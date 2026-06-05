@@ -152,6 +152,42 @@ _FRONTFILL_LOOKBACK_HOURS    = 1.0    # only frontfill last hour of PPS
 _FRONTFILL_BUDGET_SECONDS    = 8 * 60  # cap so backfill keeps ~17 min
 _FRONTFILL_SOURCE_TAG        = "frontfill"
 
+# ── Overpass-aware ingest gate ──────────────────────────────────────────
+# The */10 cron fires far more often than data actually lands. We read
+# passes_predicted.json (written every 2h by --predict-passes) and only do
+# the rapid frontfill pickup for a sensor while we're inside a window
+# around one of its predicted data-availability times (eta_on_tcatlas =
+# overpass + per-sensor NRT latency). Ticks with NO in-window sensor (and
+# no safety-net due) early-exit BEFORE any PPS auth/listing — that's what
+# keeps the tighter cron cost-neutral.
+#
+# Window = [eta - PRE_PAD, eta + POST_PAD]. Latency is empirically noisy
+# (PPS/JAXA pipeline jitter), so POST_PAD is padded generously and is
+# larger for the laggier sensors (SSMIS ~180m, AMSR2 ~200m latency).
+_OVERPASS_PRE_PAD_MIN  = 30      # open the window 30 min before eta
+_OVERPASS_POST_PAD_MIN = {       # close it POST_PAD after eta, per sensor
+    "GMI":   90,
+    "ATMS":  90,
+    "SSMIS": 120,
+    "AMSR2": 120,
+}
+_OVERPASS_POST_PAD_DEFAULT_MIN = 120   # unknown sensor → pad generously
+
+# A prediction file older than this is treated as MISSING (predict cron
+# runs every 2h; >2.5h means a prediction failure). When MISSING or STALE
+# we ignore the gate and do a full run — degrading to today's always-poll
+# behavior, never worse.
+_PASSES_STALE_MAX_AGE_SEC = 2.5 * 3600
+
+# Safety net: even with no predicted window, force a full backfill (all
+# active sensors) at least this often, tracked via a GCS time-marker
+# (mirrors PR #43's cleanup marker). Guarantees a new storm forming
+# between 2h predict cycles, a TLE/predict outlier, or a latency outlier
+# can never starve the cursor backfill that is the ultimate data-loss
+# guard. Fail-OPEN: missing/garbled marker → run the full backfill.
+_FULL_RUN_MARKER_KEY = ".ingest-last-full-run.txt"
+_FULL_RUN_INTERVAL_SEC = 2 * 3600
+
 # GCS-based concurrency lock. Cloud Run Jobs has no native exclusion,
 # so we use a conditional-create on a GCS object. TTL covers the
 # runtime budget plus a small cushion so a crashed worker's stale lock
@@ -1624,6 +1660,141 @@ def _frontfill_skip_granule(sensor: str, fname: str) -> bool:
     return already
 
 
+# ---------------------------------------------------------------------------
+# Overpass-aware ingest gate
+#
+# These helpers let the operational run poll PPS rapidly only inside
+# per-sensor windows around predicted data-availability times, and idle
+# cheaply otherwise. CORRECTNESS CONTRACT — three ways a window could be
+# wrong, all degrade to today's always-poll behavior or better:
+#   1. prediction MISSING (file absent)        → _pass_windows returns
+#      status "missing" → caller does a full run.
+#   2. prediction STALE (>2.5h, predict cron   → status "stale" →
+#      failed)                                    caller does a full run.
+#   3. a window is simply absent (new storm     → the periodic safety-net
+#      between predict cycles, latency outlier)    full backfill
+#      (_full_run_due) runs anyway at most every 2h.
+# ---------------------------------------------------------------------------
+def _pass_windows(now=None):
+    """Read passes_predicted.json and build per-sensor availability windows.
+
+    Returns (windows, status) where:
+      * windows  = {sensor: [(start_dt, end_dt), ...]} (UTC, aware)
+      * status   = "ok" | "missing" | "stale"
+
+    A window is [eta - PRE_PAD, eta + POST_PAD] around each pass's
+    `eta_on_tcatlas` (overpass + NRT latency = data-availability time),
+    with the sensor-specific POST_PAD. On "missing"/"stale" the windows
+    dict is empty and the caller MUST ignore the gate (full run) — a
+    prediction failure must never make freshness worse than always-poll.
+
+    Only the single cheap GCS JSON read; no PPS auth/listing here."""
+    if now is None:
+        now = _dt.now(timezone.utc)
+    try:
+        raw = _download_text(PASSES_KEY)
+    except Exception as exc:
+        # Transient GCS read error — treat as missing → full run (fail-open).
+        logger.warning("[gate] passes_predicted.json read failed (%s) — "
+                       "treating as missing, full run", exc)
+        return {}, "missing"
+    if not raw:
+        logger.info("[gate] passes_predicted.json absent — full run")
+        return {}, "missing"
+    try:
+        doc = json.loads(raw)
+    except Exception as exc:
+        logger.warning("[gate] passes_predicted.json unparseable (%s) — "
+                       "treating as missing, full run", exc)
+        return {}, "missing"
+
+    # Staleness check against the top-level `updated` stamp.
+    updated_raw = doc.get("updated")
+    try:
+        updated = _dt.fromisoformat(updated_raw)
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+        age = (now - updated).total_seconds()
+    except Exception:
+        # No / garbled `updated` → can't trust freshness → full run.
+        logger.warning("[gate] passes_predicted.json missing/garbled "
+                       "`updated` — treating as stale, full run")
+        return {}, "stale"
+    if age > _PASSES_STALE_MAX_AGE_SEC:
+        logger.info("[gate] passes_predicted.json stale (%.1fh > %.1fh) — "
+                    "full run", age / 3600.0,
+                    _PASSES_STALE_MAX_AGE_SEC / 3600.0)
+        return {}, "stale"
+
+    pre = timedelta(minutes=_OVERPASS_PRE_PAD_MIN)
+    windows: dict[str, list] = {}
+    for storm in doc.get("storms") or []:
+        for p in storm.get("passes") or []:
+            sensor = p.get("sensor")
+            eta_raw = p.get("eta_on_tcatlas")
+            if not sensor or not eta_raw:
+                continue
+            try:
+                eta = _dt.fromisoformat(eta_raw)
+            except Exception:
+                continue
+            if eta.tzinfo is None:
+                eta = eta.replace(tzinfo=timezone.utc)
+            post = timedelta(minutes=_OVERPASS_POST_PAD_MIN.get(
+                sensor, _OVERPASS_POST_PAD_DEFAULT_MIN))
+            windows.setdefault(sensor, []).append((eta - pre, eta + post))
+    return windows, "ok"
+
+
+def _in_window_sensors(windows: dict, now=None) -> set:
+    """Set of sensors that have at least one availability window covering
+    `now`. Empty when nothing is in-window."""
+    if now is None:
+        now = _dt.now(timezone.utc)
+    hot = set()
+    for sensor, wins in windows.items():
+        for start, end in wins:
+            if start <= now <= end:
+                hot.add(sensor)
+                break
+    return hot
+
+
+def _full_run_due(now_ts=None) -> bool:
+    """True if the periodic safety-net full backfill is due (>= the
+    interval since the last full run), read from a GCS time-marker.
+
+    Fail-OPEN: a missing, empty, garbled, or unreadable marker returns
+    True so a marker hiccup can only ever cause an *extra* full run, never
+    a skipped one. Mirrors ir_monitor_api._cleanup_due (PR #43)."""
+    if now_ts is None:
+        now_ts = time.time()
+    try:
+        raw = _download_text(_FULL_RUN_MARKER_KEY)
+    except Exception:
+        return True
+    if not raw:
+        return True
+    try:
+        stored = float(raw.strip())
+    except (ValueError, TypeError):
+        return True
+    return (now_ts - stored) >= _FULL_RUN_INTERVAL_SEC
+
+
+def _full_run_mark_done(now_ts=None) -> None:
+    """Stamp the safety-net marker with the current time. Best-effort; a
+    write failure is swallowed (worst case the next tick runs a full
+    backfill again, which is safe)."""
+    if now_ts is None:
+        now_ts = time.time()
+    try:
+        _upload_bytes(_FULL_RUN_MARKER_KEY, str(now_ts).encode(),
+                      "text/plain", cache_seconds=0)
+    except Exception as exc:
+        logger.warning("[gate] full-run marker write failed: %s", exc)
+
+
 def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
                    dry_run: bool = False, dry_run_dir: Optional[str] = None,
                    ) -> list[dict]:
@@ -2888,6 +3059,66 @@ def _cli(argv=None):
                                 "global coverage", sensors, quiet_sensors)
                     sensors = quiet_sensors
 
+            # ── Overpass-aware gate ─────────────────────────────────────
+            # Decide, from passes_predicted.json, whether THIS tick should
+            # do the rapid frontfill pickup (and for which sensors) and/or
+            # the full backfill — or early-exit cheaply.
+            #
+            #   * frontfill_sensors : in-window sensors (∩ active `sensors`)
+            #                         — the rapid-pickup path. Empty ⇒ no
+            #                         frontfill this tick.
+            #   * gate_full_run     : True ⇒ ignore the gate and run a full
+            #                         backfill over ALL active sensors. Set
+            #                         when predictions are MISSING/STALE
+            #                         (degrade to always-poll) or when the
+            #                         periodic safety-net is DUE.
+            #
+            # If neither frontfill nor a full run is warranted, we early-
+            # exit HERE — before _pps_session() / any PPS auth or listing —
+            # so out-of-window ticks cost just the one GCS JSON read. That's
+            # what makes the */10 cron cost-neutral vs the old */30.
+            #
+            # Manual --since-hours backfills bypass the gate entirely (an
+            # operator firing an explicit window always wants it processed).
+            frontfill_sensors = sensors
+            gate_full_run = True
+            if args.operational and not args.since_hours:
+                windows, pstatus = _pass_windows()
+                if pstatus != "ok":
+                    # MISSING or STALE prediction → degrade to today's
+                    # always-poll behavior (full run, all sensors). Never
+                    # worse than the pre-gate world.
+                    logger.info("[gate] predictions %s — full run over %s",
+                                pstatus, sensors)
+                    frontfill_sensors = sensors
+                    gate_full_run = True
+                else:
+                    hot = _in_window_sensors(windows)
+                    frontfill_sensors = [s for s in sensors if s in hot]
+                    safety_due = _full_run_due()
+                    gate_full_run = safety_due
+                    if not frontfill_sensors and not safety_due:
+                        # No sensor in-window AND the safety-net backfill
+                        # isn't due → cheapest possible tick: skip PPS auth
+                        # and all listing, just exit. The next in-window
+                        # tick (or the ≤2h safety net) handles the data.
+                        logger.info(
+                            "[gate] no sensor in-window (active=%s) and "
+                            "safety-net not due — cheap early-exit",
+                            sensors)
+                        print(json.dumps(
+                            {"processed": 0, "reason": "out-of-window"}))
+                        return
+                    logger.info(
+                        "[gate] in-window frontfill sensors=%s; "
+                        "full-backfill=%s (safety-net due=%s)",
+                        frontfill_sensors, gate_full_run, safety_due)
+                # We're committing to a real run (frontfill and/or backfill);
+                # stamp the safety-net marker so the next forced full run is
+                # ~2h out. Done whenever a full backfill runs this tick.
+                if gate_full_run:
+                    _full_run_mark_done()
+
             # Sort sensors stalest-first so each cron tick attacks the
             # biggest freshness deficit before the runtime budget runs
             # out. Without this, the original config order is "GMI,
@@ -3033,16 +3264,20 @@ def _cli(argv=None):
             # processed in order). Also skipped when no operational
             # cursor exists (first-ever run) — let the normal first-
             # run path populate from fallback_hours instead.
-            if args.operational:
+            # Overpass gate: frontfill only the IN-WINDOW sensors
+            # (frontfill_sensors), composed with the quiet-day narrowing
+            # via the intersection computed above. On MISSING/STALE
+            # predictions frontfill_sensors == sensors (full pickup).
+            if args.operational and frontfill_sensors:
                 frontfill_start = time.time()
                 frontfill_since = (_dt.now(timezone.utc)
                                    - timedelta(hours=_FRONTFILL_LOOKBACK_HOURS))
                 logger.info(
                     "[frontfill] pulling freshest %d granules/sensor "
-                    "since %s (budget %.0fs)",
-                    _FRONTFILL_PER_SENSOR, frontfill_since.isoformat(),
-                    _FRONTFILL_BUDGET_SECONDS)
-                for sensor in sensors:
+                    "for in-window sensors %s since %s (budget %.0fs)",
+                    _FRONTFILL_PER_SENSOR, frontfill_sensors,
+                    frontfill_since.isoformat(), _FRONTFILL_BUDGET_SECONDS)
+                for sensor in frontfill_sensors:
                     if (time.time() - frontfill_start
                             > _FRONTFILL_BUDGET_SECONDS):
                         logger.info("[frontfill] budget exhausted — "
@@ -3086,8 +3321,21 @@ def _cli(argv=None):
             # the inner loop; checked by the outer loop so we break out of
             # both. Manual --since-hours backfills also honor this so they
             # don't pile up if an operator forgot one running.
+            #
+            # Overpass gate: the cursor backfill is the data-loss safety
+            # net, so it runs over ALL active sensors whenever gate_full_run
+            # is set — i.e. on MISSING/STALE predictions and on the periodic
+            # ≤2h safety-net tick. On a pure in-window tick (gate_full_run
+            # False) we skip it: the frontfill already grabbed the fresh
+            # passes, and the next safety-net tick guarantees catch-up, so
+            # the */10 cron stays cost-neutral. Manual --since-hours always
+            # backfills (gate_full_run defaults True for it).
             budget_exceeded = False
-            for sensor in sensors:
+            backfill_sensors = sensors if gate_full_run else []
+            if args.operational and not gate_full_run:
+                logger.info("[backfill] skipped this tick (in-window "
+                            "frontfill only; safety-net not due)")
+            for sensor in backfill_sensors:
                 if time.time() - start_time > _MAX_RUNTIME_SECONDS:
                     logger.warning("[budget] runtime budget exceeded (%.0fs) "
                                    "before starting sensor %s — exiting "

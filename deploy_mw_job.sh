@@ -47,8 +47,15 @@ fi
 JOB_NAME="tc-atlas-mw-job"
 REGION="us-east1"                 # match the API service so cross-region traffic stays cheap
 SCHEDULER_NAME="tc-atlas-mw-schedule"
-SCHEDULE="*/30 * * * *"           # every 30 min (was 20). Trade-off: GMI passes show
-                                  # ~10 min later on average, but 33% lower Cloud Run cost
+SCHEDULE="*/10 * * * *"           # every 10 min (was 30). The overpass-aware gate in
+                                  # mw_ingest.py (_pass_windows) makes OUT-OF-WINDOW ticks
+                                  # cheap: when no sensor is inside its predicted
+                                  # data-availability window (and the ≤2h safety-net
+                                  # backfill isn't due) the run early-exits after a single
+                                  # GCS read of passes_predicted.json — no PPS auth/listing.
+                                  # So the tighter cadence buys ~10-min in-window pickup at
+                                  # roughly flat Cloud Run cost. MISSING/STALE predictions
+                                  # degrade to a full run every tick (i.e. old behavior).
 TIMEZONE="UTC"
 BUCKET="${GCS_MW_BUCKET:-tc-atlas-microwave-nrt}"
 
