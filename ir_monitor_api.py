@@ -8438,13 +8438,20 @@ def get_weatherlab_genesis_trend(
 
 
 @router.get("/weatherlab-genesis/{track_id}")
-def get_weatherlab_genesis_track(track_id: str):
+def get_weatherlab_genesis_track(track_id: str, init_time: str = None):
     """Per-track detail for a single FNV3 LARGE_ENSEMBLE cyclogenesis
     feature. Returns ALL ensemble members for the track (vs the global
     endpoint which thins to 100 to keep the spaghetti layer from
     tanking Leaflet). Drives the click-through detail modal that
     renders the colleague's point-cloud + intensity-spread figures
     for pre-genesis disturbances.
+
+    `init_time` (YYYYMMDDHH) pins the lookup to a specific past cycle so
+    the detail modal matches the run the user has stepped back to on the
+    global map. DM numeric track_ids get reused across cycles, so without
+    this we'd silently return the *latest* cycle's track of the same id
+    (clicking yesterday's D7 would open today's D7 in a different basin).
+    When omitted, the freshest cycle containing the id is resolved.
 
     Reuses _fetch_weatherlab_genesis_csv's per-init cache so even a
     cold per-track lookup is one filter on the already-parsed dict.
@@ -8454,19 +8461,32 @@ def get_weatherlab_genesis_track(track_id: str):
         raise HTTPException(status_code=400, detail="track_id is required")
 
     now = _dt.now(timezone.utc)
-    # Walk the maturity-gated candidate list and stop at the first cycle
-    # that contains the requested track_id. Cycles too young to be
-    # published are skipped automatically.
     data = None
     used_date = None
     used_hour = None
-    for date_str, hour_str in _genesis_candidates(now=now):
-        d = _fetch_weatherlab_genesis_csv(date_str, hour_str)
+    if init_time:
+        # Pinned to a specific cycle — look only there.
+        req_date, req_hour = _genesis_init_to_cycle(init_time)
+        if req_date is None:
+            raise HTTPException(
+                status_code=400,
+                detail="init_time must be 10 digits (YYYYMMDDHH)")
+        d = _fetch_weatherlab_genesis_csv(req_date, req_hour)
         if d and track_id in d:
             data = d
-            used_date = date_str
-            used_hour = hour_str
-            break
+            used_date = req_date
+            used_hour = req_hour
+    else:
+        # Walk the maturity-gated candidate list and stop at the first cycle
+        # that contains the requested track_id. Cycles too young to be
+        # published are skipped automatically.
+        for date_str, hour_str in _genesis_candidates(now=now):
+            d = _fetch_weatherlab_genesis_csv(date_str, hour_str)
+            if d and track_id in d:
+                data = d
+                used_date = date_str
+                used_hour = hour_str
+                break
 
     if data is None or track_id not in data:
         raise HTTPException(

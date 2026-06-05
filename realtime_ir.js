@@ -11274,7 +11274,17 @@
         //     the Global Map render. Thinned ≠ full, but better than
         //     "Loading…" forever.
         var meta = _genesisDisturbanceMeta[trackId];
-        var cachedFull = _genesisDetailCache[trackId];
+        // Pin the detail lookup to the cycle the user is currently viewing.
+        // Disturbance "D7" is a per-run label and DM numeric track_ids get
+        // reused across cycles, so without this the modal silently shows the
+        // *latest* run's track of the same id (e.g. clicking yesterday's D7
+        // opens today's D7 in a different basin).
+        var _detailInit = (meta && meta.initTime) || _genesisActiveCycle || null;
+        // Cache keyed by (track_id, cycle) — the same id exists in adjacent
+        // runs, so a track-id-only key would serve a stale cycle after the
+        // user steps the run stepper.
+        var cacheKey = trackId + '@' + (_detailInit || 'latest');
+        var cachedFull = _genesisDetailCache[cacheKey];
 
         function _fromCache() {
             // Build a backend-shaped response from the cluster cache.
@@ -11314,7 +11324,7 @@
                 .then(function (json) {
                     json._source = 'tcatlas';
                     json._uncapped = true;
-                    _genesisDetailCache[trackId] = json;
+                    _genesisDetailCache[cacheKey] = json;
                     return json;
                 })
                 .catch(function (err) {
@@ -11332,8 +11342,10 @@
             // basin outliers (DM track_ids aren't spatially coherent
             // across ensemble members; the same numeric ID gets reused
             // on unrelated storms).
+            var _dmQs = _detailInit
+                ? '?init_time=' + encodeURIComponent(_detailInit) : '';
             prom = fetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
-                    + encodeURIComponent(trackId),
+                    + encodeURIComponent(trackId) + _dmQs,
                     { cache: 'no-store' })
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -11342,7 +11354,7 @@
                 .then(function (json) {
                     var filtered = _filterDmOutliers(json);
                     filtered.json._dmExcluded = filtered.excluded;
-                    _genesisDetailCache[trackId] = filtered.json;
+                    _genesisDetailCache[cacheKey] = filtered.json;
                     return filtered.json;
                 })
                 .catch(function (err) {
@@ -13938,48 +13950,125 @@
         return anyReady;
     }
 
+    // ── In-page lightbox for the "view" (⤢) action ─────────────────────
+    // Previously the view path did window.open('','_blank') and then pointed
+    // the new tab at a blob: URL. That's a mobile trap: iOS Safari blocks
+    // navigating a freshly-opened blank tab to a blob: URL, and in-app
+    // webviews (and some mobile browsers with popups blocked) route
+    // window.open through the *current* tab — so the "expand" button bounced
+    // the user to the site root (the TC-ATLAS landing page) instead of
+    // showing the figure. An in-page overlay has no popup and no navigation,
+    // so it behaves identically on desktop and mobile.
+    var _GENESIS_SUMMARY_TITLES = {
+        overall: 'Overall summary',
+        intensity: 'Intensity summary',
+        trends: 'Run-to-run trends',
+    };
+    var _genesisLightboxUrl = null;
+    function _genesisLightboxKey(e) {
+        if (e.key === 'Escape') _genesisCloseLightbox();
+    }
+    function _genesisCloseLightbox() {
+        var ov = document.getElementById('rt-genesis-lightbox');
+        if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+        if (_genesisLightboxUrl) {
+            try { URL.revokeObjectURL(_genesisLightboxUrl); } catch (e) {}
+            _genesisLightboxUrl = null;
+        }
+        document.removeEventListener('keydown', _genesisLightboxKey);
+    }
+    // Build the overlay synchronously (in the user gesture) with a "Rendering…"
+    // placeholder; the async render fills the <img> when the blob is ready.
+    // Returns refs the caller uses to swap in the image.
+    function _genesisOpenLightbox(title) {
+        _genesisCloseLightbox();   // never stack two
+        var ov = document.createElement('div');
+        ov.id = 'rt-genesis-lightbox';
+        ov.setAttribute('role', 'dialog');
+        ov.setAttribute('aria-label', title || 'Summary');
+        ov.style.cssText = 'position:fixed;inset:0;z-index:100000;'
+            + 'background:rgba(8,12,24,0.94);display:flex;flex-direction:column;'
+            + 'align-items:center;padding:12px;box-sizing:border-box;'
+            + 'overscroll-behavior:contain;';
+        var bar = document.createElement('div');
+        bar.style.cssText = 'width:100%;max-width:1100px;display:flex;'
+            + 'align-items:center;justify-content:space-between;gap:12px;'
+            + 'color:#e2e8f0;font:600 14px system-ui,sans-serif;'
+            + 'padding:4px 2px 8px;flex:0 0 auto;';
+        var ttl = document.createElement('span');
+        ttl.textContent = title || 'Summary';
+        ttl.style.cssText = 'overflow:hidden;text-overflow:ellipsis;'
+            + 'white-space:nowrap;';
+        var x = document.createElement('button');
+        x.type = 'button';
+        x.textContent = '✕';
+        x.setAttribute('aria-label', 'Close');
+        x.style.cssText = 'flex:0 0 auto;background:rgba(255,255,255,0.1);'
+            + 'color:#e2e8f0;border:0;border-radius:8px;width:40px;height:40px;'
+            + 'font-size:18px;cursor:pointer;';
+        x.addEventListener('click', _genesisCloseLightbox);
+        bar.appendChild(ttl);
+        bar.appendChild(x);
+        var scroll = document.createElement('div');
+        scroll.style.cssText = 'flex:1 1 auto;width:100%;max-width:1100px;'
+            + 'overflow:auto;display:flex;align-items:flex-start;'
+            + 'justify-content:center;-webkit-overflow-scrolling:touch;';
+        var note = document.createElement('div');
+        note.textContent = 'Rendering…';
+        note.style.cssText = 'color:#94a3b8;font:14px system-ui,sans-serif;'
+            + 'padding:40px;';
+        var img = document.createElement('img');
+        img.alt = title || 'Summary';
+        img.style.cssText = 'max-width:100%;height:auto;border-radius:8px;'
+            + 'box-shadow:0 8px 40px rgba(0,0,0,0.5);background:#0f172a;';
+        scroll.appendChild(note);
+        ov.appendChild(bar);
+        ov.appendChild(scroll);
+        // Tap the dark backdrop (not the image or bar) to dismiss.
+        ov.addEventListener('click', function (e) {
+            if (e.target === ov || e.target === scroll) _genesisCloseLightbox();
+        });
+        document.body.appendChild(ov);
+        document.addEventListener('keydown', _genesisLightboxKey);
+        return { img: img, scroll: scroll, note: note };
+    }
+
     // Click dispatcher. Renders the requested composite, then either
-    // downloads it or shows it in a new tab. For the view path the tab is
-    // opened SYNCHRONOUSLY here (in the user-gesture) so the async render
-    // doesn't get the popup blocked — mobile Safari rejects window.open
-    // called later from a Promise.
+    // downloads it (mode 'download') or shows it in an in-page lightbox
+    // (mode 'view'). The lightbox is created synchronously in the user
+    // gesture so there's no popup to be blocked and no navigation to bounce
+    // a mobile user off the page.
     function _genesisSummaryAction(kind, mode, btn) {
         if (!_genesisCompositeReady(kind)) return;
-        var viewWin = null;
+        var lb = null;
         if (mode === 'view') {
-            viewWin = window.open('', '_blank');
-            if (viewWin && viewWin.document) {
-                try {
-                    viewWin.document.write(
-                        '<title>TC-ATLAS — rendering…</title>'
-                        + '<body style="margin:0;background:#0f172a;color:#94a3b8;'
-                        + 'font:14px system-ui,sans-serif;display:flex;'
-                        + 'align-items:center;justify-content:center;height:100vh;">'
-                        + 'Rendering ' + kind + ' summary…</body>');
-                } catch (e) { /* cross-origin guard — ignore */ }
-            }
+            lb = _genesisOpenLightbox(_GENESIS_SUMMARY_TITLES[kind]
+                || (kind + ' summary'));
         }
         _genesisRenderComposite(kind, btn, function (blob, filename) {
             if (mode === 'view') {
-                var url = URL.createObjectURL(blob);
-                if (viewWin && !viewWin.closed) {
-                    try { viewWin.location.href = url; }
-                    catch (e) { window.open(url, '_blank'); }
-                } else if (!window.open(url, '_blank')) {
-                    // Popup blocked outright — fall back to a download so
-                    // the user still ends up with the figure.
+                // If the user dismissed the overlay before the render finished,
+                // save the figure instead so the work isn't wasted.
+                if (!lb || !document.getElementById('rt-genesis-lightbox')) {
                     _saveImageBlob(blob, filename);
+                    _ga('rt_genesis_view_summary', { kind: kind });
+                    return;
                 }
-                setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+                var url = URL.createObjectURL(blob);
+                _genesisLightboxUrl = url;   // revoked on close
+                lb.img.src = url;
+                if (lb.note && lb.note.parentNode) {
+                    lb.note.parentNode.removeChild(lb.note);
+                }
+                lb.scroll.appendChild(lb.img);
                 _ga('rt_genesis_view_summary', { kind: kind });
             } else {
                 _saveImageBlob(blob, filename);
                 _ga('rt_genesis_save_summary_png', { kind: kind });
             }
         }, function () {
-            // Render failed/aborted — close the placeholder tab so it
-            // doesn't hang on "Rendering…".
-            if (viewWin && !viewWin.closed) { try { viewWin.close(); } catch (e) {} }
+            // Render failed/aborted — drop the placeholder overlay.
+            if (mode === 'view') _genesisCloseLightbox();
         });
     }
 
