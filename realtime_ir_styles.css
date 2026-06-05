@@ -3458,6 +3458,38 @@ body:has(#ir-detail[style*="block"]) #ir-global-env-cbars {
 .ir-gen-cyc-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.16); color: #fff; }
 .ir-gen-cyc-btn:disabled { opacity: 0.3; cursor: default; }
 
+/* Ensemble-size (1000 / 50) toggle beside the run stepper. */
+.rt-dock-variant {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: 8px;
+    padding-left: 8px;
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+}
+.rt-dock-var-btn {
+    flex: 0 0 auto;
+    height: 20px;
+    padding: 0 7px;
+    border: none;
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #c0d0ea;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.rt-dock-var-btn:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
+.rt-dock-var-btn.is-active {
+    background: rgba(249, 115, 22, 0.32);
+    color: #f97316;
+}
+
 /* ── Compact Tb colorbar chip — right end of the scrubber row ── */
 .rt-dock-cbar {
     flex: 0 0 auto;

@@ -498,6 +498,10 @@
     var globalAnimLoaded = 0;
     var globalAnimReady = false;
     var globalAnimLoading = false;    // true while frames are being pre-loaded
+    // Frame index the user dragged the dock slider to BEFORE frames finished
+    // loading (drag-to-scrub triggers a lazy load). Applied once the series
+    // is ready instead of snapping to the latest frame. null = none pending.
+    var _globalAnimPendingScrub = null;
     var globalAnimSpeedIdx = 1;        // index into GLOBAL_ANIM_SPEEDS
     var GLOBAL_ANIM_SPEEDS = [
         { label: '0.5×', ms: 1200 },
@@ -599,6 +603,10 @@
     var _rtGenesisClustersLoading = false;
     var _rtGenesisVisible = false;
     var _rtGenesisLoading = false;
+    // Set when a variant/cycle default resolves while a genesis fetch is
+    // in flight; the in-flight load's .finally re-fetches with the resolved
+    // variant (the _rtGenesisLoading guard would drop a direct re-entrant call).
+    var _genesisReloadPending = false;
     var _rtGenesisLayers = [];
     // Run-to-run cycle trend. _genesisCycleList holds the recent published
     // DeepMind cycles (freshest first) from /weatherlab-genesis-cycles;
@@ -643,6 +651,16 @@
     // of basin. DeepMind chip is still one click away if a forecaster
     // wants the raw source-side groupings.
     var _genesisClusterMethod = 'tcatlas';
+    // DeepMind cyclogenesis ensemble variant the user is viewing:
+    //   'large' = 1000-member FNV3_LARGE_ENSEMBLE (richer stats, slower to
+    //             publish — a cycle is occasionally delayed/skipped).
+    //   'small' = 50-member FNV3 (publishes earlier; a fresher-but-coarser
+    //             backup). Member-count-dependent math scales off the
+    //             OBSERVED ensemble size returned by the backend, not 1000.
+    // The default is resolved on load to whatever gives the freshest cycle
+    // (see _loadGenesisCycleList).
+    var _genesisEnsembleVariant = 'large';
+    var _GENESIS_VARIANT_NOMINAL = { large: 1000, small: 50 };
     // Tuner disclosure state — collapsed by default. The user can
     // expand it via the disclosure summary; their preference persists
     // across menu re-renders within the page session.
@@ -1790,6 +1808,10 @@
             var lyr = createCompositeGIBSLayer(result.oldest, opacity || 0.65, result.perSat);
             lyr.addTo(targetMap);
             gibsIRLayers = [lyr];
+            // Now that we know the latest time, enable the dock slider so the
+            // user can drag to lazy-load + scrub satellite times without first
+            // pressing play.
+            _refreshAnimSlider();
             console.log('GIBS per-satellite times:', JSON.stringify(result.perSat),
                         '| oldest (animation):', result.oldest,
                         '| stale:', result.staleSats);
@@ -2403,6 +2425,13 @@
     }
 
     /** Load all global animation frames. Called when user clicks the play button. */
+    // Number of frames the animation will build (same formula loadGlobal-
+    // Animation uses) — drives the dock slider's provisional max so the user
+    // can drag-to-scrub before frames are loaded.
+    function _globalAnimFrameCount() {
+        return Math.floor(GLOBAL_ANIM_LOOKBACK_H * 60 / GLOBAL_ANIM_STEP_MIN) + 1;
+    }
+
     function loadGlobalAnimation() {
         if (!map || !latestGIBSTime || globalAnimLoading) return;
 
@@ -2456,7 +2485,12 @@
                     if (globalAnimLoaded >= total) {
                         globalAnimReady = true;
                         globalAnimLoading = false;
-                        globalAnimIndex = total - 1;
+                        // Honor a slider position the user dragged to during
+                        // load; otherwise show the latest frame.
+                        globalAnimIndex = (_globalAnimPendingScrub != null)
+                            ? Math.max(0, Math.min(total - 1, _globalAnimPendingScrub))
+                            : total - 1;
+                        _globalAnimPendingScrub = null;
                         showGlobalAnimFrame(globalAnimIndex);
                         updateGlobalAnimControls('ready');
                         console.log('[Global Anim] All', total, 'frames loaded');
@@ -2471,7 +2505,11 @@
                 console.warn('[Global Anim] Timeout — enabling with', globalAnimLoaded, '/', globalAnimFrameTimes.length);
                 globalAnimReady = true;
                 globalAnimLoading = false;
-                globalAnimIndex = globalAnimFrameTimes.length - 1;
+                var _tot = globalAnimFrameTimes.length;
+                globalAnimIndex = (_globalAnimPendingScrub != null)
+                    ? Math.max(0, Math.min(_tot - 1, _globalAnimPendingScrub))
+                    : _tot - 1;
+                _globalAnimPendingScrub = null;
                 showGlobalAnimFrame(globalAnimIndex);
                 updateGlobalAnimControls('ready');
             }
@@ -2521,6 +2559,16 @@
                 slider.disabled = false;
                 slider.max = String(nFrames - 1);
                 slider.value = String(globalAnimIndex);
+            } else if (latestGIBSTime) {
+                // Frames not loaded yet, but we know the latest satellite time
+                // — let the user drag to lazy-load + scrub the last few hours.
+                // Provisional max matches the count loadGlobalAnimation builds,
+                // so the handle position carries over seamlessly once loaded.
+                // (Initial value/handle position is set at construction to the
+                // newest end; we don't reset it here so an in-progress drag
+                // isn't snapped away.)
+                slider.disabled = false;
+                slider.max = String(_globalAnimFrameCount() - 1);
             } else {
                 slider.disabled = true;
                 slider.max = '0';
@@ -3060,6 +3108,22 @@
                 cycNext.title = 'Newer DeepMind run';
                 cycNext.addEventListener('click', function () { _genesisStepCycle(1); });
 
+                // Ensemble-size toggle (1000 / 50) right beside the run
+                // stepper — mirrors the Layers-menu chips. _updateGenesisCycleBar
+                // sets the active state + a ⏳ when a variant isn't published
+                // for the freshest cycle.
+                var cycVar = L.DomUtil.create('span', 'rt-dock-variant', cyc);
+                cycVar.id = 'ir-dock-variant';
+                ['large', 'small'].forEach(function (v) {
+                    var vb = L.DomUtil.create('button', 'rt-dock-var-btn', cycVar);
+                    vb.setAttribute('data-variant', v);
+                    vb.textContent = (v === 'large') ? '1000' : '50';
+                    vb.title = (v === 'large')
+                        ? 'DeepMind 1000-member ensemble (FNV3 LARGE_ENSEMBLE) — richer stats, publishes later'
+                        : 'DeepMind 50-member ensemble (FNV3) — coarser, publishes earlier';
+                    vb.addEventListener('click', function () { _genesisSetVariant(v); });
+                });
+
                 var row = L.DomUtil.create('div', 'rt-anim-row', bar);
 
                 var prevBtn = L.DomUtil.create('button', 'rt-anim-btn rt-anim-step', row);
@@ -3109,15 +3173,39 @@
                 slider.id = 'ir-global-anim-slider';
                 slider.type = 'range';
                 slider.min = '0';
-                slider.max = '0';
-                slider.value = '0';
+                // Provisional range so the handle starts at the newest (right)
+                // end, matching the static latest frame on screen. Stays
+                // disabled until latestGIBSTime resolves (_refreshAnimSlider).
+                slider.max = String(_globalAnimFrameCount() - 1);
+                slider.value = String(_globalAnimFrameCount() - 1);
                 slider.disabled = true;
-                slider.title = 'Scrub through loaded animation frames';
+                slider.title = 'Drag to scrub through recent satellite times';
                 slider.addEventListener('input', function () {
-                    if (!globalAnimReady) return;
-                    stopGlobalAnimation();
                     var idx = parseInt(slider.value, 10);
-                    if (!isNaN(idx)) showGlobalAnimFrame(idx);
+                    if (isNaN(idx)) return;
+                    if (globalAnimReady) {
+                        // Frames loaded — scrub directly.
+                        stopGlobalAnimation();
+                        showGlobalAnimFrame(idx);
+                        return;
+                    }
+                    // Not loaded yet: lazy-load the frame series (same fetch
+                    // the play button triggers) and remember where the user
+                    // dragged so we land there once frames arrive. Give
+                    // immediate feedback on the time label if we can.
+                    _globalAnimPendingScrub = idx;
+                    if (!globalAnimLoading) {
+                        stopGlobalAnimation();
+                        loadGlobalAnimation();
+                    }
+                    var timeEl = document.getElementById('ir-global-anim-time');
+                    if (timeEl) {
+                        if (globalAnimFrameTimes[idx]) {
+                            timeEl.textContent = fmtUTC(globalAnimFrameTimes[idx]);
+                        } else {
+                            timeEl.textContent = 'loading…';
+                        }
+                    }
                 });
 
                 var dt = L.DomUtil.create('span', 'rt-anim-dt', row);
@@ -9173,15 +9261,67 @@
         };
     }
 
-    // Total ensemble size for FNV3 LARGE_ENSEMBLE. Formation probability
-    // is computed per-track as n_members_total / this value, so a track
-    // with 50 members is a 5% formation feature.
+    // ACTIVE ensemble size — the divisor for formation probability and the
+    // projection cap. Reassigned from each genesis response's observed
+    // `ensemble_size` (1000 for the large variant, ~50 for small) by
+    // _genesisSetEnsembleSize, so a track with N members reads as N/size.
     var _GENESIS_ENSEMBLE_SIZE = 1000;
     // Minimum member fraction to call something a "Disturbance" on the
     // map. Below this it's likely noise — a few stray member detections
     // that didn't agree spatially. 5% (50/1000) matches NHC's "Low" /
-    // "Medium" disturbance threshold conceptually.
+    // "Medium" disturbance threshold conceptually. A FRACTION, so it's
+    // variant-agnostic (5% of 50 = 2.5 members → effectively ≥3).
     var _GENESIS_MIN_FRACTION = 0.05;
+
+    // Set the active ensemble-size divisor from a backend response.
+    // Falls back to the nominal size for the active variant when the
+    // response doesn't carry an observed count.
+    function _genesisSetEnsembleSize(observed) {
+        var n = parseInt(observed, 10);
+        if (!(n > 0)) {
+            n = _GENESIS_VARIANT_NOMINAL[_genesisEnsembleVariant] || 1000;
+        }
+        _GENESIS_ENSEMBLE_SIZE = n;
+    }
+
+    // Scale a per-1000 reference clustering gate (peak_min / cluster_min)
+    // to the active ensemble size, with a floor, so client-side clustering
+    // of the 50-member variant isn't gated out by 1000-tuned counts. This
+    // mirrors the server's identical scaling in _tca_compute_clusters; the
+    // RAW reference values are what we send to the backend (it scales), and
+    // these scaled values are what client-side clustering uses.
+    function _genesisScaledGate(refCount, floor) {
+        var s = (_GENESIS_ENSEMBLE_SIZE || 1000) / 1000;
+        return Math.max(floor, Math.round(refCount * s));
+    }
+
+    // Display helpers for the active (or a given) variant.
+    function _genesisVariantNominal(variant) {
+        return _GENESIS_VARIANT_NOMINAL[variant || _genesisEnsembleVariant] || 1000;
+    }
+    // "1000-member" / "50-member" tag for headers + menus.
+    function _genesisVariantMemberTag(variant) {
+        return _genesisVariantNominal(variant) + '-member';
+    }
+    // Model byline shown in the modal subtitle / menus.
+    function _genesisVariantModelLabel(variant) {
+        return (variant || _genesisEnsembleVariant) === 'small'
+            ? 'FNV3 (50-member)' : 'FNV3 LARGE_ENSEMBLE';
+    }
+
+    // Small "pending / not-yet-published" clock glyph in the site's inline-SVG
+    // convention (currentColor stroke) so it inherits the chip's color and
+    // matches the line-icon look — replaces the ⏳ emoji, whose flat-color
+    // rendering clashed with the rest of the UI. Marks a variant that hasn't
+    // published yet for the freshest cycle.
+    var _GENESIS_PENDING_SVG =
+        '<svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"'
+        + ' style="vertical-align:-1px;margin-left:4px;">'
+        + '<circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor"'
+        + ' stroke-width="1.4"/>'
+        + '<path fill="none" stroke="currentColor" stroke-width="1.4"'
+        + ' stroke-linecap="round" stroke-linejoin="round" d="M8 4.9V8l2.1 1.5"/>'
+        + '</svg>';
 
     // Track → "Disturbance N" naming. Ordered by formation probability
     // descending so D1 is always the most-likely-to-form, regardless of
@@ -9616,7 +9756,7 @@
         var disturbances = [];
         Object.keys(clusters).forEach(function (rootKey) {
             var cluster = clusters[rootKey];
-            if (cluster.length < _GENESIS_CLUSTER_MIN_MEMBERS) return;
+            if (cluster.length < _genesisScaledGate(_GENESIS_CLUSTER_MIN_MEMBERS, 3)) return;
             var members = {};
             for (var ci = 0; ci < cluster.length; ci++) {
                 members[String(ci)] = { points: cluster[ci].points };
@@ -9748,7 +9888,7 @@
         // that dominate their 3×3 neighborhood. Equal-count adjacencies
         // are resolved by keeping the lexicographically-first key so we
         // don't double-count plateau ridges.
-        var peakMin = _GENESIS_PEAK_MIN_MEMBERS;
+        var peakMin = _genesisScaledGate(_GENESIS_PEAK_MIN_MEMBERS, 2);
         var peaks = [];
         Object.keys(density).forEach(function (key) {
             var c = density[key];
@@ -9893,7 +10033,7 @@
         var disturbances = [];
         for (var ci = 0; ci < clusters.length; ci++) {
             var cluster = clusters[ci];
-            if (cluster.length < _GENESIS_CLUSTER_MIN_MEMBERS) continue;
+            if (cluster.length < _genesisScaledGate(_GENESIS_CLUSTER_MIN_MEMBERS, 3)) continue;
             var members = {};
             // Track which DeepMind track_ids contributed members to this
             // cluster — the modal needs this to fetch uncapped per-track
@@ -9974,6 +10114,7 @@
             var pc = _rtGenesisClusters;
             var initOk = pc && _rtGenesisData
                 && pc.init_time === _rtGenesisData.init_time
+                && (pc.variant || 'large') === _genesisEnsembleVariant
                 && _genesisClusterParamsMatch(pc.params);
             if (initOk) {
                 return pc.clusters.map(_genesisServerClusterToDisturbance);
@@ -9983,11 +10124,25 @@
         return _genesisQualifyingDisturbances(rawTracks);
     }
 
+    // Shared query string for genesis fetches: pins the active cycle (when
+    // the user has stepped back) and the ensemble variant. `lead` is '?' for
+    // a standalone query string or '&' to append to an existing one. Variant
+    // is always included so the backend serves the right ensemble.
+    function _genesisQueryString(standalone) {
+        var parts = [];
+        if (_genesisActiveCycle) {
+            parts.push('init_time=' + encodeURIComponent(_genesisActiveCycle));
+        }
+        parts.push('variant=' + encodeURIComponent(_genesisEnsembleVariant));
+        return (standalone ? '?' : '&') + parts.join('&');
+    }
+
     // Current tuner params used by the active TCA computation. Sent to
-    // the backend so user adjustments trigger a server recompute. The
-    // defaults match the _GENESIS_* constants so the steady-state
-    // request is always the same string → backend cache hit ~100% of
-    // the time for the default-param result.
+    // the backend so user adjustments trigger a server recompute. These
+    // are PER-1000 reference values (the server scales them by the observed
+    // ensemble size); the defaults match the _GENESIS_* constants so the
+    // steady-state request is always the same string → backend cache hit
+    // ~100% of the time for the default-param result.
     function _genesisCurrentClusterParams() {
         return {
             grid_deg: _GENESIS_GRID_DEG,
@@ -10118,6 +10273,8 @@
                 ensembleMean: d.raw && d.raw.ensemble_mean,
                 source: _genesisClusterMethod,   // 'deepmind' or 'tcatlas'
                 initTime: (_rtGenesisData && _rtGenesisData.init_time) || null,
+                variant: _genesisEnsembleVariant,
+                ensembleSize: _GENESIS_ENSEMBLE_SIZE,
                 // TCA-only fields — let the detail modal fetch uncapped
                 // data from each contributing DM track endpoint and
                 // re-apply the identical density-peak gate.
@@ -10193,7 +10350,8 @@
                 + '</strong>'
                 + (d.peakTau != null ? ' at +' + d.peakTau + 'h' : '')
                 + '<br><span style="opacity:0.75; font-size:0.85em;">'
-                + 'Click for full 1000-member detail →</span>'
+                + 'Click for full ' + _genesisVariantMemberTag()
+                + ' detail →</span>'
                 + '</div>';
             marker.bindTooltip(tip, { direction: 'top', offset: [0, -8] });
             (function (id) {
@@ -10363,7 +10521,10 @@
             }
             var memArrays = sampleKeys.map(function (k) { return best[k].points; });
             return {
-                model: 'DeepMind FNV3 LARGE_ENSEMBLE',
+                model: (meta.variant === 'small')
+                    ? 'DeepMind FNV3 (50-member)' : 'DeepMind FNV3 LARGE_ENSEMBLE',
+                variant: meta.variant || _genesisEnsembleVariant,
+                ensemble_size: meta.ensembleSize || null,
                 init_time: initTime || meta.initTime,
                 track_id: trackId,
                 n_members: sampleKeys.length,
@@ -10771,9 +10932,11 @@
         // Use the "Disturbance N" name from the Global Map render so
         // the modal header matches the marker the user clicked.
         var meta = _genesisDisturbanceMeta[trackId];
+        var _titleVariant = (meta && meta.variant) || _genesisEnsembleVariant;
         var titleName = meta ? meta.label : ('Genesis track ' + trackId);
-        titleEl.textContent = titleName + ' · FNV3 1000-member ensemble';
-        subEl.innerHTML = 'Loading 1000 ensemble members…';
+        titleEl.textContent = titleName + ' · FNV3 '
+            + _genesisVariantMemberTag(_titleVariant) + ' ensemble';
+        subEl.innerHTML = 'Loading ensemble members…';
         m.style.display = 'flex';
         document.body.style.overflow = 'hidden';
         _ga('rt_genesis_detail_open', { track_id: trackId });
@@ -10793,16 +10956,28 @@
         // *latest* run's track of the same id (e.g. clicking yesterday's D7
         // opens today's D7 in a different basin).
         var _detailInit = (meta && meta.initTime) || _genesisActiveCycle || null;
-        // Cache keyed by (track_id, cycle) — the same id exists in adjacent
-        // runs, so a track-id-only key would serve a stale cycle after the
-        // user steps the run stepper.
-        var cacheKey = trackId + '@' + (_detailInit || 'latest');
+        // Ensemble variant the clicked marker was rendered from, so the
+        // detail fetch hits the matching CSV. DM numeric ids are reused
+        // across BOTH cycles and variants.
+        var _detailVariant = (meta && meta.variant) || _genesisEnsembleVariant;
+        // Tail query shared by the detail fetches: pins cycle + variant.
+        var _detailQTail = (_detailInit
+                ? '&init_time=' + encodeURIComponent(_detailInit) : '')
+            + '&variant=' + encodeURIComponent(_detailVariant);
+        // Cache keyed by (track_id, cycle, variant) — the same id exists in
+        // adjacent runs and across ensembles, so a coarser key would serve a
+        // stale cycle/variant after the user steps or toggles.
+        var cacheKey = trackId + '@' + (_detailInit || 'latest')
+            + '#' + _detailVariant;
         var cachedFull = _genesisDetailCache[cacheKey];
 
         function _fromCache() {
             // Build a backend-shaped response from the cluster cache.
             return {
-                model: 'DeepMind FNV3 LARGE_ENSEMBLE',
+                model: (meta && meta.variant === 'small')
+                    ? 'DeepMind FNV3 (50-member)' : 'DeepMind FNV3 LARGE_ENSEMBLE',
+                variant: _detailVariant,
+                ensemble_size: (meta && meta.ensembleSize) || null,
                 init_time: meta && meta.initTime,
                 track_id: trackId,
                 n_members: meta ? Object.keys(meta.members || {}).length : 0,
@@ -10828,7 +11003,8 @@
                 return k + '=' + encodeURIComponent(clusterParams[k]);
             });
             prom = fetch(API_BASE + '/ir-monitor/weatherlab-genesis-cluster/'
-                    + encodeURIComponent(trackId) + '?' + qsParts.join('&'),
+                    + encodeURIComponent(trackId) + '?' + qsParts.join('&')
+                    + _detailQTail,
                     { cache: 'no-store' })
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -10855,8 +11031,8 @@
             // basin outliers (DM track_ids aren't spatially coherent
             // across ensemble members; the same numeric ID gets reused
             // on unrelated storms).
-            var _dmQs = _detailInit
-                ? '?init_time=' + encodeURIComponent(_detailInit) : '';
+            // _detailQTail starts with '&'; swap to '?' for a standalone qs.
+            var _dmQs = '?' + _detailQTail.replace(/^&/, '');
             prom = fetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
                     + encodeURIComponent(trackId) + _dmQs,
                     { cache: 'no-store' })
@@ -10961,14 +11137,23 @@
         // Pre-genesis-specific stats — computed once and threaded through
         // every figure so they all share the same definitions of
         // "formation" (first time a member reaches 34 kt) and "peak Vmax".
-        var stats = _computeGenesisStats(memberKeys, members);
+        // The divisor is the response's OBSERVED ensemble size so the 50-
+        // member variant's formation probability scales correctly.
+        var _detVariant = json.variant
+            || (json.model && json.model.indexOf('50-member') >= 0 ? 'small' : 'large');
+        var _detSize = json.ensemble_size
+            || _genesisVariantNominal(_detVariant);
+        var stats = _computeGenesisStats(memberKeys, members, _detSize);
         _renderGenesisStatsStrip(stats, memberKeys.length);
 
         var subParts = [
             '<strong>Init:</strong> ' + initLabel,
             '<span id="rt-genesis-cycle-eta"></span>',
             '<strong>' + memberKeys.length + '</strong> ensemble members',
-            '<span style="opacity:0.8;">FNV3 LARGE_ENSEMBLE</span>',
+            '<span style="opacity:0.8;">'
+                + _genesisVariantModelLabel(_detVariant)
+                + (_detVariant === 'small' ? ' · preliminary' : '')
+                + '</span>',
         ];
         // If this disturbance was paired with an officially-tracked ATCF
         // storm (named TC, TD, or invest within 600 km of the cluster's
@@ -10998,7 +11183,8 @@
                 + (_am.category ? ', ' + _am.category : '')
                 + (_am.vmaxKt != null ? ', ' + _am.vmaxKt.toFixed(0) + ' kt' : '')
                 + ') — labeled with the official ATCF name; the FNV3 '
-                + '1000-member diagnostics below are TC-ATLAS\'s '
+                + _genesisVariantMemberTag(_detVariant)
+                + ' diagnostics below are TC-ATLAS\'s '
                 + 'ensemble view of that same system.';
             subParts.push('<span class="rt-genesis-atcf-pill" title="'
                 + _matchTip.replace(/"/g, '&quot;') + '">ATCF: '
@@ -11426,7 +11612,8 @@
        - genesisLat/Lon[]: per-member first-cross position
        - peakWinds[]: per-member LMI
        - meanPeak, meanPeakTau: peak of the ensemble-mean line */
-    function _computeGenesisStats(memberKeys, members) {
+    function _computeGenesisStats(memberKeys, members, ensembleSize) {
+        var _size = (ensembleSize > 0) ? ensembleSize : _GENESIS_ENSEMBLE_SIZE;
         var formationCount = 0;
         var genesisTimes = [];
         var genLats = [];
@@ -11473,12 +11660,13 @@
             // already the subset DeepMind (or our DBSCAN path) grouped
             // into this feature, so dividing by it always reads ~100%
             // and answers a meaningless question. The right question
-            // is "what fraction of the 1000-member ensemble detected
-            // this feature reaching TC strength?" — which matches the
+            // is "what fraction of the FULL ensemble detected this
+            // feature reaching TC strength?" — which matches the
             // disturbance-marker formation probability on the Global
-            // Map, so the modal and the marker now agree.
-            formationProb: formationCount / _GENESIS_ENSEMBLE_SIZE,
-            ensembleSize: _GENESIS_ENSEMBLE_SIZE,
+            // Map, so the modal and the marker now agree. `_size` is the
+            // response's observed ensemble size (1000 large / ~50 small).
+            formationProb: formationCount / _size,
+            ensembleSize: _size,
             genesisTimes: genesisTimes,
             genLats: genLats,
             genLons: genLons,
@@ -13764,7 +13952,8 @@
             ctx.fillStyle = dim;
             ctx.font = '24px Inter, "Helvetica Neue", sans-serif';
             var saved = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
-            ctx.fillText('TC-ATLAS · DeepMind FNV3 LARGE_ENSEMBLE · saved ' + saved,
+            ctx.fillText('TC-ATLAS · DeepMind ' + _genesisVariantModelLabel()
+                + ' · saved ' + saved,
                          40, totalH - 44);
 
             canvas.toBlob(function (blob) {
@@ -13936,25 +14125,22 @@
     // RAM after the first hit each cycle.
     function _loadGenesisClusters() {
         if (_rtGenesisClustersLoading) return;
-        // The cluster index is computed server-side for the LATEST cycle
-        // only. When the user has stepped back to a past run, skip it —
-        // _renderGenesis falls back to client-side TCA on the pinned data.
-        if (_genesisActiveCycle) return;
         var curParams = _genesisCurrentClusterParams();
-        // The clusters endpoint resolves the latest cycle itself, so it
-        // doesn't need _rtGenesisData — we can fetch it in parallel with the
-        // 9 MB genesis payload. The "already have it" short-circuit only
-        // applies once we have data to compare the init against.
+        // The clusters endpoint pins to the active cycle + variant via the
+        // shared query string, so it works for stepped-back runs too. The
+        // "already have it" short-circuit applies once we have data to
+        // compare the init/variant against.
         if (_rtGenesisData
                 && _rtGenesisClusters
                 && _rtGenesisClusters.init_time === _rtGenesisData.init_time
+                && _rtGenesisClusters.variant === _genesisEnsembleVariant
                 && _genesisClusterParamsMatch(_rtGenesisClusters.params)) {
             return;   // already have it
         }
         _rtGenesisClustersLoading = true;
         var qs = '?' + Object.keys(curParams).map(function (k) {
             return k + '=' + encodeURIComponent(curParams[k]);
-        }).join('&');
+        }).join('&') + _genesisQueryString(false);
         fetch(API_BASE + '/ir-monitor/weatherlab-genesis-clusters' + qs,
               { cache: 'no-store' })
             .then(function (r) {
@@ -13964,9 +14150,14 @@
             .then(function (json) {
                 _rtGenesisClusters = {
                     init_time: json.init_time,
+                    variant: json.variant || _genesisEnsembleVariant,
                     params: json.params,
                     clusters: json.clusters || [],
                 };
+                // Cluster index is authoritative for the tcatlas divisor.
+                if (json.ensemble_size) {
+                    _genesisSetEnsembleSize(json.ensemble_size);
+                }
                 if (_rtGenesisVisible && _genesisClusterMethod === 'tcatlas') {
                     _renderGenesis();
                 }
@@ -13990,11 +14181,89 @@
 
     // ── Run-to-run cycle trend: stepper across recent DeepMind runs ──
     var _genesisCycleListLoading = false;
+    // First-load defaulting flag: pick the freshest cycle/variant once,
+    // then respect the user's choices on subsequent list refreshes.
+    var _genesisVariantInitialized = false;
 
     function _fmtGenesisInit(it) {
         if (!it || it.length < 10) return '(unknown)';
         return it.slice(0, 4) + '-' + it.slice(4, 6) + '-' + it.slice(6, 8)
             + ' ' + it.slice(8, 10) + 'Z';
+    }
+
+    // Is `variant` published for this cycle-list entry? Back-compat: an old
+    // backend without per-variant info implies only the large variant.
+    function _genesisCycleHasVariant(cyc, variant) {
+        if (!cyc) return false;
+        if (cyc.variants && cyc.variants[variant]) {
+            return !!cyc.variants[variant].available;
+        }
+        return variant === 'large';
+    }
+
+    // Cycles (freshest-first) that have the given variant — the stepper
+    // operates within one variant so each ensemble's run history is coherent.
+    function _genesisCyclesForVariant(variant) {
+        return _genesisCycleList.filter(function (c) {
+            return _genesisCycleHasVariant(c, variant);
+        });
+    }
+
+    function _genesisLatestCycleForVariant(variant) {
+        var f = _genesisCyclesForVariant(variant);
+        return f.length ? f[0].init_time : null;
+    }
+
+    // One-time default: land on the freshest cycle overall, preferring the
+    // 1000-member ('large') variant when it's published for that cycle, else
+    // falling back to the 50-member ('small') so the user always sees the
+    // freshest available guidance. _genesisActiveCycle stays null = "follow
+    // the latest cycle of the chosen variant" (keeps auto-advance working).
+    // Returns true if it changed the active variant (caller should re-fetch).
+    function _genesisInitVariantDefault() {
+        if (_genesisVariantInitialized) return false;
+        if (!_genesisCycleList.length) return false;   // wait for a list
+        _genesisVariantInitialized = true;
+        var freshest = _genesisCycleList[0];
+        var want =
+            _genesisCycleHasVariant(freshest, 'large') ? 'large'
+            : (_genesisCycleHasVariant(freshest, 'small') ? 'small' : 'large');
+        _genesisActiveCycle = null;
+        if (want !== _genesisEnsembleVariant) {
+            _genesisEnsembleVariant = want;
+            return true;
+        }
+        return false;
+    }
+
+    // Switch ensemble variant. If the currently-pinned cycle doesn't carry
+    // the new variant, jump to the freshest cycle that does (or unpin to
+    // follow the latest of the new variant). Clears variant-scoped caches so
+    // stale markers/clusters from the other ensemble don't linger.
+    function _genesisSetVariant(v) {
+        v = (v === 'small') ? 'small' : 'large';
+        if (v === _genesisEnsembleVariant) return;
+        _genesisEnsembleVariant = v;
+        _genesisVariantInitialized = true;   // user override sticks
+        var curInit = _genesisActiveCycle;
+        if (curInit) {
+            var cyc = _genesisCycleList.filter(function (c) {
+                return c.init_time === curInit;
+            })[0];
+            // If the pinned cycle lacks the new variant, fall back to
+            // following the freshest cycle that has it (active = null).
+            // Otherwise keep the pin so the user compares the same cycle
+            // across ensembles.
+            if (!_genesisCycleHasVariant(cyc, v)) {
+                _genesisActiveCycle = null;
+            }
+        }
+        // Drop other-variant state so the next render is clean.
+        _rtGenesisClusters = null;
+        _genesisSetEnsembleSize(null);
+        _updateGenesisCycleBar();
+        _loadGenesis();
+        _ga('rt_genesis_variant', { variant: v });
     }
 
     // Fetch the list of recent published cycles for the stepper. Degrades
@@ -14008,6 +14277,10 @@
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (json) {
                 _genesisCycleList = (json && json.cycles) || [];
+                // One-time: default to the freshest cycle/variant available.
+                // If that flips the variant away from the initial 'large'
+                // fetch, re-load so the data matches the resolved variant.
+                var variantChanged = _genesisInitVariantDefault();
                 // If the pinned cycle has aged out of the window, fall back
                 // to following the latest again so the stepper stays valid.
                 if (_genesisActiveCycle && !_genesisCycleList.some(function (c) {
@@ -14015,10 +14288,19 @@
                 })) {
                     _genesisActiveCycle = null;
                 }
+                if (variantChanged) {
+                    _rtGenesisClusters = null;
+                    _genesisSetEnsembleSize(null);
+                    _genesisReloadPending = true;
+                    _loadGenesis();   // proceeds now, or .finally reloads
+                }
                 _updateGenesisCycleBar();
             })
             .catch(function () {
-                _genesisCycleList = [];
+                // Keep the last good cycle list on a transient re-fetch
+                // failure — wiping it would blank the dock stepper + the
+                // ensemble toggle on a momentary network blip. Only the
+                // first-ever load (empty list) leaves the dock hidden.
                 _updateGenesisCycleBar();
             })
             .finally(function () { _genesisCycleListLoading = false; });
@@ -14028,22 +14310,25 @@
     // List is freshest-first, so older = higher index. Reaching index 0
     // unpins (resumes following the latest, with auto-repoll).
     function _genesisStepCycle(dir) {
-        if (!_genesisCycleList.length) return;
-        var curInit = _genesisActiveCycle || _genesisCycleList[0].init_time;
-        var idx = _genesisCycleList.findIndex(function (c) {
+        // Step within the cycles that have the ACTIVE variant, so each
+        // ensemble's run history reads coherently.
+        var list = _genesisCyclesForVariant(_genesisEnsembleVariant);
+        if (!list.length) return;
+        var curInit = _genesisActiveCycle || list[0].init_time;
+        var idx = list.findIndex(function (c) {
             return c.init_time === curInit;
         });
         if (idx < 0) idx = 0;
         var next = idx + (dir < 0 ? 1 : -1);
-        next = Math.max(0, Math.min(_genesisCycleList.length - 1, next));
+        next = Math.max(0, Math.min(list.length - 1, next));
         if (next === idx) return;
-        _genesisActiveCycle = (next === 0) ? null
-            : _genesisCycleList[next].init_time;
+        _genesisActiveCycle = (next === 0) ? null : list[next].init_time;
         _updateGenesisCycleBar();
         _loadGenesis();   // re-fetch + re-render the selected cycle
         _ga('rt_genesis_cycle_step', {
             dir: dir < 0 ? 'older' : 'newer',
-            init: _genesisActiveCycle || _genesisCycleList[0].init_time,
+            init: _genesisActiveCycle || list[0].init_time,
+            variant: _genesisEnsembleVariant,
             pinned: !!_genesisActiveCycle,
         });
     }
@@ -14056,11 +14341,18 @@
     function _updateGenesisCycleBar() {
         var slot = document.getElementById('ir-dock-cycle');
         if (!slot) return;   // dock not built yet
-        var show = _rtGenesisVisible && _genesisCycleList.length > 1;
+        // Step within the active variant's cycles.
+        var list = _genesisCyclesForVariant(_genesisEnsembleVariant);
+        // Show the dock row whenever the layer is on and we have any cycles —
+        // the ensemble toggle is useful even with a single cycle (so the user
+        // can switch ensembles); the stepper arrows just disable themselves.
+        var show = _rtGenesisVisible && _genesisCycleList.length > 0;
         slot.style.display = show ? '' : 'none';
-        if (!show) return;
+        if (!show) { _updateDockVariantChips(); return; }
+        // Guard: if the active variant has no cycles, fall back to the unified
+        // list for the label so we never index an empty array.
+        if (!list.length) list = _genesisCycleList.slice();
 
-        var list = _genesisCycleList;
         var curInit = _genesisActiveCycle || list[0].init_time;
         var idx = list.findIndex(function (c) { return c.init_time === curInit; });
         if (idx < 0) idx = 0;
@@ -14074,13 +14366,21 @@
         var cycCountBit = '';
         var nDistCyc = (_rtGenesisData && _rtGenesisData.init_time === curInit)
             ? _genesisDisturbanceCount() : null;
+        // Variant-specific track count from the cycle entry when present.
+        var cycVarTracks = (cyc.variants && cyc.variants[_genesisEnsembleVariant]
+            && cyc.variants[_genesisEnsembleVariant].n_tracks != null)
+            ? cyc.variants[_genesisEnsembleVariant].n_tracks
+            : cyc.n_tracks;
         if (nDistCyc != null && nDistCyc > 0) {
             cycCountBit = ' · ' + nDistCyc + ' disturbance'
                 + (nDistCyc === 1 ? '' : 's');
-        } else if (cyc.n_tracks != null) {
-            cycCountBit = ' · ' + cyc.n_tracks + ' track'
-                + (cyc.n_tracks === 1 ? '' : 's');
+        } else if (cycVarTracks != null) {
+            cycCountBit = ' · ' + cycVarTracks + ' track'
+                + (cycVarTracks === 1 ? '' : 's');
         }
+        // Member tag so the user always knows which ensemble is in view.
+        var memberTag = (_genesisEnsembleVariant === 'small')
+            ? ' · 50-mbr' : ' · 1000-mbr';
         // Compact init (drop the year — the dock is tight): "06-01 06Z".
         var compactInit = (curInit && curInit.length >= 10)
             ? curInit.slice(4, 6) + '-' + curInit.slice(6, 8)
@@ -14089,13 +14389,33 @@
         var textEl = document.getElementById('ir-dock-cycle-text');
         if (textEl) {
             textEl.textContent = 'DeepMind · ' + compactInit
-                + (isLatest ? ' · latest' : '') + cycCountBit;
+                + (isLatest ? ' · latest' : '') + memberTag + cycCountBit;
         }
         var older = slot.querySelector('[data-dir="older"]');
         var newer = slot.querySelector('[data-dir="newer"]');
         if (older) older.disabled = (idx >= list.length - 1);
         if (newer) newer.disabled = (idx <= 0);
         slot.classList.toggle('is-pinned', !isLatest);
+        _updateDockVariantChips();
+    }
+
+    // Reflect the active ensemble variant + per-variant availability on the
+    // dock's 1000/50 chips. A ⏳ marks a variant not published for the
+    // freshest cycle (clicking it jumps to the freshest run that has it).
+    function _updateDockVariantChips() {
+        var wrap = document.getElementById('ir-dock-variant');
+        if (!wrap) return;
+        var freshest = _genesisCycleList[0];
+        var btns = wrap.querySelectorAll('.rt-dock-var-btn');
+        for (var i = 0; i < btns.length; i++) {
+            var b = btns[i];
+            var v = b.getAttribute('data-variant');
+            var active = (v === _genesisEnsembleVariant);
+            b.classList.toggle('is-active', active);
+            var gap = freshest && !_genesisCycleHasVariant(freshest, v);
+            var lbl = (v === 'large') ? '1000' : '50';
+            b.innerHTML = lbl + (gap ? _GENESIS_PENDING_SVG : '');
+        }
     }
 
     // Transient on-map toast announcing that cyclogenesis disturbances
@@ -14123,7 +14443,7 @@
             '<span class="rt-gen-toast-dot"></span>'
             + '<span class="rt-gen-toast-body">'
             + '<b>' + lead + nDisturbances + ' cyclogenesis disturbance' + plural + '</b>'
-            + '<span class="rt-gen-toast-sub">Google DeepMind ensemble · tap a marker for the 1000-member detail</span>'
+            + '<span class="rt-gen-toast-sub">Google DeepMind ensemble · tap a marker for the ' + _genesisVariantMemberTag() + ' detail</span>'
             + '</span>'
             + '<span class="rt-gen-toast-close" aria-label="Dismiss">×</span>';
 
@@ -14156,11 +14476,13 @@
     function _loadGenesis(isAutoRefresh) {
         if (_rtGenesisLoading) return;
         _rtGenesisLoading = true;
+        _genesisReloadPending = false;   // consuming any queued reload
         var statusEl = document.getElementById('ir-genesis-status');
         // Only show the "Loading…" placeholder on the first load — a
         // background re-poll shouldn't make the panel flicker.
         if (statusEl && !isAutoRefresh) {
-            statusEl.textContent = 'Loading 1000-member ensemble…';
+            statusEl.textContent = 'Loading ' + _genesisVariantMemberTag()
+                + ' ensemble…';
         }
 
         // Fire the lightweight (~50 KB) cluster index fetch in PARALLEL with
@@ -14174,14 +14496,15 @@
         // runs. Independent of the main fetch; failure just hides the stepper.
         _loadGenesisCycleList();
 
-        var _genQs = _genesisActiveCycle
-            ? '?init_time=' + encodeURIComponent(_genesisActiveCycle) : '';
+        var _genQs = _genesisQueryString(true);
         fetch(API_BASE + '/ir-monitor/weatherlab-genesis' + _genQs, { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (data) {
                 var newInit = data && data.init_time;
                 var prevInit = _genesisLastInit;
                 _genesisLastInit = newInit;
+                // Active divisor for formation probability / projection.
+                _genesisSetEnsembleSize(data && data.ensemble_size);
 
                 // If a background re-poll returned the same cycle we
                 // already have, skip the re-render to avoid touching
@@ -14233,7 +14556,16 @@
                 console.warn('[Genesis] fetch failed', err);
                 if (statusEl && !isAutoRefresh) statusEl.textContent = 'Unavailable';
             })
-            .finally(function () { _rtGenesisLoading = false; });
+            .finally(function () {
+                _rtGenesisLoading = false;
+                // A variant/cycle default resolved mid-load — reload now
+                // that the in-flight fetch is done (the guard above would
+                // otherwise have dropped the re-entrant call).
+                if (_genesisReloadPending) {
+                    _genesisReloadPending = false;
+                    _loadGenesis();
+                }
+            });
 
         // (Re-)arm the background re-poll. setInterval would keep firing
         // even when the tab is hidden, so we use a setTimeout chain that
@@ -15438,7 +15770,7 @@
             checked: !!_rtGlobalWLVisible
         });
         var genStatus = '';
-        if (_rtGenesisLoading) genStatus = 'Loading 1000 members…';
+        if (_rtGenesisLoading) genStatus = 'Loading members…';
         else if (_rtGenesisData) {
             var nt = _rtGenesisData.n_tracks || 0;
             var nd = _genesisDisturbanceCount();
@@ -15450,9 +15782,37 @@
         html += row({
             action: 'genesis',
             label: '<b>Cyclogenesis disturbances</b>',
-            substatus: 'FNV3 LARGE_ENSEMBLE · ≥5% formation prob' + (genStatus ? ' — ' + genStatus : ''),
+            substatus: _genesisVariantModelLabel() + ' · ≥5% formation prob'
+                + (genStatus ? ' — ' + genStatus : ''),
             checked: !!_rtGenesisVisible
         });
+        // Ensemble-size picker — 1000-member (richer stats, publishes later)
+        // vs 50-member (publishes earlier, a fresher-but-coarser backup).
+        // Defaults to whatever gives the freshest cycle; toggling to a
+        // variant the current cycle lacks jumps to the freshest run that
+        // has it. Mirrors the Method chip row styling.
+        var _vSmall = _genesisEnsembleVariant === 'small';
+        var lgBg  = !_vSmall ? 'rgba(249,115,22,0.32)' : 'transparent';
+        var smBg  =  _vSmall ? 'rgba(249,115,22,0.32)' : 'transparent';
+        var lgCol = !_vSmall ? '#f97316' : 'inherit';
+        var smCol =  _vSmall ? '#f97316' : 'inherit';
+        // Note when a variant isn't published for the freshest cycle.
+        var _freshest = _genesisCycleList[0];
+        var lgGap = (_freshest && !_genesisCycleHasVariant(_freshest, 'large'));
+        var smGap = (_freshest && !_genesisCycleHasVariant(_freshest, 'small'));
+        html += '<div class="ir-global-menu-row ir-global-method-row" style="opacity:'
+            + (_rtGenesisVisible ? 1 : 0.45) + ';">'
+            + '<span style="font-size:0.72rem; opacity:0.75; margin-right:8px;">Members:</span>'
+            + '<button type="button" class="ir-global-genvariant-chip" data-genvariant="large"'
+            + ' style="background:' + lgBg + '; color:' + lgCol + ';">'
+            + '1000' + (lgGap ? _GENESIS_PENDING_SVG : '') + '</button>'
+            + '<button type="button" class="ir-global-genvariant-chip" data-genvariant="small"'
+            + ' style="background:' + smBg + '; color:' + smCol + ';">'
+            + '50' + (smGap ? _GENESIS_PENDING_SVG : '') + '</button>'
+            + (_vSmall
+                ? '<span style="font-size:0.66rem; opacity:0.7; margin-left:8px;">preliminary</span>'
+                : '')
+            + '</div>';
         // Clustering-method picker — two radio-style chips inline so
         // a forecaster can A/B DeepMind's own track_id grouping vs
         // our DBSCAN-style spatial clustering on member first-genesis
@@ -15695,6 +16055,26 @@
                     }
                 });
             })(chips[c]);
+        }
+
+        // Ensemble-size (1000 / 50) picker chips. _genesisSetVariant
+        // handles the cycle-jump + re-fetch; we just refresh the menu so
+        // the active chip + labels update.
+        var gvChips = content.querySelectorAll('.ir-global-genvariant-chip');
+        for (var gv = 0; gv < gvChips.length; gv++) {
+            (function (chipEl) {
+                chipEl.addEventListener('click', function (ev) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    var v = chipEl.getAttribute('data-genvariant');
+                    if (!v || v === _genesisEnsembleVariant) return;
+                    _genesisSetVariant(v);
+                    if (typeof toggleLayersPanel === 'function') {
+                        toggleLayersPanel();  // close
+                        toggleLayersPanel();  // reopen with refreshed HTML
+                    }
+                });
+            })(gvChips[gv]);
         }
 
         // TC-ATLAS tuner sliders — live re-clustering on every input.
