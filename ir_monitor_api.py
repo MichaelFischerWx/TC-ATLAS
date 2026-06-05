@@ -98,6 +98,13 @@ _NHC_BASINS = {"EP", "CP", "AL"}
 
 # Cache settings
 _STORM_CACHE_TTL = 300          # 5 minutes (matches Cloud Scheduler ping interval)
+# How long a non-empty last-known-good storm cache is retained when a poll
+# comes back empty. An empty poll is almost always an upstream hiccup (NHC/JTWC
+# directory or deck fetch transiently failing), not every storm dissipating at
+# once — real dissipation ages out per-storm over 24-48 h. Retaining for this
+# long rides out outages without flickering the map to "no active TCs"; past it
+# we accept 0 rather than serve indefinitely-frozen data.
+_EMPTY_POLL_RETAIN_HOURS = 6.0
 _IR_FRAME_CACHE_MAX = 100       # max cached IR frames (~10 MB, covers ~7 storms)
 _IR_FRAME_CACHE_TTL = 300       # 5 minutes per frame
 # Minimum spacing between expensive background prefetch cycles. The storm
@@ -2643,6 +2650,41 @@ def _poll_active_storms(spawn_prefetch: bool = True):
                           f"{old.get('lat',0):.1f},{old.get('lon',0):.1f} → "
                           f"{s.get('lat',0):.1f},{s.get('lon',0):.1f} "
                           f"(Δ{dlat:.1f}°lat, Δ{dlon:.1f}°lon) — will refetch frames")
+
+    # ── Resilience: don't let a transient empty poll wipe the map ──
+    # An empty result is almost always an upstream hiccup — NHC/JTWC listings
+    # or deck fetches transiently failing (e.g. NHC gzipping an A-deck so the
+    # .dat 404s, or JTWC's SSD mirror returning 403). Genuine dissipation never
+    # drops a whole basin in one 10-min cycle; storms age out per-storm over
+    # 24-48 h. So if this poll came back empty but the last good cache still has
+    # storms and is recent, keep the last-known-good set instead of flickering
+    # to "no active TCs". Bounded by _EMPTY_POLL_RETAIN_HOURS so a genuine
+    # multi-hour outage (or true end-of-season) eventually clears to 0.
+    if not storms:
+        with _active_storms_lock:
+            prev_storms = list(_active_storms_cache.get("storms", []))
+            prev_updated = _active_storms_cache.get("updated_utc")
+        if prev_storms:
+            keep = True
+            if prev_updated:
+                try:
+                    prev_dt = _dt.strptime(
+                        prev_updated, "%Y-%m-%dT%H:%M:%SZ"
+                    ).replace(tzinfo=timezone.utc)
+                    keep = (now - prev_dt) < timedelta(
+                        hours=_EMPTY_POLL_RETAIN_HOURS)
+                except ValueError:
+                    keep = True
+            if keep:
+                print(f"[IR Monitor] Empty poll but last-known-good cache has "
+                      f"{len(prev_storms)} storm(s) (updated {prev_updated}) — "
+                      f"likely upstream hiccup; retaining previous set rather "
+                      f"than clobbering to 0.")
+                _last_poll_time = time.time()
+                return prev_storms
+            print(f"[IR Monitor] Empty poll and last-known-good cache is stale "
+                  f"(>{_EMPTY_POLL_RETAIN_HOURS} h, updated {prev_updated}) — "
+                  f"accepting 0 active storms.")
 
     # ── Update cache ──
     count_by_basin: dict = {}
