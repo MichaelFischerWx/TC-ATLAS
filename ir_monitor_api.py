@@ -7432,6 +7432,64 @@ _WEATHERLAB_GENESIS_TYPICAL_PUBLISH_LAG_H = 5.0
 _genesis_cycle_first_seen: dict = {}
 
 
+# Cyclogenesis ensemble variants.
+#   "large" = 1000-member FNV3_LARGE_ENSEMBLE — richer stats, but publishes
+#             ~3-5 h after init and a cycle is occasionally delayed/skipped.
+#   "small" = 50-member FNV3 — BYTE-IDENTICAL CSV schema, ~24x smaller, and
+#             publishes notably earlier. A fresher-but-coarser backup.
+# Member counts differ, so all member-count-dependent math (formation
+# probability, clustering gates) must scale off the OBSERVED sample count,
+# never a hard-coded 1000.
+_GENESIS_VARIANT_DEFAULT = "large"
+_GENESIS_VARIANT_NOMINAL_SIZE = {"large": 1000, "small": 50}
+
+
+def _genesis_variant_norm(variant) -> str:
+    """Normalize an incoming variant string to 'large' or 'small'."""
+    v = (variant or "").strip().lower()
+    # Accept a few friendly aliases so the query param is forgiving.
+    if v in ("small", "50", "fnv3", "fnv3_ensemble"):
+        return "small"
+    if v in ("large", "1000", "fnv3_large_ensemble", "large_ensemble"):
+        return "large"
+    return _GENESIS_VARIANT_DEFAULT
+
+
+def _genesis_variant_source(variant) -> tuple:
+    """Return (base_url, file_prefix) for the cyclogenesis CSV of this
+    variant. Resolved at call time so it can reference _WEATHERLAB_LARGE_BASE,
+    which is defined later in the module."""
+    if _genesis_variant_norm(variant) == "small":
+        return _WEATHERLAB_BASE, "FNV3"
+    return _WEATHERLAB_LARGE_BASE, "FNV3_LARGE_ENSEMBLE"
+
+
+def _genesis_variant_label(variant) -> str:
+    """Human-readable model string for response payloads."""
+    if _genesis_variant_norm(variant) == "small":
+        return "DeepMind FNV3 (50-member)"
+    return "DeepMind FNV3 LARGE_ENSEMBLE"
+
+
+def _genesis_data_ensemble_size(data: dict) -> int:
+    """Observed ensemble size = count of distinct member sample keys across
+    all tracks in a parsed cyclogenesis dict. Robust to the variant's
+    nominal size and to partial publishes."""
+    seen = set()
+    for storm in (data or {}).values():
+        seen.update((storm.get("members") or {}).keys())
+    return len(seen)
+
+
+def _genesis_variant_clusters_size(variant, date_str, hour_str):
+    """Observed ensemble size for a (variant, cycle), via the cached CSV.
+    Used by the cluster endpoints to report the divisor the frontend should
+    use for formation probability. The fetch is a warm dict lookup since the
+    clusters were just computed from the same parse."""
+    d = _fetch_weatherlab_genesis_csv(date_str, hour_str, variant)
+    return _genesis_data_ensemble_size(d) if d else None
+
+
 def _genesis_cycle_dt(date_str: str, hour_str: str):
     """Parse a `(date_str, hour_str)` candidate into a UTC datetime."""
     return _dt(
@@ -7530,12 +7588,13 @@ def _genesis_next_cycle_eta_h(now=None, init_time: str = None) -> float | None:
     return max(0.0, (next_published - now).total_seconds() / 3600.0)
 
 
-def _resolve_latest_genesis_cycle(require_data: bool = True
+def _resolve_latest_genesis_cycle(require_data: bool = True,
+                                  variant: str = _GENESIS_VARIANT_DEFAULT
                                   ) -> tuple[str | None, str | None, dict | None]:
     """Walk the candidate list newest-first and return the first cycle
-    that fetches successfully. Centralizes the loop that the global
-    endpoint, the per-track endpoint, and the warmer all need so the
-    "what's the latest?" logic lives in one place.
+    of the given ensemble `variant` that fetches successfully. Centralizes
+    the loop that the global endpoint, the per-track endpoint, and the
+    warmer all need so the "what's the latest?" logic lives in one place.
 
     `require_data`: if True (default), keep walking past cycles that
     fetch successfully but contain zero tracks. Set False to accept the
@@ -7545,7 +7604,7 @@ def _resolve_latest_genesis_cycle(require_data: bool = True
     candidates = _genesis_candidates()
     fallback = None
     for date_str, hour_str in candidates:
-        d = _fetch_weatherlab_genesis_csv(date_str, hour_str)
+        d = _fetch_weatherlab_genesis_csv(date_str, hour_str, variant)
         if d is None:
             continue
         if not require_data or len(d) > 0:
@@ -7559,10 +7618,12 @@ def _resolve_latest_genesis_cycle(require_data: bool = True
     return None, None, None
 
 
-def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str
+def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str,
+                                  variant: str = _GENESIS_VARIANT_DEFAULT
                                   ) -> dict | None:
-    """Fetch and parse the FNV3 LARGE_ENSEMBLE cyclogenesis CSV for the
-    given init time. Returns dict keyed by track_id:
+    """Fetch and parse the FNV3 cyclogenesis CSV for the given init time and
+    ensemble `variant` ('large' = 1000-member, 'small' = 50-member). Returns
+    dict keyed by track_id:
         { "members": {"<sample>": {"points": [...]}, ...},
           "ensemble_mean": {"points": [...]} }
     with the same per-point shape as `_fetch_weatherlab_csv` so the
@@ -7580,16 +7641,20 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str
     (When lead_time_hours reappears we detect it and fall back to the
     legacy layout.)
     """
-    cache_key = (date_str, hour_str)
+    variant_n = _genesis_variant_norm(variant)
+    # Cache key carries the variant so the 1000- and 50-member CSVs for the
+    # same init time don't collide.
+    cache_key = (date_str, hour_str, variant_n)
     hit = _weatherlab_cache_lookup(
         _weatherlab_genesis_cache, cache_key,
         _WEATHERLAB_GENESIS_CACHE_TTL, _WEATHERLAB_GENESIS_MISS_TTL)
     if hit is not _WL_CACHE_MISS:
         return hit   # fresh positive dict, or None for a known-missing cycle
 
+    base_url, file_prefix = _genesis_variant_source(variant_n)
     date_fmt = date_str.replace("-", "_")
-    url = (f"{_WEATHERLAB_LARGE_BASE}/ensemble/cyclogenesis/csv/"
-           f"FNV3_LARGE_ENSEMBLE_{date_fmt}T{hour_str}_00_cyclogenesis.csv")
+    url = (f"{base_url}/ensemble/cyclogenesis/csv/"
+           f"{file_prefix}_{date_fmt}T{hour_str}_00_cyclogenesis.csv")
     try:
         # 30 s read is enough for the multi-MB CSV on a warm CDN edge; the
         # shared session adds a few automatic retries to absorb DeepMind's
@@ -7600,7 +7665,7 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str
         # Short negative cache only — a flaky handshake must NOT poison the
         # full MISS window and demote users to an older cycle for 10 min.
         print(f"[WeatherLab Genesis] transient fetch error "
-              f"{date_str} {hour_str}z: {e}")
+              f"{date_str} {hour_str}z [{variant_n}]: {e}")
         _weatherlab_cache_transient(_weatherlab_genesis_cache, cache_key)
         return None
     if r.status_code != 200:
@@ -7751,8 +7816,11 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str
     # rather than an assumed lag. We use setdefault so re-fetches after
     # cache eviction don't reset the anchor to a later wall-clock time
     # (which would push the predicted next-publish further into the
-    # future every time).
-    _genesis_cycle_first_seen.setdefault(cache_key, time.time())
+    # future every time). Keyed by (date, hour) only — variant-agnostic, so
+    # whichever variant lands first anchors the cycle's publish clock (the
+    # ETA is a soft display, and _genesis_next_cycle_eta_h looks it up by
+    # the 2-tuple).
+    _genesis_cycle_first_seen.setdefault((date_str, hour_str), time.time())
     # Cap the cache at 4 PARSED cycles. Miss-sentinel entries are tiny
     # strings, so we exclude them from the cap — otherwise a flurry of
     # not-yet-published probes could evict a fresh ~10 MB parse and
@@ -7763,7 +7831,7 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str
         oldest = min(parsed_keys, key=lambda k: _weatherlab_genesis_cache[k]["ts"])
         del _weatherlab_genesis_cache[oldest]
     print(f"[WeatherLab Genesis] Parsed {len(result)} tracks from "
-          f"{date_str} {hour_str}z")
+          f"{date_str} {hour_str}z [{variant_n}]")
     return result
 
 
@@ -7800,21 +7868,27 @@ def refresh_genesis_cache() -> dict:
     The params here mirror the endpoint defaults (and the frontend reset
     values) so the steady-state request is the same cache key.
     """
-    used_date, used_hour, data = _resolve_latest_genesis_cycle(require_data=True)
-    init_time = (used_date.replace("-", "") + used_hour) if used_date else None
-    n_clusters = None
-    if data:
-        try:
-            _, _, clusters, _ = _tca_get_or_compute_clusters(
-                3.0, 8, 1000.0, 60.0, 25, 500.0)
-            n_clusters = len(clusters) if clusters else 0
-        except Exception:
-            traceback.print_exc()
-    return {
-        "init_time": init_time,
-        "n_tracks": len(data) if data else 0,
-        "n_clusters": n_clusters,
-    }
+    out = {}
+    for variant in ("large", "small"):
+        used_date, used_hour, data = _resolve_latest_genesis_cycle(
+            require_data=True, variant=variant)
+        init_time = (used_date.replace("-", "") + used_hour) if used_date else None
+        n_clusters = None
+        if data:
+            try:
+                _, _, clusters, _ = _tca_get_or_compute_clusters(
+                    3.0, 8, 1000.0, 60.0, 25, 500.0, variant=variant)
+                n_clusters = len(clusters) if clusters else 0
+            except Exception:
+                traceback.print_exc()
+        out[variant] = {
+            "init_time": init_time,
+            "n_tracks": len(data) if data else 0,
+            "n_clusters": n_clusters,
+        }
+    # Back-compat top-level fields mirror the 'large' (default) variant.
+    out.update(out["large"])
+    return out
 
 
 def _background_genesis_warm():
@@ -7841,9 +7915,10 @@ def start_genesis_warmup():
 
 
 @router.get("/weatherlab-genesis")
-def get_weatherlab_genesis(max_members: int = 100, init_time: str = None):
-    """FNV3 LARGE_ENSEMBLE cyclogenesis: all 1000-member TC predictions
-    (including pre-genesis disturbances) for the latest available init.
+def get_weatherlab_genesis(max_members: int = 100, init_time: str = None,
+                           variant: str = _GENESIS_VARIANT_DEFAULT):
+    """FNV3 cyclogenesis: all TC predictions (including pre-genesis
+    disturbances) for the latest available init.
 
     `max_members` (default 100) thins the per-track ensemble before
     return — full payload is ~10 MB for ~30 tracks × 1000 samples and
@@ -7853,24 +7928,32 @@ def get_weatherlab_genesis(max_members: int = 100, init_time: str = None):
     `init_time` (YYYYMMDDHH) pins the response to a specific past cycle
     so the frontend can step through recent runs (run-to-run trend). When
     omitted, the latest published cycle is resolved as before.
+
+    `variant`: 'large' (1000-member FNV3_LARGE_ENSEMBLE, default) or
+    'small' (50-member FNV3 — publishes earlier, useful when the large
+    cycle is delayed). `ensemble_size` in the response is the OBSERVED
+    member count so the frontend scales formation probability correctly.
     """
     now = _dt.now(timezone.utc)
+    variant_n = _genesis_variant_norm(variant)
     if init_time:
         req_date, req_hour = _genesis_init_to_cycle(init_time)
         if req_date is None:
             raise HTTPException(
                 status_code=400,
                 detail="init_time must be 10 digits (YYYYMMDDHH)")
-        data = _fetch_weatherlab_genesis_csv(req_date, req_hour)
+        data = _fetch_weatherlab_genesis_csv(req_date, req_hour, variant_n)
         used_date, used_hour = req_date, req_hour
     else:
         used_date, used_hour, data = _resolve_latest_genesis_cycle(
-            require_data=True)
+            require_data=True, variant=variant_n)
 
     if data is None:
         return JSONResponse(
             content={
-                "model": "DeepMind FNV3 LARGE_ENSEMBLE",
+                "model": _genesis_variant_label(variant_n),
+                "variant": variant_n,
+                "ensemble_size": None,
                 "init_time": init_time if init_time else None,
                 "tracks": [],
                 "n_tracks": 0,
@@ -7882,6 +7965,7 @@ def get_weatherlab_genesis(max_members: int = 100, init_time: str = None):
             headers={"Cache-Control": "public, max-age=120"},
         )
 
+    ensemble_size = _genesis_data_ensemble_size(data)
     init_time = used_date.replace("-", "") + used_hour
     cycle_dt = _genesis_cycle_dt(used_date, used_hour)
     cycle_age_h = (now - cycle_dt).total_seconds() / 3600.0
@@ -7916,7 +8000,9 @@ def get_weatherlab_genesis(max_members: int = 100, init_time: str = None):
 
     return JSONResponse(
         content={
-            "model": "DeepMind FNV3 LARGE_ENSEMBLE",
+            "model": _genesis_variant_label(variant_n),
+            "variant": variant_n,
+            "ensemble_size": ensemble_size,
             "init_time": init_time,
             "tracks": tracks,
             "n_tracks": len(tracks),
@@ -7932,13 +8018,20 @@ def get_weatherlab_genesis(max_members: int = 100, init_time: str = None):
 @router.get("/weatherlab-genesis-cycles")
 def get_weatherlab_genesis_cycles(count: int = 4):
     """List the most recent published genesis cycles (freshest first) so
-    the frontend can offer a cycle picker for run-to-run trend comparison.
+    the frontend can offer a cycle picker AND default to the freshest
+    cycle/variant available.
 
-    Each entry: `{init_time (YYYYMMDDHH), age_hours, n_tracks}`. Probes the
-    maturity-gated candidate list and reuses the per-cycle CSV cache, so
-    steady state is dict lookups; a cold instance pays the download for up
-    to `count` cycles once, after which they're warm (the parse cache also
-    caps at ~4, matching the default window).
+    Each entry reports per-variant availability:
+        { init_time (YYYYMMDDHH), age_hours,
+          n_tracks,                       # back-compat: the 'large' count
+          variants: { large: {available, n_tracks},
+                      small: {available, n_tracks} } }
+    A cycle is listed if EITHER variant is published. The small (50-member)
+    variant typically lands earlier, so the freshest listed cycle may only
+    have `small` available — that's exactly the gap this feature fills.
+
+    Probes the maturity-gated candidate list for both variants and reuses
+    the per-(cycle, variant) CSV cache, so steady state is dict lookups.
 
     Hyphenated path (not `/weatherlab-genesis/cycles`) so it doesn't get
     swallowed by the `/weatherlab-genesis/{track_id}` route.
@@ -7947,14 +8040,25 @@ def get_weatherlab_genesis_cycles(count: int = 4):
     count = max(1, min(int(count or 4), 8))
     cycles = []
     for date_str, hour_str in _genesis_candidates(now=now):
-        d = _fetch_weatherlab_genesis_csv(date_str, hour_str)
-        if d is None:
-            continue   # not published (or fetch failed) — skip, keep looking
+        per_variant = {}
+        for variant in ("large", "small"):
+            d = _fetch_weatherlab_genesis_csv(date_str, hour_str, variant)
+            per_variant[variant] = {
+                "available": d is not None,
+                "n_tracks": (len(d) if d is not None else None),
+            }
+        if not (per_variant["large"]["available"]
+                or per_variant["small"]["available"]):
+            continue   # neither variant published for this cycle yet
         cycle_dt = _genesis_cycle_dt(date_str, hour_str)
         cycles.append({
             "init_time": date_str.replace("-", "") + hour_str,
             "age_hours": round((now - cycle_dt).total_seconds() / 3600.0, 2),
-            "n_tracks": len(d),
+            # Back-compat scalar = the large count if present, else small.
+            "n_tracks": (per_variant["large"]["n_tracks"]
+                         if per_variant["large"]["available"]
+                         else per_variant["small"]["n_tracks"]),
+            "variants": per_variant,
         })
         if len(cycles) >= count:
             break
@@ -7976,6 +8080,7 @@ def get_weatherlab_genesis_trend(
     time_window_h: float = 60.0,
     cluster_min_members: int = 25,
     same_system_km: float = 500.0,
+    variant: str = _GENESIS_VARIANT_DEFAULT,
 ):
     """Run-to-run trend for ONE disturbance: for each of the last `count`
     published cycles, find the TC-ATLAS cluster whose density-peak genesis
@@ -7998,6 +8103,7 @@ def get_weatherlab_genesis_trend(
     Hyphenated path so it isn't swallowed by `/weatherlab-genesis/{track_id}`.
     """
     now = _dt.now(timezone.utc)
+    variant_n = _genesis_variant_norm(variant)
     count = max(1, min(int(count or 4), 8))
     trend = []
     n_with_data = 0
@@ -8005,7 +8111,7 @@ def get_weatherlab_genesis_trend(
         clusters = _tca_clusters_for_cycle(
             date_str, hour_str, grid_deg, peak_min_members,
             assign_radius_km, time_window_h, cluster_min_members,
-            same_system_km)
+            same_system_km, variant=variant_n)
         if clusters is None:
             continue   # cycle not published — skip, keep looking
         n_with_data += 1
@@ -8047,7 +8153,8 @@ def get_weatherlab_genesis_trend(
             break
     return JSONResponse(
         content={
-            "model": "DeepMind FNV3 LARGE_ENSEMBLE",
+            "model": _genesis_variant_label(variant_n),
+            "variant": variant_n,
             "anchor": {"lat": lat, "lon": lon},
             "match_radius_km": match_radius_km,
             "trend": trend,
@@ -8058,9 +8165,10 @@ def get_weatherlab_genesis_trend(
 
 
 @router.get("/weatherlab-genesis/{track_id}")
-def get_weatherlab_genesis_track(track_id: str, init_time: str = None):
-    """Per-track detail for a single FNV3 LARGE_ENSEMBLE cyclogenesis
-    feature. Returns ALL ensemble members for the track (vs the global
+def get_weatherlab_genesis_track(track_id: str, init_time: str = None,
+                                 variant: str = _GENESIS_VARIANT_DEFAULT):
+    """Per-track detail for a single FNV3 cyclogenesis feature. Returns ALL
+    ensemble members for the track (vs the global
     endpoint which thins to 100 to keep the spaghetti layer from
     tanking Leaflet). Drives the click-through detail modal that
     renders the colleague's point-cloud + intensity-spread figures
@@ -8081,6 +8189,7 @@ def get_weatherlab_genesis_track(track_id: str, init_time: str = None):
         raise HTTPException(status_code=400, detail="track_id is required")
 
     now = _dt.now(timezone.utc)
+    variant_n = _genesis_variant_norm(variant)
     data = None
     used_date = None
     used_hour = None
@@ -8091,7 +8200,7 @@ def get_weatherlab_genesis_track(track_id: str, init_time: str = None):
             raise HTTPException(
                 status_code=400,
                 detail="init_time must be 10 digits (YYYYMMDDHH)")
-        d = _fetch_weatherlab_genesis_csv(req_date, req_hour)
+        d = _fetch_weatherlab_genesis_csv(req_date, req_hour, variant_n)
         if d and track_id in d:
             data = d
             used_date = req_date
@@ -8101,7 +8210,7 @@ def get_weatherlab_genesis_track(track_id: str, init_time: str = None):
         # that contains the requested track_id. Cycles too young to be
         # published are skipped automatically.
         for date_str, hour_str in _genesis_candidates(now=now):
-            d = _fetch_weatherlab_genesis_csv(date_str, hour_str)
+            d = _fetch_weatherlab_genesis_csv(date_str, hour_str, variant_n)
             if d and track_id in d:
                 data = d
                 used_date = date_str
@@ -8122,7 +8231,9 @@ def get_weatherlab_genesis_track(track_id: str, init_time: str = None):
     members = storm["members"]
     return JSONResponse(
         content={
-            "model": "DeepMind FNV3 LARGE_ENSEMBLE",
+            "model": _genesis_variant_label(variant_n),
+            "variant": variant_n,
+            "ensemble_size": _genesis_data_ensemble_size(data),
             "init_time": init_time,
             "track_id": track_id,
             "n_members": len(members),
@@ -8245,12 +8356,29 @@ def _tca_compute_clusters(raw_data: dict,
                           time_window_h: float = 60.0,
                           cluster_min_members: int = 25,
                           same_system_km: float = 500.0,
-                          ensemble_size: int = 1000) -> list:
+                          ensemble_size: int = None) -> list:
     """Run the TC-ATLAS density-peak algorithm on the full uncapped
     CSV parse (dict keyed by DM track_id). Returns a list of cluster
-    dicts ranked by size (largest first → 'Disturbance 1')."""
+    dicts ranked by size (largest first → 'Disturbance 1').
+
+    `peak_min_members` / `cluster_min_members` are PER-1000 reference
+    counts: they are scaled internally by (observed ensemble size / 1000)
+    so the same tuner values behave sensibly for the 50-member variant
+    (e.g. cluster_min 25 → ≥3 of 50). The fraction divisor is the OBSERVED
+    ensemble size, never a hard-coded 1000."""
     if not raw_data:
         return []
+
+    # Observed ensemble size = distinct sample keys across all tracks.
+    # Drives both the formation-probability divisor below and the
+    # threshold scaling so 50-member data isn't gated out by 1000-tuned
+    # counts. The explicit `ensemble_size` arg is only a fallback.
+    obs_size = _genesis_data_ensemble_size(raw_data) or (ensemble_size or 0)
+    obs_size = max(1, obs_size)
+    ensemble_size = obs_size
+    _scale = obs_size / 1000.0
+    peak_min_members = max(2, int(round(peak_min_members * _scale)))
+    cluster_min_members = max(3, int(round(cluster_min_members * _scale)))
 
     # Step 1: pool (track_id, sample) entries with first-genesis points.
     entries = []
@@ -8449,20 +8577,35 @@ def _tca_compute_clusters(raw_data: dict,
 
 def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
                                   assign_radius_km, time_window_h,
-                                  cluster_min_members, same_system_km=500.0):
-    """Return cached (full, with members) clusters for the current
-    cycle + params, computing on miss. Used by both the index endpoint
+                                  cluster_min_members, same_system_km=500.0,
+                                  variant=_GENESIS_VARIANT_DEFAULT,
+                                  init_time=None):
+    """Return cached (full, with members) clusters for a cycle + params +
+    ensemble variant, computing on miss. Used by both the index endpoint
     (which strips members for the response) and the per-cluster detail
-    endpoint (which serves them in full)."""
+    endpoint (which serves them in full).
+
+    `init_time` (YYYYMMDDHH) pins to a specific cycle so the user can step
+    through past runs with the TC-ATLAS clustering method; when omitted the
+    latest published cycle of the variant is resolved."""
     now = _dt.now(timezone.utc)
-    used_date, used_hour, data = _resolve_latest_genesis_cycle(require_data=True)
+    variant_n = _genesis_variant_norm(variant)
+    if init_time:
+        req_date, req_hour = _genesis_init_to_cycle(init_time)
+        if req_date is None:
+            return None, None, None, None
+        data = _fetch_weatherlab_genesis_csv(req_date, req_hour, variant_n)
+        used_date, used_hour = req_date, req_hour
+    else:
+        used_date, used_hour, data = _resolve_latest_genesis_cycle(
+            require_data=True, variant=variant_n)
     if data is None:
         return None, None, None, None
     init_time = used_date.replace("-", "") + used_hour
     params = (round(grid_deg, 3), int(peak_min_members),
               round(assign_radius_km, 2), round(time_window_h, 2),
               int(cluster_min_members), round(same_system_km, 2))
-    cache_key = (init_time, params)
+    cache_key = (init_time, variant_n, params)
     cached = _TCA_CLUSTER_CACHE.get(cache_key)
     if cached and (time.time() - cached["ts"]) < _TCA_CLUSTER_TTL:
         return init_time, params, cached["clusters"], (used_date, used_hour)
@@ -8485,21 +8628,23 @@ def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
 
 def _tca_clusters_for_cycle(date_str, hour_str, grid_deg, peak_min_members,
                             assign_radius_km, time_window_h,
-                            cluster_min_members, same_system_km=500.0):
+                            cluster_min_members, same_system_km=500.0,
+                            variant=_GENESIS_VARIANT_DEFAULT):
     """Like `_tca_get_or_compute_clusters` but for a SPECIFIC (already-
     resolved) cycle rather than 'the latest'. Shares the same
     `_TCA_CLUSTER_CACHE` so the run-to-run trend endpoint reuses the
     cluster set the global index already computed for the current cycle,
     and only pays compute on the older cycles. Returns the cluster list
     (with members) or None if the cycle has no data."""
-    data = _fetch_weatherlab_genesis_csv(date_str, hour_str)
+    variant_n = _genesis_variant_norm(variant)
+    data = _fetch_weatherlab_genesis_csv(date_str, hour_str, variant_n)
     if data is None:
         return None
     init_time = date_str.replace("-", "") + hour_str
     params = (round(grid_deg, 3), int(peak_min_members),
               round(assign_radius_km, 2), round(time_window_h, 2),
               int(cluster_min_members), round(same_system_km, 2))
-    cache_key = (init_time, params)
+    cache_key = (init_time, variant_n, params)
     cached = _TCA_CLUSTER_CACHE.get(cache_key)
     if cached and (time.time() - cached["ts"]) < _TCA_CLUSTER_TTL:
         return cached["clusters"]
@@ -8555,6 +8700,8 @@ def get_weatherlab_genesis_clusters(
     time_window_h: float = 60.0,
     cluster_min_members: int = 25,
     same_system_km: float = 500.0,
+    variant: str = _GENESIS_VARIANT_DEFAULT,
+    init_time: str = None,
 ):
     """Precomputed TC-ATLAS density-peak cluster INDEX — lightweight
     cluster metadata + ensemble_mean polylines, no per-member trajectories.
@@ -8562,16 +8709,22 @@ def get_weatherlab_genesis_clusters(
     when the user clicks a disturbance.
 
     Query params mirror the on-page Advanced clustering controls so the
-    sliders still drive recomputation server-side."""
+    sliders still drive recomputation server-side. `variant` selects the
+    1000- ('large') or 50-member ('small') ensemble; `init_time` pins a
+    past cycle for run-to-run stepping."""
     now = _dt.now(timezone.utc)
+    variant_n = _genesis_variant_norm(variant)
     init_time, params, clusters, dh = _tca_get_or_compute_clusters(
         grid_deg, peak_min_members, assign_radius_km,
-        time_window_h, cluster_min_members, same_system_km)
+        time_window_h, cluster_min_members, same_system_km,
+        variant=variant_n, init_time=init_time)
     if clusters is None:
         next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=None)
         return JSONResponse(
             content={
-                "model": "DeepMind FNV3 LARGE_ENSEMBLE",
+                "model": _genesis_variant_label(variant_n),
+                "variant": variant_n,
+                "ensemble_size": None,
                 "method": "tcatlas",
                 "init_time": None,
                 "clusters": [],
@@ -8588,7 +8741,10 @@ def get_weatherlab_genesis_clusters(
     next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time)
     return JSONResponse(
         content={
-            "model": "DeepMind FNV3 LARGE_ENSEMBLE",
+            "model": _genesis_variant_label(variant_n),
+            "variant": variant_n,
+            "ensemble_size": _genesis_variant_clusters_size(
+                variant_n, used_date, used_hour),
             "method": "tcatlas",
             "init_time": init_time,
             "params": {
@@ -8619,14 +8775,19 @@ def get_weatherlab_genesis_cluster(
     time_window_h: float = 60.0,
     cluster_min_members: int = 25,
     same_system_km: float = 500.0,
+    variant: str = _GENESIS_VARIANT_DEFAULT,
+    init_time: str = None,
 ):
     """Full per-member trajectories for one TC-ATLAS cluster (tca-N).
     Lazy-loaded by the detail modal when the user clicks a disturbance.
     Reuses the cached cluster computation — server work is one dict
-    lookup if the index endpoint has already been hit this cycle."""
+    lookup if the index endpoint has already been hit this cycle.
+    `variant`/`init_time` mirror the index endpoint."""
+    variant_n = _genesis_variant_norm(variant)
     init_time, params, clusters, dh = _tca_get_or_compute_clusters(
         grid_deg, peak_min_members, assign_radius_km,
-        time_window_h, cluster_min_members, same_system_km)
+        time_window_h, cluster_min_members, same_system_km,
+        variant=variant_n, init_time=init_time)
     if clusters is None:
         raise HTTPException(status_code=404, detail="No cycle data available")
     match = next((c for c in clusters if c["track_id"] == tca_id), None)
@@ -8637,12 +8798,17 @@ def get_weatherlab_genesis_cluster(
     now = _dt.now(timezone.utc)
     next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time)
     cycle_age_h = None
+    used_date = used_hour = None
     if dh is not None:
         used_date, used_hour = dh
         cycle_age_h = (now - _genesis_cycle_dt(used_date, used_hour)).total_seconds() / 3600.0
     return JSONResponse(
         content={
-            "model": "DeepMind FNV3 LARGE_ENSEMBLE",
+            "model": _genesis_variant_label(variant_n),
+            "variant": variant_n,
+            "ensemble_size": (_genesis_variant_clusters_size(
+                variant_n, used_date, used_hour)
+                if used_date else None),
             "method": "tcatlas",
             "init_time": init_time,
             "track_id": tca_id,
