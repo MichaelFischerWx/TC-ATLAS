@@ -1997,6 +1997,24 @@ def _fetch_adeck(atcf_id: str) -> list:
     return records
 
 
+def _fetch_nhc_storm_name(atcf_id: str) -> Optional[str]:
+    """
+    Resolve the human-facing storm name for an NHC (AL/EP/CP) storm.
+
+    The aid_public A-deck the NHC branch polls leaves the name field (col 27)
+    blank, so a named storm like EP012026 would otherwise fall back to its
+    ATCF id on the homepage / monitor. The name lives only in the btk B-deck,
+    so fetch that and extract it. Returns None if the B-deck is unreachable or
+    carries no usable name (caller then keeps prior ATCF-id behavior).
+    """
+    text = _http_get(f"{NHC_BDECK_BASE}/b{atcf_id}.dat", timeout=10)
+    if not text:
+        text = _http_get(f"{NHC_BDECK_BASE}/b{atcf_id}.dat.gz", timeout=10)
+    if not text:
+        return None
+    return _extract_storm_name(text)
+
+
 def _fetch_bdeck(atcf_id: str) -> list:
     """
     Fetch and parse the B-deck (best track) file.
@@ -2528,7 +2546,11 @@ def _poll_active_storms(spawn_prefetch: bool = True):
         age = now - latest["datetime"]
         if age > timedelta(hours=24):
             continue
-        entry = _build_storm_entry(sid, records, source="NHC")
+        # A-decks leave the name blank; pull it from the btk B-deck so named
+        # NHC storms read as "Amanda" rather than "EP012026" (the JTWC branch
+        # already does the equivalent via TCW/B-deck text).
+        name = _fetch_nhc_storm_name(sid)
+        entry = _build_storm_entry(sid, records, name=name, source="NHC")
         if entry:
             storms.append(entry)
             seen_ids.add(sid.upper())
@@ -6019,14 +6041,25 @@ def get_ir_frame_jpg(
         now_utc = _dt.now(timezone.utc)
         picked = None
         if warp.lower() != "none":
-            for _idx in range(len(frame_times) - 1, -1, -1):
-                _ft = frame_times[_idx]
-                _plat, _plon = _interp_pos_at(atcf_id, _ft, center_lat, center_lon)
-                if _gcs_jpg_get(atcf_id.upper(), _ft.strftime("%Y%m%d%H%M"),
-                                lat=_plat, lon=_plon):
-                    picked = _idx
-                    break
+            # Fast path: the per-storm manifest records every prewarmed frame's
+            # dt in ONE object. Pick the newest dt that lands on our frame grid
+            # — a single GCS read instead of up to ~13 sequential jpg downloads
+            # (the old scan fetched each frame in full just to test existence,
+            # then the code below re-fetched the winner: a double download on
+            # every warm hit). The prewarm renders on a 10-min grid, so the
+            # thumbnail's 30-min slots are always a subset of its keys.
+            manifest = _gcs_manifest_get(atcf_id.upper())
+            if manifest:
+                grid = {}
+                for _idx, _ft in enumerate(frame_times):
+                    grid[_ft.strftime("%Y%m%d%H%M")] = _idx
+                for _dstr in sorted(manifest.keys(), reverse=True):
+                    if _dstr in grid:
+                        picked = grid[_dstr]
+                        break
         if picked is None:
+            # Fallback (manifest miss / equirectangular variant): newest frame
+            # old enough to have published imagery (~40 min publish latency).
             for _idx in range(len(frame_times) - 1, -1, -1):
                 if (now_utc - frame_times[_idx]).total_seconds() >= 40 * 60:
                     picked = _idx
@@ -6049,7 +6082,10 @@ def get_ir_frame_jpg(
 
     # Common response headers with metadata
     meta_headers = {
-        "Cache-Control": "public, max-age=300",
+        # max-age=300 keeps a fresh-enough latest frame; stale-while-revalidate
+        # lets the browser repaint the gallery instantly from cache on revisit /
+        # tab-switch while it refreshes in the background — no extra server work.
+        "Cache-Control": "public, max-age=300, stale-while-revalidate=86400",
         "X-Frame-Index": str(frame_index),
         "X-Total-Frames": str(len(frame_times)),
         "X-Datetime": target_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
