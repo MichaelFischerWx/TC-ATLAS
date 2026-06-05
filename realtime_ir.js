@@ -992,16 +992,21 @@
         return 'Cat ' + cat.replace('C', '');
     }
 
-    /** Compact 2-char intensity class for the on-map storm dot:
-     *  TD (depression) / TS (storm) / HU (Cat 1-2) / MH (major, Cat 3+).
-     *  Saffir-Simpson based, used across all basins. Returns '' when wind
-     *  is unknown so the caller can leave the dot blank. */
-    function _irIntensityClass(vmaxKt) {
+    /** Compact intensity class for the on-map storm dot, basin-aware so each
+     *  basin reads in its own nomenclature. Below hurricane strength every
+     *  basin shares TD (depression) / TS (storm); at/above it:
+     *    - Atlantic, E+C Pacific (AL/EP/CP): HU / MH (major, Cat 3+ ≥96 kt)
+     *    - West Pacific (WP):                TY / STY (super typhoon ≥130 kt)
+     *    - N. Indian, S. Hemisphere (IO/SH): TC / STC (severe tropical cyclone)
+     *  Returns '' when wind is unknown so the caller can leave the dot blank. */
+    function _irIntensityClass(vmaxKt, atcfId) {
         if (vmaxKt == null) return '';
         if (vmaxKt < 34) return 'TD';
         if (vmaxKt < 64) return 'TS';
-        if (vmaxKt < 96) return 'HU';   // Cat 1-2
-        return 'MH';                    // Cat 3+ (major hurricane)
+        var basin = String(atcfId || '').slice(0, 2).toUpperCase();
+        if (basin === 'WP') return vmaxKt < 130 ? 'TY' : 'STY';
+        if (basin === 'IO' || basin === 'SH') return vmaxKt < 96 ? 'TC' : 'STC';
+        return vmaxKt < 96 ? 'HU' : 'MH';
     }
 
     /** Invests (ATCF number 90-99) aren't classified TCs — they show an
@@ -10632,15 +10637,18 @@
             // (TD/TS/HU/MH) and put the name in the pill, so the circle isn't
             // blank. Unnamed systems keep their compact code (D7/01W) inside.
             var intenClass = (isNamed && d.atcfMatch)
-                ? _irIntensityClass(d.atcfMatch.vmaxKt) : '';
+                ? _irIntensityClass(d.atcfMatch.vmaxKt, d.atcfMatch.atcfId) : '';
             var innerLabel = isNamed ? intenClass : d.displayShort;
             var namePill = isNamed
                 ? '<span class="rt-gen-marker-name">' + d.displayShort + '</span>'
                 : '';
+            // Shrink the font for 3-char classes (STY/STC) so they don't spill
+            // past the circle; 1-2 char labels keep the larger glyph.
+            var _fontScale = (innerLabel && innerLabel.length >= 3) ? 0.40 : 0.5;
             var html =
                 '<div class="rt-gen-marker' + (animateEntry ? ' rt-gen-marker--enter' : '') + '" style="background:' + style.bold + ';'
                 + 'width:' + baseSize + 'px;height:' + baseSize + 'px;line-height:'
-                + baseSize + 'px;font-size:' + Math.max(9, Math.round(baseSize * 0.5))
+                + baseSize + 'px;font-size:' + Math.max(8, Math.round(baseSize * _fontScale))
                 + 'px;">' + innerLabel + '</div>' + namePill;
             var icon = L.divIcon({
                 html: html, className: 'rt-gen-divicon',
