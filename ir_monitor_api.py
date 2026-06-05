@@ -39,7 +39,7 @@ from typing import Optional
 
 import numpy as np
 from fastapi import APIRouter, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 # Shared satellite IR module
 from satellite_ir import (
@@ -527,6 +527,39 @@ def _upload_public_bundle(key: str, body: bytes, content_type: str = "applicatio
         )
     except Exception as ex:
         print(f"[Bundle Pre-build] upload {key} failed: {ex}")
+
+
+def _ondemand_bundle_key(product: str, atcf_upper: str,
+                         lookback_hours: float, radius_deg: float,
+                         interval_min: int, band: int | None = None) -> str:
+    """Params-keyed GCS path for an on-demand (cache-miss fallback) bundle.
+
+    Distinct from the prewarm's default-param keys (bundles/{frames,raw,band}/…)
+    so a non-default lookback/radius/interval request can't overwrite — or be
+    served by — the prewarmed default-param object. Params are folded into the
+    object name; `lb`/`r`/`i` are rounded to a stable string so 6.0 == 6 keys
+    collapse.
+
+    NOTE: these on-demand objects accumulate (one per distinct param combo per
+    storm) and are never explicitly deleted. Configure a GCS lifecycle TTL
+    (e.g. delete after 1-2 days) on the `{_GCS_RT_VERSION}/bundles/ondemand/`
+    prefix so they don't accrue cost. Correctness-first: we always rebuild +
+    re-upload on every request (a freshness/dedup check is a later optimization).
+    """
+    lb = f"{lookback_hours:g}"
+    r = f"{radius_deg:g}"
+    iv = f"{interval_min:d}"
+    prod = product if band is None else f"{product}/{band}"
+    return (f"{_GCS_RT_VERSION}/bundles/ondemand/{prod}/"
+            f"{atcf_upper}_lb{lb}_r{r}_i{iv}.bin")
+
+
+def _public_bundle_url(key: str) -> str:
+    """Public storage.googleapis.com URL for a publicRead bucket object.
+
+    Mirrors the frontend's _GCS_BUCKET_ROOT construction in realtime_ir.js
+    (`https://storage.googleapis.com/{bucket}/{key}`)."""
+    return f"https://storage.googleapis.com/{_GCS_IR_CACHE_BUCKET}/{key}"
 
 
 def _gcs_rt_version_put():
@@ -4563,28 +4596,25 @@ def get_storm_ir_raw_bundle(
     header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
     body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
 
-    # Gzip the raw-Tb body for clients that accept it (all modern browsers
-    # do). uint8 brightness-temp arrays have strong spatial correlation
-    # and compress 30-50%. Browser decompresses transparently before
-    # r.arrayBuffer() resolves — no client-side decode needed. Display
-    # WebP bundles are NOT gzipped (already entropy-coded by codec).
-    resp_headers = {
-        "Cache-Control": "public, max-age=300",
-        "X-Bundle-Frames": str(len(frame_times)),
-        "X-Bundle-Header-Length": str(len(header_json)),
-        "Vary": "Accept-Encoding",
-        "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Header-Length",
-    }
-    accept_enc = request.headers.get("accept-encoding", "")
-    if "gzip" in accept_enc.lower():
-        import gzip as _gz
-        body = _gz.compress(body, compresslevel=6)
-        resp_headers["Content-Encoding"] = "gzip"
-
-    return Response(
-        content=body,
-        media_type="application/octet-stream",
-        headers=resp_headers,
+    # Write to public GCS + 302-redirect rather than returning the bytes
+    # through Cloud Run. Cloud Run buffers responses and caps them at ~32 MiB
+    # → an empty 500 ("Response size was too large") for large raw-Tb bundles
+    # (and for non-gzip clients). GCS has no such cap and serves gzip natively.
+    # raw-Tb uint8 arrays have strong spatial correlation → gzip shrinks them
+    # 30-50%; store gzipped (gzip_content=True) so the browser decompresses
+    # transparently before r.arrayBuffer() resolves (matches the prewarm raw
+    # bundle). The object lives under a params-keyed on-demand path so a
+    # non-default lookback/radius/interval can't collide with the prewarmed
+    # default-param bundle.
+    key = _ondemand_bundle_key("raw", atcf_upper, lookback_hours,
+                               radius_deg, interval_min)
+    _upload_public_bundle(key, body, gzip_content=True)
+    # no-store on the 302 itself so clients don't pin a stale redirect; the
+    # GCS object carries its own max-age.
+    return RedirectResponse(
+        _public_bundle_url(key),
+        status_code=302,
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -5596,21 +5626,17 @@ def get_storm_band_frames_bundle(
     header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
     body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
 
-    return Response(
-        content=body,
-        media_type="application/octet-stream",
-        headers={
-            "Cache-Control": "public, max-age=300",
-            # WebP payloads are already codec-compressed; declaring an explicit
-            # Content-Encoding makes Starlette's GZipMiddleware pass the body
-            # through untouched (it skips any response that already sets one),
-            # saving ~2% bytes of pointless re-gzip CPU on every request.
-            "Content-Encoding": "identity",
-            "X-Bundle-Frames": str(len(frame_times)),
-            "X-Bundle-Band": str(band),
-            "X-Bundle-Header-Length": str(len(header_json)),
-            "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Band, X-Bundle-Header-Length",
-        },
+    # Write to public GCS + 302-redirect rather than returning the bytes
+    # through Cloud Run (which buffers + caps responses at ~32 MiB → empty 500
+    # for large bundles). WebP payloads are already codec-compressed, so do
+    # NOT gzip (gzip_content=False) — matches the prewarm band bundle.
+    key = _ondemand_bundle_key("band", atcf_upper, lookback_hours,
+                               radius_deg, interval_min, band=band)
+    _upload_public_bundle(key, body, gzip_content=False)
+    return RedirectResponse(
+        _public_bundle_url(key),
+        status_code=302,
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -6086,18 +6112,17 @@ def get_storm_ir_frames_bundle(
     header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
     body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
 
-    return Response(
-        content=body,
-        media_type="application/octet-stream",
-        headers={
-            "Cache-Control": "public, max-age=300",
-            # WebP is already codec-compressed — opt out of GZipMiddleware
-            # re-gzip (it skips responses that declare a Content-Encoding).
-            "Content-Encoding": "identity",
-            "X-Bundle-Frames": str(len(frame_times)),
-            "X-Bundle-Header-Length": str(len(header_json)),
-            "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Header-Length",
-        },
+    # Write to public GCS + 302-redirect rather than returning the bytes
+    # through Cloud Run (which buffers + caps responses at ~32 MiB → empty 500
+    # for large bundles). WebP frames are already codec-compressed → no gzip
+    # (gzip_content=False), matching the prewarm frames bundle.
+    key = _ondemand_bundle_key("frames", atcf_upper, lookback_hours,
+                               radius_deg, interval_min)
+    _upload_public_bundle(key, body, gzip_content=False)
+    return RedirectResponse(
+        _public_bundle_url(key),
+        status_code=302,
+        headers={"Cache-Control": "no-store"},
     )
 
 
