@@ -2314,6 +2314,7 @@
         }
 
         // ----- Current year (orange), with preliminary tail -----
+        var latestAnno = null;   // always-on "latest measured day" label
         if (cy && cy.values && cy.dates && cy.dates.length) {
             var cyDates = cy.dates;
             var cySrc;
@@ -2379,16 +2380,69 @@
                 connectgaps: true,   // bridge leap-DOY 60 in non-leap years
             });
             if (prelimDoys.length) {
+                // Full opacity + per-day markers: the dotted line still
+                // says "may revise", but each recent OISST update now
+                // reads as a discrete tick instead of a faint smear.
                 traces.push({
-                    type: 'scatter', mode: 'lines', x: doys, y: prelimY,
+                    type: 'scatter', mode: 'lines+markers', x: doys, y: prelimY,
                     line: { color: BRAND.orange_line, width: 2.6,
                             dash: 'dot' },
-                    opacity: 0.7,
+                    marker: { size: 5, color: BRAND.orange,
+                              line: { color: 'rgba(255,255,255,0.85)',
+                                      width: 0.8 } },
                     name: 'last ~14 days (preliminary)',
                     hovertemplate: currentYear +
                         ' · DOY %{x}: %{y:.2f} (preliminary — OISST may revise)<extra></extra>',
                     connectgaps: true,   // bridge leap-DOY 60 in non-leap years
                 });
+            }
+            // ----- Latest measured day: bold "you are here" marker -----
+            // The newest OISST day is the whole point of a live panel, but
+            // the dotted tail buried it. Draw the most recent day as one
+            // emphasized dot with a contrasting ring + an always-on value
+            // label, so the current state reads at a glance (cf.
+            // cyclonicwx's "Latest Value" callout) — in our palette.
+            var lastIdx = populated.length
+                ? populated[populated.length - 1] : -1;
+            if (lastIdx >= 0) {
+                var latestVal = cySrc[lastIdx];
+                var isDarkTs = document.documentElement
+                    .getAttribute('data-theme') === 'dark';
+                traces.push({
+                    type: 'scatter', mode: 'markers',
+                    x: [doys[lastIdx]], y: [latestVal],
+                    marker: {
+                        size: 12, color: BRAND.orange,
+                        line: { color: isDarkTs ? '#0f172a' : '#ffffff',
+                                width: 2.5 },
+                    },
+                    showlegend: false,
+                    hovertemplate: currentYear +
+                        ' · latest · DOY %{x}: %{y:.2f}<extra></extra>',
+                });
+                // Calendar label from the leap-axis index (2020 is a leap
+                // year, so leap-DOY maps 1:1 onto its day-of-year).
+                var _ld = new Date(Date.UTC(2020, 0, 1)
+                                   + lastIdx * 86400000);
+                var _mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul',
+                            'Aug', 'Sep', 'Oct', 'Nov',
+                            'Dec'][_ld.getUTCMonth()];
+                latestAnno = {
+                    x: doys[lastIdx], y: latestVal,
+                    xref: 'x', yref: 'y',
+                    text: '<b>' + _mon + ' ' + _ld.getUTCDate() + '</b>: '
+                          + latestVal.toFixed(2) + '°C',
+                    showarrow: true, arrowhead: 0, arrowwidth: 1.2,
+                    arrowcolor: BRAND.orange_line,
+                    ax: 10, ay: -34,
+                    xanchor: 'left', yanchor: 'bottom', align: 'left',
+                    font: { size: 12, color: BRAND.orange,
+                            family: 'DM Sans, system-ui, sans-serif' },
+                    bgcolor: isDarkTs ? 'rgba(15,23,42,0.78)'
+                                      : 'rgba(255,255,255,0.82)',
+                    bordercolor: 'rgba(251,146,60,0.55)',
+                    borderwidth: 1, borderpad: 3,
+                };
             }
         }
 
@@ -2466,6 +2520,7 @@
         // of the chart) and the anomaly variants (most years near zero
         // and concentrated below the inset's y range).
         layout.geo2 = _insetGeoLayout(_pickInsetDomain());
+        if (latestAnno) layout.annotations.push(latestAnno);
         seasReact(el, traces.concat(insetTraces), layout,
                      { responsive: true, displaylogo: false });
     }
@@ -2848,17 +2903,66 @@
         // ----- Current year (orange — matches the SST Daily panel's
         //       "so far" trace color so the two views read the same way
         //       at a glance) -----
+        var latestAnno = null;   // always-on "latest measured day" label
         if (regionAll.leap[currentYear]
                 && regionAll.leap[currentYear].shear) {
+            var cyShear = regionAll.leap[currentYear].shear;
             traces.push({
                 type: 'scatter', mode: 'lines', x: doys,
-                y: regionAll.leap[currentYear].shear,
+                y: cyShear,
                 line: { color: BRAND.orange_line, width: 2.6 },
                 name: String(currentYear) + ' (so far)',
                 hovertemplate: currentYear
                     + ' · DOY %{x}: %{y:.1f} m/s<extra></extra>',
                 connectgaps: true,
             });
+            // Latest measured day: bold "you are here" dot + always-on
+            // value label, mirroring the SST Daily panel so switching
+            // Variable keeps the current-state cue in the same place.
+            var lastIdxS = -1;
+            for (var li = 365; li >= 0; li--) {
+                if (cyShear[li] != null && isFinite(cyShear[li])) {
+                    lastIdxS = li; break;
+                }
+            }
+            if (lastIdxS >= 0) {
+                var latestValS = cyShear[lastIdxS];
+                var isDarkS = document.documentElement
+                    .getAttribute('data-theme') === 'dark';
+                traces.push({
+                    type: 'scatter', mode: 'markers',
+                    x: [doys[lastIdxS]], y: [latestValS],
+                    marker: {
+                        size: 12, color: BRAND.orange,
+                        line: { color: isDarkS ? '#0f172a' : '#ffffff',
+                                width: 2.5 },
+                    },
+                    showlegend: false,
+                    hovertemplate: currentYear +
+                        ' · latest · DOY %{x}: %{y:.1f} m/s<extra></extra>',
+                });
+                var _ldS = new Date(Date.UTC(2020, 0, 1)
+                                    + lastIdxS * 86400000);
+                var _monS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                             'Jul', 'Aug', 'Sep', 'Oct', 'Nov',
+                             'Dec'][_ldS.getUTCMonth()];
+                latestAnno = {
+                    x: doys[lastIdxS], y: latestValS,
+                    xref: 'x', yref: 'y',
+                    text: '<b>' + _monS + ' ' + _ldS.getUTCDate() + '</b>: '
+                          + latestValS.toFixed(1) + ' m/s',
+                    showarrow: true, arrowhead: 0, arrowwidth: 1.2,
+                    arrowcolor: BRAND.orange_line,
+                    ax: 10, ay: -34,
+                    xanchor: 'left', yanchor: 'bottom', align: 'left',
+                    font: { size: 12, color: BRAND.orange,
+                            family: 'DM Sans, system-ui, sans-serif' },
+                    bgcolor: isDarkS ? 'rgba(15,23,42,0.78)'
+                                     : 'rgba(255,255,255,0.82)',
+                    bordercolor: 'rgba(251,146,60,0.55)',
+                    borderwidth: 1, borderpad: 3,
+                };
+            }
         }
 
         // ----- Climatology mean (dashed) -----
@@ -2915,6 +3019,7 @@
                 bordercolor: BRAND.hoverBorder,
                 font: { color: BRAND.hoverText, size: 12 },
             },
+            annotations: latestAnno ? [latestAnno] : [],
         };
         // Region inset map — matches the SST Daily / Monthly paths so
         // the user always knows which region the shear time series is
