@@ -24,6 +24,30 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ir_monitor_api as M
 
 
+class _FakeRequest:
+    """Minimal stand-in for starlette.Request — the bundle endpoints only read
+    .headers (Accept-Encoding). Default: non-gzip client."""
+    def __init__(self, accept_encoding=""):
+        self.headers = {"accept-encoding": accept_encoding}
+
+
+def _drain_stream(resp):
+    """Concatenate a StreamingResponse's chunks into the full body bytes.
+
+    The bundle endpoints now return StreamingResponse. Starlette adapts the
+    sync _iter_chunks generator into an async body_iterator, so we drain it
+    on a throwaway event loop."""
+    import asyncio
+
+    async def _collect():
+        out = []
+        async for c in resp.body_iterator:
+            out.append(c if isinstance(c, (bytes, bytearray)) else c.encode("utf-8"))
+        return b"".join(out)
+
+    return asyncio.new_event_loop().run_until_complete(_collect())
+
+
 # A fixed base time on a 10-min boundary so endpoint + prewarm both snap to
 # the SAME frame grid regardless of the wall clock during the test.
 _FIXED_NOW = datetime(2026, 6, 4, 18, 30, 0, tzinfo=timezone.utc)
@@ -130,10 +154,10 @@ def test_prewarm_geocolor_bundle_byte_identical():
 
     # 2) On-demand API endpoint → Response body for the SAME frames/params.
     resp = M.get_storm_geocolor_frames_bundle(
-        "al072026", lookback_hours=lookback, radius_deg=radius,
+        _FakeRequest(), "al072026", lookback_hours=lookback, radius_deg=radius,
         interval_min=interval,
     )
-    api_body = resp.body
+    api_body = _drain_stream(resp)
 
     assert gcs_body == api_body, (
         "FAIL: prewarm GCS bundle bytes differ from the API endpoint bytes — "
@@ -159,7 +183,8 @@ def test_webp_bundle_responses_opt_out_of_gzip():
     M._get_rt_gcs_bucket = lambda: _FakeBucket({})
 
     resp = M.get_storm_geocolor_frames_bundle(
-        "al072026", lookback_hours=6.0, radius_deg=10.0, interval_min=10,
+        _FakeRequest(), "al072026", lookback_hours=6.0, radius_deg=10.0,
+        interval_min=10,
     )
     ce = resp.headers.get("content-encoding")
     assert ce == "identity", (

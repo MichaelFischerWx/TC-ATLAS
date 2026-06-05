@@ -39,7 +39,7 @@ from typing import Optional
 
 import numpy as np
 from fastapi import APIRouter, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # Shared satellite IR module
 from satellite_ir import (
@@ -495,6 +495,70 @@ def _pack_bundle(header: dict, payloads: list) -> bytes:
     import struct
     header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
     return struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
+
+
+_BUNDLE_STREAM_CHUNK = 4 * 1024 * 1024  # 4 MiB slices
+
+
+def _iter_chunks(body: bytes, chunk: int = _BUNDLE_STREAM_CHUNK):
+    """Yield `body` in fixed-size slices for StreamingResponse.
+
+    The concatenation of all yielded slices is byte-for-byte identical to
+    `body` (a plain memoryview walk — no transform), so the streamed wire
+    payload matches what a buffered Response(body) would have sent.
+    """
+    mv = memoryview(body)
+    total = len(mv)
+    pos = 0
+    while pos < total:
+        yield bytes(mv[pos:pos + chunk])
+        pos += chunk
+
+
+def _stream_bundle_response(body: bytes, request, extra_headers: dict,
+                            *, gzippable: bool) -> StreamingResponse:
+    """Stream a packed bundle through Cloud Run instead of buffering it.
+
+    Cloud Run imposes a ~32 MiB ceiling on *buffered* responses but NOT on
+    streamed ones, so wrapping the bundle in a StreamingResponse removes the
+    ceiling for all bundle sizes and for non-gzip clients (which would
+    otherwise receive the full uncompressed body and trip the limit).
+
+    Behaviour preserved vs. the old buffered Response:
+      * Conditional gzip — when `gzippable` and the client sent
+        `Accept-Encoding: gzip`, the *entire* body is gzipped in-app exactly
+        as before (compresslevel=6) and `Content-Encoding: gzip` is set.
+        WebP bundles pass `gzippable=False` (codec-compressed already) and
+        keep `Content-Encoding: identity`.
+      * Setting `Content-Encoding` explicitly (gzip or identity) makes the
+        global GZipMiddleware pass the response through untouched — its
+        IdentityResponder/GZipResponder both short-circuit on
+        `content-encoding in headers` (see starlette/middleware/gzip.py),
+        including for streaming bodies — so no double-compression and no
+        buffering of the stream.
+      * All caller-supplied headers (Cache-Control, X-Bundle-*, Vary,
+        Access-Control-Expose-Headers) are preserved verbatim.
+
+    The streamed bytes (concatenated) are byte-for-byte identical to what the
+    buffered Response would have returned for the same inputs.
+    """
+    headers = dict(extra_headers)
+    out_bytes = body
+    if gzippable and "gzip" in request.headers.get("accept-encoding", "").lower():
+        import gzip as _gz
+        out_bytes = _gz.compress(body, compresslevel=6)
+        headers["Content-Encoding"] = "gzip"
+    elif "Content-Encoding" not in headers:
+        # No app-level gzip: declare identity so GZipMiddleware skips the
+        # stream (it would otherwise try to buffer/compress it for gzip
+        # clients). WebP callers already pass identity via extra_headers.
+        headers["Content-Encoding"] = "identity"
+
+    return StreamingResponse(
+        _iter_chunks(out_bytes),
+        media_type="application/octet-stream",
+        headers=headers,
+    )
 
 
 def _upload_public_bundle(key: str, body: bytes, content_type: str = "application/octet-stream",
@@ -4595,17 +4659,11 @@ def get_storm_ir_raw_bundle(
         "Vary": "Accept-Encoding",
         "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Header-Length",
     }
-    accept_enc = request.headers.get("accept-encoding", "")
-    if "gzip" in accept_enc.lower():
-        import gzip as _gz
-        body = _gz.compress(body, compresslevel=6)
-        resp_headers["Content-Encoding"] = "gzip"
-
-    return Response(
-        content=body,
-        media_type="application/octet-stream",
-        headers=resp_headers,
-    )
+    # Stream the bundle through Cloud Run (the ~32 MiB buffered-response
+    # ceiling does not apply to streamed responses). gzippable=True keeps the
+    # exact conditional-gzip behaviour the buffered path had: gzip the full
+    # body for Accept-Encoding: gzip clients, identity otherwise.
+    return _stream_bundle_response(body, request, resp_headers, gzippable=True)
 
 
 # ---------------------------------------------------------------------------
@@ -5437,6 +5495,7 @@ def _get_or_render_band_jpg(
 
 @router.get("/storm/{atcf_id}/band-frames-bundle")
 def get_storm_band_frames_bundle(
+    request: Request,
     atcf_id: str,
     band: int = Query(8, description="Band: 8=WV (6.2 µm), 2=Vis (0.64 µm), 7=SWIR (3.9 µm, night fallback for Vis)"),
     lookback_hours: float = Query(6.0, ge=1, le=24),
@@ -5616,21 +5675,21 @@ def get_storm_band_frames_bundle(
     header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
     body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
 
-    return Response(
-        content=body,
-        media_type="application/octet-stream",
-        headers={
+    # Stream through Cloud Run (no ~32 MiB buffered-response ceiling). WebP
+    # payloads are already codec-compressed, so gzippable=False — the explicit
+    # Content-Encoding: identity below makes GZipMiddleware pass the stream
+    # through untouched (it skips any response that already sets one).
+    return _stream_bundle_response(
+        body, request,
+        {
             "Cache-Control": "public, max-age=300",
-            # WebP payloads are already codec-compressed; declaring an explicit
-            # Content-Encoding makes Starlette's GZipMiddleware pass the body
-            # through untouched (it skips any response that already sets one),
-            # saving ~2% bytes of pointless re-gzip CPU on every request.
             "Content-Encoding": "identity",
             "X-Bundle-Frames": str(len(frame_times)),
             "X-Bundle-Band": str(band),
             "X-Bundle-Header-Length": str(len(header_json)),
             "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Band, X-Bundle-Header-Length",
         },
+        gzippable=False,
     )
 
 
@@ -5949,6 +6008,7 @@ def _build_and_upload_geocolor_bundle(
 
 @router.get("/storm/{atcf_id}/geocolor-frames-bundle")
 def get_storm_geocolor_frames_bundle(
+    request: Request,
     atcf_id: str,
     lookback_hours: float = Query(6.0, ge=1, le=24),
     radius_deg: float = Query(10.0, ge=1.0, le=12.0),
@@ -5976,13 +6036,13 @@ def get_storm_geocolor_frames_bundle(
         interval_min=interval_min,
     )
 
-    return Response(
-        content=body,
-        media_type="application/octet-stream",
-        headers={
+    # Stream through Cloud Run (no ~32 MiB buffered-response ceiling). WebP is
+    # already codec-compressed — gzippable=False; the explicit
+    # Content-Encoding: identity makes GZipMiddleware skip the stream.
+    return _stream_bundle_response(
+        body, request,
+        {
             "Cache-Control": "public, max-age=300",
-            # WebP is already codec-compressed — opt out of GZipMiddleware
-            # re-gzip (it skips responses that declare a Content-Encoding).
             "Content-Encoding": "identity",
             "X-Bundle-Frames": str(n_frames),
             "X-Bundle-Product": "geocolor",
@@ -5991,6 +6051,7 @@ def get_storm_geocolor_frames_bundle(
             "X-Bundle-Header-Length": str(header_json_len),
             "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Product, X-Bundle-Day-Frames, X-Bundle-Night-Frames, X-Bundle-Header-Length",
         },
+        gzippable=False,
     )
 
 
@@ -6303,6 +6364,7 @@ def _get_or_render_ir_jpg(
 
 @router.get("/storm/{atcf_id}/ir-frames-bundle")
 def get_storm_ir_frames_bundle(
+    request: Request,
     atcf_id: str,
     lookback_hours: float = Query(6.0, ge=1, le=24),
     radius_deg: float = Query(10.0, ge=1.0, le=12.0),
@@ -6466,18 +6528,19 @@ def get_storm_ir_frames_bundle(
     header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
     body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
 
-    return Response(
-        content=body,
-        media_type="application/octet-stream",
-        headers={
+    # Stream through Cloud Run (no ~32 MiB buffered-response ceiling). WebP is
+    # already codec-compressed — gzippable=False; the explicit
+    # Content-Encoding: identity makes GZipMiddleware skip the stream.
+    return _stream_bundle_response(
+        body, request,
+        {
             "Cache-Control": "public, max-age=300",
-            # WebP is already codec-compressed — opt out of GZipMiddleware
-            # re-gzip (it skips responses that declare a Content-Encoding).
             "Content-Encoding": "identity",
             "X-Bundle-Frames": str(len(frame_times)),
             "X-Bundle-Header-Length": str(len(header_json)),
             "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Header-Length",
         },
+        gzippable=False,
     )
 
 
