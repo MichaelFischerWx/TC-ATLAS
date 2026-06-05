@@ -910,16 +910,8 @@
         if (!_elAnimPlay) _elAnimPlay = document.getElementById('ir-anim-play');
     }
 
-    // Product mode: 'eir' (IR), 'geocolor', 'vis', 'wv'
+    // Product mode: 'eir' (IR), 'vis', 'wv'
     var productMode = 'eir';
-
-    // GeoColor overlay state
-    var geocolorFrameLayers = [];   // parallel array of L.tileLayer for GeoColor frames
-    var geocolorFrameTimes = [];    // ISO time strings for GeoColor frames
-    var geocolorFramesLoaded = 0;
-    var geocolorFramesReady = false;
-    var geocolorValidFrames = [];
-    var geocolorFrameHasError = [];
 
     // Visible (Red Band 2/3) overlay state — daytime only; nighttime
     // frames are skipped (filtered by solar elevation at load time).
@@ -3771,8 +3763,7 @@
         // ArrayBuffer can be GC'd. No-op when the GIBS or per-frame path
         // is active (those don't populate _activeFrameBlobUrls).
         _revokeActiveFrameBlobUrls();
-        // Also clean up GeoColor / Visible / WV frames
-        cleanupGeocolorFrameLayers();
+        // Also clean up Visible / WV frames
         cleanupVisFrameLayers();
         cleanupWvFrameLayers();
     }
@@ -3785,10 +3776,9 @@
         if (show) {
             loader.style.display = 'flex';
             if (loaderText) {
-                var label = (productMode === 'geocolor') ? 'GeoColor' : 'IR';
                 loaderText.textContent = pct != null
-                    ? 'Pre-loading ' + label + ' frames\u2026 ' + pct + '%'
-                    : 'Pre-loading ' + label + ' frames\u2026';
+                    ? 'Pre-loading IR frames\u2026 ' + pct + '%'
+                    : 'Pre-loading IR frames\u2026';
             }
         } else {
             loader.style.display = 'none';
@@ -3998,15 +3988,13 @@
         // and only swaps frames if the new bundle has a newer latest.
         if (productMode === 'eir') {
             _refreshIrFramesIfNewer(atcfId);
-        } else if (productMode === 'geocolor') {
-            _refreshGeocolorFramesIfNewer(atcfId);
         } else if (productMode === 'vis' || productMode === 'wv') {
             _refreshBandFramesIfNewer(atcfId, productMode);
         }
         // Also opportunistically refresh IR in the background even when
         // the user is on a non-IR product so coming back to IR shows
         // fresh data. Skipped if IR was never loaded (e.g. card opened
-        // straight to GeoColor) — that's fine since clicking IR will
+        // straight to Visible) — that's fine since clicking IR will
         // load fresh on first activation.
         if (productMode !== 'eir' && animFrameTimes.length > 0) {
             _refreshIrFramesIfNewer(atcfId);
@@ -4119,41 +4107,6 @@
                     return { newer: false, buf: buf };
                 }
                 return { newer: true, buf: buf };
-            });
-    }
-
-    /** GeoColor bundle refresh — same approach as IR but uses the
-     *  GeoColor endpoint. If newer frames are available, fully reload
-     *  via loadGeocolorFrames after clearing the existing layers. */
-    function _refreshGeocolorFramesIfNewer(atcfId) {
-        if (geocolorFrameTimes.length === 0) return;
-        var currentLatest = geocolorFrameTimes[geocolorFrameTimes.length - 1];
-        var gcsUrl = _GCS_GEOCOLOR_BUNDLE_BASE + '/' +
-                     encodeURIComponent(atcfId.toUpperCase()) + '.bin';
-        var apiUrl = API_BASE
-            + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
-            + '/geocolor-frames-bundle?lookback_hours=' + JPG_PRIMARY_LOOKBACK_H
-            + '&radius_deg=' + JPG_PRIMARY_RADIUS_DEG
-            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
-        _bundleHasNewerLatest(gcsUrl, apiUrl, currentLatest)
-            .then(function (probe) {
-                if (currentStormId !== atcfId || productMode !== 'geocolor') return;
-                if (!probe.newer) return;
-                var wasPlaying = animPlaying;
-                if (wasPlaying) stopAnimation();
-                cleanupGeocolorFrameLayers();
-                // Re-trigger the bundle ingest with the already-fetched buf
-                // to avoid a second round trip.
-                _ingestGeocolorBundle(probe.buf);
-                console.log('[RT Monitor] GeoColor frames refreshed');
-                if (wasPlaying) {
-                    setTimeout(function () {
-                        if (geocolorFramesReady && currentStormId === atcfId) startAnimation();
-                    }, 250);
-                }
-            })
-            .catch(function (err) {
-                console.warn('[RT Monitor] GeoColor refresh failed:', err && err.message);
             });
     }
 
@@ -4298,7 +4251,6 @@
                 if (typeof v === 'string' && /^rt-v\d+$/.test(v)) {
                     _RT_BUNDLE_VERSION = v;
                     _GCS_BUNDLE_BASE = _GCS_BUCKET_ROOT + '/' + v + '/bundles';
-                    _GCS_GEOCOLOR_BUNDLE_BASE = _GCS_BUCKET_ROOT + '/' + v + '/bundles/geocolor';
                 }
             })
             .catch(function () { /* keep pinned fallback */ });
@@ -4398,7 +4350,6 @@
     // every frame to a 1×1 transparent src; the encoded blobs and layer
     // objects stay (cheap), so returning re-decodes with no refetch.
     function _productLayers(mode) {
-        if (mode === 'geocolor') return geocolorFrameLayers;
         if (mode === 'vis')      return visFrameLayers;
         if (mode === 'wv')       return wvFrameLayers;
         return animFrameLayers; // 'eir'
@@ -5040,7 +4991,6 @@
 
         // Reset product state for new storm
         productMode = 'eir';
-        cleanupGeocolorFrameLayers();
         cleanupVisFrameLayers();
         cleanupWvFrameLayers();
         _clearSurfaceObs();
@@ -5050,11 +5000,9 @@
         var _intResetSec = document.getElementById('ir-intensity-section');
         if (_intResetSec) _intResetSec.style.display = 'none';
         var eirBtn = document.getElementById('ir-product-eir');
-        var geoBtn = document.getElementById('ir-product-geocolor');
         var visBtnNew = document.getElementById('ir-product-vis');
         var wvBtnNew = document.getElementById('ir-product-wv');
         if (eirBtn) eirBtn.classList.add('ir-product-active');
-        if (geoBtn) geoBtn.classList.remove('ir-product-active');
         if (visBtnNew) visBtnNew.classList.remove('ir-product-active');
         if (wvBtnNew) wvBtnNew.classList.remove('ir-product-active');
 
@@ -5673,18 +5621,15 @@
         _rtRemoveRadarOverlay();
 
         // Reset product state
-        cleanupGeocolorFrameLayers();
         cleanupVisFrameLayers();
         cleanupWvFrameLayers();
         rawTbFrames = [];
         productMode = 'eir';
 
         var eirBtn = document.getElementById('ir-product-eir');
-        var geoBtn = document.getElementById('ir-product-geocolor');
         var visBtnReset = document.getElementById('ir-product-vis');
         var wvBtnReset = document.getElementById('ir-product-wv');
         if (eirBtn) eirBtn.classList.add('ir-product-active');
-        if (geoBtn) geoBtn.classList.remove('ir-product-active');
         if (visBtnReset) visBtnReset.classList.remove('ir-product-active');
         if (wvBtnReset) wvBtnReset.classList.remove('ir-product-active');
         var tbLegend = document.getElementById('ir-tb-legend');
@@ -5851,15 +5796,6 @@
     /** Find the position of animIndex within validFrames (or -1) */
     /** Get the active set of valid frames and frame layers for the current product mode */
     function activeFrameState() {
-        if (productMode === 'geocolor') {
-            return {
-                valid: geocolorValidFrames,
-                layers: geocolorFrameLayers,
-                times: geocolorFrameTimes,
-                ready: geocolorFramesReady,
-                showFn: showGeocolorFrame
-            };
-        }
         if (productMode === 'vis') {
             return {
                 valid: visValidFrames,
@@ -6298,7 +6234,7 @@
     //  PRODUCT MODE SWITCHING
     // ═══════════════════════════════════════════════════════════
 
-    /** Switch between product modes: 'eir' or 'geocolor' */
+    /** Switch between product modes: 'eir', 'vis', or 'wv' */
     function setProductMode(mode) {
         var prevMode = productMode;
         productMode = mode;
@@ -6306,7 +6242,6 @@
         // Update toggle button active states
         var btnMap = {
             eir:      document.getElementById('ir-product-eir'),
-            geocolor: document.getElementById('ir-product-geocolor'),
             vis:      document.getElementById('ir-product-vis'),
             wv:       document.getElementById('ir-product-wv')
         };
@@ -6315,7 +6250,7 @@
         }
 
         // Show/hide legends — IR Tb gradient for 'eir', WV gradient for 'wv',
-        // none for visible/GeoColor (those carry pre-rendered NASA colorbars).
+        // none for visible (carries a pre-rendered NASA colorbar).
         var tbLeg = document.getElementById('ir-tb-legend');
         if (tbLeg) tbLeg.style.display = (mode === 'eir') ? 'block' : 'none';
         var wvLeg = document.getElementById('ir-wv-legend');
@@ -6324,7 +6259,6 @@
         // --- Deactivate previous mode ---
         stopAnimation();
         if (prevMode === 'eir')           hideAllAnimFrames();
-        else if (prevMode === 'geocolor') hideAllGeocolorFrames();
         else if (prevMode === 'vis')      hideAllVisFrames();
         else if (prevMode === 'wv')       hideAllWvFrames();
 
@@ -6359,8 +6293,6 @@
             if (playBtn) playBtn.disabled = !framesReady;
             updateFrameOverlay();
             updateAnimCounter();
-        } else if (mode === 'geocolor') {
-            loadGeocolorFrames();
         } else if (mode === 'vis') {
             loadVisFrames();
         } else if (mode === 'wv') {
@@ -6837,424 +6769,9 @@
         }
     }
 
-    /** Hide all GeoColor animation frame layers */
-    function hideAllGeocolorFrames() {
-        for (var i = 0; i < geocolorFrameLayers.length; i++) {
-            geocolorFrameLayers[i].setOpacity(0);
-        }
-    }
-
-    /** Track blob URLs minted from the GeoColor bundle so we can revoke
-     *  them on storm-switch / cleanup. */
-    var _activeGeocolorBlobUrls = [];
-
-    /** Clean up GeoColor frame layers from the map */
-    function cleanupGeocolorFrameLayers() {
-        for (var i = 0; i < geocolorFrameLayers.length; i++) {
-            if (detailMap && geocolorFrameLayers[i]) {
-                detailMap.removeLayer(geocolorFrameLayers[i]);
-            }
-        }
-        for (var b = 0; b < _activeGeocolorBlobUrls.length; b++) {
-            try { URL.revokeObjectURL(_activeGeocolorBlobUrls[b]); } catch (e) {}
-        }
-        _activeGeocolorBlobUrls = [];
-        geocolorFrameLayers = [];
-        geocolorFrameTimes = [];
-        geocolorValidFrames = [];
-        geocolorFrameHasError = [];
-        geocolorFramesLoaded = 0;
-        geocolorFramesReady = false;
-    }
-
-    /** Load GeoColor animation frames from the backend bundle.
-     *
-     *  Replaces the legacy GIBS-tile path that did its own day/night
-     *  Himawari switching in JS. The backend now produces a single
-     *  per-frame bundle that handles the solar-elevation switch
-     *  (Band 2 visible by day, Band 13 IR inverted-grayscale at night)
-     *  and emits storm-relative-cropped WebPs ready for L.imageOverlay.
-     *  Wire format mirrors the IR / band bundles so the parser is the
-     *  same. GCS direct (publicRead) is tried first; the API endpoint
-     *  is the fallback for storms whose bundle hasn't been prewarmed
-     *  (currently always — GeoColor prewarm is deferred). */
-    var _GCS_GEOCOLOR_BUNDLE_BASE =
-        _GCS_BUCKET_ROOT + '/' + _RT_BUNDLE_VERSION + '/bundles/geocolor';
-
-    function loadGeocolorFrames() {
-        if (!detailMap || !currentStormId) return;
-
-        // Already loaded → restore slider and show the latest frame.
-        if (geocolorFramesReady && geocolorFrameLayers.length > 0) {
-            var sliderR = document.getElementById('ir-anim-slider');
-            if (sliderR && geocolorValidFrames.length > 0) {
-                sliderR.max = geocolorValidFrames.length - 1;
-                sliderR.value = geocolorValidFrames.length - 1;
-            }
-            var playBtnR = document.getElementById('ir-anim-play');
-            if (playBtnR) playBtnR.disabled = false;
-            showGeocolorFrame(geocolorValidFrames.length > 0
-                ? geocolorValidFrames[geocolorValidFrames.length - 1]
-                : geocolorFrameLayers.length - 1);
-            updateAnimCounter();
-            return;
-        }
-        // Bundle still in flight → bail.
-        if (geocolorFrameLayers.length > 0 && !geocolorFramesReady) return;
-
-        geocolorFrameTimes = [];
-        geocolorFramesLoaded = 0;
-        geocolorFramesReady = false;
-        geocolorValidFrames = [];
-        geocolorFrameHasError = [];
-
-        var geoBtn = document.getElementById('ir-product-geocolor');
-        if (geoBtn) { geoBtn.classList.add('ir-loading'); geoBtn.textContent = 'Loading…'; }
-        showLoadingProgress(true, 0);
-
-        var satLbl = document.getElementById('ir-satellite-label');
-        if (satLbl) satLbl.textContent = 'GeoColor — ' + detailSatName;
-
-        var atcfId = currentStormId;
-        var gcsUrl = _GCS_GEOCOLOR_BUNDLE_BASE + '/' +
-                     encodeURIComponent(atcfId.toUpperCase()) + '.bin';
-        var apiUrl = API_BASE
-            + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
-            + '/geocolor-frames-bundle?lookback_hours=' + JPG_PRIMARY_LOOKBACK_H
-            + '&radius_deg=' + JPG_PRIMARY_RADIUS_DEG
-            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
-
-        fetch(gcsUrl)
-            .then(function (r) {
-                if (!r.ok) throw new Error('GCS ' + r.status);
-                return r.arrayBuffer();
-            })
-            .catch(function () {
-                // GCS miss is the expected path right now (no prewarm).
-                return fetch(apiUrl).then(function (r) {
-                    if (!r.ok) throw new Error('API ' + r.status);
-                    return r.arrayBuffer();
-                });
-            })
-            .then(function (buf) {
-                if (currentStormId !== atcfId || productMode !== 'geocolor') return;
-                _ingestGeocolorBundle(buf);
-            })
-            .catch(function (err) {
-                console.warn('[RT Monitor] GeoColor bundle unavailable:', err && err.message);
-                if (geoBtn) { geoBtn.classList.remove('ir-loading'); geoBtn.textContent = 'GeoColor'; }
-                showLoadingProgress(false);
-                if (productMode === 'geocolor') setProductMode('eir');
-            });
-    }
-
-    /** Parse the GeoColor bundle and create L.imageOverlay frame layers. */
-    function _ingestGeocolorBundle(buf) {
-        var dv;
-        var header;
-        var binBase;
-        try {
-            dv = new DataView(buf);
-            if (buf.byteLength < 4) throw new Error('bundle too small');
-            var headerLen = dv.getUint32(0, true);
-            if (4 + headerLen > buf.byteLength) throw new Error('header overruns body');
-            var headerBytes = new Uint8Array(buf, 4, headerLen);
-            header = JSON.parse(new TextDecoder('utf-8').decode(headerBytes));
-            binBase = 4 + headerLen;
-        } catch (e) {
-            console.warn('[RT Monitor] GeoColor bundle parse failed:', e.message);
-            if (productMode === 'geocolor') setProductMode('eir');
-            return;
-        }
-
-        var frames = (header && header.frames) || [];
-        frames = _decimateFramesForMobile(frames);
-        if (!frames.length) {
-            console.warn('[RT Monitor] GeoColor bundle had no frames');
-            if (productMode === 'geocolor') setProductMode('eir');
-            return;
-        }
-
-        // Geographic framing: each frame placed at its own bounds so
-        // track dots / coastlines align to the storm in every frame.
-        // Mirrors the IR bundle behavior. Fallback: bundle-level bounds.
-        var fallbackUb = header.bounds || null;
-        // Sanity check: at least one frame (or the bundle) must carry bounds.
-        var anyBounds = !!fallbackUb;
-        if (!anyBounds) {
-            for (var li = 0; li < frames.length; li++) {
-                if (frames[li].bounds) { anyBounds = true; break; }
-            }
-        }
-        if (!anyBounds) {
-            console.warn('[RT Monitor] GeoColor bundle missing bounds');
-            if (productMode === 'geocolor') setProductMode('eir');
-            return;
-        }
-
-        var mediaType = header.media_type || 'image/webp';
-        var loaded = 0;
-        var goodCount = 0;
-        var geoBtn = document.getElementById('ir-product-geocolor');
-
-        function finalize() {
-            geocolorFramesReady = true;
-            geocolorFramesLoaded = frames.length;
-            showLoadingProgress(false);
-            if (geoBtn) { geoBtn.classList.remove('ir-loading'); geoBtn.textContent = 'GeoColor'; }
-            var playBtnF = document.getElementById('ir-anim-play');
-            if (playBtnF) playBtnF.disabled = (geocolorValidFrames.length === 0);
-            var sliderF = document.getElementById('ir-anim-slider');
-            if (sliderF && geocolorValidFrames.length > 0) {
-                sliderF.max = geocolorValidFrames.length - 1;
-                sliderF.value = geocolorValidFrames.length - 1;
-                if (productMode === 'geocolor') {
-                    showGeocolorFrame(geocolorValidFrames[geocolorValidFrames.length - 1]);
-                }
-            }
-            updateAnimCounter();
-            console.log('[RT Monitor] GeoColor bundle: ' + goodCount + '/' + frames.length +
-                        ' WebPs loaded (' + (buf.byteLength / 1024 | 0) + ' KB, ' +
-                        (header.n_day_frames || 0) + ' day, ' +
-                        (header.n_night_frames || 0) + ' night)');
-        }
-
-        for (var i = 0; i < frames.length; i++) {
-            var fh = frames[i];
-            geocolorFrameTimes.push(fh.datetime_utc);
-            if (!fh.byte_length || fh.error) {
-                geocolorFrameLayers.push(null);
-                geocolorFrameHasError.push(true);
-                loaded++;
-                continue;
-            }
-            var slice = new Uint8Array(buf, binBase + fh.byte_offset, fh.byte_length);
-            var blob = new Blob([slice], { type: mediaType });
-            var blobUrl = URL.createObjectURL(blob);
-            _activeGeocolorBlobUrls.push(blobUrl);
-            var fb = fh.bounds || fallbackUb;
-            var fBounds = L.latLngBounds(
-                L.latLng(fb[0][0], fb[0][1]), L.latLng(fb[1][0], fb[1][1]));
-            var overlay = L.imageOverlay(blobUrl, fBounds, {
-                opacity: 0, interactive: false, pane: 'tilePane'
-            });
-            overlay._frameBlobUrl = blobUrl; // for windowed decode promote/evict
-            overlay._recenterTo = fh.recenter || null; // smooth camera path
-            geocolorFrameHasError.push(false);
-            (function (lyr, idx) {
-                lyr.once('error', function () {
-                    geocolorFrameHasError[idx] = true; loaded++;
-                    if (loaded >= frames.length) finalize();
-                });
-                lyr.once('load', function () {
-                    if (!geocolorFrameHasError[idx]) {
-                        geocolorValidFrames.push(idx);
-                        geocolorValidFrames.sort(function (a, b) { return a - b; });
-                        goodCount++;
-                    }
-                    loaded++;
-                    var pct = Math.round((loaded / frames.length) * 100);
-                    showLoadingProgress(true, pct);
-                    if (loaded >= frames.length) finalize();
-                });
-            })(overlay, i);
-            geocolorFrameLayers.push(overlay);
-            overlay.addTo(detailMap);
-        }
-        if (loaded >= frames.length) finalize();
-    }
-
-    // (kept for reference — the GIBS-tile path; superseded by the bundle
-    //  loader above but left present for now in case a future fallback
-    //  wants to revive it.)
-    function loadGeocolorFrames_LEGACY_GIBS_UNUSED() {
-        if (!detailMap || !currentStormId) return;
-
-        // If already loaded, just restore slider and show the current frame
-        if (geocolorFramesReady && geocolorFrameLayers.length > 0) {
-            var slider = document.getElementById('ir-anim-slider');
-            if (slider && geocolorValidFrames.length > 0) {
-                slider.max = geocolorValidFrames.length - 1;
-                slider.value = geocolorValidFrames.length - 1;
-            }
-            var playBtn = document.getElementById('ir-anim-play');
-            if (playBtn) playBtn.disabled = false;
-            showGeocolorFrame(geocolorValidFrames.length > 0
-                ? geocolorValidFrames[geocolorValidFrames.length - 1]
-                : geocolorFrameLayers.length - 1);
-            updateAnimCounter();
-            return;
-        }
-
-        // If already loading, skip
-        if (geocolorFrameLayers.length > 0 && !geocolorFramesReady) return;
-
-        // Determine layer strategy
-        var hasNativeGeoColor = !!GIBS_GEOCOLOR_LAYERS[detailSatName];
-        var visLayerName = GIBS_GEOCOLOR_LAYERS[detailSatName] || GIBS_VIS_LAYERS[detailSatName];
-        var irLayerName = GIBS_IR_LAYERS[detailSatName] || null;
-        if (!visLayerName) {
-            console.warn('[RT Monitor] No visible imagery available for ' + detailSatName);
-            setProductMode('eir');
-            return;
-        }
-
-        // Use the same frame times as IR
-        geocolorFrameTimes = animFrameTimes.slice();
-        geocolorFramesLoaded = 0;
-        geocolorFramesReady = false;
-        geocolorValidFrames = [];
-        geocolorFrameHasError = [];
-
-        // Show loading state on the GeoColor button
-        var geoBtn = document.getElementById('ir-product-geocolor');
-        if (geoBtn) {
-            geoBtn.classList.add('ir-loading');
-            geoBtn.textContent = 'Loading\u2026';
-        }
-        showLoadingProgress(true, 0);
-
-        // Update satellite label — always "GeoColor" regardless of satellite
-        var satLabel = document.getElementById('ir-satellite-label');
-        if (satLabel) {
-            satLabel.textContent = 'GeoColor \u2014 ' + detailSatName;
-        }
-
-        // Pre-create ALL GeoColor frame tile layers (hidden at opacity 0).
-        // For satellites with native GeoColor (GOES): use createGIBSLayerVis.
-        // For satellites without (Himawari): per-frame day/night switching —
-        //   daytime → Red Visible tiles,  nighttime → Clean IR tiles (grayscale).
-        for (var i = 0; i < geocolorFrameTimes.length; i++) {
-            var timeStr = geocolorFrameTimes[i];
-            var lyr;
-            if (hasNativeGeoColor) {
-                // GOES: use native GeoColor layer (handles day/night internally)
-                lyr = createGIBSLayerVis(visLayerName, timeStr, 0, null);
-            } else {
-                // Himawari: choose visible or IR based on solar elevation
-                var sunElev = solarElevation(detailStormLat, detailStormLon, new Date(timeStr));
-                if (sunElev > -6) {
-                    // Daytime / civil twilight: use visible tiles (Level7)
-                    lyr = createGIBSLayerVis(visLayerName, timeStr, 0, null);
-                } else {
-                    // Nighttime: use clean IR tiles (grayscale, Level6)
-                    lyr = createGIBSLayer(irLayerName, timeStr, 0);
-                }
-            }
-            lyr.addTo(detailMap);
-            geocolorFrameHasError.push(false);
-
-            (function (layer, idx) {
-                layer.on('tileerror', function () {
-                    geocolorFrameHasError[idx] = true;
-                });
-                layer.on('load', function () {
-                    onGeocolorFrameLoaded(idx);
-                });
-            })(lyr, i);
-
-            geocolorFrameLayers.push(lyr);
-        }
-
-        // Safety timeout
-        setTimeout(function () {
-            if (!geocolorFramesReady && geocolorFrameLayers.length > 0 && productMode === 'geocolor') {
-                console.warn('[RT Monitor] GeoColor preload timeout — enabling with ' + geocolorFramesLoaded + '/' + geocolorFrameTimes.length + ' frames');
-                geocolorFramesReady = true;
-                showLoadingProgress(false);
-                if (geoBtn) {
-                    geoBtn.classList.remove('ir-loading');
-                    geoBtn.textContent = 'GeoColor';
-                }
-                var playBtn = document.getElementById('ir-anim-play');
-                if (playBtn) playBtn.disabled = false;
-                var slider = document.getElementById('ir-anim-slider');
-                if (slider && geocolorValidFrames.length > 0) {
-                    slider.max = geocolorValidFrames.length - 1;
-                    slider.value = geocolorValidFrames.length - 1;
-                    showGeocolorFrame(geocolorValidFrames[geocolorValidFrames.length - 1]);
-                }
-                updateAnimCounter();
-                if (_trimMode) _syncTrimScrubber();
-            }
-        }, 30000);
-    }
-
-    /** Called when a GeoColor frame tile layer finishes loading */
-    function onGeocolorFrameLoaded(idx) {
-        geocolorFramesLoaded++;
-        if (!geocolorFrameHasError[idx]) {
-            geocolorValidFrames.push(idx);
-            geocolorValidFrames.sort(function (a, b) { return a - b; });
-        }
-
-        var total = geocolorFrameTimes.length;
-        var pct = Math.round((geocolorFramesLoaded / total) * 100);
-        showLoadingProgress(true, pct);
-
-        if (geocolorFramesLoaded >= total) {
-            geocolorFramesReady = true;
-            showLoadingProgress(false);
-            var geoBtn = document.getElementById('ir-product-geocolor');
-            if (geoBtn) {
-                geoBtn.classList.remove('ir-loading');
-                geoBtn.textContent = 'GeoColor';
-            }
-
-            var playBtn = document.getElementById('ir-anim-play');
-            if (playBtn) playBtn.disabled = false;
-
-            // Update slider for GeoColor valid frames
-            var slider = document.getElementById('ir-anim-slider');
-            if (slider && geocolorValidFrames.length > 0) {
-                slider.max = geocolorValidFrames.length - 1;
-                slider.value = geocolorValidFrames.length - 1;
-            }
-
-            // Show last frame if still in GeoColor mode
-            if (productMode === 'geocolor' && geocolorValidFrames.length > 0) {
-                showGeocolorFrame(geocolorValidFrames[geocolorValidFrames.length - 1]);
-            }
-            updateAnimCounter();
-            if (_trimMode) _syncTrimScrubber();
-        }
-    }
-
-    /** Show a specific GeoColor frame by toggling opacity */
-    function showGeocolorFrame(idx) {
-        if (idx < 0 || idx >= geocolorFrameLayers.length || !detailMap) return;
-
-        _applyDecodeWindow(geocolorFrameLayers, idx);
-
-        // Show new BEFORE hiding old to avoid the mobile white-flash.
-        var prevIdx = animIndex;
-        animIndex = idx;
-        if (geocolorFrameLayers[idx]) geocolorFrameLayers[idx].setOpacity(0.92);
-
-        for (var i = 0; i < geocolorFrameLayers.length; i++) {
-            if (i !== idx && geocolorFrameLayers[i]) {
-                geocolorFrameLayers[i].setOpacity(0);
-            }
-        }
-
-        _recenterDetailToFrame(geocolorFrameLayers[idx]);
-
-        // Update overlay info
-        if (geocolorFrameTimes[idx]) {
-            document.getElementById('ir-frame-time').textContent = fmtUTC(geocolorFrameTimes[idx]);
-        }
-        document.getElementById('ir-satellite-label').textContent =
-            'GeoColor \u2014 ' + detailSatName;
-
-        // Sync model overlay to new frame time
-        if (_rtModelVisible && _rtModelAutoSync && _rtModelData) {
-            _rtSyncModelCycleToIR();
-        }
-    }
-
     // ═══════════════════════════════════════════════════════════
     //  VISIBLE + WATER VAPOR PRODUCT PIPELINES
-    //  GIBS tile-layer based, parallel to GeoColor. Frame times mirror
+    //  GIBS tile-layer based, parallel to IR. Frame times mirror
     //  the IR frame times so the slider/scrubber are interchangeable
     //  across product modes.
     // ═══════════════════════════════════════════════════════════
@@ -7491,7 +7008,7 @@
                 var satLbl = document.getElementById('ir-satellite-label');
                 var msg = isVis
                     ? 'No usable visible/SWIR frames available right now — try Water Vapor or IR.'
-                    : 'No Water Vapor frames available right now — try IR or GeoColor.';
+                    : 'No Water Vapor frames available right now — try IR or Visible.';
                 if (satLbl) satLbl.textContent = msg;
                 console.warn('[RT Monitor] Band ' + band + ' bundle had 0 valid frames');
             } else {
@@ -7918,14 +7435,10 @@
             if (wrap && !wrap.contains(e.target)) window._irCloseFramesMenu();
         });
 
-        // Product toggle buttons (IR / GeoColor / Visible / Water Vapor)
+        // Product toggle buttons (IR / Visible / Water Vapor)
         document.getElementById('ir-product-eir').addEventListener('click', function () {
             if (productMode === 'eir') return;
             setProductMode('eir');
-        });
-        document.getElementById('ir-product-geocolor').addEventListener('click', function () {
-            if (productMode === 'geocolor') return;
-            setProductMode('geocolor');
         });
         var visBtn = document.getElementById('ir-product-vis');
         if (visBtn) visBtn.addEventListener('click', function () {
@@ -10942,7 +10455,7 @@
                   // active ATCF storm — opens that storm's IR satellite
                   // detail page so the user can see real-time imagery
                   // alongside the FNV3 ensemble diagnostics.
-                  '<button type="button" id="rt-genesis-open-storm" class="rt-genesis-modal-open-storm" style="display:none;" title="View this storm\'s IR / GeoColor satellite detail page">→ IR Detail</button>' +
+                  '<button type="button" id="rt-genesis-open-storm" class="rt-genesis-modal-open-storm" style="display:none;" title="View this storm\'s IR satellite detail page">→ IR Detail</button>' +
                   // Composite exports. Each summary pairs a download (⤓)
                   // with a "view in new tab" (⤢) action. Which group is
                   // visible follows the active modal tab (set in

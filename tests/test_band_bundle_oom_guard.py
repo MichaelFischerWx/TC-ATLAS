@@ -1,9 +1,9 @@
-"""OOM-guard load test for the band / geocolor / ir-prebuilt bundle endpoints
+"""OOM-guard load test for the band / ir-prebuilt bundle endpoints
 (fix/band-bundle-oom-guard).
 
 PR #41 added the global _raw_fetch_semaphore guard to ir-raw-bundle's worker.
-The OTHER heavy-fetch bundles — band-frames-bundle, geocolor-frames-bundle,
-and ir-frames-bundle — still spawned ThreadPoolExecutor(max_workers=8) and
+The OTHER heavy-fetch bundles — band-frames-bundle and ir-frames-bundle —
+still spawned ThreadPoolExecutor(max_workers=8) and
 called their _get_or_render_*_jpg helpers with no global concurrency bound, so
 a burst of concurrent bundle requests could hold N large float32 cutouts at
 once and OOM-kill the 4 GiB instance (same failure mode #41 fixed).
@@ -218,7 +218,7 @@ def main():
     test_band_bundle_burst_bounded()
     test_no_double_acquire_deadlock()
     test_unguarded_path_exceeds_cap()
-    print("\nPASS: band/geocolor/ir-prebuilt bundle bursts are bounded to the "
+    print("\nPASS: band/ir-prebuilt bundle bursts are bounded to the "
           "OOM-safe concurrency cap; no double-acquire deadlock; peak memory "
           "cannot scale with request count.")
 
