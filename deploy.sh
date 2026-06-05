@@ -18,8 +18,15 @@
 #
 # Usage:
 #   chmod +x deploy.sh
-#   ./deploy.sh                    # deploy (reads secrets from deploy.env)
+#   ./deploy.sh                    # deploy a CLEAN checkout of origin/main, then promote
+#   ./deploy.sh --ref HEAD         # deploy local committed (but unpushed) HEAD, clean
+#   ./deploy.sh --dirty            # deploy the working tree as-is (uncommitted WIP)
+#   ./deploy.sh --no-promote       # build the revision but don't shift traffic to it
 #   ./deploy.sh --tag v2           # deploy with a traffic tag
+#
+# By default the deploy builds from a throwaway worktree at origin/main (never
+# the dirty working tree) and migrates 100% traffic to the new revision, so
+# "deploy" always ships AND serves exactly what's on origin/main.
 #
 # After first deploy, update your frontend JS files:
 #   const API_BASE = 'https://tc-atlas-api-XXXXXXXXXX-ue.a.run.app';
@@ -54,64 +61,88 @@ if [[ -n "${MISSING}" ]]; then
     [[ $REPLY =~ ^[Yy]$ ]] || exit 1
 fi
 
-# ── Freshness check: make sure the working tree matches origin/main ──
-# `gcloud run deploy --source .` ships whatever's in the current directory.
-# A stale local checkout (forgot to `git pull` after a merge) silently
-# deploys the previous version, which presents as "deploy succeeded but
-# my new code isn't there." Surface this loudly before we waste a Cloud
-# Build run on stale source.
+# ── Source selection: deploy a CLEAN commit, not the dirty tree ──────
+# `gcloud run deploy --source .` ships whatever is on disk. With multiple
+# editing sessions, the working tree is a soup of interleaved uncommitted
+# WIP, so a plain deploy can silently ship half-finished other-session code
+# (or a stale checkout). To make "what's live?" answerable, the DEFAULT now
+# deploys a clean checkout of a git ref (origin/main) into a throwaway
+# worktree — never the dirty working tree.
 #
-# Bypass with DEPLOY_SKIP_FRESHNESS_CHECK=1 or --force-stale (e.g. local
-# work-in-progress that's ahead of main and intentionally not pushed).
+# Flags:
+#   --dirty             deploy the working tree as-is (old behavior; for a
+#                       quick test of UNCOMMITTED local changes)
+#   --ref <committish>  deploy this ref instead of origin/main
+#                       (e.g. --ref HEAD for committed-but-unpushed local work)
+#   --no-promote        build the revision but DON'T migrate traffic to it
+#   --force-stale       in --dirty mode, skip the origin/main divergence prompt
+# Env:  DEPLOY_SKIP_FRESHNESS_CHECK=1 also skips the --dirty prompt.
+DIRTY=0
+NO_PROMOTE=0
 FORCE_STALE=0
+DEPLOY_REF="origin/main"
 ARGS_FORWARD=()
-for arg in "$@"; do
-    if [[ "$arg" == "--force-stale" ]]; then
-        FORCE_STALE=1
-    else
-        ARGS_FORWARD+=("$arg")
-    fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dirty)       DIRTY=1 ;;
+        --no-promote)  NO_PROMOTE=1 ;;
+        --force-stale) FORCE_STALE=1 ;;
+        --ref)         DEPLOY_REF="${2:?--ref needs a committish}"; shift ;;
+        *)             ARGS_FORWARD+=("$1") ;;
+    esac
+    shift
 done
 
-if [[ "${DEPLOY_SKIP_FRESHNESS_CHECK:-0}" != "1" && "${FORCE_STALE}" != "1" ]]; then
-    if git -C "${SCRIPT_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
-        echo "Checking source freshness vs origin/main..."
-        if ! git -C "${SCRIPT_DIR}" fetch origin main --quiet 2>/dev/null; then
-            echo "  (warning: could not fetch origin/main; skipping freshness check)"
-        else
-            HEAD_SHA=$(git -C "${SCRIPT_DIR}" rev-parse HEAD)
-            REMOTE_SHA=$(git -C "${SCRIPT_DIR}" rev-parse origin/main)
-            if [[ "${HEAD_SHA}" != "${REMOTE_SHA}" ]]; then
-                # Are we behind, ahead, or diverged?
-                BEHIND=$(git -C "${SCRIPT_DIR}" rev-list --count "${HEAD_SHA}..${REMOTE_SHA}" 2>/dev/null || echo "?")
-                AHEAD=$(git -C "${SCRIPT_DIR}" rev-list --count "${REMOTE_SHA}..${HEAD_SHA}" 2>/dev/null || echo "?")
-                echo ""
-                echo "WARNING: working tree is NOT at origin/main HEAD."
-                echo "  HEAD:        ${HEAD_SHA:0:10}"
-                echo "  origin/main: ${REMOTE_SHA:0:10}"
-                if [[ "${BEHIND}" != "0" && "${BEHIND}" != "?" ]]; then
-                    echo "  → ${BEHIND} commit(s) BEHIND origin/main."
-                    echo "    Recent commits you don't have locally:"
-                    git -C "${SCRIPT_DIR}" log --oneline "${HEAD_SHA}..${REMOTE_SHA}" 2>/dev/null | head -8 | sed 's/^/      /'
-                    echo "    To pick them up:  git pull origin main"
-                fi
-                if [[ "${AHEAD}" != "0" && "${AHEAD}" != "?" ]]; then
-                    echo "  → ${AHEAD} commit(s) AHEAD of origin/main (local-only work)."
-                fi
-                echo ""
-                echo "Deploying anyway will ship YOUR local tree, including any"
-                echo "uncommitted changes. To skip this check use --force-stale"
-                echo "or set DEPLOY_SKIP_FRESHNESS_CHECK=1."
-                echo ""
-                read -p "Deploy stale/divergent source? [y/N] " -n 1 -r
-                echo
-                [[ $REPLY =~ ^[Yy]$ ]] || exit 1
-            else
-                echo "  ✓ HEAD matches origin/main (${HEAD_SHA:0:10})"
-            fi
+# Throwaway worktree (clean mode) is cleaned up on any exit.
+CLEANUP_WORKTREE=""
+cleanup_worktree() {
+    if [[ -n "${CLEANUP_WORKTREE}" ]]; then
+        git -C "${SCRIPT_DIR}" worktree remove "${CLEANUP_WORKTREE}" --force 2>/dev/null \
+            || rm -rf "${CLEANUP_WORKTREE}"
+    fi
+}
+trap cleanup_worktree EXIT
+
+if [[ "${DIRTY}" == "1" ]]; then
+    # ── Dirty mode: deploy the working tree (may include uncommitted WIP) ──
+    DEPLOY_SRC="${SCRIPT_DIR}"
+    echo "⚠️  --dirty: deploying the WORKING TREE (uncommitted changes included)."
+    if [[ "${DEPLOY_SKIP_FRESHNESS_CHECK:-0}" != "1" && "${FORCE_STALE}" != "1" ]]; then
+        if git -C "${SCRIPT_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
+            git -C "${SCRIPT_DIR}" fetch origin main --quiet 2>/dev/null || true
+            HEAD_SHA=$(git -C "${SCRIPT_DIR}" rev-parse HEAD 2>/dev/null || echo "?")
+            REMOTE_SHA=$(git -C "${SCRIPT_DIR}" rev-parse origin/main 2>/dev/null || echo "?")
+            [[ "${HEAD_SHA}" != "${REMOTE_SHA}" ]] && \
+                echo "  HEAD ${HEAD_SHA:0:10} != origin/main ${REMOTE_SHA:0:10}"
+            [[ -n "$(git -C "${SCRIPT_DIR}" status --porcelain 2>/dev/null)" ]] && \
+                echo "  Working tree has UNCOMMITTED changes (they will ship)."
+            read -p "Deploy the dirty working tree? [y/N] " -n 1 -r; echo
+            [[ $REPLY =~ ^[Yy]$ ]] || exit 1
         fi
     fi
+else
+    # ── Clean mode (default): deploy a throwaway worktree at DEPLOY_REF ──
+    if ! git -C "${SCRIPT_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
+        echo "ERROR: not a git repo; use --dirty to deploy the directory as-is." >&2
+        exit 1
+    fi
+    if [[ "${DEPLOY_REF}" == origin/* ]]; then
+        echo "Fetching ${DEPLOY_REF}..."
+        git -C "${SCRIPT_DIR}" fetch origin "${DEPLOY_REF#origin/}" --quiet \
+            || { echo "ERROR: could not fetch ${DEPLOY_REF}." >&2; exit 1; }
+    fi
+    REF_SHA=$(git -C "${SCRIPT_DIR}" rev-parse --verify "${DEPLOY_REF}^{commit}" 2>/dev/null) \
+        || { echo "ERROR: ref '${DEPLOY_REF}' not found." >&2; exit 1; }
+    CLEANUP_WORKTREE="${TMPDIR:-/tmp}/tc-atlas-deploy.$$"
+    echo "Deploying CLEAN checkout of ${DEPLOY_REF} (${REF_SHA:0:10}) — working tree NOT used."
+    git -C "${SCRIPT_DIR}" worktree add --quiet --detach "${CLEANUP_WORKTREE}" "${REF_SHA}" \
+        || { echo "ERROR: worktree checkout failed." >&2; CLEANUP_WORKTREE=""; exit 1; }
+    DEPLOY_SRC="${CLEANUP_WORKTREE}"
 fi
+
+# --no-promote builds the revision without shifting traffic to it.
+PROMOTE_FLAGS=()
+[[ "${NO_PROMOTE}" == "1" ]] && PROMOTE_FLAGS+=("--no-traffic")
 
 # ── Configuration ─────────────────────────────────────────────
 SERVICE_NAME="tc-atlas-api"
@@ -127,7 +158,7 @@ TIMEOUT="300s"                      # match gunicorn timeout
 echo "Deploying ${SERVICE_NAME} to Cloud Run (${REGION})..."
 
 gcloud run deploy "${SERVICE_NAME}" \
-    --source . \
+    --source "${DEPLOY_SRC}" \
     --region "${REGION}" \
     --platform managed \
     --memory "${MEMORY}" \
@@ -137,7 +168,36 @@ gcloud run deploy "${SERVICE_NAME}" \
     --allow-unauthenticated \
     --update-env-vars "^||^TC_RADAR_S3_BUCKET=${TC_RADAR_S3_BUCKET:-}||TC_RADAR_S3_PREFIX=${TC_RADAR_S3_PREFIX:-tc-radar}||TC_RADAR_GCS_BUCKET=${TC_RADAR_GCS_BUCKET:-}||TC_RADAR_GCS_PREFIX=${TC_RADAR_GCS_PREFIX:-tc-radar}||GCS_IR_CACHE_BUCKET=${GCS_IR_CACHE_BUCKET:-tc-atlas-ir-cache}||AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}||EARTHDATA_USERNAME=${EARTHDATA_USERNAME:-}||CORS_ORIGINS=https://michaelfischerwx.github.io,http://localhost:8000" \
     --update-secrets "AWS_ACCESS_KEY_ID=aws-access-key-id:latest,AWS_SECRET_ACCESS_KEY=aws-secret-access-key:latest,EARTHDATA_PASSWORD=earthdata-pass:latest" \
+    ${PROMOTE_FLAGS[@]+"${PROMOTE_FLAGS[@]}"} \
     ${ARGS_FORWARD[@]+"${ARGS_FORWARD[@]}"}
+
+# ── Promote the new revision (make the deploy actually SERVE) ────────
+# The service's traffic can be PINNED to a specific revision, in which case
+# a plain `gcloud run deploy` BUILDS a new revision but does NOT serve it —
+# the classic "deploy succeeded but my change isn't live." Make promotion
+# explicit and loud so the serving revision never silently lags the build.
+# Runs BEFORE the prewarm repoint so a prewarm hiccup can't leave the API
+# stuck on the old revision.
+NEW_REV=$(gcloud run services describe "${SERVICE_NAME}" --region "${REGION}" \
+    --format="value(status.latestCreatedRevisionName)" 2>/dev/null || echo "")
+if [[ "${NO_PROMOTE}" == "1" ]]; then
+    SERVING_REV=$(gcloud run services describe "${SERVICE_NAME}" --region "${REGION}" \
+        --format="value(status.traffic[0].revisionName)" 2>/dev/null || echo "?")
+    echo ""
+    echo "⚠️  --no-promote: built ${NEW_REV:-<new revision>} but did NOT migrate traffic."
+    echo "    Still serving: ${SERVING_REV}"
+    echo "    Promote when ready:"
+    echo "      gcloud run services update-traffic ${SERVICE_NAME} --region ${REGION} --to-revisions ${NEW_REV}=100"
+else
+    echo ""
+    echo "Promoting ${NEW_REV:-latest revision} to 100% traffic..."
+    gcloud run services update-traffic "${SERVICE_NAME}" --region "${REGION}" --to-latest \
+        --format="value(status.traffic[0].revisionName)" \
+        || echo "  WARNING: traffic migration failed — run update-traffic manually (see below)."
+    SERVING_REV=$(gcloud run services describe "${SERVICE_NAME}" --region "${REGION}" \
+        --format="value(status.traffic[0].revisionName)" 2>/dev/null || echo "?")
+    echo "  Now serving: ${SERVING_REV}"
+fi
 
 # ── Re-point the prewarm job at the freshly built image ──────────
 # tc-atlas-prewarm-job REUSES this service's container image. The
