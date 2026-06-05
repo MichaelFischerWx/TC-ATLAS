@@ -8135,7 +8135,11 @@
         var thumb = document.createElement('div');
         thumb.className = 'qv-card-thumb is-loading';
         var img = document.createElement('img');
-        img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
+        // The gallery shows only the handful of active storms, all above the
+        // fold — eager + high priority so the IR snapshots start fetching
+        // immediately instead of waiting behind the lazy-load queue.
+        img.alt = ''; img.loading = 'eager'; img.decoding = 'async';
+        img.fetchPriority = 'high';
         var _triedFallback = false;
         img.addEventListener('load', function () { thumb.classList.remove('is-loading', 'is-error'); });
         img.addEventListener('error', function () {
@@ -10605,11 +10609,22 @@
             var p0 = mean.points[0];
             // Confidence scales 50 → 1000 members onto 14 → 28 px.
             var baseSize = 14 + Math.min(14, Math.round((d.fraction - 0.05) * 18));
+            // A matched, *named* storm (e.g. "Amanda") carries its real name in
+            // displayShort — too long to sit inside a 14–28px circle without
+            // spilling over the edge. Detect it (names are Title-cased, so they
+            // contain a lowercase letter; compact codes like "D7"/"01W"/"90E"
+            // never do) and render the name as a pill beside a clean dot instead
+            // of cramming it in. Unnamed systems keep the in-circle code.
+            var isNamed = /[a-z]/.test(d.displayShort || '');
+            var innerLabel = isNamed ? '' : d.displayShort;
+            var namePill = isNamed
+                ? '<span class="rt-gen-marker-name">' + d.displayShort + '</span>'
+                : '';
             var html =
                 '<div class="rt-gen-marker' + (animateEntry ? ' rt-gen-marker--enter' : '') + '" style="background:' + style.bold + ';'
                 + 'width:' + baseSize + 'px;height:' + baseSize + 'px;line-height:'
                 + baseSize + 'px;font-size:' + Math.max(9, Math.round(baseSize * 0.5))
-                + 'px;">' + d.displayShort + '</div>';
+                + 'px;">' + innerLabel + '</div>' + namePill;
             var icon = L.divIcon({
                 html: html, className: 'rt-gen-divicon',
                 iconSize: [baseSize, baseSize],
