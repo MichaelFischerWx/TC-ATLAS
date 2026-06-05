@@ -98,12 +98,12 @@ _NHC_BASINS = {"EP", "CP", "AL"}
 
 # Cache settings
 _STORM_CACHE_TTL = 300          # 5 minutes (matches Cloud Scheduler ping interval)
-# How long a non-empty last-known-good storm cache is retained when a poll
-# comes back empty. An empty poll is almost always an upstream hiccup (NHC/JTWC
-# directory or deck fetch transiently failing), not every storm dissipating at
-# once — real dissipation ages out per-storm over 24-48 h. Retaining for this
-# long rides out outages without flickering the map to "no active TCs"; past it
-# we accept 0 rather than serve indefinitely-frozen data.
+# Backstop: how long a non-empty last-known-good storm cache is retained when a
+# poll comes back empty *and* this cycle hit an upstream fetch failure (a clean
+# empty poll clears to 0 immediately — see the retain logic in
+# _poll_active_storms). Real dissipation ages out per-storm over 24-48 h, so a
+# few hours of riding out an outage is safe; past this we give up rather than
+# serve indefinitely-frozen data.
 _EMPTY_POLL_RETAIN_HOURS = 6.0
 _IR_FRAME_CACHE_MAX = 100       # max cached IR frames (~10 MB, covers ~7 storms)
 _IR_FRAME_CACHE_TTL = 300       # 5 minutes per frame
@@ -1583,16 +1583,21 @@ def _http_head(url: str, timeout: int = 5) -> bool:
 # ATCF A-deck / B-deck Parsing
 # ---------------------------------------------------------------------------
 
-def _list_nhc_active_storms() -> list:
+def _list_nhc_active_storms() -> Optional[list]:
     """
     List currently active storms from NHC's ATCF B-deck directory.
     Returns list of ATCF IDs like ['al142024', 'ep102024'].
+
+    Returns None (NOT []) when the directory listing fetch itself fails, so
+    the caller can tell "NHC enumeration is down" (an upstream hiccup) apart
+    from "NHC genuinely has no active storms" ([]). The poll uses this to
+    decide whether an empty result should retain the last-known-good cache.
     """
     # The NHC btk directory has files like bal142024.dat for all active storms
     # Also check the aid_public directory index
     text = _http_get(NHC_ATCF_BASE + "/", timeout=10)
     if not text:
-        return []
+        return None   # listing fetch failed — signal upstream degradation
 
     # Parse filenames from directory listing
     # Format: a{basin}{number}{year}.dat  e.g., aal142024.dat
@@ -1604,15 +1609,22 @@ def _list_nhc_active_storms() -> list:
     return sorted(storm_ids)
 
 
-def _list_jtwc_active_storms() -> list:
+def _list_jtwc_active_storms() -> Optional[list]:
     """
     Discover active storms from JTWC B-deck directory listings.
     Returns list of tuples: (atcf_id, bdeck_url).
 
     Uses NOAA SSD (flat directory) as primary, UCAR as fallback.
     Skips EP/CP/AL storms (already covered by NHC).
+
+    Returns None (NOT []) when NO source listing could be read at all (every
+    directory fetch failed and the TCW fallback probe also found nothing), so
+    the caller can distinguish "JTWC enumeration is down" from "JTWC genuinely
+    has no active storms" ([]). A listing that reads fine but reports zero
+    storms returns [].
     """
     year = _dt.now(timezone.utc).year
+    listing_read_ok = False   # True once any source directory is fetched OK
 
     for source_name, base_url in JTWC_SOURCES:
         if source_name == "ucar":
@@ -1624,6 +1636,7 @@ def _list_jtwc_active_storms() -> list:
         if not text:
             print(f"[IR Monitor] JTWC {source_name} listing failed, trying next source")
             continue
+        listing_read_ok = True
 
         # Match B-deck files: b{basin}{number}{year}.dat
         # Basin codes: io, sh, wp, ep, cp (from tropycal pattern)
@@ -1718,10 +1731,13 @@ def _list_jtwc_active_storms() -> list:
     if tcw_storms:
         print(f"[IR Monitor] TCW probe found {len(tcw_storms)} active storms: "
               f"{[s[0] for s in tcw_storms]}")
-    else:
-        print("[IR Monitor] TCW probe: no active storms found")
+        return tcw_storms
 
-    return tcw_storms
+    print("[IR Monitor] TCW probe: no active storms found")
+    # Distinguish a genuine empty (some listing was read OK, just no storms)
+    # from total enumeration failure (every directory fetch failed) so the
+    # poll only retains the cache in the latter case.
+    return [] if listing_read_ok else None
 
 
 def _fetch_jtwc_bdeck(atcf_id: str, bdeck_url: Optional[str] = None) -> list:
@@ -2540,19 +2556,30 @@ def _poll_active_storms(spawn_prefetch: bool = True):
     now = _dt.now(timezone.utc)
     storms = []
     seen_ids = set()
+    # Set whenever an upstream fetch this cycle FAILED (listing unreadable, or a
+    # listed storm's deck couldn't be retrieved) — as opposed to reading fine
+    # and finding nothing. Drives the empty-poll retain decision below: we only
+    # keep the last-known-good cache when the empty result is explained by a
+    # failure, never on a clean "all sources read OK, no storms" poll.
+    degraded = False
 
     # ── NHC storms (ATL + EPAC) ──
     nhc_ids = _list_nhc_active_storms()
+    if nhc_ids is None:
+        degraded = True          # NHC directory listing fetch failed
+        nhc_ids = []
     for sid in nhc_ids:
         records = _fetch_adeck(sid)
         if not records:
+            degraded = True      # listed, but its A-deck couldn't be fetched
             continue
         latest = _get_latest_position(records)
         if not latest:
+            degraded = True      # records present but no current fix — transient
             continue
         age = now - latest["datetime"]
         if age > timedelta(hours=24):
-            continue
+            continue             # genuinely aged out — NOT a fetch failure
         # A-decks leave the name blank; pull it from the btk B-deck so named
         # NHC storms read as "Amanda" rather than "EP012026" (the JTWC branch
         # already does the equivalent via TCW/B-deck text).
@@ -2566,6 +2593,9 @@ def _poll_active_storms(spawn_prefetch: bool = True):
 
     # ── JTWC storms (WPAC, IO, SHEM) ──
     jtwc_storms = _list_jtwc_active_storms()
+    if jtwc_storms is None:
+        degraded = True          # all JTWC enumeration sources failed
+        jtwc_storms = []
     jtwc_count = 0
     for storm_id, bdeck_url in jtwc_storms:
         if storm_id in seen_ids:
@@ -2597,15 +2627,18 @@ def _poll_active_storms(spawn_prefetch: bool = True):
         records.sort(key=lambda r: r["datetime"])
 
         if not records:
+            degraded = True   # listed, but no B-deck/CARQ/TCW could be fetched
             print(f"[IR Monitor] JTWC {storm_id}: no B-deck/CARQ/TCW records")
             continue
 
         latest = _get_latest_position(records)
         if not latest:
+            degraded = True   # records present but no current fix — transient
             print(f"[IR Monitor] JTWC {storm_id}: no tau=0 position in {len(records)} records")
             continue
         age = now - latest["datetime"]
         if age > timedelta(hours=48):  # JTWC B-decks update less frequently
+            # Genuinely aged out — NOT a fetch failure; let it drop normally.
             print(f"[IR Monitor] JTWC {storm_id}: stale — last fix {latest['datetime']} ({age} ago)")
             continue
 
@@ -2651,40 +2684,42 @@ def _poll_active_storms(spawn_prefetch: bool = True):
                           f"{s.get('lat',0):.1f},{s.get('lon',0):.1f} "
                           f"(Δ{dlat:.1f}°lat, Δ{dlon:.1f}°lon) — will refetch frames")
 
-    # ── Resilience: don't let a transient empty poll wipe the map ──
-    # An empty result is almost always an upstream hiccup — NHC/JTWC listings
-    # or deck fetches transiently failing (e.g. NHC gzipping an A-deck so the
-    # .dat 404s, or JTWC's SSD mirror returning 403). Genuine dissipation never
-    # drops a whole basin in one 10-min cycle; storms age out per-storm over
-    # 24-48 h. So if this poll came back empty but the last good cache still has
-    # storms and is recent, keep the last-known-good set instead of flickering
-    # to "no active TCs". Bounded by _EMPTY_POLL_RETAIN_HOURS so a genuine
-    # multi-hour outage (or true end-of-season) eventually clears to 0.
+    # ── Resilience: don't let a FAILED empty poll wipe the map ──
+    # An empty result only retains the last-known-good cache when this cycle
+    # actually hit an upstream failure (degraded=True: a listing was unreadable
+    # or a listed storm's deck couldn't be fetched — e.g. NHC gzipped an A-deck
+    # so .dat 404s, or JTWC's SSD mirror 403s). A CLEAN empty poll — every
+    # source read fine and simply reported nothing — is genuine dissipation /
+    # end-of-season and is taken at face value, clearing to 0 immediately.
+    # The retain is still bounded by _EMPTY_POLL_RETAIN_HOURS so a prolonged
+    # outage eventually gives up rather than serving indefinitely-frozen data.
     if not storms:
         with _active_storms_lock:
             prev_storms = list(_active_storms_cache.get("storms", []))
             prev_updated = _active_storms_cache.get("updated_utc")
-        if prev_storms:
-            keep = True
+        if prev_storms and degraded:
+            within_backstop = True
             if prev_updated:
                 try:
                     prev_dt = _dt.strptime(
                         prev_updated, "%Y-%m-%dT%H:%M:%SZ"
                     ).replace(tzinfo=timezone.utc)
-                    keep = (now - prev_dt) < timedelta(
+                    within_backstop = (now - prev_dt) < timedelta(
                         hours=_EMPTY_POLL_RETAIN_HOURS)
                 except ValueError:
-                    keep = True
-            if keep:
-                print(f"[IR Monitor] Empty poll but last-known-good cache has "
-                      f"{len(prev_storms)} storm(s) (updated {prev_updated}) — "
-                      f"likely upstream hiccup; retaining previous set rather "
-                      f"than clobbering to 0.")
+                    within_backstop = True
+            if within_backstop:
+                print(f"[IR Monitor] Empty poll with upstream fetch failure — "
+                      f"retaining {len(prev_storms)} last-known-good storm(s) "
+                      f"(updated {prev_updated}) rather than clobbering to 0.")
                 _last_poll_time = time.time()
                 return prev_storms
-            print(f"[IR Monitor] Empty poll and last-known-good cache is stale "
-                  f"(>{_EMPTY_POLL_RETAIN_HOURS} h, updated {prev_updated}) — "
-                  f"accepting 0 active storms.")
+            print(f"[IR Monitor] Empty poll, upstream degraded, but last-known-"
+                  f"good is stale (>{_EMPTY_POLL_RETAIN_HOURS} h, updated "
+                  f"{prev_updated}) — accepting 0 active storms.")
+        elif prev_storms:
+            print("[IR Monitor] Clean empty poll (all sources read OK) — "
+                  "accepting 0 active storms (genuine dissipation/off-season).")
 
     # ── Update cache ──
     count_by_basin: dict = {}
