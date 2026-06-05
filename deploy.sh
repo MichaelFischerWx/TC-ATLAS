@@ -117,7 +117,7 @@ fi
 SERVICE_NAME="tc-atlas-api"
 REGION="us-east1"                   # close to your S3 bucket in us-east-1
 MEMORY="4Gi"                        # 4 GiB — full-volume NEXRAD super-res VCPs (10-14 sweeps × ~5500 rays × 1832 gates) OOM at 2 GiB during region-based dealiasing
-CPU="2"                             # 2 vCPU — needed to allocate 4 GiB on Cloud Run (memory/CPU is tiered)
+CPU="1"                             # 1 vCPU — Cloud Run allows 1 vCPU at 4 GiB (only >4 GiB needs 2; the old "needs 2" note was wrong). Single gunicorn worker (1 GIL) + GCS-first serving + rendering offloaded to the prewarm Job make the 2nd core nearly idle: benchmarked p99 CPU ~55% on 2 vCPU, cached paths identical, worst-case uncached render only ~14% slower (I/O-bound, not CPU-bound). Memory stays 4 GiB for NEXRAD.
 TIMEOUT="300s"                      # match gunicorn timeout
 # NOTE: max-instances and concurrency are managed via gcloud CLI, not
 # this script. Change them with:
