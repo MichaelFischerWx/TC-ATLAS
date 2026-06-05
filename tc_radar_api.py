@@ -2163,11 +2163,6 @@ def _render_ir_png(frame_2d, vmin=190.0, vmax=310.0):
     # Normalize: cold clouds (low Tb) → high index → bright colors
     frac = 1.0 - (arr - vmin) / (vmax - vmin)
     frac = np.clip(frac, 0.0, 1.0)
-    # np.clip leaves NaNs untouched, so a NaN Tb pixel reaches the uint8 cast
-    # and triggers "RuntimeWarning: invalid value encountered in cast".
-    # Map NaN/inf to in-range fractions before casting — valid pixels are
-    # already in [0,1] and are unaffected.
-    frac = np.nan_to_num(frac, nan=0.0, posinf=1.0, neginf=0.0)
     indices = (frac * 255).astype(np.uint8)
 
     # Apply LUT

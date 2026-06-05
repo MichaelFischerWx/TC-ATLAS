@@ -38,16 +38,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ir_monitor_api as M
 
 
-class _FakeRequest:
-    """Minimal Request stand-in: the bundle endpoints now stream their
-    response and read only request.headers.get('accept-encoding', ...)."""
-    def __init__(self, accept_encoding="gzip"):
-        self.headers = {"accept-encoding": accept_encoding}
-
-
-_REQ = _FakeRequest()
-
-
 class _ConcurrencyProbe:
     """Tracks how many threads are inside the heavy render at once."""
     def __init__(self):
@@ -129,7 +119,7 @@ def test_band_bundle_burst_bounded():
         # interval_min=60, lookback=2h → a couple frames per bundle; the burst
         # of N concurrent bundles is what stresses the global cap.
         return M.get_storm_band_frames_bundle(
-            _REQ, "al072026", band=8, lookback_hours=2.0,
+            "al072026", band=8, lookback_hours=2.0,
             radius_deg=10.0, interval_min=60,
         )
 
@@ -181,7 +171,7 @@ def test_no_double_acquire_deadlock():
     def _run_bundles():
         try:
             _burst(lambda i: M.get_storm_band_frames_bundle(
-                _REQ, "al072026", band=8, lookback_hours=2.0,
+                "al072026", band=8, lookback_hours=2.0,
                 radius_deg=10.0, interval_min=60,
             ), 8)
         finally:
