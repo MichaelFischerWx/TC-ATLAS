@@ -2436,12 +2436,24 @@
                     arrowcolor: BRAND.orange_line,
                     ax: 10, ay: -34,
                     xanchor: 'left', yanchor: 'bottom', align: 'left',
+                    // System font (NOT DM Sans) on purpose: this is the
+                    // only annotation with a fitted border box, and the
+                    // border width is sized to the measured text in the
+                    // live DOM. When Plotly exports a PNG it rasterizes the
+                    // SVG via an <img>, a context that can't see our
+                    // Google-hosted DM Sans web font, so it falls back to a
+                    // ~7-10% wider system font — and the text spilled past
+                    // the box edge in saved images. Measuring AND rendering
+                    // with the same system stack keeps box and text in
+                    // agreement in both the live chart and the export.
                     font: { size: 12, color: BRAND.orange,
-                            family: 'DM Sans, system-ui, sans-serif' },
+                            family: 'system-ui, -apple-system, ' +
+                                    'BlinkMacSystemFont, "Segoe UI", ' +
+                                    'Roboto, Helvetica, Arial, sans-serif' },
                     bgcolor: isDarkTs ? 'rgba(15,23,42,0.78)'
                                       : 'rgba(255,255,255,0.82)',
                     bordercolor: 'rgba(251,146,60,0.55)',
-                    borderwidth: 1, borderpad: 3,
+                    borderwidth: 1, borderpad: 4,
                 };
             }
         }

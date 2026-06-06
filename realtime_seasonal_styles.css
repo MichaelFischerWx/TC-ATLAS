@@ -262,6 +262,53 @@
     .seasonal-panel--maximized::before { display: none; }
 }
 
+/* Close-affordance hint (mobile only). The orange "✕ Close" pill +
+   swipe-down both work, but users reported it "wasn't clear how to
+   close" the expanded panel — the corner pill is easy to overlook when
+   the figure dominates a phone screen. This caption sits just under the
+   swipe handle, names BOTH exits, then fades after a few seconds so it
+   doesn't linger as clutter. CSS-only (animation) — no JS timer. */
+.seasonal-panel--maximized::after {
+    content: "Swipe down or tap ✕ Close to exit";
+    position: fixed;
+    /* Left-anchored: the centered swipe handle sits above (top 6px) and
+       the orange "✕ Close" pill occupies the top-right corner, so the
+       top-left strip is the only collision-free spot on a 375px phone. */
+    top: 16px;
+    left: 12px;
+    z-index: 9009;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    color: var(--text, #e6edf5);
+    background: rgba(20,28,42,0.82);
+    border: 1px solid rgba(140,148,160,0.30);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    pointer-events: none;
+    opacity: 0;
+    animation: seasonalCloseHint 5s ease forwards;
+}
+/* In → hold → out. Stays fully visible ~3 s, then fades. */
+@keyframes seasonalCloseHint {
+    0%   { opacity: 0; }
+    8%   { opacity: 1; }
+    65%  { opacity: 1; }
+    100% { opacity: 0; }
+}
+/* Desktop relies on Esc + the corner pill — no caption needed. */
+@media (min-width: 769px) and (hover: hover) {
+    .seasonal-panel--maximized::after { display: none; }
+}
+/* Respect reduced-motion: show the hint statically (no fade-out) so it
+   stays readable instead of animating. */
+@media (prefers-reduced-motion: reduce) {
+    .seasonal-panel--maximized::after { animation: none; opacity: 1; }
+}
+
 /* When ANY panel is maximized, hide the page chrome that would
    otherwise paint above the panel. The topbar uses backdrop-filter
    which creates a stacking context that competes with our position:
