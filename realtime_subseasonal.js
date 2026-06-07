@@ -82,7 +82,7 @@
         activeStorms: [],
         latBand: 'trop10',
         showTCOverlay: !SUB_ONLY,
-        showForecast: false,        // GEFS 10-day Hovmöller extension toggle
+        showForecast: true,         // GEFS 10-day Hovmöller extension toggle (default on; CPC OLR runs ~2-4 d latent, so the bridge+forecast keeps the default view current)
         expandedBands: {},          // { bandKey: bool } — sticky per-tab session
         tcLoading: false,           // true while phase-2 recent-storms is in flight
         viewMode: SUB_ONLY ? 'combined' : _loadStoredViewMode(),
@@ -1687,10 +1687,15 @@
         if (!el) return;
         var avail = _forecastAvailable();
         el.disabled = !avail;
-        if (!avail) {
-            el.checked = false;
-            state.showForecast = false;
-        }
+        // Reflect state in the checkbox WITHOUT clobbering state.showForecast.
+        // This runs once before the forecast slabs load (avail=false) and
+        // again after they arrive; zeroing state on the first pass would
+        // permanently defeat the default-on intent. _activeSlab already falls
+        // back to the obs slab when a forecast slab is missing, so a
+        // "checked but not-yet-loaded" state can't request data that isn't
+        // there. state.showForecast stays the single source of truth (the
+        // markup's `checked` attr only governs the pre-JS paint).
+        el.checked = avail && state.showForecast;
         if (lbl) {
             if (lbl.getAttribute('data-title-on') == null) {
                 lbl.setAttribute('data-title-on', lbl.title || '');
