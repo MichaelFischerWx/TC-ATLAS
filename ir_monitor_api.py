@@ -134,6 +134,20 @@ _INLINE_PREWARM = os.environ.get("IR_INLINE_PREWARM", "1") != "0"
 # restore the legacy re-interpolate-and-re-render-everything behavior.
 _RENDER_ONCE = os.environ.get("IR_RENDER_ONCE", "1") != "0"
 
+# How many active storms to render concurrently per prewarm cycle. Cloud Run
+# Jobs bill allocated-CPU × wall-clock, and the per-storm pipeline is mostly
+# I/O-bound (S3 fetch + bz2 decompress), so rendering storms back-to-back left
+# both vCPUs idle during network waits — wall-clock (and thus cost) grew
+# ~linearly with the number of active systems. Overlapping storms reclaims
+# that idle time. Peak memory stays bounded by the global _raw_fetch_semaphore
+# (which caps concurrent heavy float32 cutouts regardless of storm count); the
+# only added memory is per-storm bundle assembly, so the default is a
+# conservative 2. Raise via IR_PREWARM_STORM_CONCURRENCY if the job memory is
+# bumped. 1 restores fully-serial behavior.
+_PREWARM_STORM_CONCURRENCY = max(
+    1, int(os.environ.get("IR_PREWARM_STORM_CONCURRENCY", "2"))
+)
+
 # Tb encoding constants (shared by /ir-raw endpoint and GCS prefetch)
 _TB_VMIN = 160.0
 _TB_VMAX = 330.0
@@ -2872,10 +2886,17 @@ def _prefetch_ir_frames(storms: list):
         print("[IR Pre-fetch] Already running, skipping")
         return
     try:
-        total_fetched = 0
-        total_cached = 0
-        total_gcs_fetched = 0
-        for storm in storms:
+        def _prewarm_one_storm(storm):
+            """Render + cache + bundle ONE storm; return a counts dict.
+
+            All state (frame_times, manifest, existence sets, counters,
+            the nested worker closures) is storm-local, so storms can run
+            concurrently — see the dispatch block after this definition.
+            Counts are returned (not accumulated into outer scope) so the
+            aggregation is thread-safe."""
+            mem_fetched = 0   # Phase-1 in-process cache (inline API only)
+            mem_cached = 0
+            gcs_fetched = 0
             atcf_id = storm["atcf_id"]
             center_lat = storm["lat"]
             center_lon = storm["lon"]
@@ -2888,33 +2909,44 @@ def _prefetch_ir_frames(storms: list):
                 center_dt, _PREFETCH_LOOKBACK_HOURS, _PREFETCH_INTERVAL_MIN
             )
 
-            storm_fetched = 0
-            for target_dt in reversed(frame_times):
-                cache_key = (atcf_id.upper(), target_dt.strftime("%Y%m%d%H%M"))
-                with _ir_frame_cache_lock:
-                    if cache_key in _ir_frame_cache:
-                        total_cached += 1
+            # ── Phase 1: in-process IR frame cache ───────────────────
+            # This only helps when prewarm runs INSIDE the API process
+            # (_INLINE_PREWARM=1): the live loop endpoint reads frames
+            # back from this in-memory OrderedDict. In the standalone
+            # Cloud Run Job (_INLINE_PREWARM=0) the process exits at the
+            # end of the cycle and NOTHING ever reads _ir_frame_cache, so
+            # this whole fetch + reproject + render + per-frame gc pass
+            # would be computed and immediately discarded. Skip it there;
+            # the GCS multi-band prefetch below is what actually persists
+            # and serves users in the Job.
+            if _INLINE_PREWARM:
+                storm_fetched = 0
+                for target_dt in reversed(frame_times):
+                    cache_key = (atcf_id.upper(), target_dt.strftime("%Y%m%d%H%M"))
+                    with _ir_frame_cache_lock:
+                        if cache_key in _ir_frame_cache:
+                            mem_cached += 1
+                            continue
+
+                    try:
+                        frame = fetch_ir_frame(
+                            center_lat, center_lon, target_dt, box_deg
+                        )
+                    except Exception:
                         continue
 
-                try:
-                    frame = fetch_ir_frame(
-                        center_lat, center_lon, target_dt, box_deg
-                    )
-                except Exception:
-                    continue
+                    if frame:
+                        with _ir_frame_cache_lock:
+                            _ir_frame_cache[cache_key] = frame
+                            while len(_ir_frame_cache) > _IR_FRAME_CACHE_MAX:
+                                _ir_frame_cache.popitem(last=False)
+                        storm_fetched += 1
+                        mem_fetched += 1
 
-                if frame:
-                    with _ir_frame_cache_lock:
-                        _ir_frame_cache[cache_key] = frame
-                        while len(_ir_frame_cache) > _IR_FRAME_CACHE_MAX:
-                            _ir_frame_cache.popitem(last=False)
-                    storm_fetched += 1
-                    total_fetched += 1
+                    gc.collect()
 
-                gc.collect()
-
-            if storm_fetched:
-                print(f"[IR Pre-fetch] {atcf_id}: fetched {storm_fetched} new frames")
+                if storm_fetched:
+                    print(f"[IR Pre-fetch] {atcf_id}: fetched {storm_fetched} new frames")
 
             # ── GCS multi-band prefetch (IR + WV/Vis) ────────────────
             # Uses a thread pool to fetch multiple frames in parallel.
@@ -3223,7 +3255,7 @@ def _prefetch_ir_frames(storms: list):
                     print(f"[IR Pre-fetch] {atcf_id}: GCS cached {c['ir']} IR + "
                           f"{c['band']} Band {primary_band}{extra_summary} + "
                           f"{c['jpg']} JPG frames (parallel)")
-                total_gcs_fetched += c["ir"] + c["band"]
+                gcs_fetched = c["ir"] + c["band"]
 
                 # ── Pre-build bundle artifacts ─────────────────────
                 # Assemble both the display-WebP and raw-Tb bundles
@@ -3290,6 +3322,49 @@ def _prefetch_ir_frames(storms: list):
                         _gcs_manifest_put(atcf_id, manifest)
                     except Exception as ex:
                         print(f"[IR Pre-fetch] {atcf_id}: manifest save failed: {ex}")
+
+            return {"mem_fetched": mem_fetched, "mem_cached": mem_cached,
+                    "gcs_fetched": gcs_fetched}
+
+        # ── Dispatch: render active storms concurrently ─────────────
+        # Storms are independent (storm-local state + thread-safe count
+        # returns), so overlap them to reclaim the vCPU idle time that
+        # serial back-to-back rendering wasted during S3/network waits.
+        # Wall-clock — and thus Cloud Run Job cost — then scales sub-
+        # linearly with active-storm count instead of linearly. Peak
+        # memory stays bounded by the global _raw_fetch_semaphore. A storm
+        # that raises is logged and skipped so it can't sink the batch.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        total_fetched = total_cached = total_gcs_fetched = 0
+        results = []
+        concurrency = max(1, min(_PREWARM_STORM_CONCURRENCY, len(storms)))
+        if concurrency == 1:
+            for s in storms:
+                try:
+                    results.append(_prewarm_one_storm(s))
+                except Exception:
+                    print(f"[IR Pre-fetch] {s.get('atcf_id', '?')}: storm prewarm failed")
+                    traceback.print_exc()
+        else:
+            print(f"[IR Pre-fetch] Rendering {len(storms)} storm(s) "
+                  f"{concurrency}-at-a-time")
+            with ThreadPoolExecutor(max_workers=concurrency) as storm_pool:
+                fut_to_storm = {storm_pool.submit(_prewarm_one_storm, s): s
+                                for s in storms}
+                for fut in as_completed(fut_to_storm):
+                    try:
+                        results.append(fut.result())
+                    except Exception:
+                        sid = fut_to_storm[fut].get("atcf_id", "?")
+                        print(f"[IR Pre-fetch] {sid}: storm prewarm failed")
+                        traceback.print_exc()
+        for r in results:
+            if not r:
+                continue
+            total_fetched += r["mem_fetched"]
+            total_cached += r["mem_cached"]
+            total_gcs_fetched += r["gcs_fetched"]
 
         # ── NEXRAD radar pre-fetch for storms near 88D sites ────────
         _prefetch_nexrad_for_storms(storms, frame_times_map={

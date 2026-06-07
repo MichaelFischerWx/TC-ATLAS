@@ -73,6 +73,19 @@ fi
 JOB_ENV="GCS_IR_CACHE_BUCKET=${BUCKET}"
 JOB_ENV="${JOB_ENV},AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}"
 [[ -n "${TC_RADAR_S3_BUCKET:-}" ]]    && JOB_ENV="${JOB_ENV},TC_RADAR_S3_BUCKET=${TC_RADAR_S3_BUCKET}"
+# This Job IS the prewarm worker — it calls run_prewarm_cycle() directly and
+# never serves loop requests, so the in-process _ir_frame_cache warming (Phase
+# 1 of _prefetch_ir_frames) has no reader and is discarded on exit. Setting
+# IR_INLINE_PREWARM=0 skips that dead fetch+reproject+render pass (and the
+# inline daemon/thread-spawn the flag also gates). GCS prefetch — the part that
+# actually persists and serves users — is unaffected.
+JOB_ENV="${JOB_ENV},IR_INLINE_PREWARM=0"
+# Render this many active storms concurrently (default 2). Cloud Run Jobs bill
+# CPU × wall-clock and the per-storm work is I/O-bound, so overlapping storms
+# cuts wall-clock — and cost — when multiple systems are active. Override here
+# (and bump --memory below) only if raising it; peak heavy-fetch memory is
+# already capped by _raw_fetch_semaphore regardless of this value.
+[[ -n "${IR_PREWARM_STORM_CONCURRENCY:-}" ]] && JOB_ENV="${JOB_ENV},IR_PREWARM_STORM_CONCURRENCY=${IR_PREWARM_STORM_CONCURRENCY}"
 
 # ── Create or update the Cloud Run Job ───────────────────────────
 echo "Deploying Cloud Run Job ${JOB_NAME}..."
