@@ -5111,7 +5111,40 @@ body.sat-leaflet-active #sat-cb-right .sat-cb-label-right,
    shrinking them past usefulness. */
 @media (max-width: 800px) {
     .rt-mw-compare-panels { grid-template-columns: 1fr; }
-    .rt-mw-compare-content { padding: 14px 16px; }
+
+    /* Mobile scroll fix: the desktop modal centers a tall, internally
+       scrolling card. On a phone the stacked panels make the card taller
+       than the visual viewport, and centering pushes its top edge (where
+       Save PNG / Close live) up behind the address bar — unreachable,
+       because the scroll lived inside the card, not the modal. Go
+       full-bleed: the whole modal becomes the scroll container, the card
+       fills the screen, and the header pins flush to the top so Save/Close
+       stay tappable at any scroll position (nothing can peek above it). */
+    .rt-mw-compare-modal {
+        align-items: flex-start;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        padding: 0;
+    }
+    .rt-mw-compare-content {
+        width: 100%;
+        max-height: none;
+        min-height: 100%;
+        overflow: visible;       /* let the modal scroll, not the card */
+        border-radius: 0;
+        padding: 0 16px 16px;    /* header supplies the top spacing */
+    }
+    .rt-mw-compare-header {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        margin: 0 -16px 12px;    /* bleed the pinned bar to the screen edges */
+        padding: 12px 16px;
+        background: var(--surface-raised, #ffffff);
+    }
+    [data-theme="dark"] .rt-mw-compare-header {
+        background: var(--surface-raised, #161b24);
+    }
 }
 
 /* Legend strip — explains the on-canvas position markers (latest
