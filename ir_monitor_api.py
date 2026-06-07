@@ -6666,7 +6666,9 @@ def _weatherlab_http():
             total=3, connect=3, read=3,
             backoff_factor=0.6,            # ~0, 0.6, 1.2, 2.4 s between tries
             status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=frozenset(["GET"]),
+            # HEAD is used for the cheap cyclogenesis availability probe
+            # (cycle picker); both verbs are idempotent and safe to retry.
+            allowed_methods=frozenset(["GET", "HEAD"]),
             raise_on_status=False,
         )
         adapter = HTTPAdapter(max_retries=retry)
@@ -7504,6 +7506,25 @@ _WEATHERLAB_GENESIS_CACHE_TTL = 7200  # 2 hours (CSV only changes every 6h)
 _WEATHERLAB_GENESIS_MISS_TTL = 600     # 10 min for negative cache
 _WEATHERLAB_GENESIS_MISS = "__MISSING__"
 
+# The /weatherlab-genesis-cycles list summarizes per-variant availability +
+# track counts for the most recent cycles across BOTH variants. The naive
+# implementation fully downloaded+parsed up to 8 multi-MB CSVs (4 cycles ×
+# 2 variants) on every request — ~6 s measured — and the parsed-dict cache
+# only holds 4 entries, so it thrashed and never warmed. That latency gated
+# how quickly the frontend learned the freshest cycle (and whether to switch
+# variants), so the latest run took several seconds to appear.
+#
+# Instead we probe availability with cheap HTTP HEADs (sub-second, no body)
+# and only borrow a real track count from a parsed CSV that's ALREADY cached
+# — so the whole scan is ~1 s cold and instant warm, with no multi-MB
+# downloads. The tiny result is cached for the TTL below (aligned with the
+# endpoint's HTTP max-age) and populated lazily on demand: zero speculative
+# background work, so an idle site spends no CPU keeping it warm. A fresh
+# cycle (or delayed variant) shows up within one TTL of publishing.
+_GENESIS_CYCLES_MAX = 8
+_GENESIS_CYCLES_SUMMARY_TTL = 300      # 5 min — lazy, matches HTTP max-age
+_genesis_cycles_summary_cache: dict = {"cycles": None, "ts": 0.0}
+
 # DeepMind typically publishes a cycle ~3–5 hours after its init time
 # (FNV3 inference + post-processing). Probing cycles younger than this
 # almost always 404s, wasting a 60-s timeout on every backend request
@@ -8115,6 +8136,115 @@ def get_weatherlab_genesis(max_members: int = 100, init_time: str = None,
     )
 
 
+def _genesis_cycle_brief(date_str: str, hour_str: str, variant: str) -> tuple:
+    """Cheap availability + best-effort track-count probe for one
+    (cycle, variant), for the cycle picker — WITHOUT downloading the
+    multi-MB CSV. Returns (available: bool, n_tracks: int | None):
+
+      - If the parsed CSV is already cached (e.g. the latest cycle the
+        main endpoint just served), derive both for free.
+      - A fresh known-missing cache entry → (False, None).
+      - Otherwise issue an HTTP HEAD: the server returns 200 for a
+        published file and 404 before publication — a sub-second probe
+        vs a multi-MB GET+parse. n_tracks is None (no body fetched); the
+        frontend renders the cycle without a count, which it handles.
+      - On an ambiguous HEAD (non-200/404, or a transient error surviving
+        the session's retries) fall back to the authoritative GET+parse so
+        a flaky probe never drops a real cycle from the picker.
+    """
+    variant_n = _genesis_variant_norm(variant)
+    cache_key = (date_str, hour_str, variant_n)
+    hit = _weatherlab_cache_lookup(
+        _weatherlab_genesis_cache, cache_key,
+        _WEATHERLAB_GENESIS_CACHE_TTL, _WEATHERLAB_GENESIS_MISS_TTL)
+    if isinstance(hit, dict):
+        return True, len(hit)
+    if hit is None:
+        return False, None     # fresh known-missing — no probe needed
+
+    base_url, file_prefix = _genesis_variant_source(variant_n)
+    date_fmt = date_str.replace("-", "_")
+    url = (f"{base_url}/ensemble/cyclogenesis/csv/"
+           f"{file_prefix}_{date_fmt}T{hour_str}_00_cyclogenesis.csv")
+    try:
+        r = _weatherlab_http().head(url, timeout=10, allow_redirects=True)
+    except Exception:
+        d = _fetch_weatherlab_genesis_csv(date_str, hour_str, variant_n)
+        return (d is not None), (len(d) if d is not None else None)
+    if r.status_code == 200:
+        return True, None
+    if r.status_code == 404:
+        return False, None
+    # Unexpected status — be authoritative rather than guess.
+    d = _fetch_weatherlab_genesis_csv(date_str, hour_str, variant_n)
+    return (d is not None), (len(d) if d is not None else None)
+
+
+def _compute_genesis_cycles(now=None, limit: int = _GENESIS_CYCLES_MAX) -> list:
+    """Build the freshest-first list of published cycles with per-variant
+    availability + best-effort track counts, using concurrent HEAD probes
+    (see `_genesis_cycle_brief`) rather than full CSV downloads. Cheap
+    enough (~1 s cold, no multi-MB I/O) to run lazily on the request path;
+    callers should still go through `_get_genesis_cycles_cached` so bursts
+    and multiple clients share one scan.
+
+    Stored entries omit `age_hours` because the summary is cached: age is a
+    function of wall-clock and is recomputed fresh at serve time.
+    """
+    if now is None:
+        now = _dt.now(timezone.utc)
+    candidates = _genesis_candidates(now=now)
+    tasks = [(d, h, v) for (d, h) in candidates for v in ("large", "small")]
+    briefs = {}
+    if tasks:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(16, len(tasks))) as pool:
+            futs = {pool.submit(_genesis_cycle_brief, d, h, v): (d, h, v)
+                    for (d, h, v) in tasks}
+            for f, key in futs.items():
+                try:
+                    briefs[key] = f.result()
+                except Exception:
+                    # A probe that blew past its fallback shouldn't list the
+                    # cycle as available on a guess — treat as missing.
+                    briefs[key] = (False, None)
+    cycles = []
+    for date_str, hour_str in candidates:
+        per_variant = {}
+        for variant in ("large", "small"):
+            avail, n = briefs.get((date_str, hour_str, variant), (False, None))
+            per_variant[variant] = {"available": bool(avail), "n_tracks": n}
+        if not (per_variant["large"]["available"]
+                or per_variant["small"]["available"]):
+            continue   # neither variant published for this cycle yet
+        cycles.append({
+            "init_time": date_str.replace("-", "") + hour_str,
+            # Back-compat scalar = the large count if present, else small.
+            "n_tracks": (per_variant["large"]["n_tracks"]
+                         if per_variant["large"]["available"]
+                         else per_variant["small"]["n_tracks"]),
+            "variants": per_variant,
+        })
+        if len(cycles) >= limit:
+            break
+    return cycles
+
+
+def _get_genesis_cycles_cached(now=None, force: bool = False) -> list:
+    """Cached accessor for the cycle summary. Returns the warm list when it's
+    younger than the TTL; otherwise recomputes once and caches it. `force`
+    (used by the warmer) always recomputes and refreshes the cache."""
+    nowt = time.time()
+    cache = _genesis_cycles_summary_cache
+    if (not force and cache["cycles"] is not None
+            and (nowt - cache["ts"]) < _GENESIS_CYCLES_SUMMARY_TTL):
+        return cache["cycles"]
+    cycles = _compute_genesis_cycles(now=now)
+    cache["cycles"] = cycles
+    cache["ts"] = nowt
+    return cycles
+
+
 @router.get("/weatherlab-genesis-cycles")
 def get_weatherlab_genesis_cycles(count: int = 4):
     """List the most recent published genesis cycles (freshest first) so
@@ -8130,38 +8260,27 @@ def get_weatherlab_genesis_cycles(count: int = 4):
     variant typically lands earlier, so the freshest listed cycle may only
     have `small` available — that's exactly the gap this feature fills.
 
-    Probes the maturity-gated candidate list for both variants and reuses
-    the per-(cycle, variant) CSV cache, so steady state is dict lookups.
+    Served from the warm summary cache (the background warmer keeps it
+    fresh), so steady state is an instant dict read rather than 8 CSV
+    parses. `age_hours` is recomputed live so a cached list never reports
+    a stale age.
 
     Hyphenated path (not `/weatherlab-genesis/cycles`) so it doesn't get
     swallowed by the `/weatherlab-genesis/{track_id}` route.
     """
     now = _dt.now(timezone.utc)
-    count = max(1, min(int(count or 4), 8))
+    count = max(1, min(int(count or 4), _GENESIS_CYCLES_MAX))
+    base = _get_genesis_cycles_cached(now=now)
     cycles = []
-    for date_str, hour_str in _genesis_candidates(now=now):
-        per_variant = {}
-        for variant in ("large", "small"):
-            d = _fetch_weatherlab_genesis_csv(date_str, hour_str, variant)
-            per_variant[variant] = {
-                "available": d is not None,
-                "n_tracks": (len(d) if d is not None else None),
-            }
-        if not (per_variant["large"]["available"]
-                or per_variant["small"]["available"]):
-            continue   # neither variant published for this cycle yet
-        cycle_dt = _genesis_cycle_dt(date_str, hour_str)
+    for c in base[:count]:
+        d_str, h_str = _genesis_init_to_cycle(c["init_time"])
+        cycle_dt = _genesis_cycle_dt(d_str, h_str)
         cycles.append({
-            "init_time": date_str.replace("-", "") + hour_str,
+            "init_time": c["init_time"],
             "age_hours": round((now - cycle_dt).total_seconds() / 3600.0, 2),
-            # Back-compat scalar = the large count if present, else small.
-            "n_tracks": (per_variant["large"]["n_tracks"]
-                         if per_variant["large"]["available"]
-                         else per_variant["small"]["n_tracks"]),
-            "variants": per_variant,
+            "n_tracks": c["n_tracks"],
+            "variants": c["variants"],
         })
-        if len(cycles) >= count:
-            break
     return JSONResponse(
         content={"cycles": cycles, "n": len(cycles)},
         headers={"Cache-Control": "public, max-age=300"},
