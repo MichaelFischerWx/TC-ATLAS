@@ -7291,6 +7291,29 @@
                               buf: null, source: 'none' });
             }
         }
+        // Trim a trailing run of DAYTIME SWIR-substitution frames. At the
+        // leading edge the newest Band-2 (Visible) file routinely lands a
+        // cycle or two after the smaller SWIR file, so the loop would
+        // otherwise end on a 3.9 µm SWIR frame more recent than the last
+        // true visible frame — which reads as a jarring style "jump" each
+        // time the animation wraps. Hold the loop on the last real visible
+        // frame instead. Genuine NIGHT SWIR frames (swirNight) are the whole
+        // point of the day/night composite, so a night tail is preserved; we
+        // only drop daytime (no-data gap) SWIR substitutions. If there are no
+        // visible frames at all (Vis bundle totally absent), keep the SWIR
+        // frames — better an all-SWIR daytime loop than a blank one. Pure
+        // frontend trim: zero added compute.
+        var _anyVis = false;
+        for (var _v = 0; _v < merged.length; _v++) {
+            if (merged[_v].source === 'vis') { _anyVis = true; break; }
+        }
+        if (_anyVis) {
+            while (merged.length &&
+                   merged[merged.length - 1].source === 'swir' &&
+                   !merged[merged.length - 1].swirNight) {
+                merged.pop();
+            }
+        }
         merged = _decimateFramesForMobile(merged);
         if (!merged.length) { if (productMode === 'vis') setProductMode('eir'); return; }
 
