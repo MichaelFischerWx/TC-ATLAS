@@ -3721,8 +3721,32 @@ def _build_and_upload_og_card(storms):
     key (_OG_CARD_KEY). When storms are active, the card features a live IR
     image of the most-intense one plus its vitals; otherwise a branded
     fallback. Best-effort — any failure is logged and swallowed so it never
-    breaks the prewarm cycle. Called every cycle so the card tracks the live
-    situation (and so the off-season fallback replaces a stale storm)."""
+    breaks the prewarm cycle.
+
+    COST: the only non-trivial work here is one extra fetch_ir_tb_raw (an S3
+    read + reproject, ~1-3s CPU) for the single most-intense storm. To avoid
+    paying that on every ~10-min cycle, regeneration is throttled to roughly
+    every OG_CARD_INTERVAL_MIN (default 30) minutes — the same scan-grid
+    wall-clock idiom _prefetch_ir_frames uses for the heavy Vis band. The card
+    is still (re)generated immediately when the GCS object is missing (first
+    run / recovery), so the throttle never leaves the og:image URL dangling."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+    blob = bucket.blob(_OG_CARD_KEY)
+
+    interval = max(10, int(os.environ.get("OG_CARD_INTERVAL_MIN", "30")))
+    is_og_cycle = (_dt.now(timezone.utc).minute % interval) < 10
+    if not is_og_cycle:
+        # Off-cycle: skip the render+IR-fetch unless the card is missing, so
+        # the expensive path runs ~48×/day (not 144×) yet self-heals a first
+        # run or a deleted object. blob.exists() is a cheap Class-B GCS op.
+        try:
+            if blob.exists():
+                return
+        except Exception:
+            return
+
     try:
         import og_card
     except Exception as ex:
@@ -3752,13 +3776,8 @@ def _build_and_upload_og_card(storms):
     if not png:
         return
 
-    bucket = _get_rt_gcs_bucket()
-    if bucket is None:
-        return
     try:
-        blob = bucket.blob(_OG_CARD_KEY)
-        # Short TTL so social re-scrapes pick up the live storm; matches the
-        # ~10-min job cadence.
+        # Short TTL so social re-scrapes pick up the live storm.
         blob.cache_control = "public, max-age=600"
         blob.upload_from_string(
             png, content_type="image/png",
