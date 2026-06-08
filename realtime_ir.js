@@ -11001,7 +11001,7 @@
         subEl.innerHTML = 'Loading ensemble members…';
         m.style.display = 'flex';
         document.body.style.overflow = 'hidden';
-        _ga('rt_genesis_detail_open', { track_id: trackId });
+        _ga('rt_genesis_detail_open', { track_id: trackId, label: titleName });
 
         // Source-aware loader:
         //   • TC-ATLAS clusters (tca-N) — use the cached member set
