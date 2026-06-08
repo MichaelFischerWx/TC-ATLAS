@@ -18,6 +18,7 @@
 
 # ── Cached data (MergIR frames — huge, not needed in container) ──
 mergir_cache/
+cache/
 
 # ── Claude worktrees (dev artifacts) ──
 .claude/
