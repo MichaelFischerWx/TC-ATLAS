@@ -3716,6 +3716,32 @@ def refresh_active_storms_cache():
         }
 
 
+def _latest_ir_webp(atcf_id: str):
+    """Return (webp_bytes, dt_str) for the newest cached Mercator IR WebP frame
+    of `atcf_id`, or (None, None). This REUSES the frame _prefetch_ir_frames
+    already rendered + uploaded this cycle (ir-webp-merc/...) so the OG card
+    needs no extra S3 fetch or reprojection — just one Class-A LIST + one GET.
+
+    Frame keys are '{ver}/ir-webp-merc/{ATCF}/{dt_str}{pos}.webp' with a
+    fixed-width dt_str ('YYYYMMDDHHMM') leading the basename, so the
+    lexicographic max over the key set is the chronologically newest frame."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return None, None
+    keys = _gcs_rt_list_keys(f"{_GCS_RT_VERSION}/ir-webp-merc/{atcf_id.upper()}/")
+    if not keys:
+        return None, None
+    latest = max(keys)
+    try:
+        data = bucket.blob(latest).download_as_bytes(timeout=15)
+    except Exception as ex:
+        print(f"[Prewarm] OG card frame fetch failed ({latest}): {ex}")
+        return None, None
+    base = latest.rsplit("/", 1)[-1]
+    dstr = base[:12] if len(base) >= 12 and base[:12].isdigit() else None
+    return data, dstr
+
+
 def _build_and_upload_og_card(storms):
     """Render the dynamic social OG card and upload it to the stable public
     key (_OG_CARD_KEY). When storms are active, the card features a live IR
@@ -3723,13 +3749,16 @@ def _build_and_upload_og_card(storms):
     fallback. Best-effort — any failure is logged and swallowed so it never
     breaks the prewarm cycle.
 
-    COST: the only non-trivial work here is one extra fetch_ir_tb_raw (an S3
-    read + reproject, ~1-3s CPU) for the single most-intense storm. To avoid
-    paying that on every ~10-min cycle, regeneration is throttled to roughly
-    every OG_CARD_INTERVAL_MIN (default 30) minutes — the same scan-grid
-    wall-clock idiom _prefetch_ir_frames uses for the heavy Vis band. The card
-    is still (re)generated immediately when the GCS object is missing (first
-    run / recovery), so the throttle never leaves the og:image URL dangling."""
+    COST: effectively free. The card REUSES the Mercator IR WebP that
+    _prefetch_ir_frames already rendered + uploaded for the most-intense storm
+    this cycle (_latest_ir_webp → one LIST + one ~60 KB GET), so there is NO
+    extra S3 fetch or reprojection in the normal path — only a brand-new storm
+    with no cached frame yet triggers a one-off direct fetch. Regeneration is
+    still throttled to ~every OG_CARD_INTERVAL_MIN (default 30) min — the same
+    scan-grid wall-clock idiom _prefetch_ir_frames uses for the Vis band — to
+    keep Class-A LIST + render/upload churn down. The card is (re)generated
+    immediately when the GCS object is missing (first run / recovery), so the
+    throttle never leaves the og:image URL dangling."""
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return
@@ -3756,17 +3785,29 @@ def _build_and_upload_og_card(storms):
     png = None
     storm = og_card.pick_most_intense(storms) if storms else None
     if storm is not None:
-        try:
-            raw = fetch_ir_tb_raw(
-                float(storm["lat"]), float(storm["lon"]),
-                _dt.now(timezone.utc), box_deg=10.0)
-        except Exception as ex:
-            print(f"[Prewarm] OG card IR fetch failed for {storm.get('atcf_id')}: {ex}")
-            raw = None
-        if raw is not None and raw.get("tb") is not None:
-            png = og_card.render_storm_card_png(
-                storm, raw["tb"],
-                valid_utc=raw.get("scan_dt") or raw.get("datetime_utc"))
+        # Preferred path: REUSE the Mercator IR WebP that _prefetch_ir_frames
+        # just wrote for this storm this cycle — a single GCS GET, no S3 fetch
+        # or reproject. Falls back to a one-off direct fetch only when no
+        # cached frame exists yet (e.g. the storm's very first cycle).
+        webp, dstr = _latest_ir_webp(storm["atcf_id"])
+        if webp:
+            valid = None
+            if dstr and len(dstr) >= 12 and dstr[:12].isdigit():
+                valid = (f"{dstr[0:4]}-{dstr[4:6]}-{dstr[6:8]}"
+                         f"T{dstr[8:10]}:{dstr[10:12]}:00Z")
+            png = og_card.render_storm_card_from_image(storm, webp, valid_utc=valid)
+        else:
+            try:
+                raw = fetch_ir_tb_raw(
+                    float(storm["lat"]), float(storm["lon"]),
+                    _dt.now(timezone.utc), box_deg=10.0)
+            except Exception as ex:
+                print(f"[Prewarm] OG card IR fetch failed for {storm.get('atcf_id')}: {ex}")
+                raw = None
+            if raw is not None and raw.get("tb") is not None:
+                png = og_card.render_storm_card_png(
+                    storm, raw["tb"],
+                    valid_utc=raw.get("scan_dt") or raw.get("datetime_utc"))
 
     if png is None:
         # No active storms, or IR fetch/render failed → branded fallback so the

@@ -138,18 +138,34 @@ def _draw_wordmark(draw, x: int, y: int):
               font=_font(16), fill=_DIM)
 
 
-def render_storm_card_png(storm: dict, tb: np.ndarray,
-                          valid_utc: Optional[str] = None) -> Optional[bytes]:
-    """Render the live-storm OG card (1200x630 PNG bytes) for `storm` using its
-    brightness-temperature array `tb`. Returns None on failure (callers treat
-    that as 'skip this cycle'). Never raises."""
-    try:
+def _ir_square_from_image(img_bytes: bytes):
+    """Decode a PRE-RENDERED IR image (the cached Mercator WebP the prewarm
+    already produced) and fit it to the IR square. This is the zero-extra-cost
+    backdrop path: it reuses the colormapped frame instead of re-fetching Tb
+    from S3. Transparent / off-disk pixels fall back to navy."""
+    from PIL import Image
+    im = Image.open(io.BytesIO(img_bytes))
+    if im.mode in ("RGBA", "LA", "P"):
+        im = im.convert("RGBA")
+        bg = Image.new("RGBA", im.size, (_NAVY[0], _NAVY[1], _NAVY[2], 255))
+        im = Image.alpha_composite(bg, im).convert("RGB")
+    else:
+        im = im.convert("RGB")
+    return im.resize((_IR_SQUARE, _IR_SQUARE), Image.LANCZOS)
+
+
+def _compose_storm_card(ir_square, storm: dict,
+                        valid_utc: Optional[str]) -> Optional[bytes]:
+    """Compose the final card from an already-prepared CARD_H x CARD_H RGB IR
+    square plus the storm's text panel. Shared by both the Tb and pre-rendered-
+    image entry points. Never raises (caller wraps)."""
+    if True:
         from PIL import Image, ImageDraw
 
         card = Image.new("RGB", (CARD_W, CARD_H), _NAVY)
 
         # IR backdrop on the right half.
-        ir = _ir_backdrop(tb)
+        ir = ir_square
         card.paste(ir, (_IR_X, 0))
 
         # Navy→transparent gradient over the IR's left edge to blend the seam
@@ -222,6 +238,29 @@ def render_storm_card_png(storm: dict, tb: np.ndarray,
                   font=_font(18, bold=True), fill=_CYAN)
 
         return _encode(card)
+
+
+def render_storm_card_from_image(storm: dict, ir_img_bytes: bytes,
+                                 valid_utc: Optional[str] = None) -> Optional[bytes]:
+    """Preferred entry point: render the live-storm card using a PRE-RENDERED
+    IR image (the cached Mercator WebP the prewarm already wrote this cycle),
+    so no Tb re-fetch / reproject is needed. Returns None on failure. Never
+    raises."""
+    try:
+        return _compose_storm_card(_ir_square_from_image(ir_img_bytes), storm, valid_utc)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def render_storm_card_png(storm: dict, tb: np.ndarray,
+                          valid_utc: Optional[str] = None) -> Optional[bytes]:
+    """Fallback entry point: render the live-storm card from a raw brightness-
+    temperature array `tb` (used only when no cached frame exists yet, e.g. a
+    storm's first cycle). Returns None on failure. Never raises."""
+    try:
+        return _compose_storm_card(_ir_backdrop(tb), storm, valid_utc)
     except Exception:
         import traceback
         traceback.print_exc()
