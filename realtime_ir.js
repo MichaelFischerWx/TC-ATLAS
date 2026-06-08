@@ -781,6 +781,11 @@
     var _rtDmChangeTauIdx = 4;         // current slider index for change histogram
     var _rtDmChangeInt = 24;           // 12 or 24 hour change interval
 
+    // Genesis-popup Intensity Change pane (RI histogram from cluster members)
+    var _genesisIcData = null;         // {lead_times_h, intensity_change_12h/24h, ...}
+    var _genesisIcTauIdx = 4;          // current slider index
+    var _genesisIcInt = 24;            // 12 or 24 hour change interval
+
     // ── Microwave passes (last N hrs) overlay ───────────────
     // Shared helper lives in tc_mw_layer.js (window.TCMicrowave).
     // Lazily constructed on first Layers-panel render so we don't
@@ -10681,6 +10686,7 @@
               '<div id="rt-genesis-jump-nav" class="rt-genesis-jump-nav" role="tablist">' +
                 '<button type="button" class="rt-genesis-jump-btn active" data-pane="thisrun" role="tab">This run</button>' +
                 '<button type="button" class="rt-genesis-jump-btn" data-pane="trends" role="tab">Trends</button>' +
+                '<button type="button" class="rt-genesis-jump-btn" data-pane="intchange" role="tab">Intensity Change</button>' +
               '</div>' +
               '<div class="rt-genesis-modal-body">' +
                 // ── Trends pane (hidden by default) ──────────────────
@@ -10717,6 +10723,34 @@
                   '</div>' +
                 '</div>' +
                 '</div>' + // close #rt-genesis-pane-trends
+                // ── Intensity Change pane (hidden by default) ────────
+                // RI histogram for THIS disturbance, built from the
+                // freshest matched cluster's member tracks (ΔV over 12h /
+                // 24h). Mirrors the storm-card 1K-ensemble panel but works
+                // for pre-genesis systems that have no ATCF id.
+                '<div id="rt-genesis-pane-intchange" class="rt-genesis-pane" style="display:none;">' +
+                  '<div class="rt-genesis-modal-chart-wrap" style="position:relative;">' +
+                    '<div id="rt-genesis-ic-empty" class="rt-genesis-trend-note" style="padding:10px 4px;">No intensity-change distribution yet for this disturbance.</div>' +
+                    '<div id="rt-genesis-ic-wrap" class="rt-genesis-trend-wrap" style="display:none;">' +
+                      '<div class="rt-genesis-trend-head">' +
+                        '<span class="rt-genesis-trend-title">Intensity change (ΔV)</span>' +
+                        '<div style="display:flex;gap:4px;align-items:center;">' +
+                          '<button id="rt-genesis-ic-12h-btn" type="button" onclick="window._genesisIcInterval(12)" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">12h</button>' +
+                          '<button id="rt-genesis-ic-24h-btn" type="button" onclick="window._genesisIcInterval(24)" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">24h</button>' +
+                        '</div>' +
+                      '</div>' +
+                      '<span id="rt-genesis-ic-note" class="rt-genesis-trend-note"></span>' +
+                      '<div id="rt-genesis-ic-chart" style="width:100%;"></div>' +
+                      '<div style="position:relative;z-index:10;padding:4px 0 0;">' +
+                        '<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:2px;">' +
+                          '<span style="font-size:0.6rem;color:#64748b;">Forecast hour:</span>' +
+                          '<span id="rt-genesis-ic-label" style="font-size:0.7rem;color:#00e5ff;font-variant-numeric:tabular-nums;">+24h</span>' +
+                        '</div>' +
+                        '<input type="range" id="rt-genesis-ic-slider" min="0" max="52" value="4" oninput="window._genesisIcSlide(this.value)" class="rt-dm-slider" style="width:100%;display:block;">' +
+                      '</div>' +
+                    '</div>' +
+                  '</div>' +
+                '</div>' + // close #rt-genesis-pane-intchange
                 // ── This-run pane (visible by default) ───────────────
                 '<div id="rt-genesis-pane-thisrun" class="rt-genesis-pane">' +
                 // Sub-nav: the per-disturbance panels stack vertically and
@@ -10853,8 +10887,9 @@
         var scroller = m.querySelector('.rt-genesis-modal-content');
         var jumpBtns = m.querySelectorAll('.rt-genesis-jump-btn');
         var panes = {
-            thisrun: m.querySelector('#rt-genesis-pane-thisrun'),
-            trends:  m.querySelector('#rt-genesis-pane-trends'),
+            thisrun:   m.querySelector('#rt-genesis-pane-thisrun'),
+            trends:    m.querySelector('#rt-genesis-pane-trends'),
+            intchange: m.querySelector('#rt-genesis-pane-intchange'),
         };
         function _genesisShowPane(name) {
             if (!panes[name]) return;
@@ -11795,6 +11830,13 @@
         if (_tmw) _tmw.style.display = 'none';
         if (_tiw) _tiw.style.display = 'none';
         _genesisTrendsUpdateEmpty();
+        // Reset the Intensity Change pane too — re-shown only if the fetch
+        // returns an intensity_change block for this disturbance.
+        _genesisIcData = null;
+        var _icw = document.getElementById('rt-genesis-ic-wrap');
+        var _ice = document.getElementById('rt-genesis-ic-empty');
+        if (_icw) _icw.style.display = 'none';
+        if (_ice) _ice.style.display = '';
 
         // Resolve the genesis-density anchor for this disturbance.
         var meta = _genesisDisturbanceMeta[json && json.track_id] || {};
@@ -11831,10 +11873,83 @@
                 _drawGenesisTrend(data, loadedInit);
                 _drawTrackTrend(data, loadedInit);
                 _drawIntensityTrend(data, loadedInit);
+                _drawGenesisIntChange(data, loadedInit);
                 _genesisTrendsUpdateEmpty();
             })
             .catch(function () { /* endpoint absent or failed — stay hidden */ });
     }
+
+    /**
+     * Intensity Change pane: RI histogram for this disturbance, built from the
+     * freshest matched cluster's member ΔV distribution (served on the
+     * genesis-trend response as `intensity_change`). Reuses the shared
+     * `_rtDrawChangeHistCore` so it looks identical to the storm-card panel.
+     */
+    function _drawGenesisIntChange(data, loadedInit) {
+        var wrap = document.getElementById('rt-genesis-ic-wrap');
+        var empty = document.getElementById('rt-genesis-ic-empty');
+        var noteEl = document.getElementById('rt-genesis-ic-note');
+        if (!wrap || !empty) return;
+
+        var ic = data && data.intensity_change;
+        var taus = ic && ic.lead_times_h;
+        var has = ic && (
+            (ic.intensity_change_12h && Object.keys(ic.intensity_change_12h).length) ||
+            (ic.intensity_change_24h && Object.keys(ic.intensity_change_24h).length));
+        if (!ic || !taus || !taus.length || !has) {
+            _genesisIcData = null;
+            wrap.style.display = 'none';
+            empty.style.display = '';
+            var purgeEl = document.getElementById('rt-genesis-ic-chart');
+            if (purgeEl && typeof Plotly !== 'undefined') Plotly.purge(purgeEl);
+            return;
+        }
+
+        _genesisIcData = ic;
+        empty.style.display = 'none';
+        wrap.style.display = '';
+
+        // Snap the slider to +24h (or nearest), matching the storm-card default.
+        var idx24 = taus.indexOf(24);
+        _genesisIcTauIdx = idx24 >= 0 ? idx24 : Math.min(4, taus.length - 1);
+        var slider = document.getElementById('rt-genesis-ic-slider');
+        if (slider) { slider.max = taus.length - 1; slider.value = _genesisIcTauIdx; }
+
+        if (noteEl) {
+            var it = ic.init_time || loadedInit || '';
+            var initFmt = (it.length >= 10)
+                ? (it.substring(4, 6) + '/' + it.substring(6, 8) + ' ' + it.substring(8, 10) + 'Z')
+                : '';
+            noteEl.textContent = (ic.n_members != null ? ic.n_members + ' members' : '')
+                + (initFmt ? ' · init ' + initFmt : '');
+        }
+
+        _genesisIcRender();
+    }
+
+    function _genesisIcRender() {
+        if (!_genesisIcData) return;
+        var changeData = _genesisIcInt === 12
+            ? _genesisIcData.intensity_change_12h
+            : _genesisIcData.intensity_change_24h;
+        _rtDrawChangeHistCore(changeData, _genesisIcData.lead_times_h || [],
+            _genesisIcTauIdx, _genesisIcInt,
+            'rt-genesis-ic-chart', 'rt-genesis-ic-label');
+    }
+
+    window._genesisIcSlide = function (idx) {
+        _genesisIcTauIdx = parseInt(idx, 10);
+        _genesisIcRender();
+    };
+
+    window._genesisIcInterval = function (hours) {
+        _genesisIcInt = hours;
+        var b12 = document.getElementById('rt-genesis-ic-12h-btn');
+        var b24 = document.getElementById('rt-genesis-ic-24h-btn');
+        if (b12) { b12.style.background = hours === 12 ? 'rgba(0,229,255,0.2)' : ''; b12.classList.toggle('active', hours === 12); }
+        if (b24) { b24.style.background = hours === 24 ? 'rgba(0,229,255,0.2)' : ''; b24.classList.toggle('active', hours === 24); }
+        _genesisIcRender();
+    };
 
     function _drawGenesisTrend(data, loadedInit) {
         var wrap = document.getElementById('rt-genesis-modal-trend');
@@ -16708,24 +16823,41 @@
      * Render intensity change histogram at the current slider tau.
      */
     function _rtRenderChangeHist() {
-        if (!_rtDmEnsData || typeof Plotly === 'undefined') return;
-
-        var taus = _rtDmEnsData.lead_times_h || [];
-        var tau = taus[_rtDmChangeTauIdx];
-        if (tau == null) return;
-
-        var label = document.getElementById('rt-dm-change-label');
-        if (label) label.textContent = '+' + tau + 'h';
-
+        if (!_rtDmEnsData) return;
         var changeData = _rtDmChangeInt === 12
             ? _rtDmEnsData.intensity_change_12h
             : _rtDmEnsData.intensity_change_24h;
+        _rtDrawChangeHistCore(changeData, _rtDmEnsData.lead_times_h || [],
+            _rtDmChangeTauIdx, _rtDmChangeInt,
+            'rt-dm-change-chart', 'rt-dm-change-label');
+    }
+
+    /**
+     * Shared ΔV-histogram renderer. Used by both the storm-card 1K-ensemble
+     * panel and the RT-monitor genesis popup's Intensity Change pane, so the
+     * diverging colormap, RI threshold/probability, and mean line stay
+     * identical across both surfaces.
+     *   changeData : {tau_str: {dv:[...]}} for the selected interval
+     *   taus       : lead_times_h array
+     *   tauIdx     : current slider index into taus
+     *   interval   : 12 or 24 (hours)
+     *   chartElId / labelElId : target DOM ids
+     */
+    function _rtDrawChangeHistCore(changeData, taus, tauIdx, interval, chartElId, labelElId) {
+        if (typeof Plotly === 'undefined') return;
+
+        taus = taus || [];
+        var tau = taus[tauIdx];
+        if (tau == null) return;
+
+        var label = document.getElementById(labelElId);
+        if (label) label.textContent = '+' + tau + 'h';
 
         var tauKey = String(Math.round(tau));
         var data = changeData ? changeData[tauKey] : null;
         if (!data || !data.dv) {
             // No change data at this tau (too early)
-            var chartEl = document.getElementById('rt-dm-change-chart');
+            var chartEl = document.getElementById(chartElId);
             if (chartEl) Plotly.purge(chartEl);
             return;
         }
@@ -16734,12 +16866,12 @@
         if (dv.length === 0) return;
 
         // RI threshold and probability
-        var riThreshold = _rtDmChangeInt === 24 ? 30 : 20;
+        var riThreshold = interval === 24 ? 30 : 20;
         var riCount = dv.filter(function (v) { return v >= riThreshold; }).length;
         var riPct = Math.round(riCount / dv.length * 100);
         var mean = dv.reduce(function (a, b) { return a + b; }, 0) / dv.length;
 
-        var chartEl = document.getElementById('rt-dm-change-chart');
+        var chartEl = document.getElementById(chartElId);
         if (!chartEl) return;
 
         // Pre-bin data into 5-kt bins and color by bin center value
@@ -16776,7 +16908,7 @@
                 color: binColors,
                 line: { color: 'rgba(0,0,0,0.3)', width: 0.5 }
             },
-            hovertemplate: '%{x:+.0f} kt/' + _rtDmChangeInt + 'h<br>%{y} members<extra></extra>'
+            hovertemplate: '%{x:+.0f} kt/' + interval + 'h<br>%{y} members<extra></extra>'
         };
 
         var shapes = [
@@ -16804,7 +16936,7 @@
             plot_bgcolor: 'rgba(0,0,0,0)',
             font: { family: 'DM Sans, sans-serif', size: 9, color: '#5b6573' },
             xaxis: {
-                title: { text: '\u0394V (kt/' + _rtDmChangeInt + 'h)', font: { size: 9 } },
+                title: { text: '\u0394V (kt/' + interval + 'h)', font: { size: 9 } },
                 gridcolor: 'rgba(255,255,255,0.05)',
                 zeroline: false
             },

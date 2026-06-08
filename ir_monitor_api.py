@@ -8308,6 +8308,63 @@ def get_weatherlab_genesis_cycles(count: int = 4):
     )
 
 
+def _genesis_cluster_intensity_change(cluster):
+    """ΔV (12h & 24h) intensity-change distribution across a genesis cluster's
+    member tracks, in the same shape the storm-card RI histogram consumes from
+    the 1K ensemble (`intensity_change_{12,24}h = {tau_str: {"dv": [...]}}`).
+
+    Lets the RT-monitor genesis popup show a rapid-intensification histogram for
+    a disturbance that has no ATCF id (so no `/weatherlab-ensemble`), reusing the
+    cluster members already loaded for the run-to-run trend. Returns None when
+    the cluster carries too few wind points to form a distribution.
+    """
+    members = (cluster or {}).get("members") or {}
+    if not members:
+        return None
+    # Per-member {tau: wind} map + the union of taus across members.
+    per_member = {}
+    all_taus = set()
+    for mkey, mem in members.items():
+        wmap = {}
+        for p in (mem.get("points") or []):
+            tau = p.get("tau")
+            if tau is None:
+                continue
+            wmap[tau] = p.get("wind")
+            all_taus.add(tau)
+        if wmap:
+            per_member[mkey] = wmap
+    if not per_member or not all_taus:
+        return None
+    sorted_taus = sorted(all_taus)
+    mkeys = sorted(per_member.keys())
+
+    def _changes(window_h):
+        out = {}
+        for tau in sorted_taus:
+            prev = tau - window_h
+            if prev not in all_taus:
+                continue
+            dv = []
+            for mk in mkeys:
+                wm = per_member[mk]
+                curr_w = wm.get(tau)
+                prev_w = wm.get(prev)
+                if curr_w is not None and prev_w is not None:
+                    dv.append(round(curr_w - prev_w, 1))
+                else:
+                    dv.append(None)
+            out[str(int(tau))] = {"dv": dv}
+        return out
+
+    return {
+        "lead_times_h": sorted_taus,
+        "n_members": len(per_member),
+        "intensity_change_12h": _changes(12),
+        "intensity_change_24h": _changes(24),
+    }
+
+
 @router.get("/weatherlab-genesis-trend")
 def get_weatherlab_genesis_trend(
     lat: float,
@@ -8347,6 +8404,8 @@ def get_weatherlab_genesis_trend(
     count = max(1, min(int(count or 4), 8))
     trend = []
     n_with_data = 0
+    ic_cluster = None      # freshest matched cluster — source for the RI histogram
+    ic_init = None
     for date_str, hour_str in _genesis_candidates(now=now):
         clusters = _tca_clusters_for_cycle(
             date_str, hour_str, grid_deg, peak_min_members,
@@ -8366,6 +8425,11 @@ def get_weatherlab_genesis_trend(
                 best_d = d
                 best = c
         matched = best is not None and best_d <= match_radius_km
+        if matched and ic_cluster is None:
+            # Freshest cycle that resolves this system → source the RI
+            # intensity-change distribution from its full member set.
+            ic_cluster = best
+            ic_init = date_str.replace("-", "") + hour_str
         # For matched cycles, attach the cluster's mean polyline so the
         # Trends tab can overlay run-to-run track + intensity. ensemble_mean
         # already carries {tau, lat, lon, wind} per point — slim to those
@@ -8391,6 +8455,12 @@ def get_weatherlab_genesis_trend(
         })
         if n_with_data >= count:
             break
+    intensity_change = None
+    if ic_cluster is not None:
+        ic = _genesis_cluster_intensity_change(ic_cluster)
+        if ic is not None:
+            ic["init_time"] = ic_init
+            intensity_change = ic
     return JSONResponse(
         content={
             "model": _genesis_variant_label(variant_n),
@@ -8399,6 +8469,7 @@ def get_weatherlab_genesis_trend(
             "match_radius_km": match_radius_km,
             "trend": trend,
             "n": len(trend),
+            "intensity_change": intensity_change,
         },
         headers={"Cache-Control": "public, max-age=300"},
     )
