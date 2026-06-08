@@ -179,6 +179,13 @@ _GCS_RT_VERSION = "rt-v12"  # v12: GOES geos→latlon reprojection (E+W); raw/we
                             # (perimeter-sampled geos window + true geos_extent;
                             # evicts pre-fix frames with rotated black corners)
 
+# Stable, VERSION-INDEPENDENT public key for the dynamic social OG card
+# (og:image / twitter:image). Deliberately NOT under _GCS_RT_VERSION so the
+# meta tags in the HTML never need to change when the cache version bumps.
+# Regenerated every prewarm cycle by _build_and_upload_og_card; public URL is
+# https://storage.googleapis.com/<GCS_IR_CACHE_BUCKET>/og/realtime_ir.png
+_OG_CARD_KEY = "og/realtime_ir.png"
+
 # _cleanup_old_gcs_frames is gated to run at most once per hour rather than
 # every ~10-min prewarm cycle (it issues ~6 Class-A list_blobs ops/run, the
 # priciest GCS operation). The standalone prewarm runs as a Cloud Run JOB —
@@ -3709,6 +3716,59 @@ def refresh_active_storms_cache():
         }
 
 
+def _build_and_upload_og_card(storms):
+    """Render the dynamic social OG card and upload it to the stable public
+    key (_OG_CARD_KEY). When storms are active, the card features a live IR
+    image of the most-intense one plus its vitals; otherwise a branded
+    fallback. Best-effort — any failure is logged and swallowed so it never
+    breaks the prewarm cycle. Called every cycle so the card tracks the live
+    situation (and so the off-season fallback replaces a stale storm)."""
+    try:
+        import og_card
+    except Exception as ex:
+        print(f"[Prewarm] OG card module import failed: {ex}")
+        return
+
+    png = None
+    storm = og_card.pick_most_intense(storms) if storms else None
+    if storm is not None:
+        try:
+            raw = fetch_ir_tb_raw(
+                float(storm["lat"]), float(storm["lon"]),
+                _dt.now(timezone.utc), box_deg=10.0)
+        except Exception as ex:
+            print(f"[Prewarm] OG card IR fetch failed for {storm.get('atcf_id')}: {ex}")
+            raw = None
+        if raw is not None and raw.get("tb") is not None:
+            png = og_card.render_storm_card_png(
+                storm, raw["tb"],
+                valid_utc=raw.get("scan_dt") or raw.get("datetime_utc"))
+
+    if png is None:
+        # No active storms, or IR fetch/render failed → branded fallback so the
+        # og:image URL always resolves to a good image.
+        png = og_card.render_branded_card_png()
+        storm = None
+    if not png:
+        return
+
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+    try:
+        blob = bucket.blob(_OG_CARD_KEY)
+        # Short TTL so social re-scrapes pick up the live storm; matches the
+        # ~10-min job cadence.
+        blob.cache_control = "public, max-age=600"
+        blob.upload_from_string(
+            png, content_type="image/png",
+            predefined_acl="publicRead", timeout=30)
+        tag = ("storm " + storm["atcf_id"]) if storm else "branded fallback"
+        print(f"[Prewarm] OG card updated ({tag})")
+    except Exception as ex:
+        print(f"[Prewarm] OG card upload failed: {ex}")
+
+
 def run_prewarm_cycle():
     """
     Run one full prewarm cycle SYNCHRONOUSLY (poll storms, then render + upload
@@ -3726,11 +3786,13 @@ def run_prewarm_cycle():
     storms = _poll_active_storms(spawn_prefetch=False)
     if not storms:
         print("[Prewarm Job] No active storms — nothing to render")
+        _build_and_upload_og_card([])  # branded off-season fallback card
         return {"storm_count": 0, "elapsed_sec": round(time.time() - t0, 1)}
 
     print(f"[Prewarm Job] Rendering frames for {len(storms)} active storm(s)…")
     _last_prefetch_time = time.time()
     _prefetch_ir_frames(list(storms))
+    _build_and_upload_og_card(list(storms))  # live social OG card (most-intense)
     elapsed = round(time.time() - t0, 1)
     print(f"[Prewarm Job] Cycle complete in {elapsed}s for {len(storms)} storm(s)")
     return {
