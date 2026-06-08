@@ -784,9 +784,8 @@
     // Genesis-popup Intensity Change pane (RI histogram from cluster members)
     var _genesisIcData = null;         // {lead_times_h, intensity_change_12h/24h, ...}
     var _genesisIcTauIdx = 4;          // current slider index
-    var _genesisIcInt = 24;            // 12 or 24 hour change interval
-    var _genesisIcView = 'dist';       // 'dist' = ΔV histogram @ tau, 'pri' = P(RI) vs hour, 'lmi' = LMI density
-    var _genesisIcPeak = null;         // {taus, winds} per-member peak for the LMI-by-hour view
+    var _genesisIcInt = 24;            // 12 or 24 hour change interval (ΔV + P(RI) figures)
+    var _genesisIcPeak = null;         // {taus, winds} per-member peak for the LMI figure
 
     // ── Microwave passes (last N hrs) overlay ───────────────
     // Shared helper lives in tc_mw_layer.js (window.TCMicrowave).
@@ -10733,31 +10732,45 @@
                 '<div id="rt-genesis-pane-intchange" class="rt-genesis-pane" style="display:none;">' +
                   '<div class="rt-genesis-modal-chart-wrap" style="position:relative;">' +
                     '<div id="rt-genesis-ic-empty" class="rt-genesis-trend-note" style="padding:10px 4px;">No intensity-change distribution yet for this disturbance.</div>' +
-                    '<div id="rt-genesis-ic-wrap" class="rt-genesis-trend-wrap" style="display:none;">' +
-                      '<div class="rt-genesis-trend-head">' +
-                        '<span id="rt-genesis-ic-title" class="rt-genesis-trend-title">Intensity change (ΔV)</span>' +
-                        '<div style="display:flex;gap:8px;align-items:center;">' +
-                          // View toggle: ΔV distribution @ hour · P(RI) vs hour · LMI density
+                    // Three stacked figures (like the Trends pane), not a
+                    // single chart behind a cramped view toggle.
+                    '<div id="rt-genesis-ic-wrap" style="display:none;">' +
+                      '<div id="rt-genesis-ic-note" class="rt-genesis-trend-note" style="margin-bottom:6px;"></div>' +
+                      // ── Figure 1: ΔV distribution at a forecast hour ──
+                      '<div class="rt-genesis-trend-wrap">' +
+                        '<div class="rt-genesis-trend-head">' +
+                          '<span class="rt-genesis-trend-title">Intensity change (ΔV)</span>' +
                           '<div style="display:flex;gap:4px;align-items:center;">' +
-                            '<button id="rt-genesis-ic-view-dist-btn" type="button" onclick="window._genesisIcSetView(\'dist\')" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">Distribution</button>' +
-                            '<button id="rt-genesis-ic-view-pri-btn" type="button" onclick="window._genesisIcSetView(\'pri\')" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">RI chance by hour</button>' +
-                            '<button id="rt-genesis-ic-view-lmi-btn" type="button" onclick="window._genesisIcSetView(\'lmi\')" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">LMI by hour</button>' +
-                          '</div>' +
-                          // Interval toggle (applies to the ΔV / P(RI) views only)
-                          '<div id="rt-genesis-ic-interval-toggle" style="display:flex;gap:4px;align-items:center;">' +
                             '<button id="rt-genesis-ic-12h-btn" type="button" onclick="window._genesisIcInterval(12)" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">12h</button>' +
                             '<button id="rt-genesis-ic-24h-btn" type="button" onclick="window._genesisIcInterval(24)" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">24h</button>' +
                           '</div>' +
                         '</div>' +
-                      '</div>' +
-                      '<span id="rt-genesis-ic-note" class="rt-genesis-trend-note"></span>' +
-                      '<div id="rt-genesis-ic-chart" style="width:100%;"></div>' +
-                      '<div id="rt-genesis-ic-slider-block" style="position:relative;z-index:10;padding:4px 0 0;">' +
-                        '<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:2px;">' +
-                          '<span style="font-size:0.6rem;color:#64748b;">Forecast hour:</span>' +
-                          '<span id="rt-genesis-ic-label" style="font-size:0.7rem;color:#00e5ff;font-variant-numeric:tabular-nums;">+24h</span>' +
+                        '<div id="rt-genesis-ic-chart" style="width:100%;"></div>' +
+                        '<div id="rt-genesis-ic-slider-block" style="position:relative;z-index:10;padding:4px 0 0;">' +
+                          '<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:2px;">' +
+                            '<span style="font-size:0.6rem;color:#64748b;">Forecast hour:</span>' +
+                            '<span id="rt-genesis-ic-label" style="font-size:0.7rem;color:#00e5ff;font-variant-numeric:tabular-nums;">+24h</span>' +
+                          '</div>' +
+                          '<input type="range" id="rt-genesis-ic-slider" min="0" max="52" value="4" oninput="window._genesisIcSlide(this.value)" class="rt-dm-slider" style="width:100%;display:block;">' +
                         '</div>' +
-                        '<input type="range" id="rt-genesis-ic-slider" min="0" max="52" value="4" oninput="window._genesisIcSlide(this.value)" class="rt-dm-slider" style="width:100%;display:block;">' +
+                      '</div>' +
+                      // ── Figure 2: P(RI) vs lead time ──
+                      '<div class="rt-genesis-trend-wrap" style="margin-top:14px;">' +
+                        '<div class="rt-genesis-trend-head">' +
+                          '<span class="rt-genesis-trend-title">RI probability by lead time</span>' +
+                          '<div style="display:flex;gap:4px;align-items:center;">' +
+                            '<button id="rt-genesis-ic-pri-12h-btn" type="button" onclick="window._genesisIcInterval(12)" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">12h</button>' +
+                            '<button id="rt-genesis-ic-pri-24h-btn" type="button" onclick="window._genesisIcInterval(24)" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">24h</button>' +
+                          '</div>' +
+                        '</div>' +
+                        '<div id="rt-genesis-ic-pri-chart" style="width:100%;"></div>' +
+                      '</div>' +
+                      // ── Figure 3: LMI by forecast hour ──
+                      '<div class="rt-genesis-trend-wrap" style="margin-top:14px;">' +
+                        '<div class="rt-genesis-trend-head">' +
+                          '<span class="rt-genesis-trend-title">Lifetime-max intensity by forecast hour</span>' +
+                        '</div>' +
+                        '<div id="rt-genesis-ic-lmi-chart" style="width:100%;"></div>' +
                       '</div>' +
                     '</div>' +
                   '</div>' +
@@ -11954,35 +11967,23 @@
         _genesisIcRender();
     }
 
+    // Draw the ΔV histogram (figure 1) at the current interval + slider tau.
+    function _genesisIcDrawDist() {
+        if (!_genesisIcData) return;
+        var changeData = _genesisIcInt === 12
+            ? _genesisIcData.intensity_change_12h
+            : _genesisIcData.intensity_change_24h;
+        _rtDrawChangeHistCore(changeData, _genesisIcData.lead_times_h || [],
+            _genesisIcTauIdx, _genesisIcInt,
+            'rt-genesis-ic-chart', 'rt-genesis-ic-label');
+    }
+
+    // Render all three stacked figures.
     function _genesisIcRender() {
         if (!_genesisIcData) return;
-        var sliderBlock = document.getElementById('rt-genesis-ic-slider-block');
-        var titleEl = document.getElementById('rt-genesis-ic-title');
-        var intToggle = document.getElementById('rt-genesis-ic-interval-toggle');
-        // The forecast-hour slider only applies to the ΔV histogram; the
-        // 12h/24h interval only applies to the ΔV / P(RI) views (LMI is the
-        // lifetime peak — interval-independent).
-        if (_genesisIcView === 'lmi') {
-            if (sliderBlock) sliderBlock.style.display = 'none';
-            if (intToggle) intToggle.style.display = 'none';
-            if (titleEl) titleEl.textContent = 'Lifetime-max intensity by forecast hour';
-            _drawGenesisIcLmiVsTau();
-        } else if (_genesisIcView === 'pri') {
-            if (sliderBlock) sliderBlock.style.display = 'none';
-            if (intToggle) intToggle.style.display = '';
-            if (titleEl) titleEl.textContent = 'RI probability by lead time';
-            _drawGenesisRiProb();
-        } else {
-            if (sliderBlock) sliderBlock.style.display = '';
-            if (intToggle) intToggle.style.display = '';
-            if (titleEl) titleEl.textContent = 'Intensity change (ΔV)';
-            var changeData = _genesisIcInt === 12
-                ? _genesisIcData.intensity_change_12h
-                : _genesisIcData.intensity_change_24h;
-            _rtDrawChangeHistCore(changeData, _genesisIcData.lead_times_h || [],
-                _genesisIcTauIdx, _genesisIcInt,
-                'rt-genesis-ic-chart', 'rt-genesis-ic-label');
-        }
+        _genesisIcDrawDist();
+        _drawGenesisRiProb();
+        _drawGenesisIcLmiVsTau();
     }
 
     /**
@@ -11992,7 +11993,7 @@
      * driven by the per-member peak arrays stashed in _genesisIcPeak.
      */
     function _drawGenesisIcLmiVsTau() {
-        var chartEl = document.getElementById('rt-genesis-ic-chart');
+        var chartEl = document.getElementById('rt-genesis-ic-lmi-chart');
         if (!chartEl || typeof Plotly === 'undefined') return;
         var peak = _genesisIcPeak || {};
         var pt = peak.taus || [], pw = peak.winds || [];
@@ -12062,7 +12063,7 @@
      * complementing the single-hour ΔV histogram.
      */
     function _drawGenesisRiProb() {
-        var chartEl = document.getElementById('rt-genesis-ic-chart');
+        var chartEl = document.getElementById('rt-genesis-ic-pri-chart');
         if (!chartEl || !_genesisIcData || typeof Plotly === 'undefined') return;
 
         var taus = _genesisIcData.lead_times_h || [];
@@ -12128,34 +12129,25 @@
     }
 
     window._genesisIcSlide = function (idx) {
+        // Slider only drives the ΔV-distribution figure.
         _genesisIcTauIdx = parseInt(idx, 10);
-        if (_genesisIcView === 'dist') _genesisIcRender();
+        _genesisIcDrawDist();
     };
 
     window._genesisIcInterval = function (hours) {
+        // Interval drives both ΔV-based figures; keep both header toggles in
+        // sync (the ΔV figure's pair and the P(RI) figure's pair).
         _genesisIcInt = hours;
-        var b12 = document.getElementById('rt-genesis-ic-12h-btn');
-        var b24 = document.getElementById('rt-genesis-ic-24h-btn');
-        if (b12) { b12.style.background = hours === 12 ? 'rgba(0,229,255,0.2)' : ''; b12.classList.toggle('active', hours === 12); }
-        if (b24) { b24.style.background = hours === 24 ? 'rgba(0,229,255,0.2)' : ''; b24.classList.toggle('active', hours === 24); }
-        _genesisIcRender();
-    };
-
-    window._genesisIcSetView = function (view) {
-        _genesisIcView = (view === 'pri' || view === 'lmi') ? view : 'dist';
-        var btns = {
-            dist: document.getElementById('rt-genesis-ic-view-dist-btn'),
-            pri:  document.getElementById('rt-genesis-ic-view-pri-btn'),
-            lmi:  document.getElementById('rt-genesis-ic-view-lmi-btn')
-        };
-        Object.keys(btns).forEach(function (k) {
-            var b = btns[k];
-            if (!b) return;
-            var on = (_genesisIcView === k);
-            b.style.background = on ? 'rgba(0,229,255,0.2)' : '';
-            b.classList.toggle('active', on);
+        ['rt-genesis-ic-12h-btn', 'rt-genesis-ic-pri-12h-btn'].forEach(function (id) {
+            var b = document.getElementById(id);
+            if (b) { b.style.background = hours === 12 ? 'rgba(0,229,255,0.2)' : ''; b.classList.toggle('active', hours === 12); }
         });
-        _genesisIcRender();
+        ['rt-genesis-ic-24h-btn', 'rt-genesis-ic-pri-24h-btn'].forEach(function (id) {
+            var b = document.getElementById(id);
+            if (b) { b.style.background = hours === 24 ? 'rgba(0,229,255,0.2)' : ''; b.classList.toggle('active', hours === 24); }
+        });
+        _genesisIcDrawDist();
+        _drawGenesisRiProb();
     };
 
     function _drawGenesisTrend(data, loadedInit) {
