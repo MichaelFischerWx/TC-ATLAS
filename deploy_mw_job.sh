@@ -180,13 +180,18 @@ SECRETS="PPS_USER=pps-user:latest,PPS_PASS=pps-pass:latest"
 if [ "${HAVE_SPACETRACK}" = "1" ]; then
     SECRETS="${SECRETS},SPACETRACK_USER=space-track-user:latest,SPACETRACK_PASS=space-track-pass:latest"
 fi
+# 1 vCPU: granule rendering is serial and measured CPU utilization peaks at
+# ~0.5 of the old 2-vCPU allocation (~1 core), so the 2nd vCPU sat idle. At 1
+# vCPU wall-clock is unchanged, so in-window (active-overpass) latency is NOT
+# degraded — the overpass-aware gate still does rapid pickup; this just stops
+# paying for the idle core. Bump back to 2 if a future sensor parallelizes.
 echo "Deploying Cloud Run Job ${JOB_NAME}..."
 if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; then
     gcloud run jobs update "${JOB_NAME}" \
         --region "${REGION}" \
         --image "${IMAGE}" \
         --memory 2Gi \
-        --cpu 2 \
+        --cpu 1 \
         --max-retries 1 \
         --task-timeout 3600 \
         --set-env-vars "GCS_MW_BUCKET=${BUCKET}" \
@@ -196,7 +201,7 @@ else
         --region "${REGION}" \
         --image "${IMAGE}" \
         --memory 2Gi \
-        --cpu 2 \
+        --cpu 1 \
         --max-retries 1 \
         --task-timeout 3600 \
         --set-env-vars "GCS_MW_BUCKET=${BUCKET}" \

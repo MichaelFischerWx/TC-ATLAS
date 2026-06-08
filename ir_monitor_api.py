@@ -148,6 +148,17 @@ _PREWARM_STORM_CONCURRENCY = max(
     1, int(os.environ.get("IR_PREWARM_STORM_CONCURRENCY", "2"))
 )
 
+# Visible (Band 2) prewarm cadence, in minutes. Vis L1b is ~16× the data
+# volume of IR/WV/SWIR and its bundle is the heaviest to (re)assemble, yet it
+# evolves slowly — refreshing it every 10-min cycle is overkill. We prewarm
+# Vis only on cycles landing in the first scan-slot of each interval (i.e.
+# ~every 30 min during daylight). IR/WV/SWIR stay every cycle, so the IR loop
+# and the sunrise SWIR fallback are never stale. Set =10 (the scan-grid
+# cadence) via IR_VIS_PREWARM_INTERVAL_MIN to restore every-cycle Vis.
+_VIS_PREWARM_INTERVAL_MIN = max(
+    10, int(os.environ.get("IR_VIS_PREWARM_INTERVAL_MIN", "30"))
+)
+
 # Tb encoding constants (shared by /ir-raw endpoint and GCS prefetch)
 _TB_VMIN = 160.0
 _TB_VMAX = 330.0
@@ -2886,6 +2897,12 @@ def _prefetch_ir_frames(storms: list):
         print("[IR Pre-fetch] Already running, skipping")
         return
     try:
+        # Whether THIS cycle should (re)prewarm the heavy Vis band — true only
+        # on cycles landing in the first scan-slot of each
+        # _VIS_PREWARM_INTERVAL_MIN window (~every 30 min by default). Computed
+        # once per cycle so all storms agree; combined with each storm's own
+        # daylight check below. 10 = the prewarm scan-grid cadence.
+        _vis_cycle = (_dt.now(timezone.utc).minute % _VIS_PREWARM_INTERVAL_MIN) < 10
         def _prewarm_one_storm(storm):
             """Render + cache + bundle ONE storm; return a counts dict.
 
@@ -3013,7 +3030,11 @@ def _prefetch_ir_frames(storms: list):
                 # the sunrise auto-fallback returned hours-old frames.
                 primary_band = WV_BAND
                 extra_bands: list[int] = [SWIR_BAND]
-                if sun_el_now > -6:
+                # Vis only in daylight AND only on a Vis-cadence cycle (its
+                # bundle is the heaviest and it changes slowly — see
+                # _VIS_PREWARM_INTERVAL_MIN). SWIR stays every cycle so the
+                # sunrise auto-fallback is always fresh.
+                if sun_el_now > -6 and _vis_cycle:
                     extra_bands.append(VIS_BAND)
                 _prefetch_counts = {"ir": 0, "band": 0, "jpg": 0}
 
