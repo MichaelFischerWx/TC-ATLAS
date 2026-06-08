@@ -11128,7 +11128,10 @@
                     '<div id="rt-genesis-ic-wrap" style="display:none;">' +
                       '<div id="rt-genesis-ic-note" class="rt-genesis-trend-note" style="margin-bottom:6px;"></div>' +
                       // ── Figure 1: ΔV distribution at a forecast hour ──
-                      '<div class="rt-genesis-trend-wrap">' +
+                      // Neutral chart-wrap (no card chrome), matching the
+                      // main "This run" pop-up figures rather than the
+                      // cyan Trends-card treatment.
+                      '<div class="rt-genesis-modal-chart-wrap">' +
                         '<div class="rt-genesis-trend-head">' +
                           '<span class="rt-genesis-trend-title">Intensity change (ΔV)</span>' +
                           '<div style="display:flex;gap:4px;align-items:center;">' +
@@ -11146,7 +11149,7 @@
                         '</div>' +
                       '</div>' +
                       // ── Figure 2: P(RI) vs lead time ──
-                      '<div class="rt-genesis-trend-wrap" style="margin-top:14px;">' +
+                      '<div class="rt-genesis-modal-chart-wrap" style="margin-top:14px;">' +
                         '<div class="rt-genesis-trend-head">' +
                           '<span class="rt-genesis-trend-title">RI probability by lead time</span>' +
                           '<div style="display:flex;gap:4px;align-items:center;">' +
@@ -11157,7 +11160,7 @@
                         '<div id="rt-genesis-ic-pri-chart" style="width:100%;"></div>' +
                       '</div>' +
                       // ── Figure 3: LMI by forecast hour ──
-                      '<div class="rt-genesis-trend-wrap" style="margin-top:14px;">' +
+                      '<div class="rt-genesis-modal-chart-wrap" style="margin-top:14px;">' +
                         '<div class="rt-genesis-trend-head">' +
                           '<span class="rt-genesis-trend-title">Lifetime-max intensity by forecast hour</span>' +
                         '</div>' +
