@@ -785,7 +785,8 @@
     var _genesisIcData = null;         // {lead_times_h, intensity_change_12h/24h, ...}
     var _genesisIcTauIdx = 4;          // current slider index
     var _genesisIcInt = 24;            // 12 or 24 hour change interval
-    var _genesisIcView = 'dist';       // 'dist' = ΔV histogram @ tau, 'pri' = P(RI) vs hour
+    var _genesisIcView = 'dist';       // 'dist' = ΔV histogram @ tau, 'pri' = P(RI) vs hour, 'lmi' = LMI density
+    var _genesisIcPeak = null;         // {taus, winds} per-member peak for the LMI-by-hour view
 
     // ── Microwave passes (last N hrs) overlay ───────────────
     // Shared helper lives in tc_mw_layer.js (window.TCMicrowave).
@@ -10736,13 +10737,14 @@
                       '<div class="rt-genesis-trend-head">' +
                         '<span id="rt-genesis-ic-title" class="rt-genesis-trend-title">Intensity change (ΔV)</span>' +
                         '<div style="display:flex;gap:8px;align-items:center;">' +
-                          // View toggle: ΔV distribution at one hour vs P(RI) across all hours
+                          // View toggle: ΔV distribution @ hour · P(RI) vs hour · LMI density
                           '<div style="display:flex;gap:4px;align-items:center;">' +
                             '<button id="rt-genesis-ic-view-dist-btn" type="button" onclick="window._genesisIcSetView(\'dist\')" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">Distribution</button>' +
                             '<button id="rt-genesis-ic-view-pri-btn" type="button" onclick="window._genesisIcSetView(\'pri\')" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">RI chance by hour</button>' +
+                            '<button id="rt-genesis-ic-view-lmi-btn" type="button" onclick="window._genesisIcSetView(\'lmi\')" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">LMI by hour</button>' +
                           '</div>' +
-                          // Interval toggle (applies to both views)
-                          '<div style="display:flex;gap:4px;align-items:center;">' +
+                          // Interval toggle (applies to the ΔV / P(RI) views only)
+                          '<div id="rt-genesis-ic-interval-toggle" style="display:flex;gap:4px;align-items:center;">' +
                             '<button id="rt-genesis-ic-12h-btn" type="button" onclick="window._genesisIcInterval(12)" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">12h</button>' +
                             '<button id="rt-genesis-ic-24h-btn" type="button" onclick="window._genesisIcInterval(24)" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">24h</button>' +
                           '</div>' +
@@ -11839,6 +11841,12 @@
         if (_tmw) _tmw.style.display = 'none';
         if (_tiw) _tiw.style.display = 'none';
         _genesisTrendsUpdateEmpty();
+        // Stash this cycle's per-member peak (lead-time-of-peak + LMI Vmax)
+        // so the Intensity Change pane's "LMI by hour" view can render the
+        // same density the "This run" pane shows, from data already computed.
+        _genesisIcPeak = stats
+            ? { taus: stats.peakTaus || [], winds: stats.peakWinds || [] }
+            : null;
         // Reset the Intensity Change pane too — re-shown only if the fetch
         // returns an intensity_change block. Show a loading note (not the
         // "no data" note) while the genesis-trend fetch is in flight, since
@@ -11950,13 +11958,23 @@
         if (!_genesisIcData) return;
         var sliderBlock = document.getElementById('rt-genesis-ic-slider-block');
         var titleEl = document.getElementById('rt-genesis-ic-title');
-        if (_genesisIcView === 'pri') {
-            // P(RI) vs lead time — the forecast-hour slider is irrelevant here.
+        var intToggle = document.getElementById('rt-genesis-ic-interval-toggle');
+        // The forecast-hour slider only applies to the ΔV histogram; the
+        // 12h/24h interval only applies to the ΔV / P(RI) views (LMI is the
+        // lifetime peak — interval-independent).
+        if (_genesisIcView === 'lmi') {
             if (sliderBlock) sliderBlock.style.display = 'none';
+            if (intToggle) intToggle.style.display = 'none';
+            if (titleEl) titleEl.textContent = 'Lifetime-max intensity by forecast hour';
+            _drawGenesisIcLmiVsTau();
+        } else if (_genesisIcView === 'pri') {
+            if (sliderBlock) sliderBlock.style.display = 'none';
+            if (intToggle) intToggle.style.display = '';
             if (titleEl) titleEl.textContent = 'RI probability by lead time';
             _drawGenesisRiProb();
         } else {
             if (sliderBlock) sliderBlock.style.display = '';
+            if (intToggle) intToggle.style.display = '';
             if (titleEl) titleEl.textContent = 'Intensity change (ΔV)';
             var changeData = _genesisIcInt === 12
                 ? _genesisIcData.intensity_change_12h
@@ -11965,6 +11983,75 @@
                 _genesisIcTauIdx, _genesisIcInt,
                 'rt-genesis-ic-chart', 'rt-genesis-ic-label');
         }
+    }
+
+    /**
+     * LMI by forecast hour: 2-D density of (lead time of each member's peak,
+     * that member's peak Vmax) — shows WHEN and HOW STRONG members top out.
+     * Compact dark-styled twin of the "This run" pane's _renderGenesisLmiVsTau,
+     * driven by the per-member peak arrays stashed in _genesisIcPeak.
+     */
+    function _drawGenesisIcLmiVsTau() {
+        var chartEl = document.getElementById('rt-genesis-ic-chart');
+        if (!chartEl || typeof Plotly === 'undefined') return;
+        var peak = _genesisIcPeak || {};
+        var pt = peak.taus || [], pw = peak.winds || [];
+        var xs = [], ys = [];
+        for (var i = 0; i < pw.length; i++) {
+            if (pt[i] == null || pw[i] == null || pw[i] <= 0) continue;
+            xs.push(pt[i]); ys.push(pw[i]);
+        }
+        if (!xs.length) { Plotly.purge(chartEl); return; }
+
+        var tauMax = Math.max.apply(null, xs);
+        var vmaxMax = Math.max(120, Math.max.apply(null, ys) + 10);
+        var medV = ys.slice().sort(function (a, b) { return a - b; })[Math.floor(ys.length / 2)];
+
+        var heatmap = {
+            x: xs, y: ys, type: 'histogram2d',
+            xbins: { start: 0, end: tauMax + 12, size: 12 },
+            ybins: { start: 0, end: vmaxMax, size: 10 },
+            colorscale: [
+                [0.00, 'rgba(255,247,237,0)'],
+                [0.05, 'rgba(255,237,213,0.85)'],
+                [0.25, 'rgba(254,215,170,1.0)'],
+                [0.50, 'rgba(251,146, 60,1.0)'],
+                [0.75, 'rgba(249,115, 22,1.0)'],
+                [1.00, 'rgba(194, 65, 12,1.0)']
+            ],
+            hovertemplate: 'Peak at +%{x:.0f} h<br>LMI %{y:.0f} kt<br>%{z} members<extra></extra>',
+            showscale: true,
+            colorbar: { thickness: 8, len: 0.9, x: 1.0, tickfont: { size: 8 },
+                        title: { text: 'mbrs', font: { size: 8 }, side: 'right' } }
+        };
+
+        // SS-category reference lines (64 = C1, 96 = C3, 137 = C5).
+        var catShapes = [64, 96, 137].map(function (kt) {
+            return { type: 'line', x0: 0, x1: 1, xref: 'paper', y0: kt, y1: kt,
+                     line: { color: 'rgba(255,255,255,0.18)', width: 0.8, dash: 'dot' } };
+        });
+
+        var layout = {
+            height: 210,
+            margin: { t: 16, r: 44, b: 30, l: 35 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { family: 'DM Sans, sans-serif', size: 9, color: '#5b6573' },
+            xaxis: { title: { text: 'Lead time of peak (h)', font: { size: 9 } },
+                     gridcolor: 'rgba(255,255,255,0.05)', zeroline: false },
+            yaxis: { title: { text: 'LMI Vmax (kt)', font: { size: 9 } },
+                     gridcolor: 'rgba(255,255,255,0.05)', zeroline: false, rangemode: 'tozero' },
+            shapes: catShapes,
+            annotations: [
+                { x: 1, y: medV, xref: 'paper', xanchor: 'right', yanchor: 'bottom',
+                  text: 'median ' + Math.round(medV) + ' kt', showarrow: false,
+                  font: { size: 8, color: '#00e5ff' }, xshift: -2 }
+            ]
+        };
+
+        Plotly.newPlot(chartEl, [heatmap], layout, {
+            displayModeBar: false, responsive: false
+        });
     }
 
     /**
@@ -12055,11 +12142,19 @@
     };
 
     window._genesisIcSetView = function (view) {
-        _genesisIcView = (view === 'pri') ? 'pri' : 'dist';
-        var bd = document.getElementById('rt-genesis-ic-view-dist-btn');
-        var bp = document.getElementById('rt-genesis-ic-view-pri-btn');
-        if (bd) { bd.style.background = _genesisIcView === 'dist' ? 'rgba(0,229,255,0.2)' : ''; bd.classList.toggle('active', _genesisIcView === 'dist'); }
-        if (bp) { bp.style.background = _genesisIcView === 'pri' ? 'rgba(0,229,255,0.2)' : ''; bp.classList.toggle('active', _genesisIcView === 'pri'); }
+        _genesisIcView = (view === 'pri' || view === 'lmi') ? view : 'dist';
+        var btns = {
+            dist: document.getElementById('rt-genesis-ic-view-dist-btn'),
+            pri:  document.getElementById('rt-genesis-ic-view-pri-btn'),
+            lmi:  document.getElementById('rt-genesis-ic-view-lmi-btn')
+        };
+        Object.keys(btns).forEach(function (k) {
+            var b = btns[k];
+            if (!b) return;
+            var on = (_genesisIcView === k);
+            b.style.background = on ? 'rgba(0,229,255,0.2)' : '';
+            b.classList.toggle('active', on);
+        });
         _genesisIcRender();
     };
 
