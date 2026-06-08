@@ -218,6 +218,28 @@ html, body { margin: 0; padding: 0; }
 }
 .ir-feed-banner-close:hover { color: var(--text); }
 
+/* In-app-webview nudge — reuses the feed-banner shell but reads as an
+   info prompt (blue) rather than a staleness warning (amber). */
+.ir-inapp-banner {
+    background: rgba(219, 234, 254, 0.94);
+    border-color: rgba(59, 130, 246, 0.5);
+    color: #1e40af;
+}
+.ir-inapp-banner .ir-feed-banner-icon { color: #3b82f6; }
+.ir-inapp-banner-action {
+    flex-shrink: 0;
+    background: #2563eb;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.ir-inapp-banner-action:hover { background: #1d4ed8; }
+
 /* ── Legend ───────────────────────────────────────────────────── */
 /* Theme-aware glass card — uses tokens so background, header text, and
    row text all flip cleanly between light and dark. */
