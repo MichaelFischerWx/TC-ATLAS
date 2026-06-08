@@ -1794,6 +1794,108 @@
         _markBannerSeen(key);
     }
 
+    /** One-time-per-session "open in your browser" nudge for in-app
+     *  webviews (Instagram / Facebook / X / …). Those embedded browsers are
+     *  the leading source of fast social-referral bounces: memory-tight
+     *  (the IR loop can OOM-kill the tab) and missing Safari/Chrome niceties.
+     *  We can't reliably force iOS out of a webview, so on Android we deep-
+     *  link to Chrome via intent:// and on iOS we copy the URL and prompt the
+     *  user to finish in Safari. Dismissal is per-session, so a fresh social
+     *  tap (a new webview) still gets the nudge exactly once. */
+    var _INAPP_BANNER_DISMISS_KEY = 'tc-atlas:inapp-banner-dismissed';
+
+    function _maybeShowInAppBanner() {
+        if (!_IS_INAPP_BROWSER) return;
+        if (document.getElementById('ir-inapp-banner')) return;
+        try {
+            if (sessionStorage.getItem(_INAPP_BANNER_DISMISS_KEY)) return;
+        } catch (e) { /* sessionStorage unavailable — show anyway */ }
+
+        var info = _IN_APP_INFO;
+        var appLabel = (info.app && info.app !== 'an in-app')
+            ? (info.app + "'s") : 'an';
+
+        var bar = document.createElement('div');
+        bar.id = 'ir-inapp-banner';
+        bar.className = 'ir-feed-banner ir-inapp-banner';
+        bar.setAttribute('role', 'alert');
+
+        var icon = document.createElement('span');
+        icon.className = 'ir-feed-banner-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.innerHTML = '&#128241;'; // 📱
+        bar.appendChild(icon);
+
+        var txt = document.createElement('span');
+        txt.className = 'ir-inapp-banner-text';
+        txt.textContent = "You're in " + appLabel +
+            ' in-app browser. The live satellite loop runs best in your full browser.';
+        bar.appendChild(txt);
+
+        var action = document.createElement('button');
+        action.type = 'button';
+        action.className = 'ir-inapp-banner-action';
+        action.textContent = (info.os === 'android') ? 'Open in Chrome' : 'Copy link';
+        action.onclick = function () { _openInAppExternally(action); };
+        bar.appendChild(action);
+
+        var close = document.createElement('button');
+        close.className = 'ir-feed-banner-close';
+        close.setAttribute('aria-label', 'Dismiss');
+        close.innerHTML = '&times;';
+        close.onclick = function () {
+            bar.style.display = 'none';
+            try { sessionStorage.setItem(_INAPP_BANNER_DISMISS_KEY, '1'); } catch (e) {}
+            _ga('rt_inapp_banner_dismiss', { app: info.app || '', os: info.os });
+        };
+        bar.appendChild(close);
+
+        document.body.appendChild(bar);
+        _ga('rt_inapp_banner_show', { app: info.app || '', os: info.os });
+    }
+
+    /** Try to escape the in-app webview into the real browser. Android can be
+     *  forced into Chrome with an intent:// URL; iOS has no reliable
+     *  programmatic escape, so we copy the link and update the banner with a
+     *  short "open Safari and paste" instruction. */
+    function _openInAppExternally(btn) {
+        var info = _IN_APP_INFO;
+        var url = (typeof location !== 'undefined' && location.href) || '';
+        _ga('rt_inapp_banner_open', { app: info.app || '', os: info.os });
+
+        if (info.os === 'android') {
+            var noProto = url.replace(/^https?:\/\//i, '');
+            try {
+                location.href = 'intent://' + noProto +
+                    '#Intent;scheme=https;package=com.android.chrome;end';
+                return;
+            } catch (e) { /* fall through to copy */ }
+        }
+
+        var done = function () {
+            if (btn) btn.textContent = 'Link copied';
+            var label = document.querySelector('#ir-inapp-banner .ir-inapp-banner-text');
+            if (label) {
+                label.textContent = 'Link copied — open Safari and paste, ' +
+                    'or tap ⋯ → Open in Safari.';
+            }
+        };
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(url).then(done, done);
+            } else {
+                var ta = document.createElement('textarea');
+                ta.value = url;
+                ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand('copy'); } catch (e) {}
+                document.body.removeChild(ta);
+                done();
+            }
+        } catch (e) { done(); }
+    }
+
     /** Legacy wrapper — returns the oldest satellite time (for animation compatibility) */
     function findLatestGIBSTime() {
         return findLatestGIBSTimes().then(function (result) {
@@ -4359,7 +4461,34 @@
     // the loop still spans the full lookback window, just at a coarser
     // cadence. No-op on desktop. The most recent frame is always kept so
     // the "pause at present" anchor and latest imagery are preserved.
-    var _MOBILE_MAX_FRAMES = 16;
+    // In-app webview detection (Instagram / Facebook / X / TikTok / …).
+    // These embedded browsers are tighter on memory than the system
+    // browser — the IR loop can OOM-kill the tab — and they're the leading
+    // source of fast bounces from social referrals. We use this both to cap
+    // decoded frames harder here and to surface an "open in your browser"
+    // nudge at init (see _maybeShowInAppBanner). Conservative by design:
+    // only known social UA tokens (plus Android System WebView's "; wv)")
+    // count, so we never nag a real Safari/Chrome user.
+    function _detectInAppInfo() {
+        var ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+        var os = /iPhone|iPad|iPod/i.test(ua) ? 'ios'
+               : /Android/i.test(ua) ? 'android' : 'other';
+        var app = null;
+        if (/FBAN|FBAV|FB_IAB/i.test(ua)) app = 'Facebook';
+        else if (/Instagram/i.test(ua)) app = 'Instagram';
+        else if (/\bLine\//i.test(ua)) app = 'LINE';
+        else if (/LinkedInApp/i.test(ua)) app = 'LinkedIn';
+        else if (/Snapchat/i.test(ua)) app = 'Snapchat';
+        else if (/musical_ly|BytedanceWebview|TikTok/i.test(ua)) app = 'TikTok';
+        else if (/Twitter/i.test(ua)) app = 'X';
+        else if (os === 'android' && /;\s*wv\)/i.test(ua)) app = 'an in-app';
+        return { inApp: !!app, app: app, os: os };
+    }
+    var _IN_APP_INFO = _detectInAppInfo();
+    var _IS_INAPP_BROWSER = _IN_APP_INFO.inApp;
+    // In-app webviews get a tighter decoded-bitmap budget (10 frames) than a
+    // full mobile browser tab (16); desktop is unaffected (decimation no-ops).
+    var _MOBILE_MAX_FRAMES = _IS_INAPP_BROWSER ? 10 : 16;
     function _decimateFramesForMobile(frames) {
         // Windowed-decode mode bounds memory by capping how many frames
         // are *decoded* at once, so it wants the full-cadence frame list —
@@ -11949,11 +12078,12 @@
         empty.style.display = 'none';
         wrap.style.display = '';
 
-        // Snap the slider to +24h (or nearest), matching the storm-card default.
+        // Snap the slider to +24h (or nearest), matching the storm-card default,
+        // then clamp it to the forecast hours that actually have ΔV data for
+        // the current interval (a 24h change doesn't exist before +24h).
         var idx24 = taus.indexOf(24);
         _genesisIcTauIdx = idx24 >= 0 ? idx24 : Math.min(4, taus.length - 1);
-        var slider = document.getElementById('rt-genesis-ic-slider');
-        if (slider) { slider.max = taus.length - 1; slider.value = _genesisIcTauIdx; }
+        _genesisIcClampSlider();
 
         if (noteEl) {
             var it = ic.init_time || loadedInit || '';
@@ -11965,6 +12095,34 @@
         }
 
         _genesisIcRender();
+    }
+
+    // Constrain the forecast-hour slider to the lead times that actually have
+    // ΔV data for the current interval, and clamp the current index into that
+    // range. A 24h change is undefined before +24h (no tau-24 point), so
+    // without this the slider can land on an empty bin and blank the chart.
+    function _genesisIcClampSlider() {
+        var slider = document.getElementById('rt-genesis-ic-slider');
+        if (!slider || !_genesisIcData) return;
+        var taus = _genesisIcData.lead_times_h || [];
+        var changeData = _genesisIcInt === 12
+            ? _genesisIcData.intensity_change_12h
+            : _genesisIcData.intensity_change_24h;
+        var firstValid = -1, lastValid = -1;
+        for (var i = 0; i < taus.length; i++) {
+            var d = changeData && changeData[String(Math.round(taus[i]))];
+            if (d && d.dv) { if (firstValid < 0) firstValid = i; lastValid = i; }
+        }
+        if (firstValid < 0) {            // nothing valid — leave full range
+            slider.min = 0;
+            slider.max = Math.max(0, taus.length - 1);
+            return;
+        }
+        slider.min = firstValid;
+        slider.max = lastValid;
+        if (_genesisIcTauIdx < firstValid) _genesisIcTauIdx = firstValid;
+        if (_genesisIcTauIdx > lastValid) _genesisIcTauIdx = lastValid;
+        slider.value = _genesisIcTauIdx;
     }
 
     // Draw the ΔV histogram (figure 1) at the current interval + slider tau.
@@ -12129,8 +12287,16 @@
     }
 
     window._genesisIcSlide = function (idx) {
-        // Slider only drives the ΔV-distribution figure.
-        _genesisIcTauIdx = parseInt(idx, 10);
+        // Slider only drives the ΔV-distribution figure. Clamp into the
+        // valid range so we never land on a lead time with no ΔV data.
+        var slider = document.getElementById('rt-genesis-ic-slider');
+        idx = parseInt(idx, 10);
+        if (slider) {
+            idx = Math.max(parseInt(slider.min, 10) || 0,
+                           Math.min(parseInt(slider.max, 10) || idx, idx));
+            if (String(idx) !== slider.value) slider.value = idx;
+        }
+        _genesisIcTauIdx = idx;
         _genesisIcDrawDist();
     };
 
@@ -12146,6 +12312,7 @@
             var b = document.getElementById(id);
             if (b) { b.style.background = hours === 24 ? 'rgba(0,229,255,0.2)' : ''; b.classList.toggle('active', hours === 24); }
         });
+        _genesisIcClampSlider();   // valid range differs between 12h and 24h
         _genesisIcDrawDist();
         _drawGenesisRiProb();
     };
@@ -20728,6 +20895,11 @@
         _rtGenesisVisible = true;
         _loadGenesis();
         if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
+
+        // Nudge in-app-webview visitors (social referrals) toward their full
+        // browser — the segment with the steepest bounce and the tightest
+        // memory budget for the IR loop.
+        _maybeShowInAppBanner();
 
         _ga('ir_page_load');
         console.log('[RT Monitor] Initialized — polling every', POLL_INTERVAL_MS / 1000, 'seconds');
