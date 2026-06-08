@@ -2655,5 +2655,30 @@
             </div>
         </div>
     </div>
+
+    <!-- Bare satellite-loop popup. Opened by the "Loop Only" button on the
+         storm detail card (window.openLoopOnlyView). A Tropical-Tidbits-style
+         co-moving IR animation on a Leaflet map, shown as an in-page modal
+         on top of the storm card — closing returns to the card untouched
+         (replaces the old full-page Quick View redirect). -->
+    <div id="ir-loop-modal" class="ir-loop-modal" style="display:none;" role="dialog" aria-modal="true" aria-label="Storm satellite loop">
+        <div class="ir-loop-modal-content">
+            <div class="ir-loop-modal-header">
+                <div class="ir-loop-modal-titles">
+                    <span id="ir-loop-modal-cat" class="ir-loop-modal-cat">&mdash;</span>
+                    <div>
+                        <h3 id="ir-loop-modal-title" class="ir-loop-modal-title">Satellite Loop</h3>
+                        <div id="ir-loop-modal-sub" class="ir-loop-modal-sub">&mdash;</div>
+                    </div>
+                </div>
+                <button type="button" class="ir-loop-modal-close" aria-label="Close" title="Close (Esc)">&times;</button>
+            </div>
+            <div class="ir-loop-modal-mapwrap">
+                <div id="ir-loop-modal-map" class="ir-loop-modal-map"></div>
+                <div id="ir-loop-modal-loader" class="ir-loop-modal-loader">Loading loop&hellip;</div>
+                <div id="ir-loop-modal-error" class="ir-loop-modal-error" style="display:none;"></div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

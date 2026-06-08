@@ -7713,6 +7713,9 @@
         // Keyboard shortcuts (detail view)
         document.addEventListener('keydown', function (e) {
             if (!currentStormId) return;
+            // While the bare Loop Only popup is open over the card, let it
+            // own the keyboard (Esc closes the popup, not the card).
+            if (_isLoopModalOpen()) return;
             if (e.key === 'ArrowLeft')  { stopAnimation(); prevFrame(); }
             if (e.key === 'ArrowRight') { stopAnimation(); nextFrame(); }
             if (e.key === ' ')          { e.preventDefault(); togglePlay(); }
@@ -7757,24 +7760,283 @@
         sel.style.display = '';
     }
 
-    /** "Loop only" escape hatch on the storm card → switch to the bare
-     *  Quick View animation. Preserves the active storm so the loop
-     *  matches what the user was looking at. Soft-closes the card to
-     *  release frame layers, then shows + activates Quick View directly
-     *  (bypasses switchIRView early-return when already on the Sat tab). */
+    // ── "Loop Only" popup ───────────────────────────────────────────
+    // A bare, Tropical-Tidbits-style co-moving IR animation shown as an
+    // in-page modal ON TOP of the storm detail card. Earlier this button
+    // navigated to the separate full-page Quick View (sat-quick-view /
+    // sat_quick.js), which soft-closed the card and swapped the whole tab
+    // — a jarring trip to what is now a vestigial page. The popup keeps
+    // the card mounted underneath, so closing returns to it untouched.
+    //
+    // Self-contained: it re-fetches the same per-frame WebP bundle the
+    // card uses (GCS direct → API fallback) and cycles imageOverlay
+    // opacity at unified bounds, exactly like sat_quick.js, but on its
+    // own throwaway Leaflet map so it never touches the card's viewer.
+    var _loopMap = null;
+    var _loopFrameLayers = [];
+    var _loopAnimTimer = null;
+    var _loopAnimActive = false;
+    var _loopFrameIdx = 0;
+    var _loopReqId = 0;            // bumps per open → ignore stale fetches
+    var _loopBound = false;
+    var _loopGratGroup = null;
+    var _LOOP_MID_MS = 300, _LOOP_LAST_MS = 1800;
+
+    function _loopEl(id) { return document.getElementById(id); }
+    function _isLoopModalOpen() {
+        var m = document.getElementById('ir-loop-modal');
+        return !!(m && m.style.display !== 'none' && m.style.display !== '');
+    }
+    function _loopShowLoader(msg) {
+        var l = _loopEl('ir-loop-modal-loader');
+        if (l) { l.style.display = ''; if (msg) l.textContent = msg; }
+        var e = _loopEl('ir-loop-modal-error');
+        if (e) e.style.display = 'none';
+    }
+    function _loopHideLoader() {
+        var l = _loopEl('ir-loop-modal-loader');
+        if (l) l.style.display = 'none';
+    }
+    function _loopShowError(msg) {
+        _loopHideLoader();
+        var e = _loopEl('ir-loop-modal-error');
+        if (e) { e.textContent = msg || 'Loop unavailable.'; e.style.display = ''; }
+    }
+
+    function _loopEnsureMap() {
+        if (_loopMap) return _loopMap;
+        var div = _loopEl('ir-loop-modal-map');
+        if (!div || typeof L === 'undefined') return null;
+        _loopMap = L.map(div, {
+            zoomControl: true, attributionControl: false,
+            worldCopyJump: true, zoomSnap: 0.5, zoomDelta: 0.5,
+            preferCanvas: true,
+        }).setView([0, 0], 5);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png',
+            { maxZoom: 18, subdomains: 'abcd' }).addTo(_loopMap);
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+            { maxZoom: 18, pane: 'overlayPane', opacity: 0.85 }).addTo(_loopMap);
+        _loopAddGraticule();
+        return _loopMap;
+    }
+    function _loopAddGraticule() {
+        if (!_loopMap) return;
+        var grp = L.layerGroup().addTo(_loopMap);
+        function step(z) { return z >= 8 ? 1 : z >= 6 ? 2 : z >= 4 ? 5 : 10; }
+        function redraw() {
+            grp.clearLayers();
+            var b = _loopMap.getBounds(), s = step(_loopMap.getZoom());
+            var south = Math.floor(b.getSouth() / s) * s, north = Math.ceil(b.getNorth() / s) * s;
+            var west = Math.floor(b.getWest() / s) * s, east = Math.ceil(b.getEast() / s) * s;
+            var st = { color: '#94a3b8', weight: 0.5, opacity: 0.45, interactive: false, dashArray: '2,4' };
+            for (var lat = south; lat <= north; lat += s) L.polyline([[lat, west - 5], [lat, east + 5]], st).addTo(grp);
+            for (var lon = west; lon <= east; lon += s) L.polyline([[south - 5, lon], [north + 5, lon]], st).addTo(grp);
+        }
+        _loopMap.on('moveend zoomend', redraw);
+        redraw();
+        _loopGratGroup = grp;
+    }
+
+    function _loopStopAnim() {
+        _loopAnimActive = false;
+        if (_loopAnimTimer) { clearTimeout(_loopAnimTimer); _loopAnimTimer = null; }
+    }
+    function _loopDisposeFrames() {
+        _loopStopAnim();
+        for (var i = 0; i < _loopFrameLayers.length; i++) {
+            var ly = _loopFrameLayers[i];
+            if (!ly) continue;
+            if (_loopMap) { try { _loopMap.removeLayer(ly); } catch (e) {} }
+            if (ly._blobUrl) { try { URL.revokeObjectURL(ly._blobUrl); } catch (e) {} }
+        }
+        _loopFrameLayers = [];
+        _loopFrameIdx = 0;
+    }
+    function _loopShowFrameOnly(idx) {
+        for (var i = 0; i < _loopFrameLayers.length; i++) {
+            if (_loopFrameLayers[i]) _loopFrameLayers[i].setOpacity(i === idx ? 0.92 : 0);
+        }
+    }
+    function _loopScheduleNext() {
+        if (!_loopAnimActive || _loopFrameLayers.length === 0) return;
+        var dwell = (_loopFrameIdx === _loopFrameLayers.length - 1) ? _LOOP_LAST_MS : _LOOP_MID_MS;
+        _loopAnimTimer = setTimeout(function () {
+            if (!_loopAnimActive) return;
+            _loopFrameIdx = (_loopFrameIdx + 1) % _loopFrameLayers.length;
+            _loopShowFrameOnly(_loopFrameIdx);
+            _loopScheduleNext();
+        }, dwell);
+    }
+    function _loopStartAnim() {
+        if (_loopAnimActive || _loopFrameLayers.length === 0) return;
+        _loopAnimActive = true;
+        _loopFrameIdx = 0;
+        _loopShowFrameOnly(_loopFrameIdx);
+        _loopScheduleNext();
+    }
+
+    function _loopPlaceMarker(storm) {
+        if (!_loopMap || !storm) return;
+        var cat = storm.category || windToCategory(storm.vmax_kt);
+        var color = _irIsInvest(storm.atcf_id) ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
+        var icon = L.divIcon({
+            className: '',
+            html: '<div style="width:14px;height:14px;border-radius:50%;background:' + color
+                + ';border:2px solid #fff;box-shadow:0 0 0 1px ' + color + ', 0 0 10px rgba(0,0,0,0.6);"></div>',
+            iconSize: [14, 14], iconAnchor: [7, 7],
+        });
+        L.marker([storm.lat, storm.lon], { icon: icon, interactive: false }).addTo(_loopMap);
+    }
+
+    function _loopPopulate(arrayBuffer, stormId, reqId) {
+        if (reqId !== _loopReqId || !_loopMap) return;
+        try {
+            var dv = new DataView(arrayBuffer);
+            if (arrayBuffer.byteLength < 4) throw new Error('bundle too small');
+            var headerLen = dv.getUint32(0, true);
+            if (4 + headerLen > arrayBuffer.byteLength) throw new Error('header overrun');
+            var header = JSON.parse(new TextDecoder('utf-8')
+                .decode(new Uint8Array(arrayBuffer, 4, headerLen)));
+            var binBase = 4 + headerLen;
+            var mediaType = header.media_type || 'image/webp';
+            var hdrFrames = header.frames || [];
+            var valid = [];
+            for (var i = 0; i < hdrFrames.length; i++) {
+                if (hdrFrames[i].byte_length && !hdrFrames[i].error && hdrFrames[i].bounds) {
+                    valid.push(hdrFrames[i]);
+                }
+            }
+            if (valid.length === 0) { _loopShowError('No frames available for this storm yet.'); return; }
+
+            // Mobile decoded-bitmap cap: each ~10°-radius WebP decodes to
+            // ~7 MB RGBA; a full loop can OOM-kill a phone tab. Reuse the
+            // card's decimation (keeps the latest frame; no-ops on desktop).
+            valid = _decimateFramesForMobile(valid);
+
+            // Co-moving framing: place EVERY frame at the latest frame's
+            // bounds so cutout edges don't shift frame-to-frame (the storm
+            // sits centered, clouds flow, coastlines stay anchored).
+            var latest = valid[valid.length - 1];
+            var bounds = L.latLngBounds(
+                L.latLng(latest.bounds[0][0], latest.bounds[0][1]),
+                L.latLng(latest.bounds[1][0], latest.bounds[1][1]));
+            for (var j = 0; j < valid.length; j++) {
+                var f = valid[j];
+                var slice = new Uint8Array(arrayBuffer, binBase + f.byte_offset, f.byte_length);
+                var url = URL.createObjectURL(new Blob([slice], { type: mediaType }));
+                var ov = L.imageOverlay(url, bounds, { opacity: 0, interactive: false, pane: 'tilePane' });
+                ov._blobUrl = url;
+                ov.addTo(_loopMap);
+                _loopFrameLayers.push(ov);
+            }
+            _loopMap.fitBounds(bounds, { padding: [20, 20], animate: false });
+            _loopPlaceMarker(_irFindStorm(stormId));
+            _loopHideLoader();
+            _loopStartAnim();
+        } catch (e) {
+            console.warn('[LoopModal] parse failed:', e && e.message);
+            _loopShowError('Could not parse animation data.');
+        }
+    }
+
+    function _loopLoad(stormId, reqId) {
+        if (!stormId) return;
+        _loopShowLoader('Loading loop…');
+        _loopDisposeFrames();
+        _loopEnsureMap();
+        var gcs = _gcsFramesBundleUrl(stormId);
+        var api = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId)
+            + '/ir-frames-bundle?lookback_hours=' + JPG_PRIMARY_LOOKBACK_H
+            + '&radius_deg=' + JPG_PRIMARY_RADIUS_DEG
+            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
+        fetch(gcs).then(function (r) {
+            if (!r.ok) throw new Error('gcs ' + r.status);
+            return r.arrayBuffer();
+        }).catch(function () {
+            return fetch(api).then(function (r) {
+                if (!r.ok) throw new Error('api ' + r.status);
+                return r.arrayBuffer();
+            });
+        }).then(function (buf) {
+            _loopPopulate(buf, stormId, reqId);
+        }).catch(function (err) {
+            if (reqId !== _loopReqId) return;
+            console.warn('[LoopModal] bundle fetch failed:', err && err.message);
+            _loopShowError('Animation not yet available for this storm. The prewarm cycle builds new artifacts every ~5 minutes.');
+        });
+    }
+
+    function _irFindStorm(stormId) {
+        if (!stormId) return null;
+        for (var i = 0; i < stormData.length; i++) {
+            if (stormData[i].atcf_id === stormId) return stormData[i];
+        }
+        return null;
+    }
+
+    function _loopRenderHeader(storm, stormId) {
+        var catEl = _loopEl('ir-loop-modal-cat');
+        var titleEl = _loopEl('ir-loop-modal-title');
+        var subEl = _loopEl('ir-loop-modal-sub');
+        if (titleEl) titleEl.textContent = (storm && (storm.name || storm.atcf_id)) || stormId || 'Satellite Loop';
+        if (catEl) {
+            var cat = (storm && (storm.category || windToCategory(storm.vmax_kt))) || '—';
+            catEl.textContent = cat;
+            catEl.style.background = (storm && _irIsInvest(storm.atcf_id))
+                ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
+        }
+        if (subEl) {
+            if (storm) {
+                var bits = [];
+                if (storm.vmax_kt != null) bits.push(storm.vmax_kt + ' kt');
+                if (storm.mslp_hpa != null) bits.push(storm.mslp_hpa + ' hPa');
+                if (storm.source) bits.push(storm.source);
+                subEl.textContent = bits.join('  ·  ') || '—';
+            } else {
+                subEl.textContent = '—';
+            }
+        }
+    }
+
+    function _loopBind() {
+        if (_loopBound) return;
+        var modal = _loopEl('ir-loop-modal');
+        if (!modal) return;
+        _loopBound = true;
+        var closeBtn = modal.querySelector('.ir-loop-modal-close');
+        if (closeBtn) closeBtn.addEventListener('click', _rtCloseLoopModal);
+        modal.addEventListener('click', function (ev) {
+            if (ev.target === modal) _rtCloseLoopModal();
+        });
+        document.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape' && modal.style.display !== 'none') _rtCloseLoopModal();
+        });
+    }
+
+    function _rtCloseLoopModal() {
+        _loopReqId++;            // invalidate any in-flight fetch
+        _loopDisposeFrames();
+        var modal = _loopEl('ir-loop-modal');
+        if (modal) modal.style.display = 'none';
+    }
+    window._rtCloseLoopModal = _rtCloseLoopModal;
+
+    /** "Loop only" button on the storm card → open the bare co-moving
+     *  animation as an in-page popup over the card (no navigation). */
     window.openLoopOnlyView = function () {
         var sid = currentStormId;
-        var parts = ['satellite', 'loop=1'];
-        if (sid) parts.push('storm=' + sid);
-        try {
-            history.replaceState(null, '', 'realtime_ir.html#' + parts.join('&'));
-        } catch (e) {}
-        closeStormDetail({ skipTabRoute: true });
-        var satMain = document.getElementById('sat-main');
-        var satQuick = document.getElementById('sat-quick-view');
-        if (satMain) satMain.style.display = 'none';
-        if (satQuick) satQuick.style.display = 'flex';
-        if (window.activateQuickView) window.activateQuickView();
+        _loopBind();
+        var modal = _loopEl('ir-loop-modal');
+        if (!modal) return;
+        var reqId = ++_loopReqId;
+        _loopRenderHeader(_irFindStorm(sid), sid);
+        modal.style.display = 'flex';
+        // Leaflet needs a positive-size container; the modal just became
+        // visible, so invalidate after layout settles, then (re)load.
+        setTimeout(function () {
+            if (_loopMap) { try { _loopMap.invalidateSize(false); } catch (e) {} }
+            _loopLoad(sid, reqId);
+        }, 60);
         _ga('ir_loop_only');
     };
 
