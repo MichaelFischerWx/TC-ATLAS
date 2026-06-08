@@ -785,6 +785,7 @@
     var _genesisIcData = null;         // {lead_times_h, intensity_change_12h/24h, ...}
     var _genesisIcTauIdx = 4;          // current slider index
     var _genesisIcInt = 24;            // 12 or 24 hour change interval
+    var _genesisIcView = 'dist';       // 'dist' = ΔV histogram @ tau, 'pri' = P(RI) vs hour
 
     // ── Microwave passes (last N hrs) overlay ───────────────
     // Shared helper lives in tc_mw_layer.js (window.TCMicrowave).
@@ -10733,15 +10734,23 @@
                     '<div id="rt-genesis-ic-empty" class="rt-genesis-trend-note" style="padding:10px 4px;">No intensity-change distribution yet for this disturbance.</div>' +
                     '<div id="rt-genesis-ic-wrap" class="rt-genesis-trend-wrap" style="display:none;">' +
                       '<div class="rt-genesis-trend-head">' +
-                        '<span class="rt-genesis-trend-title">Intensity change (ΔV)</span>' +
-                        '<div style="display:flex;gap:4px;align-items:center;">' +
-                          '<button id="rt-genesis-ic-12h-btn" type="button" onclick="window._genesisIcInterval(12)" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">12h</button>' +
-                          '<button id="rt-genesis-ic-24h-btn" type="button" onclick="window._genesisIcInterval(24)" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">24h</button>' +
+                        '<span id="rt-genesis-ic-title" class="rt-genesis-trend-title">Intensity change (ΔV)</span>' +
+                        '<div style="display:flex;gap:8px;align-items:center;">' +
+                          // View toggle: ΔV distribution at one hour vs P(RI) across all hours
+                          '<div style="display:flex;gap:4px;align-items:center;">' +
+                            '<button id="rt-genesis-ic-view-dist-btn" type="button" onclick="window._genesisIcSetView(\'dist\')" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">Distribution</button>' +
+                            '<button id="rt-genesis-ic-view-pri-btn" type="button" onclick="window._genesisIcSetView(\'pri\')" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">RI chance by hour</button>' +
+                          '</div>' +
+                          // Interval toggle (applies to both views)
+                          '<div style="display:flex;gap:4px;align-items:center;">' +
+                            '<button id="rt-genesis-ic-12h-btn" type="button" onclick="window._genesisIcInterval(12)" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">12h</button>' +
+                            '<button id="rt-genesis-ic-24h-btn" type="button" onclick="window._genesisIcInterval(24)" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">24h</button>' +
+                          '</div>' +
                         '</div>' +
                       '</div>' +
                       '<span id="rt-genesis-ic-note" class="rt-genesis-trend-note"></span>' +
                       '<div id="rt-genesis-ic-chart" style="width:100%;"></div>' +
-                      '<div style="position:relative;z-index:10;padding:4px 0 0;">' +
+                      '<div id="rt-genesis-ic-slider-block" style="position:relative;z-index:10;padding:4px 0 0;">' +
                         '<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:2px;">' +
                           '<span style="font-size:0.6rem;color:#64748b;">Forecast hour:</span>' +
                           '<span id="rt-genesis-ic-label" style="font-size:0.7rem;color:#00e5ff;font-variant-numeric:tabular-nums;">+24h</span>' +
@@ -11939,17 +11948,101 @@
 
     function _genesisIcRender() {
         if (!_genesisIcData) return;
+        var sliderBlock = document.getElementById('rt-genesis-ic-slider-block');
+        var titleEl = document.getElementById('rt-genesis-ic-title');
+        if (_genesisIcView === 'pri') {
+            // P(RI) vs lead time — the forecast-hour slider is irrelevant here.
+            if (sliderBlock) sliderBlock.style.display = 'none';
+            if (titleEl) titleEl.textContent = 'RI probability by lead time';
+            _drawGenesisRiProb();
+        } else {
+            if (sliderBlock) sliderBlock.style.display = '';
+            if (titleEl) titleEl.textContent = 'Intensity change (ΔV)';
+            var changeData = _genesisIcInt === 12
+                ? _genesisIcData.intensity_change_12h
+                : _genesisIcData.intensity_change_24h;
+            _rtDrawChangeHistCore(changeData, _genesisIcData.lead_times_h || [],
+                _genesisIcTauIdx, _genesisIcInt,
+                'rt-genesis-ic-chart', 'rt-genesis-ic-label');
+        }
+    }
+
+    /**
+     * P(RI) vs lead time: for each forecast hour, the fraction of cluster
+     * members whose ΔV over the selected interval meets a set of RI
+     * thresholds. Derived entirely from the per-tau dv arrays already in
+     * _genesisIcData — no extra fetch. Answers "WHEN is RI most likely?",
+     * complementing the single-hour ΔV histogram.
+     */
+    function _drawGenesisRiProb() {
+        var chartEl = document.getElementById('rt-genesis-ic-chart');
+        if (!chartEl || !_genesisIcData || typeof Plotly === 'undefined') return;
+
+        var taus = _genesisIcData.lead_times_h || [];
         var changeData = _genesisIcInt === 12
             ? _genesisIcData.intensity_change_12h
             : _genesisIcData.intensity_change_24h;
-        _rtDrawChangeHistCore(changeData, _genesisIcData.lead_times_h || [],
-            _genesisIcTauIdx, _genesisIcInt,
-            'rt-genesis-ic-chart', 'rt-genesis-ic-label');
+        if (!changeData) { Plotly.purge(chartEl); return; }
+
+        // Threshold family — the middle one is the canonical RI definition
+        // (≥30 kt/24h, ≥20 kt/12h) and is emphasised with a thicker line.
+        var thresholds = _genesisIcInt === 24
+            ? [{ kt: 25, color: '#fca5a5', emph: false },
+               { kt: 30, color: '#dc2626', emph: true },
+               { kt: 35, color: '#7f1d1d', emph: false }]
+            : [{ kt: 15, color: '#fca5a5', emph: false },
+               { kt: 20, color: '#dc2626', emph: true },
+               { kt: 25, color: '#7f1d1d', emph: false }];
+
+        var traces = thresholds.map(function (t) {
+            var xs = [], ys = [];
+            for (var i = 0; i < taus.length; i++) {
+                var tau = taus[i];
+                var d = changeData[String(Math.round(tau))];
+                if (!d || !d.dv) continue;
+                var vals = d.dv.filter(function (v) { return v != null; });
+                if (!vals.length) continue;
+                var hit = vals.filter(function (v) { return v >= t.kt; }).length;
+                xs.push(tau);
+                ys.push(Math.round(hit / vals.length * 1000) / 10);
+            }
+            return {
+                x: xs, y: ys, type: 'scatter', mode: 'lines+markers',
+                name: '≥' + t.kt + ' kt',
+                line: { color: t.color, width: t.emph ? 2.5 : 1.3 },
+                marker: { color: t.color, size: t.emph ? 5 : 3.5 },
+                hovertemplate: '+%{x}h<br>P(ΔV≥' + t.kt + ' kt/' + _genesisIcInt + 'h) = %{y:.0f}%<extra></extra>'
+            };
+        });
+
+        var layout = {
+            height: 180,
+            margin: { t: 16, r: 10, b: 30, l: 35 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { family: 'DM Sans, sans-serif', size: 9, color: '#5b6573' },
+            showlegend: true,
+            legend: { orientation: 'h', x: 1, xanchor: 'right', y: 1.18,
+                      font: { size: 8 }, bgcolor: 'rgba(0,0,0,0)' },
+            xaxis: {
+                title: { text: 'Forecast hour', font: { size: 9 } },
+                gridcolor: 'rgba(255,255,255,0.05)', zeroline: false
+            },
+            yaxis: {
+                title: { text: 'P(RI) %', font: { size: 9 } },
+                gridcolor: 'rgba(255,255,255,0.05)', zeroline: false,
+                rangemode: 'tozero'
+            }
+        };
+
+        Plotly.newPlot(chartEl, traces, layout, {
+            displayModeBar: false, responsive: false
+        });
     }
 
     window._genesisIcSlide = function (idx) {
         _genesisIcTauIdx = parseInt(idx, 10);
-        _genesisIcRender();
+        if (_genesisIcView === 'dist') _genesisIcRender();
     };
 
     window._genesisIcInterval = function (hours) {
@@ -11958,6 +12051,15 @@
         var b24 = document.getElementById('rt-genesis-ic-24h-btn');
         if (b12) { b12.style.background = hours === 12 ? 'rgba(0,229,255,0.2)' : ''; b12.classList.toggle('active', hours === 12); }
         if (b24) { b24.style.background = hours === 24 ? 'rgba(0,229,255,0.2)' : ''; b24.classList.toggle('active', hours === 24); }
+        _genesisIcRender();
+    };
+
+    window._genesisIcSetView = function (view) {
+        _genesisIcView = (view === 'pri') ? 'pri' : 'dist';
+        var bd = document.getElementById('rt-genesis-ic-view-dist-btn');
+        var bp = document.getElementById('rt-genesis-ic-view-pri-btn');
+        if (bd) { bd.style.background = _genesisIcView === 'dist' ? 'rgba(0,229,255,0.2)' : ''; bd.classList.toggle('active', _genesisIcView === 'dist'); }
+        if (bp) { bp.style.background = _genesisIcView === 'pri' ? 'rgba(0,229,255,0.2)' : ''; bp.classList.toggle('active', _genesisIcView === 'pri'); }
         _genesisIcRender();
     };
 
