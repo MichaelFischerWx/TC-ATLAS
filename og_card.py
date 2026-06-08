@@ -159,85 +159,83 @@ def _compose_storm_card(ir_square, storm: dict,
     """Compose the final card from an already-prepared CARD_H x CARD_H RGB IR
     square plus the storm's text panel. Shared by both the Tb and pre-rendered-
     image entry points. Never raises (caller wraps)."""
-    if True:
-        from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw
 
-        card = Image.new("RGB", (CARD_W, CARD_H), _NAVY)
+    card = Image.new("RGB", (CARD_W, CARD_H), _NAVY)
 
-        # IR backdrop on the right half.
-        ir = ir_square
-        card.paste(ir, (_IR_X, 0))
+    # IR backdrop on the right half.
+    card.paste(ir_square, (_IR_X, 0))
 
-        # Navy→transparent gradient over the IR's left edge to blend the seam
-        # so the text panel reads cleanly into the imagery.
-        grad_w = 160
-        grad = Image.new("RGBA", (grad_w, CARD_H), (0, 0, 0, 0))
-        gpx = grad.load()
-        for gx in range(grad_w):
-            a = int(255 * (1.0 - gx / grad_w))
-            for gy in range(CARD_H):
-                gpx[gx, gy] = (_NAVY[0], _NAVY[1], _NAVY[2], a)
-        card.paste(grad, (_IR_X, 0), grad)
+    # Navy→transparent gradient over the IR's left edge to blend the seam
+    # so the text panel reads cleanly into the imagery.
+    grad_w = 160
+    grad = Image.new("RGBA", (grad_w, CARD_H), (0, 0, 0, 0))
+    gpx = grad.load()
+    for gx in range(grad_w):
+        a = int(255 * (1.0 - gx / grad_w))
+        for gy in range(CARD_H):
+            gpx[gx, gy] = (_NAVY[0], _NAVY[1], _NAVY[2], a)
+    card.paste(grad, (_IR_X, 0), grad)
 
-        draw = ImageDraw.Draw(card)
-        pad = 48
-        _draw_wordmark(draw, pad, 44)
+    draw = ImageDraw.Draw(card)
+    pad = 48
+    _draw_wordmark(draw, pad, 44)
 
-        # LIVE badge (top, under the wordmark area on the right of the panel).
-        badge = "● LIVE"
-        bf = _font(16, bold=True)
-        bw = draw.textlength(badge, font=bf)
-        draw.text((_IR_X - pad - bw, 50), badge, font=bf, fill=(248, 113, 113))
+    # LIVE badge (top, under the wordmark area on the right of the panel).
+    badge = "● LIVE"
+    bf = _font(16, bold=True)
+    bw = draw.textlength(badge, font=bf)
+    draw.text((_IR_X - pad - bw, 50), badge, font=bf, fill=(248, 113, 113))
 
-        name = str(storm.get("name") or storm.get("atcf_id") or "Tropical Cyclone")
-        label, accent = _cat_label_color(
-            storm.get("category"), storm.get("vmax_kt"), storm.get("basin"))
+    name = str(storm.get("name") or storm.get("atcf_id") or "Tropical Cyclone")
+    label, accent = _cat_label_color(
+        storm.get("category"), storm.get("vmax_kt"), storm.get("basin"))
 
-        # Storm name — large, shrink to fit the panel width if needed.
-        max_w = _IR_X - pad - 24
-        size = 66
-        while size > 34:
-            f = _font(size, bold=True)
-            if draw.textlength(name, font=f) <= max_w:
-                break
-            size -= 4
-        name_font = _font(size, bold=True)
-        draw.text((pad, 250), name, font=name_font, fill=_WHITE)
+    # Storm name — large, shrink to fit the panel width if needed.
+    max_w = _IR_X - pad - 24
+    size = 66
+    while size > 34:
+        f = _font(size, bold=True)
+        if draw.textlength(name, font=f) <= max_w:
+            break
+        size -= 4
+    name_font = _font(size, bold=True)
+    draw.text((pad, 250), name, font=name_font, fill=_WHITE)
 
-        # Category line (accent-colored).
-        draw.text((pad, 250 + size + 14), label, font=_font(30, bold=True), fill=accent)
+    # Category line (accent-colored).
+    draw.text((pad, 250 + size + 14), label, font=_font(30, bold=True), fill=accent)
 
-        # Vitals: wind · pressure.
-        vmax = storm.get("vmax_kt")
-        mslp = storm.get("mslp_hpa")
-        vitals = []
-        if vmax not in (None, ""):
-            try:
-                vitals.append(f"{int(round(float(vmax)))} kt")
-            except (TypeError, ValueError):
-                pass
-        if mslp not in (None, ""):
-            try:
-                vitals.append(f"{int(round(float(mslp)))} hPa")
-            except (TypeError, ValueError):
-                pass
-        if vitals:
-            draw.text((pad, 250 + size + 58), "   ·   ".join(vitals),
-                      font=_font(28), fill=_WHITE)
+    # Vitals: wind · pressure.
+    vmax = storm.get("vmax_kt")
+    mslp = storm.get("mslp_hpa")
+    vitals = []
+    if vmax not in (None, ""):
+        try:
+            vitals.append(f"{int(round(float(vmax)))} kt")
+        except (TypeError, ValueError):
+            pass
+    if mslp not in (None, ""):
+        try:
+            vitals.append(f"{int(round(float(mslp)))} hPa")
+        except (TypeError, ValueError):
+            pass
+    if vitals:
+        draw.text((pad, 250 + size + 58), "   ·   ".join(vitals),
+                  font=_font(28), fill=_WHITE)
 
-        # Basin · valid time.
-        basin = str(storm.get("basin") or "").strip()
-        sat = str(storm.get("satellite") or "").strip()
-        meta_bits = [b for b in (basin, _fmt_valid(valid_utc), sat) if b]
-        draw.text((pad, 250 + size + 100), "   ·   ".join(meta_bits),
-                  font=_font(17), fill=_DIM)
+    # Basin · valid time · satellite.
+    basin = str(storm.get("basin") or "").strip()
+    sat = str(storm.get("satellite") or "").strip()
+    meta_bits = [b for b in (basin, _fmt_valid(valid_utc), sat) if b]
+    draw.text((pad, 250 + size + 100), "   ·   ".join(meta_bits),
+              font=_font(17), fill=_DIM)
 
-        # Footer CTA.
-        draw.text((pad, CARD_H - 56),
-                  "Track it live  →  michaelfischerwx.github.io/TC-ATLAS",
-                  font=_font(18, bold=True), fill=_CYAN)
+    # Footer CTA.
+    draw.text((pad, CARD_H - 56),
+              "Track it live  →  michaelfischerwx.github.io/TC-ATLAS",
+              font=_font(18, bold=True), fill=_CYAN)
 
-        return _encode(card)
+    return _encode(card)
 
 
 def render_storm_card_from_image(storm: dict, ir_img_bytes: bytes,
