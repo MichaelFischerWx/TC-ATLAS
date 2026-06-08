@@ -11831,12 +11831,15 @@
         if (_tiw) _tiw.style.display = 'none';
         _genesisTrendsUpdateEmpty();
         // Reset the Intensity Change pane too — re-shown only if the fetch
-        // returns an intensity_change block for this disturbance.
+        // returns an intensity_change block. Show a loading note (not the
+        // "no data" note) while the genesis-trend fetch is in flight, since
+        // a cold cluster computation can take a few seconds and would
+        // otherwise read as "no distribution exists".
         _genesisIcData = null;
         var _icw = document.getElementById('rt-genesis-ic-wrap');
         var _ice = document.getElementById('rt-genesis-ic-empty');
         if (_icw) _icw.style.display = 'none';
-        if (_ice) _ice.style.display = '';
+        if (_ice) { _ice.textContent = 'Loading intensity-change distribution…'; _ice.style.display = ''; }
 
         // Resolve the genesis-density anchor for this disturbance.
         var meta = _genesisDisturbanceMeta[json && json.track_id] || {};
@@ -11876,7 +11879,13 @@
                 _drawGenesisIntChange(data, loadedInit);
                 _genesisTrendsUpdateEmpty();
             })
-            .catch(function () { /* endpoint absent or failed — stay hidden */ });
+            .catch(function () {
+                // Endpoint absent or failed — Trends stays hidden; give the
+                // Intensity Change pane a definitive message so it doesn't
+                // sit on the loading note forever.
+                var ice = document.getElementById('rt-genesis-ic-empty');
+                if (ice) ice.textContent = 'Intensity-change distribution unavailable.';
+            });
     }
 
     /**
@@ -11899,6 +11908,7 @@
         if (!ic || !taus || !taus.length || !has) {
             _genesisIcData = null;
             wrap.style.display = 'none';
+            empty.textContent = 'No intensity-change distribution for this disturbance.';
             empty.style.display = '';
             var purgeEl = document.getElementById('rt-genesis-ic-chart');
             if (purgeEl && typeof Plotly !== 'undefined') Plotly.purge(purgeEl);
