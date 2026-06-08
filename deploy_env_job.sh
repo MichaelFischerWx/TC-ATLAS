@@ -62,25 +62,30 @@ echo "Building env-job container..."
 gcloud builds submit --config "${BUILD_CFG}" .
 
 # ── Create or update the Cloud Run Job ───────────────────────────
+# 1 vCPU: measured CPU utilization peaks at ~0.47 of the old 2-vCPU allocation
+# (~0.9 core), so the 2nd vCPU sat idle — overlay builds are I/O/GIL-bound, not
+# 2-core-bound. Wall-clock (and the 1800s timeout headroom) is unchanged at 1
+# vCPU; this just stops paying for the idle core. CR_VCPU is telemetry-only
+# (cost-log accuracy), so it's set to 1 to match.
 echo "Deploying Cloud Run Job ${JOB_NAME}..."
 if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; then
     gcloud run jobs update "${JOB_NAME}" \
         --region "${REGION}" \
         --image "${IMAGE}" \
         --memory 2Gi \
-        --cpu 2 \
+        --cpu 1 \
         --max-retries 1 \
         --task-timeout 1800 \
-        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},CR_VCPU=2,CR_MEM_GIB=2"
+        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},CR_VCPU=1,CR_MEM_GIB=2"
 else
     gcloud run jobs create "${JOB_NAME}" \
         --region "${REGION}" \
         --image "${IMAGE}" \
         --memory 2Gi \
-        --cpu 2 \
+        --cpu 1 \
         --max-retries 1 \
         --task-timeout 1800 \
-        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},CR_VCPU=2,CR_MEM_GIB=2"
+        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},CR_VCPU=1,CR_MEM_GIB=2"
 fi
 
 # ── Cloud Scheduler — invoke the Run Job on a cadence ─────────────
