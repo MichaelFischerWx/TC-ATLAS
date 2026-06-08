@@ -7291,26 +7291,30 @@
                               buf: null, source: 'none' });
             }
         }
-        // Trim a trailing run of DAYTIME SWIR-substitution frames. At the
-        // leading edge the newest Band-2 (Visible) file routinely lands a
-        // cycle or two after the smaller SWIR file, so the loop would
-        // otherwise end on a 3.9 µm SWIR frame more recent than the last
-        // true visible frame — which reads as a jarring style "jump" each
-        // time the animation wraps. Hold the loop on the last real visible
-        // frame instead. Genuine NIGHT SWIR frames (swirNight) are the whole
-        // point of the day/night composite, so a night tail is preserved; we
-        // only drop daytime (no-data gap) SWIR substitutions. If there are no
-        // visible frames at all (Vis bundle totally absent), keep the SWIR
-        // frames — better an all-SWIR daytime loop than a blank one. Pure
-        // frontend trim: zero added compute.
+        // Trim trailing non-visible frames so the daylight loop holds on the
+        // last TRUE visible frame. At the leading edge the newest Band-2
+        // (Visible, 0.5 km) file lands a cycle or two after the smaller SWIR
+        // file, so the tail is typically: …vis, swir(daytime-gap), none, none.
+        // Without this trim the loop would either end on a 3.9 µm SWIR frame
+        // more recent than the last visible frame — a jarring style "jump"
+        // each wrap — or on empty no-data slots. Pop from the end while the
+        // last frame is NOT a real visible frame AND NOT a genuine-night SWIR
+        // frame; this eats trailing no-data ('none') slots and daytime SWIR
+        // substitutions alike, stopping at the last vis frame (or a legitimate
+        // sunset night-SWIR tail, which we keep — that's the whole point of
+        // the composite). Guarded by _anyVis so an all-SWIR daytime loop (Vis
+        // bundle totally absent) or a pure-night loop is left intact — better
+        // than a blank one. Pure frontend trim: zero added compute.
         var _anyVis = false;
         for (var _v = 0; _v < merged.length; _v++) {
             if (merged[_v].source === 'vis') { _anyVis = true; break; }
         }
         if (_anyVis) {
-            while (merged.length &&
-                   merged[merged.length - 1].source === 'swir' &&
-                   !merged[merged.length - 1].swirNight) {
+            while (merged.length) {
+                var _last = merged[merged.length - 1];
+                var _keep = (_last.source === 'vis') ||
+                            (_last.source === 'swir' && _last.swirNight);
+                if (_keep) break;
                 merged.pop();
             }
         }
