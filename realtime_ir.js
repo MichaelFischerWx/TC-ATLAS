@@ -11138,6 +11138,7 @@
                             '<button id="rt-genesis-ic-12h-btn" type="button" onclick="window._genesisIcInterval(12)" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">12h</button>' +
                             '<button id="rt-genesis-ic-24h-btn" type="button" onclick="window._genesisIcInterval(24)" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">24h</button>' +
                           '</div>' +
+                          '<button id="rt-genesis-ic-save" type="button" class="rt-genesis-modal-save" style="position:static;margin-left:auto;padding:2px 7px;font-size:0.6rem;" title="Save ΔV distribution as PNG">⤓ PNG</button>' +
                         '</div>' +
                         '<div id="rt-genesis-ic-chart" style="width:100%;"></div>' +
                         '<div id="rt-genesis-ic-slider-block" style="position:relative;z-index:10;padding:4px 0 0;">' +
@@ -11156,6 +11157,7 @@
                             '<button id="rt-genesis-ic-pri-12h-btn" type="button" onclick="window._genesisIcInterval(12)" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">12h</button>' +
                             '<button id="rt-genesis-ic-pri-24h-btn" type="button" onclick="window._genesisIcInterval(24)" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">24h</button>' +
                           '</div>' +
+                          '<button id="rt-genesis-ic-pri-save" type="button" class="rt-genesis-modal-save" style="position:static;margin-left:auto;padding:2px 7px;font-size:0.6rem;" title="Save RI probability chart as PNG">⤓ PNG</button>' +
                         '</div>' +
                         '<div id="rt-genesis-ic-pri-chart" style="width:100%;"></div>' +
                       '</div>' +
@@ -11163,6 +11165,7 @@
                       '<div class="rt-genesis-modal-chart-wrap" style="margin-top:14px;">' +
                         '<div class="rt-genesis-trend-head">' +
                           '<span class="rt-genesis-trend-title">Lifetime-max intensity by forecast hour</span>' +
+                          '<button id="rt-genesis-ic-lmi-save" type="button" class="rt-genesis-modal-save" style="position:static;margin-left:auto;padding:2px 7px;font-size:0.6rem;" title="Save LMI density as PNG">⤓ PNG</button>' +
                         '</div>' +
                         '<div id="rt-genesis-ic-lmi-chart" style="width:100%;"></div>' +
                       '</div>' +
@@ -11272,6 +11275,16 @@
         });
         m.querySelector('#rt-genesis-lmitau-save').addEventListener('click', function () {
             _genesisSavePNG('rt-genesis-modal-lmitau', 'lmi-vs-hour');
+        });
+        // Intensity Change pane — one save button per stacked figure.
+        m.querySelector('#rt-genesis-ic-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-ic-chart', 'intensity-change');
+        });
+        m.querySelector('#rt-genesis-ic-pri-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-ic-pri-chart', 'ri-probability');
+        });
+        m.querySelector('#rt-genesis-ic-lmi-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-ic-lmi-chart', 'lmi-vs-hour');
         });
         // Composite summary exports — download (⤓) + view-in-new-tab (⤢).
         [
