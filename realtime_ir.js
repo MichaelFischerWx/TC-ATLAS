@@ -11057,6 +11057,10 @@
                       '<button type="button" id="rt-genesis-sum-trends-dl" class="rt-genesis-modal-summary-save" title="Download run-to-run trends summary PNG">⤓ Trends</button>' +
                       '<button type="button" id="rt-genesis-sum-trends-view" class="rt-genesis-modal-summary-view" title="Open trends summary in a new tab" aria-label="View trends summary in a new tab">⤢</button>' +
                     '</span>' +
+                    '<span class="rt-genesis-sum-group" data-pane="intchange" style="display:none;">' +
+                      '<button type="button" id="rt-genesis-sum-ic-dl" class="rt-genesis-modal-summary-save" title="Download intensity-change summary PNG (ΔV distribution + RI probability + LMI vs hour)">⤓ Intensity Change</button>' +
+                      '<button type="button" id="rt-genesis-sum-ic-view" class="rt-genesis-modal-summary-view" title="Open intensity-change summary in a new tab" aria-label="View intensity-change summary in a new tab">⤢</button>' +
+                    '</span>' +
                   '</span>' +
                   '<button type="button" class="rt-genesis-modal-close" aria-label="Close" title="Close (Esc)">×</button>' +
                 '</div>' +
@@ -11294,6 +11298,8 @@
             ['rt-genesis-sum-int-view',    'intensity', 'view'],
             ['rt-genesis-sum-trends-dl',   'trends',    'download'],
             ['rt-genesis-sum-trends-view', 'trends',    'view'],
+            ['rt-genesis-sum-ic-dl',       'intchange', 'download'],
+            ['rt-genesis-sum-ic-view',     'intchange', 'view'],
         ].forEach(function (cfg) {
             var b = m.querySelector('#' + cfg[0]);
             if (b) b.addEventListener('click', function () {
@@ -14416,6 +14422,15 @@
                 { el: 'rt-genesis-modal-trendint',    h: 620, optional: true },
             ],
         },
+        intchange: {
+            subSuffix: ' · Intensity change',
+            usesMap: false,
+            panels: [
+                { el: 'rt-genesis-ic-chart',     h: 560 },
+                { el: 'rt-genesis-ic-pri-chart', h: 560, optional: true },
+                { el: 'rt-genesis-ic-lmi-chart', h: 640, optional: true },
+            ],
+        },
     };
 
     // True when the composite has at least its required panels rendered
@@ -14450,6 +14465,7 @@
         overall: 'Overall summary',
         intensity: 'Intensity summary',
         trends: 'Run-to-run trends',
+        intchange: 'Intensity change summary',
     };
     var _genesisLightboxUrl = null;
     function _genesisLightboxKey(e) {
