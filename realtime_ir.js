@@ -58,6 +58,34 @@
         el.appendChild(span);
     }
 
+    // Plotly is injected async by realtime_ir.html so its ~1 MB download
+    // never blocks this file or map init. A deep-linked storm card can
+    // therefore open before Plotly arrives — chart entry points defer
+    // through here instead of silently skipping the render.
+    function _whenPlotly(fn) {
+        if (typeof Plotly !== 'undefined') { fn(); return; }
+        window.addEventListener('plotly-ready', function () { fn(); }, { once: true });
+    }
+
+    // Transient toast for actions whose failure/fallback would otherwise be
+    // invisible (product switch falling back, an overlay that didn't load).
+    // One reusable element; a repeat call replaces the message + timer.
+    var _rtToastTimer = null;
+    function _rtToast(msg) {
+        var el = document.getElementById('rt-toast');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'rt-toast';
+            document.body.appendChild(el);
+        }
+        el.textContent = msg;
+        el.classList.add('rt-toast-show');
+        if (_rtToastTimer) clearTimeout(_rtToastTimer);
+        _rtToastTimer = setTimeout(function () {
+            el.classList.remove('rt-toast-show');
+        }, 4000);
+    }
+
     // ── IR Colormap LUTs (for client-side raw Tb rendering) ────
     var IR_COLORMAPS = {};
     var irSelectedColormap = 'claude-ir';
@@ -2289,6 +2317,7 @@
                 if (err && err.name === 'AbortError') return;
                 console.warn('[RT Monitor] surface obs fetch failed:', err && err.message);
                 if (btn) btn.classList.remove('active');
+                _rtToast('Couldn’t load surface observations — tap Obs to retry');
             });
     };
 
@@ -3971,6 +4000,9 @@
         if (!loader) return;
         if (show) {
             loader.style.display = 'flex';
+            // Restore the spinner in case a prior _showNoImageryError hid it.
+            var spin = loader.querySelector('.ir-loader-spinner');
+            if (spin) spin.style.display = '';
             if (loaderText) {
                 loaderText.textContent = pct != null
                     ? 'Pre-loading IR frames\u2026 ' + pct + '%'
@@ -3979,6 +4011,32 @@
         } else {
             loader.style.display = 'none';
         }
+    }
+
+    /** Every frame failed to load \u2014 say so instead of leaving a blank
+     *  map under a spinner that never resolves. Retry re-opens the storm
+     *  card, which re-runs the whole frame pipeline (fresh bundle fetch,
+     *  GIBS fallback and all). */
+    function _showNoImageryError() {
+        var loader = document.getElementById('ir-image-loader');
+        if (!loader) return;
+        loader.style.display = 'flex';
+        var spin = loader.querySelector('.ir-loader-spinner');
+        if (spin) spin.style.display = 'none';
+        var txt = loader.querySelector('.ir-loader-text');
+        if (!txt) return;
+        txt.innerHTML = '';
+        var span = document.createElement('span');
+        span.textContent = 'No satellite imagery available right now \u00b7 ';
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'rt-retry-link';
+        btn.textContent = 'Retry';
+        btn.addEventListener('click', function () {
+            if (currentStormId) openStormDetail(currentStormId);
+        });
+        txt.appendChild(span);
+        txt.appendChild(btn);
     }
 
     var _frameLoadedOnce = {};  // track which frames have fired their initial load
@@ -4020,23 +4078,25 @@
             framesReady = true;
             // Only update UI if we're currently in EIR mode (GeoColor has its own handler)
             if (productMode === 'eir') {
-                showLoadingProgress(false);
-                // Show the latest VALID frame now that all tiles are cached
-                if (validFrames.length > 0) {
-                    showFrame(validFrames[validFrames.length - 1]);
+                if (validFrames.length === 0) {
+                    // Every frame errored — a blank map with the controls
+                    // enabled reads as "broken", so surface it + retry.
+                    _showNoImageryError();
                 } else {
-                    showFrame(animFrameTimes.length - 1);
+                    showLoadingProgress(false);
+                    // Show the latest VALID frame now that all tiles are cached
+                    showFrame(validFrames[validFrames.length - 1]);
+                    // Update slider max to reflect valid frame count
+                    var slider = document.getElementById('ir-anim-slider');
+                    if (slider) {
+                        slider.max = validFrames.length - 1;
+                        slider.value = validFrames.length - 1;
+                    }
+                    // Enable animation controls
+                    var playBtn = document.getElementById('ir-anim-play');
+                    if (playBtn) { playBtn.disabled = false; playBtn.title = 'Play/Pause'; }
+                    updateAnimCounter();
                 }
-                // Update slider max to reflect valid frame count
-                var slider = document.getElementById('ir-anim-slider');
-                if (slider && validFrames.length > 0) {
-                    slider.max = validFrames.length - 1;
-                    slider.value = validFrames.length - 1;
-                }
-                // Enable animation controls
-                var playBtn = document.getElementById('ir-anim-play');
-                if (playBtn) playBtn.disabled = false;
-                updateAnimCounter();
             }
             console.log('[RT Monitor] All ' + total + ' IR frames pre-loaded (' + detailSatName + '), ' + validFrames.length + ' valid');
             // Pre-fetch raw Tb in background so colormap switch is instant
@@ -5060,9 +5120,10 @@
         frameHasError = [];
         _renderedLatestFrameTime = null;   // new storm → no rendered baseline yet
 
-        // Disable play button until frames load
+        // Disable play button until frames load (title says why, mirroring
+        // the global-map play button's loading hint)
         var playBtn = document.getElementById('ir-anim-play');
-        if (playBtn) playBtn.disabled = true;
+        if (playBtn) { playBtn.disabled = true; playBtn.title = 'Loading frames…'; }
 
         // Show loading progress
         showLoadingProgress(true, 0);
@@ -5152,16 +5213,19 @@
                 if (productMode === 'eir') {
                     showLoadingProgress(false);
                 }
-                var playBtn = document.getElementById('ir-anim-play');
-                if (playBtn && productMode === 'eir') playBtn.disabled = false;
                 var slider = document.getElementById('ir-anim-slider');
                 if (productMode === 'eir') {
                     if (slider && validFrames.length > 0) {
                         slider.max = validFrames.length - 1;
                         slider.value = validFrames.length - 1;
                         showFrame(validFrames[validFrames.length - 1]);
+                        var playBtn = document.getElementById('ir-anim-play');
+                        if (playBtn) { playBtn.disabled = false; playBtn.title = 'Play/Pause'; }
                     } else {
-                        showFrame(animFrameTimes.length - 1);
+                        // 30 s in with zero usable frames — show the error
+                        // instead of a blank map (frames that straggle in
+                        // later resume the normal progress path).
+                        _showNoImageryError();
                     }
                     updateAnimCounter();
                 }
@@ -5461,13 +5525,20 @@
         // profile's 850→200 cell equals the displayed 0–400 km core value.
         fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) +
               '/shear-profile?eval_km=400&mask_km=500')
-            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
             .then(function (j) {
                 if (!j || currentStormId !== atcfId) return;
                 _rtShearProfileCache[atcfId] = j;
                 _rtRenderShearProfile(j);
             })
-            .catch(function () { /* leave the container empty on failure */ });
+            .catch(function () {
+                if (currentStormId !== atcfId) return;
+                _rtStatusError(el, function () { _rtLoadShearProfile(atcfId); },
+                               'Couldn’t load shear profile');
+            });
     }
 
     // Fixed 0–40 kt shear scale so the heatmap reads the same across every
@@ -6381,7 +6452,11 @@
     /** Render the intensity timeline chart */
     function renderIntensityChart(meta) {
         var chartEl = document.getElementById('ir-intensity-chart');
-        if (!chartEl || typeof Plotly === 'undefined') return;
+        if (!chartEl) return;
+        if (typeof Plotly === 'undefined') {
+            _whenPlotly(function () { renderIntensityChart(meta); });
+            return;
+        }
         // If the DeepMind ensemble forecast is already rendered (the
         // richer per-tau percentile-bands view), don't stomp it with the
         // simpler best-track history line. Best-track is a fallback for
@@ -7361,6 +7436,7 @@
                 console.warn('[RT Monitor] Vis + SWIR bundles both unavailable; back to IR');
                 if (btn) { btn.classList.remove('ir-loading'); btn.textContent = 'Visible'; }
                 showLoadingProgress(false);
+                _rtToast('Visible imagery unavailable right now — showing IR instead');
                 setProductMode('eir');
                 return;
             }
@@ -9021,6 +9097,10 @@
         if (!json || !json.members) return;
         var el = document.getElementById('ir-intensity-chart');
         if (!el) return;
+        if (typeof Plotly === 'undefined') {
+            _whenPlotly(function () { _rtRenderCardForecastIntensity(json); });
+            return;
+        }
         el.className = 'ir-intensity-chart';  // remove skeleton
 
         var memberKeys = Object.keys(json.members);

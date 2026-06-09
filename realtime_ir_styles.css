@@ -5935,3 +5935,29 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
         border-radius: 0;
     }
 }
+
+/* ── Transient toast (fallback / failure notices) ─────────────────
+   Single reusable #rt-toast element created by realtime_ir.js:_rtToast.
+   Hidden by default; .rt-toast-show fades it in for ~4 s. */
+#rt-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translateX(-50%) translateY(8px);
+    z-index: 12000;
+    padding: 10px 16px;
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.92);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    color: #e2e8f0;
+    font-size: 0.85rem;
+    text-align: center;
+    max-width: min(80%, 420px);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+}
+#rt-toast.rt-toast-show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}

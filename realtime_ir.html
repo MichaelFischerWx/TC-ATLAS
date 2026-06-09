@@ -53,6 +53,10 @@
     <link rel="preconnect" href="https://unpkg.com">
     <link rel="preconnect" href="https://cdn.plot.ly">
     <link rel="preconnect" href="https://tc-atlas-api-361010099051.us-east1.run.app">
+    <!-- IR frame bundles, rt-version.json and the microwave manifests are
+         fetched straight from GCS — warm the connection so DNS+TCP+TLS
+         aren't paid on the first bundle request. -->
+    <link rel="preconnect" href="https://storage.googleapis.com">
 
     <!-- Cache-busting: minute-resolution timestamp on local CSS/JS URLs.
          Bumped from hour to minute so fast iteration on the genesis
@@ -2325,7 +2329,25 @@
     </div>
     <!-- Scripts -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script>
+    // Plotly (~1 MB gzipped) is only needed once a chart renders, but a
+    // synchronous tag here serializes the whole page: the document.write
+    // script URLs below are invisible to the preload scanner, so
+    // realtime_ir.js can't even START downloading until Plotly has
+    // downloaded AND executed. Inject it async instead — it downloads in
+    // parallel while the map initializes. Chart entry points that can fire
+    // before it arrives (deep-linked storm cards) defer through
+    // _whenPlotly() in realtime_ir.js, keyed off this 'plotly-ready' event.
+    (function () {
+        var s = document.createElement('script');
+        s.src = 'https://cdn.plot.ly/plotly-2.27.0.min.js';
+        s.async = true;
+        s.onload = function () {
+            try { window.dispatchEvent(new Event('plotly-ready')); } catch (e) {}
+        };
+        document.head.appendChild(s);
+    })();
+    </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script>document.write('<script src="subseasonal_clock.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<script src="skewt.js'+window.__v+'"><\/script>');</script>
