@@ -16,6 +16,7 @@ Indian Ocean, and Southern Hemisphere (JTWC B-deck).
 
 import base64
 import gc
+import gzip
 import hashlib
 import io
 import json
@@ -52,8 +53,6 @@ from satellite_ir import (
     fetch_ir_frame,
     fetch_ir_tb_raw,
     fetch_band_raw,
-    compute_ir_vigor,
-    render_vigor_png,
     BAND_RANGES,
     VIS_BAND,
     WV_BAND,
@@ -6593,166 +6592,6 @@ def get_storm_metadata(atcf_id: str):
 
 
 # ---------------------------------------------------------------------------
-# IR Vigor Endpoint
-# ---------------------------------------------------------------------------
-
-@router.get("/storm/{atcf_id}/ir-vigor")
-def get_storm_ir_vigor(
-    atcf_id: str,
-    lookback_hours: float = Query(4.0, ge=1, le=8, description="Hours of Tb frames for temporal average"),
-    radius_deg: float = Query(10.0, ge=1.0, le=12.0, description="Cutout radius in degrees"),
-    radius_km: float = Query(200.0, ge=50, le=600, description="Spatial radius (km) for local minimum"),
-    interval_min: int = Query(30, ge=10, le=60, description="Minutes between frames"),
-):
-    """
-    Compute and return a spatially-aware IR vigor image for a storm.
-
-    Vigor = current_Tb − local_min(temporal_avg_Tb), where local_min
-    is computed within `radius_km` of each grid point.  The temporal
-    average spans the past `lookback_hours` at `interval_min` intervals.
-
-    Returns a single base64-encoded PNG frame with a diverging colormap.
-    """
-    try:
-        return _compute_vigor_inner(
-            atcf_id, lookback_hours, radius_deg, radius_km, interval_min
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Vigor computation error: {type(exc).__name__}: {exc}",
-        )
-
-
-def _compute_vigor_inner(
-    atcf_id: str,
-    lookback_hours: float,
-    radius_deg: float,
-    radius_km: float,
-    interval_min: int,
-):
-    """Inner implementation for vigor — separated so the outer handler can
-    catch any uncaught exceptions and return a clean 500 instead of crashing
-    the Cloud Run container (which surfaces as a 502 gateway error)."""
-
-    # Find the storm in the active list
-    _ensure_fresh_cache()
-    storm = None
-    with _active_storms_lock:
-        for s in _active_storms_cache["storms"]:
-            if s["atcf_id"].upper() == atcf_id.upper():
-                storm = dict(s)
-                break
-
-    if not storm:
-        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found in active list")
-
-    center_lat = storm["lat"]
-    center_lon = storm["lon"]
-    box_deg = radius_deg * 2
-
-    # Parse the last fix time as the animation center
-    try:
-        center_dt = _dt.fromisoformat(storm["last_fix_utc"].replace("Z", "+00:00"))
-    except Exception:
-        center_dt = _dt.now(timezone.utc)
-
-    # Build frame times for the temporal average (past N hours)
-    frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
-    print(f"[ir-vigor] {atcf_id}: fetching {len(frame_times)} frames, "
-          f"center={center_lat:.1f},{center_lon:.1f}, box={box_deg}°")
-
-    # Fetch raw Tb arrays (oldest first), stop early once we have enough
-    raw_frames = []
-    fetch_errors = 0
-    for target_dt in reversed(frame_times):
-        try:
-            result = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg,
-                                     max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
-            if result:
-                raw_frames.append(result)
-                print(f"[ir-vigor]   frame {target_dt.strftime('%H:%MZ')}: OK "
-                      f"({result['tb'].shape})")
-            else:
-                fetch_errors += 1
-                print(f"[ir-vigor]   frame {target_dt.strftime('%H:%MZ')}: "
-                      f"no data")
-        except Exception as exc:
-            fetch_errors += 1
-            print(f"[ir-vigor]   frame {target_dt.strftime('%H:%MZ')}: "
-                  f"ERROR {type(exc).__name__}: {exc}")
-
-    print(f"[ir-vigor] {atcf_id}: {len(raw_frames)} frames fetched, "
-          f"{fetch_errors} failed")
-
-    if len(raw_frames) < 2:
-        raise HTTPException(
-            status_code=503,
-            detail=(f"Only {len(raw_frames)} of {len(frame_times)} IR frames "
-                    f"available ({fetch_errors} failed) — need at least 2 for vigor. "
-                    f"Satellite data may be temporarily unavailable."),
-        )
-
-    # Extract Tb arrays (ordered oldest → newest)
-    tb_arrays = [f["tb"] for f in raw_frames]
-
-    # Resample all arrays to the same shape as the last (current) frame
-    # (minor size differences can occur between satellite scan times)
-    target_shape = tb_arrays[-1].shape
-    resampled = []
-    for tb in tb_arrays:
-        if tb.shape == target_shape:
-            resampled.append(tb)
-        else:
-            # Simple nearest-neighbour resize
-            from PIL import Image
-            img = Image.fromarray(tb)
-            img_resized = img.resize((target_shape[1], target_shape[0]),
-                                     Image.NEAREST)
-            resampled.append(np.array(img_resized, dtype=np.float32))
-    tb_arrays = resampled
-
-    # Compute vigor
-    print(f"[ir-vigor] {atcf_id}: computing vigor with {len(tb_arrays)} frames, "
-          f"radius={radius_km}km")
-    vigor = compute_ir_vigor(tb_arrays, radius_km=radius_km, box_deg=box_deg)
-    if vigor is None:
-        raise HTTPException(status_code=500, detail="Vigor computation returned None")
-
-    # Render to PNG
-    png_b64 = render_vigor_png(vigor)
-    n_frames_used = len(tb_arrays)
-    vigor_satellite = raw_frames[-1].get("satellite", "Unknown") if raw_frames else storm.get("satellite", "Unknown")
-    del vigor, tb_arrays, raw_frames, resampled
-    gc.collect()
-
-    if not png_b64:
-        raise HTTPException(status_code=500, detail="Vigor rendering failed")
-
-    half = box_deg / 2.0
-
-    return JSONResponse(
-        content={
-            "image_b64": png_b64,
-            "datetime_utc": center_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "satellite": vigor_satellite,
-            "bounds": [
-                [center_lat - half, center_lon - half],
-                [center_lat + half, center_lon + half],
-            ],
-            "storm_center": {"lat": center_lat, "lon": center_lon},
-            "frames_used": n_frames_used,
-            "lookback_hours": lookback_hours,
-            "radius_km": radius_km,
-        },
-        headers={"Cache-Control": "public, max-age=300"},
-    )
-
-
-# ---------------------------------------------------------------------------
 # DeepMind WeatherLab Ensemble Forecasts
 # ---------------------------------------------------------------------------
 # Fetches tropical cyclone ensemble forecasts from Google DeepMind's
@@ -8699,6 +8538,84 @@ _TCA_CLUSTER_CACHE: dict = {}        # (init_time, params_tuple) -> (result, ts)
 _TCA_CLUSTER_CACHE_MAX = 6           # cap memory ~ 6 cycles × ~6 MB = ~36 MB
 _TCA_CLUSTER_TTL = 7200              # same TTL as the underlying CSV
 
+# GCS tier between the in-memory cache and a recompute. Clustering a
+# 1K-member cycle costs 6-20 s of CPU, but the result is deterministic
+# for a given (cycle, variant, params, n_tracks) — so once ANY instance
+# has computed it, every other instance (min=0 cold starts) and every
+# post-TTL refresh loads the gzipped JSON from GCS in well under a
+# second instead of recomputing. n_tracks is part of the object name so
+# a CSV fetched mid-publication self-heals: when the parse grows, the
+# key changes and the fuller cycle is clustered (once) and cached anew.
+_TCA_CLUSTER_GCS_PREFIX = "genesis-clusters/v1"
+
+
+def _tca_cluster_gcs_key(init_time, variant_n, params, n_tracks) -> str:
+    p = "_".join(str(x) for x in params)
+    return (f"{_TCA_CLUSTER_GCS_PREFIX}/{variant_n}/{init_time}/"
+            f"{p}_n{n_tracks}.json.gz")
+
+
+def _tca_cluster_gcs_get(key: str):
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return None
+    try:
+        raw = bucket.blob(key).download_as_bytes(timeout=10)
+        return json.loads(gzip.decompress(raw))
+    except Exception:
+        return None
+
+
+def _tca_cluster_gcs_put(key: str, clusters: list):
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+
+    def _upload():
+        try:
+            body = gzip.compress(
+                json.dumps(clusters, separators=(",", ":")).encode("utf-8"), 6)
+            bucket.blob(key).upload_from_string(
+                body, content_type="application/json", timeout=30)
+        except Exception:
+            pass
+
+    threading.Thread(target=_upload, daemon=True).start()
+
+
+def _tca_clusters_cached(init_time, variant_n, params, data) -> list:
+    """Memory → GCS → compute lookup for one cluster set.
+
+    Shared by `_tca_get_or_compute_clusters` (latest cycle) and
+    `_tca_clusters_for_cycle` (pinned cycle) so both populate the same
+    two cache tiers. `params` is the rounded tuple that also forms the
+    cache key, in `_tca_compute_clusters` argument order."""
+    cache_key = (init_time, variant_n, params)
+    cached = _TCA_CLUSTER_CACHE.get(cache_key)
+    if cached and (time.time() - cached["ts"]) < _TCA_CLUSTER_TTL:
+        return cached["clusters"]
+    gcs_key = _tca_cluster_gcs_key(init_time, variant_n, params, len(data))
+    clusters = _tca_cluster_gcs_get(gcs_key)
+    if clusters is None:
+        (grid_deg, peak_min_members, assign_radius_km,
+         time_window_h, cluster_min_members, same_system_km) = params
+        clusters = _tca_compute_clusters(
+            data,
+            grid_deg=grid_deg,
+            peak_min_members=peak_min_members,
+            assign_radius_km=assign_radius_km,
+            time_window_h=time_window_h,
+            cluster_min_members=cluster_min_members,
+            same_system_km=same_system_km,
+        )
+        _tca_cluster_gcs_put(gcs_key, clusters)
+    _TCA_CLUSTER_CACHE[cache_key] = {"clusters": clusters, "ts": time.time()}
+    if len(_TCA_CLUSTER_CACHE) > _TCA_CLUSTER_CACHE_MAX:
+        oldest = sorted(_TCA_CLUSTER_CACHE.items(),
+                        key=lambda kv: kv[1]["ts"])[0][0]
+        _TCA_CLUSTER_CACHE.pop(oldest, None)
+    return clusters
+
 
 def _tca_haversine_km(la1, lo1, la2, lo2):
     R = 6371.0
@@ -9038,24 +8955,7 @@ def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
     params = (round(grid_deg, 3), int(peak_min_members),
               round(assign_radius_km, 2), round(time_window_h, 2),
               int(cluster_min_members), round(same_system_km, 2))
-    cache_key = (init_time, variant_n, params)
-    cached = _TCA_CLUSTER_CACHE.get(cache_key)
-    if cached and (time.time() - cached["ts"]) < _TCA_CLUSTER_TTL:
-        return init_time, params, cached["clusters"], (used_date, used_hour)
-    clusters = _tca_compute_clusters(
-        data,
-        grid_deg=grid_deg,
-        peak_min_members=peak_min_members,
-        assign_radius_km=assign_radius_km,
-        time_window_h=time_window_h,
-        cluster_min_members=cluster_min_members,
-        same_system_km=same_system_km,
-    )
-    _TCA_CLUSTER_CACHE[cache_key] = {"clusters": clusters, "ts": time.time()}
-    if len(_TCA_CLUSTER_CACHE) > _TCA_CLUSTER_CACHE_MAX:
-        oldest = sorted(_TCA_CLUSTER_CACHE.items(),
-                        key=lambda kv: kv[1]["ts"])[0][0]
-        _TCA_CLUSTER_CACHE.pop(oldest, None)
+    clusters = _tca_clusters_cached(init_time, variant_n, params, data)
     return init_time, params, clusters, (used_date, used_hour)
 
 
@@ -9077,25 +8977,7 @@ def _tca_clusters_for_cycle(date_str, hour_str, grid_deg, peak_min_members,
     params = (round(grid_deg, 3), int(peak_min_members),
               round(assign_radius_km, 2), round(time_window_h, 2),
               int(cluster_min_members), round(same_system_km, 2))
-    cache_key = (init_time, variant_n, params)
-    cached = _TCA_CLUSTER_CACHE.get(cache_key)
-    if cached and (time.time() - cached["ts"]) < _TCA_CLUSTER_TTL:
-        return cached["clusters"]
-    clusters = _tca_compute_clusters(
-        data,
-        grid_deg=grid_deg,
-        peak_min_members=peak_min_members,
-        assign_radius_km=assign_radius_km,
-        time_window_h=time_window_h,
-        cluster_min_members=cluster_min_members,
-        same_system_km=same_system_km,
-    )
-    _TCA_CLUSTER_CACHE[cache_key] = {"clusters": clusters, "ts": time.time()}
-    if len(_TCA_CLUSTER_CACHE) > _TCA_CLUSTER_CACHE_MAX:
-        oldest = sorted(_TCA_CLUSTER_CACHE.items(),
-                        key=lambda kv: kv[1]["ts"])[0][0]
-        _TCA_CLUSTER_CACHE.pop(oldest, None)
-    return clusters
+    return _tca_clusters_cached(init_time, variant_n, params, data)
 
 
 def _tca_cluster_index_view(c):
