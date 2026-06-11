@@ -8228,7 +8228,7 @@ def _get_genesis_cycles_cached(now=None, force: bool = False) -> list:
 
 
 @router.get("/weatherlab-genesis-cycles")
-def get_weatherlab_genesis_cycles(count: int = 4):
+def get_weatherlab_genesis_cycles(count: int = 5):
     """List the most recent published genesis cycles (freshest first) so
     the frontend can offer a cycle picker AND default to the freshest
     cycle/variant available.
@@ -8251,7 +8251,7 @@ def get_weatherlab_genesis_cycles(count: int = 4):
     swallowed by the `/weatherlab-genesis/{track_id}` route.
     """
     now = _dt.now(timezone.utc)
-    count = max(1, min(int(count or 4), _GENESIS_CYCLES_MAX))
+    count = max(1, min(int(count or 5), _GENESIS_CYCLES_MAX))
     base = _get_genesis_cycles_cached(now=now)
     cycles = []
     for c in base[:count]:
@@ -8330,7 +8330,7 @@ def _genesis_cluster_intensity_change(cluster):
 def get_weatherlab_genesis_trend(
     lat: float,
     lon: float,
-    count: int = 4,
+    count: int = 5,
     match_radius_km: float = 800.0,
     grid_deg: float = 3.0,
     peak_min_members: int = 8,
@@ -8362,7 +8362,7 @@ def get_weatherlab_genesis_trend(
     """
     now = _dt.now(timezone.utc)
     variant_n = _genesis_variant_norm(variant)
-    count = max(1, min(int(count or 4), 8))
+    count = max(1, min(int(count or 5), 8))
     trend = []
     n_with_data = 0
     ic_cluster = None      # freshest matched cluster — source for the RI histogram

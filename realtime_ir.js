@@ -12392,7 +12392,7 @@
         fetch(API_BASE + '/ir-monitor/weatherlab-genesis-trend'
                 + '?lat=' + encodeURIComponent(aLat)
                 + '&lon=' + encodeURIComponent(aLon)
-                + '&count=4', { cache: 'no-store' })
+                + '&count=5', { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (data) {
                 if (wrap.dataset.trackId !== (reqTrackId || '')) return;  // stale
@@ -15154,7 +15154,7 @@
     function _loadGenesisCycleList() {
         if (_genesisCycleListLoading) return;
         _genesisCycleListLoading = true;
-        fetch(API_BASE + '/ir-monitor/weatherlab-genesis-cycles?count=4',
+        fetch(API_BASE + '/ir-monitor/weatherlab-genesis-cycles?count=5',
               { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (json) {
