@@ -57,7 +57,7 @@ from scipy.interpolate import RegularGridInterpolator
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from fastapi.responses import Response, JSONResponse, StreamingResponse
+from fastapi.responses import Response, JSONResponse, RedirectResponse, StreamingResponse
 from starlette.requests import Request as StarletteRequest
 
 # ---------------------------------------------------------------------------
@@ -2269,6 +2269,23 @@ def get_ir_frame(
     Return a single server-rendered IR PNG frame.
     Called progressively by the client to build up the animation.
     """
+    # R2 fast path: TC-RADAR frames are immutable per (data_type, case, lag).
+    # Mirror each to R2 + 302 to cdn.tcatlas.org so the ~330 KB PNG-JSON serves
+    # from object storage, not streamed through Cloud Run (this endpoint was
+    # ~4% of Cloud Run egress). Same pattern as global-archive /ir/frame; reuses
+    # global_archive_api's R2 helpers (lazy import — already loaded by request
+    # time). dt is sanitized to the two known values so the key can't be poisoned.
+    from global_archive_api import (
+        _r2_frame_exists, _r2_mirror_frame_async, _public_frame_url,
+    )
+    dt = "merge" if data_type == "merge" else "swath"
+    r2_key = f"tcradar-ir/v1/{dt}/{case_index}_{lag_index}.json"
+    if _r2_frame_exists(r2_key):
+        return RedirectResponse(
+            _public_frame_url(r2_key), status_code=302,
+            headers={"Cache-Control": "no-store"},
+        )
+
     ir_store = get_ir_dataset()
     if ir_store is None:
         raise HTTPException(status_code=503, detail="IR data not available (S3 not configured)")
@@ -2299,11 +2316,14 @@ def get_ir_frame(
     else:
         png = _render_ir_png(frame, vmin=190.0, vmax=310.0)
 
-    return {
+    result = {
         "case_index": case_index,
         "lag_index": lag_index,
         "frame": png,
     }
+    # Mirror to R2 so subsequent requests 302 to cdn.tcatlas.org (off Cloud Run)
+    _r2_mirror_frame_async(r2_key, result)
+    return result
 
 
 
