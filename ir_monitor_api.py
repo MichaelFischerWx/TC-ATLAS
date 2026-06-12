@@ -8683,8 +8683,13 @@ def _tca_clusters_cached(init_time, variant_n, params, data) -> list:
     gcs_key = _tca_cluster_gcs_key(init_time, variant_n, params, len(data))
     clusters = _tca_cluster_gcs_get(gcs_key)
     if clusters is None:
+        # 6-tuple = classic params; 8-tuple appends (merge_km,
+        # merge_overlap_h) — only present when the merge pass is on,
+        # so default-param cache/GCS keys are unchanged.
         (grid_deg, peak_min_members, assign_radius_km,
-         time_window_h, cluster_min_members, same_system_km) = params
+         time_window_h, cluster_min_members, same_system_km) = params[:6]
+        merge_km = params[6] if len(params) > 6 else 0.0
+        merge_overlap_h = params[7] if len(params) > 7 else 48.0
         clusters = _tca_compute_clusters(
             data,
             grid_deg=grid_deg,
@@ -8693,6 +8698,8 @@ def _tca_clusters_cached(init_time, variant_n, params, data) -> list:
             time_window_h=time_window_h,
             cluster_min_members=cluster_min_members,
             same_system_km=same_system_km,
+            merge_km=merge_km,
+            merge_overlap_h=merge_overlap_h,
         )
         _tca_cluster_gcs_put(gcs_key, clusters)
     _TCA_CLUSTER_CACHE[cache_key] = {"clusters": clusters, "ts": time.time()}
@@ -8785,6 +8792,223 @@ def _tca_mean_track(member_point_arrays):
     return out
 
 
+# ── Valid-time track-affinity merge pass ──────────────────────────
+# The density-peak stage clusters members by their FIRST ≥34-kt point.
+# For a moving pre-genesis disturbance, genesis longitude and genesis
+# tau are strongly correlated (late developers form farther downstream),
+# so one physical system with timing uncertainty shows up as an
+# elongated ridge of genesis points that the 2D histogram carves into
+# several adjacent "disturbances" with staggered mean taus. The merge
+# pass detects fragments by the one signal genesis-space can't fake:
+# at any shared tau (== valid time, since all members share one init),
+# fragments of the same system sit in the same place — including the
+# pre-genesis track segment — while genuinely distinct sequential
+# systems are separated by their wave spacing (1500+ km) at EVERY
+# shared tau.
+_TCA_MERGE_CLOSE_FACTOR = 1.5   # "close at this tau" = within factor*merge_km
+_TCA_MERGE_MIN_F = 0.7          # required weighted fraction of close taus
+# Member-level confirmation gate: ratio of (cross-cluster member-pair
+# separation) to (within-cluster member-pair separation) at shared valid
+# times. Fragments of ONE system are different realizations of the same
+# vortex, so cross ~ within (R ~ 1); two systems traveling in tandem are
+# offset, shifting cross upward. Validated on 2026-06 cycles: same-system
+# pairs measure R = 0.94-1.24, known-distinct controls R = 8-31, and the
+# 50-member variant produced a D/F false positive (D=449 km, F=1.00) that
+# only this gate catches (R = 1.75). Especially load-bearing for the
+# 50-member ensemble, where 5-15-member clusters make mean-track D/F noisy.
+_TCA_MERGE_MAX_R = 1.30
+_TCA_MERGE_R_TAUS = 8           # valid times sampled across shared window
+_TCA_MERGE_R_SAMPLES = 300      # member-pair distance samples per tau
+# Default merge distance (km), ON by default since 2026-06-12. Calibrated
+# on 6 days of cycles (both variants): every member-level-confirmed
+# fragment pair measured D_bar <= 449 km, and the D/F+R triple gate showed
+# zero false merges. 0 disables the pass (pre-merge behavior). Endpoint
+# query params, the prewarm path, and the run-to-run trend endpoint all
+# share this default so the steady-state request is one cache key; the
+# frontend's reset value mirrors it (_GENESIS_MERGE_KM in realtime_ir.js).
+_TCA_MERGE_DEFAULT_KM = 450.0
+
+
+def _tca_member_ratio(ci, cj):
+    """Cross/within member-separation ratio for two clusters (see
+    _TCA_MERGE_MAX_R). Deterministic (fixed-seed sampling) so cached
+    cluster sets are reproducible across processes. Returns None when
+    either cluster lacks enough concurrent members to estimate spread —
+    callers should then fall back to the D/F verdict alone."""
+    import random as _random
+    rng = _random.Random(42)
+
+    def _by_tau(c):
+        out = {}
+        for mem in (c.get("members") or {}).values():
+            for p in mem.get("points") or []:
+                if p.get("lat") is None or p.get("lon") is None:
+                    continue
+                out.setdefault(p.get("tau"), []).append((p["lat"], p["lon"]))
+        return {t: v for t, v in out.items() if t is not None and len(v) >= 3}
+
+    pa, pb = _by_tau(ci), _by_tau(cj)
+    shared = sorted(set(pa) & set(pb))
+    if len(shared) < 3:
+        return None
+
+    def _dists(xs, ys, k, same):
+        d = []
+        for _ in range(k):
+            a = rng.choice(xs)
+            b = rng.choice(ys)
+            if same and a is b:
+                continue
+            d.append(_tca_haversine_km(a[0], a[1], b[0], b[1]))
+        return d
+
+    step = max(1, len(shared) // _TCA_MERGE_R_TAUS)
+    within, cross = [], []
+    for t in shared[::step]:
+        within += _dists(pa[t], pa[t], _TCA_MERGE_R_SAMPLES // 2, True)
+        within += _dists(pb[t], pb[t], _TCA_MERGE_R_SAMPLES // 2, True)
+        cross += _dists(pa[t], pb[t], _TCA_MERGE_R_SAMPLES, False)
+    if not within or not cross:
+        return None
+    within.sort()
+    cross.sort()
+    mw = within[len(within) // 2]
+    mc = cross[len(cross) // 2]
+    return (mc / mw) if mw > 0 else None
+
+
+def _tca_cluster_affinity(ci, cj, merge_km, merge_overlap_h):
+    """Affinity between two clusters' mean polylines at shared taus.
+    Returns (D_bar_km, F_close) — membership-weighted mean separation
+    and weighted fraction of shared taus closer than
+    _TCA_MERGE_CLOSE_FACTOR*merge_km — or None when the shared window
+    is shorter than merge_overlap_h (too little common history to
+    judge). The F gate rejects the one geometric false positive of a
+    mean-distance test: tracks that briefly CROSS are close at a few
+    taus only; fragments travel together at essentially all of them."""
+    pi = {p["tau"]: p for p in (ci.get("ensemble_mean") or {}).get("points") or []}
+    pj = {p["tau"]: p for p in (cj.get("ensemble_mean") or {}).get("points") or []}
+    shared = sorted(set(pi) & set(pj))
+    if len(shared) < 2 or (shared[-1] - shared[0]) < merge_overlap_h:
+        return None
+    wsum = dsum = close_w = 0.0
+    for t in shared:
+        a, b = pi[t], pj[t]
+        w = min(a.get("n_members") or 1, b.get("n_members") or 1)
+        d = _tca_haversine_km(a["lat"], a["lon"], b["lat"], b["lon"])
+        wsum += w
+        dsum += d * w
+        if d < _TCA_MERGE_CLOSE_FACTOR * merge_km:
+            close_w += w
+    if wsum <= 0:
+        return None
+    return dsum / wsum, close_w / wsum
+
+
+def _tca_merge_pass(clusters, merge_km, merge_overlap_h, ensemble_size):
+    """Union-find merge of same-system fragments (see block comment
+    above). Transitive merging is intentional: a timing ridge carved
+    into three segments should chain back into one system even when
+    the two end segments' direct affinity is weakest. The merged
+    cluster inherits identity fields (track_id, peak_*) from its
+    LARGEST constituent so detail-endpoint lookups and the Trends-tab
+    peak anchor stay stable, and records `merged_from` so the UI can
+    surface the genesis-timing modes the constituents represented."""
+    n = len(clusters)
+    parent = list(range(n))
+
+    def _find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            aff = _tca_cluster_affinity(clusters[i], clusters[j],
+                                        merge_km, merge_overlap_h)
+            if aff is None:
+                continue
+            dbar, f_close = aff
+            if dbar >= merge_km or f_close < _TCA_MERGE_MIN_F:
+                continue
+            # D/F passed — confirm at member level. R is computed only
+            # for D/F-passing pairs (a handful per cycle), so the extra
+            # cost is microseconds; None (too few members) falls back to
+            # the D/F verdict, which the validation showed is reliable
+            # when membership is too thin for a spread estimate.
+            r = _tca_member_ratio(clusters[i], clusters[j])
+            if r is not None and r > _TCA_MERGE_MAX_R:
+                continue
+            parent[_find(i)] = _find(j)
+
+    groups: dict = {}
+    for i in range(n):
+        groups.setdefault(_find(i), []).append(i)
+    if all(len(g) == 1 for g in groups.values()):
+        return clusters
+
+    out = []
+    for idxs in groups.values():
+        if len(idxs) == 1:
+            out.append(clusters[idxs[0]])
+            continue
+        group = [clusters[i] for i in idxs]
+        dom = max(group, key=lambda c: c["n_members_total"])
+        # Pool constituents' members; dedupe per sample by distance of
+        # the member's first-genesis point to the dominant peak (same
+        # rule as Step 6's within-cluster dedupe).
+        best_per_sample: dict = {}
+        contrib_track_ids: dict = {}
+        capped_total = 0
+        for c in group:
+            capped_total += c.get("capped_total", 0)
+            for tid, cnt in (c.get("contrib_track_ids") or {}).items():
+                contrib_track_ids[tid] = contrib_track_ids.get(tid, 0) + cnt
+            for sk, mem in (c.get("members") or {}).items():
+                pts = mem.get("points") or []
+                first = next(
+                    (p for p in pts
+                     if (p.get("wind") or 0) >= 34
+                     and p.get("lat") is not None and p.get("lon") is not None),
+                    None)
+                d = (_tca_haversine_km(first["lat"], first["lon"],
+                                       dom["peak_lat"], dom["peak_lon"])
+                     if first else float("inf"))
+                cur = best_per_sample.get(sk)
+                if cur is None or d < cur[0]:
+                    best_per_sample[sk] = (d, pts)
+        members = {sk: {"points": pts}
+                   for sk, (_d, pts) in best_per_sample.items()}
+        mean_pts = _tca_mean_track([pts for _d, pts in best_per_sample.values()])
+        peak_wind, peak_tau = 0.0, None
+        for mp in mean_pts:
+            if mp.get("wind") is not None and mp["wind"] > peak_wind:
+                peak_wind = mp["wind"]
+                peak_tau = mp["tau"]
+        merged = dict(dom)   # inherit peak_lat/lon/mean_tau, gates, track_id
+        merged.update({
+            "members": members,
+            "ensemble_mean": {"points": mean_pts},
+            "n_members": len(members),
+            "n_members_total": len(members),
+            "fraction": round(len(members) / max(1, ensemble_size), 4),
+            "peak_wind": round(peak_wind, 1),
+            "peak_tau": peak_tau,
+            "contrib_track_ids": contrib_track_ids,
+            "capped_total": capped_total,
+            "merged_from": [{
+                "n_members": c["n_members_total"],
+                "peak_lat": c["peak_lat"],
+                "peak_lon": c["peak_lon"],
+                "peak_mean_tau": c["peak_mean_tau"],
+            } for c in sorted(group,
+                              key=lambda c: c["peak_mean_tau"] or 0)],
+        })
+        out.append(merged)
+    return out
+
+
 def _tca_compute_clusters(raw_data: dict,
                           grid_deg: float = 3.0,
                           peak_min_members: int = 8,
@@ -8792,7 +9016,9 @@ def _tca_compute_clusters(raw_data: dict,
                           time_window_h: float = 60.0,
                           cluster_min_members: int = 25,
                           same_system_km: float = 500.0,
-                          ensemble_size: int = None) -> list:
+                          ensemble_size: int = None,
+                          merge_km: float = 0.0,
+                          merge_overlap_h: float = 48.0) -> list:
     """Run the TC-ATLAS density-peak algorithm on the full uncapped
     CSV parse (dict keyed by DM track_id). Returns a list of cluster
     dicts ranked by size (largest first → 'Disturbance 1').
@@ -9003,6 +9229,11 @@ def _tca_compute_clusters(raw_data: dict,
             "contrib_track_ids": contrib_track_ids,
             "capped_total": len(cluster),
         })
+    # Optional Step 7: merge same-system fragments split along the
+    # genesis-timing axis (opt-in via merge_km > 0; see merge-pass docs).
+    if merge_km and merge_km > 0 and len(out) > 1:
+        out = _tca_merge_pass(out, merge_km, merge_overlap_h, ensemble_size)
+
     # Sort by formation prob desc → D1 is largest. Re-label after sort.
     out.sort(key=lambda c: -c["n_members_total"])
     for idx, c in enumerate(out):
@@ -9011,11 +9242,28 @@ def _tca_compute_clusters(raw_data: dict,
     return out
 
 
+def _tca_params_tuple(grid_deg, peak_min_members, assign_radius_km,
+                      time_window_h, cluster_min_members, same_system_km,
+                      merge_km=_TCA_MERGE_DEFAULT_KM, merge_overlap_h=48.0):
+    """Rounded cache-key tuple. The merge params are appended ONLY when
+    the merge pass is enabled (merge_km > 0): merge-off requests keep the
+    classic 6-tuple keys (memory + GCS), and merge-on requests get their
+    own 8-tuple keys — the two never collide."""
+    params = (round(grid_deg, 3), int(peak_min_members),
+              round(assign_radius_km, 2), round(time_window_h, 2),
+              int(cluster_min_members), round(same_system_km, 2))
+    if merge_km and merge_km > 0:
+        params = params + (round(merge_km, 1), round(merge_overlap_h, 1))
+    return params
+
+
 def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
                                   assign_radius_km, time_window_h,
                                   cluster_min_members, same_system_km=500.0,
                                   variant=_GENESIS_VARIANT_DEFAULT,
-                                  init_time=None):
+                                  init_time=None,
+                                  merge_km=_TCA_MERGE_DEFAULT_KM,
+                                  merge_overlap_h=48.0):
     """Return cached (full, with members) clusters for a cycle + params +
     ensemble variant, computing on miss. Used by both the index endpoint
     (which strips members for the response) and the per-cluster detail
@@ -9038,9 +9286,9 @@ def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
     if data is None:
         return None, None, None, None
     init_time = used_date.replace("-", "") + used_hour
-    params = (round(grid_deg, 3), int(peak_min_members),
-              round(assign_radius_km, 2), round(time_window_h, 2),
-              int(cluster_min_members), round(same_system_km, 2))
+    params = _tca_params_tuple(grid_deg, peak_min_members, assign_radius_km,
+                               time_window_h, cluster_min_members,
+                               same_system_km, merge_km, merge_overlap_h)
     clusters = _tca_clusters_cached(init_time, variant_n, params, data)
     return init_time, params, clusters, (used_date, used_hour)
 
@@ -9048,7 +9296,9 @@ def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
 def _tca_clusters_for_cycle(date_str, hour_str, grid_deg, peak_min_members,
                             assign_radius_km, time_window_h,
                             cluster_min_members, same_system_km=500.0,
-                            variant=_GENESIS_VARIANT_DEFAULT):
+                            variant=_GENESIS_VARIANT_DEFAULT,
+                            merge_km=_TCA_MERGE_DEFAULT_KM,
+                            merge_overlap_h=48.0):
     """Like `_tca_get_or_compute_clusters` but for a SPECIFIC (already-
     resolved) cycle rather than 'the latest'. Shares the same
     `_TCA_CLUSTER_CACHE` so the run-to-run trend endpoint reuses the
@@ -9060,9 +9310,9 @@ def _tca_clusters_for_cycle(date_str, hour_str, grid_deg, peak_min_members,
     if data is None:
         return None
     init_time = date_str.replace("-", "") + hour_str
-    params = (round(grid_deg, 3), int(peak_min_members),
-              round(assign_radius_km, 2), round(time_window_h, 2),
-              int(cluster_min_members), round(same_system_km, 2))
+    params = _tca_params_tuple(grid_deg, peak_min_members, assign_radius_km,
+                               time_window_h, cluster_min_members,
+                               same_system_km, merge_km, merge_overlap_h)
     return _tca_clusters_cached(init_time, variant_n, params, data)
 
 
@@ -9087,6 +9337,9 @@ def _tca_cluster_index_view(c):
         "contrib_track_ids": c["contrib_track_ids"],
         "capped_total": c["capped_total"],
         "ensemble_mean": c["ensemble_mean"],
+        # Present only on clusters produced by the merge pass: the
+        # constituent fragments' peak/timing info (genesis-timing modes).
+        "merged_from": c.get("merged_from"),
         # Sample keys only — lets the frontend show unique counts and
         # display "X members" without the multi-MB trajectory blob.
         "sample_keys": list((c.get("members") or {}).keys()),
@@ -9103,6 +9356,8 @@ def get_weatherlab_genesis_clusters(
     same_system_km: float = 500.0,
     variant: str = _GENESIS_VARIANT_DEFAULT,
     init_time: str = None,
+    merge_km: float = _TCA_MERGE_DEFAULT_KM,
+    merge_overlap_h: float = 48.0,
 ):
     """Precomputed TC-ATLAS density-peak cluster INDEX — lightweight
     cluster metadata + ensemble_mean polylines, no per-member trajectories.
@@ -9118,7 +9373,8 @@ def get_weatherlab_genesis_clusters(
     init_time, params, clusters, dh = _tca_get_or_compute_clusters(
         grid_deg, peak_min_members, assign_radius_km,
         time_window_h, cluster_min_members, same_system_km,
-        variant=variant_n, init_time=init_time)
+        variant=variant_n, init_time=init_time,
+        merge_km=merge_km, merge_overlap_h=merge_overlap_h)
     if clusters is None:
         next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=None)
         return JSONResponse(
@@ -9155,6 +9411,8 @@ def get_weatherlab_genesis_clusters(
                 "time_window_h": params[3],
                 "cluster_min_members": params[4],
                 "same_system_km": params[5],
+                "merge_km": params[6] if len(params) > 6 else 0,
+                "merge_overlap_h": params[7] if len(params) > 7 else 48,
             },
             "clusters": [_tca_cluster_index_view(c) for c in clusters],
             "n_clusters": len(clusters),
@@ -9178,6 +9436,8 @@ def get_weatherlab_genesis_cluster(
     same_system_km: float = 500.0,
     variant: str = _GENESIS_VARIANT_DEFAULT,
     init_time: str = None,
+    merge_km: float = _TCA_MERGE_DEFAULT_KM,
+    merge_overlap_h: float = 48.0,
 ):
     """Full per-member trajectories for one TC-ATLAS cluster (tca-N).
     Lazy-loaded by the detail modal when the user clicks a disturbance.
@@ -9188,7 +9448,8 @@ def get_weatherlab_genesis_cluster(
     init_time, params, clusters, dh = _tca_get_or_compute_clusters(
         grid_deg, peak_min_members, assign_radius_km,
         time_window_h, cluster_min_members, same_system_km,
-        variant=variant_n, init_time=init_time)
+        variant=variant_n, init_time=init_time,
+        merge_km=merge_km, merge_overlap_h=merge_overlap_h)
     if clusters is None:
         raise HTTPException(status_code=404, detail="No cycle data available")
     match = next((c for c in clusters if c["track_id"] == tca_id), None)

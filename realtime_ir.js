@@ -9,6 +9,16 @@
 
     // ── Config ──────────────────────────────────────────────────
     var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
+    // Local-dev only: when the page itself is served from localhost,
+    // `?api=http://localhost:8081` points all fetches at a locally-run
+    // API so server-side changes can be A/B'd before deploy. No-op in
+    // production (page is never served from localhost there).
+    if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+        try {
+            var _apiOverride = new URLSearchParams(location.search).get('api');
+            if (_apiOverride) API_BASE = _apiOverride;
+        } catch (e) { /* old browser without URLSearchParams — keep default */ }
+    }
     var POLL_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
     var DEFAULT_LOOKBACK_HOURS = 6;
     var DEFAULT_RADIUS_DEG = 10.0;
@@ -742,6 +752,17 @@
     // and leaves genuinely distinct nearby systems separate. Raise via the
     // tuner if split single systems still show as two disturbances.
     var _GENESIS_SAME_SYSTEM_KM     = 500;
+    // Valid-time fragment merge (server-side post-pass). A single system
+    // with genesis-TIMING uncertainty shows up as several clusters strung
+    // along its track (late developers form farther downstream); fragments
+    // are detected because their mean tracks travel together at shared
+    // lead times (== valid times), confirmed by a member-level separation
+    // check server-side. 450 km is the calibrated default (matches the
+    // server's _TCA_MERGE_DEFAULT_KM — keep in sync so the steady-state
+    // request hits the prewarmed cache key); 0 disables the pass.
+    // Server-side only — the brief client-side fallback render that shows
+    // while the server fetch is in flight does not merge.
+    var _GENESIS_MERGE_KM           = 450;
     // _GENESIS_CLUSTER_MIN_MEMBERS already defined above.
     var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.12)';  // very soft so heatmap dominates
     var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
@@ -10668,6 +10689,7 @@
             time_window_h: _GENESIS_TIME_WINDOW_H,
             cluster_min_members: _GENESIS_CLUSTER_MIN_MEMBERS,
             same_system_km: _GENESIS_SAME_SYSTEM_KM,
+            merge_km: _GENESIS_MERGE_KM,
         };
     }
 
@@ -10679,7 +10701,8 @@
             && pcParams.assign_radius_km === cur.assign_radius_km
             && pcParams.time_window_h === cur.time_window_h
             && pcParams.cluster_min_members === cur.cluster_min_members
-            && pcParams.same_system_km === cur.same_system_km;
+            && pcParams.same_system_km === cur.same_system_km
+            && (pcParams.merge_km || 0) === (cur.merge_km || 0);
     }
 
     // Convert one server-side cluster object into the disturbance shape
@@ -16786,6 +16809,15 @@
                 +   '<input type="range" min="0" max="1500" step="50" '
                 +     'value="' + _GENESIS_SAME_SYSTEM_KM + '">'
                 + '</div>'
+                + '<div class="ir-tuner-row" data-key="mergekm">'
+                +   '<label>Fragment merge'
+                +     '<span class="ir-tuner-val">'
+                +       (_GENESIS_MERGE_KM > 0 ? _GENESIS_MERGE_KM + ' km' : 'off')
+                +     '</span>'
+                +   '</label>'
+                +   '<input type="range" min="0" max="800" step="50" '
+                +     'value="' + _GENESIS_MERGE_KM + '">'
+                + '</div>'
                 + '<div class="ir-tuner-footer">'
                 +   '<button type="button" class="ir-tuner-reset" '
                 +     'title="Restore default values">Reset</button>'
@@ -17027,6 +17059,9 @@
                     } else if (key === 'samesys') {
                         _GENESIS_SAME_SYSTEM_KM = v;
                         valEl.textContent = v + ' km';
+                    } else if (key === 'mergekm') {
+                        _GENESIS_MERGE_KM = v;
+                        valEl.textContent = v > 0 ? v + ' km' : 'off';
                     }
                     // Params changed → invalidate cache and re-fetch
                     // server-side clusters; render falls back to the
@@ -17049,6 +17084,7 @@
                 _GENESIS_TIME_WINDOW_H       = 60;
                 _GENESIS_CLUSTER_MIN_MEMBERS = 25;
                 _GENESIS_SAME_SYSTEM_KM      = 500;
+                _GENESIS_MERGE_KM            = 450;
                 _rtGenesisClusters = null;
                 _loadGenesisClusters();
                 _genesisReRender();
