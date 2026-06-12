@@ -1854,7 +1854,7 @@ function _phaseOnDay(modeRec, dayKey) {
 // network outage). GCS file always has at least as much data as the
 // bundled one, so prefer it.
 var _SUBSEASONAL_INDICES_GCS = (
-    'https://storage.googleapis.com/tc-atlas-ir-cache/subseasonal/indices/latest.json'
+    'https://cdn.tcatlas.org/subseasonal/indices/latest.json'   // R2 (Phase 2a)
 );
 
 function _loadSubPhases() {

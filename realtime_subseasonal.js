@@ -18,7 +18,7 @@
     'use strict';
 
     var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
-    var GCS_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/subseasonal';
+    var GCS_BASE = 'https://cdn.tcatlas.org/subseasonal';   // R2 (Phase 2a); kept fresh by tc-atlas-r2-mirror job
     var INDICES_URL = GCS_BASE + '/indices/latest.json';
     var INDICES_FALLBACK = 'data/subseasonal_phases.json';
 

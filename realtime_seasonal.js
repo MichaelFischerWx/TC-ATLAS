@@ -49,7 +49,7 @@
         return Plotly.react(el, traces, a[0], a[1]);
     }
 
-    var GCS_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/seasonal';
+    var GCS_BASE = 'https://cdn.tcatlas.org/seasonal';   // R2 (Phase 2a); kept fresh by tc-atlas-r2-mirror job
     var LOCAL_BASE = 'data/seasonal';
     // Same hostname realtime_ir.js uses for /ir-monitor/* endpoints; we
     // call /seasonal/daily off it for the Daily Panel B view.
@@ -4020,7 +4020,7 @@
     // swap is performed (era5_daily → era5_daily_legacy, era5_daily_1deg
     // → era5_daily), both URLs collapse onto the same prefix and the
     // fallback is a no-op.
-    var EVO_ARCHIVE_BASE_NEW    = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_daily_1deg';
+    var EVO_ARCHIVE_BASE_NEW    = 'https://cdn.tcatlas.org/era5_daily_1deg';   // R2 (Phase 2a)
     var EVO_ARCHIVE_BASE_LEGACY = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_daily';
     // 0.25° native archive — opt-in via the HD toggle. Tiles here are
     // ~70× the byte count of the 1° decimated tiles per month, so HD
@@ -4028,7 +4028,7 @@
     // viewport crop (see _evoSrcConfig / _evoDecodeTile).
     var EVO_ARCHIVE_BASE_HD     = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_daily_00z';
     var EVO_ARCHIVE_BASE = EVO_ARCHIVE_BASE_LEGACY;   // legacy alias kept for the existing module
-    var EVO_CLIMO_BASE   = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_climo';
+    var EVO_CLIMO_BASE   = 'https://cdn.tcatlas.org/era5_climo';   // R2 (Phase 2a)
     // EVO_GRID_NY / NX / LATS / LONS describe the DECODED grid (after
     // viewport cropping in HD mode) — they're recomputed every
     // _evoRender() based on resolution + basin. The 1° defaults below
@@ -4790,7 +4790,7 @@
             // → χ_m → VI → cubic-vPI per their Eq. 4 with VI_max = 0.145)
             // and uploaded to gs://tc-atlas-ir-cache/era5_monthly_vpi/
             // in GC-ATLAS-compatible f16-gz tile format.
-            customBase: 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_monthly_vpi',
+            customBase: 'https://cdn.tcatlas.org/era5_monthly_vpi',   // R2 (Phase 2a)
             group: 'vpi', name: 'vpi', level: null,
             label: 'Ventilated PI', units: 'm s⁻¹',
             // vPI ≤ PI by construction. Atlantic MDR climo peaks
@@ -8570,7 +8570,7 @@
     //    backfill (build_era5_daily_archive.py) has completed. Before
     //    they exist we render a graceful "pending" placeholder so the
     //    panel is honest about the data-source state.
-    var ERA5_CLIMO_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_climo';
+    var ERA5_CLIMO_BASE = 'https://cdn.tcatlas.org/era5_climo';   // R2 (Phase 2a)
     var _shearClimoManifestPromise = null;
     function _loadShearClimoManifest() {
         if (state.shearClimoManifest) return Promise.resolve(state.shearClimoManifest);
