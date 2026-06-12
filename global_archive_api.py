@@ -37,7 +37,7 @@ from functools import lru_cache
 import numpy as np
 import requests
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from PIL import Image
 
 from tc_center_fix import find_ir_center, apply_center_gates
@@ -142,6 +142,90 @@ def _gcs_put_frame(sid: str, frame_idx: int, result: dict, source: str = "ir"):
             logger.debug(f"GCS cache PUT failed: {key}: {e}")
 
     threading.Thread(target=_upload, daemon=True).start()
+
+
+# ── Cloudflare R2 public mirror (zero-egress serving via cdn.tcatlas.org) ──
+# Rendered frames are immutable per (version, sid, frame_idx). We mirror each
+# to R2 as a PUBLIC json object (the GCS copy stays private as the render
+# cache) and 302-redirect the browser there, so the ~150 KB/frame payload is
+# served straight from object storage instead of streaming through Cloud Run
+# (this endpoint was ~10% of Cloud Run egress). The frontend's
+# fetch().then(r => r.json()) follows the 302 transparently — no frontend change.
+_R2_ENDPOINT_URL = os.environ.get("R2_ENDPOINT_URL", "").rstrip("/")
+_R2_BUCKET = os.environ.get("R2_BUCKET", "")
+# Served from R2 ONLY (no public GCS copy), so the public base is always the R2
+# custom domain — independent of the RT-bundle PUBLIC_BUNDLE_BASE cutover flag.
+_R2_PUBLIC_BASE = os.environ.get("R2_PUBLIC_BASE", "https://cdn.tcatlas.org").rstrip("/")
+_r2_client = None
+_r2_client_init = False
+
+
+def _get_r2_client():
+    """Lazy S3-compatible client for Cloudflare R2. None when unconfigured —
+    callers then fall back to streaming JSON, so an absent client never breaks."""
+    global _r2_client, _r2_client_init
+    if _r2_client_init:
+        return _r2_client
+    _r2_client_init = True
+    ak = os.environ.get("R2_ACCESS_KEY_ID", "")
+    sk = os.environ.get("R2_SECRET_ACCESS_KEY", "")
+    if not (_R2_ENDPOINT_URL and _R2_BUCKET and ak and sk):
+        return None
+    try:
+        import boto3
+        from botocore.config import Config as _BotoConfig
+        _r2_client = boto3.client(
+            "s3", endpoint_url=_R2_ENDPOINT_URL,
+            aws_access_key_id=ak, aws_secret_access_key=sk,
+            region_name="auto",
+            config=_BotoConfig(signature_version="s3v4",
+                               connect_timeout=3, read_timeout=5,
+                               retries={"max_attempts": 2, "mode": "standard"}),
+        )
+    except Exception as e:
+        logger.warning(f"R2 client init failed: {e}")
+        _r2_client = None
+    return _r2_client
+
+
+def _public_frame_url(key: str) -> str:
+    return f"{_R2_PUBLIC_BASE}/{key}"
+
+
+def _r2_frame_exists(key: str) -> bool:
+    """HEAD the R2 object: True → caller 302s to it (cheap Class-B op vs.
+    streaming the frame). False on any error → fall through to render/stream."""
+    client = _get_r2_client()
+    if client is None:
+        return False
+    try:
+        client.head_object(Bucket=_R2_BUCKET, Key=key)
+        return True
+    except Exception:
+        return False
+
+
+def _r2_mirror_frame_async(key: str, result: dict):
+    """Fire-and-forget upload of a rendered frame to R2 as a public json object
+    so the NEXT request 302s straight to cdn.tcatlas.org. Only called when the
+    R2 fast-path missed; never blocks the response."""
+    client = _get_r2_client()
+    if client is None:
+        return
+
+    def _upload():
+        try:
+            client.put_object(
+                Bucket=_R2_BUCKET, Key=key,
+                Body=json.dumps(result, separators=(",", ":")).encode("utf-8"),
+                ContentType="application/json",
+                CacheControl="public, max-age=86400, immutable",
+            )
+        except Exception as e:
+            logger.debug(f"R2 frame mirror failed: {key}: {e}")
+
+    threading.Thread(target=_upload, daemon=True).start()
+
 
 router = APIRouter(tags=["global_archive"])
 
@@ -2194,6 +2278,19 @@ def ir_frame(
     Auto-selects source (MergIR/GridSat/HURSAT) based on cached metadata.
     """
     cache_key = (f"ir_{sid}", frame_idx)
+    r2_key = _gcs_cache_key(sid, frame_idx, source="ir")
+
+    # R2 fast path: this immutable frame is already mirrored to R2 → 302 the
+    # browser straight to cdn.tcatlas.org. Zero compute, no Cloud Run egress —
+    # this is the common case (repeat hits of historical frames). NOTE: once a
+    # frame is on R2 it skips the in-memory/GCS paths below, so opportunistic
+    # _maybe_heal_frame healing runs only on the FIRST access (acceptable —
+    # healing is a one-shot quality upgrade; bump _GCS_CACHE_VERSION to redo).
+    if _r2_frame_exists(r2_key):
+        return RedirectResponse(
+            _public_frame_url(r2_key), status_code=302,
+            headers={"Cache-Control": "no-store"},
+        )
 
     # Check in-memory frame cache
     if cache_key in _frame_cache:
@@ -2201,6 +2298,8 @@ def ir_frame(
         cached = _frame_cache[cache_key]
         # Opportunistically heal fallback frames in the background
         _maybe_heal_frame(sid, frame_idx, cached)
+        # Mirror to R2 so subsequent requests 302 (no Cloud Run egress)
+        _r2_mirror_frame_async(r2_key, cached)
         return JSONResponse(
             cached,
             headers={"Cache-Control": "public, max-age=86400, s-maxage=604800, immutable", "X-Cache": "HIT"},
@@ -2215,6 +2314,8 @@ def ir_frame(
             _frame_cache.popitem(last=False)
         # Opportunistically heal fallback frames in the background
         _maybe_heal_frame(sid, frame_idx, gcs_result)
+        # Mirror to R2 so subsequent requests 302 (no Cloud Run egress)
+        _r2_mirror_frame_async(r2_key, gcs_result)
         return JSONResponse(
             gcs_result,
             headers={"Cache-Control": "public, max-age=86400, s-maxage=604800, immutable", "X-Cache": "GCS-HIT"},
@@ -2377,6 +2478,8 @@ def ir_frame(
         _frame_cache.popitem(last=False)
         gc.collect()
     _gcs_put_frame(sid, frame_idx, result, source="ir")
+    # Mirror to R2 so subsequent requests 302 to cdn.tcatlas.org (off Cloud Run)
+    _r2_mirror_frame_async(r2_key, result)
 
     return JSONResponse(
         result,
