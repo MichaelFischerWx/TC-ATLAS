@@ -176,7 +176,7 @@ done
 # Build the secrets list dynamically so a missing (optional) Space-Track
 # pair doesn't break the deploy — referencing a nonexistent secret in
 # --set-secrets fails the whole command.
-SECRETS="PPS_USER=pps-user:latest,PPS_PASS=pps-pass:latest"
+SECRETS="PPS_USER=pps-user:latest,PPS_PASS=pps-pass:latest,R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
 if [ "${HAVE_SPACETRACK}" = "1" ]; then
     SECRETS="${SECRETS},SPACETRACK_USER=space-track-user:latest,SPACETRACK_PASS=space-track-pass:latest"
 fi
@@ -194,7 +194,7 @@ if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; 
         --cpu 1 \
         --max-retries 1 \
         --task-timeout 3600 \
-        --set-env-vars "GCS_MW_BUCKET=${BUCKET}" \
+        --set-env-vars "^||^GCS_MW_BUCKET=${BUCKET}||R2_ENDPOINT_URL=${R2_ENDPOINT_URL:-https://4f3e5ab095ae4962e91af5b33c6deb54.r2.cloudflarestorage.com}||R2_BUCKET=${R2_MW_BUCKET:-tc-atlas-rt}" \
         --set-secrets "${SECRETS}"
 else
     gcloud run jobs create "${JOB_NAME}" \
@@ -204,7 +204,7 @@ else
         --cpu 1 \
         --max-retries 1 \
         --task-timeout 3600 \
-        --set-env-vars "GCS_MW_BUCKET=${BUCKET}" \
+        --set-env-vars "^||^GCS_MW_BUCKET=${BUCKET}||R2_ENDPOINT_URL=${R2_ENDPOINT_URL:-https://4f3e5ab095ae4962e91af5b33c6deb54.r2.cloudflarestorage.com}||R2_BUCKET=${R2_MW_BUCKET:-tc-atlas-rt}" \
         --set-secrets "${SECRETS}"
 fi
 

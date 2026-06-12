@@ -210,6 +210,76 @@ def _get_rt_gcs_bucket():
     except Exception:
         return None
 
+# ── Cloudflare R2 public mirror (zero-egress CDN via cdn.tcatlas.org) ──
+# Public bundles are DUAL-WRITTEN to GCS (unchanged) and R2 (below). Which
+# host the frontend + 302-redirects actually hand out is controlled by
+# PUBLIC_BUNDLE_BASE:
+#   - empty → keep serving from GCS (storage.googleapis.com)  [dual-write phase]
+#   - set   → serve from R2's custom domain (https://cdn.tcatlas.org)
+# Cutover AND rollback = flipping PUBLIC_BUNDLE_BASE (which also flips the
+# "base" field written into rt-version.json that the frontend reads). No code
+# change, no frontend redeploy. R2 object keys are byte-identical to GCS keys.
+_R2_ENDPOINT_URL = os.environ.get("R2_ENDPOINT_URL", "").rstrip("/")
+_R2_BUCKET = os.environ.get("R2_BUCKET", "")
+_PUBLIC_BUNDLE_BASE = os.environ.get("PUBLIC_BUNDLE_BASE", "").rstrip("/")
+_r2_client = None
+_r2_client_init = False
+
+def _get_r2_client():
+    """Lazy S3-compatible client for Cloudflare R2. Returns None (callers
+    then no-op) when R2 is unconfigured or boto3/creds are missing — the GCS
+    write always still happens, so an absent R2 client never breaks serving."""
+    global _r2_client, _r2_client_init
+    if _r2_client_init:
+        return _r2_client
+    _r2_client_init = True
+    ak = os.environ.get("R2_ACCESS_KEY_ID", "")
+    sk = os.environ.get("R2_SECRET_ACCESS_KEY", "")
+    if not (_R2_ENDPOINT_URL and _R2_BUCKET and ak and sk):
+        return None
+    try:
+        import boto3
+        from botocore.config import Config as _BotoConfig
+        _r2_client = boto3.client(
+            "s3",
+            endpoint_url=_R2_ENDPOINT_URL,
+            aws_access_key_id=ak,
+            aws_secret_access_key=sk,
+            region_name="auto",
+            config=_BotoConfig(
+                signature_version="s3v4",
+                connect_timeout=3, read_timeout=5,
+                retries={"max_attempts": 2, "mode": "standard"},
+            ),
+        )
+    except Exception as ex:
+        print(f"[R2] client init failed: {ex}")
+        _r2_client = None
+    return _r2_client
+
+
+def _r2_put_public(key: str, body: bytes, content_type: str,
+                   cache_control: str, content_encoding: str | None = None):
+    """Best-effort mirror of one public object to R2. Synchronous with bounded
+    timeouts: synchronous so the prewarm Job actually populates R2 before the
+    process exits (a daemon-thread fire-and-forget would race the exit); the
+    short connect/read timeouts cap worst-case added latency on the on-demand
+    request path. Never raises — GCS is the source of truth during dual-write,
+    and the 302 still targets GCS until PUBLIC_BUNDLE_BASE is set."""
+    client = _get_r2_client()
+    if client is None:
+        return
+    try:
+        kwargs = {
+            "Bucket": _R2_BUCKET, "Key": key, "Body": body,
+            "ContentType": content_type, "CacheControl": cache_control,
+        }
+        if content_encoding:
+            kwargs["ContentEncoding"] = content_encoding
+        client.put_object(**kwargs)
+    except Exception as ex:
+        print(f"[R2] put {key} failed: {ex}")
+
 def _pos_key(lat: float, lon: float, radius_deg: float = 10.0) -> str:
     """Cache-key fragment encoding (lat, lon, radius) for raw Tb frames.
 
@@ -541,23 +611,32 @@ def _upload_public_bundle(key: str, body: bytes, content_type: str = "applicatio
     WebP/JPEG/PNG are already entropy-coded and gzipping them wastes
     CPU for ~2-5% gain.
     """
+    # Gzip ONCE up front so the GCS and R2 copies are byte-identical (lets us
+    # byte-compare the two during the dual-write validation window).
+    if gzip_content:
+        import gzip as _gz
+        body = _gz.compress(body, compresslevel=6)
+    content_encoding = "gzip" if gzip_content else None
+    cache_control = "public, max-age=300"
+
     bucket = _get_rt_gcs_bucket()
-    if bucket is None:
-        return
-    try:
-        if gzip_content:
-            import gzip as _gz
-            body = _gz.compress(body, compresslevel=6)
-        blob = bucket.blob(key)
-        blob.cache_control = "public, max-age=300"
-        if gzip_content:
-            blob.content_encoding = "gzip"
-        blob.upload_from_string(
-            body, content_type=content_type,
-            predefined_acl="publicRead", timeout=30,
-        )
-    except Exception as ex:
-        print(f"[Bundle Pre-build] upload {key} failed: {ex}")
+    if bucket is not None:
+        try:
+            blob = bucket.blob(key)
+            blob.cache_control = cache_control
+            if content_encoding:
+                blob.content_encoding = content_encoding
+            blob.upload_from_string(
+                body, content_type=content_type,
+                predefined_acl="publicRead", timeout=30,
+            )
+        except Exception as ex:
+            print(f"[Bundle Pre-build] GCS upload {key} failed: {ex}")
+
+    # Dual-write the SAME bytes to R2 (zero-egress public mirror). No-op until
+    # R2 is configured; never blocks correctness (GCS stays source of truth and
+    # the 302 targets GCS until PUBLIC_BUNDLE_BASE is set).
+    _r2_put_public(key, body, content_type, cache_control, content_encoding)
 
 
 def _ondemand_bundle_key(product: str, atcf_upper: str,
@@ -586,10 +665,12 @@ def _ondemand_bundle_key(product: str, atcf_upper: str,
 
 
 def _public_bundle_url(key: str) -> str:
-    """Public storage.googleapis.com URL for a publicRead bucket object.
-
-    Mirrors the frontend's _GCS_BUCKET_ROOT construction in realtime_ir.js
-    (`https://storage.googleapis.com/{bucket}/{key}`)."""
+    """Public URL for a publicRead bundle object. Honors PUBLIC_BUNDLE_BASE
+    (R2 custom domain, e.g. https://cdn.tcatlas.org) once cutover is flipped;
+    otherwise the GCS storage.googleapis.com URL. R2 keys == GCS keys, so only
+    the host root changes. Mirrors the frontend's _RT_BUNDLE_ROOT logic."""
+    if _PUBLIC_BUNDLE_BASE:
+        return f"{_PUBLIC_BUNDLE_BASE}/{key}"
     return f"https://storage.googleapis.com/{_GCS_IR_CACHE_BUCKET}/{key}"
 
 
@@ -604,10 +685,15 @@ def _gcs_rt_version_put():
     if bucket is None:
         return
     try:
+        payload = {"version": _GCS_RT_VERSION}
+        # When set, tells the frontend to fetch bundles from the R2 CDN root
+        # instead of GCS. Absent/empty → frontend keeps its GCS default.
+        if _PUBLIC_BUNDLE_BASE:
+            payload["base"] = _PUBLIC_BUNDLE_BASE
         blob = bucket.blob("rt-version.json")
         blob.cache_control = "public, max-age=120"
         blob.upload_from_string(
-            json.dumps({"version": _GCS_RT_VERSION}),
+            json.dumps(payload),
             content_type="application/json",
             predefined_acl="publicRead", timeout=15,
         )

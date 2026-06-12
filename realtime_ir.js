@@ -4474,8 +4474,12 @@
     // each prewarm cycle by the backend), falling back to this pinned
     // default so a failed/blocked fetch still works for the current build.
     var _GCS_BUCKET_ROOT = 'https://storage.googleapis.com/tc-atlas-ir-cache';
-    var _RT_BUNDLE_VERSION = 'rt-v11';   // fallback; _loadBundleVersion() may update
-    var _GCS_BUNDLE_BASE = _GCS_BUCKET_ROOT + '/' + _RT_BUNDLE_VERSION + '/bundles';
+    // Bundle host root. Defaults to GCS; rt-version.json's "base" field may
+    // override it to the Cloudflare R2 CDN (cdn.tcatlas.org) at runtime, so
+    // cutover/rollback needs no frontend redeploy. R2 keys == GCS keys.
+    var _RT_BUNDLE_ROOT = _GCS_BUCKET_ROOT;
+    var _RT_BUNDLE_VERSION = 'rt-v12';   // fallback; _loadBundleVersion() may update
+    var _GCS_BUNDLE_BASE = _RT_BUNDLE_ROOT + '/' + _RT_BUNDLE_VERSION + '/bundles';
     function _gcsFramesBundleUrl(atcfId) {
         return _GCS_BUNDLE_BASE + '/frames/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin';
     }
@@ -4494,8 +4498,9 @@
      *  old-prefix bundle. Best-effort: on any failure we keep the pinned
      *  _RT_BUNDLE_VERSION fallback. The fetched value is strictly
      *  validated (^rt-v<digits>$) before use so a corrupted/poisoned file
-     *  can't redirect bundle fetches to an arbitrary path. Host is fixed
-     *  (_GCS_BUCKET_ROOT) — only the version segment is dynamic. Returns a
+     *  can't redirect bundle fetches to an arbitrary path. The optional
+     *  "base" field (R2 CDN root) is matched against a strict host allowlist
+     *  for the same reason — only our two known roots are accepted. Returns a
      *  promise that always resolves (never rejects) so init() can await it
      *  without a guard. */
     function _loadBundleVersion() {
@@ -4503,11 +4508,19 @@
         return fetch(url, { cache: 'no-store' })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
-                var v = j && j.version;
+                if (!j) return;
+                // Optional public bundle root (Cloudflare R2). Strict allowlist
+                // so a poisoned file can't point fetches at an arbitrary host.
+                var b = j.base;
+                if (typeof b === 'string' &&
+                    /^https:\/\/(cdn\.tcatlas\.org|storage\.googleapis\.com\/tc-atlas-ir-cache)$/.test(b)) {
+                    _RT_BUNDLE_ROOT = b;
+                }
+                var v = j.version;
                 if (typeof v === 'string' && /^rt-v\d+$/.test(v)) {
                     _RT_BUNDLE_VERSION = v;
-                    _GCS_BUNDLE_BASE = _GCS_BUCKET_ROOT + '/' + v + '/bundles';
                 }
+                _GCS_BUNDLE_BASE = _RT_BUNDLE_ROOT + '/' + _RT_BUNDLE_VERSION + '/bundles';
             })
             .catch(function () { /* keep pinned fallback */ });
     }

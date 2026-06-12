@@ -72,6 +72,9 @@ fi
 # secretAccessor on both. Non-secret config stays as plain env vars.
 JOB_ENV="GCS_IR_CACHE_BUCKET=${BUCKET}"
 JOB_ENV="${JOB_ENV},AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}"
+JOB_ENV="${JOB_ENV},R2_ENDPOINT_URL=${R2_ENDPOINT_URL:-https://4f3e5ab095ae4962e91af5b33c6deb54.r2.cloudflarestorage.com}"
+JOB_ENV="${JOB_ENV},R2_BUCKET=${R2_BUCKET:-tc-atlas-rt}"
+JOB_ENV="${JOB_ENV},PUBLIC_BUNDLE_BASE=${PUBLIC_BUNDLE_BASE:-}"
 [[ -n "${TC_RADAR_S3_BUCKET:-}" ]]    && JOB_ENV="${JOB_ENV},TC_RADAR_S3_BUCKET=${TC_RADAR_S3_BUCKET}"
 # This Job IS the prewarm worker — it calls run_prewarm_cycle() directly and
 # never serves loop requests, so the in-process _ir_frame_cache warming (Phase
@@ -99,7 +102,7 @@ COMMON_ARGS=(
     --max-retries 1
     --task-timeout 900
     --set-env-vars "${JOB_ENV}"
-    --set-secrets "AWS_ACCESS_KEY_ID=aws-access-key-id:latest,AWS_SECRET_ACCESS_KEY=aws-secret-access-key:latest"
+    --set-secrets "AWS_ACCESS_KEY_ID=aws-access-key-id:latest,AWS_SECRET_ACCESS_KEY=aws-secret-access-key:latest,R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
 )
 if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; then
     gcloud run jobs update "${JOB_NAME}" "${COMMON_ARGS[@]}"
