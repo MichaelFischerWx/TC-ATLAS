@@ -5246,6 +5246,197 @@ def get_storm_band_raw_frame(
     )
 
 
+def _fetch_one_band_raw_for_bundle(band: int, atcf_id: str, storm: dict,
+                                   target_dt, radius_deg: float) -> dict:
+    """Fetch ONE band's raw uint8 frame for the band-raw bundle. Cache-first
+    (_gcs_band_get), else satellite fetch + encode + cache — the exact logic
+    of get_storm_band_raw_frame, factored out so the bundle packs from the
+    same GCS cache (matching cache keys → warm hits). Uses the storm's current
+    center for every frame (NOT per-frame interpolation), matching the per-
+    frame endpoint so both stores stay in sync. Returns the frame dict
+    (tb_data base64, tb_rows/cols, tb_vmin/vmax, data_type, datetime_utc,
+    satellite, bounds) or raises."""
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    box_deg = radius_deg * 2
+    dt_str = target_dt.strftime("%Y%m%d%H%M")
+    half = box_deg / 2.0
+
+    cached = _gcs_band_get(band, atcf_id.upper(), dt_str, lat=center_lat, lon=center_lon)
+    if cached is not None:
+        return cached
+
+    if not _raw_fetch_semaphore.acquire(timeout=60):
+        raise HTTPException(status_code=503, detail="Server busy — please retry shortly")
+    try:
+        raw = fetch_band_raw(center_lat, center_lon, target_dt, box_deg, band=band,
+                             max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
+        if not raw or raw.get("data") is None:
+            raise HTTPException(status_code=502, detail=f"No Band {band} data")
+        data = raw["data"]
+        data_type = raw["data_type"]
+        band_info = BAND_RANGES.get(band, BAND_RANGES[13])
+        vmin, vmax = band_info["vmin"], band_info["vmax"]
+        arr = np.asarray(data, dtype=np.float32)
+        mask = ~np.isfinite(arr) | (arr < vmin * 0.5 if data_type == "tb" else arr < -0.01)
+        scale = 254.0 / (vmax - vmin)
+        scaled = np.clip((arr - vmin) * scale + 1, 1, 255)
+        scaled[mask] = 0
+        encoded = scaled.astype(np.uint8)
+        del data, arr, mask, scaled
+        gc.collect()
+    finally:
+        _raw_fetch_semaphore.release()
+
+    frame_result = {
+        "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
+        "tb_rows": encoded.shape[0],
+        "tb_cols": encoded.shape[1],
+        "tb_vmin": vmin,
+        "tb_vmax": vmax,
+        "band": band,
+        "data_type": data_type,
+        "datetime_utc": raw["datetime_utc"],
+        "satellite": raw.get("satellite", ""),
+        "bounds": raw.get("bounds", [
+            [center_lat - half, center_lon - half],
+            [center_lat + half, center_lon + half],
+        ]),
+    }
+    _gcs_band_put(band, atcf_id.upper(), dt_str, frame_result, lat=center_lat, lon=center_lon)
+    del encoded
+    return frame_result
+
+
+@router.get("/storm/{atcf_id}/band-raw-bundle")
+def get_storm_band_raw_bundle(
+    request: Request,
+    atcf_id: str,
+    band: int = Query(8, ge=1, le=16, description="ABI band number (2=Vis, 8=WV, 13=IR)"),
+    lookback_hours: float = Query(6.0, ge=1, le=24),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0),
+    interval_min: int = Query(30, ge=10, le=60),
+):
+    """All raw frames for ONE band, packed binary, dual-written GCS+R2, 302.
+
+    Replaces the per-band band-raw-frame waterfall in realtime_ir.js — the #1
+    Cloud Run egress driver (~67% of heavy egress: the Visible panel fetches
+    Band 2 + Band 7 raw arrays, ~37 frames each, through Cloud Run). Same wire
+    format and write-through-+-302 pattern as /ir-raw-bundle (see that endpoint
+    for the format spec). One bundle per band; header carries the band's
+    vmin/vmax/data_type since those vary by band."""
+    import struct
+    from concurrent.futures import ThreadPoolExecutor
+
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+
+    atcf_upper = atcf_id.upper()
+    center_dt = _dt.now(timezone.utc)
+    frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
+    frame_times = list(reversed(frame_times))  # index 0 = oldest, matches band-raw-frame
+
+    def _worker(item):
+        i, target_dt = item
+        try:
+            return (i, _fetch_one_band_raw_for_bundle(band, atcf_id, storm, target_dt, radius_deg))
+        except Exception as ex:
+            return (i, {"_error": str(ex)})
+
+    indexed = list(enumerate(frame_times))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(_worker, indexed))
+    results.sort(key=lambda r: r[0])
+
+    frame_headers = []
+    payloads: list[bytes] = []
+    offset = 0
+    band_vmin = band_vmax = band_dtype = None
+
+    for i, frame in results:
+        target_dt = frame_times[i]
+        iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        if frame is None or (isinstance(frame, dict) and "_error" in frame):
+            frame_headers.append({
+                "index": i, "datetime_utc": iso_dt,
+                "tb_rows": 0, "tb_cols": 0,
+                "byte_offset": offset, "byte_length": 0,
+                "error": (frame or {}).get("_error", "no_data") if frame else "no_data",
+            })
+            continue
+        try:
+            tb_bytes = base64.b64decode(frame["tb_data"])
+        except Exception as ex:
+            frame_headers.append({
+                "index": i, "datetime_utc": iso_dt,
+                "tb_rows": 0, "tb_cols": 0,
+                "byte_offset": offset, "byte_length": 0,
+                "error": f"decode: {ex}",
+            })
+            continue
+        rows = int(frame["tb_rows"])
+        cols = int(frame["tb_cols"])
+        if len(tb_bytes) != rows * cols:
+            frame_headers.append({
+                "index": i, "datetime_utc": iso_dt,
+                "tb_rows": 0, "tb_cols": 0,
+                "byte_offset": offset, "byte_length": 0,
+                "error": "size_mismatch",
+            })
+            continue
+        if band_vmin is None:
+            band_vmin = frame.get("tb_vmin")
+            band_vmax = frame.get("tb_vmax")
+            band_dtype = frame.get("data_type")
+        frame_headers.append({
+            "index": i,
+            "datetime_utc": frame.get("datetime_utc", iso_dt),
+            "satellite": frame.get("satellite", ""),
+            "tb_rows": rows,
+            "tb_cols": cols,
+            "byte_offset": offset,
+            "byte_length": rows * cols,
+            "bounds": frame.get("bounds"),
+        })
+        payloads.append(tb_bytes)
+        offset += rows * cols
+
+    band_info = BAND_RANGES.get(band, BAND_RANGES[13])
+    header = {
+        "total_frames": len(frame_times),
+        "band": band,
+        "tb_vmin": band_vmin if band_vmin is not None else band_info["vmin"],
+        "tb_vmax": band_vmax if band_vmax is not None else band_info["vmax"],
+        "data_type": band_dtype or "tb",
+        "lookback_hours": lookback_hours,
+        "interval_min": interval_min,
+        "radius_deg": radius_deg,
+        "frames": frame_headers,
+    }
+    header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
+
+    # Same rationale as /ir-raw-bundle: write to public GCS + R2 and 302 rather
+    # than streaming the multi-MB body through Cloud Run (which caps responses
+    # ~32 MiB and bills egress). raw uint8 arrays gzip 30-50% (gzip_content=True).
+    # Band-keyed on-demand path so distinct bands/params never collide.
+    key = _ondemand_bundle_key("raw-band", atcf_upper, lookback_hours,
+                               radius_deg, interval_min, band=band)
+    _upload_public_bundle(key, body, gzip_content=True)
+    return RedirectResponse(
+        _public_bundle_url(key),
+        status_code=302,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Pre-Rendered IR Frame JPG Endpoint (fast image-overlay animation)
 # ---------------------------------------------------------------------------

@@ -7017,9 +7017,57 @@
         _fetchRawTbIncremental(currentStormId, true, null);
     }
 
+    /** Single-shot band-raw bundle path: one /band-raw-bundle request returns
+     *  every frame for the band as [u32 header_len][JSON header][concat uint8].
+     *  The endpoint 302-redirects to GCS/R2, so the multi-MB payload never
+     *  streams through Cloud Run — this per-frame waterfall was the #1 Cloud
+     *  Run egress driver. Resolves to a frames array matching the legacy
+     *  shape, or rejects so the caller can fall back to per-frame fetching. */
+    function _fetchBandRawBundle(stormId, band) {
+        var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/band-raw-bundle'
+            + '?band=' + band
+            + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+            + '&radius_deg=' + DEFAULT_RADIUS_DEG
+            + '&interval_min=' + RAW_TB_INTERVAL_MIN;
+        return fetch(apiUrl)
+            .then(function (r) {
+                if (!r.ok) throw new Error('band-raw bundle HTTP ' + r.status);
+                return r.arrayBuffer();
+            })
+            .then(function (buf) {
+                var dv = new DataView(buf);
+                if (buf.byteLength < 4) throw new Error('bundle too small');
+                var headerLen = dv.getUint32(0, true);  // little-endian
+                if (4 + headerLen > buf.byteLength) throw new Error('bundle header overruns body');
+                var header = JSON.parse(new TextDecoder('utf-8').decode(new Uint8Array(buf, 4, headerLen)));
+                var binBase = 4 + headerLen;
+                var frames = [];
+                for (var i = 0; i < header.frames.length; i++) {
+                    var fh = header.frames[i];
+                    if (!fh.byte_length || fh.error) continue;
+                    // Zero-copy view into the bundle buffer (matches the band
+                    // waterfall's decodeTbData() Uint8Array output shape).
+                    frames.push({
+                        tb_data: new Uint8Array(buf, binBase + fh.byte_offset, fh.byte_length),
+                        tb_rows: fh.tb_rows,
+                        tb_cols: fh.tb_cols,
+                        bounds: fh.bounds,
+                        datetime_utc: fh.datetime_utc || '',
+                        satellite: fh.satellite || '',
+                        tb_vmin: header.tb_vmin,
+                        tb_vmax: header.tb_vmax,
+                        data_type: header.data_type || 'tb'
+                    });
+                }
+                return frames;
+            });
+    }
+
     /**
-     * Fetch band (WV/Vis) frames incrementally, mirroring _fetchRawTbIncremental.
-     * Cached in _rawBandCache for reuse by the satellite viewer.
+     * Fetch band (WV/Vis) frames, mirroring _fetchRawTbIncremental: try the
+     * single packed bundle first (302 → GCS/R2, no per-frame Cloud Run egress),
+     * fall back to the per-frame waterfall on any failure. Cached in
+     * _rawBandCache for reuse by the satellite viewer.
      */
     function _fetchBandIncremental(stormId, band, silent, onComplete) {
         if (!stormId) return;
@@ -7030,6 +7078,27 @@
             return;
         }
 
+        _fetchBandRawBundle(stormId, band)
+            .then(function (frames) {
+                if (!_rawBandCache[band]) _rawBandCache[band] = {};
+                var pos = _stormPositionForId(stormId);
+                _rawBandCache[band][stormId] = {
+                    frames: frames, cachedAt: Date.now(),
+                    lat: pos ? pos.lat : null, lon: pos ? pos.lon : null
+                };
+                console.log('[RT Monitor] Band ' + band + ' bundle loaded for ' +
+                    stormId + ': ' + frames.length + ' frames');
+                if (onComplete) onComplete();
+            })
+            .catch(function (err) {
+                console.warn('[RT Monitor] Band ' + band + ' bundle failed (' +
+                    (err && err.message) + ') — falling back to incremental');
+                _fetchBandIncrementalLegacy(stormId, band, silent, onComplete);
+            });
+    }
+
+    /** Legacy per-frame band waterfall (kept as bundle-failure fallback). */
+    function _fetchBandIncrementalLegacy(stormId, band, silent, onComplete) {
         var totalFrames = 13;
         var loadedFrames = [];
         var completed = 0;
