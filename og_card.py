@@ -232,7 +232,7 @@ def _compose_storm_card(ir_square, storm: dict,
 
     # Footer CTA.
     draw.text((pad, CARD_H - 56),
-              "Track it live  →  michaelfischerwx.github.io/TC-ATLAS",
+              "Track it live  →  tcatlas.org",
               font=_font(18, bold=True), fill=_CYAN)
 
     return _encode(card)
@@ -285,7 +285,7 @@ def render_branded_card_png() -> Optional[bytes]:
                   "Live GOES & Himawari infrared  ·  global coverage  ·  intensity & forecast tracks",
                   font=_font(20), fill=_DIM)
         draw.text((cx, CARD_H - 70),
-                  "michaelfischerwx.github.io/TC-ATLAS",
+                  "tcatlas.org",
                   font=_font(20, bold=True), fill=_CYAN)
         return _encode(card)
     except Exception:
