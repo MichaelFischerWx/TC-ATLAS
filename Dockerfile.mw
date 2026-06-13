@@ -42,6 +42,7 @@ RUN pip install --no-cache-dir \
         h5py \
         requests \
         google-cloud-storage \
+        boto3 \
         scikit-image \
         shapely \
         fastapi \

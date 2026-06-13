@@ -320,12 +320,87 @@ def _get_bucket():
     return _bucket
 
 
+# ---------------------------------------------------------------------------
+# Cloudflare R2 dual-write (egress reduction)
+#
+# Browser-fetched MW payloads (per-pass PNG + GeoJSON, storm crops) are mirrored
+# to R2 alongside the GCS write so the manifest can point them at cdn.tcatlas.org
+# (zero Cloud Run / GCS egress). Mirrors global_archive_api's lazy-client pattern.
+# Best-effort by design: an unconfigured or failing R2 leaves the GCS write
+# untouched and _upload_bytes returns False, so the caller emits the GCS URL —
+# a missed R2 write can never yield a broken image. The manifest + predictions
+# JSON deliberately stay on GCS (frontend polls them every 5 min; serving them
+# from cdn would risk Cloudflare cache staleness), so only payloads move to R2.
+# ---------------------------------------------------------------------------
+_R2_ENDPOINT_URL = os.environ.get("R2_ENDPOINT_URL", "").rstrip("/")
+_R2_BUCKET = os.environ.get("R2_BUCKET", "")
+_R2_PUBLIC_BASE = os.environ.get("R2_PUBLIC_BASE", "https://cdn.tcatlas.org").rstrip("/")
+_r2_client = None
+_r2_client_init = False
+
+
+def _get_r2_client():
+    """Lazy S3-compatible client for Cloudflare R2. None when unconfigured —
+    callers then keep the GCS URL, so an absent client never breaks ingest."""
+    global _r2_client, _r2_client_init
+    if _r2_client_init:
+        return _r2_client
+    _r2_client_init = True
+    ak = os.environ.get("R2_ACCESS_KEY_ID", "")
+    sk = os.environ.get("R2_SECRET_ACCESS_KEY", "")
+    if not (_R2_ENDPOINT_URL and _R2_BUCKET and ak and sk):
+        return None
+    try:
+        import boto3
+        from botocore.config import Config as _BotoConfig
+        _r2_client = boto3.client(
+            "s3", endpoint_url=_R2_ENDPOINT_URL,
+            aws_access_key_id=ak, aws_secret_access_key=sk,
+            region_name="auto",
+            config=_BotoConfig(signature_version="s3v4",
+                               connect_timeout=3, read_timeout=10,
+                               retries={"max_attempts": 2, "mode": "standard"}),
+        )
+    except Exception as e:
+        logger.warning("R2 client init failed: %s", e)
+        _r2_client = None
+    return _r2_client
+
+
+def _r2_put(key: str, data: bytes, content_type: str, cache_seconds: int) -> bool:
+    """Best-effort mirror of one object to R2. True only on a confirmed write."""
+    client = _get_r2_client()
+    if client is None:
+        return False
+    try:
+        client.put_object(
+            Bucket=_R2_BUCKET, Key=key, Body=data,
+            ContentType=content_type,
+            CacheControl=f"public, max-age={cache_seconds}")
+        return True
+    except Exception as e:
+        logger.warning("R2 mirror failed for %s: %s", key, e)
+        return False
+
+
+def _mw_public_url(key: str, r2_ok: bool) -> str:
+    """cdn.tcatlas.org URL when the object made it to R2, else the GCS URL.
+    GCS is always written first (primary), so the fallback is always valid."""
+    if r2_ok and _R2_PUBLIC_BASE:
+        return f"{_R2_PUBLIC_BASE}/{key}"
+    return f"https://storage.googleapis.com/{MW_BUCKET}/{key}"
+
+
 def _upload_bytes(key: str, data: bytes, content_type: str,
-                  cache_seconds: int = 600) -> None:
+                  cache_seconds: int = 600) -> bool:
+    """Upload to GCS (primary, must succeed) + best-effort mirror to R2.
+    Returns True iff the R2 mirror also succeeded — callers building manifest
+    URLs use this to choose cdn vs. GCS per object (see _mw_public_url)."""
     blob = _get_bucket().blob(key)
     blob.cache_control = f"public, max-age={cache_seconds}"
     blob.upload_from_string(data, content_type=content_type)
     logger.info("uploaded gs://%s/%s (%d bytes)", MW_BUCKET, key, len(data))
+    return _r2_put(key, data, content_type, cache_seconds)
 
 
 def _download_text(key: str) -> Optional[str]:
@@ -1820,6 +1895,7 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
              "properties": {"sensor": meta.sensor,
                             "scan_start": t.isoformat()}},
             separators=(",", ":")).encode("utf-8")
+        png_r2 = geo_r2 = False
         if dry_run:
             out_root = Path(dry_run_dir or "./mw_out")
             (out_root / Path(png_key).parent).mkdir(parents=True, exist_ok=True)
@@ -1828,8 +1904,8 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
             logger.info("[dry-run] wrote %s (%d bytes)", out_root / png_key,
                         len(p.png_bytes))
         else:
-            _upload_bytes(png_key, p.png_bytes, "image/png")
-            _upload_bytes(geo_key, geo_payload, "application/geo+json")
+            png_r2 = _upload_bytes(png_key, p.png_bytes, "image/png")
+            geo_r2 = _upload_bytes(geo_key, geo_payload, "application/geo+json")
         # Storm-centered hi-res crops (native resolution over a small
         # window) — uploaded alongside the whole-arc PNG. The frontend
         # per-storm card + IR/MW compare prefer the crop whose bounds cover
@@ -1840,16 +1916,17 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
         for crop in (p.crops or []):
             safe_id = re.sub(r"[^A-Za-z0-9]+", "", str(crop["storm_id"])) or "x"
             crop_key = f"{base}_{p.product}_crop-{safe_id}.png"
+            crop_r2 = False
             if dry_run:
                 out_root = Path(dry_run_dir or "./mw_out")
                 (out_root / Path(crop_key).parent).mkdir(
                     parents=True, exist_ok=True)
                 (out_root / crop_key).write_bytes(crop["png_bytes"])
             else:
-                _upload_bytes(crop_key, crop["png_bytes"], "image/png")
+                crop_r2 = _upload_bytes(crop_key, crop["png_bytes"], "image/png")
             crops_meta.append({
                 "storm_id": crop["storm_id"],
-                "png_url": f"https://storage.googleapis.com/{MW_BUCKET}/{crop_key}",
+                "png_url": _mw_public_url(crop_key, crop_r2),
                 "bounds": crop["bounds"],
             })
         entry = {
@@ -1858,8 +1935,8 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
             "orbit_id": orbit_id,
             "scan_start": t.isoformat(),
             "product": p.product,
-            "png_url": f"https://storage.googleapis.com/{MW_BUCKET}/{png_key}",
-            "geojson_url": f"https://storage.googleapis.com/{MW_BUCKET}/{geo_key}",
+            "png_url": _mw_public_url(png_key, png_r2),
+            "geojson_url": _mw_public_url(geo_key, geo_r2),
             "bounds": p.bounds,  # [[s, w], [n, e]] for L.imageOverlay
             # Decimated arc center track [[lat,lon],...]. The frontend
             # tests min great-circle distance to this polyline against the
