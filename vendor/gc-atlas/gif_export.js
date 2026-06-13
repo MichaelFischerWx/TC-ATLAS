@@ -131,7 +131,7 @@ export class GifExporter {
     _drawWatermark(ctx, w, h) {
         const padX = 12, padY = 10;
         const brand  = 'TC-ATLAS';
-        const site   = 'michaelfischerwx.github.io/TC-ATLAS';
+        const site   = 'tcatlas.org';
         // Required Copernicus product-license credit — kept compact so
         // it fits comfortably on small exports; full attribution (incl.
         // disclaimer + Hersbach citation) lives in the site footer.

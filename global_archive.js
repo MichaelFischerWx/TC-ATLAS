@@ -7606,7 +7606,7 @@ window.saveCurrentFramePng = function () {
         compCtx.font = Math.round(9 * EXPORT_SCALE) + 'px sans-serif';
         compCtx.fillStyle = 'rgba(100,120,140,0.6)';
         compCtx.textBaseline = 'bottom';
-        compCtx.fillText('michaelfischerwx.github.io/TC-ATLAS', 4 * EXPORT_SCALE, outH - 4 * EXPORT_SCALE);
+        compCtx.fillText('tcatlas.org', 4 * EXPORT_SCALE, outH - 4 * EXPORT_SCALE);
 
         compCanvas.toBlob(function (blob) {
             if (!blob) {
@@ -10250,7 +10250,7 @@ function buildStormKML(stormName, stormYear, stormId, trackPoints) {
         '<kml xmlns="http://www.opengis.net/kml/2.2">\n' +
         '<Document>\n' +
         '  <name>' + _escXml(stormName + ' ' + stormYear) + '</name>\n' +
-        '  <description>Track exported from TC-ATLAS (https://michaelfischerwx.github.io/TC-ATLAS/)</description>\n' +
+        '  <description>Track exported from TC-ATLAS (https://tcatlas.org/)</description>\n' +
         placemarks +
         '</Document>\n' +
         '</kml>';

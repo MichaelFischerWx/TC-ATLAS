@@ -3075,7 +3075,7 @@ function _saveClimoClockAsPNG(card, mode) {
         ctx.font = '11px "DM Sans", system-ui, sans-serif';
         ctx.textBaseline = 'middle';
         var todayISO = new Date().toISOString().slice(0, 10);
-        ctx.fillText('TC-ATLAS · ' + todayISO + ' · michaelfischerwx.github.io/TC-ATLAS',
+        ctx.fillText('TC-ATLAS · ' + todayISO + ' · tcatlas.org',
                      padX, H - footerH / 2 - 4);
 
         canvas.toBlob(function (blob) {
@@ -3616,7 +3616,7 @@ function _saveSubEvoChart(chartId, chartLabel, btnId) {
         ctx.textBaseline = 'middle';
         var todayISO = new Date().toISOString().slice(0, 10);
         ctx.fillText('TC-ATLAS · ' + todayISO
-                     + ' · michaelfischerwx.github.io/TC-ATLAS',
+                     + ' · tcatlas.org',
                      32, canvas.height - footerH / 2);
 
         canvas.toBlob(function (blob) {

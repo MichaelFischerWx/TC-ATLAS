@@ -623,7 +623,7 @@
             xref: 'paper', yref: 'paper',
             x: 1, y: -0.16,
             xanchor: 'right', yanchor: 'bottom',
-            text: 'michaelfischerwx.github.io/TC-ATLAS',
+            text: 'tcatlas.org',
             showarrow: false,
             font: { size: 8, color: urlColor,
                     family: 'DM Sans, system-ui, sans-serif' },
@@ -723,7 +723,7 @@
         ctx.font = '400 ' + Math.round(9 * scale) +
                    'px "DM Sans", system-ui, sans-serif';
         ctx.textBaseline = 'bottom';
-        ctx.fillText('michaelfischerwx.github.io/TC-ATLAS',
+        ctx.fillText('tcatlas.org',
                      canvas.width - pad, canvas.height - pad / 2);
         ctx.restore();
     }

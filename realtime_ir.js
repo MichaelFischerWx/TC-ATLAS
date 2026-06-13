@@ -5762,7 +5762,7 @@
             { text: 'TC-ATLAS', xref: 'paper', yref: 'paper', x: 0, y: -0.135,
               showarrow: false, xanchor: 'left', yanchor: 'top',
               font: { size: 11, color: wmColor, family: 'DM Sans, sans-serif' } },
-            { text: 'michaelfischerwx.github.io/TC-ATLAS', xref: 'paper', yref: 'paper',
+            { text: 'tcatlas.org', xref: 'paper', yref: 'paper',
               x: 1, y: -0.135, showarrow: false, xanchor: 'right', yanchor: 'top',
               font: { size: 11, color: wmColor, family: 'DM Sans, sans-serif' } },
         ]);
@@ -18390,7 +18390,7 @@
             font: { size: 11, color: wmColor, family: 'DM Sans, sans-serif' }
         });
         layout.annotations.push({
-            text: 'michaelfischerwx.github.io/TC-ATLAS', xref: 'paper', yref: 'paper',
+            text: 'tcatlas.org', xref: 'paper', yref: 'paper',
             x: 1, y: -0.18, showarrow: false, xanchor: 'right', yanchor: 'top',
             font: { size: 11, color: wmColor, family: 'DM Sans, sans-serif' }
         });
@@ -20273,7 +20273,7 @@
         ctx.textAlign = 'left';
         ctx.fillText('TC-ATLAS', pad, totalH - Math.round(7 * s));
         ctx.textAlign = 'right';
-        ctx.fillText('michaelfischerwx.github.io/TC-ATLAS',
+        ctx.fillText('tcatlas.org',
                      totalW - pad, totalH - Math.round(7 * s));
 
         // Deliver. Build the filename, then hand the composite to the shared
@@ -21568,7 +21568,7 @@
                 '<div style="font-weight:700;font-size:12px;letter-spacing:0.3px;' +
                 'color:rgba(255,255,255,0.95);">TC-ATLAS</div>' +
                 '<div style="font-weight:500;font-size:9px;color:rgba(255,255,255,0.78);">' +
-                'michaelfischerwx.github.io/TC-ATLAS</div>';
+                'tcatlas.org</div>';
             host.appendChild(wm);
         }
     }
@@ -21789,7 +21789,7 @@
                     '<kml xmlns="http://www.opengis.net/kml/2.2">\n' +
                     '<Document>\n' +
                     '  <name>' + _escXml(name + ' ' + currentStormId) + '</name>\n' +
-                    '  <description>Track exported from TC-ATLAS (https://michaelfischerwx.github.io/TC-ATLAS/)</description>\n' +
+                    '  <description>Track exported from TC-ATLAS (https://tcatlas.org/)</description>\n' +
                     placemarks +
                     '</Document>\n' +
                     '</kml>';

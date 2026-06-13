@@ -15605,8 +15605,8 @@ var _CITATIONS = [
     },
     {
         label: 'TC-ATLAS Web Tool',
-        text: 'TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. Available at https://michaelfischerwx.github.io/TC-ATLAS/',
-        bibtex: '@misc{TCATLAS,\n  title  = {{TC-ATLAS}: Tropical Cyclone Analysis Tool for Live and Archived Structure},\n  author = {Fischer, Michael S.},\n  year   = {2024},\n  url    = {https://michaelfischerwx.github.io/TC-ATLAS/}\n}'
+        text: 'TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. Available at https://tcatlas.org/',
+        bibtex: '@misc{TCATLAS,\n  title  = {{TC-ATLAS}: Tropical Cyclone Analysis Tool for Live and Archived Structure},\n  author = {Fischer, Michael S.},\n  year   = {2024},\n  url    = {https://tcatlas.org/}\n}'
     }
 ];
 

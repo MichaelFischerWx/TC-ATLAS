@@ -152,7 +152,7 @@
             xref: 'paper', yref: 'paper',
             x: 1, y: 0,
             xanchor: 'right', yanchor: 'bottom',
-            text: 'TC-ATLAS<br>michaelfischerwx.github.io/TC-ATLAS',
+            text: 'TC-ATLAS<br>tcatlas.org',
             align: 'right',
             showarrow: false,
             font: { size: 14, color: fg,
@@ -664,7 +664,7 @@
             ctx.font = '11px "DM Sans", system-ui, sans-serif';
             ctx.textBaseline = 'middle';
             var todayISO = new Date().toISOString().slice(0, 10);
-            ctx.fillText('TC-ATLAS · ' + todayISO + ' · michaelfischerwx.github.io/TC-ATLAS',
+            ctx.fillText('TC-ATLAS · ' + todayISO + ' · tcatlas.org',
                          padX, H - footerH / 2 - 4);
 
             canvas.toBlob(function (blob) {
