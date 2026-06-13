@@ -43,6 +43,13 @@ Thumbs.db
 # ── Cached data (MergIR frames — can be huge, NOT needed in container) ──
 mergir_cache/
 
+# ── Local dev caches / demo scratch (NOT runtime deps; keep out of the
+#    Cloud Build context so a stray cache/*.py can't shadow a module and
+#    big .nc/.json blobs don't bloat the upload) ──
+cache/
+demo_37color/
+*.xlsx
+
 # ── Logs ──
 *.log
 
