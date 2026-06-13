@@ -71,8 +71,13 @@ def _should_skip_quiet_cycle() -> bool:
 
 def main() -> int:
     if _should_skip_quiet_cycle():
-        print("[Prewarm Job] No active storms + off-hour tick — skipping "
-              "(cheap gate, no heavy import)")
+        # MUST contain the literal "[Prewarm Job] Done:" token: the
+        # prewarm_cycle_done log metric + 30-min absence alert (see
+        # monitoring/) count this heartbeat on EVERY run, including 0-storm
+        # ticks. A cheap skip is still a successful run, so emit it here too —
+        # otherwise quiet ticks would go silent and false-fire the alert hourly.
+        print("[Prewarm Job] Done: {'storm_count': 0, "
+              "'skipped': 'quiet-tick cheap gate', 'heavy_import': False}")
         return 0
     try:
         # Imported HERE (not at module load) so the cheap-gate skip path above
