@@ -13,8 +13,9 @@ GCS downloads). Strategy: move browser-fetched bytes onto Cloudflare R2
 bundles) or via write-through + 302 redirect (rendered frames).
 
 **Done & live:** ERA5/seasonal tiles on R2; the 4 biggest Cloud Run egress
-endpoints (~97%) moved to R2 (incl. weatherlab-genesis). **Parked:** RT-bundle
-serving cutover (needs an active storm), microwave bucket, HD archive.
+endpoints (~97%) moved to R2 (incl. weatherlab-genesis); microwave NRT payloads
+dual-write to R2. **Parked:** RT-bundle serving cutover (needs an active storm),
+HD archive.
 
 ## Infrastructure facts (don't re-derive)
 
@@ -81,11 +82,20 @@ after 14 days** (bundle hygiene). Does NOT touch `era5_*`/`seasonal`/`v6/`/
 `tcradar-ir/` (different prefixes — those persist, kept fresh by mirror / immutable).
 Consider a separate longer-TTL rule for `v6/` + `tcradar-ir/` if they grow unbounded.
 
-### 3. Microwave bucket  *(low priority — $0.28/14d)*
-`tc-atlas-microwave-nrt`. `mw_ingest.py:1852,1861-1862` embeds absolute
-`storage.googleapis.com` URLs in the manifest → coordinated change: builder emits
-`cdn.tcatlas.org` URLs + copy bucket to R2 + mirror + frontend
-(`realtime_ir.js:~18544/18549`, `tc_mw_layer.js:43-44`).
+### 3. Microwave bucket — DONE (commit `7776a916`, 2026-06-13)
+`mw_ingest.py` `_upload_bytes` now dual-writes each PNG/GeoJSON/crop to R2 and
+returns R2-success; the manifest emits `cdn.tcatlas.org/{key}` per object when
+the mirror succeeded, else the GCS URL (no broken images possible). boto3 added
+to `Dockerfile.mw`. Dual-write (not mirror-job) because MW is NRT — the 6h
+mirror would 404 fresh passes. **Manifest + predictions JSON stay on GCS** (5-min
+polled; cdn would risk Cloudflare browser-cache staleness). Zero frontend change
+(loads `entry.png_url` verbatim); no bucket copy (rolling 48h manifest transitions
+to cdn within ~2 days; old entries keep working from GCS). Verified live: backfill
+run → 222 manifest entries on cdn, cdn PNG/GeoJSON serve 200, no R2 errors.
+**FOLLOW-UP (Michael, dashboard):** R2 has no lifecycle (token can't); GCS auto-
+deletes MW objects after 7 days but R2 won't → add an R2 lifecycle rule for
+prefixes `GMI/ SSMIS/ AMSR2/ ATMS/` (delete after ~9 days) so R2 MW objects don't
+accumulate. Low urgency (objects are small; R2 storage ~$0.015/GB/mo).
 
 ### 4. Phase 2b — HD archive  *(Task #9; cost-gated)*
 `era5_daily_00z` (78 GiB, ~$9 one-time copy egress). Only if HD-toggle egress
