@@ -26,9 +26,9 @@ HD archive.
 | R2 public host | `cdn.tcatlas.org` (custom domain → bucket; CORS `*`, GET/HEAD) |
 | Cloudflare account ID | `4f3e5ab095ae4962e91af5b33c6deb54` |
 | R2 S3 endpoint | `https://4f3e5ab095ae4962e91af5b33c6deb54.r2.cloudflarestorage.com` |
-| R2 token scope | **Object Read & Write only** — CANNOT set bucket lifecycle or zone config |
+| R2 token scope | `r2-*` token = **Object R/W only** (dual-writes/mirror; CANNOT set lifecycle/zone). `r2-admin-*` token = **Admin R/W** (lifecycle/bucket config) — added 2026-06-13 |
 | GCP project | `tc-atlas-web` · region `us-east1` · service `tc-atlas-api` |
-| Secrets (Secret Manager) | `r2-access-key-id`, `r2-secret-access-key` (compute SA has accessor) |
+| Secrets (Secret Manager) | `r2-access-key-id`, `r2-secret-access-key` (Object R/W; compute SA has accessor); `r2-admin-access-key-id`, `r2-admin-secret-access-key` (Admin R/W; lifecycle/bucket config) |
 | Service env (already mounted) | `R2_ENDPOINT_URL`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `PUBLIC_BUNDLE_BASE` (empty) |
 | Mirror job | `tc-atlas-r2-mirror` Cloud Run Job + scheduler (6h), `deploy_r2_mirror_job.sh` |
 
@@ -76,11 +76,19 @@ Bundles already dual-write to R2. Cutover = serve them from `cdn.tcatlas.org`.
   Validate the band-raw-bundle on the same storm.
 - **Rollback:** unset `PUBLIC_BUNDLE_BASE` (frontend falls back to GCS; instant).
 
-### 2. R2 lifecycle rule  *(Michael, dashboard — token can't do it via API)*
-R2 → `tc-atlas-rt` → Settings → Object Lifecycle Rules → prefix `rt-v`, **delete
-after 14 days** (bundle hygiene). Does NOT touch `era5_*`/`seasonal`/`v6/`/
-`tcradar-ir/` (different prefixes — those persist, kept fresh by mirror / immutable).
-Consider a separate longer-TTL rule for `v6/` + `tcradar-ir/` if they grow unbounded.
+### 2. R2 lifecycle rule — DONE (2026-06-13)
+Set on `tc-atlas-rt` via a NEW **Admin** R2 API token (the Object-scoped
+`r2-access-key-id`/`-secret` token CANNOT set lifecycle — confirmed AccessDenied).
+Admin creds stored in Secret Manager as `r2-admin-access-key-id` /
+`r2-admin-secret-access-key` (use these for any future lifecycle edits via boto3
+`put_bucket_lifecycle_configuration`; R2 quirk: each rule needs `Filter.Prefix`,
+and `Filter:{}` fails MalformedXML — use `{"Prefix": ""}` for a global rule).
+Active rules: `GMI/ SSMIS/ AMSR2/ ATMS/` → expire 7d (mirrors old GCS MW rule);
+`genesis/` → 4d (self-heals — a deleted object re-mirrors on next request via
+`_r2_frame_exists`); `rt-v` → 14d (bundle hygiene); plus R2's default global
+multipart-abort 7d (preserved). Does NOT touch `era5_*`/`seasonal`/`subseasonal`/
+`v6/`/`tcradar-ir/` (those persist — kept fresh by mirror / immutable).
+Consider a longer-TTL rule for `v6/` + `tcradar-ir/` if they ever grow unbounded.
 
 ### 3. Microwave bucket — DONE (commit `7776a916`, 2026-06-13)
 `mw_ingest.py` `_upload_bytes` now dual-writes each PNG/GeoJSON/crop to R2 and
@@ -92,10 +100,8 @@ polled; cdn would risk Cloudflare browser-cache staleness). Zero frontend change
 (loads `entry.png_url` verbatim); no bucket copy (rolling 48h manifest transitions
 to cdn within ~2 days; old entries keep working from GCS). Verified live: backfill
 run → 222 manifest entries on cdn, cdn PNG/GeoJSON serve 200, no R2 errors.
-**FOLLOW-UP (Michael, dashboard):** R2 has no lifecycle (token can't); GCS auto-
-deletes MW objects after 7 days but R2 won't → add an R2 lifecycle rule for
-prefixes `GMI/ SSMIS/ AMSR2/ ATMS/` (delete after ~9 days) so R2 MW objects don't
-accumulate. Low urgency (objects are small; R2 storage ~$0.015/GB/mo).
+**R2 lifecycle:** DONE — `GMI/ SSMIS/ AMSR2/ ATMS/` expire 7d on `tc-atlas-rt`
+(see §REMAINING #2), matching the old GCS MW rule.
 
 ### 4. Phase 2b — HD archive  *(Task #9; cost-gated)*
 `era5_daily_00z` (78 GiB, ~$9 one-time copy egress). Only if HD-toggle egress
