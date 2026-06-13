@@ -12,9 +12,9 @@ GCS downloads). Strategy: move browser-fetched bytes onto Cloudflare R2
 (zero egress) via `cdn.tcatlas.org`, served either as direct objects (tiles,
 bundles) or via write-through + 302 redirect (rendered frames).
 
-**Done & live:** ERA5/seasonal tiles on R2; the 3 biggest Cloud Run egress
-endpoints (~81%) moved to R2. **Parked:** RT-bundle serving cutover (needs an
-active storm), microwave bucket, HD archive, genesis endpoint.
+**Done & live:** ERA5/seasonal tiles on R2; the 4 biggest Cloud Run egress
+endpoints (~97%) moved to R2 (incl. weatherlab-genesis). **Parked:** RT-bundle
+serving cutover (needs an active storm), microwave bucket, HD archive.
 
 ## Infrastructure facts (don't re-derive)
 
@@ -44,10 +44,15 @@ active storm), microwave bucket, HD archive, genesis endpoint.
   `cdn.tcatlas.org` (frontend constants in `realtime_seasonal.js`,
   `realtime_subseasonal.js`, `tc_climatology.js`). Mirror job keeps R2 fresh.
   Kept on GCS: `env/` (hourly churn), `era5_daily_00z` (HD, Phase 2b), `era5_daily` (dead).
-- **Phase 3 — Cloud Run egress (~81% of heavy traffic):**
+- **Phase 3 — Cloud Run egress (~97% of heavy traffic):**
   - **band-raw-bundle** (commit `05dacaf4`, 67%) — new `/storm/{id}/band-raw-bundle`
     packs band frames, dual-writes GCS+R2, 302s; frontend `_fetchBandRawBundle`.
     Activates on next active storm.
+  - **weatherlab-genesis** (commit `70619e73`, ~16%) — `/weatherlab-genesis`
+    write-through + 302; key `genesis/{variant}/{init}_m{cap}.json`. LIVE on
+    rev `00406-dlf`, verified: hit 1 = 200+mirror, hits 2+ = 302 to cdn (7.08 MB
+    object). Frontend recomputes `cycle_age_hours` live from `init_time` so the
+    frozen R2 payload still shows true run age (`_genesisAgeFromInit`).
   - **`/global/ir/frame`** (commit `fc552b10`, 10%) — mirror frame to R2 + 302.
     LIVE, verified on historical SID 1980201N08155.
   - **TC-RADAR `/ir_frame`** (rev `00405-bv8`, 4%) — same pattern. LIVE, verified
@@ -87,10 +92,13 @@ Consider a separate longer-TTL rule for `v6/` + `tcradar-ir/` if they grow unbou
 justifies it. Copy GCS→R2, add to `deploy_r2_mirror_job.sh` PREFIXES, swap
 `EVO_ARCHIVE_BASE_HD` (`realtime_seasonal.js:4029`) to `cdn`.
 
-### 5. weatherlab-genesis  *(~16% Cloud Run egress; coordinate with Michael)*
-His active genesis code (`ir_monitor_api.py` `get_weatherlab_genesis`). Options:
-cache the computed ensemble JSON to R2 keyed by `init_time` + 302 (it already
-emits `s-maxage`); OR the Cloudflare API proxy (see #6). Left alone for now.
+### 5. weatherlab-genesis — DONE (commit `70619e73`, 2026-06-13)
+Shipped: `/weatherlab-genesis` write-through + 302 to R2. See Phase 3 DONE
+above. The wall-clock-fields subtlety (vs. immutable IR frames) is handled —
+`fetched_at + next_cycle_eta_hours` is an absolute instant (countdown stays
+correct frozen); `cycle_age_hours` is recomputed client-side from `init_time`.
+Possible follow-up: have the background warmer also mirror to R2 so the first
+hit per cycle is zero-egress too (currently first hit streams once, then 302).
 
 ### 6. Cloudflare API proxy — ABANDONED on Free plan
 Origin-Rules **Host-Header override is paywalled** in Michael's dashboard, and
