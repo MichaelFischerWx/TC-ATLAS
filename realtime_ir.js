@@ -15009,6 +15009,20 @@
         return Math.round(ageH / 24) + ' d old';
     }
 
+    // Live run-age (hours) derived from a YYYYMMDDHH UTC init string. Used in
+    // preference to the server's cycle_age_hours, which freezes when the genesis
+    // payload is served from the R2/cdn mirror (302). Returns null on a
+    // malformed init so callers can fall back to the server value.
+    function _genesisAgeFromInit(init) {
+        if (!init || init.length < 10) return null;
+        var y = +init.slice(0, 4), mo = +init.slice(4, 6),
+            d = +init.slice(6, 8), h = +init.slice(8, 10);
+        if (![y, mo, d, h].every(isFinite)) return null;
+        var t = Date.UTC(y, mo - 1, d, h);
+        if (!isFinite(t)) return null;
+        return (Date.now() - t) / 3600000;
+    }
+
     // True on phone-width viewports. Used to lay the genesis-modal
     // colorbars out horizontally (under the panel) instead of as a tall
     // right-side strip that's disproportionate on a narrow modal.
@@ -15079,8 +15093,12 @@
         var init = data && data.init_time;
         var initBit = init
             ? ' · init ' + init.slice(0, 8) + ' ' + init.slice(8) + 'Z' : '';
-        var ageBit = (data && data.cycle_age_hours != null)
-            ? ' · ' + _formatGenesisAge(data.cycle_age_hours) : '';
+        // Recompute age live from the immutable init_time so a 302'd (frozen)
+        // genesis payload from the R2/cdn mirror still shows the true run age.
+        var ageH = _genesisAgeFromInit(init);
+        if (ageH == null && data) ageH = data.cycle_age_hours;
+        var ageBit = (ageH != null)
+            ? ' · ' + _formatGenesisAge(ageH) : '';
         if (nTracks === 0) {
             statusEl.textContent = 'No genesis predicted in next 15 days'
                 + (init ? initBit + ageBit : '');

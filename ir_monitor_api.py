@@ -8294,6 +8294,14 @@ def start_genesis_warmup():
           f"(interval={_GENESIS_WARM_INTERVAL}s)")
 
 
+def _genesis_r2_key(date_str: str, hour_str: str, variant_n: str, cap: int) -> str:
+    """Content-addressed R2 key for a genesis payload. The (cycle, variant,
+    member-cap) triple is immutable once published, so the mirrored JSON can be
+    302'd to cdn.tcatlas.org (off Cloud Run egress). `cap=0` ⇒ uncapped."""
+    it = date_str.replace("-", "") + hour_str
+    return f"genesis/{variant_n}/{it}_m{int(cap)}.json"
+
+
 @router.get("/weatherlab-genesis")
 def get_weatherlab_genesis(max_members: int = 100, init_time: str = None,
                            variant: str = _GENESIS_VARIANT_DEFAULT):
@@ -8316,17 +8324,54 @@ def get_weatherlab_genesis(max_members: int = 100, init_time: str = None,
     """
     now = _dt.now(timezone.utc)
     variant_n = _genesis_variant_norm(variant)
+    cap = max(1, int(max_members)) if max_members else 0
+
+    # R2 fast path. A published (cycle, variant, cap) payload is immutable in
+    # its tracks; the only wall-clock fields are `cycle_age_hours` (the frontend
+    # recomputes this live from the immutable `init_time`) and the
+    # `fetched_at` + `next_cycle_eta_hours` pair (their SUM is an absolute
+    # publish instant, so freezing both keeps the next-cycle countdown correct).
+    # So the whole JSON can be mirrored to R2 + 302'd off Cloud Run egress
+    # (~16% of it). The no-store 302 + content-addressed key means a NEW cycle
+    # (new init_time → new key/URL) is always picked up despite the object's
+    # immutable Cache-Control. Reuses global_archive_api's R2 helpers (lazy
+    # import — already loaded by request time).
+    from global_archive_api import (
+        _r2_frame_exists, _r2_mirror_frame_async, _public_frame_url,
+    )
+
+    def _genesis_302(date_str, hour_str):
+        key = _genesis_r2_key(date_str, hour_str, variant_n, cap)
+        try:
+            if _r2_frame_exists(key):
+                return RedirectResponse(
+                    _public_frame_url(key), status_code=302,
+                    headers={"Cache-Control": "no-store"})
+        except Exception:
+            pass
+        return None
+
     if init_time:
         req_date, req_hour = _genesis_init_to_cycle(init_time)
         if req_date is None:
             raise HTTPException(
                 status_code=400,
                 detail="init_time must be 10 digits (YYYYMMDDHH)")
+        # Pinned past cycle: 302 before touching the multi-MB CSV at all.
+        hit = _genesis_302(req_date, req_hour)
+        if hit is not None:
+            return hit
         data = _fetch_weatherlab_genesis_csv(req_date, req_hour, variant_n)
         used_date, used_hour = req_date, req_hour
     else:
         used_date, used_hour, data = _resolve_latest_genesis_cycle(
             require_data=True, variant=variant_n)
+        # Latest: the resolve already fetched the CSV, so 302 here only skips
+        # the thinning loop + serialize + egress when the mirror exists.
+        if data is not None:
+            hit = _genesis_302(used_date, used_hour)
+            if hit is not None:
+                return hit
 
     if data is None:
         return JSONResponse(
@@ -8351,7 +8396,6 @@ def get_weatherlab_genesis(max_members: int = 100, init_time: str = None,
     cycle_age_h = (now - cycle_dt).total_seconds() / 3600.0
     next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time)
     tracks = []
-    cap = max(1, int(max_members)) if max_members else None
     for track_id, storm in data.items():
         members = storm["members"]
         total = len(members)
@@ -8378,19 +8422,28 @@ def get_weatherlab_genesis(max_members: int = 100, init_time: str = None,
     else:
         cache_max_age = 900       # comfortable lull mid-cycle
 
+    content = {
+        "model": _genesis_variant_label(variant_n),
+        "variant": variant_n,
+        "ensemble_size": ensemble_size,
+        "init_time": init_time,
+        "tracks": tracks,
+        "n_tracks": len(tracks),
+        "thinned_to": cap if cap else None,
+        "cycle_age_hours": round(cycle_age_h, 2),
+        "next_cycle_eta_hours": round(next_eta_h, 2) if next_eta_h is not None else None,
+        "fetched_at": now.isoformat(),
+    }
+    # Write-through: mirror this immutable (cycle, variant, cap) payload to R2 so
+    # the next request 302s to cdn.tcatlas.org instead of streaming through
+    # Cloud Run. Fire-and-forget; never blocks this first (cache-miss) response.
+    try:
+        _r2_mirror_frame_async(
+            _genesis_r2_key(used_date, used_hour, variant_n, cap), content)
+    except Exception:
+        pass
     return JSONResponse(
-        content={
-            "model": _genesis_variant_label(variant_n),
-            "variant": variant_n,
-            "ensemble_size": ensemble_size,
-            "init_time": init_time,
-            "tracks": tracks,
-            "n_tracks": len(tracks),
-            "thinned_to": cap,
-            "cycle_age_hours": round(cycle_age_h, 2),
-            "next_cycle_eta_hours": round(next_eta_h, 2) if next_eta_h is not None else None,
-            "fetched_at": now.isoformat(),
-        },
+        content=content,
         headers={"Cache-Control": f"public, max-age={cache_max_age}"},
     )
 
