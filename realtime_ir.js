@@ -19203,45 +19203,78 @@
                 if (_rtMwStormState.atcfId !== storm.atcf_id) return;  // moved on
                 var entries = (m && m.entries) || [];
                 var nowMs = Date.now();
-                var orbitMap = {};
+                // Group whole-arc tiles (segments) of one orbital arc by
+                // pass_group so the storm card shows ONE card per arc, not one
+                // per tile. The ingest attaches a wide arc's storm crops to a
+                // single tile, so we search every tile in the group for the
+                // hi-res crop and prefer it; the whole-arc fallback comes from
+                // whichever tile covers the storm. Unsegmented arcs have
+                // pass_group === orbit_id and one tile per group, so this
+                // reduces exactly to the pre-segmentation path.
+                var groups = {};
                 for (var i = 0; i < entries.length; i++) {
                     var e = entries[i];
                     var t = Date.parse(e.scan_start);
                     if (!isFinite(t) || (nowMs - t) > _RT_MW_WINDOW_MS) continue;
-                    if (!_rtMwPassCoversStorm(e, storm.lat, storm.lon)) continue;
-                    var oid = e.orbit_id;
-                    if (!orbitMap[oid]) {
-                        orbitMap[oid] = {
-                            orbit_id: oid,
+                    var pg = e.pass_group || e.orbit_id;
+                    var g = groups[pg];
+                    if (!g) {
+                        g = groups[pg] = {
+                            orbit_id: pg,
                             sensor: e.sensor,
                             platform: e.platform,
                             scan_start: e.scan_start,
                             scan_start_ms: t,
-                            bounds: e.bounds,
-                            products: {}    // product -> { png_url, geojson_url, bounds }
+                            covers: false,
+                            tiles: []
                         };
                     }
-                    // Each product PNG is regridded + Mercator-warped over
-                    // its OWN finite-data bbox, so its bounds can differ from
-                    // the orbit's first product. Store per-product bounds —
-                    // the crop must un-warp using the bounds the PNG was
-                    // warped with, else features land at the wrong latitude.
-                    //
-                    // Prefer the storm-centered hi-res crop when the ingest
-                    // produced one for this storm: it's regridded at native
-                    // resolution over a ±7° window instead of the
-                    // _adaptive_grid_cap-downsampled whole-arc grid, so the
-                    // thumbnail + compare modal render crisp (esp. AMSR2/
-                    // SSMIS wide arcs). Falls back to the whole-arc PNG when
-                    // no crop covers the storm (older entries, GMI, etc.).
-                    var hiRes = _rtMwPickCrop(e, storm.lat, storm.lon);
-                    orbitMap[oid].products[e.product] = {
-                        png_url: hiRes ? hiRes.png_url : e.png_url,
-                        geojson_url: e.geojson_url,
-                        bounds: hiRes ? hiRes.bounds : e.bounds,
-                        hi_res: !!hiRes
-                    };
+                    g.tiles.push(e);
+                    if (_rtMwPassCoversStorm(e, storm.lat, storm.lon)) g.covers = true;
                 }
+                var orbitMap = {};
+                Object.keys(groups).forEach(function (pg) {
+                    var g = groups[pg];
+                    if (!g.covers) return;   // no tile of this arc imaged the storm
+                    var rec = {
+                        orbit_id: g.orbit_id,
+                        sensor: g.sensor,
+                        platform: g.platform,
+                        scan_start: g.scan_start,
+                        scan_start_ms: g.scan_start_ms,
+                        bounds: null,
+                        products: {}    // product -> { png_url, geojson_url, bounds }
+                    };
+                    for (var j = 0; j < g.tiles.length; j++) {
+                        var e = g.tiles[j];
+                        var coversThis = _rtMwPassCoversStorm(e, storm.lat, storm.lon);
+                        // Each product PNG is regridded + Mercator-warped over
+                        // its OWN finite-data bbox, so store per-product bounds
+                        // — the crop un-warps using the bounds it was warped
+                        // with, else features land at the wrong latitude.
+                        // Prefer the storm-centered hi-res crop (native-res ±7°
+                        // window) over the _adaptive_grid_cap-downsampled
+                        // whole-arc tile; among whole-arc tiles prefer one that
+                        // actually covers the storm (esp. AMSR2/SSMIS arcs).
+                        var hiRes = _rtMwPickCrop(e, storm.lat, storm.lon);
+                        var cand = {
+                            png_url: hiRes ? hiRes.png_url : e.png_url,
+                            geojson_url: e.geojson_url,
+                            bounds: hiRes ? hiRes.bounds : e.bounds,
+                            hi_res: !!hiRes,
+                            covers: coversThis
+                        };
+                        var cur = rec.products[e.product];
+                        if (!cur ||
+                            (cand.hi_res && !cur.hi_res) ||
+                            (!cur.hi_res && cand.covers && !cur.covers)) {
+                            rec.products[e.product] = cand;
+                        }
+                        if (!rec.bounds && coversThis) rec.bounds = e.bounds;
+                    }
+                    if (!rec.bounds) rec.bounds = g.tiles[0].bounds;
+                    orbitMap[pg] = rec;
+                });
                 // Newest first — analyst typically wants "what's the latest
                 // pass" at a glance; older context follows down the list.
                 var orbits = Object.keys(orbitMap).map(function (k) { return orbitMap[k]; });

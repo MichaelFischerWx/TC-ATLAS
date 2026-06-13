@@ -1138,7 +1138,14 @@ class RenderedProduct:
     png_bytes: bytes
     bounds: list        # [[s, w], [n, e]]
     footprint: dict     # GeoJSON geometry
-    pass_suffix: str = ""  # per-pass tag like "-p0" when granule was split
+    pass_suffix: str = ""  # per-pass+segment tag like "-p0" or "-p0s1"
+    # Orbital-arc identity, WITHOUT the along-track segment suffix (e.g.
+    # "<orbit>-p0"). A wide arc is split into multiple whole-arc PNGs
+    # (segments) so each gets a tight bbox and native resolution; they all
+    # share one pass_group so the frontend counts them as a single pass and
+    # the storm card shows one card per arc. Defaults to the arc id when
+    # unsplit. See _segment_arc / upload_granule.
+    pass_group: str = ""
     center_track: list = field(default_factory=list)  # [[lat,lon],...] arc center; [] if unknown
     # Storm-centered hi-res crops for this product, one per active storm
     # this arc covers. Each: {"storm_id", "png_bytes", "bounds"}. The
@@ -1350,6 +1357,69 @@ def _split_into_passes(ds_bt, ds_geo) -> list[tuple]:
     return out
 
 
+# Max latitude span (deg) for a single whole-arc render segment. A polar
+# half-orbit spans ~120° of latitude; gridding that whole extent under
+# _adaptive_grid_cap's wide-arc cell limit lands at ~17 km/px in the
+# along-track direction — the blockiness on AMSR2/SSMIS wide arcs. Cutting
+# the arc into pieces no taller than this keeps each segment under the cap's
+# narrow (≤ NARROW_DEG=30°) full-resolution threshold, so each renders at
+# the regrid's native ~2 km base with a tight bbox (no cells wasted on the
+# empty corners of a diagonal arc's bounding box). 28° leaves a small margin
+# under 30° for a segment that also drifts a few ° in longitude.
+_SEG_MAX_LAT_DEG = 28.0
+
+
+def _segment_arc(sub_bt, sub_geo, suffix: str) -> list[tuple]:
+    """Split one orbital arc into along-track segments for the WHOLE-ARC
+    render, so each segment's lat-span stays under _SEG_MAX_LAT_DEG and
+    therefore under _adaptive_grid_cap's full-resolution threshold.
+
+    This is the bbox-tightening half of the resolution work (the other half
+    is the single-tree regrid in microwave_api). Crops are NOT re-derived
+    per segment — the caller computes them once from the full arc so a storm
+    near a segment boundary keeps full native-res coverage; only the
+    whole-arc overlay PNG is tiled.
+
+    Returns a list of (seg_bt, seg_geo, seg_suffix) with seg_suffix
+    `{suffix}s{k}`. Returns a single-element list with the ORIGINAL suffix
+    unchanged when the arc is already narrow enough — so narrow sensors
+    (GMI, ATMS) and short arcs stay bit-for-bit unaffected (one PNG, one
+    manifest entry, no `sN` tag)."""
+    if "latitude" not in sub_geo.data_vars:
+        return [(sub_bt, sub_geo, suffix)]
+    lat = sub_geo["latitude"].values
+    if lat.ndim != 2 or lat.shape[0] < 60:
+        return [(sub_bt, sub_geo, suffix)]
+    center_col = lat.shape[1] // 2
+    clat = lat[:, center_col].astype(np.float64)
+    finite = clat[np.isfinite(clat)]
+    if finite.size < 60:
+        return [(sub_bt, sub_geo, suffix)]
+    lat_span = float(finite.max() - finite.min())
+    if lat_span <= _SEG_MAX_LAT_DEG:
+        return [(sub_bt, sub_geo, suffix)]
+    nscan = len(clat)
+    nseg = int(np.ceil(lat_span / _SEG_MAX_LAT_DEG))
+    # Even scan-count splits. A single arc is ~monotonic in latitude along
+    # the scan axis (one ascending/descending pass), so equal scan slices
+    # give roughly equal latitude bands without binning by latitude value
+    # (which mis-handles the non-uniform scan spacing near the clipped poles).
+    edges = np.linspace(0, nscan, nseg + 1).round().astype(int)
+    out = []
+    for k in range(nseg):
+        i0, i1 = int(edges[k]), int(edges[k + 1])
+        if i1 - i0 < 30:
+            continue  # too few scans to render a meaningful segment
+        seg_bt  = sub_bt.isel(scan=slice(i0, i1))
+        seg_geo = seg_bt if sub_bt is sub_geo else sub_geo.isel(scan=slice(i0, i1))
+        out.append((seg_bt, seg_geo, f"{suffix}s{k}"))
+    if not out:
+        return [(sub_bt, sub_geo, suffix)]
+    logger.info("segmented arc%s (%.0f° lat) into %d whole-arc tiles",
+                suffix or "", lat_span, len(out))
+    return out
+
+
 def render_product(ds_bt, ds_geo, sensor: str, product: str
                    ) -> list[RenderedProduct]:
     """Render one product from one swath. For multi-pass sensors (SSMI/S,
@@ -1483,6 +1553,7 @@ def _render_single_product(ds_bt, ds_geo, sensor: str, product: str
 # ---------------------------------------------------------------------------
 from microwave_api import (
     _get_swath_geolocation, _regrid_swath_multi, _regrid_swath_window,
+    _bounds_contains,
 )
 
 
@@ -1933,6 +2004,11 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
             "sensor": meta.sensor,
             "platform": meta.platform,
             "orbit_id": orbit_id,
+            # Orbital-arc identity shared by all whole-arc tiles of this arc
+            # (orbit_id minus the `sN` segment suffix). The frontend groups
+            # by this so segments count as one pass and the storm card shows
+            # one card per arc. Falls back to orbit_id for unsegmented arcs.
+            "pass_group": p.pass_group or orbit_id,
             "scan_start": t.isoformat(),
             "product": p.product,
             "png_url": _mw_public_url(png_key, png_r2),
@@ -2131,6 +2207,9 @@ def _process_one_pps(reader_path: str, sensor: str,
     # Fetched once per granule (TTL-cached across granules). Empty list ⇒
     # no crops; render proceeds with whole-arc PNGs exactly as before.
     crop_targets = _active_storm_targets()
+    # storm_id → target, so phase 2 of the render loop can look up a crop's
+    # storm position and attach it to the tile whose bbox contains it.
+    crop_target_by_id = {str(t["id"]): t for t in crop_targets}
 
     # Iterate groups (file opens), then within each group iterate bands
     # (regrid caches), then within each band iterate passes + products.
@@ -2154,9 +2233,15 @@ def _process_one_pps(reader_path: str, sensor: str,
         # For every band that lives in this group, regrid once per pass
         # and derive every product of that band.
         for sub_bt, sub_geo, suffix in passes:
-            # One arc → one center track, shared by every band/product of
-            # this arc (geolocation is common across the group's bands).
-            arc_track = _center_track(sub_geo)
+            # Arc identity shared by all of this arc's segments — the
+            # frontend groups whole-arc tiles by pass_group so they count as
+            # one pass and the storm card shows one card per arc.
+            pass_group = (meta.orbit_id if meta else "") + suffix
+            # Tile the WHOLE-ARC render into along-track segments so each
+            # gets a tight bbox at native resolution (a 120°-tall arc under
+            # the cap is ~17 km/px otherwise). Narrow arcs return a single
+            # element with the original suffix — unchanged behavior.
+            segments = _segment_arc(sub_bt, sub_geo, suffix)
             for (g_name, band), prods in by_group_band.items():
                 if g_name != group_name:
                     continue
@@ -2166,39 +2251,75 @@ def _process_one_pps(reader_path: str, sensor: str,
                     for var_name in sensor_products[p]["channels"]
                 })
                 grid_res = _BAND_GRID_RES.get(band, 0.05)
-                try:
-                    cached = _regrid_band_channels(
-                        sub_bt, sub_geo, band_channels, sensor, grid_res)
-                except ValueError as exc:
-                    logger.debug("pass%s band=%d regrid failed: %s",
-                                 suffix, band, exc)
-                    continue
                 # Storm-window native-res regrids for this (pass, band) —
-                # one per active storm the arc actually imaged. Derived
-                # products below crop from these instead of the
-                # _adaptive_grid_cap-downsampled whole-arc grid.
+                # one per active storm the arc actually imaged. Computed ONCE
+                # from the FULL arc so a segment boundary can never clip a
+                # storm window. Derived products crop from these instead of
+                # the _adaptive_grid_cap-downsampled whole-arc grid.
                 band_crops = _storm_crops_for_band(
                     sub_bt, sub_geo, band_channels, sensor, band,
                     crop_targets)
-                for p in prods:
+
+                # Phase 1: render every whole-arc tile (segment). Keep a
+                # handle on each tile's equirect bounds + per-product
+                # RenderedProducts so phase 2 can hang crops on the right one.
+                seg_recs = []  # [{"bounds": [[s,w],[n,e]], "prod_r": {product: r}}]
+                for seg_bt, seg_geo, seg_suffix in segments:
                     try:
-                        r = _render_from_cached(cached, sensor, p)
-                        r.pass_suffix = suffix
-                        r.center_track = arc_track
-                        for storm_id, wcache in band_crops.items():
-                            try:
-                                cr = _render_from_cached(wcache, sensor, p)
-                            except ValueError:
-                                continue  # product can't derive from window
-                            r.crops.append({
-                                "storm_id": storm_id,
-                                "png_bytes": cr.png_bytes,
-                                "bounds": cr.bounds,
-                            })
-                        rendered.append(r)
+                        cached = _regrid_band_channels(
+                            seg_bt, seg_geo, band_channels, sensor, grid_res)
                     except ValueError as exc:
-                        logger.debug("pass%s product=%s skipped: %s",
-                                     suffix, p, exc)
+                        logger.debug("pass%s band=%d regrid failed: %s",
+                                     seg_suffix, band, exc)
+                        continue
+                    # Per-segment center track (each tile covers only its
+                    # own along-track extent — correct for the coverage gate).
+                    seg_track = _center_track(seg_geo)
+                    prod_r = {}
+                    for p in prods:
+                        try:
+                            r = _render_from_cached(cached, sensor, p)
+                        except ValueError as exc:
+                            logger.debug("pass%s product=%s skipped: %s",
+                                         seg_suffix, p, exc)
+                            continue
+                        r.pass_suffix = seg_suffix
+                        r.pass_group = pass_group
+                        r.center_track = seg_track
+                        prod_r[p] = r
+                        rendered.append(r)
+                    if prod_r:
+                        seg_recs.append({"bounds": cached["bounds"],
+                                         "prod_r": prod_r})
+
+                # Phase 2: attach each storm's crop to the tile whose bounds
+                # CONTAIN the storm — that's exactly the tile the per-storm
+                # endpoint (nrt_passes_for_storm, a bbox filter) will return,
+                # so the crop never gets stranded on a tile the endpoint drops.
+                # Fall back to the first tile so the crop still ships if no
+                # tile bbox matched (rare: storm just off every tile corner).
+                for storm_id, wcache in band_crops.items():
+                    tgt = crop_target_by_id.get(str(storm_id))
+                    chosen = None
+                    if tgt is not None:
+                        for rec in seg_recs:
+                            if _bounds_contains(rec["bounds"], tgt["lat"], tgt["lon"]):
+                                chosen = rec
+                                break
+                    if chosen is None and seg_recs:
+                        chosen = seg_recs[0]
+                    if chosen is None:
+                        continue
+                    for p, r in chosen["prod_r"].items():
+                        try:
+                            cr = _render_from_cached(wcache, sensor, p)
+                        except ValueError:
+                            continue  # product can't derive from window
+                        r.crops.append({
+                            "storm_id": storm_id,
+                            "png_bytes": cr.png_bytes,
+                            "bounds": cr.bounds,
+                        })
 
         ds_bt.close()
 

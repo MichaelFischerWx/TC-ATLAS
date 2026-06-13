@@ -1716,8 +1716,6 @@ def _build_storm_relative_grid(
     suitable for direct use as a Plotly heatmap/contour trace.
     Returns None if insufficient data.
     """
-    from scipy.interpolate import griddata
-
     # Flatten & mask
     xf = x_km.ravel().astype(np.float32)
     yf = y_km.ravel().astype(np.float32)
@@ -1736,13 +1734,14 @@ def _build_storm_relative_grid(
     ax = np.linspace(-grid_extent_km, grid_extent_km, n)
     gx, gy = np.meshgrid(ax, ax)
 
-    gridded = griddata((xf, yf), zf, (gx, gy), method="nearest")
-
-    # Mask points far from any data (>15 km) to avoid extrapolation artifacts
+    # One KD-tree query → nearest-source index (value) + distance (mask),
+    # replacing griddata(method="nearest") plus a separate far_mask tree.
     from scipy.spatial import cKDTree
     tree = cKDTree(np.column_stack([xf, yf]))
-    dists, _ = tree.query(np.column_stack([gx.ravel(), gy.ravel()]))
-    far_mask = dists.reshape(gridded.shape) > 15.0
+    dists, idx = tree.query(np.column_stack([gx.ravel(), gy.ravel()]))
+    gridded = zf[idx].reshape(gx.shape)
+    # Mask points far from any data (>15 km) to avoid extrapolation artifacts
+    far_mask = (dists > 15.0).reshape(gx.shape)
     gridded[far_mask] = np.nan
 
     # Convert to JSON-friendly lists (replace NaN with None for JSON null)
@@ -1774,7 +1773,6 @@ def _build_storm_relative_rgb_grid(
     formulas via ``_nrl_37color_rgb()``.  V37 and H37 are gridded separately
     and the RGB is computed on the regular grid.
     """
-    from scipy.interpolate import griddata
     from scipy.spatial import cKDTree
 
     # Flatten & mask (need both V37 and H37 valid)
@@ -1799,14 +1797,16 @@ def _build_storm_relative_rgb_grid(
     ax = np.linspace(-grid_extent_km, grid_extent_km, n)
     gx, gy = np.meshgrid(ax, ax)
 
-    # Distance mask — transparent where no data within 15 km
+    # Distance mask + nearest-source index in one query (transparent where
+    # no data within 15 km). V37 and H37 share the same swath geometry, so
+    # index both by idx instead of two more griddata calls that would each
+    # rebuild the same tree internally.
     tree = cKDTree(np.column_stack([xf_m, yf_m]))
-    dists, _ = tree.query(np.column_stack([gx.ravel(), gy.ravel()]))
-    far_mask = dists.reshape((n, n)) > 15.0
+    dists, idx = tree.query(np.column_stack([gx.ravel(), gy.ravel()]))
+    far_mask = (dists > 15.0).reshape((n, n))
 
-    # Grid V37 and H37 independently
-    v37_grid = griddata((xf_m, yf_m), vf_m, (gx, gy), method="nearest")
-    h37_grid = griddata((xf_m, yf_m), hf_m, (gx, gy), method="nearest")
+    v37_grid = vf_m[idx].reshape((n, n))
+    h37_grid = hf_m[idx].reshape((n, n))
     v37_grid[far_mask] = np.nan
     h37_grid[far_mask] = np.nan
 
@@ -1873,8 +1873,6 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     Regrid irregular swath data onto a regular lat/lon grid using
     nearest-neighbor binning. Fast and sufficient for image overlay.
     """
-    from scipy.interpolate import griddata
-
     # Convert longitudes from 0–360 to -180/+180 if needed (TC-PRIMED uses 0–360)
     lons = lons.copy()
     lons[lons > 180] -= 360
@@ -1913,21 +1911,21 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     grid_lon = np.linspace(lon_min, lon_max, n_lon)
     glon, glat = np.meshgrid(grid_lon, grid_lat)
 
-    # Regrid
-    gridded = griddata(
-        (flat_lon, flat_lat), flat_data,
-        (glon, glat),
-        method="nearest",
-    )
-
+    # Single nearest-neighbor pass: one KD-tree query returns BOTH the
+    # nearest source index (the regridded value) AND its distance (the
+    # off-swath mask). This replaces scipy.griddata(method="nearest") —
+    # which builds its own cKDTree internally — plus a second cKDTree that
+    # used to be built on the same points just for the far_mask. One tree
+    # build + one query for an identical result (~2x cheaper, less memory).
+    from scipy.spatial import cKDTree
+    tree = cKDTree(np.column_stack([flat_lon, flat_lat]))
+    dists, idx = tree.query(np.column_stack([glon.ravel(), glat.ravel()]))
+    gridded = flat_data[idx].reshape(glon.shape)
     # Mask grid points far from any actual swath data to prevent
     # nearest-neighbor extrapolation beyond the swath edge.
     # Threshold: ~3x the grid resolution in degrees (~6 km at equator)
-    from scipy.spatial import cKDTree
-    tree = cKDTree(np.column_stack([flat_lon, flat_lat]))
-    dists, _ = tree.query(np.column_stack([glon.ravel(), glat.ravel()]))
     max_dist_deg = grid_res_deg * 3.0
-    far_mask = dists.reshape(gridded.shape) > max_dist_deg
+    far_mask = (dists > max_dist_deg).reshape(glon.shape)
     gridded[far_mask] = np.nan
     # Fill the small interior NaN holes left by the kd-tree threshold
     # while preserving genuine off-swath edges (large connected NaN regions).
@@ -2011,8 +2009,6 @@ def _regrid_swath_multi(
 
     Returns dict with 'channels' (dict of name->2D array), plus grid metadata.
     """
-    from scipy.interpolate import griddata
-
     # Convert longitudes from 0–360 to -180/+180
     lons = lons.copy()
     lons[lons > 180] -= 360
@@ -2057,32 +2053,32 @@ def _regrid_swath_multi(
     grid_lon = np.linspace(lon_min, lon_max, n_lon)
     glon, glat = np.meshgrid(grid_lon, grid_lat)
 
-    # Regrid each channel onto the same grid
     if channel_names is None:
         channel_names = [f"ch{i}" for i in range(len(data_channels))]
+
+    # One KD-tree shared across ALL channels: every co-located channel maps
+    # the same swath geometry onto the same grid, so the nearest-source
+    # index (idx) and off-swath distance (dists) are identical for each.
+    # Build+query once, then index each channel by idx. This replaces the
+    # old per-channel griddata(method="nearest") (which built a fresh tree
+    # internally per channel) plus a separate far_mask tree — collapsing
+    # (K+1) tree builds to 1 for a K-channel composite. Identical result.
+    from scipy.spatial import cKDTree
+    tree = cKDTree(np.column_stack([flat_lon, flat_lat]))
+    dists, idx = tree.query(np.column_stack([glon.ravel(), glat.ravel()]))
+    max_dist_deg = grid_res_deg * 3.0
+    far_mask = (dists > max_dist_deg).reshape(glon.shape)
 
     channels = {}
     for name, ch_data in zip(channel_names, data_channels):
         flat_ch = ch_data.ravel()[mask]
-        channels[name] = griddata(
-            (flat_lon, flat_lat), flat_ch,
-            (glon, glat), method="nearest",
-        )
-
-    # Mask grid points far from any actual swath data to prevent
-    # nearest-neighbor extrapolation beyond the swath edge.
-    from scipy.spatial import cKDTree
-    tree = cKDTree(np.column_stack([flat_lon, flat_lat]))
-    dists, _ = tree.query(np.column_stack([glon.ravel(), glat.ravel()]))
-    max_dist_deg = grid_res_deg * 3.0
-    far_mask = dists.reshape(glon.shape) > max_dist_deg
-    for name in channels:
-        channels[name][far_mask] = np.nan
-        # Same speckle hole-fill as the single-channel path. Filling each
-        # RGB channel independently is fine — the NaN mask is identical
-        # across channels (set by the shared far_mask) so the filled
-        # values reach consistent positions.
-        channels[name] = _fill_speckle_holes(channels[name])
+        g = flat_ch[idx].reshape(glon.shape)
+        # Mask grid points far from any actual swath data to prevent
+        # nearest-neighbor extrapolation beyond the swath edge. The NaN
+        # mask is identical across channels (shared far_mask), so the
+        # per-channel speckle hole-fill lands at consistent positions.
+        g[far_mask] = np.nan
+        channels[name] = _fill_speckle_holes(g)
 
     center_lat = (lat_min + lat_max) / 2.0
     center_lon = (lon_min + lon_max) / 2.0
@@ -2130,7 +2126,6 @@ def _regrid_swath_window(
     Raises ValueError if fewer than 10 swath points fall in the window
     (storm off-swath — caller skips the crop).
     """
-    from scipy.interpolate import griddata
     from scipy.spatial import cKDTree
 
     lons = lons.copy()
@@ -2179,22 +2174,20 @@ def _regrid_swath_window(
     if channel_names is None:
         channel_names = [f"ch{i}" for i in range(len(data_channels))]
 
+    # Single shared KD-tree query (see _regrid_swath_multi): one build +
+    # query yields the nearest-source index and distance for every channel.
+    tree = cKDTree(np.column_stack([flat_lon, flat_lat]))
+    dists, idx = tree.query(np.column_stack([glon.ravel(), glat.ravel()]))
+    max_dist_deg = grid_res_deg * 3.0
+    # Mask grid cells with no nearby swath sample (off-swath / polar gap).
+    far_mask = (dists > max_dist_deg).reshape(glon.shape)
+
     channels = {}
     for name, ch_data in zip(channel_names, data_channels):
         flat_ch = ch_data.ravel()[mask][sel]
-        channels[name] = griddata(
-            (flat_lon, flat_lat), flat_ch,
-            (glon, glat), method="nearest",
-        )
-
-    # Mask grid cells with no nearby swath sample (off-swath / polar gap).
-    tree = cKDTree(np.column_stack([flat_lon, flat_lat]))
-    dists, _ = tree.query(np.column_stack([glon.ravel(), glat.ravel()]))
-    max_dist_deg = grid_res_deg * 3.0
-    far_mask = dists.reshape(glon.shape) > max_dist_deg
-    for name in channels:
-        channels[name][far_mask] = np.nan
-        channels[name] = _fill_speckle_holes(channels[name])
+        g = flat_ch[idx].reshape(glon.shape)
+        g[far_mask] = np.nan
+        channels[name] = _fill_speckle_holes(g)
 
     valid_frac = float(np.mean(~far_mask))
 

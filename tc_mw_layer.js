@@ -248,6 +248,12 @@
                 if (isNaN(ms)) continue;
                 byOrbit[key] = {
                     orbit_id: e.orbit_id,
+                    // Orbital-arc identity shared by a wide arc's whole-arc
+                    // tiles (segments). Each segment is its own orbit object
+                    // here (so it renders as its own overlay), but the pass
+                    // counter groups by pass_group so tiles count as one
+                    // pass. Falls back to orbit_id for unsegmented arcs.
+                    pass_group: e.pass_group || e.orbit_id,
                     sensor: e.sensor,
                     platform: e.platform,
                     scan_start_iso: e.scan_start,
@@ -933,12 +939,19 @@
         var now = Date.now();
         var windowMin = this._hours * 60;
         var nVisible = 0;
+        // Unique orbital arcs actually rendered. A wide arc is split into
+        // several whole-arc tiles (separate overlays / orbit objects) that
+        // share a pass_group; the user-facing "passes" count is the number
+        // of distinct arcs, not tiles, so segmentation doesn't inflate it.
+        var visibleGroups = {};
         // Counts of orbits within the time window per sensor (regardless
         // of toggle state). Drives the "(N)" suffix on the checkbox row
         // so users see how much data each sensor contributes.
-        var perSensorCounts = {};
+        // Per-sensor arc sets (dedupe whole-arc tiles by pass_group so the
+        // "(N)" checkbox suffix counts distinct passes, not segment tiles).
+        var perSensorGroups = {};
         for (var ks = 0; ks < KNOWN_SENSORS.length; ks++) {
-            perSensorCounts[KNOWN_SENSORS[ks].key] = 0;
+            perSensorGroups[KNOWN_SENSORS[ks].key] = {};
         }
         var cursorAgeMin = this._cursorAgeMin || 0;
 
@@ -973,9 +986,9 @@
             var orb = orbits[i];
             var ageMin = (now - orb.scan_start_ms) / 60000;
             if (ageMin < 0 || ageMin > windowMin) continue;
-            // Count regardless of sensor toggle state.
-            if (orb.sensor && perSensorCounts.hasOwnProperty(orb.sensor)) {
-                perSensorCounts[orb.sensor]++;
+            // Count regardless of sensor toggle state (dedupe by arc).
+            if (orb.sensor && perSensorGroups.hasOwnProperty(orb.sensor)) {
+                perSensorGroups[orb.sensor][orb.pass_group || orb.orbit_id] = true;
             }
             if (orb.sensor && this._sensors[orb.sensor] === false) continue;
             // Cursor filter: when the playback head is parked at age T > 0,
@@ -986,8 +999,14 @@
             if (!entry) continue;       // no PNG for the active product
             this._addOrbit(orb, entry, ageMin, windowMin, stormsByOrbit[orb.orbit_id], mosaicItems);
             nVisible++;
+            visibleGroups[orb.pass_group || orb.orbit_id] = true;
         }
+        var nPasses = Object.keys(visibleGroups).length;
         if (this._mosaic) this._mosaic.setItems(mosaicItems);
+        var perSensorCounts = {};
+        for (var sg in perSensorGroups) {
+            perSensorCounts[sg] = Object.keys(perSensorGroups[sg]).length;
+        }
         this._updateSensorCounts(perSensorCounts);
         this._updateScheduleSection();
         // Status line — either count or empty-state message
@@ -1011,10 +1030,10 @@
             // strips. So "14 passes" might be 1 long GMI track + a handful
             // of SSMI/S granules; users see the orbital decomposition.
             var nTracks = this._countOrbitalTracks(orbits, now, windowMin, cursorAgeMin);
-            var orbitSuffix = (nTracks > 0 && nTracks !== nVisible)
+            var orbitSuffix = (nTracks > 0 && nTracks !== nPasses)
                 ? ' (' + nTracks + ' orbital track' + (nTracks === 1 ? '' : 's') + ')'
                 : '';
-            this._updateStatus(nVisible + ' pass' + (nVisible === 1 ? '' : 'es') + orbitSuffix + ' · last ' + this._hours + ' hr' + cursorSuffix);
+            this._updateStatus(nPasses + ' pass' + (nPasses === 1 ? '' : 'es') + orbitSuffix + ' · last ' + this._hours + ' hr' + cursorSuffix);
         }
     };
 
