@@ -17254,7 +17254,17 @@
                 allowTaint: false,
                 backgroundColor: null,
                 logging: false,
-                scale: window.devicePixelRatio || 1
+                scale: window.devicePixelRatio || 1,
+                // The status bar is position:fixed at bottom:0 — the same edge
+                // as the map's south boundary. html2canvas clones the whole
+                // document and renders fixed elements within the captured bbox,
+                // so the white "No active tropical cyclones / Updated…" bar lands
+                // over the bottom row of longitude labels in the saved PNG (it
+                // doesn't in the live view, where it's just page chrome below the
+                // grid). Drop it from the capture so the graticule stays legible.
+                ignoreElements: function (el) {
+                    return el.id === 'ir-status-bar';
+                }
             });
         }).then(function (canvas) {
             return new Promise(function (resolve, reject) {
