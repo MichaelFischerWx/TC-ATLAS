@@ -7625,6 +7625,15 @@ def get_seasonal_daily_winds(
     )
 
 
+# Server-side cache for the env-layers list. The metadata only changes when
+# the build job runs (every 6 h), but assembling the list is ~25 GCS reads, so
+# without this every request paid that round-trip cost. 300 s TTL keeps it well
+# inside the build cadence.
+_env_layers_cache: list = []
+_env_layers_ts: float = 0.0
+_ENV_LAYERS_TTL = 300.0
+
+
 @router.get("/env/layers")
 def get_env_layers():
     """List available global environmental overlays.
@@ -7634,8 +7643,16 @@ def get_env_layers():
     available field, then drops it on the global map as L.imageOverlay.
 
     The layers are produced by the `build_env_overlays.py` Cloud Run
-    Job (scheduled every 6 h).
+    Job (scheduled every 6 h). The assembled list is cached in-process for
+    _ENV_LAYERS_TTL seconds so repeat requests skip the ~25 GCS reads.
     """
+    global _env_layers_cache, _env_layers_ts
+    if _env_layers_cache and (time.time() - _env_layers_ts) < _ENV_LAYERS_TTL:
+        return JSONResponse(
+            content={"layers": _env_layers_cache, "count": len(_env_layers_cache)},
+            headers={"Cache-Control": "public, max-age=120"},
+        )
+
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return JSONResponse(
@@ -7670,12 +7687,18 @@ def get_env_layers():
     for prefix, name in known:
         try:
             blob = bucket.blob(f"{prefix}/{name}/metadata.json")
-            if not blob.exists():
-                continue
-            meta = json.loads(blob.download_as_text())
+            # Skip the blob.exists() HEAD precheck — just download and treat a
+            # 404 as "not built yet". Halves the GCS round-trips per layer.
+            meta = json.loads(blob.download_as_text(timeout=10))
             layers.append(meta)
         except Exception as e:
-            logger.warning(f"{prefix}/{name}/metadata.json read failed: {e}")
+            # A not-yet-built layer is expected (NotFound); only warn on
+            # genuinely unexpected read errors.
+            if type(e).__name__ != "NotFound":
+                logger.warning(f"{prefix}/{name}/metadata.json read failed: {e}")
+
+    _env_layers_cache = layers
+    _env_layers_ts = time.time()
 
     return JSONResponse(
         content={"layers": layers, "count": len(layers)},
