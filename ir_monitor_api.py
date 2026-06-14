@@ -8927,9 +8927,10 @@ def _tca_clusters_cached(init_time, variant_n, params, data) -> list:
     gcs_key = _tca_cluster_gcs_key(init_time, variant_n, params, len(data))
     clusters = _tca_cluster_gcs_get(gcs_key)
     if clusters is None:
-        # 6-tuple = classic params; 8-tuple appends (merge_km,
-        # merge_overlap_h) — only present when the merge pass is on,
-        # so default-param cache/GCS keys are unchanged.
+        # 6-tuple = classic params; merge-on appends (merge_km,
+        # merge_overlap_h, algo_version) — only present when the merge
+        # pass is on, so merge-off cache/GCS keys are unchanged. Only
+        # [6]/[7] are read back; [8] is a cache-key discriminator.
         (grid_deg, peak_min_members, assign_radius_km,
          time_window_h, cluster_min_members, same_system_km) = params[:6]
         merge_km = params[6] if len(params) > 6 else 0.0
@@ -9071,6 +9072,13 @@ _TCA_MERGE_R_SAMPLES = 300      # member-pair distance samples per tau
 # share this default so the steady-state request is one cache key; the
 # frontend's reset value mirrors it (_GENESIS_MERGE_KM in realtime_ir.js).
 _TCA_MERGE_DEFAULT_KM = 450.0
+# Bump when the merge ALGORITHM changes (not its tuner params) so cached
+# merge-on cluster sets recompute instead of serving a stale shape. The
+# size-aware gates run INSIDE _tca_compute_clusters, after the param-based
+# cache key is formed, so without this token a deploy would keep serving
+# pre-change clusters under the unchanged merge_km=450 key. v2 = size-aware
+# geometric gates for thin ensembles.
+_TCA_MERGE_ALGO_VERSION = 2
 
 
 def _tca_size_aware_merge_gates(obs_size, merge_km, merge_overlap_h):
@@ -9525,12 +9533,14 @@ def _tca_params_tuple(grid_deg, peak_min_members, assign_radius_km,
     """Rounded cache-key tuple. The merge params are appended ONLY when
     the merge pass is enabled (merge_km > 0): merge-off requests keep the
     classic 6-tuple keys (memory + GCS), and merge-on requests get their
-    own 8-tuple keys — the two never collide."""
+    own 9-tuple keys (merge_km, merge_overlap_h, algo_version) — the two
+    never collide, and an algo bump invalidates stale merge-on caches."""
     params = (round(grid_deg, 3), int(peak_min_members),
               round(assign_radius_km, 2), round(time_window_h, 2),
               int(cluster_min_members), round(same_system_km, 2))
     if merge_km and merge_km > 0:
-        params = params + (round(merge_km, 1), round(merge_overlap_h, 1))
+        params = params + (round(merge_km, 1), round(merge_overlap_h, 1),
+                           _TCA_MERGE_ALGO_VERSION)
     return params
 
 
