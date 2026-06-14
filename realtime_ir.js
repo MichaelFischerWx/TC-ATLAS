@@ -6699,10 +6699,11 @@
         }
     }
 
-    // ── Raw Band (WV/Vis) pre-fetch cache ──
+    // ── Raw Band (WV/Vis) cache ──
+    // Populated on demand by _fetchBandIncremental when the user selects the
+    // WV/Vis product; reused by the satellite viewer via getRtRawBandFrames.
     // Structure: { "8": { stormId: { frames: [...], cachedAt, lat, lon } } }
     var _rawBandCache = {};
-    var DEFAULT_PREFETCH_BAND = 8;  // WV — works day and night
 
     function _rawBandCacheValid(stormId, band) {
         var bandCache = _rawBandCache[band];
@@ -6730,7 +6731,13 @@
      * Cached data is used by _prefetchRawTbSilent() and satellite viewer
      * when the user clicks into a storm detail view.
      */
-    var MAX_PREFETCH_STORMS = 3;  // limit background prefetch to avoid bandwidth waste
+    // Warm only the single strongest storm — the most likely first click.
+    // This runs on every active-storms poll for an idle gallery tab, and each
+    // warmed storm is a server-side bundle render, so prefetching the whole
+    // top-N speculatively (most never opened) is pure waste. The WV-band
+    // prefetch was dropped for the same reason: WV is a secondary product that
+    // already loads on demand when the user selects it.
+    var MAX_PREFETCH_STORMS = 1;
 
     function _prefetchAllStormsRawTb(storms) {
         if (!storms || storms.length === 0) return;
@@ -6749,11 +6756,7 @@
         });
         var queue = sorted.slice(0, MAX_PREFETCH_STORMS);
         function fetchNext() {
-            if (queue.length === 0) {
-                // IR prefetch done — chain band prefetch
-                _prefetchAllStormsBand(storms);
-                return;
-            }
+            if (queue.length === 0) return;  // IR prefetch done
             // Abort if user opened a detail view while prefetch was running
             if (currentStormId) return;
             var storm = queue.shift();
@@ -6762,34 +6765,6 @@
             _fetchRawTbIncremental(atcfId, true, function () {
                 console.log('[IR Pre-fetch] ' + atcfId + ': done (' +
                     ((_rawTbCache[atcfId] || {}).rawTbFrames || []).length + ' frames)');
-                fetchNext();
-            });
-        }
-        fetchNext();
-    }
-
-    /** Pre-fetch WV band frames for top storms (runs after IR prefetch). */
-    function _prefetchAllStormsBand(storms) {
-        if (!storms || storms.length === 0) return;
-        if (currentStormId) return;
-        // Defer band prefetch if the satellite viewer is active (it has its own fetches)
-        var satMain = document.getElementById('sat-main');
-        if (satMain && satMain.style.display !== 'none') return;
-        var band = DEFAULT_PREFETCH_BAND;
-        var sorted = storms.slice().sort(function (a, b) {
-            return (b.vmax_kt || 0) - (a.vmax_kt || 0);
-        });
-        var queue = sorted.slice(0, MAX_PREFETCH_STORMS);
-        function fetchNext() {
-            if (queue.length === 0) return;
-            if (currentStormId) return;
-            var storm = queue.shift();
-            var atcfId = storm.atcf_id;
-            if (!atcfId || _rawBandCacheValid(atcfId, band)) { fetchNext(); return; }
-            _fetchBandIncremental(atcfId, band, true, function () {
-                var c = (_rawBandCache[band] && _rawBandCache[band][atcfId]) || {};
-                console.log('[Band Pre-fetch] ' + atcfId + ' band ' + band + ': done (' +
-                    (c.frames || []).length + ' frames)');
                 fetchNext();
             });
         }
@@ -8356,11 +8331,11 @@
         var thumb = document.createElement('div');
         thumb.className = 'qv-card-thumb is-loading';
         var img = document.createElement('img');
-        // The gallery shows only the handful of active storms, all above the
-        // fold — eager + high priority so the IR snapshots start fetching
-        // immediately instead of waiting behind the lazy-load queue.
-        img.alt = ''; img.loading = 'eager'; img.decoding = 'async';
-        img.fetchPriority = 'high';
+        // Lazy-load the IR snapshot: above-the-fold cards still fetch
+        // immediately, but in an active season with many storms the
+        // below-the-fold cards (each a server-side IR-frame render) don't
+        // fire until scrolled into view — and never fire if never seen.
+        img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
         var _triedFallback = false;
         img.addEventListener('load', function () { thumb.classList.remove('is-loading', 'is-error'); });
         img.addEventListener('error', function () {
