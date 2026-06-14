@@ -247,32 +247,39 @@ def fetch_gfs_bundle(date_str: str, hour_str: str,
     typeOfLevel — keeps cfgrib happy without filter_by_keys gymnastics.
     """
     bundle: dict = {}
-    # Pressure-level group — one cgi-bin call per var, all levels.
-    for var, levels in GFS_PRESSURE_REQUESTS.items():
-        grib = fetch_gfs_global(date_str, hour_str, levels, var,
-                                forecast_hour=forecast_hour)
+    from concurrent.futures import ThreadPoolExecutor
+
+    # Each fetch is an independent NOMADS HTTP call returning GRIB bytes —
+    # pure I/O with no shared state — so fan them out concurrently. The serial
+    # round-trips dominated the per-forecast-hour wall-clock (and thus billed
+    # job time). cfgrib decode (read_gfs_field) stays on the main thread since
+    # eccodes isn't guaranteed thread-safe, and concurrency is kept modest so
+    # NOMADS doesn't throttle (fetch_gfs_global already retries 503s).
+    # Task tuple: (var, fetch_levels) — pressure groups all levels per call;
+    # surface fetches one sentinel level each.
+    tasks = [(var, list(levels)) for var, levels in GFS_PRESSURE_REQUESTS.items()]
+    tasks += [(var, [lvl]) for var, lvl in GFS_SURFACE_REQUESTS]
+
+    def _fetch(task):
+        var, levels = task
+        return task, fetch_gfs_global(date_str, hour_str, levels, var,
+                                      forecast_hour=forecast_hour)
+
+    with ThreadPoolExecutor(max_workers=min(4, len(tasks))) as pool:
+        results = list(pool.map(_fetch, tasks))
+
+    for (var, levels), grib in results:
         if grib is None:
-            log.warning("bundle: %s f%03d pressure fetch failed (levels=%s)",
+            log.warning("bundle: %s f%03d fetch failed (levels=%s)",
                         var, forecast_hour, levels)
             continue
         for lvl in levels:
-            arr = read_gfs_field(grib, lvl, var)
+            # int level → cfgrib pressure selection; str sentinel → the
+            # isobaricInhPa branch is bypassed (no such dim), `sel` ignored.
+            sel = lvl if isinstance(lvl, int) else 0
+            arr = read_gfs_field(grib, sel, var)
             if arr is not None:
                 bundle[(var, lvl)] = arr
-    # Non-pressure single-level fetches.
-    for var, lvl in GFS_SURFACE_REQUESTS:
-        grib = fetch_gfs_global(date_str, hour_str, [lvl], var,
-                                forecast_hour=forecast_hour)
-        if grib is None:
-            log.warning("bundle: %s %s f%03d fetch failed",
-                        var, lvl, forecast_hour)
-            continue
-        # read_gfs_field's isobaricInhPa branch is bypassed for
-        # non-pressure GRIBs (no such dim); the unused `level` arg is
-        # ignored in that path.
-        arr = read_gfs_field(grib, 0, var)
-        if arr is not None:
-            bundle[(var, lvl)] = arr
     log.info("Bundle f%03d: %d/%d fields cached",
              forecast_hour, len(bundle),
              sum(len(v) for v in GFS_PRESSURE_REQUESTS.values())
