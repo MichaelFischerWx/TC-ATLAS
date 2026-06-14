@@ -849,47 +849,43 @@ def get_microwave_data(
         s3_url = f"s3://{TCPRIMED_BUCKET}/{s3_key}"
         fs = fsspec.filesystem("s3", anon=True)
 
-        # First, discover the HDF5 group structure
+        # Discover the HDF5 group structure. Open the remote file ONCE and
+        # recurse the in-memory handle for sub-subgroups too — the previous
+        # version re-opened the S3 object once per group with subgroups, which
+        # was extra range I/O on every first render (the only billed path).
+        subgroups = {}
+        deep_groups = {}
         with fs.open(s3_url, "rb") as f:
             h5file = h5netcdf.File(f, "r")
             all_groups = list(h5file.groups.keys())
             root_vars = list(h5file.variables.keys())
-            # Also check subgroups
-            subgroups = {}
             for g in all_groups:
                 grp = h5file.groups[g]
+                grp_subs = list(grp.groups.keys()) if hasattr(grp, "groups") else []
                 subgroups[g] = {
-                    "subgroups": list(grp.groups.keys()) if hasattr(grp, "groups") else [],
+                    "subgroups": grp_subs,
                     "variables": list(grp.variables.keys()),
                 }
+                # Enumerate sub-subgroups from the same open handle.
+                for sg in grp_subs:
+                    try:
+                        sg_grp = grp.groups[sg]
+                        deep_groups[f"{g}/{sg}"] = {
+                            "subgroups": list(sg_grp.groups.keys()) if hasattr(sg_grp, "groups") else [],
+                            "variables": list(sg_grp.variables.keys()),
+                        }
+                    except Exception as e_sub:
+                        print(f"[MW]   (error reading subgroup '{g}/{sg}': {e_sub})")
             h5file.close()
 
         # Log full structure with print() so it always shows in Render logs
         print(f"[MW] TC-PRIMED file: {s3_key}")
         print(f"[MW]   Top-level groups: {all_groups}")
         print(f"[MW]   Root vars: {root_vars[:10]}")
-
-        # Enumerate sub-subgroups (build into a separate dict to avoid
-        # mutating subgroups during iteration)
-        deep_groups = {}
-        for g, ginfo in list(subgroups.items()):
+        for g, ginfo in subgroups.items():
             print(f"[MW]   Group '{g}': subgroups={ginfo['subgroups']}, vars={ginfo['variables'][:15]}")
-            if ginfo["subgroups"]:
-                try:
-                    with fs.open(s3_url, "rb") as f2:
-                        h5f2 = h5netcdf.File(f2, "r")
-                        for sg in ginfo["subgroups"]:
-                            sg_grp = h5f2.groups[g].groups[sg]
-                            sg_vars = list(sg_grp.variables.keys())
-                            sg_subs = list(sg_grp.groups.keys()) if hasattr(sg_grp, "groups") else []
-                            deep_groups[f"{g}/{sg}"] = {
-                                "subgroups": sg_subs,
-                                "variables": sg_vars,
-                            }
-                            print(f"[MW]     Sub '{g}/{sg}': vars={sg_vars[:15]}")
-                        h5f2.close()
-                except Exception as e_sub:
-                    print(f"[MW]   (error reading subgroups of '{g}': {e_sub})")
+        for k, v in deep_groups.items():
+            print(f"[MW]     Sub '{k}': vars={v['variables'][:15]}")
         subgroups.update(deep_groups)
 
         data_dict = None
