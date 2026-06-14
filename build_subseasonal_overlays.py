@@ -365,17 +365,42 @@ def daily_climatology(today: datetime, cache_dir: Path):
 
     Returns an xarray.DataArray indexed by day-of-year [1..366] of shape
     (366, lat, lon).
+
+    The observed climatology changes only when the base period
+    (CLIMO_START..CLIMO_END) is rebased, so it is built once and persisted to
+    gs://{GCS_BUCKET}/{GCS_PREFIX}/{name}, keyed by the period years. Cloud Run
+    Jobs start with a fresh filesystem each run, so without the GCS copy the
+    local cache check below never hits and this would re-pull ~30 years of
+    daily OLR over OPeNDAP and recompute the climatology on every daily run.
+    Resolution order: local cache -> GCS sidecar -> build from OPeNDAP (then
+    upload). Mirrors gefs_daily_climatology's GCS-persistence pattern.
     """
     import xarray as xr
-    cache_path = cache_dir / "olr_climo_1991_2020.nc"
+    start = datetime.fromisoformat(CLIMO_START)
+    end   = datetime.fromisoformat(CLIMO_END)
+    climo_name = f"olr_climo_{start.year}_{end.year}.nc"
+    cache_path = cache_dir / climo_name
     if cache_path.exists():
         log.info("Loading cached climatology from %s", cache_path)
         return xr.open_dataarray(cache_path).load()
 
+    # Try the GCS sidecar before paying for the OPeNDAP rebuild.
+    try:
+        from google.cloud import storage
+        client = storage.Client()
+        blob = client.bucket(GCS_BUCKET).blob(f"{GCS_PREFIX}/{climo_name}")
+        if blob.exists():
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            blob.download_to_filename(str(cache_path))
+            log.info("Downloaded OLR climatology from gs://%s/%s/%s",
+                     GCS_BUCKET, GCS_PREFIX, climo_name)
+            return xr.open_dataarray(cache_path).load()
+    except Exception as e:
+        log.warning("OLR climatology GCS fetch failed (%s); rebuilding from "
+                    "OPeNDAP.", e)
+
     log.info("Building climatology from %s .. %s ...", CLIMO_START, CLIMO_END)
     ds = _open_opendap_with_retry(OPENDAP_URL)
-    start = datetime.fromisoformat(CLIMO_START)
-    end   = datetime.fromisoformat(CLIMO_END)
     da = _fetch_olr_range(ds, start, end)
     if da is None:
         raise RuntimeError("Could not load climatology window")
@@ -393,6 +418,17 @@ def daily_climatology(today: datetime, cache_dir: Path):
     cache_dir.mkdir(parents=True, exist_ok=True)
     climo_smooth.to_netcdf(cache_path)
     log.info("Cached climatology to %s", cache_path)
+    # Persist to GCS so subsequent Cloud Run Job runs skip the OPeNDAP rebuild.
+    try:
+        from google.cloud import storage
+        client = storage.Client()
+        blob = client.bucket(GCS_BUCKET).blob(f"{GCS_PREFIX}/{climo_name}")
+        blob.upload_from_filename(str(cache_path))
+        log.info("Uploaded OLR climatology to gs://%s/%s/%s",
+                 GCS_BUCKET, GCS_PREFIX, climo_name)
+    except Exception as e:
+        log.warning("OLR climatology GCS upload failed (%s); will rebuild next "
+                    "run.", e)
     return climo_smooth
 
 
