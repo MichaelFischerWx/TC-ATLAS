@@ -13190,6 +13190,11 @@
             meanLineLats.push(mp.lat);
             prevMeanLon = mp.lon;
         }
+        // Stash the per-point mean track (no antimeridian nulls) so the static
+        // composite export can label forecast hours + mark LMI without
+        // recomputing (see _genesisMapExportFig).
+        el._genesisMeanTrack = { lon: meanLons, lat: meanLats,
+                                 wind: meanWinds, tau: meanTaus };
 
         // Measure the container's actual aspect ratio and use that as
         // the bounds target — otherwise the natural Mercator projection
@@ -14805,6 +14810,74 @@
         });
     }
 
+    // Static-export variant of the genesis track map (Overall summary only).
+    // The interactive modal keeps its scrubber + single-hour member snapshot;
+    // frozen into a figure that snapshot is an UNLABELED arbitrary hour, so the
+    // export instead drops the tau-cursor + density traces, labels forecast
+    // hours along the ensemble-mean track, and stars the mean LMI (peak-Vmax)
+    // point — so the time progression and headline intensity are unambiguous.
+    function _genesisMapExportFig(el) {
+        var data = _jsonClone(el.data);
+        var layout = _jsonClone(el.layout);
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var ink = isDark ? '#f1f5f9' : '#0f172a';
+        // _renderGenesisMap trace order: 6 = tau-cursor, 7-10 = density bands.
+        // Empty them so the frozen figure carries no unlabeled single-hour cloud.
+        for (var i = 6; i <= 10; i++) {
+            if (data[i]) {
+                data[i].lon = []; data[i].lat = [];
+                if ('text' in data[i]) data[i].text = [];
+            }
+        }
+        var mt = el._genesisMeanTrack;
+        if (mt && mt.lon && mt.lon.length) {
+            var n = mt.lon.length, li = 0;
+            for (var k = 1; k < n; k++) {
+                if ((mt.wind[k] || 0) > (mt.wind[li] || 0)) li = k;
+            }
+            // Forecast-hour ticks every 48 h along the mean track (skip the
+            // point next to LMI so its label doesn't collide with the star).
+            var tkLon = [], tkLat = [], tkTxt = [];
+            for (var j = 0; j < n; j++) {
+                var tau = mt.tau[j];
+                if (tau == null || tau % 48 !== 0 || Math.abs(j - li) <= 1) continue;
+                tkLon.push(mt.lon[j]); tkLat.push(mt.lat[j]);
+                tkTxt.push('+' + tau + ' h');
+            }
+            if (tkLon.length) {
+                data.push({
+                    type: 'scattergeo', mode: 'text',
+                    lon: tkLon, lat: tkLat, text: tkTxt,
+                    textposition: 'bottom center',
+                    textfont: { size: 11, color: ink, family: 'Inter, sans-serif' },
+                    hoverinfo: 'skip', showlegend: false,
+                });
+            }
+            data.push({
+                type: 'scattergeo', mode: 'markers+text',
+                lon: [mt.lon[li]], lat: [mt.lat[li]],
+                text: ['  LMI +' + mt.tau[li] + ' h · ' + Math.round(mt.wind[li] || 0) + ' kt'],
+                marker: { symbol: 'star', size: 15, color: '#fde047',
+                          line: { color: isDark ? '#0f172a' : '#1f2937', width: 1.2 } },
+                textposition: 'middle right',
+                textfont: { size: 12, color: ink, family: 'Inter, sans-serif' },
+                hoverinfo: 'skip', showlegend: false,
+            });
+        }
+        // One-line legend so a frozen reader knows what each layer is.
+        layout.annotations = (layout.annotations || []).concat([{
+            xref: 'paper', yref: 'paper', x: 0.5, y: 0.015,
+            xanchor: 'center', yanchor: 'bottom',
+            text: 'thin = members · thick = ensemble-mean track (dots = Vmax) · '
+                + '★ = mean LMI · labels = forecast hour',
+            showarrow: false,
+            font: { size: 11, color: ink },
+            bgcolor: isDark ? 'rgba(15,23,42,0.55)' : 'rgba(255,255,255,0.65)',
+            borderpad: 3,
+        }]);
+        return { data: data, layout: layout };
+    }
+
     // Rasterize one composite panel to an image data URL at (W × h).
     //
     // Cartesian panels go through Plotly.toImage(format:'png') — fast and
@@ -14909,7 +14982,11 @@
         sub = (sub + (spec.subSuffix || '')).trim();
 
         var tasks = panels.map(function (p) {
-            return _panelExportURL(p.el, FONT_SCALE, W, p.h);
+            // The Overall track map gets a static-export variant: forecast-hour
+            // labels + LMI star, no single-hour member snapshot.
+            var src = (p.el.id === 'rt-genesis-modal-map')
+                ? _genesisMapExportFig(p.el) : p.el;
+            return _panelExportURL(src, FONT_SCALE, W, p.h);
         });
 
         // Optional locator globe (intensity summary) — rendered in parallel
