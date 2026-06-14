@@ -3570,7 +3570,9 @@ def get_fdeck(atcf_id: str = Query(..., description="ATCF storm ID, e.g., AL1220
     counts = {k: len(v) for k, v in result.items()}
     return JSONResponse(
         content={"atcf_id": atcf_id, "fixes": result, "counts": counts},
-        headers={"Cache-Control": "public, max-age=3600"},
+        # s-maxage lets Cloudflare collapse N visitors → 1 origin fetch.
+        # Fixes update at most ~6-hourly, so a 15-min edge cache is safe.
+        headers={"Cache-Control": "public, max-age=3600, s-maxage=900, stale-while-revalidate=300"},
     )
 
 
@@ -3989,7 +3991,9 @@ def get_adeck(atcf_id: str = Query(..., description="ATCF storm ID, e.g., AL0920
             "models": result["models"],
             "n_cycles": len(result["init_times"]),
         },
-        headers={"Cache-Control": "public, max-age=3600"},
+        # s-maxage lets Cloudflare collapse N visitors → 1 origin fetch.
+        # Model forecasts update at most ~6-hourly, so 15-min edge is safe.
+        headers={"Cache-Control": "public, max-age=3600, s-maxage=900, stale-while-revalidate=300"},
     )
 
 
@@ -6081,11 +6085,19 @@ def get_vdm(
     import time as _time
     now = _time.time()
     cache_key = f"vdm_{storm_name.lower()}_{year}"
+    # CDN edge cache so repeat visitors to the same storm collapse to one
+    # origin fetch (the per-file recon pull is the expensive part). Past-year
+    # recon is immutable → long s-maxage; current-year storms may still be
+    # flying missions → shorter edge TTL with revalidation.
+    if year < int(_time.strftime("%Y")):
+        _vdm_cc = "public, max-age=3600, s-maxage=604800"
+    else:
+        _vdm_cc = "public, max-age=300, s-maxage=1800, stale-while-revalidate=300"
     if cache_key in _vdm_cache:
         cached, ts = _vdm_cache[cache_key]
         if now - ts < _VDM_CACHE_TTL:
             _vdm_cache.move_to_end(cache_key)
-            return cached
+            return JSONResponse(cached, headers={"Cache-Control": _vdm_cc})
 
     from tc_radar_api import _hrd_fetch_text, _hrd_parse_directory
 
@@ -6128,33 +6140,43 @@ def get_vdm(
                     pass
             target_files.append(entry)
 
-        # Fetch and parse each VDM file (they're tiny, ~400 bytes each)
+        # Fetch and parse each VDM file (they're tiny, ~400 bytes each). A
+        # multi-day storm has dozens of missions, so fetch them concurrently —
+        # the wall-clock (and thus billed request time) was dominated by serial
+        # round-trips to the recon archive.
         storm_upper = storm_name.upper().strip()
         atcf_upper = atcf_id.upper().strip() if atcf_id else ""
-        for fname in target_files:
+
+        def _process_modern_vdm(fname):
             try:
                 text = _hrd_fetch_text(repnt2_url + fname, timeout=10)
                 vdm = _parse_vdm_text(text, year)
                 if vdm is None:
-                    continue
+                    return None
                 # Filter by storm: match ATCF ID or storm name
                 if atcf_upper and vdm.get("atcf_id") and atcf_upper != vdm["atcf_id"]:
-                    continue
+                    return None
                 if not atcf_upper and vdm.get("storm_name") and vdm["storm_name"] != storm_upper:
-                    continue
+                    return None
                 # Resolve full datetime
                 iso_time = _resolve_vdm_time(vdm, year, start_date, end_date)
-                if iso_time:
-                    vdm["time"] = iso_time
-                else:
-                    continue  # can't resolve time → skip
-
+                if not iso_time:
+                    return None  # can't resolve time → skip
+                vdm["time"] = iso_time
                 # Clean up internal fields (keep raw_text for display)
                 for k in ("_day", "_hh", "_mm", "_ss"):
                     vdm.pop(k, None)
-                vdms.append(vdm)
+                return vdm
             except Exception as e:
                 logger.warning(f"Failed to fetch/parse VDM {fname}: {e}")
+                return None
+
+        if target_files:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(8, len(target_files))) as pool:
+                for vdm in pool.map(_process_modern_vdm, target_files):
+                    if vdm is not None:
+                        vdms.append(vdm)
 
     else:
         # Legacy format (1989-2005): storm-specific directory with V*.txt files
@@ -6172,20 +6194,29 @@ def get_vdm(
 
         if storm_dir:
             v_files = [e for e in entries if e.upper().startswith("V") and e.lower().endswith(".txt")]
-            for fname in v_files:
+
+            def _process_legacy_vdm(fname):
                 try:
                     text = _hrd_fetch_text(storm_dir + fname, timeout=10)
                     vdm = _parse_vdm_text(text, year)
                     if vdm is None:
-                        continue
+                        return None
                     iso_time = _resolve_vdm_time(vdm, year, start_date, end_date)
                     if iso_time:
                         vdm["time"] = iso_time
                     for k in ("_day", "_hh", "_mm", "_ss"):
                         vdm.pop(k, None)
-                    vdms.append(vdm)
+                    return vdm
                 except Exception as e:
                     logger.warning(f"Failed to fetch/parse legacy VDM {fname}: {e}")
+                    return None
+
+            if v_files:
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=min(8, len(v_files))) as pool:
+                    for vdm in pool.map(_process_legacy_vdm, v_files):
+                        if vdm is not None:
+                            vdms.append(vdm)
 
     # Sort by time
     vdms.sort(key=lambda v: v.get("time", ""))
@@ -6203,7 +6234,7 @@ def get_vdm(
     if len(_vdm_cache) > _VDM_CACHE_MAX:
         _vdm_cache.popitem(last=False)
 
-    return result
+    return JSONResponse(result, headers={"Cache-Control": _vdm_cc})
 
 
 # ── Minute Observations (MINOB / HDOB) ─────────────────────────────
