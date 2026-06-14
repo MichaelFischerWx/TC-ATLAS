@@ -14835,21 +14835,38 @@
             for (var k = 1; k < n; k++) {
                 if ((mt.wind[k] || 0) > (mt.wind[li] || 0)) li = k;
             }
-            // Forecast-hour ticks every 48 h along the mean track (skip the
-            // point next to LMI so its label doesn't collide with the star).
+            // Forecast-hour labels: candidates every 48 h, but a recurving /
+            // looping mean track stacks nearby hours on top of each other, so
+            // greedily keep a candidate only when it's far enough (on the map)
+            // from every already-placed label AND from the LMI star. minSep
+            // scales with the displayed span so it declutters at any zoom.
+            var gr = layout.geo || {};
+            var lonSpan = (gr.lonaxis && gr.lonaxis.range)
+                ? Math.abs(gr.lonaxis.range[1] - gr.lonaxis.range[0]) : 40;
+            var latSpan = (gr.lataxis && gr.lataxis.range)
+                ? Math.abs(gr.lataxis.range[1] - gr.lataxis.range[0]) : 30;
+            var minSep = 0.085 * Math.max(lonSpan, latSpan);
+            var anchors = [{ lon: mt.lon[li], lat: mt.lat[li] }];   // reserve LMI
             var tkLon = [], tkLat = [], tkTxt = [];
             for (var j = 0; j < n; j++) {
                 var tau = mt.tau[j];
-                if (tau == null || tau % 48 !== 0 || Math.abs(j - li) <= 1) continue;
-                tkLon.push(mt.lon[j]); tkLat.push(mt.lat[j]);
-                tkTxt.push('+' + tau + ' h');
+                if (tau == null || tau % 48 !== 0) continue;
+                var lo = mt.lon[j], la = mt.lat[j], ok = true;
+                for (var a = 0; a < anchors.length; a++) {
+                    if (Math.hypot(lo - anchors[a].lon, la - anchors[a].lat) < minSep) {
+                        ok = false; break;
+                    }
+                }
+                if (!ok) continue;
+                anchors.push({ lon: lo, lat: la });
+                tkLon.push(lo); tkLat.push(la); tkTxt.push('+' + tau + ' h');
             }
             if (tkLon.length) {
                 data.push({
                     type: 'scattergeo', mode: 'text',
                     lon: tkLon, lat: tkLat, text: tkTxt,
-                    textposition: 'bottom center',
-                    textfont: { size: 11, color: ink, family: 'Inter, sans-serif' },
+                    textposition: 'top center',   // sit above the dots, not on them
+                    textfont: { size: 12, color: ink, family: 'Inter, sans-serif' },
                     hoverinfo: 'skip', showlegend: false,
                 });
             }
