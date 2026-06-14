@@ -14805,6 +14805,37 @@
         });
     }
 
+    // Rasterize one composite panel to an image data URL at (W × h).
+    //
+    // Cartesian panels go through Plotly.toImage(format:'png') — fast and
+    // reliable everywhere. The track-map panel is a scattergeo (mercator
+    // basemap + an orthographic locator inset): Safari's PNG path rasterizes
+    // that complex geo SVG to a BLANK canvas (and slowly), so only the cartesian
+    // panels survive there — the exact "Overall PNG renders slowly then the
+    // track map is empty" report. For geo panels, export as SVG (which embeds
+    // the basemap + traces as vector paths) and hand back a BASE64 SVG data
+    // URL: drawing a base64 SVG to canvas is the reliable cross-browser path
+    // where the uri-encoded / PNG path fails on Safari. Falls back to PNG if
+    // the SVG round-trip throws, so we never do worse than before.
+    function _panelExportURL(el, scale, W, h) {
+        var fig = _figForExport(el, scale);
+        var isGeo = !!(el && el.layout && (el.layout.geo || el.layout.geo2));
+        if (!isGeo) {
+            return Plotly.toImage(fig, { format: 'png', width: W, height: h });
+        }
+        return Plotly.toImage(fig, { format: 'svg', width: W, height: h })
+            .then(function (url) {
+                if (url.indexOf(';base64,') !== -1) return url;   // already base64
+                var svg = decodeURIComponent(url.slice(url.indexOf(',') + 1));
+                // UTF-8-safe base64 (the SVG carries °, ×, kt labels etc.).
+                return 'data:image/svg+xml;base64,'
+                    + btoa(unescape(encodeURIComponent(svg)));
+            })
+            .catch(function () {
+                return Plotly.toImage(fig, { format: 'png', width: W, height: h });
+            });
+    }
+
     // Generic stitcher: header strip + each available panel + footer onto
     // one canvas, then hand the PNG blob to `onBlob(blob, filename)`.
     // `onError` (optional) fires if anything throws/aborts so the caller
@@ -14878,8 +14909,7 @@
         sub = (sub + (spec.subSuffix || '')).trim();
 
         var tasks = panels.map(function (p) {
-            return Plotly.toImage(_figForExport(p.el, FONT_SCALE),
-                                  { format: 'png', width: W, height: p.h });
+            return _panelExportURL(p.el, FONT_SCALE, W, p.h);
         });
 
         // Optional locator globe (intensity summary) — rendered in parallel
