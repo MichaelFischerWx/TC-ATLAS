@@ -9004,6 +9004,13 @@ def scatter_vp_favorability(
         }
 
     vortex_ready = _vortex_eras_done >= 2
+    # Cache only once the vortex eras are finalized — before that the payload is
+    # provisional and clients should keep refetching for the finalized version.
+    # Once ready, the result is effectively static (archive scatter over the
+    # in-memory metadata cache), so let the browser + Cloudflare absorb repeat
+    # toggles/visitors instead of recomputing per request. No remote I/O here,
+    # so this strictly removes Cloud Run invocations.
+    cc = "public, max-age=300, s-maxage=1800" if vortex_ready else "no-store"
     return JSONResponse(
         content={
             "points": points, "color_by": color_by,
@@ -9013,7 +9020,7 @@ def scatter_vp_favorability(
             "vortex_ready": vortex_ready,
             "db_means": _vortex_db_means if _vortex_db_means else None,
         },
-        headers={"Cache-Control": "no-store"},
+        headers={"Cache-Control": cc},
     )
 
 

@@ -4404,6 +4404,20 @@ function fetchAnomalyAzimuthalMean() {
 // ── VP vs Vortex Favorability Scatter (Fig. 9) ──────────────────────────
 
 var _lastVPScatterJson = null;
+// Memoize the scatter response per color_by. The payload is color_by-specific
+// (each point carries only the selected dvmax, and the 2\u03C3 ellipses are grouped
+// by it), so we cache one response per toggle value rather than reusing a
+// single response across toggles. Toggling 12h\u219424h after both are loaded then
+// costs zero backend requests. Shared by the main and composite render paths.
+var _vpScatterCache = {};
+
+function _loadVPScatter(colorBy) {
+    if (_vpScatterCache[colorBy]) return Promise.resolve(_vpScatterCache[colorBy]);
+    var url = API_BASE + '/scatter/vp_favorability?data_type=merge&color_by=' + colorBy;
+    return fetch(url, { cache: 'no-store' })
+        .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+        .then(function(json) { _vpScatterCache[colorBy] = json; return json; });
+}
 
 function fetchVPScatter(colorBy) {
     colorBy = colorBy || 'dvmax_12h';
@@ -4411,9 +4425,7 @@ function fetchVPScatter(colorBy) {
     var btn = document.getElementById('vp-scatter-btn');
     resultDiv.innerHTML = _hurricaneLoadingHTML('Loading VP scatter data\u2026', true);
     if (btn) { btn.disabled = true; btn.textContent = '\u27F3 Loading\u2026'; }
-    var url = API_BASE + '/scatter/vp_favorability?data_type=merge&color_by=' + colorBy;
-    fetch(url, { cache: 'no-store' })
-        .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+    _loadVPScatter(colorBy)
         .then(function(json) { _lastVPScatterJson = json; _lastAzJson = null; _lastHybridAzJson = null; _lastAnomalyAzJson = null; renderVPScatterInto('az-result', json, false); openPlotModal(); })
         .catch(function(err) { resultDiv.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + err.message + '</div>'; })
         .finally(function() { if (btn) { btn.disabled = false; btn.textContent = '\u2B24 VP Scatter'; } });
@@ -9731,16 +9743,19 @@ function _renderDiffAnomaly(targetId, diffJson, jsonA, jsonB, filtersA, filtersB
     buildAnomPlot('comp-diff-anom-d', diffJson.anomaly, titleD, _DIFF_COLORSCALE, diffVarInfo.vmin, diffVarInfo.vmax, '\u0394\u03c3');
 }
 
-function generateCompositeVPScatter() {
-    var resultEl = document.getElementById('comp-result-vpsc');
-    resultEl.style.display = 'block';
-    resultEl.innerHTML = _hurricaneLoadingHTML('Loading VP scatter data\u2026', true);
+function generateCompositeVPScatter() { _renderCompVPScatter('dvmax_12h', 'Loading VP scatter data\u2026'); }
 
-    fetch(API_BASE + '/scatter/vp_favorability?data_type=merge&color_by=dvmax_12h')
-        .then(function(r) {
-            if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); });
-            return r.json();
-        })
+function reloadCompVPScatter(colorBy) { _renderCompVPScatter(colorBy, 'Reloading VP scatter\u2026'); }
+
+// Shared composite VP-scatter renderer \u2014 reuses the per-color_by memo
+// (_loadVPScatter) so toggling 12h\u219424h re-renders from cache instead of
+// refetching the full dataset.
+function _renderCompVPScatter(colorBy, loadingMsg) {
+    var resultEl = document.getElementById('comp-result-vpsc');
+    if (!resultEl) return;
+    resultEl.style.display = 'block';
+    resultEl.innerHTML = _hurricaneLoadingHTML(loadingMsg, true);
+    _loadVPScatter(colorBy)
         .then(function(json) {
             resultEl.innerHTML = '<div id="comp-vpsc-chart" style="width:100%;height:500px;border-radius:8px;overflow:hidden;"></div>' +
                 '<div style="display:flex;gap:6px;justify-content:center;margin-top:6px;">' +
@@ -9751,25 +9766,6 @@ function generateCompositeVPScatter() {
         })
         .catch(function(err) {
             resultEl.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + (err.message || String(err)) + '</div>';
-        });
-}
-
-function reloadCompVPScatter(colorBy) {
-    var resultEl = document.getElementById('comp-result-vpsc');
-    if (!resultEl) return;
-    resultEl.innerHTML = _hurricaneLoadingHTML('Reloading VP scatter\u2026', true);
-    fetch(API_BASE + '/scatter/vp_favorability?data_type=merge&color_by=' + colorBy)
-        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-        .then(function(json) {
-            resultEl.innerHTML = '<div id="comp-vpsc-chart" style="width:100%;height:500px;border-radius:8px;overflow:hidden;"></div>' +
-                '<div style="display:flex;gap:6px;justify-content:center;margin-top:6px;">' +
-                '<button class="cs-btn" onclick="reloadCompVPScatter(\'dvmax_12h\')" style="font-size:10px;padding:2px 8px;">12-h \u0394Vmax</button>' +
-                '<button class="cs-btn" onclick="reloadCompVPScatter(\'dvmax_24h\')" style="font-size:10px;padding:2px 8px;">24-h \u0394Vmax</button>' +
-                '</div>';
-            renderVPScatterInto('comp-vpsc-chart', json, true);
-        })
-        .catch(function(err) {
-            resultEl.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + err.message + '</div>';
         });
 }
 
