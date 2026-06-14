@@ -782,6 +782,12 @@
     var _rtEnvMetadata = null;         // { layers: [...] } from /env/layers
     var _rtEnvLoading = false;
     var _rtEnvActive = {};             // { layerName: { overlay, opacity } }
+    // Parsed env-overlay contour GeoJSON, memoized by URL. Users toggle layers
+    // on/off to compare, and deactivation drops the layer's state entirely, so
+    // without this every re-enable re-fetched the same contour file from the
+    // backend. The URL changes when the backend regenerates contours, so a
+    // stale entry can't be served.
+    var _rtEnvGeojsonCache = {};       // { geojson_url: parsedGeoJSON }
     var _rtEnvMenuOpen = false;
     // Default opacity for filled raster overlays (RH, SST, MSLP, genesis_prob,
     // divergence). 0.85 keeps the colors readable while still letting just
@@ -16449,8 +16455,13 @@
             }).addTo(map);
             overlays = [geoLayer];
             overlayKind = 'geojson';
-            fetch(layer.geojson_url, { cache: 'no-store' })
-                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            var _geoUrl = layer.geojson_url;
+            var _geoPromise = _rtEnvGeojsonCache[_geoUrl]
+                ? Promise.resolve(_rtEnvGeojsonCache[_geoUrl])
+                : fetch(_geoUrl, { cache: 'no-store' })
+                    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                    .then(function (geojson) { _rtEnvGeojsonCache[_geoUrl] = geojson; return geojson; });
+            _geoPromise
                 .then(function (geojson) {
                     if (!_rtEnvActive[layer.name]) return;  // user deactivated mid-fetch
                     // Add primary world + ±360° copies to the same
