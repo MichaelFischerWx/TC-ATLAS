@@ -3299,9 +3299,59 @@ async def ir_hovmoller(
 
 # ── NHC F-Deck Fix Data ──────────────────────────────────────
 
-# Cache parsed f-deck data: atcf_id -> parsed dict
+# Cache parsed f-deck data: atcf_id -> (value, expiry_epoch). `value` may be
+# None to cache a negative result (storm has no f-deck yet, or is not an
+# NHC-monitored basin) so repeat polls short-circuit instead of re-running the
+# full upstream fetch chain every request.
 _fdeck_cache: OrderedDict = OrderedDict()
 _FDECK_CACHE_MAX = 50
+
+# TTLs for the deck caches (seconds). Active-year decks update at most
+# ~6-hourly, so a short positive TTL keeps them reasonably fresh while deduping
+# request bursts; archive (past-year) decks are immutable so they're cached for
+# a day. Negative results get a short TTL so a storm that later gets its first
+# fix/forecast isn't pinned to "not found".
+_DECK_TTL_ACTIVE = 900       # 15 min — current-year (live) decks
+_DECK_TTL_ARCHIVE = 86400    # 24 h — past-year (immutable) decks
+_DECK_TTL_NEGATIVE = 600     # 10 min — cached miss (no deck available yet)
+
+
+def _deck_year(atcf_id: str):
+    """Best-effort 4-digit year from an ATCF id like 'AL122024'."""
+    try:
+        return int(atcf_id.upper().strip()[4:8])
+    except (ValueError, IndexError):
+        return None
+
+
+def _deck_cache_get(cache: OrderedDict, atcf_id: str):
+    """TTL-aware lookup. Returns (hit, value); value may be None for a cached
+    negative. hit=False means the entry is absent or expired and the caller
+    should fetch."""
+    entry = cache.get(atcf_id)
+    if entry is None:
+        return False, None
+    value, expiry = entry
+    if _time.time() >= expiry:
+        cache.pop(atcf_id, None)
+        return False, None
+    cache.move_to_end(atcf_id)
+    return True, value
+
+
+def _deck_cache_put(cache: OrderedDict, atcf_id: str, value, max_size: int):
+    """Store a deck result (parsed dict or None) with a TTL chosen by result
+    type and storm year, then evict LRU entries past `max_size`."""
+    if value is None:
+        ttl = _DECK_TTL_NEGATIVE
+    else:
+        yr = _deck_year(atcf_id)
+        cur = int(_time.strftime("%Y"))
+        ttl = _DECK_TTL_ARCHIVE if (yr is not None and yr < cur) else _DECK_TTL_ACTIVE
+    cache[atcf_id] = (value, _time.time() + ttl)
+    cache.move_to_end(atcf_id)
+    while len(cache) > max_size:
+        cache.popitem(last=False)
 
 # Dvorak CI number → approximate wind speed (kt) lookup
 _DVORAK_CI_TO_KT = {
@@ -3451,15 +3501,16 @@ def _fetch_fdeck(atcf_id: str) -> dict | None:
     Tries current-year fix directory first, then archive (gzipped).
     Returns parsed fix dict or None on failure.
     """
-    # Check cache
-    if atcf_id in _fdeck_cache:
-        _fdeck_cache.move_to_end(atcf_id)
-        return _fdeck_cache[atcf_id]
-
-    # Parse ATCF ID: e.g., "AL122024" -> basin="al", num="12", year="2024"
+    # Parse ATCF ID: e.g., "AL122024" -> basin="al", num="12", year="2024".
+    # Normalize before the cache check so lookups and stores share one key.
     atcf_id = atcf_id.upper().strip()
     if len(atcf_id) < 8:
         return None
+
+    # Check cache (TTL-aware; a cached None is a valid negative result)
+    hit, value = _deck_cache_get(_fdeck_cache, atcf_id)
+    if hit:
+        return value
 
     basin = atcf_id[:2].lower()
     num = atcf_id[2:4]
@@ -3491,15 +3542,13 @@ def _fetch_fdeck(atcf_id: str) -> dict | None:
             continue
 
     if not raw_text:
+        # Cache the miss (short TTL) so repeat polls of a storm without an
+        # f-deck don't re-run the upstream fetch chain every request.
+        _deck_cache_put(_fdeck_cache, atcf_id, None, _FDECK_CACHE_MAX)
         return None
 
     parsed = _parse_fdeck(raw_text)
-
-    # Cache result
-    _fdeck_cache[atcf_id] = parsed
-    if len(_fdeck_cache) > _FDECK_CACHE_MAX:
-        _fdeck_cache.popitem(last=False)
-
+    _deck_cache_put(_fdeck_cache, atcf_id, parsed, _FDECK_CACHE_MAX)
     return parsed
 
 
@@ -3775,13 +3824,17 @@ def _fetch_adeck(atcf_id: str) -> dict | None:
 
     Returns parsed forecast dict or None on failure.
     """
-    if atcf_id in _adeck_cache:
-        _adeck_cache.move_to_end(atcf_id)
-        return _adeck_cache[atcf_id]
-
+    # Normalize before the cache check so lookups and stores share one key.
     atcf_id = atcf_id.upper().strip()
     if len(atcf_id) < 8:
         return None
+
+    # Check cache (TTL-aware; a cached None is a valid negative result so a
+    # storm with no a-deck yet doesn't re-run the up-to-7-URL fetch chain
+    # — the WP/IO/SH JTWC path especially — on every poll).
+    hit, value = _deck_cache_get(_adeck_cache, atcf_id)
+    if hit:
+        return value
 
     basin = atcf_id[:2].lower()
     num = atcf_id[2:4]
@@ -3901,16 +3954,14 @@ def _fetch_adeck(atcf_id: str) -> dict | None:
                 logger.info(f"A-deck combined from {len(sources_used)} sources: {source}")
 
     if not raw_text:
+        # Cache the miss (short TTL) so repeat polls short-circuit instead of
+        # re-running the full upstream URL chain every request.
+        _deck_cache_put(_adeck_cache, atcf_id, None, _ADECK_CACHE_MAX)
         return None
 
     parsed = _parse_adeck(raw_text)
     parsed["source"] = source
-
-    # Cache result
-    _adeck_cache[atcf_id] = parsed
-    if len(_adeck_cache) > _ADECK_CACHE_MAX:
-        _adeck_cache.popitem(last=False)
-
+    _deck_cache_put(_adeck_cache, atcf_id, parsed, _ADECK_CACHE_MAX)
     return parsed
 
 
