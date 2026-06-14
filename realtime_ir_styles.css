@@ -3914,9 +3914,17 @@ body:has(#ir-detail[style*="block"]) #ir-global-env-cbars {
     border-color: rgba(249,115,22,0.50);
 }
 
+/* The scrubber row holds 4 tau buttons + a min-160px slider + tau label +
+   the Density/Members toggle. On a phone-width modal that overflows a no-wrap
+   flex row, shoving the (last) toggle off-screen and squishing it to ~0 width
+   — so it was invisible on mobile. Let the row wrap so the toggle drops to a
+   second line at its natural size. */
+.rt-genesis-tau-bar { flex-wrap: wrap; }
+
 /* Density / Members segmented toggle. */
 .rt-genesis-mode-toggle {
     display: inline-flex;
+    flex-shrink: 0;            /* never collapse to 0 width when the row is tight */
     border: 1px solid rgba(15,22,35,0.18);
     border-radius: 4px;
     overflow: hidden;
