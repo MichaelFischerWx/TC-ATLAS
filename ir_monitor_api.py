@@ -9073,6 +9073,32 @@ _TCA_MERGE_R_SAMPLES = 300      # member-pair distance samples per tau
 _TCA_MERGE_DEFAULT_KM = 450.0
 
 
+def _tca_size_aware_merge_gates(obs_size, merge_km, merge_overlap_h):
+    """Loosen the GEOMETRIC merge gates (D̄ distance, F close-fraction, shared-
+    window overlap) for thin ensembles. The 50-member variant samples each
+    physical system with only 5-17 members, so its cluster mean tracks are
+    noisy: the SAME disturbance reads as wider mean-track separation (larger
+    D̄), fewer in-band taus (smaller F), and a shorter shared window than the
+    1000-member variant resolves for the identical system. Validated on the
+    2026-06-13 12Z cycle, where the 1000-member ensemble put WPac genesis in
+    ONE 82%-cluster but the 50-member shattered it into four (the true-fragment
+    pairs sat at D̄=600-663 km / F=0.55, beyond the 450/0.70 default).
+
+    Geometry is loosened smoothly from no change at N>=400 to full effect at
+    N<=60; the member-level R gate (_TCA_MERGE_MAX_R) is NOT touched — it stays
+    the same-system backstop (true fragments R=1.14-1.22, distinct systems
+    R=1.68-2.56 on that cycle), so loosening the noisy geometry can't admit a
+    cross-system merge. Returns (merge_km, merge_overlap_h, min_f).
+    """
+    if not merge_km or merge_km <= 0:
+        return merge_km, merge_overlap_h, _TCA_MERGE_MIN_F
+    t = max(0.0, min(1.0, (400.0 - (obs_size or 0)) / 340.0))
+    eff_km = merge_km * (1.0 + 0.55 * t)            # 450 -> ~700 at N~=50
+    eff_overlap = merge_overlap_h * (1.0 - 0.375 * t)  # 48 -> ~30 at N~=50
+    eff_min_f = _TCA_MERGE_MIN_F - 0.15 * t          # 0.70 -> ~0.55 at N~=50
+    return eff_km, eff_overlap, eff_min_f
+
+
 def _tca_member_ratio(ci, cj):
     """Cross/within member-separation ratio for two clusters (see
     _TCA_MERGE_MAX_R). Deterministic (fixed-seed sampling) so cached
@@ -9149,7 +9175,8 @@ def _tca_cluster_affinity(ci, cj, merge_km, merge_overlap_h):
     return dsum / wsum, close_w / wsum
 
 
-def _tca_merge_pass(clusters, merge_km, merge_overlap_h, ensemble_size):
+def _tca_merge_pass(clusters, merge_km, merge_overlap_h, ensemble_size,
+                    min_f=_TCA_MERGE_MIN_F):
     """Union-find merge of same-system fragments (see block comment
     above). Transitive merging is intentional: a timing ridge carved
     into three segments should chain back into one system even when
@@ -9174,7 +9201,7 @@ def _tca_merge_pass(clusters, merge_km, merge_overlap_h, ensemble_size):
             if aff is None:
                 continue
             dbar, f_close = aff
-            if dbar >= merge_km or f_close < _TCA_MERGE_MIN_F:
+            if dbar >= merge_km or f_close < min_f:
                 continue
             # D/F passed — confirm at member level. R is computed only
             # for D/F-passing pairs (a handful per cycle), so the extra
@@ -9475,8 +9502,14 @@ def _tca_compute_clusters(raw_data: dict,
         })
     # Optional Step 7: merge same-system fragments split along the
     # genesis-timing axis (opt-in via merge_km > 0; see merge-pass docs).
+    # Thin ensembles get size-aware geometric gates (D̄/F/overlap) so the
+    # 50-member variant reconstructs the systems the 1000-member resolves;
+    # the R backstop is unchanged (see _tca_size_aware_merge_gates).
     if merge_km and merge_km > 0 and len(out) > 1:
-        out = _tca_merge_pass(out, merge_km, merge_overlap_h, ensemble_size)
+        eff_km, eff_overlap, eff_min_f = _tca_size_aware_merge_gates(
+            obs_size, merge_km, merge_overlap_h)
+        out = _tca_merge_pass(out, eff_km, eff_overlap, ensemble_size,
+                              min_f=eff_min_f)
 
     # Sort by formation prob desc → D1 is largest. Re-label after sort.
     out.sort(key=lambda c: -c["n_members_total"])
