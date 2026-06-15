@@ -8322,7 +8322,14 @@
         }
     });
 
-    function _irMakeGalleryCard(s) {
+    // First N cards are above the fold in the common (few-storm) case, so
+    // they fetch eagerly at high priority instead of waiting on lazy-load
+    // intersection — the lazy default only helps the below-the-fold tail
+    // of a busy season, where it (correctly) defers renders users may
+    // never scroll to.
+    var GALLERY_EAGER_COUNT = 6;
+
+    function _irMakeGalleryCard(s, idx) {
         var card = document.createElement('button');
         card.className = 'qv-card';
         card.type = 'button';
@@ -8337,11 +8344,14 @@
         var thumb = document.createElement('div');
         thumb.className = 'qv-card-thumb is-loading';
         var img = document.createElement('img');
-        // Lazy-load the IR snapshot: above-the-fold cards still fetch
-        // immediately, but in an active season with many storms the
-        // below-the-fold cards (each a server-side IR-frame render) don't
-        // fire until scrolled into view — and never fire if never seen.
-        img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
+        // Above-the-fold cards fetch eagerly at high priority so they
+        // don't sit on a spinner; the below-the-fold tail stays lazy so a
+        // busy season doesn't fire dozens of server-side IR-frame renders
+        // users may never scroll to (and never fires if never seen).
+        var eager = (idx == null) || (idx < GALLERY_EAGER_COUNT);
+        img.alt = ''; img.decoding = 'async';
+        img.loading = eager ? 'eager' : 'lazy';
+        if (eager) img.setAttribute('fetchpriority', 'high');
         var _triedFallback = false;
         img.addEventListener('load', function () { thumb.classList.remove('is-loading', 'is-error'); });
         img.addEventListener('error', function () {
@@ -8457,7 +8467,7 @@
         }
         if (emptyEl) emptyEl.style.display = 'none';
         var frag = document.createDocumentFragment();
-        for (var i = 0; i < storms.length; i++) frag.appendChild(_irMakeGalleryCard(storms[i]));
+        for (var i = 0; i < storms.length; i++) frag.appendChild(_irMakeGalleryCard(storms[i], i));
         grid.innerHTML = '';
         grid.appendChild(frag);
         // Init locator maps now that the cards are sized in the DOM.

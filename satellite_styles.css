@@ -1042,10 +1042,18 @@
     object-fit: cover;
     display: block;
 }
+/* Spinner is absolutely positioned (not a flex item) so it stays
+   centered over the thumbnail regardless of the sibling <img>. Centred
+   with negative margins rather than translate(-50%) so the qv-spin
+   keyframe's `transform: rotate()` doesn't clobber the centering. */
 .qv-card-thumb.is-loading::after {
     content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
     width: 22px;
     height: 22px;
+    margin: -11px 0 0 -11px;
     border: 2px solid var(--border-light);
     border-top-color: var(--text-dim);
     border-radius: 50%;
@@ -1053,6 +1061,11 @@
 }
 .qv-card-thumb.is-error::after {
     content: "No recent imagery";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     color: var(--text-faint);
     font-size: 12px;
 }
