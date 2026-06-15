@@ -475,3 +475,17 @@ html.evo-only-mode #sub-evolution-modal .ace-modal-content {
        the bottom — keep top-right and rely on the smaller footprint. */
     .sub-evo-save-btn { padding: 4px 8px; font-size: 0.66rem; }
 }
+
+/* Per-basin genesis-odds readout in the Phase Evolution modal. Mirrors
+   the small RT-card cue (realtime_ir_styles.css .sub-clock-genesis) but
+   shows the full six-basin set the card defers to "the full dial". */
+#sub-evolution-genesis {
+    margin: 2px 0 6px;
+    font-size: 0.74rem;
+    line-height: 1.5;
+}
+#sub-evolution-genesis .sub-evo-gen-label { opacity: 0.7; }
+#sub-evolution-genesis .sub-gen-up   { color: #dc2626; font-weight: 600; }
+#sub-evolution-genesis .sub-gen-down { color: #2563eb; font-weight: 600; }
+[data-theme="dark"] #sub-evolution-genesis .sub-gen-up   { color: #f87171; }
+[data-theme="dark"] #sub-evolution-genesis .sub-gen-down { color: #60a5fa; }

@@ -3161,6 +3161,8 @@ function _openSubEvolution() {
     }
     m.style.display = 'flex';
     _renderSubEvolution();
+    // Genesis factors load lazily; re-render the odds line once they land.
+    _loadSubGenesisFactors().then(_renderSubGenesisOdds);
     _wireSubEvoSaveButtons();
     _ga('tc_clim_sub_evolution_open', { mode: _subState.mode, window: _subEvoWindow });
 }
@@ -3186,6 +3188,70 @@ function _buildEvoSeries(rec, startIdx, endIdx) {
     }
     if (!xs.length) return null;
     return { dates: dates, xs: xs, ys: ys, amplitudes: amplitudes, phasesArr: phasesArr };
+}
+
+// ── Genesis enhancement factors (per mode × basin × phase) ──────
+// Same static asset the RT Monitor's small phase-clock cards use
+// (build_subseasonal_genesis_factors.py). Loaded lazily the first
+// time the Phase Evolution modal opens so the expanded view can show
+// the colored per-basin genesis odds. The small card shows only
+// ATL/EP/WP for space and points users to "the full dial" for the
+// rest — this is that full readout, so we show all six basins.
+var _subGenesisFactors = null;
+var _subGenesisPromise = null;
+var _SUB_GEN_BASINS = [
+    ['NA', 'ATL'], ['EP', 'EP'], ['WP', 'WP'],
+    ['NI', 'NIO'], ['SI', 'SIO'], ['SP', 'SPac'],
+];
+function _loadSubGenesisFactors() {
+    if (_subGenesisFactors) return Promise.resolve(_subGenesisFactors);
+    if (_subGenesisPromise) return _subGenesisPromise;
+    var url = 'data/subseasonal_genesis_factors.json?v=' + (window.__v || '');
+    _subGenesisPromise = fetch(url, { cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { _subGenesisFactors = d; return d; })
+        .catch(function (e) {
+            console.warn('[tc-clim] genesis factors fetch failed:', e && e.message);
+            _subGenesisFactors = null;
+            return null;
+        });
+    return _subGenesisPromise;
+}
+
+// Render the per-basin colored genesis-odds line for the active mode's
+// current phase. Mirrors realtime_subseasonal.js:_renderGenesisIndicators
+// (red ≥1.0 enhanced, blue <1.0 suppressed; quiescent → "no modulation")
+// so the expanded view reads identically to the card that opened it.
+function _renderSubGenesisOdds() {
+    var el = document.getElementById('sub-evolution-genesis');
+    if (!el) return;
+    var rec = _subPhases && _subPhases.indices && _subPhases.indices[_subState.mode];
+    var modeFactors = _subGenesisFactors && _subGenesisFactors.modes
+        && _subGenesisFactors.modes[_subState.mode];
+    if (!rec || !modeFactors) { el.innerHTML = ''; return; }
+    var phases = rec.phases || [], amps = rec.amplitudes || [];
+    var i = phases.length - 1;
+    while (i >= 0 && phases[i] == null) i--;          // last non-null = today
+    var phase = i >= 0 ? phases[i] : null;
+    var amp   = i >= 0 ? amps[i]   : null;
+    if (phase == null || amp == null || amp < 1.0) {
+        el.innerHTML = '<span style="opacity:0.65;">Phase amplitude &lt; 1 · '
+            + 'no genesis modulation</span>';
+        return;
+    }
+    var p = phase - 1;                                // phases 1..8 → idx 0..7
+    var parts = _SUB_GEN_BASINS.map(function (b) {
+        var eh = modeFactors.enhancement && modeFactors.enhancement[b[0]];
+        if (!eh) return '';
+        var v = eh[p];
+        if (v == null) return '';
+        var cls = (v >= 1.0) ? 'sub-gen-up' : 'sub-gen-down';
+        return '<span class="' + cls + '">' + b[1] + ' ' + v.toFixed(2) + '×</span>';
+    }).filter(Boolean);
+    if (!parts.length) { el.innerHTML = ''; return; }
+    el.innerHTML = '<span class="sub-evo-gen-label">Phase ' + phase
+        + ' named-storm genesis rate vs. climatology:</span> '
+        + parts.join(' <span style="opacity:0.4;">·</span> ');
 }
 
 function _renderSubEvolution() {
@@ -3524,6 +3590,10 @@ function _renderSubEvolution() {
         });
     }
     tcNewPlot('sub-evolution-amp-chart', ampTraces, ampLayout, PLOTLY_CONFIG);
+
+    // Colored per-basin genesis odds for the current phase. No-ops
+    // silently until the factors JSON has loaded (see _openSubEvolution).
+    _renderSubGenesisOdds();
 }
 
 /* ── Phase-evolution PNG saves ─────────────────────────────────
