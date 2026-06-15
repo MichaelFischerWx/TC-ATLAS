@@ -253,21 +253,27 @@ def select_goes_sat(longitude: float, analysis_dt: _dt) -> tuple:
     Returns (bucket_name, sat_key) where sat_key is 'east', 'west', or 'himawari'.
 
     Routing:
-      -100° ≤ lon ≤ +10°  → GOES-East  (Atlantic)
-      -175° ≤ lon < -100°  → GOES-West  (East/Central Pacific)
+      -105° ≤ lon ≤ +10°  → GOES-East  (Atlantic)
+      -175° ≤ lon < -105°  → GOES-West  (East/Central Pacific)
       Everything else       → Himawari-9 (Western Pacific, IO, SH)
+
+    The east/west cutoff sits at -105° (not -100°) so western-Gulf /
+    NE-Mexico Atlantic storms (e.g. a system near 101°W) are imaged by
+    GOES-East (~26° off-nadir) rather than GOES-West (~36° off-nadir) —
+    a less-oblique, crisper view. GOES-East full-disk still has ample
+    coverage out to -105°.
     """
     # Normalise to -180..+180
     lon = ((longitude + 180) % 360) - 180
 
-    if -100 <= lon <= 10:
+    if -105 <= lon <= 10:
         # Atlantic, Caribbean, Gulf of Mexico
         sat_key = "east"
         if analysis_dt.replace(tzinfo=timezone.utc) >= GOES_TRANSITION_DT:
             bucket = GOES_BUCKETS["east_19"]
         else:
             bucket = GOES_BUCKETS["east_16"]
-    elif -175 <= lon < -100:
+    elif -175 <= lon < -105:
         # Eastern / Central Pacific
         sat_key = "west"
         bucket = GOES_BUCKETS["west"]
@@ -407,10 +413,44 @@ def open_goes_subset(s3_key: str, center_lat: float, center_lon: float,
         raise RuntimeError("s3fs not available")
 
     half = box_deg / 2.0
-    x_min, y_min = latlon_to_goes_xy(center_lat - half, center_lon - half, sat_key)
-    x_max, y_max = latlon_to_goes_xy(center_lat + half, center_lon + half, sat_key)
-    x_lo, x_hi = min(x_min, x_max), max(x_min, x_max)
-    y_lo, y_hi = min(y_min, y_max), max(y_min, y_max)
+    # Off-nadir, a lat/lon box maps to a SKEWED quadrilateral in the geos
+    # fixed grid — its bounding scan-angle rectangle is wider than the two
+    # SW/NE corners alone suggest. Sampling only the corners leaves the
+    # rotated box poking past the crop, which renders as black corner
+    # wedges after _reproject_geos_to_latlon resamples a region with no
+    # data (e.g. GOES-18 viewing a Gulf/Mexico storm ~36° off-nadir).
+    # Sample the whole perimeter densely (each edge bows outward between
+    # its endpoints, the projection being nonlinear), then take min/max +
+    # a small margin. This mirrors the fix open_himawari_subset carries.
+    pyproj = _get_pyproj()
+    if pyproj is None:
+        raise RuntimeError("pyproj is required for GOES IR subsetting")
+    _proj = pyproj.Proj(proj="geos", h=GOES_SAT_HEIGHT,
+                        lon_0=GOES_LON_0[sat_key], sweep="x")
+    lat0, lat1 = center_lat - half, center_lat + half
+    lon0, lon1 = center_lon - half, center_lon + half
+    N = 9
+    ts = [i / (N - 1) for i in range(N)]  # 0..1 along each edge
+    xs_s, ys_s = [], []
+    for t in ts:
+        for la, lo in (
+            (lat1, lon0 + t * (lon1 - lon0)),   # north edge
+            (lat0, lon0 + t * (lon1 - lon0)),   # south edge
+            (lat0 + t * (lat1 - lat0), lon0),   # west edge
+            (lat0 + t * (lat1 - lat0), lon1),   # east edge
+        ):
+            xm, ym = _proj(lo, la)
+            xr_, yr_ = xm / GOES_SAT_HEIGHT, ym / GOES_SAT_HEIGHT
+            if np.isfinite(xr_) and np.isfinite(yr_):
+                xs_s.append(xr_)
+                ys_s.append(yr_)
+    if not xs_s or not ys_s:
+        raise ValueError("storm window does not intersect the GOES disk")
+    # ~4 px of margin (ABI 2-km IR IFOV, in scan-angle radians) so grid
+    # discretization can't re-introduce a thin uncovered sliver.
+    margin = 4.0 * 2000.0 / GOES_SAT_HEIGHT
+    x_lo, x_hi = min(xs_s) - margin, max(xs_s) + margin
+    y_lo, y_hi = min(ys_s) - margin, max(ys_s) + margin
 
     geos_meta = None
     fobj = fs.open(f"s3://{s3_key}", "rb")
