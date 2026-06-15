@@ -14150,13 +14150,19 @@
             catProbs[cats[ci][0]] = Math.round(cnt / lmi.length * 100);
         }
         // Percentiles + category odds combined into one block parked in
-        // the empty top-right of the plot (LMI mass sits at low kt, so the
-        // high-kt corner is free). Keeps it clear of the title (top-left)
-        // and the ⤓ PNG button (top-right, outside the plot).
+        // the top-right of the plot. Keeps it clear of the title (top-left)
+        // and the ⤓ PNG button (top-right, outside the plot). We can't rely
+        // on the high-kt corner being empty — for strong storms the LMI mass
+        // sits at high kt and the tallest bars are right under this text — so
+        // the y-axis below carries explicit headroom to clear the block.
         var statText = 'P10 / P50 / P90: ' + p(10).toFixed(0) + ' / '
             + p(50).toFixed(0) + ' / ' + p(90).toFixed(0) + ' kt<br>'
             + 'C1+: ' + catProbs['C1+'] + '%   C3+: ' + catProbs['C3+']
             + '%   C5: ' + catProbs['C5'] + '%';
+        // Headroom so the two-line stat block never overlaps the bars,
+        // wherever the distribution peaks.
+        var maxCount = Math.max.apply(null, binCounts);
+        var yMax = maxCount > 0 ? maxCount * 1.25 : 1;
 
         var layout = Object.assign({}, theme, {
             margin: { l: 45, r: 12, t: 30, b: 36 },
@@ -14169,7 +14175,7 @@
                      gridcolor: isDark ? 'rgba(255,255,255,0.06)'
                                        : 'rgba(15,22,35,0.06)', zeroline: false },
             yaxis: { title: { text: 'Members', font: { size: 10 } },
-                     tickfont: { size: 10 },
+                     range: [0, yMax], tickfont: { size: 10 },
                      gridcolor: isDark ? 'rgba(255,255,255,0.06)'
                                        : 'rgba(15,22,35,0.06)', zeroline: false },
             shapes: shapes,
