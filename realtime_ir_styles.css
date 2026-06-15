@@ -3849,16 +3849,12 @@ body:has(#ir-detail[style*="block"]) #ir-global-env-cbars {
     }
 }
 
-/* Run-to-run trend sparkline panel (genesis detail modal). Cyan accent
-   to read as the DeepMind-ensemble family, distinct from the orange
-   stats strip above it. */
+/* Run-to-run trend panels (genesis detail modal). Bare chart-wraps, no
+   card chrome — consistent with the "This run" figures. Color now lives
+   in the plots themselves (current run + prior-run recency ramp). */
 .rt-genesis-trend-wrap {
-    padding: 8px 10px 4px;
+    padding: 8px 2px 4px;
     margin-bottom: 12px;
-    background: rgba(0, 229, 255, 0.05);
-    border: 1px solid rgba(0, 229, 255, 0.18);
-    border-left: 3px solid #00e5ff;
-    border-radius: 6px;
 }
 .rt-genesis-trend-head {
     display: flex;
@@ -3878,10 +3874,6 @@ body:has(#ir-detail[style*="block"]) #ir-global-env-cbars {
     font-size: 0.62rem;
     color: var(--text-dim, #64748b);
     opacity: 0.9;
-}
-[data-theme="dark"] .rt-genesis-trend-wrap {
-    background: rgba(0, 229, 255, 0.07);
-    border-color: rgba(0, 229, 255, 0.28);
 }
 [data-theme="dark"] .rt-genesis-trend-title,
 [data-theme="dark"] .rt-genesis-trend-note { color: #94a3b8; }

@@ -12432,6 +12432,7 @@
         wrap.style.display = 'none';   // default hidden until data lands
         if (_tmw) _tmw.style.display = 'none';
         if (_tiw) _tiw.style.display = 'none';
+        _genesisTrendLoading = true;   // fetch starts below → show "Loading…"
         _genesisTrendsUpdateEmpty();
         // Stash this cycle's per-member peak (lead-time-of-peak + LMI Vmax)
         // so the Intensity Change pane's "LMI by hour" view can render the
@@ -12467,7 +12468,11 @@
             if (!anchorPt && mpts.length) anchorPt = mpts[0];
             if (anchorPt) { aLat = anchorPt.lat; aLon = anchorPt.lon; }
         }
-        if (aLat == null || aLon == null) return;   // no anchor → skip
+        if (aLat == null || aLon == null) {   // no anchor → skip, no fetch
+            _genesisTrendLoading = false;
+            _genesisTrendsUpdateEmpty();
+            return;
+        }
 
         // Guard against a stale response landing after the user has
         // clicked through to a different disturbance.
@@ -12482,6 +12487,7 @@
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (data) {
                 if (wrap.dataset.trackId !== (reqTrackId || '')) return;  // stale
+                _genesisTrendLoading = false;
                 _drawGenesisTrend(data, loadedInit);
                 _drawTrackTrend(data, loadedInit);
                 _drawIntensityTrend(data, loadedInit);
@@ -12489,9 +12495,12 @@
                 _genesisTrendsUpdateEmpty();
             })
             .catch(function () {
-                // Endpoint absent or failed — Trends stays hidden; give the
-                // Intensity Change pane a definitive message so it doesn't
-                // sit on the loading note forever.
+                // Endpoint absent or failed — Trends stays hidden; clear the
+                // loading flag so its note settles on the definitive "no
+                // history" message instead of spinning on "Loading…" forever.
+                // Give the Intensity Change pane its own definitive message too.
+                _genesisTrendLoading = false;
+                _genesisTrendsUpdateEmpty();
                 var ice = document.getElementById('rt-genesis-ic-empty');
                 if (ice) ice.textContent = 'Intensity-change distribution unavailable.';
             });
@@ -12849,8 +12858,16 @@
             : it;
     }
 
-    // Show the "no history" note only when all three Trends figures are
-    // hidden (no matched cycles / backend not yet serving mean_track).
+    // True while the /weatherlab-genesis-trend fetch is in flight, so the
+    // placeholder reads "Loading…" instead of the definitive "no history"
+    // note — the cold cluster fetch takes a few seconds and would otherwise
+    // read as "no multi-cycle history exists" when it's just still loading.
+    var _genesisTrendLoading = false;
+
+    // Show the placeholder note only when all three Trends figures are
+    // hidden (no matched cycles / backend not yet serving mean_track). While
+    // the fetch is in flight it says "Loading…"; once it resolves (or fails)
+    // with no figures, it falls back to the definitive "no history" message.
     function _genesisTrendsUpdateEmpty() {
         var empty = document.getElementById('rt-genesis-trends-empty');
         if (!empty) return;
@@ -12859,7 +12876,11 @@
             var n = document.getElementById(id);
             return n && n.style.display !== 'none';
         });
-        empty.style.display = anyVisible ? 'none' : '';
+        if (anyVisible) { empty.style.display = 'none'; return; }
+        empty.textContent = _genesisTrendLoading
+            ? 'Loading run-to-run trend…'
+            : 'No multi-cycle history yet for this disturbance.';
+        empty.style.display = '';
     }
 
     // West/South edge tick labels for a scattergeo map (it has no built-in
@@ -12930,17 +12951,27 @@
     }
 
     // Grey color for a prior run, faded by recency rank (oldest faintest).
-    function _genesisPriorGrey(rank, nPrior, isDark) {
-        var op = (nPrior <= 1) ? 0.55 : 0.30 + 0.45 * (rank / (nPrior - 1));
-        return isDark ? 'rgba(148,163,184,' + op.toFixed(2) + ')'
-                      : 'rgba(100,116,139,' + op.toFixed(2) + ')';
+    // Prior-run color ramp: a cool slate-blue (oldest) → bright cyan (most
+    // recent prior) gradient, brighter and more opaque the newer the run.
+    // Replaces the old flat grey so each cycle reads as a distinct hue, not
+    // just a fade — while staying in a cool family that's unmistakably
+    // distinct from the current run's bold orange. rank 0 = oldest.
+    function _genesisPriorColor(rank, nPrior, isDark) {
+        var f = (nPrior <= 1) ? 1 : rank / (nPrior - 1);   // 0=oldest … 1=newest prior
+        var r = Math.round(96  + (56  - 96)  * f);
+        var g = Math.round(125 + (189 - 125) * f);
+        var b = Math.round(180 + (248 - 180) * f);
+        var op = 0.45 + 0.45 * f;                          // newer = more opaque
+        if (isDark) op = Math.min(1, op + 0.1);
+        return 'rgba(' + r + ',' + g + ',' + b + ',' + op.toFixed(2) + ')';
     }
 
     /* Track trend (Trends tab, figure 2).
        Overlays each recent cycle's cluster-mean polyline so the user can
        see how the forecast TRACK has shifted run-to-run. Current run is
-       bold orange with SS-colored markers; prior runs are grey, fainter
-       the older they are. Mean-only (no spaghetti) to keep it legible.
+       bold orange with SS-colored markers; prior runs ride a slate-blue→
+       cyan recency ramp (brighter = more recent). Mean-only (no spaghetti)
+       to keep it legible.
        Needs the backend deployed with mean_track — degrades silently
        (stays hidden) when fewer than 2 cycles carry a polyline. */
     function _drawTrackTrend(data, loadedInit) {
@@ -13020,10 +13051,10 @@
                     showlegend: false,
                 });
             } else {
-                var grey = _genesisPriorGrey(priorRank[c.init_time], nPrior, isDark);
+                var pc = _genesisPriorColor(priorRank[c.init_time], nPrior, isDark);
                 traces.push({
                     type: 'scattergeo', mode: 'lines', lon: lons, lat: lats,
-                    line: { color: grey, width: 1.6 },
+                    line: { color: pc, width: 1.8 },
                     connectgaps: false, showlegend: false,
                     hovertemplate: lbl + '<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
                 });
@@ -13034,8 +13065,8 @@
         Plotly.react(el, traces, _genesisGeoLayout(bounds, isDark, theme),
                      { responsive: true, displayModeBar: false });
         if (noteEl) {
-            noteEl.textContent = 'bold orange = current run · grey = prior runs '
-                + '(fainter = older) · ' + cycles.length + ' cycles';
+            noteEl.textContent = 'bold orange = current run · blue→cyan = prior '
+                + 'runs (brighter = more recent) · ' + cycles.length + ' cycles';
         }
         wrap.style.display = '';
     }
@@ -13043,8 +13074,9 @@
     /* Intensity trend (Trends tab, figure 3).
        Each recent cycle's cluster-mean Vmax vs forecast hour, so the user
        can see run-to-run intensity drift. Same color language as the
-       track trend: current run bold orange + markers, priors grey faded
-       by age. Hidden until ≥2 cycles carry a polyline. */
+       track trend: current run bold orange with SS-category markers,
+       priors on a slate-blue→cyan recency ramp. Hidden until ≥2 cycles
+       carry a polyline. */
     function _drawIntensityTrend(data, loadedInit) {
         var wrap = document.getElementById('rt-genesis-trendint-wrap');
         var el = document.getElementById('rt-genesis-modal-trendint');
@@ -13083,14 +13115,21 @@
                 traces.push({
                     type: 'scatter', mode: 'lines+markers', x: xs, y: ys,
                     line: { color: '#f97316', width: 2.6 },
-                    marker: { color: '#f97316', size: 6 },
+                    // Markers colored by Saffir–Simpson category — same wind
+                    // color language as the track trend and the "This run"
+                    // intensity panel, so peak strength reads at a glance.
+                    marker: {
+                        color: ys, colorscale: _GENESIS_SS_SCALE,
+                        cmin: 0, cmax: 200, size: 7, showscale: false,
+                        line: { color: isDark ? '#0f172a' : '#1f2937', width: 0.6 },
+                    },
                     hovertemplate: lbl + ' (current)<br>+%{x} h · %{y} kt<extra></extra>',
                 });
             } else {
-                var grey = _genesisPriorGrey(priorRank[c.init_time], nPrior, isDark);
+                var pc = _genesisPriorColor(priorRank[c.init_time], nPrior, isDark);
                 traces.push({
                     type: 'scatter', mode: 'lines', x: xs, y: ys,
-                    line: { color: grey, width: 1.6 },
+                    line: { color: pc, width: 1.8 },
                     hovertemplate: lbl + '<br>+%{x} h · %{y} kt<extra></extra>',
                 });
             }
@@ -13110,8 +13149,8 @@
         Plotly.react(el, traces, layout,
                      { responsive: true, displayModeBar: false });
         if (noteEl) {
-            noteEl.textContent = 'bold orange = current run · grey = prior runs '
-                + '(fainter = older)';
+            noteEl.textContent = 'orange line = current run (markers by category) '
+                + '· blue→cyan = prior runs (brighter = more recent)';
         }
         wrap.style.display = '';
     }
