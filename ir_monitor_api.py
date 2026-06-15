@@ -4170,14 +4170,28 @@ def get_recent_storms(days: int = Query(60, ge=1, le=120,
                                 headers={"Cache-Control": "public, max-age=600"})
 
     ids = _list_recent_atcf_ids(days)
+    # Each storm's track is built from up to ~4 sequential HTTP fetches to
+    # NHC/JTWC deck files. Done serially over N storms that stacks into 10+ s
+    # and the TC overlay shows up late on the Subseasonal tab. The fetches are
+    # independent and I/O-bound, so fan them out — same total work (identical
+    # requests + parsing), just concurrent, so no extra compute cost.
     entries = []
-    for atcf_id in ids:
-        try:
-            entry = _build_recent_storm_track(atcf_id, days)
-            if entry:
-                entries.append(entry)
-        except Exception as e:
-            print(f"[recent-storms] {atcf_id} failed: {e}")
+    if ids:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _build_safe(atcf_id):
+            try:
+                return _build_recent_storm_track(atcf_id, days)
+            except Exception as e:
+                print(f"[recent-storms] {atcf_id} failed: {e}")
+                return None
+
+        with ThreadPoolExecutor(max_workers=min(10, len(ids))) as pool:
+            futures = [pool.submit(_build_safe, sid) for sid in ids]
+            for fut in as_completed(futures):
+                entry = fut.result()
+                if entry:
+                    entries.append(entry)
     _attach_storm_names(entries)
     entries.sort(key=lambda s: s["last_fix_utc"], reverse=True)
 
