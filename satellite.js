@@ -10,6 +10,32 @@
     // ── Config ──────────────────────────────────────────────────
     var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
     var POLL_INTERVAL_MS = 10 * 60 * 1000;
+
+    // Bundle host + version, resolved from rt-version.json at init (mirrors
+    // realtime_ir.js). The hardcoded fallback MUST track the live prewarm
+    // version — a stale value (e.g. rt-v10 while the server is on rt-v12)
+    // makes every direct bundle fetch 403/404 and forces the slow on-demand
+    // API rebuild (~2 s/band). R2 keys == GCS keys; "base" may flip to the
+    // Cloudflare CDN at runtime so a server bump needs no frontend redeploy.
+    var _SAT_BUNDLE_ROOT = 'https://storage.googleapis.com/tc-atlas-ir-cache';
+    var _SAT_BUNDLE_VERSION = 'rt-v12';
+    var _SAT_BUNDLE_BASE = _SAT_BUNDLE_ROOT + '/' + _SAT_BUNDLE_VERSION + '/bundles';
+    function _satResolveBundleBase() {
+        return fetch(_SAT_BUNDLE_ROOT + '/rt-version.json', { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+                if (!j) return;
+                var b = j.base;
+                if (typeof b === 'string' &&
+                    /^https:\/\/(cdn\.tcatlas\.org|storage\.googleapis\.com\/tc-atlas-ir-cache)$/.test(b)) {
+                    _SAT_BUNDLE_ROOT = b;
+                }
+                var v = j.version;
+                if (typeof v === 'string' && /^rt-v\d+$/.test(v)) _SAT_BUNDLE_VERSION = v;
+                _SAT_BUNDLE_BASE = _SAT_BUNDLE_ROOT + '/' + _SAT_BUNDLE_VERSION + '/bundles';
+            })
+            .catch(function () { /* keep pinned fallback */ });
+    }
     // Lookback: desktop = 6h (25 frames at 15-min, 13 at 30-min).
     // Mobile/touch = 4h — combined with the touch-only 30-min cadence
     // (FRAME_INTERVAL_MIN below) that's 9 frames, ~36 MB of decoded
@@ -5107,14 +5133,13 @@
      *  try first), decodes the packed binary, returns an array of
      *  {index, entry} pairs where `entry` is shaped like rightFrames[i].
      *  Calls done(false) on any failure so caller can fall back. */
-    var _GCS_BAND_BUNDLE_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles/band';
     function _satTryBandBundleThen(sid, band, done) {
         var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(sid)
             + '/band-frames-bundle?band=' + band
             + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
             + '&radius_deg=' + DEFAULT_RADIUS_DEG
             + '&interval_min=' + FRAME_INTERVAL_MIN;
-        var gcsUrl = _GCS_BAND_BUNDLE_BASE + '/' + band + '/'
+        var gcsUrl = _SAT_BUNDLE_BASE + '/band/' + band + '/'
             + encodeURIComponent(sid.toUpperCase()) + '.bin';
         // Try GCS direct first (prewarmed, no Cloud Run hop). Cold storm
         // or unwritten bundle \u2192 fall to API endpoint.
@@ -5740,7 +5765,7 @@
                 + '/ir-frames-bundle?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG
                 + '&interval_min=' + FRAME_INTERVAL_MIN;
-            var gcsUrl = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles/frames/'
+            var gcsUrl = _SAT_BUNDLE_BASE + '/frames/'
                 + encodeURIComponent(sid.toUpperCase()) + '.bin';
             fetch(gcsUrl)
                 .then(function (r) {
@@ -5922,13 +5947,12 @@
         // first (prewarmed) then API fallback. One request instead of
         // N — big win on cellular where each /ir-raw-frame call costs
         // 100-300 ms of TLS+routing.
-        var _GCS_RAW_BUNDLE_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles/raw';
         function _satTryRawTbBundleThen(sid, done) {
             var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(sid)
                 + '/ir-raw-bundle?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG
                 + '&interval_min=' + FRAME_INTERVAL_MIN;
-            var gcsUrl = _GCS_RAW_BUNDLE_BASE + '/' + encodeURIComponent(sid.toUpperCase()) + '.bin';
+            var gcsUrl = _SAT_BUNDLE_BASE + '/raw/' + encodeURIComponent(sid.toUpperCase()) + '.bin';
             fetch(gcsUrl)
                 .then(function (r) {
                     if (!r.ok) throw new Error('gcs raw bundle HTTP ' + r.status);
@@ -7126,6 +7150,7 @@
     function init() {
         initDOM();
         if (!canvasIR) return;
+        _satResolveBundleBase();   // fire-and-forget; fallback covers the gap
         bindEvents();
         loadCoastlines();
         console.log('[Satellite] Viewer ready (waiting for activation)');
