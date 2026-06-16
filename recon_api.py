@@ -22,6 +22,7 @@ Design notes:
 
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -56,7 +57,8 @@ _BLOB_TTL = 120
 # Replay wall-clock anchors: (atcf_id, replay_anchor, speed) -> wall_start_epoch.
 _replay_anchors: dict = {}
 _REPLAY_MAX_ADVANCE_S = 24 * 3600  # sim-seconds; replay freezes on full track after this
-_STORM_GATE_DEG = 8.0  # keep HDOB aircraft within this of the storm (drops unrelated sorties)
+_STORM_GATE_DEG = 8.0   # (legacy) generous proximity window
+_STORM_CORE_DEG = 2.5   # true-distance "demonstrably in the storm" label-mismatch fallback
 
 
 # ── basin → archive directory mapping ────────────────────────────────────────
@@ -96,6 +98,13 @@ def _safe_div10(tok, signed=False):
         return round(int(tok) / 10.0, 1)
     except ValueError:
         return None
+
+
+def _deg_dist(lat1, lon1, lat2, lon2) -> float:
+    """Approx great-circle separation in degrees (cos-lat scaled longitude)."""
+    dlat = lat1 - lat2
+    dlon = (lon1 - lon2) * math.cos(math.radians((lat1 + lat2) / 2.0))
+    return math.sqrt(dlat * dlat + dlon * dlon)
 
 
 def _safe_int(tok):
@@ -165,9 +174,14 @@ def _parse_hdob_line(fields: list, base_date: datetime):
 
 
 def _parse_hdob_bulletin(text: str, fname_dt: datetime):
-    """Parse one URNT15/AHONT1 bulletin -> {tail, obs:[...]} (or None)."""
+    """Parse one URNT15/AHONT1 bulletin -> {tail, storm, obs:[...]} (or None).
+
+    `storm` is the system label the aircraft is flying (the token before HDOB,
+    e.g. ONE / AL01 / INVEST / a research-campaign name like TEXAQS11) — used to
+    keep a non-TC research flight out of an actual storm's track."""
     lines = text.strip().splitlines()
     tail = None
+    storm = None
     base_date = fname_dt
     obs = []
     in_data = False
@@ -179,18 +193,23 @@ def _parse_hdob_bulletin(text: str, fname_dt: datetime):
         if up.startswith(("URNT15", "AHONT1", "AHOPN1")) and " " in s:
             in_data = False
             continue
-        # Info line carries the aircraft tail + an 8-digit YYYYMMDD
+        # Info line carries the aircraft tail, the system label, + an 8-digit date
         if (not in_data) and ("HDOB" in up):
-            parts = s.split()
+            parts = up.split()
             for p in parts:
-                if re.fullmatch(r"(AF|NOAA)\d+", p.upper()):
-                    tail = p.upper()
+                if re.fullmatch(r"(AF|NOAA)\d+", p):
+                    tail = p
                 if len(p) == 8 and p.isdigit():
                     try:
                         base_date = datetime(int(p[:4]), int(p[4:6]), int(p[6:8]),
                                              tzinfo=timezone.utc)
                     except ValueError:
                         pass
+            # storm label = token immediately before HDOB
+            if "HDOB" in parts:
+                hi = parts.index("HDOB")
+                if hi >= 1:
+                    storm = parts[hi - 1]
             in_data = True
             continue
         if in_data:
@@ -202,7 +221,7 @@ def _parse_hdob_bulletin(text: str, fname_dt: datetime):
                 obs.append(row)
     if not obs:
         return None
-    return {"tail": tail or "UNKN", "obs": obs}
+    return {"tail": tail or "UNKN", "storm": storm, "obs": obs}
 
 
 # ── dropsondes (REPNT3 TEMP DROP) ────────────────────────────────────────────
@@ -344,6 +363,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
 
     # ── HDOB → per-aircraft tracks ──
     aircraft: dict = {}
+    aircraft_names: dict = {}   # tail -> {system labels from the bulletins}
     hdob_dir = f"{NHC_RECON_BASE}/{year}/{dirs['hdob']}/"
     for url in _list_recent_files(hdob_dir, since, sim_now):
         if url in _bulletin_cache:
@@ -358,27 +378,52 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         if not parsed:
             continue
         tk = aircraft.setdefault(parsed["tail"], {})
+        if parsed.get("storm"):
+            aircraft_names.setdefault(parsed["tail"], set()).add(parsed["storm"])
         for ob in parsed["obs"]:
             tk[ob["t"]] = ob  # dedup by ISO time within a tail
 
     # In replay, hide obs the simulated clock hasn't "reached" yet.
     sim_iso = sim_now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    # HDOB carries no ATCF id, so the directory returns EVERY flight in the
+    # window — including non-TC research sorties (e.g. TEXAQS) that share the
+    # AHONT1 feed. Attribute an aircraft to this storm by its bulletin LABEL
+    # (ONE / AL01 / INVEST / cyclone number) OR by being demonstrably at the
+    # storm core; this keeps the real sortie (even its ferry leg) while dropping
+    # a research flight that merely passes within a few degrees.
+    norm_q = re.sub(r"[^A-Z0-9]", "", (name or "").upper())
+    bcy = atcf_id[:4].upper()          # e.g. AL01
+    cy = atcf_id[2:4]                  # e.g. 01
+    is_invest = cy.isdigit() and int(cy) >= 90
+
+    def _label_matches(lbl: str) -> bool:
+        n = re.sub(r"[^A-Z0-9]", "", (lbl or "").upper())
+        if not n:
+            return False
+        if norm_q and (norm_q in n or n in norm_q):
+            return True
+        if bcy and bcy in n:
+            return True
+        if n in ("INVEST", "INVEST" + cy, "AL" + cy, "EP" + cy, "CP" + cy):
+            return True
+        if is_invest and n.startswith("INVEST"):
+            return True
+        return False
+
     aircraft_out = []
     for tail, obmap in aircraft.items():
         track = [obmap[k] for k in sorted(obmap) if k <= sim_iso]
         if not track:
             continue
-        # Storm-proximity gate: HDOB carries no storm id, so the AHONT1 directory
-        # returns EVERY Atlantic AF/NOAA flight in the window. Keep an aircraft
-        # only if it samples within RADIUS_DEG of the storm — otherwise an
-        # unrelated sortie (e.g. an eastern-Gulf flight) gets misattributed to a
-        # western-Gulf invest. Per-aircraft (any ob in range → keep full track,
-        # so the ferry leg into the storm is preserved).
-        if storm_lat is not None and storm_lon is not None:
-            near = any(abs(o["lat"] - storm_lat) <= _STORM_GATE_DEG and
-                       abs(o["lon"] - storm_lon) <= _STORM_GATE_DEG for o in track)
-            if not near:
-                continue
+        labels = aircraft_names.get(tail, set())
+        name_ok = any(_label_matches(l) for l in labels)
+        at_core = (storm_lat is not None and storm_lon is not None and
+                   any(_deg_dist(o["lat"], o["lon"], storm_lat, storm_lon) <= _STORM_CORE_DEG
+                       for o in track))
+        # Only filter when we have something to match against (a name and/or a
+        # position). With neither (shouldn't happen via the UI) keep, as before.
+        if (norm_q or storm_lat is not None) and not (name_ok or at_core):
+            continue
         aircraft_out.append({"tail": tail, "track": track})
     aircraft_out.sort(key=lambda a: a["track"][-1]["t"], reverse=True)
 

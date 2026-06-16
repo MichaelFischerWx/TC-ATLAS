@@ -176,8 +176,9 @@
         try {
             var replay = window._ReconKit && window._ReconKit.replayInfo && window._ReconKit.replayInfo();
             var storms = (typeof window._irGetActiveStorms === 'function') ? (window._irGetActiveStorms() || []) : [];
-            var liveRecon = storms.some(function (s) { return s && s.has_recon; });
-            if (replay || liveRecon) name = 'hdob';
+            // Default to the live side-by-side whenever anything is active (or a
+            // replay is set); fall back to the Missions archive only off-season.
+            if (replay || storms.length) name = 'hdob';
         } catch (e) {}
         window.switchReconSub(name || 'missions');
     };
