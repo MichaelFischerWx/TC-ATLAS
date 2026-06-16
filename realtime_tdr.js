@@ -256,13 +256,20 @@
         if (replay && replay.atcf) {
             opts.push({ atcf: replay.atcf, name: replay.name || replay.atcf, replay: replay });
         }
+        // List ALL active storms (not just recon-flagged ones), so tonight's
+        // target is selectable even before the first VDM fix flips has_recon.
+        // Recon-active storms sort first and are marked with ✈; the picker
+        // defaults to one of them when present.
         var storms = (typeof window._irGetActiveStorms === 'function') ? (window._irGetActiveStorms() || []) : [];
+        var reconOpts = [], otherOpts = [];
         for (var i = 0; i < storms.length; i++) {
-            if (storms[i] && storms[i].has_recon) {
-                opts.push({ atcf: (storms[i].atcf_id || '').toUpperCase(), name: storms[i].name || storms[i].atcf_id,
-                            lat: storms[i].lat, lon: storms[i].lon });
-            }
+            var s = storms[i];
+            if (!s || !s.atcf_id) continue;
+            var o = { atcf: s.atcf_id.toUpperCase(), name: s.name || s.atcf_id,
+                      lat: s.lat, lon: s.lon, recon: !!s.has_recon };
+            (s.has_recon ? reconOpts : otherOpts).push(o);
         }
+        opts = opts.concat(reconOpts).concat(otherOpts);
         var seen = {}, uniq = [];
         for (var k = 0; k < opts.length; k++) {
             if (opts[k].atcf && !seen[opts[k].atcf]) { seen[opts[k].atcf] = 1; uniq.push(opts[k]); }
@@ -272,7 +279,7 @@
         sel.innerHTML = '';
         if (!uniq.length) {
             var o0 = document.createElement('option');
-            o0.value = ''; o0.textContent = 'No active recon';
+            o0.value = ''; o0.textContent = 'No active storms';
             sel.appendChild(o0);
             _hdobShowEmpty(true);
             return;
@@ -280,7 +287,7 @@
         for (var u = 0; u < uniq.length; u++) {
             var op = document.createElement('option');
             op.value = uniq[u].atcf;
-            op.textContent = uniq[u].name + ' (' + uniq[u].atcf + ')';
+            op.textContent = (uniq[u].recon ? '✈ ' : '') + uniq[u].name + ' (' + uniq[u].atcf + ')';
             sel.appendChild(op);
         }
         sel.value = (cur && seen[cur]) ? cur : uniq[0].atcf;
