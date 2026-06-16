@@ -5281,9 +5281,91 @@
                 });
         }
 
-        // Phase 2: raw Tb backfill for hover/colormaps
+        // Phase 2: raw Tb backfill for hover/colormaps.
+        // Bundle-first: one /band-raw-bundle request (302 → R2/GCS, off
+        // Cloud Run egress) replaces the per-frame band-raw-frame waterfall
+        // that was the #1 Cloud Run egress driver on active-storm days
+        // (~2.3 GB + a 502 storm in one day). Falls back to the per-frame
+        // path on any failure. Mirrors the IR panel's _satTryRawTbBundleThen.
         function _startRightRawBackfill() {
             if (loadStatusEl) loadStatusEl.textContent = 'Loading ' + bandLabel + ' data...';
+            _satTryRawBandBundleThen(stormId, band, function (ok) {
+                if (ok) return;
+                console.log('[Satellite] Band raw bundle unavailable; using per-frame waterfall');
+                _startRightRawBackfillLegacy();
+            });
+        }
+
+        /** Right-band raw Tb bundle — one /band-raw-bundle request returns
+         *  every frame's raw uint8 array packed binary; the endpoint 302s to
+         *  R2/GCS so the multi-MB payload never streams through Cloud Run.
+         *  Merges into rightFrames[] preserving any previewImg. Calls
+         *  done(false) on any failure so the caller falls back per-frame. */
+        function _satTryRawBandBundleThen(sid, bnd, done) {
+            var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(sid)
+                + '/band-raw-bundle?band=' + bnd
+                + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                + '&radius_deg=' + DEFAULT_RADIUS_DEG
+                + '&interval_min=' + FRAME_INTERVAL_MIN;
+            fetch(apiUrl)
+                .then(function (r) {
+                    if (!r.ok) throw new Error('api band raw bundle HTTP ' + r.status);
+                    return r.arrayBuffer();
+                })
+                .then(function (buf) {
+                    if (sid !== currentStormId || bnd !== rightBand) { done(false); return; }
+                    try {
+                        var dv = new DataView(buf);
+                        if (buf.byteLength < 4) throw new Error('bundle too small');
+                        var hl = dv.getUint32(0, true);
+                        if (4 + hl > buf.byteLength) throw new Error('bundle header overrun');
+                        var header = JSON.parse(new TextDecoder('utf-8')
+                            .decode(new Uint8Array(buf, 4, hl)));
+                        var bin = 4 + hl;
+                        var ok = 0;
+                        var hdrFrames = header.frames || [];
+                        if (header.total_frames) totalFrames = header.total_frames;
+                        for (var i = 0; i < hdrFrames.length; i++) {
+                            var f = hdrFrames[i];
+                            if (!f.byte_length || f.error) continue;
+                            var tb = new Uint8Array(buf, bin + f.byte_offset, f.byte_length);
+                            var existing = rightFrames[f.index] || {};
+                            rightFrames[f.index] = {
+                                previewImg: existing.previewImg || null,
+                                tb_data: tb,
+                                rows: f.tb_rows,
+                                cols: f.tb_cols,
+                                bounds: f.bounds,
+                                datetime_utc: f.datetime_utc || '',
+                                satellite: f.satellite || '',
+                                tb_vmin: header.tb_vmin,
+                                tb_vmax: header.tb_vmax,
+                                data_type: header.data_type || rightDataType
+                            };
+                            ok++;
+                        }
+                        if (ok === 0) { done(false); return; }
+                        if (loadStatusEl) loadStatusEl.textContent = '';
+                        if (!frameCache[sid]) frameCache[sid] = { ts: Date.now() };
+                        frameCache[sid].right = rightFrames.slice();
+                        frameCache[sid].rightBand = bnd;
+                        frameCache[sid].ts = Date.now();
+                        if (sid === currentStormId) renderBothPanels();
+                        console.log('[Satellite] Band raw bundle: ' + ok + '/' +
+                                    hdrFrames.length + ' ' + bandLabel + ' frames loaded');
+                        done(true);
+                    } catch (e) {
+                        console.warn('[Satellite] Band raw bundle parse failed:', e.message);
+                        done(false);
+                    }
+                })
+                .catch(function (err) {
+                    console.warn('[Satellite] Band raw bundle fetch failed:', err && err.message);
+                    done(false);
+                });
+        }
+
+        function _startRightRawBackfillLegacy() {
             var tbDone = 0;
             for (var i = 0; i < Math.min(FETCH_CONCURRENCY, totalFrames); i++) _fetchRightRaw(i);
 
