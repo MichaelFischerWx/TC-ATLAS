@@ -165,17 +165,19 @@
         try { if (typeof gtag === 'function') gtag('event', 'recon_sub_switch', { sub: name }); } catch (e) {}
     };
 
-    // Entry point fired by switchIRView('recon'): show the active sub-tab
-    // (defaults to Missions) and lazy-load its data.
+    // Entry point fired by switchIRView('recon'): pick the sub-tab to show and
+    // lazy-load its data. Default to the Live Flight side-by-side whenever an
+    // aircraft is actually up (active-recon storm) or a replay override is set,
+    // so landing on Recon during a mission shows the live data — not the
+    // NOAA-only TDR Missions archive. Otherwise keep the last-active tab.
     window.activateReconView = function () {
         var active = document.querySelector('#recon-main .recon-sub-tab.active');
         var name = active ? active.getAttribute('data-sub') : 'missions';
-        // Dev/test: when a recon replay override is active, open straight to the
-        // Live Flight side-by-side so a single test link needs no extra clicks.
         try {
-            if (window._ReconKit && window._ReconKit.replayInfo && window._ReconKit.replayInfo()) {
-                name = 'hdob';
-            }
+            var replay = window._ReconKit && window._ReconKit.replayInfo && window._ReconKit.replayInfo();
+            var storms = (typeof window._irGetActiveStorms === 'function') ? (window._irGetActiveStorms() || []) : [];
+            var liveRecon = storms.some(function (s) { return s && s.has_recon; });
+            if (replay || liveRecon) name = 'hdob';
         } catch (e) {}
         window.switchReconSub(name || 'missions');
     };
