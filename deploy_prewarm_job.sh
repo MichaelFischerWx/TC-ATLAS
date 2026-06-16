@@ -97,7 +97,12 @@ COMMON_ARGS=(
     --image "${IMAGE}"
     --command python3
     --args prewarm_job.py
-    --memory 3Gi
+    --memory 6Gi   # 6 GiB: 3 GiB OOM-killed (signal 9) on busy multi-storm
+                   # cycles — e.g. 3 active systems incl. a Himawari one, whose
+                   # full-disk segments are ~6 MB each decompressed × many
+                   # segments × frames × concurrent storms. Job bills memory ×
+                   # runtime only while running (quiet-gate skips otherwise), so
+                   # the extra is bounded to active-storm windows (~+$0.1/day).
     --cpu 2
     --max-retries 1
     --task-timeout 900
