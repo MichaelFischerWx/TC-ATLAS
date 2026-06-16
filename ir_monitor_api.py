@@ -2268,6 +2268,17 @@ _recon_lock = threading.Lock()
 _RECON_CACHE_TTL = 900       # refresh the recon set at most every 15 min
 _RECON_LOOKBACK_HOURS = 18   # a storm with a VDM this recent is "in recon"
 
+# HDOB-based detection: a storm is "in recon" the moment flight-level obs (HDOB)
+# appear for it — not only after the first VDM fix. We scan the HDOB collective
+# dirs for recent bulletins and record their storm NAMES + a few ob POSITIONS; a
+# storm matches by name or spatial proximity. This is what lets a user start
+# tracking a flight as soon as HDOBs post, before any fix is issued.
+_recent_hdob_names: set = set()
+_recent_hdob_points: list = []   # [(lat, lon), ...] sampled from recent bulletins
+_RECON_HDOB_LOOKBACK_HOURS = 4   # an HDOB this recent ⇒ a plane is up now
+_RECON_HDOB_MAXFILES = 14        # cap fetches per basin per refresh (cost guard)
+_HDOB_MATCH_DEG = 5.0            # storm within this of a recent HDOB ob ⇒ in recon
+
 
 def _refresh_recent_recon() -> set:
     """Return the set of ATCF IDs (upper-case) with a VDM in the last
@@ -2323,20 +2334,94 @@ def _refresh_recent_recon() -> set:
         with _recon_lock:
             return set(_recent_recon_atcf)
 
+    # Refresh the HDOB signals on the same cadence (only does I/O when planes
+    # are up — an empty lookback window means zero fetches).
+    _scan_recent_hdob()
+
     with _recon_lock:
         _recent_recon_atcf = found
         _recent_recon_ts = time.time()
         return set(found)
 
 
-def _has_active_recon(atcf_id: str) -> bool:
-    """True if a VDM was issued for this storm within the lookback window."""
+def _scan_recent_hdob() -> None:
+    """Populate _recent_hdob_names / _recent_hdob_points from the most recent
+    HDOB bulletins in the lookback window. Cheap: capped file count, and zero
+    fetches when no flight is airborne. Keeps prior state on error."""
+    names: set = set()
+    points: list = []
+    try:
+        from global_archive_api import NHC_RECON_BASE
+        from tc_radar_api import _hrd_fetch_text, _hrd_parse_directory
+        from recon_api import _parse_hdob_bulletin
+
+        year = _dt.now(timezone.utc).year
+        cutoff = _dt.now(timezone.utc) - timedelta(hours=_RECON_HDOB_LOOKBACK_HOURS)
+        for prefix in ("AHONT1", "AHOPN1"):
+            url = f"{NHC_RECON_BASE}/{year}/{prefix}/"
+            try:
+                entries = _hrd_parse_directory(url)
+            except Exception:
+                continue
+            recent = []
+            for entry in entries:
+                if not entry.lower().endswith(".txt"):
+                    continue
+                dm = re.search(r"(\d{12})\.txt$", entry)
+                if not dm:
+                    continue
+                try:
+                    fdt = _dt.strptime(dm.group(1), "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+                if fdt >= cutoff:
+                    recent.append((fdt, entry))
+            recent.sort(reverse=True)  # newest first
+            for fdt, fname in recent[:_RECON_HDOB_MAXFILES]:
+                try:
+                    text = _hrd_fetch_text(url + fname, timeout=10)
+                    if not text:
+                        continue
+                    nm = re.search(r"\b([A-Z][A-Z0-9\-]+)\s+HDOB\b", text.upper())
+                    if nm:
+                        names.add(nm.group(1))
+                    parsed = _parse_hdob_bulletin(text, fdt)
+                    if parsed and parsed.get("obs"):
+                        o = parsed["obs"][-1]  # one sample position per bulletin
+                        points.append((o["lat"], o["lon"]))
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.warning(f"recent-HDOB scan failed: {e}")
+        return  # keep prior state
+
+    global _recent_hdob_names, _recent_hdob_points
+    _recent_hdob_names = names
+    _recent_hdob_points = points
+
+
+def _has_active_recon(atcf_id: str, name: str = None,
+                      lat: float = None, lon: float = None) -> bool:
+    """True if this storm is in active recon — either a recent VDM fix, OR
+    recent HDOB flight-level obs matched by storm name or position. The HDOB
+    path lets tracking start as soon as obs appear, before the first fix."""
     if not atcf_id:
         return False
     try:
-        return atcf_id.upper() in _refresh_recent_recon()
+        vdm_set = _refresh_recent_recon()  # also refreshes the HDOB signals
     except Exception:
         return False
+    if atcf_id.upper() in vdm_set:
+        return True
+    if name:
+        nm = name.upper().strip()
+        if nm and nm in _recent_hdob_names:
+            return True
+    if lat is not None and lon is not None:
+        for (plat, plon) in _recent_hdob_points:
+            if abs(plat - lat) <= _HDOB_MATCH_DEG and abs(plon - lon) <= _HDOB_MATCH_DEG:
+                return True
+    return False
 
 
 def _build_storm_entry(atcf_id: str, records: list,
@@ -2392,7 +2477,8 @@ def _build_storm_entry(atcf_id: str, records: list,
             select_goes_sat(latest["lon"], latest["datetime"])[0]
         ),
         "source": source,
-        "has_recon": _has_active_recon(atcf_id),
+        "has_recon": _has_active_recon(atcf_id, name=display_name,
+                                       lat=latest["lat"], lon=latest["lon"]),
     }
 
     # NHC invests (AL/EP/CP, number 90-99) carry a Tropical Weather Outlook
@@ -6875,7 +6961,9 @@ def get_storm_metadata(atcf_id: str):
         "current": current,
         "intensity_history": intensity_history,
         "forecast_track": forecast_track,
-        "has_recon": _has_active_recon(atcf_id),
+        "has_recon": _has_active_recon(
+            atcf_id, name=display_name,
+            lat=(current or {}).get("lat"), lon=(current or {}).get("lon")),
     }
 
     return JSONResponse(
