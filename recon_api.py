@@ -22,6 +22,7 @@ Design notes:
 
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -30,6 +31,12 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger("recon")
+
+# Replay (?replay=) is a DEV/TEST affordance — replaying a past mission as if it
+# were live. It is OFF unless RECON_ALLOW_REPLAY=1, so production never serves a
+# past storm (e.g. Milton) and only ever shows the genuinely-live recon. Set the
+# flag on a local/dev API to test against the real archive.
+_ALLOW_REPLAY = os.environ.get("RECON_ALLOW_REPLAY", "0") == "1"
 
 router = APIRouter(tags=["recon"])
 
@@ -463,6 +470,9 @@ def recon_realtime(
     atcf_id = atcf_id.upper().strip()
     if len(atcf_id) < 8:
         return JSONResponse({"error": "bad atcf_id"}, status_code=400)
+
+    if replay and not _ALLOW_REPLAY:
+        replay = ""  # ignore replay in production → live data only
 
     if replay:
         sim_now = _replay_now(atcf_id, replay, speed)
