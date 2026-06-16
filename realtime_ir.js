@@ -13,11 +13,26 @@
     // `?api=http://localhost:8081` points all fetches at a locally-run
     // API so server-side changes can be A/B'd before deploy. No-op in
     // production (page is never served from localhost there).
+    // Local-dev overrides (?api= and ?reconreplay=) are mirrored into
+    // sessionStorage so they survive the URL rewrite that storm-open does
+    // (history.replaceState drops the query string), and so they can be set
+    // from the DevTools console when address-bar encoding of `://` and `:` in
+    // the values is a hassle:
+    //   sessionStorage.setItem('rtApiOverride','http://localhost:8077');
+    //   sessionStorage.setItem('rtReconReplay','AL142024:202410081200:150:MILTON');
+    //   location.reload();
+    var _rtReconReplayOverride = null;
     if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
         try {
             var _apiOverride = new URLSearchParams(location.search).get('api');
+            if (_apiOverride) sessionStorage.setItem('rtApiOverride', _apiOverride);
+            _apiOverride = _apiOverride || sessionStorage.getItem('rtApiOverride');
             if (_apiOverride) API_BASE = _apiOverride;
-        } catch (e) { /* old browser without URLSearchParams — keep default */ }
+
+            var _rrp = new URLSearchParams(location.search).get('reconreplay');
+            if (_rrp) sessionStorage.setItem('rtReconReplay', _rrp);
+            _rtReconReplayOverride = _rrp || sessionStorage.getItem('rtReconReplay');
+        } catch (e) { /* old browser / storage blocked — keep defaults */ }
     }
     var POLL_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
     var DEFAULT_LOOKBACK_HOURS = 6;
@@ -921,6 +936,19 @@
     var _rtAscatLayers = [];           // L.marker references on map
     var _rtAscatLastAtcf = null;       // last storm we fetched passes for
     var _rtAscatActiveUrl = null;      // currently displayed pass data URL
+
+    // ── Aircraft Recon Overlay State ─────────────────────────
+    var _rtReconData = null;           // last /recon/realtime blob
+    var _rtReconVisible = false;       // overlay toggle state
+    var _rtReconLayer = null;          // _ReconBarbLayer canvas instance
+    var _rtReconMarkers = [];          // dropsonde + VDM markers/circles
+    var _rtReconPollTimer = null;      // 60s refresh interval
+    var _rtReconAtcf = null;           // current storm ATCF id
+    var _rtReconName = '';             // current storm name (sonde attribution)
+    var _rtReconReplay = null;         // {anchor, speed} dev replay override
+    var _rtReconFitDone = false;       // replay: fit map to track once (not every poll)
+    var _RT_RECON_POLL_MS = 60000;     // client poll cadence
+    var _RT_RECON_FRESH_MS = 20 * 60 * 1000;  // "latest leg" highlight window
 
     // ── 88D NEXRAD Radar Overlay State ───────────────────────
     var _rtRadarVisible = false;       // overlay toggle state
@@ -4150,6 +4178,7 @@
         _rtLoadWeatherlab(storm);
         _rtLoadDmEnsemble(storm);
         _rtLoadAscatPasses(storm);
+        _rtLoadRecon(storm);
         _rtLoadStormMwPasses(storm);
         _rtLoadRadarSites(storm);
 
@@ -5127,6 +5156,12 @@
             attributionControl: false
         });
 
+        // Local-dev debug handle so the detail map can be driven from the
+        // console / preview harness (e.g. recon overlay verification).
+        if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+            window._rtDetailMap = detailMap;
+        }
+
         // Dark basemap
         L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
             subdomains: 'abcd', maxZoom: 19
@@ -5195,6 +5230,14 @@
         detailMap.createPane('radarPane');
         detailMap.getPane('radarPane').style.zIndex = 445;
         detailMap.getPane('radarPane').style.pointerEvents = 'none';
+
+        // Recon flight-level barb canvas pane — above ASCAT, below radar.
+        // pointerEvents stay off (the canvas is non-interactive); barb clicks
+        // are caught at the map level and hit-tested. Dropsonde/VDM markers use
+        // the default (interactive) markerPane so their own clicks fire.
+        detailMap.createPane('reconPane');
+        detailMap.getPane('reconPane').style.zIndex = 443;
+        detailMap.getPane('reconPane').style.pointerEvents = 'none';
 
         // Labels on top (in overlay pane so above IR tiles)
         L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
@@ -5952,6 +5995,7 @@
         // Clean up model overlay
         _rtRemoveModelOverlay();
         _rtRemoveAscatOverlay();
+        _rtRemoveReconOverlay();
         _rtRemoveRadarOverlay();
 
         // Reset product state
@@ -21030,6 +21074,438 @@
         var section = document.getElementById('rt-ascat-section');
         if (section) section.style.display = 'none';
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ── AIRCRAFT RECON OVERLAY (HDOB track + dropsondes + VDM) ────
+    // ═══════════════════════════════════════════════════════════════
+    //
+    // Cumulative flight-level track drawn as zoom-decimated, viewport-culled
+    // wind barbs on a canvas layer (latest ~20 min highlighted), with sparse
+    // dropsonde + VDM markers. Data from /recon/realtime, polled every 60 s
+    // while the overlay is on. Mirrors the ASCAT toggle/fetch/clear lifecycle.
+
+    /** Speed color (shared scale with ASCAT). */
+    function _rtReconBarbColor(spdKt) { return _ascatColor(spdKt); }
+
+    /**
+     * Draw one WMO wind barb (dir/speed) on a canvas at (x,y). Modeled on the
+     * global-map _drawWindBarb glyph, but colored by speed and dimmed when the
+     * ob is not in the latest leg (fresh=false).
+     */
+    function _rtDrawReconBarb(ctx, x, y, dirDeg, spdKt, isSH, fresh) {
+        if (spdKt == null || spdKt < 2) return;
+        // wind FROM dirDeg → blowing-to vector (dir+180); convert to u,v so the
+        // staff points upwind, matching _drawWindBarb's atan2(u,v) convention.
+        var toRad = (dirDeg + 180) * Math.PI / 180;
+        var u = Math.sin(toRad), v = Math.cos(toRad);
+        var fromRot = Math.atan2(u, v);
+
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(fromRot);
+
+        var STAFF = 18, FEATHER = 8, FEATHER_H = 4, SPACING = 2.4, PEN_BASE = 3.5;
+        var side = isSH ? +1 : -1;
+
+        var lines = new Path2D();
+        lines.moveTo(0, 0); lines.lineTo(0, STAFF);
+
+        var kt = Math.round(spdKt / 5) * 5;
+        var nPen = Math.floor(kt / 50); kt -= nPen * 50;
+        var nFull = Math.floor(kt / 10); kt -= nFull * 10;
+        var nHalf = (kt >= 4.5) ? 1 : 0;
+
+        var pos = STAFF;
+        var pennants = new Path2D();
+        for (var i = 0; i < nPen; i++) {
+            pennants.moveTo(0, pos); pennants.lineTo(0, pos - PEN_BASE);
+            pennants.lineTo(side * FEATHER, pos); pennants.closePath();
+            pos -= PEN_BASE + SPACING * 0.5;
+        }
+        for (var f = 0; f < nFull; f++) {
+            lines.moveTo(0, pos); lines.lineTo(side * FEATHER, pos); pos -= SPACING;
+        }
+        if (nHalf) {
+            if (nPen === 0 && nFull === 0) pos -= SPACING;
+            lines.moveTo(0, pos); lines.lineTo(side * FEATHER_H, pos);
+        }
+
+        var ink = _rtReconBarbColor(spdKt);
+        var alpha = fresh ? 1.0 : 0.5;
+        // dark halo
+        ctx.globalAlpha = fresh ? 0.7 : 0.4;
+        ctx.lineWidth = fresh ? 3.4 : 2.6;
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.stroke(lines);
+        if (nPen) { ctx.fill(pennants); ctx.stroke(pennants); }
+        // colored ink
+        ctx.globalAlpha = alpha;
+        ctx.lineWidth = fresh ? 1.8 : 1.3;
+        ctx.strokeStyle = ink; ctx.fillStyle = ink;
+        ctx.stroke(lines);
+        if (nPen) { ctx.fill(pennants); ctx.stroke(pennants); }
+        ctx.restore();
+        ctx.globalAlpha = 1.0;
+    }
+
+    /** Canvas layer: cumulative track polyline + decimated/culled barbs. */
+    var _ReconBarbLayer = L.Layer.extend({
+        initialize: function () {
+            this._aircraft = [];     // [{tail, track:[obs...]}]
+            this._latestMs = 0;
+            this._canvas = null;
+            this._drawn = [];        // [{x,y,ob,tail}] for click hit-testing
+        },
+        setData: function (aircraft, latestMs) {
+            this._aircraft = aircraft || [];
+            this._latestMs = latestMs || 0;
+            if (this._map) this._redraw();
+            return this;
+        },
+        onAdd: function (map) {
+            this._map = map;
+            // Ensure the pane exists — the IR viewer creates it in initDetailMap,
+            // but a reused instance (e.g. the Recon-tab map) may not have it.
+            if (!map.getPane('reconPane')) {
+                map.createPane('reconPane');
+                map.getPane('reconPane').style.zIndex = 443;
+                map.getPane('reconPane').style.pointerEvents = 'none';
+            }
+            var c = L.DomUtil.create('canvas', 'leaflet-recon-canvas');
+            c.style.position = 'absolute';
+            c.style.pointerEvents = 'none';
+            map.getPane('reconPane').appendChild(c);
+            this._canvas = c;
+            map.on('moveend zoomend resize', this._redraw, this);
+            map.on('click', this._onClick, this);
+            this._redraw();
+            return this;
+        },
+        onRemove: function (map) {
+            map.off('moveend zoomend resize', this._redraw, this);
+            map.off('click', this._onClick, this);
+            if (this._canvas && this._canvas.parentNode) {
+                this._canvas.parentNode.removeChild(this._canvas);
+            }
+            this._canvas = null;
+        },
+        _stride: function () {
+            var z = this._map.getZoom();
+            // obs are 30 s apart; stride 20 ≈ one barb / 10 min when zoomed out
+            return z <= 4 ? 20 : z <= 5 ? 10 : z <= 6 ? 5 : z <= 7 ? 2 : 1;
+        },
+        _redraw: function () {
+            if (!this._map || !this._canvas) return;
+            var size = this._map.getSize();
+            this._canvas.width = size.x; this._canvas.height = size.y;
+            L.DomUtil.setPosition(this._canvas, this._map.containerPointToLayerPoint([0, 0]));
+            var ctx = this._canvas.getContext('2d');
+            ctx.clearRect(0, 0, size.x, size.y);
+            ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+            this._drawn = [];
+            var b = this._map.getBounds().pad(0.15);
+            var stride = this._stride();
+            for (var ai = 0; ai < this._aircraft.length; ai++) {
+                var track = this._aircraft[ai].track || [];
+                // faint full-resolution flight path
+                ctx.beginPath();
+                var started = false;
+                for (var i = 0; i < track.length; i++) {
+                    var lp = this._map.latLngToContainerPoint([track[i].lat, track[i].lon]);
+                    if (!started) { ctx.moveTo(lp.x, lp.y); started = true; }
+                    else ctx.lineTo(lp.x, lp.y);
+                }
+                ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(255,255,255,0.32)';
+                ctx.stroke();
+                // decimated + culled barbs
+                for (var j = 0; j < track.length; j += stride) {
+                    var ob = track[j];
+                    if (ob.wspd_kt == null || ob.wdir == null) continue;
+                    if (!b.contains([ob.lat, ob.lon])) continue;
+                    var pt = this._map.latLngToContainerPoint([ob.lat, ob.lon]);
+                    var fresh = this._latestMs &&
+                        (this._latestMs - Date.parse(ob.t)) <= _RT_RECON_FRESH_MS;
+                    _rtDrawReconBarb(ctx, pt.x, pt.y, ob.wdir, ob.wspd_kt, ob.lat < 0, fresh);
+                    this._drawn.push({ x: pt.x, y: pt.y, ob: ob, tail: this._aircraft[ai].tail });
+                }
+            }
+        },
+        _onClick: function (e) {
+            if (!this._drawn.length) return;
+            var cp = e.containerPoint, best = null, bd = 14;
+            for (var i = 0; i < this._drawn.length; i++) {
+                var dx = this._drawn[i].x - cp.x, dy = this._drawn[i].y - cp.y;
+                var d = Math.sqrt(dx * dx + dy * dy);
+                if (d < bd) { bd = d; best = this._drawn[i]; }
+            }
+            if (best) _rtReconBarbPopup(best.ob, best.tail, e.latlng, this._map);
+        }
+    });
+
+    function _rtFmtTime(iso) {
+        if (!iso) return '—';
+        var d = new Date(iso.endsWith('Z') || iso.indexOf('+') >= 0 ? iso : iso + 'Z');
+        if (isNaN(d)) return iso;
+        return d.toISOString().slice(11, 19) + 'Z ' + d.toISOString().slice(5, 10);
+    }
+    function _rtFmtLatLon(lat, lon) {
+        if (lat == null || lon == null) return '—';
+        return Math.abs(lat).toFixed(2) + (lat < 0 ? '°S' : '°N') + ' ' +
+               Math.abs(lon).toFixed(2) + (lon < 0 ? '°W' : '°E');
+    }
+    function _rtReconRow(label, val) {
+        if (val == null || val === '') return '';
+        return '<div style="display:flex;justify-content:space-between;gap:10px;">' +
+               '<span style="color:#94a3b8;">' + label + '</span><span>' + val + '</span></div>';
+    }
+
+    function _rtReconBarbPopup(ob, tail, latlng, map) {
+        var html = '<div class="ir-popup" style="font-size:11px;min-width:170px;">' +
+            '<div style="font-weight:700;color:#22d3ee;margin-bottom:4px;">' +
+            (tail || 'Aircraft') + ' · flight-level ob</div>' +
+            _rtReconRow('Time', _rtFmtTime(ob.t)) +
+            _rtReconRow('Position', _rtFmtLatLon(ob.lat, ob.lon)) +
+            _rtReconRow('FL wind', (ob.wdir != null ? ob.wdir + '° / ' : '') +
+                (ob.wspd_kt != null ? ob.wspd_kt + ' kt' : '')) +
+            _rtReconRow('Peak FL', ob.peak_fl_kt != null ? ob.peak_fl_kt + ' kt' : null) +
+            _rtReconRow('SFMR sfc', ob.sfmr_kt != null ? ob.sfmr_kt + ' kt' : null) +
+            _rtReconRow('SFMR rain', ob.sfmr_rain != null ? ob.sfmr_rain + ' mm/hr' : null) +
+            _rtReconRow('FL pres', ob.fl_pres_mb != null ? ob.fl_pres_mb + ' mb' : null) +
+            _rtReconRow('Geo alt', ob.geo_alt_m != null ? ob.geo_alt_m + ' m' : null) +
+            _rtReconRow('Temp', ob.temp_c != null ? ob.temp_c + ' °C' : null) +
+            _rtReconRow('Dewpt', ob.dewpt_c != null ? ob.dewpt_c + ' °C' : null) +
+            '</div>';
+        L.popup({ maxWidth: 260, className: 'rt-recon-popup' })
+            .setLatLng(latlng).setContent(html).openOn(map || detailMap);
+    }
+
+    /** Build dropsonde + VDM marker layers for `blob` and add them to `map`.
+     *  Returns the array of added layers (caller owns removal). Reusable across
+     *  the IR viewer's detailMap and the Recon tab's map. */
+    function _reconBuildMarkers(map, blob) {
+        var out = [];
+        if (!blob || !map) return out;
+
+        // Dropsondes — amber diamond
+        var sondes = blob.dropsondes || [];
+        for (var s = 0; s < sondes.length; s++) {
+            var d = sondes[s];
+            if (d.lat == null || d.lon == null) continue;
+            var icon = L.divIcon({
+                className: 'rt-recon-sonde-icon',
+                html: '<div style="width:11px;height:11px;background:#fbbf24;border:1.5px solid #1f2937;' +
+                    'transform:rotate(45deg);box-shadow:0 0 3px rgba(0,0,0,0.5);"></div>',
+                iconSize: [11, 11], iconAnchor: [6, 6]
+            });
+            var m = L.marker([d.lat, d.lon], { icon: icon, interactive: true });
+            var sh = '<div class="ir-popup" style="font-size:11px;min-width:170px;">' +
+                '<div style="font-weight:700;color:#fbbf24;margin-bottom:4px;">◇ Dropsonde' +
+                (d.tail ? ' · ' + d.tail : '') + '</div>' +
+                _rtReconRow('Release', _rtFmtTime(d.t)) +
+                _rtReconRow('Position', _rtFmtLatLon(d.lat, d.lon)) +
+                _rtReconRow('Sfc wind', d.sfc_wind_kt != null ?
+                    (d.sfc_dir != null ? d.sfc_dir + '° / ' : '') + d.sfc_wind_kt + ' kt' : null) +
+                _rtReconRow('MBL wind', d.mbl_wind_kt != null ?
+                    (d.mbl_dir != null ? d.mbl_dir + '° / ' : '') + d.mbl_wind_kt + ' kt' : null) +
+                _rtReconRow('Environment', d.environment) +
+                _rtReconRow('Splash', _rtFmtLatLon(d.splash_lat, d.splash_lon)) +
+                '</div>';
+            m.bindPopup(sh, { maxWidth: 260, className: 'rt-recon-popup' });
+            m.addTo(map); out.push(m);
+        }
+
+        // VDM center fixes — red crosshair + eye circle
+        var vdms = blob.vdms || [];
+        for (var v = 0; v < vdms.length; v++) {
+            var x = vdms[v];
+            if (x.lat == null || x.lon == null) continue;
+            var vicon = L.divIcon({
+                className: 'rt-recon-vdm-icon',
+                html: '<div style="font-size:15px;line-height:15px;color:#f87171;' +
+                    'text-shadow:0 0 2px #000,0 0 2px #000;">⊕</div>',
+                iconSize: [15, 15], iconAnchor: [8, 8]
+            });
+            var vm = L.marker([x.lat, x.lon], { icon: vicon, interactive: true });
+            var vh = '<div class="ir-popup" style="font-size:11px;min-width:175px;">' +
+                '<div style="font-weight:700;color:#f87171;margin-bottom:4px;">⊕ Center fix (VDM)' +
+                (x.aircraft ? ' · ' + x.aircraft : '') +
+                (x.ob_number != null ? ' OB ' + x.ob_number : '') + '</div>' +
+                _rtReconRow('Time', _rtFmtTime(x.t)) +
+                _rtReconRow('Center', _rtFmtLatLon(x.lat, x.lon)) +
+                _rtReconRow('Min SLP', x.min_slp_hpa != null ? x.min_slp_hpa + ' mb' : null) +
+                _rtReconRow('Max FL wind', x.max_fl_wind_kt != null ? x.max_fl_wind_kt + ' kt' : null) +
+                _rtReconRow('Max SFMR', x.max_sfmr_kt != null ? x.max_sfmr_kt + ' kt' : null) +
+                _rtReconRow('Eye', (x.eye_shape || '') +
+                    (x.eye_diam_nm != null ? ' ' + x.eye_diam_nm + ' nm' : '')) +
+                '</div>';
+            vm.bindPopup(vh, { maxWidth: 270, className: 'rt-recon-popup' });
+            vm.addTo(map); out.push(vm);
+            // eye-size circle (diameter nm → radius m)
+            if (x.eye_diam_nm) {
+                var circ = L.circle([x.lat, x.lon], {
+                    radius: x.eye_diam_nm * 1852 / 2,
+                    color: '#f87171', weight: 1, opacity: 0.7, fill: false,
+                    interactive: false, pane: 'reconPane'
+                });
+                circ.addTo(map); out.push(circ);
+            }
+        }
+        return out;
+    }
+
+    /** (Re)build dropsonde + VDM markers on the IR viewer's detailMap. */
+    function _rtReconRenderMarkers() {
+        for (var i = 0; i < _rtReconMarkers.length; i++) {
+            try { detailMap.removeLayer(_rtReconMarkers[i]); } catch (e) {}
+        }
+        _rtReconMarkers = _reconBuildMarkers(detailMap, _rtReconData);
+    }
+
+    /** Update the canvas layer + markers from _rtReconData. */
+    function _rtReconRender() {
+        if (!_rtReconData || !detailMap) return;
+        var aircraft = _rtReconData.aircraft || [];
+        var latestMs = 0;
+        for (var a = 0; a < aircraft.length; a++) {
+            var tr = aircraft[a].track || [];
+            if (tr.length) {
+                var t = Date.parse(tr[tr.length - 1].t);
+                if (t > latestMs) latestMs = t;
+            }
+        }
+        if (!_rtReconLayer) {
+            _rtReconLayer = new _ReconBarbLayer();
+            _rtReconLayer.addTo(detailMap);
+        }
+        _rtReconLayer.setData(aircraft, latestMs);
+        _rtReconRenderMarkers();
+
+        // Replay/dev only: the detail map is centered on whatever active storm
+        // was opened, but the replayed mission is elsewhere — fit to the track
+        // once so the barbs are immediately in view. Live mode skips this (the
+        // open storm IS the recon target, and refitting would fight the user).
+        if (_rtReconReplay && !_rtReconFitDone) {
+            var pts = [];
+            for (var k = 0; k < aircraft.length; k++) {
+                var tk = aircraft[k].track || [];
+                for (var p = 0; p < tk.length; p++) {
+                    var la = tk[p].lat, lo = tk[p].lon;
+                    if (la == null || lo == null) continue;
+                    if (Math.abs(la) < 0.05 || Math.abs(lo) < 0.05) continue;
+                    pts.push([la, lo]);
+                }
+            }
+            if (pts.length) {
+                try { detailMap.fitBounds(L.latLngBounds(pts).pad(0.1), { animate: false }); } catch (e) {}
+                _rtReconFitDone = true;
+            }
+        }
+    }
+
+    /** Fetch the recon blob and re-render. */
+    function _rtReconFetch() {
+        if (!_rtReconAtcf) return;
+        var statusEl = document.getElementById('rt-recon-status');
+        var url = API_BASE + '/recon/realtime?atcf_id=' + encodeURIComponent(_rtReconAtcf) + '&hours=24';
+        if (_rtReconName) url += '&name=' + encodeURIComponent(_rtReconName);
+        if (_rtReconReplay) url += '&replay=' + _rtReconReplay.anchor + '&speed=' + _rtReconReplay.speed;
+        if (statusEl && !_rtReconData) statusEl.textContent = 'loading…';
+        fetch(url, { cache: 'no-store' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (!j || j.error) { if (statusEl) statusEl.textContent = 'no data'; return; }
+                _rtReconData = j;
+                _rtReconRender();
+                if (statusEl) {
+                    var c = j.counts || {};
+                    statusEl.textContent = (c.obs || 0) + ' obs · ' + (c.dropsondes || 0) +
+                        ' sondes · ' + (c.vdms || 0) + ' VDM';
+                }
+            })
+            .catch(function () { if (statusEl) statusEl.textContent = 'fetch error'; });
+    }
+
+    /** Toggle the recon overlay on/off. */
+    window._rtToggleReconOverlay = function () {
+        var btn = document.getElementById('rt-recon-toggle-btn');
+        var controls = document.getElementById('rt-recon-controls');
+        if (_rtReconVisible) {
+            _rtReconVisible = false;
+            if (btn) btn.textContent = 'Recon';
+            if (controls) controls.style.display = 'none';
+            _rtClearReconLayers();
+            if (_rtReconPollTimer) { clearInterval(_rtReconPollTimer); _rtReconPollTimer = null; }
+            return;
+        }
+        _rtReconVisible = true;
+        if (btn) btn.textContent = 'Hide';
+        if (controls) controls.style.display = '';
+        _rtReconFetch();
+        _rtReconPollTimer = setInterval(_rtReconFetch, _RT_RECON_POLL_MS);
+    };
+
+    /** Remove drawn layers/markers but keep state (e.g. on toggle off). */
+    function _rtClearReconLayers() {
+        if (_rtReconLayer) { try { detailMap.removeLayer(_rtReconLayer); } catch (e) {} _rtReconLayer = null; }
+        for (var i = 0; i < _rtReconMarkers.length; i++) {
+            try { detailMap.removeLayer(_rtReconMarkers[i]); } catch (e) {}
+        }
+        _rtReconMarkers = [];
+        _rtReconFitDone = false;
+    }
+
+    /** Show the recon section + prime state for a storm (no fetch until toggle). */
+    function _rtLoadRecon(storm) {
+        var section = document.getElementById('rt-recon-overlay-section');
+        _rtReconAtcf = storm && storm.atcf_id ? storm.atcf_id.toUpperCase() : null;
+        _rtReconName = storm && storm.name ? storm.name.toUpperCase() : '';
+        // Dev/test replay override (captured at init): ATCF:YYYYMMDDHHMM:SPEED:NAME
+        _rtReconReplay = null;
+        if (_rtReconReplayOverride) {
+            var parts = _rtReconReplayOverride.split(':');
+            _rtReconAtcf = parts[0].toUpperCase();
+            _rtReconReplay = { anchor: parts[1], speed: parts[2] || '120' };
+            if (parts[3]) _rtReconName = parts[3].toUpperCase();
+        }
+
+        var show = !!_rtReconAtcf && (_rtReconReplay || (storm && storm.has_recon));
+        if (section) section.style.display = show ? 'block' : 'none';
+    }
+
+    /** Full recon cleanup (called when switching/closing storms). */
+    function _rtRemoveReconOverlay() {
+        _rtClearReconLayers();
+        if (_rtReconPollTimer) { clearInterval(_rtReconPollTimer); _rtReconPollTimer = null; }
+        _rtReconData = null;
+        _rtReconVisible = false;
+        _rtReconAtcf = null;
+        _rtReconName = '';
+        var btn = document.getElementById('rt-recon-toggle-btn');
+        if (btn) btn.textContent = 'Recon';
+        var controls = document.getElementById('rt-recon-controls');
+        if (controls) controls.style.display = 'none';
+        var section = document.getElementById('rt-recon-overlay-section');
+        if (section) section.style.display = 'none';
+    }
+
+    // Expose a small map-parametrized recon rendering kit so the Recon tab's
+    // side-by-side view (realtime_tdr.js, a separate IIFE) reuses the exact
+    // barb/marker/popup rendering instead of duplicating it. The class + helpers
+    // close over this IIFE's scope, so their internals still resolve.
+    window._ReconKit = {
+        BarbLayer: _ReconBarbLayer,
+        buildMarkers: _reconBuildMarkers,
+        fmtTime: _rtFmtTime,
+        fmtLatLon: _rtFmtLatLon,
+        apiBase: function () { return API_BASE; },
+        // Replay override (for dev/test), parsed: {atcf, anchor, speed, name} | null
+        replayInfo: function () {
+            if (!_rtReconReplayOverride) return null;
+            var p = _rtReconReplayOverride.split(':');
+            return { atcf: (p[0] || '').toUpperCase(), anchor: p[1],
+                     speed: p[2] || '120', name: (p[3] || '').toUpperCase() };
+        }
+    };
 
     // ═══════════════════════════════════════════════════════════════
     // ── 88D NEXRAD RADAR OVERLAY ─────────────────────────────────
