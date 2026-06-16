@@ -8803,6 +8803,157 @@ def get_weatherlab_genesis_trend(
     )
 
 
+@router.get("/weatherlab-genesis-near")
+def get_weatherlab_genesis_near(lat: float, lon: float,
+                                radius_km: float = 500.0,
+                                variant: str = _GENESIS_VARIANT_DEFAULT,
+                                init_time: str = None):
+    """Secondary point-search of the FNV3 cyclogenesis ensemble.
+
+    Scans EVERY ensemble member's predicted track and keeps those that pass
+    within `radius_km` of (lat, lon). This surfaces a DeepMind view for an
+    invest / disturbance that does NOT sit under a recognized density-peak
+    cluster (the named `/weatherlab-genesis` tracks) — e.g. a weak invest
+    that only a handful of members develop.
+
+    Each member key is the ensemble-realization (sample) index, shared
+    across tracks, so the count of UNIQUE matching members ÷ ensemble size
+    is a real LOCALIZED formation/passage probability — not double-counted.
+
+    Returns a payload shaped like `/weatherlab-genesis/{track_id}` (members
+    keyed `<track>:<member>` + a derived ensemble_mean) so the existing
+    1000-member detail modal can render it directly. Reuses the per-init
+    genesis cache, so it's one in-memory scan over already-parsed data.
+
+    Hyphenated path so it isn't swallowed by `/weatherlab-genesis/{track_id}`.
+    """
+    now = _dt.now(timezone.utc)
+    variant_n = _genesis_variant_norm(variant)
+    radius_km = max(50.0, min(2000.0, float(radius_km)))
+
+    if init_time:
+        req_date, req_hour = _genesis_init_to_cycle(init_time)
+        if req_date is None:
+            raise HTTPException(
+                status_code=400,
+                detail="init_time must be 10 digits (YYYYMMDDHH)")
+        data = _fetch_weatherlab_genesis_csv(req_date, req_hour, variant_n)
+        used_date, used_hour = req_date, req_hour
+    else:
+        used_date, used_hour, data = _resolve_latest_genesis_cycle(
+            require_data=True, variant=variant_n)
+
+    if not data:
+        return JSONResponse(
+            content={
+                "model": _genesis_variant_label(variant_n),
+                "variant": variant_n,
+                "ensemble_size": None,
+                "init_time": init_time if init_time else None,
+                "query": {"lat": lat, "lon": lon, "radius_km": radius_km},
+                "members": {}, "ensemble_mean": {"points": []},
+                "n_members": 0, "n_members_near": 0, "local_prob": None,
+                "contrib_track_ids": [],
+            },
+            headers={"Cache-Control": "public, max-age=120"},
+        )
+
+    # Cheap bounding-box prefilter (degrees) so we only run the haversine on
+    # points plausibly inside the radius. cos(lat) guards the lon span; the
+    # +1° pad keeps the box safely larger than the great-circle circle.
+    dlat_max = radius_km / 111.0 + 1.0
+    coslat = max(0.15, math.cos(math.radians(lat)))
+    dlon_max = radius_km / (111.0 * coslat) + 1.0
+
+    def _hav_km(la2, lo2):
+        R = 6371.0
+        p = math.pi / 180.0
+        dlat = (la2 - lat) * p
+        dlon = (lo2 - lon) * p
+        if dlon > math.pi:
+            dlon -= 2 * math.pi
+        elif dlon < -math.pi:
+            dlon += 2 * math.pi
+        a = (math.sin(dlat / 2) ** 2
+             + math.cos(lat * p) * math.cos(la2 * p) * math.sin(dlon / 2) ** 2)
+        return 2 * R * math.asin(min(1.0, math.sqrt(a)))
+
+    near_members = {}        # "<track>:<member>" -> {"points": [...]}
+    unique_members = set()   # distinct ensemble-realization (sample) indices
+    contrib = set()
+    for track_id, storm in data.items():
+        for mkey, mem in storm["members"].items():
+            mind = None
+            for pt in mem["points"]:
+                plat, plon = pt["lat"], pt["lon"]
+                if abs(plat - lat) > dlat_max:
+                    continue
+                dlon = abs(plon - lon)
+                if dlon > 180.0:
+                    dlon = 360.0 - dlon
+                if dlon > dlon_max:
+                    continue
+                d = _hav_km(plat, plon)
+                if mind is None or d < mind:
+                    mind = d
+            if mind is not None and mind <= radius_km:
+                near_members["%s:%s" % (track_id, mkey)] = {"points": mem["points"]}
+                unique_members.add(mkey)
+                contrib.add(track_id)
+
+    # Derive an ensemble mean over the matched members (avg lat/lon/wind/pres
+    # per tau), mirroring _fetch_weatherlab_genesis_csv so the modal's mean
+    # trace + intensity figures render identically to a real disturbance.
+    by_tau: dict = {}
+    for m in near_members.values():
+        for pt in m["points"]:
+            t = pt["tau"]
+            b = by_tau.setdefault(t, {"lat": [], "lon": [], "wind": [], "pres": []})
+            b["lat"].append(pt["lat"])
+            b["lon"].append(pt["lon"])
+            if pt.get("wind") is not None:
+                b["wind"].append(pt["wind"])
+            if pt.get("pres") is not None:
+                b["pres"].append(pt["pres"])
+    mean_pts = []
+    for t in sorted(by_tau):
+        b = by_tau[t]
+        mean_pts.append({
+            "tau": t,
+            "lat": round(sum(b["lat"]) / len(b["lat"]), 2),
+            "lon": round(sum(b["lon"]) / len(b["lon"]), 2),
+            "wind": round(sum(b["wind"]) / len(b["wind"]), 1) if b["wind"] else None,
+            "pres": round(sum(b["pres"]) / len(b["pres"]), 1) if b["pres"] else None,
+        })
+
+    ensemble_size = _genesis_data_ensemble_size(data)
+    init_time_s = used_date.replace("-", "") + used_hour
+    cycle_dt = _genesis_cycle_dt(used_date, used_hour)
+    cycle_age_h = (now - cycle_dt).total_seconds() / 3600.0
+    next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time_s)
+    n_unique = len(unique_members)
+    local_prob = (n_unique / ensemble_size) if ensemble_size else None
+    return JSONResponse(
+        content={
+            "model": _genesis_variant_label(variant_n),
+            "variant": variant_n,
+            "ensemble_size": ensemble_size,
+            "init_time": init_time_s,
+            "track_id": None,
+            "query": {"lat": lat, "lon": lon, "radius_km": radius_km},
+            "members": near_members,
+            "ensemble_mean": {"points": mean_pts},
+            "n_members": len(near_members),
+            "n_members_near": n_unique,
+            "local_prob": round(local_prob, 4) if local_prob is not None else None,
+            "contrib_track_ids": sorted(contrib, key=lambda x: (len(str(x)), str(x))),
+            "cycle_age_hours": round(cycle_age_h, 2),
+            "next_cycle_eta_hours": round(next_eta_h, 2) if next_eta_h is not None else None,
+        },
+        headers={"Cache-Control": "public, max-age=600"},
+    )
+
+
 @router.get("/weatherlab-genesis/{track_id}")
 def get_weatherlab_genesis_track(track_id: str, init_time: str = None,
                                  variant: str = _GENESIS_VARIANT_DEFAULT):

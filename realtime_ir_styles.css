@@ -316,6 +316,15 @@ html, body { margin: 0; padding: 0; }
 .ir-popup-btn:hover {
     background: var(--um-green-deep);
 }
+/* DeepMind-ensemble action — distinct cyan so it reads as the model
+   (genesis) action vs the green IR-detail action. */
+.ir-popup-btn-dm {
+    background: #0891b2;
+    margin-left: 6px;
+}
+.ir-popup-btn-dm:hover {
+    background: #0e7490;
+}
 
 /* ── Custom storm markers ────────────────────────────────────── */
 .ir-storm-marker {
@@ -1246,6 +1255,23 @@ html, body { margin: 0; padding: 0; }
 .rt-gen-member-popup {
     color: var(--text);
 }
+
+/* Recon overlay popups (flight-level ob / dropsonde / VDM) — dark chrome
+   to match the IR viewer, legible over satellite imagery. */
+.leaflet-popup.rt-recon-popup .leaflet-popup-content-wrapper {
+    background: var(--surface-raised) !important;
+    color: var(--text) !important;
+    border: 1px solid rgba(148, 163, 184, 0.25) !important;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.3) !important;
+}
+.leaflet-popup.rt-recon-popup .leaflet-popup-tip {
+    background: var(--surface-raised) !important;
+}
+.leaflet-popup.rt-recon-popup .leaflet-popup-content,
+.leaflet-popup.rt-recon-popup .ir-popup {
+    color: var(--text) !important;
+}
+.rt-recon-sonde-icon, .rt-recon-vdm-icon { background: transparent; border: none; }
 
 /* ── Mobile touch-target and layout fixes ──────────────────── */
 @media (max-width: 768px) {

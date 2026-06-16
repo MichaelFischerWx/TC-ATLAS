@@ -3596,6 +3596,17 @@
                     '<span style="color:#64748b;">' + (s.atcf_id || '') + '</span>' +
                   '</div>' +
                   '<button class="ir-popup-btn" onclick="window._irOpenStorm(\'' + s.atcf_id + '\')">View IR Detail</button>' +
+                  // Invests rarely sit under a named genesis cluster, so the
+                  // disturbance marker (which carries the 1000-member modal)
+                  // is usually absent. Offer a "secondary search" that pulls
+                  // whatever DeepMind ensemble members track near this invest.
+                  (invest
+                    ? '<button class="ir-popup-btn ir-popup-btn-dm" '
+                        + 'onclick="window._irOpenInvestEnsemble(\'' + s.atcf_id + '\','
+                        + (s.lat) + ',' + (s.lon) + ','
+                        + JSON.stringify(s.name || s.atcf_id) + ')">'
+                        + 'DeepMind Ensemble</button>'
+                    : '') +
                 '</div>';
 
             marker.bindPopup(popupHtml, { maxWidth: 260 });
@@ -11783,6 +11794,83 @@
         });
     }
     window.openGenesisDetail = openGenesisDetail;
+
+    // Invest → DeepMind ensemble. If the invest already sits under a named
+    // genesis cluster (matched within 600 km by _genesisMatchStormToDisturbance),
+    // open that disturbance's modal directly. Otherwise run the backend
+    // "secondary search" for ensemble members tracking near the invest and
+    // feed the result into the same 1000-member modal. A near-zero result is
+    // the honest answer for a system the model gives no genesis odds (e.g. an
+    // inland invest) — we say so rather than opening an empty modal.
+    window._irOpenInvestEnsemble = function (atcfId, lat, lon, name) {
+        atcfId = String(atcfId || '');
+        name = name || atcfId;
+        // 1) Already matched to a named disturbance? Reuse its modal.
+        if (_genesisMatchedAtcfIds[atcfId.toUpperCase()]) {
+            for (var tid in _genesisDisturbanceMeta) {
+                var mm = _genesisDisturbanceMeta[tid];
+                if (mm && mm.atcfMatch && mm.atcfMatch.atcfId
+                        && mm.atcfMatch.atcfId.toUpperCase() === atcfId.toUpperCase()) {
+                    openGenesisDetail(tid);
+                    return;
+                }
+            }
+        }
+        if (lat == null || lon == null || isNaN(lat) || isNaN(lon)) {
+            _rtToast('No position available for ' + name);
+            return;
+        }
+        _ga('rt_invest_ensemble_near', { atcf: atcfId });
+        _rtToast('Searching DeepMind ensemble near ' + name + '…');
+        var RADIUS_KM = 500;
+        var variant = _genesisEnsembleVariant || 'large';
+        var qs = '?lat=' + lat + '&lon=' + lon + '&radius_km=' + RADIUS_KM
+            + '&variant=' + encodeURIComponent(variant)
+            + (_genesisActiveCycle
+                ? '&init_time=' + encodeURIComponent(_genesisActiveCycle) : '');
+        fetch(API_BASE + '/ir-monitor/weatherlab-genesis-near' + qs,
+              { cache: 'no-store' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (json) {
+                var nNear = json.n_members_near || 0;
+                var ens = json.ensemble_size || 0;
+                if (!nNear) {
+                    _rtToast('DeepMind: no ensemble members develop a TC within '
+                        + RADIUS_KM + ' km of ' + name
+                        + ' — negligible local genesis odds');
+                    return;
+                }
+                var pct = (ens ? (100 * nNear / ens) : 0);
+                // Synthesize a disturbance so the existing modal renders it.
+                // Seeding _genesisDisturbanceMeta (title/variant) + the detail
+                // cache (payload) makes openGenesisDetail serve it without a
+                // second fetch — no change to that function needed.
+                var tid = 'near-' + atcfId.toUpperCase();
+                json.track_id = tid;
+                _genesisDisturbanceMeta[tid] = {
+                    label: name + ' · ' + nNear + '/' + (ens || '?')
+                        + ' members (' + pct.toFixed(1) + '%) within '
+                        + RADIUS_KM + ' km',
+                    variant: json.variant,
+                    initTime: json.init_time,
+                    ensembleSize: ens || null,
+                    members: json.members,
+                    ensembleMean: json.ensemble_mean,
+                    source: 'near',
+                };
+                var cacheKey = tid + '@' + (json.init_time || 'latest')
+                    + '#' + json.variant;
+                _genesisDetailCache[cacheKey] = json;
+                openGenesisDetail(tid);
+            })
+            .catch(function (err) {
+                _rtToast('DeepMind ensemble search failed: '
+                    + (err.message || err));
+            });
+    };
 
     // Format a remaining-ms duration as "~Xh Ym" / "~Mm" / "<1m".
     function _formatEtaShort(ms) {
