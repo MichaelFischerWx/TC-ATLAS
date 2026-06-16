@@ -7409,6 +7409,19 @@
         var goodCount = 0;
 
         var btn = document.getElementById(btnId);
+        var _firstPainted = false;
+        var showFn = isVis ? showVisFrame : showWvFrame;
+        // Expose the still-filling arrays so the progressive newest-frame paint
+        // (load handler) works before finalize(). Same refs finalize() assigns;
+        // the *Ready flag stays false so play/slider remain gated until the
+        // full loop is decoded.
+        if (isVis) {
+            visFrameTimes = times; visFrameLayers = layers;
+            visFrameHasError = hasErr; visValidFrames = validIdx;
+        } else {
+            wvFrameTimes = times; wvFrameLayers = layers;
+            wvFrameHasError = hasErr; wvValidFrames = validIdx;
+        }
 
         function finalize() {
             if (isVis) {
@@ -7493,6 +7506,13 @@
                         validIdx.push(idx);
                         validIdx.sort(function (a, b) { return a - b; });
                         goodCount++;
+                        // Progressive paint: show the newest frame the instant
+                        // it decodes instead of waiting for the whole loop
+                        // (finalize). Pure client-side reorder — no extra fetch.
+                        if (!_firstPainted && idx === frames.length - 1) {
+                            _firstPainted = true;
+                            showFn(idx);
+                        }
                     }
                     loaded++;
                     var pct = Math.round((loaded / frames.length) * 100);
@@ -7501,7 +7521,14 @@
                 });
             })(overlay, i);
             layers.push(overlay);
-            overlay.addTo(detailMap);
+        }
+        // Decode the newest frame FIRST so it paints right after the fetch
+        // instead of queuing behind the older frames. addTo() sets img.src
+        // (triggers decode), so add-order = decode-order. Zero extra compute.
+        var _newest = frames.length - 1;
+        if (layers[_newest]) layers[_newest].addTo(detailMap);
+        for (var _ai = 0; _ai < layers.length; _ai++) {
+            if (_ai !== _newest && layers[_ai]) layers[_ai].addTo(detailMap);
         }
 
         // If every frame was an error-stub (e.g. all nighttime for Vis), finalize now.
@@ -7680,6 +7707,13 @@
 
         var times = [], hasErr = [], layers = [], validIdx = [];
         var goodCount = 0, loaded = 0;
+        var _firstPainted = false;
+        // Expose the (still-filling) arrays to showVisFrame so the progressive
+        // newest-frame paint in the load handler works before finalize(). Same
+        // refs finalize() assigns; visFramesReady stays false (play/slider stay
+        // gated) until the full loop is decoded.
+        visFrameTimes = times; visFrameLayers = layers;
+        visFrameHasError = hasErr; visValidFrames = validIdx;
 
         function finalize() {
             visFrameTimes = times; visFrameLayers = layers; visFrameHasError = hasErr;
@@ -7744,6 +7778,16 @@
                         validIdx.push(idx);
                         validIdx.sort(function (x, y) { return x - y; });
                         goodCount++;
+                        // Progressive paint: show the newest frame (the loop's
+                        // hold frame, merged.length-1) the instant it decodes,
+                        // rather than waiting for every frame's load event.
+                        // Pure client-side reorder — no extra fetch/compute.
+                        // finalize() still wires the slider/play and re-snaps to
+                        // the true newest valid frame if this one ever errors.
+                        if (!_firstPainted && idx === merged.length - 1) {
+                            _firstPainted = true;
+                            showVisFrame(idx);
+                        }
                     }
                     loaded++;
                     var pct = Math.round((loaded / merged.length) * 100);
@@ -7752,7 +7796,15 @@
                 });
             })(overlay, i);
             layers.push(overlay);
-            overlay.addTo(detailMap);
+        }
+        // Decode the newest (hold) frame FIRST so it paints right after the
+        // fetch instead of queuing behind the older frames. addTo() is what
+        // sets each overlay's img.src (triggers decode), so add-order =
+        // decode-order. Pure client-side reorder — zero extra fetch/compute.
+        var _newest = merged.length - 1;
+        if (layers[_newest]) layers[_newest].addTo(detailMap);
+        for (var _ai = 0; _ai < layers.length; _ai++) {
+            if (_ai !== _newest && layers[_ai]) layers[_ai].addTo(detailMap);
         }
         if (loaded >= merged.length) finalize();
     }
