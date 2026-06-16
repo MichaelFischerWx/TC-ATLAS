@@ -949,6 +949,8 @@
     var _rtReconFitDone = false;       // replay: fit map to track once (not every poll)
     var _RT_RECON_POLL_MS = 60000;     // client poll cadence
     var _RT_RECON_FRESH_MS = 20 * 60 * 1000;  // "latest leg" highlight window
+    var _rtReconColorVar = 'wspd_kt';  // variable encoded by the barb base dot
+    var _reconActiveLayers = [];       // live _ReconBarbLayer instances (for redraw)
 
     // ── 88D NEXRAD Radar Overlay State ───────────────────────
     var _rtRadarVisible = false;       // overlay toggle state
@@ -11795,81 +11797,112 @@
     }
     window.openGenesisDetail = openGenesisDetail;
 
-    // Invest → DeepMind ensemble. If the invest already sits under a named
-    // genesis cluster (matched within 600 km by _genesisMatchStormToDisturbance),
-    // open that disturbance's modal directly. Otherwise run the backend
-    // "secondary search" for ensemble members tracking near the invest and
-    // feed the result into the same 1000-member modal. A near-zero result is
-    // the honest answer for a system the model gives no genesis odds (e.g. an
-    // inland invest) — we say so rather than opening an empty modal.
+    // Invest → DeepMind ensemble. Three tiers, best-first:
+    //   1. Already matched to a loaded genesis cluster → reuse that modal.
+    //   2. DeepMind publishes a paired track keyed by this ATCF id (the
+    //      model's OWN dedicated forecast for the invest — lives in the
+    //      50-member variant for early invests, the 1000-member once it
+    //      clusters). Open it directly; the cleanest, most relevant view.
+    //   3. No paired track → "secondary search": members of the 1000-member
+    //      run that track within RADIUS_KM of the invest, as a localized
+    //      formation probability ("N of 1000 within 500 km"). A zero result
+    //      is the honest answer for a no-genesis-odds system (e.g. inland).
+    var _IR_DM_NEAR_RADIUS_KM = 500;
     window._irOpenInvestEnsemble = function (atcfId, lat, lon, name) {
         atcfId = String(atcfId || '');
         name = name || atcfId;
-        // 1) Already matched to a named disturbance? Reuse its modal.
-        if (_genesisMatchedAtcfIds[atcfId.toUpperCase()]) {
+        var AT = atcfId.toUpperCase();
+
+        // Tier 1 — already matched to a loaded disturbance.
+        if (_genesisMatchedAtcfIds[AT]) {
             for (var tid in _genesisDisturbanceMeta) {
                 var mm = _genesisDisturbanceMeta[tid];
                 if (mm && mm.atcfMatch && mm.atcfMatch.atcfId
-                        && mm.atcfMatch.atcfId.toUpperCase() === atcfId.toUpperCase()) {
+                        && mm.atcfMatch.atcfId.toUpperCase() === AT) {
                     openGenesisDetail(tid);
                     return;
                 }
             }
         }
-        if (lat == null || lon == null || isNaN(lat) || isNaN(lon)) {
-            _rtToast('No position available for ' + name);
-            return;
+
+        _ga('rt_invest_ensemble', { atcf: atcfId });
+        _rtToast('Loading DeepMind ensemble for ' + name + '…');
+
+        // Tier 2 — the invest's own ATCF-keyed paired track. Probe the
+        // 1000-member variant first (richer), then the 50-member.
+        function tryPaired(variants, i) {
+            if (i >= variants.length) { return nearSearch(); }
+            var v = variants[i];
+            return fetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
+                    + encodeURIComponent(atcfId) + '?variant=' + v,
+                    { cache: 'no-store' })
+                .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+                .then(function (json) {
+                    if (!json || !json.members
+                            || !Object.keys(json.members).length) throw 0;
+                    var n = json.ensemble_size
+                        || Object.keys(json.members).length;
+                    _genesisDisturbanceMeta[atcfId] = {
+                        label: name + ' · DeepMind ' + n + '-member forecast',
+                        variant: json.variant,
+                        initTime: json.init_time,
+                        ensembleSize: json.ensemble_size,
+                    };
+                    _genesisDetailCache[atcfId + '@'
+                        + (json.init_time || 'latest') + '#' + json.variant] = json;
+                    openGenesisDetail(atcfId);
+                })
+                .catch(function () { return tryPaired(variants, i + 1); });
         }
-        _ga('rt_invest_ensemble_near', { atcf: atcfId });
-        _rtToast('Searching DeepMind ensemble near ' + name + '…');
-        var RADIUS_KM = 500;
-        var variant = _genesisEnsembleVariant || 'large';
-        var qs = '?lat=' + lat + '&lon=' + lon + '&radius_km=' + RADIUS_KM
-            + '&variant=' + encodeURIComponent(variant)
-            + (_genesisActiveCycle
-                ? '&init_time=' + encodeURIComponent(_genesisActiveCycle) : '');
-        fetch(API_BASE + '/ir-monitor/weatherlab-genesis-near' + qs,
-              { cache: 'no-store' })
-            .then(function (r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
-            .then(function (json) {
-                var nNear = json.n_members_near || 0;
-                var ens = json.ensemble_size || 0;
-                if (!nNear) {
-                    _rtToast('DeepMind: no ensemble members develop a TC within '
-                        + RADIUS_KM + ' km of ' + name
-                        + ' — negligible local genesis odds');
-                    return;
-                }
-                var pct = (ens ? (100 * nNear / ens) : 0);
-                // Synthesize a disturbance so the existing modal renders it.
-                // Seeding _genesisDisturbanceMeta (title/variant) + the detail
-                // cache (payload) makes openGenesisDetail serve it without a
-                // second fetch — no change to that function needed.
-                var tid = 'near-' + atcfId.toUpperCase();
-                json.track_id = tid;
-                _genesisDisturbanceMeta[tid] = {
-                    label: name + ' · ' + nNear + '/' + (ens || '?')
-                        + ' members (' + pct.toFixed(1) + '%) within '
-                        + RADIUS_KM + ' km',
-                    variant: json.variant,
-                    initTime: json.init_time,
-                    ensembleSize: ens || null,
-                    members: json.members,
-                    ensembleMean: json.ensemble_mean,
-                    source: 'near',
-                };
-                var cacheKey = tid + '@' + (json.init_time || 'latest')
-                    + '#' + json.variant;
-                _genesisDetailCache[cacheKey] = json;
-                openGenesisDetail(tid);
-            })
-            .catch(function (err) {
-                _rtToast('DeepMind ensemble search failed: '
-                    + (err.message || err));
-            });
+
+        // Tier 3 — localized members-near-point search (1000-member run).
+        function nearSearch() {
+            if (lat == null || lon == null || isNaN(lat) || isNaN(lon)) {
+                _rtToast('No DeepMind forecast available for ' + name);
+                return;
+            }
+            var R = _IR_DM_NEAR_RADIUS_KM;
+            fetch(API_BASE + '/ir-monitor/weatherlab-genesis-near?lat=' + lat
+                    + '&lon=' + lon + '&radius_km=' + R + '&variant=large',
+                    { cache: 'no-store' })
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function (json) {
+                    var nNear = json.n_members_near || 0;
+                    var ens = json.ensemble_size || 0;
+                    if (!nNear) {
+                        _rtToast('DeepMind: no ensemble members develop a TC '
+                            + 'within ' + R + ' km of ' + name
+                            + ' — negligible local genesis odds');
+                        return;
+                    }
+                    var pct = ens ? (100 * nNear / ens) : 0;
+                    var tid = 'near-' + AT;
+                    json.track_id = tid;
+                    _genesisDisturbanceMeta[tid] = {
+                        label: name + ' · ' + nNear + '/' + (ens || '?')
+                            + ' members (' + pct.toFixed(1) + '%) within '
+                            + R + ' km',
+                        variant: json.variant,
+                        initTime: json.init_time,
+                        ensembleSize: ens || null,
+                        members: json.members,
+                        ensembleMean: json.ensemble_mean,
+                        source: 'near',
+                    };
+                    _genesisDetailCache[tid + '@' + (json.init_time || 'latest')
+                        + '#' + json.variant] = json;
+                    openGenesisDetail(tid);
+                })
+                .catch(function (err) {
+                    _rtToast('DeepMind ensemble search failed: '
+                        + (err.message || err));
+                });
+        }
+
+        tryPaired(['large', 'small'], 0);
     };
 
     // Format a remaining-ms duration as "~Xh Ym" / "~Mm" / "<1m".
@@ -21173,14 +21206,61 @@
     // while the overlay is on. Mirrors the ASCAT toggle/fetch/clear lifecycle.
 
     /** Speed color (shared scale with ASCAT). */
-    function _rtReconBarbColor(spdKt) { return _ascatColor(spdKt); }
+    // Variables the barb BASE dot can encode (the glyph always = wind dir/speed).
+    var _RECON_COLORVARS = [
+        { key: 'wspd_kt', label: 'FL Wind',  unit: 'kt', kind: 'wind' },
+        { key: 'sfmr_kt', label: 'SFMR Sfc', unit: 'kt', kind: 'wind' },
+        { key: 'temp_c',  label: 'Temp',     unit: '°C', kind: 'temp' },
+        { key: 'dewpt_c', label: 'Dewpt',    unit: '°C', kind: 'temp' }
+    ];
+    var _RECON_TEMP_STOPS = [
+        [-20, '#3b82f6'], [-10, '#06b6d4'], [0, '#22d3ee'], [10, '#34d399'],
+        [20, '#fbbf24'], [25, '#fb923c'], [999, '#f87171']
+    ];
+    function _reconVarKind(key) {
+        for (var i = 0; i < _RECON_COLORVARS.length; i++) {
+            if (_RECON_COLORVARS[i].key === key) return _RECON_COLORVARS[i].kind;
+        }
+        return 'wind';
+    }
+    /** Map a value of the selected variable to a base-dot color. */
+    function _reconVarColor(key, val) {
+        if (val == null || isNaN(val)) return '#9ca3af';  // grey = missing
+        if (_reconVarKind(key) === 'temp') {
+            for (var i = 0; i < _RECON_TEMP_STOPS.length; i++) {
+                if (val < _RECON_TEMP_STOPS[i][0]) return _RECON_TEMP_STOPS[i][1];
+            }
+            return _RECON_TEMP_STOPS[_RECON_TEMP_STOPS.length - 1][1];
+        }
+        return _ascatColor(val);  // wind scale (shared with ASCAT)
+    }
+    /** Legend swatches [label,color] for the current color variable. */
+    function _reconLegendStops(key) {
+        if (_reconVarKind(key) === 'temp') {
+            return [['<-10', '#06b6d4'], ['0', '#22d3ee'], ['10', '#34d399'],
+                    ['20', '#fbbf24'], ['25', '#fb923c'], ['30+', '#f87171']];
+        }
+        return [['<15', '#60a5fa'], ['15-25', '#22c55e'], ['25-35', '#eab308'],
+                ['35-50', '#f97316'], ['50-64', '#ef4444'], ['64+', '#c026d3']];
+    }
 
     /**
-     * Draw one WMO wind barb (dir/speed) on a canvas at (x,y). Modeled on the
-     * global-map _drawWindBarb glyph, but colored by speed and dimmed when the
-     * ob is not in the latest leg (fresh=false).
+     * Draw one WMO wind barb (dir/speed) on a canvas at (x,y): a colored base
+     * dot encoding the selected variable, plus a NEUTRAL (cream) barb glyph for
+     * wind dir/speed. Dimmed when the ob is not in the latest leg (fresh=false).
      */
-    function _rtDrawReconBarb(ctx, x, y, dirDeg, spdKt, isSH, fresh) {
+    function _rtDrawReconBarb(ctx, x, y, dirDeg, spdKt, isSH, fresh, baseColor) {
+        // Base dot — encodes the user-selected variable (FL wind / SFMR / temp …)
+        if (baseColor) {
+            ctx.save();
+            ctx.globalAlpha = fresh ? 0.95 : 0.5;
+            ctx.beginPath();
+            ctx.arc(x, y, fresh ? 3.3 : 2.6, 0, 2 * Math.PI);
+            ctx.fillStyle = baseColor;
+            ctx.fill();
+            ctx.lineWidth = 0.7; ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.stroke();
+            ctx.restore();
+        }
         if (spdKt == null || spdKt < 2) return;
         // wind FROM dirDeg → blowing-to vector (dir+180); convert to u,v so the
         // staff points upwind, matching _drawWindBarb's atan2(u,v) convention.
@@ -21218,17 +21298,17 @@
             lines.moveTo(0, pos); lines.lineTo(side * FEATHER_H, pos);
         }
 
-        var ink = _rtReconBarbColor(spdKt);
-        var alpha = fresh ? 1.0 : 0.5;
+        // Neutral cream glyph (the base dot carries the color signal now).
+        var ink = 'rgba(244,240,224,0.96)';
         // dark halo
         ctx.globalAlpha = fresh ? 0.7 : 0.4;
-        ctx.lineWidth = fresh ? 3.4 : 2.6;
+        ctx.lineWidth = fresh ? 3.2 : 2.4;
         ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.fillStyle = 'rgba(0,0,0,0.6)';
         ctx.stroke(lines);
         if (nPen) { ctx.fill(pennants); ctx.stroke(pennants); }
-        // colored ink
-        ctx.globalAlpha = alpha;
-        ctx.lineWidth = fresh ? 1.8 : 1.3;
+        // cream ink
+        ctx.globalAlpha = fresh ? 1.0 : 0.55;
+        ctx.lineWidth = fresh ? 1.6 : 1.2;
         ctx.strokeStyle = ink; ctx.fillStyle = ink;
         ctx.stroke(lines);
         if (nPen) { ctx.fill(pennants); ctx.stroke(pennants); }
@@ -21266,12 +21346,15 @@
             this._canvas = c;
             map.on('moveend zoomend resize', this._redraw, this);
             map.on('click', this._onClick, this);
+            if (_reconActiveLayers.indexOf(this) < 0) _reconActiveLayers.push(this);
             this._redraw();
             return this;
         },
         onRemove: function (map) {
             map.off('moveend zoomend resize', this._redraw, this);
             map.off('click', this._onClick, this);
+            var ix = _reconActiveLayers.indexOf(this);
+            if (ix >= 0) _reconActiveLayers.splice(ix, 1);
             if (this._canvas && this._canvas.parentNode) {
                 this._canvas.parentNode.removeChild(this._canvas);
             }
@@ -21305,15 +21388,16 @@
                 }
                 ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(255,255,255,0.32)';
                 ctx.stroke();
-                // decimated + culled barbs
+                // decimated + culled barbs (base dot = selected variable)
                 for (var j = 0; j < track.length; j += stride) {
                     var ob = track[j];
-                    if (ob.wspd_kt == null || ob.wdir == null) continue;
+                    if (ob.lat == null || ob.lon == null) continue;
                     if (!b.contains([ob.lat, ob.lon])) continue;
                     var pt = this._map.latLngToContainerPoint([ob.lat, ob.lon]);
                     var fresh = this._latestMs &&
                         (this._latestMs - Date.parse(ob.t)) <= _RT_RECON_FRESH_MS;
-                    _rtDrawReconBarb(ctx, pt.x, pt.y, ob.wdir, ob.wspd_kt, ob.lat < 0, fresh);
+                    var bc = _reconVarColor(_rtReconColorVar, ob[_rtReconColorVar]);
+                    _rtDrawReconBarb(ctx, pt.x, pt.y, ob.wdir, ob.wspd_kt, ob.lat < 0, fresh, bc);
                     this._drawn.push({ x: pt.x, y: pt.y, ob: ob, tail: this._aircraft[ai].tail });
                 }
             }
@@ -21528,8 +21612,40 @@
         _rtReconVisible = true;
         if (btn) btn.textContent = 'Hide';
         if (controls) controls.style.display = '';
+        _rtReconBuildBarbVarUI();
         _rtReconFetch();
         _rtReconPollTimer = setInterval(_rtReconFetch, _RT_RECON_POLL_MS);
+    };
+
+    /** Populate the overlay's barb-color picker + dynamic legend. */
+    function _rtReconBuildBarbVarUI() {
+        var sel = document.getElementById('rt-recon-barbvar');
+        if (sel && !sel.options.length) {
+            for (var i = 0; i < _RECON_COLORVARS.length; i++) {
+                var o = document.createElement('option');
+                o.value = _RECON_COLORVARS[i].key; o.textContent = _RECON_COLORVARS[i].label;
+                sel.appendChild(o);
+            }
+        }
+        if (sel) sel.value = _rtReconColorVar;
+        _rtReconBuildBarbLegend();
+    }
+    function _rtReconBuildBarbLegend() {
+        var box = document.getElementById('rt-recon-barblegend');
+        if (!box) return;
+        box.innerHTML = '';
+        var stops = _reconLegendStops(_rtReconColorVar);
+        for (var i = 0; i < stops.length; i++) {
+            var s = document.createElement('span');
+            s.textContent = stops[i][0];
+            s.style.cssText = 'font-size:8px;color:#0b1220;font-weight:700;padding:1px 4px;border-radius:2px;background:' + stops[i][1] + ';';
+            box.appendChild(s);
+        }
+    }
+    window._rtReconSetBarbVar = function (key) {
+        if (window._ReconKit) window._ReconKit.setColorVar(key);
+        else _rtReconColorVar = key;
+        _rtReconBuildBarbLegend();
     };
 
     /** Remove drawn layers/markers but keep state (e.g. on toggle off). */
@@ -21586,6 +21702,16 @@
         fmtTime: _rtFmtTime,
         fmtLatLon: _rtFmtLatLon,
         apiBase: function () { return API_BASE; },
+        // Barb base-dot color variable (shared across both surfaces)
+        colorVars: _RECON_COLORVARS,
+        getColorVar: function () { return _rtReconColorVar; },
+        setColorVar: function (key) {
+            _rtReconColorVar = key;
+            for (var i = 0; i < _reconActiveLayers.length; i++) {
+                try { _reconActiveLayers[i]._redraw(); } catch (e) {}
+            }
+        },
+        legendStops: function (key) { return _reconLegendStops(key || _rtReconColorVar); },
         // Replay override (for dev/test), parsed: {atcf, anchor, speed, name} | null
         replayInfo: function () {
             if (!_rtReconReplayOverride) return null;
