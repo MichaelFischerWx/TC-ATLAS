@@ -190,6 +190,7 @@
     var _hdobMap = null, _hdobBarbLayer = null, _hdobMarkers = [], _hdobData = null;
     var _hdobAtcf = null, _hdobName = '', _hdobReplay = null, _hdobPollTimer = null;
     var _hdobLat = null, _hdobLon = null;  // storm position (HDOB proximity gate, live only)
+    var _hdobGibsLayer = null, _hdobGibsSat = null, _hdobSatOn = true;  // GIBS IR basemap
     var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = [], _hdobChartBound = false;
     var _hdobStormOpts = [], _hdobBuiltToggles = false;
     var _hdobVarVis = { wspd_kt: true, sfmr_kt: true, peak_fl_kt: false,
@@ -321,8 +322,14 @@
         var el = document.getElementById('recon-hdob-map');
         if (!el || !window.L) return null;
         _hdobMap = L.map(el, { center: [25, -80], zoom: 5, zoomControl: true, preferCanvas: true });
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-            { subdomains: 'abcd', maxZoom: 12, attribution: '&copy; CARTO' }).addTo(_hdobMap);
+        // Base map (z1) + GIBS IR satellite slots in at z2 (see _hdobSetSatellite)
+        // + place labels (z3) on top so names read over the IR.
+        var base = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+            { subdomains: 'abcd', maxZoom: 12, attribution: '&copy; CARTO' });
+        base.setZIndex(1); base.addTo(_hdobMap);
+        var labels = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png',
+            { subdomains: 'abcd', maxZoom: 12 });
+        labels.setZIndex(3); labels.addTo(_hdobMap);
         try {
             if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
                 window._hdobMap = _hdobMap;  // localhost debug handle
@@ -330,6 +337,39 @@
         } catch (e) {}
         return _hdobMap;
     }
+
+    /** Add/replace the GIBS IR satellite layer (z2) for the flight's longitude. */
+    function _hdobSetSatellite(lonHint) {
+        var kit = window._ReconKit;
+        if (!kit || !kit.gibsIRLayer || !_hdobMap) return;
+        if (!_hdobSatOn) {
+            if (_hdobGibsLayer) { try { _hdobMap.removeLayer(_hdobGibsLayer); } catch (e) {} _hdobGibsLayer = null; _hdobGibsSat = null; }
+            return;
+        }
+        var sat = kit.gibsSatFor ? kit.gibsSatFor(lonHint) : 'GOES-East';
+        if (_hdobGibsLayer && _hdobGibsSat === sat) return;  // right sat already up
+        if (_hdobGibsLayer) { try { _hdobMap.removeLayer(_hdobGibsLayer); } catch (e) {} }
+        _hdobGibsLayer = kit.gibsIRLayer(lonHint, 0.9);
+        try { _hdobGibsLayer.setZIndex(2); } catch (e) {}
+        _hdobGibsLayer.addTo(_hdobMap);
+        _hdobGibsSat = sat;
+    }
+
+    window._reconHdobToggleSat = function () {
+        _hdobSatOn = !_hdobSatOn;
+        var btn = document.getElementById('recon-hdob-sat-btn');
+        if (btn) btn.classList.toggle('on', _hdobSatOn);
+        if (_hdobSatOn) {
+            var lonHint = null;
+            var ac = (_hdobData && _hdobData.aircraft) || [];
+            for (var i = 0; i < ac.length && lonHint == null; i++) {
+                var t = ac[i].track || []; if (t.length) lonHint = t[t.length - 1].lon;
+            }
+            _hdobSetSatellite(lonHint);
+        } else {
+            _hdobSetSatellite(null);  // removes the layer
+        }
+    };
 
     function _hdobFetch() {
         var kit = window._ReconKit;
@@ -385,6 +425,14 @@
             var tr = aircraft[a].track || [];
             if (tr.length) { var t = Date.parse(tr[tr.length - 1].t); if (t > latestMs) latestMs = t; }
         }
+        // GIBS IR basemap, satellite picked by the latest ob's longitude so it
+        // covers the flight wherever it is (incl. outside any storm domain).
+        var lonHint = null;
+        for (var ai2 = 0; ai2 < aircraft.length && lonHint == null; ai2++) {
+            var trk = aircraft[ai2].track || [];
+            if (trk.length) lonHint = trk[trk.length - 1].lon;
+        }
+        _hdobSetSatellite(lonHint);
         if (!_hdobBarbLayer) { _hdobBarbLayer = new kit.BarbLayer(); _hdobBarbLayer.addTo(map); }
         _hdobBarbLayer.setData(aircraft, latestMs);
         for (var mi = 0; mi < _hdobMarkers.length; mi++) { try { map.removeLayer(_hdobMarkers[mi]); } catch (e) {} }

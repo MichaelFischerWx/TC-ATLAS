@@ -21756,6 +21756,23 @@
         if (section) section.style.display = 'none';
     }
 
+    // Pick the geostationary satellite whose disk covers a given longitude, so
+    // the recon basemap has IR coverage wherever the flight is — including
+    // outside any TC/invest domain (the whole point of showing GIBS here).
+    function _reconPickGibsSat(lon) {
+        if (lon == null || isNaN(lon)) return 'GOES-East';
+        if (lon >= -105 && lon <= 5) return 'GOES-East';     // Atlantic · Gulf · CONUS
+        if (lon < -105 && lon >= -180) return 'GOES-West';   // E/Central Pacific
+        return 'Himawari';                                   // W Pacific · Indian Ocean
+    }
+    // Most recent GIBS 10-min slot, backed off ~25 min for NRT latency. The
+    // RetryLayer steps further back per-tile if a slot 404s.
+    function _reconLatestGibsTime() {
+        var d = new Date(Date.now() - 25 * 60 * 1000);
+        d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10, 0, 0);
+        return d.toISOString().slice(0, 19) + 'Z';
+    }
+
     // Expose a small map-parametrized recon rendering kit so the Recon tab's
     // side-by-side view (realtime_tdr.js, a separate IIFE) reuses the exact
     // barb/marker/popup rendering instead of duplicating it. The class + helpers
@@ -21766,6 +21783,16 @@
         fmtTime: _rtFmtTime,
         fmtLatLon: _rtFmtLatLon,
         apiBase: function () { return API_BASE; },
+        // GIBS IR satellite tile layer for a recon map, satellite auto-picked by
+        // the flight's longitude. Reuses the IR viewer's createGIBSLayer (per-tile
+        // time fallback). Returns an L.GridLayer to add beneath the barb canvas.
+        gibsIRLayer: function (lonHint, opacity) {
+            var sat = _reconPickGibsSat(lonHint);
+            var layer = GIBS_IR_LAYERS[sat] || GIBS_IR_LAYERS['GOES-East'];
+            return createGIBSLayer(layer, _reconLatestGibsTime(),
+                                   opacity == null ? 0.92 : opacity);
+        },
+        gibsSatFor: _reconPickGibsSat,
         // Barb base-dot color variable (shared across both surfaces)
         colorVars: _RECON_COLORVARS,
         getColorVar: function () { return _rtReconColorVar; },

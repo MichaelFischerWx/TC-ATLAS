@@ -618,6 +618,12 @@
     font-family: inherit; cursor: pointer; transition: all 0.12s;
 }
 .recon-hdob-vartoggles button.on { color: #fff; border-color: transparent; }
+.recon-hdob-satbtn {
+    margin-left: auto; background: transparent; border: 1px solid var(--border);
+    color: var(--slate); border-radius: 5px; padding: 2px 8px; font-size: 11px;
+    font-weight: 600; font-family: inherit; cursor: pointer; transition: all 0.12s;
+}
+.recon-hdob-satbtn.on { color: #fff; background: #0ea5e9; border-color: transparent; }
 .recon-hdob-chart { flex: 1 1 auto; width: 100%; min-height: 540px; }
 .recon-hdob-hint { padding: 6px 10px; font-size: 10.5px; color: var(--slate); border-top: 1px solid var(--border); }
 .recon-hdob-maptools {
