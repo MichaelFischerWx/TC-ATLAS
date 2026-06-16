@@ -3514,8 +3514,8 @@ def _prefetch_nexrad_for_storms(storms: list, frame_times_map: dict):
         from nexrad_api import (
             NEXRAD_SITES, _haversine_km, _list_scans_s3,
             _read_nexrad_level2, _grid_radar, _render_radar_image,
-            _encode_data_uint8, PRODUCTS, _gcs_get_frame, _gcs_put_frame,
-            _cache_put,
+            _encode_data_uint8, _encode_count_uint8, PRODUCTS,
+            _gcs_get_frame, _gcs_put_frame, _cache_put,
         )
     except ImportError:
         return  # nexrad_api not available
@@ -3597,7 +3597,7 @@ def _prefetch_nexrad_for_storms(storms: list, frame_times_map: dict):
             cache_key = f"{site_id}:{s3_key}:reflectivity:0:{MAX_RANGE_KM}:1000"
             try:
                 radar = _read_nexrad_level2(s3_key)
-                data_2d, metadata = _grid_radar(
+                data_2d, count_2d, metadata = _grid_radar(
                     radar, product="reflectivity", sweep=0,
                     grid_spacing_m=1000, max_range_m=MAX_RANGE_KM * 1000,
                 )
@@ -3610,10 +3610,12 @@ def _prefetch_nexrad_for_storms(storms: list, frame_times_map: dict):
                 hover_data = _encode_data_uint8(
                     np.flipud(data_2d), prod_cfg["vmin"], prod_cfg["vmax"]
                 )
+                hover_count = _encode_count_uint8(np.flipud(count_2d))
 
                 result = {
                     "image": image,
                     **hover_data,
+                    **hover_count,
                     "bounds": metadata["bounds"],
                     "site": site_id,
                     "scan_time": metadata["scan_time"],
@@ -3627,7 +3629,7 @@ def _prefetch_nexrad_for_storms(storms: list, frame_times_map: dict):
                 _gcs_put_frame(site_id, s3_key, "reflectivity", 0, result, MAX_RANGE_KM)
                 storm_rendered += 1
 
-                del data_2d, image, hover_data, result
+                del data_2d, count_2d, image, hover_data, hover_count, result
                 gc.collect()
             except Exception as e:
                 print(f"[Radar Pre-fetch] {site_id} frame failed: {e}")
