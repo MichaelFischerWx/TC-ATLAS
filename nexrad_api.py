@@ -125,6 +125,11 @@ _gcs_client = None
 _gcs_bucket = None
 _GCS_CACHE_VERSION = "v14"  # v14 = beam-aware gridder for legacy (pre-2008) NEXRAD wedge gaps
 
+# A rendered frame is keyed on its immutable Level-2 s3_key, so the response
+# never changes — let the browser and Cloudflare edge cache it indefinitely.
+# This keeps repeat viewers off Cloud Run entirely (served from the CF edge).
+_FRAME_CACHE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
+
 
 def _get_gcs_bucket():
     global _gcs_client, _gcs_bucket
@@ -1037,13 +1042,13 @@ def get_radar_frame(
     cache_key = f"{site}:{s3_key}:{product}:{tilt}:{max_range_km}:{grid_spacing_m}"
     cached = _cache_get(cache_key)
     if cached:
-        return JSONResponse(cached)
+        return JSONResponse(cached, headers=_FRAME_CACHE_HEADERS)
 
     # Check GCS cache
     gcs_result = _gcs_get_frame(site, s3_key, product, tilt, max_range_km)
     if gcs_result:
         _cache_put(cache_key, gcs_result)
-        return JSONResponse(gcs_result)
+        return JSONResponse(gcs_result, headers=_FRAME_CACHE_HEADERS)
 
     # Read and process the radar data
     radar = _read_nexrad_level2(s3_key)
@@ -1083,7 +1088,7 @@ def get_radar_frame(
     _cache_put(cache_key, result)
     _gcs_put_frame(site, s3_key, product, tilt, result, max_range_km)
 
-    return JSONResponse(result)
+    return JSONResponse(result, headers=_FRAME_CACHE_HEADERS)
 
 
 @router.get("/storm_relative")
@@ -1112,7 +1117,7 @@ def get_storm_relative_frame(
                  f"{center_lat:.3f}:{center_lon:.3f}:{grid_spacing_km}:{domain_km}")
     cached = _cache_get(cache_key)
     if cached:
-        return JSONResponse(cached)
+        return JSONResponse(cached, headers=_FRAME_CACHE_HEADERS)
 
     # Read and grid to geographic coordinates
     radar = _read_nexrad_level2(s3_key)
@@ -1196,4 +1201,4 @@ def get_storm_relative_frame(
 
     _cache_put(cache_key, result)
 
-    return JSONResponse(result)
+    return JSONResponse(result, headers=_FRAME_CACHE_HEADERS)

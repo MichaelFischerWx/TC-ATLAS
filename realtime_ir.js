@@ -22014,7 +22014,12 @@
             '&s3_key=' + encodeURIComponent(s3Key) +
             '&product=' + product;
 
-        fetch(url, { cache: 'no-store' })
+        // A radar frame is immutable (content-addressed by its Level-2 s3_key),
+        // so let the browser honor the long Cache-Control header the API sends.
+        // Repeat displays (animation re-sync, radar toggle, product switch) then
+        // serve from browser cache with no Cloud Run round-trip. /scans + /sites
+        // stay 'no-store' since those listings change as new scans arrive.
+        fetch(url, { cache: 'default' })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (json) {
                 if (!json.image || !json.bounds) return;
