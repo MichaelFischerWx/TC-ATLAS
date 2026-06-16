@@ -9253,6 +9253,15 @@ except Exception as _asc_err:
     print(f"[ascat] FAILED to load ascat_api: {_asc_err}")
     traceback.print_exc()
 
+try:
+    from recon_api import router as recon_router
+    app.include_router(recon_router, prefix="/recon")
+    print("[recon] Router mounted")
+except Exception as _rec_err:
+    import traceback
+    print(f"[recon] FAILED to load recon_api: {_rec_err}")
+    traceback.print_exc()
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))

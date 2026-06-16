@@ -154,6 +154,13 @@
             }, 80);
         } else if (name === 'vdm') {
             _reconEnsureVdmStorms();
+        } else if (name === 'hdob') {
+            _reconEnsureHdob();
+            setTimeout(function () {
+                if (_hdobMap) _hdobMap.invalidateSize();
+                var c = document.getElementById('recon-hdob-chart');
+                if (c && window.Plotly) { try { window.Plotly.Plots.resize(c); } catch (e) {} }
+            }, 90);
         }
         try { if (typeof gtag === 'function') gtag('event', 'recon_sub_switch', { sub: name }); } catch (e) {}
     };
@@ -163,8 +170,327 @@
     window.activateReconView = function () {
         var active = document.querySelector('#recon-main .recon-sub-tab.active');
         var name = active ? active.getAttribute('data-sub') : 'missions';
+        // Dev/test: when a recon replay override is active, open straight to the
+        // Live Flight side-by-side so a single test link needs no extra clicks.
+        try {
+            if (window._ReconKit && window._ReconKit.replayInfo && window._ReconKit.replayInfo()) {
+                name = 'hdob';
+            }
+        } catch (e) {}
         window.switchReconSub(name || 'missions');
     };
+
+    // ── Recon · Live HDOB side-by-side (time series + recon map) ──
+    // Reuses window._ReconKit (exposed by realtime_ir.js) for the barb canvas
+    // layer + dropsonde/VDM markers, and the shared /recon/realtime endpoint.
+    // Adds a Plotly flight-level time series synced to the map by click.
+    var _hdobMap = null, _hdobBarbLayer = null, _hdobMarkers = [], _hdobData = null;
+    var _hdobAtcf = null, _hdobName = '', _hdobReplay = null, _hdobPollTimer = null;
+    var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = [], _hdobChartBound = false;
+    var _hdobStormOpts = [], _hdobBuiltToggles = false;
+    var _hdobVarVis = { wspd_kt: true, sfmr_kt: true, peak_fl_kt: false,
+                        fl_pres_mb: true, temp_c: false, dewpt_c: false, vdm: true };
+    var _HDOB_VARS = [
+        { key: 'wspd_kt',    name: 'FL Wind',  unit: 'kt', color: '#0ea5e9', axis: 'y' },
+        { key: 'sfmr_kt',    name: 'SFMR Sfc', unit: 'kt', color: '#fb923c', axis: 'y' },
+        { key: 'peak_fl_kt', name: 'Peak FL',  unit: 'kt', color: '#38bdf8', axis: 'y', dash: 'dot' },
+        { key: 'fl_pres_mb', name: 'FL Pres',  unit: 'mb', color: '#a855f7', axis: 'y2' },
+        { key: 'temp_c',     name: 'Temp',     unit: '°C', color: '#ef4444', axis: 'y3' },
+        { key: 'dewpt_c',    name: 'Dewpt',    unit: '°C', color: '#22c55e', axis: 'y3' }
+    ];
+
+    function _hdobX(t) {
+        if (!t) return null;
+        return (t.indexOf('Z') >= 0 || t.indexOf('+') >= 0) ? t : t + 'Z';
+    }
+
+    function _reconEnsureHdob() {
+        _hdobPopulateStorms();
+        if (!_hdobBuiltToggles) { _hdobBuildToggles(); _hdobBuildBarbVarUI(); _hdobBuiltToggles = true; }
+        var sel = document.getElementById('recon-hdob-storm');
+        if (sel && !_hdobAtcf && sel.value) window._reconHdobSelectStorm(sel.value);
+    }
+
+    // Barb base-dot color: variable picker + legend (shared via _ReconKit).
+    function _hdobBuildBarbVarUI() {
+        var kit = window._ReconKit;
+        var sel = document.getElementById('recon-hdob-barbvar');
+        if (!kit || !sel) return;
+        if (!sel.options.length) {
+            kit.colorVars.forEach(function (cv) {
+                var o = document.createElement('option');
+                o.value = cv.key; o.textContent = cv.label;
+                sel.appendChild(o);
+            });
+        }
+        sel.value = kit.getColorVar();
+        _hdobBuildBarbLegend();
+    }
+    function _hdobBuildBarbLegend() {
+        var kit = window._ReconKit;
+        var box = document.getElementById('recon-hdob-barblegend');
+        if (!kit || !box) return;
+        box.innerHTML = '';
+        kit.legendStops().forEach(function (s) {
+            var sw = document.createElement('span');
+            sw.className = 'sw'; sw.textContent = s[0]; sw.style.background = s[1];
+            box.appendChild(sw);
+        });
+    }
+    window._reconHdobSetBarbVar = function (key) {
+        var kit = window._ReconKit;
+        if (!kit) return;
+        kit.setColorVar(key);   // updates shared state + redraws active barb layers
+        _hdobBuildBarbLegend();
+    };
+
+    function _hdobPopulateStorms() {
+        var sel = document.getElementById('recon-hdob-storm');
+        if (!sel) return;
+        var kit = window._ReconKit;
+        var opts = [];
+        var replay = (kit && kit.replayInfo) ? kit.replayInfo() : null;
+        if (replay && replay.atcf) {
+            opts.push({ atcf: replay.atcf, name: replay.name || replay.atcf, replay: replay });
+        }
+        var storms = (typeof window._irGetActiveStorms === 'function') ? (window._irGetActiveStorms() || []) : [];
+        for (var i = 0; i < storms.length; i++) {
+            if (storms[i] && storms[i].has_recon) {
+                opts.push({ atcf: (storms[i].atcf_id || '').toUpperCase(), name: storms[i].name || storms[i].atcf_id });
+            }
+        }
+        var seen = {}, uniq = [];
+        for (var k = 0; k < opts.length; k++) {
+            if (opts[k].atcf && !seen[opts[k].atcf]) { seen[opts[k].atcf] = 1; uniq.push(opts[k]); }
+        }
+        _hdobStormOpts = uniq;
+        var cur = sel.value;
+        sel.innerHTML = '';
+        if (!uniq.length) {
+            var o0 = document.createElement('option');
+            o0.value = ''; o0.textContent = 'No active recon';
+            sel.appendChild(o0);
+            _hdobShowEmpty(true);
+            return;
+        }
+        for (var u = 0; u < uniq.length; u++) {
+            var op = document.createElement('option');
+            op.value = uniq[u].atcf;
+            op.textContent = uniq[u].name + ' (' + uniq[u].atcf + ')';
+            sel.appendChild(op);
+        }
+        sel.value = (cur && seen[cur]) ? cur : uniq[0].atcf;
+    }
+
+    window._reconHdobSelectStorm = function (atcf) {
+        if (!atcf) return;
+        var opt = null;
+        for (var i = 0; i < _hdobStormOpts.length; i++) {
+            if (_hdobStormOpts[i].atcf === atcf) opt = _hdobStormOpts[i];
+        }
+        if (!opt) return;
+        _hdobAtcf = opt.atcf; _hdobName = opt.name; _hdobReplay = opt.replay || null;
+        _hdobData = null; _hdobFitDone = false;
+        if (_hdobBarbLayer && _hdobMap) { try { _hdobMap.removeLayer(_hdobBarbLayer); } catch (e) {} _hdobBarbLayer = null; }
+        if (_hdobMarkers.length && _hdobMap) {
+            for (var m = 0; m < _hdobMarkers.length; m++) { try { _hdobMap.removeLayer(_hdobMarkers[m]); } catch (e) {} }
+            _hdobMarkers = [];
+        }
+        _hdobShowEmpty(false);
+        _hdobFetch();
+        if (_hdobPollTimer) clearInterval(_hdobPollTimer);
+        _hdobPollTimer = setInterval(_hdobFetch, 60000);
+    };
+
+    function _hdobInitMap() {
+        if (_hdobMap) return _hdobMap;
+        var el = document.getElementById('recon-hdob-map');
+        if (!el || !window.L) return null;
+        _hdobMap = L.map(el, { center: [25, -80], zoom: 5, zoomControl: true, preferCanvas: true });
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+            { subdomains: 'abcd', maxZoom: 12, attribution: '&copy; CARTO' }).addTo(_hdobMap);
+        try {
+            if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+                window._hdobMap = _hdobMap;  // localhost debug handle
+            }
+        } catch (e) {}
+        return _hdobMap;
+    }
+
+    function _hdobFetch() {
+        var kit = window._ReconKit;
+        if (!kit || !_hdobAtcf) return;
+        var statusEl = document.getElementById('recon-hdob-status');
+        var url = kit.apiBase() + '/recon/realtime?atcf_id=' + encodeURIComponent(_hdobAtcf) + '&hours=24';
+        if (_hdobName) url += '&name=' + encodeURIComponent(_hdobName);
+        if (_hdobReplay) url += '&replay=' + _hdobReplay.anchor + '&speed=' + _hdobReplay.speed;
+        if (statusEl && !_hdobData) statusEl.textContent = 'loading…';
+        fetch(url, { cache: 'no-store' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (!j || j.error) { if (statusEl) statusEl.textContent = 'no data'; return; }
+                _hdobData = j;
+                var c = j.counts || {};
+                var has = ((c.obs || 0) + (c.dropsondes || 0) + (c.vdms || 0)) > 0;
+                _hdobShowEmpty(!has);
+                if (has) _hdobRender();
+                if (statusEl) {
+                    statusEl.textContent = (c.obs || 0) + ' obs · ' + (c.dropsondes || 0) +
+                        ' sondes · ' + (c.vdms || 0) + ' VDM';
+                }
+            })
+            .catch(function () { if (statusEl) statusEl.textContent = 'fetch error'; });
+    }
+
+    function _hdobShowEmpty(show) {
+        var e = document.getElementById('recon-hdob-empty');
+        var s = document.getElementById('recon-hdob-split');
+        if (e) e.style.display = show ? '' : 'none';
+        if (s) s.style.display = show ? 'none' : '';
+        if (!show) {
+            setTimeout(function () {
+                if (_hdobMap) _hdobMap.invalidateSize();
+                var c = document.getElementById('recon-hdob-chart');
+                if (c && window.Plotly) { try { window.Plotly.Plots.resize(c); } catch (e2) {} }
+            }, 60);
+        }
+    }
+
+    function _hdobRender() {
+        var kit = window._ReconKit;
+        if (!kit || !_hdobData) return;
+        var map = _hdobInitMap();
+        if (!map) return;
+        var aircraft = _hdobData.aircraft || [];
+        var latestMs = 0;
+        for (var a = 0; a < aircraft.length; a++) {
+            var tr = aircraft[a].track || [];
+            if (tr.length) { var t = Date.parse(tr[tr.length - 1].t); if (t > latestMs) latestMs = t; }
+        }
+        if (!_hdobBarbLayer) { _hdobBarbLayer = new kit.BarbLayer(); _hdobBarbLayer.addTo(map); }
+        _hdobBarbLayer.setData(aircraft, latestMs);
+        for (var mi = 0; mi < _hdobMarkers.length; mi++) { try { map.removeLayer(_hdobMarkers[mi]); } catch (e) {} }
+        _hdobMarkers = kit.buildMarkers(map, _hdobData);
+        if (!_hdobFitDone) {
+            var pts = [];
+            for (var k = 0; k < aircraft.length; k++) {
+                var tk = aircraft[k].track || [];
+                for (var p = 0; p < tk.length; p++) {
+                    var la = tk[p].lat, lo = tk[p].lon;
+                    if (la == null || lo == null || Math.abs(la) < 0.05 || Math.abs(lo) < 0.05) continue;
+                    pts.push([la, lo]);
+                }
+            }
+            if (pts.length) { try { map.fitBounds(L.latLngBounds(pts).pad(0.12), { animate: false }); } catch (e) {} _hdobFitDone = true; }
+        }
+        _hdobRenderChart();
+    }
+
+    function _hdobBuildToggles() {
+        var box = document.getElementById('recon-hdob-vartoggles');
+        if (!box) return;
+        var items = _HDOB_VARS.concat([{ key: 'vdm', name: 'VDM SLP', color: '#ef4444' }]);
+        box.innerHTML = '';
+        items.forEach(function (cfg) {
+            var b = document.createElement('button');
+            b.textContent = cfg.name;
+            var on = !!_hdobVarVis[cfg.key];
+            b.className = on ? 'on' : '';
+            if (on) b.style.background = cfg.color;
+            b.onclick = function () {
+                _hdobVarVis[cfg.key] = !_hdobVarVis[cfg.key];
+                _hdobBuildToggles();
+                _hdobRenderChart();
+            };
+            box.appendChild(b);
+        });
+    }
+
+    function _hdobOnChartClick(d) {
+        if (!d || !d.points || !d.points.length || !_hdobMap) return;
+        var tms = (new Date(d.points[0].x)).getTime();
+        if (isNaN(tms)) return;
+        var best = null, bd = Infinity;
+        for (var i = 0; i < _hdobFlatObs.length; i++) {
+            var o = _hdobFlatObs[i];
+            if (o.lat == null) continue;
+            var dt = Math.abs(o._ms - tms);
+            if (dt < bd) { bd = dt; best = o; }
+        }
+        if (best) {
+            if (_hdobHighlight) { try { _hdobMap.removeLayer(_hdobHighlight); } catch (e) {} }
+            _hdobHighlight = L.circleMarker([best.lat, best.lon],
+                { radius: 8, color: '#60a5fa', weight: 3, fillColor: '#fff', fillOpacity: 0.9 }).addTo(_hdobMap);
+            _hdobMap.panTo([best.lat, best.lon]);
+        }
+    }
+
+    function _hdobRenderChart() {
+        var el = document.getElementById('recon-hdob-chart');
+        if (!el || !window.Plotly || !_hdobData) return;
+        var aircraft = _hdobData.aircraft || [];
+        var traces = [], flat = [];
+        _HDOB_VARS.forEach(function (cfg) {
+            if (!_hdobVarVis[cfg.key]) return;
+            var firstForVar = true;
+            aircraft.forEach(function (ac) {
+                var tr = ac.track || [];
+                if (!tr.length) return;
+                var xs = [], ys = [];
+                for (var i = 0; i < tr.length; i++) {
+                    xs.push(_hdobX(tr[i].t));
+                    var v = tr[i][cfg.key];
+                    ys.push(v == null ? null : v);
+                }
+                traces.push({
+                    x: xs, y: ys, type: 'scatter', mode: 'lines',
+                    name: cfg.name, legendgroup: cfg.key, showlegend: firstForVar,
+                    line: { color: cfg.color, width: 1.4, dash: cfg.dash || 'solid' },
+                    connectgaps: false, yaxis: cfg.axis,
+                    hovertemplate: '%{y} ' + cfg.unit + ' · ' + ac.tail + '<extra></extra>'
+                });
+                firstForVar = false;
+            });
+        });
+        flat = [];
+        aircraft.forEach(function (ac) {
+            (ac.track || []).forEach(function (o) { flat.push({ _ms: Date.parse(o.t), lat: o.lat, lon: o.lon }); });
+        });
+        _hdobFlatObs = flat;
+        var vdms = _hdobData.vdms || [];
+        if (_hdobVarVis.vdm && vdms.length) {
+            var vx = [], vy = [], vt = [];
+            vdms.forEach(function (v) {
+                if (v.min_slp_hpa != null && v.t) {
+                    vx.push(_hdobX(v.t)); vy.push(v.min_slp_hpa);
+                    vt.push('VDM ' + (v.aircraft || '') + (v.ob_number != null ? ' OB ' + v.ob_number : '') +
+                        '<br>' + v.min_slp_hpa + ' mb');
+                }
+            });
+            if (vx.length) {
+                traces.push({
+                    x: vx, y: vy, type: 'scatter', mode: 'markers', name: 'VDM SLP', legendgroup: 'vdm',
+                    marker: { symbol: 'diamond', size: 9, color: '#ef4444', line: { color: '#fff', width: 1 } },
+                    yaxis: 'y2', text: vt, hovertemplate: '%{text}<extra></extra>'
+                });
+            }
+        }
+        var dark = document.documentElement.getAttribute('data-theme') !== 'light';
+        var grid = dark ? 'rgba(148,163,184,0.15)' : 'rgba(100,116,139,0.15)';
+        var fg = dark ? '#8b9ec2' : '#374151';
+        var layout = {
+            autosize: true, margin: { l: 52, r: 50, t: 6, b: 34 }, showlegend: true,
+            legend: { orientation: 'h', y: 1.06, font: { size: 10, color: fg } },
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', hovermode: 'closest',
+            xaxis: { type: 'date', gridcolor: grid, tickfont: { size: 10, color: fg }, domain: [0, 1] },
+            yaxis: { title: { text: 'Wind (kt)', font: { size: 11, color: fg } }, domain: [0.56, 1.0], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false },
+            yaxis2: { title: { text: 'Pres (mb)', font: { size: 11, color: fg } }, domain: [0.30, 0.52], gridcolor: grid, tickfont: { size: 10, color: fg }, autorange: 'reversed', zeroline: false },
+            yaxis3: { title: { text: 'Temp (°C)', font: { size: 11, color: fg } }, domain: [0, 0.24], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false }
+        };
+        window.Plotly.react(el, traces, layout, { responsive: true, displayModeBar: false }).then(function () {
+            if (!_hdobChartBound) { try { el.on('plotly_click', _hdobOnChartClick); _hdobChartBound = true; } catch (e) {} }
+        });
+    }
 
     // ── Recon · Missions dashboard ───────────────────────────────
     // A browsable card grid built from the same /missions list that

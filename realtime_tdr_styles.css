@@ -569,6 +569,60 @@
     .recon-sub-tab .tab-short { display: inline; }
 }
 
+/* ── Live HDOB side-by-side (time series + interactive recon map) ── */
+.recon-hdob-wrap { padding: 12px 14px 16px; }
+.recon-hdob-header {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 14px; flex-wrap: wrap;
+}
+.recon-hdob-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.recon-hdob-status { font-size: 0.72rem; color: var(--slate); }
+.recon-hdob-empty { padding: 28px 8px; color: var(--slate); font-size: 13px; }
+.recon-hdob-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
+    align-items: stretch;
+}
+.recon-hdob-chart-panel, .recon-hdob-map-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    min-height: 600px;
+    display: flex; flex-direction: column;
+}
+.recon-hdob-vartoggles {
+    display: flex; flex-wrap: wrap; gap: 5px;
+    padding: 8px 10px; border-bottom: 1px solid var(--border);
+}
+.recon-hdob-vartoggles button {
+    background: transparent; border: 1px solid var(--border); color: var(--slate);
+    border-radius: 5px; padding: 2px 8px; font-size: 11px; font-weight: 600;
+    font-family: inherit; cursor: pointer; transition: all 0.12s;
+}
+.recon-hdob-vartoggles button.on { color: #fff; border-color: transparent; }
+.recon-hdob-chart { flex: 1 1 auto; width: 100%; min-height: 540px; }
+.recon-hdob-hint { padding: 6px 10px; font-size: 10.5px; color: var(--slate); border-top: 1px solid var(--border); }
+.recon-hdob-maptools {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 7px 10px; border-bottom: 1px solid var(--border);
+}
+.recon-hdob-maplabel { font-size: 11px; font-weight: 600; color: var(--slate); }
+.recon-hdob-barbvar {
+    background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    border-radius: 5px; padding: 2px 6px; font-size: 11px; font-family: inherit;
+}
+.recon-hdob-legend { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+.recon-hdob-legend .sw {
+    font-size: 8px; color: #0b1220; padding: 1px 5px; border-radius: 2px; font-weight: 700;
+}
+.recon-hdob-map { flex: 1 1 auto; width: 100%; min-height: 600px; }
+@media (max-width: 900px) {
+    .recon-hdob-split { grid-template-columns: 1fr; }
+    .recon-hdob-chart-panel, .recon-hdob-map-panel { min-height: 460px; }
+}
+
 /* Coming-soon stub panels (Missions / Flight-Level / VDM in PR #1) */
 .recon-stub {
     display: flex;

@@ -674,6 +674,34 @@
                     </div>
                 </div>
 
+                <!-- Aircraft Recon Overlay (HDOB track + dropsondes + VDM) -->
+                <div class="ir-info-section" id="rt-recon-overlay-section" style="display:none;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">Recon ✈</h3>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <button id="rt-recon-toggle-btn" onclick="window._rtToggleReconOverlay()"
+                                class="rt-model-toggle-btn">Recon</button>
+                            <span id="rt-recon-status" style="font-size:0.68rem;color:#64748b;"></span>
+                        </div>
+                    </div>
+                    <div id="rt-recon-controls" style="display:none;">
+                        <div class="rt-model-controls-inner">
+                            <div style="font-size:9px;color:#94a3b8;line-height:1.5;">
+                                Flight-level wind barbs (latest leg highlighted) · click a barb,
+                                <span style="color:#fbbf24;">◇ dropsonde</span>, or
+                                <span style="color:#f87171;">⊕ center fix</span> for details.
+                            </div>
+                            <!-- Barb base-dot color: variable picker + dynamic legend -->
+                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;">
+                                <span style="font-size:9px;font-weight:600;color:#64748b;">Barb color</span>
+                                <select id="rt-recon-barbvar" onchange="window._rtReconSetBarbVar(this.value)"
+                                    style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:4px;font-size:10px;padding:1px 4px;"></select>
+                                <span id="rt-recon-barblegend" style="display:flex;align-items:center;gap:3px;flex-wrap:wrap;"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- WSR-88D NEXRAD Radar Overlay -->
                 <div class="ir-info-section" id="rt-radar-section" style="display:none;">
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
@@ -1954,9 +1982,47 @@
         <!-- Inner sub-tab strip -->
         <div class="recon-subbar">
             <button class="recon-sub-tab active" data-sub="missions" onclick="window.switchReconSub('missions')">Missions</button>
+            <button class="recon-sub-tab" data-sub="hdob" onclick="window.switchReconSub('hdob')"><span class="tab-full">Live Flight ✈</span><span class="tab-short">Live ✈</span></button>
             <button class="recon-sub-tab" data-sub="tdr" onclick="window.switchReconSub('tdr')"><span class="tab-full">Tail Doppler Radar</span><span class="tab-short">TDR</span></button>
             <button class="recon-sub-tab" data-sub="fl" onclick="window.switchReconSub('fl')">Flight-Level</button>
             <button class="recon-sub-tab" data-sub="vdm" onclick="window.switchReconSub('vdm')">VDM</button>
+        </div>
+
+        <!-- Live HDOB side-by-side: flight-level time series + interactive recon map -->
+        <div class="recon-sub-panel" data-sub="hdob" style="display:none;">
+            <div class="recon-hdob-wrap">
+                <div class="rt-header recon-hdob-header">
+                    <div>
+                        <h2 class="rt-header-title">Live Flight-Level Recon ✈</h2>
+                        <p class="rt-header-desc">Air Force HDOB flight-level track, dropsondes, and VDM center fixes — time series synced to an interactive map, updating in real time.</p>
+                    </div>
+                    <div class="recon-hdob-controls">
+                        <label class="toolbar-label" for="recon-hdob-storm">Storm</label>
+                        <select id="recon-hdob-storm" class="toolbar-select" style="min-width:190px;" onchange="window._reconHdobSelectStorm(this.value)">
+                            <option value="">—</option>
+                        </select>
+                        <span id="recon-hdob-status" class="recon-hdob-status"></span>
+                    </div>
+                </div>
+                <div id="recon-hdob-empty" class="recon-hdob-empty">
+                    No active reconnaissance flight right now. This view populates while an Air Force or NOAA aircraft is sampling a storm.
+                </div>
+                <div id="recon-hdob-split" class="recon-hdob-split" style="display:none;">
+                    <div class="recon-hdob-chart-panel">
+                        <div class="recon-hdob-vartoggles" id="recon-hdob-vartoggles"></div>
+                        <div id="recon-hdob-chart" class="recon-hdob-chart"></div>
+                        <div class="recon-hdob-hint">Click the chart to mark that position on the map · click a barb, ◇ dropsonde, or ⊕ center fix for details.</div>
+                    </div>
+                    <div class="recon-hdob-map-panel">
+                        <div class="recon-hdob-maptools">
+                            <label class="recon-hdob-maplabel">Barb color</label>
+                            <select id="recon-hdob-barbvar" class="recon-hdob-barbvar" onchange="window._reconHdobSetBarbVar(this.value)"></select>
+                            <span id="recon-hdob-barblegend" class="recon-hdob-legend"></span>
+                        </div>
+                        <div id="recon-hdob-map" class="recon-hdob-map"></div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="recon-sub-panel" data-sub="missions">
