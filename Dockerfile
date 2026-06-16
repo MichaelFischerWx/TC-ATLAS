@@ -40,6 +40,7 @@ COPY prewarm_job.py .
 COPY tc_center_fix.py .
 COPY nexrad_api.py .
 COPY ascat_api.py .
+COPY recon_api.py .
 COPY tc_radar_metadata.json .
 COPY tc_radar_metadata_merge.json .
 COPY climatology_hybrid.npz .
