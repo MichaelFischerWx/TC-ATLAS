@@ -398,15 +398,21 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
     norm_q = re.sub(r"[^A-Z0-9]", "", (name or "").upper())
     qword = norm_q[6:] if norm_q.startswith("INVEST") else norm_q   # INVEST90L -> 90L
     bcy = atcf_id[:4].upper()          # e.g. AL01 / AL90
+    cy = atcf_id[2:4]                  # 01 / 90
+    short = cy + {"AL": "L", "EP": "E", "CP": "C"}.get(atcf_id[:2].upper(), "")  # 01L
 
     def _label_matches(lbl: str) -> bool:
         """True only when the bulletin label SPECIFICALLY identifies this storm.
-        A bare generic 'INVEST' (no number) is deliberately NOT a match — it can't
+        Matching is name-INVARIANT (basin+cyclone AL01, short form 01L) so it
+        survives a TD→TS rename — the storm's ATCF identity never changes. A bare
+        generic 'INVEST' (no number) is deliberately NOT a match — it can't
         distinguish two simultaneous invests, so those rely on position instead."""
         n = re.sub(r"[^A-Z0-9]", "", (lbl or "").upper())
         if not n or n == "INVEST":
             return False
         if bcy and bcy in n:                       # AL01 / AL90 (basin+cyclone #)
+            return True
+        if len(short) >= 2 and short in n:         # 01L / 90L — ATCF short form
             return True
         if qword and len(qword) >= 2 and (qword == n or qword in n or n in qword):
             return True                            # MILTON, ONE, 90L, INVEST90L
