@@ -186,6 +186,7 @@
     // Adds a Plotly flight-level time series synced to the map by click.
     var _hdobMap = null, _hdobBarbLayer = null, _hdobMarkers = [], _hdobData = null;
     var _hdobAtcf = null, _hdobName = '', _hdobReplay = null, _hdobPollTimer = null;
+    var _hdobLat = null, _hdobLon = null;  // storm position (HDOB proximity gate, live only)
     var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = [], _hdobChartBound = false;
     var _hdobStormOpts = [], _hdobBuiltToggles = false;
     var _hdobVarVis = { wspd_kt: true, sfmr_kt: true, peak_fl_kt: false,
@@ -256,7 +257,8 @@
         var storms = (typeof window._irGetActiveStorms === 'function') ? (window._irGetActiveStorms() || []) : [];
         for (var i = 0; i < storms.length; i++) {
             if (storms[i] && storms[i].has_recon) {
-                opts.push({ atcf: (storms[i].atcf_id || '').toUpperCase(), name: storms[i].name || storms[i].atcf_id });
+                opts.push({ atcf: (storms[i].atcf_id || '').toUpperCase(), name: storms[i].name || storms[i].atcf_id,
+                            lat: storms[i].lat, lon: storms[i].lon });
             }
         }
         var seen = {}, uniq = [];
@@ -290,6 +292,8 @@
         }
         if (!opt) return;
         _hdobAtcf = opt.atcf; _hdobName = opt.name; _hdobReplay = opt.replay || null;
+        _hdobLat = (opt.lat != null) ? opt.lat : null;
+        _hdobLon = (opt.lon != null) ? opt.lon : null;
         _hdobData = null; _hdobFitDone = false;
         if (_hdobBarbLayer && _hdobMap) { try { _hdobMap.removeLayer(_hdobBarbLayer); } catch (e) {} _hdobBarbLayer = null; }
         if (_hdobMarkers.length && _hdobMap) {
@@ -323,7 +327,11 @@
         var statusEl = document.getElementById('recon-hdob-status');
         var url = kit.apiBase() + '/recon/realtime?atcf_id=' + encodeURIComponent(_hdobAtcf) + '&hours=24';
         if (_hdobName) url += '&name=' + encodeURIComponent(_hdobName);
-        if (_hdobReplay) url += '&replay=' + _hdobReplay.anchor + '&speed=' + _hdobReplay.speed;
+        if (_hdobReplay) {
+            url += '&replay=' + _hdobReplay.anchor + '&speed=' + _hdobReplay.speed;
+        } else if (_hdobLat != null && _hdobLon != null) {
+            url += '&lat=' + _hdobLat + '&lon=' + _hdobLon;  // live only: gate HDOB to storm
+        }
         if (statusEl && !_hdobData) statusEl.textContent = 'loading…';
         fetch(url, { cache: 'no-store' })
             .then(function (r) { return r.json(); })

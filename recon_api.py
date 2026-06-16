@@ -56,6 +56,7 @@ _BLOB_TTL = 120
 # Replay wall-clock anchors: (atcf_id, replay_anchor, speed) -> wall_start_epoch.
 _replay_anchors: dict = {}
 _REPLAY_MAX_ADVANCE_S = 24 * 3600  # sim-seconds; replay freezes on full track after this
+_STORM_GATE_DEG = 8.0  # keep HDOB aircraft within this of the storm (drops unrelated sorties)
 
 
 # ── basin → archive directory mapping ────────────────────────────────────────
@@ -334,7 +335,8 @@ def _near_track(lat, lon, track_pts, tol_deg=4.0) -> bool:
     return False
 
 
-def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "") -> dict:
+def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
+                storm_lat: float = None, storm_lon: float = None) -> dict:
     """Assemble the cumulative recon blob for one storm as of sim_now."""
     dirs = _basin_dirs(atcf_id)
     year = sim_now.year
@@ -364,8 +366,20 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "") -> 
     aircraft_out = []
     for tail, obmap in aircraft.items():
         track = [obmap[k] for k in sorted(obmap) if k <= sim_iso]
-        if track:
-            aircraft_out.append({"tail": tail, "track": track})
+        if not track:
+            continue
+        # Storm-proximity gate: HDOB carries no storm id, so the AHONT1 directory
+        # returns EVERY Atlantic AF/NOAA flight in the window. Keep an aircraft
+        # only if it samples within RADIUS_DEG of the storm — otherwise an
+        # unrelated sortie (e.g. an eastern-Gulf flight) gets misattributed to a
+        # western-Gulf invest. Per-aircraft (any ob in range → keep full track,
+        # so the ferry leg into the storm is preserved).
+        if storm_lat is not None and storm_lon is not None:
+            near = any(abs(o["lat"] - storm_lat) <= _STORM_GATE_DEG and
+                       abs(o["lon"] - storm_lon) <= _STORM_GATE_DEG for o in track)
+            if not near:
+                continue
+        aircraft_out.append({"tail": tail, "track": track})
     aircraft_out.sort(key=lambda a: a["track"][-1]["t"], reverse=True)
 
     # ── VDM center fixes (reuse global_archive parser) ──
@@ -463,6 +477,8 @@ def recon_realtime(
     atcf_id: str = Query(..., description="ATCF id, e.g. AL052026"),
     hours: int = Query(24, ge=1, le=72, description="Look-back window (hours)"),
     name: str = Query("", description="Storm name, for dropsonde attribution"),
+    lat: float = Query(None, description="Storm lat — gates HDOB to nearby aircraft"),
+    lon: float = Query(None, description="Storm lon — gates HDOB to nearby aircraft"),
     replay: str = Query("", description="Replay anchor YYYYMMDDHHMM (dev/testing)"),
     speed: float = Query(60.0, ge=1.0, le=600.0, description="Replay speed multiplier"),
 ):
@@ -478,11 +494,11 @@ def recon_realtime(
         sim_now = _replay_now(atcf_id, replay, speed)
         if sim_now is None:
             return JSONResponse({"error": "bad replay anchor"}, status_code=400)
-        cache_key = f"{atcf_id}:{hours}:{name}:replay:{replay}:{speed}:{int(time.time() // 5)}"
+        cache_key = f"{atcf_id}:{hours}:{name}:{lat}:{lon}:replay:{replay}:{speed}:{int(time.time() // 5)}"
         cc = "no-store"
     else:
         sim_now = datetime.now(timezone.utc)
-        cache_key = f"{atcf_id}:{hours}:{name}:live"
+        cache_key = f"{atcf_id}:{hours}:{name}:{lat}:{lon}:live"
         cc = "public, max-age=60, s-maxage=120, stale-while-revalidate=120"
 
     now = time.time()
@@ -490,7 +506,7 @@ def recon_realtime(
     if hit and (now - hit[1]) < _BLOB_TTL:
         return JSONResponse(hit[0], headers={"Cache-Control": cc})
 
-    blob = _build_blob(atcf_id, hours, sim_now, name=name)
+    blob = _build_blob(atcf_id, hours, sim_now, name=name, storm_lat=lat, storm_lon=lon)
     _blob_cache[cache_key] = (blob, now)
     if len(_blob_cache) > 200:
         _blob_cache.pop(next(iter(_blob_cache)))

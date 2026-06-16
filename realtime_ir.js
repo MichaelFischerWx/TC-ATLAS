@@ -945,6 +945,8 @@
     var _rtReconPollTimer = null;      // 60s refresh interval
     var _rtReconAtcf = null;           // current storm ATCF id
     var _rtReconName = '';             // current storm name (sonde attribution)
+    var _rtReconLat = null;            // current storm lat (HDOB proximity gate, live only)
+    var _rtReconLon = null;            // current storm lon
     var _rtReconReplay = null;         // {anchor, speed} dev replay override
     var _rtReconFitDone = false;       // replay: fit map to track once (not every poll)
     var _RT_RECON_POLL_MS = 60000;     // client poll cadence
@@ -21580,7 +21582,12 @@
         var statusEl = document.getElementById('rt-recon-status');
         var url = API_BASE + '/recon/realtime?atcf_id=' + encodeURIComponent(_rtReconAtcf) + '&hours=24';
         if (_rtReconName) url += '&name=' + encodeURIComponent(_rtReconName);
-        if (_rtReconReplay) url += '&replay=' + _rtReconReplay.anchor + '&speed=' + _rtReconReplay.speed;
+        if (_rtReconReplay) {
+            url += '&replay=' + _rtReconReplay.anchor + '&speed=' + _rtReconReplay.speed;
+        } else if (_rtReconLat != null && _rtReconLon != null) {
+            // Live only: gate HDOB to this storm (replay storm ≠ opened storm).
+            url += '&lat=' + _rtReconLat + '&lon=' + _rtReconLon;
+        }
         if (statusEl && !_rtReconData) statusEl.textContent = 'loading…';
         fetch(url, { cache: 'no-store' })
             .then(function (r) { return r.json(); })
@@ -21663,6 +21670,8 @@
         var section = document.getElementById('rt-recon-overlay-section');
         _rtReconAtcf = storm && storm.atcf_id ? storm.atcf_id.toUpperCase() : null;
         _rtReconName = storm && storm.name ? storm.name.toUpperCase() : '';
+        _rtReconLat = (storm && storm.lat != null) ? storm.lat : null;
+        _rtReconLon = (storm && storm.lon != null) ? storm.lon : null;
         // Dev/test replay override (captured at init): ATCF:YYYYMMDDHHMM:SPEED:NAME
         _rtReconReplay = null;
         if (_rtReconReplayOverride) {
