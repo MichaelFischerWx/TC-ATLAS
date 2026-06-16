@@ -3600,11 +3600,14 @@
                     '<span style="color:#64748b;">' + (s.atcf_id || '') + '</span>' +
                   '</div>' +
                   '<button class="ir-popup-btn" onclick="window._irOpenStorm(\'' + s.atcf_id + '\')">View IR Detail</button>' +
-                  // Invests rarely sit under a named genesis cluster, so the
-                  // disturbance marker (which carries the 1000-member modal)
-                  // is usually absent. Offer a "secondary search" that pulls
-                  // whatever DeepMind ensemble members track near this invest.
-                  (invest
+                  // DeepMind ensemble modal for ANY active system (invest,
+                  // TD/PTC, or named storm). _irOpenInvestEnsemble degrades
+                  // gracefully: it reuses a matched genesis cluster or the
+                  // system's ATCF-paired track when present, else falls back
+                  // to a radius near-search (designated systems often keep
+                  // their genesis data under the OLD invest id, e.g. AL01 ⇒
+                  // AL90, so the near-search surfaces it). Needs coords.
+                  ((s.lat != null && s.lon != null)
                     ? '<button class="ir-popup-btn ir-popup-btn-dm" '
                         + 'onclick="window._irOpenInvestEnsemble(\'' + s.atcf_id + '\','
                         + (s.lat) + ',' + (s.lon) + ','
