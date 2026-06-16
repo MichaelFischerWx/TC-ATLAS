@@ -58,7 +58,8 @@ _BLOB_TTL = 120
 _replay_anchors: dict = {}
 _REPLAY_MAX_ADVANCE_S = 24 * 3600  # sim-seconds; replay freezes on full track after this
 _STORM_GATE_DEG = 8.0   # (legacy) generous proximity window
-_STORM_CORE_DEG = 2.5   # true-distance "demonstrably in the storm" label-mismatch fallback
+_STORM_CORE_DEG = 3.0   # true-distance "demonstrably in/at the storm" (covers broad
+                        # invest circulations + the recon pattern; excludes TEXAQS @4.5°)
 
 
 # ── basin → archive directory mapping ────────────────────────────────────────
@@ -391,23 +392,24 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
     # (ONE / AL01 / INVEST / cyclone number) OR by being demonstrably at the
     # storm core; this keeps the real sortie (even its ferry leg) while dropping
     # a research flight that merely passes within a few degrees.
+    # The query "name" is the storm display name ("One", "Milton", "Invest 90L").
+    # For invests the meaningful identifier is the number/suffix ("90L"), so strip
+    # the generic "INVEST" prefix to get the discriminating token.
     norm_q = re.sub(r"[^A-Z0-9]", "", (name or "").upper())
-    bcy = atcf_id[:4].upper()          # e.g. AL01
-    cy = atcf_id[2:4]                  # e.g. 01
-    is_invest = cy.isdigit() and int(cy) >= 90
+    qword = norm_q[6:] if norm_q.startswith("INVEST") else norm_q   # INVEST90L -> 90L
+    bcy = atcf_id[:4].upper()          # e.g. AL01 / AL90
 
     def _label_matches(lbl: str) -> bool:
+        """True only when the bulletin label SPECIFICALLY identifies this storm.
+        A bare generic 'INVEST' (no number) is deliberately NOT a match — it can't
+        distinguish two simultaneous invests, so those rely on position instead."""
         n = re.sub(r"[^A-Z0-9]", "", (lbl or "").upper())
-        if not n:
+        if not n or n == "INVEST":
             return False
-        if norm_q and (norm_q in n or n in norm_q):
+        if bcy and bcy in n:                       # AL01 / AL90 (basin+cyclone #)
             return True
-        if bcy and bcy in n:
-            return True
-        if n in ("INVEST", "INVEST" + cy, "AL" + cy, "EP" + cy, "CP" + cy):
-            return True
-        if is_invest and n.startswith("INVEST"):
-            return True
+        if qword and len(qword) >= 2 and (qword == n or qword in n or n in qword):
+            return True                            # MILTON, ONE, 90L, INVEST90L
         return False
 
     aircraft_out = []

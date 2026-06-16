@@ -2277,9 +2277,9 @@ _recent_hdob_names: set = set()
 _recent_hdob_points: list = []   # [(lat, lon), ...] sampled from recent bulletins
 _RECON_HDOB_LOOKBACK_HOURS = 4   # an HDOB this recent ⇒ a plane is up now
 _RECON_HDOB_MAXFILES = 14        # cap fetches per basin per refresh (cost guard)
-_HDOB_MATCH_DEG = 2.5            # storm within this (true distance) of a recent HDOB ob
-                                # ⇒ in recon. Tight: a research flight passing a few °
-                                # away shouldn't flag a storm; name match handles the rest.
+_HDOB_MATCH_DEG = 3.0            # storm within this (true distance) of a recent HDOB ob
+                                # ⇒ in recon. Tight enough that a research flight passing
+                                # a few ° away won't flag a storm; matches the endpoint core.
 
 
 def _refresh_recent_recon() -> set:
