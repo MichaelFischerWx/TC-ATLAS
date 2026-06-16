@@ -171,16 +171,13 @@
     // so landing on Recon during a mission shows the live data — not the
     // NOAA-only TDR Missions archive. Otherwise keep the last-active tab.
     window.activateReconView = function () {
+        // Honor the active sub-tab — which defaults to Live Flight (hdob) in the
+        // markup, so clicking Recon lands on the live side-by-side. If the user
+        // switches to Missions/TDR/etc., that choice is the active tab and sticks
+        // for the rest of the session.
         var active = document.querySelector('#recon-main .recon-sub-tab.active');
-        var name = active ? active.getAttribute('data-sub') : 'missions';
-        try {
-            var replay = window._ReconKit && window._ReconKit.replayInfo && window._ReconKit.replayInfo();
-            var storms = (typeof window._irGetActiveStorms === 'function') ? (window._irGetActiveStorms() || []) : [];
-            // Default to the live side-by-side whenever anything is active (or a
-            // replay is set); fall back to the Missions archive only off-season.
-            if (replay || storms.length) name = 'hdob';
-        } catch (e) {}
-        window.switchReconSub(name || 'missions');
+        var name = active ? active.getAttribute('data-sub') : 'hdob';
+        window.switchReconSub(name || 'hdob');
     };
 
     // ── Recon · Live HDOB side-by-side (time series + recon map) ──
