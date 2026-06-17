@@ -1623,6 +1623,120 @@
             .catch(function () { /* metadata will show from the plot fetch anyway */ });
     }
 
+    // ── Plan-view wind barbs ─────────────────────────────────────
+    // Ported from tc_radar_app.js:_buildPlanViewWindBarbs so the recon
+    // page (which does NOT load tc_radar_app.js) can draw barbs.
+    // barbData = { u:[[]], v:[[]], x:[], y:[], units:'m/s', type:'earth_relative' }
+    // axRanges = { xMin, xMax, yMin, yMax }. Returns Plotly shape objects.
+    function _buildPlanViewWindBarbs(barbData, axRanges) {
+        var shapes = [];
+        if (!barbData || !barbData.u || !barbData.v) return shapes;
+
+        var uGrid = barbData.u, vGrid = barbData.v;
+        var xCoords = barbData.x, yCoords = barbData.y;
+
+        var xSpan = axRanges.xMax - axRanges.xMin;
+        var ySpan = axRanges.yMax - axRanges.yMin;
+        var span = Math.max(xSpan, ySpan);
+        if (span <= 0) return shapes;
+
+        // Staff length in data units (km) — ~4% of axis span
+        var staffLen = span * 0.04;
+        var barbFrac = 0.38;    // feather length as fraction of staff
+        var gapFrac  = 0.12;    // gap between feathers
+        var flagWFrac = 0.38;   // flag width (50-kt pennant)
+        var flagHFrac = 0.18;   // flag height along staff
+
+        var lineColor = 'rgba(0,0,0,0.8)';
+        var lineWidth = 1.4;
+
+        function mkLine(x0, y0, x1, y1) {
+            return {
+                type: 'line', xref: 'x', yref: 'y',
+                x0: x0, y0: y0, x1: x1, y1: y1,
+                line: { color: lineColor, width: lineWidth }
+            };
+        }
+
+        for (var yi = 0; yi < uGrid.length; yi++) {
+            for (var xi = 0; xi < uGrid[yi].length; xi++) {
+                var uMs = uGrid[yi][xi], vMs = vGrid[yi][xi];
+                if (uMs === null || vMs === null) continue;
+
+                var spdKt = Math.sqrt(uMs * uMs + vMs * vMs) * 1.944;
+                if (spdKt < 2.5) continue;  // calm — skip
+
+                var xBase = xCoords[xi], yBase = yCoords[yi];
+
+                // Direction wind is coming FROM (meteorological convention)
+                var dirRad = Math.atan2(-uMs, -vMs);
+                var sinD = Math.sin(dirRad), cosD = Math.cos(dirRad);
+
+                // Staff: tip is in the "from" direction (away from base)
+                var xTip = xBase + staffLen * sinD;
+                var yTip = yBase + staffLen * cosD;
+
+                // Draw staff line
+                shapes.push(mkLine(xBase, yBase, xTip, yTip));
+
+                // Feather encoding
+                var remaining = Math.round(spdKt / 5) * 5;
+                var nFlags = Math.floor(remaining / 50); remaining -= nFlags * 50;
+                var nFull  = Math.floor(remaining / 10); remaining -= nFull * 10;
+                var nHalf  = Math.floor(remaining / 5);
+
+                // Perpendicular (left side of staff, base->tip): rotate +90°
+                var perpX = cosD;
+                var perpY = -sinD;
+
+                var barbLen = staffLen * barbFrac;
+                var barbGap = staffLen * gapFrac;
+                var flagW   = staffLen * flagWFrac;
+                var flagH   = staffLen * flagHFrac;
+
+                var featherPos = 0;
+                var frac, fx, fy, frac2, fx2, fy2, midFrac, mx, my, outX, outY, bx, by, hx, hy;
+
+                // 50-kt flags (triangular pennants)
+                for (var fi = 0; fi < nFlags; fi++) {
+                    frac = featherPos / staffLen;
+                    fx  = xTip - (xTip - xBase) * frac;
+                    fy  = yTip - (yTip - yBase) * frac;
+                    frac2 = (featherPos + flagH) / staffLen;
+                    fx2 = xTip - (xTip - xBase) * frac2;
+                    fy2 = yTip - (yTip - yBase) * frac2;
+                    midFrac = (featherPos + flagH * 0.5) / staffLen;
+                    mx = xTip - (xTip - xBase) * midFrac;
+                    my = yTip - (yTip - yBase) * midFrac;
+                    outX = mx + flagW * perpX;
+                    outY = my + flagW * perpY;
+                    shapes.push(mkLine(fx, fy, outX, outY));
+                    shapes.push(mkLine(outX, outY, fx2, fy2));
+                    featherPos += flagH + barbGap * 0.3;
+                }
+
+                // 10-kt full barbs
+                for (var fb = 0; fb < nFull; fb++) {
+                    frac = featherPos / staffLen;
+                    bx = xTip - (xTip - xBase) * frac;
+                    by = yTip - (yTip - yBase) * frac;
+                    shapes.push(mkLine(bx, by, bx + barbLen * perpX, by + barbLen * perpY));
+                    featherPos += barbGap;
+                }
+
+                // 5-kt half barbs
+                for (var hb = 0; hb < nHalf; hb++) {
+                    frac = featherPos / staffLen;
+                    hx = xTip - (xTip - xBase) * frac;
+                    hy = yTip - (yTip - yBase) * frac;
+                    shapes.push(mkLine(hx, hy, hx + barbLen * 0.55 * perpX, hy + barbLen * 0.55 * perpY));
+                    featherPos += barbGap;
+                }
+            }
+        }
+        return shapes;
+    }
+
     // ── Default variable ─────────────────────────────────────────
     var DEFAULT_RT_VAR = 'TANGENTIAL_WIND';
 
@@ -1811,8 +1925,8 @@
         var plotBg = '#ffffff';
         var baseLayout = {
             paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-            xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false, scaleanchor: 'y', range: [-250, 250] },
-            yaxis: { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false, range: [-250, 250] },
+            xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false, scaleanchor: 'y', range: [-250, 250] },
+            yaxis: { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false, range: [-250, 250] },
             hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } },
             showlegend: false
         };
@@ -1887,8 +2001,8 @@
 
         // Shear + motion vectors now rendered as HTML compass in the metadata strip (not in Plotly)
 
-        // Wind barb shapes (uses archive _buildPlanViewWindBarbs if available)
-        if (json.wind_barbs && typeof _buildPlanViewWindBarbs === 'function') {
+        // Wind barb shapes (local _buildPlanViewWindBarbs, ported from archive)
+        if (json.wind_barbs) {
             var axR = { xMin: x[0], xMax: x[x.length - 1], yMin: y[0], yMax: y[y.length - 1] };
             var barbShapes = _buildPlanViewWindBarbs(json.wind_barbs, axR);
             layout.shapes = (layout.shapes || []).concat(barbShapes);
@@ -2314,8 +2428,8 @@
         var layout = {
             title: { text: title, font: { color: '#0f1623', size: 11 }, y: 0.97, x: 0.5, xanchor: 'center' },
             paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-            xaxis: { title: { text: 'Distance along line (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
-            yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
+            xaxis: { title: { text: 'Distance along line (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false },
+            yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false },
             margin: { l: 45, r: 12, t: 44, b: 38 },
             hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } },
             showlegend: false
@@ -2739,8 +2853,8 @@
         var layout = {
             title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
             paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-            xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
-            yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
+            xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false },
+            yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false },
             margin: { l: 48, r: 14, t: json.overlay ? 58 : 46, b: 44 },
             shapes: shapes,
             hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } },
@@ -2864,8 +2978,8 @@
         var layout = {
             title: { text: title, font: { color: '#0f1623', size: 10 }, y: 0.97, x: 0.5, xanchor: 'center' },
             paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-            xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
-            yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
+            xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false },
+            yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false },
             margin: { l: 48, r: 12, t: json.overlay ? 66 : 52, b: 38 },
             hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } },
             showlegend: false
@@ -5896,14 +6010,14 @@
                 domain: [ac.x0, ac.x1],
                 title: showXLabel ? { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } } : undefined,
                 tickfont: { color: '#5b6573', size: fontSize.tick },
-                gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
+                gridcolor: 'rgba(15,22,35,0.22)', zeroline: false,
                 anchor: 'y' + axSuffix
             };
             layout['yaxis' + axSuffix] = {
                 domain: [ac.y0, ac.y1],
                 title: showYLabel ? { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } } : undefined,
                 tickfont: { color: '#5b6573', size: fontSize.tick },
-                gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
+                gridcolor: 'rgba(15,22,35,0.22)', zeroline: false,
                 anchor: 'x' + axSuffix
             };
         });
@@ -6113,12 +6227,12 @@
                 title: { text: 'R\u2095 (inner: R/RMW | outer: RMW + km)', font: { size: 10, color: '#5b6573' } },
                 tickvals: ticks.tickvals, ticktext: ticks.ticktext,
                 tickfont: { size: 9, color: '#5b6573' },
-                gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
+                gridcolor: 'rgba(15,22,35,0.22)', zeroline: false,
             },
             yaxis: {
                 title: { text: 'Height (km)', font: { size: 10, color: '#5b6573' } },
                 tickfont: { size: 9, color: '#5b6573', family: 'JetBrains Mono' },
-                gridcolor: 'rgba(255,255,255,0.04)',
+                gridcolor: 'rgba(15,22,35,0.22)',
                 range: [0, 15]
             },
             shapes: shapes,
@@ -6410,26 +6524,26 @@
             xaxis: {
                 title: { text: 'Ventilation Proxy (VP)', font: { size: 10, color: '#5b6573' } },
                 tickfont: { size: 9, color: '#5b6573' },
-                gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
+                gridcolor: 'rgba(15,22,35,0.22)', zeroline: false,
                 domain: [0, 0.45]
             },
             yaxis: {
                 title: { text: 'Vortex Favorability (VH \u2212 VW)', font: { size: 10, color: '#5b6573' } },
                 tickfont: { size: 9, color: '#5b6573' },
-                gridcolor: 'rgba(255,255,255,0.04)', zeroline: true,
+                gridcolor: 'rgba(15,22,35,0.22)', zeroline: true,
                 zerolinecolor: 'rgba(255,255,255,0.1)',
             },
             // Right panel: Height vs Width
             xaxis2: {
                 title: { text: 'Anomalous Vortex Width (W1\u2013W2)', font: { size: 10, color: '#5b6573' } },
                 tickfont: { size: 9, color: '#5b6573' },
-                gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
+                gridcolor: 'rgba(15,22,35,0.22)', zeroline: false,
                 domain: [0.55, 1.0], anchor: 'y2'
             },
             yaxis2: {
                 title: { text: 'Anomalous Vortex Height (H1)', font: { size: 10, color: '#5b6573' } },
                 tickfont: { size: 9, color: '#5b6573' },
-                gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
+                gridcolor: 'rgba(15,22,35,0.22)', zeroline: false,
                 anchor: 'x2'
             },
             annotations: annotations,
@@ -7395,11 +7509,11 @@
                 title: { text: titleText, font: { color: '#0f1623', size: 11 }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
                 paper_bgcolor: plotBg, plot_bgcolor: plotBg,
                 xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } },
-                         tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)',
+                         tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)',
                          zeroline: true, zerolinecolor: 'rgba(255,255,255,0.12)',
                          scaleanchor: 'y', range: [-ext, ext] },
                 yaxis: { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } },
-                         tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)',
+                         tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)',
                          zeroline: true, zerolinecolor: 'rgba(255,255,255,0.12)',
                          scaleanchor: 'x', scaleratio: 1, range: [-ext, ext] },
                 margin: { l: 52, r: 16, t: 46, b: 44 },
@@ -7434,11 +7548,11 @@
                 title: { text: titleText, font: { color: '#0f1623', size: 11 }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
                 paper_bgcolor: plotBg, plot_bgcolor: plotBg,
                 xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } },
-                         tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)',
+                         tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)',
                          zeroline: true, zerolinecolor: 'rgba(255,255,255,0.12)',
                          scaleanchor: 'y', range: [-ext2, ext2] },
                 yaxis: { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } },
-                         tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)',
+                         tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)',
                          zeroline: true, zerolinecolor: 'rgba(255,255,255,0.12)',
                          scaleanchor: 'x', scaleratio: 1, range: [-ext2, ext2] },
                 margin: { l: 52, r: 60, t: 46, b: 44 },
