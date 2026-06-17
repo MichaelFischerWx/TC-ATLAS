@@ -194,20 +194,23 @@
     var _hdobStormSatOverlay = null, _hdobStormSatKey = null;  // fresh storm-sector IR (priority over GIBS)
     var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = [], _hdobChartBound = false;
     var _hdobStormOpts = [], _hdobBuiltToggles = false;
-    var _hdobVarVis = { wspd_kt: true, sfmr_kt: true, peak_fl_kt: false,
+    var _hdobVarVis = { peak_fl_kt: true, wspd_kt: false, sfmr_kt: true,
                         fl_pres_mb: true, extrap_sfc_p_mb: true, geo_alt_m: true,
                         temp_c: false, dewpt_c: false, vdm: true };
     var _HDOB_VARS = [
-        { key: 'wspd_kt',    name: 'FL Wind (30s)', unit: 'kt', color: '#0ea5e9', axis: 'y',
+        // Peak (10-s) FL wind is the operationally-preferred value → solid, default on.
+        { key: 'peak_fl_kt', name: 'Peak Wind (10s)', unit: 'kt', color: '#0ea5e9', axis: 'y',
+          tip: 'Peak 10-second flight-level wind within the 30s window (operationally preferred)' },
+        { key: 'wspd_kt',    name: 'FL Wind (30s)', unit: 'kt', color: '#38bdf8', axis: 'y', dash: 'dash',
           tip: '30-second average flight-level wind' },
         { key: 'sfmr_kt',    name: 'SFMR Sfc', unit: 'kt', color: '#fb923c', axis: 'y',
           tip: 'SFMR-retrieved surface wind' },
-        { key: 'peak_fl_kt', name: 'Peak Wind (10s)', unit: 'kt', color: '#38bdf8', axis: 'y', dash: 'dot',
-          tip: 'Peak 10-second flight-level wind within the 30s window' },
-        { key: 'fl_pres_mb', name: 'FL Pres',  unit: 'mb', color: '#a855f7', axis: 'y2',
-          tip: 'Flight-level (static) pressure' },
+        // Extrap SLP shares the WIND panel on a twin (right, inverted) axis — wind
+        // peaks flank the pressure minimum at the eye, the classic recon view.
         { key: 'extrap_sfc_p_mb', name: 'Extrap SLP', unit: 'mb', color: '#e879f9', axis: 'y5',
           tip: 'Extrapolated surface pressure (HDOB) — the surface-pressure estimate, lowest at the eye' },
+        { key: 'fl_pres_mb', name: 'FL Pres',  unit: 'mb', color: '#a855f7', axis: 'y2',
+          tip: 'Flight-level (static) pressure' },
         { key: 'geo_alt_m',  name: 'FL Alt',   unit: 'km', color: '#94a3b8', axis: 'y4', scale: 0.001,
           tip: 'Geopotential height of the flight-level pressure surface (km)' },
         { key: 'temp_c',     name: 'Temp',     unit: '°C', color: '#ef4444', axis: 'y3',
@@ -774,13 +777,13 @@
             xaxis: { type: 'date', range: _xrange, gridcolor: grid, tickfont: { size: 10, color: fg }, domain: [0, 1],
                      showspikes: true, spikemode: 'across', spikedash: 'dash', spikethickness: 1,
                      spikecolor: dark ? '#94a3b8' : '#64748b' },
-            yaxis: { title: { text: 'Wind (kt)', font: { size: 11, color: fg } }, domain: [0.78, 1.0], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false },
-            yaxis2: { title: { text: 'FL Pres (mb)', font: { size: 11, color: fg } }, domain: [0.52, 0.74], gridcolor: grid, tickfont: { size: 10, color: fg }, autorange: 'reversed', zeroline: false },
+            yaxis: { title: { text: 'Wind (kt)', font: { size: 11, color: fg } }, domain: [0.56, 1.0], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false },
+            // Extrap SLP as a twin axis on the WIND panel (right, inverted, autoranged)
+            // so its ~10 mb eye signal reads against the wind peaks without squishing.
+            yaxis5: { title: { text: 'Extrap SLP (mb)', font: { size: 11, color: '#e879f9' } }, overlaying: 'y', side: 'right', showgrid: false, tickfont: { size: 10, color: '#e879f9' }, autorange: 'reversed', zeroline: false },
+            yaxis2: { title: { text: 'FL Pres (mb)', font: { size: 11, color: fg } }, domain: [0.30, 0.52], gridcolor: grid, tickfont: { size: 10, color: fg }, autorange: 'reversed', zeroline: false },
             yaxis4: { title: { text: 'Alt (km)', font: { size: 11, color: '#94a3b8' } }, overlaying: 'y2', side: 'right', showgrid: false, tickfont: { size: 10, color: '#94a3b8' }, zeroline: false },
-            // Extrap SLP gets its OWN panel + autorange so its ~10 mb eye signal
-            // isn't squished against the much wider flight-level pressure range.
-            yaxis5: { title: { text: 'Extrap SLP (mb)', font: { size: 11, color: '#e879f9' } }, domain: [0.26, 0.48], gridcolor: grid, tickfont: { size: 10, color: '#e879f9' }, autorange: 'reversed', zeroline: false },
-            yaxis3: { title: { text: 'Temp (°C)', font: { size: 11, color: fg } }, domain: [0, 0.22], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false }
+            yaxis3: { title: { text: 'Temp (°C)', font: { size: 11, color: fg } }, domain: [0, 0.24], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false }
         };
         window.Plotly.react(el, traces, layout, { responsive: true, displayModeBar: false }).then(function () {
             if (!_hdobChartBound) { try { el.on('plotly_click', _hdobOnChartClick); _hdobChartBound = true; } catch (e) {} }
