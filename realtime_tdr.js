@@ -778,9 +778,10 @@
                      showspikes: true, spikemode: 'across', spikedash: 'dash', spikethickness: 1,
                      spikecolor: dark ? '#94a3b8' : '#64748b' },
             yaxis: { title: { text: 'Wind (kt)', font: { size: 11, color: fg } }, domain: [0.56, 1.0], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false },
-            // Extrap SLP as a twin axis on the WIND panel (right, inverted, autoranged)
-            // so its ~10 mb eye signal reads against the wind peaks without squishing.
-            yaxis5: { title: { text: 'Extrap SLP (mb)', font: { size: 11, color: '#e879f9' } }, overlaying: 'y', side: 'right', showgrid: false, tickfont: { size: 10, color: '#e879f9' }, autorange: 'reversed', zeroline: false },
+            // Extrap SLP as a twin axis on the WIND panel (right, autoranged, NOT
+            // reversed) so its ~10 mb eye signal reads against the wind peaks
+            // without squishing — and the eye's low pressure dips DOWN on the axis.
+            yaxis5: { title: { text: 'Extrap SLP (mb)', font: { size: 11, color: '#e879f9' } }, overlaying: 'y', side: 'right', showgrid: false, tickfont: { size: 10, color: '#e879f9' }, autorange: true, zeroline: false },
             yaxis2: { title: { text: 'FL Pres (mb)', font: { size: 11, color: fg } }, domain: [0.30, 0.52], gridcolor: grid, tickfont: { size: 10, color: fg }, autorange: 'reversed', zeroline: false },
             yaxis4: { title: { text: 'Alt (km)', font: { size: 11, color: '#94a3b8' } }, overlaying: 'y2', side: 'right', showgrid: false, tickfont: { size: 10, color: '#94a3b8' }, zeroline: false },
             yaxis3: { title: { text: 'Temp (°C)', font: { size: 11, color: fg } }, domain: [0, 0.24], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false }

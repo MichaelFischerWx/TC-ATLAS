@@ -78,6 +78,11 @@ router = APIRouter(tags=["IR Monitor"])
 # NHC ATCF A-deck sources
 NHC_ATCF_BASE = "https://ftp.nhc.noaa.gov/atcf/aid_public"
 NHC_BDECK_BASE = "https://ftp.nhc.noaa.gov/atcf/btk"
+# NHC's authoritative real-time storm list. Carries the OFFICIAL name as soon as
+# a system is named — ahead of the B-deck/TCVITALS name field, which can lag a
+# full advisory cycle (e.g. AL01 read "ARTHUR" here while the B-deck still said
+# "ONE"). Used to resolve live names; B-deck remains the fallback.
+NHC_CURRENT_STORMS_URL = "https://www.nhc.noaa.gov/CurrentStorms.json"
 
 # JTWC B-deck sources (order of preference)
 # Reference: tropycal's realtime.py __read_btk_jtwc()
@@ -2170,16 +2175,59 @@ def _fetch_adeck(atcf_id: str) -> list:
     return records
 
 
+_CURRENT_STORMS_CACHE: dict = {"t": 0.0, "names": {}}
+_CURRENT_STORMS_TTL = 300   # 5 min — matches the active-storms poll cadence
+
+
+def _fetch_nhc_current_storm_names() -> dict:
+    """{ATCF_ID_UPPER: official_name} from NHC's CurrentStorms.json.
+
+    This is the real-time, authoritative naming source: a system shows its
+    official name here the moment NHC names it, whereas the B-deck/TCVITALS
+    name field can lag a full advisory cycle. Cached for `_CURRENT_STORMS_TTL`
+    so we hit the endpoint at most once per poll cycle. Best-effort: any
+    failure leaves the last-known map in place and the caller falls back to the
+    B-deck name.
+    """
+    now = time.time()
+    if now - _CURRENT_STORMS_CACHE["t"] < _CURRENT_STORMS_TTL and _CURRENT_STORMS_CACHE["names"]:
+        return _CURRENT_STORMS_CACHE["names"]
+    text = _http_get(NHC_CURRENT_STORMS_URL, timeout=10)
+    if not text:
+        return _CURRENT_STORMS_CACHE["names"]   # keep stale-but-good on a miss
+    try:
+        data = json.loads(text)
+        names = {}
+        for s in data.get("activeStorms", []):
+            sid = str(s.get("id", "")).upper()
+            nm = (s.get("name") or "").strip()
+            # Ignore the pre-name placeholder ("One"/an ATCF echo); only adopt a
+            # real proper name so a depression isn't pinned to its number here.
+            if sid and nm and not re.fullmatch(r"[A-Z]{2}\d{2}\d{4}", nm.upper()):
+                names[sid] = nm
+        _CURRENT_STORMS_CACHE["t"] = now
+        _CURRENT_STORMS_CACHE["names"] = names
+        return names
+    except (ValueError, TypeError):
+        return _CURRENT_STORMS_CACHE["names"]
+
+
 def _fetch_nhc_storm_name(atcf_id: str) -> Optional[str]:
     """
     Resolve the human-facing storm name for an NHC (AL/EP/CP) storm.
 
-    The aid_public A-deck the NHC branch polls leaves the name field (col 27)
-    blank, so a named storm like EP012026 would otherwise fall back to its
-    ATCF id on the homepage / monitor. The name lives only in the btk B-deck,
-    so fetch that and extract it. Returns None if the B-deck is unreachable or
-    carries no usable name (caller then keeps prior ATCF-id behavior).
+    Prefer NHC's real-time CurrentStorms.json (carries the official name as soon
+    as the system is named); fall back to the btk B-deck name field. The
+    aid_public A-deck the NHC branch polls leaves the name field (col 27) blank,
+    and the B-deck name can lag a cycle behind the public naming, so a freshly
+    named storm (e.g. AL01 "Arthur") would otherwise read as "One" or its ATCF
+    id everywhere downstream — including recon attribution, which then drops a
+    correctly-named aircraft as a "different system." Returns None only when
+    BOTH sources are unusable (caller then keeps prior ATCF-id behavior).
     """
+    live = _fetch_nhc_current_storm_names().get((atcf_id or "").upper())
+    if live:
+        return live
     text = _http_get(f"{NHC_BDECK_BASE}/b{atcf_id}.dat", timeout=10)
     if not text:
         text = _http_get(f"{NHC_BDECK_BASE}/b{atcf_id}.dat.gz", timeout=10)
