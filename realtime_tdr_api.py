@@ -2027,6 +2027,11 @@ def get_dropsondes(
 # ---------------------------------------------------------------------------
 
 SEB_ACDATA_BASE = "https://seb.omao.noaa.gov/pub/acdata"
+# Live AOC "AAMPS" 1-Hz IWG1 ingest — same feed the Recon mission/Live-Flight
+# page uses (recon_api.py). Available DURING/just-after a sortie, unlike the
+# post-processed acdata _serial.dat which lands later. Used as a fallback so
+# the TDR flight-level overlay works in real time.
+SEB_IWG1_BASE = "https://seb.omao.noaa.gov/pub/flight/aamps_ingest/iwg1"
 FL_TIME_WINDOW_MIN = 45  # +/-45 minutes from TDR analysis centre time
 
 # NOAA P-3 IWG1 field indices (0-based, after splitting by comma).
@@ -2309,6 +2314,61 @@ def _find_acdata_serial_file(mission_id: str, year: int) -> Optional[str]:
     return None
 
 
+def _fetch_iwg1_feed(mission_id: str, timeout: int = 60):
+    """
+    Fetch the live AAMPS IWG1 1-Hz feed for a mission.
+
+    Returns (url, text) or (None, None). The IWG1 feed lines start with
+    "IWG1," and share the column layout `_parse_acdata_serial` already
+    understands (lat=2, lon=3, ws=26, ...), just without the MELISSA tail —
+    so the same parser handles it; SFMR/SLP simply come back null.
+    """
+    direct = f"{SEB_IWG1_BASE}/{mission_id}/{mission_id}_iwg1.txt"
+    try:
+        txt = _fetch_text(direct, timeout=timeout)
+        if txt and "IWG1," in txt:
+            return direct, txt
+    except Exception:
+        pass
+    # Fallback: list the iwg1 base dir and match a folder to the mission id
+    # (handles any case / trailing-slash differences in the folder name).
+    try:
+        for link in _parse_directory(f"{SEB_IWG1_BASE}/"):
+            flid = link.strip("/")
+            if flid.lower() == mission_id.lower():
+                u = f"{SEB_IWG1_BASE}/{flid}/{flid}_iwg1.txt"
+                txt = _fetch_text(u, timeout=timeout)
+                if txt and "IWG1," in txt:
+                    return u, txt
+    except Exception:
+        pass
+    return None, None
+
+
+def _acquire_fl_serial(mission_id: str, year: int, timeout: int = 60):
+    """
+    Acquire flight-level serial text for a mission, preferring the richer
+    post-processed acdata _serial.dat (includes MELISSA → SFMR/SLP) and
+    falling back to the live AAMPS IWG1 feed so in-progress sorties still
+    have flight-level data.
+
+    Returns (text, source, url) where source is 'acdata_serial' | 'iwg1_live'
+    | None.
+    """
+    serial_url = _find_acdata_serial_file(mission_id, year)
+    if serial_url is not None:
+        try:
+            txt = _fetch_text(serial_url, timeout=timeout)
+            if txt:
+                return txt, "acdata_serial", serial_url
+        except Exception:
+            pass  # fall through to the live feed
+    iwg1_url, iwg1_text = _fetch_iwg1_feed(mission_id, timeout=timeout)
+    if iwg1_text:
+        return iwg1_text, "iwg1_live", iwg1_url
+    return None, None, None
+
+
 @router.get("/flightlevel")
 def get_flight_level(
     file_url: str = Query(..., description="URL to the TDR xy.nc(.gz) file"),
@@ -2358,9 +2418,10 @@ def get_flight_level(
 
     year = analysis_dt.year
 
-    # Find the serial data file
-    serial_url = _find_acdata_serial_file(mission_id, year)
-    if serial_url is None:
+    # Acquire serial text: post-processed acdata first, live IWG1 feed as a
+    # real-time fallback so an in-progress sortie still resolves.
+    serial_text, fl_source, serial_url = _acquire_fl_serial(mission_id, year, timeout=60)
+    if serial_text is None:
         result = {
             "observations": [],
             "analysis_time": analysis_dt.strftime("%Y-%m-%d %H:%M:%SZ"),
@@ -2369,19 +2430,10 @@ def get_flight_level(
             "mission_id": mission_id,
             "time_window_min": FL_TIME_WINDOW_MIN,
             "n_obs": 0,
-            "message": f"No flight-level serial data found for mission {mission_id}",
+            "message": f"No flight-level data found for mission {mission_id}",
         }
         _rt_fl_cache[cache_key] = (result, now)
         return JSONResponse(result)
-
-    # Fetch and parse the serial data
-    try:
-        serial_text = _fetch_text(serial_url, timeout=60)
-    except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Could not fetch serial data from {serial_url}: {e}",
-        )
 
     raw_obs = _parse_acdata_serial(serial_text, analysis_dt, FL_TIME_WINDOW_MIN)
 
@@ -2481,6 +2533,7 @@ def get_flight_level(
         "center_lon": center_lon,
         "mission_id": mission_id,
         "serial_url": serial_url,
+        "fl_source": fl_source,
         "time_window_min": FL_TIME_WINDOW_MIN,
         "n_obs": len(averaged_obs),
         "n_obs_total": len(raw_obs),
@@ -2554,24 +2607,20 @@ def get_flight_level_mission(
             raise HTTPException(status_code=400,
                                 detail="Could not determine year from mission id")
 
-    serial_url = _find_acdata_serial_file(mission, year)
-    if serial_url is None:
+    # Acquire serial text: post-processed acdata first, live IWG1 feed as a
+    # real-time fallback so an in-progress sortie still resolves.
+    serial_text, fl_source, serial_url = _acquire_fl_serial(mission, year, timeout=90)
+    if serial_text is None:
         result = {
             "observations": [],
             "mission_id": mission,
             "year": year,
             "n_obs": 0,
             "n_obs_total": 0,
-            "message": f"No flight-level serial data found for mission {mission}",
+            "message": f"No flight-level data found for mission {mission}",
         }
         _rt_flm_cache[cache_key] = (result, now)
         return JSONResponse(result)
-
-    try:
-        serial_text = _fetch_text(serial_url, timeout=90)
-    except Exception as e:
-        raise HTTPException(status_code=502,
-                            detail=f"Could not fetch serial data from {serial_url}: {e}")
 
     # Parse the entire mission (no analysis_dt, no time-window filter)
     raw_obs = _parse_acdata_serial(serial_text)
@@ -2582,6 +2631,7 @@ def get_flight_level_mission(
         "mission_id": mission,
         "year": year,
         "serial_url": serial_url,
+        "fl_source": fl_source,
         "n_obs": len(averaged_obs),
         "n_obs_total": len(raw_obs),
         "start_time": raw_obs[0]["time"] if raw_obs else None,
