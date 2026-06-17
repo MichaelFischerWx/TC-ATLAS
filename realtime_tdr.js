@@ -206,7 +206,7 @@
           tip: 'Peak 10-second flight-level wind within the 30s window' },
         { key: 'fl_pres_mb', name: 'FL Pres',  unit: 'mb', color: '#a855f7', axis: 'y2',
           tip: 'Flight-level (static) pressure' },
-        { key: 'extrap_sfc_p_mb', name: 'Extrap SLP', unit: 'mb', color: '#e879f9', axis: 'y2', dash: 'dot',
+        { key: 'extrap_sfc_p_mb', name: 'Extrap SLP', unit: 'mb', color: '#e879f9', axis: 'y5',
           tip: 'Extrapolated surface pressure (HDOB) — the surface-pressure estimate, lowest at the eye' },
         { key: 'geo_alt_m',  name: 'FL Alt',   unit: 'km', color: '#94a3b8', axis: 'y4', scale: 0.001,
           tip: 'Geopotential height of the flight-level pressure surface (km)' },
@@ -774,10 +774,13 @@
             xaxis: { type: 'date', range: _xrange, gridcolor: grid, tickfont: { size: 10, color: fg }, domain: [0, 1],
                      showspikes: true, spikemode: 'across', spikedash: 'dash', spikethickness: 1,
                      spikecolor: dark ? '#94a3b8' : '#64748b' },
-            yaxis: { title: { text: 'Wind (kt)', font: { size: 11, color: fg } }, domain: [0.56, 1.0], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false },
-            yaxis2: { title: { text: 'Pres (mb)', font: { size: 11, color: fg } }, domain: [0.30, 0.52], gridcolor: grid, tickfont: { size: 10, color: fg }, autorange: 'reversed', zeroline: false },
+            yaxis: { title: { text: 'Wind (kt)', font: { size: 11, color: fg } }, domain: [0.78, 1.0], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false },
+            yaxis2: { title: { text: 'FL Pres (mb)', font: { size: 11, color: fg } }, domain: [0.52, 0.74], gridcolor: grid, tickfont: { size: 10, color: fg }, autorange: 'reversed', zeroline: false },
             yaxis4: { title: { text: 'Alt (km)', font: { size: 11, color: '#94a3b8' } }, overlaying: 'y2', side: 'right', showgrid: false, tickfont: { size: 10, color: '#94a3b8' }, zeroline: false },
-            yaxis3: { title: { text: 'Temp (°C)', font: { size: 11, color: fg } }, domain: [0, 0.24], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false }
+            // Extrap SLP gets its OWN panel + autorange so its ~10 mb eye signal
+            // isn't squished against the much wider flight-level pressure range.
+            yaxis5: { title: { text: 'Extrap SLP (mb)', font: { size: 11, color: '#e879f9' } }, domain: [0.26, 0.48], gridcolor: grid, tickfont: { size: 10, color: '#e879f9' }, autorange: 'reversed', zeroline: false },
+            yaxis3: { title: { text: 'Temp (°C)', font: { size: 11, color: fg } }, domain: [0, 0.22], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false }
         };
         window.Plotly.react(el, traces, layout, { responsive: true, displayModeBar: false }).then(function () {
             if (!_hdobChartBound) { try { el.on('plotly_click', _hdobOnChartClick); _hdobChartBound = true; } catch (e) {} }

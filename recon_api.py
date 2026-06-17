@@ -126,6 +126,19 @@ def _safe_div10(tok, signed=False):
         return None
 
 
+def _decode_fl_pres(tok):
+    """Decode the HDOB static-pressure field (field 3). It's pressure×10 with the
+    leading thousands digit dropped, so a near-surface reading ≥1000 mb (e.g.
+    1002.3 mb → '0023') decodes naively to 2.3 — add the 1000 back. Recon never
+    flies above ~150 mb, so any sub-100 mb decode means the leading 1 was dropped.
+    Without this, low-level legs inject 2-12 mb values that wreck the chart's
+    pressure axis."""
+    p = _safe_div10(tok)
+    if p is None:
+        return None
+    return round(p + 1000.0, 1) if p < 100 else p
+
+
 def _deg_dist(lat1, lon1, lat2, lon2) -> float:
     """Approx great-circle separation in degrees (cos-lat scaled longitude)."""
     dlat = lat1 - lat2
@@ -200,7 +213,7 @@ def _parse_hdob_line(fields: list, base_date: datetime):
     return {
         "t": obs_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "lat": lat, "lon": lon,
-        "fl_pres_mb": _safe_div10(fields[3]),
+        "fl_pres_mb": _decode_fl_pres(fields[3]),
         "geo_alt_m": _safe_int(fields[4]),
         "sfc_p_or_dval": _safe_int(fields[5]),
         "extrap_sfc_p_mb": extrap_sfc_p_mb,
