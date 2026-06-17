@@ -2762,6 +2762,16 @@
          co-moving IR animation on a Leaflet map, shown as an in-page modal
          on top of the storm card — closing returns to the card untouched
          (replaces the old full-page Quick View redirect). -->
+    <div id="recon-skewt-modal" class="recon-skewt-modal" style="display:none;" role="dialog" aria-modal="true" aria-label="Dropsonde skew-T profile" onclick="if(event.target===this)window._reconCloseSkewT()">
+        <div class="recon-skewt-content">
+            <div class="recon-skewt-head">
+                <h3 class="recon-skewt-title">Dropsonde</h3>
+                <button type="button" class="recon-skewt-close" aria-label="Close" title="Close (Esc)" onclick="window._reconCloseSkewT()">&times;</button>
+            </div>
+            <div class="recon-skewt-body"></div>
+        </div>
+    </div>
+
     <div id="ir-loop-modal" class="ir-loop-modal" style="display:none;" role="dialog" aria-modal="true" aria-label="Storm satellite loop">
         <div class="ir-loop-modal-content">
             <div class="ir-loop-modal-header">

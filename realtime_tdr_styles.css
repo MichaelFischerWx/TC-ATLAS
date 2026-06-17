@@ -638,6 +638,50 @@
     font-family: inherit; cursor: pointer; transition: all 0.12s;
 }
 .recon-hdob-gridbtn.active { color: #fff; border-color: transparent; background: #2563eb; }
+
+/* Dropsonde skew-T modal */
+.recon-skewt-modal {
+    position: fixed; inset: 0; z-index: 4000;
+    background: rgba(8,12,20,0.72);
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.recon-skewt-content {
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 12px;
+    max-width: 960px; width: 100%; max-height: 92vh; overflow: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.55);
+}
+.recon-skewt-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 16px; border-bottom: 1px solid var(--border);
+}
+.recon-skewt-title { font-size: 14px; font-weight: 700; margin: 0; }
+.recon-skewt-close {
+    background: transparent; border: none; color: var(--slate);
+    font-size: 24px; line-height: 1; cursor: pointer; padding: 0 4px;
+}
+.recon-skewt-close:hover { color: var(--text); }
+.recon-skewt-body {
+    display: grid; grid-template-columns: minmax(0,1.5fr) minmax(210px,1fr);
+    gap: 14px; padding: 14px 16px;
+}
+.recon-skewt-plot { min-width: 0; }
+.recon-skewt-side { font-size: 11.5px; }
+.recon-skewt-tbl { width: 100%; border-collapse: collapse; }
+.recon-skewt-tbl th, .recon-skewt-tbl td {
+    border: 1px solid var(--border); padding: 3px 6px; text-align: center;
+}
+.recon-skewt-tbl th { font-weight: 600; color: var(--slate); }
+.recon-skewt-foot { margin-top: 10px; font-size: 11px; color: var(--slate); line-height: 1.5; }
+.rt-recon-skewt-btn {
+    margin-top: 7px; width: 100%; padding: 4px 8px; font-size: 11px; font-weight: 600;
+    font-family: inherit; cursor: pointer; border: 1px solid #fbbf24; border-radius: 5px;
+    background: rgba(251,191,36,0.14); color: #fbbf24;
+}
+.rt-recon-skewt-btn:hover { background: rgba(251,191,36,0.28); }
+@media (max-width: 720px) {
+    .recon-skewt-body { grid-template-columns: 1fr; }
+}
 .recon-hdob-chart { flex: 1 1 auto; width: 100%; min-height: 540px; }
 .recon-hdob-hint { padding: 6px 10px; font-size: 10.5px; color: var(--slate); border-top: 1px solid var(--border); }
 .recon-hdob-maptools {
