@@ -491,10 +491,12 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         logger.warning("recon VDM assembly failed for %s: %s", atcf_id, e)
 
     # ── Dropsondes (REPNT3 TEMP DROP) ──
-    # No ATCF id in TEMP DROP, so attribute to this storm by name match, else by
-    # spatial proximity to the aircraft track (the plane is sampling this storm).
+    # Attribute exactly like HDOB: keep a sonde if its TEMP DROP label identifies
+    # THIS storm, or it is near the storm AND not explicitly labelled for a
+    # different system. This keeps a research flight's sondes (e.g. TEXAQS) out
+    # even after its HDOB has been filtered (so the aircraft track is empty) —
+    # the old "near the track" gate became a no-op with no track and let them in.
     track_pts = [(o["lat"], o["lon"]) for a in aircraft_out for o in a["track"]]
-    want_name = (name or "").upper().strip()
     drops = []
     since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
@@ -511,10 +513,14 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
             for d in cached:
                 if not (since_iso <= (d["t"] or "") <= sim_iso):
                     continue
-                if want_name and d.get("storm"):
-                    if d["storm"] != want_name and not _near_track(d["lat"], d["lon"], track_pts):
-                        continue
-                elif not _near_track(d["lat"], d["lon"], track_pts):
+                lbl = d.get("storm")
+                name_ok_d = _label_matches(lbl) if lbl else False
+                conflicting_d = (re.sub(r"[^A-Z0-9]", "", (lbl or "").upper()) not in ("", "INVEST")
+                                 and not name_ok_d)
+                near_d = bool(track_pts) and _near_track(d["lat"], d["lon"], track_pts)
+                if not near_d and storm_lat is not None and storm_lon is not None:
+                    near_d = _deg_dist(d["lat"], d["lon"], storm_lat, storm_lon) <= _STORM_CORE_DEG
+                if not (name_ok_d or (near_d and not conflicting_d)):
                     continue
                 drops.append(d)
         drops.sort(key=lambda x: x.get("t") or "")

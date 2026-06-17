@@ -561,6 +561,19 @@
                 });
             }
         }
+        // Explicit time range from every available time (obs + VDM + sonde) so
+        // the chart never falls back to Plotly's year-2000 default when there
+        // are no flight-level traces yet (e.g. sondes-only early in a mission).
+        var _allMs = [];
+        for (var fi = 0; fi < flat.length; fi++) if (!isNaN(flat[fi]._ms)) _allMs.push(flat[fi]._ms);
+        (_hdobData.vdms || []).forEach(function (v) { var t = Date.parse(_hdobX(v.t)); if (!isNaN(t)) _allMs.push(t); });
+        (_hdobData.dropsondes || []).forEach(function (d) { var t = Date.parse(_hdobX(d.t)); if (!isNaN(t)) _allMs.push(t); });
+        var _xrange;
+        if (_allMs.length) {
+            var _mn = Math.min.apply(null, _allMs), _mx = Math.max.apply(null, _allMs);
+            var _pad = Math.max(15 * 60 * 1000, (_mx - _mn) * 0.04);
+            _xrange = [new Date(_mn - _pad).toISOString(), new Date(_mx + _pad).toISOString()];
+        }
         var dark = document.documentElement.getAttribute('data-theme') !== 'light';
         var grid = dark ? 'rgba(148,163,184,0.15)' : 'rgba(100,116,139,0.15)';
         var fg = dark ? '#8b9ec2' : '#374151';
@@ -568,7 +581,7 @@
             autosize: true, margin: { l: 52, r: 50, t: 6, b: 34 }, showlegend: true,
             legend: { orientation: 'h', y: 1.06, font: { size: 10, color: fg } },
             paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', hovermode: 'closest',
-            xaxis: { type: 'date', gridcolor: grid, tickfont: { size: 10, color: fg }, domain: [0, 1] },
+            xaxis: { type: 'date', range: _xrange, gridcolor: grid, tickfont: { size: 10, color: fg }, domain: [0, 1] },
             yaxis: { title: { text: 'Wind (kt)', font: { size: 11, color: fg } }, domain: [0.56, 1.0], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false },
             yaxis2: { title: { text: 'Pres (mb)', font: { size: 11, color: fg } }, domain: [0.30, 0.52], gridcolor: grid, tickfont: { size: 10, color: fg }, autorange: 'reversed', zeroline: false },
             yaxis3: { title: { text: 'Temp (°C)', font: { size: 11, color: fg } }, domain: [0, 0.24], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false }
