@@ -486,6 +486,7 @@ _IWG1_AIRCRAFT = {"H": "NOAA2", "I": "NOAA3", "N": "NOAA9"}
 
 _IWG1_DECIMATE_S = 5      # transport sampling step (s) — 6x finer than 30-s HDOB
 _IWG1_PEAK_WIN_S = 10     # rolling window for a HDOB-style "peak FL wind"
+_IWG1_MIN_FETCH_S = 120   # min seconds between upstream NOAA-AOC polls per flight
 _MS2KT = 1.943844         # IWG1 wind speed is m/s (confirmed vs P-3 cruise TAS)
 
 # 0-indexed column positions in the comma-split IWG1 data line (per the
@@ -543,10 +544,18 @@ def _iwg1_active_flights(now: datetime) -> list:
 def _iwg1_fetch_text(flight: dict) -> str:
     """Fetch the flight's IWG1 file, INCREMENTALLY when possible. The file is
     append-only and grows to MBs over a sortie; an HTTP Range request pulls only
-    the bytes added since the last poll (re-downloading the whole file every 50 s
-    would dominate cost). Falls back to a full GET if Range is unsupported."""
+    the bytes added since the last poll. Falls back to a full GET if Range is
+    unsupported.
+
+    Throttled to `_IWG1_MIN_FETCH_S`: 1-s data refreshes plenty often at ~2 min,
+    and the blob rebuilds every ~50 s, so without this we'd hit NOAA AOC 2-3× more
+    than needed. Between fetches we serve the cached text (the public still polls
+    OUR API every minute — only the upstream NOAA poll is rate-limited)."""
     flid = flight["flid"]
-    cache = _iwg1_cache.setdefault(flid, {"text": "", "len": 0})
+    cache = _iwg1_cache.setdefault(flid, {"text": "", "len": 0, "ts": 0.0})
+    if cache["text"] and (time.time() - cache.get("ts", 0.0)) < _IWG1_MIN_FETCH_S:
+        return cache["text"]            # within the upstream-poll window — reuse
+    cache["ts"] = time.time()
     try:
         import requests
     except Exception:

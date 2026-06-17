@@ -618,7 +618,26 @@
     font-family: inherit; cursor: pointer; transition: all 0.12s;
 }
 .recon-hdob-vartoggles button.on { color: #fff; border-color: transparent; }
+/* Flight (mission) selector — controls chart + map; shown only with ≥2 aircraft */
+.recon-hdob-flighttoggle {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+    padding: 8px 10px; border-bottom: 1px solid var(--border);
+}
+.recon-hdob-flightlabel { font-size: 11px; font-weight: 700; color: var(--slate); margin-right: 2px; }
+.recon-hdob-flighttoggle button {
+    background: transparent; border: 1px solid var(--border); color: var(--slate);
+    border-radius: 5px; padding: 2px 9px; font-size: 11px; font-weight: 600;
+    font-family: inherit; cursor: pointer; transition: all 0.12s;
+}
+.recon-hdob-flighttoggle button.on { color: #fff; border-color: transparent; background: #2563eb; }
 .recon-hdob-satgroup { margin-left: auto; display: inline-flex; gap: 3px; align-items: center; }
+/* Lat/lon grid toggle on the recon map toolbar */
+.recon-hdob-gridbtn {
+    background: transparent; border: 1px solid var(--border); color: var(--slate);
+    border-radius: 5px; padding: 3px 10px; font-size: 11px; font-weight: 600;
+    font-family: inherit; cursor: pointer; transition: all 0.12s;
+}
+.recon-hdob-gridbtn.active { color: #fff; border-color: transparent; background: #2563eb; }
 .recon-hdob-chart { flex: 1 1 auto; width: 100%; min-height: 540px; }
 .recon-hdob-hint { padding: 6px 10px; font-size: 10.5px; color: var(--slate); border-top: 1px solid var(--border); }
 .recon-hdob-maptools {

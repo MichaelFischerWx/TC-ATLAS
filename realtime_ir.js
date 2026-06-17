@@ -21935,6 +21935,26 @@
             var p = _rtReconReplayOverride.split(':');
             return { atcf: (p[0] || '').toUpperCase(), anchor: p[1],
                      speed: p[2] || '120', name: (p[3] || '').toUpperCase() };
+        },
+        // Lat/lon graticule controller for any recon map. Reuses the global
+        // map's adaptive-step builder (1° at meso zoom → 10° at world view).
+        graticule: function (targetMap) {
+            var lg = null;
+            function rebuild() { _buildGraticuleFor(lg, targetMap); }
+            return {
+                enable: function () {
+                    if (!targetMap || lg) return;
+                    lg = L.layerGroup().addTo(targetMap);
+                    rebuild();
+                    targetMap.on('moveend zoomend', rebuild);
+                },
+                disable: function () {
+                    if (!lg) return;
+                    try { targetMap.off('moveend zoomend', rebuild); targetMap.removeLayer(lg); } catch (e) {}
+                    lg = null;
+                },
+                isOn: function () { return !!lg; }
+            };
         }
     };
 

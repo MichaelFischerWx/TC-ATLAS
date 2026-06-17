@@ -194,6 +194,8 @@
     var _hdobStormSatOverlay = null, _hdobStormSatKey = null;  // fresh storm-sector IR (priority over GIBS)
     var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = [], _hdobChartBound = false;
     var _hdobStormOpts = [], _hdobBuiltToggles = false;
+    var _hdobFlightSel = '';   // '' = all flights; else a single aircraft tail (filters chart + map)
+    var _hdobGrid = null;      // lat/lon graticule controller for the recon map (lazy)
     var _hdobVarVis = { peak_fl_kt: true, wspd_kt: false, sfmr_kt: true,
                         fl_pres_mb: true, extrap_sfc_p_mb: true, geo_alt_m: true,
                         temp_c: false, dewpt_c: false, vdm: true };
@@ -384,6 +386,7 @@
     window._reconHdobSelectStorm = function (value) {
         if (!value) return;
         _hdobData = null; _hdobFitDone = false; _hdobReplay = null; _hdobLoggedLoad = false;
+        _hdobFlightSel = '';   // back to all flights when switching storm/mission
         if (value.indexOf('mission:') === 0) {
             // Mission mode: a standalone flight, attributed by aircraft tail.
             var tail = value.slice(8);
@@ -597,11 +600,15 @@
         }
         _hdobSetSatellite(lonHint);
         _hdobSetStormSat(_hdobMissionTail ? null : _hdobAtcf);  // fresh storm-sector IR over GIBS
+        _hdobBuildFlightToggle();
+        // The map honors the flight selection (all flights when none picked);
+        // framing/satellite above use the full set so they don't jump on filter.
+        var mapAircraft = _hdobFilterAircraft(aircraft, 'map');
         if (!_hdobBarbLayer) { _hdobBarbLayer = new kit.BarbLayer(); _hdobBarbLayer.addTo(map); }
-        _hdobBarbLayer.setData(aircraft, latestMs);
+        _hdobBarbLayer.setData(mapAircraft, latestMs);
         for (var mi = 0; mi < _hdobMarkers.length; mi++) { try { map.removeLayer(_hdobMarkers[mi]); } catch (e) {} }
         _hdobMarkers = kit.buildMarkers(map, _hdobData);
-        _hdobRenderAircraft(map, aircraft);
+        _hdobRenderAircraft(map, mapAircraft);
         if (!_hdobFitDone) {
             var pts = [];
             for (var k = 0; k < aircraft.length; k++) {
@@ -663,6 +670,57 @@
         }
     }
 
+    /** Aircraft to show in a given panel given the current flight selection.
+     *  A specific tail filters BOTH panels to that flight. With no selection
+     *  ('all'): the MAP shows every flight (spatial context), while the CHART
+     *  shows just the freshest single flight so its profile traces stay legible
+     *  (aircraft[0] is freshest — the backend sorts by latest ob time). */
+    function _hdobFilterAircraft(aircraft, which) {
+        if (!aircraft || !aircraft.length) return [];
+        if (_hdobFlightSel) {
+            var pick = aircraft.filter(function (a) { return a.tail === _hdobFlightSel; });
+            return pick.length ? pick : aircraft;   // selection stale → fall back to all
+        }
+        return which === 'chart' ? [aircraft[0]] : aircraft;
+    }
+
+    /** Segmented flight selector: [All] [tail · src] … Controls chart + map.
+     *  Hidden when only one aircraft is present (nothing to choose). */
+    function _hdobBuildFlightToggle() {
+        var box = document.getElementById('recon-hdob-flighttoggle');
+        if (!box) return;
+        var aircraft = (_hdobData && _hdobData.aircraft) || [];
+        if (aircraft.length < 2) { box.innerHTML = ''; box.style.display = 'none'; return; }
+        box.style.display = '';
+        box.innerHTML = '<span class="recon-hdob-flightlabel">Flight</span>';
+        var opts = [{ tail: '', label: 'All' }].concat(aircraft.map(function (a) {
+            return { tail: a.tail, label: a.tail + (a.src === 'iwg1' ? ' · 1-s' : '') };
+        }));
+        opts.forEach(function (o) {
+            var b = document.createElement('button');
+            b.textContent = o.label;
+            b.className = (_hdobFlightSel === o.tail) ? 'on' : '';
+            if (o.tail === '') b.title = 'Map: all flights · chart: latest flight';
+            b.onclick = function () {
+                _hdobFlightSel = o.tail;
+                _ga('recon_hdob_flight', { sel: o.tail || 'all' });
+                _hdobBuildFlightToggle();
+                _hdobRender();   // re-render both panels under the new filter
+            };
+            box.appendChild(b);
+        });
+    }
+
+    window._reconHdobToggleGrid = function () {
+        var kit = window._ReconKit;
+        if (!kit || !kit.graticule || !_hdobMap) return;
+        if (!_hdobGrid) _hdobGrid = kit.graticule(_hdobMap);
+        var btn = document.getElementById('recon-hdob-grid');
+        if (_hdobGrid.isOn()) { _hdobGrid.disable(); if (btn) btn.classList.remove('active'); }
+        else { _hdobGrid.enable(); if (btn) btn.classList.add('active'); }
+        _ga('recon_hdob_grid', { on: _hdobGrid.isOn() });
+    };
+
     function _hdobBuildToggles() {
         var box = document.getElementById('recon-hdob-vartoggles');
         if (!box) return;
@@ -707,7 +765,9 @@
     function _hdobRenderChart() {
         var el = document.getElementById('recon-hdob-chart');
         if (!el || !window.Plotly || !_hdobData) return;
-        var aircraft = _hdobData.aircraft || [];
+        // Chart shows one flight at a time (the selected one, or the freshest
+        // when none is picked) so overlapping profile traces stay legible.
+        var aircraft = _hdobFilterAircraft(_hdobData.aircraft || [], 'chart');
         var traces = [], flat = [];
         _HDOB_VARS.forEach(function (cfg) {
             if (!_hdobVarVis[cfg.key]) return;
