@@ -365,7 +365,10 @@
         var key = _hdobSatProduct + '|' + sat;
         if (_hdobGibsLayer && _hdobGibsKey === key) return;  // already up
         if (_hdobGibsLayer) { try { _hdobMap.removeLayer(_hdobGibsLayer); } catch (e) {} }
-        _hdobGibsLayer = kit.gibsProductLayer(_hdobSatProduct, lonHint, 0.9);
+        // Muted opacity: on this map the colored flight-level barbs/dots are the
+        // data and the satellite is context — keep it a soft backdrop so the
+        // obs (esp. red/purple wind dots over red/purple cold-top IR) stay legible.
+        _hdobGibsLayer = kit.gibsProductLayer(_hdobSatProduct, lonHint, 0.6);
         try { _hdobGibsLayer.setZIndex(2); } catch (e) {}
         _hdobGibsLayer.addTo(_hdobMap);
         _hdobGibsKey = key;
