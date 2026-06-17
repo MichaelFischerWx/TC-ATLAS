@@ -146,10 +146,12 @@ function _loadCoastlineOverlay(map) {
     if (_coastlineLoading) return;
     _coastlineLoading = true;
 
-    // Natural Earth 10m coastlines via GitHub CDN (~1.5 MB gzipped).
-    // One-time cost on first session; cached thereafter via the CDN +
-    // _coastlineGeoJSON module var so subsequent map inits are free.
-    fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_coastline.geojson')
+    // Natural Earth 10m coastlines, vendored locally (assets/coastlines/) and
+    // served from our own origin (~1.5 MB gzipped via GitHub Pages). GitHub's
+    // raw host is rate-limited and would silently drop this ~10 MB fetch.
+    // One-time cost on first session; cached thereafter in the _coastlineGeoJSON
+    // module var so subsequent map inits are free.
+    fetch('assets/coastlines/ne_10m_coastline.geojson')
         .then(function (r) { return r.json(); })
         .then(function (geojson) {
             _coastlineGeoJSON = geojson;
@@ -6520,7 +6522,7 @@ window.openGifSettings = function () {
     // Pre-load coastline GeoJSON if not already cached
     if (!_coastlineGeoJSON && !_coastlineLoading) {
         _coastlineLoading = true;
-        fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_coastline.geojson')
+        fetch('assets/coastlines/ne_10m_coastline.geojson')
             .then(function (r) { return r.json(); })
             .then(function (geojson) { _coastlineGeoJSON = geojson; })
             .catch(function (e) { console.warn('Coastline pre-load failed:', e); })

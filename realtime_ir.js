@@ -350,14 +350,18 @@
         _coastlineQueue.push(targetMap);
         if (_coastlineLoading) return;
         _coastlineLoading = true;
-        fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_coastline.geojson')
+        // Natural Earth 10m coastlines, vendored locally (assets/coastlines/)
+        // and served from our own origin — GitHub's raw host is rate-limited and
+        // would silently drop this ~10 MB fetch, leaving the map with labels but
+        // no coast outline. GitHub Pages gzip-serves it to ~1.5 MB on the wire.
+        fetch('assets/coastlines/ne_10m_coastline.geojson')
             .then(function (r) { return r.json(); })
             .then(function (geojson) {
                 _coastlineGeoJSON = geojson;
                 _coastlineQueue.forEach(function (m) { _addToMap(geojson, m); });
                 _coastlineQueue = [];
             })
-            .catch(function () { _coastlineQueue = []; })
+            .catch(function (e) { console.warn('Coastline load failed:', e); _coastlineQueue = []; })
             .finally(function () { _coastlineLoading = false; });
     }
 
@@ -5241,7 +5245,7 @@
         // 3-second delay, giving panel requests (models, WeatherLab, etc.)
         // a head start on the backend before the heavy Tb fetches begin.
 
-        // Coastline overlay — Natural Earth 50m black outlines (matches global archive)
+        // Coastline overlay — Natural Earth 10m black outlines (matches global archive)
         detailMap.createPane('coastlinePane');
         detailMap.getPane('coastlinePane').style.zIndex = 450;
         detailMap.getPane('coastlinePane').style.pointerEvents = 'none';
