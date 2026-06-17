@@ -21539,11 +21539,9 @@
             .setLatLng(latlng).setContent(html).openOn(map || detailMap);
     }
 
-    // ── Dropsonde skew-T (hand-rolled SVG so we control the skew transform +
-    //    wind barbs; data = the FM-37 profile decoded server-side). ───────────
-    var _SKEWT_LN10 = Math.LN10;
-    function _skewtLog10(x) { return Math.log(x) / _SKEWT_LN10; }
-
+    // ── Dropsonde skew-T — feeds the decoded FM-37 profile into the SHARED
+    //    renderSkewT() (skewt.js, the same Plotly skew-T the Global Archive
+    //    sonde viewer uses), so it looks identical to those. ────────────────
     /** RH (%) from T and Td (°C), Magnus — for the mandatory-level table. */
     function _skewtRH(t, td) {
         if (t == null || td == null) return null;
@@ -21552,166 +21550,106 @@
         return Math.max(1, Math.min(100, Math.round(rh)));
     }
 
-    /** A single SVG wind barb at (cx,cy): shaft toward the source direction
-     *  `dir`, with pennants (50 kt) / full (10) / half (5) barbs. kt. */
-    function _skewtBarb(cx, cy, dir, spd, color) {
-        if (dir == null || spd == null) return '';
-        var rad = dir * Math.PI / 180;
-        var ux = Math.sin(rad), uy = -Math.cos(rad);     // unit vector toward source (N up)
-        var px = -uy, py = ux;                            // perpendicular (barb side)
-        var L = 30, end = [cx + ux * L, cy + uy * L];
-        var parts = ['<line x1="' + cx.toFixed(1) + '" y1="' + cy.toFixed(1) +
-            '" x2="' + end[0].toFixed(1) + '" y2="' + end[1].toFixed(1) +
-            '" stroke="' + color + '" stroke-width="1.3"/>'];
-        if (spd < 3) {                                    // calm → open circle
-            return '<circle cx="' + cx.toFixed(1) + '" cy="' + cy.toFixed(1) +
-                '" r="4" fill="none" stroke="' + color + '" stroke-width="1.2"/>';
+    /** Log-pressure linear interpolation of `key` from sorted-descending-by-p
+     *  level array `arr` onto pressure p; nearest-value clamp outside the range. */
+    function _skewtInterp(arr, key, p) {
+        if (!arr.length) return null;
+        if (p >= arr[0].p) return arr[0][key];
+        if (p <= arr[arr.length - 1].p) return arr[arr.length - 1][key];
+        for (var i = 0; i < arr.length - 1; i++) {
+            var hi = arr[i], lo = arr[i + 1];             // hi.p > lo.p
+            if (p <= hi.p && p >= lo.p) {
+                if (hi[key] == null || lo[key] == null) return hi[key] != null ? hi[key] : lo[key];
+                var f = (Math.log(p) - Math.log(hi.p)) / (Math.log(lo.p) - Math.log(hi.p));
+                return hi[key] + f * (lo[key] - hi[key]);
+            }
         }
-        var rem = Math.round(spd / 5) * 5;                // nearest 5 kt
-        var pos = L - 2, step = 5.5, bl = 11;
-        function at(d) { return [end[0] - ux * (L - d), end[1] - uy * (L - d)]; }
-        while (rem >= 50) {                               // pennant (triangle)
-            var a = at(pos), tip = [a[0] + px * bl, a[1] + py * bl], b2 = at(pos - step);
-            parts.push('<polygon points="' + a[0].toFixed(1) + ',' + a[1].toFixed(1) + ' ' +
-                tip[0].toFixed(1) + ',' + tip[1].toFixed(1) + ' ' +
-                b2[0].toFixed(1) + ',' + b2[1].toFixed(1) + '" fill="' + color + '"/>');
-            pos -= step * 1.4; rem -= 50;
-        }
-        while (rem >= 10) {                               // full barb
-            var f = at(pos);
-            parts.push('<line x1="' + f[0].toFixed(1) + '" y1="' + f[1].toFixed(1) +
-                '" x2="' + (f[0] + px * bl).toFixed(1) + '" y2="' + (f[1] + py * bl).toFixed(1) +
-                '" stroke="' + color + '" stroke-width="1.3"/>');
-            pos -= step; rem -= 10;
-        }
-        if (rem >= 5) {                                   // half barb
-            var h = at(pos === L - 2 ? pos - step * 0.5 : pos);  // inset a touch if first
-            parts.push('<line x1="' + h[0].toFixed(1) + '" y1="' + h[1].toFixed(1) +
-                '" x2="' + (h[0] + px * bl * 0.5).toFixed(1) + '" y2="' + (h[1] + py * bl * 0.5).toFixed(1) +
-                '" stroke="' + color + '" stroke-width="1.3"/>');
-        }
-        return parts.join('');
+        return null;
     }
 
-    /** Build the skew-T SVG + side table for a sonde. Returns {svg, table} or null. */
-    function _reconBuildSkewT(sonde) {
+    /** Convert a decoded TEMP DROP profile into renderSkewT()'s `profiles`
+     *  object: plev (hPa), t (K), q (kg/kg from Td), u/v (m/s). Thermo (T/Td)
+     *  comes from mandatory+sig_temp levels; winds from mandatory+sig_wind. We
+     *  build a common pressure grid (union of both) and interpolate each field
+     *  onto it in log-p, so the T/Td lines and the wind barbs are both populated
+     *  without one set leaving gaps in the other. */
+    function _reconSondeProfiles(sonde) {
         var prof = (sonde && sonde.profile) || {};
         var mand = prof.mandatory || [], sigT = prof.sig_temp || [], sigW = prof.sig_wind || [];
-        // Merge mandatory + significant-temperature levels for the T/Td trace.
-        var tmap = {};
+        var thermo = {}, wind = {};
         mand.concat(sigT).forEach(function (L) {
-            if (L.p != null && L.t != null && !(L.p in tmap)) tmap[L.p] = { p: L.p, t: L.t, td: L.td };
+            if (L.p != null && L.t != null && !(L.p in thermo)) thermo[L.p] = { p: L.p, t: L.t, td: L.td };
         });
-        var pts = Object.keys(tmap).map(function (k) { return tmap[k]; }).sort(function (a, b) { return b.p - a.p; });
-        if (pts.length < 2) return null;
-
-        var W = 560, H = 600, mL = 44, mR = 84, mT = 16, mB = 36;
-        var pw = W - mL - mR, ph = H - mT - mB;
-        var pBot = 1050;
-        var pMin = Math.min.apply(null, pts.map(function (p) { return p.p; }));
-        var pTop = Math.max(250, Math.floor((pMin - 40) / 50) * 50);
-        var lpb = _skewtLog10(pBot), lpt = _skewtLog10(pTop);
-        // Low pressure at the TOP: pBot → bottom of plot, pTop → top.
-        function Y(p) { return mT + (_skewtLog10(p) - lpt) / (lpb - lpt) * ph; }
-        var Tmin = -30, Tmax = 40, SKEW = pw * 0.55;
-        function baseX(t) { return mL + (t - Tmin) / (Tmax - Tmin) * pw; }
-        function X(t, p) { return baseX(t) + SKEW * ((Y(p) - mT) / ph - 1) * -1; } // shift right going up
-
-        var dark = document.documentElement.getAttribute('data-theme') !== 'light';
-        var gridc = dark ? 'rgba(148,163,184,0.28)' : 'rgba(100,116,139,0.30)';
-        var axc = dark ? '#8b9ec2' : '#475569';
-        var fgc = dark ? '#cbd5e1' : '#1e293b';
-        var s = ['<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="system-ui,sans-serif">'];
-        s.push('<clipPath id="skptclip"><rect x="' + mL + '" y="' + mT + '" width="' + pw + '" height="' + ph + '"/></clipPath>');
-        // Skewed isotherms (every 10 °C), clipped to the plot.
-        s.push('<g clip-path="url(#skptclip)">');
-        for (var T = -80; T <= 50; T += 10) {
-            var x1 = X(T, pBot), y1 = Y(pBot), x2 = X(T, pTop), y2 = Y(pTop);
-            var iso = (T === 0);
-            s.push('<line x1="' + x1.toFixed(1) + '" y1="' + y1.toFixed(1) + '" x2="' + x2.toFixed(1) +
-                '" y2="' + y2.toFixed(1) + '" stroke="' + (iso ? (dark ? '#64748b' : '#94a3b8') : gridc) +
-                '" stroke-width="' + (iso ? 1.1 : 0.7) + '" stroke-dasharray="3 4"/>');
-        }
-        s.push('</g>');
-        // Isobars + labels.
-        [1000, 925, 850, 700, 600, 500, 400, 300].forEach(function (p) {
-            if (p > pBot || p < pTop) return;
-            var y = Y(p);
-            s.push('<line x1="' + mL + '" y1="' + y.toFixed(1) + '" x2="' + (mL + pw) + '" y2="' + y.toFixed(1) +
-                '" stroke="' + gridc + '" stroke-width="0.7"/>');
-            s.push('<text x="' + (mL - 5) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end" font-size="10" fill="' + axc + '">' + p + '</text>');
+        mand.concat(sigW).forEach(function (L) {
+            if (L.p != null && L.wspd != null && !(L.p in wind)) {
+                var s = L.wspd * 0.514444, r = (L.wdir || 0) * Math.PI / 180;
+                wind[L.p] = { p: L.p, u: -s * Math.sin(r), v: -s * Math.cos(r) };  // m/s, met "from"
+            }
         });
-        // Temperature labels along the bottom.
-        for (var Tx = Tmin; Tx <= Tmax; Tx += 10) {
-            var xb = baseX(Tx);
-            s.push('<text x="' + xb.toFixed(1) + '" y="' + (mT + ph + 14) + '" text-anchor="middle" font-size="10" fill="' + axc + '">' + Tx + '</text>');
-        }
-        s.push('<text x="' + (mL + pw / 2) + '" y="' + (H - 4) + '" text-anchor="middle" font-size="10.5" fill="' + axc + '">Temperature (°C)</text>');
-        s.push('<text x="11" y="' + (mT + ph / 2) + '" text-anchor="middle" font-size="10.5" fill="' + axc + '" transform="rotate(-90 11 ' + (mT + ph / 2) + ')">Pressure (hPa)</text>');
-        // Plot border.
-        s.push('<rect x="' + mL + '" y="' + mT + '" width="' + pw + '" height="' + ph + '" fill="none" stroke="' + axc + '" stroke-width="1"/>');
-        // T (red) + Td (green) profiles.
-        function poly(key, color) {
-            var d = pts.filter(function (P) { return P[key] != null; })
-                .map(function (P) { return X(P[key], P.p).toFixed(1) + ',' + Y(P.p).toFixed(1); });
-            if (d.length < 2) return;
-            s.push('<g clip-path="url(#skptclip)"><polyline points="' + d.join(' ') + '" fill="none" stroke="' + color + '" stroke-width="2.4" stroke-linejoin="round"/></g>');
-            pts.forEach(function (P) {
-                if (P[key] == null) return;
-                s.push('<circle cx="' + X(P[key], P.p).toFixed(1) + '" cy="' + Y(P.p).toFixed(1) + '" r="2.4" fill="' + color + '"/>');
-            });
-        }
-        poly('td', '#22c55e');
-        poly('t', '#ef4444');
-        // Wind barbs down the right margin — significant-wind levels (thinned),
-        // else mandatory levels. Aligned to the same pressure axis.
-        var barbLevels = (sigW.length ? sigW : mand).filter(function (L) { return L.wspd != null && L.p <= pBot && L.p >= pTop; });
-        var bx = mL + pw + 34, lastY = -99;
-        barbLevels.forEach(function (L) {
-            var y = Y(L.p);
-            if (Math.abs(y - lastY) < 16) return;     // avoid overlap
-            lastY = y;
-            s.push(_skewtBarb(bx, y, L.wdir, L.wspd, fgc));
+        var tArr = Object.keys(thermo).map(function (k) { return thermo[k]; }).sort(function (a, b) { return b.p - a.p; });
+        var wArr = Object.keys(wind).map(function (k) { return wind[k]; }).sort(function (a, b) { return b.p - a.p; });
+        if (tArr.length < 2) return null;
+        var pset = {};
+        tArr.concat(wArr).forEach(function (L) { pset[L.p] = 1; });
+        var plev = Object.keys(pset).map(Number).sort(function (a, b) { return b - a; });
+        var t = [], q = [], u = [], v = [];
+        plev.forEach(function (p) {
+            var tc = _skewtInterp(tArr, 't', p), td = _skewtInterp(tArr, 'td', p);
+            t.push(tc != null ? tc + 273.15 : null);
+            if (td != null) {
+                var es = 6.112 * Math.exp(17.67 * td / (td + 243.5));
+                q.push(0.622 * es / (p - es));
+            } else { q.push(null); }
+            u.push(_skewtInterp(wArr, 'u', p));
+            v.push(_skewtInterp(wArr, 'v', p));
         });
-        s.push('<line x1="' + (mL + pw) + '" y1="' + mT + '" x2="' + (mL + pw) + '" y2="' + (mT + ph) + '" stroke="' + axc + '" stroke-width="1"/>');
-        s.push('<text x="' + bx + '" y="' + (mT + ph + 14) + '" text-anchor="middle" font-size="9.5" fill="' + axc + '">wind (kt)</text>');
-        s.push('</svg>');
+        return { plev: plev, t: t, q: q, u: u, v: v, showParcel: false };
+    }
 
-        // Mandatory-level table + footer.
+    /** Mandatory-level table + surface/MBL footer (Tropical-Tidbits-style). */
+    function _reconSkewTTable(sonde) {
+        var mand = ((sonde.profile || {}).mandatory) || [];
         var rows = mand.map(function (L) {
+            var rh = _skewtRH(L.t, L.td);
             return '<tr><td>' + L.p + '</td><td>' + (L.hgt != null ? L.hgt + ' m' : '–') +
                 '</td><td>' + (L.t != null ? L.t.toFixed(1) + '°' : '–') +
-                '</td><td>' + (_skewtRH(L.t, L.td) != null ? _skewtRH(L.t, L.td) + '%' : '–') +
+                '</td><td>' + (rh != null ? rh + '%' : '–') +
                 '</td><td>' + (L.wspd != null ? (L.wdir != null ? L.wdir + '° / ' : '') + L.wspd + ' kt' : '–') + '</td></tr>';
         }).join('');
-        var table = '<table class="recon-skewt-tbl"><thead><tr><th>Level</th><th>Hgt</th><th>T</th><th>RH</th><th>Wind</th></tr></thead><tbody>' +
+        return '<table class="recon-skewt-tbl"><thead><tr><th>Level</th><th>Hgt</th><th>T</th><th>RH</th><th>Wind</th></tr></thead><tbody>' +
             rows + '</tbody></table>' +
             '<div class="recon-skewt-foot">' +
             (sonde.sfc_wind_kt != null ? '<div>Surface (WL150) wind: ' + (sonde.sfc_dir != null ? sonde.sfc_dir + '° / ' : '') + sonde.sfc_wind_kt + ' kt</div>' : '') +
             (sonde.mbl_wind_kt != null ? '<div>Mean boundary-layer wind: ' + (sonde.mbl_dir != null ? sonde.mbl_dir + '° / ' : '') + sonde.mbl_wind_kt + ' kt</div>' : '') +
             '</div>';
-        return { svg: s.join(''), table: table };
     }
 
     window._reconShowSkewT = function (key) {
         var sonde = _reconSondeByKey[key];
         if (!sonde) return;
-        var built = _reconBuildSkewT(sonde);
         var modal = document.getElementById('recon-skewt-modal');
         if (!modal) return;
-        if (!built) {
-            modal.querySelector('.recon-skewt-body').innerHTML =
-                '<div style="padding:30px;color:#94a3b8;">No decoded profile available for this dropsonde yet.</div>';
-        } else {
-            modal.querySelector('.recon-skewt-body').innerHTML =
-                '<div class="recon-skewt-plot">' + built.svg + '</div>' +
-                '<div class="recon-skewt-side">' + built.table + '</div>';
-        }
+        var body = modal.querySelector('.recon-skewt-body');
+        var profiles = _reconSondeProfiles(sonde);
         var loc = (sonde.lat != null && sonde.lon != null) ? _rtFmtLatLon(sonde.lat, sonde.lon) : '';
         modal.querySelector('.recon-skewt-title').textContent =
             'Dropsonde · ' + (sonde.tail || '') + (loc ? ' · ' + loc : '') +
             (sonde.t ? ' · ' + _rtFmtTime(sonde.t) : '');
+        if (!profiles || typeof renderSkewT !== 'function') {
+            body.innerHTML = '<div style="padding:30px;color:#94a3b8;">No decoded profile available for this dropsonde yet.</div>';
+        } else {
+            body.innerHTML =
+                '<div class="recon-skewt-plot"><div id="recon-skewt-plot" style="width:100%;height:560px;"></div></div>' +
+                '<div class="recon-skewt-side">' + _reconSkewTTable(sonde) + '</div>';
+        }
         modal.style.display = 'flex';
+        // Render after the modal is laid out so Plotly measures a real width
+        // (setTimeout, not rAF — rAF can be throttled when the tab isn't painting).
+        if (profiles && typeof renderSkewT === 'function') {
+            setTimeout(function () {
+                try { renderSkewT(profiles, 'recon-skewt-plot'); } catch (e) {}
+            }, 0);
+        }
         if (typeof _ga === 'function') { try { _ga('recon_skewt_open', { tail: sonde.tail || '' }); } catch (e) {} }
     };
     window._reconCloseSkewT = function () {
