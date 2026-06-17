@@ -292,9 +292,16 @@ def _parse_hdob_bulletin(text: str, fname_dt: datetime):
 # full thermodynamic profile — just the release/splash position + time and the
 # boundary-layer / surface (WL150) winds, which is the clickable-marker payload.
 
-def _dm_to_deg(d: str, ndeg: int):
-    """DDMM / DDDMM coded coordinate -> decimal degrees magnitude."""
-    return int(d[:ndeg]) + int(d[ndeg:]) / 60.0
+def _relspg_to_deg(d: str, ndeg: int):
+    """REL/SPG coordinate -> decimal degrees magnitude.
+
+    The ASPEN/AOC-appended REL (release) and SPG (splash) coords in a TEMP DROP
+    are DEGREES + HUNDREDTHS packed without the point: 'DDdd' lat / 'DDDdd' lon
+    (e.g. 2889N = 28.89°, 09342W = 93.42°). This is NOT degrees-minutes — the
+    trailing pair routinely exceeds 59 (2889, 2599, 2861), which decimal-minutes
+    can't represent. Decoding it as DDMM put sondes ~0.4-0.6° off (the bug TT's
+    plot exposed). HDOB lat/lon, by contrast, ARE DDMM — see _parse_latlon_token."""
+    return int(d[:ndeg]) + int(d[ndeg:]) / 100.0
 
 
 def _parse_tempdrop_bulletin(text: str, fname_dt: datetime) -> list:
@@ -313,8 +320,8 @@ def _parse_tempdrop_bulletin(text: str, fname_dt: datetime) -> list:
     for mm in re.finditer(
         r"REL\s+(\d{4})([NS])(\d{5})([EW])\s+(\d{6})"
         r"(?:\s+SPG?\s+(\d{4})([NS])(\d{5})([EW])\s+(\d{6}))?", text):
-        rlat = _dm_to_deg(mm.group(1), 2) * (1 if mm.group(2) == "N" else -1)
-        rlon = _dm_to_deg(mm.group(3), 3) * (1 if mm.group(4) == "E" else -1)
+        rlat = _relspg_to_deg(mm.group(1), 2) * (1 if mm.group(2) == "N" else -1)
+        rlon = _relspg_to_deg(mm.group(3), 3) * (1 if mm.group(4) == "E" else -1)
         if abs(rlat) < 0.05 or abs(rlon) < 0.05:
             continue  # missing-position placeholder
         rt = mm.group(5)
@@ -328,8 +335,8 @@ def _parse_tempdrop_bulletin(text: str, fname_dt: datetime) -> list:
         seen.add(key)
         splat = splon = None
         if mm.group(6):
-            splat = round(_dm_to_deg(mm.group(6), 2) * (1 if mm.group(7) == "N" else -1), 3)
-            splon = round(_dm_to_deg(mm.group(8), 3) * (1 if mm.group(9) == "E" else -1), 3)
+            splat = round(_relspg_to_deg(mm.group(6), 2) * (1 if mm.group(7) == "N" else -1), 3)
+            splon = round(_relspg_to_deg(mm.group(8), 3) * (1 if mm.group(9) == "E" else -1), 3)
         out.append({
             "t": dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "lat": round(rlat, 3), "lon": round(rlon, 3),
