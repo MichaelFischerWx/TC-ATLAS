@@ -2156,7 +2156,12 @@
             rtDualWrap.insertAdjacentHTML('beforebegin', _rtMetaStripHTML);
         }
 
-        Plotly.newPlot('rt-plotly-chart', [heatmap].concat(overlayTraces).concat(maxTraces), layout, config);
+        // Coastline overlay (storm-relative km) — drawn above the heatmap/IR
+        // underlay, below max markers. Included in the trace list so it exports.
+        var coastTrace = _rtCoastVisible ? _rtBuildCoastTrace(meta) : null;
+        var coastTraces = coastTrace ? [coastTrace] : [];
+
+        Plotly.newPlot('rt-plotly-chart', [heatmap].concat(coastTraces).concat(overlayTraces).concat(maxTraces), layout, config);
         _rtLastPlotlyData = { heatmap: heatmap, overlayTraces: overlayTraces, maxTraces: maxTraces, baseLayout: baseLayout, title: title, config: config, json: json };
 
         // Auto-generate azimuthal mean in the right dual pane
@@ -3527,6 +3532,82 @@
             Plotly.relayout(el, { images: images });
         });
     }
+
+    // ── Coastline overlay (storm-relative km) ─────────────────────
+    // Projects Natural Earth coastlines into the plan-view's km frame
+    // (equirectangular about the grid origin = storm center), so they line up
+    // with the IR underlay and export with the saved image.
+    var _rtCoastVisible = false;
+    var _rtCoastGeoJSON = null;   // cached Natural Earth FeatureCollection
+    var _rtCoastLoading = false;
+
+    function _rtLoadCoastline(cb) {
+        if (_rtCoastGeoJSON) { if (cb) cb(); return; }
+        if (_rtCoastLoading) return;
+        _rtCoastLoading = true;
+        fetch('assets/coastlines/ne_10m_coastline.geojson')
+            .then(function (r) { return r.json(); })
+            .then(function (gj) { _rtCoastGeoJSON = gj; _rtCoastLoading = false; if (cb) cb(); })
+            .catch(function () {
+                _rtCoastLoading = false;
+                if (typeof rtToast === 'function') rtToast('Coastline data unavailable', 'warn');
+            });
+    }
+
+    // Build a Plotly lines trace of coastlines in storm-relative km, clipped to
+    // the plot domain. Returns null if no data / no center / nothing in view.
+    function _rtBuildCoastTrace(meta) {
+        if (!_rtCoastGeoJSON || !meta) return null;
+        var lat0 = meta.latitude, lon0 = meta.longitude;
+        if (lat0 == null || lon0 == null || (lat0 === 0 && lon0 === 0)) return null;
+        var kmPerDegLat = 110.574;
+        var kmPerDegLon = 111.320 * Math.cos(lat0 * Math.PI / 180);
+        var RANGE = 260;  // km half-extent (plot is ±250) + margin
+        var dLat = RANGE / kmPerDegLat + 0.5;
+        var dLon = RANGE / Math.max(1e-3, kmPerDegLon) + 0.5;
+        var xs = [], ys = [];
+        function addSeg(coords) {
+            var started = false;
+            for (var i = 0; i < coords.length; i++) {
+                var lon = coords[i][0], lat = coords[i][1];
+                if (lat < lat0 - dLat || lat > lat0 + dLat ||
+                    lon < lon0 - dLon || lon > lon0 + dLon) {
+                    if (started) { xs.push(null); ys.push(null); started = false; }
+                    continue;
+                }
+                xs.push((lon - lon0) * kmPerDegLon);
+                ys.push((lat - lat0) * kmPerDegLat);
+                started = true;
+            }
+            if (started) { xs.push(null); ys.push(null); }
+        }
+        var feats = _rtCoastGeoJSON.features || [];
+        for (var f = 0; f < feats.length; f++) {
+            var g = feats[f].geometry;
+            if (!g) continue;
+            if (g.type === 'LineString') addSeg(g.coordinates);
+            else if (g.type === 'MultiLineString') {
+                for (var k = 0; k < g.coordinates.length; k++) addSeg(g.coordinates[k]);
+            }
+        }
+        if (!xs.length) return null;
+        return {
+            x: xs, y: ys, type: 'scatter', mode: 'lines',
+            line: { color: 'rgba(15,22,35,0.55)', width: 1 },
+            hoverinfo: 'skip', showlegend: false, _rtCoast: true,
+        };
+    }
+
+    window.rtToggleCoast = function () {
+        var btn = document.getElementById('rt-coast-btn');
+        _rtCoastVisible = !_rtCoastVisible;
+        if (btn) btn.classList.toggle('active', _rtCoastVisible);
+        if (_rtCoastVisible && !_rtCoastGeoJSON) {
+            _rtLoadCoastline(function () { rtGeneratePlot(); });
+        } else {
+            rtGeneratePlot();
+        }
+    };
 
     // ══════════════════════════════════════════════════════════════
     // Dropsonde Observations Module
