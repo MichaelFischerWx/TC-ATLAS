@@ -213,6 +213,23 @@
         if (sel && !_hdobAtcf && sel.value) window._reconHdobSelectStorm(sel.value);
     }
 
+    // The active-storms list loads asynchronously, so Live Flight (now the
+    // default Recon tab) often opens BEFORE it arrives — leaving the picker stuck
+    // on "No active storms". Re-populate whenever the list loads/updates, and
+    // auto-select + load if the tab is open and nothing is chosen yet, so the
+    // user never has to click anything to see data.
+    window.addEventListener('ir-storms-loaded', function () {
+        if (!document.getElementById('recon-hdob-storm')) return;
+        var hadStorm = !!_hdobAtcf;
+        _hdobPopulateStorms();
+        var panel = document.querySelector('#recon-main .recon-sub-panel[data-sub="hdob"]');
+        var hdobActive = panel && panel.style.display !== 'none';
+        if (hdobActive && !hadStorm) {
+            var sel = document.getElementById('recon-hdob-storm');
+            if (sel && sel.value) window._reconHdobSelectStorm(sel.value);
+        }
+    });
+
     // Barb base-dot color: variable picker + legend (shared via _ReconKit).
     function _hdobBuildBarbVarUI() {
         var kit = window._ReconKit;

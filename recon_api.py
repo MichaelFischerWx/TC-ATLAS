@@ -425,12 +425,23 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
             continue
         labels = aircraft_names.get(tail, set())
         name_ok = any(_label_matches(l) for l in labels)
+        # A flight that explicitly labels itself a DIFFERENT specific system
+        # (not this storm, not a bare "INVEST") is that system's sortie — never
+        # attribute it here, even if it passes within the core. This is what
+        # keeps a non-TC research flight (e.g. TEXAQS surveying inland Texas)
+        # out of a nearby offshore storm, regardless of how close it drifts.
+        conflicting = any(
+            re.sub(r"[^A-Z0-9]", "", (l or "").upper()) not in ("", "INVEST")
+            and not _label_matches(l)
+            for l in labels
+        )
         at_core = (storm_lat is not None and storm_lon is not None and
                    any(_deg_dist(o["lat"], o["lon"], storm_lat, storm_lon) <= _STORM_CORE_DEG
                        for o in track))
+        keep = name_ok or (at_core and not conflicting)
         # Only filter when we have something to match against (a name and/or a
         # position). With neither (shouldn't happen via the UI) keep, as before.
-        if (norm_q or storm_lat is not None) and not (name_ok or at_core):
+        if (norm_q or storm_lat is not None) and not keep:
             continue
         aircraft_out.append({"tail": tail, "track": track})
     aircraft_out.sort(key=lambda a: a["track"][-1]["t"], reverse=True)

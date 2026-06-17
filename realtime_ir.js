@@ -3976,6 +3976,7 @@
                 renderStormMarkers(stormData);
                 fetchAllTracks(stormData);
                 _rtPushStormsToMwLayer();
+                try { window.dispatchEvent(new CustomEvent('ir-storms-loaded')); } catch (e) {}
 
                 // If genesis data is already loaded, re-render so any
                 // newly-arrived ATCF storm gets paired with its matching
