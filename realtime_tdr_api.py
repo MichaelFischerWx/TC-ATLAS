@@ -1020,9 +1020,13 @@ def get_rt_data(
             return _wcm_center_km(u, v, x_km, y_km, num_sectors=1, spad=6, num_iterations=3)
 
         c2 = _quick_center(2.0)
+        # Always expose the quality diagnostics so a suppressed (gated) center
+        # is explainable client-side instead of silently vanishing.
+        result["wcm_data_coverage"] = c2.get("data_coverage")
+        result["wcm_vt_max_ms"] = c2.get("vt_max_ms")
+        result["wcm_gate_reason"] = c2.get("gate_reason")
         if c2["converged"]:
             result["wcm_rmw_km"] = c2["rmw_km"]
-            result["wcm_vt_max_ms"] = c2["vt_max_ms"]
             result["wcm_center_x_km"] = c2["center_x_km"]
             result["wcm_center_y_km"] = c2["center_y_km"]
             # 2-to-6 km tilt (each level uses its own vorticity centroid,
@@ -3728,8 +3732,18 @@ def get_rt_vortex_raw(
 # WCM Center Finding & Tilt Profile (km-space version)
 # ---------------------------------------------------------------------------
 
+# ── Minimum quality gates to RETAIN a WCM center ─────────────────────────
+# A center that "converges" on a thin sliver of data, or on a circulation too
+# weak to be meaningful, is rejected (converged=False) so every downstream
+# consumer — plan-view RMW ring, 2→6 km tilt, per-level tilt profile — drops
+# it consistently via the existing `if converged` checks. Tune here.
+# Thresholds mirror the TC-RADAR dataset's center-retention criteria
+# (min data-coverage fraction 0.15, max azimuthal-mean tangential wind ≥ 8 m/s).
+WCM_MIN_COVERAGE  = 0.15   # min fraction of valid data in the inner disk (best_cov)
+WCM_MIN_VT_MAX_MS = 8.0    # min peak azimuthal-mean tangential wind (m/s)
+
 def _wcm_center_km(u_2d, v_2d, x_km, y_km,
-                    num_sectors=12, spad=6, num_iterations=3,
+                    num_sectors=1, spad=6, num_iterations=3,
                     first_guess_xy=None):
     """
     Weighted Circulation Maximisation (WCM) centre-finding in storm-centred
@@ -3906,19 +3920,35 @@ def _wcm_center_km(u_2d, v_2d, x_km, y_km,
         except (ValueError, IndexError):
             rmw_km = np.nan
 
+    # ── Quality gates: reject a center on too little data or too weak a
+    # circulation. Flip `converged` to False so all callers drop it, but
+    # keep the computed coverage / vt_max in the payload so the reason is
+    # inspectable downstream.
+    gate_reason = None
+    if converged:
+        cov_ok = np.isfinite(best_cov) and best_cov >= WCM_MIN_COVERAGE
+        vt_ok  = np.isfinite(vt_max) and vt_max >= WCM_MIN_VT_MAX_MS
+        if not cov_ok:
+            gate_reason = "low_coverage"
+        elif not vt_ok:
+            gate_reason = "weak_circulation"
+        if gate_reason is not None:
+            converged = False
+
     # Convert back to full-grid indices
     full_ix = int(xloc_c) + x0 if converged else None
     full_iy = int(yloc_c) + y0 if converged else None
 
     return {
-        "center_x_km": round(cx_km, 2) if np.isfinite(cx_km) else None,
-        "center_y_km": round(cy_km, 2) if np.isfinite(cy_km) else None,
+        "center_x_km": round(cx_km, 2) if (converged and np.isfinite(cx_km)) else None,
+        "center_y_km": round(cy_km, 2) if (converged and np.isfinite(cy_km)) else None,
         "center_ix": full_ix,
         "center_iy": full_iy,
-        "rmw_km": round(rmw_km, 1) if np.isfinite(rmw_km) else None,
+        "rmw_km": round(rmw_km, 1) if (converged and np.isfinite(rmw_km)) else None,
         "vt_max_ms": round(vt_max, 2) if np.isfinite(vt_max) else None,
         "data_coverage": round(best_cov, 3) if np.isfinite(best_cov) else None,
         "converged": converged,
+        "gate_reason": gate_reason,
     }
 
 
