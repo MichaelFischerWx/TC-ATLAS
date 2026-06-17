@@ -63,6 +63,7 @@
     var _rtIRAnimPlaying = false;
     var _rtIRPlotlyVisible = false;
     var _rtIROpacity = 0.35;            // IR underlay opacity (slider-driven)
+    var _rtIRUserToggledOff = false;    // user explicitly turned the default-on IR off
     var _rtIRAllLoaded = false;
     var _rtIRLoadedCount = 0;
     var _rtIRFetching = false;
@@ -1901,7 +1902,7 @@
             resultDiv.innerHTML = _rtLoadingHTML('Fetching data from API…');
         }
 
-        var cacheKey = _currentFileUrl + '_' + variable + '_' + level_km + '_' + overlay + (_rtBarbsEnabled ? '_barbs' : '');
+        var cacheKey = _currentFileUrl + '_' + variable + '_' + level_km + '_' + overlay + (_rtBarbsEnabled ? '_barbs' : '') + (_rtStormRelative ? '_sr' : '');
         if (_rtDataCache[cacheKey]) {
             rtRenderPlot(_rtDataCache[cacheKey], resultDiv);
             btn.disabled = false; btn.textContent = 'Generate Plot';
@@ -1913,6 +1914,7 @@
         var url = API_BASE + RT_PREFIX + '/data?file_url=' + encodeURIComponent(_currentFileUrl) + '&variable=' + variable + '&level_km=' + level_km;
         if (overlay) url += '&overlay=' + overlay;
         if (_rtBarbsEnabled) url += '&wind_barbs=true';
+        if (_rtStormRelative) url += '&storm_relative=true';
 
         fetch(url, { signal: controller.signal })
             .then(function (r) { if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
@@ -2050,8 +2052,9 @@
         else if (varDefault) { activeColorscale = varDefault; }
 
         var activeVmin = _rtGetVmin(), activeVmax = _rtGetVmax();
+        var frameTag = json.storm_relative ? ' <span style="color:#2563eb;">· storm-relative</span>' : '';
         var title = (meta.storm_name || 'Real-Time TDR') + ' | ' + (meta.datetime || '') +
-            '<br>' + varInfo.display_name + ' @ ' + json.actual_level_km.toFixed(1) + ' km';
+            '<br>' + varInfo.display_name + ' @ ' + json.actual_level_km.toFixed(1) + ' km' + frameTag;
         if (json.overlay) title += '<br><span style="font-size:0.85em;color:#9ca3af;">Contours: ' + json.overlay.display_name + ' (' + json.overlay.units + ')</span>';
 
         var heatmap = {
@@ -2164,6 +2167,9 @@
         Plotly.newPlot('rt-plotly-chart', [heatmap].concat(coastTraces).concat(overlayTraces).concat(maxTraces), layout, config);
         _rtLastPlotlyData = { heatmap: heatmap, overlayTraces: overlayTraces, maxTraces: maxTraces, baseLayout: baseLayout, title: title, config: config, json: json };
 
+        // newPlot replaces layout.images, so re-apply the IR underlay if active.
+        if (_rtIRPlotlyVisible) _rtApplyIRUnderlay();
+
         // Auto-generate azimuthal mean in the right dual pane
         _rtAutoFetchDualAzimuthalMean();
 
@@ -2173,9 +2179,10 @@
         var azBtn = document.getElementById('rt-az-btn'); if (azBtn) azBtn.disabled = false;
         var cfadBtn = document.getElementById('rt-cfad-btn'); if (cfadBtn) cfadBtn.disabled = false;
         var tiltBtn = document.getElementById('rt-tilt-btn'); if (tiltBtn) tiltBtn.disabled = false;
-        var barbBtn = document.getElementById('rt-barb-btn'); if (barbBtn) barbBtn.disabled = false;
+        var barbBtn = document.getElementById('rt-barb-btn'); if (barbBtn) { barbBtn.disabled = false; barbBtn.classList.toggle('active', _rtBarbsEnabled); }
         var coastBtn = document.getElementById('rt-coast-btn'); if (coastBtn) coastBtn.disabled = false;
         var maxBtn = document.getElementById('rt-maxmark-btn'); if (maxBtn) maxBtn.disabled = false;
+        var srBtn = document.getElementById('rt-sr-btn'); if (srBtn) { srBtn.disabled = false; srBtn.classList.toggle('active', _rtStormRelative); }
         // Anomaly + Quadrant buttons stay disabled until SHIPS is loaded
         // (they need Vmax / SDDC from SHIPS)
 
@@ -3213,6 +3220,7 @@
         _rtIRDecodedImages = [];
         _rtIRAnimFrame = 0;
         _rtIRPlotlyVisible = false;
+        _rtIRUserToggledOff = false;   // next analysis defaults IR back on
         _rtIRAllLoaded = false;
         _rtIRLoadedCount = 0;
         _rtIRFetching = false;
@@ -3283,9 +3291,19 @@
                 // hasn't completed. Retry a few times with short delays.
                 _rtShowIROnMapWhenReady(json);
 
-                // Enable the Plotly underlay button
+                // Enable the Plotly underlay button — and turn the IR underlay
+                // ON by default once frame0 is available (unless the user has
+                // explicitly toggled it off for this analysis).
                 var irBtn = document.getElementById('rt-ir-underlay-btn');
-                if (irBtn && json.frame0) irBtn.disabled = false;
+                if (irBtn && json.frame0) {
+                    irBtn.disabled = false;
+                    if (!_rtIRUserToggledOff) {
+                        _rtIRPlotlyVisible = true;
+                        irBtn.classList.add('active');
+                        irBtn.innerHTML = _icon('satellite') + 'IR';
+                        _rtApplyIRUnderlay();
+                    }
+                }
 
                 // Phase 2: fetch remaining frames in parallel
                 _rtFetchIRFramesParallel(1);
@@ -3470,6 +3488,7 @@
     // ── Plotly IR Underlay Toggle ────────────────────────────────
     window.rtToggleIRUnderlay = function () {
         _rtIRPlotlyVisible = !_rtIRPlotlyVisible;
+        _rtIRUserToggledOff = !_rtIRPlotlyVisible;  // remember an explicit off
         var btn = document.getElementById('rt-ir-underlay-btn');
         if (btn) {
             btn.classList.toggle('active', _rtIRPlotlyVisible);
@@ -6797,7 +6816,7 @@
 
     // ── Real-Time Wind Barbs ────────────────────────────────────
 
-    var _rtBarbsEnabled = false;
+    var _rtBarbsEnabled = true;   // ON by default on first plot load
 
     window.rtToggleBarbs = function () {
         var btn = document.getElementById('rt-barb-btn');
@@ -6816,6 +6835,18 @@
         var btn = document.getElementById('rt-maxmark-btn');
         _rtMaxMarkerEnabled = !_rtMaxMarkerEnabled;
         if (btn) btn.classList.toggle('active', _rtMaxMarkerEnabled);
+        rtGeneratePlot();
+    };
+
+    // Storm-relative frame: when on, the backend subtracts the storm-motion
+    // vector from U/V before deriving WIND_SPEED / TANGENTIAL / RADIAL / U / V
+    // and the barbs. Default off (earth/ground-relative).
+    var _rtStormRelative = false;
+
+    window.rtToggleStormRelative = function () {
+        var btn = document.getElementById('rt-sr-btn');
+        _rtStormRelative = !_rtStormRelative;
+        if (btn) btn.classList.toggle('active', _rtStormRelative);
         rtGeneratePlot();
     };
 
