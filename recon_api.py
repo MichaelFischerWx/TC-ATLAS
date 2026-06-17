@@ -68,9 +68,14 @@ _blob_cache: dict = {}
 _BLOB_TTL = 50
 
 # Directory-listing freshness for the recon endpoint. The shared archive default
-# is 1 h (immutable data); recon must re-list often so a live flight's new
-# bulletins are discovered within ~a minute instead of being hidden for an hour.
-_RECON_DIR_TTL = 45
+# is 1 h (immutable data). We don't need to re-list NHC's big bulletin directories
+# (1600+ files) every poll: the low-latency live feed (_fetch_latest_hdob, pulled
+# on EVERY build) already keeps the HDOB track tip fresh, so the directory listing
+# only supplies the cumulative history + VDM/dropsonde discovery and can lag a few
+# minutes. Re-listing every poll was the dominant rebuild cost (~6-8 s); 4 min
+# keeps it cheap while HDOB stays current. (Was 45 s — shorter than _BLOB_TTL,
+# so every rebuild paid the re-list.)
+_RECON_DIR_TTL = 240
 
 # Replay wall-clock anchors: (atcf_id, replay_anchor, speed) -> wall_start_epoch.
 _replay_anchors: dict = {}
