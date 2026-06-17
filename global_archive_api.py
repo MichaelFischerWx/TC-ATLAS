@@ -5909,10 +5909,13 @@ def _parse_vdm_text(text: str, year: int) -> dict | None:
     vdm["lat"] = lat
     vdm["lon"] = lon
 
-    # C. Flight level: "700 mb 2454 m" or "700 MB 2343 M"
+    # C. Flight level + geopotential height of the fix: "700 mb 2454 m" /
+    # "925 MB 719 M". The height is the "fix height" shown on the VDM.
     c = line_map.get("C", "")
     cm = re.search(r'(\d+)\s*(?:mb|MB)', c)
     vdm["flight_level_mb"] = int(cm.group(1)) if cm else None
+    chm = re.search(r'(?:mb|MB)\s+(\d+)\s*[mM]\b', c)
+    vdm["fix_height_m"] = int(chm.group(1)) if chm else None
 
     # Format-agnostic parsing: the VDM format changed over time.
     # Old (pre-2020): D=max FL wind (kt), H=min SLP (mb), P=aircraft
@@ -5930,9 +5933,12 @@ def _parse_vdm_text(text: str, year: int) -> dict | None:
         if not val:
             continue
 
-        # SLP: standalone pressure value "927 mb" or "943 mb" (not flight level)
+        # SLP: pressure value, possibly with an "EXTRAP"/"MSLP"/"SLP" prefix
+        # ("D. EXTRAP 1004 mb" in modern VDMs) — NOT the flight level (key C).
+        # Was anchored to a bare "927 mb", which silently missed the prefixed
+        # modern form, leaving center pressure blank.
         if vdm["min_slp_hpa"] is None and key != "C":
-            slp_m = re.match(r'^\s*(\d+)\s*(?:mb|MB|hPa)\s*$', val)
+            slp_m = re.search(r'(\d+)\s*(?:mb|MB|hPa)\b', val)
             if slp_m:
                 p = int(slp_m.group(1))
                 if 850 <= p <= 1050:  # valid SLP range

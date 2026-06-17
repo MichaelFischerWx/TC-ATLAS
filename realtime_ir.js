@@ -21591,11 +21591,18 @@
                 (x.ob_number != null ? ' OB ' + x.ob_number : '') + '</div>' +
                 _rtReconRow('Time', _rtFmtTime(x.t)) +
                 _rtReconRow('Center', _rtFmtLatLon(x.lat, x.lon)) +
-                _rtReconRow('Min SLP', x.min_slp_hpa != null ? x.min_slp_hpa + ' mb' : null) +
-                _rtReconRow('Max FL wind', x.max_fl_wind_kt != null ? x.max_fl_wind_kt + ' kt' : null) +
+                _rtReconRow('Center pres', x.min_slp_hpa != null ? x.min_slp_hpa + ' mb' : null) +
+                _rtReconRow('Fix level', (x.flight_level_mb != null ? x.flight_level_mb + ' mb' : '') +
+                    (x.fix_height_m != null ? ' · ' + x.fix_height_m + ' m' : '') || null) +
+                _rtReconRow('Max FL wind', x.max_fl_wind_kt != null ?
+                    x.max_fl_wind_kt + ' kt' +
+                    (x.max_fl_wind_bearing != null && x.max_fl_wind_range_nm != null ?
+                        ' @ ' + x.max_fl_wind_bearing + '° / ' + x.max_fl_wind_range_nm + ' nm' : '') : null) +
                 _rtReconRow('Max SFMR', x.max_sfmr_kt != null ? x.max_sfmr_kt + ' kt' : null) +
-                _rtReconRow('Eye', (x.eye_shape || '') +
-                    (x.eye_diam_nm != null ? ' ' + x.eye_diam_nm + ' nm' : '')) +
+                _rtReconRow('Eye temp', x.eye_temp_c != null ? x.eye_temp_c + ' °C' : null) +
+                _rtReconRow('Eyewall temp', x.eyewall_temp_c != null ? x.eyewall_temp_c + ' °C' : null) +
+                _rtReconRow('Eye', ((x.eye_shape || '') +
+                    (x.eye_diam_nm != null ? ' ' + x.eye_diam_nm + ' nm' : '')).trim() || null) +
                 '</div>';
             vm.bindPopup(vh, { maxWidth: 270, className: 'rt-recon-popup' });
             vm.addTo(map); out.push(vm);
@@ -21831,6 +21838,41 @@
         return _reconGibsTimeStr || _reconGibsSlot(90);
     }
 
+    // Visible / GeoColor lag IR on GIBS, and during the catch-up window GIBS
+    // serves a 200 but ~tiny "no-data" tile — so the IR-derived time is too
+    // recent (404/empty) and the tile retry stops on an empty tile, leaving the
+    // layer blank. Probe the actual VIS/GeoColor layer for the latest slot whose
+    // tile is real (content-length above the empty-tile size), per layer, cached.
+    var _reconVisTime = {}, _reconVisProbing = {};
+    function _reconProbeGibsVis(layerName) {
+        if (!layerName || _reconVisProbing[layerName]) return;
+        var c = _reconVisTime[layerName];
+        if (c && (Date.now() - c.at) < 10 * 60 * 1000) return;
+        _reconVisProbing[layerName] = true;
+        var steps = [0, 15, 30, 45, 60, 75, 90, 120, 150, 180, 240], i = 0;
+        function tryNext() {
+            if (i >= steps.length) { _reconVisProbing[layerName] = false; return; }
+            var ts = _reconGibsSlot(steps[i]);
+            // z3 tile over the lit GOES-East disk (W Atlantic / tropics), Level7
+            var url = GIBS_BASE + '/' + layerName + '/default/' + ts +
+                      '/GoogleMapsCompatible_Level7/3/3/2.png';
+            fetch(url, { method: 'HEAD', cache: 'no-store' }).then(function (r) {
+                var len = parseInt(r.headers.get('content-length') || '0', 10);
+                if (r.ok && len > 1500) {   // skip 404 (~196 b) + empty (~693 b) tiles
+                    _reconVisTime[layerName] = { ts: ts, at: Date.now() };
+                    _reconVisProbing[layerName] = false;
+                    try { window.dispatchEvent(new CustomEvent('recon-gibs-ready')); } catch (e) {}
+                } else { i++; tryNext(); }
+            }).catch(function () { i++; tryNext(); });
+        }
+        tryNext();
+    }
+    function _reconVisGibsTime(layerName) {
+        _reconProbeGibsVis(layerName);
+        var c = _reconVisTime[layerName];
+        return c ? c.ts : _reconLatestGibsTime();  // fall back to IR time until probe resolves
+    }
+
     // Expose a small map-parametrized recon rendering kit so the Recon tab's
     // side-by-side view (realtime_tdr.js, a separate IIFE) reuses the exact
     // barb/marker/popup rendering instead of duplicating it. The class + helpers
@@ -21848,7 +21890,12 @@
         // stay visible when zoomed into a flight pattern instead of vanishing.
         // Tag that changes when the probed latest-available GIBS time changes,
         // so the recon map knows to rebuild its satellite layer.
-        gibsTimeTag: function () { return _reconGibsTimeStr || 'pending'; },
+        gibsTimeTag: function () {
+            // Include the probed VIS/GeoColor times so the recon map rebuilds the
+            // satellite layer when a vis-specific probe resolves a different slot.
+            var vt = Object.keys(_reconVisTime).map(function (k) { return _reconVisTime[k].ts; }).join(',');
+            return (_reconGibsTimeStr || 'pending') + '|' + vt;
+        },
         gibsProductLayer: function (product, lonHint, opacity) {
             var sat = _reconPickGibsSat(lonHint);
             var t = _reconLatestGibsTime();
@@ -21859,11 +21906,11 @@
                 try { gl.options.maxNativeZoom = GIBS_MAX_ZOOM; } catch (e) {}
             } else if (product === 'geocolor') {
                 var gc = GIBS_GEOCOLOR_LAYERS[sat];
-                gl = gc ? createGIBSLayerVis(gc, t, op, null)            // GOES native GeoColor
-                        : createGIBSLayerVis(GIBS_VIS_LAYERS[sat], t, op, GIBS_IR_LAYERS[sat]); // Himawari hybrid
+                gl = gc ? createGIBSLayerVis(gc, _reconVisGibsTime(gc), op, null)  // GOES native GeoColor (own latency)
+                        : createGIBSLayerVis(GIBS_VIS_LAYERS[sat], _reconVisGibsTime(GIBS_VIS_LAYERS[sat]), op, GIBS_IR_LAYERS[sat]); // Himawari hybrid
             } else if (product === 'vis') {
-                gl = createGIBSLayerVis(GIBS_VIS_LAYERS[sat] || GIBS_VIS_LAYERS['GOES-East'],
-                                        t, op, GIBS_IR_LAYERS[sat]);     // IR fallback at night
+                var vlayer = GIBS_VIS_LAYERS[sat] || GIBS_VIS_LAYERS['GOES-East'];
+                gl = createGIBSLayerVis(vlayer, _reconVisGibsTime(vlayer), op, GIBS_IR_LAYERS[sat]);  // IR fallback at night
             } else { // 'ir'
                 gl = createGIBSLayer(GIBS_IR_LAYERS[sat] || GIBS_IR_LAYERS['GOES-East'], t, op);
                 try { gl.options.maxNativeZoom = GIBS_MAX_ZOOM; } catch (e) {}
