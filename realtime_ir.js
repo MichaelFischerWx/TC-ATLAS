@@ -21789,8 +21789,15 @@
         gibsIRLayer: function (lonHint, opacity) {
             var sat = _reconPickGibsSat(lonHint);
             var layer = GIBS_IR_LAYERS[sat] || GIBS_IR_LAYERS['GOES-East'];
-            return createGIBSLayer(layer, _reconLatestGibsTime(),
-                                   opacity == null ? 0.92 : opacity);
+            var gl = createGIBSLayer(layer, _reconLatestGibsTime(),
+                                     opacity == null ? 0.92 : opacity);
+            // GIBS geostationary Clean IR is published only to native zoom 6
+            // (~2 km — the sensor resolution ceiling). createGIBSLayer caps
+            // maxZoom at 6, so the layer VANISHES past z6 on a deeper map. Let
+            // the z6 tiles upscale instead, so the satellite stays visible (just
+            // softer) when zoomed into a flight pattern.
+            try { gl.options.maxNativeZoom = GIBS_MAX_ZOOM; gl.options.maxZoom = 12; } catch (e) {}
+            return gl;
         },
         gibsSatFor: _reconPickGibsSat,
         // Barb base-dot color variable (shared across both surfaces)
