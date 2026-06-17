@@ -43,16 +43,34 @@ router = APIRouter(tags=["recon"])
 
 NHC_RECON_BASE = "https://www.nhc.noaa.gov/archive/recon"
 
+# Low-latency "newest bulletin" feeds. The archive directory above lags the live
+# data by ~1-2 bulletin cycles (~20 min) during an active flight; these tgftp
+# collectives hold the single most-recent HDOB per WMO header and close that gap.
+# URNT15 = Atlantic HDOB, URPN15 = E-Pacific HDOB (KNHC issues recon). We try
+# both issuing centers and keep whatever parses.
+_LATEST_HDOB_FEEDS = {
+    "AL": ["https://tgftp.nws.noaa.gov/data/raw/ur/urnt15.knhc..txt",
+           "https://tgftp.nws.noaa.gov/data/raw/ur/urnt15.kwbc..txt"],
+    "EP": ["https://tgftp.nws.noaa.gov/data/raw/ur/urpn15.knhc..txt",
+           "https://tgftp.nws.noaa.gov/data/raw/ur/urpn15.kwbc..txt"],
+}
+
 # Per-bulletin decoded cache (filename URL -> decoded payload). Bulletins never
 # change once posted, so this is unbounded-safe within a season but we cap it.
 _bulletin_cache: dict = {}
 _BULLETIN_CACHE_MAX = 4000
 
-# Assembled-blob cache (cache_key -> (blob, ts)). Short TTL: a flight posts a
-# new HDOB bulletin ~every 10 min, so 120 s keeps the overlay fresh-enough while
-# collapsing rapid client polls onto one assembly.
+# Assembled-blob cache (cache_key -> (blob, ts)). TTL sits just under the 60 s
+# client poll so each poll returns a freshly-assembled blob (a rebuild only
+# re-fetches the 1-2 newly-posted bulletins thanks to the per-bulletin cache, so
+# it's cheap) while still collapsing bursts of concurrent polls onto one build.
 _blob_cache: dict = {}
-_BLOB_TTL = 120
+_BLOB_TTL = 50
+
+# Directory-listing freshness for the recon endpoint. The shared archive default
+# is 1 h (immutable data); recon must re-list often so a live flight's new
+# bulletins are discovered within ~a minute instead of being hidden for an hour.
+_RECON_DIR_TTL = 45
 
 # Replay wall-clock anchors: (atcf_id, replay_anchor, speed) -> wall_start_epoch.
 _replay_anchors: dict = {}
@@ -159,12 +177,29 @@ def _parse_hdob_line(fields: list, base_date: datetime):
     day_off, hh_wrap = divmod(hh, 24)
     obs_dt = base_date.replace(hour=hh_wrap, minute=mm, second=ss) + timedelta(days=day_off)
 
+    # Field 5 is the extrapolated SURFACE pressure (low-level flight) OR the
+    # geopotential-height D-value (higher flight). Same decode as the global
+    # archive HDOB parser (global_archive_api.py): >=5000 ⇒ negative D-value;
+    # <1000 ⇒ 1000+x/10 mb; else x/10 mb. The extrapolated SLP is the headline
+    # surface-pressure number from an eye penetration.
+    _xxxx = _safe_int(fields[5])
+    extrap_sfc_p_mb = dval_m = None
+    if _xxxx is not None:
+        if _xxxx >= 5000:
+            dval_m = -(_xxxx - 5000)
+        elif _xxxx < 1000:
+            extrap_sfc_p_mb = round(1000 + _xxxx / 10.0, 1)
+        else:
+            extrap_sfc_p_mb = round(_xxxx / 10.0, 1)
+
     return {
         "t": obs_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "lat": lat, "lon": lon,
         "fl_pres_mb": _safe_div10(fields[3]),
         "geo_alt_m": _safe_int(fields[4]),
         "sfc_p_or_dval": _safe_int(fields[5]),
+        "extrap_sfc_p_mb": extrap_sfc_p_mb,
+        "dval_m": dval_m,
         "temp_c": _safe_div10(fields[6]),
         "dewpt_c": _safe_div10(fields[7]),
         "wdir": wdir,
@@ -208,11 +243,16 @@ def _parse_hdob_bulletin(text: str, fname_dt: datetime):
                                              tzinfo=timezone.utc)
                     except ValueError:
                         pass
-            # storm label = token immediately before HDOB
+            # storm label = token immediately before HDOB. A valid label always
+            # contains a letter (ONE / INVEST / SURVEY / AL01 / 90L); reject a
+            # pure-digit token (a mission/serial number that occasionally lands
+            # in that slot) so it can't masquerade as the system name.
             if "HDOB" in parts:
                 hi = parts.index("HDOB")
                 if hi >= 1:
-                    storm = parts[hi - 1]
+                    cand = parts[hi - 1]
+                    if re.search(r"[A-Z]", cand):
+                        storm = cand
             in_data = True
             continue
         if in_data:
@@ -309,10 +349,16 @@ def _replay_now(atcf_id: str, replay: str, speed: float):
 
 def _list_recent_files(dir_url: str, since: datetime, until: datetime) -> list:
     """Return absolute URLs for *.txt bulletins whose filename timestamp is in
-    [since, until]. Filenames: <PREFIX>-<SRC>.YYYYMMDDHHMM.txt."""
+    [since, until]. Filenames: <PREFIX>-<SRC>.YYYYMMDDHHMM.txt.
+
+    Uses a SHORT directory-listing cache (`_RECON_DIR_TTL`) so newly-posted
+    bulletins during a live flight become visible within ~a minute — the shared
+    archive default is 1 h, which would freeze the listing and make the display
+    fall behind the aircraft."""
     from tc_radar_api import _hrd_parse_directory
     try:
-        names = _hrd_parse_directory(dir_url if dir_url.endswith("/") else dir_url + "/")
+        names = _hrd_parse_directory(dir_url if dir_url.endswith("/") else dir_url + "/",
+                                     max_age=_RECON_DIR_TTL)
     except Exception as e:
         logger.warning("recon dir list failed %s: %s", dir_url, e)
         return []
@@ -343,6 +389,52 @@ def _fetch_text(url: str):
         return None
 
 
+def _fetch_texts(urls: list) -> dict:
+    """Fetch many bulletin URLs CONCURRENTLY -> {url: text|None}. The cold-build
+    bottleneck was fetching ~50+ files from NHC sequentially (~10-15 s); in
+    parallel it's a couple seconds. Per-bulletin cache means warm builds only
+    fetch the 1-2 newly-posted files."""
+    if not urls:
+        return {}
+    out = {}
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=12) as ex:
+            for u, txt in zip(urls, ex.map(_fetch_text, urls)):
+                out[u] = txt
+    except Exception:
+        for u in urls:           # fallback: sequential
+            out[u] = _fetch_text(u)
+    return out
+
+
+def _fetch_latest_hdob(atcf_id: str, now: datetime) -> list:
+    """Fetch the low-latency 'newest HDOB' feed(s) for this storm's basin and
+    return parsed bulletins (list, possibly empty). Closes the ~20-min archive
+    lag with the freshest leg. NOT cached on URL (the file's *contents* change in
+    place each issuance, unlike the timestamped archive files)."""
+    basin = "EP" if atcf_id[:2].upper() in ("EP", "CP") else "AL"
+    urls = _LATEST_HDOB_FEEDS.get(basin, [])
+    out = []
+    seen = set()
+    for url, txt in _fetch_texts(urls).items():
+        if not txt:
+            continue
+        try:
+            parsed = _parse_hdob_bulletin(txt, now)
+        except Exception:
+            parsed = None
+        if not parsed or not parsed.get("obs"):
+            continue
+        # Two issuing centers can mirror the same bulletin — dedup by (tail, last ob time).
+        key = (parsed.get("tail"), parsed["obs"][-1].get("t"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(parsed)
+    return out
+
+
 def _near_track(lat, lon, track_pts, tol_deg=4.0) -> bool:
     """True if (lat,lon) is within tol_deg of any aircraft track point — used to
     attribute a season-wide TEMP DROP bulletin to this storm when it carries no
@@ -359,7 +451,7 @@ def _near_track(lat, lon, track_pts, tol_deg=4.0) -> bool:
 
 def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
                 storm_lat: float = None, storm_lon: float = None,
-                mission_tail: str = "") -> dict:
+                mission_tail: str = "", live_feed: bool = True) -> dict:
     """Assemble the cumulative recon blob for one storm as of sim_now. When
     mission_tail is set, run in MISSION mode: return only that aircraft's full
     track (+ sondes/VDM near it), bypassing storm attribution — this is how an
@@ -372,11 +464,13 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
     aircraft: dict = {}
     aircraft_names: dict = {}   # tail -> {system labels from the bulletins}
     hdob_dir = f"{NHC_RECON_BASE}/{year}/{dirs['hdob']}/"
-    for url in _list_recent_files(hdob_dir, since, sim_now):
+    hdob_urls = _list_recent_files(hdob_dir, since, sim_now)
+    _hdob_fetched = _fetch_texts([u for u in hdob_urls if u not in _bulletin_cache])
+    for url in hdob_urls:
         if url in _bulletin_cache:
             parsed = _bulletin_cache[url]
         else:
-            txt = _fetch_text(url)
+            txt = _hdob_fetched.get(url)
             m = re.search(r"\.(\d{12})\.txt$", url)
             fdt = datetime.strptime(m.group(1), "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
             parsed = _parse_hdob_bulletin(txt, fdt) if txt else None
@@ -389,6 +483,18 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
             aircraft_names.setdefault(parsed["tail"], set()).add(parsed["storm"])
         for ob in parsed["obs"]:
             tk[ob["t"]] = ob  # dedup by ISO time within a tail
+
+    # Merge the low-latency "newest bulletin" feed so the track reaches the
+    # aircraft's latest leg instead of trailing the slower archive directory by
+    # ~20 min. Same accumulation path (dedup by ISO time). Skipped in replay,
+    # where the live feed would inject obs from after the simulated clock.
+    if live_feed:
+        for parsed in _fetch_latest_hdob(atcf_id, sim_now):
+            tk = aircraft.setdefault(parsed["tail"], {})
+            if parsed.get("storm"):
+                aircraft_names.setdefault(parsed["tail"], set()).add(parsed["storm"])
+            for ob in parsed["obs"]:
+                tk[ob["t"]] = ob
 
     # In replay, hide obs the simulated clock hasn't "reached" yet.
     sim_iso = sim_now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -469,10 +575,12 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         vdm_dir = f"{NHC_RECON_BASE}/{year}/{dirs['vdm']}/"
         sd = since.strftime("%Y-%m-%d")
         ed = sim_now.strftime("%Y-%m-%d")
-        for url in _list_recent_files(vdm_dir, since, sim_now):
+        _vdm_urls = _list_recent_files(vdm_dir, since, sim_now)
+        _vdm_fetched = _fetch_texts([u for u in _vdm_urls if ("vdm::" + u) not in _bulletin_cache])
+        for url in _vdm_urls:
             txt = _bulletin_cache.get("vdm::" + url)
             if txt is None:
-                raw = _fetch_text(url)
+                raw = _vdm_fetched.get(url)
                 parsed = _parse_vdm_text(raw, year) if raw else None
                 if parsed is not None:
                     parsed["time"] = _resolve_vdm_time(parsed, year, sd, ed)
@@ -520,10 +628,12 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
     since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         drop_dir = f"{NHC_RECON_BASE}/{year}/{dirs['drop']}/"
-        for url in _list_recent_files(drop_dir, since, sim_now):
+        _drop_urls = _list_recent_files(drop_dir, since, sim_now)
+        _drop_fetched = _fetch_texts([u for u in _drop_urls if ("drop::" + u) not in _bulletin_cache])
+        for url in _drop_urls:
             cached = _bulletin_cache.get("drop::" + url)
             if cached is None:
-                txt = _fetch_text(url)
+                txt = _drop_fetched.get(url)
                 m = re.search(r"\.(\d{12})\.txt$", url)
                 fdt = datetime.strptime(m.group(1), "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
                 cached = _parse_tempdrop_bulletin(txt, fdt) if txt else []
@@ -597,7 +707,7 @@ def recon_realtime(
     else:
         sim_now = datetime.now(timezone.utc)
         cache_key = f"{atcf_id}:{hours}:{name}:{lat}:{lon}:{tail}:live"
-        cc = "public, max-age=60, s-maxage=120, stale-while-revalidate=120"
+        cc = "public, max-age=45, s-maxage=45, stale-while-revalidate=60"
 
     now = time.time()
     hit = _blob_cache.get(cache_key)
@@ -605,7 +715,7 @@ def recon_realtime(
         return JSONResponse(hit[0], headers={"Cache-Control": cc})
 
     blob = _build_blob(atcf_id, hours, sim_now, name=name, storm_lat=lat, storm_lon=lon,
-                       mission_tail=tail)
+                       mission_tail=tail, live_feed=not replay)
     _blob_cache[cache_key] = (blob, now)
     if len(_blob_cache) > 200:
         _blob_cache.pop(next(iter(_blob_cache)))
@@ -621,29 +731,39 @@ def recon_active_missions(hours: int = Query(6, ge=1, le=24)):
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=hours)
     missions: dict = {}
+
+    def _merge_mission(parsed, basin):
+        if not parsed or not parsed.get("obs"):
+            return
+        tail = parsed["tail"]
+        mm = missions.setdefault(tail, {
+            "tail": tail, "labels": set(), "n_obs": 0, "basin": basin,
+            "last_t": "", "lat": None, "lon": None})
+        if parsed.get("storm"):
+            mm["labels"].add(parsed["storm"])
+        mm["n_obs"] += len(parsed["obs"])
+        last = parsed["obs"][-1]
+        if last["t"] > mm["last_t"]:
+            mm["last_t"], mm["lat"], mm["lon"] = last["t"], last["lat"], last["lon"]
+
     for basin, hdob in (("AL", "AHONT1"), ("EP", "AHOPN1")):
         dir_url = f"{NHC_RECON_BASE}/{now.year}/{hdob}/"
-        for url in _list_recent_files(dir_url, since, now):
+        _mis_urls = _list_recent_files(dir_url, since, now)
+        _mis_fetched = _fetch_texts([u for u in _mis_urls if u not in _bulletin_cache])
+        for url in _mis_urls:
             parsed = _bulletin_cache.get(url)
             if parsed is None:
-                txt = _fetch_text(url)
+                txt = _mis_fetched.get(url)
                 m = re.search(r"\.(\d{12})\.txt$", url)
                 fdt = datetime.strptime(m.group(1), "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
                 parsed = _parse_hdob_bulletin(txt, fdt) if txt else None
                 if len(_bulletin_cache) < _BULLETIN_CACHE_MAX:
                     _bulletin_cache[url] = parsed
-            if not parsed or not parsed.get("obs"):
-                continue
-            tail = parsed["tail"]
-            mm = missions.setdefault(tail, {
-                "tail": tail, "labels": set(), "n_obs": 0, "basin": basin,
-                "last_t": "", "lat": None, "lon": None})
-            if parsed.get("storm"):
-                mm["labels"].add(parsed["storm"])
-            mm["n_obs"] += len(parsed["obs"])
-            last = parsed["obs"][-1]
-            if last["t"] > mm["last_t"]:
-                mm["last_t"], mm["lat"], mm["lon"] = last["t"], last["lat"], last["lon"]
+            _merge_mission(parsed, basin)
+        # Pull the low-latency newest bulletin so a just-launched flight (or the
+        # freshest leg) shows up well before the archive directory catches up.
+        for parsed in _fetch_latest_hdob("AL01" if basin == "AL" else "EP01", now):
+            _merge_mission(parsed, basin)
     out = [{
         "tail": m["tail"],
         "label": (sorted(m["labels"])[0] if m["labels"] else ""),
@@ -654,4 +774,4 @@ def recon_active_missions(hours: int = Query(6, ge=1, le=24)):
     out.sort(key=lambda x: x["last_t"], reverse=True)
     return JSONResponse(
         {"missions": out, "updated_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ")},
-        headers={"Cache-Control": "public, max-age=120, s-maxage=120"})
+        headers={"Cache-Control": "public, max-age=45, s-maxage=45"})

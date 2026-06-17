@@ -6122,12 +6122,18 @@ def _hrd_fetch_text(url: str, timeout: int = 30) -> str:
             return resp.read().decode("utf-8")
 
 
-def _hrd_parse_directory(url: str) -> list[str]:
-    """Fetch an HRD Apache directory listing and return link names (cached)."""
+def _hrd_parse_directory(url: str, max_age: float = _HRD_DIR_CACHE_TTL) -> list[str]:
+    """Fetch an HRD Apache directory listing and return link names (cached).
+
+    `max_age` overrides the cache freshness window. The 1-hour default is right
+    for immutable archive data, but REAL-TIME callers (e.g. the recon endpoint
+    discovering newly-posted bulletins during a live flight) must pass a short
+    value — otherwise a frozen hour-old listing hides every new bulletin and the
+    display falls behind the aircraft."""
     now = time.time()
     if url in _hrd_dir_cache:
         links, ts = _hrd_dir_cache[url]
-        if now - ts < _HRD_DIR_CACHE_TTL:
+        if now - ts < max_age:
             _hrd_dir_cache.move_to_end(url)
             return links
 

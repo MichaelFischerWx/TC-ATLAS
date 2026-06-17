@@ -21278,10 +21278,10 @@
     /** Speed color (shared scale with ASCAT). */
     // Variables the barb BASE dot can encode (the glyph always = wind dir/speed).
     var _RECON_COLORVARS = [
-        { key: 'wspd_kt', label: 'FL Wind',  unit: 'kt', kind: 'wind' },
-        { key: 'sfmr_kt', label: 'SFMR Sfc', unit: 'kt', kind: 'wind' },
-        { key: 'temp_c',  label: 'Temp',     unit: '°C', kind: 'temp' },
-        { key: 'dewpt_c', label: 'Dewpt',    unit: '°C', kind: 'temp' }
+        { key: 'wspd_kt', label: 'FL Wind (30s)', unit: 'kt', kind: 'wind' },
+        { key: 'sfmr_kt', label: 'SFMR Sfc',      unit: 'kt', kind: 'wind' },
+        { key: 'temp_c',  label: 'Temp',          unit: '°C', kind: 'temp' },
+        { key: 'dewpt_c', label: 'Dewpt',         unit: '°C', kind: 'temp' }
     ];
     var _RECON_TEMP_STOPS = [
         [-20, '#3b82f6'], [-10, '#06b6d4'], [0, '#22d3ee'], [10, '#34d399'],
@@ -21523,13 +21523,14 @@
             (tail || 'Aircraft') + ' · flight-level ob</div>' +
             _rtReconRow('Time', _rtFmtTime(ob.t)) +
             _rtReconRow('Position', _rtFmtLatLon(ob.lat, ob.lon)) +
-            _rtReconRow('FL wind', (ob.wdir != null ? ob.wdir + '° / ' : '') +
+            _rtReconRow('FL wind (30s)', (ob.wdir != null ? ob.wdir + '° / ' : '') +
                 (ob.wspd_kt != null ? ob.wspd_kt + ' kt' : '')) +
-            _rtReconRow('Peak FL', ob.peak_fl_kt != null ? ob.peak_fl_kt + ' kt' : null) +
+            _rtReconRow('Peak wind (10s)', ob.peak_fl_kt != null ? ob.peak_fl_kt + ' kt' : null) +
             _rtReconRow('SFMR sfc', ob.sfmr_kt != null ? ob.sfmr_kt + ' kt' : null) +
             _rtReconRow('SFMR rain', ob.sfmr_rain != null ? ob.sfmr_rain + ' mm/hr' : null) +
             _rtReconRow('FL pres', ob.fl_pres_mb != null ? ob.fl_pres_mb + ' mb' : null) +
-            _rtReconRow('Geo alt', ob.geo_alt_m != null ? ob.geo_alt_m + ' m' : null) +
+            _rtReconRow('Extrap SLP', ob.extrap_sfc_p_mb != null ? ob.extrap_sfc_p_mb + ' mb' : null) +
+            _rtReconRow('FL alt', ob.geo_alt_m != null ? (ob.geo_alt_m + ' m · ' + (ob.geo_alt_m / 1000).toFixed(2) + ' km') : null) +
             _rtReconRow('Temp', ob.temp_c != null ? ob.temp_c + ' °C' : null) +
             _rtReconRow('Dewpt', ob.dewpt_c != null ? ob.dewpt_c + ' °C' : null) +
             '</div>';

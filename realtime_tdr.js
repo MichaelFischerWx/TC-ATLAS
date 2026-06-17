@@ -189,19 +189,31 @@
     var _hdobLat = null, _hdobLon = null;  // storm position (HDOB proximity gate, live only)
     var _hdobGibsLayer = null, _hdobGibsKey = null, _hdobSatProduct = 'ir';  // GIBS basemap
     var _hdobMissions = [], _hdobMissionInfo = {}, _hdobMissionTail = null;  // mission-centric fallback
+    var _hdobLoggedLoad = false;  // fire recon_hdob_loaded once per selection, not per poll
     var _hdobAircraftMarkers = [];  // ✈ glyph at each aircraft's latest ob, rotated to heading
     var _hdobStormSatOverlay = null, _hdobStormSatKey = null;  // fresh storm-sector IR (priority over GIBS)
     var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = [], _hdobChartBound = false;
     var _hdobStormOpts = [], _hdobBuiltToggles = false;
     var _hdobVarVis = { wspd_kt: true, sfmr_kt: true, peak_fl_kt: false,
-                        fl_pres_mb: true, temp_c: false, dewpt_c: false, vdm: true };
+                        fl_pres_mb: true, extrap_sfc_p_mb: true, geo_alt_m: true,
+                        temp_c: false, dewpt_c: false, vdm: true };
     var _HDOB_VARS = [
-        { key: 'wspd_kt',    name: 'FL Wind',  unit: 'kt', color: '#0ea5e9', axis: 'y' },
-        { key: 'sfmr_kt',    name: 'SFMR Sfc', unit: 'kt', color: '#fb923c', axis: 'y' },
-        { key: 'peak_fl_kt', name: 'Peak FL',  unit: 'kt', color: '#38bdf8', axis: 'y', dash: 'dot' },
-        { key: 'fl_pres_mb', name: 'FL Pres',  unit: 'mb', color: '#a855f7', axis: 'y2' },
-        { key: 'temp_c',     name: 'Temp',     unit: '°C', color: '#ef4444', axis: 'y3' },
-        { key: 'dewpt_c',    name: 'Dewpt',    unit: '°C', color: '#22c55e', axis: 'y3' }
+        { key: 'wspd_kt',    name: 'FL Wind (30s)', unit: 'kt', color: '#0ea5e9', axis: 'y',
+          tip: '30-second average flight-level wind' },
+        { key: 'sfmr_kt',    name: 'SFMR Sfc', unit: 'kt', color: '#fb923c', axis: 'y',
+          tip: 'SFMR-retrieved surface wind' },
+        { key: 'peak_fl_kt', name: 'Peak Wind (10s)', unit: 'kt', color: '#38bdf8', axis: 'y', dash: 'dot',
+          tip: 'Peak 10-second flight-level wind within the 30s window' },
+        { key: 'fl_pres_mb', name: 'FL Pres',  unit: 'mb', color: '#a855f7', axis: 'y2',
+          tip: 'Flight-level (static) pressure' },
+        { key: 'extrap_sfc_p_mb', name: 'Extrap SLP', unit: 'mb', color: '#e879f9', axis: 'y2', dash: 'dot',
+          tip: 'Extrapolated surface pressure (HDOB) — the surface-pressure estimate, lowest at the eye' },
+        { key: 'geo_alt_m',  name: 'FL Alt',   unit: 'km', color: '#94a3b8', axis: 'y4', scale: 0.001,
+          tip: 'Geopotential height of the flight-level pressure surface (km)' },
+        { key: 'temp_c',     name: 'Temp',     unit: '°C', color: '#ef4444', axis: 'y3',
+          tip: 'Air temperature' },
+        { key: 'dewpt_c',    name: 'Dewpt',    unit: '°C', color: '#22c55e', axis: 'y3',
+          tip: 'Dewpoint temperature' }
     ];
 
     function _hdobX(t) {
@@ -273,6 +285,7 @@
         if (!kit) return;
         kit.setColorVar(key);   // updates shared state + redraws active barb layers
         _hdobBuildBarbLegend();
+        _ga('recon_hdob_barbvar', { var: key });
     };
 
     function _hdobPopulateStorms() {
@@ -367,7 +380,7 @@
 
     window._reconHdobSelectStorm = function (value) {
         if (!value) return;
-        _hdobData = null; _hdobFitDone = false; _hdobReplay = null;
+        _hdobData = null; _hdobFitDone = false; _hdobReplay = null; _hdobLoggedLoad = false;
         if (value.indexOf('mission:') === 0) {
             // Mission mode: a standalone flight, attributed by aircraft tail.
             var tail = value.slice(8);
@@ -399,6 +412,10 @@
         }
         if (_hdobStormSatOverlay && _hdobMap) { try { _hdobMap.removeLayer(_hdobStormSatOverlay); } catch (e) {} _hdobStormSatOverlay = null; _hdobStormSatKey = null; }
         _hdobShowEmpty(false);
+        _ga('recon_hdob_select', {
+            mode: _hdobMissionTail ? 'mission' : 'storm',
+            id: _hdobMissionTail || _hdobAtcf, name: _hdobName
+        });
         _hdobFetch();
         if (_hdobPollTimer) clearInterval(_hdobPollTimer);
         _hdobPollTimer = setInterval(_hdobFetch, 60000);
@@ -493,6 +510,7 @@
 
     window._reconHdobSetSat = function (product) {
         _hdobSatProduct = product;
+        _ga('recon_hdob_sat', { product: product });
         var btns = document.querySelectorAll('.recon-hdob-satgroup .ir-product-btn');
         for (var i = 0; i < btns.length; i++) {
             btns[i].classList.toggle('ir-product-active', btns[i].getAttribute('data-rprod') === product);
@@ -526,6 +544,14 @@
                 var has = ((c.obs || 0) + (c.dropsondes || 0) + (c.vdms || 0)) > 0;
                 _hdobShowEmpty(!has);
                 if (has) _hdobRender();
+                if (has && !_hdobLoggedLoad) {
+                    _hdobLoggedLoad = true;
+                    _ga('recon_hdob_loaded', {
+                        mode: _hdobMissionTail ? 'mission' : 'storm',
+                        id: _hdobMissionTail || _hdobAtcf,
+                        obs: c.obs || 0, sondes: c.dropsondes || 0, vdms: c.vdms || 0
+                    });
+                }
                 if (statusEl) {
                     statusEl.textContent = (c.obs || 0) + ' obs · ' + (c.dropsondes || 0) +
                         ' sondes · ' + (c.vdms || 0) + ' VDM';
@@ -642,6 +668,7 @@
         items.forEach(function (cfg) {
             var b = document.createElement('button');
             b.textContent = cfg.name;
+            if (cfg.tip) b.title = cfg.tip;
             var on = !!_hdobVarVis[cfg.key];
             b.className = on ? 'on' : '';
             if (on) b.style.background = cfg.color;
@@ -656,6 +683,7 @@
 
     function _hdobOnChartClick(d) {
         if (!d || !d.points || !d.points.length || !_hdobMap) return;
+        _ga('recon_hdob_chart_click', {});
         var tms = (new Date(d.points[0].x)).getTime();
         if (isNaN(tms)) return;
         var best = null, bd = Infinity;
@@ -688,14 +716,14 @@
                 for (var i = 0; i < tr.length; i++) {
                     xs.push(_hdobX(tr[i].t));
                     var v = tr[i][cfg.key];
-                    ys.push(v == null ? null : v);
+                    ys.push(v == null ? null : (cfg.scale ? v * cfg.scale : v));
                 }
                 traces.push({
                     x: xs, y: ys, type: 'scatter', mode: 'lines',
                     name: cfg.name, legendgroup: cfg.key, showlegend: firstForVar,
                     line: { color: cfg.color, width: 1.4, dash: cfg.dash || 'solid' },
                     connectgaps: false, yaxis: cfg.axis,
-                    hovertemplate: '%{x|%H:%M:%SZ} · %{y} ' + cfg.unit + ' · ' + ac.tail + '<extra></extra>'
+                    hovertemplate: '%{x|%H:%M:%SZ} · %{y' + (cfg.scale ? ':.2f' : '') + '} ' + cfg.unit + ' · ' + ac.tail + '<extra></extra>'
                 });
                 firstForVar = false;
             });
@@ -748,6 +776,7 @@
                      spikecolor: dark ? '#94a3b8' : '#64748b' },
             yaxis: { title: { text: 'Wind (kt)', font: { size: 11, color: fg } }, domain: [0.56, 1.0], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false },
             yaxis2: { title: { text: 'Pres (mb)', font: { size: 11, color: fg } }, domain: [0.30, 0.52], gridcolor: grid, tickfont: { size: 10, color: fg }, autorange: 'reversed', zeroline: false },
+            yaxis4: { title: { text: 'Alt (km)', font: { size: 11, color: '#94a3b8' } }, overlaying: 'y2', side: 'right', showgrid: false, tickfont: { size: 10, color: '#94a3b8' }, zeroline: false },
             yaxis3: { title: { text: 'Temp (°C)', font: { size: 11, color: fg } }, domain: [0, 0.24], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false }
         };
         window.Plotly.react(el, traces, layout, { responsive: true, displayModeBar: false }).then(function () {
