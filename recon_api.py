@@ -58,8 +58,10 @@ _BLOB_TTL = 120
 _replay_anchors: dict = {}
 _REPLAY_MAX_ADVANCE_S = 24 * 3600  # sim-seconds; replay freezes on full track after this
 _STORM_GATE_DEG = 8.0   # (legacy) generous proximity window
-_STORM_CORE_DEG = 3.0   # true-distance "demonstrably in/at the storm" (covers broad
-                        # invest circulations + the recon pattern; excludes TEXAQS @4.5°)
+_STORM_CORE_DEG = 5.0   # true-distance proximity for a non-conflicting flight (bare
+                        # "INVEST"/unlabeled) to attach to this storm. Generous so an
+                        # inbound ferry leg counts; a research flight is excluded by its
+                        # CONFLICTING label regardless of distance, so this can be wide.
 
 
 # ── basin → archive directory mapping ────────────────────────────────────────
