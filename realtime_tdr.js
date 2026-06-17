@@ -190,6 +190,7 @@
     var _hdobGibsLayer = null, _hdobGibsKey = null, _hdobSatProduct = 'ir';  // GIBS basemap
     var _hdobMissions = [], _hdobMissionInfo = {}, _hdobMissionTail = null;  // mission-centric fallback
     var _hdobAircraftMarkers = [];  // ✈ glyph at each aircraft's latest ob, rotated to heading
+    var _hdobStormSatOverlay = null, _hdobStormSatKey = null;  // fresh storm-sector IR (priority over GIBS)
     var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = [], _hdobChartBound = false;
     var _hdobStormOpts = [], _hdobBuiltToggles = false;
     var _hdobVarVis = { wspd_kt: true, sfmr_kt: true, peak_fl_kt: false,
@@ -396,6 +397,7 @@
             for (var am = 0; am < _hdobAircraftMarkers.length; am++) { try { _hdobMap.removeLayer(_hdobAircraftMarkers[am]); } catch (e) {} }
             _hdobAircraftMarkers = [];
         }
+        if (_hdobStormSatOverlay && _hdobMap) { try { _hdobMap.removeLayer(_hdobStormSatOverlay); } catch (e) {} _hdobStormSatOverlay = null; _hdobStormSatKey = null; }
         _hdobShowEmpty(false);
         _hdobFetch();
         if (_hdobPollTimer) clearInterval(_hdobPollTimer);
@@ -414,7 +416,7 @@
         base.setZIndex(1); base.addTo(_hdobMap);
         var labels = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png',
             { subdomains: 'abcd', maxZoom: 12 });
-        labels.setZIndex(3); labels.addTo(_hdobMap);
+        labels.setZIndex(5); labels.addTo(_hdobMap);  // above GIBS(2) + storm-sector IR(3)
         try {
             if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
                 window._hdobMap = _hdobMap;  // localhost debug handle
@@ -445,6 +447,42 @@
         _hdobGibsKey = key;
     }
 
+    /** Overlay TC-ATLAS's own prewarmed storm-sector IR (fresh — minutes old,
+     *  vs GIBS's hours-laggy NRT) on top of GIBS for a TRACKED storm with the IR
+     *  product. Takes priority near the storm and fills in when GIBS is blank.
+     *  Removed for missions / non-IR products / storms with no frames. */
+    function _hdobSetStormSat(atcf) {
+        var kit = window._ReconKit, map = _hdobMap;
+        if (!map || !kit) return;
+        function drop() {
+            if (_hdobStormSatOverlay) { try { map.removeLayer(_hdobStormSatOverlay); } catch (e) {} _hdobStormSatOverlay = null; _hdobStormSatKey = null; }
+        }
+        if (_hdobMissionTail || _hdobSatProduct !== 'ir' || !atcf) { drop(); return; }
+        var base = kit.apiBase() + '/ir-monitor/storm/' + encodeURIComponent(atcf);
+        var q = '?lookback_hours=6&radius_deg=5&interval_min=15';
+        fetch(base + '/ir-frames-meta' + q, { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (meta) {
+                if (!meta || !meta.frames || !meta.frames.length) { drop(); return; }  // no frames → GIBS only
+                if (_hdobMissionTail || _hdobSatProduct !== 'ir') { drop(); return; }   // changed mid-fetch
+                var f = meta.frames[meta.frames.length - 1];  // latest
+                var key = atcf + '|' + (f.datetime_utc || f.index);
+                if (_hdobStormSatOverlay && _hdobStormSatKey === key) return;  // latest already shown
+                var fb = f.bounds || meta.bounds;
+                if (!fb) return;
+                var bounds = L.latLngBounds(L.latLng(fb[0][0], fb[0][1]), L.latLng(fb[1][0], fb[1][1]));
+                var idx = (f.index != null) ? f.index : (meta.frames.length - 1);
+                var url = base + '/ir-frame.jpg?frame_index=' + idx + q;
+                var ov = L.imageOverlay(url, bounds, { opacity: 0.7, interactive: false, crossOrigin: true, pane: 'tilePane' });
+                try { ov.setZIndex(3); } catch (e) {}
+                ov.addTo(map);
+                if (_hdobStormSatOverlay) { try { map.removeLayer(_hdobStormSatOverlay); } catch (e) {} }
+                _hdobStormSatOverlay = ov;
+                _hdobStormSatKey = key;
+            })
+            .catch(function () { /* leave GIBS as the backdrop */ });
+    }
+
     function _hdobLonHint() {
         var ac = (_hdobData && _hdobData.aircraft) || [];
         for (var i = 0; i < ac.length; i++) {
@@ -460,6 +498,7 @@
             btns[i].classList.toggle('ir-product-active', btns[i].getAttribute('data-rprod') === product);
         }
         _hdobSetSatellite(_hdobLonHint());
+        _hdobSetStormSat(_hdobMissionTail ? null : _hdobAtcf);  // IR product → storm-sector overlay
     };
 
     function _hdobFetch() {
@@ -528,6 +567,7 @@
             if (trk.length) lonHint = trk[trk.length - 1].lon;
         }
         _hdobSetSatellite(lonHint);
+        _hdobSetStormSat(_hdobMissionTail ? null : _hdobAtcf);  // fresh storm-sector IR over GIBS
         if (!_hdobBarbLayer) { _hdobBarbLayer = new kit.BarbLayer(); _hdobBarbLayer.addTo(map); }
         _hdobBarbLayer.setData(aircraft, latestMs);
         for (var mi = 0; mi < _hdobMarkers.length; mi++) { try { map.removeLayer(_hdobMarkers[mi]); } catch (e) {} }
