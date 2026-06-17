@@ -62,6 +62,7 @@
     var _rtIRAnimTimer = null;
     var _rtIRAnimPlaying = false;
     var _rtIRPlotlyVisible = false;
+    var _rtIROpacity = 0.35;            // IR underlay opacity (slider-driven)
     var _rtIRAllLoaded = false;
     var _rtIRLoadedCount = 0;
     var _rtIRFetching = false;
@@ -93,13 +94,32 @@
             String(now.getHours()).padStart(2, '0') +
             String(now.getMinutes()).padStart(2, '0') +
             String(now.getSeconds()).padStart(2, '0');
-        Plotly.downloadImage(gd, {
-            format: 'png',
-            width: gd.offsetWidth * 2,
-            height: gd.offsetHeight * 2,
-            scale: 2,
-            filename: fname + '_' + ts,
-        });
+        // Temporarily stamp a TC-ATLAS watermark into the bottom-right corner
+        // for the exported image only (the max-value annotation lives at the
+        // bottom-left, so this corner is clear), then restore the live layout.
+        var origAnns = (gd.layout && gd.layout.annotations) ? gd.layout.annotations.slice() : [];
+        var wmAnns = origAnns.concat([{
+            text: 'TC-ATLAS · tcatlas.org',
+            xref: 'paper', yref: 'paper', x: 0.995, y: -0.02,
+            xanchor: 'right', yanchor: 'top', showarrow: false,
+            font: { size: 11, color: '#5b6573', family: 'DM Sans, sans-serif' }
+        }]);
+        // Export at native proportions and 4× pixel density (sharper than the
+        // old 2× layout-doubling, which distorted font/line proportions).
+        var restore = function () {
+            try { Plotly.relayout(gd, { annotations: origAnns }); } catch (e) {}
+        };
+        Promise.resolve(Plotly.relayout(gd, { annotations: wmAnns }))
+            .then(function () {
+                return Plotly.downloadImage(gd, {
+                    format: 'png',
+                    width: gd.offsetWidth,
+                    height: gd.offsetHeight,
+                    scale: 4,
+                    filename: fname + '_' + ts,
+                });
+            })
+            .then(restore, restore);
     };
 
     // Returns an HTML string for a small camera save button.
@@ -163,20 +183,44 @@
             }, 90);
         }
         try { if (typeof gtag === 'function') gtag('event', 'recon_sub_switch', { sub: name }); } catch (e) {}
+        // Reflect the sub-tab in the URL hash so it's shareable/bookmarkable
+        // (e.g. .../realtime_ir.html#recon-tdr). _syncHash('recon') preserves
+        // any "recon-*" suffix, so the main-view sync won't clobber this.
+        try {
+            if (_RECON_SUBS[name]) {
+                var newHash = '#recon-' + name;
+                if ('#' + (window.location.hash || '').replace(/^#/, '') !== newHash) {
+                    history.replaceState(null, '',
+                        window.location.pathname + window.location.search + newHash);
+                }
+            }
+        } catch (e) { /* old browsers — skip */ }
     };
 
+    // Valid Recon sub-tab ids (shared by switchReconSub + activateReconView).
+    var _RECON_SUBS = { missions: 1, hdob: 1, tdr: 1, fl: 1, vdm: 1 };
+
+    // Parse the recon sub-tab from a "#recon-<sub>" hash, or null.
+    function _reconSubFromHash() {
+        try {
+            var h = (window.location.hash || '').replace(/^#/, '');
+            var m = h.match(/^recon-([a-z]+)/);
+            if (m && _RECON_SUBS[m[1]]) return m[1];
+        } catch (e) { /* ignore */ }
+        return null;
+    }
+
     // Entry point fired by switchIRView('recon'): pick the sub-tab to show and
-    // lazy-load its data. Default to the Live Flight side-by-side whenever an
-    // aircraft is actually up (active-recon storm) or a replay override is set,
-    // so landing on Recon during a mission shows the live data — not the
-    // NOAA-only TDR Missions archive. Otherwise keep the last-active tab.
+    // lazy-load its data. A "#recon-<sub>" deep-link wins; otherwise honor the
+    // active sub-tab (defaults to Live Flight in the markup, so landing on
+    // Recon during a mission shows the live data — not the NOAA-only TDR
+    // Missions archive).
     window.activateReconView = function () {
-        // Honor the active sub-tab — which defaults to Live Flight (hdob) in the
-        // markup, so clicking Recon lands on the live side-by-side. If the user
-        // switches to Missions/TDR/etc., that choice is the active tab and sticks
-        // for the rest of the session.
-        var active = document.querySelector('#recon-main .recon-sub-tab.active');
-        var name = active ? active.getAttribute('data-sub') : 'hdob';
+        var name = _reconSubFromHash();
+        if (!name) {
+            var active = document.querySelector('#recon-main .recon-sub-tab.active');
+            name = active ? active.getAttribute('data-sub') : 'hdob';
+        }
         window.switchReconSub(name || 'hdob');
     };
 
@@ -720,6 +764,103 @@
         else { _hdobGrid.enable(); if (btn) btn.classList.add('active'); }
         _ga('recon_hdob_grid', { on: _hdobGrid.isOn() });
     };
+
+    /** Composite the time-series chart + recon map into one watermarked PNG,
+     *  exactly as they're currently shown (flight selection, vars, barb color,
+     *  satellite, grid all reflected since we capture the live DOM). */
+    window._reconHdobExport = function () {
+        var kit = window._ReconKit;
+        var chartEl = document.getElementById('recon-hdob-chart');
+        var mapEl = document.getElementById('recon-hdob-map');
+        if (!kit || !window.Plotly || !chartEl || !mapEl || !_hdobData) return;
+        var btn = document.getElementById('recon-hdob-save');
+        var orig = btn ? btn.textContent : '';
+        if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
+        var scale = 2;
+        var cr = chartEl.getBoundingClientRect();
+        var chartP = window.Plotly.toImage(chartEl, {
+            format: 'png', width: Math.round(cr.width), height: Math.round(cr.height), scale: scale
+        });
+        var mapP = kit.ensureHtml2canvas().then(function () {
+            return window.html2canvas(mapEl, {
+                useCORS: true, allowTaint: false, backgroundColor: null, logging: false, scale: scale
+            });
+        });
+        Promise.all([chartP, mapP]).then(function (res) {
+            return new Promise(function (resolve, reject) {
+                var cimg = new Image();
+                cimg.onload = function () { resolve({ chart: cimg, map: res[1] }); };
+                cimg.onerror = reject;
+                cimg.src = res[0];
+            });
+        }).then(function (o) {
+            _hdobComposite(o.chart, o.map, scale);
+            _ga('recon_hdob_export', { ok: true, id: _hdobMissionTail || _hdobAtcf });
+            if (btn) { btn.textContent = orig; btn.disabled = false; }
+        }).catch(function (err) {
+            console.error('[Recon] composite export failed', err);
+            _ga('recon_hdob_export', { ok: false, msg: String(err && err.message) });
+            alert('Could not save image: ' + (err && err.message ? err.message : err));
+            if (btn) { btn.textContent = orig; btn.disabled = false; }
+        });
+    };
+
+    /** Lay chart (left) + map (right) onto a canvas with a header + TC-ATLAS
+     *  watermark, theme-matched, and trigger the download. Inputs are already
+     *  at `scale`× device pixels. */
+    function _hdobComposite(chartImg, mapCanvas, scale) {
+        var dark = document.documentElement.getAttribute('data-theme') !== 'light';
+        var bg = dark ? '#0b1220' : '#ffffff';
+        var fg = dark ? '#e2e8f0' : '#0f1623';
+        var sub = dark ? '#8b9ec2' : '#64748b';
+        var pad = 14 * scale, gap = 12 * scale, headH = 44 * scale;
+        var cw = chartImg.width, chh = chartImg.height;
+        var mw = mapCanvas.width, mh = mapCanvas.height;
+        var contentH = Math.max(chh, mh);
+        var W = pad + cw + gap + mw + pad;
+        var H = headH + contentH + pad;
+        var cv = document.createElement('canvas');
+        cv.width = W; cv.height = H;
+        var ctx = cv.getContext('2d');
+        ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+        // Header: title + subtitle (storm/flight + generated time).
+        var name = _hdobMissionTail ? (_hdobName || _hdobMissionTail) : (_hdobName || _hdobAtcf || '');
+        var c = (_hdobData && _hdobData.counts) || {};
+        var when = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = fg; ctx.font = 'bold ' + (17 * scale) + 'px sans-serif';
+        ctx.fillText('Live Flight Recon — ' + name, pad, headH * 0.42);
+        ctx.fillStyle = sub; ctx.font = (11 * scale) + 'px sans-serif';
+        ctx.fillText((c.obs || 0) + ' obs · ' + (c.dropsondes || 0) + ' sondes · ' +
+            (c.vdms || 0) + ' VDM   ·   generated ' + when, pad, headH * 0.78);
+        // Panels (top-aligned under the header).
+        ctx.drawImage(chartImg, pad, headH, cw, chh);
+        ctx.drawImage(mapCanvas, pad + cw + gap, headH, mw, mh);
+        // TC-ATLAS watermark pill (bottom-right, over the map).
+        var fontPx = Math.round(13 * scale);
+        ctx.font = 'bold ' + fontPx + 'px sans-serif';
+        ctx.textBaseline = 'bottom';
+        var wm = 'TC-ATLAS', wmW = ctx.measureText(wm).width, wmPad = 7 * scale;
+        var wmX = W - pad - wmW - wmPad, wmY = H - pad - 3 * scale;
+        ctx.fillStyle = 'rgba(10,22,40,0.62)';
+        ctx.fillRect(wmX - wmPad, wmY - (fontPx + 3), wmW + 2 * wmPad, fontPx + 7);
+        ctx.fillStyle = 'rgba(255,255,255,0.95)';
+        ctx.fillText(wm, wmX, wmY);
+        // Attribution bottom-left.
+        ctx.font = (10 * scale) + 'px sans-serif';
+        ctx.fillStyle = sub;
+        ctx.fillText('tcatlas.org', pad, H - pad + 2 * scale);
+        cv.toBlob(function (blob) {
+            if (!blob) { alert('Image export produced no data (CORS taint?)'); return; }
+            var ts = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+            var safe = String(name).replace(/[^0-9A-Za-z]+/g, '_').replace(/^_|_$/g, '') || 'recon';
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'TC-ATLAS_LiveFlight_' + safe + '_' + ts + '.png';
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+        }, 'image/png');
+    }
 
     function _hdobBuildToggles() {
         var box = document.getElementById('recon-hdob-vartoggles');
@@ -1960,7 +2101,7 @@
                 baseLayout.annotations = (baseLayout.annotations || []).concat([maxAnnot]);
             }
             var currentVar = (document.getElementById('rt-var') || {}).value || '';
-            if (rtIsWindVariable(currentVar)) {
+            if (_rtMaxMarkerEnabled && rtIsWindVariable(currentVar)) {
                 var maxMarker = rtBuildMaxMarkerTrace(maxInfo, varInfo.units);
                 if (maxMarker) maxTraces.push(maxMarker);
             }
@@ -2028,6 +2169,8 @@
         var cfadBtn = document.getElementById('rt-cfad-btn'); if (cfadBtn) cfadBtn.disabled = false;
         var tiltBtn = document.getElementById('rt-tilt-btn'); if (tiltBtn) tiltBtn.disabled = false;
         var barbBtn = document.getElementById('rt-barb-btn'); if (barbBtn) barbBtn.disabled = false;
+        var coastBtn = document.getElementById('rt-coast-btn'); if (coastBtn) coastBtn.disabled = false;
+        var maxBtn = document.getElementById('rt-maxmark-btn'); if (maxBtn) maxBtn.disabled = false;
         // Anomaly + Quadrant buttons stay disabled until SHIPS is loaded
         // (they need Vmax / SDDC from SHIPS)
 
@@ -2886,7 +3029,7 @@
             var azMaxAnnot = rtBuildMaxAnnotation(azMaxInfo, varInfo.units, 'R', 'Z', 9);
             if (azMaxAnnot) layout.annotations = (layout.annotations || []).concat([azMaxAnnot]);
             var currentVar = (document.getElementById('rt-var') || {}).value || '';
-            if (rtIsWindVariable(currentVar)) {
+            if (_rtMaxMarkerEnabled && rtIsWindVariable(currentVar)) {
                 var azMaxMarker = rtBuildMaxMarkerTrace(azMaxInfo, varInfo.units);
                 if (azMaxMarker) azMaxTraces.push(azMaxMarker);
             }
@@ -3010,7 +3153,7 @@
             var azMaxAnnot = rtBuildMaxAnnotation(azMaxInfo, varInfo.units, 'R', 'Z', 8);
             if (azMaxAnnot) layout.annotations = (layout.annotations || []).concat([azMaxAnnot]);
             var currentVar = (document.getElementById('rt-var') || {}).value || '';
-            if (rtIsWindVariable(currentVar)) {
+            if (_rtMaxMarkerEnabled && rtIsWindVariable(currentVar)) {
                 var azMaxMarker = rtBuildMaxMarkerTrace(azMaxInfo, varInfo.units);
                 if (azMaxMarker) azMaxTraces.push(azMaxMarker);
             }
@@ -3350,11 +3493,19 @@
             sizex: bk.x_max_km - bk.x_min_km,
             sizey: bk.y_max_km - bk.y_min_km,
             sizing: 'stretch',
-            opacity: 0.35,
+            opacity: _rtIROpacity,
             layer: 'below',
             _rtIRUnderlay: true,
         };
     }
+
+    // Slider handler: update IR underlay opacity live (0–1).
+    window.rtSetIROpacity = function (val) {
+        _rtIROpacity = Math.max(0, Math.min(1, parseFloat(val)));
+        var lbl = document.getElementById('rt-ir-opacity-val');
+        if (lbl) lbl.textContent = Math.round(_rtIROpacity * 100) + '%';
+        if (_rtIRPlotlyVisible) _rtApplyIRUnderlay();
+    };
 
     function _rtApplyIRUnderlay() {
         var irImg = _rtBuildIRPlotlyImage();
@@ -6572,6 +6723,18 @@
         _rtBarbsEnabled = !_rtBarbsEnabled;
         if (btn) btn.classList.toggle('active', _rtBarbsEnabled);
         // Re-generate the plot (barbs are added as Plotly shapes during render)
+        rtGeneratePlot();
+    };
+
+    // Max-value "X" marker: OFF by default — on a wind field it reads like a
+    // center fix and is easily confused with the TC center. The max VALUE is
+    // always shown as a text annotation; this toggle re-adds the glyph.
+    var _rtMaxMarkerEnabled = false;
+
+    window.rtToggleMaxMarker = function () {
+        var btn = document.getElementById('rt-maxmark-btn');
+        _rtMaxMarkerEnabled = !_rtMaxMarkerEnabled;
+        if (btn) btn.classList.toggle('active', _rtMaxMarkerEnabled);
         rtGeneratePlot();
     };
 

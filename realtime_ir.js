@@ -22191,7 +22191,10 @@
                 },
                 isOn: function () { return !!lg; }
             };
-        }
+        },
+        // Lazy-load html2canvas (shared with the global-map PNG export) so the
+        // Recon tab can capture its Leaflet map into a composite figure.
+        ensureHtml2canvas: _ensureHtml2canvas
     };
 
     // ═══════════════════════════════════════════════════════════════
