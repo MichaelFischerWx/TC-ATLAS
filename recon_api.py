@@ -628,7 +628,8 @@ IWG1_BASE = "https://seb.omao.noaa.gov/pub/flight/aamps_ingest/iwg1"
 # H=N42RF=NOAA2.)
 _IWG1_AIRCRAFT = {"H": "NOAA2", "I": "NOAA3", "N": "NOAA9"}
 
-_IWG1_DECIMATE_S = 5      # transport sampling step (s) — 6x finer than 30-s HDOB
+_IWG1_DECIMATE_S = 10     # default bin (s): 10-s vector-mean FL wind, matching ops
+_IWG1_FINE_S = 1          # "1-s" toggle resolution (full-rate, on demand)
 _IWG1_PEAK_WIN_S = 10     # rolling window for a HDOB-style "peak FL wind"
 _IWG1_MIN_FETCH_S = 120   # min seconds between upstream NOAA-AOC polls per flight
 _MS2KT = 1.943844         # IWG1 wind speed is m/s (confirmed vs P-3 cruise TAS)
@@ -729,12 +730,15 @@ def _iwg1_fetch_text(flight: dict) -> str:
     return cache["text"]
 
 
-def _parse_iwg1_text(text: str, sim_now: datetime) -> tuple:
+def _parse_iwg1_text(text: str, sim_now: datetime, res: int = _IWG1_DECIMATE_S) -> tuple:
     """Parse an IWG1 file body into (obs, label).
 
     obs are normalized to the HDOB ob schema (so the whole frontend renders them
-    unchanged), decimated to ~_IWG1_DECIMATE_S with a rolling _IWG1_PEAK_WIN_S
-    peak-wind (mirroring HDOB's peak FL wind) computed from the full 1-s stream.
+    unchanged). The 1-s stream is binned into `res`-second windows; within each
+    bin the flight-level wind (`wspd_kt`/`wdir`) is the VECTOR MEAN of the 1-s
+    winds — so the default res=10 gives the operational 10-s mean wind rather than
+    raw 1-s noise (res=1 = full 1-s, the "1-s" toggle). `peak_fl_kt` stays a
+    rolling _IWG1_PEAK_WIN_S peak over the full 1-s stream (HDOB-style peak wind).
     label is the IWG1 STORMID (an ATCF id like 'AL012026' once the aircraft is
     on-station), used for storm attribution exactly like an HDOB system label."""
     raw = []
@@ -793,6 +797,9 @@ def _parse_iwg1_text(text: str, sim_now: datetime) -> tuple:
             "sst_c": round(sst, 1) if sst is not None else None,
             "qc": None, "src": "iwg1",
             "_ws_kt": ws * _MS2KT if ws is not None else None,
+            # wind components (m/s, meteorological "from") for vector averaging
+            "_u": (-ws * math.sin(math.radians(wd))) if (ws is not None and wd is not None) else None,
+            "_v": (-ws * math.cos(math.radians(wd))) if (ws is not None and wd is not None) else None,
         })
     if not raw:
         return [], label
@@ -812,26 +819,49 @@ def _parse_iwg1_text(text: str, sim_now: datetime) -> tuple:
                 peak = w
         raw[i]["peak_fl_kt"] = round(peak) if peak is not None else None
 
-    # Decimate to ~_IWG1_DECIMATE_S for transport; always keep the freshest tip.
+    # Bin into `res`-second windows. The representative row (the freshest in the
+    # bin) carries position/thermo/peak; its sustained wind is the VECTOR MEAN of
+    # the bin's 1-s winds (res=1 ⇒ one row/bin ⇒ instantaneous 1-s wind).
+    res = max(1, int(res or _IWG1_DECIMATE_S))
     obs = []
-    last_dt = None
+    t0 = raw[0]["_dt"]
+
+    def _flush(rows):
+        if not rows:
+            return
+        rep = rows[-1]
+        us = [x["_u"] for x in rows if x["_u"] is not None]
+        vs = [x["_v"] for x in rows if x["_v"] is not None]
+        if us:
+            mu, mv = sum(us) / len(us), sum(vs) / len(vs)
+            sp = math.hypot(mu, mv)
+            rep["wspd_kt"] = round(sp * _MS2KT)
+            if sp > 0.1:
+                rep["wdir"] = int(round((math.degrees(math.atan2(-mu, -mv)) + 360) % 360))
+        obs.append(rep)
+
+    cur_bin, bin_rows = None, []
     for r in raw:
-        if last_dt is None or (r["_dt"] - last_dt).total_seconds() >= _IWG1_DECIMATE_S:
-            obs.append(r)
-            last_dt = r["_dt"]
-    if obs[-1] is not raw[-1]:
-        obs.append(raw[-1])
+        b = int((r["_dt"] - t0).total_seconds() // res)
+        if cur_bin is None:
+            cur_bin = b
+        if b != cur_bin:
+            _flush(bin_rows)
+            bin_rows = []
+            cur_bin = b
+        bin_rows.append(r)
+    _flush(bin_rows)
     for r in obs:                      # strip internal scratch fields
-        r.pop("_dt", None)
-        r.pop("_ws_kt", None)
+        for k in ("_dt", "_ws_kt", "_u", "_v"):
+            r.pop(k, None)
     return obs, label
 
 
 def _merge_iwg1(aircraft: dict, aircraft_names: dict, aircraft_src: dict,
-                sim_now: datetime) -> None:
+                sim_now: datetime, res: int = _IWG1_DECIMATE_S) -> None:
     """Source NOAA aircraft tracks from the 1-s IWG1 feed (overriding their 30-s
-    HDOB track). USAF aircraft are untouched. Best-effort: any flight that fails
-    to fetch/parse simply leaves the HDOB-derived track in place."""
+    HDOB track), binned to `res`-second mean winds. USAF aircraft are untouched.
+    Best-effort: any flight that fails to fetch/parse leaves its HDOB track."""
     flights = _iwg1_active_flights(sim_now)
     # Drop cached raw text for flights no longer recent (each can be tens of MB).
     live_flids = {f["flid"] for f in flights}
@@ -839,7 +869,7 @@ def _merge_iwg1(aircraft: dict, aircraft_names: dict, aircraft_src: dict,
         _iwg1_cache.pop(stale, None)
     for fl in flights:
         try:
-            obs, label = _parse_iwg1_text(_iwg1_fetch_text(fl), sim_now)
+            obs, label = _parse_iwg1_text(_iwg1_fetch_text(fl), sim_now, res)
         except Exception as e:
             logger.warning("iwg1 parse %s: %s", fl.get("flid"), e)
             continue
@@ -854,7 +884,8 @@ def _merge_iwg1(aircraft: dict, aircraft_names: dict, aircraft_src: dict,
 
 def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
                 storm_lat: float = None, storm_lon: float = None,
-                mission_tail: str = "", live_feed: bool = True) -> dict:
+                mission_tail: str = "", live_feed: bool = True,
+                fl_res: int = _IWG1_DECIMATE_S) -> dict:
     """Assemble the cumulative recon blob for one storm as of sim_now. When
     mission_tail is set, run in MISSION mode: return only that aircraft's full
     track (+ sondes/VDM near it), bypassing storm attribution — this is how an
@@ -905,7 +936,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
     # the IWG1 file is the current sortie, so in replay it would inject obs past
     # the simulated clock.
     if live_feed:
-        _merge_iwg1(aircraft, aircraft_names, aircraft_src, sim_now)
+        _merge_iwg1(aircraft, aircraft_names, aircraft_src, sim_now, fl_res)
 
     # In replay, hide obs the simulated clock hasn't "reached" yet.
     sim_iso = sim_now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1107,12 +1138,16 @@ def recon_realtime(
                                       "(+ nearby sondes/VDM), bypassing storm attribution"),
     replay: str = Query("", description="Replay anchor YYYYMMDDHHMM (dev/testing)"),
     speed: float = Query(60.0, ge=1.0, le=600.0, description="Replay speed multiplier"),
+    fl1s: int = Query(0, description="1 = NOAA flight-level wind at full 1-s res "
+                                     "(default 0 = operational 10-s mean wind)"),
 ):
     """Cumulative real-time recon for a storm (or a single mission via tail=)."""
     atcf_id = atcf_id.upper().strip()
     tail = (tail or "").upper().strip()
     if len(atcf_id) < 8:
         return JSONResponse({"error": "bad atcf_id"}, status_code=400)
+
+    fl_res = _IWG1_FINE_S if fl1s else _IWG1_DECIMATE_S
 
     if replay and not _ALLOW_REPLAY:
         replay = ""  # ignore replay in production → live data only
@@ -1121,11 +1156,11 @@ def recon_realtime(
         sim_now = _replay_now(atcf_id, replay, speed)
         if sim_now is None:
             return JSONResponse({"error": "bad replay anchor"}, status_code=400)
-        cache_key = f"{atcf_id}:{hours}:{name}:{lat}:{lon}:{tail}:replay:{replay}:{speed}:{int(time.time() // 5)}"
+        cache_key = f"{atcf_id}:{hours}:{name}:{lat}:{lon}:{tail}:{fl_res}:replay:{replay}:{speed}:{int(time.time() // 5)}"
         cc = "no-store"
     else:
         sim_now = datetime.now(timezone.utc)
-        cache_key = f"{atcf_id}:{hours}:{name}:{lat}:{lon}:{tail}:live"
+        cache_key = f"{atcf_id}:{hours}:{name}:{lat}:{lon}:{tail}:{fl_res}:live"
         cc = "public, max-age=45, s-maxage=45, stale-while-revalidate=60"
 
     now = time.time()
@@ -1134,7 +1169,7 @@ def recon_realtime(
         return JSONResponse(hit[0], headers={"Cache-Control": cc})
 
     blob = _build_blob(atcf_id, hours, sim_now, name=name, storm_lat=lat, storm_lon=lon,
-                       mission_tail=tail, live_feed=not replay)
+                       mission_tail=tail, live_feed=not replay, fl_res=fl_res)
     _blob_cache[cache_key] = (blob, now)
     if len(_blob_cache) > 200:
         _blob_cache.pop(next(iter(_blob_cache)))
