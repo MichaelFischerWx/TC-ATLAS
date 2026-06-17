@@ -21606,23 +21606,98 @@
         return { plev: plev, t: t, q: q, u: u, v: v, showParcel: false };
     }
 
-    /** Mandatory-level table + surface/MBL footer (Tropical-Tidbits-style). */
+    /** Mandatory-level table + significant-wind table + footer (TT-style). */
     function _reconSkewTTable(sonde) {
-        var mand = ((sonde.profile || {}).mandatory) || [];
-        var rows = mand.map(function (L) {
+        var prof = sonde.profile || {};
+        var mand = prof.mandatory || [], sigW = prof.sig_wind || [];
+        var mrows = mand.map(function (L) {
             var rh = _skewtRH(L.t, L.td);
             return '<tr><td>' + L.p + '</td><td>' + (L.hgt != null ? L.hgt + ' m' : '–') +
                 '</td><td>' + (L.t != null ? L.t.toFixed(1) + '°' : '–') +
                 '</td><td>' + (rh != null ? rh + '%' : '–') +
                 '</td><td>' + (L.wspd != null ? (L.wdir != null ? L.wdir + '° / ' : '') + L.wspd + ' kt' : '–') + '</td></tr>';
         }).join('');
-        return '<table class="recon-skewt-tbl"><thead><tr><th>Level</th><th>Hgt</th><th>T</th><th>RH</th><th>Wind</th></tr></thead><tbody>' +
-            rows + '</tbody></table>' +
-            '<div class="recon-skewt-foot">' +
+        var mandTbl = '<div class="recon-skewt-subhead">Mandatory levels</div>' +
+            '<table class="recon-skewt-tbl"><thead><tr><th>Level</th><th>Hgt</th><th>T</th><th>RH</th><th>Wind</th></tr></thead><tbody>' +
+            mrows + '</tbody></table>';
+        // Significant wind levels (≈ Tropical Tidbits "Table 2").
+        var windTbl = '';
+        if (sigW.length) {
+            var wrows = sigW.map(function (L) {
+                return '<tr><td>' + L.p + ' mb</td><td>' +
+                    (L.wspd != null ? (L.wdir != null ? L.wdir + '° / ' : '') + L.wspd + ' kt' : '–') + '</td></tr>';
+            }).join('');
+            windTbl = '<div class="recon-skewt-subhead">Significant wind levels</div>' +
+                '<table class="recon-skewt-tbl"><thead><tr><th>Level</th><th>Wind</th></tr></thead><tbody>' +
+                wrows + '</tbody></table>';
+        }
+        var allW = mand.concat(sigW).filter(function (L) { return L.wspd != null; });
+        var maxW = allW.length ? allW.reduce(function (a, b) { return b.wspd > a.wspd ? b : a; }) : null;
+        var foot = '<div class="recon-skewt-foot">' +
             (sonde.sfc_wind_kt != null ? '<div>Surface (WL150) wind: ' + (sonde.sfc_dir != null ? sonde.sfc_dir + '° / ' : '') + sonde.sfc_wind_kt + ' kt</div>' : '') +
             (sonde.mbl_wind_kt != null ? '<div>Mean boundary-layer wind: ' + (sonde.mbl_dir != null ? sonde.mbl_dir + '° / ' : '') + sonde.mbl_wind_kt + ' kt</div>' : '') +
+            (maxW ? '<div>Max wind in sounding: ' + (maxW.wdir != null ? maxW.wdir + '° / ' : '') + maxW.wspd + ' kt at ' + maxW.p + ' mb</div>' : '') +
             '</div>';
+        return mandTbl + windTbl + foot;
     }
+
+    /** Wind speed (kt) + direction (°) vs pressure, from the same profile. */
+    function _reconRenderWindProfile(profiles, divId) {
+        if (!window.Plotly || !document.getElementById(divId)) return;
+        var P = [], spd = [], dir = [];
+        for (var i = 0; i < profiles.plev.length; i++) {
+            var u = profiles.u[i], v = profiles.v[i];
+            if (u == null || v == null) continue;
+            P.push(profiles.plev[i]);
+            spd.push(Math.sqrt(u * u + v * v) * 1.94384);
+            dir.push((Math.atan2(-u, -v) * 180 / Math.PI + 360) % 360);
+        }
+        if (P.length < 2) return;
+        var dark = document.documentElement.getAttribute('data-theme') !== 'light';
+        var spdC = dark ? '#60a5fa' : '#1d4ed8', dirC = dark ? '#fbbf24' : '#b45309';
+        var axc = dark ? '#8b9ec2' : '#374151', grid = dark ? 'rgba(255,255,255,0.07)' : 'rgba(15,22,35,0.08)';
+        var traces = [
+            { x: spd, y: P, type: 'scatter', mode: 'lines+markers', name: 'Speed',
+              line: { color: spdC, width: 2 }, marker: { size: 4, color: spdC },
+              hovertemplate: '%{x:.0f} kt @ %{y} hPa<extra></extra>' },
+            { x: dir, y: P, type: 'scatter', mode: 'markers', name: 'Direction', xaxis: 'x2',
+              marker: { color: dirC, size: 6, symbol: 'diamond' },
+              hovertemplate: '%{x:.0f}° @ %{y} hPa<extra></extra>' }
+        ];
+        var layout = {
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            margin: { l: 54, r: 18, t: 40, b: 42 }, showlegend: true,
+            legend: { orientation: 'h', y: 1.14, x: 0, font: { size: 9, color: axc } },
+            xaxis: { title: { text: 'Wind speed (kt)', font: { size: 10, color: spdC } },
+                     color: spdC, gridcolor: grid, zeroline: false, rangemode: 'tozero' },
+            xaxis2: { title: { text: 'Direction (°)', font: { size: 10, color: dirC } },
+                      overlaying: 'x', side: 'top', range: [0, 360], dtick: 90, color: dirC, showgrid: false },
+            yaxis: { title: { text: 'Pressure (hPa)', font: { size: 10, color: axc } },
+                     type: 'log', autorange: 'reversed', color: axc, gridcolor: grid, zeroline: false,
+                     tickvals: [1000, 925, 850, 700, 600, 500, 400, 300] }
+        };
+        window.Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
+    }
+
+    var _reconSkewTProfiles = null;   // profiles for the currently-open sonde (for the view toggle)
+
+    window._reconSkewTView = function (mode) {
+        if (!_reconSkewTProfiles) return;
+        var modal = document.getElementById('recon-skewt-modal');
+        if (modal) {
+            var btns = modal.querySelectorAll('.recon-skewt-toggle button');
+            for (var i = 0; i < btns.length; i++) {
+                btns[i].className = (btns[i].getAttribute('data-skv') === mode) ? 'on' : '';
+            }
+        }
+        setTimeout(function () {
+            try {
+                if (mode === 'wind') _reconRenderWindProfile(_reconSkewTProfiles, 'recon-skewt-plot');
+                else if (typeof renderSkewT === 'function') renderSkewT(_reconSkewTProfiles, 'recon-skewt-plot');
+            } catch (e) {}
+        }, 0);
+        if (typeof _ga === 'function') { try { _ga('recon_skewt_view', { mode: mode }); } catch (e) {} }
+    };
 
     window._reconShowSkewT = function (key) {
         var sonde = _reconSondeByKey[key];
@@ -21631,6 +21706,7 @@
         if (!modal) return;
         var body = modal.querySelector('.recon-skewt-body');
         var profiles = _reconSondeProfiles(sonde);
+        _reconSkewTProfiles = profiles;
         var loc = (sonde.lat != null && sonde.lon != null) ? _rtFmtLatLon(sonde.lat, sonde.lon) : '';
         modal.querySelector('.recon-skewt-title').textContent =
             'Dropsonde · ' + (sonde.tail || '') + (loc ? ' · ' + loc : '') +
@@ -21639,6 +21715,10 @@
             body.innerHTML = '<div style="padding:30px;color:#94a3b8;">No decoded profile available for this dropsonde yet.</div>';
         } else {
             body.innerHTML =
+                '<div class="recon-skewt-toggle">' +
+                '<button class="on" data-skv="skewt" onclick="window._reconSkewTView(\'skewt\')">Skew-T</button>' +
+                '<button data-skv="wind" onclick="window._reconSkewTView(\'wind\')">Wind profile</button>' +
+                '</div>' +
                 '<div class="recon-skewt-plot"><div id="recon-skewt-plot" style="width:100%;height:560px;"></div></div>' +
                 '<div class="recon-skewt-side">' + _reconSkewTTable(sonde) + '</div>';
         }
