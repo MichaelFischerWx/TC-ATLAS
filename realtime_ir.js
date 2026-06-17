@@ -21783,20 +21783,31 @@
         fmtTime: _rtFmtTime,
         fmtLatLon: _rtFmtLatLon,
         apiBase: function () { return API_BASE; },
-        // GIBS IR satellite tile layer for a recon map, satellite auto-picked by
-        // the flight's longitude. Reuses the IR viewer's createGIBSLayer (per-tile
-        // time fallback). Returns an L.GridLayer to add beneath the barb canvas.
-        gibsIRLayer: function (lonHint, opacity) {
+        // GIBS satellite tile layer for a recon map. `product` ∈
+        // ir | geocolor | vis | wv; satellite auto-picked by the flight's
+        // longitude. Reuses the IR viewer's per-tile time-fallback builders.
+        // maxZoom is lifted to 12 so the (Level6/7-native) tiles upscale and
+        // stay visible when zoomed into a flight pattern instead of vanishing.
+        gibsProductLayer: function (product, lonHint, opacity) {
             var sat = _reconPickGibsSat(lonHint);
-            var layer = GIBS_IR_LAYERS[sat] || GIBS_IR_LAYERS['GOES-East'];
-            var gl = createGIBSLayer(layer, _reconLatestGibsTime(),
-                                     opacity == null ? 0.92 : opacity);
-            // GIBS geostationary Clean IR is published only to native zoom 6
-            // (~2 km — the sensor resolution ceiling). createGIBSLayer caps
-            // maxZoom at 6, so the layer VANISHES past z6 on a deeper map. Let
-            // the z6 tiles upscale instead, so the satellite stays visible (just
-            // softer) when zoomed into a flight pattern.
-            try { gl.options.maxNativeZoom = GIBS_MAX_ZOOM; gl.options.maxZoom = 12; } catch (e) {}
+            var t = _reconLatestGibsTime();
+            var op = opacity == null ? 0.92 : opacity;
+            var gl;
+            if (product === 'wv') {
+                gl = createGIBSLayer(GIBS_WV_LAYERS[sat] || GIBS_WV_LAYERS['GOES-East'], t, op);
+                try { gl.options.maxNativeZoom = GIBS_MAX_ZOOM; } catch (e) {}
+            } else if (product === 'geocolor') {
+                var gc = GIBS_GEOCOLOR_LAYERS[sat];
+                gl = gc ? createGIBSLayerVis(gc, t, op, null)            // GOES native GeoColor
+                        : createGIBSLayerVis(GIBS_VIS_LAYERS[sat], t, op, GIBS_IR_LAYERS[sat]); // Himawari hybrid
+            } else if (product === 'vis') {
+                gl = createGIBSLayerVis(GIBS_VIS_LAYERS[sat] || GIBS_VIS_LAYERS['GOES-East'],
+                                        t, op, GIBS_IR_LAYERS[sat]);     // IR fallback at night
+            } else { // 'ir'
+                gl = createGIBSLayer(GIBS_IR_LAYERS[sat] || GIBS_IR_LAYERS['GOES-East'], t, op);
+                try { gl.options.maxNativeZoom = GIBS_MAX_ZOOM; } catch (e) {}
+            }
+            try { gl.options.maxZoom = 12; } catch (e) {}
             return gl;
         },
         gibsSatFor: _reconPickGibsSat,

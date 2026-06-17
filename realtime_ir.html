@@ -2018,8 +2018,13 @@
                             <label class="recon-hdob-maplabel">Barb color</label>
                             <select id="recon-hdob-barbvar" class="recon-hdob-barbvar" onchange="window._reconHdobSetBarbVar(this.value)"></select>
                             <span id="recon-hdob-barblegend" class="recon-hdob-legend"></span>
-                            <button id="recon-hdob-sat-btn" class="recon-hdob-satbtn on" onclick="window._reconHdobToggleSat()"
-                                title="GIBS satellite IR basemap (covers the flight anywhere, including outside the storm domain)">🛰 IR</button>
+                            <span class="recon-hdob-satgroup" title="GIBS satellite basemap — covers the flight anywhere, including outside the storm domain">
+                                <button class="ir-product-btn ir-product-active" data-rprod="ir" onclick="window._reconHdobSetSat('ir')" title="Clean infrared (Band 13, ~10.3 µm) — day &amp; night">IR</button>
+                                <button class="ir-product-btn" data-rprod="geocolor" onclick="window._reconHdobSetSat('geocolor')" title="GeoColor — true-colour day, IR-blended night">GeoColor</button>
+                                <button class="ir-product-btn" data-rprod="vis" onclick="window._reconHdobSetSat('vis')" title="Red visible (Band 2/3) — daytime; IR at night">Visible</button>
+                                <button class="ir-product-btn" data-rprod="wv" onclick="window._reconHdobSetSat('wv')" title="Mid-level water vapor (Band 8, ~6.2 µm)">WV</button>
+                                <button class="ir-product-btn" data-rprod="off" onclick="window._reconHdobSetSat('off')" title="Hide satellite (plain basemap)">Off</button>
+                            </span>
                         </div>
                         <div id="recon-hdob-map" class="recon-hdob-map"></div>
                     </div>

@@ -187,7 +187,7 @@
     var _hdobMap = null, _hdobBarbLayer = null, _hdobMarkers = [], _hdobData = null;
     var _hdobAtcf = null, _hdobName = '', _hdobReplay = null, _hdobPollTimer = null;
     var _hdobLat = null, _hdobLon = null;  // storm position (HDOB proximity gate, live only)
-    var _hdobGibsLayer = null, _hdobGibsSat = null, _hdobSatOn = true;  // GIBS IR basemap
+    var _hdobGibsLayer = null, _hdobGibsKey = null, _hdobSatProduct = 'ir';  // GIBS basemap
     var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = [], _hdobChartBound = false;
     var _hdobStormOpts = [], _hdobBuiltToggles = false;
     var _hdobVarVis = { wspd_kt: true, sfmr_kt: true, peak_fl_kt: false,
@@ -335,37 +335,40 @@
         return _hdobMap;
     }
 
-    /** Add/replace the GIBS IR satellite layer (z2) for the flight's longitude. */
+    /** Add/replace the GIBS satellite layer (z2) for the current product +
+     *  the flight's longitude. Rebuilds only when product or satellite changes. */
     function _hdobSetSatellite(lonHint) {
         var kit = window._ReconKit;
-        if (!kit || !kit.gibsIRLayer || !_hdobMap) return;
-        if (!_hdobSatOn) {
-            if (_hdobGibsLayer) { try { _hdobMap.removeLayer(_hdobGibsLayer); } catch (e) {} _hdobGibsLayer = null; _hdobGibsSat = null; }
+        if (!kit || !kit.gibsProductLayer || !_hdobMap) return;
+        if (_hdobSatProduct === 'off') {
+            if (_hdobGibsLayer) { try { _hdobMap.removeLayer(_hdobGibsLayer); } catch (e) {} _hdobGibsLayer = null; _hdobGibsKey = null; }
             return;
         }
         var sat = kit.gibsSatFor ? kit.gibsSatFor(lonHint) : 'GOES-East';
-        if (_hdobGibsLayer && _hdobGibsSat === sat) return;  // right sat already up
+        var key = _hdobSatProduct + '|' + sat;
+        if (_hdobGibsLayer && _hdobGibsKey === key) return;  // already up
         if (_hdobGibsLayer) { try { _hdobMap.removeLayer(_hdobGibsLayer); } catch (e) {} }
-        _hdobGibsLayer = kit.gibsIRLayer(lonHint, 0.9);
+        _hdobGibsLayer = kit.gibsProductLayer(_hdobSatProduct, lonHint, 0.9);
         try { _hdobGibsLayer.setZIndex(2); } catch (e) {}
         _hdobGibsLayer.addTo(_hdobMap);
-        _hdobGibsSat = sat;
+        _hdobGibsKey = key;
     }
 
-    window._reconHdobToggleSat = function () {
-        _hdobSatOn = !_hdobSatOn;
-        var btn = document.getElementById('recon-hdob-sat-btn');
-        if (btn) btn.classList.toggle('on', _hdobSatOn);
-        if (_hdobSatOn) {
-            var lonHint = null;
-            var ac = (_hdobData && _hdobData.aircraft) || [];
-            for (var i = 0; i < ac.length && lonHint == null; i++) {
-                var t = ac[i].track || []; if (t.length) lonHint = t[t.length - 1].lon;
-            }
-            _hdobSetSatellite(lonHint);
-        } else {
-            _hdobSetSatellite(null);  // removes the layer
+    function _hdobLonHint() {
+        var ac = (_hdobData && _hdobData.aircraft) || [];
+        for (var i = 0; i < ac.length; i++) {
+            var t = ac[i].track || []; if (t.length) return t[t.length - 1].lon;
         }
+        return null;
+    }
+
+    window._reconHdobSetSat = function (product) {
+        _hdobSatProduct = product;
+        var btns = document.querySelectorAll('.recon-hdob-satgroup .ir-product-btn');
+        for (var i = 0; i < btns.length; i++) {
+            btns[i].classList.toggle('ir-product-active', btns[i].getAttribute('data-rprod') === product);
+        }
+        _hdobSetSatellite(_hdobLonHint());
     };
 
     function _hdobFetch() {
