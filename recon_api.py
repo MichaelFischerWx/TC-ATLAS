@@ -467,6 +467,238 @@ def _near_track(lat, lon, track_pts, tol_deg=4.0) -> bool:
     return False
 
 
+# ── NOAA 1-Hz flight-level (AOC "AAMPS" IWG1) ────────────────────────────────
+#
+# NOAA's WP-3D / G-IV aircraft broadcast a 1-second IWG1 packet that AOC mirrors
+# as a growing per-flight text file. It is far richer + higher-res than the 30-s
+# HDOB the same aircraft also file (per-second winds/thermo, continuous SFMR
+# surface wind + rain, SST). For NOAA tails we source the track from IWG1 and
+# fall back to HDOB only if IWG1 is unavailable; USAF aircraft (AFxxx) have no
+# IWG1 feed and always use HDOB. We pull it server-side (cached, incremental
+# Range fetch) so the public hits our API, never NOAA AOC directly.
+IWG1_BASE = "https://seb.omao.noaa.gov/pub/flight/aamps_ingest/iwg1"
+
+# AOC flight-id aircraft letter -> the HDOB tail string we key tracks by, so an
+# IWG1 track REPLACES the same aircraft's HDOB track rather than double-counting.
+# (Empirically, cross-checked vs the HDOB feed: I=N43RF=NOAA3, N=N49RF=NOAA9,
+# H=N42RF=NOAA2.)
+_IWG1_AIRCRAFT = {"H": "NOAA2", "I": "NOAA3", "N": "NOAA9"}
+
+_IWG1_DECIMATE_S = 5      # transport sampling step (s) — 6x finer than 30-s HDOB
+_IWG1_PEAK_WIN_S = 10     # rolling window for a HDOB-style "peak FL wind"
+_MS2KT = 1.943844         # IWG1 wind speed is m/s (confirmed vs P-3 cruise TAS)
+
+# 0-indexed column positions in the comma-split IWG1 data line (per the
+# IWG1_NAMES trailer; verified against live airborne obs).
+_IWG1_C = {
+    "time": 1, "lat": 2, "lon": 3, "alt": 4, "ta": 20, "td": 21, "ps": 23,
+    "ws": 26, "wd": 27, "storm": 35, "psurf": 106, "sst": 116,
+    "sfmr_ws": 135, "sfmr_ws_alt": 115, "sfmr_rain": 136, "sfmr_rain_alt": 112,
+}
+
+# Per-flight raw-text cache: flid -> {"text": str, "len": int (bytes)}.
+_iwg1_cache: dict = {}
+
+
+def _iwg1_num(parts: list, idx: int):
+    """Float at column idx, or None when missing/blank."""
+    if idx >= len(parts):
+        return None
+    v = parts[idx].strip()
+    if not v:
+        return None
+    try:
+        return float(v)
+    except ValueError:
+        return None
+
+
+def _iwg1_active_flights(now: datetime) -> list:
+    """Discover recent NOAA flight folders (YYYYMMDD{H|I|N}{n}) from the AAMPS
+    iwg1 directory. Returns [{flid, tail, url}] for flights dated within ~36 h
+    (today/yesterday UTC), newest first."""
+    try:
+        from tc_radar_api import _hrd_fetch_text
+        html = _hrd_fetch_text(IWG1_BASE + "/", timeout=15)
+    except Exception as e:
+        logger.warning("iwg1 dir list failed: %s", e)
+        return []
+    if not html:
+        return []
+    recent = {(now - timedelta(days=d)).strftime("%Y%m%d") for d in (0, 1)}
+    out = {}
+    for m in re.finditer(r'(\d{8})([HIN])(\d)/', html):
+        ymd, letter, n = m.group(1), m.group(2), m.group(3)
+        if ymd not in recent:
+            continue
+        tail = _IWG1_AIRCRAFT.get(letter)
+        if not tail:
+            continue
+        flid = f"{ymd}{letter}{n}"
+        out[flid] = {"flid": flid, "tail": tail,
+                     "url": f"{IWG1_BASE}/{flid}/{flid}_iwg1.txt"}
+    return sorted(out.values(), key=lambda f: f["flid"], reverse=True)
+
+
+def _iwg1_fetch_text(flight: dict) -> str:
+    """Fetch the flight's IWG1 file, INCREMENTALLY when possible. The file is
+    append-only and grows to MBs over a sortie; an HTTP Range request pulls only
+    the bytes added since the last poll (re-downloading the whole file every 50 s
+    would dominate cost). Falls back to a full GET if Range is unsupported."""
+    flid = flight["flid"]
+    cache = _iwg1_cache.setdefault(flid, {"text": "", "len": 0})
+    try:
+        import requests
+    except Exception:
+        from tc_radar_api import _hrd_fetch_text
+        txt = _hrd_fetch_text(flight["url"], timeout=25)
+        if txt:
+            cache["text"], cache["len"] = txt, len(txt.encode("utf-8", "replace"))
+        return cache["text"]
+    headers = {}
+    if cache["len"]:
+        headers["Range"] = f"bytes={cache['len']}-"
+    try:
+        r = requests.get(flight["url"], headers=headers, timeout=25)
+    except Exception as e:
+        logger.debug("iwg1 fetch %s: %s", flid, e)
+        return cache["text"]
+    if r.status_code == 206:            # partial — append the new tail bytes
+        cache["text"] += r.content.decode("utf-8", "replace")
+        cache["len"] += len(r.content)
+    elif r.status_code == 200:          # full body (first fetch or Range ignored)
+        cache["text"] = r.content.decode("utf-8", "replace")
+        cache["len"] = len(r.content)
+    elif r.status_code == 416:          # range past EOF — nothing new since last poll
+        pass
+    else:
+        logger.debug("iwg1 fetch %s HTTP %s", flid, r.status_code)
+    return cache["text"]
+
+
+def _parse_iwg1_text(text: str, sim_now: datetime) -> tuple:
+    """Parse an IWG1 file body into (obs, label).
+
+    obs are normalized to the HDOB ob schema (so the whole frontend renders them
+    unchanged), decimated to ~_IWG1_DECIMATE_S with a rolling _IWG1_PEAK_WIN_S
+    peak-wind (mirroring HDOB's peak FL wind) computed from the full 1-s stream.
+    label is the IWG1 STORMID (an ATCF id like 'AL012026' once the aircraft is
+    on-station), used for storm attribution exactly like an HDOB system label."""
+    raw = []
+    label = ""
+    C = _IWG1_C
+    for ln in text.splitlines():
+        # Data records start with the literal "IWG1," ; skip the interleaved
+        # "IWG1_NAMES," schema lines and any partial trailing line.
+        if not ln.startswith("IWG1,"):
+            continue
+        parts = ln.split(",")
+        if parts[0] != "IWG1" or len(parts) <= C["wd"]:
+            continue
+        try:
+            dt = datetime.strptime(parts[C["time"]].strip(),
+                                   "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+        except (ValueError, IndexError):
+            continue
+        if dt > sim_now:        # never reveal obs past the (replay) clock
+            continue
+        lat = _iwg1_num(parts, C["lat"])
+        lon = _iwg1_num(parts, C["lon"])
+        if lat is None or lon is None or abs(lat) < 0.05 or abs(lon) < 0.05:
+            continue            # pre-takeoff / missing-position rows
+        st = parts[C["storm"]].strip() if C["storm"] < len(parts) else ""
+        if st and st.upper() not in ("NONE", "NONE NONE"):
+            label = st
+        ws = _iwg1_num(parts, C["ws"])
+        wd = _iwg1_num(parts, C["wd"])
+        sfmr = _iwg1_num(parts, C["sfmr_ws"])
+        if sfmr is None:
+            sfmr = _iwg1_num(parts, C["sfmr_ws_alt"])
+        rain = _iwg1_num(parts, C["sfmr_rain"])
+        if rain is None:
+            rain = _iwg1_num(parts, C["sfmr_rain_alt"])
+        ps = _iwg1_num(parts, C["ps"])
+        psurf = _iwg1_num(parts, C["psurf"])
+        sst = _iwg1_num(parts, C["sst"])
+        ta = _iwg1_num(parts, C["ta"])
+        td = _iwg1_num(parts, C["td"])
+        alt = _iwg1_num(parts, C["alt"])
+        raw.append({
+            "_dt": dt,
+            "t": dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "lat": round(lat, 4), "lon": round(lon, 4),
+            "fl_pres_mb": round(ps, 1) if ps is not None else None,
+            "geo_alt_m": int(alt) if alt is not None else None,
+            "sfc_p_or_dval": None, "dval_m": None,
+            "extrap_sfc_p_mb": round(psurf, 1) if psurf is not None else None,
+            "temp_c": round(ta, 1) if ta is not None else None,
+            "dewpt_c": round(td, 1) if td is not None else None,
+            "wdir": int(round(wd)) % 360 if wd is not None else None,
+            "wspd_kt": round(ws * _MS2KT) if ws is not None else None,
+            "sfmr_kt": round(sfmr * _MS2KT) if sfmr is not None else None,
+            "sfmr_rain": round(rain) if rain is not None else None,
+            "sst_c": round(sst, 1) if sst is not None else None,
+            "qc": None, "src": "iwg1",
+            "_ws_kt": ws * _MS2KT if ws is not None else None,
+        })
+    if not raw:
+        return [], label
+    raw.sort(key=lambda r: r["_dt"])
+
+    # Rolling peak FL wind over a trailing _IWG1_PEAK_WIN_S window of 1-s winds,
+    # so NOAA's default "Peak Wind" trace populates just like the HDOB aircraft.
+    win = timedelta(seconds=_IWG1_PEAK_WIN_S)
+    lo = 0
+    for i in range(len(raw)):
+        while raw[lo]["_dt"] < raw[i]["_dt"] - win:
+            lo += 1
+        peak = None
+        for k in range(lo, i + 1):
+            w = raw[k]["_ws_kt"]
+            if w is not None and (peak is None or w > peak):
+                peak = w
+        raw[i]["peak_fl_kt"] = round(peak) if peak is not None else None
+
+    # Decimate to ~_IWG1_DECIMATE_S for transport; always keep the freshest tip.
+    obs = []
+    last_dt = None
+    for r in raw:
+        if last_dt is None or (r["_dt"] - last_dt).total_seconds() >= _IWG1_DECIMATE_S:
+            obs.append(r)
+            last_dt = r["_dt"]
+    if obs[-1] is not raw[-1]:
+        obs.append(raw[-1])
+    for r in obs:                      # strip internal scratch fields
+        r.pop("_dt", None)
+        r.pop("_ws_kt", None)
+    return obs, label
+
+
+def _merge_iwg1(aircraft: dict, aircraft_names: dict, aircraft_src: dict,
+                sim_now: datetime) -> None:
+    """Source NOAA aircraft tracks from the 1-s IWG1 feed (overriding their 30-s
+    HDOB track). USAF aircraft are untouched. Best-effort: any flight that fails
+    to fetch/parse simply leaves the HDOB-derived track in place."""
+    flights = _iwg1_active_flights(sim_now)
+    # Drop cached raw text for flights no longer recent (each can be tens of MB).
+    live_flids = {f["flid"] for f in flights}
+    for stale in [k for k in _iwg1_cache if k not in live_flids]:
+        _iwg1_cache.pop(stale, None)
+    for fl in flights:
+        try:
+            obs, label = _parse_iwg1_text(_iwg1_fetch_text(fl), sim_now)
+        except Exception as e:
+            logger.warning("iwg1 parse %s: %s", fl.get("flid"), e)
+            continue
+        if not obs:
+            continue
+        tail = fl["tail"]
+        aircraft[tail] = {ob["t"]: ob for ob in obs}    # replace HDOB track
+        aircraft_src[tail] = "iwg1"
+        if label:
+            aircraft_names.setdefault(tail, set()).add(label)
+
+
 def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
                 storm_lat: float = None, storm_lon: float = None,
                 mission_tail: str = "", live_feed: bool = True) -> dict:
@@ -481,6 +713,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
     # ── HDOB → per-aircraft tracks ──
     aircraft: dict = {}
     aircraft_names: dict = {}   # tail -> {system labels from the bulletins}
+    aircraft_src: dict = {}     # tail -> data source ("iwg1" for NOAA 1-s)
     hdob_dir = f"{NHC_RECON_BASE}/{year}/{dirs['hdob']}/"
     hdob_urls = _list_recent_files(hdob_dir, since, sim_now)
     _hdob_fetched = _fetch_texts([u for u in hdob_urls if u not in _bulletin_cache])
@@ -513,6 +746,13 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
                 aircraft_names.setdefault(parsed["tail"], set()).add(parsed["storm"])
             for ob in parsed["obs"]:
                 tk[ob["t"]] = ob
+
+    # NOAA aircraft: replace the 30-s HDOB track with the 1-s IWG1 feed (richer +
+    # far higher-res). USAF aircraft have no IWG1 feed and keep HDOB. Live only —
+    # the IWG1 file is the current sortie, so in replay it would inject obs past
+    # the simulated clock.
+    if live_feed:
+        _merge_iwg1(aircraft, aircraft_names, aircraft_src, sim_now)
 
     # In replay, hide obs the simulated clock hasn't "reached" yet.
     sim_iso = sim_now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -557,7 +797,8 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         # storm attribution (the user explicitly selected this flight).
         if mission_tail:
             if tail.upper() == mission_tail:
-                aircraft_out.append({"tail": tail, "track": track})
+                aircraft_out.append({"tail": tail, "track": track,
+                                     "src": aircraft_src.get(tail, "hdob")})
             continue
         labels = aircraft_names.get(tail, set())
         name_ok = any(_label_matches(l) for l in labels)
@@ -579,7 +820,8 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         # position). With neither (shouldn't happen via the UI) keep, as before.
         if (norm_q or storm_lat is not None) and not keep:
             continue
-        aircraft_out.append({"tail": tail, "track": track})
+        aircraft_out.append({"tail": tail, "track": track,
+                             "src": aircraft_src.get(tail, "hdob")})
     aircraft_out.sort(key=lambda a: a["track"][-1]["t"], reverse=True)
 
     # Points of the kept aircraft track(s) — used to attribute sondes/VDMs by
