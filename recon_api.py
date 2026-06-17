@@ -304,6 +304,141 @@ def _relspg_to_deg(d: str, ndeg: int):
     return int(d[:ndeg]) + int(d[ndeg:]) / 100.0
 
 
+# Mandatory-level pressure indicators (FM-37 TEMP) → mb.
+_TEMP_MAND_P = {"00": 1000, "92": 925, "85": 850, "70": 700, "50": 500,
+                "40": 400, "30": 300, "25": 250, "20": 200, "15": 150, "10": 100}
+# Climatological thousands base for the coded geopotential height at each level
+# (the coded 3 digits carry only the lower part). 1000 mb is handled separately
+# (it can be slightly negative). e.g. 850 mb "473" → 1473 m.
+_TEMP_MAND_HGT_BASE = {925: 0, 850: 1000, 700: 3000, 500: 5000, 400: 7000,
+                       300: 9000, 250: 10000, 200: 11000, 150: 13000, 100: 16000}
+
+
+def _td_temp(grp: str):
+    """TTTaDD group → (temp_C, dewpoint_C). Temp is tenths with the last digit's
+    PARITY giving the sign (even +, odd −); DD is dewpoint depression (00-50 ⇒
+    ×0.1 °C, 56-99 ⇒ whole °C minus 50). Returns (None, None) on a missing group."""
+    if not grp or "/" in grp or len(grp) < 3 or not grp[:3].isdigit():
+        return None, None
+    ttt = int(grp[:3])
+    temp = ttt / 10.0
+    if ttt % 2 == 1:           # odd units digit → negative
+        temp = -temp
+    td = None
+    if len(grp) >= 5 and grp[3:5].isdigit():
+        dd = int(grp[3:5])
+        depr = dd / 10.0 if dd <= 50 else float(dd - 50)
+        td = round(temp - depr, 1)
+    return round(temp, 1), td
+
+
+def _td_wind(grp: str):
+    """ddff group → (dir_deg, speed_kt). Direction is to the nearest 5°; a units
+    digit of 1-4 means that many hundreds of knots are folded out of the speed
+    (FM-37 high-wind convention). Returns (None, None) on a missing group."""
+    if not grp or "/" in grp or len(grp) < 5 or not grp.isdigit():
+        return None, None
+    d3, ff = int(grp[:3]), int(grp[3:5])
+    extra = d3 % 5
+    if extra:                  # speed ≥ 100 kt: hundreds encoded into direction
+        ff += extra * 100
+        d3 -= extra
+    return d3 % 360, ff
+
+
+def _td_pres(ppp: str, prev=None):
+    """3-digit pressure → mb. Values < 100 carry an implied leading 1 (e.g. 006 ⇒
+    1006 near the surface). `prev` keeps the sequence monotonic-decreasing as a
+    tie-break for the rare ambiguous case."""
+    if not ppp.isdigit():
+        return None
+    p = int(ppp)
+    if p < 100:
+        p += 1000
+    return p
+
+
+def _decode_tempdrop_profile(text: str) -> dict:
+    """Decode the FM-37 TEMP DROP coded profile → {mandatory, sig_temp, sig_wind}.
+
+    Each list element is {p, t, td, wdir, wspd, hgt} (subset per section). This is
+    the same data Tropical Tidbits plots; verified field-for-field against a known
+    sonde. Best-effort — a malformed section is skipped, never raised."""
+    mand, sig_t, sig_w = [], [], []
+
+    def _section(tag, end_tags):
+        m = re.search(r"\b" + tag + r"\b(.*?)(?:" + "|".join(end_tags) + r"|$)",
+                      text, re.DOTALL)
+        return m.group(1).split() if m else []
+
+    # ── XXAA mandatory levels (skip XXAA, YYGGId, 3 location groups) ──
+    try:
+        g = _section("XXAA", ["XXBB", "XXCC", "31313", "51515", "61616"])
+        i = 4                       # past YYGGId(0) + lat(1)/lon(2)/marsden(3)
+        while i + 2 < len(g):
+            grp = g[i]
+            ind = grp[:2]
+            if ind in ("88", "77", "66") or grp.startswith(("31313", "51515", "21212")):
+                break               # tropopause / max-wind / section change
+            if grp[:2] == "99":     # surface: 99 + sfc pressure
+                p = _td_pres(grp[2:5]); hgt = 0
+            elif ind in _TEMP_MAND_P:
+                p = _TEMP_MAND_P[ind]
+                if grp[2:5].isdigit():
+                    raw = int(grp[2:5])
+                    if p == 1000:                 # 1000 mb height can be slightly negative
+                        hgt = -(raw - 500) if raw >= 500 else raw
+                    else:
+                        hgt = raw + _TEMP_MAND_HGT_BASE.get(p, 0)
+                else:
+                    hgt = None
+            else:
+                break
+            t, td = _td_temp(g[i + 1])
+            wd, ws = _td_wind(g[i + 2])
+            if p is not None:
+                mand.append({"p": p, "hgt": hgt, "t": t, "td": td,
+                             "wdir": wd, "wspd": ws})
+            i += 3
+    except Exception as e:
+        logger.debug("tempdrop XXAA decode: %s", e)
+
+    # ── XXBB significant temperature levels (pairs nnPPP / TTTaDD) ──
+    try:
+        g = _section("XXBB", ["21212", "31313", "51515", "61616"])
+        i = 4
+        while i + 1 < len(g):
+            ga = g[i]
+            if not ga[:5].isdigit():
+                break
+            p = _td_pres(ga[2:5])
+            t, td = _td_temp(g[i + 1])
+            if p is not None and t is not None:
+                sig_t.append({"p": p, "t": t, "td": td})
+            i += 2
+    except Exception as e:
+        logger.debug("tempdrop XXBB decode: %s", e)
+
+    # ── 21212 significant wind levels (pairs nnPPP / ddff) ──
+    try:
+        m = re.search(r"\b21212\b(.*?)(?:31313|51515|61616|$)", text, re.DOTALL)
+        g = m.group(1).split() if m else []
+        i = 0
+        while i + 1 < len(g):
+            ga = g[i]
+            if not ga[:5].isdigit():
+                break
+            p = _td_pres(ga[2:5])
+            wd, ws = _td_wind(g[i + 1])
+            if p is not None and ws is not None:
+                sig_w.append({"p": p, "wdir": wd, "wspd": ws})
+            i += 2
+    except Exception as e:
+        logger.debug("tempdrop sigwind decode: %s", e)
+
+    return {"mandatory": mand, "sig_temp": sig_t, "sig_wind": sig_w}
+
+
 def _parse_tempdrop_bulletin(text: str, fname_dt: datetime) -> list:
     """Parse a REPNT3/REPPN3 TEMP DROP bulletin -> list of dropsonde dicts."""
     out = []
@@ -315,6 +450,7 @@ def _parse_tempdrop_bulletin(text: str, fname_dt: datetime) -> list:
     wl = re.search(r"WL150\s+(\d{3})(\d{2})", text)
     mbl_dir, mbl_kt = (int(mbl.group(1)), int(mbl.group(2))) if mbl else (None, None)
     sfc_dir, sfc_kt = (int(wl.group(1)), int(wl.group(2))) if wl else (None, None)
+    profile = _decode_tempdrop_profile(text)   # FM-37 mandatory + sig levels (skew-T)
 
     seen = set()
     for mm in re.finditer(
@@ -344,6 +480,7 @@ def _parse_tempdrop_bulletin(text: str, fname_dt: datetime) -> list:
             "sfc_dir": sfc_dir, "sfc_wind_kt": sfc_kt,
             "mbl_dir": mbl_dir, "mbl_wind_kt": mbl_kt,
             "tail": tail, "storm": storm, "ob": ob,
+            "profile": profile,
         })
     return out
 
