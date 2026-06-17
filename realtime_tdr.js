@@ -241,6 +241,7 @@
     var _hdobStormOpts = [], _hdobBuiltToggles = false;
     var _hdobFlightSel = '';   // '' = all flights; else a single aircraft tail (filters chart + map)
     var _hdobGrid = null;      // lat/lon graticule controller for the recon map (lazy)
+    var _hdobFl1s = false;     // NOAA flight-level wind: false = 10-s mean (ops), true = full 1-s
     var _hdobVarVis = { peak_fl_kt: true, wspd_kt: false, sfmr_kt: true,
                         fl_pres_mb: true, extrap_sfc_p_mb: true, geo_alt_m: true,
                         temp_c: false, dewpt_c: false, vdm: true };
@@ -432,6 +433,7 @@
         if (!value) return;
         _hdobData = null; _hdobFitDone = false; _hdobReplay = null; _hdobLoggedLoad = false;
         _hdobFlightSel = '';   // back to all flights when switching storm/mission
+        _hdobFl1s = false;     // back to the 10-s operational wind on switch
         if (value.indexOf('mission:') === 0) {
             // Mission mode: a standalone flight, attributed by aircraft tail.
             var tail = value.slice(8);
@@ -585,6 +587,7 @@
                 url += '&lat=' + _hdobLat + '&lon=' + _hdobLon;  // live only: gate HDOB to storm
             }
         }
+        if (_hdobFl1s) url += '&fl1s=1';   // NOAA flight-level wind at full 1-s
         if (statusEl && !_hdobData) statusEl.textContent = 'loading…';
         fetch(url, { cache: 'no-store' })
             .then(function (r) { return r.json(); })
@@ -646,6 +649,9 @@
         _hdobSetSatellite(lonHint);
         _hdobSetStormSat(_hdobMissionTail ? null : _hdobAtcf);  // fresh storm-sector IR over GIBS
         _hdobBuildFlightToggle();
+        _hdobBuildResToggle();
+        _hdobBuildSourceNote();
+        _hdobBuildToggles();   // refresh pills so the FL-wind label tracks source/res
         // The map honors the flight selection (all flights when none picked);
         // framing/satellite above use the full set so they don't jump on filter.
         var mapAircraft = _hdobFilterAircraft(aircraft, 'map');
@@ -739,7 +745,7 @@
         box.style.display = '';
         box.innerHTML = '<span class="recon-hdob-flightlabel">Flight</span>';
         var opts = [{ tail: '', label: 'All' }].concat(aircraft.map(function (a) {
-            return { tail: a.tail, label: a.tail + (a.src === 'iwg1' ? ' · 1-s' : '') };
+            return { tail: a.tail, label: a.tail };
         }));
         opts.forEach(function (o) {
             var b = document.createElement('button');
@@ -755,6 +761,67 @@
             box.appendChild(b);
         });
     }
+
+    /** Label for the sustained FL-wind trace, reflecting the displayed flight's
+     *  source + the 1-s toggle: USAF HDOB = 30-s; NOAA IWG1 = 10-s mean or 1-s. */
+    function _hdobFLWindLabel() {
+        var ac = _hdobFilterAircraft((_hdobData && _hdobData.aircraft) || [], 'chart');
+        if (ac.length && ac[0].src === 'iwg1') return _hdobFl1s ? 'FL Wind (1s)' : 'FL Wind (10s)';
+        return 'FL Wind (30s)';
+    }
+
+    /** Honest provenance of the displayed flight's wind, so we never imply a
+     *  native product we didn't get. NOAA = derived by us from the 1-Hz IWG1
+     *  feed; USAF = the native NHC HDOB product. */
+    function _hdobSourceText() {
+        var ac = _hdobFilterAircraft((_hdobData && _hdobData.aircraft) || [], 'chart');
+        var src = ac.length ? ac[0].src : null;
+        if (src === 'iwg1') {
+            return 'Source: NOAA 1-Hz (IWG1) flight-level feed. FL Wind = ' +
+                (_hdobFl1s ? 'full 1-second wind' : '10-second vector mean') +
+                '; Peak = rolling 10-second maximum — both derived by TC-ATLAS from the 1-Hz data (not a native 10-s product).';
+        }
+        if (src === 'hdob') {
+            return 'Source: USAF HDOB — NHC 30-second average wind with the reported 10-second peak.';
+        }
+        return '';
+    }
+
+    function _hdobBuildSourceNote() {
+        var el = document.getElementById('recon-hdob-srcnote');
+        if (!el) return;
+        var t = _hdobSourceText();
+        el.textContent = t;
+        el.style.display = t ? '' : 'none';
+    }
+
+    /** NOAA flight-level wind resolution toggle [10-s mean | 1-s]. Shown only when
+     *  a NOAA (IWG1) flight is present; switching re-fetches at the new resolution. */
+    function _hdobBuildResToggle() {
+        var box = document.getElementById('recon-hdob-restoggle');
+        if (!box) return;
+        var hasNOAA = ((_hdobData && _hdobData.aircraft) || []).some(function (a) { return a.src === 'iwg1'; });
+        if (!hasNOAA) { box.innerHTML = ''; box.style.display = 'none'; return; }
+        box.style.display = '';
+        box.innerHTML = '<span class="recon-hdob-flightlabel">NOAA FL wind</span>';
+        [{ r: 10, label: '10-s mean', on: !_hdobFl1s }, { r: 1, label: '1-s', on: _hdobFl1s }].forEach(function (o) {
+            var b = document.createElement('button');
+            b.textContent = o.label;
+            b.className = o.on ? 'on' : '';
+            b.title = o.r === 10 ? 'Operational 10-second mean flight-level wind' : 'Full 1-second flight-level wind';
+            b.onclick = function () { window._reconHdobSetRes(o.r); };
+            box.appendChild(b);
+        });
+    }
+
+    window._reconHdobSetRes = function (res) {
+        var want = (res === 1);
+        if (want === _hdobFl1s) return;
+        _hdobFl1s = want;
+        _hdobBuildResToggle();
+        _ga('recon_hdob_flres', { res: res });
+        _hdobFetch();   // re-fetch at the new resolution (rebuilds chart + map)
+    };
 
     window._reconHdobToggleGrid = function () {
         var kit = window._ReconKit;
@@ -814,7 +881,7 @@
         var bg = dark ? '#0b1220' : '#ffffff';
         var fg = dark ? '#e2e8f0' : '#0f1623';
         var sub = dark ? '#8b9ec2' : '#64748b';
-        var pad = 14 * scale, gap = 12 * scale, headH = 44 * scale;
+        var pad = 14 * scale, gap = 12 * scale, headH = 60 * scale;
         var cw = chartImg.width, chh = chartImg.height;
         var mw = mapCanvas.width, mh = mapCanvas.height;
         var contentH = Math.max(chh, mh);
@@ -830,10 +897,16 @@
         var when = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
         ctx.textBaseline = 'middle';
         ctx.fillStyle = fg; ctx.font = 'bold ' + (17 * scale) + 'px sans-serif';
-        ctx.fillText('Live Flight Recon — ' + name, pad, headH * 0.42);
+        ctx.fillText('Live Flight Recon — ' + name, pad, headH * 0.26);
         ctx.fillStyle = sub; ctx.font = (11 * scale) + 'px sans-serif';
         ctx.fillText((c.obs || 0) + ' obs · ' + (c.dropsondes || 0) + ' sondes · ' +
-            (c.vdms || 0) + ' VDM   ·   generated ' + when, pad, headH * 0.78);
+            (c.vdms || 0) + ' VDM   ·   generated ' + when, pad, headH * 0.52);
+        // Provenance line so the saved figure never overstates the wind cadence.
+        var srcTxt = _hdobSourceText();
+        if (srcTxt) {
+            ctx.font = (10 * scale) + 'px sans-serif';
+            ctx.fillText(srcTxt, pad, headH * 0.80);
+        }
         // Panels (top-aligned under the header).
         ctx.drawImage(chartImg, pad, headH, cw, chh);
         ctx.drawImage(mapCanvas, pad + cw + gap, headH, mw, mh);
@@ -870,7 +943,7 @@
         box.innerHTML = '';
         items.forEach(function (cfg) {
             var b = document.createElement('button');
-            b.textContent = cfg.name;
+            b.textContent = (cfg.key === 'wspd_kt') ? _hdobFLWindLabel() : cfg.name;
             if (cfg.tip) b.title = cfg.tip;
             var on = !!_hdobVarVis[cfg.key];
             b.className = on ? 'on' : '';
@@ -925,7 +998,8 @@
                 }
                 traces.push({
                     x: xs, y: ys, type: 'scatter', mode: 'lines',
-                    name: cfg.name, legendgroup: cfg.key, showlegend: firstForVar,
+                    name: (cfg.key === 'wspd_kt') ? _hdobFLWindLabel() : cfg.name,
+                    legendgroup: cfg.key, showlegend: firstForVar,
                     line: { color: cfg.color, width: 1.4, dash: cfg.dash || 'solid' },
                     connectgaps: false, yaxis: cfg.axis,
                     hovertemplate: '%{x|%H:%M:%SZ} · %{y' + (cfg.scale ? ':.2f' : '') + '} ' + cfg.unit + ' · ' + ac.tail + '<extra></extra>'

@@ -691,6 +691,7 @@
 @media (max-width: 720px) {
     .recon-skewt-body { grid-template-columns: 1fr; }
 }
+.recon-hdob-srcnote { padding: 2px 10px 6px; font-size: 10.5px; line-height: 1.35; color: var(--slate); }
 .recon-hdob-chart { flex: 1 1 auto; width: 100%; min-height: 540px; }
 .recon-hdob-hint { padding: 6px 10px; font-size: 10.5px; color: var(--slate); border-top: 1px solid var(--border); }
 .recon-hdob-maptools {
