@@ -5312,12 +5312,25 @@
         // that was the #1 Cloud Run egress driver on active-storm days
         // (~2.3 GB + a 502 storm in one day). Falls back to the per-frame
         // path on any failure. Mirrors the IR panel's _satTryRawTbBundleThen.
-        function _startRightRawBackfill() {
+        function _startRightRawBackfill(_retried) {
             if (loadStatusEl) loadStatusEl.textContent = 'Loading ' + bandLabel + ' data...';
             _satTryRawBandBundleThen(stormId, band, function (ok) {
                 if (ok) return;
-                console.log('[Satellite] Band raw bundle unavailable; using per-frame waterfall');
-                _startRightRawBackfillLegacy();
+                // Bundle failed. The old fallback here fired a per-frame
+                // band-raw-frame waterfall — the #1 Cloud Run egress driver
+                // (~2.3 GB + a 502 storm in one active-storm day). Instead retry
+                // the bundle ONCE (the first request may have warmed the
+                // write-through R2/GCS object, so the retry is a cheap 302) then
+                // degrade gracefully: the band imagery still animates; only
+                // hover-Tb / custom colormap on this panel waits for a good
+                // bundle. Zero per-frame Cloud Run egress.
+                if (!_retried && stormId === currentStormId && band === rightBand) {
+                    setTimeout(function () { _startRightRawBackfill(true); }, 4000);
+                    return;
+                }
+                if (loadStatusEl) loadStatusEl.textContent = '';
+                console.log('[Satellite] Band raw bundle unavailable after retry; '
+                    + 'skipping per-frame waterfall (hover-Tb/colormap degraded until next bundle)');
             });
         }
 
@@ -5390,25 +5403,12 @@
                 });
         }
 
-        function _startRightRawBackfillLegacy() {
-            var tbDone = 0;
-            for (var i = 0; i < Math.min(FETCH_CONCURRENCY, totalFrames); i++) _fetchRightRaw(i);
-
-            function _onRawDone() {
-                tbDone++;
-                if (loadStatusEl) loadStatusEl.textContent = bandLabel + ' ' + tbDone + '/' + totalFrames;
-                if (tbDone >= totalFrames) {
-                    if (loadStatusEl) loadStatusEl.textContent = '';
-                    if (!frameCache[stormId]) frameCache[stormId] = { ts: Date.now() };
-                    frameCache[stormId].right = rightFrames.slice();
-                    frameCache[stormId].rightBand = band;
-                    frameCache[stormId].ts = Date.now();
-                }
-            }
-            // Attach completion handler
-            window._rightRawDone = _onRawDone;
-        }
-
+        // NOTE: the former _startRightRawBackfillLegacy() per-frame waterfall
+        // was removed (2026-06-17) — it was the #1 Cloud Run egress driver on
+        // active-storm days. _startRightRawBackfill() now retries the bundle
+        // once then degrades gracefully. _fetchRightRaw (below) is retained for
+        // the rare single-frame preview-failure fallback at _fetchRightPreview's
+        // catch (one frame, negligible egress), NOT a full-loop waterfall.
         function _fetchRightRaw(idx) {
             if (idx >= totalFrames || stormId !== currentStormId || band !== rightBand) return;
             var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/band-raw-frame'
