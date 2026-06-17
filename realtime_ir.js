@@ -21606,16 +21606,24 @@
         return { plev: plev, t: t, q: q, u: u, v: v, showParcel: false };
     }
 
-    /** Mandatory-level table + significant-wind table + footer (TT-style). */
+    /** Mandatory-level table + significant-wind table + footer (TT-style).
+     *  Rows go LOW pressure (aloft) → HIGH pressure (surface) so the surface
+     *  reads at the BOTTOM, consistent with the skew-T. Wind cells are tinted
+     *  by speed (`_reconWindColor`) so strong winds pop. */
     function _reconSkewTTable(sonde) {
         var prof = sonde.profile || {};
-        var mand = prof.mandatory || [], sigW = prof.sig_wind || [];
+        var mand = (prof.mandatory || []).slice().reverse();
+        var sigW = (prof.sig_wind || []).slice().reverse();
+        function windCell(wdir, wspd) {
+            if (wspd == null) return '<td>–</td>';
+            return '<td style="border-left:4px solid ' + _reconWindColor(wspd) + ';font-weight:600;">' +
+                (wdir != null ? wdir + '° / ' : '') + wspd + ' kt</td>';
+        }
         var mrows = mand.map(function (L) {
             var rh = _skewtRH(L.t, L.td);
             return '<tr><td>' + L.p + '</td><td>' + (L.hgt != null ? L.hgt + ' m' : '–') +
                 '</td><td>' + (L.t != null ? L.t.toFixed(1) + '°' : '–') +
-                '</td><td>' + (rh != null ? rh + '%' : '–') +
-                '</td><td>' + (L.wspd != null ? (L.wdir != null ? L.wdir + '° / ' : '') + L.wspd + ' kt' : '–') + '</td></tr>';
+                '</td><td>' + (rh != null ? rh + '%' : '–') + '</td>' + windCell(L.wdir, L.wspd) + '</tr>';
         }).join('');
         var mandTbl = '<div class="recon-skewt-subhead">Mandatory levels</div>' +
             '<table class="recon-skewt-tbl"><thead><tr><th>Level</th><th>Hgt</th><th>T</th><th>RH</th><th>Wind</th></tr></thead><tbody>' +
@@ -21624,14 +21632,13 @@
         var windTbl = '';
         if (sigW.length) {
             var wrows = sigW.map(function (L) {
-                return '<tr><td>' + L.p + ' mb</td><td>' +
-                    (L.wspd != null ? (L.wdir != null ? L.wdir + '° / ' : '') + L.wspd + ' kt' : '–') + '</td></tr>';
+                return '<tr><td>' + L.p + ' mb</td>' + windCell(L.wdir, L.wspd) + '</tr>';
             }).join('');
             windTbl = '<div class="recon-skewt-subhead">Significant wind levels</div>' +
                 '<table class="recon-skewt-tbl"><thead><tr><th>Level</th><th>Wind</th></tr></thead><tbody>' +
                 wrows + '</tbody></table>';
         }
-        var allW = mand.concat(sigW).filter(function (L) { return L.wspd != null; });
+        var allW = (prof.mandatory || []).concat(prof.sig_wind || []).filter(function (L) { return L.wspd != null; });
         var maxW = allW.length ? allW.reduce(function (a, b) { return b.wspd > a.wspd ? b : a; }) : null;
         var foot = '<div class="recon-skewt-foot">' +
             (sonde.sfc_wind_kt != null ? '<div>Surface (WL150) wind: ' + (sonde.sfc_dir != null ? sonde.sfc_dir + '° / ' : '') + sonde.sfc_wind_kt + ' kt</div>' : '') +
@@ -21641,40 +21648,56 @@
         return mandTbl + windTbl + foot;
     }
 
-    /** Wind speed (kt) + direction (°) vs pressure, from the same profile. */
+    /** Wind speed (kt) vs pressure, with a wind-BARB column on the right for
+     *  direction (reusing skewt.js's _buildWindBarbShapes) and speed-tinted
+     *  markers. Surface (high pressure) at the bottom, like the skew-T. */
     function _reconRenderWindProfile(profiles, divId) {
         if (!window.Plotly || !document.getElementById(divId)) return;
-        var P = [], spd = [], dir = [];
+        var P = [], spd = [], dir = [], colr = [];
         for (var i = 0; i < profiles.plev.length; i++) {
             var u = profiles.u[i], v = profiles.v[i];
             if (u == null || v == null) continue;
             P.push(profiles.plev[i]);
-            spd.push(Math.sqrt(u * u + v * v) * 1.94384);
+            var s = Math.sqrt(u * u + v * v) * 1.94384;
+            spd.push(s);
             dir.push((Math.atan2(-u, -v) * 180 / Math.PI + 360) % 360);
+            colr.push(_reconWindColor(s));
         }
         if (P.length < 2) return;
         var dark = document.documentElement.getAttribute('data-theme') !== 'light';
-        var spdC = dark ? '#60a5fa' : '#1d4ed8', dirC = dark ? '#fbbf24' : '#b45309';
         var axc = dark ? '#8b9ec2' : '#374151', grid = dark ? 'rgba(255,255,255,0.07)' : 'rgba(15,22,35,0.08)';
-        var traces = [
-            { x: spd, y: P, type: 'scatter', mode: 'lines+markers', name: 'Speed',
-              line: { color: spdC, width: 2 }, marker: { size: 4, color: spdC },
-              hovertemplate: '%{x:.0f} kt @ %{y} hPa<extra></extra>' },
-            { x: dir, y: P, type: 'scatter', mode: 'markers', name: 'Direction', xaxis: 'x2',
-              marker: { color: dirC, size: 6, symbol: 'diamond' },
-              hovertemplate: '%{x:.0f}° @ %{y} hPa<extra></extra>' }
-        ];
+        var lineC = dark ? 'rgba(148,163,184,0.8)' : 'rgba(71,85,105,0.7)';
+        // Pressure axis range (explicit, so the barb column can be aligned).
+        var pHi = Math.ceil(Math.max.apply(null, P) / 25) * 25;   // bottom (surface)
+        var pLo = Math.floor(Math.min.apply(null, P) / 25) * 25;  // top (aloft)
+        var spdMax = Math.max.apply(null, spd);
+        var xMax = spdMax * 1.28 + 8;                              // leave room for the barb column
+        var barbX = spdMax * 1.12 + 4;
+        var traces = [{
+            x: spd, y: P, type: 'scatter', mode: 'lines+markers', name: 'Wind speed',
+            line: { color: lineC, width: 1.6 }, marker: { size: 7, color: colr, line: { color: lineC, width: 0.5 } },
+            customdata: dir, hovertemplate: '%{x:.0f} kt · %{customdata:.0f}° · %{y} hPa<extra></extra>'
+        }];
+        var shapes = [];
+        if (typeof window._buildWindBarbShapes === 'function') {
+            // Builder wants u/v at the SAME indices as plev; pass the filtered set.
+            var uF = [], vF = [];
+            for (var k = 0; k < profiles.plev.length; k++) {
+                if (profiles.u[k] != null && profiles.v[k] != null) { uF.push(profiles.u[k]); vF.push(profiles.v[k]); }
+            }
+            try {
+                shapes = window._buildWindBarbShapes(uF, vF, P, barbX, null,
+                    { xMin: 0, xMax: xMax, logPMin: Math.log10(pHi), logPMax: Math.log10(pLo) });
+            } catch (e) {}
+        }
         var layout = {
             paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-            margin: { l: 54, r: 18, t: 40, b: 42 }, showlegend: true,
-            legend: { orientation: 'h', y: 1.14, x: 0, font: { size: 9, color: axc } },
-            xaxis: { title: { text: 'Wind speed (kt)', font: { size: 10, color: spdC } },
-                     color: spdC, gridcolor: grid, zeroline: false, rangemode: 'tozero' },
-            xaxis2: { title: { text: 'Direction (°)', font: { size: 10, color: dirC } },
-                      overlaying: 'x', side: 'top', range: [0, 360], dtick: 90, color: dirC, showgrid: false },
-            yaxis: { title: { text: 'Pressure (hPa)', font: { size: 10, color: axc } },
-                     type: 'log', autorange: 'reversed', color: axc, gridcolor: grid, zeroline: false,
-                     tickvals: [1000, 925, 850, 700, 600, 500, 400, 300] }
+            margin: { l: 54, r: 16, t: 16, b: 42 }, showlegend: false, shapes: shapes,
+            xaxis: { title: { text: 'Wind speed (kt)', font: { size: 11, color: axc } },
+                     color: axc, gridcolor: grid, zeroline: false, range: [0, xMax] },
+            yaxis: { title: { text: 'Pressure (hPa)', font: { size: 11, color: axc } },
+                     type: 'log', range: [Math.log10(pHi), Math.log10(pLo)], color: axc, gridcolor: grid,
+                     zeroline: false, tickvals: [1000, 925, 850, 700, 600, 500, 400, 300] }
         };
         window.Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
     }
