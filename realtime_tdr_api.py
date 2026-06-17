@@ -436,11 +436,34 @@ def _get_level_axis(ds):
     return ds["level"].values.astype(float)
 
 
-def _extract_2d(ds, variable: str, level_km: float):
-    """Extract a 2D (x, y) slice at a given height level, handling dim order."""
+def _extract_2d(ds, variable: str, level_km: float, storm_motion=None):
+    """
+    Extract a 2D (x, y) slice at a given height level, handling dim order.
+
+    ``storm_motion`` = (u_storm, v_storm) in m/s. When supplied (and valid),
+    horizontal-wind variables are shifted into the STORM-RELATIVE frame by
+    subtracting the (uniform) storm-motion vector from U/V before deriving the
+    field. Magnitude/component fields recompute from corrected U/V; the stored
+    TANGENTIAL/RADIAL fields get the analytic motion projection removed (robust
+    to the stored decomposition's convention). Non-horizontal-wind fields
+    (W, REFLECTIVITY, VORT — curl of a uniform shift is unchanged) and the
+    by-definition earth-relative EARTH_REL_WSPD are left untouched.
+    """
     levels = _get_level_axis(ds)
     z_idx = int(np.argmin(np.abs(levels - level_km)))
     actual_level = float(levels[z_idx])
+
+    su = sv = None
+    if storm_motion is not None:
+        _su, _sv = storm_motion
+        if (_su is not None and _sv is not None and _su != -999 and _sv != -999
+                and not np.isnan(_su) and not np.isnan(_sv)):
+            su, sv = float(_su), float(_sv)
+
+    # Storm-relative recompute of magnitude / components from corrected U/V.
+    sr_wind = su is not None and variable in ("WIND_SPEED", "U", "V")
+    if variable in RT_DERIVED and variable != "EARTH_REL_WSPD":
+        sr_wind = su is not None  # other component-derived speeds
 
     if variable in RT_DERIVED:
         info = RT_DERIVED[variable]
@@ -448,10 +471,33 @@ def _extract_2d(ds, variable: str, level_km: float):
         # Use xarray named transpose to guarantee (y, x) output
         u = ds[u_name].isel(time=0, level=z_idx).transpose("y", "x").values
         v = ds[v_name].isel(time=0, level=z_idx).transpose("y", "x").values
+        # EARTH_REL_WSPD is defined earth-relative — never shift it.
+        if su is not None and variable != "EARTH_REL_WSPD":
+            u = u - su
+            v = v - sv
         data = np.sqrt(u**2 + v**2)
+    elif sr_wind and variable == "WIND_SPEED":
+        # Recompute storm-relative speed from corrected components.
+        u = ds["U"].isel(time=0, level=z_idx).transpose("y", "x").values
+        v = ds["V"].isel(time=0, level=z_idx).transpose("y", "x").values
+        data = np.sqrt((u - su) ** 2 + (v - sv) ** 2)
     else:
         # Use xarray named transpose — safe regardless of file dim order
         data = ds[variable].isel(time=0, level=z_idx).transpose("y", "x").values
+        if su is not None and variable == "U":
+            data = data - su
+        elif su is not None and variable == "V":
+            data = data - sv
+        elif su is not None and variable in ("TANGENTIAL_WIND", "RADIAL_WIND"):
+            # Subtract the storm-motion projection onto the local tangential /
+            # radial unit vector (azimuth about the grid origin = storm center).
+            x_km, y_km = _get_xy_coords(ds)
+            xx, yy = np.meshgrid(x_km, y_km)  # (ny, nx) to match (y, x) data
+            az = np.arctan2(yy, xx)
+            if variable == "TANGENTIAL_WIND":
+                data = data - (-su * np.sin(az) + sv * np.cos(az))
+            else:  # RADIAL_WIND
+                data = data - (su * np.cos(az) + sv * np.sin(az))
 
     # Unit conversion: real-time xy.nc stores VORT in 10⁻³ s⁻¹ (.001/seconds) → s⁻¹
     if variable == "VORT":
@@ -945,6 +991,7 @@ def get_rt_data(
     level_km:   float = Query(2.0,            ge=0.0, le=18, description="Altitude in km"),
     overlay:    str   = Query("",                            description="Optional overlay variable"),
     wind_barbs: bool  = Query(False,                         description="Include subsampled U/V for wind barbs"),
+    storm_relative: bool = Query(False,                      description="Shift horizontal winds into the storm-relative frame"),
 ):
     """Return a 2D plan-view data slice as JSON for client-side Plotly rendering."""
     if variable not in RT_VARIABLES and variable not in RT_DERIVED:
@@ -957,8 +1004,19 @@ def get_rt_data(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not open file: {e}")
 
+    # Storm-motion vector for the storm-relative frame (None = earth-relative).
+    storm_motion = None
+    sr_applied = False
+    if storm_relative:
+        _attrs = ds.attrs if hasattr(ds, "attrs") else {}
+        _smu = float(_attrs.get("EASTWARD STORM MOTION (METERS PER SECOND)", -999))
+        _smv = float(_attrs.get("NORTHWARD STORM MOTION (METERS PER SECOND)", -999))
+        if (_smu != -999 and _smv != -999 and not np.isnan(_smu) and not np.isnan(_smv)):
+            storm_motion = (_smu, _smv)
+            sr_applied = True
+
     x_km, y_km = _get_xy_coords(ds)
-    data, actual_level = _extract_2d(ds, variable, level_km)
+    data, actual_level = _extract_2d(ds, variable, level_km, storm_motion=storm_motion)
     var_info = _get_variable_info(variable)
     case_meta = _build_case_meta(ds)
 
@@ -969,11 +1027,12 @@ def get_rt_data(
         "actual_level_km": actual_level,
         "variable": var_info,
         "case_meta": case_meta,
+        "storm_relative": sr_applied,
     }
 
     # Optional overlay
     if overlay:
-        ov_data, _ = _extract_2d(ds, overlay, level_km)
+        ov_data, _ = _extract_2d(ds, overlay, level_km, storm_motion=storm_motion)
         ov_info = _get_variable_info(overlay)
         result["overlay"] = {
             "data": _clean_2d(ov_data),
@@ -990,6 +1049,9 @@ def get_rt_data(
             z_idx = int(np.argmin(np.abs(levels - level_km)))
             u_full = ds["U"].isel(time=0, level=z_idx).transpose("y", "x").values
             v_full = ds["V"].isel(time=0, level=z_idx).transpose("y", "x").values
+            if storm_motion is not None:
+                u_full = u_full - storm_motion[0]
+                v_full = v_full - storm_motion[1]
             ny, nx = u_full.shape
             stride = max(1, min(nx, ny) // 20)
             result["wind_barbs"] = {
@@ -998,7 +1060,7 @@ def get_rt_data(
                 "x": np.round(x_km[::stride], 2).tolist(),
                 "y": np.round(y_km[::stride], 2).tolist(),
                 "units": "m/s",
-                "type": "earth_relative",
+                "type": "storm_relative" if storm_motion is not None else "earth_relative",
             }
         except Exception:
             pass
