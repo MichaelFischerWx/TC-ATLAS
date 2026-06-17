@@ -189,6 +189,7 @@
     var _hdobLat = null, _hdobLon = null;  // storm position (HDOB proximity gate, live only)
     var _hdobGibsLayer = null, _hdobGibsKey = null, _hdobSatProduct = 'ir';  // GIBS basemap
     var _hdobMissions = [], _hdobMissionInfo = {}, _hdobMissionTail = null;  // mission-centric fallback
+    var _hdobAircraftMarkers = [];  // ✈ glyph at each aircraft's latest ob, rotated to heading
     var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = [], _hdobChartBound = false;
     var _hdobStormOpts = [], _hdobBuiltToggles = false;
     var _hdobVarVis = { wspd_kt: true, sfmr_kt: true, peak_fl_kt: false,
@@ -220,6 +221,14 @@
     // on "No active storms". Re-populate whenever the list loads/updates, and
     // auto-select + load if the tab is open and nothing is chosen yet, so the
     // user never has to click anything to see data.
+    // When the GIBS latest-available time is probed/refreshed, rebuild the
+    // satellite layer (its tiles were blank until we knew the real NRT slot).
+    window.addEventListener('recon-gibs-ready', function () {
+        if (!_hdobMap) return;
+        _hdobGibsKey = null;  // force rebuild with the freshly-probed time
+        _hdobSetSatellite(_hdobLonHint());
+    });
+
     window.addEventListener('ir-storms-loaded', function () {
         if (!document.getElementById('recon-hdob-storm')) return;
         var hadStorm = !!_hdobAtcf;
@@ -383,6 +392,10 @@
             for (var m = 0; m < _hdobMarkers.length; m++) { try { _hdobMap.removeLayer(_hdobMarkers[m]); } catch (e) {} }
             _hdobMarkers = [];
         }
+        if (_hdobAircraftMarkers.length && _hdobMap) {
+            for (var am = 0; am < _hdobAircraftMarkers.length; am++) { try { _hdobMap.removeLayer(_hdobAircraftMarkers[am]); } catch (e) {} }
+            _hdobAircraftMarkers = [];
+        }
         _hdobShowEmpty(false);
         _hdobFetch();
         if (_hdobPollTimer) clearInterval(_hdobPollTimer);
@@ -420,7 +433,7 @@
             return;
         }
         var sat = kit.gibsSatFor ? kit.gibsSatFor(lonHint) : 'GOES-East';
-        var key = _hdobSatProduct + '|' + sat;
+        var key = _hdobSatProduct + '|' + sat + '|' + (kit.gibsTimeTag ? kit.gibsTimeTag() : '');
         if (_hdobGibsLayer && _hdobGibsKey === key) return;  // already up
         if (_hdobGibsLayer) { try { _hdobMap.removeLayer(_hdobGibsLayer); } catch (e) {} }
         // Muted opacity: on this map the colored flight-level barbs/dots are the
@@ -519,6 +532,7 @@
         _hdobBarbLayer.setData(aircraft, latestMs);
         for (var mi = 0; mi < _hdobMarkers.length; mi++) { try { map.removeLayer(_hdobMarkers[mi]); } catch (e) {} }
         _hdobMarkers = kit.buildMarkers(map, _hdobData);
+        _hdobRenderAircraft(map, aircraft);
         if (!_hdobFitDone) {
             var pts = [];
             for (var k = 0; k < aircraft.length; k++) {
@@ -532,6 +546,52 @@
             if (pts.length) { try { map.fitBounds(L.latLngBounds(pts).pad(0.12), { animate: false }); } catch (e) {} _hdobFitDone = true; }
         }
         _hdobRenderChart();
+    }
+
+    /** Great-circle initial bearing (° clockwise from north) p1 → p2. */
+    function _hdobBearing(la1, lo1, la2, lo2) {
+        var d2r = Math.PI / 180;
+        var y = Math.sin((lo2 - lo1) * d2r) * Math.cos(la2 * d2r);
+        var x = Math.cos(la1 * d2r) * Math.sin(la2 * d2r) -
+                Math.sin(la1 * d2r) * Math.cos(la2 * d2r) * Math.cos((lo2 - lo1) * d2r);
+        return (Math.atan2(y, x) / d2r + 360) % 360;
+    }
+
+    /** ✈ marker at each aircraft's latest ob, rotated to its heading. */
+    function _hdobRenderAircraft(map, aircraft) {
+        for (var i = 0; i < _hdobAircraftMarkers.length; i++) {
+            try { map.removeLayer(_hdobAircraftMarkers[i]); } catch (e) {}
+        }
+        _hdobAircraftMarkers = [];
+        for (var a = 0; a < aircraft.length; a++) {
+            var tr = aircraft[a].track || [];
+            if (!tr.length) continue;
+            var last = tr[tr.length - 1];
+            if (last.lat == null || last.lon == null) continue;
+            // Heading from the last meaningful segment (skip ~stationary points).
+            var hdg = 0;
+            for (var j = tr.length - 2; j >= 0 && j >= tr.length - 8; j--) {
+                if (tr[j].lat == null) continue;
+                if (Math.abs(tr[j].lat - last.lat) > 0.02 || Math.abs(tr[j].lon - last.lon) > 0.02) {
+                    hdg = _hdobBearing(tr[j].lat, tr[j].lon, last.lat, last.lon);
+                    break;
+                }
+            }
+            // Plane SVG points UP (north) at rotation 0; rotate by heading.
+            var svg = '<svg width="26" height="26" viewBox="0 0 24 24" style="transform:rotate(' +
+                hdg.toFixed(0) + 'deg);filter:drop-shadow(0 0 1.5px rgba(0,0,0,0.8));">' +
+                '<path d="M12 2 L14.2 10 L22 13.5 L22 15.5 L14.2 13.5 L13.4 19 L16 21 L16 22.3 ' +
+                'L12 21.2 L8 22.3 L8 21 L10.6 19 L9.8 13.5 L2 15.5 L2 13.5 L9.8 10 Z" ' +
+                'fill="#fde047" stroke="#1f2937" stroke-width="0.7" stroke-linejoin="round"/></svg>';
+            var icon = L.divIcon({ className: 'recon-hdob-aircraft', html: svg,
+                                   iconSize: [26, 26], iconAnchor: [13, 13] });
+            var mk = L.marker([last.lat, last.lon], { icon: icon, interactive: true, zIndexOffset: 1000 });
+            mk.bindTooltip(aircraft[a].tail + ' · ' + (last.wspd_kt != null ? last.wspd_kt + ' kt FL' : '') +
+                ' · ' + (window._ReconKit ? window._ReconKit.fmtTime(last.t) : last.t),
+                { direction: 'top', offset: [0, -10] });
+            mk.addTo(map);
+            _hdobAircraftMarkers.push(mk);
+        }
     }
 
     function _hdobBuildToggles() {
@@ -595,7 +655,7 @@
                     name: cfg.name, legendgroup: cfg.key, showlegend: firstForVar,
                     line: { color: cfg.color, width: 1.4, dash: cfg.dash || 'solid' },
                     connectgaps: false, yaxis: cfg.axis,
-                    hovertemplate: '%{y} ' + cfg.unit + ' · ' + ac.tail + '<extra></extra>'
+                    hovertemplate: '%{x|%H:%M:%SZ} · %{y} ' + cfg.unit + ' · ' + ac.tail + '<extra></extra>'
                 });
                 firstForVar = false;
             });
@@ -643,7 +703,9 @@
             autosize: true, margin: { l: 52, r: 50, t: 6, b: 34 }, showlegend: true,
             legend: { orientation: 'h', y: 1.06, font: { size: 10, color: fg } },
             paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', hovermode: 'closest',
-            xaxis: { type: 'date', range: _xrange, gridcolor: grid, tickfont: { size: 10, color: fg }, domain: [0, 1] },
+            xaxis: { type: 'date', range: _xrange, gridcolor: grid, tickfont: { size: 10, color: fg }, domain: [0, 1],
+                     showspikes: true, spikemode: 'across', spikedash: 'dash', spikethickness: 1,
+                     spikecolor: dark ? '#94a3b8' : '#64748b' },
             yaxis: { title: { text: 'Wind (kt)', font: { size: 11, color: fg } }, domain: [0.56, 1.0], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false },
             yaxis2: { title: { text: 'Pres (mb)', font: { size: 11, color: fg } }, domain: [0.30, 0.52], gridcolor: grid, tickfont: { size: 10, color: fg }, autorange: 'reversed', zeroline: false },
             yaxis3: { title: { text: 'Temp (°C)', font: { size: 11, color: fg } }, domain: [0, 0.24], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false }

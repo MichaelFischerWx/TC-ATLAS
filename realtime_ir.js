@@ -21773,12 +21773,40 @@
         if (lon < -105 && lon >= -180) return 'GOES-West';   // E/Central Pacific
         return 'Himawari';                                   // W Pacific · Indian Ocean
     }
-    // Most recent GIBS 10-min slot, backed off ~25 min for NRT latency. The
-    // RetryLayer steps further back per-tile if a slot 404s.
-    function _reconLatestGibsTime() {
-        var d = new Date(Date.now() - 25 * 60 * 1000);
+    // GIBS geostationary NRT latency is variable (often ~1-2 h, sometimes ~4 h).
+    // The shallow per-tile retry can't reach that far, so a fixed small backoff
+    // leaves the layer blank. Instead we PROBE for the latest actually-published
+    // slot (cached ~10 min) and build the layer at that time; the shallow retry
+    // then lands on real tiles. Until the probe resolves we use a safe -90 min.
+    var _reconGibsTimeStr = null, _reconGibsProbedAt = 0, _reconGibsProbing = false;
+    function _reconGibsSlot(offsetMin) {
+        var d = new Date(Date.now() - offsetMin * 60 * 1000);
         d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10, 0, 0);
         return d.toISOString().slice(0, 19) + 'Z';
+    }
+    function _reconProbeGibs() {
+        if (_reconGibsProbing) return;
+        if (_reconGibsTimeStr && (Date.now() - _reconGibsProbedAt) < 10 * 60 * 1000) return;
+        _reconGibsProbing = true;
+        var layer = GIBS_IR_LAYERS['GOES-East'];
+        var steps = [15, 30, 45, 60, 90, 120, 180, 240, 300, 360], i = 0;
+        function tryNext() {
+            if (i >= steps.length) { _reconGibsProbing = false; return; }
+            var ts = _reconGibsSlot(steps[i]);
+            var url = GIBS_BASE + '/' + layer + '/default/' + ts +
+                      '/GoogleMapsCompatible_Level6/3/3/2.png';  // small disk tile
+            fetch(url, { method: 'HEAD', cache: 'no-store' }).then(function (r) {
+                if (r.ok) {
+                    _reconGibsTimeStr = ts; _reconGibsProbedAt = Date.now(); _reconGibsProbing = false;
+                    try { window.dispatchEvent(new CustomEvent('recon-gibs-ready')); } catch (e) {}
+                } else { i++; tryNext(); }
+            }).catch(function () { i++; tryNext(); });
+        }
+        tryNext();
+    }
+    function _reconLatestGibsTime() {
+        _reconProbeGibs();  // refresh the cached latest-available time in the background
+        return _reconGibsTimeStr || _reconGibsSlot(90);
     }
 
     // Expose a small map-parametrized recon rendering kit so the Recon tab's
@@ -21796,6 +21824,9 @@
         // longitude. Reuses the IR viewer's per-tile time-fallback builders.
         // maxZoom is lifted to 12 so the (Level6/7-native) tiles upscale and
         // stay visible when zoomed into a flight pattern instead of vanishing.
+        // Tag that changes when the probed latest-available GIBS time changes,
+        // so the recon map knows to rebuild its satellite layer.
+        gibsTimeTag: function () { return _reconGibsTimeStr || 'pending'; },
         gibsProductLayer: function (product, lonHint, opacity) {
             var sat = _reconPickGibsSat(lonHint);
             var t = _reconLatestGibsTime();
