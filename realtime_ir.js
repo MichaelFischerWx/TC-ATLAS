@@ -386,6 +386,11 @@
     };
     var GIBS_VIS_TILEMATRIX = 'GoogleMapsCompatible_Level7';
     var GIBS_VIS_MAX_ZOOM = 7;
+    // How far the global map can zoom IN while still SHOWING satellite. GIBS IR
+    // is native to z6 and GeoColor/Vis to z7; beyond that we upscale (keep
+    // maxNativeZoom at the native level, lift the layer's maxZoom to this) so the
+    // satellite stays visible — softer — instead of vanishing when zoomed in.
+    var GIBS_DISPLAY_MAX_ZOOM = 10;
 
     // GIBS mid-level Water Vapor (Band 8, ~6.2 µm) — same TileMatrix/zoom
     // family as IR (Level6) since GIBS publishes WV at the same 2-km resolution.
@@ -1385,7 +1390,7 @@
         var CompositeVisLayer = L.GridLayer.extend({
             options: {
                 tileSize: 256,
-                maxZoom: GIBS_VIS_MAX_ZOOM,
+                maxZoom: GIBS_DISPLAY_MAX_ZOOM,     // upscale past native z7 instead of hiding
                 maxNativeZoom: GIBS_VIS_MAX_ZOOM,
                 opacity: opacity || 0.65,
                 attribution: '<a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>',
@@ -1646,7 +1651,7 @@
         var CompositeLayer = L.GridLayer.extend({
             options: {
                 tileSize: 256,
-                maxZoom: GIBS_MAX_ZOOM,
+                maxZoom: GIBS_DISPLAY_MAX_ZOOM,     // upscale past native z6 instead of hiding
                 maxNativeZoom: GIBS_MAX_ZOOM,
                 opacity: opacity || 0.65,
                 attribution: '<a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>',
@@ -2979,8 +2984,10 @@
 
         map.zoomControl.setPosition('topleft');
 
-        // Allow zoom 7 (GeoColor tiles go up to Level7)
-        map.setMaxZoom(GIBS_VIS_MAX_ZOOM);
+        // Allow zooming in past the GIBS native level; the composite layers
+        // upscale (maxNativeZoom stays native) so the satellite stays visible
+        // instead of vanishing when zoomed in.
+        map.setMaxZoom(GIBS_DISPLAY_MAX_ZOOM);
 
         // ── Unified Layers panel (replaces the old stack of separate
         //    DeepMind / Genesis / Winds / Env Analysis pills) ────────
