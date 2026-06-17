@@ -358,8 +358,12 @@ def _near_track(lat, lon, track_pts, tol_deg=4.0) -> bool:
 
 
 def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
-                storm_lat: float = None, storm_lon: float = None) -> dict:
-    """Assemble the cumulative recon blob for one storm as of sim_now."""
+                storm_lat: float = None, storm_lon: float = None,
+                mission_tail: str = "") -> dict:
+    """Assemble the cumulative recon blob for one storm as of sim_now. When
+    mission_tail is set, run in MISSION mode: return only that aircraft's full
+    track (+ sondes/VDM near it), bypassing storm attribution — this is how an
+    airborne flight is shown even when its system isn't a tracked storm."""
     dirs = _basin_dirs(atcf_id)
     year = sim_now.year
     since = sim_now - timedelta(hours=hours)
@@ -425,6 +429,12 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         track = [obmap[k] for k in sorted(obmap) if k <= sim_iso]
         if not track:
             continue
+        # Mission mode: keep only the requested aircraft, whole track, no
+        # storm attribution (the user explicitly selected this flight).
+        if mission_tail:
+            if tail.upper() == mission_tail:
+                aircraft_out.append({"tail": tail, "track": track})
+            continue
         labels = aircraft_names.get(tail, set())
         name_ok = any(_label_matches(l) for l in labels)
         # A flight that explicitly labels itself a DIFFERENT specific system
@@ -447,6 +457,10 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
             continue
         aircraft_out.append({"tail": tail, "track": track})
     aircraft_out.sort(key=lambda a: a["track"][-1]["t"], reverse=True)
+
+    # Points of the kept aircraft track(s) — used to attribute sondes/VDMs by
+    # proximity (and the sole gate in mission mode).
+    track_pts = [(o["lat"], o["lon"]) for a in aircraft_out for o in a["track"]]
 
     # ── VDM center fixes (reuse global_archive parser) ──
     vdms = []
@@ -472,7 +486,11 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
                 continue
             if abs(v["lat"]) < 0.05 or abs(v["lon"]) < 0.05:
                 continue
-            if v.get("atcf_id") and v["atcf_id"].upper() != atcf_id.upper():
+            if mission_tail:
+                # Mission mode: keep VDMs near the selected aircraft's track.
+                if not (track_pts and _near_track(v["lat"], v["lon"], track_pts)):
+                    continue
+            elif v.get("atcf_id") and v["atcf_id"].upper() != atcf_id.upper():
                 continue
             tiso = v.get("time")
             if tiso and tiso > sim_iso:
@@ -498,7 +516,6 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
     # different system. This keeps a research flight's sondes (e.g. TEXAQS) out
     # even after its HDOB has been filtered (so the aircraft track is empty) —
     # the old "near the track" gate became a no-op with no track and let them in.
-    track_pts = [(o["lat"], o["lon"]) for a in aircraft_out for o in a["track"]]
     drops = []
     since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
@@ -514,6 +531,12 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
                     _bulletin_cache["drop::" + url] = cached
             for d in cached:
                 if not (since_iso <= (d["t"] or "") <= sim_iso):
+                    continue
+                if mission_tail:
+                    # Mission mode: keep sondes near the selected aircraft's track.
+                    if not (track_pts and _near_track(d["lat"], d["lon"], track_pts)):
+                        continue
+                    drops.append(d)
                     continue
                 lbl = d.get("storm")
                 name_ok_d = _label_matches(lbl) if lbl else False
@@ -551,11 +574,14 @@ def recon_realtime(
     name: str = Query("", description="Storm name, for dropsonde attribution"),
     lat: float = Query(None, description="Storm lat — gates HDOB to nearby aircraft"),
     lon: float = Query(None, description="Storm lon — gates HDOB to nearby aircraft"),
+    tail: str = Query("", description="Mission mode: return ONLY this aircraft's track "
+                                      "(+ nearby sondes/VDM), bypassing storm attribution"),
     replay: str = Query("", description="Replay anchor YYYYMMDDHHMM (dev/testing)"),
     speed: float = Query(60.0, ge=1.0, le=600.0, description="Replay speed multiplier"),
 ):
-    """Cumulative real-time recon for a storm: HDOB tracks, dropsondes, VDMs."""
+    """Cumulative real-time recon for a storm (or a single mission via tail=)."""
     atcf_id = atcf_id.upper().strip()
+    tail = (tail or "").upper().strip()
     if len(atcf_id) < 8:
         return JSONResponse({"error": "bad atcf_id"}, status_code=400)
 
@@ -566,11 +592,11 @@ def recon_realtime(
         sim_now = _replay_now(atcf_id, replay, speed)
         if sim_now is None:
             return JSONResponse({"error": "bad replay anchor"}, status_code=400)
-        cache_key = f"{atcf_id}:{hours}:{name}:{lat}:{lon}:replay:{replay}:{speed}:{int(time.time() // 5)}"
+        cache_key = f"{atcf_id}:{hours}:{name}:{lat}:{lon}:{tail}:replay:{replay}:{speed}:{int(time.time() // 5)}"
         cc = "no-store"
     else:
         sim_now = datetime.now(timezone.utc)
-        cache_key = f"{atcf_id}:{hours}:{name}:{lat}:{lon}:live"
+        cache_key = f"{atcf_id}:{hours}:{name}:{lat}:{lon}:{tail}:live"
         cc = "public, max-age=60, s-maxage=120, stale-while-revalidate=120"
 
     now = time.time()
@@ -578,8 +604,54 @@ def recon_realtime(
     if hit and (now - hit[1]) < _BLOB_TTL:
         return JSONResponse(hit[0], headers={"Cache-Control": cc})
 
-    blob = _build_blob(atcf_id, hours, sim_now, name=name, storm_lat=lat, storm_lon=lon)
+    blob = _build_blob(atcf_id, hours, sim_now, name=name, storm_lat=lat, storm_lon=lon,
+                       mission_tail=tail)
     _blob_cache[cache_key] = (blob, now)
     if len(_blob_cache) > 200:
         _blob_cache.pop(next(iter(_blob_cache)))
     return JSONResponse(blob, headers={"Cache-Control": cc})
+
+
+@router.get("/active-missions")
+def recon_active_missions(hours: int = Query(6, ge=1, le=24)):
+    """Mission-centric discovery: every aircraft currently posting HDOB, grouped
+    by tail — independent of whether its system is a tracked storm. Lets the UI
+    surface a flight (e.g. into an undesignated disturbance) that storm-keyed
+    attribution would miss. Cheap: reuses the per-bulletin cache."""
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(hours=hours)
+    missions: dict = {}
+    for basin, hdob in (("AL", "AHONT1"), ("EP", "AHOPN1")):
+        dir_url = f"{NHC_RECON_BASE}/{now.year}/{hdob}/"
+        for url in _list_recent_files(dir_url, since, now):
+            parsed = _bulletin_cache.get(url)
+            if parsed is None:
+                txt = _fetch_text(url)
+                m = re.search(r"\.(\d{12})\.txt$", url)
+                fdt = datetime.strptime(m.group(1), "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
+                parsed = _parse_hdob_bulletin(txt, fdt) if txt else None
+                if len(_bulletin_cache) < _BULLETIN_CACHE_MAX:
+                    _bulletin_cache[url] = parsed
+            if not parsed or not parsed.get("obs"):
+                continue
+            tail = parsed["tail"]
+            mm = missions.setdefault(tail, {
+                "tail": tail, "labels": set(), "n_obs": 0, "basin": basin,
+                "last_t": "", "lat": None, "lon": None})
+            if parsed.get("storm"):
+                mm["labels"].add(parsed["storm"])
+            mm["n_obs"] += len(parsed["obs"])
+            last = parsed["obs"][-1]
+            if last["t"] > mm["last_t"]:
+                mm["last_t"], mm["lat"], mm["lon"] = last["t"], last["lat"], last["lon"]
+    out = [{
+        "tail": m["tail"],
+        "label": (sorted(m["labels"])[0] if m["labels"] else ""),
+        "labels": sorted(m["labels"]),
+        "n_obs": m["n_obs"], "basin": m["basin"],
+        "last_t": m["last_t"], "lat": m["lat"], "lon": m["lon"],
+    } for m in missions.values()]
+    out.sort(key=lambda x: x["last_t"], reverse=True)
+    return JSONResponse(
+        {"missions": out, "updated_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ")},
+        headers={"Cache-Control": "public, max-age=120, s-maxage=120"})

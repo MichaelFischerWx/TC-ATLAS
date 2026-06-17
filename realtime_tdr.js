@@ -188,6 +188,7 @@
     var _hdobAtcf = null, _hdobName = '', _hdobReplay = null, _hdobPollTimer = null;
     var _hdobLat = null, _hdobLon = null;  // storm position (HDOB proximity gate, live only)
     var _hdobGibsLayer = null, _hdobGibsKey = null, _hdobSatProduct = 'ir';  // GIBS basemap
+    var _hdobMissions = [], _hdobMissionInfo = {}, _hdobMissionTail = null;  // mission-centric fallback
     var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = [], _hdobChartBound = false;
     var _hdobStormOpts = [], _hdobBuiltToggles = false;
     var _hdobVarVis = { wspd_kt: true, sfmr_kt: true, peak_fl_kt: false,
@@ -211,6 +212,7 @@
         if (!_hdobBuiltToggles) { _hdobBuildToggles(); _hdobBuildBarbVarUI(); _hdobBuiltToggles = true; }
         var sel = document.getElementById('recon-hdob-storm');
         if (sel && !_hdobAtcf && sel.value) window._reconHdobSelectStorm(sel.value);
+        _hdobFetchMissions();  // discover standalone flights (mission-centric fallback)
     }
 
     // The active-storms list loads asynchronously, so Live Flight (now the
@@ -291,11 +293,28 @@
             if (opts[k].atcf && !seen[opts[k].atcf]) { seen[opts[k].atcf] = 1; uniq.push(opts[k]); }
         }
         _hdobStormOpts = uniq;
+        // Mission-centric fallback: standalone active flights NOT near any tracked
+        // storm (a flight into an undesignated disturbance that storm attribution
+        // would miss). Ones near a tracked storm are already covered by it.
+        _hdobMissionInfo = {};
+        var missionOpts = [];
+        for (var mi = 0; mi < _hdobMissions.length; mi++) {
+            var mm = _hdobMissions[mi];
+            if (!mm.tail || mm.lat == null || mm.lon == null) continue;
+            var nearStorm = false;
+            for (var si = 0; si < uniq.length; si++) {
+                if (uniq[si].lat == null || uniq[si].lon == null) continue;
+                if (Math.abs(uniq[si].lat - mm.lat) <= 5 && Math.abs(uniq[si].lon - mm.lon) <= 5) { nearStorm = true; break; }
+            }
+            if (nearStorm) continue;
+            _hdobMissionInfo[mm.tail] = mm;
+            missionOpts.push(mm);
+        }
         var cur = sel.value;
         sel.innerHTML = '';
-        if (!uniq.length) {
+        if (!uniq.length && !missionOpts.length) {
             var o0 = document.createElement('option');
-            o0.value = ''; o0.textContent = 'No active storms';
+            o0.value = ''; o0.textContent = 'No active storms or flights';
             sel.appendChild(o0);
             _hdobShowEmpty(true);
             return;
@@ -306,20 +325,59 @@
             op.textContent = (uniq[u].recon ? '✈ ' : '') + uniq[u].name + ' (' + uniq[u].atcf + ')';
             sel.appendChild(op);
         }
-        sel.value = (cur && seen[cur]) ? cur : uniq[0].atcf;
+        for (var mo = 0; mo < missionOpts.length; mo++) {
+            var mop = document.createElement('option');
+            mop.value = 'mission:' + missionOpts[mo].tail;
+            mop.textContent = '✈ ' + missionOpts[mo].tail +
+                (missionOpts[mo].label ? ' · ' + missionOpts[mo].label : '') + ' (flight)';
+            sel.appendChild(mop);
+        }
+        var def = uniq.length ? uniq[0].atcf : ('mission:' + missionOpts[0].tail);
+        sel.value = (cur && (seen[cur] || cur.indexOf('mission:') === 0)) ? cur : def;
     }
 
-    window._reconHdobSelectStorm = function (atcf) {
-        if (!atcf) return;
-        var opt = null;
-        for (var i = 0; i < _hdobStormOpts.length; i++) {
-            if (_hdobStormOpts[i].atcf === atcf) opt = _hdobStormOpts[i];
+    function _hdobFetchMissions() {
+        var kit = window._ReconKit;
+        if (!kit) return;
+        fetch(kit.apiBase() + '/recon/active-missions?hours=6', { cache: 'no-store' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                _hdobMissions = (j && j.missions) || [];
+                _hdobPopulateStorms();   // re-merge missions into the picker
+                // If nothing was selected yet and the Live Flight tab is open,
+                // auto-load the (new) default so a standalone flight shows itself.
+                var panel = document.querySelector('#recon-main .recon-sub-panel[data-sub="hdob"]');
+                var sel = document.getElementById('recon-hdob-storm');
+                if (panel && panel.style.display !== 'none' && !_hdobAtcf && sel && sel.value) {
+                    window._reconHdobSelectStorm(sel.value);
+                }
+            })
+            .catch(function () {});
+    }
+
+    window._reconHdobSelectStorm = function (value) {
+        if (!value) return;
+        _hdobData = null; _hdobFitDone = false; _hdobReplay = null;
+        if (value.indexOf('mission:') === 0) {
+            // Mission mode: a standalone flight, attributed by aircraft tail.
+            var tail = value.slice(8);
+            var mm = _hdobMissionInfo[tail] || { tail: tail };
+            _hdobMissionTail = tail;
+            _hdobName = mm.label || tail;
+            _hdobAtcf = (mm.basin === 'EP') ? 'EP992026' : 'AL992026';  // synthetic, for basin only
+            _hdobLat = (mm.lat != null) ? mm.lat : null;
+            _hdobLon = (mm.lon != null) ? mm.lon : null;
+        } else {
+            _hdobMissionTail = null;
+            var opt = null;
+            for (var i = 0; i < _hdobStormOpts.length; i++) {
+                if (_hdobStormOpts[i].atcf === value) opt = _hdobStormOpts[i];
+            }
+            if (!opt) return;
+            _hdobAtcf = opt.atcf; _hdobName = opt.name; _hdobReplay = opt.replay || null;
+            _hdobLat = (opt.lat != null) ? opt.lat : null;
+            _hdobLon = (opt.lon != null) ? opt.lon : null;
         }
-        if (!opt) return;
-        _hdobAtcf = opt.atcf; _hdobName = opt.name; _hdobReplay = opt.replay || null;
-        _hdobLat = (opt.lat != null) ? opt.lat : null;
-        _hdobLon = (opt.lon != null) ? opt.lon : null;
-        _hdobData = null; _hdobFitDone = false;
         if (_hdobBarbLayer && _hdobMap) { try { _hdobMap.removeLayer(_hdobBarbLayer); } catch (e) {} _hdobBarbLayer = null; }
         if (_hdobMarkers.length && _hdobMap) {
             for (var m = 0; m < _hdobMarkers.length; m++) { try { _hdobMap.removeLayer(_hdobMarkers[m]); } catch (e) {} }
@@ -396,11 +454,15 @@
         if (!kit || !_hdobAtcf) return;
         var statusEl = document.getElementById('recon-hdob-status');
         var url = kit.apiBase() + '/recon/realtime?atcf_id=' + encodeURIComponent(_hdobAtcf) + '&hours=24';
-        if (_hdobName) url += '&name=' + encodeURIComponent(_hdobName);
-        if (_hdobReplay) {
-            url += '&replay=' + _hdobReplay.anchor + '&speed=' + _hdobReplay.speed;
-        } else if (_hdobLat != null && _hdobLon != null) {
-            url += '&lat=' + _hdobLat + '&lon=' + _hdobLon;  // live only: gate HDOB to storm
+        if (_hdobMissionTail) {
+            url += '&tail=' + encodeURIComponent(_hdobMissionTail);  // mission mode
+        } else {
+            if (_hdobName) url += '&name=' + encodeURIComponent(_hdobName);
+            if (_hdobReplay) {
+                url += '&replay=' + _hdobReplay.anchor + '&speed=' + _hdobReplay.speed;
+            } else if (_hdobLat != null && _hdobLon != null) {
+                url += '&lat=' + _hdobLat + '&lon=' + _hdobLon;  // live only: gate HDOB to storm
+            }
         }
         if (statusEl && !_hdobData) statusEl.textContent = 'loading…';
         fetch(url, { cache: 'no-store' })
