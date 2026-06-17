@@ -630,7 +630,8 @@ _IWG1_AIRCRAFT = {"H": "NOAA2", "I": "NOAA3", "N": "NOAA9"}
 
 _IWG1_DECIMATE_S = 10     # default bin (s): 10-s vector-mean FL wind, matching ops
 _IWG1_FINE_S = 1          # "1-s" toggle resolution (full-rate, on demand)
-_IWG1_PEAK_WIN_S = 10     # rolling window for a HDOB-style "peak FL wind"
+_IWG1_MEAN_WIN_S = 10     # averaging window for the 10-s mean wind (sustained + peak basis)
+_IWG1_PEAK_WIN_S = 30     # window over which "peak FL wind" = max of the 10-s mean wind
 _IWG1_MIN_FETCH_S = 120   # min seconds between upstream NOAA-AOC polls per flight
 _MS2KT = 1.943844         # IWG1 wind speed is m/s (confirmed vs P-3 cruise TAS)
 
@@ -805,16 +806,29 @@ def _parse_iwg1_text(text: str, sim_now: datetime, res: int = _IWG1_DECIMATE_S) 
         return [], label
     raw.sort(key=lambda r: r["_dt"])
 
-    # Rolling peak FL wind over a trailing _IWG1_PEAK_WIN_S window of 1-s winds,
-    # so NOAA's default "Peak Wind" trace populates just like the HDOB aircraft.
-    win = timedelta(seconds=_IWG1_PEAK_WIN_S)
+    # "Peak FL wind" must be the highest 10-SECOND-MEAN wind — NOT a raw 1-s gust
+    # (peaking on 1-s data gave a misleadingly high value, e.g. 74 kt). So:
+    #   (1) sliding _IWG1_MEAN_WIN_S (10-s) VECTOR-mean wind at each 1-s sample, then
+    #   (2) the rolling MAX of that 10-s mean over a trailing _IWG1_PEAK_WIN_S (30-s)
+    #       window — mirroring HDOB's "peak 10-s wind within the 30-s ob".
+    mwin = timedelta(seconds=_IWG1_MEAN_WIN_S)
+    lo, su, sv, nc = 0, 0.0, 0.0, 0
+    for i in range(len(raw)):
+        if raw[i]["_u"] is not None:
+            su += raw[i]["_u"]; sv += raw[i]["_v"]; nc += 1
+        while raw[lo]["_dt"] < raw[i]["_dt"] - mwin:
+            if raw[lo]["_u"] is not None:
+                su -= raw[lo]["_u"]; sv -= raw[lo]["_v"]; nc -= 1
+            lo += 1
+        raw[i]["_m10"] = (math.hypot(su / nc, sv / nc) * _MS2KT) if nc > 0 else None
+    pwin = timedelta(seconds=_IWG1_PEAK_WIN_S)
     lo = 0
     for i in range(len(raw)):
-        while raw[lo]["_dt"] < raw[i]["_dt"] - win:
+        while raw[lo]["_dt"] < raw[i]["_dt"] - pwin:
             lo += 1
         peak = None
         for k in range(lo, i + 1):
-            w = raw[k]["_ws_kt"]
+            w = raw[k]["_m10"]
             if w is not None and (peak is None or w > peak):
                 peak = w
         raw[i]["peak_fl_kt"] = round(peak) if peak is not None else None
@@ -852,7 +866,7 @@ def _parse_iwg1_text(text: str, sim_now: datetime, res: int = _IWG1_DECIMATE_S) 
         bin_rows.append(r)
     _flush(bin_rows)
     for r in obs:                      # strip internal scratch fields
-        for k in ("_dt", "_ws_kt", "_u", "_v"):
+        for k in ("_dt", "_ws_kt", "_u", "_v", "_m10"):
             r.pop(k, None)
     return obs, label
 

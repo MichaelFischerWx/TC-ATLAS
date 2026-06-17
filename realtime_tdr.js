@@ -779,7 +779,7 @@
         if (src === 'iwg1') {
             return 'Source: NOAA 1-Hz (IWG1) flight-level feed. FL Wind = ' +
                 (_hdobFl1s ? 'full 1-second wind' : '10-second vector mean') +
-                '; Peak = rolling 10-second maximum — both derived by TC-ATLAS from the 1-Hz data (not a native 10-s product).';
+                '; Peak = highest 10-second mean wind (within 30 s) — both derived by TC-ATLAS from the 1-Hz data (not a native 10-s product).';
         }
         if (src === 'hdob') {
             return 'Source: USAF HDOB — NHC 30-second average wind with the reported 10-second peak.';
