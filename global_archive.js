@@ -147,8 +147,9 @@ function _loadCoastlineOverlay(map) {
     _coastlineLoading = true;
 
     // Natural Earth 10m coastlines, vendored locally (assets/coastlines/) and
-    // served from our own origin (~1.5 MB gzipped via GitHub Pages). GitHub's
-    // raw host is rate-limited and would silently drop this ~10 MB fetch.
+    // served from our own origin (coords trimmed to 5 dp, ~2.9 MB gzipped via
+    // GitHub Pages). GitHub's raw host is rate-limited and would silently drop
+    // this ~9 MB fetch.
     // One-time cost on first session; cached thereafter in the _coastlineGeoJSON
     // module var so subsequent map inits are free.
     fetch('assets/coastlines/ne_10m_coastline.geojson')

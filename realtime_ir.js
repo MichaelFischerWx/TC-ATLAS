@@ -352,8 +352,9 @@
         _coastlineLoading = true;
         // Natural Earth 10m coastlines, vendored locally (assets/coastlines/)
         // and served from our own origin — GitHub's raw host is rate-limited and
-        // would silently drop this ~10 MB fetch, leaving the map with labels but
-        // no coast outline. GitHub Pages gzip-serves it to ~1.5 MB on the wire.
+        // would silently drop this ~9 MB fetch, leaving the map with labels but
+        // no coast outline. Coords trimmed to 5 dp; GitHub Pages gzip-serves it
+        // to ~2.9 MB on the wire.
         fetch('assets/coastlines/ne_10m_coastline.geojson')
             .then(function (r) { return r.json(); })
             .then(function (geojson) {
@@ -21286,6 +21287,21 @@
         [-20, '#3b82f6'], [-10, '#06b6d4'], [0, '#22d3ee'], [10, '#34d399'],
         [20, '#fbbf24'], [25, '#fb923c'], [999, '#f87171']
     ];
+    // Recon-specific wind scale (kt). Unlike the ASCAT scale (which tops out at
+    // 64+ for scatterometer surface winds), flight-level winds in a major
+    // hurricane routinely exceed 100 kt — so this extends through the
+    // Saffir-Simpson categories to Cat 5. Used for FL Wind / SFMR / Peak Wind.
+    var _RECON_WIND_STOPS = [
+        [34,   '#60a5fa'], [50,  '#22c55e'], [64,  '#eab308'], [83,  '#f97316'],
+        [96,   '#ef4444'], [113, '#dc2626'], [137, '#c026d3'], [9999, '#7c3aed']
+    ];
+    function _reconWindColor(v) {
+        if (v == null || isNaN(v)) return '#9ca3af';
+        for (var i = 0; i < _RECON_WIND_STOPS.length; i++) {
+            if (v < _RECON_WIND_STOPS[i][0]) return _RECON_WIND_STOPS[i][1];
+        }
+        return _RECON_WIND_STOPS[_RECON_WIND_STOPS.length - 1][1];
+    }
     function _reconVarKind(key) {
         for (var i = 0; i < _RECON_COLORVARS.length; i++) {
             if (_RECON_COLORVARS[i].key === key) return _RECON_COLORVARS[i].kind;
@@ -21301,7 +21317,7 @@
             }
             return _RECON_TEMP_STOPS[_RECON_TEMP_STOPS.length - 1][1];
         }
-        return _ascatColor(val);  // wind scale (shared with ASCAT)
+        return _reconWindColor(val);  // recon wind scale (extends to Cat 5)
     }
     /** Legend swatches [label,color] for the current color variable. */
     function _reconLegendStops(key) {
@@ -21309,8 +21325,9 @@
             return [['<-10', '#06b6d4'], ['0', '#22d3ee'], ['10', '#34d399'],
                     ['20', '#fbbf24'], ['25', '#fb923c'], ['30+', '#f87171']];
         }
-        return [['<15', '#60a5fa'], ['15-25', '#22c55e'], ['25-35', '#eab308'],
-                ['35-50', '#f97316'], ['50-64', '#ef4444'], ['64+', '#c026d3']];
+        return [['<34', '#60a5fa'], ['34-50', '#22c55e'], ['50-64', '#eab308'],
+                ['64-83', '#f97316'], ['83-96', '#ef4444'], ['96-113', '#dc2626'],
+                ['113-137', '#c026d3'], ['137+', '#7c3aed']];
     }
 
     /**
