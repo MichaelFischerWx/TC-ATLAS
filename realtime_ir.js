@@ -22759,12 +22759,22 @@
                 if (pollTimer || seasonSummaryTimer) _pollHiddenAt = Date.now();
                 if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
                 if (seasonSummaryTimer) { clearInterval(seasonSummaryTimer); seasonSummaryTimer = null; }
+                // Pause the recon overlay poll too — a backgrounded tab with the
+                // overlay open otherwise keeps rebuilding /recon/realtime blobs
+                // (and re-fetching upstream) every minute for no viewer.
+                if (_rtReconPollTimer) { clearInterval(_rtReconPollTimer); _rtReconPollTimer = null; }
             } else {
                 var awayMs = _pollHiddenAt ? Date.now() - _pollHiddenAt : 0;
                 _pollHiddenAt = 0;
                 if (awayMs > POLL_INTERVAL_MS / 2) pollActiveStorms();
                 if (!pollTimer) pollTimer = setInterval(pollActiveStorms, POLL_INTERVAL_MS);
                 if (!seasonSummaryTimer) seasonSummaryTimer = setInterval(fetchSeasonSummary, SEASON_SUMMARY_INTERVAL_MS);
+                // Resume recon polling only if the overlay is still toggled on;
+                // do one immediate refresh so the track is current on return.
+                if (_rtReconVisible && !_rtReconPollTimer) {
+                    _rtReconFetch();
+                    _rtReconPollTimer = setInterval(_rtReconFetch, _RT_RECON_POLL_MS);
+                }
             }
         });
 

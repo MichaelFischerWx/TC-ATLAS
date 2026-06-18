@@ -633,6 +633,13 @@ _IWG1_FINE_S = 1          # "1-s" toggle resolution (full-rate, on demand)
 _IWG1_MEAN_WIN_S = 10     # averaging window for the 10-s mean wind (sustained + peak basis)
 _IWG1_PEAK_WIN_S = 30     # window over which "peak FL wind" = max of the 10-s mean wind
 _IWG1_MIN_FETCH_S = 120   # min seconds between upstream NOAA-AOC polls per flight
+# Cache the NOAA flight-FOLDER discovery listing. Folders only appear at takeoff
+# / vanish after landing, so re-listing the AAMPS iwg1 index on every ~60-s blob
+# rebuild is wasted upstream load + handler time with zero freshness benefit (the
+# actual track still comes from the incremental, Range-fetched _iwg1_fetch_text).
+# Shared globally across storms/viewers. Last-good is served on a fetch error.
+_IWG1_DIR_TTL = 180
+_iwg1_flights_cache = {"flights": [], "ts": 0.0}
 _MS2KT = 1.943844         # IWG1 wind speed is m/s (confirmed vs P-3 cruise TAS)
 
 # 0-indexed column positions in the comma-split IWG1 data line (per the
@@ -663,15 +670,19 @@ def _iwg1_num(parts: list, idx: int):
 def _iwg1_active_flights(now: datetime) -> list:
     """Discover recent NOAA flight folders (YYYYMMDD{H|I|N}{n}) from the AAMPS
     iwg1 directory. Returns [{flid, tail, url}] for flights dated within ~36 h
-    (today/yesterday UTC), newest first."""
+    (today/yesterday UTC), newest first. Result cached _IWG1_DIR_TTL s (folders
+    change only at takeoff/landing); last-good served on a fetch error."""
+    c = _iwg1_flights_cache
+    if (time.time() - c["ts"]) < _IWG1_DIR_TTL:
+        return list(c["flights"])
     try:
         from tc_radar_api import _hrd_fetch_text
         html = _hrd_fetch_text(IWG1_BASE + "/", timeout=15)
     except Exception as e:
         logger.warning("iwg1 dir list failed: %s", e)
-        return []
+        return list(c["flights"])   # serve last-good rather than dropping a flight
     if not html:
-        return []
+        return list(c["flights"])
     recent = {(now - timedelta(days=d)).strftime("%Y%m%d") for d in (0, 1)}
     out = {}
     for m in re.finditer(r'(\d{8})([HIN])(\d)/', html):
@@ -684,7 +695,10 @@ def _iwg1_active_flights(now: datetime) -> list:
         flid = f"{ymd}{letter}{n}"
         out[flid] = {"flid": flid, "tail": tail,
                      "url": f"{IWG1_BASE}/{flid}/{flid}_iwg1.txt"}
-    return sorted(out.values(), key=lambda f: f["flid"], reverse=True)
+    flights = sorted(out.values(), key=lambda f: f["flid"], reverse=True)
+    c["flights"] = flights
+    c["ts"] = time.time()
+    return list(flights)
 
 
 def _iwg1_fetch_text(flight: dict) -> str:
