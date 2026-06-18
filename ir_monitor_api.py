@@ -624,19 +624,29 @@ def _upload_public_bundle(key: str, body: bytes, content_type: str = "applicatio
     content_encoding = "gzip" if gzip_content else None
     cache_control = "public, max-age=300"
 
-    bucket = _get_rt_gcs_bucket()
-    if bucket is not None:
-        try:
-            blob = bucket.blob(key)
-            blob.cache_control = cache_control
-            if content_encoding:
-                blob.content_encoding = content_encoding
-            blob.upload_from_string(
-                body, content_type=content_type,
-                predefined_acl="publicRead", timeout=30,
-            )
-        except Exception as ex:
-            print(f"[Bundle Pre-build] GCS upload {key} failed: {ex}")
+    # GCS bundle write is only needed when GCS is the serving origin. Once
+    # PUBLIC_BUNDLE_BASE is set, BOTH the browser direct-read AND the 302
+    # (_public_bundle_url) target R2/cdn.tcatlas.org, so the GCS bundle copy
+    # is never read — writing it just burns Class-A ops + storage (~$0.26/day).
+    # We skip it in that case. This stays consistent with the documented
+    # rollback model (flip PUBLIC_BUNDLE_BASE empty → GCS writes resume AND
+    # serving reverts to GCS); within one prewarm cycle (~15 min) every bundle
+    # is rewritten, so a rollback self-heals quickly. The R2 mirror below is
+    # now the sole authoritative public copy.
+    if not _PUBLIC_BUNDLE_BASE:
+        bucket = _get_rt_gcs_bucket()
+        if bucket is not None:
+            try:
+                blob = bucket.blob(key)
+                blob.cache_control = cache_control
+                if content_encoding:
+                    blob.content_encoding = content_encoding
+                blob.upload_from_string(
+                    body, content_type=content_type,
+                    predefined_acl="publicRead", timeout=30,
+                )
+            except Exception as ex:
+                print(f"[Bundle Pre-build] GCS upload {key} failed: {ex}")
 
     # Dual-write the SAME bytes to R2 (zero-egress public mirror). No-op until
     # R2 is configured; never blocks correctness (GCS stays source of truth and
@@ -833,6 +843,67 @@ _anomalous_heal_lock = threading.Lock()
 # the instance for everyone.
 _RAW_FETCH_MAX_CONCURRENT = 3
 _raw_fetch_semaphore = threading.Semaphore(_RAW_FETCH_MAX_CONCURRENT)
+
+# Per-IP rate limit on the legacy /band-raw-frame endpoint. The modern frontend
+# fetches /band-raw-bundle (one request per band → all frames), so a *real* user
+# on current JS generates ~0 per-frame hits. The only callers left are stale-
+# cached browsers and scrapers that pull frames in a loop — each response is a
+# ~1.3 MB base64 payload, so a single sustained client racks up GBs/day of Cloud
+# Run egress (observed: one IP = 4.6 GB / 6.5k reqs in a day, ~150-260
+# band-raw-frame/hour SUSTAINED — low-and-slow, not bursty). We use a rolling
+# *hourly* cap: a legit stale-JS client loads a whole loop (~7 frames × a few
+# bands) in a burst and is nowhere near 200/hr, but a continuous scraper blows
+# past it. NOTE: this is a coarse per-instance backstop (approximate across
+# maxScale) — the durable fix for low-and-slow scrapers is edge-caching these
+# max-age=300 responses at Cloudflare (see the API-fronting work), which makes
+# the repeated pulls free regardless of rate. Tunable via env.
+_BAND_FRAME_RATE_MAX = int(os.environ.get("BAND_FRAME_RATE_MAX", "200"))
+_BAND_FRAME_RATE_WINDOW_SEC = float(os.environ.get("BAND_FRAME_RATE_WINDOW_SEC", "3600"))
+_band_frame_rate_lock = threading.Lock()
+_band_frame_rate_hits: "OrderedDict[str, list]" = OrderedDict()
+
+
+def _client_ip(request: Optional[Request]) -> str:
+    """Best-effort caller IP. Cloud Run terminates TLS and sets
+    X-Forwarded-For = "<client>, <proxy>, ..."; the first hop is the real
+    client. Falls back to the socket peer."""
+    if request is None:
+        return "?"
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "?"
+
+
+def _band_frame_rate_ok(ip: str) -> bool:
+    """Rolling-window per-IP limiter for /band-raw-frame. Returns False when
+    `ip` has exceeded _BAND_FRAME_RATE_MAX hits in the last window."""
+    if _BAND_FRAME_RATE_MAX <= 0:
+        return True  # disabled
+    now = time.time()
+    cutoff = now - _BAND_FRAME_RATE_WINDOW_SEC
+    with _band_frame_rate_lock:
+        hits = _band_frame_rate_hits.get(ip)
+        if hits is None:
+            hits = []
+            _band_frame_rate_hits[ip] = hits
+        # prune expired timestamps for this IP
+        i = 0
+        for i in range(len(hits)):
+            if hits[i] >= cutoff:
+                break
+        else:
+            i = len(hits)
+        del hits[:i]
+        if len(hits) >= _BAND_FRAME_RATE_MAX:
+            _band_frame_rate_hits.move_to_end(ip)
+            return False
+        hits.append(now)
+        _band_frame_rate_hits.move_to_end(ip)
+        # bound the table: drop the least-recently-seen IPs
+        while len(_band_frame_rate_hits) > 4096:
+            _band_frame_rate_hits.popitem(last=False)
+        return True
 
 
 def _estimate_shift(a, b):
@@ -5296,6 +5367,7 @@ def get_storm_hovmoller(
 
 @router.get("/storm/{atcf_id}/band-raw-frame")
 def get_storm_band_raw_frame(
+    request: Request,
     atcf_id: str,
     band: int = Query(8, ge=1, le=16, description="ABI band number (2=Vis, 8=WV, 13=IR)"),
     frame_index: int = Query(0, ge=0, description="Frame index (0 = most recent)"),
@@ -5307,7 +5379,18 @@ def get_storm_band_raw_frame(
     Fetch a single raw data frame for any satellite band.
     Band 2/3 = Visible (reflectance 0-1), Band 8 = Water Vapor (Tb K),
     Band 13 = Clean IR (Tb K).
+
+    Legacy path — modern clients use /band-raw-bundle. Per-IP rate limited to
+    cap scraper/stale-client egress (see _band_frame_rate_ok).
     """
+    ip = _client_ip(request)
+    if not _band_frame_rate_ok(ip):
+        logger.warning("band-raw-frame: rate limit hit for %s", ip)
+        raise HTTPException(
+            status_code=429,
+            detail="Too many per-frame requests — use /band-raw-bundle",
+            headers={"Retry-After": str(int(_BAND_FRAME_RATE_WINDOW_SEC))},
+        )
     _ensure_fresh_cache()
     storm = None
     with _active_storms_lock:
