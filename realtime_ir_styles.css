@@ -369,6 +369,12 @@ html, body { margin: 0; padding: 0; }
     background: var(--navy, #0d1318);
     z-index: 500;
     overflow: hidden;
+    /* Column flex so the body fills exactly the space left by the header,
+       whatever height the header wraps to. (Previously the body hardcoded
+       calc(100% - 48px); when the header wrapped past 48px the body
+       overflowed the clipped bottom and cut off the animation controls.) */
+    display: flex;
+    flex-direction: column;
 }
 
 /* ── Detail header ───────────────────────────────────────────── */
@@ -379,6 +385,7 @@ html, body { margin: 0; padding: 0; }
     padding: 10px 20px;
     border-bottom: 1px solid var(--border);
     background: var(--surface-raised);
+    flex-shrink: 0;   /* keep natural height; never compress into the body */
 }
 .ir-back-btn {
     background: var(--border);
@@ -698,7 +705,8 @@ html, body { margin: 0; padding: 0; }
 /* ── Detail body: two-panel layout ───────────────────────────── */
 .ir-detail-body {
     display: flex;
-    height: calc(100% - 48px);
+    flex: 1;
+    min-height: 0;   /* allow children to shrink/scroll within the flex row */
     overflow: hidden;
 }
 .ir-detail-left {

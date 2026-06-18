@@ -5437,7 +5437,10 @@
         document.getElementById('ir-main').style.display = 'none';
         document.getElementById('ir-legend').style.display = 'none';
         var detailEl = document.getElementById('ir-detail');
-        detailEl.style.display = 'block';
+        // 'flex' (not 'block') so the .ir-detail column layout applies — the
+        // body flexes to fill the space below the (variable-height) header
+        // instead of overflowing and clipping the animation controls.
+        detailEl.style.display = 'flex';
 
         // Populate the in-tab storm picker (so users can switch storms
         // without leaving the card).
