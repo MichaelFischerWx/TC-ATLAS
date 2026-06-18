@@ -15586,8 +15586,8 @@ function removeMicrowaveOverlay() {
 var _CITATIONS = [
     {
         label: 'TC-RADAR Dataset',
-        text: 'Fischer, M. S., P. D. Reasor, R. F. Rogers, and J. F. Gamache, 2022: An updated tropical cyclone radar database. Mon. Wea. Rev., 150, 2255\u20132278, https://doi.org/10.1175/MWR-D-21-0223.1.',
-        bibtex: '@article{Fischer2022TCRadar,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Rogers, Robert F. and Gamache, John F.},\n  title   = {An updated tropical cyclone radar database},\n  journal = {Monthly Weather Review},\n  year    = {2022},\n  volume  = {150},\n  pages   = {2255--2278},\n  doi     = {10.1175/MWR-D-21-0223.1}\n}'
+        text: 'Fischer, M. S., P. D. Reasor, R. F. Rogers, and J. F. Gamache, 2022: An Analysis of Tropical Cyclone Vortex and Convective Characteristics in Relation to Storm Intensity Using a Novel Airborne Doppler Radar Database. Mon. Wea. Rev., 150, 2255\u20132278, https://doi.org/10.1175/MWR-D-21-0223.1.',
+        bibtex: '@article{Fischer2022TCRadar,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Rogers, Robert F. and Gamache, John F.},\n  title   = {An Analysis of Tropical Cyclone Vortex and Convective Characteristics in Relation to Storm Intensity Using a Novel Airborne Doppler Radar Database},\n  journal = {Monthly Weather Review},\n  year    = {2022},\n  volume  = {150},\n  pages   = {2255--2278},\n  doi     = {10.1175/MWR-D-21-0223.1}\n}'
     },
     {
         label: 'Vortex Tilt & Precipitation Structure',
@@ -15596,8 +15596,8 @@ var _CITATIONS = [
     },
     {
         label: 'Anomaly-Based Vortex Diagnostics',
-        text: 'Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2025: An anomaly-based framework for evaluating tropical cyclone vortex structure. Mon. Wea. Rev., 153, 857\u2013875, https://doi.org/10.1175/MWR-D-24-0101.1.',
-        bibtex: '@article{Fischer2025AnomalyFramework,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Dunion, Jason P. and Rogers, Robert F.},\n  title   = {An anomaly-based framework for evaluating tropical cyclone vortex structure},\n  journal = {Monthly Weather Review},\n  year    = {2025},\n  volume  = {153},\n  pages   = {857--875},\n  doi     = {10.1175/MWR-D-24-0101.1}\n}'
+        text: 'Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2025: Are rapidly intensifying tropical cyclones associated with unique vortex and convective characteristics? Mon. Wea. Rev., 153, 183\u2013203, https://doi.org/10.1175/MWR-D-24-0118.1.',
+        bibtex: '@article{Fischer2025RapidIntensification,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Dunion, Jason P. and Rogers, Robert F.},\n  title   = {Are Rapidly Intensifying Tropical Cyclones Associated with Unique Vortex and Convective Characteristics?},\n  journal = {Monthly Weather Review},\n  year    = {2025},\n  volume  = {153},\n  pages   = {183--203},\n  doi     = {10.1175/MWR-D-24-0118.1}\n}'
     },
     {
         label: 'TC-ATLAS Web Tool',
