@@ -12066,6 +12066,12 @@
         _genesisCycleEtaTimer = setInterval(_tickGenesisCycleEta, 30000);
     }
 
+    // Bumped on every detail render so a progressive (frame-by-frame)
+    // render that's still streaming bails out when the user re-opens a
+    // different disturbance or closes the modal — no stale charts, no
+    // wasted renders.
+    var _genesisRenderGen = 0;
+
     function _renderGenesisDetail(json) {
         var m = document.getElementById(_GENESIS_MODAL_ID);
         if (!m) return;
@@ -12153,17 +12159,49 @@
         subEl.innerHTML = subParts.join(' · ');
         _startGenesisCycleEta(json.next_cycle_eta_hours, json.fetched_at);
 
-        _renderGenesisTrend(json, stats);
-        _renderGenesisMap(memberKeys, members, mean, stats);
-        _renderGenesisIntensity(memberKeys, members, mean, stats);
-        _renderGenesisTimeHistogram(stats);
-        _renderGenesisRMW(memberKeys, members, stats);
-        _renderGenesisLmiHist(stats);
-        _renderGenesisLmiVsTau(stats);
-        _setupGenesisTauScrubber(memberKeys, members, mean, stats);
+        // Progressive render. The six panels are heavy enough together to
+        // freeze the modal for several seconds if drawn in one synchronous
+        // burst. Instead, draw the top-of-modal Tracks map first (the panel
+        // the user actually sees), drop the loader to reveal it, then stream
+        // the remaining charts one per animation frame so the browser stays
+        // responsive and paints between them. Identical Plotly calls and the
+        // same data — nothing re-fetched, no extra compute; the work is just
+        // spread across frames instead of blocking in one go.
+        var _gen = ++_genesisRenderGen;
+        function _stale() {
+            if (_gen !== _genesisRenderGen) return true;   // re-opened
+            var mm = document.getElementById(_GENESIS_MODAL_ID);
+            return !mm || mm.style.display === 'none';      // closed
+        }
 
-        // Charts are painted — drop the loading overlay to reveal them.
+        _renderGenesisMap(memberKeys, members, mean, stats);
+        // Top panel is up — reveal it now; the rest fill in below the fold.
         _genesisShowLoader(false);
+
+        var _steps = [
+            // Intensity + scrubber must run together and after the map: the
+            // scrubber's first paint draws the tau cursor onto BOTH the map
+            // and the intensity fan, so both have to exist first.
+            function () {
+                _renderGenesisIntensity(memberKeys, members, mean, stats);
+                _setupGenesisTauScrubber(memberKeys, members, mean, stats);
+            },
+            function () { _renderGenesisTimeHistogram(stats); },
+            function () { _renderGenesisRMW(memberKeys, members, stats); },
+            function () { _renderGenesisLmiHist(stats); },
+            function () { _renderGenesisLmiVsTau(stats); },
+            // Trends pane is hidden by default and does its own async fetch —
+            // render it last so it never delays the visible panels.
+            function () { _renderGenesisTrend(json, stats); },
+        ];
+        (function _drain(i) {
+            if (i >= _steps.length || _stale()) return;
+            requestAnimationFrame(function () {
+                if (_stale()) return;
+                _steps[i]();
+                _drain(i + 1);
+            });
+        })(0);
     }
 
     // Shared scrubber state — one modal at a time, so module-scope is fine.
