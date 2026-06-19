@@ -11392,6 +11392,14 @@
                 '<button type="button" class="rt-genesis-jump-btn" data-pane="intchange" role="tab">Intensity Change</button>' +
               '</div>' +
               '<div class="rt-genesis-modal-body">' +
+                // Loading overlay — covers the panel area while the member
+                // set fetches and the Plotly charts render (see
+                // _genesisShowLoader). Hidden by default; the header stays
+                // visible/clickable behind/above it.
+                '<div id="rt-genesis-modal-loader" class="rt-genesis-modal-loader" style="display:none;">' +
+                  '<div class="rt-genesis-modal-loader-spinner"></div>' +
+                  '<div class="rt-genesis-modal-loader-text">Loading ensemble members…</div>' +
+                '</div>' +
                 // ── Trends pane (hidden by default) ──────────────────
                 // Run-to-run comparison across the last few DeepMind
                 // cycles, grouped: formation %/Vmax bars, the cluster
@@ -11731,8 +11739,30 @@
     }
     window.closeGenesisDetail = closeGenesisDetail;
 
+    // Show/hide the ensemble-modal loading overlay. Shown the moment the
+    // modal opens (during the member-set fetch) and kept up through the
+    // synchronous Plotly render burst, so the user sees a spinning wheel
+    // for the whole ~click-to-charts wait instead of a frozen blank panel.
+    function _genesisShowLoader(show) {
+        var el = document.getElementById('rt-genesis-modal-loader');
+        if (!el) return;
+        // The panel area is empty until the charts render, so the body
+        // collapses to ~0 px and the absolutely-positioned overlay would
+        // have nothing to fill. Prop the body open while loading, then
+        // release it so the rendered charts define their own height.
+        var body = el.parentElement;
+        if (show) {
+            if (body) body.style.minHeight = '320px';
+            el.style.display = 'flex';
+        } else {
+            el.style.display = 'none';
+            if (body) body.style.minHeight = '';
+        }
+    }
+
     function openGenesisDetail(trackId) {
         var m = _ensureGenesisDetailModal();
+        _genesisShowLoader(true);
         var titleEl = m.querySelector('#rt-genesis-modal-title');
         var subEl   = m.querySelector('#rt-genesis-modal-sub');
         // Use the "Disturbance N" name from the Global Map render so
@@ -11865,6 +11895,7 @@
         prom.then(function (json) {
             _renderGenesisDetail(json);
         }).catch(function (err) {
+            _genesisShowLoader(false);
             subEl.innerHTML = '<span style="color:#ef4444;">'
                 + 'Could not load detail: ' + (err.message || err) + '</span>';
         });
@@ -12130,6 +12161,9 @@
         _renderGenesisLmiHist(stats);
         _renderGenesisLmiVsTau(stats);
         _setupGenesisTauScrubber(memberKeys, members, mean, stats);
+
+        // Charts are painted — drop the loading overlay to reveal them.
+        _genesisShowLoader(false);
     }
 
     // Shared scrubber state — one modal at a time, so module-scope is fine.
@@ -15308,13 +15342,38 @@
             ctx.fillStyle = bg;
             ctx.fillRect(0, 0, W, totalH);
 
-            ctx.fillStyle = ink;
-            ctx.font = '600 56px Inter, "Helvetica Neue", sans-serif';
+            // Locator globe — placed in the top-right of the HEADER strip,
+            // not over the plot. An intensity fan fills most of the panel, so
+            // any in-plot overlay would cover forecast data; the header's
+            // right side is empty, so the globe anchors the figure
+            // geographically while hiding nothing. Sits opposite the
+            // left-aligned title/subtitle. Compute its slot up front so the
+            // title/subtitle can be fit to the width left of it.
+            var gSize = HEAD - 30;                 // fit the ~180px header
+            var gx = W - gSize - 40;
+            var gy = Math.round((HEAD - gSize) / 2);
+            // Right edge available to the header text: stop short of the globe
+            // (with a gap) when one is drawn, else use the full width.
+            var textRight = globeImg ? (gx - 28) : (W - 40);
+
+            // Draw header text shrinking the font down to a floor until it
+            // fits left of the globe, so a long subtitle never runs under it.
+            function drawFitText(text, x, yTop, weight, basePx, minPx) {
+                var px = basePx;
+                ctx.font = weight + px + 'px Inter, "Helvetica Neue", sans-serif';
+                while (px > minPx
+                        && x + ctx.measureText(text).width > textRight) {
+                    px -= 2;
+                    ctx.font = weight + px + 'px Inter, "Helvetica Neue", sans-serif';
+                }
+                ctx.fillText(text, x, yTop);
+            }
+
             ctx.textBaseline = 'top';
-            ctx.fillText(title, 40, 32);
+            ctx.fillStyle = ink;
+            drawFitText(title, 40, 32, '600 ', 56, 40);
             ctx.fillStyle = dim;
-            ctx.font = '34px Inter, "Helvetica Neue", sans-serif';
-            ctx.fillText(sub, 40, 108);
+            drawFitText(sub, 40, 108, '', 34, 24);
 
             var y = HEAD;
             for (var k = 0; k < imgs.length; k++) {
@@ -15322,16 +15381,7 @@
                 y += panels[k].h + GAP;
             }
 
-            // Locator globe — placed in the top-right of the HEADER strip,
-            // not over the plot. An intensity fan fills most of the panel, so
-            // any in-plot overlay would cover forecast data; the header's
-            // right side is empty, so the globe anchors the figure
-            // geographically while hiding nothing. Sits opposite the
-            // left-aligned title/subtitle.
             if (globeImg) {
-                var gSize = HEAD - 30;                 // fit the ~180px header
-                var gx = W - gSize - 40;
-                var gy = Math.round((HEAD - gSize) / 2);
                 ctx.drawImage(globeImg, gx, gy, gSize, gSize);
             }
 

@@ -3682,6 +3682,50 @@ body:has(#ir-detail[style*="block"]) #ir-global-env-cbars {
     color: var(--text, #e2e8f0);
     border-color: rgba(148, 163, 184, 0.3);
 }
+/* ── Ensemble-modal loading overlay ──────────────────────────────
+   Shown while the member set fetches AND while the Plotly panels
+   render. The spinner is a GPU-composited `transform` animation, so
+   it keeps turning even during the synchronous chart-render burst
+   that blocks the JS main thread — the user always sees motion. The
+   overlay sits inside the body, so the header (title/subtitle/close)
+   stays visible and the close button stays clickable. */
+.rt-genesis-modal-body { position: relative; }
+.rt-genesis-modal-loader {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    /* Pin near the top, not centered: the body holds ~1900 px of empty
+       chart scaffolding during load, so a vertically-centered spinner
+       would sit far below the fold. */
+    justify-content: flex-start;
+    padding-top: 120px;
+    gap: 14px;
+    min-height: 240px;
+    z-index: 40;
+    background: var(--surface-raised, #ffffff);
+    border-radius: 6px;
+}
+.rt-genesis-modal-loader-spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid rgba(148, 163, 184, 0.35);
+    border-top-color: #2e7dff;
+    border-radius: 50%;
+    animation: ir-spin 0.8s linear infinite;
+    will-change: transform;
+}
+.rt-genesis-modal-loader-text {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-dim, #64748b);
+    letter-spacing: 0.01em;
+}
+[data-theme="dark"] .rt-genesis-modal-loader {
+    background: var(--surface-raised, #161b24);
+}
+[data-theme="dark"] .rt-genesis-modal-loader-text { color: var(--text-dim, #94a3b8); }
 /* Sticky jump-nav: keeps panel discovery visible while the user scrolls
    through the modal. position:sticky inside the modal-content scroller
    means it pins to the top of the scroll viewport, not the page. */
