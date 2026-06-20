@@ -23344,10 +23344,12 @@
             var h = node.offsetHeight;
             // Encoding cost (NeuQuant quantize + LZW) scales with pixels ×
             // frames, and gif.js holds every frame in memory. A GIF doesn't
-            // need the full panel resolution, so cap the long edge at ~720 px
-            // and downscale during capture — this is the dominant speed/size
-            // win and is invisible at typical GIF sizes.
-            var GIF_MAX_W = 720;
+            // need the full panel resolution, so cap the long edge at ~600 px
+            // and downscale during capture. NeuQuant + LZW cost (and the output
+            // bytes) scale with pixel count, so this is the dominant speed/size
+            // lever — 600 px keeps the loop crisp while cutting encode time and
+            // file size ~40% vs 720.
+            var GIF_MAX_W = 600;
             var scale = Math.min(1, GIF_MAX_W / Math.max(1, w));
             var gifW = Math.max(1, Math.round(w * scale));
             var gifH = Math.max(1, Math.round(h * scale));
@@ -23357,8 +23359,11 @@
             var workers = Math.max(2, Math.min(8, navigator.hardwareConcurrency || 4));
             // Same-origin blob worker (see _ensureGifWorker) — a cross-origin
             // worker URL throws SecurityError and stalls encoding.
+            // gif.js quality: LOWER = better palette but slower NeuQuant. 20
+            // (vs the old 15) trims encode time with no visible loss on IR's
+            // limited palette.
             var gif = new window.GIF({
-                workers: workers, quality: 15, width: gifW, height: gifH,
+                workers: workers, quality: 20, width: gifW, height: gifH,
                 workerScript: gifWorkerUrl,
                 background: '#0a0c12'
             });
@@ -23437,7 +23442,37 @@
                 cx.restore();
             }
 
-            // 1) Hide IR overlays + the label, then capture the background once.
+            // ── Storm-following (co-moving) composite ─────────────────────
+            // Reproduce the on-screen loop: the storm stays centered while the
+            // ground (basemap/coastlines/grid/track) slides. We still capture
+            // the geographic background ONCE, then per frame TRANSLATE it by the
+            // pixel delta between that frame's recenter point and the capture
+            // center, and draw the IR centered on the recenter point. The fixed
+            // UI (Tb legend + timestamp pill) is composited un-shifted. Uses
+            // Leaflet's projection so it matches _recenterDetailToFrame exactly.
+            var zoom = detailMap.getZoom();
+            var refCenter = detailMap.getCenter();
+            var pRef = detailMap.project(refCenter, zoom);
+            var scCx = node.offsetWidth / 2, scCy = node.offsetHeight / 2;
+            function _recenterOf(ov) {
+                var rt = ov && ov._recenterTo;
+                if (rt && rt.length === 2 && isFinite(rt[0]) && isFinite(rt[1])) return L.latLng(rt[0], rt[1]);
+                return ov.getBounds().getCenter();
+            }
+
+            // The Tb legend is fixed UI (must NOT slide with the ground). Capture
+            // it on its own (while still visible) so we can composite it after the
+            // shifted background, then hide it from the geographic capture.
+            var legendEl = document.getElementById('ir-tb-legend');
+            var legendRect = null, legendShown = false;
+            if (legendEl && legendEl.offsetWidth > 0 && legendEl.style.display !== 'none') {
+                legendShown = true;
+                var lr = legendEl.getBoundingClientRect();
+                legendRect = { x: (lr.left - nodeRect.left) * scale, y: (lr.top - nodeRect.top) * scale,
+                               w: lr.width * scale, h: lr.height * scale };
+            }
+
+            // Hide IR overlays + label + legend, then capture the geographic bg.
             var savedOpac = [];
             for (var li = 0; li < layers.length; li++) {
                 if (layers[li] && layers[li]._image) {
@@ -23447,9 +23482,11 @@
             }
             var infoDisp = infoEl ? infoEl.style.display : null;
             if (infoEl) infoEl.style.display = 'none';
+            var legDisp = legendEl ? legendEl.style.display : null;
 
             function _restoreLive() {
                 if (infoEl) infoEl.style.display = infoDisp || '';
+                if (legendEl) legendEl.style.display = legDisp || '';
                 for (var k = 0; k < layers.length; k++) {
                     if (layers[k] && layers[k]._image && savedOpac[k] != null) {
                         layers[k]._image.style.opacity = savedOpac[k];
@@ -23461,60 +23498,81 @@
             // backgrounds the tab mid-export — rAF is paused while hidden,
             // which would stall the whole GIF until they return.
             setTimeout(function () {
-                window.html2canvas(node, {
-                    useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
-                    logging: false, scale: scale, onclone: _irExportOnClone
-                }).then(function (bg) {
-                    if (infoEl) infoEl.style.display = infoDisp || '';  // label redrawn per frame
-                    var i = 0;
-                    function compositeNext() {
-                        if (i >= exportFrames.length) {
-                            _restoreLive();
-                            toast.textContent = 'GIF · encoding…';
-                            gif.render();
-                            return;
-                        }
-                        var idx = exportFrames[i];
-                        var ov = layers[idx];
-                        var img = ov && ov._image;
-                        toast.textContent = 'GIF · building ' + (i + 1) + '/' + exportFrames.length;
-                        // Lazy/mobile frames are evicted to a 1×1 transparent src;
-                        // promote + decode this one before drawing, then re-evict to
-                        // keep peak decoded memory bounded (one frame at a time).
-                        var wasEvicted = !!(ov && ov._decodeEvicted);
-                        function draw() {
-                            var c = document.createElement('canvas');
-                            c.width = gifW; c.height = gifH;
-                            var cx = c.getContext('2d');
-                            cx.drawImage(bg, 0, 0, gifW, gifH);
-                            if (img && img.naturalWidth) {
-                                var r = img.getBoundingClientRect();
-                                cx.drawImage(img,
-                                    (r.left - nodeRect.left) * scale,
-                                    (r.top - nodeRect.top) * scale,
-                                    r.width * scale, r.height * scale);
+                var legendPromise = legendShown
+                    ? window.html2canvas(legendEl, { useCORS: true, backgroundColor: null, logging: false, scale: scale })
+                    : Promise.resolve(null);
+                legendPromise.then(function (legendCanvas) {
+                    if (legendEl) legendEl.style.display = 'none';  // exclude from geo bg
+                    return window.html2canvas(node, {
+                        useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
+                        logging: false, scale: scale, onclone: _irExportOnClone
+                    }).then(function (bg) {
+                        if (infoEl) infoEl.style.display = infoDisp || '';   // redrawn per frame
+                        if (legendEl) legendEl.style.display = legDisp || '';
+                        // Sample a bg corner to fill the thin strips the ground-shift exposes.
+                        var bgFill = '#0a0c12';
+                        try { var d = bg.getContext('2d').getImageData(1, 1, 1, 1).data; bgFill = 'rgb(' + d[0] + ',' + d[1] + ',' + d[2] + ')'; } catch (e) {}
+                        var i = 0;
+                        function compositeNext() {
+                            if (i >= exportFrames.length) {
+                                _restoreLive();
+                                toast.textContent = 'GIF · encoding…';
+                                gif.render();
+                                return;
                             }
-                            _drawLabel(cx, idx);
-                            gif.addFrame(c, { delay: animIntervalMs, copy: true });
+                            var idx = exportFrames[i];
+                            var ov = layers[idx];
+                            var img = ov && ov._image;
+                            toast.textContent = 'GIF · building ' + (i + 1) + '/' + exportFrames.length;
+                            // Lazy/mobile frames are evicted to a 1×1 transparent src;
+                            // promote + decode this one before drawing, then re-evict to
+                            // keep peak decoded memory bounded (one frame at a time).
+                            var wasEvicted = !!(ov && ov._decodeEvicted);
+                            function draw() {
+                                var c = document.createElement('canvas');
+                                c.width = gifW; c.height = gifH;
+                                var cx = c.getContext('2d');
+                                var rc = _recenterOf(ov);
+                                var pRc = detailMap.project(rc, zoom);
+                                // Slide the ground so this frame's storm sits at the
+                                // capture center (storm-following / co-moving view).
+                                cx.fillStyle = bgFill; cx.fillRect(0, 0, gifW, gifH);
+                                cx.drawImage(bg, (pRef.x - pRc.x) * scale, (pRef.y - pRc.y) * scale, gifW, gifH);
+                                if (img && img.naturalWidth) {
+                                    var b = ov.getBounds();
+                                    var pNW = detailMap.project(b.getNorthWest(), zoom);
+                                    var pSE = detailMap.project(b.getSouthEast(), zoom);
+                                    cx.drawImage(img,
+                                        (pNW.x - pRc.x + scCx) * scale,
+                                        (pNW.y - pRc.y + scCy) * scale,
+                                        (pSE.x - pNW.x) * scale,
+                                        (pSE.y - pNW.y) * scale);
+                                }
+                                if (legendCanvas && legendRect) {
+                                    cx.drawImage(legendCanvas, legendRect.x, legendRect.y, legendRect.w, legendRect.h);
+                                }
+                                _drawLabel(cx, idx);
+                                gif.addFrame(c, { delay: animIntervalMs, copy: true });
+                                if (wasEvicted && ov && ov._frameBlobUrl) {
+                                    ov.setUrl(_TRANSPARENT_1PX); ov._decodeEvicted = true;
+                                }
+                                i++;
+                                compositeNext();
+                            }
                             if (wasEvicted && ov && ov._frameBlobUrl) {
-                                ov.setUrl(_TRANSPARENT_1PX); ov._decodeEvicted = true;
+                                ov.setUrl(ov._frameBlobUrl); ov._decodeEvicted = false;
+                                img = ov._image;
+                                if (img && img.decode) { img.decode().then(draw, draw); }
+                                else if (img) { img.onload = draw; img.onerror = draw; }
+                                else draw();
+                            } else if (img && img.decode && !img.complete) {
+                                img.decode().then(draw, draw);
+                            } else {
+                                draw();
                             }
-                            i++;
-                            compositeNext();
                         }
-                        if (wasEvicted && ov && ov._frameBlobUrl) {
-                            ov.setUrl(ov._frameBlobUrl); ov._decodeEvicted = false;
-                            img = ov._image;
-                            if (img && img.decode) { img.decode().then(draw, draw); }
-                            else if (img) { img.onload = draw; img.onerror = draw; }
-                            else draw();
-                        } else if (img && img.decode && !img.complete) {
-                            img.decode().then(draw, draw);
-                        } else {
-                            draw();
-                        }
-                    }
-                    compositeNext();
+                        compositeNext();
+                    });
                 }).catch(function (err) {
                     _restoreLive();
                     console.warn('[RT Monitor] GIF background capture failed:', err);
