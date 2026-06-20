@@ -15050,8 +15050,17 @@
 
     function _downloadOrOpenBlob(blob, filename) {
         var url = URL.createObjectURL(blob);
+        // iOS Safari EXPOSES the <a download> property but IGNORES the
+        // behavior — clicking it navigates away or saves nothing, so the
+        // plain `'download' in a` test is a trap (it's truthy on iOS). On
+        // iOS, open the image in a new tab instead so the user can
+        // long-press → Save Image / Copy. Everywhere else the attribute
+        // works → keep the one-tap save-to-disk.
+        var ua = navigator.userAgent || '';
+        var isIOS = /iP(hone|od|ad)/.test(ua) ||
+                    (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua)); // iPadOS reports as Mac
         var a = document.createElement('a');
-        if ('download' in a) {
+        if (!isIOS && 'download' in a) {
             a.href = url;
             a.download = filename;
             document.body.appendChild(a);
@@ -17927,16 +17936,9 @@
         }).then(function (blob) {
             // YYYYMMDDTHHMMSSZ — sortable, file-system-safe.
             var ts = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
-            var url = URL.createObjectURL(blob);
-            var a = document.createElement('a');
-            a.href = url;
-            a.download = 'tc-atlas-rt-' + ts + '.png';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            // Hold the URL briefly so Safari has time to start the download
-            // before the blob is revoked.
-            setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+            // Share sheet on mobile / download on desktop / new-tab on older
+            // iOS — not a raw <a download> anchor (iOS ignores it).
+            _saveImageBlob(blob, 'tc-atlas-rt-' + ts + '.png');
             _ga('rt_export_png', { ok: true });
         }).catch(function (err) {
             console.error('[Export] PNG export failed', err);
@@ -23224,12 +23226,10 @@
             canvas.toBlob(function (blob) {
                 if (!blob) return;
                 var ts = (animFrameTimes[animIndex] || '').replace(/[:\-T]/g, '').replace('Z', '');
-                var url = URL.createObjectURL(blob);
-                var a = document.createElement('a');
-                a.href = url;
-                a.download = currentStormId + '_' + (ts || 'frame') + '.png';
-                a.click();
-                requestAnimationFrame(function () { URL.revokeObjectURL(url); });
+                // Deliver via _saveImageBlob: native share sheet (Save Image /
+                // Copy) on mobile, download anchor on desktop, new-tab fallback
+                // on older iOS — instead of a raw <a download> that iOS ignores.
+                _saveImageBlob(blob, currentStormId + '_' + (ts || 'frame') + '.png');
             }, 'image/png');
         }).catch(function (err) {
             _irRestoreTrackAfterExport(hiddenTrack);
