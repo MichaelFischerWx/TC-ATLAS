@@ -23243,6 +23243,32 @@
         }
     }
 
+    /** Like _irExportOnClone but WITHOUT the watermark — used for the GIF
+     *  under-layer (basemap) so the watermark isn't buried under the IR; the
+     *  GIF over-layer uses _irExportOnClone so the watermark lands on top. */
+    function _irExportOnCloneControls(clonedDoc) {
+        ['.leaflet-control-zoom', '#ir-product-toggle', '#ir-image-loader'].forEach(function (sel) {
+            var els = clonedDoc.querySelectorAll(sel);
+            for (var i = 0; i < els.length; i++) els[i].style.display = 'none';
+        });
+    }
+
+    /** GIF over-layer onclone: controls hidden + watermark (via _irExportOnClone),
+     *  PLUS zero out the container/map backgrounds so the captured layer is
+     *  TRANSPARENT — only the vector panes (coastlines/grid/labels/track) +
+     *  watermark contribute. Without this, html2canvas paints the elements'
+     *  own light-gray backgrounds (backgroundColor:null doesn't suppress those),
+     *  and drawing the layer over the IR would paint the data out. */
+    function _irExportOnCloneVec(clonedDoc) {
+        _irExportOnClone(clonedDoc);
+        ['ir-image-container', 'ir-detail-map'].forEach(function (id) {
+            var e = clonedDoc.getElementById(id);
+            if (e) e.style.background = 'transparent';
+        });
+        var conts = clonedDoc.querySelectorAll('.leaflet-container, .leaflet-pane, .leaflet-tile-pane');
+        for (var i = 0; i < conts.length; i++) conts[i].style.background = 'transparent';
+    }
+
     /** Snapshot the visible imagery panel as a PNG, including the
      *  current frame timestamp / channel label and the Tb colorbar.
      *  Strips UI chrome, stamps a watermark, and (optionally) the track.
@@ -23502,76 +23528,103 @@
                     ? window.html2canvas(legendEl, { useCORS: true, backgroundColor: null, logging: false, scale: scale })
                     : Promise.resolve(null);
                 legendPromise.then(function (legendCanvas) {
-                    if (legendEl) legendEl.style.display = 'none';  // exclude from geo bg
+                    if (legendEl) legendEl.style.display = 'none';  // exclude from geo captures
+                    // UNDER-layer: basemap only (IR hidden via opacity). Controls
+                    // hidden but NO watermark — the watermark + vectors go on the
+                    // OVER-layer so the IR doesn't bury them. Drop the vector panes
+                    // here so grid lines aren't double-drawn (they come from `vec`).
+                    var overlayPane = detailMap.getPane('overlayPane');
+                    var markerPane = detailMap.getPane('markerPane');
+                    var opDisp = overlayPane ? overlayPane.style.display : null;
+                    var mpDisp = markerPane ? markerPane.style.display : null;
+                    if (overlayPane) overlayPane.style.display = 'none';
+                    if (markerPane) markerPane.style.display = 'none';
                     return window.html2canvas(node, {
                         useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
-                        logging: false, scale: scale, onclone: _irExportOnClone
+                        logging: false, scale: scale, onclone: _irExportOnCloneControls
                     }).then(function (bg) {
-                        if (infoEl) infoEl.style.display = infoDisp || '';   // redrawn per frame
-                        if (legendEl) legendEl.style.display = legDisp || '';
-                        // Sample a bg corner to fill the thin strips the ground-shift exposes.
-                        var bgFill = '#0a0c12';
-                        try { var d = bg.getContext('2d').getImageData(1, 1, 1, 1).data; bgFill = 'rgb(' + d[0] + ',' + d[1] + ',' + d[2] + ')'; } catch (e) {}
-                        var i = 0;
-                        function compositeNext() {
-                            if (i >= exportFrames.length) {
-                                _restoreLive();
-                                toast.textContent = 'GIF · encoding…';
-                                gif.render();
-                                return;
-                            }
-                            var idx = exportFrames[i];
-                            var ov = layers[idx];
-                            var img = ov && ov._image;
-                            toast.textContent = 'GIF · building ' + (i + 1) + '/' + exportFrames.length;
-                            // Lazy/mobile frames are evicted to a 1×1 transparent src;
-                            // promote + decode this one before drawing, then re-evict to
-                            // keep peak decoded memory bounded (one frame at a time).
-                            var wasEvicted = !!(ov && ov._decodeEvicted);
-                            function draw() {
-                                var c = document.createElement('canvas');
-                                c.width = gifW; c.height = gifH;
-                                var cx = c.getContext('2d');
-                                var rc = _recenterOf(ov);
-                                var pRc = detailMap.project(rc, zoom);
-                                // Slide the ground so this frame's storm sits at the
-                                // capture center (storm-following / co-moving view).
-                                cx.fillStyle = bgFill; cx.fillRect(0, 0, gifW, gifH);
-                                cx.drawImage(bg, (pRef.x - pRc.x) * scale, (pRef.y - pRc.y) * scale, gifW, gifH);
-                                if (img && img.naturalWidth) {
-                                    var b = ov.getBounds();
-                                    var pNW = detailMap.project(b.getNorthWest(), zoom);
-                                    var pSE = detailMap.project(b.getSouthEast(), zoom);
-                                    cx.drawImage(img,
-                                        (pNW.x - pRc.x + scCx) * scale,
-                                        (pNW.y - pRc.y + scCy) * scale,
-                                        (pSE.x - pNW.x) * scale,
-                                        (pSE.y - pNW.y) * scale);
+                        if (overlayPane) overlayPane.style.display = opDisp || '';
+                        if (markerPane) markerPane.style.display = mpDisp || '';
+                        // OVER-layer: coastlines + lat/lon grid + labels + track +
+                        // watermark on a TRANSPARENT canvas, composited ABOVE the IR
+                        // so the data can't cover the grid labels (matches the
+                        // on-screen pane order). Hide the tile pane (basemap + IR).
+                        var tilePane = detailMap.getPane('tilePane');
+                        var tpDisp = tilePane ? tilePane.style.display : null;
+                        if (tilePane) tilePane.style.display = 'none';
+                        return window.html2canvas(node, {
+                            useCORS: true, allowTaint: false, backgroundColor: null,
+                            logging: false, scale: scale, onclone: _irExportOnCloneVec
+                        }).then(function (vec) {
+                            if (tilePane) tilePane.style.display = tpDisp || '';
+                            if (infoEl) infoEl.style.display = infoDisp || '';   // redrawn per frame
+                            if (legendEl) legendEl.style.display = legDisp || '';
+                            // Sample a bg corner to fill the strips the ground-shift exposes.
+                            var bgFill = '#0a0c12';
+                            try { var d = bg.getContext('2d').getImageData(1, 1, 1, 1).data; bgFill = 'rgb(' + d[0] + ',' + d[1] + ',' + d[2] + ')'; } catch (e) {}
+                            var i = 0;
+                            function compositeNext() {
+                                if (i >= exportFrames.length) {
+                                    _restoreLive();
+                                    toast.textContent = 'GIF · encoding…';
+                                    gif.render();
+                                    return;
                                 }
-                                if (legendCanvas && legendRect) {
-                                    cx.drawImage(legendCanvas, legendRect.x, legendRect.y, legendRect.w, legendRect.h);
+                                var idx = exportFrames[i];
+                                var ov = layers[idx];
+                                var img = ov && ov._image;
+                                toast.textContent = 'GIF · building ' + (i + 1) + '/' + exportFrames.length;
+                                // Lazy/mobile frames are evicted to a 1×1 transparent src;
+                                // promote + decode this one before drawing, then re-evict to
+                                // keep peak decoded memory bounded (one frame at a time).
+                                var wasEvicted = !!(ov && ov._decodeEvicted);
+                                function draw() {
+                                    var c = document.createElement('canvas');
+                                    c.width = gifW; c.height = gifH;
+                                    var cx = c.getContext('2d');
+                                    var rc = _recenterOf(ov);
+                                    var pRc = detailMap.project(rc, zoom);
+                                    var sx = (pRef.x - pRc.x) * scale, sy = (pRef.y - pRc.y) * scale;
+                                    // Slide the ground so this frame's storm sits at the
+                                    // capture center (storm-following / co-moving view).
+                                    cx.fillStyle = bgFill; cx.fillRect(0, 0, gifW, gifH);
+                                    cx.drawImage(bg, sx, sy, gifW, gifH);                 // basemap (under)
+                                    if (img && img.naturalWidth) {                        // IR (middle)
+                                        var b = ov.getBounds();
+                                        var pNW = detailMap.project(b.getNorthWest(), zoom);
+                                        var pSE = detailMap.project(b.getSouthEast(), zoom);
+                                        cx.drawImage(img,
+                                            (pNW.x - pRc.x + scCx) * scale,
+                                            (pNW.y - pRc.y + scCy) * scale,
+                                            (pSE.x - pNW.x) * scale,
+                                            (pSE.y - pNW.y) * scale);
+                                    }
+                                    cx.drawImage(vec, sx, sy, gifW, gifH);                // coastlines/grid/labels/track (over)
+                                    if (legendCanvas && legendRect) {                     // fixed UI
+                                        cx.drawImage(legendCanvas, legendRect.x, legendRect.y, legendRect.w, legendRect.h);
+                                    }
+                                    _drawLabel(cx, idx);
+                                    gif.addFrame(c, { delay: animIntervalMs, copy: true });
+                                    if (wasEvicted && ov && ov._frameBlobUrl) {
+                                        ov.setUrl(_TRANSPARENT_1PX); ov._decodeEvicted = true;
+                                    }
+                                    i++;
+                                    compositeNext();
                                 }
-                                _drawLabel(cx, idx);
-                                gif.addFrame(c, { delay: animIntervalMs, copy: true });
                                 if (wasEvicted && ov && ov._frameBlobUrl) {
-                                    ov.setUrl(_TRANSPARENT_1PX); ov._decodeEvicted = true;
+                                    ov.setUrl(ov._frameBlobUrl); ov._decodeEvicted = false;
+                                    img = ov._image;
+                                    if (img && img.decode) { img.decode().then(draw, draw); }
+                                    else if (img) { img.onload = draw; img.onerror = draw; }
+                                    else draw();
+                                } else if (img && img.decode && !img.complete) {
+                                    img.decode().then(draw, draw);
+                                } else {
+                                    draw();
                                 }
-                                i++;
-                                compositeNext();
                             }
-                            if (wasEvicted && ov && ov._frameBlobUrl) {
-                                ov.setUrl(ov._frameBlobUrl); ov._decodeEvicted = false;
-                                img = ov._image;
-                                if (img && img.decode) { img.decode().then(draw, draw); }
-                                else if (img) { img.onload = draw; img.onerror = draw; }
-                                else draw();
-                            } else if (img && img.decode && !img.complete) {
-                                img.decode().then(draw, draw);
-                            } else {
-                                draw();
-                            }
-                        }
-                        compositeNext();
+                            compositeNext();
+                        });
                     });
                 }).catch(function (err) {
                     _restoreLive();
