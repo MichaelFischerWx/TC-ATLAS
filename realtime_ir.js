@@ -4574,10 +4574,17 @@
     // each prewarm cycle by the backend), falling back to this pinned
     // default so a failed/blocked fetch still works for the current build.
     var _GCS_BUCKET_ROOT = 'https://storage.googleapis.com/tc-atlas-ir-cache';
-    // Bundle host root. Defaults to GCS; rt-version.json's "base" field may
-    // override it to the Cloudflare R2 CDN (cdn.tcatlas.org) at runtime, so
+    var _CDN_BUNDLE_ROOT = 'https://cdn.tcatlas.org';
+    // Bundle host root. The R2 cutover is DONE: the GCS bucket's bundle
+    // objects now return 403 (only rt-version.json stays public), so the
+    // pinned default MUST be the Cloudflare R2 CDN — otherwise the first
+    // storm opened on a cold/hard load (before _loadBundleVersion's
+    // rt-version.json fetch resolves and sets the root) hits GCS → 403 →
+    // the slow on-demand API path (~2.5s 302 + assemble) instead of the
+    // prewarmed CDN bundle (~0.4s). rt-version.json's "base" field can
+    // still override this at runtime (allowlisted to CDN or GCS) so a
     // cutover/rollback needs no frontend redeploy. R2 keys == GCS keys.
-    var _RT_BUNDLE_ROOT = _GCS_BUCKET_ROOT;
+    var _RT_BUNDLE_ROOT = _CDN_BUNDLE_ROOT;
     var _RT_BUNDLE_VERSION = 'rt-v12';   // fallback; _loadBundleVersion() may update
     var _GCS_BUNDLE_BASE = _RT_BUNDLE_ROOT + '/' + _RT_BUNDLE_VERSION + '/bundles';
     function _gcsFramesBundleUrl(atcfId) {
