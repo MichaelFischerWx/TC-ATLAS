@@ -1360,7 +1360,11 @@ html, body { margin: 0; padding: 0; }
        the satellite name (redundant with the Storm Info panel) so the
        time readout stays narrow and doesn't collide with the toggle. */
     .ir-overlay-info {
-        left: 8px !important;
+        /* 48px (not 8px) so the timestamp clears the top-left zoom control —
+           at 8px it sat on top of the +/− buttons. The pill is already
+           narrowed below (sat-label hidden, max-width 44%) so it still clears
+           the top-right product toggle. */
+        left: 48px !important;
         top: 8px !important;
         font-size: 0.7rem;
         gap: 6px;
