@@ -15067,16 +15067,18 @@
         return new Blob([arr], { type: mime });
     }
 
-    // Deliver a generated PNG to the user. On mobile the <a download> +
-    // click() trick is unreliable — iOS Safari ignores the download
-    // attribute and the image either navigates away or never reaches the
-    // camera roll. Prefer the Web Share API (native "Save Image" sheet)
+    // Deliver a generated file (PNG / GIF / KML) to the user. On mobile the
+    // <a download> + click() trick is unreliable — iOS Safari ignores the
+    // download attribute and the file either navigates away or never saves.
+    // Prefer the Web Share API (native "Save Image" / "Save to Files" sheet)
     // when the device can share files; fall back to a download anchor on
-    // desktop, and to opening the image in a new tab where even that is
-    // unsupported (older iOS) so the user can long-press to save.
+    // desktop, and to opening the file in a new tab where even that is
+    // unsupported (older iOS) so the user can long-press / save manually.
+    // The File type is taken from the blob (image/gif, the KML mime, etc.) so
+    // the share sheet labels + routes it correctly — not hardcoded to PNG.
     function _saveImageBlob(blob, filename) {
         var file = null;
-        try { file = new File([blob], filename, { type: 'image/png' }); }
+        try { file = new File([blob], filename, { type: blob.type || 'image/png' }); }
         catch (e) { /* File ctor unsupported — fall through to download */ }
         if (file && navigator.canShare && typeof navigator.share === 'function'
                 && navigator.canShare({ files: [file] })) {
@@ -23397,12 +23399,9 @@
                 toast.textContent = 'GIF · encoding ' + Math.round(pct * 100) + '%';
             });
             gif.on('finished', function (blob) {
-                var url = URL.createObjectURL(blob);
-                var a = document.createElement('a');
-                a.href = url;
-                a.download = currentStormId + '_animation.gif';
-                a.click();
-                requestAnimationFrame(function () { URL.revokeObjectURL(url); });
+                // Deliver via _saveImageBlob (share sheet on mobile / download on
+                // desktop / new-tab fallback) — a raw <a download> is a no-op on iOS.
+                _saveImageBlob(blob, currentStormId + '_animation.gif');
                 // Restore track, animation state, and remove toast.
                 _irRestoreTrackAfterExport(hiddenTrackGif);
                 state.showFn(savedIndex);
@@ -23709,13 +23708,9 @@
                     '</kml>';
 
                 var blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
-                var a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = name.replace(/\s+/g, '_') + '_' + currentStormId + '.kml';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(a.href);
+                // Share sheet on mobile (Save to Files / open in Google Earth) /
+                // download on desktop — a raw <a download> is a no-op on iOS.
+                _saveImageBlob(blob, name.replace(/\s+/g, '_') + '_' + currentStormId + '.kml');
             })
             .catch(function (err) {
                 console.warn('[RT Monitor] KML export failed:', err.message || '');
