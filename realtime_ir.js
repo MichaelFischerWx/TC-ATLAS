@@ -2131,13 +2131,17 @@
         if (!detailMap || _detailGraticule) return;
         _detailGraticule = L.layerGroup().addTo(detailMap);
         _detailRebuildGraticule();
-        detailMap.on('moveend zoomend', _detailRebuildGraticule);
+        // 'resize' included so an invalidateSize() (e.g. when the just-opened
+        // panel finally gets real dimensions, or on phone rotation) rebuilds
+        // the grid against the now-correct bounds — its first build at init
+        // ran against a 0-size map and drew nothing.
+        detailMap.on('moveend zoomend resize', _detailRebuildGraticule);
     }
     function _detailDisableGraticule() {
         if (!detailMap) return;
         if (_detailGraticule) {
             detailMap.removeLayer(_detailGraticule);
-            detailMap.off('moveend zoomend', _detailRebuildGraticule);
+            detailMap.off('moveend zoomend resize', _detailRebuildGraticule);
             _detailGraticule = null;
         }
     }
@@ -4213,6 +4217,14 @@
         _rtLoadRecon(storm);
         _rtLoadStormMwPasses(storm);
         _rtLoadRadarSites(storm);
+        // Surface obs are default-ON: auto-load once per card open (deferred so
+        // satellite imagery keeps fetch priority). The button starts `active`
+        // in HTML; _irToggleSurfaceObs() flips OFF→ON when no layer is present.
+        // currentStormId + detailMap are set by now. Respect a user who toggled
+        // it off during the deferred window (layer stays null only if off).
+        if (!_surfaceObsLayer && detailMap && currentStormId) {
+            window._irToggleSurfaceObs();
+        }
 
         // Intensity chart: check cache first
         var atcfId = storm.atcf_id;
@@ -4651,10 +4663,11 @@
     // full mobile browser tab (16); desktop is unaffected (decimation no-ops).
     var _MOBILE_MAX_FRAMES = _IS_INAPP_BROWSER ? 10 : 16;
     function _decimateFramesForMobile(frames) {
-        // Windowed-decode mode bounds memory by capping how many frames
-        // are *decoded* at once, so it wants the full-cadence frame list —
-        // skip decimation entirely when it's active.
-        if (_WINDOWED_DECODE) return frames;
+        // Full-cadence mode (?decodewin=1) bounds memory by the decode
+        // window instead of by frame count, so it wants every frame — skip
+        // decimation entirely. The default lazy path KEEPS decimation as a
+        // belt-and-suspenders frame-count cap on top of the window.
+        if (_FULL_CADENCE) return frames;
         if (!_IS_MOBILE_VIEWPORT) return frames;
         if (!frames || frames.length <= _MOBILE_MAX_FRAMES) return frames;
         var n = frames.length;
@@ -4667,32 +4680,65 @@
         return keep;
     }
 
-    // ── Windowed decode (opt-in, off by default) ──────────────────
-    // The shipped mobile fix decimates the loop to cap decoded-bitmap
-    // memory, which costs temporal cadence. Windowed decode instead keeps
-    // EVERY frame in the loop but bounds how many carry a decoded bitmap
-    // at once: a sliding window around the playhead holds the real WebP
-    // src (each ~7 MB decoded); frames outside the window get a 1×1
-    // transparent src so the browser frees their bitmap (the encoded blob
-    // stays referenced, so re-entering the window just re-decodes). Peak
-    // decoded memory ≈ (BACK+AHEAD+1) frames regardless of loop length,
-    // so mobile can run the full-cadence loop without an OOM tab kill.
+    // ── Lazy / windowed decode (mobile default) ───────────────────
+    // The original mobile fix decimates the loop to cap decoded-bitmap
+    // memory, which costs temporal cadence; it still EAGERLY decodes every
+    // kept frame the instant the card opens. On a phone each ~1500² WebP
+    // decodes to a ~9 MB RGBA bitmap several× slower than on desktop, so
+    // waiting for all ~16 to decode is the bulk of the "mobile card load
+    // feels slow" gap (desktop's fast decoder hides the same work).
     //
-    // Enabled per-session via ?decodewin=1 anywhere in the URL (query or
-    // hash) so it can be validated on a real phone against a live storm
-    // before becoming the default. When on, it supersedes decimation.
-    var _WINDOWED_DECODE = (typeof location !== 'undefined') &&
-                           (location.href || '').indexOf('decodewin=1') !== -1;
-    var _DECODE_BACK = 3;    // frames kept decoded behind the playhead
+    // Lazy decode fixes both: at card-open every frame overlay starts on a
+    // 1×1 transparent src (the encoded blob stays referenced via
+    // _frameBlobUrl, so promoting just re-decodes — no refetch), and ONLY
+    // the visible frame is decoded. A sliding window around the playhead
+    // bounds how many frames carry a decoded bitmap at once, so peak
+    // decoded memory ≈ (BACK+AHEAD+1) frames regardless of loop length —
+    // mobile never OOMs and the card paints after a single decode.
+    //
+    // Default ON for mobile viewports. Escape hatches for A/B on a real
+    // phone: ?lazyload=0 forces it OFF (old eager path), ?decodewin=1
+    // forces it ON *and* keeps full cadence (skips decimation).
+    var _FULL_CADENCE = (typeof location !== 'undefined') &&
+                        (location.href || '').indexOf('decodewin=1') !== -1;
+    var _LAZY_DECODE = (function () {
+        var href = (typeof location !== 'undefined') ? (location.href || '') : '';
+        if (href.indexOf('lazyload=0') !== -1) return false; // explicit opt-out
+        if (_FULL_CADENCE) return true;                      // explicit opt-in
+        // Mobile default. NOTE: _IS_MOBILE_VIEWPORT is declared later in the
+        // IIFE (assigned after this init runs), so replicate its viewport
+        // test inline rather than reading an as-yet-undefined var.
+        return (typeof window !== 'undefined') && (window.innerWidth || 9999) < 768;
+    })();
+    var _DECODE_BACK = 3;    // frames kept decoded behind the playhead (playing)
     var _DECODE_AHEAD = 8;   // frames pre-decoded ahead (playback runs forward)
+    // Pre-play the playhead is parked on the newest frame and nothing is
+    // animating, so we decode only the shown frame plus one neighbour
+    // (instant first Next/Prev scrub) and leave everything else encoded.
+    // startAnimation() widens this to the full window; stopAnimation()
+    // shrinks it back so a paused card doesn't hold the lookahead resident.
+    var _PREPLAY_BACK = 1, _PREPLAY_AHEAD = 0;
+    var _decodeBackActive = _PREPLAY_BACK;
+    var _decodeAheadActive = _PREPLAY_AHEAD;
     var _TRANSPARENT_1PX =
         'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
     function _frameInDecodeWindow(i, idx, n) {
-        for (var d = -_DECODE_BACK; d <= _DECODE_AHEAD; d++) {
+        for (var d = -_decodeBackActive; d <= _decodeAheadActive; d++) {
             if (((idx + d) % n + n) % n === i) return true;
         }
         return false;
+    }
+
+    /** Widen (playing) or shrink (paused) the live decode window, then
+     *  re-apply it around the current frame of the active product so the
+     *  newly-in/out-of-window frames decode/evict immediately. */
+    function _setDecodeWindow(back, ahead) {
+        _decodeBackActive = back;
+        _decodeAheadActive = ahead;
+        if (!_LAZY_DECODE) return;
+        var st = activeFrameState();
+        if (st && st.layers) _applyDecodeWindow(st.layers, animIndex);
     }
 
     /** Promote frames inside the window (restore WebP src + force decode
@@ -4702,9 +4748,9 @@
      *  raw layer index currently shown. No-op unless windowed mode is on
      *  and the loop is longer than the window. */
     function _applyDecodeWindow(layers, idx) {
-        if (!_WINDOWED_DECODE || !layers) return;
+        if (!_LAZY_DECODE || !layers) return;
         var n = layers.length;
-        if (n <= _DECODE_BACK + _DECODE_AHEAD + 1) return; // whole loop fits — keep all decoded
+        if (n <= _decodeBackActive + _decodeAheadActive + 1) return; // whole loop fits — keep all decoded
         for (var i = 0; i < n; i++) {
             var ly = layers[i];
             if (!ly || !ly._frameBlobUrl) continue; // null/non-bundle layers untouched
@@ -4722,6 +4768,27 @@
                 ly.setUrl(_TRANSPARENT_1PX);
                 ly._decodeEvicted = true;
             }
+        }
+    }
+
+    /** Promote ONE evicted frame's real bitmap and run cb after its decode
+     *  resolves (or immediately if already warm / decode() unsupported).
+     *  Used by the lazy load path to hold the loader until the first real
+     *  frame has actually painted, so the card doesn't flash blank between
+     *  "spinner cleared" and "newest frame decoded". */
+    function _decodeFrameThen(layers, idx, cb) {
+        var ly = layers && layers[idx];
+        if (!ly || !ly._frameBlobUrl) { if (cb) cb(); return; }
+        if (ly._decodeEvicted) {
+            ly.setUrl(ly._frameBlobUrl);
+            ly._decodeEvicted = false;
+        }
+        var img = ly._image;
+        if (img && img.decode) {
+            img.decode().then(function () { if (cb) cb(); },
+                              function () { if (cb) cb(); });
+        } else if (cb) {
+            cb();
         }
     }
 
@@ -4872,12 +4939,17 @@
                 L.latLng(fb[0][0], fb[0][1]),
                 L.latLng(fb[1][0], fb[1][1])
             );
-            var overlay = L.imageOverlay(blobUrl, fBounds, {
+            // Lazy mode: start every overlay on a 1×1 transparent src so the
+            // browser decodes NOTHING at card-open; the real frame is decoded
+            // on demand by the decode window (the encoded blob lives on
+            // _frameBlobUrl). Eager mode points straight at the real blob.
+            var overlay = L.imageOverlay(_LAZY_DECODE ? _TRANSPARENT_1PX : blobUrl, fBounds, {
                 opacity: 0,
                 interactive: false,
                 pane: 'tilePane'
             });
-            overlay._frameBlobUrl = blobUrl; // for windowed decode promote/evict
+            overlay._frameBlobUrl = blobUrl; // for decode-window promote/evict
+            if (_LAZY_DECODE) overlay._decodeEvicted = true;
             overlay._recenterTo = fh.recenter || null; // smooth camera path (see _recenterDetailToFrame)
             animFrameLayers.push(overlay);
             goodCount++;
@@ -4893,25 +4965,70 @@
             return;
         }
 
-        // Add every valid overlay to the map at once. Blob URLs are
-        // in-memory references — Leaflet's 'load' event fires almost
-        // immediately for each, no batching needed.
-        for (var j = 0; j < animFrameLayers.length; j++) {
-            if (!animFrameLayers[j]) {
-                // Placeholder for a failed frame — count it as loaded with error
-                onFrameLayerLoaded(j);
-                continue;
+        if (_LAZY_DECODE) {
+            // ── Lazy path ──────────────────────────────────────────────
+            // Overlays are all on a transparent src, so addTo() decodes
+            // nothing. Add newest-first (cosmetic — keeps z-order tidy),
+            // then decode ONLY the visible frame and enable the controls
+            // immediately. Bundle frames are validated server-side, so we
+            // trust byte_length (no per-frame 'load' wait) — the card is
+            // interactive after a single decode instead of after ~16.
+            for (var oj = animFrameLayers.length - 1; oj >= 0; oj--) {
+                if (animFrameLayers[oj]) animFrameLayers[oj].addTo(detailMap);
             }
-            (function (idx) {
-                animFrameLayers[idx].once('error', function () {
-                    frameHasError[idx] = true;
-                    onFrameLayerLoaded(idx);
+            validFrames = [];
+            for (var vk = 0; vk < animFrameLayers.length; vk++) {
+                if (animFrameLayers[vk] && !frameHasError[vk]) validFrames.push(vk);
+            }
+            framesLoaded = animFrameTimes.length;
+            framesReady = true;
+            if (validFrames.length === 0) {
+                _showNoImageryError();
+            } else {
+                var _newestValid = validFrames[validFrames.length - 1];
+                animIndex = _newestValid;
+                // Hold the loader until the visible frame has actually
+                // decoded so the map never flashes blank under a cleared
+                // spinner.
+                _decodeFrameThen(animFrameLayers, _newestValid, function () {
+                    if (productMode !== 'eir') return; // user switched product mid-load
+                    _firstFrameShown = true;
+                    showFrame(_newestValid);
+                    showLoadingProgress(false);
+                    var sl = document.getElementById('ir-anim-slider');
+                    if (sl) { sl.max = validFrames.length - 1; sl.value = validFrames.length - 1; }
+                    var pb = document.getElementById('ir-anim-play');
+                    if (pb) { pb.disabled = false; pb.title = 'Play/Pause'; }
+                    updateAnimCounter();
                 });
-                animFrameLayers[idx].once('load', function () {
-                    onFrameLayerLoaded(idx);
-                });
-            })(j);
-            animFrameLayers[j].addTo(detailMap);
+                // Secondary panels + raw-Tb prewarm, same as the eager
+                // all-loaded branch (imagery already has priority — its one
+                // decode is in flight).
+                _triggerDeferredLoads();
+                _fetchRawTbIncremental(currentStormId, true, function () {});
+            }
+        } else {
+            // ── Eager path (desktop / ?lazyload=0) ─────────────────────
+            // Add every valid overlay to the map at once. Blob URLs are
+            // in-memory references — Leaflet's 'load' event fires almost
+            // immediately for each, no batching needed.
+            for (var j = 0; j < animFrameLayers.length; j++) {
+                if (!animFrameLayers[j]) {
+                    // Placeholder for a failed frame — count it as loaded with error
+                    onFrameLayerLoaded(j);
+                    continue;
+                }
+                (function (idx) {
+                    animFrameLayers[idx].once('error', function () {
+                        frameHasError[idx] = true;
+                        onFrameLayerLoaded(idx);
+                    });
+                    animFrameLayers[idx].once('load', function () {
+                        onFrameLayerLoaded(idx);
+                    });
+                })(j);
+                animFrameLayers[j].addTo(detailMap);
+            }
         }
 
         var slider = document.getElementById('ir-anim-slider');
@@ -4921,6 +5038,7 @@
 
         console.log('[RT Monitor] Frames bundle: ' + goodCount + '/' + frames.length +
                     ' WebPs loaded as blob overlays (' + detailSatName + ', ' +
+                    (_LAZY_DECODE ? 'lazy, ' : '') +
                     Math.round(buf.byteLength / 1024) + ' KB)');
     }
 
@@ -5149,6 +5267,13 @@
         if (detailMap) {
             detailMap.remove();
             detailMap = null;
+            // The graticule layerGroup belonged to the now-destroyed map. Drop
+            // the stale module-level ref so _detailEnableGraticule() rebuilds a
+            // fresh grid on the NEW map instead of early-returning on its
+            // `if (_detailGraticule) return` guard against a detached group —
+            // THE root cause of "grid invisible until you toggle it off/on"
+            // (the first toggle cleared the stale ref, the second recreated it).
+            _detailGraticule = null;
         }
 
         // Hide the old canvas, ensure map div exists
@@ -5317,8 +5442,34 @@
         var tbLeg = document.getElementById('ir-tb-legend');
         if (tbLeg) tbLeg.style.display = 'block';
 
-        // Force map resize after layout settles
-        setTimeout(function () { detailMap.invalidateSize(); }, 100);
+        // Size the map + (re)build the graticule once the panel actually has
+        // dimensions. The detail panel is 0-size when initDetailMap runs (just
+        // revealed), and this is the ONLY invalidateSize for detailMap, so a
+        // fixed timeout races the layout — the grid's init build drew nothing
+        // against the 0-size map and stayed blank until a manual toggle.
+        // A ResizeObserver fires exactly when the container gets real size
+        // (robust to slow layout + phone rotation); timeouts cover no-RO and
+        // already-sized cases. _detailRebuildGraticule is idempotent.
+        (function () {
+            var mapEl = detailMap.getContainer();
+            function _syncDetailSize() {
+                if (!detailMap) return;
+                detailMap.invalidateSize();
+                if (_detailGraticule) _detailRebuildGraticule();
+            }
+            if (typeof ResizeObserver !== 'undefined' && mapEl) {
+                var ro = new ResizeObserver(function () {
+                    if (mapEl.clientWidth > 0 && mapEl.clientHeight > 0) {
+                        _syncDetailSize();
+                        ro.disconnect(); // first real size is enough; 'resize'
+                                         // listener handles later changes
+                    }
+                });
+                ro.observe(mapEl);
+            }
+            setTimeout(_syncDetailSize, 100);   // already-sized / no-RO path
+            setTimeout(_syncDetailSize, 600);   // slow-layout fallback
+        })();
 
         // Safety timeout: if GIBS tiles haven't loaded within 30s, start anyway
         setTimeout(function () {
@@ -6546,6 +6697,9 @@
             _elAnimPlay.innerHTML = '&#9646;&#9646;'; // pause icon
             _elAnimPlay.title = 'Pause';
         }
+        // Widen the lazy decode window for smooth forward playback (pre-decode
+        // the lookahead). No-op when lazy decode is off.
+        _setDecodeWindow(_DECODE_BACK, _DECODE_AHEAD);
 
         // rAF-driven loop — ~2 fps via animIntervalMs (500ms)
         animLastTick = 0;
@@ -6562,6 +6716,9 @@
             _elAnimPlay.innerHTML = '&#9654;'; // play icon
             _elAnimPlay.title = 'Play';
         }
+        // Shrink the decode window back to the resting size so a paused card
+        // releases the lookahead bitmaps it no longer needs.
+        _setDecodeWindow(_PREPLAY_BACK, _PREPLAY_AHEAD);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -6687,7 +6844,9 @@
         // re-decodes only what's needed.
         if (_IS_MOBILE_VIEWPORT && prevMode !== mode) {
             _evictProductFrames(_productLayers(prevMode));
-            if (!_WINDOWED_DECODE) _restoreProductFrames(_productLayers(mode));
+            // Under lazy decode the incoming product's show call re-decodes
+            // only the window; restoring every frame would defeat that.
+            if (!_LAZY_DECODE) _restoreProductFrames(_productLayers(mode));
         }
 
         // --- Activate new mode ---
@@ -19852,6 +20011,14 @@
         }
 
         var nowMs = Date.now();
+        // Thumbnail draws are deferred into a concurrency-limited queue. Each
+        // draw decodes a PNG AND does a getImageData readback for the coverage
+        // check — on mobile, firing all ~15 at once saturates the CPU/GPU
+        // (getImageData forces a slow synchronous GPU→CPU sync per canvas),
+        // which is why the panel loads visibly slower on a phone than desktop.
+        // Newest-first ordering means the top (most-wanted) passes draw first.
+        // Desktop keeps the old all-at-once behavior (limit = task count).
+        var _mwTasks = [];
         for (var i = 0; i < orbits.length; i++) {
             var o = orbits[i];
             var resolvedProd = _resolvedProduct(o, product);
@@ -19874,30 +20041,36 @@
                         (resolvedProd !== product ? ' (substituted)' : '')
                         + ' — ' + utcStr;
                 thumbWrap.appendChild(c);
-                (function (cardEl) {
-                    _rtDrawStormMwThumbnail(c, pr.bounds || o.bounds, lat, lon, pr.png_url,
-                        function (frac) {
-                            resolvedCount++;
-                            if (frac < _RT_MW_MIN_COVERAGE) {
-                                // Swath bbox covered the storm but the
-                                // data path didn't. Hide the card so the
-                                // user only sees passes that actually
-                                // saw the system.
-                                cardEl.style.display = 'none';
-                            } else {
-                                coveredCount++;
-                                _bumpStatus();
-                            }
-                            // Final status when all images have resolved.
-                            if (resolvedCount === orbits.length && statusEl2) {
-                                if (coveredCount === 0) {
-                                    statusEl2.textContent = 'no passes covered storm';
+                // Defer the actual draw into the queue (run() below). Capture
+                // per-iteration canvas/bounds/url so the deferred call doesn't
+                // read the loop's last-iteration `var`s.
+                _mwTasks.push((function (canvasEl, bnds, url, cardEl) {
+                    return function (done) {
+                        _rtDrawStormMwThumbnail(canvasEl, bnds, lat, lon, url,
+                            function (frac) {
+                                resolvedCount++;
+                                if (frac < _RT_MW_MIN_COVERAGE) {
+                                    // Swath bbox covered the storm but the
+                                    // data path didn't. Hide the card so the
+                                    // user only sees passes that actually
+                                    // saw the system.
+                                    cardEl.style.display = 'none';
                                 } else {
+                                    coveredCount++;
                                     _bumpStatus();
                                 }
-                            }
-                        });
-                })(card);
+                                // Final status when all images have resolved.
+                                if (resolvedCount === orbits.length && statusEl2) {
+                                    if (coveredCount === 0) {
+                                        statusEl2.textContent = 'no passes covered storm';
+                                    } else {
+                                        _bumpStatus();
+                                    }
+                                }
+                                done();
+                            });
+                    };
+                })(c, pr.bounds || o.bounds, pr.png_url, card));
                 // Click handler lives on the whole card (not just the
                 // thumbnail) so users can hit the meta column too — the
                 // thumbnail-only target wasn't intuitive.
@@ -19942,6 +20115,21 @@
             card.appendChild(meta);
             listEl.appendChild(card);
         }
+
+        // Drain the thumbnail draw queue with bounded concurrency. Desktop:
+        // limit = task count → every draw starts immediately (unchanged from
+        // the old inline behavior). Mobile: 3 in flight at a time, so PNG
+        // decode + getImageData readback don't all hit the GPU/CPU at once.
+        var _mwMaxConcurrent = _IS_MOBILE_VIEWPORT ? 3 : _mwTasks.length;
+        var _mwActive = 0, _mwNext = 0;
+        function _mwPump() {
+            while (_mwActive < _mwMaxConcurrent && _mwNext < _mwTasks.length) {
+                var task = _mwTasks[_mwNext++];
+                _mwActive++;
+                task(function () { _mwActive--; _mwPump(); });
+            }
+        }
+        _mwPump();
     }
 
     // Crop a storm-centered sub-rectangle out of the pass PNG. The
