@@ -4042,10 +4042,11 @@ def _latest_ir_webp(atcf_id: str):
 
 def _build_and_upload_og_card(storms):
     """Render the dynamic social OG card and upload it to the stable public
-    key (_OG_CARD_KEY). When storms are active, the card features a live IR
-    image of the most-intense one plus its vitals; otherwise a branded
-    fallback. Best-effort — any failure is logged and swallowed so it never
-    breaks the prewarm cycle.
+    key (_OG_CARD_KEY). Count-adaptive: with exactly one active storm the card
+    features its live IR image plus vitals; with two or more it shows a roster
+    of every active system over the strongest storm's IR backdrop; with none it
+    falls back to a branded card. Best-effort — any failure is logged and
+    swallowed so it never breaks the prewarm cycle.
 
     COST: effectively free. The card REUSES the Mercator IR WebP that
     _prefetch_ir_frames already rendered + uploaded for the most-intense storm
@@ -4082,6 +4083,11 @@ def _build_and_upload_og_card(storms):
 
     png = None
     storm = og_card.pick_most_intense(storms) if storms else None
+    # Count-adaptive: 0 → branded fallback; exactly 1 → single-storm hero;
+    # ≥2 → roster card listing every active system (the strongest storm still
+    # provides the IR backdrop, so cost is identical). Avoids the social card
+    # ever arbitrarily anointing one storm when the tropics are busy.
+    multi = storm is not None and len(storms) >= 2
     if storm is not None:
         # Preferred path: REUSE the Mercator IR WebP that _prefetch_ir_frames
         # just wrote for this storm this cycle — a single GCS GET, no S3 fetch
@@ -4093,7 +4099,9 @@ def _build_and_upload_og_card(storms):
             if dstr and len(dstr) >= 12 and dstr[:12].isdigit():
                 valid = (f"{dstr[0:4]}-{dstr[4:6]}-{dstr[6:8]}"
                          f"T{dstr[8:10]}:{dstr[10:12]}:00Z")
-            png = og_card.render_storm_card_from_image(storm, webp, valid_utc=valid)
+            png = (og_card.render_multistorm_card_from_image(storms, webp, valid_utc=valid)
+                   if multi else
+                   og_card.render_storm_card_from_image(storm, webp, valid_utc=valid))
         else:
             try:
                 raw = fetch_ir_tb_raw(
@@ -4103,9 +4111,10 @@ def _build_and_upload_og_card(storms):
                 print(f"[Prewarm] OG card IR fetch failed for {storm.get('atcf_id')}: {ex}")
                 raw = None
             if raw is not None and raw.get("tb") is not None:
-                png = og_card.render_storm_card_png(
-                    storm, raw["tb"],
-                    valid_utc=raw.get("scan_dt") or raw.get("datetime_utc"))
+                _valid = raw.get("scan_dt") or raw.get("datetime_utc")
+                png = (og_card.render_multistorm_card_png(storms, raw["tb"], valid_utc=_valid)
+                       if multi else
+                       og_card.render_storm_card_png(storm, raw["tb"], valid_utc=_valid))
 
     if png is None:
         # No active storms, or IR fetch/render failed → branded fallback so the
@@ -4121,7 +4130,12 @@ def _build_and_upload_og_card(storms):
         blob.upload_from_string(
             png, content_type="image/png",
             predefined_acl="publicRead", timeout=30)
-        tag = ("storm " + storm["atcf_id"]) if storm else "branded fallback"
+        if not storm:
+            tag = "branded fallback"
+        elif multi:
+            tag = f"{len(storms)} systems (lead {storm['atcf_id']})"
+        else:
+            tag = "storm " + storm["atcf_id"]
         print(f"[Prewarm] OG card updated ({tag})")
     except Exception as ex:
         print(f"[Prewarm] OG card upload failed: {ex}")

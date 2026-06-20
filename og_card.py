@@ -154,20 +154,13 @@ def _ir_square_from_image(img_bytes: bytes):
     return im.resize((_IR_SQUARE, _IR_SQUARE), Image.LANCZOS)
 
 
-def _compose_storm_card(ir_square, storm: dict,
-                        valid_utc: Optional[str]) -> Optional[bytes]:
-    """Compose the final card from an already-prepared CARD_H x CARD_H RGB IR
-    square plus the storm's text panel. Shared by both the Tb and pre-rendered-
-    image entry points. Never raises (caller wraps)."""
-    from PIL import Image, ImageDraw
+def _paste_ir_backdrop(card, ir_square) -> None:
+    """Paste the CARD_H×CARD_H IR square on the right half and blend its left
+    seam with a navy→transparent gradient so the text panel reads cleanly into
+    the imagery. Shared by the single-storm and multi-storm composers."""
+    from PIL import Image
 
-    card = Image.new("RGB", (CARD_W, CARD_H), _NAVY)
-
-    # IR backdrop on the right half.
     card.paste(ir_square, (_IR_X, 0))
-
-    # Navy→transparent gradient over the IR's left edge to blend the seam
-    # so the text panel reads cleanly into the imagery.
     grad_w = 160
     grad = Image.new("RGBA", (grad_w, CARD_H), (0, 0, 0, 0))
     gpx = grad.load()
@@ -177,15 +170,31 @@ def _compose_storm_card(ir_square, storm: dict,
             gpx[gx, gy] = (_NAVY[0], _NAVY[1], _NAVY[2], a)
     card.paste(grad, (_IR_X, 0), grad)
 
+
+def _draw_live_badge(draw) -> None:
+    """Red '● LIVE' badge anchored to the top-right of the text panel."""
+    badge = "● LIVE"
+    bf = _font(16, bold=True)
+    bw = draw.textlength(badge, font=bf)
+    draw.text((_IR_X - 48 - bw, 50), badge, font=bf, fill=(248, 113, 113))
+
+
+def _compose_storm_card(ir_square, storm: dict,
+                        valid_utc: Optional[str]) -> Optional[bytes]:
+    """Compose the final card from an already-prepared CARD_H x CARD_H RGB IR
+    square plus the storm's text panel. Shared by both the Tb and pre-rendered-
+    image entry points. Never raises (caller wraps)."""
+    from PIL import Image, ImageDraw
+
+    card = Image.new("RGB", (CARD_W, CARD_H), _NAVY)
+    _paste_ir_backdrop(card, ir_square)
+
     draw = ImageDraw.Draw(card)
     pad = 48
     _draw_wordmark(draw, pad, 44)
 
     # LIVE badge (top, under the wordmark area on the right of the panel).
-    badge = "● LIVE"
-    bf = _font(16, bold=True)
-    bw = draw.textlength(badge, font=bf)
-    draw.text((_IR_X - pad - bw, 50), badge, font=bf, fill=(248, 113, 113))
+    _draw_live_badge(draw)
 
     name = str(storm.get("name") or storm.get("atcf_id") or "Tropical Cyclone")
     label, accent = _cat_label_color(
@@ -300,23 +309,143 @@ def _encode(card) -> bytes:
     return buf.getvalue()
 
 
-def pick_most_intense(storms: list) -> Optional[dict]:
-    """Return the active storm with the highest sustained wind, or None.
+def _intensity_key(s: dict):
+    """Sort key: highest sustained wind, then lower MSLP (deeper), then name
+    for determinism so the card doesn't flap between equally-rated storms."""
+    try:
+        v = float(s.get("vmax_kt") or 0)
+    except (TypeError, ValueError):
+        v = 0.0
+    try:
+        p = float(s.get("mslp_hpa") or 9999)
+    except (TypeError, ValueError):
+        p = 9999.0
+    return (v, -p, str(s.get("name") or s.get("atcf_id") or ""))
 
-    Ties broken by lower MSLP (deeper), then by name for determinism so the
-    card doesn't flap between equally-rated storms on successive cycles."""
+
+def pick_most_intense(storms: list) -> Optional[dict]:
+    """Return the active storm with the highest sustained wind, or None."""
     if not storms:
         return None
+    return max(storms, key=_intensity_key)
 
-    def _key(s):
-        try:
-            v = float(s.get("vmax_kt") or 0)
-        except (TypeError, ValueError):
-            v = 0.0
-        try:
-            p = float(s.get("mslp_hpa") or 9999)
-        except (TypeError, ValueError):
-            p = 9999.0
-        return (v, -p, str(s.get("name") or s.get("atcf_id") or ""))
 
-    return max(storms, key=_key)
+def _sorted_by_intensity(storms: list) -> list:
+    """All storms strongest-first (same ordering as pick_most_intense)."""
+    return sorted(storms, key=_intensity_key, reverse=True)
+
+
+# Friendly basin labels for the multi-storm roster (endpoint emits codes like
+# "WPAC"/"EPAC"). Unknown codes fall through to the raw string.
+_BASIN_LABELS = {
+    "atl": "Atlantic", "natl": "Atlantic", "al": "Atlantic",
+    "epac": "E Pacific", "ep": "E Pacific",
+    "cpac": "C Pacific", "cp": "C Pacific",
+    "wpac": "W Pacific", "wp": "W Pacific",
+    "nio": "N Indian", "io": "Indian Ocean", "ni": "N Indian",
+    "shem": "S Hemisphere", "sh": "S Hemisphere",
+    "spac": "S Pacific", "sio": "S Indian", "aus": "Australian",
+}
+
+
+def _basin_label(basin) -> str:
+    key = str(basin or "").strip().lower().replace(" ", "")
+    return _BASIN_LABELS.get(key, str(basin or "").strip())
+
+
+def _compose_multistorm_card(ir_square, storms: list,
+                             valid_utc: Optional[str]) -> Optional[bytes]:
+    """Compose the busy-tropics card: the strongest storm's IR backdrop on the
+    right, and a roster of EVERY active system on the left (count header +
+    cat-colored list). Used when ≥2 systems are active so the card never has to
+    arbitrarily anoint one storm. Never raises (caller wraps)."""
+    from PIL import Image, ImageDraw
+
+    card = Image.new("RGB", (CARD_W, CARD_H), _NAVY)
+    _paste_ir_backdrop(card, ir_square)
+    draw = ImageDraw.Draw(card)
+    pad = 48
+
+    _draw_wordmark(draw, pad, 44)
+    _draw_live_badge(draw)
+
+    ordered = _sorted_by_intensity(storms)
+    n = len(ordered)
+
+    draw.text((pad, 134), f"{n} Active Systems",
+              font=_font(46, bold=True), fill=_WHITE)
+    draw.text((pad, 196), _fmt_valid(valid_utc), font=_font(16), fill=_DIM)
+
+    # Cap the visible rows so the roster + footer always fit. When there are
+    # more, show the top systems and a "+N more" line rather than overflowing.
+    MAX_ROWS = 5
+    if n > MAX_ROWS:
+        shown, overflow = ordered[:MAX_ROWS - 1], n - (MAX_ROWS - 1)
+    else:
+        shown, overflow = ordered, 0
+
+    max_w = _IR_X - pad - 24
+    row_y, row_h = 236, 64
+    for s in shown:
+        label, accent = _cat_label_color(
+            s.get("category"), s.get("vmax_kt"), s.get("basin"))
+        # Cat-colored bullet carries the intensity cue.
+        draw.ellipse([pad, row_y + 14, pad + 18, row_y + 32], fill=accent)
+        tx = pad + 34
+
+        name = str(s.get("name") or s.get("atcf_id") or "—")
+        size = 28
+        while size > 18 and draw.textlength(
+                name, font=_font(size, bold=True)) > (max_w - 34):
+            size -= 2
+        draw.text((tx, row_y), name, font=_font(size, bold=True), fill=_WHITE)
+
+        bits = [label]
+        v = s.get("vmax_kt")
+        if v not in (None, ""):
+            try:
+                bits.append(f"{int(round(float(v)))} kt")
+            except (TypeError, ValueError):
+                pass
+        bl = _basin_label(s.get("basin"))
+        if bl:
+            bits.append(bl)
+        draw.text((tx, row_y + 34), "   ·   ".join(bits),
+                  font=_font(17), fill=_DIM)
+        row_y += row_h
+
+    if overflow:
+        draw.text((pad + 34, row_y + 4),
+                  f"+ {overflow} more active system{'s' if overflow != 1 else ''}",
+                  font=_font(18, bold=True), fill=_CYAN)
+
+    draw.text((pad, CARD_H - 56), "Track them live  →  tcatlas.org",
+              font=_font(18, bold=True), fill=_CYAN)
+
+    return _encode(card)
+
+
+def render_multistorm_card_from_image(storms: list, ir_img_bytes: bytes,
+                                      valid_utc: Optional[str] = None) -> Optional[bytes]:
+    """Multi-storm roster card from a PRE-RENDERED IR backdrop (the cached
+    Mercator WebP of the strongest storm). Returns None on failure; never
+    raises."""
+    try:
+        return _compose_multistorm_card(
+            _ir_square_from_image(ir_img_bytes), storms, valid_utc)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def render_multistorm_card_png(storms: list, tb: np.ndarray,
+                               valid_utc: Optional[str] = None) -> Optional[bytes]:
+    """Multi-storm roster card from a raw Tb backdrop (strongest storm's first
+    cycle, no cached frame yet). Returns None on failure; never raises."""
+    try:
+        return _compose_multistorm_card(_ir_backdrop(tb), storms, valid_utc)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return None
