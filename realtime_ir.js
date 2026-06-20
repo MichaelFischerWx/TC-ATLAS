@@ -23280,10 +23280,28 @@
         });
     };
 
-    /** Animated GIF of all valid frames. Steps the visible animation
-     *  frame-by-frame, html2canvas-captures the imagery panel, and feeds
-     *  each into gif.js. Same pattern as satellite.js's export but
-     *  scoped to the card's simpler DOM. */
+    // gif.js needs its worker script, but `new Worker(crossOriginUrl)` is
+    // BLOCKED by the browser — handing gif.js the cdnjs URL directly makes
+    // render() throw SecurityError, so encoding never starts (the classic
+    // "stuck on encoding"). Fix: fetch the script once and run it from a
+    // same-origin blob: URL. Cached for the session.
+    var _gifWorkerUrl = null;
+    function _ensureGifWorker() {
+        if (_gifWorkerUrl) return Promise.resolve(_gifWorkerUrl);
+        var src = 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js';
+        return fetch(src)
+            .then(function (r) { if (!r.ok) throw new Error('gif.worker HTTP ' + r.status); return r.text(); })
+            .then(function (txt) {
+                _gifWorkerUrl = URL.createObjectURL(
+                    new Blob([txt], { type: 'application/javascript' }));
+                return _gifWorkerUrl;
+            });
+    }
+
+    /** Animated GIF of all valid frames. Captures the static map background
+     *  ONCE, then composites each already-decoded IR frame + a redrawn
+     *  timestamp pill — no per-frame html2canvas. Feeds frames to gif.js
+     *  (same-origin blob worker). */
     window._irDownloadAnimGif = function () {
         if (!currentStormId) return;
         if (typeof window.GIF === 'undefined') {
@@ -23320,7 +23338,8 @@
         toast.textContent = 'GIF · capturing 0/' + exportFrames.length;
         node.appendChild(toast);
 
-        _ensureHtml2canvas().then(function () {
+        Promise.all([_ensureHtml2canvas(), _ensureGifWorker()]).then(function (_setup) {
+            var gifWorkerUrl = _setup[1];
             var w = node.offsetWidth;
             var h = node.offsetHeight;
             // Encoding cost (NeuQuant quantize + LZW) scales with pixels ×
@@ -23336,10 +23355,11 @@
             // which barely uses a modern multi-core machine. Scale to the
             // hardware (capped) so render() finishes in seconds, not minutes.
             var workers = Math.max(2, Math.min(8, navigator.hardwareConcurrency || 4));
-            // gif.js worker is served from CDN (matches what satellite.js does).
+            // Same-origin blob worker (see _ensureGifWorker) — a cross-origin
+            // worker URL throws SecurityError and stalls encoding.
             var gif = new window.GIF({
                 workers: workers, quality: 15, width: gifW, height: gifH,
-                workerScript: 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js',
+                workerScript: gifWorkerUrl,
                 background: '#0a0c12'
             });
             gif.on('progress', function (pct) {
@@ -23359,34 +23379,149 @@
                 if (toast.parentElement) toast.parentElement.removeChild(toast);
             });
 
-            // Step through frames sequentially. html2canvas is async per frame.
-            var i = 0;
-            function captureNext() {
-                if (i >= exportFrames.length) {
-                    toast.textContent = 'GIF · encoding…';
-                    gif.render();
-                    return;
-                }
-                state.showFn(exportFrames[i]);
-                toast.textContent = 'GIF · capturing ' + (i + 1) + '/' + exportFrames.length;
-                // Wait one frame so Leaflet/Plotly settle before capture.
-                requestAnimationFrame(function () {
-                    window.html2canvas(node, {
-                        useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
-                        logging: false, scale: scale, onclone: _irExportOnClone
-                    }).then(function (cv) {
-                        // delay per frame mirrors the player's animIntervalMs.
-                        gif.addFrame(cv, { delay: animIntervalMs, copy: true });
-                        i++;
-                        captureNext();
-                    }).catch(function (err) {
-                        console.warn('[RT Monitor] frame capture failed:', err);
-                        i++;
-                        captureNext();
-                    });
-                });
+            // ── Capture the STATIC layers ONCE, composite the decoded IR
+            //    per frame ────────────────────────────────────────────────
+            // The old path html2canvas-rasterized the ENTIRE map DOM (basemap
+            // tiles, coastlines, grid, track, legend, label) once PER FRAME —
+            // even though only the IR image + timestamp change. The frames are
+            // already-decoded WebP <img> overlays on the map, so instead we
+            // html2canvas the background ONCE (IR + label hidden) and draw each
+            // frame's existing bitmap + a redrawn timestamp pill onto a copy.
+            // Capture drops from O(N · whole-DOM) to O(1 · DOM + N · drawImage).
+            // The map is left at its current view, so the storm drifts through
+            // a fixed geographic frame (the classic ground-relative loop look —
+            // correct, since coastlines/grid stay put while the storm moves).
+            var layers = state.layers;
+            var nodeRect = node.getBoundingClientRect();
+            var infoEl = document.getElementById('ir-overlay-info');
+            // Snapshot the label pill's live geometry + style BEFORE hiding it
+            // so the per-frame redraw matches the CSS exactly.
+            var lbl = null;
+            if (infoEl) {
+                var ir = infoEl.getBoundingClientRect();
+                var cs = getComputedStyle(infoEl);
+                var tEl = document.getElementById('ir-frame-time');
+                var fs = parseFloat((tEl && getComputedStyle(tEl).fontSize) || cs.fontSize) || 12;
+                lbl = {
+                    x: (ir.left - nodeRect.left) * scale, y: (ir.top - nodeRect.top) * scale,
+                    w: ir.width * scale, h: ir.height * scale,
+                    padX: (parseFloat(cs.paddingLeft) || 8) * scale,
+                    radius: (parseFloat(cs.borderTopLeftRadius) || 4) * scale,
+                    bg: cs.backgroundColor || 'rgba(15,22,35,0.85)',
+                    font: (fs * scale) + "px " + (cs.fontFamily || "'DM Sans',sans-serif"),
+                    timeColor: (tEl && getComputedStyle(tEl).color) || '#fff'
+                };
             }
-            captureNext();
+            function _channelLabel() {
+                if (productMode === 'vis') return 'Visible — ' + detailSatName;
+                if (productMode === 'wv') return 'Water Vapor — ' + detailSatName;
+                return 'Infrared — ' + (detailSatName || 'GIBS IR');
+            }
+            function _drawLabel(cx, idx) {
+                if (!lbl) return;
+                var timeTxt = fmtUTC(state.times[idx]);
+                var satTxt = '  ' + _channelLabel();
+                cx.save();
+                cx.fillStyle = lbl.bg;
+                if (cx.roundRect) { cx.beginPath(); cx.roundRect(lbl.x, lbl.y, lbl.w, lbl.h, lbl.radius); cx.fill(); }
+                else cx.fillRect(lbl.x, lbl.y, lbl.w, lbl.h);
+                cx.textBaseline = 'middle';
+                var ty = lbl.y + lbl.h / 2;
+                cx.font = '700 ' + lbl.font;
+                cx.fillStyle = lbl.timeColor;
+                cx.fillText(timeTxt, lbl.x + lbl.padX, ty);
+                var tw = cx.measureText(timeTxt).width;
+                cx.font = '400 ' + lbl.font;
+                cx.fillStyle = 'rgba(226,232,240,0.88)';
+                cx.fillText(satTxt, lbl.x + lbl.padX + tw, ty);
+                cx.restore();
+            }
+
+            // 1) Hide IR overlays + the label, then capture the background once.
+            var savedOpac = [];
+            for (var li = 0; li < layers.length; li++) {
+                if (layers[li] && layers[li]._image) {
+                    savedOpac[li] = layers[li]._image.style.opacity;
+                    layers[li]._image.style.opacity = '0';
+                }
+            }
+            var infoDisp = infoEl ? infoEl.style.display : null;
+            if (infoEl) infoEl.style.display = 'none';
+
+            function _restoreLive() {
+                if (infoEl) infoEl.style.display = infoDisp || '';
+                for (var k = 0; k < layers.length; k++) {
+                    if (layers[k] && layers[k]._image && savedOpac[k] != null) {
+                        layers[k]._image.style.opacity = savedOpac[k];
+                    }
+                }
+            }
+
+            // setTimeout (not rAF) so the capture still runs if the user
+            // backgrounds the tab mid-export — rAF is paused while hidden,
+            // which would stall the whole GIF until they return.
+            setTimeout(function () {
+                window.html2canvas(node, {
+                    useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
+                    logging: false, scale: scale, onclone: _irExportOnClone
+                }).then(function (bg) {
+                    if (infoEl) infoEl.style.display = infoDisp || '';  // label redrawn per frame
+                    var i = 0;
+                    function compositeNext() {
+                        if (i >= exportFrames.length) {
+                            _restoreLive();
+                            toast.textContent = 'GIF · encoding…';
+                            gif.render();
+                            return;
+                        }
+                        var idx = exportFrames[i];
+                        var ov = layers[idx];
+                        var img = ov && ov._image;
+                        toast.textContent = 'GIF · building ' + (i + 1) + '/' + exportFrames.length;
+                        // Lazy/mobile frames are evicted to a 1×1 transparent src;
+                        // promote + decode this one before drawing, then re-evict to
+                        // keep peak decoded memory bounded (one frame at a time).
+                        var wasEvicted = !!(ov && ov._decodeEvicted);
+                        function draw() {
+                            var c = document.createElement('canvas');
+                            c.width = gifW; c.height = gifH;
+                            var cx = c.getContext('2d');
+                            cx.drawImage(bg, 0, 0, gifW, gifH);
+                            if (img && img.naturalWidth) {
+                                var r = img.getBoundingClientRect();
+                                cx.drawImage(img,
+                                    (r.left - nodeRect.left) * scale,
+                                    (r.top - nodeRect.top) * scale,
+                                    r.width * scale, r.height * scale);
+                            }
+                            _drawLabel(cx, idx);
+                            gif.addFrame(c, { delay: animIntervalMs, copy: true });
+                            if (wasEvicted && ov && ov._frameBlobUrl) {
+                                ov.setUrl(_TRANSPARENT_1PX); ov._decodeEvicted = true;
+                            }
+                            i++;
+                            compositeNext();
+                        }
+                        if (wasEvicted && ov && ov._frameBlobUrl) {
+                            ov.setUrl(ov._frameBlobUrl); ov._decodeEvicted = false;
+                            img = ov._image;
+                            if (img && img.decode) { img.decode().then(draw, draw); }
+                            else if (img) { img.onload = draw; img.onerror = draw; }
+                            else draw();
+                        } else if (img && img.decode && !img.complete) {
+                            img.decode().then(draw, draw);
+                        } else {
+                            draw();
+                        }
+                    }
+                    compositeNext();
+                }).catch(function (err) {
+                    _restoreLive();
+                    console.warn('[RT Monitor] GIF background capture failed:', err);
+                    _irRestoreTrackAfterExport(hiddenTrackGif);
+                    if (toast.parentElement) toast.parentElement.removeChild(toast);
+                });
+            }, 0);
         }).catch(function (err) {
             console.warn('[RT Monitor] GIF export setup failed:', err);
             _irRestoreTrackAfterExport(hiddenTrackGif);
