@@ -5300,6 +5300,12 @@
             // is captured at the right position. (Verified: SVG centroid
             // offset ~100px vs canvas under an identical pan.)
             preferCanvas: true,
+            // Generous hit tolerance so the small (r≈3-4) track dots are
+            // easy to hover/click — at tolerance 0 the cursor had to land
+            // exactly on a 3px dot, which read as "fickle" hover. Applies to
+            // all canvas vectors on this map (graticule lines are
+            // non-interactive, so only the track dots/pin gain the hit area).
+            renderer: L.canvas({ tolerance: 8 }),
             center: [storm.lat, storm.lon],
             // zoom 6 fills the storm-relative crop tightly to the viewport
             // (the IR cutout is ±10° around the storm, ~2200 km wide;
@@ -5404,18 +5410,48 @@
         // Storm center marker
         var cat = storm.category || windToCategory(storm.vmax_kt);
         var color = _irIsInvest(storm.atcf_id) ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
+        // Reset the track-layer array up-front so the current-position pin
+        // (pushed just below) survives — the past-track fetch appends to it.
+        detailTrackLayers = [];
         // Extrapolated pin so it tracks the convection in the loop —
         // same dead-reckoning the backend uses to crop the IR cutout.
         var pinPos = _extrapolateStormPin(storm);
-        L.circleMarker([pinPos.lat, pinPos.lon], {
+        var pin = L.circleMarker([pinPos.lat, pinPos.lon], {
             radius: 8, color: color, fillColor: color,
             fillOpacity: 0.7, weight: 2
-        }).addTo(detailMap);
+        });
+        // The current-position pin previously had no tooltip/popup/handler, so
+        // clicking the most-recent point did nothing. Give it a hover tooltip
+        // (quick name + intensity) and a click popup (fuller current state).
+        var _catLbl = _irIsInvest(storm.atcf_id) ? 'INVEST'
+                    : categoryLabel(cat);
+        var _vmaxTxt = (storm.vmax_kt != null) ? (storm.vmax_kt + ' kt') : '—';
+        pin.bindTooltip(
+            '<b>' + (storm.name || storm.atcf_id) + '</b> · ' + _vmaxTxt,
+            { direction: 'top', offset: [0, -8] }
+        );
+        var _popLines = [
+            '<div style="font-weight:700;margin-bottom:2px;">' +
+                (storm.name || storm.atcf_id) +
+                (_catLbl ? ' · ' + _catLbl : '') + '</div>',
+            'Wind: ' + _vmaxTxt +
+                (storm.mslp_hpa != null ? ' · ' + Math.round(storm.mslp_hpa) + ' hPa' : ''),
+        ];
+        if (storm.motion_deg != null && storm.motion_kt != null) {
+            _popLines.push('Motion: ' + Math.round(storm.motion_deg) + '° @ ' +
+                           Math.round(storm.motion_kt) + ' kt');
+        }
+        _popLines.push(_rtFmtLat(pinPos.lat) + ' ' + _rtFmtLon(pinPos.lon));
+        if (storm.last_fix_utc) _popLines.push('<i>Last fix: ' + fmtUTC(storm.last_fix_utc) + '</i>');
+        pin.bindPopup(_popLines.join('<br>'), { maxWidth: 240 });
+        pin.addTo(detailMap);
+        // Track-toggle parity + cleanup: the pin belongs with the track layers.
+        detailTrackLayers.push(pin);
 
         // Fetch and draw past track on detail map. Each storm opens with the
         // track shown; reset the toggle (and its button) so a hidden choice
-        // from a prior storm doesn't carry over.
-        detailTrackLayers = [];
+        // from a prior storm doesn't carry over. (detailTrackLayers was reset
+        // above, before the current-position pin was pushed into it.)
         _detailTrackVisible = true;
         var _trkBtn = document.getElementById('ir-detail-track-toggle');
         if (_trkBtn) _trkBtn.classList.add('active');
