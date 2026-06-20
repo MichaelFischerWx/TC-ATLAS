@@ -17,11 +17,19 @@
     // makes every direct bundle fetch 403/404 and forces the slow on-demand
     // API rebuild (~2 s/band). R2 keys == GCS keys; "base" may flip to the
     // Cloudflare CDN at runtime so a server bump needs no frontend redeploy.
-    var _SAT_BUNDLE_ROOT = 'https://storage.googleapis.com/tc-atlas-ir-cache';
+    // Default to the R2 CDN: post-cutover the GCS bundle objects 403, so a
+    // cold/hard load that opens before _satResolveBundleBase()'s async
+    // rt-version.json fetch resolves would otherwise hit GCS → 403 → slow
+    // on-demand API rebuild. (Mirrors realtime_ir.js _RT_BUNDLE_ROOT.)
+    var _SAT_BUNDLE_ROOT = 'https://cdn.tcatlas.org';
+    // rt-version.json lives ONLY on GCS (R2 root has no version file → 404),
+    // so discover it from a fixed GCS root regardless of where bundles are
+    // served. Mirrors realtime_ir.js's _GCS_BUCKET_ROOT split.
+    var _SAT_VERSION_ROOT = 'https://storage.googleapis.com/tc-atlas-ir-cache';
     var _SAT_BUNDLE_VERSION = 'rt-v12';
     var _SAT_BUNDLE_BASE = _SAT_BUNDLE_ROOT + '/' + _SAT_BUNDLE_VERSION + '/bundles';
     function _satResolveBundleBase() {
-        return fetch(_SAT_BUNDLE_ROOT + '/rt-version.json', { cache: 'no-store' })
+        return fetch(_SAT_VERSION_ROOT + '/rt-version.json', { cache: 'no-store' })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
                 if (!j) return;

@@ -57,9 +57,11 @@
     <link rel="preconnect" href="https://unpkg.com">
     <link rel="preconnect" href="https://cdn.plot.ly">
     <link rel="preconnect" href="https://tc-atlas-api-361010099051.us-east1.run.app">
-    <!-- IR frame bundles, rt-version.json and the microwave manifests are
-         fetched straight from GCS — warm the connection so DNS+TCP+TLS
-         aren't paid on the first bundle request. -->
+    <!-- IR/band frame bundles now serve from the R2 CDN (cdn.tcatlas.org);
+         rt-version.json, the OG card and the microwave manifests still come
+         from GCS. Warm BOTH so DNS+TCP+TLS aren't paid on the first fetch —
+         the CDN one matters most (it's the hot bundle path). -->
+    <link rel="preconnect" href="https://cdn.tcatlas.org">
     <link rel="preconnect" href="https://storage.googleapis.com">
 
     <!-- Cache-busting: minute-resolution timestamp on local CSS/JS URLs.
