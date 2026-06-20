@@ -8,7 +8,7 @@
     'use strict';
 
     // ── Config ──────────────────────────────────────────────────
-    var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
+    var API_BASE = 'https://api.tcatlas.org';
     var POLL_INTERVAL_MS = 10 * 60 * 1000;
 
     // Bundle host + version, resolved from rt-version.json at init (mirrors

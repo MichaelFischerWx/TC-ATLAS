@@ -24,7 +24,7 @@
 (function () {
     'use strict';
 
-    var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
+    var API_BASE = 'https://api.tcatlas.org';
     var GCS_BUNDLE_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles/frames';
 
     var SS_COLORS = {

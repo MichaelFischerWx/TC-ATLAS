@@ -53,7 +53,7 @@
     var LOCAL_BASE = 'data/seasonal';
     // Same hostname realtime_ir.js uses for /ir-monitor/* endpoints; we
     // call /seasonal/daily off it for the Daily Panel B view.
-    var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
+    var API_BASE = 'https://api.tcatlas.org';
 
     // Per-region cache for the Daily view. clim + trend + currentYear are
     // small enough to keep loaded for the session; the heavier region

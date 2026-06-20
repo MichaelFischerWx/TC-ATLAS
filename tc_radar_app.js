@@ -1,4 +1,4 @@
-const API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
+const API_BASE = 'https://api.tcatlas.org';
 
 // ── GA4 analytics helper ─────────────────────────────────────
 function _ga(action, params) {

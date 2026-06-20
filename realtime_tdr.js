@@ -36,7 +36,7 @@
     }
 
     // ── Configuration ────────────────────────────────────────────
-    var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
+    var API_BASE = 'https://api.tcatlas.org';
     var RT_PREFIX = '/realtime';
 
     // ── State ────────────────────────────────────────────────────

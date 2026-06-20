@@ -8,7 +8,7 @@
     'use strict';
 
     // ── Config ──────────────────────────────────────────────────
-    var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
+    var API_BASE = 'https://api.tcatlas.org';
     // Local-dev only: when the page itself is served from localhost,
     // `?api=http://localhost:8081` points all fetches at a locally-run
     // API so server-side changes can be A/B'd before deploy. No-op in

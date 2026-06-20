@@ -29,7 +29,7 @@ function _ga(action, params) {
 }
 
 // ── Configuration ────────────────────────────────────────────
-var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
+var API_BASE = 'https://api.tcatlas.org';
 var DATA_VER = 'v20260408';  // Cache-busting version for static JSON files
 var STORMS_JSON = 'ibtracs_storms.json?' + DATA_VER;
 var TRACKS_MANIFEST = 'ibtracs_tracks_manifest.json?' + DATA_VER;
