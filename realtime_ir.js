@@ -15083,9 +15083,13 @@
         if (file && navigator.canShare && typeof navigator.share === 'function'
                 && navigator.canShare({ files: [file] })) {
             navigator.share({ files: [file] }).catch(function (err) {
-                // User dismissed the sheet — don't second-guess them.
-                if (err && (err.name === 'AbortError'
-                            || err.name === 'NotAllowedError')) return;
+                // Only a genuine user-cancel (AbortError) should stop here.
+                // NotAllowedError means the sheet never delivered the file —
+                // most often because a long async export (e.g. the ~6s GIF
+                // encode) outlived the tap's transient activation, so share()
+                // is rejected. Falling back to download/open is the difference
+                // between the file saving and silently vanishing.
+                if (err && err.name === 'AbortError') return;
                 _downloadOrOpenBlob(blob, filename);
             });
             return;
