@@ -4199,16 +4199,24 @@ def get_active_storms(if_none_match: Optional[str] = Header(default=None)):
     etag_seed = f"{data['updated_utc']}|{len(data['storms'])}"
     etag = '"' + hashlib.sha1(etag_seed.encode("utf-8")).hexdigest()[:16] + '"'
 
+    # stale-while-revalidate lets the Cloudflare edge serve the last-good copy
+    # INSTANTLY while it refreshes in the background, so a visitor never waits on
+    # a cold Cloud Run origin (min=0) doing a synchronous NHC/JTWC poll. max-age
+    # matches the internal poll TTL (_STORM_CACHE_TTL=300); stale-if-error keeps
+    # the pill populated even if the origin is mid-cold-start or briefly down.
+    _ACTIVE_STORMS_CC = (
+        "public, max-age=300, stale-while-revalidate=600, stale-if-error=86400")
+
     if if_none_match and if_none_match.strip() == etag:
         return Response(
             status_code=304,
-            headers={"ETag": etag, "Cache-Control": "public, max-age=120"},
+            headers={"ETag": etag, "Cache-Control": _ACTIVE_STORMS_CC},
         )
 
     return JSONResponse(
         content=data,
         headers={
-            "Cache-Control": "public, max-age=120",
+            "Cache-Control": _ACTIVE_STORMS_CC,
             "ETag": etag,
         },
     )
