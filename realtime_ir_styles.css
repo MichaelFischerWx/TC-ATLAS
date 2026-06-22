@@ -671,21 +671,25 @@ html, body { margin: 0; padding: 0; }
     color: var(--um-green, #4a9b6e);
     outline: none;
 }
-.ir-sat-viewer-btn {
+/* The Diagnostics button is a toggle (it no longer launches a separate page):
+   neutral + dimmed when OFF (like the Track/Grid/Obs toggles beside it), and
+   UM-orange only when ACTIVE — orange now signals "diagnostics engaged" rather
+   than being the button's permanent identity. */
+.ir-sat-viewer-btn.active {
     color: var(--um-orange);
     border-color: rgba(244, 115, 33, 0.45);
     background: rgba(244, 115, 33, 0.12);
 }
-.ir-sat-viewer-btn:hover {
+.ir-sat-viewer-btn.active:hover {
     background: rgba(244, 115, 33, 0.24);
     border-color: rgba(244, 115, 33, 0.65);
 }
-[data-theme="dark"] .ir-sat-viewer-btn {
+[data-theme="dark"] .ir-sat-viewer-btn.active {
     color: #fdba74;
     border-color: rgba(244, 115, 33, 0.55);
     background: rgba(244, 115, 33, 0.16);
 }
-[data-theme="dark"] .ir-sat-viewer-btn:hover {
+[data-theme="dark"] .ir-sat-viewer-btn.active:hover {
     background: rgba(244, 115, 33, 0.30);
     border-color: rgba(244, 115, 33, 0.75);
 }
