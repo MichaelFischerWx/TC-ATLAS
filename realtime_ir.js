@@ -6586,6 +6586,75 @@
         });
     }
 
+    // Server-precomputed Hovmöller cache for 12h/24h lookbacks: { 'storm|hours': hov }.
+    var _rtHovCache = {};
+
+    /** Render the Tb Hovmöller into #rt-diag-hovmoller-chart. 6h builds in-memory
+     *  from rawTbFrames; 12h/24h fetch the server's precomputed profiles (the
+     *  card only holds the recent ~6h of raw Tb). Reuses the viewer's heatmap
+     *  renderer via window._satDiag. */
+    function _rtRenderHovmoller() {
+        if (!_diagVisible || _rtDiagTab !== 'hovmoller') return;
+        var D = window._satDiag;
+        var target = 'rt-diag-hovmoller-chart';
+        var chartEl = document.getElementById(target);
+        if (!D || !chartEl || !D.renderHovmollerChart) return;
+
+        _whenPlotly(function () {
+            if (!_diagVisible || _rtDiagTab !== 'hovmoller') return;
+            var curTime = _activeFrameTimeStr();
+
+            // 6h — build straight from the card's own raw Tb frames.
+            if (_rtDiagHours <= 6) {
+                if (!rawTbFrames || !rawTbFrames.length) return;
+                var hov6 = D.buildHovmollerData(rawTbFrames, 6);
+                if (hov6) { chartEl.style.display = ''; D.renderHovmollerChart(hov6, curTime, target); }
+                else chartEl.style.display = 'none';
+                return;
+            }
+
+            // 12h / 24h — server-precomputed (cache per storm+lookback).
+            var reqStorm = currentStormId, reqHours = _rtDiagHours;
+            var key = reqStorm + '|' + reqHours;
+            if (_rtHovCache[key]) {
+                chartEl.style.display = '';
+                D.renderHovmollerChart(_rtHovCache[key], curTime, target);
+                return;
+            }
+            chartEl.style.opacity = '0.4';
+            var statusEl = document.getElementById('rt-diag-status');
+            if (statusEl) statusEl.textContent = 'Computing ' + reqHours + 'h Hovmöller…';
+            var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(reqStorm) +
+                '/hovmoller?lookback_hours=' + reqHours + '&radius_deg=10&interval_min=10';
+            fetch(url, { cache: 'no-store' })
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (data) {
+                    chartEl.style.opacity = '1';
+                    if (statusEl && _rtDiagHours === reqHours) statusEl.textContent = '';
+                    if (currentStormId !== reqStorm) return;
+                    var hov = {
+                        times: data.times, radii: data.radii, z: data.profiles,
+                        extrapolated: data.extrapolated, _fromServer: true
+                    };
+                    _rtHovCache[key] = hov;
+                    if (_diagVisible && _rtDiagTab === 'hovmoller' && _rtDiagHours === reqHours) {
+                        chartEl.style.display = '';
+                        D.renderHovmollerChart(hov, _activeFrameTimeStr(), target);
+                    }
+                })
+                .catch(function (err) {
+                    chartEl.style.opacity = '1';
+                    if (statusEl && _rtDiagHours === reqHours) statusEl.textContent = '';
+                    console.warn('[RT Monitor] Hovmöller fetch failed:', err && err.message);
+                    // Fall back to the in-memory 6h so the panel isn't blank.
+                    if (rawTbFrames && rawTbFrames.length) {
+                        var hovFb = D.buildHovmollerData(rawTbFrames, 6);
+                        if (hovFb) { chartEl.style.display = ''; D.renderHovmollerChart(hovFb, _activeFrameTimeStr(), target); }
+                    }
+                });
+        });
+    }
+
     function showFrame(idx) {
         if (idx < 0 || idx >= animFrameLayers.length || !detailMap) return;
         // Bundle path may leave null placeholders for frames that failed

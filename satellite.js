@@ -1753,11 +1753,15 @@
     window._satDiag.renderRadialProfileChart = renderRadialProfileChart;
     window._satDiag.renderCenterFixTimeSeries = renderCenterFixTimeSeries;
     window._satDiag.renderTbHistogramChart = renderTbHistogramChart;
+    window._satDiag.buildHovmollerData = buildHovmollerData;
+    window._satDiag.renderHovmollerChart = renderHovmollerChart;
 
-    function buildHovmollerData() {
-        // Use extended frames for 12h/24h lookback if available
-        var srcFrames = irFrames;
-        if (hovLookbackHours > 6 && hovExtFrames && hovExtStormId === currentStormId) {
+    function buildHovmollerData(framesArg, lookbackArg) {
+        var _lb = (lookbackArg != null) ? lookbackArg : hovLookbackHours;
+        // Use extended frames for 12h/24h lookback if available. When the caller
+        // supplies its own frames (storm card), use those verbatim — no merge.
+        var srcFrames = framesArg || irFrames;
+        if (!framesArg && _lb > 6 && hovExtFrames && hovExtStormId === currentStormId) {
             // Merge: extended frames (older) + irFrames (recent 6h)
             srcFrames = hovExtFrames.concat(irFrames);
             console.log('[Satellite] Hovmoller merge: ' + hovExtFrames.length + ' ext + ' +
@@ -1881,7 +1885,7 @@
         }
 
         console.log('[Satellite] Hovmoller: ' + times.length + ' frames with data out of ' + srcFrames.length +
-            ' total (lookback=' + hovLookbackHours + 'h)');
+            ' total (lookback=' + _lb + 'h)');
 
         if (times.length < 2) return null;
 
@@ -2078,24 +2082,27 @@
             });
     }
 
-    function renderHovmollerChart() {
-        var div = document.getElementById('sat-diag-hovmoller-chart');
+    function renderHovmollerChart(hovArg, curTimeArg, targetId) {
+        var div = document.getElementById(targetId || 'sat-diag-hovmoller-chart');
         if (!div) return;
 
-        // Use server-side Hovmoller data for extended lookbacks if available
-        var hov;
-        if (hovLookbackHours > 6 && hovServerData && hovServerStormId === currentStormId &&
-            hovServerData._hours >= hovLookbackHours && hovServerData.times && hovServerData.times.length >= 2) {
-            // Server data: profiles[time][radius] — already in Plotly orientation
-            hov = {
-                times: hovServerData.times,
-                radii: hovServerData.radii,
-                z: hovServerData.profiles,  // already [time][radius]
-                extrapolated: hovServerData.extrapolated,
-                _fromServer: true
-            };
-        } else {
-            hov = buildHovmollerData();
+        // Caller (storm card) may pass pre-built Hovmöller data; otherwise use
+        // the viewer's server-data-or-build logic.
+        var hov = hovArg;
+        if (!hov) {
+            if (hovLookbackHours > 6 && hovServerData && hovServerStormId === currentStormId &&
+                hovServerData._hours >= hovLookbackHours && hovServerData.times && hovServerData.times.length >= 2) {
+                // Server data: profiles[time][radius] — already in Plotly orientation
+                hov = {
+                    times: hovServerData.times,
+                    radii: hovServerData.radii,
+                    z: hovServerData.profiles,  // already [time][radius]
+                    extrapolated: hovServerData.extrapolated,
+                    _fromServer: true
+                };
+            } else {
+                hov = buildHovmollerData();
+            }
         }
         if (!hov) { div.style.display = 'none'; return; }
         div.style.display = 'block';
@@ -2163,10 +2170,14 @@
         layout.margin = { t: 36, r: 64, b: 44, l: 84 };
 
         // Horizontal line at current frame time
-        var curFrame = irFrames[animIndex];
-        if (curFrame && curFrame.datetime_utc) {
+        var _curTime = curTimeArg;
+        if (_curTime == null) {
+            var curFrame = irFrames[animIndex];
+            _curTime = curFrame && curFrame.datetime_utc ? curFrame.datetime_utc : null;
+        }
+        if (_curTime) {
             layout.shapes = [{
-                type: 'line', y0: curFrame.datetime_utc, y1: curFrame.datetime_utc,
+                type: 'line', y0: _curTime, y1: _curTime,
                 x0: 0, x1: 1, xref: 'paper',
                 line: { color: '#ffffff66', width: 1.5, dash: 'dot' }
             }];
