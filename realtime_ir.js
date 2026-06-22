@@ -6406,17 +6406,30 @@
         if (_detailNameLabel) try { _detailNameLabel.setLatLng(c); } catch (e) {}
     }
 
-    /** The objective IR center-fix for a given frame time, matched against
-     *  rawTbFrames (image-overlay frames carry no center_fix). Returns the
-     *  center_fix object — which may be a gated/failed record — or null. */
-    function _centerFixForTime(timeStr) {
+    /** Timestamp string of the currently-displayed frame for the active
+     *  product (IR / Vis / WV use different per-frame time arrays). */
+    function _activeFrameTimeStr() {
+        if (productMode === 'vis') return visFrameTimes[animIndex];
+        if (productMode === 'wv') return wvFrameTimes[animIndex];
+        return animFrameTimes[animIndex];
+    }
+
+    /** The raw-Tb frame (tb_data + center_fix) for a given frame time. Image-
+     *  overlay frames carry no center_fix, so diagnostics match against
+     *  rawTbFrames by datetime_utc. Returns the frame object or null. */
+    function _rawTbFrameForTime(timeStr) {
         if (!timeStr || !rawTbFrames || !rawTbFrames.length) return null;
         for (var i = 0; i < rawTbFrames.length; i++) {
-            if (rawTbFrames[i] && rawTbFrames[i].datetime_utc === timeStr) {
-                return rawTbFrames[i].center_fix || null;
-            }
+            if (rawTbFrames[i] && rawTbFrames[i].datetime_utc === timeStr) return rawTbFrames[i];
         }
         return null;
+    }
+
+    /** The objective IR center-fix for a given frame time — may be a
+     *  gated/failed record — or null. */
+    function _centerFixForTime(timeStr) {
+        var f = _rawTbFrameForTime(timeStr);
+        return f ? (f.center_fix || null) : null;
     }
 
     /** Place / move / hide the objective-eye ⊕ marker for the displayed frame.
@@ -6481,9 +6494,97 @@
         var sec = document.getElementById('rt-diag-section');
         if (sec) sec.style.display = _diagVisible ? '' : 'none';
         _syncObjEyeToFrame();
-        if (_diagVisible && typeof _rtRenderDiagnostics === 'function') _rtRenderDiagnostics();
+        if (_diagVisible) _rtRenderDiagnostics();
         _ga('rt_diag_toggle', { on: _diagVisible });
     };
+
+    /** Compact center-fix readout for the shown frame (success metrics, or the
+     *  gate reason when the eye was rejected). */
+    function _rtUpdateDiagReadout(cf) {
+        var el = document.getElementById('rt-diag-readout');
+        if (!el) return;
+        if (!cf) { el.style.display = 'none'; return; }
+        el.style.display = '';
+        if (cf.lat != null && cf.success !== false) {
+            var bits = [];
+            if (cf.eye_score != null) bits.push('eye score ' + cf.eye_score);
+            if (cf.ir_rad_dif != null) bits.push('ΔTb ' + cf.ir_rad_dif + ' K');
+            if (cf.mean_std != null) bits.push('σ ' + cf.mean_std);
+            el.innerHTML = '<b>⊕ Objective eye</b> ' + _rtFmtLatLon(cf.lat, cf.lon) +
+                (bits.length ? ' · ' + bits.join(' · ') : '');
+        } else {
+            var reason = (cf.reason || 'no eye detected').replace(/_/g, ' ');
+            el.innerHTML = '<span class="rt-diag-readout-gated"><b>No eye fix</b> · ' +
+                reason + '</span>';
+        }
+    }
+
+    /** Render the in-panel IR diagnostics for the currently-shown frame, reusing
+     *  the satellite viewer's chart code (window._satDiag) against this card's
+     *  own rawTbFrames + the rt-diag-* DOM. No-op unless the section is open. */
+    function _rtRenderDiagnostics() {
+        if (!_diagVisible) return;
+        var emptyEl = document.getElementById('rt-diag-empty');
+        var chartsView = document.getElementById('rt-diag-charts');
+        var readoutEl = document.getElementById('rt-diag-readout');
+        var statusEl = document.getElementById('rt-diag-status');
+
+        // Raw Tb still loading — the load callback re-invokes us when ready.
+        if (!rawTbFrames || !rawTbFrames.length) {
+            if (statusEl) statusEl.textContent = 'Loading…';
+            if (emptyEl) { emptyEl.style.display = ''; emptyEl.textContent = 'Loading diagnostics…'; }
+            if (chartsView) chartsView.style.display = 'none';
+            if (readoutEl) readoutEl.style.display = 'none';
+            return;
+        }
+        if (statusEl) statusEl.textContent = '';
+
+        _whenPlotly(function () {
+            if (!_diagVisible) return;
+            var D = window._satDiag;
+            if (!D) return;
+
+            // Hovmöller tab is handled separately (added in a later phase).
+            if (_rtDiagTab === 'hovmoller') {
+                if (typeof _rtRenderHovmoller === 'function') _rtRenderHovmoller();
+                return;
+            }
+
+            var timeStr = _activeFrameTimeStr();
+            var frame = _rawTbFrameForTime(timeStr);
+            _rtUpdateDiagReadout(frame ? frame.center_fix : null);
+
+            // Charts need at least one frame with a center fix across the loop.
+            var anyFix = false;
+            for (var i = 0; i < rawTbFrames.length; i++) {
+                if (rawTbFrames[i] && rawTbFrames[i].center_fix) { anyFix = true; break; }
+            }
+            if (!anyFix) {
+                if (emptyEl) { emptyEl.style.display = ''; emptyEl.innerHTML = 'No center fix available.<br>Diagnostics require a detected eye (storms ≥ 65 kt).'; }
+                if (chartsView) chartsView.style.display = 'none';
+                return;
+            }
+            if (emptyEl) emptyEl.style.display = 'none';
+            if (chartsView) chartsView.style.display = '';
+
+            // Radial profile + histogram need a SUCCESSFUL fix; if the shown
+            // frame lacks one, fall back to the most recent good frame so the
+            // structure charts stay populated while scrubbing gated frames.
+            var goodFrame = (frame && frame.center_fix && frame.center_fix.lat != null) ? frame : null;
+            if (!goodFrame) {
+                for (var j = rawTbFrames.length - 1; j >= 0; j--) {
+                    var rf = rawTbFrames[j];
+                    if (rf && rf.center_fix && rf.center_fix.lat != null) { goodFrame = rf; break; }
+                }
+            }
+            if (goodFrame) {
+                D.renderRadialProfileChart(goodFrame, 'rt-diag-radial');
+                D.renderTbHistogramChart(goodFrame, 'rt-diag-histogram');
+            }
+            // Time series spans the whole loop; highlight the shown frame.
+            D.renderCenterFixTimeSeries(rawTbFrames, timeStr, 'rt-diag-timeseries');
+        });
+    }
 
     function showFrame(idx) {
         if (idx < 0 || idx >= animFrameLayers.length || !detailMap) return;
@@ -6521,6 +6622,9 @@
         _syncDetailPinToFrame(animFrameLayers[idx]);
         // Move the objective-eye ⊕ to this frame's center-fix (if toggled on).
         _syncObjEyeToFrame(animFrameTimes[idx]);
+        // Re-sync diagnostics to the shown frame — only when scrubbing (not
+        // mid-playback) to avoid re-drawing Plotly at animation frame rate.
+        if (_diagVisible && !animPlaying) _rtRenderDiagnostics();
 
         updateFrameOverlay();
 
@@ -8189,6 +8293,7 @@
         _recenterDetailToFrame(visFrameLayers[idx]);
         _syncDetailPinToFrame(visFrameLayers[idx]);
         _syncObjEyeToFrame(visFrameTimes[idx]);
+        if (_diagVisible && !animPlaying) _rtRenderDiagnostics();
         if (visFrameTimes[idx]) {
             document.getElementById('ir-frame-time').textContent = fmtUTC(visFrameTimes[idx]);
         }
@@ -8222,6 +8327,7 @@
         _recenterDetailToFrame(wvFrameLayers[idx]);
         _syncDetailPinToFrame(wvFrameLayers[idx]);
         _syncObjEyeToFrame(wvFrameTimes[idx]);
+        if (_diagVisible && !animPlaying) _rtRenderDiagnostics();
         if (wvFrameTimes[idx]) {
             document.getElementById('ir-frame-time').textContent = fmtUTC(wvFrameTimes[idx]);
         }

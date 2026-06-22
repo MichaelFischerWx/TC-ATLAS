@@ -1389,8 +1389,9 @@
         return vmin + (rawVal - 1) * (vmax - vmin) / 254.0;
     }
 
-    function computeRadialProfile(frame) {
+    function computeRadialProfile(frame, zoomDegArg) {
         if (!frame || !frame.center_fix || !frame.tb_data) return null;
+        var _zd = (zoomDegArg != null) ? zoomDegArg : zoomDeg;
         var cLat = frame.center_fix.lat, cLon = frame.center_fix.lon;
         var b = frame.bounds;
         var south = b[0][0], west = b[0][1], north = b[1][0], east = b[1][1];
@@ -1406,7 +1407,7 @@
         var dyKm = (north - south) / (rows - 1) * 111.0;
         var dxKm = (east - west) / (cols - 1) * 111.0 * cosLat;
 
-        var maxRadKm = Math.min(zoomDeg * 111.0, 500);
+        var maxRadKm = Math.min(_zd * 111.0, 500);
         var dr = 2; // km bin width
         var nBins = Math.ceil(maxRadKm / dr);
         var sums = new Float64Array(nBins);
@@ -1504,12 +1505,13 @@
         return { bands: bands };
     }
 
-    function buildCenterFixTimeSeries() {
+    function buildCenterFixTimeSeries(framesArg) {
+        var _frames = framesArg || irFrames;
         var times = [], eyeScores = [], irRadDifs = [], meanStds = [];
         // Separate arrays for failed attempts (plotted as open markers)
         var failTimes = [], failScores = [], failRadDifs = [], failReasons = [], failGates = [];
-        for (var i = 0; i < irFrames.length; i++) {
-            var f = irFrames[i];
+        for (var i = 0; i < _frames.length; i++) {
+            var f = _frames[i];
             if (!f || !f.center_fix) continue;
             if (f.center_fix.lat) {
                 // Successful fix
@@ -1554,10 +1556,10 @@
     var _isMobile = window.innerWidth <= 768;
     var DIAG_CONFIG = { displayModeBar: false, responsive: true, staticPlot: _isMobile, scrollZoom: false };
 
-    function renderRadialProfileChart(frame) {
-        var div = document.getElementById('sat-diag-radial');
+    function renderRadialProfileChart(frame, targetId, zoomDegArg) {
+        var div = document.getElementById(targetId || 'sat-diag-radial');
         if (!div) return;
-        var profile = computeRadialProfile(frame);
+        var profile = computeRadialProfile(frame, zoomDegArg);
         if (!profile) { div.style.display = 'none'; return; }
         div.style.display = 'block';
 
@@ -1605,16 +1607,21 @@
         }
     }
 
-    function renderCenterFixTimeSeries() {
-        var div = document.getElementById('sat-diag-timeseries');
+    function renderCenterFixTimeSeries(framesArg, curTimeArg, targetId) {
+        var div = document.getElementById(targetId || 'sat-diag-timeseries');
         if (!div) return;
-        var ts = buildCenterFixTimeSeries();
+        var ts = buildCenterFixTimeSeries(framesArg);
         if (!ts) { div.style.display = 'none'; return; }
         div.style.display = 'block';
 
-        // Find current frame time for highlight
-        var curFrame = irFrames[animIndex];
-        var curTime = curFrame && curFrame.datetime_utc ? curFrame.datetime_utc : null;
+        // Current frame time for the highlight line. Caller may pass it
+        // explicitly (storm card, where frame index ≠ viewer animIndex);
+        // otherwise fall back to the viewer's current frame.
+        var curTime = curTimeArg;
+        if (curTime == null) {
+            var curFrame = irFrames[animIndex];
+            curTime = curFrame && curFrame.datetime_utc ? curFrame.datetime_utc : null;
+        }
 
         var traces = [
             {
@@ -1701,8 +1708,8 @@
         }
     }
 
-    function renderTbHistogramChart(frame) {
-        var div = document.getElementById('sat-diag-histogram');
+    function renderTbHistogramChart(frame, targetId) {
+        var div = document.getElementById(targetId || 'sat-diag-histogram');
         if (!div) return;
         var hist = computeTbHistogram(frame);
         if (!hist) { div.style.display = 'none'; return; }
@@ -1733,6 +1740,19 @@
             Plotly.newPlot(div, traces, layout, DIAG_CONFIG);
         }
     }
+
+    // Export the diagnostics chart fns so the RT-monitor storm card
+    // (realtime_ir.js) can render the same charts against its OWN frames +
+    // DOM, without duplicating the math. All extra args are optional and
+    // default to the viewer's own globals/DOM, so the standalone viewer is
+    // unaffected. (Hovmöller export is added in a later phase.)
+    window._satDiag = window._satDiag || {};
+    window._satDiag.computeRadialProfile = computeRadialProfile;
+    window._satDiag.computeTbHistogram = computeTbHistogram;
+    window._satDiag.buildCenterFixTimeSeries = buildCenterFixTimeSeries;
+    window._satDiag.renderRadialProfileChart = renderRadialProfileChart;
+    window._satDiag.renderCenterFixTimeSeries = renderCenterFixTimeSeries;
+    window._satDiag.renderTbHistogramChart = renderTbHistogramChart;
 
     function buildHovmollerData() {
         // Use extended frames for 12h/24h lookback if available
