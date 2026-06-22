@@ -23370,6 +23370,29 @@
         toast.textContent = 'GIF · capturing 0/' + exportFrames.length;
         node.appendChild(toast);
 
+        // iOS Safari blocks window.open() (and rejects navigator.share() with
+        // NotAllowedError) when called from an async callback that has lost the
+        // tap's transient activation. The GIF encode is async (~several seconds),
+        // so delivering in the 'finished' handler is always too late. Defeat
+        // this by opening the destination tab NOW — synchronously, inside the
+        // tap — and merely navigating it to the blob URL once encoding finishes.
+        var ua = navigator.userAgent || '';
+        var isIOS = /iP(hone|od|ad)/.test(ua) ||
+                    (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
+        var gifTab = null;
+        if (isIOS) {
+            gifTab = window.open('', '_blank');
+            if (gifTab && gifTab.document) {
+                gifTab.document.write(
+                    '<title>TC-ATLAS animation</title>' +
+                    '<body style="margin:0;background:#0a0c12;color:#e2e8f0;' +
+                    'font:600 14px/1.4 -apple-system,system-ui,sans-serif;' +
+                    'display:flex;align-items:center;justify-content:center;' +
+                    'height:100vh">Encoding GIF… the animation will appear here ' +
+                    'when ready (long-press to save or copy).</body>');
+            }
+        }
+
         Promise.all([_ensureHtml2canvas(), _ensureGifWorker()]).then(function (_setup) {
             var gifWorkerUrl = _setup[1];
             var w = node.offsetWidth;
@@ -23403,9 +23426,19 @@
                 toast.textContent = 'GIF · encoding ' + Math.round(pct * 100) + '%';
             });
             gif.on('finished', function (blob) {
-                // Deliver via _saveImageBlob (share sheet on mobile / download on
-                // desktop / new-tab fallback) — a raw <a download> is a no-op on iOS.
-                _saveImageBlob(blob, currentStormId + '_animation.gif');
+                // Deliver. On iOS, navigate the tab we pre-opened inside the
+                // original tap (window.open() here would be popup-blocked, and
+                // share() would throw NotAllowedError — both because the tap's
+                // activation expired during the async encode). Showing the raw
+                // GIF in a tab lets the user long-press → Save Image / Copy.
+                // Desktop (and the popup-blocked edge case) keep _saveImageBlob.
+                if (gifTab && !gifTab.closed) {
+                    var gifUrl = URL.createObjectURL(blob);
+                    gifTab.location.href = gifUrl;
+                    setTimeout(function () { URL.revokeObjectURL(gifUrl); }, 60000);
+                } else {
+                    _saveImageBlob(blob, currentStormId + '_animation.gif');
+                }
                 // Restore track, animation state, and remove toast.
                 _irRestoreTrackAfterExport(hiddenTrackGif);
                 state.showFn(savedIndex);
