@@ -576,6 +576,12 @@
     // Storm detail mini-map state
     var detailMap = null;
     var detailTrackLayers = [];
+    // Current-position pin + name label on the detail map. Kept as refs so
+    // showFrame() can slide them to each frame's dead-reckoned center (the
+    // same target the camera recenters to), so they track the frame you're
+    // viewing instead of being pinned to a single Date.now() extrapolation.
+    var _detailPosPin = null;
+    var _detailNameLabel = null;
     // Whether the past-track overlay (polyline / fix dots / extrapolation /
     // name label) is shown on the detail map. Toggled by the "Track" button;
     // reset to true each time a storm detail view opens. The storm center
@@ -3835,6 +3841,7 @@
             _stormNameLabels[key] = label;
             _syncStormLabelVisibility();
         }
+        return label;
     }
 
     // Hide an active-storm's name label when its ATCF id is currently
@@ -5454,6 +5461,9 @@
         pin.addTo(detailMap);
         // Track-toggle parity + cleanup: the pin belongs with the track layers.
         detailTrackLayers.push(pin);
+        // Hold a ref so showFrame() can slide it to each frame's center.
+        _detailPosPin = pin;
+        _detailNameLabel = null;
 
         // Fetch and draw past track on detail map. Each storm opens with the
         // track shown; reset the toggle (and its button) so a hidden choice
@@ -5473,8 +5483,13 @@
         var stormCopy = storm;
         fetchStormMetadata(storm.atcf_id, function (metaErr, meta) {
             if (!metaErr && meta && meta.intensity_history && meta.intensity_history.length >= 2) {
-                drawTrackOnMap(detailMap, meta.intensity_history, stormCopy,
-                               detailTrackLayers, _extrapolateStormPin(stormCopy));
+                _detailNameLabel = drawTrackOnMap(detailMap, meta.intensity_history,
+                               stormCopy, detailTrackLayers, _extrapolateStormPin(stormCopy));
+                // Slide pin + label onto the currently-shown frame's center
+                // (the async track fetch may resolve after the loop starts).
+                if (animFrameLayers && animFrameLayers[animIndex]) {
+                    _syncDetailPinToFrame(animFrameLayers[animIndex]);
+                }
                 // Honor the current toggle in case it was flipped off before
                 // this async metadata fetch resolved.
                 if (!_detailTrackVisible) _irApplyDetailTrackVisibility();
@@ -6356,6 +6371,27 @@
         } catch (e) {}
     }
 
+    /** Slide the current-position pin + name label onto a frame's center.
+     *  Uses the same per-frame dead-reckoned target the camera recenters to
+     *  (`layer._recenterTo`, falling back to the cutout bounds center), so the
+     *  pin/label track the frame being shown rather than sitting at a single
+     *  Date.now() extrapolation that drifts off as you scrub. The residual
+     *  between this dead-reckoned center and the true eye is unchanged — that
+     *  needs an objective IR center-fix (separate work). */
+    function _syncDetailPinToFrame(layer) {
+        if (!layer || (!_detailPosPin && !_detailNameLabel)) return;
+        var c = null;
+        var rt = layer._recenterTo;
+        if (rt && rt.length === 2 && isFinite(rt[0]) && isFinite(rt[1])) {
+            c = L.latLng(rt[0], rt[1]);
+        } else if (typeof layer.getBounds === 'function') {
+            try { c = layer.getBounds().getCenter(); } catch (e) { return; }
+        }
+        if (!c) return;
+        if (_detailPosPin) try { _detailPosPin.setLatLng(c); } catch (e) {}
+        if (_detailNameLabel) try { _detailNameLabel.setLatLng(c); } catch (e) {}
+    }
+
     function showFrame(idx) {
         if (idx < 0 || idx >= animFrameLayers.length || !detailMap) return;
         // Bundle path may leave null placeholders for frames that failed
@@ -6388,6 +6424,8 @@
 
         // Keep the storm centered as the frame's true position moves.
         _recenterDetailToFrame(animFrameLayers[idx]);
+        // Slide the current-position pin + name label onto this frame.
+        _syncDetailPinToFrame(animFrameLayers[idx]);
 
         updateFrameOverlay();
 
@@ -8046,6 +8084,7 @@
             if (i !== idx && visFrameLayers[i]) visFrameLayers[i].setOpacity(0);
         }
         _recenterDetailToFrame(visFrameLayers[idx]);
+        _syncDetailPinToFrame(visFrameLayers[idx]);
         if (visFrameTimes[idx]) {
             document.getElementById('ir-frame-time').textContent = fmtUTC(visFrameTimes[idx]);
         }
@@ -8077,6 +8116,7 @@
             if (i !== idx && wvFrameLayers[i]) wvFrameLayers[i].setOpacity(0);
         }
         _recenterDetailToFrame(wvFrameLayers[idx]);
+        _syncDetailPinToFrame(wvFrameLayers[idx]);
         if (wvFrameTimes[idx]) {
             document.getElementById('ir-frame-time').textContent = fmtUTC(wvFrameTimes[idx]);
         }
