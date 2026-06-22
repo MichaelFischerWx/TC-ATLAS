@@ -1,0 +1,30 @@
+{
+  "_comment": "SOURCE OF TRUTH for the Cloudflare http_request_cache_settings ruleset fronting the TC-ATLAS API (api.tcatlas.org). Apply with `python3 cloudflare/apply_cache_ruleset.py`; verify with `cloudflare/verify_cache.sh`. The auth token lives in GCP Secret Manager (secret `cloudflare-rules-token`); the zone_id/ruleset_id below are identifiers, not secrets. See README.md for the design rationale and CF API gotchas.",
+  "zone_id": "3bdc80359335b40f6b355777287b1868",
+  "ruleset_id": "add5603c564744f6b4916be171c99161",
+  "phase": "http_request_cache_settings",
+  "host": "api.tcatlas.org",
+  "rules": [
+    {
+      "action": "set_cache_settings",
+      "action_parameters": { "cache": true, "edge_ttl": { "mode": "respect_origin" } },
+      "description": "tc-atlas: CACHE slow-changing JSON (active-storms, season-summary, weatherlab-genesis clusters/cluster/trend) respect origin max-age",
+      "enabled": true,
+      "expression": "(http.host eq \"api.tcatlas.org\") and (http.request.uri.path contains \"/active-storms\" or http.request.uri.path contains \"/season-summary\" or http.request.uri.path contains \"/weatherlab-genesis-cluster\" or http.request.uri.path contains \"/weatherlab-genesis-trend\")"
+    },
+    {
+      "action": "set_cache_settings",
+      "action_parameters": { "cache": false },
+      "description": "tc-atlas: BYPASS live/no-store endpoints (weatherlab EXCEPT cacheable genesis clusters/trend)",
+      "enabled": true,
+      "expression": "(http.host eq \"api.tcatlas.org\") and (http.request.method ne \"GET\" or (http.request.uri.path contains \"/weatherlab\" and not (http.request.uri.path contains \"/weatherlab-genesis-cluster\" or http.request.uri.path contains \"/weatherlab-genesis-trend\")) or http.request.uri.path contains \"/recon\" or http.request.uri.path contains \"/shear\")"
+    },
+    {
+      "action": "set_cache_settings",
+      "action_parameters": { "cache": true, "edge_ttl": { "mode": "respect_origin" } },
+      "description": "tc-atlas: CACHE frame endpoints (respect origin max-age)",
+      "enabled": true,
+      "expression": "(http.host eq \"api.tcatlas.org\") and (ends_with(http.request.uri.path, \"band-raw-frame\") or ends_with(http.request.uri.path, \"ir-raw-frame\") or ends_with(http.request.uri.path, \"ir-frame.jpg\"))"
+    }
+  ]
+}
