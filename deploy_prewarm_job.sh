@@ -42,7 +42,7 @@ SERVICE_NAME="tc-atlas-api"
 JOB_NAME="tc-atlas-prewarm-job"
 REGION="us-east1"
 SCHEDULER_NAME="tc-atlas-prewarm-schedule"
-SCHEDULE="*/10 * * * *"            # every 10 min, aligned to satellite scan grid
+SCHEDULE="*/15 * * * *"            # every 15 min (cost: prewarm is the #1 job line; was */10)
 TIMEZONE="UTC"
 BUCKET="${GCS_IR_CACHE_BUCKET:-tc-atlas-ir-cache}"
 
