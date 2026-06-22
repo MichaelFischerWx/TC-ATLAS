@@ -582,6 +582,10 @@
     // viewing instead of being pinned to a single Date.now() extrapolation.
     var _detailPosPin = null;
     var _detailNameLabel = null;
+    // Objective IR center-fix (eye) ⊕ marker on the detail map, and whether the
+    // in-panel Diagnostics section + eye overlay are toggled on for this storm.
+    var _irObjEyeMarker = null;
+    var _diagVisible = false;
     // Whether the past-track overlay (polyline / fix dots / extrapolation /
     // name label) is shown on the detail map. Toggled by the "Track" button;
     // reset to true each time a storm detail view opens. The storm center
@@ -6270,6 +6274,14 @@
             detailMap.remove();
             detailMap = null;
         }
+        // detailMap.remove() destroyed the eye marker with the map; drop the
+        // stale ref and reset the Diagnostics toggle so the next storm opens off.
+        _irObjEyeMarker = null;
+        _diagVisible = false;
+        var _diagBtnReset = document.getElementById('ir-detail-diag-toggle');
+        if (_diagBtnReset) _diagBtnReset.classList.remove('active');
+        var _diagSecReset = document.getElementById('rt-diag-section');
+        if (_diagSecReset) _diagSecReset.style.display = 'none';
         _detailGraticule = null;
         var detailMapDiv = document.getElementById('ir-detail-map');
         if (detailMapDiv) detailMapDiv.style.display = 'none';
@@ -6392,6 +6404,85 @@
         if (_detailNameLabel) try { _detailNameLabel.setLatLng(c); } catch (e) {}
     }
 
+    /** The objective IR center-fix for a given frame time, matched against
+     *  rawTbFrames (image-overlay frames carry no center_fix). Returns the
+     *  center_fix object — which may be a gated/failed record — or null. */
+    function _centerFixForTime(timeStr) {
+        if (!timeStr || !rawTbFrames || !rawTbFrames.length) return null;
+        for (var i = 0; i < rawTbFrames.length; i++) {
+            if (rawTbFrames[i] && rawTbFrames[i].datetime_utc === timeStr) {
+                return rawTbFrames[i].center_fix || null;
+            }
+        }
+        return null;
+    }
+
+    /** Place / move / hide the objective-eye ⊕ marker for the displayed frame.
+     *  Shown only while the Diagnostics toggle is on AND the frame has a
+     *  SUCCESSFUL center-fix — gated/failed fixes carry no trustworthy position
+     *  (the charts surface the gate reason instead), so we hide rather than
+     *  drop a ⊕ on a bad guess. Cyan to distinguish from the red VDM fix. */
+    function _syncObjEyeToFrame(timeStr) {
+        if (!detailMap) return;
+        if (timeStr == null) {
+            timeStr = (productMode === 'vis') ? visFrameTimes[animIndex]
+                    : (productMode === 'wv')  ? wvFrameTimes[animIndex]
+                    : animFrameTimes[animIndex];
+        }
+        // center_fix is an IR product; on a Vis/WV frame whose timestamp has no
+        // matching IR raw-Tb frame this returns null and the ⊕ is hidden.
+        var cf = _diagVisible ? _centerFixForTime(timeStr) : null;
+        var ok = cf && cf.success !== false && isFinite(cf.lat) && isFinite(cf.lon);
+        if (!ok) {
+            if (_irObjEyeMarker) {
+                try { detailMap.removeLayer(_irObjEyeMarker); } catch (e) {}
+                _irObjEyeMarker = null;
+            }
+            return;
+        }
+        var ll = L.latLng(cf.lat, cf.lon);
+        if (!_irObjEyeMarker) {
+            _irObjEyeMarker = L.marker(ll, {
+                icon: L.divIcon({
+                    className: 'ir-obj-eye-icon',
+                    html: '<div style="font-size:17px;line-height:17px;color:#00e5ff;' +
+                          'text-shadow:0 0 2px #000,0 0 2px #000;">⊕</div>',
+                    iconSize: [17, 17], iconAnchor: [9, 9]
+                }),
+                interactive: true
+            });
+            _irObjEyeMarker.addTo(detailMap);
+        } else {
+            _irObjEyeMarker.setLatLng(ll);
+        }
+        // Re-bind the popup each frame — eye score / structure change frame-to-frame.
+        var bits = [];
+        if (cf.eye_score != null) bits.push('Eye score ' + cf.eye_score);
+        if (cf.ir_rad_dif != null) bits.push('ΔTb ' + cf.ir_rad_dif + ' K');
+        if (cf.mean_std != null) bits.push('σ ' + cf.mean_std);
+        _irObjEyeMarker.bindPopup(
+            '<div class="ir-popup" style="font-size:11px;min-width:150px;">' +
+            '<div style="font-weight:700;color:#00b8cc;margin-bottom:4px;">⊕ Objective IR eye</div>' +
+            _rtReconRow('Center', _rtFmtLatLon(cf.lat, cf.lon)) +
+            (bits.length ? _rtReconRow('Quality', bits.join(' · ')) : '') +
+            '</div>', { maxWidth: 240, className: 'rt-recon-popup' });
+    }
+
+    /** Toggle the in-panel Diagnostics section + the objective-eye overlay.
+     *  (The charts render path `_rtRenderDiagnostics` is wired in a later phase;
+     *  guarded so this works before it exists.) */
+    window._irToggleDiagnosticsSection = function () {
+        if (!currentStormId) return;
+        _diagVisible = !_diagVisible;
+        var btn = document.getElementById('ir-detail-diag-toggle');
+        if (btn) btn.classList.toggle('active', _diagVisible);
+        var sec = document.getElementById('rt-diag-section');
+        if (sec) sec.style.display = _diagVisible ? '' : 'none';
+        _syncObjEyeToFrame();
+        if (_diagVisible && typeof _rtRenderDiagnostics === 'function') _rtRenderDiagnostics();
+        _ga('rt_diag_toggle', { on: _diagVisible });
+    };
+
     function showFrame(idx) {
         if (idx < 0 || idx >= animFrameLayers.length || !detailMap) return;
         // Bundle path may leave null placeholders for frames that failed
@@ -6426,6 +6517,8 @@
         _recenterDetailToFrame(animFrameLayers[idx]);
         // Slide the current-position pin + name label onto this frame.
         _syncDetailPinToFrame(animFrameLayers[idx]);
+        // Move the objective-eye ⊕ to this frame's center-fix (if toggled on).
+        _syncObjEyeToFrame(animFrameTimes[idx]);
 
         updateFrameOverlay();
 
@@ -7206,7 +7299,15 @@
                     rawTbFrames: result.frames, cachedAt: Date.now(),
                     lat: pos ? pos.lat : null, lon: pos ? pos.lon : null
                 };
-                if (stormId === currentStormId) rawTbFrames = result.frames;
+                if (stormId === currentStormId) {
+                    rawTbFrames = result.frames;
+                    // If Diagnostics was toggled on before raw Tb finished
+                    // loading, the eye/charts had no data — refresh now.
+                    if (_diagVisible) {
+                        _syncObjEyeToFrame();
+                        if (typeof _rtRenderDiagnostics === 'function') _rtRenderDiagnostics();
+                    }
+                }
                 console.log('[RT Monitor] Raw Tb bundle loaded for ' + stormId +
                     ': ' + result.frames.length + ' OK, ' + result.failed + ' failed');
                 if (!silent) showLoadingProgress(false);
@@ -8085,6 +8186,7 @@
         }
         _recenterDetailToFrame(visFrameLayers[idx]);
         _syncDetailPinToFrame(visFrameLayers[idx]);
+        _syncObjEyeToFrame(visFrameTimes[idx]);
         if (visFrameTimes[idx]) {
             document.getElementById('ir-frame-time').textContent = fmtUTC(visFrameTimes[idx]);
         }
@@ -8117,6 +8219,7 @@
         }
         _recenterDetailToFrame(wvFrameLayers[idx]);
         _syncDetailPinToFrame(wvFrameLayers[idx]);
+        _syncObjEyeToFrame(wvFrameTimes[idx]);
         if (wvFrameTimes[idx]) {
             document.getElementById('ir-frame-time').textContent = fmtUTC(wvFrameTimes[idx]);
         }
