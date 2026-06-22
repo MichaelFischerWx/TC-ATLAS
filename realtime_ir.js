@@ -586,6 +586,8 @@
     // in-panel Diagnostics section + eye overlay are toggled on for this storm.
     var _irObjEyeMarker = null;
     var _diagVisible = false;
+    var _rtDiagTab = 'charts';   // 'charts' | 'hovmoller'
+    var _rtDiagHours = 6;        // Hovmöller lookback: 6 | 12 | 24
     // Whether the past-track overlay (polyline / fix dots / extrapolation /
     // name label) is shown on the detail map. Toggled by the "Track" button;
     // reset to true each time a storm detail view opens. The storm center
@@ -20806,6 +20808,36 @@
                 b.getAttribute('data-product') === product);
         });
         _rtRenderStormMwPasses();
+    });
+
+    // IR Diagnostics tab (Charts / Hovmöller) + Hovmöller lookback chips —
+    // delegated so they work for the statically-rendered #rt-diag-section.
+    document.addEventListener('click', function (ev) {
+        var tab = ev.target.closest && ev.target.closest('.rt-diag-tab');
+        if (tab) {
+            var which = tab.getAttribute('data-diagtab');
+            if (!which || which === _rtDiagTab) return;
+            _rtDiagTab = which;
+            document.querySelectorAll('.rt-diag-tab').forEach(function (b) {
+                b.classList.toggle('active', b.getAttribute('data-diagtab') === which);
+            });
+            var chartsView = document.getElementById('rt-diag-charts');
+            var hovView = document.getElementById('rt-diag-hovmoller');
+            if (chartsView) chartsView.style.display = (which === 'charts') ? '' : 'none';
+            if (hovView) hovView.style.display = (which === 'hovmoller') ? '' : 'none';
+            if (typeof _rtRenderDiagnostics === 'function') _rtRenderDiagnostics();
+            return;
+        }
+        var lb = ev.target.closest && ev.target.closest('.rt-diag-lookback-btn');
+        if (lb) {
+            var hours = parseInt(lb.getAttribute('data-hours'), 10) || 6;
+            if (hours === _rtDiagHours) return;
+            _rtDiagHours = hours;
+            document.querySelectorAll('.rt-diag-lookback-btn').forEach(function (b) {
+                b.classList.toggle('active', parseInt(b.getAttribute('data-hours'), 10) === hours);
+            });
+            if (typeof _rtRenderDiagnostics === 'function') _rtRenderDiagnostics();
+        }
     });
 
     // Expose the loader so satellite.js (Storm Satellite tab) can

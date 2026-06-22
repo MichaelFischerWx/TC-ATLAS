@@ -1106,6 +1106,82 @@ html, body { margin: 0; padding: 0; }
     padding-bottom: 6px;
     border-bottom: 1px solid var(--border);
 }
+
+/* ── IR Diagnostics in-panel section (#rt-diag-section) ─────────────── */
+/* The Diagnostics toolbar button is a toggle: dim when off, full orange
+   (the existing .ir-sat-viewer-btn style) when active. */
+.ir-detail-diag-toggle-btn:not(.active) { opacity: 0.55; }
+.ir-detail-diag-toggle-btn:not(.active):hover { opacity: 0.85; }
+
+.rt-diag-readout {
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--text, #0f172a);
+    background: rgba(46, 125, 255, 0.06);
+    border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+    border-radius: 6px;
+    padding: 6px 9px;
+    margin-bottom: 8px;
+}
+.rt-diag-readout .rt-diag-readout-gated { color: #b45309; }
+[data-theme="dark"] .rt-diag-readout { color: var(--text, #e2e8f0); }
+[data-theme="dark"] .rt-diag-readout .rt-diag-readout-gated { color: #fbbf24; }
+
+.rt-diag-tabs,
+.rt-diag-lookback {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+.rt-diag-lookback { justify-content: flex-start; margin-top: 2px; }
+
+.rt-diag-tab,
+.rt-diag-lookback-btn {
+    padding: 3px 12px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text, #0f172a);
+    background: transparent;
+    border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+    border-radius: 999px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.rt-diag-tab:hover,
+.rt-diag-lookback-btn:hover {
+    background: rgba(46, 125, 255, 0.08);
+    border-color: rgba(46, 125, 255, 0.45);
+}
+.rt-diag-tab.active,
+.rt-diag-lookback-btn.active {
+    background: rgba(46, 125, 255, 0.18);
+    border-color: rgba(46, 125, 255, 0.65);
+    color: #2e7dff;
+}
+[data-theme="dark"] .rt-diag-tab,
+[data-theme="dark"] .rt-diag-lookback-btn {
+    color: var(--text, #e2e8f0);
+    border-color: rgba(148, 163, 184, 0.3);
+}
+[data-theme="dark"] .rt-diag-tab.active,
+[data-theme="dark"] .rt-diag-lookback-btn.active {
+    background: rgba(46, 125, 255, 0.28);
+    border-color: rgba(46, 125, 255, 0.7);
+    color: #93c5fd;
+}
+
+.rt-diag-view { display: flex; flex-direction: column; gap: 8px; }
+.rt-diag-chart { width: 100%; min-height: 190px; }
+.rt-diag-hovmoller-chart { min-height: 420px; }
+
+.rt-diag-empty {
+    color: #64748b;
+    font-size: 0.78rem;
+    text-align: center;
+    padding: 24px 16px;
+    line-height: 1.6;
+}
 .ir-info-grid {
     display: flex;
     flex-direction: column;

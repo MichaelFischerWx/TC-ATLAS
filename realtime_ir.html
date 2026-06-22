@@ -296,7 +296,7 @@
                     </svg>
                     <span>Loop Only</span>
                 </button>
-                <button class="ir-kml-btn ir-sat-viewer-btn" onclick="window.openSatelliteViewerForStorm()" title="Expert satellite diagnostics — colormaps, crosshair, follow, 88D radar, ASCAT">
+                <button id="ir-detail-diag-toggle" class="ir-kml-btn ir-sat-viewer-btn ir-detail-diag-toggle-btn" onclick="window._irToggleDiagnosticsSection()" title="Toggle IR diagnostics — objective eye on the map + inner-core charts (radial Tb, center-fix series, histogram, Hovmöller)">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M4 10a7.3 7.3 0 0 0 10 10"/>
                         <path d="m9 15 3-3"/>
@@ -615,6 +615,44 @@
                         </div>
                     </div>
                     <div id="ir-intensity-chart" class="ir-intensity-chart"></div>
+                </div>
+
+                <!-- IR Diagnostics — toggled by the "Diagnostics" toolbar
+                     button. Objective center-fix readout + inner-core charts
+                     (radial Tb profile, center-fix time series, Tb histogram,
+                     Tb Hovmöller). Charts are reused from the satellite viewer
+                     (window._satDiag) against this card's own frames. Placed
+                     above Microwave: it's the primary inner-core readout once a
+                     storm has a detectable eye. -->
+                <div class="ir-info-section rt-diag-section" id="rt-diag-section" style="display:none;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">IR Diagnostics</h3>
+                        <span id="rt-diag-status" style="font-size:0.68rem;color:#64748b;"></span>
+                    </div>
+                    <!-- Objective center-fix readout for the currently-shown frame -->
+                    <div id="rt-diag-readout" class="rt-diag-readout" style="display:none;"></div>
+                    <!-- Charts / Hovmöller tab toggle -->
+                    <div class="rt-diag-tabs">
+                        <button type="button" class="rt-diag-tab active" data-diagtab="charts">Charts</button>
+                        <button type="button" class="rt-diag-tab" data-diagtab="hovmoller">Hovm&ouml;ller</button>
+                    </div>
+                    <!-- Charts view (default) -->
+                    <div id="rt-diag-charts" class="rt-diag-view">
+                        <div id="rt-diag-radial" class="rt-diag-chart"></div>
+                        <div id="rt-diag-timeseries" class="rt-diag-chart"></div>
+                        <div id="rt-diag-histogram" class="rt-diag-chart"></div>
+                    </div>
+                    <!-- Hovmöller view -->
+                    <div id="rt-diag-hovmoller" class="rt-diag-view" style="display:none;">
+                        <div class="rt-diag-lookback">
+                            <button type="button" class="rt-diag-lookback-btn active" data-hours="6">6h</button>
+                            <button type="button" class="rt-diag-lookback-btn" data-hours="12">12h</button>
+                            <button type="button" class="rt-diag-lookback-btn" data-hours="24">24h</button>
+                        </div>
+                        <div id="rt-diag-hovmoller-chart" class="rt-diag-chart rt-diag-hovmoller-chart"></div>
+                    </div>
+                    <!-- Empty / gated state -->
+                    <div id="rt-diag-empty" class="rt-diag-empty" style="display:none;"></div>
                 </div>
 
                 <!-- Microwave Passes (storm-sectored last-24h list) —
