@@ -2959,16 +2959,14 @@
             zoomControl: true,
             worldCopyJump: true,
             preferCanvas: true,  // faster rendering for vector overlays
-            // Smooth, continuous zoom. zoomSnap:0 lets the map rest at any
-            // fractional zoom (no integer-level snapping); zoomDelta:0.5 sets
-            // the +/- button + dblclick step. The scroll-wheel itself is
-            // handled by smooth_zoom.js (continuous rAF-eased, cursor-anchored)
-            // because Leaflet's default wheel zoom hops between animated
-            // targets and reads as "snapping".
+            // Continuous fractional zoom: zoomSnap:0 lets the map rest at any
+            // zoom (no integer-level tiering), zoomDelta:0.5 sets the +/- button
+            // + dblclick step. Native Leaflet wheel zoom — keeps imagery,
+            // coastlines, and labels coherent (a custom rAF handler scaled the
+            // 9.3 MB coastline canvas as a bitmap and couldn't redraw it crisp
+            // without ~242 ms/frame; native redraws it once per zoom-stop).
             zoomSnap: 0,
-            zoomDelta: 0.5,
-            scrollWheelZoom: false,   // replaced by smooth_zoom.js (continuous)
-            smoothWheelZoom: true
+            zoomDelta: 0.5
         });
 
         // Local-dev debug handle so the global map can be driven from the
@@ -5353,11 +5351,9 @@
             maxZoom: GIBS_VIS_MAX_ZOOM,
             zoomControl: true,
             attributionControl: false,
-            // Smooth continuous zoom (no integer-level snapping)
+            // Continuous fractional zoom (no integer-level tiering), native wheel
             zoomSnap: 0,
-            zoomDelta: 0.5,
-            scrollWheelZoom: false,   // replaced by smooth_zoom.js (continuous)
-            smoothWheelZoom: true
+            zoomDelta: 0.5
         });
 
         // Local-dev debug handle so the detail map can be driven from the
