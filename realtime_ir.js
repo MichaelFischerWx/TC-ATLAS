@@ -2959,14 +2959,16 @@
             zoomControl: true,
             worldCopyJump: true,
             preferCanvas: true,  // faster rendering for vector overlays
-            // Smooth, continuous zoom (no snap-to-integer-level tiering).
-            // zoomSnap:0 lets the map rest at any fractional zoom instead of
-            // jumping a whole level per notch — that's what gives the smooth
-            // feel. Wheel step stays at Leaflet's default (60) so zoom speed
-            // is normal; a higher value felt sluggish.
+            // Smooth, continuous zoom. zoomSnap:0 lets the map rest at any
+            // fractional zoom (no integer-level snapping); zoomDelta:0.5 sets
+            // the +/- button + dblclick step. The scroll-wheel itself is
+            // handled by smooth_zoom.js (continuous rAF-eased, cursor-anchored)
+            // because Leaflet's default wheel zoom hops between animated
+            // targets and reads as "snapping".
             zoomSnap: 0,
             zoomDelta: 0.5,
-            wheelPxPerZoomLevel: 60
+            scrollWheelZoom: false,   // replaced by smooth_zoom.js (continuous)
+            smoothWheelZoom: true
         });
 
         // Local-dev debug handle so the global map can be driven from the
@@ -5354,7 +5356,8 @@
             // Smooth continuous zoom (no integer-level snapping)
             zoomSnap: 0,
             zoomDelta: 0.5,
-            wheelPxPerZoomLevel: 60
+            scrollWheelZoom: false,   // replaced by smooth_zoom.js (continuous)
+            smoothWheelZoom: true
         });
 
         // Local-dev debug handle so the detail map can be driven from the
