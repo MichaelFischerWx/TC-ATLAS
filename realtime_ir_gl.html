@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>TC-ATLAS · Global Map (MapLibre GL POC)</title>
+<meta name="robots" content="noindex" />
+<!-- MapLibre GL JS 4.7.1 — same engine cyclonicwx uses; WebGL continuous zoom -->
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #0f172a; color: #e2e8f0;
+               font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #map { position: absolute; inset: 0; }
+  #poc-bar {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 5;
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 14px; background: rgba(15, 23, 42, 0.82);
+    backdrop-filter: blur(6px); border-bottom: 1px solid rgba(148,163,184,.18);
+    font-size: 13px;
+  }
+  #poc-bar b { color: #fff; }
+  #poc-bar .tag { background: #2e7dff; color: #fff; border-radius: 6px;
+    padding: 2px 8px; font-size: 11px; font-weight: 600; letter-spacing: .3px; }
+  #poc-bar .muted { color: #94a3b8; }
+  #poc-bar a { color: #00e5ff; text-decoration: none; margin-left: auto; }
+  #poc-bar a:hover { text-decoration: underline; }
+  .ml-storm {
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.5);
+    cursor: pointer;
+  }
+  .maplibregl-popup-content {
+    background: #0f172a; color: #e2e8f0; border: 1px solid #2e7dff;
+    border-radius: 8px; font-size: 12px; line-height: 1.5;
+  }
+  .maplibregl-popup-content b { color: #fff; }
+  .maplibregl-popup-tip { border-top-color: #2e7dff !important; }
+</style>
+</head>
+<body>
+<div id="poc-bar">
+  <span class="tag">MapLibre GL · POC</span>
+  <span><b>Global Map</b> <span class="muted">— GIBS IR raster · GPU continuous zoom</span></span>
+  <span id="poc-time" class="muted"></span>
+  <a href="realtime_ir.html">← back to the live (Leaflet) monitor</a>
+</div>
+<div id="map"></div>
+<script src="realtime_ir_gl.js"></script>
+</body>
+</html>
