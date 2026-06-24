@@ -2960,13 +2960,13 @@
             worldCopyJump: true,
             preferCanvas: true,  // faster rendering for vector overlays
             // Smooth, continuous zoom (no snap-to-integer-level tiering).
-            // zoomSnap:0 lets the map rest at any fractional zoom; the
-            // slower wheel step makes trackpad/scroll zoom feel gradual
-            // rather than jumping a whole level per notch. Matches the
-            // responsive feel of canvas-based viewers.
+            // zoomSnap:0 lets the map rest at any fractional zoom instead of
+            // jumping a whole level per notch — that's what gives the smooth
+            // feel. Wheel step stays at Leaflet's default (60) so zoom speed
+            // is normal; a higher value felt sluggish.
             zoomSnap: 0,
             zoomDelta: 0.5,
-            wheelPxPerZoomLevel: 120
+            wheelPxPerZoomLevel: 60
         });
 
         // Local-dev debug handle so the global map can be driven from the
@@ -5354,7 +5354,7 @@
             // Smooth continuous zoom (no integer-level snapping)
             zoomSnap: 0,
             zoomDelta: 0.5,
-            wheelPxPerZoomLevel: 120
+            wheelPxPerZoomLevel: 60
         });
 
         // Local-dev debug handle so the detail map can be driven from the

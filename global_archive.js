@@ -886,7 +886,7 @@ function initBrowserMap() {
         // Smooth continuous zoom (no integer-level snapping)
         zoomSnap: 0,
         zoomDelta: 0.5,
-        wheelPxPerZoomLevel: 120
+        wheelPxPerZoomLevel: 60
     });
 
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
@@ -3359,7 +3359,7 @@ function renderDetailMap(track, storm) {
         // Smooth continuous zoom (no integer-level snapping)
         zoomSnap: 0,
         zoomDelta: 0.5,
-        wheelPxPerZoomLevel: 120
+        wheelPxPerZoomLevel: 60
     });
 
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
