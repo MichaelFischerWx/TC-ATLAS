@@ -51,8 +51,10 @@
     var irSources, irLayers;
     if (MOSAIC) {
         irSources = {
+            // maxzoom 7: global tiles go to z5, storm patches to z7 — MapLibre
+            // overzooms the z5 parent everywhere else (missing tiles fall back).
             'ir-mosaic': { type: 'raster', tiles: [MOSAIC.replace(/\/$/, '') + '/{z}/{x}/{y}.png'],
-                           tileSize: 256, maxzoom: 5, attribution: 'TC-ATLAS mosaic · NOAA GOES' }
+                           tileSize: 256, maxzoom: 7, attribution: 'TC-ATLAS mosaic · NOAA GOES' }
         };
         irLayers = [{ id: 'ir-mosaic', type: 'raster', source: 'ir-mosaic', paint: { 'raster-opacity': 0.9 } }];
     } else {
