@@ -35,3 +35,4 @@ data/seasonal/
 
 # Claude Code working state
 .claude/
+mosaic_out/

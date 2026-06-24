@@ -43,30 +43,47 @@
     var T = gibsTime();
     var irSourceIds = ['ir-east', 'ir-west', 'ir-hima'];
 
-    var style = {
-        version: 8,
-        sources: {
-            'carto-dark':   { type: 'raster', tiles: carto('dark_nolabels'),      tileSize: 256, attribution: '© CARTO' },
-            'carto-labels': { type: 'raster', tiles: carto('dark_only_labels'),   tileSize: 256 },
-            // Bound each satellite to a longitude band near its sub-point so the
-            // stretched off-nadir limbs don't bleed into a neighbor's territory
-            // (the cause of the vertical "venetian-blind" smear + overlap seams).
-            // Sub-points: GOES-W 137°W, GOES-E 75°W, Himawari 140°E. Band edges at
-            // the midpoints; the 20°W–75°E gap (Atlantic-E/Africa/Indian Ocean) is
-            // honestly blank — that's the Meteosat coverage we don't have yet.
-            // Crude hard cuts (no feathered blend); seamless blending = the mosaic.
+    // ?mosaic=<base> switches the IR layer to our own composited mosaic tiles
+    // (one clean raster source) instead of the 3 bounded GIBS sources. e.g.
+    //   realtime_ir_gl.html?mosaic=mosaic_out/ir/202606242140
+    var MOSAIC = new URLSearchParams(location.search).get('mosaic');
+
+    var irSources, irLayers;
+    if (MOSAIC) {
+        irSources = {
+            'ir-mosaic': { type: 'raster', tiles: [MOSAIC.replace(/\/$/, '') + '/{z}/{x}/{y}.png'],
+                           tileSize: 256, maxzoom: 5, attribution: 'TC-ATLAS mosaic · NOAA GOES' }
+        };
+        irLayers = [{ id: 'ir-mosaic', type: 'raster', source: 'ir-mosaic', paint: { 'raster-opacity': 0.9 } }];
+    } else {
+        // Bound each satellite to a longitude band near its sub-point so the
+        // stretched off-nadir limbs don't bleed into a neighbor's territory
+        // (the cause of the vertical "venetian-blind" smear + overlap seams).
+        // Sub-points: GOES-W 137°W, GOES-E 75°W, Himawari 140°E. The 20°W–75°E
+        // gap is honestly blank — Meteosat coverage we don't have yet. Crude
+        // hard cuts (no feathered blend); seamless blending = the mosaic.
+        irSources = {
             'ir-west': { type: 'raster', tiles: gibsTiles(GIBS_IR['GOES-West'], T), tileSize: 256, maxzoom: 6, bounds: [-180, -85.05, -106, 85.05], attribution: 'NASA GIBS' },
             'ir-east': { type: 'raster', tiles: gibsTiles(GIBS_IR['GOES-East'], T), tileSize: 256, maxzoom: 6, bounds: [-106, -85.05, -20, 85.05] },
             'ir-hima': { type: 'raster', tiles: gibsTiles(GIBS_IR['Himawari'],  T), tileSize: 256, maxzoom: 6, bounds: [75, -85.05, 180, 85.05] }
-        },
+        };
+        irLayers = [
+            { id: 'ir-east', type: 'raster', source: 'ir-east', paint: { 'raster-opacity': 0.85 } },
+            { id: 'ir-west', type: 'raster', source: 'ir-west', paint: { 'raster-opacity': 0.85 } },
+            { id: 'ir-hima', type: 'raster', source: 'ir-hima', paint: { 'raster-opacity': 0.85 } }
+        ];
+    }
+
+    var style = {
+        version: 8,
+        sources: Object.assign({
+            'carto-dark':   { type: 'raster', tiles: carto('dark_nolabels'),    tileSize: 256, attribution: '© CARTO' },
+            'carto-labels': { type: 'raster', tiles: carto('dark_only_labels'), tileSize: 256 }
+        }, irSources),
         layers: [
             { id: 'bg',         type: 'background', paint: { 'background-color': '#0f172a' } },
-            { id: 'carto-dark', type: 'raster', source: 'carto-dark' },
-            { id: 'ir-east',    type: 'raster', source: 'ir-east', paint: { 'raster-opacity': 0.85 } },
-            { id: 'ir-west',    type: 'raster', source: 'ir-west', paint: { 'raster-opacity': 0.85 } },
-            { id: 'ir-hima',    type: 'raster', source: 'ir-hima', paint: { 'raster-opacity': 0.85 } }
-            // coastline / labels / storms appended after load
-        ]
+            { id: 'carto-dark', type: 'raster', source: 'carto-dark' }
+        ].concat(irLayers)   // coastline / labels / storms appended after load
     };
 
     var map = new maplibregl.Map({
@@ -93,7 +110,11 @@
     window._glMap = map;
 
     var tEl = document.getElementById('poc-time');
-    if (tEl) tEl.textContent = 'IR: ' + T.replace('T', ' ').replace('Z', ' UTC');
+    if (tEl) {
+        tEl.textContent = MOSAIC
+            ? 'Mosaic IR (GOES-19+18 blend) · ' + (MOSAIC.split('/').pop() || '')
+            : 'GIBS IR: ' + T.replace('T', ' ').replace('Z', ' UTC');
+    }
 
     map.on('load', function () {
         // ── Coastlines: GPU vector line. This is the layer that cost 242 ms/frame
