@@ -7378,6 +7378,103 @@
     // aborted when the user switches storms to cancel in-flight requests.
     var _rawTbAbortController = null;
 
+    /** URL for a storm's raw-Tb frame manifest (RAW_PERFRAME path). */
+    function _rawTbManifestUrl(atcfId) {
+        return _RT_BUNDLE_ROOT + '/' + _RT_BUNDLE_VERSION + '/raw-frames/' +
+               encodeURIComponent(atcfId.toUpperCase()) + '/manifest.json';
+    }
+
+    /** Run thunks (Promise-returning fns) at most `concurrency` at a time,
+     *  resolving to results in the original order. Bounds the cold-load burst
+     *  when a storm's full window must be fetched per-frame; steady-state
+     *  cycles only fetch the ~1-2 new frames (the rest resolve from cache). */
+    function _fetchRawPool(thunks, concurrency, signal) {
+        var results = new Array(thunks.length);
+        var next = 0;
+        function runOne() {
+            if (signal && signal.aborted) {
+                return Promise.reject(new DOMException('aborted', 'AbortError'));
+            }
+            var idx = next++;
+            if (idx >= thunks.length) return Promise.resolve();
+            return Promise.resolve(thunks[idx]()).then(function (v) {
+                results[idx] = v;
+                return runOne();
+            });
+        }
+        var runners = [];
+        var n = Math.min(concurrency, thunks.length);
+        for (var c = 0; c < n; c++) runners.push(runOne());
+        return Promise.all(runners).then(function () { return results; });
+    }
+
+    /** Primary raw-Tb path: a thin manifest.json + per-frame IMMUTABLE objects.
+     *  Each frame object is content-addressed (storm/position/time), so it is
+     *  fetched at most once and then served from the browser/edge cache for the
+     *  storm's life — only NEW frames cold-fetch each cycle. Frames already held
+     *  in memory (matched by `_key`) are reused, never re-fetched. Resolves to
+     *  {frames, total, failed} matching _fetchRawTbBundle, or rejects so the
+     *  caller falls back to the monolithic bundle path. */
+    function _fetchRawTbManifest(stormId, signal) {
+        // no-cache → revalidate (ETag) so newly-appended frames are picked up;
+        // the per-frame objects it points at are immutable (long max-age).
+        return fetch(_rawTbManifestUrl(stormId), { signal: signal, cache: 'no-cache' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('manifest HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (manifest) {
+                if (!manifest || !Array.isArray(manifest.frames)) {
+                    throw new Error('bad manifest');
+                }
+                var vmin = manifest.tb_vmin || 160.0;
+                var vmax = manifest.tb_vmax || 330.0;
+                // Reuse frames already in memory (same key) across cycles.
+                var have = {};
+                var existing = (stormId === currentStormId) ? rawTbFrames
+                    : (_rawTbCache[stormId] && _rawTbCache[stormId].rawTbFrames) || [];
+                for (var k = 0; k < (existing || []).length; k++) {
+                    if (existing[k] && existing[k]._key) have[existing[k]._key] = existing[k];
+                }
+                var failed = 0;
+                var thunks = manifest.frames.map(function (fh) {
+                    return function () {
+                        if (!fh.key || fh.error) { failed++; return null; }
+                        if (have[fh.key]) return have[fh.key];
+                        return fetch(_RT_BUNDLE_ROOT + '/' + fh.key, { signal: signal })
+                            .then(function (fr) {
+                                if (!fr.ok) throw new Error('frame HTTP ' + fr.status);
+                                return fr.arrayBuffer();  // gzip auto-decoded by browser
+                            })
+                            .then(function (buf) {
+                                return {
+                                    _key: fh.key,
+                                    tb_data: new Uint8Array(buf),
+                                    rows: fh.tb_rows, cols: fh.tb_cols,
+                                    bounds: fh.bounds,
+                                    datetime_utc: fh.datetime_utc || '',
+                                    satellite: fh.satellite || '',
+                                    tb_vmin: vmin, tb_vmax: vmax,
+                                    center_fix: fh.center_fix || null
+                                };
+                            })
+                            .catch(function (e) {
+                                if (e && e.name === 'AbortError') throw e;
+                                failed++; return null;
+                            });
+                    };
+                });
+                return _fetchRawPool(thunks, 6, signal).then(function (frames) {
+                    if (signal && signal.aborted) {
+                        throw new DOMException('aborted', 'AbortError');
+                    }
+                    var ok = frames.filter(function (f) { return f; });
+                    if (ok.length === 0) throw new Error('no raw frames loaded');
+                    return { frames: ok, total: manifest.total_frames || ok.length, failed: failed };
+                });
+            });
+    }
+
     /** Single-shot binary bundle path: one /ir-raw-bundle request returns
      *  all frames packed as [u32 header_len][JSON header][concat uint8 Tb].
      *  ~3-4× faster than the 13-request waterfall on warm cache, single
@@ -7461,12 +7558,19 @@
         var controller = new AbortController();
         if (!silent) _rawTbAbortController = controller;
 
-        // ── Primary path: single binary bundle ────────────────
-        // Try the packed bundle endpoint first; on any failure (404 if
-        // backend not yet redeployed, parse error, network) fall through
-        // to the legacy per-frame incremental waterfall below.
+        // ── Layered fetch: manifest → bundle → legacy waterfall ──
+        // Primary: per-frame manifest (RAW_PERFRAME) — only new frames cold-
+        // fetch each cycle. On any failure (404 if the per-frame path isn't
+        // live yet, parse error, network) fall back to the monolithic bundle,
+        // and from there to the legacy per-frame /ir-raw-frame waterfall.
         if (!silent) showLoadingProgress(true, 5);
-        _fetchRawTbBundle(stormId, controller.signal)
+        _fetchRawTbManifest(stormId, controller.signal)
+            .catch(function (err) {
+                if (err && err.name === 'AbortError') throw err;
+                console.warn('[RT Monitor] Raw Tb manifest unavailable (' +
+                    (err && err.message) + ') — trying bundle');
+                return _fetchRawTbBundle(stormId, controller.signal);
+            })
             .then(function (result) {
                 if (controller.signal.aborted) return;
                 var pos = _stormPositionForId(stormId);

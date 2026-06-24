@@ -1,0 +1,12 @@
+{
+  "_comment": "Managed R2 object-lifecycle rules for the tc-atlas-rt bucket. Source of truth for apply_lifecycle.py, which merges these BY ID into any rules already on the bucket (it never blind-overwrites unmanaged rules). Prefixes are version-pinned (rt-vN) exactly like the GCS ir_cache_lifecycle.json rules — bump them when _GCS_RT_VERSION bumps.",
+  "rules": [
+    {
+      "ID": "tcatlas-raw-frames-2d",
+      "Status": "Enabled",
+      "Filter": {"Prefix": "rt-v12/raw-frames/"},
+      "Expiration": {"Days": 2},
+      "_comment": "Per-frame immutable raw-Tb objects (RAW_PERFRAME path) + superseded position-variants. Frames roll off the 6 h window and best-track position revisions orphan old keys; 2 days is well past any reference. The tiny manifest.json is rewritten each cycle and also expires + is recreated, which is harmless."
+    }
+  ]
+}

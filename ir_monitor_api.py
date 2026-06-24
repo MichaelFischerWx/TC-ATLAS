@@ -227,6 +227,18 @@ def _get_rt_gcs_bucket():
 _R2_ENDPOINT_URL = os.environ.get("R2_ENDPOINT_URL", "").rstrip("/")
 _R2_BUCKET = os.environ.get("R2_BUCKET", "")
 _PUBLIC_BUNDLE_BASE = os.environ.get("PUBLIC_BUNDLE_BASE", "").rstrip("/")
+
+# RAW_PERFRAME: when set, the prewarm raw-Tb path uploads per-frame IMMUTABLE
+# objects to R2 + a thin manifest.json instead of re-pushing the whole ~43 MB
+# monolithic raw bundle every cycle. The rolling 6 h window re-presents ~34
+# unchanged frames each cycle; content-addressed keys + an existence check mean
+# only the ~1-2 NEW frames are actually uploaded → ~94% less raw egress (raw is
+# ~78% of all Cloud Run→R2 egress). Default off; flip on once the frontend's
+# manifest-first path is live (it falls back to the bundle, so order is safe).
+# Only meaningful when PUBLIC_BUNDLE_BASE is set (R2 is the serving origin).
+# See project_cost_status_2026_06 / project_r2_migration.
+_RAW_PERFRAME = os.environ.get("RAW_PERFRAME", "0") == "1"
+
 _r2_client = None
 _r2_client_init = False
 
@@ -652,6 +664,127 @@ def _upload_public_bundle(key: str, body: bytes, content_type: str = "applicatio
     # R2 is configured; never blocks correctness (GCS stays source of truth and
     # the 302 targets GCS until PUBLIC_BUNDLE_BASE is set).
     _r2_put_public(key, body, content_type, cache_control, content_encoding)
+
+
+# ── Per-frame raw-Tb objects (RAW_PERFRAME path) ──────────────────────
+# Instead of one monolithic {atcf}.bin re-uploaded whole each cycle, store each
+# raw-Tb frame as its own gzipped, content-addressed, IMMUTABLE R2 object plus a
+# small manifest. The key embeds the frame's interpolated position (_pos_key, 0.1°
+# rounded) exactly like the GCS cache key (_ir_raw_key), so a given (storm, time,
+# position) maps to a stable object — a best-track position revision yields a NEW
+# key (the old one is orphaned and lifecycle-expired), so objects never mutate.
+
+def _raw_frame_r2_key(atcf_upper: str, dt_str: str, lat: float, lon: float,
+                      radius_deg: float) -> str:
+    """R2 key for one immutable per-frame raw-Tb object (gzipped uint8 Tb)."""
+    pk = _pos_key(lat, lon, radius_deg)
+    return f"{_GCS_RT_VERSION}/raw-frames/{atcf_upper}/{pk}/{dt_str}.tbz"
+
+
+def _raw_manifest_r2_key(atcf_upper: str) -> str:
+    """R2 key for a storm's raw-Tb frame manifest (small JSON, rewritten/cycle)."""
+    return f"{_GCS_RT_VERSION}/raw-frames/{atcf_upper}/manifest.json"
+
+
+def _r2_frame_exists(key: str) -> bool:
+    """HEAD an R2 object (cheap Class-B op). True → already uploaded, skip the
+    PUT. False on any error → upload. Never raises."""
+    client = _get_r2_client()
+    if client is None:
+        return False
+    try:
+        client.head_object(Bucket=_R2_BUCKET, Key=key)
+        return True
+    except Exception:
+        return False
+
+
+def _read_prev_raw_manifest_keys(atcf_upper: str) -> set:
+    """Keys already listed in the storm's current R2 manifest. Lets us skip the
+    per-frame HEAD for the ~34 unchanged frames (one small GET vs 36 HEADs).
+    Empty set on any miss/error → falls back to per-frame existence checks."""
+    client = _get_r2_client()
+    if client is None:
+        return set()
+    try:
+        obj = client.get_object(Bucket=_R2_BUCKET, Key=_raw_manifest_r2_key(atcf_upper))
+        data = json.loads(obj["Body"].read())
+        return {f["key"] for f in data.get("frames", []) if f.get("key")}
+    except Exception:
+        return set()
+
+
+def _upload_raw_frame_r2(key: str, tb_bytes: bytes) -> bool:
+    """Gzip + PUT one immutable raw-Tb frame to R2. Returns True on success."""
+    client = _get_r2_client()
+    if client is None:
+        return False
+    try:
+        import gzip as _gz
+        body = _gz.compress(tb_bytes, compresslevel=6)
+        client.put_object(
+            Bucket=_R2_BUCKET, Key=key, Body=body,
+            ContentType="application/octet-stream",
+            ContentEncoding="gzip",
+            CacheControl="public, max-age=86400, immutable",
+        )
+        return True
+    except Exception as ex:
+        print(f"[R2] raw-frame put {key} failed: {ex}")
+        return False
+
+
+def _upload_raw_manifest_r2(atcf_upper: str, manifest: dict):
+    """PUT the storm's raw-Tb manifest (short max-age so new frames appear; the
+    per-frame objects it points at stay immutable)."""
+    client = _get_r2_client()
+    if client is None:
+        return
+    try:
+        client.put_object(
+            Bucket=_R2_BUCKET, Key=_raw_manifest_r2_key(atcf_upper),
+            Body=json.dumps(manifest, separators=(",", ":")).encode("utf-8"),
+            ContentType="application/json",
+            CacheControl="public, max-age=60",
+        )
+    except Exception as ex:
+        print(f"[R2] raw manifest put {atcf_upper} failed: {ex}")
+
+
+def _upload_raw_frames_perframe(atcf_upper: str, frame_meta: list,
+                                radius_deg: float, lookback_hours: float,
+                                interval_min: int):
+    """RAW_PERFRAME upload: per-frame immutable R2 objects + a thin manifest.
+    Uploads ONLY frames whose content-addressed key isn't already on R2."""
+    prev_keys = _read_prev_raw_manifest_keys(atcf_upper)
+    manifest_frames = []
+    uploaded = 0
+    for m in frame_meta:
+        if m.get("error") or not m.get("tb_bytes"):
+            manifest_frames.append({
+                "index": m["index"], "datetime_utc": m["datetime_utc"],
+                "error": m.get("error", "no_cached_tb"),
+            })
+            continue
+        key = _raw_frame_r2_key(atcf_upper, m["dt_str"], m["lat"], m["lon"], radius_deg)
+        if key not in prev_keys and not _r2_frame_exists(key):
+            if _upload_raw_frame_r2(key, m["tb_bytes"]):
+                uploaded += 1
+        manifest_frames.append({
+            "index": m["index"], "datetime_utc": m["datetime_utc"],
+            "key": key, "tb_rows": m["rows"], "tb_cols": m["cols"],
+            "bounds": m["bounds"], "center_fix": m["center_fix"],
+            "satellite": m["satellite"],
+        })
+    manifest = {
+        "total_frames": len(frame_meta),
+        "tb_vmin": _TB_VMIN, "tb_vmax": _TB_VMAX,
+        "lookback_hours": lookback_hours, "interval_min": interval_min,
+        "radius_deg": radius_deg, "frames": manifest_frames,
+    }
+    _upload_raw_manifest_r2(atcf_upper, manifest)
+    print(f"[Bundle Pre-build] {atcf_upper}: raw-perframe {uploaded} new / "
+          f"{len(manifest_frames)} frames + manifest")
 
 
 def _ondemand_bundle_key(product: str, atcf_upper: str,
@@ -1203,6 +1336,7 @@ def _build_and_upload_bundles(
     raw_hdrs = []
     payloads_jpg = []
     payloads_raw = []
+    raw_frame_meta = []  # per-frame data for the RAW_PERFRAME upload path
     jpg_offset = 0
     raw_offset = 0
     summary_sat = ""
@@ -1249,6 +1383,8 @@ def _build_and_upload_bundles(
                 "byte_offset": raw_offset, "byte_length": 0,
                 "error": "no_cached_tb",
             })
+            raw_frame_meta.append({"index": i, "datetime_utc": iso_dt,
+                                   "error": "no_cached_tb"})
             continue
         try:
             tb_bytes = base64.b64decode(cached["tb_data"])
@@ -1259,20 +1395,34 @@ def _build_and_upload_bundles(
                 "byte_offset": raw_offset, "byte_length": 0,
                 "error": f"decode: {ex}",
             })
+            raw_frame_meta.append({"index": i, "datetime_utc": iso_dt,
+                                   "error": f"decode: {ex}"})
             continue
         rows = int(cached["tb_rows"])
         cols = int(cached["tb_cols"])
+        raw_dt_utc = cached.get("datetime_utc", iso_dt)
+        raw_sat = cached.get("satellite", "")
+        raw_bounds = cached.get("bounds")
         raw_hdrs.append({
             "index": i,
-            "datetime_utc": cached.get("datetime_utc", iso_dt),
-            "satellite": cached.get("satellite", ""),
+            "datetime_utc": raw_dt_utc,
+            "satellite": raw_sat,
             "tb_rows": rows, "tb_cols": cols,
             "byte_offset": raw_offset, "byte_length": rows * cols,
-            "bounds": cached.get("bounds"),
+            "bounds": raw_bounds,
             "center_fix": center_fix,
         })
         payloads_raw.append(tb_bytes)
         raw_offset += rows * cols
+        # Per-frame meta: position-addressed key matches the GCS cache key
+        # (_ir_raw_key uses _pos_key(ilat, ilon, radius_deg) too) so the R2
+        # object is content-addressed and effectively immutable.
+        raw_frame_meta.append({
+            "index": i, "dt_str": dt_str, "datetime_utc": raw_dt_utc,
+            "lat": ilat, "lon": ilon, "tb_bytes": tb_bytes,
+            "rows": rows, "cols": cols, "bounds": raw_bounds,
+            "center_fix": center_fix, "satellite": raw_sat,
+        })
 
     # Summary bounds: latest frame's interpolated position
     latest_ft = times_oldest_first[-1] if times_oldest_first else _dt.now(timezone.utc)
@@ -1289,28 +1439,34 @@ def _build_and_upload_bundles(
     }
     frames_body = _pack_bundle(frames_header, payloads_jpg)
 
-    raw_header = {
-        "total_frames": len(times_oldest_first),
-        "tb_vmin": _TB_VMIN,
-        "tb_vmax": _TB_VMAX,
-        "lookback_hours": lookback_hours,
-        "interval_min": interval_min,
-        "radius_deg": radius_deg,
-        "frames": raw_hdrs,
-    }
-    raw_body = _pack_bundle(raw_header, payloads_raw)
-
-    # Upload IR display + raw bundles. Pathing matches the frontend's
+    # Upload IR display bundle. Pathing matches the frontend's
     # _gcsFramesBundleUrl / _gcsRawBundleUrl helpers in realtime_ir.js.
     # Display WebPs are already codec-compressed (gzip would gain ~2%
-    # for 5-50ms of CPU — not worth it). Raw Tb uint8 arrays have
-    # strong spatial correlation (smooth cloud features → repeated/
-    # similar bytes) — gzip shrinks them ~30-50%, saving ~2 MB per
-    # raw-Tb load with imperceptible browser decode cost.
+    # for 5-50ms of CPU — not worth it).
     frames_key = f"{_GCS_RT_VERSION}/bundles/frames/{atcf_upper}.bin"
-    raw_key = f"{_GCS_RT_VERSION}/bundles/raw/{atcf_upper}.bin"
     _upload_public_bundle(frames_key, frames_body)
-    _upload_public_bundle(raw_key, raw_body, gzip_content=True)
+
+    # Raw Tb: per-frame immutable objects (RAW_PERFRAME) OR the legacy monolithic
+    # bundle. Per-frame uploads only the ~1-2 NEW frames each cycle instead of
+    # re-pushing all ~36 (~94% less raw egress). Raw Tb uint8 arrays have strong
+    # spatial correlation → gzip shrinks them ~30-50% with imperceptible browser
+    # decode cost (applied per-frame or to the whole bundle respectively).
+    raw_key = f"{_GCS_RT_VERSION}/bundles/raw/{atcf_upper}.bin"
+    if _RAW_PERFRAME:
+        _upload_raw_frames_perframe(
+            atcf_upper, raw_frame_meta, radius_deg, lookback_hours, interval_min)
+    else:
+        raw_header = {
+            "total_frames": len(times_oldest_first),
+            "tb_vmin": _TB_VMIN,
+            "tb_vmax": _TB_VMAX,
+            "lookback_hours": lookback_hours,
+            "interval_min": interval_min,
+            "radius_deg": radius_deg,
+            "frames": raw_hdrs,
+        }
+        raw_body = _pack_bundle(raw_header, payloads_raw)
+        _upload_public_bundle(raw_key, raw_body, gzip_content=True)
 
     # (Removed: separate animated-WebP build. The frames bundle above
     # IS the animation source — sat_quick.js animates by swapping <img>
@@ -1318,8 +1474,8 @@ def _build_and_upload_bundles(
     # encode a second artifact at ~the same size for marginal savings.)
 
     print(f"[Bundle Pre-build] {atcf_upper}: frames={len(payloads_jpg)} "
-          f"({len(frames_body)//1024} KB), raw={len(payloads_raw)} "
-          f"({len(raw_body)//1024} KB)")
+          f"({len(frames_body)//1024} KB), raw={len(payloads_raw)} frames"
+          f"{'' if _RAW_PERFRAME else f' ({len(raw_body)//1024} KB bundle)'}")
 
     # ── Band bundle (WV / SWIR / Vis) ───────────────────────────
     # Built separately so extra bands in the same cycle don't rebuild the

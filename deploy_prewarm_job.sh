@@ -75,6 +75,14 @@ JOB_ENV="${JOB_ENV},AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}"
 JOB_ENV="${JOB_ENV},R2_ENDPOINT_URL=${R2_ENDPOINT_URL:-https://4f3e5ab095ae4962e91af5b33c6deb54.r2.cloudflarestorage.com}"
 JOB_ENV="${JOB_ENV},R2_BUCKET=${R2_BUCKET:-tc-atlas-rt}"
 JOB_ENV="${JOB_ENV},PUBLIC_BUNDLE_BASE=${PUBLIC_BUNDLE_BASE:-https://cdn.tcatlas.org}"
+# RAW_PERFRAME: upload per-frame IMMUTABLE raw-Tb objects + a thin manifest to R2
+# instead of re-pushing the whole ~43 MB raw bundle every cycle (raw is ~78% of
+# Cloud Run→R2 egress; only ~1-2 frames are new per cycle → ~94% less raw egress).
+# Default 0 (legacy monolithic bundle). To enable durably: set RAW_PERFRAME=1 in
+# deploy.env (or export) and redeploy this job — baked here so it survives
+# deploys, unlike a bare `gcloud ... update --set-env-vars`. The frontend tries
+# the manifest first and falls back to the bundle, so enabling needs no FE redeploy.
+JOB_ENV="${JOB_ENV},RAW_PERFRAME=${RAW_PERFRAME:-0}"
 [[ -n "${TC_RADAR_S3_BUCKET:-}" ]]    && JOB_ENV="${JOB_ENV},TC_RADAR_S3_BUCKET=${TC_RADAR_S3_BUCKET}"
 # This Job IS the prewarm worker — it calls run_prewarm_cycle() directly and
 # never serves loop requests, so the in-process _ir_frame_cache warming (Phase
