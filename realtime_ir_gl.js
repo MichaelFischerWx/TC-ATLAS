@@ -47,6 +47,14 @@
     var tEl    = document.getElementById('poc-time');
     var map;
 
+    // optional ?center=lat,lon&zoom=Z to open already framed on a storm
+    var center0 = [-55, 20], zoom0 = 3;
+    if (qs.get('center')) {
+        var p = qs.get('center').split(',').map(Number);
+        if (p.length === 2 && isFinite(p[0]) && isFinite(p[1])) center0 = [p[1], p[0]];
+    }
+    if (qs.get('zoom') && isFinite(Number(qs.get('zoom')))) zoom0 = Number(qs.get('zoom'));
+
     function boot(frames) {
         var irSources = {}, irLayers = [];
         if (frames && frames.length) {
@@ -94,7 +102,7 @@
         };
 
         map = new maplibregl.Map({
-            container: 'map', style: style, center: [-55, 20], zoom: 3,
+            container: 'map', style: style, center: center0, zoom: zoom0,
             minZoom: 1, maxZoom: 10, dragRotate: false, pitchWithRotate: false,
             attributionControl: { compact: true }
         });
