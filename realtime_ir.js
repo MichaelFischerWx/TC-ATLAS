@@ -2958,8 +2958,22 @@
             maxZoom: GIBS_MAX_ZOOM,
             zoomControl: true,
             worldCopyJump: true,
-            preferCanvas: true  // faster rendering for vector overlays
+            preferCanvas: true,  // faster rendering for vector overlays
+            // Smooth, continuous zoom (no snap-to-integer-level tiering).
+            // zoomSnap:0 lets the map rest at any fractional zoom; the
+            // slower wheel step makes trackpad/scroll zoom feel gradual
+            // rather than jumping a whole level per notch. Matches the
+            // responsive feel of canvas-based viewers.
+            zoomSnap: 0,
+            zoomDelta: 0.5,
+            wheelPxPerZoomLevel: 120
         });
+
+        // Local-dev debug handle so the global map can be driven from the
+        // console / preview harness (mirrors window._rtDetailMap on the card).
+        if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+            window._rtMainMap = map;
+        }
 
         // Dark basemap (underneath IR) — load first for fast initial paint
         var basemap = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
@@ -5336,7 +5350,11 @@
             minZoom: 3,
             maxZoom: GIBS_VIS_MAX_ZOOM,
             zoomControl: true,
-            attributionControl: false
+            attributionControl: false,
+            // Smooth continuous zoom (no integer-level snapping)
+            zoomSnap: 0,
+            zoomDelta: 0.5,
+            wheelPxPerZoomLevel: 120
         });
 
         // Local-dev debug handle so the detail map can be driven from the

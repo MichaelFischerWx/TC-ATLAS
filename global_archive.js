@@ -882,7 +882,11 @@ function initBrowserMap() {
         center: [20, -20],
         zoom: 2,
         zoomControl: true,
-        worldCopyJump: true
+        worldCopyJump: true,
+        // Smooth continuous zoom (no integer-level snapping)
+        zoomSnap: 0,
+        zoomDelta: 0.5,
+        wheelPxPerZoomLevel: 120
     });
 
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
@@ -3351,7 +3355,11 @@ function renderDetailMap(track, storm) {
         center: [centerLat, centerLon],
         zoom: 4,
         zoomControl: true,
-        worldCopyJump: true
+        worldCopyJump: true,
+        // Smooth continuous zoom (no integer-level snapping)
+        zoomSnap: 0,
+        zoomDelta: 0.5,
+        wheelPxPerZoomLevel: 120
     });
 
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
