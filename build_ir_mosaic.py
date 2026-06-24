@@ -36,6 +36,8 @@ import numpy as np
 from satellite_ir import (
     GOES_BUCKETS, GOES_SAT_HEIGHT, IR_BAND, IR_VMIN, IR_VMAX, _IR_LUT,
     find_goes_file, get_goes_fs,
+    HIMAWARI_BUCKET, HIMAWARI_LON_0, HIMAWARI_SAT_HEIGHT, HIMAWARI_SWEEP,
+    find_himawari_file, open_himawari_subset,
 )
 
 OUT_DIR = os.environ.get("MOSAIC_OUT", "mosaic_out")
@@ -50,10 +52,11 @@ LIMB_DEG = 76.0       # drop pixels seen more than this far off-nadir (limb junk
 STORM_BOX_DEG = 6.0   # half-box baked around each storm
 STORM_ZOOMS = (6, 7)  # storm-detail zoom levels (z6 ≈ native IR, z7 overzoom)
 
-# (key, bucket, label). lon_0/grid are read from each file's own navigation.
+# (key, kind, bucket, label). lon_0/grid come from each file's own navigation.
 SATS = [
-    ("east", GOES_BUCKETS["east_19"], "GOES-19"),
-    ("west", GOES_BUCKETS["west"],    "GOES-18"),
+    ("east", "goes",     GOES_BUCKETS["east_19"], "GOES-19"),
+    ("west", "goes",     GOES_BUCKETS["west"],    "GOES-18"),
+    ("hima", "himawari", HIMAWARI_BUCKET,         "Himawari-9"),
 ]
 
 
@@ -177,11 +180,35 @@ def read_full_disk(bucket, dt):
     return tb, x, y, lon_0, sat_h, sweep, scan_dt
 
 
+def read_himawari_full_disk(dt):
+    """Full-disk Himawari B13 via the existing HSD reader: a huge box centred on
+    the sub-point pulls all 10 segments; the returned geos array + extent give us
+    the same (tb, x, y, lon_0, sat_h, sweep) shape as the GOES reader."""
+    prefix, scan_dt = find_himawari_file(dt, tolerance_min=20, band=IR_BAND,
+                                         return_dt=True)
+    if not prefix:
+        return None
+    data, extent = open_himawari_subset(prefix, 0.0, HIMAWARI_LON_0,
+                                        box_deg=160.0, band=IR_BAND,
+                                        return_extent=True)
+    if data is None or extent is None:
+        return None
+    ny, nx = data.shape
+    x = np.linspace(extent[0], extent[1], nx) / HIMAWARI_SAT_HEIGHT
+    y = np.linspace(extent[2], extent[3], ny) / HIMAWARI_SAT_HEIGHT
+    return (data.astype(np.float32), x, y, HIMAWARI_LON_0,
+            HIMAWARI_SAT_HEIGHT, HIMAWARI_SWEEP, scan_dt)
+
+
 def read_all_sats(dt, timings):
     sats = {}
-    for sat_key, bucket, label in SATS:
+    for sat_key, kind, bucket, label in SATS:
         t0 = time.time()
-        fd = read_full_disk(bucket, dt)
+        try:
+            fd = (read_himawari_full_disk(dt) if kind == "himawari"
+                  else read_full_disk(bucket, dt))
+        except Exception as e:
+            log(f"  {label}: read failed ({e}) — skip"); fd = None
         timings["read"] = timings.get("read", 0.0) + time.time() - t0
         if fd is None:
             log(f"  {label}: no file near {dt:%H:%M}Z — skip"); continue
@@ -205,7 +232,7 @@ def ensure_global_kernels(zoom, sats, rebuild=False):
     LON, LAT = pixels_to_lonlat(px[None, :], px[:, None], S)
     LON = np.broadcast_to(LON, (S, S)); LAT = np.broadcast_to(LAT, (S, S))
     kernels = {}
-    for sat_key, _b, label in SATS:
+    for sat_key, _kind, _b, label in SATS:
         kp = kernel_path(sat_key, zoom)
         if os.path.exists(kp) and not rebuild:
             d = np.load(kp); kernels[sat_key] = (d["idx"], d["cosz"], d["mask"])
@@ -231,8 +258,9 @@ def global_render(zoom, sats, kernels, timings):
             continue
         idx, cosz, mask = kernels[sat_key]
         flat = sats[sat_key]["flat"]
-        if flat.size != sats[sat_key]["npix"]:
-            continue
+        if idx.size and int(idx.max()) >= flat.size:
+            log(f"  {sats[sat_key]['label']}: grid {flat.size} ≠ kernel "
+                f"(rebuild with --build-kernel); skip"); continue
         g = flat[idx]
         samples.append((g, cosz, mask & np.isfinite(g) & (g > 0)))
     timings["gather"] = timings.get("gather", 0.0) + time.time() - t0
@@ -354,6 +382,8 @@ def main():
                     help="also bake a storm patch at 'lat,lon' (test point)")
     ap.add_argument("--blend-p", type=float, default=None,
                     help="override cutline sharpness (default %d)" % BLEND_P)
+    ap.add_argument("--frames", type=int, default=1,
+                    help="number of consecutive 10-min frames (for animation)")
     ap.add_argument("--time", action="store_true")
     ap.add_argument("--out", default=OUT_DIR)
     args = ap.parse_args()
@@ -361,45 +391,59 @@ def main():
         BLEND_P = args.blend_p
 
     now = datetime.now(timezone.utc) - timedelta(minutes=20)
-    dt = now.replace(minute=now.minute - (now.minute % 10), second=0, microsecond=0)
-    log(f"target {dt:%Y-%m-%d %H:%M}Z · zmax {args.zmax} · blend_p {BLEND_P:g}")
+    latest = now.replace(minute=now.minute - (now.minute % 10), second=0, microsecond=0)
 
-    timings = {}
-    sats = read_all_sats(dt, timings)
-    if not sats:
-        log("no satellite data — abort"); sys.exit(1)
-
-    kernels = ensure_global_kernels(args.zmax, sats, rebuild=args.build_kernel)
-    if args.build_kernel:
-        log("kernels ready (one-time cost) — done"); return
-
-    t0 = time.time()
-    tiles_dir = os.path.join(args.out, "ir", dt.strftime("%Y%m%d%H%M"))
-    rgba = global_render(args.zmax, sats, kernels, timings)
-    n_global = write_pyramid(rgba, args.zmax, tiles_dir, timings)
-    preview = write_preview(rgba, args.out)
-
-    n_storm = 0
+    # storm points (resolved once, reused for every frame)
     points = []
     if args.storm:
         points += fetch_active_points()
     if args.storm_at:
         la, lo = (float(v) for v in args.storm_at.split(","))
-        points.append((la, lo)); log(f"  test point @ {la},{lo}")
-    if points:
-        tiles = storm_tile_set(points, STORM_ZOOMS, STORM_BOX_DEG)
-        log(f"  storm: {len(points)} point(s) → {len(tiles)} z{STORM_ZOOMS} tiles")
-        n_storm = render_storm_tiles(sats, tiles, tiles_dir, timings)
+        points.append((la, lo)); log(f"test point @ {la},{lo}")
 
-    wall = time.time() - t0
-    log(f"wrote {n_global} global + {n_storm} storm tiles → {tiles_dir}")
-    log(f"preview → {preview}")
-    if args.time:
-        log("─ per-cycle timings ─")
-        for k in ("read", "gather", "colormap", "tile", "storm_tile"):
-            if k in timings:
-                log(f"  {k:11s} {timings[k]:6.2f}s")
-        log(f"  {'TOTAL':11s} {wall:6.2f}s")
+    # render newest→oldest so the first frame seeds/loads the kernels
+    frame_dts = [latest - timedelta(minutes=10 * i) for i in range(args.frames)]
+    written, kernels = [], None
+    t0 = time.time()
+    for fi, dt in enumerate(frame_dts):
+        log(f"── frame {fi+1}/{args.frames}: {dt:%Y-%m-%d %H:%M}Z "
+            f"(zmax {args.zmax}, blend_p {BLEND_P:g})")
+        timings = {}
+        sats = read_all_sats(dt, timings)
+        if not sats:
+            log("  no satellite data — skip frame"); continue
+        if kernels is None:
+            kernels = ensure_global_kernels(args.zmax, sats,
+                                            rebuild=args.build_kernel)
+            if args.build_kernel:
+                log("kernels ready (one-time cost) — done"); return
+
+        ts = dt.strftime("%Y%m%d%H%M")
+        tiles_dir = os.path.join(args.out, "ir", ts)
+        rgba = global_render(args.zmax, sats, kernels, timings)
+        n_global = write_pyramid(rgba, args.zmax, tiles_dir, timings)
+        n_storm = 0
+        if points:
+            tiles = storm_tile_set(points, STORM_ZOOMS, STORM_BOX_DEG)
+            n_storm = render_storm_tiles(sats, tiles, tiles_dir, timings)
+        if fi == 0:
+            write_preview(rgba, args.out)
+        written.append(ts)
+        log(f"  wrote {n_global} global + {n_storm} storm tiles → {ts}")
+        if args.time:
+            parts = " ".join(f"{k} {timings[k]:.1f}s" for k in
+                             ("read", "gather", "colormap", "tile", "storm_tile")
+                             if k in timings)
+            log(f"  timings: {parts}")
+
+    # animation manifest (oldest→newest) for the MapLibre POC
+    if written:
+        man = os.path.join(args.out, "ir", "frames.json")
+        with open(man, "w") as f:
+            json.dump({"frames": sorted(written), "zmax": args.zmax,
+                       "storm_zooms": list(STORM_ZOOMS)}, f)
+        log(f"manifest ({len(written)} frames) → {man}")
+    log(f"TOTAL {time.time()-t0:.1f}s for {len(written)} frame(s)")
 
 
 if __name__ == "__main__":
