@@ -44,16 +44,13 @@
             this._centerPoint = map.getSize()._divideBy(2);
             this._startLatLng = map.containerPointToLatLng(this._centerPoint);
             this._wheelStartLatLng = map.containerPointToLatLng(this._wheelMousePosition);
-            this._startZoom = map.getZoom();
-            this._moved = false;
-            this._zooming = true;
 
             map._stop();
             if (map._panAnim) map._panAnim.stop();
 
             this._goalZoom = map.getZoom();
-            this._prevCenter = map.getCenter();
-            this._prevZoom = map.getZoom();
+            this._zoom = map.getZoom();
+            this._center = map.getCenter();
 
             this._zoomAnimationId = requestAnimationFrame(this._updateWheelZoom.bind(this));
         },
@@ -68,29 +65,40 @@
             this._wheelMousePosition = map.mouseEventToContainerPoint(e);
 
             clearTimeout(this._timeoutId);
-            this._timeoutId = setTimeout(this._onWheelEnd.bind(this), 200);
+            // keep easing for a beat after the last wheel event, then commit
+            this._timeoutId = setTimeout(this._onWheelEnd.bind(this), 150);
 
             L.DomEvent.preventDefault(e);
             L.DomEvent.stopPropagation(e);
         },
 
         _onWheelEnd: function () {
+            if (!this._isWheeling) return;
             this._isWheeling = false;
             cancelAnimationFrame(this._zoomAnimationId);
-            this._map._moveEnd(true);
+            var map = this._map;
+            // Commit: re-render tiles at the final eased zoom. During the
+            // gesture we only scaled existing tiles (pinch path, no fetch);
+            // setView clears the pinch transform and triggers a single
+            // _update so the composite GridLayer fetches fresh tiles ONCE.
+            try {
+                map.setView(this._center, this._zoom, { animate: false });
+            } catch (err) {
+                map.setView(map.getCenter(), this._zoom, { animate: false });
+            }
         },
 
         _updateWheelZoom: function () {
             var map = this._map;
+            if (!this._isWheeling) return;
 
-            if ((!map.getCenter().equals(this._prevCenter)) || map.getZoom() !== this._prevZoom) return;
+            // ease the live zoom toward the goal
+            var cur = map.getZoom();
+            this._zoom = cur + (this._goalZoom - cur) * 0.25;
+            this._zoom = Math.round(this._zoom * 1000) / 1000;
 
-            this._zoom = map.getZoom() + (this._goalZoom - map.getZoom()) * 0.3;
-            this._zoom = Math.floor(this._zoom * 100) / 100;
-
+            // keep the latlng under the cursor anchored as we scale
             var delta = this._wheelMousePosition.subtract(this._centerPoint);
-            if (delta.x === 0 && delta.y === 0) return;
-
             if (map.options.smoothWheelZoom === 'center') {
                 this._center = this._startLatLng;
             } else {
@@ -98,10 +106,12 @@
                     map.project(this._wheelStartLatLng, this._zoom).subtract(delta), this._zoom);
             }
 
-            map.setView(this._center, this._zoom, { animate: false });
-
-            this._prevCenter = map.getCenter();
-            this._prevZoom = map.getZoom();
+            // Pinch path: scale existing tiles/overlays via CSS transform with
+            // NO tile re-fetch (mirrors L.Map.TouchZoom). This is what stops the
+            // satellite frames from going white mid-zoom — fetching is deferred
+            // to _onWheelEnd. setView(animate:false) instead would re-fetch
+            // every frame and blank the async-loading composite GridLayer.
+            map._move(this._center, this._zoom, { pinch: true, round: false });
 
             this._zoomAnimationId = requestAnimationFrame(this._updateWheelZoom.bind(this));
         }
