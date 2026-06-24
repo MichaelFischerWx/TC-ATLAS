@@ -676,9 +676,18 @@ def _upload_public_bundle(key: str, body: bytes, content_type: str = "applicatio
 
 def _raw_frame_r2_key(atcf_upper: str, dt_str: str, lat: float, lon: float,
                       radius_deg: float) -> str:
-    """R2 key for one immutable per-frame raw-Tb object (gzipped uint8 Tb)."""
+    """R2 key for one immutable per-frame raw-Tb object (gzipped uint8 Tb).
+
+    Extension is `.bin` (NOT a custom one) on purpose: cdn.tcatlas.org is an R2
+    custom domain NOT covered by the api.tcatlas.org cache ruleset, so it falls
+    back to Cloudflare's DEFAULT extension-based caching. `.bin` is in CF's
+    default cacheable set (verified: bundles/*.bin go MISS→HIT here) while an
+    exotic extension comes back cf-cache-status: DYNAMIC — i.e. never edge-cached,
+    making every per-frame fetch a slow R2 origin pull. Since these objects are
+    immutable (content-addressed key + Cache-Control: immutable), edge caching is
+    exactly right: each frame is fetched from origin at most once per colo."""
     pk = _pos_key(lat, lon, radius_deg)
-    return f"{_GCS_RT_VERSION}/raw-frames/{atcf_upper}/{pk}/{dt_str}.tbz"
+    return f"{_GCS_RT_VERSION}/raw-frames/{atcf_upper}/{pk}/{dt_str}.bin"
 
 
 def _raw_manifest_r2_key(atcf_upper: str) -> str:
