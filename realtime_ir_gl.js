@@ -48,9 +48,16 @@
         sources: {
             'carto-dark':   { type: 'raster', tiles: carto('dark_nolabels'),      tileSize: 256, attribution: '© CARTO' },
             'carto-labels': { type: 'raster', tiles: carto('dark_only_labels'),   tileSize: 256 },
-            'ir-east': { type: 'raster', tiles: gibsTiles(GIBS_IR['GOES-East'], T), tileSize: 256, maxzoom: 6, attribution: 'NASA GIBS' },
-            'ir-west': { type: 'raster', tiles: gibsTiles(GIBS_IR['GOES-West'], T), tileSize: 256, maxzoom: 6 },
-            'ir-hima': { type: 'raster', tiles: gibsTiles(GIBS_IR['Himawari'],  T), tileSize: 256, maxzoom: 6 }
+            // Bound each satellite to a longitude band near its sub-point so the
+            // stretched off-nadir limbs don't bleed into a neighbor's territory
+            // (the cause of the vertical "venetian-blind" smear + overlap seams).
+            // Sub-points: GOES-W 137°W, GOES-E 75°W, Himawari 140°E. Band edges at
+            // the midpoints; the 20°W–75°E gap (Atlantic-E/Africa/Indian Ocean) is
+            // honestly blank — that's the Meteosat coverage we don't have yet.
+            // Crude hard cuts (no feathered blend); seamless blending = the mosaic.
+            'ir-west': { type: 'raster', tiles: gibsTiles(GIBS_IR['GOES-West'], T), tileSize: 256, maxzoom: 6, bounds: [-180, -85.05, -106, 85.05], attribution: 'NASA GIBS' },
+            'ir-east': { type: 'raster', tiles: gibsTiles(GIBS_IR['GOES-East'], T), tileSize: 256, maxzoom: 6, bounds: [-106, -85.05, -20, 85.05] },
+            'ir-hima': { type: 'raster', tiles: gibsTiles(GIBS_IR['Himawari'],  T), tileSize: 256, maxzoom: 6, bounds: [75, -85.05, 180, 85.05] }
         },
         layers: [
             { id: 'bg',         type: 'background', paint: { 'background-color': '#0f172a' } },
