@@ -273,28 +273,68 @@ def kernel_path(sat_key, zoom):
     return os.path.join(KERNEL_DIR, f"{sat_key}_z{zoom}.npz")
 
 
-def ensure_global_kernels(zoom, sats, rebuild=False):
+def _r2_kernel_key(sat_key, zoom):
+    return f"{R2_PREFIX}/kernels/{sat_key}_z{zoom}.npz"
+
+
+def ensure_global_kernels(zoom, sats, rebuild=False, use_r2=False):
+    """Resolve each satellite's geos→Mercator kernel: local file → R2 cache →
+    build (+ upload to R2). The geometry is fixed, so kernels are built once ever
+    and reused every run — this removes the ~30-50 s per-cold-start rebuild AND
+    the transient 1 GB LON/LAT build grids (so it also lowers peak memory). The
+    LON/LAT grids are now built lazily, only when a kernel actually needs building."""
     os.makedirs(KERNEL_DIR, exist_ok=True)
-    S = TILE_SIZE * (2 ** zoom)
-    px = np.arange(S, dtype=np.float64) + 0.5
-    LON, LAT = pixels_to_lonlat(px[None, :], px[:, None], S)
-    LON = np.broadcast_to(LON, (S, S)); LAT = np.broadcast_to(LAT, (S, S))
     kernels = {}
+    _g = {}
+
+    def grids():                       # lazy global LON/LAT (only if building)
+        if not _g:
+            S = TILE_SIZE * (2 ** zoom)
+            px = np.arange(S, dtype=np.float64) + 0.5
+            lon, lat = pixels_to_lonlat(px[None, :], px[:, None], S)
+            _g["LON"] = np.broadcast_to(lon, (S, S))
+            _g["LAT"] = np.broadcast_to(lat, (S, S))
+        return _g["LON"], _g["LAT"]
+
     for sat_key, _kind, _b, label in SATS:
         kp = kernel_path(sat_key, zoom)
+        # 1. local file (warm container)
         if os.path.exists(kp) and not rebuild:
             d = np.load(kp); kernels[sat_key] = (d["idx"], d["cosz"], d["mask"])
-            log(f"  kernel {label} z{zoom}: loaded"); continue
+            log(f"  kernel {label} z{zoom}: loaded (local)"); continue
+        # 2. R2 cache (cold container)
+        if use_r2 and not rebuild:
+            try:
+                t0 = time.time()
+                data = _get_r2().get_object(Bucket=_r2_bucket(),
+                                            Key=_r2_kernel_key(sat_key, zoom))["Body"].read()
+                with open(kp, "wb") as f:
+                    f.write(data)
+                d = np.load(kp); kernels[sat_key] = (d["idx"], d["cosz"], d["mask"])
+                log(f"  kernel {label} z{zoom}: loaded from R2 "
+                    f"({len(data)//1048576} MB in {time.time()-t0:.1f}s)"); continue
+            except Exception:
+                pass                   # not cached yet → build below
+        # 3. build (+ upload to R2)
         if sat_key not in sats:
             continue
         t0 = time.time()
         s = sats[sat_key]
+        LON, LAT = grids()
         idx, cosz, mask = project_to_sat(LON, LAT, s["grid"], s["lon_0"],
                                          s["sat_h"], s["sweep"])
         np.savez_compressed(kp, idx=idx, cosz=cosz, mask=mask)
         kernels[sat_key] = (idx, cosz, mask)
-        log(f"  kernel {label} z{zoom}: {mask.sum()/1e6:.0f}M px in "
-            f"{time.time()-t0:.1f}s (one-time)")
+        log(f"  kernel {label} z{zoom}: {mask.sum()/1e6:.0f}M px built in "
+            f"{time.time()-t0:.1f}s")
+        if use_r2:
+            try:
+                with open(kp, "rb") as f:
+                    r2_put(_r2_kernel_key(sat_key, zoom), f.read(),
+                           "application/octet-stream", "public, max-age=86400")
+                log(f"  kernel {label}: uploaded to R2 cache")
+            except Exception as ex:
+                log(f"  kernel {label}: R2 upload failed: {ex}")
     return kernels
 
 
@@ -509,7 +549,8 @@ def main():
             log("  no satellite data — skip frame"); continue
         if kernels is None:
             kernels = ensure_global_kernels(args.zmax, sats,
-                                            rebuild=args.build_kernel)
+                                            rebuild=args.build_kernel,
+                                            use_r2=args.r2)
             if args.build_kernel:
                 log("kernels ready (one-time cost) — done"); return
 
