@@ -1659,8 +1659,31 @@
         return tryAttempt(0);
     }
 
+    // ── GL engine swap: server-composited global IR mosaic (R2/CDN) ──
+    // On the MapLibre facade we render the mosaic-v1 tiles as a plain XYZ raster
+    // instead of client-compositing GIBS per tile (the 4 GridLayer classes).
+    var _MOSAIC_BASE = 'https://cdn.tcatlas.org/mosaic-v1/ir';
+    var _mosaicFrames = [];          // rolling timestamps from frames.json
+    var _mosaicTs = null;            // latest frame
+    var _mosaicLoad = null;
+    function _loadMosaicFrames() {
+        if (_mosaicLoad) return _mosaicLoad;
+        _mosaicLoad = fetch(_MOSAIC_BASE + '/frames.json', { cache: 'no-store' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) { _mosaicFrames = (j && j.frames) || [];
+                _mosaicTs = _mosaicFrames[_mosaicFrames.length - 1] || null; return _mosaicFrames; })
+            .catch(function (e) { console.warn('[mosaic] frames.json failed', e); return []; });
+        return _mosaicLoad;
+    }
+    function _mosaicTileUrl(ts) { return _MOSAIC_BASE + '/' + ts + '/{z}/{x}/{y}.png'; }
+
     /** Create the seamless composite GIBS GridLayer */
     function createCompositeGIBSLayer(timeStr, opacity, perSatTimes) {
+        // GL facade: render the server-composited mosaic as a plain XYZ raster.
+        if (window.LFLET_GL && _mosaicTs) {
+            return L.tileLayer(_mosaicTileUrl(_mosaicTs),
+                { opacity: opacity != null ? opacity : 0.85, maxZoom: 7, maxNativeZoom: 7 });
+        }
         // perSatTimes is optional: {'GOES-East': ts, 'GOES-West': ts, 'Himawari': ts}
         // When provided, each tile uses the freshest time for its assigned satellite.
         // When absent (e.g. animation frames), all tiles share timeStr.
@@ -2019,7 +2042,12 @@
      *  Uses per-satellite times so GOES tiles show the freshest data (~15-20 min)
      *  while Himawari tiles use their own latest (may be 60-120 min behind). */
     function addGIBSOverlay(targetMap, opacity) {
-        findLatestGIBSTimes().then(function (result) {
+        // On the facade, ensure mosaic frames are loaded before building the IR
+        // layer (createCompositeGIBSLayer branches to the mosaic raster).
+        Promise.all([findLatestGIBSTimes(),
+                     window.LFLET_GL ? _loadMosaicFrames() : Promise.resolve()
+        ]).then(function (_res) {
+            var result = _res[0];
             latestGIBSTimes = result.perSat;
             latestGIBSTime = result.oldest;  // animation fallback
             _updateFeedStalenessBanner(result.staleSats);

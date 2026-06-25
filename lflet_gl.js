@@ -100,6 +100,11 @@
             renderWorldCopies: options.worldCopyJump !== false
         });
         this._gl.touchZoomRotate.disableRotation();
+        // Track readiness explicitly: after 'load' the style accepts addSource/
+        // addLayer even while tiles stream (isStyleLoaded()/loaded() flicker false
+        // during tile loads, which previously stranded layers added post-load).
+        this._loaded = false;
+        var _self = this; this._gl.on('load', function () { _self._loaded = true; });
 
         // Leaflet-style panes: DOM divs layered over the canvas (used by overlays
         // that aren't GL layers, e.g. custom canvas barb layers in later increments).
@@ -174,10 +179,8 @@
     Map.prototype.whenReady = function (fn) { if (this._gl.loaded()) fn(); else this._gl.once('load', fn); return this; };
     Map.prototype.stop = function () { this._gl.stop(); return this; };
     Map.prototype._whenStyle = function (fn) {
-        var gl = this._gl;
-        if (gl.isStyleLoaded()) { fn(); return; }
-        var h = function () { if (gl.isStyleLoaded()) { gl.off('styledata', h); fn(); } };
-        gl.on('styledata', h);
+        if (this._loaded || this._gl.isStyleLoaded()) { fn(); return; }
+        this._gl.once('load', fn);
     };
 
     // ── Layer base + Leaflet-style .extend ──
