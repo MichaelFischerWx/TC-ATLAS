@@ -496,7 +496,11 @@ def update_r2_manifest(new_ts, zmax):
 def _png_bytes(tile):
     from PIL import Image
     buf = io.BytesIO()
-    Image.fromarray(tile, "RGBA").save(buf, format="PNG", compress_level=6)
+    # compress_level=1 (was 6): IR tiles are noisy/photographic, so zlib effort
+    # barely shrinks them — measured on real z2-z4 tiles, level 1 vs 6 is the SAME
+    # size (±3%) but ~3.9× faster to encode. The tile step is the run's CPU hotspot,
+    # and encode is single-threaded in write_pyramid, so this directly cuts vCPU-s.
+    Image.fromarray(tile, "RGBA").save(buf, format="PNG", compress_level=1)
     return buf.getvalue()
 
 

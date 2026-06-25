@@ -51,14 +51,15 @@ echo "Building mosaic-job container..."
 gcloud builds submit --config "${BUILD_CFG}" .
 
 # ── Create/update the Cloud Run Job ──────────────────────────────
-# 4 vCPU: PNG encode + concurrent R2 upload parallelize across cores.
-# 8Gi: the float64 blend stack OOM'd at 8Gi originally; the float32 blend (cosz/
-# num/den as float32) + lazy LON/LAT grids + R2 kernel cache now halve the peak,
-# so 8Gi is the target. If a run dies on signal 9, bump back to 12Gi. Cold-start
-# kernel build makes a full run ~110s.
+# 2 vCPU: the heavy steps (colormap, blend, PNG encode in write_pyramid) are
+# single-threaded / I/O-bound, so cores barely help — measured 4 vCPU = 39.9s vs
+# 2 vCPU = 42.1s (+2.2s) but 38% cheaper/run. (4 vCPU just idle-billed 2 cores.)
+# 8Gi: the blend peak exceeds 4Gi (1 vCPU/4Gi OOM'd, signal 9), and 8Gi is the
+# min-CPU floor anyway (>4Gi needs >=2 vCPU). Headroom covers busy multi-storm
+# frames. Baked kernels + 512px tiles bring a warm run to ~42s.
 COMMON_FLAGS=(
   --region "${REGION}" --image "${IMAGE}"
-  --memory 8Gi --cpu 4 --max-retries 1 --task-timeout 600
+  --memory 8Gi --cpu 2 --max-retries 1 --task-timeout 600
   --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET}"
   --set-secrets  "R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
 )
