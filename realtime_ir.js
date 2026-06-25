@@ -4945,11 +4945,12 @@
     // full mobile browser tab (16); desktop is unaffected (decimation no-ops).
     var _MOBILE_MAX_FRAMES = _IS_INAPP_BROWSER ? 10 : 16;
     function _decimateFramesForMobile(frames) {
-        // Full-cadence mode (?decodewin=1) bounds memory by the decode
-        // window instead of by frame count, so it wants every frame — skip
-        // decimation entirely. The default lazy path KEEPS decimation as a
-        // belt-and-suspenders frame-count cap on top of the window.
-        if (_FULL_CADENCE) return frames;
+        // Lazy/windowed decode (default ON for mobile) already bounds peak
+        // decoded-bitmap memory by the sliding window, NOT by frame count, so the
+        // storm loop can keep its full native 10-min cadence on mobile (matching
+        // desktop) without OOM. Only the legacy EAGER path (?lazyload=0) still
+        // needs the frame-count cap. (_FULL_CADENCE = ?decodewin=1 also skips.)
+        if (_FULL_CADENCE || _LAZY_DECODE) return frames;
         if (!_IS_MOBILE_VIEWPORT) return frames;
         if (!frames || frames.length <= _MOBILE_MAX_FRAMES) return frames;
         var n = frames.length;
