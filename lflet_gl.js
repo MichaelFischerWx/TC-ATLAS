@@ -942,8 +942,14 @@
         get: function (id) { return typeof id === 'string' ? document.getElementById(id) : id; },
         addClass: function (e, c) { e && e.classList.add(c); }, removeClass: function (e, c) { e && e.classList.remove(c); },
         hasClass: function (e, c) { return e && e.classList.contains(c); },
-        setPosition: function (e, p) { if (e) { e.style.left = p.x + 'px'; e.style.top = p.y + 'px'; } },
-        getPosition: function (e) { return new Point(parseInt(e.style.left, 10) || 0, parseInt(e.style.top, 10) || 0); },
+        // MUST write the SAME CSS property as setTransform (transform), like real
+        // Leaflet. The canvas-overlay layers (MW mosaic, IR vector canvases) call
+        // setPosition in _update and setTransform during zoom-anim on the SAME
+        // element; if these wrote different properties (left/top vs transform) they
+        // COMPOUND — the MW swaths landed ~15% of the viewport off the IR base.
+        setPosition: function (e, p) { if (!e) return; e._leaflet_pos = p;
+            e.style.transform = 'translate3d(' + p.x + 'px,' + p.y + 'px,0)'; },
+        getPosition: function (e) { return (e && e._leaflet_pos) || new Point(0, 0); },
         remove: function (e) { if (e && e.parentNode) e.parentNode.removeChild(e); },
         setTransform: function (e, offset, scale) { if (!e) return; var p = offset || new Point(0, 0);
             e.style.transform = 'translate3d(' + p.x + 'px,' + p.y + 'px,0)' + (scale ? ' scale(' + scale + ')' : ''); }

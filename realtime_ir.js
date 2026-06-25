@@ -1667,7 +1667,7 @@
     // ── GL engine swap: server-composited global IR mosaic (R2/CDN) ──
     // On the MapLibre facade we render the mosaic-v1 tiles as a plain XYZ raster
     // instead of client-compositing GIBS per tile (the 4 GridLayer classes).
-    var _MOSAIC_BASE = 'https://cdn.tcatlas.org/mosaic-v1/ir';
+    var _MOSAIC_BASE = 'https://cdn.tcatlas.org/mosaic-v2/ir';   // v2 = 512px tiles (zmax 4)
     var _mosaicFrames = [];          // rolling timestamps from frames.json
     var _mosaicTs = null;            // latest frame
     var _detailMosaicBase = null;    // global IR mosaic laid under the storm-card cutout (GL build)
@@ -1691,7 +1691,8 @@
         if (window.LFLET_GL && (_mosaicTs || /^\d{12}$/.test(String(timeStr)))) {
             var _ts = /^\d{12}$/.test(String(timeStr)) ? timeStr : _mosaicTs;
             return L.tileLayer(_mosaicTileUrl(_ts),
-                { opacity: opacity != null ? opacity : 0.85, maxZoom: 7, maxNativeZoom: 7, crisp: true });
+                // mosaic-v2: 512px tiles, native max z6 (== old 256px z7 resolution).
+                { opacity: opacity != null ? opacity : 0.85, maxZoom: 6, maxNativeZoom: 6, tileSize: 512, crisp: true });
         }
         // perSatTimes is optional: {'GOES-East': ts, 'GOES-West': ts, 'Himawari': ts}
         // When provided, each tile uses the freshest time for its assigned satellite.
@@ -5463,10 +5464,11 @@
                 if (!ts || _detailMosaicBase) return;
                 _detailMosaicBase = L.tileLayer(_mosaicTileUrl(ts), {
                     // Full opacity to match the cutout's brightness, but SMOOTH
-                    // (linear) — this is context fill, overzoomed past its z7 native,
+                    // (linear) — this is context fill, overzoomed past its z6 native,
                     // so nearest-neighbor ('crisp') looked blocky/degraded at storm
                     // zoom. The high-res cutout stays sharp on its own (imageOverlay).
-                    opacity: 1.0, maxZoom: 7, maxNativeZoom: 7, pane: 'tilePane'
+                    // mosaic-v2: 512px tiles, native max z6.
+                    opacity: 1.0, maxZoom: 6, maxNativeZoom: 6, tileSize: 512, pane: 'tilePane'
                 }).addTo(detailMap);
             }).catch(function () {});
         }
