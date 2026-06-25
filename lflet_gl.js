@@ -114,6 +114,7 @@
         this._panes = {};
         this._handlers = [];          // {type, fn, wrapped}
         this._layers = {};            // id → layer facade
+        this._glz = {};               // gl layer id → pane z-index (stacking order)
         this._maxZoom = options.maxZoom != null ? options.maxZoom : 22;
 
         this._gl = new maplibregl.Map({
@@ -235,6 +236,32 @@
     // recon barbs, microwave) are bridged: onAdd builds their pane canvas, and
     // their getEvents() redraw is re-fired on every MapLibre move so the canvas
     // stays synced through continuous zoom (they project via latLngToContainerPoint).
+    // ── pane-aware GL layer stacking ──────────────────────────────
+    // MapLibre has no panes: gl.addLayer() always appends on top, so a tile
+    // layer re-added later (the IR mosaic refreshing every frame) would bury
+    // vector overlays added earlier. Leaflet avoids this with fixed-z panes.
+    // We mirror that: every GL layer carries its pane's z-index, and we insert
+    // it *below* the first existing layer with a higher z (MapLibre beforeId).
+    var _DEFAULT_PANE_Z = { mapPane: 0, tilePane: 200, overlayPane: 400,
+        shadowPane: 500, markerPane: 600, tooltipPane: 650, popupPane: 700 };
+    Map.prototype._paneZ = function (name) {
+        if (name == null) return null;
+        var p = this._panes[name];
+        if (p && p.style.zIndex !== '') return parseInt(p.style.zIndex, 10);
+        return _DEFAULT_PANE_Z[name] != null ? _DEFAULT_PANE_Z[name] : 400;
+    };
+    // Insert a GL layer at the stacking position for z (lower z = further back).
+    // Among equal z, later additions sit on top (Leaflet insertion order).
+    Map.prototype._glAdd = function (def, z) {
+        z = z == null ? 400 : z;
+        var layers = this._gl.getStyle().layers, before = null;
+        for (var i = 0; i < layers.length; i++) {
+            var lz = this._glz[layers[i].id];
+            if (lz != null && lz > z) { before = layers[i].id; break; }
+        }
+        if (before) this._gl.addLayer(def, before); else this._gl.addLayer(def);
+        this._glz[def.id] = z;
+    };
     Map.prototype.addLayer = function (layer) {
         if (!layer) return this;
         layer._map = this;
@@ -308,7 +335,7 @@
                     maxzoom: self.options.maxZoom || 19, attribution: self.options.attribution || '' });
                 var layer = { id: id, type: 'raster', source: id,
                     paint: { 'raster-opacity': self.options.opacity != null ? self.options.opacity : 1 } };
-                gl.addLayer(layer);
+                map._glAdd(layer, map._paneZ(self.options.pane || 'tilePane'));
                 self._added = true;
                 (self._loadCbs || []).forEach(function (f) { setTimeout(f, 0); });
             });
@@ -344,9 +371,12 @@
         _addToGL: function (map) { this._map = map; var gl = map._gl, id = this._id, self = this;
             map._whenStyle(function () { if (gl.getSource(id)) return;
                 gl.addSource(id, { type: 'image', url: self._url, coordinates: self._coords() });
-                gl.addLayer({ id: id, type: 'raster', source: id,
+                // Default image overlays (env filled fields, IR frames) sit above
+                // the tile basemap but below vector overlays; an explicit pane wins.
+                var imgZ = self.options.pane ? map._paneZ(self.options.pane) : 350;
+                map._glAdd({ id: id, type: 'raster', source: id,
                     paint: { 'raster-opacity': self.options.opacity != null ? self.options.opacity : 1,
-                             'raster-resampling': 'nearest', 'raster-fade-duration': 0 } }); self._added = true; }); },
+                             'raster-resampling': 'nearest', 'raster-fade-duration': 0 } }, imgZ); self._added = true; }); },
         _removeFromGL: function (map) { var gl = map._gl; try { if (gl.getLayer(this._id)) gl.removeLayer(this._id); if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {} },
         setOpacity: function (o) { var gl = this._map && this._map._gl; if (gl && gl.getLayer(this._id)) gl.setPaintProperty(this._id, 'raster-opacity', o); this.options.opacity = o; return this; },
         setUrl: function (u) { this._url = u; var gl = this._map && this._map._gl, src = gl && gl.getSource(this._id); if (src) src.updateImage({ url: u }); return this; },
@@ -378,11 +408,12 @@
             map._whenStyle(function () {
                 if (gl.getSource(id)) return;
                 gl.addSource(id, { type: 'geojson', data: self._data });
-                gl.addLayer({ id: id + '-l', type: 'line', source: id,
+                var gz = map._paneZ(self.options.pane || 'overlayPane');
+                if (st.fill && st.fillColor) map._glAdd({ id: id + '-f', type: 'fill', source: id,
+                    paint: { 'fill-color': st.fillColor, 'fill-opacity': st.fillOpacity != null ? st.fillOpacity : 0.2 } }, gz - 1);
+                map._glAdd({ id: id + '-l', type: 'line', source: id,
                     paint: { 'line-color': st.color || '#000', 'line-width': st.weight != null ? st.weight : 1,
-                             'line-opacity': st.opacity != null ? st.opacity : 1 } });
-                if (st.fill && st.fillColor) gl.addLayer({ id: id + '-f', type: 'fill', source: id,
-                    paint: { 'fill-color': st.fillColor, 'fill-opacity': st.fillOpacity != null ? st.fillOpacity : 0.2 } }, id + '-l');
+                             'line-opacity': st.opacity != null ? st.opacity : 1 } }, gz);
                 self._added = true;
             });
         },
@@ -411,7 +442,7 @@
                 var paint = { 'line-color': o.color || '#3388ff', 'line-width': o.weight != null ? o.weight : 3,
                               'line-opacity': o.opacity != null ? o.opacity : 1 };
                 if (o.dashArray) paint['line-dasharray'] = String(o.dashArray).split(/[ ,]+/).map(Number).map(function (n) { return n / (o.weight || 3); });
-                gl.addLayer({ id: id, type: 'line', source: id, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: paint });
+                map._glAdd({ id: id, type: 'line', source: id, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: paint }, map._paneZ(o.pane || 'overlayPane'));
                 self._added = true;
             });
         },
@@ -430,8 +461,9 @@
             return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [pts] } }; },
         _addToGL: function (map) { this._map = map; var gl = map._gl, id = this._id, self = this, o = this.options;
             map._whenStyle(function () { if (gl.getSource(id)) return; gl.addSource(id, { type: 'geojson', data: self._geo() });
-                if (o.fill !== false) gl.addLayer({ id: id + '-f', type: 'fill', source: id, paint: { 'fill-color': o.fillColor || o.color || '#3388ff', 'fill-opacity': o.fillOpacity != null ? o.fillOpacity : 0.2 } });
-                gl.addLayer({ id: id, type: 'line', source: id, paint: { 'line-color': o.color || '#3388ff', 'line-width': o.weight != null ? o.weight : 2, 'line-opacity': o.opacity != null ? o.opacity : 1 } }); self._added = true; }); },
+                var cz = map._paneZ(o.pane || 'overlayPane');
+                if (o.fill !== false) map._glAdd({ id: id + '-f', type: 'fill', source: id, paint: { 'fill-color': o.fillColor || o.color || '#3388ff', 'fill-opacity': o.fillOpacity != null ? o.fillOpacity : 0.2 } }, cz - 1);
+                map._glAdd({ id: id, type: 'line', source: id, paint: { 'line-color': o.color || '#3388ff', 'line-width': o.weight != null ? o.weight : 2, 'line-opacity': o.opacity != null ? o.opacity : 1 } }, cz); self._added = true; }); },
         _removeFromGL: function (map) { var gl = map._gl; [this._id, this._id + '-f'].forEach(function (l) { try { if (gl.getLayer(l)) gl.removeLayer(l); } catch (e) {} }); try { if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {} },
         setRadius: function (r) { this._radius = r; var src = this._map && this._map._gl.getSource(this._id); if (src) src.setData(this._geo()); return this; },
         setLatLng: function (ll) { this._ll = toLatLng(ll); var src = this._map && this._map._gl.getSource(this._id); if (src) src.setData(this._geo()); return this; },
@@ -439,7 +471,12 @@
     });
 
     // ── Control (custom corner widgets) ──
-    function Control(opts) { this.options = opts || {}; }
+    // Merge prototype options (where L.Control.extend subclasses put their
+    // default { position: ... }) with the passed opts, like Leaflet's setOptions.
+    // Without this, `new Sub()` (no opts) shadowed the prototype's position and
+    // every option-less control fell back to 'topright' (e.g. the bottom-left
+    // animation/DeepMind dock landed top-right).
+    function Control(opts) { this.options = Object.assign({}, this.options, opts); }
     Control.prototype.addTo = function (map) { map.addControl(this); return this; };
     Control.prototype.setPosition = function (p) { this.options.position = p; if (this._el) _placeCtrl(this._el, p); return this; };
     Control.prototype.remove = function () { if (this._map) this._map.removeControl(this); return this; };
