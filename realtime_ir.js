@@ -5462,9 +5462,11 @@
                 var ts = _mosaicTs || (_mosaicFrames.length ? _mosaicFrames[_mosaicFrames.length - 1] : null);
                 if (!ts || _detailMosaicBase) return;
                 _detailMosaicBase = L.tileLayer(_mosaicTileUrl(ts), {
-                    // Match the high-res cutout's full opacity so the surrounding
-                    // context is just as bright (was 0.6 → washed-out vs the center).
-                    opacity: 1.0, maxZoom: 7, maxNativeZoom: 7, pane: 'tilePane', crisp: true
+                    // Full opacity to match the cutout's brightness, but SMOOTH
+                    // (linear) — this is context fill, overzoomed past its z7 native,
+                    // so nearest-neighbor ('crisp') looked blocky/degraded at storm
+                    // zoom. The high-res cutout stays sharp on its own (imageOverlay).
+                    opacity: 1.0, maxZoom: 7, maxNativeZoom: 7, pane: 'tilePane'
                 }).addTo(detailMap);
             }).catch(function () {});
         }
