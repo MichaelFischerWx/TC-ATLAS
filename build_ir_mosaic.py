@@ -45,14 +45,17 @@ from satellite_ir import (
 OUT_DIR = os.environ.get("MOSAIC_OUT", "mosaic_out")
 KERNEL_DIR = os.path.join(OUT_DIR, "kernels")
 API_BASE = "https://api.tcatlas.org"
-TILE_SIZE = 256
+TILE_SIZE = 512   # 512px tiles: 4× fewer tiles/frame than 256 for the same native
+                  # pixels (S = TILE_SIZE·2^zmax stays 8192 with zmax 4). Frontend
+                  # passes tileSize:512 so MapLibre maps map-zoom→tile-z directly.
 
 # Blend / crop tuning -------------------------------------------------------
 BLEND_P = 40.0        # cutline sharpness: w = (cosz/cosz_max)**P. Higher =
                       # narrower feather (less parallax ghost), risk of seam.
 LIMB_DEG = 76.0       # drop pixels seen more than this far off-nadir (limb junk)
 STORM_BOX_DEG = 6.0   # half-box baked around each storm
-STORM_ZOOMS = (6, 7)  # storm-detail zoom levels (z6 ≈ native IR, z7 overzoom)
+STORM_ZOOMS = (5, 6)  # storm-detail zoom levels. With 512px tiles, z5/z6 give the
+                      # same resolution the old 256px z6/z7 did (512@zN == 256@z(N+1)).
 
 # (key, kind, bucket, label). lon_0/grid come from each file's own navigation.
 SATS = [
@@ -67,7 +70,8 @@ def log(msg):
 
 
 # ── Cloudflare R2 output (production) — mirrors ir_monitor_api._r2_put_public ──
-R2_PREFIX = "mosaic-v1"                 # bump to invalidate all tiles/kernels
+R2_PREFIX = "mosaic-v2"                 # bump to invalidate all tiles/kernels
+                                        # (v2 = 512px tiles / zmax 4; see TILE_SIZE)
 R2_KEEP_FRAMES = 18                     # rolling loop kept hot (~3 h at 10-min)
 _r2_client = None
 
@@ -511,7 +515,7 @@ def fetch_active_points():
 def main():
     global BLEND_P
     ap = argparse.ArgumentParser()
-    ap.add_argument("--zmax", type=int, default=5)
+    ap.add_argument("--zmax", type=int, default=4)   # 512px tiles → native S=8192 at z4
     ap.add_argument("--build-kernel", action="store_true")
     ap.add_argument("--storm", action="store_true",
                     help="also bake z6–z7 tiles over active storms")

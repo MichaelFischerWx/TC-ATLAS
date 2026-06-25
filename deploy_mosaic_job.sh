@@ -5,7 +5,7 @@
 # Provisions:
 #   1. A Cloud Run Job that runs build_ir_mosaic.py --r2 --storm once per call
 #      (reads GOES-19/18 + Himawari-9 B13, reprojects via cached kernels,
-#       cutline-blends, tiles z0–5 global + z6–7 storm sectors, uploads to R2).
+#       cutline-blends, tiles z0–4 global + z5–6 storm sectors (512px), uploads to R2).
 #   2. A Cloud Scheduler job that triggers it every 10 minutes.
 #
 # Prereqs:
@@ -15,7 +15,7 @@
 #   R2 creds in Secret Manager: r2-access-key-id, r2-secret-access-key
 #
 # Idempotent — updates the Job/Scheduler in place. This is ADDITIVE: the tiles
-# land in R2 (mosaic-v1/) where nothing in the deployed site reads them yet, so
+# land in R2 (mosaic-v2/) where nothing in the deployed site reads them yet, so
 # it cannot degrade the live page.
 # --------------------------------------------------------------------------
 set -euo pipefail
@@ -52,13 +52,13 @@ gcloud builds submit --config "${BUILD_CFG}" .
 
 # ── Create/update the Cloud Run Job ──────────────────────────────
 # 4 vCPU: PNG encode + concurrent R2 upload parallelize across cores.
-# 16Gi: smoke-tested — all 3 sats + 3 z5 kernels + the float64 blend stack +
-# transient LON/LAT build grids OOM'd at 8Gi (signal 9). Follow-up code trims
-# (float32 blend, free source arrays, R2 kernel cache) could bring this back to
-# 8Gi; until then 16Gi. Cold-start kernel build makes a full run ~110s.
+# 8Gi: the float64 blend stack OOM'd at 8Gi originally; the float32 blend (cosz/
+# num/den as float32) + lazy LON/LAT grids + R2 kernel cache now halve the peak,
+# so 8Gi is the target. If a run dies on signal 9, bump back to 12Gi. Cold-start
+# kernel build makes a full run ~110s.
 COMMON_FLAGS=(
   --region "${REGION}" --image "${IMAGE}"
-  --memory 16Gi --cpu 4 --max-retries 1 --task-timeout 600
+  --memory 8Gi --cpu 4 --max-retries 1 --task-timeout 600
   --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET}"
   --set-secrets  "R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
 )
@@ -91,7 +91,7 @@ fi
 
 cat <<EOF
 
-Done. The job is ADDITIVE (writes to R2 mosaic-v1/; the live site doesn't read it yet).
+Done. The job is ADDITIVE (writes to R2 mosaic-v2/; the live site doesn't read it yet).
 
 Smoke-test one run now:
   gcloud run jobs execute ${JOB_NAME} --region ${REGION} --wait
@@ -99,7 +99,7 @@ Smoke-test one run now:
 Logs:
   gcloud logging read 'resource.type=cloud_run_job AND resource.labels.job_name=${JOB_NAME}' --limit 50 --freshness=1h
 
-Output (served at https://cdn.tcatlas.org/mosaic-v1/ir/...):
-  mosaic-v1/ir/frames.json   ← rolling manifest
-  mosaic-v1/ir/<ts>/{z}/{x}/{y}.png
+Output (served at https://cdn.tcatlas.org/mosaic-v2/ir/...):
+  mosaic-v2/ir/frames.json   ← rolling manifest
+  mosaic-v2/ir/<ts>/{z}/{x}/{y}.png
 EOF

@@ -3,8 +3,8 @@
 # --------------------------------------------------------------------------
 # Each invocation: reads the latest GOES-19/18 + Himawari-9 full-disk Band 13,
 # reprojects via cached geos→Mercator kernels, cutline-blends, colormaps, tiles
-# (z0–5 global + z6–7 storm sectors), and uploads to R2 (mosaic-v1/) + rolls the
-# manifest. Consumed by the MapLibre map as one raster source.
+# (z0–4 global + z5–6 storm sectors, 512px), and uploads to R2 (mosaic-v2/) + rolls
+# the manifest. Consumed by the MapLibre map as one raster source.
 #
 # Build:   gcloud builds submit --config <cfg> .   (see deploy_mosaic_job.sh)
 # Deploy:  ./deploy_mosaic_job.sh
@@ -17,9 +17,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgeos-dev \
         libproj-dev \
         proj-data \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Bake the z4 geos→Mercator kernels into the image (one per satellite, ~74MB each).
+# The geometry is fixed (S = TILE_SIZE·2^zmax = 8192), so kernels are built once and
+# reused forever. Shipping them in an image layer (pulled from the fast regional GCR
+# cache) lets the builder's local-file path load them instantly — skipping the ~78s
+# cold-start rebuild (or the ~slow R2 fetch). build_ir_mosaic.py reads them from
+# mosaic_out/kernels/{sat}_z{zoom}.npz (KERNEL_DIR). Rebuild this image whenever the
+# zoom/TILE_SIZE/satellite set or R2_PREFIX changes (the key encodes the zoom).
+RUN mkdir -p /app/mosaic_out/kernels && \
+    for sat in east west hima; do \
+        curl -fsSL "https://cdn.tcatlas.org/mosaic-v2/kernels/${sat}_z4.npz" \
+             -o "/app/mosaic_out/kernels/${sat}_z4.npz"; \
+    done
 
 RUN pip install --no-cache-dir \
         numpy \
