@@ -17476,7 +17476,13 @@
         var sw = b.getSouthWest();
         var ne = b.getNorthEast();
         var copies = [];
-        for (var off = -360; off <= 360; off += 360) {
+        // MapLibre (facade) renders world copies natively and throws an
+        // out-of-bounds tile error on image sources whose coordinates fall
+        // outside [-180,180]; add only the primary copy there. Plain Leaflet
+        // needs the explicit ±360° copies so the raster repeats past the dateline.
+        var offsets = window.LFLET_GL ? [0] : [-360, 0, 360];
+        for (var oi = 0; oi < offsets.length; oi++) {
+            var off = offsets[oi];
             copies.push(L.imageOverlay(image_url, [
                 [sw.lat, sw.lng + off],
                 [ne.lat, ne.lng + off]
@@ -17551,8 +17557,13 @@
                     // L.geoJSON layer so contours stay visible past
                     // the dateline.
                     geoLayer.addData(geojson);
-                    geoLayer.addData(_shiftGeoJsonLon(geojson, +360));
-                    geoLayer.addData(_shiftGeoJsonLon(geojson, -360));
+                    // Leaflet needs explicit ±360° copies to repeat contours
+                    // past the dateline; MapLibre (facade) wraps world copies
+                    // natively, so the duplicates are redundant geometry there.
+                    if (!window.LFLET_GL) {
+                        geoLayer.addData(_shiftGeoJsonLon(geojson, +360));
+                        geoLayer.addData(_shiftGeoJsonLon(geojson, -360));
+                    }
                     // Place value labels along each non-trivial line.
                     // Labels are only placed in the primary world copy
                     // to keep the DOM marker count manageable; users

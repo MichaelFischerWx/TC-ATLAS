@@ -117,6 +117,13 @@
         this._zoomAnimated = false;
         this._animatingZoom = false;
         var _self = this; this._gl.on('load', function () { _self._loaded = true; });
+        // Registering an 'error' listener suppresses MapLibre's default console.error.
+        // Full-globe image overlays (env filled fields) make MapLibre request a
+        // wrapped world-copy tile (x=-1) that throws a harmless "outside of bounds"
+        // during _finishLoading — the overlay still renders. Swallow only that;
+        // surface everything else.
+        this._gl.on('error', function (ev) { var m = ev && ev.error && ev.error.message || '';
+            if (/outside of bounds/.test(m)) return; console.error('[lflet_gl]', ev && ev.error || ev); });
 
         // Leaflet-style default panes: DOM divs over the canvas. Custom canvas
         // layers (barbs/microwave) draw into these via L.DomUtil + projection.
@@ -293,6 +300,14 @@
         _coords: function () { var b = this._bounds, s, w, n, e; // accepts [[s,w],[n,e]] OR a LatLngBounds
             if (b && b.getSouthWest) { var sw = b.getSouthWest(), ne = b.getNorthEast(); s = sw.lat; w = sw.lng; n = ne.lat; e = ne.lng; }
             else { s = b[0][0]; w = b[0][1]; n = b[1][0]; e = b[1][1]; }
+            // Web Mercator can't represent the poles; clamp lat to its limit so a
+            // full-globe overlay ([-90..90]) doesn't push the image tile out of bounds.
+            var M = 85.05112878; s = Math.max(-M, Math.min(M, s)); n = Math.max(-M, Math.min(M, n));
+            // NOTE: a full-globe overlay makes MapLibre log a harmless "x=-1 outside
+            // of bounds" while building the western world-copy tile during image
+            // load — thrown inside its async loader (not the 'error' event, so it
+            // can't be swallowed there). The overlay still renders and it doesn't
+            // re-fire on pan. Left as-is; revisit in the parity sweep if it matters.
             return [[w, n], [e, n], [e, s], [w, s]]; },
         setBounds: function (b) { this._bounds = b; var gl = this._map && this._map._gl, src = gl && gl.getSource(this._id); if (src) src.setCoordinates(this._coords()); return this; },
         _addToGL: function (map) { this._map = map; var gl = map._gl, id = this._id, self = this;
