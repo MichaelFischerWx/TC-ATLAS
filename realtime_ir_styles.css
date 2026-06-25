@@ -1865,6 +1865,43 @@ html, body { margin: 0; padding: 0; }
     left: 280px;
 }
 
+/* ── Display Options dropdown ───────────────────────────────────────────────
+   Folds Basins/Legend/Labels/Grid/Obs under one "Display" button. The original
+   toggles are moved into #ir-display-menu and forced to flow (override their
+   per-pill fixed positioning). The wrap shifts clear when the basin sidebar opens. */
+#ir-display-wrap {
+    position: fixed;
+    top: 170px;
+    left: 10px;
+    z-index: 600;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+}
+body:has(.basin-sidebar.open) #ir-display-wrap { left: 280px; }
+.ir-display-toggle {
+    position: static !important;
+    top: auto !important;
+    left: auto !important;
+}
+#ir-display-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    animation: irDisplayMenuIn 0.14s ease;
+}
+@keyframes irDisplayMenuIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: none; }
+}
+#ir-display-menu .ir-display-item {
+    position: static !important;
+    top: auto !important;
+    left: auto !important;
+    margin: 0 !important;
+}
+
 /* The Legend/Labels/Grid pills sit at z-index 600 (above the 270-px
    sidebar at z-index 500), so without this they render on top of the
    basin cards when the panel opens. Shift them right alongside the
@@ -2310,12 +2347,21 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
    without opening anything.
    ═══════════════════════════════════════════════════════════════ */
 
+/* Top control strip: lay the controls in ONE horizontal row instead of a
+   3-deep vertical stack, so the top-right footprint is shallow and the map gets
+   more vertical room (esp. mobile). Order (left→right): IR/Vis/WV · Microwave ·
+   Layers. CSS `order` does the reordering without touching the DOM build order. */
 .ir-layers-wrap {
     display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 4px;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
 }
+.ir-layers-wrap .ir-mode-segment { order: 1; }
+.ir-layers-wrap .ir-mw-toggle-group { order: 2; margin-top: 0; }
+.ir-layers-wrap .ir-layers-row { order: 3; }
 
 .ir-layers-row {
     display: flex;

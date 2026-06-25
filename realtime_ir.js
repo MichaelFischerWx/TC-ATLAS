@@ -3364,6 +3364,48 @@
             document.body.appendChild(otog);
         }
 
+        // ── Display Options dropdown ────────────────────────────────
+        // Fold the five top-left toggles (Basins / Legend / Labels / Grid / Obs)
+        // under ONE "Display Options" button so the left edge is reclaimed for the
+        // map (esp. mobile). The originals are kept (their click handlers + ids are
+        // reused) — we just move them into a dropdown and let them flow vertically.
+        if (!document.getElementById('ir-display-wrap')) {
+            var dWrap = document.createElement('div');
+            dWrap.id = 'ir-display-wrap';
+            var dToggle = document.createElement('button');
+            dToggle.id = 'ir-display-toggle';
+            dToggle.type = 'button';
+            dToggle.className = 'basin-sidebar-toggle ir-display-toggle';
+            dToggle.title = 'Map display options — basins, legend, labels, grid, surface obs';
+            dToggle.innerHTML = '&#9776; Display';
+            var dMenu = document.createElement('div');
+            dMenu.id = 'ir-display-menu';
+            dMenu.style.display = 'none';
+            dWrap.appendChild(dToggle);
+            dWrap.appendChild(dMenu);
+            document.body.appendChild(dWrap);
+
+            // Move the five toggles into the menu (in order) + tag them for flow layout.
+            ['basin-sidebar-toggle', 'ir-legend-toggle', 'ir-labels-toggle',
+             'ir-grid-toggle', 'ir-obs-toggle'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) { el.classList.add('ir-display-item'); dMenu.appendChild(el); }
+            });
+
+            dToggle.addEventListener('click', function (e) {
+                e.stopPropagation();
+                var open = dMenu.style.display === 'none';
+                dMenu.style.display = open ? 'flex' : 'none';
+                dToggle.classList.toggle('active', open);
+            });
+            // Click-away closes the menu (but not when clicking a toggle inside it).
+            document.addEventListener('click', function (e) {
+                if (dMenu.style.display !== 'none' && !dWrap.contains(e.target)) {
+                    dMenu.style.display = 'none'; dToggle.classList.remove('active');
+                }
+            });
+        }
+
         // The IR Tb colorbar used to be its own bottom-left control; it now
         // lives as a compact chip inside the animation dock (built in
         // AnimPanel below), keeping the #ir-global-colorbar id so the
