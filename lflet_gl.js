@@ -126,7 +126,11 @@
 
         this._gl = new maplibregl.Map({
             container: el,
-            style: { version: 8, sources: {}, layers: [
+            style: { version: 8, sources: {},
+                // Glyphs for symbol text (marker-cluster counts). Public CORS server;
+                // self-host for production hardening. Bubbles still render if it fails.
+                glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+                layers: [
                 { id: 'bg', type: 'background', paint: { 'background-color': '#0b1220' } } ] },
             center: center,
             zoom: options.zoom != null ? options.zoom : 2,
@@ -634,6 +638,61 @@
         eachLayer: function (fn) { this._members.forEach(fn); return this; }
     });
 
+    // ── MarkerClusterGroup → MapLibre native (supercluster) clustering ──
+    // Leaflet.markercluster groups N markers DOM-side (slow at thousands). MapLibre
+    // clusters a geojson source on the GPU. We collect added markers, project them to
+    // a clustered source, and render: unclustered = colored circles (the markers are
+    // just colored dots), clusters = bubble + count, click point → the marker's own
+    // click handler + popup, click cluster → zoom to expansion.
+    function _markerColor(m) {
+        var icon = m && m.options && m.options.icon, html = icon && icon._html;
+        if (html) { var mt = /background(?:-color)?:\s*([^;"')]+)/i.exec(html); if (mt) return mt[1].trim(); }
+        return (m && m.options && (m.options.fillColor || m.options.color)) || '#3388ff';
+    }
+    var MarkerClusterGroup = extend.call(Layer, {
+        initialize: function (opts) { this.options = opts || {}; this._markers = []; this._id = uid('mcg'); },
+        addLayer: function (m) { this._markers.push(m); this._refresh(); return this; },
+        addLayers: function (arr) { var s = this; (arr || []).forEach(function (m) { s._markers.push(m); }); this._refresh(); return this; },
+        removeLayer: function (m) { var i = this._markers.indexOf(m); if (i >= 0) this._markers.splice(i, 1); this._refresh(); return this; },
+        clearLayers: function () { this._markers = []; this._refresh(); return this; },
+        eachLayer: function (fn) { this._markers.forEach(fn); return this; },
+        getLayers: function () { return this._markers.slice(); },
+        _fc: function () { return { type: 'FeatureCollection', features: this._markers.map(function (m, i) {
+            var ll = m._ll || toLatLng(m.getLatLng ? m.getLatLng() : m);
+            return { type: 'Feature', properties: { _mi: i, color: _markerColor(m) },
+                     geometry: { type: 'Point', coordinates: [_wrapLng(ll.lng), ll.lat] } }; }) }; },
+        _refresh: function () { var gl = this._map && this._map._gl, src = gl && gl.getSource(this._id); if (src) src.setData(this._fc()); },
+        _addToGL: function (map) { this._map = map; var gl = map._gl, id = this._id, self = this, o = this.options;
+            map._whenStyle(function () {
+                if (gl.getSource(id)) { gl.getSource(id).setData(self._fc()); return; }
+                gl.addSource(id, { type: 'geojson', data: self._fc(), cluster: true,
+                    clusterRadius: o.maxClusterRadius || 50,
+                    clusterMaxZoom: (o.disableClusteringAtZoom != null ? o.disableClusteringAtZoom : 9) - 1 });
+                var z = map._paneZ('markerPane');
+                map._glAdd({ id: id + '-pts', type: 'circle', source: id, filter: ['!', ['has', 'point_count']],
+                    paint: { 'circle-color': ['get', 'color'], 'circle-radius': 6, 'circle-stroke-width': 1.5, 'circle-stroke-color': '#fff' } }, z);
+                map._glAdd({ id: id + '-cl', type: 'circle', source: id, filter: ['has', 'point_count'],
+                    paint: { 'circle-color': 'rgba(46,125,255,0.85)', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff',
+                             'circle-radius': ['step', ['get', 'point_count'], 14, 25, 18, 100, 24] } }, z);
+                map._glAdd({ id: id + '-cnt', type: 'symbol', source: id, filter: ['has', 'point_count'],
+                    layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-size': 12, 'text-font': ['Noto Sans Bold'], 'text-allow-overlap': true },
+                    paint: { 'text-color': '#fff' } }, z + 1);
+                gl.on('click', id + '-pts', function (e) { var f = e.features[0], m = self._markers[f.properties._mi]; if (m) self._activate(m, e.lngLat); });
+                gl.on('click', id + '-cl', function (e) { var f = e.features[0]; var src = gl.getSource(id);
+                    src.getClusterExpansionZoom(f.properties.cluster_id, function (err, zm) { if (!err) gl.easeTo({ center: f.geometry.coordinates, zoom: zm }); }); });
+                ['-pts', '-cl'].forEach(function (suf) {
+                    gl.on('mouseenter', id + suf, function () { gl.getCanvas().style.cursor = 'pointer'; });
+                    gl.on('mouseleave', id + suf, function () { gl.getCanvas().style.cursor = ''; }); });
+                self._added = true;
+            }); },
+        _activate: function (m, lngLat) {
+            if (m._evts && m._evts.click) m._evts.click.forEach(function (fn) { try { fn({ type: 'click', target: m, latlng: m._ll }); } catch (e) {} });
+            if (m._popup && this._map) { var p = m._popup._ml(); p.setLngLat(lngLat).addTo(this._map._gl); } },
+        _removeFromGL: function (map) { var gl = map._gl;
+            [this._id + '-pts', this._id + '-cl', this._id + '-cnt'].forEach(function (l) { try { if (gl.getLayer(l)) gl.removeLayer(l); } catch (e) {} });
+            try { if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {} }
+    });
+
     // ── GridLayer: generic stub; the composite IR layers are bridged to the
     //    mosaic raster source via a host-app edit (inc 1). A bare GridLayer here
     //    is inert so init doesn't throw. ──
@@ -683,6 +742,9 @@
         popup: function (o) { return new Popup(o); },
         layerGroup: function (l) { return new LayerGroup(l); },
         featureGroup: function (l) { return new LayerGroup(l); },
+        markerClusterGroup: function (o) { return new MarkerClusterGroup(o); },
+        createObjectURL: function (b) { return URL.createObjectURL(b); },
+        revokeObjectURL: function (u) { return URL.revokeObjectURL(u); },
         polyline: function (ll, o) { return new Polyline(ll, o); },
         polygon: function (ll, o) { var p = new Polyline(ll, o); return p; },
         circle: function (ll, o) { return new Circle(ll, o); },
