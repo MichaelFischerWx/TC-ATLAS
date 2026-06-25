@@ -192,6 +192,12 @@
         if (!b.isValid()) return this;
         this._gl.fitBounds([[b._sw.lng, b._sw.lat], [b._ne.lng, b._ne.lat]],
             { animate: !(opts && opts.animate === false), padding: 20 }); return this; };
+    // flyTo(latlng, zoom, opts) — Leaflet duration is SECONDS; MapLibre wants ms.
+    // essential:true so it runs even under prefers-reduced-motion.
+    Map.prototype.flyTo = function (ll, zoom, opts) { opts = opts || {};
+        this._gl.flyTo({ center: ll2ml(ll), zoom: zoom != null ? zoom : this._gl.getZoom(),
+            duration: opts.animate === false ? 0 : (opts.duration != null ? opts.duration * 1000 : 1000),
+            essential: true }); return this; };
     Map.prototype.getZoom = function () { return this._gl.getZoom(); };
     Map.prototype.setZoom = function (z) { this._gl.setZoom(z); return this; };
     Map.prototype.setMaxZoom = function (z) { this._maxZoom = z; this._gl.setMaxZoom(z); return this; };
@@ -348,11 +354,19 @@
             this._map = map; var gl = map._gl, id = this._id, self = this;
             map._whenStyle(function () {
                 if (gl.getSource(id)) return;
-                gl.addSource(id, { type: 'raster', tiles: self._glUrls(), tileSize: 256,
+                gl.addSource(id, { type: 'raster', tiles: self._glUrls(),
+                    // tileSize defaults to 256 (most XYZ sources here). The IR mosaic
+                    // serves 512px tiles (4× fewer tiles/frame, same native pixels) and
+                    // passes tileSize:512 — MapLibre then maps map-zoom→tile-z directly.
+                    tileSize: self.options.tileSize || 256,
                     // maxNativeZoom (Leaflet) == source maxzoom (MapLibre): MapLibre
                     // overzooms the deepest native tiles past this instead of fetching.
                     maxzoom: self.options.maxNativeZoom || self.options.maxZoom || 19,
                     attribution: self.options.attribution || '' });
+                // Bridge MapLibre source errors (tile 404 / decode) to Leaflet's
+                // 'tileerror' so the animation self-heal handler fires.
+                if (self._errCbs && self._errCbs.length && !self._errBound) { self._errBound = true;
+                    gl.on('error', function (e) { if (e && e.sourceId === id) self._errCbs.forEach(function (f) { try { f(e); } catch (x) {} }); }); }
                 var paint = { 'raster-opacity': self.options.opacity != null ? self.options.opacity : 1,
                     // No tile cross-fade, and NO opacity transition: the animation
                     // swaps frame opacity 0↔0.85, and MapLibre's default 300ms
@@ -374,7 +388,9 @@
             this._added = false;
         },
         // 'load' fires when the raster source is added (tiles stream lazily after).
-        on: function (t, fn) { if (t === 'load') { (this._loadCbs = this._loadCbs || []).push(fn); if (this._added) setTimeout(fn, 0); } return this; },
+        // 'tileerror' bridges MapLibre source errors (wired in _addToGL).
+        on: function (t, fn) { if (t === 'load') { (this._loadCbs = this._loadCbs || []).push(fn); if (this._added) setTimeout(fn, 0); }
+            else if (t === 'tileerror') { (this._errCbs = this._errCbs || []).push(fn); } return this; },
         once: function (t, fn) { return this.on(t, fn); },
         setOpacity: function (o) { var gl = this._map && this._map._gl; if (gl && gl.getLayer(this._id)) gl.setPaintProperty(this._id, 'raster-opacity', o); this.options.opacity = o; return this; },
         setUrl: function (url) { this._url = url; if (this._map) { this._removeFromGL(this._map); this._addToGL(this._map); } return this; },
@@ -426,7 +442,10 @@
             if (img.complete && img.naturalWidth) setTimeout(function () { self._fireImg('load'); }, 0); },
         _fireImg: function (type) { if (this._fired) return; this._fired = true;
             ((this._evts && this._evts[type]) || []).forEach(function (f) { try { f(); } catch (e) {} }); },
-        bringToFront: function () { return this; }
+        // Z-order is governed by pane assignment (_paneZ), not front/back calls,
+        // so these are no-ops — present so callers (e.g. the storm-card Vis/SWIR
+        // backdrop behind the MW swath) don't throw on GL.
+        bringToFront: function () { return this; }, bringToBack: function () { return this; }
     });
 
     // ── GeoJSON → geojson source (line + optional fill) ──
@@ -485,7 +504,16 @@
             });
         },
         _removeFromGL: function (map) { var gl = map._gl; [this._id + '-l', this._id + '-f'].forEach(function (l) { try { if (gl.getLayer(l)) gl.removeLayer(l); } catch (e) {} }); try { if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {} },
-        setStyle: function () { return this; }, bringToFront: function () { return this; }
+        // setStyle on a whole GeoJSON layer (e.g. env contours dimming with the
+        // opacity slider). Applies to the line layer + fill layer if present.
+        setStyle: function (st) { st = st || {}; var gl = this._map && this._map._gl; if (!gl) { Object.assign(this.options, st); return this; }
+            var lid = this._id + '-l', fid = this._id + '-f';
+            if (gl.getLayer(lid)) { if (st.opacity != null) gl.setPaintProperty(lid, 'line-opacity', st.opacity);
+                if (st.color) gl.setPaintProperty(lid, 'line-color', st.color); if (st.weight != null) gl.setPaintProperty(lid, 'line-width', st.weight); }
+            if (gl.getLayer(fid)) { if (st.fillOpacity != null) gl.setPaintProperty(fid, 'fill-opacity', st.fillOpacity);
+                else if (st.opacity != null) gl.setPaintProperty(fid, 'fill-opacity', st.opacity); if (st.fillColor) gl.setPaintProperty(fid, 'fill-color', st.fillColor); }
+            Object.assign(this.options, st); return this; },
+        bringToFront: function () { return this; }
     });
 
     // ── Polyline → geojson line (storm tracks, forecast cones, etc.) ──
@@ -722,12 +750,19 @@
         _addToGL: function (map) { this._map = map;
             this._m = new maplibregl.Marker({ element: this.options.icon ? makeIconEl(this.options.icon) : undefined, anchor: 'center' })
                 .setLngLat(mlWrap(this._ll)).addTo(map._gl);
-            if (this._popup) this._m.setPopup(this._popup._ml());
+            if (this._popup) { this._m.setPopup(this._popup._ml()); this._bridgePopup(); }
             this._applyTooltip(); this._applyEvents(); },
         _removeFromGL: function () { if (this._tipHide) this._tipHide(); if (this._m) this._m.remove(); },
         setLatLng: function (ll) { this._ll = toLatLng(ll); if (this._m) this._m.setLngLat(mlWrap(this._ll)); return this; },
         getLatLng: function () { return this._ll; },
-        bindPopup: function (content, opts) { this._popup = content instanceof Popup ? content : new Popup(opts).setContent(content); if (this._m) this._m.setPopup(this._popup._ml()); return this; },
+        // Fire a synthetic Leaflet event to handlers registered via .on().
+        _fireEvt: function (type, data) { var self = this; ((this._evts && this._evts[type]) || []).forEach(function (fn) {
+            try { fn(Object.assign({ type: type, target: self, latlng: self._ll }, data || {})); } catch (e) {} }); },
+        // Bridge the native maplibregl popup's open/close to Leaflet popupopen/popupclose
+        // (e.g. RT monitor prefetches a storm's frame bundle on popupopen).
+        _bridgePopup: function () { var self = this, p = this._popup && this._popup._mlp; if (!p || this._popupBridged) return; this._popupBridged = true;
+            p.on('open', function () { self._fireEvt('popupopen'); }); p.on('close', function () { self._fireEvt('popupclose'); }); },
+        bindPopup: function (content, opts) { this._popup = content instanceof Popup ? content : new Popup(opts).setContent(content); if (this._m) { this._m.setPopup(this._popup._ml()); this._bridgePopup(); } return this; },
         bindTooltip: function (content, opts) { this._tip = { content: content, opts: opts || {} }; if (this._m) this._applyTooltip(); return this; },
         setTooltipContent: function (content) {
             this._tip = this._tip || { content: '', opts: {} };
@@ -735,7 +770,12 @@
             // Live-update if the tip div is currently shown (hover open).
             if (this._tipEl) this._tipEl.innerHTML = typeof content === 'string' ? content : (content && content.outerHTML || '');
             return this; },
-        setIcon: function (icon) { this.options.icon = icon; return this; },
+        setIcon: function (icon) { this.options.icon = icon;
+            // Refresh the live marker element in place (keeps position/popup/events)
+            // so an icon CHANGE (e.g. the IR objective-center marker restyling) shows.
+            if (this._m) { var cur = this._m.getElement(), neu = makeIconEl(icon);
+                if (cur && neu) { cur.className = neu.className; cur.style.cssText = neu.style.cssText; cur.innerHTML = neu.innerHTML; } }
+            return this; },
         on: function (type, fn, ctx) { if (!this._evts) this._evts = {}; var _self = this;
             String(type).split(' ').forEach(function (t) { (_self._evts[t] = _self._evts[t] || []).push(ctx ? fn.bind(ctx) : fn); });
             if (this._m) this._applyEvents(); return this; },
@@ -755,7 +795,12 @@
                     self._tipEl.className = 'leaflet-tooltip leaflet-tooltip-' + dir + ' ' + (self._tip.opts.className || '');
                     self._tipEl.style.cssText = 'position:fixed;z-index:1200;pointer-events:none;opacity:1;white-space:nowrap;'; }
                 var c = self._tip.content; self._tipEl.innerHTML = typeof c === 'string' ? c : (c && c.outerHTML || '');
+                var wasOpen = !!self._tipEl.parentNode;
                 document.body.appendChild(self._tipEl);
+                // Fire Leaflet's tooltipopen so handlers relying on it work (e.g. the
+                // archive's recon/FL hover guard _gaFLTooltipOpen, which suppresses the
+                // IR Tb hover so recon takes precedence). Only on the open transition.
+                if (!wasOpen) self._fireEvt('tooltipopen');
                 var r = el.getBoundingClientRect(), t = self._tipEl.getBoundingClientRect();
                 var cx = r.left + r.width / 2, ox = off[0] || 0, oy = off[1] || 0, x, y;
                 if (dir === 'bottom') { x = cx - t.width / 2; y = r.bottom + 6; }
@@ -764,7 +809,7 @@
                 else { x = cx - t.width / 2; y = r.top - t.height - 6; }   // 'top' (default)
                 self._tipEl.style.left = Math.round(x + ox) + 'px'; self._tipEl.style.top = Math.round(y + oy) + 'px';
             }
-            self._tipHide = function () { if (self._tipEl && self._tipEl.parentNode) self._tipEl.parentNode.removeChild(self._tipEl); };
+            self._tipHide = function () { if (self._tipEl && self._tipEl.parentNode) { self._tipEl.parentNode.removeChild(self._tipEl); self._fireEvt('tooltipclose'); } };
             el.addEventListener('mouseenter', show);
             if (this._tip.opts.sticky) el.addEventListener('mousemove', function () { if (self._tipEl && self._tipEl.parentNode) show(); });
             el.addEventListener('mouseleave', self._tipHide); },
@@ -789,7 +834,21 @@
             if (o.renderer && o.renderer._isBatch) { o.renderer._ensure(map); o.renderer._addCirc(this); this._batch = o.renderer; return; }
             this._m = new maplibregl.Marker({ element: this.options.icon._el, anchor: 'center' }).setLngLat(mlWrap(this._ll)).addTo(map._gl);
             if (this._popup) this._m.setPopup(this._popup._ml()); this._applyTooltip(); this._applyEvents(); },
-        _removeFromGL: function () { if (this._batch) { this._batch._removeCirc(this); return; } if (this._tipHide) this._tipHide(); if (this._m) this._m.remove(); }
+        _removeFromGL: function () { if (this._batch) { this._batch._removeCirc(this); return; } if (this._tipHide) this._tipHide(); if (this._m) this._m.remove(); },
+        // setRadius/setStyle on circle dots (e.g. WeatherLab genesis markers rescaled
+        // on zoom). Batched dots re-render via the renderer's circle source; DOM dots
+        // mutate their element. Without setRadius the zoom-rescale loop threw.
+        setRadius: function (radius) { this.options.radius = radius;
+            if (this._batch) { this._batch._flush(); return this; }
+            var el = this.options.icon && this.options.icon._el; if (el) { var d = (radius || 5) * 2; el.style.width = d + 'px'; el.style.height = d + 'px'; }
+            return this; },
+        setStyle: function (st) { st = st || {}; Object.assign(this.options, st);
+            if (this._batch) { this._batch._flush(); return this; }
+            var el = this.options.icon && this.options.icon._el; if (el) {
+                if (st.fillColor || st.color) el.style.background = this.options.fillColor || this.options.color || '#3388ff';
+                if (st.fillOpacity != null) el.style.opacity = st.fillOpacity;
+                if (st.color || st.weight != null) el.style.border = (this.options.weight || 1) + 'px solid ' + (this.options.color || '#fff'); }
+            return this; }
     });
 
     function Popup(opts) { this.options = opts || {}; this._content = ''; }
