@@ -125,6 +125,9 @@
             minZoom: options.minZoom != null ? options.minZoom : 0,
             maxZoom: this._maxZoom,
             dragRotate: false, pitchWithRotate: false,
+            // Keep the WebGL backbuffer readable so PNG/GIF export (html2canvas /
+            // getCanvas().toDataURL) captures the rendered map instead of blank.
+            preserveDrawingBuffer: true,
             attributionControl: { compact: true },
             renderWorldCopies: options.worldCopyJump !== false
         });
