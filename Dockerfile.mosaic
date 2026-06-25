@@ -54,4 +54,4 @@ COPY satellite_ir.py .
 # mode with storm sectors over active storms; the deploy script can override
 # --args if needed.
 ENTRYPOINT ["python", "build_ir_mosaic.py"]
-CMD ["--r2", "--storm", "--time"]
+CMD ["--r2", "--storm", "--time", "--bands", "ir,wv,vis"]

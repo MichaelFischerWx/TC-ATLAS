@@ -26,6 +26,7 @@ import argparse
 import concurrent.futures as _cf
 import io
 import json
+import math
 import os
 import sys
 import time
@@ -40,6 +41,7 @@ from satellite_ir import (
     find_goes_file, get_goes_fs,
     HIMAWARI_BUCKET, HIMAWARI_LON_0, HIMAWARI_SAT_HEIGHT, HIMAWARI_SWEEP,
     find_himawari_file, open_himawari_subset,
+    VIS_BAND, WV_BAND, HIMAWARI_VIS_BAND, HIMAWARI_WV_BAND, BAND_RANGES,
 )
 
 OUT_DIR = os.environ.get("MOSAIC_OUT", "mosaic_out")
@@ -202,18 +204,107 @@ def blend_samples(samples):
     return out.astype(np.float32)
 
 
-def colormap(tb):
-    """Tb (K) → RGBA uint8, identical normalization to render_ir_png; NaN→clear."""
-    frac = np.clip(1.0 - (tb - IR_VMIN) / (IR_VMAX - IR_VMIN), 0.0, 1.0)
-    rgba = _IR_LUT[(np.nan_to_num(frac) * 255).astype(np.uint8)].copy()
-    rgba[~np.isfinite(tb)] = (0, 0, 0, 0)
+# ── Multi-band products (IR + Water Vapor + Visible) ───────────────────────
+# Each product reads a different band but reuses the SAME geos→Mercator kernels:
+# WV (Band 8) is native 2 km = the IR grid; Visible (Band 2/3) is 0.5 km and is
+# block-averaged 4× down to the 2 km grid on read, so the IR kernel applies.
+# (GOES Band 2 21696² / 4 = 5424² = the Band-13 grid; Himawari Band 3 likewise.)
+PRODUCTS = {
+    "ir":  dict(goes=IR_BAND,  hima=IR_BAND,          coarsen=1, kind="ir",  night=False),
+    "wv":  dict(goes=WV_BAND,  hima=HIMAWARI_WV_BAND, coarsen=1, kind="wv",  night=False),
+    # Visible: 0.5 km → coarsen 4× to 2 km; night side masked to transparent.
+    # tol 60: 0.5 km Vis posts later than IR/WV, so accept an older scan (Vis
+    # changes slowly and the night side is masked anyway).
+    "vis": dict(goes=VIS_BAND, hima=HIMAWARI_VIS_BAND, coarsen=4, kind="vis", night=True, tol=60),
+}
+_NIGHT_ELEV_DEG = -6.0   # civil twilight: below this, Visible is masked clear
+
+_WV_VMIN, _WV_VMAX = BAND_RANGES[WV_BAND]["vmin"], BAND_RANGES[WV_BAND]["vmax"]
+
+
+# CIMSS-style Water-Vapor LUT (ported from ir_monitor_api._CLAUDE_WV_*): warm/dry
+# → terracotta, mid-trop → cream/cyan, deep convection → green/mint.
+_CLAUDE_WV_FRAC_STOPS = [
+    (0.000, 235, 110,  45), (0.080, 215,  90,  50), (0.160, 195, 105,  55),
+    (0.240, 220, 150,  90), (0.310, 235, 200, 165), (0.380, 248, 235, 218),
+    (0.450, 242, 246, 248), (0.510, 218, 235, 246), (0.580, 160, 210, 240),
+    (0.660,  95, 175, 225), (0.740,  45, 130, 200), (0.800,  20,  90, 170),
+    (0.860,  30, 130, 135), (0.910,  55, 180,  95), (0.960, 140, 230, 145),
+    (1.000, 230, 250, 220),
+]
+
+
+def _build_wv_lut():
+    stops = sorted(_CLAUDE_WV_FRAC_STOPS, key=lambda s: s[0])
+    lut = np.zeros((256, 4), dtype=np.uint8)
+    for i in range(256):
+        f = i / 255.0
+        lo, hi = stops[0], stops[-1]
+        for s in range(len(stops) - 1):
+            if stops[s][0] <= f <= stops[s + 1][0]:
+                lo, hi = stops[s], stops[s + 1]; break
+        t = 0.0 if hi[0] == lo[0] else max(0.0, min(1.0, (f - lo[0]) / (hi[0] - lo[0])))
+        lut[i, :3] = [int(lo[1 + c] + t * (hi[1 + c] - lo[1 + c]) + 0.5) for c in range(3)]
+        lut[i, 3] = 255
+    return lut
+
+
+_WV_LUT = _build_wv_lut()
+
+
+def coarsen2d(a, f):
+    """Block-average a 2-D array by integer factor f (f=1 → unchanged). Crops to a
+    multiple of f first. Used to bring 0.5 km Visible down to the 2 km IR grid."""
+    if f <= 1:
+        return a
+    ny, nx = a.shape
+    ny2, nx2 = (ny // f) * f, (nx // f) * f
+    a = a[:ny2, :nx2]
+    return a.reshape(ny2 // f, f, nx2 // f, f).mean(axis=(1, 3))
+
+
+def solar_elev_grid(LAT, LON, dt):
+    """Vectorized solar elevation (deg) over lat/lon arrays — vectorized twin of
+    ir_monitor_api._solar_elevation; drives the Visible night mask."""
+    doy = dt.timetuple().tm_yday
+    decl = math.radians(-23.44 * math.cos(math.radians(360.0 / 365.0 * (doy + 10))))
+    utc_h = dt.hour + dt.minute / 60.0 + dt.second / 3600.0
+    ha = np.radians((utc_h - 12.0) * 15.0 + LON)
+    latr = np.radians(LAT)
+    sin_elev = (np.sin(latr) * math.sin(decl) +
+                np.cos(latr) * math.cos(decl) * np.cos(ha))
+    return np.degrees(np.arcsin(np.clip(sin_elev, -1.0, 1.0)))
+
+
+def colormap(arr, product):
+    """Blended band value → RGBA uint8 for the given product; NaN→clear.
+    IR/WV are Tb (K) with inverted frac + their LUT; Visible is reflectance (0–1),
+    grayscale, no inversion. Night masking (Visible) is applied by the caller,
+    which has the per-pixel lat/lon to compute solar elevation."""
+    kind = PRODUCTS[product]["kind"]
+    if kind == "ir":
+        frac = np.clip(1.0 - (arr - IR_VMIN) / (IR_VMAX - IR_VMIN), 0.0, 1.0)
+        rgba = _IR_LUT[(np.nan_to_num(frac) * 255).astype(np.uint8)].copy()
+    elif kind == "wv":
+        frac = np.clip(1.0 - (arr - _WV_VMIN) / (_WV_VMAX - _WV_VMIN), 0.0, 1.0)
+        rgba = _WV_LUT[(np.nan_to_num(frac) * 255).astype(np.uint8)].copy()
+    else:  # vis: reflectance 0–1, grayscale, gamma-free
+        frac = np.clip(arr, 0.0, 1.0)
+        gray = (np.nan_to_num(frac) * 245.0 + 10.0).astype(np.uint8)
+        rgba = np.zeros(arr.shape + (4,), np.uint8)
+        rgba[..., 0] = rgba[..., 1] = rgba[..., 2] = gray
+        rgba[..., 3] = 255
+    rgba[~np.isfinite(arr)] = (0, 0, 0, 0)
     return rgba
 
 
-# ── Read full-disk B13 Tb for every satellite, once per cycle ──────────────
-def read_full_disk(bucket, dt):
+# ── Read a full-disk band for every satellite, once per cycle ──────────────
+# `band` + `coarsen` come from PRODUCTS[product]. Visible (0.5 km) is block-
+# averaged by `coarsen` (4×) inside the reader so only the 2 km grid is retained
+# (frees the big native array promptly) and the IR-grid kernels stay applicable.
+def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20):
     import xarray as xr
-    key, scan_dt = find_goes_file(bucket, dt, tolerance_min=20, band=IR_BAND,
+    key, scan_dt = find_goes_file(bucket, dt, tolerance_min=tol, band=band,
                                   return_dt=True)
     if not key:
         return None
@@ -224,8 +315,8 @@ def read_full_disk(bucket, dt):
     raw = fs.cat_file(key)
     ds = xr.open_dataset(io.BytesIO(raw), engine="h5netcdf")
     try:
-        var = "CMI" if "CMI" in ds else f"CMI_C{IR_BAND:02d}"
-        tb = ds[var].values.astype(np.float32)
+        var = "CMI" if "CMI" in ds else f"CMI_C{band:02d}"
+        data = ds[var].values.astype(np.float32)
         x = ds["x"].values.astype(np.float64)
         y = ds["y"].values.astype(np.float64)
         gip = ds["goes_imager_projection"].attrs
@@ -234,46 +325,64 @@ def read_full_disk(bucket, dt):
         sweep = str(gip.get("sweep_angle_axis", "x"))
     finally:
         ds.close()
-    return tb, x, y, lon_0, sat_h, sweep, scan_dt
+    if data.size == 0 or x.size == 0 or y.size == 0:
+        return None      # empty/partial file (seen on freshly-posting 0.5 km Vis)
+    if coarsen > 1:
+        data = coarsen2d(data, coarsen)
+        x = coarsen2d(x[None, :], coarsen)[0]
+        y = coarsen2d(y[None, :], coarsen)[0]
+    return data, x, y, lon_0, sat_h, sweep, scan_dt
 
 
-def read_himawari_full_disk(dt):
-    """Full-disk Himawari B13 via the existing HSD reader: a huge box centred on
+def read_himawari_full_disk(dt, band=IR_BAND, coarsen=1, tol=20):
+    """Full-disk Himawari band via the existing HSD reader: a huge box centred on
     the sub-point pulls all 10 segments; the returned geos array + extent give us
-    the same (tb, x, y, lon_0, sat_h, sweep) shape as the GOES reader."""
-    prefix, scan_dt = find_himawari_file(dt, tolerance_min=20, band=IR_BAND,
+    the same (data, x, y, lon_0, sat_h, sweep) shape as the GOES reader."""
+    prefix, scan_dt = find_himawari_file(dt, tolerance_min=tol, band=band,
                                          return_dt=True)
     if not prefix:
         return None
     data, extent = open_himawari_subset(prefix, 0.0, HIMAWARI_LON_0,
-                                        box_deg=160.0, band=IR_BAND,
+                                        box_deg=160.0, band=band,
                                         return_extent=True)
     if data is None or extent is None:
         return None
+    data = data.astype(np.float32)
+    if coarsen > 1:
+        data = coarsen2d(data, coarsen)
     ny, nx = data.shape
     x = np.linspace(extent[0], extent[1], nx) / HIMAWARI_SAT_HEIGHT
     y = np.linspace(extent[2], extent[3], ny) / HIMAWARI_SAT_HEIGHT
-    return (data.astype(np.float32), x, y, HIMAWARI_LON_0,
+    return (data, x, y, HIMAWARI_LON_0,
             HIMAWARI_SAT_HEIGHT, HIMAWARI_SWEEP, scan_dt)
 
 
-def read_all_sats(dt, timings):
+def read_all_sats(dt, timings, product="ir"):
+    cfg = PRODUCTS[product]
     sats = {}
     for sat_key, kind, bucket, label in SATS:
+        band = cfg["hima"] if kind == "himawari" else cfg["goes"]
+        # The Himawari HSD reader already subsamples fine bands to 2 km (the IR
+        # grid) internally, so it needs NO extra coarsen. GOES is read native, so
+        # 0.5 km Visible must be coarsened here.
+        coarsen = 1 if kind == "himawari" else cfg["coarsen"]
+        # Visible (0.5 km, ~10× larger) posts later than IR/WV; allow an older scan.
+        tol = cfg.get("tol", 20)
         t0 = time.time()
         try:
-            fd = (read_himawari_full_disk(dt) if kind == "himawari"
-                  else read_full_disk(bucket, dt))
+            fd = (read_himawari_full_disk(dt, band=band, coarsen=coarsen, tol=tol)
+                  if kind == "himawari"
+                  else read_full_disk(bucket, dt, band=band, coarsen=coarsen, tol=tol))
         except Exception as e:
-            log(f"  {label}: read failed ({e}) — skip"); fd = None
+            log(f"  {label} {product}: read failed ({e}) — skip"); fd = None
         timings["read"] = timings.get("read", 0.0) + time.time() - t0
         if fd is None:
-            log(f"  {label}: no file near {dt:%H:%M}Z — skip"); continue
-        tb, x, y, lon_0, sat_h, sweep, scan_dt = fd
-        sats[sat_key] = dict(flat=tb.reshape(-1), npix=tb.size, x=x, y=y,
+            log(f"  {label} {product}: no file near {dt:%H:%M}Z — skip"); continue
+        data, x, y, lon_0, sat_h, sweep, scan_dt = fd
+        sats[sat_key] = dict(flat=data.reshape(-1), npix=data.size, x=x, y=y,
                              lon_0=lon_0, sat_h=sat_h, sweep=sweep,
                              grid=grid_of(x, y), label=label, scan_dt=scan_dt)
-        log(f"  {label}: scan {scan_dt:%H:%M}Z ({tb.size/1e6:.0f}M px)")
+        log(f"  {label} {product}: scan {scan_dt:%H:%M}Z ({data.size/1e6:.0f}M px)")
     return sats
 
 
@@ -347,7 +456,18 @@ def ensure_global_kernels(zoom, sats, rebuild=False, use_r2=False):
     return kernels
 
 
-def global_render(zoom, sats, kernels, timings):
+# Per-pixel Mercator lon/lat for the global field (cached by side length S) —
+# used to mask the Visible night side to transparent.
+_MERC_LL = {}
+def _merc_lonlat(S):
+    if S not in _MERC_LL:
+        px = np.arange(S, dtype=np.float64) + 0.5
+        lon, lat = pixels_to_lonlat(px[None, :], px[:, None], S)
+        _MERC_LL[S] = (np.broadcast_to(lon, (S, S)), np.broadcast_to(lat, (S, S)))
+    return _MERC_LL[S]
+
+
+def global_render(zoom, sats, kernels, timings, product="ir", dt=None):
     t0 = time.time()
     samples = []
     for sat_key in sats:
@@ -356,13 +476,20 @@ def global_render(zoom, sats, kernels, timings):
         idx, cosz, mask = kernels[sat_key]
         flat = sats[sat_key]["flat"]
         if idx.size and int(idx.max()) >= flat.size:
-            log(f"  {sats[sat_key]['label']}: grid {flat.size} ≠ kernel "
-                f"(rebuild with --build-kernel); skip"); continue
+            log(f"  {sats[sat_key]['label']} {product}: grid {flat.size} ≠ kernel "
+                f"(size mismatch — skip)"); continue
         g = flat[idx]
-        samples.append((g, cosz, mask & np.isfinite(g) & (g > 0)))
+        # Visible reflectance has no "0 = no-data" sentinel; only gate IR/WV on g>0.
+        valid = mask & np.isfinite(g)
+        if PRODUCTS[product]["kind"] != "vis":
+            valid = valid & (g > 0)
+        samples.append((g, cosz, valid))
     timings["gather"] = timings.get("gather", 0.0) + time.time() - t0
     t1 = time.time()
-    rgba = colormap(blend_samples(samples))
+    rgba = colormap(blend_samples(samples), product)
+    if PRODUCTS[product]["night"] and dt is not None:
+        LON, LAT = _merc_lonlat(rgba.shape[0])
+        rgba[solar_elev_grid(LAT, LON, dt) < _NIGHT_ELEV_DEG] = (0, 0, 0, 0)
     timings["colormap"] = timings.get("colormap", 0.0) + time.time() - t1
     return rgba
 
@@ -383,7 +510,9 @@ def storm_tile_set(points, zooms, box_deg):
     return tiles
 
 
-def render_storm_tiles(sats, tiles, emit, timings):
+def render_storm_tiles(sats, tiles, emit, timings, product="ir", dt=None):
+    is_vis = PRODUCTS[product]["kind"] == "vis"
+    night = PRODUCTS[product]["night"]
     t0 = time.time()
     written = 0
     for (z, x, y) in sorted(tiles):
@@ -395,10 +524,15 @@ def render_storm_tiles(sats, tiles, emit, timings):
             if not mask.any():
                 continue
             g = s["flat"][idx]
-            samples.append((g, cosz, mask & np.isfinite(g) & (g > 0)))
+            valid = mask & np.isfinite(g)
+            if not is_vis:
+                valid = valid & (g > 0)
+            samples.append((g, cosz, valid))
         if not samples:
             continue
-        rgba = colormap(blend_samples(samples))
+        rgba = colormap(blend_samples(samples), product)
+        if night and dt is not None:
+            rgba[solar_elev_grid(LAT, LON, dt) < _NIGHT_ELEV_DEG] = (0, 0, 0, 0)
         if not rgba[..., 3].any():
             continue
         emit(z, x, y, _png_bytes(rgba)); written += 1
@@ -416,8 +550,8 @@ def local_sink(out_dir):
     return emit
 
 
-def r2_sink(ts, pool, futures):
-    base = f"{R2_PREFIX}/ir/{ts}"
+def r2_sink(ts, pool, futures, product="ir"):
+    base = f"{R2_PREFIX}/{product}/{ts}"
     def emit(z, x, y, body):
         key = f"{base}/{z}/{x}/{y}.png"
         futures.append(pool.submit(r2_put, key, body, "image/png", TILE_CACHE))
@@ -444,13 +578,14 @@ def _r2_delete_prefix(prefix):
     return n
 
 
-def _prune_old_frames(kept):
-    """Delete tiles for any ir/<ts>/ frame not in `kept`. The manifest rolls to the
-    last R2_KEEP_FRAMES, but the dropped frames' tile OBJECTS were never deleted, so
-    R2 grew unbounded (~1 GB/day). This self-heals: it lists the timestamp prefixes
-    under ir/ (cheap — Delimiter gives CommonPrefixes, not every tile) and purges any
-    not in the kept window. frames.json is a key (not a prefix) so it's never touched."""
-    c = _get_r2(); bucket = _r2_bucket(); base = f"{R2_PREFIX}/ir/"
+def _prune_old_frames(kept, product="ir"):
+    """Delete tiles for any <product>/<ts>/ frame not in `kept`. The manifest rolls
+    to the last R2_KEEP_FRAMES, but the dropped frames' tile OBJECTS were never
+    deleted, so R2 grew unbounded (~1 GB/day). This self-heals: it lists the
+    timestamp prefixes under <product>/ (cheap — Delimiter gives CommonPrefixes, not
+    every tile) and purges any not in the kept window. frames.json is a key (not a
+    prefix) so it's never touched."""
+    c = _get_r2(); bucket = _r2_bucket(); base = f"{R2_PREFIX}/{product}/"
     keptset = set(kept); token = None; pf = 0; pt = 0
     while True:
         kw = {"Bucket": bucket, "Prefix": base, "Delimiter": "/", "MaxKeys": 1000}
@@ -469,10 +604,10 @@ def _prune_old_frames(kept):
         log(f"  pruned {pf} old frame(s), {pt} tiles")
 
 
-def update_r2_manifest(new_ts, zmax):
-    """Append new_ts to <prefix>/ir/frames.json, trim to the rolling window, and
-    prune the tiles of any frame that fell out of the window (keeps R2 bounded)."""
-    c = _get_r2(); key = f"{R2_PREFIX}/ir/frames.json"
+def update_r2_manifest(new_ts, zmax, product="ir"):
+    """Append new_ts to <prefix>/<product>/frames.json, trim to the rolling window,
+    and prune the tiles of any frame that fell out of the window (keeps R2 bounded)."""
+    c = _get_r2(); key = f"{R2_PREFIX}/{product}/frames.json"
     frames = []
     try:
         cur = json.loads(c.get_object(Bucket=_r2_bucket(), Key=key)["Body"].read())
@@ -486,7 +621,7 @@ def update_r2_manifest(new_ts, zmax):
                        "storm_zooms": list(STORM_ZOOMS)}).encode()
     r2_put(key, body, "application/json", MANIFEST_CACHE)
     try:
-        _prune_old_frames(frames)
+        _prune_old_frames(frames, product)
     except Exception as e:
         log(f"  prune skipped: {e}")
     return frames
@@ -579,6 +714,9 @@ def main():
                     help="override cutline sharpness (default %d)" % BLEND_P)
     ap.add_argument("--frames", type=int, default=1,
                     help="number of consecutive 10-min frames (for animation)")
+    ap.add_argument("--bands", default="ir",
+                    help="comma-separated products to build: ir,wv,vis "
+                         "(each → mosaic-v2/<product>/...)")
     ap.add_argument("--r2", action="store_true",
                     help="upload tiles to R2 (mosaic-v1/) + roll the manifest "
                          "(production Cloud Run Job mode)")
@@ -599,66 +737,77 @@ def main():
         la, lo = (float(v) for v in args.storm_at.split(","))
         points.append((la, lo)); log(f"test point @ {la},{lo}")
 
+    products = [p.strip() for p in args.bands.split(",") if p.strip() in PRODUCTS]
+    if not products:
+        products = ["ir"]
+
     # render newest→oldest so the first frame seeds/loads the kernels
     frame_dts = [latest - timedelta(minutes=10 * i) for i in range(args.frames)]
-    written, kernels = [], None
+    written, kernels = {}, None
     t0 = time.time()
     for fi, dt in enumerate(frame_dts):
         log(f"── frame {fi+1}/{args.frames}: {dt:%Y-%m-%d %H:%M}Z "
-            f"(zmax {args.zmax}, blend_p {BLEND_P:g})")
-        timings = {}
-        sats = read_all_sats(dt, timings)
-        if not sats:
-            log("  no satellite data — skip frame"); continue
-        if kernels is None:
-            kernels = ensure_global_kernels(args.zmax, sats,
-                                            rebuild=args.build_kernel,
-                                            use_r2=args.r2)
-            if args.build_kernel:
-                log("kernels ready (one-time cost) — done"); return
-
+            f"(zmax {args.zmax}, blend_p {BLEND_P:g}, bands {','.join(products)})")
         ts = dt.strftime("%Y%m%d%H%M")
-        pool, futures = None, []
-        if args.r2:
-            pool = _cf.ThreadPoolExecutor(max_workers=16)
-            emit = r2_sink(ts, pool, futures)
-        else:
-            emit = local_sink(os.path.join(args.out, "ir", ts))
+        tiles = storm_tile_set(points, STORM_ZOOMS, STORM_BOX_DEG) if points else set()
+        # Each product reads its own band, renders, tiles, uploads to its prefix.
+        # The reproject kernels are shared (IR grid) across all bands. Sats are read
+        # + freed per product so peak memory stays ~one band at a time.
+        for product in products:
+            timings = {}
+            sats = read_all_sats(dt, timings, product)
+            if not sats:
+                log(f"  {product}: no satellite data — skip"); continue
+            if kernels is None:
+                kernels = ensure_global_kernels(args.zmax, sats,
+                                                rebuild=args.build_kernel,
+                                                use_r2=args.r2)
+                if args.build_kernel:
+                    log("kernels ready (one-time cost) — done"); return
 
-        rgba = global_render(args.zmax, sats, kernels, timings)
-        n_global = write_pyramid(rgba, args.zmax, emit, timings)
-        n_storm = 0
-        if points:
-            tiles = storm_tile_set(points, STORM_ZOOMS, STORM_BOX_DEG)
-            n_storm = render_storm_tiles(sats, tiles, emit, timings)
-        if fi == 0:
-            write_preview(rgba, args.out)
-        written.append(ts)
+            pool, futures = None, []
+            if args.r2:
+                pool = _cf.ThreadPoolExecutor(max_workers=16)
+                emit = r2_sink(ts, pool, futures, product)
+            else:
+                emit = local_sink(os.path.join(args.out, product, ts))
 
-        if args.r2:
-            t1 = time.time(); ok = errs = 0
-            for f in _cf.as_completed(futures):
-                try: f.result(); ok += 1
-                except Exception as ex: errs += 1; log(f"  R2 put failed: {ex}")
-            pool.shutdown()
-            frames = update_r2_manifest(ts, args.zmax)
-            timings["upload"] = time.time() - t1
-            log(f"  R2: {ok} tiles up ({errs} failed); manifest now {len(frames)} frames")
-        log(f"  wrote {n_global} global + {n_storm} storm tiles → {ts}")
-        if args.time:
-            parts = " ".join(f"{k} {timings[k]:.1f}s" for k in
-                             ("read", "gather", "colormap", "tile", "storm_tile", "upload")
-                             if k in timings)
-            log(f"  timings: {parts}")
+            rgba = global_render(args.zmax, sats, kernels, timings, product, dt)
+            n_global = write_pyramid(rgba, args.zmax, emit, timings)
+            n_storm = 0
+            if tiles:
+                n_storm = render_storm_tiles(sats, tiles, emit, timings, product, dt)
+            if fi == 0 and product == products[0]:
+                write_preview(rgba, args.out)
+            written.setdefault(product, []).append(ts)
+            del rgba, sats   # free the big per-band arrays before the next band
 
-    # local animation manifest (R2 mode rolls its own per-frame above)
+            if args.r2:
+                t1 = time.time(); ok = errs = 0
+                for f in _cf.as_completed(futures):
+                    try: f.result(); ok += 1
+                    except Exception as ex: errs += 1; log(f"  R2 put failed: {ex}")
+                pool.shutdown()
+                frames = update_r2_manifest(ts, args.zmax, product)
+                timings["upload"] = time.time() - t1
+                log(f"  {product} R2: {ok} up ({errs} failed); manifest {len(frames)} frames")
+            log(f"  {product}: {n_global} global + {n_storm} storm tiles → {ts}")
+            if args.time:
+                parts = " ".join(f"{k} {timings[k]:.1f}s" for k in
+                                 ("read", "gather", "colormap", "tile", "storm_tile", "upload")
+                                 if k in timings)
+                log(f"    timings: {parts}")
+
+    # local animation manifests per product (R2 mode rolls its own per-frame above)
     if written and not args.r2:
-        man = os.path.join(args.out, "ir", "frames.json")
-        with open(man, "w") as f:
-            json.dump({"frames": sorted(written), "zmax": args.zmax,
-                       "storm_zooms": list(STORM_ZOOMS)}, f)
-        log(f"manifest ({len(written)} frames) → {man}")
-    log(f"TOTAL {time.time()-t0:.1f}s for {len(written)} frame(s)")
+        for product, ts_list in written.items():
+            man = os.path.join(args.out, product, "frames.json")
+            with open(man, "w") as f:
+                json.dump({"frames": sorted(ts_list), "zmax": args.zmax,
+                           "storm_zooms": list(STORM_ZOOMS)}, f)
+            log(f"manifest {product} ({len(ts_list)} frames) → {man}")
+    nfr = sum(len(v) for v in written.values())
+    log(f"TOTAL {time.time()-t0:.1f}s for {nfr} product-frame(s)")
 
 
 if __name__ == "__main__":
