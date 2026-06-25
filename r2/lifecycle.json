@@ -7,6 +7,13 @@
       "Filter": {"Prefix": "rt-v12/raw-frames/"},
       "Expiration": {"Days": 2},
       "_comment": "Per-frame immutable raw-Tb objects (RAW_PERFRAME path) + superseded position-variants. Frames roll off the 6 h window and best-track position revisions orphan old keys; 2 days is well past any reference. The tiny manifest.json is rewritten each cycle and also expires + is recreated, which is harmless."
+    },
+    {
+      "ID": "tcatlas-mosaic-ir-1d",
+      "Status": "Enabled",
+      "Filter": {"Prefix": "mosaic-v1/ir/"},
+      "Expiration": {"Days": 1},
+      "_comment": "Global IR mosaic tiles (build_ir_mosaic.py --r2). Each 10-min timestamp's tiles are immutable; the manifest keeps only the last ~18 (R2_KEEP_FRAMES, ~3 h), so older per-timestamp tile sets orphan quickly. 1 day is well past the hot window. frames.json lives at mosaic-v1/ir/frames.json and is rewritten every cycle, so the prefix-match expiry on it is harmless. Bump the mosaic-v1 prefix to invalidate."
     }
   ]
 }

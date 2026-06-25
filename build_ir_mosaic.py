@@ -23,6 +23,8 @@ Usage:
   python build_ir_mosaic.py --storm-at 16,-95           # global + a test point
 """
 import argparse
+import concurrent.futures as _cf
+import io
 import json
 import os
 import sys
@@ -62,6 +64,49 @@ SATS = [
 
 def log(msg):
     print(f"[mosaic] {msg}", flush=True)
+
+
+# ── Cloudflare R2 output (production) — mirrors ir_monitor_api._r2_put_public ──
+R2_PREFIX = "mosaic-v1"                 # bump to invalidate all tiles/kernels
+R2_KEEP_FRAMES = 18                     # rolling loop kept hot (~3 h at 10-min)
+_r2_client = None
+
+
+def _get_r2():
+    """Lazy boto3 S3 client against R2; creds from env (Secret Manager in prod)."""
+    global _r2_client
+    if _r2_client is not None:
+        return _r2_client
+    import boto3
+    from botocore.config import Config as _Cfg
+    ep = os.environ.get("R2_ENDPOINT_URL", "").rstrip("/")
+    ak = os.environ.get("R2_ACCESS_KEY_ID", "")
+    sk = os.environ.get("R2_SECRET_ACCESS_KEY", "")
+    if not (ep and ak and sk):
+        log("R2 creds/endpoint missing — set R2_ENDPOINT_URL/R2_ACCESS_KEY_ID/"
+            "R2_SECRET_ACCESS_KEY"); return None
+    _r2_client = boto3.client("s3", endpoint_url=ep, aws_access_key_id=ak,
+                              aws_secret_access_key=sk, region_name="auto",
+                              config=_Cfg(signature_version="s3v4",
+                                          retries={"max_attempts": 3, "mode": "standard"}))
+    return _r2_client
+
+
+def _r2_bucket():
+    return os.environ.get("R2_BUCKET", "tc-atlas-rt")
+
+
+def r2_put(key, body, content_type, cache_control):
+    c = _get_r2()
+    if c is None:
+        raise RuntimeError("R2 not configured")
+    c.put_object(Bucket=_r2_bucket(), Key=key, Body=body,
+                 ContentType=content_type, CacheControl=cache_control)
+
+
+# Immutable per-timestamp tiles (content never changes) vs short-TTL manifest.
+TILE_CACHE = "public, max-age=604800, immutable"
+MANIFEST_CACHE = "public, max-age=60"
 
 
 # ── Web Mercator helpers (slippy-map convention) ───────────────────────────
@@ -286,8 +331,7 @@ def storm_tile_set(points, zooms, box_deg):
     return tiles
 
 
-def render_storm_tiles(sats, tiles, out_dir, timings):
-    from PIL import Image
+def render_storm_tiles(sats, tiles, emit, timings):
     t0 = time.time()
     written = 0
     for (z, x, y) in sorted(tiles):
@@ -305,18 +349,57 @@ def render_storm_tiles(sats, tiles, out_dir, timings):
         rgba = colormap(blend_samples(samples))
         if not rgba[..., 3].any():
             continue
-        d = os.path.join(out_dir, str(z), str(x))
-        os.makedirs(d, exist_ok=True)
-        Image.fromarray(rgba, "RGBA").save(os.path.join(d, f"{y}.png"),
-                                           compress_level=6)
-        written += 1
+        emit(z, x, y, _png_bytes(rgba)); written += 1
     timings["storm_tile"] = time.time() - t0
     return written
 
 
+# ── tile sinks: local directory or concurrent R2 upload ───────────────────
+def local_sink(out_dir):
+    def emit(z, x, y, body):
+        d = os.path.join(out_dir, str(z), str(x))
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f"{y}.png"), "wb") as f:
+            f.write(body)
+    return emit
+
+
+def r2_sink(ts, pool, futures):
+    base = f"{R2_PREFIX}/ir/{ts}"
+    def emit(z, x, y, body):
+        key = f"{base}/{z}/{x}/{y}.png"
+        futures.append(pool.submit(r2_put, key, body, "image/png", TILE_CACHE))
+    return emit
+
+
+def update_r2_manifest(new_ts, zmax):
+    """Append new_ts to mosaic-v1/ir/frames.json, trim to the rolling window."""
+    c = _get_r2(); key = f"{R2_PREFIX}/ir/frames.json"
+    frames = []
+    try:
+        cur = json.loads(c.get_object(Bucket=_r2_bucket(), Key=key)["Body"].read())
+        frames = cur.get("frames", [])
+    except Exception:
+        pass
+    if new_ts not in frames:
+        frames.append(new_ts)
+    frames = sorted(set(frames))[-R2_KEEP_FRAMES:]
+    body = json.dumps({"frames": frames, "zmax": zmax,
+                       "storm_zooms": list(STORM_ZOOMS)}).encode()
+    r2_put(key, body, "application/json", MANIFEST_CACHE)
+    return frames
+
+
 # ── Pyramid: slice the global raster into z/x/y (skip empty) ───────────────
-def write_pyramid(rgba, zmax, out_dir, timings):
+def _png_bytes(tile):
     from PIL import Image
+    buf = io.BytesIO()
+    Image.fromarray(tile, "RGBA").save(buf, format="PNG", compress_level=6)
+    return buf.getvalue()
+
+
+def write_pyramid(rgba, zmax, emit, timings):
+    """emit(z, x, y, png_bytes) routes each tile to a sink (local dir or R2)."""
     t0 = time.time()
     level = rgba
     n = 0
@@ -328,11 +411,7 @@ def write_pyramid(rgba, zmax, out_dir, timings):
                              tx*TILE_SIZE:(tx+1)*TILE_SIZE]
                 if not tile[..., 3].any():
                     continue
-                d = os.path.join(out_dir, str(z), str(tx))
-                os.makedirs(d, exist_ok=True)
-                Image.fromarray(tile, "RGBA").save(os.path.join(d, f"{ty}.png"),
-                                                   compress_level=6)
-                n += 1
+                emit(z, tx, ty, _png_bytes(tile)); n += 1
         if z > 0:
             h = (S // 2) * 2
             level = ((level[:h:2, :h:2].astype(np.uint16) + level[1:h:2, :h:2] +
@@ -350,10 +429,18 @@ def write_preview(rgba, out_dir, width=1536):
 
 
 def fetch_active_points():
-    """Active storms within GOES-E/W coverage (lon -180..-5) → [(lat,lon),…]."""
+    """Active storms within GOES-E/W + Himawari coverage → [(lat,lon),…].
+    The API sits behind Cloudflare and 403s a bare urllib UA, so send a
+    browser-ish User-Agent + Origin (production would call the origin URL)."""
+    req = urllib.request.Request(
+        API_BASE + "/ir-monitor/active-storms",
+        headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                               "AppleWebKit/537.36 (KHTML, like Gecko) "
+                               "Chrome/126 Safari/537.36",
+                 "Origin": "https://tcatlas.org",
+                 "Referer": "https://tcatlas.org/"})
     try:
-        with urllib.request.urlopen(API_BASE + "/ir-monitor/active-storms",
-                                    timeout=20) as r:
+        with urllib.request.urlopen(req, timeout=20) as r:
             storms = (json.load(r) or {}).get("storms", [])
     except Exception as e:
         log(f"  active-storms fetch failed: {e}"); return []
@@ -363,11 +450,13 @@ def fetch_active_points():
         if lat is None or lon is None:
             continue
         lonn = ((lon + 180) % 360) - 180
-        if -180 <= lonn <= -5:
+        # covered = GOES-E/W (≤ -5°) or Himawari (≥ 75°); the -5..75 gap is
+        # the Meteosat coverage we don't ingest yet.
+        if lonn <= -5 or lonn >= 75:
             pts.append((lat, lonn))
             log(f"  storm {s.get('name','?')} @ {lat:.1f},{lonn:.1f}")
         else:
-            log(f"  storm {s.get('name','?')} @ {lonn:.1f}°E outside GOES — skip")
+            log(f"  storm {s.get('name','?')} @ {lonn:.1f}° in Meteosat gap — skip")
     return pts
 
 
@@ -384,6 +473,9 @@ def main():
                     help="override cutline sharpness (default %d)" % BLEND_P)
     ap.add_argument("--frames", type=int, default=1,
                     help="number of consecutive 10-min frames (for animation)")
+    ap.add_argument("--r2", action="store_true",
+                    help="upload tiles to R2 (mosaic-v1/) + roll the manifest "
+                         "(production Cloud Run Job mode)")
     ap.add_argument("--time", action="store_true")
     ap.add_argument("--out", default=OUT_DIR)
     args = ap.parse_args()
@@ -419,25 +511,41 @@ def main():
                 log("kernels ready (one-time cost) — done"); return
 
         ts = dt.strftime("%Y%m%d%H%M")
-        tiles_dir = os.path.join(args.out, "ir", ts)
+        pool, futures = None, []
+        if args.r2:
+            pool = _cf.ThreadPoolExecutor(max_workers=16)
+            emit = r2_sink(ts, pool, futures)
+        else:
+            emit = local_sink(os.path.join(args.out, "ir", ts))
+
         rgba = global_render(args.zmax, sats, kernels, timings)
-        n_global = write_pyramid(rgba, args.zmax, tiles_dir, timings)
+        n_global = write_pyramid(rgba, args.zmax, emit, timings)
         n_storm = 0
         if points:
             tiles = storm_tile_set(points, STORM_ZOOMS, STORM_BOX_DEG)
-            n_storm = render_storm_tiles(sats, tiles, tiles_dir, timings)
+            n_storm = render_storm_tiles(sats, tiles, emit, timings)
         if fi == 0:
             write_preview(rgba, args.out)
         written.append(ts)
+
+        if args.r2:
+            t1 = time.time(); ok = errs = 0
+            for f in _cf.as_completed(futures):
+                try: f.result(); ok += 1
+                except Exception as ex: errs += 1; log(f"  R2 put failed: {ex}")
+            pool.shutdown()
+            frames = update_r2_manifest(ts, args.zmax)
+            timings["upload"] = time.time() - t1
+            log(f"  R2: {ok} tiles up ({errs} failed); manifest now {len(frames)} frames")
         log(f"  wrote {n_global} global + {n_storm} storm tiles → {ts}")
         if args.time:
             parts = " ".join(f"{k} {timings[k]:.1f}s" for k in
-                             ("read", "gather", "colormap", "tile", "storm_tile")
+                             ("read", "gather", "colormap", "tile", "storm_tile", "upload")
                              if k in timings)
             log(f"  timings: {parts}")
 
-    # animation manifest (oldest→newest) for the MapLibre POC
-    if written:
+    # local animation manifest (R2 mode rolls its own per-frame above)
+    if written and not args.r2:
         man = os.path.join(args.out, "ir", "frames.json")
         with open(man, "w") as f:
             json.dump({"frames": sorted(written), "zmax": args.zmax,

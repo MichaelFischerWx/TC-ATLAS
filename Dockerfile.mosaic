@@ -1,0 +1,42 @@
+# --------------------------------------------------------------------------
+# TC-ATLAS global IR mosaic builder — Cloud Run Job container
+# --------------------------------------------------------------------------
+# Each invocation: reads the latest GOES-19/18 + Himawari-9 full-disk Band 13,
+# reprojects via cached geos→Mercator kernels, cutline-blends, colormaps, tiles
+# (z0–5 global + z6–7 storm sectors), and uploads to R2 (mosaic-v1/) + rolls the
+# manifest. Consumed by the MapLibre map as one raster source.
+#
+# Build:   gcloud builds submit --config <cfg> .   (see deploy_mosaic_job.sh)
+# Deploy:  ./deploy_mosaic_job.sh
+# --------------------------------------------------------------------------
+FROM python:3.11-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libhdf5-dev \
+        libgeos-dev \
+        libproj-dev \
+        proj-data \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir \
+        numpy \
+        scipy \
+        xarray \
+        h5netcdf \
+        s3fs \
+        pyproj \
+        Pillow \
+        boto3
+
+# the builder + the production satellite data stack it reuses
+COPY build_ir_mosaic.py .
+COPY satellite_ir.py .
+
+# Cloud Run Jobs invoke the container once and exit. Default to production R2
+# mode with storm sectors over active storms; the deploy script can override
+# --args if needed.
+ENTRYPOINT ["python", "build_ir_mosaic.py"]
+CMD ["--r2", "--storm", "--time"]
