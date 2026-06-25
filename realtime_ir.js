@@ -1665,6 +1665,7 @@
     var _MOSAIC_BASE = 'https://cdn.tcatlas.org/mosaic-v1/ir';
     var _mosaicFrames = [];          // rolling timestamps from frames.json
     var _mosaicTs = null;            // latest frame
+    var _detailMosaicBase = null;    // global IR mosaic laid under the storm-card cutout (GL build)
     var _mosaicLoad = null;
     function _loadMosaicFrames() {
         if (_mosaicLoad) return _mosaicLoad;
@@ -4134,6 +4135,10 @@
         framesLoaded = 0;
         _frameLoadedOnce = {};
         framesReady = false;
+        // Tear down the global-mosaic under-layer (GL build) so it doesn't stack
+        // across storm switches.
+        if (_detailMosaicBase && detailMap) { try { detailMap.removeLayer(_detailMosaicBase); } catch (e) {} }
+        _detailMosaicBase = null;
         // Fully reset the parallel frame-state arrays too. These used to be
         // left intact (callers reset them individually), but that meant any
         // rebuild path that forgot — e.g. the in-place "newer frames" refresh
@@ -5409,6 +5414,25 @@
         L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
             subdomains: 'abcd', maxZoom: 19
         }).addTo(detailMap);
+
+        // GL build: lay the global IR mosaic UNDER the high-res storm cutout, so
+        // panning/zooming out of the (storm-following) cutout box shows continuous
+        // satellite data instead of blank basemap. The cutout overlays the core at
+        // higher resolution; pane z-order keeps the mosaic (tilePane) below the
+        // cutout image overlays. Static at the latest mosaic frame — when the user
+        // is zoomed in on the storm the cutout covers it, so this only shows in the
+        // surrounding context where a frozen vs animating distinction is moot.
+        if (window.LFLET_GL) {
+            var _mosStormId = storm.atcf_id;
+            _loadMosaicFrames().then(function () {
+                if (!detailMap || currentStormId !== _mosStormId) return;
+                var ts = _mosaicTs || (_mosaicFrames.length ? _mosaicFrames[_mosaicFrames.length - 1] : null);
+                if (!ts || _detailMosaicBase) return;
+                _detailMosaicBase = L.tileLayer(_mosaicTileUrl(ts), {
+                    opacity: 0.6, maxZoom: 7, maxNativeZoom: 7, pane: 'tilePane'
+                }).addTo(detailMap);
+            }).catch(function () {});
+        }
 
         // Lat/lon graticule — default ON for the storm card. Storm-relative
         // framing makes a reference grid genuinely useful (the imagery

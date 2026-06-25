@@ -154,8 +154,13 @@
         // wrapped world-copy tile (x=-1) that throws a harmless "outside of bounds"
         // during _finishLoading — the overlay still renders. Swallow only that;
         // surface everything else.
-        this._gl.on('error', function (ev) { var m = ev && ev.error && ev.error.message || '';
-            if (/outside of bounds/.test(m)) return; console.error('[lflet_gl]', ev && ev.error || ev); });
+        this._gl.on('error', function (ev) { var err = ev && ev.error, m = (err && err.message) || '';
+            // Benign + unactionable: the full-globe image-tile bounds quirk, and
+            // AbortErrors from image sources whose in-flight load was superseded
+            // (the storm-card lazy-decode window swaps frame URLs rapidly).
+            if (/outside of bounds/.test(m)) return;
+            if ((err && err.name === 'AbortError') || /aborted/.test(m)) return;
+            console.error('[lflet_gl]', err || ev); });
 
         // Leaflet-style default panes: DOM divs over the canvas. Custom canvas
         // layers (barbs/microwave) draw into these via L.DomUtil + projection.
