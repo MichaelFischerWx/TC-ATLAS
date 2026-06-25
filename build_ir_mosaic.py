@@ -178,11 +178,16 @@ def blend_samples(samples):
     BLEND_P, weight-average. Nearer-nadir wins outside a thin feather → no
     wide-area averaging of parallax-offset cold tops."""
     shape = samples[0][0].shape
-    cosz_stack = np.stack([np.where(v, c, 0.0).astype(np.float64)
+    # float32 (was float64): halves the peak blend footprint — the cosz_stack +
+    # num/den at 8192² are what forced 16 GiB — so the job can run at 8 GiB. Tb
+    # (180-310 K) and the cos² cutline weights are well within float32's ~7 sig
+    # figs; where ratio**BLEND_P underflows it's a far-off-nadir pixel whose weight
+    # is meant to be ~0 anyway, so the cutline result is unchanged.
+    cosz_stack = np.stack([np.where(v, c, 0.0).astype(np.float32)
                            for (_, c, v) in samples])
     cmax = cosz_stack.max(axis=0)
-    num = np.zeros(shape, np.float64)
-    den = np.zeros(shape, np.float64)
+    num = np.zeros(shape, np.float32)
+    den = np.zeros(shape, np.float32)
     with np.errstate(divide="ignore", invalid="ignore"):
         for k, (tb_g, _c, v) in enumerate(samples):
             ratio = np.where(cmax > 0, cosz_stack[k] / cmax, 0.0)
