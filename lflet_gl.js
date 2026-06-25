@@ -609,6 +609,80 @@
         setStyle: function () { return this; }, bringToFront: function () { return this; }
     });
 
+    // ── Rectangle (bounds → filled polygon; interactive hit target) ──
+    //    Used by the microwave layer for per-swath click/hover popups. The
+    //    fill is usually transparent (fillOpacity 0) but still hit-tests, so
+    //    the user can click anywhere inside the swath rectangle. Modeled on
+    //    Circle, plus event wiring (Circle is non-interactive). Without this
+    //    class L.rectangle was undefined → _addOrbit threw on the first orbit
+    //    and aborted _renderAll before setItems(), so the MW mosaic stayed empty.
+    var Rectangle = extend.call(Layer, {
+        initialize: function (bounds, opts) {
+            this._bounds = bounds instanceof LatLngBounds ? bounds : new LatLngBounds(bounds);
+            this.options = opts || {}; this._id = uid('rect');
+        },
+        _geo: function () {
+            var b = this._bounds, s = b.getSouth(), w = b.getWest(), n = b.getNorth(), e = b.getEast();
+            var ring = [[w, s], [e, s], [e, n], [w, n], [w, s]];
+            return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring] } };
+        },
+        _addToGL: function (map) {
+            this._map = map; var gl = map._gl, id = this._id, self = this, o = this.options;
+            map._whenStyle(function () {
+                if (gl.getSource(id)) return;
+                gl.addSource(id, { type: 'geojson', data: self._geo() });
+                var z = map._paneZ(o.pane || 'overlayPane');
+                if (o.fill !== false) map._glAdd({ id: id + '-f', type: 'fill', source: id,
+                    paint: { 'fill-color': o.fillColor || o.color || '#ffffff',
+                             'fill-opacity': o.fillOpacity != null ? o.fillOpacity : 0 } }, z - 1);
+                map._glAdd({ id: id, type: 'line', source: id,
+                    paint: { 'line-color': o.color || '#3388ff', 'line-width': o.weight != null ? o.weight : 1,
+                             'line-opacity': o.opacity != null ? o.opacity : 1 } }, z);
+                self._added = true;
+                if (o.interactive !== false && o.fill !== false) self._wire(gl, id + '-f');
+            });
+        },
+        _wire: function (gl, hitId) {
+            var self = this;
+            this._glClick = function (e) {
+                if (self._popup && self._map) self._popup._ml().setLngLat(e.lngLat).addTo(self._map._gl);
+                self._fire('click', e);
+            };
+            this._glEnter = function (e) { gl.getCanvas().style.cursor = 'pointer'; self._fire('mouseover', e); };
+            this._glLeave = function (e) { gl.getCanvas().style.cursor = ''; self._fire('mouseout', e); };
+            gl.on('click', hitId, this._glClick);
+            gl.on('mouseenter', hitId, this._glEnter);
+            gl.on('mouseleave', hitId, this._glLeave);
+        },
+        _fire: function (type, e) { var self = this;
+            ((this._evts && this._evts[type]) || []).forEach(function (fn) {
+                try { fn({ type: type, target: self, latlng: e && e.lngLat }); } catch (x) {} }); },
+        on: function (type, fn, ctx) { var self = this; if (!this._evts) this._evts = {};
+            String(type).split(' ').forEach(function (t) { (self._evts[t] = self._evts[t] || []).push(ctx ? fn.bind(ctx) : fn); }); return this; },
+        off: function () { return this; },
+        bindPopup: function (content, opts) { this._popup = content instanceof Popup ? content : new Popup(opts).setContent(content); return this; },
+        bindTooltip: function (content, opts) { this._tip = { content: content, opts: opts || {} }; return this; },
+        setStyle: function (st) { var gl = this._map && this._map._gl;
+            if (gl && gl.getLayer(this._id)) {
+                if (st.color) gl.setPaintProperty(this._id, 'line-color', st.color);
+                if (st.opacity != null) gl.setPaintProperty(this._id, 'line-opacity', st.opacity);
+                if (st.weight != null) gl.setPaintProperty(this._id, 'line-width', st.weight);
+            }
+            if (gl && gl.getLayer(this._id + '-f')) {
+                if (st.fillColor) gl.setPaintProperty(this._id + '-f', 'fill-color', st.fillColor);
+                if (st.fillOpacity != null) gl.setPaintProperty(this._id + '-f', 'fill-opacity', st.fillOpacity);
+            }
+            Object.assign(this.options, st); return this; },
+        setBounds: function (b) { this._bounds = b instanceof LatLngBounds ? b : new LatLngBounds(b);
+            var src = this._map && this._map._gl.getSource(this._id); if (src) src.setData(this._geo()); return this; },
+        bringToFront: function () { return this; },
+        _removeFromGL: function (map) { var gl = map._gl, id = this._id;
+            if (this._glClick) { try { gl.off('click', id + '-f', this._glClick);
+                gl.off('mouseenter', id + '-f', this._glEnter); gl.off('mouseleave', id + '-f', this._glLeave); } catch (e) {} }
+            [id, id + '-f'].forEach(function (l) { try { if (gl.getLayer(l)) gl.removeLayer(l); } catch (e) {} });
+            try { if (gl.getSource(id)) gl.removeSource(id); } catch (e) {} }
+    });
+
     // ── Control (custom corner widgets) ──
     // Merge prototype options (where L.Control.extend subclasses put their
     // default { position: ... }) with the passed opts, like Leaflet's setOptions.
@@ -655,6 +729,12 @@
         getLatLng: function () { return this._ll; },
         bindPopup: function (content, opts) { this._popup = content instanceof Popup ? content : new Popup(opts).setContent(content); if (this._m) this._m.setPopup(this._popup._ml()); return this; },
         bindTooltip: function (content, opts) { this._tip = { content: content, opts: opts || {} }; if (this._m) this._applyTooltip(); return this; },
+        setTooltipContent: function (content) {
+            this._tip = this._tip || { content: '', opts: {} };
+            this._tip.content = content;
+            // Live-update if the tip div is currently shown (hover open).
+            if (this._tipEl) this._tipEl.innerHTML = typeof content === 'string' ? content : (content && content.outerHTML || '');
+            return this; },
         setIcon: function (icon) { this.options.icon = icon; return this; },
         on: function (type, fn, ctx) { if (!this._evts) this._evts = {}; var _self = this;
             String(type).split(' ').forEach(function (t) { (_self._evts[t] = _self._evts[t] || []).push(ctx ? fn.bind(ctx) : fn); });
@@ -843,13 +923,14 @@
         polyline: function (ll, o) { return new Polyline(ll, o); },
         polygon: function (ll, o) { var p = new Polyline(ll, o); return p; },
         circle: function (ll, o) { return new Circle(ll, o); },
+        rectangle: function (b, o) { return new Rectangle(b, o); },
         control: function (o) { return new Control(o); },
         canvas: function (o) { return new CanvasRenderer(o); },
         svg: function (o) { return new CanvasRenderer(o); },
         Map: Map, Layer: Layer, TileLayer: TileLayer, ImageOverlay: ImageOverlay,
         GeoJSON: GeoJSON, Marker: Marker, CircleMarker: CircleMarker, Popup: Popup,
         LayerGroup: LayerGroup, GridLayer: GridLayer, DivIcon: DivIcon, Icon: Icon,
-        Polyline: Polyline, Circle: Circle, Control: Control,
+        Polyline: Polyline, Circle: Circle, Rectangle: Rectangle, Control: Control,
         DomUtil: DomUtil, DomEvent: DomEvent, Util: { bind: function (fn, ctx) { return fn.bind(ctx); }, extend: Object.assign },
         Browser: { mobile: /Mobi|Android/i.test(navigator.userAgent), retina: (window.devicePixelRatio || 1) > 1, any3d: true }
     };
