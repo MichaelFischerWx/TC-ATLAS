@@ -39,6 +39,13 @@
         return null;
     }
     function ll2ml(a, b) { var p = toLatLng(a, b); return [p.lng, p.lat]; }   // → [lng,lat]
+    function _wrapLng(lng) { return ((lng + 180) % 360 + 360) % 360 - 180; }  // → [-180,180]
+    // Point markers/popups must use a wrapped longitude: a track that crosses the
+    // antimeridian can carry lng like -235 (=125°E unwrapped). maplibregl draws a
+    // marker there fine (world copies), but Popup.setLngLat() can't project an
+    // out-of-range lng and strands the popup at 0,0 (top-left). Wrapping is a no-op
+    // for the marker's on-screen position but makes getLngLat()/popups sane.
+    function mlWrap(a, b) { var p = toLatLng(a, b); return [_wrapLng(p.lng), p.lat]; }
 
     function LatLngBounds(a, b) { this._sw = null; this._ne = null; if (a) this.extend(a); if (b) this.extend(b); }
     LatLngBounds.prototype.extend = function (o) {
@@ -504,11 +511,11 @@
         initialize: function (latlng, opts) { this._ll = toLatLng(latlng); this.options = opts || {}; this._evts = {}; },
         _addToGL: function (map) { this._map = map;
             this._m = new maplibregl.Marker({ element: this.options.icon ? makeIconEl(this.options.icon) : undefined, anchor: 'center' })
-                .setLngLat(ll2ml(this._ll)).addTo(map._gl);
+                .setLngLat(mlWrap(this._ll)).addTo(map._gl);
             if (this._popup) this._m.setPopup(this._popup._ml());
             this._applyTooltip(); this._applyEvents(); },
-        _removeFromGL: function () { if (this._tipPopup) this._tipPopup.remove(); if (this._m) this._m.remove(); },
-        setLatLng: function (ll) { this._ll = toLatLng(ll); if (this._m) this._m.setLngLat(ll2ml(this._ll)); return this; },
+        _removeFromGL: function () { if (this._tipHide) this._tipHide(); if (this._m) this._m.remove(); },
+        setLatLng: function (ll) { this._ll = toLatLng(ll); if (this._m) this._m.setLngLat(mlWrap(this._ll)); return this; },
         getLatLng: function () { return this._ll; },
         bindPopup: function (content, opts) { this._popup = content instanceof Popup ? content : new Popup(opts).setContent(content); if (this._m) this._m.setPopup(this._popup._ml()); return this; },
         bindTooltip: function (content, opts) { this._tip = { content: content, opts: opts || {} }; if (this._m) this._applyTooltip(); return this; },
@@ -517,14 +524,34 @@
             String(type).split(' ').forEach(function (t) { (_self._evts[t] = _self._evts[t] || []).push(ctx ? fn.bind(ctx) : fn); });
             if (this._m) this._applyEvents(); return this; },
         off: function () { return this; },
+        // Tooltips are positioned DOM divs anchored to the marker's on-screen rect,
+        // NOT maplibregl.Popup. maplibregl re-expresses a marker's lng in the
+        // world-copy nearest the map center (a WPac marker reads as lng -235), and
+        // Popup.setLngLat() can't project that → it strands the tip at 0,0 (top-left).
+        // The marker DOM element is always correctly placed, so we hang the tip off
+        // its getBoundingClientRect. Using the Leaflet tooltip classes also lets the
+        // site's .leaflet-tooltip / .ir-stn-plot-tooltip CSS style it (readable).
         _applyTooltip: function () { var self = this; if (!this._tip || !this._m || this._tipBound) return; var el = this._m.getElement(); if (!el) return; this._tipBound = true;
-            var dir = this._tip.opts.direction || 'top';
-            var anchor = dir === 'top' ? 'bottom' : dir === 'bottom' ? 'top' : dir === 'left' ? 'right' : dir === 'right' ? 'left' : 'bottom';
+            var dir = this._tip.opts.direction || 'top', off = this._tip.opts.offset || [0, 0];
             el.style.cursor = el.style.cursor || 'pointer';
-            el.addEventListener('mouseenter', function () {
-                if (!self._tipPopup) self._tipPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, anchor: anchor, offset: 10, className: 'lflet-tip ' + (self._tip.opts.className || '') });
-                var c = self._tip.content; self._tipPopup.setHTML(typeof c === 'string' ? c : (c && c.outerHTML || '')).setLngLat(self._m.getLngLat()).addTo(self._map._gl); });
-            el.addEventListener('mouseleave', function () { if (self._tipPopup) self._tipPopup.remove(); }); },
+            function show() {
+                if (!self._tipEl) { self._tipEl = document.createElement('div');
+                    self._tipEl.className = 'leaflet-tooltip leaflet-tooltip-' + dir + ' ' + (self._tip.opts.className || '');
+                    self._tipEl.style.cssText = 'position:fixed;z-index:1200;pointer-events:none;opacity:1;white-space:nowrap;'; }
+                var c = self._tip.content; self._tipEl.innerHTML = typeof c === 'string' ? c : (c && c.outerHTML || '');
+                document.body.appendChild(self._tipEl);
+                var r = el.getBoundingClientRect(), t = self._tipEl.getBoundingClientRect();
+                var cx = r.left + r.width / 2, ox = off[0] || 0, oy = off[1] || 0, x, y;
+                if (dir === 'bottom') { x = cx - t.width / 2; y = r.bottom + 6; }
+                else if (dir === 'left') { x = r.left - t.width - 6; y = r.top + r.height / 2 - t.height / 2; }
+                else if (dir === 'right') { x = r.right + 6; y = r.top + r.height / 2 - t.height / 2; }
+                else { x = cx - t.width / 2; y = r.top - t.height - 6; }   // 'top' (default)
+                self._tipEl.style.left = Math.round(x + ox) + 'px'; self._tipEl.style.top = Math.round(y + oy) + 'px';
+            }
+            self._tipHide = function () { if (self._tipEl && self._tipEl.parentNode) self._tipEl.parentNode.removeChild(self._tipEl); };
+            el.addEventListener('mouseenter', show);
+            if (this._tip.opts.sticky) el.addEventListener('mousemove', function () { if (self._tipEl && self._tipEl.parentNode) show(); });
+            el.addEventListener('mouseleave', self._tipHide); },
         _applyEvents: function () { var self = this; if (!this._m || !this._evts) return; var el = this._m.getElement(); if (!el) return; this._boundT = this._boundT || {};
             Object.keys(this._evts).forEach(function (t) { if (self._boundT[t]) return; self._boundT[t] = true;
                 el.addEventListener(_domEvtMap[t] || t, function (ev) {
@@ -539,7 +566,7 @@
             el.style.width = r + 'px'; el.style.height = r + 'px'; el.style.borderRadius = '50%';
             el.style.background = o.fillColor || o.color || '#3388ff'; el.style.opacity = o.fillOpacity != null ? o.fillOpacity : 1;
             el.style.border = (o.weight || 1) + 'px solid ' + (o.color || '#fff'); this.options.icon = { _el: el }; },
-        _addToGL: function (map) { this._map = map; this._m = new maplibregl.Marker({ element: this.options.icon._el, anchor: 'center' }).setLngLat(ll2ml(this._ll)).addTo(map._gl);
+        _addToGL: function (map) { this._map = map; this._m = new maplibregl.Marker({ element: this.options.icon._el, anchor: 'center' }).setLngLat(mlWrap(this._ll)).addTo(map._gl);
             if (this._popup) this._m.setPopup(this._popup._ml()); this._applyTooltip(); this._applyEvents(); }
     });
 
@@ -547,7 +574,7 @@
     Popup.prototype.setContent = function (c) { this._content = c; if (this._mlp) this._mlp.setHTML(typeof c === 'string' ? c : (c.outerHTML || '')); return this; };
     Popup.prototype.setLatLng = function (ll) { this._ll = toLatLng(ll); return this; };
     Popup.prototype._ml = function () { if (!this._mlp) { this._mlp = new maplibregl.Popup({ offset: this.options.offset || 12, closeButton: this.options.closeButton !== false, maxWidth: this.options.maxWidth || '320px' }); this._mlp.setHTML(typeof this._content === 'string' ? this._content : (this._content.outerHTML || '')); } return this._mlp; };
-    Popup.prototype.addTo = function (map) { var p = this._ml(); if (this._ll) p.setLngLat(ll2ml(this._ll)); p.addTo(map._gl); return this; };
+    Popup.prototype.addTo = function (map) { var p = this._ml(); if (this._ll) p.setLngLat(mlWrap(this._ll)); p.addTo(map._gl); return this; };
     Popup.prototype.openOn = Popup.prototype.addTo;
 
     function DivIcon(opts) { opts = opts || {}; this._html = opts.html || ''; this._className = opts.className || ''; }
