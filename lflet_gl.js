@@ -523,7 +523,11 @@
     Control.prototype.setPosition = function (p) { this.options.position = p; if (this._el) _placeCtrl(this._el, p); return this; };
     Control.prototype.remove = function () { if (this._map) this._map.removeControl(this); return this; };
     Control.extend = function (proto) { function C(o) { Control.call(this, o); if (this.initialize) this.initialize(o); } C.prototype = Object.create(Control.prototype); Object.assign(C.prototype, proto || {}); C.extend = Control.extend; return C; };
-    function _placeCtrl(el, pos) { pos = pos || 'topright'; el.style.position = 'absolute'; el.style.zIndex = 5;
+    function _placeCtrl(el, pos) { pos = pos || 'topright'; el.style.position = 'absolute';
+        // Controls (Layers menu, zoom, etc.) must sit above every pane — Leaflet's
+        // controlContainer is ~z800, above popupPane (700). At z5 the env wind-barb
+        // canvas (overlayPane, z400) painted over the open Layers menu.
+        el.style.zIndex = 800;
         el.style.top = el.style.bottom = el.style.left = el.style.right = '';
         el.style[pos.indexOf('top') >= 0 ? 'top' : 'bottom'] = '10px';
         el.style[pos.indexOf('left') >= 0 ? 'left' : 'right'] = '10px'; }

@@ -5456,7 +5456,9 @@
                 var ts = _mosaicTs || (_mosaicFrames.length ? _mosaicFrames[_mosaicFrames.length - 1] : null);
                 if (!ts || _detailMosaicBase) return;
                 _detailMosaicBase = L.tileLayer(_mosaicTileUrl(ts), {
-                    opacity: 0.6, maxZoom: 7, maxNativeZoom: 7, pane: 'tilePane', crisp: true
+                    // Match the high-res cutout's full opacity so the surrounding
+                    // context is just as bright (was 0.6 → washed-out vs the center).
+                    opacity: 1.0, maxZoom: 7, maxNativeZoom: 7, pane: 'tilePane', crisp: true
                 }).addTo(detailMap);
             }).catch(function () {});
         }
