@@ -751,6 +751,10 @@
             this._m = new maplibregl.Marker({ element: this.options.icon ? makeIconEl(this.options.icon) : undefined, anchor: 'center' })
                 .setLngLat(mlWrap(this._ll)).addTo(map._gl);
             if (this._popup) { this._m.setPopup(this._popup._ml()); this._bridgePopup(); }
+            // maplibregl markers all share one DOM container ordered by insertion, so
+            // Leaflet pane z-order doesn't apply. Honor zIndexOffset as a CSS z-index
+            // so e.g. genesis pills can sit above the track dots regardless of order.
+            if (this.options.zIndexOffset != null) this.setZIndexOffset(this.options.zIndexOffset);
             this._applyTooltip(); this._applyEvents(); },
         _removeFromGL: function () { if (this._tipHide) this._tipHide(); if (this._m) this._m.remove(); },
         setLatLng: function (ll) { this._ll = toLatLng(ll); if (this._m) this._m.setLngLat(mlWrap(this._ll)); return this; },
@@ -819,7 +823,8 @@
                     var e = { type: t, originalEvent: ev, latlng: self._ll, target: self,
                               stopPropagation: function () { ev.stopPropagation(); }, preventDefault: function () { ev.preventDefault(); } };
                     (self._evts[t] || []).forEach(function (fn) { fn(e); }); }); }); },
-        setOpacity: function (o) { if (this._m && this._m.getElement()) this._m.getElement().style.opacity = o; return this; }, setZIndexOffset: function () { return this; }
+        setOpacity: function (o) { if (this._m && this._m.getElement()) this._m.getElement().style.opacity = o; return this; },
+        setZIndexOffset: function (z) { this.options.zIndexOffset = z; var el = this._m && this._m.getElement(); if (el) el.style.zIndex = z; return this; }
     });
     var CircleMarker = extend.call(Marker, {
         initialize: function (latlng, opts) { this._ll = toLatLng(latlng); this.options = opts || {}; this._evts = {}; var o = this.options;

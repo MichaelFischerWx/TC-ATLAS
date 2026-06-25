@@ -556,6 +556,7 @@
     var globalAnimFrameLayers = [];   // parallel composite L.GridLayer (one per frame, opacity 0 until shown)
     var globalAnimIndex = 0;
     var globalAnimPlaying = false;
+    var _globalAnimAutoplay = false;  // play as soon as frames finish loading (1-click play)
     var globalAnimTimer = null;       // rAF handle (global view)
     var globalAnimLastTick = 0;       // timestamp of last frame advance (global view)
     var globalAnimLoaded = 0;
@@ -565,12 +566,13 @@
     // loading (drag-to-scrub triggers a lazy load). Applied once the series
     // is ready instead of snapping to the latest frame. null = none pending.
     var _globalAnimPendingScrub = null;
-    var globalAnimSpeedIdx = 1;        // index into GLOBAL_ANIM_SPEEDS
+    var globalAnimSpeedIdx = 3;        // default 2× (was 1×) — faster global loop
     var GLOBAL_ANIM_SPEEDS = [
         { label: '0.5×', ms: 1200 },
         { label: '1×',   ms: 600 },
         { label: '1.5×', ms: 400 },
-        { label: '2×',   ms: 300 }
+        { label: '2×',   ms: 300 },
+        { label: '3×',   ms: 200 }   // added headroom above the old 2× ceiling
     ];
 
     // Storm detail mini-map state
@@ -2767,6 +2769,7 @@
                         showGlobalAnimFrame(globalAnimIndex);
                         updateGlobalAnimControls('ready');
                         console.log('[Global Anim] All', total, 'frames loaded');
+                        if (_globalAnimAutoplay) startGlobalAnimation();  // 1-click play
                     }
                 });
             })(lyr, f, globalAnimFrameTimes.length);
@@ -2785,6 +2788,7 @@
                 _globalAnimPendingScrub = null;
                 showGlobalAnimFrame(globalAnimIndex);
                 updateGlobalAnimControls('ready');
+                if (_globalAnimAutoplay) startGlobalAnimation();  // 1-click play
             }
         }, 45000);
     }
@@ -2898,10 +2902,14 @@
     /** Start global animation loop */
     function startGlobalAnimation() {
         if (!globalAnimReady) {
-            // Start loading if not yet loaded
+            // Frames not built yet: start loading AND remember to auto-play when
+            // they finish, so the first Play click actually animates (previously it
+            // only kicked off the load and you had to click Play a second time).
+            _globalAnimAutoplay = true;
             loadGlobalAnimation();
             return;
         }
+        _globalAnimAutoplay = false;
         globalAnimPlaying = true;
         updateGlobalAnimControls('playing');
         globalAnimLastTick = 0;
@@ -3883,6 +3891,21 @@
                 layerArr.push(extSeg);
                 labelPos = extrapPin;
             }
+        }
+
+        // Render-time dedupe (the real fix for the brief doubled name): if a genesis
+        // disturbance pill already owns this storm's name — the SAME suppression the
+        // dot marker uses (~L3647) — don't create a second name label at all. The old
+        // approach let both render and hid one afterward (the flash). Also clear any
+        // label that was created before the match landed (the reverse-order race,
+        // still backstopped by _scheduleStormLabelSync).
+        if (targetMap === map && storm.atcf_id
+                && _genesisMatchedAtcfIds[String(storm.atcf_id).toUpperCase()]) {
+            var mkey = String(storm.atcf_id).toUpperCase();
+            var prevL = _stormNameLabels[mkey];
+            if (prevL && map) { try { map.removeLayer(prevL); } catch (e) {} }
+            delete _stormNameLabels[mkey];
+            return null;
         }
 
         var label = L.marker([labelPos.lat, labelPos.lon], {
@@ -10927,7 +10950,11 @@
         if (!stormsAvail || !stormsAvail.length) return null;
         var p0 = disturbance.mean.points[0];
         if (p0.lat == null || p0.lon == null) return null;
-        var best = null, bestDist = 600;  // km threshold
+        // 350 km (was 600): in basins like the E-Pac, invests sit 500–900 km apart,
+        // and the disturbance position here is an ENSEMBLE-MEAN start point that can
+        // drift toward a neighbor — 600 km let it grab the wrong invest (e.g. a
+        // disturbance mislabeled "94E"). A genuine match is usually well inside 350.
+        var best = null, bestDist = 350;  // km threshold
         for (var i = 0; i < stormsAvail.length; i++) {
             var s = stormsAvail[i];
             if (!s || s.lat == null || s.lon == null) continue;
@@ -11808,6 +11835,9 @@
             var marker = L.marker([p0.lat, p0.lon], {
                 icon: icon, interactive: true, bubblingMouseEvents: false,
                 riseOnHover: true, riseOffset: 800,
+                // Sit above the TC track dots/markers (which were covering the
+                // disturbance pills); facade maps zIndexOffset → CSS z-index.
+                zIndexOffset: 650,
             }).addTo(map);
 
             var probLine = probsPending
