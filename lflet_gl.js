@@ -349,9 +349,12 @@
                     maxzoom: self.options.maxNativeZoom || self.options.maxZoom || 19,
                     attribution: self.options.attribution || '' });
                 var paint = { 'raster-opacity': self.options.opacity != null ? self.options.opacity : 1,
-                    // No cross-fade when a new frame's tiles stream in — that fade is
-                    // the "white flash" between animation frames.
-                    'raster-fade-duration': 0 };
+                    // No tile cross-fade, and NO opacity transition: the animation
+                    // swaps frame opacity 0↔0.85, and MapLibre's default 300ms
+                    // raster-opacity transition made the basemap pulse through mid-fade
+                    // ("white opaque layer that fades in and out" between frames).
+                    'raster-fade-duration': 0,
+                    'raster-opacity-transition': { duration: 0 } };
                 // crisp: pixel-exact overzoom (the IR mosaic; keeps the sharp,
                 // non-interpolated look past native zoom). Default basemap stays linear.
                 if (self.options.crisp) paint['raster-resampling'] = 'nearest';
@@ -397,7 +400,8 @@
                 var imgZ = self.options.pane ? map._paneZ(self.options.pane) : 350;
                 map._glAdd({ id: id, type: 'raster', source: id,
                     paint: { 'raster-opacity': self.options.opacity != null ? self.options.opacity : 1,
-                             'raster-resampling': 'nearest', 'raster-fade-duration': 0 } }, imgZ); self._added = true; }); },
+                             'raster-resampling': 'nearest', 'raster-fade-duration': 0,
+                             'raster-opacity-transition': { duration: 0 } } }, imgZ); self._added = true; }); },
         _removeFromGL: function (map) { var gl = map._gl; try { if (gl.getLayer(this._id)) gl.removeLayer(this._id); if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {} },
         setOpacity: function (o) { var gl = this._map && this._map._gl; if (gl && gl.getLayer(this._id)) gl.setPaintProperty(this._id, 'raster-opacity', o); this.options.opacity = o; return this; },
         setUrl: function (u) { this._url = u; var gl = this._map && this._map._gl, src = gl && gl.getSource(this._id); if (src) src.updateImage({ url: u }); return this; },
