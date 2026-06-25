@@ -219,18 +219,34 @@ PRODUCTS = {
 }
 _NIGHT_ELEV_DEG = -6.0   # civil twilight: below this, Visible is masked clear
 
-_WV_VMIN, _WV_VMAX = BAND_RANGES[WV_BAND]["vmin"], BAND_RANGES[WV_BAND]["vmax"]
+# WV range focused on the meteorologically meaningful regime (195-255 K) rather
+# than the full 170-260 band — gives the moisture gradient more color resolution.
+# Driest >255 K saturates to darkest brown; deep convection <195 K to green.
+_WV_VMIN, _WV_VMAX = 195.0, 255.0
 
 
-# CIMSS-style Water-Vapor LUT (ported from ir_monitor_api._CLAUDE_WV_*): warm/dry
-# → terracotta, mid-trop → cream/cyan, deep convection → green/mint.
+# Diverging Water-Vapor LUT (frac = 1 - (Tb-195)/60, so frac 0 = warm/dry):
+# DRY warm tail → dark→medium brown→tan; a light cream NEUTRAL near ~232 K; then
+# MOIST → pale blue→blue→teal→green (deep convection). The earlier CIMSS port put
+# the brown/blue divergence too cold, so most of a field's mid-trop Tb read as
+# brown ("too much brown"); this moves the neutral warmer and lets lightness carry
+# the gradient so moist pockets pop as white/blue against the dry brown.
 _CLAUDE_WV_FRAC_STOPS = [
-    (0.000, 235, 110,  45), (0.080, 215,  90,  50), (0.160, 195, 105,  55),
-    (0.240, 220, 150,  90), (0.310, 235, 200, 165), (0.380, 248, 235, 218),
-    (0.450, 242, 246, 248), (0.510, 218, 235, 246), (0.580, 160, 210, 240),
-    (0.660,  95, 175, 225), (0.740,  45, 130, 200), (0.800,  20,  90, 170),
-    (0.860,  30, 130, 135), (0.910,  55, 180,  95), (0.960, 140, 230, 145),
-    (1.000, 230, 250, 220),
+    (0.000,  60,  38,  18),   # 255 K  very dry — dark espresso
+    (0.100, 105,  68,  34),   # 249 K  brown
+    (0.190, 158, 110,  60),   # 244 K  tan-brown
+    (0.270, 205, 162, 105),   # 239 K  sand
+    (0.330, 238, 212, 170),   # 235 K  pale sand
+    (0.390, 250, 244, 230),   # 232 K  cream (neutral, lightest)
+    (0.450, 212, 234, 246),   # 228 K  pale blue — moisture onset
+    (0.530, 158, 206, 238),   # 223 K  light blue
+    (0.610,  96, 170, 222),   # 218 K  blue
+    (0.690,  48, 124, 200),   # 214 K  medium blue
+    (0.770,  26,  88, 175),   # 209 K  deep blue
+    (0.840,  26, 118, 156),   # 205 K  blue-teal
+    (0.900,  34, 158, 128),   # 201 K  teal-green
+    (0.960,  78, 198,  98),   # 197 K  green
+    (1.000, 165, 230, 150),   # 195 K  light green — deep convection
 ]
 
 
@@ -329,8 +345,13 @@ def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20):
         return None      # empty/partial file (seen on freshly-posting 0.5 km Vis)
     if coarsen > 1:
         data = coarsen2d(data, coarsen)
-        x = coarsen2d(x[None, :], coarsen)[0]
-        y = coarsen2d(y[None, :], coarsen)[0]
+        # Coarsen the 1-D x/y coordinate axes by block-averaging. (coarsen2d on
+        # x[None,:] would collapse the singleton row dim to length 0 → the
+        # "index 0 out of bounds for axis 0 with size 0" crash on GOES Visible.)
+        nx2 = (x.size // coarsen) * coarsen
+        ny2 = (y.size // coarsen) * coarsen
+        x = x[:nx2].reshape(-1, coarsen).mean(axis=1)
+        y = y[:ny2].reshape(-1, coarsen).mean(axis=1)
     return data, x, y, lon_0, sat_h, sweep, scan_dt
 
 

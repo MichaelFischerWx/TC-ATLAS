@@ -311,16 +311,23 @@ def find_goes_file(bucket: str, target_dt: _dt,
     if fs is None:
         return (None, None) if return_dt else None
 
-    jday = target_dt.timetuple().tm_yday
-    prefix = f"{bucket}/{IR_PRODUCT}/{target_dt.year}/{jday:03d}/{target_dt.hour:02d}/"
-
-    try:
-        files = _cached_fs_ls(fs, prefix)
-    except Exception:
-        return (None, None) if return_dt else None
-
+    # Scan the target hour AND the previous hour. The large 0.5 km Visible
+    # (Band 2) full-disk file (~380 MB) finishes uploading well after the small
+    # IR/WV ones, so at the near-real-time edge the wanted scan often still lives
+    # in the PREVIOUS hour's prefix (the hour-scoped listing would otherwise miss
+    # it → "no file"). The best_delta/tolerance gate below still rejects anything
+    # too far, so this is safe for IR/WV too — a previous-hour file is only ever
+    # selected when it's genuinely within tolerance.
     band_tag = f"C{band:02d}"
-    candidates = [f for f in files if band_tag in f.split("/")[-1]]
+    candidates = []
+    for _h in (target_dt, target_dt - timedelta(hours=1)):
+        jd = _h.timetuple().tm_yday
+        pfx = f"{bucket}/{IR_PRODUCT}/{_h.year}/{jd:03d}/{_h.hour:02d}/"
+        try:
+            candidates += [f for f in _cached_fs_ls(fs, pfx)
+                           if band_tag in f.split("/")[-1]]
+        except Exception:
+            continue
     if not candidates:
         return (None, None) if return_dt else None
 
