@@ -123,10 +123,15 @@
         this._layers = {};            // id → layer facade
         this._glz = {};               // gl layer id → pane z-index (stacking order)
         this._maxZoom = options.maxZoom != null ? options.maxZoom : 22;
+        try { (global.__lfletMaps = global.__lfletMaps || []).push(this); } catch (e) {}  // debug registry
 
         this._gl = new maplibregl.Map({
             container: el,
-            style: { version: 8, sources: {}, layers: [
+            style: { version: 8, sources: {},
+                // Glyphs for symbol text (marker-cluster counts). Public CORS server;
+                // self-host for production hardening. Bubbles still render if it fails.
+                glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+                layers: [
                 { id: 'bg', type: 'background', paint: { 'background-color': '#0b1220' } } ] },
             center: center,
             zoom: options.zoom != null ? options.zoom : 2,
@@ -498,6 +503,9 @@
         },
         _addToGL: function (map) {
             this._map = map; var gl = map._gl, id = this._id, self = this, o = this.options;
+            // Batched: a shared L.canvas renderer draws thousands of polylines as ONE
+            // geojson layer (the archive's 13k-track view). Route to it, no own layer.
+            if (o.renderer && o.renderer._isBatch) { o.renderer._ensure(map); o.renderer._addLine(this); this._batch = o.renderer; return; }
             map._whenStyle(function () {
                 if (gl.getSource(id)) return;
                 gl.addSource(id, { type: 'geojson', data: self._geo() });
@@ -508,11 +516,80 @@
                 self._added = true;
             });
         },
-        _removeFromGL: function (map) { var gl = map._gl; try { if (gl.getLayer(this._id)) gl.removeLayer(this._id); if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {} },
+        _removeFromGL: function (map) { if (this._batch) { this._batch._removeLine(this); return; }
+            var gl = map._gl; try { if (gl.getLayer(this._id)) gl.removeLayer(this._id); if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {} },
         setLatLngs: function (lls) { this._lls = lls; var gl = this._map && this._map._gl, src = gl && gl.getSource(this._id); if (src) src.setData(this._geo()); return this; },
         setStyle: function (st) { var gl = this._map && this._map._gl; if (gl && gl.getLayer(this._id)) { if (st.color) gl.setPaintProperty(this._id, 'line-color', st.color); if (st.opacity != null) gl.setPaintProperty(this._id, 'line-opacity', st.opacity); if (st.weight != null) gl.setPaintProperty(this._id, 'line-width', st.weight); } Object.assign(this.options, st); return this; },
-        bringToFront: function () { return this; }, on: function () { return this; }
+        bindTooltip: function (content, opts) { this._tip = { content: content, opts: opts || {} }; return this; },
+        bindPopup: function (content, opts) { this._popup = content instanceof Popup ? content : new Popup(opts).setContent(content); return this; },
+        on: function (type, fn, ctx) { var self = this; if (!this._evts) this._evts = {}; String(type).split(' ').forEach(function (t) { (self._evts[t] = self._evts[t] || []).push(ctx ? fn.bind(ctx) : fn); }); return this; },
+        bringToFront: function () { return this; }
     });
+
+    // ── L.canvas → a real batch renderer (thousands of polylines/circleMarkers on
+    //    ONE geojson source each). Leaflet uses a shared canvas; we collect every
+    //    layer that names this renderer and draw them as 2 line layers (solid +
+    //    dashed) + 1 circle layer. Click/hover dispatch via a per-feature index. ──
+    function CanvasRenderer(opts) { this.options = opts || {}; this._isBatch = true; this._id = uid('canv');
+        this._lines = []; this._circs = []; this._map = null; this._ready = false; this._raf = null; this._rmL = 0; this._rmC = 0; }
+    CanvasRenderer.prototype._ensure = function (map) {
+        if (this._map) return; this._map = map; var gl = map._gl, id = this._id, self = this;
+        map._whenStyle(function () {
+            gl.addSource(id + '-l', { type: 'geojson', data: self._lineFC() });
+            gl.addSource(id + '-c', { type: 'geojson', data: self._circFC() });
+            var zl = map._paneZ('overlayPane'), zc = map._paneZ('markerPane');
+            map._glAdd({ id: id + '-ls', type: 'line', source: id + '-l', filter: ['!=', ['get', '_d'], 1],
+                layout: { 'line-cap': 'round', 'line-join': 'round' },
+                paint: { 'line-color': ['get', '_lc'], 'line-width': ['get', '_lw'], 'line-opacity': ['get', '_lo'] } }, zl);
+            map._glAdd({ id: id + '-ld', type: 'line', source: id + '-l', filter: ['==', ['get', '_d'], 1],
+                layout: { 'line-join': 'round' },
+                paint: { 'line-color': ['get', '_lc'], 'line-width': ['get', '_lw'], 'line-opacity': ['get', '_lo'], 'line-dasharray': [4, 3] } }, zl);
+            map._glAdd({ id: id + '-cm', type: 'circle', source: id + '-c',
+                paint: { 'circle-color': ['get', '_fc'], 'circle-radius': ['get', '_r'], 'circle-opacity': ['get', '_fo'],
+                         'circle-stroke-width': ['get', '_sw'], 'circle-stroke-color': ['get', '_sc'] } }, zc);
+            ['-ls', '-ld', '-cm'].forEach(function (suf) {
+                var arr = suf === '-cm' ? '_circs' : '_lines';
+                gl.on('click', id + suf, function (e) { self._dispatch(self[arr], e); });
+                gl.on('mousemove', id + suf, function (e) { self._hover(self[arr], e); });
+                gl.on('mouseenter', id + suf, function () { gl.getCanvas().style.cursor = 'pointer'; });
+                gl.on('mouseleave', id + suf, function () { self._unhover(); gl.getCanvas().style.cursor = ''; });
+            });
+            self._ready = true; self._flush();
+        });
+    };
+    CanvasRenderer.prototype._addLine = function (l) { this._lines.push(l); this._flush(); };
+    CanvasRenderer.prototype._addCirc = function (c) { this._circs.push(c); this._flush(); };
+    CanvasRenderer.prototype._removeLine = function (l) { l._bRemoved = true; this._rmL++; this._flush(); };
+    CanvasRenderer.prototype._removeCirc = function (c) { c._bRemoved = true; this._rmC++; this._flush(); };
+    CanvasRenderer.prototype._lineFC = function () { var fs = [];
+        for (var i = 0; i < this._lines.length; i++) { var L = this._lines[i]; if (L._bRemoved) continue; var o = L.options || {};
+            var g = L._geo(); g.properties = { _bi: i, _lc: o.color || '#3388ff', _lw: o.weight != null ? o.weight : 2,
+                _lo: o.opacity != null ? o.opacity : 1, _d: o.dashArray ? 1 : 0 }; fs.push(g); }
+        return { type: 'FeatureCollection', features: fs }; };
+    CanvasRenderer.prototype._circFC = function () { var fs = [];
+        for (var i = 0; i < this._circs.length; i++) { var C = this._circs[i]; if (C._bRemoved) continue; var o = C.options || {}, ll = C._ll;
+            fs.push({ type: 'Feature', properties: { _bi: i, _fc: o.fillColor || o.color || '#3388ff', _r: o.radius || 4,
+                _fo: o.fillOpacity != null ? o.fillOpacity : 1, _sw: o.weight != null ? o.weight : 1, _sc: o.color || '#fff' },
+                geometry: { type: 'Point', coordinates: [_wrapLng(ll.lng), ll.lat] } }); }
+        return { type: 'FeatureCollection', features: fs }; };
+    CanvasRenderer.prototype._flush = function () { if (!this._ready || this._raf) return; var self = this;
+        // setTimeout, NOT requestAnimationFrame: rAF is paused in a backgrounded tab,
+        // which would strand the batched setData. setTimeout still fires (clamped).
+        this._raf = setTimeout(function () { self._raf = null;
+            if (self._rmL > 256) { self._lines = self._lines.filter(function (l) { return !l._bRemoved; }); self._rmL = 0; }
+            if (self._rmC > 256) { self._circs = self._circs.filter(function (c) { return !c._bRemoved; }); self._rmC = 0; }
+            var gl = self._map._gl, ls = gl.getSource(self._id + '-l'), cs = gl.getSource(self._id + '-c');
+            if (ls) ls.setData(self._lineFC()); if (cs) cs.setData(self._circFC()); }, 0); };
+    CanvasRenderer.prototype._dispatch = function (arr, e) { var L = arr[e.features[0].properties._bi]; if (!L) return;
+        if (L._evts && L._evts.click) L._evts.click.forEach(function (fn) { try { fn({ type: 'click', target: L, latlng: e.lngLat }); } catch (x) {} });
+        if (L._popup && this._map) L._popup._ml().setLngLat(e.lngLat).addTo(this._map._gl); };
+    CanvasRenderer.prototype._hover = function (arr, e) { var L = arr[e.features[0].properties._bi]; if (!L || !L._tip) { this._unhover(); return; }
+        if (!this._tipEl) { this._tipEl = document.createElement('div'); this._tipEl.style.cssText = 'position:fixed;z-index:1200;pointer-events:none;white-space:nowrap;'; }
+        this._tipEl.className = 'leaflet-tooltip ' + (L._tip.opts.className || '');
+        var c = L._tip.content; this._tipEl.innerHTML = typeof c === 'string' ? c : (c && c.outerHTML || '');
+        document.body.appendChild(this._tipEl);
+        this._tipEl.style.left = (e.originalEvent.clientX + 12) + 'px'; this._tipEl.style.top = (e.originalEvent.clientY - 8) + 'px'; };
+    CanvasRenderer.prototype._unhover = function () { if (this._tipEl && this._tipEl.parentNode) this._tipEl.parentNode.removeChild(this._tipEl); };
 
     // ── Circle (radius in METRES) → geojson polygon ──
     var Circle = extend.call(Layer, {
@@ -625,8 +702,14 @@
             el.style.width = r + 'px'; el.style.height = r + 'px'; el.style.borderRadius = '50%';
             el.style.background = o.fillColor || o.color || '#3388ff'; el.style.opacity = o.fillOpacity != null ? o.fillOpacity : 1;
             el.style.border = (o.weight || 1) + 'px solid ' + (o.color || '#fff'); this.options.icon = { _el: el }; },
-        _addToGL: function (map) { this._map = map; this._m = new maplibregl.Marker({ element: this.options.icon._el, anchor: 'center' }).setLngLat(mlWrap(this._ll)).addTo(map._gl);
-            if (this._popup) this._m.setPopup(this._popup._ml()); this._applyTooltip(); this._applyEvents(); }
+        _addToGL: function (map) { this._map = map; var o = this.options;
+            // Batched (shared L.canvas renderer): join the renderer's circle source
+            // instead of making a DOM marker — the archive draws thousands of
+            // genesis/LMI dots this way.
+            if (o.renderer && o.renderer._isBatch) { o.renderer._ensure(map); o.renderer._addCirc(this); this._batch = o.renderer; return; }
+            this._m = new maplibregl.Marker({ element: this.options.icon._el, anchor: 'center' }).setLngLat(mlWrap(this._ll)).addTo(map._gl);
+            if (this._popup) this._m.setPopup(this._popup._ml()); this._applyTooltip(); this._applyEvents(); },
+        _removeFromGL: function () { if (this._batch) { this._batch._removeCirc(this); return; } if (this._tipHide) this._tipHide(); if (this._m) this._m.remove(); }
     });
 
     function Popup(opts) { this.options = opts || {}; this._content = ''; }
@@ -648,6 +731,61 @@
         removeLayer: function (l) { var i = this._members.indexOf(l); if (i >= 0) this._members.splice(i, 1); if (this._map) this._map.removeLayer(l); return this; },
         clearLayers: function () { var m = this._map; this._members.forEach(function (l) { if (m) m.removeLayer(l); }); this._members = []; return this; },
         eachLayer: function (fn) { this._members.forEach(fn); return this; }
+    });
+
+    // ── MarkerClusterGroup → MapLibre native (supercluster) clustering ──
+    // Leaflet.markercluster groups N markers DOM-side (slow at thousands). MapLibre
+    // clusters a geojson source on the GPU. We collect added markers, project them to
+    // a clustered source, and render: unclustered = colored circles (the markers are
+    // just colored dots), clusters = bubble + count, click point → the marker's own
+    // click handler + popup, click cluster → zoom to expansion.
+    function _markerColor(m) {
+        var icon = m && m.options && m.options.icon, html = icon && icon._html;
+        if (html) { var mt = /background(?:-color)?:\s*([^;"')]+)/i.exec(html); if (mt) return mt[1].trim(); }
+        return (m && m.options && (m.options.fillColor || m.options.color)) || '#3388ff';
+    }
+    var MarkerClusterGroup = extend.call(Layer, {
+        initialize: function (opts) { this.options = opts || {}; this._markers = []; this._id = uid('mcg'); },
+        addLayer: function (m) { this._markers.push(m); this._refresh(); return this; },
+        addLayers: function (arr) { var s = this; (arr || []).forEach(function (m) { s._markers.push(m); }); this._refresh(); return this; },
+        removeLayer: function (m) { var i = this._markers.indexOf(m); if (i >= 0) this._markers.splice(i, 1); this._refresh(); return this; },
+        clearLayers: function () { this._markers = []; this._refresh(); return this; },
+        eachLayer: function (fn) { this._markers.forEach(fn); return this; },
+        getLayers: function () { return this._markers.slice(); },
+        _fc: function () { return { type: 'FeatureCollection', features: this._markers.map(function (m, i) {
+            var ll = m._ll || toLatLng(m.getLatLng ? m.getLatLng() : m);
+            return { type: 'Feature', properties: { _mi: i, color: _markerColor(m) },
+                     geometry: { type: 'Point', coordinates: [_wrapLng(ll.lng), ll.lat] } }; }) }; },
+        _refresh: function () { var gl = this._map && this._map._gl, src = gl && gl.getSource(this._id); if (src) src.setData(this._fc()); },
+        _addToGL: function (map) { this._map = map; var gl = map._gl, id = this._id, self = this, o = this.options;
+            map._whenStyle(function () {
+                if (gl.getSource(id)) { gl.getSource(id).setData(self._fc()); return; }
+                gl.addSource(id, { type: 'geojson', data: self._fc(), cluster: true,
+                    clusterRadius: o.maxClusterRadius || 50,
+                    clusterMaxZoom: (o.disableClusteringAtZoom != null ? o.disableClusteringAtZoom : 9) - 1 });
+                var z = map._paneZ('markerPane');
+                map._glAdd({ id: id + '-pts', type: 'circle', source: id, filter: ['!', ['has', 'point_count']],
+                    paint: { 'circle-color': ['get', 'color'], 'circle-radius': 6, 'circle-stroke-width': 1.5, 'circle-stroke-color': '#fff' } }, z);
+                map._glAdd({ id: id + '-cl', type: 'circle', source: id, filter: ['has', 'point_count'],
+                    paint: { 'circle-color': 'rgba(46,125,255,0.85)', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff',
+                             'circle-radius': ['step', ['get', 'point_count'], 14, 25, 18, 100, 24] } }, z);
+                map._glAdd({ id: id + '-cnt', type: 'symbol', source: id, filter: ['has', 'point_count'],
+                    layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-size': 12, 'text-font': ['Noto Sans Bold'], 'text-allow-overlap': true },
+                    paint: { 'text-color': '#fff' } }, z + 1);
+                gl.on('click', id + '-pts', function (e) { var f = e.features[0], m = self._markers[f.properties._mi]; if (m) self._activate(m, e.lngLat); });
+                gl.on('click', id + '-cl', function (e) { var f = e.features[0]; var src = gl.getSource(id);
+                    src.getClusterExpansionZoom(f.properties.cluster_id, function (err, zm) { if (!err) gl.easeTo({ center: f.geometry.coordinates, zoom: zm }); }); });
+                ['-pts', '-cl'].forEach(function (suf) {
+                    gl.on('mouseenter', id + suf, function () { gl.getCanvas().style.cursor = 'pointer'; });
+                    gl.on('mouseleave', id + suf, function () { gl.getCanvas().style.cursor = ''; }); });
+                self._added = true;
+            }); },
+        _activate: function (m, lngLat) {
+            if (m._evts && m._evts.click) m._evts.click.forEach(function (fn) { try { fn({ type: 'click', target: m, latlng: m._ll }); } catch (e) {} });
+            if (m._popup && this._map) { var p = m._popup._ml(); p.setLngLat(lngLat).addTo(this._map._gl); } },
+        _removeFromGL: function (map) { var gl = map._gl;
+            [this._id + '-pts', this._id + '-cl', this._id + '-cnt'].forEach(function (l) { try { if (gl.getLayer(l)) gl.removeLayer(l); } catch (e) {} });
+            try { if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {} }
     });
 
     // ── GridLayer: generic stub; the composite IR layers are bridged to the
@@ -699,12 +837,15 @@
         popup: function (o) { return new Popup(o); },
         layerGroup: function (l) { return new LayerGroup(l); },
         featureGroup: function (l) { return new LayerGroup(l); },
+        markerClusterGroup: function (o) { return new MarkerClusterGroup(o); },
+        createObjectURL: function (b) { return URL.createObjectURL(b); },
+        revokeObjectURL: function (u) { return URL.revokeObjectURL(u); },
         polyline: function (ll, o) { return new Polyline(ll, o); },
         polygon: function (ll, o) { var p = new Polyline(ll, o); return p; },
         circle: function (ll, o) { return new Circle(ll, o); },
         control: function (o) { return new Control(o); },
-        canvas: function (o) { return { _stub: 'canvas', options: o || {} }; },
-        svg: function (o) { return { _stub: 'svg', options: o || {} }; },
+        canvas: function (o) { return new CanvasRenderer(o); },
+        svg: function (o) { return new CanvasRenderer(o); },
         Map: Map, Layer: Layer, TileLayer: TileLayer, ImageOverlay: ImageOverlay,
         GeoJSON: GeoJSON, Marker: Marker, CircleMarker: CircleMarker, Popup: Popup,
         LayerGroup: LayerGroup, GridLayer: GridLayer, DivIcon: DivIcon, Icon: Icon,
