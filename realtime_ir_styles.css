@@ -1901,6 +1901,18 @@ body:has(.basin-sidebar.open) #ir-display-wrap { left: 280px; }
     left: auto !important;
     margin: 0 !important;
 }
+/* IR colormap picker inside the Display menu */
+#ir-display-menu .ir-cmap-row { display: flex; width: 104px; box-sizing: border-box; }
+#ir-display-menu .ir-cmap-select {
+    width: 100%;
+    font: 500 0.72rem 'DM Sans', sans-serif;
+    color: #8993a4;
+    background: rgba(255, 255, 255, 0.88);
+    border: 1px solid rgba(15, 22, 35, 0.1);
+    border-radius: 6px;
+    padding: 6px 8px;
+    cursor: pointer;
+}
 
 /* Mobile: drop the +/- zoom buttons on the global map — pinch-to-zoom is natural
    on touch, and removing them clears the left edge for the Display button. */

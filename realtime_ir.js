@@ -1788,6 +1788,85 @@
         return _inspectOn;
     }
 
+    // ── Re-color the baked Claude-IR mosaic into other IR colormaps ($0) ───────
+    // Invert each tile pixel back to a Claude-IR index (≈ Tb), then map to the
+    // chosen operational colormap (reused from satellite.js _satIRColormaps).
+    // Registered as an 'irlut://<cmap>/<realurl>' MapLibre protocol so the IR
+    // tileLayer routes through it when a non-default colormap is active. Quality
+    // is approximate (8-bit inversion) but reads operational; Vis/WV are untouched.
+    var _irColormap = 'claude-ir';   // active IR colormap on the global map
+    var _irRevMap = null;            // quantized Claude-IR RGB(5-bit)/idx → idx
+    var _irTargetMaps = {};          // cmap → [256] mosaic-idx → [r,g,b]
+    function _irBuildReverse() {
+        if (_irRevMap) return _irRevMap;
+        var rev = new Int16Array(32768);
+        for (var k = 0; k < 32768; k++) {
+            var R = ((k >> 10) & 31) * 8 + 4, G = ((k >> 5) & 31) * 8 + 4, B = (k & 31) * 8 + 4, bi = 0, bd = 1e9;
+            for (var i = 0; i < 256; i++) { var e = _irFwdLut[i], dr = e[0] - R, dg = e[1] - G, db = e[2] - B, d = dr * dr + dg * dg + db * db; if (d < bd) { bd = d; bi = i; } }
+            rev[k] = bi;
+        }
+        return (_irRevMap = rev);
+    }
+    function _irTargetMap(cmap) {
+        if (_irTargetMaps[cmap]) return _irTargetMaps[cmap];
+        var lut = window._satIRColormaps && window._satIRColormaps[cmap];
+        if (!lut) return null;
+        var m = new Array(256);
+        for (var idx = 0; idx < 256; idx++) {
+            var tb = 310 - (idx / 255) * 120;                 // mosaic Claude-IR idx → Tb
+            var ti = Math.max(1, Math.min(255, Math.round((tb - 160) / 170 * 254) + 1)); // → 160/330 index
+            m[idx] = [lut[ti * 4], lut[ti * 4 + 1], lut[ti * 4 + 2]];
+        }
+        return (_irTargetMaps[cmap] = m);
+    }
+    var _irProtocolReady = false;
+    function _irEnsureProtocol() {
+        if (_irProtocolReady || !window.maplibregl || !maplibregl.addProtocol) return;
+        _irProtocolReady = true;
+        maplibregl.addProtocol('irlut', function (params) {
+            var rest = params.url.slice('irlut://'.length), slash = rest.indexOf('/');
+            var cmap = rest.slice(0, slash), realUrl = rest.slice(slash + 1);
+            var rev = _irBuildReverse(), tmap = _irTargetMap(cmap);
+            return fetch(realUrl).then(function (r) { return r.blob(); })
+                .then(function (b) { return createImageBitmap(b); })
+                .then(function (bmp) {
+                    var c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+                    var cx = c.getContext('2d'); cx.drawImage(bmp, 0, 0);
+                    if (tmap) {
+                        var im = cx.getImageData(0, 0, c.width, c.height), d = im.data;
+                        for (var p = 0; p < d.length; p += 4) {
+                            if (d[p + 3] < 10) continue;
+                            var col = tmap[rev[((d[p] >> 3) << 10) | ((d[p + 1] >> 3) << 5) | (d[p + 2] >> 3)]];
+                            d[p] = col[0]; d[p + 1] = col[1]; d[p + 2] = col[2];
+                        }
+                        cx.putImageData(im, 0, 0);
+                    }
+                    return new Promise(function (resolve) {
+                        c.toBlob(function (blob) { blob.arrayBuffer().then(function (ab) { resolve({ data: ab }); }); }, 'image/png');
+                    });
+                });
+        });
+    }
+    // Wrap an IR mosaic tile-URL template with the re-color protocol when a
+    // non-default colormap is active.
+    function _irColorTileUrl(url) {
+        if (_irColormap && _irColormap !== 'claude-ir') { _irEnsureProtocol(); return 'irlut://' + _irColormap + '/' + url; }
+        return url;
+    }
+    // Switch the global-map IR colormap + rebuild the IR layer/animation.
+    function _rtSetIRColormap(cmap) {
+        if (cmap === _irColormap) return;
+        _irColormap = cmap;
+        if (globalProduct !== 'ir' || !latestGIBSTime) return;
+        var hadAnim = globalAnimReady;
+        if (globalAnimFrameLayers.length > 0) cleanupGlobalAnimation();
+        removeGIBSOverlay(map, gibsIRLayers); gibsIRLayers = [];
+        var perSat = (Object.keys(latestGIBSTimes).length > 0) ? latestGIBSTimes : null;
+        var lyr = createCompositeGIBSLayer(latestGIBSTime, _productOpacity('ir'), perSat, 'ir');
+        lyr.addTo(map); gibsIRLayers = [lyr];
+        if (hadAnim) loadGlobalAnimation();
+    }
+
     /** Create the seamless composite GIBS GridLayer for a mosaic product
      *  (ir | vis | wv). Defaults to the current globalProduct. */
     function createCompositeGIBSLayer(timeStr, opacity, perSatTimes, product) {
@@ -1797,7 +1876,10 @@
         // animation); otherwise use the latest frame.
         if (window.LFLET_GL && (_mosaicTs || /^\d{12}$/.test(String(timeStr)))) {
             var _ts = /^\d{12}$/.test(String(timeStr)) ? timeStr : _mosaicTs;
-            return L.tileLayer(_mosaicTileUrl(_ts, product),
+            var _turl = _mosaicTileUrl(_ts, product);
+            // IR can be re-colored client-side into other operational colormaps.
+            if (product === 'ir') _turl = _irColorTileUrl(_turl);
+            return L.tileLayer(_turl,
                 // mosaic-v2: 512px tiles, native max z6 (== old 256px z7 resolution).
                 { opacity: opacity != null ? opacity : 0.85, maxZoom: 6, maxNativeZoom: 6, tileSize: 512, crisp: true });
         }
@@ -3502,6 +3584,25 @@
                 insBtn.classList.toggle('active', _rtToggleInspect());
             });
             dMenu.appendChild(insBtn);
+
+            // IR colormap picker — re-colors the baked Claude-IR mosaic into other
+            // operational colormaps client-side (LUT inversion, $0). Applies to the
+            // IR product only; Vis/WV ignore it.
+            var cmWrap = document.createElement('label');
+            cmWrap.className = 'ir-display-item ir-cmap-row';
+            cmWrap.title = 'IR colormap (applies to the IR view; re-colored client-side)';
+            var cmSel = document.createElement('select');
+            cmSel.id = 'ir-cmap-select';
+            cmSel.className = 'ir-cmap-select';
+            [['claude-ir', 'Claude IR'], ['irb', 'IRB'], ['avn', 'AVN'], ['nhc', 'NHC'],
+             ['rammb', 'RAMMB'], ['dvorak', 'Dvorak BD'], ['funktop', 'Funktop'],
+             ['enhanced', 'Enhanced'], ['grayscale', 'Grayscale']].forEach(function (o) {
+                var opt = document.createElement('option'); opt.value = o[0]; opt.textContent = o[1]; cmSel.appendChild(opt);
+            });
+            cmSel.addEventListener('change', function () { _rtSetIRColormap(cmSel.value); });
+            cmSel.addEventListener('click', function (e) { e.stopPropagation(); });
+            cmWrap.appendChild(cmSel);
+            dMenu.appendChild(cmWrap);
 
             dToggle.addEventListener('click', function (e) {
                 e.stopPropagation();

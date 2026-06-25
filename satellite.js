@@ -398,6 +398,12 @@
         })();
     })();
 
+    // Expose the IR colormap LUTs so the global map (realtime_ir.js) can re-color
+    // the baked Claude-IR mosaic tiles into other operational colormaps via LUT
+    // inversion ($0, no extra baked tiles). Each LUT is a 256×4 uint8 array indexed
+    // by i (1-255) where i ↔ Tb = 160 + ((i-1)/254)·170 (the 160–330 K convention).
+    window._satIRColormaps = IR_COLORMAPS;
+
     // ── DOM ─────────────────────────────────────────────────────
     var canvasIR, ctxIR, canvasRight, ctxRight;
     var overlayIR, overlayCtxIR, overlayRight, overlayCtxRight;
