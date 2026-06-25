@@ -306,6 +306,71 @@
         setStyle: function () { return this; }, bringToFront: function () { return this; }
     });
 
+    // ── Polyline → geojson line (storm tracks, forecast cones, etc.) ──
+    function _coordsOf(lls) { return lls.map(function (p) { var l = toLatLng(p); return [l.lng, l.lat]; }); }
+    var Polyline = extend.call(Layer, {
+        initialize: function (latlngs, opts) { this._lls = latlngs || []; this.options = opts || {}; this._id = uid('line'); },
+        _geo: function () {
+            var first = this._lls[0];
+            var isPt = function (x) { return isArr(x) || (x && typeof x === 'object' && 'lat' in x); };
+            // MultiLineString when the first element is itself a list of points
+            var multi = first && isArr(first) && first.length && isPt(first[0]);
+            var geom = multi ? { type: 'MultiLineString', coordinates: this._lls.map(_coordsOf) }
+                             : { type: 'LineString', coordinates: _coordsOf(this._lls) };
+            return { type: 'Feature', geometry: geom };
+        },
+        _addToGL: function (map) {
+            this._map = map; var gl = map._gl, id = this._id, self = this, o = this.options;
+            map._whenStyle(function () {
+                if (gl.getSource(id)) return;
+                gl.addSource(id, { type: 'geojson', data: self._geo() });
+                var paint = { 'line-color': o.color || '#3388ff', 'line-width': o.weight != null ? o.weight : 3,
+                              'line-opacity': o.opacity != null ? o.opacity : 1 };
+                if (o.dashArray) paint['line-dasharray'] = String(o.dashArray).split(/[ ,]+/).map(Number).map(function (n) { return n / (o.weight || 3); });
+                gl.addLayer({ id: id, type: 'line', source: id, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: paint });
+                self._added = true;
+            });
+        },
+        _removeFromGL: function (map) { var gl = map._gl; try { if (gl.getLayer(this._id)) gl.removeLayer(this._id); if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {} },
+        setLatLngs: function (lls) { this._lls = lls; var gl = this._map && this._map._gl, src = gl && gl.getSource(this._id); if (src) src.setData(this._geo()); return this; },
+        setStyle: function (st) { var gl = this._map && this._map._gl; if (gl && gl.getLayer(this._id)) { if (st.color) gl.setPaintProperty(this._id, 'line-color', st.color); if (st.opacity != null) gl.setPaintProperty(this._id, 'line-opacity', st.opacity); if (st.weight != null) gl.setPaintProperty(this._id, 'line-width', st.weight); } Object.assign(this.options, st); return this; },
+        bringToFront: function () { return this; }, on: function () { return this; }
+    });
+
+    // ── Circle (radius in METRES) → geojson polygon ──
+    var Circle = extend.call(Layer, {
+        initialize: function (latlng, opts) { this._ll = toLatLng(latlng); this.options = opts || {}; this._radius = (opts && opts.radius) || 1000; this._id = uid('circ'); },
+        _geo: function () { var c = this._ll, R = this._radius, latR = c.lat * Math.PI / 180, pts = [];
+            for (var i = 0; i <= 64; i++) { var a = i / 64 * 2 * Math.PI;
+                pts.push([c.lng + (R * Math.cos(a)) / (111320 * Math.cos(latR)), c.lat + (R * Math.sin(a)) / 110540]); }
+            return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [pts] } }; },
+        _addToGL: function (map) { this._map = map; var gl = map._gl, id = this._id, self = this, o = this.options;
+            map._whenStyle(function () { if (gl.getSource(id)) return; gl.addSource(id, { type: 'geojson', data: self._geo() });
+                if (o.fill !== false) gl.addLayer({ id: id + '-f', type: 'fill', source: id, paint: { 'fill-color': o.fillColor || o.color || '#3388ff', 'fill-opacity': o.fillOpacity != null ? o.fillOpacity : 0.2 } });
+                gl.addLayer({ id: id, type: 'line', source: id, paint: { 'line-color': o.color || '#3388ff', 'line-width': o.weight != null ? o.weight : 2, 'line-opacity': o.opacity != null ? o.opacity : 1 } }); self._added = true; }); },
+        _removeFromGL: function (map) { var gl = map._gl; [this._id, this._id + '-f'].forEach(function (l) { try { if (gl.getLayer(l)) gl.removeLayer(l); } catch (e) {} }); try { if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {} },
+        setRadius: function (r) { this._radius = r; var src = this._map && this._map._gl.getSource(this._id); if (src) src.setData(this._geo()); return this; },
+        setLatLng: function (ll) { this._ll = toLatLng(ll); var src = this._map && this._map._gl.getSource(this._id); if (src) src.setData(this._geo()); return this; },
+        setStyle: function () { return this; }, bringToFront: function () { return this; }
+    });
+
+    // ── Control (custom corner widgets) ──
+    function Control(opts) { this.options = opts || {}; }
+    Control.prototype.addTo = function (map) { map.addControl(this); return this; };
+    Control.prototype.setPosition = function (p) { this.options.position = p; if (this._el) _placeCtrl(this._el, p); return this; };
+    Control.prototype.remove = function () { if (this._map) this._map.removeControl(this); return this; };
+    Control.extend = function (proto) { function C(o) { Control.call(this, o); if (this.initialize) this.initialize(o); } C.prototype = Object.create(Control.prototype); Object.assign(C.prototype, proto || {}); C.extend = Control.extend; return C; };
+    function _placeCtrl(el, pos) { pos = pos || 'topright'; el.style.position = 'absolute'; el.style.zIndex = 5;
+        el.style.top = el.style.bottom = el.style.left = el.style.right = '';
+        el.style[pos.indexOf('top') >= 0 ? 'top' : 'bottom'] = '10px';
+        el.style[pos.indexOf('left') >= 0 ? 'left' : 'right'] = '10px'; }
+    Map.prototype.addControl = function (ctrl) {
+        if (ctrl && typeof ctrl.onAdd === 'function') { ctrl._map = this; var el = ctrl.onAdd(this);
+            if (el) { _placeCtrl(el, (ctrl.options && ctrl.options.position) || 'topright'); this.getContainer().appendChild(el); ctrl._el = el; } }
+        return this;
+    };
+    Map.prototype.removeControl = function (ctrl) { if (ctrl && ctrl._el && ctrl._el.parentNode) ctrl._el.parentNode.removeChild(ctrl._el); return this; };
+
     // ── Markers / popups (DOM) ──
     function makeIconEl(icon) {
         var el = document.createElement('div');
@@ -401,9 +466,16 @@
         popup: function (o) { return new Popup(o); },
         layerGroup: function (l) { return new LayerGroup(l); },
         featureGroup: function (l) { return new LayerGroup(l); },
+        polyline: function (ll, o) { return new Polyline(ll, o); },
+        polygon: function (ll, o) { var p = new Polyline(ll, o); return p; },
+        circle: function (ll, o) { return new Circle(ll, o); },
+        control: function (o) { return new Control(o); },
+        canvas: function (o) { return { _stub: 'canvas', options: o || {} }; },
+        svg: function (o) { return { _stub: 'svg', options: o || {} }; },
         Map: Map, Layer: Layer, TileLayer: TileLayer, ImageOverlay: ImageOverlay,
         GeoJSON: GeoJSON, Marker: Marker, CircleMarker: CircleMarker, Popup: Popup,
         LayerGroup: LayerGroup, GridLayer: GridLayer, DivIcon: DivIcon, Icon: Icon,
+        Polyline: Polyline, Circle: Circle, Control: Control,
         DomUtil: DomUtil, DomEvent: DomEvent, Util: { bind: function (fn, ctx) { return fn.bind(ctx); }, extend: Object.assign },
         Browser: { mobile: /Mobi|Android/i.test(navigator.userAgent), retina: (window.devicePixelRatio || 1) > 1 }
     };
