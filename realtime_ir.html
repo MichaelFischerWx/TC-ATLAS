@@ -45,8 +45,10 @@
     <title>Real-Time Monitor — TC-ATLAS</title>
     <script src="theme.js?v=20260509c"></script>
 
-    <!-- Leaflet -->
+    <!-- Leaflet CSS kept (chrome reuses some .leaflet-* classes); map engine is
+         MapLibre via the lflet_gl.js facade (gl-engine-swap branch). -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -2457,7 +2459,10 @@
         </div>
     </div>
     <!-- Scripts -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- ENGINE SWAP (gl-engine-swap branch): MapLibre + the lflet_gl.js facade
+         replace leaflet.js. realtime_ir.js runs unchanged on window.L. -->
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script>document.write('<script src="lflet_gl.js'+window.__v+'"><\/script>');</script>
     <script>
     // Plotly (~1 MB gzipped) is only needed once a chart renders, but a
     // synchronous tag here serializes the whole page: the document.write
