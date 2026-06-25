@@ -209,9 +209,12 @@ def read_full_disk(bucket, dt):
     if not key:
         return None
     fs = get_goes_fs()
-    fobj = fs.open(f"s3://{key}", "rb")
+    # Full download → BytesIO (like the Himawari path). Streaming via fs.open +
+    # h5netcdf needs random access that s3fs doesn't reliably provide in the slim
+    # container — it failed there while working locally. cat_file is robust.
+    raw = fs.cat_file(key)
+    ds = xr.open_dataset(io.BytesIO(raw), engine="h5netcdf")
     try:
-        ds = xr.open_dataset(fobj, engine="h5netcdf")
         var = "CMI" if "CMI" in ds else f"CMI_C{IR_BAND:02d}"
         tb = ds[var].values.astype(np.float32)
         x = ds["x"].values.astype(np.float64)
@@ -221,7 +224,7 @@ def read_full_disk(bucket, dt):
         lon_0 = float(gip.get("longitude_of_projection_origin"))
         sweep = str(gip.get("sweep_angle_axis", "x"))
     finally:
-        ds.close(); fobj.close()
+        ds.close()
     return tb, x, y, lon_0, sat_h, sweep, scan_dt
 
 
