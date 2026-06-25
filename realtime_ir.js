@@ -541,7 +541,9 @@
     var _stormNameLabels = {};
 
     // Global map product state
-    var globalProduct = 'eir';       // 'eir' or 'geocolor'
+    var globalProduct = 'ir';        // mosaic product: 'ir' | 'vis' | 'wv'
+    var _PRODUCT_OPACITY = { ir: 0.85, vis: 0.95, wv: 0.85 };
+    function _productOpacity(p) { return _PRODUCT_OPACITY[p] != null ? _PRODUCT_OPACITY[p] : 0.85; }
     var _labelsLayer = null;         // CARTO place-name tile layer (toggleable)
     var _labelsVisible = false;      // default: labels off (toggle in the top-left stack)
     var gibsVisLayers = [];          // GIBS GeoColor tile layers on main map
@@ -1669,8 +1671,12 @@
     // ── GL engine swap: server-composited global IR mosaic (R2/CDN) ──
     // On the MapLibre facade we render the mosaic-v2 tiles as a plain XYZ raster
     // instead of client-compositing GIBS per tile (the 4 GridLayer classes).
-    var _MOSAIC_BASE = 'https://cdn.tcatlas.org/mosaic-v2/ir';   // v2 = 512px tiles (zmax 4)
-    var _mosaicFrames = [];          // rolling timestamps from frames.json
+    var _MOSAIC_ROOT = 'https://cdn.tcatlas.org/mosaic-v2';   // v2 = 512px tiles (zmax 4)
+    // The combined builder writes ir/wv/vis with the SAME timestamps every run, so
+    // one shared frame list (loaded from IR) drives all three products; only the
+    // URL path segment changes per product.
+    var _MOSAIC_BASE = _MOSAIC_ROOT + '/ir';
+    var _mosaicFrames = [];          // rolling timestamps from frames.json (shared)
     var _mosaicTs = null;            // latest frame
     var _detailMosaicBase = null;    // global IR mosaic laid under the storm-card cutout (GL build)
     var _mosaicLoad = null;
@@ -1683,16 +1689,18 @@
             .catch(function (e) { console.warn('[mosaic] frames.json failed', e); return []; });
         return _mosaicLoad;
     }
-    function _mosaicTileUrl(ts) { return _MOSAIC_BASE + '/' + ts + '/{z}/{x}/{y}.png'; }
+    function _mosaicTileUrl(ts, product) { return _MOSAIC_ROOT + '/' + (product || 'ir') + '/' + ts + '/{z}/{x}/{y}.png'; }
 
-    /** Create the seamless composite GIBS GridLayer */
-    function createCompositeGIBSLayer(timeStr, opacity, perSatTimes) {
+    /** Create the seamless composite GIBS GridLayer for a mosaic product
+     *  (ir | vis | wv). Defaults to the current globalProduct. */
+    function createCompositeGIBSLayer(timeStr, opacity, perSatTimes, product) {
+        product = product || globalProduct || 'ir';
         // GL facade: render the server-composited mosaic as a plain XYZ raster.
         // Honor a passed mosaic timestamp (12-digit YYYYMMDDHHMM, from the
         // animation); otherwise use the latest frame.
         if (window.LFLET_GL && (_mosaicTs || /^\d{12}$/.test(String(timeStr)))) {
             var _ts = /^\d{12}$/.test(String(timeStr)) ? timeStr : _mosaicTs;
-            return L.tileLayer(_mosaicTileUrl(_ts),
+            return L.tileLayer(_mosaicTileUrl(_ts, product),
                 // mosaic-v2: 512px tiles, native max z6 (== old 256px z7 resolution).
                 { opacity: opacity != null ? opacity : 0.85, maxZoom: 6, maxNativeZoom: 6, tileSize: 512, crisp: true });
         }
@@ -2640,9 +2648,10 @@
             }
         }
 
-        // Show/hide IR colorbar
+        // The IR Tb colorbar only applies to the IR product; Vis (grayscale) and
+        // WV (its own scale) hide it.
         var colorbar = document.getElementById('ir-global-colorbar');
-        if (colorbar) colorbar.style.display = (mode === 'geocolor') ? 'none' : '';
+        if (colorbar) colorbar.style.display = (mode === 'ir') ? '' : 'none';
 
         // If global animation is loaded, it needs to be rebuilt for the new product
         var hadAnim = globalAnimReady;
@@ -2653,21 +2662,14 @@
         var timeStr = latestGIBSTime;
         if (!timeStr) return; // GIBS time not resolved yet
 
-        if (mode === 'geocolor') {
-            removeGIBSOverlay(map, gibsIRLayers);
-            gibsIRLayers = [];
-            var visLyr = createCompositeGIBSLayerVis(timeStr, 0.75);
-            visLyr.addTo(map);
-            gibsVisLayers = [visLyr];
-        } else {
-            removeGIBSOverlay(map, gibsVisLayers);
-            gibsVisLayers = [];
-            // Use per-satellite times for static IR layer (fresher GOES tiles)
-            var perSat = (Object.keys(latestGIBSTimes).length > 0) ? latestGIBSTimes : null;
-            var irLyr = createCompositeGIBSLayer(timeStr, 0.85, perSat);
-            irLyr.addTo(map);
-            gibsIRLayers = [irLyr];
-        }
+        // All three products (ir/vis/wv) are server-composited mosaics — same code
+        // path, just a different tile prefix + opacity.
+        removeGIBSOverlay(map, gibsVisLayers); gibsVisLayers = [];
+        removeGIBSOverlay(map, gibsIRLayers); gibsIRLayers = [];
+        var perSat = (Object.keys(latestGIBSTimes).length > 0) ? latestGIBSTimes : null;
+        var lyr = createCompositeGIBSLayer(timeStr, _productOpacity(mode), perSat, mode);
+        lyr.addTo(map);
+        gibsIRLayers = [lyr];
 
         // Re-load animation if it was active
         if (hadAnim) {
@@ -2681,10 +2683,7 @@
 
     /** Create a composite layer for a given time based on the current global product. */
     function createGlobalAnimFrame(timeStr) {
-        if (globalProduct === 'geocolor') {
-            return createCompositeGIBSLayerVis(timeStr, 0);
-        }
-        return createCompositeGIBSLayer(timeStr, 0);
+        return createCompositeGIBSLayer(timeStr, 0, null, globalProduct);
     }
 
     /** Load all global animation frames. Called when user clicks the play button. */
@@ -2735,14 +2734,10 @@
         // Update controls to show loading state
         updateGlobalAnimControls('loading', 0);
 
-        // Remove static single-frame layer — animation frames will replace it
-        if (globalProduct === 'geocolor') {
-            removeGIBSOverlay(map, gibsVisLayers);
-            gibsVisLayers = [];
-        } else {
-            removeGIBSOverlay(map, gibsIRLayers);
-            gibsIRLayers = [];
-        }
+        // Remove static single-frame layer — animation frames will replace it.
+        // All products now use gibsIRLayers (the mosaic raster); clear both to be safe.
+        removeGIBSOverlay(map, gibsIRLayers); gibsIRLayers = [];
+        removeGIBSOverlay(map, gibsVisLayers); gibsVisLayers = [];
 
         // Pre-create all frame layers at opacity 0
         globalAnimFrameLayers = [];
@@ -2808,7 +2803,7 @@
         // addGIBSOverlay (was 0.65 — the drop was visible the moment
         // animation took over). GeoColor stays at 0.75 since both its
         // still and animation paths already used that value.
-        globalAnimFrameLayers[idx].setOpacity(globalProduct === 'geocolor' ? 0.75 : 0.85);
+        globalAnimFrameLayers[idx].setOpacity(_productOpacity(globalProduct));
 
         // Update time display
         var timeEl = document.getElementById('ir-global-anim-time');
@@ -3124,8 +3119,9 @@
                 var seg = L.DomUtil.create('div', 'ir-mode-segment', wrap);
                 seg.id = 'ir-mode-segment';
                 seg.innerHTML =
-                      '<button type="button" class="ir-mode-btn ir-mode-active" data-mode="eir">IR</button>'
-                    + '<button type="button" class="ir-mode-btn"               data-mode="geocolor">GeoColor</button>';
+                      '<button type="button" class="ir-mode-btn ir-mode-active" data-mode="ir">IR</button>'
+                    + '<button type="button" class="ir-mode-btn"               data-mode="vis">Vis</button>'
+                    + '<button type="button" class="ir-mode-btn"               data-mode="wv">WV</button>';
                 var modeBtns = seg.querySelectorAll('.ir-mode-btn');
                 for (var mi = 0; mi < modeBtns.length; mi++) {
                     modeBtns[mi].addEventListener('click', function (e) {
@@ -3452,16 +3448,10 @@
                     if (globalAnimFrameLayers.length === 0) return;
                     cleanupGlobalAnimation();
                     if (latestGIBSTime) {
-                        if (globalProduct === 'geocolor') {
-                            var visLyr = createCompositeGIBSLayerVis(latestGIBSTime, 0.75);
-                            visLyr.addTo(map);
-                            gibsVisLayers = [visLyr];
-                        } else {
-                            var perSat = (Object.keys(latestGIBSTimes).length > 0) ? latestGIBSTimes : null;
-                            var irLyr = createCompositeGIBSLayer(latestGIBSTime, 0.85, perSat);
-                            irLyr.addTo(map);
-                            gibsIRLayers = [irLyr];
-                        }
+                        var perSat = (Object.keys(latestGIBSTimes).length > 0) ? latestGIBSTimes : null;
+                        var lyr = createCompositeGIBSLayer(latestGIBSTime, _productOpacity(globalProduct), perSat, globalProduct);
+                        lyr.addTo(map);
+                        gibsIRLayers = [lyr];
                     }
                     _refreshAnimSlider();
                 });
