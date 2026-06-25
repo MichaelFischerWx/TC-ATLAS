@@ -169,17 +169,17 @@
     Map.prototype.getPixelBounds = function () { var s = this.getSize(); return { min: new Point(0, 0), max: new Point(s.x, s.y) }; };
 
     // events
-    Map.prototype.on = function (types, fn) {
-        var self = this; String(types).split(' ').forEach(function (t) {
-            t = t.trim(); if (!t) return; var ml = EVT[t] || t; var w = wrapEvent(self, fn);
-            self._handlers.push({ type: t, fn: fn, wrapped: w, ml: ml }); self._gl.on(ml, w); }); return this; };
-    Map.prototype.off = function (types, fn) {
+    Map.prototype.on = function (types, fn, ctx) {
+        var self = this; var bound = ctx ? fn.bind(ctx) : fn; String(types).split(' ').forEach(function (t) {
+            t = t.trim(); if (!t) return; var ml = EVT[t] || t; var w = wrapEvent(self, bound);
+            self._handlers.push({ type: t, fn: fn, ctx: ctx, wrapped: w, ml: ml }); self._gl.on(ml, w); }); return this; };
+    Map.prototype.off = function (types, fn, ctx) {
         var self = this; String(types || '').split(' ').forEach(function (t) {
             t = t.trim(); self._handlers = self._handlers.filter(function (h) {
-                if (h.type === t && (!fn || h.fn === fn)) { self._gl.off(h.ml, h.wrapped); return false; } return true; }); }); return this; };
-    Map.prototype.once = function (types, fn) {
+                if (h.type === t && (!fn || h.fn === fn) && (!ctx || h.ctx === ctx)) { self._gl.off(h.ml, h.wrapped); return false; } return true; }); }); return this; };
+    Map.prototype.once = function (types, fn, ctx) {
         var self = this, done = false;
-        function one(e) { if (done) return; done = true; self.off(types, one); fn(e); }
+        function one(e) { if (done) return; done = true; self.off(types, one); if (ctx) fn.call(ctx, e); else fn(e); }
         return this.on(types, one); };
     Map.prototype.fire = function () { return this; };
 
