@@ -344,9 +344,18 @@
             map._whenStyle(function () {
                 if (gl.getSource(id)) return;
                 gl.addSource(id, { type: 'raster', tiles: self._glUrls(), tileSize: 256,
-                    maxzoom: self.options.maxZoom || 19, attribution: self.options.attribution || '' });
-                var layer = { id: id, type: 'raster', source: id,
-                    paint: { 'raster-opacity': self.options.opacity != null ? self.options.opacity : 1 } };
+                    // maxNativeZoom (Leaflet) == source maxzoom (MapLibre): MapLibre
+                    // overzooms the deepest native tiles past this instead of fetching.
+                    maxzoom: self.options.maxNativeZoom || self.options.maxZoom || 19,
+                    attribution: self.options.attribution || '' });
+                var paint = { 'raster-opacity': self.options.opacity != null ? self.options.opacity : 1,
+                    // No cross-fade when a new frame's tiles stream in — that fade is
+                    // the "white flash" between animation frames.
+                    'raster-fade-duration': 0 };
+                // crisp: pixel-exact overzoom (the IR mosaic; keeps the sharp,
+                // non-interpolated look past native zoom). Default basemap stays linear.
+                if (self.options.crisp) paint['raster-resampling'] = 'nearest';
+                var layer = { id: id, type: 'raster', source: id, paint: paint };
                 map._glAdd(layer, map._paneZ(self.options.pane || 'tilePane'));
                 self._added = true;
                 (self._loadCbs || []).forEach(function (f) { setTimeout(f, 0); });

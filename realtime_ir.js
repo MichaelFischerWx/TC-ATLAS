@@ -1174,7 +1174,12 @@
     function fmtUTC(isoStr) {
         if (!isoStr) return '\u2014';
         try {
-            var d = new Date(isoStr);
+            var s = String(isoStr), d;
+            // The GL build drives the global loop off mosaic frames.json stamps
+            // ("YYYYMMDDHHMM"), which new Date() can't parse \u2192 NaN. Handle both.
+            if (/^\d{12}$/.test(s)) {
+                d = new Date(Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12)));
+            } else { d = new Date(isoStr); }
             var mo = String(d.getUTCMonth() + 1).padStart(2, '0');
             var day = String(d.getUTCDate()).padStart(2, '0');
             var hh = String(d.getUTCHours()).padStart(2, '0');
@@ -1686,7 +1691,7 @@
         if (window.LFLET_GL && (_mosaicTs || /^\d{12}$/.test(String(timeStr)))) {
             var _ts = /^\d{12}$/.test(String(timeStr)) ? timeStr : _mosaicTs;
             return L.tileLayer(_mosaicTileUrl(_ts),
-                { opacity: opacity != null ? opacity : 0.85, maxZoom: 7, maxNativeZoom: 7 });
+                { opacity: opacity != null ? opacity : 0.85, maxZoom: 7, maxNativeZoom: 7, crisp: true });
         }
         // perSatTimes is optional: {'GOES-East': ts, 'GOES-West': ts, 'Himawari': ts}
         // When provided, each tile uses the freshest time for its assigned satellite.
@@ -3902,8 +3907,9 @@
             var prev = _stormNameLabels[key];
             if (prev && map) { try { map.removeLayer(prev); } catch (e) {} }
             label._atcfId = key;
+            label._labelName = (storm.name || '').toUpperCase();
             _stormNameLabels[key] = label;
-            _syncStormLabelVisibility();
+            _scheduleStormLabelSync();
         }
         return label;
     }
@@ -3914,13 +3920,34 @@
     // duplicate text is suppressed — so the user sees one "Jangmi"
     // instead of two. Restores all labels when genesis is off.
     function _syncStormLabelVisibility() {
+        // Primary signal: the ATCF-id → disturbance match. But that match can lag
+        // a poll (a storm label re-created mid genesis-rebuild reads an empty match
+        // set and shows), leaving a duplicate name. Belt-and-suspenders: also hide a
+        // label whose NAME is currently printed on a visible genesis name-pill. The
+        // pill DOM (.rt-gen-marker-name) is identical on both engines.
+        var genNames = {};
+        if (_rtGenesisVisible) {
+            var pills = document.querySelectorAll('.rt-gen-marker-name');
+            for (var p = 0; p < pills.length; p++) genNames[(pills[p].textContent || '').trim().toUpperCase()] = true;
+        }
         var ids = Object.keys(_stormNameLabels);
         for (var i = 0; i < ids.length; i++) {
             var lbl = _stormNameLabels[ids[i]];
             if (!lbl) continue;
-            var hide = _rtGenesisVisible && !!_genesisMatchedAtcfIds[ids[i]];
+            var hide = _rtGenesisVisible &&
+                (!!_genesisMatchedAtcfIds[ids[i]] || (lbl._labelName && genNames[lbl._labelName]));
             if (typeof lbl.setOpacity === 'function') lbl.setOpacity(hide ? 0 : 1);
         }
+    }
+    // The storm-label poll and the genesis-pill render are independent async
+    // flows, so a label can settle at opacity 1 a beat after the immediate sync
+    // (before the matching pill is in the DOM), leaving a duplicate name. Run the
+    // sync now AND once more after the dust settles.
+    var _stormLabelSyncTimer = null;
+    function _scheduleStormLabelSync() {
+        _syncStormLabelVisibility();
+        if (_stormLabelSyncTimer) clearTimeout(_stormLabelSyncTimer);
+        _stormLabelSyncTimer = setTimeout(function () { _stormLabelSyncTimer = null; _syncStormLabelVisibility(); }, 1500);
     }
 
     /** Fetch tracks for all active storms */
@@ -5429,7 +5456,7 @@
                 var ts = _mosaicTs || (_mosaicFrames.length ? _mosaicFrames[_mosaicFrames.length - 1] : null);
                 if (!ts || _detailMosaicBase) return;
                 _detailMosaicBase = L.tileLayer(_mosaicTileUrl(ts), {
-                    opacity: 0.6, maxZoom: 7, maxNativeZoom: 7, pane: 'tilePane'
+                    opacity: 0.6, maxZoom: 7, maxNativeZoom: 7, pane: 'tilePane', crisp: true
                 }).addTo(detailMap);
             }).catch(function () {});
         }
@@ -11680,7 +11707,7 @@
         }
         // Hide the redundant track name labels for matched storms too —
         // the disturbance pin already shows the official name.
-        _syncStormLabelVisibility();
+        _scheduleStormLabelSync();
 
         for (var di = 0; di < disturbances.length; di++) {
             var d = disturbances[di];
@@ -16819,7 +16846,7 @@
             if (typeof renderStormMarkers === 'function' && stormData) {
                 try { renderStormMarkers(stormData); } catch (e) { /* non-fatal */ }
             }
-            _syncStormLabelVisibility();
+            _scheduleStormLabelSync();
         }
         _updateGenesisCycleBar();
         if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
