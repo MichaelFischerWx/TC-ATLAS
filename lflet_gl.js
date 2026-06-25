@@ -414,8 +414,26 @@
         return _emptyFC();
     }
     var GeoJSON = extend.call(Layer, {
-        initialize: function (data, opts) { this._data = _normFC(data); this.options = opts || {}; this._id = uid('geo'); },
-        _setData: function () { var gl = this._map && this._map._gl, src = gl && gl.getSource(this._id); if (src) src.setData(this._data); },
+        initialize: function (data, opts) { this.options = opts || {}; this._id = uid('geo'); this._data = _normFC(data); this._bakeStyle(); },
+        // A Leaflet style can be a per-feature FUNCTION (contours color each line by
+        // value). MapLibre paint is one expression for the whole layer, so we bake
+        // each feature's computed style into its properties (_lc/_lw/_lo/_fc/_fo)
+        // and read them with ['get', ...]. Evaluating the fn once with a dummy
+        // feature (as before) collapsed every line to the default — black, which is
+        // invisible on the IR. A plain-object style keeps constant paint.
+        _styleIsFn: function () { return typeof this.options.style === 'function'; },
+        _bakeStyle: function () {
+            if (!this._styleIsFn()) return; var st = this.options.style, feats = this._data.features || [];
+            this._anyFill = false;
+            for (var i = 0; i < feats.length; i++) { var f = feats[i]; if (!f.properties) f.properties = {};
+                var s = {}; try { s = st(f) || {}; } catch (e) {}
+                if (s.color != null) f.properties._lc = s.color;
+                if (s.weight != null) f.properties._lw = s.weight;
+                if (s.opacity != null) f.properties._lo = s.opacity;
+                if (s.fillColor != null) { f.properties._fc = s.fillColor; this._anyFill = true; }
+                if (s.fillOpacity != null) f.properties._fo = s.fillOpacity; }
+        },
+        _setData: function () { this._bakeStyle(); var gl = this._map && this._map._gl, src = gl && gl.getSource(this._id); if (src) src.setData(this._data); },
         addData: function (d) {
             var fc = _normFC(d);
             this._data.features = (this._data.features || []).concat(fc.features);
@@ -425,16 +443,19 @@
         setData: function (d) { this._data = _normFC(d); this._setData(); return this; },
         _addToGL: function (map) {
             this._map = map; var gl = map._gl, id = this._id, self = this;
-            var st = this.options.style; if (typeof st === 'function') st = st({}) || {}; st = st || {};
+            var fn = this._styleIsFn(), st = fn ? {} : (this.options.style || {});
             map._whenStyle(function () {
                 if (gl.getSource(id)) return;
                 gl.addSource(id, { type: 'geojson', data: self._data });
                 var gz = map._paneZ(self.options.pane || 'overlayPane');
-                if (st.fill && st.fillColor) map._glAdd({ id: id + '-f', type: 'fill', source: id,
-                    paint: { 'fill-color': st.fillColor, 'fill-opacity': st.fillOpacity != null ? st.fillOpacity : 0.2 } }, gz - 1);
-                map._glAdd({ id: id + '-l', type: 'line', source: id,
-                    paint: { 'line-color': st.color || '#000', 'line-width': st.weight != null ? st.weight : 1,
-                             'line-opacity': st.opacity != null ? st.opacity : 1 } }, gz);
+                var lineColor = fn ? ['coalesce', ['get', '_lc'], '#3388ff'] : (st.color || '#000');
+                var lineWidth = fn ? ['coalesce', ['get', '_lw'], 1] : (st.weight != null ? st.weight : 1);
+                var lineOpac = fn ? ['coalesce', ['get', '_lo'], 1] : (st.opacity != null ? st.opacity : 1);
+                if ((fn && self._anyFill) || (!fn && st.fill && st.fillColor)) map._glAdd({ id: id + '-f', type: 'fill', source: id,
+                    paint: { 'fill-color': fn ? ['coalesce', ['get', '_fc'], '#3388ff'] : st.fillColor,
+                             'fill-opacity': fn ? ['coalesce', ['get', '_fo'], 0.2] : (st.fillOpacity != null ? st.fillOpacity : 0.2) } }, gz - 1);
+                map._glAdd({ id: id + '-l', type: 'line', source: id, layout: { 'line-cap': 'round', 'line-join': 'round' },
+                    paint: { 'line-color': lineColor, 'line-width': lineWidth, 'line-opacity': lineOpac } }, gz);
                 self._added = true;
             });
         },
