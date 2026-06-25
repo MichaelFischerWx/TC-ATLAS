@@ -26,6 +26,7 @@ RUN pip install --no-cache-dir \
         scipy \
         xarray \
         h5netcdf \
+        h5py \
         s3fs \
         pyproj \
         Pillow \
