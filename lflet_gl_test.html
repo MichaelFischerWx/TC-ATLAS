@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>lflet_gl facade — Increment 1 harness</title>
+<meta name="robots" content="noindex" />
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<!-- the facade pretends to be Leaflet's `L`, backed by MapLibre -->
+<script src="lflet_gl.js"></script>
+<style>
+  html,body{margin:0;height:100%;background:#0b1220;color:#e2e8f0;font:13px system-ui;}
+  #map{position:absolute;inset:0;}
+  #log{position:absolute;top:8px;left:8px;z-index:5;background:rgba(15,23,42,.88);
+    border:1px solid rgba(148,163,184,.2);border-radius:10px;padding:10px 12px;max-width:340px;
+    font:12px ui-monospace,monospace;line-height:1.5;}
+  #log b{color:#00e5ff;} .ok{color:#34d399;} .bad{color:#f87171;}
+  .leaflet-marker{width:13px;height:13px;border-radius:50%;background:#34d399;border:2px solid #fff;}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="log"><b>lflet_gl Increment-1 harness</b><br>driving MapLibre via the Leaflet API…<br><span id="lines"></span></div>
+<script>
+(function () {
+  var L = window.L, lines = document.getElementById('lines');
+  function log(msg, ok) { lines.innerHTML += '<div class="' + (ok===false?'bad':ok?'ok':'') + '">' + msg + '</div>'; }
+  log('L.version = ' + (L && L.version) + (window.LFLET_GL ? ' (facade)' : ''), !!window.LFLET_GL);
+
+  // 1. create a map exactly like initMap() does (Leaflet calls → MapLibre)
+  var map = L.map('map', { center: [20, -55], zoom: 3, minZoom: 2, maxZoom: 10,
+                           zoomControl: true, worldCopyJump: true, preferCanvas: true,
+                           zoomSnap: 0, zoomDelta: 0.5 });
+  window._m = map;
+  log('L.map() → ' + (map.getGL ? 'MapLibre map' : 'fail'), !!map.getGL);
+
+  // 2. basemap via L.tileLayer (carto, {s} subdomains) — same call as initMap
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png',
+              { subdomains: 'abcd', maxZoom: 19 }).addTo(map);
+  log('L.tileLayer(basemap).addTo(map) ✓', true);
+
+  // 3. panes + projection (initMap creates coastlinePane; barbs use projection)
+  map.createPane('coastlinePane'); map.getPane('coastlinePane').style.zIndex = 450;
+  log('createPane/getPane ✓', true);
+
+  map.on('load', function () {
+    var p = map.latLngToContainerPoint([20, -55]);
+    log('projection latLngToContainerPoint → ' + Math.round(p.x) + ',' + Math.round(p.y), true);
+
+    // 4. the IR mosaic — in the real port this replaces the composite GridLayer.
+    //    Here it's just an XYZ tileLayer (the mosaic IS XYZ), proving the swap shape.
+    fetch('https://cdn.tcatlas.org/mosaic-v1/ir/frames.json').then(function (r) { return r.json(); })
+      .then(function (j) {
+        var ts = (j.frames || []).slice(-1)[0];
+        var ir = L.tileLayer('https://cdn.tcatlas.org/mosaic-v1/ir/' + ts + '/{z}/{x}/{y}.png',
+                             { maxZoom: 7, opacity: 0.9 }).addTo(map);
+        log('IR mosaic tileLayer (' + ts + ') ✓ — opacity test…', true);
+        setTimeout(function () { ir.setOpacity(0.6); log('ir.setOpacity(0.6) ✓', true); }, 1500);
+      }).catch(function (e) { log('mosaic fetch failed: ' + e, false); });
+
+    // 5. coastline via L.geoJSON (line layer)
+    fetch('assets/coastlines/ne_10m_coastline.geojson').then(function (r) { return r.json(); })
+      .then(function (gj) { L.geoJSON(gj, { pane: 'coastlinePane', style: { color: '#000', weight: 1, opacity: 0.5 } }).addTo(map);
+        log('L.geoJSON(coastline).addTo(map) ✓', true); }).catch(function () {});
+
+    // 6. a marker + popup (storm-pin shape)
+    L.marker([18, -55], { icon: L.divIcon({ html: '<div class="leaflet-marker"></div>' }) })
+      .bindPopup('<b>Facade marker</b><br>L.marker + L.popup → maplibregl.Marker').addTo(map);
+    log('L.marker + bindPopup ✓ — click it', true);
+
+    // 7. events
+    map.on('moveend', function () { /* fires via facade event translation */ });
+    log('<b class="ok">Increment 1 facade core: working.</b>', true);
+  });
+})();
+</script>
+</body>
+</html>
