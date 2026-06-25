@@ -334,11 +334,11 @@
             // Web Mercator can't represent the poles; clamp lat to its limit so a
             // full-globe overlay ([-90..90]) doesn't push the image tile out of bounds.
             var M = 85.05112878; s = Math.max(-M, Math.min(M, s)); n = Math.max(-M, Math.min(M, n));
-            // NOTE: a full-globe overlay makes MapLibre log a harmless "x=-1 outside
-            // of bounds" while building the western world-copy tile during image
-            // load — thrown inside its async loader (not the 'error' event, so it
-            // can't be swallowed there). The overlay still renders and it doesn't
-            // re-fire on pan. Left as-is; revisit in the parity sweep if it matters.
+            // A lng span reaching exactly ±180 makes MapLibre's ImageSource compute a
+            // corner tile at x=2^z (or a wrapped x=-1) and throw "outside of bounds"
+            // during load. Pull the edges a hair inside so the source stays within
+            // [0,1) Mercator-x; the sub-pixel inset is invisible at any zoom.
+            if (w <= -180) w = -179.99; if (e >= 180) e = 179.99;
             return [[w, n], [e, n], [e, s], [w, s]]; },
         setBounds: function (b) { this._bounds = b; var gl = this._map && this._map._gl, src = gl && gl.getSource(this._id); if (src) src.setCoordinates(this._coords()); return this; },
         _addToGL: function (map) { this._map = map; var gl = map._gl, id = this._id, self = this;

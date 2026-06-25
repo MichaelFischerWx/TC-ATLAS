@@ -103,16 +103,19 @@ the only remaining step and is held for explicit sign-off.
 **Facade changes that made it work** (all in `lflet_gl.js` unless noted): toLatLng
 numeric-arg guard; LatLngBounds getSouth/W/N/E + pad + contains; Marker bindTooltip
 + real .on() events; Map.on/off/once honor context; ImageOverlay._coords accepts
-LatLngBounds + clamps Mercator-pole lat; Point multiplyBy/round/divideBy + L.Bounds;
-Map.getZoomScale/_getNewPixelOrigin; DomUtil.setTransform; Browser.any3d;
-preserveDrawingBuffer. In `realtime_ir.js`: env ±360° world copies skipped on the
-facade (MapLibre wraps natively).
+LatLngBounds + clamps Mercator-pole lat + insets lng to ±179.99; Point
+multiplyBy/round/divideBy + L.Bounds; Map.getZoomScale/_getNewPixelOrigin;
+DomUtil.setTransform; Browser.any3d; preserveDrawingBuffer. In `realtime_ir.js`:
+env ±360° world copies skipped on the facade (MapLibre wraps natively).
 
-**Known cosmetic:** full-globe image overlays log a benign `x=-1 outside of bounds`
-once during load (thrown inside MapLibre's async image loader; overlay renders fine,
-doesn't re-fire on pan). **Not verified headless:** rAF auto-playback (the hidden
-preview tab throttles requestAnimationFrame) — needs a real-browser glance; frame
-load + scrub (same showGlobalAnimFrame path) is confirmed.
+**Console noise fixed:** full-globe image overlays used to log a benign
+`x=±1 outside of bounds` during load (MapLibre's ImageSource building a corner/
+world-copy tile at the ±180 edge). Insetting the image lng to ±179.99 in
+`_coords` keeps the source inside [0,1) Mercator-x — console is now clean across
+3 stacked filled env overlays + the storm card (sub-pixel inset, invisible at any
+zoom). **Not verified headless:** rAF auto-playback (the hidden preview tab
+throttles requestAnimationFrame) — needs a real-browser glance; frame load +
+scrub (same showGlobalAnimFrame path) is confirmed.
 
 ## Parity gate (before merge to main)
 Side-by-side the branch GL page and the deployed page across: global IR + animation,
