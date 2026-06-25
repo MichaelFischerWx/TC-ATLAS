@@ -104,6 +104,10 @@
         // addLayer even while tiles stream (isStyleLoaded()/loaded() flicker false
         // during tile loads, which previously stranded layers added post-load).
         this._loaded = false;
+        // Custom Leaflet layers branch on these internals; the facade has no
+        // zoom-anim transform (canvas layers redraw on move), so report false.
+        this._zoomAnimated = false;
+        this._animatingZoom = false;
         var _self = this; this._gl.on('load', function () { _self._loaded = true; });
 
         // Leaflet-style default panes: DOM divs over the canvas. Custom canvas
@@ -144,9 +148,17 @@
     // projection
     Map.prototype.latLngToContainerPoint = function (ll) { var p = this._gl.project(ll2ml(ll)); return new Point(p.x, p.y); };
     Map.prototype.latLngToLayerPoint = Map.prototype.latLngToContainerPoint;
-    Map.prototype.containerPointToLatLng = function (pt) { var c = this._gl.unproject([pt.x, pt.y]); return new LatLng(c.lat, c.lng); };
+    Map.prototype.containerPointToLatLng = function (pt) { var x = isArr(pt) ? pt[0] : pt.x, y = isArr(pt) ? pt[1] : pt.y; var c = this._gl.unproject([x, y]); return new LatLng(c.lat, c.lng); };
     Map.prototype.project = function (ll) { var p = this._gl.project(ll2ml(ll)); return new Point(p.x, p.y); };
-    Map.prototype.unproject = function (pt) { var c = this._gl.unproject([pt.x, pt.y]); return new LatLng(c.lat, c.lng); };
+    Map.prototype.unproject = function (pt) { var x = isArr(pt) ? pt[0] : pt.x, y = isArr(pt) ? pt[1] : pt.y; var c = this._gl.unproject([x, y]); return new LatLng(c.lat, c.lng); };
+    // The facade keeps panes un-transformed (custom layers redraw on move), so
+    // layerPoint == containerPoint. Canvas overlays position themselves at the
+    // container origin and draw via latLngToContainerPoint.
+    Map.prototype.containerPointToLayerPoint = function (pt) { var x = isArr(pt) ? pt[0] : pt.x, y = isArr(pt) ? pt[1] : pt.y; return new Point(x, y); };
+    Map.prototype.layerPointToContainerPoint = function (pt) { var x = isArr(pt) ? pt[0] : pt.x, y = isArr(pt) ? pt[1] : pt.y; return new Point(x, y); };
+    Map.prototype.layerPointToLatLng = function (pt) { return this.containerPointToLatLng(pt); };
+    Map.prototype.getPixelOrigin = function () { return new Point(0, 0); };
+    Map.prototype.getPixelBounds = function () { var s = this.getSize(); return { min: new Point(0, 0), max: new Point(s.x, s.y) }; };
 
     // events
     Map.prototype.on = function (types, fn) {
@@ -286,8 +298,24 @@
     });
 
     // ── GeoJSON → geojson source (line + optional fill) ──
+    var _emptyFC = function () { return { type: 'FeatureCollection', features: [] }; };
+    function _normFC(d) {
+        if (!d) return _emptyFC();
+        if (d.type === 'FeatureCollection') return { type: 'FeatureCollection', features: (d.features || []).slice() };
+        if (d.type === 'Feature') return { type: 'FeatureCollection', features: [d] };
+        if (d.type) return { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: d }] };  // bare geometry
+        return _emptyFC();
+    }
     var GeoJSON = extend.call(Layer, {
-        initialize: function (data, opts) { this._data = data; this.options = opts || {}; this._id = uid('geo'); },
+        initialize: function (data, opts) { this._data = _normFC(data); this.options = opts || {}; this._id = uid('geo'); },
+        _setData: function () { var gl = this._map && this._map._gl, src = gl && gl.getSource(this._id); if (src) src.setData(this._data); },
+        addData: function (d) {
+            var fc = _normFC(d);
+            this._data.features = (this._data.features || []).concat(fc.features);
+            this._setData(); return this;
+        },
+        clearLayers: function () { this._data = _emptyFC(); this._setData(); return this; },
+        setData: function (d) { this._data = _normFC(d); this._setData(); return this; },
         _addToGL: function (map) {
             this._map = map; var gl = map._gl, id = this._id, self = this;
             var st = this.options.style; if (typeof st === 'function') st = st({}) || {}; st = st || {};
