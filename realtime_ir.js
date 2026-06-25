@@ -3944,10 +3944,16 @@
     // (before the matching pill is in the DOM), leaving a duplicate name. Run the
     // sync now AND once more after the dust settles.
     var _stormLabelSyncTimer = null;
+    var _stormLabelSyncInterval = null;
     function _scheduleStormLabelSync() {
         _syncStormLabelVisibility();
         if (_stormLabelSyncTimer) clearTimeout(_stormLabelSyncTimer);
         _stormLabelSyncTimer = setTimeout(function () { _stormLabelSyncTimer = null; _syncStormLabelVisibility(); }, 1500);
+        // Backstop: the genesis-render sync fires before its own pills exist (the
+        // disturbance loop runs after it) and the storm poll re-creates labels on its
+        // own clock, so point-in-time syncs keep racing. A cheap 2 s re-sync (a few
+        // labels + one DOM query) guarantees convergence regardless of ordering.
+        if (!_stormLabelSyncInterval) _stormLabelSyncInterval = setInterval(_syncStormLabelVisibility, 2000);
     }
 
     /** Fetch tracks for all active storms */
