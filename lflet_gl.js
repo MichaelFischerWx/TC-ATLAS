@@ -410,6 +410,22 @@
         _removeFromGL: function (map) { var gl = map._gl; try { if (gl.getLayer(this._id)) gl.removeLayer(this._id); if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {} },
         setOpacity: function (o) { var gl = this._map && this._map._gl; if (gl && gl.getLayer(this._id)) gl.setPaintProperty(this._id, 'raster-opacity', o); this.options.opacity = o; return this; },
         setUrl: function (u) { this._url = u; var gl = this._map && this._map._gl, src = gl && gl.getSource(this._id); if (src) src.updateImage({ url: u }); return this; },
+        // The per-band (Vis/WV) bundle counts valid frames via lyr.once('load'/'error')
+        // on each overlay (the IR bundle skips this via lazy-decode). MapLibre image
+        // sources don't surface a per-source load event, so probe the URL with an
+        // Image() and fire from that. Without this, Vis/WV never finalized → the
+        // product fell back to IR ("no Visible/WV on the storm sector").
+        on: function (type, fn) { if (type !== 'load' && type !== 'error') return this;
+            this._evts = this._evts || {}; (this._evts[type] = this._evts[type] || []).push(fn); this._probeLoad(); return this; },
+        once: function (type, fn) { return this.on(type, fn); },
+        _probeLoad: function () { if (this._probed || !this._url) return; this._probed = true; var self = this;
+            var img = new Image();
+            img.onload = function () { self._fireImg('load'); };
+            img.onerror = function () { self._fireImg('error'); };
+            try { img.src = self._url; } catch (e) { setTimeout(function () { self._fireImg('error'); }, 0); }
+            if (img.complete && img.naturalWidth) setTimeout(function () { self._fireImg('load'); }, 0); },
+        _fireImg: function (type) { if (this._fired) return; this._fired = true;
+            ((this._evts && this._evts[type]) || []).forEach(function (f) { try { f(); } catch (e) {} }); },
         bringToFront: function () { return this; }
     });
 
