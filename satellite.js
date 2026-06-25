@@ -338,23 +338,30 @@
         IR_COLORMAPS['wv'] = (function () {
             var vmin = 170.0, vmax = 260.0, lut = new Uint8Array(256 * 4);
             lut[0]=0;lut[1]=0;lut[2]=0;lut[3]=0;
+            // SHARED diverging WV design — identical to the global mosaic
+            // (build_ir_mosaic.py _CLAUDE_WV_FRAC_STOPS) and the server WebP
+            // (ir_monitor_api.py) so global-map WV and storm-card WV match.
+            // Dry warm tail → dark→tan brown; light cream neutral ~232 K; moist →
+            // pale-blue→blue→teal→green→mint. frac = 1-(Tb-170)/90.
             var stops = [
-                {f:0.000,r:235,g:110,b: 45},  // warm: terra cotta (dry)
-                {f:0.080,r:215,g: 90,b: 50},  // rust red
-                {f:0.160,r:195,g:105,b: 55},  // terracotta
-                {f:0.240,r:220,g:150,b: 90},  // amber
-                {f:0.310,r:235,g:200,b:165},  // warm cream
-                {f:0.380,r:248,g:235,b:218},  // ivory
-                {f:0.450,r:242,g:246,b:248},  // off-white
-                {f:0.510,r:218,g:235,b:246},  // pale ice blue
-                {f:0.580,r:160,g:210,b:240},  // light cyan
-                {f:0.660,r: 95,g:175,b:225},  // sky blue
-                {f:0.740,r: 45,g:130,b:200},  // cobalt
-                {f:0.800,r: 20,g: 90,b:170},  // navy
-                {f:0.860,r: 30,g:130,b:135},  // teal-green
-                {f:0.910,r: 55,g:180,b: 95},  // forest green
-                {f:0.960,r:140,g:230,b:145},  // emerald
-                {f:1.000,r:230,g:250,b:220}   // pale mint (overshooting)
+                {f:0.000,r: 45,g: 28,b: 12},  // 260K darkest brown (very dry)
+                {f:0.056,r: 60,g: 38,b: 18},  // 255K dark espresso
+                {f:0.122,r:105,g: 68,b: 34},  // 249K brown
+                {f:0.178,r:158,g:110,b: 60},  // 244K tan-brown
+                {f:0.233,r:205,g:162,b:105},  // 239K sand
+                {f:0.278,r:238,g:212,b:170},  // 235K pale sand
+                {f:0.311,r:250,g:244,b:230},  // 232K cream (neutral)
+                {f:0.356,r:212,g:234,b:246},  // 228K pale blue (moist onset)
+                {f:0.411,r:158,g:206,b:238},  // 223K light blue
+                {f:0.467,r: 96,g:170,b:222},  // 218K blue
+                {f:0.511,r: 48,g:124,b:200},  // 214K medium blue
+                {f:0.567,r: 26,g: 88,b:175},  // 209K deep blue
+                {f:0.611,r: 26,g:118,b:156},  // 205K blue-teal
+                {f:0.656,r: 34,g:158,b:128},  // 201K teal-green
+                {f:0.711,r: 78,g:198,b: 98},  // 196K green
+                {f:0.800,r:140,g:225,b:130},  // 188K light green
+                {f:0.889,r:200,g:245,b:195},  // 180K pale green
+                {f:1.000,r:240,g:252,b:228}   // 170K mint (deep convection)
             ];
             for (var i=1;i<=255;i++) {
                 var frac = 1.0 - (i-1) / 254.0;

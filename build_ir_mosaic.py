@@ -219,34 +219,38 @@ PRODUCTS = {
 }
 _NIGHT_ELEV_DEG = -6.0   # civil twilight: below this, Visible is masked clear
 
-# WV range focused on the meteorologically meaningful regime (195-255 K) rather
-# than the full 170-260 band — gives the moisture gradient more color resolution.
-# Driest >255 K saturates to darkest brown; deep convection <195 K to green.
-_WV_VMIN, _WV_VMAX = 195.0, 255.0
+# Keep the standard 170-260 K WV range so the global mosaic, the storm-card raw-WV
+# encoding (BAND_RANGES[8]) and the client LUT all share ONE Tb→color mapping
+# (matched). frac = 1 - (Tb-170)/90.
+_WV_VMIN, _WV_VMAX = 170.0, 260.0
 
 
-# Diverging Water-Vapor LUT (frac = 1 - (Tb-195)/60, so frac 0 = warm/dry):
-# DRY warm tail → dark→medium brown→tan; a light cream NEUTRAL near ~232 K; then
-# MOIST → pale blue→blue→teal→green (deep convection). The earlier CIMSS port put
-# the brown/blue divergence too cold, so most of a field's mid-trop Tb read as
-# brown ("too much brown"); this moves the neutral warmer and lets lightness carry
-# the gradient so moist pockets pop as white/blue against the dry brown.
+# Diverging Water-Vapor LUT — the SHARED design (mirrored in ir_monitor_api.py
+# _CLAUDE_WV_FRAC_STOPS and satellite.js IR_COLORMAPS['wv'] so global + storm-card
+# WV look identical). Colors anchored to Tb: DRY warm tail → dark→tan brown; a
+# light cream NEUTRAL near ~232 K; then MOIST → pale-blue→blue→teal→green→mint
+# (deep convection). The earlier CIMSS port's divergence sat too cold so mid-trop
+# Tb read brown ("too much brown"); this moves the neutral warmer and lets
+# lightness carry the gradient so moist pockets pop as white/blue against the dry.
 _CLAUDE_WV_FRAC_STOPS = [
-    (0.000,  60,  38,  18),   # 255 K  very dry — dark espresso
-    (0.100, 105,  68,  34),   # 249 K  brown
-    (0.190, 158, 110,  60),   # 244 K  tan-brown
-    (0.270, 205, 162, 105),   # 239 K  sand
-    (0.330, 238, 212, 170),   # 235 K  pale sand
-    (0.390, 250, 244, 230),   # 232 K  cream (neutral, lightest)
-    (0.450, 212, 234, 246),   # 228 K  pale blue — moisture onset
-    (0.530, 158, 206, 238),   # 223 K  light blue
-    (0.610,  96, 170, 222),   # 218 K  blue
-    (0.690,  48, 124, 200),   # 214 K  medium blue
-    (0.770,  26,  88, 175),   # 209 K  deep blue
-    (0.840,  26, 118, 156),   # 205 K  blue-teal
-    (0.900,  34, 158, 128),   # 201 K  teal-green
-    (0.960,  78, 198,  98),   # 197 K  green
-    (1.000, 165, 230, 150),   # 195 K  light green — deep convection
+    (0.000,  45,  28,  12),   # 260 K  very dry — darkest brown
+    (0.056,  60,  38,  18),   # 255 K  dark espresso
+    (0.122, 105,  68,  34),   # 249 K  brown
+    (0.178, 158, 110,  60),   # 244 K  tan-brown
+    (0.233, 205, 162, 105),   # 239 K  sand
+    (0.278, 238, 212, 170),   # 235 K  pale sand
+    (0.311, 250, 244, 230),   # 232 K  cream (neutral, lightest)
+    (0.356, 212, 234, 246),   # 228 K  pale blue — moisture onset
+    (0.411, 158, 206, 238),   # 223 K  light blue
+    (0.467,  96, 170, 222),   # 218 K  blue
+    (0.511,  48, 124, 200),   # 214 K  medium blue
+    (0.567,  26,  88, 175),   # 209 K  deep blue
+    (0.611,  26, 118, 156),   # 205 K  blue-teal
+    (0.656,  34, 158, 128),   # 201 K  teal-green
+    (0.711,  78, 198,  98),   # 196 K  green
+    (0.800, 140, 225, 130),   # 188 K  light green
+    (0.889, 200, 245, 195),   # 180 K  pale green
+    (1.000, 240, 252, 228),   # 170 K  mint — deep convection / overshoot
 ]
 
 

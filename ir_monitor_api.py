@@ -6086,24 +6086,31 @@ def _render_ir_jpg(tb_array: np.ndarray, quality: int = 75,
 # colors so a dry slot reads instantly; the cold end peaks in green
 # to call out convective bursts. Built once at import time as a 256-row
 # uint8 LUT — same fast lookup pattern as _CLAUDE_IR_JPG_LUT.
+# SHARED diverging WV design — identical to build_ir_mosaic.py and
+# satellite.js IR_COLORMAPS['wv'] so the global-map WV mosaic and the storm-card
+# WV (this server-rendered WebP + the client LUT) match. Dry warm tail →
+# dark→tan brown; light cream neutral ~232 K; moist → pale-blue→blue→teal→
+# green→mint. frac = 1 - (Tb-170)/90 over BAND_RANGES[8] (170-260 K).
 _CLAUDE_WV_FRAC_STOPS = [
-    # frac   R    G    B
-    (0.000, 235, 110,  45),   # warm: saturated terra cotta (dry intrusion)
-    (0.080, 215,  90,  50),   # rust red
-    (0.160, 195, 105,  55),   # terracotta
-    (0.240, 220, 150,  90),   # amber
-    (0.310, 235, 200, 165),   # warm cream
-    (0.380, 248, 235, 218),   # ivory
-    (0.450, 242, 246, 248),   # off-white (mid-trop moisture)
-    (0.510, 218, 235, 246),   # pale ice blue
-    (0.580, 160, 210, 240),   # light cyan
-    (0.660,  95, 175, 225),   # sky blue
-    (0.740,  45, 130, 200),   # cobalt
-    (0.800,  20,  90, 170),   # navy
-    (0.860,  30, 130, 135),   # teal-green
-    (0.910,  55, 180,  95),   # forest green (deep convection)
-    (0.960, 140, 230, 145),   # emerald
-    (1.000, 230, 250, 220),   # pale mint (overshooting tops)
+    # frac   R    G    B       Tb
+    (0.000,  45,  28,  12),   # 260 K  darkest brown (very dry)
+    (0.056,  60,  38,  18),   # 255 K  dark espresso
+    (0.122, 105,  68,  34),   # 249 K  brown
+    (0.178, 158, 110,  60),   # 244 K  tan-brown
+    (0.233, 205, 162, 105),   # 239 K  sand
+    (0.278, 238, 212, 170),   # 235 K  pale sand
+    (0.311, 250, 244, 230),   # 232 K  cream (neutral, lightest)
+    (0.356, 212, 234, 246),   # 228 K  pale blue — moisture onset
+    (0.411, 158, 206, 238),   # 223 K  light blue
+    (0.467,  96, 170, 222),   # 218 K  blue
+    (0.511,  48, 124, 200),   # 214 K  medium blue
+    (0.567,  26,  88, 175),   # 209 K  deep blue
+    (0.611,  26, 118, 156),   # 205 K  blue-teal
+    (0.656,  34, 158, 128),   # 201 K  teal-green
+    (0.711,  78, 198,  98),   # 196 K  green
+    (0.800, 140, 225, 130),   # 188 K  light green
+    (0.889, 200, 245, 195),   # 180 K  pale green
+    (1.000, 240, 252, 228),   # 170 K  mint — deep convection / overshoot
 ]
 
 def _build_claude_wv_lut() -> np.ndarray:
