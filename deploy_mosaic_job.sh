@@ -52,12 +52,13 @@ gcloud builds submit --config "${BUILD_CFG}" .
 
 # ── Create/update the Cloud Run Job ──────────────────────────────
 # 4 vCPU: PNG encode + concurrent R2 upload parallelize across cores.
-# 8Gi: the global z5 Mercator raster (~256MB) + 3 cached kernels + 3 full-disk
-# source arrays + accumulators peak ~2-3GB; 8Gi leaves headroom for the
-# one-time kernel build on cold start.
+# 16Gi: smoke-tested — all 3 sats + 3 z5 kernels + the float64 blend stack +
+# transient LON/LAT build grids OOM'd at 8Gi (signal 9). Follow-up code trims
+# (float32 blend, free source arrays, R2 kernel cache) could bring this back to
+# 8Gi; until then 16Gi. Cold-start kernel build makes a full run ~110s.
 COMMON_FLAGS=(
   --region "${REGION}" --image "${IMAGE}"
-  --memory 8Gi --cpu 4 --max-retries 1 --task-timeout 600
+  --memory 16Gi --cpu 4 --max-retries 1 --task-timeout 600
   --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET}"
   --set-secrets  "R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
 )
