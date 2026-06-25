@@ -1680,8 +1680,11 @@
     /** Create the seamless composite GIBS GridLayer */
     function createCompositeGIBSLayer(timeStr, opacity, perSatTimes) {
         // GL facade: render the server-composited mosaic as a plain XYZ raster.
-        if (window.LFLET_GL && _mosaicTs) {
-            return L.tileLayer(_mosaicTileUrl(_mosaicTs),
+        // Honor a passed mosaic timestamp (12-digit YYYYMMDDHHMM, from the
+        // animation); otherwise use the latest frame.
+        if (window.LFLET_GL && (_mosaicTs || /^\d{12}$/.test(String(timeStr)))) {
+            var _ts = /^\d{12}$/.test(String(timeStr)) ? timeStr : _mosaicTs;
+            return L.tileLayer(_mosaicTileUrl(_ts),
                 { opacity: opacity != null ? opacity : 0.85, maxZoom: 7, maxNativeZoom: 7 });
         }
         // perSatTimes is optional: {'GOES-East': ts, 'GOES-West': ts, 'Himawari': ts}
@@ -2684,6 +2687,12 @@
     }
 
     function loadGlobalAnimation() {
+        // GL facade: ensure the real mosaic frame list is loaded before building
+        // the loop (else all frames collapse to the latest mosaic tile).
+        if (window.LFLET_GL && (!_mosaicFrames || !_mosaicFrames.length)) {
+            _loadMosaicFrames().then(loadGlobalAnimation);
+            return;
+        }
         if (!map || !latestGIBSTime || globalAnimLoading) return;
 
         // If already loaded, just show the latest frame
@@ -2696,14 +2705,20 @@
         globalAnimLoaded = 0;
         globalAnimReady = false;
 
-        // Build frame times from latestGIBSTime
-        var latest = new Date(latestGIBSTime);
+        // Build frame times. On the GL facade, drive the loop from the real
+        // mosaic frames.json timestamps (each a distinct composited frame);
+        // otherwise derive GIBS times from latestGIBSTime.
         globalAnimFrameTimes = [];
-        var step = GLOBAL_ANIM_STEP_MIN * 60 * 1000;
-        var numFrames = Math.floor(GLOBAL_ANIM_LOOKBACK_H * 60 / GLOBAL_ANIM_STEP_MIN) + 1;
-        for (var i = numFrames - 1; i >= 0; i--) {
-            var dt = new Date(latest.getTime() - i * step);
-            globalAnimFrameTimes.push(toGIBSTime(roundToGIBSInterval(dt)));
+        if (window.LFLET_GL && _mosaicFrames && _mosaicFrames.length) {
+            globalAnimFrameTimes = _mosaicFrames.slice();   // oldest→newest
+        } else {
+            var latest = new Date(latestGIBSTime);
+            var step = GLOBAL_ANIM_STEP_MIN * 60 * 1000;
+            var numFrames = Math.floor(GLOBAL_ANIM_LOOKBACK_H * 60 / GLOBAL_ANIM_STEP_MIN) + 1;
+            for (var i = numFrames - 1; i >= 0; i--) {
+                var dt = new Date(latest.getTime() - i * step);
+                globalAnimFrameTimes.push(toGIBSTime(roundToGIBSInterval(dt)));
+            }
         }
 
         console.log('[Global Anim] Loading', globalAnimFrameTimes.length, 'frames for', globalProduct);

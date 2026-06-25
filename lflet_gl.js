@@ -221,14 +221,16 @@
                     paint: { 'raster-opacity': self.options.opacity != null ? self.options.opacity : 1 } };
                 gl.addLayer(layer);
                 self._added = true;
-                if (self._onload) setTimeout(self._onload, 0);
+                (self._loadCbs || []).forEach(function (f) { setTimeout(f, 0); });
             });
         },
         _removeFromGL: function (map) {
             var gl = map._gl; try { if (gl.getLayer(this._id)) gl.removeLayer(this._id); if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {}
             this._added = false;
         },
-        once: function (t, fn) { if (t === 'load') { this._onload = fn; if (this._added) setTimeout(fn, 0); } return this; },
+        // 'load' fires when the raster source is added (tiles stream lazily after).
+        on: function (t, fn) { if (t === 'load') { (this._loadCbs = this._loadCbs || []).push(fn); if (this._added) setTimeout(fn, 0); } return this; },
+        once: function (t, fn) { return this.on(t, fn); },
         setOpacity: function (o) { var gl = this._map && this._map._gl; if (gl && gl.getLayer(this._id)) gl.setPaintProperty(this._id, 'raster-opacity', o); this.options.opacity = o; return this; },
         setUrl: function (url) { this._url = url; if (this._map) { this._removeFromGL(this._map); this._addToGL(this._map); } return this; },
         bringToFront: function () { return this; }
