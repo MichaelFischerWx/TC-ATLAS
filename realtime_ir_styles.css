@@ -1902,6 +1902,12 @@ body:has(.basin-sidebar.open) #ir-display-wrap { left: 280px; }
     margin: 0 !important;
 }
 
+/* Mobile: drop the +/- zoom buttons on the global map — pinch-to-zoom is natural
+   on touch, and removing them clears the left edge for the Display button. */
+@media (max-width: 768px) {
+    #ir-map .maplibregl-ctrl-top-left .maplibregl-ctrl-group { display: none; }
+}
+
 /* The Legend/Labels/Grid pills sit at z-index 600 (above the 270-px
    sidebar at z-index 500), so without this they render on top of the
    basin cards when the panel opens. Shift them right alongside the
