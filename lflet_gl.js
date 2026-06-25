@@ -34,8 +34,8 @@
     function toLatLng(a, b) {
         if (a instanceof LatLng) return a;
         if (isArr(a)) return new LatLng(a[0], a[1]);
-        if (a && 'lat' in a) return new LatLng(a.lat, a.lng !== undefined ? a.lng : a.lon);
         if (b !== undefined) return new LatLng(a, b);
+        if (a && typeof a === 'object' && 'lat' in a) return new LatLng(a.lat, a.lng !== undefined ? a.lng : a.lon);
         return null;
     }
     function ll2ml(a, b) { var p = toLatLng(a, b); return [p.lng, p.lat]; }   // → [lng,lat]
@@ -58,6 +58,14 @@
     };
     LatLngBounds.prototype.getSouthWest = function () { return this._sw; };
     LatLngBounds.prototype.getNorthEast = function () { return this._ne; };
+    LatLngBounds.prototype.getNorthWest = function () { return new LatLng(this._ne.lat, this._sw.lng); };
+    LatLngBounds.prototype.getSouthEast = function () { return new LatLng(this._sw.lat, this._ne.lng); };
+    LatLngBounds.prototype.getSouth = function () { return this._sw.lat; };
+    LatLngBounds.prototype.getWest = function () { return this._sw.lng; };
+    LatLngBounds.prototype.getNorth = function () { return this._ne.lat; };
+    LatLngBounds.prototype.getEast = function () { return this._ne.lng; };
+    LatLngBounds.prototype.getCenter = function () { return new LatLng((this._sw.lat + this._ne.lat) / 2, (this._sw.lng + this._ne.lng) / 2); };
+    LatLngBounds.prototype.contains = function (o) { var p = toLatLng(o); return p && p.lat >= this._sw.lat && p.lat <= this._ne.lat && p.lng >= this._sw.lng && p.lng <= this._ne.lng; };
     LatLngBounds.prototype.isValid = function () { return !!this._sw; };
 
     function Point(x, y) { this.x = x; this.y = y; }
@@ -282,9 +290,11 @@
     // ── ImageOverlay → image source ──
     var ImageOverlay = extend.call(Layer, {
         initialize: function (url, bounds, opts) { this._url = url; this._bounds = bounds; this.options = opts || {}; this._id = uid('img'); },
-        _coords: function () { var b = this._bounds; // [[s,w],[n,e]]
-            var s = b[0][0], w = b[0][1], n = b[1][0], e = b[1][1];
+        _coords: function () { var b = this._bounds, s, w, n, e; // accepts [[s,w],[n,e]] OR a LatLngBounds
+            if (b && b.getSouthWest) { var sw = b.getSouthWest(), ne = b.getNorthEast(); s = sw.lat; w = sw.lng; n = ne.lat; e = ne.lng; }
+            else { s = b[0][0]; w = b[0][1]; n = b[1][0]; e = b[1][1]; }
             return [[w, n], [e, n], [e, s], [w, s]]; },
+        setBounds: function (b) { this._bounds = b; var gl = this._map && this._map._gl, src = gl && gl.getSource(this._id); if (src) src.setCoordinates(this._coords()); return this; },
         _addToGL: function (map) { this._map = map; var gl = map._gl, id = this._id, self = this;
             map._whenStyle(function () { if (gl.getSource(id)) return;
                 gl.addSource(id, { type: 'image', url: self._url, coordinates: self._coords() });
@@ -406,26 +416,48 @@
         else { el.style.width = '12px'; el.style.height = '12px'; el.style.borderRadius = '50%'; el.style.background = '#3388ff'; el.style.border = '2px solid #fff'; }
         return el;
     }
+    var _domEvtMap = { click: 'click', dblclick: 'dblclick', mousedown: 'mousedown', mouseup: 'mouseup', mouseover: 'mouseenter', mouseout: 'mouseleave', contextmenu: 'contextmenu' };
     var Marker = extend.call(Layer, {
-        initialize: function (latlng, opts) { this._ll = toLatLng(latlng); this.options = opts || {}; },
+        initialize: function (latlng, opts) { this._ll = toLatLng(latlng); this.options = opts || {}; this._evts = {}; },
         _addToGL: function (map) { this._map = map;
             this._m = new maplibregl.Marker({ element: this.options.icon ? makeIconEl(this.options.icon) : undefined, anchor: 'center' })
                 .setLngLat(ll2ml(this._ll)).addTo(map._gl);
-            if (this._popup) this._m.setPopup(this._popup._ml()); },
-        _removeFromGL: function () { if (this._m) this._m.remove(); },
+            if (this._popup) this._m.setPopup(this._popup._ml());
+            this._applyTooltip(); this._applyEvents(); },
+        _removeFromGL: function () { if (this._tipPopup) this._tipPopup.remove(); if (this._m) this._m.remove(); },
         setLatLng: function (ll) { this._ll = toLatLng(ll); if (this._m) this._m.setLngLat(ll2ml(this._ll)); return this; },
         getLatLng: function () { return this._ll; },
         bindPopup: function (content, opts) { this._popup = content instanceof Popup ? content : new Popup(opts).setContent(content); if (this._m) this._m.setPopup(this._popup._ml()); return this; },
+        bindTooltip: function (content, opts) { this._tip = { content: content, opts: opts || {} }; if (this._m) this._applyTooltip(); return this; },
         setIcon: function (icon) { this.options.icon = icon; return this; },
-        on: function () { return this; }, setOpacity: function () { return this; }, setZIndexOffset: function () { return this; }
+        on: function (type, fn, ctx) { if (!this._evts) this._evts = {}; var _self = this;
+            String(type).split(' ').forEach(function (t) { (_self._evts[t] = _self._evts[t] || []).push(ctx ? fn.bind(ctx) : fn); });
+            if (this._m) this._applyEvents(); return this; },
+        off: function () { return this; },
+        _applyTooltip: function () { var self = this; if (!this._tip || !this._m || this._tipBound) return; var el = this._m.getElement(); if (!el) return; this._tipBound = true;
+            var dir = this._tip.opts.direction || 'top';
+            var anchor = dir === 'top' ? 'bottom' : dir === 'bottom' ? 'top' : dir === 'left' ? 'right' : dir === 'right' ? 'left' : 'bottom';
+            el.style.cursor = el.style.cursor || 'pointer';
+            el.addEventListener('mouseenter', function () {
+                if (!self._tipPopup) self._tipPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, anchor: anchor, offset: 10, className: 'lflet-tip ' + (self._tip.opts.className || '') });
+                var c = self._tip.content; self._tipPopup.setHTML(typeof c === 'string' ? c : (c && c.outerHTML || '')).setLngLat(self._m.getLngLat()).addTo(self._map._gl); });
+            el.addEventListener('mouseleave', function () { if (self._tipPopup) self._tipPopup.remove(); }); },
+        _applyEvents: function () { var self = this; if (!this._m || !this._evts) return; var el = this._m.getElement(); if (!el) return; this._boundT = this._boundT || {};
+            Object.keys(this._evts).forEach(function (t) { if (self._boundT[t]) return; self._boundT[t] = true;
+                el.addEventListener(_domEvtMap[t] || t, function (ev) {
+                    var e = { type: t, originalEvent: ev, latlng: self._ll, target: self,
+                              stopPropagation: function () { ev.stopPropagation(); }, preventDefault: function () { ev.preventDefault(); } };
+                    (self._evts[t] || []).forEach(function (fn) { fn(e); }); }); }); },
+        setOpacity: function (o) { if (this._m && this._m.getElement()) this._m.getElement().style.opacity = o; return this; }, setZIndexOffset: function () { return this; }
     });
     var CircleMarker = extend.call(Marker, {
-        initialize: function (latlng, opts) { this._ll = toLatLng(latlng); this.options = opts || {}; var o = this.options;
+        initialize: function (latlng, opts) { this._ll = toLatLng(latlng); this.options = opts || {}; this._evts = {}; var o = this.options;
             var el = document.createElement('div'); var r = (o.radius || 5) * 2;
             el.style.width = r + 'px'; el.style.height = r + 'px'; el.style.borderRadius = '50%';
             el.style.background = o.fillColor || o.color || '#3388ff'; el.style.opacity = o.fillOpacity != null ? o.fillOpacity : 1;
             el.style.border = (o.weight || 1) + 'px solid ' + (o.color || '#fff'); this.options.icon = { _el: el }; },
-        _addToGL: function (map) { this._map = map; this._m = new maplibregl.Marker({ element: this.options.icon._el, anchor: 'center' }).setLngLat(ll2ml(this._ll)).addTo(map._gl); if (this._popup) this._m.setPopup(this._popup._ml()); }
+        _addToGL: function (map) { this._map = map; this._m = new maplibregl.Marker({ element: this.options.icon._el, anchor: 'center' }).setLngLat(ll2ml(this._ll)).addTo(map._gl);
+            if (this._popup) this._m.setPopup(this._popup._ml()); this._applyTooltip(); this._applyEvents(); }
     });
 
     function Popup(opts) { this.options = opts || {}; this._content = ''; }
