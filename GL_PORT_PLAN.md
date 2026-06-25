@@ -83,6 +83,37 @@ merge to `main` — only after the parity sweep (increment 9).
 - **Perf of canvas barbs redrawing every frame** → throttle redraw during active zoom if needed.
 - **Branch GL page is WIP mid-port** → fine; `main` (deployed) stays Leaflet; cutover only at parity.
 
+## Verification log (branch `gl-engine-swap`, localhost vs live data)
+
+All nine increments are built and verified against live TC-ATLAS data on the
+`gl-engine-swap` branch. `main` is still Leaflet — the `<script>` flip + merge is
+the only remaining step and is held for explicit sign-off.
+
+| Inc | Feature | Verified |
+|---|---|---|
+| 1 | Global IR mosaic + animation | mosaic attaches (z0-7); Play loads 17 frames.json frames, slider scrubs frame opacity-swap (01:00↔02:50) ✓ |
+| 2 | Static overlays | env contour (shear_200_850, geojson lines) + filled (rh_700_400 raster + colorbar) render globally; Grid/Labels/Obs toggles add GL layers ✓ |
+| 3 | Markers/popups/controls | storm pins, genesis pins, surface-obs station plots, tooltips, popups; left rail + deck + product toggles + tabs all present ✓ |
+| 4 | Env wind barbs | winds_850 barb canvas draws on overlay pane, re-renders correctly across a 2-level zoom ✓ |
+| 5 | Storm-card detail map | Mekkhala: 12/12 IR bundle frames (lazy-decode imageOverlay), track+pins+graticule+obs, slider swaps frame ✓ |
+| 6 | Recon overlay | Milton replay: 309 barbs / 5901px on reconPane canvas, correct projection ✓ |
+| 7 | Microwave | mwMosaicPane canvas + padded _bounds build clean; synthetic swath draws 13.9k px, anchored + scales across pan/zoom ✓ |
+| 8 | Export | gl.getCanvas().toDataURL ok; html2canvas composites map+overlays (center mosaic, top-left controls) ✓ |
+
+**Facade changes that made it work** (all in `lflet_gl.js` unless noted): toLatLng
+numeric-arg guard; LatLngBounds getSouth/W/N/E + pad + contains; Marker bindTooltip
++ real .on() events; Map.on/off/once honor context; ImageOverlay._coords accepts
+LatLngBounds + clamps Mercator-pole lat; Point multiplyBy/round/divideBy + L.Bounds;
+Map.getZoomScale/_getNewPixelOrigin; DomUtil.setTransform; Browser.any3d;
+preserveDrawingBuffer. In `realtime_ir.js`: env ±360° world copies skipped on the
+facade (MapLibre wraps natively).
+
+**Known cosmetic:** full-globe image overlays log a benign `x=-1 outside of bounds`
+once during load (thrown inside MapLibre's async image loader; overlay renders fine,
+doesn't re-fire on pan). **Not verified headless:** rAF auto-playback (the hidden
+preview tab throttles requestAnimationFrame) — needs a real-browser glance; frame
+load + scrub (same showGlobalAnimFrame path) is confirmed.
+
 ## Parity gate (before merge to main)
 Side-by-side the branch GL page and the deployed page across: global IR + animation,
 all Layers panel controls, env model layers, storm markers/genesis pins, storm card
