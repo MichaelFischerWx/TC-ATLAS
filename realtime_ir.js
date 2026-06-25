@@ -1665,7 +1665,7 @@
     }
 
     // ── GL engine swap: server-composited global IR mosaic (R2/CDN) ──
-    // On the MapLibre facade we render the mosaic-v1 tiles as a plain XYZ raster
+    // On the MapLibre facade we render the mosaic-v2 tiles as a plain XYZ raster
     // instead of client-compositing GIBS per tile (the 4 GridLayer classes).
     var _MOSAIC_BASE = 'https://cdn.tcatlas.org/mosaic-v2/ir';   // v2 = 512px tiles (zmax 4)
     var _mosaicFrames = [];          // rolling timestamps from frames.json

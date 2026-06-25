@@ -424,8 +424,54 @@ def r2_sink(ts, pool, futures):
     return emit
 
 
+def _r2_delete_prefix(prefix):
+    """Delete every object under `prefix` (paginated, 1000-key delete batches)."""
+    c = _get_r2(); bucket = _r2_bucket(); n = 0; token = None
+    while True:
+        kw = {"Bucket": bucket, "Prefix": prefix, "MaxKeys": 1000}
+        if token:
+            kw["ContinuationToken"] = token
+        resp = c.list_objects_v2(**kw)
+        objs = resp.get("Contents", [])
+        if objs:
+            c.delete_objects(Bucket=bucket,
+                             Delete={"Objects": [{"Key": o["Key"]} for o in objs]})
+            n += len(objs)
+        if resp.get("IsTruncated"):
+            token = resp.get("NextContinuationToken")
+        else:
+            break
+    return n
+
+
+def _prune_old_frames(kept):
+    """Delete tiles for any ir/<ts>/ frame not in `kept`. The manifest rolls to the
+    last R2_KEEP_FRAMES, but the dropped frames' tile OBJECTS were never deleted, so
+    R2 grew unbounded (~1 GB/day). This self-heals: it lists the timestamp prefixes
+    under ir/ (cheap — Delimiter gives CommonPrefixes, not every tile) and purges any
+    not in the kept window. frames.json is a key (not a prefix) so it's never touched."""
+    c = _get_r2(); bucket = _r2_bucket(); base = f"{R2_PREFIX}/ir/"
+    keptset = set(kept); token = None; pf = 0; pt = 0
+    while True:
+        kw = {"Bucket": bucket, "Prefix": base, "Delimiter": "/", "MaxKeys": 1000}
+        if token:
+            kw["ContinuationToken"] = token
+        resp = c.list_objects_v2(**kw)
+        for cp in resp.get("CommonPrefixes", []):
+            p = cp["Prefix"]; ts = p[len(base):].strip("/")
+            if ts and ts not in keptset:
+                pt += _r2_delete_prefix(p); pf += 1
+        if resp.get("IsTruncated"):
+            token = resp.get("NextContinuationToken")
+        else:
+            break
+    if pf:
+        log(f"  pruned {pf} old frame(s), {pt} tiles")
+
+
 def update_r2_manifest(new_ts, zmax):
-    """Append new_ts to mosaic-v1/ir/frames.json, trim to the rolling window."""
+    """Append new_ts to <prefix>/ir/frames.json, trim to the rolling window, and
+    prune the tiles of any frame that fell out of the window (keeps R2 bounded)."""
     c = _get_r2(); key = f"{R2_PREFIX}/ir/frames.json"
     frames = []
     try:
@@ -439,6 +485,10 @@ def update_r2_manifest(new_ts, zmax):
     body = json.dumps({"frames": frames, "zmax": zmax,
                        "storm_zooms": list(STORM_ZOOMS)}).encode()
     r2_put(key, body, "application/json", MANIFEST_CACHE)
+    try:
+        _prune_old_frames(frames)
+    except Exception as e:
+        log(f"  prune skipped: {e}")
     return frames
 
 

@@ -50,10 +50,10 @@
 
     // 4. the IR mosaic — in the real port this replaces the composite GridLayer.
     //    Here it's just an XYZ tileLayer (the mosaic IS XYZ), proving the swap shape.
-    fetch('https://cdn.tcatlas.org/mosaic-v1/ir/frames.json').then(function (r) { return r.json(); })
+    fetch('https://cdn.tcatlas.org/mosaic-v2/ir/frames.json').then(function (r) { return r.json(); })
       .then(function (j) {
         var ts = (j.frames || []).slice(-1)[0];
-        var ir = L.tileLayer('https://cdn.tcatlas.org/mosaic-v1/ir/' + ts + '/{z}/{x}/{y}.png',
+        var ir = L.tileLayer('https://cdn.tcatlas.org/mosaic-v2/ir/' + ts + '/{z}/{x}/{y}.png',
                              { maxZoom: 7, opacity: 0.9 }).addTo(map);
         log('IR mosaic tileLayer (' + ts + ') ✓ — opacity test…', true);
         setTimeout(function () { ir.setOpacity(0.6); log('ir.setOpacity(0.6) ✓', true); }, 1500);
