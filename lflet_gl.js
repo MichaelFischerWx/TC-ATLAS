@@ -66,6 +66,9 @@
     LatLngBounds.prototype.getEast = function () { return this._ne.lng; };
     LatLngBounds.prototype.getCenter = function () { return new LatLng((this._sw.lat + this._ne.lat) / 2, (this._sw.lng + this._ne.lng) / 2); };
     LatLngBounds.prototype.contains = function (o) { var p = toLatLng(o); return p && p.lat >= this._sw.lat && p.lat <= this._ne.lat && p.lng >= this._sw.lng && p.lng <= this._ne.lng; };
+    LatLngBounds.prototype.pad = function (r) { var sw = this._sw, ne = this._ne;
+        var hb = Math.abs(sw.lat - ne.lat) * r, wb = Math.abs(sw.lng - ne.lng) * r;
+        return new LatLngBounds(new LatLng(sw.lat - hb, sw.lng - wb), new LatLng(ne.lat + hb, ne.lng + wb)); };
     LatLngBounds.prototype.isValid = function () { return !!this._sw; };
 
     function Point(x, y) { this.x = x; this.y = y; }
