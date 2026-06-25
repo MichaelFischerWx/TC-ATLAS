@@ -568,13 +568,14 @@
     // loading (drag-to-scrub triggers a lazy load). Applied once the series
     // is ready instead of snapping to the latest frame. null = none pending.
     var _globalAnimPendingScrub = null;
-    var globalAnimSpeedIdx = 3;        // default 2× (was 1×) — faster global loop
+    // Rebased so the old "3×" (200 ms/frame) is the new 1× default — users wanted
+    // that pace as baseline. 0.5× slower, 2×/3× faster for rapid scanning.
+    var globalAnimSpeedIdx = 1;        // default 1× = 200 ms/frame
     var GLOBAL_ANIM_SPEEDS = [
-        { label: '0.5×', ms: 1200 },
-        { label: '1×',   ms: 600 },
-        { label: '1.5×', ms: 400 },
-        { label: '2×',   ms: 300 },
-        { label: '3×',   ms: 200 }   // added headroom above the old 2× ceiling
+        { label: '0.5×', ms: 400 },
+        { label: '1×',   ms: 200 },
+        { label: '2×',   ms: 100 },
+        { label: '3×',   ms: 67 }
     ];
 
     // Storm detail mini-map state
@@ -1690,6 +1691,102 @@
         return _mosaicLoad;
     }
     function _mosaicTileUrl(ts, product) { return _MOSAIC_ROOT + '/' + (product || 'ir') + '/' + ts + '/{z}/{x}/{y}.png'; }
+
+    // ── Inspect IR Tb (client-side, ~$0) ───────────────────────────────────
+    // The global IR mosaic tiles are pre-colored server-side with the backend
+    // _IR_LUT over [190,310] K (frac = 1 - (Tb-190)/120). We rebuild that exact
+    // LUT here and nearest-RGB-invert a sampled tile pixel back to Tb — no extra
+    // backend call. Accuracy ~±0.5 K (8-bit quantization); cold tops <190 K
+    // saturate to ~190. (The storm card's raw-Tb hover stays the precise tool.)
+    var _IR_INSPECT_STOPS = [
+        [0.000,12,12,22],[0.142,70,70,82],[0.225,120,120,132],[0.308,180,180,192],
+        [0.392,216,218,228],[0.475,140,210,220],[0.517,68,180,196],[0.558,32,148,166],
+        [0.600,40,178,116],[0.642,96,208,68],[0.683,192,220,40],[0.725,238,196,48],
+        [0.767,228,132,48],[0.808,214,78,56],[0.850,180,36,68],[0.892,196,48,156],
+        [0.933,168,64,200],[0.975,120,48,180],[1.000,64,24,140]
+    ];
+    var _irFwdLut = (function () {
+        var lut = new Array(256);
+        for (var i = 0; i < 256; i++) {
+            var frac = i / 255, lo = _IR_INSPECT_STOPS[0], hi = _IR_INSPECT_STOPS[_IR_INSPECT_STOPS.length - 1];
+            for (var s = 0; s < _IR_INSPECT_STOPS.length - 1; s++) {
+                if (_IR_INSPECT_STOPS[s][0] <= frac && frac <= _IR_INSPECT_STOPS[s + 1][0]) {
+                    lo = _IR_INSPECT_STOPS[s]; hi = _IR_INSPECT_STOPS[s + 1]; break;
+                }
+            }
+            var t = hi[0] === lo[0] ? 0 : (frac - lo[0]) / (hi[0] - lo[0]);
+            lut[i] = [Math.round(lo[1] + t * (hi[1] - lo[1])), Math.round(lo[2] + t * (hi[2] - lo[2])), Math.round(lo[3] + t * (hi[3] - lo[3]))];
+        }
+        return lut;
+    })();
+    function _irRgbToTb(r, g, b) {
+        var bestI = 0, bestD = Infinity;
+        for (var i = 0; i < 256; i++) {
+            var e = _irFwdLut[i], dr = e[0] - r, dg = e[1] - g, db = e[2] - b, d = dr * dr + dg * dg + db * db;
+            if (d < bestD) { bestD = d; bestI = i; }
+        }
+        return { tb: 310 - (bestI / 255) * 120, dist: Math.sqrt(bestD) };
+    }
+
+    var _inspectOn = false, _inspectTileCache = {}, _inspectTipEl = null, _inspectThrottle = false;
+    function _inspectSampleTile(z, x, y, cb) {
+        var url = _MOSAIC_ROOT + '/ir/' + _mosaicTs + '/' + z + '/' + x + '/' + y + '.png';
+        var rec = _inspectTileCache[url];
+        if (rec) { cb(rec.cx ? rec : null); return; }
+        rec = _inspectTileCache[url] = {};
+        var img = new Image(); img.crossOrigin = 'anonymous';
+        img.onload = function () {
+            var c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+            rec.cx = c.getContext('2d'); rec.cx.drawImage(img, 0, 0); cb(rec);
+        };
+        img.onerror = function () { cb(null); };
+        img.src = url;
+    }
+    function _inspectAt(lat, lon, clientX, clientY) {
+        if (!_mosaicTs) return;
+        lon = ((lon + 180) % 360 + 360) % 360 - 180;   // normalize world-copy lng
+        // z4 is the global base's deepest level = full native IR resolution (512px
+        // tiles == the 8192² render). z5/z6 only exist over active storms.
+        var z = 4, n = Math.pow(2, z), latR = lat * Math.PI / 180;
+        var xw = (lon + 180) / 360 * n;
+        var yw = (1 - Math.log(Math.tan(latR) + 1 / Math.cos(latR)) / Math.PI) / 2 * n;
+        if (yw < 0 || yw >= n) { _inspectHideTip(); return; }
+        var tx = Math.floor(xw), ty = Math.floor(yw);
+        var px = Math.min(511, Math.floor((xw - tx) * 512)), py = Math.min(511, Math.floor((yw - ty) * 512));
+        _inspectSampleTile(z, tx, ty, function (rec) {
+            if (!rec || !rec.cx) { _inspectHideTip(); return; }
+            var d = rec.cx.getImageData(px, py, 1, 1).data;
+            if (d[3] < 10) { _inspectHideTip(); return; }   // off-disk / no data
+            _inspectShowTip(clientX, clientY, _irRgbToTb(d[0], d[1], d[2]).tb);
+        });
+    }
+    function _inspectShowTip(x, y, tb) {
+        if (!_inspectTipEl) {
+            _inspectTipEl = document.createElement('div');
+            _inspectTipEl.className = 'ir-inspect-tip';
+            _inspectTipEl.style.cssText = 'position:fixed;z-index:1300;pointer-events:none;white-space:nowrap;' +
+                'background:rgba(15,22,35,0.92);color:#fff;font:600 11px/1.3 "DM Sans",sans-serif;' +
+                'padding:3px 7px;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.4);';
+            document.body.appendChild(_inspectTipEl);
+        }
+        _inspectTipEl.textContent = tb.toFixed(0) + ' K · ' + (tb - 273.15).toFixed(0) + ' °C';
+        _inspectTipEl.style.left = (x + 14) + 'px'; _inspectTipEl.style.top = (y - 6) + 'px';
+        _inspectTipEl.style.display = 'block';
+    }
+    function _inspectHideTip() { if (_inspectTipEl) _inspectTipEl.style.display = 'none'; }
+    function _inspectMouseMove(e) {
+        if (!_inspectOn || globalProduct !== 'ir' || !e.latlng) { _inspectHideTip(); return; }
+        if (_inspectThrottle) return;
+        _inspectThrottle = true; setTimeout(function () { _inspectThrottle = false; }, 40);
+        var oe = e.originalEvent || {};
+        _inspectAt(e.latlng.lat, e.latlng.lng, oe.clientX || 0, oe.clientY || 0);
+    }
+    function _rtToggleInspect() {
+        _inspectOn = !_inspectOn;
+        if (_inspectOn) { map.on('mousemove', _inspectMouseMove); map.on('mouseout', _inspectHideTip); }
+        else { map.off('mousemove', _inspectMouseMove); map.off('mouseout', _inspectHideTip); _inspectHideTip(); }
+        return _inspectOn;
+    }
 
     /** Create the seamless composite GIBS GridLayer for a mosaic product
      *  (ir | vis | wv). Defaults to the current globalProduct. */
@@ -3391,6 +3488,20 @@
                 var el = document.getElementById(id);
                 if (el) { el.classList.add('ir-display-item'); dMenu.appendChild(el); }
             });
+
+            // Inspect Tb — hover the IR field to read brightness temperature (IR
+            // product only). Client-side LUT inversion of the rendered tile, no
+            // backend cost. Sixth display option.
+            var insBtn = document.createElement('button');
+            insBtn.id = 'ir-inspect-toggle';
+            insBtn.type = 'button';
+            insBtn.className = 'ir-legend-toggle ir-display-item';
+            insBtn.title = 'Hover the IR field to read brightness temperature (IR view only)';
+            insBtn.innerHTML = '⌖ Inspect Tb';
+            insBtn.addEventListener('click', function () {
+                insBtn.classList.toggle('active', _rtToggleInspect());
+            });
+            dMenu.appendChild(insBtn);
 
             dToggle.addEventListener('click', function (e) {
                 e.stopPropagation();
