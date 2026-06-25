@@ -72,8 +72,26 @@
     LatLngBounds.prototype.isValid = function () { return !!this._sw; };
 
     function Point(x, y) { this.x = x; this.y = y; }
+    function toPoint(p) { return p instanceof Point ? p : isArr(p) ? new Point(p[0], p[1]) : new Point(p.x, p.y); }
     Point.prototype.subtract = function (p) { return new Point(this.x - p.x, this.y - p.y); };
     Point.prototype.add = function (p) { return new Point(this.x + p.x, this.y + p.y); };
+    Point.prototype.multiplyBy = function (n) { return new Point(this.x * n, this.y * n); };
+    Point.prototype.divideBy = function (n) { return new Point(this.x / n, this.y / n); };
+    Point.prototype.round = function () { return new Point(Math.round(this.x), Math.round(this.y)); };
+    Point.prototype.floor = function () { return new Point(Math.floor(this.x), Math.floor(this.y)); };
+    Point.prototype.clone = function () { return new Point(this.x, this.y); };
+    Point.prototype.distanceTo = function (p) { var dx = this.x - p.x, dy = this.y - p.y; return Math.sqrt(dx * dx + dy * dy); };
+
+    // ── Bounds (pixel-space rectangle; mirrors L.Bounds) ──
+    function Bounds(a, b) { var pts = b !== undefined ? [a, b] : a; this.min = null; this.max = null;
+        if (pts) { for (var i = 0; i < pts.length; i++) this.extend(pts[i]); } }
+    Bounds.prototype.extend = function (p) { p = toPoint(p);
+        if (!this.min) { this.min = p.clone(); this.max = p.clone(); }
+        else { this.min.x = Math.min(p.x, this.min.x); this.min.y = Math.min(p.y, this.min.y);
+               this.max.x = Math.max(p.x, this.max.x); this.max.y = Math.max(p.y, this.max.y); } return this; };
+    Bounds.prototype.getSize = function () { return this.max.subtract(this.min); };
+    Bounds.prototype.getCenter = function () { return new Point((this.min.x + this.max.x) / 2, (this.min.y + this.max.y) / 2); };
+    Bounds.prototype.contains = function (p) { p = toPoint(p); return p.x >= this.min.x && p.x <= this.max.x && p.y >= this.min.y && p.y <= this.max.y; };
 
     // ── event translation ──
     var EVT = { moveend: 'moveend', movestart: 'movestart', move: 'move', zoom: 'zoom',
@@ -176,6 +194,13 @@
     Map.prototype.layerPointToContainerPoint = function (pt) { var x = isArr(pt) ? pt[0] : pt.x, y = isArr(pt) ? pt[1] : pt.y; return new Point(x, y); };
     Map.prototype.layerPointToLatLng = function (pt) { return this.containerPointToLatLng(pt); };
     Map.prototype.getPixelOrigin = function () { return new Point(0, 0); };
+    // L.Renderer internals used by the microwave mosaic canvas layer. project()
+    // is screen-relative (current zoom); _getNewPixelOrigin stays consistent with
+    // it so _updateTransform's (project(center) - origin) term cancels to size/2.
+    Map.prototype.getZoomScale = function (toZoom, fromZoom) { return Math.pow(2, toZoom - (fromZoom == null ? this.getZoom() : fromZoom)); };
+    Map.prototype.getScaleZoom = function (scale, fromZoom) { return (fromZoom == null ? this.getZoom() : fromZoom) + Math.log(scale) / Math.LN2; };
+    Map.prototype._getNewPixelOrigin = function (center, zoom) { return this.project(center, zoom).subtract(this.getSize().divideBy(2)).round(); };
+    Map.prototype.getPixelWorldBounds = function () { var s = this.getSize(); return new Bounds(new Point(0, 0), new Point(s.x, s.y)); };
     Map.prototype.getPixelBounds = function () { var s = this.getSize(); return { min: new Point(0, 0), max: new Point(s.x, s.y) }; };
 
     // events
@@ -516,7 +541,9 @@
         hasClass: function (e, c) { return e && e.classList.contains(c); },
         setPosition: function (e, p) { if (e) { e.style.left = p.x + 'px'; e.style.top = p.y + 'px'; } },
         getPosition: function (e) { return new Point(parseInt(e.style.left, 10) || 0, parseInt(e.style.top, 10) || 0); },
-        remove: function (e) { if (e && e.parentNode) e.parentNode.removeChild(e); }
+        remove: function (e) { if (e && e.parentNode) e.parentNode.removeChild(e); },
+        setTransform: function (e, offset, scale) { if (!e) return; var p = offset || new Point(0, 0);
+            e.style.transform = 'translate3d(' + p.x + 'px,' + p.y + 'px,0)' + (scale ? ' scale(' + scale + ')' : ''); }
     };
     var DomEvent = {
         on: function (el, t, fn, ctx) { el && el.addEventListener(t, ctx ? fn.bind(ctx) : fn); return this; },
@@ -534,6 +561,8 @@
         latLng: function (a, b) { return toLatLng(a, b); },
         latLngBounds: function (a, b) { return new LatLngBounds(a, b); },
         point: function (x, y) { return new Point(x, y); },
+        bounds: function (a, b) { return new Bounds(a, b); },
+        Point: Point, Bounds: Bounds,
         tileLayer: function (u, o) { return new TileLayer(u, o); },
         imageOverlay: function (u, b, o) { return new ImageOverlay(u, b, o); },
         geoJSON: function (d, o) { return new GeoJSON(d, o); },
@@ -555,7 +584,7 @@
         LayerGroup: LayerGroup, GridLayer: GridLayer, DivIcon: DivIcon, Icon: Icon,
         Polyline: Polyline, Circle: Circle, Control: Control,
         DomUtil: DomUtil, DomEvent: DomEvent, Util: { bind: function (fn, ctx) { return fn.bind(ctx); }, extend: Object.assign },
-        Browser: { mobile: /Mobi|Android/i.test(navigator.userAgent), retina: (window.devicePixelRatio || 1) > 1 }
+        Browser: { mobile: /Mobi|Android/i.test(navigator.userAgent), retina: (window.devicePixelRatio || 1) > 1, any3d: true }
     };
     // tileLayer.wms etc. — stub so missing plugins don't throw
     L.tileLayer.wms = function (u, o) { return new TileLayer(u, o); };
