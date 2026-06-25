@@ -106,11 +106,12 @@
         this._loaded = false;
         var _self = this; this._gl.on('load', function () { _self._loaded = true; });
 
-        // Leaflet-style panes: DOM divs layered over the canvas (used by overlays
-        // that aren't GL layers, e.g. custom canvas barb layers in later increments).
-        var panes = this.getContainer();
-        ['mapPane', 'tilePane', 'overlayPane', 'shadowPane', 'markerPane', 'tooltipPane', 'popupPane']
-            .forEach(function (n) { /* default panes are conceptual; created lazily */ });
+        // Leaflet-style default panes: DOM divs over the canvas. Custom canvas
+        // layers (barbs/microwave) draw into these via L.DomUtil + projection.
+        var Z = { mapPane: 0, tilePane: 200, overlayPane: 400, shadowPane: 500,
+                  markerPane: 600, tooltipPane: 650, popupPane: 700 };
+        var _self0 = this;
+        Object.keys(Z).forEach(function (n) { var p = _self0.createPane(n); p.style.zIndex = Z[n]; });
 
         // zoomControl facade (Leaflet adds a +/- control; MapLibre's NavigationControl)
         this.zoomControl = { _ctrl: null, setPosition: function (pos) {
@@ -171,9 +172,39 @@
     Map.prototype.getPane = function (name) { return this._panes[name] || this.createPane(name); };
     Map.prototype.getPanes = function () { return this._panes; };
 
-    // layer add/remove (layer facades implement _addToGL/_removeFromGL)
-    Map.prototype.addLayer = function (layer) { if (layer && layer._addToGL) layer._addToGL(this); if (layer) this._layers[layer._lid || (layer._lid = uid())] = layer; return this; };
-    Map.prototype.removeLayer = function (layer) { if (layer && layer._removeFromGL) layer._removeFromGL(this); if (layer) delete this._layers[layer._lid]; return this; };
+    // layer add/remove. Built-in facade layers implement _addToGL/_removeFromGL.
+    // Custom Leaflet layers (L.Layer.extend with onAdd/getEvents — env barbs,
+    // recon barbs, microwave) are bridged: onAdd builds their pane canvas, and
+    // their getEvents() redraw is re-fired on every MapLibre move so the canvas
+    // stays synced through continuous zoom (they project via latLngToContainerPoint).
+    Map.prototype.addLayer = function (layer) {
+        if (!layer) return this;
+        layer._map = this;
+        if (layer._addToGL) layer._addToGL(this);
+        else if (typeof layer.onAdd === 'function') this._addCustomLayer(layer);
+        this._layers[layer._lid || (layer._lid = uid())] = layer;
+        return this;
+    };
+    Map.prototype._addCustomLayer = function (layer) {
+        try { layer.onAdd(this); } catch (e) { console.warn('lflet_gl: custom layer onAdd failed', e); return; }
+        var evs = (typeof layer.getEvents === 'function') ? layer.getEvents() : {};
+        var redraw = evs.viewreset || evs.moveend || evs.move || evs.zoom || evs.zoomend;
+        if (redraw) {
+            var h = function () { try { redraw.call(layer); } catch (e) {} };
+            this._gl.on('move', h); this._gl.on('moveend', h);
+            layer._glRedraw = h; setTimeout(h, 0);
+        }
+    };
+    Map.prototype.removeLayer = function (layer) {
+        if (!layer) return this;
+        if (layer._removeFromGL) layer._removeFromGL(this);
+        else {
+            if (layer._glRedraw) { this._gl.off('move', layer._glRedraw); this._gl.off('moveend', layer._glRedraw); layer._glRedraw = null; }
+            if (typeof layer.onRemove === 'function') { try { layer.onRemove(this); } catch (e) {} }
+        }
+        delete this._layers[layer._lid];
+        return this;
+    };
     Map.prototype.hasLayer = function (layer) { return !!(layer && this._layers[layer._lid]); };
     Map.prototype.eachLayer = function (fn) { var s = this; Object.keys(this._layers).forEach(function (k) { fn(s._layers[k]); }); return this; };
     Map.prototype.whenReady = function (fn) { if (this._gl.loaded()) fn(); else this._gl.once('load', fn); return this; };
