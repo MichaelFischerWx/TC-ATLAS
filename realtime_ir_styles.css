@@ -1744,9 +1744,15 @@ html, body { margin: 0; padding: 0; }
 /* Playback-control SVG icons (Play/Pause/Prev/Next/Stop) — vertical-center the
    glyph in the button and spin the loading icon. Shared across the Global Map,
    storm IR, storm-satellite and genesis-tau scrubbers for a consistent set. */
+/* Flex-center the glyph in the button box — vertical-align:middle only centers
+   against the line box (line-height), which left the SVGs sitting off-center. */
+.rt-anim-btn, .ir-anim-btn, .sat-anim-btn, .rt-genesis-tau-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
 .rt-anim-btn svg, .ir-anim-btn svg, .sat-anim-btn svg, .rt-genesis-tau-btn svg {
-    vertical-align: middle;
-    display: inline-block;
+    display: block;
 }
 .rt-anim-spin { animation: rt-anim-spin 0.8s linear infinite; transform-origin: 50% 50%; }
 @keyframes rt-anim-spin { to { transform: rotate(360deg); } }
