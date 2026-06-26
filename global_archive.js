@@ -536,12 +536,33 @@ function _archBuildDem() {
             var val = irCurrentTbData[srcRow * cols + c];
             hrow[c] = (val === 0) ? NaN : _archHeightV(vmin + (val - 1) * (vmax - vmin) / 254.0);
         }
-        var lastH = NaN;
-        for (var c2 = 0; c2 < cols; c2++) { if (hrow[c2] === hrow[c2]) lastH = hrow[c2]; else if (lastH === lastH) hrow[c2] = lastH; }
-        lastH = NaN;
-        for (var c3 = cols - 1; c3 >= 0; c3--) { if (hrow[c3] === hrow[c3]) lastH = hrow[c3]; else if (lastH === lastH) hrow[c3] = lastH; }
+        // Fill only SHORT interior gaps (scattered sensor dropouts → no 0 m
+        // pits) by interpolating across them. LARGE no-data runs (e.g. a
+        // server-padded edge where the satellite product has no coverage) and
+        // edge-touching runs are left flat — extending them would raise dark
+        // bumps under the transparent IR, which read as the "cutoff" cliff.
+        var MAXGAP = Math.max(4, Math.round(cols * 0.03));
+        var gi = 0;
+        while (gi < cols) {
+            if (hrow[gi] === hrow[gi]) { gi++; continue; }
+            var gs = gi;
+            while (gi < cols && hrow[gi] !== hrow[gi]) gi++;
+            var gap = gi - gs;
+            if (gap <= MAXGAP && gs > 0 && gi < cols) {
+                var lo = hrow[gs - 1], hi = hrow[gi];
+                for (var gk = gs; gk < gi; gk++) hrow[gk] = Math.round(lo + (hi - lo) * (gk - gs + 1) / (gap + 1));
+            }
+        }
+        // Edge feather (Y component for this row): ramp toward flat over the
+        // outer ~9% so the box boundary tapers smoothly instead of a vertical
+        // cliff in the 3D view. The storm core is tiny vs the ±10° box, so the
+        // outer ring never touches it.
+        var fy = Math.min(outRow, rows - 1 - outRow) / (rows * 0.09);
         for (var c4 = 0; c4 < cols; c4++) {
             var v = (hrow[c4] === hrow[c4]) ? hrow[c4] : FLAT;   // NaN-safe (whole row empty → FLAT)
+            var fx = Math.min(c4, cols - 1 - c4) / (cols * 0.09);
+            var fall = Math.max(0, Math.min(1, Math.min(fx, fy)));
+            v = FLAT + Math.round((v - FLAT) * fall);            // taper height → flat at edges
             var pi = (outRow * cols + c4) * 4;
             px[pi] = (v >> 16) & 255; px[pi + 1] = (v >> 8) & 255; px[pi + 2] = v & 255; px[pi + 3] = 255;
         }
