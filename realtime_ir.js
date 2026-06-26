@@ -15346,6 +15346,7 @@
                            gridcolor: isDark ? 'rgba(255,255,255,0.10)'
                                              : 'rgba(15,22,35,0.10)',
                            dtick: labelStep },
+                resolution: 50,   // 1:50m coastlines/borders (default 110 is coarse)
                 showland: true,
                 landcolor: pageLand,
                 showocean: true,
@@ -17130,6 +17131,54 @@
         });
     }
 
+    // Brand logo preloaded once for figure exports (96px PNG, same-origin).
+    var _tcLogoImg = (function () { var i = new Image(); i.src = 'tc-atlas-icon.png'; return i; })();
+
+    // Stamp the TC-ATLAS watermark — logo + name + URL — into the bottom-right
+    // of an export canvas. Sizing scales off the canvas width so it reads the
+    // same on small and 2× exports. Shared by all figure exports on this page.
+    function _drawTcWatermark(ctx, w, h) {
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var brand = isDark ? 'rgba(226,232,240,0.80)' : 'rgba(35,50,70,0.64)';
+        var urlc  = isDark ? 'rgba(226,232,240,0.52)' : 'rgba(35,50,70,0.48)';
+        var s = Math.max(1, w / 900);
+        var pad = Math.round(12 * s);
+        var logoSz = Math.round(28 * s);
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        // Logo flush bottom-right; text stacked to its left.
+        if (_tcLogoImg && _tcLogoImg.complete && _tcLogoImg.naturalWidth) {
+            try { ctx.drawImage(_tcLogoImg, w - pad - logoSz, h - pad - logoSz, logoSz, logoSz); } catch (e) {}
+        }
+        var textRight = w - pad - logoSz - Math.round(7 * s);
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = brand;
+        ctx.font = '600 ' + Math.round(13 * s) + 'px "DM Sans", system-ui, sans-serif';
+        ctx.fillText('TC-ATLAS', textRight, h - pad - Math.round(13 * s));
+        ctx.fillStyle = urlc;
+        ctx.font = '400 ' + Math.round(10 * s) + 'px "DM Sans", system-ui, sans-serif';
+        ctx.fillText('tcatlas.org', textRight, h - pad - Math.round(1 * s));
+        ctx.restore();
+    }
+
+    // Composite the brand watermark onto a Plotly.toImage PNG data-URL and hand
+    // back a Blob (cb(blob)). Used so every figure export carries the watermark
+    // + logo without per-figure Plotly annotation/image plumbing.
+    function _tcStampExport(srcDataUrl, outW, outH, cb) {
+        var base = new Image();
+        base.onload = function () {
+            var cv = document.createElement('canvas');
+            cv.width = outW; cv.height = outH;
+            var ctx = cv.getContext('2d');
+            ctx.drawImage(base, 0, 0, outW, outH);
+            _drawTcWatermark(ctx, outW, outH);
+            cv.toBlob(function (b) { cb(b); }, 'image/png');
+        };
+        base.onerror = function () { cb(null); };
+        base.src = srcDataUrl;
+    }
+
     function _genesisSavePNG(elId, slug) {
         var el = document.getElementById(elId);
         if (!el || typeof Plotly === 'undefined') return;
@@ -17151,14 +17200,15 @@
             fig.layout.paper_bgcolor = bgColor;
             fig.layout.plot_bgcolor = bgColor;
         }
-        Plotly.toImage(fig, {
-            format: 'png',
-            width: Math.round(rect.width * 2),
-            height: Math.round(rect.height * 2),
-        }).then(function (url) {
-            _saveImageBlob(_dataURLToBlob(url),
-                'tc-atlas-genesis-' + slug + '-' + dateISO + '.png');
-        }).catch(function () { /* silent */ });
+        var outW = Math.round(rect.width * 2), outH = Math.round(rect.height * 2);
+        Plotly.toImage(fig, { format: 'png', width: outW, height: outH })
+            .then(function (url) {
+                // Composite the TC-ATLAS watermark + logo, then save.
+                _tcStampExport(url, outW, outH, function (blob) {
+                    _saveImageBlob(blob || _dataURLToBlob(url),
+                        'tc-atlas-genesis-' + slug + '-' + dateISO + '.png');
+                });
+            }).catch(function () { /* silent */ });
         _ga('rt_genesis_save_png', { chart: slug });
     }
 
