@@ -1878,7 +1878,9 @@ html, body { margin: 0; padding: 0; }
    per-pill fixed positioning). The wrap shifts clear when the basin sidebar opens. */
 #ir-display-wrap {
     position: fixed;
-    top: 170px;
+    /* Top-left corner of the map (below the header+tab strip), taking the spot
+       the now-hidden zoom control used to occupy. */
+    top: 92px;
     left: 10px;
     z-index: 600;
     display: flex;
@@ -1921,11 +1923,10 @@ body:has(.basin-sidebar.open) #ir-display-wrap { left: 280px; }
     cursor: pointer;
 }
 
-/* Mobile: drop the +/- zoom buttons on the global map — pinch-to-zoom is natural
-   on touch, and removing them clears the left edge for the Display button. */
-@media (max-width: 768px) {
-    #ir-map .maplibregl-ctrl-top-left .maplibregl-ctrl-group { display: none; }
-}
+/* Drop the +/- zoom buttons on the global map (all viewports) — continuous
+   scroll / pinch zoom is natural on GL, and removing them frees the top-left
+   corner for the Display button. */
+#ir-map .maplibregl-ctrl-top-left .maplibregl-ctrl-group { display: none; }
 
 /* The Legend/Labels/Grid pills sit at z-index 600 (above the 270-px
    sidebar at z-index 500), so without this they render on top of the
