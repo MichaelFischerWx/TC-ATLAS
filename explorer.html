@@ -352,8 +352,23 @@
         </div>
     </div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <!-- Map engine: default Leaflet; ?gl=1 loads the MapLibre GL facade
+         (lflet_gl.js) for the in-progress GL migration (3D IR + NEXRAD relief,
+         smooth zoom, engine parity with RT + Archive). document.write keeps the
+         loads synchronous so tc_radar_app.js sees the right window.L. -->
+    <script>
+      (function () {
+        var gl = false; try { gl = /[?&]gl=1\b/.test(location.search); } catch (e) {}
+        if (gl) {
+          document.write('<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">');
+          document.write('<scr' + 'ipt src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"><\/scr' + 'ipt>');
+          document.write('<scr' + 'ipt src="lflet_gl.js?v=20260626a"><\/scr' + 'ipt>');
+        } else {
+          document.write('<scr' + 'ipt src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/scr' + 'ipt>');
+          document.write('<scr' + 'ipt src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"><\/scr' + 'ipt>');
+        }
+      })();
+    </script>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <!-- ensurePlotly() kept as a no-op safety net so the JS guards don't break -->
     <script>function ensurePlotly(cb) { if (cb) cb(); }</script>
