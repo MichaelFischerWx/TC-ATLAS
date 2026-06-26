@@ -827,8 +827,10 @@ function _arch3DShowTilt(show) {
     if (!show && _archOrbitRAF) { cancelAnimationFrame(_archOrbitRAF); _archOrbitRAF = null; }
 }
 
-// Auto-orbit "macro": one slow 360° revolution with a gentle tilt sweep so the
-// user gets the full 3D view hands-free. Click again (or toggle 3D off) to stop.
+// Auto-orbit "macro": a tilt-reveal of the eye's depth (camera tilts up from
+// near-overhead to a grazing angle) followed by one slow 360° revolution, so the
+// user gets the full 3D view hands-free. Returns to the starting tilt/bearing
+// when done. Click again (or toggle 3D off) to stop.
 window._arch3DOrbit = function () {
     var gl = detailMap && detailMap._gl;
     var btn = document.getElementById('arch-3d-orbit');
@@ -839,19 +841,34 @@ window._arch3DOrbit = function () {
         return;
     }
     if (btn) btn.classList.add('active');
-    var startBearing = gl.getBearing(), DUR = 18000, t0 = null;
+    var startBearing = gl.getBearing(), startPitch = gl.getPitch(), DUR = 20000, t0 = null;
     var tiltEl = document.getElementById('arch-3d-tilt'), tiltVal = document.getElementById('arch-3d-tilt-val');
+    var INTRO = 0.20, P_LO = 24, P_HI = 68, TAIL = 0.20;   // tilt-reveal then orbit
+    function _ease(t) { return t * t * (3 - 2 * t); }       // smoothstep
+    function _syncTilt(pitch) {
+        if (!tiltEl) return; var pv = Math.round(pitch); tiltEl.value = pv;
+        if (tiltVal) tiltVal.textContent = pv + '°';
+    }
     function step(ts) {
         if (!_arch3DOn) { _archOrbitRAF = null; if (btn) btn.classList.remove('active'); return; }
         if (t0 === null) t0 = ts;
         var p = (ts - t0) / DUR;
         if (p >= 1) {
-            gl.setBearing(startBearing); _archOrbitRAF = null;
-            if (btn) btn.classList.remove('active'); return;
+            gl.setBearing(startBearing); gl.setPitch(startPitch); _syncTilt(startPitch);
+            _archOrbitRAF = null; if (btn) btn.classList.remove('active'); return;
         }
-        gl.setBearing(startBearing + p * 360);
-        gl.setPitch(58 + 14 * Math.sin(p * Math.PI * 2));   // tilt sweeps 44→72→44
-        if (tiltEl) { var pv = Math.round(gl.getPitch()); tiltEl.value = pv; if (tiltVal) tiltVal.textContent = pv + '°'; }
+        var bearing, pitch;
+        if (p < INTRO) {
+            // Tilt reveal: hold bearing, sweep pitch up to show the eye's depth.
+            bearing = startBearing;
+            pitch = P_LO + (P_HI - P_LO) * _ease(p / INTRO);
+        } else {
+            // Orbit 360°, easing pitch back down over the final stretch.
+            var u = (p - INTRO) / (1 - INTRO);
+            bearing = startBearing + u * 360;
+            pitch = (u > 1 - TAIL) ? P_HI + (P_LO - P_HI) * _ease((u - (1 - TAIL)) / TAIL) : P_HI;
+        }
+        gl.setBearing(bearing); gl.setPitch(pitch); _syncTilt(pitch);
         _archOrbitRAF = requestAnimationFrame(step);
     }
     _archOrbitRAF = requestAnimationFrame(step);
