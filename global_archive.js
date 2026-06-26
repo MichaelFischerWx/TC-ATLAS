@@ -876,10 +876,18 @@ window._arch3DOrbitGif = function () {
         if (liveBtn) liveBtn.classList.remove('active');
     }
 
-    var N = 60;            // frames for a full revolution
-    var delay = 70;        // ms per frame → ~4.2 s loop
+    // Cinematic sequence: a tilt-reveal (shows the eye's depth) then a full
+    // 360° orbit. INTRO frames hold bearing and sweep pitch from near-overhead
+    // up to a dramatic grazing angle; the rest orbit, easing pitch back down at
+    // the very end so the GIF loops seamlessly back to the intro's first frame.
+    var N = 72;            // total frames
+    var INTRO = 16;        // tilt-reveal frames (bearing held)
+    var delay = 70;        // ms per frame → ~5 s loop
+    var PITCH_LOW = 24;    // near-overhead: eye reads as a dimple
+    var PITCH_HIGH = 68;   // grazing angle: full cloud-top / eye-wall relief
     var startBearing = gl.getBearing();
     var startPitch = gl.getPitch();
+    function _ease(t) { return t * t * (3 - 2 * t); }   // smoothstep
 
     // Output dims: scale the GL backing store (DPR-sized) down to a sane width.
     var srcW = glCanvas.width, srcH = glCanvas.height;
@@ -1052,11 +1060,22 @@ window._arch3DOrbitGif = function () {
         function captureOne() {
             if (_archOrbitGifCancel || !_arch3DOn) { try { gif.abort(); } catch (e) {} finish(); return; }
             if (i >= N) { encode(); return; }
-            var p = i / N;
-            try {
-                gl.setBearing(startBearing + p * 360);
-                gl.setPitch(58 + 14 * Math.sin(p * Math.PI * 2));  // 44→72→44 sweep
-            } catch (e) {}
+            var bearing, pitch;
+            if (i < INTRO) {
+                // Tilt reveal: hold bearing, sweep pitch low → high.
+                bearing = startBearing;
+                pitch = PITCH_LOW + (PITCH_HIGH - PITCH_LOW) * _ease(i / INTRO);
+            } else {
+                // Orbit: full 360°; over the final stretch ease pitch back down
+                // to PITCH_LOW so the last frame ≈ the first (seamless loop).
+                var u = (i - INTRO) / (N - INTRO);   // 0..1 across the revolution
+                bearing = startBearing + u * 360;
+                var TAIL = 0.20;
+                pitch = (u > 1 - TAIL)
+                    ? PITCH_HIGH + (PITCH_LOW - PITCH_HIGH) * _ease((u - (1 - TAIL)) / TAIL)
+                    : PITCH_HIGH;
+            }
+            try { gl.setBearing(bearing); gl.setPitch(pitch); } catch (e) {}
             var grabbed = false;
             function grab() {
                 if (grabbed) return; grabbed = true;
