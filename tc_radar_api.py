@@ -2114,45 +2114,54 @@ def _finalize_vortex_metrics():
 
 # Build a 256-entry RGBA lookup table matching the JS IR colormap.
 # The colormap maps normalized (1 - (Tb-vmin)/(vmax-vmin)) to RGB.
+# Canonical site IR colormap ("claude-ir") — Tb (K) → RGB stops, identical to
+# satellite.js / realtime_ir.js buildLUTfromTb(). Warm ocean → muted gray,
+# cold convection → cyan→green→amber→red→magenta→violet. Interpolated over the
+# SAME range the JS uses (vmin=160 K, vmax=330 K); since frac is linear in Tb,
+# linear RGB interpolation by Tb is identical to the JS frac-space LUT.
+_CLAUDE_IR_TB_STOPS = [
+    (310,  12,  12,  22), (293,  70,  70,  82), (283, 120, 120, 132),
+    (273, 180, 180, 192), (263, 216, 218, 228), (253, 140, 210, 220),
+    (248,  68, 180, 196), (243,  32, 148, 166), (238,  40, 178, 116),
+    (233,  96, 208,  68), (228, 192, 220,  40), (223, 238, 196,  48),
+    (218, 228, 132,  48), (213, 214,  78,  56), (208, 180,  36,  68),
+    (203, 196,  48, 156), (198, 168,  64, 200), (193, 120,  48, 180),
+    (183,  64,  24, 140), (173,  28,  12,  96),
+]
+_IR_CMAP_VMIN, _IR_CMAP_VMAX = 160.0, 330.0  # match buildLUTfromTb
+
+
 def _build_ir_lut():
-    """Create a 256-entry uint8 RGBA LUT for IR brightness temperatures."""
-    stops = [
-        (0.00,   8,   8,   8),
-        (0.15,  40,  40,  40),
-        (0.30,  90,  90,  90),
-        (0.40, 140, 140, 140),
-        (0.50, 200, 200, 200),
-        (0.55,   0, 180, 255),
-        (0.60,   0, 100, 255),
-        (0.65,   0, 255,   0),
-        (0.70, 255, 255,   0),
-        (0.75, 255, 180,   0),
-        (0.80, 255,  80,   0),
-        (0.85, 255,   0,   0),
-        (0.90, 180,   0, 180),
-        (0.95, 255, 180, 255),
-        (1.00, 255, 255, 255),
-    ]
+    """256-entry uint8 RGBA LUT for the claude-ir IR colormap.
+
+    Index i ↔ frac = i/255 (frac = 1 - (Tb-160)/170, so high index = cold).
+    Mirrors satellite.js buildLUT(); _render_ir_png indexes it with the same
+    frac so a given Tb produces the same color as the rest of the site.
+    """
+    frac_stops = sorted(
+        (1.0 - (tb - _IR_CMAP_VMIN) / (_IR_CMAP_VMAX - _IR_CMAP_VMIN), r, g, b)
+        for tb, r, g, b in _CLAUDE_IR_TB_STOPS
+    )
     lut = np.zeros((256, 4), dtype=np.uint8)
     for i in range(256):
         frac = i / 255.0
-        # Find bounding stops
-        lo, hi = stops[0], stops[-1]
-        for s in range(len(stops) - 1):
-            if frac >= stops[s][0] and frac <= stops[s + 1][0]:
-                lo, hi = stops[s], stops[s + 1]
+        lo, hi = frac_stops[0], frac_stops[-1]
+        for s in range(len(frac_stops) - 1):
+            if frac_stops[s][0] <= frac <= frac_stops[s + 1][0]:
+                lo, hi = frac_stops[s], frac_stops[s + 1]
                 break
         t = 0.0 if hi[0] == lo[0] else (frac - lo[0]) / (hi[0] - lo[0])
+        t = max(0.0, min(1.0, t))
         lut[i, 0] = int(lo[1] + t * (hi[1] - lo[1]) + 0.5)
         lut[i, 1] = int(lo[2] + t * (hi[2] - lo[2]) + 0.5)
         lut[i, 2] = int(lo[3] + t * (hi[3] - lo[3]) + 0.5)
-        lut[i, 3] = 220  # alpha
+        lut[i, 3] = 255  # alpha (frontend imageOverlay controls overall opacity)
     return lut
 
 _IR_LUT = _build_ir_lut()
 
 
-def _render_ir_png(frame_2d, vmin=190.0, vmax=310.0):
+def _render_ir_png(frame_2d, vmin=_IR_CMAP_VMIN, vmax=_IR_CMAP_VMAX):
     """
     Render a 2D Tb array to a base64-encoded PNG string.
     Returns a data-URL ready for use as an image src.
@@ -2232,7 +2241,7 @@ def get_ir(
     if np.all(np.isnan(tb_frame0)):
         frame0_png = None
     else:
-        frame0_png = _render_ir_png(tb_frame0, vmin=190.0, vmax=310.0)
+        frame0_png = _render_ir_png(tb_frame0, vmin=_IR_CMAP_VMIN, vmax=_IR_CMAP_VMAX)
 
     # Read IR datetimes
     ir_dt_raw = ir_store['ir_datetime'][ir_idx]  # epoch minutes
@@ -2314,7 +2323,7 @@ def get_ir_frame(
     if np.all(np.isnan(frame)):
         png = None
     else:
-        png = _render_ir_png(frame, vmin=190.0, vmax=310.0)
+        png = _render_ir_png(frame, vmin=_IR_CMAP_VMIN, vmax=_IR_CMAP_VMAX)
 
     result = {
         "case_index": case_index,
