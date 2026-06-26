@@ -2330,6 +2330,10 @@
             var g2 = cctx.createLinearGradient(0, outH - botH, 0, outH);
             g2.addColorStop(0, 'rgba(8,18,34,0)'); g2.addColorStop(1, 'rgba(8,18,34,0.82)');
             cctx.fillStyle = g2; cctx.fillRect(0, outH - botH, outW, botH);
+            // Tb colorbar (bottom-left) — IR only; matches the on-screen legend.
+            if (globalProduct === 'ir' && typeof _rtDrawCompareColorbar === 'function') {
+                try { _rtDrawCompareColorbar(cctx, outW, outH, _IR_CBAR, ['+35', '-30', '-85'], 'Brightness Temp (°C)'); } catch (e) {}
+            }
             var wmText = 'TC-ATLAS · tcatlas.org';
             cctx.font = '700 ' + Math.round(12 * S) + 'px "DM Sans",system-ui,sans-serif';
             var wmW = cctx.measureText(wmText).width, wmY = outH - Math.round(7 * S);
