@@ -1948,8 +1948,10 @@
             _terrainEnsureProtocol();
             _rt3DOn = true;
             _rt3DApply(gl);
+            _rt3DShowTilt(true);
         } else {
             _rt3DOn = false;
+            _rt3DShowTilt(false);
             try {
                 gl.setTerrain(null);
                 if (gl.getSource('ir-dem')) gl.removeSource('ir-dem');
@@ -1970,11 +1972,51 @@
                 type: 'raster-dem', tiles: ['terrainir://' + _mosaicTileUrl(_mosaicTs, 'ir')],
                 tileSize: 512, maxzoom: 6, encoding: 'mapbox'
             });
+            if (gl.setMaxPitch) gl.setMaxPitch(80);
             gl.setTerrain({ source: 'ir-dem', exaggeration: _rt3DExag });
             if (gl.dragRotate) gl.dragRotate.enable();
             if (gl.touchZoomRotate) gl.touchZoomRotate.enableRotation();
+            // Mirror drag-to-orbit pitch back onto the Tilt slider.
+            if (!gl.__rt3DPitchSync) { gl.__rt3DPitchSync = true; gl.on('pitch', _rt3DSyncTilt); }
             gl.easeTo({ pitch: _rt3DPitch, duration: 700 });
+            _rt3DSyncTilt();
         } catch (e) { console.warn('[RT 3D] enable failed', e); _rt3DOn = false; }
+    }
+    // ── Tilt control: a discoverable slider (0-80°) shown while 3D is on, in
+    //    addition to the native drag-to-orbit (right-click / ctrl / two-finger).
+    var _rt3DTiltEl = null;
+    function _rt3DEnsureTiltControl() {
+        if (_rt3DTiltEl) return _rt3DTiltEl;
+        var box = document.createElement('div');
+        box.id = 'ir-3d-tilt-ctl';
+        box.style.cssText = 'position:fixed;right:14px;bottom:128px;z-index:650;display:none;' +
+            'background:rgba(15,23,42,0.92);backdrop-filter:blur(8px);' +
+            'border:1px solid rgba(148,163,184,0.18);border-radius:10px;padding:7px 11px;' +
+            'box-shadow:0 4px 18px rgba(0,0,0,0.45);font:600 11px/1.2 "DM Sans",system-ui,sans-serif;color:#cbd5e1;';
+        box.innerHTML = '<div style="display:flex;align-items:center;gap:8px;">' +
+            '<span title="Camera tilt — 0° top-down, 80° near-horizon. Or drag the map to orbit.">⛰ Tilt</span>' +
+            '<input id="ir-3d-tilt" type="range" min="0" max="80" step="1" style="width:120px;accent-color:#00e5ff;cursor:pointer;">' +
+            '<span id="ir-3d-tilt-val" style="min-width:30px;text-align:right;color:#00e5ff;font-variant-numeric:tabular-nums;"></span></div>';
+        document.body.appendChild(box);
+        var sl = box.querySelector('#ir-3d-tilt');
+        sl.value = _rt3DPitch;
+        box.querySelector('#ir-3d-tilt-val').textContent = _rt3DPitch + '°';
+        sl.addEventListener('input', function () {
+            var gl = map && map._gl;
+            if (gl && gl.setPitch) { try { gl.setPitch(+sl.value); } catch (e) {} }
+            box.querySelector('#ir-3d-tilt-val').textContent = sl.value + '°';
+        });
+        _rt3DTiltEl = box;
+        return box;
+    }
+    function _rt3DShowTilt(show) { _rt3DEnsureTiltControl().style.display = show ? 'block' : 'none'; }
+    function _rt3DSyncTilt() {
+        if (!_rt3DTiltEl || !_rt3DOn) return;
+        var gl = map && map._gl;
+        if (!gl || !gl.getPitch) return;
+        var p = Math.round(gl.getPitch());
+        var sl = _rt3DTiltEl.querySelector('#ir-3d-tilt');
+        if (sl) { sl.value = p; _rt3DTiltEl.querySelector('#ir-3d-tilt-val').textContent = p + '°'; }
     }
     // Keep the DEM current as the mosaic refreshes / the user scrubs the loop.
     function _rt3DRefreshSource() {
@@ -3748,7 +3790,7 @@
             d3Btn.id = 'ir-3d-toggle';
             d3Btn.type = 'button';
             d3Btn.className = 'ir-legend-toggle ir-display-item';
-            d3Btn.title = 'Extrude cold cloud tops into 3D relief (IR-derived terrain). Drag to orbit; toggle off to flatten.';
+            d3Btn.title = 'Extrude cold cloud tops into 3D relief (IR-derived terrain). Use the Tilt slider or drag to orbit; toggle off to flatten.';
             d3Btn.innerHTML = '⛰ 3D Convection';
             d3Btn.addEventListener('click', function () {
                 d3Btn.classList.toggle('active', _rt3DToggle());
