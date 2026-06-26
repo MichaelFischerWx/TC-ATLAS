@@ -231,22 +231,13 @@
         // stratocumulus band gets a steep, vivid teal→green→yellow ramp so
         // low-cloud lines spiraling into an LLC pop; deep cold convection muted
         // violet-gray so it doesn't dominate. Twin of satellite.js['lowcloud'].
+        // Low-Cloud — emphasizes SHALLOW convection + low-level circulation
+        // centers. Warm ocean near-black; a stepped cyan-strato → green-cu →
+        // muted-gold ramp across the 270-294 K shallow band so cloud types
+        // separate and low-cloud lines spiraling into an LLC pop; cold tops drop
+        // to dark indigo so deep convection recedes hard. Twin of
+        // satellite.js['lowcloud'].
         IR_COLORMAPS['lowcloud'] = buildLUTfromTb([
-            {tb: 305, r:   8, g:  12, b:  22}, {tb: 298, r:  18, g:  26, b:  42},
-            {tb: 295, r:  30, g:  44, b:  66}, {tb: 293, r:  25, g:  95, b: 115},
-            {tb: 290, r:  25, g: 140, b: 140}, {tb: 287, r:  35, g: 180, b: 130},
-            {tb: 284, r:  90, g: 210, b: 100}, {tb: 280, r: 165, g: 228, b:  75},
-            {tb: 276, r: 230, g: 228, b:  90}, {tb: 272, r: 245, g: 200, b: 120},
-            {tb: 266, r: 232, g: 198, b: 188}, {tb: 258, r: 175, g: 170, b: 188},
-            {tb: 245, r: 125, g: 122, b: 145}, {tb: 228, r:  95, g:  88, b: 118},
-            {tb: 208, r:  72, g:  66, b:  96}, {tb: 185, r:  48, g:  44, b:  66}
-        ]);
-
-        // Low-Cloud II — refined: steeper within-band contrast (cyan strato →
-        // green cu → muted gold so cloud types separate), desaturated yellow,
-        // and cold tops pushed to dark indigo so deep convection recedes hard.
-        // Twin of satellite.js['lowcloud2'].
-        IR_COLORMAPS['lowcloud2'] = buildLUTfromTb([
             {tb: 305, r:   6, g:  10, b:  20}, {tb: 298, r:  14, g:  22, b:  38},
             {tb: 295, r:  22, g:  40, b:  60}, {tb: 292, r:  20, g:  90, b: 120},
             {tb: 289, r:  30, g: 150, b: 165}, {tb: 286, r:  45, g: 185, b: 140},
@@ -3952,8 +3943,7 @@
             [['claude-ir', 'Claude IR'], ['irb', 'IRB'], ['avn', 'AVN'], ['nhc', 'NHC'],
              ['rammb', 'RAMMB'], ['dvorak', 'Dvorak Color'], ['funktop', 'Funktop'],
              ['enhanced', 'Enhanced'], ['grayscale', 'Dvorak BD'],
-             ['graylinear', 'Grayscale'], ['lowcloud', 'Low-Cloud'],
-             ['lowcloud2', 'Low-Cloud II']].forEach(function (o) {
+             ['graylinear', 'Grayscale'], ['lowcloud', 'Low-Cloud']].forEach(function (o) {
                 var opt = document.createElement('option'); opt.value = o[0]; opt.textContent = o[1]; cmSel.appendChild(opt);
             });
             cmSel.addEventListener('change', function () { _rtSetIRColormap(cmSel.value); });
