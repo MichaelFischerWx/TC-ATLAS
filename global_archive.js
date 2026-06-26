@@ -90,8 +90,8 @@ var trackAnnotationMarkers = []; // Genesis, LMI, dissipation markers (hidden du
 var irOverlayVisible = false;
 var irTrackVisible = true;       // Track + position marker visible on detail map
 var detailTrackElements = [];    // All track polylines/markers added to detail map
-var irOpacity = 0.8;
-var irOpacityLevels = [0.8, 0.6, 0.4, 1.0];
+var irOpacity = 1.0;                          // default FULL — crisp IR, no basemap wash
+var irOpacityLevels = [1.0, 0.8, 0.6, 0.4];   // cycle down for geographic reference
 var irOpacityIdx = 0;
 var irFailedFrames = {};     // Track frames that permanently failed
 var irMetaPrefetchCache = {};  // Pre-fetched IR metadata keyed by SID
@@ -497,7 +497,8 @@ function renderTbToDataURI(tbData, rows, cols, colormap, southLat, northLat) {
 // ═══════════════════════════════════════════════════════════════════════
 var _arch3DOn = false, _arch3DExag = 3.0, _arch3DPitch = 62;
 var _archDemCanvas = null, _archDemBounds = null, _archDemVer = 0;
-var _archTerrainProtoReady = false, _arch3DTiltEl = null;
+var _archTerrainProtoReady = false, _arch3DTiltEl = null, _archHrow = null;
+var _archOrbitRAF = null, _archDetailBasemap = null;
 
 function _arch_xnorm(lon) { return (lon + 180) / 360; }
 function _arch_ynorm(lat) { var r = lat * Math.PI / 180; return (1 - Math.log(Math.tan(Math.PI / 4 + r / 2)) / Math.PI) / 2; }
@@ -527,10 +528,21 @@ function _archBuildDem() {
         var lat = (2 * Math.atan(Math.exp(mercY)) - Math.PI / 2) * 180 / Math.PI;
         var srcRow = Math.round((north - lat) / (north - south) * (rows - 1));
         if (srcRow < 0) srcRow = 0; if (srcRow >= rows) srcRow = rows - 1;
+        // Row heights with NaN for no-data, then forward + backward fill so
+        // scattered missing pixels inherit a neighbor's height (no 0 m pits that
+        // spike the terrain) and data edges extend instead of cliffing to flat.
+        var hrow = _archHrow && _archHrow.length === cols ? _archHrow : (_archHrow = new Float64Array(cols));
         for (var c = 0; c < cols; c++) {
             var val = irCurrentTbData[srcRow * cols + c];
-            var v = (val === 0) ? FLAT : _archHeightV(vmin + (val - 1) * (vmax - vmin) / 254.0);
-            var pi = (outRow * cols + c) * 4;
+            hrow[c] = (val === 0) ? NaN : _archHeightV(vmin + (val - 1) * (vmax - vmin) / 254.0);
+        }
+        var lastH = NaN;
+        for (var c2 = 0; c2 < cols; c2++) { if (hrow[c2] === hrow[c2]) lastH = hrow[c2]; else if (lastH === lastH) hrow[c2] = lastH; }
+        lastH = NaN;
+        for (var c3 = cols - 1; c3 >= 0; c3--) { if (hrow[c3] === hrow[c3]) lastH = hrow[c3]; else if (lastH === lastH) hrow[c3] = lastH; }
+        for (var c4 = 0; c4 < cols; c4++) {
+            var v = (hrow[c4] === hrow[c4]) ? hrow[c4] : FLAT;   // NaN-safe (whole row empty → FLAT)
+            var pi = (outRow * cols + c4) * 4;
             px[pi] = (v >> 16) & 255; px[pi + 1] = (v >> 8) & 255; px[pi + 2] = v & 255; px[pi + 3] = 255;
         }
     }
@@ -617,6 +629,9 @@ window.toggleArch3D = function () {
         _arch3DOn = true;
         _arch3DApply();
         _arch3DShowTilt(true);
+        // Mute the light basemap so beyond the IR box (and any data gap) reads
+        // as dark relief instead of a flat gray "cutoff" slab.
+        if (_archDetailBasemap) try { _archDetailBasemap.setOpacity(0); } catch (e) {}
         if (btn) btn.classList.add('active');
     } else {
         _arch3DOn = false;
@@ -627,6 +642,7 @@ window.toggleArch3D = function () {
             if (gl.dragRotate) gl.dragRotate.disable();
             if (gl.touchZoomRotate) gl.touchZoomRotate.disableRotation();
         } catch (e) {}
+        if (_archDetailBasemap) try { _archDetailBasemap.setOpacity(1); } catch (e) {}
         _arch3DShowTilt(false);
         if (btn) btn.classList.remove('active');
     }
@@ -647,7 +663,10 @@ function _arch3DEnsureTilt() {
         '<span id="arch-3d-tilt-val" style="text-align:right;color:#F47321;font-weight:700;font-variant-numeric:tabular-nums;"></span>' +
         '<span title="Vertical amplification of the IR cloud-top relief (GPU only).">↕ Height</span>' +
         '<input id="arch-3d-exag" type="range" min="1" max="8" step="0.5" style="accent-color:#4a9b6e;cursor:pointer;">' +
-        '<span id="arch-3d-exag-val" style="text-align:right;color:#F47321;font-weight:700;font-variant-numeric:tabular-nums;"></span></div>';
+        '<span id="arch-3d-exag-val" style="text-align:right;color:#F47321;font-weight:700;font-variant-numeric:tabular-nums;"></span></div>' +
+        '<button id="arch-3d-orbit" title="Auto-orbit: one slow 360° revolution with a tilt sweep — click again to stop" ' +
+        'style="margin-top:8px;width:100%;background:rgba(244,115,33,0.14);border:1px solid rgba(244,115,33,0.40);' +
+        'color:#fdba74;border-radius:7px;padding:5px 0;font:600 11px/1 \'DM Sans\',system-ui,sans-serif;cursor:pointer;">↻ Orbit</button>';
     var host = document.querySelector('.detail-map-wrap') || document.getElementById('detail-map').parentNode;
     host.style.position = host.style.position || 'relative';
     host.appendChild(box);
@@ -668,10 +687,45 @@ function _arch3DEnsureTilt() {
             try { gl.setTerrain({ source: 'arch-ir-dem', exaggeration: _arch3DExag }); } catch (e) {}
         }
     });
+    var orbitBtn = box.querySelector('#arch-3d-orbit');
+    if (orbitBtn) orbitBtn.addEventListener('click', function () { window._arch3DOrbit(); });
     _arch3DTiltEl = box;
     return box;
 }
-function _arch3DShowTilt(show) { _arch3DEnsureTilt().style.display = show ? 'block' : 'none'; }
+function _arch3DShowTilt(show) {
+    _arch3DEnsureTilt().style.display = show ? 'block' : 'none';
+    if (!show && _archOrbitRAF) { cancelAnimationFrame(_archOrbitRAF); _archOrbitRAF = null; }
+}
+
+// Auto-orbit "macro": one slow 360° revolution with a gentle tilt sweep so the
+// user gets the full 3D view hands-free. Click again (or toggle 3D off) to stop.
+window._arch3DOrbit = function () {
+    var gl = detailMap && detailMap._gl;
+    var btn = document.getElementById('arch-3d-orbit');
+    if (!gl || !_arch3DOn) return;
+    if (_archOrbitRAF) {
+        cancelAnimationFrame(_archOrbitRAF); _archOrbitRAF = null;
+        if (btn) btn.classList.remove('active');
+        return;
+    }
+    if (btn) btn.classList.add('active');
+    var startBearing = gl.getBearing(), DUR = 18000, t0 = null;
+    var tiltEl = document.getElementById('arch-3d-tilt'), tiltVal = document.getElementById('arch-3d-tilt-val');
+    function step(ts) {
+        if (!_arch3DOn) { _archOrbitRAF = null; if (btn) btn.classList.remove('active'); return; }
+        if (t0 === null) t0 = ts;
+        var p = (ts - t0) / DUR;
+        if (p >= 1) {
+            gl.setBearing(startBearing); _archOrbitRAF = null;
+            if (btn) btn.classList.remove('active'); return;
+        }
+        gl.setBearing(startBearing + p * 360);
+        gl.setPitch(58 + 14 * Math.sin(p * Math.PI * 2));   // tilt sweeps 44→72→44
+        if (tiltEl) { var pv = Math.round(gl.getPitch()); tiltEl.value = pv; if (tiltVal) tiltVal.textContent = pv + '°'; }
+        _archOrbitRAF = requestAnimationFrame(step);
+    }
+    _archOrbitRAF = requestAnimationFrame(step);
+};
 
 // Decode base64 tb_data from server into Uint8Array
 function decodeTbData(base64str) {
@@ -3547,7 +3601,7 @@ function renderDetailMap(track, storm) {
         zoomDelta: 0.5
     });
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    _archDetailBasemap = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; CARTO',
         subdomains: 'abcd',
         maxZoom: 12
