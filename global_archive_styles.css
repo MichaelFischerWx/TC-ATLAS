@@ -980,6 +980,14 @@ input[type="range"].ga-range::-moz-range-thumb {
     background: rgba(0, 180, 255, 0.25);
     border-color: rgba(0, 180, 255, 0.6);
 }
+/* 3D button: UM-orange when engaged (matches the Tilt/Height control + the
+   RT-monitor 3D pill) instead of the cyan used by the other toggles. */
+.ir-3d-btn.active {
+    opacity: 1;
+    background: rgba(244, 115, 33, 0.24);
+    border-color: rgba(244, 115, 33, 0.6);
+    color: #fdba74;
+}
 
 /* Colormap selector row — own line below options */
 .ir-cmap-row {

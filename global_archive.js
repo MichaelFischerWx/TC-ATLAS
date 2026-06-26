@@ -486,6 +486,193 @@ function renderTbToDataURI(tbData, rows, cols, colormap, southLat, northLat) {
     return _irRenderCanvas.toDataURL('image/png');
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+//  3D IR (terrain) on the archive detail map
+//  Ports the RT-monitor 3D idea, but archive IR is a SINGLE Tb frame (not
+//  tiles). We build a Mercator-warped terrain-RGB DEM canvas straight from the
+//  raw Tb (irCurrentTbData — no colormap inversion needed) and serve it as
+//  raster-dem tiles via an 'archterrain://' protocol that drawImage-crops the
+//  DEM per tile (the warped canvas is linear in normalized Web Mercator, so the
+//  crop is exact). $0, frontend-only. setTerrain then drapes the IR over it.
+// ═══════════════════════════════════════════════════════════════════════
+var _arch3DOn = false, _arch3DExag = 3.0, _arch3DPitch = 62;
+var _archDemCanvas = null, _archDemBounds = null, _archDemVer = 0;
+var _archTerrainProtoReady = false, _arch3DTiltEl = null;
+
+function _arch_xnorm(lon) { return (lon + 180) / 360; }
+function _arch_ynorm(lat) { var r = lat * Math.PI / 180; return (1 - Math.log(Math.tan(Math.PI / 4 + r / 2)) / Math.PI) / 2; }
+function _archHeightV(tb) {            // colder cloud top → taller; mapbox terrain-RGB value
+    var h = Math.max(0, (273 - tb)) * 200;
+    return Math.round((h + 10000) * 10);
+}
+
+// Build a Mercator-warped terrain-RGB DEM canvas from the current Tb frame,
+// mirroring renderTbToDataURI's warp so it drapes in register with the IR.
+function _archBuildDem() {
+    if (!irCurrentTbData || !irCurrentBounds || !irCurrentTbRows || !irCurrentTbCols) {
+        _archDemCanvas = null; return false;
+    }
+    var rows = irCurrentTbRows, cols = irCurrentTbCols;
+    var south = irCurrentBounds.getSouth(), north = irCurrentBounds.getNorth();
+    var west = irCurrentBounds.getWest(), east = irCurrentBounds.getEast();
+    var vmin = irCurrentTbVmin, vmax = irCurrentTbVmax;
+    var cv = document.createElement('canvas'); cv.width = cols; cv.height = rows;
+    var ctx = cv.getContext('2d');
+    var im = ctx.createImageData(cols, rows), px = im.data;
+    function _latToMercY(d) { var r = d * Math.PI / 180; return Math.log(Math.tan(Math.PI / 4 + r / 2)); }
+    var mN = _latToMercY(north), mS = _latToMercY(south), mR = mN - mS;
+    var FLAT = _archHeightV(330);     // warm/no-data → ~0 m baseline
+    for (var outRow = 0; outRow < rows; outRow++) {
+        var mercY = mN - (outRow / (rows - 1)) * mR;
+        var lat = (2 * Math.atan(Math.exp(mercY)) - Math.PI / 2) * 180 / Math.PI;
+        var srcRow = Math.round((north - lat) / (north - south) * (rows - 1));
+        if (srcRow < 0) srcRow = 0; if (srcRow >= rows) srcRow = rows - 1;
+        for (var c = 0; c < cols; c++) {
+            var val = irCurrentTbData[srcRow * cols + c];
+            var v = (val === 0) ? FLAT : _archHeightV(vmin + (val - 1) * (vmax - vmin) / 254.0);
+            var pi = (outRow * cols + c) * 4;
+            px[pi] = (v >> 16) & 255; px[pi + 1] = (v >> 8) & 255; px[pi + 2] = v & 255; px[pi + 3] = 255;
+        }
+    }
+    ctx.putImageData(im, 0, 0);
+    _archDemCanvas = cv;
+    _archDemBounds = { west: west, east: east, north: north, south: south };
+    _archDemVer++;
+    return true;
+}
+
+function _archEnsureProtocol() {
+    if (_archTerrainProtoReady || !window.maplibregl || !maplibregl.addProtocol) return;
+    _archTerrainProtoReady = true;
+    var FV = _archHeightV(330), FLAT = [(FV >> 16) & 255, (FV >> 8) & 255, FV & 255];
+    maplibregl.addProtocol('archterrain', function (params) {
+        var m = /archterrain:\/\/[^/]*\/(\d+)\/(\d+)\/(\d+)/.exec(params.url);
+        var TS = 256;
+        var cv = document.createElement('canvas'); cv.width = TS; cv.height = TS;
+        var ctx = cv.getContext('2d');
+        ctx.fillStyle = 'rgb(' + FLAT[0] + ',' + FLAT[1] + ',' + FLAT[2] + ')';
+        ctx.fillRect(0, 0, TS, TS);
+        if (m && _archDemCanvas && _archDemBounds) {
+            var z = +m[1], x = +m[2], y = +m[3], n = Math.pow(2, z);
+            var tWx = x / n, tEx = (x + 1) / n, tNy = y / n, tSy = (y + 1) / n;
+            var iWx = _arch_xnorm(_archDemBounds.west), iEx = _arch_xnorm(_archDemBounds.east);
+            var iNy = _arch_ynorm(_archDemBounds.north), iSy = _arch_ynorm(_archDemBounds.south);
+            var oWx = Math.max(tWx, iWx), oEx = Math.min(tEx, iEx);
+            var oNy = Math.max(tNy, iNy), oSy = Math.min(tSy, iSy);
+            if (oEx > oWx && oSy > oNy) {
+                var W = _archDemCanvas.width, H = _archDemCanvas.height;
+                var sx = (oWx - iWx) / (iEx - iWx) * W, sw = (oEx - oWx) / (iEx - iWx) * W;
+                var sy = (oNy - iNy) / (iSy - iNy) * H, sh = (oSy - oNy) / (iSy - iNy) * H;
+                var dx = (oWx - tWx) / (tEx - tWx) * TS, dw = (oEx - oWx) / (tEx - tWx) * TS;
+                var dy = (oNy - tNy) / (tSy - tNy) * TS, dh = (oSy - oNy) / (tSy - tNy) * TS;
+                try { ctx.imageSmoothingEnabled = false; ctx.drawImage(_archDemCanvas, sx, sy, sw, sh, dx, dy, dw, dh); } catch (e) {}
+            }
+        }
+        return new Promise(function (resolve) {
+            cv.toBlob(function (b) { b.arrayBuffer().then(function (ab) { resolve({ data: ab }); }); }, 'image/png');
+        });
+    });
+}
+
+function _arch3DApply() {
+    if (!_arch3DOn) return;
+    var gl = detailMap && detailMap._gl;
+    if (!gl) return;
+    if (!gl.isStyleLoaded()) { gl.once('idle', _arch3DApply); return; }
+    if (!_archBuildDem()) return;
+    try {
+        if (gl.getTerrain && gl.getTerrain()) gl.setTerrain(null);
+        if (gl.getSource('arch-ir-dem')) gl.removeSource('arch-ir-dem');
+        gl.addSource('arch-ir-dem', {
+            type: 'raster-dem', tiles: ['archterrain://v' + _archDemVer + '/{z}/{x}/{y}'],
+            tileSize: 256, maxzoom: 8, encoding: 'mapbox'
+        });
+        gl.setTerrain({ source: 'arch-ir-dem', exaggeration: _arch3DExag });
+        if (gl.setMaxPitch) gl.setMaxPitch(80);
+        if (gl.dragRotate) gl.dragRotate.enable();
+        if (gl.touchZoomRotate) gl.touchZoomRotate.enableRotation();
+        gl.easeTo({ pitch: _arch3DPitch, duration: 700 });
+    } catch (e) { console.warn('[arch 3D] enable failed', e); _arch3DOn = false; }
+}
+
+// Rebuild the DEM for the current frame; call on frame change while 3D is on.
+function _arch3DRefresh() {
+    var gl = detailMap && detailMap._gl;
+    if (!_arch3DOn || !gl || !gl.getSource) return;
+    if (!_archBuildDem()) return;
+    try {
+        var src = gl.getSource('arch-ir-dem');
+        if (src) src.setTiles(['archterrain://v' + _archDemVer + '/{z}/{x}/{y}']);
+        else _arch3DApply();
+    } catch (e) {}
+}
+
+window.toggleArch3D = function () {
+    var gl = detailMap && detailMap._gl;
+    var btn = document.getElementById('ir-3d-btn');
+    if (!gl || !window.maplibregl || !gl.setTerrain) return;
+    if (!_arch3DOn) {
+        if (!irCurrentTbData) return;   // need an IR frame loaded first
+        _archEnsureProtocol();
+        _arch3DOn = true;
+        _arch3DApply();
+        _arch3DShowTilt(true);
+        if (btn) btn.classList.add('active');
+    } else {
+        _arch3DOn = false;
+        try {
+            gl.setTerrain(null);
+            if (gl.getSource('arch-ir-dem')) gl.removeSource('arch-ir-dem');
+            gl.easeTo({ pitch: 0, bearing: 0, duration: 700 });
+            if (gl.dragRotate) gl.dragRotate.disable();
+            if (gl.touchZoomRotate) gl.touchZoomRotate.disableRotation();
+        } catch (e) {}
+        _arch3DShowTilt(false);
+        if (btn) btn.classList.remove('active');
+    }
+};
+
+// Floating Tilt / Height control (green/orange, mirrors the RT monitor).
+function _arch3DEnsureTilt() {
+    if (_arch3DTiltEl) return _arch3DTiltEl;
+    var box = document.createElement('div');
+    box.id = 'arch-3d-tilt-ctl';
+    box.style.cssText = 'position:absolute;right:14px;bottom:60px;z-index:650;display:none;' +
+        'background:rgba(15,23,42,0.92);backdrop-filter:blur(8px);border:1px solid rgba(244,115,33,0.30);' +
+        'border-radius:10px;padding:8px 11px;box-shadow:0 4px 18px rgba(0,0,0,0.45);' +
+        'font:600 11px/1.2 "DM Sans",system-ui,sans-serif;color:#cbd5e1;';
+    box.innerHTML = '<div style="display:grid;grid-template-columns:auto 120px 36px;align-items:center;gap:6px 8px;">' +
+        '<span title="Camera tilt (0 top-down, 80 near-horizon); or drag the map to orbit.">⛰ Tilt</span>' +
+        '<input id="arch-3d-tilt" type="range" min="0" max="80" step="1" style="accent-color:#4a9b6e;cursor:pointer;">' +
+        '<span id="arch-3d-tilt-val" style="text-align:right;color:#F47321;font-weight:700;font-variant-numeric:tabular-nums;"></span>' +
+        '<span title="Vertical amplification of the IR cloud-top relief (GPU only).">↕ Height</span>' +
+        '<input id="arch-3d-exag" type="range" min="1" max="8" step="0.5" style="accent-color:#4a9b6e;cursor:pointer;">' +
+        '<span id="arch-3d-exag-val" style="text-align:right;color:#F47321;font-weight:700;font-variant-numeric:tabular-nums;"></span></div>';
+    var host = document.querySelector('.detail-map-wrap') || document.getElementById('detail-map').parentNode;
+    host.style.position = host.style.position || 'relative';
+    host.appendChild(box);
+    var tilt = box.querySelector('#arch-3d-tilt'); tilt.value = _arch3DPitch;
+    box.querySelector('#arch-3d-tilt-val').textContent = _arch3DPitch + '°';
+    tilt.addEventListener('input', function () {
+        var gl = detailMap && detailMap._gl;
+        if (gl && gl.setPitch) { try { gl.setPitch(+tilt.value); } catch (e) {} }
+        box.querySelector('#arch-3d-tilt-val').textContent = tilt.value + '°';
+    });
+    var exag = box.querySelector('#arch-3d-exag'); exag.value = _arch3DExag;
+    box.querySelector('#arch-3d-exag-val').textContent = _arch3DExag + '×';
+    exag.addEventListener('input', function () {
+        _arch3DExag = +exag.value;
+        box.querySelector('#arch-3d-exag-val').textContent = _arch3DExag + '×';
+        var gl = detailMap && detailMap._gl;
+        if (gl && gl.setTerrain && _arch3DOn && gl.getSource('arch-ir-dem')) {
+            try { gl.setTerrain({ source: 'arch-ir-dem', exaggeration: _arch3DExag }); } catch (e) {}
+        }
+    });
+    _arch3DTiltEl = box;
+    return box;
+}
+function _arch3DShowTilt(show) { _arch3DEnsureTilt().style.display = show ? 'block' : 'none'; }
+
 // Decode base64 tb_data from server into Uint8Array
 function decodeTbData(base64str) {
     var binary = atob(base64str);
@@ -3808,6 +3995,9 @@ function displayIROnMap(data) {
 
     // Store bounds for hover display
     irCurrentBounds = imageBounds;
+
+    // Rebuild the 3D terrain DEM for this frame if 3D is engaged.
+    _arch3DRefresh();
 
     // Set up mousemove handler (once) for Tb hover
     if (!detailMap._irHoverAttached) {
