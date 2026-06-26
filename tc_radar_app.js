@@ -3479,6 +3479,11 @@ function _removeRubberBand() {
 var _lastPlanRender = null, _radarMapOn = false;
 var _radarMapOverlay = null, _radarMapRing = null, _radarMapTip = null;
 var _radarMapHoverBound = false;
+// Two-panel mode (?gl=1 default): the radar field is draped on the IR map, so
+// the map IS the plan view and the redundant Plotly plan pane is hidden. The
+// user can toggle back to the classic 3-panel via the Radar→Map pill; doing so
+// sets _twoPanelDisabled so it doesn't re-arm on the next variable/level change.
+var _twoPanelDisabled = false;
 
 var _NAMED_CS = {
     Viridis: [[0,'rgb(68,1,84)'],[0.25,'rgb(59,82,139)'],[0.5,'rgb(33,145,140)'],[0.75,'rgb(94,201,98)'],[1,'rgb(253,231,37)']],
@@ -3574,20 +3579,71 @@ function _radarMapHover(e) {
     _radarMapTip.style.display = 'block';
 }
 function _radarMapHideTip() { if (_radarMapTip) _radarMapTip.style.display = 'none'; }
+// Collapse to / expand from the two-panel layout: hide the Plotly plan-view
+// pane (the map now carries it) and let the azimuthal-mean pane fill the row.
+function _applyTwoPanelMode(on) {
+    var wrap = document.getElementById('dual-panel-wrap');
+    if (!wrap) return;
+    var left = document.getElementById('dual-pane-left');
+    var right = document.getElementById('dual-pane-right');
+    var divider = wrap.querySelector('.dual-pane-divider');
+    if (on) {
+        if (left) left.style.display = 'none';
+        if (divider) divider.style.display = 'none';
+        // Force the azimuthal pane visible: a <1100px media query hides
+        // .dual-pane:last-of-type (the right pane), but in two-panel mode it is
+        // the primary right panel, so override that here.
+        if (right) { right.style.display = 'flex'; right.style.flex = '1 1 100%'; right.style.maxWidth = '100%'; }
+    } else {
+        if (left) left.style.display = '';
+        if (divider) divider.style.display = '';
+        if (right) { right.style.display = ''; right.style.flex = ''; right.style.maxWidth = ''; }
+    }
+    // Reflow whichever Plotly charts changed width.
+    try {
+        if (window.Plotly) {
+            var az = document.getElementById('dual-az-chart');
+            if (az) Plotly.Plots.resize(az);
+            var pv = document.getElementById('plotly-chart');
+            if (!on && pv) Plotly.Plots.resize(pv);   // restored from hidden → re-measure
+        }
+    } catch (e) {}
+}
+
+// Two-panel default under ?gl=1: once a plan view has rendered, drape its field
+// on the IR map and hide the redundant Plotly plan pane — unless the user has
+// explicitly toggled back to 3-panel this session.
+function _maybeAutoTwoPanel() {
+    if (!window.LFLET_GL || _twoPanelDisabled || !_lastPlanRender) return;
+    var firstArm = !_radarMapOn;   // only re-frame the map the first time
+    _radarMapOn = true;
+    _radarMapDraw();
+    var btn = document.getElementById('radar-map-btn');
+    if (btn) btn.classList.add('active');
+    // Re-apply every render: renderPlotFromJSON rebuilds the dual-panel HTML,
+    // which resets the plan pane to visible — re-hide it here.
+    _applyTwoPanelMode(true);
+    if (firstArm) { try { map.fitBounds(_radarMapBounds(_lastPlanRender), { padding: [30, 30] }); } catch (e) {} }
+}
+
 window._radarToMap = function () {
     var btn = document.getElementById('radar-map-btn');
     if (!_radarMapOn) {
         if (!_lastPlanRender) { alert('Generate a plan view first.'); return; }
         _radarMapOn = true;
+        _twoPanelDisabled = false;
         _radarMapDraw();
         if (btn) btn.classList.add('active');
+        _applyTwoPanelMode(true);
         try { map.fitBounds(_radarMapBounds(_lastPlanRender), { padding: [30, 30] }); } catch (e) {}
     } else {
         _radarMapOn = false;
+        _twoPanelDisabled = true;   // user wants the classic 3-panel; don't re-arm
         if (_radarMapOverlay) { try { map.removeLayer(_radarMapOverlay); } catch (e) {} _radarMapOverlay = null; }
         if (_radarMapRing) { try { map.removeLayer(_radarMapRing); } catch (e) {} _radarMapRing = null; }
         _radarMapHideTip();
         if (btn) btn.classList.remove('active');
+        _applyTwoPanelMode(false);
     }
 };
 
@@ -4126,7 +4182,15 @@ function renderPlotFromJSON(json, resultDiv) {
         level_km: json.actual_level_km, rmw_km: meta.rmw_km,
         center_lat: (currentCaseData && currentCaseData.latitude), center_lon: (currentCaseData && currentCaseData.longitude)
     };
-    if (_radarMapOn) _radarMapDraw();
+    if (window.LFLET_GL && !_twoPanelDisabled) {
+        // Two-panel default: defer so the Plotly plan chart renders at full size
+        // first (clean toggle-back), then drape on the map + hide the plan pane.
+        // Deferred + idempotent so it also re-hides the pane on variable/level
+        // re-renders (which rebuild the dual-panel HTML).
+        setTimeout(_maybeAutoTwoPanel, 60);
+    } else if (_radarMapOn) {
+        _radarMapDraw();
+    }
 
     var vmaxStr = meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : '';
     var overlayLabel = json.overlay ? '<br><span style="font-size:0.85em;color:#9ca3af;">Contours: ' + json.overlay.display_name + ' (' + json.overlay.units + ')</span>' : '';
