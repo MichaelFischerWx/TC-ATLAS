@@ -8109,6 +8109,7 @@ def get_env_layers():
         ("env", "winds_10m"), ("env", "winds_850"),
         ("env", "winds_700"), ("env", "winds_500"), ("env", "winds_200"),
         ("env", "rh_700_400"), ("env", "sst_oisst"),
+        ("env", "sst_anom"), ("env", "sst_rel"),
         ("env", "genesis_prob_2d"), ("env", "genesis_prob_7d"), ("env", "genesis_prob_14d"),
         # Subseasonal forcing overlays — Wheeler-Kiladis-filtered OLR
         # (build_subseasonal_overlays.py Cloud Run Job).

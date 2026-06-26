@@ -19176,10 +19176,13 @@
         {
             label: 'Moisture & SST',
             match: function (L_) {
-                return L_.name === 'rh_700_400' || L_.name === 'sst_oisst';
+                return L_.name === 'rh_700_400' || L_.name === 'sst_oisst' ||
+                       L_.name === 'sst_anom' || L_.name === 'sst_rel';
             },
             shortTitle: function (L_) {
                 if (L_.name === 'rh_700_400') return '700-400 hPa RH';
+                if (L_.name === 'sst_anom') return 'SST Anomaly';
+                if (L_.name === 'sst_rel') return 'Relative SST';
                 return 'Sea-Surface Temperature';
             }
         },

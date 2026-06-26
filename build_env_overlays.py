@@ -2262,6 +2262,113 @@ def build_sst() -> Optional[bytes]:
     return sst if upload_layer(spec, sst) else None
 
 
+# Tropical band for the Vecchi-Soden relative anomaly (matches the seasonal
+# Panel A "relative SST": area-weighted mean anomaly over 30S-30N).
+_REL_TROP_LAT = 30.0
+
+
+def _load_oisst_monclim_env() -> Optional[np.ndarray]:
+    """1991-2020 monthly OISST climatology, reoriented to the env grid
+    (12, NY, NX) — N->S, lon -180..180, padded to NY — so it aligns pixel-for-
+    pixel with fetch_oisst_sst(). Cached in /tmp between runs. Returns None if
+    unavailable (built by build_oisst_history.py → gs://.../seasonal/)."""
+    local = os.path.join(tempfile.gettempdir(), "oisst_monclim_1991_2020.nc")
+    if not os.path.exists(local):
+        try:
+            from google.cloud import storage
+            blob = storage.Client().bucket(GCS_BUCKET).blob(
+                "seasonal/oisst_monclim_1991_2020.nc")
+            if not blob.exists():
+                log.warning("SST-anom: climatology blob missing in GCS seasonal/")
+                return None
+            blob.download_to_filename(local)
+        except Exception as e:
+            log.warning("SST-anom: climatology download failed: %s", e)
+            return None
+    try:
+        import xarray as xr
+        ds = xr.open_dataset(local)
+        var = "sst" if "sst" in ds.data_vars else list(ds.data_vars)[0]
+        clim = np.asarray(ds[var].values, dtype=np.float32)   # (month, lat, lon)
+        lat0 = float(ds["lat"].values[0])
+        ds.close()
+    except Exception as e:
+        log.warning("SST-anom: climatology decode failed: %s", e)
+        return None
+    if clim.ndim != 3 or clim.shape[0] != 12:
+        log.warning("SST-anom: unexpected climatology shape %s", clim.shape)
+        return None
+    if lat0 < 0:                          # S->N : flip to N->S
+        clim = clim[:, ::-1, :]
+    clim = np.roll(clim, NX // 2, axis=2)  # lon 0..360 -> -180..180
+    if clim.shape[1] == NY - 1:           # pad 720 -> 721 (match fetch_oisst_sst)
+        pad = np.empty((12, NY, NX), dtype=clim.dtype)
+        pad[:, 0, :] = clim[:, 0, :]
+        pad[:, 1:, :] = clim
+        clim = pad
+    return clim
+
+
+def build_sst_anomalies() -> bool:
+    """OISST SST anomaly + relative anomaly vs the 1991-2020 climatology.
+
+    Brings the seasonal Panel A framing to the global map: where is the ocean
+    warmer/cooler than normal for the calendar month (anomaly), and — after
+    removing the area-weighted tropical-mean warming — where is it warm
+    RELATIVE to the tropics (Vecchi & Soden 2007), which tracks TC potential
+    intensity better than absolute SST in a warming climate. Reuses the OISST
+    fetch + climatology that already exist; no new data source. Returns True if
+    either layer uploaded."""
+    log.info("Building SST anomalies: OISST vs 1991-2020 climatology")
+    result = fetch_oisst_sst()
+    if not result:
+        log.error("SST-anom: OISST fetch failed")
+        return False
+    sst, ymd = result
+    if sst.shape == (NY - 1, NX):          # pad 720 -> 721 like build_sst()
+        padded = np.empty((NY, NX), dtype=sst.dtype)
+        padded[0] = sst[0]; padded[1:] = sst
+        sst = padded
+    clim = _load_oisst_monclim_env()
+    if clim is None:
+        return False
+    month = int(ymd[4:6])
+    anom = sst - clim[month - 1]
+    valid = f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:8]}T00:00:00Z"
+
+    # Vecchi-Soden relative anomaly: subtract the cos-lat-weighted 30S-30N
+    # mean anomaly so the global/tropical warming signal drops out.
+    lats = 90.0 - np.arange(NY) * (180.0 / (NY - 1))   # +90 .. -90
+    band = np.abs(lats) <= _REL_TROP_LAT
+    w = np.cos(np.deg2rad(lats))[band][:, None]
+    sub = anom[band, :]
+    finite = np.isfinite(sub)
+    num = float(np.nansum(np.where(finite, sub * w, 0.0)))
+    den = float(np.nansum(np.where(finite, w * np.ones_like(sub), 0.0)))
+    trop_mean = num / den if den > 0 else 0.0
+    anom_rel = anom - trop_mean
+    log.info("SST-anom: month=%02d tropical-mean anomaly = %+.3f degC",
+             month, trop_mean)
+
+    ok = False
+    ok |= upload_layer(LayerSpec(
+        name="sst_anom", title="SST Anomaly", units="degC",
+        vmin=-3, vmax=3, step=1, cmap="RdBu_r", render_style="filled",
+        valid_time=valid, data_vmin=-6, data_vmax=6,
+        description=("OISST daily SST minus the 1991-2020 monthly climatology. "
+                     "Red = warmer than normal, blue = cooler."),
+    ), anom)
+    ok = upload_layer(LayerSpec(
+        name="sst_rel", title="Relative SST", units="degC",
+        vmin=-2, vmax=2, step=1, cmap="RdBu_r", render_style="filled",
+        valid_time=valid, data_vmin=-5, data_vmax=5,
+        description=("SST anomaly minus the area-weighted 30S-30N mean anomaly "
+                     "(Vecchi & Soden 2007). Warm RELATIVE to the tropics — the "
+                     "TC potential-intensity signal with the warming trend removed."),
+    ), anom_rel) or ok
+    return ok
+
+
 # --------------------------------------------------------------------------
 # FNV3 LARGE_ENSEMBLE cyclogenesis probability — derived from the
 # 1000-member ensemble track CSV (DeepMind also publishes pre-baked
@@ -2591,6 +2698,14 @@ def main() -> int:
     except Exception:
         log.error("Builder sst_oisst crashed:\n%s", traceback.format_exc())
         results["sst_oisst"] = False
+
+    # SST anomaly + relative-SST (vs 1991-2020 climo) — reuses the same OISST
+    # fetch + climatology; observation-only, single-PNG path like sst_oisst.
+    try:
+        results["sst_anomalies"] = build_sst_anomalies()
+    except Exception:
+        log.error("Builder sst_anomalies crashed:\n%s", traceback.format_exc())
+        results["sst_anomalies"] = False
 
     # After all forecast hours uploaded, write a per-layer index.json
     # listing the available hours so the API can enumerate them without
