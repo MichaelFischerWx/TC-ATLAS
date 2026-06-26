@@ -1889,6 +1889,12 @@ html, body { margin: 0; padding: 0; }
     gap: 6px;
 }
 body:has(.basin-sidebar.open) #ir-display-wrap { left: 280px; }
+/* On mobile the IR/Vis/WV + 3D + Microwave + Layers controls wrap to fill the
+   top row (right-aligned on desktop, so no collision there). Keep the Display
+   button below that wrapped row instead of in the corner, or it overlaps them. */
+@media (max-width: 768px) {
+    #ir-display-wrap { top: 178px; }
+}
 .ir-display-toggle {
     position: static !important;
     top: auto !important;
