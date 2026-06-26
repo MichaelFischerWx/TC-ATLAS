@@ -337,6 +337,56 @@ OISST_BASE = (
     "https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-"
     "interpolation/v2.1/access/avhrr"
 )
+# PSL THREDDS OPeNDAP daily file — a reliable fallback when the NCEI HTTP
+# endpoint stalls from Cloud Run (the seasonal pipeline pulls OISST this way).
+OISST_PSL_OPENDAP = (
+    "https://psl.noaa.gov/thredds/dodsC/Datasets/noaa.oisst.v2.highres/"
+    "sst.day.mean.{year}.nc"
+)
+
+
+def _fetch_oisst_psl() -> Optional[tuple]:
+    """Fallback OISST via PSL OPeNDAP. Opens the current-year (then prior-year)
+    daily file, takes the last non-all-NaN time slice, and returns
+    (sst, ymd) on the OISST native grid reoriented N->S, lon -180..180 — the
+    same orientation as _read_oisst_nc, so build_sst()'s 720->721 pad applies."""
+    import xarray as xr
+    now = datetime.now(timezone.utc)
+    for yr in (now.year, now.year - 1):
+        url = OISST_PSL_OPENDAP.format(year=yr)
+        try:
+            ds = xr.open_dataset(url)
+        except Exception as e:
+            log.warning("OISST PSL open failed for %d: %s", yr, e)
+            continue
+        try:
+            da = ds["sst"]
+            ti = None
+            for k in range(da.sizes["time"] - 1, -1, -1):
+                if bool(np.isfinite(da.isel(time=k).values).any()):
+                    ti = k
+                    break
+            if ti is None:
+                ds.close()
+                continue
+            sl = da.isel(time=ti)
+            ymd = str(np.datetime_as_string(sl["time"].values, unit="D")).replace("-", "")
+            arr = np.asarray(sl.values, dtype=np.float32)   # (lat, lon), degC
+            lat0 = float(ds["lat"].values[0])
+            ds.close()
+        except Exception as e:
+            log.warning("OISST PSL decode failed: %s", e)
+            try:
+                ds.close()
+            except Exception:
+                pass
+            continue
+        if lat0 < 0:                       # S->N -> N->S
+            arr = arr[::-1, :]
+        arr = np.roll(arr, NX // 2, axis=1)  # 0..360 -> -180..180
+        log.info("OISST: using PSL OPeNDAP %s (%d)", ymd, yr)
+        return arr, ymd
+    return None
 
 
 def fetch_oisst_sst() -> Optional[tuple[np.ndarray, str]]:
@@ -392,7 +442,9 @@ def fetch_oisst_sst() -> Optional[tuple[np.ndarray, str]]:
                 log.warning("OISST decode failed for %s", url)
             except Exception as e:
                 log.warning("OISST fetch %s failed: %s", url, e)
-    return None
+    # NCEI HTTP exhausted/slow (chronic from Cloud Run) → PSL OPeNDAP mirror.
+    log.info("OISST: NCEI unavailable, trying PSL OPeNDAP fallback")
+    return _fetch_oisst_psl()
 
 
 def _read_oisst_nc(blob: bytes) -> Optional[np.ndarray]:
