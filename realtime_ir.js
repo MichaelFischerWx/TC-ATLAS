@@ -2055,18 +2055,18 @@
         box.id = 'ir-3d-tilt-ctl';
         box.style.cssText = 'position:fixed;right:14px;bottom:128px;z-index:650;display:none;' +
             'background:rgba(15,23,42,0.92);backdrop-filter:blur(8px);' +
-            'border:1px solid rgba(148,163,184,0.18);border-radius:10px;padding:8px 11px;' +
+            'border:1px solid rgba(244,115,33,0.30);border-radius:10px;padding:8px 11px;' +
             'box-shadow:0 4px 18px rgba(0,0,0,0.45);font:600 11px/1.2 "DM Sans",system-ui,sans-serif;color:#cbd5e1;';
         // Two rows: camera Tilt (pitch) + Height (terrain exaggeration — a pure
         // GPU vertical scale on the existing DEM, no re-fetch/re-encode, $0).
         box.innerHTML =
             '<div style="display:grid;grid-template-columns:auto 120px 36px;align-items:center;gap:6px 8px;">' +
             '<span title="Camera tilt — 0° top-down, 80° near-horizon. Or drag the map to orbit.">⛰ Tilt</span>' +
-            '<input id="ir-3d-tilt" type="range" min="0" max="80" step="1" style="accent-color:#00e5ff;cursor:pointer;">' +
-            '<span id="ir-3d-tilt-val" style="text-align:right;color:#00e5ff;font-variant-numeric:tabular-nums;"></span>' +
+            '<input id="ir-3d-tilt" type="range" min="0" max="80" step="1" style="accent-color:#4a9b6e;cursor:pointer;">' +
+            '<span id="ir-3d-tilt-val" style="text-align:right;color:var(--um-orange,#F47321);font-weight:700;font-variant-numeric:tabular-nums;"></span>' +
             '<span title="Vertical amplification of the IR cloud-top relief (GPU only — no extra data or compute).">↕ Height</span>' +
-            '<input id="ir-3d-exag" type="range" min="1" max="8" step="0.5" style="accent-color:#00e5ff;cursor:pointer;">' +
-            '<span id="ir-3d-exag-val" style="text-align:right;color:#00e5ff;font-variant-numeric:tabular-nums;"></span>' +
+            '<input id="ir-3d-exag" type="range" min="1" max="8" step="0.5" style="accent-color:#4a9b6e;cursor:pointer;">' +
+            '<span id="ir-3d-exag-val" style="text-align:right;color:var(--um-orange,#F47321);font-weight:700;font-variant-numeric:tabular-nums;"></span>' +
             '</div>';
         document.body.appendChild(box);
         var tilt = box.querySelector('#ir-3d-tilt');
