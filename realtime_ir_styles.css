@@ -518,6 +518,13 @@ html, body { margin: 0; padding: 0; }
 .ir-detail-track-toggle-btn:not(.active):hover {
     opacity: 0.85;
 }
+/* Lite/Detailed toggle: disabled (Detailed-only) for storms outside mosaic
+   coverage or on the non-GL build. Active state uses .ir-sat-viewer-btn.active. */
+.ir-detail-mode-toggle-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+    pointer-events: none;
+}
 
 /* Surface-obs station plots — SVG injected into a divIcon. */
 .ir-stn-plot-icon {

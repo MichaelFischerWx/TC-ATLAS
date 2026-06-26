@@ -1692,29 +1692,93 @@
     }
     function _mosaicTileUrl(ts, product) { return _MOSAIC_ROOT + '/' + (product || 'ir') + '/' + ts + '/{z}/{x}/{y}.png'; }
 
-    // ── Lite storm view (Phase B) ──────────────────────────────────────────
-    // Opt-in via ?lite=1: the storm card renders its IR loop from the mosaic's
-    // pre-baked z5/z6 storm sectors (cdn.tcatlas.org/mosaic-v2) instead of the
-    // raw-Tb cutout. $0 new compute (the tiles already exist for every active
-    // storm) and it shields raw Tb from scrapers. The raw-Tb "Detailed" path
-    // stays the DEFAULT until this is verified on a live storm, then it flips.
+    // ── Lite storm view (Phase B/C) ────────────────────────────────────────
+    // The storm card DEFAULTS to a "lite" view: a crisp loop rendered from the
+    // mosaic's pre-baked z5/z6 storm sectors (cdn.tcatlas.org/mosaic-v2), $0
+    // (the tiles already exist for every active storm) and it shields raw Tb
+    // from scrapers. A per-card "Detailed" toggle loads the raw-Tb path
+    // on-demand for exact-Tb hover, the operational colormaps, and inner-core
+    // diagnostics. URL overrides: ?lite=0 forces Detailed, ?lite=1 forces Lite.
     // See project_lite_storm_view memory.
+    var _DETAIL_DEFAULT_LITE = true;   // Phase D: lite is the default open
     var _LITE_STORM_VIEW = (function () {
         try { return /[?&]lite=1(?:&|$)/.test(location.search); } catch (e) { return false; }
     })();
-    var _liteActive = false;   // true while a card is showing the mosaic loop
+    var _LITE_OFF = (function () {
+        try { return /[?&]lite=0(?:&|$)/.test(location.search); } catch (e) { return false; }
+    })();
+    var _detailModePref = null;  // user toggle: 'lite' | 'detailed' | null (=default)
+    var _liteActive = false;     // true while a card is showing the mosaic loop
     // The combined mosaic covers GOES-E/W + Himawari only; the Meteosat sector
     // (~-5..75°E: Africa / Europe / W Indian Ocean) has no baked tiles, so a
-    // storm there falls through to the raw-Tb path even under ?lite=1.
+    // storm there always falls through to the raw-Tb path.
     function _mosaicCoversLon(lon) {
         var L = ((lon + 180) % 360 + 360) % 360 - 180;   // normalize to [-180,180)
         return !(L > -5 && L < 75);
+    }
+    // Whether THIS storm can use the lite path at all (GL + inside coverage).
+    function _liteAvailable(lon) {
+        return !!window.LFLET_GL && _mosaicCoversLon(lon);
+    }
+    // Effective mode for a storm: user toggle wins, then URL flags, then default.
+    function _effectiveLiteMode(lon) {
+        if (!_liteAvailable(lon)) return false;     // gap / non-GL → Detailed
+        if (_detailModePref === 'lite') return true;
+        if (_detailModePref === 'detailed') return false;
+        if (_LITE_STORM_VIEW) return true;          // ?lite=1
+        if (_LITE_OFF) return false;                // ?lite=0
+        return _DETAIL_DEFAULT_LITE;
     }
     function _mosaicTsToIso(ts) {
         // 'YYYYMMDDHHMM' -> ISO 'YYYY-MM-DDTHH:MM:00Z' (fmtUTC-parseable)
         var s = String(ts);
         return s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8) + 'T' +
                s.slice(8, 10) + ':' + s.slice(10, 12) + ':00Z';
+    }
+    function _currentStormRecord() {
+        if (!currentStormId) return null;
+        for (var i = 0; i < stormData.length; i++) {
+            if (stormData[i].atcf_id === currentStormId) return stormData[i];
+        }
+        return null;
+    }
+    /** Reflect the current Lite/Detailed mode on the header toggle button. */
+    function _rtUpdateDetailModeBtn(storm) {
+        var btn = document.getElementById('ir-detail-mode-toggle');
+        if (!btn) return;
+        storm = storm || _currentStormRecord();
+        if (!storm) return;
+        var avail = _liteAvailable(storm.lon);
+        var detailed = !_effectiveLiteMode(storm.lon);
+        // Button is "active" (highlighted) when Detailed is showing.
+        btn.classList.toggle('active', detailed);
+        btn.disabled = !avail;   // gap / non-GL storms are Detailed-only
+        btn.title = !avail
+            ? 'Detailed view — this storm is outside the mosaic coverage, so the Lite view isn’t available here.'
+            : (detailed
+                ? 'Detailed view: exact-Tb hover, operational colormaps, inner-core diagnostics. Click for the fast, crisp Lite mosaic loop.'
+                : 'Lite mosaic loop (fast + crisp, native resolution). Click for the Detailed view: exact-Tb hover, colormaps, diagnostics.');
+    }
+    /** Toggle the open storm card between the Lite mosaic loop and the raw-Tb
+     *  Detailed path, then rebuild the detail map in the new mode. */
+    window._rtToggleDetailMode = function () {
+        var storm = _currentStormRecord();
+        if (!storm || !_liteAvailable(storm.lon)) return;
+        _detailModePref = _effectiveLiteMode(storm.lon) ? 'detailed' : 'lite';
+        initDetailMap(storm);
+        _rtUpdateDetailModeBtn(storm);
+        _ga('rt_detail_mode', { mode: _detailModePref, atcf_id: storm.atcf_id });
+    };
+    /** Ensure the card is on the Detailed (raw-Tb) path — used by features that
+     *  need raw Tb (diagnostics, exact-Tb hover, card colormaps). Returns true
+     *  if a switch was triggered (caller may need to wait for raw Tb to load). */
+    function _rtEnsureDetailedMode() {
+        var storm = _currentStormRecord();
+        if (!storm || !_liteActive) return false;     // already Detailed (or no card)
+        _detailModePref = 'detailed';
+        initDetailMap(storm);
+        _rtUpdateDetailModeBtn(storm);
+        return true;
     }
 
     // ── Inspect IR Tb (client-side, ~$0) ───────────────────────────────────
@@ -6077,7 +6141,7 @@
         // Lite (?lite=1) renders the storm card straight from the animated
         // mosaic frames, which already cover the whole viewport at every zoom,
         // so the static under-layer below is redundant there — skip it.
-        var _useLite = _LITE_STORM_VIEW && window.LFLET_GL && _mosaicCoversLon(storm.lon);
+        var _useLite = _effectiveLiteMode(storm.lon);
         if (window.LFLET_GL && !_useLite) {
             var _mosStormId = storm.atcf_id;
             _loadMosaicFrames().then(function () {
@@ -6489,6 +6553,7 @@
         animFrameTimes = [];
         animIndex = 0;
         initDetailMap(storm);
+        _rtUpdateDetailModeBtn(storm);   // reflect Lite/Detailed on the header toggle
 
         // Secondary data (models, WeatherLab, ASCAT, intensity chart) is
         // deferred until the first IR frame is visible — see _triggerDeferredLoads().
@@ -7238,6 +7303,20 @@
      *  guarded so this works before it exists.) */
     window._irToggleDiagnosticsSection = function () {
         if (!currentStormId) return;
+        // Diagnostics need raw Tb (objective eye + inner-core charts), which the
+        // Lite mosaic path doesn't load. Turning diagnostics ON in Lite mode
+        // first switches to the Detailed (raw-Tb) path; the charts populate once
+        // raw Tb arrives (showFrame re-renders diagnostics while _diagVisible).
+        if (!_diagVisible && _liteActive) {
+            _rtEnsureDetailedMode();
+            _diagVisible = true;
+            var b0 = document.getElementById('ir-detail-diag-toggle');
+            if (b0) b0.classList.add('active');
+            var sec0 = document.getElementById('rt-diag-section');
+            if (sec0) sec0.style.display = '';
+            _ga('rt_diag_toggle', { on: true, via: 'lite-switch' });
+            return;
+        }
         _diagVisible = !_diagVisible;
         var btn = document.getElementById('ir-detail-diag-toggle');
         if (btn) btn.classList.toggle('active', _diagVisible);
