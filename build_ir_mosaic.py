@@ -72,8 +72,16 @@ def log(msg):
 
 
 # ── Cloudflare R2 output (production) — mirrors ir_monitor_api._r2_put_public ──
-R2_PREFIX = "mosaic-v2"                 # bump to invalidate all tiles/kernels
-                                        # (v2 = 512px tiles / zmax 4; see TILE_SIZE)
+R2_PREFIX = os.environ.get("MOSAIC_R2_PREFIX", "mosaic-v2")  # bump to invalidate all
+                                        # tiles/kernels (v2 = 512px tiles / zmax 4)
+# Tile pixel format. "rgba" = baked-colormap RGBA PNG (current/default; the frontend
+# displays it directly). "idx" = single-channel 8-bit brightness-INDEX PNG (0 = no-data
+# sentinel) colormapped on the CLIENT (GPU forward-LUT) — ~64% smaller egress, exact-Tb
+# hover, no banding, zero data-quality loss (the index is the same 256-level quantization
+# baked today). Flag-gated: the live job leaves MOSAIC_TILE_MODE unset → "rgba" → byte-
+# identical to today. Pair an idx run with MOSAIC_R2_PREFIX=mosaic-v3 so it never touches v2.
+TILE_MODE = os.environ.get("MOSAIC_TILE_MODE", "rgba").lower()
+IDX_PNG_LEVEL = int(os.environ.get("MOSAIC_IDX_PNG_LEVEL", "6"))  # spike: L6 = -64% egress, +~1s/frame
 R2_KEEP_FRAMES = 18                     # rolling loop kept hot (~3 h at 10-min)
 _r2_client = None
 
@@ -318,6 +326,28 @@ def colormap(arr, product):
     return rgba
 
 
+def to_index(arr, product):
+    """Blended band value → single-channel uint8 brightness INDEX (idx mode).
+    Mirrors colormap()'s frac math EXACTLY so idx→Tb is the identical mapping the
+    client forward-LUT uses; only the final LUT expansion is skipped. 0 is reserved
+    as the no-data sentinel (the client renders it transparent), so valid data is
+    clamped to 1..255 — this only nudges the single warmest level (idx 0 ≈ 310 K,
+    extremely rare) up by ~0.5 K, invisibly. NaN (off-disk/limb) → 0."""
+    kind = PRODUCTS[product]["kind"]
+    if kind == "ir":
+        frac = np.clip(1.0 - (arr - IR_VMIN) / (IR_VMAX - IR_VMIN), 0.0, 1.0)
+        idx = (np.nan_to_num(frac) * 255).astype(np.uint8)
+    elif kind == "wv":
+        frac = np.clip(1.0 - (arr - _WV_VMIN) / (_WV_VMAX - _WV_VMIN), 0.0, 1.0)
+        idx = (np.nan_to_num(frac) * 255).astype(np.uint8)
+    else:  # vis: reflectance 0–1 → 10..255 gray (matches colormap()'s gray ramp)
+        frac = np.clip(arr, 0.0, 1.0)
+        idx = (np.nan_to_num(frac) * 245.0 + 10.0).astype(np.uint8)
+    np.maximum(idx, 1, out=idx)          # reserve 0 for no-data; valid is 1..255
+    idx[~np.isfinite(arr)] = 0           # no-data sentinel
+    return idx
+
+
 # ── Read a full-disk band for every satellite, once per cycle ──────────────
 # `band` + `coarsen` come from PRODUCTS[product]. Visible (0.5 km) is block-
 # averaged by `coarsen` (4×) inside the reader so only the 2 km grid is retained
@@ -511,12 +541,14 @@ def global_render(zoom, sats, kernels, timings, product="ir", dt=None):
         samples.append((g, cosz, valid))
     timings["gather"] = timings.get("gather", 0.0) + time.time() - t0
     t1 = time.time()
-    rgba = colormap(blend_samples(samples), product)
+    field = blend_samples(samples)
+    img = to_index(field, product) if TILE_MODE == "idx" else colormap(field, product)
     if PRODUCTS[product]["night"] and dt is not None:
-        LON, LAT = _merc_lonlat(rgba.shape[0])
-        rgba[solar_elev_grid(LAT, LON, dt) < _NIGHT_ELEV_DEG] = (0, 0, 0, 0)
+        LON, LAT = _merc_lonlat(img.shape[0])
+        nightmask = solar_elev_grid(LAT, LON, dt) < _NIGHT_ELEV_DEG
+        img[nightmask] = 0 if TILE_MODE == "idx" else (0, 0, 0, 0)
     timings["colormap"] = timings.get("colormap", 0.0) + time.time() - t1
-    return rgba
+    return img
 
 
 # ── Storm tiles: high-zoom z/x/y patches over a list of points ─────────────
@@ -555,12 +587,15 @@ def render_storm_tiles(sats, tiles, emit, timings, product="ir", dt=None):
             samples.append((g, cosz, valid))
         if not samples:
             continue
-        rgba = colormap(blend_samples(samples), product)
+        field = blend_samples(samples)
+        img = to_index(field, product) if TILE_MODE == "idx" else colormap(field, product)
         if night and dt is not None:
-            rgba[solar_elev_grid(LAT, LON, dt) < _NIGHT_ELEV_DEG] = (0, 0, 0, 0)
-        if not rgba[..., 3].any():
+            nightmask = solar_elev_grid(LAT, LON, dt) < _NIGHT_ELEV_DEG
+            img[nightmask] = 0 if TILE_MODE == "idx" else (0, 0, 0, 0)
+        empty = (not img.any()) if TILE_MODE == "idx" else (not img[..., 3].any())
+        if empty:
             continue
-        emit(z, x, y, _png_bytes(rgba)); written += 1
+        emit(z, x, y, _png_bytes(img)); written += 1
     timings["storm_tile"] = time.time() - t0
     return written
 
@@ -656,6 +691,11 @@ def update_r2_manifest(new_ts, zmax, product="ir"):
 def _png_bytes(tile):
     from PIL import Image
     buf = io.BytesIO()
+    if tile.ndim == 2:   # single-channel brightness-index (idx mode); 0 = no-data
+        # L6 measured −64% egress vs the RGBA-L1 baseline for ~+1 s/frame (spike,
+        # 2026-06-26); WebP-lossless was only 4pp smaller for ~5× the encode time.
+        Image.fromarray(tile, "L").save(buf, format="PNG", compress_level=IDX_PNG_LEVEL)
+        return buf.getvalue()
     # compress_level=1 (was 6): IR tiles are noisy/photographic, so zlib effort
     # barely shrinks them — measured on real z2-z4 tiles, level 1 vs 6 is the SAME
     # size (±3%) but ~3.9× faster to encode. The tile step is the run's CPU hotspot,
@@ -664,10 +704,17 @@ def _png_bytes(tile):
     return buf.getvalue()
 
 
-def write_pyramid(rgba, zmax, emit, timings):
-    """emit(z, x, y, png_bytes) routes each tile to a sink (local dir or R2)."""
+def write_pyramid(img, zmax, emit, timings):
+    """emit(z, x, y, png_bytes) routes each tile to a sink (local dir or R2).
+    RGBA mode: empty = no opaque pixel; box-average down (alpha fades edges).
+    idx mode (2D): empty = all no-data (0); MASKED box-average so the 0 sentinel
+    never bleeds into a valid mean — a parent pixel is the mean of its non-zero
+    children (or 0 if all four are no-data). Edges stay crisp instead of fading,
+    and averaging the INDEX (≈ mean Tb) then colormapping on the client is more
+    physical than averaging baked colours."""
     t0 = time.time()
-    level = rgba
+    idx_mode = (img.ndim == 2)
+    level = img
     n = 0
     for z in range(zmax, -1, -1):
         S = level.shape[0]
@@ -675,13 +722,22 @@ def write_pyramid(rgba, zmax, emit, timings):
             for tx in range(S // TILE_SIZE):
                 tile = level[ty*TILE_SIZE:(ty+1)*TILE_SIZE,
                              tx*TILE_SIZE:(tx+1)*TILE_SIZE]
-                if not tile[..., 3].any():
+                empty = (not tile.any()) if idx_mode else (not tile[..., 3].any())
+                if empty:
                     continue
                 emit(z, tx, ty, _png_bytes(tile)); n += 1
         if z > 0:
             h = (S // 2) * 2
-            level = ((level[:h:2, :h:2].astype(np.uint16) + level[1:h:2, :h:2] +
-                      level[:h:2, 1:h:2] + level[1:h:2, 1:h:2]) // 4).astype(np.uint8)
+            if idx_mode:
+                a = level[:h:2, :h:2]; b = level[1:h:2, :h:2]
+                c = level[:h:2, 1:h:2]; d = level[1:h:2, 1:h:2]
+                va = a != 0; vb = b != 0; vc = c != 0; vd = d != 0
+                cnt = va.astype(np.uint16) + vb + vc + vd
+                ssum = (a * va).astype(np.uint16) + b * vb + c * vc + d * vd
+                level = np.where(cnt > 0, ssum // np.maximum(cnt, 1), 0).astype(np.uint8)
+            else:
+                level = ((level[:h:2, :h:2].astype(np.uint16) + level[1:h:2, :h:2] +
+                          level[:h:2, 1:h:2] + level[1:h:2, 1:h:2]) // 4).astype(np.uint8)
     timings["tile"] = time.time() - t0
     return n
 
@@ -802,7 +858,7 @@ def main():
             n_storm = 0
             if tiles:
                 n_storm = render_storm_tiles(sats, tiles, emit, timings, product, dt)
-            if fi == 0 and product == products[0]:
+            if fi == 0 and product == products[0] and TILE_MODE != "idx":
                 write_preview(rgba, args.out)
             written.setdefault(product, []).append(ts)
             del rgba, sats   # free the big per-band arrays before the next band
