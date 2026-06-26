@@ -2938,6 +2938,12 @@ html:not([data-view="map"]) #ir-3d-tilt-ctl,
 html:not([data-view="map"]) #ir-display-wrap {
     display: none !important;
 }
+/* Mobile: the 3D Tilt/Height/Orbit control (inline-positioned at bottom:44px)
+   overlaps the DeepMind animation deck, whose top sits ~119px off the bottom.
+   Lift it clear of the deck. !important overrides the inline style. */
+@media (max-width: 768px) {
+    #ir-3d-tilt-ctl { bottom: 128px !important; }
+}
 
 /* …and the SAME controls bleed over the storm-detail pane. Opening a
    storm hides #ir-main and shows #ir-detail (z-index 500) but leaves
