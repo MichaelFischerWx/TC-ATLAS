@@ -2004,6 +2004,7 @@
     var _rt3DOn = false;
     var _rt3DExag = 3.0;           // setTerrain exaggeration (Height slider; on the 0.5 grid)
     var _rt3DPitch = 62;           // camera pitch when 3D is on
+    var _rt3DOrbitRAF = null;      // auto-orbit animation handle
     var _terrainProtoReady = false;
     function _tbToTerrainRGB(tb, out) {
         // Colder cloud top → taller. ~0 m at/above 273 K (0 °C), rising to
@@ -2057,6 +2058,7 @@
             if (_globalBasemap) try { _globalBasemap.setOpacity(0); } catch (e) {}
         } else {
             _rt3DOn = false;
+            if (_rt3DOrbitRAF) { cancelAnimationFrame(_rt3DOrbitRAF); _rt3DOrbitRAF = null; }
             _rt3DShowTilt(false);
             try {
                 gl.setTerrain(null);
@@ -2064,6 +2066,7 @@
                 gl.easeTo({ pitch: 0, bearing: 0, duration: 700 });
                 if (gl.dragRotate) gl.dragRotate.disable();
                 if (gl.touchZoomRotate) gl.touchZoomRotate.disableRotation();
+                if (gl.boxZoom) gl.boxZoom.enable();   // restore default Shift+drag
             } catch (e) {}
             if (_globalBasemap) try { _globalBasemap.setOpacity(1); } catch (e) {}
         }
@@ -2091,6 +2094,10 @@
             gl.setTerrain({ source: 'ir-dem', exaggeration: _rt3DExag });
             if (gl.dragRotate) gl.dragRotate.enable();
             if (gl.touchZoomRotate) gl.touchZoomRotate.enableRotation();
+            // Shift+drag = tilt shortcut; disable boxZoom (its default) so they
+            // don't collide. Re-enabled when 3D turns off.
+            _rt3DSetupPitchDrag(gl);
+            if (gl.boxZoom) try { gl.boxZoom.disable(); } catch (e) {}
             // Mirror drag-to-orbit pitch back onto the Tilt slider.
             if (!gl.__rt3DPitchSync) { gl.__rt3DPitchSync = true; gl.on('pitch', _rt3DSyncTilt); }
             gl.easeTo({ pitch: _rt3DPitch, duration: 700 });
@@ -2112,14 +2119,19 @@
         // GPU vertical scale on the existing DEM, no re-fetch/re-encode, $0).
         box.innerHTML =
             '<div style="display:grid;grid-template-columns:auto 120px 36px;align-items:center;gap:6px 8px;">' +
-            '<span title="Camera tilt — 0° top-down, 80° near-horizon. Or drag the map to orbit.">⛰ Tilt</span>' +
+            '<span title="Camera tilt — 0° top-down, 80° near-horizon. Shortcut: hold Shift and drag the map up/down. Or right-/ctrl-drag to orbit.">⛰ Tilt</span>' +
             '<input id="ir-3d-tilt" type="range" min="0" max="80" step="1" style="accent-color:#4a9b6e;cursor:pointer;">' +
             '<span id="ir-3d-tilt-val" style="text-align:right;color:var(--um-orange,#F47321);font-weight:700;font-variant-numeric:tabular-nums;"></span>' +
             '<span title="Vertical amplification of the IR cloud-top relief (GPU only — no extra data or compute).">↕ Height</span>' +
             '<input id="ir-3d-exag" type="range" min="1" max="8" step="0.5" style="accent-color:#4a9b6e;cursor:pointer;">' +
             '<span id="ir-3d-exag-val" style="text-align:right;color:var(--um-orange,#F47321);font-weight:700;font-variant-numeric:tabular-nums;"></span>' +
-            '</div>';
+            '</div>' +
+            '<button id="ir-3d-orbit" title="Auto-orbit: one slow 360° revolution with a tilt sweep — click again to stop" ' +
+            'style="margin-top:8px;width:100%;background:rgba(244,115,33,0.14);border:1px solid rgba(244,115,33,0.40);' +
+            'color:#fdba74;border-radius:7px;padding:5px 0;font:600 11px/1 \'DM Sans\',system-ui,sans-serif;cursor:pointer;">↻ Orbit</button>';
         document.body.appendChild(box);
+        var orbitBtn = box.querySelector('#ir-3d-orbit');
+        if (orbitBtn) orbitBtn.addEventListener('click', function () { _rt3DOrbit(); });
         var tilt = box.querySelector('#ir-3d-tilt');
         tilt.value = _rt3DPitch;
         box.querySelector('#ir-3d-tilt-val').textContent = _rt3DPitch + '°';
@@ -2158,6 +2170,62 @@
         var gl = map && map._gl;
         if (!gl || !gl.getSource('ir-dem') || !_mosaicTs) return;
         try { gl.getSource('ir-dem').setTiles(['terrainir://' + _mosaicTileUrl(_mosaicTs, 'ir')]); } catch (e) {}
+    }
+
+    // Auto-orbit: one slow 360° bearing revolution with a tilt sweep (44→72→44),
+    // mirroring the Global Archive orbit. Click again to stop. Resets bearing
+    // when it finishes.
+    function _rt3DOrbit() {
+        var gl = map && map._gl;
+        var btn = document.getElementById('ir-3d-orbit');
+        if (!gl || !_rt3DOn) return;
+        if (_rt3DOrbitRAF) {
+            cancelAnimationFrame(_rt3DOrbitRAF); _rt3DOrbitRAF = null;
+            if (btn) btn.classList.remove('active');
+            return;
+        }
+        if (btn) btn.classList.add('active');
+        var startBearing = gl.getBearing(), DUR = 18000, t0 = null;
+        function step(ts) {
+            if (!_rt3DOn) { _rt3DOrbitRAF = null; if (btn) btn.classList.remove('active'); return; }
+            if (t0 === null) t0 = ts;
+            var p = (ts - t0) / DUR;
+            if (p >= 1) {
+                gl.setBearing(startBearing); _rt3DOrbitRAF = null;
+                if (btn) btn.classList.remove('active'); return;
+            }
+            gl.setBearing(startBearing + p * 360);
+            gl.setPitch(58 + 14 * Math.sin(p * Math.PI * 2));   // 44→72→44
+            _rt3DOrbitRAF = requestAnimationFrame(step);
+        }
+        _rt3DOrbitRAF = requestAnimationFrame(step);
+    }
+
+    // Shortcut: hold Shift + left-drag the map up/down to change the camera tilt
+    // (pitch only, no bearing change). Only active while 3D is on; bound once.
+    // boxZoom (Shift+drag's default) is disabled in 3D so it doesn't fight this.
+    function _rt3DSetupPitchDrag(gl) {
+        if (gl.__rt3DPitchDrag) return;
+        gl.__rt3DPitchDrag = true;
+        var cont = gl.getCanvasContainer ? gl.getCanvasContainer() : gl.getContainer();
+        var dragging = false, lastY = 0;
+        cont.addEventListener('mousedown', function (e) {
+            if (!_rt3DOn || !e.shiftKey || e.button !== 0) return;
+            dragging = true; lastY = e.clientY;
+            try { gl.dragPan.disable(); } catch (er) {}
+            e.preventDefault(); e.stopPropagation();
+        });
+        window.addEventListener('mousemove', function (e) {
+            if (!dragging) return;
+            var dy = e.clientY - lastY; lastY = e.clientY;
+            var np = Math.max(0, Math.min(80, gl.getPitch() - dy * 0.4));  // drag up → more tilt
+            try { gl.setPitch(np); } catch (er) {}
+        });
+        window.addEventListener('mouseup', function () {
+            if (!dragging) return;
+            dragging = false;
+            try { gl.dragPan.enable(); } catch (er) {}
+        });
     }
 
     /** Create the seamless composite GIBS GridLayer for a mosaic product
