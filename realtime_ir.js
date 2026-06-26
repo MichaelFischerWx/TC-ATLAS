@@ -1892,6 +1892,98 @@
         if (hadAnim) loadGlobalAnimation();
     }
 
+    // ── 3D convection (prototype) — extrude cold IR cloud tops into relief ─────
+    // Re-encode the baked Claude-IR mosaic tiles into a Mapbox terrain-RGB DEM
+    // CLIENT-SIDE (same $0 pattern as the irlut colormap): invert each tile
+    // pixel → Tb, map Tb → cloud-top height (colder = taller), encode as
+    // terrain-RGB. MapLibre's setTerrain then drapes the IR raster over that DEM,
+    // so deep convection literally rises. It's a qualitative "feel" (IR is a 2D
+    // cloud-TOP surface, not a true 3D volume), tuned for visual impact.
+    var _rt3DOn = false;
+    var _rt3DExag = 3.2;           // setTerrain exaggeration (drama knob)
+    var _rt3DPitch = 62;           // camera pitch when 3D is on
+    var _terrainProtoReady = false;
+    function _tbToTerrainRGB(tb, out) {
+        // Colder cloud top → taller. ~0 m at/above 273 K (0 °C), rising to
+        // ~16.6 km near 190 K. Mapbox terrain-RGB: elev = -10000 + V*0.1, so
+        // V = (elev + 10000) * 10.
+        var h = Math.max(0, (273 - tb)) * 200;
+        var v = Math.round((h + 10000) * 10);
+        out[0] = (v >> 16) & 255; out[1] = (v >> 8) & 255; out[2] = v & 255;
+    }
+    function _terrainEnsureProtocol() {
+        if (_terrainProtoReady || !window.maplibregl || !maplibregl.addProtocol) return;
+        _terrainProtoReady = true;
+        var FLAT = [1, 134, 160];   // terrain-RGB for 0 m (off-disk / no data)
+        maplibregl.addProtocol('terrainir', function (params) {
+            var realUrl = params.url.slice('terrainir://'.length);
+            var rev = _irBuildReverse();
+            return fetch(realUrl).then(function (r) { return r.blob(); })
+                .then(function (b) { return createImageBitmap(b); })
+                .then(function (bmp) {
+                    var c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+                    var cx = c.getContext('2d'); cx.drawImage(bmp, 0, 0);
+                    var im = cx.getImageData(0, 0, c.width, c.height), d = im.data, rgb = [0, 0, 0];
+                    for (var p = 0; p < d.length; p += 4) {
+                        if (d[p + 3] < 10) { d[p] = FLAT[0]; d[p + 1] = FLAT[1]; d[p + 2] = FLAT[2]; d[p + 3] = 255; continue; }
+                        var idx = rev[((d[p] >> 3) << 10) | ((d[p + 1] >> 3) << 5) | (d[p + 2] >> 3)];
+                        _tbToTerrainRGB(310 - (idx / 255) * 120, rgb);
+                        d[p] = rgb[0]; d[p + 1] = rgb[1]; d[p + 2] = rgb[2]; d[p + 3] = 255;
+                    }
+                    cx.putImageData(im, 0, 0);
+                    return new Promise(function (resolve) {
+                        c.toBlob(function (blob) { blob.arrayBuffer().then(function (ab) { resolve({ data: ab }); }); }, 'image/png');
+                    });
+                });
+        });
+    }
+    /** Toggle IR-derived 3D terrain on the global map. Returns the new state.
+     *  The GL work is deferred until the style is loaded (addSource throws on a
+     *  still-loading style), so the toggle is safe to hit at any time. */
+    function _rt3DToggle() {
+        var gl = map && map._gl;
+        if (!gl || !window.maplibregl || !gl.setTerrain) return _rt3DOn;
+        if (!_rt3DOn) {
+            if (!_mosaicTs) return false;   // need a mosaic frame to derive the DEM
+            _terrainEnsureProtocol();
+            _rt3DOn = true;
+            _rt3DApply(gl);
+        } else {
+            _rt3DOn = false;
+            try {
+                gl.setTerrain(null);
+                if (gl.getSource('ir-dem')) gl.removeSource('ir-dem');
+                gl.easeTo({ pitch: 0, bearing: 0, duration: 700 });
+                if (gl.dragRotate) gl.dragRotate.disable();
+                if (gl.touchZoomRotate) gl.touchZoomRotate.disableRotation();
+            } catch (e) {}
+        }
+        return _rt3DOn;
+    }
+    function _rt3DApply(gl) {
+        if (!_rt3DOn) return;
+        if (!gl.isStyleLoaded()) { gl.once('idle', function () { _rt3DApply(gl); }); return; }
+        try {
+            if (gl.getTerrain && gl.getTerrain()) gl.setTerrain(null);
+            if (gl.getSource('ir-dem')) gl.removeSource('ir-dem');
+            gl.addSource('ir-dem', {
+                type: 'raster-dem', tiles: ['terrainir://' + _mosaicTileUrl(_mosaicTs, 'ir')],
+                tileSize: 512, maxzoom: 6, encoding: 'mapbox'
+            });
+            gl.setTerrain({ source: 'ir-dem', exaggeration: _rt3DExag });
+            if (gl.dragRotate) gl.dragRotate.enable();
+            if (gl.touchZoomRotate) gl.touchZoomRotate.enableRotation();
+            gl.easeTo({ pitch: _rt3DPitch, duration: 700 });
+        } catch (e) { console.warn('[RT 3D] enable failed', e); _rt3DOn = false; }
+    }
+    // Keep the DEM current as the mosaic refreshes / the user scrubs the loop.
+    function _rt3DRefreshSource() {
+        if (!_rt3DOn) return;
+        var gl = map && map._gl;
+        if (!gl || !gl.getSource('ir-dem') || !_mosaicTs) return;
+        try { gl.getSource('ir-dem').setTiles(['terrainir://' + _mosaicTileUrl(_mosaicTs, 'ir')]); } catch (e) {}
+    }
+
     /** Create the seamless composite GIBS GridLayer for a mosaic product
      *  (ir | vis | wv). Defaults to the current globalProduct. */
     function createCompositeGIBSLayer(timeStr, opacity, perSatTimes, product) {
@@ -2284,6 +2376,7 @@
             // that attaches just after this resolves).
             _setGlobalSatTimeLabel();
             setTimeout(_setGlobalSatTimeLabel, 1200);
+            _rt3DRefreshSource();   // keep the 3D DEM current if it's active
             // Now that we know the latest time, enable the dock slider so the
             // user can drag to lazy-load + scrub satellite times without first
             // pressing play.
@@ -3647,6 +3740,20 @@
                 insBtn.classList.toggle('active', _rtToggleInspect());
             });
             dMenu.appendChild(insBtn);
+
+            // 3D Convection (prototype) — extrude cold IR cloud tops into relief
+            // via a client-side IR→terrain-RGB DEM + MapLibre setTerrain. Drag to
+            // orbit. IR view only (the DEM is IR-derived).
+            var d3Btn = document.createElement('button');
+            d3Btn.id = 'ir-3d-toggle';
+            d3Btn.type = 'button';
+            d3Btn.className = 'ir-legend-toggle ir-display-item';
+            d3Btn.title = 'Extrude cold cloud tops into 3D relief (IR-derived terrain). Drag to orbit; toggle off to flatten.';
+            d3Btn.innerHTML = '⛰ 3D Convection';
+            d3Btn.addEventListener('click', function () {
+                d3Btn.classList.toggle('active', _rt3DToggle());
+            });
+            dMenu.appendChild(d3Btn);
 
             // IR colormap picker — re-colors the baked Claude-IR mosaic into other
             // operational colormaps client-side (LUT inversion, $0). Applies to the
