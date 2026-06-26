@@ -2024,7 +2024,15 @@
                 if (gl.touchZoomRotate) gl.touchZoomRotate.disableRotation();
             } catch (e) {}
         }
+        _rt3DSyncButtons();
         return _rt3DOn;
+    }
+    // Reflect 3D state on every 3D toggle button (top-bar pill + any others).
+    function _rt3DSyncButtons() {
+        ['ir-3d-mode-btn', 'ir-3d-toggle'].forEach(function (id) {
+            var b = document.getElementById(id);
+            if (b) b.classList.toggle('active', _rt3DOn);
+        });
     }
     function _rt3DApply(gl) {
         if (!_rt3DOn) return;
@@ -3589,6 +3597,17 @@
                     });
                 }
 
+                // ── 3D Convection one-click toggle (sibling of IR/Vis/WV) ──
+                // Surfaced as a top-level pill instead of buried in the Display
+                // menu: extrudes cold IR cloud tops into relief (client-side
+                // IR→terrain DEM + setTerrain). Tilt/Height sliders appear when on.
+                var d3Btn = L.DomUtil.create('button', 'ir-3d-mode-btn', wrap);
+                d3Btn.id = 'ir-3d-mode-btn';
+                d3Btn.type = 'button';
+                d3Btn.title = 'Extrude cold IR cloud tops into 3D relief — drag to orbit, use the Tilt / Height sliders. Toggle off to flatten.';
+                d3Btn.innerHTML = '<span class="ir-3d-mode-glyph" aria-hidden="true">⛰</span><span class="ir-3d-mode-text">3D</span>';
+                d3Btn.addEventListener('click', function () { _rt3DToggle(); });
+
                 // ── Microwave one-click toggle + options chevron ────
                 // Sibling of the IR/GeoColor pills so users don't have
                 // to dig through the Layers panel to enable the MW
@@ -3865,20 +3884,8 @@
                 insBtn.classList.toggle('active', _rtToggleInspect());
             });
             dMenu.appendChild(insBtn);
-
-            // 3D Convection (prototype) — extrude cold IR cloud tops into relief
-            // via a client-side IR→terrain-RGB DEM + MapLibre setTerrain. Drag to
-            // orbit. IR view only (the DEM is IR-derived).
-            var d3Btn = document.createElement('button');
-            d3Btn.id = 'ir-3d-toggle';
-            d3Btn.type = 'button';
-            d3Btn.className = 'ir-legend-toggle ir-display-item';
-            d3Btn.title = 'Extrude cold cloud tops into 3D relief (IR-derived terrain). Use the Tilt slider or drag to orbit; toggle off to flatten.';
-            d3Btn.innerHTML = '⛰ 3D Convection';
-            d3Btn.addEventListener('click', function () {
-                d3Btn.classList.toggle('active', _rt3DToggle());
-            });
-            dMenu.appendChild(d3Btn);
+            // (3D Convection lives as a top-level pill next to IR/Vis/WV now —
+            //  see ir-3d-mode-btn — rather than buried here in the Display menu.)
 
             // IR colormap picker — re-colors the baked Claude-IR mosaic into other
             // operational colormaps client-side (LUT inversion, $0). Applies to the

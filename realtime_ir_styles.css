@@ -2531,6 +2531,39 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     background: #4ade80;
     box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
 }
+
+/* 3D Convection top-level pill — sibling of IR/Vis/WV (sits right after the
+   segment). Muted when off; UM-orange when the 3D terrain is engaged, matching
+   the Tilt/Height control accents + the active toolbar buttons. */
+.ir-layers-wrap .ir-3d-mode-btn { order: 1; }
+.ir-3d-mode-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border-radius: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(22, 27, 36, 0.92);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    padding: 4px 10px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #cbd5e1;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.ir-3d-mode-btn .ir-3d-mode-glyph { font-size: 0.85rem; line-height: 1; opacity: 0.9; }
+.ir-3d-mode-btn:hover {
+    background: rgba(244, 115, 33, 0.16);
+    border-color: rgba(244, 115, 33, 0.40);
+    color: #ffffff;
+}
+.ir-3d-mode-btn.active {
+    background: rgba(244, 115, 33, 0.22);
+    border-color: rgba(244, 115, 33, 0.55);
+    color: #fdba74;
+}
 .ir-mw-expand-btn {
     background: transparent;
     border: none;
