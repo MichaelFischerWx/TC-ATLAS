@@ -18507,8 +18507,14 @@
         _renderEnvColorbar();
         _hideEnvHoverTip();
         if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
+        // Keep the Layers panel checkbox (if open) in sync with the removal.
+        if (typeof _renderLayersPanel === 'function') {
+            try { _renderLayersPanel(); } catch (e) {}
+        }
         _ga('rt_env_layer_off', { layer: name });
     }
+    // Close an env layer straight from its colorbar's × button.
+    window._rtCloseEnvLayer = function (name) { _deactivateEnvLayer(name); };
 
     // ── Hover tooltip ────────────────────────────────────────
     //
@@ -19443,6 +19449,9 @@
             var L_ = active[i].layer;
             var lvls = L_.levels;
             var lvlColors = L_.level_colors;
+            // × button to remove this layer straight from its colorbar.
+            var xBtn = '<button class="env-cbar-x" onclick="window._rtCloseEnvLayer(\'' + L_.name + '\')" '
+                + 'title="Remove ' + L_.title + '" aria-label="Remove ' + L_.title + ' layer">&times;</button>';
             var useSwatches = lvls && lvls.length && lvlColors
                 && lvlColors.length === lvls.length
                 && lvls.length <= _ENV_CBAR_MAX_SWATCHES;
@@ -19457,8 +19466,9 @@
                         + '</div>';
                 }
                 html += '<div style="margin-top:6px;font-family:DM Sans,sans-serif;color:#c7d2e0;">'
-                    + '<div style="display:flex;justify-content:space-between;font-size:0.62rem;margin-bottom:4px;">'
-                    + '<span>' + L_.title + '</span><span>' + L_.units + '</span></div>'
+                    + '<div style="display:flex;justify-content:space-between;align-items:center;font-size:0.62rem;margin-bottom:4px;">'
+                    + '<span>' + L_.title + '</span>'
+                    + '<span style="display:flex;align-items:center;gap:5px;">' + L_.units + xBtn + '</span></div>'
                     + '<div style="display:flex;gap:3px;">' + swatchHtml + '</div>'
                     + '</div>';
             } else {
@@ -19482,8 +19492,9 @@
                 }
                 var mid = Math.round((L_.vmin + L_.vmax) / 2);
                 html += '<div style="margin-top:6px;font-family:DM Sans,sans-serif;font-size:0.62rem;color:#c7d2e0;">'
-                    + '<div style="display:flex;justify-content:space-between;margin-bottom:2px;">'
-                    + '<span>' + L_.title + '</span><span>' + L_.units + '</span></div>'
+                    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">'
+                    + '<span>' + L_.title + '</span>'
+                    + '<span style="display:flex;align-items:center;gap:5px;">' + L_.units + xBtn + '</span></div>'
                     + '<div style="width:160px;height:8px;border-radius:2px;background:linear-gradient(to right,' + grad + ');"></div>'
                     + '<div style="display:flex;justify-content:space-between;font-size:0.55rem;color:#94a3b8;width:160px;">'
                     + '<span>' + L_.vmin + '</span><span>' + mid + '</span><span>' + L_.vmax + '</span></div>'

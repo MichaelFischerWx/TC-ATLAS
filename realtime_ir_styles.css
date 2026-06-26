@@ -2956,6 +2956,23 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     display: none !important;
 }
 
+/* × button on each env colorbar — one-click removal of that overlay. */
+.env-cbar-x {
+    background: none;
+    border: none;
+    color: #8b97a8;
+    cursor: pointer;
+    font-size: 0.95rem;
+    line-height: 1;
+    padding: 0 2px;
+    border-radius: 3px;
+    transition: color 0.15s, background 0.15s;
+}
+.env-cbar-x:hover {
+    color: #fff;
+    background: rgba(244, 115, 33, 0.85);
+}
+
 /* ════════════════════════════════════════════════════════════════
    Subseasonal tab — phase clocks (left) + Hovmöllers (right)
    ════════════════════════════════════════════════════════════════ */
