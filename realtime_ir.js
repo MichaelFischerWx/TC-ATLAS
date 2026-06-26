@@ -2647,7 +2647,22 @@
         // Latitude labels pinned to the left edge of the viewport, not the line
         // endpoint, so users don't have to scan across the map for the label.
         var labelLng = b.getWest() + (b.getEast() - b.getWest()) * 0.015;
+        // In 3D (pitched) the bounds reach the horizon, so high-latitude labels
+        // pile into a thin strip at the top and clip against the edge. When
+        // pitched, skip any latitude label that projects above a top margin (or
+        // below the bottom). 2D placement is left untouched.
+        var _glPitch = (targetMap._gl && targetMap._gl.getPitch) ? targetMap._gl.getPitch() : 0;
+        var _pitched = _glPitch > 1;
+        var _mapH = (targetMap.getSize ? targetMap.getSize().y
+                     : (targetMap.getContainer() ? targetMap.getContainer().clientHeight : 0)) || 0;
+        var _topMargin = 44;
         for (lat = sLat; lat <= nLat; lat += step) {
+            if (_pitched && _mapH) {
+                try {
+                    var _lp = targetMap.latLngToContainerPoint([lat, labelLng]);
+                    if (_lp && (_lp.y < _topMargin || _lp.y > _mapH - 2)) continue;
+                } catch (e) {}
+            }
             L.marker([lat, labelLng], {
                 icon: L.divIcon({
                     className: 'rt-graticule-label',
