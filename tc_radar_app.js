@@ -635,6 +635,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                 '<div class="overlay-strip">' +
                     '<span class="overlay-strip-label">Layers</span>' +
                     '<button class="overlay-pill" id="ir-underlay-btn" onclick="toggleIRPlotlyUnderlay()" disabled data-color="cyan" title="IR Satellite Underlay">' + _icon('satellite') + 'IR</button>' +
+                    (window.LFLET_GL ? '<button class="overlay-pill" id="radar-map-btn" onclick="window._radarToMap()" data-color="orange" title="Drape the current plan-view field onto the IR map (GL prototype)">&#8862; Radar&rarr;Map</button>' : '') +
                     '<button class="overlay-pill active" id="tdr-toggle-btn" onclick="toggleTDRVisibility()" data-color="red" title="TDR Radar Visibility">' + _icon('radio') + 'TDR</button>' +
                     '<button class="overlay-pill" id="btn-archive-fl" onclick="archiveToggleFlightLevel()" data-color="blue" title="Flight-Level Data">' + _icon('plane') + 'FL</button>' +
                     '<button class="overlay-pill" id="btn-archive-sonde" onclick="archiveToggleDropsondes()" data-color="blue" title="Dropsonde Data">' + _icon('parachute') + 'Sondes</button>' +
@@ -3470,6 +3471,126 @@ function _removeRubberBand() {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+//  Radar → Map (GL prototype): drape the plan-view field on the IR map
+//  Storm-relative km grid → lat/lon (storm center), colored via the same
+//  colorscale, as an L.imageOverlay + RMW ring + hover. ?gl=1 only.
+// ═══════════════════════════════════════════════════════════════════════
+var _lastPlanRender = null, _radarMapOn = false;
+var _radarMapOverlay = null, _radarMapRing = null, _radarMapTip = null;
+var _radarMapHoverBound = false;
+
+var _NAMED_CS = {
+    Viridis: [[0,'rgb(68,1,84)'],[0.25,'rgb(59,82,139)'],[0.5,'rgb(33,145,140)'],[0.75,'rgb(94,201,98)'],[1,'rgb(253,231,37)']],
+    Jet: [[0,'rgb(0,0,131)'],[0.125,'rgb(0,60,170)'],[0.375,'rgb(5,255,255)'],[0.625,'rgb(255,255,0)'],[0.875,'rgb(250,0,0)'],[1,'rgb(128,0,0)']],
+    RdBu: [[0,'rgb(5,10,172)'],[0.35,'rgb(106,137,247)'],[0.5,'rgb(190,190,190)'],[0.6,'rgb(220,170,132)'],[0.7,'rgb(230,145,90)'],[1,'rgb(178,10,28)']],
+    Portland: [[0,'rgb(12,51,131)'],[0.25,'rgb(10,136,186)'],[0.5,'rgb(242,211,56)'],[0.75,'rgb(242,143,56)'],[1,'rgb(217,30,30)']],
+    Hot: [[0,'rgb(0,0,0)'],[0.3,'rgb(230,0,0)'],[0.6,'rgb(255,210,0)'],[1,'rgb(255,255,255)']],
+    Greys: [[0,'rgb(0,0,0)'],[1,'rgb(255,255,255)']]
+};
+function _csParse(s) {
+    s = String(s).trim();
+    var m = /rgba?\(([^)]+)\)/.exec(s);
+    if (m) { var p = m[1].split(',').map(parseFloat); return [p[0]||0, p[1]||0, p[2]||0]; }
+    if (s[0] === '#') { var h = s.slice(1); if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+        return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)]; }
+    return [128,128,128];
+}
+function _csResolve(cs) {
+    if (Array.isArray(cs)) return cs;
+    if (typeof cs === 'string' && _NAMED_CS[cs]) return _NAMED_CS[cs];
+    return _NAMED_CS.Viridis;   // fallback for unmapped named scales
+}
+function _csColor(cs, vmin, vmax, val) {
+    var stops = _csResolve(cs);
+    var f = (vmax === vmin) ? 0 : (val - vmin) / (vmax - vmin);
+    f = Math.max(0, Math.min(1, f));
+    for (var i = 0; i < stops.length - 1; i++) {
+        if (f >= stops[i][0] && f <= stops[i+1][0]) {
+            var t = (stops[i+1][0] === stops[i][0]) ? 0 : (f - stops[i][0]) / (stops[i+1][0] - stops[i][0]);
+            var a = _csParse(stops[i][1]), b = _csParse(stops[i+1][1]);
+            return [Math.round(a[0]+t*(b[0]-a[0])), Math.round(a[1]+t*(b[1]-a[1])), Math.round(a[2]+t*(b[2]-a[2]))];
+        }
+    }
+    return _csParse(stops[stops.length-1][1]);
+}
+
+// km → lat/lon bounds of the plan-view grid (storm-centered).
+function _radarMapBounds(p) {
+    var cosLat = Math.cos(p.center_lat * Math.PI / 180) || 1;
+    var w = p.center_lon + p.x[0] / (111.0 * cosLat);
+    var e = p.center_lon + p.x[p.x.length-1] / (111.0 * cosLat);
+    var s = p.center_lat + p.y[0] / 111.0;
+    var n = p.center_lat + p.y[p.y.length-1] / 111.0;
+    return L.latLngBounds([s, w], [n, e]);
+}
+function _radarMapDraw() {
+    var p = _lastPlanRender;
+    if (!p || !p.z || !p.z.length || p.center_lat == null) return;
+    var rows = p.z.length, cols = p.z[0].length;
+    var cv = document.createElement('canvas'); cv.width = cols; cv.height = rows;
+    var ctx = cv.getContext('2d'); var im = ctx.createImageData(cols, rows), d = im.data;
+    for (var r = 0; r < rows; r++) {
+        var zr = p.z[rows - 1 - r];   // canvas top = north = last data row
+        for (var c = 0; c < cols; c++) {
+            var v = zr ? zr[c] : null, pi = (r * cols + c) * 4;
+            if (v == null || isNaN(v)) { d[pi+3] = 0; continue; }
+            var rgb = _csColor(p.colorscale, p.vmin, p.vmax, v);
+            d[pi] = rgb[0]; d[pi+1] = rgb[1]; d[pi+2] = rgb[2]; d[pi+3] = 235;
+        }
+    }
+    ctx.putImageData(im, 0, 0);
+    var bounds = _radarMapBounds(p);
+    if (_radarMapOverlay) { try { map.removeLayer(_radarMapOverlay); } catch (e) {} }
+    _radarMapOverlay = L.imageOverlay(cv.toDataURL('image/png'), bounds, { opacity: 0.9, interactive: false }).addTo(map);
+    // RMW ring
+    if (_radarMapRing) { try { map.removeLayer(_radarMapRing); } catch (e) {} _radarMapRing = null; }
+    if (p.rmw_km && !isNaN(p.rmw_km)) {
+        _radarMapRing = L.circle([p.center_lat, p.center_lon], { radius: p.rmw_km * 1000,
+            color: '#fff', weight: 1.5, dashArray: '5 5', fill: false, interactive: false }).addTo(map);
+    }
+    if (!_radarMapHoverBound) { map.on('mousemove', _radarMapHover); map.on('mouseout', _radarMapHideTip); _radarMapHoverBound = true; }
+}
+function _radarMapHover(e) {
+    var p = _lastPlanRender;
+    if (!_radarMapOn || !p) return;
+    var cosLat = Math.cos(p.center_lat * Math.PI / 180) || 1;
+    var xKm = (e.latlng.lng - p.center_lon) * 111.0 * cosLat;
+    var yKm = (e.latlng.lat - p.center_lat) * 111.0;
+    var ci = Math.round((xKm - p.x[0]) / (p.x[p.x.length-1] - p.x[0]) * (p.x.length - 1));
+    var ri = Math.round((yKm - p.y[0]) / (p.y[p.y.length-1] - p.y[0]) * (p.y.length - 1));
+    if (ci < 0 || ci >= p.x.length || ri < 0 || ri >= p.y.length) { _radarMapHideTip(); return; }
+    var v = p.z[ri] ? p.z[ri][ci] : null;
+    if (v == null || isNaN(v)) { _radarMapHideTip(); return; }
+    if (!_radarMapTip) {
+        _radarMapTip = document.createElement('div');
+        _radarMapTip.style.cssText = 'position:fixed;z-index:1300;pointer-events:none;background:rgba(15,22,35,0.92);' +
+            'color:#fff;font:600 11px/1.3 "DM Sans",sans-serif;padding:3px 7px;border-radius:4px;white-space:nowrap;';
+        document.body.appendChild(_radarMapTip);
+    }
+    _radarMapTip.textContent = v.toFixed(1) + ' ' + p.units + '  ·  ' + Math.round(xKm) + ', ' + Math.round(yKm) + ' km';
+    var oe = e.originalEvent || {};
+    _radarMapTip.style.left = ((oe.clientX || 0) + 14) + 'px'; _radarMapTip.style.top = ((oe.clientY || 0) - 6) + 'px';
+    _radarMapTip.style.display = 'block';
+}
+function _radarMapHideTip() { if (_radarMapTip) _radarMapTip.style.display = 'none'; }
+window._radarToMap = function () {
+    var btn = document.getElementById('radar-map-btn');
+    if (!_radarMapOn) {
+        if (!_lastPlanRender) { alert('Generate a plan view first.'); return; }
+        _radarMapOn = true;
+        _radarMapDraw();
+        if (btn) btn.classList.add('active');
+        try { map.fitBounds(_radarMapBounds(_lastPlanRender), { padding: [30, 30] }); } catch (e) {}
+    } else {
+        _radarMapOn = false;
+        if (_radarMapOverlay) { try { map.removeLayer(_radarMapOverlay); } catch (e) {} _radarMapOverlay = null; }
+        if (_radarMapRing) { try { map.removeLayer(_radarMapRing); } catch (e) {} _radarMapRing = null; }
+        _radarMapHideTip();
+        if (btn) btn.classList.remove('active');
+    }
+};
+
 function generateCustomPlot(callback) {
     if (currentCaseIndex === null) return;
     // Ensure Plotly is loaded before generating any plots
@@ -3995,6 +4116,17 @@ function renderPlotFromJSON(json, resultDiv) {
     var activeColorscale = varInfo.colorscale;
     if (cmapSel && cmapSel.value) { try { activeColorscale = JSON.parse(cmapSel.value); } catch(e) { activeColorscale = cmapSel.value; } }
     var activeVmin = _getActiveVmin(), activeVmax = _getActiveVmax();
+    // Capture the plan-view field so the GL "Radar→Map" prototype can drape this
+    // exact field on the IR map (storm-relative km → lat/lon). Refresh the overlay
+    // if it's already showing (variable/level/cmap change).
+    _lastPlanRender = {
+        z: zData, x: x, y: y, vmin: (activeVmin != null ? activeVmin : varInfo.vmin),
+        vmax: (activeVmax != null ? activeVmax : varInfo.vmax), colorscale: activeColorscale,
+        units: varInfo.units, display_name: varInfo.display_name,
+        level_km: json.actual_level_km, rmw_km: meta.rmw_km,
+        center_lat: (currentCaseData && currentCaseData.latitude), center_lon: (currentCaseData && currentCaseData.longitude)
+    };
+    if (_radarMapOn) _radarMapDraw();
 
     var vmaxStr = meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : '';
     var overlayLabel = json.overlay ? '<br><span style="font-size:0.85em;color:#9ca3af;">Contours: ' + json.overlay.display_name + ' (' + json.overlay.units + ')</span>' : '';
