@@ -2010,6 +2010,18 @@
     var _rt3DExag = 3.0;           // setTerrain exaggeration (Height slider; on the 0.5 grid)
     var _rt3DPitch = 62;           // camera pitch when 3D is on
     var _rt3DOrbitRAF = null;      // auto-orbit animation handle
+    var _rt3DOrbitGifRunning = false, _rt3DOrbitGifCancel = false;
+    var _rtLogoImg = null;         // cached TC-ATLAS logo for GIF branding
+
+    // Load (once) the TC-ATLAS logo for stamping onto exported frames. Same-origin
+    // PNG, so it won't taint the export canvas. cb runs with the <img> or null.
+    function _rtEnsureLogo(cb) {
+        if (_rtLogoImg && _rtLogoImg.complete && _rtLogoImg.naturalWidth) { cb(_rtLogoImg); return; }
+        var img = new Image();
+        img.onload = function () { _rtLogoImg = img; cb(img); };
+        img.onerror = function () { cb(null); };
+        img.src = 'tc-atlas-favicon-192.png';
+    }
     var _terrainProtoReady = false;
     function _tbToTerrainRGB(tb, out) {
         // Colder cloud top → taller. ~0 m at/above 273 K (0 °C), rising to
@@ -2131,12 +2143,19 @@
             '<input id="ir-3d-exag" type="range" min="1" max="8" step="0.5" style="accent-color:#4a9b6e;cursor:pointer;">' +
             '<span id="ir-3d-exag-val" style="text-align:right;color:var(--um-orange,#F47321);font-weight:700;font-variant-numeric:tabular-nums;"></span>' +
             '</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;">' +
             '<button id="ir-3d-orbit" title="Auto-orbit: one slow 360° revolution with a tilt sweep — click again to stop" ' +
-            'style="margin-top:8px;width:100%;background:rgba(244,115,33,0.14);border:1px solid rgba(244,115,33,0.40);' +
-            'color:#fdba74;border-radius:7px;padding:5px 0;font:600 11px/1 \'DM Sans\',system-ui,sans-serif;cursor:pointer;">↻ Orbit</button>';
+            'style="background:rgba(244,115,33,0.14);border:1px solid rgba(244,115,33,0.40);' +
+            'color:#fdba74;border-radius:7px;padding:5px 0;font:600 11px/1 \'DM Sans\',system-ui,sans-serif;cursor:pointer;">↻ Orbit</button>' +
+            '<button id="ir-3d-orbitgif" title="Record one full 360° orbit as an animated GIF to share" ' +
+            'style="background:rgba(74,155,110,0.16);border:1px solid rgba(74,155,110,0.45);' +
+            'color:#86efac;border-radius:7px;padding:5px 0;font:600 11px/1 \'DM Sans\',system-ui,sans-serif;cursor:pointer;">◉ Orbit GIF</button>' +
+            '</div>';
         document.body.appendChild(box);
         var orbitBtn = box.querySelector('#ir-3d-orbit');
         if (orbitBtn) orbitBtn.addEventListener('click', function () { _rt3DOrbit(); });
+        var orbitGifBtn = box.querySelector('#ir-3d-orbitgif');
+        if (orbitGifBtn) orbitGifBtn.addEventListener('click', function () { _rt3DOrbitGif(); });
         var tilt = box.querySelector('#ir-3d-tilt');
         tilt.value = _rt3DPitch;
         box.querySelector('#ir-3d-tilt-val').textContent = _rt3DPitch + '°';
@@ -2222,6 +2241,212 @@
             _rt3DOrbitRAF = requestAnimationFrame(step);
         }
         _rt3DOrbitRAF = requestAnimationFrame(step);
+    }
+
+    // Record one full 360° orbit of the 3D global mosaic to an animated GIF for
+    // sharing — same cinematics as the Global Archive (tilt-reveal then orbit,
+    // seamless loop). Captures the WebGL canvas (preserveDrawingBuffer is on),
+    // composites TC-ATLAS branding + the frame timestamp + a logo/URL watermark.
+    function _rt3DOrbitGif() {
+        var gl = map && map._gl;
+        if (!gl || !_rt3DOn) { _rtToast('Turn on 3D first, then try Orbit GIF'); return; }
+        if (_rt3DOrbitGifRunning) return;
+        var glCanvas = gl.getCanvas && gl.getCanvas();
+        if (!glCanvas) { _rtToast('3D canvas not ready'); return; }
+        if (typeof window.GIF === 'undefined') { _rtToast('GIF encoder not loaded'); return; }
+        _ga('rt_export_orbit_gif', { product: globalProduct });
+
+        // Stop the live auto-orbit and pause the mosaic loop so the captured
+        // scene is a single frame rotating (not frames advancing mid-orbit).
+        if (_rt3DOrbitRAF) {
+            cancelAnimationFrame(_rt3DOrbitRAF); _rt3DOrbitRAF = null;
+            var liveBtn = document.getElementById('ir-3d-orbit');
+            if (liveBtn) liveBtn.classList.remove('active');
+        }
+        var wasPlaying = globalAnimPlaying;
+        if (wasPlaying) stopGlobalAnimation();
+
+        // Cinematic sequence (mirrors the archive orbit GIF).
+        var N = 72, INTRO = 16, delay = 70, PITCH_LOW = 24, PITCH_HIGH = 68;
+        var startBearing = gl.getBearing(), startPitch = gl.getPitch();
+        function _ease(t) { return t * t * (3 - 2 * t); }
+
+        var srcW = glCanvas.width, srcH = glCanvas.height;
+        var TARGET_W = 720, scale = Math.min(1, TARGET_W / srcW);
+        var outW = Math.round(srcW * scale) & ~1, outH = Math.round(srcH * scale) & ~1;
+        var comp = document.createElement('canvas'); comp.width = outW; comp.height = outH;
+        var cctx = comp.getContext('2d');
+
+        // Branding text: timestamp of the shown frame + product.
+        var tEl = document.getElementById('ir-global-anim-time');
+        var dtLabel = (tEl && tEl.textContent && tEl.textContent.trim()) ||
+            (_mosaicTs ? fmtUTC(_mosaicTs) : '');
+        var prodLabel = ({ ir: 'IR', vis: 'Visible', wv: 'Water Vapor' }[globalProduct] || 'IR');
+
+        function _roundRect(c, x, y, w, h, r) {
+            c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r);
+            c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r);
+            c.arcTo(x, y, x + w, y, r); c.closePath();
+        }
+        function drawOverlay() {
+            var S = outW / 640, pad = Math.round(13 * S);
+            // Top: logo + brand + product, timestamp on the right.
+            var topH = Math.round(outH * 0.15);
+            var g = cctx.createLinearGradient(0, 0, 0, topH);
+            g.addColorStop(0, 'rgba(8,18,34,0.82)'); g.addColorStop(1, 'rgba(8,18,34,0)');
+            cctx.fillStyle = g; cctx.fillRect(0, 0, outW, topH);
+            cctx.textBaseline = 'alphabetic';
+            var logoSz = Math.round(34 * S), cx0 = pad, cy0 = Math.round(11 * S), textX = cx0;
+            if (_rtLogoImg) {
+                cctx.save(); cctx.beginPath();
+                cctx.arc(cx0 + logoSz / 2, cy0 + logoSz / 2, logoSz / 2, 0, Math.PI * 2);
+                cctx.closePath(); cctx.clip(); cctx.imageSmoothingEnabled = true;
+                try { cctx.drawImage(_rtLogoImg, cx0, cy0, logoSz, logoSz); } catch (e) {}
+                cctx.restore(); textX = cx0 + logoSz + Math.round(10 * S);
+            }
+            cctx.font = '700 ' + Math.round(10 * S) + 'px "DM Sans",system-ui,sans-serif';
+            cctx.fillStyle = 'rgba(148,197,255,0.95)';
+            cctx.fillText('TC-ATLAS', textX, cy0 + Math.round(11 * S));
+            cctx.font = '800 ' + Math.round(18 * S) + 'px "DM Sans",system-ui,sans-serif';
+            cctx.fillStyle = '#f8fafc';
+            var title = 'Real-Time Monitor';
+            cctx.fillText(title, textX, cy0 + Math.round(29 * S));
+            var titleW = cctx.measureText(title).width;
+            cctx.font = '800 ' + Math.round(11 * S) + 'px "DM Sans",system-ui,sans-serif';
+            var bw = cctx.measureText(prodLabel).width + Math.round(14 * S), bh = Math.round(17 * S);
+            var bx = textX + titleW + Math.round(9 * S), by = cy0 + Math.round(29 * S) - Math.round(13 * S);
+            cctx.fillStyle = 'rgba(74,155,110,0.85)';
+            _roundRect(cctx, bx, by, bw, bh, Math.round(5 * S)); cctx.fill();
+            cctx.fillStyle = '#ffffff';
+            cctx.fillText(prodLabel, bx + Math.round(7 * S), by + bh - Math.round(5 * S));
+            if (dtLabel) {
+                cctx.font = '700 ' + Math.round(14 * S) + 'px "DM Sans",system-ui,sans-serif';
+                cctx.textAlign = 'right'; cctx.fillStyle = '#e2e8f0';
+                cctx.fillText(dtLabel, outW - pad, cy0 + Math.round(17 * S));
+                cctx.textAlign = 'left';
+            }
+            // Bottom: logo + URL watermark.
+            var botH = Math.round(outH * 0.11);
+            var g2 = cctx.createLinearGradient(0, outH - botH, 0, outH);
+            g2.addColorStop(0, 'rgba(8,18,34,0)'); g2.addColorStop(1, 'rgba(8,18,34,0.82)');
+            cctx.fillStyle = g2; cctx.fillRect(0, outH - botH, outW, botH);
+            var wmText = 'TC-ATLAS · tcatlas.org';
+            cctx.font = '700 ' + Math.round(12 * S) + 'px "DM Sans",system-ui,sans-serif';
+            var wmW = cctx.measureText(wmText).width, wmY = outH - Math.round(7 * S);
+            var wmLogo = Math.round(16 * S), wmX = outW - pad - wmW;
+            if (_rtLogoImg) {
+                var wlx = wmX - wmLogo - Math.round(6 * S);
+                cctx.save(); cctx.beginPath();
+                cctx.arc(wlx + wmLogo / 2, wmY - wmLogo / 2 + Math.round(1 * S), wmLogo / 2, 0, Math.PI * 2);
+                cctx.closePath(); cctx.clip();
+                try { cctx.drawImage(_rtLogoImg, wlx, wmY - wmLogo + Math.round(1 * S), wmLogo, wmLogo); } catch (e) {}
+                cctx.restore();
+            }
+            cctx.fillStyle = 'rgba(232,240,248,0.92)';
+            cctx.fillText(wmText, wmX, wmY);
+        }
+
+        // Progress toast on the map container.
+        var host = (gl.getContainer && gl.getContainer()) || document.getElementById('ir-global-map');
+        var toast = document.createElement('div');
+        toast.style.cssText = 'position:absolute;bottom:8px;right:8px;background:rgba(15,22,35,0.88);color:#e2e8f0;font:600 11px/1.2 "DM Sans",sans-serif;padding:6px 10px;border-radius:5px;z-index:1000;pointer-events:none;';
+        toast.textContent = 'Orbit GIF · recording…';
+        if (host) host.appendChild(toast);
+
+        // iOS: open the destination tab synchronously inside the tap; the async
+        // encode would lose the tap activation and get popup-blocked otherwise.
+        var ua = navigator.userAgent || '';
+        var isIOS = /iP(hone|od|ad)/.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
+        var gifTab = null;
+        if (isIOS) {
+            gifTab = window.open('', '_blank');
+            if (gifTab && gifTab.document) {
+                gifTab.document.write('<title>TC-ATLAS orbit</title><body style="margin:0;background:#0a0c12;' +
+                    'color:#e2e8f0;font:600 14px/1.4 -apple-system,system-ui,sans-serif;display:flex;' +
+                    'align-items:center;justify-content:center;height:100vh">Encoding orbit GIF… it will ' +
+                    'appear here when ready (long-press to save).</body>');
+            }
+        }
+
+        var gifBtn = document.getElementById('ir-3d-orbitgif');
+        if (gifBtn) gifBtn.classList.add('active');
+        _rt3DOrbitGifRunning = true; _rt3DOrbitGifCancel = false;
+
+        function finish() {
+            _rt3DOrbitGifRunning = false;
+            try { gl.setBearing(startBearing); gl.setPitch(startPitch); } catch (e) {}
+            if (gifBtn) gifBtn.classList.remove('active');
+            if (toast.parentElement) toast.parentElement.removeChild(toast);
+            if (wasPlaying) startGlobalAnimation();
+        }
+
+        _rtEnsureLogo(function () {
+            _ensureGifWorker().then(function (workerUrl) {
+                var workers = Math.max(2, Math.min(8, navigator.hardwareConcurrency || 4));
+                var gif = new window.GIF({
+                    workers: workers, quality: 12, width: outW, height: outH,
+                    workerScript: workerUrl, background: '#0a0c12'
+                });
+                var i = 0;
+                function captureOne() {
+                    if (_rt3DOrbitGifCancel || !_rt3DOn) { try { gif.abort(); } catch (e) {} finish(); return; }
+                    if (i >= N) { encode(); return; }
+                    var bearing, pitch;
+                    if (i < INTRO) {
+                        bearing = startBearing;
+                        pitch = PITCH_LOW + (PITCH_HIGH - PITCH_LOW) * _ease(i / INTRO);
+                    } else {
+                        var u = (i - INTRO) / (N - INTRO);
+                        bearing = startBearing + u * 360;
+                        var TAIL = 0.20;
+                        pitch = (u > 1 - TAIL)
+                            ? PITCH_HIGH + (PITCH_LOW - PITCH_HIGH) * _ease((u - (1 - TAIL)) / TAIL)
+                            : PITCH_HIGH;
+                    }
+                    try { gl.setBearing(bearing); gl.setPitch(pitch); } catch (e) {}
+                    var grabbed = false;
+                    function grab() {
+                        if (grabbed) return; grabbed = true;
+                        try {
+                            cctx.clearRect(0, 0, outW, outH);
+                            cctx.drawImage(glCanvas, 0, 0, srcW, srcH, 0, 0, outW, outH);
+                            drawOverlay();
+                            gif.addFrame(cctx, { copy: true, delay: delay });
+                        } catch (e) { console.warn('[rt orbit gif] frame failed', e); }
+                        i++;
+                        toast.textContent = 'Orbit GIF · recording ' + i + '/' + N;
+                        requestAnimationFrame(captureOne);
+                    }
+                    gl.once('idle', grab);
+                    if (gl.triggerRepaint) gl.triggerRepaint();
+                    setTimeout(grab, 400);
+                }
+                function encode() {
+                    toast.textContent = 'Orbit GIF · encoding…';
+                    gif.on('progress', function (p) { toast.textContent = 'Orbit GIF · encoding ' + Math.round(p * 100) + '%'; });
+                    gif.on('finished', function (blob) {
+                        if (!_rt3DOrbitGifCancel) {
+                            var fnTs = (_mosaicTs || '').toString().replace(/[^0-9]/g, '') || 'frame';
+                            var filename = 'tc-atlas-rt-orbit-' + fnTs + '.gif';
+                            if (gifTab && !gifTab.closed) {
+                                var u = URL.createObjectURL(blob);
+                                gifTab.location.href = u;
+                                setTimeout(function () { URL.revokeObjectURL(u); }, 60000);
+                            } else {
+                                _saveImageBlob(blob, filename);
+                            }
+                        }
+                        finish();
+                    });
+                    try { gif.render(); } catch (e) { console.warn('[rt orbit gif] render failed', e); finish(); }
+                }
+                requestAnimationFrame(captureOne);
+            }).catch(function (e) {
+                console.warn('[rt orbit gif] worker failed', e);
+                if (gifTab && !gifTab.closed) try { gifTab.close(); } catch (er) {}
+                finish();
+            });
+        });
     }
 
     // Shortcut: hold Shift + left-drag the map up/down to change the camera tilt
