@@ -211,6 +211,18 @@ if [[ -x "${SCRIPT_DIR}/deploy_prewarm_job.sh" ]]; then
     "${SCRIPT_DIR}/deploy_prewarm_job.sh"
 fi
 
+# ── Re-point the OG-card job + refresh rt-version.json ────────────
+# tc-atlas-ogcard-job owns the social OG card + rt-version.json (so the prewarm
+# scheduler can be paused). It REUSES this service's image and must be re-pinned
+# on every deploy for the same keep-3 reason as prewarm. The script also runs
+# the job once, which (re)writes rt-version.json with the CURRENT cache version
+# — this is the authoritative rt-version write on each deploy.
+if [[ -x "${SCRIPT_DIR}/deploy_ogcard_job.sh" ]]; then
+    echo ""
+    echo "Re-pointing OG-card job + refreshing rt-version.json..."
+    "${SCRIPT_DIR}/deploy_ogcard_job.sh"
+fi
+
 echo ""
 echo "Done! Update your frontend API_BASE to the URL above."
 echo ""

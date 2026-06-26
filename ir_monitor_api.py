@@ -832,30 +832,19 @@ def _public_bundle_url(key: str) -> str:
 
 
 def _gcs_rt_version_put():
-    """Publish the current RT cache version to rt-version.json at the
-    bucket root so the frontend can discover it at runtime and avoid
-    serving a frozen old-version bundle after a server-side version bump
-    (the frontend fetches bundles directly from GCS, so it can't see
-    _GCS_RT_VERSION otherwise). Cheap (~30 bytes), idempotent; called
-    once per prewarm cycle."""
-    bucket = _get_rt_gcs_bucket()
-    if bucket is None:
-        return
-    try:
-        payload = {"version": _GCS_RT_VERSION}
-        # When set, tells the frontend to fetch bundles from the R2 CDN root
-        # instead of GCS. Absent/empty → frontend keeps its GCS default.
-        if _PUBLIC_BUNDLE_BASE:
-            payload["base"] = _PUBLIC_BUNDLE_BASE
-        blob = bucket.blob("rt-version.json")
-        blob.cache_control = "public, max-age=120"
-        blob.upload_from_string(
-            json.dumps(payload),
-            content_type="application/json",
-            predefined_acl="publicRead", timeout=15,
-        )
-    except Exception as ex:
-        print(f"[Prewarm] rt-version.json upload failed: {ex}")
+    """Publish the current RT cache version to rt-version.json at the bucket
+    root so the frontend can discover it at runtime and avoid serving a frozen
+    old-version bundle after a server-side version bump (the frontend fetches
+    bundles directly from GCS, so it can't see _GCS_RT_VERSION otherwise).
+
+    Delegates to og_refresh so the standalone ogcard_job (which must NOT import
+    this heavy module) shares one implementation. The authoritative writer is
+    now deploy.sh / the hourly ogcard job; this call remains for the prewarm
+    cycle while prewarm still runs."""
+    import og_refresh
+    og_refresh.put_rt_version(
+        _get_rt_gcs_bucket(), _GCS_RT_VERSION,
+        _PUBLIC_BUNDLE_BASE or None)
 
 
 def _cleanup_due() -> bool:
@@ -4222,88 +4211,17 @@ def _build_and_upload_og_card(storms):
     scan-grid wall-clock idiom _prefetch_ir_frames uses for the Vis band — to
     keep Class-A LIST + render/upload churn down. The card is (re)generated
     immediately when the GCS object is missing (first run / recovery), so the
-    throttle never leaves the og:image URL dangling."""
-    bucket = _get_rt_gcs_bucket()
-    if bucket is None:
-        return
-    blob = bucket.blob(_OG_CARD_KEY)
+    throttle never leaves the og:image URL dangling.
 
-    interval = max(10, int(os.environ.get("OG_CARD_INTERVAL_MIN", "30")))
-    is_og_cycle = (_dt.now(timezone.utc).minute % interval) < 10
-    if not is_og_cycle:
-        # Off-cycle: skip the render+IR-fetch unless the card is missing, so
-        # the expensive path runs ~48×/day (not 144×) yet self-heals a first
-        # run or a deleted object. blob.exists() is a cheap Class-B GCS op.
-        try:
-            if blob.exists():
-                return
-        except Exception:
-            return
-
-    try:
-        import og_card
-    except Exception as ex:
-        print(f"[Prewarm] OG card module import failed: {ex}")
-        return
-
-    png = None
-    storm = og_card.pick_most_intense(storms) if storms else None
-    # Count-adaptive: 0 → branded fallback; exactly 1 → single-storm hero;
-    # ≥2 → roster card listing every active system (the strongest storm still
-    # provides the IR backdrop, so cost is identical). Avoids the social card
-    # ever arbitrarily anointing one storm when the tropics are busy.
-    multi = storm is not None and len(storms) >= 2
-    if storm is not None:
-        # Preferred path: REUSE the Mercator IR WebP that _prefetch_ir_frames
-        # just wrote for this storm this cycle — a single GCS GET, no S3 fetch
-        # or reproject. Falls back to a one-off direct fetch only when no
-        # cached frame exists yet (e.g. the storm's very first cycle).
-        webp, dstr = _latest_ir_webp(storm["atcf_id"])
-        if webp:
-            valid = None
-            if dstr and len(dstr) >= 12 and dstr[:12].isdigit():
-                valid = (f"{dstr[0:4]}-{dstr[4:6]}-{dstr[6:8]}"
-                         f"T{dstr[8:10]}:{dstr[10:12]}:00Z")
-            png = (og_card.render_multistorm_card_from_image(storms, webp, valid_utc=valid)
-                   if multi else
-                   og_card.render_storm_card_from_image(storm, webp, valid_utc=valid))
-        else:
-            try:
-                raw = fetch_ir_tb_raw(
-                    float(storm["lat"]), float(storm["lon"]),
-                    _dt.now(timezone.utc), box_deg=10.0)
-            except Exception as ex:
-                print(f"[Prewarm] OG card IR fetch failed for {storm.get('atcf_id')}: {ex}")
-                raw = None
-            if raw is not None and raw.get("tb") is not None:
-                _valid = raw.get("scan_dt") or raw.get("datetime_utc")
-                png = (og_card.render_multistorm_card_png(storms, raw["tb"], valid_utc=_valid)
-                       if multi else
-                       og_card.render_storm_card_png(storm, raw["tb"], valid_utc=_valid))
-
-    if png is None:
-        # No active storms, or IR fetch/render failed → branded fallback so the
-        # og:image URL always resolves to a good image.
-        png = og_card.render_branded_card_png()
-        storm = None
-    if not png:
-        return
-
-    try:
-        # Short TTL so social re-scrapes pick up the live storm.
-        blob.cache_control = "public, max-age=600"
-        blob.upload_from_string(
-            png, content_type="image/png",
-            predefined_acl="publicRead", timeout=30)
-        if not storm:
-            tag = "branded fallback"
-        elif multi:
-            tag = f"{len(storms)} systems (lead {storm['atcf_id']})"
-        else:
-            tag = "storm " + storm["atcf_id"]
-        print(f"[Prewarm] OG card updated ({tag})")
-    except Exception as ex:
-        print(f"[Prewarm] OG card upload failed: {ex}")
+    The render logic lives in og_refresh so the standalone hourly ogcard_job
+    (which must NOT import this heavy module) shares it. This call passes the
+    _latest_ir_webp fast-path locator so the prewarm cycle still reuses its
+    freshly-rendered frame; the standalone job omits it and fetches directly."""
+    import og_refresh
+    interval = int(os.environ.get("OG_CARD_INTERVAL_MIN", "30"))
+    og_refresh.build_and_upload_og_card(
+        storms, bucket=_get_rt_gcs_bucket(), og_key=_OG_CARD_KEY,
+        ir_webp_locator=_latest_ir_webp, interval_min=interval, force=False)
 
 
 def run_prewarm_cycle():
