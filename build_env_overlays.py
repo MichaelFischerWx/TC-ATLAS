@@ -355,7 +355,9 @@ def _fetch_oisst_psl() -> Optional[tuple]:
     for yr in (now.year, now.year - 1):
         url = OISST_PSL_OPENDAP.format(year=yr)
         try:
-            ds = xr.open_dataset(url)
+            # Force the netCDF4 backend — it carries OPeNDAP/DAP support, whereas
+            # xarray could otherwise auto-pick h5netcdf (no DAP) for a .nc URL.
+            ds = xr.open_dataset(url, engine="netcdf4")
         except Exception as e:
             log.warning("OISST PSL open failed for %d: %s", yr, e)
             continue
@@ -410,25 +412,28 @@ def fetch_oisst_sst() -> Optional[tuple[np.ndarray, str]]:
     # cap on the whole walk-back loop bounds the worst case to ~90 s of
     # wasted compute and lets the rest of the job continue (the prior-
     # day SST PNG in GCS stays current as a fallback).
-    PER_REQ_TIMEOUT = 20.0
-    TOTAL_BUDGET_S  = 90.0
+    # NCEI's OISST endpoint is chronically slow/unreachable from Cloud Run, so
+    # keep its attempt window short and ALWAYS fall through to the PSL OPeNDAP
+    # mirror — whether NCEI is exhausted (loop completes) or just too slow
+    # (budget break). The earlier code `return None`-ed on budget exhaustion,
+    # which skipped PSL entirely and left SST + SST-anomaly empty every run.
+    PER_REQ_TIMEOUT = 15.0
+    TOTAL_BUDGET_S  = 45.0
 
     now = datetime.now(timezone.utc)
     started = _time.monotonic()
     for back in range(1, 10):
         if _time.monotonic() - started > TOTAL_BUDGET_S:
-            log.warning("OISST: aborting walk-back — exceeded %.0fs total budget",
+            log.warning("OISST: NCEI walk-back exceeded %.0fs budget — trying PSL",
                         TOTAL_BUDGET_S)
-            return None
+            break
         d = now - timedelta(days=back)
         ymd = d.strftime("%Y%m%d")
         ym = d.strftime("%Y%m")
         for fname in (f"oisst-avhrr-v02r01.{ymd}_preliminary.nc",
                       f"oisst-avhrr-v02r01.{ymd}.nc"):
             if _time.monotonic() - started > TOTAL_BUDGET_S:
-                log.warning("OISST: aborting — exceeded %.0fs total budget",
-                            TOTAL_BUDGET_S)
-                return None
+                break
             url = f"{OISST_BASE}/{ym}/{fname}"
             try:
                 r = requests.get(url, timeout=PER_REQ_TIMEOUT)
