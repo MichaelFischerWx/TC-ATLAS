@@ -717,6 +717,10 @@ function _arch3DApply() {
         if (gl.setMaxPitch) gl.setMaxPitch(80);
         if (gl.dragRotate) gl.dragRotate.enable();
         if (gl.touchZoomRotate) gl.touchZoomRotate.enableRotation();
+        // Shift+drag = tilt shortcut; disable boxZoom (its Shift+drag default) so
+        // they don't collide (and so it doesn't fall through to text selection).
+        _archSetupPitchDrag(gl);
+        if (gl.boxZoom) gl.boxZoom.disable();
         gl.easeTo({ pitch: _arch3DPitch, duration: 700 });
     } catch (e) { console.warn('[arch 3D] enable failed', e); _arch3DOn = false; return; }
     // Drape the IR as tiles (image sources aren't draped on terrain) + hide flat overlay.
@@ -762,6 +766,7 @@ window.toggleArch3D = function () {
             gl.easeTo({ pitch: 0, bearing: 0, duration: 700 });
             if (gl.dragRotate) gl.dragRotate.disable();
             if (gl.touchZoomRotate) gl.touchZoomRotate.disableRotation();
+            if (gl.boxZoom) gl.boxZoom.enable();   // restore default Shift+drag box-zoom
         } catch (e) {}
         // Restore the flat IR imageOverlay for the 2D view.
         if (irOverlayLayer) try { irOverlayLayer.setOpacity(irOpacity); } catch (e) {}
@@ -781,7 +786,7 @@ function _arch3DEnsureTilt() {
         'border-radius:10px;padding:8px 11px;box-shadow:0 4px 18px rgba(0,0,0,0.45);' +
         'font:600 11px/1.2 "DM Sans",system-ui,sans-serif;color:#cbd5e1;';
     box.innerHTML = '<div style="display:grid;grid-template-columns:auto 120px 36px;align-items:center;gap:6px 8px;">' +
-        '<span title="Camera tilt (0 top-down, 80 near-horizon); or drag the map to orbit.">⛰ Tilt</span>' +
+        '<span title="Camera tilt — 0° top-down, 80° near-horizon. Shortcut: hold Shift and drag the map up/down. Or right-/ctrl-drag to orbit.">⛰ Tilt</span>' +
         '<input id="arch-3d-tilt" type="range" min="0" max="80" step="1" style="accent-color:#4a9b6e;cursor:pointer;">' +
         '<span id="arch-3d-tilt-val" style="text-align:right;color:#F47321;font-weight:700;font-variant-numeric:tabular-nums;"></span>' +
         '<span title="Vertical amplification of the IR cloud-top relief (GPU only).">↕ Height</span>' +
@@ -825,6 +830,35 @@ function _arch3DEnsureTilt() {
 function _arch3DShowTilt(show) {
     _arch3DEnsureTilt().style.display = show ? 'block' : 'none';
     if (!show && _archOrbitRAF) { cancelAnimationFrame(_archOrbitRAF); _archOrbitRAF = null; }
+}
+
+// Shortcut: hold Shift + left-drag the map up/down to change the camera tilt
+// (pitch only, no bearing change). Active only while 3D is on; bound once.
+// boxZoom (Shift+drag's default) is disabled in 3D so it doesn't fight this.
+function _archSetupPitchDrag(gl) {
+    if (gl.__arch3DPitchDrag) return;
+    gl.__arch3DPitchDrag = true;
+    var cont = gl.getCanvasContainer ? gl.getCanvasContainer() : gl.getContainer();
+    var dragging = false, lastY = 0;
+    cont.addEventListener('mousedown', function (e) {
+        if (!_arch3DOn || !e.shiftKey || e.button !== 0) return;
+        dragging = true; lastY = e.clientY;
+        try { gl.dragPan.disable(); } catch (er) {}
+        e.preventDefault(); e.stopPropagation();
+    });
+    window.addEventListener('mousemove', function (e) {
+        if (!dragging) return;
+        var dy = e.clientY - lastY; lastY = e.clientY;
+        var np = Math.max(0, Math.min(80, gl.getPitch() - dy * 0.4));  // drag up → more tilt
+        try { gl.setPitch(np); } catch (er) {}
+        var t = document.getElementById('arch-3d-tilt');
+        if (t) { var pv = Math.round(np); t.value = pv; var v = document.getElementById('arch-3d-tilt-val'); if (v) v.textContent = pv + '°'; }
+    });
+    window.addEventListener('mouseup', function () {
+        if (!dragging) return;
+        dragging = false;
+        try { gl.dragPan.enable(); } catch (er) {}
+    });
 }
 
 // Auto-orbit "macro": a tilt-reveal of the eye's depth (camera tilts up from
