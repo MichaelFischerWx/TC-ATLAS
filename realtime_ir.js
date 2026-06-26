@@ -3900,7 +3900,7 @@
             dToggle.type = 'button';
             dToggle.className = 'basin-sidebar-toggle ir-display-toggle';
             dToggle.title = 'Map display options — basins, legend, labels, grid, surface obs';
-            dToggle.innerHTML = '&#9776; Display';
+            dToggle.innerHTML = '&#9776;<span class="ir-display-label"> Display</span>';
             var dMenu = document.createElement('div');
             dMenu.id = 'ir-display-menu';
             dMenu.style.display = 'none';

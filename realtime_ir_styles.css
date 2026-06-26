@@ -1889,11 +1889,17 @@ html, body { margin: 0; padding: 0; }
     gap: 6px;
 }
 body:has(.basin-sidebar.open) #ir-display-wrap { left: 280px; }
-/* On mobile the IR/Vis/WV + 3D + Microwave + Layers controls wrap to fill the
-   top row (right-aligned on desktop, so no collision there). Keep the Display
-   button below that wrapped row instead of in the corner, or it overlaps them. */
+/* On mobile the IR/Vis/WV + 3D + Microwave + Layers controls are right-aligned
+   and fill the top row, leaving only the top-LEFT corner free. Pin the Display
+   button into that corner (top:92px, aligned with the control row) and collapse
+   it to the ☰ icon so it clears the IR pill (which starts ~56px in) instead of
+   overlapping it or floating orphaned lower-left. */
 @media (max-width: 768px) {
-    #ir-display-wrap { top: 178px; }
+    #ir-display-wrap { top: 92px; }
+    .ir-display-toggle .ir-display-label { display: none; }
+    /* Shrink to the ☰ glyph — the base .basin-sidebar-toggle pins width:104px,
+       which would overlap the IR pill (~56px in). */
+    .ir-display-toggle { width: auto !important; padding: 6px 10px; text-align: center; }
 }
 .ir-display-toggle {
     position: static !important;
@@ -2910,7 +2916,11 @@ html:not([data-view="map"]) #basin-sidebar,
    over the new view. */
 html:not([data-view="map"]) #ir-global-env-cbars,
 /* The 3D-convection Tilt slider is position:fixed on <body> too. */
-html:not([data-view="map"]) #ir-3d-tilt-ctl {
+html:not([data-view="map"]) #ir-3d-tilt-ctl,
+/* The "Display" dropdown wrap is position:fixed on <body> and HOLDS the
+   moved-in toggles, so hiding the individual toggles above isn't enough — the
+   wrap + its "Display" button still float over Subseasonal/Seasonal/Recon. */
+html:not([data-view="map"]) #ir-display-wrap {
     display: none !important;
 }
 
@@ -2932,7 +2942,8 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-obs-hint,
 body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-legend,
 body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #basin-sidebar-toggle,
 body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #basin-sidebar,
-body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-global-env-cbars {
+body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-global-env-cbars,
+body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap {
     display: none !important;
 }
 
