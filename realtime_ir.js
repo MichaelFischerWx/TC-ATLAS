@@ -2278,6 +2278,12 @@
             var lyr = createCompositeGIBSLayer(result.oldest, opacity || 0.65, result.perSat);
             lyr.addTo(targetMap);
             gibsIRLayers = [lyr];
+            // Show the CURRENT (still) satellite frame time immediately, so the
+            // deck's time label isn't a bare "—" until the user plays/scrubs.
+            // Once now (deck may already exist) + once deferred (covers a deck
+            // that attaches just after this resolves).
+            _setGlobalSatTimeLabel();
+            setTimeout(_setGlobalSatTimeLabel, 1200);
             // Now that we know the latest time, enable the dock slider so the
             // user can drag to lazy-load + scrub satellite times without first
             // pressing play.
@@ -2355,13 +2361,24 @@
             color: '#f1f5f9', weight: 0.5, opacity: 0.5,
             dashArray: '3 5', interactive: false
         };
-        for (var lat = sLat; lat <= nLat; lat += step) {
-            L.polyline([[lat, wLon], [lat, eLon]], lineOpts)
-                .addTo(layerGroup);
-            // Latitude label — pinned to the left edge of the viewport,
-            // not the line endpoint, so users don't have to scan across
-            // the map for the label.
-            var labelLng = b.getWest() + (b.getEast() - b.getWest()) * 0.015;
+        // Draw ALL grid lines as ONE MultiLineString polyline (a single GL
+        // source/layer), not N individual polylines. On the MapLibre facade
+        // each polyline is its own GL layer; the graticule rebuilds on every
+        // moveend/zoomend, and an individual line layer that fails to detach
+        // leaks — leftover fine lines from a tighter zoom then read as a stale
+        // grid "box" when zoomed out (most visible on the lite storm card,
+        // where imagery now fills the viewport). One layer removes cleanly, so
+        // nothing can accumulate — and it's far fewer GL layers overall.
+        var segs = [];
+        var lat, lon;
+        for (lat = sLat; lat <= nLat; lat += step) segs.push([[lat, wLon], [lat, eLon]]);
+        for (lon = wLon; lon <= eLon; lon += step) segs.push([[sLat, lon], [nLat, lon]]);
+        if (segs.length) L.polyline(segs, lineOpts).addTo(layerGroup);
+        // Labels stay as individual DOM divIcon markers (cleared reliably).
+        // Latitude labels pinned to the left edge of the viewport, not the line
+        // endpoint, so users don't have to scan across the map for the label.
+        var labelLng = b.getWest() + (b.getEast() - b.getWest()) * 0.015;
+        for (lat = sLat; lat <= nLat; lat += step) {
             L.marker([lat, labelLng], {
                 icon: L.divIcon({
                     className: 'rt-graticule-label',
@@ -2371,10 +2388,8 @@
                 interactive: false, keyboard: false
             }).addTo(layerGroup);
         }
-        for (var lon = wLon; lon <= eLon; lon += step) {
-            L.polyline([[sLat, lon], [nLat, lon]], lineOpts)
-                .addTo(layerGroup);
-            var labelLat = b.getSouth() + (b.getNorth() - b.getSouth()) * 0.015;
+        var labelLat = b.getSouth() + (b.getNorth() - b.getSouth()) * 0.015;
+        for (lon = wLon; lon <= eLon; lon += step) {
             L.marker([labelLat, lon], {
                 icon: L.divIcon({
                     className: 'rt-graticule-label',
@@ -2993,6 +3008,29 @@
     }
 
     /** Show a specific global animation frame */
+    /** Newest known satellite-image time (ISO) for the global map still frame:
+     *  GL mosaic uses _mosaicTs; GIBS uses the newest per-satellite time. */
+    function _globalLatestSatIso() {
+        if (window.LFLET_GL && _mosaicTs) return _mosaicTsToIso(_mosaicTs);
+        if (latestGIBSTimes) {
+            var best = null;
+            for (var k in latestGIBSTimes) {
+                if (latestGIBSTimes[k] && (!best || latestGIBSTimes[k] > best)) best = latestGIBSTimes[k];
+            }
+            if (best) return best;
+        }
+        return latestGIBSTime || null;
+    }
+    /** Fill the global deck's satellite time label with the current still
+     *  frame's time (order-independent: safe to call before OR after the deck
+     *  DOM exists, and before OR after the GIBS/mosaic times are known). */
+    function _setGlobalSatTimeLabel() {
+        var el = document.getElementById('ir-global-anim-time');
+        if (!el) return;
+        var iso = _globalLatestSatIso();
+        if (iso) el.textContent = fmtUTC(iso);
+    }
+
     function showGlobalAnimFrame(idx) {
         if (idx < 0 || idx >= globalAnimFrameLayers.length) return;
 
@@ -3776,7 +3814,12 @@
 
                 var dt = L.DomUtil.create('span', 'rt-anim-dt', row);
                 dt.id = 'ir-global-anim-time';
-                dt.textContent = '—';
+                // If the satellite times are already known (deck built after the
+                // overlay loaded), show the current frame time now instead of "—".
+                // Set the element ref DIRECTLY — the deck `row` may not be attached
+                // to the document yet, so getElementById would miss it here.
+                var _iso0 = _globalLatestSatIso();
+                dt.textContent = _iso0 ? fmtUTC(_iso0) : '—';
 
                 var speedBtn = L.DomUtil.create('button', 'rt-anim-btn rt-anim-speed', row);
                 speedBtn.id = 'ir-global-anim-speed';
