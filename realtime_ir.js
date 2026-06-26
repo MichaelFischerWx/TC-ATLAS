@@ -242,6 +242,21 @@
             {tb: 208, r:  72, g:  66, b:  96}, {tb: 185, r:  48, g:  44, b:  66}
         ]);
 
+        // Low-Cloud II — refined: steeper within-band contrast (cyan strato →
+        // green cu → muted gold so cloud types separate), desaturated yellow,
+        // and cold tops pushed to dark indigo so deep convection recedes hard.
+        // Twin of satellite.js['lowcloud2'].
+        IR_COLORMAPS['lowcloud2'] = buildLUTfromTb([
+            {tb: 305, r:   6, g:  10, b:  20}, {tb: 298, r:  14, g:  22, b:  38},
+            {tb: 295, r:  22, g:  40, b:  60}, {tb: 292, r:  20, g:  90, b: 120},
+            {tb: 289, r:  30, g: 150, b: 165}, {tb: 286, r:  45, g: 185, b: 140},
+            {tb: 283, r:  95, g: 205, b:  95}, {tb: 279, r: 160, g: 210, b:  80},
+            {tb: 275, r: 212, g: 198, b:  96}, {tb: 270, r: 205, g: 170, b: 120},
+            {tb: 262, r: 170, g: 150, b: 150}, {tb: 250, r: 120, g: 115, b: 140},
+            {tb: 235, r:  80, g:  78, b: 120}, {tb: 218, r:  55, g:  54, b:  96},
+            {tb: 200, r:  38, g:  38, b:  72}, {tb: 180, r:  24, g:  24, b:  50}
+        ]);
+
         // Funktop
         IR_COLORMAPS['funktop'] = buildLUTfromTb([
             {tb: 309, r:   0, g:   0, b:   0},
@@ -3937,7 +3952,8 @@
             [['claude-ir', 'Claude IR'], ['irb', 'IRB'], ['avn', 'AVN'], ['nhc', 'NHC'],
              ['rammb', 'RAMMB'], ['dvorak', 'Dvorak Color'], ['funktop', 'Funktop'],
              ['enhanced', 'Enhanced'], ['grayscale', 'Dvorak BD'],
-             ['graylinear', 'Grayscale'], ['lowcloud', 'Low-Cloud']].forEach(function (o) {
+             ['graylinear', 'Grayscale'], ['lowcloud', 'Low-Cloud'],
+             ['lowcloud2', 'Low-Cloud II']].forEach(function (o) {
                 var opt = document.createElement('option'); opt.value = o[0]; opt.textContent = o[1]; cmSel.appendChild(opt);
             });
             cmSel.addEventListener('change', function () { _rtSetIRColormap(cmSel.value); });
