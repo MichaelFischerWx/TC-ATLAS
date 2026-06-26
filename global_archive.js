@@ -499,6 +499,18 @@ var _arch3DOn = false, _arch3DExag = 3.0, _arch3DPitch = 62;
 var _archDemCanvas = null, _archDemBounds = null, _archDemVer = 0;
 var _archTerrainProtoReady = false, _arch3DTiltEl = null, _archHrow = null;
 var _archOrbitRAF = null, _archDetailBasemap = null;
+var _archOrbitGifRunning = false, _archOrbitGifCancel = false;
+var _archLogoImg = null;   // cached TC-ATLAS logo for GIF branding
+
+// Load (once) the TC-ATLAS logo for stamping onto exported frames. Same-origin
+// PNG, so it won't taint the export canvas. cb runs with the <img> or null.
+function _archEnsureLogo(cb) {
+    if (_archLogoImg && _archLogoImg.complete && _archLogoImg.naturalWidth) { cb(_archLogoImg); return; }
+    var img = new Image();
+    img.onload = function () { _archLogoImg = img; cb(img); };
+    img.onerror = function () { cb(null); };
+    img.src = 'tc-atlas-favicon-192.png';
+}
 // IR texture tiles for 3D: MapLibre does NOT drape `image` sources (the
 // L.imageOverlay) onto terrain — they render flat at sea level and raised
 // cloud-top relief occludes them, which is the diagonal "cutout". So while 3D
@@ -775,9 +787,14 @@ function _arch3DEnsureTilt() {
         '<span title="Vertical amplification of the IR cloud-top relief (GPU only).">↕ Height</span>' +
         '<input id="arch-3d-exag" type="range" min="1" max="8" step="0.5" style="accent-color:#4a9b6e;cursor:pointer;">' +
         '<span id="arch-3d-exag-val" style="text-align:right;color:#F47321;font-weight:700;font-variant-numeric:tabular-nums;"></span></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;">' +
         '<button id="arch-3d-orbit" title="Auto-orbit: one slow 360° revolution with a tilt sweep — click again to stop" ' +
-        'style="margin-top:8px;width:100%;background:rgba(244,115,33,0.14);border:1px solid rgba(244,115,33,0.40);' +
-        'color:#fdba74;border-radius:7px;padding:5px 0;font:600 11px/1 \'DM Sans\',system-ui,sans-serif;cursor:pointer;">↻ Orbit</button>';
+        'style="background:rgba(244,115,33,0.14);border:1px solid rgba(244,115,33,0.40);' +
+        'color:#fdba74;border-radius:7px;padding:5px 0;font:600 11px/1 \'DM Sans\',system-ui,sans-serif;cursor:pointer;">↻ Orbit</button>' +
+        '<button id="arch-3d-orbitgif" title="Record one full 360° orbit as an animated GIF to share" ' +
+        'style="background:rgba(74,155,110,0.16);border:1px solid rgba(74,155,110,0.45);' +
+        'color:#86efac;border-radius:7px;padding:5px 0;font:600 11px/1 \'DM Sans\',system-ui,sans-serif;cursor:pointer;">◉ Orbit GIF</button>' +
+        '</div>';
     var host = document.querySelector('.detail-map-wrap') || document.getElementById('detail-map').parentNode;
     host.style.position = host.style.position || 'relative';
     host.appendChild(box);
@@ -800,6 +817,8 @@ function _arch3DEnsureTilt() {
     });
     var orbitBtn = box.querySelector('#arch-3d-orbit');
     if (orbitBtn) orbitBtn.addEventListener('click', function () { window._arch3DOrbit(); });
+    var orbitGifBtn = box.querySelector('#arch-3d-orbitgif');
+    if (orbitGifBtn) orbitGifBtn.addEventListener('click', function () { window._arch3DOrbitGif(); });
     _arch3DTiltEl = box;
     return box;
 }
@@ -836,6 +855,260 @@ window._arch3DOrbit = function () {
         _archOrbitRAF = requestAnimationFrame(step);
     }
     _archOrbitRAF = requestAnimationFrame(step);
+};
+
+// Record one full 360° orbit of the 3D view to an animated GIF for sharing.
+// Deterministic frame-by-frame capture (not the live rAF orbit): set bearing,
+// let the GL frame settle, grab the WebGL canvas (preserveDrawingBuffer is on),
+// composite a label + Tb colorbar + watermark, hand it to gif.js. The loop is
+// seam-free because frame N lands back on the start bearing.
+window._arch3DOrbitGif = function () {
+    var gl = detailMap && detailMap._gl;
+    if (!gl || !_arch3DOn) { showToast('Turn on 3D first, then try Orbit GIF'); return; }
+    if (_archOrbitGifRunning) return;
+    var glCanvas = gl.getCanvas && gl.getCanvas();
+    if (!glCanvas) { showToast('3D canvas not ready'); return; }
+
+    // Stop the live auto-orbit so it doesn't fight the capture sweep.
+    if (_archOrbitRAF) {
+        cancelAnimationFrame(_archOrbitRAF); _archOrbitRAF = null;
+        var liveBtn = document.getElementById('arch-3d-orbit');
+        if (liveBtn) liveBtn.classList.remove('active');
+    }
+
+    var N = 60;            // frames for a full revolution
+    var delay = 70;        // ms per frame → ~4.2 s loop
+    var startBearing = gl.getBearing();
+    var startPitch = gl.getPitch();
+
+    // Output dims: scale the GL backing store (DPR-sized) down to a sane width.
+    var srcW = glCanvas.width, srcH = glCanvas.height;
+    var TARGET_W = 640;
+    var scale = Math.min(1, TARGET_W / srcW);
+    var outW = Math.round(srcW * scale) & ~1;   // even dims for gif.js
+    var outH = Math.round(srcH * scale) & ~1;
+
+    var comp = document.createElement('canvas');
+    comp.width = outW; comp.height = outH;
+    var cctx = comp.getContext('2d');
+
+    // Pre-render the Tb colorbar strip (same LUT/orientation as the 2D GIF).
+    var lut = IR_COLORMAPS[irSelectedColormap] || IR_COLORMAPS['enhanced'];
+    var cbar = document.createElement('canvas'); cbar.width = 255; cbar.height = 1;
+    var cbctx = cbar.getContext('2d');
+    var cbImg = cbctx.createImageData(255, 1);
+    for (var cx = 0; cx < 255; cx++) {
+        var cval = 255 - cx, cli = cval * 4, cpi = cx * 4;
+        cbImg.data[cpi] = lut[cli]; cbImg.data[cpi + 1] = lut[cli + 1];
+        cbImg.data[cpi + 2] = lut[cli + 2]; cbImg.data[cpi + 3] = 255;
+    }
+    cbctx.putImageData(cbImg, 0, 0);
+
+    var S = outW / 640;   // scale label sizing to the output width
+    var nameLabel = (selectedStorm.name || 'UNNAMED');
+    var catLabel = getIntensityCategory(selectedStorm.peak_wind_kt);
+    var catColor = getIntensityColor(selectedStorm.peak_wind_kt);
+    var subtitle = selectedStorm.year + ' · ' + (BASIN_NAMES[selectedStorm.basin] || selectedStorm.basin) +
+        ' · Peak ' + (selectedStorm.peak_wind_kt || '?') + ' kt · ' +
+        (selectedStorm.min_pres_hpa || '?') + ' hPa · ACE ' + (selectedStorm.ace || 0).toFixed(1);
+    var frameMeta = irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null;
+    var dtLabel = frameMeta && frameMeta.datetime ? _formatIRDatetime(frameMeta.datetime) : '';
+
+    function _roundRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+    }
+
+    function drawOverlay() {
+        var pad = Math.round(13 * S);
+        // ── Top info card: logo + storm name + category badge + stats + datetime ──
+        var topH = Math.round(outH * 0.17);
+        var g = cctx.createLinearGradient(0, 0, 0, topH);
+        g.addColorStop(0, 'rgba(8,18,34,0.82)'); g.addColorStop(1, 'rgba(8,18,34,0)');
+        cctx.fillStyle = g; cctx.fillRect(0, 0, outW, topH);
+        cctx.textBaseline = 'alphabetic';
+
+        var logoSz = Math.round(34 * S);
+        var cx0 = pad, cy0 = Math.round(11 * S);
+        var textX = cx0;
+        if (_archLogoImg) {
+            cctx.save();
+            cctx.beginPath();
+            cctx.arc(cx0 + logoSz / 2, cy0 + logoSz / 2, logoSz / 2, 0, Math.PI * 2);
+            cctx.closePath(); cctx.clip();
+            cctx.imageSmoothingEnabled = true;
+            try { cctx.drawImage(_archLogoImg, cx0, cy0, logoSz, logoSz); } catch (e) {}
+            cctx.restore();
+            textX = cx0 + logoSz + Math.round(10 * S);
+        }
+
+        // Brand wordmark (small, above the storm name).
+        cctx.font = '700 ' + Math.round(10 * S) + 'px "DM Sans",system-ui,sans-serif';
+        cctx.fillStyle = 'rgba(148,197,255,0.95)';
+        cctx.fillText('TC-ATLAS', textX, cy0 + Math.round(11 * S));
+
+        // Storm name + category badge.
+        var nameY = cy0 + Math.round(29 * S);
+        cctx.font = '800 ' + Math.round(21 * S) + 'px "DM Sans",system-ui,sans-serif';
+        cctx.fillStyle = '#f8fafc';
+        cctx.fillText(nameLabel, textX, nameY);
+        var nameW = cctx.measureText(nameLabel).width;
+        if (catLabel && catLabel !== 'Unknown') {
+            cctx.font = '800 ' + Math.round(11 * S) + 'px "DM Sans",system-ui,sans-serif';
+            var bw = cctx.measureText(catLabel).width + Math.round(14 * S);
+            var bh = Math.round(17 * S);
+            var bx = textX + nameW + Math.round(9 * S);
+            var by = nameY - Math.round(13 * S);
+            cctx.fillStyle = catColor || '#ef4444';
+            _roundRect(cctx, bx, by, bw, bh, Math.round(5 * S)); cctx.fill();
+            cctx.fillStyle = '#ffffff';
+            cctx.fillText(catLabel, bx + Math.round(7 * S), by + bh - Math.round(5 * S));
+        }
+
+        // Stats line.
+        cctx.font = '600 ' + Math.round(12 * S) + 'px "DM Sans",system-ui,sans-serif';
+        cctx.fillStyle = 'rgba(203,213,225,0.95)';
+        cctx.fillText(subtitle, textX, nameY + Math.round(17 * S));
+
+        // Frame datetime (top-right).
+        if (dtLabel) {
+            cctx.font = '700 ' + Math.round(13 * S) + 'px "DM Sans",system-ui,sans-serif';
+            cctx.textAlign = 'right'; cctx.fillStyle = '#e2e8f0';
+            cctx.fillText(dtLabel, outW - pad, cy0 + Math.round(15 * S));
+            cctx.textAlign = 'left';
+        }
+
+        // ── Bottom: Tb colorbar (left) + branded watermark (right) ──
+        var botH = Math.round(outH * 0.12);
+        var g2 = cctx.createLinearGradient(0, outH - botH, 0, outH);
+        g2.addColorStop(0, 'rgba(8,18,34,0)'); g2.addColorStop(1, 'rgba(8,18,34,0.82)');
+        cctx.fillStyle = g2; cctx.fillRect(0, outH - botH, outW, botH);
+
+        var barW = Math.min(Math.round(200 * S), Math.round(outW * 0.34)), barH = Math.round(7 * S);
+        var barX = pad, barY = outH - Math.round(17 * S);
+        cctx.imageSmoothingEnabled = true;
+        cctx.drawImage(cbar, barX, barY, barW, barH);
+        cctx.strokeStyle = 'rgba(255,255,255,0.45)'; cctx.lineWidth = 1;
+        cctx.strokeRect(barX + 0.5, barY + 0.5, barW, barH);
+        cctx.font = '600 ' + Math.round(9 * S) + 'px "DM Sans",system-ui,sans-serif';
+        cctx.fillStyle = '#cbd5e1'; cctx.textBaseline = 'bottom';
+        cctx.textAlign = 'left'; cctx.fillText('310', barX, barY - Math.round(2 * S));
+        cctx.textAlign = 'center'; cctx.fillText('Brightness temp (K)', barX + barW / 2, barY - Math.round(2 * S));
+        cctx.textAlign = 'right'; cctx.fillText('170', barX + barW, barY - Math.round(2 * S));
+        cctx.textAlign = 'left'; cctx.textBaseline = 'alphabetic';
+
+        // Watermark: mini logo + wordmark, bottom-right.
+        var wmText = 'TC-ATLAS · tcatlas.org';
+        cctx.font = '700 ' + Math.round(12 * S) + 'px "DM Sans",system-ui,sans-serif';
+        var wmW = cctx.measureText(wmText).width;
+        var wmY = outH - Math.round(7 * S);
+        var wmLogo = Math.round(16 * S);
+        var wmX = outW - pad - wmW;
+        if (_archLogoImg) {
+            var wlx = wmX - wmLogo - Math.round(6 * S);
+            cctx.save();
+            cctx.beginPath();
+            cctx.arc(wlx + wmLogo / 2, wmY - wmLogo / 2 + Math.round(1 * S), wmLogo / 2, 0, Math.PI * 2);
+            cctx.closePath(); cctx.clip();
+            try { cctx.drawImage(_archLogoImg, wlx, wmY - wmLogo + Math.round(1 * S), wmLogo, wmLogo); } catch (e) {}
+            cctx.restore();
+        }
+        cctx.fillStyle = 'rgba(232,240,248,0.92)';
+        cctx.fillText(wmText, wmX, wmY);
+    }
+
+    // Progress UI (reuse the existing GIF export overlay if present).
+    var overlay = document.getElementById('gif-export-overlay');
+    var progressText = document.getElementById('gif-progress-text');
+    var progressBar = document.getElementById('gif-progress-bar');
+    if (overlay) overlay.style.display = 'flex';
+    if (progressText) progressText.textContent = 'Recording orbit…';
+    if (progressBar) progressBar.style.width = '0%';
+
+    var gifBtn = document.getElementById('arch-3d-orbitgif');
+    if (gifBtn) gifBtn.classList.add('active');
+    _archOrbitGifRunning = true;
+    _archOrbitGifCancel = false;
+
+    function finish() {
+        _archOrbitGifRunning = false;
+        _gifExporter = null;
+        try { gl.setBearing(startBearing); gl.setPitch(startPitch); } catch (e) {}
+        if (gifBtn) gifBtn.classList.remove('active');
+        if (overlay) overlay.style.display = 'none';
+    }
+
+    _archEnsureLogo(function () {     // preload branding, then build the encoder
+    _createGifEncoder(function (workerUrl) {
+        var gif = new GIF({
+            workers: 2, quality: 8, width: outW, height: outH,
+            workerScript: workerUrl, transparent: null, background: '#0a1628'
+        });
+        _gifExporter = gif;
+
+        var i = 0;
+        function captureOne() {
+            if (_archOrbitGifCancel || !_arch3DOn) { try { gif.abort(); } catch (e) {} finish(); return; }
+            if (i >= N) { encode(); return; }
+            var p = i / N;
+            try {
+                gl.setBearing(startBearing + p * 360);
+                gl.setPitch(58 + 14 * Math.sin(p * Math.PI * 2));  // 44→72→44 sweep
+            } catch (e) {}
+            var grabbed = false;
+            function grab() {
+                if (grabbed) return; grabbed = true;
+                try {
+                    cctx.clearRect(0, 0, outW, outH);
+                    cctx.drawImage(glCanvas, 0, 0, srcW, srcH, 0, 0, outW, outH);
+                    drawOverlay();
+                    gif.addFrame(cctx, { copy: true, delay: delay });
+                } catch (e) { console.warn('[orbit gif] frame failed', e); }
+                i++;
+                if (progressText) progressText.textContent = 'Recording orbit (' + i + '/' + N + ')…';
+                if (progressBar) progressBar.style.width = Math.round(i / N * 60) + '%';
+                requestAnimationFrame(captureOne);
+            }
+            gl.once('idle', grab);
+            if (gl.triggerRepaint) gl.triggerRepaint();
+            setTimeout(grab, 400);   // fallback so a missed 'idle' never stalls us
+        }
+
+        function encode() {
+            if (progressText) progressText.textContent = 'Encoding GIF…';
+            gif.on('progress', function (pp) {
+                if (progressBar) progressBar.style.width = (60 + Math.round(pp * 40)) + '%';
+            });
+            gif.on('finished', function (blob) {
+                if (!_archOrbitGifCancel) {
+                    var name = (selectedStorm.name || 'UNNAMED').replace(/\s+/g, '_');
+                    var filename = 'TC-ATLAS_' + name + '_' + selectedStorm.year + '_orbit3D.gif';
+                    var a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = filename;
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                    showToast('Orbit GIF exported! (' + N + ' frames, ' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)');
+                    if (typeof _ga === 'function') _ga('ga_export_orbit_gif', {
+                        sid: selectedStorm.sid, storm_name: selectedStorm.name,
+                        frames: N, cmap: irSelectedColormap, size_bytes: blob.size
+                    });
+                }
+                finish();
+            });
+            try { gif.render(); } catch (e) { console.warn('[orbit gif] render failed', e); finish(); }
+        }
+
+        requestAnimationFrame(captureOne);
+    });
+    });   // end _archEnsureLogo
+};
+
+// Allow the shared GIF cancel button to stop an in-flight orbit recording too.
+window._cancelOrbitGif = function () {
+    _archOrbitGifCancel = true;
+    if (_gifExporter) { try { _gifExporter.abort(); } catch (e) {} }
 };
 
 // Decode base64 tb_data from server into Uint8Array
@@ -7607,6 +7880,7 @@ window.startGifExport = function () {
 };
 
 window.cancelGifExport = function () {
+    if (_archOrbitGifRunning) { window._cancelOrbitGif(); showToast('Orbit GIF cancelled'); return; }
     _gifCancelled = true;
     if (_gifExporter) { try { _gifExporter.abort(); } catch (e) {} }
     _gifCleanup();
