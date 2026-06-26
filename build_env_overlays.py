@@ -343,6 +343,13 @@ OISST_PSL_OPENDAP = (
     "https://psl.noaa.gov/thredds/dodsC/Datasets/noaa.oisst.v2.highres/"
     "sst.day.mean.{year}.nc"
 )
+# 1991-2020 daily long-term-mean climatology — GLOBAL 720x1440 OISST grid, the
+# same as the daily files above, so the anomaly subtraction lines up pixel-for-
+# pixel (the seasonal/ monthly-climo GCS file is a regional 480x1040 grid).
+OISST_PSL_LTM = (
+    "https://psl.noaa.gov/thredds/dodsC/Datasets/noaa.oisst.v2.highres/"
+    "sst.day.mean.ltm.1991-2020.nc"
+)
 
 
 def _fetch_oisst_psl() -> Optional[tuple]:
@@ -2367,6 +2374,38 @@ def _load_oisst_monclim_env() -> Optional[np.ndarray]:
     return clim
 
 
+def _load_oisst_ltm_env(ymd: str) -> Optional[np.ndarray]:
+    """1991-2020 OISST daily long-term-mean for the day-of-year of `ymd`, from
+    PSL OPeNDAP — same global 720x1440 grid as fetch_oisst_sst(), reoriented
+    N->S, lon -180..180, padded 720->721. Day-of-year clamped to 365 (the LTM
+    has no Feb 29; the ~1-day shift is negligible for a climatology)."""
+    import xarray as xr
+    try:
+        doy = datetime(int(ymd[:4]), int(ymd[4:6]), int(ymd[6:8])).timetuple().tm_yday
+    except Exception:
+        return None
+    doy = min(max(doy, 1), 365)
+    try:
+        # decode_times=False: we index by integer day-of-year, so skip the
+        # cftime decode of the LTM's pre-reform reference time axis.
+        ds = xr.open_dataset(OISST_PSL_LTM, engine="netcdf4", decode_times=False)
+        clim = np.asarray(ds["sst"].isel(time=doy - 1).values, dtype=np.float32)
+        lat0 = float(ds["lat"].values[0])
+        ds.close()
+    except Exception as e:
+        log.warning("SST-anom: PSL LTM fetch failed: %s", e)
+        return None
+    if lat0 < 0:                          # S->N -> N->S
+        clim = clim[::-1, :]
+    clim = np.roll(clim, NX // 2, axis=1)  # 0..360 -> -180..180
+    if clim.shape == (NY - 1, NX):        # pad 720 -> 721 (match the SST)
+        padded = np.empty((NY, NX), dtype=clim.dtype)
+        padded[0] = clim[0]; padded[1:] = clim
+        clim = padded
+    log.info("SST-anom: PSL LTM climatology doy=%d", doy)
+    return clim
+
+
 def build_sst_anomalies(prefetched: "Optional[tuple]" = None) -> bool:
     """OISST SST anomaly + relative anomaly vs the 1991-2020 climatology.
 
@@ -2388,11 +2427,11 @@ def build_sst_anomalies(prefetched: "Optional[tuple]" = None) -> bool:
         padded = np.empty((NY, NX), dtype=sst.dtype)
         padded[0] = sst[0]; padded[1:] = sst
         sst = padded
-    clim = _load_oisst_monclim_env()
+    clim = _load_oisst_ltm_env(ymd)
     if clim is None:
         return False
     month = int(ymd[4:6])
-    anom = sst - clim[month - 1]
+    anom = sst - clim
     valid = f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:8]}T00:00:00Z"
 
     # Vecchi-Soden relative anomaly: subtract the cos-lat-weighted 30S-30N
