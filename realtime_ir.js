@@ -3329,6 +3329,18 @@
      *  with globalAnim* state. Called whenever a frame is shown, the
      *  animation starts/pauses, frames finish loading, or cleanup
      *  fires. */
+    /* Shared playback-control icons. Distinct, modern SVG glyphs so Play (a
+       single triangle) is no longer identical to Step-forward (triangle + bar).
+       currentColor so they inherit each button's text color + active state. */
+    var _ANIM_SVG = {
+        prev: '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M4.4 3.4h1.6v9.2H4.4z"/><path d="M12.6 3.4v9.2L5.9 8z"/></svg>',
+        play: '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M5 3.2v9.6l7.4-4.8z"/></svg>',
+        pause: '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M4.6 3.3h2.1v9.4H4.6zM9.3 3.3h2.1v9.4H9.3z"/></svg>',
+        next: '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M3.4 3.4v9.2L10.1 8z"/><path d="M10 3.4h1.6v9.2H10z"/></svg>',
+        stop: '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.7"/></svg>',
+        loading: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" class="rt-anim-spin"><path d="M8 2.5a5.5 5.5 0 1 1-4.4 2.2"/></svg>'
+    };
+
     function _refreshAnimSlider() {
         var slider = document.getElementById('ir-global-anim-slider');
         var playBtn = document.getElementById('ir-global-anim-play');
@@ -3359,7 +3371,7 @@
             }
         }
         if (playBtn) {
-            playBtn.innerHTML = globalAnimPlaying ? '&#10074;&#10074;' : '&#9654;';
+            playBtn.innerHTML = globalAnimPlaying ? _ANIM_SVG.pause : _ANIM_SVG.play;
             playBtn.title = globalAnimPlaying ? 'Pause' :
                 (nFrames > 0 ? 'Resume animation' : 'Load & play global animation');
             playBtn.classList.toggle('active', globalAnimPlaying);
@@ -3476,7 +3488,7 @@
         var statusEl = document.getElementById('ir-global-anim-status');
 
         if (state === 'loading') {
-            if (playBtn) { playBtn.innerHTML = '&#8987;'; playBtn.title = 'Loading frames\u2026'; playBtn.disabled = true; }
+            if (playBtn) { playBtn.innerHTML = _ANIM_SVG.loading; playBtn.title = 'Loading frames\u2026'; playBtn.disabled = true; }
             if (statusEl) statusEl.textContent = (pct != null ? pct + '%' : 'Loading\u2026');
         } else {
             if (playBtn) playBtn.disabled = false;
@@ -4021,7 +4033,7 @@
                 var row = L.DomUtil.create('div', 'rt-anim-row', bar);
 
                 var prevBtn = L.DomUtil.create('button', 'rt-anim-btn rt-anim-step', row);
-                prevBtn.innerHTML = '&#9664;';
+                prevBtn.innerHTML = _ANIM_SVG.prev;
                 prevBtn.title = 'Previous frame';
                 prevBtn.addEventListener('click', function () {
                     stopGlobalAnimation();
@@ -4030,12 +4042,12 @@
 
                 var playBtn = L.DomUtil.create('button', 'rt-anim-btn rt-anim-play', row);
                 playBtn.id = 'ir-global-anim-play';
-                playBtn.innerHTML = '&#9654;';
+                playBtn.innerHTML = _ANIM_SVG.play;
                 playBtn.title = 'Load & play global animation';
                 playBtn.addEventListener('click', toggleGlobalAnimation);
 
                 var nextBtn = L.DomUtil.create('button', 'rt-anim-btn rt-anim-step', row);
-                nextBtn.innerHTML = '&#9654;';
+                nextBtn.innerHTML = _ANIM_SVG.next;
                 nextBtn.title = 'Next frame';
                 nextBtn.addEventListener('click', function () {
                     stopGlobalAnimation();
@@ -4043,7 +4055,7 @@
                 });
 
                 var stopBtn = L.DomUtil.create('button', 'rt-anim-btn rt-anim-stop', row);
-                stopBtn.innerHTML = '&#9632;';
+                stopBtn.innerHTML = _ANIM_SVG.stop;
                 stopBtn.title = 'Stop animation and return to latest';
                 stopBtn.addEventListener('click', function () {
                     if (globalAnimFrameLayers.length === 0) return;
@@ -7924,7 +7936,7 @@
         _ga('ir_animation_play');
         _cacheAnimEls();
         if (_elAnimPlay) {
-            _elAnimPlay.innerHTML = '&#9646;&#9646;'; // pause icon
+            _elAnimPlay.innerHTML = _ANIM_SVG.pause;
             _elAnimPlay.title = 'Pause';
         }
         // Widen the lazy decode window for smooth forward playback (pre-decode
@@ -7943,7 +7955,7 @@
         animTimer = null;
         _cacheAnimEls();
         if (_elAnimPlay) {
-            _elAnimPlay.innerHTML = '&#9654;'; // play icon
+            _elAnimPlay.innerHTML = _ANIM_SVG.play;
             _elAnimPlay.title = 'Play';
         }
         // Shrink the decode window back to the resting size so a paused card
@@ -13024,10 +13036,10 @@
                 // Same control pattern as the Global Map's IR scrubber
                 // (◀ play ▶ ■ + range + monospace tau label).
                 '<div class="rt-genesis-tau-bar" style="display:flex; align-items:center; gap:10px; padding:8px 4px; margin-bottom:6px;">' +
-                  '<button type="button" id="rt-genesis-tau-prev" class="rt-genesis-tau-btn" title="Previous step (6 h)">&#9664;</button>' +
-                  '<button type="button" id="rt-genesis-tau-play" class="rt-genesis-tau-btn" title="Play / pause">&#9654;</button>' +
-                  '<button type="button" id="rt-genesis-tau-next" class="rt-genesis-tau-btn" title="Next step (6 h)">&#9654;</button>' +
-                  '<button type="button" id="rt-genesis-tau-stop" class="rt-genesis-tau-btn" title="Reset to median genesis time">&#9632;</button>' +
+                  '<button type="button" id="rt-genesis-tau-prev" class="rt-genesis-tau-btn" title="Previous step (6 h)">' + _ANIM_SVG.prev + '</button>' +
+                  '<button type="button" id="rt-genesis-tau-play" class="rt-genesis-tau-btn" title="Play / pause">' + _ANIM_SVG.play + '</button>' +
+                  '<button type="button" id="rt-genesis-tau-next" class="rt-genesis-tau-btn" title="Next step (6 h)">' + _ANIM_SVG.next + '</button>' +
+                  '<button type="button" id="rt-genesis-tau-stop" class="rt-genesis-tau-btn" title="Reset to median genesis time">' + _ANIM_SVG.stop + '</button>' +
                   '<input type="range" id="rt-genesis-tau-slider" min="0" max="0" value="0" step="1" ' +
                   'style="flex:1; min-width:160px;" title="Forecast hour — drag to see member positions and intensity at this tau">' +
                   '<span id="rt-genesis-tau-label" style="font-family:monospace; min-width:90px; text-align:right; opacity:0.85;">+0 h</span>' +
@@ -13831,7 +13843,7 @@
             if (_genesisTauState.playing) return stop();
             _genesisTauState.playing = true;
             playBtn.classList.add('playing');
-            playBtn.innerHTML = '&#10074;&#10074;';   // pause glyph
+            playBtn.innerHTML = _ANIM_SVG.pause;
             // 750 ms/step keeps the eye on each tau long enough to read
             // the intensity cursor + map snapshot before the next frame.
             _genesisTauState.animTimer = setInterval(function () {
@@ -13844,7 +13856,7 @@
         function stop() {
             _genesisTauState.playing = false;
             playBtn.classList.remove('playing');
-            playBtn.innerHTML = '&#9654;';
+            playBtn.innerHTML = _ANIM_SVG.play;
             if (_genesisTauState.animTimer) {
                 clearInterval(_genesisTauState.animTimer);
                 _genesisTauState.animTimer = null;

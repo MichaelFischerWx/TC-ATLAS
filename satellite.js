@@ -6290,7 +6290,10 @@
     function updateSliderMax() { if (sliderEl) sliderEl.max = Math.max(0, validFrameIndices.length - 1); }
     function updatePlayBtn() {
         if (!playBtn) return;
-        playBtn.textContent = animPlaying ? '\u23F8' : '\u25B6';
+        // SVG play/pause to match the sat-prev/next step icons (consistent set).
+        playBtn.innerHTML = animPlaying
+            ? '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M4.6 3.3h2.1v9.4H4.6zM9.3 3.3h2.1v9.4H9.3z"/></svg>'
+            : '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M5 3.2v9.6l7.4-4.8z"/></svg>';
         playBtn.title = animPlaying ? 'Pause (Space)' : 'Play (Space)';
     }
     function showLoader(msg) { if (loader) loader.classList.remove('hidden'); if (loaderMsg) loaderMsg.textContent = msg || 'Loading\u2026'; }
