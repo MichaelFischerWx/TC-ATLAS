@@ -2350,12 +2350,26 @@
             cctx.fillText(wmText, wmX, wmY);
         }
 
-        // Progress toast on the map container.
-        var host = (gl.getContainer && gl.getContainer()) || document.getElementById('ir-global-map');
-        var toast = document.createElement('div');
-        toast.style.cssText = 'position:absolute;bottom:8px;right:8px;background:rgba(15,22,35,0.88);color:#e2e8f0;font:600 11px/1.2 "DM Sans",sans-serif;padding:6px 10px;border-radius:5px;z-index:1000;pointer-events:none;';
-        toast.textContent = 'Orbit GIF · recording…';
-        if (host) host.appendChild(toast);
+        // Progress card — top-center of the map so it's clearly visible and not
+        // hidden behind the bottom-right 3D panel / playback bar. Two-phase bar
+        // (record 0-60%, encode 60-100%), mirroring the Global Archive overlay.
+        var host = (gl.getContainer && gl.getContainer()) || document.body;
+        var prog = document.createElement('div');
+        prog.style.cssText = 'position:absolute;top:14px;left:50%;transform:translateX(-50%);' +
+            'background:rgba(15,22,35,0.92);backdrop-filter:blur(8px);border:1px solid rgba(74,155,110,0.45);' +
+            'border-radius:9px;padding:9px 14px;z-index:1200;pointer-events:none;' +
+            'box-shadow:0 4px 18px rgba(0,0,0,0.45);min-width:200px;text-align:center;';
+        prog.innerHTML =
+            '<div id="rt-orbitgif-text" style="color:#e2e8f0;font:600 11px/1.3 \'DM Sans\',system-ui,sans-serif;margin-bottom:7px;">◉ Recording orbit GIF…</div>' +
+            '<div style="height:6px;background:rgba(148,163,184,0.25);border-radius:3px;overflow:hidden;">' +
+            '<div id="rt-orbitgif-bar" style="width:0%;height:100%;background:#4a9b6e;border-radius:3px;transition:width 0.15s;"></div></div>';
+        if (host) host.appendChild(prog);
+        var _pgText = prog.querySelector('#rt-orbitgif-text');
+        var _pgBar = prog.querySelector('#rt-orbitgif-bar');
+        function _setProg(txt, pct) {
+            if (_pgText && txt != null) _pgText.textContent = txt;
+            if (_pgBar && pct != null) _pgBar.style.width = pct + '%';
+        }
 
         // iOS: open the destination tab synchronously inside the tap; the async
         // encode would lose the tap activation and get popup-blocked otherwise.
@@ -2380,7 +2394,7 @@
             _rt3DOrbitGifRunning = false;
             try { gl.setBearing(startBearing); gl.setPitch(startPitch); } catch (e) {}
             if (gifBtn) gifBtn.classList.remove('active');
-            if (toast.parentElement) toast.parentElement.removeChild(toast);
+            if (prog.parentElement) prog.parentElement.removeChild(prog);
             if (wasPlaying) startGlobalAnimation();
         }
 
@@ -2418,7 +2432,7 @@
                             gif.addFrame(cctx, { copy: true, delay: delay });
                         } catch (e) { console.warn('[rt orbit gif] frame failed', e); }
                         i++;
-                        toast.textContent = 'Orbit GIF · recording ' + i + '/' + N;
+                        _setProg('◉ Recording orbit · ' + i + '/' + N, Math.round(i / N * 60));
                         requestAnimationFrame(captureOne);
                     }
                     gl.once('idle', grab);
@@ -2426,8 +2440,8 @@
                     setTimeout(grab, 400);
                 }
                 function encode() {
-                    toast.textContent = 'Orbit GIF · encoding…';
-                    gif.on('progress', function (p) { toast.textContent = 'Orbit GIF · encoding ' + Math.round(p * 100) + '%'; });
+                    _setProg('Encoding GIF…', 60);
+                    gif.on('progress', function (p) { _setProg('Encoding GIF · ' + Math.round(p * 100) + '%', 60 + Math.round(p * 40)); });
                     gif.on('finished', function (blob) {
                         if (!_rt3DOrbitGifCancel) {
                             var fnTs = (_mosaicTs || '').toString().replace(/[^0-9]/g, '') || 'frame';
