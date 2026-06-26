@@ -499,6 +499,13 @@ var _arch3DOn = false, _arch3DExag = 3.0, _arch3DPitch = 62;
 var _archDemCanvas = null, _archDemBounds = null, _archDemVer = 0;
 var _archTerrainProtoReady = false, _arch3DTiltEl = null, _archHrow = null;
 var _archOrbitRAF = null, _archDetailBasemap = null;
+// IR texture tiles for 3D: MapLibre does NOT drape `image` sources (the
+// L.imageOverlay) onto terrain — they render flat at sea level and raised
+// cloud-top relief occludes them, which is the diagonal "cutout". So while 3D
+// is on we drape the IR as a raster TILE source instead (which terrain does
+// drape), built from the same warped frame as the DEM so the two stay in
+// register, and hide the flat imageOverlay.
+var _archIrCanvas = null, _archIrVer = 0, _archIrProtoReady = false;
 
 function _arch_xnorm(lon) { return (lon + 180) / 360; }
 function _arch_ynorm(lat) { var r = lat * Math.PI / 180; return (1 - Math.log(Math.tan(Math.PI / 4 + r / 2)) / Math.PI) / 2; }
@@ -607,6 +614,80 @@ function _archEnsureProtocol() {
     });
 }
 
+// Crop the current IR color canvas to a single {z}/{x}/{y} tile (transparent
+// outside the data box). Same normalized-mercator math as the DEM protocol; the
+// IR canvas shares _archDemBounds + warp so the crop registers with the terrain.
+function _archEnsureIrProtocol() {
+    if (_archIrProtoReady || !window.maplibregl || !maplibregl.addProtocol) return;
+    _archIrProtoReady = true;
+    maplibregl.addProtocol('archir', function (params) {
+        var m = /archir:\/\/[^/]*\/(\d+)\/(\d+)\/(\d+)/.exec(params.url);
+        var TS = 256;
+        var cv = document.createElement('canvas'); cv.width = TS; cv.height = TS;
+        var ctx = cv.getContext('2d');   // transparent by default
+        if (m && _archIrCanvas && _archDemBounds) {
+            var z = +m[1], x = +m[2], y = +m[3], n = Math.pow(2, z);
+            var tWx = x / n, tEx = (x + 1) / n, tNy = y / n, tSy = (y + 1) / n;
+            var iWx = _arch_xnorm(_archDemBounds.west), iEx = _arch_xnorm(_archDemBounds.east);
+            var iNy = _arch_ynorm(_archDemBounds.north), iSy = _arch_ynorm(_archDemBounds.south);
+            var oWx = Math.max(tWx, iWx), oEx = Math.min(tEx, iEx);
+            var oNy = Math.max(tNy, iNy), oSy = Math.min(tSy, iSy);
+            if (oEx > oWx && oSy > oNy) {
+                var W = _archIrCanvas.width, H = _archIrCanvas.height;
+                var sx = (oWx - iWx) / (iEx - iWx) * W, sw = (oEx - oWx) / (iEx - iWx) * W;
+                var sy = (oNy - iNy) / (iSy - iNy) * H, sh = (oSy - oNy) / (iSy - iNy) * H;
+                var dx = (oWx - tWx) / (tEx - tWx) * TS, dw = (oEx - oWx) / (tEx - tWx) * TS;
+                var dy = (oNy - tNy) / (tSy - tNy) * TS, dh = (oSy - oNy) / (tSy - tNy) * TS;
+                try { ctx.drawImage(_archIrCanvas, sx, sy, sw, sh, dx, dy, dw, dh); } catch (e) {}
+            }
+        }
+        return new Promise(function (resolve) {
+            cv.toBlob(function (b) { b.arrayBuffer().then(function (ab) { resolve({ data: ab }); }); }, 'image/png');
+        });
+    });
+}
+
+// Rasterize the current frame's colorized + Mercator-warped IR into a canvas the
+// archir:// protocol can crop. Async (image decode); calls cb when ready.
+function _archBuildIrCanvas(cb) {
+    if (!irCurrentTbData || !irCurrentBounds) { if (cb) cb(); return; }
+    var sLat = irCurrentBounds.getSouth(), nLat = irCurrentBounds.getNorth();
+    var dataURI = renderTbToDataURI(irCurrentTbData, irCurrentTbRows, irCurrentTbCols, irSelectedColormap, sLat, nLat);
+    var img = new Image();
+    img.onload = function () {
+        var cv = document.createElement('canvas');
+        cv.width = img.naturalWidth || irCurrentTbCols;
+        cv.height = img.naturalHeight || irCurrentTbRows;
+        cv.getContext('2d').drawImage(img, 0, 0);
+        _archIrCanvas = cv; _archIrVer++;
+        if (cb) cb();
+    };
+    img.onerror = function () { if (cb) cb(); };
+    img.src = dataURI;
+}
+
+// Drape the IR as terrain-following tiles and hide the flat imageOverlay.
+function _archApplyIrDrape(gl) {
+    if (!gl) return;
+    _archBuildIrCanvas(function () {
+        if (!_arch3DOn || !gl || !gl.getSource) return;
+        try {
+            var src = gl.getSource('arch-ir-tex');
+            if (src) {
+                src.setTiles(['archir://v' + _archIrVer + '/{z}/{x}/{y}']);
+            } else {
+                gl.addSource('arch-ir-tex', {
+                    type: 'raster', tiles: ['archir://v' + _archIrVer + '/{z}/{x}/{y}'],
+                    tileSize: 256, maxzoom: 8
+                });
+                gl.addLayer({ id: 'arch-ir-tex', type: 'raster', source: 'arch-ir-tex',
+                    paint: { 'raster-opacity': irOpacity, 'raster-fade-duration': 0 } });
+            }
+            if (irOverlayLayer) try { irOverlayLayer.setOpacity(0); } catch (e) {}
+        } catch (e) { console.warn('[arch 3D] IR drape failed', e); }
+    });
+}
+
 function _arch3DApply() {
     if (!_arch3DOn) return;
     var gl = detailMap && detailMap._gl;
@@ -625,7 +706,9 @@ function _arch3DApply() {
         if (gl.dragRotate) gl.dragRotate.enable();
         if (gl.touchZoomRotate) gl.touchZoomRotate.enableRotation();
         gl.easeTo({ pitch: _arch3DPitch, duration: 700 });
-    } catch (e) { console.warn('[arch 3D] enable failed', e); _arch3DOn = false; }
+    } catch (e) { console.warn('[arch 3D] enable failed', e); _arch3DOn = false; return; }
+    // Drape the IR as tiles (image sources aren't draped on terrain) + hide flat overlay.
+    _archApplyIrDrape(gl);
 }
 
 // Rebuild the DEM for the current frame; call on frame change while 3D is on.
@@ -636,8 +719,10 @@ function _arch3DRefresh() {
     try {
         var src = gl.getSource('arch-ir-dem');
         if (src) src.setTiles(['archterrain://v' + _archDemVer + '/{z}/{x}/{y}']);
-        else _arch3DApply();
+        else { _arch3DApply(); return; }
     } catch (e) {}
+    // Rebuild the IR texture tiles for the new frame.
+    _archApplyIrDrape(gl);
 }
 
 window.toggleArch3D = function () {
@@ -647,6 +732,7 @@ window.toggleArch3D = function () {
     if (!_arch3DOn) {
         if (!irCurrentTbData) return;   // need an IR frame loaded first
         _archEnsureProtocol();
+        _archEnsureIrProtocol();
         _arch3DOn = true;
         _arch3DApply();
         _arch3DShowTilt(true);
@@ -658,11 +744,15 @@ window.toggleArch3D = function () {
         _arch3DOn = false;
         try {
             gl.setTerrain(null);
+            if (gl.getLayer('arch-ir-tex')) gl.removeLayer('arch-ir-tex');
+            if (gl.getSource('arch-ir-tex')) gl.removeSource('arch-ir-tex');
             if (gl.getSource('arch-ir-dem')) gl.removeSource('arch-ir-dem');
             gl.easeTo({ pitch: 0, bearing: 0, duration: 700 });
             if (gl.dragRotate) gl.dragRotate.disable();
             if (gl.touchZoomRotate) gl.touchZoomRotate.disableRotation();
         } catch (e) {}
+        // Restore the flat IR imageOverlay for the 2D view.
+        if (irOverlayLayer) try { irOverlayLayer.setOpacity(irOpacity); } catch (e) {}
         if (_archDetailBasemap) try { _archDetailBasemap.setOpacity(1); } catch (e) {}
         _arch3DShowTilt(false);
         if (btn) btn.classList.remove('active');
@@ -824,6 +914,9 @@ function switchColormap(name) {
             interactive: false,
             className: 'ir-overlay-image'
         }).addTo(detailMap);
+        // In 3D the draped tiles carry the IR — rebuild them in the new colormap
+        // and re-hide the freshly-added flat overlay.
+        if (_arch3DOn && detailMap._gl) _archApplyIrDrape(detailMap._gl);
     }
     // Update button states
     var btns = document.querySelectorAll('.ir-cmap-btn');
