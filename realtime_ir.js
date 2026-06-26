@@ -2061,7 +2061,7 @@
         if (_rt3DTiltEl) return _rt3DTiltEl;
         var box = document.createElement('div');
         box.id = 'ir-3d-tilt-ctl';
-        box.style.cssText = 'position:fixed;right:14px;bottom:128px;z-index:650;display:none;' +
+        box.style.cssText = 'position:fixed;right:14px;bottom:44px;z-index:650;display:none;' +
             'background:rgba(15,23,42,0.92);backdrop-filter:blur(8px);' +
             'border:1px solid rgba(244,115,33,0.30);border-radius:10px;padding:8px 11px;' +
             'box-shadow:0 4px 18px rgba(0,0,0,0.45);font:600 11px/1.2 "DM Sans",system-ui,sans-serif;color:#cbd5e1;';
