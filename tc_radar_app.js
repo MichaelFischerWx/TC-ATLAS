@@ -981,6 +981,7 @@ function closeSidePanel() {
     _irPlotlyVisible = false;
     cleanupERA5();
     _csMode = false; _csPointA = null; _removeRubberBand();
+    _csMapA = null; _csMapEnable(false); _csMapClearGraphics();
     exitFocusMode();
     setTimeout(function() { map.invalidateSize(); }, 360);
 }
@@ -4318,10 +4319,73 @@ function animStep(dir) { var slider = document.getElementById('ep-level'); if (!
 
 // ── Cross-section ────────────────────────────────────────────
 function toggleCrossSection() {
-    _csMode = !_csMode; _csPointA = null; _removeRubberBand();
+    _csMode = !_csMode; _csPointA = null; _csMapA = null; _removeRubberBand();
     var btn = document.getElementById('cs-btn'), status = document.getElementById('cs-status');
-    if (_csMode) { btn.classList.add('active'); btn.textContent = '\u2702 Click point A on plot\u2026'; if (status) status.textContent = 'Click the starting point on the plan view above'; }
-    else { btn.classList.remove('active'); btn.textContent = '\u2702 Draw Cross Section'; if (status) status.textContent = ''; }
+    // In two-panel mode the plan view is the draped IR map, so the user draws
+    // the cross-section line on the map instead of the (hidden) Plotly plot.
+    var onMap = !!(window.LFLET_GL && _radarMapOn);
+    if (_csMode) {
+        _csMapClearGraphics();
+        btn.classList.add('active');
+        btn.textContent = '\u2702 Click point A' + (onMap ? ' on the map\u2026' : ' on plot\u2026');
+        if (status) status.textContent = 'Click the starting point on the ' + (onMap ? 'map' : 'plan view above');
+        if (onMap) _csMapEnable(true);
+    } else {
+        btn.classList.remove('active'); btn.textContent = '\u2702 Draw Cross Section'; if (status) status.textContent = '';
+        _csMapEnable(false); _csMapClearGraphics();
+    }
+}
+
+// ── Cross-section drawing on the draped radar map (two-panel mode) ───────
+// Reuses the exact same compute (fetchCrossSection) as the Plotly path — only
+// the point-picking differs: map clicks → storm-relative km via _lastPlanRender.
+var _csMapA = null, _csMapMarkers = [], _csMapLine = null, _csMapRubber = null, _csMapBound = false;
+function _csKmFromLatLng(ll) {
+    var p = _lastPlanRender; if (!p || p.center_lat == null) return null;
+    var cosLat = Math.cos(p.center_lat * Math.PI / 180) || 1;
+    return { x: (ll.lng - p.center_lon) * 111.0 * cosLat, y: (ll.lat - p.center_lat) * 111.0 };
+}
+function _csMapClearGraphics() {
+    for (var i = 0; i < _csMapMarkers.length; i++) { try { map.removeLayer(_csMapMarkers[i]); } catch (e) {} }
+    _csMapMarkers = [];
+    if (_csMapLine) { try { map.removeLayer(_csMapLine); } catch (e) {} _csMapLine = null; }
+    if (_csMapRubber) { try { map.removeLayer(_csMapRubber); } catch (e) {} _csMapRubber = null; }
+}
+function _csMapDot(ll) {
+    return L.circleMarker(ll, { radius: 5, color: '#fff', weight: 1.5, fillColor: '#ef4444', fillOpacity: 1, interactive: false }).addTo(map);
+}
+function _csMapMove(e) {
+    if (!_csMode || !_csMapA) return;
+    var pts = [[_csMapA.lat, _csMapA.lng], [e.latlng.lat, e.latlng.lng]];
+    if (!_csMapRubber) {
+        _csMapRubber = L.polyline(pts, { color: '#ef4444', weight: 2, dashArray: '5 5', interactive: false }).addTo(map);
+    } else { _csMapRubber.setLatLngs(pts); }
+}
+function _csMapClick(e) {
+    if (!_csMode) return;
+    var km = _csKmFromLatLng(e.latlng); if (!km) return;
+    var status = document.getElementById('cs-status');
+    if (!_csMapA) {
+        _csMapA = e.latlng; _csPointA = km;
+        _csMapMarkers.push(_csMapDot(e.latlng));
+        var btn = document.getElementById('cs-btn'); if (btn) btn.textContent = '✂ Click point B on the map…';
+        if (status) status.textContent = 'A: (' + km.x.toFixed(0) + ', ' + km.y.toFixed(0) + ') km — now click the end point';
+    } else {
+        var a = _csPointA, b = km;
+        _csMapMarkers.push(_csMapDot(e.latlng));
+        if (_csMapRubber) { try { map.removeLayer(_csMapRubber); } catch (e2) {} _csMapRubber = null; }
+        _csMapLine = L.polyline([[_csMapA.lat, _csMapA.lng], [e.latlng.lat, e.latlng.lng]], { color: '#ef4444', weight: 2.5, interactive: false }).addTo(map);
+        if (status) status.textContent = 'A→B: (' + a.x.toFixed(0) + ',' + a.y.toFixed(0) + ') → (' + b.x.toFixed(0) + ',' + b.y.toFixed(0) + ') km';
+        _csMode = false; _csMapA = null; _csPointA = null;
+        _csMapEnable(false);   // leave the drawn line; stop listening
+        var btn2 = document.getElementById('cs-btn'); if (btn2) { btn2.classList.remove('active'); btn2.textContent = '✂ Draw Cross Section'; }
+        fetchCrossSection(a, b);
+    }
+}
+function _csMapEnable(on) {
+    if (typeof map === 'undefined' || !map) return;
+    if (on && !_csMapBound) { map.on('click', _csMapClick); map.on('mousemove', _csMapMove); _csMapBound = true; }
+    else if (!on && _csMapBound) { map.off('click', _csMapClick); map.off('mousemove', _csMapMove); _csMapBound = false; }
 }
 
 function handlePlotClick(eventData) {
