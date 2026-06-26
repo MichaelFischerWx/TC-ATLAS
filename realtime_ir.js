@@ -12597,6 +12597,13 @@
             _genesisDisturbanceMeta[trackId] = {
                 label: d.displayLabel,
                 short: d.displayShort,
+                // Genesis (ensemble-mean) position of THIS disturbance — the spot
+                // the user clicked. DeepMind reuses numeric track_ids across
+                // basins within a cycle, so the detail fetch must anchor its
+                // cross-basin filter here, not on the returned members' median
+                // (which can sit in the other basin and discard the clicked one).
+                genesisLat: mean.points[0].lat,
+                genesisLon: mean.points[0].lon,
                 atcfMatch: d.atcfMatch || null,
                 atcfLabel: d.atcfLabel || null,
                 fraction: d.fraction,
@@ -12881,7 +12888,7 @@
     // detail path — TCA clusters are already gated tightly during build.
     // Returns { json, excluded } where json is a shallow-clone with a
     // filtered members dict (or the original if nothing was excluded).
-    function _filterDmOutliers(json) {
+    function _filterDmOutliers(json, anchorLat, anchorLon) {
         var members = json.members || {};
         var keys = Object.keys(members);
         var firsts = [];
@@ -12896,10 +12903,19 @@
             }
         }
         if (firsts.length < 5) return { json: json, excluded: 0 };
-        var lats = firsts.map(function (f) { return f.lat; }).sort(function (a, b) { return a - b; });
-        var lons = firsts.map(function (f) { return f.lon; }).sort(function (a, b) { return a - b; });
-        var medLat = lats[Math.floor(lats.length / 2)];
-        var medLon = lons[Math.floor(lons.length / 2)];
+        // Anchor on the CLICKED disturbance's genesis position when provided —
+        // DM reuses track_ids across basins, so the returned set can be a mix of
+        // two storms and the median may land in the wrong one. Falling back to
+        // the median keeps the old single-cluster behavior when no anchor given.
+        var medLat, medLon;
+        if (anchorLat != null && anchorLon != null && !isNaN(anchorLat) && !isNaN(anchorLon)) {
+            medLat = anchorLat; medLon = anchorLon;
+        } else {
+            var lats = firsts.map(function (f) { return f.lat; }).sort(function (a, b) { return a - b; });
+            var lons = firsts.map(function (f) { return f.lon; }).sort(function (a, b) { return a - b; });
+            medLat = lats[Math.floor(lats.length / 2)];
+            medLon = lons[Math.floor(lons.length / 2)];
+        }
         var keep = {};
         var excluded = 0;
         var keptKeysWithFirst = {};
@@ -13486,7 +13502,8 @@
                     return r.json();
                 })
                 .then(function (json) {
-                    var filtered = _filterDmOutliers(json);
+                    var filtered = _filterDmOutliers(json,
+                        meta && meta.genesisLat, meta && meta.genesisLon);
                     filtered.json._dmExcluded = filtered.excluded;
                     _genesisDetailCache[cacheKey] = filtered.json;
                     return filtered.json;
