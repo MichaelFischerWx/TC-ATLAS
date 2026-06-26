@@ -1730,6 +1730,73 @@
     }
     function _mosaicTileUrl(ts, product) { return _MOSAIC_ROOT + '/' + (product || 'ir') + '/' + ts + '/{z}/{x}/{y}.png'; }
 
+    // ── Single-channel brightness-INDEX mosaic via a GPU custom layer ──────────
+    // Flag-gated (?ir2a=1). Renders the cost-saving idx tiles (1-ch PNG, value =
+    // quantized Tb) and colormaps on the GPU (mosaic_gl_layer.js). ?ir2adev=1 points
+    // it at the local 6-frame set for integration testing before v3 is on R2.
+    var _IR2A = /[?&]ir2a=1/.test(location.search);
+    var _IR2A_DEV = /[?&]ir2adev=1/.test(location.search);
+    var _IR2A_ROOT = _IR2A_DEV ? (location.origin + '/_ir2a_anim/ir')
+                               : 'https://cdn.tcatlas.org/mosaic-v3/ir';
+    var _IR2A_DEV_FRAMES = ['202606261800', '202606261810', '202606261820',
+                            '202606261830', '202606261840', '202606261850'];
+    var _ir2aLayer = null, _ir2aOn = false, _ir2aFrames = null;
+    function _ir2aEligible() {
+        return _IR2A && window.LFLET_GL && window.createMosaicGLLayer && globalProduct === 'ir';
+    }
+    function _ir2aTileUrl(frame, z, x, y) { return _IR2A_ROOT + '/' + frame + '/' + z + '/' + x + '/' + y + '.png'; }
+    // Exact claude-ir idx LUT = the backend _IR_LUT the v2 mosaic bakes (idx i → its
+    // color; idx 0 = transparent). Using it makes the idx layer's DEFAULT colormap
+    // byte-identical to v2 — the frontend IR_COLORMAPS reconstruction (160–330 K) drifts.
+    var _IR_CLAUDE_IDX_LUT = (function () {
+        var b = atob('AAAAAA4OGP8PDxn/EREb/xISHf8UFB7/FhYg/xcXIv8ZGSP/Ghol/xwcJ/8eHij/Hx8q/yEhLP8iIi3/JCQv/yYmMf8nJzL/KSk0/yoqNf8sLDf/Li45/y8vOv8xMTz/MjI+/zQ0P/82NkH/NzdD/zk5RP86Okb/PDxI/z4+Sf8/P0v/QUFN/0JCTv9ERFD/RkZS/0hIVP9KSlb/TU1Z/09PW/9RUV3/VFRg/1ZWYv9YWGT/W1tn/11daf9fX2v/YmJu/2RkcP9nZ3P/aWl1/2trd/9ubnr/cHB8/3Jyfv91dYH/d3eD/3p6hv99fYn/f3+L/4KCjv+FhZH/iIiU/4uLl/+Ojpr/kJCc/5OTn/+WlqL/mZml/5ycqP+fn6v/oaGt/6SksP+np7P/qqq2/62tuf+wsLz/srK+/7W1wf+2t8L/uLjE/7q6xv+7vMf/vb7J/7+/y//Bwc3/wsPO/8TF0P/Gx9L/x8jT/8nK1f/LzNf/zM7Y/87P2v/Q0dz/0dPd/9PV3//V1+H/1tji/9ja5P/U2uT/0dnj/83Z4//J2OL/xtji/8LY4v+/1+H/u9fh/7jX4f+01uD/sNbg/63V3/+p1d//ptXf/6LU3v+e1N7/m9Te/5fT3f+U093/kNLc/4zS3P+G0Nr/f83Y/3nK1v9yx9P/a8TR/2XCz/9ev83/V7zK/1C5yP9Ktsb/Q7PE/0Cwwf89rb7/Oaq7/zanuP8ypLX/L6Gy/yuer/8om63/JJiq/yGVp/8hlqP/IZme/yKcmf8jnpX/JKGQ/ySki/8lp4f/JqqC/yesff8nr3n/KLJ0/y21cP8yuGv/OLpn/z29Yv9CwF7/R8NZ/03GVf9SyFD/V8tM/1zOR/9j0EP/bNFB/3XTPv9+1Dv/h9U5/5HWNv+a1zP/o9gw/6zaLv+12yv/vtwo/8TaKf/I2Cn/zNYq/9DTK//V0Sz/2c8s/93NLf/iyi7/5sgv/+rGL//uwzD/7b0w/+y3MP/rsTD/6qsw/+mlMP/onzD/55kw/+aTMP/ljTD/5Ycw/+OCMP/ifTH/4Xgy/99yM//ebTP/3Wg0/9tjNf/aXjb/2Vk2/9dTN//WTjj/00o5/9BGOv/NQjv/yT48/8Y7Pv/DNz//wDNA/70vQf+6K0L/tidD/7QkRv+2JU7/tydW/7koX/+6KWf/vCpv/70rd/+/LID/wC2I/8IukP/DL5j/wzGe/8Ayov+9NKf/uzWr/7g3r/+1OLP/sjq4/7A8vP+tPcD/qj/E/6hAyP+jPsb/nz3E/5o7wv+WOsD/kTi//403vf+INbv/hDS5/38yt/97MbX/dS+y/2wrq/9jJ6X/WiOf/1Igmf9JHJL/QBiM/w==');
+        var u = new Uint8Array(b.length);
+        for (var _k = 0; _k < b.length; _k++) u[_k] = b.charCodeAt(_k);
+        return u;
+    })();
+    // Build an idx-keyed (0..255) RGBA LUT for a colormap. claude-ir uses the exact
+    // backend LUT above; other operational maps map idx → Tb (310 - idx/255*120) →
+    // IR_COLORMAPS index (160..330), matching v2's client recolor (irlut).
+    function _idxLutFor(cmap) {
+        if (cmap === 'claude-ir') return _IR_CLAUDE_IDX_LUT;
+        var src = IR_COLORMAPS[cmap] || IR_COLORMAPS['claude-ir'];
+        var out = new Uint8Array(256 * 4);                 // out[0]=transparent → idx 0 = no-data
+        for (var i = 1; i < 256; i++) {
+            var tb = 310 - (i / 255) * 120;
+            var ti = Math.max(1, Math.min(255, Math.round((tb - 160) / 170 * 254) + 1));
+            out[i * 4] = src[ti * 4]; out[i * 4 + 1] = src[ti * 4 + 1];
+            out[i * 4 + 2] = src[ti * 4 + 2]; out[i * 4 + 3] = 255;
+        }
+        return out;
+    }
+    // Stand-in for a per-frame tile layer: proxies the deck's setOpacity(idx)
+    // calls to the single WebGL layer's setFrame, so the EXISTING animation /
+    // play / slider / length logic drives the idx layer with no other changes.
+    function _ir2aStub(i) {
+        return {
+            addTo: function () { return this; },
+            on: function (ev, cb) { if (ev === 'load') setTimeout(cb, 0); return this; },
+            setOpacity: function (o) { if (!_ir2aLayer) return; _ir2aLayer.setOpacity(o); if (o > 0) _ir2aLayer.setFrame(i); },
+            remove: function () {}, setZIndex: function () { return this; }
+        };
+    }
+    function _ir2aBuild(times) {
+        if (!_ir2aLayer) {
+            _ir2aLayer = window.createMosaicGLLayer({
+                id: 'ir2a-idx', tileUrl: _ir2aTileUrl, frames: times,
+                maxZoom: _IR2A_DEV ? 4 : 6, tileSize: 512,
+                lut: _idxLutFor(_irColormap || 'claude-ir'),
+                onError: function (m) { console.error('[ir2a] ' + m); }
+            });
+            // Insert at the tile-pane z (200) so it sits below coastlines/overlays
+            // (z400+) — same stacking as the v2 mosaic raster — not on top of them.
+            try { map._glAdd(_ir2aLayer.layer, 200); }
+            catch (e) { console.error('[ir2a] addLayer failed', e); }
+        } else { _ir2aLayer.setFrames(times); }
+        _ir2aOn = true;
+    }
+    function _ir2aDestroy() { if (_ir2aLayer) { try { _ir2aLayer.destroy(); } catch (e) {} _ir2aLayer = null; } _ir2aOn = false; }
+
     // ── Lite storm view (Phase B/C) ────────────────────────────────────────
     // The storm card DEFAULTS to a "lite" view: a crisp loop rendered from the
     // mosaic's pre-baked z5/z6 storm sectors (cdn.tcatlas.org/mosaic-v2), $0
@@ -1990,6 +2057,8 @@
         if (cmap === _irColormap) return;
         _irColormap = cmap;
         if (globalProduct !== 'ir' || !latestGIBSTime) return;
+        // idx WebGL layer: instant GPU LUT swap, no rebuild.
+        if (_ir2aOn && _ir2aLayer) { _ir2aLayer.setColormap(_idxLutFor(cmap)); return; }
         var hadAnim = globalAnimReady;
         if (globalAnimFrameLayers.length > 0) cleanupGlobalAnimation();
         removeGIBSOverlay(map, gibsIRLayers); gibsIRLayers = [];
@@ -3568,6 +3637,37 @@
             }
         }
 
+        // ── idx WebGL layer path (?ir2a=1): one custom layer + proxy stubs ──
+        if (_ir2aEligible()) {
+            if (_IR2A_DEV) {
+                globalAnimFrameTimes = _IR2A_DEV_FRAMES.slice();
+            } else if (_ir2aFrames && _ir2aFrames.length) {
+                globalAnimFrameTimes = _ir2aFrames.slice();   // v3's own manifest → tiles always resolve
+            } else {
+                globalAnimLoading = false;                    // re-enter once v3 frames.json loads
+                fetch(_IR2A_ROOT + '/frames.json', { cache: 'no-store' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (j) { _ir2aFrames = (j && j.frames) || []; loadGlobalAnimation(); })
+                    .catch(function (e) { console.error('[ir2a] v3 frames.json load failed', e); updateGlobalAnimControls('idle'); });
+                return;
+            }
+            removeGIBSOverlay(map, gibsIRLayers); gibsIRLayers = [];
+            removeGIBSOverlay(map, gibsVisLayers); gibsVisLayers = [];
+            _ir2aBuild(globalAnimFrameTimes);
+            globalAnimFrameLayers = [];
+            for (var _si = 0; _si < globalAnimFrameTimes.length; _si++) globalAnimFrameLayers.push(_ir2aStub(_si));
+            globalAnimReady = true; globalAnimLoading = false;
+            globalAnimIndex = (_globalAnimPendingScrub != null)
+                ? Math.max(0, Math.min(globalAnimFrameTimes.length - 1, _globalAnimPendingScrub))
+                : globalAnimFrameTimes.length - 1;
+            _globalAnimPendingScrub = null;
+            showGlobalAnimFrame(globalAnimIndex);
+            updateGlobalAnimControls('ready');
+            console.log('[ir2a] idx WebGL layer:', globalAnimFrameTimes.length, 'frames, src', _IR2A_ROOT);
+            if (_globalAnimAutoplay) startGlobalAnimation();
+            return;
+        }
+
         console.log('[Global Anim] Loading', globalAnimFrameTimes.length, 'frames for', globalProduct);
 
         // Update controls to show loading state
@@ -3814,9 +3914,13 @@
     /** Clean up global animation frames */
     function cleanupGlobalAnimation() {
         stopGlobalAnimation();
-        for (var i = 0; i < globalAnimFrameLayers.length; i++) {
-            if (map && globalAnimFrameLayers[i]) {
-                map.removeLayer(globalAnimFrameLayers[i]);
+        if (_ir2aOn) {
+            _ir2aDestroy();   // single GL layer; stubs are not real facade layers
+        } else {
+            for (var i = 0; i < globalAnimFrameLayers.length; i++) {
+                if (map && globalAnimFrameLayers[i]) {
+                    map.removeLayer(globalAnimFrameLayers[i]);
+                }
             }
         }
         globalAnimFrameLayers = [];
