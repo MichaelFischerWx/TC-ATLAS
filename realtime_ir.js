@@ -1942,7 +1942,9 @@
         for (var idx = 0; idx < 256; idx++) {
             var tb = 310 - (idx / 255) * 120;                 // mosaic Claude-IR idx → Tb
             var ti = Math.max(1, Math.min(255, Math.round((tb - 160) / 170 * 254) + 1)); // → 160/330 index
-            m[idx] = [lut[ti * 4], lut[ti * 4 + 1], lut[ti * 4 + 2]];
+            // Include alpha so colormaps that mask out pixels (e.g. coldcloud,
+            // which drops warm/clear cloud to transparent) recolor correctly.
+            m[idx] = [lut[ti * 4], lut[ti * 4 + 1], lut[ti * 4 + 2], lut[ti * 4 + 3]];
         }
         return (_irTargetMaps[cmap] = m);
     }
@@ -1965,6 +1967,9 @@
                             if (d[p + 3] < 10) continue;
                             var col = tmap[rev[((d[p] >> 3) << 10) | ((d[p + 1] >> 3) << 5) | (d[p + 2] >> 3)]];
                             d[p] = col[0]; d[p + 1] = col[1]; d[p + 2] = col[2];
+                            // Honor the colormap's alpha (coldcloud masks warm
+                            // pixels to 0); opaque colormaps carry 255 → no change.
+                            if (col[3] != null) d[p + 3] = col[3];
                         }
                         cx.putImageData(im, 0, 0);
                     }
@@ -3241,6 +3246,8 @@
         var lyr = createCompositeGIBSLayer(timeStr, _productOpacity(mode), perSat, mode);
         lyr.addTo(map);
         gibsIRLayers = [lyr];
+        // Keep the cold-cloud convection overlay (if active) on the latest frame.
+        if (typeof _updateColdCloudOverlay === 'function') _updateColdCloudOverlay();
 
         // Re-load animation if it was active
         if (hadAnim) {
@@ -3668,6 +3675,12 @@
         map.getPane('coastlinePane').style.pointerEvents = 'none';
         _loadCoastlineOverlay(map);
 
+        // Cold-cloud convection overlay sits ABOVE shaded env rasters (~400) but
+        // below coastlines (450), so convection reads over an SST-anomaly field.
+        map.createPane('coldCloudPane');
+        map.getPane('coldCloudPane').style.zIndex = 449;
+        map.getPane('coldCloudPane').style.pointerEvents = 'none';
+
         // Labels on top of IR — stashed on `_labelsLayer` so the "Labels"
         // toggle in the right rail can add/remove it without rebuilding.
         _labelsLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
@@ -4023,6 +4036,20 @@
                 insBtn.classList.toggle('active', _rtToggleInspect());
             });
             dMenu.appendChild(insBtn);
+
+            // Convection over overlays — when a shaded env field (SST anomaly
+            // etc.) is on, drape grayscale cold-cloud convection (Tb < -20 C) on
+            // top so the white tops read over the field. Default ON.
+            var convBtn = document.createElement('button');
+            convBtn.id = 'ir-convection-toggle';
+            convBtn.type = 'button';
+            convBtn.className = 'ir-legend-toggle ir-display-item active';
+            convBtn.title = 'Overlay deep convection (Tb < -20 °C) in grayscale on top of shaded env layers (SST anomaly, RH, …) so the white cloud tops read over the field';
+            convBtn.innerHTML = '⛈ Convection';
+            convBtn.addEventListener('click', function () {
+                convBtn.classList.toggle('active', window._rtToggleConvectionOverlay());
+            });
+            dMenu.appendChild(convBtn);
             // (3D Convection lives as a top-level pill next to IR/Vis/WV now —
             //  see ir-3d-mode-btn — rather than buried here in the Display menu.)
 
@@ -18563,6 +18590,46 @@
         return { type: 'FeatureCollection', features: outFeats };
     }
 
+    // ── Cold-cloud convection overlay (auto over shaded env fields) ─────────
+    //  When a filled/shaded env raster (SST anomaly, SST, RH, …) is active, drape
+    //  a grayscale convection-only IR layer (Tb < -20 C white, warmer
+    //  transparent) ABOVE it so deep convection reads over the env field.
+    //  Default on; the Display menu "⛈ Convection" item toggles it.
+    var _coldCloudLayer = null, _coldCloudUrl = null, _coldCloudEnabled = true;
+
+    function _anyShadedEnvActive() {
+        var ks = Object.keys(_rtEnvActive);
+        for (var i = 0; i < ks.length; i++) {
+            var e = _rtEnvActive[ks[i]];
+            if (e && e.overlayKind === 'raster') return true;
+        }
+        return false;
+    }
+    function _removeColdCloudOverlay() {
+        if (_coldCloudLayer) { try { map.removeLayer(_coldCloudLayer); } catch (e) {} }
+        _coldCloudLayer = null; _coldCloudUrl = null;
+    }
+    function _updateColdCloudOverlay() {
+        if (!map) return;
+        var want = _coldCloudEnabled && _mosaicTs && window.LFLET_GL && _anyShadedEnvActive();
+        if (!want) { _removeColdCloudOverlay(); return; }
+        _irEnsureProtocol();
+        var url = 'irlut://coldcloud/' + _mosaicTileUrl(_mosaicTs, 'ir');
+        if (_coldCloudLayer && _coldCloudUrl === url) return;   // already current frame
+        _removeColdCloudOverlay();
+        _coldCloudUrl = url;
+        _coldCloudLayer = L.tileLayer(url, {
+            maxZoom: 6, maxNativeZoom: 6, tileSize: 512,
+            opacity: 1, pane: 'coldCloudPane', interactive: false
+        }).addTo(map);
+    }
+    // Exposed so the Display-menu toggle can flip it.
+    window._rtToggleConvectionOverlay = function (on) {
+        _coldCloudEnabled = (on != null) ? !!on : !_coldCloudEnabled;
+        _updateColdCloudOverlay();
+        return _coldCloudEnabled;
+    };
+
     function _activateEnvLayer(layer) {
         if (!map || !layer || _rtEnvActive[layer.name]) return;
         var bounds = layer.bounds || [[-90, -180], [90, 180]];
@@ -18647,6 +18714,7 @@
                     var rasters = _addRepeatingImageOverlays(layer.image_url, bounds);
                     _rtEnvActive[layer.name].overlays = rasters;
                     _rtEnvActive[layer.name].overlayKind = 'raster';
+                    _updateColdCloudOverlay();
                 });
         } else {
             overlays = _addRepeatingImageOverlays(layer.image_url, bounds);
@@ -18659,6 +18727,8 @@
             canvas: null, ctx: null
         };
         _rtEnvActive[layer.name] = entry;
+        // Drape the cold-cloud convection layer over the new shaded field.
+        _updateColdCloudOverlay();
 
         // Preload the parallel data PNG into an offscreen canvas so we
         // can read raw values under the cursor for the hover tooltip.
@@ -18711,6 +18781,7 @@
             }
         }
         delete _rtEnvActive[name];
+        _updateColdCloudOverlay();   // drop the convection overlay if no shaded field remains
         _renderEnvColorbar();
         _hideEnvHoverTip();
         if (typeof _refreshLayersCount === 'function') _refreshLayersCount();

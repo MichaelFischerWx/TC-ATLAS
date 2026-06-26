@@ -298,6 +298,31 @@
             }
             return lut;
         })();
+        // Cold-Cloud mask — convection-only grayscale, the rest TRANSPARENT.
+        // Used as an overlay on top of shaded env fields (SST anomaly etc.) so
+        // deep convection (Tb < -20 C = 253 K) shows as white cloud while the
+        // env field reads through the warm/clear areas. Below the threshold:
+        // light-gray → white as tops get colder; at/above: alpha 0. (The
+        // irlut:// recolor honors per-pixel alpha for this one.)
+        IR_COLORMAPS['coldcloud'] = (function () {
+            var vmin = 160.0, vmax = 330.0;
+            var THRESH = 253.0;   // -20 C cutoff
+            var coldest = 190.0;  // map THRESH→light gray, coldest→white
+            var lut = new Uint8Array(256 * 4);
+            lut[0] = 0; lut[1] = 0; lut[2] = 0; lut[3] = 0;
+            for (var i = 1; i <= 255; i++) {
+                var tb = vmin + (i - 1) * (vmax - vmin) / 254.0;
+                var idx = i * 4;
+                if (tb >= THRESH) {            // warmer than -20 C → transparent
+                    lut[idx] = 0; lut[idx + 1] = 0; lut[idx + 2] = 0; lut[idx + 3] = 0;
+                } else {
+                    var f = Math.max(0, Math.min(1, (THRESH - tb) / (THRESH - coldest)));
+                    var g = Math.round(165 + f * (255 - 165));   // 165 at -20 C → 255 coldest
+                    lut[idx] = g; lut[idx + 1] = g; lut[idx + 2] = g; lut[idx + 3] = 255;
+                }
+            }
+            return lut;
+        })();
         // Low-Cloud — emphasizes SHALLOW convection + low-level circulation
         // centers. Inverts the usual IR emphasis: warm ocean is near-black, the
         // 270-294 K shallow/trade-cumulus + stratocumulus band gets a steep,
