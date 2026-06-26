@@ -343,7 +343,11 @@ const filters = {
 };
 
 // ── Dark-themed map ──────────────────────────────────────────
-const map = L.map('map', { center:[20,-60], zoom:4, zoomControl:true, tap:true, tapTolerance:15 });
+// MapLibre's zoom uses a 512px tile base — exactly 1 level tighter than
+// Leaflet's 256px convention. Under the GL facade (?gl=1) a Leaflet zoom N
+// renders as N+1, so subtract 1 to keep the same extent. No-op on plain Leaflet.
+function _glZ(leafletZoom) { return window.LFLET_GL ? leafletZoom - 1 : leafletZoom; }
+const map = L.map('map', { center:[20,-60], zoom:_glZ(4), zoomControl:true, tap:true, tapTolerance:15 });
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
     attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
@@ -430,7 +434,7 @@ function enterFocusMode(caseData) {
     });
     _focusMarker = L.marker([caseData.latitude, caseData.longitude], { icon: icon }).addTo(map);
     _bindTCCenterTooltip(_focusMarker, caseData);
-    map.setView([caseData.latitude, caseData.longitude], 6, { animate: true });
+    map.setView([caseData.latitude, caseData.longitude], _glZ(6), { animate: true });
     document.getElementById('map-wrapper').classList.add('focus-mode');
     document.getElementById('side-panel').classList.add('focus-panel');
     setTimeout(function() {
@@ -464,7 +468,7 @@ function exitFocusMode() {
     // Restore map filter to all
     filters.stormName = 'all';
     updateMarkers();
-    setTimeout(function() { map.invalidateSize(); map.setView([20, -60], 4, { animate: true }); }, 380);
+    setTimeout(function() { map.invalidateSize(); map.setView([20, -60], _glZ(4), { animate: true }); }, 380);
 }
 
 // Storm dropdown: filters the map AND populates the case dropdown
