@@ -1692,6 +1692,31 @@
     }
     function _mosaicTileUrl(ts, product) { return _MOSAIC_ROOT + '/' + (product || 'ir') + '/' + ts + '/{z}/{x}/{y}.png'; }
 
+    // ── Lite storm view (Phase B) ──────────────────────────────────────────
+    // Opt-in via ?lite=1: the storm card renders its IR loop from the mosaic's
+    // pre-baked z5/z6 storm sectors (cdn.tcatlas.org/mosaic-v2) instead of the
+    // raw-Tb cutout. $0 new compute (the tiles already exist for every active
+    // storm) and it shields raw Tb from scrapers. The raw-Tb "Detailed" path
+    // stays the DEFAULT until this is verified on a live storm, then it flips.
+    // See project_lite_storm_view memory.
+    var _LITE_STORM_VIEW = (function () {
+        try { return /[?&]lite=1(?:&|$)/.test(location.search); } catch (e) { return false; }
+    })();
+    var _liteActive = false;   // true while a card is showing the mosaic loop
+    // The combined mosaic covers GOES-E/W + Himawari only; the Meteosat sector
+    // (~-5..75°E: Africa / Europe / W Indian Ocean) has no baked tiles, so a
+    // storm there falls through to the raw-Tb path even under ?lite=1.
+    function _mosaicCoversLon(lon) {
+        var L = ((lon + 180) % 360 + 360) % 360 - 180;   // normalize to [-180,180)
+        return !(L > -5 && L < 75);
+    }
+    function _mosaicTsToIso(ts) {
+        // 'YYYYMMDDHHMM' -> ISO 'YYYY-MM-DDTHH:MM:00Z' (fmtUTC-parseable)
+        var s = String(ts);
+        return s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8) + 'T' +
+               s.slice(8, 10) + ':' + s.slice(10, 12) + ':00Z';
+    }
+
     // ── Inspect IR Tb (client-side, ~$0) ───────────────────────────────────
     // The global IR mosaic tiles are pre-colored server-side with the backend
     // _IR_LUT over [190,310] K (frac = 1 - (Tb-190)/120). We rebuild that exact
@@ -4733,8 +4758,47 @@
         }
     }
 
+    /** Lite refresh: re-poll the mosaic frames.json and rebuild the mosaic
+     *  loop if a newer frame has landed. Mirrors _refreshIrFramesIfNewer for
+     *  the $0 mosaic-tile path — without it, the raw-Tb refresh below would
+     *  clobber the lite layers with a heavyweight bundle on the next poll. */
+    function _refreshLiteFramesIfNewer(atcfId) {
+        if (animFrameTimes.length === 0) return;
+        // Only rebuild the IR mosaic loop while IR is the shown product — a
+        // background poll while the user is on Vis/WV must not flip IR frames on.
+        if (productMode !== 'eir') return;
+        var currentLatest = animFrameTimes[animFrameTimes.length - 1];
+        fetch(_MOSAIC_BASE + '/frames.json', { cache: 'no-store' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (!detailMap || currentStormId !== atcfId || !_liteActive) return;
+                var frames = (j && j.frames) || [];
+                if (!frames.length) return;
+                var newLatest = _mosaicTsToIso(frames[frames.length - 1]);
+                if (!newLatest || newLatest <= currentLatest) return;
+                // Keep the shared mosaic state (global map) in sync too.
+                _mosaicFrames = frames;
+                _mosaicTs = frames[frames.length - 1];
+                var storm = null;
+                for (var i = 0; i < stormData.length; i++) {
+                    if (stormData[i].atcf_id === atcfId) { storm = stormData[i]; break; }
+                }
+                if (!storm) return;
+                var wasPlaying = animPlaying;
+                if (wasPlaying) stopAnimation();
+                _buildMosaicAnimLayers(storm, frames, 'ir');
+                console.log('[RT Monitor] Lite frames refreshed — latest ' + newLatest);
+                if (wasPlaying) setTimeout(function () {
+                    if (framesReady && currentStormId === atcfId && _liteActive) startAnimation();
+                }, 250);
+            })
+            .catch(function () {});
+    }
+
     function _refreshIrFramesIfNewer(atcfId) {
         if (animFrameTimes.length === 0) return;
+        // Lite cards refresh from the mosaic frames.json, not the raw-Tb bundle.
+        if (_liteActive) { _refreshLiteFramesIfNewer(atcfId); return; }
         var currentLatest = animFrameTimes[animFrameTimes.length - 1];
         var gcsUrl = _gcsFramesBundleUrl(atcfId);
         var apiUrl = API_BASE
@@ -4886,6 +4950,77 @@
                 console.warn('[RT Monitor] ' + productKey + ' refresh failed:',
                              err && err.message);
             });
+    }
+
+    /** LITE path (?lite=1): build the storm-card IR loop from the mosaic's
+     *  pre-baked z5/z6 storm sectors instead of the raw-Tb cutout. Frontend-
+     *  only, $0 new compute. Falls through to the raw-Tb path if the mosaic is
+     *  unavailable. (The Meteosat-gap longitude check happens at the caller, so
+     *  by here we expect tiles to exist.) See project_lite_storm_view. */
+    function _initDetailMapMosaic(storm) {
+        if (!detailMap) return;
+        var atcfId = storm.atcf_id;
+        _loadMosaicFrames().then(function (frames) {
+            if (!detailMap || currentStormId !== atcfId) return;
+            if (!frames || frames.length === 0) {
+                console.warn('[RT Monitor] Lite: no mosaic frames; raw-Tb fallback');
+                _liteActive = false;
+                _initDetailMapJPG(storm, GIBS_IR_LAYERS[detailSatName]);
+                return;
+            }
+            _buildMosaicAnimLayers(storm, frames, 'ir');
+        }).catch(function (e) {
+            console.warn('[RT Monitor] Lite: mosaic load failed; raw-Tb fallback', e);
+            _liteActive = false;
+            _initDetailMapJPG(storm, GIBS_IR_LAYERS[detailSatName]);
+        });
+    }
+
+    /** Populate the shared animation arrays (animFrameLayers/Times, validFrames)
+     *  with one mosaic tile layer per frame so the existing deck — play, slider,
+     *  step, speed, loop, trim — drives them unchanged. showFrame() works as-is:
+     *  setOpacity toggles the tile layer, and the imageOverlay-only helpers
+     *  (_recenterDetailToFrame / _syncDetailPinToFrame / _applyDecodeWindow)
+     *  no-op on a tile layer (no getBounds / _recenterTo / _frameBlobUrl), so
+     *  the camera stays anchored on the storm — exactly right, since the storm
+     *  "moves through" a fixed tile grid over the short window. */
+    function _buildMosaicAnimLayers(storm, frames, product) {
+        cleanupFrameLayers();   // drop any prior layers + reset the frame-state arrays
+        _liteActive = true;
+        var n = frames.length;
+        for (var i = 0; i < n; i++) {
+            var url = _mosaicTileUrl(frames[i], product);
+            if (product === 'ir') url = _irColorTileUrl(url);   // honor the colormap picker
+            var ly = L.tileLayer(url, {
+                tileSize: 512, maxNativeZoom: 6, maxZoom: GIBS_VIS_MAX_ZOOM,
+                opacity: 0, pane: 'tilePane', keepBuffer: 2
+            });
+            ly._mosaicTs = frames[i];   // marks this as a lite/mosaic layer
+            ly.addTo(detailMap);
+            animFrameLayers.push(ly);
+            animFrameTimes.push(_mosaicTsToIso(frames[i]));
+            validFrames.push(i);
+            frameHasError.push(false);
+        }
+        framesLoaded = n;
+        framesReady = true;
+        animIndex = n - 1;
+        _firstFrameShown = true;
+        showFrame(n - 1);
+        showLoadingProgress(false);
+        var sl = document.getElementById('ir-anim-slider');
+        if (sl) { sl.max = n - 1; sl.value = n - 1; }
+        var pb = document.getElementById('ir-anim-play');
+        if (pb) { pb.disabled = false; pb.title = 'Play/Pause'; }
+        updateAnimCounter();
+        updateFrameOverlay();
+        // Secondary panels (models / WeatherLab / ASCAT / recon / MW / radar /
+        // obs / intensity). Deliberately NOT _fetchRawTbIncremental — the whole
+        // point of lite is to leave raw Tb untouched; diagnostics/obj-eye that
+        // need raw Tb stay a Detailed-path feature.
+        _deferredStormRef = storm;
+        _triggerDeferredLoads();
+        console.log('[RT Monitor] Lite mosaic loop: ' + n + ' frames (' + product + ')');
     }
 
     function _initDetailMapJPG(storm, satLayerName) {
@@ -5213,6 +5348,10 @@
      *  simultaneously (no batching needed — they're local memory). */
     function _initDetailMapJPGWithBundle(storm, satLayerName, buf) {
         if (!detailMap) return;
+        // The raw-Tb path is now authoritative for IR — leave lite mode so the
+        // mosaic poll-refresh doesn't fight this rebuild (product switch back to
+        // IR, on-demand Detailed, or a fallback all funnel through here).
+        _liteActive = false;
         var dv;
         var header;
         var binBase;
@@ -5724,7 +5863,11 @@
         // cutout image overlays. Static at the latest mosaic frame — when the user
         // is zoomed in on the storm the cutout covers it, so this only shows in the
         // surrounding context where a frozen vs animating distinction is moot.
-        if (window.LFLET_GL) {
+        // Lite (?lite=1) renders the storm card straight from the animated
+        // mosaic frames, which already cover the whole viewport at every zoom,
+        // so the static under-layer below is redundant there — skip it.
+        var _useLite = _LITE_STORM_VIEW && window.LFLET_GL && _mosaicCoversLon(storm.lon);
+        if (window.LFLET_GL && !_useLite) {
             var _mosStormId = storm.atcf_id;
             _loadMosaicFrames().then(function () {
                 if (!detailMap || currentStormId !== _mosStormId) return;
@@ -5783,7 +5926,12 @@
         // frame instead of ~16 GIBS tiles. Auto-falls-back to GIBS on
         // /ir-frames-meta failure or excessive image-load errors.
         _jpgPathFellBack = false;
-        _initDetailMapJPG(storm, satLayerName);
+        if (_useLite) {
+            _initDetailMapMosaic(storm);
+        } else {
+            _liteActive = false;
+            _initDetailMapJPG(storm, satLayerName);
+        }
 
         // Raw Tb pre-fetch starts inside _triggerDeferredLoads() with a
         // 3-second delay, giving panel requests (models, WeatherLab, etc.)
