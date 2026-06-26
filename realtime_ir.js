@@ -14015,7 +14015,10 @@
                 Math.max.apply(null, lons) - Math.min.apply(null, lons));
             var binDeg = Math.max(0.25, Math.min(0.6, spread / 30));
             var grid = _genesisDensityGrid(positions, binDeg, 1.2);
-            var paths = _genesisDensityBandPaths(grid, BAND_FRACTIONS);
+            // One per-cell heatmap trace (≥10% of peak), colored by fraction —
+            // no stacked translucent bands, so a tight/sparse cluster can't
+            // composite to near-black (the 50-member long-lead bug).
+            var cells = _genesisDensityCells(grid, BAND_FRACTIONS[0]);
             // Match marker size to the cell size at the modal's view
             // scale so cells tile without gaps. ~26 px per degree at
             // the modal's typical width, scaled by binDeg + a small
@@ -14023,15 +14026,22 @@
             // are sized in pixels (not data units) so this isn't
             // perfect at all zoom states but the modal view is fixed.
             var markerPx = Math.max(8, Math.round(binDeg * 26 * 1.25));
-            // Empty the members trace + populate the 4 band traces in
-            // a single restyle call (avoids inter-frame flicker).
+            // Empty the members trace, populate the density trace (7), keep the
+            // 8-10 placeholders empty — single restyle to avoid inter-frame flicker.
             Plotly.restyle(el, {
-                lon: [[], paths[0].lons, paths[1].lons,
-                      paths[2].lons, paths[3].lons],
-                lat: [[], paths[0].lats, paths[1].lats,
-                      paths[2].lats, paths[3].lats],
+                lon: [[], cells.lons, [], [], []],
+                lat: [[], cells.lats, [], [], []],
                 'marker.size': [7, markerPx, markerPx, markerPx, markerPx],
+                'marker.color': [[], cells.fracs, [], [], []],
             }, [6, 7, 8, 9, 10]);
+            // Members mode cyclically sets ALL these traces to the SS colorscale
+            // (0-200) — reset trace 7 to the density colorscale/range/opacity so
+            // it doesn't render the fractions (0-1) as all-blue at SS scale.
+            Plotly.restyle(el, {
+                'marker.colorscale': [_GENESIS_DENSITY_SCALE],
+                'marker.cmin': [0], 'marker.cmax': [1],
+                'marker.opacity': [0.82], 'marker.line.width': [0],
+            }, [7]);
             // Dim the spaghetti trace (index 0) so the heatmap reads
             // clearly against it — the spaghetti is also orange, so at
             // its default 0.18 alpha the iso-bands get washed out.
@@ -14340,6 +14350,21 @@
         [160/200,  '#b9a3f9'],   // beyond C5 — light violet
         [180/200,  '#dccdfb'],   // extreme — pale lavender
         [1,        '#f5f0ff'],   // 200 kt — white-hot (off the charts)
+    ];
+
+    // Member-density colorscale (fraction-of-peak 0→1). Same yellow→amber→
+    // orange→crimson ramp as the iso-band legend, but applied as ONE per-cell
+    // colorscale trace instead of 4 stacked translucent bands — so tight/sparse
+    // clusters (e.g. the 50-member ensemble at long lead) can't over-composite
+    // to near-black the way the stacked bands did. Stops match the 10/25/50/75%
+    // legend swatches.
+    var _GENESIS_DENSITY_SCALE = [
+        [0.00, 'rgb(254, 240, 138)'],   // ≥10% pale yellow (cells below 10% aren't drawn)
+        [0.20, 'rgb(254, 240, 138)'],
+        [0.36, 'rgb(251, 191,  36)'],   // ≥25% amber
+        [0.62, 'rgb(234,  88,  12)'],   // ≥50% orange-red
+        [0.88, 'rgb(159,  18,  57)'],   // ≥75% deep crimson
+        [1.00, 'rgb(159,  18,  57)'],
     ];
 
     /* Run-to-run trend sparkline.
@@ -15410,10 +15435,23 @@
         // the peak composites to a saturated red against the orange
         // spaghetti background. Yellow→red ramp reads more clearly as
         // a probability heatmap than orange→red.
-        var tauDensity0 = densityBand('254, 240, 138', 0.55);  // ≥10% peak (pale yellow)
-        var tauDensity1 = densityBand('251, 191,  36', 0.55);  // ≥25% (amber)
-        var tauDensity2 = densityBand('234,  88,  12', 0.60);  // ≥50% (orange-red)
-        var tauDensity3 = densityBand('159,  18,  57', 0.65);  // ≥75% (deep crimson)
+        // Trace 7 is now the SINGLE per-cell density heatmap (colorscale by
+        // fraction-of-peak). Traces 8-10 are kept as empty placeholders so the
+        // downstream trace indices (insetMarker=11, restyle targets) are stable.
+        var tauDensity0 = {
+            type: 'scattergeo', mode: 'markers',
+            lon: [], lat: [],
+            marker: {
+                symbol: 'square', size: 12,
+                color: [], colorscale: _GENESIS_DENSITY_SCALE, cmin: 0, cmax: 1,
+                line: { color: 'rgba(0,0,0,0)', width: 0 },
+                opacity: 0.82,
+            },
+            hoverinfo: 'skip', showlegend: false,
+        };
+        var tauDensity1 = densityBand('254, 240, 138', 0);     // empty placeholder
+        var tauDensity2 = densityBand('254, 240, 138', 0);     // empty placeholder
+        var tauDensity3 = densityBand('254, 240, 138', 0);     // empty placeholder
         Plotly.react(el,
                      [spaghetti, firstGenesis, meanLine, meanMarkers,
                       lonLabels, latLabels, tauCursor,
@@ -15509,6 +15547,25 @@
     // sized to tile the grid without gaps at the modal's typical
     // view extent. Inner bands (high threshold) are SUBSETS of outer
     // bands — trace stacking + alpha compositing gives the heatmap.
+    // Single-trace density: every cell at or above minFrac of the peak, with
+    // its fraction-of-peak (0-1) for the colorscale. Replaces the 4 stacked
+    // iso-bands so overlapping markers can't compound into near-black.
+    function _genesisDensityCells(grid, minFrac) {
+        if (!grid || !grid.maxValue) return { lons: [], lats: [], fracs: [] };
+        var b = grid.binDeg, lons = [], lats = [], fracs = [];
+        for (var iy = 0; iy < grid.ny; iy++) {
+            var cellLat = grid.latMin + (iy + 0.5) * b;
+            for (var ix = 0; ix < grid.nx; ix++) {
+                var f = grid.values[iy][ix] / grid.maxValue;
+                if (f < minFrac) continue;
+                lons.push(grid.lonMin + (ix + 0.5) * b);
+                lats.push(cellLat);
+                fracs.push(f);
+            }
+        }
+        return { lons: lons, lats: lats, fracs: fracs };
+    }
+
     function _genesisDensityBandPaths(grid, fractions) {
         if (!grid || !grid.maxValue) {
             return fractions.map(function () { return { lons: [], lats: [] }; });
