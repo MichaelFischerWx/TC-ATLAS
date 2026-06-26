@@ -1900,7 +1900,7 @@
     // so deep convection literally rises. It's a qualitative "feel" (IR is a 2D
     // cloud-TOP surface, not a true 3D volume), tuned for visual impact.
     var _rt3DOn = false;
-    var _rt3DExag = 3.2;           // setTerrain exaggeration (drama knob)
+    var _rt3DExag = 3.0;           // setTerrain exaggeration (Height slider; on the 0.5 grid)
     var _rt3DPitch = 62;           // camera pitch when 3D is on
     var _terrainProtoReady = false;
     function _tbToTerrainRGB(tb, out) {
@@ -1991,20 +1991,39 @@
         box.id = 'ir-3d-tilt-ctl';
         box.style.cssText = 'position:fixed;right:14px;bottom:128px;z-index:650;display:none;' +
             'background:rgba(15,23,42,0.92);backdrop-filter:blur(8px);' +
-            'border:1px solid rgba(148,163,184,0.18);border-radius:10px;padding:7px 11px;' +
+            'border:1px solid rgba(148,163,184,0.18);border-radius:10px;padding:8px 11px;' +
             'box-shadow:0 4px 18px rgba(0,0,0,0.45);font:600 11px/1.2 "DM Sans",system-ui,sans-serif;color:#cbd5e1;';
-        box.innerHTML = '<div style="display:flex;align-items:center;gap:8px;">' +
+        // Two rows: camera Tilt (pitch) + Height (terrain exaggeration — a pure
+        // GPU vertical scale on the existing DEM, no re-fetch/re-encode, $0).
+        box.innerHTML =
+            '<div style="display:grid;grid-template-columns:auto 120px 36px;align-items:center;gap:6px 8px;">' +
             '<span title="Camera tilt — 0° top-down, 80° near-horizon. Or drag the map to orbit.">⛰ Tilt</span>' +
-            '<input id="ir-3d-tilt" type="range" min="0" max="80" step="1" style="width:120px;accent-color:#00e5ff;cursor:pointer;">' +
-            '<span id="ir-3d-tilt-val" style="min-width:30px;text-align:right;color:#00e5ff;font-variant-numeric:tabular-nums;"></span></div>';
+            '<input id="ir-3d-tilt" type="range" min="0" max="80" step="1" style="accent-color:#00e5ff;cursor:pointer;">' +
+            '<span id="ir-3d-tilt-val" style="text-align:right;color:#00e5ff;font-variant-numeric:tabular-nums;"></span>' +
+            '<span title="Vertical amplification of the IR cloud-top relief (GPU only — no extra data or compute).">↕ Height</span>' +
+            '<input id="ir-3d-exag" type="range" min="1" max="8" step="0.5" style="accent-color:#00e5ff;cursor:pointer;">' +
+            '<span id="ir-3d-exag-val" style="text-align:right;color:#00e5ff;font-variant-numeric:tabular-nums;"></span>' +
+            '</div>';
         document.body.appendChild(box);
-        var sl = box.querySelector('#ir-3d-tilt');
-        sl.value = _rt3DPitch;
+        var tilt = box.querySelector('#ir-3d-tilt');
+        tilt.value = _rt3DPitch;
         box.querySelector('#ir-3d-tilt-val').textContent = _rt3DPitch + '°';
-        sl.addEventListener('input', function () {
+        tilt.addEventListener('input', function () {
             var gl = map && map._gl;
-            if (gl && gl.setPitch) { try { gl.setPitch(+sl.value); } catch (e) {} }
-            box.querySelector('#ir-3d-tilt-val').textContent = sl.value + '°';
+            if (gl && gl.setPitch) { try { gl.setPitch(+tilt.value); } catch (e) {} }
+            box.querySelector('#ir-3d-tilt-val').textContent = tilt.value + '°';
+        });
+        var exag = box.querySelector('#ir-3d-exag');
+        exag.value = _rt3DExag;
+        box.querySelector('#ir-3d-exag-val').textContent = _rt3DExag + '×';
+        exag.addEventListener('input', function () {
+            _rt3DExag = +exag.value;
+            box.querySelector('#ir-3d-exag-val').textContent = _rt3DExag + '×';
+            var gl = map && map._gl;
+            // Re-apply terrain at the new exaggeration — instant, GPU-only.
+            if (gl && gl.setTerrain && _rt3DOn && gl.getSource('ir-dem')) {
+                try { gl.setTerrain({ source: 'ir-dem', exaggeration: _rt3DExag }); } catch (e) {}
+            }
         });
         _rt3DTiltEl = box;
         return box;
