@@ -2217,10 +2217,11 @@ def build_midlevel_rh(date_str: str, hour_str: str, *, forecast_hour: int = 0,
     return rh if upload_layer(spec, rh) else None
 
 
-def build_sst() -> Optional[bytes]:
-    """NOAA OISST v2.1 daily SST (degC)."""
+def build_sst(prefetched: "Optional[tuple]" = None) -> Optional[bytes]:
+    """NOAA OISST v2.1 daily SST (degC). `prefetched` lets main() share a single
+    OISST fetch with build_sst_anomalies (avoids two slow NCEI round-trips)."""
     log.info("Building SST: NOAA OISST")
-    result = fetch_oisst_sst()
+    result = prefetched if prefetched else fetch_oisst_sst()
     if not result:
         log.error("SST: OISST fetch failed")
         return None
@@ -2309,7 +2310,7 @@ def _load_oisst_monclim_env() -> Optional[np.ndarray]:
     return clim
 
 
-def build_sst_anomalies() -> bool:
+def build_sst_anomalies(prefetched: "Optional[tuple]" = None) -> bool:
     """OISST SST anomaly + relative anomaly vs the 1991-2020 climatology.
 
     Brings the seasonal Panel A framing to the global map: where is the ocean
@@ -2317,10 +2318,11 @@ def build_sst_anomalies() -> bool:
     removing the area-weighted tropical-mean warming — where is it warm
     RELATIVE to the tropics (Vecchi & Soden 2007), which tracks TC potential
     intensity better than absolute SST in a warming climate. Reuses the OISST
-    fetch + climatology that already exist; no new data source. Returns True if
-    either layer uploaded."""
+    fetch + climatology that already exist; no new data source. `prefetched`
+    shares main()'s single OISST fetch with build_sst. Returns True if either
+    layer uploaded."""
     log.info("Building SST anomalies: OISST vs 1991-2020 climatology")
-    result = fetch_oisst_sst()
+    result = prefetched if prefetched else fetch_oisst_sst()
     if not result:
         log.error("SST-anom: OISST fetch failed")
         return False
@@ -2691,18 +2693,25 @@ def main() -> int:
                           key, traceback.format_exc())
                 results[key] = False
 
-    # SST runs once per scheduler invocation — OISST is observation-only
-    # daily, no forecast hours exist. Uses the legacy single-PNG path.
+    # SST runs once per scheduler invocation — OISST is observation-only daily,
+    # no forecast hours. Fetch OISST ONCE and share it across the absolute-SST
+    # and anomaly builders so a slow NCEI endpoint costs one walk-back, not two
+    # (each can burn up to the 90s budget). All use the legacy single-PNG path.
     try:
-        results["sst_oisst"] = build_sst() is not None
+        _oisst = fetch_oisst_sst()
+    except Exception:
+        log.error("OISST shared fetch crashed:\n%s", traceback.format_exc())
+        _oisst = None
+    try:
+        results["sst_oisst"] = build_sst(_oisst) is not None
     except Exception:
         log.error("Builder sst_oisst crashed:\n%s", traceback.format_exc())
         results["sst_oisst"] = False
 
-    # SST anomaly + relative-SST (vs 1991-2020 climo) — reuses the same OISST
-    # fetch + climatology; observation-only, single-PNG path like sst_oisst.
+    # SST anomaly + relative-SST (vs 1991-2020 climo) — same OISST fetch + the
+    # cached climatology; observation-only, single-PNG path like sst_oisst.
     try:
-        results["sst_anomalies"] = build_sst_anomalies()
+        results["sst_anomalies"] = build_sst_anomalies(_oisst)
     except Exception:
         log.error("Builder sst_anomalies crashed:\n%s", traceback.format_exc())
         results["sst_anomalies"] = False
