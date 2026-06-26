@@ -562,6 +562,7 @@
         NI: '#fbbf24', SI: '#34d399', SP: '#a78bfa'
     };
     var gibsIRLayers = [];     // GIBS IR tile layers on main map
+    var _globalBasemap = null; // light carto basemap under the IR (muted in 3D)
     var trackLayers = [];      // past track polylines + dots on main map
     // Active-storm name-label markers, keyed by uppercase ATCF id.
     // Persists across clearTracks() on purpose: drawTrackOnMap removes the
@@ -2044,6 +2045,10 @@
             _rt3DOn = true;
             _rt3DApply(gl);
             _rt3DShowTilt(true);
+            // Mute the light basemap so where the IR raster is clear or still
+            // loading the gap reads as dark GL background, not a glaring white
+            // plateau draped over the terrain. Coastlines stay for reference.
+            if (_globalBasemap) try { _globalBasemap.setOpacity(0); } catch (e) {}
         } else {
             _rt3DOn = false;
             _rt3DShowTilt(false);
@@ -2054,6 +2059,7 @@
                 if (gl.dragRotate) gl.dragRotate.disable();
                 if (gl.touchZoomRotate) gl.touchZoomRotate.disableRotation();
             } catch (e) {}
+            if (_globalBasemap) try { _globalBasemap.setOpacity(1); } catch (e) {}
         }
         _rt3DSyncButtons();
         return _rt3DOn;
@@ -3532,6 +3538,7 @@
             subdomains: 'abcd',
             maxZoom: 19
         }).addTo(map);
+        _globalBasemap = basemap;   // exposed so 3D mode can mute it (see _rt3DToggle)
 
         // Defer GIBS overlay slightly so basemap tiles get priority in the browser's
         // connection pool (6 connections per host). This makes the map feel responsive
