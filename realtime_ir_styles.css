@@ -2821,6 +2821,16 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
    side-by-side at the same panel level. Capped on tall screens so the
    panel doesn't bleed off the bottom of the map. */
 .ir-layers-panel {
+    /* Desktop top-right dropdown: pop the panel OUT of the .ir-layers-wrap
+       flex row (position:absolute) so its height never grows the row. As a
+       static flex child it was sized into an `align-items:center` line, which
+       vertically re-centered the IR/Vis/WV + Layers buttons downward when the
+       (tall) menu opened. Anchored to the wrap (position:absolute), it drops
+       just below the trigger, right-aligned. The mobile sheet overrides this
+       with position:fixed !important. */
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
     min-width: 280px;
     max-width: 320px;
     max-height: calc(100vh - 220px);
