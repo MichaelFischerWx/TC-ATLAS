@@ -211,6 +211,37 @@
             return lut;
         })();
 
+        // Genuine LINEAR grayscale (the "grayscale" above is the stepped Dvorak
+        // BD curve). Warm = black, cold = white over a 300→190 K window.
+        IR_COLORMAPS['graylinear'] = (function () {
+            var vmin = 160.0, vmax = 330.0, hot = 300.0, cold = 190.0;
+            var lut = new Uint8Array(256 * 4);
+            lut[0] = 0; lut[1] = 0; lut[2] = 0; lut[3] = 0;
+            for (var i = 1; i <= 255; i++) {
+                var tb = vmin + (i - 1) * (vmax - vmin) / 254.0;
+                var g = Math.max(0, Math.min(255, Math.round(255 * (hot - tb) / (hot - cold))));
+                var idx = i * 4;
+                lut[idx] = g; lut[idx + 1] = g; lut[idx + 2] = g; lut[idx + 3] = 255;
+            }
+            return lut;
+        })();
+
+        // Low-Cloud — emphasizes SHALLOW convection + low-level circulation
+        // centers. Warm ocean near-black; the 270-294 K shallow/trade-cumulus +
+        // stratocumulus band gets a steep, vivid teal→green→yellow ramp so
+        // low-cloud lines spiraling into an LLC pop; deep cold convection muted
+        // violet-gray so it doesn't dominate. Twin of satellite.js['lowcloud'].
+        IR_COLORMAPS['lowcloud'] = buildLUTfromTb([
+            {tb: 305, r:   8, g:  12, b:  22}, {tb: 298, r:  18, g:  26, b:  42},
+            {tb: 295, r:  30, g:  44, b:  66}, {tb: 293, r:  25, g:  95, b: 115},
+            {tb: 290, r:  25, g: 140, b: 140}, {tb: 287, r:  35, g: 180, b: 130},
+            {tb: 284, r:  90, g: 210, b: 100}, {tb: 280, r: 165, g: 228, b:  75},
+            {tb: 276, r: 230, g: 228, b:  90}, {tb: 272, r: 245, g: 200, b: 120},
+            {tb: 266, r: 232, g: 198, b: 188}, {tb: 258, r: 175, g: 170, b: 188},
+            {tb: 245, r: 125, g: 122, b: 145}, {tb: 228, r:  95, g:  88, b: 118},
+            {tb: 208, r:  72, g:  66, b:  96}, {tb: 185, r:  48, g:  44, b:  66}
+        ]);
+
         // Funktop
         IR_COLORMAPS['funktop'] = buildLUTfromTb([
             {tb: 309, r:   0, g:   0, b:   0},
@@ -3897,8 +3928,9 @@
             cmSel.id = 'ir-cmap-select';
             cmSel.className = 'ir-cmap-select';
             [['claude-ir', 'Claude IR'], ['irb', 'IRB'], ['avn', 'AVN'], ['nhc', 'NHC'],
-             ['rammb', 'RAMMB'], ['dvorak', 'Dvorak BD'], ['funktop', 'Funktop'],
-             ['enhanced', 'Enhanced'], ['grayscale', 'Grayscale']].forEach(function (o) {
+             ['rammb', 'RAMMB'], ['dvorak', 'Dvorak Color'], ['funktop', 'Funktop'],
+             ['enhanced', 'Enhanced'], ['grayscale', 'Dvorak BD'],
+             ['graylinear', 'Grayscale'], ['lowcloud', 'Low-Cloud']].forEach(function (o) {
                 var opt = document.createElement('option'); opt.value = o[0]; opt.textContent = o[1]; cmSel.appendChild(opt);
             });
             cmSel.addEventListener('change', function () { _rtSetIRColormap(cmSel.value); });
