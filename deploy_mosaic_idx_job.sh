@@ -48,7 +48,7 @@ fi
 # window in the builder). args use the ^@^ delimiter — leading -- trips gcloud.
 COMMON_FLAGS=(
   --region "${REGION}" --image "${IMAGE}"
-  --memory 8Gi --cpu 2 --max-retries 1 --task-timeout 300
+  --memory 8Gi --cpu 2 --max-retries 1 --task-timeout 600
   --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET},MOSAIC_TILE_MODE=idx,MOSAIC_R2_PREFIX=mosaic-v3"
   --set-secrets  "R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
   "--args=^@^--r2@--storm@--time@--bands@ir,wv,vis@--frames@1"
