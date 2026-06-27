@@ -2168,6 +2168,74 @@
                 });
         });
     }
+    // Same DEM encode, but from a single-channel idx tile: the index IS the height
+    // (R = idx, idx 0 = no-data) — no reverse-LUT, exact.
+    var _terrainIdxReady = false;
+    function _terrainIdxEnsureProtocol() {
+        if (_terrainIdxReady || !window.maplibregl || !maplibregl.addProtocol) return;
+        _terrainIdxReady = true;
+        var FLAT = [1, 134, 160];
+        maplibregl.addProtocol('terrainidx', function (params) {
+            var realUrl = params.url.slice('terrainidx://'.length);
+            return fetch(realUrl).then(function (r) { return r.blob(); })
+                .then(function (b) { return createImageBitmap(b); })
+                .then(function (bmp) {
+                    var c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+                    var cx = c.getContext('2d'); cx.drawImage(bmp, 0, 0);
+                    var im = cx.getImageData(0, 0, c.width, c.height), d = im.data, rgb = [0, 0, 0];
+                    for (var p = 0; p < d.length; p += 4) {
+                        var idx = d[p];
+                        if (idx === 0) { d[p] = FLAT[0]; d[p + 1] = FLAT[1]; d[p + 2] = FLAT[2]; d[p + 3] = 255; continue; }
+                        _tbToTerrainRGB(310 - (idx / 255) * 120, rgb);
+                        d[p] = rgb[0]; d[p + 1] = rgb[1]; d[p + 2] = rgb[2]; d[p + 3] = 255;
+                    }
+                    cx.putImageData(im, 0, 0);
+                    return new Promise(function (resolve) {
+                        c.toBlob(function (blob) { blob.arrayBuffer().then(function (ab) { resolve({ data: ab }); }); }, 'image/png');
+                    });
+                });
+        });
+    }
+    // 3D DEM tiles from the idx IR set when ?ir2a is active + IR frames are loaded;
+    // else null → caller falls back to the v2 terrainir path.
+    function _ir2aDemTiles() {
+        if (_IR2A && _ir2aFrames && _ir2aFrames.length && _ir2aFramesProduct === 'ir') {
+            _terrainIdxEnsureProtocol();
+            return ['terrainidx://' + _ir2aRoot('ir') + '/' + _ir2aFrames[_ir2aFrames.length - 1] + '/{z}/{x}/{y}.png'];
+        }
+        return null;
+    }
+    // Recolor an idx tile → RGBA (forward LUT) so a RASTER layer can drape it on 3D
+    // terrain (custom 2D layers don't drape). idxcolor://<product>/<realurl>.
+    var _idxColorReady = false;
+    function _idxColorEnsureProtocol() {
+        if (_idxColorReady || !window.maplibregl || !maplibregl.addProtocol) return;
+        _idxColorReady = true;
+        maplibregl.addProtocol('idxcolor', function (params) {
+            var rest = params.url.slice('idxcolor://'.length), s = rest.indexOf('/');
+            var product = rest.slice(0, s), url = rest.slice(s + 1);
+            var lut = _idxLutForProduct(product, _irColormap || 'claude-ir');
+            return fetch(url).then(function (r) { return r.blob(); }).then(function (b) { return createImageBitmap(b); }).then(function (bmp) {
+                var c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+                var cx = c.getContext('2d'); cx.drawImage(bmp, 0, 0);
+                var im = cx.getImageData(0, 0, c.width, c.height), d = im.data, i, idx;
+                for (i = 0; i < d.length; i += 4) {
+                    idx = d[i];
+                    if (idx === 0) { d[i + 3] = 0; continue; }
+                    d[i] = lut[idx * 4]; d[i + 1] = lut[idx * 4 + 1]; d[i + 2] = lut[idx * 4 + 2]; d[i + 3] = 255;
+                }
+                cx.putImageData(im, 0, 0);
+                return new Promise(function (resolve) { c.toBlob(function (bl) { bl.arrayBuffer().then(function (ab) { resolve({ data: ab }); }); }, 'image/png'); });
+            });
+        });
+    }
+    function _ir2aColorTiles() {
+        if (_IR2A && _ir2aFrames && _ir2aFrames.length && _ir2aFramesProduct === 'ir') {
+            _idxColorEnsureProtocol();
+            return ['idxcolor://ir/' + _ir2aRoot('ir') + '/' + _ir2aFrames[_ir2aFrames.length - 1] + '/{z}/{x}/{y}.png'];
+        }
+        return null;
+    }
     /** Toggle IR-derived 3D terrain on the global map. Returns the new state.
      *  The GL work is deferred until the style is loaded (addSource throws on a
      *  still-loading style), so the toggle is safe to hit at any time. */
@@ -2191,6 +2259,9 @@
             try {
                 gl.setTerrain(null);
                 if (gl.getSource('ir-dem')) gl.removeSource('ir-dem');
+                if (gl.getLayer('ir2a-3d-color')) gl.removeLayer('ir2a-3d-color');
+                if (gl.getSource('ir2a-3d-color')) gl.removeSource('ir2a-3d-color');
+                if (_ir2aLayer) _ir2aLayer.setOpacity(_productOpacity(globalProduct));   // restore the 2D custom layer
                 gl.easeTo({ pitch: 0, bearing: 0, duration: 700 });
                 if (gl.dragRotate) gl.dragRotate.disable();
                 if (gl.touchZoomRotate) gl.touchZoomRotate.disableRotation();
@@ -2215,11 +2286,22 @@
             if (gl.getTerrain && gl.getTerrain()) gl.setTerrain(null);
             if (gl.getSource('ir-dem')) gl.removeSource('ir-dem');
             gl.addSource('ir-dem', {
-                type: 'raster-dem', tiles: ['terrainir://' + _mosaicTileUrl(_mosaicTs, 'ir')],
+                type: 'raster-dem', tiles: (_ir2aDemTiles() || ['terrainir://' + _mosaicTileUrl(_mosaicTs, 'ir')]),
                 tileSize: 512, maxzoom: 6, encoding: 'mapbox'
             });
             if (gl.setMaxPitch) gl.setMaxPitch(80);
             gl.setTerrain({ source: 'ir-dem', exaggeration: _rt3DExag });
+            // ?ir2a: the custom 2D idx layer can't drape on terrain → drape a raster of
+            // the recolored idx tiles instead, and hide the custom layer while in 3D.
+            var _ct = _ir2aColorTiles();
+            if (_ct) {
+                if (gl.getLayer('ir2a-3d-color')) gl.removeLayer('ir2a-3d-color');
+                if (gl.getSource('ir2a-3d-color')) gl.removeSource('ir2a-3d-color');
+                gl.addSource('ir2a-3d-color', { type: 'raster', tiles: _ct, tileSize: 512, maxzoom: 6 });
+                map._glAdd({ id: 'ir2a-3d-color', type: 'raster', source: 'ir2a-3d-color',
+                    paint: { 'raster-opacity': _productOpacity('ir'), 'raster-resampling': 'nearest' } }, 200);  // tile-pane z (below overlays)
+                if (_ir2aLayer) _ir2aLayer.setOpacity(0);
+            }
             if (gl.dragRotate) gl.dragRotate.enable();
             if (gl.touchZoomRotate) gl.touchZoomRotate.enableRotation();
             // Shift+drag = tilt shortcut; disable boxZoom (its default) so they
@@ -2304,7 +2386,7 @@
         if (!_rt3DOn) return;
         var gl = map && map._gl;
         if (!gl || !gl.getSource('ir-dem') || !_mosaicTs) return;
-        try { gl.getSource('ir-dem').setTiles(['terrainir://' + _mosaicTileUrl(_mosaicTs, 'ir')]); } catch (e) {}
+        try { gl.getSource('ir-dem').setTiles(_ir2aDemTiles() || ['terrainir://' + _mosaicTileUrl(_mosaicTs, 'ir')]); } catch (e) {}
     }
 
     // Auto-orbit: a tilt-reveal of the eye's depth (camera tilts up from
