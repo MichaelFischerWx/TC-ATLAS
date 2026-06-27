@@ -1721,7 +1721,10 @@
     var _mosaicLoad = null;
     function _loadMosaicFrames() {
         if (_mosaicLoad) return _mosaicLoad;
-        _mosaicLoad = fetch(_MOSAIC_BASE + '/frames.json', { cache: 'no-store' })
+        // Default (idx) reads v3's frames.json; v2 is dropped after cutover. Timestamps
+        // are builder-identical, so every _mosaicFrames/_mosaicTs consumer keeps working.
+        var _fbase = _IR2A ? _ir2aRoot('ir') : _MOSAIC_BASE;
+        _mosaicLoad = fetch(_fbase + '/frames.json', { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (j) { _mosaicFrames = (j && j.frames) || [];
                 _mosaicTs = _mosaicFrames[_mosaicFrames.length - 1] || null; return _mosaicFrames; })
@@ -1734,7 +1737,7 @@
     // Flag-gated (?ir2a=1). Renders the cost-saving idx tiles (1-ch PNG, value =
     // quantized Tb) and colormaps on the GPU (mosaic_gl_layer.js). ?ir2adev=1 points
     // it at the local 6-frame set for integration testing before v3 is on R2.
-    var _IR2A = /[?&]ir2a=1/.test(location.search);
+    var _IR2A = !/[?&]ir2a=0/.test(location.search);   // DEFAULT ON (single-channel idx); ?ir2a=0 = rollback to v2 RGBA
     var _IR2A_DEV = /[?&]ir2adev=1/.test(location.search);
     var _IR2A_BASE = 'https://cdn.tcatlas.org/mosaic-v3';
     var _ir2aProduct = 'ir';           // product (ir/vis/wv) the idx layer is built for
@@ -1786,6 +1789,18 @@
         if (product === 'wv') return _WV_IDX_LUT;
         if (product === 'vis') return _VIS_IDX_LUT;
         return _idxLutFor(cmap);
+    }
+    // idx→RGBA LUT for an alpha-carrying operational map (e.g. coldcloud) straight from
+    // _irTargetMap, which is already keyed by the SAME claude-ir idx as the v3 tiles.
+    function _idxLutFromTarget(cmap) {
+        var m = (typeof _irTargetMap === 'function') ? _irTargetMap(cmap) : null;
+        if (!m) return null;
+        var out = new Uint8Array(256 * 4);                 // out[0]=transparent → idx 0 = no-data
+        for (var i = 1; i < 256; i++) {
+            out[i * 4] = m[i][0]; out[i * 4 + 1] = m[i][1]; out[i * 4 + 2] = m[i][2];
+            out[i * 4 + 3] = (m[i][3] != null) ? m[i][3] : 255;
+        }
+        return out;
     }
     // Stand-in for a per-frame tile layer: proxies the deck's setOpacity(idx)
     // calls to the single WebGL layer's setFrame, so the EXISTING animation /
@@ -1976,7 +1991,9 @@
 
     var _inspectOn = false, _inspectTileCache = {}, _inspectTipEl = null, _inspectThrottle = false;
     function _inspectSampleTile(z, x, y, cb) {
-        var url = _MOSAIC_ROOT + '/ir/' + _mosaicTs + '/' + z + '/' + x + '/' + y + '.png';
+        // idx (v3): the single channel IS the quantized Tb → exact readout (no RGB invert).
+        var url = (_IR2A ? _ir2aRoot('ir') + '/' + _mosaicTs : _MOSAIC_ROOT + '/ir/' + _mosaicTs)
+            + '/' + z + '/' + x + '/' + y + '.png';
         var rec = _inspectTileCache[url];
         if (rec) { cb(rec.cx ? rec : null); return; }
         rec = _inspectTileCache[url] = {};
@@ -2002,8 +2019,15 @@
         _inspectSampleTile(z, tx, ty, function (rec) {
             if (!rec || !rec.cx) { _inspectHideTip(); return; }
             var d = rec.cx.getImageData(px, py, 1, 1).data;
-            if (d[3] < 10) { _inspectHideTip(); return; }   // off-disk / no data
-            _inspectShowTip(clientX, clientY, _irRgbToTb(d[0], d[1], d[2]).tb);
+            var tb;
+            if (_IR2A) {                                    // idx tile: R = idx (L-mode → opaque)
+                if (d[0] === 0) { _inspectHideTip(); return; }   // idx 0 = no-data sentinel
+                tb = 310 - (d[0] / 255) * 120;              // exact idx → Tb
+            } else {
+                if (d[3] < 10) { _inspectHideTip(); return; }    // off-disk / no data
+                tb = _irRgbToTb(d[0], d[1], d[2]).tb;
+            }
+            _inspectShowTip(clientX, clientY, tb);
         });
     }
     function _inspectShowTip(x, y, tb) {
@@ -2209,11 +2233,14 @@
     // 3D DEM tiles from the idx IR set when ?ir2a is active + IR frames are loaded;
     // else null → caller falls back to the v2 terrainir path.
     function _ir2aDemTiles() {
-        if (_IR2A && _ir2aFrames && _ir2aFrames.length && _ir2aFramesProduct === 'ir') {
-            _terrainIdxEnsureProtocol();
-            return ['terrainidx://' + _ir2aRoot('ir') + '/' + _ir2aFrames[_ir2aFrames.length - 1] + '/{z}/{x}/{y}.png'];
-        }
-        return null;
+        if (!_IR2A) return null;
+        // Prefer v3's own manifest; else fall back to _mosaicTs (also v3 now) so the
+        // 3D DEM never reaches the v2 terrainir:// path after the v2 tiles are dropped.
+        var ts = (_ir2aFrames && _ir2aFrames.length && _ir2aFramesProduct === 'ir')
+            ? _ir2aFrames[_ir2aFrames.length - 1] : _mosaicTs;
+        if (!ts) return null;
+        _terrainIdxEnsureProtocol();
+        return ['terrainidx://' + _ir2aRoot('ir') + '/' + ts + '/{z}/{x}/{y}.png'];
     }
     // Recolor an idx tile → RGBA (forward LUT) so a RASTER layer can drape it on 3D
     // terrain (custom 2D layers don't drape). idxcolor://<product>/<realurl>.
@@ -2223,8 +2250,10 @@
         _idxColorReady = true;
         maplibregl.addProtocol('idxcolor', function (params) {
             var rest = params.url.slice('idxcolor://'.length), s = rest.indexOf('/');
-            var product = rest.slice(0, s), url = rest.slice(s + 1);
-            var lut = _idxLutForProduct(product, _irColormap || 'claude-ir');
+            var head = rest.slice(0, s), url = rest.slice(s + 1);
+            // head = "<product>" or "<product>:<cmap>" (explicit alpha-carrying map, e.g. ir:coldcloud)
+            var cs = head.indexOf(':'), product = cs < 0 ? head : head.slice(0, cs), cmapOv = cs < 0 ? null : head.slice(cs + 1);
+            var lut = (cmapOv && _idxLutFromTarget(cmapOv)) || _idxLutForProduct(product, _irColormap || 'claude-ir');
             return fetch(url).then(function (r) { return r.blob(); }).then(function (b) { return createImageBitmap(b); }).then(function (bmp) {
                 var c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
                 var cx = c.getContext('2d'); cx.drawImage(bmp, 0, 0);
@@ -2232,7 +2261,7 @@
                 for (i = 0; i < d.length; i += 4) {
                     idx = d[i];
                     if (idx === 0) { d[i + 3] = 0; continue; }
-                    d[i] = lut[idx * 4]; d[i + 1] = lut[idx * 4 + 1]; d[i + 2] = lut[idx * 4 + 2]; d[i + 3] = 255;
+                    d[i] = lut[idx * 4]; d[i + 1] = lut[idx * 4 + 1]; d[i + 2] = lut[idx * 4 + 2]; d[i + 3] = lut[idx * 4 + 3];
                 }
                 cx.putImageData(im, 0, 0);
                 return new Promise(function (resolve) { c.toBlob(function (bl) { bl.arrayBuffer().then(function (ab) { resolve({ data: ab }); }); }, 'image/png'); });
@@ -5736,7 +5765,7 @@
         // background poll while the user is on Vis/WV must not flip IR frames on.
         if (productMode !== 'eir') return;
         var currentLatest = animFrameTimes[animFrameTimes.length - 1];
-        fetch(_MOSAIC_BASE + '/frames.json', { cache: 'no-store' })
+        fetch((_IR2A ? _ir2aRoot('ir') : _MOSAIC_BASE) + '/frames.json', { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (j) {
                 if (!detailMap || currentStormId !== atcfId || !_liteActive) return;
@@ -6848,19 +6877,30 @@
         var _useLite = _effectiveLiteMode(storm.lon);
         if (window.LFLET_GL && !_useLite) {
             var _mosStormId = storm.atcf_id;
-            _loadMosaicFrames().then(function () {
-                if (!detailMap || currentStormId !== _mosStormId) return;
-                var ts = _mosaicTs || (_mosaicFrames.length ? _mosaicFrames[_mosaicFrames.length - 1] : null);
-                if (!ts || _detailMosaicBase) return;
-                _detailMosaicBase = L.tileLayer(_mosaicTileUrl(ts), {
-                    // Full opacity to match the cutout's brightness, but SMOOTH
-                    // (linear) — this is context fill, overzoomed past its z6 native,
-                    // so nearest-neighbor ('crisp') looked blocky/degraded at storm
-                    // zoom. The high-res cutout stays sharp on its own (imageOverlay).
-                    // mosaic-v2: 512px tiles, native max z6.
-                    opacity: 1.0, maxZoom: 6, maxNativeZoom: 6, tileSize: 512, pane: 'tilePane'
-                }).addTo(detailMap);
-            }).catch(function () {});
+            // Full opacity to match the cutout's brightness, but SMOOTH (linear): this
+            // is context fill overzoomed past its z6 native, so nearest-neighbor looked
+            // blocky at storm zoom. The high-res cutout stays sharp on its own.
+            var _baseOpts = { opacity: 1.0, maxZoom: 6, maxNativeZoom: 6, tileSize: 512, pane: 'tilePane' };
+            if (_IR2A) {
+                // idx (v3): recolor the single-channel context fill via idxcolor://.
+                _idxColorEnsureProtocol();
+                fetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (j) {
+                        if (!detailMap || currentStormId !== _mosStormId || _detailMosaicBase) return;
+                        var fr = (j && j.frames) || [];
+                        var ts = fr.length ? fr[fr.length - 1] : null;
+                        if (!ts) return;
+                        _detailMosaicBase = L.tileLayer('idxcolor://ir/' + _ir2aRoot('ir') + '/' + ts + '/{z}/{x}/{y}.png', _baseOpts).addTo(detailMap);
+                    }).catch(function () {});
+            } else {
+                _loadMosaicFrames().then(function () {   // mosaic-v2: baked-RGBA tiles
+                    if (!detailMap || currentStormId !== _mosStormId) return;
+                    var ts = _mosaicTs || (_mosaicFrames.length ? _mosaicFrames[_mosaicFrames.length - 1] : null);
+                    if (!ts || _detailMosaicBase) return;
+                    _detailMosaicBase = L.tileLayer(_mosaicTileUrl(ts), _baseOpts).addTo(detailMap);
+                }).catch(function () {});
+            }
         }
 
         // Lat/lon graticule — default ON for the storm card. Storm-relative
@@ -19143,8 +19183,14 @@
         if (!map) return;
         var want = _coldCloudEnabled && _mosaicTs && window.LFLET_GL && _anyShadedEnvActive();
         if (!want) { _removeColdCloudOverlay(); return; }
-        _irEnsureProtocol();
-        var url = 'irlut://coldcloud/' + _mosaicTileUrl(_mosaicTs, 'ir');
+        var url;
+        if (_IR2A) {   // idx (v3): recolor single-channel tiles with the coldcloud alpha map
+            _idxColorEnsureProtocol();
+            url = 'idxcolor://ir:coldcloud/' + _ir2aRoot('ir') + '/' + _mosaicTs + '/{z}/{x}/{y}.png';
+        } else {
+            _irEnsureProtocol();
+            url = 'irlut://coldcloud/' + _mosaicTileUrl(_mosaicTs, 'ir');
+        }
         if (_coldCloudLayer && _coldCloudUrl === url) return;   // already current frame
         _removeColdCloudOverlay();
         _coldCloudUrl = url;
