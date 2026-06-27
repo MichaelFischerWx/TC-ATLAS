@@ -5960,32 +5960,23 @@
         cleanupFrameLayers();   // drop any prior layers + reset the frame-state arrays
         _liteActive = true;
         var n = frames.length;
-        // idx WebGL path (?ir2a): one custom layer on the detail map + proxy stubs.
-        var idxMode = (_IR2A && window.createMosaicGLLayer && product === 'ir' && detailMap && detailMap._glAdd);
-        if (idxMode) {
-            if (!_liteIdx) {
-                _liteIdx = window.createMosaicGLLayer({
-                    id: 'lite-idx', frames: frames, maxZoom: 6, baseMaxZoom: 4, tileSize: 512,
-                    tileUrl: function (f, z, x, y) { return _ir2aRoot('ir') + '/' + f + '/' + z + '/' + x + '/' + y + '.png'; },
-                    lut: _idxLutFor(_irColormap || 'claude-ir')
-                });
-                try { detailMap._glAdd(_liteIdx.layer, 200); } catch (e) { console.error('[ir2a lite] addLayer', e); idxMode = false; }
-            } else { _liteIdx.setFrames(frames); }
-        }
+        // idx path (?ir2a): recolor the single-channel v3 tiles → RGBA via the
+        // idxcolor:// protocol and render them as a NORMAL raster tile layer. Beats a
+        // custom GL layer on this 2nd map: mobile-safe (no extra GL context), and tile
+        // layers fall back to parent (z4) tiles natively → fast first paint + no gaps.
+        var idxMode = (_IR2A && product === 'ir' && window.maplibregl && window.maplibregl.addProtocol);
+        if (idxMode) _idxColorEnsureProtocol();
         for (var i = 0; i < n; i++) {
-            if (idxMode) {
-                animFrameLayers.push(_liteIdxStub(i, frames[i]));
-            } else {
-                var url = _mosaicTileUrl(frames[i], product);
-                if (product === 'ir') url = _irColorTileUrl(url);   // honor the colormap picker
-                var ly = L.tileLayer(url, {
-                    tileSize: 512, maxNativeZoom: 6, maxZoom: GIBS_VIS_MAX_ZOOM,
-                    opacity: 0, pane: 'tilePane', keepBuffer: 2
-                });
-                ly._mosaicTs = frames[i];   // marks this as a lite/mosaic layer
-                ly.addTo(detailMap);
-                animFrameLayers.push(ly);
-            }
+            var url = idxMode
+                ? ('idxcolor://ir/' + _ir2aRoot('ir') + '/' + frames[i] + '/{z}/{x}/{y}.png')
+                : (product === 'ir' ? _irColorTileUrl(_mosaicTileUrl(frames[i], product)) : _mosaicTileUrl(frames[i], product));
+            var ly = L.tileLayer(url, {
+                tileSize: 512, maxNativeZoom: 6, maxZoom: GIBS_VIS_MAX_ZOOM,
+                opacity: 0, pane: 'tilePane', keepBuffer: 2
+            });
+            ly._mosaicTs = frames[i];   // marks this as a lite/mosaic layer
+            ly.addTo(detailMap);
+            animFrameLayers.push(ly);
             animFrameTimes.push(_mosaicTsToIso(frames[i]));
             validFrames.push(i);
             frameHasError.push(false);
