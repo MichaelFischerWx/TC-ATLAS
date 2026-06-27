@@ -1736,15 +1736,17 @@
     // it at the local 6-frame set for integration testing before v3 is on R2.
     var _IR2A = /[?&]ir2a=1/.test(location.search);
     var _IR2A_DEV = /[?&]ir2adev=1/.test(location.search);
-    var _IR2A_ROOT = _IR2A_DEV ? (location.origin + '/_ir2a_anim/ir')
-                               : 'https://cdn.tcatlas.org/mosaic-v3/ir';
+    var _IR2A_BASE = 'https://cdn.tcatlas.org/mosaic-v3';
+    var _ir2aProduct = 'ir';           // product (ir/vis/wv) the idx layer is built for
+    function _ir2aRoot(p) { return _IR2A_DEV ? (location.origin + '/_ir2a_anim/ir') : (_IR2A_BASE + '/' + (p || 'ir')); }
     var _IR2A_DEV_FRAMES = ['202606261800', '202606261810', '202606261820',
                             '202606261830', '202606261840', '202606261850'];
-    var _ir2aLayer = null, _ir2aOn = false, _ir2aFrames = null;
+    var _ir2aLayer = null, _ir2aOn = false, _ir2aFrames = null, _ir2aFramesProduct = null;
     function _ir2aEligible() {
-        return _IR2A && window.LFLET_GL && window.createMosaicGLLayer && globalProduct === 'ir';
+        return _IR2A && window.LFLET_GL && window.createMosaicGLLayer &&
+               (globalProduct === 'ir' || globalProduct === 'vis' || globalProduct === 'wv');
     }
-    function _ir2aTileUrl(frame, z, x, y) { return _IR2A_ROOT + '/' + frame + '/' + z + '/' + x + '/' + y + '.png'; }
+    function _ir2aTileUrl(frame, z, x, y) { return _ir2aRoot(_ir2aProduct) + '/' + frame + '/' + z + '/' + x + '/' + y + '.png'; }
     // Exact claude-ir idx LUT = the backend _IR_LUT the v2 mosaic bakes (idx i → its
     // color; idx 0 = transparent). Using it makes the idx layer's DEFAULT colormap
     // byte-identical to v2 — the frontend IR_COLORMAPS reconstruction (160–330 K) drifts.
@@ -1769,6 +1771,22 @@
         }
         return out;
     }
+    // Exact WV idx LUT = the builder's _WV_LUT (170-260K diverging map; idx 0 transparent).
+    var _WV_IDX_LUT = (function () {
+        var b = atob('AAAAAC4dDP8vHQ3/MB4N/zEfDv8yIA7/MyAP/zQhD/81Ig//NiIQ/zgjEP85JBH/OiQR/zslEf88JhL/PicT/0EpFP9DKxX/Ri0W/0kuFv9LMBf/TjIY/1E0Gf9TNhr/Vjcb/1k5HP9bOx3/Xj0e/2E+H/9jQCD/ZkIh/2lEIv9sRyT/cEol/3RNJ/93Tyn/e1Ir/39VLf+DWC//hlsw/4peMv+OYTT/kWQ2/5VnOP+Zajn/nW07/6BwPv+jdEH/p3hE/6p7SP+tf0v/sYNO/7SHUf+4ilT/u45Y/76SW//ClV7/xZlh/8idZP/MoGj/z6Vs/9Kpcv/UrXj/17J9/9q2g//duon/4L+O/+PDlP/mx5r/6cyf/+vQpf/u1Kv/8Niy//Hcuf/y4MD/9OTH//Xnzv/369b/+O/d//rz5P/48+f/9PPo//Hy6v/u8ev/6vDt/+fv7v/k7u//4e3x/93s8v/a7PT/1+v1/9Pq9v/P6PX/y+b1/8jk9P/E4vT/wODz/7ze8v+43PL/tNrx/7HY8f+t1vD/qdTw/6XS7/+h0O7/nc7u/5nL7f+UyOz/kMbq/4zD6f+Hwej/g77n/3+85v96ueX/drfk/3K04/9tsuH/aa/g/2Wt3/9gqt7/XKbc/1ii2v9Untj/T5rW/0uW1P9HktL/Qo7Q/z6Kzv86hc3/NoHL/zF9yf8vesf/LXjF/yx1w/8qc8L/KXDA/yduvv8ma7z/JGm7/yNmuf8hZLf/IGG1/x5ftP8cXLL/G1mw/xpZrv8aXK3/Gl6r/xphqf8aZKj/Gmam/xpppP8abKL/Gm+h/xpxn/8adJ3/Gnec/xt6mf8cfpf/HIGU/x2Fkv8eiI//HoyN/x+Piv8gk4j/IJaG/yGag/8inYH/JKB+/yejfP8rpnr/Lql4/zGrdv80rnT/N7Fy/zq0b/89t23/QLpr/0S9af9Hv2f/SsJl/03FY/9Qx2P/U8hk/1XJZv9Yymf/W8xp/17Nav9gzmv/Y89t/2bQbv9o0nD/a9Nx/27Ucv9x1XT/c9Z1/3bXd/952Xj/fNp6/37be/+B3Hz/hN1+/4fff/+J4IH/jOGC/4/ihf+R44j/lOSL/5fljf+Z5ZD/nOaT/5/nlv+h6Jn/pOmc/6bqn/+p66L/rOyk/67sp/+x7ar/tO6t/7bvsP+58LP/vPG2/77yuP/B87v/xPS+/8b0wf/I9cP/yvXF/8v2xv/N9sf/zvbI/8/2yf/R98r/0vfM/9T3zf/V987/1/jP/9j40P/Z+NH/2/jT/9z51P/e+dX/3/nW/+D51//i+tj/4/ra/+X62//m+tz/6Pvd/+n73v/q+9//7Pvh/+384v/v/OP/8Pzk/w==');
+        var u = new Uint8Array(b.length); for (var _w = 0; _w < b.length; _w++) u[_w] = b.charCodeAt(_w); return u;
+    })();
+    // Vis = grayscale identity (the idx IS the reflectance brightness); idx 0 transparent.
+    var _VIS_IDX_LUT = (function () {
+        var u = new Uint8Array(256 * 4);
+        for (var _v = 1; _v < 256; _v++) { u[_v * 4] = u[_v * 4 + 1] = u[_v * 4 + 2] = _v; u[_v * 4 + 3] = 255; }
+        return u;
+    })();
+    function _idxLutForProduct(product, cmap) {
+        if (product === 'wv') return _WV_IDX_LUT;
+        if (product === 'vis') return _VIS_IDX_LUT;
+        return _idxLutFor(cmap);
+    }
     // Stand-in for a per-frame tile layer: proxies the deck's setOpacity(idx)
     // calls to the single WebGL layer's setFrame, so the EXISTING animation /
     // play / slider / length logic drives the idx layer with no other changes.
@@ -1785,7 +1803,7 @@
             _ir2aLayer = window.createMosaicGLLayer({
                 id: 'ir2a-idx', tileUrl: _ir2aTileUrl, frames: times,
                 maxZoom: _IR2A_DEV ? 4 : 6, tileSize: 512,
-                lut: _idxLutFor(_irColormap || 'claude-ir'),
+                lut: _idxLutForProduct(_ir2aProduct, _irColormap || 'claude-ir'),
                 onError: function (m) { console.error('[ir2a] ' + m); }
             });
             // Insert at the tile-pane z (200) so it sits below coastlines/overlays
@@ -1796,6 +1814,30 @@
         _ir2aOn = true;
     }
     function _ir2aDestroy() { if (_ir2aLayer) { try { _ir2aLayer.destroy(); } catch (e) {} _ir2aLayer = null; } _ir2aOn = false; }
+    // Ensure the v3 frame list is loaded and the persistent idx layer is built, then cb().
+    function _ir2aEnsure(cb) {
+        var p = globalProduct;
+        if (_ir2aLayer && _ir2aProduct !== p) { _ir2aDestroy(); }   // product changed → rebuild for it
+        _ir2aProduct = p;
+        var build = function () {
+            if (!_ir2aFrames || !_ir2aFrames.length) return;
+            _ir2aBuild(_ir2aFrames);          // builds + adds the layer if absent; sets _ir2aOn
+            if (cb) cb();
+        };
+        if (_ir2aFrames && _ir2aFrames.length && _ir2aFramesProduct === p) { build(); return; }
+        if (_IR2A_DEV) { _ir2aFrames = _IR2A_DEV_FRAMES.slice(); _ir2aFramesProduct = p; build(); return; }
+        fetch(_ir2aRoot(p) + '/frames.json', { cache: 'no-store' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) { _ir2aFrames = (j && j.frames) || []; _ir2aFramesProduct = p; build(); })
+            .catch(function (e) { console.error('[ir2a] frames.json load failed', e); });
+    }
+    // Show the latest v3 frame as the still (pre-play) global IR layer.
+    function _ir2aStill() {
+        _ir2aEnsure(function () {
+            _ir2aLayer.setFrame(_ir2aFrames.length - 1);
+            _ir2aLayer.setOpacity(_productOpacity(globalProduct));
+        });
+    }
 
     // ── Lite storm view (Phase B/C) ────────────────────────────────────────
     // The storm card DEFAULTS to a "lite" view: a crisp loop rendered from the
@@ -2946,6 +2988,13 @@
             latestGIBSTimes = result.perSat;
             latestGIBSTime = result.oldest;  // animation fallback
             _updateFeedStalenessBanner(result.staleSats);
+            if (_ir2aEligible()) {
+                // Single-channel idx layer (flag): show the latest v3 frame as the still.
+                _ir2aStill(); gibsIRLayers = [];
+                _setGlobalSatTimeLabel(); setTimeout(_setGlobalSatTimeLabel, 1200);
+                _rt3DRefreshSource(); _refreshAnimSlider();
+                return;
+            }
             var lyr = createCompositeGIBSLayer(result.oldest, opacity || 0.65, result.perSat);
             lyr.addTo(targetMap);
             gibsIRLayers = [lyr];
@@ -3572,6 +3621,14 @@
         // path, just a different tile prefix + opacity.
         removeGIBSOverlay(map, gibsVisLayers); gibsVisLayers = [];
         removeGIBSOverlay(map, gibsIRLayers); gibsIRLayers = [];
+        // idx WebGL layer (flag): render it for IR; tear it down when leaving IR.
+        if (_ir2aEligible()) {
+            _ir2aStill();
+            if (typeof _updateColdCloudOverlay === 'function') _updateColdCloudOverlay();
+            if (hadAnim) loadGlobalAnimation();
+            return;
+        }
+        if (_ir2aOn) _ir2aDestroy();   // switched away from IR → remove the idx layer
         var perSat = (Object.keys(latestGIBSTimes).length > 0) ? latestGIBSTimes : null;
         var lyr = createCompositeGIBSLayer(timeStr, _productOpacity(mode), perSat, mode);
         lyr.addTo(map);
@@ -3639,15 +3696,16 @@
 
         // ── idx WebGL layer path (?ir2a=1): one custom layer + proxy stubs ──
         if (_ir2aEligible()) {
+            _ir2aProduct = globalProduct;
             if (_IR2A_DEV) {
                 globalAnimFrameTimes = _IR2A_DEV_FRAMES.slice();
-            } else if (_ir2aFrames && _ir2aFrames.length) {
+            } else if (_ir2aFrames && _ir2aFrames.length && _ir2aFramesProduct === globalProduct) {
                 globalAnimFrameTimes = _ir2aFrames.slice();   // v3's own manifest → tiles always resolve
             } else {
                 globalAnimLoading = false;                    // re-enter once v3 frames.json loads
-                fetch(_IR2A_ROOT + '/frames.json', { cache: 'no-store' })
+                fetch(_ir2aRoot(globalProduct) + '/frames.json', { cache: 'no-store' })
                     .then(function (r) { return r.json(); })
-                    .then(function (j) { _ir2aFrames = (j && j.frames) || []; loadGlobalAnimation(); })
+                    .then(function (j) { _ir2aFrames = (j && j.frames) || []; _ir2aFramesProduct = globalProduct; loadGlobalAnimation(); })
                     .catch(function (e) { console.error('[ir2a] v3 frames.json load failed', e); updateGlobalAnimControls('idle'); });
                 return;
             }
@@ -3663,7 +3721,7 @@
             _globalAnimPendingScrub = null;
             showGlobalAnimFrame(globalAnimIndex);
             updateGlobalAnimControls('ready');
-            console.log('[ir2a] idx WebGL layer:', globalAnimFrameTimes.length, 'frames, src', _IR2A_ROOT);
+            console.log('[ir2a] idx WebGL layer:', globalAnimFrameTimes.length, 'frames, src', _ir2aRoot(globalProduct));
             if (_globalAnimAutoplay) startGlobalAnimation();
             return;
         }
@@ -3915,7 +3973,8 @@
     function cleanupGlobalAnimation() {
         stopGlobalAnimation();
         if (_ir2aOn) {
-            _ir2aDestroy();   // single GL layer; stubs are not real facade layers
+            // Keep the persistent idx layer (it serves the still too) — just drop the
+            // animation proxy stubs below. The layer is torn down only on product switch.
         } else {
             for (var i = 0; i < globalAnimFrameLayers.length; i++) {
                 if (map && globalAnimFrameLayers[i]) {
@@ -4535,7 +4594,9 @@
                 stopBtn.addEventListener('click', function () {
                     if (globalAnimFrameLayers.length === 0) return;
                     cleanupGlobalAnimation();
-                    if (latestGIBSTime) {
+                    if (_ir2aEligible()) {
+                        _ir2aStill();   // idx layer persists; just show the latest frame
+                    } else if (latestGIBSTime) {
                         var perSat = (Object.keys(latestGIBSTimes).length > 0) ? latestGIBSTimes : null;
                         var lyr = createCompositeGIBSLayer(latestGIBSTime, _productOpacity(globalProduct), perSat, globalProduct);
                         lyr.addTo(map);
