@@ -1802,7 +1802,7 @@
         if (!_ir2aLayer) {
             _ir2aLayer = window.createMosaicGLLayer({
                 id: 'ir2a-idx', tileUrl: _ir2aTileUrl, frames: times,
-                maxZoom: _IR2A_DEV ? 4 : 6, tileSize: 512,
+                maxZoom: _IR2A_DEV ? 4 : 6, baseMaxZoom: 4, tileSize: 512,
                 lut: _idxLutForProduct(_ir2aProduct, _irColormap || 'claude-ir'),
                 onError: function (m) { console.error('[ir2a] ' + m); }
             });
@@ -1856,6 +1856,16 @@
     })();
     var _detailModePref = null;  // user toggle: 'lite' | 'detailed' | null (=default)
     var _liteActive = false;     // true while a card is showing the mosaic loop
+    var _liteIdx = null;         // idx WebGL layer on the storm detail map (?ir2a)
+    function _liteIdxStub(i, ts) {
+        return {
+            _mosaicTs: ts, _isLiteIdxStub: true,
+            setOpacity: function (o) { if (!_liteIdx) return; _liteIdx.setOpacity(o); if (o > 0) _liteIdx.setFrame(i); },
+            addTo: function () { return this; }, remove: function () {},
+            on: function (ev, cb) { if (ev === 'load') setTimeout(cb, 0); return this; },
+            setZIndex: function () { return this; }
+        };
+    }
     // The combined mosaic covers GOES-E/W + Himawari only; the Meteosat sector
     // (~-5..75°E: Africa / Europe / W Indian Ocean) has no baked tiles, so a
     // storm there always falls through to the raw-Tb path.
@@ -5409,10 +5419,11 @@
     /** Clean up pre-loaded frame layers */
     function cleanupFrameLayers() {
         for (var i = 0; i < animFrameLayers.length; i++) {
-            if (animFrameLayers[i] && detailMap) {
+            if (animFrameLayers[i] && !animFrameLayers[i]._isLiteIdxStub && detailMap) {
                 detailMap.removeLayer(animFrameLayers[i]);
             }
         }
+        if (_liteIdx) { try { _liteIdx.destroy(); } catch (e) {} _liteIdx = null; }
         animFrameLayers = [];
         animFrameTimes = [];
         framesLoaded = 0;
@@ -5917,7 +5928,11 @@
     function _initDetailMapMosaic(storm) {
         if (!detailMap) return;
         var atcfId = storm.atcf_id;
-        _loadMosaicFrames().then(function (frames) {
+        var framesP = (_IR2A && window.createMosaicGLLayer)
+            ? fetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' })
+                .then(function (r) { return r.json(); }).then(function (j) { return (j && j.frames) || []; })
+            : _loadMosaicFrames();
+        framesP.then(function (frames) {
             if (!detailMap || currentStormId !== atcfId) return;
             if (!frames || frames.length === 0) {
                 console.warn('[RT Monitor] Lite: no mosaic frames; raw-Tb fallback');
@@ -5945,16 +5960,32 @@
         cleanupFrameLayers();   // drop any prior layers + reset the frame-state arrays
         _liteActive = true;
         var n = frames.length;
+        // idx WebGL path (?ir2a): one custom layer on the detail map + proxy stubs.
+        var idxMode = (_IR2A && window.createMosaicGLLayer && product === 'ir' && detailMap && detailMap._glAdd);
+        if (idxMode) {
+            if (!_liteIdx) {
+                _liteIdx = window.createMosaicGLLayer({
+                    id: 'lite-idx', frames: frames, maxZoom: 6, baseMaxZoom: 4, tileSize: 512,
+                    tileUrl: function (f, z, x, y) { return _ir2aRoot('ir') + '/' + f + '/' + z + '/' + x + '/' + y + '.png'; },
+                    lut: _idxLutFor(_irColormap || 'claude-ir')
+                });
+                try { detailMap._glAdd(_liteIdx.layer, 200); } catch (e) { console.error('[ir2a lite] addLayer', e); idxMode = false; }
+            } else { _liteIdx.setFrames(frames); }
+        }
         for (var i = 0; i < n; i++) {
-            var url = _mosaicTileUrl(frames[i], product);
-            if (product === 'ir') url = _irColorTileUrl(url);   // honor the colormap picker
-            var ly = L.tileLayer(url, {
-                tileSize: 512, maxNativeZoom: 6, maxZoom: GIBS_VIS_MAX_ZOOM,
-                opacity: 0, pane: 'tilePane', keepBuffer: 2
-            });
-            ly._mosaicTs = frames[i];   // marks this as a lite/mosaic layer
-            ly.addTo(detailMap);
-            animFrameLayers.push(ly);
+            if (idxMode) {
+                animFrameLayers.push(_liteIdxStub(i, frames[i]));
+            } else {
+                var url = _mosaicTileUrl(frames[i], product);
+                if (product === 'ir') url = _irColorTileUrl(url);   // honor the colormap picker
+                var ly = L.tileLayer(url, {
+                    tileSize: 512, maxNativeZoom: 6, maxZoom: GIBS_VIS_MAX_ZOOM,
+                    opacity: 0, pane: 'tilePane', keepBuffer: 2
+                });
+                ly._mosaicTs = frames[i];   // marks this as a lite/mosaic layer
+                ly.addTo(detailMap);
+                animFrameLayers.push(ly);
+            }
             animFrameTimes.push(_mosaicTsToIso(frames[i]));
             validFrames.push(i);
             frameHasError.push(false);

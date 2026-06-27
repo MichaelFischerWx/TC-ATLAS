@@ -50,6 +50,10 @@
   window.createMosaicGLLayer = function (opts) {
     var tileSize = opts.tileSize || 512;
     var maxZoom = (opts.maxZoom != null) ? opts.maxZoom : 6;
+    // Zoom up to which tiles cover the WHOLE globe (gapless). Above it, only sparse
+    // detail (e.g. storm sectors) exists, so we draw a base at min(z, baseMaxZoom)
+    // UNDER the detail — the base fills the gaps where detail tiles don't exist.
+    var baseMaxZoom = (opts.baseMaxZoom != null) ? opts.baseMaxZoom : maxZoom;
     var minZoom = opts.minZoom || 0;
     var MAX_TILES = opts.maxCachedTiles || 700;   // LRU bound across frames/zooms
     var onErr = opts.onError || function (m) { try { console.error('[mosaicGL] ' + m); } catch (e) {} };
@@ -168,31 +172,36 @@
       },
       render: function (gfx, matrix) {
         if (!prog || !active) return;
-        var z = pickZoom(), n = 1 << z, s = 1.0 / n;
-        var vis = visibleTiles(z);
-        // ensure visible tiles for the active frame are loading/loaded
-        for (var i = 0; i < vis.length; i++) loadTile(active, z, vis[i][0], vis[i][1]);
+        var z = pickZoom();
+        var baseZ = Math.min(z, baseMaxZoom);
+        // Coarse base (gapless) first, then sparse detail (storm sectors) on top.
+        var levels = (z > baseZ) ? [baseZ, z] : [baseZ];
 
         gl.useProgram(prog);
         gl.bindBuffer(gl.ARRAY_BUFFER, buf);
         gl.enableVertexAttribArray(loc.a_pos);
         gl.vertexAttribPointer(loc.a_pos, 2, gl.FLOAT, false, 0, 0);
         gl.uniformMatrix4fv(loc.u_matrix, false, matrix);
-        gl.uniform1f(loc.u_scale, s);
         gl.uniform1f(loc.u_opacity, opacity);
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, lutTex); gl.uniform1i(loc.u_lut, 1);
         gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);  // premultiplied (keeps fb alpha=1)
         gl.disable(gl.DEPTH_TEST);
 
-        for (var j = 0; j < vis.length; j++) {
-          var cx = vis[j][0], cy = vis[j][1], rec = tiles[tkey(active, z, cx, cy)];
-          if (!rec) continue;                           // not loaded yet
-          rec.used = ++useClock;
-          gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, rec.tex); gl.uniform1i(loc.u_idx, 0);
-          // draw in the primary world + both neighbor copies (antimeridian display wrap)
-          for (var k = -1; k <= 1; k++) {
-            gl.uniform2f(loc.u_origin, cx * s + k, cy * s);
-            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        for (var li = 0; li < levels.length; li++) {
+          var lz = levels[li], n = 1 << lz, s = 1.0 / n;
+          var vis = visibleTiles(lz);
+          for (var i = 0; i < vis.length; i++) loadTile(active, lz, vis[i][0], vis[i][1]);
+          gl.uniform1f(loc.u_scale, s);
+          for (var j = 0; j < vis.length; j++) {
+            var cx = vis[j][0], cy = vis[j][1], rec = tiles[tkey(active, lz, cx, cy)];
+            if (!rec) continue;                           // not loaded yet → coarser base shows through
+            rec.used = ++useClock;
+            gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, rec.tex); gl.uniform1i(loc.u_idx, 0);
+            // draw in the primary world + both neighbor copies (antimeridian display wrap)
+            for (var k = -1; k <= 1; k++) {
+              gl.uniform2f(loc.u_origin, cx * s + k, cy * s);
+              gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            }
           }
         }
       },
