@@ -2411,6 +2411,50 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     flex-wrap: wrap;
     justify-content: flex-end;
     gap: 6px;
+    position: relative;   /* anchor the export PNG/GIF menu */
+}
+
+/* Download chooser (PNG / animated GIF) under the export icon. */
+.ir-export-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 6px;
+    z-index: 1200;
+    min-width: 180px;
+    padding: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 7px;
+    background: rgba(22, 27, 36, 0.96);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+}
+.ir-export-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.74rem;
+    font-weight: 500;
+    color: #e2e8f0;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.ir-export-menu-item:hover {
+    background: rgba(74, 155, 110, 0.22);
+    color: #ffffff;
+}
+.ir-export-menu-glyph {
+    width: 14px;
+    text-align: center;
+    opacity: 0.85;
 }
 .ir-layers-wrap .ir-mode-segment { order: 1; }
 .ir-layers-wrap .ir-mw-toggle-group { order: 2; margin-top: 0; }
@@ -4285,6 +4329,46 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 }
 [data-theme="dark"] .rt-genesis-mode-btn:hover { background: rgba(255,255,255,0.10); }
 [data-theme="dark"] .rt-genesis-mode-btn.active {
+    background: rgba(249,115,22,0.28);
+    color: #fdba74;
+}
+
+/* Structure anomaly-mode toggle (Raw / Percentile / Z-score) — reuses the
+   genesis mode-toggle look so it reads as a sibling control. */
+.rt-genesis-struct-mode {
+    display: inline-flex;
+    flex-shrink: 0;
+    border: 1px solid rgba(15,22,35,0.18);
+    border-radius: 4px;
+    overflow: hidden;
+}
+[data-theme="dark"] .rt-genesis-struct-mode { border-color: rgba(255,255,255,0.18); }
+.rt-genesis-struct-mode-btn {
+    background: rgba(15,22,35,0.04);
+    color: var(--text);
+    border: none;
+    font-size: 11px;
+    padding: 4px 9px;
+    cursor: pointer;
+}
+.rt-genesis-struct-mode-btn + .rt-genesis-struct-mode-btn {
+    border-left: 1px solid rgba(15,22,35,0.18);
+}
+.rt-genesis-struct-mode-btn:hover { background: rgba(15,22,35,0.10); }
+.rt-genesis-struct-mode-btn.active {
+    background: rgba(249,115,22,0.22);
+    color: #f97316;
+    font-weight: 600;
+}
+[data-theme="dark"] .rt-genesis-struct-mode-btn {
+    background: rgba(255,255,255,0.04);
+    color: #e2e8f0;
+}
+[data-theme="dark"] .rt-genesis-struct-mode-btn + .rt-genesis-struct-mode-btn {
+    border-left-color: rgba(255,255,255,0.18);
+}
+[data-theme="dark"] .rt-genesis-struct-mode-btn:hover { background: rgba(255,255,255,0.10); }
+[data-theme="dark"] .rt-genesis-struct-mode-btn.active {
     background: rgba(249,115,22,0.28);
     color: #fdba74;
 }

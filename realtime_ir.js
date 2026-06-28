@@ -580,7 +580,10 @@
 
     // Global map product state
     var globalProduct = 'ir';        // mosaic product: 'ir' | 'vis' | 'wv'
-    var _PRODUCT_OPACITY = { ir: 0.85, vis: 0.95, wv: 0.85 };
+    // Full brightness — the global mosaic now renders at native opacity so it
+    // matches the per-storm sector tiles (which are full-opacity). The old
+    // 0.85/0.95 values dimmed the global view relative to the storm card.
+    var _PRODUCT_OPACITY = { ir: 1.0, vis: 1.0, wv: 1.0 };
     function _productOpacity(p) { return _PRODUCT_OPACITY[p] != null ? _PRODUCT_OPACITY[p] : 0.85; }
     var _labelsLayer = null;         // CARTO place-name tile layer (toggleable)
     var _labelsVisible = false;      // default: labels off (toggle in the top-left stack)
@@ -3940,10 +3943,9 @@
 
         // Show requested frame
         globalAnimIndex = idx;
-        // IR uses 0.85 to match the initial still-overlay opacity set in
-        // addGIBSOverlay (was 0.65 — the drop was visible the moment
-        // animation took over). GeoColor stays at 0.75 since both its
-        // still and animation paths already used that value.
+        // Opacity comes from the single _PRODUCT_OPACITY source so the still
+        // overlay and the animation frames always agree (now full brightness
+        // to match the per-storm sector tiles).
         globalAnimFrameLayers[idx].setOpacity(_productOpacity(globalProduct));
 
         // Update time display
@@ -4273,12 +4275,47 @@
 
                 var exportBtn = L.DomUtil.create('button', 'ir-global-toggle-btn ir-layers-icon-btn', row);
                 exportBtn.id = 'ir-global-export-btn';
-                exportBtn.title = 'Save the current map view as a PNG image';
+                exportBtn.title = 'Save the current map view — PNG image or animated GIF';
+                exportBtn.setAttribute('aria-haspopup', 'true');
+                exportBtn.setAttribute('aria-expanded', 'false');
                 exportBtn.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
                     + '<path fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"'
                     + ' d="M3 11.5v1.5h10v-1.5M8 2.5v8M4.5 7L8 10.5L11.5 7"/>'
                     + '</svg>';
-                exportBtn.addEventListener('click', _exportMapPng);
+
+                // Small PNG/GIF chooser anchored under the download icon.
+                var exportMenu = L.DomUtil.create('div', 'ir-export-menu', wrap);
+                exportMenu.id = 'ir-global-export-menu';
+                exportMenu.style.display = 'none';
+                exportMenu.innerHTML =
+                      '<button type="button" class="ir-export-menu-item" data-act="png">'
+                    + '<span class="ir-export-menu-glyph" aria-hidden="true">⬇</span> Save image (PNG)</button>'
+                    + '<button type="button" class="ir-export-menu-item" data-act="gif">'
+                    + '<span class="ir-export-menu-glyph" aria-hidden="true">◉</span> Save animation (GIF)</button>';
+                function _closeExportMenu() {
+                    exportMenu.style.display = 'none';
+                    exportBtn.setAttribute('aria-expanded', 'false');
+                }
+                exportBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    var open = exportMenu.style.display !== 'none';
+                    if (open) { _closeExportMenu(); return; }
+                    exportMenu.style.display = 'block';
+                    exportBtn.setAttribute('aria-expanded', 'true');
+                    setTimeout(function () {
+                        document.addEventListener('click', function onAway(ev) {
+                            if (!wrap.contains(ev.target)) { _closeExportMenu(); document.removeEventListener('click', onAway, true); }
+                            else if (exportMenu.style.display === 'none') { document.removeEventListener('click', onAway, true); }
+                        }, true);
+                    }, 0);
+                });
+                exportMenu.addEventListener('click', function (e) {
+                    var item = e.target.closest ? e.target.closest('.ir-export-menu-item') : null;
+                    if (!item) return;
+                    _closeExportMenu();
+                    if (item.getAttribute('data-act') === 'gif') _exportMapGif();
+                    else _exportMapPng();
+                });
 
                 // ── Compact IR/GeoColor mode switch (segmented) ─────
                 var seg = L.DomUtil.create('div', 'ir-mode-segment', wrap);
@@ -4581,6 +4618,10 @@
                 insBtn.classList.toggle('active', _rtToggleInspect());
             });
             dMenu.appendChild(insBtn);
+            // Default ON: brightness-Tb hover starts enabled so users see Tb
+            // readouts the moment they move over the IR field (IR view only).
+            // Guarded so a control re-add doesn't double-bind the map handlers.
+            if (!_inspectOn) { insBtn.classList.add('active'); _rtToggleInspect(); }
 
             // Convection over overlays — when a shaded env field (SST anomaly
             // etc.) is on, drape grayscale cold-cloud convection (Tb < -20 C) on
@@ -13612,6 +13653,7 @@
                 '<button type="button" class="rt-genesis-jump-btn active" data-pane="thisrun" role="tab">This run</button>' +
                 '<button type="button" class="rt-genesis-jump-btn" data-pane="trends" role="tab">Trends</button>' +
                 '<button type="button" class="rt-genesis-jump-btn" data-pane="intchange" role="tab">Intensity Change</button>' +
+                '<button type="button" class="rt-genesis-jump-btn" data-pane="structure" role="tab">Structure</button>' +
               '</div>' +
               '<div class="rt-genesis-modal-body">' +
                 // Loading overlay — covers the panel area while the member
@@ -13713,6 +13755,49 @@
                     '</div>' +
                   '</div>' +
                 '</div>' + // close #rt-genesis-pane-intchange
+                // ── Structure pane (hidden by default) ───────────────
+                // RMW + wind-radii figures, with an intensity-conditioned
+                // IBTrACS climatology baseline. The anomaly toggle re-expresses
+                // the fan figures (RMW / size / nesting) as raw radii, a
+                // climatological percentile, or a σ anomaly vs storms of the
+                // same forecast intensity.
+                '<div id="rt-genesis-pane-structure" class="rt-genesis-pane" style="display:none;">' +
+                '<div class="rt-genesis-struct-head" style="margin-top:6px; margin-bottom:6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">' +
+                  '<span class="rt-genesis-struct-title" style="font-weight:600; font-size:0.82rem; opacity:0.9;">Forecast structure</span>' +
+                  '<span class="rt-genesis-struct-sub" style="font-size:0.68rem; opacity:0.6;">fans shown vs IBTrACS at matched intensity</span>' +
+                  '<div id="rt-genesis-struct-mode" class="rt-genesis-struct-mode" role="group" style="margin-left:auto;" title="Express the fan figures (RMW / gale-force size / wind-field nesting) as raw radii, a climatological percentile, or a σ anomaly vs storms of the same Vmax">' +
+                    '<button type="button" class="rt-genesis-struct-mode-btn active" data-mode="raw">Raw</button>' +
+                    '<button type="button" class="rt-genesis-struct-mode-btn" data-mode="pct">Percentile</button>' +
+                    '<button type="button" class="rt-genesis-struct-mode-btn" data-mode="z">Z-score</button>' +
+                  '</div>' +
+                '</div>' +
+                // Forecast RMW evolution — per-member radius-of-max-wind fan.
+                '<div id="rt-genesis-jump-rmw" class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:6px;">' +
+                  '<button type="button" id="rt-genesis-rmw-save" class="rt-genesis-modal-save" title="Save RMW evolution as PNG">⤓ PNG</button>' +
+                  '<div id="rt-genesis-modal-rmw" style="width:100%; height:300px;"></div>' +
+                '</div>' +
+                // Gale-force (34-kt) storm size — quadrant-mean R34 fan.
+                '<div id="rt-genesis-jump-size" class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
+                  '<button type="button" id="rt-genesis-size-save" class="rt-genesis-modal-save" title="Save storm-size fan as PNG">⤓ PNG</button>' +
+                  '<div id="rt-genesis-modal-size" style="width:100%; height:300px;"></div>' +
+                '</div>' +
+                // Wind-radii quadrant rose at peak intensity (NE/SE/SW/NW),
+                // with an intensity-matched IBTrACS R34 climo ring.
+                '<div id="rt-genesis-jump-rose" class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
+                  '<button type="button" id="rt-genesis-rose-save" class="rt-genesis-modal-save" title="Save wind-radii rose as PNG">⤓ PNG</button>' +
+                  '<div id="rt-genesis-modal-rose" style="width:100%; height:340px;"></div>' +
+                '</div>' +
+                // Wind-field nesting — R34 / R50 / R64 median radii + spread.
+                '<div id="rt-genesis-jump-nesting" class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
+                  '<button type="button" id="rt-genesis-nesting-save" class="rt-genesis-modal-save" title="Save wind-field nesting as PNG">⤓ PNG</button>' +
+                  '<div id="rt-genesis-modal-nesting" style="width:100%; height:300px;"></div>' +
+                '</div>' +
+                // 34-kt wind-area / IKE proxy distribution.
+                '<div id="rt-genesis-jump-ike" class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
+                  '<button type="button" id="rt-genesis-ike-save" class="rt-genesis-modal-save" title="Save wind-area distribution as PNG">⤓ PNG</button>' +
+                  '<div id="rt-genesis-modal-ike" style="width:100%; height:240px;"></div>' +
+                '</div>' +
+                '</div>' + // close #rt-genesis-pane-structure
                 // ── This-run pane (visible by default) ───────────────
                 '<div id="rt-genesis-pane-thisrun" class="rt-genesis-pane">' +
                 // Sub-nav: the per-disturbance panels stack vertically and
@@ -13723,7 +13808,6 @@
                   '<button type="button" class="rt-genesis-subnav-chip active" data-jump="rt-genesis-jump-tracks">Tracks</button>' +
                   '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-intensity">Intensity</button>' +
                   '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-gtime">Genesis time</button>' +
-                  '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-rmw">RMW</button>' +
                   '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-lmi">LMI</button>' +
                   '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-lmitau">LMI vs hour</button>' +
                 '</div>' +
@@ -13764,14 +13848,6 @@
                   '<button type="button" id="rt-genesis-gtime-save" class="rt-genesis-modal-save" title="Save genesis-time histogram as PNG">⤓ PNG</button>' +
                   '<div id="rt-genesis-modal-gtime" style="width:100%; height:180px;"></div>' +
                 '</div>' +
-                // Forecast RMW evolution — per-member radius-of-max-wind
-                // fan-chart over lead time. Only members at TC strength
-                // (≥34 kt) contribute, so the envelope tracks the storm
-                // phase rather than the noisy pre-genesis disturbance.
-                '<div id="rt-genesis-jump-rmw" class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
-                  '<button type="button" id="rt-genesis-rmw-save" class="rt-genesis-modal-save" title="Save RMW evolution as PNG">⤓ PNG</button>' +
-                  '<div id="rt-genesis-modal-rmw" style="width:100%; height:300px;"></div>' +
-                '</div>' +
                 // Lifetime-max-intensity distribution — 1-D histogram of
                 // each member\'s peak Vmax across the whole forecast.
                 '<div id="rt-genesis-jump-lmi" class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
@@ -13811,6 +13887,26 @@
         m.querySelector('#rt-genesis-rmw-save').addEventListener('click', function () {
             _genesisSavePNG('rt-genesis-modal-rmw', 'rmw-evolution');
         });
+        m.querySelector('#rt-genesis-size-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-modal-size', 'storm-size');
+        });
+        m.querySelector('#rt-genesis-rose-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-modal-rose', 'wind-radii-rose');
+        });
+        m.querySelector('#rt-genesis-nesting-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-modal-nesting', 'wind-field-nesting');
+        });
+        m.querySelector('#rt-genesis-ike-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-modal-ike', 'wind-area');
+        });
+        // Structure anomaly-mode toggle (Raw / Percentile / Z-score).
+        var _structSeg = m.querySelector('#rt-genesis-struct-mode');
+        if (_structSeg) {
+            _structSeg.addEventListener('click', function (e) {
+                var b = e.target.closest ? e.target.closest('.rt-genesis-struct-mode-btn') : null;
+                if (b) _setGenStructMode(b.getAttribute('data-mode'));
+            });
+        }
         m.querySelector('#rt-genesis-lmi-save').addEventListener('click', function () {
             _genesisSavePNG('rt-genesis-modal-lmi', 'lmi-distribution');
         });
@@ -13864,6 +13960,7 @@
             thisrun:   m.querySelector('#rt-genesis-pane-thisrun'),
             trends:    m.querySelector('#rt-genesis-pane-trends'),
             intchange: m.querySelector('#rt-genesis-pane-intchange'),
+            structure: m.querySelector('#rt-genesis-pane-structure'),
         };
         function _genesisShowPane(name) {
             if (!panes[name]) return;
@@ -13933,7 +14030,7 @@
                 if (best) setActiveChip(best.target.id);
             }, { root: scroller, threshold: [0.25, 0.5, 0.75] });
             ['rt-genesis-jump-tracks', 'rt-genesis-jump-intensity',
-             'rt-genesis-jump-gtime', 'rt-genesis-jump-rmw',
+             'rt-genesis-jump-gtime',
              'rt-genesis-jump-lmi', 'rt-genesis-jump-lmitau'].forEach(function (id) {
                 var el = m.querySelector('#' + id);
                 if (el) io.observe(el);
@@ -14410,7 +14507,7 @@
                 _setupGenesisTauScrubber(memberKeys, members, mean, stats);
             },
             function () { _renderGenesisTimeHistogram(stats); },
-            function () { _renderGenesisRMW(memberKeys, members, stats); },
+            function () { _renderGenesisStructure(memberKeys, members, stats); },
             function () { _renderGenesisLmiHist(stats); },
             function () { _renderGenesisLmiVsTau(stats); },
             // Trends pane is hidden by default and does its own async fetch —
@@ -16553,15 +16650,544 @@
                      { responsive: true, displayModeBar: false });
     }
 
-    /* Forecast RMW evolution (figure 4).
-       Per-member radius-of-maximum-wind fan-chart over lead time, in
-       nautical miles. RMW is only physically meaningful once a member
-       has a closed TC-strength circulation, so we gate each contributing
-       point on wind ≥ 34 kt. Taus with fewer than 3 qualifying members
-       are dropped to avoid 1-member "envelopes" that read as noise. The
-       chart mirrors the intensity envelope's nested-ribbon fan so the
-       two read as a matched pair. */
-    function _renderGenesisRMW(memberKeys, members, stats) {
+    // ═══════════════════════════════════════════════════════════
+    //  STRUCTURE SECTION — RMW + wind-radii figures, with an
+    //  intensity-conditioned IBTrACS climatology baseline so each
+    //  member's structure can be read as an anomaly (raw / percentile
+    //  / z-score) vs storms of the same forecast intensity.
+    // ═══════════════════════════════════════════════════════════
+    var _STRUCT_KM_TO_NM = 0.5399568;
+    var _structClimo = null, _structClimoLoad = null;
+    var _genStructMode = 'raw';        // 'raw' | 'pct' | 'z' (fans + nesting)
+    var _genStructCtx = null;          // { memberKeys, members, stats, basin }
+
+    /** Lazy-load the static IBTrACS structure climatology (built by
+     *  build_structure_climo.py). Cached for the session; null on failure
+     *  (figures then fall back to raw-only with no climo overlay). */
+    function _loadStructClimo() {
+        if (_structClimo) return Promise.resolve(_structClimo);
+        if (_structClimoLoad) return _structClimoLoad;
+        _structClimoLoad = fetch('structure_climo.json', { cache: 'force-cache' })
+            .then(function (r) { if (!r.ok) throw new Error('climo HTTP ' + r.status); return r.json(); })
+            .then(function (j) { _structClimo = j; return j; })
+            .catch(function (e) { console.warn('[struct] climo load failed', e); return null; });
+        return _structClimoLoad;
+    }
+
+    /** Coarse IBTrACS basin from a genesis lat/lon (matches the basin keys
+     *  in structure_climo.json: NA/EP/WP/NI/SI/SP/SA). Approximate — a miss
+     *  just falls back to the global climatology. */
+    function _structBasin(lat, lon) {
+        if (lat == null || lon == null) return null;
+        var L = lon; while (L > 180) L -= 360; while (L < -180) L += 360;
+        if (lat >= 0) {
+            if (L > 30 && L < 100) return 'NI';
+            if (L >= 100 && L <= 180) return 'WP';
+            if (L >= -180 && L < -100) return 'EP';
+            return 'NA';                       // -100..30 (Atlantic + Gulf/Caribbean)
+        }
+        if (L >= 20 && L < 135) return 'SI';
+        if (L >= 135 || L < -70) return 'SP';
+        return 'SA';                            // -70..20
+    }
+
+    /** Vmax (kt) -> climo bin index, clamped into the open top bin. */
+    function _structClimoIdx(vmax) {
+        if (!_structClimo || vmax == null) return -1;
+        var n = _structClimo.bin_centers_kt.length;
+        var idx = Math.floor((vmax - _structClimo.bin_edges_kt[0]) / 5);
+        return idx < 0 ? 0 : (idx > n - 1 ? n - 1 : idx);
+    }
+
+    /** Climo summary record {n,mean,std,p10..p90} (km) for a metric at a given
+     *  basin+Vmax. Prefers the basin bin, falls back to global. */
+    function _structClimoRec(basin, metric, vmax) {
+        if (!_structClimo) return null;
+        var idx = _structClimoIdx(vmax);
+        if (idx < 0) return null;
+        var bb = _structClimo.by_basin && basin && _structClimo.by_basin[basin];
+        var rec = bb && bb[metric] && bb[metric][idx];
+        if (rec) return rec;
+        var g = _structClimo.global && _structClimo.global[metric];
+        return (g && g[idx]) || null;
+    }
+
+    function _climoZ(rec, valKm) {
+        return (rec && rec.std > 0) ? (valKm - rec.mean) / rec.std : null;
+    }
+    /** Empirical climatological percentile (0–100) of valKm via piecewise-linear
+     *  interpolation through the p10..p90 anchors, extrapolated + clamped. */
+    function _climoPct(rec, valKm) {
+        if (!rec) return null;
+        var a = [[rec.p10, 10], [rec.p25, 25], [rec.p50, 50], [rec.p75, 75], [rec.p90, 90]];
+        if (valKm <= a[0][0]) {
+            var s0 = (a[1][1] - a[0][1]) / Math.max(1e-6, a[1][0] - a[0][0]);
+            return Math.max(0.5, a[0][1] + (valKm - a[0][0]) * s0);
+        }
+        for (var i = 0; i < a.length - 1; i++) {
+            if (valKm <= a[i + 1][0]) {
+                var f = (valKm - a[i][0]) / Math.max(1e-6, a[i + 1][0] - a[i][0]);
+                return a[i][1] + f * (a[i + 1][1] - a[i][1]);
+            }
+        }
+        var s1 = (a[4][1] - a[3][1]) / Math.max(1e-6, a[4][0] - a[3][0]);
+        return Math.min(99.5, a[4][1] + (valKm - a[4][0]) * s1);
+    }
+
+    /** Transform a structure value (km) for the active anomaly mode. Returns
+     *  nm in raw mode, σ in z mode, percentile in pct mode (null if no climo). */
+    function _structXform(climoMetric, basin, vmaxKt, valKm) {
+        if (_genStructMode === 'raw') return valKm * _STRUCT_KM_TO_NM;
+        var rec = _structClimoRec(basin, climoMetric, vmaxKt);
+        if (!rec) return null;
+        return _genStructMode === 'z' ? _climoZ(rec, valKm) : _climoPct(rec, valKm);
+    }
+
+    function _structPct(sorted, q) {
+        if (!sorted.length) return null;
+        var idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(q * (sorted.length - 1))));
+        return sorted[idx];
+    }
+    function _structMedian(arr) {
+        if (!arr.length) return null;
+        var s = arr.slice().sort(function (a, b) { return a - b; });
+        return s[Math.floor((s.length - 1) / 2)];
+    }
+
+    function _structEmpty(el, theme, title, msg) {
+        Plotly.react(el, [], Object.assign({}, theme, {
+            margin: { l: 55, r: 12, t: 26, b: 42 },
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            title: { text: title, x: 0, xanchor: 'left',
+                     font: { size: 11, color: theme.font.color } },
+            annotations: [{ xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
+                text: msg, showarrow: false,
+                font: { size: 12, color: theme.font.color } }],
+            xaxis: { visible: false }, yaxis: { visible: false },
+        }), { responsive: true, displayModeBar: false });
+    }
+
+    /** y-axis title + climo-reference behavior for the active mode. */
+    function _structModeAxis(rawTitle) {
+        if (_genStructMode === 'z') return { title: 'Anomaly vs IBTrACS (σ)', ref: 0, range: null };
+        if (_genStructMode === 'pct') return { title: 'IBTrACS percentile (intensity-matched)', ref: 50, range: [0, 100] };
+        return { title: rawTitle, ref: null, range: null };
+    }
+
+    /* Shared structure fan-chart (RMW, gale-force size, …). Buckets one
+       per-point metric by lead time over TC-strength members, draws the
+       nested min–max / P10–P90 / IQR ribbons + median, and either overlays
+       the intensity-matched IBTrACS climo curve (raw mode) or re-expresses
+       every member as a percentile / σ anomaly vs that climo. */
+    function _renderStructFan(elId, cfg) {
+        var el = document.getElementById(elId);
+        if (!el || typeof Plotly === 'undefined' || !_genStructCtx) return;
+        var ctx = _genStructCtx;
+        var theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var gate = cfg.windGate || 34;
+
+        // Bucket {value km, member wind} by tau.
+        var byTau = {};
+        for (var i = 0; i < ctx.memberKeys.length; i++) {
+            var pts = ctx.members[ctx.memberKeys[i]].points || [];
+            for (var j = 0; j < pts.length; j++) {
+                var p = pts[j];
+                if (p[cfg.metricKey] == null || p.wind == null || p.wind < gate) continue;
+                (byTau[p.tau] = byTau[p.tau] || []).push({ v: p[cfg.metricKey], w: p.wind });
+            }
+        }
+        var taus = Object.keys(byTau).map(Number).sort(function (a, b) { return a - b; })
+            .filter(function (t) { return byTau[t].length >= 3; });
+        if (!taus.length) {
+            _structEmpty(el, theme, cfg.title,
+                'No member sustains ≥' + gate + ' kt with a reported ' + cfg.shortName + ' this cycle.');
+            return;
+        }
+        if (_genStructMode !== 'raw' && !_structClimo) {
+            _structEmpty(el, theme, cfg.title, 'Climatology unavailable — switch to Raw.');
+            return;
+        }
+
+        var minA = [], maxA = [], p10A = [], p25A = [], p50A = [], p75A = [], p90A = [], nA = [], climoA = [], xVals = [];
+        for (var ti = 0; ti < taus.length; ti++) {
+            var entries = byTau[taus[ti]];
+            var vals = [];
+            for (var e = 0; e < entries.length; e++) {
+                var tv = _structXform(cfg.climoMetric, ctx.basin, entries[e].w, entries[e].v);
+                if (tv != null && isFinite(tv)) vals.push(tv);
+            }
+            if (vals.length < 3) continue;
+            vals.sort(function (a, b) { return a - b; });
+            minA.push(vals[0]); maxA.push(vals[vals.length - 1]);
+            p10A.push(_structPct(vals, 0.10)); p25A.push(_structPct(vals, 0.25));
+            p50A.push(_structPct(vals, 0.50)); p75A.push(_structPct(vals, 0.75));
+            p90A.push(_structPct(vals, 0.90)); nA.push(vals.length);
+            // Raw climo curve: climo mean at this tau's median member Vmax.
+            var medW = _structMedian(entries.map(function (x) { return x.w; }));
+            var rec = _structClimoRec(ctx.basin, cfg.climoMetric, medW);
+            climoA.push((_genStructMode === 'raw' && rec) ? rec.mean * _STRUCT_KM_TO_NM : null);
+            xVals.push('+' + taus[ti] + 'h');
+        }
+        if (!xVals.length) { _structEmpty(el, theme, cfg.title, 'Not enough data for this view.'); return; }
+
+        var rgb = cfg.rgb;   // [r,g,b]
+        function rgba(al) { return 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + al + ')'; }
+        var traces = [];
+        function ribbon(low, high, al, name) {
+            traces.push({ type: 'scatter', mode: 'lines', x: xVals, y: low,
+                line: { color: 'rgba(0,0,0,0)' }, showlegend: false, hoverinfo: 'skip' });
+            traces.push({ type: 'scatter', mode: 'lines', x: xVals, y: high,
+                line: { color: 'rgba(0,0,0,0)' }, fill: 'tonexty', fillcolor: rgba(al),
+                name: name, hoverinfo: 'skip', showlegend: true });
+        }
+        ribbon(minA, maxA, isDark ? 0.08 : 0.07, 'min – max');
+        ribbon(p10A, p90A, isDark ? 0.14 : 0.13, 'P10 – P90');
+        ribbon(p25A, p75A, isDark ? 0.20 : 0.19, 'P25 – P75 (IQR)');
+        var unit = _genStructMode === 'raw' ? cfg.unit : (_genStructMode === 'z' ? 'σ' : '%ile');
+        traces.push({ type: 'scatter', mode: 'lines+markers', x: xVals, y: p50A,
+            line: { color: rgba(1), width: 2.4 },
+            marker: { size: 5, color: rgba(1) },
+            name: 'median (P50)', customdata: nA,
+            hovertemplate: '%{x}<br>median: %{y:.' + (_genStructMode === 'raw' ? '0' : '1') + 'f} ' + unit
+                + '<br>%{customdata} members<extra></extra>', showlegend: true });
+        if (_genStructMode === 'raw' && climoA.some(function (v) { return v != null; })) {
+            traces.push({ type: 'scatter', mode: 'lines', x: xVals, y: climoA,
+                line: { color: isDark ? '#cbd5e1' : '#475569', width: 1.8, dash: 'dot' },
+                name: 'IBTrACS climo', connectgaps: true,
+                hovertemplate: '%{x}<br>climo mean: %{y:.0f} ' + cfg.unit + '<extra></extra>', showlegend: true });
+        }
+
+        var ax = _structModeAxis(cfg.unitTitle);
+        var shapes = [];
+        if (ax.ref != null) {
+            shapes.push({ type: 'line', xref: 'paper', yref: 'y', x0: 0, x1: 1,
+                y0: ax.ref, y1: ax.ref, line: { color: isDark ? '#cbd5e1' : '#475569', width: 1.4, dash: 'dot' } });
+        }
+        var yMin = Math.min.apply(null, minA), yMax = Math.max.apply(null, maxA);
+        var yRange = ax.range || (_genStructMode === 'z'
+            ? [Math.min(-3, yMin - 0.5), Math.max(3, yMax + 0.5)]
+            : [0, Math.max(_genStructMode === 'raw' ? 60 : 1, yMax * 1.1)]);
+        var layout = Object.assign({}, theme, {
+            margin: { l: 56, r: 16, t: 26, b: 60 },
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            title: { text: cfg.title, x: 0, xanchor: 'left', font: { size: 11, color: theme.font.color } },
+            xaxis: { title: { text: 'Lead time', font: { size: 11 }, standoff: 14 },
+                     tickfont: { size: 10 }, tickmode: 'array',
+                     tickvals: xVals.filter(function (_v, i) { return i % 4 === 0; }),
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)' },
+            yaxis: { title: { text: ax.title, font: { size: 11 } }, range: yRange,
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)' },
+            shapes: shapes, showlegend: true,
+            legend: { x: 0.985, y: 0.98, xanchor: 'right', yanchor: 'top',
+                bgcolor: isDark ? 'rgba(15,22,35,0.82)' : 'rgba(255,255,255,0.88)',
+                bordercolor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,22,35,0.10)', borderwidth: 1,
+                font: { size: 9, color: isDark ? '#e2e8f0' : '#1f2937' },
+                itemsizing: 'constant', itemwidth: 30, tracegroupgap: 0 },
+        });
+        Plotly.react(el, traces, layout, { responsive: true, displayModeBar: false });
+    }
+
+    /* Forecast RMW evolution — now routed through the shared structure fan so
+       it picks up the IBTrACS climo overlay + anomaly modes. */
+    function _renderGenesisRMW() {
+        _renderStructFan('rt-genesis-modal-rmw', {
+            metricKey: 'rmw_km', climoMetric: 'rmw_km', windGate: 34,
+            title: 'Radius of maximum wind (members ≥34 kt)',
+            shortName: 'RMW', unit: 'nm', unitTitle: 'RMW (nm)',
+            rgb: [34, 211, 238],
+        });
+    }
+
+    /* Gale-force (34-kt) storm size — quadrant-mean R34 fan. */
+    function _renderGenesisSize() {
+        _renderStructFan('rt-genesis-modal-size', {
+            metricKey: 'r34_mean_km', climoMetric: 'r34_mean_km', windGate: 34,
+            title: 'Gale-force size — mean 34-kt wind radius',
+            shortName: 'R34', unit: 'nm', unitTitle: 'Mean R34 (nm)',
+            rgb: [52, 211, 153],
+        });
+    }
+
+    /* Wind-field nesting — R34 / R50 / R64 quadrant-mean median radii on one
+       chart, showing how the damaging-wind field stacks. Honors the anomaly
+       mode (each ring expressed vs its own intensity-matched climo). */
+    function _renderGenesisNesting() {
+        var el = document.getElementById('rt-genesis-modal-nesting');
+        if (!el || typeof Plotly === 'undefined' || !_genStructCtx) return;
+        var ctx = _genStructCtx, theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        if (_genStructMode !== 'raw' && !_structClimo) {
+            _structEmpty(el, theme, 'Wind-field nesting', 'Climatology unavailable — switch to Raw.');
+            return;
+        }
+        var rings = [
+            { key: 'r34_mean_km', gate: 34, name: 'R34', rgb: [52, 211, 153] },
+            { key: 'r50_mean_km', gate: 50, name: 'R50', rgb: [251, 191, 36] },
+            { key: 'r64_mean_km', gate: 64, name: 'R64', rgb: [248, 113, 113] },
+        ];
+        var allTaus = {};
+        var perRing = rings.map(function (r) {
+            var byTau = {};
+            for (var i = 0; i < ctx.memberKeys.length; i++) {
+                var pts = ctx.members[ctx.memberKeys[i]].points || [];
+                for (var j = 0; j < pts.length; j++) {
+                    var p = pts[j];
+                    if (p[r.key] == null || p[r.key] === 0 || p.wind == null || p.wind < r.gate) continue;
+                    (byTau[p.tau] = byTau[p.tau] || []).push({ v: p[r.key], w: p.wind });
+                }
+            }
+            Object.keys(byTau).forEach(function (t) { allTaus[t] = 1; });
+            return byTau;
+        });
+        var taus = Object.keys(allTaus).map(Number).sort(function (a, b) { return a - b; });
+        if (!taus.length) { _structEmpty(el, theme, 'Wind-field nesting', 'No member reports wind-radii this cycle.'); return; }
+        var xVals = taus.map(function (t) { return '+' + t + 'h'; });
+        var traces = [];
+        for (var ri = 0; ri < rings.length; ri++) {
+            var r = rings[ri], byTau = perRing[ri];
+            var med = [], lo = [], hi = [];
+            for (var ti = 0; ti < taus.length; ti++) {
+                var entries = byTau[taus[ti]];
+                if (!entries || entries.length < 3) { med.push(null); lo.push(null); hi.push(null); continue; }
+                var vals = [];
+                for (var e = 0; e < entries.length; e++) {
+                    var tv = _structXform(r.key, ctx.basin, entries[e].w, entries[e].v);
+                    if (tv != null && isFinite(tv)) vals.push(tv);
+                }
+                if (vals.length < 3) { med.push(null); lo.push(null); hi.push(null); continue; }
+                vals.sort(function (a, b) { return a - b; });
+                med.push(_structPct(vals, 0.5)); lo.push(_structPct(vals, 0.25)); hi.push(_structPct(vals, 0.75));
+            }
+            var c = 'rgb(' + r.rgb[0] + ',' + r.rgb[1] + ',' + r.rgb[2] + ')';
+            var cf = 'rgba(' + r.rgb[0] + ',' + r.rgb[1] + ',' + r.rgb[2] + ',0.13)';
+            // P25–P75 band gives a feel for the member spread of each ring.
+            traces.push({ type: 'scatter', mode: 'lines', x: xVals, y: lo,
+                line: { color: 'rgba(0,0,0,0)' }, connectgaps: false,
+                showlegend: false, hoverinfo: 'skip' });
+            traces.push({ type: 'scatter', mode: 'lines', x: xVals, y: hi,
+                line: { color: 'rgba(0,0,0,0)' }, fill: 'tonexty', fillcolor: cf,
+                connectgaps: false, name: r.name + ' IQR', hoverinfo: 'skip', showlegend: false });
+            traces.push({ type: 'scatter', mode: 'lines+markers', x: xVals, y: med,
+                line: { color: c, width: 2.2 }, marker: { size: 4, color: c },
+                name: r.name + ' (median · P25–75)', connectgaps: false,
+                hovertemplate: r.name + ' %{x}<br>median %{y:.' + (_genStructMode === 'raw' ? '0' : '1') + 'f}<extra></extra>' });
+        }
+        var ax = _structModeAxis('Mean radius (nm)');
+        var shapes = [];
+        if (ax.ref != null) shapes.push({ type: 'line', xref: 'paper', yref: 'y', x0: 0, x1: 1,
+            y0: ax.ref, y1: ax.ref, line: { color: isDark ? '#cbd5e1' : '#475569', width: 1.4, dash: 'dot' } });
+        var layout = Object.assign({}, theme, {
+            margin: { l: 56, r: 16, t: 26, b: 60 },
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            title: { text: 'Wind-field nesting — R34 / R50 / R64', x: 0, xanchor: 'left',
+                     font: { size: 11, color: theme.font.color } },
+            xaxis: { title: { text: 'Lead time', font: { size: 11 }, standoff: 14 },
+                     tickfont: { size: 10 }, tickmode: 'array',
+                     tickvals: xVals.filter(function (_v, i) { return i % 4 === 0; }),
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)' },
+            yaxis: { title: { text: ax.title, font: { size: 11 } }, range: ax.range,
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)' },
+            shapes: shapes, showlegend: true,
+            legend: { x: 0.985, y: 0.98, xanchor: 'right', yanchor: 'top',
+                bgcolor: isDark ? 'rgba(15,22,35,0.82)' : 'rgba(255,255,255,0.88)',
+                bordercolor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,22,35,0.10)', borderwidth: 1,
+                font: { size: 9, color: isDark ? '#e2e8f0' : '#1f2937' }, itemsizing: 'constant' },
+        });
+        Plotly.react(el, traces, layout, { responsive: true, displayModeBar: false });
+    }
+
+    /* Wind-radii quadrant rose — at each member's PEAK intensity, the median
+       34/50/64-kt radius by quadrant (NE/SE/SW/NW), with the intensity-matched
+       IBTrACS R34 climo drawn as a dashed reference ring. Always in nm. */
+    function _renderGenesisRose() {
+        var el = document.getElementById('rt-genesis-modal-rose');
+        if (!el || typeof Plotly === 'undefined' || !_genStructCtx) return;
+        var ctx = _genStructCtx, theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var quads = ['ne', 'se', 'sw', 'nw'];
+        var thetaDeg = { ne: 45, se: 135, sw: 225, nw: 315 };
+        var rings = [
+            { t: '34', name: 'R34', color: 'rgb(52,211,153)' },
+            { t: '50', name: 'R50', color: 'rgb(251,191,36)' },
+            { t: '64', name: 'R64', color: 'rgb(248,113,113)' },
+        ];
+        // Per member: the point at its peak wind. Collect quadrant radii there.
+        var bucket = {};   // thresh -> quad -> [nm]
+        var peakWinds = [];
+        rings.forEach(function (r) { bucket[r.t] = { ne: [], se: [], sw: [], nw: [] }; });
+        for (var i = 0; i < ctx.memberKeys.length; i++) {
+            var pts = ctx.members[ctx.memberKeys[i]].points || [];
+            var best = null;
+            for (var j = 0; j < pts.length; j++) {
+                if (pts[j].wind != null && (!best || pts[j].wind > best.wind)) best = pts[j];
+            }
+            if (!best || best.wind == null || best.wind < 34) continue;
+            peakWinds.push(best.wind);
+            rings.forEach(function (r) {
+                quads.forEach(function (q) {
+                    var v = best['r' + r.t + '_' + q + '_km'];
+                    if (v != null && v > 0) bucket[r.t][q].push(v * _STRUCT_KM_TO_NM);
+                });
+            });
+        }
+        if (!peakWinds.length) { _structEmpty(el, theme, 'Wind-radii rose', 'No member reaches TC strength this cycle.'); return; }
+        var traces = [];
+        var anyRing = false;
+        rings.forEach(function (r) {
+            var rad = [], th = [];
+            quads.forEach(function (q) {
+                var med = _structMedian(bucket[r.t][q]);
+                if (med != null) { rad.push(med); th.push(thetaDeg[q]); }
+            });
+            if (rad.length < 3) return;
+            anyRing = true;
+            rad.push(rad[0]); th.push(th[0]);   // close the loop
+            traces.push({ type: 'scatterpolar', r: rad, theta: th, mode: 'lines+markers',
+                fill: 'toself', name: r.name + ' (median)',
+                line: { color: r.color, width: 2 }, marker: { size: 5, color: r.color },
+                fillcolor: r.color.replace('rgb', 'rgba').replace(')', ',0.10)'),
+                hovertemplate: r.name + ' %{theta}: %{r:.0f} nm<extra></extra>' });
+        });
+        if (!anyRing) { _structEmpty(el, theme, 'Wind-radii rose', 'Not enough quadrant data this cycle.'); return; }
+        // Intensity-matched IBTrACS R34 climo ring (axisymmetric reference).
+        var medPeak = _structMedian(peakWinds);
+        var climoRec = _structClimoRec(ctx.basin, 'r34_mean_km', medPeak);
+        if (climoRec) {
+            // Climo R34 is axisymmetric (one value, no quadrant info), so draw it
+            // as a smooth reference circle rather than a 4-point diamond that
+            // wouldn't align with the NE/SE/SW/NW forecast quadrants.
+            var cr = climoRec.mean * _STRUCT_KM_TO_NM;
+            var cTheta = [], cR = [];
+            for (var ang = 0; ang <= 360; ang += 10) { cTheta.push(ang); cR.push(cr); }
+            traces.push({ type: 'scatterpolar', r: cR, theta: cTheta,
+                mode: 'lines', name: 'R34 climo (' + Math.round(medPeak) + ' kt)',
+                line: { color: isDark ? '#cbd5e1' : '#475569', width: 1.6, dash: 'dot' },
+                hovertemplate: 'climo R34: %{r:.0f} nm<extra></extra>' });
+        }
+        var layout = Object.assign({}, theme, {
+            margin: { l: 30, r: 30, t: 34, b: 30 },
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            title: { text: 'Wind-radii rose at peak intensity (median, nm)', x: 0, xanchor: 'left',
+                     font: { size: 11, color: theme.font.color } },
+            showlegend: true,
+            legend: { font: { size: 9, color: isDark ? '#e2e8f0' : '#1f2937' } },
+            polar: {
+                bgcolor: 'rgba(0,0,0,0)',
+                radialaxis: { angle: 90, tickfont: { size: 9 }, gridcolor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,22,35,0.10)' },
+                angularaxis: { direction: 'clockwise', rotation: 90,
+                    tickmode: 'array', tickvals: [45, 135, 225, 315], ticktext: ['NE', 'SE', 'SW', 'NW'],
+                    tickfont: { size: 10, color: theme.font.color },
+                    gridcolor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,22,35,0.10)' },
+            },
+        });
+        Plotly.react(el, traces, layout, { responsive: true, displayModeBar: false });
+    }
+
+    /* 34-kt wind-area / IKE proxy — per-member MAX over the forecast of the
+       area enclosed by the four R34 quadrant radii (quarter-disk sum), as a
+       distribution. A dashed line marks the intensity-matched axisymmetric
+       IBTrACS R34 area at the ensemble's median peak intensity. Always 10³ km². */
+    function _renderGenesisIKE() {
+        var el = document.getElementById('rt-genesis-modal-ike');
+        if (!el || typeof Plotly === 'undefined' || !_genStructCtx) return;
+        var ctx = _genStructCtx, theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var QPI = Math.PI / 4;   // quarter-disk per quadrant
+        var areas = [], peakWinds = [];
+        for (var i = 0; i < ctx.memberKeys.length; i++) {
+            var pts = ctx.members[ctx.memberKeys[i]].points || [];
+            var bestArea = 0, bestPeak = 0;
+            for (var j = 0; j < pts.length; j++) {
+                var p = pts[j];
+                if (p.wind == null || p.wind < 34) continue;
+                if (p.wind > bestPeak) bestPeak = p.wind;
+                var sq = 0, have = false;
+                ['ne', 'se', 'sw', 'nw'].forEach(function (q) {
+                    var v = p['r34_' + q + '_km'];
+                    if (v != null && v > 0) { sq += v * v; have = true; }
+                });
+                if (have) { var a = QPI * sq / 1000; if (a > bestArea) bestArea = a; }
+            }
+            if (bestArea > 0) { areas.push(bestArea); peakWinds.push(bestPeak); }
+        }
+        if (areas.length < 3) { _structEmpty(el, theme, '34-kt wind area', 'Too few members with a 34-kt wind field this cycle.'); return; }
+        var maxA = Math.max.apply(null, areas);
+        var nb = 24, bw = Math.max(1, maxA / nb);
+        var trace = { type: 'histogram', x: areas, xbins: { start: 0, end: maxA + bw, size: bw },
+            marker: { color: isDark ? 'rgba(96,165,250,0.72)' : 'rgba(37,99,235,0.66)',
+                      line: { color: isDark ? 'rgba(226,232,240,0.35)' : 'rgba(15,22,35,0.25)', width: 0.5 } },
+            hovertemplate: '%{x} ×10³ km²<br>%{y} members<extra></extra>' };
+        var shapes = [], annotations = [];
+        var medA = _structMedian(areas);
+        if (medA != null) {
+            shapes.push({ type: 'line', x0: medA, x1: medA, yref: 'paper', y0: 0, y1: 1,
+                line: { color: isDark ? '#60a5fa' : '#2563eb', width: 1.6 } });
+            annotations.push({ x: medA, yref: 'paper', y: 0.98, text: 'median ' + medA.toFixed(0),
+                showarrow: false, font: { size: 9, color: isDark ? '#93c5fd' : '#2563eb' }, xanchor: 'left', xshift: 4 });
+        }
+        var medPeak = _structMedian(peakWinds);
+        var climoRec = _structClimoRec(ctx.basin, 'r34_mean_km', medPeak);
+        if (climoRec) {
+            var crNm = climoRec.mean * _STRUCT_KM_TO_NM;
+            var climoArea = Math.PI * crNm * crNm / 1000;   // axisymmetric R34 disk
+            shapes.push({ type: 'line', x0: climoArea, x1: climoArea, yref: 'paper', y0: 0, y1: 1,
+                line: { color: isDark ? '#cbd5e1' : '#475569', width: 1.6, dash: 'dot' } });
+            annotations.push({ x: climoArea, yref: 'paper', y: 0.88, text: 'climo (' + Math.round(medPeak) + ' kt)',
+                showarrow: false, font: { size: 9, color: isDark ? '#cbd5e1' : '#475569' }, xanchor: 'left', xshift: 4 });
+        }
+        var layout = Object.assign({}, theme, {
+            margin: { l: 50, r: 16, t: 26, b: 46 },
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            title: { text: 'Peak 34-kt wind area (per member)', x: 0, xanchor: 'left',
+                     font: { size: 11, color: theme.font.color } },
+            bargap: 0.04,
+            xaxis: { title: { text: '34-kt wind area (×10³ km²)', font: { size: 11 } }, tickfont: { size: 10 },
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)' },
+            yaxis: { title: { text: 'Members', font: { size: 11 } }, tickfont: { size: 10 },
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)' },
+            shapes: shapes, annotations: annotations, showlegend: false,
+        });
+        Plotly.react(el, [trace], layout, { responsive: true, displayModeBar: false });
+    }
+
+    /** Render the whole Structure section (RMW + 4 figures). Sets the shared
+     *  context, derives the basin, ensures the climo is loaded, then draws. */
+    function _renderGenesisStructure(memberKeys, members, stats) {
+        var basin = _structBasin(_structMedian(stats.genLats || []), _structMedian(stats.genLons || []));
+        _genStructCtx = { memberKeys: memberKeys, members: members, stats: stats, basin: basin };
+        _loadStructClimo().then(function () {
+            if (!_genStructCtx) return;
+            _renderGenesisRMW();
+            _renderGenesisSize();
+            _renderGenesisNesting();
+            _renderGenesisRose();
+            _renderGenesisIKE();
+        });
+    }
+
+    /** Switch anomaly mode (raw / pct / z) and re-render the fan figures. */
+    function _setGenStructMode(mode) {
+        if (mode === _genStructMode || !_genStructCtx) return;
+        _genStructMode = mode;
+        var seg = document.getElementById('rt-genesis-struct-mode');
+        if (seg) {
+            var btns = seg.querySelectorAll('.rt-genesis-struct-mode-btn');
+            for (var i = 0; i < btns.length; i++) {
+                btns[i].classList.toggle('active', btns[i].getAttribute('data-mode') === mode);
+            }
+        }
+        _renderGenesisRMW();
+        _renderGenesisSize();
+        _renderGenesisNesting();
+        // Rose + wind-area stay in physical units (climo shown as a reference),
+        // so they don't need re-rendering on a mode switch.
+    }
+    window._setGenStructMode = _setGenStructMode;
+
+    /* (legacy) Forecast RMW evolution — kept for reference; superseded by the
+       shared _renderStructFan path above. */
+    function _renderGenesisRMW_LEGACY_UNUSED(memberKeys, members, stats) {
         var el = document.getElementById('rt-genesis-modal-rmw');
         if (!el || typeof Plotly === 'undefined') return;
         var theme = _genesisTheme();
@@ -20190,6 +20816,139 @@
             alert('Couldn’t save PNG: ' + (err && err.message ? err.message : err));
         }).then(function () {
             if (btn) { btn.textContent = orig; btn.disabled = false; }
+        });
+    }
+
+    /** Animated GIF of the global map's current loop — captures *whatever the
+     *  user has on screen* (mosaic frames + env overlays + forecast tracks +
+     *  markers + 3D, if on) by html2canvas-ing the whole #ir-map node once per
+     *  animation frame, then feeding the captures to gif.js (same-origin blob
+     *  worker, like the storm-card + orbit GIF paths). Requires the loop to be
+     *  built (press ▶ once) so there's something to animate. */
+    function _exportMapGif() {
+        if (typeof window.GIF === 'undefined') { _rtToast('GIF encoder still loading — try again in a moment'); return; }
+        var nFrames = globalAnimFrameLayers.length;
+        if (!globalAnimReady || nFrames < 2) {
+            _rtToast('Press ▶ to load the animation first, then export a GIF');
+            return;
+        }
+        var node = document.getElementById('ir-map');
+        if (!node) return;
+        _ga('rt_export_map_gif', { product: globalProduct, frames: nFrames });
+
+        var wasPlaying = globalAnimPlaying;
+        if (wasPlaying) stopGlobalAnimation();
+        var startIdx = globalAnimIndex;
+
+        var exBtn = document.getElementById('ir-global-export-btn');
+        if (exBtn) exBtn.disabled = true;
+
+        // Progress card — top-center of the map (mirrors the orbit-GIF overlay).
+        var prog = document.createElement('div');
+        prog.style.cssText = 'position:absolute;top:14px;left:50%;transform:translateX(-50%);' +
+            'background:rgba(15,22,35,0.92);backdrop-filter:blur(8px);border:1px solid rgba(74,155,110,0.45);' +
+            'border-radius:9px;padding:9px 14px;z-index:1200;pointer-events:none;' +
+            'box-shadow:0 4px 18px rgba(0,0,0,0.45);min-width:210px;text-align:center;';
+        prog.innerHTML =
+            '<div id="rt-mapgif-text" style="color:#e2e8f0;font:600 11px/1.3 \'DM Sans\',system-ui,sans-serif;margin-bottom:7px;">◉ Recording GIF…</div>' +
+            '<div style="height:6px;background:rgba(148,163,184,0.25);border-radius:3px;overflow:hidden;">' +
+            '<div id="rt-mapgif-bar" style="width:0%;height:100%;background:#4a9b6e;border-radius:3px;transition:width 0.15s;"></div></div>';
+        node.appendChild(prog);
+        var _pgText = prog.querySelector('#rt-mapgif-text');
+        var _pgBar = prog.querySelector('#rt-mapgif-bar');
+        function _setProg(txt, pct) {
+            if (_pgText && txt != null) _pgText.textContent = txt;
+            if (_pgBar && pct != null) _pgBar.style.width = pct + '%';
+        }
+
+        // iOS: pre-open the destination tab inside the tap so the async encode
+        // isn't popup-blocked (mirrors the storm-card + orbit GIF paths).
+        var ua = navigator.userAgent || '';
+        var isIOS = /iP(hone|od|ad)/.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
+        var gifTab = null;
+        if (isIOS) {
+            gifTab = window.open('', '_blank');
+            if (gifTab && gifTab.document) {
+                gifTab.document.write('<title>TC-ATLAS loop</title><body style="margin:0;background:#0a0c12;' +
+                    'color:#e2e8f0;font:600 14px/1.4 -apple-system,system-ui,sans-serif;display:flex;' +
+                    'align-items:center;justify-content:center;height:100vh">Encoding GIF… it will appear ' +
+                    'here when ready (long-press to save).</body>');
+            }
+        }
+
+        function cleanup() {
+            if (exBtn) exBtn.disabled = false;
+            if (prog.parentElement) prog.parentElement.removeChild(prog);
+            showGlobalAnimFrame(startIdx);
+            if (wasPlaying) startGlobalAnimation();
+        }
+
+        var rect = node.getBoundingClientRect();
+        var capScale = Math.min(1, 1000 / Math.max(1, rect.width));   // cap the long edge ~1000 px
+        var delayMs = Math.max(90, GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].ms);
+        var h2cOpts = {
+            useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
+            logging: false, scale: capScale,
+            ignoreElements: function (el) {
+                return el.id === 'ir-status-bar' || el.id === 'ir-global-export-menu';
+            }
+        };
+
+        Promise.all([_ensureHtml2canvas(), _ensureGifWorker()]).then(function (res) {
+            var workerUrl = res[1];
+            var gif = null, i = 0;
+            function frameStep() {
+                showGlobalAnimFrame(i);
+                // Give the GL canvas + vector panes a beat to repaint the new
+                // frame before html2canvas reads them.
+                setTimeout(function () {
+                    window.html2canvas(node, h2cOpts).then(function (canvas) {
+                        if (!gif) {
+                            var workers = Math.max(2, Math.min(6, navigator.hardwareConcurrency || 4));
+                            gif = new window.GIF({
+                                workers: workers, quality: 10,
+                                width: canvas.width, height: canvas.height,
+                                workerScript: workerUrl, background: '#0a0c12'
+                            });
+                        }
+                        gif.addFrame(canvas, { delay: delayMs, copy: true });
+                        i++;
+                        _setProg('◉ Capturing · ' + i + '/' + nFrames, Math.round(i / nFrames * 60));
+                        if (i < nFrames) frameStep();
+                        else encode(gif);
+                    }).catch(function (err) {
+                        console.warn('[rt map gif] frame capture failed', err);
+                        i++;
+                        if (gif && i < nFrames) frameStep();
+                        else if (gif) encode(gif);
+                        else { _rtToast('GIF export failed'); cleanup(); }
+                    });
+                }, 200);
+            }
+            function encode(gifObj) {
+                _setProg('Encoding GIF…', 60);
+                gifObj.on('progress', function (p) { _setProg('Encoding · ' + Math.round(p * 100) + '%', 60 + Math.round(p * 40)); });
+                gifObj.on('finished', function (blob) {
+                    var fnTs = (globalAnimFrameTimes[globalAnimFrameTimes.length - 1] || '').replace(/[^0-9]/g, '') || 'loop';
+                    var filename = 'tc-atlas-rt-' + globalProduct + '-' + fnTs + '.gif';
+                    if (gifTab && !gifTab.closed) {
+                        var u = URL.createObjectURL(blob);
+                        gifTab.location.href = u;
+                        setTimeout(function () { URL.revokeObjectURL(u); }, 60000);
+                    } else {
+                        _saveImageBlob(blob, filename);
+                    }
+                    _ga('rt_export_map_gif', { ok: true });
+                    cleanup();
+                });
+                try { gifObj.render(); } catch (e) { console.warn('[rt map gif] render failed', e); _rtToast('GIF encode failed'); cleanup(); }
+            }
+            frameStep();
+        }).catch(function (err) {
+            console.warn('[rt map gif] setup failed', err);
+            if (gifTab && !gifTab.closed) { try { gifTab.close(); } catch (e) {} }
+            _rtToast('GIF export failed to start');
+            cleanup();
         });
     }
 
