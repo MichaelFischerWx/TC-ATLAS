@@ -17331,8 +17331,11 @@
         var medPeak = _structMedian(peakWinds);
         var climoRec = _structClimoRec(ctx.basin, 'r34_mean_km', medPeak);
         if (climoRec) {
-            var crNm = climoRec.mean * _STRUCT_KM_TO_NM;
-            var climoArea = Math.PI * crNm * crNm / 1000;   // axisymmetric R34 disk
+            // Axisymmetric R34 disk area in 10³ km² — match the member areas,
+            // which are built from km radii (NOT nm). The earlier nm conversion
+            // made the climo line land near x=0.
+            var crKm = climoRec.mean;
+            var climoArea = Math.PI * crKm * crKm / 1000;
             shapes.push({ type: 'line', x0: climoArea, x1: climoArea, yref: 'paper', y0: 0, y1: 1,
                 line: { color: isDark ? '#cbd5e1' : '#475569', width: 1.6, dash: 'dot' } });
             annotations.push({ x: climoArea, yref: 'paper', y: 0.88, text: 'climo (' + Math.round(medPeak) + ' kt)',
