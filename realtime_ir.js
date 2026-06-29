@@ -21632,7 +21632,9 @@
         if (exBtn) exBtn.disabled = true;
 
         // Progress card — top-center of the map (mirrors the orbit-GIF overlay).
+        // id so html2canvas can skip it (else "Recording GIF…" bakes into frames).
         var prog = document.createElement('div');
+        prog.id = 'rt-mapgif-prog';
         prog.style.cssText = 'position:absolute;top:14px;left:50%;transform:translateX(-50%);' +
             'background:rgba(15,22,35,0.92);backdrop-filter:blur(8px);border:1px solid rgba(74,155,110,0.45);' +
             'border-radius:9px;padding:9px 14px;z-index:1200;pointer-events:none;' +
@@ -21672,13 +21674,20 @@
         }
 
         var rect = node.getBoundingClientRect();
-        var capScale = Math.min(1, 1000 / Math.max(1, rect.width));   // cap the long edge ~1000 px
+        // Cap the long edge ~600 px: GIF encode (NeuQuant + LZW) and file size
+        // scale with pixel count, so this is the dominant speed lever — 1000 px
+        // × 12 radar frames stalled encoding. Matches the storm-card GIF path.
+        var capScale = Math.min(1, 600 / Math.max(1, rect.width));
         var delayMs = Math.max(90, GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].ms);
         var h2cOpts = {
             useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
             logging: false, scale: capScale,
             ignoreElements: function (el) {
-                return el.id === 'ir-status-bar' || el.id === 'ir-global-export-menu';
+                // Skip chrome that shouldn't bake into the GIF: status bar, the
+                // export menu, and the recording-progress card.
+                return el.id === 'ir-status-bar'
+                    || el.id === 'ir-global-export-menu'
+                    || el.id === 'rt-mapgif-prog';
             }
         };
 
@@ -21694,7 +21703,7 @@
                         if (!gif) {
                             var workers = Math.max(2, Math.min(6, navigator.hardwareConcurrency || 4));
                             gif = new window.GIF({
-                                workers: workers, quality: 10,
+                                workers: workers, quality: 20,
                                 width: canvas.width, height: canvas.height,
                                 workerScript: workerUrl, background: '#0a0c12'
                             });
