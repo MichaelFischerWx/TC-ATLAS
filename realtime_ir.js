@@ -3809,6 +3809,33 @@
         globalAnimLoaded = 0;
         globalAnimReady = false;
 
+        // ── Radar mode: decoupled full IEM loop ──────────────────────────
+        // When radar is on, the loop is the radar's OWN timeline — latest →
+        // −55 min at IEM's native 5-min steps (12 frames) — independent of the
+        // sparse, lagged satellite mosaic. The satellite stays on its latest
+        // still as a static backdrop; per frame, _gRadarSync (called from
+        // showGlobalAnimFrame) flips to the matching preloaded radar bucket.
+        if (_gRadarOn) {
+            var _rnow = Date.now();
+            globalAnimFrameTimes = [];
+            globalAnimFrameLayers = [];
+            for (var _age = 55; _age >= 0; _age -= 5) {   // oldest→newest
+                globalAnimFrameTimes.push(new Date(_rnow - _age * 60000).toISOString());
+                globalAnimFrameLayers.push(_gRadarFrameStub());
+            }
+            _gRadarPreload();   // build + start loading every bucket layer
+            globalAnimReady = true;
+            globalAnimLoading = false;
+            globalAnimIndex = (_globalAnimPendingScrub != null)
+                ? Math.max(0, Math.min(globalAnimFrameTimes.length - 1, _globalAnimPendingScrub))
+                : globalAnimFrameTimes.length - 1;
+            _globalAnimPendingScrub = null;
+            showGlobalAnimFrame(globalAnimIndex);
+            updateGlobalAnimControls('ready');
+            if (_globalAnimAutoplay) startGlobalAnimation();
+            return;
+        }
+
         // Build frame times. On the GL facade, drive the loop from the real
         // mosaic frames.json timestamps (each a distinct composited frame);
         // otherwise derive GIBS times from latestGIBSTime.
@@ -4046,6 +4073,19 @@
             var n = _iemLayerForFrameTime(times[i]);
             if (!seen[n]) { seen[n] = 1; _gRadarBucketLayer(n); }
         }
+    }
+
+    // Dummy frame-layer for the decoupled radar loop. The radar bucket is shown
+    // by _gRadarSync (driven off globalAnimFrameTimes[idx]); the satellite stays
+    // on its latest still, so this stub is just a length placeholder that
+    // satisfies the slider/play machinery (no real GL layer).
+    function _gRadarFrameStub() {
+        return {
+            addTo: function () { return this; },
+            on: function (ev, cb) { if (ev === 'load') setTimeout(cb, 0); return this; },
+            setOpacity: function () {},
+            remove: function () {}, setZIndex: function () { return this; },
+        };
     }
 
     /** Show the radar bucket matching the current frame time (instant opacity
@@ -15649,10 +15689,16 @@
         var reqTrackId = json && json.track_id;
         wrap.dataset.trackId = reqTrackId || '';
         var loadedInit = (json && json.init_time) || '';
+        // Match the trend's ensemble variant to the LOADED run so the newest
+        // cycle isn't dropped: the 50-member "small" preliminary publishes
+        // hours before the 1000-member "large", so a large-only trend omits the
+        // freshest cycle the user is actually viewing.
+        var _trendVariant = (json && json.variant) || _genesisEnsembleVariant || '';
 
         fetch(API_BASE + '/ir-monitor/weatherlab-genesis-trend'
                 + '?lat=' + encodeURIComponent(aLat)
                 + '&lon=' + encodeURIComponent(aLon)
+                + (_trendVariant ? '&variant=' + encodeURIComponent(_trendVariant) : '')
                 + '&count=5', { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (data) {
