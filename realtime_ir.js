@@ -5783,6 +5783,9 @@
      *    current without thrashing the IR pipeline. */
     function _refreshFramesIfNewer(atcfId) {
         if (!detailMap || currentStormId !== atcfId) return;
+        // Lite card: all products refresh from the mosaic frames.json (no band
+        // bundle). Handles the current product internally.
+        if (_liteActive) { _refreshLiteFramesIfNewer(atcfId); return; }
         // Dispatch by active product. Each helper checks its own state
         // and only swaps frames if the new bundle has a newer latest.
         if (productMode === 'eir') {
@@ -5806,11 +5809,10 @@
      *  clobber the lite layers with a heavyweight bundle on the next poll. */
     function _refreshLiteFramesIfNewer(atcfId) {
         if (animFrameTimes.length === 0) return;
-        // Only rebuild the IR mosaic loop while IR is the shown product — a
-        // background poll while the user is on Vis/WV must not flip IR frames on.
-        if (productMode !== 'eir') return;
+        // Refresh whichever product is shown (IR/Vis/WV all ride the mosaic now).
+        var product = (productMode === 'vis' || productMode === 'wv') ? productMode : 'ir';
         var currentLatest = animFrameTimes[animFrameTimes.length - 1];
-        fetch((_IR2A ? _ir2aRoot('ir') : _MOSAIC_BASE) + '/frames.json', { cache: 'no-store' })
+        fetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (j) {
                 if (!detailMap || currentStormId !== atcfId || !_liteActive) return;
@@ -5818,9 +5820,8 @@
                 if (!frames.length) return;
                 var newLatest = _mosaicTsToIso(frames[frames.length - 1]);
                 if (!newLatest || newLatest <= currentLatest) return;
-                // Keep the shared mosaic state (global map) in sync too.
-                _mosaicFrames = frames;
-                _mosaicTs = frames[frames.length - 1];
+                // Keep the shared mosaic state (global map) in sync on IR.
+                if (product === 'ir') { _mosaicFrames = frames; _mosaicTs = frames[frames.length - 1]; }
                 var storm = null;
                 for (var i = 0; i < stormData.length; i++) {
                     if (stormData[i].atcf_id === atcfId) { storm = stormData[i]; break; }
@@ -5828,8 +5829,8 @@
                 if (!storm) return;
                 var wasPlaying = animPlaying;
                 if (wasPlaying) stopAnimation();
-                _buildMosaicAnimLayers(storm, frames, 'ir');
-                console.log('[RT Monitor] Lite frames refreshed — latest ' + newLatest);
+                _buildMosaicAnimLayers(storm, frames, product);
+                console.log('[RT Monitor] Lite ' + product + ' frames refreshed — latest ' + newLatest);
                 if (wasPlaying) setTimeout(function () {
                     if (framesReady && currentStormId === atcfId && _liteActive) startAnimation();
                 }, 250);
@@ -5999,26 +6000,33 @@
      *  only, $0 new compute. Falls through to the raw-Tb path if the mosaic is
      *  unavailable. (The Meteosat-gap longitude check happens at the caller, so
      *  by here we expect tiles to exist.) See project_lite_storm_view. */
-    function _initDetailMapMosaic(storm) {
+    function _initDetailMapMosaic(storm, product) {
         if (!detailMap) return;
+        product = product || 'ir';
         var atcfId = storm.atcf_id;
-        var framesP = (_IR2A && window.createMosaicGLLayer)
-            ? fetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' })
-                .then(function (r) { return r.json(); }).then(function (j) { return (j && j.frames) || []; })
-            : _loadMosaicFrames();
+        // Per-product fallback when the mosaic has no frames/tiles for this
+        // product (e.g. GOES Vis Band-2 gap): IR → raw-Tb cutout; Vis/WV →
+        // the band bundle, so a storm outside mosaic coverage still loops.
+        function _fallback() {
+            if (product === 'ir') { _liteActive = false; _initDetailMapJPG(storm, GIBS_IR_LAYERS[detailSatName]); }
+            else if (product === 'vis') { _loadVisSwirComposite(); }
+            else { _loadBandFramesBundle(8, 'wv'); }
+        }
+        var framesP = (product === 'ir' && !(_IR2A && window.createMosaicGLLayer))
+            ? _loadMosaicFrames()   // legacy v2 IR path
+            : fetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
+                .then(function (r) { return r.json(); }).then(function (j) { return (j && j.frames) || []; });
         framesP.then(function (frames) {
             if (!detailMap || currentStormId !== atcfId) return;
             if (!frames || frames.length === 0) {
-                console.warn('[RT Monitor] Lite: no mosaic frames; raw-Tb fallback');
-                _liteActive = false;
-                _initDetailMapJPG(storm, GIBS_IR_LAYERS[detailSatName]);
+                console.warn('[RT Monitor] Lite: no ' + product + ' mosaic frames; fallback');
+                _fallback();
                 return;
             }
-            _buildMosaicAnimLayers(storm, frames, 'ir');
+            _buildMosaicAnimLayers(storm, frames, product);
         }).catch(function (e) {
-            console.warn('[RT Monitor] Lite: mosaic load failed; raw-Tb fallback', e);
-            _liteActive = false;
-            _initDetailMapJPG(storm, GIBS_IR_LAYERS[detailSatName]);
+            console.warn('[RT Monitor] Lite: ' + product + ' mosaic load failed; fallback', e);
+            _fallback();
         });
     }
 
@@ -6038,11 +6046,16 @@
         // idxcolor:// protocol and render them as a NORMAL raster tile layer. Beats a
         // custom GL layer on this 2nd map: mobile-safe (no extra GL context), and tile
         // layers fall back to parent (z4) tiles natively → fast first paint + no gaps.
-        var idxMode = (_IR2A && product === 'ir' && window.maplibregl && window.maplibregl.addProtocol);
+        // All three products (IR/Vis/WV) are single-channel idx tiles in the v3
+        // mosaic, recolored per-product via the idxcolor:// protocol on the GL
+        // facade — so Vis/WV get the same crisp storm-sector tiles as IR (no
+        // prewarm band bundle). Legacy v2 raster fallback only when idx is off.
+        var idxMode = (_IR2A && (product === 'ir' || product === 'vis' || product === 'wv')
+                       && window.maplibregl && window.maplibregl.addProtocol);
         if (idxMode) _idxColorEnsureProtocol();
         for (var i = 0; i < n; i++) {
             var url = idxMode
-                ? ('idxcolor://ir/' + _ir2aRoot('ir') + '/' + frames[i] + '/{z}/{x}/{y}.png')
+                ? ('idxcolor://' + product + '/' + _ir2aRoot(product) + '/' + frames[i] + '/{z}/{x}/{y}.png')
                 : (product === 'ir' ? _irColorTileUrl(_mosaicTileUrl(frames[i], product)) : _mosaicTileUrl(frames[i], product));
             var ly = L.tileLayer(url, {
                 tileSize: 512, maxNativeZoom: 6, maxZoom: GIBS_VIS_MAX_ZOOM,
@@ -6071,6 +6084,10 @@
         // obs / intensity). Deliberately NOT _fetchRawTbIncremental — the whole
         // point of lite is to leave raw Tb untouched; diagnostics/obj-eye that
         // need raw Tb stay a Detailed-path feature.
+        var _satLbl = document.getElementById('ir-satellite-label');
+        if (_satLbl) _satLbl.textContent =
+            ({ ir: 'Infrared', vis: 'Visible', wv: 'Water Vapor' }[product] || 'Infrared')
+            + ' — ' + detailSatName;
         _deferredStormRef = storm;
         _triggerDeferredLoads();
         console.log('[RT Monitor] Lite mosaic loop: ' + n + ' frames (' + product + ')');
@@ -8013,6 +8030,7 @@
     /** Timestamp string of the currently-displayed frame for the active
      *  product (IR / Vis / WV use different per-frame time arrays). */
     function _activeFrameTimeStr() {
+        if (_liteActive) return animFrameTimes[animIndex];   // shared mosaic loop
         if (productMode === 'vis') return visFrameTimes[animIndex];
         if (productMode === 'wv') return wvFrameTimes[animIndex];
         return animFrameTimes[animIndex];
@@ -8043,11 +8061,7 @@
      *  drop a ⊕ on a bad guess. Cyan to distinguish from the red VDM fix. */
     function _syncObjEyeToFrame(timeStr) {
         if (!detailMap) return;
-        if (timeStr == null) {
-            timeStr = (productMode === 'vis') ? visFrameTimes[animIndex]
-                    : (productMode === 'wv')  ? wvFrameTimes[animIndex]
-                    : animFrameTimes[animIndex];
-        }
+        if (timeStr == null) timeStr = _activeFrameTimeStr();
         // center_fix is an IR product; on a Vis/WV frame whose timestamp has no
         // matching IR raw-Tb frame this returns null and the ⊕ is hidden.
         var cf = _diagVisible ? _centerFixForTime(timeStr) : null;
@@ -8327,6 +8341,19 @@
     /** Find the position of animIndex within validFrames (or -1) */
     /** Get the active set of valid frames and frame layers for the current product mode */
     function activeFrameState() {
+        // Lite mode renders EVERY product from the shared mosaic anim arrays
+        // (one loop, rebuilt per product on switch), so the deck reads those
+        // regardless of productMode. The per-product arrays are only used on
+        // the Detailed (band/raw) path below.
+        if (_liteActive) {
+            return {
+                valid: validFrames,
+                layers: animFrameLayers,
+                times: animFrameTimes,
+                ready: framesReady,
+                showFn: showFrame
+            };
+        }
         if (productMode === 'vis') {
             return {
                 valid: visValidFrames,
@@ -8817,7 +8844,13 @@
         }
 
         // --- Activate new mode ---
-        if (mode === 'eir') {
+        if (_liteActive && _deferredStormRef) {
+            // Lite card: render this product from the mosaic idx tiles (crisp
+            // storm-sector tiles fading to the global mosaic when zoomed out),
+            // rebuilt on each switch — no prewarm band bundle. Falls back to the
+            // band bundle / raw-Tb per product if the mosaic lacks coverage.
+            _initDetailMapMosaic(_deferredStormRef, mode === 'eir' ? 'ir' : mode);
+        } else if (mode === 'eir') {
             // Restore IR slider state
             var slider = document.getElementById('ir-anim-slider');
             if (slider && validFrames.length > 0) {
