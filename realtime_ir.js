@@ -13710,6 +13710,13 @@
                 // (genesis panel needs ≥2 matched cycles; the track +
                 // intensity overlays need mean_track from the backend).
                 '<div id="rt-genesis-pane-trends" class="rt-genesis-pane" style="display:none;">' +
+                '<div class="rt-genesis-struct-head" style="margin-top:4px; margin-bottom:6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">' +
+                  '<span class="rt-genesis-struct-title" style="font-weight:600; font-size:0.82rem; opacity:0.9;">Run-to-run trends</span>' +
+                  '<div id="rt-genesis-trend-win" class="rt-genesis-struct-mode" role="group" style="margin-left:auto;" title="Full forecast vs the 0–120 h short-term window (top-panel metrics + track ellipses adjust to the window)">' +
+                    '<button type="button" class="rt-genesis-struct-mode-btn active" data-win="full">Full</button>' +
+                    '<button type="button" class="rt-genesis-struct-mode-btn" data-win="short">0–120 h</button>' +
+                  '</div>' +
+                '</div>' +
                 '<div id="rt-genesis-jump-trends" class="rt-genesis-modal-chart-wrap" style="position:relative;">' +
                   '<div id="rt-genesis-trends-empty" class="rt-genesis-trend-note" style="padding:10px 4px;">No multi-cycle history yet for this disturbance.</div>' +
                   '<div id="rt-genesis-modal-trend" class="rt-genesis-trend-wrap" style="display:none;">' +
@@ -13953,6 +13960,13 @@
             _structSeg.addEventListener('click', function (e) {
                 var b = e.target.closest ? e.target.closest('.rt-genesis-struct-mode-btn') : null;
                 if (b) _setGenStructMode(b.getAttribute('data-mode'));
+            });
+        }
+        var _trendWinSeg = m.querySelector('#rt-genesis-trend-win');
+        if (_trendWinSeg) {
+            _trendWinSeg.addEventListener('click', function (e) {
+                var b = e.target.closest ? e.target.closest('.rt-genesis-struct-mode-btn') : null;
+                if (b) _setGenTrendWin(b.getAttribute('data-win'));
             });
         }
         m.querySelector('#rt-genesis-lmi-save').addEventListener('click', function () {
@@ -15206,6 +15220,7 @@
             .then(function (data) {
                 if (wrap.dataset.trackId !== (reqTrackId || '')) return;  // stale
                 _genesisTrendLoading = false;
+                _genTrendData = data; _genTrendInit = loadedInit;   // for the window toggle
                 _drawGenesisTrend(data, loadedInit);
                 _drawTrackTrend(data, loadedInit);
                 _drawIntensityTrend(data, loadedInit);
@@ -15510,6 +15525,7 @@
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var grid = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)';
 
+        var _short = (_genTrendWin === 'short');
         var xLabels = [], formPct = [], medV = [], barColors = [], custom = [];
         var formTxt = [], vTxt = [];
         for (var i = 0; i < trend.length; i++) {
@@ -15520,14 +15536,23 @@
                 : it;
             var isLoaded = (it === loadedInit);
             xLabels.push(lbl + (isLoaded ? ' ★' : ''));
-            var fp = t.matched ? +(t.formation_prob * 100).toFixed(0) : null;
+            var w120 = t.spread && t.spread.win120;
+            var fp, mv;
+            if (_short) {
+                // 0–120 h window: formation by +120 h + median member peak ≤120 h.
+                fp = (t.matched && w120 && w120.formation_prob != null)
+                    ? +(w120.formation_prob * 100).toFixed(0) : null;
+                mv = (t.matched && w120 && w120.median_lmi != null) ? w120.median_lmi : null;
+            } else {
+                fp = t.matched ? +(t.formation_prob * 100).toFixed(0) : null;
+                // Prefer the per-cycle MEDIAN member LMI (representative "how strong");
+                // fall back to the mean-track peak if the backend hasn't supplied it.
+                mv = t.matched
+                    ? ((t.spread && t.spread.median_lmi != null) ? t.spread.median_lmi : t.peak_wind)
+                    : null;
+            }
             formPct.push(fp);
             formTxt.push(fp != null ? fp + '%' : '');
-            // Prefer the per-cycle MEDIAN member LMI (representative "how strong");
-            // fall back to the mean-track peak if the backend hasn't supplied it.
-            var mv = t.matched
-                ? ((t.spread && t.spread.median_lmi != null) ? t.spread.median_lmi : t.peak_wind)
-                : null;
             medV.push(mv);
             vTxt.push(mv != null ? Math.round(mv) + ' kt' : '');
             barColors.push(isLoaded ? '#00e5ff' : 'rgba(0,229,255,0.42)');
@@ -15564,12 +15589,14 @@
             bargap: 0.45,
             xaxis: { tickfont: { size: 9.5 }, gridcolor: grid, fixedrange: true },
             yaxis: {
-                title: { text: 'Formation %', font: { size: 9.5, color: '#0891b2' } },
+                title: { text: _short ? 'Formation % ≤120 h' : 'Formation %',
+                         font: { size: 9.5, color: '#0891b2' } },
                 tickfont: { size: 9, color: '#0891b2' }, range: [0, 115], gridcolor: grid,
                 fixedrange: true,
             },
             yaxis2: {
-                title: { text: 'Median LMI (kt)', font: { size: 9.5, color: '#f97316' } },
+                title: { text: _short ? 'Median Vmax ≤120 h (kt)' : 'Median LMI (kt)',
+                         font: { size: 9.5, color: '#f97316' } },
                 tickfont: { size: 9, color: '#f97316' }, overlaying: 'y', side: 'right',
                 // Headroom so the "NNN kt" point labels don't clip at the top
                 // for very strong storms (LMI ~150 kt).
@@ -15580,9 +15607,10 @@
         Plotly.react(el, [barTrace, lineTrace], layout,
                      { responsive: true, displayModeBar: false });
         if (noteEl) {
-            noteEl.textContent = '★ = loaded run · left axis = formation % '
-                + '(cyan bars, % of ensemble reaching 34 kt) · right axis = '
-                + 'median member LMI (orange line) · last ' + trend.length + ' cycles';
+            noteEl.textContent = '★ = loaded run · left = formation % (cyan, % of '
+                + 'ensemble reaching 34 kt' + (_short ? ' by +120 h' : '') + ') · right = '
+                + (_short ? 'median member peak Vmax within 0–120 h' : 'median member LMI')
+                + ' (orange) · last ' + trend.length + ' cycles';
         }
         wrap.style.display = '';
     }
@@ -15600,6 +15628,31 @@
     // note — the cold cluster fetch takes a few seconds and would otherwise
     // read as "no multi-cycle history exists" when it's just still loading.
     var _genesisTrendLoading = false;
+
+    // Trends-tab window: 'full' (whole forecast) | 'short' (0–120 h). The
+    // short view re-renders the SAME 3 panels clipped to ≤120 h, with the top
+    // panel using the per-cycle 0–120 h metrics and the track ellipses at
+    // 72/120 h (vs 120/240 h). Stored trend payload lets the toggle re-render
+    // without a refetch.
+    var _genTrendWin = 'full';
+    var _genTrendData = null, _genTrendInit = '';
+    function _setGenTrendWin(win) {
+        if (win === _genTrendWin) return;
+        _genTrendWin = win;
+        var seg = document.getElementById('rt-genesis-trend-win');
+        if (seg) {
+            var bs = seg.querySelectorAll('.rt-genesis-struct-mode-btn');
+            for (var i = 0; i < bs.length; i++) {
+                bs[i].classList.toggle('active', bs[i].getAttribute('data-win') === win);
+            }
+        }
+        if (_genTrendData) {
+            _drawGenesisTrend(_genTrendData, _genTrendInit);
+            _drawTrackTrend(_genTrendData, _genTrendInit);
+            _drawIntensityTrend(_genTrendData, _genTrendInit);
+        }
+    }
+    window._setGenTrendWin = _setGenTrendWin;
 
     // Show the placeholder note only when all three Trends figures are
     // hidden (no matched cycles / backend not yet serving mean_track). While
@@ -15749,11 +15802,13 @@
 
         var theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var _short = (_genTrendWin === 'short');
+        var _inWin = function (p) { return !_short || (p.tau != null && p.tau <= 120); };
 
         var allLats = [], allLons = [];
         cycles.forEach(function (c) {
             c.mean_track.forEach(function (p) {
-                if (p.lat != null && p.lon != null) {
+                if (p.lat != null && p.lon != null && _inWin(p)) {
                     allLats.push(p.lat); allLons.push(p.lon);
                 }
             });
@@ -15777,7 +15832,7 @@
         }).forEach(function (c) {
             var lons = [], lats = [], prev = null;
             c.mean_track.forEach(function (p) {
-                if (p.lat == null || p.lon == null) return;
+                if (p.lat == null || p.lon == null || !_inWin(p)) return;
                 if (prev !== null && Math.abs(p.lon - prev) > 180) {
                     lons.push(null); lats.push(null);
                 }
@@ -15787,8 +15842,12 @@
             var _isCur = (c.init_time === loadedInit);
             var cycColor = _isCur ? '#f97316'
                 : _genesisPriorColor(priorRank[c.init_time], nPrior, isDark);
-            // Member-position spread ellipses at +120 h / +240 h (variability).
-            var ells = (c.spread && c.spread.ellipses) || [];
+            // Member-position spread ellipses: 72/120 h (short view) or
+            // 120/240 h (full view).
+            var _ellTaus = _short ? [72, 120] : [120, 240];
+            var ells = ((c.spread && c.spread.ellipses) || []).filter(function (e) {
+                return _ellTaus.indexOf(e.tau) >= 0;
+            });
             ells.forEach(function (e) {
                 if (e.sxx == null) return;
                 // Outline-only (no fill): a filled +240 h ellipse is huge and
@@ -15815,7 +15874,7 @@
                 });
                 var mLon = [], mLat = [], mW = [], mTau = [];
                 c.mean_track.forEach(function (p) {
-                    if (p.lat == null || p.lon == null) return;
+                    if (p.lat == null || p.lon == null || !_inWin(p)) return;
                     mLon.push(p.lon); mLat.push(p.lat);
                     mW.push(p.wind != null ? p.wind : 0); mTau.push(p.tau);
                 });
@@ -15850,7 +15909,8 @@
         if (noteEl) {
             noteEl.textContent = 'bold orange = current run · blue→cyan = prior '
                 + 'runs (brighter = more recent) · dotted ellipses = member-track '
-                + 'spread at +120/+240 h · ' + cycles.length + ' cycles';
+                + 'spread at ' + (_short ? '+72/+120 h' : '+120/+240 h')
+                + ' · ' + cycles.length + ' cycles';
         }
         wrap.style.display = '';
     }
@@ -15878,6 +15938,7 @@
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var grid = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)';
 
+        var _short = (_genTrendWin === 'short');
         var priors = cycles.filter(function (c) { return c.init_time !== loadedInit; });
         var nPrior = priors.length;
         var priorRank = {};
@@ -15892,6 +15953,7 @@
             var xs = [], ys = [];
             c.mean_track.forEach(function (p) {
                 if (p.tau == null || p.wind == null) return;
+                if (_short && p.tau > 120) return;
                 xs.push(p.tau); ys.push(p.wind);
             });
             var lbl = _genesisFmtInit(c.init_time);
@@ -15899,7 +15961,9 @@
             var cycColor = _isCur ? '#f97316'
                 : _genesisPriorColor(priorRank[c.init_time], nPrior, isDark);
             // Per-cycle member-Vmax IQR (P25–P75) band — intensity spread.
-            var wp = (c.spread && c.spread.wind_pcts) || [];
+            var wp = ((c.spread && c.spread.wind_pcts) || []).filter(function (d) {
+                return !_short || d.tau <= 120;
+            });
             if (wp.length >= 2) {
                 var bx = wp.map(function (d) { return d.tau; });
                 var blo = wp.map(function (d) { return d.p25; });
@@ -15942,6 +16006,7 @@
             height: 280, showlegend: false,
             xaxis: { title: { text: 'Forecast hour', font: { size: 10 } },
                      tickfont: { size: 9 }, gridcolor: grid, fixedrange: true,
+                     range: _short ? [0, 120] : undefined,
                      rangemode: 'tozero' },
             yaxis: { title: { text: 'Mean Vmax (kt)', font: { size: 10 } },
                      tickfont: { size: 9 }, gridcolor: grid, fixedrange: true,

@@ -9082,23 +9082,29 @@ def _genesis_cluster_peak_structure(cluster):
     }
 
 
-def _genesis_cluster_spread(cluster):
+def _genesis_cluster_spread(cluster, ensemble_size=None):
     """Per-cycle ensemble-spread bundle for the run-to-run Trends panels:
       - median_lmi: median of members' lifetime-max Vmax (kt) — a more
         representative "how strong" than the mean-track peak.
       - wind_pcts: per-tau p25/p50/p75 of member Vmax (intensity IQR band).
-      - ellipses: at +120 h and +240 h, the member-position mean + covariance
+      - ellipses: at +72/+120/+240 h, the member-position mean + covariance
         (lon/lat degrees: sxx/syy/sxy) so the frontend can draw a spread
-        ellipse. Returns None if too few members.
+        ellipse. (The full view uses 120/240; the 0–120 h view uses 72/120.)
+      - win120: 0–120 h-window metrics for the short-term Trends view —
+        {formation_prob, median_lmi} computed over tau ≤ 120 h.
+    Returns None if too few members.
     """
     members = (cluster or {}).get("members") or {}
     if not members:
         return None
     lmis = []
+    lmis_120 = []              # per-member max wind within 0–120 h (if forms by 120)
+    n_form_120 = 0            # members reaching ≥34 kt by 120 h
     by_tau_wind = {}            # tau -> [wind]
-    pos_at = {120: [], 240: []}  # tau -> [(lat, lon)]
+    pos_at = {72: [], 120: [], 240: []}  # tau -> [(lat, lon)]
     for mem in members.values():
         peak = None
+        peak_120 = None
         for p in (mem.get("points") or []):
             w = p.get("wind")
             t = p.get("tau")
@@ -9106,11 +9112,16 @@ def _genesis_cluster_spread(cluster):
                 peak = w if peak is None else max(peak, w)
                 if t is not None:
                     by_tau_wind.setdefault(t, []).append(w)
+                    if t <= 120:
+                        peak_120 = w if peak_120 is None else max(peak_120, w)
             la, lo = p.get("lat"), p.get("lon")
             if t in pos_at and la is not None and lo is not None:
                 pos_at[t].append((la, lo))
         if peak is not None:
             lmis.append(peak)
+        if peak_120 is not None and peak_120 >= 34:
+            n_form_120 += 1
+            lmis_120.append(peak_120)
     if len(lmis) < 3:
         return None
 
@@ -9131,7 +9142,7 @@ def _genesis_cluster_spread(cluster):
                               "p50": _pct(ws, 0.50), "p75": _pct(ws, 0.75)})
 
     ellipses = []
-    for t in (120, 240):
+    for t in (72, 120, 240):
         pos = pos_at.get(t) or []
         n = len(pos)
         if n < 5:
@@ -9145,7 +9156,16 @@ def _genesis_cluster_spread(cluster):
                          "sxx": round(sxx, 4), "syy": round(syy, 4),
                          "sxy": round(sxy, 4), "n": n})
 
-    return {"median_lmi": _median(lmis), "wind_pcts": wind_pcts, "ellipses": ellipses}
+    win120 = None
+    if ensemble_size and ensemble_size > 0:
+        win120 = {
+            "formation_prob": round(n_form_120 / ensemble_size, 4),
+            "median_lmi": _median(lmis_120) if len(lmis_120) >= 3 else None,
+            "n_form": n_form_120,
+        }
+
+    return {"median_lmi": _median(lmis), "wind_pcts": wind_pcts,
+            "ellipses": ellipses, "win120": win120}
 
 
 @router.get("/weatherlab-genesis-trend")
@@ -9226,7 +9246,15 @@ def get_weatherlab_genesis_trend(
                 for p in pts
             ]
         peak_structure = _genesis_cluster_peak_structure(best) if matched else None
-        spread = _genesis_cluster_spread(best) if matched else None
+        # Recover the cycle's ensemble size from fraction = n_members/size, so
+        # the 0–120 h formation % shares the same denominator as formation_prob.
+        _es = None
+        if matched and best.get("fraction"):
+            try:
+                _es = round(best.get("n_members", 0) / best["fraction"])
+            except Exception:
+                _es = None
+        spread = _genesis_cluster_spread(best, _es) if matched else None
         trend.append({
             "init_time": date_str.replace("-", "") + hour_str,
             "age_hours": round((now - cycle_dt).total_seconds() / 3600.0, 2),
