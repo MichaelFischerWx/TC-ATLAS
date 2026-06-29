@@ -9033,6 +9033,55 @@ def _genesis_cluster_intensity_change(cluster):
     }
 
 
+def _genesis_cluster_peak_structure(cluster):
+    """Median storm-structure metrics at peak intensity across a cluster's
+    members. For each member that reaches TC strength (>=34 kt), take the
+    structure at its lifetime-max-wind point; return the cross-member median
+    of RMW + mean R34/R50/R64 (km, frontend converts to nm). Powers the
+    run-to-run structure trend. Returns None if too few members qualify."""
+    members = (cluster or {}).get("members") or {}
+    if not members:
+        return None
+    cols = {"rmw_km": [], "r34_mean_km": [], "r50_mean_km": [], "r64_mean_km": []}
+    n = 0
+    for _mkey, mem in members.items():
+        pts = mem.get("points") or []
+        best_pt = None
+        for p in pts:
+            w = p.get("wind")
+            if w is None or w < 34:
+                continue
+            if best_pt is None or w > best_pt.get("wind", -1):
+                best_pt = p
+        if best_pt is None:
+            continue
+        got = False
+        for k in cols:
+            v = best_pt.get(k)
+            if v is not None:
+                cols[k].append(v)
+                got = True
+        if got:
+            n += 1
+    if n < 3:
+        return None
+
+    def _median(vals):
+        if not vals:
+            return None
+        s = sorted(vals)
+        m = len(s)
+        return s[m // 2] if m % 2 else round((s[m // 2 - 1] + s[m // 2]) / 2.0, 1)
+
+    return {
+        "n": n,
+        "peak_rmw_km": _median(cols["rmw_km"]),
+        "peak_r34_km": _median(cols["r34_mean_km"]),
+        "peak_r50_km": _median(cols["r50_mean_km"]),
+        "peak_r64_km": _median(cols["r64_mean_km"]),
+    }
+
+
 @router.get("/weatherlab-genesis-trend")
 def get_weatherlab_genesis_trend(
     lat: float,
@@ -9110,6 +9159,7 @@ def get_weatherlab_genesis_trend(
                  "lon": p.get("lon"), "wind": p.get("wind")}
                 for p in pts
             ]
+        peak_structure = _genesis_cluster_peak_structure(best) if matched else None
         trend.append({
             "init_time": date_str.replace("-", "") + hour_str,
             "age_hours": round((now - cycle_dt).total_seconds() / 3600.0, 2),
@@ -9120,6 +9170,7 @@ def get_weatherlab_genesis_trend(
             "peak_tau": best["peak_tau"] if matched else None,
             "display_short": best["display_short"] if matched else None,
             "mean_track": mean_track,
+            "peak_structure": peak_structure,
         })
         if n_with_data >= count:
             break

@@ -738,6 +738,10 @@
     // yet, the list stays empty and the stepper hides.
     var _genesisCycleList = [];
     var _genesisActiveCycle = null;
+    // Storm label + formatted init cycle of the currently-open genesis modal,
+    // stamped into saved figures (set in _renderGenesisDetail / openGenesisDetail).
+    var _genesisExportStorm = '';
+    var _genesisExportInit = '';
     // init_time of the cycle whose markers we last played the pop-in
     // entrance animation for. Keyed by init so the *first* render that
     // draws markers for a new cycle animates them (catching the user's
@@ -13696,6 +13700,14 @@
                     '</div>' +
                     '<div id="rt-genesis-modal-trendint" style="width:100%; height:280px;"></div>' +
                   '</div>' +
+                  '<div id="rt-genesis-trendstruct-wrap" class="rt-genesis-trend-wrap" style="display:none; position:relative; margin-top:14px;">' +
+                    '<button type="button" id="rt-genesis-trendstruct-save" class="rt-genesis-modal-save" title="Save structure trend as PNG">⤓ PNG</button>' +
+                    '<div class="rt-genesis-trend-head">' +
+                      '<span class="rt-genesis-trend-title">Structure trend</span>' +
+                      '<span id="rt-genesis-trendstruct-note" class="rt-genesis-trend-note"></span>' +
+                    '</div>' +
+                    '<div id="rt-genesis-modal-trendstruct" style="width:100%; height:280px;"></div>' +
+                  '</div>' +
                 '</div>' +
                 '</div>' + // close #rt-genesis-pane-trends
                 // ── Intensity Change pane (hidden by default) ────────
@@ -13899,6 +13911,9 @@
         m.querySelector('#rt-genesis-ike-save').addEventListener('click', function () {
             _genesisSavePNG('rt-genesis-modal-ike', 'wind-area');
         });
+        m.querySelector('#rt-genesis-trendstruct-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-modal-trendstruct', 'structure-trend');
+        });
         // Structure anomaly-mode toggle (Raw / Percentile / Z-score).
         var _structSeg = m.querySelector('#rt-genesis-struct-mode');
         if (_structSeg) {
@@ -14089,6 +14104,7 @@
         var meta = _genesisDisturbanceMeta[trackId];
         var _titleVariant = (meta && meta.variant) || _genesisEnsembleVariant;
         var titleName = meta ? meta.label : ('Genesis track ' + trackId);
+        _genesisExportStorm = titleName;
         titleEl.textContent = titleName + ' · FNV3 '
             + _genesisVariantMemberTag(_titleVariant) + ' ensemble';
         subEl.innerHTML = 'Loading ensemble members…';
@@ -14404,6 +14420,7 @@
             ? init.slice(0, 4) + '-' + init.slice(4, 6) + '-' + init.slice(6, 8)
               + ' ' + init.slice(8, 10) + 'Z'
             : '(unknown init)';
+        _genesisExportInit = initLabel;
 
         // Pre-genesis-specific stats — computed once and threaded through
         // every figure so they all share the same definitions of
@@ -15095,9 +15112,11 @@
         // note. Each draw un-hides its own wrap once it has data.
         var _tmw = document.getElementById('rt-genesis-trendmap-wrap');
         var _tiw = document.getElementById('rt-genesis-trendint-wrap');
+        var _tsw = document.getElementById('rt-genesis-trendstruct-wrap');
         wrap.style.display = 'none';   // default hidden until data lands
         if (_tmw) _tmw.style.display = 'none';
         if (_tiw) _tiw.style.display = 'none';
+        if (_tsw) _tsw.style.display = 'none';
         _genesisTrendLoading = true;   // fetch starts below → show "Loading…"
         _genesisTrendsUpdateEmpty();
         // Stash this cycle's per-member peak (lead-time-of-peak + LMI Vmax)
@@ -15157,6 +15176,7 @@
                 _drawGenesisTrend(data, loadedInit);
                 _drawTrackTrend(data, loadedInit);
                 _drawIntensityTrend(data, loadedInit);
+                _drawStructureTrend(data, loadedInit);
                 _drawGenesisIntChange(data, loadedInit);
                 _genesisTrendsUpdateEmpty();
             })
@@ -15817,6 +15837,65 @@
         if (noteEl) {
             noteEl.textContent = 'orange line = current run (markers by category) '
                 + '· blue→cyan = prior runs (brighter = more recent)';
+        }
+        wrap.style.display = '';
+    }
+
+    /* Structure trend — run-to-run evolution of the cluster's median
+       peak-intensity wind structure (RMW + mean R34/R50/R64, nm) across the
+       last few model cycles. Answers "is the forecast wind field growing or
+       shrinking run-to-run?" Backend supplies per-cycle medians in
+       `peak_structure` on each matched trend cycle. */
+    function _drawStructureTrend(data, loadedInit) {
+        var wrap = document.getElementById('rt-genesis-trendstruct-wrap');
+        var el = document.getElementById('rt-genesis-modal-trendstruct');
+        var noteEl = document.getElementById('rt-genesis-trendstruct-note');
+        if (!wrap || !el || typeof Plotly === 'undefined') return;
+        wrap.style.display = 'none';
+        var KM_TO_NM = 0.5399568;
+        var trend = ((data && data.trend) || []).slice().reverse();   // old→new
+        var cycles = trend.filter(function (t) { return t.matched && t.peak_structure; });
+        if (cycles.length < 2) return;
+
+        var theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var grid = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)';
+        var xLabels = cycles.map(function (c) { return _genesisFmtInit(c.init_time); });
+        var metrics = [
+            { key: 'peak_r34_km', name: 'R34', color: 'rgb(52,211,153)' },
+            { key: 'peak_r50_km', name: 'R50', color: 'rgb(251,191,36)' },
+            { key: 'peak_r64_km', name: 'R64', color: 'rgb(248,113,113)' },
+            { key: 'peak_rmw_km', name: 'RMW', color: 'rgb(34,211,238)' },
+        ];
+        var traces = [];
+        metrics.forEach(function (mt) {
+            var ys = cycles.map(function (c) {
+                var v = c.peak_structure[mt.key];
+                return v != null ? Math.round(v * KM_TO_NM) : null;
+            });
+            if (ys.every(function (v) { return v == null; })) return;
+            traces.push({ type: 'scatter', mode: 'lines+markers', x: xLabels, y: ys,
+                line: { color: mt.color, width: 2 }, marker: { size: 6, color: mt.color },
+                name: mt.name, connectgaps: true,
+                hovertemplate: mt.name + ' %{x}<br>%{y} nm<extra></extra>' });
+        });
+        if (!traces.length) return;
+
+        var layout = Object.assign({}, theme, {
+            margin: { l: 48, r: 12, t: 24, b: 56 },
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            height: 280, showlegend: true,
+            legend: { orientation: 'h', x: 0, y: 1.02, xanchor: 'left', yanchor: 'bottom',
+                font: { size: 9, color: isDark ? '#e2e8f0' : '#1f2937' } },
+            xaxis: { type: 'category', title: { text: 'Model cycle', font: { size: 10 } },
+                     tickfont: { size: 9 }, gridcolor: grid, fixedrange: true, tickangle: -30 },
+            yaxis: { title: { text: 'Median radius at peak (nm)', font: { size: 10 } },
+                     tickfont: { size: 9 }, gridcolor: grid, fixedrange: true, rangemode: 'tozero' },
+        });
+        Plotly.react(el, traces, layout, { responsive: true, displayModeBar: false });
+        if (noteEl) {
+            noteEl.textContent = 'median across members at each member’s peak intensity '
+                + '· oldest→newest cycle';
         }
         wrap.style.display = '';
     }
@@ -18412,7 +18491,28 @@
     // Composite the brand watermark onto a Plotly.toImage PNG data-URL and hand
     // back a Blob (cb(blob)). Used so every figure export carries the watermark
     // + logo without per-figure Plotly annotation/image plumbing.
-    function _tcStampExport(srcDataUrl, outW, outH, cb) {
+    /** Draw an attribution caption (e.g. "Invest 95W · 2026-06-28 06Z") in the
+     *  bottom-left, mirroring the TC-ATLAS watermark (bottom-right). */
+    function _drawExportCaption(ctx, w, h, text) {
+        if (!text) return;
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var s = Math.max(1, w / 900);
+        var pad = Math.round(12 * s);
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.font = '600 ' + Math.round(13 * s) + 'px "DM Sans", system-ui, sans-serif';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+        var tw = ctx.measureText(text).width;
+        var bh = Math.round(20 * s), bw = tw + Math.round(10 * s);
+        var bx = pad - Math.round(5 * s), by = h - pad - bh;
+        ctx.fillStyle = isDark ? 'rgba(15,23,42,0.55)' : 'rgba(255,255,255,0.62)';
+        ctx.fillRect(bx, by, bw, bh);
+        ctx.fillStyle = isDark ? 'rgba(226,232,240,0.92)' : 'rgba(35,50,70,0.86)';
+        ctx.fillText(text, pad, h - pad - Math.round(6 * s));
+        ctx.restore();
+    }
+
+    function _tcStampExport(srcDataUrl, outW, outH, cb, caption) {
         var base = new Image();
         base.onload = function () {
             var cv = document.createElement('canvas');
@@ -18420,6 +18520,7 @@
             var ctx = cv.getContext('2d');
             ctx.drawImage(base, 0, 0, outW, outH);
             _drawTcWatermark(ctx, outW, outH);
+            _drawExportCaption(ctx, outW, outH, caption);
             cv.toBlob(function (b) { cb(b); }, 'image/png');
         };
         base.onerror = function () { cb(null); };
@@ -18447,14 +18548,26 @@
             fig.layout.paper_bgcolor = bgColor;
             fig.layout.plot_bgcolor = bgColor;
         }
-        var outW = Math.round(rect.width * 2), outH = Math.round(rect.height * 2);
-        Plotly.toImage(fig, { format: 'png', width: outW, height: outH })
+        // >=300 DPI: CSS px are 1/96", so a 4x render of an on-screen figure is
+        // ~384 DPI at its displayed physical size — comfortably print-grade.
+        // Plotly's `scale` multiplies the figure's layout dimensions (fonts +
+        // lines scale crisply) rather than re-laying-out at a bigger size.
+        var EXPORT_SCALE = 4;
+        var baseW = Math.round(rect.width), baseH = Math.round(rect.height);
+        var outW = baseW * EXPORT_SCALE, outH = baseH * EXPORT_SCALE;
+        // Stamp the storm + model cycle into the saved figure.
+        var caption = [_genesisExportStorm, _genesisExportInit]
+            .filter(Boolean).join('  ·  ');
+        var fnTag = (_genesisExportStorm || '').replace(/[^A-Za-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '').toLowerCase();
+        Plotly.toImage(fig, { format: 'png', width: baseW, height: baseH, scale: EXPORT_SCALE })
             .then(function (url) {
-                // Composite the TC-ATLAS watermark + logo, then save.
+                // Composite the TC-ATLAS watermark + logo + storm/cycle caption.
                 _tcStampExport(url, outW, outH, function (blob) {
                     _saveImageBlob(blob || _dataURLToBlob(url),
-                        'tc-atlas-genesis-' + slug + '-' + dateISO + '.png');
-                });
+                        'tc-atlas-genesis-' + slug + (fnTag ? '-' + fnTag : '')
+                        + '-' + dateISO + '.png');
+                }, caption);
             }).catch(function () { /* silent */ });
         _ga('rt_genesis_save_png', { chart: slug });
     }
