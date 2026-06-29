@@ -604,8 +604,8 @@
     // Global-map US radar overlay (IEM N0Q tiles, synced to the loop). Reuses
     // _iemRadarUrl / _iemLayerForFrameTime (defined with the storm-page radar).
     var _gRadarOn = false;
-    var _gRadarLayer = null;          // L.tileLayer on gRadarPane
-    var _gRadarCurLayer = null;       // IEM layer name currently shown (skip redundant setUrl)
+    var _gRadarLayers = {};           // IEM bucket name → preloaded L.tileLayer (opacity-toggled)
+    var _gRadarVisibleBucket = null;  // bucket currently shown
     var _gRadarOpacity = 0.75;
     var _gRadarPrevProduct = null;    // satellite product to restore when radar off
     var _gRadarPrevCmap = null;       // IR colormap to restore when radar off
@@ -4005,15 +4005,54 @@
         }
     }
 
-    /** Point the radar layer at the IEM layer matching the current frame time
-     *  (clamped to IEM's ~1 h window). Swaps via setUrl only when the 5-min
-     *  age bucket changes, so scrubbing within a bucket is free. */
+    // One radar tile layer per distinct IEM bucket, opacity-toggled per frame —
+    // instead of setUrl-ing a single layer, which tore down the GL source and
+    // re-fetched tiles EVERY frame (→ flicker, blank-at-zoom, lag). All layers
+    // stay added at opacity 0 (≠ visibility:none, so MapLibre keeps their tiles
+    // loaded), so switching frames is an instant opacity flip with no fetch.
+    function _gRadarBucketLayer(name) {
+        if (!_gRadarLayers[name]) {
+            var lyr = L.tileLayer(_iemRadarUrl(name), {
+                pane: 'gRadarPane', opacity: 0, attribution: 'Radar: IEM / NWS',
+            });
+            _gRadarLayers[name] = lyr;
+            if (map) lyr.addTo(map);
+        }
+        return _gRadarLayers[name];
+    }
+    function _gRadarShowBucket(name) {
+        _gRadarBucketLayer(name);
+        for (var k in _gRadarLayers) {
+            if (_gRadarLayers.hasOwnProperty(k)) {
+                _gRadarLayers[k].setOpacity(k === name ? _gRadarOpacity : 0);
+            }
+        }
+        _gRadarVisibleBucket = name;
+    }
+    function _gRadarClearLayers() {
+        for (var k in _gRadarLayers) {
+            if (_gRadarLayers.hasOwnProperty(k) && map) map.removeLayer(_gRadarLayers[k]);
+        }
+        _gRadarLayers = {};
+        _gRadarVisibleBucket = null;
+    }
+    // Pre-build a layer for every distinct bucket in the current loop so their
+    // tiles fetch ahead of playback (smooth from the first pass).
+    function _gRadarPreload() {
+        var times = (globalAnimFrameTimes && globalAnimFrameTimes.length)
+            ? globalAnimFrameTimes : [_gRadarFrameTime()];
+        var seen = {};
+        for (var i = 0; i < times.length; i++) {
+            var n = _iemLayerForFrameTime(times[i]);
+            if (!seen[n]) { seen[n] = 1; _gRadarBucketLayer(n); }
+        }
+    }
+
+    /** Show the radar bucket matching the current frame time (instant opacity
+     *  flip — layers are preloaded). */
     function _gRadarSync() {
-        if (!_gRadarLayer) return;
-        var layerName = _iemLayerForFrameTime(_gRadarFrameTime());
-        if (layerName === _gRadarCurLayer) return;
-        _gRadarCurLayer = layerName;
-        _gRadarLayer.setUrl(_iemRadarUrl(layerName));
+        if (!_gRadarOn) return;
+        _gRadarShowBucket(_iemLayerForFrameTime(_gRadarFrameTime()));
     }
 
     /** Show/hide a small dBZ legend over the global map (created on demand). */
@@ -4070,7 +4109,7 @@
             _gRadarOn = false;
             if (btn) btn.classList.remove('active');
             _gRadarLegend(false);
-            if (_gRadarLayer && map) map.removeLayer(_gRadarLayer);
+            _gRadarClearLayers();
             _gRadarRestoreBase();
             _reloadGlobalAnimIfActive();
             return;
@@ -4086,19 +4125,11 @@
             var pane = map.getPane('gRadarPane');
             if (pane) pane.style.zIndex = 350;   // mosaic ~200, coastlines ~400
         }
-        var layerName = _iemLayerForFrameTime(_gRadarFrameTime());
-        _gRadarCurLayer = layerName;
-        if (!_gRadarLayer) {
-            _gRadarLayer = L.tileLayer(_iemRadarUrl(layerName), {
-                pane: 'gRadarPane',
-                opacity: _gRadarOpacity,
-                attribution: 'Radar: IEM / NWS',
-            });
-        } else {
-            _gRadarLayer.setUrl(_iemRadarUrl(layerName));
-        }
-        if (map) _gRadarLayer.addTo(map);
+        // Rebuild the loop (trim to radar window) FIRST so preload covers the
+        // right frames, then build + preload all bucket layers and show current.
         _reloadGlobalAnimIfActive();
+        _gRadarPreload();
+        _gRadarShowBucket(_iemLayerForFrameTime(_gRadarFrameTime()));
     };
 
     /** Keep the rt-anim slider, play button, and speed pill in sync
