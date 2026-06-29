@@ -1027,25 +1027,17 @@
     var _rtReconColorVar = 'wspd_kt';  // variable encoded by the barb base dot
     var _reconActiveLayers = [];       // live _ReconBarbLayer instances (for redraw)
 
-    // ── 88D NEXRAD Radar Overlay State ───────────────────────
+    // ── US Radar Overlay State (IEM NEXRAD N0Q composite tiles) ──
+    // Reflectivity comes straight from the Iowa Environmental Mesonet's
+    // national base-reflectivity XYZ tile cache — no server render, no
+    // prewarm. The composite spans CONUS (+ PR), so the panel only shows
+    // for storms within that box. See project_nexrad_gl memory.
     var _rtRadarVisible = false;       // overlay toggle state
-    var _rtRadarMapOverlay = null;     // L.imageOverlay on map
-    var _rtRadarData = null;           // raw uint8 hover data
-    var _rtRadarRows = 0;
-    var _rtRadarCols = 0;
-    var _rtRadarVmin = -32;
-    var _rtRadarVmax = 95;
-    var _rtRadarBounds = null;         // L.latLngBounds
-    var _rtRadarUnits = 'dBZ';
-    var _rtRadarProduct = 'reflectivity';
-    var _rtRadarSiteLat = null;        // radar site latitude
-    var _rtRadarSiteLon = null;        // radar site longitude
-    var _rtRadarTilt = 0.5;            // elevation angle in degrees
-    var _rtRadarLastAtcf = null;       // last storm we fetched sites for
+    var _rtRadarTileLayer = null;      // L.tileLayer (GL raster) on radarPane
+    var _rtRadarCurLayer = null;       // IEM layer name currently shown (skip redundant setUrl)
+    var _rtRadarOpacity = 0.7;         // overlay opacity
+    var _rtRadarLastAtcf = null;       // last storm we evaluated coverage for
     var _rtRadarUpdateTimer = null;    // throttle timer for frame-sync
-    var _rtRadarAllScans = [];         // full scan list across 6h window
-    var _rtRadarFrameCache = {};       // { s3_key:product: { image, bounds, data, ... } }
-    var _rtRadarPrefetching = false;
 
     // ── IR Center Fix State ────────────────────────────────
 
@@ -26084,512 +26076,188 @@
     // ── 88D NEXRAD RADAR OVERLAY ─────────────────────────────────
     // ═══════════════════════════════════════════════════════════════
 
-    /** Haversine distance in km between two lat/lon points. */
-    function _rtHaversineKm(lat1, lon1, lat2, lon2) {
-        var R = 6371;
-        var dLat = (lat2 - lat1) * Math.PI / 180;
-        var dLon = (lon2 - lon1) * Math.PI / 180;
-        var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-                Math.sin(dLon / 2) * Math.sin(dLon / 2);
-        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    // IEM national NEXRAD base-reflectivity (N0Q) XYZ tile cache. The bare
+    // layer is the latest composite; the -mNNm variants step back in 5-min
+    // increments to ~55 min (a built-in ~1 h loop). XYZ web-mercator, so it
+    // drops straight onto the GL map via L.tileLayer.
+    var _IEM_RADAR_BASE = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0';
+    function _iemRadarUrl(layer) {
+        return _IEM_RADAR_BASE + '/' + layer + '/{z}/{x}/{y}.png';
+    }
+    // Rough CONUS (+ Puerto Rico) box the IEM composite covers. Outside it the
+    // tiles are transparent, so we hide the panel rather than show an empty
+    // layer (e.g. for WPac / IO / SHEM storms).
+    function _rtInRadarCoverage(lat, lon) {
+        return lat >= 16 && lat <= 52 && lon >= -128 && lon <= -63;
+    }
+    // Map a frame timestamp to the closest IEM layer within its ~1 h window.
+    // Frames older than 55 min clamp to the oldest available (m55m); recent
+    // frames resolve to the latest composite.
+    function _iemLayerForFrameTime(frameTimeStr) {
+        var t = frameTimeStr ? Date.parse(frameTimeStr) : NaN;
+        if (!isFinite(t)) return 'nexrad-n0q';
+        var ageMin = (Date.now() - t) / 60000;
+        var bucket = Math.round(ageMin / 5) * 5;
+        if (bucket <= 0) return 'nexrad-n0q';
+        if (bucket > 55) bucket = 55;
+        return 'nexrad-n0q-m' + (bucket < 10 ? '0' : '') + bucket + 'm';
     }
 
     /**
-     * Estimated beam center height (km ARL) using 4/3 effective Earth radius.
-     */
-    function _rtBeamHeightKm(distKm, tiltDeg) {
-        var Re = 6371 * 4 / 3;
-        var r = distKm;
-        var theta = tiltDeg * Math.PI / 180;
-        return Math.sqrt(r * r + Re * Re + 2 * r * Re * Math.sin(theta)) - Re;
-    }
-
-    /** Parse "YYYY-MM-DD HH:MM:SS UTC" to epoch ms */
-    function _rtParseScanTime(s) {
-        if (!s) return 0;
-        return new Date(s.replace(' UTC', 'Z').replace(' ', 'T')).getTime();
-    }
-
-    /**
-     * Search for nearby NEXRAD sites for the current storm.
-     * Called from _triggerDeferredLoads() after IR frames load.
+     * Decide whether the US radar panel is relevant for this storm (i.e. it's
+     * inside the CONUS/PR composite footprint) and show/hide accordingly.
+     * Replaces the old per-site discovery fetch \u2014 there are no sites to pick
+     * with the national IEM composite. Called from _triggerDeferredLoads().
      */
     function _rtLoadRadarSites(storm) {
         var section = document.getElementById('rt-radar-section');
         var statusEl = document.getElementById('rt-radar-status');
-        var siteSelect = document.getElementById('rt-radar-site-select');
-        var atcfId = storm.atcf_id;
-        if (!atcfId || !siteSelect) {
+        var atcfId = storm && storm.atcf_id;
+        var lat = storm && storm.lat, lon = storm && storm.lon;
+        if (!atcfId || lat == null || lon == null || !_rtInRadarCoverage(lat, lon)) {
             if (section) section.style.display = 'none';
+            // Storm left coverage (or none) \u2014 drop any existing overlay.
+            if (_rtRadarVisible) _rtRemoveRadarOverlay();
+            _rtRadarLastAtcf = atcfId || null;
             return;
         }
-
+        if (section) section.style.display = '';
+        if (statusEl) statusEl.textContent = 'US base reflectivity';
         if (atcfId === _rtRadarLastAtcf) {
-            if (section) section.style.display = '';
+            // Same storm still in coverage \u2014 keep current overlay, just resync.
+            if (_rtRadarVisible) _rtUpdateRadarForFrame();
             return;
         }
         _rtRadarLastAtcf = atcfId;
-
-        var lat = storm.lat;
-        var lon = storm.lon;
-        if (!lat || !lon) {
-            if (section) section.style.display = 'none';
-            return;
-        }
-
-        if (statusEl) statusEl.textContent = 'Searching...';
-        if (section) section.style.display = '';
-        siteSelect.innerHTML = '<option value="">Searching...</option>';
-
-        fetch(API_BASE + '/nexrad/sites?lat=' + lat + '&lon=' + lon + '&max_range_km=500', { cache: 'no-store' })
-            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-            .then(function (json) {
-                siteSelect.innerHTML = '';
-                if (!json.sites || json.sites.length === 0) {
-                    siteSelect.innerHTML = '<option value="">No nearby radars</option>';
-                    if (statusEl) statusEl.textContent = 'No 88D coverage';
-                    return;
-                }
-                for (var i = 0; i < json.sites.length; i++) {
-                    var s = json.sites[i];
-                    var opt = document.createElement('option');
-                    opt.value = s.site;
-                    opt.setAttribute('data-lat', s.lat);
-                    opt.setAttribute('data-lon', s.lon);
-                    opt.textContent = s.site + ' \u2014 ' + s.name + ' (' + s.distance_km + ' km)';
-                    siteSelect.appendChild(opt);
-                }
-                if (json.sites.length > 0) {
-                    _rtRadarSiteLat = json.sites[0].lat;
-                    _rtRadarSiteLon = json.sites[0].lon;
-                }
-                if (statusEl) statusEl.textContent = json.sites.length + ' site(s)';
-
-                if (_rtRadarVisible) window._rtLoadRadarScans();
-            })
-            .catch(function (e) {
-                siteSelect.innerHTML = '<option value="">Error</option>';
-                if (statusEl) statusEl.textContent = 'Error: ' + e.message;
-            });
+        if (_rtRadarVisible) { _rtEnsureRadarLayer(); _rtUpdateRadarForFrame(); }
     }
 
-    /**
-     * Load ALL scans for the selected site across the full 6h window.
-     * Populates dropdown and kicks off key-frame pre-fetch.
-     */
-    window._rtLoadRadarScans = function () {
-        var siteSelect = document.getElementById('rt-radar-site-select');
-        var scanSelect = document.getElementById('rt-radar-scan-select');
-        var status = document.getElementById('rt-radar-frame-status');
-        if (!siteSelect || !scanSelect || !siteSelect.value) return;
-
-        var site = siteSelect.value;
-
-        // Update stored site position
-        var selOpt = siteSelect.options[siteSelect.selectedIndex];
-        if (selOpt && selOpt.getAttribute('data-lat')) {
-            _rtRadarSiteLat = parseFloat(selOpt.getAttribute('data-lat'));
-            _rtRadarSiteLon = parseFloat(selOpt.getAttribute('data-lon'));
-        }
-
-        // Use middle of animation window as reference
-        var midIdx = Math.floor(animFrameTimes.length / 2);
-        var refTime = (animFrameTimes && animFrameTimes.length > 0)
-            ? (animFrameTimes[midIdx] || animFrameTimes[animIndex]) : null;
-        if (!refTime) { if (status) status.textContent = 'No frame time'; return; }
-
-        scanSelect.innerHTML = '<option value="">Loading...</option>';
-        if (status) status.textContent = 'Searching 6h window...';
-
-        fetch(API_BASE + '/nexrad/scans?site=' + encodeURIComponent(site) + '&datetime=' + encodeURIComponent(refTime) + '&window_min=360', { cache: 'no-store' })
-            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-            .then(function (json) {
-                _rtRadarAllScans = (json.scans || []).slice();
-                _rtRadarAllScans.sort(function (a, b) {
-                    return _rtParseScanTime(a.scan_time) - _rtParseScanTime(b.scan_time);
-                });
-
-                scanSelect.innerHTML = '';
-                if (_rtRadarAllScans.length === 0) {
-                    scanSelect.innerHTML = '<option value="">No scans</option>';
-                    if (status) status.textContent = 'No scans in 6h window';
-                    return;
-                }
-                for (var i = 0; i < _rtRadarAllScans.length; i++) {
-                    var sc = _rtRadarAllScans[i];
-                    var opt = document.createElement('option');
-                    opt.value = sc.s3_key;
-                    opt.textContent = sc.scan_time;
-                    scanSelect.appendChild(opt);
-                }
-                if (status) status.textContent = _rtRadarAllScans.length + ' scans over 6h';
-
-                _rtSyncRadarToFrame();
-                _rtPrefetchKeyFrames();
-            })
-            .catch(function (e) {
-                scanSelect.innerHTML = '<option value="">Error</option>';
-                if (status) status.textContent = 'Error: ' + e.message;
-            });
-    };
-
-    /**
-     * Find the scan closest to the current IR frame time and display it.
-     */
-    function _rtSyncRadarToFrame() {
-        if (_rtRadarAllScans.length === 0) return;
-        var refTime = (animFrameTimes && animFrameTimes.length > 0 && animIndex >= 0)
+    /** Current IR animation frame time string (drives radar time-sync). */
+    function _rtCurrentFrameTime() {
+        return (animFrameTimes && animFrameTimes.length > 0 && animIndex >= 0)
             ? animFrameTimes[animIndex] : null;
-        if (!refTime) return;
+    }
 
-        var irTime = new Date(refTime).getTime();
-        var bestIdx = 0, bestDelta = Infinity;
-        for (var i = 0; i < _rtRadarAllScans.length; i++) {
-            var d = Math.abs(_rtParseScanTime(_rtRadarAllScans[i].scan_time) - irTime);
-            if (d < bestDelta) { bestDelta = d; bestIdx = i; }
-        }
-
-        var bestScan = _rtRadarAllScans[bestIdx];
-        var scanSelect = document.getElementById('rt-radar-scan-select');
-        if (scanSelect && bestIdx < scanSelect.options.length) {
-            scanSelect.selectedIndex = bestIdx;
-        }
-
-        var cacheKey = bestScan.s3_key + ':' + _rtRadarProduct;
-        var cached = _rtRadarFrameCache[cacheKey];
-        if (cached) {
-            _rtApplyRadarFrame(cached);
-            return;
-        }
-        _rtFetchRadarFrame(bestScan.s3_key, true);
+    /** Reflect the shown radar age in the panel status line. */
+    function _rtSetRadarFrameStatus(layerName) {
+        var el = document.getElementById('rt-radar-frame-status');
+        if (!el) return;
+        var m = /m(\d{2})m/.exec(layerName || '');
+        el.textContent = m ? ('valid ~' + parseInt(m[1], 10) + ' min ago')
+                           : 'latest scan';
     }
 
     /**
-     * Apply a cached radar frame to the Leaflet map.
+     * Create (once) and attach the IEM radar tile layer to the detail map,
+     * pointed at the layer matching the current frame time. Idempotent —
+     * re-adds the existing layer if it was previously removed.
      */
-    function _rtApplyRadarFrame(frame) {
-        _rtRadarData = frame.data;
-        _rtRadarRows = frame.rows;
-        _rtRadarCols = frame.cols;
-        _rtRadarVmin = frame.vmin;
-        _rtRadarVmax = frame.vmax;
-        _rtRadarUnits = frame.units;
-        _rtRadarTilt = frame.tilt || 0.5;
-
-        var bounds = L.latLngBounds(
-            L.latLng(frame.bounds[0][0], frame.bounds[0][1]),
-            L.latLng(frame.bounds[1][0], frame.bounds[1][1])
-        );
-        _rtRadarBounds = bounds;
-
-        if (_rtRadarMapOverlay && detailMap) detailMap.removeLayer(_rtRadarMapOverlay);
-        _rtRadarMapOverlay = L.imageOverlay(frame.image, bounds, {
-            opacity: 0.75, interactive: false, pane: 'radarPane'
-        });
-        if (_rtRadarVisible && detailMap) _rtRadarMapOverlay.addTo(detailMap);
-
-        var status = document.getElementById('rt-radar-frame-status');
-        if (status) status.textContent = frame.statusText || '';
-    }
-
-    /**
-     * Fetch a single radar frame and cache it.
-     */
-    function _rtFetchRadarFrame(s3Key, display) {
-        var siteSelect = document.getElementById('rt-radar-site-select');
-        if (!siteSelect || !siteSelect.value) return;
-        var site = siteSelect.value;
-        var product = _rtRadarProduct;
-        var status = document.getElementById('rt-radar-frame-status');
-
-        if (display && status) status.textContent = 'Loading...';
-
-        var url = API_BASE + '/nexrad/frame?site=' + encodeURIComponent(site) +
-            '&s3_key=' + encodeURIComponent(s3Key) +
-            '&product=' + product;
-
-        // A radar frame is immutable (content-addressed by its Level-2 s3_key),
-        // so let the browser honor the long Cache-Control header the API sends.
-        // Repeat displays (animation re-sync, radar toggle, product switch) then
-        // serve from browser cache with no Cloud Run round-trip. /scans + /sites
-        // stay 'no-store' since those listings change as new scans arrive.
-        fetch(url, { cache: 'default' })
-            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-            .then(function (json) {
-                if (!json.image || !json.bounds) return;
-
-                var hoverData = null;
-                if (json.data) {
-                    var raw = atob(json.data);
-                    hoverData = new Uint8Array(raw.length);
-                    for (var i = 0; i < raw.length; i++) hoverData[i] = raw.charCodeAt(i);
-                }
-
-                var entry = {
-                    image: json.image,
-                    bounds: json.bounds,
-                    data: hoverData,
-                    rows: json.data_rows,
-                    cols: json.data_cols,
-                    vmin: json.data_vmin,
-                    vmax: json.data_vmax,
-                    units: json.units || 'dBZ',
-                    tilt: json.tilt || 0.5,
-                    s3Key: s3Key,
-                    statusText: json.site + ' ' + json.scan_time + ' \u2014 ' + json.label + ' (tilt ' + json.tilt + '\u00B0)'
-                };
-                _rtRadarFrameCache[s3Key + ':' + product] = entry;
-
-                _rtUpdatePrefetchStatus();
-
-                if (display) {
-                    _rtApplyRadarFrame(entry);
-                    _rtUpdateRadarColorbar(product);
-                }
-            })
-            .catch(function (e) {
-                if (display && status) status.textContent = 'Error: ' + e.message;
+    function _rtEnsureRadarLayer() {
+        if (!detailMap || typeof L === 'undefined') return;
+        var layerName = _iemLayerForFrameTime(_rtCurrentFrameTime());
+        _rtRadarCurLayer = layerName;
+        if (!_rtRadarTileLayer) {
+            _rtRadarTileLayer = L.tileLayer(_iemRadarUrl(layerName), {
+                pane: 'radarPane',
+                opacity: _rtRadarOpacity,
+                attribution: 'Radar: IEM / NWS',
             });
+        } else {
+            _rtRadarTileLayer.setUrl(_iemRadarUrl(layerName));
+        }
+        _rtRadarTileLayer.addTo(detailMap);
+        _rtSetRadarFrameStatus(layerName);
     }
 
-    /**
-     * Load a specific scan from the dropdown (user manual selection).
-     */
-    window._rtLoadRadarFrame = function () {
-        var scanSelect = document.getElementById('rt-radar-scan-select');
-        if (!scanSelect || !scanSelect.value) return;
-
-        var prodSelect = document.getElementById('rt-radar-product-select');
-        _rtRadarProduct = (prodSelect && prodSelect.value) || 'reflectivity';
-
-        var s3Key = scanSelect.value;
-        var cacheKey = s3Key + ':' + _rtRadarProduct;
-        var cached = _rtRadarFrameCache[cacheKey];
-        if (cached) {
-            _rtApplyRadarFrame(cached);
-            _rtUpdateRadarColorbar(_rtRadarProduct);
-            return;
-        }
-        _rtFetchRadarFrame(s3Key, true);
-    };
-
-    /**
-     * Pre-fetch ~8 key frames evenly spaced across the scan list.
-     */
-    function _rtPrefetchKeyFrames() {
-        if (_rtRadarAllScans.length === 0 || _rtRadarPrefetching) return;
-        _rtRadarPrefetching = true;
-
-        var total = _rtRadarAllScans.length;
-        var maxKeys = 8;
-        var step = Math.max(1, Math.floor(total / maxKeys));
-        var keyIndices = [];
-        for (var i = 0; i < total; i += step) keyIndices.push(i);
-        if (keyIndices[keyIndices.length - 1] !== total - 1) keyIndices.push(total - 1);
-
-        var CONCURRENCY = 2;
-        var nextSlot = 0;
-
-        function fetchNext() {
-            if (nextSlot >= keyIndices.length) {
-                _rtRadarPrefetching = false;
-                _rtUpdatePrefetchStatus();
-                return;
-            }
-            var idx = keyIndices[nextSlot++];
-            var scan = _rtRadarAllScans[idx];
-            var cacheKey = scan.s3_key + ':' + _rtRadarProduct;
-            if (_rtRadarFrameCache[cacheKey]) { fetchNext(); return; }
-            _rtFetchRadarFrame(scan.s3_key, false);
-            setTimeout(fetchNext, 500);
-        }
-
-        for (var c = 0; c < Math.min(CONCURRENCY, keyIndices.length); c++) fetchNext();
-    }
-
-    /**
-     * Update prefetch progress in status text.
-     */
-    function _rtUpdatePrefetchStatus() {
-        var statusEl = document.getElementById('rt-radar-status');
-        if (!statusEl) return;
-        var cached = 0;
-        for (var k in _rtRadarFrameCache) {
-            if (_rtRadarFrameCache.hasOwnProperty(k)) cached++;
-        }
-        var total = _rtRadarAllScans.length;
-        if (_rtRadarPrefetching) {
-            statusEl.textContent = 'Caching ' + cached + '/' + total;
-        } else if (cached > 0) {
-            statusEl.textContent = cached + ' cached';
-        }
-    }
-
-    /**
-     * Toggle the 88D radar overlay on/off.
-     */
+    /** Toggle the US radar overlay on/off. */
     window._rtToggleRadarOverlay = function () {
         var btn = document.getElementById('rt-radar-toggle-btn');
         var controls = document.getElementById('rt-radar-controls');
 
         if (_rtRadarVisible) {
             _rtRadarVisible = false;
-            if (btn) btn.textContent = '88D';
+            if (btn) btn.textContent = 'Radar';
             if (controls) controls.style.display = 'none';
-            if (_rtRadarMapOverlay && detailMap) detailMap.removeLayer(_rtRadarMapOverlay);
+            if (_rtRadarTileLayer && detailMap) detailMap.removeLayer(_rtRadarTileLayer);
             return;
         }
 
         _rtRadarVisible = true;
-        if (btn) btn.textContent = 'Hide 88D';
+        if (btn) btn.textContent = 'Hide';
         if (controls) controls.style.display = '';
         _ga('ir_radar_toggle', { visible: true });
+        _rtUpdateRadarColorbar();
+        _rtEnsureRadarLayer();
+    };
 
-        if (_rtRadarMapOverlay && detailMap) _rtRadarMapOverlay.addTo(detailMap);
-
-        var siteSelect = document.getElementById('rt-radar-site-select');
-        if (siteSelect && siteSelect.value) {
-            if (_rtRadarAllScans.length > 0) {
-                _rtSyncRadarToFrame();
-            } else {
-                window._rtLoadRadarScans();
-            }
-        }
+    /** Opacity slider handler (0-100 \u2192 0-1). */
+    window._rtSetRadarOpacity = function (pct) {
+        _rtRadarOpacity = Math.max(0, Math.min(1, (parseFloat(pct) || 70) / 100));
+        if (_rtRadarTileLayer) _rtRadarTileLayer.setOpacity(_rtRadarOpacity);
     };
 
     /**
-     * Sync radar to nearest cached scan on frame change (throttled).
-     * Called from showFrame().
+     * Re-point the radar tile layer at the IEM layer matching the new frame
+     * time (throttled). Called from showFrame(). Skips the swap when the
+     * 5-min age bucket hasn't changed, so scrubbing within a bucket is free.
      */
     function _rtUpdateRadarForFrame() {
-        if (!_rtRadarVisible || _rtRadarAllScans.length === 0) return;
+        if (!_rtRadarVisible) return;
         if (_rtRadarUpdateTimer) clearTimeout(_rtRadarUpdateTimer);
         _rtRadarUpdateTimer = setTimeout(function () {
-            _rtSyncRadarToFrame();
+            if (!_rtRadarVisible || !_rtRadarTileLayer) return;
+            var layerName = _iemLayerForFrameTime(_rtCurrentFrameTime());
+            if (layerName === _rtRadarCurLayer) return;
+            _rtRadarCurLayer = layerName;
+            _rtRadarTileLayer.setUrl(_iemRadarUrl(layerName));
+            _rtSetRadarFrameStatus(layerName);
         }, 150);
     }
 
-    /**
-     * Handle hover readout for NEXRAD radar data on the RT monitor.
-     * Returns { value, units } or null.
-     */
-    function _rtHandleRadarMouseMove(e) {
-        if (!_rtRadarVisible || !_rtRadarData || !_rtRadarBounds || !detailMap) return null;
-
-        var lat = e.latlng.lat;
-        var lng = e.latlng.lng;
-        var b = _rtRadarBounds;
-
-        if (lat < b.getSouth() || lat > b.getNorth() ||
-            lng < b.getWest() || lng > b.getEast()) {
-            return null;
-        }
-
-        function _latToMercY(d) {
-            var r = d * Math.PI / 180;
-            return Math.log(Math.tan(Math.PI / 4 + r / 2));
-        }
-        var mercNorth = _latToMercY(b.getNorth());
-        var mercSouth = _latToMercY(b.getSouth());
-        var mercLat   = _latToMercY(lat);
-        var fracY = (mercNorth - mercLat) / (mercNorth - mercSouth);
-        var fracX = (lng - b.getWest()) / (b.getEast() - b.getWest());
-        var row = Math.min(Math.floor(fracY * _rtRadarRows), _rtRadarRows - 1);
-        var col = Math.min(Math.floor(fracX * _rtRadarCols), _rtRadarCols - 1);
-
-        var rawVal = _rtRadarData[row * _rtRadarCols + col];
-        if (rawVal === 0) return null;
-
-        var val = _rtRadarVmin + (rawVal - 1) * (_rtRadarVmax - _rtRadarVmin) / 254.0;
-
-        // Compute beam height
-        var beamStr = '';
-        if (_rtRadarSiteLat != null && _rtRadarSiteLon != null) {
-            var distKm = _rtHaversineKm(_rtRadarSiteLat, _rtRadarSiteLon, lat, lng);
-            var beamHt = _rtBeamHeightKm(distKm, _rtRadarTilt);
-            if (beamHt < 1) {
-                beamStr = ' ' + (beamHt * 1000).toFixed(0) + 'm ARL';
-            } else {
-                beamStr = ' ' + beamHt.toFixed(1) + 'km ARL';
-            }
-        }
-        return { value: val.toFixed(1), units: _rtRadarUnits, beam: beamStr };
-    }
-
-    /**
-     * Update the 88D colorbar in the RT radar controls.
-     */
-    function _rtUpdateRadarColorbar(product) {
+    /** Static NWS N0Q base-reflectivity (dBZ) legend. */
+    function _rtUpdateRadarColorbar() {
         var el = document.getElementById('rt-radar-colorbar');
         if (!el) return;
-
-        if (product === 'velocity') {
-            el.innerHTML =
-                '<div style="display:flex;height:8px;border-radius:3px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
-                    '<div style="flex:1;background:#0000D0;"></div>' +
-                    '<div style="flex:1;background:#0050FF;"></div>' +
-                    '<div style="flex:1;background:#00C8FF;"></div>' +
-                    '<div style="flex:1;background:#00FF80;"></div>' +
-                    '<div style="flex:1;background:#80FF00;"></div>' +
-                    '<div style="flex:1;background:#FFFF00;"></div>' +
-                    '<div style="flex:1;background:#FF8000;"></div>' +
-                    '<div style="flex:1;background:#FF0000;"></div>' +
-                    '<div style="flex:1;background:#C80000;"></div>' +
-                '</div>' +
-                '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
-                    '<span>-100 m/s</span><span>0</span><span>+100 m/s</span>' +
-                '</div>';
-        } else {
-            el.innerHTML =
-                '<div style="display:flex;height:8px;border-radius:3px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
-                    '<div style="flex:1;background:#04E9E7;"></div>' +
-                    '<div style="flex:1;background:#019FF4;"></div>' +
-                    '<div style="flex:1;background:#0300F4;"></div>' +
-                    '<div style="flex:1;background:#02FD02;"></div>' +
-                    '<div style="flex:1;background:#01C501;"></div>' +
-                    '<div style="flex:1;background:#008E00;"></div>' +
-                    '<div style="flex:1;background:#FDF802;"></div>' +
-                    '<div style="flex:1;background:#E5BC00;"></div>' +
-                    '<div style="flex:1;background:#FD9500;"></div>' +
-                    '<div style="flex:1;background:#FD0000;"></div>' +
-                    '<div style="flex:1;background:#D40000;"></div>' +
-                    '<div style="flex:1;background:#BC0000;"></div>' +
-                    '<div style="flex:1;background:#F800FD;"></div>' +
-                    '<div style="flex:1;background:#9854C6;"></div>' +
-                '</div>' +
-                '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
-                    '<span>5 dBZ</span><span>20</span><span>35</span><span>50</span><span>65</span>' +
-                '</div>';
-        }
+        el.innerHTML =
+            '<div style="display:flex;height:8px;border-radius:3px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
+                '<div style="flex:1;background:#04E9E7;"></div>' +
+                '<div style="flex:1;background:#019FF4;"></div>' +
+                '<div style="flex:1;background:#0300F4;"></div>' +
+                '<div style="flex:1;background:#02FD02;"></div>' +
+                '<div style="flex:1;background:#01C501;"></div>' +
+                '<div style="flex:1;background:#008E00;"></div>' +
+                '<div style="flex:1;background:#FDF802;"></div>' +
+                '<div style="flex:1;background:#E5BC00;"></div>' +
+                '<div style="flex:1;background:#FD9500;"></div>' +
+                '<div style="flex:1;background:#FD0000;"></div>' +
+                '<div style="flex:1;background:#D40000;"></div>' +
+                '<div style="flex:1;background:#BC0000;"></div>' +
+                '<div style="flex:1;background:#F800FD;"></div>' +
+                '<div style="flex:1;background:#9854C6;"></div>' +
+            '</div>' +
+            '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+                '<span>5 dBZ</span><span>20</span><span>35</span><span>50</span><span>65</span>' +
+            '</div>';
     }
 
     /**
      * Full radar overlay cleanup (called when switching/closing storms).
      */
     function _rtRemoveRadarOverlay() {
-        if (_rtRadarMapOverlay && detailMap) {
-            detailMap.removeLayer(_rtRadarMapOverlay);
-            _rtRadarMapOverlay = null;
+        if (_rtRadarTileLayer && detailMap) {
+            detailMap.removeLayer(_rtRadarTileLayer);
         }
-        _rtRadarData = null;
-        _rtRadarBounds = null;
+        _rtRadarTileLayer = null;
+        _rtRadarCurLayer = null;
         _rtRadarVisible = false;
         _rtRadarLastAtcf = null;
-        _rtRadarAllScans = [];
-        _rtRadarFrameCache = {};
-        _rtRadarPrefetching = false;
         if (_rtRadarUpdateTimer) { clearTimeout(_rtRadarUpdateTimer); _rtRadarUpdateTimer = null; }
         var btn = document.getElementById('rt-radar-toggle-btn');
-        if (btn) btn.textContent = '88D';
+        if (btn) btn.textContent = 'Radar';
         var controls = document.getElementById('rt-radar-controls');
         if (controls) controls.style.display = 'none';
         var section = document.getElementById('rt-radar-section');
         if (section) section.style.display = 'none';
-        var siteSelect = document.getElementById('rt-radar-site-select');
-        if (siteSelect) siteSelect.innerHTML = '';
-        var scanSelect = document.getElementById('rt-radar-scan-select');
-        if (scanSelect) scanSelect.innerHTML = '';
     }
 
     /**

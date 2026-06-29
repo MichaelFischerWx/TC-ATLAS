@@ -754,32 +754,23 @@
                 <!-- WSR-88D NEXRAD Radar Overlay -->
                 <div class="ir-info-section" id="rt-radar-section" style="display:none;">
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">88D Radar</h3>
+                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">US Radar</h3>
                         <div style="display:flex;align-items:center;gap:6px;">
                             <button id="rt-radar-toggle-btn" onclick="window._rtToggleRadarOverlay()"
-                                class="rt-model-toggle-btn">88D</button>
+                                class="rt-model-toggle-btn">Radar</button>
                             <span id="rt-radar-status" style="font-size:0.68rem;color:#64748b;"></span>
                         </div>
                     </div>
                     <div id="rt-radar-controls" style="display:none;">
                         <div class="rt-model-controls-inner">
                             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
-                                <label style="font-size:10px;font-weight:600;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;">Site</label>
-                                <select id="rt-radar-site-select" onchange="window._rtLoadRadarScans()"
-                                    class="rt-model-cycle-select" style="min-width:140px;"></select>
-                            </div>
-                            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
-                                <label style="font-size:10px;font-weight:600;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;">Scan</label>
-                                <select id="rt-radar-scan-select" onchange="window._rtLoadRadarFrame()"
-                                    class="rt-model-cycle-select" style="min-width:160px;"></select>
-                                <select id="rt-radar-product-select" onchange="window._rtLoadRadarFrame()"
-                                    class="rt-model-cycle-select">
-                                    <option value="reflectivity">Reflectivity</option>
-                                    <option value="velocity">Velocity</option>
-                                </select>
+                                <label style="font-size:10px;font-weight:600;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;">Opacity</label>
+                                <input type="range" id="rt-radar-opacity" min="20" max="100" value="70"
+                                    oninput="window._rtSetRadarOpacity(this.value)" style="flex:1;min-width:120px;">
                             </div>
                             <span id="rt-radar-frame-status" style="font-size:9px;color:#64748b;display:block;margin-bottom:4px;"></span>
                             <div id="rt-radar-colorbar"></div>
+                            <div style="font-size:8px;color:#64748b;margin-top:4px;">National base reflectivity (NWS N0Q) · Iowa Environmental Mesonet · ~1 h loop</div>
                         </div>
                     </div>
                 </div>

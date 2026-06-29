@@ -3844,12 +3844,11 @@ def _prefetch_ir_frames(storms: list):
             total_cached += r["mem_cached"]
             total_gcs_fetched += r["gcs_fetched"]
 
-        # ── NEXRAD radar pre-fetch for storms near 88D sites ────────
-        _prefetch_nexrad_for_storms(storms, frame_times_map={
-            s["atcf_id"]: build_frame_times(
-                _dt.now(timezone.utc), _PREFETCH_LOOKBACK_HOURS, _PREFETCH_INTERVAL_MIN
-            ) for s in storms
-        })
+        # NEXRAD radar pre-fetch retired (2026-06-29): the storm-page radar
+        # overlay now pulls the IEM national N0Q reflectivity composite as
+        # client-side GL tiles (no server render). _prefetch_nexrad_for_storms
+        # is kept below only for the legacy /nexrad endpoints, which the
+        # frontend no longer calls. See project_nexrad_gl memory.
 
         print(f"[IR Pre-fetch] Done — {total_fetched} new PNG frames, "
               f"{total_cached} already cached, "
