@@ -15534,6 +15534,9 @@
             custom.push(t.matched ? (t.display_short || '') : '—');
         }
 
+        var _maxLMI = Math.max.apply(null,
+            medV.filter(function (v) { return v != null; }).concat([60]));
+
         var barTrace = {
             type: 'bar', x: xLabels, y: formPct, name: 'Formation %',
             yaxis: 'y', marker: { color: barColors },
@@ -15568,7 +15571,9 @@
             yaxis2: {
                 title: { text: 'Median LMI (kt)', font: { size: 9.5, color: '#f97316' } },
                 tickfont: { size: 9, color: '#f97316' }, overlaying: 'y', side: 'right',
-                rangemode: 'tozero', showgrid: false, fixedrange: true,
+                // Headroom so the "NNN kt" point labels don't clip at the top
+                // for very strong storms (LMI ~150 kt).
+                range: [0, _maxLMI * 1.32], showgrid: false, fixedrange: true,
             },
         });
 
@@ -15786,15 +15791,19 @@
             var ells = (c.spread && c.spread.ellipses) || [];
             ells.forEach(function (e) {
                 if (e.sxx == null) return;
+                // Outline-only (no fill): a filled +240 h ellipse is huge and
+                // reads as an orange wash over the map. Dotted ring + a small
+                // edge label conveys the spread cleanly.
                 var ep = _covEllipsePath(e.lat, e.lon, e.sxx, e.syy, e.sxy, 1.5, 48);
-                var et = { type: 'scattergeo', mode: 'lines', lon: ep.lons, lat: ep.lats,
-                    line: { color: cycColor, width: _isCur ? 1.4 : 1, dash: 'dot' },
-                    hoverinfo: 'skip', showlegend: false };
-                if (_isCur) { et.fill = 'toself'; et.fillcolor = 'rgba(249,115,22,0.10)'; }
-                traces.push(et);
+                traces.push({ type: 'scattergeo', mode: 'lines', lon: ep.lons, lat: ep.lats,
+                    line: { color: cycColor, width: _isCur ? 1.6 : 1 },
+                    opacity: _isCur ? 0.9 : 0.5,
+                    hoverinfo: 'skip', showlegend: false });
                 if (_isCur) {
-                    traces.push({ type: 'scattergeo', mode: 'text', lon: [e.lon], lat: [e.lat],
-                        text: ['+' + e.tau + 'h'], textposition: 'middle center',
+                    // Label at the ellipse's north edge so it doesn't sit on the track.
+                    traces.push({ type: 'scattergeo', mode: 'text',
+                        lon: [e.lon], lat: [e.lat + 1.5 * Math.sqrt(Math.max(e.syy, 0))],
+                        text: ['+' + e.tau + 'h'], textposition: 'top center',
                         textfont: { size: 9, color: '#f97316' }, hoverinfo: 'skip', showlegend: false });
                 }
             });
