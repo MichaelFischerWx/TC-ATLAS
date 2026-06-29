@@ -818,6 +818,62 @@ html, body { margin: 0; padding: 0; }
 .ir-product-btn.ir-loading {
     color: #fbbf24;
 }
+/* US Radar overlay toggle — a sibling pill of the ⛰3D / Microwave toggles in
+   the global-map control bar. Mirrors .ir-3d-mode-btn; green (reflectivity)
+   active state so it reads as an overlay, not a base product. */
+.ir-layers-wrap .ir-radar-mode-btn { order: 2; }
+.ir-radar-mode-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border-radius: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(22, 27, 36, 0.92);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    padding: 4px 10px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #cbd5e1;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.ir-radar-mode-btn .ir-radar-mode-glyph { font-size: 0.85rem; line-height: 1; opacity: 0.9; }
+.ir-radar-mode-btn:hover {
+    background: rgba(34, 197, 94, 0.16);
+    border-color: rgba(34, 197, 94, 0.40);
+    color: #ffffff;
+}
+.ir-radar-mode-btn.active {
+    background: rgba(34, 197, 94, 0.22);
+    border-color: rgba(34, 197, 94, 0.55);
+    color: #86efac;
+}
+/* Radar dBZ legend (created in JS, appended to the map). Desktop: bottom-right,
+   clear of the genesis/anim dock (which is bottom-left). */
+.ir-radar-global-legend {
+    position: absolute;
+    right: 12px;
+    bottom: 14px;
+    z-index: 600;
+    pointer-events: none;
+    background: rgba(15, 23, 42, 0.82);
+    color: #e2e8f0;
+    font: 11px/1.3 'DM Sans', sans-serif;
+    padding: 7px 9px;
+    border-radius: 7px;
+}
+/* Mobile: the anim/genesis dock spans the FULL width at the bottom, so anchor
+   the legend up under the (wrapped) control bar instead. */
+@media (max-width: 768px) {
+    .ir-radar-global-legend {
+        right: auto;
+        bottom: auto;
+        left: 8px;
+        top: 160px;
+    }
+}
 
 /* IR Brightness Temperature legend overlay */
 .ir-tb-legend {

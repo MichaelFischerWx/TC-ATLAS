@@ -601,6 +601,14 @@
     var globalAnimPlaying = false;
     var _globalAnimAutoplay = false;  // play as soon as frames finish loading (1-click play)
     var globalAnimTimer = null;       // rAF handle (global view)
+    // Global-map US radar overlay (IEM N0Q tiles, synced to the loop). Reuses
+    // _iemRadarUrl / _iemLayerForFrameTime (defined with the storm-page radar).
+    var _gRadarOn = false;
+    var _gRadarLayer = null;          // L.tileLayer on gRadarPane
+    var _gRadarCurLayer = null;       // IEM layer name currently shown (skip redundant setUrl)
+    var _gRadarOpacity = 0.75;
+    var _gRadarPrevProduct = null;    // satellite product to restore when radar off
+    var _gRadarPrevCmap = null;       // IR colormap to restore when radar off
     var globalAnimLastTick = 0;       // timestamp of last frame advance (global view)
     var globalAnimLoaded = 0;
     var globalAnimReady = false;
@@ -1851,6 +1859,9 @@
             _ir2aLayer.setFrame(_ir2aFrames.length - 1);
             _ir2aLayer.setOpacity(_productOpacity(globalProduct));
         });
+        // Follow the latest frame with the radar overlay (still view refreshes
+        // as new satellite frames arrive).
+        if (_gRadarOn) _gRadarSync();
     }
 
     // ── Lite storm view (Phase B/C) ────────────────────────────────────────
@@ -3831,6 +3842,7 @@
             }
             removeGIBSOverlay(map, gibsIRLayers); gibsIRLayers = [];
             removeGIBSOverlay(map, gibsVisLayers); gibsVisLayers = [];
+            globalAnimFrameTimes = _radarTrimFrames(globalAnimFrameTimes);
             _ir2aBuild(globalAnimFrameTimes);
             globalAnimFrameLayers = [];
             for (var _si = 0; _si < globalAnimFrameTimes.length; _si++) globalAnimFrameLayers.push(_ir2aStub(_si));
@@ -3846,6 +3858,7 @@
             return;
         }
 
+        globalAnimFrameTimes = _radarTrimFrames(globalAnimFrameTimes);
         console.log('[Global Anim] Loading', globalAnimFrameTimes.length, 'frames for', globalProduct);
 
         // Update controls to show loading state
@@ -3950,8 +3963,143 @@
             timeEl.textContent = fmtUTC(globalAnimFrameTimes[idx]);
         }
 
+        // Keep the US radar overlay (if on) synced to the displayed frame time.
+        if (_gRadarOn) _gRadarSync();
+
         _refreshAnimSlider();
     }
+
+    // ── Global-map US radar overlay (IEM N0Q tiles) ──────────────────────
+    /** Current global-map frame time: the displayed animation frame if loaded,
+     *  else the latest satellite/mosaic time (still view). */
+    function _gRadarFrameTime() {
+        if (globalAnimFrameTimes.length && globalAnimIndex >= 0
+                && globalAnimIndex < globalAnimFrameTimes.length) {
+            return globalAnimFrameTimes[globalAnimIndex];
+        }
+        return latestGIBSTime || null;
+    }
+
+    // IEM radar only covers the last ~1 h, so when radar is on we restrict the
+    // animation loop to frames within that window — otherwise most frames clamp
+    // to the oldest radar (m55m) and the radar looks frozen while satellite
+    // animates. Satellite frames in the window animate too (shorter loop).
+    var _GRADAR_ANIM_WINDOW_MIN = 60;
+    function _radarTrimFrames(times) {
+        if (!_gRadarOn || !times || times.length < 2) return times;
+        var now = Date.now(), win = _GRADAR_ANIM_WINDOW_MIN * 60000, out = [];
+        for (var i = 0; i < times.length; i++) {
+            var ms = Date.parse(times[i]);
+            if (!isFinite(ms) || (now - ms) <= win) out.push(times[i]);
+        }
+        // Never leave the loop empty — fall back to the last few frames.
+        if (out.length < 2) out = times.slice(-Math.min(times.length, 6));
+        return out;
+    }
+    // Rebuild the global animation (if one is active) so its frame range tracks
+    // the current radar on/off state.
+    function _reloadGlobalAnimIfActive() {
+        if (globalAnimReady || globalAnimFrameLayers.length) {
+            cleanupGlobalAnimation();
+            loadGlobalAnimation();
+        }
+    }
+
+    /** Point the radar layer at the IEM layer matching the current frame time
+     *  (clamped to IEM's ~1 h window). Swaps via setUrl only when the 5-min
+     *  age bucket changes, so scrubbing within a bucket is free. */
+    function _gRadarSync() {
+        if (!_gRadarLayer) return;
+        var layerName = _iemLayerForFrameTime(_gRadarFrameTime());
+        if (layerName === _gRadarCurLayer) return;
+        _gRadarCurLayer = layerName;
+        _gRadarLayer.setUrl(_iemRadarUrl(layerName));
+    }
+
+    /** Show/hide a small dBZ legend over the global map (created on demand). */
+    function _gRadarLegend(show) {
+        var el = document.getElementById('ir-radar-global-legend');
+        if (!show) { if (el) el.style.display = 'none'; return; }
+        if (!el) {
+            var host = document.getElementById('ir-map');
+            if (!host) return;
+            el = document.createElement('div');
+            el.id = 'ir-radar-global-legend';
+            // Positioning lives in CSS (.ir-radar-global-legend) so a media
+            // query can move it off the full-width bottom dock on mobile.
+            el.className = 'ir-radar-global-legend';
+            el.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">US Radar — Reflectivity (dBZ)</div>'
+                + '<div style="height:8px;width:200px;border-radius:3px;border:1px solid rgba(255,255,255,.15);'
+                + 'background:linear-gradient(to right,#04E9E7,#019FF4,#0300F4,#02FD02,#01C501,#008E00,#FDF802,#E5BC00,#FD9500,#FD0000,#D40000,#BC0000,#F800FD,#9854C6);"></div>'
+                + '<div style="display:flex;justify-content:space-between;font-size:9px;color:#94a3b8;margin-top:2px;">'
+                + '<span>5</span><span>35</span><span>65</span></div>';
+            host.appendChild(el);
+        }
+        el.style.display = '';
+    }
+
+    /** When radar turns on, swap the satellite base to a non-clashing scheme:
+     *  Visible by day over CONUS (naturally grayscale), grayscale IR at night.
+     *  Saves the prior product + IR colormap so toggling radar off restores it. */
+    function _gRadarApplyBase() {
+        _gRadarPrevProduct = globalProduct;
+        _gRadarPrevCmap = _irColormap;
+        // Day/night decided at the CONUS centroid (~39N, 98W) — one base choice
+        // for the whole US radar footprint.
+        var elev = solarElevation(39, -98, new Date());
+        if (elev > 0) {
+            setGlobalProduct('vis');
+        } else {
+            if (globalProduct !== 'ir') setGlobalProduct('ir');
+            _rtSetIRColormap('graylinear');
+        }
+    }
+    /** Restore the satellite base that was active before radar was turned on. */
+    function _gRadarRestoreBase() {
+        if (_gRadarPrevProduct == null) return;
+        var prevP = _gRadarPrevProduct, prevC = _gRadarPrevCmap;
+        _gRadarPrevProduct = null; _gRadarPrevCmap = null;
+        if (prevC != null) _rtSetIRColormap(prevC);  // updates stored cmap (+ applies if on IR)
+        setGlobalProduct(prevP);
+    }
+
+    /** Toggle the global-map US radar overlay. */
+    window._gToggleRadar = function () {
+        var btn = document.getElementById('ir-radar-mode-btn');
+        if (_gRadarOn) {
+            _gRadarOn = false;
+            if (btn) btn.classList.remove('active');
+            _gRadarLegend(false);
+            if (_gRadarLayer && map) map.removeLayer(_gRadarLayer);
+            _gRadarRestoreBase();
+            _reloadGlobalAnimIfActive();
+            return;
+        }
+        _gRadarOn = true;
+        if (btn) btn.classList.add('active');
+        _gRadarLegend(true);
+        _ga('rt_global_radar_toggle', { on: true });
+        _gRadarApplyBase();
+        // Dedicated pane above the satellite mosaic, below coastlines/markers.
+        if (map && map.createPane && !map.getPane('gRadarPane')) {
+            map.createPane('gRadarPane');
+            var pane = map.getPane('gRadarPane');
+            if (pane) pane.style.zIndex = 350;   // mosaic ~200, coastlines ~400
+        }
+        var layerName = _iemLayerForFrameTime(_gRadarFrameTime());
+        _gRadarCurLayer = layerName;
+        if (!_gRadarLayer) {
+            _gRadarLayer = L.tileLayer(_iemRadarUrl(layerName), {
+                pane: 'gRadarPane',
+                opacity: _gRadarOpacity,
+                attribution: 'Radar: IEM / NWS',
+            });
+        } else {
+            _gRadarLayer.setUrl(_iemRadarUrl(layerName));
+        }
+        if (map) _gRadarLayer.addTo(map);
+        _reloadGlobalAnimIfActive();
+    };
 
     /** Keep the rt-anim slider, play button, and speed pill in sync
      *  with globalAnim* state. Called whenever a frame is shown, the
@@ -4337,6 +4485,16 @@
                 d3Btn.title = 'Extrude cold IR cloud tops into 3D relief — drag to orbit, use the Tilt / Height sliders. Toggle off to flatten.';
                 d3Btn.innerHTML = '<span class="ir-3d-mode-glyph" aria-hidden="true">⛰</span><span class="ir-3d-mode-text">3D</span>';
                 d3Btn.addEventListener('click', function () { _rt3DToggle(); });
+
+                // ── US Radar one-click overlay toggle (sibling of 3D / MW) ──
+                // IEM N0Q reflectivity on top of the satellite mosaic, synced
+                // to the loop. CONUS-only (transparent elsewhere).
+                var radarBtn = L.DomUtil.create('button', 'ir-radar-mode-btn', wrap);
+                radarBtn.id = 'ir-radar-mode-btn';
+                radarBtn.type = 'button';
+                radarBtn.title = 'Toggle US NEXRAD base reflectivity (IEM) — overlays the satellite, synced to the loop (CONUS only)';
+                radarBtn.innerHTML = '<span class="ir-radar-mode-glyph" aria-hidden="true">◈</span><span class="ir-radar-mode-text">Radar</span>';
+                radarBtn.addEventListener('click', function () { window._gToggleRadar(); });
 
                 // ── Microwave one-click toggle + options chevron ────
                 // Sibling of the IR/GeoColor pills so users don't have
