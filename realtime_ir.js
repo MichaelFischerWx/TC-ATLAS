@@ -13880,6 +13880,21 @@
                     '<button type="button" id="rt-genesis-mode-members" class="rt-genesis-mode-btn">Members</button>' +
                   '</div>' +
                 '</div>' +
+                // Peak-Vmax filter — restrict the tracks + tau snapshot to
+                // members whose lifetime-max intensity passes a threshold,
+                // so you can isolate where the strong (≥) or weak (≤)
+                // scenarios go. ≥/≤ toggle mirrors the Density/Members
+                // toggle pattern; the subset is fixed as you scrub time.
+                '<div class="rt-genesis-int-bar" style="display:flex; align-items:center; gap:8px; padding:0 4px 8px;">' +
+                  '<span style="font-size:11px; opacity:0.7; white-space:nowrap;">Peak Vmax</span>' +
+                  '<div class="rt-genesis-mode-toggle" role="group" title="Show members at or ABOVE (≥) the threshold, or at or BELOW (≤) it">' +
+                    '<button type="button" id="rt-genesis-int-ge" class="rt-genesis-mode-btn active">≥</button>' +
+                    '<button type="button" id="rt-genesis-int-le" class="rt-genesis-mode-btn">≤</button>' +
+                  '</div>' +
+                  '<input type="range" id="rt-genesis-int-slider" min="0" max="160" value="0" step="5" ' +
+                  'style="flex:1; min-width:120px;" title="Lifetime-max intensity threshold — filter members by peak Vmax">' +
+                  '<span id="rt-genesis-int-label" style="font-family:monospace; min-width:128px; text-align:right; opacity:0.85;">All members</span>' +
+                '</div>' +
                 // Density-mode key — sits BETWEEN the scrubber row and
                 // the map so it doesn\'t compete with the in-map lat
                 // axis labels for the top-left corner. Hidden in
@@ -14644,6 +14659,38 @@
             }
         }
 
+        // Per-member lifetime-max Vmax (LMI) for the peak-intensity
+        // filter, plus each member's first-genesis position tagged with
+        // its eventual peak so the genesis-dot cloud (trace 1) filters
+        // alongside the spaghetti. stats.peakWinds is parallel to
+        // memberKeys; reuse it rather than rescan for the peak.
+        var peakByKey = {};
+        for (var pk0 = 0; pk0 < memberKeys.length; pk0++) {
+            peakByKey[memberKeys[pk0]] =
+                (stats.peakWinds && stats.peakWinds[pk0] != null)
+                    ? stats.peakWinds[pk0] : 0;
+        }
+        var genesisPts = [];
+        for (var gk = 0; gk < memberKeys.length; gk++) {
+            var gkey = memberKeys[gk];
+            var gpts = members[gkey].points || [];
+            for (var gp = 0; gp < gpts.length; gp++) {
+                if (gpts[gp].wind != null && gpts[gp].wind >= 34
+                        && gpts[gp].lat != null && gpts[gp].lon != null) {
+                    genesisPts.push({ lat: gpts[gp].lat, lon: gpts[gp].lon,
+                                      peak: peakByKey[gkey] });
+                    break;
+                }
+            }
+        }
+        // Slider top adapts to the cluster's strongest member so ≤ mode
+        // can sweep the whole range (and so a 170-kt outlier is reachable).
+        var maxPeak = 0;
+        for (var mpk = 0; mpk < memberKeys.length; mpk++) {
+            if (peakByKey[memberKeys[mpk]] > maxPeak) maxPeak = peakByKey[memberKeys[mpk]];
+        }
+        var intSliderMax = Math.max(80, Math.ceil(maxPeak / 5) * 5);
+
         // Start cursor at median genesis time if we have one, else at
         // the middle of the tau range — these are usually the most
         // informative time slices to land on.
@@ -14674,6 +14721,18 @@
             initialIdx: initialIdx,
             medianGenesisTau: stats.genesisMedianTau,
             mode: defaultMode,
+            // Peak-Vmax filter. intFilter.dir ∈ {'ge','le'}; passKeys is
+            // the {key:true} set of members whose LMI passes — consulted
+            // by _genesisPaintTauCursor and the spaghetti/genesis restyle.
+            intFilter: { thresh: 0, dir: 'ge' },
+            intMax: intSliderMax,
+            peakByKey: peakByKey,
+            passKeys: null,
+            // Memoized density cells per tau (keyed by tau, cleared when
+            // the intensity filter changes) so re-scrubbing and playback
+            // don't re-run the grid+Gaussian every frame.
+            densityCache: {},
+            filterSig: null,
         };
         var modeDensityBtn = document.getElementById('rt-genesis-mode-density');
         var modeMembersBtn = document.getElementById('rt-genesis-mode-members');
@@ -14735,10 +14794,38 @@
             clone.addEventListener(evt, handler);
             return clone;
         }
+        // Coalesce rapid slider input to ≤1 redraw per animation frame.
+        // Each full redraw costs 35-75 ms; a drag fires input far faster
+        // than that, so without this the synchronous handlers queue up and
+        // the UI stalls. onFrame keeps only the latest job and runs it once
+        // the next frame is ready.
+        var _rafToken = null, _rafJob = null;
+        function onFrame(job) {
+            _rafJob = job;
+            if (_rafToken != null) return;
+            _rafToken = requestAnimationFrame(function () {
+                _rafToken = null;
+                var j = _rafJob; _rafJob = null;
+                if (j) j();
+            });
+        }
+        // Trailing debounce for the single heaviest op — the 49k-point
+        // spaghetti rebuild — so it fires once the user settles rather
+        // than every frame of an intensity-filter drag.
+        var _settleTimer = null;
+        function onSettle(job, ms) {
+            if (_settleTimer) clearTimeout(_settleTimer);
+            _settleTimer = setTimeout(function () {
+                _settleTimer = null; job();
+            }, ms || 120);
+        }
         slider  = rebind(slider, 'input', function () {
             stop();
             _genesisTauState.idx = parseInt(slider.value, 10) || 0;
-            paint();
+            // Instant readout; coalesce the heavy map+intensity redraw.
+            var _t = _genesisTauState.taus[_genesisTauState.idx];
+            label.textContent = '+' + _t + ' h';
+            onFrame(paint);
         });
         prevBtn = rebind(prevBtn, 'click', function () { stop(); step(-1); });
         nextBtn = rebind(nextBtn, 'click', function () { stop(); step(1); });
@@ -14759,6 +14846,155 @@
             });
         }
 
+        // ── Peak-Vmax (LMI) filter ───────────────────────────────────
+        var intSlider = document.getElementById('rt-genesis-int-slider');
+        var intLabel  = document.getElementById('rt-genesis-int-label');
+        var intGeBtn  = document.getElementById('rt-genesis-int-ge');
+        var intLeBtn  = document.getElementById('rt-genesis-int-le');
+
+        // Recompute the set of members whose LMI passes the current
+        // threshold + direction, then refresh the count label.
+        function computePass() {
+            var f = _genesisTauState.intFilter;
+            // Filter changed → the filtered positions per tau change, so
+            // drop the memoized density cells.
+            var sig = f.dir + ':' + f.thresh;
+            if (sig !== _genesisTauState.filterSig) {
+                _genesisTauState.filterSig = sig;
+                _genesisTauState.densityCache = {};
+            }
+            var pass = {};
+            var n = 0;
+            for (var i = 0; i < memberKeys.length; i++) {
+                var key = memberKeys[i];
+                var pw = peakByKey[key] != null ? peakByKey[key] : 0;
+                var ok = (f.dir === 'le') ? (pw <= f.thresh) : (pw >= f.thresh);
+                if (ok) { pass[key] = true; n++; }
+            }
+            _genesisTauState.passKeys = pass;
+            _genesisTauState.passCount = n;
+            return pass;
+        }
+        function intIsAll() {
+            var f = _genesisTauState.intFilter;
+            return (f.dir === 'ge' && f.thresh <= 0)
+                || (f.dir === 'le' && f.thresh >= _genesisTauState.intMax);
+        }
+        function refreshIntLabel() {
+            if (!intLabel) return;
+            var f = _genesisTauState.intFilter;
+            var n = _genesisTauState.passCount;
+            intLabel.textContent = intIsAll()
+                ? 'All members (' + n + ')'
+                : (f.dir === 'le' ? '≤ ' : '≥ ') + f.thresh + ' kt · ' + n + ' memb';
+        }
+        // Cheap restyle: first-genesis dots (trace 1) to the passing subset.
+        function _intRestyleGenesis(elMap) {
+            var f = _genesisTauState.intFilter, gLons = [], gLats = [];
+            for (var g = 0; g < genesisPts.length; g++) {
+                var pw = genesisPts[g].peak;
+                var ok = (f.dir === 'le') ? (pw <= f.thresh) : (pw >= f.thresh);
+                if (ok) { gLons.push(genesisPts[g].lon); gLats.push(genesisPts[g].lat); }
+            }
+            Plotly.restyle(elMap, { lon: [gLons], lat: [gLats] }, [1]);
+        }
+        // Heavy restyle: rebuild the ~49k-point spaghetti (trace 0) from the
+        // passing members. This is the costly op; callers defer it to drag-
+        // settle so it doesn't run every frame.
+        function _intRestyleSpaghetti(elMap) {
+            var pass = _genesisTauState.passKeys, sx = [], sy = [];
+            for (var i = 0; i < memberKeys.length; i++) {
+                if (!pass[memberKeys[i]]) continue;
+                var pts = members[memberKeys[i]].points || [];
+                var lastLon = null;
+                for (var j = 0; j < pts.length; j++) {
+                    if (pts[j].lat == null || pts[j].lon == null) continue;
+                    if (lastLon !== null && Math.abs(pts[j].lon - lastLon) > 180) {
+                        sx.push(null); sy.push(null);
+                    }
+                    sx.push(pts[j].lon); sy.push(pts[j].lat);
+                    lastLon = pts[j].lon;
+                }
+                sx.push(null); sy.push(null);
+            }
+            Plotly.restyle(elMap, { lon: [sx], lat: [sy] }, [0]);
+        }
+        // Full apply (used by the ≥/≤ buttons + initial seed): label +
+        // spaghetti + genesis + tau cursor, all at once.
+        function applyIntFilter() {
+            computePass();
+            refreshIntLabel();
+            var elMap = document.getElementById('rt-genesis-modal-map');
+            if (elMap && typeof Plotly !== 'undefined' && elMap.data) {
+                _intRestyleSpaghetti(elMap);
+                _intRestyleGenesis(elMap);
+            }
+            paint();
+        }
+
+        if (intSlider) {
+            intSlider.max = String(_genesisTauState.intMax);
+            intSlider.value = '0';
+            intSlider = rebind(intSlider, 'input', function () {
+                _genesisTauState.intFilter.thresh = parseInt(intSlider.value, 10) || 0;
+                // Instant: recompute the passing set + count label (cheap,
+                // one pass over members). The heavy redraws are deferred so
+                // dragging the slider stays smooth.
+                computePass();
+                refreshIntLabel();
+                var elMap = document.getElementById('rt-genesis-modal-map');
+                if (!elMap || typeof Plotly === 'undefined' || !elMap.data) return;
+                // Light per-frame feedback: filtered genesis dots.
+                onFrame(function () { _intRestyleGenesis(elMap); });
+                // Heavy spaghetti rebuild + filtered tau snapshot once the
+                // drag settles (also fires on release via the change event).
+                onSettle(function () {
+                    _intRestyleSpaghetti(elMap);
+                    paint();
+                }, 110);
+            });
+            intSlider.addEventListener('change', function () {
+                var elMap = document.getElementById('rt-genesis-modal-map');
+                if (!elMap || typeof Plotly === 'undefined' || !elMap.data) return;
+                _intRestyleSpaghetti(elMap);
+                paint();
+            });
+        }
+        if (intGeBtn && intLeBtn) {
+            // Reset to ≥ (default) on each modal open — the DOM persists.
+            intGeBtn.classList.add('active');
+            intLeBtn.classList.remove('active');
+            intGeBtn = rebind(intGeBtn, 'click', function () {
+                if (_genesisTauState.intFilter.dir === 'ge') return;
+                // Flipping while at the prior direction's "all" end should
+                // land on the new direction's "all" end, not silently empty
+                // the map (≤0 kt ≈ nothing).
+                var wasAll = intIsAll();
+                _genesisTauState.intFilter.dir = 'ge';
+                if (wasAll) {
+                    _genesisTauState.intFilter.thresh = 0;
+                    if (intSlider) intSlider.value = '0';
+                }
+                intGeBtn.classList.add('active');
+                intLeBtn.classList.remove('active');
+                applyIntFilter();
+            });
+            intLeBtn = rebind(intLeBtn, 'click', function () {
+                if (_genesisTauState.intFilter.dir === 'le') return;
+                var wasAll = intIsAll();
+                _genesisTauState.intFilter.dir = 'le';
+                if (wasAll) {
+                    _genesisTauState.intFilter.thresh = _genesisTauState.intMax;
+                    if (intSlider) intSlider.value = String(_genesisTauState.intMax);
+                }
+                intLeBtn.classList.add('active');
+                intGeBtn.classList.remove('active');
+                applyIntFilter();
+            });
+        }
+        computePass();      // seed passKeys for the initial paint()
+        refreshIntLabel();
+
         paint();
     }
 
@@ -14774,33 +15010,54 @@
         var el = document.getElementById('rt-genesis-modal-map');
         if (!el || typeof Plotly === 'undefined' || !el.data) return;
         var mode = (_genesisTauState && _genesisTauState.mode) || 'members';
+        // Drop members filtered out by the peak-Vmax (LMI) slider so the
+        // single-hour snapshot matches the filtered spaghetti.
+        if (_genesisTauState && _genesisTauState.passKeys) {
+            var _pk = _genesisTauState.passKeys;
+            positions = positions.filter(function (p) { return _pk[p.key]; });
+        }
         // Iso-density band fractions (10/25/50/75 % of peak density).
         // Stacked + composited via translucent fills so the inner
         // bands read darker — operational ensemble-product convention.
         var BAND_FRACTIONS = [0.10, 0.25, 0.50, 0.75];
 
         if (mode === 'density' && positions.length >= 10) {
-            // Adaptive bin size: tight clusters get a finer grid so
-            // we don't get a 1-cell blob; sprawling clusters get
-            // wider cells to keep the marker count reasonable.
-            var lats = positions.map(function (p) { return p.lat; });
-            var lons = positions.map(function (p) { return p.lon; });
-            var spread = Math.max(
-                Math.max.apply(null, lats) - Math.min.apply(null, lats),
-                Math.max.apply(null, lons) - Math.min.apply(null, lons));
-            var binDeg = Math.max(0.25, Math.min(0.6, spread / 30));
-            var grid = _genesisDensityGrid(positions, binDeg, 1.2);
-            // One per-cell heatmap trace (≥10% of peak), colored by fraction —
-            // no stacked translucent bands, so a tight/sparse cluster can't
-            // composite to near-black (the 50-member long-lead bug).
-            var cells = _genesisDensityCells(grid, BAND_FRACTIONS[0]);
-            // Match marker size to the cell size at the modal's view
-            // scale so cells tile without gaps. ~26 px per degree at
-            // the modal's typical width, scaled by binDeg + a small
-            // overlap factor to hide cell-edge seams. Plotly markers
-            // are sized in pixels (not data units) so this isn't
-            // perfect at all zoom states but the modal view is fixed.
-            var markerPx = Math.max(8, Math.round(binDeg * 26 * 1.25));
+            // Memoize the (grid → cells → markerPx) computation per tau.
+            // The filtered positions at a tau are fixed for a given filter
+            // (densityCache is cleared in computePass when the filter
+            // changes), so re-scrubbing and playback skip the grid+Gaussian.
+            var _dc = _genesisTauState && _genesisTauState.densityCache;
+            var _hit = _dc ? _dc[tau] : null;
+            var cells, markerPx, binDeg, gridMax;
+            if (_hit) {
+                cells = _hit.cells; markerPx = _hit.markerPx;
+                binDeg = _hit.binDeg; gridMax = _hit.maxValue;
+            } else {
+                // Adaptive bin size: tight clusters get a finer grid so
+                // we don't get a 1-cell blob; sprawling clusters get
+                // wider cells to keep the marker count reasonable.
+                var lats = positions.map(function (p) { return p.lat; });
+                var lons = positions.map(function (p) { return p.lon; });
+                var spread = Math.max(
+                    Math.max.apply(null, lats) - Math.min.apply(null, lats),
+                    Math.max.apply(null, lons) - Math.min.apply(null, lons));
+                binDeg = Math.max(0.25, Math.min(0.6, spread / 30));
+                var grid = _genesisDensityGrid(positions, binDeg, 1.2);
+                // One per-cell heatmap trace (≥10% of peak), colored by fraction —
+                // no stacked translucent bands, so a tight/sparse cluster can't
+                // composite to near-black (the 50-member long-lead bug).
+                cells = _genesisDensityCells(grid, BAND_FRACTIONS[0]);
+                // Match marker size to the cell size at the modal's view
+                // scale so cells tile without gaps. ~26 px per degree at
+                // the modal's typical width, scaled by binDeg + a small
+                // overlap factor to hide cell-edge seams. Plotly markers
+                // are sized in pixels (not data units) so this isn't
+                // perfect at all zoom states but the modal view is fixed.
+                markerPx = Math.max(8, Math.round(binDeg * 26 * 1.25));
+                gridMax = grid.maxValue;
+                if (_dc) _dc[tau] = { cells: cells, markerPx: markerPx,
+                                     binDeg: binDeg, maxValue: gridMax };
+            }
             // Empty the members trace, populate the density trace (7), keep the
             // 8-10 placeholders empty — single restyle to avoid inter-frame flicker.
             Plotly.restyle(el, {
@@ -14826,7 +15083,7 @@
             // Inset legend so the user knows what the heatmap means.
             // Peak density is reported as "N members per <bin>° cell"
             // so the absolute scale is interpretable, not just relative.
-            _genesisSetDensityLegend(el, binDeg, grid.maxValue, positions.length, tau);
+            _genesisSetDensityLegend(el, binDeg, gridMax, positions.length, tau);
             return;
         }
 
