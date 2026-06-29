@@ -9082,6 +9082,72 @@ def _genesis_cluster_peak_structure(cluster):
     }
 
 
+def _genesis_cluster_spread(cluster):
+    """Per-cycle ensemble-spread bundle for the run-to-run Trends panels:
+      - median_lmi: median of members' lifetime-max Vmax (kt) — a more
+        representative "how strong" than the mean-track peak.
+      - wind_pcts: per-tau p25/p50/p75 of member Vmax (intensity IQR band).
+      - ellipses: at +120 h and +240 h, the member-position mean + covariance
+        (lon/lat degrees: sxx/syy/sxy) so the frontend can draw a spread
+        ellipse. Returns None if too few members.
+    """
+    members = (cluster or {}).get("members") or {}
+    if not members:
+        return None
+    lmis = []
+    by_tau_wind = {}            # tau -> [wind]
+    pos_at = {120: [], 240: []}  # tau -> [(lat, lon)]
+    for mem in members.values():
+        peak = None
+        for p in (mem.get("points") or []):
+            w = p.get("wind")
+            t = p.get("tau")
+            if w is not None:
+                peak = w if peak is None else max(peak, w)
+                if t is not None:
+                    by_tau_wind.setdefault(t, []).append(w)
+            la, lo = p.get("lat"), p.get("lon")
+            if t in pos_at and la is not None and lo is not None:
+                pos_at[t].append((la, lo))
+        if peak is not None:
+            lmis.append(peak)
+    if len(lmis) < 3:
+        return None
+
+    def _pct(arr, q):
+        s = sorted(arr)
+        return round(s[min(len(s) - 1, max(0, int(q * (len(s) - 1))))], 1)
+
+    def _median(arr):
+        s = sorted(arr)
+        m = len(s)
+        return round(s[m // 2] if m % 2 else (s[m // 2 - 1] + s[m // 2]) / 2.0, 1)
+
+    wind_pcts = []
+    for t in sorted(by_tau_wind.keys()):
+        ws = by_tau_wind[t]
+        if len(ws) >= 3:
+            wind_pcts.append({"tau": t, "p25": _pct(ws, 0.25),
+                              "p50": _pct(ws, 0.50), "p75": _pct(ws, 0.75)})
+
+    ellipses = []
+    for t in (120, 240):
+        pos = pos_at.get(t) or []
+        n = len(pos)
+        if n < 5:
+            continue
+        mlat = sum(p[0] for p in pos) / n
+        mlon = sum(p[1] for p in pos) / n
+        sxx = sum((p[1] - mlon) ** 2 for p in pos) / n   # lon variance (deg²)
+        syy = sum((p[0] - mlat) ** 2 for p in pos) / n   # lat variance (deg²)
+        sxy = sum((p[1] - mlon) * (p[0] - mlat) for p in pos) / n
+        ellipses.append({"tau": t, "lat": round(mlat, 2), "lon": round(mlon, 2),
+                         "sxx": round(sxx, 4), "syy": round(syy, 4),
+                         "sxy": round(sxy, 4), "n": n})
+
+    return {"median_lmi": _median(lmis), "wind_pcts": wind_pcts, "ellipses": ellipses}
+
+
 @router.get("/weatherlab-genesis-trend")
 def get_weatherlab_genesis_trend(
     lat: float,
@@ -9160,6 +9226,7 @@ def get_weatherlab_genesis_trend(
                 for p in pts
             ]
         peak_structure = _genesis_cluster_peak_structure(best) if matched else None
+        spread = _genesis_cluster_spread(best) if matched else None
         trend.append({
             "init_time": date_str.replace("-", "") + hour_str,
             "age_hours": round((now - cycle_dt).total_seconds() / 3600.0, 2),
@@ -9171,6 +9238,7 @@ def get_weatherlab_genesis_trend(
             "display_short": best["display_short"] if matched else None,
             "mean_track": mean_track,
             "peak_structure": peak_structure,
+            "spread": spread,
         })
         if n_with_data >= count:
             break

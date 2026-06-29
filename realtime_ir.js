@@ -15510,7 +15510,8 @@
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var grid = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)';
 
-        var xLabels = [], formPct = [], peakV = [], barColors = [], custom = [];
+        var xLabels = [], formPct = [], medV = [], barColors = [], custom = [];
+        var formTxt = [], vTxt = [];
         for (var i = 0; i < trend.length; i++) {
             var t = trend[i];
             var it = t.init_time || '';
@@ -15519,8 +15520,16 @@
                 : it;
             var isLoaded = (it === loadedInit);
             xLabels.push(lbl + (isLoaded ? ' ★' : ''));
-            formPct.push(t.matched ? +(t.formation_prob * 100).toFixed(0) : null);
-            peakV.push(t.matched ? t.peak_wind : null);
+            var fp = t.matched ? +(t.formation_prob * 100).toFixed(0) : null;
+            formPct.push(fp);
+            formTxt.push(fp != null ? fp + '%' : '');
+            // Prefer the per-cycle MEDIAN member LMI (representative "how strong");
+            // fall back to the mean-track peak if the backend hasn't supplied it.
+            var mv = t.matched
+                ? ((t.spread && t.spread.median_lmi != null) ? t.spread.median_lmi : t.peak_wind)
+                : null;
+            medV.push(mv);
+            vTxt.push(mv != null ? Math.round(mv) + ' kt' : '');
             barColors.push(isLoaded ? '#00e5ff' : 'rgba(0,229,255,0.42)');
             custom.push(t.matched ? (t.display_short || '') : '—');
         }
@@ -15528,15 +15537,19 @@
         var barTrace = {
             type: 'bar', x: xLabels, y: formPct, name: 'Formation %',
             yaxis: 'y', marker: { color: barColors },
+            text: formTxt, textposition: 'inside', insidetextanchor: 'start',
+            textfont: { size: 9, color: isDark ? '#06283d' : '#06283d' },
             customdata: custom,
             hovertemplate: '%{x}<br>Formation: %{y}%<br>(%{customdata})<extra></extra>',
         };
         var lineTrace = {
-            type: 'scatter', mode: 'lines+markers', x: xLabels, y: peakV,
-            name: 'Peak Vmax', yaxis: 'y2', connectgaps: true,
+            type: 'scatter', mode: 'lines+markers+text', x: xLabels, y: medV,
+            name: 'Median LMI', yaxis: 'y2', connectgaps: true,
             line: { color: '#f97316', width: 2 },
             marker: { color: '#f97316', size: 6 },
-            hovertemplate: '%{x}<br>Peak Vmax: %{y} kt<extra></extra>',
+            text: vTxt, textposition: 'top center',
+            textfont: { size: 9, color: '#f97316' },
+            hovertemplate: '%{x}<br>Median member LMI: %{y} kt<extra></extra>',
         };
 
         var layout = Object.assign({}, theme, {
@@ -15548,13 +15561,13 @@
             bargap: 0.45,
             xaxis: { tickfont: { size: 9.5 }, gridcolor: grid, fixedrange: true },
             yaxis: {
-                title: { text: 'Form %', font: { size: 9.5 } },
-                tickfont: { size: 9 }, range: [0, 100], gridcolor: grid,
+                title: { text: 'Formation %', font: { size: 9.5, color: '#0891b2' } },
+                tickfont: { size: 9, color: '#0891b2' }, range: [0, 115], gridcolor: grid,
                 fixedrange: true,
             },
             yaxis2: {
-                title: { text: 'Vmax', font: { size: 9.5 } },
-                tickfont: { size: 9 }, overlaying: 'y', side: 'right',
+                title: { text: 'Median LMI (kt)', font: { size: 9.5, color: '#f97316' } },
+                tickfont: { size: 9, color: '#f97316' }, overlaying: 'y', side: 'right',
                 rangemode: 'tozero', showgrid: false, fixedrange: true,
             },
         });
@@ -15562,9 +15575,9 @@
         Plotly.react(el, [barTrace, lineTrace], layout,
                      { responsive: true, displayModeBar: false });
         if (noteEl) {
-            noteEl.textContent = '★ = loaded run · formation % (bars) and '
-                + 'peak Vmax (line) across the last ' + trend.length
-                + ' cycles';
+            noteEl.textContent = '★ = loaded run · left axis = formation % '
+                + '(cyan bars, % of ensemble reaching 34 kt) · right axis = '
+                + 'median member LMI (orange line) · last ' + trend.length + ' cycles';
         }
         wrap.style.display = '';
     }
@@ -15693,6 +15706,29 @@
        to keep it legible.
        Needs the backend deployed with mean_track — degrades silently
        (stays hidden) when fewer than 2 cycles carry a polyline. */
+    /** Trace lon/lat points of a k·σ covariance ellipse (degree space —
+     *  illustrative spread, not a strict confidence region) from a member-
+     *  position mean + covariance (sxx=lon var, syy=lat var, sxy). */
+    function _covEllipsePath(lat, lon, sxx, syy, sxy, k, N) {
+        k = k || 1.5; N = N || 48;
+        var tr = sxx + syy, det = sxx * syy - sxy * sxy;
+        var disc = Math.sqrt(Math.max(0, tr * tr / 4 - det));
+        var l1 = tr / 2 + disc, l2 = tr / 2 - disc;
+        var v1x, v1y;
+        if (Math.abs(sxy) > 1e-9) { v1x = l1 - syy; v1y = sxy; }
+        else if (sxx >= syy) { v1x = 1; v1y = 0; } else { v1x = 0; v1y = 1; }
+        var n1 = Math.hypot(v1x, v1y) || 1; v1x /= n1; v1y /= n1;
+        var v2x = -v1y, v2y = v1x;
+        var a = k * Math.sqrt(Math.max(0, l1)), b = k * Math.sqrt(Math.max(0, l2));
+        var lons = [], lats = [];
+        for (var i = 0; i <= N; i++) {
+            var th = 2 * Math.PI * i / N, ct = Math.cos(th), st = Math.sin(th);
+            lons.push(lon + a * ct * v1x + b * st * v2x);
+            lats.push(lat + a * ct * v1y + b * st * v2y);
+        }
+        return { lons: lons, lats: lats };
+    }
+
     function _drawTrackTrend(data, loadedInit) {
         var wrap = document.getElementById('rt-genesis-trendmap-wrap');
         var el = document.getElementById('rt-genesis-modal-trendmap');
@@ -15743,7 +15779,26 @@
                 lons.push(p.lon); lats.push(p.lat); prev = p.lon;
             });
             var lbl = _genesisFmtInit(c.init_time);
-            if (c.init_time === loadedInit) {
+            var _isCur = (c.init_time === loadedInit);
+            var cycColor = _isCur ? '#f97316'
+                : _genesisPriorColor(priorRank[c.init_time], nPrior, isDark);
+            // Member-position spread ellipses at +120 h / +240 h (variability).
+            var ells = (c.spread && c.spread.ellipses) || [];
+            ells.forEach(function (e) {
+                if (e.sxx == null) return;
+                var ep = _covEllipsePath(e.lat, e.lon, e.sxx, e.syy, e.sxy, 1.5, 48);
+                var et = { type: 'scattergeo', mode: 'lines', lon: ep.lons, lat: ep.lats,
+                    line: { color: cycColor, width: _isCur ? 1.4 : 1, dash: 'dot' },
+                    hoverinfo: 'skip', showlegend: false };
+                if (_isCur) { et.fill = 'toself'; et.fillcolor = 'rgba(249,115,22,0.10)'; }
+                traces.push(et);
+                if (_isCur) {
+                    traces.push({ type: 'scattergeo', mode: 'text', lon: [e.lon], lat: [e.lat],
+                        text: ['+' + e.tau + 'h'], textposition: 'middle center',
+                        textfont: { size: 9, color: '#f97316' }, hoverinfo: 'skip', showlegend: false });
+                }
+            });
+            if (_isCur) {
                 traces.push({
                     type: 'scattergeo', mode: 'lines', lon: lons, lat: lats,
                     line: { color: '#f97316', width: 2.8 },
@@ -15785,7 +15840,8 @@
                      { responsive: true, displayModeBar: false });
         if (noteEl) {
             noteEl.textContent = 'bold orange = current run · blue→cyan = prior '
-                + 'runs (brighter = more recent) · ' + cycles.length + ' cycles';
+                + 'runs (brighter = more recent) · dotted ellipses = member-track '
+                + 'spread at +120/+240 h · ' + cycles.length + ' cycles';
         }
         wrap.style.display = '';
     }
@@ -15830,7 +15886,24 @@
                 xs.push(p.tau); ys.push(p.wind);
             });
             var lbl = _genesisFmtInit(c.init_time);
-            if (c.init_time === loadedInit) {
+            var _isCur = c.init_time === loadedInit;
+            var cycColor = _isCur ? '#f97316'
+                : _genesisPriorColor(priorRank[c.init_time], nPrior, isDark);
+            // Per-cycle member-Vmax IQR (P25–P75) band — intensity spread.
+            var wp = (c.spread && c.spread.wind_pcts) || [];
+            if (wp.length >= 2) {
+                var bx = wp.map(function (d) { return d.tau; });
+                var blo = wp.map(function (d) { return d.p25; });
+                var bhi = wp.map(function (d) { return d.p75; });
+                var fillC = _isCur ? 'rgba(249,115,22,0.16)'
+                    : cycColor.replace(/[\d.]+\)\s*$/, '0.06)');
+                traces.push({ type: 'scatter', mode: 'lines', x: bx, y: blo,
+                    line: { color: 'rgba(0,0,0,0)' }, hoverinfo: 'skip', showlegend: false });
+                traces.push({ type: 'scatter', mode: 'lines', x: bx, y: bhi, fill: 'tonexty',
+                    fillcolor: fillC, line: { color: 'rgba(0,0,0,0)' },
+                    name: lbl + ' IQR', hoverinfo: 'skip', showlegend: false });
+            }
+            if (_isCur) {
                 traces.push({
                     type: 'scatter', mode: 'lines+markers', x: xs, y: ys,
                     line: { color: '#f97316', width: 2.6 },
@@ -15869,7 +15942,8 @@
                      { responsive: true, displayModeBar: false });
         if (noteEl) {
             noteEl.textContent = 'orange line = current run (markers by category) '
-                + '· blue→cyan = prior runs (brighter = more recent)';
+                + '· blue→cyan = prior runs (brighter = more recent) · shaded band '
+                + '= member-Vmax IQR (P25–P75) per run';
         }
         wrap.style.display = '';
     }
