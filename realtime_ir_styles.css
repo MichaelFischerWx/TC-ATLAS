@@ -873,6 +873,12 @@ html, body { margin: 0; padding: 0; }
         left: 8px;
         top: 160px;
     }
+    /* The top-right control bar is right-aligned + wraps; cap its width so its
+       wrapped rows can't extend left under the top-left Display button
+       (reserve ~64px for that button). */
+    .ir-layers-wrap {
+        max-width: calc(100vw - 64px);
+    }
 }
 
 /* IR Brightness Temperature legend overlay */
