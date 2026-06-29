@@ -867,18 +867,21 @@ html, body { margin: 0; padding: 0; }
 /* Mobile: the anim/genesis dock spans the FULL width at the bottom, so anchor
    the legend up under the (wrapped) control bar instead. */
 @media (max-width: 768px) {
+    /* Colorbar lower in the open map area (was crowding the control bar). */
     .ir-radar-global-legend {
         right: auto;
         bottom: auto;
         left: 8px;
-        top: 160px;
+        top: 50%;
     }
-    /* The top-right control bar is right-aligned + wraps; cap its width so its
-       wrapped rows can't extend left under the top-left Display button
-       (reserve ~64px for that button). */
-    .ir-layers-wrap {
-        max-width: calc(100vw - 64px);
-    }
+    /* Compact the control bar — tighter inter-pill gap + slimmer toggle
+       padding — so the wrapped rows take less width and clear the top-left
+       Display button without a reserved-space gap. */
+    .ir-layers-wrap { gap: 2px; }
+    .ir-layers-wrap .ir-3d-mode-btn,
+    .ir-layers-wrap .ir-radar-mode-btn,
+    .ir-layers-wrap .ir-mw-toggle-btn { padding: 4px 6px; }
+    .ir-mode-segment .ir-mode-btn { padding: 4px 6px; }
 }
 
 /* IR Brightness Temperature legend overlay */
