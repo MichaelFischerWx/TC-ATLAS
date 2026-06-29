@@ -3989,7 +3989,7 @@
         if (!_gRadarOn || !times || times.length < 2) return times;
         var now = Date.now(), win = _GRADAR_ANIM_WINDOW_MIN * 60000, out = [];
         for (var i = 0; i < times.length; i++) {
-            var ms = Date.parse(times[i]);
+            var ms = _parseFrameTimeMs(times[i]);
             if (!isFinite(ms) || (now - ms) <= win) out.push(times[i]);
         }
         // Never leave the loop empty — fall back to the last few frames.
@@ -26248,11 +26248,22 @@
     function _rtInRadarCoverage(lat, lon) {
         return lat >= 16 && lat <= 52 && lon >= -128 && lon <= -63;
     }
+    // Parse a frame timestamp to epoch ms. Handles the compact mosaic format
+    // "YYYYMMDDHHMM" (UTC, e.g. 202606292230) — which Date.parse does NOT —
+    // as well as ISO strings (GIBS / storm frame times). Returns NaN if neither.
+    function _parseFrameTimeMs(s) {
+        if (s == null) return NaN;
+        s = String(s);
+        var m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(s);
+        if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+        var t = Date.parse(s);
+        return isFinite(t) ? t : NaN;
+    }
     // Map a frame timestamp to the closest IEM layer within its ~1 h window.
     // Frames older than 55 min clamp to the oldest available (m55m); recent
     // frames resolve to the latest composite.
     function _iemLayerForFrameTime(frameTimeStr) {
-        var t = frameTimeStr ? Date.parse(frameTimeStr) : NaN;
+        var t = _parseFrameTimeMs(frameTimeStr);
         if (!isFinite(t)) return 'nexrad-n0q';
         var ageMin = (Date.now() - t) / 60000;
         var bucket = Math.round(ageMin / 5) * 5;

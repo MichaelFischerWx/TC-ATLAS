@@ -867,12 +867,13 @@ html, body { margin: 0; padding: 0; }
 /* Mobile: the anim/genesis dock spans the FULL width at the bottom, so anchor
    the legend up under the (wrapped) control bar instead. */
 @media (max-width: 768px) {
-    /* Colorbar lower in the open map area (was crowding the control bar). */
+    /* Colorbar just above the bottom anim/genesis dock (#ir-global-anim-panel
+       sits ~119px tall, bottom-anchored above the status bar). */
     .ir-radar-global-legend {
         right: auto;
-        bottom: auto;
+        top: auto;
         left: 8px;
-        top: 50%;
+        bottom: 128px;
     }
     /* Compact the control bar — tighter inter-pill gap + slimmer toggle
        padding — so the wrapped rows take less width and clear the top-left
