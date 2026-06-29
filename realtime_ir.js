@@ -16879,11 +16879,16 @@
             yaxis: { title: { text: ax.title, font: { size: 11 } }, range: yRange,
                      gridcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)' },
             shapes: shapes, showlegend: true,
-            legend: { x: 0.985, y: 0.98, xanchor: 'right', yanchor: 'top',
-                bgcolor: isDark ? 'rgba(15,22,35,0.82)' : 'rgba(255,255,255,0.88)',
-                bordercolor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,22,35,0.10)', borderwidth: 1,
-                font: { size: 9, color: isDark ? '#e2e8f0' : '#1f2937' },
-                itemsizing: 'constant', itemwidth: 30, tracegroupgap: 0 },
+            legend: (cfg.legendSide === 'left'
+                ? { x: 0.015, xanchor: 'left' } : { x: 0.985, xanchor: 'right' }),
+        });
+        // Fill in the shared legend styling (x/xanchor set per cfg above).
+        Object.assign(layout.legend, {
+            y: 0.98, yanchor: 'top',
+            bgcolor: isDark ? 'rgba(15,22,35,0.82)' : 'rgba(255,255,255,0.88)',
+            bordercolor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,22,35,0.10)', borderwidth: 1,
+            font: { size: 9, color: isDark ? '#e2e8f0' : '#1f2937' },
+            itemsizing: 'constant', itemwidth: 30, tracegroupgap: 0,
         });
         Plotly.react(el, traces, layout, { responsive: true, displayModeBar: false });
     }
@@ -16905,7 +16910,7 @@
             metricKey: 'r34_mean_km', climoMetric: 'r34_mean_km', windGate: 34,
             title: 'Gale-force size — mean 34-kt wind radius',
             shortName: 'R34', unit: 'nm', unitTitle: 'Mean R34 (nm)',
-            rgb: [52, 211, 153],
+            rgb: [52, 211, 153], legendSide: 'left',   // size climbs L→R; keep legend off the data
         });
     }
 
@@ -16989,7 +16994,9 @@
             yaxis: { title: { text: ax.title, font: { size: 11 } }, range: ax.range,
                      gridcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)' },
             shapes: shapes, showlegend: true,
-            legend: { x: 0.985, y: 0.98, xanchor: 'right', yanchor: 'top',
+            // Nesting rings climb L→R (esp. in percentile/z mode), so the
+            // top-LEFT corner is the clear one — keep the legend off the data.
+            legend: { x: 0.015, y: 0.98, xanchor: 'left', yanchor: 'top',
                 bgcolor: isDark ? 'rgba(15,22,35,0.82)' : 'rgba(255,255,255,0.88)',
                 bordercolor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,22,35,0.10)', borderwidth: 1,
                 font: { size: 9, color: isDark ? '#e2e8f0' : '#1f2937' }, itemsizing: 'constant' },
