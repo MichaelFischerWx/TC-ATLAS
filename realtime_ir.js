@@ -4712,15 +4712,19 @@
         if (!document.getElementById('ir-global-env-cbars')) {
             var ebox = document.createElement('div');
             ebox.id = 'ir-global-env-cbars';
+            // absolute (not fixed) + parented to #ir-map so it's INSIDE the
+            // node the PNG/GIF export captures — fixed-on-body left it out of
+            // saved figures. #ir-map fills to the viewport bottom, so the
+            // bottom-left position is visually unchanged.
             ebox.style.cssText =
-                'position:fixed;left:12px;bottom:140px;display:none;' +
+                'position:absolute;left:12px;bottom:140px;display:none;' +
                 'background:rgba(22,27,36,0.93);padding:8px 12px;' +
                 'border-radius:6px;border:1px solid rgba(255,255,255,0.14);' +
                 'backdrop-filter:blur(6px);z-index:700;' +
                 'box-shadow:0 4px 14px rgba(0,0,0,0.25);' +
                 'max-width:min(60vw, 420px);' +
                 'max-height:calc(100vh - 240px);overflow-y:auto;';
-            document.body.appendChild(ebox);
+            (document.getElementById('ir-map') || document.body).appendChild(ebox);
         }
 
         // Intensity legend toggle — small pill below the Basins button.
