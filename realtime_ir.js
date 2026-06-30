@@ -21668,20 +21668,12 @@
             if (_pgBar && pct != null) _pgBar.style.width = pct + '%';
         }
 
-        // iOS: pre-open the destination tab inside the tap so the async encode
-        // isn't popup-blocked (mirrors the storm-card + orbit GIF paths).
-        var ua = navigator.userAgent || '';
-        var isIOS = /iP(hone|od|ad)/.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
-        var gifTab = null;
-        if (isIOS) {
-            gifTab = window.open('', '_blank');
-            if (gifTab && gifTab.document) {
-                gifTab.document.write('<title>TC-ATLAS loop</title><body style="margin:0;background:#0a0c12;' +
-                    'color:#e2e8f0;font:600 14px/1.4 -apple-system,system-ui,sans-serif;display:flex;' +
-                    'align-items:center;justify-content:center;height:100vh">Encoding GIF… it will appear ' +
-                    'here when ready (long-press to save).</body>');
-            }
-        }
+        // NOTE: no pre-opened tab. Encoding runs in THIS window — pre-opening a
+        // tab made users switch to it, which backgrounds this tab and stalls the
+        // encode (rAF/timers throttle when hidden). On finish we show the GIF in
+        // an in-page modal whose Save button carries fresh user-activation, so
+        // the share sheet / download works without popup-blocking. See
+        // feedback_ios_png_export memory.
 
         function cleanup() {
             if (exBtn) exBtn.disabled = false;
@@ -21757,13 +21749,7 @@
                     gifObj.on('finished', function (blob) {
                         var fnTs = (globalAnimFrameTimes[globalAnimFrameTimes.length - 1] || '').replace(/[^0-9]/g, '') || 'loop';
                         var filename = 'tc-atlas-rt-' + globalProduct + '-' + fnTs + '.gif';
-                        if (gifTab && !gifTab.closed) {
-                            var u = URL.createObjectURL(blob);
-                            gifTab.location.href = u;
-                            setTimeout(function () { URL.revokeObjectURL(u); }, 60000);
-                        } else {
-                            _saveImageBlob(blob, filename);
-                        }
+                        _showGifResult(blob, filename);
                         _ga('rt_export_map_gif', { ok: true });
                         cleanup();
                     });
@@ -21773,10 +21759,54 @@
             });
         }).catch(function (err) {
             console.warn('[rt map gif] setup failed', err);
-            if (gifTab && !gifTab.closed) { try { gifTab.close(); } catch (e) {} }
             _rtToast('GIF export failed to start');
             cleanup();
         });
+    }
+
+    /** Show a finished GIF in an in-page modal with a Save button. Encoding
+     *  happens in this window (no pre-opened tab to stall it); the Save tap
+     *  carries fresh user-activation so the share sheet / download works on iOS
+     *  without popup-blocking. */
+    function _showGifResult(blob, filename) {
+        var url = URL.createObjectURL(blob);
+        var ov = document.createElement('div');
+        ov.className = 'rt-gif-result';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:3000;background:rgba(8,12,18,0.92);' +
+            'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;' +
+            'padding:16px;backdrop-filter:blur(4px);';
+        var img = document.createElement('img');
+        img.src = url; img.alt = 'TC-ATLAS loop';
+        img.style.cssText = 'max-width:96vw;max-height:72vh;border-radius:8px;' +
+            'box-shadow:0 8px 30px rgba(0,0,0,0.55);';
+        var hint = document.createElement('div');
+        hint.style.cssText = "color:#cbd5e1;font:600 12px/1.4 'DM Sans',system-ui,sans-serif;text-align:center;";
+        hint.textContent = 'Tap Save GIF — or long-press the image to save.';
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:10px;';
+        function _pill(label, bg) {
+            var b = document.createElement('button');
+            b.textContent = label; b.type = 'button';
+            b.style.cssText = 'font:700 13px/1 \'DM Sans\',system-ui,sans-serif;color:#fff;' +
+                'background:' + bg + ';border:none;border-radius:8px;padding:11px 18px;cursor:pointer;';
+            return b;
+        }
+        var saveBtn = _pill('⬇ Save GIF', '#4a9b6e');
+        var closeBtn = _pill('Close', 'rgba(148,163,184,0.35)');
+        function close() {
+            if (ov.parentElement) ov.parentElement.removeChild(ov);
+            setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+        }
+        // Fresh tap → activation intact → _saveImageBlob's share/download works.
+        saveBtn.addEventListener('click', function () { _saveImageBlob(blob, filename); });
+        closeBtn.addEventListener('click', close);
+        ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+        document.addEventListener('keydown', function esc(e) {
+            if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
+        });
+        row.appendChild(saveBtn); row.appendChild(closeBtn);
+        ov.appendChild(img); ov.appendChild(hint); ov.appendChild(row);
+        document.body.appendChild(ov);
     }
 
     // Group definition for the Env Analysis menu — collapses the
