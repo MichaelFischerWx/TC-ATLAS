@@ -21568,29 +21568,42 @@
         var orig = btn ? btn.textContent : '';
         if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
 
+        var node = document.getElementById('ir-map');
+        var glMap = map && map._gl;
+        var glCanvas = glMap && glMap.getCanvas && glMap.getCanvas();
+
         _ensureHtml2canvas().then(function () {
-            var node = document.getElementById('ir-map');
             if (!node) throw new Error('Map element not found');
+            // DOM/vector overlays ONLY — transparent bg, and skip the WebGL
+            // canvas (html2canvas can't read it — it's composited separately
+            // below) + the status bar (position:fixed, would land over the
+            // graticule's south edge).
             return window.html2canvas(node, {
                 useCORS: true,
                 allowTaint: false,
                 backgroundColor: null,
                 logging: false,
                 scale: window.devicePixelRatio || 1,
-                // The status bar is position:fixed at bottom:0 — the same edge
-                // as the map's south boundary. html2canvas clones the whole
-                // document and renders fixed elements within the captured bbox,
-                // so the white "No active tropical cyclones / Updated…" bar lands
-                // over the bottom row of longitude labels in the saved PNG (it
-                // doesn't in the live view, where it's just page chrome below the
-                // grid). Drop it from the capture so the graticule stays legible.
                 ignoreElements: function (el) {
-                    return el.id === 'ir-status-bar';
+                    return (el.classList && el.classList.contains('maplibregl-canvas'))
+                        || el.id === 'ir-status-bar';
                 }
             });
-        }).then(function (canvas) {
+        }).then(function (overlay) {
             return new Promise(function (resolve, reject) {
-                canvas.toBlob(function (blob) {
+                // Composite: GL base (satellite + radar + GL vector layers) first,
+                // DOM/vector overlays on top. html2canvas alone dropped the WebGL
+                // satellite/radar, leaving washed-out figures.
+                var outW = overlay.width, outH = overlay.height;
+                var comp = document.createElement('canvas');
+                comp.width = outW; comp.height = outH;
+                var cctx = comp.getContext('2d');
+                cctx.fillStyle = '#0a0c12'; cctx.fillRect(0, 0, outW, outH);
+                if (glCanvas) {
+                    try { cctx.drawImage(glCanvas, 0, 0, glCanvas.width, glCanvas.height, 0, 0, outW, outH); } catch (e) {}
+                }
+                try { cctx.drawImage(overlay, 0, 0); } catch (e) {}
+                comp.toBlob(function (blob) {
                     if (!blob) return reject(new Error('Canvas produced no blob (likely CORS taint)'));
                     resolve(blob);
                 }, 'image/png');
@@ -21683,68 +21696,81 @@
         // × 12 radar frames stalled encoding. Matches the storm-card GIF path.
         var capScale = Math.min(1, 600 / Math.max(1, rect.width));
         var delayMs = Math.max(90, GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].ms);
-        var h2cOpts = {
-            useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
-            logging: false, scale: capScale,
-            ignoreElements: function (el) {
-                // Skip chrome that shouldn't bake into the GIF: status bar, the
-                // export menu, and the recording-progress card.
-                return el.id === 'ir-status-bar'
-                    || el.id === 'ir-global-export-menu'
-                    || el.id === 'rt-mapgif-prog';
-            }
-        };
+        // html2canvas CANNOT read the WebGL canvas, so the old per-frame
+        // html2canvas path dropped the satellite mosaic + radar entirely
+        // (washed-out GIF — only basemap + vector overlays). Instead: draw the
+        // GL canvas DIRECTLY per frame (satellite + radar + GL vector layers),
+        // and composite the DOM/vector overlays (markers, env colorbar, radar
+        // legend, barbs) captured ONCE on top. Mirrors the orbit-GIF capture.
+        var glMap = map && map._gl;
+        var glCanvas = glMap && glMap.getCanvas && glMap.getCanvas();
+        if (!glCanvas) { _rtToast('GIF export needs the GL map'); cleanup(); return; }
+        var outW = Math.max(2, Math.round(rect.width * capScale)) & ~1;
+        var outH = Math.max(2, Math.round(rect.height * capScale)) & ~1;
+        var comp = document.createElement('canvas'); comp.width = outW; comp.height = outH;
+        var cctx = comp.getContext('2d');
+        // Wait for the GL map to repaint the current frame before grabbing.
+        function _grabGL(cb) {
+            var done = false;
+            function g() { if (done) return; done = true; cb(); }
+            if (glMap.once) glMap.once('idle', g);
+            if (glMap.triggerRepaint) glMap.triggerRepaint();
+            setTimeout(g, 350);
+        }
 
         Promise.all([_ensureHtml2canvas(), _ensureGifWorker()]).then(function (res) {
             var workerUrl = res[1];
-            var gif = null, i = 0;
-            function frameStep() {
-                showGlobalAnimFrame(i);
-                // Give the GL canvas + vector panes a beat to repaint the new
-                // frame before html2canvas reads them.
-                setTimeout(function () {
-                    window.html2canvas(node, h2cOpts).then(function (canvas) {
-                        if (!gif) {
-                            var workers = Math.max(2, Math.min(6, navigator.hardwareConcurrency || 4));
-                            gif = new window.GIF({
-                                workers: workers, quality: 20,
-                                width: canvas.width, height: canvas.height,
-                                workerScript: workerUrl, background: '#0a0c12'
-                            });
-                        }
-                        gif.addFrame(canvas, { delay: delayMs, copy: true });
+            // Overlays don't change across frames → capture once. Transparent bg,
+            // and skip the GL canvas (drawn separately) + the export chrome.
+            return window.html2canvas(node, {
+                backgroundColor: null, useCORS: true, allowTaint: false,
+                logging: false, scale: capScale,
+                ignoreElements: function (el) {
+                    return (el.classList && el.classList.contains('maplibregl-canvas'))
+                        || el.id === 'ir-status-bar'
+                        || el.id === 'ir-global-export-menu'
+                        || el.id === 'rt-mapgif-prog';
+                }
+            }).then(function (overlay) {
+                var gif = new window.GIF({
+                    workers: Math.max(2, Math.min(6, navigator.hardwareConcurrency || 4)),
+                    quality: 20, width: outW, height: outH,
+                    workerScript: workerUrl, background: '#0a0c12'
+                });
+                var i = 0;
+                function frameStep() {
+                    showGlobalAnimFrame(i);
+                    _grabGL(function () {
+                        cctx.clearRect(0, 0, outW, outH);
+                        try { cctx.drawImage(glCanvas, 0, 0, glCanvas.width, glCanvas.height, 0, 0, outW, outH); } catch (e) {}
+                        try { cctx.drawImage(overlay, 0, 0, overlay.width, overlay.height, 0, 0, outW, outH); } catch (e) {}
+                        gif.addFrame(cctx, { delay: delayMs, copy: true });
                         i++;
                         _setProg('◉ Capturing · ' + i + '/' + nFrames, Math.round(i / nFrames * 60));
                         if (i < nFrames) frameStep();
                         else encode(gif);
-                    }).catch(function (err) {
-                        console.warn('[rt map gif] frame capture failed', err);
-                        i++;
-                        if (gif && i < nFrames) frameStep();
-                        else if (gif) encode(gif);
-                        else { _rtToast('GIF export failed'); cleanup(); }
                     });
-                }, 200);
-            }
-            function encode(gifObj) {
-                _setProg('Encoding GIF…', 60);
-                gifObj.on('progress', function (p) { _setProg('Encoding · ' + Math.round(p * 100) + '%', 60 + Math.round(p * 40)); });
-                gifObj.on('finished', function (blob) {
-                    var fnTs = (globalAnimFrameTimes[globalAnimFrameTimes.length - 1] || '').replace(/[^0-9]/g, '') || 'loop';
-                    var filename = 'tc-atlas-rt-' + globalProduct + '-' + fnTs + '.gif';
-                    if (gifTab && !gifTab.closed) {
-                        var u = URL.createObjectURL(blob);
-                        gifTab.location.href = u;
-                        setTimeout(function () { URL.revokeObjectURL(u); }, 60000);
-                    } else {
-                        _saveImageBlob(blob, filename);
-                    }
-                    _ga('rt_export_map_gif', { ok: true });
-                    cleanup();
-                });
-                try { gifObj.render(); } catch (e) { console.warn('[rt map gif] render failed', e); _rtToast('GIF encode failed'); cleanup(); }
-            }
-            frameStep();
+                }
+                function encode(gifObj) {
+                    _setProg('Encoding GIF…', 60);
+                    gifObj.on('progress', function (p) { _setProg('Encoding · ' + Math.round(p * 100) + '%', 60 + Math.round(p * 40)); });
+                    gifObj.on('finished', function (blob) {
+                        var fnTs = (globalAnimFrameTimes[globalAnimFrameTimes.length - 1] || '').replace(/[^0-9]/g, '') || 'loop';
+                        var filename = 'tc-atlas-rt-' + globalProduct + '-' + fnTs + '.gif';
+                        if (gifTab && !gifTab.closed) {
+                            var u = URL.createObjectURL(blob);
+                            gifTab.location.href = u;
+                            setTimeout(function () { URL.revokeObjectURL(u); }, 60000);
+                        } else {
+                            _saveImageBlob(blob, filename);
+                        }
+                        _ga('rt_export_map_gif', { ok: true });
+                        cleanup();
+                    });
+                    try { gifObj.render(); } catch (e) { console.warn('[rt map gif] render failed', e); _rtToast('GIF encode failed'); cleanup(); }
+                }
+                frameStep();
+            });
         }).catch(function (err) {
             console.warn('[rt map gif] setup failed', err);
             if (gifTab && !gifTab.closed) { try { gifTab.close(); } catch (e) {} }
