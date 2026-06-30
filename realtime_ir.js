@@ -2613,20 +2613,8 @@
             if (_pgBar && pct != null) _pgBar.style.width = pct + '%';
         }
 
-        // iOS: open the destination tab synchronously inside the tap; the async
-        // encode would lose the tap activation and get popup-blocked otherwise.
-        var ua = navigator.userAgent || '';
-        var isIOS = /iP(hone|od|ad)/.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
-        var gifTab = null;
-        if (isIOS) {
-            gifTab = window.open('', '_blank');
-            if (gifTab && gifTab.document) {
-                gifTab.document.write('<title>TC-ATLAS orbit</title><body style="margin:0;background:#0a0c12;' +
-                    'color:#e2e8f0;font:600 14px/1.4 -apple-system,system-ui,sans-serif;display:flex;' +
-                    'align-items:center;justify-content:center;height:100vh">Encoding orbit GIF… it will ' +
-                    'appear here when ready (long-press to save).</body>');
-            }
-        }
+        // No pre-opened tab: encode in THIS window and deliver via the in-page
+        // result modal on finish (_showGifResult) — see _exportMapGif.
 
         var gifBtn = document.getElementById('ir-3d-orbitgif');
         if (gifBtn) gifBtn.classList.add('active');
@@ -2687,14 +2675,7 @@
                     gif.on('finished', function (blob) {
                         if (!_rt3DOrbitGifCancel) {
                             var fnTs = (_mosaicTs || '').toString().replace(/[^0-9]/g, '') || 'frame';
-                            var filename = 'tc-atlas-rt-orbit-' + fnTs + '.gif';
-                            if (gifTab && !gifTab.closed) {
-                                var u = URL.createObjectURL(blob);
-                                gifTab.location.href = u;
-                                setTimeout(function () { URL.revokeObjectURL(u); }, 60000);
-                            } else {
-                                _saveImageBlob(blob, filename);
-                            }
+                            _showGifResult(blob, 'tc-atlas-rt-orbit-' + fnTs + '.gif');
                         }
                         finish();
                     });
@@ -2703,7 +2684,6 @@
                 requestAnimationFrame(captureOne);
             }).catch(function (e) {
                 console.warn('[rt orbit gif] worker failed', e);
-                if (gifTab && !gifTab.closed) try { gifTab.close(); } catch (er) {}
                 finish();
             });
         });
@@ -21578,7 +21558,9 @@
             // canvas (html2canvas can't read it — it's composited separately
             // below) + the status bar (position:fixed, would land over the
             // graticule's south edge).
-            return window.html2canvas(node, {
+            // Overlays only — race against a timeout so a mobile html2canvas hang
+            // can't wedge the export (proceed GL-only if it doesn't finish).
+            var _overlayP = window.html2canvas(node, {
                 useCORS: true,
                 allowTaint: false,
                 backgroundColor: null,
@@ -21588,13 +21570,17 @@
                     return (el.classList && el.classList.contains('maplibregl-canvas'))
                         || el.id === 'ir-status-bar';
                 }
-            });
+            }).catch(function () { return null; });
+            var _overlayTimeout = new Promise(function (r) { setTimeout(function () { r(null); }, 5000); });
+            return Promise.race([_overlayP, _overlayTimeout]);
         }).then(function (overlay) {
             return new Promise(function (resolve, reject) {
                 // Composite: GL base (satellite + radar + GL vector layers) first,
                 // DOM/vector overlays on top. html2canvas alone dropped the WebGL
                 // satellite/radar, leaving washed-out figures.
-                var outW = overlay.width, outH = overlay.height;
+                var dpr = window.devicePixelRatio || 1;
+                var outW = overlay ? overlay.width : (glCanvas ? glCanvas.width : Math.round((node ? node.offsetWidth : 800) * dpr));
+                var outH = overlay ? overlay.height : (glCanvas ? glCanvas.height : Math.round((node ? node.offsetHeight : 600) * dpr));
                 var comp = document.createElement('canvas');
                 comp.width = outW; comp.height = outH;
                 var cctx = comp.getContext('2d');
@@ -21602,7 +21588,7 @@
                 if (glCanvas) {
                     try { cctx.drawImage(glCanvas, 0, 0, glCanvas.width, glCanvas.height, 0, 0, outW, outH); } catch (e) {}
                 }
-                try { cctx.drawImage(overlay, 0, 0); } catch (e) {}
+                if (overlay) { try { cctx.drawImage(overlay, 0, 0); } catch (e) {} }
                 comp.toBlob(function (blob) {
                     if (!blob) return reject(new Error('Canvas produced no blob (likely CORS taint)'));
                     resolve(blob);
@@ -21714,7 +21700,11 @@
             var workerUrl = res[1];
             // Overlays don't change across frames → capture once. Transparent bg,
             // and skip the GL canvas (drawn separately) + the export chrome.
-            return window.html2canvas(node, {
+            // NEVER let html2canvas block: on mobile it can hang on a complex DOM
+            // (the old symptom: stuck at "Recording GIF…"). Race it against a
+            // timeout — if it doesn't finish, proceed GL-only (satellite + radar
+            // still render; the DOM overlays are just omitted).
+            var _overlayP = window.html2canvas(node, {
                 backgroundColor: null, useCORS: true, allowTaint: false,
                 logging: false, scale: capScale,
                 ignoreElements: function (el) {
@@ -21723,7 +21713,9 @@
                         || el.id === 'ir-global-export-menu'
                         || el.id === 'rt-mapgif-prog';
                 }
-            }).then(function (overlay) {
+            }).catch(function () { return null; });
+            var _overlayTimeout = new Promise(function (r) { setTimeout(function () { r(null); }, 5000); });
+            return Promise.race([_overlayP, _overlayTimeout]).then(function (overlay) {
                 var gif = new window.GIF({
                     workers: Math.max(2, Math.min(6, navigator.hardwareConcurrency || 4)),
                     quality: 20, width: outW, height: outH,
@@ -21735,7 +21727,7 @@
                     _grabGL(function () {
                         cctx.clearRect(0, 0, outW, outH);
                         try { cctx.drawImage(glCanvas, 0, 0, glCanvas.width, glCanvas.height, 0, 0, outW, outH); } catch (e) {}
-                        try { cctx.drawImage(overlay, 0, 0, overlay.width, overlay.height, 0, 0, outW, outH); } catch (e) {}
+                        if (overlay) { try { cctx.drawImage(overlay, 0, 0, overlay.width, overlay.height, 0, 0, outW, outH); } catch (e) {} }
                         gif.addFrame(cctx, { delay: delayMs, copy: true });
                         i++;
                         _setProg('◉ Capturing · ' + i + '/' + nFrames, Math.round(i / nFrames * 60));
@@ -26906,28 +26898,9 @@
         toast.textContent = 'GIF · capturing 0/' + exportFrames.length;
         node.appendChild(toast);
 
-        // iOS Safari blocks window.open() (and rejects navigator.share() with
-        // NotAllowedError) when called from an async callback that has lost the
-        // tap's transient activation. The GIF encode is async (~several seconds),
-        // so delivering in the 'finished' handler is always too late. Defeat
-        // this by opening the destination tab NOW — synchronously, inside the
-        // tap — and merely navigating it to the blob URL once encoding finishes.
-        var ua = navigator.userAgent || '';
-        var isIOS = /iP(hone|od|ad)/.test(ua) ||
-                    (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
-        var gifTab = null;
-        if (isIOS) {
-            gifTab = window.open('', '_blank');
-            if (gifTab && gifTab.document) {
-                gifTab.document.write(
-                    '<title>TC-ATLAS animation</title>' +
-                    '<body style="margin:0;background:#0a0c12;color:#e2e8f0;' +
-                    'font:600 14px/1.4 -apple-system,system-ui,sans-serif;' +
-                    'display:flex;align-items:center;justify-content:center;' +
-                    'height:100vh">Encoding GIF… the animation will appear here ' +
-                    'when ready (long-press to save or copy).</body>');
-            }
-        }
+        // No pre-opened tab: encode in THIS window and deliver via the in-page
+        // result modal on finish (_showGifResult) — fresh tap activation on its
+        // Save button makes the share/download work without popup-blocking.
 
         Promise.all([_ensureHtml2canvas(), _ensureGifWorker()]).then(function (_setup) {
             var gifWorkerUrl = _setup[1];
@@ -26962,19 +26935,9 @@
                 toast.textContent = 'GIF · encoding ' + Math.round(pct * 100) + '%';
             });
             gif.on('finished', function (blob) {
-                // Deliver. On iOS, navigate the tab we pre-opened inside the
-                // original tap (window.open() here would be popup-blocked, and
-                // share() would throw NotAllowedError — both because the tap's
-                // activation expired during the async encode). Showing the raw
-                // GIF in a tab lets the user long-press → Save Image / Copy.
-                // Desktop (and the popup-blocked edge case) keep _saveImageBlob.
-                if (gifTab && !gifTab.closed) {
-                    var gifUrl = URL.createObjectURL(blob);
-                    gifTab.location.href = gifUrl;
-                    setTimeout(function () { URL.revokeObjectURL(gifUrl); }, 60000);
-                } else {
-                    _saveImageBlob(blob, currentStormId + '_animation.gif');
-                }
+                // Deliver via the in-page result modal (Save button has fresh
+                // tap activation → share/download works without popup-blocking).
+                _showGifResult(blob, currentStormId + '_animation.gif');
                 // Restore track, animation state, and remove toast.
                 _irRestoreTrackAfterExport(hiddenTrackGif);
                 state.showFn(savedIndex);
