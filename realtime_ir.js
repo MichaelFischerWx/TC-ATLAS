@@ -2015,28 +2015,37 @@
         img.onerror = function () { cb(null); };
         img.src = url;
     }
-    function _inspectAt(lat, lon, clientX, clientY) {
-        if (!_mosaicTs) return;
+    // Sample the global IR mosaic at (lat, lon) and invert to Tb (Kelvin).
+    // Map-agnostic — samples tiles by URL, so both the global map inspect
+    // and the storm-detail hover use it. cb(tb) or cb(null) if no data.
+    function _mosaicTbAt(lat, lon, cb) {
+        if (!_mosaicTs) { cb(null); return; }
         lon = ((lon + 180) % 360 + 360) % 360 - 180;   // normalize world-copy lng
         // z4 is the global base's deepest level = full native IR resolution (512px
         // tiles == the 8192² render). z5/z6 only exist over active storms.
         var z = 4, n = Math.pow(2, z), latR = lat * Math.PI / 180;
         var xw = (lon + 180) / 360 * n;
         var yw = (1 - Math.log(Math.tan(latR) + 1 / Math.cos(latR)) / Math.PI) / 2 * n;
-        if (yw < 0 || yw >= n) { _inspectHideTip(); return; }
+        if (yw < 0 || yw >= n) { cb(null); return; }
         var tx = Math.floor(xw), ty = Math.floor(yw);
         var px = Math.min(511, Math.floor((xw - tx) * 512)), py = Math.min(511, Math.floor((yw - ty) * 512));
         _inspectSampleTile(z, tx, ty, function (rec) {
-            if (!rec || !rec.cx) { _inspectHideTip(); return; }
+            if (!rec || !rec.cx) { cb(null); return; }
             var d = rec.cx.getImageData(px, py, 1, 1).data;
             var tb;
             if (_IR2A) {                                    // idx tile: R = idx (L-mode → opaque)
-                if (d[0] === 0) { _inspectHideTip(); return; }   // idx 0 = no-data sentinel
+                if (d[0] === 0) { cb(null); return; }        // idx 0 = no-data sentinel
                 tb = 310 - (d[0] / 255) * 120;              // exact idx → Tb
             } else {
-                if (d[3] < 10) { _inspectHideTip(); return; }    // off-disk / no data
+                if (d[3] < 10) { cb(null); return; }         // off-disk / no data
                 tb = _irRgbToTb(d[0], d[1], d[2]).tb;
             }
+            cb(tb);
+        });
+    }
+    function _inspectAt(lat, lon, clientX, clientY) {
+        _mosaicTbAt(lat, lon, function (tb) {
+            if (tb == null) { _inspectHideTip(); return; }
             _inspectShowTip(clientX, clientY, tb);
         });
     }
@@ -21220,33 +21229,53 @@
         }
     }
 
-    /** Detail-map env hover: sample each active layer's data canvas at the
-     *  cursor and show the shared readout tooltip. Mirrors the global map's
-     *  handler but reads _detailEnvActive. No-ops when nothing is active. */
+    /** Detail-map hover readout: IR brightness temperature at the cursor by
+     *  default (same mosaic-LUT inversion the global map uses), plus any
+     *  active analysis-layer values. One tooltip; on by default. Throttled
+     *  ~40 ms like the global inspect. */
+    var _detailHoverThrottle = false;
     function _detailEnvHoverMove(e) {
+        if (!e.latlng) { _hideEnvHoverTip(); return; }
+        if (_detailHoverThrottle) return;
+        _detailHoverThrottle = true;
+        setTimeout(function () { _detailHoverThrottle = false; }, 40);
+
+        var lat = e.latlng.lat, lon = e.latlng.lng;
+        // Env-layer values (synchronous canvas sampling).
+        var envLines = [];
         var actives = Object.keys(_detailEnvActive).map(function (k) { return _detailEnvActive[k]; });
-        if (!actives.length) { _hideEnvHoverTip(); return; }
-        var lat = e.latlng.lat, lon = e.latlng.lng, lines = [];
         for (var i = 0; i < actives.length; i++) {
             var v = _sampleEnvLayer(actives[i], lat, lon);
             if (v == null) continue;
             var L_ = actives[i].layer;
             var span = L_.vmax - L_.vmin;
             var nd = span >= 50 ? 0 : (span >= 10 ? 1 : 2);
-            lines.push('<b>' + L_.title + ':</b> ' + v.toFixed(nd) + ' ' + L_.units);
+            envLines.push('<b>' + L_.title + ':</b> ' + v.toFixed(nd) + ' ' + L_.units);
         }
-        var tip = _envHoverTipEl();
-        if (!lines.length) { tip.style.display = 'none'; return; }
-        lines.push('<span style="color:#94a3b8;font-size:0.62rem;">'
-            + lat.toFixed(1) + '°' + (lat >= 0 ? 'N' : 'S')
-            + ' ' + Math.abs(lon).toFixed(1) + '°' + (lon >= 0 ? 'E' : 'W') + '</span>');
-        tip.innerHTML = lines.join('<br>');
         var pt = e.originalEvent;
-        if (pt) {
-            tip.style.left = (pt.clientX + 14) + 'px';
-            tip.style.top = (pt.clientY + 14) + 'px';
-            tip.style.display = '';
-        }
+        var wantTb = (typeof productMode === 'undefined' || productMode === 'eir');
+        // IR Tb is async (mosaic tile sample); render once it resolves so the
+        // Tb line leads the tooltip. Skip the Tb sample for Vis/WV products.
+        var render = function (tb) {
+            var lines = [];
+            if (tb != null) {
+                lines.push('<b>IR:</b> ' + tb.toFixed(0) + ' K · ' + (tb - 273.15).toFixed(0) + ' °C');
+            }
+            lines = lines.concat(envLines);
+            var tip = _envHoverTipEl();
+            if (!lines.length) { tip.style.display = 'none'; return; }
+            lines.push('<span style="color:#94a3b8;font-size:0.62rem;">'
+                + lat.toFixed(1) + '°' + (lat >= 0 ? 'N' : 'S')
+                + ' ' + Math.abs(lon).toFixed(1) + '°' + (lon >= 0 ? 'E' : 'W') + '</span>');
+            tip.innerHTML = lines.join('<br>');
+            if (pt) {
+                tip.style.left = (pt.clientX + 14) + 'px';
+                tip.style.top = (pt.clientY + 14) + 'px';
+                tip.style.display = '';
+            }
+        };
+        if (wantTb) _mosaicTbAt(lat, lon, render);
+        else render(null);
     }
 
     window._irDetailToggleEnvLayer = function (name) {
