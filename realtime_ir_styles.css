@@ -1038,6 +1038,54 @@ html, body { margin: 0; padding: 0; }
     border-radius: 5px;
     pointer-events: none;
 }
+/* Active analysis-layer colorbars, stacked bottom-right of the imagery. */
+.ir-detail-env-cbars {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    z-index: 500;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 200px;
+    max-height: 55%;
+    overflow-y: auto;
+    padding: 8px 10px;
+    background: rgba(15, 22, 35, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    backdrop-filter: blur(4px);
+}
+.ir-detail-cbar-item { font-family: 'DM Sans', sans-serif; color: #c7d2e0; }
+.ir-detail-cbar-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.62rem;
+    margin-bottom: 3px;
+}
+.ir-detail-cbar-units {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: #94a3b8;
+}
+.ir-detail-cbar-grad {
+    width: 100%;
+    height: 8px;
+    border-radius: 2px;
+}
+.ir-detail-cbar-ticks {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.52rem;
+    color: #94a3b8;
+    margin-top: 1px;
+}
+@media (max-width: 768px) {
+    .ir-detail-env-cbars { max-width: 150px; padding: 6px 7px; }
+}
 /* US Radar overlay toggle — a sibling pill of the ⛰3D / Microwave toggles in
    the global-map control bar. Mirrors .ir-3d-mode-btn; green (reflectivity)
    active state so it reads as an overlay, not a base product. */

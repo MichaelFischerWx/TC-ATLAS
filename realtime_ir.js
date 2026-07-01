@@ -21340,6 +21340,61 @@
             if (capTxt) { cap.textContent = capTxt; cap.style.display = ''; }
             else { cap.style.display = 'none'; }
         }
+        _renderDetailEnvColorbar();
+    }
+
+    /** Colorbars for the active detail env layers, stacked bottom-right of
+     *  the storm-detail imagery (mirrors the global map's _renderEnvColorbar).
+     *  Discrete swatches for contour layers with levels; gradient otherwise.
+     *  Wind barbs have no continuous scale, so they're skipped. */
+    function _renderDetailEnvColorbar() {
+        var box = document.getElementById('ir-detail-env-cbars');
+        if (!box) return;
+        var active = Object.keys(_detailEnvActive)
+            .map(function (k) { return _detailEnvActive[k]; })
+            .filter(function (e) { return e && e.overlayKind !== 'wind'; });
+        if (!active.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+        box.style.display = '';
+        var html = '';
+        for (var i = 0; i < active.length; i++) {
+            var L_ = active[i].layer;
+            var lvls = L_.levels, lvlColors = L_.level_colors;
+            var xBtn = '<button class="env-cbar-x" onclick="window._irDetailToggleEnvLayer(\'' + L_.name + '\')" '
+                + 'title="Remove ' + L_.title + '" aria-label="Remove ' + L_.title + '">&times;</button>';
+            var head = '<div class="ir-detail-cbar-head"><span>' + L_.title + '</span>'
+                + '<span class="ir-detail-cbar-units">' + (L_.units || '') + xBtn + '</span></div>';
+            var useSwatches = lvls && lvls.length && lvlColors
+                && lvlColors.length === lvls.length && lvls.length <= _ENV_CBAR_MAX_SWATCHES;
+            if (useSwatches) {
+                var sw = '';
+                for (var k = 0; k < lvls.length; k++) {
+                    sw += '<div style="display:flex;flex-direction:column;align-items:center;">'
+                        + '<div style="width:15px;height:12px;background:rgb(' + lvlColors[k].join(',') + ');'
+                        + 'border:1px solid rgba(255,255,255,0.18);border-radius:2px;"></div>'
+                        + '<div style="font-size:0.5rem;color:#c7d2e0;margin-top:1px;">' + lvls[k] + '</div></div>';
+                }
+                html += '<div class="ir-detail-cbar-item">' + head
+                    + '<div style="display:flex;gap:3px;flex-wrap:wrap;">' + sw + '</div></div>';
+            } else {
+                var stops = L_.colorbar_stops || [];
+                var grad = stops.map(function (s) {
+                    return 'rgb(' + s.rgb.join(',') + ') ' + Math.round(s.t * 100) + '%';
+                }).join(',');
+                if (!grad && lvls && lvlColors && lvlColors.length === lvls.length) {
+                    var span = (L_.vmax - L_.vmin) || 1;
+                    grad = lvls.map(function (lvl, idx) {
+                        var t = Math.max(0, Math.min(1, (lvl - L_.vmin) / span));
+                        return 'rgb(' + lvlColors[idx].join(',') + ') ' + Math.round(t * 100) + '%';
+                    }).join(',');
+                }
+                var mid = Math.round((L_.vmin + L_.vmax) / 2);
+                html += '<div class="ir-detail-cbar-item">' + head
+                    + '<div class="ir-detail-cbar-grad" style="background:linear-gradient(to right,' + grad + ');"></div>'
+                    + '<div class="ir-detail-cbar-ticks"><span>' + L_.vmin + '</span><span>' + mid
+                    + '</span><span>' + L_.vmax + '</span></div></div>';
+            }
+        }
+        box.innerHTML = html;
     }
 
     /** Format a GFS run/valid caption from an env layer's init_cycle
