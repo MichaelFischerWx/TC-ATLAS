@@ -7350,35 +7350,68 @@ def _wl_float(s: str):
     return v
 
 
-def _parse_weatherlab_size(cols: list) -> dict:
-    """Extract RMW + R34/R50/R64 quadrant radii (km) from a WeatherLab CSV row.
+def _wl_colmap(header: list) -> dict:
+    """Map WeatherLab CSV columns by HEADER NAME rather than fixed index.
 
-    Column layout (0-indexed):
-        9: radius_of_maximum_winds_km
-        10–13: R34 NE/SE/SW/NW
-        14–17: R50 NE/SE/SW/NW
-        18–21: R64 NE/SE/SW/NW
+    DeepMind added a `lead_time_hours` column, which shifted every field by
+    one and silently mismapped lat/lon/MSLP/wind/radii under the old
+    fixed-index parser (lat←lead_hours, lon←lat, pres←lon, wind←MSLP). Mapping
+    by name is robust against future column additions.
+    """
+    idx = {h.strip().lower(): i for i, h in enumerate(header)}
 
-    Returns a flat dict suitable for json.dumps; missing columns are skipped.
-    rmw_km, r34_ne_km/se/sw/nw_km, r50_*, r64_*. Also includes a mean
-    radius per threshold (`r34_mean_km`, etc.) for compact UI summaries —
-    None if all four quadrants missing.
+    def first(*names):
+        for n in names:
+            if n in idx:
+                return idx[n]
+        return None
+
+    m = {
+        "lat": first("lat", "latitude"),
+        "lon": first("lon", "longitude"),
+        "mslp": first("minimum_sea_level_pressure_hpa", "mslp",
+                      "min_sea_level_pressure_hpa"),
+        "wind": first("maximum_sustained_wind_speed_knots", "max_wind_kt",
+                      "maximum_sustained_wind_kt"),
+        "lead_h": first("lead_time_hours"),
+        "lead_str": first("lead_time"),
+        "rmw": first("radius_of_maximum_winds_km", "rmw_km"),
+    }
+    for thr in (34, 50, 64):
+        for q in ("ne", "se", "sw", "nw"):
+            m[f"r{thr}_{q}"] = first(f"radius_{thr}_knot_winds_{q}_km")
+    return m
+
+
+def _wl_cell(cols: list, i, ndigits: int = None):
+    """Value at column index `i` (from a colmap), or None if absent/blank."""
+    if i is None or i >= len(cols):
+        return None
+    s = cols[i].strip()
+    if not s:
+        return None
+    v = _wl_float(s)
+    if v is None:
+        return None
+    return round(v, ndigits) if ndigits is not None else v
+
+
+def _parse_weatherlab_size(cols: list, cmap: dict) -> dict:
+    """Extract RMW + R34/R50/R64 quadrant radii (km) from a WeatherLab CSV row,
+    mapping columns by header name (see _wl_colmap). Missing columns skipped.
+    Includes a mean radius per threshold (`r34_mean_km`, etc.), None if all
+    four quadrants missing.
     """
     out: dict = {}
-    if len(cols) > 9:
-        rmw = _wl_float(cols[9])
-        if rmw is not None:
-            out["rmw_km"] = round(rmw, 1)
-    for thresh, base in [(34, 10), (50, 14), (64, 18)]:
-        quads = ["ne", "se", "sw", "nw"]
+    rmw = _wl_cell(cols, cmap.get("rmw"), 1)
+    if rmw is not None:
+        out["rmw_km"] = rmw
+    for thresh in (34, 50, 64):
         vals = []
-        for i, q in enumerate(quads):
-            idx = base + i
-            if idx >= len(cols):
-                continue
-            v = _wl_float(cols[idx])
+        for q in ("ne", "se", "sw", "nw"):
+            v = _wl_cell(cols, cmap.get(f"r{thresh}_{q}"), 1)
             if v is not None:
-                out[f"r{thresh}_{q}_km"] = round(v, 1)
+                out[f"r{thresh}_{q}_km"] = v
                 vals.append(v)
         if vals:
             out[f"r{thresh}_mean_km"] = round(sum(vals) / len(vals), 1)
@@ -7426,11 +7459,13 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
     # Parse ensemble CSV
     result: dict = {}
     header = None
+    cmap: dict = {}
     for line in ens_text.splitlines():
         if line.startswith("#") or not line.strip():
             continue
         if header is None:
             header = [h.strip() for h in line.split(",")]
+            cmap = _wl_colmap(header)
             continue
 
         cols = line.split(",")
@@ -7444,19 +7479,24 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
         except (ValueError, TypeError):
             continue
 
-        tau = _parse_lead_time(cols[4])
-        try:
-            lat = round(float(cols[5]), 2)
-            lon = round(float(cols[6]), 2)
-            pres = round(float(cols[7]), 1) if cols[7].strip() else None
-            wind = round(float(cols[8]), 1) if cols[8].strip() else None
-        except (ValueError, IndexError):
+        # tau: prefer the numeric lead_time_hours column; else parse the
+        # "N days HH:MM:SS" lead_time string.
+        if cmap.get("lead_h") is not None:
+            tau = _wl_cell(cols, cmap["lead_h"])
+        else:
+            tau = _parse_lead_time(cols[cmap.get("lead_str", 4)])
+        if tau is None:
+            continue
+        lat = _wl_cell(cols, cmap.get("lat"), 2)
+        lon = _wl_cell(cols, cmap.get("lon"), 2)
+        pres = _wl_cell(cols, cmap.get("mslp"), 1)
+        wind = _wl_cell(cols, cmap.get("wind"), 1)
+        if lat is None or lon is None:
             continue
 
         point = {"tau": tau, "lat": lat, "lon": lon, "wind": wind, "pres": pres}
-        # Parse storm-size columns (cols 9-21): RMW + R34/R50/R64 per quadrant.
-        # NaN/empty values land as None. nm conversion left to the frontend.
-        _size = _parse_weatherlab_size(cols)
+        # RMW + R34/R50/R64 per quadrant, mapped by header name.
+        _size = _parse_weatherlab_size(cols, cmap)
         if _size:
             point.update(_size)
 
@@ -7473,12 +7513,14 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
     try:
         mean_resp = _weatherlab_http().get(mean_url, timeout=20)
         if mean_resp.status_code == 200:
+            mean_cmap: dict = {}
             mean_header = None
             for line in mean_resp.text.splitlines():
                 if line.startswith("#") or not line.strip():
                     continue
                 if mean_header is None:
-                    mean_header = True
+                    mean_header = [h.strip() for h in line.split(",")]
+                    mean_cmap = _wl_colmap(mean_header)
                     continue
 
                 cols = line.split(",")
@@ -7486,13 +7528,17 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
                     continue
 
                 track_id = cols[1].strip()
-                tau = _parse_lead_time(cols[4])
-                try:
-                    lat = round(float(cols[5]), 2)
-                    lon = round(float(cols[6]), 2)
-                    pres = round(float(cols[7]), 1) if cols[7].strip() else None
-                    wind = round(float(cols[8]), 1) if cols[8].strip() else None
-                except (ValueError, IndexError):
+                if mean_cmap.get("lead_h") is not None:
+                    tau = _wl_cell(cols, mean_cmap["lead_h"])
+                else:
+                    tau = _parse_lead_time(cols[mean_cmap.get("lead_str", 4)])
+                if tau is None:
+                    continue
+                lat = _wl_cell(cols, mean_cmap.get("lat"), 2)
+                lon = _wl_cell(cols, mean_cmap.get("lon"), 2)
+                pres = _wl_cell(cols, mean_cmap.get("mslp"), 1)
+                wind = _wl_cell(cols, mean_cmap.get("wind"), 1)
+                if lat is None or lon is None:
                     continue
 
                 if track_id in result:
@@ -7500,7 +7546,7 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
                         result[track_id]["ensemble_mean"] = {"points": []}
                     pt = {"tau": tau, "lat": lat, "lon": lon,
                           "wind": wind, "pres": pres}
-                    _size = _parse_weatherlab_size(cols)
+                    _size = _parse_weatherlab_size(cols, mean_cmap)
                     if _size:
                         pt.update(_size)
                     result[track_id]["ensemble_mean"]["points"].append(pt)
@@ -10515,12 +10561,14 @@ def _fetch_weatherlab_large_csv(date_str: str, hour_str: str,
     # Per-member time series: {track_id: {member_int: {tau: {wind, pres}}}}
     member_series: dict = {}
     header_seen = False
+    lcmap: dict = {}
 
     for line in resp.iter_lines(decode_unicode=True):
         if not line or line.startswith("#"):
             continue
         if not header_seen:
             header_seen = True
+            lcmap = _wl_colmap([h.strip() for h in line.split(",")])
             continue
 
         cols = line.split(",")
@@ -10533,11 +10581,17 @@ def _fetch_weatherlab_large_csv(date_str: str, hour_str: str,
 
         try:
             member = int(float(cols[2].strip()))
-            tau = _parse_lead_time(cols[4])
-            wind = round(float(cols[8]), 1) if cols[8].strip() else None
-            pres = round(float(cols[7]), 1) if cols[7].strip() else None
         except (ValueError, IndexError):
             continue
+        # Header-name mapping (same off-by-one fix as _fetch_weatherlab_csv).
+        if lcmap.get("lead_h") is not None:
+            tau = _wl_cell(cols, lcmap["lead_h"])
+        else:
+            tau = _parse_lead_time(cols[lcmap.get("lead_str", 4)])
+        if tau is None:
+            continue
+        wind = _wl_cell(cols, lcmap.get("wind"), 1)
+        pres = _wl_cell(cols, lcmap.get("mslp"), 1)
 
         if track_id not in member_series:
             member_series[track_id] = {}
