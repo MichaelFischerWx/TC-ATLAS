@@ -10700,7 +10700,7 @@ _SHEAR_CACHE_TTL = 6 * 3600    # 6 hours; one GFS cycle
 # and supports the Davis-Ahijevych Helmholtz method as an opt-in.
 # Cache key includes method + params so SHIPS, env-profile, and
 # Helmholtz-tuned variants don't cross-pollinate.
-_SHEAR_CACHE_VER = "env-v3"
+_SHEAR_CACHE_VER = "env-v4"   # v4: payload now carries chi_inputs + ventilation (VI)
 _shear_mem_cache: dict = {}    # (atcf_id, cycle_iso, params_key) → {data, ts}
 _shear_mem_lock = threading.Lock()
 _SHEAR_MEM_MAX = 200
