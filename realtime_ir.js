@@ -8704,6 +8704,8 @@
 
         // Sync radar overlay scan to new frame time
         _rtUpdateRadarForFrame();
+        // Re-align any draped env analysis to the shown frame's valid time.
+        _detailEnvSyncToFrame();
     }
 
     /** Find the position of animIndex within validFrames (or -1) */
@@ -21152,6 +21154,21 @@
             };
             img.src = layer.data_url;
         }
+        // Fetch the per-hour index so the overlay can time-match the shown
+        // satellite frame. Shows the "latest" urls immediately; snaps to the
+        // nearest forecast hour once the index loads.
+        var idxUrl = _detailEnvIndexUrl(layer);
+        if (idxUrl) {
+            fetch(idxUrl, { cache: 'no-store' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (j) {
+                    if (!j || !_detailEnvActive[layer.name]) return;
+                    entry.hours = (j.forecast_hours || []).filter(function (h) { return h.valid_time; });
+                    _detailEnvSyncOne(entry, true);
+                    _updateDetailLayersCount();
+                })
+                .catch(function () {});
+        }
         _updateDetailLayersCount();
         _ga('rt_detail_env_layer', { layer: layer.name, on: true });
     }
@@ -21201,6 +21218,99 @@
         });
     }
 
+    // ── Frame-aligned env overlays ───────────────────────────────────
+    // The env overlays store every forecast hour (f000–f012) in a per-layer
+    // index.json. On the storm page we pick the hour whose valid_time is
+    // nearest the DISPLAYED satellite frame, and re-pick as the loop plays,
+    // so the draped GFS field matches the imagery you're looking at (nearest-
+    // hour resolution). Raster layers swap via imageOverlay.setUrl; contour
+    // layers re-fetch the hour's GeoJSON. Wind barbs stay on latest (skipped).
+    function _detailEnvIndexUrl(layer) {
+        var u = layer && layer.image_url;
+        if (!u || u.indexOf('/env/') < 0) return null;   // only env layers ship index.json
+        return u.replace(/[^/]+$/, 'index.json');
+    }
+    function _detailCurrentFrameMs() {
+        var t = animFrameTimes[animIndex];
+        if (!t) return null;
+        var ms = Date.parse(t);
+        return isNaN(ms) ? null : ms;
+    }
+    function _detailPickHour(hours, frameMs) {
+        if (!hours || !hours.length) return null;
+        if (frameMs == null) return hours[hours.length - 1];
+        var best = null, bestD = Infinity;
+        for (var i = 0; i < hours.length; i++) {
+            var hm = Date.parse(hours[i].valid_time);
+            if (isNaN(hm)) continue;
+            var d = Math.abs(hm - frameMs);
+            if (d < bestD) { bestD = d; best = hours[i]; }
+        }
+        return best;
+    }
+    function _detailApplyHour(entry, h) {
+        if (!entry || !h) return;
+        entry.selectedFh = h.forecast_hour;
+        entry.selectedValid = h.valid_time;
+        if (entry.overlayKind === 'raster') {
+            for (var k = 0; k < entry.overlays.length; k++) {
+                if (entry.overlays[k].setUrl) entry.overlays[k].setUrl(h.image_url);
+            }
+        } else if (entry.overlayKind === 'geojson' && h.geojson_url) {
+            var gl = entry.overlays[0];
+            if (gl && gl.clearLayers) {
+                var url = h.geojson_url;
+                var p = _rtEnvGeojsonCache[url] ? Promise.resolve(_rtEnvGeojsonCache[url])
+                    : fetch(url, { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+                        .then(function (g) { _rtEnvGeojsonCache[url] = g; return g; });
+                p.then(function (g) {
+                    if (!entry.overlays || entry.selectedFh !== h.forecast_hour) return;  // superseded
+                    gl.clearLayers(); gl.addData(g);
+                    if (!window.LFLET_GL) { gl.addData(_shiftGeoJsonLon(g, 360)); gl.addData(_shiftGeoJsonLon(g, -360)); }
+                }).catch(function () {});
+            }
+        }
+        // Reload the hover data canvas from this hour's data PNG (data
+        // encoding range is fixed per layer, so entry.layer's vmin/vmax
+        // stay valid).
+        if (h.data_url) {
+            var img = new Image(); img.crossOrigin = 'anonymous';
+            img.onload = function () {
+                try {
+                    var c = document.createElement('canvas');
+                    c.width = img.naturalWidth; c.height = img.naturalHeight;
+                    var ctx = c.getContext('2d', { willReadFrequently: true });
+                    ctx.drawImage(img, 0, 0);
+                    entry.canvas = c; entry.ctx = ctx;
+                    entry.dataW = img.naturalWidth; entry.dataH = img.naturalHeight;
+                } catch (e) {}
+            };
+            img.src = h.data_url;
+        }
+    }
+    function _detailEnvSyncOne(entry, force) {
+        if (!entry || !entry.hours || !entry.hours.length) return;
+        var h = _detailPickHour(entry.hours, _detailCurrentFrameMs());
+        if (!h) return;
+        if (!force && entry.selectedFh === h.forecast_hour) return;   // unchanged hour
+        _detailApplyHour(entry, h);
+    }
+    /** Re-align every active detail env layer to the current frame's time.
+     *  Called from showFrame(); only swaps a layer's URLs when its nearest
+     *  hour actually changes (~hourly, not every frame). */
+    function _detailEnvSyncToFrame() {
+        var names = Object.keys(_detailEnvActive);
+        if (!names.length) return;
+        var changed = false;
+        for (var i = 0; i < names.length; i++) {
+            var e = _detailEnvActive[names[i]];
+            var before = e.selectedFh;
+            _detailEnvSyncOne(e);
+            if (e.selectedFh !== before) changed = true;
+        }
+        if (changed) _updateDetailLayersCount();   // refresh the valid-time caption
+    }
+
     function _updateDetailLayersCount() {
         var names = Object.keys(_detailEnvActive);
         var n = names.length;
@@ -21215,12 +21325,18 @@
         // valid time is draped.
         var cap = document.getElementById('ir-detail-layers-caption');
         if (cap) {
-            var capLayer = null;
+            var capObj = null;
             for (var i = 0; i < names.length; i++) {
-                var L_ = _detailEnvActive[names[i]].layer;
-                if (L_ && (L_.valid_time || L_.init_cycle)) { capLayer = L_; break; }
+                var ce = _detailEnvActive[names[i]];
+                var L_ = ce.layer;
+                if (!L_ || !(L_.valid_time || L_.init_cycle)) continue;
+                // Prefer the frame-selected forecast hour when present.
+                capObj = ce.selectedValid
+                    ? { init_cycle: L_.init_cycle, forecast_hour: ce.selectedFh, valid_time: ce.selectedValid }
+                    : L_;
+                break;
             }
-            var capTxt = n > 0 ? _fmtGfsRun(capLayer) : '';
+            var capTxt = n > 0 ? _fmtGfsRun(capObj) : '';
             if (capTxt) { cap.textContent = capTxt; cap.style.display = ''; }
             else { cap.style.display = 'none'; }
         }
