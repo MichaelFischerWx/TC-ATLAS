@@ -393,7 +393,42 @@
             else if (t === 'tileerror') { (this._errCbs = this._errCbs || []).push(fn); } return this; },
         once: function (t, fn) { return this.on(t, fn); },
         setOpacity: function (o) { var gl = this._map && this._map._gl; if (gl && gl.getLayer(this._id)) gl.setPaintProperty(this._id, 'raster-opacity', o); this.options.opacity = o; return this; },
-        setUrl: function (url) { this._url = url; if (this._map) { this._removeFromGL(this._map); this._addToGL(this._map); } return this; },
+        setUrl: function (url) {
+            this._url = url;
+            if (!this._map) return this;
+            var self = this, map = this._map, gl = map._gl;
+            // Prefer an in-place tiles swap: it changes the source URL without
+            // removing the layer, so stacking is preserved. A remove+re-add
+            // (the old path) re-appends this raster and — among equal-z
+            // tilePane layers — lands it ON TOP, which is how a theme swap of
+            // the CARTO basemap was burying the IR mosaic ("satellite imagery
+            // disappears on dark-mode toggle").
+            var src = gl && gl.getSource(this._id);
+            if (src && typeof src.setTiles === 'function') {
+                try { src.setTiles(this._glUrls()); return this; } catch (e) {}
+            }
+            // Fallback: capture the layer currently above this one, re-add,
+            // then move back to that original slot.
+            var beforeId = null;
+            try {
+                var ls = gl.getStyle().layers;
+                for (var i = 0; i < ls.length; i++) {
+                    if (ls[i].id === this._id) {
+                        beforeId = (i + 1 < ls.length) ? ls[i + 1].id : null; break;
+                    }
+                }
+            } catch (e2) {}
+            this._removeFromGL(map);
+            this._addToGL(map);
+            map._whenStyle(function () {
+                try {
+                    if (beforeId && gl.getLayer(self._id) && gl.getLayer(beforeId)) {
+                        gl.moveLayer(self._id, beforeId);
+                    }
+                } catch (e3) {}
+            });
+            return this;
+        },
         bringToFront: function () { return this; }
     });
 
