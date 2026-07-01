@@ -618,6 +618,127 @@ html, body { margin: 0; padding: 0; }
     cursor: pointer;
     accent-color: var(--um-green);
 }
+
+/* ── Options dropdown ─────────────────────────────────────────────
+   Consolidates the former header toggle/action buttons into one menu.
+   Toggle items keep their original IDs + .active class; the .ir-opt-dot
+   reflects on/off state so the existing state-sync JS needs no changes. */
+.ir-options-wrap {
+    position: relative;
+    display: inline-block;
+}
+.ir-options-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 1100;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    min-width: 244px;
+    max-height: 70vh;
+    overflow-y: auto;
+    box-shadow: 0 6px 24px rgba(15, 22, 36, 0.18);
+    padding: 5px;
+    font-family: 'DM Sans', sans-serif;
+}
+[data-theme="dark"] .ir-options-menu {
+    background: rgba(20, 26, 38, 0.98);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+.ir-opt-group-label {
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #94a3b8;
+    padding: 6px 10px 3px;
+}
+.ir-opt-sep {
+    height: 1px;
+    margin: 4px 6px;
+    background: rgba(100, 116, 139, 0.18);
+}
+.ir-opt-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 7px 10px;
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    text-align: left;
+    cursor: pointer;
+    color: var(--text);
+    opacity: 1;           /* override the legacy :not(.active) dimming */
+    transition: background 0.12s;
+}
+.ir-opt-item:hover {
+    background: rgba(74, 155, 110, 0.12);
+}
+[data-theme="dark"] .ir-opt-item:hover {
+    background: rgba(74, 155, 110, 0.20);
+}
+.ir-opt-item:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+.ir-opt-item:disabled:hover { background: transparent; }
+.ir-opt-item.active {
+    background: rgba(74, 155, 110, 0.10);
+}
+/* State dot: hollow when off, filled green when on. */
+.ir-opt-dot {
+    flex: 0 0 auto;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 1.5px solid #94a3b8;
+    background: transparent;
+    transition: background 0.12s, border-color 0.12s;
+}
+.ir-opt-item.active .ir-opt-dot {
+    background: var(--um-green);
+    border-color: var(--um-green);
+    box-shadow: 0 0 5px rgba(74, 155, 110, 0.6);
+}
+.ir-opt-dot-blank {          /* action items — keep alignment, no state */
+    border-color: transparent;
+}
+.ir-opt-ic {
+    flex: 0 0 auto;
+    display: inline-flex;
+    color: var(--um-green);
+}
+.ir-opt-ic svg {
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+/* Loop-only glyph is a filled play triangle. */
+.ir-opt-ic svg polygon { fill: currentColor; stroke: none; }
+.ir-opt-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.ir-opt-title {
+    font-size: 0.82rem;
+    font-weight: 600;
+    line-height: 1.2;
+}
+.ir-opt-desc {
+    font-size: 0.68rem;
+    color: #64748b;
+    margin-top: 1px;
+}
+[data-theme="dark"] .ir-opt-desc { color: #94a3b8; }
 .ir-chart-save-btn {
     display: inline-flex;
     align-items: center;
@@ -817,6 +938,88 @@ html, body { margin: 0; padding: 0; }
 }
 .ir-product-btn.ir-loading {
     color: #fbbf24;
+}
+
+/* ── Storm-detail env Layers control ─────────────────────────────
+   Sits top-right under the product toggle; opens a compact grouped
+   menu of GFS/OISST analyses to drape over the zoomed storm view. */
+.ir-detail-layers {
+    position: absolute;
+    top: 46px;
+    right: 10px;
+    z-index: 500;
+}
+.ir-detail-layers-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: #8993a4;
+    background: rgba(255, 255, 255, 0.85);
+    border: 1px solid var(--border-light);
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+}
+.ir-detail-layers-btn svg {
+    width: 13px; height: 13px; fill: none; stroke: currentColor;
+    stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+}
+.ir-detail-layers-btn svg polygon { fill: currentColor; stroke: none; }
+.ir-detail-layers-btn:hover { background: rgba(30, 60, 110, 0.9); color: #c0d0ea; }
+.ir-detail-layers-btn.active { background: rgba(74, 155, 110, 0.25); color: #60a5fa; }
+.ir-detail-layers-count {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 15px; height: 15px; padding: 0 4px;
+    font-size: 0.6rem; font-weight: 700; line-height: 1;
+    color: #fff; background: var(--um-green); border-radius: 999px;
+}
+.ir-detail-layers-menu {
+    position: absolute;
+    top: calc(100% + 5px);
+    right: 0;
+    width: 236px;
+    max-height: 62vh;
+    overflow-y: auto;
+    background: rgba(20, 26, 38, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+    padding: 8px;
+    font-family: 'DM Sans', sans-serif;
+    color: #e2e8f0;
+}
+.ir-dl-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 0.74rem; font-weight: 700; color: #cbd5e1;
+    padding-bottom: 6px; margin-bottom: 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.ir-dl-valid { font-size: 0.6rem; font-weight: 600; color: #7c8aa0; }
+.ir-dl-group {
+    font-size: 0.6rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.07em; color: #7c8aa0; margin: 8px 0 3px;
+}
+.ir-dl-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 4px; border-radius: 5px; cursor: pointer;
+    font-size: 0.76rem; color: #e2e8f0;
+}
+.ir-dl-row:hover { background: rgba(74, 155, 110, 0.18); }
+.ir-dl-row input { margin: 0; cursor: pointer; accent-color: var(--um-green); flex: 0 0 auto; }
+.ir-dl-empty { font-size: 0.72rem; color: #94a3b8; padding: 6px 4px; }
+.ir-dl-opacity {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+.ir-dl-opacity label { font-size: 0.7rem; color: #94a3b8; }
+.ir-dl-opacity input { flex: 1; accent-color: var(--um-green); }
+.ir-dl-note {
+    font-size: 0.62rem; color: #7c8aa0; line-height: 1.4; margin-top: 6px;
 }
 /* US Radar overlay toggle — a sibling pill of the ⛰3D / Microwave toggles in
    the global-map control bar. Mirrors .ir-3d-mode-btn; green (reflectivity)
@@ -1280,6 +1483,79 @@ html, body { margin: 0; padding: 0; }
     color: var(--text);
 }
 
+/* ── Environmental favorability dashboard ─────────────────────────
+   Thin meter bars under Storm Info. Fill LENGTH = favorability (0→1),
+   fill COLOR = favorable / marginal / hostile (set inline by JS). */
+.ir-fav-dash {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+.ir-fav-heading {
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #94a3b8;
+}
+.ir-fav-meter { display: flex; flex-direction: column; gap: 4px; }
+.ir-fav-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+}
+.ir-fav-label {
+    font-size: 0.76rem;
+    color: #8993a4;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+.ir-fav-sub {
+    font-size: 0.66rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    margin-left: 5px;
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.16);
+    color: #94a3b8;
+}
+.ir-fav-sub.warm { background: rgba(226, 96, 63, 0.16); color: #e2603f; }
+.ir-fav-sub.cool { background: rgba(56, 132, 214, 0.16); color: #4c86d6; }
+.ir-fav-val {
+    font-size: 0.82rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+}
+.ir-fav-bar {
+    position: relative;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.20);
+    overflow: hidden;
+}
+.ir-fav-fill {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 0%;
+    border-radius: 999px;
+    background: #94a3b8;      /* neutral until data loads; JS recolors */
+    transition: width 0.5s cubic-bezier(0.22, 0.61, 0.36, 1), background 0.35s;
+}
+.ir-fav-meter.is-empty .ir-fav-fill { width: 100%; opacity: 0.18; }
+.ir-fav-note {
+    font-size: 0.64rem;
+    color: #64748b;
+    line-height: 1.4;
+}
+[data-theme="dark"] .ir-fav-note { color: #7c8aa0; }
+
 /* ── Intensity chart ─────────────────────────────────────────── */
 .ir-intensity-chart {
     width: 100%;
@@ -1488,8 +1764,12 @@ html, body { margin: 0; padding: 0; }
     }
     /* Download dropdown anchors to its button; keep it from being
        clipped by the wrapped header. */
-    .ir-download-menu {
+    .ir-download-menu,
+    .ir-options-menu {
         z-index: 1200;
+    }
+    .ir-options-menu {
+        max-height: 60vh;
     }
 
     .ir-product-toggle button {

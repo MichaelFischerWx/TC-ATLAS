@@ -2951,10 +2951,18 @@
         } catch (e) {}
     }
 
+    // Retired: the global map now renders our own R2 idx mosaic, not NASA GIBS
+    // tiles, so a "GIBS feed delayed" notice no longer describes what the user
+    // is looking at — it's a relic of the old GIBS workflow and just a
+    // distraction. The staleGIBSSats backfill logic stays (still used by any
+    // GIBS fallback paths); flip this to re-enable the user-facing banner.
+    var _FEED_BANNER_ENABLED = false;
+
     function _updateFeedStalenessBanner(staleSats) {
         var el = document.getElementById('ir-feed-banner');
         var txt = document.getElementById('ir-feed-banner-text');
         if (!el || !txt) return;
+        if (!_FEED_BANNER_ENABLED) { el.style.display = 'none'; return; }
         if (!staleSats || staleSats.length === 0) {
             el.style.display = 'none';
             return;
@@ -7062,6 +7070,10 @@
 
         // Destroy old mini-map if exists
         cleanupFrameLayers();
+        // Env overlays belong to the outgoing map instance — drop them (and
+        // close the menu) before the map is torn down / rebuilt.
+        _detailClearEnvLayers();
+        if (typeof window._irCloseDetailLayers === 'function') window._irCloseDetailLayers();
         if (detailMap) {
             detailMap.remove();
             detailMap = null;
@@ -7587,6 +7599,113 @@
     var _rtEnvCache = {};
     var _rtCoreShearCache = {};    // Helmholtz 0–400 km core shear per storm
     var _rtShearProfileCache = {}; // /shear-profile (Helmholtz by-layer) per storm
+    var _rtOceanCache = {};        // /ocean (OISST SST + AOML TCHP) per storm
+
+    // ── Environmental favorability meters (Storm Info dashboard) ──────
+    // Each metric maps to { frac: 0..1 favorability, color } so the bar's
+    // LENGTH reads as "how supportive" and its COLOR flags the threshold
+    // band. Thresholds are the textbook TC-intensification values.
+    var _FAV_GOOD = '#3fb27f';     // favorable  (green, ~um-green family)
+    var _FAV_MARGINAL = '#e6a53a'; // marginal   (amber)
+    var _FAV_HOSTILE = '#e2603f';  // hostile    (red)
+    function _clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
+    /** Deep-layer shear (kt) — lower is better. <10 good, 10–20 marginal, >20 hostile. */
+    function _favShear(kt) {
+        if (kt == null || isNaN(kt)) return null;
+        var frac = _clamp01((30 - kt) / 30);   // 0 kt → 1.0, 30 kt → 0.0
+        var color = kt < 10 ? _FAV_GOOD : (kt <= 20 ? _FAV_MARGINAL : _FAV_HOSTILE);
+        return { frac: frac, color: color };
+    }
+    /** SST (°C) — warmer is better. <26.5 hostile, 26.5–28.5 marginal, ≥28.5 good. */
+    function _favSst(c) {
+        if (c == null || isNaN(c)) return null;
+        var frac = _clamp01((c - 24) / 6);      // 24°C → 0, 30°C → 1.0
+        var color = c < 26.5 ? _FAV_HOSTILE : (c < 28.5 ? _FAV_MARGINAL : _FAV_GOOD);
+        return { frac: frac, color: color };
+    }
+    /** TCHP / ocean heat (kJ/cm²) — higher is better. <16 hostile, 16–50 marginal, ≥50 good (RI support). */
+    function _favOhc(v) {
+        if (v == null || isNaN(v)) return null;
+        var frac = _clamp01(v / 100);           // 0 → 0, 100 kJ/cm² → 1.0
+        var color = v < 16 ? _FAV_HOSTILE : (v < 50 ? _FAV_MARGINAL : _FAV_GOOD);
+        return { frac: frac, color: color };
+    }
+    function _favApply(meterId, valId, fav, valText) {
+        var meter = document.getElementById(meterId);
+        var valEl = document.getElementById(valId);
+        if (!meter) return;
+        var fill = meter.querySelector('.ir-fav-fill');
+        if (valEl) valEl.innerHTML = valText;
+        if (!fav) {                              // no data → muted "empty" bar
+            meter.classList.add('is-empty');
+            if (fill) { fill.style.width = '100%'; fill.style.background = ''; }
+            return;
+        }
+        meter.classList.remove('is-empty');
+        if (fill) {
+            fill.style.width = Math.round(fav.frac * 100) + '%';
+            fill.style.background = fav.color;
+        }
+    }
+    /** Repaint the three favorability meters from whatever's cached for the
+     *  current storm (shear from _rtEnvCache, SST/OHC from _rtOceanCache).
+     *  Safe to call repeatedly as each async source lands. */
+    function _rtUpdateFavMeters(atcfId) {
+        if (!atcfId || currentStormId !== atcfId) return;
+        var env = _rtEnvCache[atcfId];
+        var kt = env && env.magnitude_kt != null ? env.magnitude_kt : null;
+        _favApply('ir-fav-shear', 'ir-fav-shear-val', _favShear(kt),
+            kt != null ? Math.round(kt) + ' kt' : 'n/a');
+
+        var oc = _rtOceanCache[atcfId];
+        // SST + anomaly chip.
+        var sst = oc && oc.sst_c != null ? oc.sst_c : null;
+        _favApply('ir-fav-sst', 'ir-fav-sst-val', _favSst(sst),
+            sst != null ? sst.toFixed(1) + '°C' : (oc ? 'n/a' : '…'));
+        var anomEl = document.getElementById('ir-fav-sst-anom');
+        if (anomEl) {
+            if (oc && oc.sst_anom_c != null) {
+                var a = oc.sst_anom_c;
+                anomEl.textContent = (a >= 0 ? '+' : '') + a.toFixed(1) + '°';
+                anomEl.className = 'ir-fav-sub ' + (a >= 0 ? 'warm' : 'cool');
+                anomEl.title = 'SST anomaly vs OISST climatology';
+            } else { anomEl.textContent = ''; anomEl.className = 'ir-fav-sub'; }
+        }
+        // Ocean heat content (TCHP).
+        var ohc = oc && oc.ohc_kj_cm2 != null ? oc.ohc_kj_cm2 : null;
+        _favApply('ir-fav-ohc', 'ir-fav-ohc-val', _favOhc(ohc),
+            ohc != null ? Math.round(ohc) + ' kJ/cm²' : (oc ? 'n/a' : '…'));
+
+        // Footer note: SST source date + any coverage caveat.
+        var note = document.getElementById('ir-fav-note');
+        if (note) {
+            if (oc && oc.sst_date) {
+                var bits = ['OISST ' + oc.sst_date];
+                if (oc.ohc_date) bits.push('TCHP ' + oc.ohc_date);
+                note.textContent = bits.join(' · ');
+            } else if (oc) { note.textContent = ''; }
+        }
+    }
+    /** Fetch OISST SST/anomaly/relative + AOML TCHP at the storm center and
+     *  refresh the favorability meters. Cached per storm; quiet on failure. */
+    function _rtFetchOcean(atcfId) {
+        if (!atcfId) return;
+        if (_rtOceanCache[atcfId]) { _rtUpdateFavMeters(atcfId); return; }
+        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/ocean',
+              { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+                if (!j || currentStormId !== atcfId) return;
+                _rtOceanCache[atcfId] = j;
+                _rtUpdateFavMeters(atcfId);
+            })
+            .catch(function () {
+                if (currentStormId === atcfId) {
+                    _rtOceanCache[atcfId] = {};   // mark attempted → meters show n/a
+                    _rtUpdateFavMeters(atcfId);
+                }
+            });
+    }
 
     /** Inline arrow SVG pointing the way the shear blows. heading_deg is
      *  "toward" (0° = north = up); rotating an up-arrow clockwise by the
@@ -7620,12 +7739,18 @@
         var elCore = document.getElementById('ir-info-shear-core');
         if (!el) return;
 
+        // Kick off the ocean (SST/OHC) fetch that feeds the favorability
+        // meters, and seed them from any already-cached shear.
+        _rtFetchOcean(atcfId);
+        _rtUpdateFavMeters(atcfId);
+
         // Env (SHIPS annulus) — also drives the Skew-T / profile reveal.
         fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/shear')
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
                 if (!j || currentStormId !== atcfId) return;
                 _rtEnvCache[atcfId] = j;
+                _rtUpdateFavMeters(atcfId);
                 el.innerHTML = _shearValueHtml(j);
                 el.title = 'GFS 0.25° analysis ' + (j.gfs_cycle_utc || '') + '\n' +
                     '850–200 hPa shear, 200–800 km annulus (environmental)\n' +
@@ -8073,6 +8198,8 @@
         _rtRemoveAscatOverlay();
         _rtRemoveReconOverlay();
         _rtRemoveRadarOverlay();
+        _detailClearEnvLayers();
+        if (typeof window._irCloseDetailLayers === 'function') window._irCloseDetailLayers();
 
         // Reset product state
         cleanupVisFrameLayers();
@@ -8677,7 +8804,7 @@
 
         if (!_trimMode || n === 0) {
             // No trim mode, or the current product has no frames to trim.
-            if (btnLabel) btnLabel.textContent = 'Frames';
+            if (btnLabel) btnLabel.textContent = 'Trim range…';
             if (overlay) overlay.style.display = 'none';
             return;
         }
@@ -10372,7 +10499,7 @@
 
     /** Extract the deep-linked storm id from the URL hash. Handles both the
      *  compound form written by openStormDetail ("satellite&storm=WP062026",
-     *  optionally with loop=1/detailed=1) and the legacy bare-id form
+     *  optionally with detailed=1) and the legacy bare-id form
      *  ("WP062026"). Returns the ATCF id (upper-case) or null. */
     function _stormIdFromHash() {
         var hash = window.location.hash.replace(/^#/, '').trim();
@@ -10535,16 +10662,13 @@
 
     // ── "Loop Only" popup ───────────────────────────────────────────
     // A bare, Tropical-Tidbits-style co-moving IR animation shown as an
-    // in-page modal ON TOP of the storm detail card. Earlier this button
-    // navigated to the separate full-page Quick View (sat-quick-view /
-    // sat_quick.js), which soft-closed the card and swapped the whole tab
-    // — a jarring trip to what is now a vestigial page. The popup keeps
-    // the card mounted underneath, so closing returns to it untouched.
+    // in-page modal ON TOP of the storm detail card. The popup keeps the
+    // card mounted underneath, so closing returns to it untouched.
     //
     // Self-contained: it re-fetches the same per-frame WebP bundle the
     // card uses (GCS direct → API fallback) and cycles imageOverlay
-    // opacity at unified bounds, exactly like sat_quick.js, but on its
-    // own throwaway Leaflet map so it never touches the card's viewer.
+    // opacity at unified bounds, on its own throwaway Leaflet map so it
+    // never touches the card's viewer.
     var _loopMap = null;
     var _loopFrameLayers = [];
     var _loopAnimTimer = null;
@@ -11096,10 +11220,8 @@
         var gallery = document.getElementById('sat-gallery');
         var detail = document.getElementById('ir-detail');
         var satMain = document.getElementById('sat-main');
-        var satQuick = document.getElementById('sat-quick-view');
         if (detail) detail.style.display = 'none';
         if (satMain) satMain.style.display = 'none';
-        if (satQuick) satQuick.style.display = 'none';
         if (gallery) gallery.style.display = 'block';
         // Drop any storm= from the hash so a reload/shared link lands on the
         // gallery, not a specific card.
@@ -18540,6 +18662,15 @@
         _downloadOrOpenBlob(blob, filename);
     }
 
+    /** iOS / iPadOS detection (iPadOS masquerades as Macintosh). Used to
+     *  route async exports through the fresh-tap result modal, since iOS
+     *  drops the tap's transient activation across a long async capture. */
+    function _isIOS() {
+        var ua = navigator.userAgent || '';
+        return /iP(hone|od|ad)/.test(ua) ||
+               (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
+    }
+
     function _downloadOrOpenBlob(blob, filename) {
         var url = URL.createObjectURL(blob);
         // iOS Safari EXPOSES the <a download> property but IGNORES the
@@ -18548,9 +18679,7 @@
         // iOS, open the image in a new tab instead so the user can
         // long-press → Save Image / Copy. Everywhere else the attribute
         // works → keep the one-tap save-to-disk.
-        var ua = navigator.userAgent || '';
-        var isIOS = /iP(hone|od|ad)/.test(ua) ||
-                    (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua)); // iPadOS reports as Mac
+        var isIOS = _isIOS();   // iPadOS reports as Mac — handled in _isIOS
         var a = document.createElement('a');
         if (!isIOS && 'download' in a) {
             a.href = url;
@@ -20896,6 +21025,237 @@
         });
     }
 
+    // ══════════════════════════════════════════════════════════════
+    //  STORM-DETAIL ENV LAYERS  (GFS analyses on the zoomed view)
+    // ══════════════════════════════════════════════════════════════
+    //  A self-contained mini-Layers control for the storm-detail map. It
+    //  reuses the already-loaded env metadata (_rtEnvMetadata), the same
+    //  MapLibre GL facade the detail map runs on, and the shared render
+    //  helpers (_WindBarbLayer, _shiftGeoJsonLon, _rtEnvGeojsonCache), but
+    //  keeps its OWN active-store + activate/deactivate targeting detailMap
+    //  so the global map's env system is entirely untouched. Scope is the
+    //  environmental *analyses* (shear / RH / SST / heights / vorticity /
+    //  winds) — the forecast/genesis track overlays stay on the global map.
+    var _detailEnvActive = {};        // { layerName: { overlays, labels, overlayKind, layer } }
+    var _detailEnvOpacity = 0.8;
+    var _detailLayersMenuOpen = false;
+
+    function _detailEnvAddOverlays(image_url, bounds) {
+        var b = L.latLngBounds(bounds);
+        var sw = b.getSouthWest(), ne = b.getNorthEast();
+        var offsets = window.LFLET_GL ? [0] : [-360, 0, 360];
+        var copies = [];
+        for (var i = 0; i < offsets.length; i++) {
+            copies.push(L.imageOverlay(image_url, [
+                [sw.lat, sw.lng + offsets[i]],
+                [ne.lat, ne.lng + offsets[i]]
+            ], { opacity: _detailEnvOpacity, interactive: false }).addTo(detailMap));
+        }
+        return copies;
+    }
+
+    function _detailActivateEnvLayer(layer) {
+        if (!detailMap || !layer || _detailEnvActive[layer.name]) return;
+        var bounds = layer.bounds || [[-90, -180], [90, 180]];
+        var overlays = [], kind;
+        if (layer.render_style === 'wind_barb') {
+            overlays = [new _WindBarbLayer(layer).addTo(detailMap)];
+            kind = 'wind';
+        } else if (layer.render_style === 'contour' && layer.geojson_url) {
+            var gl = L.geoJSON(null, {
+                style: function (f) {
+                    return {
+                        color: (f.properties && f.properties.color) || '#ffffff',
+                        weight: 1.5, opacity: _detailEnvOpacity, interactive: false
+                    };
+                }
+            }).addTo(detailMap);
+            overlays = [gl]; kind = 'geojson';
+            var url = layer.geojson_url;
+            var p = _rtEnvGeojsonCache[url]
+                ? Promise.resolve(_rtEnvGeojsonCache[url])
+                : fetch(url, { cache: 'no-store' })
+                    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                    .then(function (g) { _rtEnvGeojsonCache[url] = g; return g; });
+            p.then(function (g) {
+                if (!_detailEnvActive[layer.name]) return;   // toggled off mid-fetch
+                gl.addData(g);
+                if (!window.LFLET_GL) {
+                    gl.addData(_shiftGeoJsonLon(g, +360));
+                    gl.addData(_shiftGeoJsonLon(g, -360));
+                }
+            }).catch(function (err) {
+                console.warn('[Detail env] geojson failed for ' + layer.name + '; raster fallback', err);
+                if (!_detailEnvActive[layer.name]) return;
+                try { detailMap.removeLayer(gl); } catch (e) {}
+                var rs = _detailEnvAddOverlays(layer.image_url, bounds);
+                _detailEnvActive[layer.name].overlays = rs;
+                _detailEnvActive[layer.name].overlayKind = 'raster';
+            });
+        } else {
+            overlays = _detailEnvAddOverlays(layer.image_url, bounds);
+            kind = 'raster';
+        }
+        _detailEnvActive[layer.name] = { overlays: overlays, overlayKind: kind, layer: layer };
+        _updateDetailLayersCount();
+        _ga('rt_detail_env_layer', { layer: layer.name, on: true });
+    }
+
+    function _detailDeactivateEnvLayer(name) {
+        var e = _detailEnvActive[name];
+        if (!e) return;
+        if (detailMap && e.overlays) {
+            for (var i = 0; i < e.overlays.length; i++) {
+                try { detailMap.removeLayer(e.overlays[i]); } catch (x) {}
+            }
+        }
+        if (detailMap && e.labels) {
+            for (var j = 0; j < e.labels.length; j++) {
+                try { detailMap.removeLayer(e.labels[j]); } catch (x) {}
+            }
+        }
+        delete _detailEnvActive[name];
+        _updateDetailLayersCount();
+        _ga('rt_detail_env_layer', { layer: name, on: false });
+    }
+
+    /** Drop all detail-map env overlays — called when the detail map is
+     *  rebuilt (mode switch) or the card closes, since the overlays belong
+     *  to the outgoing map instance. */
+    function _detailClearEnvLayers() {
+        Object.keys(_detailEnvActive).forEach(function (n) {
+            var e = _detailEnvActive[n];
+            if (detailMap && e && e.overlays) {
+                e.overlays.forEach(function (o) { try { detailMap.removeLayer(o); } catch (x) {} });
+            }
+        });
+        _detailEnvActive = {};
+        _updateDetailLayersCount();
+    }
+
+    function _detailSetEnvOpacity(v) {
+        _detailEnvOpacity = Math.max(0, Math.min(1, v));
+        Object.keys(_detailEnvActive).forEach(function (n) {
+            var e = _detailEnvActive[n];
+            if (!e || !e.overlays) return;
+            for (var k = 0; k < e.overlays.length; k++) {
+                var ov = e.overlays[k];
+                if (e.overlayKind === 'geojson') { if (ov.setStyle) ov.setStyle({ opacity: _detailEnvOpacity }); }
+                else if (ov.setOpacity) { ov.setOpacity(_detailEnvOpacity); }
+            }
+        });
+    }
+
+    function _updateDetailLayersCount() {
+        var n = Object.keys(_detailEnvActive).length;
+        var badge = document.getElementById('ir-detail-layers-count');
+        if (badge) {
+            badge.textContent = n;
+            badge.style.display = n > 0 ? '' : 'none';
+        }
+        var btn = document.getElementById('ir-detail-layers-btn');
+        if (btn) btn.classList.toggle('active', n > 0);
+    }
+
+    window._irDetailToggleEnvLayer = function (name) {
+        var all = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
+        var layer = null;
+        for (var i = 0; i < all.length; i++) { if (all[i].name === name) { layer = all[i]; break; } }
+        if (!layer) return;
+        if (_detailEnvActive[name]) _detailDeactivateEnvLayer(name);
+        else _detailActivateEnvLayer(layer);
+    };
+
+    window._irDetailSetOpacity = function (v) { _detailSetEnvOpacity(parseFloat(v)); };
+
+    function _renderDetailLayersMenu() {
+        var box = document.getElementById('ir-dl-groups');
+        if (!box) return;
+        var all = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
+        if (!all.length) {
+            box.innerHTML = '<div class="ir-dl-empty">' +
+                ((_rtEnvMetadata && _rtEnvMetadata.error) ? 'Analyses unavailable.' : 'Loading…') + '</div>';
+            return;
+        }
+        var vt = document.getElementById('ir-dl-valid');
+        var vs = all.map(function (L_) { return L_.valid_time; }).filter(Boolean);
+        if (vt && vs.length) vt.textContent = 'valid ' + String(vs[0]).replace('T', ' ').replace(':00:00Z', 'Z');
+
+        function esc(s) {
+            return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+        function rows(layers, shortFn) {
+            var out = '';
+            for (var i = 0; i < layers.length; i++) {
+                var L_ = layers[i];
+                var t = shortFn ? shortFn(L_) : (L_.title || L_.name);
+                out += '<label class="ir-dl-row" data-name="' + esc(L_.name) + '">' +
+                    '<input type="checkbox"' + (_detailEnvActive[L_.name] ? ' checked' : '') +
+                    ' onchange="window._irDetailToggleEnvLayer(\'' + esc(L_.name) + '\')">' +
+                    '<span>' + esc(t) + '</span></label>';
+            }
+            return out;
+        }
+        var html = '';
+        for (var gi = 0; gi < _ENV_MENU_GROUPS.length; gi++) {
+            var g = _ENV_MENU_GROUPS[gi];
+            var ls = all.filter(function (L_) {
+                return L_.name.indexOf('genesis_') !== 0 && L_.name.indexOf('winds_') !== 0 && g.match(L_);
+            });
+            if (!ls.length) continue;
+            html += '<div class="ir-dl-group">' + esc(g.label) + '</div>' + rows(ls, g.shortTitle);
+        }
+        // Wind barbs (winds_* layers) — the level-tagged GFS wind vectors.
+        var winds = all.filter(function (L_) { return L_.name.indexOf('winds_') === 0; });
+        if (winds.length) {
+            html += '<div class="ir-dl-group">Winds</div>' + rows(winds, function (L_) { return L_.title || L_.name; });
+        }
+        box.innerHTML = html || '<div class="ir-dl-empty">No analyses available.</div>';
+        var op = document.getElementById('ir-dl-opacity');
+        if (op) op.value = _detailEnvOpacity;
+    }
+
+    window._irToggleDetailLayers = function () {
+        var menu = document.getElementById('ir-detail-layers-menu');
+        var btn = document.getElementById('ir-detail-layers-btn');
+        if (!menu) return;
+        _detailLayersMenuOpen = menu.style.display === 'none' || !menu.style.display;
+        menu.style.display = _detailLayersMenuOpen ? 'block' : 'none';
+        if (btn) btn.setAttribute('aria-expanded', _detailLayersMenuOpen ? 'true' : 'false');
+        if (_detailLayersMenuOpen) {
+            _renderDetailLayersMenu();
+            // Metadata may not have loaded yet (user never opened the global
+            // Layers panel this session) — fetch then re-render.
+            if (!_rtEnvMetadata) _loadEnvMetadata().then(_renderDetailLayersMenu);
+            setTimeout(function () {
+                document.addEventListener('click', _irOutsideDetailLayersClick, { capture: true, once: true });
+            }, 0);
+            document.addEventListener('keydown', _irDetailLayersEsc);
+        }
+    };
+    window._irCloseDetailLayers = function () {
+        var menu = document.getElementById('ir-detail-layers-menu');
+        var btn = document.getElementById('ir-detail-layers-btn');
+        _detailLayersMenuOpen = false;
+        if (menu) menu.style.display = 'none';
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+        document.removeEventListener('keydown', _irDetailLayersEsc);
+    };
+    function _irDetailLayersEsc(e) {
+        if (e.key === 'Escape' || e.keyCode === 27) window._irCloseDetailLayers();
+    }
+    function _irOutsideDetailLayersClick(e) {
+        var wrap = document.getElementById('ir-detail-layers');
+        if (wrap && wrap.contains(e.target)) {
+            setTimeout(function () {
+                document.addEventListener('click', _irOutsideDetailLayersClick, { capture: true, once: true });
+            }, 0);
+            return;
+        }
+        window._irCloseDetailLayers();
+    }
+
     // ═══════════════════════════════════════════════════════════
     //  UNIFIED LAYERS PANEL  (right-rail UI shell)
     // ═══════════════════════════════════════════════════════════
@@ -21760,7 +22120,14 @@
      *  happens in this window (no pre-opened tab to stall it); the Save tap
      *  carries fresh user-activation so the share sheet / download works on iOS
      *  without popup-blocking. */
-    function _showGifResult(blob, filename) {
+    /** In-page result modal with an image preview + a Save button. The Save
+     *  button runs on a FRESH tap, so its transient activation is intact —
+     *  this is what makes share/download work on iOS after a long async
+     *  export (GIF encode) or an async capture (PNG via html2canvas), both of
+     *  which outlive the original tap's activation and would otherwise fail
+     *  silently. opts: { saveLabel, hint, alt }. */
+    function _showSaveResult(blob, filename, opts) {
+        opts = opts || {};
         var url = URL.createObjectURL(blob);
         var ov = document.createElement('div');
         ov.className = 'rt-gif-result';
@@ -21768,12 +22135,12 @@
             'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;' +
             'padding:16px;backdrop-filter:blur(4px);';
         var img = document.createElement('img');
-        img.src = url; img.alt = 'TC-ATLAS loop';
+        img.src = url; img.alt = opts.alt || 'TC-ATLAS export';
         img.style.cssText = 'max-width:96vw;max-height:72vh;border-radius:8px;' +
             'box-shadow:0 8px 30px rgba(0,0,0,0.55);';
         var hint = document.createElement('div');
         hint.style.cssText = "color:#cbd5e1;font:600 12px/1.4 'DM Sans',system-ui,sans-serif;text-align:center;";
-        hint.textContent = 'Tap Save GIF — or long-press the image to save.';
+        hint.textContent = opts.hint || 'Tap Save — or long-press the image to save.';
         var row = document.createElement('div');
         row.style.cssText = 'display:flex;gap:10px;';
         function _pill(label, bg) {
@@ -21783,7 +22150,7 @@
                 'background:' + bg + ';border:none;border-radius:8px;padding:11px 18px;cursor:pointer;';
             return b;
         }
-        var saveBtn = _pill('⬇ Save GIF', '#4a9b6e');
+        var saveBtn = _pill(opts.saveLabel || '⬇ Save', '#4a9b6e');
         var closeBtn = _pill('Close', 'rgba(148,163,184,0.35)');
         function close() {
             if (ov.parentElement) ov.parentElement.removeChild(ov);
@@ -21799,6 +22166,13 @@
         row.appendChild(saveBtn); row.appendChild(closeBtn);
         ov.appendChild(img); ov.appendChild(hint); ov.appendChild(row);
         document.body.appendChild(ov);
+    }
+    /** Back-compat wrapper — GIF exports show the loop preview + "Save GIF". */
+    function _showGifResult(blob, filename) {
+        _showSaveResult(blob, filename, {
+            saveLabel: '⬇ Save GIF', alt: 'TC-ATLAS loop',
+            hint: 'Tap Save GIF — or long-press the image to save.'
+        });
     }
 
     // Group definition for the Env Analysis menu — collapses the
@@ -26686,6 +27060,7 @@
         var btn = document.querySelector('#ir-download-wrap .ir-download-btn');
         if (!menu) return;
         var open = menu.style.display !== 'none';
+        if (!open && window._irCloseOptionsMenu) window._irCloseOptionsMenu();
         menu.style.display = open ? 'none' : 'block';
         if (btn) btn.setAttribute('aria-expanded', open ? 'false' : 'true');
         if (!open) {
@@ -26719,6 +27094,51 @@
             return;
         }
         window._irCloseDownloadMenu();
+    }
+
+    // ── Options menu ─────────────────────────────────────────────────
+    // Consolidates the former header buttons (Obs, Grid, Track, Frames,
+    // Loop only, Detailed, Diagnostics, Microwave) into a single dropdown.
+    // The toggle items KEEP the original element IDs (ir-detail-*-toggle,
+    // ir-frames-btn) so all the existing state-sync / disable / label code
+    // just works — .active lands on the menu item and shows a filled dot.
+    // Toggle items don't close the menu (users flip several at once);
+    // action items append _irCloseOptionsMenu() in their onclick.
+    window._irToggleOptionsMenu = function () {
+        var menu = document.getElementById('ir-options-menu');
+        var btn = document.querySelector('#ir-options-wrap .ir-options-btn');
+        if (!menu) return;
+        var open = menu.style.display !== 'none';
+        if (!open && window._irCloseDownloadMenu) window._irCloseDownloadMenu();
+        menu.style.display = open ? 'none' : 'block';
+        if (btn) btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+        if (!open) {
+            setTimeout(function () {
+                document.addEventListener('click', _irOutsideOptionsClick, { capture: true, once: true });
+            }, 0);
+            document.addEventListener('keydown', _irOptionsEscClose);
+        }
+    };
+    function _irOptionsEscClose(e) {
+        if (e.key === 'Escape' || e.keyCode === 27) window._irCloseOptionsMenu();
+    }
+    window._irCloseOptionsMenu = function () {
+        var menu = document.getElementById('ir-options-menu');
+        var btn = document.querySelector('#ir-options-wrap .ir-options-btn');
+        if (menu) menu.style.display = 'none';
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+        document.removeEventListener('keydown', _irOptionsEscClose);
+    };
+    function _irOutsideOptionsClick(e) {
+        var wrap = document.getElementById('ir-options-wrap');
+        if (wrap && wrap.contains(e.target)) {
+            // Click inside (e.g. a toggle) — keep open, re-arm the closer.
+            setTimeout(function () {
+                document.addEventListener('click', _irOutsideOptionsClick, { capture: true, once: true });
+            }, 0);
+            return;
+        }
+        window._irCloseOptionsMenu();
     }
 
     /** Whether the user wants the storm track included in saved images. */
@@ -26829,10 +27249,20 @@
             canvas.toBlob(function (blob) {
                 if (!blob) return;
                 var ts = (animFrameTimes[animIndex] || '').replace(/[:\-T]/g, '').replace('Z', '');
-                // Deliver via _saveImageBlob: native share sheet (Save Image /
-                // Copy) on mobile, download anchor on desktop, new-tab fallback
-                // on older iOS — instead of a raw <a download> that iOS ignores.
-                _saveImageBlob(blob, currentStormId + '_' + (ts || 'frame') + '.png');
+                var pngName = currentStormId + '_' + (ts || 'frame') + '.png';
+                // iOS drops the tap's transient activation across the async
+                // html2canvas capture, so a direct share()/window.open here is
+                // rejected/popup-blocked and the PNG silently vanishes. Route
+                // through the result modal — its Save button has a fresh tap.
+                // Desktop keeps the instant one-tap download via _saveImageBlob.
+                if (_isIOS()) {
+                    _showSaveResult(blob, pngName, {
+                        saveLabel: '⬇ Save image', alt: 'TC-ATLAS IR frame',
+                        hint: 'Tap Save image — or long-press the image to save.'
+                    });
+                } else {
+                    _saveImageBlob(blob, pngName);
+                }
             }, 'image/png');
         }).catch(function (err) {
             _irRestoreTrackAfterExport(hiddenTrack);

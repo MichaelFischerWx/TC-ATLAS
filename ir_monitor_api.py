@@ -10780,6 +10780,36 @@ def _gcs_put_shear(atcf_id: str, cycle_iso: str, payload: dict,
         logger.debug(f"GCS shear put failed for {atcf_id} {cycle_iso} {params_key}: {e}")
 
 
+def _gcs_get_ocean(atcf_id: str, day_iso: str) -> Optional[dict]:
+    """Read a cached ocean (SST/OHC) result from GCS, if present."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return None
+    blob_name = f"ocean/{_OCEAN_CACHE_VER}/{atcf_id.upper()}/{day_iso}.json"
+    try:
+        blob = bucket.blob(blob_name)
+        if not blob.exists():
+            return None
+        return json.loads(blob.download_as_text())
+    except Exception as e:
+        logger.debug(f"GCS ocean get failed for {atcf_id} {day_iso}: {e}")
+        return None
+
+
+def _gcs_put_ocean(atcf_id: str, day_iso: str, payload: dict) -> None:
+    """Write an ocean (SST/OHC) result to GCS (fire-and-forget)."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+    blob_name = f"ocean/{_OCEAN_CACHE_VER}/{atcf_id.upper()}/{day_iso}.json"
+    try:
+        bucket.blob(blob_name).upload_from_string(
+            json.dumps(payload), content_type="application/json"
+        )
+    except Exception as e:
+        logger.debug(f"GCS ocean put failed for {atcf_id} {day_iso}: {e}")
+
+
 def _fetch_gfs_grib2(slat: float, slon360: float, date_str: str, hour_str: str,
                      levels: Optional[list] = None,
                      vars_: Optional[list] = None) -> Optional[bytes]:
@@ -11652,6 +11682,163 @@ def get_storm_shear(
     return JSONResponse(
         content=payload,
         headers={"Cache-Control": "public, max-age=1800"},
+    )
+
+
+# ── Ocean environment (SST + ocean heat content) ─────────────────────
+# SST + anomaly from NOAA OISST v2.1 (CoastWatch ERDDAP) and ocean heat
+# content (Tropical Cyclone Heat Potential) from NOAA/AOML (their ERDDAP).
+# Both are 0.25° global and read as a single nearest-grid-point via ERDDAP
+# griddap .json — an HTTP GET + tiny JSON parse, so the API image only needs
+# `requests` (no OPeNDAP / NetCDF stack). Powers the Storm Info favorability
+# meters. Cached per (storm, UTC day); refreshes daily.
+_OISST_ERDDAP = ("https://coastwatch.pfeg.noaa.gov/erddap/griddap/"
+                 "ncdcOisst21Agg_LonPM180.json")
+_TCHP_ERDDAP = "https://erddap.aoml.noaa.gov/hdb/erddap/griddap/TCHP.json"
+_OCEAN_CACHE_TTL = 6 * 3600       # 6h; OISST/TCHP update ~daily
+_OCEAN_CACHE_VER = "ocean-v1"
+_ocean_mem_cache: dict = {}
+_ocean_mem_lock = threading.Lock()
+_OCEAN_MEM_MAX = 200
+
+
+def _erddap_point_json(url: str, timeout: float = 15.0) -> Optional[dict]:
+    """GET an ERDDAP griddap .json point query; return {column: value} for
+    the single returned row, or None on any failure / empty result."""
+    try:
+        r = _requests.get(url, timeout=timeout)
+        if r.status_code != 200:
+            return None
+        tbl = (r.json() or {}).get("table", {})
+        cols = tbl.get("columnNames", [])
+        rows = tbl.get("rows", [])
+        if not cols or not rows:
+            return None
+        return dict(zip(cols, rows[0]))
+    except Exception as e:
+        logger.debug(f"ERDDAP point query failed ({url[:64]}…): {e}")
+        return None
+
+
+def _norm_lon180(lon: float) -> float:
+    """Normalize longitude to [-180, 180) — both ERDDAP grids are PM180."""
+    return ((float(lon) + 180.0) % 360.0) - 180.0
+
+
+def _erddap_num(v, ndigits: int = 2, nonneg: bool = False):
+    """Parse an ERDDAP cell to a rounded float; None for null / NaN / fill."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f != f:                     # NaN (masked land / no data)
+        return None
+    if nonneg and f < 0:
+        return None
+    return round(f, ndigits)
+
+
+def _fetch_oisst_point(lat: float, lon: float) -> dict:
+    """Latest OISST SST + anomaly at the nearest 0.25° grid point."""
+    lon180 = _norm_lon180(lon)
+    sel = f"%5B(last)%5D%5B(0.0)%5D%5B({lat:.4f})%5D%5B({lon180:.4f})%5D"
+    q = f"{_OISST_ERDDAP}?sst{sel},anom{sel}"
+    row = _erddap_point_json(q)
+    if not row:
+        return {"sst_c": None, "sst_anom_c": None, "sst_date": None}
+    t = row.get("time") or ""
+    return {
+        "sst_c": _erddap_num(row.get("sst")),
+        "sst_anom_c": _erddap_num(row.get("anom")),
+        "sst_date": t[:10] if t else None,
+    }
+
+
+def _fetch_tchp_point(lat: float, lon: float) -> dict:
+    """Latest AOML Tropical Cyclone Heat Potential (ocean heat content,
+    kJ/cm²) at the nearest 0.25° grid point."""
+    lon180 = _norm_lon180(lon)
+    q = (f"{_TCHP_ERDDAP}?Tropical_Cyclone_Heat_Potential"
+         f"%5B(last)%5D%5B({lat:.4f})%5D%5B({lon180:.4f})%5D")
+    row = _erddap_point_json(q)
+    if not row:
+        return {"ohc_kj_cm2": None, "ohc_date": None}
+    t = row.get("time") or ""
+    return {
+        "ohc_kj_cm2": _erddap_num(
+            row.get("Tropical_Cyclone_Heat_Potential"), ndigits=1, nonneg=True),
+        "ohc_date": t[:10] if t else None,
+    }
+
+
+@router.get("/storm/{atcf_id}/ocean")
+def get_storm_ocean(atcf_id: str):
+    """SST (+ anomaly) and ocean heat content (TCHP) at the storm's current
+    best-track position — the ocean side of the intensification budget for
+    the Storm Info favorability meters.
+
+    SST + anomaly: NOAA OISST v2.1 (CoastWatch ERDDAP, 0.25°).
+    Ocean heat content: NOAA/AOML Tropical Cyclone Heat Potential (0.25°),
+    the integrated heat above the 26 °C isotherm. Each source is queried
+    independently, so one being down still returns the other (missing fields
+    come back null). Cached per (storm, UTC day); refreshes daily.
+    """
+    pos = _resolve_storm_position(atcf_id)
+    if pos is None:
+        raise HTTPException(status_code=404, detail=f"No position found for {atcf_id}")
+    slat, slon, last_fix = pos
+
+    day_iso = _dt.now(timezone.utc).strftime("%Y%m%d")
+    cache_key = (atcf_id.upper(), day_iso)
+
+    with _ocean_mem_lock:
+        hit = _ocean_mem_cache.get(cache_key)
+        if hit and time.time() - hit["ts"] < _OCEAN_CACHE_TTL:
+            return JSONResponse(
+                content=hit["data"],
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+
+    gcs_hit = _gcs_get_ocean(atcf_id, day_iso)
+    if gcs_hit is not None:
+        with _ocean_mem_lock:
+            _ocean_mem_cache[cache_key] = {"data": gcs_hit, "ts": time.time()}
+            while len(_ocean_mem_cache) > _OCEAN_MEM_MAX:
+                _ocean_mem_cache.pop(next(iter(_ocean_mem_cache)))
+        return JSONResponse(
+            content=gcs_hit,
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    sst = _fetch_oisst_point(slat, slon)
+    ohc = _fetch_tchp_point(slat, slon)
+    payload = {
+        "atcf_id": atcf_id.upper(),
+        "lat": slat,
+        "lon": slon,
+        "last_fix_utc": last_fix,
+        "sst_source": "NOAA OISST v2.1 (CoastWatch ERDDAP)",
+        "ohc_source": "NOAA/AOML Tropical Cyclone Heat Potential",
+        **sst,
+        **ohc,
+    }
+
+    # Only persist when at least one source resolved — don't lock in a
+    # double-miss (transient ERDDAP outage) for the whole day.
+    if payload.get("sst_c") is not None or payload.get("ohc_kj_cm2") is not None:
+        with _ocean_mem_lock:
+            _ocean_mem_cache[cache_key] = {"data": payload, "ts": time.time()}
+            while len(_ocean_mem_cache) > _OCEAN_MEM_MAX:
+                _ocean_mem_cache.pop(next(iter(_ocean_mem_cache)))
+        threading.Thread(
+            target=_gcs_put_ocean,
+            args=(atcf_id, day_iso, payload),
+            daemon=True,
+        ).start()
+
+    return JSONResponse(
+        content=payload,
+        headers={"Cache-Control": "public, max-age=3600"},
     )
 
 

@@ -244,86 +244,73 @@
                         </label>
                     </div>
                 </div>
-                <button id="ir-detail-obs-toggle" class="ir-kml-btn ir-detail-obs-toggle-btn active" onclick="window._irToggleSurfaceObs()" title="Toggle nearby surface observations (METAR airports/land + NDBC marine buoys, station-plot format)">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <circle cx="12" cy="12" r="3"/>
-                        <line x1="12" y1="2" x2="12" y2="6"/>
-                        <line x1="12" y1="18" x2="12" y2="22"/>
-                        <line x1="2" y1="12" x2="6" y2="12"/>
-                        <line x1="18" y1="12" x2="22" y2="12"/>
-                    </svg>
-                    <span>Obs</span>
-                </button>
-                <button id="ir-detail-grid-toggle" class="ir-kml-btn ir-detail-grid-toggle-btn active" onclick="window._irToggleDetailGrid()" title="Toggle lat/lon grid overlay">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
-                    </svg>
-                    <span>Grid</span>
-                </button>
-                <button id="ir-detail-track-toggle" class="ir-kml-btn ir-detail-track-toggle-btn active" onclick="window._irToggleDetailTrack()" title="Toggle storm track overlay (past fixes + name label)">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <circle cx="5" cy="18" r="1.6"/>
-                        <circle cx="12" cy="11" r="1.6"/>
-                        <circle cx="19" cy="6" r="1.6"/>
-                        <path d="M5 18 12 11l7-5"/>
-                    </svg>
-                    <span>Track</span>
-                </button>
-                <div class="ir-frames-wrap" id="ir-frames-wrap">
-                    <button id="ir-frames-btn" class="ir-kml-btn ir-frames-btn" type="button"
-                            onclick="window._irToggleFramesMenu()"
+                <div class="ir-options-wrap" id="ir-options-wrap">
+                    <button class="ir-kml-btn ir-options-btn" type="button"
+                            onclick="window._irToggleOptionsMenu()"
                             aria-haspopup="true" aria-expanded="false"
-                            title="Limit the animation to a custom frame range">
+                            title="View toggles, display modes, and actions">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <rect x="3" y="7" width="18" height="10" rx="1.5"/>
-                            <line x1="8.5" y1="4" x2="8.5" y2="20"/>
-                            <line x1="15.5" y1="4" x2="15.5" y2="20"/>
+                            <circle cx="5" cy="12" r="1.7"/>
+                            <circle cx="12" cy="12" r="1.7"/>
+                            <circle cx="19" cy="12" r="1.7"/>
                         </svg>
-                        <span id="ir-frames-label">Frames</span>
+                        <span>Options</span>
                     </button>
-                    <div class="ir-frames-menu" id="ir-frames-menu" role="menu" style="display:none;">
-                        <button class="ir-frames-item" role="menuitem" onclick="window._irFramesSetMode('all')">
-                            <span class="ir-frames-item-title">All frames</span>
-                            <span class="ir-frames-item-desc">Show the full loop</span>
+                    <div class="ir-options-menu" id="ir-options-menu" role="menu" style="display:none;">
+                        <div class="ir-opt-group-label">View</div>
+                        <button id="ir-detail-obs-toggle" class="ir-opt-item ir-detail-obs-toggle-btn active" role="menuitemcheckbox" onclick="window._irToggleSurfaceObs()" title="Nearby surface observations (METAR airports/land + NDBC marine buoys, station-plot format)">
+                            <span class="ir-opt-dot" aria-hidden="true"></span>
+                            <span class="ir-opt-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg></span>
+                            <span class="ir-opt-text"><span class="ir-opt-title">Surface obs</span><span class="ir-opt-desc">METAR + NDBC station plots</span></span>
                         </button>
-                        <button class="ir-frames-item" role="menuitem" onclick="window._irFramesSetMode('trim')">
-                            <span class="ir-frames-item-title">Trim range&hellip;</span>
-                            <span class="ir-frames-item-desc">Drag the handles on the timeline</span>
+                        <button id="ir-detail-grid-toggle" class="ir-opt-item ir-detail-grid-toggle-btn active" role="menuitemcheckbox" onclick="window._irToggleDetailGrid()" title="Lat/lon grid overlay">
+                            <span class="ir-opt-dot" aria-hidden="true"></span>
+                            <span class="ir-opt-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg></span>
+                            <span class="ir-opt-text"><span class="ir-opt-title">Lat/lon grid</span><span class="ir-opt-desc">Reference graticule</span></span>
+                        </button>
+                        <button id="ir-detail-track-toggle" class="ir-opt-item ir-detail-track-toggle-btn active" role="menuitemcheckbox" onclick="window._irToggleDetailTrack()" title="Storm track overlay (past fixes + name label)">
+                            <span class="ir-opt-dot" aria-hidden="true"></span>
+                            <span class="ir-opt-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="18" r="1.6"/><circle cx="12" cy="11" r="1.6"/><circle cx="19" cy="6" r="1.6"/><path d="M5 18 12 11l7-5"/></svg></span>
+                            <span class="ir-opt-text"><span class="ir-opt-title">Storm track</span><span class="ir-opt-desc">Past fixes + name label</span></span>
+                        </button>
+                        <div class="ir-opt-sep"></div>
+                        <div class="ir-opt-group-label">Display</div>
+                        <button id="ir-detail-mode-toggle" class="ir-opt-item ir-detail-mode-toggle-btn" role="menuitemcheckbox" onclick="window._rtToggleDetailMode()" title="Switch between the fast crisp Lite mosaic loop (default) and the Detailed raw-Tb view (exact-Tb hover, colormaps, diagnostics)">
+                            <span class="ir-opt-dot" aria-hidden="true"></span>
+                            <span class="ir-opt-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3.2M12 17.8V21M3 12h3.2M17.8 12H21"/></svg></span>
+                            <span class="ir-opt-text"><span class="ir-opt-title">Detailed view</span><span class="ir-opt-desc">Raw-Tb hover, colormaps</span></span>
+                        </button>
+                        <button id="ir-detail-diag-toggle" class="ir-opt-item ir-detail-diag-toggle-btn" role="menuitemcheckbox" onclick="window._irToggleDiagnosticsSection()" title="IR diagnostics — objective eye on the map + inner-core charts (radial Tb, center-fix series, histogram, Hovmöller)">
+                            <span class="ir-opt-dot" aria-hidden="true"></span>
+                            <span class="ir-opt-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10a7.3 7.3 0 0 0 10 10"/><path d="m9 15 3-3"/><path d="M17 13a6 6 0 0 0-6-6"/><path d="M21 13A10 10 0 0 0 11 3"/></svg></span>
+                            <span class="ir-opt-text"><span class="ir-opt-title">Diagnostics</span><span class="ir-opt-desc">Objective eye + inner-core charts</span></span>
+                        </button>
+                        <div class="ir-opt-sep"></div>
+                        <div class="ir-opt-group-label">Frames</div>
+                        <button class="ir-opt-item" role="menuitem" onclick="window._irFramesSetMode('all');window._irCloseOptionsMenu();" title="Show the full loop">
+                            <span class="ir-opt-dot ir-opt-dot-blank" aria-hidden="true"></span>
+                            <span class="ir-opt-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="1.5"/></svg></span>
+                            <span class="ir-opt-text"><span class="ir-opt-title">All frames</span><span class="ir-opt-desc">Show the full loop</span></span>
+                        </button>
+                        <button id="ir-frames-btn" class="ir-opt-item" role="menuitemcheckbox" onclick="window._irFramesSetMode('trim');window._irCloseOptionsMenu();" title="Limit the animation to a custom frame range">
+                            <span class="ir-opt-dot" aria-hidden="true"></span>
+                            <span class="ir-opt-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="1.5"/><line x1="8.5" y1="4" x2="8.5" y2="20"/><line x1="15.5" y1="4" x2="15.5" y2="20"/></svg></span>
+                            <span class="ir-opt-text"><span class="ir-opt-title" id="ir-frames-label">Trim range&hellip;</span><span class="ir-opt-desc">Drag the handles on the timeline</span></span>
+                        </button>
+                        <div class="ir-opt-sep"></div>
+                        <div class="ir-opt-group-label">Actions</div>
+                        <button class="ir-opt-item" role="menuitem" onclick="window.openLoopOnlyView();window._irCloseOptionsMenu();" title="Bare animation loop (Tropical Tidbits style)">
+                            <span class="ir-opt-dot ir-opt-dot-blank" aria-hidden="true"></span>
+                            <span class="ir-opt-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="6,4 20,12 6,20"/></svg></span>
+                            <span class="ir-opt-text"><span class="ir-opt-title">Loop only</span><span class="ir-opt-desc">Bare full-screen animation</span></span>
+                        </button>
+                        <button class="ir-opt-item" role="menuitem" onclick="window._rtJumpToMwSection();window._irCloseOptionsMenu();" title="Jump to Microwave Passes (24h) — click any pass for side-by-side IR vs MW comparison">
+                            <span class="ir-opt-dot ir-opt-dot-blank" aria-hidden="true"></span>
+                            <span class="ir-opt-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49"/><path d="M7.76 16.24a6 6 0 0 1 0-8.49"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M4.93 19.07a10 10 0 0 1 0-14.14"/></svg></span>
+                            <span class="ir-opt-text"><span class="ir-opt-title">Microwave passes</span><span class="ir-opt-desc">Jump to MW section</span></span>
                         </button>
                     </div>
                 </div>
-                <button class="ir-kml-btn ir-loop-only-btn" onclick="window.openLoopOnlyView()" title="Bare animation loop (Tropical Tidbits style)">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <polygon points="6,4 20,12 6,20"/>
-                    </svg>
-                    <span>Loop Only</span>
-                </button>
-                <button id="ir-detail-mode-toggle" class="ir-kml-btn ir-sat-viewer-btn ir-detail-mode-toggle-btn" onclick="window._rtToggleDetailMode()" title="Switch between the fast crisp Lite mosaic loop (default) and the Detailed raw-Tb view (exact-Tb hover, colormaps, diagnostics)">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <circle cx="12" cy="12" r="3.2"/>
-                        <path d="M12 3v3.2M12 17.8V21M3 12h3.2M17.8 12H21"/>
-                    </svg>
-                    <span>Detailed</span>
-                </button>
-                <button id="ir-detail-diag-toggle" class="ir-kml-btn ir-sat-viewer-btn ir-detail-diag-toggle-btn" onclick="window._irToggleDiagnosticsSection()" title="Toggle IR diagnostics — objective eye on the map + inner-core charts (radial Tb, center-fix series, histogram, Hovmöller)">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M4 10a7.3 7.3 0 0 0 10 10"/>
-                        <path d="m9 15 3-3"/>
-                        <path d="M17 13a6 6 0 0 0-6-6"/>
-                        <path d="M21 13A10 10 0 0 0 11 3"/>
-                    </svg>
-                    <span>Diagnostics</span>
-                </button>
-                <button class="ir-kml-btn ir-mw-jump-btn" onclick="window._rtJumpToMwSection()" title="Jump to Microwave Passes (24h) — click any pass for side-by-side IR vs MW comparison">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <circle cx="12" cy="12" r="2"/>
-                        <path d="M16.24 7.76a6 6 0 0 1 0 8.49"/>
-                        <path d="M7.76 16.24a6 6 0 0 1 0-8.49"/>
-                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
-                        <path d="M4.93 19.07a10 10 0 0 1 0-14.14"/>
-                    </svg>
-                    <span>Microwave</span>
-                </button>
             </div>
         </div>
         <div class="ir-detail-body">
@@ -344,6 +331,33 @@
                         <button id="ir-product-eir" class="ir-product-btn ir-product-active" title="Clean infrared (Band 13, ~10.3 µm)">IR</button>
                         <button id="ir-product-vis" class="ir-product-btn" title="Red visible (Band 2 / Band 3 — daytime only)">Visible</button>
                         <button id="ir-product-wv" class="ir-product-btn" title="Mid-level water vapor (Band 8, ~6.2 µm)">WV</button>
+                    </div>
+                    <!-- Env layers control — drape GFS analyses (shear, RH, SST,
+                         heights, vorticity, winds) over the zoomed storm view.
+                         Self-contained; reuses the global env metadata but its
+                         own overlays live on the storm-detail GL map. -->
+                    <div id="ir-detail-layers" class="ir-detail-layers">
+                        <button id="ir-detail-layers-btn" class="ir-detail-layers-btn" type="button"
+                                onclick="window._irToggleDetailLayers()"
+                                aria-haspopup="true" aria-expanded="false"
+                                title="Overlay GFS environmental analyses on this view">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <polygon points="12,3 21,8 12,13 3,8"/>
+                                <path d="M3 12l9 5 9-5"/><path d="M3 16l9 5 9-5"/>
+                            </svg>
+                            <span>Layers</span>
+                            <span id="ir-detail-layers-count" class="ir-detail-layers-count" style="display:none;">0</span>
+                        </button>
+                        <div id="ir-detail-layers-menu" class="ir-detail-layers-menu" role="menu" style="display:none;">
+                            <div class="ir-dl-head">Environmental analyses<span class="ir-dl-valid" id="ir-dl-valid"></span></div>
+                            <div id="ir-dl-groups" class="ir-dl-groups"><div class="ir-dl-empty">Loading&hellip;</div></div>
+                            <div class="ir-dl-opacity">
+                                <label for="ir-dl-opacity">Opacity</label>
+                                <input type="range" id="ir-dl-opacity" min="0.2" max="1" step="0.05" value="0.8"
+                                       oninput="window._irDetailSetOpacity(this.value)">
+                            </div>
+                            <div class="ir-dl-note">GFS 0.25° analysis / OISST, draped over the storm-centered view. Hover values live on the global map.</div>
+                        </div>
                     </div>
                     <!-- IR Tb colorbar legend (Claude IR; °C labels).
                          Range chosen to span realistic cloud-top temps:
@@ -412,6 +426,30 @@
                         <div class="ir-info-row"><span class="ir-info-label">MSLP</span><span class="ir-info-value" id="ir-info-mslp">&mdash;</span></div>
                         <div class="ir-info-row"><span class="ir-info-label">Vmax</span><span class="ir-info-value" id="ir-info-vmax">&mdash;</span></div>
                         <div class="ir-info-row"><span class="ir-info-label">Last Fix</span><span class="ir-info-value" id="ir-info-lastfix">&mdash;</span></div>
+                    </div>
+                    <!-- Environmental favorability dashboard — at-a-glance meters
+                         for the three levers that most govern intensification.
+                         Each fill's LENGTH = favorability (0 hostile → full
+                         favorable) and COLOR = green/amber/red vs TC thresholds,
+                         so "long + green = supportive environment" reads instantly.
+                         SST/OHC come from /ir-monitor/storm/{id}/ocean (OISST +
+                         AOML TCHP); shear mirrors the row above. Degrades to a
+                         muted "n/a" bar when a source is unavailable. -->
+                    <div class="ir-fav-dash" id="ir-fav-dash">
+                        <div class="ir-fav-heading">Environmental favorability</div>
+                        <div class="ir-fav-meter" id="ir-fav-shear">
+                            <div class="ir-fav-top"><span class="ir-fav-label">Deep-layer shear<button type="button" class="ir-info-help" tabindex="0" aria-label="About deep-layer shear" title="850–200 hPa environmental shear (SHIPS 200–800 km ring). Lower is more favorable: <10 kt supportive, 10–20 kt marginal, >20 kt hostile. Source: latest GFS 0.25° analysis.">i</button></span><span class="ir-fav-val" id="ir-fav-shear-val">&mdash;</span></div>
+                            <div class="ir-fav-bar"><div class="ir-fav-fill"></div></div>
+                        </div>
+                        <div class="ir-fav-meter" id="ir-fav-sst">
+                            <div class="ir-fav-top"><span class="ir-fav-label">Sea-surface temp<button type="button" class="ir-info-help" tabindex="0" aria-label="About SST" title="Sea-surface temperature at the storm center (NOAA OISST v2.1, 0.25°). ~26.5°C is the classic minimum for tropical development; ≥28.5°C is strongly supportive. The chip shows the SST anomaly vs the OISST climatology.">i</button><span class="ir-fav-sub" id="ir-fav-sst-anom"></span></span><span class="ir-fav-val" id="ir-fav-sst-val">&mdash;</span></div>
+                            <div class="ir-fav-bar"><div class="ir-fav-fill"></div></div>
+                        </div>
+                        <div class="ir-fav-meter" id="ir-fav-ohc">
+                            <div class="ir-fav-top"><span class="ir-fav-label">Ocean heat (TCHP)<button type="button" class="ir-info-help" tabindex="0" aria-label="About ocean heat content" title="Tropical Cyclone Heat Potential — integrated heat above the 26°C isotherm (NOAA/AOML, 0.25°). >16 kJ/cm² is meaningful; ≥50 kJ/cm² is deep warm water that supports rapid intensification.">i</button></span><span class="ir-fav-val" id="ir-fav-ohc-val">&mdash;</span></div>
+                            <div class="ir-fav-bar"><div class="ir-fav-fill"></div></div>
+                        </div>
+                        <div class="ir-fav-note" id="ir-fav-note"></div>
                     </div>
                     <!-- Env profile reveal — Skew-T + shear-vs-pressure built
                          from the same GFS annular-mean profile that drove the
@@ -820,41 +858,6 @@
         <div id="sat-gallery-empty" class="qv-gallery-empty" style="display:none;">
             <div style="font-size:18px;margin-bottom:8px;">No active storms.</div>
             <div style="color:#94a3b8;">Storms appear here when systems are active in any basin.</div>
-        </div>
-    </section>
-
-    <section id="sat-quick-view" class="sat-quick-view" style="display:none;" aria-label="Storm Satellite Quick View">
-        <div class="qv-storm-bar">
-            <div class="qv-storm-picker-wrap">
-                <select id="qv-storm-select" class="qv-storm-select" aria-label="Pick a storm">
-                    <option value="">No active storms</option>
-                </select>
-            </div>
-            <div class="qv-storm-info">
-                <span class="qv-cat-chip" id="qv-cat">—</span>
-                <span class="qv-name" id="qv-name">—</span>
-                <span class="qv-vitals" id="qv-vitals">—</span>
-            </div>
-            <button id="qv-to-detailed" class="qv-detailed-btn" title="Expert satellite diagnostics — colormaps, crosshair, follow, 88D radar, ASCAT">Diagnostics &rarr;</button>
-        </div>
-        <div class="qv-stage">
-            <!-- Leaflet map: per-frame L.imageOverlay at its true bounds
-                 over a basemap with coastlines + a graticule layer.
-                 Native geographic correctness — storm moves across the
-                 view, land stays put, lat/lon lines are real. -->
-            <div id="qv-leaflet-map" class="qv-leaflet-map"></div>
-            <div id="qv-loader" class="qv-loader">Loading animation&hellip;</div>
-            <div id="qv-empty" class="qv-empty" style="display:none;">
-                <div style="font-size:18px;margin-bottom:8px;">No active storms.</div>
-                <div style="color:#94a3b8;">Storm animations appear here when systems are active in any basin.</div>
-            </div>
-            <div id="qv-error" class="qv-error" style="display:none;"></div>
-        </div>
-        <div class="qv-meta-bar">
-            <div class="qv-meta-item"><span class="qv-meta-label">Position</span><b id="qv-position">—</b></div>
-            <div class="qv-meta-item"><span class="qv-meta-label">Motion</span><b id="qv-motion">—</b></div>
-            <div class="qv-meta-item"><span class="qv-meta-label">Shear</span><b id="qv-shear">—</b></div>
-            <div class="qv-meta-item"><span class="qv-meta-label">Satellite</span><b id="qv-sat">—</b></div>
         </div>
     </section>
 
@@ -2490,9 +2493,6 @@
     <script>document.write('<script src="vol3d.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<script src="realtime_tdr.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<script src="satellite.js'+window.__v+'"><\/script>');</script>
-    <!-- Storm Satellite Quick View (default casual viewer). Light IIFE,
-         independent of satellite.js — loads animated WebP from GCS direct. -->
-    <script>document.write('<script src="sat_quick.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<script src="realtime_subseasonal.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<script src="realtime_seasonal.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<link rel="stylesheet" href="realtime_seasonal_styles.css'+window.__v+'">');</script>
@@ -2523,12 +2523,12 @@
                 if (view === 'map') {
                     newHash = '';
                 } else if (view === 'satellite') {
-                    // Preserve the satellite sub-state params (storm=, loop=1,
+                    // Preserve the satellite sub-state params (storm=,
                     // detailed=1) so a reload or shared link to a specific
                     // storm card restores THAT storm instead of collapsing to
                     // the bare tab (which then falls back to the default view).
                     var keep = cur.split('&').filter(function (p) {
-                        return /^storm=/.test(p) || p === 'loop=1' || p === 'detailed=1';
+                        return /^storm=/.test(p) || p === 'detailed=1';
                     });
                     newHash = '#satellite' + (keep.length ? '&' + keep.join('&') : '');
                 } else {
@@ -2539,17 +2539,17 @@
             } catch (e) { /* old browsers — silently skip */ }
         }
 
-        /* Tab-click handler for Storm Satellite. Clears the loop=1 /
-           detailed=1 sub-mode hints so the user always lands on the
-           default (card) when they explicitly click the tab. Direct
-           navigation via switchIRView (e.g. hashchange, deep-link) is
-           unaffected and honors sub-mode params. */
+        /* Tab-click handler for Storm Satellite. Clears the detailed=1
+           sub-mode hint so the user always lands on the default (card)
+           when they explicitly click the tab. Direct navigation via
+           switchIRView (e.g. hashchange, deep-link) is unaffected and
+           honors sub-mode params. */
         window._switchToSatTab = function () {
             try {
                 var h = (window.location.hash || '').replace(/^#/, '');
                 if (h) {
                     var parts = h.split('&').filter(function (p) {
-                        return p !== 'loop=1' && p !== 'detailed=1';
+                        return p !== 'detailed=1';
                     });
                     var newHash = parts.length ? '#' + parts.join('&') : '#satellite';
                     history.replaceState(null, '',
@@ -2570,7 +2570,6 @@
 
             var irMain = document.getElementById('ir-main');
             var satMain = document.getElementById('sat-main');
-            var satQuick = document.getElementById('sat-quick-view');
             var subMain = document.getElementById('sub-main');
             var seaMain = document.getElementById('seasonal-main');
             var reconMain = document.getElementById('recon-main');
@@ -2596,7 +2595,6 @@
             var satGallery = document.getElementById('sat-gallery');
             irMain.style.display = 'none';
             satMain.style.display = 'none';
-            if (satQuick) satQuick.style.display = 'none';
             if (satGallery) satGallery.style.display = 'none';
             if (subMain) subMain.style.display = 'none';
             if (seaMain) seaMain.style.display = 'none';
@@ -2609,21 +2607,15 @@
             if (view === 'satellite') {
                 /* Storm Satellite sub-modes:
                    - ?detailed=1 → expert Diagnostics view (sat-main)
-                   - ?loop=1     → bare Quick View (animation only)
                    - ?storm=ID   → that storm's rich detail card (ir-detail)
                    - default     → active-storm gallery (sat-gallery); a card
                                    opens the rich detail card. */
                 var hashStr = window.location.hash || '';
                 var goDetailed = /[#&]detailed=1/.test(hashStr);
-                var goLoopOnly = /[#&]loop=1/.test(hashStr);
                 if (goDetailed) {
                     if (irDetail) irDetail.style.display = 'none';
                     satMain.style.display = 'flex';
                     if (window.activateSatelliteView) window.activateSatelliteView();
-                } else if (goLoopOnly) {
-                    if (irDetail) irDetail.style.display = 'none';
-                    if (satQuick) satQuick.style.display = 'flex';
-                    if (window.activateQuickView) window.activateQuickView();
                 } else {
                     /* Default landing = the active-storm GALLERY. Clicking a
                        card opens that storm's rich detail card (#ir-detail).
@@ -2647,7 +2639,6 @@
                             if (window._irShowGallery) window._irShowGallery();
                             window._irOnceStormsLoaded(function () {
                                 if (currentView !== 'satellite') return;
-                                if (/[#&]loop=1/.test(window.location.hash || '')) return;
                                 openPreferred();
                             });
                         } else if (window._irShowGallery) {
@@ -2659,10 +2650,6 @@
                     } else if (window._irShowGallery) {
                         // No specific storm → land on the gallery overview.
                         window._irShowGallery();
-                    } else if (satQuick) {
-                        // Fallback if the gallery helper isn't available.
-                        satQuick.style.display = 'flex';
-                        if (window.activateQuickView) window.activateQuickView();
                     }
                 }
             } else if (view === 'subseasonal') {
