@@ -60,6 +60,7 @@ from satellite_ir import (
 )
 
 from tc_center_fix import find_ir_center, apply_center_gates
+import favorability   # shared ventilation-index physics (also used by the climo builder)
 
 try:
     import requests as _requests
@@ -10683,6 +10684,14 @@ _GFS_FILTER_URL = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl"
 _GFS_LATENCY_HOURS = 4.0       # NOMADS typically posts ~3.5h after cycle time
 _SHEAR_INNER_KM = 200.0        # SHIPS annulus inner radius
 _SHEAR_OUTER_KM = 800.0        # SHIPS annulus outer radius
+# χ_m (600 hPa mid-trop entropy deficit) per Tang & Emanuel (2012)
+# "Calculation from Gridded Data": the SATURATION entropy s*_m is averaged
+# over an inner 0–100 km disc, while the ENVIRONMENTAL entropy s_m is
+# averaged over a 100–300 km annulus. Two distinct regions, NOT the
+# 200–800 km shear ring (which samples a much drier outer air mass).
+_CHI_DISC_KM = 100.0           # 0–100 km disc (s*_m saturation + boundary s_b)
+_CHI_INNER_KM = 100.0          # 100–300 km annulus (environmental s_m)
+_CHI_OUTER_KM = 300.0
 _SHEAR_BOX_DEG = 9.0           # subset half-width in degrees (lat ~1000 km buffer)
 _SHEAR_CACHE_TTL = 6 * 3600    # 6 hours; one GFS cycle
 # Bumped to env-v3 after the env-profile + Helmholtz merge: payload
@@ -10708,7 +10717,7 @@ _DA_DEFAULT_EVAL_KM = 500.0    # evaluation radius: 0–eval_km area-mean of env
 # Standard pressure levels we pull for the env profile + Skew-T.
 # Includes 900 (Davis-Ahijevych) and 850 (SHIPS) so a single GRIB
 # fetch services every supported method. ~400 KB GRIB2 for a 9° box.
-_GFS_PROFILE_LEVELS = [1000, 925, 900, 850, 700, 500, 400, 300, 250, 200, 150, 100]
+_GFS_PROFILE_LEVELS = [1000, 925, 900, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100]
 
 
 def _latest_available_gfs_cycle() -> tuple[str, str]:
@@ -11007,6 +11016,43 @@ def _compute_gfs_shear(lat: float, lon: float, date_str: str, hour_str: str) -> 
                 q = 0.622 * e / max(pHpa - 0.378 * e, 1e-3)
                 q_prof.append(round(float(q), 6))
 
+            # ── χ_m inner-annulus (100–300 km) T/q for the ventilation
+            #    index. Averaged over a DIFFERENT (near-core, moister) ring
+            #    than the 200–800 km shear annulus above. T/q at 1000 hPa
+            #    (boundary) and 700 hPa (mid-trop), the two levels the
+            #    Bryan-entropy χ_m uses.
+            disc_mask = dist_km <= _CHI_DISC_KM
+            annulus_mask = (dist_km >= _CHI_INNER_KM) & (dist_km <= _CHI_OUTER_KM)
+
+            def _tq_masked(pHpa, m):
+                if (pHpa not in plev_sorted) or t_var is None or r_var is None:
+                    return None, None
+                gi = order[plev_sorted.index(pHpa)]   # original grib level index
+
+                def _avg(da):
+                    arr = np.asarray(da.values)
+                    while arr.ndim > 2:
+                        arr = arr[0]
+                    vals = arr[m]
+                    vals = vals[np.isfinite(vals)]
+                    return float(vals.mean()) if vals.size else float("nan")
+
+                tK = _avg(t_var.isel({lev_name: gi}))
+                rh = _avg(r_var.isel({lev_name: gi}))
+                if not (np.isfinite(tK) and np.isfinite(rh)):
+                    return None, None
+                tC = tK - 273.15
+                es = 6.112 * np.exp(17.67 * tC / (tC + 243.5))
+                e = max(0.0, (rh / 100.0) * es)
+                q = 0.622 * e / max(pHpa - 0.378 * e, 1e-3)
+                return round(float(tK), 2), round(float(q), 6)
+
+            # s_b (boundary) + s*_m (mid-trop saturation) from the 0-100 km
+            # disc; s_m (environmental mid-trop) from the 100-300 km annulus.
+            t_b_k, q_b = _tq_masked(1000, disc_mask)
+            t_m_sat_k, _ = _tq_masked(600, disc_mask)
+            t_m_env_k, q_m_env = _tq_masked(600, annulus_mask)
+
             return {
                 # Existing summary fields (unchanged contract).
                 "magnitude_ms": round(mag_ms, 2),
@@ -11030,6 +11076,18 @@ def _compute_gfs_shear(lat: float, lon: float, date_str: str, hour_str: str) -> 
                     "t_k":      t_prof,
                     "rh_pct":   rh_prof,
                     "q_kgkg":   q_prof,
+                },
+                # χ_m inner-annulus (100–300 km) inputs for the ventilation
+                # index — consumed by favorability.compute_vi at the endpoint.
+                "chi_inputs": {
+                    "disc_km": _CHI_DISC_KM,
+                    "annulus_km": [_CHI_INNER_KM, _CHI_OUTER_KM],
+                    "mid_hpa": 600,
+                    "t_b_k": t_b_k, "q_b": q_b,             # 1000 hPa boundary (disc)
+                    "t_m_sat_k": t_m_sat_k,                 # 600 hPa saturation (disc)
+                    "t_m_env_k": t_m_env_k, "q_m_env": q_m_env,  # 600 hPa env (annulus)
+                    "n_disc_points": int(disc_mask.sum()),
+                    "n_annulus_points": int(annulus_mask.sum()),
                 },
             }
         finally:
@@ -11668,6 +11726,33 @@ def get_storm_shear(
     # SHIPS path doesn't echo `method` in its result dict; tag it for
     # symmetry so frontends can dispatch on the field reliably.
     payload.setdefault("method", "ships")
+
+    # Ventilation index (Tang & Emanuel 2012) — SHIPS deep-layer shear only.
+    # VI = V_shear · χ_m / PI, with χ_m from the 100–300 km inner-annulus T/q
+    # (chi_inputs above) and empirical DeMaria–Kaplan PI from OISST SST.
+    # Same favorability.compute_vi() the ΔV climatology builder uses, so the
+    # live value and the climo distribution share one scale.
+    if method == "ships":
+        try:
+            ci = payload.get("chi_inputs") or {}
+            sst_c = _fetch_oisst_point(slat, slon).get("sst_c")
+            # Shear = SHIPS 850–200 hPa env magnitude (magnitude_kt), matching
+            # Tang & Emanuel's 850–200 deep-layer shear layer.
+            vi = favorability.compute_vi(
+                shear_kt=payload.get("magnitude_kt"),
+                t_b_k=ci.get("t_b_k"), q_b=ci.get("q_b"),
+                t_m_env_k=ci.get("t_m_env_k"), q_m_env=ci.get("q_m_env"),
+                t_m_sat_k=ci.get("t_m_sat_k"),
+                sst_c=sst_c,
+            ) if sst_c is not None else None
+            if vi:
+                vi["sst_c"] = round(sst_c, 2)
+                vi["chi_annulus_km"] = ci.get("annulus_km")
+                vi["shear_layer_hpa"] = [850, 200]
+                vi["chi_mid_hpa"] = ci.get("mid_hpa")
+                payload["ventilation"] = vi
+        except Exception as e:
+            logger.debug(f"[vi] ventilation index failed for {atcf_id}: {e}")
 
     with _shear_mem_lock:
         _shear_mem_cache[cache_key] = {"data": payload, "ts": time.time()}

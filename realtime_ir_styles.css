@@ -1021,6 +1021,23 @@ html, body { margin: 0; padding: 0; }
 .ir-dl-note {
     font-size: 0.62rem; color: #7c8aa0; line-height: 1.4; margin-top: 6px;
 }
+/* Persistent GFS run/valid caption under the Layers button when a layer
+   is draped (so the valid time is visible with the menu closed). */
+.ir-detail-layers-caption {
+    position: absolute;
+    top: calc(100% + 5px);
+    right: 0;
+    white-space: nowrap;
+    padding: 3px 8px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.64rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    background: rgba(20, 26, 38, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 5px;
+    pointer-events: none;
+}
 /* US Radar overlay toggle — a sibling pill of the ⛰3D / Microwave toggles in
    the global-map control bar. Mirrors .ir-3d-mode-btn; green (reflectivity)
    active state so it reads as an overlay, not a base product. */
@@ -1555,6 +1572,21 @@ html, body { margin: 0; padding: 0; }
     line-height: 1.4;
 }
 [data-theme="dark"] .ir-fav-note { color: #7c8aa0; }
+/* Composite ventilation-index meter — set apart from the 3 ingredient
+   meters above it with a divider + slightly bolder label. */
+.ir-fav-composite {
+    margin-top: 4px;
+    padding-top: 9px;
+    border-top: 1px dashed rgba(100, 116, 139, 0.30);
+}
+.ir-fav-composite .ir-fav-label { font-weight: 600; color: var(--text); }
+.ir-fav-vi-sub {
+    font-size: 0.62rem;
+    color: #64748b;
+    font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+}
+[data-theme="dark"] .ir-fav-vi-sub { color: #7c8aa0; }
 
 /* ── Intensity chart ─────────────────────────────────────────── */
 .ir-intensity-chart {

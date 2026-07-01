@@ -356,8 +356,9 @@
                                 <input type="range" id="ir-dl-opacity" min="0.2" max="1" step="0.05" value="0.8"
                                        oninput="window._irDetailSetOpacity(this.value)">
                             </div>
-                            <div class="ir-dl-note">GFS 0.25° analysis / OISST, draped over the storm-centered view. Hover values live on the global map.</div>
+                            <div class="ir-dl-note">GFS 0.25° analysis / OISST, draped over the storm-centered view. Hover the map to read values at the cursor.</div>
                         </div>
+                        <div id="ir-detail-layers-caption" class="ir-detail-layers-caption" style="display:none;"></div>
                     </div>
                     <!-- IR Tb colorbar legend (Claude IR; °C labels).
                          Range chosen to span realistic cloud-top temps:
@@ -448,6 +449,14 @@
                         <div class="ir-fav-meter" id="ir-fav-ohc">
                             <div class="ir-fav-top"><span class="ir-fav-label">Ocean heat (TCHP)<button type="button" class="ir-info-help" tabindex="0" aria-label="About ocean heat content" title="Tropical Cyclone Heat Potential — integrated heat above the 26°C isotherm (NOAA/AOML, 0.25°). >16 kJ/cm² is meaningful; ≥50 kJ/cm² is deep warm water that supports rapid intensification.">i</button></span><span class="ir-fav-val" id="ir-fav-ohc-val">&mdash;</span></div>
                             <div class="ir-fav-bar"><div class="ir-fav-fill"></div></div>
+                        </div>
+                        <!-- Composite: Ventilation Index (Tang & Emanuel 2012).
+                             Combines the three ingredients above into one
+                             favorability number; lower = more favorable. -->
+                        <div class="ir-fav-meter ir-fav-composite" id="ir-fav-vi">
+                            <div class="ir-fav-top"><span class="ir-fav-label">Ventilation index<button type="button" class="ir-info-help" tabindex="0" aria-label="About the ventilation index" title="Ventilation index (Tang & Emanuel 2012): VI = deep-layer shear × mid-level entropy deficit χ_m / potential intensity. A single composite of the three levers — low shear, moist mid-levels, and high ocean potential all lower it. Lower VI = more favorable; rapid intensification becomes unlikely as VI rises. Shear: 850–200 hPa; χ_m: 600 hPa entropy deficit (saturation entropy over the inner 0–100 km disc, environmental entropy over the 100–300 km annulus); potential intensity: empirical (SST-based, DeMaria–Kaplan). Placed against the reanalysis climatology of subsequent 24 h intensity change.">i</button></span><span class="ir-fav-val" id="ir-fav-vi-val">&mdash;</span></div>
+                            <div class="ir-fav-bar"><div class="ir-fav-fill"></div></div>
+                            <div class="ir-fav-vi-sub" id="ir-fav-vi-sub"></div>
                         </div>
                         <div class="ir-fav-note" id="ir-fav-note"></div>
                     </div>

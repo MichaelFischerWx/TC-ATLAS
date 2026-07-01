@@ -7131,6 +7131,11 @@
             zoomSnap: 0,
             zoomDelta: 0.5
         });
+        // Env-value hover: while an analysis layer is draped over the storm,
+        // hovering reads that layer's value at the cursor (reuses the global
+        // map's canvas-sampling tooltip). No-ops when no layer is active.
+        detailMap.on('mousemove', _detailEnvHoverMove);
+        detailMap.on('mouseout', _hideEnvHoverTip);
 
         // Local-dev debug handle so the detail map can be driven from the
         // console / preview harness (e.g. recon overlay verification).
@@ -7630,6 +7635,15 @@
         var color = v < 16 ? _FAV_HOSTILE : (v < 50 ? _FAV_MARGINAL : _FAV_GOOD);
         return { frac: frac, color: color };
     }
+    /** Ventilation index (Tang & Emanuel) — LOWER is better. Provisional
+     *  thresholds (favorable <0.02, marginal <0.08); the climatological ΔV
+     *  distribution will replace these with a percentile once it lands. */
+    function _favVI(vi) {
+        if (vi == null || isNaN(vi)) return null;
+        var frac = _clamp01((0.12 - vi) / 0.12);   // 0 → 1.0, 0.12+ → 0
+        var color = vi < 0.02 ? _FAV_GOOD : (vi < 0.08 ? _FAV_MARGINAL : _FAV_HOSTILE);
+        return { frac: frac, color: color };
+    }
     function _favApply(meterId, valId, fav, valText) {
         var meter = document.getElementById(meterId);
         var valEl = document.getElementById(valId);
@@ -7675,6 +7689,19 @@
         var ohc = oc && oc.ohc_kj_cm2 != null ? oc.ohc_kj_cm2 : null;
         _favApply('ir-fav-ohc', 'ir-fav-ohc-val', _favOhc(ohc),
             ohc != null ? Math.round(ohc) + ' kJ/cm²' : (oc ? 'n/a' : '…'));
+
+        // Composite ventilation index (from the /shear payload).
+        var vent = env && env.ventilation ? env.ventilation : null;
+        var vi = vent && vent.vi != null ? vent.vi : null;
+        _favApply('ir-fav-vi', 'ir-fav-vi-val', _favVI(vi),
+            vi != null ? vi.toFixed(3) : (env ? 'n/a' : '…'));
+        var viSub = document.getElementById('ir-fav-vi-sub');
+        if (viSub) {
+            viSub.textContent = vent
+                ? ('shear ' + Math.round(vent.shear_kt) + ' kt · χₘ ' + vent.chi_m +
+                   ' · PI ' + Math.round(vent.mpi_kt) + ' kt')
+                : '';
+        }
 
         // Footer note: SST source date + any coverage caveat.
         var note = document.getElementById('ir-fav-note');
@@ -21096,7 +21123,26 @@
             overlays = _detailEnvAddOverlays(layer.image_url, bounds);
             kind = 'raster';
         }
-        _detailEnvActive[layer.name] = { overlays: overlays, overlayKind: kind, layer: layer };
+        var entry = { overlays: overlays, overlayKind: kind, layer: layer };
+        _detailEnvActive[layer.name] = entry;
+        // Load the raw data PNG into an offscreen canvas so hover can read
+        // the value at the cursor (same mechanism as the global map). Needs
+        // crossOrigin for getImageData; the GCS bucket serves CORS headers.
+        if (layer.data_url) {
+            var img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = function () {
+                try {
+                    var c = document.createElement('canvas');
+                    c.width = img.naturalWidth; c.height = img.naturalHeight;
+                    var ctx = c.getContext('2d', { willReadFrequently: true });
+                    ctx.drawImage(img, 0, 0);
+                    entry.canvas = c; entry.ctx = ctx;
+                    entry.dataW = img.naturalWidth; entry.dataH = img.naturalHeight;
+                } catch (e) {}
+            };
+            img.src = layer.data_url;
+        }
         _updateDetailLayersCount();
         _ga('rt_detail_env_layer', { layer: layer.name, on: true });
     }
@@ -21147,7 +21193,8 @@
     }
 
     function _updateDetailLayersCount() {
-        var n = Object.keys(_detailEnvActive).length;
+        var names = Object.keys(_detailEnvActive);
+        var n = names.length;
         var badge = document.getElementById('ir-detail-layers-count');
         if (badge) {
             badge.textContent = n;
@@ -21155,6 +21202,51 @@
         }
         var btn = document.getElementById('ir-detail-layers-btn');
         if (btn) btn.classList.toggle('active', n > 0);
+        // Persistent caption: which GFS analysis + valid time is draped.
+        var cap = document.getElementById('ir-detail-layers-caption');
+        if (cap) {
+            var vt = null;
+            for (var i = 0; i < names.length; i++) {
+                var L_ = _detailEnvActive[names[i]].layer;
+                if (L_ && L_.valid_time) { vt = L_.valid_time; break; }
+            }
+            if (n > 0 && vt) {
+                cap.textContent = 'GFS · valid ' +
+                    String(vt).replace('T', ' ').replace(':00:00Z', 'Z');
+                cap.style.display = '';
+            } else {
+                cap.style.display = 'none';
+            }
+        }
+    }
+
+    /** Detail-map env hover: sample each active layer's data canvas at the
+     *  cursor and show the shared readout tooltip. Mirrors the global map's
+     *  handler but reads _detailEnvActive. No-ops when nothing is active. */
+    function _detailEnvHoverMove(e) {
+        var actives = Object.keys(_detailEnvActive).map(function (k) { return _detailEnvActive[k]; });
+        if (!actives.length) { _hideEnvHoverTip(); return; }
+        var lat = e.latlng.lat, lon = e.latlng.lng, lines = [];
+        for (var i = 0; i < actives.length; i++) {
+            var v = _sampleEnvLayer(actives[i], lat, lon);
+            if (v == null) continue;
+            var L_ = actives[i].layer;
+            var span = L_.vmax - L_.vmin;
+            var nd = span >= 50 ? 0 : (span >= 10 ? 1 : 2);
+            lines.push('<b>' + L_.title + ':</b> ' + v.toFixed(nd) + ' ' + L_.units);
+        }
+        var tip = _envHoverTipEl();
+        if (!lines.length) { tip.style.display = 'none'; return; }
+        lines.push('<span style="color:#94a3b8;font-size:0.62rem;">'
+            + lat.toFixed(1) + '°' + (lat >= 0 ? 'N' : 'S')
+            + ' ' + Math.abs(lon).toFixed(1) + '°' + (lon >= 0 ? 'E' : 'W') + '</span>');
+        tip.innerHTML = lines.join('<br>');
+        var pt = e.originalEvent;
+        if (pt) {
+            tip.style.left = (pt.clientX + 14) + 'px';
+            tip.style.top = (pt.clientY + 14) + 'px';
+            tip.style.display = '';
+        }
     }
 
     window._irDetailToggleEnvLayer = function (name) {
