@@ -21211,22 +21211,41 @@
         }
         var btn = document.getElementById('ir-detail-layers-btn');
         if (btn) btn.classList.toggle('active', n > 0);
-        // Persistent caption: which GFS analysis + valid time is draped.
+        // Persistent caption: which GFS run (init cycle + forecast hour) and
+        // valid time is draped.
         var cap = document.getElementById('ir-detail-layers-caption');
         if (cap) {
-            var vt = null;
+            var capLayer = null;
             for (var i = 0; i < names.length; i++) {
                 var L_ = _detailEnvActive[names[i]].layer;
-                if (L_ && L_.valid_time) { vt = L_.valid_time; break; }
+                if (L_ && (L_.valid_time || L_.init_cycle)) { capLayer = L_; break; }
             }
-            if (n > 0 && vt) {
-                cap.textContent = 'GFS · valid ' +
-                    String(vt).replace('T', ' ').replace(':00:00Z', 'Z');
-                cap.style.display = '';
-            } else {
-                cap.style.display = 'none';
-            }
+            var capTxt = n > 0 ? _fmtGfsRun(capLayer) : '';
+            if (capTxt) { cap.textContent = capTxt; cap.style.display = ''; }
+            else { cap.style.display = 'none'; }
         }
+    }
+
+    /** Format a GFS run/valid caption from an env layer's init_cycle
+     *  ("YYYYMMDD-HH") + forecast_hour + valid_time. Analysis (f000) reads
+     *  "GFS 06Z analysis · valid 06Z"; a forecast reads "GFS 06Z f12 · valid 18Z". */
+    function _fmtGfsRun(layer) {
+        if (!layer) return '';
+        var run = '';
+        var ic = layer.init_cycle;
+        if (ic && /^\d{8}-\d{2}$/.test(ic)) run = ic.slice(9, 11) + 'Z';
+        var fh = layer.forecast_hour;
+        var head = 'GFS';
+        if (run) {
+            head += ' ' + run;
+            if (fh != null && fh > 0) head += ' f' + (fh < 10 ? '0' + fh : fh);
+            else if (fh === 0) head += ' analysis';
+        }
+        var parts = [head];
+        if (layer.valid_time) {
+            parts.push('valid ' + String(layer.valid_time).replace('T', ' ').replace(':00:00Z', 'Z'));
+        }
+        return parts.join(' · ');
     }
 
     /** Detail-map hover readout: IR brightness temperature at the cursor by
@@ -21299,8 +21318,13 @@
             return;
         }
         var vt = document.getElementById('ir-dl-valid');
-        var vs = all.map(function (L_) { return L_.valid_time; }).filter(Boolean);
-        if (vt && vs.length) vt.textContent = 'valid ' + String(vs[0]).replace('T', ' ').replace(':00:00Z', 'Z');
+        if (vt) {
+            var vtLayer = null;
+            for (var vi_ = 0; vi_ < all.length; vi_++) {
+                if (all[vi_] && (all[vi_].valid_time || all[vi_].init_cycle)) { vtLayer = all[vi_]; break; }
+            }
+            vt.textContent = _fmtGfsRun(vtLayer);
+        }
 
         function esc(s) {
             return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
