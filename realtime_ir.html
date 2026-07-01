@@ -660,6 +660,12 @@
                         <h3 class="ir-info-heading" id="ir-intensity-heading"
                             style="margin-bottom:0;padding-bottom:0;border-bottom:none;">Intensity Forecast</h3>
                         <div style="display:flex;align-items:center;gap:8px;">
+                            <div class="ir-intensity-metric" role="group" aria-label="Intensity metric">
+                                <button id="ir-intensity-metric-vmax" class="ir-intensity-metric-btn active" type="button"
+                                        onclick="window._rtToggleIntensityMetric('vmax')" title="Show maximum sustained wind">Vmax</button>
+                                <button id="ir-intensity-metric-mslp" class="ir-intensity-metric-btn" type="button"
+                                        onclick="window._rtToggleIntensityMetric('mslp')" title="Show minimum sea-level pressure">MSLP</button>
+                            </div>
                             <span id="ir-intensity-source"
                                   style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
                             <button id="ir-intensity-save" type="button" class="ir-chart-save-btn"

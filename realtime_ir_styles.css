@@ -1636,6 +1636,30 @@ html, body { margin: 0; padding: 0; }
 }
 [data-theme="dark"] .ir-fav-vi-sub { color: #7c8aa0; }
 
+/* Vmax|MSLP segmented toggle in the intensity-chart heading. */
+.ir-intensity-metric {
+    display: inline-flex;
+    border: 1px solid var(--border-light);
+    border-radius: 5px;
+    overflow: hidden;
+}
+.ir-intensity-metric-btn {
+    padding: 2px 8px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: #8993a4;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.ir-intensity-metric-btn:hover { color: var(--text); }
+.ir-intensity-metric-btn.active {
+    background: rgba(0, 229, 255, 0.18);
+    color: #00e5ff;
+}
+
 /* ── Intensity chart ─────────────────────────────────────────── */
 .ir-intensity-chart {
     width: 100%;

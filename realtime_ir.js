@@ -701,6 +701,7 @@
     var _rtModelIntensityTraces = [];  // Plotly trace indices for intensity chart
 
     // ── DeepMind WeatherLab Ensemble State ────────────────────
+    var _rtIntensityMetric = 'vmax';   // 'vmax' | 'mslp' — intensity chart y-axis
     var _rtWeatherlabData = null;      // API response
     var _rtWeatherlabVisible = false;  // toggle state
     var _rtWeatherlabLayers = [];      // Leaflet polylines
@@ -9090,6 +9091,58 @@
     // ═══════════════════════════════════════════════════════════
 
     /** Render the intensity timeline chart */
+    // ── Intensity metric (Vmax ⟷ MSLP) ──────────────────────────────
+    // The intensity chart overlays best-track history, model forecasts, and
+    // the DeepMind ensemble. The Vmax|MSLP pill in the heading flips them all
+    // to minimum pressure. MSLP uses a NORMAL y-axis (low pressure at the
+    // bottom) per common convention, and drops the Saffir–Simpson lines
+    // (which are Vmax-specific).
+    var _I_MSLP = { unit: 'hPa', title: 'MSLP (hPa)', fmt: '.0f' };
+    var _I_VMAX = { unit: 'kt', title: 'Vmax (kt)', fmt: '.0f' };
+    function _iMeta() { return _rtIntensityMetric === 'mslp' ? _I_MSLP : _I_VMAX; }
+    /** Pull the active metric's value from a point, tolerating field aliases
+     *  (DeepMind pres/wind, best-track mslp_hpa/vmax_kt, model mslp/vmax). */
+    function _iVal(pt) {
+        if (!pt) return null;
+        if (_rtIntensityMetric === 'mslp') {
+            return pt.pres != null ? pt.pres
+                 : pt.mslp != null ? pt.mslp
+                 : pt.mslp_hpa != null ? pt.mslp_hpa : null;
+        }
+        return pt.wind != null ? pt.wind
+             : pt.vmax != null ? pt.vmax
+             : pt.vmax_kt != null ? pt.vmax_kt : null;
+    }
+    /** Re-render whichever intensity view is active for the current storm,
+     *  using the new metric. Wired to the Vmax|MSLP pill. */
+    window._rtToggleIntensityMetric = function (metric) {
+        var m = (metric === 'mslp') ? 'mslp' : 'vmax';
+        if (m === _rtIntensityMetric) return;
+        _rtIntensityMetric = m;
+        // Reflect the pill state.
+        ['vmax', 'mslp'].forEach(function (k) {
+            var b = document.getElementById('ir-intensity-metric-' + k);
+            if (b) b.classList.toggle('active', k === m);
+        });
+        // Re-rendering the base chart (Plotly.react/newPlot) replaces all
+        // traces, invalidating the stored overlay trace indices. Reset the
+        // trackers first so the overlay clear-funcs don't delete base traces
+        // by stale index; the overlays are re-added fresh below.
+        _rtModelIntensityTraces = [];
+        _rtWeatherlabMeanTraces = [];
+        // Re-draw the active chart: DeepMind percentile view if present,
+        // else best-track history; then re-overlay models + ensemble spread.
+        if (_rtWeatherlabData && _rtWeatherlabData.members) {
+            _rtRenderCardForecastIntensity(_rtWeatherlabData);
+        } else {
+            var meta = (currentStormId && _panelCache[currentStormId])
+                ? _panelCache[currentStormId].meta : null;
+            if (meta) renderIntensityChart(meta);
+        }
+        if (_rtModelVisible && _rtModelData) _rtRenderModelIntensityTraces(_rtModelActiveCycle);
+        if (_rtWeatherlabVisible) _rtRenderWeatherlabIntensity();
+    };
+
     function renderIntensityChart(meta) {
         var chartEl = document.getElementById('ir-intensity-chart');
         if (!chartEl) return;
@@ -9113,14 +9166,15 @@
             return;
         }
 
+        var isMslp = _rtIntensityMetric === 'mslp';
         var times = [];
         var winds = [];
         var colors = [];
         for (var i = 0; i < history.length; i++) {
             times.push(history[i].time);
-            winds.push(history[i].vmax_kt);
-            var cat = windToCategory(history[i].vmax_kt);
-            colors.push(SS_COLORS[cat]);
+            winds.push(_iVal(history[i]));
+            // SS-category coloring is Vmax-specific; use a flat color for MSLP.
+            colors.push(isMslp ? '#2e7dff' : SS_COLORS[windToCategory(history[i].vmax_kt)]);
         }
 
         var trace = {
@@ -9144,12 +9198,13 @@
                 tickformat: '%m/%d %Hz'
             },
             yaxis: {
-                title: { text: 'Vmax (kt)', font: { size: 10, color: '#5b6573', family: 'DM Sans, sans-serif' } },
+                title: { text: _iMeta().title, font: { size: 10, color: '#5b6573', family: 'DM Sans, sans-serif' } },
                 gridcolor: 'rgba(255,255,255,0.04)',
                 tickfont: { size: 9, color: '#5b6573', family: 'DM Sans, sans-serif' }
             },
-            // SS category shading bands
-            shapes: [
+            // SS category shading bands — Vmax only (drop for MSLP; low
+            // pressure sits at the bottom on a normal axis).
+            shapes: isMslp ? [] : [
                 { type: 'rect', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 34,  y1: 64,  fillcolor: 'rgba(52,211,153,0.06)', line: { width: 0 } },
                 { type: 'rect', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 64,  y1: 83,  fillcolor: 'rgba(251,191,36,0.06)',  line: { width: 0 } },
                 { type: 'rect', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 83,  y1: 96,  fillcolor: 'rgba(251,146,60,0.06)',  line: { width: 0 } },
@@ -11839,13 +11894,15 @@
             var winds = [];
             var hasWind = false;
             for (var pi = 0; pi < points.length; pi++) {
-                if (points[pi].wind != null) {
+                var v = _iVal(points[pi]);
+                if (v != null) {
                     times.push('+' + Math.round(points[pi].tau) + 'h');
-                    winds.push(points[pi].wind);
+                    winds.push(v);
                     hasWind = true;
                 }
             }
-
+            // A model with no data for the active metric (e.g. no MSLP) is
+            // simply skipped in that mode.
             if (!hasWind || winds.length < 2) continue;
 
             var color = forecast.color || RT_MODEL_COLORS[tech] || '#888';
@@ -11865,7 +11922,7 @@
                 marker: isOfficial ? { size: 5, symbol: 'diamond', color: color } : undefined,
                 opacity: isOfficial ? 1.0 : (isConsensus ? 0.85 : 0.65),
                 showlegend: false,
-                hovertemplate: forecast.name + ': %{y} kt<extra></extra>'
+                hovertemplate: forecast.name + ': %{y} ' + _iMeta().unit + '<extra></extra>'
             });
         }
 
@@ -12326,12 +12383,13 @@
             if (!pts) continue;
             for (var pi = 0; pi < pts.length; pi++) {
                 var pt = pts[pi];
-                if (pt.wind == null) continue;
+                var wv = _iVal(pt);
+                if (wv == null) continue;
                 if (!tauMap[pt.tau]) {
                     var t = new Date(initDate.getTime() + pt.tau * 3600000);
                     tauMap[pt.tau] = { winds: [], time: t.toISOString() };
                 }
-                tauMap[pt.tau].winds.push(pt.wind);
+                tauMap[pt.tau].winds.push(wv);
             }
         }
 
@@ -12375,10 +12433,11 @@
             var meanTimes = [];
             var meanWinds = [];
             for (var i = 0; i < mean.points.length; i++) {
-                if (mean.points[i].wind != null) {
+                var mv = _iVal(mean.points[i]);
+                if (mv != null) {
                     var t = new Date(initDate.getTime() + mean.points[i].tau * 3600000);
                     meanTimes.push(t.toISOString());
-                    meanWinds.push(mean.points[i].wind);
+                    meanWinds.push(mv);
                 }
             }
             newTraces.push({
@@ -12389,7 +12448,7 @@
                 marker: { size: 4, symbol: 'circle', color: _WEATHERLAB_MEAN_COLOR },
                 opacity: 0.9,
                 showlegend: false,
-                hovertemplate: 'DeepMind: %{y:.0f} kt<extra></extra>'
+                hovertemplate: 'DeepMind: %{y:.0f} ' + _iMeta().unit + '<extra></extra>'
             });
         }
 
@@ -17225,16 +17284,23 @@
         var theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
-        // Bucket every member's Vmax by tau so we can compute a per-tau
+        // MSLP is scoped to the storm card chart (the genesis modal stays
+        // Vmax). valOf pulls the active metric from a point.
+        var mslp = (elId === 'ir-intensity-chart') && _rtIntensityMetric === 'mslp';
+        var unit = mslp ? 'hPa' : 'kt';
+        var valOf = function (pt) { return mslp ? pt.pres : pt.wind; };
+
+        // Bucket every member's value by tau so we can compute a per-tau
         // envelope without re-walking members per-point.
         var byTau = {};
         for (var i = 0; i < memberKeys.length; i++) {
             var pts = members[memberKeys[i]].points || [];
             for (var j = 0; j < pts.length; j++) {
-                if (pts[j].wind == null) continue;
+                var v = valOf(pts[j]);
+                if (v == null) continue;
                 var t = pts[j].tau;
                 if (!byTau[t]) byTau[t] = [];
-                byTau[t].push(pts[j].wind);
+                byTau[t].push(v);
             }
         }
         var taus = Object.keys(byTau).map(Number).sort(function (a, b) {
@@ -17264,8 +17330,8 @@
         var xVals = taus.map(function (t) { return '+' + t + 'h'; });
         var meanByTau = {};
         for (var mi = 0; mi < mean.points.length; mi++) {
-            if (mean.points[mi].wind != null) {
-                meanByTau[mean.points[mi].tau] = mean.points[mi].wind;
+            if (valOf(mean.points[mi]) != null) {
+                meanByTau[mean.points[mi].tau] = valOf(mean.points[mi]);
             }
         }
         var meanArr = taus.map(function (t) { return meanByTau[t]; });
@@ -17291,7 +17357,8 @@
                                      : 'rgba(71,85,105,0.85)';
         var shapes = [];
         var ssAnnotations = [];
-        for (var sti = 0; sti < ssThresholds.length; sti++) {
+        // SS category lines are Vmax-specific — omit them in MSLP mode.
+        for (var sti = 0; sti < ssThresholds.length && !mslp; sti++) {
             var st = ssThresholds[sti];
             shapes.push({
                 type: 'line', xref: 'paper', yref: 'y',
@@ -17355,7 +17422,7 @@
                                   : 'rgba(180,83,9,0.75)',
                     width: 1.2, dash: 'dot' },
             name: 'median (P50)',
-            hovertemplate: '%{x}<br>median: %{y:.1f} kt<extra></extra>',
+            hovertemplate: '%{x}<br>median: %{y:.1f} ' + unit + '<extra></extra>',
             showlegend: true,
         });
         // Ensemble mean — solid bold line with SS-colored markers.
@@ -17366,7 +17433,11 @@
             type: 'scatter', mode: 'lines+markers',
             x: xVals, y: meanArr,
             line: { color: '#f97316', width: 2.5 },
-            marker: {
+            marker: mslp ? {
+                size: 7, color: '#f97316',
+                line: { color: isDark ? 'rgba(255,255,255,0.45)'
+                                       : 'rgba(15,22,35,0.30)', width: 0.5 },
+            } : {
                 size: 7,
                 color: meanArr,
                 colorscale: _GENESIS_SS_SCALE,
@@ -17380,7 +17451,7 @@
                 showscale: false,
             },
             name: 'ensemble mean',
-            hovertemplate: '%{x}<br>%{y:.1f} kt<extra></extra>',
+            hovertemplate: '%{x}<br>%{y:.1f} ' + unit + '<extra></extra>',
             showlegend: true,
         });
 
@@ -17398,6 +17469,16 @@
         }
 
         var maxY = Math.max(160, Math.max.apply(null, maxArr) + 10);
+        var yRange, yTitle;
+        if (mslp) {
+            // Low pressure at the bottom (normal axis) per common convention.
+            yRange = [Math.min.apply(null, minArr) - 5,
+                      Math.max.apply(null, maxArr) + 5];
+            yTitle = 'MSLP (hPa)';
+        } else {
+            yRange = [0, maxY];
+            yTitle = 'Vmax (kt)';
+        }
         var layout = Object.assign({}, theme, {
             // Extra bottom room for the rotated tick labels + the
             // "Lead time" title (was 42 px and crowded against the
@@ -17419,8 +17500,8 @@
                      tickvals: xVals.filter(function (_v, i) { return i % 4 === 0; }),
                      gridcolor: isDark ? 'rgba(255,255,255,0.06)'
                                        : 'rgba(15,22,35,0.06)' },
-            yaxis: { title: { text: 'Vmax (kt)', font: { size: 11 } },
-                     range: [0, maxY],
+            yaxis: { title: { text: yTitle, font: { size: 11 } },
+                     range: yRange,
                      gridcolor: isDark ? 'rgba(255,255,255,0.06)'
                                        : 'rgba(15,22,35,0.06)' },
             shapes: shapes,
