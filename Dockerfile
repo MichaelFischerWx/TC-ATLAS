@@ -35,6 +35,7 @@ COPY global_archive_api.py .
 COPY microwave_api.py .
 COPY satellite_ir.py .
 COPY ir_monitor_api.py .
+COPY favorability.py .
 COPY og_card.py .
 COPY og_refresh.py .
 COPY prewarm_job.py .
