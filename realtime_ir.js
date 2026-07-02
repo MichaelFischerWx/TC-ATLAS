@@ -7123,7 +7123,18 @@
         }
         mapDiv.style.display = 'block';
 
-        // Create mini-map centered on storm
+        // Create mini-map centered on storm — dead-reckoned to the current
+        // time, NOT the raw last-fix position. B-deck fixes lag real-time by
+        // 6-9 h; the satellite imagery (and the current-position pin, which
+        // uses the same _extrapolateStormPin) show where the storm actually
+        // is NOW, so anchoring the camera on the stale fix left the live storm
+        // sitting up-shear of center. On the storm-cutout path the per-frame
+        // recenter corrects this anyway, but in lite/mosaic mode the frames are
+        // global tile layers that _recenterDetailToFrame no-ops on — so the
+        // creation center IS the resting camera position. Extrapolate here so
+        // both paths open with the storm centered. (>9 h stale or <30 min fresh
+        // → _extrapolateStormPin returns the raw fix, i.e. prior behavior.)
+        var _initCtr = _extrapolateStormPin(storm);
         // Allow up to zoom 7 (GeoColor supports Level7); IR tiles still capped at Level6
         detailMap = L.map(mapDiv, {
             // Render vectors (track, graticule, storm marker) via Canvas
@@ -7140,7 +7151,7 @@
             // all canvas vectors on this map (graticule lines are
             // non-interactive, so only the track dots/pin gain the hit area).
             renderer: L.canvas({ tolerance: 8 }),
-            center: [storm.lat, storm.lon],
+            center: [_initCtr.lat, _initCtr.lon],
             // zoom 6 fills the storm-relative crop tightly to the viewport
             // (the IR cutout is ±10° around the storm, ~2200 km wide;
             // zoom 5 left visible basemap margins around the cropped
