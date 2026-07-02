@@ -8586,31 +8586,52 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str,
     # Compute the ensemble mean per track: average lat/lon/wind/pres at
     # each tau across all samples we have. DeepMind doesn't publish an
     # ensemble_mean for the cyclogenesis CSV, so we derive it here.
+    #
+    # Two robustness fixes mirror _tca_mean_track (so the mean trace is
+    # smooth rather than a non-physical sawtooth): a circular mean for
+    # longitude (antimeridian-safe) and a per-tau member-count gate that
+    # drops thin late-tau buckets where a 1-2 member "mean" can leap
+    # thousands of km. Unlike the cluster path, per-track membership can
+    # be genuinely small, so the floor is 1 (never wipes a small track);
+    # the 10%-of-peak rule still trims lone outlier taus on big tracks.
     for track_id, storm in result.items():
-        by_tau: dict = {}  # tau -> {lats:[], lons:[], winds:[], pres:[]}
+        by_tau: dict = {}  # tau -> {lat, lon_sin, lon_cos, wind, pres, n}
         for mkey, mem in storm["members"].items():
             for p in mem["points"]:
+                if p.get("lat") is None or p.get("lon") is None:
+                    continue
                 t = p["tau"]
-                bucket = by_tau.setdefault(t, {"lat": [], "lon": [],
-                                                "wind": [], "pres": []})
-                bucket["lat"].append(p["lat"])
-                bucket["lon"].append(p["lon"])
+                bucket = by_tau.setdefault(t, {
+                    "lat_sum": 0.0, "lon_sin": 0.0, "lon_cos": 0.0,
+                    "n": 0, "wind": [], "pres": []})
+                bucket["lat_sum"] += p["lat"]
+                lon_rad = p["lon"] * math.pi / 180.0
+                bucket["lon_sin"] += math.sin(lon_rad)
+                bucket["lon_cos"] += math.cos(lon_rad)
+                bucket["n"] += 1
                 if p.get("wind") is not None:
                     bucket["wind"].append(p["wind"])
                 if p.get("pres") is not None:
                     bucket["pres"].append(p["pres"])
         mean_pts = []
-        for t in sorted(by_tau):
-            b = by_tau[t]
-            mean_pts.append({
-                "tau": t,
-                "lat": round(sum(b["lat"]) / len(b["lat"]), 2),
-                "lon": round(sum(b["lon"]) / len(b["lon"]), 2),
-                "wind": round(sum(b["wind"]) / len(b["wind"]), 1)
-                        if b["wind"] else None,
-                "pres": round(sum(b["pres"]) / len(b["pres"]), 1)
-                        if b["pres"] else None,
-            })
+        if by_tau:
+            peak_n = max(b["n"] for b in by_tau.values())
+            min_n = max(1, int(round(peak_n * 0.10)))
+            for t in sorted(by_tau):
+                b = by_tau[t]
+                if b["n"] < min_n:
+                    continue
+                lon_mean = math.atan2(b["lon_sin"] / b["n"],
+                                      b["lon_cos"] / b["n"]) * 180.0 / math.pi
+                mean_pts.append({
+                    "tau": t,
+                    "lat": round(b["lat_sum"] / b["n"], 2),
+                    "lon": round(lon_mean, 2),
+                    "wind": round(sum(b["wind"]) / len(b["wind"]), 1)
+                            if b["wind"] else None,
+                    "pres": round(sum(b["pres"]) / len(b["pres"]), 1)
+                            if b["pres"] else None,
+                })
         storm["ensemble_mean"] = {"points": mean_pts}
 
     _weatherlab_genesis_cache[cache_key] = {"data": result, "ts": time.time()}

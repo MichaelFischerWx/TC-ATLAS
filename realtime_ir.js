@@ -13057,6 +13057,18 @@
     // every contributing member. Used by the TC-ATLAS clustering path
     // since DeepMind's pre-computed ensemble_mean is per-track-id and
     // doesn't apply to our re-grouping.
+    //
+    // Mirrors the server-side _tca_mean_track (ir_monitor_api.py) with
+    // its two robustness fixes, so the client-side fallback mean draws
+    // the same smooth track as the server clusters:
+    //   1. Circular mean for longitude — a cluster straddling the
+    //      antimeridian must not average +179° and -179° to 0° (the
+    //      wrong side of the globe).
+    //   2. Per-tau member-count gate — at late lead times only a few
+    //      members are still tracked, and a 1-2 member "mean" can leap
+    //      thousands of km between consecutive taus, producing a
+    //      non-physical sawtooth. Drop tau buckets thinner than 10% of
+    //      the peak member count (floor of 5 for small clusters).
     function _genesisMeanTrack(memberPointArrays) {
         var byTau = {};
         for (var i = 0; i < memberPointArrays.length; i++) {
@@ -13066,30 +13078,46 @@
                 var p = pts[j];
                 if (p.lat == null || p.lon == null) continue;
                 if (!byTau[p.tau]) {
-                    byTau[p.tau] = { latSum: 0, lonSum: 0,
+                    byTau[p.tau] = { latSum: 0, lonSin: 0, lonCos: 0,
                                      windSum: 0, windN: 0, n: 0 };
                 }
-                byTau[p.tau].latSum += p.lat;
-                byTau[p.tau].lonSum += p.lon;
-                byTau[p.tau].n++;
+                var b = byTau[p.tau];
+                b.latSum += p.lat;
+                // Circular-mean accumulator for longitude.
+                var lonRad = p.lon * Math.PI / 180;
+                b.lonSin += Math.sin(lonRad);
+                b.lonCos += Math.cos(lonRad);
+                b.n++;
                 if (p.wind != null && isFinite(p.wind)) {
-                    byTau[p.tau].windSum += p.wind;
-                    byTau[p.tau].windN++;
+                    b.windSum += p.wind;
+                    b.windN++;
                 }
             }
         }
         var taus = Object.keys(byTau).map(Number).sort(function (a, b) {
             return a - b;
         });
-        return taus.map(function (tau) {
-            var b = byTau[tau];
-            return {
-                tau: tau,
-                lat: b.latSum / b.n,
-                lon: b.lonSum / b.n,
-                wind: b.windN > 0 ? b.windSum / b.windN : null,
-            };
-        });
+        if (!taus.length) return [];
+        // Member-count gate: 10% of the peak per-tau count, floor 5.
+        var peakN = 0;
+        for (var ti = 0; ti < taus.length; ti++) {
+            if (byTau[taus[ti]].n > peakN) peakN = byTau[taus[ti]].n;
+        }
+        var minN = Math.max(5, Math.round(peakN * 0.10));
+        var out = [];
+        for (var tk = 0; tk < taus.length; tk++) {
+            var bb = byTau[taus[tk]];
+            if (bb.n < minN) continue;
+            var lonMean = Math.atan2(bb.lonSin / bb.n, bb.lonCos / bb.n)
+                * 180 / Math.PI;
+            out.push({
+                tau: taus[tk],
+                lat: bb.latSum / bb.n,
+                lon: lonMean,
+                wind: bb.windN > 0 ? bb.windSum / bb.windN : null,
+            });
+        }
+        return out;
     }
 
     // TC-ATLAS clustering — DENSITY-PEAK method.
