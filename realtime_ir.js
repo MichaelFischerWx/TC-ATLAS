@@ -9129,6 +9129,9 @@
     // Stash of the DeepMind modal's intensity data so its Vmax|MSLP toggle
     // can re-render the fan chart.
     var _genesisIntData = null;
+    // True when the modal's system is already a TC (genesis at +0 h) — the
+    // overall summary figure then shows ACE instead of the genesis-time panel.
+    var _genesisAlreadyTC = false;
 
     /** Re-render whichever intensity view is active, using the new metric.
      *  Shared by the card pill AND the DeepMind modal toggle. */
@@ -14115,7 +14118,7 @@
                   // Intensity; the "Trends" tab shows the run-to-run summary.
                   '<span id="rt-genesis-summary-actions" class="rt-genesis-summary-actions">' +
                     '<span class="rt-genesis-sum-group" data-pane="thisrun">' +
-                      '<button type="button" id="rt-genesis-sum-overall-dl" class="rt-genesis-modal-summary-save" title="Download overall summary PNG (track map + intensity + genesis time)">⤓ Overall</button>' +
+                      '<button type="button" id="rt-genesis-sum-overall-dl" class="rt-genesis-modal-summary-save" title="Download overall summary PNG (track map + intensity + genesis time, or ACE distribution once the system is already a TC)">⤓ Overall</button>' +
                       '<button type="button" id="rt-genesis-sum-overall-view" class="rt-genesis-modal-summary-view" title="Open overall summary in a new tab" aria-label="View overall summary in a new tab">⤢</button>' +
                       '<button type="button" id="rt-genesis-sum-int-dl" class="rt-genesis-modal-summary-save" title="Download intensity summary PNG (intensity spread + LMI distribution + LMI vs hour)">⤓ Intensity</button>' +
                       '<button type="button" id="rt-genesis-sum-int-view" class="rt-genesis-modal-summary-view" title="Open intensity summary in a new tab" aria-label="View intensity summary in a new tab">⤢</button>' +
@@ -14974,6 +14977,12 @@
             || _genesisVariantNominal(_detVariant);
         var stats = _computeGenesisStats(memberKeys, members, _detSize);
         _renderGenesisStatsStrip(stats, memberKeys.length);
+        // "Already a TC": genesis has effectively already happened (median
+        // first-34 kt at +0 h), so formation probability / genesis time are
+        // trivially 100% / +0 h and meaningless. The overall summary figure
+        // swaps the genesis-time panel for the ACE distribution in this case.
+        _genesisAlreadyTC = !!(stats && stats.genesisMedianTau != null
+                               && stats.genesisMedianTau <= 0);
 
         var subParts = [
             '<strong>Init:</strong> ' + initLabel,
@@ -19367,7 +19376,13 @@
         var panels = [];
         for (var i = 0; i < spec.panels.length; i++) {
             var p = spec.panels[i];
-            var el = document.getElementById(p.el);
+            var elId = p.el;
+            // Already a TC → genesis time is meaningless; show ACE in the
+            // overall summary instead (the ACE fan is always rendered).
+            if (_genesisAlreadyTC && kind === 'overall' && elId === 'rt-genesis-modal-gtime') {
+                elId = 'rt-genesis-modal-ace';
+            }
+            var el = document.getElementById(elId);
             var ready = !!(el && el.data && el.data.length);
             if (!ready) {
                 if (p.optional) continue;
