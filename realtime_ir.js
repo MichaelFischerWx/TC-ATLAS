@@ -5897,6 +5897,14 @@
         var cached = _panelCache[atcfId];
         function _handleMeta(meta) {
             renderIntensityChart(meta);
+            // Reveal the intensity panel on card open when there's history to
+            // show, so the chart (and the Vmax|MSLP toggle in its heading) is
+            // visible by default — not hidden until Models is turned on. It
+            // upgrades to the DeepMind forecast bands when Models/DeepMind loads.
+            var _isec = document.getElementById('ir-intensity-section');
+            if (_isec && meta && meta.intensity_history && meta.intensity_history.length) {
+                _isec.style.display = '';
+            }
             if (meta.has_recon) {
                 document.getElementById('ir-recon-section').style.display = 'block';
                 document.getElementById('ir-recon-info').innerHTML =
@@ -9160,9 +9168,12 @@
         // simpler best-track history line. Best-track is a fallback for
         // storms without WeatherLab coverage.
         if (_rtWeatherlabData) return;
-        // We're rendering history (no forecast). Reflect that in the heading.
+        // We're rendering history (no forecast). Reflect that in the heading
+        // + source label (the static "DeepMind 1K" would be misleading here).
         var heading = document.getElementById('ir-intensity-heading');
         if (heading) heading.textContent = 'Intensity History';
+        var _src = document.getElementById('ir-intensity-source');
+        if (_src) _src.textContent = 'Best track';
         chartEl.className = 'ir-intensity-chart';  // remove skeleton
 
         var history = meta.intensity_history || [];
@@ -12043,6 +12054,12 @@
 
         var heading = document.getElementById('ir-intensity-heading');
         if (heading) heading.textContent = 'Intensity Forecast';
+        var _fsrc = document.getElementById('ir-intensity-source');
+        if (_fsrc) _fsrc.textContent = 'DeepMind 1K';
+        // Ensure the panel (and its Vmax|MSLP toggle) is visible whenever the
+        // DeepMind forecast bands render.
+        var _fsec = document.getElementById('ir-intensity-section');
+        if (_fsec) _fsec.style.display = '';
 
         _renderGenesisIntensity(memberKeys, json.members, mean, stats,
                                 'ir-intensity-chart');
