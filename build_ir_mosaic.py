@@ -537,9 +537,33 @@ def _merc_lonlat(S):
     return _MERC_LL[S]
 
 
+# Number of latitude strips for the global blend. The 8192² blend is per-pixel
+# INDEPENDENT (each output pixel reads only the sats at that pixel), so processing
+# it in horizontal row-bands caps the transient footprint — the per-sat gathered
+# Tb + cosz_stack + num/den, which at full 8192² are ~3 GB — at strip height
+# instead of full height. That + a per-strip (uncached) night lon/lat grid drops
+# peak memory under 4 GiB so the job runs at 1 vCPU / 4 GiB. The persistent kernel
+# arrays (idx/cosz/mask, ~1.7 GB for 3 sats) are the remaining floor. Output is
+# byte-identical to a single-strip render; MOSAIC_STRIPS=1 reproduces the old path.
+_MOSAIC_STRIPS = max(1, int(os.environ.get("MOSAIC_STRIPS", "8")))
+
+
+def _merc_lonlat_rows(S, r0, r1):
+    """LON/LAT (float64, broadcast) for global-Mercator rows [r0, r1) at size S.
+    Computed per-strip (uncached) so the Visible night mask never materializes the
+    full 8192² lon/lat grid (~1 GB) that _merc_lonlat would."""
+    px = np.arange(S, dtype=np.float64) + 0.5
+    py = np.arange(r0, r1, dtype=np.float64) + 0.5
+    lon, lat = pixels_to_lonlat(px[None, :], py[:, None], S)
+    return (np.broadcast_to(lon, (r1 - r0, S)),
+            np.broadcast_to(lat, (r1 - r0, S)))
+
+
 def global_render(zoom, sats, kernels, timings, product="ir", dt=None):
-    t0 = time.time()
-    samples = []
+    S = TILE_SIZE * (2 ** zoom)
+    # Resolve the active sats + their (kernel, flat) once; the size-mismatch guard
+    # runs on the full kernel before any striping (matches the pre-strip behavior).
+    active = []
     for sat_key in sats:
         if sat_key not in kernels:
             continue
@@ -548,22 +572,43 @@ def global_render(zoom, sats, kernels, timings, product="ir", dt=None):
         if idx.size and int(idx.max()) >= flat.size:
             log(f"  {sats[sat_key]['label']} {product}: grid {flat.size} ≠ kernel "
                 f"(size mismatch — skip)"); continue
-        g = flat[idx]
-        # Visible reflectance has no "0 = no-data" sentinel; only gate IR/WV on g>0.
-        valid = mask & np.isfinite(g)
-        if PRODUCTS[product]["kind"] != "vis":
-            valid = valid & (g > 0)
-        samples.append((g, cosz, valid))
-    timings["gather"] = timings.get("gather", 0.0) + time.time() - t0
-    t1 = time.time()
-    field = blend_samples(samples)
-    img = to_index(field, product) if TILE_MODE == "idx" else colormap(field, product)
-    if PRODUCTS[product]["night"] and dt is not None:
-        LON, LAT = _merc_lonlat(img.shape[0])
-        nightmask = solar_elev_grid(LAT, LON, dt) < _NIGHT_ELEV_DEG
-        img[nightmask] = 0 if TILE_MODE == "idx" else (0, 0, 0, 0)
-    timings["colormap"] = timings.get("colormap", 0.0) + time.time() - t1
-    return img
+        active.append((idx, cosz, mask, flat))
+
+    out = (np.zeros((S, S), np.uint8) if TILE_MODE == "idx"
+           else np.zeros((S, S, 4), np.uint8))
+    night = PRODUCTS[product]["night"] and dt is not None
+    is_vis = PRODUCTS[product]["kind"] == "vis"
+    edges = np.linspace(0, S, _MOSAIC_STRIPS + 1).round().astype(int)
+    tg = tc = 0.0
+    for si in range(_MOSAIC_STRIPS):
+        r0, r1 = int(edges[si]), int(edges[si + 1])
+        if r1 <= r0:
+            continue
+        t0 = time.time()
+        samples = []
+        for (idx, cosz, mask, flat) in active:
+            g = flat[idx[r0:r1]]                       # gather this strip's rows only
+            # Visible reflectance has no "0 = no-data" sentinel; only gate IR/WV on g>0.
+            valid = mask[r0:r1] & np.isfinite(g)
+            if not is_vis:
+                valid = valid & (g > 0)
+            samples.append((g, cosz[r0:r1], valid))    # cosz slice is a view (no copy)
+        tg += time.time() - t0
+        if not samples:
+            continue
+        t1 = time.time()
+        field = blend_samples(samples)
+        img_s = (to_index(field, product) if TILE_MODE == "idx"
+                 else colormap(field, product))
+        if night:
+            LON, LAT = _merc_lonlat_rows(S, r0, r1)
+            nightmask = solar_elev_grid(LAT, LON, dt) < _NIGHT_ELEV_DEG
+            img_s[nightmask] = 0 if TILE_MODE == "idx" else (0, 0, 0, 0)
+        out[r0:r1] = img_s
+        tc += time.time() - t1
+    timings["gather"] = timings.get("gather", 0.0) + tg
+    timings["colormap"] = timings.get("colormap", 0.0) + tc
+    return out
 
 
 # ── Storm tiles: high-zoom z/x/y patches over a list of points ─────────────
