@@ -9126,17 +9126,31 @@
              : pt.vmax != null ? pt.vmax
              : pt.vmax_kt != null ? pt.vmax_kt : null;
     }
-    /** Re-render whichever intensity view is active for the current storm,
-     *  using the new metric. Wired to the Vmax|MSLP pill. */
+    // Stash of the DeepMind modal's intensity data so its Vmax|MSLP toggle
+    // can re-render the fan chart.
+    var _genesisIntData = null;
+
+    /** Re-render whichever intensity view is active, using the new metric.
+     *  Shared by the card pill AND the DeepMind modal toggle. */
     window._rtToggleIntensityMetric = function (metric) {
         var m = (metric === 'mslp') ? 'mslp' : 'vmax';
         if (m === _rtIntensityMetric) return;
         _rtIntensityMetric = m;
-        // Reflect the pill state.
+        // Reflect BOTH toggles (card pill + modal) so they stay in sync.
         ['vmax', 'mslp'].forEach(function (k) {
             var b = document.getElementById('ir-intensity-metric-' + k);
             if (b) b.classList.toggle('active', k === m);
+            var g = document.getElementById('rt-genesis-metric-' + k);
+            if (g) g.classList.toggle('active', k === m);
         });
+        // Re-render the DeepMind ensemble modal's fan chart if it's open.
+        if (_genesisIntData) {
+            var _mm = document.getElementById(_GENESIS_MODAL_ID);
+            if (_mm && _mm.style.display !== 'none') {
+                _renderGenesisIntensity(_genesisIntData.memberKeys, _genesisIntData.members,
+                                        _genesisIntData.mean, _genesisIntData.stats);
+            }
+        }
         // Re-rendering the base chart (Plotly.react/newPlot) replaces all
         // traces, invalidating the stored overlay trace indices. Reset the
         // trackers first so the overlay clear-funcs don't delete base traces
@@ -14352,6 +14366,14 @@
                 '</div>' +
                 '<div id="rt-genesis-jump-intensity" class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
                   '<button type="button" id="rt-genesis-int-save" class="rt-genesis-modal-save" title="Save intensity time series as PNG">⤓ PNG</button>' +
+                  // Vmax|MSLP toggle for the ensemble intensity fan.
+                  '<div style="display:flex; align-items:center; gap:6px; padding:0 0 4px 4px;">' +
+                    '<span style="font-size:11px; opacity:0.7;">Show</span>' +
+                    '<div class="ir-intensity-metric" role="group" aria-label="Intensity metric">' +
+                      '<button type="button" id="rt-genesis-metric-vmax" class="ir-intensity-metric-btn active" onclick="window._rtToggleIntensityMetric(\'vmax\')" title="Maximum sustained wind">Vmax</button>' +
+                      '<button type="button" id="rt-genesis-metric-mslp" class="ir-intensity-metric-btn" onclick="window._rtToggleIntensityMetric(\'mslp\')" title="Minimum sea-level pressure">MSLP</button>' +
+                    '</div>' +
+                  '</div>' +
                   '<div id="rt-genesis-modal-int" style="width:100%; height:300px;"></div>' +
                 '</div>' +
                 // Unique-to-pre-genesis: histogram of when each member
@@ -15028,6 +15050,8 @@
             // scrubber's first paint draws the tau cursor onto BOTH the map
             // and the intensity fan, so both have to exist first.
             function () {
+                // Stash so the modal's Vmax|MSLP toggle can re-render.
+                _genesisIntData = { memberKeys: memberKeys, members: members, mean: mean, stats: stats };
                 _renderGenesisIntensity(memberKeys, members, mean, stats);
                 _setupGenesisTauScrubber(memberKeys, members, mean, stats);
             },
@@ -16290,10 +16314,16 @@
         };
 
         var layout = Object.assign({}, theme, {
-            margin: { l: 40, r: 44, t: 8, b: 30 },
+            margin: { l: 40, r: 44, t: 26, b: 30 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            height: 140,
+            height: 156,
+            title: {
+                text: 'How this feature has trended across recent runs — '
+                    + 'formation chance (bars) & median peak intensity (line)',
+                font: { size: 10.5, color: theme.font && theme.font.color },
+                x: 0, xanchor: 'left', y: 0.97, yanchor: 'top',
+            },
             showlegend: false,
             bargap: 0.45,
             xaxis: { tickfont: { size: 9.5 }, gridcolor: grid, fixedrange: true },
@@ -17306,9 +17336,9 @@
         var theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
-        // MSLP is scoped to the storm card chart (the genesis modal stays
-        // Vmax). valOf pulls the active metric from a point.
-        var mslp = (elId === 'ir-intensity-chart') && _rtIntensityMetric === 'mslp';
+        // Vmax vs MSLP applies to the card chart AND the DeepMind ensemble
+        // modal (both honor _rtIntensityMetric). valOf pulls the active metric.
+        var mslp = _rtIntensityMetric === 'mslp';
         var unit = mslp ? 'hPa' : 'kt';
         var valOf = function (pt) { return mslp ? pt.pres : pt.wind; };
 
