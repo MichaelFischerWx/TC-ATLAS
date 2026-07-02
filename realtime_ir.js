@@ -8327,6 +8327,11 @@
     /** Update the overlay info with the current frame time */
     function updateFrameOverlay() {
         if (animFrameTimes.length === 0) return;
+        // IR-only: this reads IR's animFrameTimes[animIndex] and writes the
+        // "Infrared" label. Vis/WV drive their own time + label via
+        // showVisFrame/showWvFrame; an IR-frame (re)load firing while the user
+        // is on Visible must not clobber those with the IR time/label.
+        if (productMode !== 'eir') return;
         _cacheAnimEls();
         var timeStr = animFrameTimes[animIndex];
         if (_elFrameTime) _elFrameTime.textContent = fmtUTC(timeStr);
