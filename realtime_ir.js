@@ -7086,6 +7086,12 @@
     function initDetailMap(storm) {
         var container = document.getElementById('ir-image-container');
 
+        // The global map's IR-inspect tooltip is position:fixed and doesn't
+        // get a mouseout when a storm is opened by clicking its marker, so it
+        // lingers over the detail header. Dismiss it (and any env hover tip).
+        _inspectHideTip();
+        _hideEnvHoverTip();
+
         // Destroy old mini-map if exists
         cleanupFrameLayers();
         // Env overlays belong to the outgoing map instance — drop them (and
@@ -19602,12 +19608,23 @@
     function _tcStampExport(srcDataUrl, outW, outH, cb, caption) {
         var base = new Image();
         base.onload = function () {
+            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            var bg = isDark ? '#0f172a' : '#ffffff';
+            // Add a footer strip BELOW the chart for the caption + watermark so
+            // they never overlap the chart's own x-axis labels (the ACE chart's
+            // "+0h … +360h" ticks reach the plot's bottom edge). Sized off the
+            // same width scale _drawTcWatermark uses (logo ≈ 28·s + padding).
+            var s = Math.max(1, outW / 900);
+            var footerH = Math.round(56 * s);
             var cv = document.createElement('canvas');
-            cv.width = outW; cv.height = outH;
+            cv.width = outW; cv.height = outH + footerH;
             var ctx = cv.getContext('2d');
+            ctx.fillStyle = bg;
+            ctx.fillRect(0, 0, cv.width, cv.height);
             ctx.drawImage(base, 0, 0, outW, outH);
-            _drawTcWatermark(ctx, outW, outH);
-            _drawExportCaption(ctx, outW, outH, caption);
+            // Anchor stamps to the full canvas height → they land in the footer.
+            _drawTcWatermark(ctx, outW, cv.height);
+            _drawExportCaption(ctx, outW, cv.height, caption);
             cv.toBlob(function (b) { cb(b); }, 'image/png');
         };
         base.onerror = function () { cb(null); };
