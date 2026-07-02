@@ -14319,6 +14319,7 @@
                   '<span class="rt-genesis-subnav-label">Jump to:</span>' +
                   '<button type="button" class="rt-genesis-subnav-chip active" data-jump="rt-genesis-jump-tracks">Tracks</button>' +
                   '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-intensity">Intensity</button>' +
+                  '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-ace">ACE</button>' +
                   '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-gtime">Genesis time</button>' +
                   '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-lmi">LMI</button>' +
                   '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-lmitau">LMI vs hour</button>' +
@@ -14376,6 +14377,13 @@
                   '</div>' +
                   '<div id="rt-genesis-modal-int" style="width:100%; height:300px;"></div>' +
                 '</div>' +
+                // Accumulated Cyclone Energy (ACE) distribution vs lead time —
+                // cumulative ACE per member (6-hourly, Vmax >= 34 kt), shown as
+                // a percentile fan so you see the spread of total energy.
+                '<div id="rt-genesis-jump-ace" class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
+                  '<button type="button" id="rt-genesis-ace-save" class="rt-genesis-modal-save" title="Save ACE distribution as PNG">⤓ PNG</button>' +
+                  '<div id="rt-genesis-modal-ace" style="width:100%; height:260px;"></div>' +
+                '</div>' +
                 // Unique-to-pre-genesis: histogram of when each member
                 // first reaches 34 kt. Useful for the "when does it
                 // form?" question a named-storm view never has to ask.
@@ -14412,6 +14420,9 @@
         });
         m.querySelector('#rt-genesis-map-save').addEventListener('click', function () {
             _genesisSavePNG('rt-genesis-modal-map', 'tracks');
+        });
+        m.querySelector('#rt-genesis-ace-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-modal-ace', 'ace');
         });
         m.querySelector('#rt-genesis-int-save').addEventListener('click', function () {
             _genesisSavePNG('rt-genesis-modal-int', 'intensity');
@@ -15055,6 +15066,7 @@
                 _renderGenesisIntensity(memberKeys, members, mean, stats);
                 _setupGenesisTauScrubber(memberKeys, members, mean, stats);
             },
+            function () { _renderGenesisACE(memberKeys, members, stats); },
             function () { _renderGenesisTimeHistogram(stats); },
             function () { _renderGenesisStructure(memberKeys, members, stats); },
             function () { _renderGenesisLmiHist(stats); },
@@ -17330,6 +17342,105 @@
        (No ±σ ribbons or per-member dots — the user asked for the
        simpler "track and intensity forecasts" view, not the colleague's
        statistical layout.) */
+    /** ACE (Accumulated Cyclone Energy) distribution vs lead time. Per member,
+     *  ACE accrues ONLY at 6-hourly synoptic steps while Vmax >= 34 kt
+     *  (ACE += 1e-4 * Vmax^2, the standard convention). Each member's running
+     *  total is carried forward across the union of taus (a dissipated member
+     *  keeps its final ACE; a not-yet-formed member contributes 0), then the
+     *  cross-member percentile fan is drawn — same nested-ribbon style as the
+     *  intensity fan. */
+    function _renderGenesisACE(memberKeys, members, stats) {
+        var el = document.getElementById('rt-genesis-modal-ace');
+        if (!el || typeof Plotly === 'undefined') return;
+        var theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+
+        var perMember = [];   // [ [{tau, cum}, ...], ... ]  cumulative ACE steps
+        var tauSet = {};
+        for (var i = 0; i < memberKeys.length; i++) {
+            var pts = (members[memberKeys[i]].points || []).slice()
+                .sort(function (a, b) { return a.tau - b.tau; });
+            var cum = 0, arr = [];
+            for (var j = 0; j < pts.length; j++) {
+                var tau = pts[j].tau;
+                if (tau == null || Math.round(tau) % 6 !== 0) continue;   // 6-hourly only
+                var w = pts[j].wind;
+                if (w != null && w >= 34) cum += w * w * 1e-4;            // ACE increment
+                arr.push({ tau: tau, cum: cum });
+                tauSet[tau] = true;
+            }
+            if (arr.length) perMember.push(arr);
+        }
+        if (!perMember.length) return;
+        var taus = Object.keys(tauSet).map(Number).sort(function (a, b) { return a - b; });
+
+        function pct(sorted, q) {
+            if (!sorted.length) return null;
+            var idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(q * (sorted.length - 1))));
+            return sorted[idx];
+        }
+        var minArr = [], maxArr = [], p10Arr = [], p25Arr = [], p50Arr = [],
+            p75Arr = [], p90Arr = [], meanArr = [];
+        for (var ti = 0; ti < taus.length; ti++) {
+            var T = taus[ti], vals = [];
+            for (var mm = 0; mm < perMember.length; mm++) {
+                var a = perMember[mm], v = 0;
+                for (var k = 0; k < a.length; k++) {
+                    if (a[k].tau <= T) v = a[k].cum; else break;   // carry forward
+                }
+                vals.push(v);
+            }
+            vals.sort(function (x, y) { return x - y; });
+            minArr.push(vals[0]); maxArr.push(vals[vals.length - 1]);
+            p10Arr.push(pct(vals, 0.10)); p25Arr.push(pct(vals, 0.25));
+            p50Arr.push(pct(vals, 0.50)); p75Arr.push(pct(vals, 0.75));
+            p90Arr.push(pct(vals, 0.90));
+            var s = 0; for (var z = 0; z < vals.length; z++) s += vals[z];
+            meanArr.push(vals.length ? s / vals.length : 0);
+        }
+        var xVals = taus.map(function (t) { return '+' + t + 'h'; });
+
+        var traces = [];
+        function pushRibbon(low, high, fill, name) {
+            traces.push({ type: 'scatter', mode: 'lines', x: xVals, y: low,
+                line: { color: 'rgba(0,0,0,0)' }, showlegend: false, hoverinfo: 'skip' });
+            traces.push({ type: 'scatter', mode: 'lines', x: xVals, y: high,
+                line: { color: 'rgba(0,0,0,0)' }, fill: 'tonexty', fillcolor: fill,
+                name: name, hoverinfo: 'skip', showlegend: true });
+        }
+        pushRibbon(minArr, maxArr, isDark ? 'rgba(59,130,246,0.10)' : 'rgba(59,130,246,0.08)', 'min – max');
+        pushRibbon(p10Arr, p90Arr, isDark ? 'rgba(59,130,246,0.16)' : 'rgba(59,130,246,0.14)', 'P10 – P90');
+        pushRibbon(p25Arr, p75Arr, isDark ? 'rgba(59,130,246,0.24)' : 'rgba(59,130,246,0.20)', 'P25 – P75 (IQR)');
+        traces.push({ type: 'scatter', mode: 'lines', x: xVals, y: p50Arr,
+            line: { color: isDark ? 'rgba(191,219,254,0.9)' : 'rgba(30,64,175,0.8)', width: 1.2, dash: 'dot' },
+            name: 'median (P50)', hovertemplate: '%{x}<br>median ACE: %{y:.1f}<extra></extra>', showlegend: true });
+        traces.push({ type: 'scatter', mode: 'lines+markers', x: xVals, y: meanArr,
+            line: { color: '#2563eb', width: 2.5 }, marker: { size: 4, color: '#2563eb' },
+            name: 'ensemble mean', hovertemplate: '%{x}<br>mean ACE: %{y:.1f}<extra></extra>', showlegend: true });
+
+        var maxY = Math.max(1, Math.max.apply(null, maxArr) * 1.08);
+        var layout = Object.assign({}, theme, {
+            margin: { l: 52, r: 16, t: 40, b: 44 },
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            title: { text: 'Accumulated Cyclone Energy (ACE) — cumulative per member vs lead time (6-hourly, ≥34 kt)',
+                     font: { size: 10.5, color: theme.font && theme.font.color },
+                     x: 0, xanchor: 'left', y: 0.99, yanchor: 'top' },
+            xaxis: { title: { text: 'Lead time', font: { size: 11 }, standoff: 12 },
+                     tickfont: { size: 10 }, tickmode: 'array',
+                     tickvals: xVals.filter(function (_v, i) { return i % 4 === 0; }),
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)' },
+            yaxis: { title: { text: 'ACE (10⁴ kt²)', font: { size: 11 } }, range: [0, maxY],
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)' },
+            showlegend: true,
+            legend: { x: 0.02, y: 0.86, xanchor: 'left', yanchor: 'top',
+                      bgcolor: isDark ? 'rgba(15,22,35,0.82)' : 'rgba(255,255,255,0.88)',
+                      bordercolor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,22,35,0.10)',
+                      borderwidth: 1, font: { size: 9, color: isDark ? '#e2e8f0' : '#1f2937' },
+                      itemsizing: 'constant', itemwidth: 30, tracegroupgap: 0 },
+        });
+        Plotly.react(el, traces, layout, { responsive: true, displayModeBar: false });
+    }
+
     function _renderGenesisIntensity(memberKeys, members, mean, stats, elId) {
         var el = document.getElementById(elId || 'rt-genesis-modal-int');
         if (!el || typeof Plotly === 'undefined') return;
