@@ -500,12 +500,18 @@ app.add_middleware(CompositeGCMiddleware)
 # Dataset loading
 # ---------------------------------------------------------------------------
 
-# Per-process chunk cache budgets (bytes). Sized for Cloud Run 4 GB instances:
-# 4 caches × ≤150 MB = 600 MB ceiling = ~15% of allocation. The TC-RADAR cache
-# pays off the most (hit by every composite endpoint when users iterate on
-# env filters). zarr's LRUStoreCache is process-local, so each Cloud Run
-# instance maintains its own cache — works well under session affinity.
-_TC_RADAR_CHUNK_CACHE_BYTES = 150 * 1024 * 1024
+# Per-process chunk cache budgets (bytes). Sized for Cloud Run 4 GB instances.
+# The TC-RADAR cache pays off the most (hit by every composite endpoint when
+# users iterate on env filters). zarr's LRUStoreCache is process-local, so each
+# Cloud Run instance maintains its own cache — works well under session affinity.
+#
+# TC-RADAR is 75 MB (was 150) because get_dataset() now keeps all 4
+# (data_type, era) combos resident (lru_cache maxsize=4, was 2) — each cached
+# dataset holds its OWN LRUStoreCache, so the per-combo budget must halve to keep
+# the aggregate flat: 4 × 75 MB = 300 MB, identical to the old 2 × 150 MB. This
+# eliminates the swath↔merge / early↔recent reopen thrash (~112 reopens/day, a
+# multi-second stall + ~1600 Class-B ops each) at zero net memory cost.
+_TC_RADAR_CHUNK_CACHE_BYTES = 75 * 1024 * 1024
 _IR_CHUNK_CACHE_BYTES       = 150 * 1024 * 1024
 _ERA5_CHUNK_CACHE_BYTES     = 150 * 1024 * 1024
 
@@ -516,7 +522,7 @@ def _wrap_lru(store, max_bytes: int):
     return zarr.storage.LRUStoreCache(store, max_size=max_bytes)
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=4)  # all 4 (data_type, era) combos resident — no reopen thrash
 def get_dataset(data_type: str, era: str) -> xr.Dataset:
     """
     Open a TC-RADAR dataset.
