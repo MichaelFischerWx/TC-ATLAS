@@ -59,6 +59,7 @@ import signal
 import sys
 import tempfile
 import time
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime as _dt, timedelta, timezone
 from pathlib import Path
@@ -584,11 +585,23 @@ def _encode_scalar_png(arr: np.ndarray, cmap, vmin: float, vmax: float) -> bytes
 # ---------------------------------------------------------------------------
 # Footprint polygon (concave hull of valid pixels)
 # ---------------------------------------------------------------------------
+# Douglas-Peucker tolerance (degrees) applied to the traced footprint before
+# serialization. The raw contour follows the valid-mask at full pixel resolution
+# — for 89 GHz that's ~90k vertices / ~3.5 MB of GeoJSON per pass, and it's the
+# single largest write in the pipeline (geojson ≈ 56% of all bytes; SSMIS 78%).
+# The footprint is only a coverage outline + click hit-test, so ~5.6 km (at or
+# below the 89 GHz footprint resolution) is visually identical while shrinking
+# the payload ~40× (3.5 MB → ~94 KB, measured on a real SSMIS pass).
+_FOOTPRINT_SIMPLIFY_TOL_DEG = 0.05
+
+
 def _footprint_geojson(valid_mask: np.ndarray,
                        bounds: list) -> dict:
     """Approximate the swath footprint as a polygon by tracing the outer
     contour of the valid_mask in lat/lon space. Coarse but adequate for
-    a click-popup hit test and visualization. bounds = [[s, w], [n, e]]."""
+    a click-popup hit test and visualization. bounds = [[s, w], [n, e]].
+    The traced contour is Douglas-Peucker simplified (see
+    _FOOTPRINT_SIMPLIFY_TOL_DEG) to keep the GeoJSON small."""
     from shapely.geometry import MultiPolygon, Polygon, mapping
     from shapely.ops import unary_union
     try:
@@ -632,6 +645,25 @@ def _footprint_geojson(valid_mask: np.ndarray,
         # Pick the largest few components to keep the GeoJSON small.
         comps = sorted(union.geoms, key=lambda g: -g.area)[:5]
         union = MultiPolygon(comps)
+
+    # Douglas-Peucker down to a map-display tolerance — this is the ~40× win.
+    # Guarded: if simplify yields an invalid/empty geom (degenerate rings can),
+    # try a buffer(0) repair, else keep the full-resolution union rather than
+    # ever emitting a broken/empty footprint.
+    try:
+        with warnings.catch_warnings():
+            # GEOS emits a benign "invalid value" RuntimeWarning on some
+            # degenerate rings but still returns a valid simplified geom; the
+            # is_valid/buffer(0) guard below is the real safety net.
+            warnings.simplefilter("ignore", RuntimeWarning)
+            simp = union.simplify(_FOOTPRINT_SIMPLIFY_TOL_DEG,
+                                  preserve_topology=True)
+        if not simp.is_valid or simp.is_empty:
+            simp = simp.buffer(0)
+        if simp.is_valid and not simp.is_empty and simp.area > 0:
+            union = simp
+    except Exception:
+        pass
     return mapping(union)
 
 
