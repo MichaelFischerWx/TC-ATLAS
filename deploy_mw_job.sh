@@ -164,6 +164,11 @@ GRANT_SECRETS="pps-user pps-pass"
 if [ "${HAVE_SPACETRACK}" = "1" ]; then
     GRANT_SECRETS="${GRANT_SECRETS} space-track-user space-track-pass"
 fi
+# When the R2 CDN mirror is on (see MW_R2_MIRROR below), also (re)grant the SA
+# access to the r2-* secrets so a re-enable is fully self-contained.
+if [ "${MW_R2_MIRROR:-0}" = "1" ]; then
+    GRANT_SECRETS="${GRANT_SECRETS} r2-access-key-id r2-secret-access-key"
+fi
 echo "Granting Secret Manager access on [${GRANT_SECRETS}] to ${SA_EMAIL}..."
 for SECRET in ${GRANT_SECRETS}; do
     gcloud secrets add-iam-policy-binding "${SECRET}" \
@@ -176,9 +181,33 @@ done
 # Build the secrets list dynamically so a missing (optional) Space-Track
 # pair doesn't break the deploy — referencing a nonexistent secret in
 # --set-secrets fails the whole command.
-SECRETS="PPS_USER=pps-user:latest,PPS_PASS=pps-pass:latest,R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
+SECRETS="PPS_USER=pps-user:latest,PPS_PASS=pps-pass:latest"
 if [ "${HAVE_SPACETRACK}" = "1" ]; then
     SECRETS="${SECRETS},SPACETRACK_USER=space-track-user:latest,SPACETRACK_PASS=space-track-pass:latest"
+fi
+
+# ── R2 CDN mirror toggle (default OFF) ───────────────────────────────
+# Every rendered MW object is written to GCS (primary, must succeed). When the
+# mirror is ON it is *also* best-effort mirrored to Cloudflare R2 and the browser
+# manifest serves cdn.tcatlas.org URLs; when OFF, _get_r2_client() (mw_ingest.py)
+# sees no R2 vars → returns None → _mw_public_url emits GCS URLs. Images render
+# identically either way; the mirror only shifts *where* browsers fetch from.
+#
+# Disabled 2026-07-02: mirror was net-lossy ~$11-12/mo (uploaded ~4 GiB/day to R2
+# but browsers pulled only 0.1-0.5 GiB/day of MW imagery from GCS). Flip back ON
+# only if GCS egress from the microwave-nrt bucket ramps enough to beat the ~$0.43/day
+# Cloud Run→R2 upload egress. Re-enable with:  MW_R2_MIRROR=1 ./deploy_mw_job.sh
+# (or set MW_R2_MIRROR=1 in deploy.env for a durable flip). Nothing else to change.
+MW_R2_MIRROR="${MW_R2_MIRROR:-0}"
+ENV_VARS="GCS_MW_BUCKET=${BUCKET}"
+if [ "${MW_R2_MIRROR}" = "1" ]; then
+    echo "R2 CDN mirror: ENABLED (MW_R2_MIRROR=1)"
+    SECRETS="${SECRETS},R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
+    # ^||^ = use || as the pair delimiter (values are comma-free, but keep the
+    # explicit delimiter so a future value with a comma can't split silently).
+    ENV_VARS="^||^GCS_MW_BUCKET=${BUCKET}||R2_ENDPOINT_URL=${R2_ENDPOINT_URL:-https://4f3e5ab095ae4962e91af5b33c6deb54.r2.cloudflarestorage.com}||R2_BUCKET=${R2_MW_BUCKET:-tc-atlas-rt}"
+else
+    echo "R2 CDN mirror: DISABLED (MW imagery served from GCS; set MW_R2_MIRROR=1 to re-enable)"
 fi
 # 1 vCPU: granule rendering is serial and measured CPU utilization peaks at
 # ~0.5 of the old 2-vCPU allocation (~1 core), so the 2nd vCPU sat idle. At 1
@@ -194,7 +223,7 @@ if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; 
         --cpu 1 \
         --max-retries 1 \
         --task-timeout 3600 \
-        --set-env-vars "^||^GCS_MW_BUCKET=${BUCKET}||R2_ENDPOINT_URL=${R2_ENDPOINT_URL:-https://4f3e5ab095ae4962e91af5b33c6deb54.r2.cloudflarestorage.com}||R2_BUCKET=${R2_MW_BUCKET:-tc-atlas-rt}" \
+        --set-env-vars "${ENV_VARS}" \
         --set-secrets "${SECRETS}"
 else
     gcloud run jobs create "${JOB_NAME}" \
@@ -204,7 +233,7 @@ else
         --cpu 1 \
         --max-retries 1 \
         --task-timeout 3600 \
-        --set-env-vars "^||^GCS_MW_BUCKET=${BUCKET}||R2_ENDPOINT_URL=${R2_ENDPOINT_URL:-https://4f3e5ab095ae4962e91af5b33c6deb54.r2.cloudflarestorage.com}||R2_BUCKET=${R2_MW_BUCKET:-tc-atlas-rt}" \
+        --set-env-vars "${ENV_VARS}" \
         --set-secrets "${SECRETS}"
 fi
 
