@@ -17419,8 +17419,21 @@
             name: 'ensemble mean', hovertemplate: '%{x}<br>mean ACE: %{y:.1f}<extra></extra>', showlegend: true });
 
         var maxY = Math.max(1, Math.max.apply(null, maxArr) * 1.08);
+        // On mobile the inset legend covers the data (ACE climbs into the
+        // upper-left where the legend sits), so drop it below the plot as a
+        // compact horizontal strip and add bottom room for it.
+        var isMobile = !!(window.matchMedia && window.matchMedia('(max-width: 768px)').matches);
+        var legend = isMobile
+            ? { orientation: 'h', x: 0.5, xanchor: 'center', y: -0.30, yanchor: 'top',
+                font: { size: 8, color: isDark ? '#e2e8f0' : '#1f2937' },
+                itemsizing: 'constant', itemwidth: 24, tracegroupgap: 0 }
+            : { x: 0.02, y: 0.86, xanchor: 'left', yanchor: 'top',
+                bgcolor: isDark ? 'rgba(15,22,35,0.82)' : 'rgba(255,255,255,0.88)',
+                bordercolor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,22,35,0.10)',
+                borderwidth: 1, font: { size: 9, color: isDark ? '#e2e8f0' : '#1f2937' },
+                itemsizing: 'constant', itemwidth: 30, tracegroupgap: 0 };
         var layout = Object.assign({}, theme, {
-            margin: { l: 52, r: 16, t: 40, b: 44 },
+            margin: isMobile ? { l: 46, r: 12, t: 38, b: 84 } : { l: 52, r: 16, t: 40, b: 44 },
             paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
             title: { text: 'Accumulated Cyclone Energy (ACE) — cumulative per member vs lead time (6-hourly, ≥34 kt)',
                      font: { size: 10.5, color: theme.font && theme.font.color },
@@ -17432,11 +17445,7 @@
             yaxis: { title: { text: 'ACE (10⁴ kt²)', font: { size: 11 } }, range: [0, maxY],
                      gridcolor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)' },
             showlegend: true,
-            legend: { x: 0.02, y: 0.86, xanchor: 'left', yanchor: 'top',
-                      bgcolor: isDark ? 'rgba(15,22,35,0.82)' : 'rgba(255,255,255,0.88)',
-                      bordercolor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,22,35,0.10)',
-                      borderwidth: 1, font: { size: 9, color: isDark ? '#e2e8f0' : '#1f2937' },
-                      itemsizing: 'constant', itemwidth: 30, tracegroupgap: 0 },
+            legend: legend,
         });
         Plotly.react(el, traces, layout, { responsive: true, displayModeBar: false });
     }
