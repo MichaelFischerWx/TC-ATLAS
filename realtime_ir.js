@@ -14989,6 +14989,13 @@
         // swaps the genesis-time panel for the ACE distribution in this case.
         _genesisAlreadyTC = !!(stats && stats.genesisMedianTau != null
                                && stats.genesisMedianTau <= 0);
+        // On-screen too: for an already-formed TC, hide the genesis-time panel
+        // and its jump chip (the ACE panel stands in its place). Toggled each
+        // render so a reused modal switches correctly between systems.
+        var _gtWrap = m.querySelector('#rt-genesis-jump-gtime');
+        if (_gtWrap) _gtWrap.style.display = _genesisAlreadyTC ? 'none' : '';
+        var _gtChip = m.querySelector('.rt-genesis-subnav-chip[data-jump="rt-genesis-jump-gtime"]');
+        if (_gtChip) _gtChip.style.display = _genesisAlreadyTC ? 'none' : '';
 
         var subParts = [
             '<strong>Init:</strong> ' + initLabel,
@@ -15082,7 +15089,7 @@
                 _setupGenesisTauScrubber(memberKeys, members, mean, stats);
             },
             function () { _renderGenesisACE(memberKeys, members, stats); },
-            function () { _renderGenesisTimeHistogram(stats); },
+            function () { if (!_genesisAlreadyTC) _renderGenesisTimeHistogram(stats); },
             function () { _renderGenesisStructure(memberKeys, members, stats); },
             function () { _renderGenesisLmiHist(stats); },
             function () { _renderGenesisLmiVsTau(stats); },
@@ -18951,7 +18958,13 @@
         var file = null;
         try { file = new File([blob], filename, { type: blob.type || 'image/png' }); }
         catch (e) { /* File ctor unsupported — fall through to download */ }
-        if (file && navigator.canShare && typeof navigator.share === 'function'
+        // Only route through the native share sheet on TOUCH devices (phones /
+        // tablets), where saving to a folder isn't the norm. On desktop
+        // (incl. Mac Safari, where canShare is also true) the share sheet is an
+        // annoying extra step — users expect a straight download to Downloads.
+        var touch = _isIOS() || (window.matchMedia
+            && window.matchMedia('(pointer: coarse)').matches);
+        if (touch && file && navigator.canShare && typeof navigator.share === 'function'
                 && navigator.canShare({ files: [file] })) {
             navigator.share({ files: [file] }).catch(function (err) {
                 // Only a genuine user-cancel (AbortError) should stop here.
@@ -19423,7 +19436,9 @@
             }
         }
 
-        var W = 1800, HEAD = 180, GAP = 18, FOOT = 64;
+        // FOOT is tall enough for the bottom-left "saved" line AND the
+        // bottom-right TC-ATLAS logo + tcatlas.org watermark.
+        var W = 1800, HEAD = 180, GAP = 18, FOOT = 96;
         // Scale Plotly fonts ~2.8× so labels/ticks/legends/colorbars look
         // proportional at 1800-px export width (markers + line widths
         // scale inside _figForExport).
@@ -19530,6 +19545,8 @@
             ctx.fillText('TC-ATLAS · DeepMind ' + _genesisVariantModelLabel()
                 + ' · saved ' + saved,
                          40, totalH - 44);
+            // Brand logo + tcatlas.org, bottom-right (matches single-panel exports).
+            _drawTcWatermark(ctx, W, totalH);
 
             canvas.toBlob(function (blob) {
                 restoreBtn();
