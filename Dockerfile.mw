@@ -51,6 +51,15 @@ RUN pip install --no-cache-dir \
 # mw_ingest reuses _compute_37color_swath / _compute_89pct_swath /
 # _nrl_89ghz_cmap from microwave_api so the math stays 1:1 with the
 # TC-PRIMED archive renderer. Both files must ship together.
+#
+# CACHEBUST invalidates the source COPY layers below whenever the copied .py
+# files change. Without it, `docker build --cache-from` (deploy_mw_job.sh) was
+# observed on Cloud Build's fresh VMs to reuse a STALE COPY layer and silently
+# ship old code (2026-07-02: an mw_ingest.py footprint fix built to a new image
+# digest but still ran the previous source). deploy_mw_job.sh passes a content
+# hash of the two files here, so an unchanged source stays fully cached (fast)
+# while any edit forces the COPY (and everything after) to rebuild.
+ARG CACHEBUST=dev
 COPY mw_ingest.py .
 COPY microwave_api.py .
 

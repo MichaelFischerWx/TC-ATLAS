@@ -137,6 +137,14 @@ fi
 # Dockerfile change it can balloon past 20 min. With layer caching,
 # subsequent builds finish in ~1-2 min when only mw_ingest.py changes.
 # The `|| true` swallows the no-previous-image case (first deploy).
+#
+# CACHEBUST: --cache-from has been observed to reuse a STALE `COPY *.py` layer
+# even after the source changed (2026-07-02 shipped an old mw_ingest.py to a new
+# digest). We pass a content hash of the copied files as a build-arg consumed by
+# `ARG CACHEBUST` in Dockerfile.mw (placed just before the COPYs): unchanged
+# source → same hash → COPY layer still cached (fast); any edit → new hash →
+# COPY and everything after rebuild. Keeps the pip layer cached either way.
+SRC_HASH="$(cat mw_ingest.py microwave_api.py | shasum -a 256 | cut -c1-16)"
 BUILD_CFG="$(mktemp -t tc-atlas-mw-cloudbuild.XXXXXX.yaml)"
 trap 'rm -f "${BUILD_CFG}"' EXIT
 cat > "${BUILD_CFG}" <<EOF
@@ -145,7 +153,7 @@ steps:
   entrypoint: 'bash'
   args: ['-c', 'docker pull ${IMAGE} || true']
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '-f', 'Dockerfile.mw', '-t', '${IMAGE}', '--cache-from', '${IMAGE}', '.']
+  args: ['build', '-f', 'Dockerfile.mw', '-t', '${IMAGE}', '--cache-from', '${IMAGE}', '--build-arg', 'CACHEBUST=${SRC_HASH}', '.']
 - name: 'gcr.io/cloud-builders/docker'
   args: ['push', '${IMAGE}']
 images: ['${IMAGE}']
