@@ -19373,11 +19373,14 @@
     // URL: drawing a base64 SVG to canvas is the reliable cross-browser path
     // where the uri-encoded / PNG path fails on Safari. Falls back to PNG if
     // the SVG round-trip throws, so we never do worse than before.
-    function _panelExportURL(el, scale, W, h) {
+    function _panelExportURL(el, scale, W, h, outScale) {
         var fig = _figForExport(el, scale);
         var isGeo = !!(el && el.layout && (el.layout.geo || el.layout.geo2));
         if (!isGeo) {
-            return Plotly.toImage(fig, { format: 'png', width: W, height: h });
+            // outScale supersamples the raster (2× → crisp on Retina / when
+            // zoomed). SVG below is vector, so it stays crisp without it.
+            return Plotly.toImage(fig, { format: 'png', width: W, height: h,
+                                         scale: outScale || 1 });
         }
         return Plotly.toImage(fig, { format: 'svg', width: W, height: h })
             .then(function (url) {
@@ -19472,12 +19475,17 @@
         sub = sub.replace(/\s*·\s*Next cycle[^·]*/i, '').trim();
         sub = (sub + (spec.subSuffix || '')).trim();
 
+        // Supersample the whole composite 2× so it's crisp on Retina / when
+        // zoomed (the single-panel ⤓ PNG exports render at 4×; this brings the
+        // multi-panel summaries into the same ballpark). All layout math stays
+        // in logical W×totalH units; ctx.scale(SS) renders it at SS× device.
+        var SS = 2;
         var tasks = panels.map(function (p) {
             // The Overall track map gets a static-export variant: forecast-hour
             // labels + LMI star, no single-hour member snapshot.
             var src = (p.el.id === 'rt-genesis-modal-map')
                 ? _genesisMapExportFig(p.el) : p.el;
-            return _panelExportURL(src, FONT_SCALE, W, p.h);
+            return _panelExportURL(src, FONT_SCALE, W, p.h, SS);
         });
 
         // Optional locator globe (intensity summary) — rendered in parallel
@@ -19501,9 +19509,10 @@
             var imgs = results[0];
             var globeImg = results[1];
             var canvas = document.createElement('canvas');
-            canvas.width = W;
-            canvas.height = totalH;
+            canvas.width = W * SS;
+            canvas.height = totalH * SS;
             var ctx = canvas.getContext('2d');
+            ctx.scale(SS, SS);   // draw in logical W×totalH; output at SS× device
             ctx.fillStyle = bg;
             ctx.fillRect(0, 0, W, totalH);
 
@@ -19542,7 +19551,8 @@
 
             var y = HEAD;
             for (var k = 0; k < imgs.length; k++) {
-                ctx.drawImage(imgs[k], 0, y);
+                // Panels are 2× native; draw into their logical W×h slot.
+                ctx.drawImage(imgs[k], 0, y, W, panels[k].h);
                 y += panels[k].h + GAP;
             }
 
@@ -19556,8 +19566,10 @@
             ctx.fillText('TC-ATLAS · DeepMind ' + _genesisVariantModelLabel()
                 + ' · saved ' + saved,
                          40, totalH - 44);
-            // Brand logo + tcatlas.org, bottom-right (matches single-panel exports).
-            _drawTcWatermark(ctx, W, totalH);
+            // Brand logo + tcatlas.org, bottom-right (matches single-panel
+            // exports). _drawTcWatermark resets the transform to identity, so
+            // pass DEVICE dimensions (W·SS × totalH·SS) to land it correctly.
+            _drawTcWatermark(ctx, W * SS, totalH * SS);
 
             canvas.toBlob(function (blob) {
                 restoreBtn();
