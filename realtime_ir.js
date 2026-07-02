@@ -1735,7 +1735,8 @@
         _mosaicLoad = fetch(_fbase + '/frames.json', { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (j) { _mosaicFrames = (j && j.frames) || [];
-                _mosaicTs = _mosaicFrames[_mosaicFrames.length - 1] || null; return _mosaicFrames; })
+                _mosaicTs = _mosaicFrames[_mosaicFrames.length - 1] || null;
+                _irApplyTrange(j, 'ir'); return _mosaicFrames; })
             .catch(function (e) { console.warn('[mosaic] frames.json failed', e); return []; });
         return _mosaicLoad;
     }
@@ -1758,6 +1759,40 @@
                (globalProduct === 'ir' || globalProduct === 'vis' || globalProduct === 'wv');
     }
     function _ir2aTileUrl(frame, z, x, y) { return _ir2aRoot(_ir2aProduct) + '/' + frame + '/' + z + '/' + x + '/' + y + '.png'; }
+
+    // ── IR idx→Tb decode range ─────────────────────────────────────────────
+    // The idx mosaic encodes Tb linearly into 1..255 over [vmin,vmax]. Legacy
+    // frames used [190,310] K, so cold tops saturated at −83 °C; the widened
+    // encoding uses [160,330] K (published per-frame as `ir_trange` in
+    // frames.json) so the hover reads real cold-top temperatures. We track the
+    // LATEST IR frame's range; frames without an entry fall back to legacy.
+    // COLOUR paths (LUT builders) clamp the decoded Tb back to [190,310] so the
+    // rendered image is unchanged; HOVER + 3D-height paths use the real value.
+    var _IR_IDX_RANGE_LEGACY = [190.0, 310.0];
+    var _irIdxRange = _IR_IDX_RANGE_LEGACY.slice();      // [vmin, vmax] of the current IR frames
+    function _irIdxToTb(idx) {                            // idx (1..255) → Tb (K), real value
+        return _irIdxRange[1] - (idx / 255) * (_irIdxRange[1] - _irIdxRange[0]);
+    }
+    function _irIdxToTbColor(idx) {                       // decode, then clamp to the display window
+        var tb = _irIdxToTb(idx);
+        return tb < 190 ? 190 : (tb > 310 ? 310 : tb);
+    }
+    // Adopt the latest IR frame's decode range from a freshly-loaded frames.json.
+    // No-op for wv/vis. Rebuilds the live idx colour LUT if the range changed so
+    // the widened encoding takes effect the moment the first new frame lands.
+    function _irApplyTrange(j, product) {
+        if (product !== 'ir') return;
+        var frames = (j && j.frames) || [], tr = (j && j.ir_trange) || null;
+        var latest = frames.length ? frames[frames.length - 1] : null;
+        var r = (tr && latest && tr[latest]) ? tr[latest] : null;
+        var next = (r && r.length === 2) ? [+r[0], +r[1]] : _IR_IDX_RANGE_LEGACY.slice();
+        if (next[0] === _irIdxRange[0] && next[1] === _irIdxRange[1]) return;
+        _irIdxRange = next;
+        if (_ir2aOn && _ir2aLayer && _ir2aFramesProduct === 'ir') {
+            try { _ir2aLayer.setColormap(_idxLutForProduct('ir', _irColormap || 'claude-ir')); } catch (e) {}
+        }
+        _irTargetMaps = {};   // drop cached recolor maps built at the old range
+    }
     // Exact claude-ir idx LUT = the backend _IR_LUT the v2 mosaic bakes (idx i → its
     // color; idx 0 = transparent). Using it makes the idx layer's DEFAULT colormap
     // byte-identical to v2 — the frontend IR_COLORMAPS reconstruction (160–330 K) drifts.
@@ -1771,11 +1806,25 @@
     // backend LUT above; other operational maps map idx → Tb (310 - idx/255*120) →
     // IR_COLORMAPS index (160..330), matching v2's client recolor (irlut).
     function _idxLutFor(cmap) {
-        if (cmap === 'claude-ir') return _IR_CLAUDE_IDX_LUT;
+        var legacy = (_irIdxRange[0] === 190 && _irIdxRange[1] === 310);
+        if (cmap === 'claude-ir') {
+            if (legacy) return _IR_CLAUDE_IDX_LUT;   // fast path: baked LUT is exactly this
+            // Widened encoding: remap the baked 190–310 idx LUT through the new
+            // decode + display clamp so the SAME physical Tb keeps its exact
+            // colour (new idx → real Tb → clamp[190,310] → old 190–310 idx →
+            // baked colour). Cold tops clamp to the coldest baked colour, as today.
+            var outc = new Uint8Array(256 * 4);
+            for (var j = 1; j < 256; j++) {
+                var oi = Math.max(1, Math.min(255, Math.round((310 - _irIdxToTbColor(j)) / 120 * 255)));
+                outc[j * 4] = _IR_CLAUDE_IDX_LUT[oi * 4]; outc[j * 4 + 1] = _IR_CLAUDE_IDX_LUT[oi * 4 + 1];
+                outc[j * 4 + 2] = _IR_CLAUDE_IDX_LUT[oi * 4 + 2]; outc[j * 4 + 3] = 255;
+            }
+            return outc;
+        }
         var src = IR_COLORMAPS[cmap] || IR_COLORMAPS['claude-ir'];
         var out = new Uint8Array(256 * 4);                 // out[0]=transparent → idx 0 = no-data
         for (var i = 1; i < 256; i++) {
-            var tb = 310 - (i / 255) * 120;
+            var tb = _irIdxToTbColor(i);                    // real Tb, clamped to the display window
             var ti = Math.max(1, Math.min(255, Math.round((tb - 160) / 170 * 254) + 1));
             out[i * 4] = src[ti * 4]; out[i * 4 + 1] = src[ti * 4 + 1];
             out[i * 4 + 2] = src[ti * 4 + 2]; out[i * 4 + 3] = 255;
@@ -1851,7 +1900,7 @@
         if (_IR2A_DEV) { _ir2aFrames = _IR2A_DEV_FRAMES.slice(); _ir2aFramesProduct = p; build(); return; }
         fetch(_ir2aRoot(p) + '/frames.json', { cache: 'no-store' })
             .then(function (r) { return r.json(); })
-            .then(function (j) { _ir2aFrames = (j && j.frames) || []; _ir2aFramesProduct = p; build(); })
+            .then(function (j) { _ir2aFrames = (j && j.frames) || []; _ir2aFramesProduct = p; _irApplyTrange(j, p); build(); })
             .catch(function (e) { console.error('[ir2a] frames.json load failed', e); });
     }
     // Show the latest v3 frame as the still (pre-play) global IR layer.
@@ -2036,7 +2085,7 @@
             var tb;
             if (_IR2A) {                                    // idx tile: R = idx (L-mode → opaque)
                 if (d[0] === 0) { cb(null); return; }        // idx 0 = no-data sentinel
-                tb = 310 - (d[0] / 255) * 120;              // exact idx → Tb
+                tb = _irIdxToTb(d[0]);                       // exact idx → real Tb (cold tops < 190 K now real)
             } else {
                 if (d[3] < 10) { cb(null); return; }         // off-disk / no data
                 tb = _irRgbToTb(d[0], d[1], d[2]).tb;
@@ -2103,7 +2152,7 @@
         if (!lut) return null;
         var m = new Array(256);
         for (var idx = 0; idx < 256; idx++) {
-            var tb = 310 - (idx / 255) * 120;                 // mosaic Claude-IR idx → Tb
+            var tb = _irIdxToTbColor(idx);                    // mosaic idx → Tb, clamped to display window
             var ti = Math.max(1, Math.min(255, Math.round((tb - 160) / 170 * 254) + 1)); // → 160/330 index
             // Include alpha so colormaps that mask out pixels (e.g. coldcloud,
             // which drops warm/clear cloud to transparent) recolor correctly.
@@ -2240,7 +2289,7 @@
                     for (var p = 0; p < d.length; p += 4) {
                         var idx = d[p];
                         if (idx === 0) { d[p] = FLAT[0]; d[p + 1] = FLAT[1]; d[p + 2] = FLAT[2]; d[p + 3] = 255; continue; }
-                        _tbToTerrainRGB(310 - (idx / 255) * 120, rgb);
+                        _tbToTerrainRGB(_irIdxToTb(idx), rgb);   // real Tb → true cold-top height
                         d[p] = rgb[0]; d[p + 1] = rgb[1]; d[p + 2] = rgb[2]; d[p + 3] = 255;
                     }
                     cx.putImageData(im, 0, 0);
@@ -3861,7 +3910,7 @@
                 globalAnimLoading = false;                    // re-enter once v3 frames.json loads
                 fetch(_ir2aRoot(globalProduct) + '/frames.json', { cache: 'no-store' })
                     .then(function (r) { return r.json(); })
-                    .then(function (j) { _ir2aFrames = (j && j.frames) || []; _ir2aFramesProduct = globalProduct; loadGlobalAnimation(); })
+                    .then(function (j) { _ir2aFrames = (j && j.frames) || []; _ir2aFramesProduct = globalProduct; _irApplyTrange(j, globalProduct); loadGlobalAnimation(); })
                     .catch(function (e) { console.error('[ir2a] v3 frames.json load failed', e); updateGlobalAnimControls('idle'); });
                 return;
             }
@@ -6048,6 +6097,7 @@
             .then(function (j) {
                 if (!detailMap || currentStormId !== atcfId || !_liteActive) return;
                 var frames = (j && j.frames) || [];
+                _irApplyTrange(j, product);
                 if (!frames.length) return;
                 var newLatest = _mosaicTsToIso(frames[frames.length - 1]);
                 if (!newLatest || newLatest <= currentLatest) return;
@@ -6246,7 +6296,7 @@
         var framesP = (product === 'ir' && !(_IR2A && window.createMosaicGLLayer))
             ? _loadMosaicFrames()   // legacy v2 IR path
             : fetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
-                .then(function (r) { return r.json(); }).then(function (j) { return (j && j.frames) || []; });
+                .then(function (r) { return r.json(); }).then(function (j) { _irApplyTrange(j, product); return (j && j.frames) || []; });
         framesP.then(function (frames) {
             if (!detailMap || currentStormId !== atcfId) return;
             if (!frames || frames.length === 0) {
@@ -7208,6 +7258,7 @@
                     .then(function (j) {
                         if (!detailMap || currentStormId !== _mosStormId || _detailMosaicBase) return;
                         var fr = (j && j.frames) || [];
+                        _irApplyTrange(j, 'ir');
                         var ts = fr.length ? fr[fr.length - 1] : null;
                         if (!ts) return;
                         _detailMosaicBase = L.tileLayer('idxcolor://ir/' + _ir2aRoot('ir') + '/' + ts + '/{z}/{x}/{y}.png', _baseOpts).addTo(detailMap);

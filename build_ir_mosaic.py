@@ -232,6 +232,17 @@ _NIGHT_ELEV_DEG = -6.0   # civil twilight: below this, Visible is masked clear
 # (matched). frac = 1 - (Tb-170)/90.
 _WV_VMIN, _WV_VMAX = 170.0, 260.0
 
+# IR *index-encoding* range — DELIBERATELY WIDER than the display colour limits
+# (IR_VMIN/IR_VMAX = 190/310, imported from satellite_ir). to_index() quantizes Tb
+# into the 1..255 idx over THIS range; the client decodes idx→Tb with the same
+# limits (published per-frame as `ir_trange` in frames.json) so cold tops below
+# −83 °C (190 K) read their real temperature instead of saturating. Precision is
+# (330-160)/254 ≈ 0.67 K/step (was 0.47 over 190-310) — inside ABI noise. Do NOT
+# fold these into IR_VMIN/IR_VMAX: those anchor the DISPLAY colormap for every
+# rendered IR product (ir-frame.jpg, OG card, archive) and the client clamps the
+# decoded Tb back to [IR_VMIN, IR_VMAX] before colouring, so the look is unchanged.
+IR_IDX_VMIN, IR_IDX_VMAX = 160.0, 330.0
+
 
 # Diverging Water-Vapor LUT — the SHARED design (mirrored in ir_monitor_api.py
 # _CLAUDE_WV_FRAC_STOPS and satellite.js IR_COLORMAPS['wv'] so global + storm-card
@@ -331,11 +342,15 @@ def to_index(arr, product):
     Mirrors colormap()'s frac math EXACTLY so idx→Tb is the identical mapping the
     client forward-LUT uses; only the final LUT expansion is skipped. 0 is reserved
     as the no-data sentinel (the client renders it transparent), so valid data is
-    clamped to 1..255 — this only nudges the single warmest level (idx 0 ≈ 310 K,
-    extremely rare) up by ~0.5 K, invisibly. NaN (off-disk/limb) → 0."""
+    clamped to 1..255 — this only nudges the single warmest level (idx 0 ≈ 330 K,
+    extremely rare) up by ~0.7 K, invisibly. NaN (off-disk/limb) → 0.
+
+    IR uses the WIDER IR_IDX_VMIN/VMAX (160-330), NOT the display IR_VMIN/VMAX, so
+    the encoded index preserves real cold-top Tb below 190 K; the client publishes
+    this range per-frame (ir_trange) and clamps to [IR_VMIN,IR_VMAX] for colour."""
     kind = PRODUCTS[product]["kind"]
     if kind == "ir":
-        frac = np.clip(1.0 - (arr - IR_VMIN) / (IR_VMAX - IR_VMIN), 0.0, 1.0)
+        frac = np.clip(1.0 - (arr - IR_IDX_VMIN) / (IR_IDX_VMAX - IR_IDX_VMIN), 0.0, 1.0)
         idx = (np.nan_to_num(frac) * 255).astype(np.uint8)
     elif kind == "wv":
         frac = np.clip(1.0 - (arr - _WV_VMIN) / (_WV_VMAX - _WV_VMIN), 0.0, 1.0)
@@ -668,17 +683,25 @@ def update_r2_manifest(new_ts, zmax, product="ir"):
     """Append new_ts to <prefix>/<product>/frames.json, trim to the rolling window,
     and prune the tiles of any frame that fell out of the window (keeps R2 bounded)."""
     c = _get_r2(); key = f"{R2_PREFIX}/{product}/frames.json"
-    frames = []
+    frames = []; ir_trange = {}
     try:
         cur = json.loads(c.get_object(Bucket=_r2_bucket(), Key=key)["Body"].read())
         frames = cur.get("frames", [])
+        ir_trange = cur.get("ir_trange", {}) or {}
     except Exception:
         pass
     if new_ts not in frames:
         frames.append(new_ts)
     frames = sorted(set(frames))[-R2_KEEP_FRAMES:]
-    body = json.dumps({"frames": frames, "zmax": zmax,
-                       "storm_zooms": list(STORM_ZOOMS)}).encode()
+    manifest = {"frames": frames, "zmax": zmax, "storm_zooms": list(STORM_ZOOMS)}
+    # Per-frame idx→Tb decode range (IR only). Stamp THIS frame with the current
+    # encoding range; leave pre-existing frames' entries as-is (a mixed rollover
+    # window stays correct) and drop entries for frames that fell out of the window.
+    # Frames with no entry decode with the client's legacy [190,310] fallback.
+    if PRODUCTS[product]["kind"] == "ir":
+        ir_trange[new_ts] = [IR_IDX_VMIN, IR_IDX_VMAX]
+        manifest["ir_trange"] = {t: r for t, r in ir_trange.items() if t in frames}
+    body = json.dumps(manifest).encode()
     r2_put(key, body, "application/json", MANIFEST_CACHE)
     try:
         _prune_old_frames(frames, product)
