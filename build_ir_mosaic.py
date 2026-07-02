@@ -957,6 +957,14 @@ def main():
             log(f"manifest {product} ({len(ts_list)} frames) → {man}")
     nfr = sum(len(v) for v in written.values())
     log(f"TOTAL {time.time()-t0:.1f}s for {nfr} product-frame(s)")
+    # Peak RSS across the whole process (max over all frames — per-frame arrays are
+    # freed between frames). Drives the strip-count / memory-limit sizing (S6).
+    try:
+        import resource
+        log(f"PEAK RSS {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:.0f} MiB "
+            f"(MOSAIC_STRIPS={_MOSAIC_STRIPS})")
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
