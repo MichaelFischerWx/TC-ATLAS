@@ -10775,8 +10775,10 @@ _SHEAR_CACHE_TTL = 6 * 3600    # 6 hours; one GFS cycle
 # and supports the Davis-Ahijevych Helmholtz method as an opt-in.
 # Cache key includes method + params so SHIPS, env-profile, and
 # Helmholtz-tuned variants don't cross-pollinate.
-_SHEAR_CACHE_VER = "env-v5"   # v5: χ_m s*_m now at the ENVIRONMENTAL mid-level temp
-                              #     (Tang & Emanuel) — invalidates the inflated v4 VI.
+_SHEAR_CACHE_VER = "env-v6"   # v6: REVERT v5 — χ_m s*_m is the inner-0-100km-disc
+                              #     saturation entropy (Tang & Emanuel 2012 supplement,
+                              #     "Calculation from Gridded Data"); v5's annulus-temp
+                              #     s*_m was wrong. Invalidates the v5 (under-valued) VI.
                               # v4: payload carries chi_inputs + ventilation (VI)
 _shear_mem_cache: dict = {}    # (atcf_id, cycle_iso, params_key) → {data, ts}
 _shear_mem_lock = threading.Lock()
