@@ -713,6 +713,52 @@ def _dead_reckon(storm, target_dt):
     return math.degrees(p2), math.degrees(l2)
 
 
+def _reproject_tb_crop(sats, clat, clon, half):
+    """Reproject a storm-centered equirect Tb crop (K) from in-memory sats — no
+    extra S3 read. Returns (tb, LAT, LON) with row 0 = north, or (None,None,None).
+    Band-agnostic: the sats' `flat` is whatever band was read (IR or WV Tb)."""
+    n = int(round(2 * half / _EYE_DIAG_RES_DEG)) + 1
+    lats = np.linspace(clat + half, clat - half, n)   # row 0 = NORTH (finder convention)
+    lons = np.linspace(clon - half, clon + half, n)
+    LON, LAT = np.meshgrid(lons, lats)
+    samples = []
+    for s in sats.values():
+        idx, cosz, mask = project_to_sat(LON, LAT, s["grid"], s["lon_0"],
+                                         s["sat_h"], s["sweep"])
+        g = s["flat"][idx]
+        valid = mask & np.isfinite(g) & (g > 0)
+        if bool(valid.any()):
+            samples.append((g, cosz, valid))
+    if not samples:
+        return None, None, None
+    tb = blend_samples(samples)   # K, NaN where no data
+    if not bool(np.isfinite(tb).any()):
+        return None, None, None
+    return tb, LAT, LON
+
+
+def _eye_min_c(tb, LAT, LON, clat, clon):
+    """(warmest Tb within 50 km of center = eye, coldest Tb in crop), in °C."""
+    ring = np.isfinite(tb) & (_haversine_km(LAT, LON, clat, clon) <= _EYE_RING_KM)
+    eye_c = (float(np.nanmax(np.where(ring, tb, np.nan))) - 273.15) if bool(ring.any()) else None
+    min_c = float(np.nanmin(tb)) - 273.15
+    return eye_c, min_c
+
+
+def band_eye_min_at_center(sats, clat, clon):
+    """Warm-eye + cold-top Tb for a band's sats at a KNOWN center (used for WV,
+    reusing the IR-derived eye position — the eye is best located in IR). °C,
+    rounded; (None,None) if no data."""
+    if not sats:
+        return None, None
+    tb, LAT, LON = _reproject_tb_crop(sats, clat, clon, _EYE_DIAG_HALF_DEG)
+    if tb is None:
+        return None, None
+    eye_c, min_c = _eye_min_c(tb, LAT, LON, clat, clon)
+    return (round(eye_c, 1) if eye_c is not None else None,
+            round(min_c, 1) if min_c is not None else None)
+
+
 def storm_ir_diagnostic(sats, storm, target_dt):
     """Objective IR center fix (gated) + warm-eye / cold-top Tb for one storm.
 
@@ -728,22 +774,8 @@ def storm_ir_diagnostic(sats, storm, target_dt):
     # >150 km stale) so the search reliably reaches the true eye.
     lat0, lon0 = _dead_reckon(storm, target_dt)
     half = _EYE_DIAG_HALF_DEG
-    n = int(round(2 * half / _EYE_DIAG_RES_DEG)) + 1
-    lats = np.linspace(lat0 + half, lat0 - half, n)   # row 0 = NORTH (finder convention)
-    lons = np.linspace(lon0 - half, lon0 + half, n)
-    LON, LAT = np.meshgrid(lons, lats)
-    samples = []
-    for s in sats.values():
-        idx, cosz, mask = project_to_sat(LON, LAT, s["grid"], s["lon_0"],
-                                         s["sat_h"], s["sweep"])
-        g = s["flat"][idx]
-        valid = mask & np.isfinite(g) & (g > 0)
-        if bool(valid.any()):
-            samples.append((g, cosz, valid))
-    if not samples:
-        return None
-    tb = blend_samples(samples)   # K, NaN where no data
-    if not bool(np.isfinite(tb).any()):
+    tb, LAT, LON = _reproject_tb_crop(sats, lat0, lon0, half)
+    if tb is None:
         return None
     bounds = [[lat0 - half, lon0 - half], [lat0 + half, lon0 + half]]
     fix_lat, fix_lon, fix_ok = lat0, lon0, False
@@ -754,16 +786,14 @@ def storm_ir_diagnostic(sats, storm, target_dt):
             fix_lat, fix_lon, fix_ok = float(cf["lat"]), float(cf["lon"]), True
     except Exception as e:
         log(f"  eye diag: center-fix error {storm.get('atcf_id')}: {e}")
-    ring = np.isfinite(tb) & (_haversine_km(LAT, LON, fix_lat, fix_lon) <= _EYE_RING_KM)
-    eye_c = (float(np.nanmax(np.where(ring, tb, np.nan))) - 273.15) if bool(ring.any()) else None
-    min_c = float(np.nanmin(tb)) - 273.15
+    eye_c, min_c = _eye_min_c(tb, LAT, LON, fix_lat, fix_lon)
     return {
         "atcf_id": storm.get("atcf_id"),
         "name": storm.get("name"),
         "lat": round(fix_lat, 3), "lon": round(fix_lon, 3),
         "fix": fix_ok,
         "eye_c": round(eye_c, 1) if eye_c is not None else None,
-        "min_c": round(min_c, 1),
+        "min_c": round(min_c, 1) if min_c is not None else None,
         "vmax": storm.get("vmax_kt"),
         "mslp": storm.get("mslp_hpa"),
     }
@@ -796,7 +826,8 @@ def update_r2_eye_fixes(ts, diags):
         if d.get("name"):
             st["name"] = d["name"]
         st["frames"][ts] = {k: d.get(k) for k in
-                            ("lat", "lon", "fix", "eye_c", "min_c", "vmax", "mslp")}
+                            ("lat", "lon", "fix", "eye_c", "min_c", "vmax", "mslp",
+                             "wv_eye_c", "wv_min_c")}
     floor = _eye_window_floor(ts)
     pruned = {}
     for aid, st in storms.items():
@@ -1116,6 +1147,14 @@ def main():
                     dg = storm_ir_diagnostic(sats, sm, dt)
                     if dg:
                         frame_diags.append(dg)
+            elif product == "wv" and frame_diags:
+                # WV Tb at the IR-derived eye center, so the header readout shows
+                # band-relevant values when the user views Water Vapor (WV Tb runs
+                # much colder than IR for the same scene).
+                for dg in frame_diags:
+                    we, wm = band_eye_min_at_center(sats, dg["lat"], dg["lon"])
+                    dg["wv_eye_c"] = we
+                    dg["wv_min_c"] = wm
             if fi == 0 and product == products[0] and TILE_MODE != "idx":
                 write_preview(rgba, args.out)
             written.setdefault(product, []).append(ts)
