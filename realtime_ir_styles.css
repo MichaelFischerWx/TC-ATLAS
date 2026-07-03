@@ -933,8 +933,11 @@ html, body { margin: 0; padding: 0; }
     color: #c0d0ea;
 }
 .ir-product-btn.ir-product-active {
-    background: rgba(74, 155, 110, 0.25);
-    color: #60a5fa;
+    /* Solid, not 25%-transparent — a see-through "selected" button vanished over
+       bright imagery (WV/Vis especially). Opaque green + white text reads on any
+       background and clearly marks the active channel. */
+    background: #4a9b6e;
+    color: #ffffff;
 }
 .ir-product-btn.ir-loading {
     color: #fbbf24;

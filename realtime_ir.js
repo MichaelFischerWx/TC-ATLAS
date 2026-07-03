@@ -3368,7 +3368,11 @@
         if (!detailMap) return;
         for (var i = 0; i < detailTrackLayers.length; i++) {
             var ly = detailTrackLayers[i];
-            if (!ly) continue;
+            // Keep the current-position pin (eye marker) visible regardless — it's
+            // orientation, not track history (matches the download "Show storm
+            // track" convention where the center marker always stays). So the
+            // track can default off for hurricanes without hiding the eye pin.
+            if (!ly || ly === _detailPosPin) continue;
             if (_detailTrackVisible) {
                 if (!detailMap.hasLayer(ly)) { try { ly.addTo(detailMap); } catch (e) {} }
             } else if (detailMap.hasLayer(ly)) {
@@ -6358,11 +6362,62 @@
     }
 
     /** Eye fix for a given mosaic timestamp (YYYYMMDDHHMM): the per-frame fix
-     *  when present, else the latest fix (the user-chosen default snap). */
+     *  when present, else the latest fix (the user-chosen default snap). Used for
+     *  the eye/cold-top text readout. */
     function _eyeFixForTs(ts) {
         if (!_eyeDiag || _eyeDiag.atcf !== currentStormId) return null;
         if (ts && _eyeDiag.byTs && _eyeDiag.byTs[ts]) return _eyeDiag.byTs[ts];
         return _eyeDiag.latest || null;
+    }
+
+    function _tsToMs(ts) {
+        var s = String(ts);
+        return Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8),
+                        +s.slice(8, 10), +s.slice(10, 12));
+    }
+
+    /** Eye CENTER {lat,lon} for a frame's timestamp, for positioning the pin +
+     *  follow camera. If this frame was objectively fixed (fix:true) use it; if
+     *  not (gate failed for a few frames), INTERPOLATE across the nearest
+     *  objectively-fixed frames on either side (by time) so the animation doesn't
+     *  jump between the true eye and the dead-reckoned fallback. Clamps to the
+     *  nearest anchor at the ends. Null if we have no objective fixes at all. */
+    function _eyeCenterForTs(ts) {
+        if (!_eyeDiag || _eyeDiag.atcf !== currentStormId) return null;
+        var byTs = _eyeDiag.byTs || {};
+        var cur = ts && byTs[ts];
+        if (cur && cur.fix && isFinite(cur.lat) && isFinite(cur.lon)) {
+            return { lat: cur.lat, lon: cur.lon };
+        }
+        var anchors = [];
+        for (var k in byTs) {
+            if (!byTs.hasOwnProperty(k)) continue;
+            var f = byTs[k];
+            if (f && f.fix && isFinite(f.lat) && isFinite(f.lon)) {
+                anchors.push({ ms: _tsToMs(k), lat: f.lat, lon: f.lon });
+            }
+        }
+        if (!anchors.length) {
+            // No objective fix anywhere — fall back to this frame's own value,
+            // else the latest recorded value.
+            if (cur && isFinite(cur.lat)) return { lat: cur.lat, lon: cur.lon };
+            var lt = _eyeDiag.latest;
+            return (lt && isFinite(lt.lat)) ? { lat: lt.lat, lon: lt.lon } : null;
+        }
+        anchors.sort(function (a, b) { return a.ms - b.ms; });
+        var t = ts ? _tsToMs(ts) : anchors[anchors.length - 1].ms;
+        var prev = null, next = null;
+        for (var i = 0; i < anchors.length; i++) {
+            if (anchors[i].ms <= t) prev = anchors[i];
+            if (anchors[i].ms >= t) { next = anchors[i]; break; }
+        }
+        if (prev && next && next.ms !== prev.ms) {
+            var w = (t - prev.ms) / (next.ms - prev.ms);
+            return { lat: prev.lat + (next.lat - prev.lat) * w,
+                     lon: prev.lon + (next.lon - prev.lon) * w };
+        }
+        var use = prev || next;          // clamp to the nearest end
+        return { lat: use.lat, lon: use.lon };
     }
 
     function _ensureEyeDiagEl() {
@@ -6388,12 +6443,18 @@
     function _updateEyeDiagText(ts) {
         var el = _ensureEyeDiagEl();
         if (!el) return;
+        // Values are band-relative: WV brightness temps run much colder than IR
+        // for the same scene, so switch to the WV pair when WV is shown. Visible
+        // is reflectance (not temperature) → no readout.
+        if (productMode === 'vis') { el.style.display = 'none'; return; }
+        var isWV = (productMode === 'wv');
         var ef = _eyeFixForTs(ts);
+        var eyeV = ef ? (isWV ? ef.wv_eye_c : ef.eye_c) : null;
+        var minV = ef ? (isWV ? ef.wv_min_c : ef.min_c) : null;
         var parts = [];
-        if (ef) {
-            if (ef.eye_c != null) parts.push('Eye ' + Math.round(ef.eye_c) + '°C');
-            if (ef.min_c != null) parts.push('Coldest ' + Math.round(ef.min_c) + '°C');
-        }
+        // Tenths — the sidecar already carries 1-decimal precision.
+        if (eyeV != null) parts.push('Eye ' + eyeV.toFixed(1) + '°C');
+        if (minV != null) parts.push('Coldest ' + minV.toFixed(1) + '°C');
         el.textContent = parts.join('   ·   ');
         el.style.display = parts.length ? 'block' : 'none';
     }
@@ -7521,9 +7582,13 @@
         // track shown; reset the toggle (and its button) so a hidden choice
         // from a prior storm doesn't carry over. (detailTrackLayers was reset
         // above, before the current-position pin was pushed into it.)
-        _detailTrackVisible = true;
+        // Hurricanes (>=64 kt) default to track history OFF — on a strong storm
+        // with a clear eye the past-track/extrapolation just clutters the imagery,
+        // and the eye pin already marks the (objective) center. Weaker systems
+        // (no clear eye) keep it on, where the track is genuinely useful.
+        _detailTrackVisible = !(storm.vmax_kt != null && storm.vmax_kt >= 64);
         var _trkBtn = document.getElementById('ir-detail-track-toggle');
-        if (_trkBtn) _trkBtn.classList.add('active');
+        if (_trkBtn) _trkBtn.classList.toggle('active', _detailTrackVisible);
         // Each storm opens on the full loop — clear any prior frame trim.
         _trimMode = false;
         _trimFracStart = 0;
@@ -8586,11 +8651,12 @@
         var c = null;
         // Objective eye fix wins: snap the pin onto the real eye. Best-track lags
         // the eye ~30-50 km (more when the fix is old), which is glaring on a
-        // sharp-eyed major. Per-frame fix when we have one, else the latest fix
-        // (the default snap); falls back to the dead-reckoned best-track center.
-        var ef = _eyeFixForTs(layer._mosaicTs);
-        if (ef && isFinite(ef.lat) && isFinite(ef.lon)) {
-            c = L.latLng(ef.lat, ef.lon);
+        // sharp-eyed major. _eyeCenterForTs uses the frame's fix, or interpolates
+        // across neighbouring fixes for gate-failed frames (no jumps); falls back
+        // to the dead-reckoned best-track center only when there's no fix at all.
+        var ec = _eyeCenterForTs(layer._mosaicTs);
+        if (ec && isFinite(ec.lat) && isFinite(ec.lon)) {
+            c = L.latLng(ec.lat, ec.lon);
         } else {
             var rt = layer._recenterTo;
             if (rt && rt.length === 2 && isFinite(rt[0]) && isFinite(rt[1])) {
@@ -8609,9 +8675,10 @@
     function _rtFollowStormRecenter(layer) {
         if (!_rtFollowStorm || !detailMap || !layer) return;
         var c = null;
-        var ef = _eyeFixForTs(layer._mosaicTs);
-        if (ef && isFinite(ef.lat) && isFinite(ef.lon)) {
-            c = L.latLng(ef.lat, ef.lon);
+        // Interpolated eye center (smooth across gate-failed frames — no jumps).
+        var ec = _eyeCenterForTs(layer._mosaicTs);
+        if (ec && isFinite(ec.lat) && isFinite(ec.lon)) {
+            c = L.latLng(ec.lat, ec.lon);
         } else {
             var rt = layer._recenterTo;
             if (rt && rt.length === 2 && isFinite(rt[0]) && isFinite(rt[1])) c = L.latLng(rt[0], rt[1]);
