@@ -657,6 +657,10 @@
     // marker is NOT covered by this — it stays for orientation, matching the
     // download "Show storm track" convention.
     var _detailTrackVisible = true;
+    // The current-position eye marker (pin). OFF by default on the loops — the
+    // eye is obvious in the imagery — with its own "Eye marker" toggle (separate
+    // from the track history). Persists across storms as a session preference.
+    var _detailPinVisible = false;
     var detailSatName = '';     // which satellite is used for this storm
     var detailStormLat = 0;    // storm latitude for solar position calc
     var detailStormLon = 0;    // storm longitude for solar position calc
@@ -3387,6 +3391,29 @@
         var btn = document.getElementById('ir-detail-track-toggle');
         if (btn) btn.classList.toggle('active', _detailTrackVisible);
         _ga('rt_detail_track_toggle', { on: _detailTrackVisible });
+    };
+
+    /** Add / remove the eye-marker pin to match _detailPinVisible. The pin still
+     *  exists + tracks frames when hidden (showFrame moves it); this only governs
+     *  whether it's on the map. Independent of the track-history toggle. */
+    function _irApplyPinVisibility() {
+        if (!detailMap || !_detailPosPin) return;
+        if (_detailPinVisible) {
+            if (!detailMap.hasLayer(_detailPosPin)) { try { _detailPosPin.addTo(detailMap); } catch (e) {} }
+        } else if (detailMap.hasLayer(_detailPosPin)) {
+            try { detailMap.removeLayer(_detailPosPin); } catch (e) {}
+        }
+    }
+    window._irToggleEyeMarker = function () {
+        _detailPinVisible = !_detailPinVisible;
+        _irApplyPinVisibility();
+        var btn = document.getElementById('ir-eye-marker-toggle');
+        if (btn) btn.classList.toggle('active', _detailPinVisible);
+        // Snap the just-shown pin onto the current frame's eye immediately.
+        if (_detailPinVisible && _liteActive && animFrameLayers[animIndex]) {
+            _syncDetailPinToFrame(animFrameLayers[animIndex]);
+        }
+        _ga('rt_eye_marker_toggle', { on: _detailPinVisible });
     };
 
     window._irToggleFollowStorm = function () {
@@ -7572,11 +7599,18 @@
         if (storm.last_fix_utc) _popLines.push('<i>Last fix: ' + fmtUTC(storm.last_fix_utc) + '</i>');
         pin.bindPopup(_popLines.join('<br>'), { maxWidth: 240 });
         pin.addTo(detailMap);
-        // Track-toggle parity + cleanup: the pin belongs with the track layers.
+        // Kept in detailTrackLayers for per-storm CLEANUP only — its visibility is
+        // governed by _detailPinVisible (the "Eye marker" toggle), NOT the track
+        // toggle (_irApplyDetailTrackVisibility skips it).
         detailTrackLayers.push(pin);
         // Hold a ref so showFrame() can slide it to each frame's center.
         _detailPosPin = pin;
         _detailNameLabel = null;
+        // Eye marker off by default — hide the just-added pin unless the user has
+        // it on (it still tracks frames while hidden). Sync the toggle button.
+        var _eyeBtn = document.getElementById('ir-eye-marker-toggle');
+        if (_eyeBtn) _eyeBtn.classList.toggle('active', _detailPinVisible);
+        _irApplyPinVisibility();
 
         // Fetch and draw past track on detail map. Each storm opens with the
         // track shown; reset the toggle (and its button) so a hidden choice
