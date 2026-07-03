@@ -43,6 +43,8 @@ from satellite_ir import (
     find_himawari_file, open_himawari_subset,
     VIS_BAND, WV_BAND, HIMAWARI_VIS_BAND, HIMAWARI_WV_BAND, BAND_RANGES,
 )
+# Shared gated IR center-finder (g1/g2/g3 policy) — reused, never reimplemented.
+from tc_center_fix import apply_center_gates
 
 OUT_DIR = os.environ.get("MOSAIC_OUT", "mosaic_out")
 KERNEL_DIR = os.path.join(OUT_DIR, "kernels")
@@ -614,7 +616,8 @@ def global_render(zoom, sats, kernels, timings, product="ir", dt=None):
 # ── Storm tiles: high-zoom z/x/y patches over a list of points ─────────────
 def storm_tile_set(points, zooms, box_deg):
     tiles = set()
-    for lat, lon in points:
+    for p in points:
+        lat, lon = (p["lat"], p["lon"]) if isinstance(p, dict) else p
         for z in zooms:
             n = 2 ** z
             x0 = max(0, lon_to_tilex(lon - box_deg, z))
@@ -658,6 +661,154 @@ def render_storm_tiles(sats, tiles, emit, timings, product="ir", dt=None):
         emit(z, x, y, _png_bytes(img)); written += 1
     timings["storm_tile"] = time.time() - t0
     return written
+
+
+# ── Storm IR diagnostics: objective eye-fix + warm-eye / cold-top Tb ───────
+# For storms >= this intensity, run the shared gated center-finder on the raw IR
+# already in memory and record: the objective eye position (so the frontend can
+# snap the track pin onto the real eye instead of the lagging best-track fix),
+# the warmest Tb within 50 km of that center (= subsident eye temperature, the
+# "Max (TC Center)" CyclonicWx shows), and the coldest Tb in the crop (cloud-top
+# minimum). Shipped as a tiny rolling sidecar. ~20-100 ms per storm; no extra S3.
+_EYE_DIAG_MIN_VMAX = 65          # kt — hurricane strength (a clear eye to find)
+_EYE_DIAG_HALF_DEG = 1.9         # crop half-width: covers 150 km search + 50 km ring
+_EYE_DIAG_RES_DEG = 0.02         # ~2.2 km ≈ IR native
+_EYE_RING_KM = 50.0              # warm-eye search radius around the center
+
+
+def _haversine_km(lat, lon, lat0, lon0):
+    R = 6371.0
+    p1 = np.radians(lat); p2 = np.radians(lat0)
+    dphi = np.radians(lat0 - lat); dlam = np.radians(lon0 - lon)
+    a = np.sin(dphi / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(dlam / 2) ** 2
+    return 2 * R * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
+
+
+def _dead_reckon(storm, target_dt):
+    """Dead-reckon the storm's last fix forward to target_dt using its motion.
+    Unlike the frontend display pin (capped at 9 h), this is UNcapped: it only
+    needs to seed the center-finder within its search radius of the true eye —
+    a raw 6-hourly fix can be >150 km stale for a moving storm, which would put
+    the eye outside the search. The finder then refines to the actual eye."""
+    lat0 = float(storm["lat"]); lon0 = float(storm["lon"])
+    mk = storm.get("motion_kt"); md = storm.get("motion_deg")
+    lf = storm.get("last_fix_utc")
+    if mk is None or md is None or not lf:
+        return lat0, lon0
+    try:
+        fix_dt = datetime.fromisoformat(str(lf).replace("Z", "+00:00"))
+    except Exception:
+        return lat0, lon0
+    age_h = (target_dt - fix_dt).total_seconds() / 3600.0
+    if age_h <= 0.0 or age_h > 24.0:      # sanity clamp only
+        return lat0, lon0
+    dist_km = float(mk) * age_h * 1.852
+    brg = math.radians(float(md))
+    d = dist_km / 6371.0
+    p1 = math.radians(lat0); l1 = math.radians(lon0)
+    p2 = math.asin(math.sin(p1) * math.cos(d) +
+                   math.cos(p1) * math.sin(d) * math.cos(brg))
+    l2 = l1 + math.atan2(math.sin(brg) * math.sin(d) * math.cos(p1),
+                         math.cos(d) - math.sin(p1) * math.sin(p2))
+    return math.degrees(p2), math.degrees(l2)
+
+
+def storm_ir_diagnostic(sats, storm, target_dt):
+    """Objective IR center fix (gated) + warm-eye / cold-top Tb for one storm.
+
+    Reprojects a small storm-centered IR crop from the already-in-memory `sats`
+    (no extra read), runs tc_center_fix.apply_center_gates (the same g1/g2/g3
+    finder the Detailed view uses), then measures the max Tb within 50 km of the
+    fix — or of the best-track position when the gates don't pass — as the eye
+    temperature, plus the crop's coldest Tb. Returns a dict, or None if there's
+    no usable IR over the storm."""
+    if not sats:
+        return None
+    # Seed the crop + finder with a dead-reckoned position (raw fix can be
+    # >150 km stale) so the search reliably reaches the true eye.
+    lat0, lon0 = _dead_reckon(storm, target_dt)
+    half = _EYE_DIAG_HALF_DEG
+    n = int(round(2 * half / _EYE_DIAG_RES_DEG)) + 1
+    lats = np.linspace(lat0 + half, lat0 - half, n)   # row 0 = NORTH (finder convention)
+    lons = np.linspace(lon0 - half, lon0 + half, n)
+    LON, LAT = np.meshgrid(lons, lats)
+    samples = []
+    for s in sats.values():
+        idx, cosz, mask = project_to_sat(LON, LAT, s["grid"], s["lon_0"],
+                                         s["sat_h"], s["sweep"])
+        g = s["flat"][idx]
+        valid = mask & np.isfinite(g) & (g > 0)
+        if bool(valid.any()):
+            samples.append((g, cosz, valid))
+    if not samples:
+        return None
+    tb = blend_samples(samples)   # K, NaN where no data
+    if not bool(np.isfinite(tb).any()):
+        return None
+    bounds = [[lat0 - half, lon0 - half], [lat0 + half, lon0 + half]]
+    fix_lat, fix_lon, fix_ok = lat0, lon0, False
+    try:
+        gated = apply_center_gates(tb, bounds, lat0, lon0, ref_lat=lat0, ref_lon=lon0)
+        cf = gated.get("center_fix") if gated.get("passed") else None
+        if cf and cf.get("lat") is not None:
+            fix_lat, fix_lon, fix_ok = float(cf["lat"]), float(cf["lon"]), True
+    except Exception as e:
+        log(f"  eye diag: center-fix error {storm.get('atcf_id')}: {e}")
+    ring = np.isfinite(tb) & (_haversine_km(LAT, LON, fix_lat, fix_lon) <= _EYE_RING_KM)
+    eye_c = (float(np.nanmax(np.where(ring, tb, np.nan))) - 273.15) if bool(ring.any()) else None
+    min_c = float(np.nanmin(tb)) - 273.15
+    return {
+        "atcf_id": storm.get("atcf_id"),
+        "name": storm.get("name"),
+        "lat": round(fix_lat, 3), "lon": round(fix_lon, 3),
+        "fix": fix_ok,
+        "eye_c": round(eye_c, 1) if eye_c is not None else None,
+        "min_c": round(min_c, 1),
+        "vmax": storm.get("vmax_kt"),
+        "mslp": storm.get("mslp_hpa"),
+    }
+
+
+def _eye_window_floor(ts):
+    """Oldest timestamp to retain in the rolling eye-fix sidecar (frame window
+    + a little slack), as a comparable 'YYYYMMDDHHMM' string."""
+    t = datetime.strptime(ts, "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
+    return (t - timedelta(minutes=R2_KEEP_FRAMES * 10 + 20)).strftime("%Y%m%d%H%M")
+
+
+def update_r2_eye_fixes(ts, diags):
+    """Roll the storm eye-fix / Tb-diagnostic sidecar (mosaic-v3/eye_fixes.json):
+    per storm, per timestamp, trimmed to the frame window; dissipated storms drop
+    out once their newest frame rolls off. Tiny (<1 KB)."""
+    key = f"{R2_PREFIX}/eye_fixes.json"
+    c = _get_r2()
+    cur = {}
+    try:
+        cur = json.loads(c.get_object(Bucket=_r2_bucket(), Key=key)["Body"].read())
+    except Exception:
+        pass
+    storms = cur.get("storms", {}) or {}
+    for d in diags:
+        aid = d.get("atcf_id")
+        if not aid:
+            continue
+        st = storms.setdefault(aid, {"name": d.get("name"), "frames": {}})
+        if d.get("name"):
+            st["name"] = d["name"]
+        st["frames"][ts] = {k: d.get(k) for k in
+                            ("lat", "lon", "fix", "eye_c", "min_c", "vmax", "mslp")}
+    floor = _eye_window_floor(ts)
+    pruned = {}
+    for aid, st in storms.items():
+        frames = st.get("frames", {}) or {}
+        keep = sorted(frames.keys())[-R2_KEEP_FRAMES:]
+        frames = {t: frames[t] for t in keep}
+        if frames and max(frames.keys()) >= floor:
+            st["frames"] = frames
+            pruned[aid] = st
+    body = json.dumps({"storms": pruned, "updated": ts}).encode()
+    r2_put(key, body, "application/json", MANIFEST_CACHE)
+    return pruned
 
 
 # ── tile sinks: local directory or concurrent R2 upload ───────────────────
@@ -862,7 +1013,12 @@ def fetch_active_points():
         # covered = GOES-E/W (≤ -5°) or Himawari (≥ 75°); the -5..75 gap is
         # the Meteosat coverage we don't ingest yet.
         if lonn <= -5 or lonn >= 75:
-            pts.append((lat, lonn))
+            pts.append({"lat": lat, "lon": lonn, "atcf_id": s.get("atcf_id"),
+                        "name": s.get("name"), "vmax_kt": s.get("vmax_kt"),
+                        "mslp_hpa": s.get("mslp_hpa"),
+                        "motion_kt": s.get("motion_kt"),
+                        "motion_deg": s.get("motion_deg"),
+                        "last_fix_utc": s.get("last_fix_utc")})
             log(f"  storm {s.get('name','?')} @ {lat:.1f},{lonn:.1f}")
         else:
             log(f"  storm {s.get('name','?')} @ {lonn:.1f}° in Meteosat gap — skip")
@@ -903,7 +1059,9 @@ def main():
         points += fetch_active_points()
     if args.storm_at:
         la, lo = (float(v) for v in args.storm_at.split(","))
-        points.append((la, lo)); log(f"test point @ {la},{lo}")
+        points.append({"lat": la, "lon": lo, "atcf_id": None, "name": None,
+                       "vmax_kt": None, "mslp_hpa": None})
+        log(f"test point @ {la},{lo}")
 
     products = [p.strip() for p in args.bands.split(",") if p.strip() in PRODUCTS]
     if not products:
@@ -918,6 +1076,7 @@ def main():
             f"(zmax {args.zmax}, blend_p {BLEND_P:g}, bands {','.join(products)})")
         ts = dt.strftime("%Y%m%d%H%M")
         tiles = storm_tile_set(points, STORM_ZOOMS, STORM_BOX_DEG) if points else set()
+        frame_diags = []   # eye-fix / Tb diagnostics for storms >=65 kt (IR pass)
         # Each product reads its own band, renders, tiles, uploads to its prefix.
         # The reproject kernels are shared (IR grid) across all bands. Sats are read
         # + freed per product so peak memory stays ~one band at a time.
@@ -945,6 +1104,18 @@ def main():
             n_storm = 0
             if tiles:
                 n_storm = render_storm_tiles(sats, tiles, emit, timings, product, dt)
+            # Objective eye-fix + warm-eye/cold-top Tb, from the IR sats already
+            # in memory (no extra read). IR pass only; storms >= 65 kt only.
+            if product == "ir":
+                for sm in points:
+                    if not isinstance(sm, dict) or not sm.get("atcf_id"):
+                        continue
+                    v = sm.get("vmax_kt")
+                    if v is None or v < _EYE_DIAG_MIN_VMAX:
+                        continue
+                    dg = storm_ir_diagnostic(sats, sm, dt)
+                    if dg:
+                        frame_diags.append(dg)
             if fi == 0 and product == products[0] and TILE_MODE != "idx":
                 write_preview(rgba, args.out)
             written.setdefault(product, []).append(ts)
@@ -970,6 +1141,15 @@ def main():
                                  ("read", "gather", "colormap", "tile", "storm_tile", "upload")
                                  if k in timings)
                 log(f"    timings: {parts}")
+
+        # Ship the per-frame eye-fix / Tb-diagnostic sidecar (R2 mode).
+        if frame_diags and args.r2:
+            try:
+                st = update_r2_eye_fixes(ts, frame_diags)
+                log(f"  eye_fixes: {len(frame_diags)} storm(s) this frame, "
+                    f"{len(st)} in window → {ts}")
+            except Exception as e:
+                log(f"  eye_fixes write failed: {e}")
 
     # local animation manifests per product (R2 mode rolls its own per-frame above)
     if written and not args.r2:

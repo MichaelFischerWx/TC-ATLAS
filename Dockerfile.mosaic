@@ -49,6 +49,7 @@ RUN pip install --no-cache-dir \
 # the builder + the production satellite data stack it reuses
 COPY build_ir_mosaic.py .
 COPY satellite_ir.py .
+COPY tc_center_fix.py .
 
 # Cloud Run Jobs invoke the container once and exit. Default to production R2
 # mode with storm sectors over active storms; the deploy script can override
