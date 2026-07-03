@@ -6284,24 +6284,30 @@
      *  only, $0 new compute. Falls through to the raw-Tb path if the mosaic is
      *  unavailable. (The Meteosat-gap longitude check happens at the caller, so
      *  by here we expect tiles to exist.) See project_lite_storm_view. */
-    /** The storm-card LITE loop must only play frames that actually have
-     *  z5/z6 storm-sector tiles. The mosaic builder lists EVERY rendered frame
-     *  in `frames` (the global map wants them all), but a Visible frame can be
-     *  night-masked or hit a Band-2 scan gap → global tiles written, NO storm
-     *  tiles. Playing such a frame over the storm shows the blurry global parent
-     *  (or blank) for one frame = the "jumping to a random section" bug. The
-     *  builder now publishes `storm_frames` (the covered subset); filter to it.
-     *  Fallbacks: no `storm_frames` key (older manifest) → use all frames
-     *  (prior behavior). Present but EMPTY (e.g. a fully-nighttime Vis storm) →
-     *  return [] so the caller falls back to the band composite, which handles
-     *  night via SWIR. IR/WV never gap so their storm_frames == frames. */
+    /** The storm-card LITE loop must not play frames that lack z5/z6 storm
+     *  tiles. The mosaic builder lists EVERY rendered frame in `frames` (the
+     *  global map wants them all), but a Visible frame can be night-masked or
+     *  hit a Band-2 scan gap → global tiles written, NO storm tiles. Playing
+     *  such a frame over the storm shows the blurry global parent (or blank)
+     *  for one frame = the "jumping to a random section" bug.
+     *
+     *  The builder publishes `gap_frames` = frames it rendered AND found had no
+     *  storm-sector tiles (a DENY-list, not an allow-list). We exclude those and
+     *  show everything else. Deny-list is deliberate: the job renders one frame
+     *  per run, so an allow-list would wrongly drop every older frame rendered
+     *  before it existed until the window refills (~3 h) — collapsing the loop.
+     *  With a deny-list, unknown/old frames default to shown (no regression) and
+     *  only known gaps drop. No `gap_frames` key or empty → show all (unchanged
+     *  behavior). All frames marked gap (fully-night Vis storm) → return [] so
+     *  the caller falls back to the band composite, which handles night via
+     *  SWIR. IR/WV never gap, so nothing is excluded for them. */
     function _liteStormFrames(j) {
         var all = (j && j.frames) || [];
-        var sf = j && j.storm_frames;
-        if (!sf) return all;                 // old manifest → unchanged behavior
+        var gaps = j && j.gap_frames;
+        if (!gaps || !gaps.length) return all;
         var set = {};
-        for (var i = 0; i < sf.length; i++) set[sf[i]] = 1;
-        return all.filter(function (t) { return set[t] === 1; });
+        for (var i = 0; i < gaps.length; i++) set[gaps[i]] = 1;
+        return all.filter(function (t) { return set[t] !== 1; });
     }
 
     function _initDetailMapMosaic(storm, product) {
