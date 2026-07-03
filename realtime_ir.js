@@ -27975,7 +27975,16 @@
             } else {
                 var awayMs = _pollHiddenAt ? Date.now() - _pollHiddenAt : 0;
                 _pollHiddenAt = 0;
-                if (awayMs > POLL_INTERVAL_MS / 2) pollActiveStorms();
+                if (awayMs > POLL_INTERVAL_MS / 2) {
+                    pollActiveStorms();   // long absence → full poll (also refreshes frames)
+                } else if (currentStormId && detailMap) {
+                    // Short absence: skip the heavier active-storms poll but STILL
+                    // refresh the open storm's loop. The poll timer is cleared while
+                    // backgrounded, so a user who app-switches faster than the poll
+                    // interval (e.g. flipping to Messages) would otherwise never see
+                    // new frames land — the loop froze at whatever time it opened.
+                    try { _refreshFramesIfNewer(currentStormId); } catch (e) {}
+                }
                 if (!pollTimer) pollTimer = setInterval(pollActiveStorms, POLL_INTERVAL_MS);
                 if (!seasonSummaryTimer) seasonSummaryTimer = setInterval(fetchSeasonSummary, SEASON_SUMMARY_INTERVAL_MS);
                 // Resume recon polling only if the overlay is still toggled on;
