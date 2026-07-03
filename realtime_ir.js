@@ -636,6 +636,15 @@
     // viewing instead of being pinned to a single Date.now() extrapolation.
     var _detailPosPin = null;
     var _detailNameLabel = null;
+    // Objective eye-fix + warm-eye/cold-top Tb diagnostics for the open storm,
+    // from the mosaic builder's eye_fixes.json sidecar (see project_vis_loop_bounce
+    // / the mosaic builder). Snaps the current-position pin onto the real eye
+    // (best-track lags by ~30-50 km, more when the fix is old) and drives the
+    // eye-temp / cold-top header readout. { atcf, latest:{...}, byTs:{ts:{...}} }.
+    var _eyeDiag = null;
+    // "Follow storm" — when on, the lite camera recenters onto the eye each frame
+    // as the loop plays (default off: the view stays put unless asked).
+    var _rtFollowStorm = false;
     // Objective IR center-fix (eye) ⊕ marker on the detail map, and whether the
     // in-panel Diagnostics section + eye overlay are toggled on for this storm.
     var _irObjEyeMarker = null;
@@ -3374,6 +3383,17 @@
         var btn = document.getElementById('ir-detail-track-toggle');
         if (btn) btn.classList.toggle('active', _detailTrackVisible);
         _ga('rt_detail_track_toggle', { on: _detailTrackVisible });
+    };
+
+    window._irToggleFollowStorm = function () {
+        _rtFollowStorm = !_rtFollowStorm;
+        var btn = document.getElementById('ir-follow-storm-toggle');
+        if (btn) btn.classList.toggle('active', _rtFollowStorm);
+        _ga('rt_follow_storm_toggle', { on: _rtFollowStorm });
+        // Apply immediately to the shown frame (recenter on / restore off).
+        if (_liteActive && animFrameLayers[animIndex]) {
+            if (_rtFollowStorm) _rtFollowStormRecenter(animFrameLayers[animIndex]);
+        }
     };
 
     // ── Surface obs overlay (NDBC buoys; Synoptic Data is planned) ───
@@ -6310,10 +6330,75 @@
         return all.filter(function (t) { return set[t] !== 1; });
     }
 
+    /** Load the objective eye-fix / Tb-diagnostic sidecar for a storm (built by
+     *  the mosaic job for systems ≥65 kt). Best-effort: any failure just leaves
+     *  the pin on best-track and hides the header readout. Cached per storm. */
+    function _fetchEyeFixes(atcfId) {
+        if (!atcfId) return;
+        if (_eyeDiag && _eyeDiag.atcf === atcfId) return;   // already loaded
+        var url = _ir2aRoot('ir').replace(/\/ir$/, '') + '/eye_fixes.json';
+        fetch(url, { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+                if (!j || currentStormId !== atcfId) return;
+                var st = j.storms && j.storms[atcfId];
+                if (!st || !st.frames) { _eyeDiag = { atcf: atcfId, latest: null, byTs: {} }; return; }
+                var tss = Object.keys(st.frames).sort();
+                var latestTs = tss[tss.length - 1];
+                var latest = st.frames[latestTs];
+                if (latest) latest = Object.assign({ ts: latestTs }, latest);
+                _eyeDiag = { atcf: atcfId, latest: latest, byTs: st.frames };
+                // Re-sync the currently-shown frame now that fixes are in.
+                if (_liteActive && animFrameLayers[animIndex]) {
+                    _syncDetailPinToFrame(animFrameLayers[animIndex]);
+                    _updateEyeDiagText(animFrameLayers[animIndex]._mosaicTs);
+                }
+            })
+            .catch(function () { _eyeDiag = { atcf: atcfId, latest: null, byTs: {} }; });
+    }
+
+    /** Eye fix for a given mosaic timestamp (YYYYMMDDHHMM): the per-frame fix
+     *  when present, else the latest fix (the user-chosen default snap). */
+    function _eyeFixForTs(ts) {
+        if (!_eyeDiag || _eyeDiag.atcf !== currentStormId) return null;
+        if (ts && _eyeDiag.byTs && _eyeDiag.byTs[ts]) return _eyeDiag.byTs[ts];
+        return _eyeDiag.latest || null;
+    }
+
+    function _ensureEyeDiagEl() {
+        var el = document.getElementById('ir-eye-diag');
+        if (el) return el;
+        var host = document.getElementById('ir-image-container');
+        if (!host) return null;
+        el = document.createElement('div');
+        el.id = 'ir-eye-diag';
+        el.style.cssText = 'position:absolute;top:10px;left:50%;transform:translateX(-50%);' +
+            'z-index:1200;pointer-events:none;display:none;padding:3px 9px;border-radius:6px;' +
+            'background:rgba(15,22,35,0.62);color:#e6edf6;font:600 12px/1.25 "DM Sans",system-ui,sans-serif;' +
+            'letter-spacing:0.2px;text-shadow:0 1px 2px rgba(0,0,0,0.6);white-space:nowrap;';
+        host.appendChild(el);
+        return el;
+    }
+
+    /** Update the eye-temp / cold-top header readout for the shown frame. */
+    function _updateEyeDiagText(ts) {
+        var el = _ensureEyeDiagEl();
+        if (!el) return;
+        var ef = _eyeFixForTs(ts);
+        var parts = [];
+        if (ef) {
+            if (ef.eye_c != null) parts.push('Eye ' + Math.round(ef.eye_c) + '°C');
+            if (ef.min_c != null) parts.push('Coldest ' + Math.round(ef.min_c) + '°C');
+        }
+        el.textContent = parts.join('   ·   ');
+        el.style.display = parts.length ? 'block' : 'none';
+    }
+
     function _initDetailMapMosaic(storm, product) {
         if (!detailMap) return;
         product = product || 'ir';
         var atcfId = storm.atcf_id;
+        _fetchEyeFixes(atcfId);
         // Per-product fallback when the mosaic has no frames/tiles for this
         // product (e.g. GOES Vis Band-2 gap): IR → raw-Tb cutout; Vis/WV →
         // the band bundle, so a storm outside mosaic coverage still loops.
@@ -8495,15 +8580,42 @@
     function _syncDetailPinToFrame(layer) {
         if (!layer || (!_detailPosPin && !_detailNameLabel)) return;
         var c = null;
-        var rt = layer._recenterTo;
-        if (rt && rt.length === 2 && isFinite(rt[0]) && isFinite(rt[1])) {
-            c = L.latLng(rt[0], rt[1]);
-        } else if (typeof layer.getBounds === 'function') {
-            try { c = layer.getBounds().getCenter(); } catch (e) { return; }
+        // Objective eye fix wins: snap the pin onto the real eye. Best-track lags
+        // the eye ~30-50 km (more when the fix is old), which is glaring on a
+        // sharp-eyed major. Per-frame fix when we have one, else the latest fix
+        // (the default snap); falls back to the dead-reckoned best-track center.
+        var ef = _eyeFixForTs(layer._mosaicTs);
+        if (ef && isFinite(ef.lat) && isFinite(ef.lon)) {
+            c = L.latLng(ef.lat, ef.lon);
+        } else {
+            var rt = layer._recenterTo;
+            if (rt && rt.length === 2 && isFinite(rt[0]) && isFinite(rt[1])) {
+                c = L.latLng(rt[0], rt[1]);
+            } else if (typeof layer.getBounds === 'function') {
+                try { c = layer.getBounds().getCenter(); } catch (e) { return; }
+            }
         }
         if (!c) return;
         if (_detailPosPin) try { _detailPosPin.setLatLng(c); } catch (e) {}
         if (_detailNameLabel) try { _detailNameLabel.setLatLng(c); } catch (e) {}
+    }
+
+    /** "Follow storm": recenter the (lite) camera onto the eye each frame. No-op
+     *  unless the toggle is on. Uses the eye fix, else the best-track center. */
+    function _rtFollowStormRecenter(layer) {
+        if (!_rtFollowStorm || !detailMap || !layer) return;
+        var c = null;
+        var ef = _eyeFixForTs(layer._mosaicTs);
+        if (ef && isFinite(ef.lat) && isFinite(ef.lon)) {
+            c = L.latLng(ef.lat, ef.lon);
+        } else {
+            var rt = layer._recenterTo;
+            if (rt && rt.length === 2 && isFinite(rt[0]) && isFinite(rt[1])) c = L.latLng(rt[0], rt[1]);
+        }
+        if (!c) return;
+        var cur = detailMap.getCenter();
+        if (Math.abs(cur.lat - c.lat) < 1e-4 && Math.abs(cur.lng - c.lng) < 1e-4) return;
+        detailMap.setView(c, detailMap.getZoom(), { animate: false });
     }
 
     /** Timestamp string of the currently-displayed frame for the active
@@ -8800,6 +8912,9 @@
         _recenterDetailToFrame(animFrameLayers[idx]);
         // Slide the current-position pin + name label onto this frame.
         _syncDetailPinToFrame(animFrameLayers[idx]);
+        // Eye-temp / cold-top header readout + optional storm-follow camera.
+        _updateEyeDiagText(animFrameLayers[idx] && animFrameLayers[idx]._mosaicTs);
+        _rtFollowStormRecenter(animFrameLayers[idx]);
         // Move the objective-eye ⊕ to this frame's center-fix (if toggled on).
         _syncObjEyeToFrame(animFrameTimes[idx]);
         // Re-sync diagnostics to the shown frame — only when scrubbing (not
