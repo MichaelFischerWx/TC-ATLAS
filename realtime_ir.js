@@ -27999,18 +27999,49 @@
         // a lower scale on iOS so the surface stays well under the limit; desktop
         // keeps the print-grade 3× scale.
         var _exportScale = _isIOS() ? 2 : Math.max(3, window.devicePixelRatio || 1);
+        // The detail map is the GL facade: satellite imagery lives on a WebGL
+        // canvas that html2canvas CANNOT read — reading it taints the export
+        // canvas, so on iOS canvas.toBlob/toDataURL throw "the operation is
+        // insecure" and the save fails. So (as the global-map export does) we
+        // capture ONLY the DOM overlays with html2canvas — graticule, labels,
+        // track, watermark — skipping the GL canvas, then composite the GL
+        // imagery underneath into a clean 2D canvas that reads fine. When there's
+        // no GL map (LFLET_GL off), imagery is DOM tiles → capture the panel
+        // opaquely as before.
+        var glMap = detailMap && detailMap._gl;
+        var glCanvas = glMap && glMap.getCanvas && glMap.getCanvas();
         _ensureHtml2canvas().then(function () {
             return window.html2canvas(node, {
-                useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
+                useCORS: true, allowTaint: false,
+                // Transparent when compositing over GL imagery; opaque otherwise.
+                backgroundColor: glCanvas ? null : '#0a0c12',
                 // Fixed high scale → device-independent, print-grade PNG
                 // (~2600 px wide ≈ 8.5" at 300 DPI) instead of the
                 // display's pixel ratio (only ~880 px on a 1× screen).
                 logging: false, scale: _exportScale,
-                onclone: _irExportOnClone
+                onclone: _irExportOnClone,
+                ignoreElements: glCanvas ? function (el) {
+                    return el.classList && el.classList.contains('maplibregl-canvas');
+                } : undefined
             });
-        }).then(function (canvas) {
+        }).then(function (overlay) {
             // Capture done — restore the live track immediately.
             _irRestoreTrackAfterExport(hiddenTrack); hiddenTrack = null;
+            var canvas = overlay;
+            if (glCanvas) {
+                // Composite GL imagery (under) + DOM overlays (over) into a clean
+                // 2D canvas. overlay dims are canonical; stretch the GL canvas to
+                // fit (both cover the same map footprint).
+                var outW = overlay ? overlay.width : glCanvas.width;
+                var outH = overlay ? overlay.height : glCanvas.height;
+                var comp = document.createElement('canvas');
+                comp.width = outW; comp.height = outH;
+                var cctx = comp.getContext('2d');
+                cctx.fillStyle = '#0a0c12'; cctx.fillRect(0, 0, outW, outH);
+                try { cctx.drawImage(glCanvas, 0, 0, glCanvas.width, glCanvas.height, 0, 0, outW, outH); } catch (e) {}
+                if (overlay) { try { cctx.drawImage(overlay, 0, 0); } catch (e) {} }
+                canvas = comp;
+            }
             var ts = (_activeFrameTimeStr() || animFrameTimes[animIndex] || '')
                         .replace(/[:\-T]/g, '').replace('Z', '');
             var pngName = currentStormId + '_' + (ts || 'frame') + '.png';
