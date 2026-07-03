@@ -6099,10 +6099,13 @@
                 var frames = (j && j.frames) || [];
                 _irApplyTrange(j, product);
                 if (!frames.length) return;
-                var newLatest = _mosaicTsToIso(frames[frames.length - 1]);
-                if (!newLatest || newLatest <= currentLatest) return;
-                // Keep the shared mosaic state (global map) in sync on IR.
+                // Global-map state syncs off the FULL frame list; the lite loop
+                // plays only the storm-covered subset (see _liteStormFrames).
                 if (product === 'ir') { _mosaicFrames = frames; _mosaicTs = frames[frames.length - 1]; }
+                var sframes = _liteStormFrames(j);
+                if (!sframes.length) return;
+                var newLatest = _mosaicTsToIso(sframes[sframes.length - 1]);
+                if (!newLatest || newLatest <= currentLatest) return;
                 var storm = null;
                 for (var i = 0; i < stormData.length; i++) {
                     if (stormData[i].atcf_id === atcfId) { storm = stormData[i]; break; }
@@ -6110,7 +6113,7 @@
                 if (!storm) return;
                 var wasPlaying = animPlaying;
                 if (wasPlaying) stopAnimation();
-                _buildMosaicAnimLayers(storm, frames, product);
+                _buildMosaicAnimLayers(storm, sframes, product);
                 console.log('[RT Monitor] Lite ' + product + ' frames refreshed — latest ' + newLatest);
                 if (wasPlaying) setTimeout(function () {
                     if (framesReady && currentStormId === atcfId && _liteActive) startAnimation();
@@ -6281,6 +6284,26 @@
      *  only, $0 new compute. Falls through to the raw-Tb path if the mosaic is
      *  unavailable. (The Meteosat-gap longitude check happens at the caller, so
      *  by here we expect tiles to exist.) See project_lite_storm_view. */
+    /** The storm-card LITE loop must only play frames that actually have
+     *  z5/z6 storm-sector tiles. The mosaic builder lists EVERY rendered frame
+     *  in `frames` (the global map wants them all), but a Visible frame can be
+     *  night-masked or hit a Band-2 scan gap → global tiles written, NO storm
+     *  tiles. Playing such a frame over the storm shows the blurry global parent
+     *  (or blank) for one frame = the "jumping to a random section" bug. The
+     *  builder now publishes `storm_frames` (the covered subset); filter to it.
+     *  Fallbacks: no `storm_frames` key (older manifest) → use all frames
+     *  (prior behavior). Present but EMPTY (e.g. a fully-nighttime Vis storm) →
+     *  return [] so the caller falls back to the band composite, which handles
+     *  night via SWIR. IR/WV never gap so their storm_frames == frames. */
+    function _liteStormFrames(j) {
+        var all = (j && j.frames) || [];
+        var sf = j && j.storm_frames;
+        if (!sf) return all;                 // old manifest → unchanged behavior
+        var set = {};
+        for (var i = 0; i < sf.length; i++) set[sf[i]] = 1;
+        return all.filter(function (t) { return set[t] === 1; });
+    }
+
     function _initDetailMapMosaic(storm, product) {
         if (!detailMap) return;
         product = product || 'ir';
@@ -6296,7 +6319,7 @@
         var framesP = (product === 'ir' && !(_IR2A && window.createMosaicGLLayer))
             ? _loadMosaicFrames()   // legacy v2 IR path
             : fetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
-                .then(function (r) { return r.json(); }).then(function (j) { _irApplyTrange(j, product); return (j && j.frames) || []; });
+                .then(function (r) { return r.json(); }).then(function (j) { _irApplyTrange(j, product); return _liteStormFrames(j); });
         framesP.then(function (frames) {
             if (!detailMap || currentStormId !== atcfId) return;
             if (!frames || frames.length === 0) {
@@ -10456,8 +10479,19 @@
             var dt = sf.datetime_utc;
             var vfr = visByDt[dt];
             if (visP && vfr && vfr.byte_length && !vfr.error) {
+                // Camera target: ALWAYS the canonical (SWIR) timeline's recenter,
+                // never the Vis bundle's. SWIR is rebuilt every cycle; Vis only on
+                // the slow _VIS_PREWARM_INTERVAL_MIN daylight cadence, so its
+                // per-frame recenter reflects an OLDER b-deck vintage. Preferring
+                // vfr.recenter here made the camera follow the stale vis vintage on
+                // vis frames and the fresh swir vintage on gap/night frames —
+                // mixed-vintage camera targets that jump 0.3–1° frame-to-frame
+                // ("bouncing"), the exact failure the render-once recenter fix
+                // removed for single-bundle products (IR/WV). Keep bounds = the
+                // vis frame's own cutout center (georef stays correct); only the
+                // camera is unified to one vintage. See project_vis_loop_bounce.
                 merged.push({ datetime_utc: dt, bounds: vfr.bounds || sf.bounds || globalBounds,
-                              recenter: vfr.recenter || sf.recenter || null,
+                              recenter: sf.recenter || vfr.recenter || null,
                               buf: visBuf, base: visP.binBase, byte_offset: vfr.byte_offset,
                               byte_length: vfr.byte_length, mediaType: visMedia, source: 'vis' });
             } else if (swirP && sf.byte_length && !sf.error) {
@@ -27954,22 +27988,40 @@
         var node = document.getElementById('ir-image-container');
         if (!node) return;
         var hiddenTrack = _irExportShowTrack() ? null : _irHideTrackForExport();
+        // iOS caps canvas area aggressively and can hand back a NULL blob from
+        // canvas.toBlob() on a large surface (silent export failure). Capture at
+        // a lower scale on iOS so the surface stays well under the limit; desktop
+        // keeps the print-grade 3× scale.
+        var _exportScale = _isIOS() ? 2 : Math.max(3, window.devicePixelRatio || 1);
         _ensureHtml2canvas().then(function () {
             return window.html2canvas(node, {
                 useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
                 // Fixed high scale → device-independent, print-grade PNG
                 // (~2600 px wide ≈ 8.5" at 300 DPI) instead of the
                 // display's pixel ratio (only ~880 px on a 1× screen).
-                logging: false, scale: Math.max(3, window.devicePixelRatio || 1),
+                logging: false, scale: _exportScale,
                 onclone: _irExportOnClone
             });
         }).then(function (canvas) {
             // Capture done — restore the live track immediately.
             _irRestoreTrackAfterExport(hiddenTrack); hiddenTrack = null;
-            canvas.toBlob(function (blob) {
-                if (!blob) return;
-                var ts = (animFrameTimes[animIndex] || '').replace(/[:\-T]/g, '').replace('Z', '');
-                var pngName = currentStormId + '_' + (ts || 'frame') + '.png';
+            var ts = (_activeFrameTimeStr() || animFrameTimes[animIndex] || '')
+                        .replace(/[:\-T]/g, '').replace('Z', '');
+            var pngName = currentStormId + '_' + (ts || 'frame') + '.png';
+            function _deliver(blob) {
+                if (!blob) {
+                    // toBlob failed (iOS memory / tainted surface) — fall back to
+                    // the synchronous toDataURL path, which is more reliable on
+                    // iOS Safari. If THAT throws too, tell the user rather than
+                    // failing silently.
+                    try { blob = _dataURLToBlob(canvas.toDataURL('image/png')); }
+                    catch (e2) { blob = null; }
+                }
+                if (!blob) {
+                    _rtToast('Couldn’t build the image on this device — try Water Vapor/IR or a smaller zoom.');
+                    console.warn('[RT Monitor] PNG export produced no blob');
+                    return;
+                }
                 // iOS drops the tap's transient activation across the async
                 // html2canvas capture, so a direct share()/window.open here is
                 // rejected/popup-blocked and the PNG silently vanishes. Route
@@ -27983,10 +28035,13 @@
                 } else {
                     _saveImageBlob(blob, pngName);
                 }
-            }, 'image/png');
+            }
+            canvas.toBlob(_deliver, 'image/png');
         }).catch(function (err) {
             _irRestoreTrackAfterExport(hiddenTrack);
             console.warn('[RT Monitor] PNG export failed:', err);
+            _rtToast('Couldn’t save the image — ' +
+                     (err && err.message ? err.message : 'export failed') + '.');
         });
     };
 
