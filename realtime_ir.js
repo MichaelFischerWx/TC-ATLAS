@@ -28020,8 +28020,16 @@
                 // display's pixel ratio (only ~880 px on a 1× screen).
                 logging: false, scale: _exportScale,
                 onclone: _irExportOnClone,
+                // Skip EVERY <canvas> — not just the GL one. A single cross-origin
+                // tile taints the WebGL canvas, and html2canvas throws
+                // SecurityError ("the operation is insecure") on iOS the instant it
+                // tries to read ANY tainted canvas. In the GL facade the imagery AND
+                // the vector overlays (track/graticule/pin) both live on the GL
+                // canvas, which we composite separately below; the Leaflet
+                // L.canvas renderer is empty; the colorbar/labels are DOM. So
+                // skipping all canvases loses nothing and can't throw.
                 ignoreElements: glCanvas ? function (el) {
-                    return el.classList && el.classList.contains('maplibregl-canvas');
+                    return el.tagName === 'CANVAS';
                 } : undefined
             });
         }).then(function (overlay) {
