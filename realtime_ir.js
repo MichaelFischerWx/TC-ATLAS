@@ -6372,7 +6372,11 @@
         if (!host) return null;
         el = document.createElement('div');
         el.id = 'ir-eye-diag';
-        el.style.cssText = 'position:absolute;top:10px;left:50%;transform:translateX(-50%);' +
+        // Stacked just BELOW the timestamp chip (top-left), not centered — on a
+        // narrow phone a centered chip overlaps the timestamp on the left and the
+        // IR/Vis/WV toggle on the right. left:48px clears the zoom control and
+        // lines up under the timestamp; top:44px clears its ~40px bottom edge.
+        el.style.cssText = 'position:absolute;top:44px;left:48px;' +
             'z-index:1200;pointer-events:none;display:none;padding:3px 9px;border-radius:6px;' +
             'background:rgba(15,22,35,0.62);color:#e6edf6;font:600 12px/1.25 "DM Sans",system-ui,sans-serif;' +
             'letter-spacing:0.2px;text-shadow:0 1px 2px rgba(0,0,0,0.6);white-space:nowrap;';
