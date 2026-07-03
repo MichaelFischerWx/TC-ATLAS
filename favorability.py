@@ -106,16 +106,20 @@ def chi_m(t_b_k: float, q_b: float,
           t_m_env_k: float, q_m_env: float, t_m_sat_k: float,
           sst_k: float) -> Optional[float]:
     """Non-dimensional mid-trop (600 hPa) entropy deficit χ_m (Tang &
-    Emanuel 2012, eq. S12):
+    Emanuel 2012):
 
         χ_m = (s*_m − s_m) / (s*_SST − s_b)
 
-    Per their "Calculation from Gridded Data", the two mid-level terms come
-    from DIFFERENT regions:
-      * s*_m — 600 hPa SATURATION entropy from the inner 0–100 km disc
-        (uses t_m_sat_k, the disc-mean temperature).
-      * s_m  — 600 hPa environmental (actual) entropy from the 100–300 km
-        annulus (uses t_m_env_k / q_m_env).
+    The two mid-level terms are BOTH properties of the same mid-level
+    ENVIRONMENTAL air (the 100–300 km annulus), evaluated at the SAME
+    temperature, so the numerator is purely the environmental sub-saturation:
+      * s_m  — 600 hPa environmental (actual) moist entropy (annulus T + q).
+      * s*_m — 600 hPa SATURATION moist entropy at that SAME annulus
+        temperature (t_m_env_k). It is NOT taken from the inner warm core:
+        because saturation entropy is exponential in T, using the ~2 K warmer
+        0–100 km disc there conflated the warm core with the deficit and
+        inflated χ_m (~0.11 → ~0.66 on Cat-4 Bavi). `t_m_sat_k` is retained in
+        the signature for compatibility + diagnostics but is no longer used.
     The denominator air–sea disequilibrium uses boundary-layer entropy s_b
     (1000 hPa, inner disc) and SST saturation entropy s*_SST. All
     temperatures KELVIN; humidities specific humidity (kg/kg). Returns None
@@ -124,8 +128,10 @@ def chi_m(t_b_k: float, q_b: float,
     r_m_env = mixing_ratio_from_q(q_m_env)
     s_b = bryan_moist_entropy(t_b_k, r_b, P_BOUND, saturated=False)
     s_m = bryan_moist_entropy(t_m_env_k, r_m_env, P_MID, saturated=False)
-    r_m_sat = sat_mixing_ratio(t_m_sat_k, P_MID)
-    s_m_s = bryan_moist_entropy(t_m_sat_k, r_m_sat, P_MID, saturated=True)
+    # s*_m at the ENVIRONMENTAL mid-level temperature (Tang & Emanuel), not the
+    # inner-disc warm-core temp — the deficit is environmental sub-saturation.
+    r_m_sat = sat_mixing_ratio(t_m_env_k, P_MID)
+    s_m_s = bryan_moist_entropy(t_m_env_k, r_m_sat, P_MID, saturated=True)
     r_sst = sat_mixing_ratio(sst_k, P_SURF)
     s_sst = bryan_moist_entropy(sst_k, r_sst, P_SURF, saturated=True)
     denom = s_sst - s_b
