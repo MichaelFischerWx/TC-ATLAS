@@ -27983,6 +27983,41 @@
         for (var i = 0; i < conts.length; i++) conts[i].style.background = 'transparent';
     }
 
+    function _roundRectPath(cx, x, y, w, h, r) {
+        cx.beginPath(); cx.moveTo(x + r, y);
+        cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r);
+        cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath();
+    }
+    /** Hand-draw the timestamp/satellite chip (top-left) + TC-ATLAS watermark
+     *  (top-right) onto a 2D export canvas. Used by the iOS export path, which
+     *  can't use html2canvas (see _irDownloadCurrentFrame). System font stack —
+     *  a web font may not be available to a canvas draw. */
+    function _irStampExportChrome(cx, W, H) {
+        var fs = Math.max(13, Math.round(W / 46));
+        var pad = Math.round(fs * 0.6);
+        var m = Math.round(W / 70);
+        function chip(x, y, lines, align, weight) {
+            cx.font = (weight || 600) + ' ' + fs + "px -apple-system, system-ui, 'Segoe UI', sans-serif";
+            var lh = Math.round(fs * 1.28), tw = 0, i;
+            for (i = 0; i < lines.length; i++) tw = Math.max(tw, cx.measureText(lines[i]).width);
+            var bw = tw + pad * 2, bh = lines.length * lh + pad;
+            var bx = align === 'right' ? (x - bw) : x;
+            cx.fillStyle = 'rgba(15,22,35,0.62)';
+            _roundRectPath(cx, bx, y, bw, bh, Math.round(fs * 0.35)); cx.fill();
+            cx.fillStyle = 'rgba(255,255,255,0.96)';
+            cx.textBaseline = 'top'; cx.textAlign = align === 'right' ? 'right' : 'left';
+            var tx = align === 'right' ? (bx + bw - pad) : (bx + pad);
+            for (i = 0; i < lines.length; i++) cx.fillText(lines[i], tx, y + pad * 0.5 + i * lh);
+        }
+        var lines = [];
+        var tstr = _activeFrameTimeStr() || animFrameTimes[animIndex];
+        try { if (tstr) lines.push(fmtUTC(tstr)); } catch (e) {}
+        var sat = document.getElementById('ir-satellite-label');
+        if (sat && sat.textContent) lines.push(sat.textContent.trim());
+        if (lines.length) chip(m, m, lines, 'left', 600);
+        chip(W - m, m, ['TC-ATLAS', 'tcatlas.org'], 'right', 700);
+    }
+
     /** Snapshot the visible imagery panel as a PNG, including the
      *  current frame timestamp / channel label and the Tb colorbar.
      *  Strips UI chrome, stamps a watermark, and (optionally) the track.
@@ -28010,6 +28045,57 @@
         // opaquely as before.
         var glMap = detailMap && detailMap._gl;
         var glCanvas = glMap && glMap.getCanvas && glMap.getCanvas();
+
+        // ── iOS: bypass html2canvas entirely ────────────────────────────────
+        // html2canvas throws SecurityError ("the operation is insecure") on iOS
+        // Safari — it walks document.styleSheets and reads .cssRules, which
+        // Safari BLOCKS for cross-origin sheets (e.g. Google Fonts). No
+        // ignoreElements / CORS tweak fixes that (it's not a canvas or an image).
+        // On the GL facade the imagery AND the vector overlays (track/graticule/
+        // pin) all live on the WebGL canvas, so we can build the whole export
+        // from it: draw it into a clean 2D canvas and hand-stamp the timestamp +
+        // watermark with the 2D text API. preserveDrawingBuffer is on, so the
+        // canvas holds the last render. If the track was opted out, it's already
+        // removed from the map — trigger a repaint and capture on the next render
+        // so the GL canvas reflects that before we read it.
+        if (_isIOS() && glMap && glCanvas) {
+            var _iosCapture = function () {
+                try {
+                    var g = glMap.getCanvas(), W = g.width, H = g.height;
+                    var comp = document.createElement('canvas');
+                    comp.width = W; comp.height = H;
+                    var cx = comp.getContext('2d');
+                    cx.fillStyle = '#0a0c12'; cx.fillRect(0, 0, W, H);
+                    cx.drawImage(g, 0, 0);
+                    _irStampExportChrome(cx, W, H);
+                    _irRestoreTrackAfterExport(hiddenTrack); hiddenTrack = null;
+                    var tsx = (_activeFrameTimeStr() || animFrameTimes[animIndex] || '')
+                                .replace(/[:\-T]/g, '').replace('Z', '');
+                    var nm = currentStormId + '_' + (tsx || 'frame') + '.png';
+                    comp.toBlob(function (blob) {
+                        if (!blob) { try { blob = _dataURLToBlob(comp.toDataURL('image/png')); } catch (e2) { blob = null; } }
+                        if (!blob) { _rtToast('Couldn’t build the image on this device — the map layer can’t be read.'); return; }
+                        _showSaveResult(blob, nm, {
+                            saveLabel: '⬇ Save image', alt: 'TC-ATLAS frame',
+                            hint: 'Tap Save image — or long-press the image to save.'
+                        });
+                    }, 'image/png');
+                } catch (e) {
+                    _irRestoreTrackAfterExport(hiddenTrack); hiddenTrack = null;
+                    console.warn('[RT Monitor] iOS GL export failed:', e);
+                    _rtToast('Couldn’t save the image — ' + (e && e.message ? e.message : 'export failed') + '.');
+                }
+            };
+            var _ran = false;
+            var _once = function () { if (_ran) return; _ran = true; _iosCapture(); };
+            if (glMap.once) glMap.once('render', function () { requestAnimationFrame(_once); });
+            if (glMap.triggerRepaint) glMap.triggerRepaint();
+            // Fallback: a quiescent map may not fire 'render' at all, so capture
+            // after a short delay regardless — the export must never hang.
+            setTimeout(_once, 300);
+            return;
+        }
+
         _ensureHtml2canvas().then(function () {
             return window.html2canvas(node, {
                 useCORS: true, allowTaint: false,
