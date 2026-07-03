@@ -724,21 +724,37 @@ def _prune_old_frames(kept, product="ir"):
         log(f"  pruned {pf} old frame(s), {pt} tiles")
 
 
-def update_r2_manifest(new_ts, zmax, product="ir"):
+def update_r2_manifest(new_ts, zmax, product="ir", has_storm=False):
     """Append new_ts to <prefix>/<product>/frames.json, trim to the rolling window,
-    and prune the tiles of any frame that fell out of the window (keeps R2 bounded)."""
+    and prune the tiles of any frame that fell out of the window (keeps R2 bounded).
+
+    `has_storm` = did THIS frame write any z5/z6 storm-sector tiles for this product.
+    Persisted (rolling, like ir_trange) as `storm_frames` — the subset the storm-card
+    LITE loop should play. Visible is night-masked + Band-2 can gap, so a Vis frame
+    can render with global tiles but NO storm tiles; it still belongs in `frames`
+    (the global map wants it) but must be excluded from the storm loop, else the
+    lite camera sits over a frame with no crisp tiles → overzooms to the blurry
+    global parent = the "jumping to a random section" bug. IR never gaps so its
+    storm_frames == frames. See project_vis_loop_bounce."""
     c = _get_r2(); key = f"{R2_PREFIX}/{product}/frames.json"
-    frames = []; ir_trange = {}
+    frames = []; ir_trange = {}; storm_frames = []
     try:
         cur = json.loads(c.get_object(Bucket=_r2_bucket(), Key=key)["Body"].read())
         frames = cur.get("frames", [])
         ir_trange = cur.get("ir_trange", {}) or {}
+        storm_frames = cur.get("storm_frames", []) or []
     except Exception:
         pass
     if new_ts not in frames:
         frames.append(new_ts)
     frames = sorted(set(frames))[-R2_KEEP_FRAMES:]
-    manifest = {"frames": frames, "zmax": zmax, "storm_zooms": list(STORM_ZOOMS)}
+    if has_storm and new_ts not in storm_frames:
+        storm_frames.append(new_ts)
+    # Keep only in-window entries (drops rolled-off frames + any frame that never
+    # had storm coverage).
+    storm_frames = [t for t in sorted(set(storm_frames)) if t in frames]
+    manifest = {"frames": frames, "zmax": zmax, "storm_zooms": list(STORM_ZOOMS),
+                "storm_frames": storm_frames}
     # Per-frame idx→Tb decode range (IR only). Stamp THIS frame with the current
     # encoding range; leave pre-existing frames' entries as-is (a mixed rollover
     # window stays correct) and drop entries for frames that fell out of the window.
@@ -892,7 +908,7 @@ def main():
 
     # render newest→oldest so the first frame seeds/loads the kernels
     frame_dts = [latest - timedelta(minutes=10 * i) for i in range(args.frames)]
-    written, kernels = {}, None
+    written, written_storm, kernels = {}, {}, None
     t0 = time.time()
     for fi, dt in enumerate(frame_dts):
         log(f"── frame {fi+1}/{args.frames}: {dt:%Y-%m-%d %H:%M}Z "
@@ -929,6 +945,8 @@ def main():
             if fi == 0 and product == products[0] and TILE_MODE != "idx":
                 write_preview(rgba, args.out)
             written.setdefault(product, []).append(ts)
+            if n_storm > 0:
+                written_storm.setdefault(product, []).append(ts)
             del rgba, sats   # free the big per-band arrays before the next band
 
             if args.r2:
@@ -937,7 +955,8 @@ def main():
                     try: f.result(); ok += 1
                     except Exception as ex: errs += 1; log(f"  R2 put failed: {ex}")
                 pool.shutdown()
-                frames = update_r2_manifest(ts, args.zmax, product)
+                frames = update_r2_manifest(ts, args.zmax, product,
+                                            has_storm=(n_storm > 0))
                 timings["upload"] = time.time() - t1
                 log(f"  {product} R2: {ok} up ({errs} failed); manifest {len(frames)} frames")
             log(f"  {product}: {n_global} global + {n_storm} storm tiles → {ts}")
@@ -951,10 +970,13 @@ def main():
     if written and not args.r2:
         for product, ts_list in written.items():
             man = os.path.join(args.out, product, "frames.json")
+            _sframes = sorted(set(written_storm.get(product, [])) & set(ts_list))
             with open(man, "w") as f:
                 json.dump({"frames": sorted(ts_list), "zmax": args.zmax,
-                           "storm_zooms": list(STORM_ZOOMS)}, f)
-            log(f"manifest {product} ({len(ts_list)} frames) → {man}")
+                           "storm_zooms": list(STORM_ZOOMS),
+                           "storm_frames": _sframes}, f)
+            log(f"manifest {product} ({len(ts_list)} frames, "
+                f"{len(_sframes)} storm) → {man}")
     nfr = sum(len(v) for v in written.values())
     log(f"TOTAL {time.time()-t0:.1f}s for {nfr} product-frame(s)")
     # Peak RSS across the whole process (max over all frames — per-frame arrays are
