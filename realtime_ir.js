@@ -28243,6 +28243,12 @@
         try { if (tstr) lines.push(fmtUTC(tstr)); } catch (e) {}
         var sat = document.getElementById('ir-satellite-label');
         if (sat && sat.textContent) lines.push(sat.textContent.trim());
+        // Eye / cold-top readout (hurricanes only — the chip is shown ≥65 kt),
+        // band-aware since we read the live chip text.
+        var eyeEl = document.getElementById('ir-eye-diag');
+        if (eyeEl && eyeEl.style.display !== 'none' && eyeEl.textContent) {
+            lines.push(eyeEl.textContent.trim());
+        }
         if (lines.length) chip(m, m, lines, 'left', 600);
         chip(W - m, m, ['TC-ATLAS', 'tcatlas.org'], 'right', 700);
     }
