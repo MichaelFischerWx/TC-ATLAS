@@ -228,6 +228,15 @@ PRODUCTS = {
     "vis": dict(goes=VIS_BAND, hima=HIMAWARI_VIS_BAND, coarsen=4, kind="vis", night=True, tol=60),
 }
 _NIGHT_ELEV_DEG = -6.0   # civil twilight: below this, Visible is masked clear
+# Vis STORM tiles only: drop extreme-limb pixels (cos of view angle below this).
+# Reflectance from a far-limb satellite (e.g. GOES-West's far-western edge over
+# the WPac, cosz~0.32 at 152°E) is dim + geometrically distorted; when it was
+# used ALONE — because Himawari's slower 0.5 km Vis hadn't posted at build time —
+# the storm tile came out ~half brightness and flashed as a "jump" in the loop.
+# 0.35 excludes that (~69° view) while passing Himawari everywhere it covers
+# (cosz ≥ ~0.40 even at its 75°E western edge) and GOES-West when it's a decent
+# view (≥0.36). No near-nadir view → tile skipped → frame becomes a gap.
+_VIS_STORM_MIN_COSZ = 0.35
 
 # Keep the standard 170-260 K WV range so the global mosaic, the storm-card raw-WV
 # encoding (BAND_RANGES[8]) and the client LUT all share ONE Tb→color mapping
@@ -647,7 +656,13 @@ def render_storm_tiles(sats, tiles, emit, timings, product="ir", dt=None):
             valid = mask & np.isfinite(g)
             if not is_vis:
                 valid = valid & (g > 0)
-            samples.append((g, cosz, valid))
+            else:
+                # Storm tiles: reject far-limb (dim/distorted) Vis reflectance so
+                # a frame built before Himawari's Vis posts doesn't freeze a dim
+                # GOES-West-limb "jump" frame. See _VIS_STORM_MIN_COSZ.
+                valid = valid & (cosz >= _VIS_STORM_MIN_COSZ)
+            if valid.any():
+                samples.append((g, cosz, valid))
         if not samples:
             continue
         field = blend_samples(samples)
