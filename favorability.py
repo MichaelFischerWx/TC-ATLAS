@@ -122,10 +122,13 @@ def chi_m(t_b_k: float, q_b: float,
     for strong TCs — a documented limitation, not an error. Do NOT "fix" the
     high χ_m by moving s*_m to the annulus temperature; that is a different
     (sub-saturation) quantity and is not T&E.
-    The denominator air–sea disequilibrium uses boundary-layer entropy s_b
-    (1000 hPa, inner disc) and SST saturation entropy s*_SST. All
-    temperatures KELVIN; humidities specific humidity (kg/kg). Returns None
-    if the denominator is non-physical."""
+    The denominator is the air–sea disequilibrium (~ potential intensity; T&E
+    2012 eq. 2 evaluates it at the RMW at PI). It uses SST saturation entropy
+    s*_SST and boundary-layer entropy s_b from the ENVIRONMENTAL annulus — NOT
+    the storm's near-saturated inner-core BL, which collapses the disequilibrium
+    and inflates χ_m for intense TCs. (t_b_k/q_b are passed by the caller from
+    the annulus.) All temperatures KELVIN; humidities specific humidity (kg/kg).
+    Returns None if the denominator is non-physical."""
     r_b = mixing_ratio_from_q(q_b)
     r_m_env = mixing_ratio_from_q(q_m_env)
     s_b = bryan_moist_entropy(t_b_k, r_b, P_BOUND, saturated=False)

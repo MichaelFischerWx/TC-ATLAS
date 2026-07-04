@@ -10775,10 +10775,12 @@ _SHEAR_CACHE_TTL = 6 * 3600    # 6 hours; one GFS cycle
 # and supports the Davis-Ahijevych Helmholtz method as an opt-in.
 # Cache key includes method + params so SHIPS, env-profile, and
 # Helmholtz-tuned variants don't cross-pollinate.
-_SHEAR_CACHE_VER = "env-v6"   # v6: REVERT v5 — χ_m s*_m is the inner-0-100km-disc
-                              #     saturation entropy (Tang & Emanuel 2012 supplement,
-                              #     "Calculation from Gridded Data"); v5's annulus-temp
-                              #     s*_m was wrong. Invalidates the v5 (under-valued) VI.
+_SHEAR_CACHE_VER = "env-v7"   # v7: χ_m denominator s_b now from the ENVIRONMENTAL
+                              #     annulus (T&E 2012 eq.2 air-sea disequilibrium ~ PI),
+                              #     not the near-saturated inner disc that inflated χ_m
+                              #     for intense TCs (Cat-5 1.49). Invalidates v6.
+                              # v6: REVERT v5 — χ_m s*_m is the inner-0-100km-disc
+                              #     saturation entropy (T&E 2012 supp gridded calc).
                               # v4: payload carries chi_inputs + ventilation (VI)
 _shear_mem_cache: dict = {}    # (atcf_id, cycle_iso, params_key) → {data, ts}
 _shear_mem_lock = threading.Lock()
@@ -11126,9 +11128,16 @@ def _compute_gfs_shear(lat: float, lon: float, date_str: str, hour_str: str) -> 
                 q = 0.622 * e / max(pHpa - 0.378 * e, 1e-3)
                 return round(float(tK), 2), round(float(q), 6)
 
-            # s_b (boundary) + s*_m (mid-trop saturation) from the 0-100 km
-            # disc; s_m (environmental mid-trop) from the 100-300 km annulus.
-            t_b_k, q_b = _tq_masked(1000, disc_mask)
+            # s*_m (mid-trop saturation) from the inner 0-100 km disc (the
+            # saturated warm core); s_m (environmental mid-trop) from the 100-300
+            # km annulus. s_b (boundary layer) for the DENOMINATOR's air-sea
+            # disequilibrium comes from the ENVIRONMENTAL annulus, NOT the disc:
+            # Tang & Emanuel (2012) eq. 2 evaluates the denominator as the air-sea
+            # disequilibrium (~ PI) — an ambient quantity. The storm's own inner-
+            # core boundary layer is near-saturated (warm, ~96% RH), which
+            # collapses the disequilibrium and inflates χ_m for intense TCs (Cat-5
+            # Bavi read 1.49). Annular s_b restores it (~0.4-0.5). See the VI memo.
+            t_b_k, q_b = _tq_masked(1000, annulus_mask)
             t_m_sat_k, _ = _tq_masked(600, disc_mask)
             t_m_env_k, q_m_env = _tq_masked(600, annulus_mask)
 
@@ -11162,7 +11171,7 @@ def _compute_gfs_shear(lat: float, lon: float, date_str: str, hour_str: str) -> 
                     "disc_km": _CHI_DISC_KM,
                     "annulus_km": [_CHI_INNER_KM, _CHI_OUTER_KM],
                     "mid_hpa": 600,
-                    "t_b_k": t_b_k, "q_b": q_b,             # 1000 hPa boundary (disc)
+                    "t_b_k": t_b_k, "q_b": q_b,             # 1000 hPa boundary (annulus/env)
                     "t_m_sat_k": t_m_sat_k,                 # 600 hPa saturation (disc)
                     "t_m_env_k": t_m_env_k, "q_m_env": q_m_env,  # 600 hPa env (annulus)
                     "n_disc_points": int(disc_mask.sum()),
