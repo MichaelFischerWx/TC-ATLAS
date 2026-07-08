@@ -953,6 +953,31 @@ _REG_MIN_QUALITY = 0.45        # …and all three NCC peaks must be at least thi
                                # (a coherent scene exists; real 10-min frames
                                # correlate ≫ this — gates out decorrelated churn)
 
+# Endpoint (one-sided) screen. ALL three screens above triangulate against a
+# PRESENT neighbor on BOTH sides, so the loop's two endpoints — and in practice
+# the NEWEST frame — are structurally never evaluated. That is the worst blind
+# spot: the freshest scan is the one most likely to be a partial/off-sector/
+# wrong-satellite substitution (it arrives on S3 in pieces, or the nearest
+# available scan is pulled from a different sub-satellite geometry), and it's
+# the frame the user stares at. Observed live on Bavi (WP092026) Visible
+# 00:30 UTC (2026-07-08): the newest frame rendered a scene hundreds of km off
+# the storm while 17/18 was perfectly centered. We screen an endpoint against
+# its single present neighbor `p` and p's own next-inward neighbor `pp`, which
+# anchors trust: we only judge the endpoint when the interior pair (pp↔p) is
+# strongly coherent AND smooth, i.e. the loop really is well-behaved there, so a
+# change at the endpoint is the endpoint's fault — not normal fast motion. Two
+# failure regimes are covered: a moderately displaced but still-overlapping
+# scene (coherent, high-Q, large shift) and a wholly unrelated scene (Q
+# collapses vs the coherent interior). Gated to the reflectance products
+# (Visible + GeoColor daytime) where this is observed and the other screens are
+# already known-blind; IR/WV keep two-sided-only to protect the newest IR frame
+# users watch. A false positive costs one dropped newest frame + a refetch, and
+# a storm cannot translate a whole cutout-width in 10 min, so the shift branch
+# can only trip on a wrong cutout, never real motion.
+_REG_ENDPOINT_SHIFT_PX = 1.6   # one-sided |shift| to flag a coherent-but-displaced endpoint
+_REG_ENDPOINT_REF_Q = 0.60     # interior pair (pp↔p) must be at least this coherent to trust it
+_REG_ENDPOINT_LOWQ = 0.30      # …then flag if the endpoint↔p correlation collapses below this
+
 # Per-storm set of frame slot keys ("YYYYMMDDHHMM") flagged anomalous in the
 # last bundle build. The prewarm pops this at the start of each cycle and
 # FORCE-refetches those frames (bypassing the cache short-circuit) so a
@@ -1228,6 +1253,46 @@ def _flag_anomalous_frames(jpgs: list, band: int | None = None,
             base = abs(dy_pq) if vert else abs(dx_pq)
             print(f"[Anom reg] frame {i}: {axis} displacement ~{amp:.1f}px "
                   f"(neighbors agree {base:.1f}px) band={band}")
+
+    # Endpoint (one-sided) screen — see _REG_ENDPOINT_* above. Reflectance
+    # products only (Visible product via `band`, GeoColor daytime via `is_day`).
+    if run_dimout:
+        def _endpoint_daytime(j):
+            # For GeoColor, a frame only participates if it is daytime (its
+            # brightness/registration is meaningless against inverted night IR).
+            return is_day is None or is_day[j]
+
+        for e, step in ((n - 1, -1), (0, +1)):   # newest first, then oldest
+            if e in flagged or thumbs[e] is None or not _endpoint_daytime(e):
+                continue
+            # p = nearest present (daytime, for GeoColor) neighbor inward;
+            # pp = the next present neighbor beyond p in the same direction.
+            js = range(e + step, n if step > 0 else -1, step)
+            present = [j for j in js if thumbs[j] is not None and _endpoint_daytime(j)]
+            if len(present) < 2:
+                continue
+            p, pp = present[0], present[1]
+            te, tp, tpp = thumbs[e], thumbs[p], thumbs[pp]
+            # Trust anchor: the interior pair must be coherent AND smooth, so we
+            # KNOW the loop is well-behaved next to this endpoint.
+            dy_r, dx_r, q_ref = _estimate_shift(tpp, tp)
+            if q_ref < _REG_ENDPOINT_REF_Q or max(abs(dy_r), abs(dx_r)) > _REG_NEIGHBOR_AGREE_PX:
+                continue
+            dy_e, dx_e, q_e = _estimate_shift(tp, te)      # endpoint onto its neighbor
+            reason = None
+            if q_e >= _REG_MIN_QUALITY and max(abs(dy_e), abs(dx_e)) >= _REG_ENDPOINT_SHIFT_PX:
+                reason = f"displaced ~{max(abs(dy_e), abs(dx_e)):.1f}px"
+            elif q_e < _REG_ENDPOINT_LOWQ:
+                # Unrelated scene. Guard against a legit twilight dim-out (the
+                # dim-out screen owns that): only trip when the endpoint is still
+                # bright relative to its neighbor, i.e. "bright but wrong place".
+                me, mp = float(te.mean()), float(tp.mean())
+                if me >= _VIS_DROPOUT_MIN_BRIGHT and me >= mp * _VIS_DROPOUT_FRAC:
+                    reason = f"decorrelated q={q_e:.2f} (interior q={q_ref:.2f})"
+            if reason:
+                flagged.add(e)
+                print(f"[Anom endpoint] frame {e}: {reason} band={band}")
+
     return flagged
 
 
