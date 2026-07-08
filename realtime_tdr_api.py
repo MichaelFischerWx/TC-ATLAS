@@ -1668,27 +1668,121 @@ def _extract_mission_id(file_url: str) -> Optional[str]:
 
 def _parse_sonde_launch_time(filename: str) -> Optional[_dt]:
     """
-    Parse launch datetime from a dropsonde CSV filename.
+    Parse launch datetime from a dropsonde filename across the several naming
+    conventions now in use.
 
-    Filename format: D20251028_135043_PQC.csv
+    Historically (1996–2025) all agencies produced ASPEN PQC CSV files with a
+    uniform name::
+
+        D20251028_135043_PQC.csv          -> D<YYYYMMDD>_<HHMMSS>
+
+    In 2026 NCAR upgraded AVAPS; each agency now configures its own file names
+    and ASPEN emits NetCDF/FRD per sonde. The launch time survives as an
+    embedded ISO-ish token, e.g.::
+
+        NOAA: 20260617I1-20260617T171908-03-Hurricane_2026_PTC-1-2QC.frd
+        NASA: NURTURE-x20260121-05-20260121T200101-1.nc
+        AF:   USAF-26061703309_0101A_SURVEY-20260617T044446-02.nc
+                                            ^^^^^^^^^^^^^^^ <YYYYMMDD>T<HHMMSS>
+
+    Returns a tz-aware UTC datetime, or None if no timestamp is recognisable
+    (in which case the caller should read the launch time from the file
+    contents instead).
     """
+    if not filename:
+        return None
+
+    def _mk(y, mo, d, hh, mm, ss) -> Optional[_dt]:
+        try:
+            if hh >= 24:  # occasional roll-over encoding (HH>=24)
+                base = _dt(y, mo, d, tzinfo=timezone.utc)
+                return base + timedelta(hours=hh, minutes=mm, seconds=ss)
+            return _dt(y, mo, d, hh, mm, ss, tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+    # 1) Legacy uniform D-file CSV: D<YYYYMMDD>_<HHMMSS>
     m = re.match(r"D(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})", filename)
-    if not m:
+    if m:
+        g = [int(x) for x in m.groups()]
+        return _mk(*g)
+
+    # 2) New AVAPS convention: an embedded <YYYYMMDD>T<HHMMSS> token
+    #    (NOAA/NASA/AF all carry the launch time this way).
+    m = re.search(r"(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})", filename)
+    if m:
+        g = [int(x) for x in m.groups()]
+        return _mk(*g)
+
+    # 3) Loose fallback: <YYYYMMDD>[_T]<HHMMSS> anywhere in the name.
+    m = re.search(r"(20\d{2})(\d{2})(\d{2})[_T](\d{2})(\d{2})(\d{2})", filename)
+    if m:
+        g = [int(x) for x in m.groups()]
+        return _mk(*g)
+
+    return None
+
+
+# Accepted ASPEN dropsonde products, richest first. The 2026 AVAPS upgrade
+# replaced the uniform ``_PQC.csv`` with per-sonde NetCDF (``…QC.nc``) plus an
+# operationally-processed ``…QC.frd`` (same FRD text format the archive path
+# already decodes) and a coded ``…WMO.txt``. We prefer the .frd because we have
+# a proven parser for it and it is compact; the legacy CSV remains supported.
+def _classify_sonde_file(name: str) -> Optional[str]:
+    """Return 'frd', 'csv', or None for a dropsonde-product filename."""
+    low = name.lower().rstrip("/")
+    if low.endswith(".frd"):
+        return "frd"
+    if low.endswith("_pqc.csv") or (low.endswith(".csv") and "qc" in low):
+        return "csv"
+    return None
+
+
+def _frd_parsed_to_sonde(parsed_frd: dict) -> Optional[dict]:
+    """Normalise a ``_parse_frd_file`` result into the CSV-shaped dict that
+    ``_build_sonde_response`` consumes (so both formats share one response
+    builder and the storm-motion correction)."""
+    if not parsed_frd:
         return None
-    try:
-        hr = int(m.group(4))
-        mi = int(m.group(5))
-        sc = int(m.group(6))
-        if hr >= 24:
-            base = _dt(int(m.group(1)), int(m.group(2)), int(m.group(3)),
-                        tzinfo=timezone.utc)
-            return base + timedelta(hours=hr, minutes=mi, seconds=sc)
-        return _dt(
-            int(m.group(1)), int(m.group(2)), int(m.group(3)),
-            hr, mi, sc, tzinfo=timezone.utc,
-        )
-    except ValueError:
+    m = parsed_frd.get("meta", {}) or {}
+    p = parsed_frd.get("profile", {}) or {}
+    n = len(p.get("time_s", []))
+    if n == 0:
         return None
+
+    meta: dict = {}
+    ldt = m.get("launch_dt")
+    if ldt is not None:
+        meta.update({
+            "Year": ldt.year, "Month": ldt.month, "Day": ldt.day,
+            "Hour": ldt.hour, "Minute": ldt.minute, "Second": ldt.second,
+        })
+    meta["SondeId"] = m.get("sonde_id", "")
+    meta["Flight"] = m.get("aircraft", "")
+    meta["PlatformId"] = m.get("aircraft", "")
+    meta["Project"] = m.get("project", "")
+    meta["DropsondeHitSfc"] = "1" if m.get("hit_surface") else "0"
+
+    # .frd carries a single altitude column (geopotential/GPS Z); expose it as
+    # both alt and gps_alt so the shared builder's fallbacks work. No dewpoint.
+    alt = p.get("alt", [None] * n)
+    profile = {
+        "time_s": p.get("time_s", [None] * n),
+        "pres": p.get("pres", [None] * n),
+        "temp": p.get("temp", [None] * n),
+        "rh": p.get("rh", [None] * n),
+        "wspd": p.get("wspd", [None] * n),
+        "wdir": p.get("wdir", [None] * n),
+        "lat": p.get("lat", [None] * n),
+        "lon": p.get("lon", [None] * n),
+        "alt": alt,
+        "gps_alt": list(alt),
+        "uwnd": p.get("uwnd", [None] * n),
+        "vwnd": p.get("vwnd", [None] * n),
+        "ascent": [None] * n,
+        "dewpoint": [None] * n,
+    }
+    return {"meta": meta, "profile": profile}
 
 
 def _parse_dropsonde_csv(csv_text: str) -> Optional[dict]:
@@ -2013,48 +2107,86 @@ def get_dropsondes(
         _rt_sonde_cache[file_url] = (result, now)
         return JSONResponse(result)
 
-    # Filter to PQC CSV files within time window
-    csv_candidates = []
-    for link in links:
-        if not link.endswith("_PQC.csv"):
-            continue
-        launch_dt = _parse_sonde_launch_time(link)
-        if launch_dt is None:
-            continue
-        delta_min = abs((launch_dt - analysis_dt).total_seconds()) / 60.0
-        if delta_min <= SONDE_TIME_WINDOW_MIN:
-            csv_candidates.append((link, launch_dt, delta_min))
+    # Discover dropsonde products across naming conventions. The 2026 AVAPS
+    # upgrade dropped the 30-year-uniform ``D…_PQC.csv`` name: NOAA ASPEN now
+    # emits per-sonde ``…QC.frd`` (same FRD text the archive path decodes),
+    # ``…QC.nc`` (NetCDF) and ``…WMO.txt`` (coded). Prefer .frd (proven parser,
+    # compact); fall back to the legacy PQC CSV.
+    frd_links = [l for l in links if _classify_sonde_file(l) == "frd"]
+    csv_links = [l for l in links if _classify_sonde_file(l) == "csv"]
 
-    csv_candidates.sort(key=lambda x: x[2])
+    _parse_frd = None
+    if frd_links:
+        try:
+            from tc_radar_api import _parse_frd_file as _parse_frd
+        except Exception:
+            _parse_frd = None
 
-    # Fetch and parse each CSV in parallel
+    if frd_links and _parse_frd is not None:
+        sonde_links, sonde_kind = frd_links, "frd"
+    else:
+        sonde_links, sonde_kind = csv_links, "csv"
+
+    # Pre-filter by the launch time embedded in the filename when readable;
+    # otherwise keep the candidate and filter after parsing (the launch time is
+    # always present inside the file). This avoids fetching an entire multi-hour
+    # mission while still tolerating unrecognised agency naming.
+    candidates = []  # (filename, launch_dt_or_None)
+    for link in sonde_links:
+        ldt = _parse_sonde_launch_time(link)
+        if ldt is not None:
+            delta_min = abs((ldt - analysis_dt).total_seconds()) / 60.0
+            if delta_min > SONDE_TIME_WINDOW_MIN:
+                continue
+        candidates.append((link, ldt))
+
+    candidates.sort(key=lambda c: (
+        c[1] is None,
+        abs((c[1] - analysis_dt).total_seconds()) if c[1] is not None else 0.0,
+    ))
+
+    # Fetch and parse each sonde in parallel
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    _su = case_meta.get("storm_motion_east_ms", -999)
+    _sv = case_meta.get("storm_motion_north_ms", -999)
+
     def _fetch_and_parse(item):
-        filename, _ldt, _dmin = item
-        csv_url = f"{SEB_SONDE_BASE}/{mission_id}/{filename}"
+        filename, _ldt = item
+        url = f"{SEB_SONDE_BASE}/{mission_id}/{filename}"
         try:
-            csv_text = _fetch_text(csv_url, timeout=30)
-            parsed = _parse_dropsonde_csv(csv_text)
+            text = _fetch_text(url, timeout=30)
+        except Exception:
+            return None
+        try:
+            if sonde_kind == "frd":
+                parsed = _frd_parsed_to_sonde(_parse_frd(text))
+            else:
+                parsed = _parse_dropsonde_csv(text)
             if parsed is None:
                 return None
             return _build_sonde_response(
                 parsed, center_lat, center_lon, analysis_dt,
-                storm_u=case_meta.get("storm_motion_east_ms", -999),
-                storm_v=case_meta.get("storm_motion_north_ms", -999),
+                storm_u=_su, storm_v=_sv,
             )
         except Exception:
             return None
 
     dropsondes = []
-    if csv_candidates:
-        max_workers = min(len(csv_candidates), 6)
+    if candidates:
+        max_workers = min(len(candidates), 6)
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(_fetch_and_parse, item): item for item in csv_candidates}
+            futures = {pool.submit(_fetch_and_parse, item): item for item in candidates}
             for future in as_completed(futures):
                 sonde_entry = future.result()
-                if sonde_entry is not None:
-                    dropsondes.append(sonde_entry)
+                if sonde_entry is None:
+                    continue
+                # Post-hoc window filter using the content-derived launch time
+                # (covers candidates whose filename carried no timestamp).
+                toff = sonde_entry.get("time_offset_min")
+                if toff is not None and abs(toff) > SONDE_TIME_WINDOW_MIN:
+                    continue
+                dropsondes.append(sonde_entry)
 
     dropsondes.sort(
         key=lambda s: abs(s["time_offset_min"]) if s["time_offset_min"] is not None else 999
