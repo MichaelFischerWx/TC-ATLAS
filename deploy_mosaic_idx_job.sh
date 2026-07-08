@@ -44,11 +44,18 @@ if ! gcloud artifacts docker images describe "${IMAGE}" >/dev/null 2>&1 \
 fi
 
 # ── Create/update the idx Cloud Run Job ──────────────────────────
-# Same resources as the v2 job (8Gi/2vCPU); rolling 1 frame/run (R2_KEEP_FRAMES
-# window in the builder). args use the ^@^ delimiter — leading -- trips gcloud.
+# Resources are overridable so the S6 peak-RAM fix can flip to 1vCPU/4Gi in one
+# durable place once verified. Cloud Run REQUIRES 2vCPU for >4Gi, so 4Gi ⇒ 1vCPU
+# is the cheaper tier the strip-read + malloc_trim fix targets (peak now ~3 GiB).
+# Default stays 8Gi/2 for the code-first rollout; flip via:
+#   MOSAIC_JOB_MEMORY=4Gi MOSAIC_JOB_CPU=1 ./deploy_mosaic_idx_job.sh
+MOSAIC_JOB_MEMORY="${MOSAIC_JOB_MEMORY:-8Gi}"
+MOSAIC_JOB_CPU="${MOSAIC_JOB_CPU:-2}"
+# rolling 1 frame/run (R2_KEEP_FRAMES window in the builder). args use the ^@^
+# delimiter — leading -- trips gcloud.
 COMMON_FLAGS=(
   --region "${REGION}" --image "${IMAGE}"
-  --memory 8Gi --cpu 2 --max-retries 1 --task-timeout 600
+  --memory "${MOSAIC_JOB_MEMORY}" --cpu "${MOSAIC_JOB_CPU}" --max-retries 1 --task-timeout 600
   --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET},MOSAIC_TILE_MODE=idx,MOSAIC_R2_PREFIX=mosaic-v3"
   --set-secrets  "R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
   "--args=^@^--r2@--storm@--time@--bands@ir,wv,vis@--frames@1"

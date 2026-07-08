@@ -24,6 +24,7 @@ Usage:
 """
 import argparse
 import concurrent.futures as _cf
+import gc
 import io
 import json
 import math
@@ -313,6 +314,56 @@ def coarsen2d(a, f):
     return a.reshape(ny2 // f, f, nx2 // f, f).mean(axis=(1, 3))
 
 
+# Strip-decode factor for the coarsen (0.5 km Visible) read. GOES Band-2 is a
+# 21696² disk that decodes to ~1.9 GiB float32; materializing it whole is the
+# single biggest term in the mosaic's peak RSS (VIS-only 4.6 GiB vs IR 2.8).
+# Reading it in N row-strips and block-averaging each strip caps the transient
+# at ~one strip, dropping VIS peak to ≈ the IR peak. Set 0 to fall back to the
+# legacy whole-array read.
+_READ_STRIPS = int(os.environ.get("MOSAIC_READ_STRIPS", "8"))
+
+
+def _coarsen_read(da, f, n_strips):
+    """Block-average a lazy 2-D DataArray by factor f, decoding only ~1/n_strips
+    of the source rows at a time so the full-resolution array is never
+    materialized. Byte-identical to coarsen2d(np.asarray(da.values, f32), f):
+    same crop-to-multiple-of-f, same block mean, and strip boundaries are forced
+    onto multiples of f so no block is ever split across strips."""
+    ny, nx = da.shape
+    ny_c, nx_c = (ny // f) * f, (nx // f) * f
+    if ny_c == 0 or nx_c == 0:
+        return np.empty((0, 0), np.float32)
+    out = np.empty((ny_c // f, nx_c // f), np.float32)
+    rows_c = ny_c // f                                  # output rows
+    per = max(1, math.ceil(rows_c / max(1, n_strips)))  # output rows per strip
+    step = per * f                                       # source rows per strip (× f)
+    for r0 in range(0, ny_c, step):
+        r1 = min(r0 + step, ny_c)
+        block = np.asarray(da[r0:r1, :nx_c].values, dtype=np.float32)  # one strip only
+        out[r0 // f:r1 // f] = coarsen2d(block, f)
+        del block
+    return out
+
+
+_libc = None
+
+
+def _release_memory():
+    """gc + glibc malloc_trim(0) so freed per-product arrays are returned to the
+    OS between bands, preventing the ir→wv→vis arena retention (~1.8 GiB) that
+    pushes the full run's peak well above any single band's. No-op off glibc
+    (e.g. local macOS dev)."""
+    global _libc
+    gc.collect()
+    try:
+        if _libc is None:
+            import ctypes
+            _libc = ctypes.CDLL("libc.so.6", use_errno=False)
+        _libc.malloc_trim(0)
+    except Exception:
+        pass
+
+
 def solar_elev_grid(LAT, LON, dt):
     """Vectorized solar elevation (deg) over lat/lon arrays — vectorized twin of
     ir_monitor_api._solar_elevation; drives the Visible night mask."""
@@ -392,7 +443,17 @@ def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20):
     ds = xr.open_dataset(io.BytesIO(raw), engine="h5netcdf")
     try:
         var = "CMI" if "CMI" in ds else f"CMI_C{band:02d}"
-        data = ds[var].values.astype(np.float32)
+        da = ds[var]
+        # For the coarsened (0.5 km Visible) read, strip-decode so the full
+        # native array is never materialized (peak-RAM fix). Byte-identical to
+        # the whole-array path. Falls back to the legacy read for IR/WV
+        # (coarsen==1), when disabled (MOSAIC_READ_STRIPS=0), or non-2-D vars.
+        if coarsen > 1 and _READ_STRIPS >= 1 and getattr(da, "ndim", 0) == 2:
+            data = _coarsen_read(da, coarsen, _READ_STRIPS)
+            pre_coarsened = True
+        else:
+            data = np.asarray(da.values, dtype=np.float32)
+            pre_coarsened = False
         x = ds["x"].values.astype(np.float64)
         y = ds["y"].values.astype(np.float64)
         gip = ds["goes_imager_projection"].attrs
@@ -404,7 +465,8 @@ def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20):
     if data.size == 0 or x.size == 0 or y.size == 0:
         return None      # empty/partial file (seen on freshly-posting 0.5 km Vis)
     if coarsen > 1:
-        data = coarsen2d(data, coarsen)
+        if not pre_coarsened:
+            data = coarsen2d(data, coarsen)
         # Coarsen the 1-D x/y coordinate axes by block-averaging. (coarsen2d on
         # x[None,:] would collapse the singleton row dim to length 0 → the
         # "index 0 out of bounds for axis 0 with size 0" crash on GOES Visible.)
@@ -1176,6 +1238,7 @@ def main():
             if tiles and n_storm == 0:
                 written_gap.setdefault(product, []).append(ts)
             del rgba, sats   # free the big per-band arrays before the next band
+            _release_memory()  # return the freed arena to the OS between bands
 
             if args.r2:
                 t1 = time.time(); ok = errs = 0
