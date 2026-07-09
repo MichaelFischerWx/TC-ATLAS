@@ -44,19 +44,22 @@ if ! gcloud artifacts docker images describe "${IMAGE}" >/dev/null 2>&1 \
 fi
 
 # ── Create/update the idx Cloud Run Job ──────────────────────────
-# Resources are overridable so the S6 peak-RAM fix can flip to 1vCPU/4Gi in one
-# durable place once verified. Cloud Run REQUIRES 2vCPU for >4Gi, so 4Gi ⇒ 1vCPU
-# is the cheaper tier the strip-read + malloc_trim fix targets (peak now ~3 GiB).
-# Default stays 8Gi/2 for the code-first rollout; flip via:
-#   MOSAIC_JOB_MEMORY=4Gi MOSAIC_JOB_CPU=1 ./deploy_mosaic_idx_job.sh
-MOSAIC_JOB_MEMORY="${MOSAIC_JOB_MEMORY:-8Gi}"
-MOSAIC_JOB_CPU="${MOSAIC_JOB_CPU:-2}"
+# S6 peak-RAM fix landed 2026-07-08: strip-decode VIS read + malloc_trim between
+# bands dropped the full-run peak ~6.5→~3.4 GiB, so the job runs at the cheaper
+# 1vCPU/4Gi tier (Cloud Run requires 2vCPU for >4Gi). REQUIRED: MALLOC_ARENA_MAX=2
+# — without it glibc spreads the 16-thread upload pool across per-thread arenas
+# whose fragmentation adds ~670 MiB to the cgroup (getrusage doesn't see it) and
+# OOMs at 4Gi even though the process peaks ~3.4 GiB. Verified: exec 3m40s wall,
+# peak 3311-3467 MiB. Rollback if it ever OOMs: MOSAIC_JOB_MEMORY=8Gi
+# MOSAIC_JOB_CPU=2 ./deploy_mosaic_idx_job.sh
+MOSAIC_JOB_MEMORY="${MOSAIC_JOB_MEMORY:-4Gi}"
+MOSAIC_JOB_CPU="${MOSAIC_JOB_CPU:-1}"
 # rolling 1 frame/run (R2_KEEP_FRAMES window in the builder). args use the ^@^
 # delimiter — leading -- trips gcloud.
 COMMON_FLAGS=(
   --region "${REGION}" --image "${IMAGE}"
   --memory "${MOSAIC_JOB_MEMORY}" --cpu "${MOSAIC_JOB_CPU}" --max-retries 1 --task-timeout 600
-  --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET},MOSAIC_TILE_MODE=idx,MOSAIC_R2_PREFIX=mosaic-v3"
+  --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET},MOSAIC_TILE_MODE=idx,MOSAIC_R2_PREFIX=mosaic-v3,MALLOC_ARENA_MAX=2,MALLOC_TRIM_THRESHOLD_=0"
   --set-secrets  "R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
   "--args=^@^--r2@--storm@--time@--bands@ir,wv,vis@--frames@1"
 )
