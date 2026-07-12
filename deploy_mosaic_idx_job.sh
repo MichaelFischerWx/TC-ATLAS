@@ -50,8 +50,15 @@ fi
 # — without it glibc spreads the 16-thread upload pool across per-thread arenas
 # whose fragmentation adds ~670 MiB to the cgroup (getrusage doesn't see it) and
 # OOMs at 4Gi even though the process peaks ~3.4 GiB. Verified: exec 3m40s wall,
-# peak 3311-3467 MiB. Rollback if it ever OOMs: MOSAIC_JOB_MEMORY=8Gi
-# MOSAIC_JOB_CPU=2 ./deploy_mosaic_idx_job.sh
+# peak 3311-3467 MiB.
+#
+# 2026-07-12 follow-up: S6 still OOM'd ~11% of runs, clustered 19-00 UTC when the
+# Americas + Pacific are BOTH in daylight so all 3 sats do their largest VIS reads
+# back-to-back. read_all_sats now malloc_trims after each VIS-band sat read (that
+# same getrusage-invisible arena garbage was accumulating across the 2-3 sequential
+# VIS reads, only trimmed between bands before). getrusage PEAK RSS is unchanged
+# (~3.0-3.1 GiB) by design — the win is in the untracked cgroup arena.
+# Rollback if it STILL OOMs: MOSAIC_JOB_MEMORY=8Gi MOSAIC_JOB_CPU=2 ./deploy_mosaic_idx_job.sh
 MOSAIC_JOB_MEMORY="${MOSAIC_JOB_MEMORY:-4Gi}"
 MOSAIC_JOB_CPU="${MOSAIC_JOB_CPU:-1}"
 # rolling 1 frame/run (R2_KEEP_FRAMES window in the builder). args use the ^@^

@@ -526,6 +526,17 @@ def read_all_sats(dt, timings, product="ir"):
                              lon_0=lon_0, sat_h=sat_h, sweep=sweep,
                              grid=grid_of(x, y), label=label, scan_dt=scan_dt)
         log(f"  {label} {product}: scan {scan_dt:%H:%M}Z ({data.size/1e6:.0f}M px)")
+        # Visible reads pull a few-hundred-MB 0.5 km CMIP file per GOES sat
+        # (cat_file BytesIO + h5netcdf/strip decode). _release_memory only fires
+        # BETWEEN bands, so across the 2-3 sequential VIS sat reads that transient
+        # garbage accumulates in the glibc arena (getrusage-invisible, the same
+        # effect the S6 note flags) and tips the cgroup over 4 GiB mid-band on
+        # ~11% of runs. Trim per-sat here so each file's transient is returned to
+        # the OS before the next sat's read. The kept flat/x/y are live refs, so
+        # the trim only reclaims the freed decode buffers. IR/WV (2 km, ~50 MB
+        # files) have coarsen==1 and don't need it. See project_mosaic_tile_format.
+        if cfg["coarsen"] > 1:
+            _release_memory()
     return sats
 
 
