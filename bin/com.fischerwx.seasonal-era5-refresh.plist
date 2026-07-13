@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fischerwx.seasonal-era5-refresh</string>
+
+    <!-- 11th of every month, 9:00 AM local — the day AFTER the climatology
+         globe refresh (com.fischerwx.era5-monthly-refresh, 10th 9am) so the
+         gc-atlas-era5 per-year tiles that build_era5_indices.py reads are
+         already current. launchd runs a missed job when the laptop wakes. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Day</key>
+        <integer>11</integer>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/mfischer/github/TC-ATLAS/bin/seasonal-era5-refresh.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mfischer/github/TC-ATLAS</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mfischer/Library/Logs/seasonal-era5-refresh.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/mfischer/Library/Logs/seasonal-era5-refresh.stderr.log</string>
+
+    <!-- Only fire at the scheduled calendar time, not at every login/unlock. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Same sane PATH as the globe refresh so anaconda + homebrew (gsutil,
+         gcloud) resolve exactly as in an interactive shell. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/anaconda3/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mfischer</string>
+    </dict>
+</dict>
+</plist>
