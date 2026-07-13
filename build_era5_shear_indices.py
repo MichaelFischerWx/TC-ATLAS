@@ -55,7 +55,10 @@ GCS_PREFIX   = "era5_daily_1deg"
 
 CLIM_START = 1991
 CLIM_END   = 2020
-PER_YEAR_END_DEFAULT = 2025   # extended each year as new ERA5 data lands
+PER_YEAR_END_DEFAULT = 2026   # extended each year as new ERA5 data lands
+                              # (the seasonal-era5-refresh.sh wrapper also
+                              #  passes --year-max = current year so the
+                              #  automated path never drops the current year)
 
 # Grid spec inherited from build_era5_daily_archive.py — must stay in sync.
 LAT_N, LAT_S = 60.0, -60.0

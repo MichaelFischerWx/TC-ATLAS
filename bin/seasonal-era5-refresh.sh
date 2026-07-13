@@ -96,7 +96,11 @@ fi
 
 # ── B. Indices derived from the daily archive (need A) ───────────────────────
 if [ "$ARCHIVE_OK" = "1" ]; then
-    if run "B1. build_era5_shear_indices.py" "$PY" build_era5_shear_indices.py; then
+    # Pass --year-max = current calendar year so the current (partial) year is
+    # always included. Without it the script falls back to its hardcoded
+    # PER_YEAR_END_DEFAULT, which silently drops the current year until the
+    # constant is bumped by hand (this exact footgun dropped 2026 once).
+    if run "B1. build_era5_shear_indices.py" "$PY" build_era5_shear_indices.py --year-max "$(date +%Y)"; then
         run "B1-upload indices_monthly_era5_shear.json" \
             gsutil -h "Content-Type:application/json" \
                    cp data/indices_monthly_era5_shear.json "$BUCKET/indices_monthly_era5_shear.json"
