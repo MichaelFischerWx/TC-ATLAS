@@ -580,6 +580,12 @@
 
     // Global map product state
     var globalProduct = 'ir';        // mosaic product: 'ir' | 'vis' | 'wv'
+    // "Off" pill on the Global Map band switch: suppress the base satellite
+    // layer entirely so only the basemap + forecast overlays (DeepMind
+    // ensemble, cyclogenesis, env) show. Gated in the base-satellite add
+    // paths (addGIBSOverlay / _ir2aStill / loadGlobalAnimation) so the
+    // periodic refresh can't sneak the imagery back in while it's hidden.
+    var _satHidden = false;
     // Full brightness — the global mosaic now renders at native opacity so it
     // matches the per-storm sector tiles (which are full-opacity). The old
     // 0.85/0.95 values dimmed the global view relative to the storm card.
@@ -1941,6 +1947,7 @@
     }
     // Show the latest v3 frame as the still (pre-play) global IR layer.
     function _ir2aStill() {
+        if (_satHidden) return;   // satellite hidden via the "Off" pill
         _ir2aEnsure(function () {
             _ir2aLayer.setFrame(_ir2aFrames.length - 1);
             _ir2aLayer.setOpacity(_productOpacity(globalProduct));
@@ -2386,6 +2393,8 @@
     function _rt3DToggle() {
         var gl = map && map._gl;
         if (!gl || !window.maplibregl || !gl.setTerrain) return _rt3DOn;
+        // No IR field to extrude while the satellite layer is hidden.
+        if (_satHidden && !_rt3DOn) return _rt3DOn;
         if (!_rt3DOn) {
             if (!_mosaicTs) return false;   // need a mosaic frame to derive the DEM
             _terrainEnsureProtocol();
@@ -3193,6 +3202,8 @@
      *  Uses per-satellite times so GOES tiles show the freshest data (~15-20 min)
      *  while Himawari tiles use their own latest (may be 60-120 min behind). */
     function addGIBSOverlay(targetMap, opacity) {
+        // Satellite hidden via the "Off" pill — don't add any base imagery.
+        if (_satHidden) return;
         // On the facade, ensure mosaic frames are loaded before building the IR
         // layer (createCompositeGIBSLayer branches to the mosaic raster).
         Promise.all([findLatestGIBSTimes(),
@@ -3894,6 +3905,60 @@
         }
     }
 
+    // Reflect satellite on/off + active band on the IR|Vis|WV|Off segment.
+    function _syncSatSegment() {
+        var seg = document.getElementById('ir-mode-segment');
+        if (!seg) return;
+        var btns = seg.querySelectorAll('.ir-mode-btn');
+        for (var i = 0; i < btns.length; i++) {
+            var m = btns[i].getAttribute('data-mode');
+            var on = _satHidden ? (m === 'off') : (m === globalProduct);
+            btns[i].classList.toggle('ir-mode-active', on);
+        }
+    }
+
+    // Grey out (and re-enable) the 3D pill — 3D relief is built from the IR
+    // field, so it has nothing to extrude when the satellite is hidden.
+    function _rt3DSetAvailable(avail) {
+        var b = document.getElementById('ir-3d-mode-btn');
+        if (!b) return;
+        b.disabled = !avail;
+        b.style.opacity = avail ? '' : '0.4';
+        b.style.pointerEvents = avail ? '' : 'none';
+        b.title = avail
+            ? 'Extrude cold IR cloud tops into 3D relief — drag to orbit, use the Tilt / Height sliders. Toggle off to flatten.'
+            : 'Turn the satellite layer back on (IR / Vis / WV) to use 3D relief';
+    }
+
+    // Toggle the base satellite imagery on the Global Map. Tears down every
+    // base-satellite render path (idx WebGL layer, GIBS overlays, running
+    // loop) so only the basemap + forecast overlays remain; the add-path
+    // guards keep the periodic refresh from bringing it back while hidden.
+    function _setSatelliteHidden(hidden) {
+        hidden = !!hidden;
+        if (hidden === _satHidden) { _syncSatSegment(); return; }
+        _satHidden = hidden;
+        var colorbar = document.getElementById('ir-global-colorbar');
+        if (hidden) {
+            // 3D relief is derived from the IR field — flatten it first.
+            if (_rt3DOn) _rt3DToggle();
+            if (globalAnimFrameLayers.length) cleanupGlobalAnimation();
+            if (_ir2aOn) _ir2aDestroy();
+            removeGIBSOverlay(map, gibsIRLayers); gibsIRLayers = [];
+            removeGIBSOverlay(map, gibsVisLayers); gibsVisLayers = [];
+            if (colorbar) colorbar.style.display = 'none';
+        } else {
+            // Rebuild the base satellite for the current product. _satHidden is
+            // already false, so the add-path guards let this through.
+            addGIBSOverlay(map, 0.85);
+            if (colorbar) colorbar.style.display = (globalProduct === 'ir') ? '' : 'none';
+        }
+        _rt3DSetAvailable(!hidden);
+        if (typeof _setGlobalSatTimeLabel === 'function') _setGlobalSatTimeLabel();
+        _syncSatSegment();
+        _ga('rt_global_sat_toggle', { hidden: hidden });
+    }
+
     // ═══════════════════════════════════════════════════════════
     //  GLOBAL MAP ANIMATION
     // ═══════════════════════════════════════════════════════════
@@ -3912,6 +3977,7 @@
     }
 
     function loadGlobalAnimation() {
+        if (_satHidden) return;   // no satellite loop while imagery is hidden
         // GL facade: ensure the real mosaic frame list is loaded before building
         // the loop (else all frames collapse to the latest mosaic tile).
         if (window.LFLET_GL && (!_mosaicFrames || !_mosaicFrames.length)) {
@@ -4659,11 +4725,25 @@
                 seg.innerHTML =
                       '<button type="button" class="ir-mode-btn ir-mode-active" data-mode="ir">IR</button>'
                     + '<button type="button" class="ir-mode-btn"               data-mode="vis">Vis</button>'
-                    + '<button type="button" class="ir-mode-btn"               data-mode="wv">WV</button>';
+                    + '<button type="button" class="ir-mode-btn"               data-mode="wv">WV</button>'
+                    + '<button type="button" class="ir-mode-btn"               data-mode="off"'
+                    + ' title="Hide the satellite imagery — show only the map and forecast overlays">Off</button>';
                 var modeBtns = seg.querySelectorAll('.ir-mode-btn');
                 for (var mi = 0; mi < modeBtns.length; mi++) {
                     modeBtns[mi].addEventListener('click', function (e) {
-                        setGlobalProduct(e.target.getAttribute('data-mode'));
+                        var m = e.target.getAttribute('data-mode');
+                        if (m === 'off') { _setSatelliteHidden(true); return; }
+                        // A band click always brings the satellite back. Adopt
+                        // the target product first, then rebuild for it — avoids
+                        // the async addGIBSOverlay racing setGlobalProduct's
+                        // synchronous teardown.
+                        if (_satHidden) {
+                            globalProduct = m;
+                            _setSatelliteHidden(false);
+                        } else {
+                            setGlobalProduct(m);
+                        }
+                        _syncSatSegment();
                     });
                 }
 
