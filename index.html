@@ -870,52 +870,44 @@
             <p class="section-desc">TC-ATLAS is actively maintained — new data sources, analysis tools, and UI improvements are added continuously.</p>
             <div class="changelog-list">
                 <div class="changelog-entry">
-                    <div class="changelog-date">May 16, 2026</div>
-                    <div class="changelog-text"><a href="realtime_ir.html">Real-Time Monitor</a> overhaul: new unified <strong>Layers panel</strong> on the right edge collapses the old stack of separate buttons into one trigger with FORECAST / ANALYSIS / WIND BARBS sections and a live count badge. The Environmental Analysis menu now includes <strong>500 hPa geopotential heights</strong> (3 dam contours) alongside shear, vorticity, RH, and SST. <strong>DeepMind FNV3 cyclogenesis probability</strong> (2/7/14-day) was reworked into an NHC-TWO-style radius-integrated metric with a chunked colorbar so individual probability tiers are easy to read. Wind barbs now have a dark halo for legibility, all overlays tile across the dateline, the global IR animation accepts keyboard scrubbing (&larr;/&rarr;/space/+/&minus;), and a one-click <strong>Save PNG</strong> exports the current map view.</div>
+                    <div class="changelog-date">Jul 15, 2026</div>
+                    <div class="changelog-text"><a href="realtime_ir.html">Real-Time Monitor</a> forecast focus: a new <strong>&ldquo;Off&rdquo;</strong> option on the IR/Vis/WV switch hides the satellite layer so the DeepMind ensemble and environmental overlays read unobscured. DeepMind <strong>FNV3 cyclogenesis</strong> probabilities are now labeled explicitly as the model odds of a disturbance reaching <strong>tropical-storm strength (&ge;34 kt)</strong>, and the 1000-member raw-ensemble spaghetti renders instantly.</div>
                 </div>
                 <div class="changelog-entry">
-                    <div class="changelog-date">May 16, 2026</div>
-                    <div class="changelog-text">New <strong>Subseasonal Modulation</strong> subview on the TC Climatology page: TC genesis frequency, track-point density, and <strong>RI rate</strong> binned by daily 8-phase MJO and BSISO indices. Switch between MJO (Wheeler&ndash;Hendon RMM) and OLR-based <strong>OMI</strong> (Kiladis 2014), or compare BSISO1 (30&ndash;60 d northward) vs BSISO2 (10&ndash;30 d NW). Click any phase tile to drill in: larger map, per-phase RI rate vs climatology, top RI episodes, and the 24-h &Delta;wind distribution. Year-range, basin, and season filters cascade through every chart. Four BSISO PC monthly indices were also added to the <a href="climatology_globe.html">Reanalysis Globe</a> composite builder.</div>
+                    <div class="changelog-date">Jul 3, 2026</div>
+                    <div class="changelog-text"><strong>Objective eye-fix &amp; storm favorability.</strong> The monitor snaps the storm pin to an objective IR <strong>eye center</strong> with an eye / cold-top brightness-temperature readout and a follow-storm mode. Each storm card gained a <strong>favorability dashboard</strong> &mdash; a realtime <strong>ventilation index</strong> (Tang &amp; Emanuel) alongside ocean <strong>SST, SST anomaly, and ocean heat content (TCHP)</strong> &mdash; and the storm-detail imagery now carries frame-aligned <strong>GFS environmental overlays</strong> with init-cycle captions and hover readouts.</div>
                 </div>
                 <div class="changelog-entry">
-                    <div class="changelog-date">May 7, 2026</div>
-                    <div class="changelog-text">Site-wide visual refresh: new <strong>TC-ATLAS logomark</strong> on University of Miami&rsquo;s green and orange palette, <strong>light theme</strong> by default with an optional <strong>dark mode</strong>, and a cleaner <strong>light basemap</strong> for the global storm-track maps.</div>
+                    <div class="changelog-date">Jun 29, 2026</div>
+                    <div class="changelog-text"><strong>Ground radar on the map.</strong> Storm-page and global-map <strong>NEXRAD</strong> reflectivity now stream as GL tiles (IEM N0Q) at no added compute, and the <a href="explorer.html">TC-RADAR Explorer</a> gained a two-panel view with the airborne Doppler field draped directly on the IR map.</div>
                 </div>
                 <div class="changelog-entry">
-                    <div class="changelog-date">May 5, 2026</div>
-                    <div class="changelog-text">New <strong>TC Climatology</strong> page brings IBTrACS best-track statistics (ACE, peak-intensity, RI, LMI, seasonal cycles by basin) together with the interactive <strong>ERA5 Reanalysis Globe</strong> — composite by 14 climate indices (RONI, ONI, AMO, NPGO, SAM, IOD…), per-pixel correlation maps, and 13,500+ IBTrACS tracks overlaid. A featured-views gallery jumps you straight into TC-relevant scenes.</div>
+                    <div class="changelog-date">Jun 28, 2026</div>
+                    <div class="changelog-text"><strong>DeepMind FNV3 ensemble tools.</strong> The 1000-member cyclogenesis ensemble gained a <strong>Structure</strong> modal (RMW, size, wind-rose, and wind-area vs. IBTrACS climatology), an <strong>Intensity-Change / RI trends</strong> panel with median LMI and intensity IQR, an <strong>ACE distribution</strong>, and <strong>Vmax &harr; MSLP</strong> toggles on every intensity chart. Members are clustered into labeled disturbances on the global map.</div>
                 </div>
                 <div class="changelog-entry">
-                    <div class="changelog-date">May 5, 2026</div>
-                    <div class="changelog-text">TC-RADAR Explorer enhancements: <strong>TC center marker</strong> with lat/lon on hover across the plan view, <strong>aircraft Lat/Lon hover</strong> in flight-level overlays on all three TC pages, slimmer FL hover cards, and a <strong>Wind/W toggle</strong> on the FL time-series with TDR vertical-velocity interpolated to flight-level points.</div>
+                    <div class="changelog-date">Jun 27, 2026</div>
+                    <div class="changelog-text"><strong>TC-ATLAS global satellite mosaic.</strong> The monitor now renders its own worldwide geostationary mosaic in <strong>IR, Visible, and Water Vapor</strong>, served from our CDN as GPU-recolored single-channel tiles &mdash; full-brightness, multiple colormaps, seamless across the dateline, with animated-GIF export.</div>
                 </div>
                 <div class="changelog-entry">
-                    <div class="changelog-date">Apr 27, 2026</div>
-                    <div class="changelog-text">ERA5 <strong>Reanalysis Globe</strong> extracted into its own dedicated page with a new <strong>Index Correlation panel</strong> (ACE per basin, sliding-30 anomalies, p-value masking) and improved Composite Builder with synthetic-field support.</div>
+                    <div class="changelog-date">Jun 25, 2026</div>
+                    <div class="changelog-text"><strong>New map engine &amp; 3D convection.</strong> The Real-Time Monitor and <a href="global_archive.html">Global Archive</a> moved to a <strong>MapLibre GL</strong> rendering engine (smoother zoom, GPU overlays). A one-click <strong>3D</strong> pill extrudes cold IR cloud tops into relief with Tilt/Height sliders, drag-to-orbit, and branded <strong>3D-orbit GIF</strong> export, and the Environmental Analysis menu added <strong>SST anomaly and relative-SST</strong> layers.</div>
                 </div>
                 <div class="changelog-entry">
-                    <div class="changelog-date">Apr 16, 2026</div>
-                    <div class="changelog-text">Home page refresh: <strong>live activity strip</strong>, <strong>"Popular starting points"</strong> quick-start row, and <strong>featured-case onboarding</strong> on the TC-RADAR Explorer. Refined visual hierarchy and role-based color palette across the site.</div>
+                    <div class="changelog-date">Jun 13, 2026</div>
+                    <div class="changelog-text">TC-ATLAS moved to its own domain, <a href="https://tcatlas.org/"><strong>tcatlas.org</strong></a>, and gained <strong>dynamic social-preview cards</strong> that render the current active-storm state when the site is shared.</div>
                 </div>
                 <div class="changelog-entry">
-                    <div class="changelog-date">Apr 15, 2026</div>
-                    <div class="changelog-text"><strong>IR Hovmöller diagrams</strong> (time × radius brightness-temperature) added to every storm in the Global Archive + Compare pages, with adjustable coverage thresholds, colormap sync, and PNG export.</div>
+                    <div class="changelog-date">May 25, 2026</div>
+                    <div class="changelog-text"><strong>Near-real-time microwave &amp; aircraft recon.</strong> Added NRT <strong>microwave</strong> overpasses (AMSR2, GMI, SSMIS &mdash; 89 GHz PCT + 37 GHz color) with satellite pass prediction, an aircraft <strong>recon overlay</strong> (HDOB wind barbs, dropsondes, VDM), and a real-time <strong>Tail Doppler Radar</strong> tab with a live wind-center solver.</div>
                 </div>
                 <div class="changelog-entry">
-                    <div class="changelog-date">Apr 14, 2026</div>
-                    <div class="changelog-text"><strong>Objective IR eye-center finding</strong> — automated center estimation with symmetry-based quality gates; rejected candidates now rendered as orange crosshairs for full diagnostic transparency.</div>
+                    <div class="changelog-date">May 19, 2026</div>
+                    <div class="changelog-text">New <strong>Seasonal</strong> tab on the Real-Time Monitor &mdash; seven panels spanning a <strong>live SST-anomaly map</strong>, regional environment evolution (shear, MPI, RH, TCWV&hellip;), pre-season SST &times; annual ACE, OISST correlation and analog-season maps, and a climate-index dashboard (ENSO, AMO, MJO, BSISO&hellip;).</div>
                 </div>
                 <div class="changelog-entry">
-                    <div class="changelog-date">Apr 13, 2026</div>
-                    <div class="changelog-text">Real-time <strong>NEXRAD 88D ground-radar overlay</strong> on the Real-Time Monitor and Storm Satellite views, with storm-relative reflectivity, velocity, and animated GIF export.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Apr 11, 2026</div>
-                    <div class="changelog-text"><strong>ASCAT surface-wind barbs</strong> overlaid on the Real-Time Monitor map for verified radar/microwave cross-comparison with scatterometer winds.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Apr 7, 2026</div>
-                    <div class="changelog-text"><strong>Real-time microwave Tb overlay</strong> on the Real-Time Monitor map (89 GHz PCT + 37 GHz color) pulled from TC-PRIMED overpasses.</div>
+                    <div class="changelog-date">May 17, 2026</div>
+                    <div class="changelog-text">New <strong>Subseasonal</strong> tab &mdash; MJO and BSISO <strong>phase clocks</strong> plus 60-day <strong>Wheeler&ndash;Kiladis-filtered OLR Hovm&ouml;llers</strong> (MJO, Kelvin, ER, MRG, TD-type) with active TCs projected on as longitude traces and a GEFS 10-day forecast extension.</div>
                 </div>
             </div>
             <div class="changelog-footer">
