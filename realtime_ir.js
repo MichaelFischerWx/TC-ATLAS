@@ -783,6 +783,29 @@
     // the analyst the full ensemble distribution as context.
     var _rtGenesisRawVisible = false;
     var _rtGenesisRawLayers = [];
+    // Shared GL batch renderers (L.canvas → _isBatch) for the raw + spaghetti
+    // member layers. Without these, every member's polyline/hit-line/dot became
+    // its OWN MapLibre source+layer; the 1000-member raw view (~2,700 members ×
+    // ~3 layers each = ~8k GL layers) locked the main thread for 30s+ and looked
+    // like a hang. Routed through one canvas renderer, all members collapse to
+    // ~3 GL layers (solid + dashed line + circle) — same trick the Global
+    // Archive uses for its 13k-track view. Persistent + reused across re-renders.
+    var _rtGenesisRawBatch = null;
+    var _rtGenesisSpaghettiBatch = null;
+    function _genesisBatchRenderer(which) {
+        var key = (which === 'spaghetti') ? '_rtGenesisSpaghettiBatch'
+                                          : '_rtGenesisRawBatch';
+        var cur = (which === 'spaghetti') ? _rtGenesisSpaghettiBatch
+                                          : _rtGenesisRawBatch;
+        // L.canvas may be unavailable on the (non-GL) Leaflet path — callers
+        // fall back to per-layer rendering when this returns null.
+        if (!cur && L && typeof L.canvas === 'function') {
+            cur = L.canvas({ padding: 0.5 });
+            if (which === 'spaghetti') _rtGenesisSpaghettiBatch = cur;
+            else _rtGenesisRawBatch = cur;
+        }
+        return cur && cur._isBatch ? cur : null;
+    }
     // Disturbance clustering method.
     //   'deepmind' — trust DeepMind's CSV track_id grouping (each
     //                row's track_id field is the cluster boundary)
@@ -20693,6 +20716,9 @@
         if (!_rtGenesisData || !map) return;
         var rawTracks = _rtGenesisData.tracks || [];
         if (!rawTracks.length) return;
+        // Same GL batch-renderer path as the raw layer — collapses hundreds of
+        // clustered-member polylines/hit-lines into one geojson layer.
+        var batch = _genesisBatchRenderer('spaghetti');
         var disturbances = _genesisDisturbances(rawTracks);
         for (var di = 0; di < disturbances.length; di++) {
             var d = disturbances[di];
@@ -20719,12 +20745,14 @@
                 var trackLabel = d.displayLabel || null;
                 for (var si = 0; si < segs.length; si++) {
                     if (segs[si].length < 2) continue;
-                    var line = L.polyline(segs[si], {
+                    var lineOpts = {
                         color: style.faint,
                         weight: 0.7,
                         opacity: 1.0,      // alpha lives in style.faint
                         interactive: false,
-                    }).addTo(map);
+                    };
+                    if (batch) lineOpts.renderer = batch;
+                    var line = L.polyline(segs[si], lineOpts).addTo(map);
                     _rtGenesisSpaghettiLayers.push(line);
 
                     // Invisible hit-target so the user can actually click
@@ -20732,7 +20760,7 @@
                     (function (segLatLngs, mk, pp_, pw, init, label) {
                         var hit = _addGenesisMemberHitLayer(map, segLatLngs, function (e) {
                             _openGenesisMemberPopup(e.latlng, mk, pp_, init, pw, label);
-                        });
+                        }, batch);
                         _rtGenesisSpaghettiLayers.push(hit);
                     })(segs[si], memberKeyLocal, ptsLocal, memberPeak, initIso, trackLabel);
                 }
@@ -20921,20 +20949,29 @@
      *  one so clicking the 0.7-px stroke is actually possible. Returns
      *  the hit layer so it can be pushed into the cleanup array. The
      *  click handler fires `onClick(e)` with the Leaflet click event. */
-    function _addGenesisMemberHitLayer(map_, segLatLngs, onClick) {
-        var hit = L.polyline(segLatLngs, {
+    function _addGenesisMemberHitLayer(map_, segLatLngs, onClick, batch) {
+        // Wide, fully-transparent companion line. On the GL path it joins the
+        // shared batch renderer (one geojson layer for thousands of members);
+        // opacity-0 features are still returned by MapLibre's click query, so
+        // the fat 10px band stays clickable while the visible track is a hair
+        // wide. `interactive` is ignored by the batch — click dispatch goes
+        // through the renderer's per-feature index to this line's `on` handler.
+        var opts = {
             color: '#000',
             weight: 10,
-            opacity: 0,        // fully transparent — SVG still captures clicks
+            opacity: 0,        // fully transparent — geometry still captures clicks
             interactive: true,
             bubblingMouseEvents: false,
-        }).addTo(map_);
+        };
+        if (batch) opts.renderer = batch;
+        var hit = L.polyline(segLatLngs, opts).addTo(map_);
         hit.on('click', function (e) {
             try { onClick(e); }
             catch (err) { console.warn('[Genesis] member click handler failed:', err); }
-            L.DomEvent.stopPropagation(e);
+            if (L.DomEvent && e && e.originalEvent) L.DomEvent.stopPropagation(e);
         });
-        // Pointer cursor on hover so it's obvious lines are interactive.
+        // Pointer cursor on hover so it's obvious lines are interactive
+        // (DOM-line path only; the batch renderer sets its own hover cursor).
         hit.on('mouseover', function () {
             var el = hit.getElement && hit.getElement();
             if (el) el.style.cursor = 'pointer';
@@ -20953,6 +20990,13 @@
         if (!_rtGenesisData || !map) return;
         var rawTracks = _rtGenesisData.tracks || [];
         if (!rawTracks.length) return;
+
+        // Draw every member through ONE shared GL batch renderer (see
+        // _genesisBatchRenderer) so the ~2,700-member 1000-ensemble view stays
+        // ~3 GL layers instead of ~8k — the difference between an instant paint
+        // and a 30s main-thread freeze. Null on the non-GL Leaflet path, where
+        // per-layer rendering is fine.
+        var batch = _genesisBatchRenderer('raw');
 
         // Member-color helper — mirrors SS_COLORS via _genesisCatStyle
         // but returns rgba strings so we can directly stamp opacity.
@@ -21002,12 +21046,14 @@
                 }
                 for (var si = 0; si < segs.length; si++) {
                     if (segs[si].length < 2) continue;
-                    var line = L.polyline(segs[si], {
+                    var lineOpts = {
                         color: rgba(style.bold, 0.18),
                         weight: 0.7,
                         opacity: 1.0,
                         interactive: false,
-                    }).addTo(map);
+                    };
+                    if (batch) lineOpts.renderer = batch;
+                    var line = L.polyline(segs[si], lineOpts).addTo(map);
                     _rtGenesisRawLayers.push(line);
 
                     // Wider invisible hit-target so the thin visible
@@ -21016,7 +21062,7 @@
                     (function (segLatLngs, mk, pp, pw, init, label) {
                         var hit = _addGenesisMemberHitLayer(map, segLatLngs, function (e) {
                             _openGenesisMemberPopup(e.latlng, mk, pp, init, pw, label);
-                        });
+                        }, batch);
                         _rtGenesisRawLayers.push(hit);
                     })(segs[si], memberKeyLocal, ptsLocal, peakWindLocal, initIso, trackLabel);
                 }
@@ -21024,16 +21070,18 @@
                 // Genesis dot — only if this member actually reaches
                 // TC strength. Tiny circle at the first-34kt position.
                 if (firstGenPt) {
+                    var dotOpts = {
+                        radius: 2.2,
+                        color: rgba(style.bold, 0.85),
+                        fillColor: rgba(style.bold, 0.55),
+                        fillOpacity: 1,
+                        weight: 1,
+                        opacity: 1,
+                        interactive: false,
+                    };
+                    if (batch) dotOpts.renderer = batch;
                     var dot = L.circleMarker(
-                        [firstGenPt.lat, firstGenPt.lon], {
-                            radius: 2.2,
-                            color: rgba(style.bold, 0.85),
-                            fillColor: rgba(style.bold, 0.55),
-                            fillOpacity: 1,
-                            weight: 1,
-                            opacity: 1,
-                            interactive: false,
-                        }).addTo(map);
+                        [firstGenPt.lat, firstGenPt.lon], dotOpts).addTo(map);
                     _rtGenesisRawLayers.push(dot);
                 }
             }
