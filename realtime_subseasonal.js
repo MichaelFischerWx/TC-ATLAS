@@ -317,13 +317,19 @@
         return state.slabs[bandKey];
     }
 
-    // Plotly shapes + annotation marking the observed↔forecast boundary on
-    // a (time-on-y, reversed) Hovmöller. `slab` must carry forecast
-    // metadata (n_forecast / forecast_from). Returns {shapes, annotations}
-    // to splice into the layout. The forecast region (newest rows, at the
-    // bottom since y is reversed) gets a faint tint + a dashed divider line
-    // and a "GEFS" tag so the extrapolated tail reads as distinct from
-    // analysis.
+    // Plotly shapes + annotations marking the GEFS extension on a
+    // (time-on-y, reversed) Hovmöller. The tail below the last CPC OLR day
+    // is NOT one uniform "forecast": when CPC runs latent, the gap between
+    // the last observed day and the latest GEFS cycle is back-filled with
+    // each day's own GEFS day-1 (0–24 h) field — analysis-quality, not a
+    // multi-day-old forecast — and only the span from the latest cycle
+    // forward is a genuine forecast. We draw the two regimes distinctly so a
+    // long CPC outage doesn't read as stale guidance:
+    //   • forecast_from … forecast_start  →  "GEFS analysis" (teal, gap-fill)
+    //   • forecast_start … last day        →  "GEFS forecast" (blue)
+    // `forecast_start` (latest GEFS cycle day) comes from the pipeline;
+    // absent that (older output), we fall back to today (UTC) so the split
+    // still appears. `slab` must carry n_forecast / forecast_from.
     function _forecastDecor(slab, fg) {
         var out = { shapes: [], annotations: [] };
         if (!slab || !slab.n_forecast || !slab.forecast_from) return out;
@@ -331,41 +337,63 @@
         var fromIdx = times.indexOf(slab.forecast_from);
         if (fromIdx <= 0) return out;
         var lastTime = times[times.length - 1];
-        // Plotly auto-detects the "YYYY-MM-DD" y values as a DATE axis (not
-        // categorical), so shape/annotation coordinates must be date
-        // strings — numeric indices get read as ms-since-epoch and blow the
-        // autorange back to 1970. The analysis↔forecast boundary sits half
-        // a day before forecast_from (midway between the last observed day
-        // and the first forecast day, since the series is daily).
-        var edge = slab.forecast_from + 'T00:00:00';
-        // Shade the forecast band (forecast_from → last day). Pad the far
-        // end by ~12 h so the last daily cell is fully covered.
+        // Plotly reads the "YYYY-MM-DD" y values as a DATE axis, so shape /
+        // annotation coordinates must be date strings (numeric indices get
+        // read as ms-since-epoch and blow the autorange back to 1970).
+        var gefsEdge = slab.forecast_from + 'T00:00:00';   // CPC obs ↔ GEFS
         var lastEdge = lastTime + 'T23:59:59';
+
+        // Where the genuine forecast begins (latest GEFS cycle day). Prefer
+        // the pipeline value; else today (UTC) as a close, self-updating
+        // approximation on pre-field output.
+        var fcStart = slab.forecast_start || new Date().toISOString().slice(0, 10);
+        // A separate analysis-fill band exists only when that boundary sits
+        // strictly inside the GEFS span (i.e. CPC was latent by >1 day).
+        var haveBridge = fcStart > slab.forecast_from
+            && fcStart <= lastTime && times.indexOf(fcStart) > fromIdx;
+        var fcEdge = haveBridge ? (fcStart + 'T00:00:00') : gefsEdge;
+
+        // ── Analysis-fill band (CPC gap bridged with GEFS day-1) ──────────
+        if (haveBridge) {
+            out.shapes.push({
+                type: 'rect', xref: 'x', yref: 'y',
+                x0: 0, x1: 360, y0: gefsEdge, y1: fcEdge,
+                fillcolor: 'rgba(20,184,166,0.10)',   // teal — distinct from blue
+                line: { width: 0 }, layer: 'below',
+            });
+            out.shapes.push({
+                type: 'line', xref: 'x', yref: 'y',
+                x0: 0, x1: 360, y0: gefsEdge, y1: gefsEdge,
+                line: { color: fg, width: 1, dash: 'dot' }, layer: 'above',
+            });
+            out.annotations.push({
+                xref: 'x', yref: 'y', x: 0, xanchor: 'left',
+                y: gefsEdge, yanchor: 'top',
+                text: 'GEFS analysis', showarrow: false,
+                font: { size: 9, color: fg, family: 'DM Sans, system-ui, sans-serif' },
+                bgcolor: 'rgba(20,184,166,0.18)', borderpad: 2,
+            });
+        }
+
+        // ── Forecast band (latest GEFS cycle forward) ─────────────────────
         out.shapes.push({
             type: 'rect', xref: 'x', yref: 'y',
-            x0: 0, x1: 360, y0: edge, y1: lastEdge,
-            fillcolor: 'rgba(46,125,255,0.07)',
-            line: { width: 0 }, layer: 'below',
+            x0: 0, x1: 360, y0: fcEdge, y1: lastEdge,
+            fillcolor: 'rgba(46,125,255,0.07)', line: { width: 0 }, layer: 'below',
         });
-        // Dashed divider at the analysis/forecast boundary.
         out.shapes.push({
             type: 'line', xref: 'x', yref: 'y',
-            x0: 0, x1: 360, y0: edge, y1: edge,
-            line: { color: fg, width: 1.2, dash: 'dot' },
-            layer: 'above',
+            x0: 0, x1: 360, y0: fcEdge, y1: fcEdge,
+            line: { color: fg, width: 1.2, dash: 'dot' }, layer: 'above',
         });
-        // "GEFS forecast" tag pinned against the left y-axis, just below the
-        // analysis/forecast divider. Data x-coords (not paper) keep it inside
-        // the Hovmöller box and away from the colorbar margin; no arrow (the
-        // dashed divider already marks the boundary).
+        // Forecast tag anchored on the RIGHT so it can't collide with the
+        // left-anchored "GEFS analysis" tag when the bridge band is thin.
         var fcstLabel = slab.gefs_cycle
-            ? ('GEFS ' + slab.gefs_cycle) : 'GEFS forecast';
+            ? ('GEFS forecast · ' + slab.gefs_cycle) : 'GEFS forecast';
         out.annotations.push({
-            xref: 'x', yref: 'y',
-            x: 0, xanchor: 'left',
-            y: edge, yanchor: 'top',
-            text: fcstLabel,
-            showarrow: false,
+            xref: 'x', yref: 'y', x: 360, xanchor: 'right',
+            y: fcEdge, yanchor: 'top',
+            text: fcstLabel, showarrow: false,
             font: { size: 9, color: fg, family: 'DM Sans, system-ui, sans-serif' },
             bgcolor: 'rgba(46,125,255,0.12)', borderpad: 2,
         });

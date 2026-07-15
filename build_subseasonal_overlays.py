@@ -1279,7 +1279,9 @@ GCS_PREFIX = "subseasonal"   # gs://{bucket}/{prefix}/{wave}/{latest.png|metadat
 
 
 def build_hovmoller_slab(field, spec: WaveSpec, valid_time_iso: str,
-                         n_forecast: int = 0) -> dict:
+                         n_forecast: int = 0,
+                         forecast_start: str = None,
+                         gefs_cycle: str = None) -> dict:
     """Slice the full (time, lat, lon) wave-band field into a Hovmöller
     payload: last HOVMOLLER_LOOKBACK_DAYS days, latitudinally averaged
     over each band in HOVMOLLER_LAT_BANDS. Output is a JSON-ready dict
@@ -1328,6 +1330,15 @@ def build_hovmoller_slab(field, spec: WaveSpec, valid_time_iso: str,
         out["forecast_from"] = times[-n_forecast]
         out["analysis_valid_time"] = valid_time_iso
         out["forecast_source"] = "GEFS ens-mean OLR"
+        # Split the GEFS tail into its two regimes so the frontend can label
+        # them distinctly: [forecast_from, forecast_start) is the CPC-latency
+        # gap back-filled with each day's GEFS day-1 (analysis-quality), and
+        # [forecast_start, end] is the genuine forward forecast from the
+        # latest cycle. forecast_start = the latest GEFS cycle's calendar day.
+        if forecast_start:
+            out["forecast_start"] = forecast_start
+        if gefs_cycle:
+            out["gefs_cycle"] = gefs_cycle
     all_vals = []
     for band in HOVMOLLER_LAT_BANDS:
         # Build a boolean mask on the lat axis instead of relying on
@@ -1888,6 +1899,8 @@ def main():
     # overlay and the default Hovmöller are stable regardless of forecast
     # availability. Any failure here degrades to observed-only.
     n_forecast = 0
+    forecast_start_iso = None   # latest GEFS cycle day = analysis↔forecast split
+    gefs_cycle_label = None
     sym_ext = asym_ext = anom_ext = None
     if not args.no_forecast:
         try:
@@ -1909,8 +1922,15 @@ def main():
                 anom_ext = xr.concat([anom, fcst_anom], dim="time")
                 n_forecast = int(fcst_anom.sizes["time"])
                 sym_ext, asym_ext = symmetric_antisymmetric(anom_ext)
-                log.info("GEFS forecast appended to Hovmöller: +%d days",
-                         n_forecast)
+                # The latest GEFS cycle day is where the genuine forecast
+                # begins; everything between last_obs and it is analysis-grade
+                # day-1 gap-fill. Surface both so the frontend can label the
+                # two regimes distinctly.
+                _gcd, _gch = _gefs_cycle_for(today)
+                forecast_start_iso = f"{_gcd[:4]}-{_gcd[4:6]}-{_gcd[6:8]}"
+                gefs_cycle_label = f"{_gcd[4:6]}-{_gcd[6:8]} {_gch}Z"
+                log.info("GEFS forecast appended to Hovmöller: +%d days "
+                         "(forecast_start=%s)", n_forecast, forecast_start_iso)
         except Exception as e:
             log.exception("GEFS forecast extension failed; observed-only: %s", e)
             n_forecast = 0
@@ -1981,7 +2001,9 @@ def main():
                     filtered_ext = apply_pcf_projection(
                         wk_filter(asym_ext, spec), spec)
                 hov_fcst = build_hovmoller_slab(
-                    filtered_ext, spec, valid_time_iso, n_forecast=n_forecast)
+                    filtered_ext, spec, valid_time_iso, n_forecast=n_forecast,
+                    forecast_start=forecast_start_iso,
+                    gefs_cycle=gefs_cycle_label)
             except Exception as e:
                 log.warning("Forecast Hovmöller build failed for %s: %s",
                             spec.name, e)
