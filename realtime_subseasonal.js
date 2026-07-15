@@ -229,13 +229,45 @@
             }
         });
 
+        // TC track markers / connecting lines / storm-name labels also live on
+        // traces, so they'd stay their on-screen pixel size on the 2× raster
+        // and render half-size relative to everything else. Scale them too.
+        var traceStyleOrig = [];
+        (panel.data || []).forEach(function (t, i) {
+            var mode = t.mode || '';
+            var rec = { idx: i };
+            var any = false;
+            if (mode.indexOf('markers') !== -1 && t.marker
+                    && typeof t.marker.size === 'number') {
+                rec.markerSize = t.marker.size; any = true;
+                if (t.marker.line && typeof t.marker.line.width === 'number') {
+                    rec.markerLineWidth = t.marker.line.width;
+                }
+            }
+            if (mode.indexOf('lines') !== -1 && t.line
+                    && typeof t.line.width === 'number') {
+                rec.lineWidth = t.line.width; any = true;
+            }
+            if (t.textfont && typeof t.textfont.size === 'number') {
+                rec.textSize = t.textfont.size; any = true;
+            }
+            if (any) traceStyleOrig.push(rec);
+        });
+
         return Plotly.relayout(panel, scaledLayout).then(function () {
             return Promise.all(traceColorbarOrig.map(function (c) {
                 return Plotly.restyle(panel, {
                     'colorbar.tickfont.size': Math.round(c.tick * scale),
                     'colorbar.title.font.size': Math.round(c.title * scale),
                 }, [c.idx]);
-            }));
+            }).concat(traceStyleOrig.map(function (c) {
+                var upd = {};
+                if (c.markerSize != null) upd['marker.size'] = Math.round(c.markerSize * scale);
+                if (c.markerLineWidth != null) upd['marker.line.width'] = c.markerLineWidth * scale;
+                if (c.lineWidth != null) upd['line.width'] = c.lineWidth * scale;
+                if (c.textSize != null) upd['textfont.size'] = Math.round(c.textSize * scale);
+                return Plotly.restyle(panel, upd, [c.idx]);
+            })));
         }).then(function () { return work(); }).finally(function () {
             var revertLayout = {
                 'font.size':            orig.fontSize,
@@ -256,7 +288,14 @@
                         'colorbar.tickfont.size': c.tick,
                         'colorbar.title.font.size': c.title,
                     }, [c.idx]);
-                }));
+                }).concat(traceStyleOrig.map(function (c) {
+                    var upd = {};
+                    if (c.markerSize != null) upd['marker.size'] = c.markerSize;
+                    if (c.markerLineWidth != null) upd['marker.line.width'] = c.markerLineWidth;
+                    if (c.lineWidth != null) upd['line.width'] = c.lineWidth;
+                    if (c.textSize != null) upd['textfont.size'] = c.textSize;
+                    return Plotly.restyle(panel, upd, [c.idx]);
+                })));
             }).catch(function () {});
         });
     }
