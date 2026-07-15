@@ -89,6 +89,15 @@
         combinedSmoothDays: 5,      // OLR base smoothing in combined view: 1 (raw), 3, or 5 days
     };
 
+    // Hovmöller plot-area horizontal margins (px). The basin reference strip
+    // beneath a Hovmöller MUST reuse the same l/r so their longitude axes line
+    // up pixel-for-pixel. The combined view needs a wider column than the
+    // stacked panels (bigger date labels + the OLR colorbar reservation on the
+    // right); the strip previously hard-coded the stacked values, so under the
+    // combined view its map read wider than the Hovmöller above it.
+    var COMBINED_HOV_MARGIN_LR = { l: 90, r: 90 };
+    var STACKED_HOV_MARGIN_LR  = { l: 60, r: 55 };
+
     // Per-band contour styling for the combined view. Colors are chosen
     // for legibility on top of the BrBG OLR base (dark green ↔ tan ↔ deep
     // brown), so no green or brown hue is used: MJO black, Kelvin blue,
@@ -731,7 +740,7 @@
 
         if (state.viewMode === 'combined') {
             _renderCombinedHovmoller(container, bg, fg, axisGrid, isDark);
-            _renderBasinStrip(container, bg, fg);
+            _renderBasinStrip(container, bg, fg, COMBINED_HOV_MARGIN_LR);
             _renderActiveTCList();
             return;
         }
@@ -855,7 +864,7 @@
                 // the last one to read off the axis. Right margin makes
                 // room for the per-panel vertical colorbar; basin strip
                 // below uses the same r value to preserve x-axis alignment.
-                margin: { l: 60, r: 55, t: 18, b: 22 },
+                margin: { l: STACKED_HOV_MARGIN_LR.l, r: STACKED_HOV_MARGIN_LR.r, t: 18, b: 22 },
                 paper_bgcolor: bg,
                 plot_bgcolor:  bg,
                 font: { color: fg, size: 10, family: 'DM Sans, system-ui, sans-serif' },
@@ -917,7 +926,7 @@
             Plotly.newPlot(panel, [trace].concat(overlayTraces), layout, config);
         });
 
-        _renderBasinStrip(container, bg, fg);
+        _renderBasinStrip(container, bg, fg, STACKED_HOV_MARGIN_LR);
         _renderActiveTCList();
     }
 
@@ -1076,7 +1085,7 @@
             // wraps to two lines so the column needs to accommodate the
             // longer of those plus the "↓ Time" annotation that sits in
             // the same margin band.
-            margin: { l: 90, r: 90, t: 38, b: 36 },
+            margin: { l: COMBINED_HOV_MARGIN_LR.l, r: COMBINED_HOV_MARGIN_LR.r, t: 38, b: 36 },
             paper_bgcolor: bg, plot_bgcolor: bg,
             font: { color: fg, size: 10, family: 'DM Sans, system-ui, sans-serif' },
             xaxis: {
@@ -1153,7 +1162,12 @@
        layer, with translucent basin-label callouts overlaid for
        at-a-glance context. Aligned to the same longitude axis as the
        Hovmöllers above via matching margin: { l: 60, r: 12 }. */
-    function _renderBasinStrip(container, bg, fg) {
+    function _renderBasinStrip(container, bg, fg, marginLR) {
+        // Match the l/r of the Hovmöller this strip sits under so the two
+        // longitude axes align pixel-for-pixel. Defaults to the stacked-view
+        // margins when a caller doesn't specify (back-compat).
+        var mL = (marginLR && marginLR.l != null) ? marginLR.l : STACKED_HOV_MARGIN_LR.l;
+        var mR = (marginLR && marginLR.r != null) ? marginLR.r : STACKED_HOV_MARGIN_LR.r;
         var div = document.createElement('div');
         div.className = 'sub-hov-basin-strip';
         container.appendChild(div);
@@ -1192,9 +1206,9 @@
             type: 'scatter', x: [0, 360], y: [0.5, 0.5],
             mode: 'markers', marker: { opacity: 0 }, hoverinfo: 'skip',
         }], {
-            // Right margin matches Hovmöller panels' colorbar reservation
+            // Right margin matches the Hovmöller above (passed in per view)
             // so longitude axes align vertically across the stack.
-            margin: { l: 60, r: 55, t: 0, b: 0 },
+            margin: { l: mL, r: mR, t: 0, b: 0 },
             paper_bgcolor: bg, plot_bgcolor: bg,
             xaxis: {
                 range: [0, 360],
