@@ -14196,9 +14196,14 @@
 
             var probLine = probsPending
                 ? '<br><span style="opacity:0.75; font-style:italic;">Probabilities loading…</span>'
-                : '<br>Formation probability: <strong>' + pctText + '</strong>'
+                : '<br>Chance of reaching tropical-storm strength '
+                    + '(&ge;34 kt): <strong>' + pctText + '</strong>'
                     + ' <span style="opacity:0.7;">(' + d.total + ' of '
-                    + _GENESIS_ENSEMBLE_SIZE + ' members)</span>';
+                    + _GENESIS_ENSEMBLE_SIZE + ' members)</span>'
+                    // Not NHC's tropical-depression genesis: this is the
+                    // model odds of a member reaching ≥34 kt (TS strength).
+                    + '<br><span style="opacity:0.6; font-size:0.8em;">'
+                    + 'model odds of TS formation, not NHC TD genesis</span>';
             var gInit = (_rtGenesisData && _rtGenesisData.init_time) || '';
             var initLine = gInit
                 ? '<br><span style="opacity:0.75; font-size:0.85em;">Init: '
@@ -22477,7 +22482,7 @@
         html += row({
             action: 'genesis',
             label: '<b>Cyclogenesis disturbances</b>',
-            substatus: _genesisVariantModelLabel() + ' · ≥5% formation prob'
+            substatus: _genesisVariantModelLabel() + ' · ≥5% reach TS (≥34 kt)'
                 + (genStatus ? ' — ' + genStatus : ''),
             checked: !!_rtGenesisVisible
         });
