@@ -8,16 +8,16 @@
     {
       "action": "set_cache_settings",
       "action_parameters": { "cache": true, "edge_ttl": { "mode": "respect_origin" } },
-      "description": "tc-atlas: CACHE slow-changing JSON (active-storms, season-summary, weatherlab-genesis clusters/cluster/trend) respect origin max-age",
+      "description": "tc-atlas: CACHE slow-changing JSON (active-storms, season-summary, ALL weatherlab-genesis* incl the ~20MB immutable spaghetti, weatherlab-global) respect origin max-age. The genesis base + global payloads were previously bypassed (DYNAMIC) so every global-map visitor pulled them from Cloud Run origin; the origin already stamps them immutable/short max-age so edge-caching is safe and cuts origin egress. EXCEPTION: /weatherlab-genesis-cycles (the cycle-picker list) is excluded so a freshly-published DeepMind cycle appears in the picker immediately instead of after its 5-min max-age; it is tiny (~800 B) so the extra origin hits are negligible.",
       "enabled": true,
-      "expression": "(http.host eq \"api.tcatlas.org\") and (http.request.uri.path contains \"/active-storms\" or http.request.uri.path contains \"/season-summary\" or http.request.uri.path contains \"/weatherlab-genesis-cluster\" or http.request.uri.path contains \"/weatherlab-genesis-trend\")"
+      "expression": "(http.host eq \"api.tcatlas.org\") and (http.request.uri.path contains \"/active-storms\" or http.request.uri.path contains \"/season-summary\" or (http.request.uri.path contains \"/weatherlab-genesis\" and not ends_with(http.request.uri.path, \"-cycles\")) or http.request.uri.path contains \"/weatherlab-global\")"
     },
     {
       "action": "set_cache_settings",
       "action_parameters": { "cache": false },
-      "description": "tc-atlas: BYPASS live/no-store endpoints (weatherlab EXCEPT cacheable genesis clusters/trend)",
+      "description": "tc-atlas: BYPASS live/no-store endpoints (per-storm /weatherlab + /weatherlab-ensemble, recon, shear). All /weatherlab-genesis* and /weatherlab-global are EXCLUDED here so they fall through to the CACHE rule above.",
       "enabled": true,
-      "expression": "(http.host eq \"api.tcatlas.org\") and (http.request.method ne \"GET\" or (http.request.uri.path contains \"/weatherlab\" and not (http.request.uri.path contains \"/weatherlab-genesis-cluster\" or http.request.uri.path contains \"/weatherlab-genesis-trend\")) or http.request.uri.path contains \"/recon\" or http.request.uri.path contains \"/shear\")"
+      "expression": "(http.host eq \"api.tcatlas.org\") and (http.request.method ne \"GET\" or (http.request.uri.path contains \"/weatherlab\" and not (http.request.uri.path contains \"/weatherlab-genesis\" or http.request.uri.path contains \"/weatherlab-global\")) or http.request.uri.path contains \"/recon\" or http.request.uri.path contains \"/shear\")"
     },
     {
       "action": "set_cache_settings",
@@ -25,6 +25,13 @@
       "description": "tc-atlas: CACHE frame endpoints (respect origin max-age)",
       "enabled": true,
       "expression": "(http.host eq \"api.tcatlas.org\") and (ends_with(http.request.uri.path, \"band-raw-frame\") or ends_with(http.request.uri.path, \"ir-raw-frame\") or ends_with(http.request.uri.path, \"ir-frame.jpg\"))"
+    },
+    {
+      "action": "set_cache_settings",
+      "action_parameters": { "cache": true, "edge_ttl": { "mode": "respect_origin" } },
+      "description": "tc-atlas: CACHE cdn JSON manifests + immutable genesis payloads (.json not in CF default extension set -> was DYNAMIC; mosaic frames.json + rt raw-frames manifest.json send max-age=60; /genesis/*.json are content-addressed per-cycle & immutable/max-age=86400 -> the ~23MB DeepMind spaghetti was re-pulled from R2 origin by EVERY global-map visitor because the edge would not cache it)",
+      "enabled": true,
+      "expression": "(http.host eq \"cdn.tcatlas.org\") and (ends_with(http.request.uri.path, \"/frames.json\") or ends_with(http.request.uri.path, \"/manifest.json\") or (starts_with(http.request.uri.path, \"/genesis/\") and ends_with(http.request.uri.path, \".json\")))"
     }
   ]
 }

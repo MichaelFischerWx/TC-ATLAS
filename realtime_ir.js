@@ -371,12 +371,30 @@
 
     function _loadCoastlineOverlay(targetMap) {
         function _addToMap(geojson, m) {
+            // Cased coastline: a dark halo underneath a bright cyan line so the
+            // outline stays legible over BOTH near-black ocean (where a plain
+            // black line vanished) and bright cloud tops / radar echoes. Two
+            // thin line layers are cheap on the GL engine. Same pane → the
+            // later (bright) layer renders on top of the halo.
             L.geoJSON(geojson, {
                 pane: 'coastlinePane',
                 style: {
                     color: '#000000',
-                    weight: 1.2,
-                    opacity: 0.7,
+                    weight: 2.6,
+                    opacity: 0.5,
+                    fill: false,
+                    fillColor: 'transparent',
+                    fillOpacity: 0,
+                    interactive: false
+                }
+            }).addTo(m);
+            L.geoJSON(geojson, {
+                pane: 'coastlinePane',
+                style: {
+                    color: '#8fd7f7',
+                    weight: 1.1,
+                    opacity: 0.9,
+                    fill: false,
                     fillColor: 'transparent',
                     fillOpacity: 0,
                     interactive: false
