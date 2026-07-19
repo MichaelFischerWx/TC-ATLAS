@@ -3672,10 +3672,12 @@
                         }),
                         interactive: true, keyboard: false,
                     });
-                    marker.bindTooltip(lines.join('<br>'), {
+                    marker.bindTooltip(lines.join('<br>') +
+                        '<br><span style="opacity:0.6;">click for 24 h history</span>', {
                         sticky: true, direction: 'top', offset: [0, -10],
                         className: 'ir-stn-plot-tooltip',
                     });
+                    _rtObsBindClick(marker, ob);
                     lg.addLayer(marker);
                 }
                 _surfaceObsLayer = lg.addTo(detailMap);
@@ -3750,6 +3752,205 @@
         return out;
     }
 
+    // ── Surface-ob click → 24h history modal ─────────────────────
+    // Each ob carries id / source / lat / lon, so a click can pull the
+    // station's recent time series (NDBC realtime2 or METAR hours=24)
+    // and plot it. One modal reused for both the global-map and
+    // storm-card overlays.
+    var _rtObsHistOverlay = null, _rtObsHistCard = null, _rtObsHistAbort = null;
+    var _RT_OBS_HIST_CHART_ID = 'rt-obs-hist-chart';
+
+    function _rtObsBindClick(marker, ob) {
+        marker.on('click', function () { _rtOpenObHistory(ob); });
+    }
+
+    function _rtObsEnsureHistModal() {
+        if (_rtObsHistOverlay) return;
+        var ov = document.createElement('div');
+        ov.id = 'rt-obs-history-modal';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99998;display:none;' +
+            'align-items:center;justify-content:center;background:rgba(8,12,20,0.6);padding:16px;';
+        var card = document.createElement('div');
+        card.style.cssText = 'position:relative;width:min(720px,96vw);max-height:90vh;' +
+            'overflow:auto;border-radius:14px;padding:14px 16px;display:flex;' +
+            'flex-direction:column;gap:8px;box-shadow:0 18px 60px rgba(0,0,0,0.5);' +
+            'font:500 13px/1.4 ' + _DM_FONT_STACK + ';';
+        ov.appendChild(card);
+        ov.addEventListener('click', function (e) { if (e.target === ov) _rtObsCloseHist(); });
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && _rtObsHistOverlay
+                && _rtObsHistOverlay.style.display !== 'none') _rtObsCloseHist();
+        });
+        document.body.appendChild(ov);
+        _rtObsHistOverlay = ov;
+        _rtObsHistCard = card;
+    }
+
+    function _rtObsCloseHist() {
+        if (_rtObsHistAbort) { try { _rtObsHistAbort.abort(); } catch (e) {} _rtObsHistAbort = null; }
+        if (!_rtObsHistOverlay) return;
+        var chart = document.getElementById(_RT_OBS_HIST_CHART_ID);
+        if (chart && window.Plotly) { try { Plotly.purge(chart); } catch (e2) {} }
+        _rtObsHistOverlay.style.display = 'none';
+    }
+
+    function _rtOpenObHistory(ob) {
+        if (!ob || !ob.id || !ob.source) return;
+        _rtObsEnsureHistModal();
+        var isDark = _dmIsDark();
+        _rtObsHistCard.style.background = isDark ? '#151b26' : '#ffffff';
+        _rtObsHistCard.style.color = isDark ? '#e6edf6' : '#0f1623';
+        _rtObsHistCard.style.border = '1px solid ' +
+            (isDark ? 'rgba(255,255,255,0.12)' : 'rgba(15,22,35,0.14)');
+        var sub = isDark ? '#9aa6b6' : '#5b6573';
+
+        var link = ob.source === 'NDBC'
+            ? 'https://www.ndbc.noaa.gov/station_page.php?station=' + encodeURIComponent(ob.id)
+            : 'https://aviationweather.gov/data/metar/?id=' + encodeURIComponent(ob.id) + '&hours=24';
+        var latlon = (ob.lat != null && ob.lon != null)
+            ? ob.lat.toFixed(2) + '°, ' + ob.lon.toFixed(2) + '°' : '';
+
+        _rtObsHistCard.innerHTML =
+            '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">' +
+              '<div>' +
+                '<div style="font-weight:700;font-size:15px;">' + ob.id +
+                  ' <span style="color:' + sub + ';font-weight:600;font-size:12px;">· ' + ob.source +
+                  (ob.name ? ' · ' + ob.name : '') + '</span></div>' +
+                '<div style="color:' + sub + ';font-size:11.5px;">Last 24 h' +
+                  (latlon ? ' · ' + latlon : '') +
+                  ' · <a href="' + link + '" target="_blank" rel="noopener" ' +
+                    'style="color:#2e7dff;text-decoration:none;">station page ↗</a></div>' +
+              '</div>' +
+              '<div style="display:flex;gap:6px;flex-shrink:0;">' +
+                '<button type="button" id="rt-obs-hist-save" title="Save chart PNG" ' +
+                  'style="padding:6px 12px;border-radius:8px;border:1px solid ' +
+                  (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(15,22,35,0.14)') +
+                  ';background:transparent;color:' + (isDark ? '#e6edf6' : '#0f1623') +
+                  ';font:600 12px ' + _DM_FONT_STACK + ';cursor:pointer;">⤓ PNG</button>' +
+                '<button type="button" id="rt-obs-hist-close" ' +
+                  'style="padding:6px 12px;border-radius:8px;border:none;background:#2e7dff;' +
+                  'color:#fff;font:700 13px ' + _DM_FONT_STACK + ';cursor:pointer;">Close</button>' +
+              '</div>' +
+            '</div>' +
+            '<div id="' + _RT_OBS_HIST_CHART_ID + '" style="width:100%;min-height:260px;"></div>' +
+            '<div id="rt-obs-hist-status" style="color:' + sub +
+              ';font-size:11.5px;text-align:center;padding:6px;">Loading recent observations…</div>';
+
+        _rtObsHistOverlay.style.display = 'flex';
+        document.getElementById('rt-obs-hist-close').onclick = _rtObsCloseHist;
+        document.getElementById('rt-obs-hist-save').onclick = function () {
+            var chart = document.getElementById(_RT_OBS_HIST_CHART_ID);
+            if (chart && window.TCExport) {
+                TCExport.savePlotly(chart,
+                    'tc-atlas-obs-' + ob.id + '-24h.png', { scale: 3 });
+            }
+        };
+
+        if (_rtObsHistAbort) { try { _rtObsHistAbort.abort(); } catch (e3) {} }
+        _rtObsHistAbort = new AbortController();
+        var url = API_BASE + '/ir-monitor/surface-obs/history?id=' +
+            encodeURIComponent(ob.id) + '&source=' + encodeURIComponent(ob.source) +
+            '&hours=24';
+        fetch(url, { cache: 'no-store', signal: _rtObsHistAbort.signal })
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (payload) { _rtRenderObHistory(payload, ob); })
+            .catch(function (err) {
+                if (err && err.name === 'AbortError') return;
+                var st = document.getElementById('rt-obs-hist-status');
+                if (st) st.textContent = 'Could not load history for this station.';
+            });
+    }
+
+    function _rtRenderObHistory(payload, ob) {
+        var st = document.getElementById('rt-obs-hist-status');
+        var series = (payload && payload.series) || [];
+        if (!series.length) {
+            if (st) st.textContent = 'No recent observations reported by this station.';
+            return;
+        }
+        _whenPlotly(function () {
+            var chart = document.getElementById(_RT_OBS_HIST_CHART_ID);
+            if (!chart) return;
+            var t = series.map(function (s) { return s.time_utc; });
+            function col(key) { return series.map(function (s) { return s[key]; }); }
+            function has(key) { return series.some(function (s) { return s[key] != null; }); }
+
+            // Build only the panels that carry data — differs by source
+            // (METARs have no SST/waves).
+            var panels = [];
+            if (has('wind_speed_kt')) {
+                var wt = [{ name: 'Sustained', key: 'wind_speed_kt', color: _DM_MEAN_COLOR }];
+                if (has('wind_gust_kt')) wt.push({ name: 'Gust', key: 'wind_gust_kt', color: '#fbbf24', dash: 'dot' });
+                panels.push({ title: 'Wind (kt)', traces: wt });
+            }
+            if (has('pressure_hpa')) {
+                panels.push({ title: 'MSLP (hPa)', traces: [{ name: 'MSLP', key: 'pressure_hpa', color: '#2e7dff' }] });
+            }
+            if (has('air_temp_c') || has('dewpoint_c') || has('sst_c')) {
+                var tt = [];
+                if (has('air_temp_c')) tt.push({ name: 'Air T', key: 'air_temp_c', color: '#ef4444' });
+                if (has('dewpoint_c')) tt.push({ name: 'Dewpoint', key: 'dewpoint_c', color: '#22c55e' });
+                if (has('sst_c')) tt.push({ name: 'SST', key: 'sst_c', color: '#06b6d4' });
+                panels.push({ title: 'Temp (°C)', traces: tt });
+            }
+            if (has('wave_height_m')) {
+                panels.push({ title: 'Wave ht (m)', traces: [{ name: 'Sig wave', key: 'wave_height_m', color: '#8b5cf6' }] });
+            }
+            if (!panels.length) {
+                if (st) st.textContent = 'Station reported no plottable variables.';
+                return;
+            }
+
+            var theme = _genesisTheme();
+            var grid = _dmGridColor();
+            var traces = [];
+            var layout = {
+                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+                font: theme.font,
+                margin: { l: 56, r: 14, t: 26, b: 34 },
+                height: Math.max(260, panels.length * 132 + 60),
+                showlegend: true,
+                legend: { orientation: 'h', x: 0, y: 1.03, xanchor: 'left',
+                          yanchor: 'bottom', font: { size: 9 }, bgcolor: 'rgba(0,0,0,0)' },
+                hovermode: 'x unified',
+                grid: { rows: panels.length, columns: 1, pattern: 'independent',
+                        roworder: 'top to bottom' },
+            };
+            panels.forEach(function (p, i) {
+                var ax = i === 0 ? '' : (i + 1);
+                layout['yaxis' + ax] = {
+                    title: { text: p.title, font: { size: 10 } },
+                    gridcolor: grid, zeroline: false, tickfont: { size: 9 },
+                    automargin: true,
+                };
+                layout['xaxis' + ax] = {
+                    type: 'date', gridcolor: grid, zeroline: false,
+                    showticklabels: (i === panels.length - 1), tickfont: { size: 9 },
+                };
+                if (i > 0) layout['xaxis' + ax].matches = 'x';
+                p.traces.forEach(function (tr) {
+                    traces.push({
+                        type: 'scatter', mode: 'lines+markers',
+                        x: t, y: col(tr.key), name: tr.name,
+                        xaxis: 'x' + ax, yaxis: 'y' + ax,
+                        line: { color: tr.color, width: 1.8, dash: tr.dash || 'solid' },
+                        marker: { size: 3, color: tr.color },
+                        connectgaps: false,
+                        hovertemplate: tr.name + ': %{y:.1f}<extra></extra>',
+                    });
+                });
+            });
+
+            Plotly.react(chart, traces, layout,
+                { responsive: true, displayModeBar: false });
+            if (st) {
+                var last = series[series.length - 1];
+                st.textContent = payload.n + ' obs · latest ' +
+                    (last.time_utc || '').replace('T', ' ').replace('Z', ' UTC');
+            }
+        });
+    }
+
     function _rtObsRefresh() {
         if (!_rtObsOn || !map) return;
         var z = map.getZoom();
@@ -3811,10 +4012,12 @@
                         }),
                         interactive: true, keyboard: false,
                     });
-                    marker.bindTooltip(lines.join('<br>'), {
+                    marker.bindTooltip(lines.join('<br>') +
+                        '<br><span style="opacity:0.6;">click for 24 h history</span>', {
                         sticky: true, direction: 'top', offset: [0, -10],
                         className: 'ir-stn-plot-tooltip',
                     });
+                    _rtObsBindClick(marker, ob);
                     lg.addLayer(marker);
                 }
                 if (_rtObsLayer) { map.removeLayer(_rtObsLayer); }

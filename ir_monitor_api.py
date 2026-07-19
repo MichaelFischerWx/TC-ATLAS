@@ -12178,6 +12178,9 @@ _NDBC_STATIONS_URL = "https://www.ndbc.noaa.gov/activestations.xml"
 _NDBC_CACHE: dict = {"text": None, "stations": None, "fetched_at": 0.0}
 _NDBC_CACHE_LOCK = threading.Lock()
 _NDBC_CACHE_TTL_S = 10 * 60   # 10 min — matches buoy report cadence
+# NDBC text feeds report wind in m/s; the station plot + barbs use knots
+# (METAR is already knots), so buoy winds must be converted.
+_MS_TO_KT = 1.9438445
 
 
 def _fetch_ndbc_latest_text() -> str | None:
@@ -12234,6 +12237,8 @@ def _parse_ndbc_latest(text: str) -> list[dict]:
         # NDBC pad with "MM" for missing values; pad to 21 fields.
         while len(parts) < 21:
             parts.append("MM")
+        _ws = _f(parts[9])
+        _gst = _f(parts[10])
         rows.append({
             "id": stn,
             "lat": lat,
@@ -12241,8 +12246,9 @@ def _parse_ndbc_latest(text: str) -> list[dict]:
             "time_utc": (f"{parts[3]}-{parts[4]}-{parts[5]}T"
                          f"{parts[6]}:{parts[7]}:00Z"),
             "wind_dir_deg": _f(parts[8]),
-            "wind_speed_kt": _f(parts[9]),
-            "wind_gust_kt": _f(parts[10]),
+            # latest_obs.txt WSPD/GST are m/s → convert to knots.
+            "wind_speed_kt": _ws * _MS_TO_KT if _ws is not None else None,
+            "wind_gust_kt": _gst * _MS_TO_KT if _gst is not None else None,
             "wave_height_m": _f(parts[11]),
             "wave_period_s": _f(parts[12]),
             "pressure_hpa": _f(parts[15]),
@@ -12539,3 +12545,162 @@ def get_surface_obs_viewport(
         },
         headers={"Cache-Control": "public, max-age=300"},
     )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Per-station 24h time series (click an ob → history modal).
+# NDBC: the realtime2/{id}.txt file carries ~45 days of obs (newest
+# first). NOTE: realtime2 reports wind in m/s (unlike latest_obs.txt,
+# which is already knots), so we convert. METAR: the same
+# aviationweather endpoint returns a multi-hour history when given
+# ids=&hours=N instead of a bbox.
+# ─────────────────────────────────────────────────────────────────
+
+_NDBC_REALTIME2_URL = "https://www.ndbc.noaa.gov/data/realtime2/{id}.txt"
+_OBS_HISTORY_CACHE: "OrderedDict[tuple, dict]" = OrderedDict()
+_OBS_HISTORY_LOCK = threading.Lock()
+_OBS_HISTORY_TTL_S = 10 * 60
+_OBS_HISTORY_MAX = 128
+
+
+def _ndbc_f(v: str) -> float | None:
+    """Coerce an NDBC realtime2 token to float; 'MM' and the numeric
+    sentinels mean missing."""
+    if v == "MM":
+        return None
+    try:
+        x = float(v)
+        return None if x in (99.0, 999.0, 9999.0) else x
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_ndbc_realtime2(text: str, since_ts: float) -> list[dict]:
+    """Parse a realtime2/{station}.txt standard-met file into ascending
+    time-ordered rows since ``since_ts`` (unix seconds). Column layout
+    (0-based): 0-4 YY MM DD hh mm, 5 WDIR, 6 WSPD(m/s), 7 GST(m/s),
+    8 WVHT(m), 9 DPD, 10 APD, 11 MWD, 12 PRES(hPa), 13 ATMP, 14 WTMP,
+    15 DEWP."""
+    rows: list[dict] = []
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 13:
+            continue
+        try:
+            t = _dt(int(parts[0]), int(parts[1]), int(parts[2]),
+                    int(parts[3]), int(parts[4]), tzinfo=timezone.utc)
+        except (ValueError, IndexError):
+            continue
+        if t.timestamp() < since_ts:
+            continue
+        ws = _ndbc_f(parts[6])
+        gst = _ndbc_f(parts[7])
+        rows.append({
+            "time_utc": t.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "wind_dir_deg": _ndbc_f(parts[5]),
+            "wind_speed_kt": ws * _MS_TO_KT if ws is not None else None,
+            "wind_gust_kt": gst * _MS_TO_KT if gst is not None else None,
+            "wave_height_m": _ndbc_f(parts[8]),
+            "wave_period_s": _ndbc_f(parts[9]),
+            "pressure_hpa": _ndbc_f(parts[12]),
+            "air_temp_c": _ndbc_f(parts[13]),
+            "sst_c": _ndbc_f(parts[14]),
+            "dewpoint_c": _ndbc_f(parts[15]) if len(parts) > 15 else None,
+        })
+    rows.sort(key=lambda r: r["time_utc"])
+    return rows
+
+
+def _fetch_ndbc_history(station: str, since_ts: float) -> list[dict]:
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            _NDBC_REALTIME2_URL.format(id=station.upper()),
+            headers={"User-Agent": "tc-atlas/1.0"})
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            text = resp.read().decode("utf-8", errors="ignore")
+    except Exception as ex:
+        print(f"[Obs History] NDBC {station} fetch failed: {ex}")
+        return []
+    return _parse_ndbc_realtime2(text, since_ts)
+
+
+def _fetch_metar_history(icao: str, hours: int, since_ts: float) -> list[dict]:
+    url = (f"{_METAR_BBOX_URL}?ids={icao.upper()}"
+           f"&format=json&hours={hours}")
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, headers={"User-Agent": "tc-atlas/1.0"})
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            body = resp.read().decode("utf-8", errors="ignore").strip()
+        raw = json.loads(body) if body else []
+    except Exception as ex:
+        print(f"[Obs History] METAR {icao} fetch failed: {ex}")
+        return []
+    rows: list[dict] = []
+    for m in (raw or []):
+        time_utc = (m.get("reportTime") or "").replace(" ", "T")
+        if time_utc and not time_utc.endswith("Z"):
+            time_utc += "Z"
+        mslp = _metar_num(m.get("slp"))
+        if mslp is None:
+            mslp = _metar_num(m.get("altim"))
+        rows.append({
+            "time_utc": time_utc,
+            "wind_dir_deg": _metar_num(m.get("wdir")),
+            "wind_speed_kt": _metar_num(m.get("wspd")),
+            "wind_gust_kt": _metar_num(m.get("wgst")),
+            "air_temp_c": _metar_num(m.get("temp")),
+            "dewpoint_c": _metar_num(m.get("dewp")),
+            "pressure_hpa": mslp,
+        })
+    rows = [r for r in rows if r["time_utc"]]
+    rows.sort(key=lambda r: r["time_utc"])
+    return rows
+
+
+@router.get("/surface-obs/history")
+def get_surface_obs_history(
+    id: str = Query(..., min_length=1, max_length=12),
+    source: str = Query(..., description="NDBC or METAR"),
+    hours: int = Query(24, ge=1, le=48),
+):
+    """Recent time series for a single surface station, for the
+    click-an-ob history modal. Returns ascending time-ordered rows in
+    the same normalized schema the overlay uses (SI + knots)."""
+    src = source.strip().upper()
+    if src not in ("NDBC", "METAR"):
+        raise HTTPException(status_code=400,
+                            detail="source must be NDBC or METAR")
+    station = id.strip()
+    since_ts = time.time() - hours * 3600
+    key = (src, station.upper(), hours)
+    now = time.time()
+    with _OBS_HISTORY_LOCK:
+        hit = _OBS_HISTORY_CACHE.get(key)
+        if hit and (now - hit["fetched_at"]) < _OBS_HISTORY_TTL_S:
+            _OBS_HISTORY_CACHE.move_to_end(key)
+            return JSONResponse(content=hit["payload"],
+                                headers={"Cache-Control": "public, max-age=300"})
+
+    if src == "NDBC":
+        series = _fetch_ndbc_history(station, since_ts)
+    else:
+        series = _fetch_metar_history(station, hours, since_ts)
+
+    payload = {
+        "id": station,
+        "source": src,
+        "hours": hours,
+        "n": len(series),
+        "series": series,
+    }
+    with _OBS_HISTORY_LOCK:
+        _OBS_HISTORY_CACHE[key] = {"payload": payload, "fetched_at": now}
+        _OBS_HISTORY_CACHE.move_to_end(key)
+        while len(_OBS_HISTORY_CACHE) > _OBS_HISTORY_MAX:
+            _OBS_HISTORY_CACHE.popitem(last=False)
+    return JSONResponse(content=payload,
+                        headers={"Cache-Control": "public, max-age=300"})
