@@ -8218,7 +8218,7 @@
         document.getElementById('ir-detail-name').textContent = storm.name || 'UNNAMED';
         document.getElementById('ir-detail-id').textContent = storm.atcf_id;
         var reconEl = document.getElementById('ir-detail-recon');
-        if (reconEl) reconEl.style.display = storm.has_recon ? '' : 'none';
+        if (reconEl) { reconEl.style.display = storm.has_recon ? '' : 'none'; reconEl.dataset.atcf = storm.atcf_id || ''; }
         var catEl = document.getElementById('ir-detail-cat');
         catEl.textContent = (invest ? 'INVEST' : categoryShort(cat)) + (storm.vmax_kt != null ? ' \u00B7 ' + storm.vmax_kt + ' kt' : '');
         catEl.style.background = color;
@@ -8896,7 +8896,7 @@
         if (nameEl) nameEl.textContent = storm.name || 'UNNAMED';
 
         var reconEl = document.getElementById('ir-detail-recon');
-        if (reconEl) reconEl.style.display = storm.has_recon ? '' : 'none';
+        if (reconEl) { reconEl.style.display = storm.has_recon ? '' : 'none'; reconEl.dataset.atcf = storm.atcf_id || ''; }
 
         var catEl = document.getElementById('ir-detail-cat');
         if (catEl) {

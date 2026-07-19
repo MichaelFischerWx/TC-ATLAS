@@ -224,6 +224,31 @@
         window.switchReconSub(name || 'hdob');
     };
 
+    // Deep-link from a storm's detail view (the header "✈ RECON" badge) straight
+    // to its Live-Flight recon. switchIRView('recon') activates the tab and
+    // populates the storm picker ASYNCHRONOUSLY (active-storm list may still be in
+    // flight), so poll briefly for this storm's option, then select it.
+    window._reconOpenForStorm = function (atcf) {
+        if (!atcf) return;
+        atcf = String(atcf).toUpperCase();
+        try { window.switchIRView('recon'); } catch (e) {}
+        try { window.switchReconSub('hdob'); } catch (e) {}
+        _ga('recon_open_from_storm', { id: atcf });
+        var tries = 0;
+        (function pick() {
+            var sel = document.getElementById('recon-hdob-storm');
+            var match = sel && Array.prototype.filter.call(sel.options, function (o) {
+                return (o.value || '').toUpperCase() === atcf;
+            })[0];
+            if (match) {
+                sel.value = match.value;                       // reflect it in the picker UI
+                if (window._reconHdobSelectStorm) window._reconHdobSelectStorm(match.value);
+                return;
+            }
+            if (tries++ < 30) setTimeout(pick, 150);           // storm list still loading
+        })();
+    };
+
     // ── Recon · Live HDOB side-by-side (time series + recon map) ──
     // Reuses window._ReconKit (exposed by realtime_ir.js) for the barb canvas
     // layer + dropsonde/VDM markers, and the shared /recon/realtime endpoint.

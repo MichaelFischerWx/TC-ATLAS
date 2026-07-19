@@ -212,8 +212,10 @@
                 <span id="ir-detail-name" class="ir-detail-name"></span>
                 <span id="ir-detail-id" class="ir-detail-id"></span>
                 <span id="ir-detail-cat" class="ir-detail-cat"></span>
-                <span id="ir-detail-recon" class="ir-recon-badge" style="display:none;"
-                      title="Aircraft reconnaissance active (recent vortex data message)">✈ RECON</span>
+                <span id="ir-detail-recon" class="ir-recon-badge" style="display:none;" role="button" tabindex="0"
+                      onclick="window._reconOpenForStorm && window._reconOpenForStorm(this.dataset.atcf)"
+                      onkeydown="if((event.key==='Enter'||event.key===' ')&&window._reconOpenForStorm){event.preventDefault();window._reconOpenForStorm(this.dataset.atcf);}"
+                      title="Aircraft reconnaissance active — click to open Live Flight">✈ RECON</span>
                 <div class="ir-download-wrap" id="ir-download-wrap">
                     <button class="ir-kml-btn ir-download-btn" type="button"
                             onclick="window._irToggleDownloadMenu()"

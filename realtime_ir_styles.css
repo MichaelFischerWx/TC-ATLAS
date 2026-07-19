@@ -464,6 +464,18 @@ html, body { margin: 0; padding: 0; }
 .ir-popup-name .ir-recon-badge {
     margin-left: 6px;
 }
+/* The storm-detail header badge is a button (opens Live Flight for the storm);
+   the popup badge is display-only, so scope the affordance to the header one. */
+#ir-detail-recon {
+    cursor: pointer;
+    transition: filter 0.12s ease, box-shadow 0.12s ease;
+}
+#ir-detail-recon:hover,
+#ir-detail-recon:focus-visible {
+    filter: brightness(1.08);
+    box-shadow: 0 0 0 1px var(--um-orange-deep, rgba(214, 95, 18, 0.6)), 0 2px 8px rgba(214, 95, 18, 0.45);
+    outline: none;
+}
 
 /* Storm-detail header pills — KML / Satellite / Microwave.
    Tinted with the site's UM brand palette: green for primary
