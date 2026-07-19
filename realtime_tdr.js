@@ -488,7 +488,14 @@
         base.addTo(_hdobMap);
         var labels = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png',
             { subdomains: 'abcd', maxZoom: 12, pane: 'overlayPane' });
-        labels.addTo(_hdobMap);  // overlayPane(400) > GIBS/base tilePane(200) > storm-sector IR imageOverlay(350)
+        labels.addTo(_hdobMap);  // overlayPane(400) > coastline(350) > satellite/base tilePane(200)
+        // Crisp coastline over the satellite (esp. the grayscale Visible product,
+        // where the light basemap's coast washes out): reuse the shared
+        // Natural-Earth cased-line overlay on a pane above the imagery (350) and
+        // below the place labels (overlayPane 400).
+        _hdobMap.createPane('coastlinePane');
+        try { _hdobMap.getPane('coastlinePane').style.zIndex = 350; } catch (e) {}
+        try { var _kit = window._ReconKit; if (_kit && _kit.coastlines) _kit.coastlines(_hdobMap); } catch (e) {}
         try {
             if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
                 window._hdobMap = _hdobMap;  // localhost debug handle
@@ -888,10 +895,16 @@
      *  watermark, theme-matched, and trigger the download. Inputs are already
      *  at `scale`× device pixels. */
     function _hdobComposite(chartImg, mapCanvas, scale) {
-        var dark = document.documentElement.getAttribute('data-theme') !== 'light';
-        var bg = dark ? '#0b1220' : '#ffffff';
-        var fg = dark ? '#e2e8f0' : '#0f1623';
-        var sub = dark ? '#8b9ec2' : '#64748b';
+        // Match the chart chrome's theme EXACTLY by reading the same CSS tokens the
+        // Plotly layout uses. The chart paper renders transparent, so it adopts
+        // whatever bg we paint here — and keying off the data-theme ATTRIBUTE was
+        // wrong: light is the default with NO attribute, so `!== 'light'` misread
+        // light mode as dark and put a light-theme chart on a dark panel.
+        var _rs = getComputedStyle(document.documentElement);
+        function _rv(n, f) { return (_rs.getPropertyValue(n) || '').trim() || f; }
+        var bg = _rv('--plot-paper', '#ffffff');
+        var fg = _rv('--plot-text', '#0f1623');
+        var sub = _rv('--plot-axis', '#64748b');
         var pad = 14 * scale, gap = 12 * scale, headH = 60 * scale;
         var cw = chartImg.width, chh = chartImg.height;
         var mw = mapCanvas.width, mh = mapCanvas.height;

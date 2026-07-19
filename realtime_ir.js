@@ -28186,7 +28186,13 @@
         },
         // Lazy-load html2canvas (shared with the global-map PNG export) so the
         // Recon tab can capture its Leaflet map into a composite figure.
-        ensureHtml2canvas: _ensureHtml2canvas
+        ensureHtml2canvas: _ensureHtml2canvas,
+        // Draw the shared Natural-Earth coastline (cased line, coastlinePane) on a
+        // consumer's map — same asset + style the global/detail maps use, so the
+        // Recon map gets a crisp coastline over the satellite (esp. the grayscale
+        // Visible product where the basemap coast washes out). The target map must
+        // have a 'coastlinePane'.
+        coastlines: function (targetMap) { _loadCoastlineOverlay(targetMap); }
     };
 
     // ═══════════════════════════════════════════════════════════════
