@@ -3078,19 +3078,8 @@ function _saveClimoClockAsPNG(card, mode) {
         ctx.fillText('TC-ATLAS · ' + todayISO + ' · tcatlas.org',
                      padX, H - footerH / 2 - 4);
 
-        canvas.toBlob(function (blob) {
-            var u = URL.createObjectURL(blob);
-            var a = document.createElement('a');
-            a.href = u;
-            a.download = 'tc-atlas-phaseclock-' + mode + '-' + todayISO + '.png';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(function () {
-                URL.revokeObjectURL(u);
-                URL.revokeObjectURL(svgUrl);
-            }, 1000);
-        }, 'image/png');
+        TCExport.save(canvas, 'tc-atlas-phaseclock-' + mode + '-' + todayISO + '.png');
+        URL.revokeObjectURL(svgUrl);
     };
     img.onerror = function () {
         URL.revokeObjectURL(svgUrl);
@@ -3689,17 +3678,8 @@ function _saveSubEvoChart(chartId, chartLabel, btnId) {
                      + ' · tcatlas.org',
                      32, canvas.height - footerH / 2);
 
-        canvas.toBlob(function (blob) {
-            var u = URL.createObjectURL(blob);
-            var a = document.createElement('a');
-            a.href = u;
-            a.download = 'tc-atlas-' + _slugSubPhase(modeLabel) + '-'
-                + _slugSubPhase(chartLabel) + '-' + todayISO + '.png';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(function () { URL.revokeObjectURL(u); }, 1000);
-        }, 'image/png');
+        return TCExport.save(canvas, 'tc-atlas-' + _slugSubPhase(modeLabel) + '-'
+            + _slugSubPhase(chartLabel) + '-' + todayISO + '.png');
     }).catch(function (err) {
         console.error('[sub-evo] save PNG failed:', err);
     }).finally(function () {

@@ -1155,10 +1155,7 @@ window._arch3DOrbitGif = function () {
                 if (!_archOrbitGifCancel) {
                     var name = (selectedStorm.name || 'UNNAMED').replace(/\s+/g, '_');
                     var filename = 'TC-ATLAS_' + name + '_' + selectedStorm.year + '_orbit3D.gif';
-                    var a = document.createElement('a');
-                    a.href = URL.createObjectURL(blob);
-                    a.download = filename;
-                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                    TCExport.save(blob, filename);
                     showToast('Orbit GIF exported! (' + N + ' frames, ' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)');
                     if (typeof _ga === 'function') _ga('ga_export_orbit_gif', {
                         sid: selectedStorm.sid, storm_name: selectedStorm.name,
@@ -7924,13 +7921,7 @@ window.startGifExport = function () {
 
                     var name = (selectedStorm.name || 'UNNAMED').replace(/\s+/g, '_');
                     var filename = 'TC-ATLAS_' + name + '_' + selectedStorm.year + '_' + irSelectedColormap + '.gif';
-
-                    var a = document.createElement('a');
-                    a.href = URL.createObjectURL(blob);
-                    a.download = filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
+                    TCExport.save(blob, filename);
 
                     var sizeMB = (blob.size / 1024 / 1024).toFixed(1);
                     showToast('GIF exported! (' + framesDone + ' frames, ' + sizeMB + ' MB)');
@@ -8328,13 +8319,7 @@ window.saveCurrentFramePng = function () {
             var name = (selectedStorm.name || 'UNNAMED').replace(/\s+/g, '_');
             var safeDt = (dtStr || 'frame').replace(/[^0-9A-Za-z_-]/g, '');
             var filename = 'TC-ATLAS_' + name + '_' + selectedStorm.year + '_' + safeDt + '.png';
-            var a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(a.href);
+            TCExport.save(blob, filename);
             showToast('PNG saved: ' + filename);
             _ga('ga_export_png', {
                 sid: selectedStorm.sid, storm_name: selectedStorm.name,
@@ -10968,14 +10953,7 @@ function buildStormKML(stormName, stormYear, stormId, trackPoints) {
 }
 
 function _downloadFile(filename, content, mimeType) {
-    var blob = new Blob([content], { type: mimeType });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(a.href);
+    TCExport.saveText(content, filename, mimeType);
 }
 
 window.downloadStormKML = function () {

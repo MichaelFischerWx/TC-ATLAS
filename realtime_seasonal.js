@@ -630,8 +630,8 @@
         }];
     }
 
-    // Attach a small monochrome ⤓ button to a panel that triggers
-    // Plotly's downloadImage on the named plot.
+    // Attach a small monochrome ⤓ button to a panel that saves the
+    // named Plotly plot as a PNG via TCExport.
     function _addPlotSaveBtn(panelId, plotId, filenameBase) {
         var panel = document.getElementById(panelId);
         if (!panel || panel.querySelector('.seasonal-save-btn')) return;
@@ -664,9 +664,8 @@
                 // Min width 1400 / height 800 ensures we never ship a
                 // sub-publication-quality snapshot even from a small
                 // viewport.
-                window.Plotly.downloadImage(plot, {
+                TCExport.savePlotly(plot, 'TC-ATLAS_' + filenameBase + '_' + stamp, {
                     format: 'png',
-                    filename: 'TC-ATLAS_' + filenameBase + '_' + stamp,
                     width: Math.max(plot.clientWidth, 1400),
                     height: Math.max(plot.clientHeight, 800),
                     scale: 2,
@@ -818,13 +817,7 @@
             }).then(function (blob) {
                 var ts = new Date().toISOString()
                     .replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
-                var url = URL.createObjectURL(blob);
-                var a = document.createElement('a');
-                a.href = url;
-                a.download = filenameBase + '_' + ts + '.png';
-                document.body.appendChild(a); a.click();
-                document.body.removeChild(a);
-                setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+                return TCExport.save(blob, filenameBase + '_' + ts + '.png');
             }).catch(function (err) {
                 console.error('[seasonal] save failed', err);
                 alert("Couldn't save PNG: " +
@@ -7670,18 +7663,9 @@
                 ctx.font = footerFont + 'px "DM Sans", system-ui, sans-serif';
                 ctx.fillText('TC-ATLAS · ' + new Date().toISOString().slice(0, 10) + ' UTC',
                              padLeft, titleH + img.height + footerH / 2);
-                canvas.toBlob(function (blob) {
-                    var u = URL.createObjectURL(blob);
-                    var a = document.createElement('a');
-                    a.href = u;
-                    a.download = 'tc-atlas-seasonal-evo-' + _evoState.year
-                        + '-' + dateLabel.replace(/[^a-zA-Z0-9]+/g, '_')
-                        + '.png';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    setTimeout(function () { URL.revokeObjectURL(u); }, 1000);
-                }, 'image/png');
+                TCExport.save(canvas, 'tc-atlas-seasonal-evo-' + _evoState.year
+                    + '-' + dateLabel.replace(/[^a-zA-Z0-9]+/g, '_')
+                    + '.png');
             };
             img.src = url;
         }).catch(function (err) {
@@ -7725,14 +7709,7 @@
                         gif.finish();
                         var bytes = gif.bytes();
                         var blob = new Blob([bytes], { type: 'image/gif' });
-                        var u = URL.createObjectURL(blob);
-                        var a = document.createElement('a');
-                        a.href = u;
-                        a.download = 'tc-atlas-seasonal-evo-' + _evoState.year + '.gif';
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        setTimeout(function () { URL.revokeObjectURL(u); }, 1500);
+                        TCExport.save(blob, 'tc-atlas-seasonal-evo-' + _evoState.year + '.gif');
                         if (buttonEl) {
                             buttonEl.disabled = false;
                             buttonEl.textContent = originalLabel;

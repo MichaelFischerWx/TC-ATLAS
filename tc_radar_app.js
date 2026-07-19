@@ -238,12 +238,11 @@ function archiveSavePlotPNG(chartDivId, defaultName) {
         String(now.getHours()).padStart(2, '0') +
         String(now.getMinutes()).padStart(2, '0') +
         String(now.getSeconds()).padStart(2, '0');
-    Plotly.downloadImage(gd, {
+    TCExport.savePlotly(gd, fname + '_' + ts, {
         format: 'png',
         width: gd.offsetWidth * 2,
         height: gd.offsetHeight * 2,
         scale: 2,
-        filename: fname + '_' + ts,
     });
 }
 
@@ -262,12 +261,11 @@ function archiveSaveSondePNG(chartDivId, plotType) {
         var m = titleEl.textContent.match(/\b(\d{9})\b/);
         if (m) parts.push(m[1]);
     }
-    Plotly.downloadImage(gd, {
+    TCExport.savePlotly(gd, parts.join('_'), {
         format: 'png',
         width: gd.offsetWidth * 2,
         height: gd.offsetHeight * 2,
         scale: 2,
-        filename: parts.join('_'),
     });
 }
 
@@ -9306,13 +9304,11 @@ function _checkCompPermalink() {
 }
 
 function _triggerDownload(content, filename, mimeType) {
-    var blob = new Blob([content], { type: mimeType });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    if (content instanceof Blob) {
+        TCExport.save(content, filename);
+    } else {
+        TCExport.saveText(content, filename, mimeType);
+    }
 }
 
 function _downloadCompJSON() {
@@ -15289,8 +15285,11 @@ function loadMicrowaveOverpass() {
                 if (status && status.parentNode) status.parentNode.insertBefore(dlBtn, status.nextSibling);
             }
             var dtSafe = (json.datetime || '').replace(/[^0-9A-Za-z]/g, '_').replace(/_+/g, '_').replace(/_$/, '');
-            dlBtn.href = imgUrl;
-            dlBtn.download = 'MW_' + (json.sensor || 'sensor') + '_' + product + '_' + dtSafe + '.png';
+            var mwFname = 'MW_' + (json.sensor || 'sensor') + '_' + product + '_' + dtSafe + '.png';
+            dlBtn.onclick = function (ev) {
+                ev.preventDefault();
+                TCExport.save(imgUrl, mwFname);
+            };
         })
         .catch(function(e) {
             if (status) status.textContent = 'Error: ' + e.message;

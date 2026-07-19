@@ -112,12 +112,11 @@
         };
         Promise.resolve(Plotly.relayout(gd, { annotations: wmAnns }))
             .then(function () {
-                return Plotly.downloadImage(gd, {
+                return TCExport.savePlotly(gd, fname + '_' + ts, {
                     format: 'png',
                     width: gd.offsetWidth,
                     height: gd.offsetHeight,
                     scale: 4,
-                    filename: fname + '_' + ts,
                 });
             })
             .then(restore, restore);
@@ -928,11 +927,7 @@
             if (!blob) { alert('Image export produced no data (CORS taint?)'); return; }
             var ts = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
             var safe = String(name).replace(/[^0-9A-Za-z]+/g, '_').replace(/^_|_$/g, '') || 'recon';
-            var a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = 'TC-ATLAS_LiveFlight_' + safe + '_' + ts + '.png';
-            document.body.appendChild(a); a.click(); document.body.removeChild(a);
-            setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+            TCExport.save(blob, 'TC-ATLAS_LiveFlight_' + safe + '_' + ts + '.png');
         }, 'image/png');
     }
 
@@ -7805,8 +7800,11 @@
                     if (status && status.parentNode) status.parentNode.insertBefore(dlBtn, status.nextSibling);
                 }
                 var dtSafe = (json.datetime || '').replace(/[^0-9A-Za-z]/g, '_').replace(/_+/g, '_').replace(/_$/, '');
-                dlBtn.href = imgUrl;
-                dlBtn.download = 'MW_' + (json.sensor || 'sensor') + '_' + product + '_' + dtSafe + '.png';
+                var mwFname = 'MW_' + (json.sensor || 'sensor') + '_' + product + '_' + dtSafe + '.png';
+                dlBtn.onclick = function (ev) {
+                    ev.preventDefault();
+                    TCExport.save(imgUrl, mwFname);
+                };
             })
             .catch(function (e) {
                 if (status) status.textContent = 'Error: ' + e.message;

@@ -300,54 +300,18 @@
         });
     }
 
-    // iOS / iPadOS detection (iPadOS masquerades as Macintosh).
-    function _isIOS() {
-        var ua = navigator.userAgent || '';
-        return /iP(hone|od|ad)/.test(ua)
-            || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
-    }
-
-    // Deliver a rendered blob to the user. iOS Safari EXPOSES the <a download>
-    // attribute but IGNORES it — a bare anchor.click() silently saves nothing
-    // on iPhone/iPad, which is why the Hovmöller "Save PNG" looked broken on
-    // mobile. Mirrors realtime_ir.js:_saveImageBlob: native share sheet on
-    // touch devices, open-in-new-tab fallback on iOS (long-press → Save
-    // Image), straight anchor download on desktop.
+    // Deliver a rendered blob via the site-wide export module (tc_export.js).
+    // The Hovmöller/clock pipelines are long async chains (Plotly toImage,
+    // canvas.toBlob), so by the time the blob exists the tap's transient
+    // user-activation may have expired — TCExport handles that by falling
+    // back to a fresh-tap "Save" overlay on touch devices.
     function _saveBlob(blob, filename) {
-        var isIOS = _isIOS();
-        var touch = isIOS || (window.matchMedia
-            && window.matchMedia('(pointer: coarse)').matches);
-        var file = null;
-        try { file = new File([blob], filename, { type: blob.type || 'image/png' }); }
-        catch (e) { /* File ctor unsupported — fall through */ }
-        if (touch && file && navigator.canShare
-                && typeof navigator.share === 'function'
-                && navigator.canShare({ files: [file] })) {
-            navigator.share({ files: [file] }).catch(function (err) {
-                // Genuine user-cancel stops; anything else (e.g. the tap's
-                // transient activation lapsed during a long export) falls
-                // back so the file still lands.
-                if (err && err.name === 'AbortError') return;
-                _downloadOrOpenBlob(blob, filename, isIOS);
-            });
-            return;
-        }
-        _downloadOrOpenBlob(blob, filename, isIOS);
-    }
-
-    function _downloadOrOpenBlob(blob, filename, isIOS) {
+        if (window.TCExport) { window.TCExport.save(blob, filename); return; }
+        // Minimal desktop-only fallback if tc_export.js failed to load.
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
-        if (!isIOS && 'download' in a) {
-            a.href = url; a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        } else {
-            // iOS ignores <a download> — open the image so the user can
-            // long-press → Save Image.
-            window.open(url, '_blank');
-        }
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); a.remove();
         setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
     }
 
