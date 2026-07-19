@@ -670,25 +670,31 @@
         _hdobMarkers = kit.buildMarkers(map, _hdobData);
         _hdobRenderAircraft(map, mapAircraft);
         if (!_hdobFitDone) {
-            var pts = [];
+            // Anchor the initial view on the LATEST aircraft position — where the
+            // live action is. Fitting the WHOLE track (takeoff → storm) put its
+            // centroid over land and pushed the storm/aircraft to the edge; the
+            // freshest fix is in/near the storm, so centering there frames the eye
+            // at a storm-scale zoom. (Re-anchors on storm switch via _hdobFitDone.)
+            var latest = null;
             for (var k = 0; k < aircraft.length; k++) {
                 var tk = aircraft[k].track || [];
-                for (var p = 0; p < tk.length; p++) {
-                    var la = tk[p].lat, lo = tk[p].lon;
-                    if (la == null || lo == null || Math.abs(la) < 0.05 || Math.abs(lo) < 0.05) continue;
-                    pts.push([la, lo]);
+                for (var p = tk.length - 1; p >= 0; p--) {   // newest valid fix for this aircraft
+                    var o = tk[p];
+                    if (o.lat == null || o.lon == null || Math.abs(o.lat) < 0.05 || Math.abs(o.lon) < 0.05) continue;
+                    if (!latest || (o.t || '') > (latest.t || '')) latest = o;
+                    break;
                 }
             }
-            // Also frame the storm center (VDM fixes): early in a sortie the track
-            // is just a tight cluster at the takeoff base, so fitting to it alone
-            // zoomed hard into the wrong place. Including the center keeps the storm
-            // in view, and maxZoom caps how far a small bounds can zoom in.
-            var _vd = (_hdobData && _hdobData.vdms) || [];
-            for (var vi = 0; vi < _vd.length; vi++) {
-                var vla = _vd[vi].lat, vlo = _vd[vi].lon;
-                if (vla != null && vlo != null && Math.abs(vla) > 0.05 && Math.abs(vlo) > 0.05) pts.push([vla, vlo]);
+            if (latest) {
+                // Frame a fixed ~storm-scale box (±2.5°, ~550 km) centered on that
+                // fix — deterministic every load (unlike fitting the variable-length
+                // track), not too tight, and wide enough that the eye/center fix
+                // stays in view even on an outbound leg.
+                var dLat = 2.5, dLon = 2.5 / Math.max(0.3, Math.cos(latest.lat * Math.PI / 180));
+                var box = [[latest.lat - dLat, latest.lon - dLon], [latest.lat + dLat, latest.lon + dLon]];
+                try { map.fitBounds(L.latLngBounds(box), { animate: false }); } catch (e) {}
+                _hdobFitDone = true;
             }
-            if (pts.length) { try { map.fitBounds(L.latLngBounds(pts).pad(0.12), { animate: false, maxZoom: 7 }); } catch (e) {} _hdobFitDone = true; }
         }
         _hdobRenderChart();
     }
