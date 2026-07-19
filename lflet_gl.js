@@ -190,8 +190,15 @@
     Map.prototype.fitBounds = function (b, opts) {
         b = (b instanceof LatLngBounds) ? b : new LatLngBounds(b);
         if (!b.isValid()) return this;
-        this._gl.fitBounds([[b._sw.lng, b._sw.lat], [b._ne.lng, b._ne.lat]],
-            { animate: !(opts && opts.animate === false), padding: 20 }); return this; };
+        opts = opts || {};
+        var mlOpts = { animate: opts.animate !== false,
+            padding: opts.padding != null ? opts.padding : 20 };
+        // Leaflet passes maxZoom via options; MapLibre honors it natively — pass it
+        // through so a tiny bounds (e.g. an aircraft still near its takeoff base)
+        // doesn't fit to street-level zoom.
+        if (opts.maxZoom != null) mlOpts.maxZoom = opts.maxZoom;
+        this._gl.fitBounds([[b._sw.lng, b._sw.lat], [b._ne.lng, b._ne.lat]], mlOpts);
+        return this; };
     // flyTo(latlng, zoom, opts) — Leaflet duration is SECONDS; MapLibre wants ms.
     // essential:true so it runs even under prefers-reduced-motion.
     Map.prototype.flyTo = function (ll, zoom, opts) { opts = opts || {};

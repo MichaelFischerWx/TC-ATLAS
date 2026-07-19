@@ -510,10 +510,10 @@
         var key = _hdobSatProduct + '|' + sat + '|' + (kit.gibsTimeTag ? kit.gibsTimeTag() : '');
         if (_hdobGibsLayer && _hdobGibsKey === key) return;  // already up
         if (_hdobGibsLayer) { try { _hdobMap.removeLayer(_hdobGibsLayer); } catch (e) {} }
-        // Muted opacity: on this map the colored flight-level barbs/dots are the
-        // data and the satellite is context — keep it a soft backdrop so the
-        // obs (esp. red/purple wind dots over red/purple cold-top IR) stay legible.
-        _hdobGibsLayer = kit.gibsProductLayer(_hdobSatProduct, lonHint, 0.6);
+        // Near-opaque so the imagery reads cleanly rather than washing to gray
+        // against the light basemap. The flight-level barbs/dots draw on their own
+        // pane ABOVE the satellite, so they stay fully legible without muting it.
+        _hdobGibsLayer = kit.gibsProductLayer(_hdobSatProduct, lonHint, 0.9);
         try { _hdobGibsLayer.setZIndex(2); } catch (e) {}
         _hdobGibsLayer.addTo(_hdobMap);
         _hdobGibsKey = key;
@@ -672,7 +672,16 @@
                     pts.push([la, lo]);
                 }
             }
-            if (pts.length) { try { map.fitBounds(L.latLngBounds(pts).pad(0.12), { animate: false }); } catch (e) {} _hdobFitDone = true; }
+            // Also frame the storm center (VDM fixes): early in a sortie the track
+            // is just a tight cluster at the takeoff base, so fitting to it alone
+            // zoomed hard into the wrong place. Including the center keeps the storm
+            // in view, and maxZoom caps how far a small bounds can zoom in.
+            var _vd = (_hdobData && _hdobData.vdms) || [];
+            for (var vi = 0; vi < _vd.length; vi++) {
+                var vla = _vd[vi].lat, vlo = _vd[vi].lon;
+                if (vla != null && vlo != null && Math.abs(vla) > 0.05 && Math.abs(vlo) > 0.05) pts.push([vla, vlo]);
+            }
+            if (pts.length) { try { map.fitBounds(L.latLngBounds(pts).pad(0.12), { animate: false, maxZoom: 7 }); } catch (e) {} _hdobFitDone = true; }
         }
         _hdobRenderChart();
     }
