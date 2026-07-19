@@ -12450,11 +12450,94 @@
     }
 
     // ═══════════════════════════════════════════════════════════
+    //  DEEPMIND SHARED DESIGN TOKENS  (see DEEPMIND_GRAPHICS_ROADMAP.md)
+    // ═══════════════════════════════════════════════════════════
+    // Single source of truth for every DeepMind/FNV3 surface: global-map
+    // overlays, storm-card charts, the ensemble modal, and figure exports.
+    // Convention: ORANGE = ensemble mean/median, CYAN = members/spread
+    // and DeepMind branding accents.
+
+    // Explicit system fallbacks so Plotly toImage exports (which can't
+    // load Google web fonts) rasterize with near-identical metrics.
+    var _DM_FONT_STACK = '"DM Sans", -apple-system, "Helvetica Neue", Arial, sans-serif';
+    var _DM_MEAN_COLOR = '#f97316';
+
+    function _dmIsDark() {
+        return document.documentElement.getAttribute('data-theme') === 'dark';
+    }
+
+    // Saffir–Simpson palette — ONE table drives both the continuous
+    // Plotly colorscale (maps, fan-chart markers; normalized kt/200) and
+    // the discrete per-category bins (card histograms). kt values are
+    // category floors. The official scale ends at C5 (137 kt), but FNV3
+    // members can forecast far stronger — the entries past 137 kt keep
+    // the C5 violet hue and push lightness up (violet → pale lavender →
+    // white-hot) so an off-the-charts member is the brightest mark on a
+    // dark map without rotating into the C4 magenta.
+    var _DM_SS_STOPS = [
+        { kt: 0,   key: 'TD',  color: '#60a5fa' },
+        { kt: 34,  key: 'TS',  color: '#34d399' },
+        { kt: 64,  key: 'C1',  color: '#fbbf24' },
+        { kt: 83,  key: 'C2',  color: '#fb923c' },
+        { kt: 96,  key: 'C3',  color: '#ef4444' },
+        { kt: 113, key: 'C4',  color: '#c430a0' },
+        { kt: 137, key: 'C5',  color: '#8b5cf6' },
+        { kt: 160, key: 'C5x', color: '#b9a3f9' },   // beyond C5 — light violet
+        { kt: 180, key: 'C5y', color: '#dccdfb' },   // extreme — pale lavender
+        { kt: 200, key: 'MAX', color: '#f5f0ff' },   // off the charts — white-hot
+    ];
+
+    function _dmGridColor() {
+        return _dmIsDark() ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)';
+    }
+    // Faint dotted reference lines (SS thresholds, zero lines) that must
+    // read on both themes — replaces the white-alpha hardcodes that
+    // vanished on the light theme.
+    function _dmRefLineColor() {
+        return _dmIsDark() ? 'rgba(255,255,255,0.18)' : 'rgba(15,22,35,0.18)';
+    }
+    // Standard inset legend (top-right, inside the plot) shared by DM charts.
+    function _dmLegendInset() {
+        var isDark = _dmIsDark();
+        return {
+            x: 0.985, y: 0.98, xanchor: 'right', yanchor: 'top',
+            bgcolor: isDark ? 'rgba(15,22,35,0.82)' : 'rgba(255,255,255,0.88)',
+            bordercolor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,22,35,0.10)',
+            borderwidth: 1,
+            font: { size: 9, color: isDark ? '#e2e8f0' : '#1f2937' },
+            itemsizing: 'constant', itemwidth: 30, tracegroupgap: 0,
+        };
+    }
+    /** Shared cartesian layout for DeepMind charts: theme font + colors,
+     *  transparent background, hairline theme-aware grids. Per-chart
+     *  overrides merge in via opts:
+     *    { margin, fontSize, xaxis, yaxis, legend:true, extra:{...} } */
+    function _dmChartLayout(opts) {
+        opts = opts || {};
+        var theme = _genesisTheme();
+        var grid = _dmGridColor();
+        var layout = Object.assign({}, theme, {
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            margin: opts.margin || { l: 46, r: 16, t: 24, b: 44 },
+            showlegend: !!opts.legend,
+        }, opts.extra || {});
+        layout.font = Object.assign({}, theme.font,
+            opts.fontSize ? { size: opts.fontSize } : null);
+        layout.xaxis = Object.assign({}, theme.xaxis,
+            { gridcolor: grid, zeroline: false }, opts.xaxis || {});
+        layout.yaxis = Object.assign({}, theme.yaxis,
+            { gridcolor: grid, zeroline: false }, opts.yaxis || {});
+        if (opts.legend) layout.legend = _dmLegendInset();
+        return layout;
+    }
+
+    // ═══════════════════════════════════════════════════════════
     //  DEEPMIND WEATHERLAB ENSEMBLE OVERLAY
     // ═══════════════════════════════════════════════════════════
 
     var _WEATHERLAB_MEMBER_COLOR = 'rgba(0, 229, 255, 0.25)';
-    var _WEATHERLAB_MEAN_COLOR = '#00e5ff';
+    var _WEATHERLAB_MEAN_COLOR = _DM_MEAN_COLOR;
 
     /**
      * Load WeatherLab ensemble data for a storm (called from openStormDetail).
@@ -14053,6 +14136,22 @@
         return disturbances;
     }
 
+    // True when the server cluster index alone is enough to draw the on-map
+    // disturbance markers: tcatlas method + a variant/param-matched cluster
+    // set is present. The clusters payload (~15 KB) carries the mean track,
+    // peak Vmax, formation fraction and label for every disturbance, so the
+    // markers can paint the moment it lands — without waiting on the multi-MB
+    // ensemble payload (which is only needed for the spaghetti layer + modal
+    // member data). Does NOT check init against _rtGenesisData; callers that
+    // must avoid drawing stale clusters over fresh tracks add that themselves.
+    function _genesisHaveRenderableClusters() {
+        if (_genesisClusterMethod !== 'tcatlas') return false;
+        var pc = _rtGenesisClusters;
+        return !!(pc && (pc.clusters || []).length
+            && (pc.variant || 'large') === _genesisEnsembleVariant
+            && _genesisClusterParamsMatch(pc.params));
+    }
+
     // Method dispatcher — single entry point so the render functions
     // don't have to branch on cluster method themselves. TC-ATLAS
     // prefers the server-precomputed clusters (instant, accurate).
@@ -14062,13 +14161,20 @@
     function _genesisDisturbances(rawTracks) {
         if (_genesisClusterMethod === 'tcatlas') {
             var pc = _rtGenesisClusters;
-            var initOk = pc && _rtGenesisData
-                && pc.init_time === _rtGenesisData.init_time
-                && (pc.variant || 'large') === _genesisEnsembleVariant
-                && _genesisClusterParamsMatch(pc.params);
-            if (initOk) {
+            // Server clusters are usable as soon as they arrive. Require the
+            // init to match the big payload WHEN it's present (so a stale
+            // cluster set isn't drawn over fresh tracks); before that payload
+            // lands, trust the clusters' own init so the markers appear on the
+            // fast path instead of waiting for the multi-MB download.
+            var clustersOk = _genesisHaveRenderableClusters()
+                && (!_rtGenesisData || pc.init_time === _rtGenesisData.init_time);
+            if (clustersOk) {
                 return pc.clusters.map(_genesisServerClusterToDisturbance);
             }
+            // No usable clusters yet: fall back to client-side clustering over
+            // the capped ensemble tracks — only possible once the big payload
+            // is in. Before then there is nothing to draw.
+            if (!_rtGenesisData) return [];
             return _genesisTCAtlasDisturbances(rawTracks);
         }
         return _genesisQualifyingDisturbances(rawTracks);
@@ -14147,9 +14253,14 @@
     function _renderGenesis() {
         _clearGenesis();
         _genesisDisturbanceMeta = {};
-        if (!_rtGenesisData || !map) return;
-        var tracks = _rtGenesisData.tracks || [];
-        if (tracks.length === 0) return;
+        if (!map) return;
+        // Markers paint from the lightweight server clusters the moment they
+        // land — no need to wait on the multi-MB ensemble download. Prefer the
+        // big payload's tracks when present (enables the client-side fallback
+        // clustering); otherwise render straight from clusters.
+        var tracks = (_rtGenesisData && _rtGenesisData.tracks) || [];
+        if (_rtGenesisData && tracks.length === 0) return;
+        if (!_rtGenesisData && !_genesisHaveRenderableClusters()) return;
 
         var disturbances = _genesisDisturbances(tracks);
         if (disturbances.length === 0) return;
@@ -14163,18 +14274,24 @@
         // uncapped cluster index (which only covers the latest run) will
         // never match — so don't wait on it. The client-side TCA fractions
         // computed from the pinned cycle's capped data are what we show.
+        // Cluster-sourced renders (incl. the fast first paint before the big
+        // payload lands) already carry the authoritative uncapped fractions,
+        // so probabilities are NOT pending then. Only the client-side estimate
+        // over capped tracks is a placeholder awaiting the server clusters.
+        var usingServerClusters = _genesisHaveRenderableClusters()
+            && (!_rtGenesisData
+                || _rtGenesisClusters.init_time === _rtGenesisData.init_time);
         var probsPending = !_genesisActiveCycle
             && (_genesisClusterMethod === 'tcatlas')
-            && !(_rtGenesisClusters
-                 && _rtGenesisData
-                 && _rtGenesisClusters.init_time === _rtGenesisData.init_time
-                 && _genesisClusterParamsMatch(_rtGenesisClusters.params));
+            && !usingServerClusters;
 
         // Play the pop-in entrance once per cycle, on whichever render
         // first draws markers for this init (deepmind pass or the later
         // tcatlas cluster swap — whichever wins). Subsequent re-renders
         // for the same cycle skip it so the map doesn't twitch.
-        var initNow = (_rtGenesisData && _rtGenesisData.init_time) || null;
+        var effInit = (_rtGenesisData && _rtGenesisData.init_time)
+            || (_rtGenesisClusters && _rtGenesisClusters.init_time) || null;
+        var initNow = effInit;
         var animateEntry = !!initNow && initNow !== _genesisAnimatedInit;
 
         // Re-label disturbances that overlap an officially-tracked
@@ -14302,7 +14419,7 @@
                     // model odds of a member reaching ≥34 kt (TS strength).
                     + '<br><span style="opacity:0.6; font-size:0.8em;">'
                     + 'model odds of TS formation, not NHC TD genesis</span>';
-            var gInit = (_rtGenesisData && _rtGenesisData.init_time) || '';
+            var gInit = effInit || '';
             var initLine = gInit
                 ? '<br><span style="opacity:0.75; font-size:0.85em;">Init: '
                     + gInit.slice(0, 4) + '-' + gInit.slice(4, 6) + '-'
@@ -16332,37 +16449,29 @@
        ramp matches realtime_ir.js's SS_COLORS used on the global map
        so colored markers read the same as track icons. */
     function _genesisTheme() {
+        var t;
         if (window.TCATheme && typeof window.TCATheme.plotly === 'function') {
-            return window.TCATheme.plotly();
+            t = window.TCATheme.plotly();
+        } else {
+            t = {
+                paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
+                font: { color: '#0f1623', size: 11 },
+                hoverlabel: { bgcolor: '#ffffff',
+                              bordercolor: 'rgba(15,22,35,0.15)',
+                              font: { color: '#0f1623', size: 11 } },
+            };
         }
-        return {
-            paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
-            font: { family: 'DM Sans, system-ui, sans-serif',
-                    color: '#0f1623', size: 11 },
-            hoverlabel: { bgcolor: '#ffffff',
-                          bordercolor: 'rgba(15,22,35,0.15)',
-                          font: { color: '#0f1623', size: 11 } },
-        };
+        // Enforce the shared DM font stack (with system fallbacks) so
+        // on-screen charts and toImage exports use the same metrics.
+        t.font = Object.assign({}, t.font, { family: _DM_FONT_STACK });
+        return t;
     }
-    var _GENESIS_SS_SCALE = [
-        [0,        '#60a5fa'],   // TD
-        [34/200,   '#34d399'],   // TS
-        [64/200,   '#fbbf24'],   // C1
-        [83/200,   '#fb923c'],   // C2
-        [96/200,   '#ef4444'],   // C3
-        [113/200,  '#c430a0'],   // C4
-        [137/200,  '#8b5cf6'],   // C5 (137 kt) — Saffir–Simpson ends here
-        // The official scale stops at C5, but FNV3 members can forecast
-        // far stronger (Patricia peaked ~185 kt). Keep the C5 violet hue
-        // and just push the lightness up — violet → pale lavender →
-        // white-hot. On the dark navy map a lighter dot is also a
-        // higher-contrast dot, so an "off-the-charts" 160-185+ kt member
-        // is the brightest marker on screen. Staying in the violet family
-        // (not rotating toward magenta) keeps it clear of the C4 color.
-        [160/200,  '#b9a3f9'],   // beyond C5 — light violet
-        [180/200,  '#dccdfb'],   // extreme — pale lavender
-        [1,        '#f5f0ff'],   // 200 kt — white-hot (off the charts)
-    ];
+    // Continuous SS colorscale, derived from the shared _DM_SS_STOPS
+    // table (kt normalized /200). See the table for the beyond-C5 ramp
+    // rationale.
+    var _GENESIS_SS_SCALE = _DM_SS_STOPS.map(function (s) {
+        return [s.kt / 200, s.color];
+    });
 
     // Member-density colorscale (fraction-of-peak 0→1). Same yellow→amber→
     // orange→crimson ramp as the iso-band legend, but applied as ONE per-cell
@@ -16623,26 +16732,25 @@
         // SS-category reference lines (64 = C1, 96 = C3, 137 = C5).
         var catShapes = [64, 96, 137].map(function (kt) {
             return { type: 'line', x0: 0, x1: 1, xref: 'paper', y0: kt, y1: kt,
-                     line: { color: 'rgba(255,255,255,0.18)', width: 0.8, dash: 'dot' } };
+                     line: { color: _dmRefLineColor(), width: 0.8, dash: 'dot' } };
         });
 
-        var layout = {
-            height: 210,
+        var layout = _dmChartLayout({
             margin: { t: 16, r: 44, b: 30, l: 35 },
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'DM Sans, sans-serif', size: 9, color: '#5b6573' },
-            xaxis: { title: { text: 'Lead time of peak (h)', font: { size: 9 } },
-                     gridcolor: 'rgba(255,255,255,0.05)', zeroline: false },
+            fontSize: 9,
+            xaxis: { title: { text: 'Lead time of peak (h)', font: { size: 9 } } },
             yaxis: { title: { text: 'LMI Vmax (kt)', font: { size: 9 } },
-                     gridcolor: 'rgba(255,255,255,0.05)', zeroline: false, rangemode: 'tozero' },
-            shapes: catShapes,
-            annotations: [
-                { x: 1, y: medV, xref: 'paper', xanchor: 'right', yanchor: 'bottom',
-                  text: 'median ' + Math.round(medV) + ' kt', showarrow: false,
-                  font: { size: 8, color: '#00e5ff' }, xshift: -2 }
-            ]
-        };
+                     rangemode: 'tozero' },
+            extra: {
+                height: 210,
+                shapes: catShapes,
+                annotations: [
+                    { x: 1, y: medV, xref: 'paper', xanchor: 'right', yanchor: 'bottom',
+                      text: 'median ' + Math.round(medV) + ' kt', showarrow: false,
+                      font: { size: 8, color: _DM_MEAN_COLOR }, xshift: -2 }
+                ],
+            },
+        });
 
         Plotly.newPlot(chartEl, [heatmap], layout, {
             displayModeBar: false, responsive: false
@@ -16697,25 +16805,19 @@
             };
         });
 
-        var layout = {
-            height: 180,
+        var layout = _dmChartLayout({
             margin: { t: 16, r: 10, b: 30, l: 35 },
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'DM Sans, sans-serif', size: 9, color: '#5b6573' },
-            showlegend: true,
-            legend: { orientation: 'h', x: 1, xanchor: 'right', y: 1.18,
-                      font: { size: 8 }, bgcolor: 'rgba(0,0,0,0)' },
-            xaxis: {
-                title: { text: 'Forecast hour', font: { size: 9 } },
-                gridcolor: 'rgba(255,255,255,0.05)', zeroline: false
+            fontSize: 9,
+            xaxis: { title: { text: 'Forecast hour', font: { size: 9 } } },
+            yaxis: { title: { text: 'P(RI) %', font: { size: 9 } },
+                     rangemode: 'tozero' },
+            extra: {
+                height: 180,
+                showlegend: true,
+                legend: { orientation: 'h', x: 1, xanchor: 'right', y: 1.18,
+                          font: { size: 8 }, bgcolor: 'rgba(0,0,0,0)' },
             },
-            yaxis: {
-                title: { text: 'P(RI) %', font: { size: 9 } },
-                gridcolor: 'rgba(255,255,255,0.05)', zeroline: false,
-                rangemode: 'tozero'
-            }
-        };
+        });
 
         Plotly.newPlot(chartEl, traces, layout, {
             displayModeBar: false, responsive: false
@@ -16949,34 +17051,78 @@
             { type: 'scattergeo', mode: 'text', lon: loLon, lat: loLat,
               text: loTxt, textposition: 'top center', hoverinfo: 'skip',
               showlegend: false,
-              textfont: { size: 11, color: fg, family: 'Inter, sans-serif' } },
+              textfont: { size: 12, color: fg, family: _DM_FONT_STACK } },
             { type: 'scattergeo', mode: 'text', lon: laLon, lat: laLat,
               text: laTxt, textposition: 'middle right', hoverinfo: 'skip',
               showlegend: false,
-              textfont: { size: 11, color: fg, family: 'Inter, sans-serif' } },
+              textfont: { size: 12, color: fg, family: _DM_FONT_STACK } },
         ];
     }
 
-    // Standard genesis scattergeo geo-layout for a given bounds box.
-    function _genesisGeoLayout(bounds, isDark, theme) {
+    // Locator-globe inset (geo2): small orthographic disc rotated onto
+    // the disturbance so a reader who doesn't recognize a zoomed-in
+    // stretch of open ocean can see which hemisphere/basin it's in.
+    function _dmGeoInset(lon, lat, domain, isDark) {
+        return {
+            domain: domain,
+            projection: {
+                type: 'orthographic',
+                rotation: { lon: lon, lat: lat, roll: 0 },
+            },
+            showland: true,
+            landcolor: isDark ? '#39434f' : '#cfd6e0',
+            showocean: true,
+            oceancolor: isDark ? '#0c121b' : '#9fb0c6',
+            showcoastlines: true,
+            coastlinecolor: isDark ? 'rgba(255,255,255,0.40)'
+                                   : 'rgba(15,22,35,0.45)',
+            coastlinewidth: 0.4,
+            showcountries: false,
+            showframe: true,
+            framecolor: isDark ? 'rgba(255,255,255,0.40)'
+                               : 'rgba(15,22,35,0.45)',
+            framewidth: 1,
+            lonaxis: { showgrid: true, dtick: 30,
+                       gridcolor: isDark ? 'rgba(255,255,255,0.12)'
+                                         : 'rgba(15,22,35,0.15)' },
+            lataxis: { showgrid: true, dtick: 30,
+                       gridcolor: isDark ? 'rgba(255,255,255,0.12)'
+                                         : 'rgba(15,22,35,0.15)' },
+            bgcolor: 'rgba(0,0,0,0)',
+        };
+    }
+
+    /** Standard DeepMind scattergeo layout — the ONE geo builder for the
+     *  Tracks map, the Trends track map, and any future geo panel, so
+     *  coastline resolution / land-ocean tokens / grids can't drift.
+     *  opts: { resolution (default 50 — 1:50m; Plotly's default 110m is
+     *  coarse), domainY, insetLon/insetLat/insetDomain (adds the geo2
+     *  locator globe) } */
+    function _dmGeoLayout(bounds, opts) {
+        opts = opts || {};
+        var isDark = _dmIsDark();
+        var theme = _genesisTheme();
         var step = _genesisAxisDtick(bounds);
+        // Live --surface tokens so the map ocean matches the modal
+        // background exactly — no "panel inside a panel" two-tone look.
         var rootStyle = getComputedStyle(document.documentElement);
         var pageSurface = rootStyle.getPropertyValue('--surface-raised').trim()
                        || (isDark ? '#161b24' : '#ffffff');
         var pageLand = rootStyle.getPropertyValue('--surface').trim()
                     || (isDark ? '#11161f' : '#f7f8fa');
         var gridc = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,22,35,0.10)';
-        return {
+        var layout = {
             margin: { l: 4, r: 4, t: 8, b: 4 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             font: theme.font,
             geo: {
                 projection: { type: 'mercator' },
-                domain: { x: [0, 1], y: [0, 1] },
+                domain: { x: [0, 1], y: opts.domainY || [0, 1] },
                 lonaxis: { range: bounds.lon, showgrid: true, gridcolor: gridc,
                            dtick: step },
                 lataxis: { range: bounds.lat, showgrid: true, gridcolor: gridc,
                            dtick: step },
+                resolution: opts.resolution || 50,
                 showland: true, landcolor: pageLand,
                 showocean: true, oceancolor: pageSurface,
                 showcountries: true,
@@ -16987,6 +17133,11 @@
             },
             showlegend: false,
         };
+        if (opts.insetDomain) {
+            layout.geo2 = _dmGeoInset(opts.insetLon, opts.insetLat,
+                                      opts.insetDomain, isDark);
+        }
+        return layout;
     }
 
     // Grey color for a prior run, faded by recency rank (oldest faintest).
@@ -17153,7 +17304,7 @@
         });
         traces = traces.concat(_genesisAxisLabelTraces(bounds, isDark));
 
-        Plotly.react(el, traces, _genesisGeoLayout(bounds, isDark, theme),
+        Plotly.react(el, traces, _dmGeoLayout(bounds),
                      { responsive: true, displayModeBar: false });
         if (noteEl) {
             noteEl.textContent = 'bold orange = current run · blue→cyan = prior '
@@ -17519,7 +17670,7 @@
             type: 'scattergeo', mode: 'text',
             lon: lonLabelLons, lat: lonLabelLats,
             text: lonLabelText,
-            textfont: { size: 12, color: labelFg, family: 'Inter, sans-serif' },
+            textfont: { size: 12, color: labelFg, family: _DM_FONT_STACK },
             textposition: 'top center',
             hoverinfo: 'skip',
             showlegend: false,
@@ -17528,90 +17679,24 @@
             type: 'scattergeo', mode: 'text',
             lon: latLabelLons, lat: latLabelLats,
             text: latLabelText,
-            textfont: { size: 12, color: labelFg, family: 'Inter, sans-serif' },
+            textfont: { size: 12, color: labelFg, family: _DM_FONT_STACK },
             textposition: 'middle right',
             hoverinfo: 'skip',
             showlegend: false,
         };
-        // Read the live --surface tokens from CSS so the map ocean
-        // matches the modal background exactly — no more "panel inside
-        // a panel" two-tone look. Falls back to safe defaults if the
-        // tokens aren't set on the page.
-        var rootStyle = getComputedStyle(document.documentElement);
-        var pageSurface = rootStyle.getPropertyValue('--surface-raised').trim()
-                       || (isDark ? '#161b24' : '#ffffff');
-        var pageLand    = rootStyle.getPropertyValue('--surface').trim()
-                       || (isDark ? '#11161f' : '#f7f8fa');
-
         // On phone width the Vmax colorbar lays out horizontally beneath the
         // map (see _genesisVmaxColorbar), so reserve a bottom band for it and
-        // lift the locator-globe inset above that band.
+        // lift the locator-globe inset above that band. The geo layout
+        // itself (coastlines, land/ocean tokens, grids) comes from the
+        // shared _dmGeoLayout builder.
         var _mapNarrow = _genesisNarrow();
-        var _mapGeoDomainY = _mapNarrow ? [0.15, 1] : [0, 1];
-        var _mapInsetDomain = _mapNarrow
-            ? { x: [0.01, 0.20], y: [0.56, 0.92] }
-            : { x: [0.01, 0.17], y: [0.02, 0.36] };
-        var layout = {
-            margin: { l: 4, r: 4, t: 8, b: 4 },
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            font: theme.font,
-            geo: {
-                projection: { type: 'mercator' },
-                domain: { x: [0, 1], y: _mapGeoDomainY },
-                lonaxis: { range: bounds.lon, showgrid: true,
-                           gridcolor: isDark ? 'rgba(255,255,255,0.10)'
-                                             : 'rgba(15,22,35,0.10)',
-                           dtick: labelStep },
-                lataxis: { range: bounds.lat, showgrid: true,
-                           gridcolor: isDark ? 'rgba(255,255,255,0.10)'
-                                             : 'rgba(15,22,35,0.10)',
-                           dtick: labelStep },
-                resolution: 50,   // 1:50m coastlines/borders (default 110 is coarse)
-                showland: true,
-                landcolor: pageLand,
-                showocean: true,
-                oceancolor: pageSurface,
-                showcountries: true,
-                countrycolor: isDark ? 'rgba(255,255,255,0.20)' : 'rgba(15,22,35,0.30)',
-                coastlinecolor: isDark ? 'rgba(255,255,255,0.45)'
-                                       : 'rgba(15,22,35,0.55)',
-                coastlinewidth: 0.8,
-                showcoastlines: true,
-                bgcolor: 'rgba(0,0,0,0)',
-            },
-            // Locator globe — orthographic disc rotated onto the
-            // disturbance, parked in the bottom-left corner. Domain is
-            // taller than wide; Plotly fits the circle and centers it,
-            // so the leftover space just pads the disc.
-            geo2: {
-                domain: _mapInsetDomain,
-                projection: {
-                    type: 'orthographic',
-                    rotation: { lon: insetLon, lat: insetLat, roll: 0 },
-                },
-                showland: true,
-                landcolor: isDark ? '#39434f' : '#cfd6e0',
-                showocean: true,
-                oceancolor: isDark ? '#0c121b' : '#9fb0c6',
-                showcoastlines: true,
-                coastlinecolor: isDark ? 'rgba(255,255,255,0.40)'
-                                       : 'rgba(15,22,35,0.45)',
-                coastlinewidth: 0.4,
-                showcountries: false,
-                showframe: true,
-                framecolor: isDark ? 'rgba(255,255,255,0.40)'
-                                   : 'rgba(15,22,35,0.45)',
-                framewidth: 1,
-                lonaxis: { showgrid: true, dtick: 30,
-                           gridcolor: isDark ? 'rgba(255,255,255,0.12)'
-                                             : 'rgba(15,22,35,0.15)' },
-                lataxis: { showgrid: true, dtick: 30,
-                           gridcolor: isDark ? 'rgba(255,255,255,0.12)'
-                                             : 'rgba(15,22,35,0.15)' },
-                bgcolor: 'rgba(0,0,0,0)',
-            },
-            showlegend: false,
-        };
+        var layout = _dmGeoLayout(bounds, {
+            domainY: _mapNarrow ? [0.15, 1] : [0, 1],
+            insetLon: insetLon, insetLat: insetLat,
+            insetDomain: _mapNarrow
+                ? { x: [0.01, 0.20], y: [0.56, 0.92] }
+                : { x: [0.01, 0.17], y: [0.02, 0.36] },
+        });
         // Tau-cursor placeholder — starts empty, gets populated by
         // _genesisPaintTauCursor when the user drags the scrubber. Has
         // its own SS-colored markers so the moving snapshot reads as
@@ -19431,30 +19516,12 @@
     // The File type is taken from the blob (image/gif, the KML mime, etc.) so
     // the share sheet labels + routes it correctly — not hardcoded to PNG.
     function _saveImageBlob(blob, filename) {
-        var file = null;
-        try { file = new File([blob], filename, { type: blob.type || 'image/png' }); }
-        catch (e) { /* File ctor unsupported — fall through to download */ }
-        // Only route through the native share sheet on TOUCH devices (phones /
-        // tablets), where saving to a folder isn't the norm. On desktop
-        // (incl. Mac Safari, where canShare is also true) the share sheet is an
-        // annoying extra step — users expect a straight download to Downloads.
-        var touch = _isIOS() || (window.matchMedia
-            && window.matchMedia('(pointer: coarse)').matches);
-        if (touch && file && navigator.canShare && typeof navigator.share === 'function'
-                && navigator.canShare({ files: [file] })) {
-            navigator.share({ files: [file] }).catch(function (err) {
-                // Only a genuine user-cancel (AbortError) should stop here.
-                // NotAllowedError means the sheet never delivered the file —
-                // most often because a long async export (e.g. the ~6s GIF
-                // encode) outlived the tap's transient activation, so share()
-                // is rejected. Falling back to download/open is the difference
-                // between the file saving and silently vanishing.
-                if (err && err.name === 'AbortError') return;
-                _downloadOrOpenBlob(blob, filename);
-            });
-            return;
-        }
-        _downloadOrOpenBlob(blob, filename);
+        // Site-wide export module (tc_export.js): share sheet on touch,
+        // anchor download on desktop, and — new — a fresh-tap "Save"
+        // overlay when a long async export outlived the tap's transient
+        // activation (share rejected AND popup blocked).
+        if (window.TCExport) { window.TCExport.save(blob, filename); return; }
+        _downloadOrOpenBlob(blob, filename);   // fallback if module missing
     }
 
     /** iOS / iPadOS detection (iPadOS masquerades as Macintosh). Used to
@@ -19797,7 +19864,7 @@
                     type: 'scattergeo', mode: 'text',
                     lon: tkLon, lat: tkLat, text: tkTxt,
                     textposition: 'top center',   // sit above the dots, not on them
-                    textfont: { size: 12, color: ink, family: 'Inter, sans-serif' },
+                    textfont: { size: 12, color: ink, family: _DM_FONT_STACK },
                     hoverinfo: 'skip', showlegend: false,
                 });
             }
@@ -19808,7 +19875,7 @@
                 marker: { symbol: 'star', size: 15, color: '#fde047',
                           line: { color: isDark ? '#0f172a' : '#1f2937', width: 1.2 } },
                 textposition: 'middle right',
-                textfont: { size: 12, color: ink, family: 'Inter, sans-serif' },
+                textfont: { size: 12, color: ink, family: _DM_FONT_STACK },
                 hoverinfo: 'skip', showlegend: false,
             });
         }
@@ -23491,31 +23558,27 @@
     //  DEEPMIND 1000-MEMBER ENSEMBLE DISTRIBUTION PANELS
     // ═══════════════════════════════════════════════════════════
 
-    var _DM_SS_COLORS = {
-        TD: '#60a5fa', TS: '#34d399', C1: '#fbbf24', C2: '#fb923c',
-        C3: '#ef4444', C4: '#c430a0', C5: '#8b5cf6'
-    };
+    // Discrete per-category colors, derived from the shared _DM_SS_STOPS
+    // table so histogram bars and map markers can never disagree.
+    var _DM_SS_COLORS = _DM_SS_STOPS.reduce(function (m, s) {
+        m[s.key] = s.color; return m;
+    }, {});
 
-    /** Assign SS color to a wind speed value */
+    /** Assign SS color to a wind speed value (bins by category floor). */
     function _dmWindColor(w) {
         if (w == null) return '#64748b';
-        if (w < 34) return _DM_SS_COLORS.TD;
-        if (w < 64) return _DM_SS_COLORS.TS;
-        if (w < 83) return _DM_SS_COLORS.C1;
-        if (w < 96) return _DM_SS_COLORS.C2;
-        if (w < 113) return _DM_SS_COLORS.C3;
-        if (w < 137) return _DM_SS_COLORS.C4;
-        if (w < 160) return _DM_SS_COLORS.C5;
-        // Super-C5: the SS scale ends at C5, but members forecast far
-        // stronger. Keep the C5 violet hue and step it so off-the-charts
-        // bins don't flatline at one purple (mirrors the genesis map
-        // colorbar, _GENESIS_SS_SCALE). Direction is background-dependent:
-        // on the dark theme lighten toward white-hot like the map; on the
-        // light theme deepen toward royal violet, since a near-white bar
-        // would vanish on a white plot.
-        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-        if (w < 180) return isDark ? '#b9a3f9' : '#7c3aed';   // 160–180 kt
-        return isDark ? '#f0e9ff' : '#5b21b6';                 // ≥180 kt
+        // Super-C5 on the LIGHT theme: the shared ramp lightens toward
+        // white-hot (right for the dark map, where brighter = stronger);
+        // a near-white bar would vanish on a white plot, so deepen
+        // toward royal violet instead.
+        if (w >= 160 && !_dmIsDark()) {
+            return w < 180 ? '#7c3aed' : '#5b21b6';
+        }
+        var color = _DM_SS_STOPS[0].color;
+        for (var i = 0; i < _DM_SS_STOPS.length; i++) {
+            if (w >= _DM_SS_STOPS[i].kt) color = _DM_SS_STOPS[i].color;
+        }
+        return color;
     }
 
     /**
@@ -23676,7 +23739,7 @@
         var shapes = ssThresholds.map(function (t) {
             return {
                 type: 'line', x0: t.v, x1: t.v, y0: 0, y1: 1, yref: 'paper',
-                line: { color: 'rgba(255,255,255,0.15)', width: 1, dash: 'dot' }
+                line: { color: _dmRefLineColor(), width: 1, dash: 'dot' }
             };
         });
 
@@ -23685,38 +23748,25 @@
             '  P90: ' + p(90).toFixed(0) + ' kt';
         var annotations = [
             { x: 0, y: 1.06, xref: 'paper', yref: 'paper', text: pctText,
-              showarrow: false, font: { size: 8, color: '#5b6573' },
+              showarrow: false, font: { size: 8 },
               xanchor: 'left', yanchor: 'bottom' }
         ];
 
         // Mean line
         shapes.push({
             type: 'line', x0: mean, x1: mean, y0: 0, y1: 1, yref: 'paper',
-            line: { color: '#00e5ff', width: 1.5 }
+            line: { color: _DM_MEAN_COLOR, width: 1.5 }
         });
 
-        var layout = {
-            height: 180,
+        var layout = _dmChartLayout({
             margin: { t: 25, r: 10, b: 30, l: 40 },
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'DM Sans, sans-serif', size: 9, color: '#5b6573' },
-            xaxis: {
-                title: { text: 'Vmax (kt)', font: { size: 9 } },
-                range: [0, 175],
-                dtick: 20,
-                gridcolor: 'rgba(255,255,255,0.05)',
-                zeroline: false
-            },
-            yaxis: {
-                title: { text: 'Count', font: { size: 9 } },
-                gridcolor: 'rgba(255,255,255,0.05)',
-                zeroline: false
-            },
-            shapes: shapes,
-            annotations: annotations,
-            bargap: 0.08
-        };
+            fontSize: 9,
+            xaxis: { title: { text: 'Vmax (kt)', font: { size: 9 } },
+                     range: [0, 175], dtick: 20 },
+            yaxis: { title: { text: 'Count', font: { size: 9 } } },
+            extra: { height: 180, shapes: shapes,
+                     annotations: annotations, bargap: 0.08 },
+        });
 
         Plotly.newPlot(chartEl, [trace], layout, {
             displayModeBar: false, responsive: false, staticPlot: true
@@ -23818,13 +23868,13 @@
         var shapes = [
             // Zero line
             { type: 'line', x0: 0, x1: 0, y0: 0, y1: 1, yref: 'paper',
-              line: { color: 'rgba(255,255,255,0.2)', width: 1 } },
+              line: { color: _dmRefLineColor(), width: 1 } },
             // RI threshold
             { type: 'line', x0: riThreshold, x1: riThreshold, y0: 0, y1: 1, yref: 'paper',
               line: { color: '#dc2626', width: 1.5, dash: 'dash' } },
             // Mean
             { type: 'line', x0: mean, x1: mean, y0: 0, y1: 1, yref: 'paper',
-              line: { color: '#00e5ff', width: 1.5 } }
+              line: { color: _DM_MEAN_COLOR, width: 1.5 } }
         ];
 
         var annotations = [
@@ -23833,26 +23883,14 @@
               yanchor: 'bottom', xanchor: 'left', xshift: 4 }
         ];
 
-        var layout = {
-            height: 180,
+        var layout = _dmChartLayout({
             margin: { t: 20, r: 10, b: 30, l: 35 },
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'DM Sans, sans-serif', size: 9, color: '#5b6573' },
-            xaxis: {
-                title: { text: '\u0394V (kt/' + interval + 'h)', font: { size: 9 } },
-                gridcolor: 'rgba(255,255,255,0.05)',
-                zeroline: false
-            },
-            yaxis: {
-                title: { text: 'Members', font: { size: 9 } },
-                gridcolor: 'rgba(255,255,255,0.05)',
-                zeroline: false
-            },
-            shapes: shapes,
-            annotations: annotations,
-            bargap: 0.05
-        };
+            fontSize: 9,
+            xaxis: { title: { text: '\u0394V (kt/' + interval + 'h)', font: { size: 9 } } },
+            yaxis: { title: { text: 'Members', font: { size: 9 } } },
+            extra: { height: 180, shapes: shapes,
+                     annotations: annotations, bargap: 0.05 },
+        });
 
         Plotly.newPlot(chartEl, [trace], layout, {
             displayModeBar: false, responsive: false, staticPlot: true
@@ -23929,13 +23967,13 @@
         var shapes = [34, 64, 83, 96, 113, 137].map(function (v) {
             return {
                 type: 'line', x0: v, x1: v, y0: 0, y1: 1, yref: 'paper',
-                line: { color: 'rgba(255,255,255,0.15)', width: 1, dash: 'dot' }
+                line: { color: _dmRefLineColor(), width: 1, dash: 'dot' }
             };
         });
         // Mean line
         shapes.push({
             type: 'line', x0: mean, x1: mean, y0: 0, y1: 1, yref: 'paper',
-            line: { color: '#00e5ff', width: 1.5 }
+            line: { color: _DM_MEAN_COLOR, width: 1.5 }
         });
 
         // Compute category probabilities
@@ -23954,35 +23992,22 @@
 
         var annotations = [
             { x: 0, y: 1.06, xref: 'paper', yref: 'paper', text: summaryText,
-              showarrow: false, font: { size: 8, color: '#5b6573' },
+              showarrow: false, font: { size: 8 },
               xanchor: 'left', yanchor: 'bottom' },
             { x: 1, y: 1.06, xref: 'paper', yref: 'paper', text: catText,
-              showarrow: false, font: { size: 8, color: '#5b6573' },
+              showarrow: false, font: { size: 8 },
               xanchor: 'right', yanchor: 'bottom' }
         ];
 
-        var layout = {
-            height: 180,
+        var layout = _dmChartLayout({
             margin: { t: 30, r: 10, b: 30, l: 40 },
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'DM Sans, sans-serif', size: 9, color: '#5b6573' },
-            xaxis: {
-                title: { text: 'LMI Vmax (kt)', font: { size: 9 } },
-                range: [0, 185],
-                dtick: 20,
-                gridcolor: 'rgba(255,255,255,0.05)',
-                zeroline: false
-            },
-            yaxis: {
-                title: { text: 'Count', font: { size: 9 } },
-                gridcolor: 'rgba(255,255,255,0.05)',
-                zeroline: false
-            },
-            shapes: shapes,
-            annotations: annotations,
-            bargap: 0.08
-        };
+            fontSize: 9,
+            xaxis: { title: { text: 'LMI Vmax (kt)', font: { size: 9 } },
+                     range: [0, 185], dtick: 20 },
+            yaxis: { title: { text: 'Count', font: { size: 9 } } },
+            extra: { height: 180, shapes: shapes,
+                     annotations: annotations, bargap: 0.08 },
+        });
 
         Plotly.newPlot(chartEl, [trace], layout, {
             displayModeBar: false, responsive: false, staticPlot: true
@@ -24058,11 +24083,11 @@
             colorbar: {
                 // Match the compact "DeepMind 1K" label style used elsewhere:
                 // small DM-Sans title, slim bar, integer tick spacing.
-                title: { text: 'Members', font: { size: 9, family: 'DM Sans, sans-serif', color: '#5b6573' }, side: 'right' },
+                title: { text: 'Members', font: { size: 9, family: _DM_FONT_STACK }, side: 'right' },
                 thickness: 6,
                 len: 0.85,
                 outlinewidth: 0,
-                tickfont: { size: 8, family: 'DM Sans, sans-serif', color: '#5b6573' },
+                tickfont: { size: 8, family: _DM_FONT_STACK },
                 xpad: 4,
                 ypad: 0
             }
@@ -24072,35 +24097,31 @@
         var ssLines = [34, 64, 83, 96, 113, 137].map(function (v) {
             return {
                 type: 'line', x0: 0, x1: tauMax, y0: v, y1: v,
-                line: { color: 'rgba(148,163,184,0.18)', width: 1, dash: 'dot' }
+                line: { color: _dmRefLineColor(), width: 1, dash: 'dot' }
             };
         });
 
-        var layout = {
-            height: 200,
+        var layout = _dmChartLayout({
             margin: { t: 12, r: 60, b: 32, l: 40 },
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'DM Sans, sans-serif', size: 9, color: '#5b6573' },
+            fontSize: 9,
             xaxis: {
                 title: { text: 'Lead time of peak (h)', font: { size: 9 } },
                 range: [0, tauMax],
                 dtick: 24,
-                gridcolor: 'rgba(255,255,255,0.05)',
-                zeroline: false
             },
             yaxis: {
                 title: { text: 'LMI Vmax (kt)', font: { size: 9 } },
                 range: [0, vmaxMax],
                 dtick: 30,
-                gridcolor: 'rgba(255,255,255,0.05)',
-                zeroline: false
             },
-            shapes: ssLines,
-            // Hovermode: 'closest' so the tooltip snaps to the cell under
-            // the cursor instead of the column-of-cells default.
-            hovermode: 'closest'
-        };
+            extra: {
+                height: 200,
+                shapes: ssLines,
+                // Hovermode: 'closest' so the tooltip snaps to the cell under
+                // the cursor instead of the column-of-cells default.
+                hovermode: 'closest',
+            },
+        });
 
         // Drop staticPlot:true so users can hover over cells to read out
         // (lead time, LMI Vmax, member count). Keep the mode bar off.

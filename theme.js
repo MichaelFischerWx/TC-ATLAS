@@ -107,7 +107,10 @@
             paper_bgcolor: readVar('--plot-paper') || '#ffffff',
             plot_bgcolor:  readVar('--plot-bg')    || '#ffffff',
             font: {
-                family: 'DM Sans, sans-serif',
+                // Explicit system fallbacks: Plotly toImage exports can't
+                // load Google web fonts, so give them metric-similar
+                // system faces instead of generic sans-serif.
+                family: '"DM Sans", -apple-system, "Helvetica Neue", Arial, sans-serif',
                 color: readVar('--plot-text') || '#0f1623'
             },
             xaxis: {
@@ -126,7 +129,8 @@
                 bgcolor:    readVar('--plot-hover-bg')     || '#ffffff',
                 bordercolor: readVar('--plot-hover-border') || 'rgba(15,22,35,0.15)',
                 font: { color: readVar('--plot-text') || '#0f1623',
-                        family: 'DM Sans', size: 12 }
+                        family: '"DM Sans", -apple-system, "Helvetica Neue", Arial, sans-serif',
+                        size: 12 }
             }
         };
     }
