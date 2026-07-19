@@ -28115,25 +28115,36 @@
         },
         gibsProductLayer: function (product, lonHint, opacity) {
             var sat = _reconPickGibsSat(lonHint);
-            var t = _reconLatestGibsTime();
             var op = opacity == null ? 0.92 : opacity;
-            var gl;
+            // The recon map renders on the MapLibre GL facade (lflet_gl.js), whose
+            // custom-GridLayer path is an INERT STUB — createGIBSLayer's per-tile
+            // canvas retry / Vis-night compositing drew nothing on GL (the recon
+            // satellite went blank after the engine swap). GIBS is served in
+            // epsg3857 / GoogleMapsCompatible, so a plain XYZ RASTER tile layer
+            // (facade L.tileLayer → native raster source) shows the same imagery
+            // at the already-probed latest-available time. Trade-offs vs the old
+            // custom layer: no per-tile time-retry (unneeded — the requested time
+            // is the probed known-good slot) and no Vis→IR night blend (daytime
+            // Vis still renders; recon defaults to IR anyway).
+            var layer, matrix, t, maxNative;
             if (product === 'wv') {
-                gl = createGIBSLayer(GIBS_WV_LAYERS[sat] || GIBS_WV_LAYERS['GOES-East'], t, op);
-                try { gl.options.maxNativeZoom = GIBS_MAX_ZOOM; } catch (e) {}
+                layer = GIBS_WV_LAYERS[sat] || GIBS_WV_LAYERS['GOES-East'];
+                matrix = GIBS_TILEMATRIX; t = _reconLatestGibsTime(); maxNative = GIBS_MAX_ZOOM;
             } else if (product === 'geocolor') {
-                var gc = GIBS_GEOCOLOR_LAYERS[sat];
-                gl = gc ? createGIBSLayerVis(gc, _reconVisGibsTime(gc), op, null)  // GOES native GeoColor (own latency)
-                        : createGIBSLayerVis(GIBS_VIS_LAYERS[sat], _reconVisGibsTime(GIBS_VIS_LAYERS[sat]), op, GIBS_IR_LAYERS[sat]); // Himawari hybrid
+                layer = GIBS_GEOCOLOR_LAYERS[sat] || GIBS_VIS_LAYERS[sat] || GIBS_VIS_LAYERS['GOES-East'];
+                matrix = GIBS_VIS_TILEMATRIX; t = _reconVisGibsTime(layer); maxNative = GIBS_VIS_MAX_ZOOM;
             } else if (product === 'vis') {
-                var vlayer = GIBS_VIS_LAYERS[sat] || GIBS_VIS_LAYERS['GOES-East'];
-                gl = createGIBSLayerVis(vlayer, _reconVisGibsTime(vlayer), op, GIBS_IR_LAYERS[sat]);  // IR fallback at night
+                layer = GIBS_VIS_LAYERS[sat] || GIBS_VIS_LAYERS['GOES-East'];
+                matrix = GIBS_VIS_TILEMATRIX; t = _reconVisGibsTime(layer); maxNative = GIBS_VIS_MAX_ZOOM;
             } else { // 'ir'
-                gl = createGIBSLayer(GIBS_IR_LAYERS[sat] || GIBS_IR_LAYERS['GOES-East'], t, op);
-                try { gl.options.maxNativeZoom = GIBS_MAX_ZOOM; } catch (e) {}
+                layer = GIBS_IR_LAYERS[sat] || GIBS_IR_LAYERS['GOES-East'];
+                matrix = GIBS_TILEMATRIX; t = _reconLatestGibsTime(); maxNative = GIBS_MAX_ZOOM;
             }
-            try { gl.options.maxZoom = 12; } catch (e) {}
-            return gl;
+            var url = GIBS_BASE + '/' + layer + '/default/' + t + '/' + matrix + '/{z}/{y}/{x}.png';
+            return L.tileLayer(url, {
+                opacity: op, tileSize: 256, maxZoom: 12, maxNativeZoom: maxNative,
+                attribution: '<a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>'
+            });
         },
         gibsSatFor: _reconPickGibsSat,
         // Barb base-dot color variable (shared across both surfaces)

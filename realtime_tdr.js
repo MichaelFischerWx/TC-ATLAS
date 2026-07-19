@@ -478,14 +478,17 @@
         var el = document.getElementById('recon-hdob-map');
         if (!el || !window.L) return null;
         _hdobMap = L.map(el, { center: [25, -80], zoom: 5, zoomControl: true, preferCanvas: true });
-        // Base map (z1) + GIBS IR satellite slots in at z2 (see _hdobSetSatellite)
-        // + place labels (z3) on top so names read over the IR.
+        // Layer stacking is PANE-based on the MapLibre GL facade (setZIndex is a
+        // no-op there). Mirror the global/detail map: base + GIBS satellite live on
+        // tilePane; place labels on overlayPane so names always read OVER the IR.
+        // (Before this, labels defaulted to tilePane and the later-added GIBS layer
+        // buried them — invisible on a weak TD, total occlusion under a major.)
         var base = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-            { subdomains: 'abcd', maxZoom: 12, attribution: '&copy; CARTO' });
-        base.setZIndex(1); base.addTo(_hdobMap);
+            { subdomains: 'abcd', maxZoom: 12, attribution: '&copy; CARTO', pane: 'tilePane' });
+        base.addTo(_hdobMap);
         var labels = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png',
-            { subdomains: 'abcd', maxZoom: 12 });
-        labels.setZIndex(5); labels.addTo(_hdobMap);  // above GIBS(2) + storm-sector IR(3)
+            { subdomains: 'abcd', maxZoom: 12, pane: 'overlayPane' });
+        labels.addTo(_hdobMap);  // overlayPane(400) > GIBS/base tilePane(200) > storm-sector IR imageOverlay(350)
         try {
             if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
                 window._hdobMap = _hdobMap;  // localhost debug handle

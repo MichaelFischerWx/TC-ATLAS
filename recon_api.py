@@ -80,6 +80,14 @@ _RECON_DIR_TTL = 240
 # Replay wall-clock anchors: (atcf_id, replay_anchor, speed) -> wall_start_epoch.
 _replay_anchors: dict = {}
 _REPLAY_MAX_ADVANCE_S = 24 * 3600  # sim-seconds; replay freezes on full track after this
+# Generic, NON-discriminating system labels USAF/NOAA put in the HDOB header when
+# no NHC name applies. None of these identify a specific system, so a flight
+# carrying one attaches by CORE PROXIMITY, not by label — and must never count as
+# a "conflicting" (different-named-system) sortie. "INVEST" was the original case;
+# "CYCLONE" is the placeholder USAF filed on AL02/AF301 (2026-07-19), which the
+# INVEST-only gate misread as a conflicting name and dropped a live flight.
+_GENERIC_LABELS = frozenset({"", "INVEST", "CYCLONE", "SUSPECT", "DISTURBANCE", "GENESIS"})
+
 _STORM_GATE_DEG = 8.0   # (legacy) generous proximity window
 _STORM_CORE_DEG = 5.0   # true-distance proximity for a non-conflicting flight (bare
                         # "INVEST"/unlabeled) to attach to this storm. Generous so an
@@ -990,7 +998,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         generic 'INVEST' (no number) is deliberately NOT a match — it can't
         distinguish two simultaneous invests, so those rely on position instead."""
         n = re.sub(r"[^A-Z0-9]", "", (lbl or "").upper())
-        if not n or n == "INVEST":
+        if n in _GENERIC_LABELS:
             return False
         if bcy and bcy in n:                       # AL01 / AL90 (basin+cyclone #)
             return True
@@ -1020,7 +1028,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         # keeps a non-TC research flight (e.g. TEXAQS surveying inland Texas)
         # out of a nearby offshore storm, regardless of how close it drifts.
         conflicting = any(
-            re.sub(r"[^A-Z0-9]", "", (l or "").upper()) not in ("", "INVEST")
+            re.sub(r"[^A-Z0-9]", "", (l or "").upper()) not in _GENERIC_LABELS
             and not _label_matches(l)
             for l in labels
         )
@@ -1128,7 +1136,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
                     continue
                 lbl = d.get("storm")
                 name_ok_d = _label_matches(lbl) if lbl else False
-                conflicting_d = (re.sub(r"[^A-Z0-9]", "", (lbl or "").upper()) not in ("", "INVEST")
+                conflicting_d = (re.sub(r"[^A-Z0-9]", "", (lbl or "").upper()) not in _GENERIC_LABELS
                                  and not name_ok_d)
                 near_d = bool(track_pts) and _near_track(d["lat"], d["lon"], track_pts)
                 if not near_d and storm_lat is not None and storm_lon is not None:
