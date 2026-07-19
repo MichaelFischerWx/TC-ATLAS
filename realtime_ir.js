@@ -3758,6 +3758,7 @@
     // and plot it. One modal reused for both the global-map and
     // storm-card overlays.
     var _rtObsHistOverlay = null, _rtObsHistCard = null, _rtObsHistAbort = null;
+    var _rtObsHistLast = null;   // { ob, n } for the export header
     var _RT_OBS_HIST_CHART_ID = 'rt-obs-hist-chart';
 
     function _rtObsBindClick(marker, ob) {
@@ -3839,11 +3840,7 @@
         _rtObsHistOverlay.style.display = 'flex';
         document.getElementById('rt-obs-hist-close').onclick = _rtObsCloseHist;
         document.getElementById('rt-obs-hist-save').onclick = function () {
-            var chart = document.getElementById(_RT_OBS_HIST_CHART_ID);
-            if (chart && window.TCExport) {
-                TCExport.savePlotly(chart,
-                    'tc-atlas-obs-' + ob.id + '-24h.png', { scale: 3 });
-            }
+            _rtObsSaveChartComposite(ob);
         };
 
         if (_rtObsHistAbort) { try { _rtObsHistAbort.abort(); } catch (e3) {} }
@@ -3941,12 +3938,96 @@
                 });
             });
 
+            _rtObsHistLast = { ob: ob, n: payload.n };
             Plotly.react(chart, traces, layout,
                 { responsive: true, displayModeBar: false });
             if (st) {
                 var last = series[series.length - 1];
                 st.textContent = payload.n + ' obs · latest ' +
                     (last.time_utc || '').replace('T', ' ').replace('Z', ' UTC');
+            }
+        });
+    }
+
+    // Branded PNG export for the ob-history chart. TCExport.savePlotly would
+    // hand back the bare (transparent, unlabeled) Plotly graph; instead we
+    // composite a solid-background figure with a station-ID header and the
+    // TC-ATLAS logo + tcatlas.org watermark, reusing the same export toolkit
+    // (_panelExportURL / _figForExport / _drawTcWatermark) as the DeepMind
+    // summaries. Theme matches the current view.
+    function _rtObsSaveChartComposite(ob) {
+        var el = document.getElementById(_RT_OBS_HIST_CHART_ID);
+        if (!el || !el.data || !el.data.length || typeof Plotly === 'undefined') {
+            if (el && window.TCExport) {
+                TCExport.savePlotly(el, 'tc-atlas-obs-' + ob.id + '-24h.png', { scale: 3 });
+            }
+            return;
+        }
+        var saveBtn = document.getElementById('rt-obs-hist-save');
+        var origTxt = saveBtn ? saveBtn.textContent : null;
+        if (saveBtn) { saveBtn.textContent = '…'; saveBtn.disabled = true; }
+        function restore() {
+            if (saveBtn) { saveBtn.textContent = origTxt; saveBtn.disabled = false; }
+        }
+
+        var isDark = _dmIsDark();
+        var bg = isDark ? '#0f172a' : '#ffffff';
+        var ink = isDark ? '#f1f5f9' : '#0f172a';
+        var dim = isDark ? '#94a3b8' : '#475569';
+        var FONT = '"DM Sans", system-ui, -apple-system, sans-serif';
+        var W = 1360, SS = 2, HEAD = 116, FOOT = 74;
+        var chartH = Math.max(300, (el.layout && el.layout.height) || 520);
+        var totalH = HEAD + chartH + FOOT;
+
+        _panelExportURL(el, 2.0, W, chartH, SS).then(function (url) {
+            return new Promise(function (res, rej) {
+                var im = new Image();
+                im.onload = function () { res(im); };
+                im.onerror = rej;
+                im.src = url;
+            });
+        }).then(function (img) {
+            var canvas = document.createElement('canvas');
+            canvas.width = W * SS; canvas.height = totalH * SS;
+            var ctx = canvas.getContext('2d');
+            ctx.scale(SS, SS);
+            // Solid background (fixes the "transparent PNG displays oddly" case);
+            // the chart's own paper is transparent so this shows through.
+            ctx.fillStyle = bg;
+            ctx.fillRect(0, 0, W, totalH);
+            ctx.textBaseline = 'top';
+            ctx.fillStyle = ink;
+            ctx.font = '700 30px ' + FONT;
+            ctx.fillText(ob.id + '  ·  ' + ob.source +
+                (ob.name ? '  ·  ' + ob.name : ''), 40, 30);
+            ctx.fillStyle = dim;
+            ctx.font = '400 19px ' + FONT;
+            var meta = 'Surface observations · last 24 h';
+            if (ob.lat != null && ob.lon != null) {
+                meta += ' · ' + ob.lat.toFixed(2) + '°, ' + ob.lon.toFixed(2) + '°';
+            }
+            if (_rtObsHistLast && _rtObsHistLast.n) meta += ' · ' + _rtObsHistLast.n + ' obs';
+            ctx.fillText(meta, 40, 72);
+            ctx.drawImage(img, 0, HEAD, W, chartH);
+            ctx.fillStyle = dim;
+            ctx.font = '400 18px ' + FONT;
+            var saved = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+            ctx.fillText('TC-ATLAS · surface-ob history · saved ' + saved,
+                         40, totalH - 30);
+            // Logo + tcatlas.org, bottom-right. _drawTcWatermark resets the
+            // transform, so pass DEVICE dimensions.
+            _drawTcWatermark(ctx, W * SS, totalH * SS);
+            canvas.toBlob(function (blob) {
+                restore();
+                if (blob && window.TCExport) {
+                    TCExport.save(blob, 'tc-atlas-obs-' + ob.id + '-24h.png');
+                }
+            }, 'image/png');
+        }).catch(function (err) {
+            restore();
+            console.warn('[Obs] history export failed', err);
+            if (window.TCExport) {
+                TCExport.savePlotly(el, 'tc-atlas-obs-' + ob.id + '-24h.png', { scale: 3 });
             }
         });
     }
