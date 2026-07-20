@@ -141,25 +141,32 @@ IR_BOX_DEG = 8.0                     # geographic crop box (degrees, was 10)
 IR_VMIN = 190.0                      # brightness temperature colour limits (K)
 IR_VMAX = 310.0
 
-# Enhanced IR colormap LUT (cold → bright/colourful, warm → dark grey)
-# Same stops as the archive MergIR LUT in tc_radar_api.py
-_IR_STOPS = [
-    (0.00,   8,   8,   8),
-    (0.15,  40,  40,  40),
-    (0.30,  90,  90,  90),
-    (0.40, 140, 140, 140),
-    (0.50, 200, 200, 200),
-    (0.55,   0, 180, 255),
-    (0.60,   0, 100, 255),
-    (0.65,   0, 255,   0),
-    (0.70, 255, 255,   0),
-    (0.75, 255, 180,   0),
-    (0.80, 255,  80,   0),
-    (0.85, 255,   0,   0),
-    (0.90, 180,   0, 180),
-    (0.95, 255, 180, 255),
-    (1.00, 255, 255, 255),
-]
+# IR colour ramp — SINGLE-SOURCED from satellite_ir so this overlay matches the
+# global mosaic / Live Flight / Global Map imagery exactly. The two renderers
+# already share IR_VMIN/IR_VMAX (190/310 K) and the identical
+# `frac = 1 - (Tb - VMIN)/(VMAX - VMIN)` → index mapping, so the stop table
+# transfers verbatim with no re-scaling.
+# (A local 15-stop table used to live here and had drifted from satellite_ir's
+# 19-stop ramp, so the same storm rendered in different colours on this tab than
+# everywhere else. Importing instead of copying keeps them from diverging again.)
+# Alpha is the one deliberate difference: this IR is an UNDERLAY beneath the
+# radar analysis, so it stays semi-transparent rather than satellite_ir's 255.
+_IR_ALPHA = 220
+
+try:
+    from satellite_ir import _IR_STOPS  # noqa: F401  (shared colour ramp)
+except Exception as _e:  # pragma: no cover — keep the tab rendering if it moves
+    logger.warning("realtime_tdr: satellite_ir IR stops unavailable (%s); "
+                   "falling back to the local ramp", _e)
+    _IR_STOPS = [
+        (0.000,  12,  12,  22), (0.142,  70,  70,  82), (0.225, 120, 120, 132),
+        (0.308, 180, 180, 192), (0.392, 216, 218, 228), (0.475, 140, 210, 220),
+        (0.517,  68, 180, 196), (0.558,  32, 148, 166), (0.600,  40, 178, 116),
+        (0.642,  96, 208,  68), (0.683, 192, 220,  40), (0.725, 238, 196,  48),
+        (0.767, 228, 132,  48), (0.808, 214,  78,  56), (0.850, 180,  36,  68),
+        (0.892, 196,  48, 156), (0.933, 168,  64, 200), (0.975, 120,  48, 180),
+        (1.000,  64,  24, 140),
+    ]
 
 
 def _build_ir_lut() -> np.ndarray:
@@ -176,7 +183,7 @@ def _build_ir_lut() -> np.ndarray:
         lut[i, 0] = int(lo[1] + t * (hi[1] - lo[1]) + 0.5)
         lut[i, 1] = int(lo[2] + t * (hi[2] - lo[2]) + 0.5)
         lut[i, 2] = int(lo[3] + t * (hi[3] - lo[3]) + 0.5)
-        lut[i, 3] = 220  # semi-transparent alpha
+        lut[i, 3] = _IR_ALPHA  # semi-transparent: this IR sits UNDER the radar
     return lut
 
 
