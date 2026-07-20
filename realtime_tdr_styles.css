@@ -422,20 +422,33 @@
 .fl-ts-header {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;          /* controls drop to their own line when tight */
+    gap: 6px 10px;
     padding: 6px 12px;
     background: rgba(96, 165, 250, 0.08);
     border-bottom: 1px solid rgba(96, 165, 250, 0.15);
 }
+/* Title must never be the thing that collapses: with `flex: 1` the wide control
+   cluster squeezed it to a one-word-per-line column ("Along- / Track / Time /
+   Series"). Size it to content and let the controls take the slack instead. */
 .fl-ts-title {
     color: #1d4ed8;
     font-size: 13px;
     font-weight: 600;
-    flex: 1;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
 }
 .fl-ts-controls {
     display: flex;
     align-items: center;
-    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-width: 0;
 }
 .fl-ts-var-group {
     display: flex;

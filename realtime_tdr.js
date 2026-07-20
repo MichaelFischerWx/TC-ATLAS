@@ -82,7 +82,7 @@
 
     // ── PNG Save helper ──────────────────────────────────────────
     // Downloads a Plotly chart div as a high-res PNG.
-    window.rtSavePlotPNG = function (chartDivId, defaultName) {
+    window.rtSavePlotPNG = function (chartDivId, defaultName, caption) {
         var gd = document.getElementById(chartDivId);
         if (!gd || !gd.data) { if (typeof rtToast === 'function') rtToast('No plot to save', 'warn'); return; }
         _ga('export_png', { chart: defaultName || chartDivId, module: 'realtime_tdr' });
@@ -95,31 +95,30 @@
             String(now.getHours()).padStart(2, '0') +
             String(now.getMinutes()).padStart(2, '0') +
             String(now.getSeconds()).padStart(2, '0');
-        // Temporarily stamp a TC-ATLAS watermark into the bottom-right corner
-        // for the exported image only (the max-value annotation lives at the
-        // bottom-left, so this corner is clear), then restore the live layout.
-        var origAnns = (gd.layout && gd.layout.annotations) ? gd.layout.annotations.slice() : [];
-        var wmAnns = origAnns.concat([{
-            text: 'TC-ATLAS · tcatlas.org',
-            xref: 'paper', yref: 'paper', x: 0.995, y: -0.02,
-            xanchor: 'right', yanchor: 'top', showarrow: false,
-            font: { size: 11, color: '#5b6573', family: 'DM Sans, sans-serif' }
-        }]);
-        // Export at native proportions and 4× pixel density (sharper than the
-        // old 2× layout-doubling, which distorted font/line proportions).
-        var restore = function () {
-            try { Plotly.relayout(gd, { annotations: origAnns }); } catch (e) {}
-        };
-        Promise.resolve(Plotly.relayout(gd, { annotations: wmAnns }))
-            .then(function () {
-                return TCExport.savePlotly(gd, fname + '_' + ts, {
-                    format: 'png',
-                    width: gd.offsetWidth,
-                    height: gd.offsetHeight,
-                    scale: 4,
-                });
+        // Render at a generous LOGICAL size, not the on-screen one: these panels
+        // can be narrow (the TDR sidebar squeezes them), and exporting at that
+        // width just scaled up gives a cramped figure with oversized fonts. A
+        // 1280-wide floor lets the layout breathe; the on-screen aspect is kept.
+        var w0 = gd.offsetWidth || 900, h0 = gd.offsetHeight || 400;
+        var outW = Math.max(1280, w0);
+        var outH = Math.max(360, Math.round(h0 * (outW / w0)));
+        var scale = 3;                       // 1280 × 3 = 3840 px wide
+        var kit = window._ReconKit;
+        var full = fname + '_' + ts + '.png';
+        // toImage renders an off-screen clone, so the live plot is untouched (the
+        // old path relayout-ed a watermark annotation INTO the live figure and
+        // restored it afterwards, which flickered and raced with redraws).
+        Plotly.toImage(gd, { format: 'png', width: outW, height: outH, scale: scale })
+            .then(function (dataUrl) {
+                if (!kit || !kit.stampExport) { TCExport.save(dataUrl, full); return; }
+                kit.stampExport(dataUrl, outW * scale, outH * scale, function (blob) {
+                    TCExport.save(blob || dataUrl, full);   // fall back to the raw PNG
+                }, caption || null);
             })
-            .then(restore, restore);
+            .catch(function (e) {
+                console.error('[rtSavePlotPNG]', e);
+                if (typeof rtToast === 'function') rtToast('Could not save image', 'warn');
+            });
     };
 
     // Returns an HTML string for a small camera save button.
@@ -5799,12 +5798,20 @@
         var layout = {
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(247,248,250,0.85)',
-            margin: { l: 55, r: 55, t: 8, b: 40 },
+            // Top margin holds the legend strip (see below) so it stops covering
+            // the traces it describes — the wind peaks sit exactly where the old
+            // top-right vertical legend floated.
+            margin: { l: 55, r: 55, t: 44, b: 40 },
             font: { family: 'DM Sans, sans-serif', size: 11, color: '#5b6573' },
             legend: {
-                orientation: 'v', x: 1.0, xanchor: 'right', y: 1.0, yanchor: 'top',
-                font: { size: 9 }, bgcolor: 'rgba(10,15,25,0.7)',
-                bordercolor: 'rgba(148,163,184,0.15)', borderwidth: 1,
+                // Horizontal strip ABOVE the plot (was a floating box INSIDE it).
+                orientation: 'h', x: 0, xanchor: 'left', y: 1.0, yanchor: 'bottom',
+                font: { size: 9, color: '#475569' },
+                // plot_bgcolor here is LIGHT, but this box used a dark fill
+                // (rgba(10,15,25,0.7)) with dark text — it rendered as an
+                // unreadable slab. Match the plot surface instead.
+                bgcolor: 'rgba(255,255,255,0.75)',
+                bordercolor: 'rgba(15,23,42,0.12)', borderwidth: 1,
                 traceorder: 'grouped', tracegroupgap: 4,
             },
             hovermode: 'x unified',
@@ -5935,12 +5942,15 @@
                 yref: 'paper',
                 text: insetLines.join('<br>'),
                 showarrow: false,
-                font: { family: 'DM Sans, sans-serif', size: 10, color: '#5b6573' },
+                // Same dark-box-on-light-plot problem as the legend: dark fill with
+                // dark text made this stats inset barely legible. Light, translucent
+                // fill so the traces underneath still read through it.
+                font: { family: 'DM Sans, sans-serif', size: 10, color: '#334155' },
                 align: 'left',
                 xanchor: 'left',
                 yanchor: 'top',
-                bgcolor: 'rgba(10,15,25,0.75)',
-                bordercolor: 'rgba(96,165,250,0.3)',
+                bgcolor: 'rgba(255,255,255,0.82)',
+                bordercolor: 'rgba(15,23,42,0.15)',
                 borderwidth: 1,
                 borderpad: 6,
             });

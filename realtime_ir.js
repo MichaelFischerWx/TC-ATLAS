@@ -28252,6 +28252,15 @@
         // the same helper every figure export on this page uses, so recon saves
         // carry identical branding. Draws bottom-right of the given canvas.
         watermark: function (ctx, w, h) { try { _drawTcWatermark(ctx, w, h); } catch (e) {} },
+        // Composite a Plotly toImage PNG data-URL onto a canvas with a footer
+        // strip carrying the brand logo + tcatlas.org (and an optional caption),
+        // handing back a Blob. Same helper the Global-Map figure exports use, so
+        // every saved chart on the site is branded identically. outW/outH are the
+        // FINAL pixel dimensions (logical size × scale). cb(blob|null).
+        stampExport: function (srcDataUrl, outW, outH, cb, caption) {
+            try { _tcStampExport(srcDataUrl, outW, outH, cb, caption); }
+            catch (e) { cb(null); }
+        },
         // Resolves once the brand logo bitmap has decoded, so an export doesn't
         // race a cold image load and silently omit the logo. Never blocks a save.
         watermarkReady: function () {
