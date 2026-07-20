@@ -28,6 +28,34 @@
     function uid(p) { return (p || 'l') + (++_uid); }
     function isArr(a) { return Object.prototype.toString.call(a) === '[object Array]'; }
 
+    // ── stacking: MapLibre markers/popups vs the Leaflet-style panes ──────────
+    // Markers render inside .maplibregl-canvas-container and popups directly in
+    // the map container, both at `z-index: auto`. Our Leaflet-emulating panes are
+    // siblings with EXPLICIT z-index (tilePane 200 … popupPane 700), and a
+    // positioned element with a z-index always paints above one with `auto` —
+    // so every pane, including custom canvas layers (recon barbs, env barbs,
+    // microwave), painted OVER markers and popups. A dropsonde popup came up
+    // underneath the wind barbs.
+    // Give the MapLibre-rendered pieces the same stacking level as the Leaflet
+    // panes they stand in for (markerPane 600), which is the order Leaflet itself
+    // uses and what the rest of the facade assumes.
+    // Popups sit at 1100 rather than Leaflet's popupPane 700 because
+    // setZIndexOffset() writes an INLINE z-index on a marker element (beating this
+    // class rule, as an explicit per-marker boost should) and callers use values up
+    // to 1000 — e.g. the recon aircraft glyph. A popup must clear the whole marker
+    // range, or opening one lands it underneath the markers it was opened from.
+    (function _injectStackingCSS() {
+        try {
+            if (document.getElementById('lflet-gl-stacking')) return;
+            var s = document.createElement('style');
+            s.id = 'lflet-gl-stacking';
+            s.textContent =
+                '.maplibregl-marker{z-index:600;}' +
+                '.maplibregl-popup{z-index:1100;}';
+            (document.head || document.documentElement).appendChild(s);
+        } catch (e) {}
+    })();
+
     // ── coordinate helpers (Leaflet [lat,lng] ↔ MapLibre [lng,lat]) ──
     function LatLng(lat, lng) { this.lat = +lat; this.lng = +lng; }
     LatLng.prototype.equals = function (o) { o = toLatLng(o); return o && Math.abs(this.lat - o.lat) < 1e-9 && Math.abs(this.lng - o.lng) < 1e-9; };

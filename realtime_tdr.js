@@ -542,12 +542,35 @@
         _hdobMap.createPane('coastlinePane');
         try { _hdobMap.getPane('coastlinePane').style.zIndex = 350; } catch (e) {}
         try { var _kit = window._ReconKit; if (_kit && _kit.coastlines) _kit.coastlines(_hdobMap); } catch (e) {}
+        _hdobAddLegend(el);
         try {
             if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
                 window._hdobMap = _hdobMap;  // localhost debug handle
             }
         } catch (e) {}
         return _hdobMap;
+    }
+
+    /** Key for the non-barb map symbols. Barb COLOUR already has its own legend
+     *  in the toolbar; this explains the point markers (previously unlabelled —
+     *  there was no way to know the amber diamond meant a dropsonde). Appended
+     *  into the map element so the Save-PNG export picks it up too. */
+    function _hdobAddLegend(mapEl) {
+        if (!mapEl || mapEl.querySelector('.recon-hdob-legend')) return;
+        var rows = [
+            { sym: '<span class="recon-hdob-legend-diamond"></span>', label: 'Dropsonde' },
+            { sym: '<span style="color:#f87171;font-size:14px;line-height:13px;">⊕</span>', label: 'Center fix (VDM)' },
+            { sym: '<span style="color:#eab308;font-size:12px;line-height:13px;">✈</span>', label: 'Aircraft (latest)' }
+        ];
+        var html = rows.map(function (r) {
+            return '<div class="recon-hdob-legend-row">' +
+                   '<span class="recon-hdob-legend-sym">' + r.sym + '</span>' +
+                   '<span>' + r.label + '</span></div>';
+        }).join('');
+        var box = document.createElement('div');
+        box.className = 'recon-hdob-legend';
+        box.innerHTML = html;
+        mapEl.appendChild(box);
     }
 
     /** Add/replace the GIBS satellite layer (z2) for the current product +

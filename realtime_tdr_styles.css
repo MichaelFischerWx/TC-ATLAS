@@ -707,7 +707,36 @@
 .recon-hdob-legend .sw {
     font-size: 8px; color: #0b1220; padding: 1px 5px; border-radius: 2px; font-weight: 700;
 }
-.recon-hdob-map { flex: 1 1 auto; width: 100%; min-height: 600px; }
+.recon-hdob-map { flex: 1 1 auto; width: 100%; min-height: 600px; position: relative; }
+
+/* Map symbol key. Lives INSIDE the map element so it is captured by the
+   Save-PNG export (html2canvas targets the map div). It is chrome, so it sits
+   above all map DATA — panes (max 700) and markers (up to 1000 via
+   zIndexOffset) — but below popups (1100), which should cover it. */
+.recon-hdob-legend {
+    position: absolute; left: 8px; bottom: 8px; z-index: 1050;
+    pointer-events: none; user-select: none;
+    background: rgba(255, 255, 255, 0.86);
+    border: 1px solid rgba(15, 23, 42, 0.18);
+    border-radius: 5px; padding: 5px 8px;
+    font-size: 10px; line-height: 1.5; color: #1f2937;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+    backdrop-filter: blur(2px);
+}
+:root[data-theme="dark"] .recon-hdob-legend {
+    background: rgba(15, 23, 42, 0.82);
+    border-color: rgba(148, 163, 184, 0.28);
+    color: #e2e8f0;
+}
+.recon-hdob-legend-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.recon-hdob-legend-sym {
+    width: 13px; text-align: center; flex: 0 0 13px;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.recon-hdob-legend-diamond {
+    width: 9px; height: 9px; background: #fbbf24;
+    border: 1.5px solid #1f2937; transform: rotate(45deg);
+}
 @media (max-width: 900px) {
     .recon-hdob-split { grid-template-columns: 1fr; }
     .recon-hdob-chart-panel, .recon-hdob-map-panel { min-height: 460px; }

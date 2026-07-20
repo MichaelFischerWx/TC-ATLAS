@@ -27402,11 +27402,19 @@
             this._map = map;
             // Ensure the pane exists — the IR viewer creates it in initDetailMap,
             // but a reused instance (e.g. the Recon-tab map) may not have it.
-            if (!map.getPane('reconPane')) {
-                map.createPane('reconPane');
-                map.getPane('reconPane').style.zIndex = 443;
-                map.getPane('reconPane').style.pointerEvents = 'none';
-            }
+            // Set the style UNCONDITIONALLY: the GL facade's getPane() auto-creates
+            // a missing pane, so the old `if (!getPane(...))` guard never ran there
+            // and the barb canvas silently fell back to the .leaflet-pane default
+            // (400) instead of 443 — tying it with overlayPane.
+            // (createPane is NOT idempotent on real Leaflet — it would build a
+            // second div and orphan this one's canvas — so still gate creation on
+            // getPane, which returns undefined there and auto-creates on the facade.)
+            if (!map.getPane('reconPane')) map.createPane('reconPane');
+            try {
+                var _rp = map.getPane('reconPane');
+                _rp.style.zIndex = 443;          // above overlayPane(400), below markers(600)
+                _rp.style.pointerEvents = 'none';
+            } catch (e) {}
             var c = L.DomUtil.create('canvas', 'leaflet-recon-canvas');
             c.style.position = 'absolute';
             c.style.pointerEvents = 'none';
