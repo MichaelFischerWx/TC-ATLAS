@@ -260,11 +260,19 @@
     var _hdobMissions = [], _hdobMissionInfo = {}, _hdobMissionTail = null;  // mission-centric fallback
     var _hdobLoggedLoad = false;  // fire recon_hdob_loaded once per selection, not per poll
     var _hdobAircraftMarkers = [];  // ✈ glyph at each aircraft's latest ob, rotated to heading
-    var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = [], _hdobChartBound = false;
+    // _hdobFlatObs is built lazily on first chart click (null = not yet built);
+    // _hdobFlatSrc holds the aircraft set the last render was drawn from.
+    var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = null,
+        _hdobFlatSrc = null, _hdobChartBound = false;
     var _hdobStormOpts = [], _hdobBuiltToggles = false;
     var _hdobFlightSel = '';   // '' = all flights; else a single aircraft tail (filters chart + map)
     var _hdobGrid = null;      // lat/lon graticule controller for the recon map (lazy)
     var _hdobFl1s = false;     // NOAA flight-level wind: false = 10-s mean (ops), true = full 1-s
+    // Last payload per FL-wind resolution for the CURRENT selection, so flipping
+    // 10-s ↔ 1-s repaints from memory instead of re-fetching (the 1-s payload is
+    // ~10× larger, and the round-trip was the bulk of the toggle lag). Cleared on
+    // storm/mission switch; the background refresh still keeps both current.
+    var _hdobResCache = { '10': null, '1': null };
     var _hdobVarVis = { peak_fl_kt: true, wspd_kt: false, sfmr_kt: true,
                         fl_pres_mb: true, extrap_sfc_p_mb: true, geo_alt_m: true,
                         temp_c: false, dewpt_c: false, vdm: true };
@@ -469,6 +477,7 @@
     window._reconHdobSelectStorm = function (value) {
         if (!value) return;
         _hdobData = null; _hdobFitDone = false; _hdobReplay = null; _hdobLoggedLoad = false;
+        _hdobResCache = { '10': null, '1': null };   // payloads belong to the old selection
         _hdobFlightSel = '';   // back to all flights when switching storm/mission
         _hdobFl1s = false;     // back to the 10-s operational wind on switch
         if (value.indexOf('mission:') === 0) {
@@ -596,6 +605,7 @@
             .then(function (j) {
                 if (!j || j.error) { if (statusEl) statusEl.textContent = 'no data'; return; }
                 _hdobData = j;
+                _hdobResCache[_hdobFl1s ? '1' : '10'] = j;   // keep the toggle instant
                 var c = j.counts || {};
                 var has = ((c.obs || 0) + (c.dropsondes || 0) + (c.vdms || 0)) > 0;
                 _hdobShowEmpty(!has);
@@ -846,7 +856,12 @@
         _hdobFl1s = want;
         _hdobBuildResToggle();
         _ga('recon_hdob_flres', { res: res });
-        _hdobFetch();   // re-fetch at the new resolution (rebuilds chart + map)
+        // Repaint from the cached payload for this resolution if we already have
+        // one (the common back-and-forth case) so the flip is immediate, then
+        // refresh in the background. Cold first flip still waits on the fetch.
+        var cached = _hdobResCache[want ? '1' : '10'];
+        if (cached) { _hdobData = cached; _hdobRender(); }
+        _hdobFetch();   // freshen at the new resolution (repaints when it lands)
     };
 
     window._reconHdobToggleGrid = function () {
@@ -880,7 +895,9 @@
                 useCORS: true, allowTaint: false, backgroundColor: null, logging: false, scale: scale
             });
         });
-        Promise.all([chartP, mapP]).then(function (res) {
+        // Wait on the brand logo too, so a cold cache can't drop it from the save.
+        var logoP = kit.watermarkReady ? kit.watermarkReady() : Promise.resolve();
+        Promise.all([chartP, mapP, logoP]).then(function (res) {
             return new Promise(function (resolve, reject) {
                 var cimg = new Image();
                 cimg.onload = function () { resolve({ chart: cimg, map: res[1] }); };
@@ -918,7 +935,13 @@
         var mw = mapCanvas.width, mh = mapCanvas.height;
         var contentH = Math.max(chh, mh);
         var W = pad + cw + gap + mw + pad;
-        var H = headH + contentH + pad;
+        // Footer band sized for the shared brand watermark (it lays out off canvas
+        // WIDTH: ~12px pad + 28px logo at s = W/900). Giving it its own strip keeps
+        // the logo + URL on clean paper instead of over the satellite imagery,
+        // where the translucent brand colours would wash out.
+        var _s = Math.max(1, W / 900);
+        var footH = Math.round(46 * _s);
+        var H = headH + contentH + footH;
         var cv = document.createElement('canvas');
         cv.width = W; cv.height = H;
         var ctx = cv.getContext('2d');
@@ -942,20 +965,15 @@
         // Panels (top-aligned under the header).
         ctx.drawImage(chartImg, pad, headH, cw, chh);
         ctx.drawImage(mapCanvas, pad + cw + gap, headH, mw, mh);
-        // TC-ATLAS watermark pill (bottom-right, over the map).
-        var fontPx = Math.round(13 * scale);
-        ctx.font = 'bold ' + fontPx + 'px sans-serif';
-        ctx.textBaseline = 'bottom';
-        var wm = 'TC-ATLAS', wmW = ctx.measureText(wm).width, wmPad = 7 * scale;
-        var wmX = W - pad - wmW - wmPad, wmY = H - pad - 3 * scale;
-        ctx.fillStyle = 'rgba(10,22,40,0.62)';
-        ctx.fillRect(wmX - wmPad, wmY - (fontPx + 3), wmW + 2 * wmPad, fontPx + 7);
-        ctx.fillStyle = 'rgba(255,255,255,0.95)';
-        ctx.fillText(wm, wmX, wmY);
-        // Attribution bottom-left.
+        // Brand watermark — logo + TC-ATLAS + tcatlas.org — in the footer band,
+        // via the shared helper so this save matches every other figure export.
+        var _kit = window._ReconKit;
+        if (_kit && _kit.watermark) _kit.watermark(ctx, W, H);
+        // Source attribution, bottom-left of the same band.
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
         ctx.font = (10 * scale) + 'px sans-serif';
         ctx.fillStyle = sub;
-        ctx.fillText('tcatlas.org', pad, H - pad + 2 * scale);
+        ctx.fillText('Aircraft recon: NOAA AOC / USAF 53rd WRS · NHC', pad, H - Math.round(14 * _s));
         cv.toBlob(function (blob) {
             if (!blob) { alert('Image export produced no data (CORS taint?)'); return; }
             var ts = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
@@ -985,14 +1003,30 @@
         });
     }
 
+    /** Flat, time-parsed ob list for chart-click hit-testing. Built on demand from
+     *  the last rendered aircraft set (see _hdobRenderChart) so a 1-s repaint
+     *  doesn't pay for it, and memoised until the next render. */
+    function _hdobEnsureFlatObs() {
+        if (_hdobFlatObs) return _hdobFlatObs;
+        var flat = [];
+        (_hdobFlatSrc || []).forEach(function (ac) {
+            (ac.track || []).forEach(function (o) {
+                flat.push({ _ms: Date.parse(_hdobX(o.t)), lat: o.lat, lon: o.lon });
+            });
+        });
+        _hdobFlatObs = flat;
+        return flat;
+    }
+
     function _hdobOnChartClick(d) {
         if (!d || !d.points || !d.points.length || !_hdobMap) return;
         _ga('recon_hdob_chart_click', {});
         var tms = (new Date(d.points[0].x)).getTime();
         if (isNaN(tms)) return;
         var best = null, bd = Infinity;
-        for (var i = 0; i < _hdobFlatObs.length; i++) {
-            var o = _hdobFlatObs[i];
+        var _flatObs = _hdobEnsureFlatObs();
+        for (var i = 0; i < _flatObs.length; i++) {
+            var o = _flatObs[i];
             if (o.lat == null) continue;
             var dt = Math.abs(o._ms - tms);
             if (dt < bd) { bd = dt; best = o; }
@@ -1011,18 +1045,27 @@
         // Chart shows one flight at a time (the selected one, or the freshest
         // when none is picked) so overlapping profile traces stay legible.
         var aircraft = _hdobFilterAircraft(_hdobData.aircraft || [], 'chart');
-        var traces = [], flat = [];
+        // The time axis is identical for every variable on a given aircraft, so
+        // build it ONCE per aircraft rather than once per (aircraft × variable).
+        // At 1 Hz a track is ~57k obs and there are ~5 variables on by default,
+        // so this drops ~230k redundant timestamp-normalisation calls per repaint.
+        var xsByAc = aircraft.map(function (ac) {
+            var tr = ac.track || [], xs = new Array(tr.length);
+            for (var i = 0; i < tr.length; i++) xs[i] = _hdobX(tr[i].t);
+            return xs;
+        });
+        var traces = [];
         _HDOB_VARS.forEach(function (cfg) {
             if (!_hdobVarVis[cfg.key]) return;
             var firstForVar = true;
-            aircraft.forEach(function (ac) {
+            aircraft.forEach(function (ac, acIdx) {
                 var tr = ac.track || [];
                 if (!tr.length) return;
-                var xs = [], ys = [];
+                // x is shared by every variable on this aircraft — built once above.
+                var xs = xsByAc[acIdx], ys = new Array(tr.length);
                 for (var i = 0; i < tr.length; i++) {
-                    xs.push(_hdobX(tr[i].t));
                     var v = tr[i][cfg.key];
-                    ys.push(v == null ? null : (cfg.scale ? v * cfg.scale : v));
+                    ys[i] = (v == null) ? null : (cfg.scale ? v * cfg.scale : v);
                 }
                 traces.push({
                     x: xs, y: ys, type: 'scatter', mode: 'lines',
@@ -1035,21 +1078,31 @@
                 firstForVar = false;
             });
         });
-        flat = [];
-        aircraft.forEach(function (ac) {
-            (ac.track || []).forEach(function (o) { flat.push({ _ms: Date.parse(o.t), lat: o.lat, lon: o.lon }); });
-        });
-        _hdobFlatObs = flat;
+        // Chart-click hit-testing needs a flat, time-parsed ob list — but building
+        // it eagerly cost ~57k Date.parse calls + allocations on EVERY 1-s repaint
+        // for a feature only used on click. Defer it: remember the source and let
+        // _hdobOnChartClick materialise it on first use.
+        _hdobFlatObs = null;
+        _hdobFlatSrc = aircraft;
         // Window the auxiliary layers (VDM/sonde) to the DISPLAYED sortie so an
         // earlier flight's fixes don't drop diamonds on the current chart or
         // stretch the time axis across the on-ground gap. When the sortie has no
         // HDOB yet (sonde/VDM-only early in a mission) the window is unbounded so
         // those still frame the axis, exactly as before.
-        var _obsMs = [];
-        for (var oi = 0; oi < flat.length; oi++) if (!isNaN(flat[oi]._ms)) _obsMs.push(flat[oi]._ms);
+        // Tracks are time-ordered, so the first/last ob bound each one — O(1) per
+        // aircraft instead of parsing every timestamp.
+        var _obsLo = Infinity, _obsHi = -Infinity;
+        aircraft.forEach(function (ac) {
+            var tr = ac.track || [];
+            if (!tr.length) return;
+            var a = Date.parse(_hdobX(tr[0].t)), z = Date.parse(_hdobX(tr[tr.length - 1].t));
+            if (!isNaN(a) && a < _obsLo) _obsLo = a;
+            if (!isNaN(z) && z > _obsHi) _obsHi = z;
+        });
+        var _hasObs = isFinite(_obsLo) && isFinite(_obsHi);
         var _winPad = 2 * 3600 * 1000;   // 2 h — catches a VDM/sonde just after the last HDOB
-        var _winMin = _obsMs.length ? Math.min.apply(null, _obsMs) - _winPad : -Infinity;
-        var _winMax = _obsMs.length ? Math.max.apply(null, _obsMs) + _winPad : Infinity;
+        var _winMin = _hasObs ? _obsLo - _winPad : -Infinity;
+        var _winMax = _hasObs ? _obsHi + _winPad : Infinity;
         function _inWin(ms) { return !isNaN(ms) && ms >= _winMin && ms <= _winMax; }
         var vdms = _hdobData.vdms || [];
         if (_hdobVarVis.vdm && vdms.length) {
@@ -1073,7 +1126,7 @@
         // sonde times, so the chart never falls back to Plotly's year-2000 default
         // when there are no flight-level traces yet (e.g. sondes-only early in a
         // mission) yet also never spans an earlier sortie's fixes.
-        var _allMs = _obsMs.slice();
+        var _allMs = _hasObs ? [_obsLo, _obsHi] : [];   // min/max of the obs, exactly
         (_hdobData.vdms || []).forEach(function (v) { var t = Date.parse(_hdobX(v.t)); if (_inWin(t)) _allMs.push(t); });
         (_hdobData.dropsondes || []).forEach(function (d) { var t = Date.parse(_hdobX(d.t)); if (_inWin(t)) _allMs.push(t); });
         var _xrange;

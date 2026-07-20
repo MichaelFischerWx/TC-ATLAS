@@ -27428,10 +27428,31 @@
             }
             this._canvas = null;
         },
-        _stride: function () {
+        /** Median seconds between consecutive obs, over a bounded sample so a
+         *  1-Hz IWG1 track costs the same to measure as a 30-s HDOB one.
+         *  Median (not mean) keeps transmission gaps from skewing it. */
+        _cadence: function (track) {
+            if (!track || track.length < 2) return 30;
+            var d = [], n = Math.min(track.length - 1, 200);
+            var step = Math.max(1, Math.floor((track.length - 1) / n));
+            for (var i = step; i < track.length; i += step) {
+                var t0 = Date.parse(track[i - step].t), t1 = Date.parse(track[i].t);
+                if (!isNaN(t0) && !isNaN(t1) && t1 > t0) d.push((t1 - t0) / step / 1000);
+            }
+            if (!d.length) return 30;
+            d.sort(function (p, q) { return p - q; });
+            return d[Math.floor(d.length / 2)] || 30;
+        },
+        /** Index stride giving ~one barb per target INTERVAL, derived from the
+         *  track's own cadence. Barb density is therefore a function of TIME, not
+         *  of the feed's sample rate — so flipping NOAA FL wind 10-s ↔ 1-s (a 10×
+         *  change in point count) no longer makes the map 10× denser, and a 30-s
+         *  USAF HDOB track next to a 1-s NOAA one reads at the same density.
+         *  Targets reproduce the old 30-s-HDOB behaviour exactly (stride 20/10/5/2/1). */
+        _strideFor: function (track) {
             var z = this._map.getZoom();
-            // obs are 30 s apart; stride 20 ≈ one barb / 10 min when zoomed out
-            return z <= 4 ? 20 : z <= 5 ? 10 : z <= 6 ? 5 : z <= 7 ? 2 : 1;
+            var targetS = z <= 4 ? 600 : z <= 5 ? 300 : z <= 6 ? 150 : z <= 7 ? 60 : 30;
+            return Math.max(1, Math.round(targetS / this._cadence(track)));
         },
         _redraw: function () {
             if (!this._map || !this._canvas) return;
@@ -27443,16 +27464,27 @@
             ctx.lineCap = 'round'; ctx.lineJoin = 'round';
             this._drawn = [];
             var b = this._map.getBounds().pad(0.15);
-            var stride = this._stride();
             for (var ai = 0; ai < this._aircraft.length; ai++) {
                 var track = this._aircraft[ai].track || [];
-                // faint full-resolution flight path
+                // Stride is per-aircraft: USAF 30-s HDOB and NOAA 1-s IWG1 tracks
+                // can share the map and must read at the same barb density.
+                var stride = this._strideFor(track);
+                // Faint flight path. Capped at ~2000 plotted points: at 1-Hz a
+                // sortie is ~15k obs, and re-walking all of them on every pan/zoom
+                // was the bulk of the 1-s redraw cost for no visible gain (the
+                // extra vertices are sub-pixel at any map scale).
+                var pStride = Math.max(1, Math.ceil(track.length / 2000));
                 ctx.beginPath();
                 var started = false;
-                for (var i = 0; i < track.length; i++) {
+                for (var i = 0; i < track.length; i += pStride) {
                     var lp = this._map.latLngToContainerPoint([track[i].lat, track[i].lon]);
                     if (!started) { ctx.moveTo(lp.x, lp.y); started = true; }
                     else ctx.lineTo(lp.x, lp.y);
+                }
+                // Always finish on the true last fix so the path reaches the aircraft.
+                if (started && track.length && ((track.length - 1) % pStride)) {
+                    var lpEnd = this._map.latLngToContainerPoint([track[track.length - 1].lat, track[track.length - 1].lon]);
+                    ctx.lineTo(lpEnd.x, lpEnd.y);
                 }
                 ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(255,255,255,0.32)';
                 ctx.stroke();
@@ -28207,6 +28239,21 @@
                 remove: clear,
                 coversLon: function (lon) { return _mosaicCoversLon(lon); }
             };
+        },
+        // Brand watermark (logo + TC-ATLAS + tcatlas.org) for canvas exports —
+        // the same helper every figure export on this page uses, so recon saves
+        // carry identical branding. Draws bottom-right of the given canvas.
+        watermark: function (ctx, w, h) { try { _drawTcWatermark(ctx, w, h); } catch (e) {} },
+        // Resolves once the brand logo bitmap has decoded, so an export doesn't
+        // race a cold image load and silently omit the logo. Never blocks a save.
+        watermarkReady: function () {
+            return new Promise(function (res) {
+                var i = _tcLogoImg;
+                if (!i || (i.complete && i.naturalWidth)) { res(); return; }
+                i.addEventListener('load', function () { res(); }, { once: true });
+                i.addEventListener('error', function () { res(); }, { once: true });
+                setTimeout(res, 1500);
+            });
         },
         gibsSatFor: _reconPickGibsSat,
         // Barb base-dot color variable (shared across both surfaces)
