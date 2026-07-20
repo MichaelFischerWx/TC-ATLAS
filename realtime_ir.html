@@ -2096,10 +2096,10 @@
                             <label class="recon-hdob-maplabel">Barb color</label>
                             <select id="recon-hdob-barbvar" class="recon-hdob-barbvar" onchange="window._reconHdobSetBarbVar(this.value)"></select>
                             <span id="recon-hdob-barblegend" class="recon-hdob-legend"></span>
-                            <span class="recon-hdob-satgroup" title="GIBS satellite basemap — covers the flight anywhere, including outside the storm domain">
+                            <span class="recon-hdob-satgroup" title="TC-ATLAS global satellite mosaic — the same fresh imagery as the Global Map (IR / Water Vapor / Visible)">
                                 <button class="ir-product-btn ir-product-active" data-rprod="ir" onclick="window._reconHdobSetSat('ir')" title="Clean infrared (Band 13, ~10.3 µm) — day &amp; night">IR</button>
-                                <button class="ir-product-btn" data-rprod="geocolor" onclick="window._reconHdobSetSat('geocolor')" title="GeoColor — true-colour day, IR-blended night">GeoColor</button>
-                                <button class="ir-product-btn" data-rprod="vis" onclick="window._reconHdobSetSat('vis')" title="Red visible (Band 2/3) — daytime; IR at night">Visible</button>
+                                <button class="ir-product-btn" data-rprod="wv" onclick="window._reconHdobSetSat('wv')" title="Mid-level water vapor (~6.9 µm) — day &amp; night">WV</button>
+                                <button class="ir-product-btn" data-rprod="vis" onclick="window._reconHdobSetSat('vis')" title="Visible reflectance — daytime only">Visible</button>
                                 <button class="ir-product-btn" data-rprod="off" onclick="window._reconHdobSetSat('off')" title="Hide satellite (plain basemap)">Off</button>
                             </span>
                             <button id="recon-hdob-grid" class="recon-hdob-gridbtn" onclick="window._reconHdobToggleGrid()" title="Toggle lat/lon grid">Grid</button>

@@ -256,11 +256,10 @@
     var _hdobMap = null, _hdobBarbLayer = null, _hdobMarkers = [], _hdobData = null;
     var _hdobAtcf = null, _hdobName = '', _hdobReplay = null, _hdobPollTimer = null;
     var _hdobLat = null, _hdobLon = null;  // storm position (HDOB proximity gate, live only)
-    var _hdobGibsLayer = null, _hdobGibsKey = null, _hdobSatProduct = 'ir';  // GIBS basemap
+    var _hdobMosaic = null, _hdobSatProduct = 'ir';  // global mosaic satellite (same data as Global Map)
     var _hdobMissions = [], _hdobMissionInfo = {}, _hdobMissionTail = null;  // mission-centric fallback
     var _hdobLoggedLoad = false;  // fire recon_hdob_loaded once per selection, not per poll
     var _hdobAircraftMarkers = [];  // ✈ glyph at each aircraft's latest ob, rotated to heading
-    var _hdobStormSatOverlay = null, _hdobStormSatKey = null;  // fresh storm-sector IR (priority over GIBS)
     var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = [], _hdobChartBound = false;
     var _hdobStormOpts = [], _hdobBuiltToggles = false;
     var _hdobFlightSel = '';   // '' = all flights; else a single aircraft tail (filters chart + map)
@@ -296,6 +295,28 @@
         return (t.indexOf('Z') >= 0 || t.indexOf('+') >= 0) ? t : t + 'Z';
     }
 
+    /** Stable per-entry id. The backend splits a tail's window into sorties
+     *  (a plane that flew twice = two entries sharing a tail), so we key the
+     *  flight selection on tail+sortie, not tail alone. */
+    function _hdobAcId(a) {
+        return (a && a.sortie) ? (a.tail + '#' + a.sortie) : ((a && a.tail) || '');
+    }
+
+    /** ISO → "DD/HHZ" (e.g. 20/06Z), used to disambiguate a tail's sorties. */
+    function _hdobSortieTag(iso) {
+        var m = iso && /\d{4}-(\d{2})-(\d{2})T(\d{2})/.exec(iso);
+        return m ? (m[2] + '/' + m[3] + 'Z') : '';
+    }
+
+    /** Flight-selector label: bare tail normally; tail + sortie time only when
+     *  a tail has more than one sortie in the window (so single flights stay clean). */
+    function _hdobAcLabel(a) {
+        if (a && a.n_sorties > 1 && a.sortie_start) {
+            return a.tail + ' · ' + _hdobSortieTag(a.sortie_start);
+        }
+        return (a && a.tail) || '';
+    }
+
     function _reconEnsureHdob() {
         _hdobPopulateStorms();
         if (!_hdobBuiltToggles) { _hdobBuildToggles(); _hdobBuildBarbVarUI(); _hdobBuiltToggles = true; }
@@ -309,14 +330,6 @@
     // on "No active storms". Re-populate whenever the list loads/updates, and
     // auto-select + load if the tab is open and nothing is chosen yet, so the
     // user never has to click anything to see data.
-    // When the GIBS latest-available time is probed/refreshed, rebuild the
-    // satellite layer (its tiles were blank until we knew the real NRT slot).
-    window.addEventListener('recon-gibs-ready', function () {
-        if (!_hdobMap) return;
-        _hdobGibsKey = null;  // force rebuild with the freshly-probed time
-        _hdobSetSatellite(_hdobLonHint());
-    });
-
     window.addEventListener('ir-storms-loaded', function () {
         if (!document.getElementById('recon-hdob-storm')) return;
         var hadStorm = !!_hdobAtcf;
@@ -487,7 +500,6 @@
             for (var am = 0; am < _hdobAircraftMarkers.length; am++) { try { _hdobMap.removeLayer(_hdobAircraftMarkers[am]); } catch (e) {} }
             _hdobAircraftMarkers = [];
         }
-        if (_hdobStormSatOverlay && _hdobMap) { try { _hdobMap.removeLayer(_hdobStormSatOverlay); } catch (e) {} _hdobStormSatOverlay = null; _hdobStormSatKey = null; }
         _hdobShowEmpty(false);
         _ga('recon_hdob_select', {
             mode: _hdobMissionTail ? 'mission' : 'storm',
@@ -533,58 +545,15 @@
      *  the flight's longitude. Rebuilds only when product or satellite changes. */
     function _hdobSetSatellite(lonHint) {
         var kit = window._ReconKit;
-        if (!kit || !kit.gibsProductLayer || !_hdobMap) return;
-        if (_hdobSatProduct === 'off') {
-            if (_hdobGibsLayer) { try { _hdobMap.removeLayer(_hdobGibsLayer); } catch (e) {} _hdobGibsLayer = null; _hdobGibsKey = null; }
-            return;
-        }
-        var sat = kit.gibsSatFor ? kit.gibsSatFor(lonHint) : 'GOES-East';
-        var key = _hdobSatProduct + '|' + sat + '|' + (kit.gibsTimeTag ? kit.gibsTimeTag() : '');
-        if (_hdobGibsLayer && _hdobGibsKey === key) return;  // already up
-        if (_hdobGibsLayer) { try { _hdobMap.removeLayer(_hdobGibsLayer); } catch (e) {} }
-        // Near-opaque so the imagery reads cleanly rather than washing to gray
-        // against the light basemap. The flight-level barbs/dots draw on their own
-        // pane ABOVE the satellite, so they stay fully legible without muting it.
-        _hdobGibsLayer = kit.gibsProductLayer(_hdobSatProduct, lonHint, 0.9);
-        try { _hdobGibsLayer.setZIndex(2); } catch (e) {}
-        _hdobGibsLayer.addTo(_hdobMap);
-        _hdobGibsKey = key;
-    }
-
-    /** Overlay TC-ATLAS's own prewarmed storm-sector IR (fresh — minutes old,
-     *  vs GIBS's hours-laggy NRT) on top of GIBS for a TRACKED storm with the IR
-     *  product. Takes priority near the storm and fills in when GIBS is blank.
-     *  Removed for missions / non-IR products / storms with no frames. */
-    function _hdobSetStormSat(atcf) {
-        var kit = window._ReconKit, map = _hdobMap;
-        if (!map || !kit) return;
-        function drop() {
-            if (_hdobStormSatOverlay) { try { map.removeLayer(_hdobStormSatOverlay); } catch (e) {} _hdobStormSatOverlay = null; _hdobStormSatKey = null; }
-        }
-        if (_hdobMissionTail || _hdobSatProduct !== 'ir' || !atcf) { drop(); return; }
-        var base = kit.apiBase() + '/ir-monitor/storm/' + encodeURIComponent(atcf);
-        var q = '?lookback_hours=6&radius_deg=5&interval_min=15';
-        fetch(base + '/ir-frames-meta' + q, { cache: 'no-store' })
-            .then(function (r) { return r.ok ? r.json() : null; })
-            .then(function (meta) {
-                if (!meta || !meta.frames || !meta.frames.length) { drop(); return; }  // no frames → GIBS only
-                if (_hdobMissionTail || _hdobSatProduct !== 'ir') { drop(); return; }   // changed mid-fetch
-                var f = meta.frames[meta.frames.length - 1];  // latest
-                var key = atcf + '|' + (f.datetime_utc || f.index);
-                if (_hdobStormSatOverlay && _hdobStormSatKey === key) return;  // latest already shown
-                var fb = f.bounds || meta.bounds;
-                if (!fb) return;
-                var bounds = L.latLngBounds(L.latLng(fb[0][0], fb[0][1]), L.latLng(fb[1][0], fb[1][1]));
-                var idx = (f.index != null) ? f.index : (meta.frames.length - 1);
-                var url = base + '/ir-frame.jpg?frame_index=' + idx + q;
-                var ov = L.imageOverlay(url, bounds, { opacity: 0.7, interactive: false, crossOrigin: true, pane: 'tilePane' });
-                try { ov.setZIndex(3); } catch (e) {}
-                ov.addTo(map);
-                if (_hdobStormSatOverlay) { try { map.removeLayer(_hdobStormSatOverlay); } catch (e) {} }
-                _hdobStormSatOverlay = ov;
-                _hdobStormSatKey = key;
-            })
-            .catch(function () { /* leave GIBS as the backdrop */ });
+        if (!kit || !kit.reconMosaicLayer || !_hdobMap) return;
+        if (!_hdobMosaic) _hdobMosaic = kit.reconMosaicLayer(_hdobMap);
+        if (_hdobSatProduct === 'off') { _hdobMosaic.remove(); return; }
+        // Near-opaque so the imagery reads cleanly over the light basemap; the
+        // flight-level barbs/dots draw on their own pane ABOVE the satellite.
+        // The mosaic is our own fresh (~10-min) global product, so — unlike the
+        // old GIBS path — no separate storm-sector IR overlay is needed to beat
+        // NRT lag; the basemap itself is current over the storm.
+        _hdobMosaic.setProduct(_hdobSatProduct, 0.92);
     }
 
     function _hdobLonHint() {
@@ -603,7 +572,6 @@
             btns[i].classList.toggle('ir-product-active', btns[i].getAttribute('data-rprod') === product);
         }
         _hdobSetSatellite(_hdobLonHint());
-        _hdobSetStormSat(_hdobMissionTail ? null : _hdobAtcf);  // IR product → storm-sector overlay
     };
 
     function _hdobFetch() {
@@ -681,7 +649,6 @@
             if (trk.length) lonHint = trk[trk.length - 1].lon;
         }
         _hdobSetSatellite(lonHint);
-        _hdobSetStormSat(_hdobMissionTail ? null : _hdobAtcf);  // fresh storm-sector IR over GIBS
         _hdobBuildFlightToggle();
         _hdobBuildResToggle();
         _hdobBuildSourceNote();
@@ -771,17 +738,27 @@
     }
 
     /** Aircraft to show in a given panel given the current flight selection.
-     *  A specific tail filters BOTH panels to that flight. With no selection
-     *  ('all'): the MAP shows every flight (spatial context), while the CHART
-     *  shows just the freshest single flight so its profile traces stay legible
-     *  (aircraft[0] is freshest — the backend sorts by latest ob time). */
+     *  A specific sortie filters BOTH panels to that flight. With no selection
+     *  ('all'): the CHART shows just the freshest single sortie so its profile
+     *  traces stay legible, while the MAP shows the LATEST sortie of each tail —
+     *  multiple simultaneous planes still get spatial context, but a tail's
+     *  already-landed earlier sortie doesn't clutter the default view.
+     *  (aircraft[0] is freshest — the backend sorts by latest ob time.) */
     function _hdobFilterAircraft(aircraft, which) {
         if (!aircraft || !aircraft.length) return [];
         if (_hdobFlightSel) {
-            var pick = aircraft.filter(function (a) { return a.tail === _hdobFlightSel; });
+            var pick = aircraft.filter(function (a) { return _hdobAcId(a) === _hdobFlightSel; });
             return pick.length ? pick : aircraft;   // selection stale → fall back to all
         }
-        return which === 'chart' ? [aircraft[0]] : aircraft;
+        if (which === 'chart') return [aircraft[0]];
+        // Map, no selection: first (freshest) sortie per tail.
+        var seen = {}, out = [];
+        for (var i = 0; i < aircraft.length; i++) {
+            var t = aircraft[i].tail;
+            if (seen[t]) continue;
+            seen[t] = 1; out.push(aircraft[i]);
+        }
+        return out;
     }
 
     /** Segmented flight selector: [All] [tail · src] … Controls chart + map.
@@ -793,17 +770,17 @@
         if (aircraft.length < 2) { box.innerHTML = ''; box.style.display = 'none'; return; }
         box.style.display = '';
         box.innerHTML = '<span class="recon-hdob-flightlabel">Flight</span>';
-        var opts = [{ tail: '', label: 'All' }].concat(aircraft.map(function (a) {
-            return { tail: a.tail, label: a.tail };
+        var opts = [{ id: '', label: 'All' }].concat(aircraft.map(function (a) {
+            return { id: _hdobAcId(a), label: _hdobAcLabel(a) };
         }));
         opts.forEach(function (o) {
             var b = document.createElement('button');
             b.textContent = o.label;
-            b.className = (_hdobFlightSel === o.tail) ? 'on' : '';
-            if (o.tail === '') b.title = 'Map: all flights · chart: latest flight';
+            b.className = (_hdobFlightSel === o.id) ? 'on' : '';
+            if (o.id === '') b.title = 'Map: current flights · chart: latest flight';
             b.onclick = function () {
-                _hdobFlightSel = o.tail;
-                _ga('recon_hdob_flight', { sel: o.tail || 'all' });
+                _hdobFlightSel = o.id;
+                _ga('recon_hdob_flight', { sel: o.id || 'all' });
                 _hdobBuildFlightToggle();
                 _hdobRender();   // re-render both panels under the new filter
             };
@@ -1063,11 +1040,22 @@
             (ac.track || []).forEach(function (o) { flat.push({ _ms: Date.parse(o.t), lat: o.lat, lon: o.lon }); });
         });
         _hdobFlatObs = flat;
+        // Window the auxiliary layers (VDM/sonde) to the DISPLAYED sortie so an
+        // earlier flight's fixes don't drop diamonds on the current chart or
+        // stretch the time axis across the on-ground gap. When the sortie has no
+        // HDOB yet (sonde/VDM-only early in a mission) the window is unbounded so
+        // those still frame the axis, exactly as before.
+        var _obsMs = [];
+        for (var oi = 0; oi < flat.length; oi++) if (!isNaN(flat[oi]._ms)) _obsMs.push(flat[oi]._ms);
+        var _winPad = 2 * 3600 * 1000;   // 2 h — catches a VDM/sonde just after the last HDOB
+        var _winMin = _obsMs.length ? Math.min.apply(null, _obsMs) - _winPad : -Infinity;
+        var _winMax = _obsMs.length ? Math.max.apply(null, _obsMs) + _winPad : Infinity;
+        function _inWin(ms) { return !isNaN(ms) && ms >= _winMin && ms <= _winMax; }
         var vdms = _hdobData.vdms || [];
         if (_hdobVarVis.vdm && vdms.length) {
             var vx = [], vy = [], vt = [];
             vdms.forEach(function (v) {
-                if (v.min_slp_hpa != null && v.t) {
+                if (v.min_slp_hpa != null && v.t && _inWin(Date.parse(_hdobX(v.t)))) {
                     vx.push(_hdobX(v.t)); vy.push(v.min_slp_hpa);
                     vt.push('VDM ' + (v.aircraft || '') + (v.ob_number != null ? ' OB ' + v.ob_number : '') +
                         '<br>' + v.min_slp_hpa + ' mb');
@@ -1081,13 +1069,13 @@
                 });
             }
         }
-        // Explicit time range from every available time (obs + VDM + sonde) so
-        // the chart never falls back to Plotly's year-2000 default when there
-        // are no flight-level traces yet (e.g. sondes-only early in a mission).
-        var _allMs = [];
-        for (var fi = 0; fi < flat.length; fi++) if (!isNaN(flat[fi]._ms)) _allMs.push(flat[fi]._ms);
-        (_hdobData.vdms || []).forEach(function (v) { var t = Date.parse(_hdobX(v.t)); if (!isNaN(t)) _allMs.push(t); });
-        (_hdobData.dropsondes || []).forEach(function (d) { var t = Date.parse(_hdobX(d.t)); if (!isNaN(t)) _allMs.push(t); });
+        // Explicit time range from the displayed sortie's obs + its in-window VDM/
+        // sonde times, so the chart never falls back to Plotly's year-2000 default
+        // when there are no flight-level traces yet (e.g. sondes-only early in a
+        // mission) yet also never spans an earlier sortie's fixes.
+        var _allMs = _obsMs.slice();
+        (_hdobData.vdms || []).forEach(function (v) { var t = Date.parse(_hdobX(v.t)); if (_inWin(t)) _allMs.push(t); });
+        (_hdobData.dropsondes || []).forEach(function (d) { var t = Date.parse(_hdobX(d.t)); if (_inWin(t)) _allMs.push(t); });
         var _xrange;
         if (_allMs.length) {
             var _mn = Math.min.apply(null, _allMs), _mx = Math.max.apply(null, _allMs);

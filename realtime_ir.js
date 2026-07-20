@@ -28146,6 +28146,68 @@
                 attribution: '<a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>'
             });
         },
+        // Global mosaic idx layer for a recon map — the SAME satellite data the
+        // Global Map renders (our own R2 mosaic, GPU-recolored via the shared idx
+        // LUTs), so IR / WV / Vis are consistent site-wide and fresh (~10-min
+        // latency) instead of GIBS's hours-laggy NRT (and GIBS has no WV band at
+        // all). Shows the latest frame as a still backdrop; poll refreshes swap in
+        // newer frames in place (no re-add → no flicker). Returns a controller.
+        // Coverage matches the Global Map (GOES-E/W + Himawari) — always covers
+        // NHC/USAF recon basins (Atlantic + E/C Pacific).
+        reconMosaicLayer: function (targetMap) {
+            var obj = null, gen = 0, curProduct = null, curFrame = null, curOpacity = 0.92;
+            function clear() {
+                curProduct = null; curFrame = null;
+                if (obj) { try { obj.destroy(); } catch (e) {} obj = null; }
+            }
+            function fetchLatest(product) {
+                return fetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (j) { _irApplyTrange(j, product); var f = (j && j.frames) || [];
+                                         return f.length ? f[f.length - 1] : null; });
+            }
+            function build(product, opacity) {
+                if (opacity != null) curOpacity = opacity;
+                // Same product already up → just refresh to the latest frame, no
+                // destroy/re-add (avoids a per-poll flash).
+                if (obj && product === curProduct) {
+                    var g0 = gen;
+                    return fetchLatest(product).then(function (latest) {
+                        if (g0 !== gen || !obj || !latest) return;
+                        if (latest !== curFrame) { obj.setFrames([latest]); obj.setFrame(0); curFrame = latest; }
+                        obj.setOpacity(curOpacity);
+                    }).catch(function () {});
+                }
+                var myGen = ++gen;                       // product change / first build
+                clear();
+                curProduct = product;
+                return fetchLatest(product).then(function (latest) {
+                    if (myGen !== gen || !targetMap || !latest) return;
+                    obj = window.createMosaicGLLayer({
+                        id: 'recon-mosaic-idx',
+                        tileUrl: function (f, z, x, y) { return _ir2aRoot(product) + '/' + f + '/' + z + '/' + x + '/' + y + '.png'; },
+                        frames: [latest], maxZoom: 6, baseMaxZoom: 4, tileSize: 512,
+                        lut: _idxLutForProduct(product, _irColormap || 'claude-ir'),
+                        onError: function (m) { try { console.error('[recon-mosaic] ' + m); } catch (e) {} }
+                    });
+                    // Add once the GL style is ready (a fresh recon map's style
+                    // often hasn't loaded yet — _glAdd would throw on getStyle()).
+                    // z200 = tilePane, below coastlines(350) + labels(400).
+                    var addGen = myGen;
+                    var doAdd = function () {
+                        if (addGen !== gen || !obj) return;   // superseded before style ready
+                        try { targetMap._glAdd(obj.layer, 200); obj.setFrame(0); obj.setOpacity(curOpacity); curFrame = latest; }
+                        catch (e) { try { console.error('[recon-mosaic] add failed', e); } catch (e2) {} }
+                    };
+                    if (targetMap._whenStyle) targetMap._whenStyle(doAdd); else doAdd();
+                }).catch(function (e) { try { console.error('[recon-mosaic] frames load failed', e); } catch (e2) {} });
+            }
+            return {
+                setProduct: function (product, opacity) { return build(product, opacity); },
+                remove: clear,
+                coversLon: function (lon) { return _mosaicCoversLon(lon); }
+            };
+        },
         gibsSatFor: _reconPickGibsSat,
         // Barb base-dot color variable (shared across both surfaces)
         colorVars: _RECON_COLORVARS,

@@ -918,6 +918,50 @@ def _merge_iwg1(aircraft: dict, aircraft_names: dict, aircraft_src: dict,
             aircraft_names.setdefault(tail, set()).add(label)
 
 
+# A tail's obs come every ~30 s while it is airborne, so a multi-hour break in
+# its track unambiguously means the plane landed and later flew a fresh sortie.
+# 3 h is comfortably longer than any in-flight transmission gap yet shorter than
+# a realistic turnaround, so it cleanly separates back-to-back missions by the
+# same aircraft (which HDOB keys by tail, merging them into one long track).
+_SORTIE_GAP_S = 3 * 3600
+
+
+def _parse_ob_iso(t: str):
+    """Parse an ob's ISO 't' (…T%H:%M:%SZ, or IWG1's fractional variant) → aware
+    datetime, or None if unparseable."""
+    if not t:
+        return None
+    try:
+        return datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        try:
+            return datetime.fromisoformat(t.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+
+def _split_sorties(track: list, gap_s: int = _SORTIE_GAP_S) -> list:
+    """Split one tail's time-ordered track into separate sorties wherever there is
+    a >gap_s idle break. Returns a list of contiguous sub-tracks, oldest first
+    (a single-flight track returns [track])."""
+    if not track:
+        return []
+    sorties, cur = [], [track[0]]
+    prev = _parse_ob_iso(track[0].get("t"))
+    for o in track[1:]:
+        cur_t = _parse_ob_iso(o.get("t"))
+        if (prev is not None and cur_t is not None and
+                (cur_t - prev).total_seconds() > gap_s):
+            sorties.append(cur)
+            cur = []
+        cur.append(o)
+        if cur_t is not None:
+            prev = cur_t
+    if cur:
+        sorties.append(cur)
+    return sorties
+
+
 def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
                 storm_lat: float = None, storm_lon: float = None,
                 mission_tail: str = "", live_feed: bool = True,
@@ -1009,6 +1053,22 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         return False
 
     aircraft_out = []
+
+    def _emit_sorties(tail, track, src):
+        """Append one aircraft entry per sortie (a plane that flew twice in the
+        window becomes two selectable flights instead of one long merged track)."""
+        sorties = _split_sorties(track)
+        n = len(sorties)
+        for si, st in enumerate(sorties):
+            aircraft_out.append({
+                "tail": tail, "track": st, "src": src,
+                "sortie": st[0]["t"],        # stable per-tail id (start time)
+                "sortie_start": st[0]["t"],
+                "sortie_end": st[-1]["t"],
+                "sortie_index": si,          # 0 = oldest of this tail's sorties
+                "n_sorties": n,
+            })
+
     for tail, obmap in aircraft.items():
         track = [obmap[k] for k in sorted(obmap) if k <= sim_iso]
         if not track:
@@ -1017,8 +1077,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         # storm attribution (the user explicitly selected this flight).
         if mission_tail:
             if tail.upper() == mission_tail:
-                aircraft_out.append({"tail": tail, "track": track,
-                                     "src": aircraft_src.get(tail, "hdob")})
+                _emit_sorties(tail, track, aircraft_src.get(tail, "hdob"))
             continue
         labels = aircraft_names.get(tail, set())
         name_ok = any(_label_matches(l) for l in labels)
@@ -1040,8 +1099,9 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         # position). With neither (shouldn't happen via the UI) keep, as before.
         if (norm_q or storm_lat is not None) and not keep:
             continue
-        aircraft_out.append({"tail": tail, "track": track,
-                             "src": aircraft_src.get(tail, "hdob")})
+        _emit_sorties(tail, track, aircraft_src.get(tail, "hdob"))
+    # Freshest sortie first, so the frontend's default (aircraft[0]) is the
+    # current flight and older sorties fall below it in the flight selector.
     aircraft_out.sort(key=lambda a: a["track"][-1]["t"], reverse=True)
 
     # Points of the kept aircraft track(s) — used to attribute sondes/VDMs by
