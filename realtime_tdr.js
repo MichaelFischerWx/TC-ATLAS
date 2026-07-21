@@ -62,7 +62,7 @@
     var _rtIRAnimTimer = null;
     var _rtIRAnimPlaying = false;
     var _rtIRPlotlyVisible = false;
-    var _rtIROpacity = 0.35;            // IR underlay opacity (slider-driven)
+    var _rtIROpacity = 0.80;            // IR underlay opacity (slider-driven)
     var _rtIRUserToggledOff = false;    // user explicitly turned the default-on IR off
     var _rtIRAllLoaded = false;
     var _rtIRLoadedCount = 0;
@@ -2524,6 +2524,11 @@
         // underlay, below max markers. Included in the trace list so it exports.
         var coastTrace = _rtCoastVisible ? _rtBuildCoastTrace(meta) : null;
         var coastTraces = coastTrace ? [coastTrace] : [];
+        // Coast is on by default, so the GeoJSON may not be fetched yet on the
+        // first plot — kick off the load and re-render once it lands.
+        if (_rtCoastVisible && !_rtCoastGeoJSON && !_rtCoastLoading) {
+            _rtLoadCoastline(function () { rtGeneratePlot(); });
+        }
 
         Plotly.newPlot('rt-plotly-chart', [heatmap].concat(coastTraces).concat(overlayTraces).concat(maxTraces), layout, config);
         _rtLastPlotlyData = { heatmap: heatmap, overlayTraces: overlayTraces, maxTraces: maxTraces, baseLayout: baseLayout, title: title, config: config, json: json };
@@ -2542,7 +2547,7 @@
         var ctrkBtn = document.getElementById('rt-ctrk-btn'); if (ctrkBtn) ctrkBtn.disabled = false;
         var tiltBtn = document.getElementById('rt-tilt-btn'); if (tiltBtn) tiltBtn.disabled = false;
         var barbBtn = document.getElementById('rt-barb-btn'); if (barbBtn) { barbBtn.disabled = false; barbBtn.classList.toggle('active', _rtBarbsEnabled); }
-        var coastBtn = document.getElementById('rt-coast-btn'); if (coastBtn) coastBtn.disabled = false;
+        var coastBtn = document.getElementById('rt-coast-btn'); if (coastBtn) { coastBtn.disabled = false; coastBtn.classList.toggle('active', _rtCoastVisible); }
         var maxBtn = document.getElementById('rt-maxmark-btn'); if (maxBtn) maxBtn.disabled = false;
         var srBtn = document.getElementById('rt-sr-btn'); if (srBtn) { srBtn.disabled = false; srBtn.classList.toggle('active', _rtStormRelative); }
         // Anomaly + Quadrant buttons stay disabled until SHIPS is loaded
@@ -3954,7 +3959,7 @@
     // Projects Natural Earth coastlines into the plan-view's km frame
     // (equirectangular about the grid origin = storm center), so they line up
     // with the IR underlay and export with the saved image.
-    var _rtCoastVisible = false;
+    var _rtCoastVisible = true;   // on by default — geographic context on the plan view
     var _rtCoastGeoJSON = null;   // cached Natural Earth FeatureCollection
     var _rtCoastLoading = false;
 
@@ -3979,7 +3984,10 @@
         if (lat0 == null || lon0 == null || (lat0 === 0 && lon0 === 0)) return null;
         var kmPerDegLat = 110.574;
         var kmPerDegLon = 111.320 * Math.cos(lat0 * Math.PI / 180);
-        var RANGE = 260;  // km half-extent (plot is ±250) + margin
+        // Half-extent to project. Kept wider than the ±250 km default plot so the
+        // coast stays drawn when the user scrolls to zoom / drags to pan out, and
+        // so it spans the full IR underlay box (~±440 km at these latitudes).
+        var RANGE = 500;  // km half-extent
         var dLat = RANGE / kmPerDegLat + 0.5;
         var dLon = RANGE / Math.max(1e-3, kmPerDegLon) + 0.5;
         var xs = [], ys = [];
