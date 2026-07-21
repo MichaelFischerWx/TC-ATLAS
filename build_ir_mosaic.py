@@ -74,6 +74,28 @@ VIS_HIRES = os.environ.get("MOSAIC_VIS_HIRES", "1") not in ("0", "false", "off")
 # 4 GiB job's peak. Live 2026-07-21 00Z: 3 storms → 3 windows on EACH GOES →
 # first attempt OOM'd (signal 9) every run; the gate + float16 halve that load.
 _VIS_HIRES_MIN_COSW = 0.64
+# Adaptive z7 guard: the decoupled pass-B native-window read (a GOES 0.5-km
+# re-download) adds a ~400-600 MB transient AFTER pass A. At the 19-00 UTC peak,
+# pass A survives right at the 4 GiB edge with a fragmented glibc arena that
+# malloc_trim can't return, so pass B tips it over — verified live 2026-07-21
+# (exec pbzw7 OOM'd 9 s into the z7 pass). Gate it on the CURRENT resident set
+# before pass B: skip z7 (frontend falls back to z6) when there isn't headroom
+# for the re-read. Tunable live via env (no redeploy). See project_mosaic_idx_oom.
+# Threshold on the PEAK RSS this frame has already reached: pass A's high-water
+# mark captures how close the frame ran to the 4 GiB edge (hot 19-00 UTC peak
+# frames survive ~3.3 GiB; off-peak frames peak lower). If pass A already came
+# this close there's no margin for pass B's re-read → skip z7. Default 3000 leaves
+# ~1 GiB for the re-read; tune live (env, no redeploy) from the logged values.
+VIS_Z7_RSS_SKIP_MIB = int(os.environ.get("MOSAIC_VIS_Z7_RSS_SKIP_MIB", "3000"))
+
+
+def _peak_rss_mib():
+    """Peak resident set so far this process (MiB) — the high-water mark, so it
+    reflects pass A's worst moment (incl. the un-returned glibc arena). ru_maxrss
+    is KiB on Linux (the container); the off-Linux path is local dev only."""
+    import resource
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return rss / 1024.0 if sys.platform.startswith("linux") else rss / (1024.0 * 1024.0)
 
 
 def storm_zooms_for(product):
@@ -1485,6 +1507,7 @@ def main():
             rgba = global_render(args.zmax, sats, kernels, timings, product, dt)
             n_global = write_pyramid(rgba, args.zmax, emit, timings)
             n_storm = 0
+            n_storm_z7 = 0     # native z7 tiles actually baked (0 when the guard skips)
             if tiles:
                 tiles_lo = {t for t in tiles if t[0] <= STORM_ZOOMS[-1]}
                 tiles_hi = {t for t in tiles if t[0] > STORM_ZOOMS[-1]}
@@ -1497,12 +1520,24 @@ def main():
                     for _s in sats.values():
                         _s.pop("flat", None); _s.pop("grid", None); _s.pop("npix", None)
                     _release_memory()
-                    win = read_all_sat_windows(dt, timings, product, hw)
-                    if win:
-                        n_storm += render_storm_tiles(win, tiles_hi, emit, timings,
-                                                      product, dt, hi_only=True)
-                    del win
-                    _release_memory()
+                    # Adaptive guard: at the 19-00 UTC peak pass A leaves a fragmented
+                    # arena that trim can't return, so pass B's 0.5-km re-read OOMs.
+                    # Skip z7 (z6 fallback) when the post-pass-A resident set is already
+                    # too high to absorb the re-read; run it when there's headroom
+                    # (off-peak = z7 free most of the day). See project_mosaic_idx_oom.
+                    rss = _peak_rss_mib()
+                    if rss > VIS_Z7_RSS_SKIP_MIB:
+                        log(f"  vis z7: SKIP native pass — peak RSS {rss:.0f} MiB "
+                            f"> {VIS_Z7_RSS_SKIP_MIB} (peak-load headroom guard; z6 fallback)")
+                    else:
+                        log(f"  vis z7: peak RSS {rss:.0f} MiB ≤ {VIS_Z7_RSS_SKIP_MIB} — run native pass")
+                        win = read_all_sat_windows(dt, timings, product, hw)
+                        if win:
+                            n_storm_z7 = render_storm_tiles(win, tiles_hi, emit, timings,
+                                                            product, dt, hi_only=True)
+                            n_storm += n_storm_z7
+                        del win
+                        _release_memory()
             # Objective eye-fix + warm-eye/cold-top Tb, from the IR sats already
             # in memory (no extra read). IR pass only; storms >= 65 kt only.
             if product == "ir":
@@ -1532,8 +1567,15 @@ def main():
             _release_memory()  # return the freed arena to the OS between bands
 
             # Deepest storm zoom this frame actually baked (None when no storm
-            # tiles — the frontend then defaults to the base z6 sectors).
-            frame_szm = max(zooms) if n_storm else None
+            # tiles — the frontend then defaults to the base z6 sectors). When the
+            # adaptive guard skipped the z7 pass, cap at the z5/z6 base so the
+            # manifest never advertises z7 tiles that weren't written.
+            if not n_storm:
+                frame_szm = None
+            elif n_storm_z7 > 0:
+                frame_szm = max(zooms)
+            else:
+                frame_szm = STORM_ZOOMS[-1]
             if frame_szm:
                 written_zmax.setdefault(product, {})[ts] = frame_szm
             if args.r2:
