@@ -27640,10 +27640,19 @@
                '<span style="color:#94a3b8;">' + label + '</span><span>' + val + '</span></div>';
     }
 
+    /** NOAA hurricane-hunter recon callsign → familiar tail-number name (mirrors
+     *  realtime_tdr.js _hdobTailDisplay). NHC's feed tokenizes N43RF as "NOAA3",
+     *  but crews and NHC advisories call it "NOAA 43" — show that so a sortie
+     *  isn't mistaken for missing. USAF (AF3xx) tails pass through unchanged. */
+    var _RT_RECON_TAIL_NAMES = { NOAA2: 'NOAA 42', NOAA3: 'NOAA 43', NOAA9: 'NOAA 49' };
+    function _rtReconTailName(tail) {
+        return (tail && _RT_RECON_TAIL_NAMES[String(tail).toUpperCase()]) || tail || '';
+    }
+
     function _rtReconBarbPopup(ob, tail, latlng, map) {
         var html = '<div class="ir-popup" style="font-size:11px;min-width:170px;">' +
             '<div style="font-weight:700;color:#22d3ee;margin-bottom:4px;">' +
-            (tail || 'Aircraft') + ' · flight-level ob</div>' +
+            (_rtReconTailName(tail) || 'Aircraft') + ' · flight-level ob</div>' +
             _rtReconRow('Time', _rtFmtTime(ob.t)) +
             _rtReconRow('Position', _rtFmtLatLon(ob.lat, ob.lon)) +
             _rtReconRow('FL wind (30s)', (ob.wdir != null ? ob.wdir + '° / ' : '') +
@@ -27854,7 +27863,7 @@
         _reconSkewTProfiles = profiles;
         var loc = (sonde.lat != null && sonde.lon != null) ? _rtFmtLatLon(sonde.lat, sonde.lon) : '';
         modal.querySelector('.recon-skewt-title').textContent =
-            'Dropsonde · ' + (sonde.tail || '') + (loc ? ' · ' + loc : '') +
+            'Dropsonde · ' + _rtReconTailName(sonde.tail) + (loc ? ' · ' + loc : '') +
             (sonde.t ? ' · ' + _rtFmtTime(sonde.t) : '');
         if (!profiles || typeof renderSkewT !== 'function') {
             body.innerHTML = '<div style="padding:30px;color:#94a3b8;">No decoded profile available for this dropsonde yet.</div>';
@@ -27915,7 +27924,7 @@
                              (prof.sig_temp && prof.sig_temp.length);
             var sh = '<div class="ir-popup" style="font-size:11px;min-width:170px;">' +
                 '<div style="font-weight:700;color:#fbbf24;margin-bottom:4px;">◇ Dropsonde' +
-                (d.tail ? ' · ' + d.tail : '') + '</div>' +
+                (d.tail ? ' · ' + _rtReconTailName(d.tail) : '') + '</div>' +
                 _rtReconRow('Release', _rtFmtTime(d.t)) +
                 _rtReconRow('Position', _rtFmtLatLon(d.lat, d.lon)) +
                 _rtReconRow('Sfc wind', d.sfc_wind_kt != null ?
