@@ -68,6 +68,12 @@ STORM_ZOOMS = (5, 6)  # storm-detail zoom levels. With 512px tiles, z5/z6 give t
 # there are active storms to bake (quiet cycles are byte-identical to today).
 VIS_STORM_ZMAX = int(os.environ.get("MOSAIC_VIS_STORM_ZMAX", "7"))
 VIS_HIRES = os.environ.get("MOSAIC_VIS_HIRES", "1") not in ("0", "false", "off")
+# Skip a sat's hi-res window when the storm is > ~50° off-nadir: the P=40
+# cutline blend gives that sat ~zero weight there anyway (a nearer sat's native
+# window carries the tile), and every skipped window is ~37 MB not held at the
+# 4 GiB job's peak. Live 2026-07-21 00Z: 3 storms → 3 windows on EACH GOES →
+# first attempt OOM'd (signal 9) every run; the gate + float16 halve that load.
+_VIS_HIRES_MIN_COSW = 0.64
 
 
 def storm_zooms_for(product):
@@ -461,6 +467,10 @@ def _goes_hires_windows(da, x, y, lon_0, sat_h, sweep, windows):
     proj = pyproj.Proj(proj="geos", h=sat_h, lon_0=lon_0, sweep=sweep)
     x_asc = bool(x[-1] > x[0]); y_asc = bool(y[-1] > y[0])
     for (lat0, lat1, lon0, lon1) in windows:
+        clat = 0.5 * (lat0 + lat1); clon = 0.5 * (lon0 + lon1)
+        cosw = math.cos(math.radians(clat)) * math.cos(math.radians(clon - lon_0))
+        if cosw < _VIS_HIRES_MIN_COSW:
+            continue                      # far off-nadir: ~zero blend weight, skip
         # Perimeter-sample the box (geos maps a lat/lon box to a skewed quad).
         ts_ = np.linspace(0.0, 1.0, 9)
         lats = np.concatenate([np.full(9, lat0), np.full(9, lat1),
@@ -485,7 +495,9 @@ def _goes_hires_windows(da, x, y, lon_0, sat_h, sweep, windows):
         r0, r1 = _rng(y, yw0, yw1, y_asc)
         if r1 - r0 < 8 or c1 - c0 < 8:
             continue
-        w = np.asarray(da[r0:r1, c0:c1].values, dtype=np.float32)
+        # float16: reflectance (0-1, display-quantized to 1/255) is comfortably
+        # inside f16 precision, and it halves what the window holds at peak RAM.
+        w = np.asarray(da[r0:r1, c0:c1].values, dtype=np.float32).astype(np.float16)
         out.append((w, x[c0:c1].copy(), y[r0:r1].copy()))
     return out
 
@@ -576,8 +588,9 @@ def read_himawari_full_disk(dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=N
     for (lat0, lat1, lon0, lon1) in (hires_windows or []):
         clat = 0.5 * (lat0 + lat1); clon = 0.5 * (lon0 + lon1)
         dlon = ((clon - HIMAWARI_LON_0 + 180.0) % 360.0) - 180.0
-        if abs(dlon) > 78.0 or abs(clat) > 70.0:
-            continue                      # box (essentially) off the Himawari disk
+        cosw = math.cos(math.radians(clat)) * math.cos(math.radians(dlon))
+        if cosw < _VIS_HIRES_MIN_COSW:
+            continue                      # far off-nadir: ~zero blend weight, skip
         try:
             wdat, wext = open_himawari_subset(prefix, clat, clon,
                                               box_deg=max(lat1 - lat0, lon1 - lon0),
@@ -585,7 +598,7 @@ def read_himawari_full_disk(dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=N
                                               target_res_m=500)
             if wdat is None or wext is None:
                 continue
-            wdat = wdat.astype(np.float32)
+            wdat = wdat.astype(np.float16)   # reflectance: f16 halves peak RAM
             wy, wx = wdat.shape
             hires.append((wdat,
                           np.linspace(wext[0], wext[1], wx) / HIMAWARI_SAT_HEIGHT,
@@ -1120,20 +1133,30 @@ def _prune_old_frames(kept, product="ir"):
 
 
 def build_pack_bytes(entries):
-    """entries: [(z, x, y, png_bytes), ...] → (pack_bytes, index_json_bytes).
-    pack.bin is the tiles' PNG bytes concatenated in sorted (z,x,y) order;
-    index.json maps "z/x/y" → [offset, length] for client Range reads. A tile
-    absent from the index is definitively absent from the frame (the client
-    skips the request entirely — no 404 round-trips)."""
+    """entries: [(z, x, y, png_bytes), ...] → (pack_bytes, index_json_bytes,
+    pack_name). The pack is the tiles' PNG bytes concatenated in sorted (z,x,y)
+    order; index.json maps "z/x/y" → [offset, length] for client Range reads. A
+    tile absent from the index is definitively absent from the frame (the client
+    skips the request entirely — no 404 round-trips).
+
+    The pack object is CONTENT-HASH named (pack-<sha1[:10]>.bin, referenced by
+    index.json "pack") so a re-render of the same frame — a Cloud Run task retry
+    produces slightly different bytes — writes a NEW object instead of
+    overwriting. With overwrite + the 7-day immutable edge cache, Cloudflare
+    pinned a stale pack.bin against a fresh index.json and every offset shifted
+    (live storm cards lost their sector tiles, 2026-07-21 00Z)."""
+    import hashlib
     entries = sorted(entries, key=lambda e: (e[0], e[1], e[2]))
     parts, index, off = [], {}, 0
     for z, x, y, body in entries:
         index[f"{z}/{x}/{y}"] = [off, len(body)]
         parts.append(body)
         off += len(body)
-    ix = json.dumps({"tiles": index, "size": off, "count": len(parts)},
+    pk = b"".join(parts)
+    name = f"pack-{hashlib.sha1(pk).hexdigest()[:10]}.bin"
+    ix = json.dumps({"pack": name, "tiles": index, "size": off, "count": len(parts)},
                     separators=(",", ":")).encode()
-    return b"".join(parts), ix
+    return pk, ix, name
 
 
 def update_r2_manifest(new_ts, zmax, product="ir", is_gap=False,
@@ -1445,14 +1468,16 @@ def main():
                 pack_ok = False
                 if pack is not None:
                     try:
-                        pk, ix = build_pack_bytes(pack)
+                        pk, ix, pk_name = build_pack_bytes(pack)
                         base = f"{R2_PREFIX}/{product}/{ts}"
-                        r2_put(f"{base}/pack.bin", pk,
+                        # pack FIRST, then the index that references it — a
+                        # client can never see an index pointing at a missing pack.
+                        r2_put(f"{base}/{pk_name}", pk,
                                "application/octet-stream", TILE_CACHE)
                         r2_put(f"{base}/index.json", ix,
                                "application/json", TILE_CACHE)
                         pack_ok = True
-                        log(f"  {product} pack: {len(pack)} tiles, {len(pk)/1e6:.1f} MB")
+                        log(f"  {product} pack: {len(pack)} tiles, {len(pk)/1e6:.1f} MB → {pk_name}")
                     except Exception as ex:
                         # dual: clients fall back to the per-tile objects. only:
                         # the frame is unusable — do NOT stamp pack_frames (and
@@ -1470,10 +1495,10 @@ def main():
             elif pack is not None:
                 # Local mode: write the pack next to (or instead of) the tile dir
                 # so the dev server / fixtures exercise the exact client path.
-                pk, ix = build_pack_bytes(pack)
+                pk, ix, pk_name = build_pack_bytes(pack)
                 d = os.path.join(args.out, product, ts)
                 os.makedirs(d, exist_ok=True)
-                with open(os.path.join(d, "pack.bin"), "wb") as f:
+                with open(os.path.join(d, pk_name), "wb") as f:
                     f.write(pk)
                 with open(os.path.join(d, "index.json"), "wb") as f:
                     f.write(ix)
