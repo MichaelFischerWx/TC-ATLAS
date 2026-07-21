@@ -3244,6 +3244,10 @@
             if (playBtn) playBtn.textContent = '⏸';
             _rtMapIRAnimTick();
         }
+        // Mirror play state on the content-panel Loop pill (the map play button
+        // may be hidden when the geographic map is collapsed).
+        var loopPill = document.getElementById('rt-ir-play-btn');
+        if (loopPill) loopPill.classList.toggle('active', _rtMapIRAnimPlaying);
     };
 
     function _rtMapIRAnimTick() {
@@ -3594,6 +3598,8 @@
         _rtIRMapBoundsSet = false;
         var irBtn = document.getElementById('rt-ir-underlay-btn');
         if (irBtn) { irBtn.disabled = true; irBtn.innerHTML = _icon('satellite') + 'IR Off'; irBtn.classList.remove('active'); }
+        var irPlayBtn = document.getElementById('rt-ir-play-btn');
+        if (irPlayBtn) { irPlayBtn.disabled = true; irPlayBtn.classList.remove('active'); }
     }
 
     // ── Helper: show IR on map, with retry if map not ready yet ──
@@ -3671,6 +3677,10 @@
                         _rtApplyIRUnderlay();
                     }
                 }
+                // Enable the content-panel IR Loop control (animates the plan-view
+                // background — usable even when the geographic map is collapsed).
+                var irPlayBtn = document.getElementById('rt-ir-play-btn');
+                if (irPlayBtn && json.frame0) irPlayBtn.disabled = false;
 
                 // Phase 2: fetch remaining frames in parallel
                 _rtFetchIRFramesParallel(1);
@@ -3855,6 +3865,25 @@
     };
 
     // ── Plotly IR Underlay Toggle ────────────────────────────────
+    // Collapse / expand the left geographic map so the plan view can go
+    // full-width. The IR loop still animates the plan-view background via the
+    // Loop pill, so hiding the map doesn't lose the animation.
+    window.rtToggleMapPanel = function () {
+        var layoutEl = document.querySelector('.rt-viz-layout');
+        if (!layoutEl) return;
+        var collapsed = layoutEl.classList.toggle('rt-map-collapsed');
+        var btn = document.getElementById('rt-map-toggle-btn');
+        if (btn) btn.classList.toggle('active', !collapsed);
+        // Reflow after the layout settles: a window resize event reflows every
+        // responsive Plotly chart; re-showing the map needs a size recompute
+        // (it was display:none, so Leaflet/GL measured 0×0).
+        setTimeout(function () {
+            try { window.dispatchEvent(new Event('resize')); } catch (e) {}
+            if (!collapsed && _rtMap) { try { _rtMap.invalidateSize(); } catch (e) {} }
+        }, 60);
+        if (typeof _ga === 'function') _ga('rt_toggle_map_panel', { collapsed: collapsed });
+    };
+
     window.rtToggleIRUnderlay = function () {
         _rtIRPlotlyVisible = !_rtIRPlotlyVisible;
         _rtIRUserToggledOff = !_rtIRPlotlyVisible;  // remember an explicit off

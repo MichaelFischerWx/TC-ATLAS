@@ -64,6 +64,12 @@
     min-width: 0;
 }
 
+/* Collapsed state: hide the geographic map so the plan view goes full-width
+   (the IR loop still animates the plan-view background via the Loop pill). */
+.rt-viz-layout.rt-map-collapsed .rt-viz-map-panel {
+    display: none;
+}
+
 /* The explorer-layout inside the RT content panel inherits
    styles from tc_radar_styles.css (.explorer-layout, .explorer-display,
    .explorer-controls). Override min-height so it fills the viewport. */
