@@ -1903,21 +1903,34 @@
             if (!ix || !ix.tiles) return plain();
             var e = ix.tiles[key];
             if (!e) return null;                      // definitively absent — no request
-            return fetch(base + '/pack.bin',
-                         { headers: { Range: 'bytes=' + e[0] + '-' + (e[0] + e[1] - 1) } })
-                .then(function (r) {
+            // ix.pack = content-hashed pack filename (defends against a CDN-cached
+            // pack from a DIFFERENT build of the same frame — a Cloud Run task
+            // retry re-renders the frame with slightly different bytes, and the
+            // immutable edge cache can otherwise pin the old pack against the new
+            // index, shifting every offset; seen live 2026-07-21).
+            var packUrl = base + '/' + (ix.pack || 'pack.bin');
+            // Validate the PNG signature on every ranged slice; anything else
+            // (offset drift, edge-cache corruption) falls back to the per-tile GET.
+            function pngBlobOrPlain(ab) {
+                var b = new Uint8Array(ab, 0, 4);
+                if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) {
                     // Explicit image/png type: the pack serves as octet-stream,
                     // and Safari won't sniff a typeless blob for <img>/bitmap.
+                    return new Blob([ab], { type: 'image/png' });
+                }
+                return plain();
+            }
+            return fetch(packUrl,
+                         { headers: { Range: 'bytes=' + e[0] + '-' + (e[0] + e[1] - 1) } })
+                .then(function (r) {
                     if (r.status === 206) {
-                        return r.arrayBuffer().then(function (ab) {
-                            return new Blob([ab], { type: 'image/png' });
-                        });
+                        return r.arrayBuffer().then(pngBlobOrPlain);
                     }
                     if (r.status === 200) {
                         // Range-unaware server (e.g. a plain dev server): slice
                         // the full pack client-side so the tile still decodes.
                         return r.arrayBuffer().then(function (ab) {
-                            return new Blob([ab.slice(e[0], e[0] + e[1])], { type: 'image/png' });
+                            return pngBlobOrPlain(ab.slice(e[0], e[0] + e[1]));
                         });
                     }
                     return plain();
