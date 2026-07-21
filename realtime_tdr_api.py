@@ -1032,13 +1032,11 @@ def list_missions():
     return JSONResponse({"missions": missions})
 
 
-@router.get("/files")
-def list_files(
-    mission: str = Query(..., description="Mission folder name, e.g. '20251028H1'"),
-):
+def _mission_file_entries(mission: str) -> list[dict]:
     """
-    List available xy.nc(.gz) analysis files within a mission folder.
-    Returns file entries with name and URL.
+    List a mission's xy.nc(.gz) analysis files as dicts, chronologically ordered.
+    Shared by /files (endpoint) and /center_track (per-file center walk).
+    Raises HTTPException(502) if the SEB listing is unreachable.
     """
     url = f"{SEB_BASE}/{mission}/"
     try:
@@ -1077,7 +1075,18 @@ def list_files(
     # Order chronologically by production time when we have it (correct across a
     # midnight rollover); fall back to filename. ISO strings sort lexically.
     files.sort(key=lambda f: (f.get("datetime_utc") or "", f["filename"]))
-    return JSONResponse({"mission": mission, "files": files})
+    return files
+
+
+@router.get("/files")
+def list_files(
+    mission: str = Query(..., description="Mission folder name, e.g. '20251028H1'"),
+):
+    """
+    List available xy.nc(.gz) analysis files within a mission folder.
+    Returns file entries with name and URL.
+    """
+    return JSONResponse({"mission": mission, "files": _mission_file_entries(mission)})
 
 
 @router.get("/variables")
@@ -4622,6 +4631,232 @@ def _compute_rt_tilt_profile(ds, min_height=0.5, max_height=8.0, ref_height=2.0)
         "ref_center_y_km": round(ref_cy, 2),
         "storm_motion_corrected": has_motion,
     }
+
+
+# ---------------------------------------------------------------------------
+# Center-track: the 2 km + 6 km WCM centre of every sweep in a mission, in
+# lat/lon, so the whole mission's centre evolution can be drawn on one
+# geographic figure over IR (the L/M center-track plot). Per-file centres are
+# immutable (the analysis never changes) → cached in-process and written
+# through to GCS, keyed by WCM version + file_url. The grid origin differs per
+# sweep (each grid is recentred on that sweep's storm position), so km offsets
+# are converted with each file's own ORIGIN_LATITUDE/LONGITUDE.
+# ---------------------------------------------------------------------------
+_CTRK_CACHE_PREFIX = "rt-tdr-centertrack/" + _WCM_VERSION
+_rt_ctrk_mem = OrderedDict()          # cache key -> per-file centre dict
+_RT_CTRK_MEM_MAX = 512
+_rt_ctrk_lock = threading.Lock()
+
+_rt_ctrk_result_mem = OrderedDict()   # (mission, hours, max_files) -> (payload, ts)
+_RT_CTRK_RESULT_TTL = 120             # seconds — short so a new sweep shows up promptly
+
+_KM_PER_DEG = 111.19                  # mean km per degree of latitude
+
+
+def _ctrk_cache_key(file_url: str) -> str:
+    raw = f"{_WCM_VERSION}|ctrk|{file_url}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def _ctrk_from_gcs(key: str):
+    bucket = _get_tdr_gcs_bucket()
+    if bucket is None:
+        return None
+    try:
+        blob = bucket.blob(f"{_CTRK_CACHE_PREFIX}/{key}.json")
+        if not blob.exists():
+            return None
+        return json.loads(blob.download_as_text())
+    except Exception:
+        return None
+
+
+def _ctrk_to_gcs_async(key: str, rec: dict):
+    bucket = _get_tdr_gcs_bucket()
+    if bucket is None:
+        return
+
+    def _write():
+        try:
+            blob = bucket.blob(f"{_CTRK_CACHE_PREFIX}/{key}.json")
+            blob.cache_control = "public, max-age=31536000, immutable"
+            blob.upload_from_string(json.dumps(rec), content_type="application/json")
+        except Exception as e:
+            logger.debug("centertrack GCS write failed for %s: %s", key, e)
+
+    threading.Thread(target=_write, daemon=True).start()
+
+
+def _compute_file_centers(ds) -> Optional[dict]:
+    """Run gated WCM at 2 km and 6 km and convert each to lat/lon using the
+    file's own grid origin. Winds are made storm-relative first (same as the
+    plan-view quick-centre and tilt profile). Centres may be None when a level
+    is gated out — the record is still returned so it can be cached."""
+    try:
+        x_km, y_km = _get_xy_coords(ds)
+        levels = _get_level_axis(ds)
+    except Exception:
+        return None
+
+    attrs = ds.attrs if hasattr(ds, "attrs") else {}
+    su = float(attrs.get("EASTWARD STORM MOTION (METERS PER SECOND)", -999))
+    sv = float(attrs.get("NORTHWARD STORM MOTION (METERS PER SECOND)", -999))
+    has_mot = (su != -999 and sv != -999 and not np.isnan(su) and not np.isnan(sv))
+
+    def _solve(target_km):
+        zi = int(np.argmin(np.abs(levels - target_km)))
+        u = ds["U"].isel(time=0, level=zi).transpose("y", "x").values
+        v = ds["V"].isel(time=0, level=zi).transpose("y", "x").values
+        if has_mot:
+            u = u - su
+            v = v - sv
+        return _wcm_center_km(u, v, x_km, y_km, num_sectors=1, spad=6, num_iterations=3)
+
+    meta = _build_case_meta(ds)
+    olat = float(meta.get("latitude") or 0.0)
+    olon = float(meta.get("longitude") or 0.0)
+    coslat = max(0.05, float(np.cos(np.radians(olat))))
+
+    def _latlon(c):
+        if not c.get("converged") or c.get("center_x_km") is None:
+            return None, None
+        lat = olat + c["center_y_km"] / _KM_PER_DEG
+        lon = olon + c["center_x_km"] / (_KM_PER_DEG * coslat)
+        return round(float(lat), 4), round(float(lon), 4)
+
+    c2 = _solve(2.0)
+    c6 = _solve(6.0)
+    lat2, lon2 = _latlon(c2)
+    lat6, lon6 = _latlon(c6)
+
+    # HHMM analysis-time label. Hour may be >=24 (SEB convention, e.g. 2452Z =
+    # 00:52Z next day) — kept verbatim so it reads like the flight logs.
+    hh = int(attrs.get("ANALYSIS CENTER HOUR", 0))
+    mm = int(attrs.get("ANALYSIS CENTER MINUTE", 0))
+
+    tilt_km = None
+    if (c2.get("center_x_km") is not None and c6.get("center_x_km") is not None):
+        dx = c6["center_x_km"] - c2["center_x_km"]
+        dy = c6["center_y_km"] - c2["center_y_km"]
+        tilt_km = round(float(np.sqrt(dx * dx + dy * dy)), 1)
+
+    return {
+        "storm_name": meta.get("storm_name", ""),
+        "origin_lat": round(olat, 4),
+        "origin_lon": round(olon, 4),
+        "datetime": meta.get("datetime", ""),
+        "time_label": f"{hh:02d}{mm:02d}",
+        "lat2": lat2, "lon2": lon2,
+        "lat6": lat6, "lon6": lon6,
+        "rmw2_km": c2.get("rmw_km"),
+        "coverage2": c2.get("data_coverage"),
+        "gate2": None if lat2 is not None else (c2.get("gate_reason") or "no-converge"),
+        "gate6": None if lat6 is not None else (c6.get("gate_reason") or "no-converge"),
+        "tilt_2_6_km": tilt_km,
+    }
+
+
+def _get_file_centers(file_url: str) -> Optional[dict]:
+    """Cache-aware per-file centres: in-proc LRU → GCS → open + compute."""
+    key = _ctrk_cache_key(file_url)
+    with _rt_ctrk_lock:
+        hit = _rt_ctrk_mem.get(key)
+        if hit is not None:
+            _rt_ctrk_mem.move_to_end(key)
+            return hit
+    gcs = _ctrk_from_gcs(key)
+    if gcs is not None:
+        with _rt_ctrk_lock:
+            _rt_ctrk_mem[key] = gcs
+            while len(_rt_ctrk_mem) > _RT_CTRK_MEM_MAX:
+                _rt_ctrk_mem.popitem(last=False)
+        return gcs
+    try:
+        ds = _open_rt_dataset(file_url)
+    except Exception:
+        return None
+    rec = _compute_file_centers(ds)
+    if rec is not None:
+        with _rt_ctrk_lock:
+            _rt_ctrk_mem[key] = rec
+            while len(_rt_ctrk_mem) > _RT_CTRK_MEM_MAX:
+                _rt_ctrk_mem.popitem(last=False)
+        _ctrk_to_gcs_async(key, rec)
+    return rec
+
+
+@router.get("/center_track")
+def get_center_track(
+    mission:   str   = Query(...,  description="Mission folder name, e.g. '20251028H1'"),
+    hours:     float = Query(0.0,  ge=0, le=48, description="Only include sweeps within the last N h (0 = all)"),
+    max_files: int   = Query(30,   ge=1, le=120, description="Cap to the most recent N sweeps"),
+):
+    """
+    Walk a mission's TDR sweeps and return the 2 km + 6 km WCM centre of each,
+    in lat/lon, so the client can plot the mission's centre-track evolution over
+    IR (L = 2 km, M = 6 km).
+
+    Per-file centres are cached (in-proc + GCS, immutable); the assembled mission
+    result is memoised for a short TTL so rapid re-opens don't re-walk the listing.
+    A cold mission opens every uncached sweep once (~1 s each) — hence the cap.
+    """
+    result_key = (mission, round(hours, 2), int(max_files))
+    now = time.time()
+    cached = _rt_ctrk_result_mem.get(result_key)
+    if cached is not None and (now - cached[1]) < _RT_CTRK_RESULT_TTL:
+        _rt_ctrk_result_mem.move_to_end(result_key)
+        return JSONResponse(cached[0])
+
+    entries = _mission_file_entries(mission)
+    if not entries:
+        raise HTTPException(status_code=404, detail=f"No analysis files for mission {mission}.")
+
+    # Optional time window relative to the newest sweep.
+    if hours > 0:
+        newest = max((e["datetime_utc"] for e in entries if e.get("datetime_utc")), default=None)
+        if newest:
+            try:
+                cutoff = (_dt.strptime(newest, "%Y-%m-%dT%H:%M:%SZ")
+                          .replace(tzinfo=timezone.utc) - timedelta(hours=hours))
+                entries = [e for e in entries
+                           if not e.get("datetime_utc")
+                           or _dt.strptime(e["datetime_utc"], "%Y-%m-%dT%H:%M:%SZ")
+                              .replace(tzinfo=timezone.utc) >= cutoff]
+            except ValueError:
+                pass
+
+    entries = entries[-int(max_files):]   # most recent N
+
+    points = []
+    for e in entries:
+        rec = _get_file_centers(e["url"])
+        if rec is None:
+            continue
+        # Skip sweeps where neither level solved — nothing to plot.
+        if rec.get("lat2") is None and rec.get("lat6") is None:
+            continue
+        pt = dict(rec)
+        pt["url"] = e["url"]
+        pt["filename"] = e["filename"]
+        pt["datetime_utc"] = e.get("datetime_utc")
+        if not pt.get("time_label"):
+            pt["time_label"] = e.get("time_label", "")
+        points.append(pt)
+
+    storm_name = points[-1].get("storm_name", "") if points else ""
+
+    payload = {
+        "mission": mission,
+        "storm_name": storm_name,
+        "n_sweeps": len(entries),
+        "n_points": len(points),
+        "points": points,
+        "latest_file_url": entries[-1]["url"] if entries else None,
+    }
+    _rt_ctrk_result_mem[result_key] = (payload, now)
+    while len(_rt_ctrk_result_mem) > 32:
+        _rt_ctrk_result_mem.popitem(last=False)
+    return JSONResponse(payload)
 
 
 @router.get("/tilt_profile")

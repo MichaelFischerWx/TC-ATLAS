@@ -2020,6 +2020,7 @@
         var quadBtn = document.getElementById('rt-quad-btn'); if (quadBtn) quadBtn.disabled = true;
         var anomalyBtn = document.getElementById('rt-anomaly-btn'); if (anomalyBtn) anomalyBtn.disabled = true;
         var vpBtn = document.getElementById('rt-vp-btn'); if (vpBtn) vpBtn.disabled = true;
+        var ctrkBtn = document.getElementById('rt-ctrk-btn'); if (ctrkBtn) { ctrkBtn.disabled = true; ctrkBtn.classList.remove('active'); }
         var tiltBtn = document.getElementById('rt-tilt-btn'); if (tiltBtn) { tiltBtn.disabled = true; tiltBtn.classList.remove('active'); }
         _rtTiltData = null; _rtTiltTraceStart = -1; _rtTiltEnabled = false;
 
@@ -2483,6 +2484,7 @@
         var volBtn = document.getElementById('rt-vol-btn'); if (volBtn) volBtn.disabled = false;
         var azBtn = document.getElementById('rt-az-btn'); if (azBtn) azBtn.disabled = false;
         var cfadBtn = document.getElementById('rt-cfad-btn'); if (cfadBtn) cfadBtn.disabled = false;
+        var ctrkBtn = document.getElementById('rt-ctrk-btn'); if (ctrkBtn) ctrkBtn.disabled = false;
         var tiltBtn = document.getElementById('rt-tilt-btn'); if (tiltBtn) tiltBtn.disabled = false;
         var barbBtn = document.getElementById('rt-barb-btn'); if (barbBtn) { barbBtn.disabled = false; barbBtn.classList.toggle('active', _rtBarbsEnabled); }
         var coastBtn = document.getElementById('rt-coast-btn'); if (coastBtn) coastBtn.disabled = false;
@@ -7135,6 +7137,225 @@
             responsive: true, displayModeBar: true, displaylogo: false,
             modeBarButtonsToRemove: ['lasso2d', 'select2d', 'toggleSpikelines']
         });
+    }
+
+    // ── Center Track: 2-km (L) + 6-km (M) TDR centres over IR ────
+    // Plots the evolution of the vortex centre across every sweep in the current
+    // mission, in lat/lon, over a single GOES IR frame. L = 2 km, M = 6 km.
+
+    var _rtCtrkLoading = false;
+
+    function _rtCurrentMission() {
+        var sel = document.getElementById('rt-mission-select');
+        return sel ? (sel.value || '') : '';
+    }
+
+    window.rtToggleCenterTrack = function () {
+        var container = document.getElementById('rt-ctrk-result');
+        var btn = document.getElementById('rt-ctrk-btn');
+        if (!container) return;
+        // Toggle off if already showing.
+        if (container.innerHTML.trim() !== '') {
+            container.innerHTML = '';
+            if (btn) btn.classList.remove('active');
+            return;
+        }
+        var mission = _rtCurrentMission();
+        if (!mission) {
+            container.innerHTML = '<div style="color:var(--slate);padding:12px;font-size:12px;">Select a mission first.</div>';
+            return;
+        }
+        if (_rtCtrkLoading) return;
+        _rtCtrkLoading = true;
+        if (btn) { btn.classList.add('active'); btn.disabled = true; }
+        container.innerHTML =
+            '<div class="storm-timeline-panel" style="margin-top:10px;padding:24px;text-align:center;color:var(--slate);font-size:12px;">' +
+            'Solving 2-km &amp; 6-km centres for each sweep… (first load may take ~20-40s)</div>';
+
+        var ctUrl = API_BASE + RT_PREFIX + '/center_track?mission=' + encodeURIComponent(mission) + '&max_files=30';
+        // Reuse the currently-viewed sweep for the IR backdrop (its 8° box covers
+        // the whole track and it's usually already cached server-side).
+        var irUrl = _currentFileUrl
+            ? (API_BASE + RT_PREFIX + '/ir?file_url=' + encodeURIComponent(_currentFileUrl))
+            : null;
+
+        Promise.all([
+            fetch(ctUrl, { cache: 'no-store' }).then(function (r) {
+                if (!r.ok) throw new Error('center_track ' + r.status);
+                return r.json();
+            }),
+            irUrl ? fetch(irUrl, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
+                  : Promise.resolve(null)
+        ]).then(function (res) {
+            _rtRenderCenterTrack(res[0], res[1]);
+            _ga('center_track', { module: 'realtime_tdr', mission: mission });
+        }).catch(function (e) {
+            container.innerHTML = '<div style="color:#f87171;padding:12px;font-size:12px;">Could not build center track: ' + (e && e.message ? e.message : e) + '</div>';
+        }).finally(function () {
+            _rtCtrkLoading = false;
+            if (btn) btn.disabled = false;
+        });
+    };
+
+    function _rtRenderCenterTrack(json, irJson) {
+        var container = document.getElementById('rt-ctrk-result');
+        if (!container) return;
+        var btn = document.getElementById('rt-ctrk-btn');
+        var points = (json && json.points) || [];
+        if (!points.length) {
+            container.innerHTML =
+                '<div class="storm-timeline-panel" style="margin-top:10px;">' +
+                '<div class="fl-ts-header"><span class="fl-ts-title">◎ Center Track</span>' +
+                '<button onclick="rtToggleCenterTrack()" class="fl-ts-close" title="Close">&times;</button></div>' +
+                '<div style="color:var(--slate);text-align:center;padding:30px;font-size:12px;">No converged 2-km / 6-km centres in this mission yet.</div></div>';
+            if (btn) btn.classList.remove('active');
+            return;
+        }
+
+        var storm = (json.storm_name || '').trim();
+        var title = (storm ? storm + ' — ' : '') + '2-km (L) &amp; 6-km (M) TDR Center Track';
+
+        container.innerHTML =
+            '<div class="storm-timeline-panel" style="margin-top:10px;">' +
+            '<div class="fl-ts-header">' +
+            '<span class="fl-ts-title">◎ Center Track · ' + points.length + ' sweeps</span>' +
+            '<div style="flex:1;"></div>' +
+            _rtSaveBtnHTML('rt-ctrk-chart', 'CenterTrack', '') +
+            '<button onclick="rtToggleCenterTrack()" class="fl-ts-close" title="Close">&times;</button>' +
+            '</div>' +
+            '<div id="rt-ctrk-chart" style="width:100%;height:460px;"></div>' +
+            '<div id="rt-ctrk-table" style="padding:4px 8px 8px;"></div>' +
+            '</div>';
+
+        // ── Geographic extent from the points (with a small margin) ──
+        var lats = [], lons = [];
+        points.forEach(function (p) {
+            if (p.lat2 != null) { lats.push(p.lat2); lons.push(p.lon2); }
+            if (p.lat6 != null) { lats.push(p.lat6); lons.push(p.lon6); }
+        });
+        var latMin = Math.min.apply(null, lats), latMax = Math.max.apply(null, lats);
+        var lonMin = Math.min.apply(null, lons), lonMax = Math.max.apply(null, lons);
+        var latPad = Math.max(0.12, (latMax - latMin) * 0.35);
+        var lonPad = Math.max(0.12, (lonMax - lonMin) * 0.35);
+        var lat0 = (latMin + latMax) / 2;
+
+        var traces = [];
+
+        // ── 2-km centre track (L) ──
+        var p2 = points.filter(function (p) { return p.lat2 != null; });
+        traces.push({
+            x: p2.map(function (p) { return p.lon2; }),
+            y: p2.map(function (p) { return p.lat2; }),
+            mode: 'markers+lines+text',
+            type: 'scatter',
+            name: '2 km (L)',
+            text: p2.map(function () { return 'L'; }),
+            textposition: 'middle center',
+            textfont: { color: '#ffffff', size: 10, family: 'Arial Black, Arial, sans-serif' },
+            line: { color: 'rgba(147,197,253,0.55)', width: 1.5 },
+            marker: { size: 15, color: '#60a5fa', line: { color: '#1e3a8a', width: 1 } },
+            customdata: p2.map(function (p) { return [p.time_label, p.lat2, p.lon2]; }),
+            hovertemplate: '<b>%{customdata[0]}Z</b> · 2 km<br>%{customdata[1]:.2f}°N, %{customdata[2]:.2f}°<extra></extra>'
+        });
+        // ── 6-km centre track (M) ──
+        var p6 = points.filter(function (p) { return p.lat6 != null; });
+        traces.push({
+            x: p6.map(function (p) { return p.lon6; }),
+            y: p6.map(function (p) { return p.lat6; }),
+            mode: 'markers+lines+text',
+            type: 'scatter',
+            name: '6 km (M)',
+            text: p6.map(function () { return 'M'; }),
+            textposition: 'middle center',
+            textfont: { color: '#ffffff', size: 10, family: 'Arial Black, Arial, sans-serif' },
+            line: { color: 'rgba(37,99,235,0.5)', width: 1.5, dash: 'dot' },
+            marker: { size: 15, color: '#2563eb', line: { color: '#1e3a8a', width: 1 }, symbol: 'diamond' },
+            customdata: p6.map(function (p) { return [p.time_label, p.lat6, p.lon6]; }),
+            hovertemplate: '<b>%{customdata[0]}Z</b> · 6 km<br>%{customdata[1]:.2f}°N, %{customdata[2]:.2f}°<extra></extra>'
+        });
+
+        // Time labels next to each 2-km marker (annotations).
+        var annotations = p2.map(function (p) {
+            return {
+                x: p.lon2, y: p.lat2, text: p.time_label + 'Z',
+                showarrow: false, xanchor: 'left', yanchor: 'bottom',
+                xshift: 8, yshift: 4,
+                font: { color: '#93c5fd', size: 9, family: 'Arial, sans-serif' }
+            };
+        });
+
+        var images = [];
+        if (irJson && irJson.frame0 && irJson.bounds_deg) {
+            var bd = irJson.bounds_deg;
+            images.push({
+                source: irJson.frame0,
+                xref: 'x', yref: 'y',
+                x: bd.lon_min, y: bd.lat_max,
+                sizex: bd.lon_max - bd.lon_min,
+                sizey: bd.lat_max - bd.lat_min,
+                xanchor: 'left', yanchor: 'top',
+                sizing: 'stretch', opacity: 0.85, layer: 'below'
+            });
+        }
+
+        var isDark = !document.body.classList.contains('theme-light');
+        var paper = isDark ? '#0a1628' : '#ffffff';
+        var gridc = isDark ? 'rgba(148,163,184,0.18)' : 'rgba(15,23,42,0.12)';
+        var tickc = isDark ? '#94a3b8' : '#334155';
+
+        var layout = {
+            title: { text: title, font: { color: isDark ? '#e2e8f0' : '#0f172a', size: 13 }, x: 0.5, xanchor: 'center' },
+            paper_bgcolor: paper,
+            plot_bgcolor: images.length ? '#000010' : paper,
+            xaxis: {
+                title: { text: 'Longitude', font: { color: tickc, size: 11 } },
+                range: [lonMin - lonPad, lonMax + lonPad],
+                gridcolor: gridc, zeroline: false, tickfont: { color: tickc, size: 10 },
+                constrain: 'domain'
+            },
+            yaxis: {
+                title: { text: 'Latitude', font: { color: tickc, size: 11 } },
+                range: [latMin - latPad, latMax + latPad],
+                gridcolor: gridc, zeroline: false, tickfont: { color: tickc, size: 10 },
+                scaleanchor: 'x', scaleratio: 1 / Math.max(0.1, Math.cos(lat0 * Math.PI / 180))
+            },
+            images: images,
+            annotations: annotations,
+            showlegend: true,
+            legend: { x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top',
+                      font: { color: tickc, size: 10 },
+                      bgcolor: isDark ? 'rgba(10,22,40,0.75)' : 'rgba(255,255,255,0.8)',
+                      bordercolor: gridc, borderwidth: 1 },
+            margin: { l: 60, r: 20, t: 44, b: 48 },
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 10 } }
+        };
+
+        Plotly.newPlot('rt-ctrk-chart', traces, layout, {
+            responsive: true, displayModeBar: true, displaylogo: false,
+            modeBarButtonsToRemove: ['lasso2d', 'select2d', 'toggleSpikelines']
+        });
+
+        // ── Compact time × center table (like the classic figure) ──
+        var rows = points.map(function (p) {
+            var c2 = p.lat2 != null ? '(' + p.lon2.toFixed(2) + ', ' + p.lat2.toFixed(2) + ')' : '—';
+            var c6 = p.lat6 != null ? '(' + p.lon6.toFixed(2) + ', ' + p.lat6.toFixed(2) + ')' : '—';
+            var tilt = p.tilt_2_6_km != null ? p.tilt_2_6_km.toFixed(1) : '—';
+            return '<tr><td style="padding:1px 10px 1px 0;color:#93c5fd;">' + p.time_label + 'Z</td>' +
+                   '<td style="padding:1px 10px 1px 0;color:#cbd5e1;">' + c2 + '</td>' +
+                   '<td style="padding:1px 10px 1px 0;color:#cbd5e1;">' + c6 + '</td>' +
+                   '<td style="padding:1px 0;color:#94a3b8;">' + tilt + '</td></tr>';
+        }).join('');
+        var tbl = document.getElementById('rt-ctrk-table');
+        if (tbl) {
+            tbl.innerHTML =
+                '<table style="font-size:10.5px;border-collapse:collapse;font-variant-numeric:tabular-nums;">' +
+                '<thead><tr style="color:#64748b;text-align:left;border-bottom:1px solid rgba(148,163,184,0.25);">' +
+                '<th style="padding:1px 10px 3px 0;font-weight:600;">Time (Z)</th>' +
+                '<th style="padding:1px 10px 3px 0;font-weight:600;">2-km (lon, lat)</th>' +
+                '<th style="padding:1px 10px 3px 0;font-weight:600;">6-km (lon, lat)</th>' +
+                '<th style="padding:1px 0 3px;font-weight:600;">Tilt (km)</th></tr></thead>' +
+                '<tbody>' + rows + '</tbody></table>';
+        }
     }
 
     // ── Real-Time Wind Barbs ────────────────────────────────────
