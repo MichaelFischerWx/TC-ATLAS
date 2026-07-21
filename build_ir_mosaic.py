@@ -502,7 +502,8 @@ def _goes_hires_windows(da, x, y, lon_0, sat_h, sweep, windows):
     return out
 
 
-def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=None):
+def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=None,
+                   windows_only=False):
     import xarray as xr
     key, scan_dt = find_goes_file(bucket, dt, tolerance_min=tol, band=band,
                                   return_dt=True)
@@ -536,7 +537,9 @@ def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=No
         # native array is never materialized (peak-RAM fix). Byte-identical to
         # the whole-array path. Falls back to the legacy read for IR/WV
         # (coarsen==1), when disabled (MOSAIC_READ_STRIPS=0), or non-2-D vars.
-        if coarsen > 1 and _READ_STRIPS >= 1 and getattr(da, "ndim", 0) == 2:
+        if windows_only:
+            data = None                       # z7 second pass: skip the full-disk decode
+        elif coarsen > 1 and _READ_STRIPS >= 1 and getattr(da, "ndim", 0) == 2:
             data = _coarsen_read(da, coarsen, _READ_STRIPS)
             pre_coarsened = True
         else:
@@ -544,6 +547,11 @@ def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=No
             pre_coarsened = False
     finally:
         ds.close()
+    if windows_only:
+        # Decoupled z7 pass: only the native storm windows were decoded (the full
+        # disk is never materialized), so these crops can't co-reside with the
+        # pass-A full-disk grids — keeps worst-case daytime multi-storm Vis in 4 GiB.
+        return None, x, y, lon_0, sat_h, sweep, scan_dt, hires
     if data.size == 0 or x.size == 0 or y.size == 0:
         return None      # empty/partial file (seen on freshly-posting 0.5 km Vis)
     if coarsen > 1:
@@ -559,7 +567,8 @@ def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=No
     return data, x, y, lon_0, sat_h, sweep, scan_dt, hires
 
 
-def read_himawari_full_disk(dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=None):
+def read_himawari_full_disk(dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=None,
+                            windows_only=False):
     """Full-disk Himawari band via the existing HSD reader: a huge box centred on
     the sub-point pulls all 10 segments; the returned geos array + extent give us
     the same (data, x, y, lon_0, sat_h, sweep) shape as the GOES reader.
@@ -573,17 +582,20 @@ def read_himawari_full_disk(dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=N
                                          return_dt=True)
     if not prefix:
         return None
-    data, extent = open_himawari_subset(prefix, 0.0, HIMAWARI_LON_0,
-                                        box_deg=160.0, band=band,
-                                        return_extent=True)
-    if data is None or extent is None:
-        return None
-    data = data.astype(np.float32)
-    if coarsen > 1:
-        data = coarsen2d(data, coarsen)
-    ny, nx = data.shape
-    x = np.linspace(extent[0], extent[1], nx) / HIMAWARI_SAT_HEIGHT
-    y = np.linspace(extent[2], extent[3], ny) / HIMAWARI_SAT_HEIGHT
+    if windows_only:
+        data = x = y = None          # z7 second pass: skip the full-disk subset read
+    else:
+        data, extent = open_himawari_subset(prefix, 0.0, HIMAWARI_LON_0,
+                                            box_deg=160.0, band=band,
+                                            return_extent=True)
+        if data is None or extent is None:
+            return None
+        data = data.astype(np.float32)
+        if coarsen > 1:
+            data = coarsen2d(data, coarsen)
+        ny, nx = data.shape
+        x = np.linspace(extent[0], extent[1], nx) / HIMAWARI_SAT_HEIGHT
+        y = np.linspace(extent[2], extent[3], ny) / HIMAWARI_SAT_HEIGHT
     hires = []
     for (lat0, lat1, lon0, lon1) in (hires_windows or []):
         clat = 0.5 * (lat0 + lat1); clon = 0.5 * (lon0 + lon1)
@@ -662,6 +674,47 @@ def read_all_sats(dt, timings, product="ir", hires_windows=None):
         if cfg["coarsen"] > 1:
             _release_memory()
     return sats
+
+
+def read_all_sat_windows(dt, timings, product="vis", hires_windows=None):
+    """Decoupled SECOND pass for Vis z7 storm sectors: re-open each sat's file and
+    decode ONLY the native storm windows — the full disk is never retained. Run
+    AFTER the pass-A full-disk grids (global + z5/z6) are freed, so the two never
+    co-reside; this is what lets worst-case daytime multi-storm Vis (both GOES in
+    daylight, a storm in each cone) stay inside the 1 vCPU / 4 GiB tier instead of
+    OOM'ing on every frame. Cost: GOES re-downloads its 0.5 km CMIP file (NOAA S3
+    egress is free) and Himawari re-reads the 1-3 touched segments — both small
+    next to a full-disk read. Returns {sat_key: {hi, lon_0, sat_h, sweep, label}},
+    the subset render_storm_tiles(..., hi_only=True) needs. See project_mosaic_idx_oom."""
+    cfg = PRODUCTS[product]
+    if not (hires_windows and cfg["kind"] == "vis" and cfg["coarsen"] > 1):
+        return {}
+    out = {}
+    for sat_key, kind, bucket, label in SATS:
+        band = cfg["hima"] if kind == "himawari" else cfg["goes"]
+        coarsen = 1 if kind == "himawari" else cfg["coarsen"]
+        tol = cfg.get("tol", 20)
+        t0 = time.time()
+        try:
+            fd = (read_himawari_full_disk(dt, band=band, coarsen=coarsen, tol=tol,
+                                          hires_windows=hires_windows, windows_only=True)
+                  if kind == "himawari"
+                  else read_full_disk(bucket, dt, band=band, coarsen=coarsen,
+                                      tol=tol, hires_windows=hires_windows,
+                                      windows_only=True))
+        except Exception as e:
+            log(f"  {label} {product} windows: read failed ({e}) — skip"); fd = None
+        timings["read"] = timings.get("read", 0.0) + time.time() - t0
+        if fd is None:
+            continue
+        _data, _x, _y, lon_0, sat_h, sweep, _scan_dt, hires = fd
+        if hires:
+            out[sat_key] = dict(lon_0=lon_0, sat_h=sat_h, sweep=sweep, label=label,
+                                hi=[(w.reshape(-1), grid_of(wx, wy))
+                                    for (w, wx, wy) in hires])
+            log(f"  {label} {product}: {len(out[sat_key]['hi'])} native window(s) (z7 pass)")
+        _release_memory()      # return each file's transient before the next sat
+    return out
 
 
 # ── Global kernel (cached): geos→Mercator gather for the whole field ───────
@@ -836,7 +889,8 @@ def storm_tile_set(points, zooms, box_deg):
     return tiles
 
 
-def render_storm_tiles(sats, tiles, emit, timings, product="ir", dt=None):
+def render_storm_tiles(sats, tiles, emit, timings, product="ir", dt=None,
+                       hi_only=False):
     is_vis = PRODUCTS[product]["kind"] == "vis"
     night = PRODUCTS[product]["night"]
     t0 = time.time()
@@ -850,7 +904,7 @@ def render_storm_tiles(sats, tiles, emit, timings, product="ir", dt=None):
             # storm window instead of the 2-km full disk — the per-tile projection
             # is grid-agnostic, so deeper tiles carry real detail while z5/z6 and
             # the kernel-driven global render are byte-identical to today.
-            s_flat, idx = s["flat"], None
+            s_flat, idx = s.get("flat"), None
             if z > base_zmax:
                 for (hflat, hgrid) in s.get("hi") or []:
                     hidx, hcosz, hmask = project_to_sat(LON, LAT, hgrid, s["lon_0"],
@@ -858,6 +912,10 @@ def render_storm_tiles(sats, tiles, emit, timings, product="ir", dt=None):
                     if hmask.any():
                         s_flat, idx, cosz, mask = hflat, hidx, hcosz, hmask
                         break
+            if idx is None and hi_only:
+                # z7 second pass: the full disk was freed before this pass, so
+                # there is no 2-km fallback — skip sats with no covering window.
+                continue
             if idx is None:
                 idx, cosz, mask = project_to_sat(LON, LAT, s["grid"], s["lon_0"],
                                                  s["sat_h"], s["sweep"])
@@ -1392,7 +1450,10 @@ def main():
                 for p in points:
                     la, lo = (p["lat"], p["lon"]) if isinstance(p, dict) else p
                     hw.append((la - W, la + W, lo - W, lo + W))
-            sats = read_all_sats(dt, timings, product, hires_windows=hw)
+            # Pass A reads full disks ONLY (no native windows). Vis z7 windows are
+            # read in a decoupled second pass below, after these grids are freed, so
+            # the two never co-reside — the fix for the daytime multi-storm 4 GiB OOM.
+            sats = read_all_sats(dt, timings, product, hires_windows=None)
             if not sats:
                 log(f"  {product}: no satellite data — skip"); continue
             if kernels is None:
@@ -1425,7 +1486,23 @@ def main():
             n_global = write_pyramid(rgba, args.zmax, emit, timings)
             n_storm = 0
             if tiles:
-                n_storm = render_storm_tiles(sats, tiles, emit, timings, product, dt)
+                tiles_lo = {t for t in tiles if t[0] <= STORM_ZOOMS[-1]}
+                tiles_hi = {t for t in tiles if t[0] > STORM_ZOOMS[-1]}
+                # z5/z6 storm sectors from the 2-km full disk (byte-identical to before).
+                n_storm = render_storm_tiles(sats, tiles_lo, emit, timings, product, dt)
+                if tiles_hi and hw:
+                    # Vis z7 native sectors, DECOUPLED second pass: free the full-disk
+                    # grids first so the native windows never co-reside with them (the
+                    # OOM), then re-read only the windows. See project_mosaic_idx_oom.
+                    for _s in sats.values():
+                        _s.pop("flat", None); _s.pop("grid", None); _s.pop("npix", None)
+                    _release_memory()
+                    win = read_all_sat_windows(dt, timings, product, hw)
+                    if win:
+                        n_storm += render_storm_tiles(win, tiles_hi, emit, timings,
+                                                      product, dt, hi_only=True)
+                    del win
+                    _release_memory()
             # Objective eye-fix + warm-eye/cold-top Tb, from the IR sats already
             # in memory (no extra read). IR pass only; storms >= 65 kt only.
             if product == "ir":
