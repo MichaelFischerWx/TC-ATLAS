@@ -1418,6 +1418,14 @@ def main():
     ap.add_argument("--bands", default="ir",
                     help="comma-separated products to build: ir,wv,vis "
                          "(each → mosaic-v2/<product>/...)")
+    ap.add_argument("--eye-diags-out", default=None,
+                    help="write each frame's eye-fix diagnostics to this JSON file "
+                         "({ts: [diag,...]}) INSTEAD of uploading — band-isolated "
+                         "runs hand the IR pass's fixes to the WV pass this way "
+                         "(see mosaic_band_runner.py)")
+    ap.add_argument("--eye-diags-in", default=None,
+                    help="preload eye-fix diagnostics from this JSON file (the WV "
+                         "pass augments the IR fixes with WV Tb, then uploads)")
     ap.add_argument("--r2", action="store_true",
                     help="upload tiles to R2 (mosaic-v1/) + roll the manifest "
                          "(production Cloud Run Job mode)")
@@ -1453,7 +1461,16 @@ def main():
         log(f"── frame {fi+1}/{args.frames}: {dt:%Y-%m-%d %H:%M}Z "
             f"(zmax {args.zmax}, blend_p {BLEND_P:g}, bands {','.join(products)})")
         ts = dt.strftime("%Y%m%d%H%M")
-        frame_diags = []   # eye-fix / Tb diagnostics for storms >=65 kt (IR pass)
+        # Eye-fix / Tb diagnostics for storms >=65 kt (IR pass builds, WV pass
+        # augments). Band-isolated runs (mosaic_band_runner.py) hand them across
+        # processes as {ts: [diag,...]} JSON via --eye-diags-in/out.
+        frame_diags = []
+        if args.eye_diags_in:
+            try:
+                with open(args.eye_diags_in) as f:
+                    frame_diags = json.load(f).get(ts, [])
+            except Exception as e:
+                log(f"  eye diags preload failed: {e}")
         # Each product reads its own band, renders, tiles, uploads to its prefix.
         # The reproject kernels are shared (IR grid) across all bands. Sats are read
         # + freed per product so peak memory stays ~one band at a time.
@@ -1630,8 +1647,21 @@ def main():
                                  if k in timings)
                 log(f"    timings: {parts}")
 
-        # Ship the per-frame eye-fix / Tb-diagnostic sidecar (R2 mode).
-        if frame_diags and args.r2:
+        # Ship the per-frame eye-fix / Tb-diagnostic sidecar (R2 mode). In
+        # band-isolated runs the IR process writes to --eye-diags-out instead;
+        # the WV process (no out-file) augments and uploads.
+        if args.eye_diags_out:
+            try:
+                allf = {}
+                if os.path.exists(args.eye_diags_out):
+                    with open(args.eye_diags_out) as f:
+                        allf = json.load(f)
+                allf[ts] = frame_diags
+                with open(args.eye_diags_out, "w") as f:
+                    json.dump(allf, f)
+            except Exception as e:
+                log(f"  eye diags write failed: {e}")
+        elif frame_diags and args.r2:
             try:
                 st = update_r2_eye_fixes(ts, frame_diags)
                 log(f"  eye_fixes: {len(frame_diags)} storm(s) this frame, "

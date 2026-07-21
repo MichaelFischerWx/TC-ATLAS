@@ -48,6 +48,7 @@ RUN pip install --no-cache-dir \
 
 # the builder + the production satellite data stack it reuses
 COPY build_ir_mosaic.py .
+COPY mosaic_band_runner.py .
 COPY satellite_ir.py .
 COPY tc_center_fix.py .
 

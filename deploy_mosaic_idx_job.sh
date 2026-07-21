@@ -68,16 +68,29 @@ MOSAIC_JOB_CPU="${MOSAIC_JOB_CPU:-1}"
 # verified live (the manifest's pack_frames gates clients per frame either way).
 MOSAIC_PACK="${MOSAIC_PACK:-dual}"
 # Vis hi-res storm sectors: native 0.5-km windows around active storms feed z7
-# sector tiles (small windows — stays in the 4Gi tier). "0" reverts to 2-km/z6.
-MOSAIC_VIS_HIRES="${MOSAIC_VIS_HIRES:-1}"
+# sector tiles. HELD OFF (default 0) 2026-07-21: even the decoupled+guarded z7
+# pass can't fit the 19-00 UTC peak at 4Gi (project_mosaic_idx_oom). With
+# per-band process isolation (mosaic_band_runner.py) the vis process now starts
+# from a fresh arena — flip to 1 DELIBERATELY once a clean-peak day confirms
+# the isolated baseline has headroom.
+MOSAIC_VIS_HIRES="${MOSAIC_VIS_HIRES:-0}"
 # rolling 1 frame/run (R2_KEEP_FRAMES window in the builder). args use the ^@^
 # delimiter — leading -- trips gcloud.
+#
+# BAND ISOLATION (2026-07-21): entrypoint is mosaic_band_runner.py, which runs
+# each band (ir, wv, vis) in its OWN subprocess. One process running all three
+# accumulates glibc-arena garbage malloc_trim can't return, so the VIS band at
+# the 19-00 UTC peak OOM'd even at baseline (project_mosaic_idx_oom). A fresh
+# process per band returns the arena to the OS at exit; a residual vis-only OOM
+# at the extreme edge exits 0 (IR/WV already shipped; frame self-heals) instead
+# of failing the execution and paging.
 COMMON_FLAGS=(
   --region "${REGION}" --image "${IMAGE}"
   --memory "${MOSAIC_JOB_MEMORY}" --cpu "${MOSAIC_JOB_CPU}" --max-retries 1 --task-timeout 600
   --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET},MOSAIC_TILE_MODE=idx,MOSAIC_R2_PREFIX=mosaic-v3,MOSAIC_PACK=${MOSAIC_PACK},MOSAIC_VIS_HIRES=${MOSAIC_VIS_HIRES},MALLOC_ARENA_MAX=2,MALLOC_TRIM_THRESHOLD_=0"
   --set-secrets  "R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
-  "--args=^@^--r2@--storm@--time@--bands@ir,wv,vis@--frames@1"
+  --command "python"
+  "--args=^@^mosaic_band_runner.py@--r2@--storm@--time@--bands@ir,wv,vis@--frames@1"
 )
 echo "Deploying Cloud Run Job ${JOB_NAME} (idx → mosaic-v3)..."
 if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; then
