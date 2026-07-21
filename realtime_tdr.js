@@ -105,17 +105,42 @@
         var scale = 3;                       // 1280 × 3 = 3840 px wide
         var kit = window._ReconKit;
         var full = fname + '_' + ts + '.png';
-        // toImage renders an off-screen clone, so the live plot is untouched (the
-        // old path relayout-ed a watermark annotation INTO the live figure and
-        // restored it afterwards, which flickered and raced with redraws).
-        Plotly.toImage(gd, { format: 'png', width: outW, height: outH, scale: scale })
+
+        // The export is rendered at outW (≥1280) but the fonts are sized for the
+        // narrower on-screen panel, so at export width they come out small and
+        // hard to read (title, axis labels, the Max readout). Scale those fonts up
+        // by the widen factor for the render, then restore — toImage uses the live
+        // layout, so this is a brief, deliberate change during a save click.
+        var fb = Math.max(1, Math.min(2.2, outW / w0));
+        var L = gd.layout || {};
+        var upd = {}, rst = {};
+        function bump(path, cur) { if (typeof cur === 'number') { rst[path] = cur; upd[path] = Math.round(cur * fb); } }
+        bump('title.font.size', L.title && L.title.font && L.title.font.size);
+        ['xaxis', 'yaxis'].forEach(function (ax) {
+            var a = L[ax] || {};
+            bump(ax + '.title.font.size', a.title && a.title.font && a.title.font.size);
+            bump(ax + '.tickfont.size', a.tickfont && a.tickfont.size);
+        });
+        (L.annotations || []).forEach(function (a, i) {
+            if (a && a.font && typeof a.font.size === 'number') {
+                rst['annotations[' + i + '].font.size'] = a.font.size;
+                upd['annotations[' + i + '].font.size'] = Math.round(a.font.size * fb);
+            }
+        });
+        var hasBump = Object.keys(upd).length > 0;
+        var restore = function () { if (hasBump) { try { Plotly.relayout(gd, rst); } catch (e) {} } };
+
+        Promise.resolve(hasBump ? Plotly.relayout(gd, upd) : null)
+            .then(function () { return Plotly.toImage(gd, { format: 'png', width: outW, height: outH, scale: scale }); })
             .then(function (dataUrl) {
+                restore();
                 if (!kit || !kit.stampExport) { TCExport.save(dataUrl, full); return; }
                 kit.stampExport(dataUrl, outW * scale, outH * scale, function (blob) {
                     TCExport.save(blob || dataUrl, full);   // fall back to the raw PNG
                 }, caption || null);
             })
             .catch(function (e) {
+                restore();
                 console.error('[rtSavePlotPNG]', e);
                 if (typeof rtToast === 'function') rtToast('Could not save image', 'warn');
             });
@@ -2219,17 +2244,19 @@
 
     function rtBuildMaxAnnotation(maxInfo, units, xLabel, yLabel, fontSize) {
         if (!maxInfo) return null;
-        var fs = fontSize || 9;
+        var fs = fontSize || 11;   // was 9 — small
         return {
             text: '<b>Max:</b> ' + maxInfo.value.toFixed(2) + ' ' + units +
                   '  @  ' + xLabel + '=' + maxInfo.x.toFixed(0) + ', ' + yLabel + '=' + (Math.abs(maxInfo.y) < 100 ? maxInfo.y.toFixed(1) : maxInfo.y.toFixed(0)),
             xref: 'paper', yref: 'paper', x: 0.01, y: -0.01,
             xanchor: 'left', yanchor: 'top',
             showarrow: false,
-            font: { color: '#0f1623', size: fs, family: 'DM Sans, sans-serif' },
-            bgcolor: 'rgba(10,22,40,0.8)',
-            borderpad: 3,
-            bordercolor: 'rgba(255,255,255,0.15)',
+            // LIGHT text: the pill background is dark navy, so the old near-black
+            // #0f1623 was dark-on-dark and barely legible.
+            font: { color: '#f1f5f9', size: fs, family: 'DM Sans, sans-serif' },
+            bgcolor: 'rgba(10,22,40,0.82)',
+            borderpad: 4,
+            bordercolor: 'rgba(255,255,255,0.22)',
             borderwidth: 1
         };
     }
@@ -2347,7 +2374,7 @@
         baseLayout.shapes = shapes;
 
         var layout = Object.assign({}, baseLayout, {
-            title: { text: title, font: { color: '#0f1623', size: 11 }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
+            title: { text: title, font: { color: '#0f1623', size: 14 }, y: 0.97, x: 0.5, xanchor: 'center', yanchor: 'top' },
             margin: { l: 52, r: 16, t: json.overlay ? 58 : 46, b: 44 }
         });
 
@@ -7331,78 +7358,13 @@
         btn.classList.toggle('active');
     };
 
-    window._rtAddTiltTo3D = function (tiltData) {
-        var chartDiv = document.getElementById('vol-3d-chart');
-        var btn = document.getElementById('vol-tilt-toggle');
-        if (!tiltData || !tiltData.x_km || !tiltData.x_km.length) {
-            if (btn) { btn.disabled = true; btn.classList.remove('active'); }
-            return;
-        }
-        if (btn) btn.disabled = false;
-
-        var rawX = tiltData.x_km, rawY = tiltData.y_km, rawZ = tiltData.height_km;
-        var rawMag = tiltData.tilt_magnitude_km || [];
-        var rawRmw = tiltData.rmw_km || [];
-        var refH = tiltData.ref_height_km || 2.0;
-        var offX = tiltData.ref_center_x_km || 0;
-        var offY = tiltData.ref_center_y_km || 0;
-
-        // Filter out levels with null coordinates
-        var xAbs = [], yAbs = [], z = [], tiltMag = [], rmw = [], dx = [], dy = [];
-        for (var k = 0; k < rawZ.length; k++) {
-            if (rawX[k] == null || rawY[k] == null || rawZ[k] == null) continue;
-            xAbs.push(rawX[k] + offX); yAbs.push(rawY[k] + offY); z.push(rawZ[k]);
-            dx.push(rawX[k]); dy.push(rawY[k]);
-            tiltMag.push(rawMag[k] != null ? rawMag[k] : null);
-            rmw.push(rawRmw[k] != null ? rawRmw[k] : null);
-        }
-        if (z.length < 2) {
-            if (btn) { btn.disabled = true; btn.classList.remove('active'); }
-            return;
-        }
-
-        var hoverText = [];
-        for (var i = 0; i < z.length; i++) {
-            var txt = '<b>' + z[i].toFixed(1) + ' km</b>' +
-                '<br>\u0394X: ' + dx[i].toFixed(1) + ', \u0394Y: ' + dy[i].toFixed(1) + ' km';
-            if (tiltMag[i] != null) txt += '<br>Tilt: ' + tiltMag[i].toFixed(1) + ' km';
-            if (rmw[i] != null) txt += '<br>RMW: ' + rmw[i].toFixed(1) + ' km';
-            hoverText.push(txt);
-        }
-        var sizes = z.map(function (h) { return Math.abs(h - refH) < 0.3 ? 7 : 4; });
-
-        var lineTrace = {
-            type: 'scatter3d', mode: 'lines',
-            x: xAbs, y: yAbs, z: z,
-            line: { color: _RT_TILT_LINE, width: 3, dash: 'dot' },
-            hoverinfo: 'skip', showlegend: false
-        };
-        var markerTrace = {
-            type: 'scatter3d', mode: 'markers+text',
-            x: xAbs, y: yAbs, z: z,
-            marker: {
-                size: sizes, color: z,
-                colorscale: _RT_TILT_COLORSCALE, cmin: 0, cmax: 14,
-                line: { color: _RT_TILT_OUTLINE, width: 1 },
-                colorbar: {
-                    title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } },
-                    tickfont: { color: '#5b6573', size: 9 },
-                    thickness: 10, len: 0.35,
-                    x: 1.08, y: 0.15, xanchor: 'left'
-                }
-            },
-            text: z.map(function (h) { return h.toFixed(1); }),
-            textposition: 'top right',
-            textfont: { size: 8, color: 'rgba(110,231,183,0.7)' },
-            hovertext: hoverText, hoverinfo: 'text',
-            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } },
-            showlegend: false
-        };
-
-        _rtTilt3DTraceStart = chartDiv.data.length;
-        Plotly.addTraces(chartDiv, [lineTrace, markerTrace]);
-        if (btn) btn.classList.add('active');
-    };
+    // The shared 3D module (vol3d.js _build3DTiltTraces) now renders the vortex-
+    // tilt column + RMW rings itself — magenta, matching the archive — so this
+    // RT-side duplicate is retired: it was adding a SECOND (Viridis) tilt overlay
+    // that the Tilt button couldn't even control. No-op keeps its call sites
+    // (rtOpen3DModal, the vol3d-rerendered listener) harmless; the Tilt button now
+    // drives vol3d's toggle3DTilt().
+    window._rtAddTiltTo3D = function () { return; };
 
 
     // ── Single-Case CFAD for Real-Time TDR ──────────────────────────

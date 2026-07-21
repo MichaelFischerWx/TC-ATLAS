@@ -25,6 +25,29 @@
 var _last3DJson = null;
 var _3dTiltTraceStart = -1;   // index where tilt traces begin in chart data
 
+// Tilt-height colorscale: a magenta/purple family so the vortex-tilt column and
+// its RMW rings stand out from the reflectivity/wind fields (which run
+// blue→green→yellow→red) and the grey backdrop, instead of a Viridis that blended
+// in. Bright at every height so low-level rings/points don't vanish.
+var _VOL3D_TILT_CS = [
+    [0.00, '#f9a8d4'], [0.40, '#e879f9'], [0.70, '#c026d3'], [1.00, '#86198f']
+];
+var _VOL3D_TILT_LINE = 'rgba(192,38,211,0.85)';
+function _vol3dSampleCS(scale, t) {
+    t = Math.max(0, Math.min(1, t));
+    function hx(h) { return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
+    for (var i = 1; i < scale.length; i++) {
+        if (t <= scale[i][0]) {
+            var a = scale[i - 1], b = scale[i], f = (t - a[0]) / (b[0] - a[0] || 1);
+            var ca = hx(a[1]), cb = hx(b[1]);
+            return 'rgb(' + Math.round(ca[0] + f * (cb[0] - ca[0])) + ',' +
+                            Math.round(ca[1] + f * (cb[1] - ca[1])) + ',' +
+                            Math.round(ca[2] + f * (cb[2] - ca[2])) + ')';
+        }
+    }
+    return scale[scale.length - 1][1];
+}
+
 // Plotly.newPlot wrapper: reuse the archive theme wrapper when it's
 // loaded (explorer.html), otherwise call Plotly directly (RT page).
 // The 3D chart is always inside a modal, so tcrNewPlot's touch
@@ -312,7 +335,7 @@ function _build3DTiltTraces(tiltData) {
         type: 'scatter3d',
         mode: 'lines',
         x: x, y: y, z: z,
-        line: { color: 'rgba(52,211,153,0.6)', width: 3, dash: 'dot' },
+        line: { color: _VOL3D_TILT_LINE, width: 3, dash: 'dot' },
         hoverinfo: 'skip',
         showlegend: false
     };
@@ -324,9 +347,9 @@ function _build3DTiltTraces(tiltData) {
         marker: {
             size: sizes,
             color: z,
-            colorscale: 'Viridis',
+            colorscale: _VOL3D_TILT_CS,
             cmin: 0, cmax: 14,
-            line: { color: 'rgba(15, 22, 35,0.4)', width: 0.5 },
+            line: { color: 'rgba(20,0,28,0.9)', width: 1 },
             colorbar: {
                 title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } },
                 tickfont: { color: '#5b6573', size: 9 },
@@ -337,14 +360,37 @@ function _build3DTiltTraces(tiltData) {
         },
         text: z.map(function(h) { return h.toFixed(1); }),
         textposition: 'top right',
-        textfont: { size: 8, color: 'rgba(110,231,183,0.7)' },
+        textfont: { size: 8, color: 'rgba(240,171,252,0.75)' },
         hovertext: hoverText,
         hoverinfo: 'text',
         hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } },
         showlegend: false
     };
 
-    return [lineTrace, markerTrace];
+    // RMW rings — one circle per height, centred on THAT height's own vortex
+    // centre (so the stack leans with the tilt) and coloured by height. Mirrors
+    // the archive "RMW rings at each height" figure; makes the vortex structure +
+    // tilt legible at a glance versus the bare centre line.
+    var ringTraces = [];
+    var NTH = 48, theta = [];
+    for (var ti = 0; ti <= NTH; ti++) theta.push(2 * Math.PI * ti / NTH);
+    for (var ri = 0; ri < z.length; ri++) {
+        if (rmw[ri] == null || !isFinite(rmw[ri]) || rmw[ri] <= 0) continue;
+        var rx = [], ry = [], rz = [];
+        for (var tj = 0; tj < theta.length; tj++) {
+            rx.push(x[ri] + rmw[ri] * Math.cos(theta[tj]));
+            ry.push(y[ri] + rmw[ri] * Math.sin(theta[tj]));
+            rz.push(z[ri]);
+        }
+        ringTraces.push({
+            type: 'scatter3d', mode: 'lines', x: rx, y: ry, z: rz,
+            line: { color: _vol3dSampleCS(_VOL3D_TILT_CS, z[ri] / 14), width: 4 },
+            hovertemplate: 'RMW ' + rmw[ri].toFixed(0) + ' km @ ' + z[ri].toFixed(1) + ' km<extra></extra>',
+            showlegend: false
+        });
+    }
+
+    return [lineTrace, markerTrace].concat(ringTraces);
 }
 
 function _addTiltTo3D() {
