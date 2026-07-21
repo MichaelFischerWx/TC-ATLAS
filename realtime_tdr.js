@@ -155,13 +155,18 @@
             if (typeof rtToast === 'function') rtToast('Generate a plot first', 'warn');
             return;
         }
+        // The descriptive title (storm · time · field) is already rendered at
+        // the top of the figure, so the footer caption carries PROVENANCE — the
+        // source analysis/mission id — rather than restating the title. Fall
+        // back to the (flattened) title only when there's no file id, so the
+        // footer is never blank. stampExport flattens any residual markup.
         var caption = '';
         try {
             var title = (gd.layout && gd.layout.title &&
                          (gd.layout.title.text || gd.layout.title)) || '';
             var fn = (_currentFileUrl || '').split('/').pop()
                         .replace(/_xy\.nc(\.gz)?$/i, '');
-            caption = [fn, title].filter(Boolean).join('  ·  ');
+            caption = fn || title;
         } catch (e) {}
         rtSavePlotPNG('rt-plotly-chart', 'TDR_PlanView', caption);
     };
@@ -1030,6 +1035,7 @@
         ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
         // Header: title + subtitle (storm/flight + generated time).
         var name = _hdobMissionTail ? (_hdobName || _hdobMissionTail) : (_hdobName || _hdobAtcf || '');
+        name = _hdobTailDisplay(name);   // NOAA3 -> NOAA 43 when the title is a bare tail
         var c = (_hdobData && _hdobData.counts) || {};
         var when = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
         ctx.textBaseline = 'middle';

@@ -20541,9 +20541,30 @@
     // Composite the brand watermark onto a Plotly.toImage PNG data-URL and hand
     // back a Blob (cb(blob)). Used so every figure export carries the watermark
     // + logo without per-figure Plotly annotation/image plumbing.
+    /** Flatten a caption to a single clean text line. Callers build captions
+     *  from Plotly title strings that carry layout markup — "<br>" for the
+     *  two-line on-plot title, "<span…>" for the contour note — and the caption
+     *  is drawn as raw raster text (no HTML), so a stray tag would print
+     *  literally (e.g. "…00:52Z<br>Tangential Wind"). Convert <br> to " · ",
+     *  drop other tags, decode the few entities that appear, and collapse any
+     *  resulting separator/space runs. */
+    function _tcPlainCaption(text) {
+        if (!text) return '';
+        return String(text)
+            .replace(/<br\s*\/?>/gi, ' · ')
+            .replace(/<[^>]*>/g, '')
+            .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&')
+            .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+            .replace(/\s+/g, ' ')
+            .replace(/(?:\s*·\s*){2,}/g, ' · ')   // collapse separator runs (stripped empty tags)
+            .replace(/^\s*·\s*/, '').replace(/\s*·\s*$/, '')
+            .trim();
+    }
+
     /** Draw an attribution caption (e.g. "Invest 95W · 2026-06-28 06Z") in the
      *  bottom-left, mirroring the TC-ATLAS watermark (bottom-right). */
     function _drawExportCaption(ctx, w, h, text) {
+        text = _tcPlainCaption(text);
         if (!text) return;
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var s = Math.max(1, w / 900);
