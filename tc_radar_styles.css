@@ -558,7 +558,13 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 .vol3d-modal-box { width: 96vw; height: 94vh; background: #0d1117; border-radius: var(--radius-lg); position: relative; overflow: hidden; box-shadow: 0 8px 40px rgba(0,0,0,0.18); border: 1px solid var(--border-light); display: flex; flex-direction: column; }
 .vol3d-controls { display: flex; align-items: center; gap: 8px; padding: 8px 50px 6px 14px; background: rgba(15,20,30,0.95); border-bottom: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap; z-index: 2; }
 .vol3d-controls label { font-size: 10px; color: #8899aa; font-weight: 600; white-space: nowrap; }
-.vol3d-controls input, .vol3d-controls select { padding: 3px 5px; font-size: 11px; border: 1px solid var(--border-light); border-radius: 4px; background: #161b22; color: var(--text); font-family: 'DM Sans', sans-serif; }
+/* The control bar is ALWAYS dark (background #161b22), so its inputs/selects must
+   use a fixed LIGHT text colour — `var(--text)` follows the page theme and is dark
+   in light mode, which rendered the values (e.g. the Surfaces "4") invisible on the
+   dark bar. Fixed border/arrow too so the fields read in both themes. */
+.vol3d-controls input, .vol3d-controls select { padding: 3px 5px; font-size: 11px; border: 1px solid rgba(255,255,255,0.22); border-radius: 4px; background: #161b22; color: #e6e8eb; font-family: 'DM Sans', sans-serif; }
+.vol3d-controls select { appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23e6e8eb' stroke-width='1.5'/></svg>"); background-repeat: no-repeat; background-position: right 5px center; padding-right: 18px; }
+.vol3d-controls option { background: #161b22; color: #e6e8eb; }
 .vol3d-toggle-btn { padding: 3px 10px; font-size: 10px; border: 1px solid var(--blue); border-radius: 4px; background: transparent; color: var(--blue-light); cursor: pointer; font-weight: 700; font-family: 'DM Sans', sans-serif; transition: all 0.15s; }
 .vol3d-toggle-btn.active { background: var(--blue); color: #ffffff; }
 .vol3d-toggle-btn:hover { background: rgba(37,99,235,0.15); }

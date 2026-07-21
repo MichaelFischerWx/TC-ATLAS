@@ -97,7 +97,7 @@ RT_VARIABLES = {
     "TANGENTIAL_WIND": ("Tangential Wind",   "jet",        "m/s",  -10,  80),
     "RADIAL_WIND":     ("Radial Wind",        "RdBu_r",    "m/s",  -30,  30),
     "W":               ("Vertical Velocity",  "RdBu_r",    "m/s",   -5,   5),
-    "REFLECTIVITY":    ("Reflectivity",       "Spectral_r", "dBZ", -10,  65),
+    "REFLECTIVITY":    ("Reflectivity",       "nws_ref",    "dBZ", -10,  65),
     "WIND_SPEED":      ("Wind Speed",         "inferno",   "m/s",    0,  80),
     "VORT":            ("Relative Vorticity", "RdBu_r",    "s⁻¹", -5e-3, 5e-3),
     "U":               ("Eastward Wind (U)",  "RdBu_r",    "m/s",  -40,  40),
@@ -444,6 +444,46 @@ def _open_rt_dataset(file_url: str) -> xr.Dataset:
     ds = xr.open_dataset(buf, engine=engine)
     _rt_ds_cache[file_url] = (ds, time.time())
     return ds
+
+
+# Custom NWS/NEXRAD-style reflectivity colormap — the operational radar standard,
+# far more legible than the generic Spectral_r rainbow it replaces (cyan light
+# echo → green → yellow → orange → red → magenta at the extremes, with clear steps
+# between intensity bands). Anchors are placed at their true dBZ values across the
+# REFLECTIVITY display range (-10…65 dBZ), so band edges land on round numbers.
+# Registered once at import so _cmap_to_plotly / plt.get_cmap resolve it by name.
+def _register_nws_reflectivity():
+    from matplotlib.colors import LinearSegmentedColormap
+    vmin, vmax = -10.0, 65.0
+    stops = [
+        (-10, "#41415a"),  # sub-echo: muted slate (barely-there returns)
+        (  5, "#00ecec"),  # cyan
+        ( 10, "#019ff4"),  # light blue
+        ( 15, "#0300f4"),  # blue
+        ( 20, "#02fd02"),  # green
+        ( 25, "#01c501"),  # green
+        ( 30, "#008e00"),  # dark green
+        ( 35, "#fdf802"),  # yellow
+        ( 40, "#e5bc00"),  # gold
+        ( 45, "#fd9500"),  # orange
+        ( 50, "#fd0000"),  # red
+        ( 55, "#d40000"),  # dark red
+        ( 60, "#bc0000"),  # darker red
+        ( 65, "#f800fd"),  # magenta (extreme)
+    ]
+    pts = [((dbz - vmin) / (vmax - vmin), hexc) for dbz, hexc in stops]
+    cmap = LinearSegmentedColormap.from_list("nws_ref", pts)
+    try:
+        import matplotlib as _mpl
+        _mpl.colormaps.register(cmap, force=True)   # mpl >= 3.6
+    except Exception:
+        try:
+            plt.register_cmap(cmap=cmap)             # older mpl
+        except Exception:
+            pass
+
+
+_register_nws_reflectivity()
 
 
 def _cmap_to_plotly(cmap_name: str, n_steps: int = 64) -> list:

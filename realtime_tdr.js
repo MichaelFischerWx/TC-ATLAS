@@ -7135,6 +7135,21 @@
     var _rtTiltEnabled = false;      // toggle state
     var _rtTilt3DTraceStart = -1;    // index where tilt traces start in 3D viewer
 
+    // Tilt-height colorscale. Deliberately a magenta/purple family: the fields
+    // it overlays — Jet wind and the reflectivity rainbow — both run
+    // blue→green→yellow→red, and the IR backdrop is grayscale, so a Viridis
+    // (blue/green/yellow) tilt column blended right in. Magenta sits outside all
+    // of those, and the ramp stays bright at every height so low-level points
+    // don't disappear over the dark inner core.
+    var _RT_TILT_COLORSCALE = [
+        [0.00, '#f9a8d4'],   // 0 km  — light pink
+        [0.40, '#e879f9'],   //         magenta
+        [0.70, '#c026d3'],   //         bright magenta
+        [1.00, '#86198f']    // 14 km — deep magenta
+    ];
+    var _RT_TILT_LINE   = 'rgba(192,38,211,0.85)';   // connecting line (magenta, was green)
+    var _RT_TILT_OUTLINE = 'rgba(20,0,28,0.9)';      // marker edge — dark so dots read on light areas
+
     window.rtToggleTilt = function () {
         var btn = document.getElementById('rt-tilt-btn');
         if (!btn) return;
@@ -7243,7 +7258,7 @@
         var lineTrace = {
             x: xAbs, y: yAbs,
             mode: 'lines', type: 'scatter',
-            line: { color: 'rgba(52,211,153,0.5)', width: 1.5, dash: 'dot' },
+            line: { color: _RT_TILT_LINE, width: 1.5, dash: 'dot' },
             hoverinfo: 'skip', showlegend: false
         };
 
@@ -7252,8 +7267,8 @@
             mode: 'markers', type: 'scatter',
             marker: {
                 size: sizes, color: z,
-                colorscale: 'Viridis', cmin: 0, cmax: 14,
-                line: { color: 'rgba(255,255,255,0.5)', width: 0.5 },
+                colorscale: _RT_TILT_COLORSCALE, cmin: 0, cmax: 14,
+                line: { color: _RT_TILT_OUTLINE, width: 1 },
                 colorbar: {
                     title: { text: 'Tilt Height (km)', font: { color: '#5b6573', size: 9 } },
                     tickfont: { color: '#5b6573', size: 8 },
@@ -7359,7 +7374,7 @@
         var lineTrace = {
             type: 'scatter3d', mode: 'lines',
             x: xAbs, y: yAbs, z: z,
-            line: { color: 'rgba(52,211,153,0.6)', width: 3, dash: 'dot' },
+            line: { color: _RT_TILT_LINE, width: 3, dash: 'dot' },
             hoverinfo: 'skip', showlegend: false
         };
         var markerTrace = {
@@ -7367,8 +7382,8 @@
             x: xAbs, y: yAbs, z: z,
             marker: {
                 size: sizes, color: z,
-                colorscale: 'Viridis', cmin: 0, cmax: 14,
-                line: { color: 'rgba(255,255,255,0.4)', width: 0.5 },
+                colorscale: _RT_TILT_COLORSCALE, cmin: 0, cmax: 14,
+                line: { color: _RT_TILT_OUTLINE, width: 1 },
                 colorbar: {
                     title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } },
                     tickfont: { color: '#5b6573', size: 9 },
