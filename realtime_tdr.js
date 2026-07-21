@@ -128,9 +128,45 @@
             }
         });
         var hasBump = Object.keys(upd).length > 0;
-        var restore = function () { if (hasBump) { try { Plotly.relayout(gd, rst); } catch (e) {} } };
 
-        Promise.resolve(hasBump ? Plotly.relayout(gd, upd) : null)
+        // Colorbar fonts are TRACE attributes (not layout), so the relayout bump
+        // above misses them — the colorbar label + ticks stayed small on export.
+        // Bump them with a parallel restyle across every colorbar-bearing trace.
+        var data = gd.data || [];
+        var cbIdx = [], cbTickUp = [], cbTickRs = [], cbTitleUp = [], cbTitleRs = [];
+        for (var ti = 0; ti < data.length; ti++) {
+            var tr = data[ti];
+            if (!tr || tr.showscale === false) continue;
+            var cb = tr.colorbar || {};
+            // Only bump traces that actually carry a colorbar spec (heatmaps,
+            // contours, coloured-marker scatters) — skip plain line traces.
+            var hasColorbar = !!tr.colorbar ||
+                (tr.marker && (tr.marker.showscale || (tr.marker.colorbar))) ||
+                tr.type === 'heatmap' || tr.type === 'contour' || tr.type === 'heatmapgl';
+            if (!hasColorbar) continue;
+            var curTick = (cb.tickfont && cb.tickfont.size) || 12;
+            var curTitle = (cb.title && cb.title.font && cb.title.font.size) ||
+                           (cb.titlefont && cb.titlefont.size) || 13;
+            cbIdx.push(ti);
+            cbTickRs.push(curTick);  cbTickUp.push(Math.round(curTick * fb));
+            cbTitleRs.push(curTitle); cbTitleUp.push(Math.round(curTitle * fb));
+        }
+        var hasCb = cbIdx.length > 0;
+
+        var applyBump = function () {
+            var ps = [];
+            if (hasBump) ps.push(Plotly.relayout(gd, upd));
+            if (hasCb) ps.push(Plotly.restyle(gd,
+                { 'colorbar.tickfont.size': cbTickUp, 'colorbar.title.font.size': cbTitleUp }, cbIdx));
+            return Promise.all(ps);
+        };
+        var restore = function () {
+            if (hasBump) { try { Plotly.relayout(gd, rst); } catch (e) {} }
+            if (hasCb) { try { Plotly.restyle(gd,
+                { 'colorbar.tickfont.size': cbTickRs, 'colorbar.title.font.size': cbTitleRs }, cbIdx); } catch (e) {} }
+        };
+
+        Promise.resolve((hasBump || hasCb) ? applyBump() : null)
             .then(function () { return Plotly.toImage(gd, { format: 'png', width: outW, height: outH, scale: scale }); })
             .then(function (dataUrl) {
                 restore();
@@ -756,7 +792,8 @@
         if (!_hdobBarbLayer) { _hdobBarbLayer = new kit.BarbLayer(); _hdobBarbLayer.addTo(map); }
         _hdobBarbLayer.setData(mapAircraft, latestMs);
         for (var mi = 0; mi < _hdobMarkers.length; mi++) { try { map.removeLayer(_hdobMarkers[mi]); } catch (e) {} }
-        _hdobMarkers = kit.buildMarkers(map, _hdobData);
+        // Sonde/VDM markers honour the flight selection too (was: always all).
+        _hdobMarkers = kit.buildMarkers(map, _hdobFilterMarkerBlob(_hdobData));
         _hdobRenderAircraft(map, mapAircraft);
         if (!_hdobFitDone) {
             // Anchor the initial view on the LATEST aircraft position — where the
@@ -856,6 +893,24 @@
             seen[t] = 1; out.push(aircraft[i]);
         }
         return out;
+    }
+
+    function _hdobTailEq(a, b) {
+        return String(a || '').trim().toUpperCase() === String(b || '').trim().toUpperCase();
+    }
+
+    /** Scope the dropsonde + VDM markers to the selected flight, the same way
+     *  _hdobFilterAircraft scopes the barbs/track. Sondes carry `tail`, VDMs
+     *  carry `aircraft`; both are matched against the selected aircraft's raw
+     *  tail (the `#sortie` suffix is dropped — sonde/VDM records aren't tagged
+     *  by sortie). No selection → the blob is returned unchanged. */
+    function _hdobFilterMarkerBlob(blob) {
+        if (!_hdobFlightSel || !blob) return blob;
+        var selTail = _hdobFlightSel.split('#')[0];
+        return Object.assign({}, blob, {
+            dropsondes: (blob.dropsondes || []).filter(function (d) { return _hdobTailEq(d.tail, selTail); }),
+            vdms:       (blob.vdms || []).filter(function (x) { return _hdobTailEq(x.aircraft, selTail); })
+        });
     }
 
     /** Segmented flight selector: [All] [tail · src] … Controls chart + map.
@@ -5919,31 +5974,38 @@
             });
         });
 
-        // Layout with up to 4 y-axes
-        var gridColor = 'rgba(148,163,184,0.08)';
+        // Layout with up to 4 y-axes — driven by the site theme vars (light/dark)
+        // so the panel matches the rest of the monitor instead of a fixed muddy
+        // translucent grey. tc_radar_styles.css defines these for both themes.
+        var _flCS = getComputedStyle(document.documentElement);
+        function _flVar(n, f) { return (_flCS.getPropertyValue(n) || '').trim() || f; }
+        var flPaper = _flVar('--plot-paper', '#ffffff');
+        var flBg    = _flVar('--plot-bg', '#ffffff');
+        var flInk   = _flVar('--text', '#334155');
+        var flInkDim = _flVar('--text-dim', '#5b6573');
+        var gridColor = _flVar('--plot-grid', 'rgba(148,163,184,0.15)');
         var layout = {
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(247,248,250,0.85)',
+            paper_bgcolor: flPaper,
+            plot_bgcolor: flBg,
             // Top margin holds the legend strip (see below) so it stops covering
             // the traces it describes — the wind peaks sit exactly where the old
             // top-right vertical legend floated.
             margin: { l: 55, r: 55, t: 44, b: 40 },
-            font: { family: 'DM Sans, sans-serif', size: 11, color: '#5b6573' },
+            font: { family: 'DM Sans, sans-serif', size: 11, color: flInkDim },
             legend: {
                 // Horizontal strip ABOVE the plot (was a floating box INSIDE it).
                 orientation: 'h', x: 0, xanchor: 'left', y: 1.0, yanchor: 'bottom',
-                font: { size: 9, color: '#475569' },
-                // plot_bgcolor here is LIGHT, but this box used a dark fill
-                // (rgba(10,15,25,0.7)) with dark text — it rendered as an
-                // unreadable slab. Match the plot surface instead.
-                bgcolor: 'rgba(255,255,255,0.75)',
-                bordercolor: 'rgba(15,23,42,0.12)', borderwidth: 1,
+                font: { size: 9, color: flInkDim },
+                // Match the (theme-aware) plot surface so the strip reads on both
+                // light and dark rather than being a fixed light slab.
+                bgcolor: flPaper,
+                bordercolor: gridColor, borderwidth: 1,
                 traceorder: 'grouped', tracegroupgap: 4,
             },
             hovermode: 'x unified',
             xaxis: {
                 title: { text: 'Minutes from Analysis Time', font: { size: 11 } },
-                color: '#5b6573',
+                color: flInkDim,
                 gridcolor: gridColor,
                 zeroline: true,
                 zerolinecolor: 'rgba(96,165,250,0.5)',
@@ -6068,15 +6130,14 @@
                 yref: 'paper',
                 text: insetLines.join('<br>'),
                 showarrow: false,
-                // Same dark-box-on-light-plot problem as the legend: dark fill with
-                // dark text made this stats inset barely legible. Light, translucent
-                // fill so the traces underneath still read through it.
-                font: { family: 'DM Sans, sans-serif', size: 10, color: '#334155' },
+                // Theme-aware stats inset: paper-coloured fill + primary ink so it
+                // reads on both light and dark (was a fixed light slab).
+                font: { family: 'DM Sans, sans-serif', size: 10, color: flInk },
                 align: 'left',
                 xanchor: 'left',
                 yanchor: 'top',
-                bgcolor: 'rgba(255,255,255,0.82)',
-                bordercolor: 'rgba(15,23,42,0.15)',
+                bgcolor: flPaper,
+                bordercolor: gridColor,
                 borderwidth: 1,
                 borderpad: 6,
             });
