@@ -1183,20 +1183,59 @@
      *  multi-segment rendering. */
     function splitAtAntimeridian(latlngs) {
         if (latlngs.length < 2) return [latlngs];
+        // Normalize longitudes to -180..180 first. Some sources (notably
+        // DeepMind WeatherLab, which is 0..360) feed unwrapped longitudes;
+        // without this a genuine dateline crossing (e.g. 178 -> 182) shows
+        // NO >180° jump, so the track is never split and the renderer draws
+        // the connecting segment the long way across the whole map.
+        var norm = [];
+        for (var n = 0; n < latlngs.length; n++) {
+            var lon = latlngs[n][1];
+            while (lon > 180) lon -= 360;
+            while (lon < -180) lon += 360;
+            norm.push([latlngs[n][0], lon]);
+        }
         var segments = [];
-        var current = [latlngs[0]];
-        for (var i = 1; i < latlngs.length; i++) {
-            var prevLon = latlngs[i - 1][1];
-            var curLon = latlngs[i][1];
+        var current = [norm[0]];
+        for (var i = 1; i < norm.length; i++) {
+            var prevLon = norm[i - 1][1];
+            var curLon = norm[i][1];
             // A jump > 180° in longitude indicates a dateline crossing
             if (Math.abs(curLon - prevLon) > 180) {
                 segments.push(current);
                 current = [];
             }
-            current.push(latlngs[i]);
+            current.push(norm[i]);
         }
         segments.push(current);
         return segments;
+    }
+
+    // Circular mean of a longitude list (degrees). Robust across the
+    // antimeridian: averaging +179 and -179 yields ±180, not 0. Returns a
+    // value in -180..180; used as the reference for dateline-aware unwrapping
+    // of genesis-map track longitudes. Returns 0 for an empty list.
+    function _genesisCircMeanLon(lons) {
+        var s = 0, c = 0, n = 0;
+        for (var i = 0; i < lons.length; i++) {
+            var lo = lons[i];
+            if (lo == null || !isFinite(lo)) continue;
+            var r = lo * Math.PI / 180;
+            s += Math.sin(r); c += Math.cos(r); n++;
+        }
+        if (!n) return 0;
+        return Math.atan2(s, c) * 180 / Math.PI;
+    }
+
+    // Hemisphere-aware lat/lon label for DeepMind/WeatherLab tooltips.
+    // Normalizes 0..360 longitudes (the WeatherLab convention) to -180..180
+    // so western-hemisphere positions read as °W, not a bare positive °E.
+    function _wlFmtLatLon(lat, lon) {
+        var x = lon;
+        while (x > 180) x -= 360;
+        while (x < -180) x += 360;
+        return Math.abs(lat).toFixed(1) + '°' + (lat >= 0 ? 'N' : 'S') + ' ' +
+               Math.abs(x).toFixed(1) + '°' + (x >= 0 ? 'E' : 'W');
     }
 
     /** Classify wind speed (kt) to Saffir-Simpson category key */
@@ -13156,7 +13195,7 @@
                 marker._wlBaseRadius = baseR;
 
                 var tipHtml = '<b>Member ' + key + '</b> +' + pt.tau + 'h<br>' +
-                    pt.lat.toFixed(1) + '\u00B0N ' + pt.lon.toFixed(1) + '\u00B0E<br>' +
+                    _wlFmtLatLon(pt.lat, pt.lon) + '<br>' +
                     (pt.wind != null ? pt.wind.toFixed(0) + ' kt' : '') +
                     (pt.pres != null ? ' \u00B7 ' + pt.pres.toFixed(0) + ' hPa' : '') +
                     '<br><span style="color:' + color + ';">' + cat + '</span>';
@@ -13192,7 +13231,7 @@
                 var lmiTip = '<b>Member ' + key + ' LMI</b><br>' +
                     '+' + lmiPt.tau + 'h \u00B7 ' + lmiWind.toFixed(0) + ' kt' +
                     (lmiPt.pres != null ? ' \u00B7 ' + lmiPt.pres.toFixed(0) + ' hPa' : '') +
-                    '<br>' + lmiPt.lat.toFixed(1) + '\u00B0N ' + lmiPt.lon.toFixed(1) + '\u00B0E' +
+                    '<br>' + _wlFmtLatLon(lmiPt.lat, lmiPt.lon) +
                     '<br><span style="color:' + lmiColor + ';">' + lmiCat + '</span>';
 
                 lmiMarker.bindTooltip(lmiTip, { direction: 'top', offset: [0, -5] });
@@ -13241,7 +13280,7 @@
                 marker._wlBaseRadius = baseR;
 
                 var tipHtml = '<b>DeepMind Mean</b> +' + pt.tau + 'h<br>' +
-                    pt.lat.toFixed(1) + '\u00B0N ' + pt.lon.toFixed(1) + '\u00B0E<br>' +
+                    _wlFmtLatLon(pt.lat, pt.lon) + '<br>' +
                     (pt.wind != null ? pt.wind.toFixed(0) + ' kt' : '') +
                     (pt.pres != null ? ' \u00B7 ' + pt.pres.toFixed(0) + ' hPa' : '') +
                     '<br><span style="color:' + color + ';">' + cat + '</span>' +
@@ -13278,7 +13317,7 @@
                 var mlTip = '<b>DeepMind Mean LMI</b><br>' +
                     '+' + meanLmiPt.tau + 'h \u00B7 ' + meanLmiWind.toFixed(0) + ' kt' +
                     (meanLmiPt.pres != null ? ' \u00B7 ' + meanLmiPt.pres.toFixed(0) + ' hPa' : '') +
-                    '<br>' + meanLmiPt.lat.toFixed(1) + '\u00B0N ' + meanLmiPt.lon.toFixed(1) + '\u00B0E' +
+                    '<br>' + _wlFmtLatLon(meanLmiPt.lat, meanLmiPt.lon) +
                     '<br><span style="color:' + mlColor + ';">' + mlCat + '</span>' +
                     _rtFmtSize(meanLmiPt);
 
@@ -16498,6 +16537,18 @@
             var _pk = _genesisTauState.passKeys;
             positions = positions.filter(function (p) { return _pk[p.key]; });
         }
+        // Unwrap longitudes into the map's dateline-aware frame (set by
+        // _renderGenesisMap) so the single-hour snapshot + density grid stay
+        // compact for a system straddling ±180° instead of splitting across
+        // the globe.
+        var _tcRef = (el._genesisLonRef != null) ? el._genesisLonRef : 0;
+        positions = positions.map(function (p) {
+            var x = p.lon;
+            while (x - _tcRef > 180) x -= 360;
+            while (x - _tcRef < -180) x += 360;
+            return (x === p.lon) ? p
+                : { key: p.key, lat: p.lat, lon: x, wind: p.wind };
+        });
         // Iso-density band fractions (10/25/50/75 % of peak density).
         // Stacked + composited via translucent fills so the inner
         // bands read darker — operational ensemble-product convention.
@@ -16586,7 +16637,8 @@
             'marker.opacity': [0.95],
             text: [positions.map(function (p) {
                 return 'Member ' + p.key + '<br>+' + tau + ' h<br>'
-                    + (p.wind != null ? p.wind.toFixed(0) + ' kt' : '— kt');
+                    + (p.wind != null ? p.wind.toFixed(0) + ' kt' : '— kt')
+                    + '<br>' + _wlFmtLatLon(p.lat, p.lon);
             })],
         }, [6, 7, 8, 9, 10]);
         Plotly.restyle(el, {
@@ -17590,11 +17642,29 @@
         var _short = (_genTrendWin === 'short');
         var _inWin = function (p) { return !_short || (p.tau != null && p.tau <= 120); };
 
+        // Dateline-aware frame (see _renderGenesisMap): unwrap every cycle's
+        // longitudes about a common reference so a system straddling ±180°
+        // stays in one compact window instead of blowing the bounds out to
+        // the whole globe.
+        var _tRef = _genesisCircMeanLon(cycles.reduce(function (a, c) {
+            (c.mean_track || []).forEach(function (p) {
+                if (p.lon != null) a.push(p.lon);
+            });
+            return a;
+        }, []));
+        function _tUnwrap(lon) {
+            if (lon == null) return lon;
+            var x = lon;
+            while (x - _tRef > 180) x -= 360;
+            while (x - _tRef < -180) x += 360;
+            return x;
+        }
+
         var allLats = [], allLons = [];
         cycles.forEach(function (c) {
             c.mean_track.forEach(function (p) {
                 if (p.lat != null && p.lon != null && _inWin(p)) {
-                    allLats.push(p.lat); allLons.push(p.lon);
+                    allLats.push(p.lat); allLons.push(_tUnwrap(p.lon));
                 }
             });
         });
@@ -17618,10 +17688,11 @@
             var lons = [], lats = [], prev = null;
             c.mean_track.forEach(function (p) {
                 if (p.lat == null || p.lon == null || !_inWin(p)) return;
-                if (prev !== null && Math.abs(p.lon - prev) > 180) {
+                var _lo = _tUnwrap(p.lon);
+                if (prev !== null && Math.abs(_lo - prev) > 180) {
                     lons.push(null); lats.push(null);
                 }
-                lons.push(p.lon); lats.push(p.lat); prev = p.lon;
+                lons.push(_lo); lats.push(p.lat); prev = _lo;
             });
             var lbl = _genesisFmtInit(c.init_time);
             var _isCur = (c.init_time === loadedInit);
@@ -17638,7 +17709,8 @@
                 // Outline-only (no fill): a filled +240 h ellipse is huge and
                 // reads as an orange wash over the map. Dotted ring + a small
                 // edge label conveys the spread cleanly.
-                var ep = _covEllipsePath(e.lat, e.lon, e.sxx, e.syy, e.sxy, 1.5, 48);
+                var _eLon = _tUnwrap(e.lon);
+                var ep = _covEllipsePath(e.lat, _eLon, e.sxx, e.syy, e.sxy, 1.5, 48);
                 traces.push({ type: 'scattergeo', mode: 'lines', lon: ep.lons, lat: ep.lats,
                     line: { color: cycColor, width: _isCur ? 1.6 : 1 },
                     opacity: _isCur ? 0.9 : 0.5,
@@ -17646,7 +17718,7 @@
                 if (_isCur) {
                     // Label at the ellipse's north edge so it doesn't sit on the track.
                     traces.push({ type: 'scattergeo', mode: 'text',
-                        lon: [e.lon], lat: [e.lat + 1.5 * Math.sqrt(Math.max(e.syy, 0))],
+                        lon: [_eLon], lat: [e.lat + 1.5 * Math.sqrt(Math.max(e.syy, 0))],
                         text: ['+' + e.tau + 'h'], textposition: 'top center',
                         textfont: { size: 9, color: '#f97316' }, hoverinfo: 'skip', showlegend: false });
                 }
@@ -17660,7 +17732,7 @@
                 var mLon = [], mLat = [], mW = [], mTau = [];
                 c.mean_track.forEach(function (p) {
                     if (p.lat == null || p.lon == null || !_inWin(p)) return;
-                    mLon.push(p.lon); mLat.push(p.lat);
+                    mLon.push(_tUnwrap(p.lon)); mLat.push(p.lat);
                     mW.push(p.wind != null ? p.wind : 0); mTau.push(p.tau);
                 });
                 traces.push({
@@ -17672,9 +17744,10 @@
                     },
                     text: mW.map(function (w, i) {
                         return lbl + ' (current)<br>+' + mTau[i] + ' h · '
-                            + w.toFixed(0) + ' kt (' + windToCategory(w) + ')';
+                            + w.toFixed(0) + ' kt (' + windToCategory(w) + ')'
+                            + '<br>' + _wlFmtLatLon(mLat[i], mLon[i]);
                     }),
-                    hovertemplate: '%{text}<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
+                    hovertemplate: '%{text}<extra></extra>',
                     showlegend: false,
                 });
             } else {
@@ -17683,7 +17756,10 @@
                     type: 'scattergeo', mode: 'lines', lon: lons, lat: lats,
                     line: { color: pc, width: 1.8 },
                     connectgaps: false, showlegend: false,
-                    hovertemplate: lbl + '<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
+                    customdata: lons.map(function (lo, i) {
+                        return (lo == null) ? '' : _wlFmtLatLon(lats[i], lo);
+                    }),
+                    hovertemplate: lbl + '<br>%{customdata}<extra></extra>',
                 });
             }
         });
@@ -17881,23 +17957,45 @@
         var theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
+        // Dateline-aware longitude frame. A genesis system straddling ±180°
+        // has member/mean/genesis longitudes split between ~+170 and ~-170;
+        // naive min/max bounds then span the ENTIRE globe and the spaghetti
+        // wraps across it. Pick a reference longitude near the system (the
+        // circular mean of the mean track) and "unwrap" every plotted
+        // longitude to within ±180° of it, so a dateline cluster stays
+        // compact (e.g. 170..195 rather than 170 & -175). Plotly geo accepts
+        // an axis range that runs past ±180, and _genesisFormatLon re-wraps
+        // the tick + hover labels, so positions still read as °E/°W.
+        var _refLon = _genesisCircMeanLon(
+            (mean && mean.points) ? mean.points.map(function (p) { return p.lon; })
+                                  : (stats && stats.genLons) || []);
+        el._genesisLonRef = _refLon;
+        function _unwrapLon(lon) {
+            if (lon == null) return lon;
+            var x = lon;
+            while (x - _refLon > 180) x -= 360;
+            while (x - _refLon < -180) x += 360;
+            return x;
+        }
+
         // Per-member polylines collapsed into one trace via null separators
         // (cheap render: 1 trace × N members × M points vs N traces).
-        // Insert a null between consecutive points whose longitudes
-        // differ by >180° so Plotly doesn't draw a line wrapping the
-        // entire globe when a member crosses the antimeridian.
+        // Insert a null between consecutive points whose longitudes still
+        // differ by >180° after unwrapping so Plotly doesn't draw a line
+        // wrapping the entire globe when a member crosses the antimeridian.
         var spagX = [], spagY = [];
         for (var i = 0; i < memberKeys.length; i++) {
             var pts = members[memberKeys[i]].points || [];
             var lastLon = null;
             for (var j = 0; j < pts.length; j++) {
                 if (pts[j].lat == null || pts[j].lon == null) continue;
-                if (lastLon !== null && Math.abs(pts[j].lon - lastLon) > 180) {
+                var _slon = _unwrapLon(pts[j].lon);
+                if (lastLon !== null && Math.abs(_slon - lastLon) > 180) {
                     spagX.push(null); spagY.push(null);
                 }
-                spagX.push(pts[j].lon);
+                spagX.push(_slon);
                 spagY.push(pts[j].lat);
-                lastLon = pts[j].lon;
+                lastLon = _slon;
             }
             spagX.push(null); spagY.push(null);
         }
@@ -17910,17 +18008,21 @@
         var prevMeanLon = null;
         for (var k = 0; k < mean.points.length; k++) {
             var mp = mean.points[k];
-            meanLons.push(mp.lon);
+            var _mlon = _unwrapLon(mp.lon);
+            meanLons.push(_mlon);
             meanLats.push(mp.lat);
             meanWinds.push(mp.wind != null ? mp.wind : 0);
             meanTaus.push(mp.tau);
-            if (prevMeanLon !== null && Math.abs(mp.lon - prevMeanLon) > 180) {
+            if (prevMeanLon !== null && Math.abs(_mlon - prevMeanLon) > 180) {
                 meanLineLons.push(null); meanLineLats.push(null);
             }
-            meanLineLons.push(mp.lon);
+            meanLineLons.push(_mlon);
             meanLineLats.push(mp.lat);
-            prevMeanLon = mp.lon;
+            prevMeanLon = _mlon;
         }
+        // First-genesis longitudes in the same unwrapped frame, for the
+        // bounds, the dot cloud, and the locator-inset center.
+        var genLonsU = (stats.genLons || []).map(_unwrapLon);
         // Stash the per-point mean track (no antimeridian nulls) so the static
         // composite export can label forecast hours + mark LMI without
         // recomputing (see _genesisMapExportFig).
@@ -17936,7 +18038,7 @@
         var containerAspect = rect.height > 0
             ? Math.max(0.8, (rect.width - 70) / rect.height) : 2.2;
         var bounds = _genesisBoundsFromMean(meanLats, meanLons,
-                                             stats.genLats, stats.genLons,
+                                             stats.genLats, genLonsU,
                                              containerAspect);
         // Center for the locator-globe inset — the median first-genesis
         // position across members, so the red dot marks where the
@@ -17946,7 +18048,7 @@
         var insetLon, insetLat;
         if (stats.genLats && stats.genLats.length >= 5) {
             var sortedGenLats = stats.genLats.slice().sort(function (a, b) { return a - b; });
-            var sortedGenLons = stats.genLons.slice().sort(function (a, b) { return a - b; });
+            var sortedGenLons = genLonsU.slice().sort(function (a, b) { return a - b; });
             insetLat = sortedGenLats[Math.floor(sortedGenLats.length / 2)];
             insetLon = sortedGenLons[Math.floor(sortedGenLons.length / 2)];
         } else {
@@ -17966,14 +18068,17 @@
         // First-genesis dots — a pre-genesis feature only this view has.
         var firstGenesis = {
             type: 'scattergeo', mode: 'markers',
-            lon: stats.genLons, lat: stats.genLats,
+            lon: genLonsU, lat: stats.genLats,
             marker: {
                 size: 5,
                 color: 'rgba(249,115,22,0.55)',
                 line: { color: 'rgba(124,45,18,0.65)', width: 0.4 },
             },
             name: 'First-genesis (≥ 34 kt)',
-            hovertemplate: 'Member first reaches 34 kt<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
+            customdata: genLonsU.map(function (lo, i) {
+                return _wlFmtLatLon(stats.genLats[i], lo);
+            }),
+            hovertemplate: 'Member first reaches 34 kt<br>%{customdata}<extra></extra>',
             showlegend: false,
         };
         var meanLine = {
@@ -18001,9 +18106,10 @@
             },
             text: meanWinds.map(function (w, idx) {
                 return '+' + meanTaus[idx] + ' h<br>' + w.toFixed(0)
-                    + ' kt (' + windToCategory(w) + ')';
+                    + ' kt (' + windToCategory(w) + ')'
+                    + '<br>' + _wlFmtLatLon(meanLats[idx], meanLons[idx]);
             }),
-            hovertemplate: '%{text}<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
+            hovertemplate: '%{text}<extra></extra>',
             name: 'Ensemble mean',
             showlegend: false,
         };
@@ -18096,7 +18202,7 @@
                 line: { color: isDark ? '#0f172a' : '#1f2937', width: 0.6 },
                 opacity: 0.95,
             },
-            hovertemplate: '%{text}<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
+            hovertemplate: '%{text}<extra></extra>',
             showlegend: false,
         };
         // Density-mode placeholder traces — 4 stacked square-marker
