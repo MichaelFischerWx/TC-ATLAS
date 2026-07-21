@@ -24,8 +24,11 @@ Additional for GOES IR: s3fs, pyproj, Pillow
 import base64
 import gc
 import gzip
+import hashlib
 import io
+import json
 import logging
+import os
 import re
 import threading
 import time
@@ -1296,7 +1299,7 @@ def get_rt_volume(
 
     if tilt_profile:
         try:
-            tilt = _compute_rt_tilt_profile(ds)
+            tilt = _get_or_compute_tilt(ds, file_url)
             if tilt:
                 result["tilt_profile"] = tilt
         except Exception:
@@ -4143,6 +4146,10 @@ def get_rt_vortex_raw(
 WCM_MIN_COVERAGE  = 0.15   # min fraction of valid data in the inner disk (best_cov)
 WCM_MIN_VT_MAX_MS = 8.0    # min peak azimuthal-mean tangential wind (m/s)
 
+# Bump when the WCM algorithm or its gates change — it's part of the tilt cache
+# key, so old cached profiles are ignored (never served stale under new science).
+_WCM_VERSION = "wcm1"
+
 def _wcm_center_km(u_2d, v_2d, x_km, y_km,
                     num_sectors=1, spad=6, num_iterations=3,
                     first_guess_xy=None):
@@ -4353,6 +4360,107 @@ def _wcm_center_km(u_2d, v_2d, x_km, y_km,
     }
 
 
+# ── Persistent tilt-profile cache (shared across users + instances) ─────────
+# A tilt profile is small (a few dozen floats) and its inputs are IMMUTABLE — a
+# given analysis file never changes, and the WCM version is pinned into the key —
+# so it's an ideal thing to compute ONCE and share. First requester computes and
+# writes to GCS (~1 KB JSON, fire-and-forget); everyone after loads instantly.
+# Two tiers: an in-process LRU (same instance) over a GCS object (cross-instance,
+# survives restarts). Degrades to compute-every-time if GCS is unconfigured.
+_TILT_CACHE_PREFIX = "rt-tdr-tilt/" + _WCM_VERSION
+_GCS_TDR_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
+_rt_tilt_mem = OrderedDict()          # key -> tilt dict
+_RT_TILT_MEM_MAX = 256
+_rt_tilt_lock = threading.Lock()
+_gcs_tdr_client = None
+_gcs_tdr_bucket = None
+
+
+def _get_tdr_gcs_bucket():
+    """Lazy GCS bucket handle for the tilt cache (None if unconfigured)."""
+    global _gcs_tdr_client, _gcs_tdr_bucket
+    if not _GCS_TDR_BUCKET:
+        return None
+    if _gcs_tdr_bucket is not None:
+        return _gcs_tdr_bucket
+    try:
+        from google.cloud import storage
+        _gcs_tdr_client = storage.Client()
+        _gcs_tdr_bucket = _gcs_tdr_client.bucket(_GCS_TDR_BUCKET)
+        return _gcs_tdr_bucket
+    except Exception:
+        return None
+
+
+def _tilt_cache_key(file_url: str, min_h: float, max_h: float, ref_h: float) -> str:
+    """Stable content hash. file_url identifies the (immutable) analysis; the
+    height params + WCM version complete it so a different request or a new
+    algorithm can't collide with a prior result."""
+    raw = f"{_WCM_VERSION}|{file_url}|{min_h:.3f}|{max_h:.3f}|{ref_h:.3f}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def _tilt_from_gcs(key: str):
+    bucket = _get_tdr_gcs_bucket()
+    if bucket is None:
+        return None
+    try:
+        blob = bucket.blob(f"{_TILT_CACHE_PREFIX}/{key}.json")
+        if not blob.exists():
+            return None
+        return json.loads(blob.download_as_text())
+    except Exception:
+        return None
+
+
+def _tilt_to_gcs_async(key: str, tilt: dict):
+    """Write-through to GCS off the request path (never blocks the response)."""
+    bucket = _get_tdr_gcs_bucket()
+    if bucket is None:
+        return
+
+    def _write():
+        try:
+            blob = bucket.blob(f"{_TILT_CACHE_PREFIX}/{key}.json")
+            blob.cache_control = "public, max-age=31536000, immutable"
+            blob.upload_from_string(json.dumps(tilt), content_type="application/json")
+        except Exception as e:
+            logger.debug("tilt GCS write failed for %s: %s", key, e)
+
+    threading.Thread(target=_write, daemon=True).start()
+
+
+def _get_or_compute_tilt(ds, file_url, min_height=0.5, max_height=8.0, ref_height=2.0):
+    """Cached tilt: in-process LRU → GCS → compute (then populate both). The
+    computed value is stored even when it's None-shaped? No — only real profiles
+    are cached, so a transient data hiccup won't pin a permanent empty result."""
+    key = _tilt_cache_key(file_url, min_height, max_height, ref_height)
+
+    with _rt_tilt_lock:
+        hit = _rt_tilt_mem.get(key)
+        if hit is not None:
+            _rt_tilt_mem.move_to_end(key)
+            return dict(hit, cache="memory")
+
+    gcs = _tilt_from_gcs(key)
+    if gcs is not None:
+        with _rt_tilt_lock:
+            _rt_tilt_mem[key] = gcs
+            while len(_rt_tilt_mem) > _RT_TILT_MEM_MAX:
+                _rt_tilt_mem.popitem(last=False)
+        return dict(gcs, cache="gcs")
+
+    tilt = _compute_rt_tilt_profile(ds, min_height, max_height, ref_height)
+    if tilt is not None:
+        with _rt_tilt_lock:
+            _rt_tilt_mem[key] = tilt
+            while len(_rt_tilt_mem) > _RT_TILT_MEM_MAX:
+                _rt_tilt_mem.popitem(last=False)
+        _tilt_to_gcs_async(key, tilt)
+        return dict(tilt, cache="computed")
+    return None
+
+
 def _compute_rt_tilt_profile(ds, min_height=0.5, max_height=8.0, ref_height=2.0):
     """
     Compute vortex tilt profile for a real-time TDR file by running the WCM
@@ -4496,7 +4604,7 @@ def get_rt_tilt_profile(
 
     t0 = time.time()
     try:
-        tilt = _compute_rt_tilt_profile(ds, min_height, max_height, ref_height)
+        tilt = _get_or_compute_tilt(ds, file_url, min_height, max_height, ref_height)
     except Exception as e:
         raise HTTPException(status_code=500,
                             detail=f"Error computing tilt profile: {str(e)}")
