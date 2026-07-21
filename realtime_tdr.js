@@ -2075,7 +2075,13 @@
         var quadBtn = document.getElementById('rt-quad-btn'); if (quadBtn) quadBtn.disabled = true;
         var anomalyBtn = document.getElementById('rt-anomaly-btn'); if (anomalyBtn) anomalyBtn.disabled = true;
         var vpBtn = document.getElementById('rt-vp-btn'); if (vpBtn) vpBtn.disabled = true;
-        var ctrkBtn = document.getElementById('rt-ctrk-btn'); if (ctrkBtn) { ctrkBtn.disabled = true; ctrkBtn.classList.remove('active'); }
+        // Keep centre-track mode across sweeps of the SAME mission (re-projected
+        // per sweep); drop it + the cache when the mission changes.
+        if (_rtCtrkData && _rtCtrkData.mission !== _rtCurrentMission()) {
+            _rtCtrkData = null; _rtCtrkOverlay = false;
+            var _cte = document.getElementById('rt-ctrk-result'); if (_cte) _cte.innerHTML = '';
+        }
+        var ctrkBtn = document.getElementById('rt-ctrk-btn'); if (ctrkBtn) { ctrkBtn.disabled = true; ctrkBtn.classList.toggle('active', _rtCtrkOverlay); }
         var tiltBtn = document.getElementById('rt-tilt-btn'); if (tiltBtn) { tiltBtn.disabled = true; tiltBtn.classList.remove('active'); }
         _rtTiltData = null; _rtTiltTraceStart = -1; _rtTiltEnabled = false;
 
@@ -2530,7 +2536,25 @@
             _rtLoadCoastline(function () { rtGeneratePlot(); });
         }
 
-        Plotly.newPlot('rt-plotly-chart', [heatmap].concat(coastTraces).concat(overlayTraces).concat(maxTraces), layout, config);
+        // Center-track mode: replace the wind field with the mission's 2/6 km
+        // centres (projected into THIS sweep's km frame) over the IR underlay +
+        // coastlines. Overlay contours / max marker / RMW & barb shapes are
+        // dropped for clarity; toggle the mode off to get the winds back.
+        var _ctrk = (_rtCtrkOverlay && _rtCtrkData && _rtCtrkData.points && _rtCtrkData.points.length)
+            ? _rtBuildCenterTrackTraces(meta) : null;
+        var _planTraces, _planLayout;
+        if (_ctrk) {
+            _planTraces = coastTraces.concat(_ctrk.traces);
+            _planLayout = Object.assign({}, layout, {
+                title: { text: _ctrk.title, font: { color: '#0f1623', size: 14 }, y: 0.97, x: 0.5, xanchor: 'center', yanchor: 'top' },
+                annotations: _ctrk.annotations,
+                shapes: []
+            });
+        } else {
+            _planTraces = [heatmap].concat(coastTraces).concat(overlayTraces).concat(maxTraces);
+            _planLayout = layout;
+        }
+        Plotly.newPlot('rt-plotly-chart', _planTraces, _planLayout, config);
         _rtLastPlotlyData = { heatmap: heatmap, overlayTraces: overlayTraces, maxTraces: maxTraces, baseLayout: baseLayout, title: title, config: config, json: json };
 
         // newPlot replaces layout.images, so re-apply the IR underlay if active.
@@ -2544,7 +2568,10 @@
         var volBtn = document.getElementById('rt-vol-btn'); if (volBtn) volBtn.disabled = false;
         var azBtn = document.getElementById('rt-az-btn'); if (azBtn) azBtn.disabled = false;
         var cfadBtn = document.getElementById('rt-cfad-btn'); if (cfadBtn) cfadBtn.disabled = false;
-        var ctrkBtn = document.getElementById('rt-ctrk-btn'); if (ctrkBtn) ctrkBtn.disabled = false;
+        var ctrkBtn = document.getElementById('rt-ctrk-btn'); if (ctrkBtn) { ctrkBtn.disabled = false; ctrkBtn.classList.toggle('active', _rtCtrkOverlay); }
+        // Keep the centre-track table in sync when the mode is active (e.g. after
+        // switching sweeps within the same mission — the centres re-project).
+        if (_rtCtrkOverlay && _rtCtrkData) _rtRenderCenterTrackTable();
         var tiltBtn = document.getElementById('rt-tilt-btn'); if (tiltBtn) tiltBtn.disabled = false;
         var barbBtn = document.getElementById('rt-barb-btn'); if (barbBtn) { barbBtn.disabled = false; barbBtn.classList.toggle('active', _rtBarbsEnabled); }
         var coastBtn = document.getElementById('rt-coast-btn'); if (coastBtn) { coastBtn.disabled = false; coastBtn.classList.toggle('active', _rtCoastVisible); }
@@ -7242,219 +7269,145 @@
     // mission, in lat/lon, over a single GOES IR frame. L = 2 km, M = 6 km.
 
     var _rtCtrkLoading = false;
+    var _rtCtrkOverlay = false;   // when on, the plan view shows the centre track (wind field hidden)
+    var _rtCtrkData = null;       // cached /center_track response (keyed by mission)
 
     function _rtCurrentMission() {
         var sel = document.getElementById('rt-mission-select');
         return sel ? (sel.value || '') : '';
     }
 
+    // Center Track is a plan-view MODE: it hides the wind field and draws the
+    // mission's 2/6 km WCM centres (all sweeps) over the IR underlay + coastlines,
+    // in this sweep's storm-relative km frame. The table sits below the map.
     window.rtToggleCenterTrack = function () {
-        var container = document.getElementById('rt-ctrk-result');
         var btn = document.getElementById('rt-ctrk-btn');
-        if (!container) return;
-        // Toggle off if already showing.
-        if (container.innerHTML.trim() !== '') {
-            container.innerHTML = '';
+        var tableEl = document.getElementById('rt-ctrk-result');
+        // Toggle OFF → the wind field returns on the next render.
+        if (_rtCtrkOverlay) {
+            _rtCtrkOverlay = false;
             if (btn) btn.classList.remove('active');
+            if (tableEl) tableEl.innerHTML = '';
+            rtGeneratePlot();
+            return;
+        }
+        if (!_currentFileUrl) {
+            if (tableEl) tableEl.innerHTML = '<div style="color:var(--slate);padding:10px;font-size:12px;">Load an analysis first.</div>';
             return;
         }
         var mission = _rtCurrentMission();
         if (!mission) {
-            container.innerHTML = '<div style="color:var(--slate);padding:12px;font-size:12px;">Select a mission first.</div>';
+            if (tableEl) tableEl.innerHTML = '<div style="color:var(--slate);padding:10px;font-size:12px;">Select a mission first.</div>';
+            return;
+        }
+        // Cached for this mission → flip on instantly.
+        if (_rtCtrkData && _rtCtrkData.mission === mission && _rtCtrkData.points && _rtCtrkData.points.length) {
+            _rtCtrkOverlay = true;
+            if (btn) btn.classList.add('active');
+            rtGeneratePlot();
+            _rtRenderCenterTrackTable();
             return;
         }
         if (_rtCtrkLoading) return;
         _rtCtrkLoading = true;
         if (btn) { btn.classList.add('active'); btn.disabled = true; }
-        container.innerHTML =
-            '<div class="storm-timeline-panel" style="margin-top:10px;padding:24px;text-align:center;color:var(--slate);font-size:12px;">' +
-            'Solving 2-km &amp; 6-km centres for each sweep… (first load may take ~20-40s)</div>';
+        if (tableEl) tableEl.innerHTML = '<div style="color:var(--slate);padding:10px;font-size:12px;">Solving 2-km &amp; 6-km centres for each sweep… (first load may take ~20-40s)</div>';
 
         var ctUrl = API_BASE + RT_PREFIX + '/center_track?mission=' + encodeURIComponent(mission) + '&max_files=30';
-        // Reuse the currently-viewed sweep for the IR backdrop (its 8° box covers
-        // the whole track and it's usually already cached server-side).
-        var irUrl = _currentFileUrl
-            ? (API_BASE + RT_PREFIX + '/ir?file_url=' + encodeURIComponent(_currentFileUrl))
-            : null;
-
-        Promise.all([
-            fetch(ctUrl, { cache: 'no-store' }).then(function (r) {
-                if (!r.ok) throw new Error('center_track ' + r.status);
-                return r.json();
-            }),
-            irUrl ? fetch(irUrl, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
-                  : Promise.resolve(null)
-        ]).then(function (res) {
-            _rtRenderCenterTrack(res[0], res[1]);
-            _ga('center_track', { module: 'realtime_tdr', mission: mission });
-        }).catch(function (e) {
-            container.innerHTML = '<div style="color:#f87171;padding:12px;font-size:12px;">Could not build center track: ' + (e && e.message ? e.message : e) + '</div>';
-        }).finally(function () {
-            _rtCtrkLoading = false;
-            if (btn) btn.disabled = false;
-        });
+        fetch(ctUrl, { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('center_track ' + r.status); return r.json(); })
+            .then(function (json) {
+                _rtCtrkData = json;
+                if (!json.points || !json.points.length) {
+                    _rtCtrkOverlay = false;
+                    if (btn) btn.classList.remove('active');
+                    if (tableEl) tableEl.innerHTML = '<div style="color:var(--slate);padding:10px;font-size:12px;">No converged 2-km / 6-km centres in this mission yet.</div>';
+                    return;
+                }
+                _rtCtrkOverlay = true;
+                rtGeneratePlot();
+                _rtRenderCenterTrackTable();
+                _ga('center_track', { module: 'realtime_tdr', mission: mission });
+            })
+            .catch(function (e) {
+                _rtCtrkOverlay = false;
+                if (btn) btn.classList.remove('active');
+                if (tableEl) tableEl.innerHTML = '<div style="color:#f87171;padding:10px;font-size:12px;">Could not build center track: ' + (e && e.message ? e.message : e) + '</div>';
+            })
+            .finally(function () { _rtCtrkLoading = false; if (btn) btn.disabled = false; });
     };
 
-    function _rtRenderCenterTrack(json, irJson) {
-        var container = document.getElementById('rt-ctrk-result');
-        if (!container) return;
-        var btn = document.getElementById('rt-ctrk-btn');
-        var points = (json && json.points) || [];
-        if (!points.length) {
-            container.innerHTML =
-                '<div class="storm-timeline-panel" style="margin-top:10px;">' +
-                '<div class="fl-ts-header"><span class="fl-ts-title">◎ Center Track</span>' +
-                '<button onclick="rtToggleCenterTrack()" class="fl-ts-close" title="Close">&times;</button></div>' +
-                '<div style="color:var(--slate);text-align:center;padding:30px;font-size:12px;">No converged 2-km / 6-km centres in this mission yet.</div></div>';
-            if (btn) btn.classList.remove('active');
-            return;
-        }
-
-        var storm = (json.storm_name || '').trim();
-        var title = (storm ? storm + ' — ' : '') + '2-km (L) &amp; 6-km (M) TDR Center Track';
-
-        container.innerHTML =
-            '<div class="storm-timeline-panel" style="margin-top:10px;">' +
-            '<div class="fl-ts-header">' +
-            '<span class="fl-ts-title">◎ Center Track · ' + points.length + ' sweeps</span>' +
-            '<div style="flex:1;"></div>' +
-            _rtSaveBtnHTML('rt-ctrk-chart', 'CenterTrack', '') +
-            '<button onclick="rtToggleCenterTrack()" class="fl-ts-close" title="Close">&times;</button>' +
-            '</div>' +
-            '<div id="rt-ctrk-chart" style="width:100%;height:460px;"></div>' +
-            '<div id="rt-ctrk-table" style="padding:4px 8px 8px;"></div>' +
-            '</div>';
-
-        // ── Geographic extent from the points (with a small margin) ──
-        var lats = [], lons = [];
-        points.forEach(function (p) {
-            if (p.lat2 != null) { lats.push(p.lat2); lons.push(p.lon2); }
-            if (p.lat6 != null) { lats.push(p.lat6); lons.push(p.lon6); }
+    // Project the mission's 2/6 km centres (lat/lon) into THIS sweep's storm-
+    // relative km frame (the same projection the coastline overlay uses) and
+    // return plan-view traces + time-label annotations + a title.
+    function _rtBuildCenterTrackTraces(meta) {
+        var pts = (_rtCtrkData && _rtCtrkData.points) || [];
+        var lat0 = meta && meta.latitude, lon0 = meta && meta.longitude;
+        if (lat0 == null || lon0 == null || !pts.length) return { traces: [], annotations: [], title: 'Center Track' };
+        var kLat = 110.574, kLon = 111.320 * Math.cos(lat0 * Math.PI / 180);
+        var x2 = [], y2 = [], cd2 = [], x6 = [], y6 = [], cd6 = [], ann = [];
+        pts.forEach(function (p) {
+            if (p.lat2 != null) {
+                var xa = (p.lon2 - lon0) * kLon, ya = (p.lat2 - lat0) * kLat;
+                x2.push(xa); y2.push(ya); cd2.push(p.time_label);
+                ann.push({ x: xa, y: ya, text: p.time_label + 'Z', showarrow: false,
+                           xanchor: 'left', yanchor: 'bottom', xshift: 7, yshift: 3,
+                           font: { color: '#1e3a8a', size: 9, family: 'Arial, sans-serif' } });
+            }
+            if (p.lat6 != null) {
+                x6.push((p.lon6 - lon0) * kLon); y6.push((p.lat6 - lat0) * kLat); cd6.push(p.time_label);
+            }
         });
-        var latMin = Math.min.apply(null, lats), latMax = Math.max.apply(null, lats);
-        var lonMin = Math.min.apply(null, lons), lonMax = Math.max.apply(null, lons);
-        var latPad = Math.max(0.12, (latMax - latMin) * 0.35);
-        var lonPad = Math.max(0.12, (lonMax - lonMin) * 0.35);
-        var lat0 = (latMin + latMax) / 2;
+        var traces = [
+            { x: x2, y: y2, mode: 'markers+lines+text', type: 'scatter', name: '2 km (L)',
+              text: x2.map(function () { return 'L'; }), textposition: 'middle center',
+              textfont: { color: '#ffffff', size: 10, family: 'Arial Black, Arial, sans-serif' },
+              line: { color: 'rgba(96,165,250,0.75)', width: 1.5 },
+              marker: { size: 15, color: '#60a5fa', line: { color: '#1e3a8a', width: 1 } },
+              customdata: cd2, hovertemplate: '<b>%{customdata}Z</b> · 2 km centre<extra></extra>' },
+            { x: x6, y: y6, mode: 'markers+lines+text', type: 'scatter', name: '6 km (M)',
+              text: x6.map(function () { return 'M'; }), textposition: 'middle center',
+              textfont: { color: '#ffffff', size: 10, family: 'Arial Black, Arial, sans-serif' },
+              line: { color: 'rgba(37,99,235,0.6)', width: 1.5, dash: 'dot' },
+              marker: { size: 15, color: '#2563eb', symbol: 'diamond', line: { color: '#1e3a8a', width: 1 } },
+              customdata: cd6, hovertemplate: '<b>%{customdata}Z</b> · 6 km centre<extra></extra>' }
+        ];
+        var storm = ((_rtCtrkData && _rtCtrkData.storm_name) || (meta && meta.storm_name) || '').trim();
+        var title = (storm ? storm + ' | ' + (meta.datetime || '') + '<br>' : '') +
+            '2-km (L) &amp; 6-km (M) Center Track · ' + pts.length + ' sweeps';
+        return { traces: traces, annotations: ann, title: title };
+    }
 
-        var traces = [];
-
-        // ── 2-km centre track (L) ──
-        var p2 = points.filter(function (p) { return p.lat2 != null; });
-        traces.push({
-            x: p2.map(function (p) { return p.lon2; }),
-            y: p2.map(function (p) { return p.lat2; }),
-            mode: 'markers+lines+text',
-            type: 'scatter',
-            name: '2 km (L)',
-            text: p2.map(function () { return 'L'; }),
-            textposition: 'middle center',
-            textfont: { color: '#ffffff', size: 10, family: 'Arial Black, Arial, sans-serif' },
-            line: { color: 'rgba(147,197,253,0.55)', width: 1.5 },
-            marker: { size: 15, color: '#60a5fa', line: { color: '#1e3a8a', width: 1 } },
-            customdata: p2.map(function (p) { return [p.time_label, p.lat2, p.lon2]; }),
-            hovertemplate: '<b>%{customdata[0]}Z</b> · 2 km<br>%{customdata[1]:.2f}°N, %{customdata[2]:.2f}°<extra></extra>'
-        });
-        // ── 6-km centre track (M) ──
-        var p6 = points.filter(function (p) { return p.lat6 != null; });
-        traces.push({
-            x: p6.map(function (p) { return p.lon6; }),
-            y: p6.map(function (p) { return p.lat6; }),
-            mode: 'markers+lines+text',
-            type: 'scatter',
-            name: '6 km (M)',
-            text: p6.map(function () { return 'M'; }),
-            textposition: 'middle center',
-            textfont: { color: '#ffffff', size: 10, family: 'Arial Black, Arial, sans-serif' },
-            line: { color: 'rgba(37,99,235,0.5)', width: 1.5, dash: 'dot' },
-            marker: { size: 15, color: '#2563eb', line: { color: '#1e3a8a', width: 1 }, symbol: 'diamond' },
-            customdata: p6.map(function (p) { return [p.time_label, p.lat6, p.lon6]; }),
-            hovertemplate: '<b>%{customdata[0]}Z</b> · 6 km<br>%{customdata[1]:.2f}°N, %{customdata[2]:.2f}°<extra></extra>'
-        });
-
-        // Time labels next to each 2-km marker (annotations).
-        var annotations = p2.map(function (p) {
-            return {
-                x: p.lon2, y: p.lat2, text: p.time_label + 'Z',
-                showarrow: false, xanchor: 'left', yanchor: 'bottom',
-                xshift: 8, yshift: 4,
-                font: { color: '#93c5fd', size: 9, family: 'Arial, sans-serif' }
-            };
-        });
-
-        var images = [];
-        if (irJson && irJson.frame0 && irJson.bounds_deg) {
-            var bd = irJson.bounds_deg;
-            images.push({
-                source: irJson.frame0,
-                xref: 'x', yref: 'y',
-                x: bd.lon_min, y: bd.lat_max,
-                sizex: bd.lon_max - bd.lon_min,
-                sizey: bd.lat_max - bd.lat_min,
-                xanchor: 'left', yanchor: 'top',
-                sizing: 'stretch', opacity: 0.85, layer: 'below'
-            });
-        }
-
-        var isDark = !document.body.classList.contains('theme-light');
-        var paper = isDark ? '#0a1628' : '#ffffff';
-        var gridc = isDark ? 'rgba(148,163,184,0.18)' : 'rgba(15,23,42,0.12)';
-        var tickc = isDark ? '#94a3b8' : '#334155';
-
-        var layout = {
-            title: { text: title, font: { color: isDark ? '#e2e8f0' : '#0f172a', size: 13 }, x: 0.5, xanchor: 'center' },
-            paper_bgcolor: paper,
-            plot_bgcolor: images.length ? '#000010' : paper,
-            xaxis: {
-                title: { text: 'Longitude', font: { color: tickc, size: 11 } },
-                range: [lonMin - lonPad, lonMax + lonPad],
-                gridcolor: gridc, zeroline: false, tickfont: { color: tickc, size: 10 },
-                constrain: 'domain'
-            },
-            yaxis: {
-                title: { text: 'Latitude', font: { color: tickc, size: 11 } },
-                range: [latMin - latPad, latMax + latPad],
-                gridcolor: gridc, zeroline: false, tickfont: { color: tickc, size: 10 },
-                scaleanchor: 'x', scaleratio: 1 / Math.max(0.1, Math.cos(lat0 * Math.PI / 180))
-            },
-            images: images,
-            annotations: annotations,
-            showlegend: true,
-            legend: { x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top',
-                      font: { color: tickc, size: 10 },
-                      bgcolor: isDark ? 'rgba(10,22,40,0.75)' : 'rgba(255,255,255,0.8)',
-                      bordercolor: gridc, borderwidth: 1 },
-            margin: { l: 60, r: 20, t: 44, b: 48 },
-            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 10 } }
-        };
-
-        Plotly.newPlot('rt-ctrk-chart', traces, layout, {
-            responsive: true, displayModeBar: true, displaylogo: false,
-            modeBarButtonsToRemove: ['lasso2d', 'select2d', 'toggleSpikelines']
-        });
-
-        // ── Compact time × center table (like the classic figure) ──
-        var rows = points.map(function (p) {
+    // Compact time × centre × tilt table below the plan view.
+    function _rtRenderCenterTrackTable() {
+        var el = document.getElementById('rt-ctrk-result');
+        if (!el || !_rtCtrkData) return;
+        var pts = _rtCtrkData.points || [];
+        var rows = pts.map(function (p) {
             var c2 = p.lat2 != null ? '(' + p.lon2.toFixed(2) + ', ' + p.lat2.toFixed(2) + ')' : '—';
             var c6 = p.lat6 != null ? '(' + p.lon6.toFixed(2) + ', ' + p.lat6.toFixed(2) + ')' : '—';
             var tilt = p.tilt_2_6_km != null ? p.tilt_2_6_km.toFixed(1) : '—';
-            return '<tr><td style="padding:1px 10px 1px 0;color:#93c5fd;">' + p.time_label + 'Z</td>' +
-                   '<td style="padding:1px 10px 1px 0;color:#cbd5e1;">' + c2 + '</td>' +
-                   '<td style="padding:1px 10px 1px 0;color:#cbd5e1;">' + c6 + '</td>' +
-                   '<td style="padding:1px 0;color:#94a3b8;">' + tilt + '</td></tr>';
+            return '<tr><td style="padding:1px 10px 1px 0;color:#2563eb;">' + p.time_label + 'Z</td>' +
+                   '<td style="padding:1px 10px 1px 0;color:var(--text);">' + c2 + '</td>' +
+                   '<td style="padding:1px 10px 1px 0;color:var(--text);">' + c6 + '</td>' +
+                   '<td style="padding:1px 0;color:var(--slate);">' + tilt + '</td></tr>';
         }).join('');
-        var tbl = document.getElementById('rt-ctrk-table');
-        if (tbl) {
-            tbl.innerHTML =
-                '<table style="font-size:10.5px;border-collapse:collapse;font-variant-numeric:tabular-nums;">' +
-                '<thead><tr style="color:#64748b;text-align:left;border-bottom:1px solid rgba(148,163,184,0.25);">' +
-                '<th style="padding:1px 10px 3px 0;font-weight:600;">Time (Z)</th>' +
-                '<th style="padding:1px 10px 3px 0;font-weight:600;">2-km (lon, lat)</th>' +
-                '<th style="padding:1px 10px 3px 0;font-weight:600;">6-km (lon, lat)</th>' +
-                '<th style="padding:1px 0 3px;font-weight:600;">Tilt (km)</th></tr></thead>' +
-                '<tbody>' + rows + '</tbody></table>';
-        }
+        el.innerHTML =
+            '<div class="storm-timeline-panel" style="margin-top:8px;padding:8px 10px;">' +
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">' +
+            '<span style="font-size:12px;font-weight:600;color:var(--text);">◎ Center Track · ' + pts.length + ' sweeps</span>' +
+            '<span style="flex:1;"></span>' +
+            '<button onclick="rtToggleCenterTrack()" class="fl-ts-close" title="Hide the centre track (winds return)">&times;</button>' +
+            '</div>' +
+            '<table style="font-size:10.5px;border-collapse:collapse;font-variant-numeric:tabular-nums;">' +
+            '<thead><tr style="color:var(--slate);text-align:left;border-bottom:1px solid rgba(148,163,184,0.25);">' +
+            '<th style="padding:1px 10px 3px 0;font-weight:600;">Time (Z)</th>' +
+            '<th style="padding:1px 10px 3px 0;font-weight:600;">2-km (lon, lat)</th>' +
+            '<th style="padding:1px 10px 3px 0;font-weight:600;">6-km (lon, lat)</th>' +
+            '<th style="padding:1px 0 3px;font-weight:600;">Tilt (km)</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody></table></div>';
     }
+
 
     // ── Real-Time Wind Barbs ────────────────────────────────────
 
