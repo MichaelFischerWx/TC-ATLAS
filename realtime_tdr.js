@@ -127,6 +127,24 @@
                 upd['annotations[' + i + '].font.size'] = Math.round(a.font.size * fb);
             }
         });
+
+        // Bumping the fonts without bumping the LAYOUT is what made saved figures
+        // collide: the on-screen margins/standoffs are tuned for small fonts, so
+        // at fb× the (often 2-line) title overlapped the plot, the axis titles ran
+        // into the tick labels, and the bottom-left "Max" readout (y=-0.01, in the
+        // bottom margin) sat on top of the x-axis title. Grow the margins + add
+        // axis-title standoffs for the export only (restored right after, like the
+        // fonts). A path absent on-screen restores to null (Plotly default).
+        var _mar = L.margin || {};
+        function setExp(path, cur, val) { rst[path] = (cur === undefined ? null : cur); upd[path] = val; }
+        setExp('margin.t', _mar.t, Math.round((_mar.t != null ? _mar.t : 46) * fb) + 24); // 2-line title
+        setExp('margin.l', _mar.l, Math.round((_mar.l != null ? _mar.l : 52) * fb) + 8);  // y-title + ticks
+        setExp('margin.b', _mar.b, Math.round((_mar.b != null ? _mar.b : 44) * fb) + 34); // x-title below Max box
+        setExp('margin.r', _mar.r, Math.round((_mar.r != null ? _mar.r : 16) * Math.max(1, fb * 0.7)));
+        var _xt = L.xaxis && L.xaxis.title, _yt = L.yaxis && L.yaxis.title;
+        setExp('xaxis.title.standoff', _xt && _xt.standoff, Math.round(26 * fb)); // clear ticks + Max box
+        setExp('yaxis.title.standoff', _yt && _yt.standoff, Math.round(14 * fb));
+
         var hasBump = Object.keys(upd).length > 0;
 
         // Colorbar fonts are TRACE attributes (not layout), so the relayout bump
