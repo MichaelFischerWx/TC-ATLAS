@@ -193,7 +193,7 @@ _IR_LUT = _build_ir_lut()
 # Caching
 # ---------------------------------------------------------------------------
 _rt_ds_cache = OrderedDict()       # file_url → (xr.Dataset, timestamp)
-_rt_dir_cache = OrderedDict()      # dir_url  → (link_list, timestamp)
+_rt_dir_cache = OrderedDict()      # dir_url  → (link_list, {href: mtime_str}, timestamp)
 _RT_DS_CACHE_MAX = 1               # ONE dataset at a time — each can be 100-300 MB
 _RT_DIR_CACHE_TTL = 300            # 5 minutes for directory listings
 _rt_dir_lock = threading.Lock()    # guards _rt_dir_cache against a thundering herd
@@ -294,16 +294,42 @@ def _fetch_text(url: str, timeout: int = 30) -> str:
 
 
 class _LinkParser(HTMLParser):
-    """Extract href links from an Apache directory listing."""
+    """Extract href links — and each entry's Apache "Last modified" time — from a
+    directory listing. The mtime (a real production timestamp) is used to decide
+    which analyses fall within a recent window and to order them across a
+    midnight rollover, which a filename/HHMM sort gets wrong."""
+    _MTIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}")
+
     def __init__(self):
         super().__init__()
         self.links = []
+        self.mtimes = {}          # href -> "YYYY-MM-DD HH:MM" (Apache index, UTC)
+        self._pending = None      # href awaiting its "Last modified" cell
+        self._want_mtime = False
 
     def handle_starttag(self, tag, attrs):
         if tag == "a":
             for name, value in attrs:
                 if name == "href" and value and not value.startswith("?") and not value.startswith("/"):
                     self.links.append(value)
+                    # The name cell holds the <a>; the very next align=right cell
+                    # is "Last modified" (the one after it is Size).
+                    self._pending = value
+                    self._want_mtime = False
+        elif tag == "td" and self._pending and not self._want_mtime:
+            if any(n == "align" and v == "right" for n, v in attrs):
+                self._want_mtime = True
+
+    def handle_data(self, data):
+        if not self._want_mtime or not self._pending:
+            return
+        m = self._MTIME_RE.search(data)
+        if m:
+            self.mtimes[self._pending] = m.group(0)
+            self._pending = None
+            self._want_mtime = False
+        elif data.strip():
+            self._want_mtime = False   # a non-empty non-timestamp cell → stop (don't grab Size)
 
 
 def _parse_directory(url: str) -> list[str]:
@@ -325,17 +351,18 @@ def _parse_directory(url: str) -> list[str]:
     """
     now = time.time()
     stale_links = None
+    stale_mtimes = None
     with _rt_dir_lock:
         cached = _rt_dir_cache.get(url)
         if cached is not None:
-            links, ts = cached
+            links, mtimes, ts = cached
             if now - ts < _RT_DIR_CACHE_TTL:
                 _rt_dir_cache.move_to_end(url)
                 return links
             # Expired: claim the refetch by bumping the timestamp now so
-            # concurrent callers in this window reuse the stale links.
-            stale_links = links
-            _rt_dir_cache[url] = (links, now)
+            # concurrent callers in this window reuse the stale listing.
+            stale_links, stale_mtimes = links, mtimes
+            _rt_dir_cache[url] = (links, mtimes, now)
             _rt_dir_cache.move_to_end(url)
 
     try:
@@ -349,10 +376,20 @@ def _parse_directory(url: str) -> list[str]:
     parser.feed(html)
     links = parser.links
     with _rt_dir_lock:
-        _rt_dir_cache[url] = (links, time.time())
+        _rt_dir_cache[url] = (links, parser.mtimes, time.time())
         if len(_rt_dir_cache) > 50:
             _rt_dir_cache.popitem(last=False)
     return links
+
+
+def _dir_mtimes(url: str) -> dict:
+    """{href: 'YYYY-MM-DD HH:MM'} (Apache "Last modified", UTC) for a directory.
+    Reuses _parse_directory's fetch+cache — call it first so the cache is warm,
+    then read the mtime map back out. Empty dict if the listing is unavailable."""
+    _parse_directory(url)
+    with _rt_dir_lock:
+        cached = _rt_dir_cache.get(url)
+        return dict(cached[1]) if cached else {}
 
 
 def _open_rt_dataset(file_url: str) -> xr.Dataset:
@@ -964,19 +1001,36 @@ def list_files(
         raise HTTPException(status_code=502, detail=f"Could not list files for {mission}: {e}")
 
     # Filter to xy analysis files
+    mtimes = _dir_mtimes(url)
     files = []
     for link in links:
         if "_xy.nc" in link:
             # Parse analysis time from filename like 251028H1_1349_xy.nc.gz
             m = re.match(r".*?_(\d{4})_xy\.nc", link)
             time_label = m.group(1) if m else ""
+            # The file's "Last modified" time is when the analysis was produced —
+            # a real UTC timestamp, so it's rollover-safe (unlike the HHMM label,
+            # which repeats across midnight) and is what "within the last N h"
+            # keys off. None if the listing didn't carry one.
+            dt_iso = None
+            mt = mtimes.get(link)
+            if mt:
+                try:
+                    dt_iso = (_dt.strptime(mt, "%Y-%m-%d %H:%M")
+                              .replace(tzinfo=timezone.utc)
+                              .strftime("%Y-%m-%dT%H:%M:%SZ"))
+                except ValueError:
+                    pass
             files.append({
                 "filename": link,
                 "url": f"{SEB_BASE}/{mission}/{link}",
                 "time_label": time_label,
+                "datetime_utc": dt_iso,
             })
 
-    files.sort(key=lambda f: f["filename"])
+    # Order chronologically by production time when we have it (correct across a
+    # midnight rollover); fall back to filename. ISO strings sort lexically.
+    files.sort(key=lambda f: (f.get("datetime_utc") or "", f["filename"]))
     return JSONResponse({"mission": mission, "files": files})
 
 

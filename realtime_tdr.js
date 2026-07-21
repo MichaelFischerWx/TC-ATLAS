@@ -160,6 +160,9 @@
             _reconRenderMissionsDashboard();
         } else if (name === 'tdr') {
             _reconEnsureMissions();
+            // If the mission list is already loaded (revisiting the tab), the
+            // loadMissions callback won't fire — try the auto-load here too.
+            _rtAutoLoadRecent();
             // Leaflet needs a nudge after being shown from display:none.
             setTimeout(function () { if (_rtMap) _rtMap.invalidateSize(); }, 80);
         } else if (name === 'fl') {
@@ -1794,11 +1797,14 @@
                 });
                 sel.disabled = false;
                 // A Missions-dashboard card may have requested a mission
-                // before the list finished loading — apply it now.
+                // before the list finished loading — apply it now. Otherwise,
+                // auto-load the most recent analysis if one is fresh enough.
                 if (_reconPendingMission) {
                     var pm = _reconPendingMission;
                     _reconPendingMission = null;
                     _reconSelectMission(pm);
+                } else {
+                    _rtAutoLoadRecent();
                 }
             })
             .catch(function (err) {
@@ -1809,7 +1815,9 @@
     window._rtLoadMissions = loadMissions;
 
     // ── Load files for a mission ─────────────────────────────────
-    function loadFiles(mission) {
+    // cb(files|null) fires after the dropdown is populated, so callers (e.g. the
+    // recent-analysis auto-loader) can act on the list without re-fetching.
+    function loadFiles(mission, cb) {
         _ga('rt_select_mission', { mission: mission });
         var sel = document.getElementById('rt-file-select');
         var goBtn = document.getElementById('rt-go-btn');
@@ -1823,6 +1831,7 @@
                 sel.innerHTML = '<option value="">Select an analysis…</option>';
                 if (json.files.length === 0) {
                     sel.innerHTML = '<option value="">No xy analysis files found</option>';
+                    if (cb) cb([]);
                     return;
                 }
                 json.files.forEach(function (f) {
@@ -1836,11 +1845,53 @@
                     sel.appendChild(opt);
                 });
                 sel.disabled = false;
+                if (cb) cb(json.files);
             })
             .catch(function (err) {
                 sel.innerHTML = '<option value="">Error loading files</option>';
                 rtToast('Could not list files: ' + err.message, 'error');
+                if (cb) cb(null);
             });
+    }
+
+    // ── Auto-load the most recent analysis (within RECENT_H hours) ───
+    // So opening the TDR tab during/just-after a sortie lands straight on the
+    // freshest analysis instead of an empty mission picker — the same "it just
+    // works" behaviour as Live Flight auto-selecting the active storm. If nothing
+    // is recent (off-season, or the newest analysis is stale) it leaves the manual
+    // picker untouched. Only ever runs once, and never overrides a user choice.
+    var _RT_RECENT_H = 12;
+    var _rtAutoLoadTried = false;
+    function _rtAutoLoadRecent() {
+        if (_rtAutoLoadTried || _currentFileUrl) return;   // once, and never over a live selection
+        var msel = document.getElementById('rt-mission-select');
+        if (!msel || msel.disabled || msel.options.length < 2) return;  // missions not ready yet
+        if (msel.value) return;                             // user already picked a mission
+        _rtAutoLoadTried = true;
+        var newestMission = msel.options[1].value;          // options[0] = "Select…"; list is reverse-chron
+        if (!newestMission) return;
+        loadFiles(newestMission, function (files) {
+            if (!files || !files.length) return;
+            // Files come back oldest→newest (backend sorts by production time).
+            var latest = files[files.length - 1];
+            var ts = latest.datetime_utc ? Date.parse(latest.datetime_utc) : NaN;
+            var ageH = isNaN(ts) ? Infinity : (Date.now() - ts) / 3600000;
+            if (ageH > _RT_RECENT_H) return;                // nothing fresh → stay on manual picker
+            // Reflect the auto-selection in both dropdowns, then load it.
+            msel.value = newestMission;
+            var fsel = document.getElementById('rt-file-select');
+            fsel.value = latest.url;
+            var goBtn = document.getElementById('rt-go-btn');
+            if (goBtn) goBtn.disabled = false;
+            _ga('rt_autoload_recent', { mission: newestMission, age_h: Math.round(ageH * 10) / 10 });
+            window.rtExploreFile();
+            if (typeof rtToast === 'function') {
+                var lbl = (latest.time_label && latest.time_label.length === 4)
+                    ? latest.time_label.slice(0, 2) + ':' + latest.time_label.slice(2) + ' UTC' : '';
+                rtToast('Showing the latest TDR analysis' + (lbl ? ' (' + lbl + ')' : '') +
+                        ' — pick another from the menu above.', 'info');
+            }
+        });
     }
 
     // ── Event: mission selected ──────────────────────────────────
