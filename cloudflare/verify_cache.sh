@@ -58,8 +58,19 @@ else
   echo "SKIP  cacheable  genesis-detail (no active cluster right now)"
 fi
 
+# Recon: derive a live storm that HAS recon (bare /recon/realtime is a 422 -> can't
+# cache-check). Skip cleanly if no active recon mission right now.
+RECON=$(curl -s --compressed -H "Origin: $ORIGIN" -H "$AE" \
+          "$HOST/ir-monitor/active-storms" \
+          | jq -r 'first(.storms[] | select(.has_recon))
+                   | if . then "atcf_id=\(.atcf_id)&hours=24&name=\(.name)&lat=\(.lat)&lon=\(.lon)" else empty end' 2>/dev/null)
+if [ -n "$RECON" ]; then
+  assert_cacheable "recon-realtime" "$HOST/recon/realtime?$RECON"
+else
+  echo "SKIP  cacheable  recon-realtime (no active recon mission right now)"
+fi
+
 echo "== should BYPASS =="
-assert_bypassed "recon-realtime" "$HOST/recon/realtime"
 assert_bypassed "genesis-near"   "$HOST/ir-monitor/weatherlab-genesis-near?lat=15&lon=-50"
 assert_bypassed "genesis-cycles" "$HOST/ir-monitor/weatherlab-genesis-cycles"
 
