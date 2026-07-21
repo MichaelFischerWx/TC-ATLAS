@@ -36,3 +36,14 @@ data/seasonal/
 # Claude Code working state
 .claude/
 mosaic_out/
+_ir2a_dev/
+ir2a_proto.html
+ir2a_colorrelief.html
+_ir2a_dem/
+_ir2a_anim
+_ir2a_anim_old_fixture/
+rt_pack_test.html
+mosaic_out2/
+ir2a_webgl.html
+_ir2a_anim/
+ir2a_anim.html

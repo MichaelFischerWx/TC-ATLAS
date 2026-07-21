@@ -57,6 +57,13 @@
     var minZoom = opts.minZoom || 0;
     var MAX_TILES = opts.maxCachedTiles || 700;   // LRU bound across frames/zooms
     var onErr = opts.onError || function (m) { try { console.error('[mosaicGL] ' + m); } catch (e) {} };
+    // Optional async tile source (packed-frame range reads). Resolves a Blob, or
+    // null when the tile definitively doesn't exist (cached as a miss — no
+    // re-request). Without it, tiles load via a plain <img> as before.
+    var fetchTile = opts.fetchTile || null;
+    // Optional per-frame detail cap (e.g. Vis frames with a baked z7 storm
+    // sector go past z6; other frames don't) — clamps the render zoom per frame.
+    var frameMaxZoom = opts.frameMaxZoom || null;
 
     var frames = opts.frames ? opts.frames.slice() : [];
     var active = frames.length ? frames[frames.length - 1] : null;
@@ -82,25 +89,44 @@
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     }
 
+    function uploadTex(key, img) {
+      delete inflight[key];
+      if (!gl) return;
+      var tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);  // don't blur the index
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      tiles[key] = { tex: tex, used: ++useClock };
+      evictIfNeeded();
+      if (map) map.triggerRepaint();
+    }
+
     function loadTile(frame, z, x, y) {
       var key = tkey(frame, z, x, y);
       if (tiles[key] || inflight[key]) return;
       inflight[key] = true;
+      if (fetchTile) {
+        fetchTile(frame, z, x, y).then(function (b) {
+          if (b === null) {
+            // Definitive miss (absent from the pack index): cache it so the
+            // render loop never re-requests this tile.
+            delete inflight[key];
+            tiles[key] = { tex: null, used: ++useClock };
+            return;
+          }
+          if (!b || !gl) { delete inflight[key]; return; }
+          var u = URL.createObjectURL(b), img = new Image();
+          img.onload = function () { uploadTex(key, img); URL.revokeObjectURL(u); };
+          img.onerror = function () { delete inflight[key]; URL.revokeObjectURL(u); };
+          img.src = u;
+        }).catch(function () { delete inflight[key]; });
+        return;
+      }
       var img = new Image(); img.crossOrigin = 'anonymous';
-      img.onload = function () {
-        delete inflight[key];
-        if (!gl) return;
-        var tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);  // don't blur the index
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        tiles[key] = { tex: tex, used: ++useClock };
-        evictIfNeeded();
-        if (map) map.triggerRepaint();
-      };
+      img.onload = function () { uploadTex(key, img); };
       img.onerror = function () { delete inflight[key]; };  // empty/missing tile — skip
       img.src = opts.tileUrl(frame, z, x, y);
     }
@@ -111,7 +137,7 @@
       keys.sort(function (a, b) { return tiles[a].used - tiles[b].used; });
       var drop = keys.length - MAX_TILES;
       for (var i = 0; i < drop; i++) {
-        var k = keys[i]; if (gl) gl.deleteTexture(tiles[k].tex); delete tiles[k];
+        var k = keys[i]; if (gl && tiles[k].tex) gl.deleteTexture(tiles[k].tex); delete tiles[k];
       }
     }
 
@@ -143,8 +169,13 @@
     }
 
     function pickZoom() {
+      var mz = maxZoom;
+      if (frameMaxZoom && active) {
+        var f = frameMaxZoom(active);
+        if (f != null) mz = Math.min(mz, f);
+      }
       var z = Math.round(map.getZoom());
-      return Math.max(minZoom, Math.min(maxZoom, z));
+      return Math.max(minZoom, Math.min(mz, z));
     }
 
     var layer = {
@@ -194,8 +225,8 @@
           gl.uniform1f(loc.u_scale, s);
           for (var j = 0; j < vis.length; j++) {
             var cx = vis[j][0], cy = vis[j][1], rec = tiles[tkey(active, lz, cx, cy)];
-            if (!rec) continue;                           // not loaded yet → coarser base shows through
-            rec.used = ++useClock;
+            if (rec) rec.used = ++useClock;
+            if (!rec || !rec.tex) continue;               // not loaded / known-absent → coarser base shows through
             gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, rec.tex); gl.uniform1i(loc.u_idx, 0);
             // draw in the primary world + both neighbor copies (antimeridian display wrap)
             for (var k = -1; k <= 1; k++) {
@@ -207,7 +238,7 @@
       },
       onRemove: function () {
         if (!gl) return;
-        Object.keys(tiles).forEach(function (k) { gl.deleteTexture(tiles[k].tex); });
+        Object.keys(tiles).forEach(function (k) { if (tiles[k].tex) gl.deleteTexture(tiles[k].tex); });
         tiles = {}; inflight = {};
         if (lutTex) gl.deleteTexture(lutTex);
         if (buf) gl.deleteBuffer(buf);

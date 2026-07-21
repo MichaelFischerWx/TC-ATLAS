@@ -1811,8 +1811,7 @@
     var _IR2A_BASE = 'https://cdn.tcatlas.org/mosaic-v3';
     var _ir2aProduct = 'ir';           // product (ir/vis/wv) the idx layer is built for
     function _ir2aRoot(p) { return _IR2A_DEV ? (location.origin + '/_ir2a_anim/ir') : (_IR2A_BASE + '/' + (p || 'ir')); }
-    var _IR2A_DEV_FRAMES = ['202606261800', '202606261810', '202606261820',
-                            '202606261830', '202606261840', '202606261850'];
+    var _IR2A_DEV_FRAMES = ['202607202240'];   // local mosaic_out fixture (packed frame)
     var _ir2aLayer = null, _ir2aOn = false, _ir2aFrames = null, _ir2aFramesProduct = null;
     function _ir2aEligible() {
         return _IR2A && window.LFLET_GL && window.createMosaicGLLayer &&
@@ -1840,7 +1839,25 @@
     // Adopt the latest IR frame's decode range from a freshly-loaded frames.json.
     // No-op for wv/vis. Rebuilds the live idx colour LUT if the range changed so
     // the widened encoding takes effect the moment the first new frame lands.
+    // Per-product mosaic manifest extras (stamped per frame by the builder):
+    // pack_frames = frames whose tiles live in a single pack.bin (range-read via
+    // index.json — 1 R2 object/frame instead of ~260 Class-A PUTs);
+    // storm_zmax = deepest storm-sector zoom that frame actually baked (Vis z7
+    // from the 1-km hi-res read; IR/WV stay z6), so a mixed rollover window
+    // never requests tiles that don't exist.
+    var _mosaicPackFrames = {};   // product -> { ts: 1 }
+    var _mosaicStormZmax = {};    // product -> { ts: zmax }
+    function _stormZmaxFor(product, ts) {
+        var m = _mosaicStormZmax[product], v = (m && ts) ? m[ts] : null;
+        return (v && v > 6) ? v : 6;
+    }
     function _irApplyTrange(j, product) {
+        if (j) {
+            var pf = {}, i, pl = j.pack_frames || [];
+            for (i = 0; i < pl.length; i++) pf[pl[i]] = 1;
+            _mosaicPackFrames[product] = pf;
+            _mosaicStormZmax[product] = j.storm_zmax || {};
+        }
         if (product !== 'ir') return;
         var frames = (j && j.frames) || [], tr = (j && j.ir_trange) || null;
         var latest = frames.length ? frames[frames.length - 1] : null;
@@ -1853,6 +1870,62 @@
         }
         _irTargetMaps = {};   // drop cached recolor maps built at the old range
     }
+
+    // ── Packed-frame tile fetch (v3 mosaic) ────────────────────────────────
+    // Fetch one v3 tile as a Blob. For packed frames (manifest pack_frames) the
+    // tile is a byte-range of the frame's single pack.bin, located via its
+    // index.json sidecar; a tile ABSENT from the index resolves null with no
+    // network at all (kills the z5-z7 404 spam over open ocean). Non-packed
+    // frames — and any pack/index failure — fall back to a plain tile GET, so
+    // this is safe across mixed rollover windows and rollbacks.
+    var _packIdxCache = {};   // "<product>|<ts>" -> Promise<index|null>
+    function _packIndexFor(base, product, ts) {
+        var k = product + '|' + ts, p = _packIdxCache[k];
+        if (p) return p;
+        p = _packIdxCache[k] = fetch(base + '/index.json')
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .catch(function () { return null; });
+        return p;
+    }
+    // Debug hook (console/diagnostics): window._v3TileBlob(url) → Promise<Blob|null>.
+    function _v3TileBlob(url) {
+        function plain() {
+            return fetch(url).then(function (r) { return r.ok ? r.blob() : null; })
+                .catch(function () { return null; });
+        }
+        var m = url.match(/^(.*\/(ir|vis|wv))\/(\d{12})\/(\d+)\/(\d+)\/(\d+)\.png$/);
+        if (!m) return plain();
+        var product = m[2], ts = m[3], key = m[4] + '/' + m[5] + '/' + m[6];
+        var pf = _mosaicPackFrames[product];
+        if (!pf || !pf[ts]) return plain();
+        var base = m[1] + '/' + ts;
+        return _packIndexFor(base, product, ts).then(function (ix) {
+            if (!ix || !ix.tiles) return plain();
+            var e = ix.tiles[key];
+            if (!e) return null;                      // definitively absent — no request
+            return fetch(base + '/pack.bin',
+                         { headers: { Range: 'bytes=' + e[0] + '-' + (e[0] + e[1] - 1) } })
+                .then(function (r) {
+                    // Explicit image/png type: the pack serves as octet-stream,
+                    // and Safari won't sniff a typeless blob for <img>/bitmap.
+                    if (r.status === 206) {
+                        return r.arrayBuffer().then(function (ab) {
+                            return new Blob([ab], { type: 'image/png' });
+                        });
+                    }
+                    if (r.status === 200) {
+                        // Range-unaware server (e.g. a plain dev server): slice
+                        // the full pack client-side so the tile still decodes.
+                        return r.arrayBuffer().then(function (ab) {
+                            return new Blob([ab.slice(e[0], e[0] + e[1])], { type: 'image/png' });
+                        });
+                    }
+                    return plain();
+                })
+                .catch(function () { return plain(); });
+        });
+    }
+    window._v3TileBlob = _v3TileBlob;
     // Exact claude-ir idx LUT = the backend _IR_LUT the v2 mosaic bakes (idx i → its
     // color; idx 0 = transparent). Using it makes the idx layer's DEFAULT colormap
     // byte-identical to v2 — the frontend IR_COLORMAPS reconstruction (160–330 K) drifts.
@@ -1934,7 +2007,11 @@
         if (!_ir2aLayer) {
             _ir2aLayer = window.createMosaicGLLayer({
                 id: 'ir2a-idx', tileUrl: _ir2aTileUrl, frames: times,
-                maxZoom: _IR2A_DEV ? 4 : 6, baseMaxZoom: 4, tileSize: 512,
+                maxZoom: _IR2A_DEV ? 4 : 7, baseMaxZoom: 4, tileSize: 512,
+                // Per-frame detail cap: only frames whose manifest entry says a
+                // z7 storm sector was baked (Vis hi-res) go past z6.
+                frameMaxZoom: function (f) { return _stormZmaxFor(_ir2aProduct, f); },
+                fetchTile: function (f, z, x, y) { return _v3TileBlob(_ir2aTileUrl(f, z, x, y)); },
                 lut: _idxLutForProduct(_ir2aProduct, _irColormap || 'claude-ir'),
                 onError: function (m) { console.error('[ir2a] ' + m); }
             });
@@ -2118,13 +2195,13 @@
         var rec = _inspectTileCache[url];
         if (rec) { cb(rec.cx ? rec : null); return; }
         rec = _inspectTileCache[url] = {};
-        var img = new Image(); img.crossOrigin = 'anonymous';
-        img.onload = function () {
-            var c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
-            rec.cx = c.getContext('2d'); rec.cx.drawImage(img, 0, 0); cb(rec);
-        };
-        img.onerror = function () { cb(null); };
-        img.src = url;
+        _v3TileBlob(url).then(function (b) {
+            if (!b) { cb(null); return; }
+            return createImageBitmap(b).then(function (bmp) {
+                var c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+                rec.cx = c.getContext('2d'); rec.cx.drawImage(bmp, 0, 0); cb(rec);
+            });
+        }).catch(function () { cb(null); });
     }
     // Sample the global IR mosaic at (lat, lon) and invert to Tb (Kelvin).
     // Map-agnostic — samples tiles by URL, so both the global map inspect
@@ -2341,8 +2418,11 @@
         var FLAT = [1, 134, 160];
         maplibregl.addProtocol('terrainidx', function (params) {
             var realUrl = params.url.slice('terrainidx://'.length);
-            return fetch(realUrl).then(function (r) { return r.blob(); })
-                .then(function (b) { return createImageBitmap(b); })
+            return _v3TileBlob(realUrl)
+                .then(function (b) {
+                    if (!b) throw new Error('tile absent');
+                    return createImageBitmap(b);
+                })
                 .then(function (bmp) {
                     var c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
                     var cx = c.getContext('2d'); cx.drawImage(bmp, 0, 0);
@@ -2384,7 +2464,10 @@
             // head = "<product>" or "<product>:<cmap>" (explicit alpha-carrying map, e.g. ir:coldcloud)
             var cs = head.indexOf(':'), product = cs < 0 ? head : head.slice(0, cs), cmapOv = cs < 0 ? null : head.slice(cs + 1);
             var lut = (cmapOv && _idxLutFromTarget(cmapOv)) || _idxLutForProduct(product, _irColormap || 'claude-ir');
-            return fetch(url).then(function (r) { return r.blob(); }).then(function (b) { return createImageBitmap(b); }).then(function (bmp) {
+            return _v3TileBlob(url).then(function (b) {
+                if (!b) throw new Error('tile absent');   // MapLibre treats as a missing tile
+                return createImageBitmap(b);
+            }).then(function (bmp) {
                 var c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
                 var cx = c.getContext('2d'); cx.drawImage(bmp, 0, 0);
                 var im = cx.getImageData(0, 0, c.width, c.height), d = im.data, i, idx;
@@ -6950,7 +7033,12 @@
                 ? ('idxcolor://' + product + '/' + _ir2aRoot(product) + '/' + frames[i] + '/{z}/{x}/{y}.png')
                 : (product === 'ir' ? _irColorTileUrl(_mosaicTileUrl(frames[i], product)) : _mosaicTileUrl(frames[i], product));
             var ly = L.tileLayer(url, {
-                tileSize: 512, maxNativeZoom: 6, maxZoom: GIBS_VIS_MAX_ZOOM,
+                // Per-frame native cap: Vis frames that baked a z7 hi-res storm
+                // sector (manifest storm_zmax) serve it; others stay at z6.
+                // crisp = nearest-neighbor overzoom past native (the sharp
+                // "pixel" look instead of a bilinear blur).
+                tileSize: 512, maxNativeZoom: _stormZmaxFor(product, frames[i]),
+                maxZoom: GIBS_VIS_MAX_ZOOM, crisp: true,
                 opacity: 0, pane: 'tilePane', keepBuffer: 2
             });
             ly._mosaicTs = frames[i];   // marks this as a lite/mosaic layer
@@ -28226,7 +28314,11 @@
                     obj = window.createMosaicGLLayer({
                         id: 'recon-mosaic-idx',
                         tileUrl: function (f, z, x, y) { return _ir2aRoot(product) + '/' + f + '/' + z + '/' + x + '/' + y + '.png'; },
-                        frames: [latest], maxZoom: 6, baseMaxZoom: 4, tileSize: 512,
+                        frameMaxZoom: function (f) { return _stormZmaxFor(product, f); },
+                        fetchTile: function (f, z, x, y) {
+                            return _v3TileBlob(_ir2aRoot(product) + '/' + f + '/' + z + '/' + x + '/' + y + '.png');
+                        },
+                        frames: [latest], maxZoom: 7, baseMaxZoom: 4, tileSize: 512,
                         lut: _idxLutForProduct(product, _irColormap || 'claude-ir'),
                         onError: function (m) { try { console.error('[recon-mosaic] ' + m); } catch (e) {} }
                     });

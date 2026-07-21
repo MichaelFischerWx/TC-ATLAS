@@ -816,7 +816,8 @@ def _hsd_counts_to_reflectance(counts: np.ndarray, header: dict,
 def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
                          box_deg: float = 8.0,
                          band: int = HIMAWARI_BAND,
-                         return_extent: bool = False):
+                         return_extent: bool = False,
+                         target_res_m: int = 2000):
     """
     Open Himawari HSD segment files from S3 and return a geographically-subsetted
     2D array (y, x).  For IR/WV bands (7-16) returns brightness temperature
@@ -843,7 +844,11 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
 
     is_visible = band <= 6
     res_m = HIMAWARI_BAND_RES_M.get(band, 2000)
-    scale_factor = int(2000 / res_m)  # subsample factor to get to 2km (e.g., 4 for 0.5km)
+    # Retained grid resolution. Default 2000 m (the IR grid); callers may ask for
+    # a finer grid from a finer-native band (e.g. 1000 m from 0.5 km Band 3 for
+    # hi-res storm sectors). Never finer than the band's native resolution.
+    target_res_m = max(int(target_res_m), res_m)
+    scale_factor = max(1, int(target_res_m / res_m))  # subsample factor (e.g. 4 for 0.5km→2km)
 
     # Determine which segments we need
     needed_segs = _himawari_seg_for_lat(center_lat, box_deg, band=band)
@@ -935,17 +940,18 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
         lon_0=HIMAWARI_LON_0, sweep=HIMAWARI_SWEEP,
     )
 
-    # Compute pixel coordinates for the bounding box corners
+    # Compute pixel coordinates for the bounding box corners. All geometry below
+    # is in RETAINED-grid pixels: the 2-km constants scale by rf (=1 for the
+    # default 2000 m grid, 2 for a 1000 m grid, ...).
     half = box_deg / 2.0
-    total_nlines = HIMAWARI_NLINES_PER_SEG * HIMAWARI_N_SEGMENTS  # 5500
-    total_ncols = HIMAWARI_NCOLS  # 5500
+    rf = 2000.0 / target_res_m
+    total_nlines = int(round(HIMAWARI_NLINES_PER_SEG * HIMAWARI_N_SEGMENTS * rf))  # 5500 @2km
+    total_ncols = int(round(HIMAWARI_NCOLS * rf))  # 5500 @2km
 
-    # Pixel scale: at nadir, 1 pixel = 2 km = 2000 m
-    # IFOV = 2000 / sat_height = 5.589e-5 rad
-    # pixels_per_rad = 1 / IFOV = 17893
-    coff = total_ncols / 2.0   # 2750
-    loff = total_nlines / 2.0  # 2750
-    pix_per_rad = HIMAWARI_SAT_HEIGHT / 2000.0  # 17893.01
+    # Pixel scale: at nadir, 1 pixel = target_res_m metres
+    coff = total_ncols / 2.0
+    loff = total_nlines / 2.0
+    pix_per_rad = HIMAWARI_SAT_HEIGHT / float(target_res_m)  # 17893.01 @2km
 
     def latlon_to_pixel(lat, lon):
         """Convert lat/lon to pixel row/col in full-disk image."""
@@ -962,7 +968,7 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
     # Adjust row indices relative to the stacked array
     # (which starts from the first needed segment, not segment 1)
     min_seg = min(seg_files.keys())
-    row_offset = (min_seg - 1) * HIMAWARI_NLINES_PER_SEG
+    row_offset = int(round((min_seg - 1) * HIMAWARI_NLINES_PER_SEG * rf))
 
     if return_extent:
         # Off-nadir, a lat/lon box maps to a SKEWED quadrilateral in the
@@ -1023,12 +1029,13 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
 
     if return_extent:
         # geos extent at the centres of the subset's first/last pixels, in
-        # the same metres the geos Proj() emits (x_m = (col-coff)*2000, etc).
+        # the same metres the geos Proj() emits (x_m = (col-coff)*res, etc).
         # Absolute full-disk rows: r1_local maps back via +row_offset.
-        x_left   = (c1_local - coff) * 2000.0
-        x_right  = (c2_local - 1 - coff) * 2000.0
-        y_top    = (loff - (r1_local + row_offset)) * 2000.0
-        y_bottom = (loff - (r2_local - 1 + row_offset)) * 2000.0
+        res = float(target_res_m)
+        x_left   = (c1_local - coff) * res
+        x_right  = (c2_local - 1 - coff) * res
+        y_top    = (loff - (r1_local + row_offset)) * res
+        y_bottom = (loff - (r2_local - 1 + row_offset)) * res
         return subset, (x_left, x_right, y_top, y_bottom)
 
     return subset

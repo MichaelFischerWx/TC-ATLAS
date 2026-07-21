@@ -61,6 +61,19 @@ LIMB_DEG = 76.0       # drop pixels seen more than this far off-nadir (limb junk
 STORM_BOX_DEG = 6.0   # half-box baked around each storm
 STORM_ZOOMS = (5, 6)  # storm-detail zoom levels. With 512px tiles, z5/z6 give the
                       # same resolution the old 256px z6/z7 did (512@zN == 256@z(N+1)).
+# Visible storm sectors go one level deeper (z7 ≈ 0.61 km/px at the equator) and
+# are fed by a 1-km hi-res Vis read (coarsen 2 instead of 4; Himawari 1000 m grid)
+# so the extra zoom carries real detail — IR/WV are 2-km native, already fully
+# resolved at z6, and stay at STORM_ZOOMS. The hi-res read only happens when
+# there are active storms to bake (quiet cycles are byte-identical to today).
+VIS_STORM_ZMAX = int(os.environ.get("MOSAIC_VIS_STORM_ZMAX", "7"))
+VIS_HIRES = os.environ.get("MOSAIC_VIS_HIRES", "1") not in ("0", "false", "off")
+
+
+def storm_zooms_for(product):
+    if PRODUCTS[product]["kind"] == "vis" and VIS_HIRES and VIS_STORM_ZMAX > STORM_ZOOMS[-1]:
+        return tuple(range(STORM_ZOOMS[0], VIS_STORM_ZMAX + 1))
+    return STORM_ZOOMS
 
 # (key, kind, bucket, label). lon_0/grid come from each file's own navigation.
 SATS = [
@@ -85,6 +98,14 @@ R2_PREFIX = os.environ.get("MOSAIC_R2_PREFIX", "mosaic-v2")  # bump to invalidat
 # identical to today. Pair an idx run with MOSAIC_R2_PREFIX=mosaic-v3 so it never touches v2.
 TILE_MODE = os.environ.get("MOSAIC_TILE_MODE", "rgba").lower()
 IDX_PNG_LEVEL = int(os.environ.get("MOSAIC_IDX_PNG_LEVEL", "6"))  # spike: L6 = -64% egress, +~1s/frame
+# Packed-frame output. "off" (default) = one R2 PUT per tile (~260 Class-A ops/
+# product-frame). "dual" = tiles AND a single pack.bin (concatenated PNGs) +
+# index.json per product-frame (transition mode: pack-aware clients range-read
+# the pack, old clients keep the tiles). "only" = pack alone (~3 PUTs/product-
+# frame — the Class-A saving lands). Packed frames are advertised per-frame in
+# frames.json `pack_frames`; the frontend range-reads via the index (and skips
+# the network entirely for tiles the index says don't exist).
+PACK_MODE = os.environ.get("MOSAIC_PACK", "off").lower()
 R2_KEEP_FRAMES = 18                     # rolling loop kept hot (~3 h at 10-min)
 _r2_client = None
 
@@ -429,7 +450,47 @@ def to_index(arr, product):
 # `band` + `coarsen` come from PRODUCTS[product]. Visible (0.5 km) is block-
 # averaged by `coarsen` (4×) inside the reader so only the 2 km grid is retained
 # (frees the big native array promptly) and the IR-grid kernels stay applicable.
-def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20):
+def _goes_hires_windows(da, x, y, lon_0, sat_h, sweep, windows):
+    """Decode NATIVE-resolution sub-windows of an open (in-memory) GOES CMI var
+    for the given lat/lon boxes [(lat0, lat1, lon0, lon1), ...] — the hi-res
+    source for Vis z7 storm-sector tiles. Slicing `da` decodes only the HDF5
+    chunks the window touches, so this adds ~tens of MB per storm, not the
+    ~1.9 GB full native field. Returns [(data, x_w, y_w), ...]."""
+    import pyproj
+    out = []
+    proj = pyproj.Proj(proj="geos", h=sat_h, lon_0=lon_0, sweep=sweep)
+    x_asc = bool(x[-1] > x[0]); y_asc = bool(y[-1] > y[0])
+    for (lat0, lat1, lon0, lon1) in windows:
+        # Perimeter-sample the box (geos maps a lat/lon box to a skewed quad).
+        ts_ = np.linspace(0.0, 1.0, 9)
+        lats = np.concatenate([np.full(9, lat0), np.full(9, lat1),
+                               lat0 + ts_ * (lat1 - lat0), lat0 + ts_ * (lat1 - lat0)])
+        lons = np.concatenate([lon0 + ts_ * (lon1 - lon0), lon0 + ts_ * (lon1 - lon0),
+                               np.full(9, lon0), np.full(9, lon1)])
+        xm, ym = proj(lons, lats, errcheck=False)
+        xr_ = np.asarray(xm) / sat_h; yr_ = np.asarray(ym) / sat_h
+        ok = np.isfinite(xr_) & np.isfinite(yr_) & (np.abs(xr_) < 1e3) & (np.abs(yr_) < 1e3)
+        if not ok.any():
+            continue                      # box entirely off this sat's disk
+        xw0, xw1 = float(xr_[ok].min()), float(xr_[ok].max())
+        yw0, yw1 = float(yr_[ok].min()), float(yr_[ok].max())
+        def _rng(axis, lo, hi, asc):
+            i0 = np.searchsorted(axis if asc else axis[::-1], lo)
+            i1 = np.searchsorted(axis if asc else axis[::-1], hi, side="right")
+            n = axis.size
+            if not asc:
+                i0, i1 = n - i1, n - i0
+            return max(0, int(i0) - 4), min(n, int(i1) + 4)
+        c0, c1 = _rng(x, xw0, xw1, x_asc)
+        r0, r1 = _rng(y, yw0, yw1, y_asc)
+        if r1 - r0 < 8 or c1 - c0 < 8:
+            continue
+        w = np.asarray(da[r0:r1, c0:c1].values, dtype=np.float32)
+        out.append((w, x[c0:c1].copy(), y[r0:r1].copy()))
+    return out
+
+
+def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=None):
     import xarray as xr
     key, scan_dt = find_goes_file(bucket, dt, tolerance_min=tol, band=band,
                                   return_dt=True)
@@ -444,6 +505,21 @@ def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20):
     try:
         var = "CMI" if "CMI" in ds else f"CMI_C{band:02d}"
         da = ds[var]
+        x = ds["x"].values.astype(np.float64)
+        y = ds["y"].values.astype(np.float64)
+        gip = ds["goes_imager_projection"].attrs
+        sat_h = float(gip.get("perspective_point_height", GOES_SAT_HEIGHT))
+        lon_0 = float(gip.get("longitude_of_projection_origin"))
+        sweep = str(gip.get("sweep_angle_axis", "x"))
+        # Native-res storm windows (Vis hi-res sectors) — decoded from the SAME
+        # in-memory file before the coarsened full-disk read, no second download.
+        hires = []
+        if hires_windows and coarsen > 1 and getattr(da, "ndim", 0) == 2:
+            try:
+                hires = _goes_hires_windows(da, x, y, lon_0, sat_h, sweep,
+                                            hires_windows)
+            except Exception as e:
+                log(f"  hires window decode failed ({e}) — sectors stay 2 km")
         # For the coarsened (0.5 km Visible) read, strip-decode so the full
         # native array is never materialized (peak-RAM fix). Byte-identical to
         # the whole-array path. Falls back to the legacy read for IR/WV
@@ -454,12 +530,6 @@ def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20):
         else:
             data = np.asarray(da.values, dtype=np.float32)
             pre_coarsened = False
-        x = ds["x"].values.astype(np.float64)
-        y = ds["y"].values.astype(np.float64)
-        gip = ds["goes_imager_projection"].attrs
-        sat_h = float(gip.get("perspective_point_height", GOES_SAT_HEIGHT))
-        lon_0 = float(gip.get("longitude_of_projection_origin"))
-        sweep = str(gip.get("sweep_angle_axis", "x"))
     finally:
         ds.close()
     if data.size == 0 or x.size == 0 or y.size == 0:
@@ -474,13 +544,19 @@ def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20):
         ny2 = (y.size // coarsen) * coarsen
         x = x[:nx2].reshape(-1, coarsen).mean(axis=1)
         y = y[:ny2].reshape(-1, coarsen).mean(axis=1)
-    return data, x, y, lon_0, sat_h, sweep, scan_dt
+    return data, x, y, lon_0, sat_h, sweep, scan_dt, hires
 
 
-def read_himawari_full_disk(dt, band=IR_BAND, coarsen=1, tol=20):
+def read_himawari_full_disk(dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=None):
     """Full-disk Himawari band via the existing HSD reader: a huge box centred on
     the sub-point pulls all 10 segments; the returned geos array + extent give us
-    the same (data, x, y, lon_0, sat_h, sweep) shape as the GOES reader."""
+    the same (data, x, y, lon_0, sat_h, sweep) shape as the GOES reader.
+
+    hires_windows: lat/lon boxes to ALSO read at native resolution (Vis z7 storm
+    sectors) via a second, small open_himawari_subset call per box (target 500 m
+    → scale_factor 1). Re-downloads the 1-3 segments the box touches (~30 MB
+    compressed each) — acceptable next to the full-disk read, and the returned
+    window is only ~tens of MB."""
     prefix, scan_dt = find_himawari_file(dt, tolerance_min=tol, band=band,
                                          return_dt=True)
     if not prefix:
@@ -496,12 +572,40 @@ def read_himawari_full_disk(dt, band=IR_BAND, coarsen=1, tol=20):
     ny, nx = data.shape
     x = np.linspace(extent[0], extent[1], nx) / HIMAWARI_SAT_HEIGHT
     y = np.linspace(extent[2], extent[3], ny) / HIMAWARI_SAT_HEIGHT
+    hires = []
+    for (lat0, lat1, lon0, lon1) in (hires_windows or []):
+        clat = 0.5 * (lat0 + lat1); clon = 0.5 * (lon0 + lon1)
+        dlon = ((clon - HIMAWARI_LON_0 + 180.0) % 360.0) - 180.0
+        if abs(dlon) > 78.0 or abs(clat) > 70.0:
+            continue                      # box (essentially) off the Himawari disk
+        try:
+            wdat, wext = open_himawari_subset(prefix, clat, clon,
+                                              box_deg=max(lat1 - lat0, lon1 - lon0),
+                                              band=band, return_extent=True,
+                                              target_res_m=500)
+            if wdat is None or wext is None:
+                continue
+            wdat = wdat.astype(np.float32)
+            wy, wx = wdat.shape
+            hires.append((wdat,
+                          np.linspace(wext[0], wext[1], wx) / HIMAWARI_SAT_HEIGHT,
+                          np.linspace(wext[2], wext[3], wy) / HIMAWARI_SAT_HEIGHT))
+        except Exception as e:
+            log(f"  himawari hires window failed ({e}) — sector stays 2 km")
     return (data, x, y, HIMAWARI_LON_0,
-            HIMAWARI_SAT_HEIGHT, HIMAWARI_SWEEP, scan_dt)
+            HIMAWARI_SAT_HEIGHT, HIMAWARI_SWEEP, scan_dt, hires)
 
 
-def read_all_sats(dt, timings, product="ir"):
+def read_all_sats(dt, timings, product="ir", hires_windows=None):
+    """hires_windows (Vis only): lat/lon boxes around active storms ALSO read at
+    NATIVE 0.5-km resolution for the z7 storm-sector tiles — GOES decodes the
+    windows from the already-downloaded file, Himawari re-reads the 1-3 segments
+    each box touches. The full-disk read (and so the kernel-driven global render)
+    is byte-identical to today; the windows ride along as sats[k]['hi'] =
+    [(flat, grid), ...] at ~tens of MB per storm, keeping the job in the
+    1 vCPU / 4 GiB tier (a full-disk fine read measured ~6 GiB peak)."""
     cfg = PRODUCTS[product]
+    want_hi = bool(hires_windows) and cfg["kind"] == "vis" and cfg["coarsen"] > 1
     sats = {}
     for sat_key, kind, bucket, label in SATS:
         band = cfg["hima"] if kind == "himawari" else cfg["goes"]
@@ -511,21 +615,28 @@ def read_all_sats(dt, timings, product="ir"):
         coarsen = 1 if kind == "himawari" else cfg["coarsen"]
         # Visible (0.5 km, ~10× larger) posts later than IR/WV; allow an older scan.
         tol = cfg.get("tol", 20)
+        hw = hires_windows if want_hi else None
         t0 = time.time()
         try:
-            fd = (read_himawari_full_disk(dt, band=band, coarsen=coarsen, tol=tol)
+            fd = (read_himawari_full_disk(dt, band=band, coarsen=coarsen, tol=tol,
+                                          hires_windows=hw)
                   if kind == "himawari"
-                  else read_full_disk(bucket, dt, band=band, coarsen=coarsen, tol=tol))
+                  else read_full_disk(bucket, dt, band=band, coarsen=coarsen,
+                                      tol=tol, hires_windows=hw))
         except Exception as e:
             log(f"  {label} {product}: read failed ({e}) — skip"); fd = None
         timings["read"] = timings.get("read", 0.0) + time.time() - t0
         if fd is None:
             log(f"  {label} {product}: no file near {dt:%H:%M}Z — skip"); continue
-        data, x, y, lon_0, sat_h, sweep, scan_dt = fd
+        data, x, y, lon_0, sat_h, sweep, scan_dt, hires = fd
         sats[sat_key] = dict(flat=data.reshape(-1), npix=data.size, x=x, y=y,
                              lon_0=lon_0, sat_h=sat_h, sweep=sweep,
-                             grid=grid_of(x, y), label=label, scan_dt=scan_dt)
-        log(f"  {label} {product}: scan {scan_dt:%H:%M}Z ({data.size/1e6:.0f}M px)")
+                             grid=grid_of(x, y), label=label, scan_dt=scan_dt,
+                             hi=[(w.reshape(-1), grid_of(wx, wy))
+                                 for (w, wx, wy) in (hires or [])])
+        log(f"  {label} {product}: scan {scan_dt:%H:%M}Z ({data.size/1e6:.0f}M px"
+            + (f", {len(sats[sat_key]['hi'])} native window(s)" if sats[sat_key]["hi"] else "")
+            + ")")
         # Visible reads pull a few-hundred-MB 0.5 km CMIP file per GOES sat
         # (cat_file BytesIO + h5netcdf/strip decode). _release_memory only fires
         # BETWEEN bands, so across the 2-3 sequential VIS sat reads that transient
@@ -717,15 +828,29 @@ def render_storm_tiles(sats, tiles, emit, timings, product="ir", dt=None):
     night = PRODUCTS[product]["night"]
     t0 = time.time()
     written = 0
+    base_zmax = STORM_ZOOMS[-1]
     for (z, x, y) in sorted(tiles):
         LON, LAT = tile_lonlat(z, x, y)
         samples = []
         for sat_key, s in sats.items():
-            idx, cosz, mask = project_to_sat(LON, LAT, s["grid"], s["lon_0"],
-                                             s["sat_h"], s["sweep"])
+            # Above the base storm zooms (Vis z7+), sample the NATIVE-resolution
+            # storm window instead of the 2-km full disk — the per-tile projection
+            # is grid-agnostic, so deeper tiles carry real detail while z5/z6 and
+            # the kernel-driven global render are byte-identical to today.
+            s_flat, idx = s["flat"], None
+            if z > base_zmax:
+                for (hflat, hgrid) in s.get("hi") or []:
+                    hidx, hcosz, hmask = project_to_sat(LON, LAT, hgrid, s["lon_0"],
+                                                        s["sat_h"], s["sweep"])
+                    if hmask.any():
+                        s_flat, idx, cosz, mask = hflat, hidx, hcosz, hmask
+                        break
+            if idx is None:
+                idx, cosz, mask = project_to_sat(LON, LAT, s["grid"], s["lon_0"],
+                                                 s["sat_h"], s["sweep"])
             if not mask.any():
                 continue
-            g = s["flat"][idx]
+            g = s_flat[idx]
             valid = mask & np.isfinite(g)
             if not is_vis:
                 valid = valid & (g > 0)
@@ -994,7 +1119,25 @@ def _prune_old_frames(kept, product="ir"):
         log(f"  pruned {pf} old frame(s), {pt} tiles")
 
 
-def update_r2_manifest(new_ts, zmax, product="ir", is_gap=False):
+def build_pack_bytes(entries):
+    """entries: [(z, x, y, png_bytes), ...] → (pack_bytes, index_json_bytes).
+    pack.bin is the tiles' PNG bytes concatenated in sorted (z,x,y) order;
+    index.json maps "z/x/y" → [offset, length] for client Range reads. A tile
+    absent from the index is definitively absent from the frame (the client
+    skips the request entirely — no 404 round-trips)."""
+    entries = sorted(entries, key=lambda e: (e[0], e[1], e[2]))
+    parts, index, off = [], {}, 0
+    for z, x, y, body in entries:
+        index[f"{z}/{x}/{y}"] = [off, len(body)]
+        parts.append(body)
+        off += len(body)
+    ix = json.dumps({"tiles": index, "size": off, "count": len(parts)},
+                    separators=(",", ":")).encode()
+    return b"".join(parts), ix
+
+
+def update_r2_manifest(new_ts, zmax, product="ir", is_gap=False,
+                       pack=False, storm_zmax=None):
     """Append new_ts to <prefix>/<product>/frames.json, trim to the rolling window,
     and prune the tiles of any frame that fell out of the window (keeps R2 bounded).
 
@@ -1011,12 +1154,14 @@ def update_r2_manifest(new_ts, zmax, product="ir", is_gap=False):
     deny-list only grows with newly-observed gaps; unknown/old frames default to
     shown. IR never gaps so its gap_frames stays empty. See project_vis_loop_bounce."""
     c = _get_r2(); key = f"{R2_PREFIX}/{product}/frames.json"
-    frames = []; ir_trange = {}; gap_frames = []
+    frames = []; ir_trange = {}; gap_frames = []; pack_frames = []; szm = {}
     try:
         cur = json.loads(c.get_object(Bucket=_r2_bucket(), Key=key)["Body"].read())
         frames = cur.get("frames", [])
         ir_trange = cur.get("ir_trange", {}) or {}
         gap_frames = cur.get("gap_frames", []) or []
+        pack_frames = cur.get("pack_frames", []) or []
+        szm = cur.get("storm_zmax", {}) or {}
     except Exception:
         pass
     if new_ts not in frames:
@@ -1026,8 +1171,18 @@ def update_r2_manifest(new_ts, zmax, product="ir", is_gap=False):
         gap_frames.append(new_ts)
     # Keep only in-window entries (rolled-off frames drop out).
     gap_frames = [t for t in sorted(set(gap_frames)) if t in frames]
+    # Per-frame flags, rolled like ir_trange: `pack_frames` = frames whose tiles
+    # live in a single pack.bin (+index.json) the client range-reads; `storm_zmax`
+    # = deepest storm-sector zoom THIS frame actually baked (frontend gates z7 per
+    # frame so a mixed rollover window never requests tiles that don't exist).
+    if pack and new_ts not in pack_frames:
+        pack_frames.append(new_ts)
+    pack_frames = [t for t in sorted(set(pack_frames)) if t in frames]
+    if storm_zmax:
+        szm[new_ts] = int(storm_zmax)
     manifest = {"frames": frames, "zmax": zmax, "storm_zooms": list(STORM_ZOOMS),
-                "gap_frames": gap_frames}
+                "gap_frames": gap_frames, "pack_frames": pack_frames,
+                "storm_zmax": {t: v for t, v in szm.items() if t in frames}}
     # Per-frame idx→Tb decode range (IR only). Stamp THIS frame with the current
     # encoding range; leave pre-existing frames' entries as-is (a mixed rollover
     # window stays correct) and drop entries for frames that fell out of the window.
@@ -1150,7 +1305,7 @@ def main():
     ap.add_argument("--zmax", type=int, default=4)   # 512px tiles → native S=8192 at z4
     ap.add_argument("--build-kernel", action="store_true")
     ap.add_argument("--storm", action="store_true",
-                    help="also bake z6–z7 tiles over active storms")
+                    help="also bake storm-sector tiles (z5–z6; Vis to z7) over active storms")
     ap.add_argument("--storm-at", default=None,
                     help="also bake a storm patch at 'lat,lon' (test point)")
     ap.add_argument("--blend-p", type=float, default=None,
@@ -1189,19 +1344,32 @@ def main():
     # render newest→oldest so the first frame seeds/loads the kernels
     frame_dts = [latest - timedelta(minutes=10 * i) for i in range(args.frames)]
     written, written_gap, kernels = {}, {}, None
+    written_pack, written_zmax = {}, {}   # per-product: packed frames / storm zmax
     t0 = time.time()
     for fi, dt in enumerate(frame_dts):
         log(f"── frame {fi+1}/{args.frames}: {dt:%Y-%m-%d %H:%M}Z "
             f"(zmax {args.zmax}, blend_p {BLEND_P:g}, bands {','.join(products)})")
         ts = dt.strftime("%Y%m%d%H%M")
-        tiles = storm_tile_set(points, STORM_ZOOMS, STORM_BOX_DEG) if points else set()
         frame_diags = []   # eye-fix / Tb diagnostics for storms >=65 kt (IR pass)
         # Each product reads its own band, renders, tiles, uploads to its prefix.
         # The reproject kernels are shared (IR grid) across all bands. Sats are read
         # + freed per product so peak memory stays ~one band at a time.
         for product in products:
             timings = {}
-            sats = read_all_sats(dt, timings, product)
+            # Storm zooms are per-product now (Vis bakes z7 from native windows).
+            zooms = storm_zooms_for(product)
+            tiles = storm_tile_set(points, zooms, STORM_BOX_DEG) if points else set()
+            hw = None
+            if tiles and PRODUCTS[product]["kind"] == "vis" and max(zooms) > STORM_ZOOMS[-1]:
+                # Native-res read windows: storm box + the deepest tiles' snap-out
+                # margin (tiles are chosen by overlap, so their edges extend up to
+                # one z(base+1) tile width past the box) + a half-degree pad.
+                W = STORM_BOX_DEG + 360.0 / (1 << (STORM_ZOOMS[-1] + 1)) + 0.5
+                hw = []
+                for p in points:
+                    la, lo = (p["lat"], p["lon"]) if isinstance(p, dict) else p
+                    hw.append((la - W, la + W, lo - W, lo + W))
+            sats = read_all_sats(dt, timings, product, hires_windows=hw)
             if not sats:
                 log(f"  {product}: no satellite data — skip"); continue
             if kernels is None:
@@ -1212,11 +1380,23 @@ def main():
                     log("kernels ready (one-time cost) — done"); return
 
             pool, futures = None, []
+            # Pack collection: in dual/only modes every emitted tile is ALSO kept
+            # in memory (~5-20 MB/product-frame) and shipped as one pack.bin +
+            # index.json after the tile step. "only" skips the per-tile PUTs.
+            pack = [] if PACK_MODE in ("dual", "only") else None
             if args.r2:
                 pool = _cf.ThreadPoolExecutor(max_workers=16)
-                emit = r2_sink(ts, pool, futures, product)
+                inner = r2_sink(ts, pool, futures, product) if PACK_MODE != "only" else None
             else:
-                emit = local_sink(os.path.join(args.out, product, ts))
+                inner = (local_sink(os.path.join(args.out, product, ts))
+                         if PACK_MODE != "only" else None)
+            if pack is not None:
+                def emit(z, x, y, body, _p=pack, _e=inner):
+                    _p.append((z, x, y, body))
+                    if _e:
+                        _e(z, x, y, body)
+            else:
+                emit = inner
 
             rgba = global_render(args.zmax, sats, kernels, timings, product, dt)
             n_global = write_pyramid(rgba, args.zmax, emit, timings)
@@ -1251,18 +1431,54 @@ def main():
             del rgba, sats   # free the big per-band arrays before the next band
             _release_memory()  # return the freed arena to the OS between bands
 
+            # Deepest storm zoom this frame actually baked (None when no storm
+            # tiles — the frontend then defaults to the base z6 sectors).
+            frame_szm = max(zooms) if n_storm else None
+            if frame_szm:
+                written_zmax.setdefault(product, {})[ts] = frame_szm
             if args.r2:
                 t1 = time.time(); ok = errs = 0
                 for f in _cf.as_completed(futures):
                     try: f.result(); ok += 1
                     except Exception as ex: errs += 1; log(f"  R2 put failed: {ex}")
                 pool.shutdown()
+                pack_ok = False
+                if pack is not None:
+                    try:
+                        pk, ix = build_pack_bytes(pack)
+                        base = f"{R2_PREFIX}/{product}/{ts}"
+                        r2_put(f"{base}/pack.bin", pk,
+                               "application/octet-stream", TILE_CACHE)
+                        r2_put(f"{base}/index.json", ix,
+                               "application/json", TILE_CACHE)
+                        pack_ok = True
+                        log(f"  {product} pack: {len(pack)} tiles, {len(pk)/1e6:.1f} MB")
+                    except Exception as ex:
+                        # dual: clients fall back to the per-tile objects. only:
+                        # the frame is unusable — do NOT stamp pack_frames (and
+                        # there are no tiles), so it reads as a missing frame.
+                        log(f"  {product} pack upload failed: {ex}")
                 # A gap only counts when there WERE storms to cover (tiles
                 # non-empty) but none rendered — not a no-storm quiet cycle.
                 frames = update_r2_manifest(ts, args.zmax, product,
-                                            is_gap=(bool(tiles) and n_storm == 0))
+                                            is_gap=(bool(tiles) and n_storm == 0),
+                                            pack=pack_ok, storm_zmax=frame_szm)
                 timings["upload"] = time.time() - t1
                 log(f"  {product} R2: {ok} up ({errs} failed); manifest {len(frames)} frames")
+                if pack_ok:
+                    written_pack.setdefault(product, []).append(ts)
+            elif pack is not None:
+                # Local mode: write the pack next to (or instead of) the tile dir
+                # so the dev server / fixtures exercise the exact client path.
+                pk, ix = build_pack_bytes(pack)
+                d = os.path.join(args.out, product, ts)
+                os.makedirs(d, exist_ok=True)
+                with open(os.path.join(d, "pack.bin"), "wb") as f:
+                    f.write(pk)
+                with open(os.path.join(d, "index.json"), "wb") as f:
+                    f.write(ix)
+                written_pack.setdefault(product, []).append(ts)
+                log(f"  {product} pack: {len(pack)} tiles, {len(pk)/1e6:.1f} MB (local)")
             log(f"  {product}: {n_global} global + {n_storm} storm tiles → {ts}")
             if args.time:
                 parts = " ".join(f"{k} {timings[k]:.1f}s" for k in
@@ -1287,7 +1503,10 @@ def main():
             with open(man, "w") as f:
                 json.dump({"frames": sorted(ts_list), "zmax": args.zmax,
                            "storm_zooms": list(STORM_ZOOMS),
-                           "gap_frames": _gapframes}, f)
+                           "gap_frames": _gapframes,
+                           "pack_frames": sorted(set(written_pack.get(product, [])) & set(ts_list)),
+                           "storm_zmax": {t: v for t, v in written_zmax.get(product, {}).items()
+                                          if t in ts_list}}, f)
             log(f"manifest {product} ({len(ts_list)} frames, "
                 f"{len(_gapframes)} gap) → {man}")
     nfr = sum(len(v) for v in written.values())

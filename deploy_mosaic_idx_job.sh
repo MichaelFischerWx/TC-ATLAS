@@ -61,12 +61,21 @@ fi
 # Rollback if it STILL OOMs: MOSAIC_JOB_MEMORY=8Gi MOSAIC_JOB_CPU=2 ./deploy_mosaic_idx_job.sh
 MOSAIC_JOB_MEMORY="${MOSAIC_JOB_MEMORY:-4Gi}"
 MOSAIC_JOB_CPU="${MOSAIC_JOB_CPU:-1}"
+# Packed-frame writes: "off" = per-tile PUTs (legacy), "dual" = tiles + pack.bin/
+# index.json (transition — pack-aware clients range-read, old clients unaffected),
+# "only" = pack alone (~3 Class-A PUTs/product-frame instead of ~260 — where the
+# ~$10/mo write saving lands). Flip to "only" once the pack-aware frontend is
+# verified live (the manifest's pack_frames gates clients per frame either way).
+MOSAIC_PACK="${MOSAIC_PACK:-dual}"
+# Vis hi-res storm sectors: native 0.5-km windows around active storms feed z7
+# sector tiles (small windows — stays in the 4Gi tier). "0" reverts to 2-km/z6.
+MOSAIC_VIS_HIRES="${MOSAIC_VIS_HIRES:-1}"
 # rolling 1 frame/run (R2_KEEP_FRAMES window in the builder). args use the ^@^
 # delimiter — leading -- trips gcloud.
 COMMON_FLAGS=(
   --region "${REGION}" --image "${IMAGE}"
   --memory "${MOSAIC_JOB_MEMORY}" --cpu "${MOSAIC_JOB_CPU}" --max-retries 1 --task-timeout 600
-  --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET},MOSAIC_TILE_MODE=idx,MOSAIC_R2_PREFIX=mosaic-v3,MALLOC_ARENA_MAX=2,MALLOC_TRIM_THRESHOLD_=0"
+  --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET},MOSAIC_TILE_MODE=idx,MOSAIC_R2_PREFIX=mosaic-v3,MOSAIC_PACK=${MOSAIC_PACK},MOSAIC_VIS_HIRES=${MOSAIC_VIS_HIRES},MALLOC_ARENA_MAX=2,MALLOC_TRIM_THRESHOLD_=0"
   --set-secrets  "R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
   "--args=^@^--r2@--storm@--time@--bands@ir,wv,vis@--frames@1"
 )

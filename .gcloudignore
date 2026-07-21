@@ -61,3 +61,13 @@ LICENSE
 *.docx
 *.log
 images/
+_ir2a_dev/
+_ir2a_anim/
+_ir2a_dem/
+demo_37color/
+ir2a_proto.html
+ir2a_colorrelief.html
+ir2a_webgl.html
+ir2a_anim.html
+mosaic_out/
+TC-ATLAS_revenue_model.xlsx
