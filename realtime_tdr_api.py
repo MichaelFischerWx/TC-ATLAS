@@ -42,6 +42,23 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
+
+# Force dask fully initialised at import time (single-threaded). xarray lazily
+# does `from dask.base import ...` the first time it decodes a dataset; when two
+# request threads open *different* TDR files at the same moment (e.g. the plan
+# view for one sweep while /center_track walks others), they can race on dask's
+# first import and one sees a partially-initialised dask.base — surfacing as
+# "cannot import name 'annotate' from partially initialized module 'dask.base'
+# (most likely due to a circular import)". Importing it here, before any worker
+# thread runs, removes the race. Best-effort: if dask isn't installed, xarray
+# falls back to eager numpy and this is a no-op.
+try:
+    import dask          # noqa: F401
+    import dask.base     # noqa: F401
+    import dask.array    # noqa: F401
+except Exception:
+    pass
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 
