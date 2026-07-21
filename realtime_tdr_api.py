@@ -149,9 +149,12 @@ IR_VMAX = 310.0
 # (A local 15-stop table used to live here and had drifted from satellite_ir's
 # 19-stop ramp, so the same storm rendered in different colours on this tab than
 # everywhere else. Importing instead of copying keeps them from diverging again.)
-# Alpha is the one deliberate difference: this IR is an UNDERLAY beneath the
-# radar analysis, so it stays semi-transparent rather than satellite_ir's 255.
-_IR_ALPHA = 220
+# Fully opaque, like satellite_ir. Transparency is applied per CONTEXT on the
+# frontend — the left-panel map shows IR at full opacity (matching the Global
+# Map's satellite), while the plan-view panel draws it as a faint underlay via
+# its own Plotly image opacity (slider-controlled). Baking a <255 alpha here
+# stacked ON TOP of that and only washed the map IR out for no benefit.
+_IR_ALPHA = 255
 
 try:
     from satellite_ir import _IR_STOPS  # noqa: F401  (shared colour ramp)
@@ -3327,6 +3330,90 @@ def _fetch_ships_by_name(
     return None
 
 
+def _fetch_ships_by_location(
+    analysis_dt: _dt,
+    lat: float,
+    lon: float,
+    max_deg: float = 2.5,
+) -> Optional[tuple[dict, str]]:
+    """Backup SHIPS lookup that matches by STORM POSITION instead of name.
+
+    Used when the TDR file's name is a placeholder the name probe can't hit
+    (e.g. "CYCLONE" — an unnamed system, or a name the file didn't carry).
+    Probes the same candidate SHIPS files, parses each one's t=0 centre, and
+    returns the CLOSEST to (lat, lon) within ``max_deg`` great-circle degrees.
+    Returns (ships_data, atcf_id) or None.
+
+    lat/lon are standard signed degrees (N+, W−); SHIPS files report the centre
+    as LAT (DEG N) and LONG(DEG W) (west-POSITIVE), so the longitude is flipped
+    before comparing.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    if lat == 0 and lon == 0:
+        return None
+
+    year = analysis_dt.year
+    yy = year % 100
+    likely_basins = _guess_basin_from_coords(lat, lon)
+
+    base_urls = [
+        "https://ftp.nhc.noaa.gov/atcf/stext",
+        f"https://ftp.nhc.noaa.gov/atcf/archive/MESSAGES/{year}/stext",
+    ]
+
+    hour_floor = (analysis_dt.hour // 6) * 6
+    base_synoptic = analysis_dt.replace(hour=hour_floor, minute=0, second=0, microsecond=0)
+    synoptic_times = [base_synoptic - timedelta(hours=6 * i) for i in range(3)]
+
+    coslat = max(0.2, float(np.cos(np.radians(lat))))
+
+    def _dist_deg(slat: float, slon_w: float) -> float:
+        slon = -slon_w                       # DEG W (west+) → standard signed lon
+        while slon < -180:
+            slon += 360
+        while slon > 180:
+            slon -= 360
+        dlon = (lon - slon)
+        while dlon < -180:
+            dlon += 360
+        while dlon > 180:
+            dlon -= 360
+        return float(np.hypot(lat - slat, dlon * coslat))
+
+    def _probe(task):
+        url, atcf_id = task
+        try:
+            text = _fetch_text(url, timeout=8)
+        except Exception:
+            return None
+        data = _parse_ships_text(text)
+        slat, slon_w = data.get("lat"), data.get("lon")
+        if slat is None or slon_w is None:
+            return None
+        d = _dist_deg(slat, slon_w)
+        return (d, data, atcf_id) if d <= max_deg else None
+
+    for syn_dt in synoptic_times:
+        dt_prefix = syn_dt.strftime("%y%m%d%H")
+        tasks = []
+        for basin in likely_basins:
+            for stnum in range(1, 26):
+                atcf_id = f"{basin}{stnum:02d}{yy:02d}"
+                fname = f"{dt_prefix}{atcf_id}_ships.txt"
+                for base_url in base_urls:
+                    tasks.append((f"{base_url}/{fname}", atcf_id))
+        best = None
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            for res in executor.map(_probe, tasks):
+                if res is not None and (best is None or res[0] < best[0]):
+                    best = res
+        if best is not None:
+            return (best[1], best[2])   # closest within this synoptic cycle wins
+
+    return None
+
+
 def _fetch_ships_from_nhc(atcf_id: str, analysis_dt: _dt) -> Optional[dict]:
     """
     Fetch SHIPS text file from NHC FTP by constructing the URL directly.
@@ -3497,6 +3584,14 @@ def get_rt_ships(
 
     try:
         found = _fetch_ships_by_name(storm_name, analysis_datetime, lat, lon)
+        matched_by = "name"
+
+        # Backup: match by TC POSITION when the name probe misses. This is what
+        # rescues unnamed/placeholder cases like "CYCLONE", where no SHIPS header
+        # carries the name but the storm is right where the analysis says it is.
+        if found is None and (lat != 0 or lon != 0):
+            found = _fetch_ships_by_location(analysis_datetime, lat, lon)
+            matched_by = "location"
 
         if found is None:
             result = {
@@ -3519,6 +3614,7 @@ def get_rt_ships(
                 storm_name, year, d_basin, d_stnum
             )
             result["auto_detected"] = True
+            result["matched_by"] = matched_by   # "name" | "location"
 
         _rt_ships_cache[cache_key] = (result, now)
         if len(_rt_ships_cache) > 50:

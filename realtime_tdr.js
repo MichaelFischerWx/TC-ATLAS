@@ -121,6 +121,26 @@
             });
     };
 
+    // Download the plan-view (the main TDR product) as a branded PNG. Wraps
+    // rtSavePlotPNG with a caption built from the current analysis + variable, so
+    // the saved figure is self-describing (storm/mission, analysis time, field).
+    window.rtSaveTDRView = function () {
+        var gd = document.getElementById('rt-plotly-chart');
+        if (!gd || !gd.data || !gd.data.length) {
+            if (typeof rtToast === 'function') rtToast('Generate a plot first', 'warn');
+            return;
+        }
+        var caption = '';
+        try {
+            var title = (gd.layout && gd.layout.title &&
+                         (gd.layout.title.text || gd.layout.title)) || '';
+            var fn = (_currentFileUrl || '').split('/').pop()
+                        .replace(/_xy\.nc(\.gz)?$/i, '');
+            caption = [fn, title].filter(Boolean).join('  ·  ');
+        } catch (e) {}
+        rtSavePlotPNG('rt-plotly-chart', 'TDR_PlanView', caption);
+    };
+
     // Returns an HTML string for a small camera save button.
     // posStyle: optional CSS for positioning (default: top-right absolute).
     function _rtSaveBtnHTML(chartDivId, defaultName, posStyle) {
@@ -2266,6 +2286,7 @@
                     '<div class="dual-pane-inner" style="position:relative;">' +
                         '<div id="rt-plotly-chart" style="width:100%;height:100%;min-height:360px;"></div>' +
                         '<button onclick="rtOpenFullscreen()" title="Expand to fullscreen" style="position:absolute;top:6px;left:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:28px;height:28px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;" onmouseover="this.style.background=\'rgba(255,255,255,0.2)\'" onmouseout="this.style.background=\'rgba(255,255,255,0.08)\'">⛶</button>' +
+                        '<button onclick="rtSaveTDRView()" title="Download this plan view as a PNG (branded)" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:15px;width:28px;height:28px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;" onmouseover="this.style.background=\'rgba(255,255,255,0.2)\'" onmouseout="this.style.background=\'rgba(255,255,255,0.08)\'"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>' +
                     '</div>' +
                 '</div>' +
                 '<div class="dual-pane-divider" title="Toggle azimuthal mean panel" onclick="_rtToggleDualPane()"></div>' +
@@ -3007,8 +3028,13 @@
             // Always update bounds — they change when switching analysis files
             _rtIRMapOverlay.setBounds(bounds);
         } else {
+            // Full opacity so the left-panel IR reads like the Global Map's
+            // satellite (crisp, not washed to grey over the basemap). This map
+            // shows IR as the primary imagery — the faint, see-through underlay
+            // is only the plan-view panel, where the radar draws on top and the
+            // opacity is intentional (and slider-controlled).
             _rtIRMapOverlay = L.imageOverlay(url, bounds, {
-                opacity: 0.75, interactive: false, zIndex: 200
+                opacity: 1.0, interactive: false, zIndex: 200
             });
             if (_rtIRMapVisible) _rtIRMapOverlay.addTo(_rtMap);
         }
@@ -3580,10 +3606,12 @@
                 statusText = 'IR: ' + _rtIRLoadedCount + ' of ' + n + ' available';
             }
             _rtUpdateIRLoadingText(statusText);
+            // Enable the play/step controls once there's more than one frame,
+            // but DON'T auto-play — default to the still frame closest to the
+            // analysis time (frame 0 = t=0). Auto-animating on every load was
+            // distracting and inconsistent with the rest of the site, where the
+            // satellite loop is opt-in. The user can press play when they want it.
             if (_rtIRLoadedCount >= 2) _rtEnableIRAnimControls();
-            if (_rtIRLoadedCount === 2 && !_rtMapIRAnimPlaying) {
-                rtMapIRAnimToggle();
-            }
             if (completedCount >= totalToFetch) {
                 _rtIRAllLoaded = true;
                 _rtIRFetching = false;
