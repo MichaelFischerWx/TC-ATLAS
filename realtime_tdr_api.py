@@ -221,6 +221,18 @@ _RT_DS_CACHE_MAX = 1               # ONE dataset at a time — each can be 100-3
 _RT_DIR_CACHE_TTL = 300            # 5 minutes for directory listings
 _rt_dir_lock = threading.Lock()    # guards _rt_dir_cache against a thundering herd
 
+# Single-flight for _open_rt_dataset. The datasets are 50-150 MB and the cache
+# holds exactly ONE, so a burst of concurrent opens (a figure fanning out across
+# a dozen endpoints, or many users on the one storm being flown) could otherwise
+# each download+parse its own copy — with containerConcurrency=20 on a 4 GiB
+# instance that stacks copies and OOMs. A per-file_url lock collapses those into
+# a single download; a separate lock guards the cache OrderedDict itself (which
+# was previously mutated by concurrent different-URL requests with no guard).
+_rt_ds_cache_lock = threading.Lock()     # guards _rt_ds_cache dict mutations
+_rt_ds_inflight_lock = threading.Lock()  # guards the _rt_ds_inflight registry
+_rt_ds_inflight = OrderedDict()          # file_url → threading.Lock (one downloader)
+_RT_DS_INFLIGHT_MAX = 64                 # bound the registry (locks are tiny)
+
 # GOES IR frame cache: (file_url, frame_index) → rendered result dict
 # Kept small because browsers cache via Cache-Control headers.
 _rt_ir_cache = OrderedDict()
@@ -415,52 +427,92 @@ def _dir_mtimes(url: str) -> dict:
         return dict(cached[1]) if cached else {}
 
 
+def _rt_ds_cache_get(file_url: str) -> Optional[xr.Dataset]:
+    """Return a cached dataset (and mark it MRU) or None, under the cache lock."""
+    with _rt_ds_cache_lock:
+        hit = _rt_ds_cache.get(file_url)
+        if hit is not None:
+            _rt_ds_cache.move_to_end(file_url)
+            return hit[0]
+    return None
+
+
 def _open_rt_dataset(file_url: str) -> xr.Dataset:
     """Download, decompress (if .gz), and open a real-time TDR NetCDF file.
 
     Memory-conscious: explicitly frees intermediate byte buffers and forces
     garbage collection when evicting cached datasets.
+
+    Single-flight: concurrent callers for the SAME ``file_url`` block on one
+    per-URL lock so the 50-150 MB download+parse happens once, not once per
+    caller. This is what keeps a figure's endpoint fan-out (and many users on
+    the same active storm) from stacking dataset copies and OOMing the 4 GiB
+    instance under ``containerConcurrency=20``.
     """
-    if file_url in _rt_ds_cache:
-        ds, _ = _rt_ds_cache[file_url]
-        _rt_ds_cache.move_to_end(file_url)
+    ds = _rt_ds_cache_get(file_url)
+    if ds is not None:
         return ds
 
-    # Evict oldest cached dataset BEFORE downloading new one to minimise peak RAM
-    if len(_rt_ds_cache) >= _RT_DS_CACHE_MAX:
-        _evicted_url, (evicted_ds, _) = _rt_ds_cache.popitem(last=False)
-        try:
-            evicted_ds.close()
-        except Exception:
-            pass
-        del evicted_ds
+    # Claim (or join) the single downloader for this file_url.
+    with _rt_ds_inflight_lock:
+        lk = _rt_ds_inflight.get(file_url)
+        if lk is None:
+            lk = threading.Lock()
+            _rt_ds_inflight[file_url] = lk
+            while len(_rt_ds_inflight) > _RT_DS_INFLIGHT_MAX:
+                # Popping a lock reference is always safe: any thread still using
+                # it holds its own reference via the `with` frame. Worst case a
+                # brand-new request for a just-evicted URL opens a 2nd copy — far
+                # better than the 20 copies this whole mechanism prevents.
+                _rt_ds_inflight.popitem(last=False)
+        else:
+            _rt_ds_inflight.move_to_end(file_url)
+
+    with lk:
+        # A peer may have finished the download while we blocked on the lock.
+        ds = _rt_ds_cache_get(file_url)
+        if ds is not None:
+            return ds
+
+        # Evict oldest cached dataset BEFORE downloading to minimise peak RAM.
+        evicted_ds = None
+        with _rt_ds_cache_lock:
+            if len(_rt_ds_cache) >= _RT_DS_CACHE_MAX:
+                _evicted_url, (evicted_ds, _) = _rt_ds_cache.popitem(last=False)
+        if evicted_ds is not None:
+            try:
+                evicted_ds.close()
+            except Exception:
+                pass
+            del evicted_ds
+            gc.collect()
+
+        raw = _fetch_bytes(file_url, timeout=120)
+
+        # Decompress if gzipped — check the actual bytes, not just the URL,
+        # because the HTTP server may transparently decompress via Content-Encoding.
+        # Gzip magic number is b'\x1f\x8b'; HDF5/NetCDF4 starts with b'\x89HDF' or b'CDF'.
+        if raw[:2] == b'\x1f\x8b':
+            decompressed = gzip.decompress(raw)
+            del raw          # free compressed copy immediately
+            raw = decompressed
+            del decompressed
+
+        # Detect file format from magic bytes and choose the right xarray engine.
+        # netCDF3 classic starts with b'CDF'; HDF5/netCDF4 starts with b'\x89HDF'.
+        if raw[:3] == b'CDF':
+            engine = "scipy"
+        else:
+            engine = "h5netcdf"
+
+        buf = io.BytesIO(raw)
+        del raw  # free raw bytes — xarray reads from the BytesIO buffer
         gc.collect()
 
-    raw = _fetch_bytes(file_url, timeout=120)
-
-    # Decompress if gzipped — check the actual bytes, not just the URL,
-    # because the HTTP server may transparently decompress via Content-Encoding.
-    # Gzip magic number is b'\x1f\x8b'; HDF5/NetCDF4 starts with b'\x89HDF' or b'CDF'.
-    if raw[:2] == b'\x1f\x8b':
-        decompressed = gzip.decompress(raw)
-        del raw          # free compressed copy immediately
-        raw = decompressed
-        del decompressed
-
-    # Detect file format from magic bytes and choose the right xarray engine.
-    # netCDF3 classic starts with b'CDF'; HDF5/netCDF4 starts with b'\x89HDF'.
-    if raw[:3] == b'CDF':
-        engine = "scipy"
-    else:
-        engine = "h5netcdf"
-
-    buf = io.BytesIO(raw)
-    del raw  # free raw bytes — xarray reads from the BytesIO buffer
-    gc.collect()
-
-    ds = xr.open_dataset(buf, engine=engine)
-    _rt_ds_cache[file_url] = (ds, time.time())
-    return ds
+        ds = xr.open_dataset(buf, engine=engine)
+        with _rt_ds_cache_lock:
+            _rt_ds_cache[file_url] = (ds, time.time())
+        return ds
 
 
 # Custom NWS/NEXRAD-style reflectivity colormap — the operational radar standard,
@@ -1132,6 +1184,12 @@ def get_rt_data(
     if overlay and overlay not in RT_VARIABLES and overlay not in RT_DERIVED:
         raise HTTPException(status_code=400, detail=f"Unknown overlay variable '{overlay}'.")
 
+    _ck = {"file_url": file_url, "variable": variable, "level_km": round(level_km, 3),
+           "overlay": overlay, "wind_barbs": wind_barbs, "storm_relative": storm_relative}
+    _hit = _derived_cache_lookup("data", _ck)
+    if _hit is not None:
+        return _cached_json_response(_hit)
+
     try:
         ds = _open_rt_dataset(file_url)
     except Exception as e:
@@ -1234,7 +1292,8 @@ def get_rt_data(
     except Exception:
         pass
 
-    return JSONResponse(result)
+    _derived_cache_store("data", _ck, result)
+    return _cached_json_response(result)
 
 
 @router.get("/cross_section")
@@ -1253,6 +1312,13 @@ def get_rt_cross_section(
         raise HTTPException(status_code=400, detail=f"Unknown variable '{variable}'.")
     if overlay and overlay not in RT_VARIABLES and overlay not in RT_DERIVED:
         raise HTTPException(status_code=400, detail=f"Unknown overlay variable '{overlay}'.")
+
+    _ck = {"file_url": file_url, "variable": variable, "overlay": overlay,
+           "x0": round(x0, 3), "y0": round(y0, 3), "x1": round(x1, 3),
+           "y1": round(y1, 3), "n_points": n_points}
+    _hit = _derived_cache_lookup("cross_section", _ck)
+    if _hit is not None:
+        return _cached_json_response(_hit)
 
     try:
         ds = _open_rt_dataset(file_url)
@@ -1306,7 +1372,8 @@ def get_rt_cross_section(
             "vmax": ov_info["vmax"],
         }
 
-    return JSONResponse(result)
+    _derived_cache_store("cross_section", _ck, result)
+    return _cached_json_response(result)
 
 
 @router.get("/volume")
@@ -1320,6 +1387,12 @@ def get_rt_volume(
     """Return the full 3D volume for Plotly isosurface rendering (compact mode)."""
     if variable not in RT_VARIABLES and variable not in RT_DERIVED:
         raise HTTPException(status_code=400, detail=f"Unknown variable '{variable}'.")
+
+    _ck = {"file_url": file_url, "variable": variable, "stride": stride,
+           "max_height_km": round(max_height_km, 3), "tilt_profile": tilt_profile}
+    _hit = _derived_cache_lookup("volume", _ck)
+    if _hit is not None:
+        return _cached_json_response(_hit)
 
     try:
         ds = _open_rt_dataset(file_url)
@@ -1371,7 +1444,8 @@ def get_rt_volume(
         except Exception:
             pass
 
-    return JSONResponse(result)
+    _derived_cache_store("volume", _ck, result)
+    return _cached_json_response(result)
 
 
 # ---------------------------------------------------------------------------
@@ -1716,6 +1790,13 @@ def get_rt_azimuthal_mean(
     if overlay and overlay not in RT_VARIABLES and overlay not in RT_DERIVED:
         raise HTTPException(status_code=400, detail=f"Unknown overlay variable '{overlay}'.")
 
+    _ck = {"file_url": file_url, "variable": variable, "overlay": overlay,
+           "max_radius_km": round(max_radius_km, 3), "dr_km": round(dr_km, 3),
+           "coverage_min": round(coverage_min, 3)}
+    _hit = _derived_cache_lookup("azimuthal_mean", _ck)
+    if _hit is not None:
+        return _cached_json_response(_hit)
+
     try:
         ds = _open_rt_dataset(file_url)
     except Exception as e:
@@ -1761,7 +1842,8 @@ def get_rt_azimuthal_mean(
         except Exception:
             pass
 
-    return JSONResponse(result)
+    _derived_cache_store("azimuthal_mean", _ck, result)
+    return _cached_json_response(result)
 
 
 # ---------------------------------------------------------------------------
@@ -3712,6 +3794,13 @@ def get_rt_quadrant_mean(
     if variable not in RT_VARIABLES and variable not in RT_DERIVED:
         raise HTTPException(status_code=400, detail=f"Unknown variable '{variable}'")
 
+    _ck = {"file_url": file_url, "variable": variable, "sddc": round(sddc, 3),
+           "max_radius_km": round(max_radius_km, 3), "dr_km": round(dr_km, 3),
+           "coverage_min": round(coverage_min, 3), "overlay": overlay}
+    _hit = _derived_cache_lookup("quadrant_mean", _ck)
+    if _hit is not None:
+        return _cached_json_response(_hit)
+
     try:
         ds = _open_rt_dataset(file_url)
     except Exception as e:
@@ -3766,7 +3855,8 @@ def get_rt_quadrant_mean(
             except Exception:
                 pass
 
-        return JSONResponse(result)
+        _derived_cache_store("quadrant_mean", _ck, result)
+        return _cached_json_response(result)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error computing quadrant means: {str(e)}")
@@ -3787,6 +3877,13 @@ def get_rt_anomaly_azimuthal_mean(
     """
     if variable not in RT_VARIABLES and variable not in RT_DERIVED:
         raise HTTPException(status_code=400, detail=f"Unknown variable '{variable}'")
+
+    _ck = {"file_url": file_url, "variable": variable, "vmax_kt": round(vmax_kt, 2),
+           "rmw_km": round(rmw_km, 3) if rmw_km is not None else None,
+           "coverage_min": round(coverage_min, 3)}
+    _hit = _derived_cache_lookup("anomaly_azimuthal_mean", _ck)
+    if _hit is not None:
+        return _cached_json_response(_hit)
 
     try:
         ds = _open_rt_dataset(file_url)
@@ -3890,7 +3987,8 @@ def get_rt_anomaly_azimuthal_mean(
             "climatology_count": int(climo_count) if climo_count is not None else 0,
         }
 
-        return JSONResponse(result)
+        _derived_cache_store("anomaly_azimuthal_mean", _ck, result)
+        return _cached_json_response(result)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error computing anomaly azimuthal mean: {str(e)}")
@@ -3966,6 +4064,12 @@ def get_rt_vortex_raw(
     database means from /scatter/vp_favorability to get vortex_height,
     vortex_width, and vortex_favorability.
     """
+    _ck = {"file_url": file_url, "vmax_kt": round(vmax_kt, 2),
+           "rmw_km": round(rmw_km, 3) if rmw_km is not None else None}
+    _hit = _derived_cache_lookup("vortex_raw", _ck)
+    if _hit is not None:
+        return _cached_json_response(_hit)
+
     try:
         ds = _open_rt_dataset(file_url)
     except Exception as e:
@@ -4192,7 +4296,8 @@ def get_rt_vortex_raw(
                 "db_means": db_means,
             })
 
-        return JSONResponse(result)
+        _derived_cache_store("vortex_raw", _ck, result)
+        return _cached_json_response(result)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error computing vortex metrics: {str(e)}")
@@ -4525,6 +4630,144 @@ def _get_or_compute_tilt(ds, file_url, min_height=0.5, max_height=8.0, ref_heigh
         _tilt_to_gcs_async(key, tilt)
         return dict(tilt, cache="computed")
     return None
+
+
+# ---------------------------------------------------------------------------
+# Generic derived-product cache (the immutable plan-view / cross-section /
+# azimuthal / CFAD / volume JSON products). Same two-tier design as the tilt
+# cache: in-process LRU → GCS object → compute. Because a posted real-time
+# analysis file never changes, a product keyed by (endpoint, file_url, params)
+# is immutable — so the 50-150 MB raw-file download+parse happens ONCE PER FILE
+# EVER, and every subsequent user/instance reads a small JSON from GCS instead
+# of reopening the NetCDF. Degrades to compute-every-time if GCS is unconfigured.
+#
+# The in-process layer is byte-bounded (not count-bounded) so it can never add
+# to the 4 GiB instance's RAM pressure regardless of payload size — big /volume
+# payloads live in GCS only.
+#
+# Bump _DERIVED_CACHE_VERSION whenever a wrapped endpoint's output changes so
+# stale results aren't served — that includes a change to the compute body AND a
+# change to a *data dependency* the output is derived from (the intensity
+# climatology bundle behind /anomaly_azimuthal_mean & /vortex_raw, the
+# _vortex_db_means centring in /vortex_raw). The file_url already keys the
+# immutable raw analysis; the version keys everything else.
+# ---------------------------------------------------------------------------
+_DERIVED_CACHE_VERSION = "d1"
+_DERIVED_CACHE_PREFIX = "rt-tdr-derived/" + _DERIVED_CACHE_VERSION
+_rt_derived_mem = OrderedDict()       # key -> (payload dict, nbytes)
+_rt_derived_mem_bytes = 0
+_RT_DERIVED_MEM_BYTES_MAX = 32 * 1024 * 1024   # ~32 MB ceiling for the in-proc tier
+_RT_DERIVED_MEM_ITEM_MAX = 4 * 1024 * 1024     # skip in-proc for payloads above this
+_rt_derived_lock = threading.Lock()
+_DERIVED_GCS_GZIP_MIN = 64 * 1024     # gzip GCS objects larger than this
+
+
+def _derived_cache_key(kind: str, params: dict) -> str:
+    """Stable hash for an immutable derived product. ``kind`` is the endpoint
+    name (so two endpoints never collide); ``params`` is every input that
+    changes the output — ``file_url`` identifies the immutable analysis, so a
+    fresh SEB file yields a fresh key on its own."""
+    parts = [_DERIVED_CACHE_VERSION, kind]
+    for k in sorted(params):
+        parts.append(f"{k}={params[k]}")
+    raw = "|".join(parts)
+    return kind + "/" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def _derived_mem_get(key: str):
+    with _rt_derived_lock:
+        hit = _rt_derived_mem.get(key)
+        if hit is not None:
+            _rt_derived_mem.move_to_end(key)
+            return hit[0]
+    return None
+
+
+def _derived_mem_put(key: str, payload: dict, nbytes: int):
+    """Insert into the byte-bounded in-proc LRU (skip oversized payloads)."""
+    global _rt_derived_mem_bytes
+    if nbytes > _RT_DERIVED_MEM_ITEM_MAX:
+        return  # too big for the in-proc tier — GCS only
+    with _rt_derived_lock:
+        old = _rt_derived_mem.pop(key, None)
+        if old is not None:
+            _rt_derived_mem_bytes -= old[1]
+        _rt_derived_mem[key] = (payload, nbytes)
+        _rt_derived_mem_bytes += nbytes
+        while _rt_derived_mem_bytes > _RT_DERIVED_MEM_BYTES_MAX and _rt_derived_mem:
+            _ek, (_ep, _en) = _rt_derived_mem.popitem(last=False)
+            _rt_derived_mem_bytes -= _en
+
+
+def _derived_from_gcs(key: str):
+    bucket = _get_tdr_gcs_bucket()
+    if bucket is None:
+        return None
+    try:
+        blob = bucket.blob(f"{_DERIVED_CACHE_PREFIX}/{key}.json")
+        if not blob.exists():
+            return None
+        # google-cloud-storage transparently decompresses gzip content-encoding.
+        return json.loads(blob.download_as_text())
+    except Exception:
+        return None
+
+
+def _derived_to_gcs_async(key: str, blob_bytes: bytes):
+    """Write-through to GCS off the request path (never blocks the response).
+    ``blob_bytes`` is the already-serialised JSON (serialised once by the caller
+    so a multi-MB payload isn't encoded twice)."""
+    bucket = _get_tdr_gcs_bucket()
+    if bucket is None:
+        return
+
+    def _write():
+        try:
+            blob = bucket.blob(f"{_DERIVED_CACHE_PREFIX}/{key}.json")
+            blob.cache_control = "public, max-age=31536000, immutable"
+            data = blob_bytes
+            if len(data) > _DERIVED_GCS_GZIP_MIN:
+                blob.content_encoding = "gzip"
+                data = gzip.compress(data)
+            blob.upload_from_string(data, content_type="application/json")
+        except Exception as e:
+            logger.debug("derived GCS write failed for %s: %s", key, e)
+
+    threading.Thread(target=_write, daemon=True).start()
+
+
+def _derived_cache_lookup(kind: str, params: dict):
+    """Return a cached derived product (in-proc LRU → GCS) or None.
+
+    Call at the TOP of an endpoint, before opening the raw file. On a hit the
+    endpoint can return immediately without ever touching the 50-150 MB NetCDF.
+    The ``cache`` field records the tier it came from (debug aid, harmless to
+    the frontend). Concurrent cold misses are safe: Change #1's single-flight in
+    ``_open_rt_dataset`` already collapses their downloads into one, and each
+    then writes the same deterministic product to GCS (idempotent, last wins).
+    """
+    key = _derived_cache_key(kind, params)
+    hit = _derived_mem_get(key)
+    if hit is not None:
+        return dict(hit, cache="memory")
+    gcs = _derived_from_gcs(key)
+    if gcs is not None:
+        _derived_mem_put(key, gcs, len(json.dumps(gcs)))
+        return dict(gcs, cache="gcs")
+    return None
+
+
+def _derived_cache_store(kind: str, params: dict, payload: dict):
+    """Populate both cache tiers for a freshly-computed derived product. Serialises
+    the payload once (shared by the in-proc byte accounting and the async GCS
+    write). Best-effort: never raises into the request path."""
+    try:
+        key = _derived_cache_key(kind, params)
+        blob_bytes = json.dumps(payload).encode("utf-8")
+        _derived_mem_put(key, payload, len(blob_bytes))
+        _derived_to_gcs_async(key, blob_bytes)
+    except Exception as e:
+        logger.debug("derived cache store failed for %s: %s", kind, e)
 
 
 def _compute_rt_tilt_profile(ds, min_height=0.5, max_height=8.0, ref_height=2.0):
@@ -4943,6 +5186,16 @@ def get_rt_cfad(
     if normalise not in ("total", "height", "raw"):
         raise HTTPException(status_code=400, detail="normalise must be 'total', 'height', or 'raw'")
 
+    def _r3(v):
+        return round(v, 3) if v is not None else None
+    _ck = {"file_url": file_url, "variable": variable, "bin_min": _r3(bin_min),
+           "bin_max": _r3(bin_max), "bin_width": _r3(bin_width), "n_bins": n_bins,
+           "min_radius": round(min_radius, 3), "max_radius": round(max_radius, 3),
+           "normalise": normalise}
+    _hit = _derived_cache_lookup("cfad", _ck)
+    if _hit is not None:
+        return _cached_json_response(_hit)
+
     try:
         ds = _open_rt_dataset(file_url)
     except Exception as e:
@@ -5011,7 +5264,7 @@ def get_rt_cfad(
     for row in hist_2d:
         cfad_list.append([round(float(v), 4) if np.isfinite(v) else 0.0 for v in row])
 
-    return JSONResponse({
+    result = {
         "cfad": cfad_list,
         "bin_centers": [round(float(b), 6) for b in bin_centers],
         "bin_edges": [round(float(b), 6) for b in bin_edges],
@@ -5028,4 +5281,6 @@ def get_rt_cfad(
         },
         "radial_domain": [min_radius, max_radius],
         "case_meta": meta,
-    })
+    }
+    _derived_cache_store("cfad", _ck, result)
+    return _cached_json_response(result)
