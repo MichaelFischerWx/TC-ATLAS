@@ -3957,15 +3957,22 @@
                   ' · <a href="' + link + '" target="_blank" rel="noopener" ' +
                     'style="color:#2e7dff;text-decoration:none;">station page ↗</a></div>' +
               '</div>' +
-              '<div style="display:flex;gap:6px;flex-shrink:0;">' +
-                '<button type="button" id="rt-obs-hist-save" title="Save chart PNG" ' +
-                  'style="padding:6px 12px;border-radius:8px;border:1px solid ' +
-                  (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(15,22,35,0.14)') +
-                  ';background:transparent;color:' + (isDark ? '#e6edf6' : '#0f1623') +
-                  ';font:600 12px ' + _DM_FONT_STACK + ';cursor:pointer;">⤓ PNG</button>' +
-                '<button type="button" id="rt-obs-hist-close" ' +
-                  'style="padding:6px 12px;border-radius:8px;border:none;background:#2e7dff;' +
-                  'color:#fff;font:700 13px ' + _DM_FONT_STACK + ';cursor:pointer;">Close</button>' +
+              '<div style="display:flex;flex-direction:column;align-items:flex-end;' +
+                'gap:8px;flex-shrink:0;">' +
+                '<div style="display:flex;gap:6px;">' +
+                  '<button type="button" id="rt-obs-hist-save" title="Save chart PNG" ' +
+                    'style="padding:6px 12px;border-radius:8px;border:1px solid ' +
+                    (isDark ? 'rgba(255,255,255,0.14)' : 'rgba(15,22,35,0.14)') +
+                    ';background:transparent;color:' + (isDark ? '#e6edf6' : '#0f1623') +
+                    ';font:600 12px ' + _DM_FONT_STACK + ';cursor:pointer;">⤓ PNG</button>' +
+                  '<button type="button" id="rt-obs-hist-close" ' +
+                    'style="padding:6px 12px;border-radius:8px;border:none;background:#2e7dff;' +
+                    'color:#fff;font:700 13px ' + _DM_FONT_STACK + ';cursor:pointer;">Close</button>' +
+                '</div>' +
+                ((ob.lat != null && ob.lon != null)
+                  ? '<canvas id="rt-obs-hist-locator" title="Station location" ' +
+                    'style="border-radius:8px;display:block;"></canvas>'
+                  : '') +
               '</div>' +
             '</div>' +
             '<div id="' + _RT_OBS_HIST_CHART_ID + '" style="width:100%;min-height:260px;"></div>' +
@@ -3977,6 +3984,7 @@
         document.getElementById('rt-obs-hist-save').onclick = function () {
             _rtObsSaveChartComposite(ob);
         };
+        _rtRenderLocatorCanvas(document.getElementById('rt-obs-hist-locator'), ob, isDark);
 
         if (_rtObsHistAbort) { try { _rtObsHistAbort.abort(); } catch (e3) {} }
         _rtObsHistAbort = new AbortController();
@@ -4084,6 +4092,142 @@
         });
     }
 
+    // ── Locator-map inset for the ob-history export ────────────────
+    // A small regional map (coastlines + state/province lines + a station
+    // marker) baked into the top-right of the saved figure so the reader
+    // sees WHERE the obs come from. Coastline reuses the same Natural Earth
+    // 10m GeoJSON the detail map loads; state lines are a lighter 50m file
+    // vendored alongside it. Both are lines-only (no land polygons), so the
+    // inset is drawn as neutral panel + outlines rather than a shaded map.
+    var _locatorStatesGeoJSON = null;
+    var _locatorCountriesGeoJSON = null;
+    var _locatorGeoPromise = null;
+
+    function _ensureLocatorGeo() {
+        if (_locatorGeoPromise) return _locatorGeoPromise;
+        var jobs = [];
+        if (!_coastlineGeoJSON) {
+            jobs.push(fetch('assets/coastlines/ne_10m_coastline.geojson')
+                .then(function (r) { return r.json(); })
+                .then(function (g) { _coastlineGeoJSON = g; })
+                .catch(function (e) { console.warn('[Obs] coastline load failed', e); }));
+        }
+        jobs.push(fetch('assets/coastlines/ne_50m_admin_1_states_provinces_lines.geojson')
+            .then(function (r) { return r.json(); })
+            .then(function (g) { _locatorStatesGeoJSON = g; })
+            .catch(function (e) { console.warn('[Obs] state-line load failed', e); }));
+        jobs.push(fetch('assets/coastlines/ne_50m_admin_0_boundary_lines_land.geojson')
+            .then(function (r) { return r.json(); })
+            .then(function (g) { _locatorCountriesGeoJSON = g; })
+            .catch(function (e) { console.warn('[Obs] country-border load failed', e); }));
+        _locatorGeoPromise = Promise.all(jobs);
+        return _locatorGeoPromise;
+    }
+
+    // Stroke every (Multi)LineString in `features` through the projection,
+    // culling polylines whose points all fall outside the (padded) view box.
+    function _rtDrawGeoLines(ctx, features, proj, box, opt) {
+        if (!features || !features.length) return;
+        var pad = 0.6;
+        var lonMin = box.lonMin - pad, lonMax = box.lonMax + pad,
+            latMin = box.latMin - pad, latMax = box.latMax + pad;
+        ctx.strokeStyle = opt.color;
+        ctx.lineWidth = opt.width;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        for (var f = 0; f < features.length; f++) {
+            var g = features[f] && features[f].geometry;
+            if (!g) continue;
+            var lines = g.type === 'MultiLineString' ? g.coordinates
+                      : g.type === 'LineString' ? [g.coordinates] : null;
+            if (!lines) continue;
+            for (var li = 0; li < lines.length; li++) {
+                var coords = lines[li];
+                if (!coords || coords.length < 2) continue;
+                var any = false;
+                for (var c = 0; c < coords.length; c++) {
+                    var lo = coords[c][0], la = coords[c][1];
+                    if (lo >= lonMin && lo <= lonMax && la >= latMin && la <= latMax) {
+                        any = true; break;
+                    }
+                }
+                if (!any) continue;
+                ctx.beginPath();
+                for (var c2 = 0; c2 < coords.length; c2++) {
+                    var p = proj(coords[c2][0], coords[c2][1]);
+                    if (c2 === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+                }
+                ctx.stroke();
+            }
+        }
+    }
+
+    // Draw the square locator inset at (x, y) in canvas (CSS-px) space.
+    // Equirectangular with a cos(lat) aspect so shapes aren't stretched.
+    function _rtDrawLocatorInset(ctx, lat, lon, x, y, size, isDark) {
+        var lonSpan = 16;
+        var latSpan = Math.max(4, lonSpan * Math.cos(lat * Math.PI / 180));
+        var box = {
+            lonMin: lon - lonSpan / 2, lonMax: lon + lonSpan / 2,
+            latMin: lat - latSpan / 2, latMax: lat + latSpan / 2
+        };
+        function proj(lo, la) {
+            return [
+                x + (lo - box.lonMin) / (box.lonMax - box.lonMin) * size,
+                y + (box.latMax - la) / (box.latMax - box.latMin) * size
+            ];
+        }
+        var panel     = isDark ? '#132033' : '#e9eff6';
+        var coastCol  = isDark ? '#8fd7f7' : '#2c5578';
+        var stateCol  = isDark ? 'rgba(233,240,246,0.28)' : 'rgba(15,22,35,0.22)';
+        var countryCol= isDark ? 'rgba(233,240,246,0.55)' : 'rgba(15,22,35,0.48)';
+        var borderCol = isDark ? 'rgba(255,255,255,0.22)' : 'rgba(15,22,35,0.22)';
+
+        ctx.save();
+        ctx.beginPath(); ctx.rect(x, y, size, size);
+        ctx.fillStyle = panel; ctx.fill();
+        ctx.clip();
+        // Draw order: state/province lines (faintest) → country borders →
+        // coastline (brightest, the defining outline) → station marker.
+        _rtDrawGeoLines(ctx, _locatorStatesGeoJSON && _locatorStatesGeoJSON.features,
+                        proj, box, { color: stateCol, width: 1.0 });
+        _rtDrawGeoLines(ctx, _locatorCountriesGeoJSON && _locatorCountriesGeoJSON.features,
+                        proj, box, { color: countryCol, width: 1.2 });
+        _rtDrawGeoLines(ctx, _coastlineGeoJSON && _coastlineGeoJSON.features,
+                        proj, box, { color: coastCol, width: 1.5 });
+        // Station marker: red dot with a soft halo + white ring.
+        var m = proj(lon, lat);
+        ctx.beginPath(); ctx.arc(m[0], m[1], 7, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(239,68,68,0.22)'; ctx.fill();
+        ctx.beginPath(); ctx.arc(m[0], m[1], 3.6, 0, Math.PI * 2);
+        ctx.fillStyle = '#ef4444';
+        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+        ctx.fill(); ctx.stroke();
+        ctx.restore();
+
+        // Border on top of the clipped content.
+        ctx.strokeStyle = borderCol; ctx.lineWidth = 1;
+        ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+    }
+
+    // Render the live locator inset into a modal canvas (HiDPI-crisp). Loads
+    // the geometry lazily, then draws once it's available.
+    function _rtRenderLocatorCanvas(cv, ob, isDark) {
+        if (!cv || ob.lat == null || ob.lon == null) return;
+        var size = 150;
+        var dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+        cv.width = size * dpr; cv.height = size * dpr;
+        cv.style.width = size + 'px'; cv.style.height = size + 'px';
+        _ensureLocatorGeo().then(function () {
+            // Bail if the modal was closed / reopened for another station.
+            if (!cv.isConnected) return;
+            var ctx = cv.getContext('2d');
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, size, size);
+            _rtDrawLocatorInset(ctx, ob.lat, ob.lon, 0, 0, size, isDark);
+        });
+    }
+
     // Branded PNG export for the ob-history chart. TCExport.savePlotly would
     // hand back the bare (transparent, unlabeled) Plotly graph; instead we
     // composite a solid-background figure with a station-ID header and the
@@ -4110,9 +4254,15 @@
         var ink = isDark ? '#f1f5f9' : '#0f172a';
         var dim = isDark ? '#94a3b8' : '#475569';
         var FONT = '"DM Sans", system-ui, -apple-system, sans-serif';
-        var W = 1360, SS = 2, HEAD = 116, FOOT = 74;
+        var hasLoc = (ob.lat != null && ob.lon != null);
+        var INSET = 160, INSET_PAD = 28;
+        var W = 1360, SS = 2, HEAD = hasLoc ? 188 : 116, FOOT = 74;
         var chartH = Math.max(300, (el.layout && el.layout.height) || 520);
         var totalH = HEAD + chartH + FOOT;
+
+        // Kick off (or reuse) the coastline + state-line load in parallel with
+        // the Plotly raster so the locator inset has geometry to draw.
+        var geoReady = hasLoc ? _ensureLocatorGeo() : Promise.resolve();
 
         _panelExportURL(el, 2.0, W, chartH, SS).then(function (url) {
             return new Promise(function (res, rej) {
@@ -4121,6 +4271,8 @@
                 im.onerror = rej;
                 im.src = url;
             });
+        }).then(function (img) {
+            return geoReady.then(function () { return img; });
         }).then(function (img) {
             var canvas = document.createElement('canvas');
             canvas.width = W * SS; canvas.height = totalH * SS;
@@ -4143,6 +4295,11 @@
             }
             if (_rtObsHistLast && _rtObsHistLast.n) meta += ' · ' + _rtObsHistLast.n + ' obs';
             ctx.fillText(meta, 40, 72);
+            // Locator inset, top-right of the header band.
+            if (hasLoc && (_coastlineGeoJSON || _locatorStatesGeoJSON)) {
+                _rtDrawLocatorInset(ctx, ob.lat, ob.lon,
+                    W - INSET - INSET_PAD, (HEAD - INSET) / 2, INSET, isDark);
+            }
             ctx.drawImage(img, 0, HEAD, W, chartH);
             ctx.fillStyle = dim;
             ctx.font = '400 18px ' + FONT;
