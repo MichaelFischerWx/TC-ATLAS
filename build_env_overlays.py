@@ -2798,19 +2798,49 @@ def main() -> int:
     except Exception:
         log.error("OISST shared fetch crashed:\n%s", traceback.format_exc())
         _oisst = None
-    try:
-        results["sst_oisst"] = build_sst(_oisst) is not None
-    except Exception:
-        log.error("Builder sst_oisst crashed:\n%s", traceback.format_exc())
-        results["sst_oisst"] = False
 
-    # SST anomaly + relative-SST (vs 1991-2020 climo) — same OISST fetch + the
-    # cached climatology; observation-only, single-PNG path like sst_oisst.
-    try:
-        results["sst_anomalies"] = build_sst_anomalies(_oisst)
-    except Exception:
-        log.error("Builder sst_anomalies crashed:\n%s", traceback.format_exc())
-        results["sst_anomalies"] = False
+    # OISST is a daily product but this job runs every 6 h — 3 of 4 runs used
+    # to re-render and re-upload byte-identical SST/anomaly PNGs. Skip the
+    # renders when the fetched field is unchanged since the last upload. The
+    # marker hashes the DATA (not just the date) so a preliminary→final file
+    # swap for the same ymd still triggers a re-render.
+    _oisst_unchanged = False
+    if _oisst is not None:
+        import hashlib
+        _sst_arr, _sst_ymd = _oisst
+        _marker = f"{_sst_ymd}:{hashlib.sha1(_sst_arr.tobytes()).hexdigest()[:12]}"
+        _marker_path = "env/oisst_last_rendered.txt"
+        try:
+            from google.cloud import storage as _st
+            _mb = _st.Client().bucket(GCS_BUCKET).blob(_marker_path)
+            _oisst_unchanged = (_mb.download_as_text(timeout=15).strip() == _marker)
+        except Exception:
+            _oisst_unchanged = False   # missing/unreadable marker → render
+
+    if _oisst_unchanged:
+        log.info("OISST %s unchanged since last render — skipping SST builders", _sst_ymd)
+        results["sst_oisst"] = True
+        results["sst_anomalies"] = True
+    else:
+        try:
+            results["sst_oisst"] = build_sst(_oisst) is not None
+        except Exception:
+            log.error("Builder sst_oisst crashed:\n%s", traceback.format_exc())
+            results["sst_oisst"] = False
+
+        # SST anomaly + relative-SST (vs 1991-2020 climo) — same OISST fetch +
+        # the cached climatology; observation-only, single-PNG path like
+        # sst_oisst.
+        try:
+            results["sst_anomalies"] = build_sst_anomalies(_oisst)
+        except Exception:
+            log.error("Builder sst_anomalies crashed:\n%s", traceback.format_exc())
+            results["sst_anomalies"] = False
+        if _oisst is not None and results.get("sst_oisst") and results.get("sst_anomalies"):
+            try:
+                _mb.upload_from_string(_marker, content_type="text/plain", timeout=15)
+            except Exception:
+                log.warning("OISST render marker write failed (will re-render next run)")
 
     # After all forecast hours uploaded, write a per-layer index.json
     # listing the available hours so the API can enumerate them without
