@@ -6175,6 +6175,50 @@ def _render_band_jpg(data_array: np.ndarray, band: int,
     return buf.getvalue()
 
 
+def _resolve_frame_at(at: str, frame_times: list, interval_min: int):
+    """Resolve a time-keyed frame request (`at=YYYYMMDDHHMM`, dashes/colons/
+    T/Z tolerated) to the nearest index in oldest-first `frame_times`.
+
+    Returns the index, or raises: 400 for an unparsable value, 404 when the
+    requested time falls outside the lookback window (more than one slot from
+    every frame) — so callers (the MW-compare fallback) get a definitive miss
+    instead of a silently wrong nearest frame.
+    """
+    s = (at or "").strip()
+    for ch in "-:TZtz ":
+        s = s.replace(ch, "")
+    s = s[:12]
+    if len(s) != 12 or not s.isdigit():
+        raise HTTPException(status_code=400, detail=f"unparsable at= time {at!r}")
+    try:
+        t = _dt(int(s[:4]), int(s[4:6]), int(s[6:8]),
+                int(s[8:10]), int(s[10:12]), tzinfo=timezone.utc)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"invalid at= time {at!r}")
+    if not frame_times:
+        raise HTTPException(status_code=404, detail="no frames in window")
+    idx = min(range(len(frame_times)),
+              key=lambda i: abs((frame_times[i] - t).total_seconds()))
+    if abs((frame_times[idx] - t).total_seconds()) > interval_min * 60:
+        raise HTTPException(
+            status_code=404,
+            detail=f"at= time {at} outside the lookback window")
+    return idx
+
+
+def _at_cache_control(target_dt) -> str:
+    """Cache-Control for time-keyed (`at=`) frame URLs. Unlike frame_index
+    URLs — whose meaning slides every 10 minutes, forcing short TTLs — a
+    time-keyed frame is stable once the best-track interpolation around it
+    has settled (~12 h; before that a new fix can shift the crop center), so
+    old frames get a week at the edge and each render is served from
+    Cloudflare thereafter."""
+    age_h = (_dt.now(timezone.utc) - target_dt).total_seconds() / 3600.0
+    if age_h >= 12:
+        return "public, max-age=604800"
+    return "public, max-age=300, stale-while-revalidate=3600"
+
+
 @router.get("/storm/{atcf_id}/band-frame.jpg")
 def get_band_frame_jpg(
     atcf_id: str,
@@ -6183,6 +6227,7 @@ def get_band_frame_jpg(
     lookback_hours: float = Query(6.0, ge=1, le=24),
     radius_deg: float = Query(10.0, ge=1.0, le=12.0),
     interval_min: int = Query(30, ge=10, le=60),
+    at: str = Query(None, description="Time-keyed frame lookup (YYYYMMDDHHMM); overrides frame_index"),
 ):
     """Return a pre-rendered WV/Vis band frame as a JPEG image."""
     _ensure_fresh_cache()
@@ -6206,6 +6251,8 @@ def get_band_frame_jpg(
     )
     frame_times = list(reversed(frame_times))
 
+    if at:
+        frame_index = _resolve_frame_at(at, frame_times, interval_min)
     if frame_index >= len(frame_times):
         raise HTTPException(status_code=400, detail=f"frame_index {frame_index} out of range")
 
@@ -6227,7 +6274,8 @@ def get_band_frame_jpg(
     sat_name = satellite_name_from_bucket(bucket)
 
     meta_headers = {
-        "Cache-Control": "public, max-age=300",
+        "Cache-Control": (_at_cache_control(target_dt) if at
+                          else "public, max-age=300"),
         "X-Frame-Index": str(frame_index),
         "X-Total-Frames": str(len(frame_times)),
         "X-Datetime": target_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -6626,6 +6674,7 @@ def get_ir_frame_jpg(
     radius_deg: float = Query(10.0, ge=1.0, le=12.0),
     interval_min: int = Query(30, ge=10, le=60),
     warp: str = Query("mercator", pattern="^(mercator|none)$"),
+    at: str = Query(None, description="Time-keyed frame lookup (YYYYMMDDHHMM); overrides frame_index"),
 ):
     """Return a pre-rendered IR frame as a JPEG image.
 
@@ -6662,6 +6711,9 @@ def get_ir_frame_jpg(
         _dt.now(timezone.utc), lookback_hours, interval_min
     )
     frame_times = list(reversed(frame_times))  # oldest first (idx 0 = oldest)
+
+    if at:
+        frame_index = _resolve_frame_at(at, frame_times, interval_min)
 
     # frame_index=-1 → "latest AVAILABLE frame" (single-call thumbnail with no
     # prior frames-meta lookup). The absolute newest slot is often too recent
@@ -6718,7 +6770,9 @@ def get_ir_frame_jpg(
         # max-age=300 keeps a fresh-enough latest frame; stale-while-revalidate
         # lets the browser repaint the gallery instantly from cache on revisit /
         # tab-switch while it refreshes in the background — no extra server work.
-        "Cache-Control": "public, max-age=300, stale-while-revalidate=86400",
+        # Time-keyed (at=) requests for settled frames instead get a week.
+        "Cache-Control": (_at_cache_control(target_dt) if at
+                          else "public, max-age=300, stale-while-revalidate=86400"),
         "X-Frame-Index": str(frame_index),
         "X-Total-Frames": str(len(frame_times)),
         "X-Datetime": target_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),

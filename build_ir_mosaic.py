@@ -135,6 +135,12 @@ IDX_PNG_LEVEL = int(os.environ.get("MOSAIC_IDX_PNG_LEVEL", "6"))  # spike: L6 = 
 # the network entirely for tiles the index says don't exist).
 PACK_MODE = os.environ.get("MOSAIC_PACK", "off").lower()
 R2_KEEP_FRAMES = 18                     # rolling loop kept hot (~3 h at 10-min)
+# Frames that roll OFF the loop manifest stay on R2 as a rolling ARCHIVE until
+# this age, so the MW↔IR compare can render passes up to ~2 days old from tiles
+# that were already built (no re-render, R2 egress free). ~45 MB/frame × 324
+# frames ≈ 15 GB ≈ $0.22/mo storage. Pruning is by AGE (see _prune_old_frames),
+# not manifest membership; frames.json itself still lists only R2_KEEP_FRAMES.
+R2_ARCHIVE_HOURS = float(os.environ.get("MOSAIC_R2_ARCHIVE_HOURS", "54"))
 _r2_client = None
 
 
@@ -1195,6 +1201,11 @@ def _prune_old_frames(kept, product="ir"):
     prefix) so it's never touched."""
     c = _get_r2(); bucket = _r2_bucket(); base = f"{R2_PREFIX}/{product}/"
     keptset = set(kept); token = None; pf = 0; pt = 0
+    # Age cutoff for the rolling archive: frames outside the manifest window
+    # survive until R2_ARCHIVE_HOURS old. Only well-formed YYYYMMDDHHMM
+    # prefixes are ever deleted (lexical compare == chronological).
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(hours=R2_ARCHIVE_HOURS)).strftime("%Y%m%d%H%M")
     while True:
         kw = {"Bucket": bucket, "Prefix": base, "Delimiter": "/", "MaxKeys": 1000}
         if token:
@@ -1202,7 +1213,8 @@ def _prune_old_frames(kept, product="ir"):
         resp = c.list_objects_v2(**kw)
         for cp in resp.get("CommonPrefixes", []):
             p = cp["Prefix"]; ts = p[len(base):].strip("/")
-            if ts and ts not in keptset:
+            if (ts and ts not in keptset and len(ts) == 12 and ts.isdigit()
+                    and ts < cutoff):
                 pt += _r2_delete_prefix(p); pf += 1
         if resp.get("IsTruncated"):
             token = resp.get("NextContinuationToken")

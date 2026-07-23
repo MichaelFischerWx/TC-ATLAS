@@ -27108,7 +27108,7 @@
     // band-frame.jpg endpoint renders an equirectangular cutout centered
     // on the interp position — so _rtDrawStormMwThumbnail can crop its
     // central fraction directly (no Mercator un-warp needed).
-    function _rtLoadMwCompareBackdrop(storm, frameIndex, cLat, cLon, mwMs, cb) {
+    function _rtLoadMwCompareBackdrop(storm, frameIndex, cLat, cLon, mwMs, cb, atTime) {
         if (!_rtMwCompareVisEnabled || frameIndex == null || frameIndex < 0) {
             cb(null);
             return;
@@ -27128,10 +27128,14 @@
             var sunEl = solarElevation(cLat, cLon, new Date(mwMs));
             band = (sunEl >= _RT_MW_BACKDROP_VIS_MIN_ELEV) ? 2 : 7;
         } catch (e) {}
+        // Time-keyed (at=) when the caller knows the frame time — the URL is
+        // then stable across the sliding frame_index window, so settled
+        // frames get week-long edge-cache TTLs (see _at_cache_control).
         var url = API_BASE
             + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
             + '/band-frame.jpg?band=' + band
             + '&frame_index=' + frameIndex
+            + (atTime ? '&at=' + encodeURIComponent(atTime) : '')
             + '&lookback_hours=' + _RT_MW_COMPARE_LOOKBACK_H
             + '&radius_deg=' + _RT_MW_COMPARE_RADIUS
             + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
@@ -27140,6 +27144,181 @@
         img.onload = function () { cb(img); };
         img.onerror = function () { cb(null); };
         img.src = url;
+    }
+
+    // ── MW compare from the mosaic tile ARCHIVE ───────────────────────────
+    // The mosaic job now keeps ~54 h of frames on R2 (build_ir_mosaic
+    // R2_ARCHIVE_HOURS), so both compare panels can render from tiles that
+    // were already built for the global map: zero server rendering, zero
+    // egress cost (R2), and no dependence on the 27-69 s cold band-frame
+    // path. The API render chain remains the fallback (Meteosat gap
+    // longitudes, pre-archive frames, fetch failures).
+
+    // Resolve the mosaic frame timestamp nearest a pass time by probing the
+    // per-frame index.json (cached by _packIndexFor). cb(ts|null, ix|null).
+    function _rtMosaicResolveTs(ms, cb) {
+        var t0 = new Date(Math.round(ms / 600000) * 600000);
+        var offs = [0, -10, 10, -20, 20, -30, 30];
+        function tsFor(o) {
+            var d = new Date(t0.getTime() + o * 60000);
+            function p2(n) { return (n < 10 ? '0' : '') + n; }
+            return '' + d.getUTCFullYear() + p2(d.getUTCMonth() + 1)
+                + p2(d.getUTCDate()) + p2(d.getUTCHours()) + p2(d.getUTCMinutes());
+        }
+        function tryAt(i) {
+            if (i >= offs.length) { cb(null, null); return; }
+            var ts = tsFor(offs[i]);
+            _packIndexFor(_ir2aRoot('ir') + '/' + ts, 'ir', ts).then(function (ix) {
+                if (ix && ix.tiles) {
+                    // Seed pack_frames so _v3TileBlob range-reads this
+                    // archive frame (it rolled off frames.json long ago).
+                    (_mosaicPackFrames.ir = _mosaicPackFrames.ir || {})[ts] = 1;
+                    cb(ts, ix);
+                } else { tryAt(i + 1); }
+            });
+        }
+        tryAt(0);
+    }
+
+    // Assemble mosaic tiles for one product/frame into an EQUIRECTANGULAR
+    // canvas spanning (cLat±halfDeg, cLon±halfDeg), recolored through an
+    // idx LUT (256×4 RGBA; idx 0 → transparent). Draws the global z4 base
+    // under any z5/z6 storm-sector tiles, then row-unwarps Mercator→linear
+    // lat like every other compare surface. cb(canvas|null).
+    function _rtMosaicEquirectCanvas(product, ts, cLat, cLon, halfDeg, lut, cb) {
+        var base = _ir2aRoot(product) + '/' + ts;
+        _packIndexFor(base, product, ts).then(function (ix) {
+            if (!ix || !ix.tiles) { cb(null); return; }
+            (_mosaicPackFrames[product] = _mosaicPackFrames[product] || {})[ts] = 1;
+            var latN = Math.min(80, cLat + halfDeg), latS = Math.max(-80, cLat - halfDeg);
+            var Y = function (lat) {
+                return (1 - Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)) / Math.PI) / 2;
+            };
+            var x0 = (cLon - halfDeg + 180) / 360, x1 = (cLon + halfDeg + 180) / 360;
+            var y0 = Y(latN), y1 = Y(latS);
+            var S = 512 * 64;                        // world px at z6
+            var W = Math.max(2, Math.round((x1 - x0) * S));
+            var H = Math.max(2, Math.round((y1 - y0) * S));
+            var mc = document.createElement('canvas');
+            mc.width = W; mc.height = H;
+            var mctx = mc.getContext('2d');
+            mctx.imageSmoothingEnabled = false;      // never interpolate INDICES
+            var jobs = [];
+            [4, 5, 6].forEach(function (z) {
+                var n = Math.pow(2, z);
+                var txA = Math.floor(x0 * n), txB = Math.floor((x1 * n) - 1e-9);
+                var tyA = Math.max(0, Math.floor(y0 * n));
+                var tyB = Math.min(n - 1, Math.floor((y1 * n) - 1e-9));
+                for (var tx = txA; tx <= txB; tx++) {
+                    var txw = ((tx % n) + n) % n;    // dateline wrap for the key
+                    for (var ty = tyA; ty <= tyB; ty++) {
+                        var key = z + '/' + txw + '/' + ty;
+                        if (!ix.tiles[key]) continue;
+                        (function (z2, txw2, tx2, ty2, n2) {
+                            jobs.push(_v3TileBlob(base + '/' + z2 + '/' + txw2 + '/' + ty2 + '.png')
+                                .then(function (blob) {
+                                    if (!blob) return null;
+                                    return new Promise(function (res) {
+                                        var u = URL.createObjectURL(blob);
+                                        var im = new Image();
+                                        im.onload = function () {
+                                            res({ z: z2, im: im, u: u,
+                                                  dx: (tx2 / n2 - x0) * S,
+                                                  dy: (ty2 / n2 - y0) * S,
+                                                  ds: S / n2 });
+                                        };
+                                        im.onerror = function () { URL.revokeObjectURL(u); res(null); };
+                                        im.src = u;
+                                    });
+                                }));
+                        })(z, txw, tx, ty, n);
+                    }
+                }
+            });
+            if (!jobs.length) { cb(null); return; }
+            Promise.all(jobs).then(function (loaded) {
+                var tiles = loaded.filter(Boolean).sort(function (a, b) { return a.z - b.z; });
+                if (!tiles.length) { cb(null); return; }
+                tiles.forEach(function (t) {
+                    mctx.drawImage(t.im, t.dx, t.dy, t.ds, t.ds);
+                    URL.revokeObjectURL(t.u);
+                });
+                // Recolor idx → LUT in place (R channel carries the idx).
+                try {
+                    var id = mctx.getImageData(0, 0, W, H), d = id.data;
+                    for (var p = 0; p < d.length; p += 4) {
+                        var ix4 = (d[p + 3] > 0 ? d[p] : 0) * 4;
+                        d[p] = lut[ix4]; d[p + 1] = lut[ix4 + 1];
+                        d[p + 2] = lut[ix4 + 2]; d[p + 3] = lut[ix4 + 3];
+                    }
+                    mctx.putImageData(id, 0, 0);
+                } catch (e) { cb(null); return; }
+                // Un-warp Mercator rows → linear-lat output.
+                var out = document.createElement('canvas');
+                out.width = W;
+                out.height = W;                       // square: lon span == lat span
+                var octx = out.getContext('2d');
+                octx.imageSmoothingEnabled = true;
+                for (var oy = 0; oy < out.height; oy++) {
+                    var latT = (cLat + halfDeg) - (oy / out.height) * (2 * halfDeg);
+                    var latB = (cLat + halfDeg) - ((oy + 1) / out.height) * (2 * halfDeg);
+                    var syA = (Y(Math.min(latN, Math.max(latS, latT))) - y0) / (y1 - y0) * H;
+                    var syB = (Y(Math.min(latN, Math.max(latS, latB))) - y0) / (y1 - y0) * H;
+                    if (syB - syA < 0.5) syB = syA + 0.5;
+                    octx.drawImage(mc, 0, syA, W, syB - syA, 0, oy, W, 1);
+                }
+                cb(out);
+            });
+        });
+    }
+
+    // IR compare panel from the mosaic archive: same crop, graticule,
+    // markers and colorbar as _rtDrawIrCompareFrame, but the pixels come
+    // from R2 idx tiles recolored client-side (claude-ir LUT).
+    function _rtDrawIrCompareFromMosaic(canvas, ts, gLat, gLon, done) {
+        var lut = _idxLutForProduct('ir', 'claude-ir');
+        _rtMosaicEquirectCanvas('ir', ts, gLat, gLon, _RT_MW_COMPARE_HALF_DEG,
+                                lut, function (src) {
+            if (!src) { if (done) done(new Error('mosaic frame unavailable')); return; }
+            var ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+            ctx.fillStyle = 'rgba(15,22,36,1)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(src, 0, 0, src.width, src.height,
+                          0, 0, canvas.width, canvas.height);
+            var cx = canvas.width / 2, cy = canvas.height / 2;
+            ctx.strokeStyle = 'rgba(253, 224, 71, 0.95)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(cx - 10, cy); ctx.lineTo(cx + 10, cy);
+            ctx.moveTo(cx, cy - 10); ctx.lineTo(cx, cy + 10);
+            ctx.stroke();
+            _rtDrawLatLonGrid(ctx, canvas.width, canvas.height,
+                              gLat, gLon, _RT_MW_COMPARE_HALF_DEG, 2);
+            _rtDrawInterpMarker(ctx, canvas.width, canvas.height,
+                                gLat, gLon, _RT_MW_COMPARE_HALF_DEG);
+            _rtDrawCompareColorbar(ctx, canvas.width, canvas.height,
+                _IR_CBAR, ['+35', '-30', '-85'], 'IR Tb (°C)');
+            if (done) done(null);
+        });
+    }
+
+    // Mosaic-sourced backdrop for the MW panel: Vis tiles when the sun is
+    // solidly up at the pass, IR-as-grayscale otherwise (no SWIR band in
+    // the mosaic; cold tops render bright, which is the context we need).
+    // Produces the same contract as the API band frame: an equirectangular
+    // image spanning ±_RT_MW_COMPARE_RADIUS around the shared center.
+    function _rtLoadMwCompareBackdropMosaic(ts, cLat, cLon, mwMs, cb) {
+        if (!_rtMwCompareVisEnabled) { cb(null); return; }
+        var product = 'ir';
+        try {
+            if (solarElevation(cLat, cLon, new Date(mwMs))
+                    >= _RT_MW_BACKDROP_VIS_MIN_ELEV) product = 'vis';
+        } catch (e) {}
+        _rtMosaicEquirectCanvas(product, ts, cLat, cLon,
+                                _RT_MW_COMPARE_RADIUS, _VIS_IDX_LUT,
+                                function (cnv) { cb(cnv); });
     }
 
     // Toggle the spinner overlay on a compare panel ('ir' | 'mw'). The
@@ -27177,7 +27356,10 @@
         // advisory fix only if the IR meta is unavailable.
         var mwMs = orbit.scan_start_ms;
 
-        function paintMw(cLat, cLon, frameIndex) {
+        // frameIndex/frameAt drive the legacy API backdrop; mosaicTs (when
+        // set) sources the backdrop from the R2 tile archive instead — no
+        // server render at all.
+        function paintMw(cLat, cLon, frameIndex, mosaicTs, frameAt) {
             var pr = orbit.products[product];
             if (mwCanvas && pr && pr.png_url) {
                 if (mwStatus) mwStatus.textContent = '';
@@ -27210,15 +27392,21 @@
                     }, true /* withGrid */, backdropImg);
                 }
                 drawSwath(null);
-                _rtLoadMwCompareBackdrop(storm, frameIndex, cLat, cLon, mwMs,
-                                         function (backdropImg) {
+                function onBackdrop(backdropImg) {
                     // Drop a late backdrop if the user has moved on to a
                     // different pass or product since this load started.
                     if (!backdropImg
                             || _rtMwCompareState.orbit !== orbit
                             || _rtMwCompareState.product !== product) return;
                     drawSwath(backdropImg);
-                });
+                }
+                if (mosaicTs) {
+                    _rtLoadMwCompareBackdropMosaic(mosaicTs, cLat, cLon, mwMs,
+                                                   onBackdrop);
+                } else {
+                    _rtLoadMwCompareBackdrop(storm, frameIndex, cLat, cLon,
+                                             mwMs, onBackdrop, frameAt);
+                }
             } else if (mwCanvas) {
                 _rtMwCompareLoading('mw', false);
                 var ctx = mwCanvas.getContext('2d');
@@ -27246,6 +27434,47 @@
             ctx2.fillRect(0, 0, irCanvas.width, irCanvas.height);
         }
 
+        // ── Mosaic-first: both panels from the R2 tile archive (zero server
+        // rendering; tiles were built for the global map anyway). Falls back
+        // to the API render chain when the storm sits in the Meteosat gap,
+        // the pass predates the archive, or any tile fetch fails.
+        function legacyRender() {
+            if (irStatus) irStatus.textContent = 'finding closest IR…';
+            _rtMwCompareLoading('ir', true);
+            _rtMwCompareLoading('mw', true);
+            legacyMetaRender();
+        }
+        if (_mosaicCoversLon(storm.lon) && irCanvas) {
+            _rtMosaicResolveTs(mwMs, function (ts) {
+                if (_rtMwCompareState.orbit !== orbit
+                        || _rtMwCompareState.product !== product) return;
+                if (!ts) { legacyRender(); return; }
+                var ctr = _rtMwCompareState.interp
+                    || { lat: storm.lat, lon: storm.lon };
+                paintMw(ctr.lat, ctr.lon, null, ts);
+                var tMs = Date.UTC(+ts.slice(0, 4), +ts.slice(4, 6) - 1,
+                                   +ts.slice(6, 8), +ts.slice(8, 10),
+                                   +ts.slice(10, 12));
+                var dMin = Math.round((tMs - mwMs) / 60000);
+                if (irTimeEl) {
+                    irTimeEl.textContent = ts.slice(0, 4) + '-' + ts.slice(4, 6)
+                        + '-' + ts.slice(6, 8) + ' ' + ts.slice(8, 10) + ':'
+                        + ts.slice(10, 12) + 'Z (' + (dMin >= 0 ? '+' : '')
+                        + dMin + ' min vs MW)';
+                }
+                if (irStatus) irStatus.textContent = 'loading IR frame…';
+                _rtDrawIrCompareFromMosaic(irCanvas, ts, ctr.lat, ctr.lon,
+                                           function (err) {
+                    if (_rtMwCompareState.orbit !== orbit) return;
+                    if (err) { legacyRender(); return; }
+                    _rtMwCompareLoading('ir', false);
+                    if (irStatus) irStatus.textContent = '';
+                });
+            });
+            return;
+        }
+        legacyMetaRender();
+        function legacyMetaRender() {
         _rtFetchIrFramesMeta(storm)
             .then(function (meta) {
                 if (!meta || !meta.frames || !meta.frames.length) {
@@ -27287,7 +27516,7 @@
                 if (closest.center && closest.center.length === 2) {
                     cLat = closest.center[0]; cLon = closest.center[1];
                 }
-                paintMw(cLat, cLon, closest.index);
+                paintMw(cLat, cLon, closest.index, null, closest.datetime_utc);
 
                 if (!irCanvas) { _rtMwCompareLoading('ir', false); return; }
 
@@ -27329,7 +27558,7 @@
                         _rtMwCompareLoading('ir', false);
                         if (irStatus) irStatus.textContent =
                             (ci === 0) ? '' : 'nearest available IR frame';
-                    });
+                    }, cand.datetime_utc);
                 }
                 _tryIrCandidate(0);
             })
@@ -27339,6 +27568,7 @@
                 if (irStatus) irStatus.textContent = 'IR meta unavailable';
                 paintMw(storm.lat, storm.lon);  // still show MW
             });
+        }
     }
 
     // Cache /ir-frames-meta per storm so swapping products doesn't
@@ -27373,7 +27603,7 @@
     // ir-frames-meta) — used for the graticule + marker so the IR grid
     // matches the IR imagery AND the MW panel (which is cropped + gridded
     // on the identical center). See _rtRenderMwCompare.
-    function _rtDrawIrCompareFrame(canvas, storm, frameIndex, gLat, gLon, done) {
+    function _rtDrawIrCompareFrame(canvas, storm, frameIndex, gLat, gLon, done, atTime) {
         // Use the DEFAULT (Mercator-warped) IR frame — it's pre-rendered and
         // cached in GCS, so it loads in ~0.5 s. The equirectangular variant
         // (warp=none) is rendered on demand and was 30–40 s. Instead of a
@@ -27386,6 +27616,7 @@
         var url = API_BASE
             + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
             + '/ir-frame.jpg?frame_index=' + frameIndex
+            + (atTime ? '&at=' + encodeURIComponent(atTime) : '')
             + '&lookback_hours=' + _RT_MW_COMPARE_LOOKBACK_H
             + '&radius_deg=' + _RT_MW_COMPARE_RADIUS
             + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
