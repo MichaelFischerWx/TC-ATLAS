@@ -8350,12 +8350,20 @@ def _genesis_data_ensemble_size(data: dict) -> int:
 
 
 def _genesis_variant_clusters_size(variant, date_str, hour_str):
-    """Observed ensemble size for a (variant, cycle), via the cached CSV.
-    Used by the cluster endpoints to report the divisor the frontend should
-    use for formation probability. The fetch is a warm dict lookup since the
-    clusters were just computed from the same parse."""
+    """Observed ensemble size for a (variant, cycle). Prefers the size
+    side-cache (seeded by the cluster GCS wrapper or a prior CSV parse)
+    so the cluster-detail endpoint never forces a CSV download just for
+    the probability divisor; falls back to the cached CSV path."""
+    variant_n = _genesis_variant_norm(variant)
+    init_time = date_str.replace("-", "") + hour_str
+    hit = _TCA_ENS_SIZE_CACHE.get((variant_n, init_time))
+    if hit:
+        return hit
     d = _fetch_weatherlab_genesis_csv(date_str, hour_str, variant)
-    return _genesis_data_ensemble_size(d) if d else None
+    n = _genesis_data_ensemble_size(d) if d else None
+    if n:
+        _TCA_ENS_SIZE_CACHE[(variant_n, init_time)] = n
+    return n
 
 
 def _genesis_cycle_dt(date_str: str, hour_str: str):
@@ -9677,19 +9685,29 @@ _TCA_CLUSTER_TTL = 7200              # same TTL as the underlying CSV
 
 # GCS tier between the in-memory cache and a recompute. Clustering a
 # 1K-member cycle costs 6-20 s of CPU, but the result is deterministic
-# for a given (cycle, variant, params, n_tracks) — so once ANY instance
-# has computed it, every other instance (min=0 cold starts) and every
+# for a given (cycle, variant, params) — so once ANY instance has
+# computed it, every other instance (min=0 cold starts) and every
 # post-TTL refresh loads the gzipped JSON from GCS in well under a
-# second instead of recomputing. n_tracks is part of the object name so
-# a CSV fetched mid-publication self-heals: when the parse grows, the
-# key changes and the fuller cycle is clustered (once) and cached anew.
-_TCA_CLUSTER_GCS_PREFIX = "genesis-clusters/v1"
+# second instead of recomputing. The object name is STABLE per
+# (cycle, variant, params) so a pinned lookup can be served from GCS
+# WITHOUT first downloading the DeepMind CSV (which is what made the
+# detail modal take 30+ s on a cold instance). Self-heal for a CSV
+# fetched mid-publication moved into the wrapper: n_tracks is stored
+# in the blob, and any caller that DOES hold the parsed CSV (the index
+# endpoint and the background warmer) recomputes + overwrites when the
+# parse has grown.
+_TCA_CLUSTER_GCS_PREFIX = "genesis-clusters/v2"
+
+# Observed ensemble size per (variant, init_time), seeded by whichever
+# path (CSV parse or GCS wrapper) learns it first, so the detail
+# endpoint's probability divisor doesn't force a CSV fetch.
+_TCA_ENS_SIZE_CACHE: dict = {}
 
 
-def _tca_cluster_gcs_key(init_time, variant_n, params, n_tracks) -> str:
+def _tca_cluster_gcs_key(init_time, variant_n, params) -> str:
     p = "_".join(str(x) for x in params)
     return (f"{_TCA_CLUSTER_GCS_PREFIX}/{variant_n}/{init_time}/"
-            f"{p}_n{n_tracks}.json.gz")
+            f"{p}.json.gz")
 
 
 def _tca_cluster_gcs_get(key: str):
@@ -9703,7 +9721,7 @@ def _tca_cluster_gcs_get(key: str):
         return None
 
 
-def _tca_cluster_gcs_put(key: str, clusters: list):
+def _tca_cluster_gcs_put(key: str, wrapper: dict):
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return
@@ -9711,7 +9729,7 @@ def _tca_cluster_gcs_put(key: str, clusters: list):
     def _upload():
         try:
             body = gzip.compress(
-                json.dumps(clusters, separators=(",", ":")).encode("utf-8"), 6)
+                json.dumps(wrapper, separators=(",", ":")).encode("utf-8"), 6)
             bucket.blob(key).upload_from_string(
                 body, content_type="application/json", timeout=30)
         except Exception:
@@ -9720,20 +9738,41 @@ def _tca_cluster_gcs_put(key: str, clusters: list):
     threading.Thread(target=_upload, daemon=True).start()
 
 
-def _tca_clusters_cached(init_time, variant_n, params, data) -> list:
+def _tca_clusters_cached(init_time, variant_n, params, data=None,
+                         lazy_fetch=None) -> list:
     """Memory → GCS → compute lookup for one cluster set.
 
     Shared by `_tca_get_or_compute_clusters` (latest cycle) and
     `_tca_clusters_for_cycle` (pinned cycle) so both populate the same
     two cache tiers. `params` is the rounded tuple that also forms the
-    cache key, in `_tca_compute_clusters` argument order."""
+    cache key, in `_tca_compute_clusters` argument order.
+
+    `data` (the parsed CSV) may be None when the caller has a pinned
+    init_time: the GCS tier is keyed without it, so a cold instance can
+    answer a detail-modal click from one small GCS read instead of a
+    multi-second DeepMind CSV download. `lazy_fetch` is only invoked on
+    a full miss (no memory, no GCS)."""
     cache_key = (init_time, variant_n, params)
     cached = _TCA_CLUSTER_CACHE.get(cache_key)
     if cached and (time.time() - cached["ts"]) < _TCA_CLUSTER_TTL:
         return cached["clusters"]
-    gcs_key = _tca_cluster_gcs_key(init_time, variant_n, params, len(data))
-    clusters = _tca_cluster_gcs_get(gcs_key)
+    gcs_key = _tca_cluster_gcs_key(init_time, variant_n, params)
+    wrapper = _tca_cluster_gcs_get(gcs_key)
+    clusters = None
+    if isinstance(wrapper, dict) and "clusters" in wrapper:
+        # Trust the blob unless we hold a parse that has since grown
+        # (mid-publication self-heal — only callers with the CSV in
+        # hand can detect that).
+        if data is None or wrapper.get("n_tracks") == len(data):
+            clusters = wrapper["clusters"]
+            ens = wrapper.get("ensemble_size")
+            if ens:
+                _TCA_ENS_SIZE_CACHE[(variant_n, init_time)] = ens
     if clusters is None:
+        if data is None and lazy_fetch is not None:
+            data = lazy_fetch()
+        if data is None:
+            return None
         # 6-tuple = classic params; merge-on appends (merge_km,
         # merge_overlap_h, algo_version) — only present when the merge
         # pass is on, so merge-off cache/GCS keys are unchanged. Only
@@ -9753,7 +9792,14 @@ def _tca_clusters_cached(init_time, variant_n, params, data) -> list:
             merge_km=merge_km,
             merge_overlap_h=merge_overlap_h,
         )
-        _tca_cluster_gcs_put(gcs_key, clusters)
+        ens = _genesis_data_ensemble_size(data)
+        if ens:
+            _TCA_ENS_SIZE_CACHE[(variant_n, init_time)] = ens
+        _tca_cluster_gcs_put(gcs_key, {
+            "n_tracks": len(data),
+            "ensemble_size": ens or None,
+            "clusters": clusters,
+        })
     _TCA_CLUSTER_CACHE[cache_key] = {"clusters": clusters, "ts": time.time()}
     if len(_TCA_CLUSTER_CACHE) > _TCA_CLUSTER_CACHE_MAX:
         oldest = sorted(_TCA_CLUSTER_CACHE.items(),
@@ -10368,21 +10414,33 @@ def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
     latest published cycle of the variant is resolved."""
     now = _dt.now(timezone.utc)
     variant_n = _genesis_variant_norm(variant)
-    if init_time:
-        req_date, req_hour = _genesis_init_to_cycle(init_time)
-        if req_date is None:
-            return None, None, None, None
-        data = _fetch_weatherlab_genesis_csv(req_date, req_hour, variant_n)
-        used_date, used_hour = req_date, req_hour
-    else:
-        used_date, used_hour, data = _resolve_latest_genesis_cycle(
-            require_data=True, variant=variant_n)
-    if data is None:
-        return None, None, None, None
-    init_time = used_date.replace("-", "") + used_hour
     params = _tca_params_tuple(grid_deg, peak_min_members, assign_radius_km,
                                time_window_h, cluster_min_members,
                                same_system_km, merge_km, merge_overlap_h)
+    if init_time:
+        # Pinned cycle — do NOT fetch the DeepMind CSV up front. The
+        # cluster set for a (cycle, variant, params) is cached in memory
+        # and GCS under a CSV-free key, so the common case (detail-modal
+        # click after the index endpoint or the warmer populated the
+        # cache) is a dict lookup or one small GCS read even on a cold
+        # instance. The CSV is only downloaded on a genuine full miss.
+        req_date, req_hour = _genesis_init_to_cycle(init_time)
+        if req_date is None:
+            return None, None, None, None
+        used_date, used_hour = req_date, req_hour
+        init_time = used_date.replace("-", "") + used_hour
+        clusters = _tca_clusters_cached(
+            init_time, variant_n, params, data=None,
+            lazy_fetch=lambda: _fetch_weatherlab_genesis_csv(
+                req_date, req_hour, variant_n))
+        if clusters is None:
+            return None, None, None, None
+        return init_time, params, clusters, (used_date, used_hour)
+    used_date, used_hour, data = _resolve_latest_genesis_cycle(
+        require_data=True, variant=variant_n)
+    if data is None:
+        return None, None, None, None
+    init_time = used_date.replace("-", "") + used_hour
     clusters = _tca_clusters_cached(init_time, variant_n, params, data)
     return init_time, params, clusters, (used_date, used_hour)
 
@@ -10400,14 +10458,16 @@ def _tca_clusters_for_cycle(date_str, hour_str, grid_deg, peak_min_members,
     and only pays compute on the older cycles. Returns the cluster list
     (with members) or None if the cycle has no data."""
     variant_n = _genesis_variant_norm(variant)
-    data = _fetch_weatherlab_genesis_csv(date_str, hour_str, variant_n)
-    if data is None:
-        return None
     init_time = date_str.replace("-", "") + hour_str
     params = _tca_params_tuple(grid_deg, peak_min_members, assign_radius_km,
                                time_window_h, cluster_min_members,
                                same_system_km, merge_km, merge_overlap_h)
-    return _tca_clusters_cached(init_time, variant_n, params, data)
+    # Cycle is pinned — same lazy CSV pattern as the pinned branch of
+    # `_tca_get_or_compute_clusters`: memory/GCS first, CSV only on miss.
+    return _tca_clusters_cached(
+        init_time, variant_n, params, data=None,
+        lazy_fetch=lambda: _fetch_weatherlab_genesis_csv(
+            date_str, hour_str, variant_n))
 
 
 def _tca_cluster_index_view(c):

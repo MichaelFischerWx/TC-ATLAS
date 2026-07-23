@@ -15079,6 +15079,12 @@
     //  positioned overlay built lazily on first open.
 
     var _genesisDetailCache = {};   // track_id → JSON (TCA-synthesized or DM-fetched)
+    // Monotonic request token for the detail modal. A slow (cold-server)
+    // detail fetch can resolve AFTER the user has clicked a different
+    // system; without this guard the late response repaints the open
+    // modal with the wrong storm (e.g. Fausto's modal showing a WPAC
+    // disturbance).
+    var _genesisDetailReqSeq = 0;
     // Countdown chip state for the disturbance detail modal. The chip
     // shows "next cycle in ~Xh Ym" derived from the backend's
     // `next_cycle_eta_hours` (estimated DeepMind publish time = cycle
@@ -15781,6 +15787,9 @@
     function closeGenesisDetail() {
         var m = document.getElementById(_GENESIS_MODAL_ID);
         if (!m) return;
+        // Invalidate any in-flight detail fetch so a late response can't
+        // repaint into (or reopen state under) a closed modal.
+        _genesisDetailReqSeq++;
         m.style.display = 'none';
         document.body.style.overflow = '';
         if (_genesisTauState && _genesisTauState.animTimer) {
@@ -15820,6 +15829,7 @@
 
     function openGenesisDetail(trackId) {
         var m = _ensureGenesisDetailModal();
+        var reqSeq = ++_genesisDetailReqSeq;
         _genesisShowLoader(true);
         var titleEl = m.querySelector('#rt-genesis-modal-title');
         var subEl   = m.querySelector('#rt-genesis-modal-sub');
@@ -15953,8 +15963,10 @@
         }
 
         prom.then(function (json) {
+            if (reqSeq !== _genesisDetailReqSeq) return;  // superseded/closed
             _renderGenesisDetail(json);
         }).catch(function (err) {
+            if (reqSeq !== _genesisDetailReqSeq) return;
             _genesisShowLoader(false);
             subEl.innerHTML = '<span style="color:#ef4444;">'
                 + 'Could not load detail: ' + (err.message || err) + '</span>';
