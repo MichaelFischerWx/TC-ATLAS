@@ -27182,11 +27182,13 @@
             if (mwCanvas && pr && pr.png_url) {
                 if (mwStatus) mwStatus.textContent = '';
                 _rtMwCompareLoading('mw', true);   // spinner until the PNG paints
-                // Load the day-Vis/night-SWIR backdrop first (async), then
-                // paint the swath with it behind. Backdrop is null when the
-                // toggle is off or no IR frame matched.
-                _rtLoadMwCompareBackdrop(storm, frameIndex, cLat, cLon, mwMs,
-                                         function (backdropImg) {
+                // Paint the swath IMMEDIATELY (no backdrop), and load the
+                // day-Vis/night-SWIR backdrop in parallel, repainting with
+                // it behind once it arrives. The backdrop is contextual
+                // garnish, but a first-ever band-frame render is a cold
+                // S3-fetch+render on the server (measured 27-60 s) — it
+                // must never gate the actual microwave science panel.
+                function drawSwath(backdropImg) {
                     _rtDrawStormMwThumbnail(mwCanvas, pr.bounds || orbit.bounds, cLat, cLon,
                                             pr.png_url, function (frac, centerFrac) {
                         _rtMwCompareLoading('mw', false);
@@ -27206,6 +27208,16 @@
                         _rtDrawMwCompareColorbar(mwCanvas.getContext('2d'),
                             mwCanvas.width, mwCanvas.height, product);
                     }, true /* withGrid */, backdropImg);
+                }
+                drawSwath(null);
+                _rtLoadMwCompareBackdrop(storm, frameIndex, cLat, cLon, mwMs,
+                                         function (backdropImg) {
+                    // Drop a late backdrop if the user has moved on to a
+                    // different pass or product since this load started.
+                    if (!backdropImg
+                            || _rtMwCompareState.orbit !== orbit
+                            || _rtMwCompareState.product !== product) return;
+                    drawSwath(backdropImg);
                 });
             } else if (mwCanvas) {
                 _rtMwCompareLoading('mw', false);
