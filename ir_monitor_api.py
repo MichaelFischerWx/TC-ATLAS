@@ -811,8 +811,10 @@ def _ondemand_bundle_key(product: str, atcf_upper: str,
     NOTE: these on-demand objects accumulate (one per distinct param combo per
     storm) and are never explicitly deleted. Configure a GCS lifecycle TTL
     (e.g. delete after 1-2 days) on the `{_GCS_RT_VERSION}/bundles/ondemand/`
-    prefix so they don't accrue cost. Correctness-first: we always rebuild +
-    re-upload on every request (a freshness/dedup check is a later optimization).
+    prefix so they don't accrue cost. Rebuild + re-upload is skipped when the
+    key was uploaded < _ONDEMAND_302_TTL ago (see the freshness/single-flight
+    machinery below) — otherwise every browser call re-fetched N frames and
+    re-uploaded a multi-MB object.
     """
     lb = f"{lookback_hours:g}"
     r = f"{radius_deg:g}"
@@ -830,6 +832,61 @@ def _public_bundle_url(key: str) -> str:
     if _PUBLIC_BUNDLE_BASE:
         return f"{_PUBLIC_BUNDLE_BASE}/{key}"
     return f"https://storage.googleapis.com/{_GCS_IR_CACHE_BUCKET}/{key}"
+
+
+# -- On-demand bundle 302: freshness memo + single-flight locks --------------
+# The four on-demand bundle endpoints (/ir-raw-bundle, /band-raw-bundle,
+# /band-frames-bundle, /ir-frames-bundle) share a "build -> upload -> 302"
+# pattern. Bundles are built from 10-min-cadence satellite frames, so
+# re-serving a bundle uploaded less than ~4 minutes ago is safe -- the
+# underlying imagery cannot have advanced by a frame yet. The memo below lets
+# those endpoints 302 straight to the existing R2/GCS object instead of
+# rebuilding + re-uploading a multi-MB body on every browser call (measured:
+# 298 calls/12 h on /ir-raw-bundle alone, each a full N-frame fetch plus a
+# ~5-20 MB upload).
+_ONDEMAND_302_TTL = float(os.environ.get("ONDEMAND_BUNDLE_TTL_SEC", "240"))
+
+# key -> time.monotonic() of the last SUCCESSFUL upload for that key.
+# Unbounded but tiny: one entry per (storm, product, param-combo).
+_ondemand_302_stamps: dict = {}
+_ondemand_302_stamps_lock = threading.Lock()
+
+# LRU-bounded per-key build locks (single-flight). Concurrent requests for
+# the same bundle key serialize on one lock so only the first rebuilds; the
+# rest re-check freshness inside and 302 immediately. Bounded so dead
+# storm/param combos don't leak lock objects (mirrors realtime_tdr_api.py's
+# _rt_flight_lock registry, kept self-contained here).
+_ONDEMAND_302_LOCKS_MAX = 64
+_ondemand_302_locks: "OrderedDict[str, threading.Lock]" = OrderedDict()
+_ondemand_302_locks_guard = threading.Lock()
+
+
+def _ondemand_302_lock(key: str) -> threading.Lock:
+    """Per-bundle-key build lock from the LRU-bounded registry."""
+    with _ondemand_302_locks_guard:
+        lk = _ondemand_302_locks.get(key)
+        if lk is None:
+            lk = threading.Lock()
+            _ondemand_302_locks[key] = lk
+        else:
+            _ondemand_302_locks.move_to_end(key)
+        while len(_ondemand_302_locks) > _ONDEMAND_302_LOCKS_MAX:
+            _ondemand_302_locks.popitem(last=False)
+        return lk
+
+
+def _ondemand_302_fresh(key: str) -> bool:
+    """True if `key` was successfully uploaded < _ONDEMAND_302_TTL ago."""
+    with _ondemand_302_stamps_lock:
+        ts = _ondemand_302_stamps.get(key)
+    return ts is not None and (time.monotonic() - ts) < _ONDEMAND_302_TTL
+
+
+def _ondemand_302_stamp(key: str) -> None:
+    """Record a successful upload for `key`. Call ONLY after
+    _upload_public_bundle returns -- a failed build/upload must not stamp."""
+    with _ondemand_302_stamps_lock:
+        _ondemand_302_stamps[key] = time.monotonic()
 
 
 def _gcs_rt_version_put():
@@ -5199,123 +5256,144 @@ def get_storm_ir_raw_bundle(
         raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
 
     atcf_upper = atcf_id.upper()
-    center_lat = storm["lat"]
-    center_lon = storm["lon"]
-
-    center_dt = _dt.now(timezone.utc)
-    frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
-    # Match /ir-raw-frame ordering: index 0 = oldest, index N-1 = most recent
-    frame_times = list(reversed(frame_times))
-
-    track_records = _get_track_for_interp(atcf_id)
-
-    def _worker(item):
-        i, target_dt = item
-        interp_lat, interp_lon = center_lat, center_lon
-        if track_records:
-            ipos = _interpolate_track_position(track_records, target_dt)
-            if ipos:
-                interp_lat, interp_lon = ipos
-        try:
-            return (i, _fetch_one_raw_tb_for_bundle(
-                atcf_upper, storm, target_dt, radius_deg, interp_lat, interp_lon,
-            ))
-        except Exception as ex:
-            return (i, {"_error": str(ex)})
-
-    # Cap workers at 4 — beyond that S3 throughput plateaus and the
-    # NOAA-Open-Data anonymous endpoint starts returning sporadic 429s.
-    # (The global _raw_fetch_semaphore is the real OOM guard; this just
-    # avoids spawning threads that would only block on it.)
-    indexed = list(enumerate(frame_times))
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(_worker, indexed))
-    results.sort(key=lambda r: r[0])
-
-    frame_headers = []
-    payloads: list[bytes] = []
-    offset = 0
-
-    for i, frame in results:
-        target_dt = frame_times[i]
-        iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        if frame is None or (isinstance(frame, dict) and "_error" in frame):
-            frame_headers.append({
-                "index": i,
-                "datetime_utc": iso_dt,
-                "tb_rows": 0,
-                "tb_cols": 0,
-                "byte_offset": offset,
-                "byte_length": 0,
-                "error": (frame or {}).get("_error", "no_data") if frame else "no_data",
-            })
-            continue
-        try:
-            tb_bytes = base64.b64decode(frame["tb_data"])
-        except Exception as ex:
-            frame_headers.append({
-                "index": i, "datetime_utc": iso_dt,
-                "tb_rows": 0, "tb_cols": 0,
-                "byte_offset": offset, "byte_length": 0,
-                "error": f"decode: {ex}",
-            })
-            continue
-        rows = int(frame["tb_rows"])
-        cols = int(frame["tb_cols"])
-        if len(tb_bytes) != rows * cols:
-            frame_headers.append({
-                "index": i, "datetime_utc": iso_dt,
-                "tb_rows": 0, "tb_cols": 0,
-                "byte_offset": offset, "byte_length": 0,
-                "error": "size_mismatch",
-            })
-            continue
-        frame_headers.append({
-            "index": i,
-            "datetime_utc": frame.get("datetime_utc", iso_dt),
-            "satellite": frame.get("satellite", ""),
-            "tb_rows": rows,
-            "tb_cols": cols,
-            "byte_offset": offset,
-            "byte_length": rows * cols,
-            "bounds": frame.get("bounds"),
-            "center_fix": frame.get("center_fix"),
-        })
-        payloads.append(tb_bytes)
-        offset += rows * cols
-
-    header = {
-        "total_frames": len(frame_times),
-        "tb_vmin": _TB_VMIN,
-        "tb_vmax": _TB_VMAX,
-        "lookback_hours": lookback_hours,
-        "interval_min": interval_min,
-        "radius_deg": radius_deg,
-        "frames": frame_headers,
-    }
-    header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
-    body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
-
-    # Write to public GCS + 302-redirect rather than returning the bytes
-    # through Cloud Run. Cloud Run buffers responses and caps them at ~32 MiB
-    # → an empty 500 ("Response size was too large") for large raw-Tb bundles
-    # (and for non-gzip clients). GCS has no such cap and serves gzip natively.
-    # raw-Tb uint8 arrays have strong spatial correlation → gzip shrinks them
-    # 30-50%; store gzipped (gzip_content=True) so the browser decompresses
-    # transparently before r.arrayBuffer() resolves (matches the prewarm raw
-    # bundle). The object lives under a params-keyed on-demand path so a
-    # non-default lookback/radius/interval can't collide with the prewarmed
-    # default-param bundle.
+    # -- Freshness + single-flight guard ------------------------------------
+    # Bundles are built from 10-min-cadence satellite frames, so a bundle
+    # uploaded < _ONDEMAND_302_TTL (~4 min) ago is still current: 302
+    # straight to the existing object instead of re-running the full
+    # N-frame fetch + multi-MB re-upload on every browser call.
     key = _ondemand_bundle_key("raw", atcf_upper, lookback_hours,
                                radius_deg, interval_min)
-    _upload_public_bundle(key, body, gzip_content=True)
-    # no-store on the 302 itself so clients don't pin a stale redirect; the
-    # GCS object carries its own max-age.
-    return RedirectResponse(
-        _public_bundle_url(key),
-        status_code=302,
-        headers={"Cache-Control": "no-store"},
-    )
+    if _ondemand_302_fresh(key):
+        return RedirectResponse(
+            _public_bundle_url(key),
+            status_code=302,
+            headers={"Cache-Control": "no-store"},
+        )
+    # Single-flight: concurrent requests for the same key serialize here;
+    # losers re-check freshness inside and 302 without rebuilding.
+    with _ondemand_302_lock(key):
+        if _ondemand_302_fresh(key):
+            return RedirectResponse(
+                _public_bundle_url(key),
+                status_code=302,
+                headers={"Cache-Control": "no-store"},
+            )
+        center_lat = storm["lat"]
+        center_lon = storm["lon"]
+
+        center_dt = _dt.now(timezone.utc)
+        frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
+        # Match /ir-raw-frame ordering: index 0 = oldest, index N-1 = most recent
+        frame_times = list(reversed(frame_times))
+
+        track_records = _get_track_for_interp(atcf_id)
+
+        def _worker(item):
+            i, target_dt = item
+            interp_lat, interp_lon = center_lat, center_lon
+            if track_records:
+                ipos = _interpolate_track_position(track_records, target_dt)
+                if ipos:
+                    interp_lat, interp_lon = ipos
+            try:
+                return (i, _fetch_one_raw_tb_for_bundle(
+                    atcf_upper, storm, target_dt, radius_deg, interp_lat, interp_lon,
+                ))
+            except Exception as ex:
+                return (i, {"_error": str(ex)})
+
+        # Cap workers at 4 — beyond that S3 throughput plateaus and the
+        # NOAA-Open-Data anonymous endpoint starts returning sporadic 429s.
+        # (The global _raw_fetch_semaphore is the real OOM guard; this just
+        # avoids spawning threads that would only block on it.)
+        indexed = list(enumerate(frame_times))
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(_worker, indexed))
+        results.sort(key=lambda r: r[0])
+
+        frame_headers = []
+        payloads: list[bytes] = []
+        offset = 0
+
+        for i, frame in results:
+            target_dt = frame_times[i]
+            iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            if frame is None or (isinstance(frame, dict) and "_error" in frame):
+                frame_headers.append({
+                    "index": i,
+                    "datetime_utc": iso_dt,
+                    "tb_rows": 0,
+                    "tb_cols": 0,
+                    "byte_offset": offset,
+                    "byte_length": 0,
+                    "error": (frame or {}).get("_error", "no_data") if frame else "no_data",
+                })
+                continue
+            try:
+                tb_bytes = base64.b64decode(frame["tb_data"])
+            except Exception as ex:
+                frame_headers.append({
+                    "index": i, "datetime_utc": iso_dt,
+                    "tb_rows": 0, "tb_cols": 0,
+                    "byte_offset": offset, "byte_length": 0,
+                    "error": f"decode: {ex}",
+                })
+                continue
+            rows = int(frame["tb_rows"])
+            cols = int(frame["tb_cols"])
+            if len(tb_bytes) != rows * cols:
+                frame_headers.append({
+                    "index": i, "datetime_utc": iso_dt,
+                    "tb_rows": 0, "tb_cols": 0,
+                    "byte_offset": offset, "byte_length": 0,
+                    "error": "size_mismatch",
+                })
+                continue
+            frame_headers.append({
+                "index": i,
+                "datetime_utc": frame.get("datetime_utc", iso_dt),
+                "satellite": frame.get("satellite", ""),
+                "tb_rows": rows,
+                "tb_cols": cols,
+                "byte_offset": offset,
+                "byte_length": rows * cols,
+                "bounds": frame.get("bounds"),
+                "center_fix": frame.get("center_fix"),
+            })
+            payloads.append(tb_bytes)
+            offset += rows * cols
+
+        header = {
+            "total_frames": len(frame_times),
+            "tb_vmin": _TB_VMIN,
+            "tb_vmax": _TB_VMAX,
+            "lookback_hours": lookback_hours,
+            "interval_min": interval_min,
+            "radius_deg": radius_deg,
+            "frames": frame_headers,
+        }
+        header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
+        body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
+
+        # Write to public GCS + 302-redirect rather than returning the bytes
+        # through Cloud Run. Cloud Run buffers responses and caps them at ~32 MiB
+        # → an empty 500 ("Response size was too large") for large raw-Tb bundles
+        # (and for non-gzip clients). GCS has no such cap and serves gzip natively.
+        # raw-Tb uint8 arrays have strong spatial correlation → gzip shrinks them
+        # 30-50%; store gzipped (gzip_content=True) so the browser decompresses
+        # transparently before r.arrayBuffer() resolves (matches the prewarm raw
+        # bundle). The object lives under a params-keyed on-demand path so a
+        # non-default lookback/radius/interval can't collide with the prewarmed
+        # default-param bundle.
+        _upload_public_bundle(key, body, gzip_content=True)
+        _ondemand_302_stamp(key)  # success only -- an upload exception skips the stamp
+        # no-store on the 302 itself so clients don't pin a stale redirect; the
+        # GCS object carries its own max-age.
+        return RedirectResponse(
+            _public_bundle_url(key),
+            status_code=302,
+            headers={"Cache-Control": "no-store"},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -5748,102 +5826,119 @@ def get_storm_band_raw_bundle(
         raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
 
     atcf_upper = atcf_id.upper()
-    center_dt = _dt.now(timezone.utc)
-    frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
-    frame_times = list(reversed(frame_times))  # index 0 = oldest, matches band-raw-frame
-
-    def _worker(item):
-        i, target_dt = item
-        try:
-            return (i, _fetch_one_band_raw_for_bundle(band, atcf_id, storm, target_dt, radius_deg))
-        except Exception as ex:
-            return (i, {"_error": str(ex)})
-
-    indexed = list(enumerate(frame_times))
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(_worker, indexed))
-    results.sort(key=lambda r: r[0])
-
-    frame_headers = []
-    payloads: list[bytes] = []
-    offset = 0
-    band_vmin = band_vmax = band_dtype = None
-
-    for i, frame in results:
-        target_dt = frame_times[i]
-        iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        if frame is None or (isinstance(frame, dict) and "_error" in frame):
-            frame_headers.append({
-                "index": i, "datetime_utc": iso_dt,
-                "tb_rows": 0, "tb_cols": 0,
-                "byte_offset": offset, "byte_length": 0,
-                "error": (frame or {}).get("_error", "no_data") if frame else "no_data",
-            })
-            continue
-        try:
-            tb_bytes = base64.b64decode(frame["tb_data"])
-        except Exception as ex:
-            frame_headers.append({
-                "index": i, "datetime_utc": iso_dt,
-                "tb_rows": 0, "tb_cols": 0,
-                "byte_offset": offset, "byte_length": 0,
-                "error": f"decode: {ex}",
-            })
-            continue
-        rows = int(frame["tb_rows"])
-        cols = int(frame["tb_cols"])
-        if len(tb_bytes) != rows * cols:
-            frame_headers.append({
-                "index": i, "datetime_utc": iso_dt,
-                "tb_rows": 0, "tb_cols": 0,
-                "byte_offset": offset, "byte_length": 0,
-                "error": "size_mismatch",
-            })
-            continue
-        if band_vmin is None:
-            band_vmin = frame.get("tb_vmin")
-            band_vmax = frame.get("tb_vmax")
-            band_dtype = frame.get("data_type")
-        frame_headers.append({
-            "index": i,
-            "datetime_utc": frame.get("datetime_utc", iso_dt),
-            "satellite": frame.get("satellite", ""),
-            "tb_rows": rows,
-            "tb_cols": cols,
-            "byte_offset": offset,
-            "byte_length": rows * cols,
-            "bounds": frame.get("bounds"),
-        })
-        payloads.append(tb_bytes)
-        offset += rows * cols
-
-    band_info = BAND_RANGES.get(band, BAND_RANGES[13])
-    header = {
-        "total_frames": len(frame_times),
-        "band": band,
-        "tb_vmin": band_vmin if band_vmin is not None else band_info["vmin"],
-        "tb_vmax": band_vmax if band_vmax is not None else band_info["vmax"],
-        "data_type": band_dtype or "tb",
-        "lookback_hours": lookback_hours,
-        "interval_min": interval_min,
-        "radius_deg": radius_deg,
-        "frames": frame_headers,
-    }
-    header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
-    body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
-
-    # Same rationale as /ir-raw-bundle: write to public GCS + R2 and 302 rather
-    # than streaming the multi-MB body through Cloud Run (which caps responses
-    # ~32 MiB and bills egress). raw uint8 arrays gzip 30-50% (gzip_content=True).
-    # Band-keyed on-demand path so distinct bands/params never collide.
+    # Freshness + single-flight guard -- see /ir-raw-bundle for rationale.
     key = _ondemand_bundle_key("raw-band", atcf_upper, lookback_hours,
                                radius_deg, interval_min, band=band)
-    _upload_public_bundle(key, body, gzip_content=True)
-    return RedirectResponse(
-        _public_bundle_url(key),
-        status_code=302,
-        headers={"Cache-Control": "no-store"},
-    )
+    if _ondemand_302_fresh(key):
+        return RedirectResponse(
+            _public_bundle_url(key),
+            status_code=302,
+            headers={"Cache-Control": "no-store"},
+        )
+    # Single-flight: concurrent requests for the same key serialize here;
+    # losers re-check freshness inside and 302 without rebuilding.
+    with _ondemand_302_lock(key):
+        if _ondemand_302_fresh(key):
+            return RedirectResponse(
+                _public_bundle_url(key),
+                status_code=302,
+                headers={"Cache-Control": "no-store"},
+            )
+        center_dt = _dt.now(timezone.utc)
+        frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
+        frame_times = list(reversed(frame_times))  # index 0 = oldest, matches band-raw-frame
+
+        def _worker(item):
+            i, target_dt = item
+            try:
+                return (i, _fetch_one_band_raw_for_bundle(band, atcf_id, storm, target_dt, radius_deg))
+            except Exception as ex:
+                return (i, {"_error": str(ex)})
+
+        indexed = list(enumerate(frame_times))
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(_worker, indexed))
+        results.sort(key=lambda r: r[0])
+
+        frame_headers = []
+        payloads: list[bytes] = []
+        offset = 0
+        band_vmin = band_vmax = band_dtype = None
+
+        for i, frame in results:
+            target_dt = frame_times[i]
+            iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            if frame is None or (isinstance(frame, dict) and "_error" in frame):
+                frame_headers.append({
+                    "index": i, "datetime_utc": iso_dt,
+                    "tb_rows": 0, "tb_cols": 0,
+                    "byte_offset": offset, "byte_length": 0,
+                    "error": (frame or {}).get("_error", "no_data") if frame else "no_data",
+                })
+                continue
+            try:
+                tb_bytes = base64.b64decode(frame["tb_data"])
+            except Exception as ex:
+                frame_headers.append({
+                    "index": i, "datetime_utc": iso_dt,
+                    "tb_rows": 0, "tb_cols": 0,
+                    "byte_offset": offset, "byte_length": 0,
+                    "error": f"decode: {ex}",
+                })
+                continue
+            rows = int(frame["tb_rows"])
+            cols = int(frame["tb_cols"])
+            if len(tb_bytes) != rows * cols:
+                frame_headers.append({
+                    "index": i, "datetime_utc": iso_dt,
+                    "tb_rows": 0, "tb_cols": 0,
+                    "byte_offset": offset, "byte_length": 0,
+                    "error": "size_mismatch",
+                })
+                continue
+            if band_vmin is None:
+                band_vmin = frame.get("tb_vmin")
+                band_vmax = frame.get("tb_vmax")
+                band_dtype = frame.get("data_type")
+            frame_headers.append({
+                "index": i,
+                "datetime_utc": frame.get("datetime_utc", iso_dt),
+                "satellite": frame.get("satellite", ""),
+                "tb_rows": rows,
+                "tb_cols": cols,
+                "byte_offset": offset,
+                "byte_length": rows * cols,
+                "bounds": frame.get("bounds"),
+            })
+            payloads.append(tb_bytes)
+            offset += rows * cols
+
+        band_info = BAND_RANGES.get(band, BAND_RANGES[13])
+        header = {
+            "total_frames": len(frame_times),
+            "band": band,
+            "tb_vmin": band_vmin if band_vmin is not None else band_info["vmin"],
+            "tb_vmax": band_vmax if band_vmax is not None else band_info["vmax"],
+            "data_type": band_dtype or "tb",
+            "lookback_hours": lookback_hours,
+            "interval_min": interval_min,
+            "radius_deg": radius_deg,
+            "frames": frame_headers,
+        }
+        header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
+        body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
+
+        # Same rationale as /ir-raw-bundle: write to public GCS + R2 and 302 rather
+        # than streaming the multi-MB body through Cloud Run (which caps responses
+        # ~32 MiB and bills egress). raw uint8 arrays gzip 30-50% (gzip_content=True).
+        # Band-keyed on-demand path so distinct bands/params never collide.
+        _upload_public_bundle(key, body, gzip_content=True)
+        _ondemand_302_stamp(key)  # success only -- an upload exception skips the stamp
+        return RedirectResponse(
+            _public_bundle_url(key),
+            status_code=302,
+            headers={"Cache-Control": "no-store"},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -6442,106 +6537,135 @@ def get_storm_band_frames_bundle(
         raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
 
     atcf_upper = atcf_id.upper()
-    center_lat = storm["lat"]
-    center_lon = storm["lon"]
-    half = radius_deg
+    # Freshness + single-flight guard -- see /ir-raw-bundle for rationale.
+    key = _ondemand_bundle_key("band", atcf_upper, lookback_hours,
+                               radius_deg, interval_min, band=band)
+    if _ondemand_302_fresh(key):
+        return RedirectResponse(
+            _public_bundle_url(key),
+            status_code=302,
+            headers={"Cache-Control": "no-store"},
+        )
+    # Single-flight: concurrent requests for the same key serialize here;
+    # losers re-check freshness inside and 302 without rebuilding.
+    with _ondemand_302_lock(key):
+        if _ondemand_302_fresh(key):
+            return RedirectResponse(
+                _public_bundle_url(key),
+                status_code=302,
+                headers={"Cache-Control": "no-store"},
+            )
+        center_lat = storm["lat"]
+        center_lon = storm["lon"]
+        half = radius_deg
 
-    center_dt = _dt.now(timezone.utc)
-    frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
-    frame_times = list(reversed(frame_times))
+        center_dt = _dt.now(timezone.utc)
+        frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
+        frame_times = list(reversed(frame_times))
 
-    latest_dt = frame_times[-1] if frame_times else center_dt
-    s_ilat, s_ilon = _interp_pos_at(atcf_id, latest_dt, center_lat, center_lon)
-    bounds = [
-        [s_ilat - half, s_ilon - half],
-        [s_ilat + half, s_ilon + half],
-    ]
+        latest_dt = frame_times[-1] if frame_times else center_dt
+        s_ilat, s_ilon = _interp_pos_at(atcf_id, latest_dt, center_lat, center_lon)
+        bounds = [
+            [s_ilat - half, s_ilon - half],
+            [s_ilat + half, s_ilon + half],
+        ]
 
-    def _worker(item):
-        i, target_dt = item
-        try:
-            ilat, ilon = _interp_pos_at(
-                atcf_id, target_dt, center_lat, center_lon)
-            # Bound the heavy GCS-miss render under the global raw-fetch
-            # semaphore so a burst of concurrent band bundles can't pile up
-            # unbounded float32 cutouts and OOM-kill the 4 GiB instance (same
-            # failure mode #41 fixed for ir-raw-bundle). _get_or_render_band_jpg
-            # is a bundle-only helper (not shared with the semaphore-holding
-            # single-frame endpoints), so acquiring here cannot double-acquire.
-            # Cache hits inside the helper return fast and release the permit
-            # almost immediately. On overload, return the frame as a graceful
-            # per-frame error so the bundle still completes (byte_length=0).
-            if not _raw_fetch_semaphore.acquire(timeout=60):
-                return (i, None, "", None, False, "overloaded")
+        def _worker(item):
+            i, target_dt = item
             try:
-                jpg, sat = _get_or_render_band_jpg(
-                    atcf_upper, ilat, ilon, target_dt, radius_deg, band,
-                )
-            finally:
-                _raw_fetch_semaphore.release()
-            frame_bounds = [
-                [ilat - half, ilon - half],
-                [ilat + half, ilon + half],
-            ]
-            # Real solar gate for the Vis "nighttime" label: a missing Vis
-            # frame is only genuinely "nighttime" when the sun is actually
-            # down. A daytime gap (upstream Band-2 latency/scan miss) must NOT
-            # be labelled night — that mislabels the SWIR fallback as a night
-            # frame on the client.
-            is_night = (band == VIS_BAND and
-                        _solar_elevation(ilat, ilon, target_dt) < -6)
-            return (i, jpg, sat, frame_bounds, is_night, None)
-        except Exception as ex:
-            return (i, None, "", None, False, str(ex))
+                ilat, ilon = _interp_pos_at(
+                    atcf_id, target_dt, center_lat, center_lon)
+                # Bound the heavy GCS-miss render under the global raw-fetch
+                # semaphore so a burst of concurrent band bundles can't pile up
+                # unbounded float32 cutouts and OOM-kill the 4 GiB instance (same
+                # failure mode #41 fixed for ir-raw-bundle). _get_or_render_band_jpg
+                # is a bundle-only helper (not shared with the semaphore-holding
+                # single-frame endpoints), so acquiring here cannot double-acquire.
+                # Cache hits inside the helper return fast and release the permit
+                # almost immediately. On overload, return the frame as a graceful
+                # per-frame error so the bundle still completes (byte_length=0).
+                if not _raw_fetch_semaphore.acquire(timeout=60):
+                    return (i, None, "", None, False, "overloaded")
+                try:
+                    jpg, sat = _get_or_render_band_jpg(
+                        atcf_upper, ilat, ilon, target_dt, radius_deg, band,
+                    )
+                finally:
+                    _raw_fetch_semaphore.release()
+                frame_bounds = [
+                    [ilat - half, ilon - half],
+                    [ilat + half, ilon + half],
+                ]
+                # Real solar gate for the Vis "nighttime" label: a missing Vis
+                # frame is only genuinely "nighttime" when the sun is actually
+                # down. A daytime gap (upstream Band-2 latency/scan miss) must NOT
+                # be labelled night — that mislabels the SWIR fallback as a night
+                # frame on the client.
+                is_night = (band == VIS_BAND and
+                            _solar_elevation(ilat, ilon, target_dt) < -6)
+                return (i, jpg, sat, frame_bounds, is_night, None)
+            except Exception as ex:
+                return (i, None, "", None, False, str(ex))
 
-    indexed = list(enumerate(frame_times))
-    # 4 workers: the global _raw_fetch_semaphore (cap 3) is the real OOM cap,
-    # so spawning more threads than that just blocks on the permit. Matches
-    # ir-raw-bundle's pool size (#41).
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(_worker, indexed))
-    results.sort(key=lambda r: r[0])
+        indexed = list(enumerate(frame_times))
+        # 4 workers: the global _raw_fetch_semaphore (cap 3) is the real OOM cap,
+        # so spawning more threads than that just blocks on the permit. Matches
+        # ir-raw-bundle's pool size (#41).
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(_worker, indexed))
+        results.sort(key=lambda r: r[0])
 
-    # Screen for anomalous scans (same "pops out and comes back" check the
-    # IR/prebuilt-WV bundles use) and queue any flagged slot for self-heal on
-    # the next prewarm cycle. frame_times is oldest-first, index-aligned.
-    jpgs_by_idx = [None] * len(frame_times)
-    for i, jpg, sat, fbounds, is_night, err in results:
-        if jpg and err is None:
-            jpgs_by_idx[i] = jpg
-    band_anom_idx = _screen_and_queue_anomalies(
-        atcf_upper, frame_times, jpgs_by_idx, label=f"band{band} (on-demand)",
-        band=band)
+        # Screen for anomalous scans (same "pops out and comes back" check the
+        # IR/prebuilt-WV bundles use) and queue any flagged slot for self-heal on
+        # the next prewarm cycle. frame_times is oldest-first, index-aligned.
+        jpgs_by_idx = [None] * len(frame_times)
+        for i, jpg, sat, fbounds, is_night, err in results:
+            if jpg and err is None:
+                jpgs_by_idx[i] = jpg
+        band_anom_idx = _screen_and_queue_anomalies(
+            atcf_upper, frame_times, jpgs_by_idx, label=f"band{band} (on-demand)",
+            band=band)
 
-    frame_headers = []
-    payloads: list[bytes] = []
-    offset = 0
-    summary_sat = ""
+        frame_headers = []
+        payloads: list[bytes] = []
+        offset = 0
+        summary_sat = ""
 
-    for i, jpg, sat, fbounds, is_night, err in results:
-        target_dt = frame_times[i]
-        iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        # On-demand bounds are already a fresh, consistent interpolation
-        # (no render-once manifest here), so the recenter target is just the
-        # bounds center — emitted so the frontend always finds a `recenter`
-        # field regardless of which build path served the bundle.
-        rc = ([round((fbounds[0][0] + fbounds[1][0]) / 2, 4),
-               round((fbounds[0][1] + fbounds[1][1]) / 2, 4)]
-              if fbounds else None)
-        is_anom = i in band_anom_idx
-        if not jpg or err is not None or is_anom:
-            # Distinguish anomalous scan, nighttime (expected for Vis), errors
-            if is_anom:
-                err_msg = "anomalous_scan"
-            elif err:
-                err_msg = err
-            elif band == VIS_BAND:
-                # Only call it night when the sun is actually down; a daytime
-                # Band-2 gap is "no_data" so the client labels the SWIR
-                # fallback "(SWIR)" not "(SWIR night)".
-                err_msg = "nighttime" if is_night else "no_data"
-            else:
-                err_msg = "no_data"
+        for i, jpg, sat, fbounds, is_night, err in results:
+            target_dt = frame_times[i]
+            iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            # On-demand bounds are already a fresh, consistent interpolation
+            # (no render-once manifest here), so the recenter target is just the
+            # bounds center — emitted so the frontend always finds a `recenter`
+            # field regardless of which build path served the bundle.
+            rc = ([round((fbounds[0][0] + fbounds[1][0]) / 2, 4),
+                   round((fbounds[0][1] + fbounds[1][1]) / 2, 4)]
+                  if fbounds else None)
+            is_anom = i in band_anom_idx
+            if not jpg or err is not None or is_anom:
+                # Distinguish anomalous scan, nighttime (expected for Vis), errors
+                if is_anom:
+                    err_msg = "anomalous_scan"
+                elif err:
+                    err_msg = err
+                elif band == VIS_BAND:
+                    # Only call it night when the sun is actually down; a daytime
+                    # Band-2 gap is "no_data" so the client labels the SWIR
+                    # fallback "(SWIR)" not "(SWIR night)".
+                    err_msg = "nighttime" if is_night else "no_data"
+                else:
+                    err_msg = "no_data"
+                frame_headers.append({
+                    "index": i,
+                    "datetime_utc": iso_dt,
+                    "satellite": sat or "",
+                    "bounds": fbounds,
+                    "recenter": rc,
+                    "byte_offset": offset,
+                    "byte_length": 0,
+                    "error": err_msg,
+                })
+                continue
             frame_headers.append({
                 "index": i,
                 "datetime_utc": iso_dt,
@@ -6549,53 +6673,41 @@ def get_storm_band_frames_bundle(
                 "bounds": fbounds,
                 "recenter": rc,
                 "byte_offset": offset,
-                "byte_length": 0,
-                "error": err_msg,
+                "byte_length": len(jpg),
             })
-            continue
-        frame_headers.append({
-            "index": i,
-            "datetime_utc": iso_dt,
-            "satellite": sat or "",
-            "bounds": fbounds,
-            "recenter": rc,
-            "byte_offset": offset,
-            "byte_length": len(jpg),
-        })
-        payloads.append(jpg)
-        offset += len(jpg)
-        summary_sat = sat or summary_sat
+            payloads.append(jpg)
+            offset += len(jpg)
+            summary_sat = sat or summary_sat
 
-    binfo = BAND_RANGES.get(band, BAND_RANGES[13])
-    header = {
-        "total_frames": len(frame_times),
-        "bounds": bounds,
-        "satellite": summary_sat,
-        "band": band,
-        "data_type": binfo["data_type"],
-        "vmin": binfo["vmin"],
-        "vmax": binfo["vmax"],
-        "lookback_hours": lookback_hours,
-        "interval_min": interval_min,
-        "radius_deg": radius_deg,
-        "media_type": "image/webp",
-        "frames": frame_headers,
-    }
-    header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
-    body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
+        binfo = BAND_RANGES.get(band, BAND_RANGES[13])
+        header = {
+            "total_frames": len(frame_times),
+            "bounds": bounds,
+            "satellite": summary_sat,
+            "band": band,
+            "data_type": binfo["data_type"],
+            "vmin": binfo["vmin"],
+            "vmax": binfo["vmax"],
+            "lookback_hours": lookback_hours,
+            "interval_min": interval_min,
+            "radius_deg": radius_deg,
+            "media_type": "image/webp",
+            "frames": frame_headers,
+        }
+        header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
+        body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
 
-    # Write to public GCS + 302-redirect rather than returning the bytes
-    # through Cloud Run (which buffers + caps responses at ~32 MiB → empty 500
-    # for large bundles). WebP payloads are already codec-compressed, so do
-    # NOT gzip (gzip_content=False) — matches the prewarm band bundle.
-    key = _ondemand_bundle_key("band", atcf_upper, lookback_hours,
-                               radius_deg, interval_min, band=band)
-    _upload_public_bundle(key, body, gzip_content=False)
-    return RedirectResponse(
-        _public_bundle_url(key),
-        status_code=302,
-        headers={"Cache-Control": "no-store"},
-    )
+        # Write to public GCS + 302-redirect rather than returning the bytes
+        # through Cloud Run (which buffers + caps responses at ~32 MiB → empty 500
+        # for large bundles). WebP payloads are already codec-compressed, so do
+        # NOT gzip (gzip_content=False) — matches the prewarm band bundle.
+        _upload_public_bundle(key, body, gzip_content=False)
+        _ondemand_302_stamp(key)  # success only -- an upload exception skips the stamp
+        return RedirectResponse(
+            _public_bundle_url(key),
+            status_code=302,
+            headers={"Cache-Control": "no-store"},
+        )
 
 
 @router.get("/storm/{atcf_id}/ir-frames-meta")
@@ -6962,83 +7074,112 @@ def get_storm_ir_frames_bundle(
         raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
 
     atcf_upper = atcf_id.upper()
-    center_lat = storm["lat"]
-    center_lon = storm["lon"]
-    half = radius_deg
+    # Freshness + single-flight guard -- see /ir-raw-bundle for rationale.
+    key = _ondemand_bundle_key("frames", atcf_upper, lookback_hours,
+                               radius_deg, interval_min)
+    if _ondemand_302_fresh(key):
+        return RedirectResponse(
+            _public_bundle_url(key),
+            status_code=302,
+            headers={"Cache-Control": "no-store"},
+        )
+    # Single-flight: concurrent requests for the same key serialize here;
+    # losers re-check freshness inside and 302 without rebuilding.
+    with _ondemand_302_lock(key):
+        if _ondemand_302_fresh(key):
+            return RedirectResponse(
+                _public_bundle_url(key),
+                status_code=302,
+                headers={"Cache-Control": "no-store"},
+            )
+        center_lat = storm["lat"]
+        center_lon = storm["lon"]
+        half = radius_deg
 
-    center_dt = _dt.now(timezone.utc)
-    frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
-    # Match /ir-frame.jpg ordering: index 0 = oldest, index N-1 = most recent
-    frame_times = list(reversed(frame_times))
+        center_dt = _dt.now(timezone.utc)
+        frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
+        # Match /ir-frame.jpg ordering: index 0 = oldest, index N-1 = most recent
+        frame_times = list(reversed(frame_times))
 
-    # Bundle-level "bounds" reflects the *latest* frame's interpolated
-    # position. Each frame in the JSON header also carries its own bounds
-    # (computed per-frame inside the worker) so storms that move through
-    # the lookback window are placed correctly per-frame on the map.
-    latest_dt = frame_times[-1] if frame_times else center_dt
-    summary_ilat, summary_ilon = _interp_pos_at(
-        atcf_id, latest_dt, center_lat, center_lon)
-    bounds = [
-        [summary_ilat - half, summary_ilon - half],
-        [summary_ilat + half, summary_ilon + half],
-    ]
+        # Bundle-level "bounds" reflects the *latest* frame's interpolated
+        # position. Each frame in the JSON header also carries its own bounds
+        # (computed per-frame inside the worker) so storms that move through
+        # the lookback window are placed correctly per-frame on the map.
+        latest_dt = frame_times[-1] if frame_times else center_dt
+        summary_ilat, summary_ilon = _interp_pos_at(
+            atcf_id, latest_dt, center_lat, center_lon)
+        bounds = [
+            [summary_ilat - half, summary_ilon - half],
+            [summary_ilat + half, summary_ilon + half],
+        ]
 
-    def _worker(item):
-        i, target_dt = item
-        try:
-            ilat, ilon = _interp_pos_at(
-                atcf_id, target_dt, center_lat, center_lon)
-            # Bound the heavy GCS-miss render under the global raw-fetch
-            # semaphore (same OOM guard as #41). _get_or_render_ir_jpg is a
-            # bundle-only helper (single-frame ir endpoints use their own
-            # paths), so acquiring here cannot double-acquire the semaphore.
-            # Cache hits release fast. On overload, surface the frame as a
-            # graceful per-frame error (byte_length=0).
-            if not _raw_fetch_semaphore.acquire(timeout=60):
-                return (i, None, "", None, None, "overloaded")
+        def _worker(item):
+            i, target_dt = item
             try:
-                jpg, sat = _get_or_render_ir_jpg(
-                    atcf_upper, ilat, ilon, target_dt, radius_deg,
-                )
-            finally:
-                _raw_fetch_semaphore.release()
-            # Also pull center_fix from the raw Tb cache so the bundle
-            # header carries it — lets the satellite viewer's follow-storm
-            # toggle recenter accurately from the moment the display bundle
-            # lands, without waiting for the separate raw Tb bundle.
-            dt_str = target_dt.strftime("%Y%m%d%H%M")
-            cached_raw = _gcs_rt_get(atcf_upper, dt_str,
-                                    lat=ilat, lon=ilon, radius_deg=radius_deg)
-            cfix = cached_raw.get("center_fix") if cached_raw else None
-            # Carry per-frame bounds so the JSON header can describe
-            # exactly where this frame's cutout lives.
-            frame_bounds = [
-                [ilat - half, ilon - half],
-                [ilat + half, ilon + half],
-            ]
-            return (i, jpg, sat, frame_bounds, cfix, None)
-        except Exception as ex:
-            return (i, None, "", None, None, str(ex))
+                ilat, ilon = _interp_pos_at(
+                    atcf_id, target_dt, center_lat, center_lon)
+                # Bound the heavy GCS-miss render under the global raw-fetch
+                # semaphore (same OOM guard as #41). _get_or_render_ir_jpg is a
+                # bundle-only helper (single-frame ir endpoints use their own
+                # paths), so acquiring here cannot double-acquire the semaphore.
+                # Cache hits release fast. On overload, surface the frame as a
+                # graceful per-frame error (byte_length=0).
+                if not _raw_fetch_semaphore.acquire(timeout=60):
+                    return (i, None, "", None, None, "overloaded")
+                try:
+                    jpg, sat = _get_or_render_ir_jpg(
+                        atcf_upper, ilat, ilon, target_dt, radius_deg,
+                    )
+                finally:
+                    _raw_fetch_semaphore.release()
+                # Also pull center_fix from the raw Tb cache so the bundle
+                # header carries it — lets the satellite viewer's follow-storm
+                # toggle recenter accurately from the moment the display bundle
+                # lands, without waiting for the separate raw Tb bundle.
+                dt_str = target_dt.strftime("%Y%m%d%H%M")
+                cached_raw = _gcs_rt_get(atcf_upper, dt_str,
+                                        lat=ilat, lon=ilon, radius_deg=radius_deg)
+                cfix = cached_raw.get("center_fix") if cached_raw else None
+                # Carry per-frame bounds so the JSON header can describe
+                # exactly where this frame's cutout lives.
+                frame_bounds = [
+                    [ilat - half, ilon - half],
+                    [ilat + half, ilon + half],
+                ]
+                return (i, jpg, sat, frame_bounds, cfix, None)
+            except Exception as ex:
+                return (i, None, "", None, None, str(ex))
 
-    indexed = list(enumerate(frame_times))
-    # 4 workers to match ir-raw-bundle (#41); the global _raw_fetch_semaphore
-    # (cap 3) is the real OOM cap, so extra threads would only block on it.
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(_worker, indexed))
-    results.sort(key=lambda r: r[0])
+        indexed = list(enumerate(frame_times))
+        # 4 workers to match ir-raw-bundle (#41); the global _raw_fetch_semaphore
+        # (cap 3) is the real OOM cap, so extra threads would only block on it.
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(_worker, indexed))
+        results.sort(key=lambda r: r[0])
 
-    frame_headers = []
-    payloads: list[bytes] = []
-    offset = 0
-    # Most-recent frame's satellite goes in the top-level summary;
-    # per-frame satellite stays available for storms crossing
-    # GOES-East / GOES-West / Himawari boundaries within the window.
-    summary_sat = ""
+        frame_headers = []
+        payloads: list[bytes] = []
+        offset = 0
+        # Most-recent frame's satellite goes in the top-level summary;
+        # per-frame satellite stays available for storms crossing
+        # GOES-East / GOES-West / Himawari boundaries within the window.
+        summary_sat = ""
 
-    for i, jpg, sat, fbounds, cfix, err in results:
-        target_dt = frame_times[i]
-        iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        if not jpg or err is not None:
+        for i, jpg, sat, fbounds, cfix, err in results:
+            target_dt = frame_times[i]
+            iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            if not jpg or err is not None:
+                frame_headers.append({
+                    "index": i,
+                    "datetime_utc": iso_dt,
+                    "satellite": sat or "",
+                    "bounds": fbounds,
+                    "center_fix": cfix,
+                    "byte_offset": offset,
+                    "byte_length": 0,
+                    "error": err or "no_data",
+                })
+                continue
             frame_headers.append({
                 "index": i,
                 "datetime_utc": iso_dt,
@@ -7046,48 +7187,36 @@ def get_storm_ir_frames_bundle(
                 "bounds": fbounds,
                 "center_fix": cfix,
                 "byte_offset": offset,
-                "byte_length": 0,
-                "error": err or "no_data",
+                "byte_length": len(jpg),
             })
-            continue
-        frame_headers.append({
-            "index": i,
-            "datetime_utc": iso_dt,
-            "satellite": sat or "",
-            "bounds": fbounds,
-            "center_fix": cfix,
-            "byte_offset": offset,
-            "byte_length": len(jpg),
-        })
-        payloads.append(jpg)
-        offset += len(jpg)
-        summary_sat = sat or summary_sat
+            payloads.append(jpg)
+            offset += len(jpg)
+            summary_sat = sat or summary_sat
 
-    header = {
-        "total_frames": len(frame_times),
-        "bounds": bounds,
-        "satellite": summary_sat,
-        "lookback_hours": lookback_hours,
-        "interval_min": interval_min,
-        "radius_deg": radius_deg,
-        "media_type": "image/webp",
-        "frames": frame_headers,
-    }
-    header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
-    body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
+        header = {
+            "total_frames": len(frame_times),
+            "bounds": bounds,
+            "satellite": summary_sat,
+            "lookback_hours": lookback_hours,
+            "interval_min": interval_min,
+            "radius_deg": radius_deg,
+            "media_type": "image/webp",
+            "frames": frame_headers,
+        }
+        header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
+        body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
 
-    # Write to public GCS + 302-redirect rather than returning the bytes
-    # through Cloud Run (which buffers + caps responses at ~32 MiB → empty 500
-    # for large bundles). WebP frames are already codec-compressed → no gzip
-    # (gzip_content=False), matching the prewarm frames bundle.
-    key = _ondemand_bundle_key("frames", atcf_upper, lookback_hours,
-                               radius_deg, interval_min)
-    _upload_public_bundle(key, body, gzip_content=False)
-    return RedirectResponse(
-        _public_bundle_url(key),
-        status_code=302,
-        headers={"Cache-Control": "no-store"},
-    )
+        # Write to public GCS + 302-redirect rather than returning the bytes
+        # through Cloud Run (which buffers + caps responses at ~32 MiB → empty 500
+        # for large bundles). WebP frames are already codec-compressed → no gzip
+        # (gzip_content=False), matching the prewarm frames bundle.
+        _upload_public_bundle(key, body, gzip_content=False)
+        _ondemand_302_stamp(key)  # success only -- an upload exception skips the stamp
+        return RedirectResponse(
+            _public_bundle_url(key),
+            status_code=302,
+            headers={"Cache-Control": "no-store"},
+        )
 
 
 def _write_geotiff_bytes(tb_array: np.ndarray, bounds: list) -> bytes:
