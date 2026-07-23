@@ -20,6 +20,15 @@
 # --------------------------------------------------------------------------
 set -euo pipefail
 
+# RETIRED 2026-06-27: mosaic-v3 (deploy_mosaic_idx_job.sh) is the sole builder.
+# Deploying this job re-creates/resumes the v2 scheduler and silently doubles
+# the heaviest job line (~$45-60/mo). Keep tc-atlas-mosaic-schedule PAUSED.
+if [[ "${FORCE_V2:-0}" != "1" ]]; then
+    echo "ERROR: v2 mosaic is retired (v3 idx is the live builder)."
+    echo "       Set FORCE_V2=1 to deploy anyway (rollback only)."
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "${SCRIPT_DIR}/deploy.env" ]]; then set -a; source "${SCRIPT_DIR}/deploy.env"; set +a; fi
 

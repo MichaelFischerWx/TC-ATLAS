@@ -20816,30 +20816,9 @@
     // Composite the brand watermark onto a Plotly.toImage PNG data-URL and hand
     // back a Blob (cb(blob)). Used so every figure export carries the watermark
     // + logo without per-figure Plotly annotation/image plumbing.
-    /** Flatten a caption to a single clean text line. Callers build captions
-     *  from Plotly title strings that carry layout markup — "<br>" for the
-     *  two-line on-plot title, "<span…>" for the contour note — and the caption
-     *  is drawn as raw raster text (no HTML), so a stray tag would print
-     *  literally (e.g. "…00:52Z<br>Tangential Wind"). Convert <br> to " · ",
-     *  drop other tags, decode the few entities that appear, and collapse any
-     *  resulting separator/space runs. */
-    function _tcPlainCaption(text) {
-        if (!text) return '';
-        return String(text)
-            .replace(/<br\s*\/?>/gi, ' · ')
-            .replace(/<[^>]*>/g, '')
-            .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&')
-            .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
-            .replace(/\s+/g, ' ')
-            .replace(/(?:\s*·\s*){2,}/g, ' · ')   // collapse separator runs (stripped empty tags)
-            .replace(/^\s*·\s*/, '').replace(/\s*·\s*$/, '')
-            .trim();
-    }
-
     /** Draw an attribution caption (e.g. "Invest 95W · 2026-06-28 06Z") in the
      *  bottom-left, mirroring the TC-ATLAS watermark (bottom-right). */
     function _drawExportCaption(ctx, w, h, text) {
-        text = _tcPlainCaption(text);
         if (!text) return;
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var s = Math.max(1, w / 900);
@@ -28179,19 +28158,10 @@
                '<span style="color:#94a3b8;">' + label + '</span><span>' + val + '</span></div>';
     }
 
-    /** NOAA hurricane-hunter recon callsign → familiar tail-number name (mirrors
-     *  realtime_tdr.js _hdobTailDisplay). NHC's feed tokenizes N43RF as "NOAA3",
-     *  but crews and NHC advisories call it "NOAA 43" — show that so a sortie
-     *  isn't mistaken for missing. USAF (AF3xx) tails pass through unchanged. */
-    var _RT_RECON_TAIL_NAMES = { NOAA2: 'NOAA 42', NOAA3: 'NOAA 43', NOAA9: 'NOAA 49' };
-    function _rtReconTailName(tail) {
-        return (tail && _RT_RECON_TAIL_NAMES[String(tail).toUpperCase()]) || tail || '';
-    }
-
     function _rtReconBarbPopup(ob, tail, latlng, map) {
         var html = '<div class="ir-popup" style="font-size:11px;min-width:170px;">' +
             '<div style="font-weight:700;color:#22d3ee;margin-bottom:4px;">' +
-            (_rtReconTailName(tail) || 'Aircraft') + ' · flight-level ob</div>' +
+            (tail || 'Aircraft') + ' · flight-level ob</div>' +
             _rtReconRow('Time', _rtFmtTime(ob.t)) +
             _rtReconRow('Position', _rtFmtLatLon(ob.lat, ob.lon)) +
             _rtReconRow('FL wind (30s)', (ob.wdir != null ? ob.wdir + '° / ' : '') +
@@ -28402,7 +28372,7 @@
         _reconSkewTProfiles = profiles;
         var loc = (sonde.lat != null && sonde.lon != null) ? _rtFmtLatLon(sonde.lat, sonde.lon) : '';
         modal.querySelector('.recon-skewt-title').textContent =
-            'Dropsonde · ' + _rtReconTailName(sonde.tail) + (loc ? ' · ' + loc : '') +
+            'Dropsonde · ' + (sonde.tail || '') + (loc ? ' · ' + loc : '') +
             (sonde.t ? ' · ' + _rtFmtTime(sonde.t) : '');
         if (!profiles || typeof renderSkewT !== 'function') {
             body.innerHTML = '<div style="padding:30px;color:#94a3b8;">No decoded profile available for this dropsonde yet.</div>';
@@ -28463,7 +28433,7 @@
                              (prof.sig_temp && prof.sig_temp.length);
             var sh = '<div class="ir-popup" style="font-size:11px;min-width:170px;">' +
                 '<div style="font-weight:700;color:#fbbf24;margin-bottom:4px;">◇ Dropsonde' +
-                (d.tail ? ' · ' + _rtReconTailName(d.tail) : '') + '</div>' +
+                (d.tail ? ' · ' + d.tail : '') + '</div>' +
                 _rtReconRow('Release', _rtFmtTime(d.t)) +
                 _rtReconRow('Position', _rtFmtLatLon(d.lat, d.lon)) +
                 _rtReconRow('Sfc wind', d.sfc_wind_kt != null ?

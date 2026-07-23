@@ -209,18 +209,13 @@
             if (typeof rtToast === 'function') rtToast('Generate a plot first', 'warn');
             return;
         }
-        // The descriptive title (storm · time · field) is already rendered at
-        // the top of the figure, so the footer caption carries PROVENANCE — the
-        // source analysis/mission id — rather than restating the title. Fall
-        // back to the (flattened) title only when there's no file id, so the
-        // footer is never blank. stampExport flattens any residual markup.
         var caption = '';
         try {
             var title = (gd.layout && gd.layout.title &&
                          (gd.layout.title.text || gd.layout.title)) || '';
             var fn = (_currentFileUrl || '').split('/').pop()
                         .replace(/_xy\.nc(\.gz)?$/i, '');
-            caption = fn || title;
+            caption = [fn, title].filter(Boolean).join('  ·  ');
         } catch (e) {}
         rtSavePlotPNG('rt-plotly-chart', 'TDR_PlanView', caption);
     };
@@ -416,18 +411,6 @@
         return (a && a.sortie) ? (a.tail + '#' + a.sortie) : ((a && a.tail) || '');
     }
 
-    /** NHC's HDOB/IWG1 feed tokenizes the NOAA hurricane-hunter fleet by recon
-     *  callsign — "NOAA3" for N43RF, "NOAA2" for N42RF, "NOAA9" for the G-IV.
-     *  Crews, NHC's own public products, and users know these planes by tail
-     *  number ("NOAA 43"), so a sortie shown as "NOAA3" reads as missing even
-     *  when it's right there. Display the recognizable name; keep the raw tail
-     *  as the id/dedup key (which is what filtering and the backend match on).
-     *  USAF tails (AF3xx) are already the familiar form and pass through. */
-    var _HDOB_TAIL_NAMES = { NOAA2: 'NOAA 42', NOAA3: 'NOAA 43', NOAA9: 'NOAA 49' };
-    function _hdobTailDisplay(tail) {
-        return (tail && _HDOB_TAIL_NAMES[String(tail).toUpperCase()]) || tail || '';
-    }
-
     /** ISO → "DD/HHZ" (e.g. 20/06Z), used to disambiguate a tail's sorties. */
     function _hdobSortieTag(iso) {
         var m = iso && /\d{4}-(\d{2})-(\d{2})T(\d{2})/.exec(iso);
@@ -438,9 +421,9 @@
      *  a tail has more than one sortie in the window (so single flights stay clean). */
     function _hdobAcLabel(a) {
         if (a && a.n_sorties > 1 && a.sortie_start) {
-            return _hdobTailDisplay(a.tail) + ' · ' + _hdobSortieTag(a.sortie_start);
+            return a.tail + ' · ' + _hdobSortieTag(a.sortie_start);
         }
-        return (a && _hdobTailDisplay(a.tail)) || '';
+        return (a && a.tail) || '';
     }
 
     function _reconEnsureHdob() {
@@ -565,7 +548,7 @@
         for (var mo = 0; mo < missionOpts.length; mo++) {
             var mop = document.createElement('option');
             mop.value = 'mission:' + missionOpts[mo].tail;
-            mop.textContent = '✈ ' + _hdobTailDisplay(missionOpts[mo].tail) +
+            mop.textContent = '✈ ' + missionOpts[mo].tail +
                 (missionOpts[mo].label ? ' · ' + missionOpts[mo].label : '') + ' (flight)';
             sel.appendChild(mop);
         }
@@ -881,7 +864,7 @@
             var icon = L.divIcon({ className: 'recon-hdob-aircraft', html: svg,
                                    iconSize: [26, 26], iconAnchor: [13, 13] });
             var mk = L.marker([last.lat, last.lon], { icon: icon, interactive: true, zIndexOffset: 1000 });
-            mk.bindTooltip(_hdobTailDisplay(aircraft[a].tail) + ' · ' + (last.wspd_kt != null ? last.wspd_kt + ' kt FL' : '') +
+            mk.bindTooltip(aircraft[a].tail + ' · ' + (last.wspd_kt != null ? last.wspd_kt + ' kt FL' : '') +
                 ' · ' + (window._ReconKit ? window._ReconKit.fmtTime(last.t) : last.t),
                 { direction: 'top', offset: [0, -10] });
             mk.addTo(map);
@@ -1108,7 +1091,6 @@
         ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
         // Header: title + subtitle (storm/flight + generated time).
         var name = _hdobMissionTail ? (_hdobName || _hdobMissionTail) : (_hdobName || _hdobAtcf || '');
-        name = _hdobTailDisplay(name);   // NOAA3 -> NOAA 43 when the title is a bare tail
         var c = (_hdobData && _hdobData.counts) || {};
         var when = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
         ctx.textBaseline = 'middle';
@@ -1234,7 +1216,7 @@
                     legendgroup: cfg.key, showlegend: firstForVar,
                     line: { color: cfg.color, width: 1.4, dash: cfg.dash || 'solid' },
                     connectgaps: false, yaxis: cfg.axis,
-                    hovertemplate: '%{x|%H:%M:%SZ} · %{y' + (cfg.scale ? ':.2f' : '') + '} ' + cfg.unit + ' · ' + _hdobTailDisplay(ac.tail) + '<extra></extra>'
+                    hovertemplate: '%{x|%H:%M:%SZ} · %{y' + (cfg.scale ? ':.2f' : '') + '} ' + cfg.unit + ' · ' + ac.tail + '<extra></extra>'
                 });
                 firstForVar = false;
             });

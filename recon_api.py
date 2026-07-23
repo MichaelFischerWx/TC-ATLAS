@@ -903,13 +903,6 @@ def _merge_iwg1(aircraft: dict, aircraft_names: dict, aircraft_src: dict,
     live_flids = {f["flid"] for f in flights}
     for stale in [k for k in _iwg1_cache if k not in live_flids]:
         _iwg1_cache.pop(stale, None)
-    # Accumulate every active IWG1 sortie PER TAIL first. _iwg1_active_flights
-    # returns each tail's recent flights (a just-launched sortie AND the prior
-    # one it flew the same day), newest-first — so a plain `aircraft[tail] = …`
-    # per flight lets whichever is processed LAST win, i.e. the OLDEST, silently
-    # dropping the fresh sortie. Merge the sorties into one obs map instead;
-    # _split_sorties later separates them back into selectable flights.
-    iwg1_by_tail: dict = {}     # tail -> {ob_t: ob} across all its active sorties
     for fl in flights:
         try:
             obs, label = _parse_iwg1_text(_iwg1_fetch_text(fl), sim_now, res)
@@ -919,31 +912,10 @@ def _merge_iwg1(aircraft: dict, aircraft_names: dict, aircraft_src: dict,
         if not obs:
             continue
         tail = fl["tail"]
-        acc = iwg1_by_tail.setdefault(tail, {})
-        for ob in obs:
-            acc[ob["t"]] = ob
+        aircraft[tail] = {ob["t"]: ob for ob in obs}    # replace HDOB track
         aircraft_src[tail] = "iwg1"
         if label:
             aircraft_names.setdefault(tail, set()).add(label)
-    # IWG1 overrides the 30-s HDOB track, but only across the time spans it
-    # actually covers: a NOAA sortie older than the IWG1 directory window
-    # (HDOB-only) still survives, while an IWG1-covered sortie isn't polluted by
-    # mixing 30-s HDOB obs into the 1-s feed.
-    for tail, acc in iwg1_by_tail.items():
-        iwg1_track = [acc[k] for k in sorted(acc)]
-        spans = []
-        for st in _split_sorties(iwg1_track):
-            t0 = _parse_ob_iso(st[0].get("t"))
-            t1 = _parse_ob_iso(st[-1].get("t"))
-            if t0 and t1:
-                spans.append((t0, t1))
-        merged = {}
-        for t, ob in aircraft.get(tail, {}).items():   # keep HDOB outside IWG1 spans
-            ot = _parse_ob_iso(t)
-            if ot is None or not any(s0 <= ot <= s1 for s0, s1 in spans):
-                merged[t] = ob
-        merged.update(acc)
-        aircraft[tail] = merged
 
 
 # A tail's obs come every ~30 s while it is airborne, so a multi-hour break in
