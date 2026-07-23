@@ -98,9 +98,9 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260721a">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260723e">
-    <link rel="stylesheet" href="satellite_styles.css?v=20260723e">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260723e">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260723f">
+    <link rel="stylesheet" href="satellite_styles.css?v=20260723f">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260723f">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -2507,9 +2507,9 @@
          scanner so the whole bundle downloads IN PARALLEL. The old
          document.write chain forced a serial download of ~3 MB. -->
     <script defer src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-    <script defer src="lflet_gl.js?v=20260723e"></script>
+    <script defer src="lflet_gl.js?v=20260723f"></script>
     <!-- Single-channel idx mosaic WebGL layer (flag-gated ?ir2a=1). -->
-    <script defer src="mosaic_gl_layer.js?v=20260723e"></script>
+    <script defer src="mosaic_gl_layer.js?v=20260723f"></script>
     <script>
     // Plotly (~1 MB gzipped) is only needed once a chart renders, but a
     // synchronous tag here serializes the whole page: the document.write
@@ -2530,16 +2530,16 @@
     })();
     </script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
-    <script defer src="skewt.js?v=20260723e"></script>
-    <script defer src="tc_mw_layer.js?v=20260723e"></script>
-    <script defer src="realtime_ir.js?v=20260723e"></script>
-    <script defer src="vol3d.js?v=20260723e"></script>
+    <script defer src="skewt.js?v=20260723f"></script>
+    <script defer src="tc_mw_layer.js?v=20260723f"></script>
+    <script defer src="realtime_ir.js?v=20260723f"></script>
+    <script defer src="vol3d.js?v=20260723f"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
          eager for the map-tab recon-overlay sonde skew-Ts. The recon /
          subseasonal / seasonal tab modules (~1 MB combined) lazy-load on first
          tab activation — see _lazyViewMods in the tab controller below. -->
-    <script defer src="satellite.js?v=20260723e"></script>
+    <script defer src="satellite.js?v=20260723f"></script>
 
     <script>
     /* Tab switching between Map, Satellite, Subseasonal, and Seasonal views */
@@ -2608,7 +2608,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260723e';
+        var _LAZY_ASSET_V = '?v=20260723f';
         var _lazyViewMods = {
             recon:       { js: ['realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

@@ -9410,7 +9410,7 @@ def _genesis_cluster_spread(cluster, ensemble_size=None):
       - median_lmi: median of members' lifetime-max Vmax (kt) — a more
         representative "how strong" than the mean-track peak.
       - wind_pcts: per-tau p25/p50/p75 of member Vmax (intensity IQR band).
-      - ellipses: at +72/+120/+240 h, the member-position mean + covariance
+      - ellipses: on a 12-hourly tau grid, the member-position mean + covariance
         (lon/lat degrees: sxx/syy/sxy) so the frontend can draw a spread
         ellipse. (The full view uses 120/240; the 0–120 h view uses 72/120.)
       - win120: 0–120 h-window metrics for the short-term Trends view —
@@ -9424,7 +9424,11 @@ def _genesis_cluster_spread(cluster, ensemble_size=None):
     lmis_120 = []              # per-member max wind within 0–120 h (if forms by 120)
     n_form_120 = 0            # members reaching ≥34 kt by 120 h
     by_tau_wind = {}            # tau -> [wind]
-    pos_at = {72: [], 120: [], 240: []}  # tau -> [(lat, lon)]
+    # 12-hourly tau grid (was just 72/120/240) so the frontend can pick the
+    # ellipse whose VALID TIME matches the current run's +72/+120/+240 h when
+    # overlaying prior cycles — a 24 h-older run's comparable ellipse is its
+    # +144 h, not its +120 h. ~90 B/ellipse, so the denser grid is ~2 KB/cycle.
+    pos_at = {t: [] for t in range(12, 253, 12)}  # tau -> [(lat, lon)]
     for mem in members.values():
         peak = None
         peak_120 = None
@@ -9465,7 +9469,7 @@ def _genesis_cluster_spread(cluster, ensemble_size=None):
                               "p50": _pct(ws, 0.50), "p75": _pct(ws, 0.75)})
 
     ellipses = []
-    for t in (72, 120, 240):
+    for t in sorted(pos_at):
         pos = pos_at.get(t) or []
         n = len(pos)
         if n < 5:

@@ -1997,8 +1997,28 @@
             });
         return p;
     }
+    // Tile-blob LRU. Range-read 206 responses cache poorly in the browser's
+    // HTTP cache, so without this every consumer (the global GL layer, the
+    // lite deck's per-frame idxcolor layers, the viewport prefetch below)
+    // re-pays the range fetch for the same tile. Resolved NON-NULL blobs
+    // only — nulls (absent tile / transient failure) are never pinned.
+    var _v3BlobLRU = new Map();          // url -> Promise<Blob>
+    var _V3_BLOB_LRU_MAX = 600;          // ~600 × ~60 KB ≈ 36 MB ceiling
     // Debug hook (console/diagnostics): window._v3TileBlob(url) → Promise<Blob|null>.
     function _v3TileBlob(url) {
+        var hit = _v3BlobLRU.get(url);
+        if (hit) { _v3BlobLRU.delete(url); _v3BlobLRU.set(url, hit); return hit; }
+        var p = _v3TileBlobUncached(url).then(function (b) {
+            if (!b) _v3BlobLRU.delete(url);
+            return b;
+        }).catch(function () { _v3BlobLRU.delete(url); return null; });
+        _v3BlobLRU.set(url, p);
+        while (_v3BlobLRU.size > _V3_BLOB_LRU_MAX) {
+            _v3BlobLRU.delete(_v3BlobLRU.keys().next().value);
+        }
+        return p;
+    }
+    function _v3TileBlobUncached(url) {
         function plain() {
             return fetch(url).then(function (r) { return r.ok ? r.blob() : null; })
                 .catch(function () { return null; });
@@ -2049,6 +2069,53 @@
         });
     }
     window._v3TileBlob = _v3TileBlob;
+
+    // ── Lite-deck viewport prefetch ────────────────────────────────────────
+    // On the storm card, each animation frame is its own idxcolor tile layer.
+    // Zooming OUT makes every frame need fresh low-zoom tiles, which used to
+    // stream in unordered WHILE the loop played — tiles popping in scattered
+    // across frames ("glitchy"). This warms the current viewport's tiles for
+    // ALL frames through _v3TileBlob (shared LRU with the idxcolor protocol),
+    // so by the time the loop reaches a frame its tiles resolve instantly.
+    var _litePrefetchState = null;   // { product, frames } for the active lite deck
+    var _litePrefetchTimer = null;
+    var _LITE_PREFETCH_ZMAX = 6;     // sector zooms are already smooth; warm z<=6
+    function _lonLatToTileXY(lon, lat, z) {
+        var n = Math.pow(2, z);
+        var x = Math.floor((lon + 180) / 360 * n);
+        var latR = Math.max(-85.05, Math.min(85.05, lat)) * Math.PI / 180;
+        var y = Math.floor((1 - Math.log(Math.tan(latR) + 1 / Math.cos(latR)) / Math.PI) / 2 * n);
+        return [Math.min(n - 1, Math.max(0, x)), Math.min(n - 1, Math.max(0, y))];
+    }
+    function _litePrefetchViewport() {
+        var st = _litePrefetchState;
+        if (!st || !detailMap || !st.frames || !st.frames.length) return;
+        var z; try { z = Math.round(detailMap.getZoom()); } catch (e) { return; }
+        if (z == null || z > _LITE_PREFETCH_ZMAX) return;
+        var b; try { b = detailMap.getBounds(); } catch (e) { return; }
+        if (!b) return;
+        var tl = _lonLatToTileXY(b.getWest(), b.getNorth(), z);
+        var br = _lonLatToTileXY(b.getEast(), b.getSouth(), z);
+        var urls = [];
+        st.frames.forEach(function (ts) {
+            for (var x = tl[0]; x <= br[0]; x++) {
+                for (var y = tl[1]; y <= br[1]; y++) {
+                    urls.push(_ir2aRoot(st.product) + '/' + ts + '/' + z + '/' + x + '/' + y + '.png');
+                }
+            }
+        });
+        if (urls.length > 400) urls.length = 400;   // runaway guard (huge viewport)
+        var i = 0;
+        function worker() {
+            if (i >= urls.length || _litePrefetchState !== st) return;
+            _v3TileBlob(urls[i++]).then(worker, worker);
+        }
+        for (var w = 0; w < 6; w++) worker();
+    }
+    function _litePrefetchSchedule() {
+        if (_litePrefetchTimer) clearTimeout(_litePrefetchTimer);
+        _litePrefetchTimer = setTimeout(_litePrefetchViewport, 250);
+    }
     // Exact claude-ir idx LUT = the backend _IR_LUT the v2 mosaic bakes (idx i → its
     // color; idx 0 = transparent). Using it makes the idx layer's DEFAULT colormap
     // byte-identical to v2 — the frontend IR_COLORMAPS reconstruction (160–330 K) drifts.
@@ -7351,6 +7418,16 @@
             + ' — ' + detailSatName;
         _deferredStormRef = storm;
         _triggerDeferredLoads();
+        // Arm the viewport prefetch for this deck (and re-warm on pan/zoom so
+        // zoomed-out loops don't stream tiles mid-animation — the "glitchy
+        // zoom-out" fix). Hooks registered once per detail map.
+        _litePrefetchState = { product: product, frames: frames.slice() };
+        if (detailMap && !detailMap._litePrefetchHooked) {
+            detailMap._litePrefetchHooked = true;
+            detailMap.on('zoomend', _litePrefetchSchedule);
+            detailMap.on('moveend', _litePrefetchSchedule);
+        }
+        _litePrefetchSchedule();
         console.log('[RT Monitor] Lite mosaic loop: ' + n + ' frames (' + product + ')');
     }
 
@@ -17940,10 +18017,26 @@
             var cycColor = _isCur ? '#f97316'
                 : _genesisPriorColor(priorRank[c.init_time], nPrior, isDark);
             // Member-position spread ellipses: 72/120 h (short view) or
-            // 120/240 h (full view).
+            // 120/240 h (full view) — VALID-TIME aligned. A prior cycle's
+            // comparable ellipse is the one at the same physical time as the
+            // current run's display tau (e.g. a 24 h-older run's +144 h vs
+            // the current +120 h), so pick the available tau closest to
+            // T + init-offset (backend now emits a 12-hourly tau grid;
+            // ≤12 h mismatch tolerated for older cached payloads).
+            var _dtHm = 0;
+            try {
+                _dtHm = (Date.parse(loadedInit) - Date.parse(c.init_time)) / 3.6e6;
+                if (!isFinite(_dtHm)) _dtHm = 0;
+            } catch (e2) { _dtHm = 0; }
             var _ellTaus = _short ? [72, 120] : [120, 240];
-            var ells = ((c.spread && c.spread.ellipses) || []).filter(function (e) {
-                return _ellTaus.indexOf(e.tau) >= 0;
+            var _ellAvail = (c.spread && c.spread.ellipses) || [];
+            var ells = [];
+            _ellTaus.forEach(function (T) {
+                var want = T + _dtHm, best = null;
+                _ellAvail.forEach(function (e) {
+                    if (best === null || Math.abs(e.tau - want) < Math.abs(best.tau - want)) best = e;
+                });
+                if (best && Math.abs(best.tau - want) <= 12 && ells.indexOf(best) < 0) ells.push(best);
             });
             ells.forEach(function (e) {
                 if (e.sxx == null) return;
@@ -18052,11 +18145,21 @@
             var bc = b.init_time === loadedInit ? 1 : 0;
             return ac - bc;
         }).forEach(function (c) {
+            // VALID-TIME alignment: prior cycles are shifted left by their
+            // init-time offset from the current run, so x = hours after the
+            // CURRENT init and equal x = equal physical time across all
+            // curves. Without this, a 24 h-older run's peak plots 24 h "late"
+            // and the overlay reads as a timing trend that isn't there.
+            var _dtH = 0;
+            try {
+                _dtH = (Date.parse(loadedInit) - Date.parse(c.init_time)) / 3.6e6;
+                if (!isFinite(_dtH)) _dtH = 0;
+            } catch (e) { _dtH = 0; }
             var xs = [], ys = [];
             c.mean_track.forEach(function (p) {
                 if (p.tau == null || p.wind == null) return;
-                if (_short && p.tau > 120) return;
-                xs.push(p.tau); ys.push(p.wind);
+                if (_short && (p.tau - _dtH) > 120) return;
+                xs.push(p.tau - _dtH); ys.push(p.wind);
             });
             var lbl = _genesisFmtInit(c.init_time);
             var _isCur = c.init_time === loadedInit;
@@ -18064,10 +18167,10 @@
                 : _genesisPriorColor(priorRank[c.init_time], nPrior, isDark);
             // Per-cycle member-Vmax IQR (P25–P75) band — intensity spread.
             var wp = ((c.spread && c.spread.wind_pcts) || []).filter(function (d) {
-                return !_short || d.tau <= 120;
+                return !_short || (d.tau - _dtH) <= 120;
             });
             if (wp.length >= 2) {
-                var bx = wp.map(function (d) { return d.tau; });
+                var bx = wp.map(function (d) { return d.tau - _dtH; });
                 var blo = wp.map(function (d) { return d.p25; });
                 var bhi = wp.map(function (d) { return d.p75; });
                 var fillC = _isCur ? 'rgba(249,115,22,0.16)'
@@ -18097,7 +18200,8 @@
                 traces.push({
                     type: 'scatter', mode: 'lines', x: xs, y: ys,
                     line: { color: pc, width: 1.8 },
-                    hovertemplate: lbl + '<br>+%{x} h · %{y} kt<extra></extra>',
+                    // x is valid-time aligned: hours after the CURRENT init.
+                    hovertemplate: lbl + '<br>%{x} h after current init · %{y} kt<extra></extra>',
                 });
             }
         });
@@ -18106,7 +18210,7 @@
             margin: { l: 46, r: 12, t: 8, b: 34 },
             paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
             height: 280, showlegend: false,
-            xaxis: { title: { text: 'Forecast hour', font: { size: 10 } },
+            xaxis: { title: { text: 'Hours after current init (valid-time aligned)', font: { size: 10 } },
                      tickfont: { size: 9 }, gridcolor: grid, fixedrange: true,
                      range: _short ? [0, 120] : undefined,
                      rangemode: 'tozero' },
