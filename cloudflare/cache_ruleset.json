@@ -31,7 +31,7 @@
       "action_parameters": { "cache": true, "edge_ttl": { "mode": "respect_origin" } },
       "description": "tc-atlas: CACHE cdn JSON manifests + immutable genesis payloads (.json not in CF default extension set -> was DYNAMIC; mosaic frames.json + rt raw-frames manifest.json send max-age=60; /genesis/*.json are content-addressed per-cycle & immutable/max-age=86400 -> the ~23MB DeepMind spaghetti was re-pulled from R2 origin by EVERY global-map visitor because the edge would not cache it). 2026-07-23: added */index.json — the per-frame pack index (immutable, max-age=604800, references a content-hashed pack file) was DYNAMIC, so after the MOSAIC_PACK=only cutover EVERY viewer's EVERY frame paid an R2 origin RTT for its index; under load some of those fetches stalled, and the frontend's memoized index promise turned one stall into a permanently blank mosaic (fixed client-side the same day with a timeout + retry).",
       "enabled": true,
-      "expression": "(http.host eq \"cdn.tcatlas.org\") and (ends_with(http.request.uri.path, \"/frames.json\") or ends_with(http.request.uri.path, \"/manifest.json\") or ends_with(http.request.uri.path, \"/index.json\") or (starts_with(http.request.uri.path, \"/genesis/\") and ends_with(http.request.uri.path, \".json\")))"
+      "expression": "(http.host eq \"cdn.tcatlas.org\") and (ends_with(http.request.uri.path, \"/frames.json\") or ends_with(http.request.uri.path, \"/manifest.json\") or ends_with(http.request.uri.path, \"/index.json\") or (starts_with(http.request.uri.path, \"/genesis/\") and ends_with(http.request.uri.path, \".json\")) or (starts_with(http.request.uri.path, \"/seasonal/\") and ends_with(http.request.uri.path, \".json\")))"
     }
   ]
 }
