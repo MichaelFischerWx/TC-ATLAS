@@ -14,6 +14,20 @@
       "Filter": {"Prefix": "mosaic-v1/ir/"},
       "Expiration": {"Days": 1},
       "_comment": "Global IR mosaic tiles (build_ir_mosaic.py --r2). Each 10-min timestamp's tiles are immutable; the manifest keeps only the last ~18 (R2_KEEP_FRAMES, ~3 h), so older per-timestamp tile sets orphan quickly. 1 day is well past the hot window. frames.json lives at mosaic-v1/ir/frames.json and is rewritten every cycle, so the prefix-match expiry on it is harmless. Bump the mosaic-v1 prefix to invalidate."
+    },
+    {
+      "ID": "tcatlas-mosaic-v2-retired-1d",
+      "Status": "Enabled",
+      "Filter": {"Prefix": "mosaic-v2/"},
+      "Expiration": {"Days": 1},
+      "_comment": "v2 RGB mosaic is RETIRED (v3 idx sole builder since 2026-06-27; deploy_mosaic_job.sh guarded behind FORCE_V2=1). This drains the leftover tiles, including the orphans from the accidental 2026-07-23 re-enable. If v2 is ever force-redeployed as a rollback it rewrites fresh tiles each cycle, so a 1-day expiry never bites."
+    },
+    {
+      "ID": "tcatlas-mosaic-v3-4d",
+      "Status": "Enabled",
+      "Filter": {"Prefix": "mosaic-v3/"},
+      "Expiration": {"Days": 4},
+      "_comment": "v3 idx mosaic (ir/wv/vis) — the LIVE builder. The job itself prunes its 54-hour rolling archive, so this is only a backstop for orphans (position-revision keys, frames dropped from the manifest, failed prunes). 4 days > the 54 h archive window with margin — must never undercut it or live compare-panel tiles would vanish. frames.json/pack indexes are rewritten every cycle; expiry keys off upload time, so they never expire in practice."
     }
   ]
 }

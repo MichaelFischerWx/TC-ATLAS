@@ -230,7 +230,7 @@ if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; 
         --memory 2Gi \
         --cpu 1 \
         --max-retries 1 \
-        --task-timeout 3600 \
+        --task-timeout 900 \
         --set-env-vars "${ENV_VARS}" \
         --set-secrets "${SECRETS}"
 else
@@ -240,7 +240,7 @@ else
         --memory 2Gi \
         --cpu 1 \
         --max-retries 1 \
-        --task-timeout 3600 \
+        --task-timeout 900 \
         --set-env-vars "${ENV_VARS}" \
         --set-secrets "${SECRETS}"
 fi
