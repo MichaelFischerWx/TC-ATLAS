@@ -684,7 +684,7 @@ def get_overpasses(
         "overpasses": overpasses,
         "count": len(overpasses),
         "window_hours": OVERPASS_WINDOW_HOURS,
-    })
+    }, headers={"Cache-Control": "public, max-age=300, s-maxage=300"})
 
 
 def _live_tcprimed_lookup(atcf_id: str, year: Optional[int] = None) -> List[dict]:
@@ -781,7 +781,7 @@ def get_storm_overpasses(
         "atcf_id": resolved_atcf,
         "overpasses": overpasses,
         "count": len(overpasses),
-    })
+    }, headers={"Cache-Control": "public, max-age=300, s-maxage=300"})
 
 
 @router.get("/data")
@@ -847,7 +847,10 @@ def get_microwave_data(
         import fsspec
         import h5netcdf
         s3_url = f"s3://{TCPRIMED_BUCKET}/{s3_key}"
-        fs = fsspec.filesystem("s3", anon=True)
+        fs = fsspec.filesystem(
+            "s3", anon=True,
+            config_kwargs={"connect_timeout": 5, "read_timeout": 30},
+        )
 
         # Discover the HDF5 group structure. Open the remote file ONCE and
         # recurse the in-memory handle for sub-subgroups too — the previous
@@ -2563,4 +2566,4 @@ async def get_realtime_overpasses(
         "overpasses": matched,
         "count": len(matched),
         "window_hours": OVERPASS_WINDOW_HOURS,
-    })
+    }, headers={"Cache-Control": "public, max-age=300, s-maxage=300"})

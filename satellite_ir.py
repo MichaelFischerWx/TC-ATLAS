@@ -101,7 +101,10 @@ def get_goes_fs():
         s3fs = _get_s3fs()
         if s3fs is None:
             return None
-        _goes_fs = s3fs.S3FileSystem(anon=True)
+        _goes_fs = s3fs.S3FileSystem(
+            anon=True,
+            config_kwargs={"connect_timeout": 5, "read_timeout": 30},
+        )
     return _goes_fs
 
 

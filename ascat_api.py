@@ -52,6 +52,10 @@ _PASS_CACHE_TTL = 900       # 15 minutes
 _WIND_CACHE_MAX = 50        # max cached wind results
 _WIND_CACHE_TTL = 3600      # 1 hour
 
+# Edge/browser caching for successful responses (Cloudflare sits in front of
+# api.tcatlas.org — without this every poll bills the origin)
+_EDGE_CACHE_HEADERS = {"Cache-Control": "public, max-age=300, s-maxage=300"}
+
 # ─── Import active storms cache from ir_monitor_api ──────────────────
 
 _active_storms_ref = None
@@ -400,7 +404,7 @@ def get_ascat_passes(
     with _pass_cache_lock:
         cached = _pass_cache.get(cache_key)
         if cached and cached["expires"] > time.time():
-            return JSONResponse(cached["data"])
+            return JSONResponse(cached["data"], headers=_EDGE_CACHE_HEADERS)
 
     # Query CMR
     passes = _search_cmr_granules(
@@ -427,7 +431,7 @@ def get_ascat_passes(
         for k in stale:
             del _pass_cache[k]
 
-    return JSONResponse(result)
+    return JSONResponse(result, headers=_EDGE_CACHE_HEADERS)
 
 
 @router.get("/winds")
@@ -447,7 +451,7 @@ def get_ascat_winds(
         cached = _wind_cache.get(cache_key)
         if cached and cached["expires"] > time.time():
             _wind_cache.move_to_end(cache_key)
-            return JSONResponse(cached["data"])
+            return JSONResponse(cached["data"], headers=_EDGE_CACHE_HEADERS)
 
     # Fetch and process
     result = _fetch_ascat_winds(data_url, center_lat, center_lon, radius_deg)
@@ -461,4 +465,4 @@ def get_ascat_winds(
         while len(_wind_cache) > _WIND_CACHE_MAX:
             _wind_cache.popitem(last=False)
 
-    return JSONResponse(result)
+    return JSONResponse(result, headers=_EDGE_CACHE_HEADERS)

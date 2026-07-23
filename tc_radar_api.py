@@ -535,7 +535,7 @@ def get_dataset(data_type: str, era: str) -> xr.Dataset:
     if USE_GCS_ZARR and key in GCS_PATHS:
         import gcsfs
         path = GCS_PATHS[key]
-        fs = gcsfs.GCSFileSystem()
+        fs = gcsfs.GCSFileSystem(requests_timeout=30)
         store = _wrap_lru(gcsfs.GCSMap(root=path, gcs=fs, check=False),
                           _TC_RADAR_CHUNK_CACHE_BYTES)
         ds = xr.open_zarr(store, consolidated=True)
@@ -544,7 +544,8 @@ def get_dataset(data_type: str, era: str) -> xr.Dataset:
     if USE_S3:
         import s3fs
         path = S3_PATHS[key]
-        fs   = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION})
+        fs   = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION},
+                                 config_kwargs={"connect_timeout": 5, "read_timeout": 30})
         store = _wrap_lru(s3fs.S3Map(root=path, s3=fs, check=False),
                           _TC_RADAR_CHUNK_CACHE_BYTES)
         ds = xr.open_zarr(store, consolidated=True)
@@ -591,14 +592,15 @@ def get_ir_dataset():
     import zarr
     if USE_GCS_ZARR and IR_GCS_PATH:
         import gcsfs
-        fs = gcsfs.GCSFileSystem()
+        fs = gcsfs.GCSFileSystem(requests_timeout=30)
         store = _wrap_lru(gcsfs.GCSMap(root=IR_GCS_PATH, gcs=fs, check=False),
                           _IR_CHUNK_CACHE_BYTES)
         print(f"Opened MergIR Zarr from GCS (LRU {_IR_CHUNK_CACHE_BYTES//1024//1024} MB): {IR_GCS_PATH}")
         return _open_zarr_group_consolidated(store, "MergIR/GCS")
     if USE_S3 and IR_S3_PATH:
         import s3fs
-        fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION})
+        fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION},
+                               config_kwargs={"connect_timeout": 5, "read_timeout": 30})
         store = _wrap_lru(s3fs.S3Map(root=IR_S3_PATH, s3=fs, check=False),
                           _IR_CHUNK_CACHE_BYTES)
         print(f"Opened MergIR Zarr from S3 (LRU {_IR_CHUNK_CACHE_BYTES//1024//1024} MB): {IR_S3_PATH}")
@@ -612,14 +614,15 @@ def get_era5_dataset():
     import zarr
     if USE_GCS_ZARR and ERA5_GCS_PATH:
         import gcsfs
-        fs = gcsfs.GCSFileSystem()
+        fs = gcsfs.GCSFileSystem(requests_timeout=30)
         store = _wrap_lru(gcsfs.GCSMap(root=ERA5_GCS_PATH, gcs=fs, check=False),
                           _ERA5_CHUNK_CACHE_BYTES)
         print(f"Opened ERA5 Zarr from GCS (LRU {_ERA5_CHUNK_CACHE_BYTES//1024//1024} MB): {ERA5_GCS_PATH}")
         return _open_zarr_group_consolidated(store, "ERA5/GCS")
     if USE_S3 and ERA5_S3_PATH:
         import s3fs
-        fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION})
+        fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION},
+                               config_kwargs={"connect_timeout": 5, "read_timeout": 30})
         store = _wrap_lru(s3fs.S3Map(root=ERA5_S3_PATH, s3=fs, check=False),
                           _ERA5_CHUNK_CACHE_BYTES)
         print(f"Opened ERA5 Zarr from S3 (LRU {_ERA5_CHUNK_CACHE_BYTES//1024//1024} MB): {ERA5_S3_PATH}")
@@ -1184,7 +1187,7 @@ def warmup():
     if USE_GCS_ZARR:
         try:
             import gcsfs
-            fs = gcsfs.GCSFileSystem()
+            fs = gcsfs.GCSFileSystem(requests_timeout=30)
             fs.ls(f"{GCS_ZARR_BUCKET}/{GCS_ZARR_PREFIX}/", detail=False)
             result["gcs_zarr_alive"] = True
         except Exception as e:
@@ -1194,7 +1197,8 @@ def warmup():
         try:
             import s3fs
             fs = s3fs.S3FileSystem(anon=False,
-                                   client_kwargs={"region_name": AWS_REGION})
+                                   client_kwargs={"region_name": AWS_REGION},
+                                   config_kwargs={"connect_timeout": 5, "read_timeout": 30})
             fs.ls(f"{S3_BUCKET}/{S3_PREFIX}/", detail=False)
             result["s3_alive"] = True
         except Exception as e:

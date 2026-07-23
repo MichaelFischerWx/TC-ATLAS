@@ -7785,7 +7785,7 @@ def _load_seasonal_daily_df():
             if not blob.exists():
                 logger.warning("seasonal/indices_daily_full.parquet not found")
                 return None
-            data = blob.download_as_bytes()
+            data = blob.download_as_bytes(timeout=30)
             df_full = pd.read_parquet(io.BytesIO(data))
         except Exception as e:
             logger.warning(f"failed to load indices_daily_full.parquet: {e}")
@@ -7796,7 +7796,7 @@ def _load_seasonal_daily_df():
         try:
             cy_blob = bucket.blob("seasonal/indices_daily_current_year.parquet")
             if cy_blob.exists():
-                cy_data = cy_blob.download_as_bytes()
+                cy_data = cy_blob.download_as_bytes(timeout=30)
                 df_cy = pd.read_parquet(io.BytesIO(cy_data))
                 # Keep only columns the full table has, drop the rest.
                 keep_cols = [c for c in df_cy.columns if c in df_full.columns]
@@ -7946,7 +7946,7 @@ def _load_seasonal_daily_shear_df():
             if not blob.exists():
                 logger.warning("seasonal/indices_daily_shear.parquet not found")
                 return None
-            data = blob.download_as_bytes()
+            data = blob.download_as_bytes(timeout=30)
             df = pd.read_parquet(io.BytesIO(data))
         except Exception as e:
             logger.warning(f"failed to load indices_daily_shear.parquet: {e}")
@@ -8059,7 +8059,7 @@ def _load_seasonal_daily_winds_df():
             if not blob.exists():
                 logger.warning("seasonal/indices_daily_winds.parquet not found")
                 return None
-            data = blob.download_as_bytes()
+            data = blob.download_as_bytes(timeout=30)
             df = pd.read_parquet(io.BytesIO(data))
         except Exception as e:
             logger.warning(f"failed to load indices_daily_winds.parquet: {e}")
@@ -11024,7 +11024,7 @@ def _gcs_get_shear(atcf_id: str, cycle_iso: str,
         blob = bucket.blob(blob_name)
         if not blob.exists():
             return None
-        return json.loads(blob.download_as_text())
+        return json.loads(blob.download_as_text(timeout=15))
     except Exception as e:
         logger.debug(f"GCS shear get failed for {atcf_id} {cycle_iso} {params_key}: {e}")
         return None
@@ -11059,7 +11059,7 @@ def _gcs_get_ocean(atcf_id: str, day_iso: str) -> Optional[dict]:
         blob = bucket.blob(blob_name)
         if not blob.exists():
             return None
-        return json.loads(blob.download_as_text())
+        return json.loads(blob.download_as_text(timeout=15))
     except Exception as e:
         logger.debug(f"GCS ocean get failed for {atcf_id} {day_iso}: {e}")
         return None

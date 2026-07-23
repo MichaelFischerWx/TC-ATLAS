@@ -233,6 +233,30 @@ _rt_ds_inflight_lock = threading.Lock()  # guards the _rt_ds_inflight registry
 _rt_ds_inflight = OrderedDict()          # file_url → threading.Lock (one downloader)
 _RT_DS_INFLIGHT_MAX = 64                 # bound the registry (locks are tiny)
 
+# Endpoint-level single-flight. The memoised endpoints (center_track /
+# dropsondes / tilt_profile) each cache their result for a TTL, but a burst of
+# concurrent COLD requests would all miss the memo and redo the same expensive
+# build (center_track opens every uncached sweep at ~1 s each). A per-key lock
+# collapses the burst: the first requester builds, followers block on the lock
+# and then read the freshly-populated memo (double-checked under the lock).
+_rt_flight_guard = threading.Lock()      # guards the _rt_flight_locks registry
+_rt_flight_locks = OrderedDict()         # (endpoint, *params) → threading.Lock
+_RT_FLIGHT_MAX = 128                     # bound the registry (locks are tiny)
+
+
+def _rt_flight_lock(key) -> threading.Lock:
+    """Shared per-key single-flight lock, created on first use and LRU-bounded."""
+    with _rt_flight_guard:
+        lock = _rt_flight_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _rt_flight_locks[key] = lock
+            while len(_rt_flight_locks) > _RT_FLIGHT_MAX:
+                _rt_flight_locks.popitem(last=False)
+        else:
+            _rt_flight_locks.move_to_end(key)
+        return lock
+
 # GOES IR frame cache: (file_url, frame_index) → rendered result dict
 # Kept small because browsers cache via Cache-Control headers.
 _rt_ir_cache = OrderedDict()
@@ -2259,6 +2283,9 @@ def _build_sonde_response(
     }
 
 
+_SONDE_CACHE_HEADERS = {"Cache-Control": "public, max-age=300, s-maxage=300"}
+
+
 @router.get("/dropsondes")
 def get_dropsondes(
     file_url: str = Query(..., description="URL to the TDR xy.nc(.gz) file"),
@@ -2275,8 +2302,22 @@ def get_dropsondes(
         cached, ts = _rt_sonde_cache[file_url]
         if now - ts < _RT_SONDE_CACHE_TTL:
             _rt_sonde_cache.move_to_end(file_url)
-            return JSONResponse(cached)
+            return JSONResponse(cached, headers=_SONDE_CACHE_HEADERS)
 
+    # Single-flight: concurrent cold requests for the same file share one build.
+    with _rt_flight_lock(("sondes", file_url)):
+        now = time.time()
+        if file_url in _rt_sonde_cache:
+            cached, ts = _rt_sonde_cache[file_url]
+            if now - ts < _RT_SONDE_CACHE_TTL:
+                _rt_sonde_cache.move_to_end(file_url)
+                return JSONResponse(cached, headers=_SONDE_CACHE_HEADERS)
+        result = _build_dropsondes_result(file_url, now)
+    return JSONResponse(result, headers=_SONDE_CACHE_HEADERS)
+
+
+def _build_dropsondes_result(file_url: str, now: float) -> dict:
+    """Build (and memoise) the /dropsondes payload for one TDR file."""
     try:
         ds = _open_rt_dataset(file_url)
     except Exception as e:
@@ -2320,7 +2361,7 @@ def get_dropsondes(
             "message": f"No dropsonde directory found for mission {mission_id}",
         }
         _rt_sonde_cache[file_url] = (result, now)
-        return JSONResponse(result)
+        return result
 
     # Discover dropsonde products across naming conventions. The 2026 AVAPS
     # upgrade dropped the 30-year-uniform ``D…_PQC.csv`` name: NOAA ASPEN now
@@ -2428,7 +2469,7 @@ def get_dropsondes(
         _rt_sonde_cache.popitem(last=False)
         gc.collect()
 
-    return JSONResponse(result)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -4909,6 +4950,7 @@ _rt_ctrk_lock = threading.Lock()
 
 _rt_ctrk_result_mem = OrderedDict()   # (mission, hours, max_files) -> (payload, ts)
 _RT_CTRK_RESULT_TTL = 120             # seconds — short so a new sweep shows up promptly
+_CTRK_CACHE_HEADERS = {"Cache-Control": "public, max-age=45, s-maxage=45"}  # polled live
 
 _KM_PER_DEG = 111.19                  # mean km per degree of latitude
 
@@ -5065,58 +5107,67 @@ def get_center_track(
     cached = _rt_ctrk_result_mem.get(result_key)
     if cached is not None and (now - cached[1]) < _RT_CTRK_RESULT_TTL:
         _rt_ctrk_result_mem.move_to_end(result_key)
-        return JSONResponse(cached[0])
+        return JSONResponse(cached[0], headers=_CTRK_CACHE_HEADERS)
 
-    entries = _mission_file_entries(mission)
-    if not entries:
-        raise HTTPException(status_code=404, detail=f"No analysis files for mission {mission}.")
+    # Single-flight: concurrent cold requests share one walk of the listing
+    # instead of each re-opening every uncached sweep.
+    with _rt_flight_lock(("ctrk",) + result_key):
+        now = time.time()
+        cached = _rt_ctrk_result_mem.get(result_key)
+        if cached is not None and (now - cached[1]) < _RT_CTRK_RESULT_TTL:
+            _rt_ctrk_result_mem.move_to_end(result_key)
+            return JSONResponse(cached[0], headers=_CTRK_CACHE_HEADERS)
 
-    # Optional time window relative to the newest sweep.
-    if hours > 0:
-        newest = max((e["datetime_utc"] for e in entries if e.get("datetime_utc")), default=None)
-        if newest:
-            try:
-                cutoff = (_dt.strptime(newest, "%Y-%m-%dT%H:%M:%SZ")
-                          .replace(tzinfo=timezone.utc) - timedelta(hours=hours))
-                entries = [e for e in entries
-                           if not e.get("datetime_utc")
-                           or _dt.strptime(e["datetime_utc"], "%Y-%m-%dT%H:%M:%SZ")
-                              .replace(tzinfo=timezone.utc) >= cutoff]
-            except ValueError:
-                pass
+        entries = _mission_file_entries(mission)
+        if not entries:
+            raise HTTPException(status_code=404, detail=f"No analysis files for mission {mission}.")
 
-    entries = entries[-int(max_files):]   # most recent N
+        # Optional time window relative to the newest sweep.
+        if hours > 0:
+            newest = max((e["datetime_utc"] for e in entries if e.get("datetime_utc")), default=None)
+            if newest:
+                try:
+                    cutoff = (_dt.strptime(newest, "%Y-%m-%dT%H:%M:%SZ")
+                              .replace(tzinfo=timezone.utc) - timedelta(hours=hours))
+                    entries = [e for e in entries
+                               if not e.get("datetime_utc")
+                               or _dt.strptime(e["datetime_utc"], "%Y-%m-%dT%H:%M:%SZ")
+                                  .replace(tzinfo=timezone.utc) >= cutoff]
+                except ValueError:
+                    pass
 
-    points = []
-    for e in entries:
-        rec = _get_file_centers(e["url"])
-        if rec is None:
-            continue
-        # Skip sweeps where neither level solved — nothing to plot.
-        if rec.get("lat2") is None and rec.get("lat6") is None:
-            continue
-        pt = dict(rec)
-        pt["url"] = e["url"]
-        pt["filename"] = e["filename"]
-        pt["datetime_utc"] = e.get("datetime_utc")
-        if not pt.get("time_label"):
-            pt["time_label"] = e.get("time_label", "")
-        points.append(pt)
+        entries = entries[-int(max_files):]   # most recent N
 
-    storm_name = points[-1].get("storm_name", "") if points else ""
+        points = []
+        for e in entries:
+            rec = _get_file_centers(e["url"])
+            if rec is None:
+                continue
+            # Skip sweeps where neither level solved — nothing to plot.
+            if rec.get("lat2") is None and rec.get("lat6") is None:
+                continue
+            pt = dict(rec)
+            pt["url"] = e["url"]
+            pt["filename"] = e["filename"]
+            pt["datetime_utc"] = e.get("datetime_utc")
+            if not pt.get("time_label"):
+                pt["time_label"] = e.get("time_label", "")
+            points.append(pt)
 
-    payload = {
-        "mission": mission,
-        "storm_name": storm_name,
-        "n_sweeps": len(entries),
-        "n_points": len(points),
-        "points": points,
-        "latest_file_url": entries[-1]["url"] if entries else None,
-    }
-    _rt_ctrk_result_mem[result_key] = (payload, now)
-    while len(_rt_ctrk_result_mem) > 32:
-        _rt_ctrk_result_mem.popitem(last=False)
-    return JSONResponse(payload)
+        storm_name = points[-1].get("storm_name", "") if points else ""
+
+        payload = {
+            "mission": mission,
+            "storm_name": storm_name,
+            "n_sweeps": len(entries),
+            "n_points": len(points),
+            "points": points,
+            "latest_file_url": entries[-1]["url"] if entries else None,
+        }
+        _rt_ctrk_result_mem[result_key] = (payload, now)
+        while len(_rt_ctrk_result_mem) > 32:
+            _rt_ctrk_result_mem.popitem(last=False)
+    return JSONResponse(payload, headers=_CTRK_CACHE_HEADERS)
 
 
 @router.get("/tilt_profile")
@@ -5132,25 +5183,30 @@ def get_rt_tilt_profile(
 
     Uses parallel ThreadPoolExecutor for each height level.
     """
-    try:
-        ds = _open_rt_dataset(file_url)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not open file: {str(e)}")
+    # Single-flight per (file, params): followers block while the first
+    # requester computes, then hit the memo inside _get_or_compute_tilt.
+    flight_key = _tilt_cache_key(file_url, min_height, max_height, ref_height)
+    with _rt_flight_lock(("tilt", flight_key)):
+        try:
+            ds = _open_rt_dataset(file_url)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Could not open file: {str(e)}")
 
-    t0 = time.time()
-    try:
-        tilt = _get_or_compute_tilt(ds, file_url, min_height, max_height, ref_height)
-    except Exception as e:
-        raise HTTPException(status_code=500,
-                            detail=f"Error computing tilt profile: {str(e)}")
-    elapsed = time.time() - t0
+        t0 = time.time()
+        try:
+            tilt = _get_or_compute_tilt(ds, file_url, min_height, max_height, ref_height)
+        except Exception as e:
+            raise HTTPException(status_code=500,
+                                detail=f"Error computing tilt profile: {str(e)}")
+        elapsed = time.time() - t0
 
     if tilt is None:
         raise HTTPException(status_code=400,
                             detail="Could not compute tilt — insufficient data.")
 
     tilt["compute_time_s"] = round(elapsed, 2)
-    return JSONResponse(tilt)
+    return JSONResponse(
+        tilt, headers={"Cache-Control": "public, max-age=300, s-maxage=300"})
 
 
 # ---------------------------------------------------------------------------
