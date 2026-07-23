@@ -80,7 +80,12 @@
     // above on DEFAULT_LOOKBACK_HOURS.
     if (_IS_TOUCH_INIT) DEFAULT_LOOKBACK_HOURS = 4;
     var FETCH_CONCURRENCY = 5;
-    var COASTLINE_URL = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_coastline.geojson';
+    // Vendored simplified coastline (~0.2 MB gzip). Was the full 9.3 MB 10m
+    // file from raw.githubusercontent.com — rate-limited, silently dropped,
+    // and fetched on EVERY page load even though this module only draws it
+    // once the Satellite tab activates. ~2 px worst-case deviation on the
+    // storm-crop canvas — invisible under the cased outline stroke.
+    var COASTLINE_URL = 'assets/coastlines/ne_10m_coastline_simplified.geojson';
 
     // ── State ───────────────────────────────────────────────────
     var storms = [];
@@ -6011,26 +6016,21 @@
         }
 
         // ── Bundle path (Option A — mobile colormap unlock) ────────
-        // Tries the binary /ir-raw-bundle endpoint, with direct-GCS try
-        // first (prewarmed) then API fallback. One request instead of
-        // N — big win on cellular where each /ir-raw-frame call costs
-        // 100-300 ms of TLS+routing.
+        // Tries the binary /ir-raw-bundle endpoint (302 → R2/GCS). One
+        // request instead of N — big win on cellular where each
+        // /ir-raw-frame call costs 100-300 ms of TLS+routing. The old
+        // direct-R2 first-try (bundles/raw/SID.bin) was removed: prewarm
+        // was retired 2026-06 and nothing writes that object anymore, so
+        // every session paid a guaranteed-404 round-trip before the API.
         function _satTryRawTbBundleThen(sid, done) {
             var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(sid)
                 + '/ir-raw-bundle?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG
                 + '&interval_min=' + FRAME_INTERVAL_MIN;
-            var gcsUrl = _SAT_BUNDLE_BASE + '/raw/' + encodeURIComponent(sid.toUpperCase()) + '.bin';
-            fetch(gcsUrl)
+            fetch(apiUrl)
                 .then(function (r) {
-                    if (!r.ok) throw new Error('gcs raw bundle HTTP ' + r.status);
+                    if (!r.ok) throw new Error('api raw bundle HTTP ' + r.status);
                     return r.arrayBuffer();
-                })
-                .catch(function () {
-                    return fetch(apiUrl).then(function (r) {
-                        if (!r.ok) throw new Error('api raw bundle HTTP ' + r.status);
-                        return r.arrayBuffer();
-                    });
                 })
                 .then(function (buf) {
                     if (sid !== currentStormId) { done(false); return; }
@@ -6104,14 +6104,19 @@
          * totals 1.3-4 s of overhead alone. Bundle collapses that to
          * one round-trip.
          */
-        function _startRawTbBackfill() {
+        function _startRawTbBackfill(_retried) {
             if (loadStatusEl) loadStatusEl.textContent = 'Loading Tb data...';
-            // Bundle attempt first; only fall through to the per-frame
-            // waterfall on failure (404 if backend not yet redeployed,
-            // parse error, network).
+            // Bundle attempt first. On failure retry ONCE after a pause —
+            // the first request warms the write-through R2 object, so the
+            // retry is normally a cheap 302 (mirrors _startRightRawBackfill).
+            // Only a failed retry falls to the per-frame waterfall.
             _satTryRawTbBundleThen(stormId, function (ok) {
                 if (ok) return;
-                console.log('[Satellite] Bundle path unavailable; using per-frame waterfall');
+                if (!_retried && stormId === currentStormId) {
+                    setTimeout(function () { _startRawTbBackfill(true); }, 4000);
+                    return;
+                }
+                console.log('[Satellite] Bundle path unavailable after retry; using per-frame waterfall');
                 _startRawTbBackfillLegacy();
             });
         }
@@ -7223,13 +7228,13 @@
         if (!canvasIR) return;
         _satResolveBundleBase();   // fire-and-forget; fallback covers the gap
         bindEvents();
-        loadCoastlines();
         console.log('[Satellite] Viewer ready (waiting for activation)');
     }
 
     function activate() {
         if (_activated) return;
         _activated = true;
+        loadCoastlines();   // deferred from init(): only tab users pay for it
 
         // Speculative fetch: if URL hash has a storm ID, start fetching
         // frame 0 immediately — don't wait for the storm list API.

@@ -371,12 +371,17 @@
 
     function _loadCoastlineOverlay(targetMap) {
         function _addToMap(geojson, m) {
+            // Replace any prior tier's layers (low→hi upgrade swaps in place).
+            if (m._coastLayers) {
+                m._coastLayers.forEach(function (l) { try { m.removeLayer(l); } catch (e) {} });
+            }
+            m._coastLayers = [];
             // Cased coastline: a dark halo underneath a bright cyan line so the
             // outline stays legible over BOTH near-black ocean (where a plain
             // black line vanished) and bright cloud tops / radar echoes. Two
             // thin line layers are cheap on the GL engine. Same pane → the
             // later (bright) layer renders on top of the halo.
-            L.geoJSON(geojson, {
+            m._coastLayers.push(L.geoJSON(geojson, {
                 pane: 'coastlinePane',
                 style: {
                     color: '#000000',
@@ -387,8 +392,8 @@
                     fillOpacity: 0,
                     interactive: false
                 }
-            }).addTo(m);
-            L.geoJSON(geojson, {
+            }).addTo(m));
+            m._coastLayers.push(L.geoJSON(geojson, {
                 pane: 'coastlinePane',
                 style: {
                     color: '#8fd7f7',
@@ -399,26 +404,76 @@
                     fillOpacity: 0,
                     interactive: false
                 }
-            }).addTo(m);
+            }).addTo(m));
         }
-        if (_coastlineGeoJSON) { _addToMap(_coastlineGeoJSON, targetMap); return; }
+        // Two-tier coastline. The old single-tier loader shipped the full 9.3 MB
+        // Natural Earth 10m file (~2.9 MB gzip) to EVERY visitor for a map that
+        // opens at zoom 3, where that detail is invisible. Tier LOW = a 0.06°-
+        // simplified derivative (~0.7 MB raw / ~0.2 MB gzip, generated from the
+        // 10m file) loads first and is indistinguishable below ~z5; tier HIGH =
+        // the original 10m file, fetched only when a map actually zooms in
+        // (z>=5), then swapped in place. Both vendored locally — GitHub's raw
+        // host is rate-limited and would silently drop big fetches.
+        var _COAST_HI_ZOOM = 5;
+        function _maybeUpgrade(m) {
+            if (!m || m._coastTier === 'hi') return;
+            var z; try { z = m.getZoom(); } catch (e) { return; }
+            if (z == null || z < _COAST_HI_ZOOM) return;
+            // Only for maps the user can actually SEE — the storm-card
+            // prefetch builds a hidden detail map at storm zoom, which must
+            // not pull the 9 MB tier during page load. moveend refires when
+            // the card opens (setView/invalidateSize), so a now-visible map
+            // upgrades on its first interaction.
+            try {
+                var c = m.getContainer();
+                if (!c || c.offsetParent === null) return;
+            } catch (e) { return; }
+            _loadCoastlineHi(function (g) {
+                if (m._coastTier === 'hi') return;
+                m._coastTier = 'hi';
+                _addToMap(g, m);
+            });
+        }
+        if (!targetMap._coastZoomHook) {
+            targetMap._coastZoomHook = true;
+            targetMap.on('zoomend', function () { _maybeUpgrade(targetMap); });
+            targetMap.on('moveend', function () { _maybeUpgrade(targetMap); });
+        }
+        if (_coastlineGeoJSON) {
+            _addToMap(_coastlineGeoJSON, targetMap);
+            _maybeUpgrade(targetMap);
+            return;
+        }
         _coastlineQueue.push(targetMap);
         if (_coastlineLoading) return;
         _coastlineLoading = true;
-        // Natural Earth 10m coastlines, vendored locally (assets/coastlines/)
-        // and served from our own origin — GitHub's raw host is rate-limited and
-        // would silently drop this ~9 MB fetch, leaving the map with labels but
-        // no coast outline. Coords trimmed to 5 dp; GitHub Pages gzip-serves it
-        // to ~2.9 MB on the wire.
-        fetch('assets/coastlines/ne_10m_coastline.geojson')
+        fetch('assets/coastlines/ne_10m_coastline_simplified.geojson')
             .then(function (r) { return r.json(); })
             .then(function (geojson) {
                 _coastlineGeoJSON = geojson;
-                _coastlineQueue.forEach(function (m) { _addToMap(geojson, m); });
+                _coastlineQueue.forEach(function (m) { _addToMap(geojson, m); _maybeUpgrade(m); });
                 _coastlineQueue = [];
             })
             .catch(function (e) { console.warn('Coastline load failed:', e); _coastlineQueue = []; })
             .finally(function () { _coastlineLoading = false; });
+    }
+    var _coastlineHiGeoJSON = null;
+    var _coastlineHiLoading = false;
+    var _coastlineHiQueue = [];
+    function _loadCoastlineHi(cb) {
+        if (_coastlineHiGeoJSON) { cb(_coastlineHiGeoJSON); return; }
+        _coastlineHiQueue.push(cb);
+        if (_coastlineHiLoading) return;
+        _coastlineHiLoading = true;
+        fetch('assets/coastlines/ne_10m_coastline.geojson')
+            .then(function (r) { return r.json(); })
+            .then(function (g) {
+                _coastlineHiGeoJSON = g;
+                _coastlineHiQueue.forEach(function (f) { f(g); });
+                _coastlineHiQueue = [];
+            })
+            .catch(function (e) { console.warn('Coastline 10m load failed:', e); _coastlineHiQueue = []; })
+            .finally(function () { _coastlineHiLoading = false; });
     }
 
     // NASA GIBS WMTS tile config for IR imagery
@@ -4107,7 +4162,8 @@
         if (_locatorGeoPromise) return _locatorGeoPromise;
         var jobs = [];
         if (!_coastlineGeoJSON) {
-            jobs.push(fetch('assets/coastlines/ne_10m_coastline.geojson')
+            // Simplified tier is plenty for the tiny locator-inset canvas.
+            jobs.push(fetch('assets/coastlines/ne_10m_coastline_simplified.geojson')
                 .then(function (r) { return r.json(); })
                 .then(function (g) { _coastlineGeoJSON = g; })
                 .catch(function (e) { console.warn('[Obs] coastline load failed', e); }));

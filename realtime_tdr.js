@@ -2031,7 +2031,9 @@
     }
 
     // ── Event: mission selected ──────────────────────────────────
-    document.addEventListener('DOMContentLoaded', function () {
+    // readyState-aware: this module can be LAZY-LOADED on first Recon-tab
+    // click, long after DOMContentLoaded — a bare listener would never fire.
+    var _tdrWireDom = function () {
         var missionSel = document.getElementById('rt-mission-select');
         var fileSel = document.getElementById('rt-file-select');
         var goBtn = document.getElementById('rt-go-btn');
@@ -2051,7 +2053,12 @@
                 goBtn.disabled = !this.value;
             });
         }
-    });
+    };
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', _tdrWireDom);
+    } else {
+        _tdrWireDom();
+    }
 
     // ── Go button: load the file and show viz panel ──────────────
     window.rtExploreFile = function () {

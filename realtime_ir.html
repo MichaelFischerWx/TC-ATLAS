@@ -98,9 +98,9 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260721a">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260723b">
-    <link rel="stylesheet" href="satellite_styles.css?v=20260723b">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260723b">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260723d">
+    <link rel="stylesheet" href="satellite_styles.css?v=20260723d">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260723d">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -2507,9 +2507,9 @@
          scanner so the whole bundle downloads IN PARALLEL. The old
          document.write chain forced a serial download of ~3 MB. -->
     <script defer src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-    <script defer src="lflet_gl.js?v=20260723b"></script>
+    <script defer src="lflet_gl.js?v=20260723d"></script>
     <!-- Single-channel idx mosaic WebGL layer (flag-gated ?ir2a=1). -->
-    <script defer src="mosaic_gl_layer.js?v=20260723b"></script>
+    <script defer src="mosaic_gl_layer.js?v=20260723d"></script>
     <script>
     // Plotly (~1 MB gzipped) is only needed once a chart renders, but a
     // synchronous tag here serializes the whole page: the document.write
@@ -2530,16 +2530,16 @@
     })();
     </script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
-    <script defer src="subseasonal_clock.js?v=20260723b"></script>
-    <script defer src="skewt.js?v=20260723b"></script>
-    <script defer src="tc_mw_layer.js?v=20260723b"></script>
-    <script defer src="realtime_ir.js?v=20260723b"></script>
-    <script defer src="vol3d.js?v=20260723b"></script>
-    <script defer src="realtime_tdr.js?v=20260723b"></script>
-    <script defer src="satellite.js?v=20260723b"></script>
-    <script defer src="realtime_subseasonal.js?v=20260723b"></script>
-    <script defer src="realtime_seasonal.js?v=20260723b"></script>
-    <link rel="stylesheet" href="realtime_seasonal_styles.css?v=20260723b">
+    <script defer src="skewt.js?v=20260723d"></script>
+    <script defer src="tc_mw_layer.js?v=20260723d"></script>
+    <script defer src="realtime_ir.js?v=20260723d"></script>
+    <script defer src="vol3d.js?v=20260723d"></script>
+    <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
+         through its window._satDiag / _satIRColormaps exports. skewt.js stays
+         eager for the map-tab recon-overlay sonde skew-Ts. The recon /
+         subseasonal / seasonal tab modules (~1 MB combined) lazy-load on first
+         tab activation — see _lazyViewMods in the tab controller below. -->
+    <script defer src="satellite.js?v=20260723d"></script>
 
     <script>
     /* Tab switching between Map, Satellite, Subseasonal, and Seasonal views */
@@ -2603,7 +2603,60 @@
             window.switchIRView('satellite');
         };
 
+        /* Lazy tab modules: the recon / subseasonal / seasonal bundles
+           (~1 MB combined) load on FIRST activation of their tab instead of
+           on every page visit. Scripts inject with async=false so multi-file
+           lists execute in order; a failed load is dropped from the memo so
+           the next tab click retries. */
+        var _LAZY_ASSET_V = '?v=20260723d';
+        var _lazyViewMods = {
+            recon:       { js: ['realtime_tdr.js'] },
+            subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
+            seasonal:    { js: ['realtime_seasonal.js'], css: ['realtime_seasonal_styles.css'] }
+        };
+        var _lazyLoads = {};    /* src -> Promise */
+        function _loadOnce(src, isCss) {
+            if (_lazyLoads[src]) return _lazyLoads[src];
+            _lazyLoads[src] = new Promise(function (resolve) {
+                var el;
+                if (isCss) {
+                    el = document.createElement('link');
+                    el.rel = 'stylesheet'; el.href = src + _LAZY_ASSET_V;
+                } else {
+                    el = document.createElement('script');
+                    el.src = src + _LAZY_ASSET_V; el.async = false;
+                }
+                el.onload = function () { resolve(true); };
+                el.onerror = function () {
+                    console.error('[tabs] failed to load ' + src);
+                    delete _lazyLoads[src];
+                    resolve(false);
+                };
+                document.head.appendChild(el);
+            });
+            return _lazyLoads[src];
+        }
+        function _ensureViewModules(view, cb) {
+            var spec = _lazyViewMods[view];
+            if (!spec) { cb(); return; }   /* map/satellite: synchronous */
+            var ps = [];
+            (spec.css || []).forEach(function (h) { ps.push(_loadOnce(h, true)); });
+            (spec.js || []).forEach(function (s) { ps.push(_loadOnce(s, false)); });
+            Promise.all(ps).then(function () { cb(); });
+        }
+        var _pendingView = null;
+
         window.switchIRView = function (view) {
+            /* Load the tab's module(s) first; only the LAST requested view
+               wins if the user clicks around while one is still loading. */
+            _pendingView = view;
+            _ensureViewModules(view, function () {
+                if (_pendingView !== view) return;
+                _switchIRViewNow(view);
+            });
+        };
+
+        var _switchIRViewNow = function (view) {
             /* Satellite tab has multiple sub-modes (card / loop-only /
                diagnostics) selected from hash params, so we always
                re-evaluate it. Other tabs can short-circuit. */
