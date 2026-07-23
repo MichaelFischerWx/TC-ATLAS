@@ -1976,9 +1976,25 @@
     function _packIndexFor(base, product, ts) {
         var k = product + '|' + ts, p = _packIdxCache[k];
         if (p) return p;
-        p = _packIdxCache[k] = fetch(base + '/index.json')
-            .then(function (r) { return r.ok ? r.json() : null; })
-            .catch(function () { return null; });
+        // Timeout + failure retry are load-bearing: this promise is memoized,
+        // so without them ONE stalled index.json fetch (seen live 2026-07-23
+        // when the then-uncached index hammered the R2 origin) hangs every
+        // tile of the frame FOREVER — a silently blank mosaic. On timeout or
+        // error, resolve null (callers fall back / skip) and DROP the memo so
+        // the next animation tick retries with a fresh request.
+        var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        var tid = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 8000) : null;
+        p = _packIdxCache[k] = fetch(base + '/index.json', ctrl ? { signal: ctrl.signal } : {})
+            .then(function (r) {
+                if (tid) clearTimeout(tid);
+                if (!r.ok) { delete _packIdxCache[k]; return null; }
+                return r.json();
+            })
+            .catch(function () {
+                if (tid) clearTimeout(tid);
+                delete _packIdxCache[k];
+                return null;
+            });
         return p;
     }
     // Debug hook (console/diagnostics): window._v3TileBlob(url) → Promise<Blob|null>.
