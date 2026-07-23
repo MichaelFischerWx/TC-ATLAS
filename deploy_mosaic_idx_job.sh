@@ -66,7 +66,7 @@ MOSAIC_JOB_CPU="${MOSAIC_JOB_CPU:-1}"
 # "only" = pack alone (~3 Class-A PUTs/product-frame instead of ~260 — where the
 # ~$10/mo write saving lands). Flip to "only" once the pack-aware frontend is
 # verified live (the manifest's pack_frames gates clients per frame either way).
-MOSAIC_PACK="${MOSAIC_PACK:-dual}"
+MOSAIC_PACK="${MOSAIC_PACK:-only}"
 # Vis hi-res storm sectors: native 0.5-km windows around active storms feed z7
 # sector tiles. HELD OFF (default 0) 2026-07-21: even the decoupled+guarded z7
 # pass can't fit the 19-00 UTC peak at 4Gi (project_mosaic_idx_oom). With
