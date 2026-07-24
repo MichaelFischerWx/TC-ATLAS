@@ -6955,6 +6955,35 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 [data-theme="dark"] .exp-chip span { color: #64748b; }
 .exp-chip.active { background: #2e7dff; border-color: #2e7dff; color: #fff; }
 .exp-chip.active span { color: #dbeafe; }
+.exp-ranges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+.exp-ranges-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #64748b;
+    margin-right: 2px;
+}
+.exp-range {
+    background: transparent;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    color: #475569;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+}
+[data-theme="dark"] .exp-range { border-color: #334155; color: #94a3b8; }
+.exp-range.active {
+    background: #2e7dff1a;
+    border-color: #2e7dff;
+    color: #2e7dff;
+    font-weight: 600;
+}
 .exp-plot { min-height: 320px; }
 .exp-plan-wrap { margin-top: 14px; text-align: center; }
 .exp-plan { max-width: 100%; border-radius: 8px; border: 1px solid #e2e8f0; }

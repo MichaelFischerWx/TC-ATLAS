@@ -22,6 +22,10 @@
     var _storm = null;         // selected ATCF id
     var _series = {};          // atcf -> frames json
     var _plotlyReq = null;
+    var _rangeH = 48;          // visible window, hours; 0 = full lifetime
+                               // (must match a RANGES entry so a button reads active)
+    var RANGES = [{ h: 24, label: '24 h' }, { h: 48, label: '48 h' },
+                  { h: 0,  label: 'Full lifetime' }];
 
     function ensurePlotly() {
         if (typeof Plotly !== 'undefined') return Promise.resolve(true);
@@ -111,7 +115,7 @@
             '    <span class="exp-title">GHOST — ML Structure Diagnostics</span>' +
             '  </div>' +
             '  <div class="exp-meta">Updated ' + genStr +
-            '    · refreshes every 30 min · <a href="#" id="exp-refresh">reload</a></div>' +
+            '    · refreshes hourly · <a href="#" id="exp-refresh">reload</a></div>' +
             '</div>' +
             '<div class="exp-note">Recon-independent estimates from ' +
             'geostationary IR + SHIPS-type environment (GHOST Stage-0 intensity ' +
@@ -131,6 +135,14 @@
                 (s.name || s.atcf) + ' <span>' + s.atcf + '</span></button>';
         });
         html += '</div>' +
+            '<div class="exp-ranges" id="exp-ranges">' +
+            '<span class="exp-ranges-label">Show</span>';
+        RANGES.forEach(function (r) {
+            html += '<button class="exp-range' +
+                (r.h === _rangeH ? ' active' : '') + '" data-h="' + r.h + '">' +
+                r.label + '</button>';
+        });
+        html += '</div>' +
             '<div id="exp-plot" class="exp-plot"></div>' +
             '<div class="exp-plan-wrap"><img id="exp-plan" class="exp-plan" ' +
             'alt="GHOST plan view"></div></div>';
@@ -140,6 +152,17 @@
         chips.forEach(function (c) {
             c.addEventListener('click', function () {
                 selectStorm(c.getAttribute('data-atcf'));
+            });
+        });
+        _root.querySelectorAll('.exp-range').forEach(function (b) {
+            b.addEventListener('click', function () {
+                _rangeH = parseInt(b.getAttribute('data-h'), 10);
+                _root.querySelectorAll('.exp-range').forEach(function (o) {
+                    o.classList.toggle('active', o === b);
+                });
+                /* Data already spans the full lifetime — a range change is a
+                   pure client-side x-axis relayout, no refetch. */
+                if (_storm && _series[_storm]) applyRange(_series[_storm]);
             });
         });
         var want = _storm && storms.some(function (s) { return s.atcf === _storm; })
@@ -176,6 +199,24 @@
             var el = document.getElementById('exp-plot');
             if (el) el.innerHTML =
                 '<div class="exp-empty">Failed to load ' + atcf + ' data.</div>';
+        });
+    }
+
+    /* Visible x-window for the current range button. Autorange y so a zoomed
+       view isn't squashed by the full-lifetime extremes. */
+    function applyRange(j) {
+        var el = document.getElementById('exp-plot');
+        var fr = (j && j.frames) || [];
+        if (!el || !fr.length || typeof Plotly === 'undefined') return;
+        var last = new Date(fr[fr.length - 1].t);
+        var first = new Date(fr[0].t);
+        var lo = _rangeH ? new Date(last.getTime() - _rangeH * 3600e3) : first;
+        if (lo < first) lo = first;
+        var rng = [lo.toISOString(), last.toISOString()];
+        Plotly.relayout(el, {
+            'xaxis.range': rng, 'xaxis2.range': rng, 'xaxis3.range': rng,
+            'yaxis.autorange': true, 'yaxis2.autorange': true,
+            'yaxis3.autorange': true
         });
     }
 
@@ -236,7 +277,7 @@
             responsive: true,
             displaylogo: false,
             modeBarButtonsToRemove: ['toImage', 'lasso2d', 'select2d']
-        });
+        }).then(function () { applyRange(j); });
     }
 
     /* ---------------- entry ---------------- */
