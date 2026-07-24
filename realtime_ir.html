@@ -98,9 +98,9 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260721a">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260723f">
-    <link rel="stylesheet" href="satellite_styles.css?v=20260723f">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260723f">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260724a">
+    <link rel="stylesheet" href="satellite_styles.css?v=20260724a">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260724a">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -142,6 +142,7 @@
             <button class="ir-view-tab" data-view="subseasonal" onclick="window.switchIRView('subseasonal')">Subseasonal</button>
             <button class="ir-view-tab" data-view="seasonal" onclick="window.switchIRView('seasonal')">Seasonal</button>
             <button class="ir-view-tab" data-view="recon" onclick="window.switchIRView('recon')">Recon</button>
+            <button class="ir-view-tab" data-view="experimental" onclick="window.switchIRView('experimental')"><span class="tab-full">Experimental</span><span class="tab-short">Exp</span></button>
         </div>
         <div class="ir-storm-counts">
             <span class="ir-count"><span class="ir-count-val" id="stat-active">&mdash;</span> Active</span>
@@ -2460,6 +2461,10 @@
         </div>
     </section>
 
+    <!-- ── Experimental View (GHOST ML diagnostics; gated) ───── -->
+    <section id="exp-main" class="exp-main" style="display:none;" role="main"
+             aria-label="Experimental ML Diagnostics"></section>
+
     <!-- ── 3D Volume Isosurface Modal (shared via vol3d.js) ───── -->
     <div id="vol3DModal" class="plot-modal-overlay" onclick="close3DModal()">
         <div class="vol3d-modal-box" onclick="event.stopPropagation()">
@@ -2507,9 +2512,9 @@
          scanner so the whole bundle downloads IN PARALLEL. The old
          document.write chain forced a serial download of ~3 MB. -->
     <script defer src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-    <script defer src="lflet_gl.js?v=20260723f"></script>
+    <script defer src="lflet_gl.js?v=20260724a"></script>
     <!-- Single-channel idx mosaic WebGL layer (flag-gated ?ir2a=1). -->
-    <script defer src="mosaic_gl_layer.js?v=20260723f"></script>
+    <script defer src="mosaic_gl_layer.js?v=20260724a"></script>
     <script>
     // Plotly (~1 MB gzipped) is only needed once a chart renders, but a
     // synchronous tag here serializes the whole page: the document.write
@@ -2530,22 +2535,22 @@
     })();
     </script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
-    <script defer src="skewt.js?v=20260723f"></script>
-    <script defer src="tc_mw_layer.js?v=20260723f"></script>
-    <script defer src="realtime_ir.js?v=20260723f"></script>
-    <script defer src="vol3d.js?v=20260723f"></script>
+    <script defer src="skewt.js?v=20260724a"></script>
+    <script defer src="tc_mw_layer.js?v=20260724a"></script>
+    <script defer src="realtime_ir.js?v=20260724a"></script>
+    <script defer src="vol3d.js?v=20260724a"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
          eager for the map-tab recon-overlay sonde skew-Ts. The recon /
          subseasonal / seasonal tab modules (~1 MB combined) lazy-load on first
          tab activation — see _lazyViewMods in the tab controller below. -->
-    <script defer src="satellite.js?v=20260723f"></script>
+    <script defer src="satellite.js?v=20260724a"></script>
 
     <script>
     /* Tab switching between Map, Satellite, Subseasonal, and Seasonal views */
     (function () {
         var currentView = 'map';
-        var VALID_VIEWS = { map: 1, satellite: 1, subseasonal: 1, seasonal: 1, recon: 1 };
+        var VALID_VIEWS = { map: 1, satellite: 1, subseasonal: 1, seasonal: 1, recon: 1, experimental: 1 };
         /* Seed the data-view attribute so CSS hides map-only toggles
            correctly even on first paint (before any user click). */
         document.documentElement.setAttribute('data-view', 'map');
@@ -2608,11 +2613,12 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260723f';
+        var _LAZY_ASSET_V = '?v=20260724a';
         var _lazyViewMods = {
             recon:       { js: ['realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
-            seasonal:    { js: ['realtime_seasonal.js'], css: ['realtime_seasonal_styles.css'] }
+            seasonal:    { js: ['realtime_seasonal.js'], css: ['realtime_seasonal_styles.css'] },
+            experimental:{ js: ['realtime_experimental.js'] }
         };
         var _lazyLoads = {};    /* src -> Promise */
         function _loadOnce(src, isCss) {
@@ -2670,6 +2676,7 @@
             var subMain = document.getElementById('sub-main');
             var seaMain = document.getElementById('seasonal-main');
             var reconMain = document.getElementById('recon-main');
+            var expMain = document.getElementById('exp-main');
             var legend = document.getElementById('ir-legend');
             var tabs = document.querySelectorAll('.ir-view-tab');
 
@@ -2696,6 +2703,7 @@
             if (subMain) subMain.style.display = 'none';
             if (seaMain) seaMain.style.display = 'none';
             if (reconMain) reconMain.style.display = 'none';
+            if (expMain) expMain.style.display = 'none';
             if (legend) legend.style.display = 'none';
             if (view !== 'satellite' && view !== 'map' && irDetail) {
                 irDetail.style.display = 'none';
@@ -2758,6 +2766,9 @@
             } else if (view === 'recon') {
                 if (reconMain) reconMain.style.display = '';
                 if (window.activateReconView) window.activateReconView();
+            } else if (view === 'experimental') {
+                if (expMain) expMain.style.display = 'block';
+                if (window.activateExperimentalView) window.activateExperimentalView();
             } else {
                 irMain.style.display = '';
                 if (legend) legend.style.display = '';
