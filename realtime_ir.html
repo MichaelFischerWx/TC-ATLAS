@@ -142,7 +142,12 @@
             <button class="ir-view-tab" data-view="subseasonal" onclick="window.switchIRView('subseasonal')">Subseasonal</button>
             <button class="ir-view-tab" data-view="seasonal" onclick="window.switchIRView('seasonal')">Seasonal</button>
             <button class="ir-view-tab" data-view="recon" onclick="window.switchIRView('recon')">Recon</button>
-            <button class="ir-view-tab" data-view="experimental" onclick="window.switchIRView('experimental')"><span class="tab-full">Experimental</span><span class="tab-short">Exp</span></button>
+            <!-- The Experimental view (GHOST ML diagnostics) is intentionally
+                 NOT in the tab bar: it is unpublished research, reachable only
+                 by direct URL (realtime_ir.html#experimental) and then gated by
+                 password. Routing lives in VALID_VIEWS / _viewFromHash below,
+                 which is independent of this bar — re-add a button here to
+                 make it public. -->
         </div>
         <div class="ir-storm-counts">
             <span class="ir-count"><span class="ir-count-val" id="stat-active">&mdash;</span> Active</span>
