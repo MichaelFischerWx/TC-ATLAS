@@ -6984,6 +6984,18 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     color: #2e7dff;
     font-weight: 600;
 }
+.exp-ranges-sep {
+    width: 1px;
+    height: 18px;
+    background: #cbd5e1;
+    margin: 0 4px;
+}
+[data-theme="dark"] .exp-ranges-sep { background: #334155; }
+.exp-comp.active {
+    background: #a855f71a;
+    border-color: #a855f7;
+    color: #a855f7;
+}
 .exp-plot { min-height: 320px; }
 .exp-plan-wrap { margin-top: 14px; text-align: center; }
 .exp-plan { max-width: 100%; border-radius: 8px; border: 1px solid #e2e8f0; }

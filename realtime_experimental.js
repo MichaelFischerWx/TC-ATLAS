@@ -22,6 +22,13 @@
     var _storm = null;         // selected ATCF id
     var _series = {};          // atcf -> frames json
     var _plotlyReq = null;
+    var _showComp = false;   // overlay operational comparators
+    var COMP_STYLE = {
+        'D-PRINT':       '#a855f7',
+        'SATCON':        '#ec4899',
+        'ADT':           '#f59e0b',
+        'Dvorak (DVTS)': '#14b8a6'
+    };
     var _rangeH = 48;          // visible window, hours; 0 = full lifetime
                                // (must match a RANGES entry so a button reads active)
     var RANGES = [{ h: 24, label: '24 h' }, { h: 48, label: '48 h' },
@@ -142,7 +149,10 @@
                 (r.h === _rangeH ? ' active' : '') + '" data-h="' + r.h + '">' +
                 r.label + '</button>';
         });
-        html += '</div>' +
+        html += '<span class="exp-ranges-sep"></span>' +
+            '<button class="exp-range exp-comp' + (_showComp ? ' active' : '') +
+            '" id="exp-comp">Operational comparators</button>' +
+            '</div>' +
             '<div id="exp-plot" class="exp-plot"></div>' +
             '<div class="exp-plan-wrap"><img id="exp-plan" class="exp-plan" ' +
             'alt="GHOST plan view"></div></div>';
@@ -154,12 +164,17 @@
                 selectStorm(c.getAttribute('data-atcf'));
             });
         });
-        _root.querySelectorAll('.exp-range').forEach(function (b) {
+        var compBtn = document.getElementById('exp-comp');
+        if (compBtn) compBtn.addEventListener('click', function () {
+            _showComp = !_showComp;
+            compBtn.classList.toggle('active', _showComp);
+            if (_storm && _series[_storm]) drawSeries(_series[_storm]);
+        });
+        _root.querySelectorAll('.exp-range[data-h]').forEach(function (b) {
             b.addEventListener('click', function () {
                 _rangeH = parseInt(b.getAttribute('data-h'), 10);
-                _root.querySelectorAll('.exp-range').forEach(function (o) {
-                    o.classList.toggle('active', o === b);
-                });
+                _root.querySelectorAll('.exp-range[data-h]').forEach(
+                    function (o) { o.classList.toggle('active', o === b); });
                 /* Data already spans the full lifetime — a range change is a
                    pure client-side x-axis relayout, no refetch. */
                 if (_storm && _series[_storm]) applyRange(_series[_storm]);
@@ -273,6 +288,37 @@
         };
         traces[2].xaxis = 'x2'; traces[3].xaxis = 'x2';
         traces[4].xaxis = 'x3'; traces[5].xaxis = 'x3';
+
+        /* Operational satellite estimators, scored against the same target.
+           Sparse + irregular (f-deck fixes are a few per day), so markers
+           with connecting lines rather than a continuous curve. */
+        if (_showComp && j.comparators) {
+            Object.keys(j.comparators).forEach(function (name) {
+                var rows = j.comparators[name] || [];
+                if (!rows.length) return;
+                var col = COMP_STYLE[name] || '#94a3b8';
+                var many = rows.length > 60;
+                traces.push({
+                    x: rows.map(function (r) { return r.t; }),
+                    y: rows.map(function (r) { return r.vmax_kt; }),
+                    name: name, yaxis: 'y', xaxis: 'x',
+                    mode: many ? 'lines' : 'lines+markers',
+                    line: { color: col, width: 1.4 },
+                    marker: { size: 5, color: col },
+                    opacity: 0.9
+                });
+                var hasP = rows.some(function (r) {
+                    return r.pmin_hpa !== undefined && r.pmin_hpa !== null; });
+                if (hasP) traces.push({
+                    x: rows.map(function (r) { return r.t; }),
+                    y: rows.map(function (r) {
+                        return (r.pmin_hpa === undefined) ? null : r.pmin_hpa; }),
+                    name: name + ' Pmin', yaxis: 'y2', xaxis: 'x2',
+                    mode: 'lines', line: { color: col, width: 1.4 },
+                    opacity: 0.9, showlegend: false
+                });
+            });
+        }
         Plotly.react(el, traces, layout, {
             responsive: true,
             displaylogo: false,
