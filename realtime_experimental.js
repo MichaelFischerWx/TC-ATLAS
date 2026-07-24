@@ -283,6 +283,7 @@
     /* ---------------- entry ---------------- */
 
     function loadIndex() {
+        _lastLoad = Date.now();
         fetchJson(GCS_BASE + _prefix + '/index.json').then(function (idx) {
             _index = idx;
             renderShell();
@@ -301,6 +302,26 @@
         }
     }).observe(document.documentElement,
                { attributes: true, attributeFilter: ['data-theme'] });
+
+    /* The producer republishes hourly, but a tab left open would keep showing
+       whatever it fetched on first activation (series are memoized in
+       _series). Re-pull while the tab is actually being looked at, and again
+       whenever it regains visibility after going stale. */
+    var REFRESH_MS = 10 * 60 * 1000;
+    var _lastLoad = 0;
+
+    function refreshIfStale(force) {
+        if (!_root || !_prefix) return;
+        if (document.hidden) return;
+        if (document.documentElement.getAttribute('data-view') !== 'experimental') return;
+        if (!force && Date.now() - _lastLoad < REFRESH_MS) return;
+        _series = {};
+        loadIndex();
+    }
+    setInterval(function () { refreshIfStale(false); }, 60 * 1000);
+    document.addEventListener('visibilitychange', function () {
+        refreshIfStale(false);
+    });
 
     window.activateExperimentalView = function () {
         _root = document.getElementById('exp-main');
