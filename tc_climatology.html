@@ -1029,10 +1029,18 @@
     <!-- Toast -->
     <div id="toast" class="ga-toast" style="display:none;"></div>
 
-    <!-- Scripts -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-    <script src="subseasonal_clock.js?v=20260523b"></script>
-    <script src="tc_climatology.js?v=20260529a"></script>
+    <!-- Scripts.
+         All deferred: `defer` keeps this execution order (leaflet, then Plotly,
+         then the page JS) while leaving the parser unblocked. Unlike the other
+         pages this one DOES need Plotly at load — tc_climatology.js builds six
+         charts up front — so Plotly stays in the initial load here; deferring
+         it just stops it blocking first render. Deferred scripts still run
+         before DOMContentLoaded, so the handlers inside these files fire as
+         they always did. Do NOT add an inline <script> after this block that
+         depends on them — inline scripts run during parsing, before deferred. -->
+    <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script defer src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script defer src="subseasonal_clock.js?v=20260523b"></script>
+    <script defer src="tc_climatology.js?v=20260529a"></script>
 </body>
 </html>

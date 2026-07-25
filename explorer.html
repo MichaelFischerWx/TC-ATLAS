@@ -370,12 +370,21 @@
         }
       })();
     </script>
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-    <!-- ensurePlotly() kept as a no-op safety net so the JS guards don't break -->
+    <!-- All deferred: `defer` preserves this execution order while leaving the
+         parser unblocked. The Leaflet/MapLibre scripts written by the gl-branch
+         document.write() above are parser-inserted and still execute BEFORE any
+         deferred script, so the map engine is ready by the time tc_radar_app
+         runs — same ordering as before, just without blocking first render.
+         Do NOT add an inline <script> after this block that depends on these
+         files: inline scripts run during parsing, i.e. before deferred ones. -->
+    <script defer src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <!-- ensurePlotly() kept as a no-op safety net so the JS guards don't break.
+         Safe with defer: its only callers live in the deferred app scripts
+         below, which run after deferred Plotly has executed. -->
     <script>function ensurePlotly(cb) { if (cb) cb(); }</script>
-    <script src="skewt.js"></script>
-    <script src="vol3d.js?v=20260530a"></script>
-    <script src="tc_radar_app.js?v=20260626d"></script>
-    <script src="realtime_tdr.js?v=20260530a"></script>
+    <script defer src="skewt.js"></script>
+    <script defer src="vol3d.js?v=20260530a"></script>
+    <script defer src="tc_radar_app.js?v=20260626d"></script>
+    <script defer src="realtime_tdr.js?v=20260530a"></script>
 </body>
 </html>
