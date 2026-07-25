@@ -2292,6 +2292,43 @@ html, body { margin: 0; padding: 0; }
     margin-left: 4px;
 }
 
+/* ── Narrow-viewport animation dock ──────────────────────────────
+   On a 375px phone the dock ran off the right edge and took two of its
+   controls with it. Two compounding causes:
+
+   1. .rt-anim-bar sets min-width:360px AND max-width:min(90vw,540px).
+      min-width always wins over max-width, so at 375px the dock resolved
+      to 360 + 20 padding + 2 border = 382px inside a 375px viewport.
+   2. .rt-anim-row is a nowrap flex row whose children need ~460px
+      (4x24 buttons + 110 slider + 102 timestamp + 32 speed + 58 colorbar
+      + gaps), so they overflowed the dock's own box on top of that.
+
+   Net effect: the speed button sat 30px past the viewport and the Tb
+   colorbar 106px past it, and because documentElement.scrollWidth stayed
+   at 375 there was no horizontal scroll to reach them — they were simply
+   unreachable, not merely off-screen.
+
+   Fix: let the dock shrink to the viewport, and let the row wrap so the
+   overflowing controls fall to a second line. The scrubber may shrink;
+   the timestamp keeps its 102px so "07/25 01:20 UTC" can't clip. */
+@media (max-width: 560px) {
+    .rt-anim-bar {
+        /* border-box so the 10px padding + 1px border are INSIDE max-width —
+           with the default content-box the dock still measured 377px wide and,
+           sitting at the Leaflet control's 10px left margin, spilled 12px past
+           a 375px viewport. */
+        box-sizing: border-box;
+        min-width: 0;
+        max-width: calc(100vw - 20px);
+    }
+    .rt-anim-row {
+        flex-wrap: wrap;
+        justify-content: center;
+        row-gap: 6px;
+    }
+    .rt-anim-slider { min-width: 0; flex: 1 1 90px; }
+}
+
 /* ── Contour value labels (env GeoJSON layers) ───────────────── */
 /* L.divIcon HTML labels placed at each contour line's midpoint. They
    inherit DM Sans, stay crisp at any zoom (browser re-renders text),

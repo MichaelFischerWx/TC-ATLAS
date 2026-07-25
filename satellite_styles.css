@@ -112,7 +112,29 @@
 @media (max-width: 640px) {
     .ir-view-tab .tab-full  { display: none; }
     .ir-view-tab .tab-short { display: inline; }
-    .ir-view-tab { padding: 7px 10px; }
+    /* Even the SHORT labels still wrapped at 375px: the five tabs' natural
+       widths (~374px incl. gaps) exceed the bar, so flex shrank each one
+       below its text width and "Storm Sat" broke onto two lines. That grew
+       the button to 50px inside a 35px bar, and .ir-view-tabs'
+       align-items:flex-end pins buttons to the bar's BOTTOM — so the extra
+       height pushed the first line up under the header, where it was
+       clipped mid-glyph.
+
+       Keep every label on one line, stop tabs shrinking below their text,
+       and let the row scroll horizontally when the set is wider than the
+       viewport (scrollbar hidden — it's a touch surface). */
+    .ir-view-tab {
+        padding: 7px 10px;
+        white-space: nowrap;
+        flex: 0 0 auto;
+    }
+    .ir-view-tabs {
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+    }
+    .ir-view-tabs::-webkit-scrollbar { display: none; }
 }
 
 .ir-storm-counts {
