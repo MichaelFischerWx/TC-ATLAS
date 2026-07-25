@@ -1389,6 +1389,13 @@ function _gaIsTouch() {
         && window.matchMedia('(pointer: coarse)').matches
         && window.matchMedia('(hover: none)').matches;
 }
+// The single creation choke point for this page — every chart routes through
+// here, so gating Plotly's arrival here covers all of them. Plotly is now
+// lazy-loaded (see the ensurePlotly() loader in global_archive.html), so this
+// returns a promise that resolves once the library is present AND the plot is
+// drawn. Every existing caller is fire-and-forget, so the added await is
+// invisible to them; anything that needs to touch Plotly.* on this element
+// must chain off the returned promise rather than assume the plot exists.
 function gaNewPlot(el, traces, layout, config) {
     if (_gaIsTouch()) {
         layout = Object.assign({}, layout, { dragmode: false });
@@ -1396,7 +1403,9 @@ function gaNewPlot(el, traces, layout, config) {
             displayModeBar: false, scrollZoom: false
         });
     }
-    return Plotly.newPlot(el, traces, layout, config);
+    return window.ensurePlotly().then(function () {
+        return Plotly.newPlot(el, traces, layout, config);
+    });
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -10412,7 +10421,7 @@ function renderSHIPSChart() {
     });
 
     if (activeVars.length === 0) {
-        Plotly.purge(chartEl);
+        if (window.Plotly) Plotly.purge(chartEl);
         return;
     }
 
@@ -10478,7 +10487,7 @@ function renderSHIPSChart() {
     });
 
     if (traces.length === 0) {
-        Plotly.purge(chartEl);
+        if (window.Plotly) Plotly.purge(chartEl);
         return;
     }
 
@@ -10685,7 +10694,7 @@ function renderTCPrimedEnvChart() {
     });
 
     if (activeVars.length === 0) {
-        Plotly.purge(chartEl);
+        if (window.Plotly) Plotly.purge(chartEl);
         return;
     }
 
@@ -10752,7 +10761,7 @@ function renderTCPrimedEnvChart() {
     });
 
     if (traces.length === 0) {
-        Plotly.purge(chartEl);
+        if (window.Plotly) Plotly.purge(chartEl);
         return;
     }
 
