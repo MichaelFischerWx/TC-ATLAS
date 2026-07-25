@@ -36,7 +36,7 @@
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
 
     <title>TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure</title>
-    <script src="theme.js?v=20260508e"></script>
+    <script src="theme.js?v=20260725a"></script>
     <script src="tc_export.js?v=20260719a"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
@@ -48,8 +48,8 @@
     <link rel="preconnect" href="https://unpkg.com">
     <link rel="preconnect" href="https://cdn.plot.ly">
     <link rel="preconnect" href="https://api.tcatlas.org">
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260721a">
-    <link rel="stylesheet" href="realtime_tdr_styles.css">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260725a">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260725a">
 </head>
 <body>
     <a href="#map-section" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -363,7 +363,7 @@
         if (gl) {
           document.write('<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">');
           document.write('<scr' + 'ipt src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"><\/scr' + 'ipt>');
-          document.write('<scr' + 'ipt src="lflet_gl.js?v=20260626a"><\/scr' + 'ipt>');
+          document.write('<scr' + 'ipt src="lflet_gl.js?v=20260725a"><\/scr' + 'ipt>');
         } else {
           document.write('<scr' + 'ipt src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/scr' + 'ipt>');
           document.write('<scr' + 'ipt src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"><\/scr' + 'ipt>');
@@ -382,8 +382,8 @@
          Safe with defer: its only callers live in the deferred app scripts
          below, which run after deferred Plotly has executed. -->
     <script>function ensurePlotly(cb) { if (cb) cb(); }</script>
-    <script defer src="skewt.js"></script>
-    <script defer src="vol3d.js?v=20260530a"></script>
+    <script defer src="skewt.js?v=20260725a"></script>
+    <script defer src="vol3d.js?v=20260725a"></script>
     <script defer src="tc_radar_app.js?v=20260626d"></script>
     <script defer src="realtime_tdr.js?v=20260530a"></script>
 </body>
