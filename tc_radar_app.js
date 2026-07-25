@@ -7111,6 +7111,14 @@ function _buildTDRtoSIDMapping() {
     });
 }
 
+// Cache-busting version for the shared static IBTrACS JSONs. MUST stay in
+// lockstep with global_archive.js:33, tc_climatology.js:32 and
+// climatology_globe.js:24 — these four pages fetch the SAME ~6.2 MB (gzipped)
+// of storms + track chunks, so a mismatched token means the browser caches two
+// full copies and a user who visits both Explorer and Global Archive downloads
+// all of it twice. This file previously fetched them with no token at all.
+var IBTRACS_DATA_VER = 'v20260408';
+
 // Load IBTrACS storms + tracks (chunked)
 function _loadIBTrACSData(onDone) {
     if (_tracksLoaded || _tracksLoading) { if (onDone) onDone(); return; }
@@ -7120,7 +7128,7 @@ function _loadIBTrACSData(onDone) {
     var stormsReady = false, tracksReady = false;
     function checkDone() { if (stormsReady && tracksReady) { _tracksLoaded = true; _tracksLoading = false; _buildTDRtoSIDMapping(); console.log('IBTrACS loaded: ' + _ibtStorms.length + ' storms, ' + Object.keys(_allTracks).length + ' tracks'); if (onDone) onDone(); } }
 
-    fetch('ibtracs_storms.json')
+    fetch('ibtracs_storms.json?' + IBTRACS_DATA_VER)
         .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(function(data) {
             _ibtStorms = data.storms || [];
@@ -7131,13 +7139,13 @@ function _loadIBTrACSData(onDone) {
         .catch(function(err) { console.warn('Failed to load IBTrACS storms: ' + err.message); _tracksLoading = false; });
 
     // 2) Load chunked tracks
-    fetch('ibtracs_tracks_manifest.json')
+    fetch('ibtracs_tracks_manifest.json?' + IBTRACS_DATA_VER)
         .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(function(manifest) {
             var nChunks = manifest.chunks.length;
             var loaded = 0;
             manifest.chunks.forEach(function(chunkName) {
-                fetch(chunkName)
+                fetch(chunkName + '?' + IBTRACS_DATA_VER)
                     .then(function(r) { return r.json(); })
                     .then(function(chunk) {
                         var keys = Object.keys(chunk);
@@ -7150,7 +7158,7 @@ function _loadIBTrACSData(onDone) {
         })
         .catch(function() {
             // Fallback: single file
-            fetch('ibtracs_tracks.json')
+            fetch('ibtracs_tracks.json?' + IBTRACS_DATA_VER)
                 .then(function(r) { return r.json(); })
                 .then(function(data) { _allTracks = data; tracksReady = true; checkDone(); })
                 .catch(function(err) { console.warn('Failed to load tracks: ' + err.message); _tracksLoading = false; });
