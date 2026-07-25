@@ -23,6 +23,7 @@
     var _series = {};          // atcf -> frames json
     var _plotlyReq = null;
     var _showComp = false;   // overlay operational comparators
+    var _showShap = false;   // model-driver (SHAP) panel
     var COMP_STYLE = {
         'D-PRINT':       '#a855f7',
         'SATCON':        '#ec4899',
@@ -152,8 +153,11 @@
         html += '<span class="exp-ranges-sep"></span>' +
             '<button class="exp-range exp-comp' + (_showComp ? ' active' : '') +
             '" id="exp-comp">Operational comparators</button>' +
+            '<button class="exp-range exp-shapbtn' + (_showShap ? ' active' : '') +
+            '" id="exp-shap-btn">Model drivers</button>' +
             '</div>' +
             '<div id="exp-plot" class="exp-plot"></div>' +
+            '<div id="exp-shap" class="exp-shap" style="display:none;"></div>' +
             '<div class="exp-plan-wrap"><img id="exp-plan" class="exp-plan" ' +
             'alt="GHOST plan view"></div></div>';
         _root.innerHTML = html;
@@ -163,6 +167,14 @@
             c.addEventListener('click', function () {
                 selectStorm(c.getAttribute('data-atcf'));
             });
+        });
+        var shapBtn = document.getElementById('exp-shap-btn');
+        if (shapBtn) shapBtn.addEventListener('click', function () {
+            _showShap = !_showShap;
+            shapBtn.classList.toggle('active', _showShap);
+            var box = document.getElementById('exp-shap');
+            if (box) box.style.display = _showShap ? 'block' : 'none';
+            if (_showShap && _storm && _series[_storm]) drawShap(_series[_storm]);
         });
         var compBtn = document.getElementById('exp-comp');
         if (compBtn) compBtn.addEventListener('click', function () {
@@ -209,7 +221,9 @@
             : fetchJson(GCS_BASE + _prefix + '/ghost_' + atcf + '.json')
                 .then(function (j) { _series[atcf] = j; return j; });
         Promise.all([p, ensurePlotly()]).then(function (res) {
-            if (_storm === atcf) drawSeries(res[0]);
+            if (_storm !== atcf) return;
+            drawSeries(res[0]);
+            if (_showShap) drawShap(res[0]);
         }).catch(function () {
             var el = document.getElementById('exp-plot');
             if (el) el.innerHTML =
@@ -233,6 +247,86 @@
             'yaxis.autorange': true, 'yaxis2.autorange': true,
             'yaxis3.autorange': true
         });
+    }
+
+    /* Exact TreeSHAP from the producer. Explains the RAW Stage-A booster and
+       the base-18 RMW model -- deliberately NOT the published values, which
+       add calibration, Stage-B inertia, a causal kernel and the pinhole
+       blend. The panel says so, so nobody reads it as a decomposition of the
+       number on the chart above. */
+    function drawShap(j) {
+        var box = document.getElementById('exp-shap');
+        if (!box || typeof Plotly === 'undefined') return;
+        var sh = j.shap;
+        if (!sh || !sh.vmax_latest) {
+            box.innerHTML = '<div class="exp-empty">No driver attribution in ' +
+                'this storm\'s file yet (republish to populate).</div>';
+            return;
+        }
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var grid = dark ? '#1e293b' : '#e2e8f0';
+        var fc = dark ? '#cbd5e1' : '#334155';
+        var last = (j.frames || []).slice(-1)[0];
+        box.innerHTML =
+            '<div class="exp-shap-head">Model drivers &mdash; ' +
+            (last ? last.t.slice(0, 16).replace('T', ' ') + 'Z' : '') +
+            '<span class="exp-shap-sub">exact TreeSHAP. Explains the ' +
+            'Stage-A intensity booster (base ' + (sh.vmax_base || 0).toFixed(1) +
+            ' kt) and the base-18 RMW model &mdash; not the calibrated / ' +
+            'kernel-smoothed values plotted above.</span></div>' +
+            '<div class="exp-shap-grid">' +
+            '<div id="exp-shap-v"></div><div id="exp-shap-r"></div></div>' +
+            '<div id="exp-shap-t"></div>';
+
+        function barFig(el, rows, unit, title) {
+            if (!rows || !rows.length) return;
+            var r = rows.slice().reverse();
+            Plotly.react(el, [{
+                type: 'bar', orientation: 'h',
+                x: r.map(function (d) { return d.v; }),
+                y: r.map(function (d) { return d.f; }),
+                marker: { color: r.map(function (d) {
+                    return d.v >= 0 ? '#f43f5e' : '#2e7dff'; }) },
+                hovertemplate: '%{y}: %{x:+.2f}' + unit + '<extra></extra>'
+            }], {
+                title: { text: title, font: { size: 12 } },
+                height: 300, margin: { l: 150, r: 12, t: 30, b: 34 },
+                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+                font: { color: fc, size: 10 },
+                xaxis: { zeroline: true, zerolinecolor: fc, gridcolor: grid,
+                         title: { text: unit, font: { size: 10 } } },
+                yaxis: { automargin: true }
+            }, { displayModeBar: false, responsive: true })
+              .then(function () { Plotly.Plots.resize(el); });
+        }
+        barFig('exp-shap-v', sh.vmax_latest, ' kt', 'Intensity (Stage-A)');
+        barFig('exp-shap-r', sh.rmw_latest, ' %', 'RMW (base-18, % effect)');
+
+        if (sh.groups && j.frames) {
+            var t = j.frames.map(function (f) { return f.t; });
+            var col = { 'IR structure': '#f43f5e',
+                        'Organization / banding': '#a855f7',
+                        'Environment': '#2e7dff',
+                        'Temporal (multi-frame)': '#14b8a6',
+                        'Storm age': '#f59e0b' };
+            var tr = Object.keys(sh.groups).map(function (g) {
+                return { x: t, y: sh.groups[g], name: g, mode: 'lines',
+                         line: { color: col[g] || '#94a3b8', width: 1.8 } };
+            });
+            Plotly.react('exp-shap-t', tr, {
+                title: { text: 'Grouped contribution through the storm\'s life',
+                         font: { size: 12 } },
+                height: 260, margin: { l: 54, r: 12, t: 30, b: 40 },
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: dark ? 'rgba(15,23,42,0.55)' : 'rgba(248,250,252,0.7)',
+                font: { color: fc, size: 10 }, hovermode: 'x unified',
+                legend: { orientation: 'h', y: -0.22, font: { size: 10 } },
+                xaxis: { gridcolor: grid },
+                yaxis: { title: { text: 'kt', font: { size: 10 } },
+                         gridcolor: grid, zeroline: true, zerolinecolor: fc }
+            }, { displayModeBar: false, responsive: true })
+              .then(function () { Plotly.Plots.resize('exp-shap-t'); });
+        }
     }
 
     function drawSeries(j) {
@@ -345,6 +439,7 @@
         if (_storm && _series[_storm] &&
             document.getElementById('exp-plot')) {
             drawSeries(_series[_storm]);
+            if (_showShap) drawShap(_series[_storm]);
         }
     }).observe(document.documentElement,
                { attributes: true, attributeFilter: ['data-theme'] });
