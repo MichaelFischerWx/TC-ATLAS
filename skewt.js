@@ -715,6 +715,20 @@ function renderSkewT(profiles, divId) {
         showlegend: true,
         shapes: barbShapes,
     };
-    Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
+    // Routed through ensurePlotly() when the host page provides one. This file is
+    // shared by three pages that load Plotly differently: global_archive.html
+    // lazy-injects it (so it may not exist yet when a user opens a Skew-T from a
+    // dropsonde marker), while explorer.html and realtime_ir.html load it eagerly
+    // and expose no such loader. The fallback keeps those two behaving exactly as
+    // before rather than assuming a hook that isn't there.
+    var go = function () {
+        Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
+    };
+    // Belt and braces: only chain if the hook actually returned a thenable, so a
+    // host page shipping an older void-returning ensurePlotly() stub degrades to
+    // a direct call instead of throwing "Cannot read properties of undefined".
+    var pending = (typeof window.ensurePlotly === 'function') ? window.ensurePlotly() : null;
+    if (pending && typeof pending.then === 'function') pending.then(go);
+    else go();
 }
 

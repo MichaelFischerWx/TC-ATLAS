@@ -7569,12 +7569,16 @@ function closePlotModal() {
     document.getElementById('plotModal').classList.remove('active');
     document.getElementById('plotModalBox').classList.remove('split');
     document.body.style.overflow = '';
-    Plotly.purge('plotly-fullscreen');
-    var csFull = document.getElementById('cs-fullscreen'); if (csFull) { Plotly.purge('cs-fullscreen'); csFull.style.display='none'; }
+    // Defensive: this teardown is reachable from a modal-close path that doesn't
+    // itself prove a chart was ever drawn. Plotly is eager on this page today, so
+    // these guards are currently no-ops — they exist so that closing the modal
+    // can't throw if Plotly is ever made lazy here (see the note in explorer.html).
+    if (window.Plotly) Plotly.purge('plotly-fullscreen');
+    var csFull = document.getElementById('cs-fullscreen'); if (csFull) { if (window.Plotly) Plotly.purge('cs-fullscreen'); csFull.style.display='none'; }
     document.getElementById('cs-full-divider').style.display='none';
-    var azFull = document.getElementById('az-fullscreen'); if (azFull) { Plotly.purge('az-fullscreen'); azFull.style.display='none'; }
+    var azFull = document.getElementById('az-fullscreen'); if (azFull) { if (window.Plotly) Plotly.purge('az-fullscreen'); azFull.style.display='none'; }
     document.getElementById('az-full-divider').style.display='none';
-    var sqFull = document.getElementById('sq-fullscreen'); if (sqFull) { Plotly.purge('sq-fullscreen'); sqFull.style.display='none'; }
+    var sqFull = document.getElementById('sq-fullscreen'); if (sqFull) { if (window.Plotly) Plotly.purge('sq-fullscreen'); sqFull.style.display='none'; }
     var sqDiv = document.getElementById('sq-full-divider'); if (sqDiv) sqDiv.style.display='none';
 }
 
