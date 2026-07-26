@@ -136,6 +136,7 @@ _GRANULE_TIMEOUT_SECONDS = 10 * 60
 # next cron tick doesn't re-hit it. The frontend product whitelist
 # (89pct/89v/89h/37color/37v/37h) excludes this, so it never renders.
 _TIMEOUT_SENTINEL_PRODUCT = "_timed-out-skip"
+_RENDERED_SENTINEL_PRODUCT = "_already-rendered-skip"
 
 # Frontfill phase: process the N freshest granules per sensor BEFORE
 # the cursor-based catch-up loop. Prevents the "manifest has data but
@@ -149,8 +150,13 @@ _TIMEOUT_SENTINEL_PRODUCT = "_timed-out-skip"
 # reprocessing cost is bounded (N entries × 4 sensors per tick) and
 # pays for itself in user-visible freshness.
 _FRONTFILL_PER_SENSOR        = 2
-_FRONTFILL_LOOKBACK_HOURS    = 1.0    # only frontfill last hour of PPS
+# Frontfill lookback is PER-SENSOR — see _frontfill_lookback_hours().
+# list_pps_granules filters on scan_start (observation time), so the
+# lookback must cover the sensor's NRT latency + the gate window, or an
+# in-window laggy sensor (SSMIS ~3h, AMSR2 ~3.3h) lists zero candidates
+# and silently degrades to the 2h backfill safety net.
 _FRONTFILL_BUDGET_SECONDS    = 8 * 60  # cap so backfill keeps ~17 min
+_FRONTFILL_EXIST_CHECK_CAP   = 12     # newest-first existence probes/tick
 _FRONTFILL_SOURCE_TAG        = "frontfill"
 
 # ── Overpass-aware ingest gate ──────────────────────────────────────────
@@ -188,6 +194,11 @@ _PASSES_STALE_MAX_AGE_SEC = 2.5 * 3600
 # guard. Fail-OPEN: missing/garbled marker → run the full backfill.
 _FULL_RUN_MARKER_KEY = ".ingest-last-full-run.txt"
 _FULL_RUN_INTERVAL_SEC = 2 * 3600
+# The cron fires on a 10-min grid and the marker is stamped ~20-45s after
+# the tick (lock + gate reads), so a strict >= INTERVAL check misses the
+# 2h-later tick by seconds and drifts to 2h10m spacing. Half-a-tick of
+# slack keeps full runs on the intended ~2h cadence.
+_FULL_RUN_SLACK_SEC = 5 * 60
 
 # GCS-based concurrency lock. Cloud Run Jobs has no native exclusion,
 # so we use a conditional-create on a GCS object. TTL covers the
@@ -290,6 +301,28 @@ PREDICT_SATELLITES = [
     {"platform": "NOAA21",  "sensor": "ATMS",  "catnr": 54234,
      "swath_half_km": 1150.0, "nrt_latency_min": ATMS_NRT_LATENCY_MIN},
 ]
+
+# Sensor-name → nominal NRT latency, for the per-sensor frontfill lookback.
+_SENSOR_NRT_LATENCY_MIN = {
+    "GMI":   GMI_NRT_LATENCY_MIN,
+    "SSMIS": SSMIS_NRT_LATENCY_MIN,
+    "AMSR2": AMSR2_NRT_LATENCY_MIN,
+    "ATMS":  ATMS_NRT_LATENCY_MIN,
+}
+
+
+def _frontfill_lookback_hours(sensor: str) -> float:
+    """Per-sensor frontfill lookback (hours) = NRT latency + POST_PAD +
+    PRE_PAD. A granule can legitimately land as late as eta + POST_PAD,
+    at which point its scan_start is (latency + POST_PAD) old; the
+    listing filter is scan_start-based, so anything shorter makes the
+    in-window frontfill blind to exactly the passes its window was
+    opened for. GMI ≈ 2.8h, ATMS ≈ 3h, SSMIS ≈ 5.5h, AMSR2 ≈ 5.8h."""
+    latency = _SENSOR_NRT_LATENCY_MIN.get(
+        sensor, _OVERPASS_POST_PAD_DEFAULT_MIN)
+    post = _OVERPASS_POST_PAD_MIN.get(
+        sensor, _OVERPASS_POST_PAD_DEFAULT_MIN)
+    return (latency + post + _OVERPASS_PRE_PAD_MIN) / 60.0
 
 EARTH_RADIUS_KM = 6371.0
 WGS84_A_KM = 6378.137           # semi-major axis (equatorial)
@@ -1957,7 +1990,7 @@ def _full_run_due(now_ts=None) -> bool:
         stored = float(raw.strip())
     except (ValueError, TypeError):
         return True
-    return (now_ts - stored) >= _FULL_RUN_INTERVAL_SEC
+    return (now_ts - stored) >= _FULL_RUN_INTERVAL_SEC - _FULL_RUN_SLACK_SEC
 
 
 def _full_run_mark_done(now_ts=None) -> None:
@@ -2413,10 +2446,23 @@ def _fetch_active_storms() -> list[dict]:
     list of {atcf_id, name, lat, lon, ...}. No auth required."""
     import requests
     url = f"{TC_ATLAS_API_BASE}/ir-monitor/active-storms"
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
-    payload = r.json()
-    return payload.get("storms", []) or []
+    # One retry: the API's cold instances occasionally blow the 30s read
+    # timeout, and every caller treats a raise as "assume storms exist"
+    # (fail-safe but more expensive), so a second attempt is worth it.
+    last_exc: Exception = RuntimeError("unreachable")
+    for attempt in (1, 2):
+        try:
+            r = requests.get(url, timeout=30)
+            r.raise_for_status()
+            payload = r.json()
+            return payload.get("storms", []) or []
+        except Exception as exc:
+            last_exc = exc
+            if attempt == 1:
+                logger.info("active-storms fetch attempt 1 failed (%s) — "
+                            "retrying once", exc)
+                time.sleep(2)
+    raise last_exc
 
 
 def _fetch_genesis_disturbances() -> list[dict]:
@@ -3500,46 +3546,52 @@ def _cli(argv=None):
             # predictions frontfill_sensors == sensors (full pickup).
             if args.operational and frontfill_sensors:
                 frontfill_start = time.time()
-                frontfill_since = (_dt.now(timezone.utc)
-                                   - timedelta(hours=_FRONTFILL_LOOKBACK_HOURS))
+                frontfill_now = _dt.now(timezone.utc)
                 logger.info(
-                    "[frontfill] pulling freshest %d granules/sensor "
-                    "for in-window sensors %s since %s (budget %.0fs)",
+                    "[frontfill] pulling freshest %d unrendered granules/"
+                    "sensor for in-window sensors %s (per-sensor lookback; "
+                    "budget %.0fs)",
                     _FRONTFILL_PER_SENSOR, frontfill_sensors,
-                    frontfill_since.isoformat(), _FRONTFILL_BUDGET_SECONDS)
+                    _FRONTFILL_BUDGET_SECONDS)
                 for sensor in frontfill_sensors:
                     if (time.time() - frontfill_start
                             > _FRONTFILL_BUDGET_SECONDS):
                         logger.info("[frontfill] budget exhausted — "
                                     "switching to backfill phase")
                         break
+                    lookback_h = _frontfill_lookback_hours(sensor)
+                    frontfill_since = (frontfill_now
+                                       - timedelta(hours=lookback_h))
                     try:
                         recent = list_pps_granules(sensor, frontfill_since)
                     except Exception as exc:
                         logger.warning(
                             "[frontfill][%s] listing failed: %s", sensor, exc)
                         continue
-                    # PPS listing is ascending by scan_start; take the
-                    # TAIL N (newest) and process newest-first.
-                    freshest = list(reversed(recent[-_FRONTFILL_PER_SENSOR:]))
                     logger.info(
-                        "[frontfill][%s] %d candidates in last %.1fh; "
-                        "frontfilling %d newest",
-                        sensor, len(recent), _FRONTFILL_LOOKBACK_HOURS,
-                        len(freshest))
-                    for url, scan_start in freshest:
+                        "[frontfill][%s] %d candidates in last %.1fh",
+                        sensor, len(recent), lookback_h)
+                    # Newest-first scan for the first N granules NOT already
+                    # rendered. (The old tail-N-then-skip could do nothing
+                    # on a tick where the N newest were rendered but older
+                    # in-window granules weren't.) The existence guard runs
+                    # BEFORE the expensive download+regrid+render — that's
+                    # the main Jobs-cost saving — and the probe cap bounds
+                    # GCS LIST calls now that the lookback is hours wide.
+                    picked = 0
+                    probed = 0
+                    for url, scan_start in reversed(recent):
                         if (time.time() - frontfill_start
                                 > _FRONTFILL_BUDGET_SECONDS):
                             break
-                        # Existence guard: a frontfill candidate whose
-                        # rendered outputs are already in GCS is skipped
-                        # BEFORE the expensive download+regrid+render —
-                        # this is the main Jobs-cost saving. A genuinely
-                        # new pass (no outputs yet) and any error/force
-                        # case fall through to full processing.
+                        if (picked >= _FRONTFILL_PER_SENSOR
+                                or probed >= _FRONTFILL_EXIST_CHECK_CAP):
+                            break
+                        probed += 1
                         fname = url.rsplit("/", 1)[-1]
                         if _frontfill_skip_granule(sensor, fname):
                             continue
+                        picked += 1
                         _process_one_granule(
                             url, scan_start, sensor,
                             source_tag=_FRONTFILL_SOURCE_TAG)
@@ -3603,6 +3655,29 @@ def _cli(argv=None):
                             time.time() - start_time, len(granules) - idx)
                         budget_exceeded = True
                         break
+                    # Existence guard (same as frontfill): a granule the
+                    # frontfill already rendered is not re-downloaded and
+                    # re-rendered here. A sentinel manifest entry (mirrors
+                    # the watchdog-timeout sentinel: degenerate bounds, no
+                    # _source tag) advances the contiguous backfill cursor
+                    # past it while the real frontfill entries keep
+                    # serving the page. Fail-safe: any guard error returns
+                    # False → full processing, never a dropped pass.
+                    fname = url.rsplit("/", 1)[-1]
+                    if _frontfill_skip_granule(sensor, fname):
+                        all_entries.append({
+                            "sensor": sensor,
+                            "platform": "_skip",
+                            "scan_start": scan_start.isoformat(),
+                            "scan_end": scan_start.isoformat(),
+                            "orbit_id": f"RENDERED-SKIP-{fname}",
+                            "product": _RENDERED_SENTINEL_PRODUCT,
+                            "png_url": "",
+                            "geojson_url": "",
+                            "bounds": [[0.0, 0.0], [0.0, 0.0]],
+                            "_skip_reason": "already-rendered-by-frontfill",
+                        })
+                        continue
                     _process_one_granule(url, scan_start, sensor,
                                          source_tag=None)
                 if budget_exceeded:

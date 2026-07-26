@@ -222,6 +222,12 @@ fi
 # vCPU wall-clock is unchanged, so in-window (active-overpass) latency is NOT
 # degraded — the overpass-aware gate still does rapid pickup; this just stops
 # paying for the idle core. Bump back to 2 if a future sensor parallelizes.
+#
+# task-timeout MUST exceed mw_ingest._MAX_RUNTIME_SECONDS (25 min = 1500 s):
+# the job self-budgets and exits cleanly at that mark, and safety-net full
+# backfills have been observed running 20+ min. 1800 s = internal budget +
+# 300 s cushion for lock release + manifest upload. (A previous cut to 900 s
+# would have killed exactly the full runs that carry SSMIS/AMSR2/ATMS.)
 echo "Deploying Cloud Run Job ${JOB_NAME}..."
 if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; then
     gcloud run jobs update "${JOB_NAME}" \
@@ -230,7 +236,7 @@ if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; 
         --memory 2Gi \
         --cpu 1 \
         --max-retries 1 \
-        --task-timeout 900 \
+        --task-timeout 1800 \
         --set-env-vars "${ENV_VARS}" \
         --set-secrets "${SECRETS}"
 else
@@ -240,7 +246,7 @@ else
         --memory 2Gi \
         --cpu 1 \
         --max-retries 1 \
-        --task-timeout 900 \
+        --task-timeout 1800 \
         --set-env-vars "${ENV_VARS}" \
         --set-secrets "${SECRETS}"
 fi
