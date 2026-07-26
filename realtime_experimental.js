@@ -25,6 +25,7 @@
                              // over-reading; peers give honest context
     var _showShap = false;   // model-driver (SHAP) panel
     var _showVerif = false;  // manuscript verification statistics
+    var GHOST_COL = '#f43f5e';   // one colour for every GHOST trace
     var COMP_STYLE = {
         'D-PRINT':       '#a855f7',
         'SATCON':        '#ec4899',
@@ -454,8 +455,11 @@
         var nhc = { color: dark ? '#94a3b8' : '#64748b', width: 1.4,
                     dash: 'dash' };
         var traces = [
-            { x: t, y: col('vmax_kt'), name: 'GHOST Vmax', yaxis: 'y',
-              line: { color: '#f43f5e', width: 2.4 } },
+            /* One GHOST colour across all three panels so the single legend
+               entry means the same thing everywhere (the y-axis titles already
+               say which quantity each panel shows). */
+            { x: t, y: col('vmax_kt'), name: 'GHOST', yaxis: 'y',
+              line: { color: GHOST_COL, width: 2.4 } },
             { x: t, y: col('btk_vmax_kt'), name: 'NHC best track (interp)',
               yaxis: 'y', line: nhc, connectgaps: false },
             { x: fr.filter(function (d) { return d.btk_is_fix; })
@@ -464,12 +468,12 @@
                    .map(function (d) { return d.btk_vmax_kt; }),
               name: 'NHC analysis', yaxis: 'y', mode: 'markers',
               marker: { size: 5, color: nhc.color } },
-            { x: t, y: col('pmin_hpa'), name: 'GHOST Pmin', yaxis: 'y2',
-              line: { color: '#2e7dff', width: 2.4 }, showlegend: false },
+            { x: t, y: col('pmin_hpa'), name: 'GHOST', yaxis: 'y2',
+              line: { color: GHOST_COL, width: 2.4 }, showlegend: false },
             { x: t, y: col('btk_mslp_hpa'), name: 'NHC best track (interp)',
               yaxis: 'y2', line: nhc, showlegend: false, connectgaps: false },
-            { x: t, y: col('rmw_km'), name: 'GHOST RMW', yaxis: 'y3',
-              line: { color: '#34d399', width: 2.4 }, showlegend: false },
+            { x: t, y: col('rmw_km'), name: 'GHOST', yaxis: 'y3',
+              line: { color: GHOST_COL, width: 2.4 }, showlegend: false },
             { x: t, y: col('btk_rmw_km'), name: 'NHC RMW', yaxis: 'y3',
               line: nhc, showlegend: false, connectgaps: false }
         ];
