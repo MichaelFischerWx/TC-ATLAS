@@ -25,7 +25,7 @@
                              // over-reading; peers give honest context
     var _showShap = false;   // model-driver (SHAP) panel
     var _showVerif = false;  // manuscript verification statistics
-    var GHOST_COL = '#f43f5e';   // one colour for every GHOST trace
+    var GHOST_COL = '#f43f5e';   // one color for every GHOST trace
     var COMP_STYLE = {
         'D-PRINT':       '#a855f7',
         /* ADT comes from the CIMSS feed (~30 min) and carries MSLP, so it
@@ -42,7 +42,7 @@
     var _showTrack = false;  // center-track mini-map panel
 
     /* Saffir-Simpson palette + classifier — same values as realtime_ir.js /
-       global_archive.js so category colours read identically site-wide. */
+       global_archive.js so category colors read identically site-wide. */
     var SS_COLORS = { TD: '#60a5fa', TS: '#34d399', C1: '#fbbf24',
                       C2: '#fb923c', C3: '#f87171', C4: '#ef4444',
                       C5: '#dc2626' };
@@ -64,7 +64,7 @@
     function categoryShort(cat) {
         return (cat === 'TD' || cat === 'TS') ? cat : 'Cat ' + cat.slice(1);
     }
-    /* Badge text colour: the light SS hues carry dark ink, the deep reds white. */
+    /* Badge text color: the light SS hues carry dark ink, the deep reds white. */
     function catInk(cat) {
         return (cat === 'C3' || cat === 'C4' || cat === 'C5')
             ? '#ffffff' : '#0f172a';
@@ -542,7 +542,7 @@
         /* Trend line: arrow + delta, tinted by strengthening vs weakening
            (falling pressure and contracting RMW both read as strengthening).
            Deltas inside the noise deadband stay neutral so a −1 hPa wiggle
-           doesn't wear a bold trend colour. */
+           doesn't wear a bold trend color. */
         var DEADBAND = { kt: 5, hPa: 3, km: 5 };
         function deltaLine(tr, unit, dp, strongerWhenUp) {
             if (!tr) return '<div class="exp-tile-d">— <span class="exp-tile-sub">' +
@@ -636,8 +636,8 @@
 
     /* The producer publishes the IR-recentered center for every frame
        (center_lat/lon + eye_recentered) but until now nothing displayed
-       them. Full-lifetime track coloured by GHOST intensity; open circles
-       mark frames where no IR eye lock was found and the centre fell back
+       them. Full-lifetime track colored by GHOST intensity; open circles
+       mark frames where no IR eye lock was found and the center fell back
        to the interpolated/extrapolated NHC track. */
     function drawTrack(j) {
         var box = document.getElementById('exp-track');
@@ -647,7 +647,7 @@
                    f.center_lon !== null && f.center_lon !== undefined;
         });
         if (fr.length < 2) {
-            box.innerHTML = '<div class="exp-empty">No centre-fix positions ' +
+            box.innerHTML = '<div class="exp-empty">No center-fix positions ' +
                 'published for this storm yet.</div>';
             return;
         }
@@ -667,7 +667,7 @@
                 (f.vmax_kt != null ? Math.round(f.vmax_kt) + ' kt (' +
                     categoryShort(cat) + ')' : '—') +
                 (f.rmw_km != null ? ' · RMW ' + Math.round(f.rmw_km) + ' km' : '') +
-                (f.eye_recentered ? ' · IR-fixed centre' : ' · track first-guess');
+                (f.eye_recentered ? ' · IR-fixed center' : ' · track first-guess');
         });
         var dark = document.documentElement.getAttribute('data-theme') === 'dark';
         var grid = dark ? '#1e293b' : '#e2e8f0';
@@ -676,9 +676,9 @@
         var la = Math.min.apply(null, lats), lb = Math.max.apply(null, lats);
 
         box.innerHTML =
-            '<div class="exp-shap-head">GHOST centre track' +
-            '<span class="exp-shap-sub">full lifetime, coloured by GHOST ' +
-            'intensity. Open circles = no IR eye lock; the centre there comes ' +
+            '<div class="exp-shap-head">GHOST center track' +
+            '<span class="exp-shap-sub">full lifetime, colored by GHOST ' +
+            'intensity. Open circles = no IR eye lock; the center there comes ' +
             'from the interpolated NHC track instead.</span></div>' +
             '<div id="exp-track-map"></div>' +
             '<div class="exp-track-leg" id="exp-track-leg"></div>';
@@ -689,7 +689,7 @@
                 legHtml += '<span><i style="background:' + SS_COLORS[k] +
                     '"></i>' + categoryShort(k) + '</span>';
             });
-            legHtml += '<span><i class="open"></i>track-based centre</span>';
+            legHtml += '<span><i class="open"></i>track-based center</span>';
             leg.innerHTML = legHtml;
         }
 
@@ -840,7 +840,7 @@
         var nhc = { color: dark ? '#94a3b8' : '#64748b', width: 1.4,
                     dash: 'dash' };
         var traces = [
-            /* One GHOST colour across all three panels so the single legend
+            /* One GHOST color across all three panels so the single legend
                entry means the same thing everywhere (the y-axis titles already
                say which quantity each panel shows). */
             { x: t, y: col('vmax_kt'), name: 'GHOST', yaxis: 'y',

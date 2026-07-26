@@ -7089,7 +7089,7 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     margin-right: 4px; vertical-align: -0.5px;
 }
 
-/* Centre-track mini-map */
+/* Center-track mini-map */
 .exp-track { margin-top: 16px; }
 #exp-track-map { min-width: 0; width: 100%; }
 .exp-track-leg {
