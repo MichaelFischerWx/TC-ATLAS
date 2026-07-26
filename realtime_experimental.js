@@ -219,7 +219,8 @@
             '    <span class="exp-title">GHOST — ML Structure Diagnostics</span>' +
             '  </div>' +
             '  <div class="exp-meta">Updated ' + genStr +
-            '    · refreshes hourly · <a href="#" id="exp-refresh">reload</a></div>' +
+            '    · refreshes every 30 min for major hurricanes, hourly ' +
+            'otherwise · <a href="#" id="exp-refresh">reload</a></div>' +
             '</div>' +
             '<div class="exp-lede">GHOST provides <strong>independent, ' +
             'real-time estimates of tropical cyclone intensity (maximum ' +
