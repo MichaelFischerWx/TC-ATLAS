@@ -128,8 +128,11 @@
             '<div class="exp-note">Recon-independent estimates from ' +
             'geostationary IR + SHIPS-type environment (GHOST Stage-0 intensity ' +
             '/ pressure, Stage-1 RMW). Guidance, not official analysis. ' +
-            'Weak systems (TD / weak TS) are known to read high; NHC working ' +
-            'best-track comparisons are themselves operational estimates.</div>';
+            'Weak systems (TD / weak TS) are known to read high. The NHC ' +
+            'reference is linearly interpolated between 6-hourly analyses ' +
+            '(dots mark the real ones) and STOPS at the latest analysis — ' +
+            'GHOST continues past it, so the most recent stretch has no ' +
+            'reference to compare against yet.</div>';
         if (!storms.length) {
             html += '<div class="exp-empty">No active NHC storms right now — ' +
                 'the pipeline publishes automatically when a storm forms.</div></div>';
@@ -389,16 +392,22 @@
         var traces = [
             { x: t, y: col('vmax_kt'), name: 'GHOST Vmax', yaxis: 'y',
               line: { color: '#f43f5e', width: 2.4 } },
-            { x: t, y: col('btk_vmax_kt'), name: 'NHC working BT', yaxis: 'y',
-              line: nhc },
+            { x: t, y: col('btk_vmax_kt'), name: 'NHC best track (interp)',
+              yaxis: 'y', line: nhc, connectgaps: false },
+            { x: fr.filter(function (d) { return d.btk_is_fix; })
+                   .map(function (d) { return d.t; }),
+              y: fr.filter(function (d) { return d.btk_is_fix; })
+                   .map(function (d) { return d.btk_vmax_kt; }),
+              name: 'NHC analysis', yaxis: 'y', mode: 'markers',
+              marker: { size: 5, color: nhc.color } },
             { x: t, y: col('pmin_hpa'), name: 'GHOST Pmin', yaxis: 'y2',
               line: { color: '#2e7dff', width: 2.4 }, showlegend: false },
-            { x: t, y: col('btk_mslp_hpa'), name: 'NHC working BT', yaxis: 'y2',
-              line: nhc, showlegend: false },
+            { x: t, y: col('btk_mslp_hpa'), name: 'NHC best track (interp)',
+              yaxis: 'y2', line: nhc, showlegend: false, connectgaps: false },
             { x: t, y: col('rmw_km'), name: 'GHOST RMW', yaxis: 'y3',
               line: { color: '#34d399', width: 2.4 }, showlegend: false },
             { x: t, y: col('btk_rmw_km'), name: 'NHC RMW', yaxis: 'y3',
-              line: nhc, showlegend: false }
+              line: nhc, showlegend: false, connectgaps: false }
         ];
         var layout = {
             grid: { rows: 3, columns: 1, pattern: 'independent',
@@ -422,8 +431,8 @@
             yaxis3: { title: { text: 'RMW (km)' },   gridcolor: grid,
                       domain: [0.00, 0.30], rangemode: 'tozero' }
         };
-        traces[2].xaxis = 'x2'; traces[3].xaxis = 'x2';
-        traces[4].xaxis = 'x3'; traces[5].xaxis = 'x3';
+        traces[3].xaxis = 'x2'; traces[4].xaxis = 'x2';
+        traces[5].xaxis = 'x3'; traces[6].xaxis = 'x3';
 
         /* Operational satellite estimators, scored against the same target.
            Sparse + irregular (f-deck fixes are a few per day), so markers
