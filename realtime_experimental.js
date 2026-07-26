@@ -281,7 +281,14 @@
             '<div id="exp-track" class="exp-track" style="display:none;"></div>' +
             '<div id="exp-shap" class="exp-shap" style="display:none;"></div>' +
             '<div id="exp-verif" class="exp-verif" style="display:none;"></div>' +
-            '<div class="exp-plan-wrap"><img id="exp-plan" class="exp-plan" ' +
+            '<div class="exp-plan-wrap">' +
+            '<div class="exp-plan-head">' +
+            '<span class="exp-plan-title">IR plan-view evolution</span>' +
+            '<button class="exp-range exp-dl" id="exp-plan-dl" ' +
+            'title="Download plan view as PNG" ' +
+            'aria-label="Download plan view as PNG">&#x2913; Download</button>' +
+            '</div>' +
+            '<img id="exp-plan" class="exp-plan" ' +
             'alt="GHOST plan view"></div></div>';
         _root.innerHTML = html;
         bindRefresh();
@@ -329,6 +336,28 @@
         var dlBtn = document.getElementById('exp-dl');
         if (dlBtn) dlBtn.addEventListener('click', function () {
             saveChartPng(dlBtn);
+        });
+        /* Plan view is a producer-rendered PNG on GCS (CORS origin:*), so
+           download = fetch the blob and hand it to TCExport (the ONE save
+           path — iOS-safe, share-sheet aware). */
+        var pDl = document.getElementById('exp-plan-dl');
+        if (pDl) pDl.addEventListener('click', function () {
+            var img = document.getElementById('exp-plan');
+            if (!img || !img.src || !window.TCExport || !_storm) return;
+            track('ghost_plan_download', { storm: _storm });
+            pDl.disabled = true;
+            var stamp = (_index && _index.generated || '').slice(0, 10);
+            fetch(img.src, { cache: 'no-store' })
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.blob();
+                })
+                .then(function (b) {
+                    return TCExport.saveBlob(b, 'TC-ATLAS_GHOST_' + _storm +
+                        '_planview' + (stamp ? '_' + stamp : '') + '.png');
+                })
+                .catch(function () {})
+                .then(function () { pDl.disabled = false; });
         });
         _root.querySelectorAll('.exp-range[data-h]').forEach(function (b) {
             b.addEventListener('click', function () {

@@ -7089,6 +7089,14 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     margin-right: 4px; vertical-align: -0.5px;
 }
 
+/* Plan-view header row (title + download) */
+.exp-plan-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 6px; text-align: left;
+}
+.exp-plan-title { font-size: 13px; font-weight: 600; color: #0f172a; }
+[data-theme="dark"] .exp-plan-title { color: #e2e8f0; }
+
 /* Center-track mini-map */
 .exp-track { margin-top: 16px; }
 #exp-track-map { min-width: 0; width: 100%; }
