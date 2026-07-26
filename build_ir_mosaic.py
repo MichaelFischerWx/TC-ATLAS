@@ -1490,29 +1490,33 @@ def main():
             timings = {}
             # Storm zooms are per-product now (Vis bakes z7 from native windows).
             zooms = storm_zooms_for(product)
-            tiles = storm_tile_set(points, zooms, STORM_BOX_DEG) if points else set()
-            hw = None
-            if tiles and PRODUCTS[product]["kind"] == "vis" and max(zooms) > STORM_ZOOMS[-1]:
-                # Native-res read windows: storm box + the deepest tiles' snap-out
-                # margin (tiles are chosen by overlap, so their edges extend up to
-                # one z(base+1) tile width past the box) + a half-degree pad.
-                W = STORM_BOX_DEG + 360.0 / (1 << (STORM_ZOOMS[-1] + 1)) + 0.5
-                hw = []
+            base_zooms = tuple(z for z in zooms if z <= STORM_ZOOMS[-1])
+            hi_zooms = tuple(z for z in zooms if z > STORM_ZOOMS[-1])
+            tiles = storm_tile_set(points, base_zooms, STORM_BOX_DEG) if points else set()
+            tiles_hi, hw = set(), None
+            if points and hi_zooms and PRODUCTS[product]["kind"] == "vis":
+                # Hi-res sectors only for storms whose center is in daylight:
+                # below civil twilight the per-pixel night mask blanks the whole
+                # sector anyway, so the 0.5-km re-read would bake black tiles.
+                # Same _NIGHT_ELEV_DEG threshold as the mask; a center just past
+                # the terminator keeps its window (the sunlit half still renders).
+                day_pts = []
                 for p in points:
                     la, lo = (p["lat"], p["lon"]) if isinstance(p, dict) else p
-                    hw.append((la - W, la + W, lo - W, lo + W))
-            # Pass A reads full disks ONLY (no native windows). Vis z7 windows are
-            # read in a decoupled second pass below, after these grids are freed, so
-            # the two never co-reside — the fix for the daytime multi-storm 4 GiB OOM.
-            sats = read_all_sats(dt, timings, product, hires_windows=None)
-            if not sats:
-                log(f"  {product}: no satellite data — skip"); continue
-            if kernels is None:
-                kernels = ensure_global_kernels(args.zmax, sats,
-                                                rebuild=args.build_kernel,
-                                                use_r2=args.r2)
-                if args.build_kernel:
-                    log("kernels ready (one-time cost) — done"); return
+                    se = float(solar_elev_grid(np.asarray(la, dtype=np.float64),
+                                               np.asarray(lo, dtype=np.float64), dt))
+                    if se >= _NIGHT_ELEV_DEG:
+                        day_pts.append((la, lo))
+                if len(day_pts) < len(points):
+                    log(f"  vis z7: {len(points) - len(day_pts)}/{len(points)} "
+                        f"storm(s) in darkness — those sectors stay z6")
+                if day_pts:
+                    tiles_hi = storm_tile_set(day_pts, hi_zooms, STORM_BOX_DEG)
+                    # Native-res read windows: storm box + the deepest tiles' snap-out
+                    # margin (tiles are chosen by overlap, so their edges extend up to
+                    # one z(base+1) tile width past the box) + a half-degree pad.
+                    W = STORM_BOX_DEG + 360.0 / (1 << (STORM_ZOOMS[-1] + 1)) + 0.5
+                    hw = [(la - W, la + W, lo - W, lo + W) for (la, lo) in day_pts]
 
             pool, futures = None, []
             # Pack collection: in dual/only modes every emitted tile is ALSO kept
@@ -1533,40 +1537,58 @@ def main():
             else:
                 emit = inner
 
+            # ── Vis z7 native sectors — FIRST, on a virgin arena ─────────────
+            # The window working set is small (~70 MB per storm per sat); what
+            # OOM'd was running it AFTER the full-disk pass, on top of the
+            # fragmented arena trim can't return (19-00 UTC all-sats-daylight
+            # peak). Ordered first — and with mosaic_band_runner giving vis a
+            # fresh process — it sees the container's full headroom, and its own
+            # residue (tens of MB) is immaterial to the full-disk pass below.
+            # The RSS guard stays as a backstop; ru_maxrss is a high-water mark,
+            # so in multi-frame dev runs frames 2+ still skip (production is
+            # --frames 1). See project_mosaic_idx_oom.
+            n_storm_z7 = 0     # native z7 tiles actually baked (0 when gated/skipped)
+            if tiles_hi and hw:
+                rss = _peak_rss_mib()
+                if rss > VIS_Z7_RSS_SKIP_MIB:
+                    log(f"  vis z7: SKIP native pass — peak RSS {rss:.0f} MiB "
+                        f"> {VIS_Z7_RSS_SKIP_MIB} (headroom backstop; z6 fallback)")
+                else:
+                    log(f"  vis z7: peak RSS {rss:.0f} MiB ≤ {VIS_Z7_RSS_SKIP_MIB} — native pass")
+                    win = read_all_sat_windows(dt, timings, product, hw)
+                    if win:
+                        n_storm_z7 = render_storm_tiles(win, tiles_hi, emit, timings,
+                                                        product, dt, hi_only=True)
+                    del win
+                    _release_memory()
+
+            # Pass A: full disks ONLY (no native windows) — the z7 windows above
+            # are already rendered and freed, so the two never co-reside.
+            sats = read_all_sats(dt, timings, product, hires_windows=None)
+            if not sats:
+                log(f"  {product}: no satellite data — skip")
+                if pool is not None:
+                    # Drain in-flight per-tile PUTs (dual mode) before skipping.
+                    # Already-uploaded z7 tiles are orphans the lifecycle rule
+                    # reaps — the frame never enters the manifest.
+                    for f in _cf.as_completed(futures):
+                        try: f.result()
+                        except Exception: pass
+                    pool.shutdown()
+                continue
+            if kernels is None:
+                kernels = ensure_global_kernels(args.zmax, sats,
+                                                rebuild=args.build_kernel,
+                                                use_r2=args.r2)
+                if args.build_kernel:
+                    log("kernels ready (one-time cost) — done"); return
+
             rgba = global_render(args.zmax, sats, kernels, timings, product, dt)
             n_global = write_pyramid(rgba, args.zmax, emit, timings)
-            n_storm = 0
-            n_storm_z7 = 0     # native z7 tiles actually baked (0 when the guard skips)
+            n_storm = n_storm_z7
             if tiles:
-                tiles_lo = {t for t in tiles if t[0] <= STORM_ZOOMS[-1]}
-                tiles_hi = {t for t in tiles if t[0] > STORM_ZOOMS[-1]}
                 # z5/z6 storm sectors from the 2-km full disk (byte-identical to before).
-                n_storm = render_storm_tiles(sats, tiles_lo, emit, timings, product, dt)
-                if tiles_hi and hw:
-                    # Vis z7 native sectors, DECOUPLED second pass: free the full-disk
-                    # grids first so the native windows never co-reside with them (the
-                    # OOM), then re-read only the windows. See project_mosaic_idx_oom.
-                    for _s in sats.values():
-                        _s.pop("flat", None); _s.pop("grid", None); _s.pop("npix", None)
-                    _release_memory()
-                    # Adaptive guard: at the 19-00 UTC peak pass A leaves a fragmented
-                    # arena that trim can't return, so pass B's 0.5-km re-read OOMs.
-                    # Skip z7 (z6 fallback) when the post-pass-A resident set is already
-                    # too high to absorb the re-read; run it when there's headroom
-                    # (off-peak = z7 free most of the day). See project_mosaic_idx_oom.
-                    rss = _peak_rss_mib()
-                    if rss > VIS_Z7_RSS_SKIP_MIB:
-                        log(f"  vis z7: SKIP native pass — peak RSS {rss:.0f} MiB "
-                            f"> {VIS_Z7_RSS_SKIP_MIB} (peak-load headroom guard; z6 fallback)")
-                    else:
-                        log(f"  vis z7: peak RSS {rss:.0f} MiB ≤ {VIS_Z7_RSS_SKIP_MIB} — run native pass")
-                        win = read_all_sat_windows(dt, timings, product, hw)
-                        if win:
-                            n_storm_z7 = render_storm_tiles(win, tiles_hi, emit, timings,
-                                                            product, dt, hi_only=True)
-                            n_storm += n_storm_z7
-                        del win
-                        _release_memory()
+                n_storm += render_storm_tiles(sats, tiles, emit, timings, product, dt)
             # Objective eye-fix + warm-eye/cold-top Tb, from the IR sats already
             # in memory (no extra read). IR pass only; storms >= 65 kt only.
             if product == "ir":
