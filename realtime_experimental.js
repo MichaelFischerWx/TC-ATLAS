@@ -150,7 +150,9 @@
             'Technique) is an unpublished research method; this page is ' +
             'provided for scientific transparency and is <strong>not an ' +
             'official forecast or analysis</strong>. Please contact the ' +
-            'author before citing or redistributing these estimates.</div>' +
+            'author \u2014 Dr. Michael Fischer ' +
+            '(<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu' +
+            '</a>) \u2014 before citing or redistributing these estimates.</div>' +
             '<div class="exp-note">Guidance, not official analysis. ' +
             'Weak systems (TD / weak TS) have a known high-bias. The NHC ' +
             'reference is linearly interpolated between 6-hourly analyses ' +
