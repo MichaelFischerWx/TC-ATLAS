@@ -1155,7 +1155,10 @@
                             ? ' (' + r.fl_wind_t.slice(11, 16) + 'Z)' : '') +
                         ' @ ' + r.fl_level_mb + ' mb ×' + r.sfc_factor +
                         (r.sfmr_kt != null ? ' · SFMR ' + r.sfmr_kt + ' kt' : '') +
-                        '<br>max since previous fix (VDM convention)';
+                        (r.eye ? '<br>eye: ' + r.eye : '') +
+                        '<br>' + (r.src === 'hdob'
+                            ? 'derived from HDOBs (VDM not posted yet)'
+                            : 'official Vortex Data Message fix');
                 }),
                 hovertemplate: '%{text}<extra>Recon</extra>'
             });
@@ -1172,8 +1175,8 @@
                 y: rr.map(function (r) { return r.rmw_km; }),
                 name: 'Recon', yaxis: 'y3', xaxis: 'x3', mode: 'markers',
                 marker: mk, showlegend: false,
-                hovertemplate: '%{y:.0f} km — radius of the flight-level ' +
-                    'wind max<extra>Recon</extra>'
+                hovertemplate: '%{y:.0f} km — range of the max ' +
+                    'flight-level wind<extra>Recon</extra>'
             });
         }
         Plotly.react(el, traces, layout, {
