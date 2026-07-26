@@ -513,10 +513,19 @@
                 if (!rows.length) return;
                 var col = COMP_STYLE[name] || '#94a3b8';
                 var many = rows.length > 60;
+                /* f-deck comparators (ADT / Dvorak / SATCON) are appended on
+                   the advisory cycle and can be many hours old, so a series
+                   that merely ENDS early looks like a live disagreement.
+                   Stamp the last update into the legend, and flag it when the
+                   series is well behind the newest GHOST frame. */
+                var lastT = rows[rows.length - 1].t;
+                var ageH = (new Date(t[t.length - 1]) - new Date(lastT)) / 3.6e6;
+                var lbl = name + ' \u00b7 ' + lastT.slice(11, 16) + 'Z' +
+                          (ageH >= 2 ? ' (' + ageH.toFixed(0) + ' h old)' : '');
                 traces.push({
                     x: rows.map(function (r) { return r.t; }),
                     y: rows.map(function (r) { return r.vmax_kt; }),
-                    name: name, yaxis: 'y', xaxis: 'x',
+                    name: lbl, yaxis: 'y', xaxis: 'x',
                     mode: many ? 'lines' : 'lines+markers',
                     line: { color: col, width: 1.4 },
                     marker: { size: 5, color: col },
@@ -528,7 +537,7 @@
                     x: rows.map(function (r) { return r.t; }),
                     y: rows.map(function (r) {
                         return (r.pmin_hpa === undefined) ? null : r.pmin_hpa; }),
-                    name: name + ' Pmin', yaxis: 'y2', xaxis: 'x2',
+                    name: lbl + ' Pmin', yaxis: 'y2', xaxis: 'x2',
                     mode: 'lines', line: { color: col, width: 1.4 },
                     opacity: 0.9, showlegend: false
                 });
