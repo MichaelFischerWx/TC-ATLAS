@@ -143,21 +143,81 @@ def _fetch_oisst_single_day(year: int) -> xr.DataArray | None:
     return None
 
 
-def fetch_latest_oisst() -> xr.DataArray:
-    """Return the most recent available daily SST field from PSL.
+def _load_oisst_day_file(path: Path) -> xr.DataArray | None:
+    """Read one NCEI/S3 per-day OISST NetCDF into the same (lat, lon)
+    DataArray shape the PSL path produces. Returns None on a corrupt file
+    or an all-NaN slab."""
+    try:
+        with xr.open_dataset(path) as ds:
+            slab = (ds["sst"].squeeze("zlev", drop=True).isel(time=0)
+                    .sel(lat=slice(LAT_MIN, LAT_MAX),
+                         lon=slice(LON_MIN, LON_MAX))
+                    .load())
+    except Exception as e:
+        log.warning("  could not read day file %s: %s", path.name, e)
+        return None
+    vals = np.ascontiguousarray(slab.values)
+    vals[np.abs(vals) > 50.0] = np.nan
+    if not np.isfinite(vals).any():
+        return None
+    return xr.DataArray(
+        vals, dims=("lat", "lon"),
+        coords={"lat": slab["lat"].values.copy(),
+                "lon": slab["lon"].values.copy()},
+    )
 
-    PSL's current-year file is updated each day with the latest available
-    timestep. We open the current year's file, take the last time slice
-    that's not all-NaN, and return it as a 2D DataArray with a time coord.
+
+def _fetch_latest_oisst_via_day_files() -> xr.DataArray | None:
+    """Fallback for a PSL OPeNDAP outage: walk back from yesterday pulling
+    single-day OISST NetCDFs through the backfill's mirror chain (AWS S3
+    primary, NCEI HTTPS fallback, final → preliminary) and return the
+    newest day that has real data."""
+    from build_oisst_history import _oisst_fetch_one_day
+    stage = WORK_DIR / "oisst_day_fallback"
+    stage.mkdir(parents=True, exist_ok=True)
+    today = datetime.now(timezone.utc).date()
+    for back in range(1, 8):
+        d = today - timedelta(days=back)
+        dest = stage / f"oisst-{d.strftime('%Y%m%d')}.nc"
+        if not _oisst_fetch_one_day(d.strftime("%Y%m%d"), dest, max_attempts=2):
+            continue
+        slab = _load_oisst_day_file(dest)
+        if slab is None:
+            continue
+        slab.attrs["time"] = d.isoformat()
+        log.info("  day-file fallback: using OISST %s", d.isoformat())
+        return slab
+    return None
+
+
+def fetch_latest_oisst() -> xr.DataArray:
+    """Return the most recent available daily SST field.
+
+    Primary: PSL's current-year OPeNDAP file, which is updated each day
+    with the latest available timestep — open it and take the last time
+    slice that's not all-NaN. If PSL refuses both the current- and
+    prior-year files (it 403s/503s from time to time and once failed a
+    whole scheduled run), fall back to the per-day S3/NCEI mirrors.
+    OISST_SKIP_OPENDAP=1 skips PSL entirely — the escape hatch if PSL
+    starts hanging (rather than erroring) inside the task timeout.
     """
-    yr = datetime.now(timezone.utc).year
-    sst = _fetch_oisst_single_day(yr)
+    sst = None
+    if os.environ.get("OISST_SKIP_OPENDAP", "") != "1":
+        yr = datetime.now(timezone.utc).year
+        sst = _fetch_oisst_single_day(yr)
+        if sst is None:
+            log.warning("  current-year (%d) OISST not available; trying %d", yr, yr - 1)
+            sst = _fetch_oisst_single_day(yr - 1)
+    else:
+        log.info("  OISST_SKIP_OPENDAP=1: skipping PSL OPeNDAP")
     if sst is None:
-        log.warning("  current-year (%d) OISST not available; trying %d", yr, yr - 1)
-        sst = _fetch_oisst_single_day(yr - 1)
+        log.warning("  PSL OPeNDAP unavailable; falling back to per-day "
+                    "S3/NCEI mirrors")
+        sst = _fetch_latest_oisst_via_day_files()
     if sst is None:
         raise RuntimeError(
-            "Could not get a recent OISST timestep from either current or prior year"
+            "Could not get a recent OISST timestep from PSL OPeNDAP "
+            "(current or prior year) or the per-day S3/NCEI mirrors"
         )
     return sst
 
@@ -526,6 +586,51 @@ def append_to_daily_parquet(row: dict) -> None:
     _upload_blob(json_local, json_name, "application/json")
 
 
+def fill_recent_daily_gaps(clim_mean: xr.DataArray,
+                           lookback_days: int = 45) -> None:
+    """Backfill daily-index rows for recently missed days.
+
+    A failed scheduled run permanently skips that day's row in
+    indices_daily_current_year.parquet — the next run appends only the
+    NEW latest timestep, so the daily Panel B chart keeps a hole until a
+    manual backfill. Here we scan the last `lookback_days` for calendar
+    days missing from the parquet (only days strictly before the newest
+    row — later days simply haven't been published yet), fetch each from
+    the per-day mirrors, and append its row. No-op when there are no gaps.
+    """
+    from build_oisst_history import _oisst_fetch_one_day
+    name = "indices_daily_current_year.parquet"
+    local = WORK_DIR / name
+    if not local.exists() and not _download_blob(name, local):
+        return
+    df = pd.read_parquet(local)
+    if df.empty:
+        return
+    have = set(df["date"])
+    latest = max(have)
+    today = datetime.now(timezone.utc).date()
+    start = max(datetime(today.year, 1, 1, tzinfo=timezone.utc).date(),
+                today - timedelta(days=lookback_days))
+    stage = WORK_DIR / "oisst_day_fallback"
+    stage.mkdir(parents=True, exist_ok=True)
+    d = start
+    while d.isoformat() < latest:
+        iso = d.isoformat()
+        if iso not in have:
+            dest = stage / f"oisst-{d.strftime('%Y%m%d')}.nc"
+            slab = None
+            if _oisst_fetch_one_day(d.strftime("%Y%m%d"), dest, max_attempts=2):
+                slab = _load_oisst_day_file(dest)
+            if slab is None:
+                log.warning("  gap-fill: no OISST for %s; skipping", iso)
+            else:
+                slab.attrs["time"] = iso
+                gap_row, _, _ = compute_today_indices(slab, clim_mean)
+                append_to_daily_parquet(gap_row)
+                log.info("  gap-fill: appended missing day %s", iso)
+        d += timedelta(days=1)
+
+
 def refresh_monthly_preliminary(climo_mean: xr.DataArray) -> None:
     """Patch the current-month preliminary row in indices_monthly.parquet
     so Panel C stays current between manual `build_oisst_history --step
@@ -719,6 +824,12 @@ def main():
                              "application/json")
         log.info("Appending daily indices parquet ...")
         append_to_daily_parquet(row)
+        log.info("Filling any recent daily-index gaps ...")
+        try:
+            fill_recent_daily_gaps(clim["sst_clim_mean"])
+        except Exception as e:
+            # A gap-fill hiccup must not fail the whole daily run.
+            log.warning("  gap-fill failed: %s", e)
         log.info("Refreshing monthly preliminary row (Panel C) ...")
         try:
             refresh_monthly_preliminary(clim["sst_clim_mean"])

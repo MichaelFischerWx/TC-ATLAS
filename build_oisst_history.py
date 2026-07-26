@@ -202,14 +202,16 @@ def _oisst_fetch_one_day(date_str: str, dest: Path,
     if dest.exists() and dest.stat().st_size > 100_000:
         return True
     yyyymm = date_str[:6]
-    # Ordered fallbacks. (label, url) pairs.
+    s3_final = OISST_S3_DAY_TMPL.format(yyyymm=yyyymm, yyyymmdd=date_str)
+    ncei_final = OISST_NCEI_DAY_TMPL.format(yyyymm=yyyymm, yyyymmdd=date_str)
+    # Ordered fallbacks. (label, url) pairs. NB: swap only the TRAILING
+    # ".nc" for the preliminary variant — a bare str.replace(".nc", ...)
+    # also mangles the ".nc" inside the "www.ncei.noaa.gov" hostname.
     sources = [
-        ("S3 final",      OISST_S3_DAY_TMPL.format(yyyymm=yyyymm, yyyymmdd=date_str)),
-        ("S3 prelim",     OISST_S3_DAY_TMPL.format(yyyymm=yyyymm, yyyymmdd=date_str)
-                              .replace(".nc", "_preliminary.nc")),
-        ("NCEI final",    OISST_NCEI_DAY_TMPL.format(yyyymm=yyyymm, yyyymmdd=date_str)),
-        ("NCEI prelim",   OISST_NCEI_DAY_TMPL.format(yyyymm=yyyymm, yyyymmdd=date_str)
-                              .replace(".nc", "_preliminary.nc")),
+        ("S3 final",      s3_final),
+        ("S3 prelim",     s3_final[:-3] + "_preliminary.nc"),
+        ("NCEI final",    ncei_final),
+        ("NCEI prelim",   ncei_final[:-3] + "_preliminary.nc"),
     ]
     for label, url in sources:
         for attempt in range(1, max_attempts + 1):
