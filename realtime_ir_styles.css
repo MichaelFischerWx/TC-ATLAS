@@ -6993,7 +6993,7 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 [data-theme="dark"] .exp-verifbtn.active { color: #a78bfa; }
 
 .exp-plot { min-height: 320px; }
-.exp-plan-wrap { margin-top: 14px; text-align: center; }
+.exp-plan-wrap { margin: 4px 0 16px; text-align: center; }
 .exp-plan { max-width: 100%; border-radius: 8px; border: 1px solid #e2e8f0; }
 [data-theme="dark"] .exp-plan { border-color: #1e293b; }
 .exp-empty { padding: 40px 0; text-align: center; color: #64748b; font-size: 14px; }

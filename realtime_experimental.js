@@ -294,6 +294,18 @@
         });
         html += '</div>' +
             '<div class="exp-tiles" id="exp-tiles"></div>' +
+            /* Plan view leads: the latest imagery is the page's face, and the
+               toggled panels (verification especially) must never push it
+               out of view — they open BELOW the chart, verification last. */
+            '<div class="exp-plan-wrap">' +
+            '<div class="exp-plan-head">' +
+            '<span class="exp-plan-title">IR plan-view evolution</span>' +
+            '<button class="exp-range exp-dl" id="exp-plan-dl" ' +
+            'title="Download plan view as PNG" ' +
+            'aria-label="Download plan view as PNG">&#x2913; Download</button>' +
+            '</div>' +
+            '<img id="exp-plan" class="exp-plan" alt="GHOST plan view">' +
+            '</div>' +
             '<div class="exp-ranges" id="exp-ranges">' +
             '<span class="exp-ranges-label">Show</span>';
         RANGES.forEach(function (r) {
@@ -318,15 +330,7 @@
             '<div id="exp-track" class="exp-track" style="display:none;"></div>' +
             '<div id="exp-shap" class="exp-shap" style="display:none;"></div>' +
             '<div id="exp-verif" class="exp-verif" style="display:none;"></div>' +
-            '<div class="exp-plan-wrap">' +
-            '<div class="exp-plan-head">' +
-            '<span class="exp-plan-title">IR plan-view evolution</span>' +
-            '<button class="exp-range exp-dl" id="exp-plan-dl" ' +
-            'title="Download plan view as PNG" ' +
-            'aria-label="Download plan view as PNG">&#x2913; Download</button>' +
-            '</div>' +
-            '<img id="exp-plan" class="exp-plan" ' +
-            'alt="GHOST plan view"></div></div>';
+            '</div>';
         _root.innerHTML = html;
         bindRefresh();
         var chips = _root.querySelectorAll('.exp-chip');
