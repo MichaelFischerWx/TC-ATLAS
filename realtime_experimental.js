@@ -21,8 +21,10 @@
     var _storm = null;         // selected ATCF id
     var _series = {};          // atcf -> frames json
     var _plotlyReq = null;
-    var _showComp = false;   // overlay operational comparators
+    var _showComp = true;    // ON by default: a lone GHOST curve invites
+                             // over-reading; peers give honest context
     var _showShap = false;   // model-driver (SHAP) panel
+    var _showVerif = false;  // manuscript verification statistics
     var COMP_STYLE = {
         'D-PRINT':       '#a855f7',
         'SATCON':        '#ec4899',
@@ -54,6 +56,70 @@
         });
     }
 
+    /* Verification numbers are quoted from the manuscript (Fischer, in prep).
+       Held-out means the season's storms were withheld from training in every
+       basin. Do NOT edit these by hand without checking the source. */
+    var VERIF_HTML =
+        '<div class="exp-verif-h">Preliminary verification' +
+        '<span class="exp-verif-src">from the manuscript in preparation. ' +
+        '&ldquo;Held out&rdquo; = the season\'s storms were withheld from ' +
+        'training. Per-storm-mean unless noted.</span></div>' +
+
+        '<div class="exp-verif-t"><table><caption>Intensity &mdash; 2025 ' +
+        'Atlantic held out (13 storms, 1425 hourly frames)</caption><thead>' +
+        '<tr><th>Method</th><th>Vmax RMSE</th><th>Bias</th></tr></thead><tbody>' +
+        '<tr class="me"><td>GHOST</td><td>6.8 kt</td><td>+1.4 kt</td></tr>' +
+        '<tr><td>D-PRINT (deep learning)</td><td>7.1 kt</td><td>&minus;3.1 kt</td></tr>' +
+        '<tr><td>AiDT</td><td>7.9 kt</td><td>&minus;1.7 kt</td></tr>' +
+        '<tr><td>Dvorak (DVTS)</td><td>8.4 kt</td><td>&minus;4.5 kt</td></tr>' +
+        '<tr><td>ADT</td><td>9.8 kt</td><td>&minus;3.2 kt</td></tr>' +
+        '</tbody></table></div>' +
+
+        '<p class="exp-verif-note">GHOST\'s 6.8 kt carries a 95% confidence ' +
+        'interval of [5.8, 8.0] kt, which contains D-PRINT\'s 7.1 kt &mdash; ' +
+        'the two are <strong>statistically on par</strong>, not separated by a ' +
+        'single season. GHOST\'s bias interval [&minus;0.5, +3.3] kt includes ' +
+        'zero. The high-bias sits in the weak regime (about +9 kt at tropical ' +
+        'depression intensity) and vanishes at major-hurricane intensity ' +
+        '(&minus;0.3 kt for Vmax &ge; 96 kt), where the comparators run ' +
+        'systematically low.</p>' +
+
+        '<div class="exp-verif-t"><table><caption>Size (radius of maximum wind) ' +
+        '&mdash; mean absolute error vs airborne radar</caption><thead>' +
+        '<tr><th>Method</th><th>2024 held out<br>(n=146)</th>' +
+        '<th>2025 held out<br>(n=76)</th></tr></thead><tbody>' +
+        '<tr class="me"><td>GHOST <em>(no outer-wind input)</em></td>' +
+        '<td>13.0 km</td><td>18.7 km</td></tr>' +
+        '<tr><td>CK22 <em>(needs observed R34)</em></td><td>19.7 km</td><td>17.9 km</td></tr>' +
+        '<tr><td>WB06 <em>(needs observed R34)</em></td><td>30.3 km</td><td>20.4 km</td></tr>' +
+        '<tr><td>KZ07 <em>(needs observed R34)</em></td><td>33.2 km</td><td>34.2 km</td></tr>' +
+        '</tbody></table></div>' +
+
+        '<p class="exp-verif-note">On major hurricanes &mdash; where core size ' +
+        'is best defined and matters most &mdash; GHOST\'s size error falls to ' +
+        '<strong>6.5 km</strong>. A radius error costs less than it appears: ' +
+        'over matched radar cases the resulting tangential-wind error has a ' +
+        'median of 2.3 kt, roughly 9% of the peak wind.</p>' +
+
+        '<div class="exp-verif-t"><table><caption>Independent cross-check &mdash; ' +
+        'correlation with tail Doppler radar wind (83 coincident frames)</caption>' +
+        '<thead><tr><th>Method</th><th>r vs radar</th></tr></thead><tbody>' +
+        '<tr class="me"><td>GHOST</td><td>0.92</td></tr>' +
+        '<tr><td>D-PRINT</td><td>0.92</td></tr>' +
+        '<tr><td>AiDT</td><td>0.89</td></tr>' +
+        '<tr><td>ADT</td><td>0.85</td></tr>' +
+        '<tr><td><em>Best track (upper bound)</em></td><td><em>0.97</em></td></tr>' +
+        '</tbody></table></div>' +
+
+        '<p class="exp-verif-note">Radar is independent of both the satellite ' +
+        'imagery and the best-track process, so this addresses the concern that ' +
+        'a technique trained against the best track might only be echoing the ' +
+        'satellite estimates that shaped its labels. Other results: minimum ' +
+        'pressure 6.4 hPa RMSE vs 8.1 for D-PRINT (2025); East Pacific 8.3 vs ' +
+        '8.5 kt pooled over three held-out seasons (49 storms); pooled ' +
+        'storm-grouped cross-validation over all development seasons gives ' +
+        '10.1 kt and 8.2 hPa.</p>';
+
     /* ---------------- main UI ---------------- */
 
     function renderShell() {
@@ -72,17 +138,20 @@
             '  <div class="exp-meta">Updated ' + genStr +
             '    · refreshes hourly · <a href="#" id="exp-refresh">reload</a></div>' +
             '</div>' +
+            '<div class="exp-lede">GHOST provides <strong>independent, ' +
+            'real-time estimates of tropical cyclone intensity (maximum ' +
+            'sustained wind and minimum central pressure) and radius of ' +
+            'maximum wind</strong> \u2014 derived from geostationary infrared ' +
+            'imagery and the large-scale environment alone, with no aircraft ' +
+            'reconnaissance required.</div>' +
             '<div class="exp-cite"><strong>Manuscript in preparation.</strong> ' +
             'GHOST (Geostationary-based Hurricane Objective Strength ' +
             'Technique) is an unpublished research method; this page is ' +
             'provided for scientific transparency and is <strong>not an ' +
             'official forecast or analysis</strong>. Please contact the ' +
             'author before citing or redistributing these estimates.</div>' +
-            '<div class="exp-note">Recon-independent estimates from ' +
-            'geostationary infrared imagery and reanalysis-derived environmental ' +
-            'predictors alone \u2014 no aircraft reconnaissance. Guidance, not ' +
-            'official analysis. ' +
-            'Weak systems (TD / weak TS) are known to read high. The NHC ' +
+            '<div class="exp-note">Guidance, not official analysis. ' +
+            'Weak systems (TD / weak TS) have a known high-bias. The NHC ' +
             'reference is linearly interpolated between 6-hourly analyses ' +
             '(dots mark the real ones) and STOPS at the latest analysis — ' +
             'GHOST continues past it, so the most recent stretch has no ' +
@@ -112,12 +181,15 @@
             '" id="exp-comp">Operational comparators</button>' +
             '<button class="exp-range exp-shapbtn' + (_showShap ? ' active' : '') +
             '" id="exp-shap-btn">Model drivers</button>' +
+            '<button class="exp-range exp-verifbtn' + (_showVerif ? ' active' : '') +
+            '" id="exp-verif-btn">Verification</button>' +
             '<button class="exp-range exp-dl" id="exp-dl" ' +
             'title="Download chart as PNG" aria-label="Download chart as PNG">' +
             '&#x2913; Download</button>' +
             '</div>' +
             '<div id="exp-plot" class="exp-plot"></div>' +
             '<div id="exp-shap" class="exp-shap" style="display:none;"></div>' +
+            '<div id="exp-verif" class="exp-verif" style="display:none;"></div>' +
             '<div class="exp-plan-wrap"><img id="exp-plan" class="exp-plan" ' +
             'alt="GHOST plan view"></div></div>';
         _root.innerHTML = html;
@@ -127,6 +199,15 @@
             c.addEventListener('click', function () {
                 selectStorm(c.getAttribute('data-atcf'));
             });
+        });
+        var vBtn = document.getElementById('exp-verif-btn');
+        if (vBtn) vBtn.addEventListener('click', function () {
+            _showVerif = !_showVerif;
+            vBtn.classList.toggle('active', _showVerif);
+            var box = document.getElementById('exp-verif');
+            if (!box) return;
+            box.style.display = _showVerif ? 'block' : 'none';
+            if (_showVerif) box.innerHTML = VERIF_HTML;
         });
         var shapBtn = document.getElementById('exp-shap-btn');
         if (shapBtn) shapBtn.addEventListener('click', function () {
@@ -212,7 +293,36 @@
         var dark = document.documentElement.getAttribute('data-theme') === 'dark';
         var bg = dark ? '#0d1117' : '#ffffff';
         if (btn) btn.disabled = true;
-        Plotly.relayout(el, { paper_bgcolor: bg, plot_bgcolor: bg })
+        var fg = dark ? '#94a3b8' : '#475569';
+        var m = JSON.parse(JSON.stringify(el.layout.margin || {}));
+        m.b = (m.b || 40) + 58;          // room for the footer band
+        Plotly.relayout(el, {
+            paper_bgcolor: bg, plot_bgcolor: bg, margin: m,
+            images: [{
+                source: 'tc-atlas-favicon-96.png',   // same-origin: no canvas taint
+                xref: 'paper', yref: 'paper', x: 0, y: -0.085,
+                sizex: 0.055, sizey: 0.055,
+                xanchor: 'left', yanchor: 'top', layer: 'above'
+            }],
+            annotations: [{
+                xref: 'paper', yref: 'paper', x: 0.065, y: -0.085,
+                xanchor: 'left', yanchor: 'top', showarrow: false,
+                align: 'left',
+                text: '<b>TC-ATLAS</b> &#183; tcatlas.org',
+                font: { size: 12, color: fg }
+            }, {
+                xref: 'paper', yref: 'paper', x: 0.065, y: -0.135,
+                xanchor: 'left', yanchor: 'top', showarrow: false,
+                align: 'left',
+                text: '<b style="color:#F47321">EXPERIMENTAL</b> &#183; GHOST is ' +
+                      'an unpublished research method (manuscript in ' +
+                      'preparation) &#8212; <b>not an official forecast or ' +
+                      'analysis</b>.<br>Recon-independent estimates from ' +
+                      'infrared imagery + reanalysis environment. Contact the ' +
+                      'author before citing or redistributing.',
+                font: { size: 10, color: fg }
+            }]
+        })
             .then(function () {
                 return TCExport.savePlotly(el,
                     'TC-ATLAS_GHOST_' + _storm + '_' + stamp + '.png', {
