@@ -15,9 +15,15 @@
 
     var GCS_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/';
     var PREFIX = 'ghost-rt';
+    /* Season-archive prefix (retrospective runs published by TC-SWARM
+       realtime/ghost_archive_season.py). Season-scoped on purpose — bump
+       for a new season once its first archived storm exists. */
+    var ARCH_PREFIX = 'ghost-rt/archive2026';
 
     var _root = null;          // #exp-main
     var _index = null;         // manifest {generated, storms:[{atcf,name}]}
+    var _archIndex = null;     // season-archive manifest (or null)
+    var _archSet = {};         // atcf -> true for archived storms
     var _storm = null;         // selected ATCF id
     var _series = {};          // atcf -> frames json
     var _plotlyReq = null;
@@ -278,21 +284,48 @@
             '(dots mark the real ones) and STOPS at the latest analysis — ' +
             'GHOST continues past it, so the most recent stretch has no ' +
             'reference to compare against yet.</div>';
-        if (!storms.length) {
+        var arch = (_archIndex && _archIndex.storms) || [];
+        if (!storms.length && !arch.length) {
             html += '<div class="exp-empty">No active NHC storms right now — ' +
                 'the pipeline publishes automatically when a storm forms.</div></div>';
             _root.innerHTML = html;
             bindRefresh();
             return;
         }
-        html += '<div class="exp-chips" id="exp-chips">';
-        storms.forEach(function (s) {
-            html += '<button class="exp-chip" data-atcf="' + s.atcf + '">' +
-                (s.name || s.atcf) + ' <span>' + s.atcf + '</span>' +
-                '<em class="exp-chip-int" id="exp-int-' + s.atcf + '"></em>' +
-                '</button>';
-        });
-        html += '</div>' +
+        if (storms.length) {
+            html += '<div class="exp-chips" id="exp-chips">';
+            storms.forEach(function (s) {
+                html += '<button class="exp-chip" data-atcf="' + s.atcf + '">' +
+                    (s.name || s.atcf) + ' <span>' + s.atcf + '</span>' +
+                    '<em class="exp-chip-int" id="exp-int-' + s.atcf + '"></em>' +
+                    '</button>';
+            });
+            html += '</div>';
+        } else {
+            html += '<div class="exp-empty exp-empty-sm">No active NHC ' +
+                'storms right now — browse the season archive below.</div>';
+        }
+        if (arch.length) {
+            html += '<div class="exp-arch-h">' +
+                ((_archIndex && _archIndex.year) || '') +
+                ' season archive <span>retrospective GHOST runs of ' +
+                'completed storms</span></div>' +
+                '<div class="exp-chips exp-chips-arch">';
+            arch.forEach(function (s) {
+                var pk = s.ghost_peak_kt;
+                var cat = windToCategory(pk);
+                html += '<button class="exp-chip exp-chip-arch" data-atcf="' +
+                    s.atcf + '">' + (s.name || s.atcf) +
+                    ' <span>' + s.atcf + '</span>' +
+                    '<em class="exp-chip-int">' +
+                    (pk != null
+                        ? '<i style="background:' + SS_COLORS[cat] + '"></i>' +
+                          'peak ' + Math.round(pk) + ' kt'
+                        : '') + '</em></button>';
+            });
+            html += '</div>';
+        }
+        html +=
             '<div class="exp-tiles" id="exp-tiles"></div>' +
             /* Plan view leads: the latest imagery is the page's face, and the
                toggled panels (verification especially) must never push it
@@ -411,10 +444,18 @@
                 if (_storm && _series[_storm]) applyRange(_series[_storm]);
             });
         });
-        var want = _storm && storms.some(function (s) { return s.atcf === _storm; })
-            ? _storm : storms[0].atcf;
+        var known = storms.concat(arch);
+        var want = _storm && known.some(function (s) { return s.atcf === _storm; })
+            ? _storm : known[0].atcf;
         selectStorm(want);
         stampChipIntensities(storms);
+    }
+
+    /* Archived storms live under the season prefix; live ones under the
+       real-time prefix. Everything downstream is prefix-agnostic. */
+    function seriesUrl(atcf) {
+        return GCS_BASE + (_archSet[atcf] ? ARCH_PREFIX : PREFIX) +
+            '/ghost_' + atcf + '.json';
     }
 
     /* Fill each storm chip with its latest GHOST intensity + category. Also
@@ -454,12 +495,16 @@
         });
         var img = document.getElementById('exp-plan');
         if (img) {
-            img.src = GCS_BASE + PREFIX + '/ghost_' + atcf + '_plan.png?t=' +
-                encodeURIComponent((_index && _index.generated) || Date.now());
+            var gen = _archSet[atcf]
+                ? (_archIndex && _archIndex.generated)
+                : (_index && _index.generated);
+            img.src = GCS_BASE + (_archSet[atcf] ? ARCH_PREFIX : PREFIX) +
+                '/ghost_' + atcf + '_plan.png?t=' +
+                encodeURIComponent(gen || Date.now());
         }
         var p = _series[atcf]
             ? Promise.resolve(_series[atcf])
-            : fetchJson(GCS_BASE + PREFIX + '/ghost_' + atcf + '.json')
+            : fetchJson(seriesUrl(atcf))
                 .then(function (j) { _series[atcf] = j; return j; });
         Promise.all([p, ensurePlotly()]).then(function (res) {
             if (_storm !== atcf) return;
@@ -698,6 +743,11 @@
                       Math.round(gAt) + ' kt (' +
                       fmtSigned(gAt - fix.btk_vmax_kt, 0) + ')</div>' : '') +
                 '</div>';
+        }
+        if (_archSet[j.storm]) {
+            html = '<div class="exp-arch-note">Archived storm — ' +
+                'retrospective GHOST run over the completed lifetime; ' +
+                '“latest” values are the storm’s final analysis.</div>' + html;
         }
         box.innerHTML = html;
     }
@@ -1190,8 +1240,19 @@
 
     function loadIndex() {
         _lastLoad = Date.now();
-        fetchJson(GCS_BASE + PREFIX + '/index.json').then(function (idx) {
-            _index = idx;
+        Promise.all([
+            fetchJson(GCS_BASE + PREFIX + '/index.json'),
+            /* archive is optional: absent until the first season storm
+               completes, and its loss must never take the live page down */
+            fetchJson(GCS_BASE + ARCH_PREFIX + '/index.json')
+                .catch(function () { return null; })
+        ]).then(function (res) {
+            _index = res[0];
+            _archIndex = res[1];
+            _archSet = {};
+            ((_archIndex && _archIndex.storms) || []).forEach(function (s) {
+                _archSet[s.atcf] = true;
+            });
             renderShell();
         }).catch(function () {
             _root.innerHTML = '<div class="exp-inner"><div class="exp-empty">' +

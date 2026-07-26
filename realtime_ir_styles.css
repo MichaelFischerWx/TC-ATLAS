@@ -7081,6 +7081,27 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 }
 .exp-flag.down { background: #2563eb; }
 
+/* Season archive */
+.exp-arch-h {
+    font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.05em; color: #64748b; margin: 2px 0 6px;
+}
+[data-theme="dark"] .exp-arch-h { color: #94a3b8; }
+.exp-arch-h span {
+    font-weight: 400; text-transform: none; letter-spacing: 0;
+    font-size: 11.5px; margin-left: 6px;
+}
+.exp-chip-arch { opacity: 0.88; }
+.exp-empty-sm { padding: 10px 0 14px; text-align: left; font-size: 13px; }
+.exp-arch-note {
+    grid-column: 1 / -1; font-size: 12px; color: #475569;
+    background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px;
+    padding: 7px 11px;
+}
+[data-theme="dark"] .exp-arch-note {
+    color: #94a3b8; background: rgba(15,23,42,0.55); border-color: #1e293b;
+}
+
 /* Storm-chip intensity stamp */
 .exp-chip-int { font-style: normal; font-size: 11px; opacity: 0.85; margin-left: 6px; }
 .exp-chip-int:empty { display: none; }
