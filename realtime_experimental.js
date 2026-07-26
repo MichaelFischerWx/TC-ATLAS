@@ -1150,8 +1150,12 @@
                 mode: 'markers', marker: mk,
                 text: rec.map(function (r) {
                     return r.vmax_sfc_kt + ' kt sfc — FL ' + r.fl_wind_kt +
-                        ' kt @ ' + r.fl_level_mb + ' mb ×' + r.sfc_factor +
-                        (r.sfmr_kt != null ? ' · SFMR ' + r.sfmr_kt + ' kt' : '');
+                        ' kt' +
+                        (r.fl_wind_t
+                            ? ' (' + r.fl_wind_t.slice(11, 16) + 'Z)' : '') +
+                        ' @ ' + r.fl_level_mb + ' mb ×' + r.sfc_factor +
+                        (r.sfmr_kt != null ? ' · SFMR ' + r.sfmr_kt + ' kt' : '') +
+                        '<br>max since previous fix (VDM convention)';
                 }),
                 hovertemplate: '%{text}<extra>Recon</extra>'
             });
