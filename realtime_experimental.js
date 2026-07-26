@@ -814,6 +814,101 @@
           .then(function () { Plotly.Plots.resize('exp-track-map'); });
     }
 
+    /* Plain-language glosses for the SHAP feature names. CONCEPTUAL ONLY —
+       each says WHAT a feature measures, never HOW it is computed (no
+       formulas, thresholds, kernels or window details); that stays with the
+       manuscript. Grounded in the producer's own docstrings
+       (build_symmetry_cdo.py, dvorak_feats.py, build_train_table.py,
+       build_multiframe_feats.py) — do NOT guess new entries, a wrong gloss
+       is worse than none. Suffixes: _km = kernel-smoothed over recent
+       frames (NOT kilometres), _tr = its recent trend. */
+    var FEATURE_GLOSS = {
+        tc_lat: 'Storm latitude',
+        age_h: 'Time since the system became a tropical cyclone',
+        vmax_init: 'Intensity input to the size model (GHOST’s own estimate)',
+        pres_init: 'Central-pressure input to the size model (GHOST’s own estimate)',
+        mpi_init: 'Maximum potential intensity of the current ocean–atmosphere environment',
+        shdc_init: 'Deep-layer vertical wind shear over the storm',
+        sddc_init: 'Direction the deep-layer shear comes from',
+        rhlo_init: 'Lower-troposphere relative humidity near the storm',
+        rhmd_init: 'Mid-troposphere relative humidity near the storm',
+        rhhi_init: 'Upper-troposphere relative humidity near the storm',
+        pw2m_init: 'Column moisture (precipitable water) near the core',
+        pw5m_init: 'Column moisture over the broader storm environment',
+        dist2land: 'Distance to the nearest land',
+        mot_speed: 'Forward (translation) speed of the storm',
+        s0_eye_tb: 'Mean cloud-top warmth inside the eye region',
+        s0_eye_tb_max: 'Warmest single eye pixel — subsidence warming, a classic intense-storm signal',
+        s0_eye_maxcontrast: 'Warmest eye pixel vs the coldest eyewall ring (warm-eye-over-cold-eyewall contrast)',
+        s0_eye_cdo_contrast: 'Mean eye warmth vs the coldest ring of the central overcast',
+        s0_cdo_min_tb: 'Coldest ring-averaged cloud-top temperature (canopy coldness)',
+        s0_cdo_min_rad: 'Radius of the coldest cloud-top ring (roughly the eyewall radius)',
+        s0_cdo_mean_tb: 'Overall coldness of the central dense overcast',
+        s0_ewall_wn1: 'One-sided (wavenumber-1) asymmetry of the eyewall cloud',
+        s0_ewall_wn2: 'Elliptical (wavenumber-2) asymmetry of the eyewall cloud',
+        s0_ewall_azistd: 'Unevenness of the eyewall cloud tops around the ring',
+        s0_ewall_wn1frac: 'Share of eyewall asymmetry carried by its one-sided component',
+        eye_tb_center: 'Cloud-top temperature right at the storm center',
+        irb_rimn: 'Mean cloud-top temperature in the inner core',
+        irb_rmmn: 'Mean cloud-top temperature in the middle core',
+        irb_romn: 'Mean cloud-top temperature in the outer core',
+        irb_risd: 'Ring-wise unevenness of inner-core cloud tops (low = symmetric)',
+        irb_rmsd: 'Ring-wise unevenness of middle-core cloud tops (low = symmetric)',
+        irb_rosd: 'Ring-wise unevenness of outer-core cloud tops (low = symmetric)',
+        irb_min_tb: 'Coldest ring-averaged cloud-top temperature',
+        irb_min_rad: 'Radius of the coldest cloud-top ring',
+        irb_rad_dif: 'Warmth at the center vs the coldest ring around it',
+        irb_grad_rad: 'Sharpest center-outward change in cloud-top temperature',
+        irb_wn0_kur: 'Peakedness of the cloud-top temperature distribution',
+        dv_banding_wrap: 'How completely cold banding wraps around the storm center',
+        dv_conv_disp: 'Offset of the cold-convection mass from the storm center',
+        dv_cdo_edge_sharp: 'Sharpness of the central overcast’s outer edge',
+        dv_cold_frac_inner: 'Fraction of very cold cloud tops in the inner core',
+        spiral: 'How coherently the cloud field organizes into a log-spiral banding pattern',
+        spiral_disp: 'Offset between the best-fit spiral pattern and the storm center',
+        spiral_norm: 'Spiral organization relative to the overall sharpness of the imagery',
+        ltr12_eye: '12-hour warming/cooling trend of the eye region',
+        ltr12_cdo: '12-hour warming/cooling trend of the cloud canopy',
+        ltr6_cdo: '6-hour warming/cooling trend of the cloud canopy',
+        'vigor_r050-r075': 'Convective vigor (coldness vs the storm’s recent minimum) in the 50–75 km ring',
+        'vigor_r075-r100': 'Convective vigor (coldness vs the storm’s recent minimum) in the 75–100 km ring',
+        'vigor_r100-r125': 'Convective vigor (coldness vs the storm’s recent minimum) in the 100–125 km ring',
+        ir_vigor_eye_max: 'Peak convective vigor in the eye region',
+        ir_vigor_rad: 'Radius of peak convective vigor',
+        irb_vigor_azi_rad: 'Radius of the strongest ring-averaged convective vigor',
+        irb_vigor_zero_rad: 'Radius where convective vigor fades to zero',
+        irb_vigor_grad_rad: 'How sharply convective vigor changes with radius',
+        irb_vigor_grad2_rad: 'Curvature of the convective-vigor profile with radius',
+        irb_rad_grad2_val: 'Curvature of the cloud-top temperature profile near its steepest edge',
+        cold_frac65_outer_mean: 'Fraction of cold cloud in the outer (100–200 km) band',
+        r_eye: 'Apparent eye radius from the infrared imagery',
+        r_cold: 'Radius of the surrounding cold-top ring'
+    };
+    function featGloss(f) {
+        if (FEATURE_GLOSS[f]) return FEATURE_GLOSS[f];
+        var base = f.replace(/_(km|tr)$/, '');
+        var sfx = /_km$/.test(f)
+            ? ' — smoothed over the last few hours'
+            : (/_tr$/.test(f) ? ' — its recent trend' : '');
+        if (FEATURE_GLOSS[base]) return FEATURE_GLOSS[base] + sfx;
+        if (/^(s0_|irb_|eye_|ir_)/.test(base))
+            return 'Infrared cloud-top structure metric' + sfx;
+        if (/^(dv_|spiral)/.test(base))
+            return 'Cloud organization / banding metric' + sfx;
+        if (/_init$/.test(base)) return 'Large-scale environment input';
+        return 'Model input feature' + sfx;
+    }
+    /* Plotly hover labels don't wrap — break long glosses ourselves. */
+    function wrapGloss(s) {
+        var words = s.split(' '), lines = [], cur = '';
+        words.forEach(function (w) {
+            if ((cur + ' ' + w).length > 44) { lines.push(cur); cur = w; }
+            else cur = cur ? cur + ' ' + w : w;
+        });
+        if (cur) lines.push(cur);
+        return lines.join('<br>');
+    }
+
     /* Exact TreeSHAP from the producer. Explains the RAW Stage-A booster and
        the base-18 RMW model -- deliberately NOT the published values, which
        add calibration, Stage-B inertia, a causal kernel and the pinhole
@@ -838,7 +933,8 @@
             '<span class="exp-shap-sub">exact TreeSHAP. Explains the ' +
             'intensity model\u2019s first-pass estimate (base ' +
             (sh.vmax_base || 0).toFixed(1) + ' kt) and the size model &mdash; ' +
-            'not the calibrated, time-smoothed values plotted above.</span></div>' +
+            'not the calibrated, time-smoothed values plotted above. ' +
+            'Hover a bar for what that feature measures.</span></div>' +
             '<div class="exp-shap-grid">' +
             '<div id="exp-shap-v"></div><div id="exp-shap-r"></div></div>' +
             '<div id="exp-shap-t"></div>';
@@ -850,9 +946,12 @@
                 type: 'bar', orientation: 'h',
                 x: r.map(function (d) { return d.v; }),
                 y: r.map(function (d) { return d.f; }),
+                customdata: r.map(function (d) {
+                    return wrapGloss(featGloss(d.f)); }),
                 marker: { color: r.map(function (d) {
                     return d.v >= 0 ? '#f43f5e' : '#2e7dff'; }) },
-                hovertemplate: '%{y}: %{x:+.2f}' + unit + '<extra></extra>'
+                hovertemplate: '%{y}: %{x:+.2f}' + unit +
+                    '<br><i>%{customdata}</i><extra></extra>'
             }], {
                 title: { text: title, font: { size: 12 } },
                 height: 300, margin: { l: 150, r: 12, t: 30, b: 34 },
