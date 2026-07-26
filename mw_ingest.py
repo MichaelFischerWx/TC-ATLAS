@@ -174,7 +174,7 @@ _FRONTFILL_SOURCE_TAG        = "frontfill"
 _OVERPASS_PRE_PAD_MIN  = 30      # open the window 30 min before eta
 _OVERPASS_POST_PAD_MIN = {       # close it POST_PAD after eta, per sensor
     "GMI":   90,
-    "ATMS":  90,
+    "ATMS":  120,   # latency empirically noisy (see ATMS_NRT_LATENCY_MIN)
     "SSMIS": 120,
     "AMSR2": 120,
 }
@@ -277,7 +277,12 @@ AMSR2_PREDICT_HORIZON_H = 48   # GCOM-W1 sun-sync, 1 sat, smaller swath
 GMI_NRT_LATENCY_MIN   = 45
 SSMIS_NRT_LATENCY_MIN = 180
 AMSR2_NRT_LATENCY_MIN = 200
-ATMS_NRT_LATENCY_MIN  = 60   # NPP/NOAA-20/NOAA-21 via PPS; empirical
+ATMS_NRT_LATENCY_MIN  = 210  # NPP/NOAA-20/NOAA-21 via PPS. Empirical
+                             # 2026-07-26: newest granule on PPS lagged
+                             # scan_start by ~3.4h (was set to 60, which
+                             # placed gate windows hours before the data
+                             # existed — every in-window tick listed 0
+                             # candidates and ATMS rode the safety net).
 
 PREDICT_SATELLITES = [
     {"platform": "GPM",     "sensor": "GMI",   "catnr": 39574,
@@ -317,7 +322,7 @@ def _frontfill_lookback_hours(sensor: str) -> float:
     at which point its scan_start is (latency + POST_PAD) old; the
     listing filter is scan_start-based, so anything shorter makes the
     in-window frontfill blind to exactly the passes its window was
-    opened for. GMI ≈ 2.8h, ATMS ≈ 3h, SSMIS ≈ 5.5h, AMSR2 ≈ 5.8h."""
+    opened for. GMI ≈ 2.8h, ATMS ≈ 6h, SSMIS ≈ 5.5h, AMSR2 ≈ 5.8h."""
     latency = _SENSOR_NRT_LATENCY_MIN.get(
         sensor, _OVERPASS_POST_PAD_DEFAULT_MIN)
     post = _OVERPASS_POST_PAD_MIN.get(
