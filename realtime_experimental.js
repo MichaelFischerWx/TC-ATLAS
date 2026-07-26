@@ -39,6 +39,76 @@
                                // (must match a RANGES entry so a button reads active)
     var RANGES = [{ h: 24, label: '24 h' }, { h: 48, label: '48 h' },
                   { h: 0,  label: 'Full lifetime' }];
+    var _showTrack = false;  // center-track mini-map panel
+
+    /* Saffir-Simpson palette + classifier — same values as realtime_ir.js /
+       global_archive.js so category colours read identically site-wide. */
+    var SS_COLORS = { TD: '#60a5fa', TS: '#34d399', C1: '#fbbf24',
+                      C2: '#fb923c', C3: '#f87171', C4: '#ef4444',
+                      C5: '#dc2626' };
+    var SS_BANDS = [
+        { k: 'TS', lo: 34,  hi: 64 },  { k: 'C1', lo: 64,  hi: 83 },
+        { k: 'C2', lo: 83,  hi: 96 },  { k: 'C3', lo: 96,  hi: 113 },
+        { k: 'C4', lo: 113, hi: 137 }, { k: 'C5', lo: 137, hi: 250 }
+    ];
+    function windToCategory(v) {
+        if (v == null || !isFinite(v)) return 'TD';
+        if (v < 34) return 'TD';
+        if (v < 64) return 'TS';
+        if (v < 83) return 'C1';
+        if (v < 96) return 'C2';
+        if (v < 113) return 'C3';
+        if (v < 137) return 'C4';
+        return 'C5';
+    }
+    function categoryShort(cat) {
+        return (cat === 'TD' || cat === 'TS') ? cat : 'Cat ' + cat.slice(1);
+    }
+    /* Badge text colour: the light SS hues carry dark ink, the deep reds white. */
+    function catInk(cat) {
+        return (cat === 'C3' || cat === 'C4' || cat === 'C5')
+            ? '#ffffff' : '#0f172a';
+    }
+    function hexToRgba(hex, a) {
+        var n = parseInt(hex.slice(1), 16);
+        return 'rgba(' + (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' +
+               (n & 255) + ',' + a + ')';
+    }
+
+    /* Last frame with a finite value for `key` (frames hold nulls where a
+       quantity is missing, e.g. NHC columns past the last analysis). */
+    function lastFiniteFrame(fr, key) {
+        for (var i = fr.length - 1; i >= 0; i--) {
+            var v = fr[i][key];
+            if (v !== null && v !== undefined && isFinite(v))
+                return { v: v, t: fr[i].t, f: fr[i] };
+        }
+        return null;
+    }
+
+    /* Change over ~24 h: latest finite value minus the finite value nearest
+       (now − 24 h). Needs ≥18 h of history so a young storm shows "—" rather
+       than a misleading short-baseline delta; returns the true baseline hours
+       so the label can stay honest when it isn't exactly 24. */
+    function trend24(fr, key) {
+        var last = lastFiniteFrame(fr, key);
+        if (!last) return null;
+        var target = new Date(last.t).getTime() - 24 * 3600e3;
+        var best = null, bestD = Infinity;
+        for (var i = 0; i < fr.length; i++) {
+            var v = fr[i][key];
+            if (v === null || v === undefined || !isFinite(v)) continue;
+            var d = Math.abs(new Date(fr[i].t).getTime() - target);
+            if (d < bestD) { bestD = d; best = fr[i]; }
+        }
+        if (!best) return null;
+        var hrs = (new Date(last.t) - new Date(best.t)) / 3.6e6;
+        if (hrs < 18) return null;
+        return { d: last.v - best[key], h: hrs };
+    }
+    function fmtSigned(x, dp) {
+        return (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(dp);
+    }
 
     /* GA4 is already configured on the page (G-EFM8GFFKLK); mirror the
        guarded helper used by realtime_seasonal.js so a blocked/absent gtag
@@ -181,9 +251,12 @@
         html += '<div class="exp-chips" id="exp-chips">';
         storms.forEach(function (s) {
             html += '<button class="exp-chip" data-atcf="' + s.atcf + '">' +
-                (s.name || s.atcf) + ' <span>' + s.atcf + '</span></button>';
+                (s.name || s.atcf) + ' <span>' + s.atcf + '</span>' +
+                '<em class="exp-chip-int" id="exp-int-' + s.atcf + '"></em>' +
+                '</button>';
         });
         html += '</div>' +
+            '<div class="exp-tiles" id="exp-tiles"></div>' +
             '<div class="exp-ranges" id="exp-ranges">' +
             '<span class="exp-ranges-label">Show</span>';
         RANGES.forEach(function (r) {
@@ -194,6 +267,8 @@
         html += '<span class="exp-ranges-sep"></span>' +
             '<button class="exp-range exp-comp' + (_showComp ? ' active' : '') +
             '" id="exp-comp">Operational comparators</button>' +
+            '<button class="exp-range exp-trackbtn' + (_showTrack ? ' active' : '') +
+            '" id="exp-track-btn">Track map</button>' +
             '<button class="exp-range exp-shapbtn' + (_showShap ? ' active' : '') +
             '" id="exp-shap-btn">Model drivers</button>' +
             '<button class="exp-range exp-verifbtn' + (_showVerif ? ' active' : '') +
@@ -203,6 +278,7 @@
             '&#x2913; Download</button>' +
             '</div>' +
             '<div id="exp-plot" class="exp-plot"></div>' +
+            '<div id="exp-track" class="exp-track" style="display:none;"></div>' +
             '<div id="exp-shap" class="exp-shap" style="display:none;"></div>' +
             '<div id="exp-verif" class="exp-verif" style="display:none;"></div>' +
             '<div class="exp-plan-wrap"><img id="exp-plan" class="exp-plan" ' +
@@ -224,6 +300,15 @@
             if (!box) return;
             box.style.display = _showVerif ? 'block' : 'none';
             if (_showVerif) box.innerHTML = VERIF_HTML;
+        });
+        var trackBtn = document.getElementById('exp-track-btn');
+        if (trackBtn) trackBtn.addEventListener('click', function () {
+            _showTrack = !_showTrack;
+            track('ghost_track_map', { on: _showTrack });
+            trackBtn.classList.toggle('active', _showTrack);
+            var box = document.getElementById('exp-track');
+            if (box) box.style.display = _showTrack ? 'block' : 'none';
+            if (_showTrack && _storm && _series[_storm]) drawTrack(_series[_storm]);
         });
         var shapBtn = document.getElementById('exp-shap-btn');
         if (shapBtn) shapBtn.addEventListener('click', function () {
@@ -259,6 +344,27 @@
         var want = _storm && storms.some(function (s) { return s.atcf === _storm; })
             ? _storm : storms[0].atcf;
         selectStorm(want);
+        stampChipIntensities(storms);
+    }
+
+    /* Fill each storm chip with its latest GHOST intensity + category. Also
+       warms the _series cache, so switching storms is instant afterwards. */
+    function stampChipIntensities(storms) {
+        storms.forEach(function (s) {
+            var p = _series[s.atcf]
+                ? Promise.resolve(_series[s.atcf])
+                : fetchJson(GCS_BASE + PREFIX + '/ghost_' + s.atcf + '.json')
+                    .then(function (j) { _series[s.atcf] = j; return j; });
+            p.then(function (j) {
+                var em = document.getElementById('exp-int-' + s.atcf);
+                if (!em) return;
+                var lf = lastFiniteFrame(j.frames || [], 'vmax_kt');
+                if (!lf) return;
+                var cat = windToCategory(lf.v);
+                em.innerHTML = '<i style="background:' + SS_COLORS[cat] +
+                    '"></i>' + Math.round(lf.v) + ' kt · ' + categoryShort(cat);
+            }).catch(function () {});
+        });
     }
 
     function bindRefresh() {
@@ -287,7 +393,9 @@
                 .then(function (j) { _series[atcf] = j; return j; });
         Promise.all([p, ensurePlotly()]).then(function (res) {
             if (_storm !== atcf) return;
+            renderTiles(res[0]);
             drawSeries(res[0]);
+            if (_showTrack) drawTrack(res[0]);
             if (_showShap) drawShap(res[0]);
         }).catch(function () {
             var el = document.getElementById('exp-plot');
@@ -325,7 +433,9 @@
                 sizex: 0.055, sizey: 0.055,
                 xanchor: 'left', yanchor: 'top', layer: 'above'
             }],
-            annotations: [{
+            /* Concat, don't replace: the live layout carries the category
+               labels from labelBands() and they should survive into the PNG. */
+            annotations: (el.layout.annotations || []).concat([{
                 xref: 'paper', yref: 'paper', x: 0.065, y: -0.085,
                 xanchor: 'left', yanchor: 'top', showarrow: false,
                 align: 'left',
@@ -342,7 +452,7 @@
                       'infrared imagery + reanalysis environment. Contact the ' +
                       'author before citing or redistributing.',
                 font: { size: 10, color: fg }
-            }]
+            }])
         })
             .then(function () {
                 return TCExport.savePlotly(el,
@@ -372,11 +482,266 @@
         var lo = _rangeH ? new Date(last.getTime() - _rangeH * 3600e3) : first;
         if (lo < first) lo = first;
         var rng = [lo.toISOString(), last.toISOString()];
+        /* Strip any previously-painted bands BEFORE autoranging — shapes in
+           data coords are included in Plotly's autorange, so stale bands
+           would stretch the Vmax axis. paintBands() re-adds them clipped to
+           the realised range once it is known. */
         Plotly.relayout(el, {
+            shapes: [], annotations: [],
             'xaxis.range': rng, 'xaxis2.range': rng, 'xaxis3.range': rng,
             'yaxis.autorange': true, 'yaxis2.autorange': true,
             'yaxis3.autorange': true
+        }).then(function () { paintBands(el); });
+    }
+
+    /* Saffir-Simpson category bands + "TS / Cat 1 / …" labels on the Vmax
+       panel. Must run AFTER autorange settles: the realised y-range is read
+       back, frozen, and the bands are clipped to it so they can never expand
+       the axis (a full-height C5 band would otherwise autorange Vmax to
+       250 kt for every storm). Rebuilt on every range change. */
+    function paintBands(el) {
+        var fl = el._fullLayout;
+        if (!fl || !fl.yaxis || !fl.yaxis.range) return;
+        var yr = fl.yaxis.range.slice();
+        var y0 = yr[0], y1 = yr[1];
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var fg = dark ? '#94a3b8' : '#64748b';
+        var shapes = [], ann = [];
+        SS_BANDS.forEach(function (b) {
+            if (b.hi <= y0 || b.lo >= y1) return;
+            shapes.push({
+                type: 'rect', xref: 'x domain', yref: 'y', x0: 0, x1: 1,
+                y0: Math.max(b.lo, y0), y1: Math.min(b.hi, y1),
+                fillcolor: hexToRgba(SS_COLORS[b.k], dark ? 0.10 : 0.08),
+                line: { width: 0 }, layer: 'below'
+            });
+            if (b.lo < y1 - (y1 - y0) * 0.05) ann.push({
+                xref: 'x domain', yref: 'y', x: 0.994,
+                y: Math.max(b.lo, y0), xanchor: 'right', yanchor: 'bottom',
+                showarrow: false, text: categoryShort(b.k),
+                font: { size: 9, color: fg }, opacity: 0.9
+            });
         });
+        Plotly.relayout(el, {
+            'yaxis.range': yr, 'yaxis.autorange': false,
+            shapes: shapes, annotations: ann
+        });
+    }
+
+    /* ---------------- latest-estimate stat tiles ---------------- */
+
+    function renderTiles(j) {
+        var box = document.getElementById('exp-tiles');
+        if (!box) return;
+        var fr = j.frames || [];
+        var v = lastFiniteFrame(fr, 'vmax_kt');
+        var p = lastFiniteFrame(fr, 'pmin_hpa');
+        var r = lastFiniteFrame(fr, 'rmw_km');
+        if (!v) { box.innerHTML = ''; return; }
+
+        /* Trend line: arrow + delta, tinted by strengthening vs weakening
+           (falling pressure and contracting RMW both read as strengthening).
+           Deltas inside the noise deadband stay neutral so a −1 hPa wiggle
+           doesn't wear a bold trend colour. */
+        var DEADBAND = { kt: 5, hPa: 3, km: 5 };
+        function deltaLine(tr, unit, dp, strongerWhenUp) {
+            if (!tr) return '<div class="exp-tile-d">— <span class="exp-tile-sub">' +
+                '(needs 24 h of history)</span></div>';
+            var up = tr.d >= 0;
+            var stronger = strongerWhenUp ? up : !up;
+            var cls = Math.abs(tr.d) < (DEADBAND[unit] || 0)
+                ? '' : (stronger ? 'exp-up' : 'exp-down');
+            var arrow = up ? '▲' : '▼';
+            var hLbl = Math.abs(tr.h - 24) < 1.5 ? '24 h' : Math.round(tr.h) + ' h';
+            return '<div class="exp-tile-d"><span class="' + cls + '">' + arrow +
+                ' ' + fmtSigned(tr.d, dp) + ' ' + unit + '</span> over ' + hLbl +
+                '</div>';
+        }
+
+        var tv = trend24(fr, 'vmax_kt');
+        var tp = trend24(fr, 'pmin_hpa');
+        var trm = trend24(fr, 'rmw_km');
+        var cat = windToCategory(v.v);
+        var asOf = '<div class="exp-tile-sub">at ' + v.t.slice(11, 16) + 'Z</div>';
+
+        var html =
+            '<div class="exp-tile">' +
+            '<div class="exp-tile-k">GHOST max wind</div>' +
+            '<div class="exp-tile-v">' + Math.round(v.v) +
+            ' <span class="exp-tile-u">kt</span>' +
+            '<span class="exp-cat" style="background:' + SS_COLORS[cat] +
+            ';color:' + catInk(cat) + '">' + categoryShort(cat) + '</span></div>' +
+            deltaLine(tv, 'kt', 0, true) +
+            /* NHC RI definition: ≥30 kt in 24 h (scaled to the true baseline). */
+            (tv && tv.d * 24 / tv.h >= 30
+                ? '<div class="exp-flag">Rapid intensification</div>'
+                : (tv && tv.d * 24 / tv.h <= -30
+                    ? '<div class="exp-flag down">Rapid weakening</div>' : '')) +
+            asOf + '</div>';
+
+        if (p) html +=
+            '<div class="exp-tile">' +
+            '<div class="exp-tile-k">GHOST min pressure</div>' +
+            '<div class="exp-tile-v">' + Math.round(p.v) +
+            ' <span class="exp-tile-u">hPa</span></div>' +
+            deltaLine(tp, 'hPa', 0, false) +
+            '<div class="exp-tile-sub">at ' + p.t.slice(11, 16) + 'Z</div></div>';
+
+        if (r) {
+            var ph = lastFiniteFrame(fr, 'pinhole_prob');
+            html +=
+                '<div class="exp-tile">' +
+                '<div class="exp-tile-k">GHOST eyewall radius (RMW)</div>' +
+                '<div class="exp-tile-v">' + Math.round(r.v) +
+                ' <span class="exp-tile-u">km</span></div>' +
+                deltaLine(trm, 'km', 0, false) +
+                ((ph && ph.v >= 0.10)
+                    ? '<div class="exp-tile-sub">pinhole-eye probability ' +
+                      Math.round(ph.v * 100) + '%</div>'
+                    : '<div class="exp-tile-sub">at ' + r.t.slice(11, 16) +
+                      'Z</div>') +
+                '</div>';
+        }
+
+        /* Latest true NHC analysis + what GHOST said at that same time, so
+           the "GHOST continues past the reference" caveat has a number. */
+        var fix = null;
+        for (var i = fr.length - 1; i >= 0; i--) {
+            if (fr[i].btk_is_fix && fr[i].btk_vmax_kt !== null &&
+                fr[i].btk_vmax_kt !== undefined && isFinite(fr[i].btk_vmax_kt)) {
+                fix = fr[i]; break;
+            }
+        }
+        if (fix) {
+            var ageH = (new Date(v.t) - new Date(fix.t)) / 3.6e6;
+            var gAt = (fix.vmax_kt !== null && isFinite(fix.vmax_kt))
+                ? fix.vmax_kt : null;
+            html +=
+                '<div class="exp-tile">' +
+                '<div class="exp-tile-k">Last NHC analysis</div>' +
+                '<div class="exp-tile-v">' + Math.round(fix.btk_vmax_kt) +
+                ' <span class="exp-tile-u">kt</span></div>' +
+                '<div class="exp-tile-d">at ' + fix.t.slice(11, 16) + 'Z · ' +
+                (ageH >= 1 ? Math.round(ageH) + ' h ago' : 'current') + '</div>' +
+                (gAt !== null
+                    ? '<div class="exp-tile-sub">GHOST at that time: ' +
+                      Math.round(gAt) + ' kt (' +
+                      fmtSigned(gAt - fix.btk_vmax_kt, 0) + ')</div>' : '') +
+                '</div>';
+        }
+        box.innerHTML = html;
+    }
+
+    /* ---------------- center-track mini-map ---------------- */
+
+    /* The producer publishes the IR-recentered center for every frame
+       (center_lat/lon + eye_recentered) but until now nothing displayed
+       them. Full-lifetime track coloured by GHOST intensity; open circles
+       mark frames where no IR eye lock was found and the centre fell back
+       to the interpolated/extrapolated NHC track. */
+    function drawTrack(j) {
+        var box = document.getElementById('exp-track');
+        if (!box || typeof Plotly === 'undefined') return;
+        var fr = (j.frames || []).filter(function (f) {
+            return f.center_lat !== null && f.center_lat !== undefined &&
+                   f.center_lon !== null && f.center_lon !== undefined;
+        });
+        if (fr.length < 2) {
+            box.innerHTML = '<div class="exp-empty">No centre-fix positions ' +
+                'published for this storm yet.</div>';
+            return;
+        }
+        var lats = fr.map(function (f) { return f.center_lat; });
+        var lons = fr.map(function (f) { return f.center_lon; });
+        /* Dateline-crossing track (CP basin): unwrap so the range is contiguous. */
+        if (Math.max.apply(null, lons) - Math.min.apply(null, lons) > 180) {
+            lons = lons.map(function (l) { return l < 0 ? l + 360 : l; });
+        }
+        var cols = fr.map(function (f) {
+            return SS_COLORS[windToCategory(f.vmax_kt)]; });
+        var syms = fr.map(function (f) {
+            return f.eye_recentered ? 'circle' : 'circle-open'; });
+        var hover = fr.map(function (f) {
+            var cat = windToCategory(f.vmax_kt);
+            return f.t.slice(5, 16).replace('T', ' ') + 'Z — ' +
+                (f.vmax_kt != null ? Math.round(f.vmax_kt) + ' kt (' +
+                    categoryShort(cat) + ')' : '—') +
+                (f.rmw_km != null ? ' · RMW ' + Math.round(f.rmw_km) + ' km' : '') +
+                (f.eye_recentered ? ' · IR-fixed centre' : ' · track first-guess');
+        });
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var grid = dark ? '#1e293b' : '#e2e8f0';
+        var latPad = 2, lonPad = 2.5;
+        var lo = Math.min.apply(null, lons), hi = Math.max.apply(null, lons);
+        var la = Math.min.apply(null, lats), lb = Math.max.apply(null, lats);
+
+        box.innerHTML =
+            '<div class="exp-shap-head">GHOST centre track' +
+            '<span class="exp-shap-sub">full lifetime, coloured by GHOST ' +
+            'intensity. Open circles = no IR eye lock; the centre there comes ' +
+            'from the interpolated NHC track instead.</span></div>' +
+            '<div id="exp-track-map"></div>' +
+            '<div class="exp-track-leg" id="exp-track-leg"></div>';
+        var leg = document.getElementById('exp-track-leg');
+        if (leg) {
+            var legHtml = '';
+            ['TD', 'TS', 'C1', 'C2', 'C3', 'C4', 'C5'].forEach(function (k) {
+                legHtml += '<span><i style="background:' + SS_COLORS[k] +
+                    '"></i>' + categoryShort(k) + '</span>';
+            });
+            legHtml += '<span><i class="open"></i>track-based centre</span>';
+            leg.innerHTML = legHtml;
+        }
+
+        var traces = [
+            { type: 'scattergeo', mode: 'lines', lat: lats, lon: lons,
+              line: { color: dark ? '#475569' : '#94a3b8', width: 1 },
+              hoverinfo: 'skip', showlegend: false },
+            { type: 'scattergeo', mode: 'markers', lat: lats, lon: lons,
+              marker: { size: 6, color: cols, symbol: syms,
+                        line: { width: 0.5,
+                                color: dark ? '#0f172a' : '#ffffff' } },
+              text: hover, hoverinfo: 'text', showlegend: false },
+            /* current position, emphasised */
+            { type: 'scattergeo', mode: 'markers', lat: [lats[lats.length - 1]],
+              lon: [lons[lons.length - 1]],
+              marker: { size: 12, color: cols[cols.length - 1],
+                        symbol: syms[syms.length - 1],
+                        line: { width: 2,
+                                color: dark ? '#e2e8f0' : '#0f172a' } },
+              text: [hover[hover.length - 1]], hoverinfo: 'text',
+              showlegend: false }
+        ];
+        /* Geo plots letterbox inside a fixed height (the projection keeps its
+           own aspect), so derive the height from the track's lat/lon extent
+           and the container width instead of hardcoding it — otherwise a
+           long low-latitude track swims in vertical whitespace on phones. */
+        var mapEl = document.getElementById('exp-track-map');
+        var mapW = (mapEl && mapEl.clientWidth) || 800;
+        var aspect = (lb - la + 2 * latPad) / Math.max(1, hi - lo + 2 * lonPad);
+        var mapH = Math.max(240, Math.min(520, Math.round(mapW * aspect * 1.15)));
+        Plotly.react('exp-track-map', traces, {
+            height: mapH, margin: { l: 0, r: 0, t: 4, b: 0 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            geo: {
+                projection: { type: 'mercator' },
+                lonaxis: { range: [lo - lonPad, hi + lonPad],
+                           showgrid: true, gridcolor: grid, dtick: 5 },
+                lataxis: { range: [la - latPad, lb + latPad],
+                           showgrid: true, gridcolor: grid, dtick: 5 },
+                resolution: 50,
+                showland: true,
+                landcolor: dark ? '#1e293b' : '#e2e8f0',
+                showocean: true,
+                oceancolor: dark ? 'rgba(15,23,42,0.55)' : 'rgba(248,250,252,0.7)',
+                showcoastlines: true,
+                coastlinecolor: dark ? '#475569' : '#94a3b8',
+                showcountries: true,
+                countrycolor: dark ? '#334155' : '#cbd5e1',
+                bgcolor: 'rgba(0,0,0,0)'
+            }
+        }, { displayModeBar: false, responsive: true })
+          .then(function () { Plotly.Plots.resize('exp-track-map'); });
     }
 
     /* Exact TreeSHAP from the producer. Explains the RAW Stage-A booster and
@@ -479,9 +844,11 @@
                entry means the same thing everywhere (the y-axis titles already
                say which quantity each panel shows). */
             { x: t, y: col('vmax_kt'), name: 'GHOST', yaxis: 'y',
-              line: { color: GHOST_COL, width: 2.4 } },
+              line: { color: GHOST_COL, width: 2.4 },
+              hovertemplate: '%{y:.1f} kt' },
             { x: t, y: col('btk_vmax_kt'), name: 'NHC best track (interp)',
-              yaxis: 'y', line: nhc, connectgaps: false },
+              yaxis: 'y', line: nhc, connectgaps: false,
+              hovertemplate: '%{y:.0f} kt' },
             { x: fr.filter(function (d) { return d.btk_is_fix; })
                    .map(function (d) { return d.t; }),
               y: fr.filter(function (d) { return d.btk_is_fix; })
@@ -489,13 +856,17 @@
               name: 'NHC analysis', yaxis: 'y', mode: 'markers',
               marker: { size: 5, color: nhc.color } },
             { x: t, y: col('pmin_hpa'), name: 'GHOST', yaxis: 'y2',
-              line: { color: GHOST_COL, width: 2.4 }, showlegend: false },
+              line: { color: GHOST_COL, width: 2.4 }, showlegend: false,
+              hovertemplate: '%{y:.0f} hPa' },
             { x: t, y: col('btk_mslp_hpa'), name: 'NHC best track (interp)',
-              yaxis: 'y2', line: nhc, showlegend: false, connectgaps: false },
+              yaxis: 'y2', line: nhc, showlegend: false, connectgaps: false,
+              hovertemplate: '%{y:.0f} hPa' },
             { x: t, y: col('rmw_km'), name: 'GHOST', yaxis: 'y3',
-              line: { color: GHOST_COL, width: 2.4 }, showlegend: false },
+              line: { color: GHOST_COL, width: 2.4 }, showlegend: false,
+              hovertemplate: '%{y:.0f} km' },
             { x: t, y: col('btk_rmw_km'), name: 'NHC RMW', yaxis: 'y3',
-              line: nhc, showlegend: false, connectgaps: false }
+              line: nhc, showlegend: false, connectgaps: false,
+              hovertemplate: '%{y:.0f} km' }
         ];
         /* Mobile: 7 legend entries (now carrying update times) wrap to three
            rows and used to sit ON TOP of the Vmax panel, and the fixed 58 px
@@ -503,12 +874,19 @@
            room above the plot, shrink its font, and let the y-axes claim the
            margin they need. */
         var narrow = window.innerWidth < 640;
+        /* Legend always sits ABOVE the plot area (yanchor bottom at y=1.0)
+           so its rows grow upward into the top margin, never down onto the
+           Vmax panel. The margin must therefore budget for the wrapped rows:
+           comparators add up to 4 extra entries (with update-time stamps)
+           which wrap to 2-3 rows at desktop widths too, not just on phones. */
+        var topM = narrow ? (_showComp ? 116 : 64)
+                          : (_showComp ? 88 : 48);
         var layout = {
             grid: { rows: 3, columns: 1, pattern: 'independent',
                     roworder: 'top to bottom' },
-            height: narrow ? 640 : 560,
-            margin: narrow ? { l: 8, r: 8, t: 104, b: 44 }
-                           : { l: 58, r: 16, t: 26, b: 40 },
+            height: (narrow ? 640 : 560) + (topM - (narrow ? 104 : 26)),
+            margin: narrow ? { l: 8, r: 8, t: topM, b: 44 }
+                           : { l: 58, r: 16, t: topM, b: 40 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: dark ? 'rgba(15,23,42,0.55)' : 'rgba(248,250,252,0.7)',
             font: font,
@@ -517,12 +895,17 @@
                 ? { orientation: 'h', y: 1.0, yanchor: 'bottom', x: 0,
                     xanchor: 'left', font: { size: 9 },
                     itemwidth: 30, tracegroupgap: 2 }
-                : { orientation: 'h', y: 1.06, font: { size: 11 } },
+                : { orientation: 'h', y: 1.0, yanchor: 'bottom', x: 0,
+                    xanchor: 'left', font: { size: 11 } },
+            /* Saffir-Simpson bands are painted AFTER autorange settles (see
+               paintBands) — shapes in data coords participate in Plotly's
+               y-autorange, so declaring the 250-kt C5 band here would blow
+               the Vmax axis out to 250 regardless of the storm. */
             xaxis:  { anchor: 'y',  gridcolor: grid, matches: 'x3',
                       showticklabels: false },
             xaxis2: { anchor: 'y2', gridcolor: grid, matches: 'x3',
                       showticklabels: false },
-            xaxis3: { anchor: 'y3', gridcolor: grid },
+            xaxis3: { anchor: 'y3', gridcolor: grid, automargin: true },
             yaxis:  { title: { text: 'Vmax (kt)', standoff: 4 }, automargin: true, gridcolor: grid,
                       domain: [0.70, 1.00] },
             yaxis2: { title: { text: 'Pmin (hPa)', standoff: 4 }, automargin: true, gridcolor: grid,
@@ -562,7 +945,8 @@
                     mode: many ? 'lines' : 'lines+markers',
                     line: { color: col, width: 1.4 },
                     marker: { size: 5, color: col },
-                    opacity: 0.9
+                    opacity: 0.9,
+                    hovertemplate: '%{y:.0f} kt'
                 });
                 var hasP = rows.some(function (r) {
                     return r.pmin_hpa !== undefined && r.pmin_hpa !== null; });
@@ -572,7 +956,8 @@
                         return (r.pmin_hpa === undefined) ? null : r.pmin_hpa; }),
                     name: lbl + ' Pmin', yaxis: 'y2', xaxis: 'x2',
                     mode: 'lines', line: { color: col, width: 1.4 },
-                    opacity: 0.9, showlegend: false
+                    opacity: 0.9, showlegend: false,
+                    hovertemplate: '%{y:.0f} hPa'
                 });
             });
         }
@@ -602,6 +987,7 @@
         if (_storm && _series[_storm] &&
             document.getElementById('exp-plot')) {
             drawSeries(_series[_storm]);
+            if (_showTrack) drawTrack(_series[_storm]);
             if (_showShap) drawShap(_series[_storm]);
         }
     }).observe(document.documentElement,

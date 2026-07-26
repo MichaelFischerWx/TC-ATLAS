@@ -7041,6 +7041,72 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 }
 [data-theme="dark"] .exp-verif-note { color: #94a3b8; }
 
+/* Latest-estimate stat tiles */
+.exp-tiles {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+    gap: 8px; margin-bottom: 12px;
+}
+.exp-tiles:empty { display: none; }
+.exp-tile {
+    border: 1px solid #e2e8f0; border-radius: 10px; padding: 9px 12px 8px;
+    background: #f8fafc; min-width: 0;
+}
+[data-theme="dark"] .exp-tile { border-color: #1e293b; background: rgba(15,23,42,0.55); }
+.exp-tile-k {
+    font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.04em; color: #64748b; margin-bottom: 2px;
+}
+[data-theme="dark"] .exp-tile-k { color: #94a3b8; }
+.exp-tile-v { font-size: 21px; font-weight: 700; color: #0f172a; line-height: 1.2; }
+[data-theme="dark"] .exp-tile-v { color: #e2e8f0; }
+.exp-tile-u { font-size: 12px; font-weight: 600; color: #64748b; }
+[data-theme="dark"] .exp-tile-u { color: #94a3b8; }
+.exp-tile-sub { font-size: 11px; color: #64748b; margin-top: 1px; }
+[data-theme="dark"] .exp-tile-sub { color: #94a3b8; }
+.exp-tile-d { font-size: 11.5px; color: #475569; margin-top: 3px; }
+[data-theme="dark"] .exp-tile-d { color: #94a3b8; }
+.exp-cat {
+    display: inline-block; font-size: 10.5px; font-weight: 700;
+    border-radius: 999px; padding: 1.5px 8px; margin-left: 7px;
+    vertical-align: 3px;
+}
+.exp-up { color: #dc2626; font-weight: 600; }
+.exp-down { color: #2563eb; font-weight: 600; }
+[data-theme="dark"] .exp-up { color: #f87171; }
+[data-theme="dark"] .exp-down { color: #60a5fa; }
+.exp-flag {
+    display: inline-block; margin-top: 5px; font-size: 10px; font-weight: 700;
+    letter-spacing: 0.04em; text-transform: uppercase; border-radius: 4px;
+    padding: 2px 7px; background: #dc2626; color: #fff;
+}
+.exp-flag.down { background: #2563eb; }
+
+/* Storm-chip intensity stamp */
+.exp-chip-int { font-style: normal; font-size: 11px; opacity: 0.85; margin-left: 6px; }
+.exp-chip-int:empty { display: none; }
+.exp-chip-int i {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 4px; vertical-align: -0.5px;
+}
+
+/* Centre-track mini-map */
+.exp-track { margin-top: 16px; }
+#exp-track-map { min-width: 0; width: 100%; }
+.exp-track-leg {
+    display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
+    font-size: 11px; color: #475569; margin-top: 4px;
+}
+[data-theme="dark"] .exp-track-leg { color: #94a3b8; }
+.exp-track-leg i {
+    display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+    margin-right: 4px; vertical-align: -0.5px;
+}
+.exp-track-leg i.open { background: transparent; border: 1.5px solid currentColor; }
+.exp-trackbtn.active {
+    border-color: #2e7dff; color: #1d4ed8; background: rgba(46,125,255,0.08);
+}
+[data-theme="dark"] .exp-trackbtn.active { color: #60a5fa; }
+
 @media (max-width: 720px) { .exp-shap-grid { grid-template-columns: 1fr; } }
 @media (max-width: 640px) {
     .exp-main { padding: 12px 8px 40px; }
@@ -7056,6 +7122,9 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     .exp-ranges > * { flex: 0 0 auto; }
     .exp-range { padding: 5px 9px; font-size: 11.5px; }
     .exp-chip { padding: 5px 11px; font-size: 12.5px; }
+    .exp-tiles { grid-template-columns: repeat(2, 1fr); }
+    .exp-tile-v { font-size: 18px; }
+    .exp-cat { vertical-align: 2px; }
     .exp-lede { font-size: 13px; }
     .exp-cite, .exp-note { font-size: 12px; padding: 9px 10px; }
     .exp-verif-note { font-size: 11.5px; }
