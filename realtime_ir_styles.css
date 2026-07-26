@@ -7043,6 +7043,20 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 
 @media (max-width: 720px) { .exp-shap-grid { grid-template-columns: 1fr; } }
 @media (max-width: 640px) {
-    .exp-main { padding: 12px 10px 40px; }
-    .exp-title { font-size: 16px; }
+    .exp-main { padding: 12px 8px 40px; }
+    .exp-title { font-size: 16px; margin-left: 6px; }
+    /* the control row is 6 buttons; let it scroll sideways in one line
+       instead of wrapping into three stacked rows */
+    .exp-ranges {
+        flex-wrap: nowrap; overflow-x: auto; gap: 5px;
+        padding-bottom: 4px; -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+    .exp-ranges::-webkit-scrollbar { display: none; }
+    .exp-ranges > * { flex: 0 0 auto; }
+    .exp-range { padding: 5px 9px; font-size: 11.5px; }
+    .exp-chip { padding: 5px 11px; font-size: 12.5px; }
+    .exp-lede { font-size: 13px; }
+    .exp-cite, .exp-note { font-size: 12px; padding: 9px 10px; }
+    .exp-verif-note { font-size: 11.5px; }
 }

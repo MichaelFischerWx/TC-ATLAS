@@ -37,6 +37,15 @@
     var RANGES = [{ h: 24, label: '24 h' }, { h: 48, label: '48 h' },
                   { h: 0,  label: 'Full lifetime' }];
 
+    /* GA4 is already configured on the page (G-EFM8GFFKLK); mirror the
+       guarded helper used by realtime_seasonal.js so a blocked/absent gtag
+       can never throw into the render path. */
+    function track(name, params) {
+        try {
+            if (typeof gtag === 'function') gtag('event', name, params || {});
+        } catch (e) {}
+    }
+
     function ensurePlotly() {
         if (typeof Plotly !== 'undefined') return Promise.resolve(true);
         if (_plotlyReq) return _plotlyReq;
@@ -206,6 +215,7 @@
         var vBtn = document.getElementById('exp-verif-btn');
         if (vBtn) vBtn.addEventListener('click', function () {
             _showVerif = !_showVerif;
+            track('ghost_verification', { on: _showVerif });
             vBtn.classList.toggle('active', _showVerif);
             var box = document.getElementById('exp-verif');
             if (!box) return;
@@ -215,6 +225,7 @@
         var shapBtn = document.getElementById('exp-shap-btn');
         if (shapBtn) shapBtn.addEventListener('click', function () {
             _showShap = !_showShap;
+            track('ghost_model_drivers', { on: _showShap });
             shapBtn.classList.toggle('active', _showShap);
             var box = document.getElementById('exp-shap');
             if (box) box.style.display = _showShap ? 'block' : 'none';
@@ -223,6 +234,7 @@
         var compBtn = document.getElementById('exp-comp');
         if (compBtn) compBtn.addEventListener('click', function () {
             _showComp = !_showComp;
+            track('ghost_comparators', { on: _showComp });
             compBtn.classList.toggle('active', _showComp);
             if (_storm && _series[_storm]) drawSeries(_series[_storm]);
         });
@@ -233,6 +245,7 @@
         _root.querySelectorAll('.exp-range[data-h]').forEach(function (b) {
             b.addEventListener('click', function () {
                 _rangeH = parseInt(b.getAttribute('data-h'), 10);
+                track('ghost_range', { hours: _rangeH || 'lifetime' });
                 _root.querySelectorAll('.exp-range[data-h]').forEach(
                     function (o) { o.classList.toggle('active', o === b); });
                 /* Data already spans the full lifetime — a range change is a
@@ -255,6 +268,7 @@
     }
 
     function selectStorm(atcf) {
+        if (_storm && _storm !== atcf) track('ghost_storm_select', { storm: atcf });
         _storm = atcf;
         _root.querySelectorAll('.exp-chip').forEach(function (c) {
             c.classList.toggle('active', c.getAttribute('data-atcf') === atcf);
@@ -285,6 +299,7 @@
        paper exports as a see-through PNG), snapshot, then redraw to restore
        the live transparent styling. */
     function saveChartPng(btn) {
+        track('ghost_download_png', { storm: _storm || 'none' });
         var el = document.getElementById('exp-plot');
         if (!el || typeof Plotly === 'undefined' || !window.TCExport) return;
         if (!_storm || !_series[_storm]) return;
@@ -479,26 +494,37 @@
             { x: t, y: col('btk_rmw_km'), name: 'NHC RMW', yaxis: 'y3',
               line: nhc, showlegend: false, connectgaps: false }
         ];
+        /* Mobile: 7 legend entries (now carrying update times) wrap to three
+           rows and used to sit ON TOP of the Vmax panel, and the fixed 58 px
+           left margin clipped "RMW (km)" to "1W (km)". Give the legend real
+           room above the plot, shrink its font, and let the y-axes claim the
+           margin they need. */
+        var narrow = window.innerWidth < 640;
         var layout = {
             grid: { rows: 3, columns: 1, pattern: 'independent',
                     roworder: 'top to bottom' },
-            height: 560,
-            margin: { l: 58, r: 16, t: 26, b: 40 },
+            height: narrow ? 640 : 560,
+            margin: narrow ? { l: 8, r: 8, t: 104, b: 44 }
+                           : { l: 58, r: 16, t: 26, b: 40 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: dark ? 'rgba(15,23,42,0.55)' : 'rgba(248,250,252,0.7)',
             font: font,
             hovermode: 'x unified',
-            legend: { orientation: 'h', y: 1.06, font: { size: 11 } },
+            legend: narrow
+                ? { orientation: 'h', y: 1.0, yanchor: 'bottom', x: 0,
+                    xanchor: 'left', font: { size: 9 },
+                    itemwidth: 30, tracegroupgap: 2 }
+                : { orientation: 'h', y: 1.06, font: { size: 11 } },
             xaxis:  { anchor: 'y',  gridcolor: grid, matches: 'x3',
                       showticklabels: false },
             xaxis2: { anchor: 'y2', gridcolor: grid, matches: 'x3',
                       showticklabels: false },
             xaxis3: { anchor: 'y3', gridcolor: grid },
-            yaxis:  { title: { text: 'Vmax (kt)' },  gridcolor: grid,
+            yaxis:  { title: { text: 'Vmax (kt)', standoff: 4 }, automargin: true, gridcolor: grid,
                       domain: [0.70, 1.00] },
-            yaxis2: { title: { text: 'Pmin (hPa)' }, gridcolor: grid,
+            yaxis2: { title: { text: 'Pmin (hPa)', standoff: 4 }, automargin: true, gridcolor: grid,
                       domain: [0.36, 0.64] },
-            yaxis3: { title: { text: 'RMW (km)' },   gridcolor: grid,
+            yaxis3: { title: { text: 'RMW (km)', standoff: 4 }, automargin: true,   gridcolor: grid,
                       domain: [0.00, 0.30], rangemode: 'tozero' }
         };
         traces[3].xaxis = 'x2'; traces[4].xaxis = 'x2';
@@ -520,8 +546,12 @@
                    series is well behind the newest GHOST frame. */
                 var lastT = rows[rows.length - 1].t;
                 var ageH = (new Date(t[t.length - 1]) - new Date(lastT)) / 3.6e6;
-                var lbl = name + ' \u00b7 ' + lastT.slice(11, 16) + 'Z' +
-                          (ageH >= 2 ? ' (' + ageH.toFixed(0) + ' h old)' : '');
+                var short = window.innerWidth < 640;
+                var lbl = short
+                    ? name.replace(' (DVTS)', '') + ' ' + lastT.slice(11, 16) +
+                      (ageH >= 2 ? '\u00b7' + ageH.toFixed(0) + 'h' : '')
+                    : name + ' \u00b7 ' + lastT.slice(11, 16) + 'Z' +
+                      (ageH >= 2 ? ' (' + ageH.toFixed(0) + ' h old)' : '');
                 traces.push({
                     x: rows.map(function (r) { return r.t; }),
                     y: rows.map(function (r) { return r.vmax_kt; }),
@@ -597,6 +627,7 @@
     window.activateExperimentalView = function () {
         _root = document.getElementById('exp-main');
         if (!_root) return;
+        track('ghost_view_open', { narrow: window.innerWidth < 640 });
         loadIndex();
     };
 })();
