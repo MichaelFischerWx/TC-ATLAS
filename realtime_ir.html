@@ -43,7 +43,7 @@
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
 
     <title>Real-Time Monitor — TC-ATLAS</title>
-    <script src="theme.js?v=20260726a"></script>
+    <script src="theme.js?v=20260726b"></script>
     <script src="tc_export.js?v=20260719a"></script>
 
     <!-- Leaflet CSS kept (chrome reuses some .leaflet-* classes); map engine is
@@ -97,10 +97,10 @@
     </script>
 
     <!-- Styles -->
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260726a">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260726b">
     <link rel="stylesheet" href="realtime_ir_styles.css?v=20260725c">
     <link rel="stylesheet" href="satellite_styles.css?v=20260725c">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260726a">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260726b">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -142,12 +142,7 @@
             <button class="ir-view-tab" data-view="subseasonal" onclick="window.switchIRView('subseasonal')">Subseasonal</button>
             <button class="ir-view-tab" data-view="seasonal" onclick="window.switchIRView('seasonal')">Seasonal</button>
             <button class="ir-view-tab" data-view="recon" onclick="window.switchIRView('recon')">Recon</button>
-            <!-- The Experimental view (GHOST ML diagnostics) is intentionally
-                 NOT in the tab bar: it is unpublished research, reachable only
-                 by direct URL (realtime_ir.html#experimental) and then gated by
-                 password. Routing lives in VALID_VIEWS / _viewFromHash below,
-                 which is independent of this bar — re-add a button here to
-                 make it public. -->
+            <button class="ir-view-tab" data-view="experimental" onclick="window.switchIRView('experimental')"><span class="tab-full">Experimental</span><span class="tab-short">Exp</span></button>
         </div>
         <div class="ir-storm-counts">
             <span class="ir-count"><span class="ir-count-val" id="stat-active">&mdash;</span> Active</span>
@@ -2517,9 +2512,9 @@
          scanner so the whole bundle downloads IN PARALLEL. The old
          document.write chain forced a serial download of ~3 MB. -->
     <script defer src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-    <script defer src="lflet_gl.js?v=20260726a"></script>
+    <script defer src="lflet_gl.js?v=20260726b"></script>
     <!-- Single-channel idx mosaic WebGL layer (flag-gated ?ir2a=1). -->
-    <script defer src="mosaic_gl_layer.js?v=20260726a"></script>
+    <script defer src="mosaic_gl_layer.js?v=20260726b"></script>
     <script>
     // Plotly (~1 MB gzipped) is only needed once a chart renders, but a
     // synchronous tag here serializes the whole page: the document.write
@@ -2541,15 +2536,15 @@
     </script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
-    <script defer src="tc_mw_layer.js?v=20260726a"></script>
+    <script defer src="tc_mw_layer.js?v=20260726b"></script>
     <script defer src="realtime_ir.js?v=20260725b"></script>
-    <script defer src="vol3d.js?v=20260726a"></script>
+    <script defer src="vol3d.js?v=20260726b"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
          eager for the map-tab recon-overlay sonde skew-Ts. The recon /
          subseasonal / seasonal tab modules (~1 MB combined) lazy-load on first
          tab activation — see _lazyViewMods in the tab controller below. -->
-    <script defer src="satellite.js?v=20260726a"></script>
+    <script defer src="satellite.js?v=20260726b"></script>
 
     <script>
     /* Tab switching between Map, Satellite, Subseasonal, and Seasonal views */

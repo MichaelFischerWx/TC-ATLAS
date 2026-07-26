@@ -2,10 +2,10 @@
  *
  * GHOST Stage-0/1 ML diagnostics (recon-independent Vmax/Pmin/RMW from
  * geostationary IR + SHIPS environment), produced by the TC-SWARM
- * realtime/ghost_rt pipeline every 30 min and published to a GCS prefix
- * derived from the access password: "ghost-rt-" + sha1(password)[:10].
- * Wrong password → prefix doesn't exist → 404. Light gate by design:
- * unpublished research guidance, not operational products.
+ * realtime/ghost_rt pipeline hourly and published to
+ * gs://tc-atlas-ir-cache/ghost-rt/. Public since 2026-07-26; the method is
+ * described in a manuscript in preparation. Research guidance, NOT an
+ * official forecast or analysis.
  *
  * Lazy-loaded on first tab activation (see _lazyViewMods in
  * realtime_ir.html). Public API: window.activateExperimentalView().
@@ -14,10 +14,9 @@
     'use strict';
 
     var GCS_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/';
-    var SS_KEY = 'ghostRtPrefix';
+    var PREFIX = 'ghost-rt';
 
     var _root = null;          // #exp-main
-    var _prefix = null;        // validated "ghost-rt-xxxxxxxxxx"
     var _index = null;         // manifest {generated, storms:[{atcf,name}]}
     var _storm = null;         // selected ATCF id
     var _series = {};          // atcf -> frames json
@@ -48,62 +47,10 @@
         return _plotlyReq;
     }
 
-    function sha1Hex(text) {
-        var buf = new TextEncoder().encode(text);
-        return crypto.subtle.digest('SHA-1', buf).then(function (d) {
-            return Array.prototype.map.call(new Uint8Array(d), function (b) {
-                return ('0' + b.toString(16)).slice(-2);
-            }).join('');
-        });
-    }
-
     function fetchJson(url) {
         return fetch(url, { cache: 'no-store' }).then(function (r) {
             if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.json();
-        });
-    }
-
-    /* ---------------- gate ---------------- */
-
-    function renderGate(msg) {
-        _root.innerHTML =
-            '<div class="exp-inner"><div class="exp-gate">' +
-            '  <div class="exp-badge">EXPERIMENTAL</div>' +
-            '  <h2>GHOST — ML Structure Diagnostics</h2>' +
-            '  <p>Recon-independent tropical cyclone intensity, pressure, and ' +
-            '     RMW estimated from geostationary IR + large-scale environment. ' +
-            '     Unpublished research product — access is limited while the ' +
-            '     manuscript is in review.</p>' +
-            '  <div class="exp-gate-row">' +
-            '    <input type="password" id="exp-pw" placeholder="Access password" ' +
-            '           autocomplete="off">' +
-            '    <button id="exp-pw-go">Enter</button>' +
-            '  </div>' +
-            (msg ? '<div class="exp-gate-err">' + msg + '</div>' : '') +
-            '</div></div>';
-        var input = document.getElementById('exp-pw');
-        var go = document.getElementById('exp-pw-go');
-        function submit() { tryPassword(input.value.trim()); }
-        go.addEventListener('click', submit);
-        input.addEventListener('keydown', function (e) {
-            if (e.key === 'Enter') submit();
-        });
-        input.focus();
-    }
-
-    function tryPassword(pw) {
-        if (!pw) return;
-        sha1Hex(pw).then(function (hex) {
-            var prefix = 'ghost-rt-' + hex.slice(0, 10);
-            return fetchJson(GCS_BASE + prefix + '/index.json').then(function (idx) {
-                _prefix = prefix;
-                _index = idx;
-                try { sessionStorage.setItem(SS_KEY, prefix); } catch (e) {}
-                renderShell();
-            });
-        }).catch(function () {
-            renderGate('Incorrect password (or no data published yet).');
         });
     }
 
@@ -125,9 +72,16 @@
             '  <div class="exp-meta">Updated ' + genStr +
             '    · refreshes hourly · <a href="#" id="exp-refresh">reload</a></div>' +
             '</div>' +
+            '<div class="exp-cite"><strong>Manuscript in preparation.</strong> ' +
+            'GHOST (Geostationary-based Hurricane Objective Strength ' +
+            'Technique) is an unpublished research method; this page is ' +
+            'provided for scientific transparency and is <strong>not an ' +
+            'official forecast or analysis</strong>. Please contact the ' +
+            'author before citing or redistributing these estimates.</div>' +
             '<div class="exp-note">Recon-independent estimates from ' +
-            'geostationary IR + SHIPS-type environment (GHOST Stage-0 intensity ' +
-            '/ pressure, Stage-1 RMW). Guidance, not official analysis. ' +
+            'geostationary infrared imagery and reanalysis-derived environmental ' +
+            'predictors alone \u2014 no aircraft reconnaissance. Guidance, not ' +
+            'official analysis. ' +
             'Weak systems (TD / weak TS) are known to read high. The NHC ' +
             'reference is linearly interpolated between 6-hourly analyses ' +
             '(dots mark the real ones) and STOPS at the latest analysis — ' +
@@ -223,12 +177,12 @@
         });
         var img = document.getElementById('exp-plan');
         if (img) {
-            img.src = GCS_BASE + _prefix + '/ghost_' + atcf + '_plan.png?t=' +
+            img.src = GCS_BASE + PREFIX + '/ghost_' + atcf + '_plan.png?t=' +
                 encodeURIComponent((_index && _index.generated) || Date.now());
         }
         var p = _series[atcf]
             ? Promise.resolve(_series[atcf])
-            : fetchJson(GCS_BASE + _prefix + '/ghost_' + atcf + '.json')
+            : fetchJson(GCS_BASE + PREFIX + '/ghost_' + atcf + '.json')
                 .then(function (j) { _series[atcf] = j; return j; });
         Promise.all([p, ensurePlotly()]).then(function (res) {
             if (_storm !== atcf) return;
@@ -316,9 +270,9 @@
             '<div class="exp-shap-head">Model drivers &mdash; ' +
             (last ? last.t.slice(0, 16).replace('T', ' ') + 'Z' : '') +
             '<span class="exp-shap-sub">exact TreeSHAP. Explains the ' +
-            'Stage-A intensity booster (base ' + (sh.vmax_base || 0).toFixed(1) +
-            ' kt) and the base-18 RMW model &mdash; not the calibrated / ' +
-            'kernel-smoothed values plotted above.</span></div>' +
+            'intensity model\u2019s first-pass estimate (base ' +
+            (sh.vmax_base || 0).toFixed(1) + ' kt) and the size model &mdash; ' +
+            'not the calibrated, time-smoothed values plotted above.</span></div>' +
             '<div class="exp-shap-grid">' +
             '<div id="exp-shap-v"></div><div id="exp-shap-r"></div></div>' +
             '<div id="exp-shap-t"></div>';
@@ -344,8 +298,8 @@
             }, { displayModeBar: false, responsive: true })
               .then(function () { Plotly.Plots.resize(el); });
         }
-        barFig('exp-shap-v', sh.vmax_latest, ' kt', 'Intensity (Stage-A)');
-        barFig('exp-shap-r', sh.rmw_latest, ' %', 'RMW (base-18, % effect)');
+        barFig('exp-shap-v', sh.vmax_latest, ' kt', 'Intensity drivers (kt)');
+        barFig('exp-shap-r', sh.rmw_latest, ' %', 'Size (RMW) drivers (% effect)');
 
         if (sh.groups && j.frames) {
             var t = j.frames.map(function (f) { return f.t; });
@@ -475,13 +429,13 @@
 
     function loadIndex() {
         _lastLoad = Date.now();
-        fetchJson(GCS_BASE + _prefix + '/index.json').then(function (idx) {
+        fetchJson(GCS_BASE + PREFIX + '/index.json').then(function (idx) {
             _index = idx;
             renderShell();
         }).catch(function () {
-            try { sessionStorage.removeItem(SS_KEY); } catch (e) {}
-            _prefix = null;
-            renderGate('Session expired — re-enter the password.');
+            _root.innerHTML = '<div class="exp-inner"><div class="exp-empty">' +
+                'Could not load GHOST output right now — the hourly job may be ' +
+                'mid-publish. Try again shortly.</div></div>';
         });
     }
 
@@ -503,7 +457,7 @@
     var _lastLoad = 0;
 
     function refreshIfStale(force) {
-        if (!_root || !_prefix) return;
+        if (!_root || !PREFIX) return;
         if (document.hidden) return;
         if (document.documentElement.getAttribute('data-view') !== 'experimental') return;
         if (!force && Date.now() - _lastLoad < REFRESH_MS) return;
@@ -518,10 +472,6 @@
     window.activateExperimentalView = function () {
         _root = document.getElementById('exp-main');
         if (!_root) return;
-        if (!_prefix) {
-            try { _prefix = sessionStorage.getItem(SS_KEY); } catch (e) {}
-        }
-        if (_prefix) loadIndex();
-        else renderGate('');
+        loadIndex();
     };
 })();
