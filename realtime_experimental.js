@@ -1130,6 +1130,48 @@
                 });
             });
         }
+        /* Aircraft verification fixes: one diamond per recon center pass.
+           Flight-level wind arrives already surface-adjusted by the producer
+           (x0.90 at 700 mb / x0.80 at 850 mb, Franklin et al. 2003) so the
+           Vmax marker is apples-to-apples with GHOST; hover keeps the raw
+           flight-level and SFMR values. RMW passes through unadjusted —
+           GHOST predicts the 2-km RMW, so the FL wind-max radius is the
+           natural comparison. */
+        if (j.recon && j.recon.length) {
+            var ink = dark ? '#f1f5f9' : '#0f172a';
+            var ring = dark ? '#0f172a' : '#ffffff';
+            var rec = j.recon;
+            var mk = { symbol: 'diamond', size: 9, color: ink,
+                       line: { width: 1.5, color: ring } };
+            traces.push({
+                x: rec.map(function (r) { return r.t; }),
+                y: rec.map(function (r) { return r.vmax_sfc_kt; }),
+                name: 'Recon (sfc-adjusted)', yaxis: 'y', xaxis: 'x',
+                mode: 'markers', marker: mk,
+                text: rec.map(function (r) {
+                    return r.vmax_sfc_kt + ' kt sfc — FL ' + r.fl_wind_kt +
+                        ' kt @ ' + r.fl_level_mb + ' mb ×' + r.sfc_factor +
+                        (r.sfmr_kt != null ? ' · SFMR ' + r.sfmr_kt + ' kt' : '');
+                }),
+                hovertemplate: '%{text}<extra>Recon</extra>'
+            });
+            traces.push({
+                x: rec.map(function (r) { return r.t; }),
+                y: rec.map(function (r) { return r.pmin_hpa; }),
+                name: 'Recon', yaxis: 'y2', xaxis: 'x2', mode: 'markers',
+                marker: mk, showlegend: false,
+                hovertemplate: '%{y:.0f} hPa (extrapolated)<extra>Recon</extra>'
+            });
+            var rr = rec.filter(function (r) { return r.rmw_km != null; });
+            if (rr.length) traces.push({
+                x: rr.map(function (r) { return r.t; }),
+                y: rr.map(function (r) { return r.rmw_km; }),
+                name: 'Recon', yaxis: 'y3', xaxis: 'x3', mode: 'markers',
+                marker: mk, showlegend: false,
+                hovertemplate: '%{y:.0f} km — radius of the flight-level ' +
+                    'wind max<extra>Recon</extra>'
+            });
+        }
         Plotly.react(el, traces, layout, {
             responsive: true,
             displaylogo: false,
