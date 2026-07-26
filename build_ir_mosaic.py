@@ -751,7 +751,11 @@ def kernel_path(sat_key, zoom):
 
 
 def _r2_kernel_key(sat_key, zoom):
-    return f"{R2_PREFIX}/kernels/{sat_key}_z{zoom}.npz"
+    # Bucket-root prefix, NOT under R2_PREFIX: mosaic-v2/ and mosaic-v3/ carry
+    # expiry lifecycle rules (1 d / 4 d) that silently deleted the kernels once
+    # already (bricking image builds — the Dockerfile bakes them from the CDN).
+    # kernels/ has no lifecycle rule; the geometry is fixed so these never age.
+    return f"kernels/{sat_key}_z{zoom}.npz"
 
 
 def ensure_global_kernels(zoom, sats, rebuild=False, use_r2=False):

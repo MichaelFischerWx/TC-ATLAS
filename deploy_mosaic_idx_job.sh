@@ -68,12 +68,12 @@ MOSAIC_JOB_CPU="${MOSAIC_JOB_CPU:-1}"
 # verified live (the manifest's pack_frames gates clients per frame either way).
 MOSAIC_PACK="${MOSAIC_PACK:-only}"
 # Vis hi-res storm sectors: native 0.5-km windows around active storms feed z7
-# sector tiles. HELD OFF (default 0) 2026-07-21: even the decoupled+guarded z7
-# pass can't fit the 19-00 UTC peak at 4Gi (project_mosaic_idx_oom). With
-# per-band process isolation (mosaic_band_runner.py) the vis process now starts
-# from a fresh arena — flip to 1 DELIBERATELY once a clean-peak day confirms
-# the isolated baseline has headroom.
-MOSAIC_VIS_HIRES="${MOSAIC_VIS_HIRES:-0}"
+# sector tiles. Default ON since 2026-07-26: the z7 pass now runs FIRST in the
+# vis child (virgin arena — its ~70 MB/storm/sat working set never sits on the
+# fragmented post-full-disk arena that OOM'd the 19-00 UTC peak), storms in
+# darkness are gated out, and the RSS guard remains as a backstop
+# (project_mosaic_idx_oom). Set 0 to fall back to z6-only sectors.
+MOSAIC_VIS_HIRES="${MOSAIC_VIS_HIRES:-1}"
 # rolling 1 frame/run (R2_KEEP_FRAMES window in the builder). args use the ^@^
 # delimiter — leading -- trips gcloud.
 #

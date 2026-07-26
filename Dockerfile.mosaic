@@ -28,10 +28,13 @@ WORKDIR /app
 # cache) lets the builder's local-file path load them instantly — skipping the ~78s
 # cold-start rebuild (or the ~slow R2 fetch). build_ir_mosaic.py reads them from
 # mosaic_out/kernels/{sat}_z{zoom}.npz (KERNEL_DIR). Rebuild this image whenever the
-# zoom/TILE_SIZE/satellite set or R2_PREFIX changes (the key encodes the zoom).
+# zoom/TILE_SIZE/satellite set changes (the key encodes the zoom).
+# Source is the bucket-root kernels/ prefix — it has NO lifecycle rule. Do not move
+# them under mosaic-v2/ or mosaic-v3/: those prefixes carry 1 d / 4 d expiry rules,
+# which silently deleted the kernels once and bricked this build step with 404s.
 RUN mkdir -p /app/mosaic_out/kernels && \
     for sat in east west hima; do \
-        curl -fsSL "https://cdn.tcatlas.org/mosaic-v2/kernels/${sat}_z4.npz" \
+        curl -fsSL "https://cdn.tcatlas.org/kernels/${sat}_z4.npz" \
              -o "/app/mosaic_out/kernels/${sat}_z4.npz"; \
     done
 
