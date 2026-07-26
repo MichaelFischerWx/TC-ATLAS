@@ -2025,6 +2025,26 @@ def ir_meta(
             "n_frames": len(mergir_frames), "frames": frame_list,
         }
 
+    # Advertise the R2 prefix so the browser can fetch already-rendered frames
+    # straight from cdn.tcatlas.org instead of round-tripping through Cloud Run
+    # just to be 302'd there.  The redirect in ir_frame() means the browser
+    # already reads exactly these objects today — going direct only removes a
+    # hop (and a request slot, which is what 429s us under load).
+    #
+    # Sent as a full base URL rather than a bare version string so a
+    # _GCS_CACHE_VERSION bump can't strand a frontend that pinned the old
+    # prefix — the same trap the rt-vN pin sets on the RT monitor.
+    #
+    # Only for sources the frontend fetches via /global/ir/frame: the legacy
+    # /global/hursat/frame endpoint has no R2 mirror, so its key space is empty
+    # and probing it would be a guaranteed miss on every frame.
+    if (
+        result.get("available")
+        and result.get("source") in ("mergir", "gridsat")
+        and _get_r2_client() is not None
+    ):
+        result["frame_cdn_base"] = f"{_R2_PUBLIC_BASE}/{_GCS_CACHE_VERSION}/ir"
+
     # Cache and return
     _mergir_meta_cache[cache_key] = result
     if len(_mergir_meta_cache) > _MERGIR_META_CACHE_MAX:
