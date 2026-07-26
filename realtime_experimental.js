@@ -28,6 +28,9 @@
     var GHOST_COL = '#f43f5e';   // one colour for every GHOST trace
     var COMP_STYLE = {
         'D-PRINT':       '#a855f7',
+        /* ADT comes from the CIMSS feed (~30 min) and carries MSLP, so it
+           overlays the pressure panel too; Dvorak/SATCON remain f-deck-only
+           and are wind-only + intermittent. */
         'SATCON':        '#ec4899',
         'ADT':           '#f59e0b',
         'Dvorak (DVTS)': '#14b8a6'
