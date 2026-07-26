@@ -155,6 +155,9 @@
             '" id="exp-comp">Operational comparators</button>' +
             '<button class="exp-range exp-shapbtn' + (_showShap ? ' active' : '') +
             '" id="exp-shap-btn">Model drivers</button>' +
+            '<button class="exp-range exp-dl" id="exp-dl" ' +
+            'title="Download chart as PNG" aria-label="Download chart as PNG">' +
+            '&#x2913; Download</button>' +
             '</div>' +
             '<div id="exp-plot" class="exp-plot"></div>' +
             '<div id="exp-shap" class="exp-shap" style="display:none;"></div>' +
@@ -181,6 +184,10 @@
             _showComp = !_showComp;
             compBtn.classList.toggle('active', _showComp);
             if (_storm && _series[_storm]) drawSeries(_series[_storm]);
+        });
+        var dlBtn = document.getElementById('exp-dl');
+        if (dlBtn) dlBtn.addEventListener('click', function () {
+            saveChartPng(dlBtn);
         });
         _root.querySelectorAll('.exp-range[data-h]').forEach(function (b) {
             b.addEventListener('click', function () {
@@ -229,6 +236,41 @@
             if (el) el.innerHTML =
                 '<div class="exp-empty">Failed to load ' + atcf + ' data.</div>';
         });
+    }
+
+    /* Chart → PNG through TCExport (the ONE save path — iOS-safe, share-
+       sheet aware). Same recipe as the Seasonal panels: force an opaque
+       background matching the current viewing theme (else the transparent
+       paper exports as a see-through PNG), snapshot, then redraw to restore
+       the live transparent styling. */
+    function saveChartPng(btn) {
+        var el = document.getElementById('exp-plot');
+        if (!el || typeof Plotly === 'undefined' || !window.TCExport) return;
+        if (!_storm || !_series[_storm]) return;
+        var j = _series[_storm];
+        var fr = j.frames || [];
+        var stamp = fr.length
+            ? fr[fr.length - 1].t.slice(0, 16).replace(/[:T-]/g, '')
+            : new Date().toISOString().slice(0, 16).replace(/[:T-]/g, '');
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var bg = dark ? '#0d1117' : '#ffffff';
+        if (btn) btn.disabled = true;
+        Plotly.relayout(el, { paper_bgcolor: bg, plot_bgcolor: bg })
+            .then(function () {
+                return TCExport.savePlotly(el,
+                    'TC-ATLAS_GHOST_' + _storm + '_' + stamp + '.png', {
+                        format: 'png',
+                        width: Math.max(el.clientWidth, 1400),
+                        height: Math.max(el.clientHeight, 800),
+                        scale: 2
+                    });
+            })
+            .catch(function () {})
+            .then(function () {
+                if (btn) btn.disabled = false;
+                // Restore the live (transparent) theme layout.
+                if (_storm && _series[_storm]) drawSeries(_series[_storm]);
+            });
     }
 
     /* Visible x-window for the current range button. Autorange y so a zoomed
