@@ -524,7 +524,8 @@
         if (/^Himawari/i.test(name))  return 'Himawari';
         if (/^GOES-East/i.test(name)) return 'GOES-East';
         if (/^GOES-West/i.test(name)) return 'GOES-West';
-        if (/^GOES-1[678]|^GOES-19/i.test(name)) return 'GOES-East';   // GOES-16/17 = East legacy
+        if (/^GOES-1[69]/i.test(name)) return 'GOES-East';   // GOES-16 legacy, GOES-19 current
+        if (/^GOES-1[78]/i.test(name)) return 'GOES-West';   // GOES-17 legacy, GOES-18 current
         return name;
     }
 
@@ -1413,13 +1414,15 @@
 
     /** Pick the best satellite for a given longitude (angular distance to sub-satellite point) */
     function bestSatelliteForLon(lon) {
-        var best = SAT_SUBLONS[0], bestDist = 999;
-        for (var i = 0; i < SAT_SUBLONS.length; i++) {
-            var d = Math.abs(lon - SAT_SUBLONS[i].sublon);
-            if (d > 180) d = 360 - d;
-            if (d < bestDist) { bestDist = d; best = SAT_SUBLONS[i]; }
-        }
-        return best.name;
+        // Mirror the backend's routing (select_goes_sat in satellite_ir.py)
+        // so the caption + GIBS fallback agree with the imagery the API
+        // actually serves. Nearest-sublon put the E/W crossover at -106.2°,
+        // the backend cuts at -105° — storms in between (Genevieve EP072026)
+        // got GOES-West frames captioned "GOES-East".
+        var L = ((lon + 180) % 360 + 360) % 360 - 180;
+        if (L >= -105 && L <= 10) return 'GOES-East';
+        if (L >= -175 && L < -105) return 'GOES-West';
+        return 'Himawari';
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -7827,7 +7830,7 @@
         // Match the existing animFrame ordering (oldest first)
         animFrameTimes = frames.map(function (f) { return f.datetime_utc; });
         animIndex = animFrameTimes.length - 1;
-        if (header.satellite) detailSatName = header.satellite;
+        if (header.satellite) detailSatName = normalizeSatFamily(header.satellite);
 
         // Geographic framing: each frame is placed at its OWN bounds.
         // The storm visually drifts through the viewport as it moves,
@@ -8021,7 +8024,7 @@
         animFrameTimes = frames.map(function (f) { return f.datetime_utc; });
         animIndex = animFrameTimes.length - 1;
 
-        if (meta.satellite) detailSatName = meta.satellite;
+        if (meta.satellite) detailSatName = normalizeSatFamily(meta.satellite);
 
         // Create one L.imageOverlay per frame (opacity 0 until activated)
         for (var i = 0; i < frames.length; i++) {

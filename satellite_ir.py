@@ -52,7 +52,10 @@ def _cached_fs_ls(fs, prefix, detail=False):
                 return cached
             del _fs_ls_cache[key]
 
-    result = fs.ls(prefix, detail=detail)
+    # refresh=True bypasses s3fs's own dircache — without it, an expired
+    # entry here just re-serves s3fs's stale (possibly leading-edge) listing
+    # and this wrapper's TTL is meaningless. This wrapper IS the cache.
+    result = fs.ls(prefix, detail=detail, refresh=True)
 
     with _fs_ls_lock:
         _fs_ls_cache[key] = (now, result)
@@ -104,6 +107,16 @@ def get_goes_fs():
         _goes_fs = s3fs.S3FileSystem(
             anon=True,
             config_kwargs={"connect_timeout": 5, "read_timeout": 30},
+            # fsspec's dircache default is listings_expiry_time=None →
+            # listings NEVER expire for the life of the process. An hour
+            # prefix first listed at the leading edge (only the :00 scan
+            # landed yet) then stays frozen at that near-empty state, and
+            # every later find_goes_file() call silently fails for the
+            # :10-:50 scans (the ±7-min substitution gate rejects the :00
+            # neighbour). Symptom: GOES loops degrade to hourly cadence.
+            # _cached_fs_ls() provides the actual LIST-call throttle; this
+            # expiry is a safety net for any direct fs.ls/glob callers.
+            listings_expiry_time=60,
         )
     return _goes_fs
 
@@ -1175,7 +1188,8 @@ def _scan_substitution_too_stale(scan_dt, target_dt: _dt,
 
 def fetch_ir_tb_raw(center_lat: float, center_lon: float,
                     target_dt: _dt, box_deg: float = 8.0,
-                    max_substitution_min: Optional[float] = None) -> Optional[dict]:
+                    max_substitution_min: Optional[float] = None,
+                    select_lon: Optional[float] = None) -> Optional[dict]:
     """
     Fetch a single IR frame and return the RAW brightness temperature array.
     Same routing as fetch_ir_frame but returns numpy Tb instead of rendered PNG.
@@ -1192,10 +1206,18 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
     _scan_substitution_too_stale). Leave None for snapshot callers that want
     the nearest scan regardless of age.
 
+    select_lon: if set, the satellite is chosen from THIS longitude instead
+    of center_lon. Animation callers pass the storm's current advisory lon so
+    every frame in one loop uses the same satellite — per-frame selection
+    from the (moving) interpolated center flips satellites mid-loop when a
+    storm crosses the -105° GOES-E/W boundary (a visible parallax seam).
+    The cutout stays centered on center_lon either way.
+
     Returns dict with 'tb' (np.ndarray), 'datetime_utc', 'scan_dt',
     'satellite', 'bounds' or None on failure.
     """
-    bucket, sat_key = select_goes_sat(center_lon, target_dt)
+    bucket, sat_key = select_goes_sat(
+        center_lon if select_lon is None else select_lon, target_dt)
 
     try:
         if sat_key == "himawari":
@@ -1269,7 +1291,8 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
 def fetch_band_raw(center_lat: float, center_lon: float,
                    target_dt: _dt, box_deg: float = 8.0,
                    band: int = 13,
-                   max_substitution_min: Optional[float] = None) -> Optional[dict]:
+                   max_substitution_min: Optional[float] = None,
+                   select_lon: Optional[float] = None) -> Optional[dict]:
     """
     Fetch any satellite band and return the raw 2D data array.
     For IR/WV bands (7-16): returns brightness temperature (K).
@@ -1279,10 +1302,14 @@ def fetch_band_raw(center_lat: float, center_lon: float,
     nearest available scan is further than this from target_dt, so animation
     frames are never poisoned with a stale neighbouring scan.
 
+    select_lon: see fetch_ir_tb_raw — satellite selection longitude override
+    so all frames of one animation loop use the same satellite.
+
     Returns dict with 'data', 'data_type', 'datetime_utc', 'scan_dt',
     'satellite', 'bounds' or None on failure.
     """
-    bucket, sat_key = select_goes_sat(center_lon, target_dt)
+    bucket, sat_key = select_goes_sat(
+        center_lon if select_lon is None else select_lon, target_dt)
 
     # Map GOES band to Himawari equivalent
     him_band = band

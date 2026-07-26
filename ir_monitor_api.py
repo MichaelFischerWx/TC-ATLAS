@@ -364,6 +364,28 @@ def _interp_pos_at(atcf_id: str, target_dt, fallback_lat: float,
     return fallback_lat, fallback_lon
 
 
+def _sat_select_lon(atcf_id: str, fallback_lon: float) -> float:
+    """Longitude used for SATELLITE SELECTION (not cutout centering).
+
+    Returns the storm's CURRENT advisory longitude so every frame of one
+    animation loop picks the same satellite. Per-frame selection from the
+    (moving) interpolated center flips satellites mid-loop the moment a
+    storm crosses the -105° GOES-E/W boundary — a visible parallax seam
+    (Genevieve EP072026, 2026-07-25). Cutouts still center on the
+    per-frame interpolated position; only the E/W choice is pinned.
+    Falls back to fallback_lon (typically the frame's interp lon) when
+    the storm isn't in the active cache (shouldn't happen in practice).
+    """
+    try:
+        with _active_storms_lock:
+            for s in _active_storms_cache["storms"]:
+                if s["atcf_id"].upper() == atcf_id.upper():
+                    return s["lon"]
+    except Exception:
+        pass
+    return fallback_lon
+
+
 def _gcs_rt_get(atcf_id: str, dt_str: str, lat: float = 0, lon: float = 0,
                 radius_deg: float = 10.0) -> dict | None:
     """Try to read a cached raw Tb frame from GCS.
@@ -3666,7 +3688,8 @@ def _prefetch_ir_frames(storms: list):
                             return
                     try:
                         raw = fetch_ir_tb_raw(ilat, ilon, tdt, box_deg,
-                                              max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
+                                              max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN,
+                                              select_lon=center_lon)
                     except Exception:
                         return
                     if not raw or raw.get("tb") is None:
@@ -3739,7 +3762,8 @@ def _prefetch_ir_frames(storms: list):
                     bscale = 254.0 / (bvmax - bvmin)
                     try:
                         raw = fetch_band_raw(ilat, ilon, tdt, box_deg, band=band,
-                                             max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
+                                             max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN,
+                                             select_lon=center_lon)
                     except Exception:
                         return
                     if not raw or raw.get("data") is None:
@@ -4759,7 +4783,8 @@ def get_storm_ir_raw(
             continue
 
         raw = fetch_ir_tb_raw(ilat, ilon, target_dt, box_deg,
-                              max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
+                              max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN,
+                              select_lon=center_lon)
         if raw and raw.get("tb") is not None:
             tb = raw["tb"]
             # Encode as uint8: 0 = invalid, 1-255 = Tb range
@@ -4965,7 +4990,8 @@ def get_storm_ir_raw_frame(
         raise HTTPException(status_code=503, detail="Server busy — please retry shortly")
     try:
         raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg,
-                              max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
+                              max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN,
+                              select_lon=storm["lon"])
     finally:
         _raw_fetch_semaphore.release()
     if not raw or raw.get("tb") is None:
@@ -5137,7 +5163,8 @@ def _render_one_raw_tb_for_bundle(
     # Cache miss: pull from S3 + render. Cutout centered on the
     # interpolated position so the cached frame's bounds match the key.
     raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg,
-                          max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
+                          max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN,
+                          select_lon=_sat_select_lon(atcf_upper, interp_lon))
     if not raw or raw.get("tb") is None:
         return None
 
@@ -5442,7 +5469,8 @@ def get_storm_hovmoller(
             # Not in cache — fetch raw Tb from satellite and cache it
             try:
                 raw = fetch_ir_tb_raw(ilat, ilon, ft, box_deg,
-                                      max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
+                                      max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN,
+                                      select_lon=center_lon)
                 if raw and raw.get("tb") is not None:
                     arr = np.asarray(raw["tb"], dtype=np.float32)
                     mask = ~np.isfinite(arr) | (arr <= 0)
@@ -6365,7 +6393,10 @@ def get_band_frame_jpg(
         [center_lat - half, center_lon - half],
         [center_lat + half, center_lon + half],
     ]
-    bucket, _ = select_goes_sat(center_lon, target_dt)
+    # Label from the storm's ADVISORY lon (same lon the fetch below selects
+    # with) so the X-Satellite header matches the imagery — the interp
+    # center_lon can sit on the other side of the -105° E/W boundary.
+    bucket, _ = select_goes_sat(storm["lon"], target_dt)
     sat_name = satellite_name_from_bucket(bucket)
 
     meta_headers = {
@@ -6408,7 +6439,8 @@ def get_band_frame_jpg(
     # Render fresh from S3
     try:
         raw = fetch_band_raw(center_lat, center_lon, target_dt, box_deg, band=band,
-                         max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
+                         max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN,
+                         select_lon=storm["lon"])
     except Exception:
         raise HTTPException(status_code=502, detail=f"No band {band} data")
 
@@ -6443,7 +6475,10 @@ def _get_or_render_band_jpg(
     """
     box_deg = radius_deg * 2.0
     dt_str = target_dt.strftime("%Y%m%d%H%M")
-    bucket, _ = select_goes_sat(interp_lon, target_dt)
+    # Selection + label pinned to the storm's advisory lon so all frames
+    # of one bundle use (and report) the same satellite — see _sat_select_lon.
+    sel_lon = _sat_select_lon(atcf_upper, interp_lon)
+    bucket, _ = select_goes_sat(sel_lon, target_dt)
     sat_name = satellite_name_from_bucket(bucket)
 
     # Vis is daytime-only — skip cleanly when sun is too low
@@ -6484,7 +6519,8 @@ def _get_or_render_band_jpg(
     # max-frame-time wall clock instead of N × per-frame-time.
     try:
         raw = fetch_band_raw(interp_lat, interp_lon, target_dt, box_deg, band=band,
-                             max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
+                             max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN,
+                             select_lon=sel_lon)
     except Exception:
         return None, sat_name
     if not raw or raw.get("data") is None:
@@ -6931,9 +6967,11 @@ def get_ir_frame_jpg(
         except Exception:
             pass  # Fall through to S3 fetch
 
-    # Render fresh from S3 satellite data (cutout centered on interpolated pos)
+    # Render fresh from S3 satellite data (cutout centered on interpolated pos;
+    # satellite selection pinned to the advisory lon, matching X-Satellite above)
     raw = fetch_ir_tb_raw(ilat, ilon, target_dt, box_deg,
-                          max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
+                          max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN,
+                          select_lon=center_lon)
     if not raw or raw.get("tb") is None:
         raise HTTPException(status_code=502, detail=f"No IR data for frame {frame_index}")
 
@@ -6972,7 +7010,9 @@ def _get_or_render_ir_jpg(
     box_deg = radius_deg * 2.0
     half = radius_deg
     dt_str = target_dt.strftime("%Y%m%d%H%M")
-    bucket, _ = select_goes_sat(interp_lon, target_dt)
+    # Selection + label pinned to the storm's advisory lon — see _sat_select_lon.
+    sel_lon = _sat_select_lon(atcf_upper, interp_lon)
+    bucket, _ = select_goes_sat(sel_lon, target_dt)
     sat_name = satellite_name_from_bucket(bucket)
 
     # Warmest path: pre-rendered Mercator-warped WebP in GCS (position-
@@ -7007,7 +7047,8 @@ def _get_or_render_ir_jpg(
     # Coldest: fetch Tb from S3 + render
     try:
         raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg,
-                          max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
+                          max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN,
+                          select_lon=sel_lon)
     except Exception:
         return None, sat_name
     if not raw or raw.get("tb") is None:
