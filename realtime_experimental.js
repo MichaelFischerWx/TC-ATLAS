@@ -141,7 +141,11 @@
 
     /* Verification numbers are quoted from the manuscript (Fischer, in prep).
        Held-out means the season's storms were withheld from training in every
-       basin. Do NOT edit these by hand without checking the source. */
+       basin. Do NOT edit these by hand without checking the source.
+       EXCEPTION: the "error by storm strength" table is NOT from the paper —
+       it is computed with the manuscript's evaluation code on the same
+       held-out 2025 frames (TC-SWARM realtime/rmse_by_intensity_2025.py,
+       run 2026-07-26) and is labeled as such in the UI. */
     var VERIF_HTML =
         '<div class="exp-verif-h">Preliminary verification' +
         '<span class="exp-verif-src">from the manuscript in preparation. ' +
@@ -166,6 +170,38 @@
         'depression intensity) and vanishes at major-hurricane intensity ' +
         '(&minus;0.3 kt for Vmax &ge; 96 kt), where the comparators run ' +
         'systematically low.</p>' +
+
+        '<div class="exp-verif-t"><table><caption>Error by storm strength ' +
+        '&mdash; same held-out 2025 frames, computed with the ' +
+        'manuscript\'s evaluation code (supplementary; not a table from ' +
+        'the paper)</caption><thead>' +
+        '<tr><th>NHC best-track intensity</th><th>Frames</th><th>Bias</th>' +
+        '<th>RMSE</th><th>RMSE vs typical wind</th></tr></thead><tbody>' +
+        '<tr><td>Depression (&lt;34 kt)</td><td>56</td><td>+5.5 kt</td>' +
+        '<td>6.0 kt</td><td>~22%</td></tr>' +
+        '<tr><td>Tropical storm (34&ndash;63 kt)</td><td>825</td>' +
+        '<td>+1.2 kt</td><td>6.2 kt</td><td>~13%</td></tr>' +
+        '<tr><td>Category 1</td><td>171</td><td>&minus;3.5 kt</td>' +
+        '<td>8.8 kt</td><td>~12%</td></tr>' +
+        '<tr><td>Category 2</td><td>112</td><td>&minus;2.3 kt</td>' +
+        '<td>8.5 kt</td><td>~10%</td></tr>' +
+        '<tr><td>Category 3</td><td>73</td><td>+2.2 kt</td>' +
+        '<td>11.4 kt</td><td>~11%</td></tr>' +
+        '<tr><td>Category 4&ndash;5 (&ge;113 kt)</td><td>188</td>' +
+        '<td>+2.7 kt</td><td>10.2 kt</td><td>~8%</td></tr>' +
+        '</tbody></table></div>' +
+
+        '<p class="exp-verif-note">How to read this: the <em>absolute</em> ' +
+        'error grows with intensity, but the <em>relative</em> error ' +
+        'shrinks &mdash; roughly 13% of the wind at tropical-storm strength ' +
+        'versus 8&ndash;9% at Category 4&ndash;5. Two caveats: at major ' +
+        'intensity the NHC best track itself carries roughly 10 kt of ' +
+        'uncertainty, so part of the high-end &ldquo;error&rdquo; is ' +
+        'disagreement with an uncertain reference rather than model error; ' +
+        'and these rows pool all 1425 frames, which weights long-lived ' +
+        'storms more than the headline 6.8 kt per-storm mean does (the ' +
+        'same frames pooled give 7.7 kt overall &mdash; both are correct, ' +
+        'they aggregate differently).</p>' +
 
         '<div class="exp-verif-t"><table><caption>Size (radius of maximum wind) ' +
         '&mdash; mean absolute error vs airborne radar</caption><thead>' +
