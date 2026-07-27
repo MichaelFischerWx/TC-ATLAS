@@ -47,6 +47,7 @@
     var RANGES = [{ h: 24, label: '24 h' }, { h: 48, label: '48 h' },
                   { h: 0,  label: 'Full lifetime' }];
     var _showTrack = false;  // center-track mini-map panel
+    var _showDist = false;   // conditional-distribution panel
 
     /* Saffir-Simpson palette + classifier — same values as realtime_ir.js /
        global_archive.js so category colors read identically site-wide. */
@@ -115,6 +116,41 @@
     }
     function fmtSigned(x, dp) {
         return (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(dp);
+    }
+
+    /* ---- conditional predictive distribution (vmax_dist lookup) ----
+       Producer ships error percentiles of the storm-held-out OOF chain,
+       binned by prediction level. Adding them to the live estimate gives
+       calibrated bounds: the IQR band on the chart, the full curve in the
+       Distribution panel. */
+    function distBin(j, v) {
+        var d = j.vmax_dist;
+        if (!d || !d.bin_edges || !d.err_q) return -1;
+        for (var i = 0; i < d.bin_edges.length - 1; i++) {
+            var hi = (d.bin_edges[i + 1] === null)
+                ? Infinity : d.bin_edges[i + 1];
+            if (v >= d.bin_edges[i] && v < hi) return i;
+        }
+        return -1;
+    }
+    function distErrAt(j, v, pct) {
+        var i = distBin(j, v);
+        if (i < 0) return null;
+        var q = j.vmax_dist.err_q['p' + (pct < 10 ? '0' + pct : pct)];
+        return (q && q[i] !== null && q[i] !== undefined) ? q[i] : null;
+    }
+    function distBounds(j, plo, phi) {
+        var fr = j.frames || [];
+        if (!j.vmax_dist || !j.vmax_dist.err_q) return null;
+        var lo = [], hi = [], any = false;
+        fr.forEach(function (f) {
+            var v = f.vmax_kt;
+            var a = (v == null) ? null : distErrAt(j, v, plo);
+            var b = (v == null) ? null : distErrAt(j, v, phi);
+            if (a === null || b === null) { lo.push(null); hi.push(null); return; }
+            lo.push(v + a); hi.push(v + b); any = true;
+        });
+        return any ? { lo: lo, hi: hi } : null;
     }
 
     /* GA4 is already configured on the page (G-EFM8GFFKLK); mirror the
@@ -420,6 +456,8 @@
             '" id="exp-comp">Operational comparators</button>' +
             '<button class="exp-range exp-trackbtn' + (_showTrack ? ' active' : '') +
             '" id="exp-track-btn">Track map</button>' +
+            '<button class="exp-range exp-distbtn' + (_showDist ? ' active' : '') +
+            '" id="exp-dist-btn">Distribution</button>' +
             '<button class="exp-range exp-shapbtn' + (_showShap ? ' active' : '') +
             '" id="exp-shap-btn">Model drivers</button>' +
             '<button class="exp-range exp-verifbtn' + (_showVerif ? ' active' : '') +
@@ -430,6 +468,7 @@
             '</div>' +
             '<div id="exp-plot" class="exp-plot"></div>' +
             '<div id="exp-track" class="exp-track" style="display:none;"></div>' +
+            '<div id="exp-dist" class="exp-shap" style="display:none;"></div>' +
             '<div id="exp-shap" class="exp-shap" style="display:none;"></div>' +
             '<div id="exp-verif" class="exp-verif" style="display:none;"></div>' +
             '</div>';
@@ -469,6 +508,15 @@
             var box = document.getElementById('exp-track');
             if (box) box.style.display = _showTrack ? 'block' : 'none';
             if (_showTrack && _storm && _series[_storm]) drawTrack(_series[_storm]);
+        });
+        var distBtn = document.getElementById('exp-dist-btn');
+        if (distBtn) distBtn.addEventListener('click', function () {
+            _showDist = !_showDist;
+            track('ghost_distribution', { on: _showDist });
+            distBtn.classList.toggle('active', _showDist);
+            var box = document.getElementById('exp-dist');
+            if (box) box.style.display = _showDist ? 'block' : 'none';
+            if (_showDist && _storm && _series[_storm]) drawDist(_series[_storm]);
         });
         var shapBtn = document.getElementById('exp-shap-btn');
         if (shapBtn) shapBtn.addEventListener('click', function () {
@@ -591,6 +639,7 @@
             renderTiles(res[0]);
             drawSeries(res[0]);
             if (_showTrack) drawTrack(res[0]);
+            if (_showDist) drawDist(res[0]);
             if (_showShap) drawShap(res[0]);
         }).catch(function () {
             var el = document.getElementById('exp-plot');
@@ -767,6 +816,16 @@
             '<span class="exp-cat" style="background:' + SS_COLORS[cat] +
             ';color:' + catInk(cat) + '">' + categoryShort(cat) + '</span></div>' +
             deltaLine(tv, 'kt', 0, true) +
+            (function () {
+                var a = distErrAt(j, v.v, 25), b = distErrAt(j, v.v, 75);
+                return (a !== null && b !== null)
+                    ? '<div class="exp-tile-sub">IQR ' +
+                      Math.round(v.v + a) + '\u2013' + Math.round(v.v + b) +
+                      ' kt <span title="25th\u201375th percentile of ' +
+                      'storm-held-out CV outcomes at this predicted ' +
+                      'intensity">\u24d8</span></div>'
+                    : '';
+            })() +
             /* NHC RI definition: ≥30 kt in 24 h (scaled to the true baseline). */
             (tv && tv.d * 24 / tv.h >= 30
                 ? '<div class="exp-flag">Rapid intensification</div>'
@@ -842,6 +901,92 @@
                 '“latest” values are the storm’s final analysis.</div>' + html;
         }
         box.innerHTML = html;
+    }
+
+    /* ---------------- conditional-distribution panel ---------------- */
+
+    /* Full predictive distribution for the LATEST frame, as a CDF: for each
+       stored percentile, x = estimate + conditional OOF error quantile,
+       y = cumulative probability. The long right tail at high intensities is
+       real information — storms whose frames carried similar predictions
+       have verified far above them (that's where the monsters live). */
+    function drawDist(j) {
+        var box = document.getElementById('exp-dist');
+        if (!box || typeof Plotly === 'undefined') return;
+        var v = lastFiniteFrame(j.frames || [], 'vmax_kt');
+        var d = j.vmax_dist;
+        if (!v || !d || !d.err_q || !d.pcts) {
+            box.innerHTML = '<div class="exp-empty">No distribution lookup ' +
+                'in this storm’s file yet (republish to populate).</div>';
+            return;
+        }
+        var bi = distBin(j, v.v);
+        var xs = [], ys = [];
+        d.pcts.forEach(function (pc) {
+            var e = distErrAt(j, v.v, pc);
+            if (e !== null) { xs.push(v.v + e); ys.push(pc); }
+        });
+        if (xs.length < 4) { box.innerHTML = ''; return; }
+        var q25 = v.v + (distErrAt(j, v.v, 25) || 0);
+        var q75 = v.v + (distErrAt(j, v.v, 75) || 0);
+        var n = (d.n && bi >= 0) ? d.n[bi] : null;
+        var lo = d.bin_edges[bi], hi = d.bin_edges[bi + 1];
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var grid = dark ? '#1e293b' : '#e2e8f0';
+        var fc = dark ? '#cbd5e1' : '#334155';
+        var nhcV = lastFiniteFrame(j.frames || [], 'btk_vmax_kt');
+        box.innerHTML =
+            '<div class="exp-shap-head">Predictive distribution — ' +
+            v.t.slice(5, 16).replace('T', ' ') + 'Z' +
+            '<span class="exp-shap-sub">calibrated from ' + (n || '—') +
+            ' storm-held-out CV frames with similar predicted intensity (' +
+            (lo != null ? Math.round(lo) : '?') + '–' +
+            (hi != null ? Math.round(hi) : '∞') + ' kt bin). The right ' +
+            'tail is real: it reflects storms that verified far above ' +
+            'similar predictions. Near the Cat-5 ceiling the point estimate ' +
+            'is analog-limited — the tail carries the monster risk.' +
+            '</span></div>' +
+            '<div id="exp-dist-plot"></div>';
+        var shapes = [
+            { type: 'rect', xref: 'x', yref: 'paper', x0: q25, x1: q75,
+              y0: 0, y1: 1, fillcolor: 'rgba(244,63,94,0.10)',
+              line: { width: 0 }, layer: 'below' },
+            { type: 'line', xref: 'x', yref: 'paper', x0: v.v, x1: v.v,
+              y0: 0, y1: 1, line: { color: GHOST_COL, width: 2 } }
+        ];
+        var ann = [{
+            x: v.v, y: 0.97, xref: 'x', yref: 'paper', showarrow: false,
+            text: 'GHOST ' + Math.round(v.v), font: { size: 10,
+                color: GHOST_COL }, xanchor: 'left'
+        }];
+        if (nhcV) {
+            shapes.push({ type: 'line', xref: 'x', yref: 'paper',
+                x0: nhcV.v, x1: nhcV.v, y0: 0, y1: 1,
+                line: { color: fc, width: 1.4, dash: 'dash' } });
+            ann.push({ x: nhcV.v, y: 0.06, xref: 'x', yref: 'paper',
+                showarrow: false, text: (j.agency || 'NHC') + ' ' +
+                Math.round(nhcV.v), font: { size: 10, color: fc },
+                xanchor: 'right' });
+        }
+        Plotly.react('exp-dist-plot', [{
+            x: xs, y: ys, mode: 'lines+markers',
+            line: { color: GHOST_COL, width: 2, shape: 'spline' },
+            marker: { size: 5, color: GHOST_COL },
+            hovertemplate: '%{y}% of similar CV frames verified ≤ ' +
+                '%{x:.0f} kt<extra></extra>'
+        }], {
+            height: 300, margin: { l: 52, r: 16, t: 8, b: 42 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: dark ? 'rgba(15,23,42,0.55)' : 'rgba(248,250,252,0.7)',
+            font: { color: fc, size: 11 },
+            shapes: shapes, annotations: ann,
+            xaxis: { title: { text: 'Vmax (kt)', font: { size: 11 } },
+                     gridcolor: grid },
+            yaxis: { title: { text: 'cumulative probability (%)',
+                              font: { size: 11 } },
+                     gridcolor: grid, range: [0, 100] }
+        }, { displayModeBar: false, responsive: true })
+          .then(function () { Plotly.Plots.resize('exp-dist-plot'); });
     }
 
     /* ---------------- center-track mini-map ---------------- */
@@ -1152,13 +1297,31 @@
         var nhc = { color: dark ? '#94a3b8' : '#64748b', width: 1.4,
                     dash: 'dash' };
         var ag = j.agency || 'NHC';
-        var traces = [
+        var traces = [];
+        /* Conditional IQR band: per-frame 25th/75th-percentile bounds from
+           the storm-held-out OOF error distribution, conditioned on the
+           prediction level (lookup shipped in the JSON). Drawn under the
+           GHOST line; the full distribution lives in the Distribution
+           panel. */
+        var iqr = distBounds(j, 25, 75);
+        if (iqr) {
+            traces.push(
+                { x: t, y: iqr.lo, yaxis: 'y', xaxis: 'x', mode: 'lines',
+                  line: { width: 0 }, hoverinfo: 'skip', showlegend: false },
+                { x: t, y: iqr.hi, yaxis: 'y', xaxis: 'x', mode: 'lines',
+                  line: { width: 0 }, fill: 'tonexty',
+                  fillcolor: 'rgba(244,63,94,0.13)',
+                  name: 'IQR (conditional)',
+                  hovertemplate: '%{y:.0f} kt (p75)' });
+        }
+        traces.push(
             /* One GHOST color across all three panels so the single legend
                entry means the same thing everywhere (the y-axis titles already
                say which quantity each panel shows). */
             { x: t, y: col('vmax_kt'), name: 'GHOST', yaxis: 'y',
               line: { color: GHOST_COL, width: 2.4 },
-              hovertemplate: '%{y:.1f} kt' },
+              hovertemplate: '%{y:.1f} kt' });
+        traces = traces.concat([
             { x: t, y: col('btk_vmax_kt'), name: ag + ' best track (interp)',
               yaxis: 'y', line: nhc, connectgaps: false,
               hovertemplate: '%{y:.0f} kt' },
@@ -1180,7 +1343,7 @@
             { x: t, y: col('btk_rmw_km'), name: ag + ' RMW', yaxis: 'y3',
               line: nhc, showlegend: false, connectgaps: false,
               hovertemplate: '%{y:.0f} km' }
-        ];
+        ]);
         /* Mobile: 7 legend entries (now carrying update times) wrap to three
            rows and used to sit ON TOP of the Vmax panel, and the fixed 58 px
            left margin clipped "RMW (km)" to "1W (km)". Give the legend real
@@ -1226,8 +1389,12 @@
             yaxis3: { title: { text: 'RMW (km)', standoff: 4 }, automargin: true,   gridcolor: grid,
                       domain: [0.00, 0.30], rangemode: 'tozero' }
         };
-        traces[3].xaxis = 'x2'; traces[4].xaxis = 'x2';
-        traces[5].xaxis = 'x3'; traces[6].xaxis = 'x3';
+        /* Assign subplot x-axes by the trace's y-axis, not by position —
+           the conditional IQR band shifts indices. */
+        traces.forEach(function (tr) {
+            if (tr.yaxis === 'y2') tr.xaxis = tr.xaxis || 'x2';
+            if (tr.yaxis === 'y3') tr.xaxis = tr.xaxis || 'x3';
+        });
 
         /* Operational satellite estimators, scored against the same target.
            Sparse + irregular (f-deck fixes are a few per day), so markers
@@ -1361,6 +1528,7 @@
             document.getElementById('exp-plot')) {
             drawSeries(_series[_storm]);
             if (_showTrack) drawTrack(_series[_storm]);
+            if (_showDist) drawDist(_series[_storm]);
             if (_showShap) drawShap(_series[_storm]);
         }
     }).observe(document.documentElement,

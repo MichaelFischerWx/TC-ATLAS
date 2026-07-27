@@ -7167,10 +7167,18 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     margin-right: 4px; vertical-align: -0.5px;
 }
 .exp-track-leg i.open { background: transparent; border: 1.5px solid currentColor; }
+.exp-distbtn.active {
+    border-color: #f43f5e; color: #be123c; background: rgba(244,63,94,0.08);
+}
+[data-theme="dark"] .exp-distbtn.active { color: #fb7185; }
 .exp-trackbtn.active {
     border-color: #2e7dff; color: #1d4ed8; background: rgba(46,125,255,0.08);
 }
-[data-theme="dark"] .exp-trackbtn.active { color: #60a5fa; }
+[data-theme="dark"] .exp-distbtn.active {
+    border-color: #f43f5e; color: #be123c; background: rgba(244,63,94,0.08);
+}
+[data-theme="dark"] .exp-distbtn.active { color: #fb7185; }
+.exp-trackbtn.active { color: #60a5fa; }
 
 @media (max-width: 720px) { .exp-shap-grid { grid-template-columns: 1fr; } }
 @media (max-width: 640px) {
