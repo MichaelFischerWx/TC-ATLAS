@@ -301,9 +301,12 @@
             '<div class="exp-note">Guidance, not official analysis. ' +
             'Weak systems (TD / weak TS) have a known high-bias. Near ' +
             'Category-5 strength the estimates saturate (ceiling ' +
-            '&asymp;150&ndash;155 kt): a flat, maxed-out trace means ' +
+            '&asymp;150&ndash;160 kt): a flat, maxed-out trace means ' +
             '&ldquo;at or above the ceiling&rdquo;, and the strongest ' +
-            'storms are typically under-read. The best-track ' +
+            'storms are typically under-read. The operational model was ' +
+            'retrained 2026-07-27 to include the 2025 season; the ' +
+            'Verification tables describe the manuscript&rsquo;s held-out ' +
+            'configuration. The best-track ' +
             'reference (NHC, or JTWC for West Pacific / Indian Ocean ' +
             'storms) is linearly interpolated between 6-hourly analyses ' +
             '(dots mark the real ones) and STOPS at the latest analysis — ' +
@@ -772,7 +775,7 @@
                decays from saturation are invisible at first. */
             (v.v >= 145
                 ? '<div class="exp-tile-sub exp-ceil">near the model’s ' +
-                  'saturation ceiling (~150–155 kt) — read as ' +
+                  'saturation ceiling (~150–160 kt) — read as ' +
                   '“at least”, not a precise value</div>'
                 : '') +
             asOf + '</div>';
