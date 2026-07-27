@@ -7105,6 +7105,29 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 }
 .exp-chip-arch { opacity: 0.88; }
 .exp-chip-off { opacity: 0.55; cursor: not-allowed; }
+.exp-arch-toggle {
+    font: inherit; font-size: 12px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    color: #334155; background: #f1f5f9; border: 1px solid #cbd5e1;
+    border-radius: 6px; padding: 4px 10px; cursor: pointer;
+}
+.exp-arch-toggle:hover { border-color: #F47321; color: #F47321; }
+.exp-arch-toggle b {
+    font-weight: 400; display: inline-block; transition: transform 0.15s;
+}
+.exp-arch-toggle.open b { transform: rotate(180deg); }
+[data-theme="dark"] .exp-arch-toggle {
+    color: #cbd5e1; background: #111c33; border-color: #1e293b;
+}
+[data-theme="dark"] .exp-arch-toggle:hover {
+    border-color: #F47321; color: #F47321;
+}
+.exp-arch-body { margin-top: 6px; }
+.exp-arch-basin {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: #64748b; margin: 8px 0 4px;
+}
+[data-theme="dark"] .exp-arch-basin { color: #94a3b8; }
 .exp-empty-sm { padding: 10px 0 14px; text-align: left; font-size: 13px; }
 .exp-arch-note {
     grid-column: 1 / -1; font-size: 12px; color: #475569;

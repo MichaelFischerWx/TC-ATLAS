@@ -22,6 +22,7 @@
 
     var _root = null;          // #exp-main
     var _index = null;         // manifest {generated, storms:[{atcf,name}]}
+    var _archOpen = null;      // archive collapsed state (null = auto)
     var _archIndex = null;     // season-archive manifest (or null)
     var _archSet = {};         // atcf -> true for archived storms
     var _storm = null;         // selected ATCF id
@@ -302,14 +303,15 @@
             'Category-5 strength the estimates saturate (ceiling ' +
             '&asymp;150&ndash;155 kt): a flat, maxed-out trace means ' +
             '&ldquo;at or above the ceiling&rdquo;, and the strongest ' +
-            'storms are typically under-read. The NHC ' +
-            'reference is linearly interpolated between 6-hourly analyses ' +
+            'storms are typically under-read. The best-track ' +
+            'reference (NHC, or JTWC for West Pacific / Indian Ocean ' +
+            'storms) is linearly interpolated between 6-hourly analyses ' +
             '(dots mark the real ones) and STOPS at the latest analysis — ' +
             'GHOST continues past it, so the most recent stretch has no ' +
             'reference to compare against yet.</div>';
         var arch = (_archIndex && _archIndex.storms) || [];
         if (!storms.length && !arch.length) {
-            html += '<div class="exp-empty">No active NHC storms right now — ' +
+            html += '<div class="exp-empty">No active storms right now — ' +
                 'the pipeline publishes automatically when a storm forms.</div></div>';
             _root.innerHTML = html;
             bindRefresh();
@@ -325,36 +327,63 @@
             });
             html += '</div>';
         } else {
-            html += '<div class="exp-empty exp-empty-sm">No active NHC ' +
+            html += '<div class="exp-empty exp-empty-sm">No active ' +
                 'storms right now — browse the season archive below.</div>';
         }
         if (arch.length) {
+            /* Collapsed by default (auto-open when there are no live storms,
+               so the page never renders empty). Chips grouped by basin. */
+            var archOpen = (_archOpen === null) ? !storms.length : _archOpen;
             html += '<div class="exp-arch-h">' +
+                '<button class="exp-arch-toggle' +
+                (archOpen ? ' open' : '') + '" id="exp-arch-toggle" ' +
+                'aria-expanded="' + archOpen + '">' +
                 ((_archIndex && _archIndex.year) || '') +
-                ' season archive <span>retrospective GHOST runs of ' +
-                'completed storms</span></div>' +
-                '<div class="exp-chips exp-chips-arch">';
+                ' season archive (' + arch.length + ') <b>&#9662;</b>' +
+                '</button>' +
+                '<span>retrospective GHOST runs of completed storms</span>' +
+                '</div>' +
+                '<div class="exp-arch-body" id="exp-arch-body"' +
+                (archOpen ? '' : ' hidden') + '>';
+            var BASIN_NAMES = { AL: 'Atlantic', EP: 'East Pacific',
+                                CP: 'Central Pacific', WP: 'West Pacific',
+                                IO: 'North Indian',
+                                SH: 'Southern Hemisphere' };
+            var groups = {}, basinOrder = [];
             arch.forEach(function (s) {
-                /* Filter-excluded storms (weak/overland whole life) are
-                   listed but not selectable — silently missing reads as a
-                   bug, and the reason is scientifically meaningful. */
-                if (s.excluded) {
-                    html += '<button class="exp-chip exp-chip-arch ' +
-                        'exp-chip-off" disabled title="' + s.excluded + '">' +
-                        (s.name || s.atcf) + ' <span>' + s.atcf + '</span>' +
-                        '<em class="exp-chip-int">not scoreable</em></button>';
-                    return;
-                }
-                var pk = s.ghost_peak_kt;
-                var cat = windToCategory(pk);
-                html += '<button class="exp-chip exp-chip-arch" data-atcf="' +
-                    s.atcf + '">' + (s.name || s.atcf) +
-                    ' <span>' + s.atcf + '</span>' +
-                    '<em class="exp-chip-int">' +
-                    (pk != null
-                        ? '<i style="background:' + SS_COLORS[cat] + '"></i>' +
-                          'peak ' + Math.round(pk) + ' kt'
-                        : '') + '</em></button>';
+                var b = (s.atcf || '').slice(0, 2);
+                if (!groups[b]) { groups[b] = []; basinOrder.push(b); }
+                groups[b].push(s);
+            });
+            basinOrder.forEach(function (b) {
+                html += '<div class="exp-arch-basin">' +
+                    (BASIN_NAMES[b] || b) + '</div>' +
+                    '<div class="exp-chips exp-chips-arch">';
+                groups[b].forEach(function (s) {
+                    /* Filter-excluded storms (weak/overland whole life) are
+                       listed but not selectable — silently missing reads as
+                       a bug, and the reason is scientifically meaningful. */
+                    if (s.excluded) {
+                        html += '<button class="exp-chip exp-chip-arch ' +
+                            'exp-chip-off" disabled title="' + s.excluded +
+                            '">' + (s.name || s.atcf) +
+                            ' <span>' + s.atcf + '</span>' +
+                            '<em class="exp-chip-int">not scoreable</em>' +
+                            '</button>';
+                        return;
+                    }
+                    var pk = s.ghost_peak_kt;
+                    var cat = windToCategory(pk);
+                    html += '<button class="exp-chip exp-chip-arch" ' +
+                        'data-atcf="' + s.atcf + '">' + (s.name || s.atcf) +
+                        ' <span>' + s.atcf + '</span>' +
+                        '<em class="exp-chip-int">' +
+                        (pk != null
+                            ? '<i style="background:' + SS_COLORS[cat] +
+                              '"></i>peak ' + Math.round(pk) + ' kt'
+                            : '') + '</em></button>';
+                });
+                html += '</div>';
             });
             html += '</div>';
         }
@@ -404,6 +433,16 @@
             c.addEventListener('click', function () {
                 selectStorm(c.getAttribute('data-atcf'));
             });
+        });
+        var archT = document.getElementById('exp-arch-toggle');
+        if (archT) archT.addEventListener('click', function () {
+            var body = document.getElementById('exp-arch-body');
+            if (!body) return;
+            _archOpen = body.hidden;          // toggling from current state
+            body.hidden = !_archOpen;
+            archT.classList.toggle('open', _archOpen);
+            archT.setAttribute('aria-expanded', _archOpen);
+            track('ghost_archive_toggle', { open: _archOpen });
         });
         var vBtn = document.getElementById('exp-verif-btn');
         if (vBtn) vBtn.addEventListener('click', function () {
@@ -762,8 +801,10 @@
                 '</div>';
         }
 
-        /* Latest true NHC analysis + what GHOST said at that same time, so
-           the "GHOST continues past the reference" caveat has a number. */
+        /* Latest true best-track analysis + what GHOST said at that same
+           time, so the "GHOST continues past the reference" caveat has a
+           number. */
+        var agT = j.agency || 'NHC';
         var fix = null;
         for (var i = fr.length - 1; i >= 0; i--) {
             if (fr[i].btk_is_fix && fr[i].btk_vmax_kt !== null &&
@@ -777,7 +818,7 @@
                 ? fix.vmax_kt : null;
             html +=
                 '<div class="exp-tile">' +
-                '<div class="exp-tile-k">Last NHC analysis</div>' +
+                '<div class="exp-tile-k">Last ' + agT + ' analysis</div>' +
                 '<div class="exp-tile-v">' + Math.round(fix.btk_vmax_kt) +
                 ' <span class="exp-tile-u">kt</span></div>' +
                 '<div class="exp-tile-d">at ' + fix.t.slice(11, 16) + 'Z · ' +
@@ -843,7 +884,8 @@
             '<div class="exp-shap-head">GHOST center track' +
             '<span class="exp-shap-sub">full lifetime, colored by GHOST ' +
             'intensity. Open circles = no IR eye lock; the center there comes ' +
-            'from the interpolated NHC track instead.</span></div>' +
+            'from the interpolated ' + (j.agency || 'NHC') +
+            ' track instead.</span></div>' +
             '<div id="exp-track-map"></div>' +
             '<div class="exp-track-leg" id="exp-track-leg"></div>';
         var leg = document.getElementById('exp-track-leg');
@@ -1102,6 +1144,7 @@
         var grid = dark ? '#1e293b' : '#e2e8f0';
         var nhc = { color: dark ? '#94a3b8' : '#64748b', width: 1.4,
                     dash: 'dash' };
+        var ag = j.agency || 'NHC';
         var traces = [
             /* One GHOST color across all three panels so the single legend
                entry means the same thing everywhere (the y-axis titles already
@@ -1109,25 +1152,25 @@
             { x: t, y: col('vmax_kt'), name: 'GHOST', yaxis: 'y',
               line: { color: GHOST_COL, width: 2.4 },
               hovertemplate: '%{y:.1f} kt' },
-            { x: t, y: col('btk_vmax_kt'), name: 'NHC best track (interp)',
+            { x: t, y: col('btk_vmax_kt'), name: ag + ' best track (interp)',
               yaxis: 'y', line: nhc, connectgaps: false,
               hovertemplate: '%{y:.0f} kt' },
             { x: fr.filter(function (d) { return d.btk_is_fix; })
                    .map(function (d) { return d.t; }),
               y: fr.filter(function (d) { return d.btk_is_fix; })
                    .map(function (d) { return d.btk_vmax_kt; }),
-              name: 'NHC analysis', yaxis: 'y', mode: 'markers',
+              name: ag + ' analysis', yaxis: 'y', mode: 'markers',
               marker: { size: 5, color: nhc.color } },
             { x: t, y: col('pmin_hpa'), name: 'GHOST', yaxis: 'y2',
               line: { color: GHOST_COL, width: 2.4 }, showlegend: false,
               hovertemplate: '%{y:.0f} hPa' },
-            { x: t, y: col('btk_mslp_hpa'), name: 'NHC best track (interp)',
+            { x: t, y: col('btk_mslp_hpa'), name: ag + ' best track (interp)',
               yaxis: 'y2', line: nhc, showlegend: false, connectgaps: false,
               hovertemplate: '%{y:.0f} hPa' },
             { x: t, y: col('rmw_km'), name: 'GHOST', yaxis: 'y3',
               line: { color: GHOST_COL, width: 2.4 }, showlegend: false,
               hovertemplate: '%{y:.0f} km' },
-            { x: t, y: col('btk_rmw_km'), name: 'NHC RMW', yaxis: 'y3',
+            { x: t, y: col('btk_rmw_km'), name: ag + ' RMW', yaxis: 'y3',
               line: nhc, showlegend: false, connectgaps: false,
               hovertemplate: '%{y:.0f} km' }
         ];
