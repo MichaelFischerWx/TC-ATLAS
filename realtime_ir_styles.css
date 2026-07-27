@@ -6926,6 +6926,16 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     color: #fdba74; background: #2a1a0d; border-color: #7c2d12;
 }
 .exp-cite a { color: inherit; text-decoration: underline; }
+.exp-stale {
+    font-size: 13px; line-height: 1.5; font-weight: 600;
+    color: #7f1d1d; background: #fef2f2; border: 1px solid #fecaca;
+    border-left: 3px solid #dc2626;
+    border-radius: 6px; padding: 10px 12px; margin-bottom: 10px;
+}
+[data-theme="dark"] .exp-stale {
+    color: #fca5a5; background: #2a0f0f; border-color: #7f1d1d;
+    border-left-color: #dc2626;
+}
 .exp-note {
     font-size: 12.5px; line-height: 1.5;
     color: #475569; background: #f8fafc;

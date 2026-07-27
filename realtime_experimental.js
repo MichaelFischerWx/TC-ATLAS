@@ -247,12 +247,30 @@
 
     /* ---------------- main UI ---------------- */
 
+    // Producer heartbeat: index.json is rewritten by every run (even when all
+    // storms are cadence-skipped), so its age is a dead-man's switch for the
+    // whole pipeline. Hourly cron + 30-min slack + 5-min GCS edge cache means
+    // anything past ~2.5 h is a real outage, not jitter.
+    var STALE_H = 2.5;
+
     function renderShell() {
         var storms = (_index && _index.storms) || [];
         var gen = _index && _index.generated
             ? new Date(_index.generated) : null;
         var genStr = gen
             ? gen.toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '—';
+        var ageH = gen ? (Date.now() - gen.getTime()) / 36e5 : null;
+        var staleHtml = '';
+        if (_index && (ageH === null || ageH > STALE_H)) {
+            staleHtml =
+                '<div class="exp-stale">&#9888;&#65039; GHOST updates are ' +
+                'paused — the last successful run was ' +
+                (ageH === null ? 'an unknown time' :
+                 ageH > 48 ? Math.round(ageH / 24) + ' days' :
+                 ageH.toFixed(1) + ' hours') +
+                ' ago. Estimates and imagery below are from that run and do ' +
+                'not reflect current storm status.</div>';
+        }
         var html =
             '<div class="exp-inner">' +
             '<div class="exp-head">' +
@@ -264,6 +282,7 @@
             '    · refreshes every 30 min for major hurricanes, hourly ' +
             'otherwise · <a href="#" id="exp-refresh">reload</a></div>' +
             '</div>' +
+            staleHtml +
             '<div class="exp-lede">GHOST provides <strong>independent, ' +
             'real-time estimates of tropical cyclone intensity (maximum ' +
             'sustained wind and minimum central pressure) and radius of ' +
