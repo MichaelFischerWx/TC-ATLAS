@@ -280,8 +280,8 @@
             '    <span class="exp-title">GHOST — ML Structure Diagnostics</span>' +
             '  </div>' +
             '  <div class="exp-meta">Updated ' + genStr +
-            '    · refreshes every 30 min for major hurricanes, hourly ' +
-            'otherwise · <a href="#" id="exp-refresh">reload</a></div>' +
+            '    · refreshes every 30 minutes · ' +
+            '<a href="#" id="exp-refresh">reload</a></div>' +
             '</div>' +
             staleHtml +
             '<div class="exp-lede">GHOST provides <strong>independent, ' +
