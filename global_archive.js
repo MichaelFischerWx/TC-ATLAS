@@ -1389,13 +1389,6 @@ function _gaIsTouch() {
         && window.matchMedia('(pointer: coarse)').matches
         && window.matchMedia('(hover: none)').matches;
 }
-// The single creation choke point for this page — every chart routes through
-// here, so gating Plotly's arrival here covers all of them. Plotly is now
-// lazy-loaded (see the ensurePlotly() loader in global_archive.html), so this
-// returns a promise that resolves once the library is present AND the plot is
-// drawn. Every existing caller is fire-and-forget, so the added await is
-// invisible to them; anything that needs to touch Plotly.* on this element
-// must chain off the returned promise rather than assume the plot exists.
 function gaNewPlot(el, traces, layout, config) {
     if (_gaIsTouch()) {
         layout = Object.assign({}, layout, { dragmode: false });
@@ -1403,9 +1396,7 @@ function gaNewPlot(el, traces, layout, config) {
             displayModeBar: false, scrollZoom: false
         });
     }
-    return window.ensurePlotly().then(function () {
-        return Plotly.newPlot(el, traces, layout, config);
-    });
+    return Plotly.newPlot(el, traces, layout, config);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -4212,11 +4203,6 @@ function loadHURSAT(storm) {
                 return;
             }
             irMeta = meta;
-            // CDN hit/miss tallies gate the direct-fetch probe, and coverage is
-            // per storm — carrying them across storms would let one uncached
-            // storm disable the fast path for every storm opened after it.
-            _irCdnHits = 0;
-            _irCdnMisses = 0;
             document.getElementById('ir-slider').max = meta.n_frames - 1;
             document.getElementById('ir-slider').value = 0;
 
@@ -4920,31 +4906,6 @@ var IR_PREFETCH_BATCH_MERGIR = 6;   // MergIR: server-side rate limiter handles 
                                     // limiting (server also paces with 0.5s min interval)
 var IR_PREFETCH_AHEAD = 20;  // How many frames ahead to prefetch
 
-// ── Direct-CDN frame fetching ────────────────────────────────────────────
-// Rendered frames are mirrored to R2 under an immutable key, whose prefix
-// /global/ir/meta hands us as `frame_cdn_base` (never hardcode it — a
-// server-side version bump would silently strand us on a dead prefix).
-// Fetching those straight from the CDN keeps cache hits off Cloud Run
-// entirely: the API only ever 302'd us there anyway, but the redirect still
-// burned a request slot, so a saturated API (429) could blank out a storm
-// whose imagery we already hold. Going direct makes cached storms immune.
-var _irCdnHits = 0;              // frames served straight from the CDN
-var _irCdnMisses = 0;            // CDN 404s — frame not rendered yet
-var IR_CDN_TIMEOUT = 8000;       // a slow CDN probe should yield to the API
-var IR_CDN_GIVEUP_MISSES = 3;    // stop probing a storm that has yielded nothing
-
-function _irCdnFrameUrl(idx) {
-    if (!irMeta || !irMeta.frame_cdn_base || !selectedStorm) return null;
-    // A never-viewed storm has nothing on the CDN at all — after a few straight
-    // misses, stop paying an extra round-trip on every one of its frames.
-    // Probes already in flight when the threshold trips still land, so the real
-    // ceiling is this plus the prefetch width (~9 observed at 6-wide MergIR).
-    // Bounded and cheap either way: a miss is an edge 404, zero Cloud Run cost.
-    if (_irCdnHits === 0 && _irCdnMisses >= IR_CDN_GIVEUP_MISSES) return null;
-    return irMeta.frame_cdn_base + '/' +
-        encodeURIComponent(selectedStorm.sid) + '/' + idx + '.json';
-}
-
 function setIRLoadingText(msg) {
     var el = document.getElementById('ir-loading-text');
     if (el) el.textContent = msg;
@@ -5063,46 +5024,12 @@ function fetchIRFrameSingle(idx, callback) {
     var controller = new AbortController();
     var timer = setTimeout(function () { controller.abort(); }, timeoutMs);
 
-    function _fetchViaApi() {
-        return fetch(frameUrl, { signal: controller.signal })
-            .then(function (r) {
-                clearTimeout(timer);
-                if (!r.ok) throw new Error('Frame not available (HTTP ' + r.status + ')');
-                return r.json();
-            });
-    }
-
-    // Try the CDN first when the frame is already rendered. A miss is a plain
-    // CORS-enabled 404, so it rejects cleanly and we fall through to the API,
-    // which renders the frame and mirrors it for next time. Same bytes either
-    // way — this is the exact object the API's 302 points at.
-    var cdnUrl = _irCdnFrameUrl(idx);
-    var chain;
-    if (cdnUrl) {
-        var cdnCtl = new AbortController();
-        var cdnTimer = setTimeout(function () { cdnCtl.abort(); }, IR_CDN_TIMEOUT);
-        chain = fetch(cdnUrl, { signal: cdnCtl.signal })
-            .then(function (r) {
-                clearTimeout(cdnTimer);
-                if (!r.ok) throw new Error('cdn miss');
-                return r.json();
-            })
-            // Two-arg then: the reject handler sees CDN failures only, so an
-            // error thrown downstream can never re-trigger the API fetch.
-            .then(function (data) {
-                _irCdnHits++;
-                clearTimeout(timer);
-                return data;
-            }, function () {
-                clearTimeout(cdnTimer);
-                _irCdnMisses++;
-                return _fetchViaApi();
-            });
-    } else {
-        chain = _fetchViaApi();
-    }
-
-    chain
+    fetch(frameUrl, { signal: controller.signal })
+        .then(function (r) {
+            clearTimeout(timer);
+            if (!r.ok) throw new Error('Frame not available (HTTP ' + r.status + ')');
+            return r.json();
+        })
         .then(function (data) {
             irFrames[idx] = data;
             updateIRCacheStatus();
@@ -10485,7 +10412,7 @@ function renderSHIPSChart() {
     });
 
     if (activeVars.length === 0) {
-        if (window.Plotly) Plotly.purge(chartEl);
+        Plotly.purge(chartEl);
         return;
     }
 
@@ -10551,7 +10478,7 @@ function renderSHIPSChart() {
     });
 
     if (traces.length === 0) {
-        if (window.Plotly) Plotly.purge(chartEl);
+        Plotly.purge(chartEl);
         return;
     }
 
@@ -10758,7 +10685,7 @@ function renderTCPrimedEnvChart() {
     });
 
     if (activeVars.length === 0) {
-        if (window.Plotly) Plotly.purge(chartEl);
+        Plotly.purge(chartEl);
         return;
     }
 
@@ -10825,7 +10752,7 @@ function renderTCPrimedEnvChart() {
     });
 
     if (traces.length === 0) {
-        if (window.Plotly) Plotly.purge(chartEl);
+        Plotly.purge(chartEl);
         return;
     }
 

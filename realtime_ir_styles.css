@@ -7065,6 +7065,8 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 [data-theme="dark"] .exp-tile-sub { color: #94a3b8; }
 .exp-tile-d { font-size: 11.5px; color: #475569; margin-top: 3px; }
 [data-theme="dark"] .exp-tile-d { color: #94a3b8; }
+.exp-tile-sub.exp-ceil { color: #b45309; font-weight: 600; }
+[data-theme="dark"] .exp-tile-sub.exp-ceil { color: #fbbf24; }
 .exp-cat {
     display: inline-block; font-size: 10.5px; font-weight: 700;
     border-radius: 999px; padding: 1.5px 8px; margin-left: 7px;

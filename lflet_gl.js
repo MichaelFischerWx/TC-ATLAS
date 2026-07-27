@@ -311,15 +311,6 @@
     // Insert a GL layer at the stacking position for z (lower z = further back).
     // Among equal z, later additions sit on top (Leaflet insertion order).
     Map.prototype._glAdd = function (def, z) {
-        // getStyle() is undefined until MapLibre's 'load' fires. With the page's
-        // scripts loading in parallel (defer), a fast frames.json can race the
-        // style and land here early — queue the add instead of crashing. Queued
-        // adds replay in registration order, preserving stacking.
-        if (!(this._loaded || this._gl.isStyleLoaded())) {
-            var self = this;
-            this._whenStyle(function () { self._glAdd(def, z); });
-            return;
-        }
         z = z == null ? 400 : z;
         var layers = this._gl.getStyle().layers, before = null;
         for (var i = 0; i < layers.length; i++) {

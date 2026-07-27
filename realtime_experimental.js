@@ -279,7 +279,11 @@
             '(<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu' +
             '</a>) \u2014 before citing or redistributing these estimates.</div>' +
             '<div class="exp-note">Guidance, not official analysis. ' +
-            'Weak systems (TD / weak TS) have a known high-bias. The NHC ' +
+            'Weak systems (TD / weak TS) have a known high-bias. Near ' +
+            'Category-5 strength the estimates saturate (ceiling ' +
+            '&asymp;150&ndash;155 kt): a flat, maxed-out trace means ' +
+            '&ldquo;at or above the ceiling&rdquo;, and the strongest ' +
+            'storms are typically under-read. The NHC ' +
             'reference is linearly interpolated between 6-hourly analyses ' +
             '(dots mark the real ones) and STOPS at the latest analysis — ' +
             'GHOST continues past it, so the most recent stretch has no ' +
@@ -703,6 +707,16 @@
                 ? '<div class="exp-flag">Rapid intensification</div>'
                 : (tv && tv.d * 24 / tv.h <= -30
                     ? '<div class="exp-flag down">Rapid weakening</div>' : '')) +
+            /* Cat-5 saturation: the calibration chain tops out near
+               150–155 kt (isotonic cap + handoff ramp; empirical max ever
+               emitted 155.1 kt on held-out 2025). A flat, maxed-out value
+               means "at or above the ceiling", not a measurement — and
+               decays from saturation are invisible at first. */
+            (v.v >= 145
+                ? '<div class="exp-tile-sub exp-ceil">near the model’s ' +
+                  'saturation ceiling (~150–155 kt) — read as ' +
+                  '“at least”, not a precise value</div>'
+                : '') +
             asOf + '</div>';
 
         if (p) html +=
