@@ -123,8 +123,8 @@
        binned by prediction level. Adding them to the live estimate gives
        calibrated bounds: the IQR band on the chart, the full curve in the
        Distribution panel. */
-    function distBin(j, v) {
-        var d = j.vmax_dist;
+    function distBin(j, v, key) {
+        var d = j[key || 'vmax_dist'];
         if (!d || !d.bin_edges || !d.err_q) return -1;
         for (var i = 0; i < d.bin_edges.length - 1; i++) {
             var hi = (d.bin_edges[i + 1] === null)
@@ -133,20 +133,21 @@
         }
         return -1;
     }
-    function distErrAt(j, v, pct) {
-        var i = distBin(j, v);
+    function distErrAt(j, v, pct, key) {
+        var i = distBin(j, v, key);
         if (i < 0) return null;
-        var q = j.vmax_dist.err_q['p' + (pct < 10 ? '0' + pct : pct)];
+        var q = j[key || 'vmax_dist'].err_q['p' + (pct < 10 ? '0' + pct : pct)];
         return (q && q[i] !== null && q[i] !== undefined) ? q[i] : null;
     }
-    function distBounds(j, plo, phi) {
+    function distBounds(j, plo, phi, key, field) {
         var fr = j.frames || [];
-        if (!j.vmax_dist || !j.vmax_dist.err_q) return null;
+        key = key || 'vmax_dist'; field = field || 'vmax_kt';
+        if (!j[key] || !j[key].err_q) return null;
         var lo = [], hi = [], any = false;
         fr.forEach(function (f) {
-            var v = f.vmax_kt;
-            var a = (v == null) ? null : distErrAt(j, v, plo);
-            var b = (v == null) ? null : distErrAt(j, v, phi);
+            var v = f[field];
+            var a = (v == null) ? null : distErrAt(j, v, plo, key);
+            var b = (v == null) ? null : distErrAt(j, v, phi, key);
             if (a === null || b === null) { lo.push(null); hi.push(null); return; }
             lo.push(v + a); hi.push(v + b); any = true;
         });
@@ -849,6 +850,15 @@
             '<div class="exp-tile-v">' + Math.round(p.v) +
             ' <span class="exp-tile-u">hPa</span></div>' +
             deltaLine(tp, 'hPa', 0, false) +
+            (function () {
+                var a = distErrAt(j, p.v, 25, 'pmin_dist'),
+                    b = distErrAt(j, p.v, 75, 'pmin_dist');
+                return (a !== null && b !== null)
+                    ? '<div class="exp-tile-sub">IQR ' +
+                      Math.round(p.v + a) + '\u2013' + Math.round(p.v + b) +
+                      ' hPa</div>'
+                    : '';
+            })() +
             '<div class="exp-tile-sub">at ' + p.t.slice(11, 16) + 'Z</div></div>';
 
         if (r) {
@@ -914,39 +924,47 @@
         var box = document.getElementById('exp-dist');
         if (!box || typeof Plotly === 'undefined') return;
         var v = lastFiniteFrame(j.frames || [], 'vmax_kt');
-        var d = j.vmax_dist;
-        if (!v || !d || !d.err_q || !d.pcts) {
+        if (!v || !j.vmax_dist || !j.vmax_dist.err_q) {
             box.innerHTML = '<div class="exp-empty">No distribution lookup ' +
-                'in this storm’s file yet (republish to populate).</div>';
+                'in this storm\u2019s file yet (republish to populate).</div>';
             return;
         }
-        var bi = distBin(j, v.v);
+        box.innerHTML =
+            '<div class="exp-shap-head">Predictive distributions \u2014 ' +
+            v.t.slice(5, 16).replace('T', ' ') + 'Z' +
+            '<span class="exp-shap-sub">calibrated from storm-held-out CV ' +
+            'frames with similar predicted values (bin sample size on each ' +
+            'panel). The right tail of the wind panel is real information: ' +
+            'it reflects storms that verified far above similar predictions ' +
+            '\u2014 near the Cat-5 ceiling the point estimate is ' +
+            'analog-limited and the tail carries the monster risk. RMW band ' +
+            'pending its own CV artifact.</span></div>' +
+            '<div class="exp-shap-grid">' +
+            '<div id="exp-dist-v"></div><div id="exp-dist-p"></div></div>';
+        cdfFig('exp-dist-v', j, 'vmax_dist', 'vmax_kt', 'Vmax (kt)', 'btk_vmax_kt');
+        cdfFig('exp-dist-p', j, 'pmin_dist', 'pmin_hpa', 'Pmin (hPa)', 'btk_mslp_hpa');
+    }
+
+    function cdfFig(elId, j, key, field, label, refField) {
+        var d = j[key];
+        var v = lastFiniteFrame(j.frames || [], field);
+        var el = document.getElementById(elId);
+        if (!el) return;
+        if (!d || !d.err_q || !d.pcts || !v) { el.innerHTML = ''; return; }
         var xs = [], ys = [];
         d.pcts.forEach(function (pc) {
-            var e = distErrAt(j, v.v, pc);
+            var e = distErrAt(j, v.v, pc, key);
             if (e !== null) { xs.push(v.v + e); ys.push(pc); }
         });
-        if (xs.length < 4) { box.innerHTML = ''; return; }
-        var q25 = v.v + (distErrAt(j, v.v, 25) || 0);
-        var q75 = v.v + (distErrAt(j, v.v, 75) || 0);
+        if (xs.length < 4) { el.innerHTML = ''; return; }
+        var bi = distBin(j, v.v, key);
         var n = (d.n && bi >= 0) ? d.n[bi] : null;
-        var lo = d.bin_edges[bi], hi = d.bin_edges[bi + 1];
+        var q25 = v.v + (distErrAt(j, v.v, 25, key) || 0);
+        var q75 = v.v + (distErrAt(j, v.v, 75, key) || 0);
         var dark = document.documentElement.getAttribute('data-theme') === 'dark';
         var grid = dark ? '#1e293b' : '#e2e8f0';
         var fc = dark ? '#cbd5e1' : '#334155';
-        var nhcV = lastFiniteFrame(j.frames || [], 'btk_vmax_kt');
-        box.innerHTML =
-            '<div class="exp-shap-head">Predictive distribution — ' +
-            v.t.slice(5, 16).replace('T', ' ') + 'Z' +
-            '<span class="exp-shap-sub">calibrated from ' + (n || '—') +
-            ' storm-held-out CV frames with similar predicted intensity (' +
-            (lo != null ? Math.round(lo) : '?') + '–' +
-            (hi != null ? Math.round(hi) : '∞') + ' kt bin). The right ' +
-            'tail is real: it reflects storms that verified far above ' +
-            'similar predictions. Near the Cat-5 ceiling the point estimate ' +
-            'is analog-limited — the tail carries the monster risk.' +
-            '</span></div>' +
-            '<div id="exp-dist-plot"></div>';
+        var ref = refField ? lastFiniteFrame(j.frames || [], refField) : null;
         var shapes = [
             { type: 'rect', xref: 'x', yref: 'paper', x0: q25, x1: q75,
               y0: 0, y1: 1, fillcolor: 'rgba(244,63,94,0.10)',
@@ -956,37 +974,38 @@
         ];
         var ann = [{
             x: v.v, y: 0.97, xref: 'x', yref: 'paper', showarrow: false,
-            text: 'GHOST ' + Math.round(v.v), font: { size: 10,
-                color: GHOST_COL }, xanchor: 'left'
+            text: 'GHOST ' + Math.round(v.v),
+            font: { size: 10, color: GHOST_COL }, xanchor: 'left'
         }];
-        if (nhcV) {
+        if (ref) {
             shapes.push({ type: 'line', xref: 'x', yref: 'paper',
-                x0: nhcV.v, x1: nhcV.v, y0: 0, y1: 1,
+                x0: ref.v, x1: ref.v, y0: 0, y1: 1,
                 line: { color: fc, width: 1.4, dash: 'dash' } });
-            ann.push({ x: nhcV.v, y: 0.06, xref: 'x', yref: 'paper',
+            ann.push({ x: ref.v, y: 0.06, xref: 'x', yref: 'paper',
                 showarrow: false, text: (j.agency || 'NHC') + ' ' +
-                Math.round(nhcV.v), font: { size: 10, color: fc },
+                Math.round(ref.v), font: { size: 10, color: fc },
                 xanchor: 'right' });
         }
-        Plotly.react('exp-dist-plot', [{
+        Plotly.react(elId, [{
             x: xs, y: ys, mode: 'lines+markers',
             line: { color: GHOST_COL, width: 2, shape: 'spline' },
             marker: { size: 5, color: GHOST_COL },
-            hovertemplate: '%{y}% of similar CV frames verified ≤ ' +
-                '%{x:.0f} kt<extra></extra>'
+            hovertemplate: '%{y}% of similar CV frames verified \u2264 ' +
+                '%{x:.0f}<extra></extra>'
         }], {
-            height: 300, margin: { l: 52, r: 16, t: 8, b: 42 },
+            height: 290, margin: { l: 48, r: 14, t: 22, b: 42 },
+            title: { text: label + (n ? ' \u2014 n=' + n : ''),
+                     font: { size: 11 } },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: dark ? 'rgba(15,23,42,0.55)' : 'rgba(248,250,252,0.7)',
-            font: { color: fc, size: 11 },
+            font: { color: fc, size: 10 },
             shapes: shapes, annotations: ann,
-            xaxis: { title: { text: 'Vmax (kt)', font: { size: 11 } },
+            xaxis: { title: { text: label, font: { size: 10 } },
                      gridcolor: grid },
-            yaxis: { title: { text: 'cumulative probability (%)',
-                              font: { size: 11 } },
+            yaxis: { title: { text: 'cumulative %', font: { size: 10 } },
                      gridcolor: grid, range: [0, 100] }
         }, { displayModeBar: false, responsive: true })
-          .then(function () { Plotly.Plots.resize('exp-dist-plot'); });
+          .then(function () { Plotly.Plots.resize(elId); });
     }
 
     /* ---------------- center-track mini-map ---------------- */
@@ -1331,6 +1350,20 @@
                    .map(function (d) { return d.btk_vmax_kt; }),
               name: ag + ' analysis', yaxis: 'y', mode: 'markers',
               marker: { size: 5, color: nhc.color } },
+            (function () {
+                var b = distBounds(j, 25, 75, 'pmin_dist', 'pmin_hpa');
+                return b ? { x: t, y: b.lo, yaxis: 'y2', mode: 'lines',
+                    line: { width: 0 }, hoverinfo: 'skip',
+                    showlegend: false } : null;
+            })(),
+            (function () {
+                var b = distBounds(j, 25, 75, 'pmin_dist', 'pmin_hpa');
+                return b ? { x: t, y: b.hi, yaxis: 'y2', mode: 'lines',
+                    line: { width: 0 }, fill: 'tonexty',
+                    fillcolor: 'rgba(244,63,94,0.13)', showlegend: false,
+                    hovertemplate: '%{y:.0f} hPa (p75)',
+                    name: 'IQR' } : null;
+            })(),
             { x: t, y: col('pmin_hpa'), name: 'GHOST', yaxis: 'y2',
               line: { color: GHOST_COL, width: 2.4 }, showlegend: false,
               hovertemplate: '%{y:.0f} hPa' },
@@ -1391,6 +1424,7 @@
         };
         /* Assign subplot x-axes by the trace's y-axis, not by position —
            the conditional IQR band shifts indices. */
+        traces = traces.filter(function (tr) { return tr; });
         traces.forEach(function (tr) {
             if (tr.yaxis === 'y2') tr.xaxis = tr.xaxis || 'x2';
             if (tr.yaxis === 'y3') tr.xaxis = tr.xaxis || 'x3';
