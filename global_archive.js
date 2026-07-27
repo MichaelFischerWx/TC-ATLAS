@@ -1408,6 +1408,24 @@ function gaNewPlot(el, traces, layout, config) {
     });
 }
 
+// Bind a Plotly event AFTER the plot exists.
+//
+// Plotly attaches .on() to the DOM node as part of newPlot, and gaNewPlot is
+// async now that Plotly is lazy-loaded — so binding on the line after it
+// throws "….on is not a function". That exception propagated out of
+// renderIntensityTimeline through renderStormDetail, so the storm-detail
+// build aborted partway: no overlay toggles, no detail map, an empty overlays
+// panel and a source badge stuck on its hardcoded HURSAT-B1 default. It looked
+// exactly like a data or map failure and was neither.
+function gaOnPlot(plotPromise, el, evt, fn) {
+    Promise.resolve(plotPromise).then(function () {
+        var node = (typeof el === 'string') ? document.getElementById(el) : el;
+        if (node && typeof node.on === 'function') node.on(evt, fn);
+    }).catch(function (e) {
+        console.warn('gaOnPlot: could not bind ' + evt, e);
+    });
+}
+
 // ══════════════════════════════════════════════════════════════
 //  TAB SWITCHING
 // ══════════════════════════════════════════════════════════════
@@ -2428,10 +2446,10 @@ function renderIntensityTimeline(track, storm) {
     // Store base shapes for later (IR time marker is appended dynamically)
     window._timelineBaseShapes = shapes.slice();
 
-    gaNewPlot('timeline-chart', [windTrace, presTrace], layout, PLOTLY_CONFIG);
+    var _tlPlot = gaNewPlot('timeline-chart', [windTrace, presTrace], layout, PLOTLY_CONFIG);
 
     // Click handler to sync IR + Recon
-    document.getElementById('timeline-chart').on('plotly_click', function (data) {
+    gaOnPlot(_tlPlot, 'timeline-chart', 'plotly_click', function (data) {
         if (data.points && data.points.length > 0) {
             var clickedTime = data.points[0].x;
             syncIRToTime(clickedTime);
@@ -2766,10 +2784,10 @@ function renderHovmoller(data) {
             scale: 2
         }
     });
-    gaNewPlot(div, traces, layout, hovConfig);
+    var _hovPlot = gaNewPlot(div, traces, layout, hovConfig);
 
     // Click handler: sync IR to clicked time
-    div.on('plotly_click', function (evtData) {
+    gaOnPlot(_hovPlot, div, 'plotly_click', function (evtData) {
         if (evtData.points && evtData.points.length > 0) {
             var clickedTime = evtData.points[0].y;
             syncIRToTime(clickedTime);
@@ -14057,10 +14075,10 @@ function _gaFLRenderTimeSeries() {
         layout.xaxis.categoryarray = keys;
     }
 
-    gaNewPlot('ga-fl-ts-chart', traces, layout, { responsive: true, displayModeBar: true, displaylogo: false });
+    var _flPlot = gaNewPlot('ga-fl-ts-chart', traces, layout, { responsive: true, displayModeBar: true, displaylogo: false });
 
     // Click-to-highlight on map
-    chartDiv.on('plotly_click', function (data) {
+    gaOnPlot(_flPlot, chartDiv, 'plotly_click', function (data) {
         if (!data.points || !data.points[0]) return;
         var pt = data.points[0];
         var obs10 = _gaFLData10s;
