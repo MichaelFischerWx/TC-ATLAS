@@ -312,6 +312,16 @@
                 'completed storms</span></div>' +
                 '<div class="exp-chips exp-chips-arch">';
             arch.forEach(function (s) {
+                /* Filter-excluded storms (weak/overland whole life) are
+                   listed but not selectable — silently missing reads as a
+                   bug, and the reason is scientifically meaningful. */
+                if (s.excluded) {
+                    html += '<button class="exp-chip exp-chip-arch ' +
+                        'exp-chip-off" disabled title="' + s.excluded + '">' +
+                        (s.name || s.atcf) + ' <span>' + s.atcf + '</span>' +
+                        '<em class="exp-chip-int">not scoreable</em></button>';
+                    return;
+                }
                 var pk = s.ghost_peak_kt;
                 var cat = windToCategory(pk);
                 html += '<button class="exp-chip exp-chip-arch" data-atcf="' +
@@ -444,7 +454,8 @@
                 if (_storm && _series[_storm]) applyRange(_series[_storm]);
             });
         });
-        var known = storms.concat(arch);
+        var known = storms.concat(arch.filter(function (s) {
+            return !s.excluded; }));
         var want = _storm && known.some(function (s) { return s.atcf === _storm; })
             ? _storm : known[0].atcf;
         selectStorm(want);
