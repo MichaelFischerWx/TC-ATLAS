@@ -653,7 +653,7 @@
     var _stormNameLabels = {};
 
     // Global map product state
-    var globalProduct = 'ir';        // mosaic product: 'ir' | 'vis' | 'wv'
+    var globalProduct = 'ir';        // mosaic product: 'ir' | 'vis' | 'wv' | 'combo' (sandwich)
     // "Off" pill on the Global Map band switch: suppress the base satellite
     // layer entirely so only the basemap + forecast overlays (DeepMind
     // ensemble, cyclogenesis, env) show. Gated in the base-satellite add
@@ -663,7 +663,7 @@
     // Full brightness — the global mosaic now renders at native opacity so it
     // matches the per-storm sector tiles (which are full-opacity). The old
     // 0.85/0.95 values dimmed the global view relative to the storm card.
-    var _PRODUCT_OPACITY = { ir: 1.0, vis: 1.0, wv: 1.0 };
+    var _PRODUCT_OPACITY = { ir: 1.0, vis: 1.0, wv: 1.0, combo: 1.0 };
     function _productOpacity(p) { return _PRODUCT_OPACITY[p] != null ? _PRODUCT_OPACITY[p] : 0.85; }
     var _labelsLayer = null;         // CARTO place-name tile layer (toggleable)
     var _labelsVisible = false;      // default: labels off (toggle in the top-left stack)
@@ -1912,9 +1912,61 @@
     var _ir2aLayer = null, _ir2aOn = false, _ir2aFrames = null, _ir2aFramesProduct = null;
     function _ir2aEligible() {
         return _IR2A && window.LFLET_GL && window.createMosaicGLLayer &&
-               (globalProduct === 'ir' || globalProduct === 'vis' || globalProduct === 'wv');
+               (globalProduct === 'ir' || globalProduct === 'vis' || globalProduct === 'wv'
+                || globalProduct === 'combo');
     }
-    function _ir2aTileUrl(frame, z, x, y) { return _ir2aRoot(_ir2aProduct) + '/' + frame + '/' + z + '/' + x + '/' + y + '.png'; }
+    // Combo ("sandwich") renders IR idx as the PRIMARY band (timeline, hover,
+    // colormap) with the paired Vis idx sampled as luminance in the shader.
+    function _ir2aPrimaryBand() { return (_ir2aProduct === 'combo') ? 'ir' : _ir2aProduct; }
+    function _ir2aTileUrl(frame, z, x, y) { return _ir2aRoot(_ir2aPrimaryBand()) + '/' + frame + '/' + z + '/' + x + '/' + y + '.png'; }
+    function _ir2aTileUrlVis(frame, z, x, y) { return _ir2aRoot('vis') + '/' + frame + '/' + z + '/' + x + '/' + y + '.png'; }
+    // Vis frame list for combo pairing (frames.json of the vis band).
+    var _comboVisFrames = null;
+    function _tsToMin(ts) {   // 'YYYYMMDDHHmm' → minutes since epoch (UTC)
+        return Date.UTC(+ts.slice(0, 4), +ts.slice(4, 6) - 1, +ts.slice(6, 8),
+                        +ts.slice(8, 10), +ts.slice(10, 12)) / 60000;
+    }
+    // Nearest vis mosaic frame to an IR frame, or null when the vis list is
+    // stale/empty (layer then renders plain IR — night handling is per-PIXEL
+    // via the vis tile's idx-0 sentinel, not per-frame).
+    function _comboPairVis(irTs) {
+        var v = _comboVisFrames;
+        if (!v || !v.length || !irTs) return null;
+        var lo = 0, hi = v.length - 1;                     // lexicographic == chronological
+        while (lo < hi) { var mid = (lo + hi) >> 1; if (v[mid] < irTs) lo = mid + 1; else hi = mid; }
+        var best = null, bestD = Infinity, t0 = _tsToMin(irTs);
+        for (var i = Math.max(0, lo - 1); i <= Math.min(v.length - 1, lo + 1); i++) {
+            var d = Math.abs(_tsToMin(v[i]) - t0);
+            if (d < bestD) { bestD = d; best = v[i]; }
+        }
+        return (bestD <= 40) ? best : null;
+    }
+    // Load the frame manifest(s) for a product. 'combo' needs BOTH bands: the
+    // IR list drives the timeline, the Vis list feeds pairing, and both
+    // manifests must register their pack/zmax maps for tile fetches.
+    function _ir2aLoadFrames(p, cb, onErr) {
+        if (p !== 'combo') {
+            fetch(_ir2aRoot(p) + '/frames.json', { cache: 'no-store' })
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                    _ir2aFrames = (j && j.frames) || []; _ir2aFramesProduct = p;
+                    _irApplyTrange(j, p); cb();
+                })
+                .catch(onErr);
+            return;
+        }
+        Promise.all([
+            fetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' }).then(function (r) { return r.json(); }),
+            fetch(_ir2aRoot('vis') + '/frames.json', { cache: 'no-store' }).then(function (r) { return r.json(); }),
+        ]).then(function (js) {
+            _ir2aFrames = (js[0] && js[0].frames) || [];
+            _comboVisFrames = (js[1] && js[1].frames) || [];
+            _ir2aFramesProduct = 'combo';
+            _irApplyTrange(js[0], 'ir');
+            _irApplyTrange(js[1], 'vis');
+            cb();
+        }).catch(onErr);
+    }
 
     // ── IR idx→Tb decode range ─────────────────────────────────────────────
     // The idx mosaic encodes Tb linearly into 1..255 over [vmin,vmax]. Legacy
@@ -1962,8 +2014,12 @@
         var next = (r && r.length === 2) ? [+r[0], +r[1]] : _IR_IDX_RANGE_LEGACY.slice();
         if (next[0] === _irIdxRange[0] && next[1] === _irIdxRange[1]) return;
         _irIdxRange = next;
-        if (_ir2aOn && _ir2aLayer && _ir2aFramesProduct === 'ir') {
-            try { _ir2aLayer.setColormap(_idxLutForProduct('ir', _irColormap || 'claude-ir')); } catch (e) {}
+        if (_ir2aOn && _ir2aLayer &&
+            (_ir2aFramesProduct === 'ir' || _ir2aFramesProduct === 'combo')) {
+            try {
+                _ir2aLayer.setColormap(
+                    _idxLutForProduct(_ir2aFramesProduct, _irColormap || 'claude-ir'));
+            } catch (e) {}
         }
         _irTargetMaps = {};   // drop cached recolor maps built at the old range
     }
@@ -2168,9 +2224,25 @@
         for (var _v = 1; _v < 256; _v++) { u[_v * 4] = u[_v * 4 + 1] = u[_v * 4 + 2] = _v; u[_v * 4 + 3] = 255; }
         return u;
     })();
+    // Combo ("sandwich") LUT: full IR colormap rgb everywhere, but alpha ramped
+    // so color applies ONLY to cold tops — 0 at ≥ −20 °C up to full at ≤ −40 °C.
+    // The GL combo shader mixes Vis luminance beneath by this alpha, and uses
+    // the (still valid) rgb directly for night-side plain-IR fallback.
+    var _COMBO_TB_WARM = 253.15, _COMBO_TB_COLD = 233.15;
+    function _comboIdxLut(cmap) {
+        var base = _idxLutFor(cmap), out = new Uint8Array(base);
+        for (var i = 1; i < 256; i++) {
+            var tb = _irIdxToTbColor(i);
+            var a = (_COMBO_TB_WARM - tb) / (_COMBO_TB_WARM - _COMBO_TB_COLD);
+            a = a < 0 ? 0 : (a > 1 ? 1 : a);
+            out[i * 4 + 3] = Math.round(base[i * 4 + 3] * a);
+        }
+        return out;
+    }
     function _idxLutForProduct(product, cmap) {
         if (product === 'wv') return _WV_IDX_LUT;
         if (product === 'vis') return _VIS_IDX_LUT;
+        if (product === 'combo') return _comboIdxLut(cmap);
         return _idxLutFor(cmap);
     }
     // idx→RGBA LUT for an alpha-carrying operational map (e.g. coldcloud) straight from
@@ -2198,16 +2270,25 @@
     }
     function _ir2aBuild(times) {
         if (!_ir2aLayer) {
-            _ir2aLayer = window.createMosaicGLLayer({
+            var glOpts = {
                 id: 'ir2a-idx', tileUrl: _ir2aTileUrl, frames: times,
                 maxZoom: _IR2A_DEV ? 4 : 7, baseMaxZoom: 4, tileSize: 512,
                 // Per-frame detail cap: only frames whose manifest entry says a
-                // z7 storm sector was baked (Vis hi-res) go past z6.
+                // z7 storm sector was baked (Vis hi-res) go past z6. For combo
+                // _stormZmaxFor has no 'combo' map → capped at z6 (both bands
+                // are globally gapless there).
                 frameMaxZoom: function (f) { return _stormZmaxFor(_ir2aProduct, f); },
                 fetchTile: function (f, z, x, y) { return _v3TileBlob(_ir2aTileUrl(f, z, x, y)); },
                 lut: _idxLutForProduct(_ir2aProduct, _irColormap || 'claude-ir'),
                 onError: function (m) { console.error('[ir2a] ' + m); }
-            });
+            };
+            if (_ir2aProduct === 'combo') {
+                glOpts.tileUrl2 = _ir2aTileUrlVis;
+                glOpts.fetchTile2 = function (f, z, x, y) { return _v3TileBlob(_ir2aTileUrlVis(f, z, x, y)); };
+                glOpts.pairFrame = _comboPairVis;
+                glOpts.lut2 = _VIS_IDX_LUT;
+            }
+            _ir2aLayer = window.createMosaicGLLayer(glOpts);
             // Insert at the tile-pane z (200) so it sits below coastlines/overlays
             // (z400+) — same stacking as the v2 mosaic raster — not on top of them.
             try { map._glAdd(_ir2aLayer.layer, 200); }
@@ -2228,10 +2309,8 @@
         };
         if (_ir2aFrames && _ir2aFrames.length && _ir2aFramesProduct === p) { build(); return; }
         if (_IR2A_DEV) { _ir2aFrames = _IR2A_DEV_FRAMES.slice(); _ir2aFramesProduct = p; build(); return; }
-        fetch(_ir2aRoot(p) + '/frames.json', { cache: 'no-store' })
-            .then(function (r) { return r.json(); })
-            .then(function (j) { _ir2aFrames = (j && j.frames) || []; _ir2aFramesProduct = p; _irApplyTrange(j, p); build(); })
-            .catch(function (e) { console.error('[ir2a] frames.json load failed', e); });
+        _ir2aLoadFrames(p, build,
+            function (e) { console.error('[ir2a] frames.json load failed', e); });
     }
     // Show the latest v3 frame as the still (pre-play) global IR layer.
     function _ir2aStill() {
@@ -2445,7 +2524,7 @@
     }
     function _inspectHideTip() { if (_inspectTipEl) _inspectTipEl.style.display = 'none'; }
     function _inspectMouseMove(e) {
-        if (!_inspectOn || globalProduct !== 'ir' || !e.latlng) { _inspectHideTip(); return; }
+        if (!_inspectOn || (globalProduct !== 'ir' && globalProduct !== 'combo') || !e.latlng) { _inspectHideTip(); return; }
         if (_inspectThrottle) return;
         _inspectThrottle = true; setTimeout(function () { _inspectThrottle = false; }, 40);
         var oe = e.originalEvent || {};
@@ -2532,9 +2611,12 @@
     function _rtSetIRColormap(cmap) {
         if (cmap === _irColormap) return;
         _irColormap = cmap;
-        if (globalProduct !== 'ir' || !latestGIBSTime) return;
+        if ((globalProduct !== 'ir' && globalProduct !== 'combo') || !latestGIBSTime) return;
         // idx WebGL layer: instant GPU LUT swap, no rebuild.
-        if (_ir2aOn && _ir2aLayer) { _ir2aLayer.setColormap(_idxLutFor(cmap)); return; }
+        if (_ir2aOn && _ir2aLayer) {
+            _ir2aLayer.setColormap(_idxLutForProduct(globalProduct, cmap));
+            return;
+        }
         var hadAnim = globalAnimReady;
         if (globalAnimFrameLayers.length > 0) cleanupGlobalAnimation();
         removeGIBSOverlay(map, gibsIRLayers); gibsIRLayers = [];
@@ -2921,7 +3003,7 @@
         var tEl = document.getElementById('ir-global-anim-time');
         var dtLabel = (tEl && tEl.textContent && tEl.textContent.trim()) ||
             (_mosaicTs ? fmtUTC(_mosaicTs) : '');
-        var prodLabel = ({ ir: 'IR', vis: 'Visible', wv: 'Water Vapor' }[globalProduct] || 'IR');
+        var prodLabel = ({ ir: 'IR', vis: 'Visible', wv: 'Water Vapor', combo: 'Vis+IR Combo' }[globalProduct] || 'IR');
 
         function _roundRect(c, x, y, w, h, r) {
             c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r);
@@ -2970,8 +3052,8 @@
             var g2 = cctx.createLinearGradient(0, outH - botH, 0, outH);
             g2.addColorStop(0, 'rgba(8,18,34,0)'); g2.addColorStop(1, 'rgba(8,18,34,0.82)');
             cctx.fillStyle = g2; cctx.fillRect(0, outH - botH, outW, botH);
-            // Tb colorbar (bottom-left) — IR only; matches the on-screen legend.
-            if (globalProduct === 'ir' && typeof _rtDrawCompareColorbar === 'function') {
+            // Tb colorbar (bottom-left) — IR/Combo; matches the on-screen legend.
+            if ((globalProduct === 'ir' || globalProduct === 'combo') && typeof _rtDrawCompareColorbar === 'function') {
                 try { _rtDrawCompareColorbar(cctx, outW, outH, _IR_CBAR, ['+35', '-30', '-85'], 'Brightness Temp (°C)'); } catch (e) {}
             }
             var wmText = 'TC-ATLAS · tcatlas.org';
@@ -4602,10 +4684,10 @@
             }
         }
 
-        // The IR Tb colorbar only applies to the IR product; Vis (grayscale) and
-        // WV (its own scale) hide it.
+        // The IR Tb colorbar applies to IR and Combo (whose cold-top colors are
+        // the IR map); Vis (grayscale) and WV (its own scale) hide it.
         var colorbar = document.getElementById('ir-global-colorbar');
-        if (colorbar) colorbar.style.display = (mode === 'ir') ? '' : 'none';
+        if (colorbar) colorbar.style.display = (mode === 'ir' || mode === 'combo') ? '' : 'none';
 
         // If global animation is loaded, it needs to be rebuilt for the new product
         var hadAnim = globalAnimReady;
@@ -4628,8 +4710,11 @@
             return;
         }
         if (_ir2aOn) _ir2aDestroy();   // switched away from IR → remove the idx layer
+        // Combo needs the GL idx layer; without it (raster fallback path)
+        // degrade to plain IR rather than requesting a nonexistent band.
+        var gibsMode = (mode === 'combo') ? 'ir' : mode;
         var perSat = (Object.keys(latestGIBSTimes).length > 0) ? latestGIBSTimes : null;
-        var lyr = createCompositeGIBSLayer(timeStr, _productOpacity(mode), perSat, mode);
+        var lyr = createCompositeGIBSLayer(timeStr, _productOpacity(gibsMode), perSat, gibsMode);
         lyr.addTo(map);
         gibsIRLayers = [lyr];
         // Keep the cold-cloud convection overlay (if active) on the latest frame.
@@ -4784,10 +4869,8 @@
                 globalAnimFrameTimes = _ir2aFrames.slice();   // v3's own manifest → tiles always resolve
             } else {
                 globalAnimLoading = false;                    // re-enter once v3 frames.json loads
-                fetch(_ir2aRoot(globalProduct) + '/frames.json', { cache: 'no-store' })
-                    .then(function (r) { return r.json(); })
-                    .then(function (j) { _ir2aFrames = (j && j.frames) || []; _ir2aFramesProduct = globalProduct; _irApplyTrange(j, globalProduct); loadGlobalAnimation(); })
-                    .catch(function (e) { console.error('[ir2a] v3 frames.json load failed', e); updateGlobalAnimControls('idle'); });
+                _ir2aLoadFrames(globalProduct, loadGlobalAnimation,
+                    function (e) { console.error('[ir2a] v3 frames.json load failed', e); updateGlobalAnimControls('idle'); });
                 return;
             }
             removeGIBSOverlay(map, gibsIRLayers); gibsIRLayers = [];
@@ -5462,6 +5545,8 @@
                       '<button type="button" class="ir-mode-btn ir-mode-active" data-mode="ir">IR</button>'
                     + '<button type="button" class="ir-mode-btn"               data-mode="vis">Vis</button>'
                     + '<button type="button" class="ir-mode-btn"               data-mode="wv">WV</button>'
+                    + '<button type="button" class="ir-mode-btn"               data-mode="combo"'
+                    + ' title="Sandwich composite — visible cloud texture with IR-colored cold tops (night side falls back to IR)">Combo</button>'
                     + '<button type="button" class="ir-mode-btn"               data-mode="off"'
                     + ' title="Hide the satellite imagery — show only the map and forecast overlays">Off</button>';
                 var modeBtns = seg.querySelectorAll('.ir-mode-btn');

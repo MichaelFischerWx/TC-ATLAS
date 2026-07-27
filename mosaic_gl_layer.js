@@ -34,12 +34,31 @@
     'gl_Position=u_matrix*vec4(m,0.0,1.0);v_uv=vec2(a_pos.x,1.0-a_pos.y);}';
   var FS =
     'precision mediump float;uniform sampler2D u_idx;uniform sampler2D u_lut;' +
-    'uniform float u_opacity;varying vec2 v_uv;' +
+    'uniform sampler2D u_idx2;uniform sampler2D u_lut2;' +  // combo: second band (Vis idx) + its LUT
+    'uniform float u_opacity;uniform float u_combo;varying vec2 v_uv;' +
     'void main(){float v=texture2D(u_idx,v_uv).r;' +       // R channel = idx/255 (grayscale tile)
+    'if(u_combo<0.5){' +
     'if(v<0.0019)discard;' +                                // idx 0 = no-data sentinel → transparent
     'vec4 c=texture2D(u_lut,vec2((v*255.0+0.5)/256.0,0.5));' +  // exact texel center → LUT[idx], no sentinel bleed
     'float a=c.a*u_opacity;' +
-    'gl_FragColor=vec4(c.rgb*a,a);}';                       // PREMULTIPLIED — MapLibre's framebuffer is
+    'gl_FragColor=vec4(c.rgb*a,a);return;}' +               // PREMULTIPLIED — MapLibre's framebuffer is
+    // ── sandwich/combo path: Vis luminance × cold-top IR color ──
+    // u_lut here is the ALPHA-RAMPED IR LUT (alpha 0 warm → 1 cold, rgb =
+    // full IR colormap everywhere). Night/no-Vis pixels (idx2 sentinel 0,
+    // or the 1x1 black fallback texture) render as plain IR colormap.
+    'float v2=texture2D(u_idx2,v_uv).r;' +
+    'if(v<0.0019&&v2<0.0019)discard;' +
+    'vec4 c=texture2D(u_lut,vec2((v*255.0+0.5)/256.0,0.5));' +
+    'vec3 rgb;' +
+    'if(v2<0.0019){' +
+    'if(v<0.0019)discard;' +
+    'rgb=c.rgb;' +                                          // night side: plain IR colors
+    '}else{' +
+    'float lum=texture2D(u_lut2,vec2((v2*255.0+0.5)/256.0,0.5)).r;' +
+    'float ca=(v<0.0019)?0.0:c.a;' +
+    'rgb=mix(vec3(lum),c.rgb*(0.35+0.65*lum),ca);' +        // luminance-modulated cold-top color
+    '}' +
+    'gl_FragColor=vec4(rgb*u_opacity,u_opacity);}';
 
   function compile(gl, type, src, onErr) {
     var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
@@ -64,29 +83,53 @@
     // Optional per-frame detail cap (e.g. Vis frames with a baked z7 storm
     // sector go past z6; other frames don't) — clamps the render zoom per frame.
     var frameMaxZoom = opts.frameMaxZoom || null;
+    // Combo ("sandwich") mode: a second band (Vis idx) is sampled alongside the
+    // primary. pairFrame(frame) → the second band's frame id (or null = none,
+    // e.g. night); tileUrl2/fetchTile2 fetch its tiles; lut2 maps its idx to
+    // luminance. The primary LUT should carry a cold-only alpha ramp.
+    var pairFrame = opts.pairFrame || null;
+    var comboMode = !!(pairFrame && (opts.tileUrl2 || opts.fetchTile2));
 
     var frames = opts.frames ? opts.frames.slice() : [];
     var active = frames.length ? frames[frames.length - 1] : null;
     var opacity = (opts.opacity != null) ? opts.opacity : 1.0;
 
     var map = null, gl = null, prog = null, buf = null, loc = null, lutTex = null;
+    var lut2Tex = null, blackTex = null;     // combo: Vis LUT + 1x1 no-data fallback
     var pendingLut = opts.lut || null;       // applied on first render once gl exists
-    var tiles = {};                          // key "frame|z|x|y" -> {tex, used}
+    var pendingLut2 = opts.lut2 || null;
+    var tiles = {};                          // key "band|frame|z|x|y" -> {tex, used}
     var inflight = {};                       // key -> true while Image loading
     var useClock = 0;
 
-    function tkey(f, z, x, y) { return f + '|' + z + '|' + x + '|' + y; }
+    function tkey(f, z, x, y, band) { return (band || 0) + '|' + f + '|' + z + '|' + x + '|' + y; }
 
-    function makeLutTex() {
-      lutTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, lutTex);
-      var data = pendingLut || new Uint8Array(256 * 4);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    function _lutParams() {
       // NEAREST: 256 discrete colors = exactly what v2 bakes, and (critically) no
       // interpolation toward the transparent idx-0 sentinel that washed out warm Tb.
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+
+    function makeLutTex() {
+      lutTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, lutTex);
+      var data = pendingLut || new Uint8Array(256 * 4);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+      _lutParams();
+      if (comboMode) {
+        lut2Tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, lut2Tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+                      pendingLut2 || new Uint8Array(256 * 4));
+        _lutParams();
+        // 1x1 idx-0 texture: bound as the second band when its tile is missing
+        // (night side, not yet loaded) → shader takes the plain-IR path.
+        blackTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, blackTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+                      new Uint8Array([0, 0, 0, 255]));
+        _lutParams();
+      }
     }
 
     function uploadTex(key, img) {
@@ -104,12 +147,15 @@
       if (map) map.triggerRepaint();
     }
 
-    function loadTile(frame, z, x, y) {
-      var key = tkey(frame, z, x, y);
+    function loadTile(frame, z, x, y, band) {
+      band = band || 0;
+      var key = tkey(frame, z, x, y, band);
       if (tiles[key] || inflight[key]) return;
       inflight[key] = true;
-      if (fetchTile) {
-        fetchTile(frame, z, x, y).then(function (b) {
+      var bandFetch = band ? (opts.fetchTile2 || null) : fetchTile;
+      var bandUrl = band ? opts.tileUrl2 : opts.tileUrl;
+      if (bandFetch) {
+        bandFetch(frame, z, x, y).then(function (b) {
           if (b === null) {
             // Definitive miss (absent from the pack index): cache it so the
             // render loop never re-requests this tile.
@@ -128,7 +174,7 @@
       var img = new Image(); img.crossOrigin = 'anonymous';
       img.onload = function () { uploadTex(key, img); };
       img.onerror = function () { delete inflight[key]; };  // empty/missing tile — skip
-      img.src = opts.tileUrl(frame, z, x, y);
+      img.src = bandUrl(frame, z, x, y);
     }
 
     function evictIfNeeded() {
@@ -195,7 +241,10 @@
           u_scale: gl.getUniformLocation(prog, 'u_scale'),
           u_idx: gl.getUniformLocation(prog, 'u_idx'),
           u_lut: gl.getUniformLocation(prog, 'u_lut'),
-          u_opacity: gl.getUniformLocation(prog, 'u_opacity')
+          u_opacity: gl.getUniformLocation(prog, 'u_opacity'),
+          u_idx2: gl.getUniformLocation(prog, 'u_idx2'),
+          u_lut2: gl.getUniformLocation(prog, 'u_lut2'),
+          u_combo: gl.getUniformLocation(prog, 'u_combo')
         };
         buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
@@ -208,26 +257,42 @@
         // Coarse base (gapless) first, then sparse detail (storm sectors) on top.
         var levels = (z > baseZ) ? [baseZ, z] : [baseZ];
 
+        var pf = comboMode ? pairFrame(active) : null;   // paired Vis frame (null = none)
+
         gl.useProgram(prog);
         gl.bindBuffer(gl.ARRAY_BUFFER, buf);
         gl.enableVertexAttribArray(loc.a_pos);
         gl.vertexAttribPointer(loc.a_pos, 2, gl.FLOAT, false, 0, 0);
         gl.uniformMatrix4fv(loc.u_matrix, false, matrix);
         gl.uniform1f(loc.u_opacity, opacity);
+        gl.uniform1f(loc.u_combo, comboMode ? 1.0 : 0.0);
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, lutTex); gl.uniform1i(loc.u_lut, 1);
+        if (comboMode) {
+          gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, lut2Tex); gl.uniform1i(loc.u_lut2, 3);
+        }
         gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);  // premultiplied (keeps fb alpha=1)
         gl.disable(gl.DEPTH_TEST);
 
         for (var li = 0; li < levels.length; li++) {
           var lz = levels[li], n = 1 << lz, s = 1.0 / n;
           var vis = visibleTiles(lz);
-          for (var i = 0; i < vis.length; i++) loadTile(active, lz, vis[i][0], vis[i][1]);
+          for (var i = 0; i < vis.length; i++) {
+            loadTile(active, lz, vis[i][0], vis[i][1]);
+            if (pf) loadTile(pf, lz, vis[i][0], vis[i][1], 1);
+          }
           gl.uniform1f(loc.u_scale, s);
           for (var j = 0; j < vis.length; j++) {
             var cx = vis[j][0], cy = vis[j][1], rec = tiles[tkey(active, lz, cx, cy)];
             if (rec) rec.used = ++useClock;
             if (!rec || !rec.tex) continue;               // not loaded / known-absent → coarser base shows through
             gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, rec.tex); gl.uniform1i(loc.u_idx, 0);
+            if (comboMode) {
+              var rec2 = pf ? tiles[tkey(pf, lz, cx, cy, 1)] : null;
+              if (rec2) rec2.used = ++useClock;
+              gl.activeTexture(gl.TEXTURE2);
+              gl.bindTexture(gl.TEXTURE_2D, (rec2 && rec2.tex) ? rec2.tex : blackTex);
+              gl.uniform1i(loc.u_idx2, 2);
+            }
             // draw in the primary world + both neighbor copies (antimeridian display wrap)
             for (var k = -1; k <= 1; k++) {
               gl.uniform2f(loc.u_origin, cx * s + k, cy * s);
@@ -241,6 +306,8 @@
         Object.keys(tiles).forEach(function (k) { if (tiles[k].tex) gl.deleteTexture(tiles[k].tex); });
         tiles = {}; inflight = {};
         if (lutTex) gl.deleteTexture(lutTex);
+        if (lut2Tex) gl.deleteTexture(lut2Tex);
+        if (blackTex) gl.deleteTexture(blackTex);
         if (buf) gl.deleteBuffer(buf);
         if (prog) gl.deleteProgram(prog);
         gl = null; map = null;
@@ -255,7 +322,14 @@
         if (map) {
           // prefetch the next frame's visible tiles so playback doesn't stall
           var nf = frames[i + 1] || frames[i - 1];
-          if (nf && gl) { var z = pickZoom(); visibleTiles(z).forEach(function (t) { loadTile(nf, z, t[0], t[1]); }); }
+          if (nf && gl) {
+            var z = pickZoom();
+            var npf = comboMode ? pairFrame(nf) : null;
+            visibleTiles(z).forEach(function (t) {
+              loadTile(nf, z, t[0], t[1]);
+              if (npf) loadTile(npf, z, t[0], t[1], 1);
+            });
+          }
           map.triggerRepaint();
         }
       },
