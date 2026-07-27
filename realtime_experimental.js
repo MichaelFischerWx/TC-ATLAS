@@ -311,7 +311,11 @@
             'storms) is linearly interpolated between 6-hourly analyses ' +
             '(dots mark the real ones) and STOPS at the latest analysis — ' +
             'GHOST continues past it, so the most recent stretch has no ' +
-            'reference to compare against yet.</div>';
+            'reference to compare against yet. Below hurricane strength ' +
+            'the plotted storm center comes from that interpolated track ' +
+            '(the IR eye-lock engages only once an eye is trackable), so ' +
+            'plan-view centers can lag a reforming or fast-moving storm ' +
+            '— each panel is stamped with its center source.</div>';
         var arch = (_archIndex && _archIndex.storms) || [];
         if (!storms.length && !arch.length) {
             html += '<div class="exp-empty">No active storms right now — ' +
