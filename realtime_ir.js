@@ -20718,9 +20718,22 @@
                 hoverinfo: 'skip', showlegend: false,
             });
         }
+        // Narrow layouts put the Vmax colorbar horizontally in the bottom
+        // band (y=0.02) — the same band this caption uses, so the text
+        // printed straight across the tick labels on phone exports. Lift
+        // the bar within the band and pin the caption underneath it so the
+        // two never share pixels; desktop (vertical bar) keeps y=0.015.
+        var horizBar = false;
+        for (var ti = 0; ti < data.length; ti++) {
+            var tcb = data[ti] && data[ti].marker && data[ti].marker.colorbar;
+            if (tcb && tcb.orientation === 'h') {
+                horizBar = true;
+                tcb.y = 0.075; tcb.yanchor = 'bottom';
+            }
+        }
         // One-line legend so a frozen reader knows what each layer is.
         layout.annotations = (layout.annotations || []).concat([{
-            xref: 'paper', yref: 'paper', x: 0.5, y: 0.015,
+            xref: 'paper', yref: 'paper', x: 0.5, y: horizBar ? 0 : 0.015,
             xanchor: 'center', yanchor: 'bottom',
             text: 'thin = members · thick = ensemble-mean track (dots = Vmax) · '
                 + '★ = mean LMI · labels = forecast hour',
@@ -20842,8 +20855,15 @@
         var subEl   = document.getElementById('rt-genesis-modal-sub');
         var title = titleEl ? titleEl.textContent : 'FNV3 cyclogenesis ensemble';
         var sub = subEl ? subEl.textContent.replace(/\s+/g, ' ').trim() : '';
-        // Strip the live "Next cycle ~Nm" countdown — meaningless offline.
-        sub = sub.replace(/\s*·\s*Next cycle[^·]*/i, '').trim();
+        // Rebuild the separator-delimited subtitle part-by-part: drop the
+        // live "Next cycle ~Nm" countdown (meaningless offline) and empty
+        // slots (the cycle-ETA span before it populates). Regex-stripping
+        // instead used to eat the separator's surrounding spaces and print
+        // "12Z· 50 ensemble members" on saved figures.
+        sub = sub.split('·')
+            .map(function (s) { return s.trim(); })
+            .filter(function (s) { return s && !/^Next cycle/i.test(s); })
+            .join(' · ');
         sub = (sub + (spec.subSuffix || '')).trim();
 
         // Supersample the whole composite 2× so it's crisp on Retina / when
