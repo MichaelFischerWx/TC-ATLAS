@@ -1530,6 +1530,54 @@
                     'flight-level wind<extra>Recon</extra>'
             });
         }
+        /* Instantaneous Stage-A read: the calibrated per-frame estimate
+           BEFORE Stage-B inertia and the 5-h causal kernel — it leads the
+           published value during RI and is noisier in steady state. Off by
+           default; click the legend entry to show. */
+        if (fr.some(function (r) { return r.vmax_inst_kt != null; })) {
+            traces.push({
+                x: t, y: col('vmax_inst_kt'),
+                name: 'Instantaneous (single-frame)', yaxis: 'y', xaxis: 'x',
+                mode: 'lines',
+                line: { width: 1.1, dash: 'dot', color: '#f59e0b' },
+                visible: 'legendonly',
+                hovertemplate: '%{y:.0f} kt — single-frame read, no ' +
+                    'inertia/smoothing<extra>Instant</extra>'
+            });
+        }
+        /* SAR surface-wind analyses (Ifremer CyclObs: RCM / Sentinel-1 /
+           RADARSAT-2). Star per pass on the Vmax + RMW panels — the only
+           direct surface-wind truth available in JTWC basins. CyclObs
+           processing lags an acquisition by hours, so passes appear on
+           later runs. */
+        if (j.sar && j.sar.length) {
+            var inkS = dark ? '#fbbf24' : '#b45309';
+            var ringS = dark ? '#0f172a' : '#ffffff';
+            var mkS = { symbol: 'star', size: 11, color: inkS,
+                        line: { width: 1.2, color: ringS } };
+            traces.push({
+                x: j.sar.map(function (r) { return r.t; }),
+                y: j.sar.map(function (r) { return r.sfc_kt; }),
+                name: 'SAR (CyclObs)', yaxis: 'y', xaxis: 'x',
+                mode: 'markers', marker: mkS,
+                text: j.sar.map(function (r) {
+                    return r.sfc_kt + ' kt surface — ' + (r.mission || 'SAR') +
+                        (r.eye_in_acq ? ' · eye in swath' : '') +
+                        (r.rmw_km != null ? '<br>SAR RMW ' + r.rmw_km + ' km'
+                                          : '');
+                }),
+                hovertemplate: '%{text}<extra>SAR</extra>'
+            });
+            var sr = j.sar.filter(function (r) { return r.rmw_km != null; });
+            if (sr.length) traces.push({
+                x: sr.map(function (r) { return r.t; }),
+                y: sr.map(function (r) { return r.rmw_km; }),
+                name: 'SAR', yaxis: 'y3', xaxis: 'x3', mode: 'markers',
+                marker: mkS, showlegend: false,
+                hovertemplate: '%{y:.0f} km — SAR-analyzed RMW' +
+                    '<extra>SAR</extra>'
+            });
+        }
         Plotly.react(el, traces, layout, {
             responsive: true,
             displaylogo: false,
