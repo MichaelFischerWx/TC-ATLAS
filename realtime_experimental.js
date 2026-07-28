@@ -1558,11 +1558,17 @@
             traces.push({
                 x: j.sar.map(function (r) { return r.t; }),
                 y: j.sar.map(function (r) { return r.sfc_kt; }),
-                name: 'SAR (CyclObs)', yaxis: 'y', xaxis: 'x',
+                name: 'SAR surface wind', yaxis: 'y', xaxis: 'x',
                 mode: 'markers', marker: mkS,
                 text: j.sar.map(function (r) {
+                    var q = r.quads_kt;
                     return r.sfc_kt + ' kt surface — ' + (r.mission || 'SAR') +
+                        (r.src === 'star' ? ' (NOAA/STAR)' : ' (CyclObs)') +
                         (r.eye_in_acq ? ' · eye in swath' : '') +
+                        (q ? '<br>quadrants: ' + ['NE', 'SE', 'SW', 'NW']
+                            .filter(function (k) { return q[k] != null; })
+                            .map(function (k) { return k + ' ' + q[k]; })
+                            .join(' · ') + ' kt' : '') +
                         (r.rmw_km != null ? '<br>SAR RMW ' + r.rmw_km + ' km'
                                           : '');
                 }),
@@ -1577,6 +1583,19 @@
                 hovertemplate: '%{y:.0f} km — SAR-analyzed RMW' +
                     '<extra>SAR</extra>'
             });
+        }
+        /* Upcoming SAR acquisition (STAR schedule) — small note on the Vmax
+           panel so users know when the next surface-wind truth arrives. */
+        if (j.sar_next) {
+            layout.annotations = (layout.annotations || []).concat([{
+                xref: 'x domain', yref: 'y domain', x: 0.01, y: 0.02,
+                xanchor: 'left', yanchor: 'bottom', showarrow: false,
+                font: { size: 10, color: dark ? '#94a3b8' : '#64748b' },
+                text: '☆ next SAR pass ' +
+                    j.sar_next.replace('T', ' ').slice(5, 16) + 'Z' +
+                    (j.sar_next.indexOf('(') > 0
+                        ? ' ' + j.sar_next.slice(j.sar_next.indexOf('(')) : '')
+            }]);
         }
         Plotly.react(el, traces, layout, {
             responsive: true,
