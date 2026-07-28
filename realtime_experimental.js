@@ -1537,12 +1537,15 @@
         if (fr.some(function (r) { return r.vmax_inst_kt != null; })) {
             traces.push({
                 x: t, y: col('vmax_inst_kt'),
-                name: 'Instantaneous (single-frame)', yaxis: 'y', xaxis: 'x',
+                name: 'GHOST instantaneous', yaxis: 'y', xaxis: 'x',
                 mode: 'lines',
-                line: { width: 1.1, dash: 'dot', color: '#f59e0b' },
+                /* GHOST's own single-frame Stage-A read — same crimson family
+                   as the published trace (dotted + translucent), NOT a
+                   comparator product. */
+                line: { width: 1.2, dash: 'dot', color: 'rgba(244,63,94,0.75)' },
                 visible: 'legendonly',
-                hovertemplate: '%{y:.0f} kt — single-frame read, no ' +
-                    'inertia/smoothing<extra>Instant</extra>'
+                hovertemplate: '%{y:.0f} kt — GHOST single-frame read, no ' +
+                    'inertia/smoothing<extra>GHOST inst</extra>'
             });
         }
         /* SAR surface-wind analyses (Ifremer CyclObs: RCM / Sentinel-1 /
