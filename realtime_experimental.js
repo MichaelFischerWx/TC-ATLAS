@@ -1570,7 +1570,10 @@
                             .map(function (k) { return k + ' ' + q[k]; })
                             .join(' · ') + ' kt' : '') +
                         (r.rmw_km != null ? '<br>SAR RMW ' + r.rmw_km + ' km'
-                                          : '');
+                                          : '') +
+                        (r.sfc_kt >= 100 || r.rmw_km != null && r.rmw_km < 20
+                            ? '<br><i>SAR can saturate below the true max ' +
+                              'in extreme / small cores</i>' : '');
                 }),
                 hovertemplate: '%{text}<extra>SAR</extra>'
             });
