@@ -8725,11 +8725,27 @@
         // marker when the card is the Sat tab's landing view, so reload
         // / share keeps the user on the tab they were on.
         if (window.history && window.history.replaceState) {
+            // data-view alone isn't enough: on a warm-cache reload the storm
+            // list hydrates synchronously from localStorage inside init(), so
+            // handleDeepLink() opens this card while data-view still reads
+            // 'map' — the tab controller only switches on DOMContentLoaded,
+            // which fires after deferred scripts. Writing the legacy bare-id
+            // form there dropped the Sat-tab marker the URL had asked for.
+            var _curHash = window.location.hash || '';
             var _view = document.documentElement.getAttribute('data-view');
-            var _newHash = (_view === 'satellite')
-                ? '#satellite&storm=' + atcfId
+            var _onSatTab = (_view === 'satellite') ||
+                /(?:^#|&)satellite(?=$|&)/.test(_curHash);
+            // Carry detailed=1 through — it selects the Sat tab's Diagnostics
+            // sub-mode, and clobbering it here would silently demote a
+            // "#satellite&storm=…&detailed=1" deep link to the plain card.
+            var _newHash = _onSatTab
+                ? '#satellite&storm=' + atcfId +
+                  (/[#&]detailed=1(?=$|&)/.test(_curHash) ? '&detailed=1' : '')
                 : '#' + atcfId;
-            window.history.replaceState(null, '', 'realtime_ir.html' + _newHash);
+            // Keep the query string — ?gl=1 / ?decodewin=1 and friends must
+            // survive opening a card, or a refresh silently drops them.
+            window.history.replaceState(null, '',
+                window.location.pathname + window.location.search + _newHash);
         }
 
         // Hide map view, show detail
@@ -12023,6 +12039,14 @@
     /** Global entry point called from popup buttons */
     window._irOpenStorm = function (atcfId) {
         openStormDetail(atcfId);
+    };
+
+    /** ATCF id of the storm whose detail card is currently mounted (''/null
+     *  when none). Lets the tab controller tell "the right card is already
+     *  open" from "no card", so switching to the Storm Satellite tab doesn't
+     *  needlessly tear the detail map down and re-fetch the IR loop. */
+    window._irGetOpenStormId = function () {
+        return currentStormId || '';
     };
 
     /** Render the in-card storm picker. Hidden when only one storm is

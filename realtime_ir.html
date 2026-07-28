@@ -2537,7 +2537,7 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
     <script defer src="tc_mw_layer.js?v=20260726i"></script>
-    <script defer src="realtime_ir.js?v=20260725b"></script>
+    <script defer src="realtime_ir.js?v=20260727h"></script>
     <script defer src="vol3d.js?v=20260726i"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
@@ -2576,9 +2576,19 @@
                     // detailed=1) so a reload or shared link to a specific
                     // storm card restores THAT storm instead of collapsing to
                     // the bare tab (which then falls back to the default view).
-                    var keep = cur.split('&').filter(function (p) {
+                    var parts = cur.split('&');
+                    var keep = parts.filter(function (p) {
                         return /^storm=/.test(p) || p === 'detailed=1';
                     });
+                    // A legacy bare-id hash (#WP122026 — what openStormDetail
+                    // writes while the Map tab is active) names the open card
+                    // just as well. Promote it to storm= instead of dropping it,
+                    // or switching tabs with a card open loses which storm it is
+                    // and the branch below can't tell "same card" from "no card".
+                    var hasStorm = keep.some(function (p) { return /^storm=/.test(p); });
+                    if (!hasStorm && /^[A-Za-z]{2}\d{6}$/.test(parts[0])) {
+                        keep.unshift('storm=' + parts[0].toUpperCase());
+                    }
                     newHash = '#satellite' + (keep.length ? '&' + keep.join('&') : '');
                 } else {
                     newHash = '#' + view;
@@ -2731,7 +2741,18 @@
                                       irDetail.style.display !== '';
                     var hashStormMatch = hashStr.match(/storm=([A-Za-z]{2}\d{6})/);
                     var preferredId = hashStormMatch ? hashStormMatch[1].toUpperCase() : null;
-                    if (preferredId) {
+                    var openId = ((window._irGetOpenStormId
+                                   && window._irGetOpenStormId()) || '').toUpperCase();
+                    if (preferredId && alreadyOpen && openId === preferredId) {
+                        /* That card is already mounted — realtime_ir.js's
+                           handleDeepLink() can beat this handler to it when the
+                           storm list hydrates synchronously from localStorage
+                           inside init() (deferred scripts run before
+                           DOMContentLoaded). Re-opening would tear the detail
+                           map down and re-fetch the whole IR loop, so just
+                           re-assert the layout mode. */
+                        irDetail.style.display = 'flex';
+                    } else if (preferredId) {
                         /* Deep-link / restored storm → open its card. If storms
                            haven't loaded yet, show the gallery as a placeholder
                            and open the card once the list arrives. */
@@ -2751,7 +2772,13 @@
                         }
                     } else if (alreadyOpen) {
                         // Returning to the tab with a card already open — keep it.
-                        irDetail.style.display = 'block';
+                        // MUST be 'flex', not 'block': .ir-detail is a flex
+                        // column, and without it .ir-detail-body sizes to its
+                        // content (~1800px of info panel) instead of the space
+                        // below the header. The map then centers the storm
+                        // off-screen and the animation bar is pushed past the
+                        // card's overflow:hidden edge with no way to scroll to it.
+                        irDetail.style.display = 'flex';
                     } else if (window._irShowGallery) {
                         // No specific storm → land on the gallery overview.
                         window._irShowGallery();
