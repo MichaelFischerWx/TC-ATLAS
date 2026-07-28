@@ -340,8 +340,14 @@
             'Category-5 strength the estimates saturate (ceiling ' +
             '&asymp;150&ndash;160 kt): a flat, maxed-out trace means ' +
             '&ldquo;at or above the ceiling&rdquo;, and the strongest ' +
-            'storms are typically under-read. The operational model was ' +
-            'retrained 2026-07-27 to include the 2025 season; the ' +
+            'storms are typically under-read. The operational model ' +
+            '(op-2026b, updated 2026-07-28) trains on 2000&ndash;2025 and ' +
+            'adds ocean predictors &mdash; sea-surface temperature, ocean ' +
+            'heat content and their recent changes, from operational SHIPS ' +
+            'for NHC basins and a satellite ocean-heat-content analysis for ' +
+            'JTWC basins &mdash; plus an intensity-trend state; this ' +
+            'reduced, but did not eliminate, the tendency to read high ' +
+            'while storms weaken over open water. The ' +
             'Verification tables describe the manuscript&rsquo;s held-out ' +
             'configuration. The best-track ' +
             'reference (NHC, or JTWC for West Pacific / Indian Ocean ' +
