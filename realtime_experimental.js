@@ -248,21 +248,30 @@
         'they aggregate differently).</p>' +
 
         '<div class="exp-verif-t"><table><caption>Size (radius of maximum wind) ' +
-        '&mdash; mean absolute error vs airborne radar</caption><thead>' +
+        '&mdash; mean absolute error vs airborne radar, on the cases where every ' +
+        'method is defined. GHOST column = the deployed model configuration (the ' +
+        'one running on this page).</caption><thead>' +
         '<tr><th>Method</th><th>2024 held out<br>(n=146)</th>' +
         '<th>2025 held out<br>(n=76)</th></tr></thead><tbody>' +
         '<tr class="me"><td>GHOST <em>(no outer-wind input)</em></td>' +
-        '<td>13.0 km</td><td>18.7 km</td></tr>' +
+        '<td>18.6 km</td><td>18.7 km</td></tr>' +
         '<tr><td>CK22 <em>(needs observed R34)</em></td><td>19.7 km</td><td>17.9 km</td></tr>' +
-        '<tr><td>WB06 <em>(needs observed R34)</em></td><td>30.3 km</td><td>20.4 km</td></tr>' +
-        '<tr><td>KZ07 <em>(needs observed R34)</em></td><td>33.2 km</td><td>34.2 km</td></tr>' +
+        '<tr><td>WB06 <em>(Vmax + latitude formula)</em></td><td>30.3 km</td><td>20.4 km</td></tr>' +
+        '<tr><td>KZ07 <em>(Vmax + latitude formula)</em></td><td>33.2 km</td><td>34.2 km</td></tr>' +
         '</tbody></table></div>' +
 
-        '<p class="exp-verif-note">On major hurricanes &mdash; where core size ' +
-        'is best defined and matters most &mdash; GHOST\'s size error falls to ' +
-        '<strong>6.5 km</strong>. A radius error costs less than it appears: ' +
-        'over matched radar cases the resulting tangential-wind error has a ' +
-        'median of 2.3 kt, roughly 9% of the peak wind.</p>' +
+        '<p class="exp-verif-note">GHOST and CK22 are <strong>statistically ' +
+        'tied</strong> in both years: only 5&ndash;7 storms carry each ' +
+        'season\'s comparison, and storm-clustered confidence intervals on ' +
+        'the difference include zero both times &mdash; the year-to-year flip ' +
+        'is sampling, not skill. The distinction is the inputs: CK22 must be ' +
+        'handed the storm\'s observed outer wind radius (R34, itself a ' +
+        'recon/scatterometer product); GHOST infers core size from the cloud ' +
+        'field alone. On major hurricanes &mdash; where core size is best ' +
+        'defined and matters most &mdash; GHOST\'s size error falls to ' +
+        'about <strong>6 km</strong>. A radius error costs less than it ' +
+        'appears: over matched radar cases the resulting tangential-wind ' +
+        'error has a median of 2.3 kt, roughly 9% of the peak wind.</p>' +
 
         '<div class="exp-verif-t"><table><caption>Independent cross-check &mdash; ' +
         'correlation with tail Doppler radar wind (83 coincident frames)</caption>' +
