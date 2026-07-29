@@ -251,12 +251,24 @@
         '&mdash; mean absolute error vs airborne radar</caption><thead>' +
         '<tr><th>Method</th><th>2024 held out<br>(n=146)</th>' +
         '<th>2025 held out<br>(n=76)</th></tr></thead><tbody>' +
-        '<tr class="me"><td>GHOST <em>(no outer-wind input)</em></td>' +
+        '<tr class="me"><td>GHOST <em>(IR + environment; no R34)</em></td>' +
         '<td>13.0 km</td><td>18.7 km</td></tr>' +
         '<tr><td>CK22 <em>(needs observed R34)</em></td><td>19.7 km</td><td>17.9 km</td></tr>' +
-        '<tr><td>WB06 <em>(needs observed R34)</em></td><td>30.3 km</td><td>20.4 km</td></tr>' +
-        '<tr><td>KZ07 <em>(needs observed R34)</em></td><td>33.2 km</td><td>34.2 km</td></tr>' +
+        '<tr><td>WB06 <em>(V<sub>max</sub> + latitude)</em></td><td>30.3 km</td><td>20.4 km</td></tr>' +
+        '<tr><td>KZ07 <em>(V<sub>max</sub> + latitude)</em></td><td>33.2 km</td><td>34.2 km</td></tr>' +
         '</tbody></table></div>' +
+
+        '<p class="exp-verif-note">The three baselines are not equivalent. ' +
+        'WB06 and KZ07 are pure intensity&ndash;latitude climatologies, and ' +
+        'GHOST beats them decisively. CK22 is genuinely strong &mdash; but ' +
+        'only because it is handed an <em>observed</em> outer-size radius ' +
+        '(R34), which itself comes from aircraft, scatterometer or subjective ' +
+        'satellite analysis and is missing for most storms outside ' +
+        'well-sampled basins. GHOST is competitive with CK22 while requiring ' +
+        'no such input, and the head-to-head flips with the season’s ' +
+        'storm mix: GHOST is ahead on 2024, CK22 on the intense-heavy 2025 ' +
+        'set, where R34 is best defined. CK22 wins the compact-intense core; ' +
+        'GHOST holds the large-RMW regime.</p>' +
 
         '<p class="exp-verif-note">On major hurricanes &mdash; where core size ' +
         'is best defined and matters most &mdash; GHOST\'s size error falls to ' +
