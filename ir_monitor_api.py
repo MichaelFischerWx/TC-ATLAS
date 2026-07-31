@@ -4360,7 +4360,13 @@ def _gcs_storm_cache_get() -> dict:
               f"(GCS_IR_CACHE_BUCKET={_GCS_IR_CACHE_BUCKET!r})")
         return {}
     try:
-        data = bucket.blob(_STORM_CACHE_GCS_KEY).download_as_bytes(timeout=5)
+        # Generous timeout on purpose. On a COLD instance this is the first
+        # GCS call in the process, so it also pays storage.Client() setup and
+        # a metadata-server auth-token fetch — which can blow a short timeout,
+        # silently fail, and drop us into a full poll precisely on a new
+        # instance, i.e. the case adoption exists to help. Waiting a few
+        # seconds for a 688-byte object always beats a 20-40s poll.
+        data = bucket.blob(_STORM_CACHE_GCS_KEY).download_as_bytes(timeout=20)
         d = json.loads(data)
         if not isinstance(d, dict):
             print(f"[IR Monitor] shared storm-cache get: not a dict ({type(d).__name__})")
