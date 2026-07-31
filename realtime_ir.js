@@ -30048,6 +30048,75 @@
         chip(W - m, m, ['TC-ATLAS', 'tcatlas.org'], 'right', 700);
     }
 
+    /** Temporarily overlay the CURRENT frame at one zoom level deeper, so the
+     *  export samples detail the card is carrying but not drawing.
+     *
+     *  The mosaic bakes Vis storm sectors at z7 (~0.61 km/px, from the 1-km
+     *  hi-res read); IR/WV are 2-km native and fully resolved at z6. The card's
+     *  default fit sits at map zoom 6.0 — just under the 6.5 where MapLibre's
+     *  rounding would ask for z7 — so a Vis card renders z6 and a retina screen
+     *  upscales it. Those z7 tiles are already inside the frame's downloaded
+     *  pack, so using them costs no request and no backend work.
+     *
+     *  Declaring the same 512-px tiles as `tileSize: 256` makes MapLibre pick
+     *  one zoom deeper for an unchanged camera (the classic retina trick):
+     *  identical geometry, 2× the pixel density. We do it ONLY around the
+     *  capture and only for the frame being saved — 4× the tile draws across an
+     *  18-frame loop is exactly the phone-perf regression we don't want, and one
+     *  still frame is ~16 tiles sliced out of a blob that's already in memory.
+     *
+     *  Added ON TOP of the live frame layer, which stays put: where the z7
+     *  sector doesn't reach (it's baked as a box around the storm), the z6 layer
+     *  shows through instead of leaving a hole. Returns null when there's
+     *  nothing deeper than what's on screen — IR/WV always, and Vis once the
+     *  user has zoomed past the threshold themselves. */
+    function _irHiResExportLayer() {
+        if (!detailMap || !_liteActive) return null;
+        if (!(_IR2A && window.maplibregl && window.maplibregl.addProtocol)) return null;
+        var cur = animFrameLayers[animIndex];
+        var ts = cur && cur._mosaicTs;
+        if (!ts) return null;
+        var product = (productMode === 'vis') ? 'vis' : (productMode === 'wv' ? 'wv' : 'ir');
+        var zmax = _stormZmaxFor(product, ts);
+        // MapLibre rounds for raster sources, so this is the level on screen.
+        if (!(zmax > Math.round(detailMap.getZoom()))) return null;
+        _idxColorEnsureProtocol();
+        var ly = L.tileLayer(
+            'idxcolor://' + product + '/' + _ir2aRoot(product) + '/' + ts + '/{z}/{x}/{y}.png',
+            {
+                tileSize: 256, maxNativeZoom: zmax, maxZoom: GIBS_VIS_MAX_ZOOM,
+                crisp: true, pane: 'tilePane',
+                opacity: (cur.options && cur.options.opacity != null) ? cur.options.opacity : 1
+            });
+        ly.addTo(detailMap);
+        return { remove: function () { try { detailMap.removeLayer(ly); } catch (e) {} } };
+    }
+
+    /** Resolve once the GL map has finished streaming tiles — or once `ms` has
+     *  passed, whichever comes first. The timeout is load-bearing: 'idle' never
+     *  fires on a backgrounded tab (rAF is throttled), and an export that hangs
+     *  is worse than one that captures a half-loaded frame. */
+    function _whenGlIdle(glMap, ms) {
+        return new Promise(function (resolve) {
+            var done = false;
+            function fin() { if (!done) { done = true; resolve(); } }
+            try { glMap.once('idle', fin); } catch (e) {}
+            setTimeout(fin, ms || 2000);
+        });
+    }
+
+    /** _glSnapshot, but sampling the deepest baked zoom for the frame (see
+     *  _irHiResExportLayer). Falls straight through to the plain snapshot when
+     *  there's no deeper detail to be had. */
+    function _glSnapshotHiRes(glMap) {
+        var hi = _irHiResExportLayer();
+        if (!hi) return _glSnapshot(glMap);
+        return _whenGlIdle(glMap, 2000)
+            .then(function () { return _glSnapshot(glMap); })
+            .then(function (snap) { hi.remove(); return snap; },
+                  function (err) { hi.remove(); throw err; });
+    }
+
     /** Snapshot the visible imagery panel as a PNG, including the
      *  current frame timestamp / channel label and the Tb colorbar.
      *  Strips UI chrome, stamps a watermark, and (optionally) the track.
@@ -30130,7 +30199,7 @@
                     _rtToast('Couldn’t save the image — ' + (e && e.message ? e.message : 'export failed') + '.');
                 }
             };
-            _glSnapshot(glMap).then(_iosCapture);
+            _glSnapshotHiRes(glMap).then(_iosCapture);
             return;
         }
 
@@ -30138,7 +30207,7 @@
         // later) is what produced storm-card PNGs with the chip, watermark and
         // graticule LABELS but a blank map — see _glSnapshot.
         var glSnap = null;
-        _glSnapshot(glMap).then(function (snap) {
+        _glSnapshotHiRes(glMap).then(function (snap) {
             glSnap = snap;
             if (glCanvas && (!snap || snap.__glBlank)) console.warn('[RT Monitor] GL map readback came back empty');
             return _ensureHtml2canvas();
