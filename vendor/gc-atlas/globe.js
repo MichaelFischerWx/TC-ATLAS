@@ -5360,11 +5360,18 @@ class GlobeApp {
             units: meta.units,
         });
         const blob = new Blob([csv], { type: 'text/csv' });
+        const stamp = new Date().toISOString().replace(/:/g, '-').slice(0, 19);
+        const fname = `tc-atlas-${this.state.field}-timeseries-${stamp}.csv`;
+        // Route through the site-wide export module (tc_export.js): iOS Safari
+        // EXPOSES the <a download> property but IGNORES it, so the anchor path
+        // below silently did nothing on a phone. TCExport uses the share sheet
+        // and falls back to a fresh-tap Save overlay.
+        if (window.TCExport) { window.TCExport.save(blob, fname); return; }
+        // Fallback for the standalone GC-ATLAS build, which has no tc_export.js.
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        const stamp = new Date().toISOString().replace(/:/g, '-').slice(0, 19);
         a.href = url;
-        a.download = `tc-atlas-${this.state.field}-timeseries-${stamp}.csv`;
+        a.download = fname;
         document.body.appendChild(a);
         a.click();
         setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 100);

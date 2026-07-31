@@ -93,7 +93,11 @@
         } else {
             // Opens the image/file in a new tab; user long-presses to save
             // (or the file downloads via Safari's download manager).
-            ok = !!window.open(url, '_blank');
+            // `!!w` alone is not enough: a refused window.open on iOS Safari
+            // can return a truthy, already-closed Window, which would read as
+            // success and suppress the caller's fresh-tap overlay.
+            var w = window.open(url, '_blank');
+            ok = !!(w && !w.closed);
         }
         // Generous revoke delay: the opened tab / download manager needs the
         // URL alive; once loaded they hold their own reference.
@@ -121,8 +125,23 @@
         }, function (err) {
             // AbortError = user opened the sheet and cancelled — respect it.
             if (err && err.name === 'AbortError') return true;
-            // NotAllowedError (stale activation) or anything else → fallback.
-            return downloadOrOpen(blob, filename);
+            // Any other rejection here means the share never happened, and on
+            // touch the overwhelmingly common cause is that the tap's
+            // transient activation expired during a long export.
+            //
+            // Do NOT fall back to downloadOrOpen: window.open needs that SAME
+            // activation, so it cannot succeed either — but iOS Safari does
+            // not reliably return null when it refuses. It can hand back a
+            // truthy, already-dead Window, which downloadOrOpen reports as
+            // success. save() then skips the fresh-tap overlay and the user
+            // sees absolutely nothing happen. That silent failure is exactly
+            // the reported Seasonal Panel B bug, and it only bites panels
+            // whose export pipeline is slow enough to outlive the activation
+            // — which is why the symptom looked page-dependent.
+            //
+            // Returning false sends the caller straight to the overlay, whose
+            // Save button carries a brand-new activation and always works.
+            return false;
         });
     }
 
