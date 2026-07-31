@@ -4390,7 +4390,15 @@ def _gcs_storm_cache_put(storms: list, updated_utc: str, count_by_basin: dict):
             "updated_utc": updated_utc,
             "count_by_basin": count_by_basin,
         }, default=str).encode("utf-8")
-        bucket.blob(_STORM_CACHE_GCS_KEY).upload_from_string(
+        blob = bucket.blob(_STORM_CACHE_GCS_KEY)
+        # MUST override the cache header. This bucket is publicly readable, and
+        # GCS applies a DEFAULT `Cache-Control: public, max-age=3600` to public
+        # objects that don't set one. Readers then get copies up to an HOUR old
+        # — observed live at 531s and 2078s — which always exceeds
+        # _STORM_CACHE_TTL, so every adopt was rejected and every instance
+        # polled anyway. That silently made this whole cache a no-op.
+        blob.cache_control = "no-store"
+        blob.upload_from_string(
             body, content_type="application/json", timeout=10)
     except Exception as ex:
         print(f"[IR Monitor] shared storm-cache put failed: {ex}")
