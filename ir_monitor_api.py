@@ -812,11 +812,41 @@ def _upload_raw_frames_perframe(atcf_upper: str, frame_meta: list,
         "total_frames": len(frame_meta),
         "tb_vmin": _TB_VMIN, "tb_vmax": _TB_VMAX,
         "lookback_hours": lookback_hours, "interval_min": interval_min,
-        "radius_deg": radius_deg, "frames": manifest_frames,
+        "radius_deg": radius_deg,
+        # Build stamp so the frontend can tell a STALE manifest from a fresh
+        # one. Since the prewarm job retired (2026-06-29) nothing rewrites
+        # manifests on a schedule — /ir-raw-bundle refreshes them on demand —
+        # so without this a frozen manifest would render a frozen loop forever.
+        # Deliberately NOT "age of newest frame": satellite latency makes the
+        # newest frame routinely 10-20 min old even in a just-built manifest,
+        # which would false-trigger a rebuild on nearly every load.
+        "built_at": _dt.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "frames": manifest_frames,
     }
     _upload_raw_manifest_r2(atcf_upper, manifest)
     print(f"[Bundle Pre-build] {atcf_upper}: raw-perframe {uploaded} new / "
           f"{len(manifest_frames)} frames + manifest")
+
+
+def _raw_params_are_canonical(lookback_hours: float, radius_deg: float,
+                              interval_min: int) -> bool:
+    """True when a raw-Tb request uses the geometry the shared manifest is
+    defined in terms of.
+
+    `_raw_manifest_r2_key` is a FIXED path per storm — it is deliberately NOT
+    params-keyed the way `_ondemand_bundle_key` is. So only a canonical-params
+    request may (re)write it: a caller asking for, say, `interval_min=30` (this
+    endpoint's Query DEFAULT) or `radius_deg=5` would otherwise overwrite the
+    one shared manifest with a coarser/smaller window for every other viewer,
+    and the frontend would render it without noticing. The frontend's raw-Tb
+    path sends exactly these values (DEFAULT_LOOKBACK_HOURS / DEFAULT_RADIUS_DEG
+    / RAW_TB_INTERVAL_MIN in realtime_ir.js), so the common path qualifies.
+    """
+    return (
+        abs(float(lookback_hours) - _PREFETCH_LOOKBACK_HOURS) < 1e-6
+        and abs(float(radius_deg) - _PREFETCH_RADIUS_DEG) < 1e-6
+        and int(interval_min) == int(_PREFETCH_INTERVAL_MIN)
+    )
 
 
 def _ondemand_bundle_key(product: str, atcf_upper: str,
@@ -5322,12 +5352,16 @@ def get_storm_ir_raw_bundle(
                 ipos = _interpolate_track_position(track_records, target_dt)
                 if ipos:
                     interp_lat, interp_lon = ipos
+            # Positions come back out with the frame: _upload_raw_frames_perframe
+            # content-addresses each R2 object by _pos_key(lat, lon, radius_deg),
+            # so the interpolated position used for the fetch MUST be the one
+            # recorded in the manifest or the key won't match the object.
             try:
                 return (i, _fetch_one_raw_tb_for_bundle(
                     atcf_upper, storm, target_dt, radius_deg, interp_lat, interp_lon,
-                ))
+                ), interp_lat, interp_lon)
             except Exception as ex:
-                return (i, {"_error": str(ex)})
+                return (i, {"_error": str(ex)}, interp_lat, interp_lon)
 
         # Cap workers at 4 — beyond that S3 throughput plateaus and the
         # NOAA-Open-Data anonymous endpoint starts returning sporadic 429s.
@@ -5340,12 +5374,21 @@ def get_storm_ir_raw_bundle(
 
         frame_headers = []
         payloads: list[bytes] = []
+        # Per-frame meta for the RAW_PERFRAME R2 upload, in the exact shape
+        # _upload_raw_frames_perframe expects (same shape the prewarm path
+        # builds at _build_and_upload_bundles). Populated in lockstep with
+        # frame_headers so error frames stay index-aligned in both.
+        raw_frame_meta = []
         offset = 0
 
-        for i, frame in results:
+        for i, frame, interp_lat, interp_lon in results:
             target_dt = frame_times[i]
             iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            # Matches _fetch_one_raw_tb_for_bundle's dt_str, which keys the GCS
+            # raw cache — so the R2 per-frame key lines up with the cached frame.
+            dt_str = target_dt.strftime("%Y%m%d%H%M")
             if frame is None or (isinstance(frame, dict) and "_error" in frame):
+                err = (frame or {}).get("_error", "no_data") if frame else "no_data"
                 frame_headers.append({
                     "index": i,
                     "datetime_utc": iso_dt,
@@ -5353,8 +5396,10 @@ def get_storm_ir_raw_bundle(
                     "tb_cols": 0,
                     "byte_offset": offset,
                     "byte_length": 0,
-                    "error": (frame or {}).get("_error", "no_data") if frame else "no_data",
+                    "error": err,
                 })
+                raw_frame_meta.append({"index": i, "datetime_utc": iso_dt,
+                                       "error": err})
                 continue
             try:
                 tb_bytes = base64.b64decode(frame["tb_data"])
@@ -5365,6 +5410,8 @@ def get_storm_ir_raw_bundle(
                     "byte_offset": offset, "byte_length": 0,
                     "error": f"decode: {ex}",
                 })
+                raw_frame_meta.append({"index": i, "datetime_utc": iso_dt,
+                                       "error": f"decode: {ex}"})
                 continue
             rows = int(frame["tb_rows"])
             cols = int(frame["tb_cols"])
@@ -5375,17 +5422,29 @@ def get_storm_ir_raw_bundle(
                     "byte_offset": offset, "byte_length": 0,
                     "error": "size_mismatch",
                 })
+                raw_frame_meta.append({"index": i, "datetime_utc": iso_dt,
+                                       "error": "size_mismatch"})
                 continue
+            raw_dt_utc = frame.get("datetime_utc", iso_dt)
+            raw_sat = frame.get("satellite", "")
+            raw_bounds = frame.get("bounds")
+            raw_center_fix = frame.get("center_fix")
             frame_headers.append({
                 "index": i,
-                "datetime_utc": frame.get("datetime_utc", iso_dt),
-                "satellite": frame.get("satellite", ""),
+                "datetime_utc": raw_dt_utc,
+                "satellite": raw_sat,
                 "tb_rows": rows,
                 "tb_cols": cols,
                 "byte_offset": offset,
                 "byte_length": rows * cols,
-                "bounds": frame.get("bounds"),
-                "center_fix": frame.get("center_fix"),
+                "bounds": raw_bounds,
+                "center_fix": raw_center_fix,
+            })
+            raw_frame_meta.append({
+                "index": i, "dt_str": dt_str, "datetime_utc": raw_dt_utc,
+                "lat": interp_lat, "lon": interp_lon, "tb_bytes": tb_bytes,
+                "rows": rows, "cols": cols, "bounds": raw_bounds,
+                "center_fix": raw_center_fix, "satellite": raw_sat,
             })
             payloads.append(tb_bytes)
             offset += rows * cols
@@ -5414,6 +5473,28 @@ def get_storm_ir_raw_bundle(
         # default-param bundle.
         _upload_public_bundle(key, body, gzip_content=True)
         _ondemand_302_stamp(key)  # success only -- an upload exception skips the stamp
+
+        # Refresh the per-frame R2 objects + manifest so the NEXT viewer skips
+        # this endpoint entirely via the manifest-first path in realtime_ir.js.
+        # Since the prewarm job retired (2026-06-29) this is the ONLY writer of
+        # them, which is why it runs INLINE rather than in a background thread:
+        # the service runs --cpu-throttling, so a thread spawned after the
+        # response may never be scheduled. Cost is bounded — the freshness/
+        # single-flight guard above means this rebuild happens at most once per
+        # _ONDEMAND_302_TTL per storm, and _upload_raw_frames_perframe only PUTs
+        # frames whose content-addressed key isn't already on R2 (~1-2/cycle
+        # steady-state). Best-effort: the 302 is the user-visible result and
+        # must not fail because R2 did.
+        if _RAW_PERFRAME and _raw_params_are_canonical(
+                lookback_hours, radius_deg, interval_min):
+            try:
+                _upload_raw_frames_perframe(
+                    atcf_upper, raw_frame_meta, radius_deg,
+                    lookback_hours, interval_min)
+            except Exception as ex:
+                print(f"[R2] on-demand raw-perframe refresh failed for "
+                      f"{atcf_upper}: {ex}")
+
         # no-store on the 302 itself so clients don't pin a stale redirect; the
         # GCS object carries its own max-age.
         return RedirectResponse(

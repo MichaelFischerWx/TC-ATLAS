@@ -10765,6 +10765,40 @@
                encodeURIComponent(atcfId.toUpperCase()) + '/manifest.json';
     }
 
+    // How old a raw-Tb manifest may be before we force a rebuild. Roughly the
+    // retired prewarm job's 15-minute cadence plus slack for satellite
+    // latency, so a normally-fresh manifest never false-triggers. Lower =
+    // fresher loops but more /ir-raw-bundle rebuilds (the expensive path).
+    var RAW_TB_MANIFEST_MAX_AGE_MIN = 25;
+
+    /** True when a manifest describes the same window we're asking for.
+     *  Absent or unparseable fields count as a mismatch — one extra rebuild
+     *  beats silently rendering the wrong geometry. */
+    function _rawTbGeometryMatches(manifest) {
+        return Number(manifest.radius_deg) === Number(DEFAULT_RADIUS_DEG) &&
+               Number(manifest.lookback_hours) === Number(DEFAULT_LOOKBACK_HOURS) &&
+               Number(manifest.interval_min) === Number(RAW_TB_INTERVAL_MIN);
+    }
+
+    /** Minutes since the manifest was built, or null if it carries no
+     *  parseable build stamp. */
+    function _rawTbManifestAgeMin(manifest) {
+        if (!manifest.built_at) return null;
+        var t = Date.parse(manifest.built_at);
+        if (isNaN(t)) return null;
+        return (Date.now() - t) / 60000;
+    }
+
+    /** An Error marking that the manifest EXISTED but can't be used, so the
+     *  bundle fallback must hit the API — which rewrites the manifest —
+     *  instead of being satisfied by a cached prewarmed GCS object that
+     *  would leave the stale manifest in place forever. */
+    function _rawTbRefetch(msg) {
+        var e = new Error(msg);
+        e._forceApi = true;
+        return e;
+    }
+
     /** Run thunks (Promise-returning fns) at most `concurrency` at a time,
      *  resolving to results in the original order. Bounds the cold-load burst
      *  when a storm's full window must be fetched per-frame; steady-state
@@ -10807,6 +10841,31 @@
             .then(function (manifest) {
                 if (!manifest || !Array.isArray(manifest.frames)) {
                     throw new Error('bad manifest');
+                }
+                // ── Geometry check ────────────────────────────────────
+                // The manifest lives at ONE fixed key per storm (it is not
+                // params-keyed), so a request made with a different window
+                // could have written it. Never render a manifest whose
+                // geometry isn't what we asked for — the frames would be a
+                // different resolution/cadence and nothing downstream checks.
+                if (!_rawTbGeometryMatches(manifest)) {
+                    throw _rawTbRefetch('manifest geometry mismatch (r=' +
+                        manifest.radius_deg + ' lb=' + manifest.lookback_hours +
+                        ' iv=' + manifest.interval_min + ')');
+                }
+                // ── Freshness check ───────────────────────────────────
+                // Nothing rewrites manifests on a schedule since the prewarm
+                // job retired — /ir-raw-bundle refreshes them on demand. So a
+                // stale manifest must be treated as a MISS, otherwise the loop
+                // freezes at whatever the last rebuild captured. Falling
+                // through to the bundle path triggers that rebuild, and the
+                // next load is fresh. A manifest with no build stamp predates
+                // this scheme; treat it as stale so it gets replaced once.
+                var ageMin = _rawTbManifestAgeMin(manifest);
+                if (ageMin === null || ageMin > RAW_TB_MANIFEST_MAX_AGE_MIN) {
+                    throw _rawTbRefetch('manifest stale (' +
+                        (ageMin === null ? 'no build stamp' :
+                         Math.round(ageMin) + ' min old') + ')');
                 }
                 var vmin = manifest.tb_vmin || 160.0;
                 var vmax = manifest.tb_vmax || 330.0;
@@ -10863,26 +10922,38 @@
      *  that resolves to an array of frame objects matching the shape
      *  produced by the incremental path, or rejects on any failure so
      *  the caller can fall back to incremental fetching. */
-    function _fetchRawTbBundle(stormId, signal) {
+    function _fetchRawTbBundle(stormId, signal, forceApi) {
         var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/ir-raw-bundle'
             + '?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
             + '&radius_deg=' + DEFAULT_RADIUS_DEG
             + '&interval_min=' + RAW_TB_INTERVAL_MIN;
-        // Try direct-from-GCS (prewarmed, no Cloud Run hop) first.
-        // Fall through to the API endpoint on miss / fresh storms.
-        var gcsUrl = _gcsRawBundleUrl(stormId);
-        return fetch(gcsUrl, { signal: signal })
-            .then(function (r) {
-                if (!r.ok) throw new Error('gcs raw bundle HTTP ' + r.status);
+        function _viaApi() {
+            return fetch(apiUrl, { signal: signal }).then(function (r) {
+                if (!r.ok) throw new Error('api raw bundle HTTP ' + r.status);
                 return r.arrayBuffer();
-            })
-            .catch(function (err) {
-                if (err && err.name === 'AbortError') throw err;
-                return fetch(apiUrl, { signal: signal }).then(function (r) {
-                    if (!r.ok) throw new Error('api raw bundle HTTP ' + r.status);
+            });
+        }
+        // Try direct-from-GCS (prewarmed, no Cloud Run hop) first, then the
+        // API on miss / fresh storms. `forceApi` skips the GCS hop: a stale or
+        // mismatched manifest can ONLY be repaired by the API endpoint (that's
+        // what rewrites it), and a cached GCS bundle would satisfy this fetch
+        // without ever calling it — leaving the bad manifest in place forever.
+        var gcsUrl = _gcsRawBundleUrl(stormId);
+        var source;
+        if (forceApi) {
+            source = _viaApi();
+        } else {
+            source = fetch(gcsUrl, { signal: signal })
+                .then(function (r) {
+                    if (!r.ok) throw new Error('gcs raw bundle HTTP ' + r.status);
                     return r.arrayBuffer();
+                })
+                .catch(function (err) {
+                    if (err && err.name === 'AbortError') throw err;
+                    return _viaApi();
                 });
-            })
+        }
+        return source
             .then(function (buf) {
                 if (signal && signal.aborted) throw new DOMException('aborted', 'AbortError');
                 var dv = new DataView(buf);
@@ -10950,7 +11021,11 @@
                 if (err && err.name === 'AbortError') throw err;
                 console.warn('[RT Monitor] Raw Tb manifest unavailable (' +
                     (err && err.message) + ') — trying bundle');
-                return _fetchRawTbBundle(stormId, controller.signal);
+                // _forceApi: the manifest existed but was stale/mismatched, so
+                // the bundle MUST come from the API — that request is what
+                // rewrites the manifest and makes the next load fast again.
+                return _fetchRawTbBundle(stormId, controller.signal,
+                                         !!(err && err._forceApi));
             })
             .then(function (result) {
                 if (controller.signal.aborted) return;
