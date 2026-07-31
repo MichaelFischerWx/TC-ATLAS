@@ -4670,6 +4670,41 @@
         _ga('rt_graticule_toggle', { on: true });
     }
 
+    // ── "Imagery Only" (clean view) ──────────────────────────────
+    // One switch that strips the map down to the picture: every track, cone,
+    // genesis dot, storm marker, wind barb, env raster, label and graticule line
+    // goes away so the PNG/GIF export is a bare satellite frame. Nothing is torn
+    // down — the facade flips GL layer visibility + pane display, so toggling
+    // back restores exactly the layer set the user had on.
+    //
+    // Kept: the satellite mosaic and storm-card frames (tilePane), the radar
+    // mosaic and microwave swaths (both z350) — those ARE imagery — and the
+    // coastline outline, without which a satellite frame has no geography to
+    // read against. Turn the coastline off separately if you want it gone.
+    var _cleanViewOn = false;
+    var _CLEAN_KEEP_PANES = ['tilePane', 'gRadarPane', 'mwMosaicPane', 'coastlinePane'];
+
+    function _rtToggleCleanView(force) {
+        if (!map || !map.setOverlaysHidden) return false;
+        _cleanViewOn = (force == null) ? !_cleanViewOn : !!force;
+        map.setOverlaysHidden(_cleanViewOn, _CLEAN_KEEP_PANES);
+        // Surface the state on the collapsed Display pill too — the menu is shut
+        // most of the time, and a map with no storms on it should say why. The
+        // glyph carries the state on mobile, where CSS drops the label.
+        var dt = document.getElementById('ir-display-toggle');
+        if (dt) {
+            dt.classList.toggle('ir-clean-on', _cleanViewOn);
+            dt.innerHTML = (_cleanViewOn ? '&#9635;' : '&#9776;')
+                         + '<span class="ir-display-label"> '
+                         + (_cleanViewOn ? 'Imagery' : 'Display') + '</span>';
+        }
+        var cb = document.getElementById('ir-clean-toggle');
+        if (cb) cb.classList.toggle('active', _cleanViewOn);
+        _ga('rt_clean_view_toggle', { on: _cleanViewOn });
+        return _cleanViewOn;
+    }
+    window._rtToggleCleanView = _rtToggleCleanView;
+
     function setGlobalProduct(mode) {
         if (mode === globalProduct) return;
         globalProduct = mode;
@@ -5166,10 +5201,13 @@
         _ga('rt_global_radar_toggle', { on: true });
         _gRadarApplyBase();
         // Dedicated pane above the satellite mosaic, below coastlines/markers.
-        if (map && map.createPane && !map.getPane('gRadarPane')) {
-            map.createPane('gRadarPane');
-            var pane = map.getPane('gRadarPane');
-            if (pane) pane.style.zIndex = 350;   // mosaic ~200, coastlines ~400
+        // Probe with getPanes(), NOT getPane(): the GL facade's getPane CREATES a
+        // missing pane and returns it, so the old `!map.getPane(...)` guard was
+        // always false — the pane got made without its z-index and fell back to
+        // 400 (overlayPane), stacking radar with the vector overlays.
+        if (map && map.createPane && !map.getPanes()['gRadarPane']) {
+            var pane = map.createPane('gRadarPane');
+            if (pane) pane.style.zIndex = 350;   // mosaic ~200, coastlines ~450
         }
         // Rebuild the loop (trim to radar window) FIRST so preload covers the
         // right frames, then build + preload all bucket layers and show current.
@@ -5855,6 +5893,21 @@
                 var el = document.getElementById(id);
                 if (el) { el.classList.add('ir-display-item'); dMenu.appendChild(el); }
             });
+
+            // Imagery Only — strip every track/marker/overlay for a clean
+            // satellite frame to save. First item: it's the one that changes the
+            // whole map, and the others are refinements of what it hides.
+            var cleanBtn = document.createElement('button');
+            cleanBtn.id = 'ir-clean-toggle';
+            cleanBtn.type = 'button';
+            cleanBtn.className = 'ir-legend-toggle ir-display-item ir-clean-item';
+            cleanBtn.title = 'Imagery only — hide storm tracks, forecast tracks, genesis, '
+                           + 'markers, wind barbs, environmental overlays, labels and the '
+                           + 'graticule so you can save a clean satellite image. Coastlines '
+                           + 'and radar stay. Click again to bring everything back.';
+            cleanBtn.innerHTML = '▣ Imagery Only';
+            cleanBtn.addEventListener('click', function () { _rtToggleCleanView(); });
+            dMenu.insertBefore(cleanBtn, dMenu.firstChild);
 
             // Inspect Tb — hover the IR field to read brightness temperature (IR
             // product only). Client-side LUT inversion of the rendered tile, no
@@ -24165,6 +24218,95 @@
         return _html2canvasLoadingPromise;
     }
 
+    /** Snapshot a MapLibre WebGL canvas into a plain 2D canvas, verified
+     *  non-empty. Returns Promise<HTMLCanvasElement|null>.
+     *
+     *  Every PNG export composites the GL map UNDER an html2canvas capture of
+     *  the DOM overlays. Reading the GL canvas AFTER that capture is fragile:
+     *  html2canvas takes ~0.5-2 s, and across that gap the drawing buffer can
+     *  come back empty (context loss, or the compositor dropping it despite
+     *  preserveDrawingBuffer). The old `catch (e) {}` swallowed that silently —
+     *  you got a PNG with the timestamp chip, watermark and graticule LABELS
+     *  (all DOM) over a blank navy rectangle, because the imagery, graticule
+     *  LINES, coastlines and pin all live on the GL canvas.
+     *
+     *  So: force a repaint, capture on the very next rendered frame, and check
+     *  the result. The facade's style always paints an opaque `bg` layer, so a
+     *  good grab is fully opaque — alpha≈0 across the sample means the buffer
+     *  was empty. Retry once (MapLibre restores a lost context on the next
+     *  render) before giving up. */
+    function _glSnapshot(glMap) {
+        if (!glMap || !glMap.getCanvas) return Promise.resolve(null);
+
+        function read() {
+            var g;
+            try { g = glMap.getCanvas(); } catch (e) { return null; }
+            if (!g || !g.width || !g.height) return null;
+            var c = document.createElement('canvas');
+            c.width = g.width; c.height = g.height;
+            try { c.getContext('2d').drawImage(g, 0, 0); }
+            catch (e) { console.warn('[Export] GL readback threw:', e); return null; }
+            return c;
+        }
+
+        /** Two ways a grab comes back useless, and both were observed:
+         *  nothing drawn at all (alpha≈0), and ONLY the background clear
+         *  surviving — every sampled pixel identical to MapLibre's #0b1220
+         *  `bg` layer. An alpha-only test passes that second case happily,
+         *  which is how a flat rectangle reached the saved PNG. */
+        function isBlank(c) {
+            if (!c) return true;
+            var N = 64, s = document.createElement('canvas');
+            s.width = N; s.height = N;
+            try {
+                var sx = s.getContext('2d');
+                sx.drawImage(c, 0, 0, c.width, c.height, 0, 0, N, N);
+                var d = sx.getImageData(0, 0, N, N).data, opaque = 0, uniform = true, i;
+                for (i = 3; i < d.length; i += 4) if (d[i] > 8) opaque++;
+                for (i = 4; i < d.length; i += 4) {
+                    if (d[i] !== d[0] || d[i + 1] !== d[1] || d[i + 2] !== d[2]) { uniform = false; break; }
+                }
+                return uniform || opaque < N * N * 0.02;
+            } catch (e) {
+                // Tainted canvas — can't verify. Take the grab; a taint failure
+                // surfaces downstream at toBlob() with its own message.
+                return false;
+            }
+        }
+
+        function grab() {
+            return new Promise(function (resolve) {
+                // redraw() renders INLINE. Prefer it over waiting on 'render':
+                // requestAnimationFrame is throttled in a backgrounded or
+                // occluded tab, so the event-based path can stall exactly when
+                // someone exports and then switches away.
+                try { if (glMap.redraw) glMap.redraw(); } catch (e) {}
+                var c = read();
+                if (!isBlank(c)) { resolve(c); return; }
+                // Fall back to capturing on the frame MapLibre actually paints.
+                // The timeout is a floor for a map that stays quiescent — the
+                // export must never hang.
+                var fired = false;
+                function shoot() { if (fired) return; fired = true; resolve(read()); }
+                try { if (glMap.once) glMap.once('render', function () { requestAnimationFrame(shoot); }); } catch (e) {}
+                try { if (glMap.triggerRepaint) glMap.triggerRepaint(); } catch (e) {}
+                setTimeout(shoot, 300);
+            });
+        }
+
+        // Resolve with the best canvas we got — never discard real pixels over a
+        // heuristic. A grab that still looks blank after a retry is flagged via
+        // __glBlank so the caller can warn instead of silently saving a flat map.
+        return grab().then(function (c) {
+            if (!isBlank(c)) return c;
+            return grab().then(function (c2) {
+                var best = c2 || c;
+                if (best && isBlank(best)) best.__glBlank = true;
+                return best;
+            });
+        });
+    }
+
     function _exportMapPng() {
         var btn = document.getElementById('ir-global-export-btn');
         var orig = btn ? btn.textContent : '';
@@ -24174,7 +24316,14 @@
         var glMap = map && map._gl;
         var glCanvas = glMap && glMap.getCanvas && glMap.getCanvas();
 
-        _ensureHtml2canvas().then(function () {
+        // Grab the GL map BEFORE html2canvas runs — the drawing buffer is not
+        // reliably readable on the far side of a multi-second async capture.
+        var glSnap = null;
+        _glSnapshot(glMap).then(function (snap) {
+            glSnap = snap;
+            if (glCanvas && (!snap || snap.__glBlank)) console.warn('[Export] GL map readback came back empty');
+            return _ensureHtml2canvas();
+        }).then(function () {
             if (!node) throw new Error('Map element not found');
             // DOM/vector overlays ONLY — transparent bg, and skip the WebGL
             // canvas (html2canvas can't read it — it's composited separately
@@ -24201,14 +24350,20 @@
                 // DOM/vector overlays on top. html2canvas alone dropped the WebGL
                 // satellite/radar, leaving washed-out figures.
                 var dpr = window.devicePixelRatio || 1;
-                var outW = overlay ? overlay.width : (glCanvas ? glCanvas.width : Math.round((node ? node.offsetWidth : 800) * dpr));
-                var outH = overlay ? overlay.height : (glCanvas ? glCanvas.height : Math.round((node ? node.offsetHeight : 600) * dpr));
+                var glW = glSnap ? glSnap.width : (glCanvas ? glCanvas.width : 0);
+                var glH = glSnap ? glSnap.height : (glCanvas ? glCanvas.height : 0);
+                var outW = overlay ? overlay.width : (glW || Math.round((node ? node.offsetWidth : 800) * dpr));
+                var outH = overlay ? overlay.height : (glH || Math.round((node ? node.offsetHeight : 600) * dpr));
                 var comp = document.createElement('canvas');
                 comp.width = outW; comp.height = outH;
                 var cctx = comp.getContext('2d');
                 cctx.fillStyle = '#0a0c12'; cctx.fillRect(0, 0, outW, outH);
-                if (glCanvas) {
-                    try { cctx.drawImage(glCanvas, 0, 0, glCanvas.width, glCanvas.height, 0, 0, outW, outH); } catch (e) {}
+                if (glSnap) {
+                    try { cctx.drawImage(glSnap, 0, 0, glW, glH, 0, 0, outW, outH); }
+                    catch (e) { console.warn('[Export] GL composite failed:', e); }
+                }
+                if (glCanvas && (!glSnap || glSnap.__glBlank)) {
+                    _rtToast('Saved without the map layer — the browser couldn’t read the map canvas.');
                 }
                 if (overlay) { try { cctx.drawImage(overlay, 0, 0); } catch (e) {} }
                 comp.toBlob(function (blob) {
@@ -29796,7 +29951,11 @@
      *  TC-ATLAS watermark + URL into the imagery panel. The live DOM is
      *  untouched. */
     function _irExportOnClone(clonedDoc) {
-        ['.leaflet-control-zoom', '#ir-product-toggle', '#ir-image-loader'].forEach(function (sel) {
+        // '.maplibregl-ctrl-group' is the zoom control under the GL facade —
+        // '.leaflet-control-zoom' only matches when leaflet.js is the engine,
+        // which is why the +/- buttons used to bake into saved storm-card PNGs.
+        ['.leaflet-control-zoom', '.maplibregl-ctrl-group',
+         '#ir-product-toggle', '#ir-image-loader'].forEach(function (sel) {
             var els = clonedDoc.querySelectorAll(sel);
             for (var i = 0; i < els.length; i++) els[i].style.display = 'none';
         });
@@ -29825,7 +29984,8 @@
      *  under-layer (basemap) so the watermark isn't buried under the IR; the
      *  GIF over-layer uses _irExportOnClone so the watermark lands on top. */
     function _irExportOnCloneControls(clonedDoc) {
-        ['.leaflet-control-zoom', '#ir-product-toggle', '#ir-image-loader'].forEach(function (sel) {
+        ['.leaflet-control-zoom', '.maplibregl-ctrl-group',
+         '#ir-product-toggle', '#ir-image-loader'].forEach(function (sel) {
             var els = clonedDoc.querySelectorAll(sel);
             for (var i = 0; i < els.length; i++) els[i].style.display = 'none';
         });
@@ -29903,7 +30063,18 @@
         // canvas.toBlob() on a large surface (silent export failure). Capture at
         // a lower scale on iOS so the surface stays well under the limit; desktop
         // keeps the print-grade 3× scale.
+        //
+        // …but BOUNDED. A full-width panel (1512 CSS px) at 3× is 4536×3861 =
+        // 17.5 MP, and the export allocates two of those (html2canvas overlay +
+        // composite) alongside a live WebGL map. That is enough to cost the GPU
+        // process its WebGL context: the map goes blank, which is how the
+        // satellite layer vanished from saved PNGs. Cap the long edge instead —
+        // 3000 px is still >300 DPI for a 10-inch figure, at ~2.3× less area.
         var _exportScale = _isIOS() ? 2 : Math.max(3, window.devicePixelRatio || 1);
+        var _longEdge = Math.max(node.offsetWidth || 0, node.offsetHeight || 0);
+        if (_longEdge > 0 && _longEdge * _exportScale > 3000) {
+            _exportScale = Math.max(1, 3000 / _longEdge);
+        }
         // The detail map is the GL facade: satellite imagery lives on a WebGL
         // canvas that html2canvas CANNOT read — reading it taints the export
         // canvas, so on iOS canvas.toBlob/toDataURL throw "the operation is
@@ -29924,19 +30095,22 @@
         // On the GL facade the imagery AND the vector overlays (track/graticule/
         // pin) all live on the WebGL canvas, so we can build the whole export
         // from it: draw it into a clean 2D canvas and hand-stamp the timestamp +
-        // watermark with the 2D text API. preserveDrawingBuffer is on, so the
-        // canvas holds the last render. If the track was opted out, it's already
-        // removed from the map — trigger a repaint and capture on the next render
-        // so the GL canvas reflects that before we read it.
+        // watermark with the 2D text API. _glSnapshot forces the repaint and
+        // captures on the next render, so a track opted out just before this
+        // (already removed from the map) is reflected in what we read.
         if (_isIOS() && glMap && glCanvas) {
-            var _iosCapture = function () {
+            var _iosCapture = function (snap) {
                 try {
-                    var g = glMap.getCanvas(), W = g.width, H = g.height;
+                    var W = (snap && snap.width) || glCanvas.width;
+                    var H = (snap && snap.height) || glCanvas.height;
                     var comp = document.createElement('canvas');
                     comp.width = W; comp.height = H;
                     var cx = comp.getContext('2d');
                     cx.fillStyle = '#0a0c12'; cx.fillRect(0, 0, W, H);
-                    cx.drawImage(g, 0, 0);
+                    if (snap) cx.drawImage(snap, 0, 0);
+                    if (!snap || snap.__glBlank) {
+                        _rtToast('Saved without the map layer — the browser couldn’t read the map canvas.');
+                    }
                     _irStampExportChrome(cx, W, H);
                     _irRestoreTrackAfterExport(hiddenTrack); hiddenTrack = null;
                     var tsx = (_activeFrameTimeStr() || animFrameTimes[animIndex] || '')
@@ -29956,17 +30130,19 @@
                     _rtToast('Couldn’t save the image — ' + (e && e.message ? e.message : 'export failed') + '.');
                 }
             };
-            var _ran = false;
-            var _once = function () { if (_ran) return; _ran = true; _iosCapture(); };
-            if (glMap.once) glMap.once('render', function () { requestAnimationFrame(_once); });
-            if (glMap.triggerRepaint) glMap.triggerRepaint();
-            // Fallback: a quiescent map may not fire 'render' at all, so capture
-            // after a short delay regardless — the export must never hang.
-            setTimeout(_once, 300);
+            _glSnapshot(glMap).then(_iosCapture);
             return;
         }
 
-        _ensureHtml2canvas().then(function () {
+        // Grab the GL map FIRST. Reading it after html2canvas resolves (~0.5-2 s
+        // later) is what produced storm-card PNGs with the chip, watermark and
+        // graticule LABELS but a blank map — see _glSnapshot.
+        var glSnap = null;
+        _glSnapshot(glMap).then(function (snap) {
+            glSnap = snap;
+            if (glCanvas && (!snap || snap.__glBlank)) console.warn('[RT Monitor] GL map readback came back empty');
+            return _ensureHtml2canvas();
+        }).then(function () {
             return window.html2canvas(node, {
                 useCORS: true, allowTaint: false,
                 // Transparent when compositing over GL imagery; opaque otherwise.
@@ -29996,13 +30172,21 @@
                 // Composite GL imagery (under) + DOM overlays (over) into a clean
                 // 2D canvas. overlay dims are canonical; stretch the GL canvas to
                 // fit (both cover the same map footprint).
-                var outW = overlay ? overlay.width : glCanvas.width;
-                var outH = overlay ? overlay.height : glCanvas.height;
+                var glW = glSnap ? glSnap.width : glCanvas.width;
+                var glH = glSnap ? glSnap.height : glCanvas.height;
+                var outW = overlay ? overlay.width : glW;
+                var outH = overlay ? overlay.height : glH;
                 var comp = document.createElement('canvas');
                 comp.width = outW; comp.height = outH;
                 var cctx = comp.getContext('2d');
                 cctx.fillStyle = '#0a0c12'; cctx.fillRect(0, 0, outW, outH);
-                try { cctx.drawImage(glCanvas, 0, 0, glCanvas.width, glCanvas.height, 0, 0, outW, outH); } catch (e) {}
+                if (glSnap) {
+                    try { cctx.drawImage(glSnap, 0, 0, glW, glH, 0, 0, outW, outH); }
+                    catch (e) { console.warn('[RT Monitor] GL composite failed:', e); }
+                }
+                if (!glSnap || glSnap.__glBlank) {
+                    _rtToast('Saved without the map layer — the browser couldn’t read the map canvas.');
+                }
                 if (overlay) { try { cctx.drawImage(overlay, 0, 0); } catch (e) {} }
                 canvas = comp;
             }

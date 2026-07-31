@@ -2439,6 +2439,22 @@ body:has(.basin-sidebar.open) #ir-display-wrap { left: 280px; }
     left: auto !important;
     margin: 0 !important;
 }
+/* "Imagery Only" sits at the head of the menu and hides what every item
+   below it toggles, so give it a rule underneath to read as its own tier. */
+#ir-display-menu .ir-clean-item {
+    border-bottom: 1px solid rgba(15, 22, 35, 0.12);
+    padding-bottom: 8px;
+    border-radius: 6px 6px 0 0;
+    line-height: 1.2;   /* the label wraps to two lines in the 104px column */
+}
+/* Clean view is easy to forget once the menu is shut (the map just looks
+   empty) — accent the collapsed pill so the state is visible from the corner. */
+.ir-display-toggle.ir-clean-on {
+    background: rgba(74, 155, 110, 0.22);
+    color: #60a5fa;
+    border-color: rgba(74, 155, 110, 0.45);
+}
+
 /* IR colormap picker inside the Display menu */
 #ir-display-menu .ir-cmap-row { display: flex; width: 104px; box-sizing: border-box; }
 #ir-display-menu .ir-cmap-select {

@@ -285,9 +285,68 @@
         if (this._panes[name]) return this._panes[name];
         var d = document.createElement('div'); d.className = 'leaflet-pane leaflet-' + name;
         d.style.position = 'absolute'; d.style.left = 0; d.style.top = 0; d.style.pointerEvents = 'none';
+        // A pane born while overlays are hidden ("imagery only") starts hidden too,
+        // otherwise turning a layer on mid-clean-view would pop it back on screen.
+        if (this._ovHidden && (this._ovKeepPanes || []).indexOf(name) < 0) d.style.display = 'none';
         this.getContainer().appendChild(d); this._panes[name] = d; return d; };
     Map.prototype.getPane = function (name) { return this._panes[name] || this.createPane(name); };
     Map.prototype.getPanes = function () { return this._panes; };
+
+    // ── "Imagery only" — hide every annotation overlay ────────────
+    // Panes are the only classifier the facade has (every GL layer carries its
+    // pane's z in _glz, every custom canvas layer draws into a pane div), so the
+    // caller expresses what to KEEP as pane names — e.g. the satellite mosaic
+    // (tilePane), radar, coastlines. Everything else — tracks, cones, genesis
+    // dots, env rasters, wind barbs, markers, popups — goes dark, leaving a clean
+    // frame to export. Nothing is removed, so restoring is one setLayoutProperty.
+    // Keep-z is recomputed on demand, not cached: panes like gRadarPane /
+    // mwMosaicPane are created lazily, and _paneZ() of a pane that doesn't exist
+    // yet falls back to 400 — which would spare overlayPane by accident.
+    // A keep-pane whose z collides with a pane we're hiding is dropped rather
+    // than honored: a lazily-created pane that never got its z-index reads as
+    // overlayPane's 400, and sparing 400 would spare every track on the map.
+    // Hiding too much is a visible, one-click-reversible mistake; hiding
+    // nothing silently defeats the whole feature.
+    Map.prototype._ovKeepZ = function () {
+        var self = this, keep = this._ovKeepPanes || [], banned = {}, out = [];
+        Object.keys(this._panes).forEach(function (n) {
+            if (keep.indexOf(n) < 0) banned[self._paneZ(n)] = true;
+        });
+        keep.forEach(function (n) {
+            if (!self._panes[n]) return;
+            var z = self._paneZ(n);
+            if (!banned[z]) out.push(z);
+        });
+        return out;
+    };
+    Map.prototype.setOverlaysHidden = function (hidden, keepPanes) {
+        var self = this;
+        hidden = !!hidden;
+        this._ovHidden = hidden;
+        if (keepPanes) this._ovKeepPanes = keepPanes.slice();
+        var keep = this._ovKeepZ(), keepNames = this._ovKeepPanes || [];
+        Object.keys(this._glz).forEach(function (id) {
+            if (keep.indexOf(self._glz[id]) >= 0) return;
+            try { if (self._gl.getLayer(id)) self._gl.setLayoutProperty(id, 'visibility', hidden ? 'none' : 'visible'); }
+            catch (e) {}
+        });
+        Object.keys(this._panes).forEach(function (n) {
+            if (keepNames.indexOf(n) >= 0) return;
+            self._panes[n].style.display = hidden ? 'none' : '';
+        });
+        // Markers/popups are maplibregl DOM children of the container, not panes —
+        // a container class covers the ones added after the toggle too.
+        var c = this.getContainer();
+        if (c) { if (hidden) c.classList.add('lflet-overlays-hidden'); else c.classList.remove('lflet-overlays-hidden'); }
+        if (hidden && !document.getElementById('lflet-gl-ov-css')) {
+            var st = document.createElement('style'); st.id = 'lflet-gl-ov-css';
+            st.textContent = '.lflet-overlays-hidden .maplibregl-marker,'
+                           + '.lflet-overlays-hidden .maplibregl-popup{display:none !important;}';
+            document.head.appendChild(st);
+        }
+        return this;
+    };
+    Map.prototype.overlaysHidden = function () { return !!this._ovHidden; };
 
     // layer add/remove. Built-in facade layers implement _addToGL/_removeFromGL.
     // Custom Leaflet layers (L.Layer.extend with onAdd/getEvents — env barbs,
@@ -328,6 +387,11 @@
         }
         if (before) this._gl.addLayer(def, before); else this._gl.addLayer(def);
         this._glz[def.id] = z;
+        // Inherit "imagery only" — a track built while the clean view is on must
+        // not paint over the frame the user is about to save.
+        if (this._ovHidden && this._ovKeepZ().indexOf(z) < 0) {
+            try { this._gl.setLayoutProperty(def.id, 'visibility', 'none'); } catch (e) {}
+        }
     };
     Map.prototype.addLayer = function (layer) {
         if (!layer) return this;

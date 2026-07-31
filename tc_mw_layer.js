@@ -361,7 +361,12 @@
 
             _getMosaicPane: function () {
                 var map = this._map;
-                var pane = map.getPane('mwMosaicPane');
+                // getPanes(), not getPane(): the GL facade's getPane creates the
+                // pane on miss and hands it back, so `if (!pane)` never fired and
+                // the z-index/pointer-events below were never applied (the pane
+                // then defaulted to overlayPane's 400).
+                var pane = (map.getPanes && map.getPanes()['mwMosaicPane'])
+                        || (map._panes && map._panes.mwMosaicPane);
                 if (!pane) {
                     pane = map.createPane('mwMosaicPane');
                     // Above the IR/basemap tiles (200) but below the
