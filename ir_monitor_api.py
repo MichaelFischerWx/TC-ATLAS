@@ -4348,15 +4348,27 @@ _STORM_CACHE_GCS_KEY = f"{_GCS_RT_VERSION}/storm-cache/active-storms.json"
 
 
 def _gcs_storm_cache_get() -> dict:
-    """Read the shared poll result. {} on miss/any error."""
+    """Read the shared poll result. {} on miss/any error.
+
+    Failures are LOGGED, not swallowed: a silent {} here is indistinguishable
+    from "nothing published yet", and that ambiguity made a live adoption
+    failure impossible to diagnose from the outside.
+    """
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
+        print("[IR Monitor] shared storm-cache get: no GCS bucket "
+              f"(GCS_IR_CACHE_BUCKET={_GCS_IR_CACHE_BUCKET!r})")
         return {}
     try:
         data = bucket.blob(_STORM_CACHE_GCS_KEY).download_as_bytes(timeout=5)
         d = json.loads(data)
-        return d if isinstance(d, dict) else {}
-    except Exception:
+        if not isinstance(d, dict):
+            print(f"[IR Monitor] shared storm-cache get: not a dict ({type(d).__name__})")
+            return {}
+        return d
+    except Exception as ex:
+        print(f"[IR Monitor] shared storm-cache get failed "
+              f"({type(ex).__name__}: {ex}) key={_STORM_CACHE_GCS_KEY}")
         return {}
 
 
@@ -4386,15 +4398,22 @@ def _adopt_shared_storm_cache() -> bool:
     """
     global _last_poll_time
     shared = _gcs_storm_cache_get()
+    if not shared:
+        return False           # already logged by the getter
     polled_at = shared.get("polled_at")
     if not isinstance(polled_at, (int, float)):
+        print(f"[IR Monitor] shared storm-cache: bad polled_at ({polled_at!r}) — polling")
         return False
     age = time.time() - polled_at
     # Reject the future (clock skew) and anything already expired.
     if age < 0 or age > _STORM_CACHE_TTL:
+        print(f"[IR Monitor] shared storm-cache: age {age:.0f}s outside "
+              f"(0, {_STORM_CACHE_TTL}] — polling")
         return False
     storms = shared.get("storms")
     if not isinstance(storms, list):
+        print(f"[IR Monitor] shared storm-cache: storms not a list "
+              f"({type(storms).__name__}) — polling")
         return False
     with _active_storms_lock:
         _active_storms_cache["storms"] = storms
