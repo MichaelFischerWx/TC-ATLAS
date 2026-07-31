@@ -92,6 +92,17 @@ JTWC_SOURCES = [
     ("ucar", "https://hurricanes.ral.ucar.edu/repository/data/bdecks_open"),
 ]
 
+# Concurrency for the per-storm B-deck prefetch in _poll_active_storms.
+# The poll fetches one B-deck per storm for EVERY storm in the season's
+# listing (78 in 2026), and it used to do so strictly sequentially at
+# ~0.3-0.5s each — ~41s per poll, charged to whichever unlucky request
+# found the cache expired (measured 2026-07-31: 110 of 120 slow
+# active-storms requests were on WARM instances, avg 41.0s). The fetches
+# are independent, pure-read and I/O-bound, so a small pool collapses the
+# wall-clock to roughly the slowest single fetch. Kept modest to stay
+# polite to the UCAR/NOAA hosts — this is someone else's free service.
+_JTWC_BDECK_WORKERS = int(os.environ.get("JTWC_BDECK_WORKERS", "8"))
+
 # JTWC CARQ a-deck (operational analyzed fixes — updates faster than b-deck)
 JTWC_CARQ_BASE = "https://hurricanes.ral.ucar.edu/repository/data/carq"
 
@@ -3287,12 +3298,49 @@ def _poll_active_storms(spawn_prefetch: bool = True):
         degraded = True          # all JTWC enumeration sources failed
         jtwc_storms = []
     jtwc_count = 0
+
+    # ── Prefetch every B-deck concurrently ───────────────────────
+    # This loop's dominant cost is one HTTP GET per storm across the WHOLE
+    # season's listing (most of which died weeks ago — the staleness gate
+    # below only spares them the CARQ/TCW calls, not the B-deck fetch).
+    # Done sequentially that was ~41s per poll. Only the network reads are
+    # parallelized; everything below stays sequential and untouched, so
+    # ordering, logging, `degraded` semantics and `storms` order are all
+    # exactly as before. _fetch_jtwc_bdeck is pure (locals only) and
+    # _http_get builds a fresh request per call, so this is thread-safe.
+    _bdeck_pre: dict = {}
+    _to_fetch = [(sid, url) for sid, url in jtwc_storms if sid not in seen_ids]
+    if _to_fetch:
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+
+        def _prefetch_bdeck(item):
+            sid, url = item
+            try:
+                return sid, _fetch_jtwc_bdeck(sid, url)
+            except Exception as ex:
+                # Never let one bad storm sink the batch — fall through to
+                # the inline fetch below, which retries and logs as before.
+                print(f"[IR Monitor] JTWC {sid}: B-deck prefetch failed: {ex}")
+                return sid, None
+
+        _t0 = time.time()
+        with _TPE(max_workers=_JTWC_BDECK_WORKERS) as _pool:
+            for sid, recs in _pool.map(_prefetch_bdeck, _to_fetch):
+                if recs is not None:
+                    _bdeck_pre[sid] = recs
+        print(f"[IR Monitor] JTWC B-deck prefetch: {len(_bdeck_pre)}/{len(_to_fetch)} "
+              f"in {time.time() - _t0:.1f}s ({_JTWC_BDECK_WORKERS} workers)")
+
     for storm_id, bdeck_url in jtwc_storms:
         if storm_id in seen_ids:
             continue
 
-        # Fetch B-deck first and check staleness before expensive CARQ/TCW lookups
-        bdeck_records = _fetch_jtwc_bdeck(storm_id, bdeck_url)
+        # Fetch B-deck first and check staleness before expensive CARQ/TCW lookups.
+        # Served from the concurrent prefetch above; the inline call remains the
+        # fallback for anything the prefetch missed or errored on.
+        bdeck_records = _bdeck_pre.get(storm_id)
+        if bdeck_records is None:
+            bdeck_records = _fetch_jtwc_bdeck(storm_id, bdeck_url)
 
         # Quick staleness check on B-deck alone — skip CARQ/TCW for old storms
         if bdeck_records:
