@@ -74,7 +74,12 @@
     // UNDER the detail — the base fills the gaps where detail tiles don't exist.
     var baseMaxZoom = (opts.baseMaxZoom != null) ? opts.baseMaxZoom : maxZoom;
     var minZoom = opts.minZoom || 0;
-    var MAX_TILES = opts.maxCachedTiles || 700;   // LRU bound across frames/zooms
+    var baseMaxTiles = opts.maxCachedTiles || 700;  // floor for the LRU bound
+    // Grown in setFrame to fit the whole loop's viewport working set (see the
+    // frame-ready gate below). Hard ceiling: 2400 LUMINANCE 512² textures ≈
+    // 600 MiB GPU — beyond that, bounded memory wins over loop smoothness.
+    var maxTiles = baseMaxTiles;
+    var HARD_MAX_TILES = 2400;
     var onErr = opts.onError || function (m) { try { console.error('[mosaicGL] ' + m); } catch (e) {} };
     // Optional async tile source (packed-frame range reads). Resolves a Blob, or
     // null when the tile definitively doesn't exist (cached as a miss — no
@@ -137,13 +142,17 @@
       if (!gl) return;
       var tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      // LUMINANCE (1 byte/px): the tiles are grayscale and the shader reads only
+      // .r — 4× less GPU memory than RGBA, which is what lets maxTiles hold a
+      // whole zoomed-in loop resident.
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, gl.LUMINANCE, gl.UNSIGNED_BYTE, img);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);  // don't blur the index
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       tiles[key] = { tex: tex, used: ++useClock };
       evictIfNeeded();
+      _pendingResolve(key);
       if (map) map.triggerRepaint();
     }
 
@@ -161,6 +170,7 @@
             // render loop never re-requests this tile.
             delete inflight[key];
             tiles[key] = { tex: null, used: ++useClock };
+            _pendingResolve(key);
             return;
           }
           if (!b || !gl) { delete inflight[key]; return; }
@@ -179,9 +189,9 @@
 
     function evictIfNeeded() {
       var keys = Object.keys(tiles);
-      if (keys.length <= MAX_TILES) return;
+      if (keys.length <= maxTiles) return;
       keys.sort(function (a, b) { return tiles[a].used - tiles[b].used; });
-      var drop = keys.length - MAX_TILES;
+      var drop = keys.length - maxTiles;
       for (var i = 0; i < drop; i++) {
         var k = keys[i]; if (gl && tiles[k].tex) gl.deleteTexture(tiles[k].tex); delete tiles[k];
       }
@@ -214,14 +224,57 @@
       return out;
     }
 
-    function pickZoom() {
+    function pickZoom(frame) {
+      var f = (frame != null) ? frame : active;
       var mz = maxZoom;
-      if (frameMaxZoom && active) {
-        var f = frameMaxZoom(active);
-        if (f != null) mz = Math.min(mz, f);
+      if (frameMaxZoom && f) {
+        var c = frameMaxZoom(f);
+        if (c != null) mz = Math.min(mz, c);
       }
       var z = Math.round(map.getZoom());
       return Math.max(minZoom, Math.min(mz, z));
+    }
+
+    // Every tile the given frame needs for the current viewport: both pyramid
+    // levels (coarse base + sharp), and the paired-Vis band in combo mode.
+    // Each ref is [frame, z, x, y, band].
+    function frameTileRefs(frame) {
+      var z = pickZoom(frame), baseZ = Math.min(z, baseMaxZoom);
+      var levels = (z > baseZ) ? [baseZ, z] : [baseZ];
+      var pf = comboMode ? pairFrame(frame) : null;
+      var out = [];
+      for (var li = 0; li < levels.length; li++) {
+        var vis = visibleTiles(levels[li]);
+        for (var i = 0; i < vis.length; i++) {
+          out.push([frame, levels[li], vis[i][0], vis[i][1], 0]);
+          if (pf) out.push([pf, levels[li], vis[i][0], vis[i][1], 1]);
+        }
+      }
+      return out;
+    }
+
+    // ── Frame-ready gate ──────────────────────────────────────────────────
+    // setFrame() keeps the PREVIOUS frame on screen until every viewport tile
+    // of the incoming frame is resolved (uploaded, or a cached known-miss), so
+    // a swap never paints holes — the "white flash" between animation frames.
+    // GATE_MS bounds the hold: an erroring/stuck tile flips the frame anyway
+    // (worst case = the old behavior) rather than freezing playback.
+    var GATE_MS = 400;
+    var pending = null;   // { frame, keys: {tkey:1}, n, timer }
+    function _clearPending() {
+      if (pending && pending.timer) clearTimeout(pending.timer);
+      pending = null;
+    }
+    function _flipPending() {
+      if (!pending) return;
+      active = pending.frame;
+      _clearPending();
+      if (map) map.triggerRepaint();
+    }
+    function _pendingResolve(key) {
+      if (!pending || !pending.keys[key]) return;
+      delete pending.keys[key];
+      if (--pending.n <= 0) _flipPending();
     }
 
     var layer = {
@@ -302,6 +355,7 @@
         }
       },
       onRemove: function () {
+        _clearPending();
         if (!gl) return;
         Object.keys(tiles).forEach(function (k) { if (tiles[k].tex) gl.deleteTexture(tiles[k].tex); });
         tiles = {}; inflight = {};
@@ -318,22 +372,45 @@
       layer: layer,
       setFrame: function (i) {
         if (i < 0 || i >= frames.length) return;
-        active = frames[i];
-        if (map) {
-          // prefetch the next frame's visible tiles so playback doesn't stall
-          var nf = frames[i + 1] || frames[i - 1];
-          if (nf && gl) {
-            var z = pickZoom();
-            var npf = comboMode ? pairFrame(nf) : null;
-            visibleTiles(z).forEach(function (t) {
-              loadTile(nf, z, t[0], t[1]);
-              if (npf) loadTile(npf, z, t[0], t[1], 1);
-            });
+        var target = frames[i];
+        if (!map || !gl) { _clearPending(); active = target; return; }
+
+        var refs = frameTileRefs(target);
+        // Grow the LRU bound to fit the whole loop's viewport working set —
+        // with LRU + cyclic playback, a cap below the working set evicts
+        // exactly the frames coming up next, so every pass re-fetched and
+        // re-uploaded every tile (the flash-on-every-loop bug).
+        maxTiles = Math.min(HARD_MAX_TILES,
+                            Math.max(baseMaxTiles, refs.length * frames.length + 64));
+
+        var missing = {}, n = 0;
+        for (var r = 0; r < refs.length; r++) {
+          var t = refs[r], key = tkey(t[0], t[1], t[2], t[3], t[4]);
+          if (!tiles[key]) {
+            loadTile(t[0], t[1], t[2], t[3], t[4]);
+            missing[key] = 1; n++;
           }
-          map.triggerRepaint();
         }
+        // prefetch the following frame (both levels + combo band) so steady
+        // playback stays ahead of the gate
+        var nf = frames[i + 1] || frames[i - 1];
+        if (nf) {
+          var nrefs = frameTileRefs(nf);
+          for (var p = 0; p < nrefs.length; p++) {
+            loadTile(nrefs[p][0], nrefs[p][1], nrefs[p][2], nrefs[p][3], nrefs[p][4]);
+          }
+        }
+
+        _clearPending();
+        if (!n) { active = target; map.triggerRepaint(); return; }
+        pending = { frame: target, keys: missing, n: n, timer: setTimeout(_flipPending, GATE_MS) };
       },
-      setFrames: function (arr) { frames = arr.slice(); if (frames.indexOf(active) < 0) active = frames[frames.length - 1] || null; if (map) map.triggerRepaint(); },
+      setFrames: function (arr) {
+        frames = arr.slice();
+        if (frames.indexOf(active) < 0) active = frames[frames.length - 1] || null;
+        if (pending && frames.indexOf(pending.frame) < 0) _clearPending();
+        if (map) map.triggerRepaint();
+      },
       setColormap: function (u8) {
         pendingLut = u8;
         if (gl && lutTex) {
@@ -345,7 +422,7 @@
       setOpacity: function (o) { opacity = o; if (map) map.triggerRepaint(); },
       currentFrame: function () { return active; },
       frameCount: function () { return frames.length; },
-      stats: function () { return { cached: Object.keys(tiles).length, inflight: Object.keys(inflight).length, frames: frames.length }; },
+      stats: function () { return { cached: Object.keys(tiles).length, inflight: Object.keys(inflight).length, frames: frames.length, maxTiles: maxTiles, pendingTiles: pending ? pending.n : 0 }; },
       destroy: function () { if (map && map.getLayer(layer.id)) map.removeLayer(layer.id); }
     };
   };

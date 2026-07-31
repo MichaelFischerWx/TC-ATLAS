@@ -2062,7 +2062,9 @@
     // re-pays the range fetch for the same tile. Resolved NON-NULL blobs
     // only — nulls (absent tile / transient failure) are never pinned.
     var _v3BlobLRU = new Map();          // url -> Promise<Blob>
-    var _V3_BLOB_LRU_MAX = 600;          // ~600 × ~60 KB ≈ 36 MB ceiling
+    var _V3_BLOB_LRU_MAX = 1200;         // ~1200 × ~60 KB ≈ 72 MB ceiling; sized to
+                                         // back the GL layer's grown texture LRU so a
+                                         // zoomed-in loop's full working set stays warm
     // Debug hook (console/diagnostics): window._v3TileBlob(url) → Promise<Blob|null>.
     function _v3TileBlob(url) {
         var hit = _v3BlobLRU.get(url);
@@ -2297,6 +2299,8 @@
         _ir2aOn = true;
     }
     function _ir2aDestroy() { if (_ir2aLayer) { try { _ir2aLayer.destroy(); } catch (e) {} _ir2aLayer = null; } _ir2aOn = false; }
+    // Debug hook (console/diagnostics): tile-cache stats of the idx GL layer.
+    window._ir2aStats = function () { return _ir2aLayer ? _ir2aLayer.stats() : null; };
     // Ensure the v3 frame list is loaded and the persistent idx layer is built, then cb().
     function _ir2aEnsure(cb) {
         var p = globalProduct;
