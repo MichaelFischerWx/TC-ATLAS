@@ -3471,6 +3471,14 @@ def _poll_active_storms(spawn_prefetch: bool = True):
         _active_storms_cache["count_by_basin"] = count_by_basin
 
     _last_poll_time = time.time()
+
+    # Publish for the other instances. Only on this path — the degraded
+    # "retain last-known-good" early-return above must NOT republish, or a
+    # failed upstream fetch would keep refreshing the shared timestamp and
+    # stale data would coast indefinitely.
+    _gcs_storm_cache_put(
+        storms, now.strftime("%Y-%m-%dT%H:%M:%SZ"), count_by_basin)
+
     total = len(storms)
     if moved_storms:
         print(f"[IR Monitor] Total: {total} active — {count_by_basin} "
@@ -4318,10 +4326,99 @@ def _cleanup_old_gcs_frames(active_storms: list):
               f"(cutoff: {cutoff_str}, active storms: {len(active_ids)})")
 
 
+# ── Cross-instance shared storm cache ────────────────────────────────────
+# _poll_active_storms is EXPENSIVE and, worse, expensive per INSTANCE: each
+# Cloud Run instance holds its own in-memory _active_storms_cache and
+# _last_poll_time, so every instance independently re-runs the whole poll
+# every _STORM_CACHE_TTL. The dominant cost is not network — it is parsing
+# ~59 MB of decompressed NHC A-deck text (23 files) line by line, which is
+# CPU-bound and so does not parallelize usefully under the GIL.
+#
+# This shares the RESULT (a few KB of JSON) through GCS: whichever instance
+# polls first publishes it, and every other instance adopts it with a single
+# small read instead of repeating the parse. Freshness is UNCHANGED — the
+# adopted result carries the original poll's timestamp, so it expires on
+# exactly the same schedule the local cache would have.
+#
+# Deliberately lock-free: no lease, no compare-and-swap. If two instances
+# find it stale at the same moment they both poll, which is exactly what
+# happens today — never worse. Every path is best-effort; any GCS error
+# falls through to a normal local poll.
+_STORM_CACHE_GCS_KEY = f"{_GCS_RT_VERSION}/storm-cache/active-storms.json"
+
+
+def _gcs_storm_cache_get() -> dict:
+    """Read the shared poll result. {} on miss/any error."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return {}
+    try:
+        data = bucket.blob(_STORM_CACHE_GCS_KEY).download_as_bytes(timeout=5)
+        d = json.loads(data)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _gcs_storm_cache_put(storms: list, updated_utc: str, count_by_basin: dict):
+    """Publish this instance's poll result for the others to adopt."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+    try:
+        body = json.dumps({
+            "polled_at": time.time(),
+            "storms": storms,
+            "updated_utc": updated_utc,
+            "count_by_basin": count_by_basin,
+        }, default=str).encode("utf-8")
+        bucket.blob(_STORM_CACHE_GCS_KEY).upload_from_string(
+            body, content_type="application/json", timeout=10)
+    except Exception as ex:
+        print(f"[IR Monitor] shared storm-cache put failed: {ex}")
+
+
+def _adopt_shared_storm_cache() -> bool:
+    """Adopt a still-fresh shared poll result into this instance's memory.
+
+    True  → adopted; caller must NOT poll.
+    False → nothing usable; caller polls as before.
+    """
+    global _last_poll_time
+    shared = _gcs_storm_cache_get()
+    polled_at = shared.get("polled_at")
+    if not isinstance(polled_at, (int, float)):
+        return False
+    age = time.time() - polled_at
+    # Reject the future (clock skew) and anything already expired.
+    if age < 0 or age > _STORM_CACHE_TTL:
+        return False
+    storms = shared.get("storms")
+    if not isinstance(storms, list):
+        return False
+    with _active_storms_lock:
+        _active_storms_cache["storms"] = storms
+        _active_storms_cache["updated_utc"] = shared.get("updated_utc") or ""
+        _active_storms_cache["count_by_basin"] = shared.get("count_by_basin") or {}
+    # Inherit the ORIGINAL poll time, not now — otherwise adopting would
+    # silently extend freshness past the TTL and the data could coast.
+    _last_poll_time = polled_at
+    print(f"[IR Monitor] Adopted shared storm cache: {len(storms)} storm(s), "
+          f"{age:.0f}s old (skipped local poll)")
+    return True
+
+
 def _ensure_fresh_cache():
     """If the cache is stale (older than TTL), re-poll."""
     global _last_poll_time
     if time.time() - _last_poll_time > _STORM_CACHE_TTL:
+        # Another instance may have already done this work — adopting its
+        # result costs one small GCS read instead of a full re-poll.
+        try:
+            if _adopt_shared_storm_cache():
+                return
+        except Exception:
+            traceback.print_exc()   # never let the shared path block a poll
         try:
             _poll_active_storms()
         except Exception:
