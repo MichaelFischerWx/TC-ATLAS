@@ -4476,10 +4476,20 @@ def refresh_active_storms_cache():
     Returns summary dict for the warmup response.
     """
     if time.time() - _last_poll_time > 60:
+        # Prefer another instance's recent result over repeating the work —
+        # priming the cache is the point here, and adopting primes it just as
+        # well for a fraction of the cost. Falls through to a real poll when
+        # nothing fresh is published.
+        adopted = False
         try:
-            _poll_active_storms()
+            adopted = _adopt_shared_storm_cache()
         except Exception:
             traceback.print_exc()
+        if not adopted:
+            try:
+                _poll_active_storms()
+            except Exception:
+                traceback.print_exc()
 
     with _active_storms_lock:
         return {
