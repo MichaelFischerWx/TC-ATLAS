@@ -14779,7 +14779,9 @@
             }
             disturbances.push({
                 raw: {
-                    track_id: 'tca-' + rootKey,
+                    // Client-side ids live in the "tcac-" namespace (see
+                    // _genesisTCAtlasDisturbances) — never the server's.
+                    track_id: 'tcac-' + rootKey,
                     members: members,
                     ensemble_mean: { points: meanPts },
                     n_members_total: cluster.length,
@@ -15081,7 +15083,17 @@
             );
             disturbances.push({
                 raw: {
-                    track_id: 'tca-' + ci,
+                    // "tcac-" (client) — deliberately NOT the server's
+                    // "tca-N" namespace. These indices come from OUR peak
+                    // list over the CAPPED ensemble, so index N here is a
+                    // different physical system than the server's cluster
+                    // N (computed over the uncapped member set). Handing
+                    // one of these to /weatherlab-genesis-cluster/tca-N
+                    // opened an unrelated storm in another basin; the
+                    // distinct prefix makes that mix-up impossible and
+                    // routes the modal through the geometry-based
+                    // re-cluster path instead (see openGenesisDetail).
+                    track_id: 'tcac-' + ci,
                     members: members,
                     ensemble_mean: { points: meanPts },
                     n_members_total: projectedTotal,
@@ -15091,6 +15103,10 @@
                 peakWind: peakWind,
                 peakTau: peakTau,
                 mean: { points: meanPts },
+                // Provenance: this disturbance is the client-side estimate,
+                // not a server cluster. The detail modal must not address it
+                // by index against the backend.
+                clientCluster: true,
                 // Cluster geometry — replayed in the modal to re-apply the
                 // identical spatial+temporal gate against uncapped data.
                 peakLat: pk.lat,
@@ -15322,7 +15338,16 @@
                 members: d.raw && d.raw.members,
                 ensembleMean: d.raw && d.raw.ensemble_mean,
                 source: _genesisClusterMethod,   // 'deepmind' or 'tcatlas'
-                initTime: (_rtGenesisData && _rtGenesisData.init_time) || null,
+                // True when the markers came from the client-side estimate
+                // over capped tracks rather than the server cluster index.
+                clientCluster: !!d.clientCluster,
+                // Pin to the cycle THESE markers were built from. On the
+                // fast path the cluster index paints before the big ensemble
+                // payload lands, so _rtGenesisData is still null — using it
+                // alone left the detail fetch unpinned, and a cycle that
+                // rolled over between the index fetch and the click resolved
+                // "latest", i.e. a different run's cluster numbering.
+                initTime: effInit || null,
                 variant: _genesisEnsembleVariant,
                 ensembleSize: _GENESIS_ENSEMBLE_SIZE,
                 // TCA-only fields — let the detail modal fetch uncapped
@@ -15501,14 +15526,47 @@
     // we've seen, narrow enough to drop genuine cross-basin orphans.
     var _GENESIS_DM_OUTLIER_KM = 1500;
 
+    // How far a detail payload's genesis position may sit from the marker
+    // the user clicked before we call it a different system. Capped vs
+    // uncapped member sets shift an ensemble-mean genesis by tens of km,
+    // never hundreds — so 1000 km flags an id/index mix-up (wrong cluster,
+    // wrong basin) with a wide margin against false alarms.
+    var _GENESIS_DETAIL_MAX_DRIFT_KM = 1000;
+
+    /** Distance (km) between the clicked disturbance's genesis position and
+     *  the one described by a loaded detail payload. null when either side
+     *  has no usable anchor (nothing to check — caller renders as-is). */
+    function _genesisDetailDriftKm(json, meta) {
+        if (!json || !meta) return null;
+        var aLat = (meta.genesisLat != null) ? meta.genesisLat : meta.peakLat;
+        var aLon = (meta.genesisLon != null) ? meta.genesisLon : meta.peakLon;
+        if (aLat == null || aLon == null || isNaN(aLat) || isNaN(aLon)) return null;
+        var bLat = null, bLon = null;
+        var pts = (json.ensemble_mean && json.ensemble_mean.points) || [];
+        if (pts.length && pts[0].lat != null && pts[0].lon != null) {
+            bLat = pts[0].lat; bLon = pts[0].lon;
+        } else if (json.peak_lat != null && json.peak_lon != null) {
+            bLat = json.peak_lat; bLon = json.peak_lon;
+        }
+        if (bLat == null || bLon == null || isNaN(bLat) || isNaN(bLon)) return null;
+        return _genesisHaversineKm(aLat, aLon, bLat, bLon);
+    }
+
     // Fetch one DeepMind track's full uncapped member set. Cached so
     // re-opening clusters that share a contributor doesn't re-hit the
     // backend.
-    function _fetchDmTrack(dmTrackId) {
-        var key = String(dmTrackId);
+    function _fetchDmTrack(dmTrackId, initTime, variant) {
+        var v = variant || _genesisEnsembleVariant;
+        var id = String(dmTrackId);
+        // Key by (track, cycle, variant): DM reuses numeric track_ids across
+        // runs AND across the 50/1000-member ensembles, so a track-only key
+        // served another cycle's storm under the same id.
+        var key = id + '@' + (initTime || 'latest') + '#' + v;
         if (_genesisDmTrackCache[key]) return _genesisDmTrackCache[key];
+        var qs = '?variant=' + encodeURIComponent(v)
+            + (initTime ? '&init_time=' + encodeURIComponent(initTime) : '');
         var p = fetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
-                + encodeURIComponent(key), { cache: 'no-store' })
+                + encodeURIComponent(id) + qs, { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
@@ -15530,7 +15588,9 @@
         if (contribIds.length === 0) {
             return Promise.reject(new Error('no contributing DM tracks'));
         }
-        var fetches = contribIds.map(function (id) { return _fetchDmTrack(id); });
+        var fetches = contribIds.map(function (id) {
+            return _fetchDmTrack(id, meta.initTime, meta.variant);
+        });
         return Promise.all(fetches).then(function (responses) {
             // Dedupe across contributing DM tracks BY SAMPLE ID. DeepMind
             // can label the same forecast member's trajectory under
@@ -16286,9 +16346,38 @@
             };
         }
 
+        // "tcac-N" ids come from the client-side estimate: the index is ours,
+        // not the backend's, so it must never be sent to the index-keyed
+        // cluster endpoint. Rebuild from the contributing DM tracks instead
+        // (pure geometry — replays this disturbance's own gate), falling back
+        // to the capped members already in hand.
+        var isClientCluster = (trackId && trackId.indexOf('tcac-') === 0)
+            || !!(meta && meta.clientCluster);
+
         var prom;
         if (cachedFull) {
             prom = Promise.resolve(cachedFull);
+        } else if (isClientCluster) {
+            if (meta && meta.contribTrackIds && meta.peakLat != null) {
+                prom = _fetchAndReclusterTCA(trackId, meta)
+                    .then(function (json) {
+                        _genesisDetailCache[cacheKey] = json;
+                        return json;
+                    })
+                    .catch(function (err) {
+                        if (meta && meta.members) {
+                            console.warn('[Genesis] re-cluster failed, using '
+                                + 'cached capped members:', err.message);
+                            return _fromCache();
+                        }
+                        throw err;
+                    });
+            } else if (meta && meta.members) {
+                prom = Promise.resolve(_fromCache());
+            } else {
+                prom = Promise.reject(
+                    new Error('ensemble members not loaded for this disturbance'));
+            }
         } else if (trackId && trackId.indexOf('tca-') === 0) {
             // TC-ATLAS path — hit the per-cluster server endpoint which
             // returns the precomputed dedup'd member trajectories from
@@ -16356,7 +16445,42 @@
         }
 
         prom.then(function (json) {
-            if (reqSeq !== _genesisDetailReqSeq) return;  // superseded/closed
+            if (reqSeq !== _genesisDetailReqSeq) return null;  // superseded
+            // Last line of defence: the payload must describe the system the
+            // user actually clicked. Cluster ids are positional, so ANY skew
+            // between the marker's id-space and the backend's (stale cache,
+            // cycle rollover mid-click, params drift) silently returns a
+            // different storm — which is how clicking a disturbance off
+            // Florida opened an East Pacific ensemble. Verify the geometry
+            // instead of trusting the id.
+            var drift = _genesisDetailDriftKm(json, meta);
+            if (drift == null || drift <= _GENESIS_DETAIL_MAX_DRIFT_KM) {
+                return json;
+            }
+            console.warn('[Genesis] detail payload for ' + trackId + ' is '
+                + Math.round(drift) + ' km from the clicked disturbance — '
+                + 'discarding and rebuilding locally');
+            _ga('rt_genesis_detail_mismatch', {
+                track_id: trackId, drift_km: Math.round(drift),
+            });
+            delete _genesisDetailCache[cacheKey];
+            if (meta && meta.contribTrackIds && meta.peakLat != null) {
+                return _fetchAndReclusterTCA(trackId, meta).then(function (j2) {
+                    var d2 = _genesisDetailDriftKm(j2, meta);
+                    if (d2 != null && d2 > _GENESIS_DETAIL_MAX_DRIFT_KM) {
+                        throw new Error('ensemble data for this disturbance '
+                            + 'is unavailable for this cycle');
+                    }
+                    return j2;
+                });
+            }
+            if (meta && meta.members && Object.keys(meta.members).length) {
+                return _fromCache();
+            }
+            throw new Error('ensemble data for this disturbance is '
+                + 'unavailable for this cycle');
+        }).then(function (json) {
+            if (!json || reqSeq !== _genesisDetailReqSeq) return;
             _renderGenesisDetail(json);
         }).catch(function (err) {
             if (reqSeq !== _genesisDetailReqSeq) return;
