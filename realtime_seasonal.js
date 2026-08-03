@@ -698,6 +698,8 @@
             return;
         }
 
+        _renderAceStorms();
+
         var days = [];
         for (var d = 1; d <= 366; d++) days.push(d);
         var hoverDates = days.map(function (x) { return _aceDayLabel(basin, x); });
@@ -871,8 +873,10 @@
                     'Full-season climatological mean is ' +
                     st.seasonMean.toFixed(1) + '. ' +
                     'Live track data through ' + (st.through || 'n/a') +
-                    '; winds are 1-minute sustained (NHC/JTWC), which is also ' +
-                    'the convention behind the climatology.';
+                    ', which advances on the 6-hourly synoptic cycle ' +
+                    '(re-read at most every 30 minutes). Winds are 1-minute ' +
+                    'sustained (NHC/JTWC), which is also the convention ' +
+                    'behind the climatology.';
             }
         }
     }
@@ -910,6 +914,67 @@
             _addPlotSaveBtn('seasonal-panel-ace-pace', 'seasonal-ace-plot',
                             'seasonal_ace_pace');
         });
+    }
+
+    // Per-storm contribution breakdown for the live season. Only the live
+    // season has storm-level detail — the climo file carries aggregate
+    // curves, not individual storms — so this block always describes the
+    // season in progress regardless of the "Compare season" pick.
+    function _aceStampLabel(stamp) {
+        if (!stamp || stamp.length < 10) return '';
+        var m = parseInt(stamp.slice(4, 6), 10);
+        return _MONTH_NAMES_FULL[m - 1] + ' ' + parseInt(stamp.slice(6, 8), 10);
+    }
+
+    function _renderAceStorms() {
+        var el = document.getElementById('seasonal-ace-storms');
+        if (!el) return;
+        var basin = state.acePace.basin;
+        var live = _aceLiveBasin(basin);
+        var cl = _aceBasinClimo(basin);
+        if (!live) { el.innerHTML = ''; return; }
+        var recs = live.storm_detail || [];
+        var name = cl ? cl.name : basin;
+        if (!recs.length) {
+            el.innerHTML = '<div class="seasonal-ace-storms-empty">No ' +
+                'ACE-contributing storms yet in the ' + name + ' ' +
+                live.season + ' season — nothing has reached 34 kt as a ' +
+                'tropical or subtropical cyclone.</div>';
+            return;
+        }
+        var total = live.ace || 0;
+        var maxAce = recs[0].ace || 1;
+        var head = '<div class="seasonal-ace-storms-head">' +
+            '<strong>' + name + ' ' + live.season + ' storm contributions</strong> — ' +
+            recs.length + ' storm' + (recs.length === 1 ? '' : 's') +
+            ', ' + total.toFixed(1) + ' ACE' +
+            (live.ace_24h ? ', <span style="color:#fb923c">+' +
+                live.ace_24h.toFixed(1) + ' in the last 24 h</span>' : '') +
+            (live.ace_7d ? ', +' + live.ace_7d.toFixed(1) + ' in 7 days' : '') +
+            (live.active_storms ? ' · ' + live.active_storms + ' active now' : '') +
+            '</div>';
+        var rows = recs.map(function (r) {
+            var share = total > 0 ? (100 * r.ace / total) : 0;
+            var label = (r.name || r.id) + ' ';
+            return '<div class="seasonal-ace-storm' +
+                (r.active ? ' is-active' : '') + '" title="' + r.id +
+                ' · ' + r.points + ' synoptic points at or above 34 kt · peak ' +
+                r.peak_kt + ' kt">' +
+                '<div class="ace-storm-name">' + label +
+                '<span class="ace-storm-meta">' + r.peak_kt + ' kt · ' +
+                _aceStampLabel(r.first) + '-' + _aceStampLabel(r.last) +
+                '</span></div>' +
+                '<div class="ace-storm-bar"><span style="width:' +
+                Math.max(2, 100 * r.ace / maxAce).toFixed(1) + '%"></span></div>' +
+                '<div class="ace-storm-val">' + r.ace.toFixed(1) + ' · ' +
+                share.toFixed(0) + '%' +
+                (r.active && r.ace_24h
+                    ? ' <span class="ace-storm-live">+' + r.ace_24h.toFixed(1) +
+                      '/24h</span>'
+                    : (r.active ? ' <span class="ace-storm-live">active</span>' : '')) +
+                '</div></div>';
+        }).join('');
+        el.innerHTML = head + rows;
     }
 
     function _bindAcePaceControls() {

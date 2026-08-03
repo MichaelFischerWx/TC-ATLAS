@@ -867,6 +867,63 @@ body.seasonal-maximized .seasonal-header {
 .seasonal-ace-chip .ace-hi { color: #ff7a59; }
 .seasonal-ace-chip .ace-lo { color: #6da8e6; }
 
+/* Panel A — per-storm ACE contribution breakdown */
+.seasonal-ace-storms { margin-top: 6px; }
+.seasonal-ace-storms-head {
+    font-size: 0.74rem;
+    color: var(--text-dim, #94a3b8);
+    margin-bottom: 6px;
+}
+.seasonal-ace-storms-head strong { color: var(--text, #e0e0e0); }
+.seasonal-ace-storm {
+    display: grid;
+    grid-template-columns: minmax(168px, 1.7fr) minmax(60px, 2fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 3px 0;
+    font-size: 0.74rem;
+    color: var(--text-dim, #94a3b8);
+}
+.seasonal-ace-storm .ace-storm-name {
+    color: var(--text, #e0e0e0);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.seasonal-ace-storm .ace-storm-meta {
+    font-weight: 400;
+    color: var(--text-dim, #94a3b8);
+}
+.seasonal-ace-storm .ace-storm-bar {
+    position: relative;
+    height: 9px;
+    border-radius: 5px;
+    background: rgba(140,148,160,0.16);
+    overflow: hidden;
+}
+.seasonal-ace-storm .ace-storm-bar span {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    border-radius: 5px;
+    background: #6da8e6;
+}
+.seasonal-ace-storm.is-active .ace-storm-bar span { background: #fb923c; }
+.seasonal-ace-storm .ace-storm-val {
+    font-variant-numeric: tabular-nums;
+    color: var(--text, #e0e0e0);
+    white-space: nowrap;
+}
+.seasonal-ace-storm .ace-storm-live {
+    color: #fb923c;
+    font-weight: 600;
+}
+.seasonal-ace-storms-empty {
+    font-size: 0.74rem;
+    color: var(--text-dim, #94a3b8);
+    opacity: .8;
+}
+
 /* Panel C — region time series */
 .seasonal-ts-controls {
     display: flex;

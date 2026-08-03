@@ -8677,7 +8677,10 @@ def _parse_bdeck_ace_points(text: str) -> list:
             lon = float(lon_s[:-1]) / 10.0 * (-1 if lon_s[-1].upper() == "W" else 1)
         except (ValueError, IndexError):
             continue
-        seen[stamp] = (stamp, lat, lon, vmax)
+        # Storm name lives in ATCF field 28. Blank/INVEST/"ONE" style
+        # placeholders are left to the caller to prettify.
+        name = parts[27].strip().upper() if len(parts) > 27 else ""
+        seen[stamp] = (stamp, lat, lon, vmax, name)
     return list(seen.values())
 
 
@@ -8749,17 +8752,28 @@ def _compute_live_ace() -> dict:
         with ThreadPoolExecutor(max_workers=_JTWC_BDECK_WORKERS) as ex:
             results = list(ex.map(_fetch, urls))
 
+    # Cutoffs for the "how fast is this basin moving right now" figures.
+    # A storm whose last best-track entry is within one synoptic cycle plus
+    # slack is still running; b-decks are typically posted within a couple
+    # of hours of the synoptic hour, and JTWC can lag further.
+    cut_24h = (now - timedelta(hours=24)).strftime("%Y%m%d%H")
+    cut_7d = (now - timedelta(days=7)).strftime("%Y%m%d%H")
+    cut_active = (now - timedelta(hours=18)).strftime("%Y%m%d%H")
+
     daily: dict = {}       # basin -> {season_day: ace increment}
-    storms: dict = {}      # basin -> set of storm keys that contributed
     latest: dict = {}      # basin -> newest synoptic stamp used
+    per_storm: dict = {}   # basin -> [storm record, ...]
     for (atcf_basin, text), (_b, url) in zip(results, urls):
         if not text:
             continue
         pts = _parse_bdeck_ace_points(text)
         if not pts:
             continue
-        sid = url.rsplit("/", 1)[-1]
-        for stamp, lat, lon, vmax in pts:
+        sid = url.rsplit("/", 1)[-1].replace(".dat", "").lstrip("b").upper()
+        # One storm can straddle the SI/SP boundary, so its ACE is tallied
+        # per basin exactly the way the curve is.
+        rec_by_basin: dict = {}
+        for stamp, lat, lon, vmax, name in pts:
             basin = _ace_basin_for(atcf_basin, lon)
             if basin is None:
                 continue
@@ -8768,11 +8782,40 @@ def _compute_live_ace() -> dict:
                                  int(stamp[6:8]), season)
             if sd is None or not (1 <= sd <= 366):
                 continue
+            contrib = vmax * vmax * 1e-4
             daily.setdefault(basin, {})
-            daily[basin][sd] = daily[basin].get(sd, 0.0) + vmax * vmax * 1e-4
-            storms.setdefault(basin, set()).add(sid)
+            daily[basin][sd] = daily[basin].get(sd, 0.0) + contrib
             if stamp > latest.get(basin, ""):
                 latest[basin] = stamp
+            rec = rec_by_basin.get(basin)
+            if rec is None:
+                rec = rec_by_basin[basin] = {
+                    "id": sid, "name": "", "ace": 0.0, "ace_24h": 0.0,
+                    "ace_7d": 0.0, "peak_kt": 0.0, "points": 0,
+                    "first": stamp, "last": stamp,
+                }
+            rec["ace"] += contrib
+            if stamp >= cut_24h:
+                rec["ace_24h"] += contrib
+            if stamp >= cut_7d:
+                rec["ace_7d"] += contrib
+            rec["peak_kt"] = max(rec["peak_kt"], vmax)
+            rec["points"] += 1
+            if stamp < rec["first"]:
+                rec["first"] = stamp
+            if stamp > rec["last"]:
+                rec["last"] = stamp
+            # Later entries carry the assigned name; earlier ones may still
+            # read INVEST or a number, so keep the last non-placeholder.
+            if name and name not in ("INVEST", "UNNAMED", "NONAME"):
+                rec["name"] = name
+        for basin, rec in rec_by_basin.items():
+            rec["ace"] = round(rec["ace"], 2)
+            rec["ace_24h"] = round(rec["ace_24h"], 2)
+            rec["ace_7d"] = round(rec["ace_7d"], 2)
+            rec["peak_kt"] = int(rec["peak_kt"])
+            rec["active"] = rec["last"] >= cut_active
+            per_storm.setdefault(basin, []).append(rec)
 
     basins = {}
     for basin in ("NA", "EP", "WP", "NI", "SI", "SP"):
@@ -8784,13 +8827,19 @@ def _compute_live_ace() -> dict:
             total += per_day[sd]
             curve.append([sd, round(total, 2)])
         stamp = latest.get(basin)
+        recs = sorted(per_storm.get(basin, []),
+                      key=lambda r: r["ace"], reverse=True)
         basins[basin] = {
             "season": season,
             "ace": round(total, 2),
-            "storms": len(storms.get(basin, ())),
+            "storms": len(recs),
             "curve": curve,
             "through": (f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]}T{stamp[8:10]}Z"
                         if stamp else None),
+            "ace_24h": round(sum(r["ace_24h"] for r in recs), 2),
+            "ace_7d": round(sum(r["ace_7d"] for r in recs), 2),
+            "active_storms": sum(1 for r in recs if r["active"]),
+            "storm_detail": recs,
         }
 
     return {
@@ -8799,6 +8848,9 @@ def _compute_live_ace() -> dict:
         "sh_season": sh_season,
         "vmax_threshold_kt": _ACE_MIN_KT,
         "wind_source": "ATCF b-deck (NHC/JTWC 1-min sustained)",
+        "update_cadence": "6-hourly synoptic best-track entries; "
+                          "server cache 30 min",
+        "cache_ttl_s": int(_ACE_LIVE_TTL),
         "n_decks": len(urls),
         "basins": basins,
     }

@@ -1471,7 +1471,9 @@
                     (ACE = 10⁻⁴ Σ v², 6-hourly synoptic points at ≥ 34 kt
                     while tropical or subtropical). Southern Hemisphere
                     basins run July-June and are labeled by the year the
-                    season ends.
+                    season ends. The curve therefore advances in 6-hourly
+                    steps: a storm at 65 kt adds 0.42 per step (1.7/day),
+                    one at 130 kt adds 1.69 per step (6.8/day).
                 </p>
                 <div class="seasonal-ace-chips" id="seasonal-ace-chips"></div>
                 <div class="seasonal-ts-controls">
@@ -1502,6 +1504,7 @@
                 </div>
                 <div id="seasonal-ace-plot" class="seasonal-ts-plot"></div>
                 <p class="seasonal-panel-desc" id="seasonal-ace-note"></p>
+                <div class="seasonal-ace-storms" id="seasonal-ace-storms"></div>
             </section>
 
             <!-- Panel B: Live SST anomaly map (global by default) -->
@@ -2677,7 +2680,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260802a';
+        var _LAZY_ASSET_V = '?v=20260803a';
         var _lazyViewMods = {
             recon:       { js: ['realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
