@@ -1298,6 +1298,7 @@
                 _renderTimeSeries();
                 _renderIndices();
                 if (state.ace_pace) _renderAcePace();
+                _evoApplyTheme();
             }
         });
         obs.observe(document.documentElement, { attributes: true,
@@ -8633,6 +8634,54 @@
                 if (origSliders) Plotly.relayout(el, { sliders: origSliders });
                 throw e;
             });
+    }
+
+    // Re-color the evolution figure when the theme toggles.
+    //
+    // Its text colors are resolved at draw time and it is NOT re-rendered
+    // on a theme change (a full redraw would rebuild every frame and
+    // reset the scrub position), so before this the map kept the previous
+    // theme's ink — near-white axis labels on a white background after
+    // switching to light. Relayout/restyle just the color properties
+    // instead: cheap, and the animation state survives.
+    //
+    // Every color below is pinned explicitly because Plotly's
+    // layout.font.color does NOT cascade into nested font specs that
+    // override other properties, nor into a trace's colorbar.
+    function _evoApplyTheme() {
+        var el = document.getElementById('seasonal-evo-map');
+        if (!el || !el.layout || typeof Plotly === 'undefined') return;
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var textColor = isDark ? '#dfe6f0' : '#1f2937';
+        try {
+            Plotly.relayout(el, {
+                'font.color': textColor,
+                'xaxis.title.font.color': textColor,
+                'xaxis.tickfont.color': textColor,
+                'yaxis.title.font.color': textColor,
+                'yaxis.tickfont.color': textColor,
+                // The watermark annotations carry their own theme ink.
+                annotations: (el.layout.annotations || []).map(function (a) {
+                    if (!_isWatermarkAnnotation(a)) return a;
+                    var fresh = _watermarkAnnotations().filter(function (w) {
+                        return w.text === a.text;
+                    })[0];
+                    return fresh || a;
+                }),
+            });
+            // Colorbar fonts live on the trace, not the layout.
+            var idx = (el.data || []).map(function (t, i) {
+                return t.colorbar ? i : -1;
+            }).filter(function (i) { return i >= 0; });
+            if (idx.length) {
+                Plotly.restyle(el, {
+                    'colorbar.title.font.color': textColor,
+                    'colorbar.tickfont.color': textColor,
+                }, idx);
+            }
+        } catch (e) {
+            console.warn('[seasonal-evo] theme re-apply failed', e);
+        }
     }
 
     // Fixed CSS-pixel base width for saved figures — keeps mobile vs
