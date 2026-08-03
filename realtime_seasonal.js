@@ -1311,34 +1311,28 @@
     // both export paths (Plotly's toImage and html2canvas) can draw it
     // without a network round-trip and without tainting the canvas.
     // -------------------------------------------------------------------
-    var TC_LOGO_URL = 'tc-atlas-icon.svg';
+    // The site's actual mark — the same file the topbar renders
+    // (`.topbar-icon`). tc-atlas-icon.svg is a different, simpler glyph
+    // and is NOT the brand logo; don't substitute it here.
+    var TC_LOGO_URL = 'tc-atlas-icon.png';
     var _tcLogoPromise = null;
     var _tcLogo = null;          // {uri, img} once resolved
 
     function _tcLogoLoad() {
         if (_tcLogoPromise) return _tcLogoPromise;
+        // Fetched as a blob rather than pointed at directly so the decoded
+        // image can never taint an export canvas.
         _tcLogoPromise = fetch(TC_LOGO_URL)
             .then(function (r) {
                 if (!r.ok) throw new Error('logo ' + r.status);
-                return r.text();
+                return r.blob();
             })
-            .then(function (svg) {
-                var uri = 'data:image/svg+xml;charset=utf-8,' +
-                          encodeURIComponent(svg);
+            .then(function (blob) {
+                var uri = URL.createObjectURL(blob);
                 return new Promise(function (resolve, reject) {
                     var img = new Image();
                     img.onload = function () {
-                        // Rasterize once. Plotly's toImage is unreliable
-                        // at rendering a nested SVG layout image, so the
-                        // figure path gets a PNG data URI; the canvas
-                        // paths can use either.
-                        var c = document.createElement('canvas');
-                        c.width = c.height = 256;
-                        c.getContext('2d').drawImage(img, 0, 0, 256, 256);
-                        var pngUri = uri;
-                        try { pngUri = c.toDataURL('image/png'); }
-                        catch (e) { /* keep the SVG URI */ }
-                        _tcLogo = { uri: uri, pngUri: pngUri, img: img };
+                        _tcLogo = { uri: uri, img: img };
                         resolve(_tcLogo);
                     };
                     img.onerror = function () {

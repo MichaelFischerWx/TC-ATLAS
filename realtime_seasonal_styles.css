@@ -65,6 +65,11 @@
                             sticky pin tucks the bar right against the
                             secondary tab bar instead of leaving a gap */
     z-index: 6;
+    /* .seasonal-main is a column flex container taller than the viewport,
+       so its children are shrinkable by default — on a phone the browser
+       squeezed this bar to ~16 px and the panel chips were sliced off at
+       the top. Never shrink it. */
+    flex: 0 0 auto;
     display: flex;
     flex-wrap: wrap;
     gap: 4px 6px;

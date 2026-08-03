@@ -34,13 +34,23 @@
             || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
     }
 
-    /* ---- PNG resolution metadata ------------------------------------
+    /* ---- Print resolution -------------------------------------------
      * Canvas-produced PNGs carry no pHYs chunk, so print and publication
      * tools assume 72 dpi and blow a 2800-px figure up to a 39-inch
-     * poster. Pass {dpi: 300} to save()/savePlotly() and the delivered
-     * file declares that resolution. Purely additive: callers that don't
-     * ask for it get byte-identical output to before.
+     * poster. Every PNG delivered through TCExport is therefore stamped
+     * 300 dpi by default; pass {dpi: 0} to opt a call site out, or a
+     * different number to override.
+     *
+     * The tag only DECLARES a resolution — savePlotly additionally
+     * renders enough device pixels to back it (see PRINT_MIN_PX). Raster
+     * sources (satellite imagery, map tiles) are tagged but never
+     * upscaled: interpolating them would invent detail that isn't there.
      */
+    var DEFAULT_PNG_DPI = 300;
+    /* 300 dpi across an 8-inch figure. */
+    var PRINT_MIN_PX = 2400;
+    /* Guard against a pathological scale on a tiny chart. */
+    var MAX_PRINT_SCALE = 8;
     var _CRC_TABLE = (function () {
         var t = new Uint32Array(256);
         for (var n = 0; n < 256; n++) {
@@ -315,7 +325,8 @@
             if (!blob || !blob.size) {
                 throw new Error('TCExport: export produced no data');
             }
-            return opts.dpi ? pngWithDpi(blob, opts.dpi) : blob;
+            var dpi = (opts.dpi === undefined) ? DEFAULT_PNG_DPI : opts.dpi;
+            return dpi ? pngWithDpi(blob, dpi) : blob;
         }).then(function (blob) {
             if (!isTouch()) {
                 downloadOrOpen(blob, filename);
@@ -342,6 +353,18 @@
         var spec = { format: opts.format || 'png', scale: opts.scale || 3 };
         if (opts.width) spec.width = opts.width;
         if (opts.height) spec.height = opts.height;
+        /* Raise the scale until the figure clears 300 dpi at a normal
+         * print width. Plotly re-renders vectors at the export size, so
+         * this buys real detail rather than interpolation, and the figure
+         * looks identical — every dimension scales together. Callers that
+         * need an exact pixel size pass {printReady: false}. */
+        if (spec.format === 'png' && opts.printReady !== false) {
+            var cssW = spec.width || gd.clientWidth || gd.offsetWidth || 0;
+            if (cssW > 0) {
+                spec.scale = Math.min(MAX_PRINT_SCALE,
+                    Math.max(spec.scale, Math.ceil(PRINT_MIN_PX / cssW)));
+            }
+        }
         return save(P.toImage(gd, spec), filename, opts);
     }
 
