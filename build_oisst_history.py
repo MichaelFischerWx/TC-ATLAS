@@ -1532,12 +1532,37 @@ def build_correlations(out_dir: Path,
         dist2 = sq[:, None] + sq[None, :] - 2 * gram
         return np.sqrt(np.maximum(dist2, 0))
     total = 0
+    def _season_finished(basin: str, season: int) -> bool:
+        """Has this basin's season completed its calendar window?
+
+        NH seasons close Dec 31 of the season year; SH (SI/SP) close Jun 30,
+        having opened the previous Jul 1 — the IBTrACS `season` convention.
+        """
+        today = datetime.now(timezone.utc)
+        if basin in ("SI", "SP"):
+            current = today.year + 1 if today.month >= 7 else today.year
+        else:
+            current = today.year
+        return season < current
+
     for basin in ACE_BASINS:
         region_corr[basin] = {}
         distance_matrices[basin] = {}
         ace_dict = ace_all["basins"][basin]["years"]
         ace_full = np.array([ace_dict.get(y, 0.0) for y in years_all.tolist()],
                             dtype=np.float64)
+        # A season still in progress carries a PARTIAL ACE total (the North
+        # Atlantic sat at 2.6 on 3 Aug 2026 against a 122 climatology), and
+        # `ace_dict.get(y, 0.0)` hands back a flat 0.0 for a season with no
+        # entry at all. Correlating either against that year's SST tells the
+        # regression an unfinished season was a dead one — and since the
+        # current year is also the warmest on record, it drags r negative
+        # across the whole tropical band in exactly the pre-season months
+        # (Jan-May) these maps are used for. Correlate over FINISHED seasons
+        # only. The distance matrices below deliberately keep every year:
+        # ranking analogs *for* the in-progress season is their entire job.
+        season_done = np.array(
+            [_season_finished(basin, int(y)) for y in years_all.tolist()])
         for month in range(1, 13):
             sst_ym = sst_stack[:, month - 1]   # (n_years, lat, lon)
             # Mask out years where this month's SST is entirely missing
@@ -1548,24 +1573,37 @@ def build_correlations(out_dir: Path,
                 continue
             sst_v = sst_ym[valid_year_mask]
             ace_v = ace_full[valid_year_mask]
+            # Correlation subset: SST present AND the season finished.
+            corr_sub = season_done[valid_year_mask]
+            if corr_sub.sum() < 10:
+                log.warning("  %s month %d: only %d finished seasons; skipping",
+                            basin, month, int(corr_sub.sum()))
+                continue
+            sst_c = sst_v[corr_sub]
+            ace_c = ace_v[corr_sub]
             # Raw correlation
             # Pearson + Spearman correlation in parallel for each kind.
             # Spearman is robust to ACE outliers (1990 WP, 2005 NA, 2018
             # EP …); useful as an option but Pearson stays default since
             # it matches the standard convention in the literature.
-            r_raw  = _corr_along_year(sst_v, ace_v)
-            r_raw_s = _spearman_along_year(sst_v, ace_v)
+            r_raw  = _corr_along_year(sst_c, ace_c)
+            r_raw_s = _spearman_along_year(sst_c, ace_c)
             _render(r_raw, f"{basin}_{month:02d}_raw.png",
                     ACE_BASINS[basin], month, "raw")
             _render(r_raw_s, f"{basin}_{month:02d}_raw_spearman.png",
                     ACE_BASINS[basin], month, "raw_spearman")
             _write_grid_sidecar(r_raw, f"{basin}_{month:02d}_raw.grid.json")
             _write_grid_sidecar(r_raw_s, f"{basin}_{month:02d}_raw_spearman.grid.json")
-            # Detrended (linear-in-year removed from both SST and ACE)
-            ace_dt = _detrend(ace_v.reshape(-1, 1)).ravel()
+            # Detrended (linear-in-year removed from both SST and ACE).
+            # Two detrends: one over finished seasons for the correlation,
+            # one over every year for the distance matrices below — fitting
+            # the trend on a different year set than it is applied to would
+            # leave a residual tilt in whichever product used the other fit.
+            ace_dt = _detrend(ace_c.reshape(-1, 1)).ravel()
+            sst_c_dt = _detrend(sst_c)
             sst_dt = _detrend(sst_v)
-            r_det  = _corr_along_year(sst_dt, ace_dt)
-            r_det_s = _spearman_along_year(sst_dt, ace_dt)
+            r_det  = _corr_along_year(sst_c_dt, ace_dt)
+            r_det_s = _spearman_along_year(sst_c_dt, ace_dt)
             _render(r_det, f"{basin}_{month:02d}_detrended.png",
                     ACE_BASINS[basin], month, "detrended")
             _render(r_det_s, f"{basin}_{month:02d}_detrended_spearman.png",
@@ -1575,8 +1613,9 @@ def build_correlations(out_dir: Path,
             # Relative SST (Vecchi-Soden); ACE detrended for consistency.
             trop_v = trop_mean_grid[valid_year_mask, month - 1]
             sst_v_rel = sst_v - trop_v[:, None, None]
-            r_rel  = _corr_along_year(sst_v_rel, ace_dt)
-            r_rel_s = _spearman_along_year(sst_v_rel, ace_dt)
+            sst_c_rel = sst_v_rel[corr_sub]
+            r_rel  = _corr_along_year(sst_c_rel, ace_dt)
+            r_rel_s = _spearman_along_year(sst_c_rel, ace_dt)
             _render(r_rel, f"{basin}_{month:02d}_relative.png",
                     ACE_BASINS[basin], month, "relative")
             _render(r_rel_s, f"{basin}_{month:02d}_relative_spearman.png",
