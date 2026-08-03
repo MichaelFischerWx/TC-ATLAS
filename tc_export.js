@@ -51,6 +51,11 @@
     var PRINT_MIN_PX = 2400;
     /* Guard against a pathological scale on a tiny chart. */
     var MAX_PRINT_SCALE = 8;
+    /* Safari caps a canvas near 16.7 megapixels and 4096 px per side, and
+     * past either limit it returns a BLANK canvas rather than throwing —
+     * the export then silently produces nothing. Budget under both. */
+    var MAX_CANVAS_PX = 12e6;
+    var MAX_CANVAS_SIDE = 4096;
     var _CRC_TABLE = (function () {
         var t = new Uint32Array(256);
         for (var n = 0; n < 256; n++) {
@@ -363,6 +368,15 @@
             if (cssW > 0) {
                 spec.scale = Math.min(MAX_PRINT_SCALE,
                     Math.max(spec.scale, Math.ceil(PRINT_MIN_PX / cssW)));
+            }
+            /* Clamp to what the canvas backend can actually allocate. */
+            var cssH = spec.height || gd.clientHeight || gd.offsetHeight || 0;
+            if (cssW > 0 && cssH > 0) {
+                var cap = Math.min(Math.sqrt(MAX_CANVAS_PX / (cssW * cssH)),
+                                   MAX_CANVAS_SIDE / cssW,
+                                   MAX_CANVAS_SIDE / cssH);
+                cap = Math.floor(cap * 10) / 10;
+                if (cap > 0) spec.scale = Math.max(1, Math.min(spec.scale, cap));
             }
         }
         return save(P.toImage(gd, spec), filename, opts);

@@ -88,6 +88,8 @@
         // budget on first paint.
         ts: { region: 'atl_mdr', variable: 'sst', history: 'all',
               highlight: 'none', resolution: 'daily' },
+        // month is re-resolved to the current calendar month once the
+        // data lands (see _resolveAnalogMonth); 5 is only a pre-load stub.
         an: { year: null, month: 5, regions: 'all',
               method: 'grid_weighted', basin: 'NA', kind: 'relative',
               stat: 'pearson', topN: 'auto' },
@@ -1449,8 +1451,32 @@
     var EXPORT_PRINT_IN = 8;                       // target print width
     var EXPORT_MIN_PX = EXPORT_DPI * EXPORT_PRINT_IN;   // 2400 px
 
-    function _exportScaleFor(cssWidthPx) {
-        return Math.max(2, Math.ceil(EXPORT_MIN_PX / Math.max(1, cssWidthPx)));
+    // Safari caps a canvas at roughly 16.7 megapixels total and 4096 px
+    // per side; past either limit it silently hands back a blank canvas
+    // and toBlob returns null, so the save just does nothing. A phone-
+    // width panel (339 × 990 CSS) asking for 300 dpi wants scale 8 —
+    // 2712 × 7920, 21.5 Mpx — which is exactly how the analog panel's
+    // download broke on iOS. Budgets kept under the cap with margin.
+    // Budgets sit below the true limits on purpose: the panel can reflow
+    // slightly between measuring it and html2canvas capturing it, so a
+    // scale computed right at the ceiling can still overshoot.
+    var EXPORT_MAX_CANVAS_PX = 10e6;
+    var EXPORT_MAX_SIDE_PX = 3800;
+
+    function _exportScaleFor(cssWidthPx, cssHeightPx) {
+        var w = Math.max(1, cssWidthPx || 1);
+        var scale = Math.max(2, Math.ceil(EXPORT_MIN_PX / w));
+        var h = cssHeightPx || 0;
+        if (h > 0) {
+            var byArea = Math.sqrt(EXPORT_MAX_CANVAS_PX / (w * h));
+            var bySide = Math.min(EXPORT_MAX_SIDE_PX / w,
+                                  EXPORT_MAX_SIDE_PX / h);
+            // Floor to 1 decimal — html2canvas and Plotly both accept
+            // fractional scales, and rounding down keeps us inside.
+            var cap = Math.floor(Math.min(byArea, bySide) * 10) / 10;
+            if (cap > 0) scale = Math.min(scale, cap);
+        }
+        return Math.max(1, scale);
     }
 
     // The pHYs stamping itself lives in tc_export.js (TCExport.pngWithDpi)
@@ -1517,7 +1543,7 @@
             // then scaled to clear 300 dpi at an 8-inch print width.
             var w = Math.max(plot.clientWidth, 1400);
             var h = Math.max(plot.clientHeight, 800);
-            var scale = _exportScaleFor(w);
+            var scale = _exportScaleFor(w, h);
             var fontK = _exportFontScale(plot.clientWidth, w);
             _tcLogoLoad().then(function () {
                 // Render from a DETACHED copy of the figure rather than
@@ -1732,7 +1758,8 @@
                     // Enough device pixels to clear 300 dpi at an 8-inch
                     // print width even when the panel is phone-narrow —
                     // a flat scale of 2 on a 700-px panel was only ~175.
-                    scale: _exportScaleFor(panel.offsetWidth),
+                    scale: _exportScaleFor(panel.offsetWidth,
+                                           panel.offsetHeight),
                     ignoreElements: function (el) {
                         // Both corner controls are UI chrome, not figure
                         // content — and the expand arrow sits exactly
@@ -4643,6 +4670,33 @@
                 }
             }
         }
+    }
+
+    // Analog panel opens on the CURRENT month rather than a fixed May.
+    // "Which seasons look like this one right now" is the question the
+    // panel answers, so the answer should move with the calendar.
+    //
+    // The current month only has analogs once the daily job has written
+    // its month-to-date vector, so this walks back from today to the most
+    // recent month that actually resolves — reusing _buildAnalogs rather
+    // than re-deriving which sources cover which month.
+    function _resolveAnalogMonth() {
+        var sel = document.getElementById('seasonal-an-month');
+        var saved = state.an.month;
+        var target = (new Date()).getUTCMonth() + 1;
+        for (var m = target; m >= 1; m--) {
+            state.an.month = m;
+            var bundle = _buildAnalogs();
+            if (bundle && bundle.rows && bundle.rows.length) {
+                if (sel) sel.value = String(m);
+                return m;
+            }
+        }
+        // Nothing in this calendar year resolves yet (early January).
+        // Leave it on the current month so the panel explains itself.
+        state.an.month = target;
+        if (sel) sel.value = String(target);
+        return target;
     }
 
     function _populateAnalogYearSelector() {
@@ -10093,6 +10147,7 @@
         Promise.all([p1, p2, p3, p4, p5, p6, p7]).then(function () {
             _setStatus('');
             _populateAnalogYearSelector();
+            _resolveAnalogMonth();
             _populateOverlayYears();
             _renderScatter();
             _renderTimeSeries();
