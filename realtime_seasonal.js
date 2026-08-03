@@ -1542,12 +1542,11 @@
                         ctx.fillStyle = isDark ? '#0d1117' : '#ffffff';
                         ctx.fillRect(0, 0, c.width, c.height);
                         ctx.drawImage(img, 0, 0);
-                        // Same lockup renderer the panel-image exports
-                        // use; `w` is the figure's CSS width, so the
-                        // helper derives the right device-pixel scale,
-                        // and fontK keeps the lockup in step with the
-                        // figure's scaled-up type.
-                        _stampTcAtlasWatermark(c, w, fontK);
+                        // `w` is the figure's CSS width, so the helper
+                        // derives the right device-pixel scale; fontK
+                        // keeps the lockup in step with the figure's
+                        // scaled-up type.
+                        _stampFigureAttribution(c, w, fontK);
                         c.toBlob(function (b) {
                             b ? resolve(b) : reject(new Error('no blob'));
                         }, 'image/png');
@@ -1584,6 +1583,41 @@
             document.head.appendChild(s);
         });
         return window._html2canvasPending;
+    }
+
+    // Attribution for a rendered Plotly FIGURE: one lockup — mark,
+    // wordmark, URL — in the bottom-right corner, below the axis.
+    //
+    // Deliberately not the top-right corner the panel captures use: a
+    // horizontal legend sits in that band, and once export type is scaled
+    // up the legend grows wide enough to run straight through the lockup.
+    // The area under the x-axis is the only corner nothing else occupies.
+    function _stampFigureAttribution(canvas, cssWidthPx, typeScale) {
+        var ctx = canvas.getContext('2d');
+        var scale = (canvas.width / Math.max(1, cssWidthPx)) * (typeScale || 1);
+        var pad = Math.round(12 * scale);
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var ink = isDark ? 'rgba(220,228,238,0.60)' : 'rgba(40,55,75,0.50)';
+        var size = Math.round(9 * scale);
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'bottom';
+        ctx.fillStyle = ink;
+        ctx.font = '500 ' + size + 'px "DM Sans", system-ui, sans-serif';
+        var text = 'TC-ATLAS · tcatlas.org';
+        var baseY = canvas.height - Math.round(pad * 0.6);
+        ctx.fillText(text, canvas.width - pad, baseY);
+        if (_tcLogo && _tcLogo.img) {
+            var textW = ctx.measureText(text).width;
+            var logoSize = Math.round(size * 1.45);
+            ctx.drawImage(_tcLogo.img,
+                          canvas.width - pad - textW - logoSize -
+                              Math.round(size * 0.5),
+                          baseY - logoSize + Math.round(size * 0.12),
+                          logoSize, logoSize);
+        }
+        ctx.restore();
     }
 
     // `typeScale` matches the lockup to the figure's own type. Plotly
