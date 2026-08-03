@@ -1362,6 +1362,84 @@
         return a && (a.text === 'TC-ATLAS' || a.text === 'tcatlas.org');
     }
 
+    // ---- Export typography --------------------------------------------
+    // Plotly font sizes are absolute points, so stretching a 830-px panel
+    // to a 1400-px export shrinks every label RELATIVE to the figure —
+    // tick labels landed around 5 pt on a 9-inch print. Scale type by the
+    // same factor the layout was stretched, plus a small boost so a saved
+    // figure reads at slide/paper distance rather than at panel distance.
+    var EXPORT_FONT_BOOST = 1.25;
+    var EXPORT_FONT_MIN = 1.25;
+    var EXPORT_FONT_MAX = 2.4;   // a phone-width panel would otherwise
+                                 // blow labels up to 3-4x
+
+    function _exportFontScale(onScreenW, exportW) {
+        if (!onScreenW || !exportW) return EXPORT_FONT_BOOST;
+        var k = (exportW / onScreenW) * EXPORT_FONT_BOOST;
+        return Math.min(EXPORT_FONT_MAX, Math.max(EXPORT_FONT_MIN, k));
+    }
+
+    // Multiply every `size` that lives on a font-ish object. Catches
+    // layout.font, axis tickfont/title.font, legend.font, annotation
+    // fonts and colorbar fonts wherever they sit in the tree.
+    function _scaleFontsDeep(obj, k) {
+        if (!obj || typeof obj !== 'object') return obj;
+        Object.keys(obj).forEach(function (key) {
+            var v = obj[key];
+            if (!v || typeof v !== 'object') return;
+            if (/font$/i.test(key) && typeof v.size === 'number') {
+                v.size = Math.round(v.size * k * 10) / 10;
+            }
+            _scaleFontsDeep(v, k);
+        });
+        return obj;
+    }
+
+    // Detached layout for the export: theme forced opaque, on-screen
+    // attribution stripped (the canvas stamp redraws it as a lockup with
+    // the mark), fonts scaled.
+    function _exportLayout(layout, fontK, isDark) {
+        var out = JSON.parse(JSON.stringify(layout || {}));
+        out.paper_bgcolor = isDark ? '#0d1117' : '#ffffff';
+        out.plot_bgcolor = isDark ? '#0d1117' : '#ffffff';
+        out.annotations = (out.annotations || []).filter(function (a) {
+            return !_isWatermarkAnnotation(a);
+        });
+        _scaleFontsDeep(out, fontK);
+        // Margins hold the scaled tick labels and axis titles, so they
+        // have to grow with the type or the labels collide with the frame.
+        var m = out.margin;
+        if (m) {
+            ['l', 'r', 't', 'b'].forEach(function (side) {
+                if (typeof m[side] === 'number') {
+                    m[side] = Math.round(m[side] * Math.min(fontK, 1.6));
+                }
+            });
+        }
+        return out;
+    }
+
+    // Traces are passed through by reference except where a colorbar
+    // carries its own fonts — those get a shallow copy so the live chart
+    // keeps its on-screen sizes. Avoids deep-cloning the data arrays.
+    function _exportData(data, fontK) {
+        return (data || []).map(function (tr) {
+            var cb = tr.colorbar || (tr.marker && tr.marker.colorbar);
+            if (!cb) return tr;
+            var copy = Object.assign({}, tr);
+            if (tr.colorbar) {
+                copy.colorbar = _scaleFontsDeep(
+                    JSON.parse(JSON.stringify(tr.colorbar)), fontK);
+            }
+            if (tr.marker && tr.marker.colorbar) {
+                copy.marker = Object.assign({}, tr.marker);
+                copy.marker.colorbar = _scaleFontsDeep(
+                    JSON.parse(JSON.stringify(tr.marker.colorbar)), fontK);
+            }
+            return copy;
+        });
+    }
+
     // ---- 300 dpi ------------------------------------------------------
     // Canvas PNGs carry no resolution metadata, so print/publication tools
     // assume 72 dpi and scale the figure to a poster. We render at enough
@@ -1433,14 +1511,6 @@
             // PNG isn't transparent (otherwise it'd composite onto
             // whatever app's background the user pastes into).
             var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-            // Remember exactly what we override so the live figure can be
-            // put back without re-rendering every panel on the tab (which
-            // missed any panel not in the re-render list).
-            var prev = {
-                paper_bgcolor: plot.layout.paper_bgcolor,
-                plot_bgcolor: plot.layout.plot_bgcolor,
-                annotations: (plot.layout.annotations || []).slice(),
-            };
             btn.disabled = true;
             // Figure width is pinned to at least 1400 CSS px so a
             // phone-sized viewport still yields a publication figure,
@@ -1448,17 +1518,16 @@
             var w = Math.max(plot.clientWidth, 1400);
             var h = Math.max(plot.clientHeight, 800);
             var scale = _exportScaleFor(w);
+            var fontK = _exportFontScale(plot.clientWidth, w);
             _tcLogoLoad().then(function () {
-                var saveOverride = isDark
-                    ? { paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117' }
-                    : { paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff' };
-                // Drop the on-screen attribution text; the canvas stamp
-                // below redraws it as a proper lockup with the mark.
-                saveOverride.annotations = prev.annotations.filter(
-                    function (a) { return !_isWatermarkAnnotation(a); });
-                return window.Plotly.relayout(plot, saveOverride);
-            }).then(function () {
-                return window.Plotly.toImage(plot, {
+                // Render from a DETACHED copy of the figure rather than
+                // relayout-ing the live one: no flicker, no restore step,
+                // and the export can carry bigger fonts than the panel.
+                var fig = {
+                    data: _exportData(plot.data, fontK),
+                    layout: _exportLayout(plot.layout, fontK, isDark),
+                };
+                return window.Plotly.toImage(fig, {
                     format: 'png', width: w, height: h, scale: scale });
             }).then(function (dataUrl) {
                 // Re-render into a canvas so the spiral mark can be
@@ -1475,8 +1544,10 @@
                         ctx.drawImage(img, 0, 0);
                         // Same lockup renderer the panel-image exports
                         // use; `w` is the figure's CSS width, so the
-                        // helper derives the right device-pixel scale.
-                        _stampTcAtlasWatermark(c, w);
+                        // helper derives the right device-pixel scale,
+                        // and fontK keeps the lockup in step with the
+                        // figure's scaled-up type.
+                        _stampTcAtlasWatermark(c, w, fontK);
                         c.toBlob(function (b) {
                             b ? resolve(b) : reject(new Error('no blob'));
                         }, 'image/png');
@@ -1493,9 +1564,7 @@
             }).catch(function (err) {
                 console.error('[seasonal] save failed', err);
             }).then(function () {
-                _refreshTheme();
                 btn.disabled = false;
-                return window.Plotly.relayout(plot, prev);
             });
         });
         panel.appendChild(btn);
@@ -1517,9 +1586,14 @@
         return window._html2canvasPending;
     }
 
-    function _stampTcAtlasWatermark(canvas, panelWidthPx) {
+    // `typeScale` matches the lockup to the figure's own type. Plotly
+    // exports scale their fonts up (see _exportFontScale), so a fixed-size
+    // stamp would end up visibly smaller than every label around it. The
+    // html2canvas panels capture DOM text at panel proportions and pass 1.
+    function _stampTcAtlasWatermark(canvas, panelWidthPx, typeScale) {
         var ctx = canvas.getContext('2d');
-        var scale = canvas.width / Math.max(1, panelWidthPx);
+        var scale = (canvas.width / Math.max(1, panelWidthPx)) *
+                    (typeScale || 1);
         var pad = Math.round(12 * scale);
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         // Dark-on-light in light mode, light-on-dark in dark mode — same
