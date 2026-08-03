@@ -826,7 +826,48 @@ body.seasonal-maximized .seasonal-header {
    never overlaps Plotly's modebar (which sits at the figure's
    top-right). See _renderScatter() in realtime_seasonal.js. */
 
-/* Panel B — region time series */
+/* Panel A — season ACE pace: one chip per basin, so the all-basin picture
+   reads at a glance and clicking a chip switches the plotted basin. */
+.seasonal-ace-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 4px 0 12px;
+}
+.seasonal-ace-chip {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 6px 10px;
+    min-width: 118px;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    background: var(--surface-raised, #161b22);
+    cursor: pointer;
+    font-size: 0.72rem;
+    color: var(--text-dim, #94a3b8);
+    transition: border-color .12s ease, background .12s ease;
+}
+.seasonal-ace-chip:hover { border-color: rgba(120,170,210,0.55); }
+.seasonal-ace-chip.is-active {
+    border-color: #2e7dff;
+    background: rgba(46,125,255,0.10);
+}
+.seasonal-ace-chip .ace-chip-basin {
+    font-weight: 600;
+    letter-spacing: .02em;
+    color: var(--text, #e0e0e0);
+}
+.seasonal-ace-chip .ace-chip-val {
+    font-size: 0.95rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text, #e0e0e0);
+}
+.seasonal-ace-chip .ace-chip-pct { font-variant-numeric: tabular-nums; }
+.seasonal-ace-chip .ace-hi { color: #ff7a59; }
+.seasonal-ace-chip .ace-lo { color: #6da8e6; }
+
+/* Panel C — region time series */
 .seasonal-ts-controls {
     display: flex;
     flex-wrap: wrap;

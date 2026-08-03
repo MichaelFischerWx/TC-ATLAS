@@ -288,8 +288,10 @@ def compute_today_indices(sst: xr.DataArray, clim_mean: xr.DataArray) -> tuple:
     return row, anom, anom_rel
 
 
-def fetch_current_month_mtd_anomaly(clim_mean: xr.DataArray):
-    """Month-to-date mean anomaly grids for the current calendar month.
+def fetch_month_mean_anomaly(clim_mean: xr.DataArray,
+                             year: int | None = None,
+                             month: int | None = None):
+    """Mean anomaly grids over every available day of one calendar month.
 
     Averages the anomaly of every available day this month (each day's SST
     minus its day-interpolated climatology, via compute_today_indices so the
@@ -302,11 +304,20 @@ def fetch_current_month_mtd_anomaly(clim_mean: xr.DataArray):
     full-month anomaly — and persistence-of-anomaly is exactly the projection
     the analog distance assumes (projected full-month anom = current anom).
 
+    Defaults to the current calendar month (month-to-date). Pass an explicit
+    (year, month) for a COMPLETED month — then the returned field is the full
+    monthly mean anomaly, not a persistence projection, which is what the
+    just-finished month needs while it waits for the finalized distance
+    matrix rebuild.
+
     Returns (anom_mtd_da, anom_rel_mtd_da, n_days, through_date) or None if no
-    current-month days are available yet (caller falls back to single-day).
+    days are available yet (caller falls back to single-day).
     """
     today = datetime.now(timezone.utc).date()
-    year, month = today.year, today.month
+    if year is None:
+        year = today.year
+    if month is None:
+        month = today.month
     url = OISST_DAILY_OPENDAP_TMPL.format(year=year)
     try:
         ds = xr.open_dataset(url)
@@ -338,7 +349,8 @@ def fetch_current_month_mtd_anomaly(clim_mean: xr.DataArray):
         ds.close()
 
     if not anoms:
-        log.warning("  MTD anomaly: no current-month days available yet")
+        log.warning("  month-mean anomaly: no days available yet for %d-%02d",
+                    year, month)
         return None
     # NaN-safe mean across days (land/ice cells that are NaN on some days
     # still contribute their finite days rather than poisoning the cell).
@@ -346,15 +358,66 @@ def fetch_current_month_mtd_anomaly(clim_mean: xr.DataArray):
     anom_rel_mtd = xr.concat(rels, dim="_day").mean(dim="_day", skipna=True)
     anom_mtd.attrs = {"time": dates[-1]}
     anom_rel_mtd.attrs = {"time": dates[-1]}
-    log.info("  MTD anomaly: averaged %d day(s) of %d-%02d (through %s)",
+    log.info("  month-mean anomaly: averaged %d day(s) of %d-%02d (through %s)",
              len(anoms), year, month, dates[-1])
     return anom_mtd, anom_rel_mtd, len(anoms), dates[-1]
+
+
+# Back-compat alias — the current-month default is the original behavior.
+fetch_current_month_mtd_anomaly = fetch_month_mean_anomaly
+
+
+_MATRIX_COVERAGE: dict[int, set[int]] | None = None
+
+
+def _matrix_covered_months(year: int) -> set[int]:
+    """Months of `year` already present in the finalized grid-weighted
+    distance matrix on GCS.
+
+    `analog_distance_matrices.json` is only rebuilt by the manual
+    `build_oisst_history.py --step correlations` backfill, so completed
+    months sit outside it for however long that gap runs (June + July 2026
+    sat there for two months). Knowing the coverage lets the daily job fill
+    exactly the holes instead of guessing "last month".
+
+    Returns an empty set if the matrix can't be read — the caller then
+    fills the recent completed months unconditionally, which is the safe
+    direction (a redundant entry is ignored by the frontend, a missing one
+    is a visible "no analogs" message).
+    """
+    global _MATRIX_COVERAGE
+    if _MATRIX_COVERAGE is None:
+        _MATRIX_COVERAGE = {}
+        local = WORK_DIR / "analog_distance_matrices.json"
+        try:
+            if local.exists() or _download_blob(
+                    "analog_distance_matrices.json", local):
+                dm = json.loads(local.read_text())
+                # Every basin shares the same year axis per month; NA is
+                # representative. One parse gives coverage for all years.
+                for mm, entry in (dm.get("basins", {}).get("NA", {}) or {}).items():
+                    for y in (entry.get("years") or []):
+                        _MATRIX_COVERAGE.setdefault(int(y), set()).add(int(mm))
+        except Exception as e:
+            log.warning("  analog matrix coverage unreadable: %s", e)
+        finally:
+            # The 6.7 MB matrix isn't needed again this run.
+            try:
+                local.unlink()
+            except Exception:
+                pass
+    months = _MATRIX_COVERAGE.get(year, set())
+    log.info("  finalized analog matrix covers %d month(s) of %d: %s",
+             len(months), year, sorted(months))
+    return months
 
 
 def compute_preliminary_analog_distances(
         anom_raw: xr.DataArray,
         anom_rel: xr.DataArray,
         ace_basins: dict,
+        year: int | None = None,
+        month: int | None = None,
 ) -> dict:
     """Compute grid-weighted L2 distance from the live preliminary
     current-month anomaly field to each historical year for every
@@ -377,8 +440,10 @@ def compute_preliminary_analog_distances(
     from build_oisst_history import ACE_BASINS
 
     today = datetime.now(timezone.utc).date()
-    year = today.year
-    month = today.month
+    if year is None:
+        year = today.year
+    if month is None:
+        month = today.month
     mm = f"{month:02d}"
 
     # ---- Coarsen the preliminary anomaly fields to the 1° grid used by
@@ -729,29 +794,85 @@ def main():
         log.info("Writing latest.json ...")
         write_latest_json(row, f"anom_png/{row['date']}.png")
 
-    log.info("Computing preliminary analog distances for Panel E ...")
+    log.info("Computing preliminary analog distances for Panel F ...")
     try:
-        # Prefer the month-to-date mean anomaly (averages all available days
-        # of the current month) over the single latest daily slab — far less
-        # noisy, especially early in a month. Falls back to the single-day
-        # field if the MTD fetch yields nothing.
-        mtd = fetch_current_month_mtd_anomaly(clim["sst_clim_mean"])
-        if mtd is not None:
-            anom_pre, anom_rel_pre, n_mtd, mtd_through = mtd
-            log.info("  analog distances use %d-day MTD mean anomaly (through %s)",
-                     n_mtd, mtd_through)
-        else:
-            anom_pre, anom_rel_pre = anom, anom_rel
-            log.warning("  MTD anomaly unavailable; using single-day field "
-                        "for analog distances")
-        prelim_dist = compute_preliminary_analog_distances(anom_pre, anom_rel_pre, None)
-        out_local = WORK_DIR / "analog_preliminary_distances.json"
-        out_local.write_text(json.dumps(prelim_dist, separators=(",", ":")))
-        if not args.local_only:
-            _upload_blob(out_local, "analog_preliminary_distances.json",
-                         "application/json")
-        log.info("  wrote analog_preliminary_distances.json (%.1f KB)",
-                 out_local.stat().st_size / 1024.0)
+        today = datetime.now(timezone.utc).date()
+        # Which months does this year still need? Always the live month,
+        # plus every COMPLETED month of this year the finalized matrix
+        # hasn't picked up yet. Without the completed months a just-ended
+        # month falls into a hole the moment the live vector rolls over —
+        # not in the matrix (that only rebuilds on the manual backfill),
+        # no longer the live month — and Panel F's grid-weighted method
+        # reports "no finalized SST" for a month that is very much over.
+        # Walk back from the live month over completed months, keeping the
+        # ones the matrix is missing. Bounded at 3 — the recent gaps are
+        # what anyone looks at, and each month costs a fresh set of
+        # anomaly-contour downloads. Crosses the year boundary so a
+        # January run still fills the previous December.
+        covered_by_year: dict[int, set[int]] = {}
+        gaps = []
+        gy, gm = today.year, today.month
+        for _ in range(12):
+            gm -= 1
+            if gm == 0:
+                gy, gm = gy - 1, 12
+            if gy not in covered_by_year:
+                covered_by_year[gy] = _matrix_covered_months(gy)
+            if gm not in covered_by_year[gy]:
+                gaps.append((gy, gm))
+            if len(gaps) >= 3:
+                break
+        wanted = list(reversed(gaps)) + [(today.year, today.month)]
+
+        entries = []
+        live_payload = None
+        for (ey, m) in wanted:
+            complete = not (ey == today.year and m == today.month)
+            got = fetch_month_mean_anomaly(clim["sst_clim_mean"], ey, m)
+            if got is not None:
+                a_pre, a_rel_pre, n_days, through = got
+                log.info("  %d-%02d: %d-day mean anomaly (through %s, %s)",
+                         ey, m, n_days, through,
+                         "complete month" if complete else "month-to-date")
+            elif not complete:
+                # Live month with no days yet (1st of the month before the
+                # OISST drop) — the single latest daily slab still ranks.
+                a_pre, a_rel_pre = anom, anom_rel
+                n_days, through = 1, row["date"]
+                log.warning("  MTD anomaly unavailable; using single-day field")
+            else:
+                log.warning("  %d-%02d: no daily coverage; skipping", ey, m)
+                continue
+            dist = compute_preliminary_analog_distances(
+                a_pre, a_rel_pre, None, year=ey, month=m)
+            dist["complete"] = complete
+            dist["n_days"] = int(n_days)
+            dist["through"] = through
+            entries.append(dist)
+            if not complete:
+                live_payload = dist
+
+        if entries:
+            # Top-level year/month/basins stay the LIVE month so an older
+            # cached frontend keeps working unchanged; `entries` is the
+            # (year, month)-keyed list the current frontend reads.
+            base = live_payload or entries[-1]
+            payload = {
+                "year": base["year"],
+                "month": base["month"],
+                "basins": base["basins"],
+                "entries": entries,
+                "generated_utc": datetime.now(timezone.utc).isoformat(),
+            }
+            out_local = WORK_DIR / "analog_preliminary_distances.json"
+            out_local.write_text(json.dumps(payload, separators=(",", ":")))
+            if not args.local_only:
+                _upload_blob(out_local, "analog_preliminary_distances.json",
+                             "application/json")
+            log.info("  wrote analog_preliminary_distances.json "
+                     "(%.1f KB, months %s)",
+                     out_local.stat().st_size / 1024.0,
+                     [e["month"] for e in entries])
     except Exception as e:
         log.warning("  preliminary distances failed: %s", e)
 

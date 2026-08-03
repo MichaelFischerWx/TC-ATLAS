@@ -1136,7 +1136,11 @@ def build_ace(out_path: Path, ibtracs_path: str | None = None,
     def _b2s(x):
         return x.decode("utf-8") if isinstance(x, (bytes, bytearray)) else str(x)
 
-    ACCEPTED_TRACK_TYPES = {"main", "PROVISIONAL"}
+    # US-PROVISIONAL = IBTrACS has only the US-agency (NHC/JTWC) track so
+    # far. That is how nearly every JTWC-basin storm arrives for the first
+    # year or two, so excluding it reported recent WP/NI/SP seasons as a
+    # flat zero rather than as missing.
+    ACCEPTED_TRACK_TYPES = {"main", "PROVISIONAL", "US-PROVISIONAL"}
     # IBTrACS nature codes counted toward ACE: tropical (TS — covers TD/TS/HU
     # in the IBTrACS scheme) and subtropical (SS) with wind ≥ 35 kt. Excludes
     # disturbance (DS), extratropical (ET), not-rated (NR), mixed (MX).
@@ -1235,7 +1239,11 @@ def build_ace_all_basins(out_path: Path,
     def _b2s(x):
         return x.decode("utf-8") if isinstance(x, (bytes, bytearray)) else str(x)
 
-    ACCEPTED_TRACK_TYPES = {"main", "PROVISIONAL"}
+    # US-PROVISIONAL = IBTrACS has only the US-agency (NHC/JTWC) track so
+    # far. That is how nearly every JTWC-basin storm arrives for the first
+    # year or two, so excluding it reported recent WP/NI/SP seasons as a
+    # flat zero rather than as missing.
+    ACCEPTED_TRACK_TYPES = {"main", "PROVISIONAL", "US-PROVISIONAL"}
     ACE_NATURES = {"TS", "SS"}
 
     n_storms, n_times = wmo_wind.shape

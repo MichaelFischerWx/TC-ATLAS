@@ -92,6 +92,11 @@
               method: 'grid_weighted', basin: 'NA', kind: 'relative',
               stat: 'pearson', topN: 'auto' },
         idx: { window: '10', variable: 'anom' },
+        // Panel A — season ACE pace. `compare` is '' | 'record' | a year.
+        acePace: { basin: 'NA', compare: '', view: 'cum' },
+        ace_pace: null,        // parsed ace_pace_climo.json
+        ace_live: null,        // /ir-monitor/seasonal/ace-live
+
         anomZoom: 'global',
         anomVar: 'raw',     // Panel A: 'raw' | 'relative' | 'shear_climo'
         // Calendar month for ERA5 climatology view. Defaults to UTC
@@ -458,6 +463,485 @@
     }
 
     // -------------------------------------------------------------------
+    // Panel A — Season ACE pace
+    //
+    // Cumulative ACE vs day-of-season, live season against the 1991-2020
+    // percentile envelope. Two data sources, one axis:
+    //   * ace_pace_climo.json — IBTrACS-built climo bands + per-season
+    //     curves (sparse [day, cumulative] pairs; the curve is piecewise
+    //     constant so only days where ACE accrued are stored).
+    //   * /ir-monitor/seasonal/ace-live — operational ATCF b-decks for the
+    //     season in progress. IBTrACS lags the JTWC basins by a year or
+    //     more, so the live season can never come from the static file.
+    //
+    // Day-of-season is a 366-day leap-year frame. NH basins start Jan 1;
+    // SI/SP start Jul 1 and are labeled by the year the season ends.
+    // -------------------------------------------------------------------
+
+    var ACE_BASIN_ORDER = ['NA', 'EP', 'WP', 'NI', 'SI', 'SP'];
+    var ACE_BASIN_SHORT = { NA: 'Atlantic', EP: 'E Pacific', WP: 'W Pacific',
+                            NI: 'N Indian', SI: 'S Indian', SP: 'S Pacific' };
+    var ACE_SH_BASINS = { SI: 1, SP: 1 };
+    var _ACE_LEAP_CUM = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];
+
+    function _aceSeasonDay(basin, month, day) {
+        var d = _ACE_LEAP_CUM[month - 1] + day;
+        if (!ACE_SH_BASINS[basin]) return d;
+        return (month >= 7) ? d - 182 : d + 184;
+    }
+
+    // Inverse: season-day → {month, day} in the leap frame, for tick
+    // labels and hover text.
+    function _aceDayToDate(basin, sd) {
+        var d = ACE_SH_BASINS[basin]
+            ? ((sd <= 184) ? sd + 182 : sd - 184)
+            : sd;
+        for (var m = 12; m >= 1; m--) {
+            if (d > _ACE_LEAP_CUM[m - 1]) {
+                return { month: m, day: d - _ACE_LEAP_CUM[m - 1] };
+            }
+        }
+        return { month: 1, day: 1 };
+    }
+
+    function _aceDayLabel(basin, sd) {
+        var md = _aceDayToDate(basin, sd);
+        return _MONTH_NAMES_FULL[md.month - 1] + ' ' + md.day;
+    }
+
+    // Today's position on the basin's season axis.
+    function _aceTodayDay(basin) {
+        var now = new Date();
+        return _aceSeasonDay(basin, now.getUTCMonth() + 1, now.getUTCDate());
+    }
+
+    // Expand a sparse [[day, cum], ...] curve onto the dense 1..366 axis
+    // by holding the last value forward (the cumulative curve is flat
+    // between storms). `throughDay` clips the fill — beyond it the season
+    // hasn't happened yet, so the trace stops rather than drawing a flat
+    // line across the rest of the year.
+    function _aceExpand(sparse, throughDay) {
+        var out = new Array(366);
+        var i = 0, cur = 0;
+        for (var d = 1; d <= 366; d++) {
+            while (i < sparse.length && sparse[i][0] <= d) {
+                cur = sparse[i][1];
+                i++;
+            }
+            out[d - 1] = (throughDay && d > throughDay) ? null : cur;
+        }
+        return out;
+    }
+
+    function _aceBasinClimo(basin) {
+        var p = state.ace_pace;
+        return (p && p.basins && p.basins[basin]) ? p.basins[basin] : null;
+    }
+
+    function _aceLiveBasin(basin) {
+        var l = state.ace_live;
+        return (l && l.basins && l.basins[basin]) ? l.basins[basin] : null;
+    }
+
+    function _ordinal(n) {
+        var v = n % 100;
+        if (v >= 11 && v <= 13) return n + 'th';
+        return n + (['th', 'st', 'nd', 'rd'][n % 10] || 'th');
+    }
+
+    // Value of one season's cumulative curve on a given season-day.
+    function _aceCurveAt(sparse, day) {
+        var v = 0;
+        for (var i = 0; i < sparse.length; i++) {
+            if (sparse[i][0] > day) break;
+            v = sparse[i][1];
+        }
+        return v;
+    }
+
+    // Mid-ranked percentile of `ace` among the 1991-2020 seasons of this
+    // basin on `day`. Ties count half, so a storm-free basin in a month
+    // that is climatologically storm-free lands mid-pack rather than at
+    // either extreme.
+    function _aceClimoRank(basin, day, ace) {
+        var cl = _aceBasinClimo(basin);
+        if (!cl) return null;
+        var below = 0, ties = 0, n = 0;
+        for (var y = 1991; y <= 2020; y++) {
+            var curve = cl.years[String(y)];
+            if (!curve) { n++; ties += (ace === 0) ? 1 : 0; below += (ace > 0) ? 1 : 0; continue; }
+            var v = _aceCurveAt(curve, day);
+            n++;
+            if (v < ace) below++;
+            else if (v === ace) ties++;
+        }
+        if (!n) return null;
+        return { below: below, ties: ties, n: n,
+                 pct: 100 * (below + 0.5 * ties) / n };
+    }
+
+    // Climatological mean-to-date and the live season's standing, shared
+    // by the chips and the plot annotation.
+    function _aceStanding(basin) {
+        var cl = _aceBasinClimo(basin);
+        var live = _aceLiveBasin(basin);
+        if (!cl) return null;
+        var today = Math.min(_aceTodayDay(basin), 366);
+        var meanToDate = cl.climo.mean[today - 1];
+        var seasonMean = cl.climo.mean[365];
+        var ace = live ? live.ace : null;
+        // Percent-of-normal is meaningless before the climatological
+        // season really starts (dividing by ~0.1 ACE units gives 4000%).
+        // Require the mean-to-date to be at least 2% of the full-season
+        // mean AND a full ACE unit before showing a ratio.
+        var pct = (ace !== null && meanToDate >= 1.0
+                   && meanToDate >= 0.02 * seasonMean)
+            ? (100 * ace / meanToDate) : null;
+        // Percentile standing against the individual 1991-2020 seasons at
+        // this same calendar day, mid-ranked so ties count half. Ranking
+        // off the percentile curves instead would misread the early
+        // season, where most of them sit at exactly zero and any
+        // comparison against a storm-free basin is a tie, not a miss.
+        var rank = null;
+        if (ace !== null) rank = _aceClimoRank(basin, today, ace);
+        return { today: today, meanToDate: meanToDate, seasonMean: seasonMean,
+                 ace: ace, pct: pct, rank: rank,
+                 season: live ? live.season : null,
+                 storms: live ? live.storms : null,
+                 through: live ? live.through : null };
+    }
+
+    function _renderAceChips() {
+        var el = document.getElementById('seasonal-ace-chips');
+        if (!el || !state.ace_pace) return;
+        var html = '';
+        ACE_BASIN_ORDER.forEach(function (b) {
+            var cl = _aceBasinClimo(b);
+            if (!cl) return;
+            var st = _aceStanding(b);
+            var ace = (st && st.ace !== null) ? st.ace.toFixed(1) : '—';
+            var pctTxt = '—';
+            var pctCls = '';
+            if (st && st.pct !== null) {
+                pctTxt = Math.round(st.pct) + '% of normal';
+                pctCls = (st.pct >= 115) ? ' ace-hi'
+                       : (st.pct <= 85) ? ' ace-lo' : '';
+            } else if (st) {
+                pctTxt = 'pre-season';
+            }
+            html += '<button type="button" class="seasonal-ace-chip' +
+                (b === state.acePace.basin ? ' is-active' : '') +
+                '" data-basin="' + b + '" title="' + cl.name +
+                ' — season-to-date ACE vs the 1991-2020 mean for the same ' +
+                'calendar day">' +
+                '<span class="ace-chip-basin">' + ACE_BASIN_SHORT[b] + '</span>' +
+                '<span class="ace-chip-val">' + ace + '</span>' +
+                '<span class="ace-chip-pct' + pctCls + '">' + pctTxt + '</span>' +
+                '</button>';
+        });
+        el.innerHTML = html;
+        el.querySelectorAll('.seasonal-ace-chip').forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                state.acePace.basin = chip.getAttribute('data-basin');
+                var sel = document.getElementById('seasonal-ace-basin');
+                if (sel) sel.value = state.acePace.basin;
+                _populateAceCompare();
+                _renderAcePace();
+                _renderAceChips();
+                _ga('rt_seasonal_ace_basin',
+                    { basin: state.acePace.basin, via: 'chip' });
+            });
+        });
+    }
+
+    function _populateAceCompare() {
+        var sel = document.getElementById('seasonal-ace-compare');
+        var cl = _aceBasinClimo(state.acePace.basin);
+        if (!sel || !cl) return;
+        var liveSeason = (_aceLiveBasin(state.acePace.basin) || {}).season;
+        var years = Object.keys(cl.years).map(Number)
+            .filter(function (y) { return y !== liveSeason; })
+            .sort(function (a, b) { return b - a; });
+        var prev = state.acePace.compare;
+        sel.innerHTML = '<option value="">None</option>' +
+            '<option value="record">Record season (' + cl.record.season + ')</option>' +
+            years.map(function (y) {
+                return '<option value="' + y + '">' + y + '</option>';
+            }).join('');
+        // Keep the user's choice when switching basins if it still exists.
+        sel.value = (prev && (prev === 'record' ||
+                              years.indexOf(parseInt(prev, 10)) !== -1))
+            ? prev : '';
+        state.acePace.compare = sel.value;
+    }
+
+    function _aceLiveCurve(basin) {
+        var live = _aceLiveBasin(basin);
+        if (!live) return null;
+        var today = Math.min(_aceTodayDay(basin), 366);
+        // Hold the last accrued value forward to today so a quiet stretch
+        // reads as a flat line rather than as missing data.
+        return _aceExpand(live.curve || [], today);
+    }
+
+    function _renderAcePace() {
+        var el = document.getElementById('seasonal-ace-plot');
+        if (!el || typeof Plotly === 'undefined') return;
+        var basin = state.acePace.basin;
+        var cl = _aceBasinClimo(basin);
+        var note = document.getElementById('seasonal-ace-note');
+        if (!cl) {
+            el.innerHTML = '';
+            if (note) note.textContent =
+                'ACE pace climatology unavailable (ace_pace_climo.json ' +
+                'did not load).';
+            return;
+        }
+
+        var days = [];
+        for (var d = 1; d <= 366; d++) days.push(d);
+        var hoverDates = days.map(function (x) { return _aceDayLabel(basin, x); });
+        var st = _aceStanding(basin);
+        var liveCurve = _aceLiveCurve(basin);
+        var traces = [];
+
+        var isPct = (state.acePace.view === 'pct');
+        if (isPct) {
+            // Percent-of-normal-to-date. Only defined once the climo mean
+            // has actually left zero, so clip the axis to that window.
+            var meanArr = cl.climo.mean;
+            var startDay = 1;
+            while (startDay < 366 &&
+                   meanArr[startDay - 1] < Math.max(1.0, 0.02 * meanArr[365])) {
+                startDay++;
+            }
+            var xs = [], ys = [], hd = [];
+            if (liveCurve) {
+                for (var i = startDay; i <= 366; i++) {
+                    if (liveCurve[i - 1] === null) break;
+                    xs.push(i);
+                    ys.push(100 * liveCurve[i - 1] / meanArr[i - 1]);
+                    hd.push(hoverDates[i - 1]);
+                }
+            }
+            traces.push({
+                x: [startDay, 366], y: [100, 100], type: 'scatter',
+                mode: 'lines', name: 'normal (1991-2020 mean)',
+                line: { color: BRAND.textDim, width: 1.4, dash: 'dash' },
+                hoverinfo: 'skip',
+            });
+            traces.push({
+                x: xs, y: ys, type: 'scatter', mode: 'lines',
+                name: (st && st.season ? st.season : 'live') + ' season',
+                line: { color: BRAND.orange, width: 3 },
+                customdata: hd,
+                hovertemplate: '%{customdata}: %{y:.0f}% of normal<extra></extra>',
+            });
+        } else {
+            var band = function (lo, hi, color, label) {
+                traces.push({
+                    x: days, y: cl.climo[lo], type: 'scatter', mode: 'lines',
+                    line: { width: 0 }, showlegend: false, hoverinfo: 'skip',
+                });
+                traces.push({
+                    x: days, y: cl.climo[hi], type: 'scatter', mode: 'lines',
+                    line: { width: 0 }, fill: 'tonexty', fillcolor: color,
+                    name: label, hoverinfo: 'skip',
+                });
+            };
+            band('p10', 'p90', BRAND.gray, '10th-90th pct (1991-2020)');
+            band('p25', 'p75', 'rgba(140,148,160,0.30)', '25th-75th pct');
+            traces.push({
+                x: days, y: cl.climo.p50, type: 'scatter', mode: 'lines',
+                name: 'median season',
+                line: { color: BRAND.textDim, width: 1.6, dash: 'dash' },
+                customdata: hoverDates,
+                hovertemplate: '%{customdata} · median: %{y:.1f}<extra></extra>',
+            });
+
+            var cmp = state.acePace.compare;
+            if (cmp) {
+                var cmpYear = (cmp === 'record') ? String(cl.record.season) : cmp;
+                if (cl.years[cmpYear]) {
+                    traces.push({
+                        x: days, y: _aceExpand(cl.years[cmpYear], null),
+                        type: 'scatter', mode: 'lines',
+                        name: cmpYear + (cmp === 'record' ? ' (record)' : ''),
+                        line: { color: BRAND.highlight, width: 2 },
+                        customdata: hoverDates,
+                        hovertemplate: '%{customdata} · ' + cmpYear +
+                            ': %{y:.1f}<extra></extra>',
+                    });
+                }
+            }
+
+            if (liveCurve) {
+                traces.push({
+                    x: days, y: liveCurve, type: 'scatter', mode: 'lines',
+                    name: (st && st.season ? st.season : 'live') + ' season',
+                    line: { color: BRAND.orange, width: 3 },
+                    connectgaps: false,
+                    customdata: hoverDates,
+                    hovertemplate: '%{customdata} · %{y:.1f} ACE<extra></extra>',
+                });
+            }
+        }
+
+        // Month ticks along the basin's own season axis.
+        var tickvals = [], ticktext = [];
+        for (var m = 1; m <= 12; m++) {
+            tickvals.push(_aceSeasonDay(basin, m, 1));
+            ticktext.push(_MONTH_NAMES_FULL[m - 1]);
+        }
+        var order = tickvals.slice().sort(function (a, b) { return a - b; });
+        var tt = order.map(function (v) { return ticktext[tickvals.indexOf(v)]; });
+
+        var todayDay = Math.min(_aceTodayDay(basin), 366);
+        var layout = {
+            // Bottom margin has to clear the tcatlas.org watermark, which
+            // the shared annotation helper places at paper y = -0.16.
+            margin: { l: 56, r: 16, t: 26, b: 58 },
+            height: 360,
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: BRAND.plotBg,
+            font: { family: 'DM Sans, system-ui, sans-serif', color: BRAND.text },
+            hovermode: 'x unified',
+            hoverlabel: {
+                bgcolor: BRAND.hoverBg, bordercolor: BRAND.hoverBorder,
+                font: { color: BRAND.hoverText, size: 12 },
+            },
+            legend: { orientation: 'h', x: 0, y: 1.14,
+                      font: { size: 10, color: BRAND.textDim } },
+            xaxis: {
+                tickmode: 'array', tickvals: order, ticktext: tt,
+                range: [1, 366], gridcolor: BRAND.grid, zeroline: false,
+                tickfont: { size: 10, color: BRAND.textDim },
+            },
+            yaxis: {
+                title: { text: isPct ? '% of 1991-2020 mean to date'
+                                     : 'Cumulative ACE (10⁴ kt²)',
+                         font: { size: 11, color: BRAND.textDim } },
+                gridcolor: BRAND.grid, zeroline: true,
+                zerolinecolor: BRAND.gridZero,
+                rangemode: 'tozero',
+                tickfont: { size: 10, color: BRAND.textDim },
+            },
+            shapes: [{
+                type: 'line', x0: todayDay, x1: todayDay,
+                yref: 'paper', y0: 0, y1: 1,
+                line: { color: BRAND.textDim, width: 1, dash: 'dot' },
+            }],
+            annotations: _watermarkAnnotations().concat([{
+                x: todayDay, y: 1, xref: 'x', yref: 'paper',
+                yanchor: 'bottom', showarrow: false, text: 'today',
+                font: { size: 9, color: BRAND.textDim },
+            }]),
+        };
+
+        Plotly.purge(el);
+        seasNewPlot(el, traces, layout,
+                    { responsive: true, displaylogo: false });
+
+        if (note) {
+            if (!st || st.ace === null) {
+                note.textContent = cl.name + ': live season-to-date ACE ' +
+                    'unavailable (the b-deck feed did not respond).';
+            } else {
+                var rankTxt = '';
+                if (st.rank) {
+                    var pctOrd = _ordinal(Math.round(st.rank.pct)) +
+                                 ' percentile';
+                    rankTxt = (st.rank.below === 0 && st.rank.ties)
+                        ? ('tied with ' + st.rank.ties + ' of ' + st.rank.n +
+                           ' 1991-2020 seasons that also had none by this ' +
+                           'date (' + pctOrd + ')')
+                        : ('ahead of ' + st.rank.below + ' of ' + st.rank.n +
+                           ' 1991-2020 seasons on this date (' + pctOrd + ')');
+                }
+                note.innerHTML =
+                    '<strong>' + cl.name + ' ' + st.season + ':</strong> ' +
+                    st.ace.toFixed(1) + ' ACE through ' +
+                    _aceDayLabel(basin, st.today) + ' from ' + st.storms +
+                    ' storm' + (st.storms === 1 ? '' : 's') + ' — ' +
+                    (st.pct !== null
+                        ? Math.round(st.pct) + '% of the 1991-2020 mean to date (' +
+                          st.meanToDate.toFixed(1) + '), '
+                        : '') +
+                    rankTxt + '. ' +
+                    'Full-season climatological mean is ' +
+                    st.seasonMean.toFixed(1) + '. ' +
+                    'Live track data through ' + (st.through || 'n/a') +
+                    '; winds are 1-minute sustained (NHC/JTWC), which is also ' +
+                    'the convention behind the climatology.';
+            }
+        }
+    }
+
+    // Panel A loader: the static climo bands and the live b-deck curve.
+    // The live fetch is allowed to fail — the climatology alone is still
+    // a useful panel, and the note line says the live feed is missing.
+    var _acePaceLoaded = false;
+    function _loadAcePace() {
+        if (_acePaceLoaded) return;
+        _acePaceLoaded = true;
+        var pClimo = _fetchData('ace_pace_climo.json').then(
+            function (j) { state.ace_pace = j; },
+            function () { state.ace_pace = null; }
+        );
+        var pLive = _fetchJSON(API_BASE + '/ir-monitor/seasonal/ace-live').then(
+            function (j) { state.ace_live = j; },
+            function () { state.ace_live = null; }
+        );
+        Promise.all([pClimo, pLive]).then(function () {
+            if (!state.ace_pace) return;
+            // Default the basin to whichever hemisphere is actually in
+            // season: in NH summer the Atlantic is the story, but a user
+            // opening the tab in January should not land on an empty
+            // Atlantic panel.
+            var m = (new Date()).getUTCMonth() + 1;
+            if (m >= 12 || m <= 3) {
+                state.acePace.basin = 'SI';
+                var bsel = document.getElementById('seasonal-ace-basin');
+                if (bsel) bsel.value = 'SI';
+            }
+            _populateAceCompare();
+            _renderAceChips();
+            _renderAcePace();
+            _addPlotSaveBtn('seasonal-panel-ace-pace', 'seasonal-ace-plot',
+                            'seasonal_ace_pace');
+        });
+    }
+
+    function _bindAcePaceControls() {
+        var bsel = document.getElementById('seasonal-ace-basin');
+        if (bsel) {
+            bsel.addEventListener('change', function () {
+                state.acePace.basin = bsel.value;
+                _populateAceCompare();
+                _renderAcePace();
+                _renderAceChips();
+                _ga('rt_seasonal_ace_basin', { basin: bsel.value, via: 'select' });
+            });
+        }
+        var csel = document.getElementById('seasonal-ace-compare');
+        if (csel) {
+            csel.addEventListener('change', function () {
+                state.acePace.compare = csel.value;
+                _renderAcePace();
+                _ga('rt_seasonal_ace_compare', { value: csel.value });
+            });
+        }
+        var vsel = document.getElementById('seasonal-ace-view');
+        if (vsel) {
+            vsel.addEventListener('change', function () {
+                state.acePace.view = vsel.value;
+                _renderAcePace();
+                _ga('rt_seasonal_ace_view', { value: vsel.value });
+            });
+        }
+    }
+
+    // -------------------------------------------------------------------
     // Panel C — MDR × AMO scatter colored by annual ACE
     // -------------------------------------------------------------------
 
@@ -599,6 +1083,7 @@
                 _renderScatter();   // triggers inset re-render too
                 _renderTimeSeries();
                 _renderIndices();
+                if (state.ace_pace) _renderAcePace();
             }
         });
         obs.observe(document.documentElement, { attributes: true,
@@ -3080,6 +3565,24 @@
     // Panel E — Analog seasons by SST-anomaly distance
     // -------------------------------------------------------------------
 
+    // Daily-derived distance vectors for months the finalized matrix
+    // doesn't cover yet. The job writes an `entries` list (live month +
+    // completed-but-not-yet-finalized months); older payloads only had a
+    // single top-level {year, month, basins}, so honor both shapes.
+    function _prelimEntry(year, month) {
+        var p = state.prelim_distances;
+        if (!p) return null;
+        if (p.entries && p.entries.length) {
+            for (var i = 0; i < p.entries.length; i++) {
+                var e = p.entries[i];
+                if (e && e.year === year && e.month === month && e.basins) return e;
+            }
+            return null;
+        }
+        if (p.year === year && p.month === month && p.basins) return p;
+        return null;
+    }
+
     function _buildAnalogs() {
         if (!state.indices || !state.ace) return null;
         var idx = state.indices;
@@ -3101,39 +3604,51 @@
             if (mEntry) {
                 var idxOfYear = mEntry.years.indexOf(targetYear);
                 if (idxOfYear < 0) {
-                    // Fallback: when target is the LIVE preliminary year
-                    // for the LIVE month, the daily cron has written a
-                    // distance vector from MTD anomaly → every historical
-                    // year. Use it so users see real rankings instead of
-                    // "no data" the moment they pick 2026 in May.
-                    var prelim = state.prelim_distances;
-                    if (prelim && prelim.year === targetYear &&
-                        prelim.month === month) {
-                        var pBasin = prelim.basins[basin];
+                    // Fallback: the daily cron writes distance vectors
+                    // from the daily OISST archive → every historical
+                    // year, for the LIVE month and for any COMPLETED
+                    // month the finalized matrix hasn't absorbed yet
+                    // (that matrix only rebuilds on the manual backfill,
+                    // so a just-ended month can sit outside it for
+                    // weeks). Use them so users see real rankings
+                    // instead of "no data" for a month that is over.
+                    var pEntry = _prelimEntry(targetYear, month);
+                    if (pEntry) {
+                        var pBasin = pEntry.basins[basin];
                         var pVec = pBasin && pBasin[matrixKey];
                         if (pVec) {
                             var pranked = Object.keys(pVec).map(function (k) {
                                 return { year: parseInt(k, 10), dist: pVec[k] };
                             });
                             pranked.sort(function (a, b) { return a.dist - b.dist; });
+                            var pComplete = (pEntry.complete === true);
                             return {
                                 years: pranked.map(function (r) { return r.year; }).concat([targetYear]),
                                 rows: pranked.slice(0, (state.an.resolvedTopN || 10)),
                                 targetYear: targetYear,
                                 method: 'grid_weighted',
                                 preliminary: true,
-                                preliminary_note:
-                                    'Distances computed from this month\'s ' +
-                                    'partial-month-to-date anomaly via the ' +
-                                    'persistence-anomaly extrapolation. ' +
-                                    'Updates daily as new days come in.',
+                                preliminary_note: pComplete
+                                    ? ('Distances computed from the complete ' +
+                                       _MONTH_NAMES_FULL[month - 1] + ' mean anomaly ' +
+                                       'built from the daily OISST archive (' +
+                                       (pEntry.n_days || 0) + ' days' +
+                                       (pEntry.through ? ', through ' + pEntry.through : '') +
+                                       '), ahead of NOAA\'s finalized monthly ' +
+                                       'field. Rankings are final in all but ' +
+                                       'the last decimal.')
+                                    : ('Distances computed from this month\'s ' +
+                                       'partial-month-to-date anomaly via the ' +
+                                       'persistence-anomaly extrapolation. ' +
+                                       'Updates daily as new days come in.'),
                             };
                         }
                     }
                     return { years: mEntry.years, rows: [],
                              unavailableReason:
                                  'Target year ' + targetYear +
-                                 ' has no finalized SST for ' + month +
+                                 ' has no finalized SST for ' +
+                                 _MONTH_NAMES_FULL[month - 1] +
                                  '; pick a finalized year (' +
                                  mEntry.years[0] + '-' +
                                  mEntry.years[mEntry.years.length - 1] +
@@ -3634,9 +4149,17 @@
                 summary.innerHTML =
                     '<strong>Pixel-weighted distance</strong> over the full ' +
                     '0.25° SST anomaly field. Each cell\'s weight = ' +
-                    '|r(SST<sub>cell</sub>, ' + state.an.basin + ' ACE)| at ' +
-                    'month ' + state.an.month + ' (' + kindLabel +
+                    '|r(SST<sub>cell</sub>, ' + state.an.basin + ' ACE)| in ' +
+                    _MONTH_NAMES_FULL[state.an.month - 1] + ' (' + kindLabel +
                     '). Land/NaN cells contribute zero.';
+                // Daily-derived fallback (live month, or a completed month
+                // the finalized matrix hasn't absorbed) — say so, since the
+                // distances then come from the daily archive, not NOAA's
+                // finalized monthly field.
+                if (bundle.preliminary && bundle.preliminary_note) {
+                    summary.innerHTML += ' <em>' + bundle.preliminary_note +
+                                         '</em>';
+                }
             } else if (bundle.weights) {
                 var pairs = bundle.regions.map(function (r, idx) {
                     return { region: r, w: bundle.weights[idx] };
@@ -9040,8 +9563,13 @@
         _bindIndexControls();
         _bindAnomZoomControl();
         _bindAnomVarControl();
+        _bindAcePaceControls();
         _wireCorrHover();
         _renderCorrelation();
+        // Panel A — season ACE pace. Independent of the SST bundle below
+        // (different files, different cadence), so it renders as soon as
+        // its own two fetches land instead of waiting on the whole tab.
+        _loadAcePace();
         // New Panel C — seasonal evolution animation. Self-contained:
         // pulls its own manifests + tiles, populates the year picker
         // from what's actually in the era5_daily archive on GCS.

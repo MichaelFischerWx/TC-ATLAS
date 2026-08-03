@@ -8582,6 +8582,268 @@ def get_seasonal_daily_winds(
     )
 
 
+# ---------------------------------------------------------------------------
+# Live season-to-date ACE (Seasonal tab, Panel A "Season ACE pace")
+# ---------------------------------------------------------------------------
+# The climatological pace curves ship as a static JSON built from IBTrACS
+# (build_ace_pace_climo.py). IBTrACS lags the JTWC basins by a year or more,
+# so the CURRENT season has to come from operational ATCF b-decks instead.
+# This endpoint walks the season's b-decks and accumulates ACE onto the same
+# 366-day season-day axis the climatology uses.
+
+# Season-day axis, shared with build_ace_pace_climo.py: day 1..366 in a
+# leap-year frame. NH basins start at Jan 1; SH basins (SI/SP) start at Jul 1
+# and the season is named for the year it ENDS — the IBTrACS convention, and
+# also how ATCF numbers its `sh##YYYY` storms.
+_ACE_LEAP_CUM = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+_ACE_SH_BASINS = {"SI", "SP"}
+# ACE counts synoptic 6-hourly points at >= 34 kt while tropical/subtropical.
+_ACE_MIN_KT = 34.0
+# ATCF storm-type codes that count. JTWC b-decks very often leave the field
+# as "XX" (or blank), so those are accepted too — JTWC ends its best tracks
+# at extratropical transition, so the permissive read doesn't drag in post-
+# tropical energy the way an NHC deck would.
+_ACE_TROPICAL_TYPES = {"TD", "TS", "HU", "TY", "ST", "TC", "SD", "SS", "XX", ""}
+# Storm numbers >= 50 are invests (90-99) and internal/test slots — never ACE.
+_ACE_MAX_CY = 49
+
+_ACE_LIVE_LOCK = threading.Lock()
+_ACE_LIVE_CACHE: dict = {"payload": None, "ts": 0.0}
+_ACE_LIVE_TTL = float(os.environ.get("ACE_LIVE_TTL_S", "1800"))   # 30 min
+
+
+def _ace_season_day(basin: str, year: int, month: int, day: int,
+                    season: int) -> Optional[int]:
+    d = _ACE_LEAP_CUM[month - 1] + day
+    if basin not in _ACE_SH_BASINS:
+        return d if year == season else None
+    if month >= 7:
+        return d - 182 if year == season - 1 else None
+    return d + 184 if year == season else None
+
+
+def _ace_basin_for(atcf_basin: str, lon: float) -> Optional[str]:
+    """Map an ATCF basin code (+ longitude for SH) to an IBTrACS basin."""
+    if atcf_basin == "AL":
+        return "NA"
+    if atcf_basin in ("EP", "CP"):
+        return "EP"
+    if atcf_basin == "WP":
+        return "WP"
+    if atcf_basin == "IO":
+        return "NI"
+    if atcf_basin == "SH":
+        # IBTrACS splits the Southern Hemisphere at 135°E: South Indian to
+        # the west, South Pacific to the east.
+        lon360 = lon % 360.0
+        return "SI" if 20.0 <= lon360 < 135.0 else "SP"
+    return None
+
+
+def _parse_bdeck_ace_points(text: str) -> list:
+    """Extract (datetime_str, lat, lon, vmax_kt) for the synoptic BEST
+    entries of one b-deck, deduped by time.
+
+    A b-deck carries one line per wind-radii threshold (34/50/64 kt), so the
+    same synoptic time appears up to three times with the same vmax — count
+    it once or the storm contributes triple ACE.
+    """
+    seen: dict = {}
+    for line in text.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 11:
+            continue
+        if parts[4].upper() != "BEST":
+            continue
+        stamp = parts[2]
+        if len(stamp) != 10 or not stamp.isdigit():
+            continue
+        if stamp[8:10] not in ("00", "06", "12", "18"):
+            continue
+        if stamp in seen:
+            continue
+        stype = parts[10].upper()
+        if stype not in _ACE_TROPICAL_TYPES:
+            continue
+        try:
+            vmax = float(parts[8])
+        except ValueError:
+            continue
+        if vmax < _ACE_MIN_KT:
+            continue
+        lat_s, lon_s = parts[6], parts[7]
+        try:
+            lat = float(lat_s[:-1]) / 10.0 * (-1 if lat_s[-1].upper() == "S" else 1)
+            lon = float(lon_s[:-1]) / 10.0 * (-1 if lon_s[-1].upper() == "W" else 1)
+        except (ValueError, IndexError):
+            continue
+        seen[stamp] = (stamp, lat, lon, vmax)
+    return list(seen.values())
+
+
+def _ace_season_bdeck_urls(nh_season: int, sh_season: int) -> list:
+    """(atcf_basin, url) for every non-invest b-deck of the current seasons.
+
+    UCAR's `bdecks_open/{year}/` mirror is the only listing that carries the
+    WHOLE season across all basins (NHC's btk directory only holds storms
+    that are currently active). NHC's own copies are layered on top below
+    for the Atlantic/East Pacific, where they are the authoritative and
+    freshest source.
+    """
+    out = []
+    seen = set()
+    ucar = dict(JTWC_SOURCES).get("ucar",
+                                  "https://hurricanes.ral.ucar.edu/repository/data/bdecks_open")
+    for season, basins in ((nh_season, ("al", "ep", "cp", "wp", "io")),
+                           (sh_season, ("sh",))):
+        text = _http_get(f"{ucar}/{season}/", timeout=15)
+        if not text:
+            logger.warning(f"ace-live: UCAR listing failed for {season}")
+            continue
+        codes = "|".join(basins)
+        for m in re.finditer(rf'b({codes})(\d{{2}}){season}\.dat',
+                             text, re.IGNORECASE):
+            code, cy = m.group(1).lower(), int(m.group(2))
+            if cy > _ACE_MAX_CY:
+                continue
+            sid = f"b{code}{cy:02d}{season}"
+            if sid in seen:
+                continue
+            seen.add(sid)
+            out.append((code.upper(), f"{ucar}/{season}/{sid}.dat"))
+
+    # NHC btk: currently-active AL/EP/CP storms, fresher than the mirror.
+    text = _http_get(NHC_BDECK_BASE + "/", timeout=10)
+    if text:
+        for m in re.finditer(rf'b(al|ep|cp)(\d{{2}}){nh_season}\.dat',
+                             text, re.IGNORECASE):
+            code, cy = m.group(1).lower(), int(m.group(2))
+            if cy > _ACE_MAX_CY:
+                continue
+            sid = f"b{code}{cy:02d}{nh_season}"
+            url = f"{NHC_BDECK_BASE}/{sid}.dat"
+            # Replace the UCAR mirror entry for the same storm, if any.
+            out = [(b, u) for (b, u) in out if not u.endswith(f"/{sid}.dat")]
+            out.append((code.upper(), url))
+    return out
+
+
+def _compute_live_ace() -> dict:
+    """Season-to-date cumulative ACE per basin from operational b-decks."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    now = _dt.now(timezone.utc)
+    nh_season = now.year
+    sh_season = now.year + 1 if now.month >= 7 else now.year
+
+    urls = _ace_season_bdeck_urls(nh_season, sh_season)
+    logger.info(f"ace-live: fetching {len(urls)} b-decks "
+                f"(NH {nh_season}, SH {sh_season})")
+
+    def _fetch(item):
+        atcf_basin, url = item
+        return atcf_basin, _http_get(url, timeout=15)
+
+    results = []
+    if urls:
+        with ThreadPoolExecutor(max_workers=_JTWC_BDECK_WORKERS) as ex:
+            results = list(ex.map(_fetch, urls))
+
+    daily: dict = {}       # basin -> {season_day: ace increment}
+    storms: dict = {}      # basin -> set of storm keys that contributed
+    latest: dict = {}      # basin -> newest synoptic stamp used
+    for (atcf_basin, text), (_b, url) in zip(results, urls):
+        if not text:
+            continue
+        pts = _parse_bdeck_ace_points(text)
+        if not pts:
+            continue
+        sid = url.rsplit("/", 1)[-1]
+        for stamp, lat, lon, vmax in pts:
+            basin = _ace_basin_for(atcf_basin, lon)
+            if basin is None:
+                continue
+            season = sh_season if basin in _ACE_SH_BASINS else nh_season
+            sd = _ace_season_day(basin, int(stamp[:4]), int(stamp[4:6]),
+                                 int(stamp[6:8]), season)
+            if sd is None or not (1 <= sd <= 366):
+                continue
+            daily.setdefault(basin, {})
+            daily[basin][sd] = daily[basin].get(sd, 0.0) + vmax * vmax * 1e-4
+            storms.setdefault(basin, set()).add(sid)
+            if stamp > latest.get(basin, ""):
+                latest[basin] = stamp
+
+    basins = {}
+    for basin in ("NA", "EP", "WP", "NI", "SI", "SP"):
+        season = sh_season if basin in _ACE_SH_BASINS else nh_season
+        per_day = daily.get(basin, {})
+        curve = []
+        total = 0.0
+        for sd in sorted(per_day):
+            total += per_day[sd]
+            curve.append([sd, round(total, 2)])
+        stamp = latest.get(basin)
+        basins[basin] = {
+            "season": season,
+            "ace": round(total, 2),
+            "storms": len(storms.get(basin, ())),
+            "curve": curve,
+            "through": (f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]}T{stamp[8:10]}Z"
+                        if stamp else None),
+        }
+
+    return {
+        "generated_utc": now.isoformat(),
+        "nh_season": nh_season,
+        "sh_season": sh_season,
+        "vmax_threshold_kt": _ACE_MIN_KT,
+        "wind_source": "ATCF b-deck (NHC/JTWC 1-min sustained)",
+        "n_decks": len(urls),
+        "basins": basins,
+    }
+
+
+@router.get("/seasonal/ace-live")
+def get_seasonal_ace_live():
+    """Season-to-date cumulative ACE per basin, from operational b-decks.
+
+    Shares the 366-day season-day axis with `seasonal/ace_pace_climo.json`
+    so the live curve drops straight onto the climatological percentile
+    bands in Panel A. Cached for 30 min — b-decks only move on the 6-hourly
+    synoptic cycle, and the listing walk is ~40-80 small fetches.
+    """
+    now_t = time.time()
+    with _ACE_LIVE_LOCK:
+        cached = _ACE_LIVE_CACHE.get("payload")
+        if cached and (now_t - _ACE_LIVE_CACHE.get("ts", 0.0)) < _ACE_LIVE_TTL:
+            return JSONResponse(
+                content=cached,
+                headers={"Cache-Control": "public, max-age=900"},
+            )
+    try:
+        payload = _compute_live_ace()
+    except Exception as e:
+        logger.warning(f"ace-live failed: {e}")
+        with _ACE_LIVE_LOCK:
+            stale = _ACE_LIVE_CACHE.get("payload")
+        if stale:
+            # Serving a stale-but-real season total beats an empty panel.
+            return JSONResponse(
+                content={**stale, "stale": True},
+                headers={"Cache-Control": "public, max-age=300"},
+            )
+        raise HTTPException(status_code=502,
+                            detail="live ACE unavailable") from e
+    with _ACE_LIVE_LOCK:
+        _ACE_LIVE_CACHE["payload"] = payload
+        _ACE_LIVE_CACHE["ts"] = now_t
+    return JSONResponse(
+        content=payload,
+        headers={"Cache-Control": "public, max-age=900"},
+    )
+
+
 # Server-side cache for the env-layers list. The metadata only changes when
 # the build job runs (every 6 h), but assembling the list is ~25 GCS reads, so
 # without this every request paid that round-trip cost. 300 s TTL keeps it well
