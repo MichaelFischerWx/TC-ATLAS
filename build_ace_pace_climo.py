@@ -89,14 +89,26 @@ def _leap_doy(month: int, day: int) -> int:
 def _season_day(basin: str, year: int, month: int, day: int,
                 season: int) -> int | None:
     """Index 1..366 along the basin's season axis, or None if the point
-    falls outside the season it was filed under (IBTrACS occasionally
-    carries a straggler across the boundary)."""
+    falls outside the season it was filed under.
+
+    Storms that are still going when the season's calendar window closes
+    (Atlantic Zeta running Dec 30 → Jan 6, West Pacific Soulik into
+    January) keep their original IBTrACS season, so their spillover points
+    are pinned to the last day of the axis rather than dropped — dropping
+    them silently shorted those storms, and their basins, by real ACE.
+    """
     d = _leap_doy(month, day)
     if basin not in SH_BASINS:
-        return d if year == season else None
+        if year == season:
+            return d
+        # January of the following calendar year = tail of this season.
+        return DAYS if (year == season + 1 and month == 1) else None
     # SH: Jul 1 of (season-1) = day 1, Jun 30 of season = day 366.
     if month >= 7:
-        return d - 182 if year == season - 1 else None
+        if year == season - 1:
+            return d - 182
+        # July of the season year = past Jun 30, i.e. the season's tail.
+        return DAYS if (year == season and month == 7) else None
     return d + 184 if year == season else None
 
 
@@ -140,6 +152,9 @@ def accumulate(ibtracs_path: str) -> dict:
     track_type = ds["track_type"].values
     iso_time = ds["iso_time"].values
     nature = ds["nature"].values
+    usa_status = (ds["usa_status"].values if "usa_status" in ds
+                  else np.full(nature.shape, b"", dtype=object))
+    storm_name = ds["name"].values if "name" in ds else None
 
     # US-PROVISIONAL covers storms IBTrACS has only from the US agencies
     # (NHC/JTWC) so far — that is nearly every JTWC-basin storm for the
@@ -147,12 +162,30 @@ def accumulate(ibtracs_path: str) -> dict:
     # silently zeroes recent WP/NI/SP seasons. Since this builder reads
     # usa_wind anyway, those tracks are exactly the right ones to keep.
     ACCEPTED_TRACK_TYPES = {"main", "PROVISIONAL", "US-PROVISIONAL"}
-    ACE_NATURES = {"TS", "SS"}          # tropical + subtropical only
+
+    # Phase gate. ACE counts a point only while the system is tropical or
+    # subtropical — never a disturbance, wave, remnant low, or
+    # extratropical cyclone. Two fields carry that information and they
+    # disagree on a small fraction of points:
+    #   `nature`     — IBTrACS's cross-agency consensus (TS/SS/DS/ET/MX/NR)
+    #   `usa_status` — the US agency's own call (TD/TS/HU/TY/ST/SD/SS/
+    #                  EX/LO/DB/WV), which is the agency whose winds this
+    #                  builder reads
+    # Policy: accept when EITHER field says tropical/subtropical, but
+    # reject outright whenever the US agency explicitly says it is not a
+    # TC. That keeps the phase call aligned with the wind source, picks up
+    # the ~0.8% of points IBTrACS marks MX (mixed agency reports) while
+    # NHC/JTWC call them a tropical storm, and still drops every DS/ET
+    # point the stricter nature-only gate dropped.
+    ACE_NATURES = {"TS", "SS"}
+    ACE_USA_STATUS = {"TD", "TS", "HU", "TY", "ST", "TC", "SD", "SS"}
+    NON_TC_USA_STATUS = {"EX", "LO", "DB", "WV", "DS", "PT", "IN"}
 
     n_storms, n_times = wmo_wind.shape
     # daily[basin][season] = per-day (not cumulative) ACE increments
     daily: dict[str, dict[int, np.ndarray]] = {b: {} for b in ACE_BASINS}
     storms: dict[str, dict[int, int]] = {b: {} for b in ACE_BASINS}
+    per_storm: dict[str, dict[int, list]] = {}
 
     for i in range(n_storms):
         s = season_v[i]
@@ -163,7 +196,9 @@ def accumulate(ibtracs_path: str) -> dict:
             continue
         if _decode(track_type[i]) not in ACCEPTED_TRACK_TYPES:
             continue
-        contributed: set[str] = set()
+        # Per-storm tally, keyed by basin so a system that crosses the
+        # SI/SP boundary is credited exactly the way the curve is.
+        rec_by_basin: dict[str, dict] = {}
         for j in range(n_times):
             tstr = _decode(iso_time[i, j])
             # 6-hourly synoptic times only — IBTrACS also carries 3-hourly
@@ -171,7 +206,11 @@ def accumulate(ibtracs_path: str) -> dict:
             if (len(tstr) < 16 or tstr[11:13] not in ("00", "06", "12", "18")
                     or tstr[14:16] != "00"):
                 continue
-            if _decode(nature[i, j]) not in ACE_NATURES:
+            st = _decode(usa_status[i, j]).strip().upper()
+            if st in NON_TC_USA_STATUS:
+                continue
+            if (_decode(nature[i, j]) not in ACE_NATURES
+                    and st not in ACE_USA_STATUS):
                 continue
             b = _decode(basin_v[i, j])
             if b not in ACE_BASINS:
@@ -188,15 +227,34 @@ def accumulate(ibtracs_path: str) -> dict:
             if arr is None:
                 arr = np.zeros(DAYS, dtype=np.float64)
                 daily[b][s] = arr
-            arr[sd - 1] += float(v) * float(v) * 1e-4
-            contributed.add(b)
-        for b in contributed:
+            contrib = float(v) * float(v) * 1e-4
+            arr[sd - 1] += contrib
+            rec = rec_by_basin.get(b)
+            if rec is None:
+                rec = rec_by_basin[b] = {"ace": 0.0, "peak": 0.0, "pts": 0,
+                                         "first": sd, "last": sd}
+            rec["ace"] += contrib
+            rec["peak"] = max(rec["peak"], float(v))
+            rec["pts"] += 1
+            rec["first"] = min(rec["first"], sd)
+            rec["last"] = max(rec["last"], sd)
+        nm = _decode(storm_name[i]).strip().upper() if storm_name is not None else ""
+        if nm in ("NOT_NAMED", "UNNAMED", "NOT NAMED", "NONAME"):
+            nm = ""
+        for b, rec in rec_by_basin.items():
             storms[b][s] = storms[b].get(s, 0) + 1
+            # Compact row: [name, ace, peak_kt, first_day, last_day, points]
+            per_storm.setdefault(b, {}).setdefault(s, []).append(
+                [nm, round(rec["ace"], 2), int(rec["peak"]),
+                 rec["first"], rec["last"], rec["pts"]])
 
     ds.close()
     cum = {b: {s: np.cumsum(a) for s, a in per.items()}
            for b, per in daily.items()}
-    return {"cum": cum, "storms": storms}
+    for b in per_storm:
+        for s in per_storm[b]:
+            per_storm[b][s].sort(key=lambda r: r[1], reverse=True)
+    return {"cum": cum, "storms": storms, "per_storm": per_storm}
 
 
 def _sparse(curve: np.ndarray) -> list:
@@ -218,7 +276,7 @@ def _sparse(curve: np.ndarray) -> list:
 
 def build(ibtracs_path: str, out_path: Path) -> Path:
     acc = accumulate(ibtracs_path)
-    cum, storms = acc["cum"], acc["storms"]
+    cum, storms, per_storm = acc["cum"], acc["storms"], acc["per_storm"]
 
     payload = {
         "vmax_threshold_kt": ACE_VMAX_THRESH,
@@ -284,6 +342,28 @@ def build(ibtracs_path: str, out_path: Path) -> Path:
     out_path.write_text(json.dumps(payload, separators=(",", ":")))
     log.info("wrote %s (%.1f KB)", out_path,
              out_path.stat().st_size / 1024.0)
+
+    # Per-storm breakdowns ship in their OWN file, lazy-loaded by the panel
+    # the first time a user picks a comparison season. Every season since
+    # 1982 in one payload is a few hundred KB — worth it on demand, not
+    # worth it on every Seasonal-tab open.
+    storms_payload = {
+        "generated_utc": payload["generated_utc"],
+        "history_start": HISTORY_START,
+        "days": DAYS,
+        "columns": ["name", "ace", "peak_kt", "first_day", "last_day",
+                    "points"],
+        "vmax_threshold_kt": ACE_VMAX_THRESH,
+        "wind_source": payload["wind_source"],
+        "basins": {b: {str(s): rows for s, rows in sorted(per.items())}
+                   for b, per in per_storm.items()},
+    }
+    storms_path = out_path.with_name("ace_pace_storms.json")
+    storms_path.write_text(json.dumps(storms_payload, separators=(",", ":")))
+    n_rows = sum(len(rows) for per in per_storm.values()
+                 for rows in per.values())
+    log.info("wrote %s (%.1f KB, %d storm-season rows)", storms_path,
+             storms_path.stat().st_size / 1024.0, n_rows)
     return out_path
 
 
@@ -313,6 +393,7 @@ def main():
     out = build(path, Path(args.out))
     if not args.local_only:
         upload(out)
+        upload(out.with_name("ace_pace_storms.json"))
 
 
 if __name__ == "__main__":

@@ -918,6 +918,22 @@ body.seasonal-maximized .seasonal-header {
     color: #fb923c;
     font-weight: 600;
 }
+.seasonal-ace-storms-gap { height: 14px; }
+.seasonal-ace-more {
+    margin-top: 4px;
+    padding: 2px 8px;
+    font-size: 0.72rem;
+    font-family: inherit;
+    color: var(--text-dim, #94a3b8);
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 4px;
+    cursor: pointer;
+}
+.seasonal-ace-more:hover {
+    color: var(--text, #e0e0e0);
+    border-color: rgba(120,170,210,0.55);
+}
 .seasonal-ace-storms-empty {
     font-size: 0.74rem;
     color: var(--text-dim, #94a3b8);

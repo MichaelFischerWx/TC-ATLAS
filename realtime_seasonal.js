@@ -96,6 +96,7 @@
         acePace: { basin: 'NA', compare: '', view: 'cum' },
         ace_pace: null,        // parsed ace_pace_climo.json
         ace_live: null,        // /ir-monitor/seasonal/ace-live
+        ace_storms: null,      // parsed ace_pace_storms.json (lazy)
 
         anomZoom: 'global',
         anomVar: 'raw',     // Panel A: 'raw' | 'relative' | 'shear_climo'
@@ -926,44 +927,55 @@
         return _MONTH_NAMES_FULL[m - 1] + ' ' + parseInt(stamp.slice(6, 8), 10);
     }
 
-    function _renderAceStorms() {
-        var el = document.getElementById('seasonal-ace-storms');
-        if (!el) return;
-        var basin = state.acePace.basin;
-        var live = _aceLiveBasin(basin);
-        var cl = _aceBasinClimo(basin);
-        if (!live) { el.innerHTML = ''; return; }
-        var recs = live.storm_detail || [];
-        var name = cl ? cl.name : basin;
-        if (!recs.length) {
-            el.innerHTML = '<div class="seasonal-ace-storms-empty">No ' +
-                'ACE-contributing storms yet in the ' + name + ' ' +
-                live.season + ' season — nothing has reached 34 kt as a ' +
-                'tropical or subtropical cyclone.</div>';
-            return;
+    // Historical per-storm rows live in their own lazy-loaded file — every
+    // season since 1982 is only ~115 KB, but there's no reason to pay it
+    // until someone actually asks for a comparison season.
+    var _aceStormsPromise = null;
+    function _loadAceStorms() {
+        if (!_aceStormsPromise) {
+            _aceStormsPromise = _fetchData('ace_pace_storms.json').then(
+                function (j) { state.ace_storms = j; return j; },
+                function () { state.ace_storms = null; return null; }
+            );
         }
-        var total = live.ace || 0;
-        var maxAce = recs[0].ace || 1;
-        var head = '<div class="seasonal-ace-storms-head">' +
-            '<strong>' + name + ' ' + live.season + ' storm contributions</strong> — ' +
-            recs.length + ' storm' + (recs.length === 1 ? '' : 's') +
-            ', ' + total.toFixed(1) + ' ACE' +
-            (live.ace_24h ? ', <span style="color:#fb923c">+' +
-                live.ace_24h.toFixed(1) + ' in the last 24 h</span>' : '') +
-            (live.ace_7d ? ', +' + live.ace_7d.toFixed(1) + ' in 7 days' : '') +
-            (live.active_storms ? ' · ' + live.active_storms + ' active now' : '') +
-            '</div>';
-        var rows = recs.map(function (r) {
+        return _aceStormsPromise;
+    }
+
+    // Historical rows are compact arrays:
+    //   [name, ace, peak_kt, first_day, last_day, points]
+    function _aceHistoricStorms(basin, season) {
+        var s = state.ace_storms;
+        if (!s || !s.basins || !s.basins[basin]) return null;
+        var rows = s.basins[basin][String(season)];
+        if (!rows) return null;
+        return rows.map(function (r) {
+            return { name: r[0], ace: r[1], peak_kt: r[2],
+                     firstDay: r[3], lastDay: r[4], points: r[5] };
+        });
+    }
+
+    // One contribution block: heading plus a ranked bar per storm. `recs`
+    // carry either day indices (historical) or ATCF stamps (live).
+    function _aceStormBlock(heading, recs, total, opts) {
+        opts = opts || {};
+        var basin = state.acePace.basin;
+        var maxAce = recs.reduce(function (m, r) {
+            return Math.max(m, r.ace); }, 0) || 1;
+        var limit = opts.expanded ? recs.length : Math.min(recs.length, 12);
+        var html = '<div class="seasonal-ace-storms-head">' + heading + '</div>';
+        html += recs.slice(0, limit).map(function (r) {
             var share = total > 0 ? (100 * r.ace / total) : 0;
-            var label = (r.name || r.id) + ' ';
+            var span = (r.firstDay !== undefined)
+                ? _aceDayLabel(basin, r.firstDay) + '-' + _aceDayLabel(basin, r.lastDay)
+                : _aceStampLabel(r.first) + '-' + _aceStampLabel(r.last);
             return '<div class="seasonal-ace-storm' +
-                (r.active ? ' is-active' : '') + '" title="' + r.id +
-                ' · ' + r.points + ' synoptic points at or above 34 kt · peak ' +
+                (r.active ? ' is-active' : '') + '" title="' +
+                (r.id || r.name || '') + ' · ' + r.points +
+                ' synoptic points at or above 34 kt · peak ' +
                 r.peak_kt + ' kt">' +
-                '<div class="ace-storm-name">' + label +
-                '<span class="ace-storm-meta">' + r.peak_kt + ' kt · ' +
-                _aceStampLabel(r.first) + '-' + _aceStampLabel(r.last) +
-                '</span></div>' +
+                '<div class="ace-storm-name">' + (r.name || r.id || 'UNNAMED') +
+                ' <span class="ace-storm-meta">' + r.peak_kt + ' kt · ' +
+                span + '</span></div>' +
                 '<div class="ace-storm-bar"><span style="width:' +
                 Math.max(2, 100 * r.ace / maxAce).toFixed(1) + '%"></span></div>' +
                 '<div class="ace-storm-val">' + r.ace.toFixed(1) + ' · ' +
@@ -974,7 +986,84 @@
                     : (r.active ? ' <span class="ace-storm-live">active</span>' : '')) +
                 '</div></div>';
         }).join('');
-        el.innerHTML = head + rows;
+        if (recs.length > limit) {
+            html += '<button type="button" class="seasonal-ace-more" ' +
+                'data-more="' + (opts.key || '') + '">+ ' +
+                (recs.length - limit) + ' more storm' +
+                ((recs.length - limit) === 1 ? '' : 's') + '</button>';
+        }
+        return html;
+    }
+
+    var _aceExpanded = {};      // block key -> show all rows
+
+    function _renderAceStorms() {
+        var el = document.getElementById('seasonal-ace-storms');
+        if (!el) return;
+        var basin = state.acePace.basin;
+        var live = _aceLiveBasin(basin);
+        var cl = _aceBasinClimo(basin);
+        var name = cl ? cl.name : basin;
+        var html = '';
+
+        if (live) {
+            var recs = live.storm_detail || [];
+            if (!recs.length) {
+                html += '<div class="seasonal-ace-storms-empty">No ' +
+                    'ACE-contributing storms yet in the ' + name + ' ' +
+                    live.season + ' season — nothing has reached 34 kt as a ' +
+                    'tropical or subtropical cyclone.</div>';
+            } else {
+                var head = '<strong>' + name + ' ' + live.season +
+                    ' storm contributions</strong> — ' + recs.length +
+                    ' storm' + (recs.length === 1 ? '' : 's') + ', ' +
+                    (live.ace || 0).toFixed(1) + ' ACE' +
+                    (live.ace_24h ? ', <span style="color:#fb923c">+' +
+                        live.ace_24h.toFixed(1) + ' in the last 24 h</span>' : '') +
+                    (live.ace_7d ? ', +' + live.ace_7d.toFixed(1) + ' in 7 days' : '') +
+                    (live.active_storms
+                        ? ' · ' + live.active_storms + ' active now' : '');
+                var liveKey = basin + ':live';
+                html += _aceStormBlock(head, recs, live.ace || 0,
+                                       { key: liveKey,
+                                         expanded: !!_aceExpanded[liveKey] });
+            }
+        }
+
+        // Comparison season, when one is selected and its rows have loaded.
+        var cmp = state.acePace.compare;
+        if (cmp && cl) {
+            var cmpSeason = (cmp === 'record') ? cl.record.season
+                                               : parseInt(cmp, 10);
+            var hist = _aceHistoricStorms(basin, cmpSeason);
+            if (hist && hist.length) {
+                var hTotal = (cl.totals[String(cmpSeason)] !== undefined)
+                    ? cl.totals[String(cmpSeason)]
+                    : hist.reduce(function (a, r) { return a + r.ace; }, 0);
+                var hKey = basin + ':' + cmpSeason;
+                html += '<div class="seasonal-ace-storms-gap"></div>' +
+                    _aceStormBlock(
+                        '<strong>' + name + ' ' + cmpSeason +
+                        ' storm contributions</strong> — ' + hist.length +
+                        ' storm' + (hist.length === 1 ? '' : 's') + ', ' +
+                        hTotal.toFixed(1) + ' ACE (IBTrACS best tracks)',
+                        hist, hTotal,
+                        { key: hKey, expanded: !!_aceExpanded[hKey] });
+            } else if (state.ace_storms) {
+                html += '<div class="seasonal-ace-storms-gap"></div>' +
+                    '<div class="seasonal-ace-storms-empty">No storm-level ' +
+                    'breakdown on file for ' + name + ' ' + cmpSeason +
+                    '.</div>';
+            }
+        }
+
+        el.innerHTML = html;
+        el.querySelectorAll('.seasonal-ace-more').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                _aceExpanded[btn.getAttribute('data-more')] = true;
+                _renderAceStorms();
+            });
+        });
     }
 
     function _bindAcePaceControls() {
@@ -993,6 +1082,12 @@
             csel.addEventListener('change', function () {
                 state.acePace.compare = csel.value;
                 _renderAcePace();
+                // Storm-level rows for past seasons are a separate fetch;
+                // pull them the first time a comparison is picked, then
+                // re-render so the breakdown appears under the chart.
+                if (csel.value) {
+                    _loadAceStorms().then(function () { _renderAceStorms(); });
+                }
                 _ga('rt_seasonal_ace_compare', { value: csel.value });
             });
         }

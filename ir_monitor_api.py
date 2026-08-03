@@ -8599,11 +8599,22 @@ _ACE_LEAP_CUM = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
 _ACE_SH_BASINS = {"SI", "SP"}
 # ACE counts synoptic 6-hourly points at >= 34 kt while tropical/subtropical.
 _ACE_MIN_KT = 34.0
-# ATCF storm-type codes that count. JTWC b-decks very often leave the field
-# as "XX" (or blank), so those are accepted too — JTWC ends its best tracks
-# at extratropical transition, so the permissive read doesn't drag in post-
-# tropical energy the way an NHC deck would.
-_ACE_TROPICAL_TYPES = {"TD", "TS", "HU", "TY", "ST", "TC", "SD", "SS", "XX", ""}
+# ATCF storm-type codes that count: tropical depression/storm/hurricane/
+# typhoon/super-typhoon/cyclone and subtropical depression/storm. Anything
+# else — DB (disturbance), LO (low), WV (tropical wave), EX (extratropical),
+# PT (post-tropical) — is explicitly NOT a TC and contributes no ACE.
+_ACE_TROPICAL_TYPES = {"TD", "TS", "HU", "TY", "ST", "TC", "SD", "SS"}
+# The phase field is only trustworthy from NHC. Every line in the JTWC
+# b-decks on the UCAR mirror reads "XX" (measured 2026-08-03: 299 of 299 WP
+# points, 523 of 523 SH), so requiring an explicit code there would zero out
+# those basins. For JTWC we fall back to what their best-track practice
+# guarantees — warnings run over the tropical/subtropical life cycle and
+# stop at extratropical transition — plus a latitude backstop for the rare
+# post-ET tail. Measured leakage under this rule for the 2026 season to
+# date: 0.8 of 170.9 WP ACE poleward of 35°, nothing at all beyond 40°.
+_ACE_UNTYPED = {"XX", ""}
+_ACE_JTWC_BASINS = {"WP", "IO", "SH"}
+_ACE_UNTYPED_MAX_LAT = 45.0
 # Storm numbers >= 50 are invests (90-99) and internal/test slots — never ACE.
 _ACE_MAX_CY = 49
 
@@ -8614,11 +8625,21 @@ _ACE_LIVE_TTL = float(os.environ.get("ACE_LIVE_TTL_S", "1800"))   # 30 min
 
 def _ace_season_day(basin: str, year: int, month: int, day: int,
                     season: int) -> Optional[int]:
+    """Season-day index 1..366, mirroring build_ace_pace_climo._season_day.
+
+    A storm still running when the season's calendar window closes (an
+    Atlantic storm crossing into January, an SH storm into July) keeps its
+    season and is pinned to the last day of the axis rather than dropped.
+    """
     d = _ACE_LEAP_CUM[month - 1] + day
     if basin not in _ACE_SH_BASINS:
-        return d if year == season else None
+        if year == season:
+            return d
+        return 366 if (year == season + 1 and month == 1) else None
     if month >= 7:
-        return d - 182 if year == season - 1 else None
+        if year == season - 1:
+            return d - 182
+        return 366 if (year == season and month == 7) else None
     return d + 184 if year == season else None
 
 
@@ -8640,14 +8661,22 @@ def _ace_basin_for(atcf_basin: str, lon: float) -> Optional[str]:
     return None
 
 
-def _parse_bdeck_ace_points(text: str) -> list:
-    """Extract (datetime_str, lat, lon, vmax_kt) for the synoptic BEST
-    entries of one b-deck, deduped by time.
+def _parse_bdeck_ace_points(text: str, atcf_basin: str = "") -> list:
+    """Extract (datetime_str, lat, lon, vmax_kt, name) for the ACE-eligible
+    synoptic BEST entries of one b-deck, deduped by time.
+
+    ACE-eligible means all four of:
+      * a synoptic hour (00/06/12/18Z) — b-decks also carry off-hour
+        landfall and special entries, which would over-count;
+      * tropical or subtropical phase (see the type policy above);
+      * at least 34 kt;
+      * a parseable position.
 
     A b-deck carries one line per wind-radii threshold (34/50/64 kt), so the
     same synoptic time appears up to three times with the same vmax — count
     it once or the storm contributes triple ACE.
     """
+    is_jtwc = atcf_basin.upper() in _ACE_JTWC_BASINS
     seen: dict = {}
     for line in text.splitlines():
         parts = [p.strip() for p in line.split(",")]
@@ -8663,7 +8692,12 @@ def _parse_bdeck_ace_points(text: str) -> list:
         if stamp in seen:
             continue
         stype = parts[10].upper()
-        if stype not in _ACE_TROPICAL_TYPES:
+        untyped = stype in _ACE_UNTYPED
+        if untyped and not is_jtwc:
+            # NHC always fills this in, so a blank here means the line is
+            # something other than a best-track TC fix.
+            continue
+        if not untyped and stype not in _ACE_TROPICAL_TYPES:
             continue
         try:
             vmax = float(parts[8])
@@ -8676,6 +8710,10 @@ def _parse_bdeck_ace_points(text: str) -> list:
             lat = float(lat_s[:-1]) / 10.0 * (-1 if lat_s[-1].upper() == "S" else 1)
             lon = float(lon_s[:-1]) / 10.0 * (-1 if lon_s[-1].upper() == "W" else 1)
         except (ValueError, IndexError):
+            continue
+        if untyped and abs(lat) > _ACE_UNTYPED_MAX_LAT:
+            # No phase flag to trust this far poleward — treat it as the
+            # extratropical tail of the track and stop counting.
             continue
         # Storm name lives in ATCF field 28. Blank/INVEST/"ONE" style
         # placeholders are left to the caller to prettify.
@@ -8766,7 +8804,7 @@ def _compute_live_ace() -> dict:
     for (atcf_basin, text), (_b, url) in zip(results, urls):
         if not text:
             continue
-        pts = _parse_bdeck_ace_points(text)
+        pts = _parse_bdeck_ace_points(text, atcf_basin)
         if not pts:
             continue
         sid = url.rsplit("/", 1)[-1].replace(".dat", "").lstrip("b").upper()
