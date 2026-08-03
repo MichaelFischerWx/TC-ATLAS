@@ -34,6 +34,82 @@
             || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
     }
 
+    /* ---- PNG resolution metadata ------------------------------------
+     * Canvas-produced PNGs carry no pHYs chunk, so print and publication
+     * tools assume 72 dpi and blow a 2800-px figure up to a 39-inch
+     * poster. Pass {dpi: 300} to save()/savePlotly() and the delivered
+     * file declares that resolution. Purely additive: callers that don't
+     * ask for it get byte-identical output to before.
+     */
+    var _CRC_TABLE = (function () {
+        var t = new Uint32Array(256);
+        for (var n = 0; n < 256; n++) {
+            var c = n;
+            for (var k = 0; k < 8; k++) {
+                c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+            }
+            t[n] = c >>> 0;
+        }
+        return t;
+    })();
+
+    function crc32(bytes) {
+        var c = 0xFFFFFFFF;
+        for (var i = 0; i < bytes.length; i++) {
+            c = _CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+        }
+        return (c ^ 0xFFFFFFFF) >>> 0;
+    }
+
+    /* Returns a Promise<Blob> with the pHYs chunk set to `dpi`. Any
+     * surprise (not a PNG, malformed chunk stream, no arrayBuffer
+     * support) resolves to the original blob — a missing dpi tag must
+     * never cost the user their download. */
+    function pngWithDpi(blob, dpi) {
+        if (!blob || !dpi || !blob.arrayBuffer ||
+                (blob.type && blob.type !== 'image/png')) {
+            return Promise.resolve(blob);
+        }
+        return blob.arrayBuffer().then(function (buf) {
+            var src = new Uint8Array(buf);
+            var SIG = [137, 80, 78, 71, 13, 10, 26, 10];
+            for (var i = 0; i < 8; i++) {
+                if (src[i] !== SIG[i]) return blob;
+            }
+            var ppm = Math.round(dpi / 0.0254);   // pixels per metre
+            var phys = new Uint8Array(21);
+            var dv = new DataView(phys.buffer);
+            dv.setUint32(0, 9);                   // chunk data length
+            phys[4] = 0x70; phys[5] = 0x48;       // 'p' 'H'
+            phys[6] = 0x59; phys[7] = 0x73;       // 'Y' 's'
+            dv.setUint32(8, ppm);
+            dv.setUint32(12, ppm);
+            phys[16] = 1;                         // unit specifier = metre
+            dv.setUint32(17, crc32(phys.subarray(4, 17)));
+
+            var out = [src.subarray(0, 8)];
+            var p = 8;
+            var inserted = false;
+            while (p + 8 <= src.length) {
+                var len = new DataView(src.buffer, src.byteOffset + p, 4)
+                    .getUint32(0);
+                var type = String.fromCharCode(src[p + 4], src[p + 5],
+                                               src[p + 6], src[p + 7]);
+                var end = p + 12 + len;
+                if (end > src.length) return blob;      // malformed
+                if (type !== 'pHYs') out.push(src.subarray(p, end));
+                if (type === 'IHDR' && !inserted) {
+                    // pHYs must appear before the first IDAT.
+                    out.push(phys);
+                    inserted = true;
+                }
+                p = end;
+                if (type === 'IEND') break;
+            }
+            return inserted ? new Blob(out, { type: 'image/png' }) : blob;
+        }).catch(function () { return blob; });
+    }
+
     function dataURLToBlob(dataURL) {
         var parts = dataURL.split(',');
         var mime = (parts[0].match(/data:([^;]+)/) || [null, 'application/octet-stream'])[1];
@@ -239,6 +315,8 @@
             if (!blob || !blob.size) {
                 throw new Error('TCExport: export produced no data');
             }
+            return opts.dpi ? pngWithDpi(blob, opts.dpi) : blob;
+        }).then(function (blob) {
             if (!isTouch()) {
                 downloadOrOpen(blob, filename);
                 return 'download';
@@ -276,6 +354,7 @@
         saveBlob: saveBlob,
         savePlotly: savePlotly,
         saveText: saveText,
+        pngWithDpi: pngWithDpi,
         present: present,
         dataURLToBlob: dataURLToBlob,
         isIOS: isIOS,

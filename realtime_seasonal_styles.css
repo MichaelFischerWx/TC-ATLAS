@@ -363,6 +363,9 @@ body.seasonal-maximized .seasonal-header {
         top: 6px;
         right: 8px;
     }
+    /* Buttons are wider here (32 px each + gaps), so the title needs a
+       matching reserve to keep from wrapping under them. */
+    .seasonal-panel-title { padding-right: 88px; }
 }
 
 .seasonal-body {
@@ -749,6 +752,11 @@ body.seasonal-maximized .seasonal-header {
     font-size: 0.85rem;
     color: var(--text, #e0e0e0);
     letter-spacing: 0.02em;
+    /* Keep clear of the expand + save buttons pinned to the panel's
+       top-right. Without this the title (or its subtitle pill) wraps
+       underneath them on a phone and the text collides with the icons —
+       which then also lands in the saved PNG. */
+    padding-right: 76px;
 }
 
 .seasonal-save-btn {
@@ -885,6 +893,11 @@ body.seasonal-maximized .seasonal-header {
     .seasonal-ace-layout { grid-template-columns: minmax(0, 1fr); }
 }
 .seasonal-ace-chart { min-width: 0; }
+/* Must match the Plotly layout height in _renderAcePace. The generic
+   .seasonal-ts-plot rule only sets a 340 px minimum and relies on flex to
+   grow; this panel's chart is a grid item, so it never grew and the
+   400 px figure overflowed into the caption below it. */
+#seasonal-ace-plot { height: 400px; min-height: 400px; }
 .seasonal-ace-chart .seasonal-panel-desc { margin-top: 6px; }
 
 /* Panel A — per-storm ACE contribution breakdown */

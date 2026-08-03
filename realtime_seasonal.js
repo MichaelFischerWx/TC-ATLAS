@@ -1302,6 +1302,88 @@
             attributeFilter: ['data-theme'] });
     }
 
+    // -------------------------------------------------------------------
+    // Export attribution + resolution
+    //
+    // Every saved figure on this tab carries the same three things: the
+    // TC-ATLAS spiral mark, the wordmark, and tcatlas.org. The mark is
+    // fetched once from the same-origin SVG and cached as a data URI, so
+    // both export paths (Plotly's toImage and html2canvas) can draw it
+    // without a network round-trip and without tainting the canvas.
+    // -------------------------------------------------------------------
+    var TC_LOGO_URL = 'tc-atlas-icon.svg';
+    var _tcLogoPromise = null;
+    var _tcLogo = null;          // {uri, img} once resolved
+
+    function _tcLogoLoad() {
+        if (_tcLogoPromise) return _tcLogoPromise;
+        _tcLogoPromise = fetch(TC_LOGO_URL)
+            .then(function (r) {
+                if (!r.ok) throw new Error('logo ' + r.status);
+                return r.text();
+            })
+            .then(function (svg) {
+                var uri = 'data:image/svg+xml;charset=utf-8,' +
+                          encodeURIComponent(svg);
+                return new Promise(function (resolve, reject) {
+                    var img = new Image();
+                    img.onload = function () {
+                        // Rasterize once. Plotly's toImage is unreliable
+                        // at rendering a nested SVG layout image, so the
+                        // figure path gets a PNG data URI; the canvas
+                        // paths can use either.
+                        var c = document.createElement('canvas');
+                        c.width = c.height = 256;
+                        c.getContext('2d').drawImage(img, 0, 0, 256, 256);
+                        var pngUri = uri;
+                        try { pngUri = c.toDataURL('image/png'); }
+                        catch (e) { /* keep the SVG URI */ }
+                        _tcLogo = { uri: uri, pngUri: pngUri, img: img };
+                        resolve(_tcLogo);
+                    };
+                    img.onerror = function () {
+                        reject(new Error('logo decode failed'));
+                    };
+                    img.src = uri;
+                });
+            })
+            .catch(function (e) {
+                // Attribution text still ships; only the mark is missing.
+                console.warn('[seasonal] logo unavailable for export', e);
+                _tcLogo = null;
+                return null;
+            });
+        return _tcLogoPromise;
+    }
+
+    // Annotations Plotly draws for attribution on screen. At export time
+    // these are stripped and the whole lockup is re-drawn on the canvas
+    // by _stampTcAtlasWatermark, so both export paths — Plotly figures
+    // and html2canvas panels — place the mark, wordmark and URL through
+    // one renderer at deterministic pixel offsets. (Anchoring the mark to
+    // the Plotly annotation is not workable: the annotation's position
+    // depends on Plotly's auto-expanded margins, which differ between the
+    // on-screen figure and the export.)
+    function _isWatermarkAnnotation(a) {
+        return a && (a.text === 'TC-ATLAS' || a.text === 'tcatlas.org');
+    }
+
+    // ---- 300 dpi ------------------------------------------------------
+    // Canvas PNGs carry no resolution metadata, so print/publication tools
+    // assume 72 dpi and scale the figure to a poster. We render at enough
+    // pixels for 300 dpi at a normal figure width AND stamp the pHYs chunk
+    // so the file reports 300 dpi to anything that reads it.
+    var EXPORT_DPI = 300;
+    var EXPORT_PRINT_IN = 8;                       // target print width
+    var EXPORT_MIN_PX = EXPORT_DPI * EXPORT_PRINT_IN;   // 2400 px
+
+    function _exportScaleFor(cssWidthPx) {
+        return Math.max(2, Math.ceil(EXPORT_MIN_PX / Math.max(1, cssWidthPx)));
+    }
+
+    // The pHYs stamping itself lives in tc_export.js (TCExport.pngWithDpi)
+    // so every page's exports can declare a resolution, not just this tab.
+
     // Common watermark annotation appended to every Plotly figure so the
     // saved-as-PNG output carries attribution.
     function _watermarkAnnotations() {
@@ -1318,8 +1400,13 @@
                     family: 'DM Sans, system-ui, sans-serif' },
         }, {
             xref: 'paper', yref: 'paper',
-            x: 1, y: -0.16,
-            xanchor: 'right', yanchor: 'bottom',
+            // Anchored in PIXELS below the plot area, not as a fraction of
+            // it. At -0.16 paper the offset scales with figure height, so
+            // an export twice as tall as the on-screen figure pushed this
+            // past the bottom margin and the URL was silently clipped out
+            // of every saved PNG.
+            x: 1, y: 0,
+            xanchor: 'right', yanchor: 'top', yshift: -30,
             text: 'tcatlas.org',
             showarrow: false,
             font: { size: 8, color: urlColor,
@@ -1352,28 +1439,69 @@
             // PNG isn't transparent (otherwise it'd composite onto
             // whatever app's background the user pastes into).
             var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-            var saveOverride = isDark
-                ? { paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117' }
-                : { paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff' };
-            window.Plotly.relayout(plot, saveOverride).then(function () {
-                // scale: 2 gives ~2× the on-screen pixel density — usable
-                // for both web sharing and 6-inch print at 200+ DPI.
-                // Min width 1400 / height 800 ensures we never ship a
-                // sub-publication-quality snapshot even from a small
-                // viewport.
-                TCExport.savePlotly(plot, 'TC-ATLAS_' + filenameBase + '_' + stamp, {
-                    format: 'png',
-                    width: Math.max(plot.clientWidth, 1400),
-                    height: Math.max(plot.clientHeight, 800),
-                    scale: 2,
-                }).then(function () {
-                    // Restore the live theme — _refreshTheme + re-render
-                    // is the cleanest way to undo every override.
-                    _refreshTheme();
-                    _renderScatter();
-                    _renderTimeSeries();
-                    _renderIndices();
+            // Remember exactly what we override so the live figure can be
+            // put back without re-rendering every panel on the tab (which
+            // missed any panel not in the re-render list).
+            var prev = {
+                paper_bgcolor: plot.layout.paper_bgcolor,
+                plot_bgcolor: plot.layout.plot_bgcolor,
+                annotations: (plot.layout.annotations || []).slice(),
+            };
+            btn.disabled = true;
+            // Figure width is pinned to at least 1400 CSS px so a
+            // phone-sized viewport still yields a publication figure,
+            // then scaled to clear 300 dpi at an 8-inch print width.
+            var w = Math.max(plot.clientWidth, 1400);
+            var h = Math.max(plot.clientHeight, 800);
+            var scale = _exportScaleFor(w);
+            _tcLogoLoad().then(function () {
+                var saveOverride = isDark
+                    ? { paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117' }
+                    : { paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff' };
+                // Drop the on-screen attribution text; the canvas stamp
+                // below redraws it as a proper lockup with the mark.
+                saveOverride.annotations = prev.annotations.filter(
+                    function (a) { return !_isWatermarkAnnotation(a); });
+                return window.Plotly.relayout(plot, saveOverride);
+            }).then(function () {
+                return window.Plotly.toImage(plot, {
+                    format: 'png', width: w, height: h, scale: scale });
+            }).then(function (dataUrl) {
+                // Re-render into a canvas so the spiral mark can be
+                // stamped alongside the wordmark before delivery.
+                return new Promise(function (resolve, reject) {
+                    var img = new Image();
+                    img.onload = function () {
+                        var c = document.createElement('canvas');
+                        c.width = img.width;
+                        c.height = img.height;
+                        var ctx = c.getContext('2d');
+                        ctx.fillStyle = isDark ? '#0d1117' : '#ffffff';
+                        ctx.fillRect(0, 0, c.width, c.height);
+                        ctx.drawImage(img, 0, 0);
+                        // Same lockup renderer the panel-image exports
+                        // use; `w` is the figure's CSS width, so the
+                        // helper derives the right device-pixel scale.
+                        _stampTcAtlasWatermark(c, w);
+                        c.toBlob(function (b) {
+                            b ? resolve(b) : reject(new Error('no blob'));
+                        }, 'image/png');
+                    };
+                    img.onerror = function () {
+                        reject(new Error('export decode failed'));
+                    };
+                    img.src = dataUrl;
                 });
+            }).then(function (blob) {
+                return TCExport.save(
+                    blob, 'TC-ATLAS_' + filenameBase + '_' + stamp + '.png',
+                    { dpi: EXPORT_DPI });
+            }).catch(function (err) {
+                console.error('[seasonal] save failed', err);
+            }).then(function () {
+                _refreshTheme();
+                btn.disabled = false;
+                return window.Plotly.relayout(plot, prev);
             });
         });
         panel.appendChild(btn);
@@ -1411,10 +1539,21 @@
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.textAlign = 'right';
         ctx.fillStyle = brand;
-        ctx.font = '600 ' + Math.round(11 * scale) +
-                   'px "DM Sans", system-ui, sans-serif';
+        var markFont = Math.round(11 * scale);
+        ctx.font = '600 ' + markFont + 'px "DM Sans", system-ui, sans-serif';
         ctx.textBaseline = 'top';
         ctx.fillText('TC-ATLAS', canvas.width - pad, pad);
+        // Spiral mark to the left of the wordmark, matched to its cap
+        // height so the pair reads as one lockup.
+        if (_tcLogo && _tcLogo.img) {
+            var markW = ctx.measureText('TC-ATLAS').width;
+            var logoSize = Math.round(markFont * 1.5);
+            ctx.drawImage(_tcLogo.img,
+                          canvas.width - pad - markW - logoSize -
+                              Math.round(6 * scale),
+                          pad - Math.round(markFont * 0.25),
+                          logoSize, logoSize);
+        }
         ctx.fillStyle = url;
         ctx.font = '400 ' + Math.round(9 * scale) +
                    'px "DM Sans", system-ui, sans-serif';
@@ -1482,16 +1621,23 @@
             // gets a light one. (#0d1117 mirrors the seasonal-main
             // surface in dark mode; #ffffff for the light theme.)
             var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-            _ensureHtml2canvas().then(function () {
+            Promise.all([_ensureHtml2canvas(), _tcLogoLoad()]).then(function () {
                 return window.html2canvas(panel, {
                     useCORS: true,
                     allowTaint: false,
                     backgroundColor: isDark ? '#0d1117' : '#ffffff',
                     logging: false,
-                    scale: 2,
+                    // Enough device pixels to clear 300 dpi at an 8-inch
+                    // print width even when the panel is phone-narrow —
+                    // a flat scale of 2 on a 700-px panel was only ~175.
+                    scale: _exportScaleFor(panel.offsetWidth),
                     ignoreElements: function (el) {
+                        // Both corner controls are UI chrome, not figure
+                        // content — and the expand arrow sits exactly
+                        // where the attribution lockup is stamped.
                         return el.classList &&
-                               el.classList.contains('seasonal-save-btn');
+                               (el.classList.contains('seasonal-save-btn') ||
+                                el.classList.contains('seasonal-maximize-btn'));
                     },
                     // html2canvas can't render the text inside native
                     // <select> widgets — the dropdown value comes from
@@ -1514,7 +1660,10 @@
             }).then(function (blob) {
                 var ts = new Date().toISOString()
                     .replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
-                return TCExport.save(blob, filenameBase + '_' + ts + '.png');
+                // Same TC-ATLAS_ prefix the Plotly-panel saves use.
+                return TCExport.save(blob,
+                                     'TC-ATLAS_' + filenameBase + '_' + ts + '.png',
+                                     { dpi: EXPORT_DPI });
             }).catch(function (err) {
                 console.error('[seasonal] save failed', err);
                 alert("Couldn't save PNG: " +
@@ -8008,7 +8157,10 @@
         // map sits in a borderless frame) to keep dark + light modes
         // looking equivalent.
         var layout = {
-            margin: { l: 50, r: 70, t: 10, b: 30 },
+            // b=48 (was 30) leaves room under the tick labels for the
+            // tcatlas.org attribution, which rides in the figure so the
+            // animated GIF export carries it on every frame.
+            margin: { l: 50, r: 70, t: 10, b: 48 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
             // scaleanchor locks the 1°-lon = 1°-lat aspect so the map
@@ -8032,7 +8184,11 @@
                 currentvalue: { visible: false },
                 steps: built.sliderSteps,
             }],
-            annotations: built.initialLabels || [],
+            // Attribution rides in the figure itself so the animated GIF
+            // export carries it on every frame — the PNG path draws its
+            // own footer, but GIF frames are raw Plotly captures.
+            annotations: (built.initialLabels || [])
+                .concat(_watermarkAnnotations()),
         };
         // Clear any leftover "Loading…" stub the renderer parked here
         // before Plotly's first paint. newPlot replaces innerHTML on
@@ -8352,6 +8508,12 @@
     // Output dimensions are FIXED (independent of viewport) so mobile
     // and desktop saves are identical pixel-for-pixel.
     function _evoSavePng() {
+        // Make sure the spiral mark is decoded before we compose the
+        // footer; the load is cached after the first call.
+        _tcLogoLoad().then(_evoSavePngNow);
+    }
+
+    function _evoSavePngNow() {
         var el = document.getElementById('seasonal-evo-map');
         if (!el || typeof Plotly === 'undefined') return;
         var dim = _evoSaveDimensions().png;
@@ -8396,11 +8558,22 @@
                 ctx.drawImage(img, 0, titleH);
                 ctx.fillStyle = '#475569';
                 ctx.font = footerFont + 'px "DM Sans", system-ui, sans-serif';
-                ctx.fillText('TC-ATLAS · ' + new Date().toISOString().slice(0, 10) + ' UTC',
-                             padLeft, titleH + img.height + footerH / 2);
+                var footY = titleH + img.height + footerH / 2;
+                // Same attribution lockup as every other panel: mark,
+                // wordmark, then the URL.
+                var footX = padLeft;
+                if (_tcLogo && _tcLogo.img) {
+                    var lg = Math.round(footerFont * 1.5);
+                    ctx.drawImage(_tcLogo.img, footX,
+                                  footY - lg / 2, lg, lg);
+                    footX += lg + Math.round(footerFont * 0.5);
+                }
+                ctx.fillText('TC-ATLAS · tcatlas.org · '
+                             + new Date().toISOString().slice(0, 10) + ' UTC',
+                             footX, footY);
                 TCExport.save(canvas, 'tc-atlas-seasonal-evo-' + _evoState.year
                     + '-' + dateLabel.replace(/[^a-zA-Z0-9]+/g, '_')
-                    + '.png');
+                    + '.png', { dpi: EXPORT_DPI });
             };
             img.src = url;
         }).catch(function (err) {
@@ -9776,6 +9949,8 @@
         _bindAnomZoomControl();
         _bindAnomVarControl();
         _bindAcePaceControls();
+        // Warm the export logo so the first save doesn't wait on it.
+        _tcLogoLoad();
         _wireCorrHover();
         _renderCorrelation();
         // Panel A — season ACE pace. Independent of the SST bundle below
