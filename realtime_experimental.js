@@ -483,7 +483,17 @@
             'title="Download plan view as PNG" ' +
             'aria-label="Download plan view as PNG">&#x2913; Download</button>' +
             '</div>' +
-            '<img id="exp-plan" class="exp-plan" alt="GHOST plan view">' +
+            /* crossorigin="anonymous" is LOAD-BEARING for the Download
+               button, not decoration. Without it the browser fetches this
+               image in no-CORS mode and stores a cache entry that CORS-mode
+               requests may not reuse -- so the download handler's fetch() of
+               the SAME url fails with an opaque "TypeError: Failed to fetch"
+               and the save never even reaches TCExport. Must be set before
+               src is assigned (it is: src is set later in selectStorm).
+               Both cdn.tcatlas.org and the GCS fallback send
+               access-control-allow-origin: *, so the image still loads. */
+            '<img id="exp-plan" class="exp-plan" crossorigin="anonymous" ' +
+            'alt="GHOST plan view">' +
             '</div>' +
             '<div class="exp-ranges" id="exp-ranges">' +
             '<span class="exp-ranges-label">Show</span>';
@@ -592,8 +602,14 @@
             /* Normal caching: img.src is already displayed and its URL is
                stamped with the publish time, so the browser copy is exactly
                the bytes the user is looking at. no-store here re-downloaded
-               the full ~0.9 MB PNG on every save. */
+               the full ~0.9 MB PNG on every save.
+               The retry is the safety net for a cache entry stored in
+               no-CORS mode BEFORE the img gained crossorigin="anonymous"
+               (every phone that loaded this page earlier has one). A plain
+               fetch can be refused against such an entry; cache:'reload'
+               forces a fresh CORS-mode request that cannot reuse it. */
             fetch(img.src)
+                .catch(function () { return fetch(img.src, { cache: 'reload' }); })
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     return r.blob();
