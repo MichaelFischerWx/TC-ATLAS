@@ -599,10 +599,25 @@
                     return r.blob();
                 })
                 .then(function (b) {
-                    return TCExport.saveBlob(b, 'TC-ATLAS_GHOST_' + _storm +
+                    /* TCExport.save(), NOT saveBlob(). saveBlob is the
+                       low-level delivery step and returns FALSE when the
+                       share sheet could not run -- on iOS the ~0.9 MB fetch
+                       above routinely outlives the tap's transient user
+                       activation, so share rejects with NotAllowedError.
+                       This call site discarded that false and never showed
+                       the fresh-tap overlay, so the button did nothing at all
+                       on iPhone. save() owns the whole contract: desktop
+                       anchor, touch share sheet, and the overlay fallback
+                       whose Save button carries a brand-new activation.
+                       Same silent-failure class as commit aa6f708c. */
+                    return TCExport.save(b, 'TC-ATLAS_GHOST_' + _storm +
                         '_planview' + (stamp ? '_' + stamp : '') + '.png');
                 })
-                .catch(function () {})
+                .catch(function (e) {
+                    /* Never swallow silently -- a dead save button with no
+                       trace is what made this bug survive two audits. */
+                    if (window.console) console.warn('GHOST plan save failed', e);
+                })
                 .then(function () { pDl.disabled = false; });
         });
         _root.querySelectorAll('.exp-range[data-h]').forEach(function (b) {
