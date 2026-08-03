@@ -399,6 +399,11 @@ body.seasonal-maximized .seasonal-header {
     min-width: 0;
 }
 
+/* Panel A is the headline panel and its x-axis is a whole calendar year,
+   so it takes the full width as a dominant top row. Pairing it with the
+   anomaly map left a ragged row — the two have very different natural
+   heights — and the year axis was cramped at half width. */
+#seasonal-panel-ace-pace { grid-column: 1 / -1; }
 #seasonal-panel-scatter { grid-column: 1 / -1; }
 #seasonal-panel-correlation { grid-column: 1 / -1; }
 #seasonal-panel-evolution { grid-column: 1 / -1; }
@@ -867,29 +872,54 @@ body.seasonal-maximized .seasonal-header {
 .seasonal-ace-chip .ace-hi { color: #ff7a59; }
 .seasonal-ace-chip .ace-lo { color: #6da8e6; }
 
+/* Panel A inner layout: chart left, storm contributions right. The
+   breakdown is a natural sidebar — short rows, no wide axis — and putting
+   it beside the chart keeps the full-width panel from running tall. */
+.seasonal-ace-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+    gap: 20px;
+    align-items: start;
+}
+@media (max-width: 1100px) {
+    .seasonal-ace-layout { grid-template-columns: minmax(0, 1fr); }
+}
+.seasonal-ace-chart { min-width: 0; }
+.seasonal-ace-chart .seasonal-panel-desc { margin-top: 6px; }
+
 /* Panel A — per-storm ACE contribution breakdown */
-.seasonal-ace-storms { margin-top: 6px; }
+.seasonal-ace-storms { margin-top: 6px; min-width: 0; }
 .seasonal-ace-storms-head {
     font-size: 0.74rem;
     color: var(--text-dim, #94a3b8);
     margin-bottom: 6px;
 }
 .seasonal-ace-storms-head strong { color: var(--text, #e0e0e0); }
-.seasonal-ace-storm {
+/* The LIST owns the column tracks; each row is display:contents so its
+   four cells land in the shared grid. Sizing the tracks per row let a
+   longer value cell (the active storm's "+3.8/24h") narrow that row's
+   bar track and visibly offset its bar. */
+.seasonal-ace-list {
     display: grid;
-    grid-template-columns: minmax(168px, 1.7fr) minmax(60px, 2fr) auto;
+    grid-template-columns:
+        minmax(140px, 1.6fr) minmax(40px, 1fr) max-content max-content;
     align-items: center;
-    gap: 10px;
-    padding: 3px 0;
+    column-gap: 10px;
+    row-gap: 6px;
     font-size: 0.74rem;
     color: var(--text-dim, #94a3b8);
 }
+.seasonal-ace-storm { display: contents; }
 .seasonal-ace-storm .ace-storm-name {
     color: var(--text, #e0e0e0);
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    /* Without this the cell's automatic minimum size is its full text
+       width, which widens the shared name track for everyone instead of
+       ellipsizing the one long name. */
+    min-width: 0;
 }
 .seasonal-ace-storm .ace-storm-meta {
     font-weight: 400;
@@ -913,10 +943,14 @@ body.seasonal-maximized .seasonal-header {
     font-variant-numeric: tabular-nums;
     color: var(--text, #e0e0e0);
     white-space: nowrap;
+    text-align: right;
 }
 .seasonal-ace-storm .ace-storm-live {
     color: #fb923c;
     font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    text-align: right;
 }
 .seasonal-ace-storms-gap { height: 14px; }
 .seasonal-ace-more {

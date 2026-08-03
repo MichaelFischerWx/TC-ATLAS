@@ -99,7 +99,11 @@
         ace_storms: null,      // parsed ace_pace_storms.json (lazy)
 
         anomZoom: 'global',
-        anomVar: 'raw',     // Panel A: 'raw' | 'relative' | 'shear_climo'
+        // Panel B defaults to RELATIVE SST (Vecchi-Soden 2007): with a
+        // warming tropics, the raw anomaly map is mostly a uniform warm
+        // wash, while relative SST is what actually tracks TC potential
+        // intensity. Same framing Panel E already defaults to.
+        anomVar: 'relative',   // 'raw' | 'relative' | 'shear_anom' | 'shear_climo'
         // Calendar month for ERA5 climatology view. Defaults to UTC
         // "now"; user-selectable when in shear_climo mode.
         anomMonth: (new Date()).getUTCMonth() + 1,
@@ -605,8 +609,21 @@
         // comparison against a storm-free basin is a tie, not a miss.
         var rank = null;
         if (ace !== null) rank = _aceClimoRank(basin, today, ace);
+        // Standing against the per-day record envelope, so "is this season
+        // at record pace?" is answerable mid-season and not only against
+        // the final total.
+        var rec = null;
+        if (cl.record_pace) {
+            var rp = cl.record_pace;
+            rec = { max: rp.max[today - 1], min: rp.min[today - 1],
+                    maxSeason: rp.max_season[today - 1],
+                    span: rp.seasons,
+                    aheadOfRecord: (ace !== null && ace > rp.max[today - 1]),
+                    pctOfRecord: (ace !== null && rp.max[today - 1] > 0)
+                        ? (100 * ace / rp.max[today - 1]) : null };
+        }
         return { today: today, meanToDate: meanToDate, seasonMean: seasonMean,
-                 ace: ace, pct: pct, rank: rank,
+                 ace: ace, pct: pct, rank: rank, rec: rec,
                  season: live ? live.season : null,
                  storms: live ? live.storms : null,
                  through: live ? live.through : null };
@@ -754,6 +771,33 @@
             };
             band('p10', 'p90', BRAND.gray, '10th-90th pct (1991-2020)');
             band('p25', 'p75', 'rgba(140,148,160,0.30)', '25th-75th pct');
+
+            // Record envelope — the fastest and slowest any complete
+            // season has been through the same calendar date. Drawn thin
+            // and dotted so it reads as a boundary, not another season.
+            var rp = cl.record_pace;
+            if (rp) {
+                var rangeTxt = rp.seasons[0] + '-' + rp.seasons[1];
+                traces.push({
+                    x: days, y: rp.max, type: 'scatter', mode: 'lines',
+                    name: 'record pace (' + rangeTxt + ')',
+                    line: { color: 'rgba(239,68,68,0.80)', width: 1.4,
+                            dash: 'dot' },
+                    // hovermode is 'x unified', so the date is already in
+                    // the hover header — customdata carries the season
+                    // that set the record on that date.
+                    customdata: rp.max_season,
+                    hovertemplate: 'record: %{y:.1f} ' +
+                        '(%{customdata})<extra></extra>',
+                });
+                traces.push({
+                    x: days, y: rp.min, type: 'scatter', mode: 'lines',
+                    name: 'slowest season',
+                    line: { color: 'rgba(148,163,184,0.75)', width: 1.2,
+                            dash: 'dot' },
+                    hovertemplate: 'slowest: %{y:.1f}<extra></extra>',
+                });
+            }
             traces.push({
                 x: days, y: cl.climo.p50, type: 'scatter', mode: 'lines',
                 name: 'median season',
@@ -804,7 +848,7 @@
             // Bottom margin has to clear the tcatlas.org watermark, which
             // the shared annotation helper places at paper y = -0.16.
             margin: { l: 56, r: 16, t: 26, b: 58 },
-            height: 360,
+            height: 400,
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: BRAND.plotBg,
             font: { family: 'DM Sans, system-ui, sans-serif', color: BRAND.text },
@@ -835,8 +879,12 @@
                 line: { color: BRAND.textDim, width: 1, dash: 'dot' },
             }],
             annotations: _watermarkAnnotations().concat([{
-                x: todayDay, y: 1, xref: 'x', yref: 'paper',
-                yanchor: 'bottom', showarrow: false, text: 'today',
+                // Inside the plot area, hanging off the "today" rule —
+                // above it the label collides with the legend, which now
+                // wraps to two rows.
+                x: todayDay, y: 0.99, xref: 'x', yref: 'paper',
+                yanchor: 'top', xanchor: 'left', xshift: 3,
+                showarrow: false, text: 'today',
                 font: { size: 9, color: BRAND.textDim },
             }]),
         };
@@ -963,29 +1011,33 @@
             return Math.max(m, r.ace); }, 0) || 1;
         var limit = opts.expanded ? recs.length : Math.min(recs.length, 12);
         var html = '<div class="seasonal-ace-storms-head">' + heading + '</div>';
-        html += recs.slice(0, limit).map(function (r) {
+        // One grid for the whole list (rows are `display: contents`), so
+        // every bar starts and ends on the same track. Per-row grids sized
+        // their columns independently, which let the active storm's
+        // "+3.8/24h" suffix shove that row's bar out of alignment.
+        html += '<div class="seasonal-ace-list">' +
+            recs.slice(0, limit).map(function (r) {
             var share = total > 0 ? (100 * r.ace / total) : 0;
             var span = (r.firstDay !== undefined)
                 ? _aceDayLabel(basin, r.firstDay) + '-' + _aceDayLabel(basin, r.lastDay)
                 : _aceStampLabel(r.first) + '-' + _aceStampLabel(r.last);
+            var tip = (r.id || r.name || '') + ' · ' + r.points +
+                ' synoptic points at or above 34 kt · peak ' + r.peak_kt + ' kt';
             return '<div class="seasonal-ace-storm' +
-                (r.active ? ' is-active' : '') + '" title="' +
-                (r.id || r.name || '') + ' · ' + r.points +
-                ' synoptic points at or above 34 kt · peak ' +
-                r.peak_kt + ' kt">' +
-                '<div class="ace-storm-name">' + (r.name || r.id || 'UNNAMED') +
+                (r.active ? ' is-active' : '') + '">' +
+                '<div class="ace-storm-name" title="' + tip + '">' +
+                (r.name || r.id || 'UNNAMED') +
                 ' <span class="ace-storm-meta">' + r.peak_kt + ' kt · ' +
                 span + '</span></div>' +
                 '<div class="ace-storm-bar"><span style="width:' +
                 Math.max(2, 100 * r.ace / maxAce).toFixed(1) + '%"></span></div>' +
                 '<div class="ace-storm-val">' + r.ace.toFixed(1) + ' · ' +
-                share.toFixed(0) + '%' +
-                (r.active && r.ace_24h
-                    ? ' <span class="ace-storm-live">+' + r.ace_24h.toFixed(1) +
-                      '/24h</span>'
-                    : (r.active ? ' <span class="ace-storm-live">active</span>' : '')) +
+                share.toFixed(0) + '%</div>' +
+                '<div class="ace-storm-live">' +
+                (r.active && r.ace_24h ? '+' + r.ace_24h.toFixed(1) + '/24h'
+                    : (r.active ? 'active' : '')) +
                 '</div></div>';
-        }).join('');
+        }).join('') + '</div>';
         if (recs.length > limit) {
             html += '<button type="button" class="seasonal-ace-more" ' +
                 'data-more="' + (opts.key || '') + '">+ ' +

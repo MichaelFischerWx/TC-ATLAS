@@ -1502,9 +1502,18 @@
                         </select>
                     </label>
                 </div>
-                <div id="seasonal-ace-plot" class="seasonal-ts-plot"></div>
-                <p class="seasonal-panel-desc" id="seasonal-ace-note"></p>
-                <div class="seasonal-ace-storms" id="seasonal-ace-storms"></div>
+                <!-- Chart and the per-storm breakdown sit side by side on a
+                     wide viewport: the panel spans both grid columns, so
+                     stacking them would leave a very tall cell above a
+                     half-height Panel B. Collapses to one column under
+                     1100 px. -->
+                <div class="seasonal-ace-layout">
+                    <div class="seasonal-ace-chart">
+                        <div id="seasonal-ace-plot" class="seasonal-ts-plot"></div>
+                        <p class="seasonal-panel-desc" id="seasonal-ace-note"></p>
+                    </div>
+                    <div class="seasonal-ace-storms" id="seasonal-ace-storms"></div>
+                </div>
             </section>
 
             <!-- Panel B: Live SST anomaly map (global by default) -->
@@ -1514,8 +1523,8 @@
                     <label>Variable
                         <select id="seasonal-anom-var" title="SST and atmospheric anomalies — both relative to the same 1991-2020 climatology. SST uses today's OISST; the atmosphere uses the latest GFS analysis cycle.">
                             <optgroup label="SST (OISST today − climo)">
-                                <option value="raw" selected>Raw SST anomaly</option>
-                                <option value="relative">Relative SST anomaly (Vecchi-Soden 2007)</option>
+                                <option value="raw">Raw SST anomaly</option>
+                                <option value="relative" selected>Relative SST anomaly (Vecchi-Soden 2007)</option>
                             </optgroup>
                             <optgroup label="Atmosphere (latest GFS − ERA5 climo)">
                                 <option value="shear_anom">Deep-layer shear anomaly (current)</option>

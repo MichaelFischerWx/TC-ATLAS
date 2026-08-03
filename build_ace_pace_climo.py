@@ -116,6 +116,21 @@ def _decode(x) -> str:
     return x.decode("utf-8") if isinstance(x, (bytes, bytearray)) else str(x)
 
 
+def _season_is_over(basin: str, season: int,
+                    today: datetime | None = None) -> bool:
+    """Has this basin's `season` finished its calendar window?
+
+    NH seasons close on Dec 31 of the season year; SH seasons close on
+    Jun 30 of the season year (they open the previous Jul 1).
+    """
+    today = today or datetime.now(timezone.utc)
+    if basin in SH_BASINS:
+        current = today.year + 1 if today.month >= 7 else today.year
+    else:
+        current = today.year
+    return season < current
+
+
 def refresh_ibtracs(path: str) -> str:
     """Re-download IBTrACS.ALL (~23 MB, NCEI refreshes it every few weeks).
 
@@ -320,6 +335,25 @@ def build(ibtracs_path: str, out_path: Path) -> Path:
         # while the live curve already covers it.
         record_season = max(totals, key=lambda k: totals[k])
 
+        # Per-day record envelope: the fastest and slowest any season has
+        # ever been through this same calendar date. This is what makes
+        # "is this season at record pace?" answerable at any point in the
+        # season, rather than only against the final total.
+        #
+        # Computed over COMPLETE seasons only. A season still in progress
+        # is flat-zero for every day after today, which would drag the
+        # minimum envelope to zero across the back half of the year and
+        # make every season look record-slow.
+        done = [s for s in seasons if _season_is_over(b, s)]
+        rec_max = rec_min = rec_max_season = None
+        if done:
+            rstack = np.zeros((len(done), DAYS), dtype=np.float64)
+            for k, s in enumerate(done):
+                rstack[k] = per_season[s]
+            rec_max = rstack.max(axis=0)
+            rec_min = rstack.min(axis=0)
+            rec_max_season = [int(done[i]) for i in rstack.argmax(axis=0)]
+
         payload["basins"][b] = {
             "name": label,
             "hemisphere": "SH" if b in SH_BASINS else "NH",
@@ -327,6 +361,13 @@ def build(ibtracs_path: str, out_path: Path) -> Path:
             "n_climo_seasons": n_climo,
             "climo": {k: [round(float(x), 2) for x in v]
                       for k, v in climo.items()},
+            "record_pace": ({
+                "max": [round(float(x), 2) for x in rec_max],
+                "min": [round(float(x), 2) for x in rec_min],
+                "max_season": rec_max_season,
+                "seasons": [int(s) for s in (done[0], done[-1])],
+                "n_seasons": len(done),
+            } if rec_max is not None else None),
             "years": {str(s): _sparse(per_season[s]) for s in seasons},
             "totals": totals,
             "storms": {str(s): int(storms[b].get(s, 0)) for s in seasons},
