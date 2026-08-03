@@ -2,10 +2,12 @@
  *
  * GHOST Stage-0/1 ML diagnostics (recon-independent Vmax/Pmin/RMW from
  * geostationary IR + SHIPS environment), produced by the TC-SWARM
- * realtime/ghost_rt pipeline hourly and published to
- * gs://tc-atlas-ir-cache/ghost-rt/. Public since 2026-07-26; the method is
- * described in a manuscript in preparation. Research guidance, NOT an
- * official forecast or analysis.
+ * realtime/ghost_rt pipeline every 30 min, published to
+ * gs://tc-atlas-ir-cache/ghost-rt/ and mirrored to Cloudflare R2. Read here
+ * from https://cdn.tcatlas.org/ghost-rt/ (free egress, edge-cached) with GCS
+ * as the fallback. Public since 2026-07-26; the method is described in a
+ * manuscript in preparation. Research guidance, NOT an official forecast or
+ * analysis.
  *
  * Lazy-loaded on first tab activation (see _lazyViewMods in
  * realtime_ir.html). Public API: window.activateExperimentalView().
@@ -13,6 +15,15 @@
 (function () {
     'use strict';
 
+    /* Read route (2026-08-03). These objects used to be pulled straight off
+       storage.googleapis.com, which made every viewer a paid GCS egress event
+       ($0.12/GB) -- the last public data path on the site that never got the
+       R2/Cloudflare treatment. The publisher (TC-SWARM ghost_rt_all.upload)
+       now mirrors every object to R2, so reads come off cdn.tcatlas.org where
+       egress is free and the edge caches them. GCS_BASE is retained purely as
+       a fallback: if a mirror write ever fails, the object is still on GCS and
+       the tab keeps working (at the old cost) instead of breaking. */
+    var CDN_BASE = 'https://cdn.tcatlas.org/';
     var GCS_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/';
     var PREFIX = 'ghost-rt';
     /* Season-archive prefix (retrospective runs published by TC-SWARM
@@ -176,11 +187,25 @@
         return _plotlyReq;
     }
 
-    function fetchJson(url) {
-        return fetch(url, { cache: 'no-store' }).then(function (r) {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            return r.json();
-        });
+    /* Fetch a published GHOST object by bucket-relative path (e.g.
+       'ghost-rt/index.json'), preferring the CDN and falling back to GCS if
+       the mirror is missing or the edge errors.
+
+       Caching: the per-storm series payloads are 200-290 KB EACH and the tab
+       fetches one for every live storm on open, so they are left on normal
+       browser caching and the origin's max-age=300 does its job -- a 5-minute
+       window against a 30-minute publish cadence. Only the tiny index.json
+       (102 B) is fetched no-store, so the storm list and the `generated`
+       stamp (which cache-busts the plan PNGs) are always current. */
+    function fetchJson(path, noStore) {
+        var opts = noStore ? { cache: 'no-store' } : undefined;
+        function get(base) {
+            return fetch(base + path, opts).then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            });
+        }
+        return get(CDN_BASE).catch(function () { return get(GCS_BASE); });
     }
 
     /* Verification numbers are quoted from the manuscript (Fischer, in prep).
@@ -564,7 +589,11 @@
             track('ghost_plan_download', { storm: _storm });
             pDl.disabled = true;
             var stamp = (_index && _index.generated || '').slice(0, 10);
-            fetch(img.src, { cache: 'no-store' })
+            /* Normal caching: img.src is already displayed and its URL is
+               stamped with the publish time, so the browser copy is exactly
+               the bytes the user is looking at. no-store here re-downloaded
+               the full ~0.9 MB PNG on every save. */
+            fetch(img.src)
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     return r.blob();
@@ -596,9 +625,10 @@
     }
 
     /* Archived storms live under the season prefix; live ones under the
-       real-time prefix. Everything downstream is prefix-agnostic. */
-    function seriesUrl(atcf) {
-        return GCS_BASE + (_archSet[atcf] ? ARCH_PREFIX : PREFIX) +
+       real-time prefix. Everything downstream is prefix-agnostic.
+       Returns a bucket-relative path -- fetchJson() picks CDN vs GCS. */
+    function seriesPath(atcf) {
+        return (_archSet[atcf] ? ARCH_PREFIX : PREFIX) +
             '/ghost_' + atcf + '.json';
     }
 
@@ -608,7 +638,7 @@
         storms.forEach(function (s) {
             var p = _series[s.atcf]
                 ? Promise.resolve(_series[s.atcf])
-                : fetchJson(GCS_BASE + PREFIX + '/ghost_' + s.atcf + '.json')
+                : fetchJson(PREFIX + '/ghost_' + s.atcf + '.json')
                     .then(function (j) { _series[s.atcf] = j; return j; });
             p.then(function (j) {
                 var em = document.getElementById('exp-int-' + s.atcf);
@@ -642,13 +672,21 @@
             var gen = _archSet[atcf]
                 ? (_archIndex && _archIndex.generated)
                 : (_index && _index.generated);
-            img.src = GCS_BASE + (_archSet[atcf] ? ARCH_PREFIX : PREFIX) +
+            var planPath = (_archSet[atcf] ? ARCH_PREFIX : PREFIX) +
                 '/ghost_' + atcf + '_plan.png?t=' +
                 encodeURIComponent(gen || Date.now());
+            /* Same CDN-first/GCS-fallback contract as fetchJson, but an <img>
+               can only express it through onerror. Guarded so a failing GCS
+               copy can't loop: the handler clears itself before retrying. */
+            img.onerror = function () {
+                img.onerror = null;
+                img.src = GCS_BASE + planPath;
+            };
+            img.src = CDN_BASE + planPath;
         }
         var p = _series[atcf]
             ? Promise.resolve(_series[atcf])
-            : fetchJson(seriesUrl(atcf))
+            : fetchJson(seriesPath(atcf))
                 .then(function (j) { _series[atcf] = j; return j; });
         Promise.all([p, ensurePlotly()]).then(function (res) {
             if (_storm !== atcf) return;
@@ -1624,10 +1662,10 @@
     function loadIndex() {
         _lastLoad = Date.now();
         Promise.all([
-            fetchJson(GCS_BASE + PREFIX + '/index.json'),
+            fetchJson(PREFIX + '/index.json', true),
             /* archive is optional: absent until the first season storm
                completes, and its loss must never take the live page down */
-            fetchJson(GCS_BASE + ARCH_PREFIX + '/index.json')
+            fetchJson(ARCH_PREFIX + '/index.json', true)
                 .catch(function () { return null; })
         ]).then(function (res) {
             _index = res[0];
