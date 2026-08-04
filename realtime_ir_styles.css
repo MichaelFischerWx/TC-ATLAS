@@ -207,7 +207,7 @@ html, body { margin: 0; padding: 0; }
     max-width: min(720px, 90vw);
 }
 .ir-feed-banner-icon {
-    color: #fb923c;
+    color: var(--um-orange, #F47321);
     font-size: 1rem;
     flex-shrink: 0;
 }
@@ -2294,7 +2294,7 @@ html, body { margin: 0; padding: 0; }
     border: 2px solid #161b24;
 }
 .rt-anim-dt {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 0.66rem;
     color: #e2e8f0;
     font-variant-numeric: tabular-nums;
@@ -2304,7 +2304,7 @@ html, body { margin: 0; padding: 0; }
     white-space: nowrap;
 }
 .rt-anim-speed {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 0.62rem;
     font-weight: 600;
     min-width: 32px;
@@ -2351,6 +2351,17 @@ html, body { margin: 0; padding: 0; }
         row-gap: 6px;
     }
     .rt-anim-slider { min-width: 0; flex: 1 1 90px; }
+    /* Real touch targets: the desktop 22px buttons are half the ~44px
+       mobile minimum. The row already wraps, so the taller bar is fine. */
+    .rt-anim-btn {
+        min-width: 40px;
+        height: 40px;
+        padding: 0 10px;
+        font-size: 0.82rem;
+    }
+    .rt-anim-slider { height: 6px; }
+    .rt-anim-slider::-webkit-slider-thumb { width: 18px; height: 18px; }
+    .rt-anim-slider::-moz-range-thumb { width: 18px; height: 18px; }
 }
 
 /* ── Contour value labels (env GeoJSON layers) ───────────────── */
@@ -3267,7 +3278,7 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
    the RT global map. Mono font, light text with a dark halo so they
    read on both bright land and dark ocean basemap tiles. */
 .rt-graticule-label {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
     font-weight: 600;
     color: #f1f5f9;
@@ -4081,7 +4092,7 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     font-weight: 600;
 }
 .ir-tuner-val {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-family: var(--font-mono);
     font-size: 0.7rem;
     font-weight: 700;
     color: #f97316;
@@ -5309,7 +5320,7 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     font-weight: 600;
 }
 .rt-mw-storm-utc {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 0.62rem;
     color: var(--text-dim, #64748b);
 }
@@ -5572,7 +5583,7 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     font-weight: 600;
 }
 .sat-mw-strip-card-utc {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 0.62rem;
     color: #94a3b8;
 }
@@ -5802,7 +5813,7 @@ body.sat-leaflet-active #sat-cb-right .sat-cb-label-right,
    text-shadow halo so they read on both bright land and dark ocean
    basemap tiles. Same convention as the Global Map's RT graticule. */
 .sat-graticule-label {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
     font-weight: 600;
     color: #f1f5f9;
@@ -6034,7 +6045,7 @@ body.sat-leaflet-active #sat-cb-right .sat-cb-label-right,
     color: var(--text, #0f172a);
 }
 .rt-mw-compare-time {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 0.72rem;
     font-weight: 500;
     color: var(--text-dim, #64748b);
@@ -6188,7 +6199,7 @@ body.sat-leaflet-active #sat-cb-right .sat-cb-label-right,
     line-height: 1.2;
 }
 .rt-mw-compare-marker-time {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 0.66rem;
     color: var(--text-dim, #64748b);
 }

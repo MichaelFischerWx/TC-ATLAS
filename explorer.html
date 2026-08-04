@@ -11,21 +11,21 @@
     </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. Explore 1,500+ airborne Doppler radar analyses of tropical cyclones (1997–2024) with 3D vortex structure, IR satellite imagery, microwave overlays, ERA5 environmental diagnostics, and more.">
+    <meta name="description" content="Explore 1,500+ airborne Doppler radar analyses of tropical cyclones (1997–2024) with 3D vortex structure, satellite imagery, and environmental diagnostics.">
     <meta name="keywords" content="tropical cyclone, hurricane, radar, TC-ATLAS, airborne Doppler, vortex structure, NOAA, HRD, wind analysis, microwave, satellite">
     <meta name="author" content="Dr. Michael Fischer, University of Miami / NOAA HRD">
 
     <!-- Open Graph / Social Sharing -->
     <meta property="og:type" content="website">
-    <meta property="og:title" content="TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure">
+    <meta property="og:title" content="TC-RADAR Explorer — TC-ATLAS">
     <meta property="og:description" content="Explore 1,500+ airborne Doppler radar analyses of tropical cyclones. Interactive 3D wind fields, IR satellite overlays, microwave imagery, ERA5 environmental diagnostics, and compositing tools.">
-    <meta property="og:url" content="https://tcatlas.org/explorer">
+    <meta property="og:url" content="https://tcatlas.org/explorer.html">
     <meta property="og:image" content="https://tcatlas.org/images/og-preview.png">
     <meta property="og:site_name" content="TC-ATLAS">
 
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure">
+    <meta name="twitter:title" content="TC-RADAR Explorer — TC-ATLAS">
     <meta name="twitter:description" content="Explore 1,500+ airborne Doppler radar analyses of tropical cyclones with interactive 3D visualization, microwave imagery, and environmental diagnostics.">
     <meta name="twitter:image" content="https://tcatlas.org/images/og-preview.png">
 
@@ -34,8 +34,13 @@
     <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
     <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="manifest" href="manifest.json">
+    <link rel="canonical" href="https://tcatlas.org/explorer.html">
+    <meta name="theme-color" content="#005030" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0a0e14" media="(prefers-color-scheme: dark)">
+    <meta name="apple-mobile-web-app-title" content="TC-ATLAS">
 
-    <title>TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure</title>
+    <title>TC-RADAR Explorer — TC-ATLAS</title>
     <script src="theme.js?v=20260804a"></script>
     <script defer src="tc_export.js?v=20260803c"></script>
     <link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css?v=1.9.4" />
@@ -55,9 +60,9 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundle + parser-injected map engine, discoverable
          from byte 0. Tokens MUST match the script tags below. -->
-    <link rel="preload" as="script" href="tc_radar_app.js?v=20260804a">
+    <link rel="preload" as="script" href="tc_radar_app.js?v=20260804b">
     <link rel="preload" as="script" href="assets/vendor/leaflet/leaflet.js?v=1.9.4">
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260804a">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260804b">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260804a">
 </head>
 <body>
@@ -124,27 +129,27 @@
                 <div class="filter-group">
                     <label>Intensity Range (kt)</label>
                     <div class="slider-values"><span id="min-intensity-value">0</span><span id="max-intensity-value">200</span></div>
-                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="intensity-range-fill"></div><input type="range" id="min-intensity" min="0" max="200" value="0" step="5"><input type="range" id="max-intensity" min="0" max="200" value="200" step="5"></div>
+                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="intensity-range-fill"></div><input type="range" id="min-intensity" aria-label="Minimum intensity (kt)" min="0" max="200" value="0" step="5"><input type="range" id="max-intensity" aria-label="Maximum intensity (kt)" min="0" max="200" value="200" step="5"></div>
                 </div>
                 <div class="filter-group">
                     <label>24-h Intensity Change (kt)</label>
                     <div class="slider-values"><span id="min-vmax-change-value">-100</span><span id="max-vmax-change-value">85</span></div>
-                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="vmax-change-range-fill"></div><input type="range" id="min-vmax-change" min="-100" max="85" value="-100" step="5"><input type="range" id="max-vmax-change" min="-100" max="85" value="85" step="5"></div>
+                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="vmax-change-range-fill"></div><input type="range" id="min-vmax-change" aria-label="Minimum 24-h intensity change (kt)" min="-100" max="85" value="-100" step="5"><input type="range" id="max-vmax-change" aria-label="Maximum 24-h intensity change (kt)" min="-100" max="85" value="85" step="5"></div>
                 </div>
                 <div class="filter-group">
                     <label>Tilt Magnitude (km)</label>
                     <div class="slider-values"><span id="min-tilt-value">0</span><span id="max-tilt-value">200</span></div>
-                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="tilt-range-fill"></div><input type="range" id="min-tilt" min="0" max="200" value="0" step="5"><input type="range" id="max-tilt" min="0" max="200" value="200" step="5"></div>
+                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="tilt-range-fill"></div><input type="range" id="min-tilt" aria-label="Minimum vortex tilt (km)" min="0" max="200" value="0" step="5"><input type="range" id="max-tilt" aria-label="Maximum vortex tilt (km)" min="0" max="200" value="200" step="5"></div>
                 </div>
                 <div class="filter-group">
                     <label>Max TDR Wind &mdash; 0.5 km (m/s)</label>
                     <div class="slider-values"><span id="min-wspd05-value">0</span><span id="max-wspd05-value">100</span></div>
-                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="wspd05-range-fill"></div><input type="range" id="min-wspd05" min="0" max="100" value="0" step="2"><input type="range" id="max-wspd05" min="0" max="100" value="100" step="2"></div>
+                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="wspd05-range-fill"></div><input type="range" id="min-wspd05" aria-label="Minimum 0.5-km wind speed (m/s)" min="0" max="100" value="0" step="2"><input type="range" id="max-wspd05" aria-label="Maximum 0.5-km wind speed (m/s)" min="0" max="100" value="100" step="2"></div>
                 </div>
                 <div class="filter-group">
                     <label>Max TDR Wind &mdash; 2.0 km (m/s)</label>
                     <div class="slider-values"><span id="min-wspd20-value">0</span><span id="max-wspd20-value">100</span></div>
-                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="wspd20-range-fill"></div><input type="range" id="min-wspd20" min="0" max="100" value="0" step="2"><input type="range" id="max-wspd20" min="0" max="100" value="100" step="2"></div>
+                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="wspd20-range-fill"></div><input type="range" id="min-wspd20" aria-label="Minimum 2-km wind speed (m/s)" min="0" max="100" value="0" step="2"><input type="range" id="max-wspd20" aria-label="Maximum 2-km wind speed (m/s)" min="0" max="100" value="100" step="2"></div>
                 </div>
                 <div class="filter-group">
                     <label>Year Range</label>
@@ -173,7 +178,7 @@
                 <div id="map" role="application" aria-label="Interactive map showing TC-RADAR case locations"></div>
                 <div class="scroll-prompt"><span>Scroll for details</span><div class="arrow"></div></div>
             </div>
-            <div id="side-panel"><div id="side-panel-inner"><button id="side-panel-close" onclick="closeSidePanel()">&times;</button></div></div>
+            <div id="side-panel"><div id="side-panel-inner"><button id="side-panel-close" aria-label="Close case panel" onclick="closeSidePanel()">&times;</button></div></div>
         </div>
     </section>
 
@@ -419,7 +424,7 @@
     </script>
     <script defer src="skewt.js?v=20260725d"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
-    <script defer src="tc_radar_app.js?v=20260804a"></script>
-    <script defer src="realtime_tdr.js?v=20260804a"></script>
+    <script defer src="tc_radar_app.js?v=20260804b"></script>
+    <script defer src="realtime_tdr.js?v=20260804b"></script>
 </body>
 </html>

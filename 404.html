@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex">
+    <title>Page not found — TC-ATLAS</title>
+    <link rel="icon" type="image/png" sizes="16x16" href="/tc-atlas-favicon-16.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/tc-atlas-favicon-32.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/tc-atlas-favicon-192.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="/tc-atlas-favicon-192.png">
+    <meta name="theme-color" content="#005030" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0a0e14" media="(prefers-color-scheme: dark)">
+    <!-- GH Pages serves this for ANY unknown path, so all URLs must be
+         root-absolute (a stale /some/deep/link would otherwise break the
+         relative links). Assets reuse the shared cached stylesheet. -->
+    <script src="/theme.js?v=20260804a"></script>
+    <link rel="stylesheet" href="/tc_radar_styles.css?v=20260804b">
+    <style>
+        .nf-wrap {
+            min-height: calc(100vh - 120px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 32px 20px;
+        }
+        .nf-icon { width: 76px; height: 76px; border-radius: 14px; margin-bottom: 18px; }
+        .nf-code {
+            font-size: 0.8rem;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+        .nf-title { font-size: 1.5rem; font-weight: 700; color: var(--text); margin: 0 0 10px; }
+        .nf-desc { font-size: 0.95rem; color: var(--text-dim); max-width: 420px; margin: 0 0 26px; }
+        .nf-links { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+        .nf-links a {
+            display: inline-block;
+            padding: 9px 18px;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-light);
+            background: var(--surface-raised);
+            color: var(--text);
+            font-size: 0.88rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: border-color 0.15s, background 0.15s;
+        }
+        .nf-links a:hover { border-color: var(--um-green); }
+        .nf-links a.nf-primary {
+            background: var(--um-green);
+            border-color: var(--um-green);
+            color: #ffffff;
+        }
+        .nf-links a.nf-primary:hover { background: var(--um-green-deep); }
+    </style>
+</head>
+<body>
+    <header class="topbar" role="banner">
+        <div class="topbar-inner">
+            <div class="topbar-brand">
+                <img src="/tc-atlas-favicon-64.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
+                <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+            </div>
+        </div>
+    </header>
+    <main class="nf-wrap">
+        <img src="/tc-atlas-favicon-192.png" alt="" class="nf-icon" aria-hidden="true" width="76" height="76">
+        <div class="nf-code">404</div>
+        <h2 class="nf-title">This page drifted off the chart</h2>
+        <p class="nf-desc">The page you're looking for doesn't exist — it may have
+        moved, or the link is stale. The storms, however, are all still here.</p>
+        <nav class="nf-links" aria-label="Main destinations">
+            <a class="nf-primary" href="/realtime_ir.html">Real-Time Monitor</a>
+            <a href="/explorer.html">TC-RADAR Explorer</a>
+            <a href="/global_archive.html">Global Archive</a>
+            <a href="/">Home</a>
+        </nav>
+    </main>
+</body>
+</html>

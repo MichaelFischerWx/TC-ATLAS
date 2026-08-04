@@ -24581,7 +24581,7 @@
         }).catch(function (err) {
             console.error('[Export] PNG export failed', err);
             _ga('rt_export_png', { ok: false, msg: String(err && err.message) });
-            alert('Couldn’t save PNG: ' + (err && err.message ? err.message : err));
+            _rtToast('Couldn’t save PNG: ' + (err && err.message ? err.message : err));
         }).then(function () {
             if (btn) { btn.textContent = orig; btn.disabled = false; }
         });
@@ -29962,7 +29962,11 @@
                 // overlay open otherwise keeps rebuilding /recon/realtime blobs
                 // (and re-fetching upstream) every minute for no viewer.
                 if (_rtReconPollTimer) { clearInterval(_rtReconPollTimer); _rtReconPollTimer = null; }
+                // And the 2 s label-sync backstop (pure DOM churn for no viewer;
+                // it restarts itself via _scheduleStormLabelSync on return).
+                if (_stormLabelSyncInterval) { clearInterval(_stormLabelSyncInterval); _stormLabelSyncInterval = null; }
             } else {
+                _scheduleStormLabelSync();
                 var awayMs = _pollHiddenAt ? Date.now() - _pollHiddenAt : 0;
                 _pollHiddenAt = 0;
                 if (awayMs > POLL_INTERVAL_MS / 2) {
@@ -30854,7 +30858,7 @@
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (meta) {
                 if (!meta || !meta.intensity_history || meta.intensity_history.length === 0) {
-                    alert('No track data available for export');
+                    _rtToast('No track data available for export');
                     return;
                 }
 
@@ -30909,7 +30913,7 @@
             })
             .catch(function (err) {
                 console.warn('[RT Monitor] KML export failed:', err.message || '');
-                alert('KML export failed — could not fetch track data');
+                _rtToast('KML export failed — could not fetch track data');
             });
     };
 

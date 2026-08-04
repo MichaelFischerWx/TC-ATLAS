@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /lflet_gl_test.html
+Disallow: /realtime_ir_gl.html
+
+Sitemap: https://tcatlas.org/sitemap.xml

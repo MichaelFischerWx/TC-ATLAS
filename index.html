@@ -11,7 +11,7 @@
     </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. A multi-source platform for exploring tropical cyclone vortex structure with airborne radar, satellite IR/microwave imagery, reconnaissance, ERA5 reanalysis, and best-track climatology with composite + correlation tools.">
+    <meta name="description" content="Live tropical cyclone monitoring and research: global satellite imagery, airborne Doppler radar, reconnaissance, and environmental diagnostics in one platform.">
     <meta name="keywords" content="tropical cyclone, hurricane, radar, TC-ATLAS, TC-RADAR, airborne Doppler, vortex structure, NOAA, HRD, satellite, microwave, IBTrACS, ERA5, reanalysis, climatology, ENSO, AMO, RONI">
     <meta name="author" content="Dr. Michael Fischer, University of Miami">
 
@@ -41,6 +41,11 @@
     <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
     <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="manifest" href="manifest.json">
+    <link rel="canonical" href="https://tcatlas.org/">
+    <meta name="theme-color" content="#005030" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0a0e14" media="(prefers-color-scheme: dark)">
+    <meta name="apple-mobile-web-app-title" content="TC-ATLAS">
 
     <title>TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure</title>
     <script src="theme.js?v=20260804a"></script>
@@ -139,6 +144,18 @@
         body { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: var(--text); background: var(--navy); }
 
         /* ── Top bar ─────────────────────────────────────── */
+        .skip-link { position: absolute; top: -100%; left: 16px; z-index: 100000; padding: 8px 16px; background: var(--um-orange, #F47321); color: #000; font-weight: 600; border-radius: 0 0 8px 8px; text-decoration: none; transition: top 0.2s; }
+        .skip-link:focus { top: 0; }
+        *:focus-visible { outline: 2px solid var(--um-orange, #F47321); outline-offset: 2px; }
+        ::selection { background: rgba(0, 80, 48, 0.18); }
+        [data-theme="dark"] ::selection { background: rgba(74, 155, 110, 0.30); }
+        * { -webkit-tap-highlight-color: transparent; scrollbar-width: thin; scrollbar-color: var(--border-light, rgba(15,22,35,0.12)) transparent; }
+        ::-webkit-scrollbar { width: 10px; height: 10px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.4); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+        }
         .topbar { background: var(--navy); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1000; backdrop-filter: blur(12px); }
         .topbar-inner { max-width: 1200px; margin: 0 auto; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; height: 52px; }
         .topbar-brand { display: flex; align-items: center; gap: 14px; }
@@ -352,7 +369,7 @@
             border-radius: var(--radius);
             padding: 1.5rem;
         }
-        .source-card h4 {
+        .source-card h3 {
             color: var(--text);
             margin-bottom: 0.5rem;
             font-size: 0.95rem;
@@ -664,6 +681,7 @@
     </style>
 </head>
 <body>
+    <a href="#main" class="skip-link">Skip to main content</a>
     <header class="topbar" role="banner">
         <div class="topbar-inner">
             <div class="topbar-brand">
@@ -691,6 +709,7 @@
     </header>
 
     <!-- ── Hero ──────────────────────────────────────────── -->
+    <main id="main">
     <section class="hero">
         <div class="hero-lockup">
             <img src="tc-atlas-favicon-192.png" alt="" class="hero-icon" aria-hidden="true" width="76" height="76">
@@ -827,31 +846,31 @@
             <p class="section-desc">TC-ATLAS unifies observations from multiple platforms and agencies into a single interactive environment.</p>
             <div class="source-grid">
                 <div class="source-card">
-                    <h4>Airborne Doppler Radar</h4>
+                    <h3>Airborne Doppler Radar</h3>
                     <p>Post-processed NOAA P-3 tail Doppler radar analyses providing full 3D wind fields, reflectivity, and derived vortex diagnostics via the <a href="explorer.html">TC-RADAR database</a>.</p>
                 </div>
                 <div class="source-card">
-                    <h4>Passive Microwave Satellite</h4>
+                    <h3>Passive Microwave Satellite</h3>
                     <p>Multi-sensor microwave imagery from the <a href="https://rammb-data.cira.colostate.edu/tcprimed/" target="_blank" rel="noopener">TC-PRIMED</a> dataset, revealing precipitation structure and convective organization.</p>
                 </div>
                 <div class="source-card">
-                    <h4>Infrared Satellite</h4>
+                    <h3>Infrared Satellite</h3>
                     <p>Geostationary IR brightness temperatures from GridSat-B1, MergIR, and real-time GOES ABI Band 13 imagery for cloud-top structure.</p>
                 </div>
                 <div class="source-card">
-                    <h4>ERA5 Reanalysis</h4>
+                    <h3>ERA5 Reanalysis</h3>
                     <p>Monthly-mean and per-year ERA5 fields (SST, MPI, wind, moisture, MSE, PV, deep-layer shear) on a 3D globe via the <a href="tc_climatology.html">TC Climatology</a> page. Composite TC seasons by climate index, custom year/month, or per-pixel correlation.</p>
                 </div>
                 <div class="source-card">
-                    <h4>SHIPS Diagnostics</h4>
+                    <h3>SHIPS Diagnostics</h3>
                     <p>Operational SHIPS model parameters — vertical wind shear, mid-level RH, ocean heat content, and forecast environment context — surfaced inline on each storm's detail card.</p>
                 </div>
                 <div class="source-card">
-                    <h4>In-situ Observations</h4>
+                    <h3>In-situ Observations</h3>
                     <p>Flight-level data and GPS dropsonde profiles from NOAA reconnaissance missions via the <a href="https://seb.omao.noaa.gov/" target="_blank" rel="noopener">SEB archives</a>.</p>
                 </div>
                 <div class="source-card">
-                    <h4>Best-Track Records</h4>
+                    <h3>Best-Track Records</h3>
                     <p>Storm tracks, intensity, and classification from <a href="https://www.ncei.noaa.gov/products/international-best-track-archive" target="_blank" rel="noopener">IBTrACS v04</a> for comprehensive historical context across all ocean basins.</p>
                 </div>
             </div>
@@ -962,6 +981,7 @@
             <p style="margin-top:1rem;"><a href="mailto:mike.fischer@miami.edu" style="font-size:1rem;">mike.fischer@miami.edu</a></p>
         </div>
     </section>
+    </main>
 
     <footer>
         <div>Created by Michael S. Fischer &middot; University of Miami</div>

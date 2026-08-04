@@ -3288,7 +3288,7 @@ function _buildCompareSearchHTML(ctx) {
             '<div class="compare-filter-cell"><label>Year</label><div class="compare-range-inputs">' +
                 '<input type="number" id="compare-year-min' + sfx + '" class="ga-input ga-input-sm" placeholder="1997" oninput="updateCompareSearch()">' +
                 '<span>&ndash;</span>' +
-                '<input type="number" id="compare-year-max' + sfx + '" class="ga-input ga-input-sm" placeholder="2024" oninput="updateCompareSearch()">' +
+                '<input type="number" id="compare-year-max' + sfx + '" class="ga-input ga-input-sm" placeholder="2026" oninput="updateCompareSearch()">' +
             '</div></div>' +
             '<div class="compare-filter-cell"><label>Min Wind (kt)</label>' +
                 '<input type="number" id="compare-wind-min' + sfx + '" class="ga-input ga-input-sm" placeholder="0" oninput="updateCompareSearch()">' +

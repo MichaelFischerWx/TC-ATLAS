@@ -647,6 +647,18 @@
         _hdobPollTimer = setInterval(_hdobFetch, 60000);
     };
 
+    // Pause the 60 s HDOB poll while the tab is hidden — a backgrounded tab
+    // otherwise re-fetches recon data every minute for no viewer. Mirrors the
+    // visibility gating realtime_ir.js applies to its own polls.
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden) {
+            if (_hdobPollTimer) { clearInterval(_hdobPollTimer); _hdobPollTimer = null; }
+        } else if ((_hdobAtcf || _hdobMissionTail) && !_hdobPollTimer) {
+            _hdobFetch();
+            _hdobPollTimer = setInterval(_hdobFetch, 60000);
+        }
+    });
+
     function _hdobInitMap() {
         if (_hdobMap) return _hdobMap;
         var el = document.getElementById('recon-hdob-map');

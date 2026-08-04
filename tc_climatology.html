@@ -11,7 +11,7 @@
     </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="TC Climatology — IBTrACS best-track statistics (ACE, intensity, RI, LMI, seasonal cycles) and an interactive ERA5 reanalysis globe with TC tracks for compositing by climate index, custom year/month selection, and per-pixel correlation maps.">
+    <meta name="description" content="Tropical cyclone climatology: IBTrACS best-track statistics (ACE, intensity, rapid intensification) and an interactive ERA5 globe with compositing tools.">
     <meta name="keywords" content="tropical cyclone, hurricane, climatology, IBTrACS, ACE, ENSO, RONI, AMO, ERA5, reanalysis, composites">
     <meta name="author" content="Dr. Michael Fischer, University of Miami / NOAA HRD">
 
@@ -23,10 +23,21 @@
     <meta property="og:site_name" content="TC-ATLAS">
     <meta property="og:image" content="https://tcatlas.org/tc-atlas-preview.png">
 
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="TC-ATLAS — Tropical Cyclone Climatology">
+    <meta name="twitter:description" content="IBTrACS best-track statistics + ERA5 reanalysis globe for tropical cyclone climatology and composites.">
+    <meta name="twitter:image" content="https://tcatlas.org/tc-atlas-preview.png">
+
     <link rel="icon" type="image/png" sizes="16x16" href="tc-atlas-favicon-16.png">
     <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
     <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="manifest" href="manifest.json">
+    <link rel="canonical" href="https://tcatlas.org/tc_climatology.html">
+    <meta name="theme-color" content="#005030" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0a0e14" media="(prefers-color-scheme: dark)">
+    <meta name="apple-mobile-web-app-title" content="TC-ATLAS">
     <title>TC Climatology — TC-ATLAS</title>
     <script src="theme.js?v=20260804a"></script>
     <script defer src="tc_export.js?v=20260803c"></script>
@@ -53,8 +64,8 @@
          layout in tc_climatology_styles.css. global_archive_styles.css is
          loaded too because the chart-panel + modal classes (.clim-grid,
          .clim-panel, .ace-modal-*) live there and are reused as-is. -->
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260804a">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260725a">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260804b">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260804b">
     <link rel="stylesheet" href="tc_climatology_styles.css?v=20260523b">
 </head>
 <body>

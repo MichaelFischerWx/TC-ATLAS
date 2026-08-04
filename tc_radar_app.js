@@ -3647,7 +3647,7 @@ function _maybeAutoTwoPanel() {
 window._radarToMap = function () {
     var btn = document.getElementById('radar-map-btn');
     if (!_radarMapOn) {
-        if (!_lastPlanRender) { alert('Generate a plan view first.'); return; }
+        if (!_lastPlanRender) { showToast('Generate a plan view first.', 'warn'); return; }
         _radarMapOn = true;
         _twoPanelDisabled = false;
         _radarMapDraw();
@@ -5283,7 +5283,7 @@ function fetchSingleCFAD() {
             renderSingleCFADInto('az-result', json, false);
             openPlotModal();
         })
-        .catch(function(e) { alert('CFAD error: ' + e.message); })
+        .catch(function(e) { showToast('CFAD error: ' + e.message, 'error'); })
         .finally(function() { if (btn) { btn.disabled = false; btn.textContent = '\u2593 CFAD'; } });
 }
 
@@ -7394,7 +7394,7 @@ function switchDataType(dt) {
     _ga('switch_data_type', { from: _activeDataType, to: dt });
     var src = dt === 'merge' ? mergeData : allData;
     if (!src) {
-        alert(dt === 'merge' ? 'Merge metadata not loaded yet.' : 'Swath metadata not loaded yet.');
+        showToast(dt === 'merge' ? 'Merge metadata not loaded yet.' : 'Swath metadata not loaded yet.', 'warn');
         document.getElementById('map-data-type').value = _activeDataType;
         return;
     }
@@ -7641,7 +7641,7 @@ function fetch3DVolume() {
         })
         .catch(function(err) {
             var msg = err.name === 'AbortError' ? 'Request timed out (120s).' : err.message;
-            alert('\u26A0\uFE0F 3D Volume: ' + msg);
+            showToast('3D Volume: ' + msg, 'warn', 7000);
         })
         .finally(function() { clearTimeout(timeout); btn.disabled = false; btn.innerHTML = _icon('monitor') + '3D Volume'; });
 }
@@ -10936,7 +10936,7 @@ function _saveDiffComposite(panelIds, fileStem, mode, btn) {
     }).catch(function(err) {
         console.error('Composite save failed:', err);
         if (btn) { btn.innerHTML = orig; btn.disabled = false; }
-        alert('Could not render composite PNG: ' + (err && err.message ? err.message : err));
+        showToast('Could not render composite PNG: ' + (err && err.message ? err.message : err), 'error');
     });
 }
 

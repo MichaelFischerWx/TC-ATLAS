@@ -84,8 +84,8 @@
 }
 
 .ir-view-tab.active {
-    color: #fb923c;
-    border-bottom-color: #fb923c;
+    color: var(--um-orange, #F47321);
+    border-bottom-color: var(--um-orange, #F47321);
     background: transparent;
     box-shadow: none;
 }
@@ -101,7 +101,7 @@
     position: absolute;
     left: 10%; right: 10%; bottom: -2px;
     height: 2px;
-    background: linear-gradient(90deg, transparent, #fb923c, transparent);
+    background: linear-gradient(90deg, transparent, var(--um-orange, #F47321), transparent);
     background-size: 200% 100%;
     animation: irTabLoading 1s linear infinite;
 }
@@ -110,7 +110,7 @@
     100% { background-position: -200% 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-    .ir-view-tab.is-loading::after { animation: none; background: #fb923c; }
+    .ir-view-tab.is-loading::after { animation: none; background: var(--um-orange, #F47321); }
 }
 
 /* Inline failure bar injected by the tab controller when a lazy module

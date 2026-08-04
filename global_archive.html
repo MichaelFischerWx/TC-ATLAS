@@ -56,6 +56,11 @@
     <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
     <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="manifest" href="manifest.json">
+    <link rel="canonical" href="https://tcatlas.org/global_archive.html">
+    <meta name="theme-color" content="#005030" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0a0e14" media="(prefers-color-scheme: dark)">
+    <meta name="apple-mobile-web-app-title" content="TC-ATLAS">
 
     <title>Global TC Archive — TC-ATLAS</title>
     <script src="theme.js?v=20260804a"></script>
@@ -83,11 +88,11 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundles, discoverable from byte 0. Tokens MUST match
          the script tags below. -->
-    <link rel="preload" as="script" href="global_archive.js?v=20260804a">
+    <link rel="preload" as="script" href="global_archive.js?v=20260804b">
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260804a">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260725a">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260804b">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260804b">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -218,7 +223,7 @@
                             </div>
                             <div class="filter-col">
                                 <label class="filter-label" for="filter-year-max">Year To</label>
-                                <input type="number" id="filter-year-max" class="ga-input ga-input-sm" placeholder="2024" oninput="onFilterChange()">
+                                <input type="number" id="filter-year-max" class="ga-input ga-input-sm" placeholder="2026" oninput="onFilterChange()">
                             </div>
                         </div>
 
@@ -548,7 +553,7 @@
                                 <span id="ir-frame-info" class="ir-frame-info"></span>
                                 <span class="panel-badge" id="ir-source-badge">HURSAT-B1</span>
                                 <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepIRFrame(-1)" title="Previous frame">&#9664;</button>
-                                <button id="ir-play-btn" class="ga-btn ga-btn-sm" onclick="toggleIRPlay()">&#9654;</button>
+                                <button id="ir-play-btn" class="ga-btn ga-btn-sm" aria-label="Play IR animation" onclick="toggleIRPlay()">&#9654;</button>
                                 <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepIRFrame(1)" title="Next frame">&#9654;</button>
                                 <button class="ga-btn ga-btn-sm ir-step-btn ir-peak-btn" onclick="jumpIRToPeak()" title="Jump to lifetime-max-intensity frame">&#9733;&nbsp;Peak</button>
                                 <input type="range" id="ir-slider" class="ga-range ir-slider ir-bar-slider" min="0" max="0" value="0" oninput="seekIRFrame(this.value)">
@@ -677,7 +682,7 @@
                                     <button id="ga-sonde-view-radial" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('radial')" style="font-size:9px;" title="Radial profile of selected variable">Radial</button>
                                     <button id="ga-sonde-toggle-parcel" class="ga-btn ga-btn-xs" onclick="gaSondeToggleParcel()" style="font-size:9px;" title="Toggle parcel theory (CAPE/CIN/LCL/LFC/EL). Off by default — parcel theory has limited utility for TC inner-core sondes (slantwise eyewall ascent, near-saturated column).">Parcel</button>
                                     <select id="ga-sonde-skewt-select" onchange="gaSondeShowSkewT(this.value)" style="font-size:9px;padding:2px 4px;background:var(--surface-raised);color:var(--text);border:1px solid var(--border);border-radius:3px;" data-hide-in-xsec="1"></select>
-                                    <button class="ga-btn ga-btn-xs" onclick="gaSondeCloseSkewT()" style="font-size:9px;color:#f87171;">&#10005;</button>
+                                    <button class="ga-btn ga-btn-xs" aria-label="Close Skew-T panel" onclick="gaSondeCloseSkewT()" style="font-size:9px;color:#f87171;">&#10005;</button>
                                 </div>
                             </div>
                             <div id="ga-xsec-var-row" style="display:none;margin-bottom:6px;">
@@ -704,7 +709,7 @@
                                     <button class="ga-btn ga-btn-xs active" id="ga-fl-minob-btn" onclick="gaFLToggleMinob()" style="display:none;font-size:9px;color:#f97316;border-color:#f97316;" title="MINOB/HDOB minute obs (peak 10-sec wind)">MINOB</button>
                                     <span style="font-size:9px;color:var(--slate);margin-left:4px;">X-axis:</span>
                                     <button class="ga-btn ga-btn-xs" onclick="gaFLToggleXAxis()" id="ga-fl-xaxis-btn" style="font-size:9px;">Time</button>
-                                    <button class="ga-btn ga-btn-xs" onclick="gaFLCloseTimeSeries()" style="font-size:9px;color:#f87171;">&#10005;</button>
+                                    <button class="ga-btn ga-btn-xs" aria-label="Close time-series panel" onclick="gaFLCloseTimeSeries()" style="font-size:9px;color:#f87171;">&#10005;</button>
                                 </div>
                             </div>
                             <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;" id="ga-fl-var-toggles"></div>
@@ -799,7 +804,7 @@
                                 <div class="compare-range-inputs">
                                     <input type="number" id="compare-year-min" class="ga-input ga-input-sm" placeholder="1997" oninput="updateCompareSearch()">
                                     <span>&ndash;</span>
-                                    <input type="number" id="compare-year-max" class="ga-input ga-input-sm" placeholder="2024" oninput="updateCompareSearch()">
+                                    <input type="number" id="compare-year-max" class="ga-input ga-input-sm" placeholder="2026" oninput="updateCompareSearch()">
                                 </div>
                             </div>
                             <div class="compare-filter-cell">
@@ -887,9 +892,9 @@
                                     <div id="compare-ir-map-left" class="compare-ir-map"></div>
                                 </div>
                                 <div class="compare-ir-controls" id="compare-ir-ctrl-left">
-                                    <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareIR('left',-1)">&#9664;</button>
+                                    <button class="ga-btn ga-btn-sm ir-step-btn" aria-label="Previous frame (left panel)" onclick="stepCompareIR('left',-1)">&#9664;</button>
                                     <button class="ga-btn ga-btn-sm" id="compare-ir-play-left" onclick="toggleCompareIRPlay('left')">&#9654; Play</button>
-                                    <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareIR('left',1)">&#9654;</button>
+                                    <button class="ga-btn ga-btn-sm ir-step-btn" aria-label="Next frame (left panel)" onclick="stepCompareIR('left',1)">&#9654;</button>
                                     <button class="ga-btn ga-btn-sm ir-step-btn" onclick="jumpCompareIRToPeak('left')" title="Jump to peak intensity">&#9733;</button>
                                     <span class="compare-ir-datetime" id="compare-ir-dt-left"></span>
                                 </div>
@@ -902,9 +907,9 @@
                                     <div id="compare-ir-map-right" class="compare-ir-map"></div>
                                 </div>
                                 <div class="compare-ir-controls" id="compare-ir-ctrl-right">
-                                    <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareIR('right',-1)">&#9664;</button>
+                                    <button class="ga-btn ga-btn-sm ir-step-btn" aria-label="Previous frame (right panel)" onclick="stepCompareIR('right',-1)">&#9664;</button>
                                     <button class="ga-btn ga-btn-sm" id="compare-ir-play-right" onclick="toggleCompareIRPlay('right')">&#9654; Play</button>
-                                    <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareIR('right',1)">&#9654;</button>
+                                    <button class="ga-btn ga-btn-sm ir-step-btn" aria-label="Next frame (right panel)" onclick="stepCompareIR('right',1)">&#9654;</button>
                                     <button class="ga-btn ga-btn-sm ir-step-btn" onclick="jumpCompareIRToPeak('right')" title="Jump to peak intensity">&#9733;</button>
                                     <span class="compare-ir-datetime" id="compare-ir-dt-right"></span>
                                 </div>
@@ -956,8 +961,8 @@
                                         <div id="compare-mw-map-left" class="compare-ir-map"></div>
                                     </div>
                                     <div class="compare-ir-controls" id="compare-mw-ctrl-left">
-                                        <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareMW('left',-1)">&#9664;</button>
-                                        <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareMW('left',1)">&#9654;</button>
+                                        <button class="ga-btn ga-btn-sm ir-step-btn" aria-label="Previous microwave pass (left panel)" onclick="stepCompareMW('left',-1)">&#9664;</button>
+                                        <button class="ga-btn ga-btn-sm ir-step-btn" aria-label="Next microwave pass (left panel)" onclick="stepCompareMW('left',1)">&#9654;</button>
                                         <button class="ga-btn ga-btn-sm ir-step-btn" onclick="jumpCompareMWToPeak('left')" title="Jump to overpass nearest peak intensity">&#9733;</button>
                                         <span class="compare-ir-datetime" id="compare-mw-dt-left"></span>
                                     </div>
@@ -973,8 +978,8 @@
                                         <div id="compare-mw-map-right" class="compare-ir-map"></div>
                                     </div>
                                     <div class="compare-ir-controls" id="compare-mw-ctrl-right">
-                                        <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareMW('right',-1)">&#9664;</button>
-                                        <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareMW('right',1)">&#9654;</button>
+                                        <button class="ga-btn ga-btn-sm ir-step-btn" aria-label="Previous microwave pass (right panel)" onclick="stepCompareMW('right',-1)">&#9664;</button>
+                                        <button class="ga-btn ga-btn-sm ir-step-btn" aria-label="Next microwave pass (right panel)" onclick="stepCompareMW('right',1)">&#9654;</button>
                                         <button class="ga-btn ga-btn-sm ir-step-btn" onclick="jumpCompareMWToPeak('right')" title="Jump to overpass nearest peak intensity">&#9733;</button>
                                         <span class="compare-ir-datetime" id="compare-mw-dt-right"></span>
                                     </div>
@@ -1044,6 +1049,6 @@
     <script defer src="lflet_gl.js?v=20260804a"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
-    <script defer src="global_archive.js?v=20260804a"></script>
+    <script defer src="global_archive.js?v=20260804b"></script>
 </body>
 </html>

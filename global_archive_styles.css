@@ -1637,7 +1637,11 @@ input[type="range"].ga-range::-moz-range-thumb {
     .ga-tabs {
         padding: 0 12px;
         overflow-x: auto;
+        /* Touch surface — hide the scrollbar like the RT tab bar does. */
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
     }
+    .ga-tabs::-webkit-scrollbar { display: none; }
     .ga-tab {
         padding: 8px 14px;
         white-space: nowrap;

@@ -40,18 +40,25 @@
     <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
     <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="manifest" href="manifest.json">
+    <link rel="canonical" href="https://tcatlas.org/climatology_globe.html">
+    <meta name="theme-color" content="#005030" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0a0e14" media="(prefers-color-scheme: dark)">
+    <meta name="apple-mobile-web-app-title" content="TC-ATLAS">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <!-- three.js module graph comes from unpkg; ERA5 tiles from GCS. -->
     <link rel="preconnect" href="https://unpkg.com">
     <link rel="preconnect" href="https://storage.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+    <!-- JetBrains Mono included: vendor/gc-atlas/globe.css requests it in 10
+         places but this page never loaded it, silently falling back. -->
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 
     <!-- Vendored GC-ATLAS globe styles (un-scoped, applies page-wide). Loads
          BEFORE TC-ATLAS sheets so TC-ATLAS rules can override topbar styling
          and re-map theme variables (--deep, --emerald, etc.) to navy/blue. -->
     <link rel="stylesheet" href="vendor/gc-atlas/globe.css">
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260804a">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260804b">
     <link rel="stylesheet" href="climatology_globe_styles.css?v=20260509c">
 
     <!-- Importmap for the GC-ATLAS engine. Three.js + addons from unpkg;

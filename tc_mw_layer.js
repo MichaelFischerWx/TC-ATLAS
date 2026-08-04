@@ -659,11 +659,26 @@
             self._renderAll();
         });
         this._refreshTimer = setInterval(function () {
+            // A backgrounded tab shouldn't pull the ~1 MB manifest every 5 min
+            // for no viewer. Skip and mark; the visibilitychange handler below
+            // catches up immediately on return.
+            if (document.hidden) { self._refreshSkippedHidden = true; return; }
             self._fetchPredictions();
             self._fetchManifest().then(function () {
                 if (self._enabled) self._renderAll();
             });
         }, REFRESH_MS);
+        if (!this._visListener) {
+            this._visListener = function () {
+                if (document.hidden || !self._enabled || !self._refreshSkippedHidden) return;
+                self._refreshSkippedHidden = false;
+                self._fetchPredictions();
+                self._fetchManifest().then(function () {
+                    if (self._enabled) self._renderAll();
+                });
+            };
+            document.addEventListener('visibilitychange', this._visListener);
+        }
         this._savePrefs();
     };
 

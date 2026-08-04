@@ -49,6 +49,20 @@ outline-offset: 2px;
     --border-light: rgba(15, 22, 35, 0.12);
     --radius: 6px;
     --radius-lg: 8px;
+    --radius-sm: 4px;
+    --radius-pill: 999px;
+
+    /* Elevation scale — use these instead of ad-hoc box-shadows */
+    --shadow-1: 0 1px 3px rgba(10, 15, 25, 0.10);
+    --shadow-2: 0 4px 12px rgba(10, 15, 25, 0.14);
+    --shadow-3: 0 12px 32px rgba(10, 15, 25, 0.22);
+
+    /* Typography — single source of truth for font stacks */
+    --font-sans: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+    /* Text selection */
+    --selection-bg: rgba(0, 80, 48, 0.18);
 
     /* Map canvas — LIGHT (Positron basemap) */
     --map-canvas: #f7f8fa;
@@ -57,10 +71,12 @@ outline-offset: 2px;
     --map-text-dim: #6b7385;
     --map-border: var(--border-light);
 
-    /* Muted text scale */
+    /* Muted text scale — darkened 2026-08-04 for WCAG contrast on white:
+       old faint #8a93a3 was 3.10:1 and subtle #9ca3af 2.54:1. New values:
+       faint 4.58:1, subtle 4.17:1 (AA-large; the least-emphasized tier). */
     --text-muted: #6b7280;
-    --text-faint: #8a93a3;
-    --text-subtle: #9ca3af;
+    --text-faint: #6e7684;
+    --text-subtle: #737d8c;
 
     /* UM brand-true (always available, theme-independent) */
     --um-green: #005030;
@@ -69,6 +85,10 @@ outline-offset: 2px;
     --um-orange: #F47321;
     --um-orange-deep: #d65f12;
     --um-orange-tint: rgba(244, 115, 33, 0.10);
+    /* For TEXT in UM orange on light surfaces: #F47321 is 2.87:1 on white
+       (fails WCAG); this darker variant is 5.27:1. Keep #F47321 for fills,
+       borders, and dots where text contrast rules don't apply. */
+    --um-orange-text: #b34d0a;
 
     /* Plotly bridge — JS reads these via getComputedStyle so charts
        repaint correctly when theme flips. Don't reference these from
@@ -116,9 +136,17 @@ outline-offset: 2px;
     --map-text-dim: #8a93a3;
     --map-border: rgba(255, 255, 255, 0.10);
 
+    /* Lightened 2026-08-04 for WCAG contrast on the dark card surface:
+       old faint #6b7280 was 3.57:1 and subtle #64748b 3.63:1. New values:
+       faint 5.58:1, subtle 5.75:1. */
     --text-muted: #9ca3af;
-    --text-faint: #6b7280;
-    --text-subtle: #64748b;
+    --text-faint: #8a93a3;
+    --text-subtle: #8896ab;
+    --um-orange-text: #F47321;   /* orange passes on dark surfaces as-is */
+    --selection-bg: rgba(74, 155, 110, 0.30);
+    --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.40);
+    --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.45);
+    --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.55);
 
     /* UM tokens stay the same hue, brightened for dark-bg contrast */
     --um-green: #4a9b6e;
@@ -134,6 +162,54 @@ outline-offset: 2px;
     --plot-hover-border: rgba(255, 255, 255, 0.18);
 
     --basemap-variant: "dark";
+}
+
+/* ── Cross-cutting polish (every page loads this sheet) ───────── */
+
+/* Brand-colored text selection instead of OS default blue. */
+::selection { background: var(--selection-bg); }
+
+/* Kill the translucent gray flash iOS Safari paints on every tap;
+   interactive elements communicate press state via :active styles. */
+* { -webkit-tap-highlight-color: transparent; }
+
+/* One scrollbar treatment site-wide (thin, theme-aware) instead of the
+   OS-default chunky bar against dark surfaces + per-widget variants. */
+* { scrollbar-width: thin; scrollbar-color: var(--border-light) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.4);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: rgba(148, 163, 184, 0.6); }
+
+/* Guarantee a keyboard focus ring even where component styles set
+   outline:none on :focus (those rules otherwise out-specify the global
+   *:focus-visible at the top of this sheet). */
+*:focus-visible {
+    outline: 2px solid var(--cyan, #F47321) !important;
+    outline-offset: 2px;
+}
+
+/* Respect reduced-motion globally: collapse animations and transitions,
+   but keep the loading spinners alive — a frozen spinner reads as a hang,
+   and spin feedback is status information, not decoration. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+    .spinner, .ga-spinner, .ir-loader-spinner, .sat-spinner,
+    .env-loading-spinner, .rt-genesis-modal-loader-spinner,
+    .rt-mw-compare-spinner {
+        animation-duration: 0.8s !important;
+        animation-iteration-count: infinite !important;
+    }
 }
 
 /* Smooth toggle transitions on common surfaces */
@@ -915,7 +991,7 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 
 /* ── Loading ─────────────────────────────────────── */
 #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); background: var(--surface-raised); padding: 30px 40px; border-radius: var(--radius-lg); box-shadow: 0 4px 20px rgba(0,0,0,0.12); z-index: 1000; text-align: center; color: var(--text); border: 1px solid var(--border); }
-.spinner { border: 3px solid rgba(148, 163, 184, 0.4); border-top: 3px solid var(--cyan); border-radius: 50%; width: 36px; height: 36px; animation: spin 1s linear infinite; margin: 0 auto 12px; }
+.spinner { border: 3px solid rgba(148, 163, 184, 0.4); border-top: 3px solid var(--cyan); border-radius: 50%; width: 36px; height: 36px; animation: spin 0.8s linear infinite; margin: 0 auto 12px; }
 @keyframes spin { 0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
 
 /* ── Below-fold sections ─────────────────────────── */
