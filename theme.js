@@ -135,14 +135,56 @@
         };
     }
 
-    // Auto-relayout any chart tagged js-theme-chart on theme change
+    // Build a FLAT (dotted-key) relayout patch for one chart. Nested-object
+    // patches would REPLACE each whole axis (losing titles/ranges/types), so
+    // we address individual attributes and enumerate the chart's real axes
+    // from its _fullLayout (covers xaxis2/yaxis2/etc).
+    //  - colors-only by default: grid/axis-tick/text/hover colors follow the
+    //    theme, but paper/plot backgrounds are left alone — most charts sit
+    //    transparently on a themed panel, and forcing an opaque paper color
+    //    would paint rectangles over deliberately styled plots (Skew-T etc).
+    //  - withBackgrounds=true (the .js-theme-chart opt-in) also swaps
+    //    paper_bgcolor/plot_bgcolor.
+    function plotlyFlatPatch(node, withBackgrounds) {
+        var grid = readVar('--plot-grid') || 'rgba(15,22,35,0.08)';
+        var axisC = readVar('--plot-axis') || '#5b6573';
+        var text = readVar('--plot-text') || '#0f1623';
+        var patch = {
+            'font.color': text,
+            'hoverlabel.bgcolor': readVar('--plot-hover-bg') || '#ffffff',
+            'hoverlabel.bordercolor': readVar('--plot-hover-border') || 'rgba(15,22,35,0.15)',
+            'hoverlabel.font.color': text
+        };
+        if (withBackgrounds) {
+            patch['paper_bgcolor'] = readVar('--plot-paper') || '#ffffff';
+            patch['plot_bgcolor'] = readVar('--plot-bg') || '#ffffff';
+        }
+        var fl = node._fullLayout || {};
+        for (var k in fl) {
+            if (/^[xy]axis\d*$/.test(k) && fl[k] && typeof fl[k] === 'object') {
+                patch[k + '.gridcolor'] = grid;
+                patch[k + '.linecolor'] = grid;
+                patch[k + '.tickfont.color'] = axisC;
+            }
+        }
+        return patch;
+    }
+
+    // Re-theme Plotly charts on theme change. Plotly stamps every rendered
+    // chart div with .js-plotly-plot, so no per-site opt-in is needed:
+    //  - default: colors-only patch (grid/axis/text/hover)
+    //  - .js-theme-chart: also swaps paper/plot backgrounds (opt-in)
+    //  - .js-theme-ignore: skipped entirely (self-managed charts)
     document.documentElement.addEventListener('theme:change', function () {
         if (typeof window.Plotly === 'undefined') return;
-        var nodes = document.querySelectorAll('.js-theme-chart');
-        var patch = plotlyTheme();
+        var nodes = document.querySelectorAll('.js-plotly-plot, .js-theme-chart');
+        var seen = [];
         for (var i = 0; i < nodes.length; i++) {
             var n = nodes[i];
-            if (!n._fullLayout) continue;
+            if (!n._fullLayout || seen.indexOf(n) >= 0) continue;
+            seen.push(n);
+            if (n.classList.contains('js-theme-ignore')) continue;
+            var patch = plotlyFlatPatch(n, n.classList.contains('js-theme-chart'));
             try { window.Plotly.relayout(n, patch); } catch (e) {}
         }
     });

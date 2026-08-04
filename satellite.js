@@ -7,6 +7,16 @@
 (function () {
     'use strict';
 
+    // Theme-aware Plotly gridline color. The old hardcoded faint-white
+    // values were invisible on the (default) light theme's white panels.
+    function _satGrid() {
+        try {
+            var v = window.TCATheme && window.TCATheme.readVar('--plot-grid');
+            if (v) return v;
+        } catch (e) {}
+        return 'rgba(15,22,35,0.08)';
+    }
+
     // ── Config ──────────────────────────────────────────────────
     var API_BASE = 'https://api.tcatlas.org';
     var POLL_INTERVAL_MS = 10 * 60 * 1000;
@@ -1630,8 +1640,8 @@
         ];
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
         layout.title = { text: 'Azimuthal-Mean Radial Tb', font: { size: 11, color: '#5b6573' } };
-        layout.xaxis = { title: { text: 'Radius (km)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
-        layout.yaxis = { title: { text: 'Tb (\u00B0C)', font: { size: 10 } }, range: [40, -100], fixedrange: true, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' }, ticksuffix: '\u00B0' };
+        layout.xaxis = { title: { text: 'Radius (km)', font: { size: 10 } }, gridcolor: _satGrid(), tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+        layout.yaxis = { title: { text: 'Tb (\u00B0C)', font: { size: 10 } }, range: [40, -100], fixedrange: true, gridcolor: _satGrid(), tickfont: { size: 9, family: 'JetBrains Mono, monospace' }, ticksuffix: '\u00B0' };
         layout.showlegend = false;
 
         if (div.data) {
@@ -1706,9 +1716,9 @@
         }
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
         layout.title = { text: 'Center Fix Time Series', font: { size: 11, color: '#5b6573' } };
-        layout.xaxis = { gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 8, family: 'JetBrains Mono, monospace' }, tickangle: -30 };
-        layout.yaxis = { title: { text: 'Eye Score', font: { size: 9, color: '#22d3ee' } }, side: 'left', gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
-        layout.yaxis2 = { title: { text: 'IR Rad Diff (K)', font: { size: 9, color: '#a78bfa' } }, side: 'right', overlaying: 'y', gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+        layout.xaxis = { gridcolor: _satGrid(), tickfont: { size: 8, family: 'JetBrains Mono, monospace' }, tickangle: -30 };
+        layout.yaxis = { title: { text: 'Eye Score', font: { size: 9, color: '#22d3ee' } }, side: 'left', gridcolor: _satGrid(), tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+        layout.yaxis2 = { title: { text: 'IR Rad Diff (K)', font: { size: 9, color: '#a78bfa' } }, side: 'right', overlaying: 'y', gridcolor: _satGrid(), tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
         layout.legend = { x: 0, y: 1.15, orientation: 'h', font: { size: 9 } };
         layout.margin = { t: 32, r: 48, b: 44, l: 48 };
         layout.showlegend = true;
@@ -1761,8 +1771,8 @@
         }
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
         layout.title = { text: 'Tb Distribution by Radial Band', font: { size: 11, color: '#5b6573' } };
-        layout.xaxis = { title: { text: 'Brightness Temp (K)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
-        layout.yaxis = { title: { text: 'Fraction', font: { size: 10 } }, tickformat: '.0%', gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+        layout.xaxis = { title: { text: 'Brightness Temp (K)', font: { size: 10 } }, gridcolor: _satGrid(), tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+        layout.yaxis = { title: { text: 'Fraction', font: { size: 10 } }, tickformat: '.0%', gridcolor: _satGrid(), tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
         layout.barmode = 'overlay';
         layout.legend = { x: 0, y: 1.15, orientation: 'h', font: { size: 9 } };
         layout.margin = { t: 32, r: 12, b: 44, l: 48 };
@@ -2199,8 +2209,8 @@
 
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
         layout.title = { text: 'Azimuthal-Mean Tb Hovmoller', font: { size: 15, color: '#5b6573' } };
-        layout.xaxis = { title: { text: 'Radius (km)', font: { size: 13 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 12, family: 'JetBrains Mono, monospace' } };
-        layout.yaxis = { title: { text: 'Time (UTC)', font: { size: 13 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 11, family: 'JetBrains Mono, monospace' }, autorange: true };
+        layout.xaxis = { title: { text: 'Radius (km)', font: { size: 13 } }, gridcolor: _satGrid(), tickfont: { size: 12, family: 'JetBrains Mono, monospace' } };
+        layout.yaxis = { title: { text: 'Time (UTC)', font: { size: 13 } }, gridcolor: _satGrid(), tickfont: { size: 11, family: 'JetBrains Mono, monospace' }, autorange: true };
         layout.margin = { t: 36, r: 64, b: 44, l: 84 };
 
         // Horizontal line at current frame time
@@ -2442,9 +2452,9 @@
             plot_bgcolor: 'rgba(0,0,0,0)',
             font: { color: '#cbd5e1', size: 10, family: '"DM Sans",sans-serif' },
             showlegend: false,
-            xaxis: { gridcolor: 'rgba(255,255,255,0.08)', tickformat: '%H:%M' },
+            xaxis: { gridcolor: _satGrid(), tickformat: '%H:%M' },
             yaxis: { title: { text: 'kt', font: { size: 10 } },
-                     gridcolor: 'rgba(255,255,255,0.08)',
+                     gridcolor: _satGrid(),
                      side: 'left', color: '#fbbf24' },
             yaxis2: { title: { text: 'hPa', font: { size: 10 } },
                       overlaying: 'y', side: 'right', color: '#60a5fa',
@@ -2552,9 +2562,9 @@
             plot_bgcolor: 'rgba(0,0,0,0)',
             font: { color: '#cbd5e1', size: 10, family: '"DM Sans",sans-serif' },
             xaxis: { title: { text: 'Forecast hour', font: { size: 10 } },
-                     gridcolor: 'rgba(255,255,255,0.08)' },
+                     gridcolor: _satGrid() },
             yaxis: { title: { text: 'kt', font: { size: 10 } },
-                     gridcolor: 'rgba(255,255,255,0.08)' }
+                     gridcolor: _satGrid() }
         };
         Plotly.react(el, traces, layout,
                      { displayModeBar: false, responsive: true, staticPlot: _IS_TOUCH_INIT });

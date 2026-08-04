@@ -28,25 +28,32 @@
     <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
     <title>TC Climatology — TC-ATLAS</title>
-    <script src="theme.js?v=20260725a"></script>
-    <script src="tc_export.js?v=20260803c"></script>
+    <script src="theme.js?v=20260804a"></script>
+    <script defer src="tc_export.js?v=20260803c"></script>
 
     <!-- Leaflet — needed by the ACE modal's per-year season map -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css?v=1.9.4" />
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 
-    <link rel="preconnect" href="https://unpkg.com">
     <link rel="preconnect" href="https://cdn.plot.ly">
+    <!-- CARTO basemap tiles for the genesis/track-density maps. -->
+    <link rel="preconnect" href="https://a.basemaps.cartocdn.com">
+    <link rel="dns-prefetch" href="https://b.basemaps.cartocdn.com">
+    <link rel="dns-prefetch" href="https://c.basemaps.cartocdn.com">
+    <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
+    <!-- Bottom-of-body bundle, discoverable from byte 0. Token MUST match
+         the script tag below. -->
+    <link rel="preload" as="script" href="tc_climatology.js?v=20260529a">
 
     <!-- Shared chrome (topbar, fonts, basin chips, modals); page-specific
          layout in tc_climatology_styles.css. global_archive_styles.css is
          loaded too because the chart-panel + modal classes (.clim-grid,
          .clim-panel, .ace-modal-*) live there and are reused as-is. -->
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260725a">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260804a">
     <link rel="stylesheet" href="global_archive_styles.css?v=20260725a">
     <link rel="stylesheet" href="tc_climatology_styles.css?v=20260523b">
 </head>
@@ -57,7 +64,7 @@
     <header class="topbar" role="banner">
         <div class="topbar-inner">
             <div class="topbar-brand">
-                <img src="tc-atlas-icon.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
+                <img src="tc-atlas-favicon-64.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
                 <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
                 <div class="topbar-divider"></div>
                 <div class="topbar-subtitle">TC Climatology</div>
@@ -1038,7 +1045,7 @@
          before DOMContentLoaded, so the handlers inside these files fire as
          they always did. Do NOT add an inline <script> after this block that
          depends on them — inline scripts run during parsing, before deferred. -->
-    <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script defer src="assets/vendor/leaflet/leaflet.js?v=1.9.4"></script>
     <script defer src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script defer src="subseasonal_clock.js?v=20260523b"></script>
     <script defer src="tc_climatology.js?v=20260529a"></script>

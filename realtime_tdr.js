@@ -13,6 +13,16 @@
 (function () {
     'use strict';
 
+    // Theme-aware Plotly gridline color. The old hardcoded faint-white
+    // values sat on white plot backgrounds — invisible in every theme.
+    function _tdrGrid() {
+        try {
+            var v = window.TCATheme && window.TCATheme.readVar('--plot-grid');
+            if (v) return v;
+        } catch (e) {}
+        return 'rgba(15,22,35,0.08)';
+    }
+
     // ── Inline-SVG icon helper (Lucide-style; stroke:currentColor). ─
     // Returns an SVG string to prepend to button labels that are
     // dynamically updated via innerHTML. Keeps icons from being stripped
@@ -5249,8 +5259,8 @@
             xaxis: {
                 title: { text: 'Wind Speed (m/s)', font: { color: '#22c55e', size: 12 } },
                 tickfont: { color: '#22c55e', size: 10 },
-                gridcolor: 'rgba(255,255,255,0.08)',
-                zeroline: true, zerolinecolor: 'rgba(255,255,255,0.15)',
+                gridcolor: _tdrGrid(),
+                zeroline: true, zerolinecolor: _tdrGrid(),
                 side: 'bottom',
             },
             xaxis2: {
@@ -5262,7 +5272,7 @@
             yaxis: {
                 title: { text: 'Pressure (hPa)', font: { color: '#5b6573', size: 12 } },
                 tickfont: { color: '#5b6573', size: 10 },
-                gridcolor: 'rgba(255,255,255,0.08)',
+                gridcolor: _tdrGrid(),
                 autorange: 'reversed', type: 'log',
                 range: [Math.log10(pMax), Math.log10(pMin)],
                 dtick: 'D1',
@@ -7785,11 +7795,11 @@
             title: { text: title, font: { color: '#e0e0e0', size: 13 }, x: 0.5 },
             xaxis: {
                 title: { text: varInfo.display_name + ' (' + varInfo.units + ')', font: { color: '#5b6573', size: 12 } },
-                color: '#5b6573', gridcolor: 'rgba(255,255,255,0.06)', zeroline: true, zerolinecolor: 'rgba(255,255,255,0.2)',
+                color: '#5b6573', gridcolor: _tdrGrid(), zeroline: true, zerolinecolor: _tdrGrid(),
             },
             yaxis: {
                 title: { text: 'Height (km)', font: { color: '#5b6573', size: 12 } },
-                color: '#5b6573', gridcolor: 'rgba(255,255,255,0.06)',
+                color: '#5b6573', gridcolor: _tdrGrid(),
             },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: '#ffffff',

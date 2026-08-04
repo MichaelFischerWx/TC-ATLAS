@@ -357,23 +357,42 @@ map.createPane('coastlines');
 map.getPane('coastlines').style.zIndex = 450;
 map.getPane('coastlines').style.pointerEvents = 'none';
 
+// Two-tier coastline: vendored simplified file (~170 KB gz) at overview
+// zooms, full 10m detail only after the user zooms in. Never hit the
+// rate-limited raw.githubusercontent host for this.
 (function() {
-    fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_coastline.geojson')
+    var COAST_STYLE = {
+        color: '#000000',
+        weight: 1.2,
+        opacity: 0.7,
+        fillColor: 'transparent',
+        fillOpacity: 0,
+        interactive: false
+    };
+    var _coastLayer = null;
+    var _coastTier = null;
+    var _coastHiRequested = false;
+    function _setCoast(geojson, tier) {
+        if (_coastTier === 'hi' && tier !== 'hi') return;
+        if (_coastLayer) { try { map.removeLayer(_coastLayer); } catch (e) {} }
+        _coastLayer = L.geoJSON(geojson, { pane: 'coastlines', style: COAST_STYLE }).addTo(map);
+        _coastTier = tier;
+    }
+    fetch('assets/coastlines/ne_10m_coastline_simplified.geojson')
         .then(function(r) { return r.json(); })
-        .then(function(geojson) {
-            L.geoJSON(geojson, {
-                pane: 'coastlines',
-                style: {
-                    color: '#000000',
-                    weight: 1.2,
-                    opacity: 0.7,
-                    fillColor: 'transparent',
-                    fillOpacity: 0,
-                    interactive: false
-                }
-            }).addTo(map);
-        })
+        .then(function(geojson) { _setCoast(geojson, 'lo'); })
         .catch(function() {});
+    function _maybeUpgradeCoast() {
+        if (_coastHiRequested) return;
+        var z; try { z = map.getZoom(); } catch (e) { return; }
+        if (z == null || z < _glZ(6)) return;
+        _coastHiRequested = true;
+        fetch('assets/coastlines/ne_10m_coastline.geojson')
+            .then(function(r) { return r.json(); })
+            .then(function(geojson) { _setCoast(geojson, 'hi'); })
+            .catch(function() { _coastHiRequested = false; });
+    }
+    map.on('zoomend', _maybeUpgradeCoast);
 })();
 
 // ── Filter drawer toggle ─────────────────────────────────────

@@ -62,6 +62,16 @@
             .finally(function () { if (timer) clearTimeout(timer); });
     }
 
+    // Theme-aware Plotly gridline color (the old hardcoded faint-white
+    // value was invisible on the default light theme's panels).
+    function _rtPlotGrid() {
+        try {
+            var v = window.TCATheme && window.TCATheme.readVar('--plot-grid');
+            if (v) return v;
+        } catch (e) {}
+        return 'rgba(15,22,35,0.08)';
+    }
+
     // Render a compact, retry-able error into a panel status element.
     // Keeps the wording + affordance consistent across every panel so a
     // failed load is always distinguishable from an empty result, and is
@@ -3346,7 +3356,15 @@
                     dt = new Date(dt.getTime() - offset * 60 * 1000);
                     var ts = toGIBSTime(dt);
                     var url = GIBS_BASE + '/' + sat.layer + '/default/' + ts + sat.suffix;
-                    return fetch(url, { cache: 'no-store' }).then(function (r) {
+                    // Timeout so a stalled socket (which never settles a bare
+                    // fetch) falls into the existing null/stale path instead of
+                    // hanging the whole Promise.all — a hung probe here used to
+                    // wedge map init until manual reload.
+                    var probeOpts = { cache: 'no-store' };
+                    try {
+                        if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) probeOpts.signal = AbortSignal.timeout(8000);
+                    } catch (e) { /* older browsers: no timeout, same as before */ }
+                    return fetch(url, probeOpts).then(function (r) {
                         return r.ok ? { offset: offset, ts: ts } : null;
                     }).catch(function () {
                         return null;
@@ -3617,6 +3635,18 @@
             console.log('GIBS per-satellite times:', JSON.stringify(result.perSat),
                         '| oldest (animation):', result.oldest,
                         '| stale:', result.staleSats);
+        }).catch(function (e) {
+            // Without this catch a single stalled/failed init fetch left the
+            // map with no IR layer forever and no message (unhandled
+            // rejection). Flag every feed stale and retry once — a transient
+            // network hiccup at load then self-heals instead of requiring a
+            // manual reload.
+            console.warn('[RT] satellite layer init failed:', e);
+            _updateFeedStalenessBanner(['GOES-East', 'GOES-West', 'Himawari']);
+            if (!addGIBSOverlay._retried) {
+                addGIBSOverlay._retried = true;
+                setTimeout(function () { addGIBSOverlay(targetMap, opacity); }, 30000);
+            }
         });
         return []; // layers added asynchronously — gibsIRLayers updated in callback
     }
@@ -6662,6 +6692,35 @@
         return jittered;
     }
 
+    /** Show/hide the zero-storm notice on the global map. A quiet season
+     *  used to render as a bare map with no explanation — this pill names
+     *  the state and gives the visit somewhere to go instead of a dead end. */
+    function _updateNoStormsNotice(storms) {
+        var host = document.getElementById('ir-main');
+        if (!host) return;
+        var el = document.getElementById('ir-no-storms');
+        if (storms && storms.length > 0) {
+            if (el && el.parentNode) el.parentNode.removeChild(el);
+            return;
+        }
+        var KEY = 'tc-atlas-no-storms-dismissed';
+        try { if (sessionStorage.getItem(KEY)) return; } catch (e) {}
+        if (el) return;
+        el = document.createElement('div');
+        el.id = 'ir-no-storms';
+        el.className = 'ir-no-storms';
+        el.innerHTML =
+            '<span class="ir-no-storms-icon" aria-hidden="true">🌀</span>' +
+            '<span class="ir-no-storms-title">No active tropical cyclones right now</span>' +
+            '<a class="ir-no-storms-link" href="global_archive.html">Explore past storms →</a>' +
+            '<button class="ir-no-storms-close" type="button" aria-label="Dismiss">×</button>';
+        el.querySelector('.ir-no-storms-close').addEventListener('click', function () {
+            try { sessionStorage.setItem(KEY, '1'); } catch (e) {}
+            if (el.parentNode) el.parentNode.removeChild(el);
+        });
+        host.appendChild(el);
+    }
+
     /** Poll /ir-monitor/active-storms */
     function pollActiveStorms() {
         var loaderEl = document.getElementById('ir-loader');
@@ -6689,7 +6748,17 @@
         var headers = {};
         if (_activeStormsETag) headers['If-None-Match'] = _activeStormsETag;
 
-        fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store', headers: headers })
+        // Stall timeout: a hung socket never settles a bare fetch, so neither
+        // .then nor .catch would fire and the retry/backoff path below never
+        // engaged — the loader spun until the 10-min poll interval. 30 s
+        // clears a worst-case Cloud Run cold start (~22 s measured) while
+        // converting a true stall into the normal retry path.
+        var _pollOpts = { cache: 'no-store', headers: headers };
+        try {
+            if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) _pollOpts.signal = AbortSignal.timeout(30000);
+        } catch (e) { /* older browsers keep the legacy behavior */ }
+
+        fetch(API_BASE + '/ir-monitor/active-storms', _pollOpts)
             .then(function (r) {
                 if (r.status === 304) {
                     // Server confirms our cached payload is still current — no work to do.
@@ -6726,6 +6795,7 @@
                 // Update UI
                 updateStats(data);
                 renderStormMarkers(stormData);
+                _updateNoStormsNotice(stormData);
                 fetchAllTracks(stormData);
                 _rtPushStormsToMwLayer();
                 try { window.dispatchEvent(new CustomEvent('ir-storms-loaded')); } catch (e) {}
@@ -10555,13 +10625,13 @@
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
             xaxis: {
-                gridcolor: 'rgba(255,255,255,0.04)',
+                gridcolor: _rtPlotGrid(),
                 tickfont: { size: 9, color: '#5b6573', family: 'DM Sans, sans-serif' },
                 tickformat: '%m/%d %Hz'
             },
             yaxis: {
                 title: { text: _iMeta().title, font: { size: 10, color: '#5b6573', family: 'DM Sans, sans-serif' } },
-                gridcolor: 'rgba(255,255,255,0.04)',
+                gridcolor: _rtPlotGrid(),
                 tickfont: { size: 9, color: '#5b6573', family: 'DM Sans, sans-serif' }
             },
             // SS category shading bands — Vmax only (drop for MSLP; low
@@ -21346,8 +21416,10 @@
         });
     }
 
-    // Brand logo preloaded once for figure exports (96px PNG, same-origin).
-    var _tcLogoImg = (function () { var i = new Image(); i.src = 'tc-atlas-icon.png'; return i; })();
+    // Brand logo preloaded once for figure exports (192px PNG, same-origin —
+    // same artwork as the 1024px tc-atlas-icon.png at 1/6 the bytes; watermark
+    // draws at most ~112px even on 4x exports).
+    var _tcLogoImg = (function () { var i = new Image(); i.src = 'tc-atlas-favicon-192.png'; return i; })();
 
     // Stamp the TC-ATLAS watermark — logo + name + URL — into the bottom-right
     // of an export canvas. Sizing scales off the canvas width so it reads the

@@ -43,9 +43,12 @@
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
 
     <title>TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure</title>
-    <script src="theme.js?v=20260725a"></script>
+    <script src="theme.js?v=20260804a"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <!-- The hero activity strip fetches active-storms as soon as its inline
+         script runs — warm the API connection from byte 0. -->
+    <link rel="preconnect" href="https://api.tcatlas.org">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 
     <style>
@@ -664,7 +667,7 @@
     <header class="topbar" role="banner">
         <div class="topbar-inner">
             <div class="topbar-brand">
-                <img src="tc-atlas-icon.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
+                <img src="tc-atlas-favicon-64.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
                 <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
             </div>
             <nav aria-label="Main navigation">
@@ -690,7 +693,7 @@
     <!-- ── Hero ──────────────────────────────────────────── -->
     <section class="hero">
         <div class="hero-lockup">
-            <img src="tc-atlas-icon.png" alt="" class="hero-icon" aria-hidden="true">
+            <img src="tc-atlas-favicon-192.png" alt="" class="hero-icon" aria-hidden="true" width="76" height="76">
             <h1 class="hero-title">TC-ATLAS</h1>
         </div>
         <p class="hero-subtitle">Tropical Cyclone Analysis Tool for Live and Archived Structure</p>

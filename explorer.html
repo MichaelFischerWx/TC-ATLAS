@@ -36,11 +36,11 @@
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
 
     <title>TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure</title>
-    <script src="theme.js?v=20260725a"></script>
-    <script src="tc_export.js?v=20260803c"></script>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+    <script src="theme.js?v=20260804a"></script>
+    <script defer src="tc_export.js?v=20260803c"></script>
+    <link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css?v=1.9.4" />
+    <link rel="stylesheet" href="assets/vendor/markercluster/MarkerCluster.css?v=1.5.3" />
+    <link rel="stylesheet" href="assets/vendor/markercluster/MarkerCluster.Default.css?v=1.5.3" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
@@ -48,15 +48,24 @@
     <link rel="preconnect" href="https://unpkg.com">
     <link rel="preconnect" href="https://cdn.plot.ly">
     <link rel="preconnect" href="https://api.tcatlas.org">
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260725a">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260725a">
+    <!-- CARTO basemap tiles are the first pixels on the explorer map. -->
+    <link rel="preconnect" href="https://a.basemaps.cartocdn.com">
+    <link rel="dns-prefetch" href="https://b.basemaps.cartocdn.com">
+    <link rel="dns-prefetch" href="https://c.basemaps.cartocdn.com">
+    <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
+    <!-- Bottom-of-body bundle + parser-injected map engine, discoverable
+         from byte 0. Tokens MUST match the script tags below. -->
+    <link rel="preload" as="script" href="tc_radar_app.js?v=20260804a">
+    <link rel="preload" as="script" href="assets/vendor/leaflet/leaflet.js?v=1.9.4">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260804a">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260804a">
 </head>
 <body>
     <a href="#map-section" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
     <header class="topbar" role="banner">
         <div class="topbar-inner">
             <div class="topbar-brand">
-                <img src="tc-atlas-icon.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
+                <img src="tc-atlas-favicon-64.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
                 <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
                 <div class="topbar-divider"></div>
                 <div class="topbar-subtitle">Structure Analysis</div>
@@ -356,17 +365,21 @@
     <!-- Map engine: default Leaflet; ?gl=1 loads the MapLibre GL facade
          (lflet_gl.js) for the in-progress GL migration (3D IR + NEXRAD relief,
          smooth zoom, engine parity with RT + Archive). document.write keeps the
-         loads synchronous so tc_radar_app.js sees the right window.L. -->
+         loads synchronous so tc_radar_app.js sees the right window.L.
+         The default-branch scripts are VENDORED (assets/vendor/) so they load
+         same-origin: Chrome's slow-connection intervention only blocks
+         document.write()-injected scripts from OTHER origins, so serving them
+         ourselves keeps the ordering guarantee on every connection class. -->
     <script>
       (function () {
         var gl = false; try { gl = /[?&]gl=1\b/.test(location.search); } catch (e) {}
         if (gl) {
-          document.write('<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">');
+          document.write('<link href="assets/vendor/maplibre/maplibre-gl.css?v=4.7.1" rel="stylesheet">');
           document.write('<scr' + 'ipt src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"><\/scr' + 'ipt>');
-          document.write('<scr' + 'ipt src="lflet_gl.js?v=20260727a"><\/scr' + 'ipt>');
+          document.write('<scr' + 'ipt src="lflet_gl.js?v=20260804a"><\/scr' + 'ipt>');
         } else {
-          document.write('<scr' + 'ipt src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/scr' + 'ipt>');
-          document.write('<scr' + 'ipt src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"><\/scr' + 'ipt>');
+          document.write('<scr' + 'ipt src="assets/vendor/leaflet/leaflet.js?v=1.9.4"><\/scr' + 'ipt>');
+          document.write('<scr' + 'ipt src="assets/vendor/markercluster/leaflet.markercluster.js?v=1.5.3"><\/scr' + 'ipt>');
         }
       })();
     </script>
@@ -405,8 +418,8 @@
     };
     </script>
     <script defer src="skewt.js?v=20260725d"></script>
-    <script defer src="vol3d.js?v=20260725a"></script>
-    <script defer src="tc_radar_app.js?v=20260725d"></script>
-    <script defer src="realtime_tdr.js?v=20260530a"></script>
+    <script defer src="vol3d.js?v=20260804a"></script>
+    <script defer src="tc_radar_app.js?v=20260804a"></script>
+    <script defer src="realtime_tdr.js?v=20260804a"></script>
 </body>
 </html>

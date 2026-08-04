@@ -90,6 +90,35 @@
     box-shadow: none;
 }
 
+/* Module still downloading for this tab — animate the underline so the
+   click is visibly acknowledged before the section can render. */
+.ir-view-tab.is-loading {
+    position: relative;
+    border-bottom-color: transparent;
+}
+.ir-view-tab.is-loading::after {
+    content: '';
+    position: absolute;
+    left: 10%; right: 10%; bottom: -2px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #fb923c, transparent);
+    background-size: 200% 100%;
+    animation: irTabLoading 1s linear infinite;
+}
+@keyframes irTabLoading {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .ir-view-tab.is-loading::after { animation: none; background: #fb923c; }
+}
+
+/* Inline failure bar injected by the tab controller when a lazy module
+   fails to load (see _showTabLoadError in realtime_ir.html). */
+.ir-tab-load-error {
+    padding: 14px 18px;
+}
+
 /* Mobile tweaks — vars in :root already widen the bar to 36px. */
 @media (max-width: 768px) {
     .ir-secondary-bar {

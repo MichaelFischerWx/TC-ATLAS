@@ -182,6 +182,19 @@
         this._zoomAnimated = false;
         this._animatingZoom = false;
         var _self = this; this._gl.on('load', function () { _self._loaded = true; });
+        // Self-heal container-size changes. MapLibre reads the container size
+        // once at construction; if the element was hidden/zero-sized/wrong at
+        // that moment (embedded webviews, panel resizes, phone rotation) the
+        // canvas stayed at the 400×300 default forever — nothing ever called
+        // invalidateSize(). A ResizeObserver on the container closes that hole.
+        try {
+            if (typeof ResizeObserver !== 'undefined' && el) {
+                this._resizeObs = new ResizeObserver(function () {
+                    try { _self._gl.resize(); } catch (e) {}
+                });
+                this._resizeObs.observe(el);
+            }
+        } catch (e) { /* non-fatal: behaves as before */ }
         // Registering an 'error' listener suppresses MapLibre's default console.error.
         // Full-globe image overlays (env filled fields) make MapLibre request a
         // wrapped world-copy tile (x=-1) that throws a harmless "outside of bounds"
@@ -192,7 +205,7 @@
             // AbortErrors from image sources whose in-flight load was superseded
             // (the storm-card lazy-decode window swaps frame URLs rapidly).
             if (/outside of bounds/.test(m)) return;
-            if ((err && err.name === 'AbortError') || /aborted/.test(m)) return;
+            if ((err && err.name === 'AbortError') || /abort/i.test(m)) return;
             console.error('[lflet_gl]', err || ev); });
 
         // Leaflet-style default panes: DOM divs over the canvas. Custom canvas
@@ -241,7 +254,10 @@
     Map.prototype.getBounds = function () { var b = this._gl.getBounds(); return new LatLngBounds([b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]); };
     Map.prototype.getSize = function () { var c = this.getContainer(); return new Point(c.clientWidth, c.clientHeight); };
     Map.prototype.invalidateSize = function () { this._gl.resize(); return this; };
-    Map.prototype.remove = function () { try { this._gl.remove(); } catch (e) {} };
+    Map.prototype.remove = function () {
+        try { if (this._resizeObs) { this._resizeObs.disconnect(); this._resizeObs = null; } } catch (e) {}
+        try { this._gl.remove(); } catch (e) {}
+    };
 
     // projection
     Map.prototype.latLngToContainerPoint = function (ll) { var p = this._gl.project(ll2ml(ll)); return new Point(p.x, p.y); };

@@ -122,6 +122,18 @@ html, body { margin: 0; padding: 0; }
 .ir-no-storms-desc {
     display: none;
 }
+.ir-no-storms-link {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--um-orange, #F47321);
+    text-decoration: none;
+    white-space: nowrap;
+}
+.ir-no-storms-link:hover { text-decoration: underline; }
+[data-theme="dark"] .ir-no-storms {
+    background: rgba(22, 27, 36, 0.88);
+    border-color: rgba(255, 255, 255, 0.12);
+}
 .ir-no-storms-close {
     background: none;
     border: none;
@@ -1431,26 +1443,38 @@ html, body { margin: 0; padding: 0; }
 }
 
 /* ── Info sections (right panel) ─────────────────────────────── */
-/* Skeleton pulse animation for loading placeholders */
+/* Skeleton pulse animation for loading placeholders.
+   Keyframe runs -200% → 200% so the shimmer sweeps left-to-right
+   (reading direction). Dark theme needs WHITE-based washes — the old
+   black washes were invisible on the dark surfaces. */
 @keyframes skeleton-pulse {
-    0%   { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
+    0%   { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
 }
 .skeleton-pulse {
-    background: linear-gradient(90deg, transparent 25%, rgba(15, 22, 35,0.04) 50%, transparent 75%);
+    background: linear-gradient(90deg, transparent 25%, rgba(15, 22, 35, 0.05) 50%, transparent 75%);
     background-size: 200% 100%;
     animation: skeleton-pulse 1.8s ease-in-out infinite;
     border-radius: 4px;
 }
 .skeleton-chart {
     height: 180px;
-    background-color: rgba(15, 22, 35,0.03);
+    background-color: rgba(15, 22, 35, 0.04);
 }
 .skeleton-text {
     height: 14px;
     width: 120px;
-    background-color: rgba(15, 22, 35,0.05);
+    background-color: rgba(15, 22, 35, 0.06);
     display: inline-block;
+}
+[data-theme="dark"] .skeleton-pulse {
+    background: linear-gradient(90deg, transparent 25%, rgba(255, 255, 255, 0.07) 50%, transparent 75%);
+    background-size: 200% 100%;
+}
+[data-theme="dark"] .skeleton-chart { background-color: rgba(255, 255, 255, 0.05); }
+[data-theme="dark"] .skeleton-text  { background-color: rgba(255, 255, 255, 0.08); }
+@media (prefers-reduced-motion: reduce) {
+    .skeleton-pulse { animation: none; }
 }
 
 .ir-info-section {

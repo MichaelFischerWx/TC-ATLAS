@@ -107,24 +107,51 @@ var irCurrentBounds = null;  // L.latLngBounds for current IR overlay
 var irTbTooltip = null;      // L.popup for Tb hover display
 var irSelectedColormap = 'claude-ir';  // Current colormap name
 
-// ── Coastline overlay cache ────────────────────────────────────────────
-// Natural Earth 10m coastlines as GeoJSON — loaded once, shared by all maps.
+// ── Coastline overlay cache (two-tier) ─────────────────────────────────
+// _coastlineGeoJSON always holds the BEST tier fetched so far: the vendored
+// simplified file (~170 KB gz) first for fast paint, upgraded in place to the
+// full Natural Earth 10m file (~2.9 MB gz) once a visible map zooms past
+// _COAST_HI_ZOOM. Canvas consumers (GIF export) read this var directly and
+// automatically pick up the upgrade.
 var _coastlineGeoJSON = null;
+var _coastlineTier = null;    // 'lo' | 'hi'
 var _coastlineLoading = false;
 var _coastlineQueue = []; // maps waiting for coastline data
+var _coastlineHiLoading = false;
+var _coastlineHiQueue = []; // callbacks waiting for the 10m tier
+var _COAST_HI_ZOOM = 5;
+
+// Fetch the full 10m tier (once) and promote _coastlineGeoJSON to it.
+// 10m gives ~100 m positional accuracy — small enough that the overlay
+// stays visually flush with the Carto basemap at z6-z9 zoom levels (the
+// range where coastline mis-registration was previously visible).
+function _loadCoastlineHi(cb) {
+    if (_coastlineTier === 'hi') { if (cb) cb(_coastlineGeoJSON); return; }
+    if (cb) _coastlineHiQueue.push(cb);
+    if (_coastlineHiLoading) return;
+    _coastlineHiLoading = true;
+    fetch('assets/coastlines/ne_10m_coastline.geojson')
+        .then(function (r) { return r.json(); })
+        .then(function (g) {
+            _coastlineGeoJSON = g;
+            _coastlineTier = 'hi';
+            _coastlineHiQueue.forEach(function (f) { f(g); });
+            _coastlineHiQueue = [];
+        })
+        .catch(function (e) { console.warn('Coastline 10m load failed:', e); _coastlineHiQueue = []; })
+        .finally(function () { _coastlineHiLoading = false; });
+}
 
 /**
- * Load Natural Earth 10m coastlines and add as thin dark outlines to a map.
+ * Load coastlines and add as thin dark outlines to a map.
  * Uses the 'coastlines' pane (z=450) so lines render above IR but below markers.
- * Caches the GeoJSON so it's only fetched once across all maps.
- *
- * 10m gives ~100 m positional accuracy — small enough that the overlay
- * stays visually flush with the Carto basemap at z6-z9 zoom levels (the
- * range where coastline mis-registration was previously visible).
+ * Starts from the simplified tier; upgrades this map's layer (and the shared
+ * cache) to 10m once the map is visibly zoomed past _COAST_HI_ZOOM.
  */
 function _loadCoastlineOverlay(map) {
     function _addToMap(geojson, m) {
-        L.geoJSON(geojson, {
+        if (m._gaCoastLayer) { try { m.removeLayer(m._gaCoastLayer); } catch (e) {} }
+        m._gaCoastLayer = L.geoJSON(geojson, {
             pane: 'coastlines',
             style: {
                 color: '#000000',
@@ -137,8 +164,33 @@ function _loadCoastlineOverlay(map) {
         }).addTo(m);
     }
 
+    function _maybeUpgrade(m) {
+        if (m._gaCoastTier === 'hi') return;
+        var z; try { z = m.getZoom(); } catch (e) { return; }
+        if (z == null || z < _COAST_HI_ZOOM) return;
+        // Only for maps the user can actually see — hidden maps must not
+        // pull the 9 MB tier during page load.
+        try {
+            var c = m.getContainer();
+            if (!c || c.offsetParent === null) return;
+        } catch (e) { return; }
+        _loadCoastlineHi(function (g) {
+            if (m._gaCoastTier === 'hi') return;
+            m._gaCoastTier = 'hi';
+            _addToMap(g, m);
+        });
+    }
+
+    if (!map._gaCoastZoomHook) {
+        map._gaCoastZoomHook = true;
+        map.on('zoomend', function () { _maybeUpgrade(map); });
+        map.on('moveend', function () { _maybeUpgrade(map); });
+    }
+
     if (_coastlineGeoJSON) {
         _addToMap(_coastlineGeoJSON, map);
+        if (_coastlineTier === 'hi') map._gaCoastTier = 'hi';
+        else _maybeUpgrade(map);
         return;
     }
 
@@ -146,17 +198,11 @@ function _loadCoastlineOverlay(map) {
     if (_coastlineLoading) return;
     _coastlineLoading = true;
 
-    // Natural Earth 10m coastlines, vendored locally (assets/coastlines/) and
-    // served from our own origin (coords trimmed to 5 dp, ~2.9 MB gzipped via
-    // GitHub Pages). GitHub's raw host is rate-limited and would silently drop
-    // this ~9 MB fetch.
-    // One-time cost on first session; cached thereafter in the _coastlineGeoJSON
-    // module var so subsequent map inits are free.
-    fetch('assets/coastlines/ne_10m_coastline.geojson')
+    fetch('assets/coastlines/ne_10m_coastline_simplified.geojson')
         .then(function (r) { return r.json(); })
         .then(function (geojson) {
-            _coastlineGeoJSON = geojson;
-            _coastlineQueue.forEach(function (m) { _addToMap(geojson, m); });
+            if (_coastlineTier !== 'hi') { _coastlineGeoJSON = geojson; _coastlineTier = 'lo'; }
+            _coastlineQueue.forEach(function (m) { _addToMap(_coastlineGeoJSON, m); _maybeUpgrade(m); });
             _coastlineQueue = [];
         })
         .catch(function (e) {
@@ -7315,15 +7361,9 @@ window.openGifSettings = function () {
     updateGifRangeUI();
     _updateGifEstimate();
 
-    // Pre-load coastline GeoJSON if not already cached
-    if (!_coastlineGeoJSON && !_coastlineLoading) {
-        _coastlineLoading = true;
-        fetch('assets/coastlines/ne_10m_coastline.geojson')
-            .then(function (r) { return r.json(); })
-            .then(function (geojson) { _coastlineGeoJSON = geojson; })
-            .catch(function (e) { console.warn('Coastline pre-load failed:', e); })
-            .finally(function () { _coastlineLoading = false; });
-    }
+    // Pre-load the full 10m coastline tier for export quality (the shared
+    // cache may only hold the simplified tier at this point).
+    _loadCoastlineHi(null);
 
     // Enable/disable model checkbox based on whether model data is loaded
     var modelCb = document.getElementById('gif-show-models');

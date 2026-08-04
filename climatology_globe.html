@@ -12,11 +12,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Climatology Globe — TC-ATLAS</title>
-    <script src="theme.js?v=20260725a"></script>
+    <script src="theme.js?v=20260804a"></script>
     <!-- Site-wide export module. This page was the last one still missing it,
          so its Download-CSV button used a bare <a download> and did nothing
          at all on iOS Safari. Must load BEFORE globe.js, which checks for it. -->
-    <script src="tc_export.js?v=20260803c"></script>
+    <script defer src="tc_export.js?v=20260803c"></script>
     <meta name="description" content="ERA5 climatology globe with IBTrACS tropical cyclone tracks overlaid. Connect environmental state (SST, shear, OHC) to actual storm tracks.">
 
     <!-- Open Graph / Social Sharing -->
@@ -40,13 +40,18 @@
     <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
     <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <!-- three.js module graph comes from unpkg; ERA5 tiles from GCS. -->
+    <link rel="preconnect" href="https://unpkg.com">
+    <link rel="preconnect" href="https://storage.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
 
     <!-- Vendored GC-ATLAS globe styles (un-scoped, applies page-wide). Loads
          BEFORE TC-ATLAS sheets so TC-ATLAS rules can override topbar styling
          and re-map theme variables (--deep, --emerald, etc.) to navy/blue. -->
     <link rel="stylesheet" href="vendor/gc-atlas/globe.css">
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260725a">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260804a">
     <link rel="stylesheet" href="climatology_globe_styles.css?v=20260509c">
 
     <!-- Importmap for the GC-ATLAS engine. Three.js + addons from unpkg;
@@ -67,7 +72,7 @@
     <header class="topbar" role="banner">
         <div class="topbar-inner">
             <div class="topbar-brand">
-                <img src="tc-atlas-icon.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
+                <img src="tc-atlas-favicon-64.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
                 <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
                 <div class="topbar-divider"></div>
                 <div class="topbar-subtitle">Climatology Globe</div>

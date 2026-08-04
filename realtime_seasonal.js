@@ -1314,10 +1314,12 @@
     // both export paths (Plotly's toImage and html2canvas) can draw it
     // without a network round-trip and without tainting the canvas.
     // -------------------------------------------------------------------
-    // The site's actual mark — the same file the topbar renders
-    // (`.topbar-icon`). tc-atlas-icon.svg is a different, simpler glyph
-    // and is NOT the brand logo; don't substitute it here.
-    var TC_LOGO_URL = 'tc-atlas-icon.png';
+    // The site's actual mark — same artwork the topbar renders
+    // (`.topbar-icon`, tc-atlas-favicon-64.png). The 192px favicon is the
+    // identical raster at 1/6 the bytes of the 1024px tc-atlas-icon.png.
+    // tc-atlas-icon.svg is a different, simpler glyph and is NOT the brand
+    // logo; don't substitute it here.
+    var TC_LOGO_URL = 'tc-atlas-favicon-192.png';
     var _tcLogoPromise = null;
     var _tcLogo = null;          // {uri, img} once resolved
 
@@ -5390,7 +5392,10 @@
     function _evoLoadStorms() {
         if (_evoState.storms) return Promise.resolve(_evoState.storms);
         if (_evoState.stormsPromise) return _evoState.stormsPromise;
-        _evoState.stormsPromise = fetch('ibtracs_storms.json?' + (window.__v || ''))
+        // Same static-quarterly cache key as global_archive/tc_radar_app so the
+        // pages share one HTTP cache entry (never window.__v — that key changes
+        // every minute and forced a full re-download per visit).
+        _evoState.stormsPromise = fetch('ibtracs_storms.json?v20260408')
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
                 if (!j || !j.storms) { _evoState.storms = {}; return {}; }
@@ -5407,7 +5412,7 @@
         // Chunk 1 (1977-present) is enough — era5_daily archive starts 1991.
         if (_evoState.tracks) return Promise.resolve(_evoState.tracks);
         if (_evoState.tracksPromise) return _evoState.tracksPromise;
-        _evoState.tracksPromise = fetch('ibtracs_tracks_1.json?' + (window.__v || ''))
+        _evoState.tracksPromise = fetch('ibtracs_tracks_1.json?v20260408')
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
                 _evoState.tracks = j || {};
