@@ -2228,6 +2228,14 @@ window.viewStormDetail = function () {
         panel.classList.toggle('active', panel.id === 'tab-detail');
     });
 
+    // Put the storm in the URL so a hard refresh comes back to it. This
+    // bypasses switchTab (see above), which is the only other thing that
+    // writes the hash — so without this, opening a storm left the URL on
+    // whatever it was and reloading dumped you back in the browser list.
+    // Richer state (frame, colormap, zoom) is layered on later by
+    // seekIRFrame et al. as the user interacts.
+    updateHashSilently();
+
     // Small delay to let the DOM settle before rendering charts/maps
     setTimeout(function () {
         renderStormDetail(selectedStorm);
@@ -9947,10 +9955,17 @@ function _fallbackCopy(text) {
  * Update hash in URL bar silently when user changes state.
  */
 var _hashUpdateTimer = null;
+// True while restoreFromHash is still applying a link's state. viewStormDetail
+// writes the hash now, and restore calls viewStormDetail — so without this the
+// debounced write (500ms) lands before restore applies frame/cmap/zoom (800ms)
+// and rewrites the URL as bare #tab=detail&storm=SID, quietly stripping those
+// params off a shared link. Checked inside the timer, not at schedule time.
+var _hashRestoreActive = false;
 function updateHashSilently() {
     // Debounce to avoid hammering history API during animation playback
     clearTimeout(_hashUpdateTimer);
     _hashUpdateTimer = setTimeout(function () {
+        if (_hashRestoreActive) return;
         history.replaceState(null, '', buildShareHash());
     }, 500);
 }
@@ -10006,6 +10021,7 @@ function restoreFromHash() {
                 return;
             }
             selectedStorm = storm;
+            _hashRestoreActive = true;   // hold the URL until state is applied
             viewStormDetail();
 
             // Wait for detail to render, then apply IR state
@@ -10056,6 +10072,10 @@ function restoreFromHash() {
                         }
                     }, 300);
                 }
+                // State applied — the URL may track the user again. The frame
+                // seek above uses _origSeekIRFrame, which does not write the
+                // hash, so there is nothing left to race.
+                _hashRestoreActive = false;
             }, 800);
         }
 
