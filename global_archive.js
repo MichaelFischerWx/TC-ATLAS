@@ -4231,6 +4231,9 @@ function loadHURSAT(storm) {
     irPrefetchActive = 0;
     irFailedFrames = {};
     irInFlight = {};
+    irFrameAttempts = {};
+    irFrameRetryAt = {};
+    if (_irRetryTimer) { clearTimeout(_irRetryTimer); _irRetryTimer = null; }
     irFollowZoomSet = false;
     stopIRPlayback();
     removeIROverlay();
@@ -4963,11 +4966,21 @@ function updateIRCacheStatus() {
         });
     }
 
+    // Frames we have permanently given up on, after IR_FRAME_MAX_ATTEMPTS.
+    // Without this the counter just stops climbing and a finished-but-
+    // incomplete load is indistinguishable from one still in progress —
+    // which is what made a dead loader read as "stuck" for weeks.
+    var gaveUp = 0;
+    for (var k in irFailedFrames) { if (irFailedFrames[k]) gaveUp++; }
+
     var text;
     if (cached < total) {
         text = cached + ' / ' + total + ' frames loaded (' + plannedLabel + ')';
     } else {
         text = total + ' frames (' + plannedLabel + ')';
+    }
+    if (gaveUp > 0) {
+        text += ' · ' + gaveUp + ' unavailable';
     }
     if (fallbackCount > 0) {
         text += ' · ' + fallbackCount + ' fallback';
@@ -4983,6 +4996,48 @@ var IR_PREFETCH_BATCH_GRIDSAT = 14; // Higher concurrency for GridSat (small sub
 var IR_PREFETCH_BATCH_MERGIR = 6;   // MergIR: server-side rate limiter handles pacing
                                     // limiting (server also paces with 0.5s min interval)
 var IR_PREFETCH_AHEAD = 20;  // How many frames ahead to prefetch
+
+// ── Bounded frame retry ──────────────────────────────────────────────────
+// A single miss used to blacklist a frame for the rest of the session:
+// irFailedFrames[idx] was set on the first failure and fetchIRFrameSingle
+// short-circuits on it forever. Any transient 502 — a backend semaphore
+// timeout under 6-wide prefetch, a cold instance, a blip — therefore became
+// a permanently missing frame, and once every remaining frame was blacklisted
+// the self-replenishing prefetch chain had nothing left to pick and died
+// silently, freezing the counter mid-load. Give each frame a few attempts
+// with backoff, and only then give up for good.
+var irFrameAttempts = {};        // idx -> count of failed attempts
+var irFrameRetryAt = {};         // idx -> earliest epoch ms to try again
+var IR_FRAME_MAX_ATTEMPTS = 3;   // after this many, blacklist permanently
+var _irRetryTimer = null;
+
+function _irNoteFrameFailure(idx) {
+    var n = (irFrameAttempts[idx] || 0) + 1;
+    irFrameAttempts[idx] = n;
+    if (n >= IR_FRAME_MAX_ATTEMPTS) {
+        irFailedFrames[idx] = true;
+    } else {
+        // Back off so a saturated backend isn't hammered by the retry itself.
+        irFrameRetryAt[idx] = Date.now() + 2000 * Math.pow(3, n - 1);
+    }
+}
+
+// When every outstanding frame is in backoff, toFetch comes back empty and
+// the chain would end there. Re-arm it for when the soonest cooldown lapses.
+function _irScheduleRetryKick() {
+    if (_irRetryTimer || !irMeta) return;
+    var now = Date.now(), soonest = Infinity;
+    for (var i = 0; i < irMeta.n_frames; i++) {
+        if (irFrames[i] || irFailedFrames[i]) continue;
+        var t = irFrameRetryAt[i] || 0;
+        if (t > now && t < soonest) soonest = t;
+    }
+    if (soonest === Infinity) return;
+    _irRetryTimer = setTimeout(function () {
+        _irRetryTimer = null;
+        prefetchIRFrames(irFrameIdx);
+    }, Math.max(250, soonest - now));
+}
 
 // ── Direct-CDN frame fetching ────────────────────────────────────────────
 // Rendered frames are mirrored to R2 under an immutable key, whose prefix
@@ -5046,7 +5101,7 @@ function loadIRFrame(idx) {
             displayIROnMap(data);
         }
         if (!data && irFrameIdx === idx) {
-            irFailedFrames[idx] = true;
+            _irNoteFrameFailure(idx);
             // During playback, auto-skip to next frame
             if (irPlaying && irMeta) {
                 var nextIdx = (idx + 1) % irMeta.n_frames;
@@ -5076,7 +5131,12 @@ function loadIRFrame(idx) {
 }
 
 function fetchIRFrameSingle(idx, callback) {
-    if (!irMeta || !selectedStorm) return;
+    // Must still settle the callback: prefetchIRFrames has already taken a
+    // slot with irPrefetchActive++, and returning silently here leaks it.
+    // Enough leaked slots and irPrefetchActive pins at maxConcurrent, after
+    // which prefetchIRFrames returns immediately every time and the loop is
+    // wedged for good.
+    if (!irMeta || !selectedStorm) { if (callback) callback(null); return; }
     if (irFrames[idx]) { callback(irFrames[idx]); return; }
     if (irFailedFrames[idx]) { if (callback) callback(null); return; }
 
@@ -5224,33 +5284,33 @@ function prefetchIRFrames(currentIdx) {
     // is about to see. No frontier needed — the scan itself skips cached frames.
     var toFetch = [];
     var slots = maxConcurrent - irPrefetchActive;
+    var _now = Date.now();
+    function _ready(i) {
+        return !irFrames[i] && !irFailedFrames[i] && !irInFlight[i] &&
+               !(irFrameRetryAt[i] > _now);
+    }
     for (var i = 0; i < total && toFetch.length < slots; i++) {
         var idx = (currentIdx + 1 + i) % total;
-        if (!irFrames[idx] && !irFailedFrames[idx] && !irInFlight[idx]) {
-            toFetch.push(idx);
-        }
+        if (_ready(idx)) toFetch.push(idx);
     }
 
     // Also prefetch a few behind current display (for rewinding)
     for (var j = 1; j <= 3; j++) {
         var prevIdx = (currentIdx - j + total) % total;
-        if (!irFrames[prevIdx] && !irFailedFrames[prevIdx] && !irInFlight[prevIdx] &&
-            toFetch.indexOf(prevIdx) === -1 && toFetch.length < slots + 3) {
+        if (_ready(prevIdx) && toFetch.indexOf(prevIdx) === -1 &&
+            toFetch.length < slots + 3) {
             toFetch.push(prevIdx);
         }
     }
 
-    if (toFetch.length === 0) return;
+    if (toFetch.length === 0) { _irScheduleRetryKick(); return; }
 
     // Fire individual fetches in parallel — self-replenishing chain
     toFetch.forEach(function (idx) {
         irPrefetchActive++;
         fetchIRFrameSingle(idx, function (data) {
             irPrefetchActive--;
-            if (!data) {
-                // Mark as failed so prefetch doesn't retry this frame endlessly
-                irFailedFrames[idx] = true;
-            }
+            if (!data) _irNoteFrameFailure(idx);
             updateIRCacheStatus();
             // Chain: each completion immediately fills the empty slot
             prefetchIRFrames(irFrameIdx);
