@@ -5108,9 +5108,13 @@ function fetchIRFrameSingle(idx, callback) {
 
     if ((source === 'mergir' || source === 'gridsat') && irMeta.frames && irMeta.frames[idx]) {
         var fi = irMeta.frames[idx];
+        // Send the frame timestamp too. The server's meta cache is per-instance,
+        // so a prefetch that lands on a container which didn't serve /ir/meta
+        // otherwise has no way to date the frame and 502s ("no frame datetime").
+        var dtP = fi.datetime ? '&dt=' + encodeURIComponent(fi.datetime) : '';
         frameUrl = API_BASE + '/global/ir/frame?sid=' + encodeURIComponent(selectedStorm.sid) +
             '&frame_idx=' + idx +
-            '&lat=' + fi.lat + '&lon=' + fi.lon +
+            '&lat=' + fi.lat + '&lon=' + fi.lon + dtP +
             '&_v=' + irCacheVer;
     } else {
         // HURSAT: use legacy endpoint directly (most reliable)

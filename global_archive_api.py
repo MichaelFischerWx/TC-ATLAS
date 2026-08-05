@@ -2316,6 +2316,7 @@ def ir_frame(
     frame_idx: int = Query(..., ge=0, description="Frame index (0-based)"),
     lat: float = Query(None, description="Storm center latitude (for MergIR)"),
     lon: float = Query(None, description="Storm center longitude (for MergIR)"),
+    dt: str = Query(None, description="Frame timestamp (ISO), from /ir/meta frames[i].datetime"),
 ):
     """
     Return a rendered IR frame as base64 PNG.
@@ -2405,6 +2406,18 @@ def ir_frame(
                 frame_lat = lat or frame_info.get("lat")
                 frame_lon = lon or frame_info.get("lon")
                 frame_dt = datetime.fromisoformat(frame_info["datetime"])
+
+        # Client-supplied timestamp — the authoritative escape from instance-local
+        # state.  _mergir_meta_cache lives in one container's memory, so on
+        # autoscaled Cloud Run only the instance that happened to serve /ir/meta
+        # can date a frame; every prefetch routed elsewhere used to 502 with
+        # "no frame datetime".  The browser has had frames[i].datetime in hand
+        # the whole time, so let it just say so and make this endpoint stateless.
+        if frame_dt is None and dt:
+            try:
+                frame_dt = datetime.fromisoformat(dt.replace("Z", "").strip())
+            except ValueError:
+                logger.warning(f"ir_frame: unparseable dt={dt!r} for {sid} frame {frame_idx}")
 
         # If we don't have frame_dt from meta, try to get it from HURSAT frame list
         if frame_dt is None:
