@@ -250,13 +250,29 @@ GRIDSAT_START_YEAR = 1980
 GRIDSAT_END_YEAR = 2024  # Updates paused since March 2024
 GRIDSAT_HALF_DOMAIN = 10.0  # 10° each direction = 20°×20° box — fills Leaflet panel
 
-# Earthdata credentials for MergIR access (set via env vars on Render)
-# Option 1: Bearer token (EARTHDATA_TOKEN) — preferred
-# Option 2: Username/password (EARTHDATA_USER + EARTHDATA_PASS)
+# Earthdata credentials for MergIR access.
+# Option 1: Username/password — preferred, and what _get_earthdata_session
+#           actually reaches for first.  Does not expire.
+# Option 2: Bearer token (EARTHDATA_TOKEN) — fallback only.  EDL tokens are
+#           good for 60 days, so a service pinned to one goes dark four times
+#           a year with no warning; that is exactly what happened between
+#           2026-05-24 and 2026-08-05.
 # Either option requires a ~/.netrc entry for urs.earthdata.nasa.gov
-EARTHDATA_TOKEN = os.environ.get("EARTHDATA_TOKEN", "")
-EARTHDATA_USER = os.environ.get("EARTHDATA_USER", "")
-EARTHDATA_PASS = os.environ.get("EARTHDATA_PASS", "")
+#
+# The Cloud Run service spells the user/pass pair EARTHDATA_USERNAME /
+# EARTHDATA_PASSWORD, so accept both spellings.  Silently reading only the
+# short names left the password path dead: when the bearer token expired,
+# there was nothing to fall back to and every MergIR fetch 401'd.
+#
+# .strip() is load-bearing: a secret payload added with a trailing newline
+# (the default if you type the value and press Enter before Ctrl-D) carries
+# that newline into the env var, and requests refuses to send a header value
+# containing one — turning an expired-token 401 into an opaque InvalidHeader.
+EARTHDATA_TOKEN = os.environ.get("EARTHDATA_TOKEN", "").strip()
+EARTHDATA_USER = (os.environ.get("EARTHDATA_USER")
+                  or os.environ.get("EARTHDATA_USERNAME", "")).strip()
+EARTHDATA_PASS = (os.environ.get("EARTHDATA_PASS")
+                  or os.environ.get("EARTHDATA_PASSWORD", "")).strip()
 
 
 def _setup_earthdata_netrc():
@@ -307,10 +323,18 @@ def _setup_earthdata_netrc():
     except Exception as e:
         print(f"[global_archive] Earthdata: FAILED to write {netrc_path}: {e}")
 
-    # Write ~/.dodsrc for OPeNDAP cookie/redirect handling
+    # Write ~/.dodsrc for OPeNDAP cookie/redirect handling.
+    #
+    # Paths MUST be absolute: netCDF-c does not expand '~', so a tilde path
+    # makes it try to create a cookie file under a literal './~' directory,
+    # fail, and abort the DAP handshake with OC_EPERM -> NC_EPERM
+    # ("[Errno -37] NetCDF: Write to read only").  That kills EVERY OPeNDAP
+    # open in the process, including anonymous non-NASA ones — it is what
+    # took out the GridSat fallback, which needs no Earthdata auth at all.
+    cookie_path = os.path.join(home, ".urs_cookies")
     dodsrc_content = (
-        "HTTP.COOKIEJAR=~/.urs_cookies\n"
-        "HTTP.NETRC=~/.netrc\n"
+        f"HTTP.COOKIEJAR={cookie_path}\n"
+        f"HTTP.NETRC={netrc_path}\n"
     )
     try:
         with open(dodsrc_path, "w") as f:
