@@ -1701,6 +1701,25 @@
         ]).then(function (res) {
             _index = res[0];
             _archIndex = res[1];
+            /* A LIVE storm must never be served out of the season archive.
+               The archive pass can misfile an active storm as completed (a
+               quiet JTWC b-deck reads as dissipation) and its manifest entry
+               is never pruned afterwards, so WP132026 sat in both indexes:
+               live as Peilou through 08-10, archived as a 3-day-stale run
+               under the name the b-deck carried that day ("Kujira"). Every
+               downstream path keys off _archSet, so the live chip silently
+               loaded the archived JSON + plan PNG under the old name.
+               Drop the archive copy on any ATCF collision — live always
+               wins, and the chips, the count and seriesPath() all follow. */
+            var live = {};
+            ((_index && _index.storms) || []).forEach(function (s) {
+                live[s.atcf] = true;
+            });
+            if (_archIndex && _archIndex.storms) {
+                _archIndex.storms = _archIndex.storms.filter(function (s) {
+                    return !live[s.atcf];
+                });
+            }
             _archSet = {};
             ((_archIndex && _archIndex.storms) || []).forEach(function (s) {
                 _archSet[s.atcf] = true;
