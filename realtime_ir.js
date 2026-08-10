@@ -18478,6 +18478,11 @@
             });
             ells.forEach(function (e) {
                 if (e.sxx == null) return;
+                // Guard for payloads cached before the antimeridian fix: raw
+                // lon moments across ±180° give σ of O(100°), which draws as a
+                // ring wrapped around the globe. No real ensemble spreads that
+                // far — drop the ellipse rather than render garbage.
+                if (Math.max(e.sxx, e.syy) > 900) return;   // σ > 30°
                 // Outline-only (no fill): a filled +240 h ellipse is huge and
                 // reads as an orange wash over the map. Dotted ring + a small
                 // edge label conveys the spread cleanly.

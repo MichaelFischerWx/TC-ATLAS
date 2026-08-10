@@ -10136,11 +10136,22 @@ def _genesis_cluster_spread(cluster, ensemble_size=None):
         n = len(pos)
         if n < 5:
             continue
+        # Antimeridian-safe moments (same idea as _tca_mean_track): take a
+        # circular mean of the member longitudes, then unwrap each member to
+        # within ±180° of it before computing the covariance. Raw-degree
+        # moments put a cluster straddling ±180° at ~0°E with a lon variance
+        # of O(180²), which the frontend draws as a globe-spanning ring.
+        _lref = math.degrees(math.atan2(
+            sum(math.sin(math.radians(p[1])) for p in pos) / n,
+            sum(math.cos(math.radians(p[1])) for p in pos) / n))
+        lons_u = [_lref + (((p[1] - _lref) + 180.0) % 360.0) - 180.0 for p in pos]
         mlat = sum(p[0] for p in pos) / n
-        mlon = sum(p[1] for p in pos) / n
-        sxx = sum((p[1] - mlon) ** 2 for p in pos) / n   # lon variance (deg²)
-        syy = sum((p[0] - mlat) ** 2 for p in pos) / n   # lat variance (deg²)
-        sxy = sum((p[1] - mlon) * (p[0] - mlat) for p in pos) / n
+        mlon = sum(lons_u) / n
+        sxx = sum((lo - mlon) ** 2 for lo in lons_u) / n   # lon variance (deg²)
+        syy = sum((p[0] - mlat) ** 2 for p in pos) / n     # lat variance (deg²)
+        sxy = sum((lo - mlon) * (p[0] - mlat)
+                  for lo, p in zip(lons_u, pos)) / n
+        mlon = ((mlon + 180.0) % 360.0) - 180.0            # back to [-180, 180)
         ellipses.append({"tau": t, "lat": round(mlat, 2), "lon": round(mlon, 2),
                          "sxx": round(sxx, 4), "syy": round(syy, 4),
                          "sxy": round(sxy, 4), "n": n})
