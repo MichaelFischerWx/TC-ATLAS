@@ -49,6 +49,11 @@ from typing import Optional
 
 import numpy as np
 
+# PI / VI / vPI physics core. Imported at module scope but the numba
+# driver inside it compiles lazily on first use, so a run that never
+# builds the PI layers pays nothing for this.
+import potential_intensity
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -180,6 +185,9 @@ def read_gfs_field(grib_bytes: bytes, level: int, var: str
             "TMP":   ["t", "t2m"],
             "HGT":   ["gh"],
             "PRMSL": ["prmsl"],
+            # Specific humidity decodes to the CF short name "q" — the
+            # NOMADS toggle is SPFH but cfgrib never uses that spelling.
+            "SPFH":  ["q"],
         }
         names = candidates.get(var, [var.lower()])
         xname = next((n for n in names if n in ds.data_vars), None)
@@ -862,7 +870,12 @@ def render_data_png(field: np.ndarray, spec: LayerSpec) -> bytes:
     dv_max = spec.data_vmax if spec.data_vmax is not None else spec.vmax
     norm = np.clip((field - dv_min) / max(dv_max - dv_min, 1e-9),
                    0.0, 1.0)
-    gray = (norm * 255).astype(np.uint8)
+    # NaN survives the clip, and casting NaN to uint8 is undefined — it
+    # happens to land on 0 here but raises a RuntimeWarning per call, which
+    # buries the log once a layer is mostly NaN (MPI is ~53% land/cold
+    # water). The alpha channel below already zeroes these pixels so the
+    # value is never read; fill explicitly so the cast is well-defined.
+    gray = (np.nan_to_num(norm, nan=0.0) * 255).astype(np.uint8)
 
     h, w = gray.shape
     rgba = np.zeros((h, w, 4), dtype=np.uint8)
@@ -2334,6 +2347,332 @@ def build_midlevel_rh(date_str: str, hour_str: str, *, forecast_hour: int = 0,
     return rh if upload_layer(spec, rh) else None
 
 
+# --------------------------------------------------------------------------
+# Potential intensity family: MPI / ventilation index / ventilated PI
+# --------------------------------------------------------------------------
+# All three come out of one expensive computation (a full T/q profile fetch
+# plus the Bister-Emanuel solve), so they share a single cached result on
+# the bundle rather than recomputing per layer. Physics lives in
+# potential_intensity.py; this section is only plumbing.
+#
+# Run at f000 ONLY. PI is a slowly-varying quantity — Tang & Emanuel lean on
+# exactly that when they sample it three days ahead along a track — so
+# rendering it at 13 forecast hours would multiply the 44 MB profile fetch
+# and the PI solve by 13 for a field that barely moves within 12 h.
+
+PI_PROFILE_LEVELS = [1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600,
+                     550, 500, 450, 400, 350, 300, 250, 200, 150, 100, 70, 50]
+
+# Deliberately NOT added to GFS_PRESSURE_REQUESTS: the bundle is rebuilt for
+# every forecast hour, and only f000 needs these. `_load_fields` fetches them
+# on demand (two NOMADS calls, ~44 MB) when the key is absent from the bundle.
+
+
+def _pad_oisst_to_env_grid(sst: np.ndarray) -> Optional[np.ndarray]:
+    """OISST native is 720x1440; the env grid is 721x1440. Repeat the polar
+    row, matching build_sst's padding."""
+    if sst is None:
+        return None
+    if sst.shape == (NY, NX):
+        return sst
+    if sst.shape == (720, NX):
+        padded = np.empty((NY, NX), dtype=sst.dtype)
+        padded[0] = sst[0]
+        padded[1:] = sst
+        return padded
+    log.warning("OISST unexpected shape %s; PI layers skipped", sst.shape)
+    return None
+
+
+def _detect_vortices(msl_hpa: np.ndarray, u850: np.ndarray, v850: np.ndarray,
+                     lats: np.ndarray, lons: np.ndarray) -> list:
+    """Hemisphere-signed 850 hPa cyclonic vorticity + MSLP deficit → TC
+    centers. Vorticity is computed exactly as build_vorticity does (200 km
+    disc-smoothed u/v, spherical dx) so the two agree on what a vortex is."""
+    R_EARTH = 6.371e6
+    DEG_TO_RAD = np.pi / 180.0
+    dlat_m = 0.25 * DEG_TO_RAD * R_EARTH
+    cos_lat = np.maximum(np.cos(lats * DEG_TO_RAD), 1e-6)
+    u_s = disc_smooth(u850, 200.0)
+    v_s = disc_smooth(v850, 200.0)
+    dv_dx = (np.roll(v_s, -1, axis=1) - np.roll(v_s, 1, axis=1)) \
+        / (2 * (dlat_m * cos_lat)[:, None])
+    du_dy = np.zeros_like(u_s)
+    du_dy[1:-1, :] = -(u_s[2:, :] - u_s[:-2, :]) / (2 * dlat_m)
+    sign_lat = np.sign(lats)
+    sign_lat[sign_lat == 0] = 1.0
+    cyclonic = (dv_dx - du_dy) * sign_lat[:, None] * 1e5
+    return potential_intensity.detect_tc_centers(
+        msl_hpa, cyclonic, lats, lons, km_per_cell=KM_PER_CELL)
+
+
+def _compute_pi_family(date_str: str, hour_str: str, forecast_hour: int,
+                       bundle: Optional[dict],
+                       oisst: "Optional[tuple]") -> Optional[dict]:
+    """Fetch profiles, remove TC vortices, and solve for MPI / χ_m / VI /
+    vPI on the canonical global grid. Cached on the bundle under the
+    sentinel key ("__pi_family", 0) so the three builders pay for it once.
+
+    Returns {mpi_kt, vi, vpi_kt, chi_m, centers} or None."""
+    if bundle is not None:
+        cached = bundle.get(("__pi_family", 0))
+        if cached is not None:
+            return cached
+
+    if not oisst:
+        log.error("PI: no OISST — cannot compute potential intensity")
+        return None
+    sst_c = _pad_oisst_to_env_grid(oisst[0])
+    if sst_c is None:
+        return None
+
+    needs = [("TMP", L) for L in PI_PROFILE_LEVELS] + \
+            [("SPFH", L) for L in PI_PROFILE_LEVELS] + \
+            [("PRMSL", "mean_sea_level"),
+             ("UGRD", 850), ("VGRD", 850)]
+    log.info("PI: loading %d profile fields (GFS %s %sZ f%03d)",
+             len(needs), date_str, hour_str, forecast_hour)
+    fields = _load_fields(date_str, hour_str, forecast_hour, needs,
+                          bundle=bundle)
+    if fields is None:
+        log.error("PI: profile load failed")
+        return None
+
+    t_k = np.stack([regrid_to_global(fields[("TMP", L)])
+                    for L in PI_PROFILE_LEVELS])
+    q_kg = np.stack([regrid_to_global(fields[("SPFH", L)])
+                     for L in PI_PROFILE_LEVELS])
+    msl_hpa = regrid_to_global(fields[("PRMSL", "mean_sea_level")]) / 100.0
+    u850 = regrid_to_global(fields[("UGRD", 850)])
+    v850 = regrid_to_global(fields[("VGRD", 850)])
+
+    lats = 90.0 - np.arange(NY) * 0.25
+    lons = -180.0 + np.arange(NX) * 0.25
+
+    # ── Vortex removal ────────────────────────────────────────────────
+    # Scalars only. SST is deliberately left alone: a storm's cold wake is
+    # a real observed ocean state, not a model artifact, and a TC's own PI
+    # genuinely is lower over the water it has already churned.
+    centers = _detect_vortices(msl_hpa, u850, v850, lats, lons)
+    if centers:
+        log.info("PI: removing %d TC-like vortices (deepest %.1f hPa @ "
+                 "%.1f,%.1f)", len(centers), centers[0][2],
+                 centers[0][0], centers[0][1])
+        msl_hpa = potential_intensity.remove_tc_vortex(
+            msl_hpa, lats, lons, centers, km_per_cell=KM_PER_CELL)
+        t_k = potential_intensity.remove_tc_vortex(
+            t_k, lats, lons, centers, km_per_cell=KM_PER_CELL)
+        q_kg = potential_intensity.remove_tc_vortex(
+            q_kg, lats, lons, centers, km_per_cell=KM_PER_CELL)
+
+    # ── Bister-Emanuel PI ─────────────────────────────────────────────
+    # Blank SST outside the TC band before solving. The numba driver skips
+    # NaN-SST cells outright, so this is how the latitude restriction is
+    # actually enforced — it roughly halves the single-core solve time,
+    # which matters because the env job runs at --cpu 1.
+    sst_c = np.where(
+        np.abs(lats)[:, None] <= potential_intensity.PI_LAT_MAX,
+        sst_c, np.nan)
+
+    # Only the entropy-deficit level survives the solve, so grab it now and
+    # drop the full profiles — six 23x721x1440 arrays live at once here and
+    # the job only has 2 GiB.
+    mid_idx = PI_PROFILE_LEVELS.index(int(potential_intensity.CHI_MID_HPA))
+    t_mid = t_k[mid_idx].copy()
+    q_mid = q_kg[mid_idx].copy()
+
+    t_c = (t_k - 273.15).astype(np.float32)
+    del t_k
+    r_gkg = ((q_kg / np.clip(1.0 - q_kg, 1e-12, None))
+             * 1000.0).astype(np.float32)
+    del q_kg
+
+    _t0 = time.time()
+    pi_out = potential_intensity.pi_grid(
+        sst_c, msl_hpa, np.asarray(PI_PROFILE_LEVELS, dtype=float),
+        t_c, r_gkg)
+    log.info("PI: solve took %.1fs (%d valid cells)", time.time() - _t0,
+             int(np.isfinite(pi_out["vmax_ms"]).sum()))
+    del t_c, r_gkg
+
+    # ── χ_m, VI, vPI ──────────────────────────────────────────────────
+    s_star, s_m = potential_intensity.entropy_fields(t_mid, q_mid)
+    s_star_disc = potential_intensity.radial_mean(
+        s_star, 0.0, potential_intensity.CHI_R_INNER_KM, KM_PER_CELL)
+    s_m_annulus = potential_intensity.radial_mean(
+        s_m, potential_intensity.CHI_R_INNER_KM,
+        potential_intensity.CHI_R_OUTER_KM, KM_PER_CELL)
+    chi_m = potential_intensity.chi_m_grid(s_star_disc, s_m_annulus,
+                                           pi_out["asdeq"])
+
+    # Reuse the shipped shear field — already 400 km disc-smoothed per
+    # COMPONENT before differencing, which is the vortex-suppression the
+    # shear layer itself uses. Smoothing the magnitude instead would bias
+    # it high (|smoothed| <= smoothed(|.|)).
+    shear_kt = _compute_smoothed_shear_kt(date_str, hour_str,
+                                          forecast_hour, bundle)
+    if shear_kt is None:
+        log.error("PI: shear unavailable — cannot compute VI/vPI")
+        return None
+    shear_ms = shear_kt / potential_intensity.MS_TO_KT
+
+    # Two VIs on purpose. vPI needs the UNFLOORED index so that a cell
+    # where ventilation overwhelms a weak PI resolves to vPI = 0 ("no
+    # storm can be sustained here") rather than NaN ("no data here") —
+    # those are very different things to paint on a map. The VI layer
+    # itself uses the floored version so its hover readout isn't scaled
+    # by runaway values over cold water.
+    vi_raw = potential_intensity.ventilation_index(
+        shear_ms, chi_m, pi_out["vmax_ms"], pi_floor_ms=0.0)
+    vi_display = potential_intensity.ventilation_index(
+        shear_ms, chi_m, pi_out["vmax_ms"])
+    vpi = potential_intensity.vpi_from(pi_out["vmax_ms"], vi_raw)
+
+    KT = potential_intensity.MS_TO_KT
+    result = {
+        "mpi_kt": pi_out["vmax_ms"] * KT,
+        "vpi_kt": vpi * KT,
+        "vi": vi_display,
+        "chi_m": chi_m,
+        "centers": centers,
+    }
+    if bundle is not None:
+        bundle[("__pi_family", 0)] = result
+    return result
+
+
+_PI_VORTEX_NOTE = (
+    "TC circulations are excised before the calculation: candidate "
+    "vortices are found from the 850 hPa cyclonic vorticity and the local "
+    "MSLP deficit, then MSLP and the temperature/humidity profiles are "
+    "replaced inside a 500 km disc by a harmonic fill from the surrounding "
+    "environment. Without it an active storm carves a spurious hole in its "
+    "own field — measured at 22 kt of MPI at one WPac center. SST is left "
+    "untouched, since a storm's cold wake is real ocean state."
+)
+
+
+def build_mpi(date_str: str, hour_str: str, *, forecast_hour: int = 0,
+              bundle: Optional[dict] = None,
+              oisst: "Optional[tuple]" = None) -> Optional[bytes]:
+    """Bister-Emanuel maximum potential intensity (kt)."""
+    log.info("Building MPI: GFS %s %sZ", date_str, hour_str)
+    fam = _compute_pi_family(date_str, hour_str, forecast_hour, bundle, oisst)
+    if fam is None:
+        return None
+    field = fam["mpi_kt"]
+    spec = LayerSpec(
+        name="mpi",
+        title="Maximum Potential Intensity",
+        units="kt",
+        vmin=60,
+        vmax=180,
+        step=20,
+        # plasma, not a warm ramp: these overlays sit on a dark navy map
+        # over satellite imagery. YlOrRd bottoms out near-white, so it
+        # washes the map brightest exactly where values are LOWEST, and
+        # inferno/magma bottom out at black, which reads as missing data.
+        # plasma keeps a saturated indigo low end that still reads as
+        # data, is perceptually uniform, and is colorblind-safe.
+        cmap="plasma",
+        valid_time=compute_valid_time(date_str, hour_str, forecast_hour),
+        forecast_hour=forecast_hour,
+        init_cycle=f"{date_str}-{hour_str}",
+        data_vmin=0,
+        data_vmax=220,
+        render_style="filled",
+        description=(
+            "Bister & Emanuel (2002) thermodynamic upper bound on TC "
+            "intensity, from the GFS 0.25° temperature/humidity profile "
+            "(1000-50 hPa) over NOAA OISST. This is the 10 m wind "
+            "(C_k/C_D = 0.9, reversible ascent, gradient-wind reduction "
+            "0.8), so it is directly comparable to best-track Vmax. " +
+            _PI_VORTEX_NOTE
+        ),
+    )
+    return field if upload_layer(spec, field) else None
+
+
+def build_ventilation_index(date_str: str, hour_str: str, *,
+                            forecast_hour: int = 0,
+                            bundle: Optional[dict] = None,
+                            oisst: "Optional[tuple]" = None) -> Optional[bytes]:
+    """Tang & Emanuel (2012) ventilation index (dimensionless)."""
+    log.info("Building ventilation index: GFS %s %sZ", date_str, hour_str)
+    fam = _compute_pi_family(date_str, hour_str, forecast_hour, bundle, oisst)
+    if fam is None:
+        return None
+    field = fam["vi"]
+    spec = LayerSpec(
+        name="ventilation_index",
+        title="Ventilation Index",
+        units="",
+        vmin=0.0,
+        vmax=0.30,
+        step=0.02,
+        cmap="RdYlBu_r",
+        valid_time=compute_valid_time(date_str, hour_str, forecast_hour),
+        forecast_hour=forecast_hour,
+        init_cycle=f"{date_str}-{hour_str}",
+        data_vmin=0.0,
+        data_vmax=1.0,
+        render_style="filled",
+        discrete_bins=True,
+        # Bins straddle 0.145 so the genesis threshold is an actual color
+        # boundary rather than a value the reader has to interpolate.
+        levels_override=[0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.125, 0.145,
+                         0.20, 0.30, 0.50],
+        description=(
+            "VI = V_shear · χ_m / PI (Tang & Emanuel 2012) — "
+            "deep-layer shear times the 700 hPa entropy deficit, scaled by "
+            "potential intensity. LOWER is more favorable. The 0.145 "
+            "contour is the genesis threshold (Hoogewind et al. 2020): "
+            "above it no steady TC can be sustained. " + _PI_VORTEX_NOTE
+        ),
+    )
+    return field if upload_layer(spec, field) else None
+
+
+def build_vpi(date_str: str, hour_str: str, *, forecast_hour: int = 0,
+              bundle: Optional[dict] = None,
+              oisst: "Optional[tuple]" = None) -> Optional[bytes]:
+    """Chavas et al. (2025) ventilated potential intensity (kt)."""
+    log.info("Building ventilated PI: GFS %s %sZ", date_str, hour_str)
+    fam = _compute_pi_family(date_str, hour_str, forecast_hour, bundle, oisst)
+    if fam is None:
+        return None
+    field = fam["vpi_kt"]
+    spec = LayerSpec(
+        name="vpi",
+        title="Ventilated Potential Intensity",
+        units="kt",
+        # Same scale and colormap as `mpi` on purpose — the useful read is
+        # the two side by side, and a shared scale makes the ventilation
+        # penalty legible as a color shift rather than a rescale.
+        vmin=60,
+        vmax=180,
+        step=20,
+        cmap="plasma",
+        valid_time=compute_valid_time(date_str, hour_str, forecast_hour),
+        forecast_hour=forecast_hour,
+        init_cycle=f"{date_str}-{hour_str}",
+        data_vmin=0,
+        data_vmax=220,
+        render_style="filled",
+        description=(
+            "The intensity a storm could actually reach once ventilation "
+            "is accounted for — the equilibrium upper-branch solution "
+            "of Tang & Emanuel (2012) theory, per Chavas, Camargo & "
+            "Tippett (2025). vPI = PI · f(VI/VI_max), falling to "
+            "0.577·PI at the genesis threshold and to zero above it. "
+            "Compare against the MPI layer on the same color scale: the "
+            "difference is what the environment is taking away. " +
+            _PI_VORTEX_NOTE
+        ),
+    )
+    return field if upload_layer(spec, field) else None
+
+
 def build_sst(prefetched: "Optional[tuple]" = None) -> Optional[bytes]:
     """NOAA OISST v2.1 daily SST (degC). `prefetched` lets main() share a single
     OISST fetch with build_sst_anomalies (avoids two slow NCEI round-trips)."""
@@ -2825,6 +3164,27 @@ def main() -> int:
         ("rh_700_400",    lambda fh, b: build_midlevel_rh(date_str, hour_str, forecast_hour=fh, bundle=b)),
     ]
 
+    # Fetch OISST ONCE up front and share it across every consumer — the
+    # SST/anomaly builders below AND the potential-intensity family, which
+    # needs SST as its lower boundary condition. A slow NCEI endpoint then
+    # costs one walk-back for the whole job instead of one per consumer.
+    # This has to happen BEFORE the forecast-hour loop so the f000 PI
+    # builders can see it.
+    try:
+        _oisst = fetch_oisst_sst()
+    except Exception:
+        log.error("OISST shared fetch crashed:\n%s", traceback.format_exc())
+        _oisst = None
+
+    # PI / VI / vPI run at f000 only — see the note on PI_PROFILE_LEVELS.
+    # They also need OISST, so they are skipped entirely without it rather
+    # than failing three times over.
+    pi_builders = [
+        ("mpi",               build_mpi),
+        ("ventilation_index", build_ventilation_index),
+        ("vpi",               build_vpi),
+    ]
+
     # Hour-major iteration with a shared bundle per hour: one NOMADS
     # fetch per (var, typeOfLevel) up front, then every builder for
     # that hour reads pre-decoded fields out of the bundle.
@@ -2842,15 +3202,20 @@ def main() -> int:
                           key, traceback.format_exc())
                 results[key] = False
 
-    # SST runs once per scheduler invocation — OISST is observation-only daily,
-    # no forecast hours. Fetch OISST ONCE and share it across the absolute-SST
-    # and anomaly builders so a slow NCEI endpoint costs one walk-back, not two
-    # (each can burn up to the 90s budget). All use the legacy single-PNG path.
-    try:
-        _oisst = fetch_oisst_sst()
-    except Exception:
-        log.error("OISST shared fetch crashed:\n%s", traceback.format_exc())
-        _oisst = None
+        if fh != 0:
+            continue
+        if _oisst is None:
+            log.warning("Skipping PI/VI/vPI layers: OISST unavailable")
+            continue
+        for name, fn in pi_builders:
+            key = f"{name}.f000"
+            try:
+                results[key] = fn(date_str, hour_str, forecast_hour=0,
+                                  bundle=bundle, oisst=_oisst) is not None
+            except Exception:
+                log.error("Builder %s crashed:\n%s",
+                          key, traceback.format_exc())
+                results[key] = False
 
     # OISST is a daily product but this job runs every 6 h — 3 of 4 runs used
     # to re-render and re-upload byte-identical SST/anomaly PNGs. Skip the
@@ -2903,6 +3268,17 @@ def main() -> int:
                             [b[0] for b in gfs_builders])
     except Exception:
         log.error("write_layer_indices failed:\n%s", traceback.format_exc())
+
+    # PI layers exist at f000 only, so they get their own index write with
+    # a single-hour list — advertising f001..f012 would point the
+    # frontend's time picker at 404s.
+    try:
+        built_pi = [n for n, _ in pi_builders if results.get(f"{n}.f000")]
+        if built_pi:
+            write_layer_indices(date_str, hour_str, [0], built_pi)
+    except Exception:
+        log.error("write_layer_indices (PI) failed:\n%s",
+                  traceback.format_exc())
 
     if genesis_csv:
         for days in (2, 7, 14):

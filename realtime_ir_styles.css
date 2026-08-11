@@ -2872,6 +2872,31 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     font-size: 0.6rem;
     color: #94a3b8;
 }
+/* Color-ramp preview chip on an analysis-layer row — shows what the layer's
+   scale looks like before you turn it on. Deliberately a thin, label-less
+   mark: the readable scale is the colorbar that appears once the layer is
+   active, and tick numbers at this size would be noise. The inset ring (not
+   an outer border) keeps a pale ramp end from bleeding into the panel on
+   either theme without adding a pixel to the layout box. */
+.ir-global-menu-row .ir-menu-ramp {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 6px;
+    border-radius: 3px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+    opacity: 0.85;
+    transition: opacity 0.12s, transform 0.12s;
+}
+.ir-global-menu-row:hover .ir-menu-ramp {
+    opacity: 1;
+    transform: scaleY(1.35);
+}
+/* Checked rows get the full-strength ramp — it doubles as an "on" cue that
+   doesn't rely on the checkbox alone. */
+.ir-global-menu-row input[type="checkbox"]:checked ~ .ir-menu-ramp {
+    opacity: 1;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+}
 .ir-global-menu-row .substatus {
     font-size: 0.62rem;
     color: #94a3b8;

@@ -8984,6 +8984,9 @@ def get_env_layers():
         ("env", "winds_700"), ("env", "winds_500"), ("env", "winds_200"),
         ("env", "rh_700_400"), ("env", "sst_oisst"),
         ("env", "sst_anom"), ("env", "sst_rel"),
+        # Potential-intensity family — f000 only (PI varies slowly), so
+        # these carry a single-hour index.json.
+        ("env", "mpi"), ("env", "ventilation_index"), ("env", "vpi"),
         ("env", "genesis_prob_2d"), ("env", "genesis_prob_7d"), ("env", "genesis_prob_14d"),
         # Subseasonal forcing overlays — Wheeler-Kiladis-filtered OLR
         # (build_subseasonal_overlays.py Cloud Run Job).

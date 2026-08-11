@@ -64,28 +64,37 @@ gcloud builds submit --config "${BUILD_CFG}" .
 # ── Create or update the Cloud Run Job ───────────────────────────
 # 1 vCPU: measured CPU utilization peaks at ~0.47 of the old 2-vCPU allocation
 # (~0.9 core), so the 2nd vCPU sat idle — overlay builds are I/O/GIL-bound, not
-# 2-core-bound. Wall-clock (and the 1800s timeout headroom) is unchanged at 1
-# vCPU; this just stops paying for the idle core. CR_VCPU is telemetry-only
-# (cost-log accuracy), so it's set to 1 to match.
+# 2-core-bound. CR_VCPU is telemetry-only (cost-log accuracy), set to 1 to match.
+#
+# Timeout raised 1800 -> 2700 s when the MPI/VI/vPI layers landed. The job was
+# running 1000-1265 s and the Bister-Emanuel solve adds ~150-220 s at 1 vCPU,
+# which left too little margin on a slow NOMADS day. Jobs bill actual runtime,
+# so a longer ceiling costs nothing unless a run genuinely hangs.
+#
+# Memory raised 2 -> 3 GiB for the same change: the PI path holds 23-level
+# T and q profiles on the 0.25 deg grid (~95 MB each) plus their vortex-removed
+# copies and derived arrays. The driver keeps them float32 and the builder frees
+# them before the solve, but peak is still several hundred MB above the old
+# high-water mark and an OOM here would take the whole overlay run down.
 echo "Deploying Cloud Run Job ${JOB_NAME}..."
 if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; then
     gcloud run jobs update "${JOB_NAME}" \
         --region "${REGION}" \
         --image "${IMAGE}" \
-        --memory 2Gi \
+        --memory 3Gi \
         --cpu 1 \
         --max-retries 1 \
-        --task-timeout 1800 \
-        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},CR_VCPU=1,CR_MEM_GIB=2"
+        --task-timeout 2700 \
+        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},CR_VCPU=1,CR_MEM_GIB=3"
 else
     gcloud run jobs create "${JOB_NAME}" \
         --region "${REGION}" \
         --image "${IMAGE}" \
-        --memory 2Gi \
+        --memory 3Gi \
         --cpu 1 \
         --max-retries 1 \
-        --task-timeout 1800 \
-        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},CR_VCPU=1,CR_MEM_GIB=2"
+        --task-timeout 2700 \
+        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},CR_VCPU=1,CR_MEM_GIB=3"
 fi
 
 # ── Cloud Scheduler — invoke the Run Job on a cadence ─────────────

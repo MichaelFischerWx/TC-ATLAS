@@ -24100,6 +24100,7 @@
                 + titleAttr + '>'
                 + '<input type="checkbox"' + (opts.checked ? ' checked' : '') + '>'
                 + '<span class="label">' + opts.label + sub + '</span>'
+                + (opts.ramp || '')
                 + units
                 + infoIcon
                 + '</label>';
@@ -24288,6 +24289,7 @@
                 dataName: GL.name,
                 label: GL.title.replace('TC Formation Probability — ', 'Formation prob — '),
                 units: GL.units,
+                ramp: _envRampChip(GL),
                 checked: !!_rtEnvActive[GL.name]
             });
         }
@@ -24307,6 +24309,7 @@
                         dataName: L_.name,
                         label: grp.shortTitle(L_),
                         units: L_.units,
+                        ramp: _envRampChip(L_),
                         tooltip: L_.description,
                         checked: !!_rtEnvActive[L_.name]
                     });
@@ -24325,6 +24328,7 @@
                         dataName: Lu.name,
                         label: Lu.title,
                         units: Lu.units,
+                        ramp: _envRampChip(Lu),
                         checked: !!_rtEnvActive[Lu.name]
                     });
                 }
@@ -24971,6 +24975,43 @@
     // own dedicated menu inside the Layers panel so users can mix-and-
     // match wind levels with any diagnostic here (e.g. 850 mb vorticity
     // + 200 mb winds together).
+    /** Compact color-ramp chip for a layer row in the Layers menu.
+     *
+     *  The menu used to be text-only, so picking a layer meant activating it
+     *  just to find out what its color scale looked like. This previews the
+     *  scale inline. It is a PREVIEW, not a legend — no tick labels; the
+     *  precise scale is the colorbar that appears once the layer is on
+     *  (_renderDetailEnvColorbar).
+     *
+     *  Prefers `colorbar_stops` (16 evenly-spaced {t, rgb} samples the
+     *  builder writes for every layer). Falls back to the discrete
+     *  `levels`/`level_colors` pair, positioning each color at its real
+     *  value so a non-uniform level set (vorticity, genesis prob) previews
+     *  with the right proportions. Returns '' for layers with no continuous
+     *  scale — wind barbs — so those rows stay text-only. */
+    function _envRampChip(L_) {
+        if (!L_) return '';
+        var css = '';
+        var stops = L_.colorbar_stops;
+        if (stops && stops.length) {
+            css = stops.map(function (s) {
+                return 'rgb(' + s.rgb.join(',') + ') ' + Math.round(s.t * 100) + '%';
+            }).join(',');
+        } else if (L_.levels && L_.level_colors
+                   && L_.levels.length === L_.level_colors.length
+                   && L_.levels.length > 1) {
+            var span = (L_.vmax - L_.vmin) || 1;
+            css = L_.levels.map(function (lvl, i) {
+                var t = Math.max(0, Math.min(1, (lvl - L_.vmin) / span));
+                return 'rgb(' + L_.level_colors[i].join(',') + ') '
+                    + Math.round(t * 100) + '%';
+            }).join(',');
+        }
+        if (!css) return '';
+        return '<span class="ir-menu-ramp" aria-hidden="true" style="background:'
+            + 'linear-gradient(to right,' + css + ');"></span>';
+    }
+
     var _ENV_MENU_GROUPS = [
         {
             label: 'Pressure',
@@ -25015,6 +25056,20 @@
                 if (L_.name === 'sst_anom') return 'SST Anomaly';
                 if (L_.name === 'sst_rel') return 'Relative SST';
                 return 'Sea-Surface Temperature';
+            }
+        },
+        {
+            // Thermodynamic capstone — sits last so the menu reads
+            // Pressure -> Wind -> Moisture/SST -> what they add up to.
+            label: 'Potential Intensity',
+            match: function (L_) {
+                return L_.name === 'mpi' || L_.name === 'vpi' ||
+                       L_.name === 'ventilation_index';
+            },
+            shortTitle: function (L_) {
+                if (L_.name === 'mpi') return 'Maximum PI';
+                if (L_.name === 'vpi') return 'Ventilated PI';
+                return 'Ventilation Index';
             }
         },
         {
