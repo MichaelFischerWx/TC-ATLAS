@@ -1156,14 +1156,19 @@ def write_layer_indices(date_str: str, hour_str: str,
             valid = compute_valid_time(date_str, hour_str, fh)
             hh = f"{fh:03d}"
             per_hour_dir = f"{GCS_PREFIX}/{name}/init-{init_cycle}"
-            hours_meta.append({
+            entry = {
                 "forecast_hour": fh,
                 "valid_time": valid,
                 "image_url": f"{base_url}/{per_hour_dir}/f{hh}.png",
-                "data_url":  f"{base_url}/{per_hour_dir}/f{hh}_data.png",
-                "geojson_url": f"{base_url}/{per_hour_dir}/f{hh}.geojson",
                 "metadata_url": f"{base_url}/{per_hour_dir}/f{hh}.json",
-            })
+            }
+            # Wind layers carry their values IN the visualization PNG (RG-packed
+            # u/v) and never emit a data sidecar or contours — advertising those
+            # URLs would point the frontend at 404s.
+            if not name.startswith("winds_"):
+                entry["data_url"] = f"{base_url}/{per_hour_dir}/f{hh}_data.png"
+                entry["geojson_url"] = f"{base_url}/{per_hour_dir}/f{hh}.geojson"
+            hours_meta.append(entry)
 
         index = {
             "name": name,
@@ -1364,10 +1369,17 @@ def _climo_to_gfs_grid(climo_kt: np.ndarray) -> np.ndarray:
     from scipy.interpolate import RegularGridInterpolator
     src_lat = np.linspace(60.0, -60.0, 121, dtype=np.float64)
     src_lon = np.linspace(-180.0, 179.0, 360, dtype=np.float64)
+    # Longitude is periodic, but the source stops at 179.0 while the target
+    # runs to 179.75 — without a wrap column the last three GFS columns fell
+    # outside the interpolator and came back NaN, leaving a ~1°-wide hole in
+    # the anomaly field right at the dateline. Append lon 180.0 carrying the
+    # -180.0 column so the seam interpolates like anywhere else.
+    src_lon = np.append(src_lon, 180.0)
+    climo_wrapped = np.concatenate([climo_kt, climo_kt[:, :1]], axis=1)
     # RegularGridInterpolator wants ascending coords — flip lat axis.
     interp = RegularGridInterpolator(
         (src_lat[::-1], src_lon),
-        climo_kt[::-1, :],
+        climo_wrapped[::-1, :],
         method="linear", bounds_error=False, fill_value=np.nan,
     )
     dst_lat = np.linspace(90.0, -90.0, NY, dtype=np.float64)
@@ -1775,12 +1787,21 @@ def render_uv_png(u: np.ndarray, v: np.ndarray) -> bytes:
 
 def _upload_winds(name: str, title: str, valid_time: str, png: bytes,
                   level: Optional[int] = None,
-                  description: Optional[str] = None) -> bool:
+                  description: Optional[str] = None,
+                  init_cycle: Optional[str] = None,
+                  forecast_hour: Optional[int] = None) -> bool:
     """Upload an RG-packed wind PNG + metadata.json sidecar.
 
     `title` is the user-facing label ("850 hPa Wind Barbs", "10 m Wind
     Barbs"). `level` is optional (kept on pressure-level layers for
-    sort/filter; absent for 10-m surface winds)."""
+    sort/filter; absent for 10-m surface winds).
+
+    Path layout mirrors write_layer_spec: with an (init_cycle,
+    forecast_hour) pair the PNG lands at env/{name}/init-{cycle}/f{HHH}.png
+    and f000 additionally clobbers the back-compat env/{name}/latest.png.
+    Without them everything goes to latest.png — which, once the job started
+    looping over f000..f012, meant every hour overwrote the previous one and
+    "latest" ended up being the +12 h forecast."""
     try:
         from google.cloud import storage
     except ImportError:
@@ -1792,8 +1813,26 @@ def _upload_winds(name: str, title: str, valid_time: str, png: bytes,
 
     client = storage.Client()
     bucket = client.bucket(GCS_BUCKET)
-    png_blob = bucket.blob(f"{GCS_PREFIX}/{name}/latest.png")
-    meta_blob = bucket.blob(f"{GCS_PREFIX}/{name}/metadata.json")
+    is_hourly = init_cycle is not None and forecast_hour is not None
+    legacy_png_url = (
+        f"https://storage.googleapis.com/{GCS_BUCKET}/"
+        f"{GCS_PREFIX}/{name}/latest.png"
+    )
+    if is_hourly:
+        hh_str = f"{forecast_hour:03d}"
+        per_hour_dir = f"{GCS_PREFIX}/{name}/init-{init_cycle}"
+        png_blob = bucket.blob(f"{per_hour_dir}/f{hh_str}.png")
+        meta_blob = bucket.blob(f"{per_hour_dir}/f{hh_str}.json")
+        image_url = (
+            f"https://storage.googleapis.com/{GCS_BUCKET}/"
+            f"{per_hour_dir}/f{hh_str}.png"
+        )
+        latest_png_blob = bucket.blob(f"{GCS_PREFIX}/{name}/latest.png")
+        latest_meta_blob = bucket.blob(f"{GCS_PREFIX}/{name}/metadata.json")
+    else:
+        png_blob = bucket.blob(f"{GCS_PREFIX}/{name}/latest.png")
+        meta_blob = bucket.blob(f"{GCS_PREFIX}/{name}/metadata.json")
+        image_url = legacy_png_url
 
     meta = {
         "name": name,
@@ -1802,10 +1841,9 @@ def _upload_winds(name: str, title: str, valid_time: str, png: bytes,
         "category": "wind",
         "render_style": "wind_barb",
         "valid_time": valid_time,
-        "image_url": (
-            f"https://storage.googleapis.com/{GCS_BUCKET}/"
-            f"{GCS_PREFIX}/{name}/latest.png"
-        ),
+        "init_cycle": init_cycle,
+        "forecast_hour": forecast_hour,
+        "image_url": image_url,
         "bounds": [[-90.0, -180.0], [90.0, 180.0]],
         "grid": {"nx": NX, "ny": NY},
         # Decoding parameters: u = u_min + (R/255)*(u_max - u_min)
@@ -1813,8 +1851,8 @@ def _upload_winds(name: str, title: str, valid_time: str, png: bytes,
         "v_min": _WIND_VMIN, "v_max": _WIND_VMAX,
         "wind_units_native": "m/s",
         "description": description or (
-            f"u, v components ({title}) from the latest GFS 0.25° "
-            f"analysis, packed as RG channels of an 8-bit PNG "
+            f"u, v components ({title}) from the GFS 0.25° "
+            f"{init_cycle or 'latest'} run, packed as RG channels of an 8-bit PNG "
             f"(±60 m/s range). Frontend decodes and draws standard "
             f"meteorological wind barbs."
         ),
@@ -1835,7 +1873,18 @@ def _upload_winds(name: str, title: str, valid_time: str, png: bytes,
     try:
         _put(png_blob, png, "image/png")
         _put(meta_blob, json.dumps(meta, indent=2), "application/json")
-        log.info("Uploaded %s: png=%d bytes", name, len(png))
+        # Back-compat: the f000 analysis also lands at latest.png +
+        # metadata.json, matching write_layer_spec's scheme. Forecast hours
+        # must NOT touch those blobs — that was the bug that left latest.png
+        # holding f012.
+        if is_hourly and forecast_hour == 0:
+            legacy_meta = dict(meta)
+            legacy_meta["image_url"] = legacy_png_url
+            _put(latest_png_blob, png, "image/png")
+            _put(latest_meta_blob, json.dumps(legacy_meta, indent=2),
+                 "application/json")
+        log.info("Uploaded %s%s: png=%d bytes", name,
+                 f" (f{forecast_hour:03d})" if is_hourly else "", len(png))
         return True
     except Exception as e:
         log.error("Wind upload failed for %s: %s", name, e)
@@ -1867,7 +1916,9 @@ def build_winds(date_str: str, hour_str: str, level: int, *, forecast_hour: int 
     png = render_uv_png(u_s, v_s)
     valid = compute_valid_time(date_str, hour_str, forecast_hour)
     title = f"{level} hPa Wind Barbs"
-    return png if _upload_winds(f"winds_{level}", title, valid, png, level=level) else None
+    return png if _upload_winds(f"winds_{level}", title, valid, png, level=level,
+                                init_cycle=f"{date_str}-{hour_str}",
+                                forecast_hour=forecast_hour) else None
 
 
 def build_winds_10m(date_str: str, hour_str: str, *, forecast_hour: int = 0,
@@ -1901,13 +1952,15 @@ def build_winds_10m(date_str: str, hour_str: str, *, forecast_hour: int = 0,
     png = render_uv_png(u_s, v_s)
     valid = compute_valid_time(date_str, hour_str, forecast_hour)
     description = (
-        "10-m above-ground u, v from the latest GFS 0.25° analysis, "
-        "packed as RG channels of an 8-bit PNG (±60 m/s range). "
-        "Pairs with MSLP to expose surface circulations, frontal wind "
-        "shifts, and low-level inflow into developing systems."
+        f"10-m above-ground u, v from the GFS 0.25° {date_str} {hour_str}Z run "
+        f"(f{forecast_hour:03d}), packed as RG channels of an 8-bit PNG "
+        "(±60 m/s range). Pairs with MSLP to expose surface circulations, "
+        "frontal wind shifts, and low-level inflow into developing systems."
     )
     return png if _upload_winds("winds_10m", "10 m Wind Barbs", valid, png,
-                                description=description) else None
+                                description=description,
+                                init_cycle=f"{date_str}-{hour_str}",
+                                forecast_hour=forecast_hour) else None
 
 
 def build_vorticity(date_str: str, hour_str: str, level: int, *, forecast_hour: int = 0,

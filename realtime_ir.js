@@ -5039,9 +5039,11 @@
      *  DOM exists, and before OR after the GIBS/mosaic times are known). */
     function _setGlobalSatTimeLabel() {
         var el = document.getElementById('ir-global-anim-time');
-        if (!el) return;
         var iso = _globalLatestSatIso();
-        if (iso) el.textContent = fmtUTC(iso);
+        if (el && iso) el.textContent = fmtUTC(iso);
+        // The still frame's time just moved (new mosaic ingest) — re-pick the
+        // env forecast hour so the draped analysis keeps up with the imagery.
+        _globalEnvSyncToFrame();
     }
 
     function showGlobalAnimFrame(idx) {
@@ -5067,6 +5069,8 @@
 
         // Keep the US radar overlay (if on) synced to the displayed frame time.
         if (_gRadarOn) _gRadarSync();
+        // Drape the GFS forecast hour nearest this frame's valid time.
+        _globalEnvSyncToFrame();
 
         _refreshAnimSlider();
     }
@@ -22678,10 +22682,24 @@
             map.getPanes().overlayPane.appendChild(c);
             this._canvas = c;
 
+            this._loadSource(this._meta.image_url);
+
+            map.on('moveend zoomend resize', this._redraw, this);
+            this._redraw();
+            return this;
+        },
+
+        /** Decode a u/v PNG into the sampling buffer, then redraw.
+         *  `onFail` fires if the PNG can't be fetched (the previously decoded
+         *  barbs stay on screen) so callers can undo whatever state change
+         *  prompted the swap. */
+        _loadSource: function (url, onFail) {
             var img = new Image();
             img.crossOrigin = 'anonymous';
             var self = this;
+            this._srcUrl = url;
             img.onload = function () {
+                if (self._srcUrl !== url) return;   // a newer hour won the race
                 var off = document.createElement('canvas');
                 off.width = img.naturalWidth;
                 off.height = img.naturalHeight;
@@ -22699,11 +22717,16 @@
             };
             img.onerror = function () {
                 console.warn('[Wind] PNG load failed for ' + self._meta.name);
+                if (onFail) onFail();
             };
-            img.src = this._meta.image_url;
+            img.src = url;
+        },
 
-            map.on('moveend zoomend resize', this._redraw, this);
-            this._redraw();
+        /** Swap in another forecast hour's u/v PNG (frame-time alignment).
+         *  Keeps the existing barbs drawn until the new PNG decodes. */
+        setSource: function (url, onFail) {
+            if (!url || url === this._srcUrl) return this;
+            this._loadSource(url, onFail);
             return this;
         },
 
@@ -23003,64 +23026,6 @@
             }).addTo(map);
             overlays = [geoLayer];
             overlayKind = 'geojson';
-            var _geoUrl = layer.geojson_url;
-            var _geoPromise = _rtEnvGeojsonCache[_geoUrl]
-                ? Promise.resolve(_rtEnvGeojsonCache[_geoUrl])
-                : fetch(_geoUrl, { cache: 'no-store' })
-                    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-                    .then(function (geojson) { _rtEnvGeojsonCache[_geoUrl] = geojson; return geojson; });
-            _geoPromise
-                .then(function (geojson) {
-                    if (!_rtEnvActive[layer.name]) return;  // user deactivated mid-fetch
-                    // Add primary world + ±360° copies to the same
-                    // L.geoJSON layer so contours stay visible past
-                    // the dateline.
-                    geoLayer.addData(geojson);
-                    // Leaflet needs explicit ±360° copies to repeat contours
-                    // past the dateline; MapLibre (facade) wraps world copies
-                    // natively, so the duplicates are redundant geometry there.
-                    if (!window.LFLET_GL) {
-                        geoLayer.addData(_shiftGeoJsonLon(geojson, +360));
-                        geoLayer.addData(_shiftGeoJsonLon(geojson, -360));
-                    }
-                    // Place value labels along each non-trivial line.
-                    // Labels are only placed in the primary world copy
-                    // to keep the DOM marker count manageable; users
-                    // panning past the dateline still see the lines.
-                    var labels = [];
-                    var features = (geojson && geojson.features) || [];
-                    for (var i = 0; i < features.length; i++) {
-                        var ft = features[i];
-                        var coords = ft.geometry && ft.geometry.coordinates;
-                        if (!coords || coords.length < 20) continue;
-                        var lvl = ft.properties && ft.properties.level;
-                        if (lvl == null) continue;
-                        var midIdx = Math.floor(coords.length / 2);
-                        var mid = coords[midIdx];
-                        var mk = L.marker([mid[1], mid[0]], {
-                            icon: L.divIcon({
-                                className: 'env-contour-label',
-                                html: '' + Math.round(lvl),
-                                iconSize: null,
-                                iconAnchor: [10, 7]
-                            }),
-                            interactive: false,
-                            keyboard: false,
-                            opacity: _rtEnvOpacity
-                        }).addTo(map);
-                        labels.push(mk);
-                    }
-                    _rtEnvActive[layer.name].labels = labels;
-                })
-                .catch(function (err) {
-                    console.warn('[Env] GeoJSON load failed for ' + layer.name + '; falling back to raster', err);
-                    if (!_rtEnvActive[layer.name]) return;
-                    map.removeLayer(geoLayer);
-                    var rasters = _addRepeatingImageOverlays(layer.image_url, bounds);
-                    _rtEnvActive[layer.name].overlays = rasters;
-                    _rtEnvActive[layer.name].overlayKind = 'raster';
-                    _updateColdCloudOverlay();
-                });
         } else {
             overlays = _addRepeatingImageOverlays(layer.image_url, bounds);
             overlayKind = 'raster';
@@ -23072,8 +23037,26 @@
             canvas: null, ctx: null
         };
         _rtEnvActive[layer.name] = entry;
+        if (overlayKind === 'geojson') _envDrawGeojson(entry, layer.geojson_url, bounds);
         // Drape the cold-cloud convection layer over the new shaded field.
         _updateColdCloudOverlay();
+
+        // Pull the per-hour index (f000–f012 of the latest GFS cycle) so the
+        // overlay can follow the displayed satellite frame instead of sitting
+        // on the analysis. Shows the "latest" URLs immediately, then snaps to
+        // the hour nearest the current frame once the index lands.
+        var _idxUrl = _detailEnvIndexUrl(layer);
+        if (_idxUrl) {
+            fetch(_idxUrl, { cache: 'no-store' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (j) {
+                    if (!j || _rtEnvActive[layer.name] !== entry) return;
+                    entry.hours = (j.forecast_hours || []).filter(function (h) { return h.valid_time; });
+                    _globalEnvSyncOne(entry, true);
+                    _renderEnvColorbar();
+                })
+                .catch(function () {});
+        }
 
         // Preload the parallel data PNG into an offscreen canvas so we
         // can read raw values under the cursor for the hover tooltip.
@@ -23138,6 +23121,172 @@
     }
     // Close an env layer straight from its colorbar's × button.
     window._rtCloseEnvLayer = function (name) { _deactivateEnvLayer(name); };
+
+    /** Draw (or redraw) a contour layer's GeoJSON on the global map: the
+     *  primary world copy, the ±360° copies Leaflet needs to repeat past the
+     *  dateline, and one value label per non-trivial line. Called on activation
+     *  and again whenever the frame-aligned forecast hour changes.
+     *  `bounds` is only used for the raster fallback if the fetch fails. */
+    function _envDrawGeojson(entry, geoUrl, bounds) {
+        if (!entry || !geoUrl) return;
+        var geoLayer = entry.overlays && entry.overlays[0];
+        if (!geoLayer || !geoLayer.addData) return;
+        var layer = entry.layer;
+        var wasEmpty = !entry._geoUrl;   // first draw → raster fallback still applies
+        entry._geoUrl = geoUrl;
+        var p = _rtEnvGeojsonCache[geoUrl]
+            ? Promise.resolve(_rtEnvGeojsonCache[geoUrl])
+            : fetch(geoUrl, { cache: 'no-store' })
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (geojson) { _rtEnvGeojsonCache[geoUrl] = geojson; return geojson; });
+        p.then(function (geojson) {
+            if (_rtEnvActive[layer.name] !== entry) return;   // deactivated mid-fetch
+            if (entry._geoUrl !== geoUrl) return;             // a newer hour won the race
+            // Clear the previous hour's geometry + labels before redrawing.
+            if (geoLayer.clearLayers) geoLayer.clearLayers();
+            if (entry.labels && map) {
+                for (var d = 0; d < entry.labels.length; d++) {
+                    try { map.removeLayer(entry.labels[d]); } catch (e) {}
+                }
+            }
+            entry.labels = [];
+            geoLayer.addData(geojson);
+            // Leaflet needs explicit ±360° copies to repeat contours past the
+            // dateline; MapLibre (facade) wraps world copies natively, so the
+            // duplicates are redundant geometry there.
+            if (!window.LFLET_GL) {
+                geoLayer.addData(_shiftGeoJsonLon(geojson, +360));
+                geoLayer.addData(_shiftGeoJsonLon(geojson, -360));
+            }
+            // Labels go only in the primary world copy to keep the DOM marker
+            // count manageable; users panning past the dateline still see lines.
+            var features = (geojson && geojson.features) || [];
+            for (var i = 0; i < features.length; i++) {
+                var ft = features[i];
+                var coords = ft.geometry && ft.geometry.coordinates;
+                if (!coords || coords.length < 20) continue;
+                var lvl = ft.properties && ft.properties.level;
+                if (lvl == null) continue;
+                var mid = coords[Math.floor(coords.length / 2)];
+                entry.labels.push(L.marker([mid[1], mid[0]], {
+                    icon: L.divIcon({
+                        className: 'env-contour-label',
+                        html: '' + Math.round(lvl),
+                        iconSize: null,
+                        iconAnchor: [10, 7]
+                    }),
+                    interactive: false,
+                    keyboard: false,
+                    opacity: _rtEnvOpacity
+                }).addTo(map));
+            }
+        }).catch(function (err) {
+            if (_rtEnvActive[layer.name] !== entry) return;
+            if (!wasEmpty) return;   // an hour swap failed; keep what's drawn
+            console.warn('[Env] GeoJSON load failed for ' + layer.name + '; falling back to raster', err);
+            try { map.removeLayer(geoLayer); } catch (e) {}
+            entry.overlays = _addRepeatingImageOverlays(layer.image_url, bounds || layer.bounds || [[-90, -180], [90, 180]]);
+            entry.overlayKind = 'raster';
+            _updateColdCloudOverlay();
+        });
+    }
+
+    // ── Frame-aligned env overlays (global map) ──────────────────────
+    // Same idea as the storm-detail map: every GFS-driven env layer ships a
+    // per-layer index.json listing f000–f012 of the latest cycle. We drape the
+    // forecast hour whose valid_time is nearest the DISPLAYED satellite frame
+    // and re-pick as the loop plays, so the analysis you see matches the
+    // imagery you're looking at (nearest-hour resolution). With no loop
+    // loaded we align to the latest satellite time instead.
+    function _globalCurrentFrameMs() {
+        var t = (globalAnimFrameTimes.length && globalAnimIndex >= 0
+                 && globalAnimIndex < globalAnimFrameTimes.length)
+            ? globalAnimFrameTimes[globalAnimIndex]
+            : _globalLatestSatIso();
+        var ms = _parseFrameTimeMs(t);
+        return isFinite(ms) ? ms : Date.now();
+    }
+    function _globalEnvApplyHour(entry, h) {
+        if (!entry || !h) return;
+        entry.selectedFh = h.forecast_hour;
+        entry.selectedValid = h.valid_time;
+        if (entry.overlayKind === 'raster') {
+            // Decode the new hour's PNG before swapping it in — setUrl on a
+            // cold URL leaves the overlay blank until the fetch lands, which
+            // during playback reads as a flicker (and would bake an empty
+            // frame into a GIF export).
+            var want = h.forecast_hour, nextUrl = h.image_url;
+            var pre = new Image();
+            pre.onload = pre.onerror = function () {
+                if (entry.selectedFh !== want || !entry.overlays) return;
+                for (var k = 0; k < entry.overlays.length; k++) {
+                    if (entry.overlays[k].setUrl) entry.overlays[k].setUrl(nextUrl);
+                }
+            };
+            pre.src = nextUrl;
+        } else if (entry.overlayKind === 'geojson' && h.geojson_url) {
+            _envDrawGeojson(entry, h.geojson_url);
+        } else if (entry.overlayKind === 'wind') {
+            var wl = entry.overlays[0];
+            // If a cycle's per-hour barb PNG isn't published yet, the layer
+            // keeps the barbs it already has — so drop back to reporting the
+            // layer's own valid time rather than an hour we aren't showing.
+            if (wl && wl.setSource) {
+                wl.setSource(h.image_url, function () {
+                    entry.selectedFh = null; entry.selectedValid = null;
+                    _renderEnvColorbar();
+                });
+            }
+        }
+        // Repoint the hover data canvas at this hour's data PNG. The encoding
+        // range is fixed per layer, so the layer's vmin/vmax stay valid.
+        // Wind layers have no data sidecar — their PNG *is* the data.
+        if (h.data_url && entry.overlayKind !== 'wind') {
+            var img = new Image();
+            img.crossOrigin = 'anonymous';
+            var want = h.forecast_hour;
+            img.onload = function () {
+                if (entry.selectedFh !== want) return;   // superseded
+                try {
+                    var c = document.createElement('canvas');
+                    c.width = img.naturalWidth; c.height = img.naturalHeight;
+                    var ctx = c.getContext('2d', { willReadFrequently: true });
+                    ctx.drawImage(img, 0, 0);
+                    entry.canvas = c; entry.ctx = ctx;
+                    entry.dataW = img.naturalWidth; entry.dataH = img.naturalHeight;
+                } catch (e) {}
+            };
+            img.src = h.data_url;
+        }
+    }
+    function _globalEnvSyncOne(entry, force) {
+        if (!entry || !entry.hours || !entry.hours.length) return false;
+        var h = _detailPickHour(entry.hours, _globalCurrentFrameMs());
+        if (!h) return false;
+        if (!force && entry.selectedFh === h.forecast_hour) return false;
+        _globalEnvApplyHour(entry, h);
+        return true;
+    }
+    /** Re-align every active global env layer to the current frame's time.
+     *  Called from showGlobalAnimFrame(); only swaps a layer's URLs when its
+     *  nearest hour actually changes (~hourly, not every frame). */
+    function _globalEnvSyncToFrame() {
+        var names = Object.keys(_rtEnvActive);
+        if (!names.length) return;
+        var changed = false;
+        for (var i = 0; i < names.length; i++) {
+            if (_globalEnvSyncOne(_rtEnvActive[names[i]])) changed = true;
+        }
+        if (!changed) return;
+        _renderEnvColorbar();   // refresh the run/valid caption
+        // Keep the Layers panel's header caption on the same hour without
+        // rebuilding the whole panel mid-playback.
+        var cap = document.querySelector('.ir-global-menu-valid');
+        if (cap) {
+            var txt = _globalEnvRunCaption();
+            if (txt) cap.innerHTML = '<b>' + txt + '</b>';
+        }
+    }
 
     // ── Hover tooltip ────────────────────────────────────────
     //
@@ -23428,7 +23577,7 @@
     // nearest the DISPLAYED satellite frame, and re-pick as the loop plays,
     // so the draped GFS field matches the imagery you're looking at (nearest-
     // hour resolution). Raster layers swap via imageOverlay.setUrl; contour
-    // layers re-fetch the hour's GeoJSON. Wind barbs stay on latest (skipped).
+    // layers re-fetch the hour's GeoJSON; wind barbs re-decode the hour's u/v PNG.
     function _detailEnvIndexUrl(layer) {
         var u = layer && layer.image_url;
         if (!u || u.indexOf('/env/') < 0) return null;   // only env layers ship index.json
@@ -23473,11 +23622,19 @@
                     if (!window.LFLET_GL) { gl.addData(_shiftGeoJsonLon(g, 360)); gl.addData(_shiftGeoJsonLon(g, -360)); }
                 }).catch(function () {});
             }
+        } else if (entry.overlayKind === 'wind') {
+            var wl = entry.overlays[0];
+            if (wl && wl.setSource) {
+                wl.setSource(h.image_url, function () {
+                    entry.selectedFh = null; entry.selectedValid = null;
+                    _updateDetailLayersCount();
+                });
+            }
         }
         // Reload the hover data canvas from this hour's data PNG (data
         // encoding range is fixed per layer, so entry.layer's vmin/vmax
-        // stay valid).
-        if (h.data_url) {
+        // stay valid). Wind layers have no data sidecar — their PNG is the data.
+        if (h.data_url && entry.overlayKind !== 'wind') {
             var img = new Image(); img.crossOrigin = 'anonymous';
             img.onload = function () {
                 try {
@@ -23902,14 +24059,20 @@
             return L_.name.indexOf('genesis_') === 0;
         });
 
-        // Shared valid-time pulled from whichever env layer reports one.
-        var validShort = '';
-        var validSamples = allLayers.map(function (L_) { return L_.valid_time; }).filter(Boolean);
-        if (validSamples.length) {
-            var counts = {};
-            for (var i = 0; i < validSamples.length; i++) counts[validSamples[i]] = (counts[validSamples[i]] || 0) + 1;
-            var top = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; })[0];
-            validShort = (top || '').replace('T', ' ').replace(':00:00Z', 'Z');
+        // Shared run/valid caption. When a layer is already on the map we show
+        // ITS frame-aligned forecast hour; otherwise fall back to the cycle
+        // reported by the majority of the published layers (the analysis).
+        var validShort = _globalEnvRunCaption();
+        if (!validShort) {
+            var validSamples = allLayers.map(function (L_) { return L_.valid_time; }).filter(Boolean);
+            if (validSamples.length) {
+                var counts = {};
+                for (var i = 0; i < validSamples.length; i++) counts[validSamples[i]] = (counts[validSamples[i]] || 0) + 1;
+                var top = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; })[0];
+                for (var vi = 0; vi < allLayers.length; vi++) {
+                    if (allLayers[vi].valid_time === top) { validShort = _fmtGfsRun(allLayers[vi]); break; }
+                }
+            }
         }
 
         function _escAttr(s) {
@@ -23944,7 +24107,7 @@
 
         var html = '';
         if (validShort) {
-            html += '<div class="ir-global-menu-valid">valid <b>' + validShort + '</b></div>';
+            html += '<div class="ir-global-menu-valid"><b>' + validShort + '</b></div>';
         }
 
         // ── FORECAST ────────────────────────────────────────────────
@@ -24887,6 +25050,22 @@
     // min/mid/max ticks instead — much more compact + still legible.
     var _ENV_CBAR_MAX_SWATCHES = 16;
 
+    /** "GFS 06Z f03 · valid 2026-08-11 09Z" for whichever active layer reports
+     *  a cycle — the frame-selected hour when the loop has snapped to one,
+     *  else the layer's own (analysis) metadata. */
+    function _globalEnvRunCaption() {
+        var names = Object.keys(_rtEnvActive);
+        for (var i = 0; i < names.length; i++) {
+            var e = _rtEnvActive[names[i]];
+            var L_ = e && e.layer;
+            if (!L_ || !(L_.valid_time || L_.init_cycle)) continue;
+            return _fmtGfsRun(e.selectedValid
+                ? { init_cycle: L_.init_cycle, forecast_hour: e.selectedFh, valid_time: e.selectedValid }
+                : L_);
+        }
+        return '';
+    }
+
     function _renderEnvColorbar() {
         var box = document.getElementById('ir-global-env-cbars');
         if (!box) return;
@@ -24896,13 +25075,20 @@
         var active = Object.values(_rtEnvActive).filter(function (e) {
             return e && e.overlayKind !== 'wind';
         });
-        if (active.length === 0) {
+        // The run/valid caption covers wind barbs too, so the box stays up
+        // whenever ANY GFS-driven layer is on — even a barbs-only view.
+        var runTxt = _globalEnvRunCaption();
+        if (active.length === 0 && !runTxt) {
             box.style.display = 'none';
             box.innerHTML = '';
             return;
         }
         box.style.display = '';
         var html = '';
+        if (runTxt) {
+            html += '<div style="font-family:DM Sans,sans-serif;font-size:0.6rem;color:#94a3b8;'
+                + 'letter-spacing:0.02em;white-space:nowrap;">' + runTxt + '</div>';
+        }
         for (var i = 0; i < active.length; i++) {
             var L_ = active[i].layer;
             var lvls = L_.levels;
