@@ -23870,7 +23870,7 @@
                 out += '<label class="ir-dl-row" data-name="' + esc(L_.name) + '">' +
                     '<input type="checkbox"' + (_detailEnvActive[L_.name] ? ' checked' : '') +
                     ' onchange="window._irDetailToggleEnvLayer(\'' + esc(L_.name) + '\')">' +
-                    '<span>' + esc(t) + '</span></label>';
+                    '<span>' + esc(t) + '</span>' + _envRampChip(L_) + '</label>';
             }
             return out;
         }

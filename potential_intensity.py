@@ -138,6 +138,20 @@ def _build_pi_driver():
     from numba import njit, prange
     from tcpyPI import pi as _pi_scalar
 
+    # `pi` must be an njit Dispatcher for the driver below to call it from
+    # nopython code. It is in tcpypi <= 1.4; in 1.4.1 it became a plain
+    # Python wrapper around a private `_pi_numba`, and numba then fails deep
+    # inside compilation with the unhelpful "Untyped global name
+    # '_pi_scalar'". Fail loudly and actionably here instead. Do NOT "fix"
+    # this by reaching for `_pi_numba`: 1.4.1 also added an
+    # `outflow_source` option that can change PI, and the validation in this
+    # module's docstring was all done against 1.4.
+    if not hasattr(_pi_scalar, "py_func"):
+        raise RuntimeError(
+            "tcpyPI.pi is not numba-compiled (got %r). Install tcpypi==1.4 — "
+            "1.4.1 moved the jit to a private _pi_numba and changed the "
+            "outflow-source default." % type(_pi_scalar))
+
     @njit(parallel=True, cache=True)
     def _pi_grid(sst_c, msl_hpa, p_hpa, t_c, r_gkg,
                  ckcd, ascent_flag, diss_flag, v_reduc, ptop, miss_handle):

@@ -1036,6 +1036,18 @@ html, body { margin: 0; padding: 0; }
     font-size: 0.76rem; color: #e2e8f0;
 }
 .ir-dl-row:hover { background: rgba(74, 155, 110, 0.18); }
+/* Same ramp preview as the global Layers menu. `margin-left:auto` right-aligns
+   it since these rows have no units column to anchor against. */
+.ir-dl-row .ir-menu-ramp {
+    flex: 0 0 auto; margin-left: auto;
+    width: 28px; height: 6px; border-radius: 3px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+    opacity: 0.85; transition: opacity 0.12s, transform 0.12s;
+}
+.ir-dl-row:hover .ir-menu-ramp { opacity: 1; transform: scaleY(1.35); }
+.ir-dl-row input:checked ~ .ir-menu-ramp {
+    opacity: 1; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+}
 .ir-dl-row input { margin: 0; cursor: pointer; accent-color: var(--um-green); flex: 0 0 auto; }
 .ir-dl-empty { font-size: 0.72rem; color: #94a3b8; padding: 6px 4px; }
 .ir-dl-opacity {
