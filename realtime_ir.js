@@ -2168,10 +2168,21 @@
         var tl = _lonLatToTileXY(b.getWest(), b.getNorth(), z);
         var br = _lonLatToTileXY(b.getEast(), b.getSouth(), z);
         var urls = [];
+        // 'combo' is not a band on the CDN — it's built client-side from the
+        // IR tile plus its paired Vis tile, so warm those two instead (asking
+        // for /mosaic-v3/combo/… is a guaranteed 404 storm).
+        var comboPre = (st.product === 'combo');
         st.frames.forEach(function (ts) {
+            var vts = comboPre ? _comboPairVis(ts) : null;
             for (var x = tl[0]; x <= br[0]; x++) {
                 for (var y = tl[1]; y <= br[1]; y++) {
-                    urls.push(_ir2aRoot(st.product) + '/' + ts + '/' + z + '/' + x + '/' + y + '.png');
+                    var tail = '/' + z + '/' + x + '/' + y + '.png';
+                    if (comboPre) {
+                        urls.push(_ir2aRoot('ir') + '/' + ts + tail);
+                        if (vts) urls.push(_ir2aRoot('vis') + '/' + vts + tail);
+                    } else {
+                        urls.push(_ir2aRoot(st.product) + '/' + ts + tail);
+                    }
                 }
             }
         });
@@ -2743,7 +2754,7 @@
     }
     // Recolor an idx tile → RGBA (forward LUT) so a RASTER layer can drape it on 3D
     // terrain (custom 2D layers don't drape). idxcolor://<product>/<realurl>.
-    var _idxColorReady = false;
+    var _idxColorReady = false, _idxColorWarned = 0;
     function _idxColorEnsureProtocol() {
         if (_idxColorReady || !window.maplibregl || !maplibregl.addProtocol) return;
         _idxColorReady = true;
@@ -2752,24 +2763,123 @@
             var head = rest.slice(0, s), url = rest.slice(s + 1);
             // head = "<product>" or "<product>:<cmap>" (explicit alpha-carrying map, e.g. ir:coldcloud)
             var cs = head.indexOf(':'), product = cs < 0 ? head : head.slice(0, cs), cmapOv = cs < 0 ? null : head.slice(cs + 1);
-            var lut = (cmapOv && _idxLutFromTarget(cmapOv)) || _idxLutForProduct(product, _irColormap || 'claude-ir');
-            return _v3TileBlob(url).then(function (b) {
-                if (!b) throw new Error('tile absent');   // MapLibre treats as a missing tile
-                return createImageBitmap(b);
-            }).then(function (bmp) {
+            // Combo ("sandwich"): head is "combo<visTs>" (or "combonone" when
+            // that IR frame has no Vis pair) and `url` is the IR tile — see
+            // _comboTileUrl. The pairing has to ride in the HEAD: a query
+            // suffix on the tile URL is silently dropped somewhere in
+            // MapLibre's tile path and the layer then renders nothing at all.
+            var combo = (product.indexOf('combo') === 0), visUrl = null;
+            if (combo) {
+                var visTs = product.slice(5);
+                if (visTs && visTs !== 'none') {
+                    var zxy = url.match(/\/(\d+\/\d+\/\d+\.png)$/);
+                    // null visUrl → the per-pixel plain-IR branch, which is
+                    // also what the night side does.
+                    if (zxy) visUrl = _ir2aRoot('vis') + '/' + visTs + '/' + zxy[1];
+                }
+            }
+            var lut = combo
+                ? _comboIdxLut(_irColormap || 'claude-ir')
+                : ((cmapOv && _idxLutFromTarget(cmapOv)) || _idxLutForProduct(product, _irColormap || 'claude-ir'));
+            return Promise.all([
+                _v3TileBlob(url),
+                visUrl ? _v3TileBlob(visUrl).catch(function () { return null; })
+                       : Promise.resolve(null)
+            ]).then(function (bs) {
+                if (!bs[0]) throw new Error('tile absent');   // MapLibre treats as a missing tile
+                // The Vis half is strictly optional: a missing OR undecodable
+                // tile (a short/corrupt pack slice does happen) must degrade to
+                // plain IR for that tile, not reject and blank the whole layer.
+                return Promise.all([
+                    createImageBitmap(bs[0]),
+                    bs[1] ? createImageBitmap(bs[1]).catch(function () { return null; })
+                          : null
+                ]);
+            }).then(function (bm) {
+                var bmp = bm[0], visBmp = bm[1];
                 var c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
                 var cx = c.getContext('2d'); cx.drawImage(bmp, 0, 0);
                 var im = cx.getImageData(0, 0, c.width, c.height), d = im.data, i, idx;
-                for (i = 0; i < d.length; i += 4) {
-                    idx = d[i];
-                    if (idx === 0) { d[i + 3] = 0; continue; }
-                    d[i] = lut[idx * 4]; d[i + 1] = lut[idx * 4 + 1]; d[i + 2] = lut[idx * 4 + 2]; d[i + 3] = lut[idx * 4 + 3];
+                if (!combo) {
+                    for (i = 0; i < d.length; i += 4) {
+                        idx = d[i];
+                        if (idx === 0) { d[i + 3] = 0; continue; }
+                        d[i] = lut[idx * 4]; d[i + 1] = lut[idx * 4 + 1]; d[i + 2] = lut[idx * 4 + 2]; d[i + 3] = lut[idx * 4 + 3];
+                    }
+                } else {
+                    // Sandwich, pixel-for-pixel the same blend as the Global
+                    // Map's GL shader (mosaic_gl_layer.js combo branch):
+                    //   vis idx 0 (night / no data) → plain IR colormap
+                    //   else → mix(lum, irRGB·(0.35+0.65·lum), irColdTopAlpha)
+                    var vd = null;
+                    if (visBmp && visBmp.width === bmp.width && visBmp.height === bmp.height) {
+                        var vc = document.createElement('canvas');
+                        vc.width = visBmp.width; vc.height = visBmp.height;
+                        var vcx = vc.getContext('2d');
+                        vcx.drawImage(visBmp, 0, 0);
+                        vd = vcx.getImageData(0, 0, vc.width, vc.height).data;
+                    }
+                    for (i = 0; i < d.length; i += 4) {
+                        var vi = d[i], v2 = vd ? vd[i] : 0;
+                        if (vi === 0 && v2 === 0) { d[i + 3] = 0; continue; }
+                        var r = lut[vi * 4], g = lut[vi * 4 + 1], b = lut[vi * 4 + 2];
+                        if (v2 === 0) {
+                            d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = 255;
+                            continue;
+                        }
+                        var ca = (vi === 0) ? 0 : (lut[vi * 4 + 3] / 255);
+                        var lum = _VIS_IDX_LUT[v2 * 4];
+                        var kk = 0.35 + 0.65 * (lum / 255);
+                        d[i]     = Math.round(lum + (r * kk - lum) * ca);
+                        d[i + 1] = Math.round(lum + (g * kk - lum) * ca);
+                        d[i + 2] = Math.round(lum + (b * kk - lum) * ca);
+                        d[i + 3] = 255;
+                    }
                 }
                 cx.putImageData(im, 0, 0);
                 return new Promise(function (resolve) { c.toBlob(function (bl) { bl.arrayBuffer().then(function (ab) { resolve({ data: ab }); }); }, 'image/png'); });
+            }).catch(function (e) {
+                // A missing edge tile is routine; anything else means the
+                // recolor itself broke, and MapLibre would just show a hole.
+                if (_idxColorWarned < 4 && !/tile absent/.test(String(e && e.message))) {
+                    _idxColorWarned++;
+                    console.warn('[idxcolor] tile build failed for ' + params.url, e);
+                }
+                throw e;
             });
         });
     }
+    // ── Combo ("sandwich") tile URLs ─────────────────────────────────────
+    // The Global Map composites Vis×IR in the custom GL layer's shader
+    // (mosaic_gl_layer.js). The storm card has no custom GL layer — its lite
+    // loop is one plain raster layer per frame fed by idxcolor:// — so the
+    // same blend runs on a 2D canvas inside that protocol handler, using the
+    // SAME alpha-ramped IR LUT and the same math. Both pages therefore render
+    // an identical sandwich.
+    //
+    // The IR tile is the protocol URL as usual; the paired Vis FRAME rides in
+    // the protocol HEAD as "combo<visTs>" ("combonone" when the frame has no
+    // Vis pair → plain IR). Not a full second URL, because the roots contain
+    // '/' and MapLibre rewrites {z}/{x}/{y} globally; and NOT a query suffix,
+    // because a tile URL with one silently renders nothing.
+    /** idxcolor tile template for one IR frame sandwiched with `visTs`. */
+    function _comboTileUrl(irTs, visTs) {
+        return 'idxcolor://combo' + (visTs || 'none') + '/'
+             + _ir2aRoot('ir') + '/' + irTs + '/{z}/{x}/{y}.png';
+    }
+    // Debug hook (console/diagnostics): what the storm-card GL style actually
+    // holds — raster source ids + their tile templates.
+    window._irDetailStyleDbg = function () {
+        var gl = window.__irDetailMap && window.__irDetailMap._gl;
+        if (!gl || !gl.getStyle) return null;
+        var st = gl.getStyle(), out = { layers: [], sources: {} };
+        (st.layers || []).forEach(function (l) { out.layers.push(l.id + ':' + l.type); });
+        Object.keys(st.sources || {}).forEach(function (k) {
+            var s = st.sources[k];
+            out.sources[k] = s.type + (s.tiles ? (' ' + String(s.tiles[0]).slice(0, 70)) : '');
+        });
+        return out;
+    };
     function _ir2aColorTiles() {
         if (_IR2A && _ir2aFrames && _ir2aFrames.length && _ir2aFramesProduct === 'ir') {
             _idxColorEnsureProtocol();
@@ -7195,7 +7305,9 @@
      *  clobber the lite layers with a heavyweight bundle on the next poll. */
     function _refreshLiteFramesIfNewer(atcfId) {
         if (animFrameTimes.length === 0) return;
-        // Refresh whichever product is shown (IR/Vis/WV all ride the mosaic now).
+        // Refresh whichever product is shown (IR/Vis/WV all ride the mosaic
+        // now). Combo's timeline IS the IR manifest, so it polls 'ir' too —
+        // only the rebuild differs (it has to re-pair the Vis band).
         var product = (productMode === 'vis' || productMode === 'wv') ? productMode : 'ir';
         var currentLatest = animFrameTimes[animFrameTimes.length - 1];
         fetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
@@ -7219,8 +7331,12 @@
                 if (!storm) return;
                 var wasPlaying = animPlaying;
                 if (wasPlaying) stopAnimation();
-                _buildMosaicAnimLayers(storm, sframes, product);
-                console.log('[RT Monitor] Lite ' + product + ' frames refreshed — latest ' + newLatest);
+                // Combo re-enters the loader so BOTH manifests reload and the
+                // new IR frames get paired against a fresh Vis list.
+                if (productMode === 'combo') _initDetailMapMosaic(storm, 'combo');
+                else _buildMosaicAnimLayers(storm, sframes, product);
+                console.log('[RT Monitor] Lite ' + (productMode === 'combo' ? 'combo' : product)
+                            + ' frames refreshed — latest ' + newLatest);
                 if (wasPlaying) setTimeout(function () {
                     if (framesReady && currentStormId === atcfId && _liteActive) startAnimation();
                 }, 250);
@@ -7550,14 +7666,41 @@
         // product (e.g. GOES Vis Band-2 gap): IR → raw-Tb cutout; Vis/WV →
         // the band bundle, so a storm outside mosaic coverage still loops.
         function _fallback() {
-            if (product === 'ir') { _liteActive = false; _initDetailMapJPG(storm, GIBS_IR_LAYERS[detailSatName]); }
+            if (product === 'combo') {
+                // No sandwich without both bands — drop back to plain IR and
+                // put the toggle back on IR so the UI doesn't lie.
+                productMode = 'eir';
+                _irSyncProductButtons('eir');
+                _initDetailMapMosaic(storm, 'ir');
+            }
+            else if (product === 'ir') { _liteActive = false; _initDetailMapJPG(storm, GIBS_IR_LAYERS[detailSatName]); }
             else if (product === 'vis') { _loadVisSwirComposite(); }
             else { _loadBandFramesBundle(8, 'wv'); }
         }
-        var framesP = (product === 'ir' && !(_IR2A && window.createMosaicGLLayer))
-            ? _loadMosaicFrames()   // legacy v2 IR path
-            : fetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
-                .then(function (r) { return r.json(); }).then(function (j) { _irApplyTrange(j, product); return _liteStormFrames(j); });
+        var framesP;
+        if (product === 'combo') {
+            // Combo needs BOTH manifests: the IR list drives the timeline (and
+            // the frame layers), the Vis list feeds _comboPairVis. Mirrors
+            // _ir2aLoadFrames('combo') on the Global Map, including sharing
+            // _comboVisFrames — it's the same global mosaic manifest.
+            framesP = Promise.all([
+                fetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' }).then(function (r) { return r.json(); }),
+                fetch(_ir2aRoot('vis') + '/frames.json', { cache: 'no-store' }).then(function (r) { return r.json(); })
+            ]).then(function (js) {
+                _irApplyTrange(js[0], 'ir');
+                _irApplyTrange(js[1], 'vis');
+                // Pair against the FULL vis manifest: a vis gap just means
+                // those pixels take the plain-IR branch, per-pixel.
+                _comboVisFrames = (js[1] && js[1].frames) || [];
+                return _liteStormFrames(js[0]);
+            });
+        } else if (product === 'ir' && !(_IR2A && window.createMosaicGLLayer)) {
+            framesP = _loadMosaicFrames();   // legacy v2 IR path
+        } else {
+            framesP = fetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
+                .then(function (r) { return r.json(); })
+                .then(function (j) { _irApplyTrange(j, product); return _liteStormFrames(j); });
+        }
         framesP.then(function (frames) {
             if (!detailMap || currentStormId !== atcfId) return;
             if (!frames || frames.length === 0) {
@@ -7583,6 +7726,7 @@
     function _buildMosaicAnimLayers(storm, frames, product) {
         cleanupFrameLayers();   // drop any prior layers + reset the frame-state arrays
         _liteActive = true;
+        _irSyncComboAvail();    // Combo is Lite-only — it's live again now
         var n = frames.length;
         // idx path (?ir2a): recolor the single-channel v3 tiles → RGBA via the
         // idxcolor:// protocol and render them as a NORMAL raster tile layer. Beats a
@@ -7592,16 +7736,25 @@
         // mosaic, recolored per-product via the idxcolor:// protocol on the GL
         // facade — so Vis/WV get the same crisp storm-sector tiles as IR (no
         // prewarm band bundle). Legacy v2 raster fallback only when idx is off.
+        // 'combo' is the same idxcolor pipeline with a second band blended in
+        // (see _comboTileUrl). Its frames ARE the IR frames, so timeline,
+        // hover and the Tb legend all stay on IR.
+        var comboMode = (_IR2A && product === 'combo'
+                         && window.maplibregl && window.maplibregl.addProtocol);
         var idxMode = (_IR2A && (product === 'ir' || product === 'vis' || product === 'wv')
                        && window.maplibregl && window.maplibregl.addProtocol);
-        if (idxMode) _idxColorEnsureProtocol();
+        if (idxMode || comboMode) _idxColorEnsureProtocol();
         for (var i = 0; i < n; i++) {
-            var url = idxMode
+            var url = comboMode
+                ? _comboTileUrl(frames[i], _comboPairVis(frames[i]))
+                : idxMode
                 ? ('idxcolor://' + product + '/' + _ir2aRoot(product) + '/' + frames[i] + '/{z}/{x}/{y}.png')
                 : (product === 'ir' ? _irColorTileUrl(_mosaicTileUrl(frames[i], product)) : _mosaicTileUrl(frames[i], product));
             var ly = L.tileLayer(url, {
                 // Per-frame native cap: Vis frames that baked a z7 hi-res storm
                 // sector (manifest storm_zmax) serve it; others stay at z6.
+                // Combo has no zmax map of its own → capped at z6, where both
+                // bands are globally gapless (same rule as the Global Map).
                 // crisp = nearest-neighbor overzoom past native (the sharp
                 // "pixel" look instead of a bilinear blur).
                 tileSize: 512, maxNativeZoom: _stormZmaxFor(product, frames[i]),
@@ -7633,7 +7786,8 @@
         // need raw Tb stay a Detailed-path feature.
         var _satLbl = document.getElementById('ir-satellite-label');
         if (_satLbl) _satLbl.textContent =
-            ({ ir: 'Infrared', vis: 'Visible', wv: 'Water Vapor' }[product] || 'Infrared')
+            ({ ir: 'Infrared', vis: 'Visible', wv: 'Water Vapor',
+               combo: 'Vis+IR Combo' }[product] || 'Infrared')
             + ' — ' + detailSatName;
         _deferredStormRef = storm;
         _triggerDeferredLoads();
@@ -7979,6 +8133,7 @@
         // mosaic poll-refresh doesn't fight this rebuild (product switch back to
         // IR, on-demand Detailed, or a fallback all funnel through here).
         _liteActive = false;
+        _irSyncComboAvail();    // Combo needs Lite — grey it out here
         var dv;
         var header;
         var binBase;
@@ -8492,6 +8647,7 @@
             zoomSnap: 0,
             zoomDelta: 0.5
         });
+        window.__irDetailMap = detailMap;   // console/diagnostics handle
         // Env-value hover: while an analysis layer is draped over the storm,
         // hovering reads that layer's value at the cursor (reuses the global
         // map's canvas-sampling tooltip). No-ops when no layer is active.
@@ -8595,6 +8751,7 @@
             _initDetailMapMosaic(storm);
         } else {
             _liteActive = false;
+            _irSyncComboAvail();
             _initDetailMapJPG(storm, satLayerName);
         }
 
@@ -8831,12 +8988,8 @@
         // expose a stale (or empty) forecast panel.
         var _intResetSec = document.getElementById('ir-intensity-section');
         if (_intResetSec) _intResetSec.style.display = 'none';
-        var eirBtn = document.getElementById('ir-product-eir');
-        var visBtnNew = document.getElementById('ir-product-vis');
-        var wvBtnNew = document.getElementById('ir-product-wv');
-        if (eirBtn) eirBtn.classList.add('ir-product-active');
-        if (visBtnNew) visBtnNew.classList.remove('ir-product-active');
-        if (wvBtnNew) wvBtnNew.classList.remove('ir-product-active');
+        _irSyncProductButtons('eir');
+        _irSyncComboAvail();
 
         // Find storm in current data
         var storm = null;
@@ -9623,12 +9776,7 @@
         rawTbFrames = [];
         productMode = 'eir';
 
-        var eirBtn = document.getElementById('ir-product-eir');
-        var visBtnReset = document.getElementById('ir-product-vis');
-        var wvBtnReset = document.getElementById('ir-product-wv');
-        if (eirBtn) eirBtn.classList.add('ir-product-active');
-        if (visBtnReset) visBtnReset.classList.remove('ir-product-active');
-        if (wvBtnReset) wvBtnReset.classList.remove('ir-product-active');
+        _irSyncProductButtons('eir');
         var tbLegend = document.getElementById('ir-tb-legend');
         if (tbLegend) tbLegend.style.display = 'none';
         var wvLegend = document.getElementById('ir-wv-legend');
@@ -10663,31 +10811,50 @@
     //  PRODUCT MODE SWITCHING
     // ═══════════════════════════════════════════════════════════
 
-    /** Switch between product modes: 'eir', 'vis', or 'wv' */
+    /** Reflect the active product on the IR / Visible / WV / Combo toggle. */
+    function _irSyncProductButtons(mode) {
+        var ids = { eir: 'ir-product-eir', vis: 'ir-product-vis',
+                    wv: 'ir-product-wv', combo: 'ir-product-combo' };
+        for (var k in ids) {
+            var b = document.getElementById(ids[k]);
+            if (b) b.classList.toggle('ir-product-active', mode === k);
+        }
+    }
+
+    /** Enable/disable the Combo button. Combo is a mosaic (idx) product built
+     *  from two bands, so it only exists on the Lite path — the Detailed
+     *  (raw-Tb) path has no Vis idx tiles to sandwich with. */
+    function _irSyncComboAvail() {
+        var b = document.getElementById('ir-product-combo');
+        if (!b) return;
+        var on = !!_liteActive;
+        b.disabled = !on;
+        b.style.opacity = on ? '' : '0.45';
+        b.title = on
+            ? 'Sandwich composite — visible cloud texture with IR-colored cold tops (night side falls back to IR)'
+            : 'Combo is part of the Lite mosaic view — switch to Lite with the view toggle to use it.';
+    }
+
+    /** Switch between product modes: 'eir', 'vis', 'wv', or 'combo' */
     function setProductMode(mode) {
         var prevMode = productMode;
         productMode = mode;
 
-        // Update toggle button active states
-        var btnMap = {
-            eir:      document.getElementById('ir-product-eir'),
-            vis:      document.getElementById('ir-product-vis'),
-            wv:       document.getElementById('ir-product-wv')
-        };
-        for (var k in btnMap) {
-            if (btnMap[k]) btnMap[k].classList.toggle('ir-product-active', mode === k);
-        }
+        _irSyncProductButtons(mode);
 
-        // Show/hide legends — IR Tb gradient for 'eir', WV gradient for 'wv',
-        // none for visible (carries a pre-rendered NASA colorbar).
+        // Show/hide legends — IR Tb gradient for 'eir' AND 'combo' (whose
+        // cold-top colors are the IR map), WV gradient for 'wv', none for
+        // visible (carries a pre-rendered NASA colorbar).
         var tbLeg = document.getElementById('ir-tb-legend');
-        if (tbLeg) tbLeg.style.display = (mode === 'eir') ? 'block' : 'none';
+        if (tbLeg) tbLeg.style.display = (mode === 'eir' || mode === 'combo') ? 'block' : 'none';
         var wvLeg = document.getElementById('ir-wv-legend');
         if (wvLeg) wvLeg.style.display = (mode === 'wv') ? 'block' : 'none';
 
         // --- Deactivate previous mode ---
         stopAnimation();
-        if (prevMode === 'eir')           hideAllAnimFrames();
+        // 'combo' shares the IR animation arrays (it IS the IR timeline with a
+        // Vis band sampled underneath), so it hides the same layers as 'eir'.
+        if (prevMode === 'eir' || prevMode === 'combo') hideAllAnimFrames();
         else if (prevMode === 'vis')      hideAllVisFrames();
         else if (prevMode === 'wv')       hideAllWvFrames();
 
@@ -10711,6 +10878,13 @@
             // rebuilt on each switch — no prewarm band bundle. Falls back to the
             // band bundle / raw-Tb per product if the mosaic lacks coverage.
             _initDetailMapMosaic(_deferredStormRef, mode === 'eir' ? 'ir' : mode);
+        } else if (mode === 'combo') {
+            // Combo has no Detailed-path renderer (no Vis idx tiles to
+            // sandwich). The button is disabled off-lite; this is the guard
+            // for anything that reaches here another way.
+            _irSyncComboAvail();
+            setProductMode('eir');
+            return;
         } else if (mode === 'eir') {
             // Restore IR slider state
             var slider = document.getElementById('ir-anim-slider');
@@ -12214,6 +12388,11 @@
         if (wvBtn) wvBtn.addEventListener('click', function () {
             if (productMode === 'wv') return;
             setProductMode('wv');
+        });
+        var comboBtn = document.getElementById('ir-product-combo');
+        if (comboBtn) comboBtn.addEventListener('click', function () {
+            if (productMode === 'combo' || comboBtn.disabled) return;
+            setProductMode('combo');
         });
         // Browser back/forward
         window.addEventListener('popstate', function () {
@@ -30404,8 +30583,11 @@
         // '.maplibregl-ctrl-group' is the zoom control under the GL facade —
         // '.leaflet-control-zoom' only matches when leaflet.js is the engine,
         // which is why the +/- buttons used to bake into saved storm-card PNGs.
+        // '#ir-gif-prog' is the GIF export's own progress toast, which lives
+        // inside the captured node — without this it bakes "GIF · capturing
+        // 0/18" into every frame of the export it is reporting on.
         ['.leaflet-control-zoom', '.maplibregl-ctrl-group',
-         '#ir-product-toggle', '#ir-image-loader'].forEach(function (sel) {
+         '#ir-product-toggle', '#ir-image-loader', '#ir-gif-prog'].forEach(function (sel) {
             var els = clonedDoc.querySelectorAll(sel);
             for (var i = 0; i < els.length; i++) els[i].style.display = 'none';
         });
@@ -30435,7 +30617,7 @@
      *  GIF over-layer uses _irExportOnClone so the watermark lands on top. */
     function _irExportOnCloneControls(clonedDoc) {
         ['.leaflet-control-zoom', '.maplibregl-ctrl-group',
-         '#ir-product-toggle', '#ir-image-loader'].forEach(function (sel) {
+         '#ir-product-toggle', '#ir-image-loader', '#ir-gif-prog'].forEach(function (sel) {
             var els = clonedDoc.querySelectorAll(sel);
             for (var i = 0; i < els.length; i++) els[i].style.display = 'none';
         });
@@ -30526,6 +30708,10 @@
         var cur = animFrameLayers[animIndex];
         var ts = cur && cur._mosaicTs;
         if (!ts) return null;
+        // Combo has no deeper level to sample (capped at z6, where both bands
+        // are gapless) and a plain-IR hi-res layer on top would break the
+        // sandwich — so there's nothing to add.
+        if (productMode === 'combo') return null;
         var product = (productMode === 'vis') ? 'vis' : (productMode === 'wv' ? 'wv' : 'ir');
         var zmax = _stormZmaxFor(product, ts);
         // MapLibre rounds for raster sources, so this is the level on screen.
@@ -30767,10 +30953,136 @@
             });
     }
 
+    /** Animated GIF for the Lite / GL mosaic loop.
+     *
+     *  Lite frames are `L.tileLayer`s (tagged `._mosaicTs`) drawn by the GL
+     *  engine, NOT `L.imageOverlay`s: there is no per-frame `<img>` and no
+     *  `.getBounds()`. The imageOverlay compositor below therefore threw
+     *  "ov.getBounds is not a function", died inside its own .catch with a
+     *  console warning, and left the Download ▸ GIF button looking inert.
+     *
+     *  Here the WebGL canvas already carries EVERYTHING geographic (basemap,
+     *  coastlines, graticule, track, imagery), so we step showFrame(idx), let
+     *  the map settle, and read the canvas per frame — the same readback the
+     *  lite PNG export uses. Static DOM chrome (Tb colorbar, env colorbars) is
+     *  captured once; the timestamp chip + watermark are hand-stamped per
+     *  frame with the 2D text API. Mirrors the global map's _exportMapGif. */
+    function _irGifFromGL(state, exportFrames, node, toast, cleanup) {
+        var glMap = detailMap && detailMap._gl;
+        var glCanvas = glMap && glMap.getCanvas && glMap.getCanvas();
+        if (!glCanvas) {
+            console.warn('[RT Monitor] lite GIF export needs the GL map');
+            _rtToast('GIF export needs the GL map');
+            cleanup();
+            return;
+        }
+
+        var rect = node.getBoundingClientRect();
+        // Cap the long edge ~600 px — NeuQuant + LZW cost and output bytes
+        // scale with pixel count. Matches the other two GIF paths.
+        var capScale = Math.min(1, 600 / Math.max(1, rect.width));
+        var outW = Math.max(2, Math.round(rect.width * capScale)) & ~1;
+        var outH = Math.max(2, Math.round(rect.height * capScale)) & ~1;
+        var comp = document.createElement('canvas');
+        comp.width = outW; comp.height = outH;
+        var cctx = comp.getContext('2d');
+
+        Promise.all([_ensureHtml2canvas(), _ensureGifWorker()]).then(function (setup) {
+            var workerUrl = setup[1];
+            // The DOM chrome doesn't change across frames → capture once.
+            // Skip every <canvas> (the GL one is composited separately, and
+            // reading a tainted canvas throws on iOS) and the timestamp pill,
+            // which _irStampExportChrome redraws per frame. NEVER block on
+            // this: html2canvas can take many seconds on this DOM, and a GIF
+            // without the Tb colorbar beats a GIF that never arrives.
+            var overlayP = window.html2canvas(node, {
+                backgroundColor: null, useCORS: true, allowTaint: false,
+                logging: false, scale: capScale,
+                onclone: _irExportOnCloneControls,
+                ignoreElements: function (el) {
+                    return el.tagName === 'CANVAS' || el.id === 'ir-overlay-info';
+                }
+            }).catch(function () { return null; });
+            var overlayTimeout = new Promise(function (r) {
+                setTimeout(function () { r(null); }, 8000);
+            });
+
+            return Promise.race([overlayP, overlayTimeout]).then(function (overlay) {
+                var gif = new window.GIF({
+                    workers: Math.max(2, Math.min(8, navigator.hardwareConcurrency || 4)),
+                    quality: 20, width: outW, height: outH,
+                    workerScript: workerUrl, background: '#0a0c12'
+                });
+                gif.on('progress', function (pct) {
+                    toast.textContent = 'GIF · encoding ' + Math.round(pct * 100) + '%';
+                });
+                gif.on('finished', function (blob) {
+                    _showGifResult(blob, currentStormId + '_animation.gif');
+                    _ga('ir_export_gif', { ok: true, mode: 'lite' });
+                    cleanup();
+                });
+
+                var i = 0;
+                function frameStep() {
+                    if (i >= exportFrames.length) {
+                        toast.textContent = 'GIF · encoding…';
+                        try { gif.render(); }
+                        catch (e) {
+                            console.warn('[RT Monitor] lite GIF render failed', e);
+                            _rtToast('GIF encode failed');
+                            cleanup();
+                        }
+                        return;
+                    }
+                    var idx = exportFrames[i];
+                    // showFrame swaps layer opacity, recenters on the frame's
+                    // true position, and updates the timestamp DOM that
+                    // _irStampExportChrome reads back below.
+                    state.showFn(idx);
+                    _whenGlIdle(glMap, 1500)
+                        .then(function () { return _glSnapshot(glMap); })
+                        .then(function (snap) {
+                            // __glBlank means the readback was empty or a flat
+                            // fill — this frame's tiles hadn't streamed in yet.
+                            // Give it one longer settle rather than baking a
+                            // black frame into the loop.
+                            if (snap && snap.__glBlank) {
+                                return _whenGlIdle(glMap, 2500)
+                                    .then(function () { return _glSnapshot(glMap); });
+                            }
+                            return snap;
+                        })
+                        .then(function (snap) {
+                            cctx.fillStyle = '#0a0c12';
+                            cctx.fillRect(0, 0, outW, outH);
+                            if (snap) {
+                                cctx.drawImage(snap, 0, 0, snap.width, snap.height,
+                                               0, 0, outW, outH);
+                            }
+                            if (overlay) {
+                                cctx.drawImage(overlay, 0, 0, overlay.width, overlay.height,
+                                               0, 0, outW, outH);
+                            }
+                            _irStampExportChrome(cctx, outW, outH);
+                            gif.addFrame(cctx, { delay: animIntervalMs, copy: true });
+                            i++;
+                            toast.textContent = 'GIF · capturing ' + i + '/' + exportFrames.length;
+                            frameStep();
+                        });
+                }
+                frameStep();
+            });
+        }).catch(function (err) {
+            console.warn('[RT Monitor] lite GIF export setup failed:', err);
+            _rtToast('GIF export failed to start');
+            cleanup();
+        });
+    }
+
     /** Animated GIF of all valid frames. Captures the static map background
      *  ONCE, then composites each already-decoded IR frame + a redrawn
      *  timestamp pill — no per-frame html2canvas. Feeds frames to gif.js
-     *  (same-origin blob worker). */
+     *  (same-origin blob worker). Lite/GL loops take the _irGifFromGL path. */
     window._irDownloadAnimGif = function () {
         if (!currentStormId) return;
         if (typeof window.GIF === 'undefined') {
@@ -30801,11 +31113,31 @@
         // Honor the "Show storm track" toggle for the whole GIF.
         var hiddenTrackGif = _irExportShowTrack() ? null : _irHideTrackForExport();
 
-        // Bottom-corner toast for progress.
+        // Bottom-corner toast for progress. The id keeps it out of the
+        // html2canvas captures (see _irExportOnCloneControls).
         var toast = document.createElement('div');
+        toast.id = 'ir-gif-prog';
         toast.style.cssText = 'position:absolute;bottom:8px;right:8px;background:rgba(15,22,35,0.85);color:#e2e8f0;font:600 11px/1.2 \'DM Sans\',sans-serif;padding:6px 10px;border-radius:4px;z-index:1000;pointer-events:none;';
         toast.textContent = 'GIF · capturing 0/' + exportFrames.length;
         node.appendChild(toast);
+
+        // Restore the live card exactly as we found it — both paths end here.
+        function _gifCleanup() {
+            _irRestoreTrackAfterExport(hiddenTrackGif);
+            state.showFn(savedIndex);
+            if (wasPlaying) startAnimation();
+            if (toast.parentElement) toast.parentElement.removeChild(toast);
+        }
+
+        // Lite / GL mosaic loop: frames are tile layers, not image overlays,
+        // so the compositor below can't touch them. Tagged by ._mosaicTs as
+        // well as the mode flag, since that's the property the composite
+        // path actually chokes on.
+        var _first = state.layers && state.layers[exportFrames[0]];
+        if (_liteActive || (_first && _first._mosaicTs)) {
+            _irGifFromGL(state, exportFrames, node, toast, _gifCleanup);
+            return;
+        }
 
         // No pre-opened tab: encode in THIS window and deliver via the in-page
         // result modal on finish (_showGifResult) — fresh tap activation on its
@@ -30847,11 +31179,7 @@
                 // Deliver via the in-page result modal (Save button has fresh
                 // tap activation → share/download works without popup-blocking).
                 _showGifResult(blob, currentStormId + '_animation.gif');
-                // Restore track, animation state, and remove toast.
-                _irRestoreTrackAfterExport(hiddenTrackGif);
-                state.showFn(savedIndex);
-                if (wasPlaying) startAnimation();
-                if (toast.parentElement) toast.parentElement.removeChild(toast);
+                _gifCleanup();
             });
 
             // ── Capture the STATIC layers ONCE, composite the decoded IR
@@ -31073,14 +31401,15 @@
                 }).catch(function (err) {
                     _restoreLive();
                     console.warn('[RT Monitor] GIF background capture failed:', err);
-                    _irRestoreTrackAfterExport(hiddenTrackGif);
-                    if (toast.parentElement) toast.parentElement.removeChild(toast);
+                    _rtToast('GIF export failed — ' +
+                             ((err && err.message) || 'capture error'));
+                    _gifCleanup();
                 });
             }, 0);
         }).catch(function (err) {
             console.warn('[RT Monitor] GIF export setup failed:', err);
-            _irRestoreTrackAfterExport(hiddenTrackGif);
-            if (toast.parentElement) toast.parentElement.removeChild(toast);
+            _rtToast('GIF export failed to start');
+            _gifCleanup();
         });
     };
 

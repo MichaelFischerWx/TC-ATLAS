@@ -83,7 +83,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20260811b">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20260812a">
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -117,7 +117,7 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260811b">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260812a">
     <link rel="stylesheet" href="satellite_styles.css?v=20260811b">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260804a">
 </head>
@@ -363,11 +363,24 @@
                         <span id="ir-frame-time" class="ir-frame-time-label"></span>
                         <span id="ir-satellite-label" class="ir-sat-label"></span>
                     </div>
-                    <!-- Product toggle (IR / Visible / Water Vapor) -->
+                    <!-- Product toggle (IR / Visible / Water Vapor / Combo) -->
                     <div id="ir-product-toggle" class="ir-product-toggle">
                         <button id="ir-product-eir" class="ir-product-btn ir-product-active" title="Clean infrared (Band 13, ~10.3 µm)">IR</button>
                         <button id="ir-product-vis" class="ir-product-btn" title="Red visible (Band 2 / Band 3 — daytime only)">Visible</button>
                         <button id="ir-product-wv" class="ir-product-btn" title="Mid-level water vapor (Band 8, ~6.2 µm)">WV</button>
+                        <!-- Combo (Vis+IR sandwich) — the JS side is complete
+                             (setProductMode/_initDetailMapMosaic/_comboTileUrl +
+                             the sandwich branch of the idxcolor:// protocol),
+                             and the blend output is verified correct against
+                             real tiles. What is NOT solved: MapLibre never
+                             streams tiles for the combo raster sources on the
+                             storm card — the source cache reports used=true,
+                             srcLoaded=true, zoom 6 within maxzoom 6, no error
+                             event, and _tiles stays empty, while an identical
+                             layer carrying a plain idxcolor://ir/ URL loads
+                             normally. Re-enable this button once that is fixed.
+                        <button id="ir-product-combo" class="ir-product-btn" title="Sandwich composite — visible cloud texture with IR-colored cold tops (night side falls back to IR)">Combo</button>
+                        -->
                     </div>
                     <!-- Env layers control — drape GFS analyses (shear, RH, SST,
                          heights, vorticity, winds) over the zoomed storm view.
@@ -2622,7 +2635,7 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
     <script defer src="tc_mw_layer.js?v=20260811b"></script>
-    <script defer src="realtime_ir.js?v=20260811b"></script>
+    <script defer src="realtime_ir.js?v=20260812a"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays

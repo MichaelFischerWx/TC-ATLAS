@@ -966,6 +966,14 @@ html, body { margin: 0; padding: 0; }
 .ir-product-btn.ir-loading {
     color: #fbbf24;
 }
+/* Combo is Lite-only: keep the disabled button inert instead of lighting up
+   on hover as if it were clickable. */
+.ir-product-btn:disabled,
+.ir-product-btn:disabled:hover {
+    cursor: default;
+    color: #8993a4;
+    background: rgba(255, 255, 255, 0.85);
+}
 
 /* ── Storm-detail env Layers control ─────────────────────────────
    Sits top-right under the product toggle; opens a compact grouped
