@@ -3058,6 +3058,7 @@ function _vdmReset() {
 
 var minobData = null;
 var minobLoaded = false;
+var minobDone = false;      // fetch settled (data, empty, or error)
 
 function _minobFetch() {
     if (!selectedStorm || minobLoaded) return;
@@ -3079,6 +3080,9 @@ function _minobFetch() {
     fetch(url)
         .then(function (r) { return r.json(); })
         .then(function (json) {
+            // Settled either way — the HDOB fallback waits on this rather than
+            // polling out its 20 s ceiling when a storm genuinely has no recon.
+            minobDone = true;
             if (!json.success || !json.observations || json.observations.length === 0) return;
             minobData = json.observations;
             minobLoaded = true;
@@ -3096,12 +3100,13 @@ function _minobFetch() {
             // Re-render map to add gap-fill if HRD data is truncated
             if (_gaFLData10s && detailMap) _gaFLRenderMinobGapFill();
         })
-        .catch(function () {});
+        .catch(function () { minobDone = true; });
 }
 
 function _minobReset() {
     minobData = null;
     minobLoaded = false;
+    minobDone = false;
     var mbtn = document.getElementById('ga-fl-minob-btn');
     if (mbtn) mbtn.style.display = 'none';
 }
@@ -11221,6 +11226,10 @@ function _gaFLReset() {
     _gaFLFetching = false;
     _gaFLTSOpen = false;
     _gaFLClientCache = {};
+    // Must clear with the storm — otherwise the next storm, which may well have
+    // HRD flight-level data, keeps routing mission loads through the HDOB path.
+    _gaHdobMode = false;
+    _gaHdobMissions = [];
     if (_gaFLZoomHandler && detailMap) {
         detailMap.off('zoomend', _gaFLZoomHandler);
         _gaFLZoomHandler = null;
@@ -11338,8 +11347,12 @@ function _gaFLDiscoverMissions(storm) {
         .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function (json) {
             if (!json.success || !json.missions || json.missions.length === 0) {
-                if (status) status.textContent = 'No FL data available';
-                document.getElementById('ga-fl-status').textContent = 'No data';
+                // HRD publishes 1-Hz flight-level files only for the research
+                // sorties it chose to archive — nothing at all for whole basins
+                // and seasons (Kenna 2002 has none, though NHC holds two USAF
+                // HDOB missions for it). Fall back to the HDOBs, which cover
+                // every storm recon flew, before declaring no data.
+                _gaHdobFallback(status);
                 return;
             }
             _gaFLMissions = json.missions;
@@ -11352,6 +11365,157 @@ function _gaFLDiscoverMissions(storm) {
         .catch(function (e) {
             if (status) status.textContent = 'Error: ' + e.message;
         });
+}
+
+// ── HDOB fallback for storms HRD never archived ──────────────────────────
+//
+// The HDOB obs are already fetched by _minobFetch() for the gap-fill overlay;
+// this promotes them to the mission picker's primary source when HRD has
+// nothing, converting each ob into the flight-level schema so every existing
+// renderer (map barbs, time series, cross-section) works untouched.
+
+var _gaHdobMode = false;      // dropdown is serving HDOB missions, not HRD
+var _gaHdobMissions = [];
+
+/** Wait for the in-flight MINOB/HDOB fetch, then populate from it. */
+function _gaHdobFallback(status, _tries) {
+    _tries = _tries || 0;
+    var flStatus = document.getElementById('ga-fl-status');
+    if (!minobDone && _tries < 40) {              // ~20 s ceiling; cold years are slow
+        if (status) status.textContent = 'Searching HDOBs…';
+        setTimeout(function () { _gaHdobFallback(status, _tries + 1); }, 500);
+        return;
+    }
+    var missions = (minobData && minobData.length) ? _gaHdobMissionList() : [];
+    if (!missions.length) {
+        if (status) status.textContent = 'No FL or HDOB data';
+        if (flStatus) flStatus.textContent = 'No data';
+        return;
+    }
+    _gaHdobMode = true;
+    _gaHdobMissions = missions;
+    _gaFLMissions = missions;
+    _gaFLPopulateMissionDropdown();
+    if (status) {
+        status.textContent = missions.length + ' HDOB mission(s) · no HRD FL';
+        status.title = 'AOML/HRD archives no flight-level file for this storm; '
+            + 'these are NHC recon-archive HDOBs.';
+    }
+    _gaFLSyncToIRFrame();
+}
+
+/** Group the loaded HDOB obs into mission entries shaped like HRD's. */
+function _gaHdobMissionList() {
+    var byKey = {};
+    for (var i = 0; i < minobData.length; i++) {
+        var o = minobData[i];
+        if (!o.time || o.lat == null || o.lon == null) continue;
+        var day = o.time.substring(0, 10);
+        var key = (o.mission_id || '') + '|' + (o.aircraft || '') + '|' + day;
+        var m = byKey[key];
+        if (!m) {
+            m = byKey[key] = {
+                mission_id: o.mission_id || 'HDOB',
+                aircraft_code: o.aircraft || '',
+                aircraft: o.aircraft || '',
+                datetime: day, sortie: '', n_obs: 0,
+                start_time: o.time, end_time: o.time,
+                source: 'hdob', file_url: 'hdob:' + key
+            };
+        }
+        m.n_obs++;
+        if (o.time < m.start_time) m.start_time = o.time;
+        if (o.time > m.end_time) m.end_time = o.time;
+        var w = o.peak_10s_wspd_kt;
+        if (w != null && (m.max_wind == null || w > m.max_wind)) m.max_wind = w;
+    }
+    var out = Object.keys(byKey).map(function (k) { return byKey[k]; });
+    out.sort(function (a, b) { return a.start_time < b.start_time ? -1 : 1; });
+    return out;
+}
+
+/** HDOB ob → the flight-level observation schema the renderers consume. */
+function _gaHdobToFLObs(o, baseDay) {
+    var hh = parseInt(o.time.substring(11, 13), 10);
+    var mm = parseInt(o.time.substring(14, 16), 10);
+    var ss = parseInt(o.time.substring(17, 19), 10) || 0;
+    var sec = hh * 3600 + mm * 60 + ss;
+    // A sortie that crosses 00Z keeps counting up, matching how the HRD path
+    // treats a mission's seconds-from-midnight axis.
+    if (baseDay && o.time.substring(0, 10) > baseDay) sec += 86400;
+    var kt = o.wspd_30s_kt;
+    var pres = o.fl_pres_mb != null ? o.fl_pres_mb : null;
+    var thetaE = null;
+    if (o.temp_c != null && o.dewpt_c != null && pres) {
+        // RH from T and Td (Bolton), then the shared θe helper — the legacy
+        // HDOB reports a dewpoint, not an RH.
+        var es = 6.112 * Math.exp(17.67 * o.temp_c / (o.temp_c + 243.5));
+        var e = 6.112 * Math.exp(17.67 * o.dewpt_c / (o.dewpt_c + 243.5));
+        var rh = Math.max(1, Math.min(100, 100 * e / es));
+        thetaE = _computeThetaE(o.temp_c, rh, pres);
+    }
+    return {
+        time: o.time.substring(11, 19),
+        time_sec: sec,
+        lat: o.lat, lon: o.lon,
+        fl_wspd_ms: kt != null ? +(kt / 1.94384).toFixed(2) : null,
+        fl_wdir_deg: o.wdir_deg != null ? o.wdir_deg : null,
+        peak_10s_wspd_kt: o.peak_10s_wspd_kt,
+        gps_alt_m: o.geo_alt_m != null ? o.geo_alt_m : o.press_alt_m,
+        static_pres_hpa: pres,
+        temp_c: o.temp_c,
+        dewpoint_c: o.dewpt_c,
+        sfcpr_hpa: o.sfc_pres_hpa,
+        theta_e: thetaE != null ? +thetaE.toFixed(1) : null,
+        sfmr_wspd_ms: o.sfmr_wspd_kt != null ? +(o.sfmr_wspd_kt / 1.94384).toFixed(2) : null,
+        qc_flagged: !!o.qc_flagged,
+        ground_spd_ms: null, true_airspd_ms: null, heading: null,
+        track: null, vert_vel_ms: null, slp_hpa: null,
+        extrapolated_sfc_wspd_ms: null
+    };
+}
+
+/** Build an HRD-shaped payload for one HDOB mission and hand it to the
+ *  existing render path. HDOBs are 30-s (or 1-min) obs, so every resolution
+ *  tier points at the same series — there's no 1 Hz to thin. */
+function _gaHdobBuildMissionData(mission) {
+    var obs = [];
+    for (var i = 0; i < minobData.length; i++) {
+        var o = minobData[i];
+        if ((o.mission_id || '') !== mission.mission_id) continue;
+        if ((o.aircraft || '') !== mission.aircraft_code) continue;
+        if (o.time.substring(0, 10) !== mission.datetime) continue;
+        obs.push(_gaHdobToFLObs(o, mission.datetime));
+    }
+    obs.sort(function (a, b) { return a.time_sec - b.time_sec; });
+    var wspds = obs.map(function (o) { return o.fl_wspd_ms; })
+                   .filter(function (v) { return v != null; });
+    var alts = obs.map(function (o) { return o.gps_alt_m; })
+                  .filter(function (v) { return v != null; });
+    var sfcprs = obs.map(function (o) { return o.sfcpr_hpa; })
+                    .filter(function (v) { return v != null && v >= 850 && v <= 1100; });
+    return {
+        success: true,
+        observations: obs, obs_1s: null, obs_10s: obs, obs_30s: obs,
+        mission_id: mission.mission_id,
+        source_file: mission.mission_id + ' (' + mission.aircraft_code + ')',
+        source_url: 'https://www.nhc.noaa.gov/archive/recon/',
+        n_obs: obs.length, n_obs_raw: obs.length,
+        has_1s: false, has_storm_relative: false,
+        center_lat: null, center_lon: null,
+        source: 'hdob',
+        summary: {
+            max_fl_wspd_ms: wspds.length ? +Math.max.apply(null, wspds).toFixed(1) : null,
+            min_sfcpr_hpa: sfcprs.length ? +Math.min.apply(null, sfcprs).toFixed(1) : null,
+            max_fl_wspd_ms_1s: null, min_sfcpr_hpa_1s: null,
+            total_obs_1hz: obs.length,
+            mean_alt_m: alts.length
+                ? Math.round(alts.reduce(function (a, b) { return a + b; }, 0) / alts.length)
+                : null,
+            start_time: obs.length ? obs[0].time : null,
+            end_time: obs.length ? obs[obs.length - 1].time : null
+        }
+    };
 }
 
 var _gaFLMissionStats = {};  // file_url → { maxWind, minP }
@@ -11406,11 +11570,20 @@ function _gaFLPopulateMissionDropdown() {
         var m = _gaFLMissions[i];
         var opt = document.createElement('option');
         opt.value = m.file_url;
-        var label = m.datetime + ' ' + m.aircraft_code + m.sortie +
-            ' (' + m.aircraft + ')';
-        var stats = _gaFLMissionStats[m.file_url];
-        if (stats) {
-            label += ' \u2014 ' + stats.maxWind + ' kt';
+        var label;
+        if (m.source === 'hdob') {
+            // HDOB missions have no sortie letter and carry their own peak wind,
+            // so label them by mission number + tail and mark the source.
+            label = m.datetime + ' \u00b7 ' + m.mission_id + ' (' + m.aircraft + ')'
+                + (m.max_wind != null ? ' \u2014 ' + m.max_wind + ' kt' : '')
+                + ' \u00b7 HDOB';
+        } else {
+            label = m.datetime + ' ' + m.aircraft_code + m.sortie +
+                ' (' + m.aircraft + ')';
+            var stats = _gaFLMissionStats[m.file_url];
+            if (stats) {
+                label += ' \u2014 ' + stats.maxWind + ' kt';
+            }
         }
         opt.textContent = label;
         select.appendChild(opt);
@@ -11548,6 +11721,19 @@ function _gaFLApplyData(json) {
 
 function _gaFLLoadMissionData(fileUrl) {
     if (_gaFLFetching) return;
+
+    // HDOB fallback missions carry an "hdob:" pseudo-URL and are already in
+    // memory — assemble and apply them here so every caller (mission picker,
+    // IR-frame sync, f-deck cross-link) takes the same path with no fetch.
+    if (_gaHdobMode && typeof fileUrl === 'string' && fileUrl.indexOf('hdob:') === 0) {
+        for (var hi = 0; hi < _gaFLMissions.length; hi++) {
+            if (_gaFLMissions[hi].file_url === fileUrl) {
+                _gaFLApplyData(_gaHdobBuildMissionData(_gaFLMissions[hi]));
+                return;
+            }
+        }
+        return;
+    }
 
     // Check browser-side cache first — instant load for previously viewed missions
     if (_gaFLClientCache[fileUrl]) {

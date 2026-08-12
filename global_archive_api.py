@@ -6380,10 +6380,18 @@ def _parse_minob_obs_urnt40(fields: list) -> dict | None:
         except ValueError:
             return None
 
-    geo_alt = _safe_int(fields[3])
+    # NOAA reports altitude in FEET, not the meters the USAF legacy format uses:
+    # a P-3 on a 700 mb leg reads 10037 here versus 3030 in the USAF files —
+    # a ratio of 3.28, i.e. ft/m. Storing it raw put a P-3 at "10,037 m".
+    press_alt_ft = _safe_int(fields[3])
+    press_alt = round(press_alt_ft * 0.3048) if press_alt_ft is not None else None
 
-    # D-value (signed)
-    d_val = _safe_int(fields[4])
+    # D-value (signed). Units are NOT confirmed for this format — reading it as
+    # feet makes Katrina's 8/27 core deeper than the 8/28 sortie into a much
+    # lower central pressure, which can't be right, and tenths-of-meters fits
+    # better but isn't established. Left raw and unlabeled rather than shipping
+    # a plausible-looking number in the wrong unit.
+    d_val_raw = _safe_int(fields[4])
 
     # 30-sec wind: DDDSSS (dir 3 digits, speed 3 digits)
     wdir, wspd_30s = None, None
@@ -6404,23 +6412,134 @@ def _parse_minob_obs_urnt40(fields: list) -> dict | None:
     if len(pk_raw) == 6 and pk_raw.isdigit():
         peak_10s = int(pk_raw[3:])
 
-    # Surface pressure from D-value + geopotential height
-    sfc_pres_hpa = None
-    # (D-value encoding varies; skip sfc pressure for URNT40)
+    # SFMR surface wind + rain rate — the P-3s carried SFMR well before the
+    # USAF fleet did, so these are populated here and absent in the USAF files.
+    sfmr_kt = _safe_int(fields[9]) if len(fields) > 9 else None
+    sfmr_rain = _safe_int(fields[10]) if len(fields) > 10 else None
 
-    return {
+    # No extrapolated surface pressure is reported in this format.
+    sfc_pres_hpa = None
+
+    return _minob_qc({
         "_hh": hh, "_mm": mm, "_ss": ss,
         "lat": round(lat, 3),
         "lon": round(lon, 3),
-        "geo_alt_m": geo_alt,
-        "d_value_m": d_val,
+        "geo_alt_m": None,          # not reported separately in URNT40
+        "press_alt_m": press_alt,
+        "fl_pres_mb": _press_alt_to_mb(press_alt),
+        "d_value_m": None,          # see the unit note above
+        "d_value_raw": d_val_raw,
         "sfc_pres_hpa": sfc_pres_hpa,
         "wdir_deg": wdir,
         "wspd_30s_kt": wspd_30s,
         "temp_c": temp_c,
         "dewpt_c": dewpt_c,
         "peak_10s_wspd_kt": peak_10s,
-    }
+        "sfmr_wspd_kt": sfmr_kt,
+        "sfmr_rain_rate": sfmr_rain,
+    })
+
+
+def _press_alt_to_mb(alt_m):
+    """Pressure altitude (m) → flight-level pressure (mb), ICAO standard atmosphere.
+
+    Exact inverse of the standard-atmosphere height the aircraft's altimeter
+    encodes, so a 700 mb leg at ~3010 m comes back as ~700 mb. Only valid in
+    the troposphere, which is all recon flies."""
+    if alt_m is None or alt_m < -500 or alt_m > 20000:
+        return None
+    return round(1013.25 * (1.0 - alt_m / 44330.77) ** (1.0 / 0.190263), 1)
+
+
+# Physical bounds for a flight-level recon observation. The NHC archive carries
+# occasional corrupt records — e.g. two isolated rows in Katrina's 2005-08-27
+# NOAA sortie report 223 kt with a -4190 D-value between neighbors reading 53 kt,
+# then snap back — and passing those through put a 223 kt spike on the charts.
+# Fields that fail are nulled individually; a bad wind doesn't discard the
+# position, and a bad position discards the ob.
+_MINOB_LIMITS = {
+    "wspd_30s_kt": (0, 200),
+    "peak_10s_wspd_kt": (0, 220),
+    "wdir_deg": (0, 360),
+    "temp_c": (-90.0, 50.0),
+    "dewpt_c": (-90.0, 50.0),
+    "d_value_m": (-1200, 1200),
+    "geo_alt_m": (-100, 20000),
+    "press_alt_m": (-100, 20000),
+    "sfc_pres_hpa": (850.0, 1060.0),
+    "sfmr_wspd_kt": (0, 200),
+}
+
+
+def _minob_qc(ob: dict | None) -> dict | None:
+    """Null out physically impossible fields; drop the ob if its fix is bad."""
+    if ob is None:
+        return None
+    lat, lon = ob.get("lat"), ob.get("lon")
+    if lat is None or lon is None or not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+        return None
+    # Exactly 0/0 is the archive's missing-position placeholder, not the Gulf of
+    # Guinea — the same guard the real-time HDOB parser applies.
+    if abs(lat) < 0.05 and abs(lon) < 0.05:
+        return None
+    for key, (lo, hi) in _MINOB_LIMITS.items():
+        v = ob.get(key)
+        if v is not None and not (lo <= v <= hi):
+            ob[key] = None
+            ob["qc_flagged"] = True
+    # A 30-s mean above the 10-s peak is contradictory; keep the mean, which is
+    # the more robust of the two, and drop the peak.
+    mean_kt, peak_kt = ob.get("wspd_30s_kt"), ob.get("peak_10s_wspd_kt")
+    if mean_kt is not None and peak_kt is not None and peak_kt < mean_kt:
+        ob["peak_10s_wspd_kt"] = None
+        ob["qc_flagged"] = True
+    return ob
+
+
+def _minob_despike(obs: list) -> None:
+    """Void records whose height channel jumps and snaps back, in place.
+
+    The corrupt records in the archive are wrong in every field at once —
+    Katrina's 2005-08-27 NOAA sortie reads 53, 50, [120, 125], 53, 53 kt with the
+    D-value going +151, [-3612, -4190], +141 across the same rows — so the
+    HEIGHT channel is where they can be identified without risk. An aircraft on
+    a constant-pressure leg cannot displace a thousand metres and return two obs
+    later, whereas the wind legitimately can swing 130 kt in one ob crossing an
+    eyewall into the eye. Screening on wind directly clipped real eyewall passes
+    (a narrow eyewall is only 2-3 obs wide at 30-s sampling), so it screens on
+    height and then voids the whole record.
+
+    Deliberately unit-agnostic: it compares raw excursions, because URNT40's
+    D-value units are unconfirmed (see _parse_minob_obs_urnt40).
+    """
+    jump = 1000          # metres, feet, or tenths — corrupt at any of them
+    max_run = 4
+    vals = [(o.get("d_value_m") if o.get("d_value_m") is not None
+             else o.get("d_value_raw")) for o in obs]
+    i = 1
+    while i < len(obs) - 1:
+        base = vals[i - 1]
+        if base is None or vals[i] is None or abs(vals[i] - base) <= jump:
+            i += 1
+            continue
+        j = i
+        while j < len(obs) and vals[j] is not None and abs(vals[j] - base) > jump:
+            j += 1
+        after = vals[j] if j < len(obs) else None
+        if j - i <= max_run and after is not None and abs(after - base) <= jump:
+            for k in range(i, j):
+                voided = {}
+                for f in ("wspd_30s_kt", "peak_10s_wspd_kt", "wdir_deg",
+                          "temp_c", "dewpt_c", "d_value_m", "geo_alt_m"):
+                    if obs[k].get(f) is not None:
+                        voided[f] = obs[k][f]
+                    obs[k][f] = None
+                # Keep what was voided rather than destroying it — a screened
+                # ob should still be inspectable, and the threshold is a
+                # judgement call on formats whose units aren't fully pinned.
+                obs[k]["qc_voided"] = voided
+                obs[k]["qc_flagged"] = True
+        i = j + 1 if j > i else i + 1
 
 
 def _parse_minob_obs_legacy(fields: list, colatitude: bool = False) -> dict | None:
@@ -6489,25 +6608,33 @@ def _parse_minob_obs_legacy(fields: list, colatitude: bool = False) -> dict | No
             return None
         return int(s)
 
-    geo_alt = _safe_int(fields[3])               # geopotential height (m)
-    xxxx = _safe_int(fields[4])                   # D-value or sfc pressure
+    press_alt = _safe_int(fields[3])              # pressure altitude (m)
+    xxxx = _safe_int(fields[4])                   # D-value (see below)
     wdir = _safe_int(fields[5])                   # wind direction (deg)
     wspd_30s = _safe_int(fields[6])               # 30-sec avg wind (kt)
     temp_raw = _safe_int(fields[7])               # temp in tenths C
     dewpt_raw = _safe_int(fields[8])              # dewpoint in tenths C
     peak_10s = _safe_int(fields[9]) if len(fields) > 9 else None
+    # Field 10 (when present) is the geopotential/true height, which tracks
+    # press_alt + D-value. Field 3 stays near the flight level all mission
+    # (Kenna: 3010-3072 m at 700 mb) while field 10 collapses through the core
+    # (2303 m in Kenna's eye) — that asymmetry is what identifies which is which.
+    geo_alt = _safe_int(fields[10]) if len(fields) > 10 else None
 
-    # Decode D-value / surface pressure
+    # Field 4 is ALWAYS the D-value in this legacy format, with >=5000 meaning
+    # negative (5642 -> -642 m). The modern HDOB rule — where the same slot
+    # carries extrapolated surface pressure at low flight levels — does NOT
+    # apply here, and applying it fabricated a ~1013 mb "surface pressure" for
+    # every positive D-value (317 of Kenna's 413 obs, including inside the
+    # eyewall of a 913 mb hurricane). Two independent checks pin it down:
+    # press_alt + D-value reproduces field 10 to ~14 m on every line, and a
+    # 2005 Katrina sortie sitting on the ramp at 60 m reports 5070 (-70 m),
+    # which no surface-pressure encoding can produce.
     d_value_m = None
-    sfc_pres_hpa = None
     if xxxx is not None:
-        if xxxx >= 5000:
-            d_value_m = -(xxxx - 5000)
-        else:
-            if xxxx < 1000:
-                sfc_pres_hpa = round(1000 + xxxx / 10.0, 1)
-            else:
-                sfc_pres_hpa = round(xxxx / 10.0, 1)
+        d_value_m = -(xxxx - 5000) if xxxx >= 5000 else xxxx
+    # No extrapolated surface pressure is reported in the legacy format.
+    sfc_pres_hpa = None
 
     # Decode temperature (tenths C, values > 500 mean negative)
     temp_c = None
@@ -6524,11 +6651,17 @@ def _parse_minob_obs_legacy(fields: list, colatitude: bool = False) -> dict | No
         else:
             dewpt_c = dewpt_raw / 10.0
 
-    return {
+    return _minob_qc({
         "_hh": hh, "_mm": mm, "_ss": ss,
         "lat": round(lat, 3),
         "lon": round(lon, 3),
         "geo_alt_m": geo_alt,
+        "press_alt_m": press_alt,
+        # Pressure altitude IS the standard-atmosphere height of the flight
+        # level, so it inverts back to the flight-level pressure exactly. The
+        # legacy format reports no static pressure of its own, and without this
+        # nothing downstream (theta-e, level labels) can place the obs.
+        "fl_pres_mb": _press_alt_to_mb(press_alt),
         "d_value_m": d_value_m,
         "sfc_pres_hpa": sfc_pres_hpa,
         "wdir_deg": wdir,
@@ -6536,7 +6669,7 @@ def _parse_minob_obs_legacy(fields: list, colatitude: bool = False) -> dict | No
         "temp_c": round(temp_c, 1) if temp_c is not None else None,
         "dewpt_c": round(dewpt_c, 1) if dewpt_c is not None else None,
         "peak_10s_wspd_kt": peak_10s,
-    }
+    })
 
 
 def _parse_minob_obs_modern(fields: list) -> dict | None:
@@ -6608,20 +6741,48 @@ def _parse_minob_obs_modern(fields: list) -> dict | None:
         wspd_30s = int(wind_combined[3:])
 
     peak_10s = _safe_int(fields[9]) if len(fields) > 9 else None
+    sfmr_kt = _safe_int(fields[10]) if len(fields) > 10 else None
+    sfmr_rain = _safe_int(fields[11]) if len(fields) > 11 else None
 
-    return {
+    # Field 3 is the STATIC (flight-level) pressure, not a surface pressure —
+    # pressure x10 with the leading thousands digit dropped, so a 344.3 mb leg
+    # reads "3443" and a 1002.3 mb leg reads "0023". Feeding it to sfc_pres_hpa
+    # labeled a G-IV's 344 mb flight level as the storm's surface pressure.
+    fl_pres_mb = None
+    if pres_raw is not None:
+        p = pres_raw / 10.0
+        fl_pres_mb = round(p + 1000.0, 1) if p < 100 else round(p, 1)
+
+    # Field 5 carries the extrapolated surface pressure on low-level legs and the
+    # geopotential D-value higher up, distinguished by the same encoding the
+    # real-time parser uses: >=5000 is a negative D-value, <1000 is 1000+x/10 mb.
+    d_value_m = None
+    sfc_pres_hpa = None
+    if d_val_raw is not None:
+        if d_val_raw >= 5000:
+            d_value_m = -(d_val_raw - 5000)
+        elif d_val_raw < 1000:
+            sfc_pres_hpa = round(1000 + d_val_raw / 10.0, 1)
+        else:
+            sfc_pres_hpa = round(d_val_raw / 10.0, 1)
+
+    return _minob_qc({
         "_hh": hh, "_mm": mm, "_ss": ss,
         "lat": round(lat, 3),
         "lon": round(lon, 3),
         "geo_alt_m": geo_alt,
-        "d_value_m": d_val_raw,
-        "sfc_pres_hpa": round(pres_raw / 10.0, 1) if pres_raw is not None else None,
+        "press_alt_m": None,        # modern HDOB reports pressure, not pressure altitude
+        "fl_pres_mb": fl_pres_mb,
+        "d_value_m": d_value_m,
+        "sfc_pres_hpa": sfc_pres_hpa,
         "wdir_deg": wdir,
         "wspd_30s_kt": wspd_30s,
         "temp_c": temp_c,
         "dewpt_c": dewpt_c,
         "peak_10s_wspd_kt": peak_10s,
-    }
+        "sfmr_wspd_kt": sfmr_kt,
+        "sfmr_rain_rate": sfmr_rain,
+    })
 
 
 def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
@@ -6755,6 +6916,9 @@ def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
             i += 1
 
         if observations:
+            # Despike within the bulletin, where the obs are contiguous in time
+            # (across bulletins there's a gap, so neighbors aren't comparable).
+            _minob_despike(observations)
             messages.append({
                 "aircraft": aircraft,
                 "mission_id": mission_id,
@@ -6764,6 +6928,52 @@ def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
             })
 
     return messages
+
+
+def _minob_mission_summary(obs: list) -> list:
+    """Group flattened obs into per-sortie entries for the mission picker.
+
+    Mirrors the shape of the HRD flight-level mission list the picker was built
+    for (mission_id / aircraft / datetime / n_obs plus peak wind), so the
+    frontend can populate the same dropdown from either source. Keyed by
+    (mission_id, aircraft, date) because a mission id repeats across days.
+    """
+    groups: dict = {}
+    for o in obs:
+        t = o.get("time") or ""
+        if not t:
+            continue
+        key = (o.get("mission_id") or "", o.get("aircraft") or "", t[:10])
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {
+                "mission_id": key[0],
+                "aircraft": key[1],
+                "datetime": key[2],
+                "start_time": t,
+                "end_time": t,
+                "n_obs": 0,
+                "max_wspd_kt": None,
+                "max_peak_kt": None,
+                "min_sfc_pres_hpa": None,
+                "source": "hdob",
+            }
+        g["n_obs"] += 1
+        if t < g["start_time"]:
+            g["start_time"] = t
+        if t > g["end_time"]:
+            g["end_time"] = t
+        for src, dst in (("wspd_30s_kt", "max_wspd_kt"),
+                         ("peak_10s_wspd_kt", "max_peak_kt")):
+            v = o.get(src)
+            if v is not None and (g[dst] is None or v > g[dst]):
+                g[dst] = v
+        p = o.get("sfc_pres_hpa")
+        if p is not None and (g["min_sfc_pres_hpa"] is None or p < g["min_sfc_pres_hpa"]):
+            g["min_sfc_pres_hpa"] = p
+    out = list(groups.values())
+    out.sort(key=lambda m: (m["start_time"], m["mission_id"]))
+    return out
 
 
 @router.get("/minobs")
@@ -6937,6 +7147,7 @@ def get_minobs(
         "observations": flat_obs,
         "n_obs": len(flat_obs),
         "n_messages": len(all_messages),
+        "missions": _minob_mission_summary(flat_obs),
     }
 
     _minob_cache[cache_key] = (result, now)
