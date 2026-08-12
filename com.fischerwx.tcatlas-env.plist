@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fischerwx.tcatlas-env</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/mfischer/github/TC-ATLAS/run_env_overlays_local.sh</string>
+    </array>
+    <!-- Hourly poll rather than StartCalendarInterval at the GFS cycle
+         times: launchd calendar entries are LOCAL time, so a fixed UTC
+         schedule would drift an hour twice a year. The script asks GCS
+         whether the current cycle is already built and exits in ~2 s when
+         it is, so ~5 of every 6 wake-ups are nearly free. Same approach as
+         com.fischerwx.ghost-rt. -->
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <!-- Don't fire on login/reload: a run takes ~23 min, and the backstop
+         already covers any cycle this machine misses. -->
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/Users/mfischer/Library/Logs/tcatlas-env.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/mfischer/Library/Logs/tcatlas-env.stderr.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- launchd hands the job a minimal PATH; anaconda first so the
+             interpreter's own tooling resolves, then homebrew for gcloud. -->
+        <key>PATH</key>
+        <string>/opt/anaconda3/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- ADC user credentials carry no project; without this every
+             google-cloud-storage upload raises and nothing publishes. -->
+        <key>GOOGLE_CLOUD_PROJECT</key>
+        <string>tc-atlas-web</string>
+    </dict>
+    <!-- Politeness only. Deliberately NOT ProcessType=Background: that opts
+         the job into macOS CPU throttling, and this run is already ~32 min
+         (the PI solve alone is a 16-thread numba loop). Throttling it risks
+         pushing a pass past the hourly StartInterval. com.fischerwx.ghost-rt
+         sets neither key and has run reliably since July; Nice +
+         LowPriorityIO keep the machine responsive without capping CPU. -->
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>
