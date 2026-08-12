@@ -8125,6 +8125,68 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
     return result
 
 
+def _wl_track_t0(track: dict) -> Optional[tuple]:
+    """(lat, lon) of a WeatherLab track's analysis point. Prefers the
+    ensemble mean; falls back to member 0."""
+    for src in (track.get("ensemble_mean"),
+                (track.get("members") or {}).get("0")):
+        pts = (src or {}).get("points") or []
+        if pts:
+            p = min(pts, key=lambda q: q.get("tau", 0) or 0)
+            if p.get("lat") is not None and p.get("lon") is not None:
+                return (float(p["lat"]), float(p["lon"]))
+    return None
+
+
+def _weatherlab_match_id(data: dict, atcf_id: str,
+                         max_deg: float = 3.5) -> Optional[str]:
+    """Resolve a storm to its WeatherLab track ID, exact match first.
+
+    DeepMind's ATCF pairing lags the operational centers: on 2026-08-12 the
+    FNV3 06Z cycle still carried CP012026 under its invest number CP932026
+    (t=0 15.0N/140.4W, 29 kt vs NHC's 15.0N/141.4W, 30 kt). Without a
+    fallback the storm page 404s and shows no DeepMind tracks at all.
+
+    The fallback ONLY considers invest-numbered tracks (90-99) — a named
+    track that isn't our ID is a genuinely different storm — and takes the
+    nearest one to the storm's current position within `max_deg`, preferring
+    the same basin. Cross-basin is allowed (a system renumbered EP→CP keeps
+    DeepMind's original invest ID) but only wins if no same-basin invest
+    matches.
+    """
+    if not data:
+        return None
+    if atcf_id in data:
+        return atcf_id
+    if _is_invest(atcf_id):
+        return None                      # we ARE the invest; nothing to remap
+    pos = _resolve_storm_position(atcf_id)
+    if pos is None:
+        return None
+    slat, slon, _ = pos
+    basin = atcf_id[:2].upper()
+
+    best = None                          # (same_basin_rank, dist_deg, track_id)
+    for tid, track in data.items():
+        if not _is_invest(tid):
+            continue
+        t0 = _wl_track_t0(track)
+        if t0 is None:
+            continue
+        d = _haversine_deg(slat, slon, t0[0], t0[1])
+        if d > max_deg:
+            continue
+        rank = 0 if tid[:2].upper() == basin else 1
+        if best is None or (rank, d) < (best[0], best[1]):
+            best = (rank, d, tid)
+
+    if best is None:
+        return None
+    print(f"[WeatherLab] {atcf_id} not in cycle — matched invest track "
+          f"{best[2]} at {best[1]:.2f}° (same_basin={best[0] == 0})")
+    return best[2]
+
+
 @router.get("/storm/{atcf_id}/weatherlab")
 def get_storm_weatherlab(atcf_id: str):
     """Fetch DeepMind WeatherLab ensemble forecasts for a storm.
@@ -8142,20 +8204,24 @@ def get_storm_weatherlab(atcf_id: str):
     data = None
     used_date = None
     used_hour = None
+    track_id = None
     for date_str, hour_str in _genesis_candidates(now=now):
         data = _fetch_weatherlab_csv(date_str, hour_str)
-        if data and atcf_id in data:
+        # Exact ID first; fall back to the nearest invest track, which is how
+        # a freshly-upgraded storm appears while DeepMind's pairing catches up.
+        track_id = _weatherlab_match_id(data, atcf_id) if data else None
+        if track_id:
             used_date = date_str
             used_hour = hour_str
             break
 
-    if not data or atcf_id not in data:
+    if not track_id:
         raise HTTPException(
             status_code=404,
             detail=f"WeatherLab data not found for {atcf_id}",
         )
 
-    storm = data[atcf_id]
+    storm = data[track_id]
     init_time = used_date.replace("-", "") + used_hour
     cycle_dt = _genesis_cycle_dt(used_date, used_hour)
     cycle_age_h = (now - cycle_dt).total_seconds() / 3600.0
@@ -8171,6 +8237,10 @@ def get_storm_weatherlab(atcf_id: str):
         content={
             "model": "DeepMind FNV3",
             "init_time": init_time,
+            # track_id differs from atcf_id when DeepMind is still carrying
+            # the system under its invest number (see _weatherlab_match_id).
+            "track_id": track_id,
+            "matched_by": "exact" if track_id == atcf_id else "invest_proximity",
             "members": storm["members"],
             "ensemble_mean": storm["ensemble_mean"],
             "n_members": len(storm["members"]),
@@ -11697,29 +11767,44 @@ def get_storm_weatherlab_ensemble(atcf_id: str):
     data = None
     used_date = None
     used_hour = None
+    track_id = None
     for date_str, hour_str in _genesis_candidates(now=now):
         # Fetch ALL storms (no filter) so the full CSV is cached for all
         # subsequent per-storm requests within the TTL window.
         data = _fetch_weatherlab_large_csv(date_str, hour_str,
                                            target_track=None)
-        if data and atcf_id in data:
+        if not data:
+            continue
+        if atcf_id in data:
+            track_id = atcf_id
+        else:
+            # The 1000-member CSV carries no positions, so resolve the
+            # invest→named remap off the 50-member cycle (same track IDs)
+            # and reuse the answer here. See _weatherlab_match_id.
+            alias = _weatherlab_match_id(
+                _fetch_weatherlab_csv(date_str, hour_str), atcf_id)
+            if alias and alias in data:
+                track_id = alias
+        if track_id:
             used_date = date_str
             used_hour = hour_str
             break
 
-    if not data or atcf_id not in data:
+    if not track_id:
         raise HTTPException(
             status_code=404,
             detail=f"WeatherLab 1000-member data not found for {atcf_id}",
         )
 
-    storm = data[atcf_id]
+    storm = data[track_id]
     init_time = used_date.replace("-", "") + used_hour
 
     return JSONResponse(
         content={
             "model": "DeepMind FNV3 (1000 members)",
             "init_time": init_time,
+            "track_id": track_id,
+            "matched_by": "exact" if track_id == atcf_id else "invest_proximity",
             "n_members": storm["n_members"],
             "lead_times_h": storm["lead_times_h"],
             "intensity": storm["intensity"],
@@ -12665,6 +12750,81 @@ def _resolve_storm_position(atcf_id: str) -> Optional[tuple[float, float, str]]:
     )
 
 
+def _attach_ventilation(payload: dict, sst_c: Optional[float]) -> bool:
+    """Compute the Tang & Emanuel ventilation index into payload["ventilation"].
+
+    VI = V_shear · χ_m / PI, with χ_m from the 100–300 km inner-annulus T/q
+    (`chi_inputs`, built in _compute_gfs_shear) and empirical DeMaria–Kaplan
+    PI from OISST SST. Same favorability.compute_vi() the ΔV climatology
+    builder uses, so the live value and the climo distribution share one
+    scale. Returns True if a block was added.
+
+    Split out of the endpoint body so a payload served from cache WITHOUT a
+    ventilation block (SST was slow when it was computed) can be backfilled
+    later instead of staying "n/a" for the whole GFS cycle.
+    """
+    if not payload or payload.get("ventilation"):
+        return False
+    if payload.get("method", "ships") != "ships":
+        return False
+    if sst_c is None:
+        return False
+    ci = payload.get("chi_inputs") or {}
+    if not ci:
+        return False
+    try:
+        # Shear = SHIPS 850–200 hPa env magnitude (magnitude_kt), matching
+        # Tang & Emanuel's 850–200 deep-layer shear layer.
+        vi = favorability.compute_vi(
+            shear_kt=payload.get("magnitude_kt"),
+            t_b_k=ci.get("t_b_k"), q_b=ci.get("q_b"),
+            t_m_env_k=ci.get("t_m_env_k"), q_m_env=ci.get("q_m_env"),
+            t_m_sat_k=ci.get("t_m_sat_k"),
+            sst_c=sst_c,
+        )
+    except Exception as e:
+        logger.debug(f"[vi] ventilation index failed for "
+                     f"{payload.get('atcf_id')}: {e}")
+        return False
+    if not vi:
+        return False
+    vi["sst_c"] = round(sst_c, 2)
+    vi["chi_annulus_km"] = ci.get("annulus_km")
+    vi["shear_layer_hpa"] = [850, 200]
+    vi["chi_mid_hpa"] = ci.get("mid_hpa")
+    payload["ventilation"] = vi
+    return True
+
+
+def _backfill_ventilation(payload: dict, atcf_id: str, cycle_iso: str,
+                          params_key: str) -> dict:
+    """Lazily add the ventilation block to a CACHED shear payload using the
+    memoized OISST point (never a blocking fetch). Re-persists to GCS on
+    success so sibling Cloud Run instances get the filled payload too."""
+    if not payload or payload.get("ventilation"):
+        return payload
+    if payload.get("method", "ships") != "ships" or not payload.get("chi_inputs"):
+        return payload
+    lat, lon = payload.get("lat"), payload.get("lon")
+    if lat is None or lon is None:
+        return payload
+    sst_c = _peek_oisst_point(lat, lon).get("sst_c")
+    if sst_c is None:
+        # Nothing memoized yet — arm the (non-blocking) fetch so the next
+        # request can fill it in.
+        threading.Thread(
+            target=_fetch_oisst_point, args=(lat, lon),
+            kwargs={"timeout": _SST_SLOW_TIMEOUT}, daemon=True).start()
+        return payload
+    if _attach_ventilation(payload, sst_c):
+        threading.Thread(
+            target=_gcs_put_shear,
+            args=(atcf_id, cycle_iso, payload, params_key),
+            daemon=True,
+        ).start()
+    return payload
+
+
 @router.get("/storm/{atcf_id}/shear")
 def get_storm_shear(
     atcf_id: str,
@@ -12739,10 +12899,14 @@ def get_storm_shear(
     with _shear_mem_lock:
         hit = _shear_mem_cache.get(cache_key)
         if hit and time.time() - hit["ts"] < _SHEAR_CACHE_TTL:
-            return JSONResponse(
-                content=hit["data"],
-                headers={"Cache-Control": "public, max-age=1800"},
-            )
+            cached = hit["data"]
+        else:
+            cached = None
+    if cached is not None:
+        return JSONResponse(
+            content=_backfill_ventilation(cached, atcf_id, cycle_iso, params_key),
+            headers={"Cache-Control": "public, max-age=1800"},
+        )
 
     # GCS warm cache. The helper bakes method+params into the blob name
     # so old SHIPS-only entries (shear-v1) don't collide with the new
@@ -12754,7 +12918,7 @@ def get_storm_shear(
             while len(_shear_mem_cache) > _SHEAR_MEM_MAX:
                 _shear_mem_cache.pop(next(iter(_shear_mem_cache)))
         return JSONResponse(
-            content=gcs_hit,
+            content=_backfill_ventilation(gcs_hit, atcf_id, cycle_iso, params_key),
             headers={"Cache-Control": "public, max-age=1800"},
         )
 
@@ -12804,31 +12968,11 @@ def get_storm_shear(
     payload.setdefault("method", "ships")
 
     # Ventilation index (Tang & Emanuel 2012) — SHIPS deep-layer shear only.
-    # VI = V_shear · χ_m / PI, with χ_m from the 100–300 km inner-annulus T/q
-    # (chi_inputs above) and empirical DeMaria–Kaplan PI from OISST SST.
-    # Same favorability.compute_vi() the ΔV climatology builder uses, so the
-    # live value and the climo distribution share one scale.
+    # A missed SST here is NOT fatal: the payload caches without a
+    # `ventilation` block and _backfill_ventilation fills it on a later
+    # request once the memoized OISST point lands.
     if method == "ships":
-        try:
-            ci = payload.get("chi_inputs") or {}
-            sst_c = _fetch_oisst_point(slat, slon).get("sst_c")
-            # Shear = SHIPS 850–200 hPa env magnitude (magnitude_kt), matching
-            # Tang & Emanuel's 850–200 deep-layer shear layer.
-            vi = favorability.compute_vi(
-                shear_kt=payload.get("magnitude_kt"),
-                t_b_k=ci.get("t_b_k"), q_b=ci.get("q_b"),
-                t_m_env_k=ci.get("t_m_env_k"), q_m_env=ci.get("q_m_env"),
-                t_m_sat_k=ci.get("t_m_sat_k"),
-                sst_c=sst_c,
-            ) if sst_c is not None else None
-            if vi:
-                vi["sst_c"] = round(sst_c, 2)
-                vi["chi_annulus_km"] = ci.get("annulus_km")
-                vi["shear_layer_hpa"] = [850, 200]
-                vi["chi_mid_hpa"] = ci.get("mid_hpa")
-                payload["ventilation"] = vi
-        except Exception as e:
-            logger.debug(f"[vi] ventilation index failed for {atcf_id}: {e}")
+        _attach_ventilation(payload, _fetch_oisst_point(slat, slon).get("sst_c"))
 
     with _shear_mem_lock:
         _shear_mem_cache[cache_key] = {"data": payload, "ts": time.time()}
@@ -12899,20 +13043,113 @@ def _erddap_num(v, ndigits: int = 2, nonneg: bool = False):
     return round(f, ndigits)
 
 
-def _fetch_oisst_point(lat: float, lon: float) -> dict:
-    """Latest OISST SST + anomaly at the nearest 0.25° grid point."""
+# ── OISST point memo ─────────────────────────────────────────────────
+# CoastWatch's OISST aggregation answers a single-point griddap query in
+# anywhere from ~2 s to ~45 s (measured 2026-08-12: identical query returned
+# in 1.9 s and 43 s minutes apart). A 15 s request-path timeout therefore
+# misses often, and every miss costs BOTH the /ocean SST meter AND the
+# ventilation index (no SST → no empirical PI → compute_vi is skipped, so
+# the storm page shows "n/a" with the shear/χ_m inputs sitting right there).
+# So: memoize the point per (0.25° cell, UTC day) — /ocean and /shear share
+# one fetch — and when the fast attempt times out, re-query on a background
+# thread with a long timeout so the NEXT caller is served from memory
+# instead of waiting on ERDDAP again.
+_SST_POINT_TTL = 6 * 3600          # matches _OCEAN_CACHE_TTL
+_SST_SLOW_TIMEOUT = 60.0           # background retry — off the request path
+_SST_POINT_MAX = 400
+_SST_MISS = {"sst_c": None, "sst_anom_c": None, "sst_date": None}
+_sst_point_cache: dict = {}        # (lat_q, lon_q, day) -> {"data": …, "ts": float}
+_sst_point_lock = threading.Lock()
+_sst_point_inflight: set = set()
+
+
+def _oisst_point_url(lat: float, lon: float) -> str:
     lon180 = _norm_lon180(lon)
     sel = f"%5B(last)%5D%5B(0.0)%5D%5B({lat:.4f})%5D%5B({lon180:.4f})%5D"
-    q = f"{_OISST_ERDDAP}?sst{sel},anom{sel}"
-    row = _erddap_point_json(q)
+    return f"{_OISST_ERDDAP}?sst{sel},anom{sel}"
+
+
+def _sst_point_key(lat: float, lon: float) -> tuple:
+    """Quantize to the OISST 0.25° grid so nearby callers (storm center vs
+    the same storm an hour later) share one cache entry."""
+    return (round(float(lat) * 4) / 4,
+            round(_norm_lon180(lon) * 4) / 4,
+            _dt.now(timezone.utc).strftime("%Y%m%d"))
+
+
+def _sst_point_store(key: tuple, data: dict) -> None:
+    with _sst_point_lock:
+        _sst_point_cache[key] = {"data": data, "ts": time.time()}
+        while len(_sst_point_cache) > _SST_POINT_MAX:
+            _sst_point_cache.pop(next(iter(_sst_point_cache)))
+
+
+def _oisst_row_to_dict(row: Optional[dict]) -> Optional[dict]:
     if not row:
-        return {"sst_c": None, "sst_anom_c": None, "sst_date": None}
+        return None
     t = row.get("time") or ""
     return {
         "sst_c": _erddap_num(row.get("sst")),
         "sst_anom_c": _erddap_num(row.get("anom")),
         "sst_date": t[:10] if t else None,
     }
+
+
+def _sst_point_bg_refresh(lat: float, lon: float, key: tuple) -> None:
+    """Long-timeout OISST retry on a daemon thread. Only ever populates the
+    memo — nobody is waiting on it."""
+    try:
+        got = _oisst_row_to_dict(
+            _erddap_point_json(_oisst_point_url(lat, lon),
+                               timeout=_SST_SLOW_TIMEOUT))
+        if got:
+            _sst_point_store(key, got)
+            logger.info(f"[oisst] slow-path refresh ok for {key}: "
+                        f"sst={got.get('sst_c')}")
+    except Exception as e:
+        logger.debug(f"[oisst] slow-path refresh failed for {key}: {e}")
+    finally:
+        with _sst_point_lock:
+            _sst_point_inflight.discard(key)
+
+
+def _fetch_oisst_point(lat: float, lon: float, timeout: float = 15.0) -> dict:
+    """Latest OISST SST + anomaly at the nearest 0.25° grid point, memoized
+    per (0.25° cell, UTC day). A land/masked point returns real nulls and is
+    cached as such; only a network failure/timeout arms the slow retry."""
+    key = _sst_point_key(lat, lon)
+    with _sst_point_lock:
+        hit = _sst_point_cache.get(key)
+        if hit and time.time() - hit["ts"] < _SST_POINT_TTL:
+            return dict(hit["data"])
+
+    row = _erddap_point_json(_oisst_point_url(lat, lon), timeout=timeout)
+    got = _oisst_row_to_dict(row)
+    if got is not None:            # ERDDAP answered (even NaN over land)
+        _sst_point_store(key, got)
+        return dict(got)
+
+    # Timed out or empty result — retry off the request path so the memo is
+    # warm for the next call (and for the lazy VI backfill on /shear).
+    with _sst_point_lock:
+        already = key in _sst_point_inflight
+        if not already:
+            _sst_point_inflight.add(key)
+    if not already:
+        threading.Thread(target=_sst_point_bg_refresh,
+                         args=(lat, lon, key), daemon=True).start()
+    return dict(_SST_MISS)
+
+
+def _peek_oisst_point(lat: float, lon: float) -> dict:
+    """Memo-only SST lookup — never touches the network. Used by the lazy
+    ventilation backfill on cached /shear payloads."""
+    key = _sst_point_key(lat, lon)
+    with _sst_point_lock:
+        hit = _sst_point_cache.get(key)
+        if hit and time.time() - hit["ts"] < _SST_POINT_TTL:
+            return dict(hit["data"])
+    return dict(_SST_MISS)
 
 
 def _fetch_tchp_point(lat: float, lon: float) -> dict:
