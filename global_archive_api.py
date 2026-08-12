@@ -6305,7 +6305,11 @@ def get_vdm(
 _minob_cache: OrderedDict = OrderedDict()
 _MINOB_CACHE_TTL = 7 * 86400
 _MINOB_CACHE_MAX = 50
-_MINOB_GCS_PREFIX = "recon/minob/v3"
+# v4: the decoder changed what the stored fields MEAN — the legacy D-value no
+# longer masquerades as a surface pressure, NOAA altitudes are metres, and
+# fl_pres_mb is new. Historical storms are cached here indefinitely, so without
+# the bump every previously-viewed storm would keep serving the old decode.
+_MINOB_GCS_PREFIX = "recon/minob/v4"
 
 
 def _minob_gcs_key(storm_name: str, year: int) -> str:
