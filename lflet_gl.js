@@ -647,22 +647,45 @@
         _addToGL: function (map) {
             this._map = map; var gl = map._gl, id = this._id, self = this;
             var fn = this._styleIsFn(), st = fn ? {} : (this.options.style || {});
-            map._whenStyle(function () {
-                if (gl.getSource(id)) return;
-                gl.addSource(id, { type: 'geojson', data: self._data });
-                var gz = map._paneZ(self.options.pane || 'overlayPane');
-                var lineColor = fn ? ['coalesce', ['get', '_lc'], '#3388ff'] : (st.color || '#000');
-                var lineWidth = fn ? ['coalesce', ['get', '_lw'], 1] : (st.weight != null ? st.weight : 1);
-                var lineOpac = fn ? ['coalesce', ['get', '_lo'], 1] : (st.opacity != null ? st.opacity : 1);
-                if ((fn && self._anyFill) || (!fn && st.fill && st.fillColor)) map._glAdd({ id: id + '-f', type: 'fill', source: id,
-                    paint: { 'fill-color': fn ? ['coalesce', ['get', '_fc'], '#3388ff'] : st.fillColor,
-                             'fill-opacity': fn ? ['coalesce', ['get', '_fo'], 0.2] : (st.fillOpacity != null ? st.fillOpacity : 0.2) } }, gz - 1);
-                map._glAdd({ id: id + '-l', type: 'line', source: id, layout: { 'line-cap': 'round', 'line-join': 'round' },
-                    paint: { 'line-color': lineColor, 'line-width': lineWidth, 'line-opacity': lineOpac } }, gz);
+            this._rmFlag = false;
+            // Verify-and-retry: a layer toggled on while the IR animation is
+            // churning image sources can hit a style that momentarily reports
+            // loaded but rejects addSource/addLayer (MapLibre fires an
+            // ErrorEvent — "source not found" — instead of throwing), or a
+            // map whose 'load' event is minutes away because frames keep the
+            // style perpetually busy. Poll until the add verifiably lands.
+            var attempt = function () {
+                if (self._rmFlag || self._map !== map) return;
+                if (gl.getSource(id)) { self._added = true; return; }
+                if (!(map._loaded || gl.isStyleLoaded())) { setTimeout(attempt, 150); return; }
+                try {
+                    gl.addSource(id, { type: 'geojson', data: self._data });
+                    var gz = map._paneZ(self.options.pane || 'overlayPane');
+                    var lineColor = fn ? ['coalesce', ['get', '_lc'], '#3388ff'] : (st.color || '#000');
+                    var lineWidth = fn ? ['coalesce', ['get', '_lw'], 1] : (st.weight != null ? st.weight : 1);
+                    var lineOpac = fn ? ['coalesce', ['get', '_lo'], 1] : (st.opacity != null ? st.opacity : 1);
+                    if ((fn && self._anyFill) || (!fn && st.fill && st.fillColor)) map._glAdd({ id: id + '-f', type: 'fill', source: id,
+                        paint: { 'fill-color': fn ? ['coalesce', ['get', '_fc'], '#3388ff'] : st.fillColor,
+                                 'fill-opacity': fn ? ['coalesce', ['get', '_fo'], 0.2] : (st.fillOpacity != null ? st.fillOpacity : 0.2) } }, gz - 1);
+                    map._glAdd({ id: id + '-l', type: 'line', source: id, layout: { 'line-cap': 'round', 'line-join': 'round' },
+                        paint: { 'line-color': lineColor, 'line-width': lineWidth, 'line-opacity': lineOpac } }, gz);
+                } catch (e) { /* fall through to verification */ }
+                // A rejected add fires an ErrorEvent rather than throwing —
+                // verify, clean up the partial state, and retry.
+                if (!gl.getSource(id) || !gl.getLayer(id + '-l')) {
+                    ['-l', '-f'].forEach(function (suf) { try { if (gl.getLayer(id + suf)) gl.removeLayer(id + suf); } catch (e2) {} });
+                    try { if (gl.getSource(id)) gl.removeSource(id); } catch (e2) {}
+                    setTimeout(attempt, 250);
+                    return;
+                }
                 self._added = true;
-            });
+            };
+            // NOT map._whenStyle(attempt): that queues on the map 'load'
+            // event, which never fires while IR frame churn keeps the style
+            // busy. attempt() self-polls until the style accepts the add.
+            attempt();
         },
-        _removeFromGL: function (map) { var gl = map._gl; [this._id + '-l', this._id + '-f'].forEach(function (l) { try { if (gl.getLayer(l)) gl.removeLayer(l); } catch (e) {} }); try { if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {} },
+        _removeFromGL: function (map) { this._rmFlag = true; var gl = map._gl; [this._id + '-l', this._id + '-f'].forEach(function (l) { try { if (gl.getLayer(l)) gl.removeLayer(l); } catch (e) {} }); try { if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {} },
         // setStyle on a whole GeoJSON layer (e.g. env contours dimming with the
         // opacity slider). Applies to the line layer + fill layer if present.
         setStyle: function (st) { st = st || {}; var gl = this._map && this._map._gl; if (!gl) { Object.assign(this.options, st); return this; }

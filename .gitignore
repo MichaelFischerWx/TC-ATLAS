@@ -47,3 +47,10 @@ mosaic_out2/
 ir2a_webgl.html
 _ir2a_anim/
 ir2a_anim.html
+
+# Local dev artifacts (wrangler state, misc local caches)
+.wrangler/
+cache/
+
+# Daily-index intermediates (JSON payloads ship to GCS; parquet stays local)
+data/*.parquet
