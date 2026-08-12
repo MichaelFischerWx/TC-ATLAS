@@ -381,6 +381,10 @@
     var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = null,
         _hdobFlatSrc = null, _hdobChartBound = false;
     var _hdobStormOpts = [], _hdobBuiltToggles = false;
+    var _hdobAutoSel = null;   // last value the picker defaulted to on its own
+                               // (null once the user picks) — see _hdobPopulateStorms
+    var _hdobReqSeq = 0;       // /recon/realtime request token; a response whose token
+                               // is stale belongs to a superseded selection
     var _hdobFlightSel = '';   // '' = all flights; else a single aircraft tail (filters chart + map)
     var _hdobGrid = null;      // lat/lon graticule controller for the recon map (lazy)
     var _hdobFl1s = false;     // NOAA flight-level wind: false = 10-s mean (ops), true = full 1-s
@@ -457,7 +461,7 @@
         _hdobPopulateStorms();
         if (!_hdobBuiltToggles) { _hdobBuildToggles(); _hdobBuildBarbVarUI(); _hdobBuiltToggles = true; }
         var sel = document.getElementById('recon-hdob-storm');
-        if (sel && !_hdobAtcf && sel.value) window._reconHdobSelectStorm(sel.value);
+        if (sel && !_hdobAtcf && sel.value) window._reconHdobSelectStorm(sel.value, true);
         _hdobFetchMissions();  // discover standalone flights (mission-centric fallback)
     }
 
@@ -474,7 +478,7 @@
         var hdobActive = panel && panel.style.display !== 'none';
         if (hdobActive && !hadStorm) {
             var sel = document.getElementById('recon-hdob-storm');
-            if (sel && sel.value) window._reconHdobSelectStorm(sel.value);
+            if (sel && sel.value) window._reconHdobSelectStorm(sel.value, true);
         }
     });
 
@@ -535,28 +539,42 @@
             (s.has_recon ? reconOpts : otherOpts).push(o);
         }
         opts = opts.concat(reconOpts).concat(otherOpts);
-        var seen = {}, uniq = [];
+        var seen = {}, uniq = [], byAtcf = {};
         for (var k = 0; k < opts.length; k++) {
-            if (opts[k].atcf && !seen[opts[k].atcf]) { seen[opts[k].atcf] = 1; uniq.push(opts[k]); }
+            if (opts[k].atcf && !seen[opts[k].atcf]) {
+                seen[opts[k].atcf] = 1; uniq.push(opts[k]); byAtcf[opts[k].atcf] = opts[k];
+            }
         }
-        _hdobStormOpts = uniq;
-        // Mission-centric fallback: standalone active flights NOT near any tracked
-        // storm (a flight into an undesignated disturbance that storm attribution
-        // would miss). Ones near a tracked storm are already covered by it.
+        // Mission-centric fallback: standalone active flights NOT attributable to
+        // any tracked storm (a flight into an undesignated disturbance that storm
+        // attribution would miss). Ones flying a tracked storm are already covered
+        // by it — and they also FLAG it ✈ here, because a mission is airborne long
+        // before has_recon (a 15-min server cache) catches up.
         _hdobMissionInfo = {};
         var missionOpts = [];
         for (var mi = 0; mi < _hdobMissions.length; mi++) {
             var mm = _hdobMissions[mi];
             if (!mm.tail || mm.lat == null || mm.lon == null) continue;
-            var nearStorm = false;
-            for (var si = 0; si < uniq.length; si++) {
-                if (uniq[si].lat == null || uniq[si].lon == null) continue;
-                if (Math.abs(uniq[si].lat - mm.lat) <= 5 && Math.abs(uniq[si].lon - mm.lon) <= 5) { nearStorm = true; break; }
+            // The mission id decodes to the storm the sortie was FILED for, so it
+            // beats proximity: a ferry leg is still hours from its target.
+            var owner = mm.atcf ? byAtcf[String(mm.atcf).toUpperCase()] : null;
+            if (!owner) {
+                for (var si = 0; si < uniq.length; si++) {
+                    if (uniq[si].lat == null || uniq[si].lon == null) continue;
+                    if (Math.abs(uniq[si].lat - mm.lat) <= 5 && Math.abs(uniq[si].lon - mm.lon) <= 5) { owner = uniq[si]; break; }
+                }
             }
-            if (nearStorm) continue;
+            if (owner) { owner.recon = true; continue; }
             _hdobMissionInfo[mm.tail] = mm;
             missionOpts.push(mm);
         }
+        // Re-sort now that missions have flagged their storms: replay pinned first,
+        // then recon-active. (The initial has_recon split above can't see them.)
+        uniq.sort(function (a, b) {
+            if (!!a.replay !== !!b.replay) return a.replay ? -1 : 1;
+            return (b.recon ? 1 : 0) - (a.recon ? 1 : 0);
+        });
+        _hdobStormOpts = uniq;
         var cur = sel.value;
         sel.innerHTML = '';
         if (!uniq.length && !missionOpts.length) {
@@ -579,8 +597,32 @@
                 (missionOpts[mo].label ? ' · ' + missionOpts[mo].label : '') + ' (flight)';
             sel.appendChild(mop);
         }
-        var def = uniq.length ? uniq[0].atcf : ('mission:' + missionOpts[0].tail);
-        sel.value = (cur && (seen[cur] || cur.indexOf('mission:') === 0)) ? cur : def;
+        // Default to where the planes actually are: a recon-active storm, else a
+        // standalone flight, and only then the first storm on the list. Landing on
+        // an arbitrary quiet storm ("0 obs · 0 sondes · 0 VDM") while a mission is
+        // airborne elsewhere reads as a broken page.
+        var def = '';
+        for (var d = 0; d < uniq.length; d++) {
+            if (uniq[d].recon) { def = uniq[d].atcf; break; }
+        }
+        if (!def && missionOpts.length) def = 'mission:' + missionOpts[0].tail;
+        if (!def && uniq.length) def = uniq[0].atcf;
+        // Keep the user's own choice. An earlier AUTO pick is not a choice, though:
+        // this runs again as the storm list and the mission list land, and the
+        // first pass has neither, so a sticky auto-default would freeze the picker
+        // on whatever was listed first.
+        var keep = cur && cur !== _hdobAutoSel &&
+                   (seen[cur] || (cur.indexOf('mission:') === 0 && _hdobMissionInfo[cur.slice(8)]));
+        sel.value = keep ? cur : def;
+        if (!keep) {
+            var wasAuto = _hdobAutoSel;
+            _hdobAutoSel = def;
+            // Auto-load the better default when it supersedes an earlier auto pick
+            // that has already been loaded (otherwise the caller does the loading).
+            if (def && wasAuto && def !== wasAuto && _hdobAtcf) {
+                window._reconHdobSelectStorm(def, true);
+            }
+        }
     }
 
     function _hdobFetchMissions() {
@@ -596,14 +638,17 @@
                 var panel = document.querySelector('#recon-main .recon-sub-panel[data-sub="hdob"]');
                 var sel = document.getElementById('recon-hdob-storm');
                 if (panel && panel.style.display !== 'none' && !_hdobAtcf && sel && sel.value) {
-                    window._reconHdobSelectStorm(sel.value);
+                    window._reconHdobSelectStorm(sel.value, true);
                 }
             })
             .catch(function () {});
     }
 
-    window._reconHdobSelectStorm = function (value) {
+    /** `auto` = chosen by the picker's own defaulting, not by the user. Only a
+     *  user (or an explicit deep-link) pins the selection against re-defaulting. */
+    window._reconHdobSelectStorm = function (value, auto) {
         if (!value) return;
+        if (!auto) _hdobAutoSel = null;
         _hdobData = null; _hdobFitDone = false; _hdobReplay = null; _hdobLoggedLoad = false;
         _hdobResCache = { '10': null, '1': null };   // payloads belong to the old selection
         _hdobFlightSel = '';   // back to all flights when switching storm/mission
@@ -614,7 +659,11 @@
             var mm = _hdobMissionInfo[tail] || { tail: tail };
             _hdobMissionTail = tail;
             _hdobName = mm.label || tail;
-            _hdobAtcf = (mm.basin === 'EP') ? 'EP992026' : 'AL992026';  // synthetic, for basin only
+            // Only the BASIN of this id is used (it picks the archive directory),
+            // but CP lives in the Pacific dirs and 'AL99' would send the fetch to
+            // the Atlantic. Prefer the mission's own decoded id when it has one.
+            _hdobAtcf = mm.atcf ||
+                ((mm.basin === 'EP' || mm.basin === 'CP') ? 'EP992026' : 'AL992026');
             _hdobLat = (mm.lat != null) ? mm.lat : null;
             _hdobLon = (mm.lon != null) ? mm.lon : null;
         } else {
@@ -750,6 +799,10 @@
         var kit = window._ReconKit;
         if (!kit || !_hdobAtcf) return;
         var statusEl = document.getElementById('recon-hdob-status');
+        // Selections can supersede each other faster than a cold blob builds (~10 s),
+        // and the loser landing last wins the panel: the quiet storm the picker
+        // opened on would repaint "0 obs" over the flight the user is now looking at.
+        var req = ++_hdobReqSeq;
         var url = kit.apiBase() + '/recon/realtime?atcf_id=' + encodeURIComponent(_hdobAtcf) + '&hours=24';
         if (_hdobMissionTail) {
             url += '&tail=' + encodeURIComponent(_hdobMissionTail);  // mission mode
@@ -766,6 +819,7 @@
         fetch(url, { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (j) {
+                if (req !== _hdobReqSeq) return;   // superseded by a newer selection
                 if (!j || j.error) { if (statusEl) statusEl.textContent = 'no data'; return; }
                 _hdobData = j;
                 _hdobResCache[_hdobFl1s ? '1' : '10'] = j;   // keep the toggle instant
@@ -786,7 +840,9 @@
                         ' sondes · ' + (c.vdms || 0) + ' VDM';
                 }
             })
-            .catch(function () { if (statusEl) statusEl.textContent = 'fetch error'; });
+            .catch(function () {
+                if (req === _hdobReqSeq && statusEl) statusEl.textContent = 'fetch error';
+            });
     }
 
     function _hdobShowEmpty(show) {

@@ -94,6 +94,69 @@ _STORM_CORE_DEG = 5.0   # true-distance proximity for a non-conflicting flight (
                         # inbound ferry leg counts; a research flight is excluded by its
                         # CONFLICTING label regardless of distance, so this can be wide.
 
+# HDOB mission-ID field — the token right after the aircraft tail in the header
+# ("NOAA2 0201C PTC01-C  HDOB 10 20260812"). It packs mission number, CYCLONE
+# NUMBER and BASIN LETTER as MMSSB, so "0201C" = mission 02, cyclone 01, Central
+# Pacific = CP012026. This is the one AUTHORITATIVE storm identifier an HDOB
+# carries: it holds on a ferry leg still 8° from the center, and it survives a
+# header label the NHC name doesn't match (USAF filed "PTC01-C" for a storm NHC
+# lists as "One-C"). USAF files a non-storm form ("WXWXA") on unnumbered
+# missions, which resolves to None and leaves label/proximity attribution.
+_MISSION_BASIN = {"L": "AL", "E": "EP", "C": "CP"}
+_MISSION_BASIN_LTR = {v: k for k, v in _MISSION_BASIN.items()}   # AL -> L
+
+
+def _mission_atcf(token: str, year: int):
+    """'0201C' + 2026 -> 'CP012026'. None for a non-storm mission id or serial."""
+    m = re.fullmatch(r"\d{2}(\d{2})([LEC])", (token or "").upper().strip())
+    if not m or m.group(1) == "00":
+        return None
+    return "%s%s%04d" % (_MISSION_BASIN[m.group(2)], m.group(1), year)
+
+
+def _label_matches_storm(lbl: str, atcf_id: str, name: str = "") -> bool:
+    """True only when an HDOB/TEMP-DROP system label SPECIFICALLY identifies this
+    storm. Matching is name-INVARIANT (basin+cyclone AL01, short form 01L, and
+    the bare cyclone number for a PTC/TD placeholder like PTC01-C) so it survives
+    a TD→TS rename and a header label NHC's own name doesn't match — the storm's
+    ATCF identity never changes. A bare generic 'INVEST' (no number) is
+    deliberately NOT a match: it can't distinguish two simultaneous invests, so
+    those rely on position instead.
+
+    Module-level so the ✈ RECON badge (ir_monitor_api._has_active_recon) and the
+    recon blob's own attribution apply ONE rule. They used to disagree — the
+    badge compared the header label to the display name verbatim, so a NOAA2
+    sortie filed as "PTC01-C" never flagged the storm NHC calls "One-C"."""
+    n = re.sub(r"[^A-Z0-9]", "", (lbl or "").upper())
+    if n in _GENERIC_LABELS:
+        return False
+    atcf_id = (atcf_id or "").upper()
+    bcy = atcf_id[:4]                  # e.g. AL01 / AL90
+    cy = atcf_id[2:4]                  # 01 / 90
+    # Only NHC's own basins have a recon short form. Elsewhere (WP/IO/SH) there is
+    # no basin letter, and matching on the bare cyclone number would fire on any
+    # label that merely CONTAINS those two digits — WP01 on a "PTC01-C" bulletin.
+    basin_ltr = _MISSION_BASIN_LTR.get(atcf_id[:2], "")
+    # The query "name" is the storm display name ("One", "Milton", "Invest 90L").
+    # For invests the meaningful identifier is the number/suffix ("90L"), so strip
+    # the generic "INVEST" prefix to get the discriminating token.
+    norm_q = re.sub(r"[^A-Z0-9]", "", (name or "").upper())
+    qword = norm_q[6:] if norm_q.startswith("INVEST") else norm_q   # INVEST90L -> 90L
+    if bcy and bcy in n:                       # AL01 / AL90 (basin+cyclone #)
+        return True
+    if basin_ltr and (cy + basin_ltr) in n:    # 01L / 90L / 01C — ATCF short form
+        return True
+    # PTC/TD placeholders carry the cyclone number with the basin letter split off
+    # by a hyphen ("PTC01-C" -> PTC01C, which the short form above catches) or
+    # dropped entirely ("PTC01", "TD01"). Anchor on the leading placeholder word so
+    # a name that merely contains the digits can't collide.
+    if basin_ltr and re.fullmatch(
+            r"(?:PTC|TD|TS|STS|HU|PC)0*" + cy + "[" + basin_ltr + "]?", n):
+        return True
+    if qword and len(qword) >= 2 and (qword == n or qword in n or n in qword):
+        return True                            # MILTON, ONE, 90L, INVEST90L
+    return False
+
 
 # ── basin → archive directory mapping ────────────────────────────────────────
 
@@ -238,14 +301,17 @@ def _parse_hdob_line(fields: list, base_date: datetime):
 
 
 def _parse_hdob_bulletin(text: str, fname_dt: datetime):
-    """Parse one URNT15/AHONT1 bulletin -> {tail, storm, obs:[...]} (or None).
+    """Parse one URNT15/AHONT1 bulletin -> {tail, storm, atcf, obs:[...]} (or None).
 
     `storm` is the system label the aircraft is flying (the token before HDOB,
     e.g. ONE / AL01 / INVEST / a research-campaign name like TEXAQS11) — used to
-    keep a non-TC research flight out of an actual storm's track."""
+    keep a non-TC research flight out of an actual storm's track.
+    `atcf` is the storm this mission was FILED for, decoded from the mission-ID
+    field (see _mission_atcf) — authoritative when present, None otherwise."""
     lines = text.strip().splitlines()
     tail = None
     storm = None
+    mission = None
     base_date = fname_dt
     obs = []
     in_data = False
@@ -279,6 +345,13 @@ def _parse_hdob_bulletin(text: str, fname_dt: datetime):
                     cand = parts[hi - 1]
                     if re.search(r"[A-Z]", cand):
                         storm = cand
+                # Mission id: the field after the tail. Scan the header tokens
+                # rather than fixing an index — the label slot is sometimes
+                # empty, which shifts everything left.
+                for p in parts[1:hi]:
+                    if _mission_atcf(p, base_date.year):
+                        mission = p
+                        break
             in_data = True
             continue
         if in_data:
@@ -290,7 +363,8 @@ def _parse_hdob_bulletin(text: str, fname_dt: datetime):
                 obs.append(row)
     if not obs:
         return None
-    return {"tail": tail or "UNKN", "storm": storm, "obs": obs}
+    return {"tail": tail or "UNKN", "storm": storm, "mission": mission,
+            "atcf": _mission_atcf(mission, base_date.year), "obs": obs}
 
 
 # ── dropsondes (REPNT3 TEMP DROP) ────────────────────────────────────────────
@@ -1005,6 +1079,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
     # ── HDOB → per-aircraft tracks ──
     aircraft: dict = {}
     aircraft_names: dict = {}   # tail -> {system labels from the bulletins}
+    aircraft_atcf: dict = {}    # tail -> {ATCF ids decoded from the mission-ID field}
     aircraft_src: dict = {}     # tail -> data source ("iwg1" for NOAA 1-s)
     hdob_dir = f"{NHC_RECON_BASE}/{year}/{dirs['hdob']}/"
     hdob_urls = _list_recent_files(hdob_dir, since, sim_now)
@@ -1024,6 +1099,8 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         tk = aircraft.setdefault(parsed["tail"], {})
         if parsed.get("storm"):
             aircraft_names.setdefault(parsed["tail"], set()).add(parsed["storm"])
+        if parsed.get("atcf"):
+            aircraft_atcf.setdefault(parsed["tail"], set()).add(parsed["atcf"])
         for ob in parsed["obs"]:
             tk[ob["t"]] = ob  # dedup by ISO time within a tail
 
@@ -1036,6 +1113,8 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
             tk = aircraft.setdefault(parsed["tail"], {})
             if parsed.get("storm"):
                 aircraft_names.setdefault(parsed["tail"], set()).add(parsed["storm"])
+            if parsed.get("atcf"):
+                aircraft_atcf.setdefault(parsed["tail"], set()).add(parsed["atcf"])
             for ob in parsed["obs"]:
                 tk[ob["t"]] = ob
 
@@ -1048,37 +1127,17 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
 
     # In replay, hide obs the simulated clock hasn't "reached" yet.
     sim_iso = sim_now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    # HDOB carries no ATCF id, so the directory returns EVERY flight in the
-    # window — including non-TC research sorties (e.g. TEXAQS) that share the
-    # AHONT1 feed. Attribute an aircraft to this storm by its bulletin LABEL
-    # (ONE / AL01 / INVEST / cyclone number) OR by being demonstrably at the
-    # storm core; this keeps the real sortie (even its ferry leg) while dropping
-    # a research flight that merely passes within a few degrees.
-    # The query "name" is the storm display name ("One", "Milton", "Invest 90L").
-    # For invests the meaningful identifier is the number/suffix ("90L"), so strip
-    # the generic "INVEST" prefix to get the discriminating token.
+    # The directory returns EVERY flight in the window — including non-TC research
+    # sorties (e.g. TEXAQS) that share the AHONT1 feed. Attribute an aircraft to
+    # this storm by its MISSION ID (authoritative when the crew filed a numbered
+    # mission), else by its bulletin LABEL (ONE / AL01 / INVEST / cyclone number),
+    # else by being demonstrably at the storm core; this keeps the real sortie
+    # (even its ferry leg) while dropping a research flight that merely passes
+    # within a few degrees.
     norm_q = re.sub(r"[^A-Z0-9]", "", (name or "").upper())
-    qword = norm_q[6:] if norm_q.startswith("INVEST") else norm_q   # INVEST90L -> 90L
-    bcy = atcf_id[:4].upper()          # e.g. AL01 / AL90
-    cy = atcf_id[2:4]                  # 01 / 90
-    short = cy + {"AL": "L", "EP": "E", "CP": "C"}.get(atcf_id[:2].upper(), "")  # 01L
 
     def _label_matches(lbl: str) -> bool:
-        """True only when the bulletin label SPECIFICALLY identifies this storm.
-        Matching is name-INVARIANT (basin+cyclone AL01, short form 01L) so it
-        survives a TD→TS rename — the storm's ATCF identity never changes. A bare
-        generic 'INVEST' (no number) is deliberately NOT a match — it can't
-        distinguish two simultaneous invests, so those rely on position instead."""
-        n = re.sub(r"[^A-Z0-9]", "", (lbl or "").upper())
-        if n in _GENERIC_LABELS:
-            return False
-        if bcy and bcy in n:                       # AL01 / AL90 (basin+cyclone #)
-            return True
-        if len(short) >= 2 and short in n:         # 01L / 90L — ATCF short form
-            return True
-        if qword and len(qword) >= 2 and (qword == n or qword in n or n in qword):
-            return True                            # MILTON, ONE, 90L, INVEST90L
-        return False
+        return _label_matches_storm(lbl, atcf_id, name)
 
     aircraft_out = []
 
@@ -1109,6 +1168,12 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
             continue
         labels = aircraft_names.get(tail, set())
         name_ok = any(_label_matches(l) for l in labels)
+        # The mission ID names the storm the sortie was FILED for, so it settles
+        # attribution outright — both ways. A mission filed for a different storm
+        # is that storm's, however close it flies to this one.
+        mids = aircraft_atcf.get(tail, set())
+        atcf_ok = atcf_id.upper() in mids
+        atcf_conflict = bool(mids) and not atcf_ok
         # A flight that explicitly labels itself a DIFFERENT specific system
         # (not this storm, not a bare "INVEST") is that system's sortie — never
         # attribute it here, even if it passes within the core. This is what
@@ -1122,7 +1187,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         at_core = (storm_lat is not None and storm_lon is not None and
                    any(_deg_dist(o["lat"], o["lon"], storm_lat, storm_lon) <= _STORM_CORE_DEG
                        for o in track))
-        keep = name_ok or (at_core and not conflicting)
+        keep = atcf_ok or (not atcf_conflict and (name_ok or (at_core and not conflicting)))
         # Only filter when we have something to match against (a name and/or a
         # position). With neither (shouldn't happen via the UI) keep, as before.
         if (norm_q or storm_lat is not None) and not keep:
@@ -1308,19 +1373,32 @@ def recon_active_missions(hours: int = Query(6, ge=1, le=24)):
     attribution would miss. Cheap: reuses the per-bulletin cache."""
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=hours)
+    since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
     missions: dict = {}
 
     def _merge_mission(parsed, basin):
         if not parsed or not parsed.get("obs"):
             return
+        last = parsed["obs"][-1]
+        # The tgftp "newest bulletin" feeds hold whatever was posted LAST, which
+        # during a quiet spell is days old and from another basin — NOAA2's
+        # yesterday-ferry bulletin sat in the Atlantic feed and stamped its
+        # in-progress Pacific mission "AL". Bound them by the same window the
+        # archive listing is bounded by.
+        if last["t"] < since_iso:
+            return
         tail = parsed["tail"]
         mm = missions.setdefault(tail, {
             "tail": tail, "labels": set(), "n_obs": 0, "basin": basin,
-            "last_t": "", "lat": None, "lon": None})
+            "atcf": None, "last_t": "", "lat": None, "lon": None})
         if parsed.get("storm"):
             mm["labels"].add(parsed["storm"])
+        if parsed.get("atcf"):
+            # Mission ID beats the directory the bulletin was found in: AHOPN1
+            # carries both EP and CP missions.
+            mm["atcf"] = parsed["atcf"]
+            mm["basin"] = parsed["atcf"][:2]
         mm["n_obs"] += len(parsed["obs"])
-        last = parsed["obs"][-1]
         if last["t"] > mm["last_t"]:
             mm["last_t"], mm["lat"], mm["lon"] = last["t"], last["lat"], last["lon"]
 
@@ -1346,7 +1424,7 @@ def recon_active_missions(hours: int = Query(6, ge=1, le=24)):
         "tail": m["tail"],
         "label": (sorted(m["labels"])[0] if m["labels"] else ""),
         "labels": sorted(m["labels"]),
-        "n_obs": m["n_obs"], "basin": m["basin"],
+        "n_obs": m["n_obs"], "basin": m["basin"], "atcf": m["atcf"],
         "last_t": m["last_t"], "lat": m["lat"], "lon": m["lon"],
     } for m in missions.values()]
     out.sort(key=lambda x: x["last_t"], reverse=True)

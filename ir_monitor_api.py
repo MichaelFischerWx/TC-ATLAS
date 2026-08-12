@@ -2732,8 +2732,9 @@ _RECON_LOOKBACK_HOURS = 18   # a storm with a VDM this recent is "in recon"
 # dirs for recent bulletins and record their storm NAMES + a few ob POSITIONS; a
 # storm matches by name or spatial proximity. This is what lets a user start
 # tracking a flight as soon as HDOBs post, before any fix is issued.
-_recent_hdob_names: set = set()
-_recent_hdob_points: list = []   # [(lat, lon), ...] sampled from recent bulletins
+_recent_hdob_labels: set = set()  # system labels from the bulletin headers
+_recent_hdob_atcf: set = set()    # ATCF ids decoded from the HDOB mission-ID field
+_recent_hdob_points: list = []    # [(lat, lon), ...] sampled from recent bulletins
 _RECON_HDOB_LOOKBACK_HOURS = 4   # an HDOB this recent ⇒ a plane is up now
 _RECON_HDOB_MAXFILES = 14        # cap fetches per basin per refresh (cost guard)
 _HDOB_MATCH_DEG = 1.5            # storm within this (true distance) of a recent HDOB ob
@@ -2807,10 +2808,12 @@ def _refresh_recent_recon() -> set:
 
 
 def _scan_recent_hdob() -> None:
-    """Populate _recent_hdob_names / _recent_hdob_points from the most recent
-    HDOB bulletins in the lookback window. Cheap: capped file count, and zero
-    fetches when no flight is airborne. Keeps prior state on error."""
-    names: set = set()
+    """Populate _recent_hdob_labels / _recent_hdob_atcf / _recent_hdob_points from
+    the most recent HDOB bulletins in the lookback window. Cheap: capped file
+    count, and zero fetches when no flight is airborne. Keeps prior state on
+    error."""
+    labels: set = set()
+    atcfs: set = set()
     points: list = []
     try:
         from global_archive_api import NHC_RECON_BASE
@@ -2844,11 +2847,14 @@ def _scan_recent_hdob() -> None:
                     text = _hrd_fetch_text(url + fname, timeout=10)
                     if not text:
                         continue
-                    nm = re.search(r"\b([A-Z][A-Z0-9\-]+)\s+HDOB\b", text.upper())
-                    if nm:
-                        names.add(nm.group(1))
                     parsed = _parse_hdob_bulletin(text, fdt)
-                    if parsed and parsed.get("obs"):
+                    if not parsed:
+                        continue
+                    if parsed.get("storm"):
+                        labels.add(parsed["storm"])
+                    if parsed.get("atcf"):
+                        atcfs.add(parsed["atcf"].upper())
+                    if parsed.get("obs"):
                         o = parsed["obs"][-1]  # one sample position per bulletin
                         points.append((o["lat"], o["lon"]))
                 except Exception:
@@ -2857,16 +2863,17 @@ def _scan_recent_hdob() -> None:
         logger.warning(f"recent-HDOB scan failed: {e}")
         return  # keep prior state
 
-    global _recent_hdob_names, _recent_hdob_points
-    _recent_hdob_names = names
+    global _recent_hdob_labels, _recent_hdob_atcf, _recent_hdob_points
+    _recent_hdob_labels = labels
+    _recent_hdob_atcf = atcfs
     _recent_hdob_points = points
 
 
 def _has_active_recon(atcf_id: str, name: str = None,
                       lat: float = None, lon: float = None) -> bool:
     """True if this storm is in active recon — either a recent VDM fix, OR
-    recent HDOB flight-level obs matched by storm name or position. The HDOB
-    path lets tracking start as soon as obs appear, before the first fix."""
+    recent HDOB flight-level obs matched by mission id, label or position. The
+    HDOB path lets tracking start as soon as obs appear, before the first fix."""
     if not atcf_id:
         return False
     try:
@@ -2875,10 +2882,23 @@ def _has_active_recon(atcf_id: str, name: str = None,
         return False
     if atcf_id.upper() in vdm_set:
         return True
-    if name:
-        nm = name.upper().strip()
-        if nm and nm in _recent_hdob_names:
-            return True
+    # The mission-ID field names the storm the sortie was filed for — it flags a
+    # ferry leg still hours from the center, which neither the label nor the
+    # position gate below can do.
+    if atcf_id.upper() in _recent_hdob_atcf:
+        return True
+    # Label match uses recon_api's ATCF-invariant rule, the SAME one the recon
+    # blob attributes tracks with. A verbatim name comparison lived here instead
+    # and silently disagreed: USAF files "PTC01-C" for the storm NHC lists as
+    # "One-C", so an airborne mission never lit the badge.
+    if _recent_hdob_labels:
+        try:
+            from recon_api import _label_matches_storm
+            for lbl in _recent_hdob_labels:
+                if _label_matches_storm(lbl, atcf_id, name or ""):
+                    return True
+        except Exception:
+            pass
     if lat is not None and lon is not None:
         import math
         for (plat, plon) in _recent_hdob_points:
