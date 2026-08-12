@@ -11,6 +11,23 @@ files in the repo root that the frontend reads at boot:
     ibtracs_storms.json            per-storm metadata + global summary
     intensity_changes.json         { basins: { NA: [[Δw_kt, year], ...] } }
 
+plus the wind-radii sidecar tree (lazy-loaded by the storm detail view,
+never at boot — see global_archive.js loadWindRadii):
+
+    ibtracs_radii/manifest.json    { years: [...], climo: {basin: {...}} }
+    ibtracs_radii/radii_YYYY.json  { sid: { rows: [[t, r34[4], r50[4],
+                                            r64[4], rmw, poci, roci], ...],
+                                            s34: <MultiPolygon coords>|null,
+                                            s64: ... }, ... }
+                                   quadrant order NE/SE/SW/NW, nm; keyed by
+                                   SEASON year (matches storm.year in
+                                   ibtracs_storms.json, not the SID prefix).
+                                   s34/s64 are precomputed lifetime swath
+                                   unions (shapely at build time — the
+                                   frontend has no polygon-clipping dep)
+                                   in an unwrapped-longitude frame (values
+                                   may exceed ±180 for dateline crossers).
+
 Schema is fixed by what global_archive.js + track_overlay.js expect — la/lo
 NOT lat/lon, t as ISO string ("YYYY-MM-DDTHH:MM"), w in knots, p in hPa.
 
@@ -117,10 +134,13 @@ def download_ibtracs(force: bool) -> Path:
     return NC_CACHE
 
 
-def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list]:
-    """Returns (tracks_by_sid, storms_metadata_list).
+def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list, dict]:
+    """Returns (tracks_by_sid, storms_metadata_list, radii_by_sid).
     tracks_by_sid: { sid: [{t, la, lo, w?, p?, n}, ...] } — finite la/lo only
     storms_metadata_list: [{sid, name, year, basin, ...}, ...]
+    radii_by_sid: { sid: [[t, r34[4], r50[4], r64[4], rmw, poci, roci], ...] }
+                  — only fixes where at least one structure field is finite;
+                  quadrant order NE/SE/SW/NW (IBTrACS quadrant dim), nm
     """
     import xarray as xr
     LOG.info(f"opening {nc_path.name}")
@@ -145,11 +165,32 @@ def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list]:
     atcf  = ds["usa_atcf_id"].values if "usa_atcf_id" in ds else None
     hursat = ds["hursat_b1"].values if "hursat_b1" in ds else None
 
+    # Wind-radii / structure fields (USA agency = NHC + JTWC, which covers
+    # every basin; routinely analyzed ~2004 on, sparse 2001-2003).
+    # Shape: storm × time × quadrant (NE/SE/SW/NW) for r34/r50/r64.
+    r34_v = ds["usa_r34"].values if "usa_r34" in ds else None
+    r50_v = ds["usa_r50"].values if "usa_r50" in ds else None
+    r64_v = ds["usa_r64"].values if "usa_r64" in ds else None
+    rmw_v = ds["usa_rmw"].values if "usa_rmw" in ds else None
+    poci_v = ds["usa_poci"].values if "usa_poci" in ds else None
+    roci_v = ds["usa_roci"].values if "usa_roci" in ds else None
+
     nstorms = lats.shape[0]
     LOG.info(f"parsing {nstorms} storms")
 
     tracks: dict[str, list] = {}
     storms: list[dict] = []
+    radii: dict[str, list] = {}
+
+    def _quad(arr, i, j):
+        """usa_rXX[i, j, :] → [ne, se, sw, nw] ints, or None if all missing.
+        Zero is meaningful (no such wind in that quadrant) and kept."""
+        if arr is None:
+            return None
+        q = arr[i, j]
+        if not np.isfinite(q).any():
+            return None
+        return [int(round(float(v))) if np.isfinite(v) else None for v in q]
 
     # ACE constant: 1e-4 × Σ v²(kt²) at synoptic 6-hourly fixes ≥ 34 kt
     # WHILE the storm has a tropical or subtropical designation. IBTrACS
@@ -192,6 +233,7 @@ def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list]:
 
         # Track points: every fix where lat & lon are finite.
         pts: list[dict] = []
+        rad_rows: list[list] = []
         atcf_id = None
         peak_w = None
         min_p = None
@@ -220,6 +262,24 @@ def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list]:
             if w is not None: pt["w"] = round(w, 1)
             if p is not None: pt["p"] = round(p, 1)
             pts.append(pt)
+
+            # Wind-radii sidecar row: [t, r34, r50, r64, rmw, poci, roci]
+            # with trailing Nones trimmed (client destructures; missing
+            # trailing slots read as undefined).
+            q34 = _quad(r34_v, i, j)
+            q50 = _quad(r50_v, i, j)
+            q64 = _quad(r64_v, i, j)
+            rmw = _finite_or_none(rmw_v[i, j]) if rmw_v is not None else None
+            po  = _finite_or_none(poci_v[i, j]) if poci_v is not None else None
+            ro  = _finite_or_none(roci_v[i, j]) if roci_v is not None else None
+            if any(v is not None for v in (q34, q50, q64, rmw, po, ro)):
+                row = [t, q34, q50, q64,
+                       int(round(rmw)) if rmw is not None else None,
+                       int(round(po)) if po is not None else None,
+                       int(round(ro)) if ro is not None else None]
+                while row[-1] is None:
+                    row.pop()
+                rad_rows.append(row)
 
             if w is not None:
                 if peak_w is None or w > peak_w: peak_w = w
@@ -300,12 +360,21 @@ def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list]:
         }
         if atcf_id:
             meta["atcf_id"] = atcf_id
+        # Only ship the sidecar (and flag the storm) when there is at least
+        # one actual wind-radii quadrant set — RMW/POCI/ROCI-only storms
+        # (sparse pre-2001 reanalysis fixes) can't draw a wind field and
+        # would emit hundreds of near-empty season files.
+        has_quad = any(len(r) > 1 and (r[1] or r[2] or r[3]) for r in rad_rows)
+        if has_quad:
+            meta["radii"] = True
+            radii[sid] = rad_rows
 
         tracks[sid] = pts
         storms.append(meta)
 
-    LOG.info(f"parsed {len(tracks)} storms with valid tracks")
-    return tracks, storms
+    LOG.info(f"parsed {len(tracks)} storms with valid tracks, "
+             f"{len(radii)} with wind radii")
+    return tracks, storms, radii
 
 
 def chunk_tracks(tracks: dict) -> tuple[dict, dict]:
@@ -383,6 +452,183 @@ def compute_intensity_changes(tracks: dict, storms_by_sid: dict) -> dict:
     }
 
 
+def compute_radii_climo(tracks: dict, radii: dict, storms_by_sid: dict) -> dict:
+    """Per-basin histograms of per-fix structure metrics, 2004+ (the era
+    when radii are routinely analyzed — matches the climo window on Dan
+    Chavas' extremewx viewer, whose percentile-bar design this feeds).
+
+    Metrics (all per fix, joined to the track by timestamp for Vmax):
+      r34: nonzero-quadrant mean R34 (nm), fixes with Vmax ≥ 34 kt
+      r64: nonzero-quadrant mean R64 (nm), fixes with Vmax ≥ 64 kt
+      rmw: RMW (nm), fixes with Vmax ≥ 34 kt
+
+    Histogram spec: {"lo": min, "step": w, "counts": [...]} — overflow
+    clipped into the last bin; percentile = cumsum client-side."""
+    SPECS = {"r34": (0, 10, 40), "r64": (0, 5, 30), "rmw": (0, 5, 40)}
+    out: dict[str, dict] = {}
+
+    def _bump(basin, key, val):
+        lo, step, nbins = SPECS[key]
+        b = out.setdefault(basin, {})
+        h = b.setdefault(key, {"lo": lo, "step": step, "counts": [0] * nbins, "n": 0})
+        idx = min(int((val - lo) / step), nbins - 1)
+        if idx < 0: idx = 0
+        h["counts"][idx] += 1
+        h["n"] += 1
+
+    def _nzmean(quads):
+        vals = [v for v in (quads or []) if v is not None and v > 0]
+        return sum(vals) / len(vals) if vals else None
+
+    for sid, rows in radii.items():
+        meta = storms_by_sid.get(sid)
+        if not meta or (meta.get("year") or 0) < 2004:
+            continue
+        basin = meta["basin"]
+        w_by_t = {pt["t"]: pt.get("w") for pt in tracks.get(sid, [])}
+        for row in rows:
+            t = row[0]
+            w = w_by_t.get(t)
+            if w is None:
+                continue
+            r34 = _nzmean(row[1] if len(row) > 1 else None)
+            r64 = _nzmean(row[3] if len(row) > 3 else None)
+            rmw = row[4] if len(row) > 4 else None
+            if w >= 34 and r34 is not None: _bump(basin, "r34", r34)
+            if w >= 64 and r64 is not None: _bump(basin, "r64", r64)
+            if w >= 34 and rmw is not None: _bump(basin, "rmw", rmw)
+    return out
+
+
+def _wedge_polygon(lat: float, lon: float, quads: list) -> Optional[list]:
+    """Quadrant wind-radii wedge as a shapely-ready ring. Quarter-circle
+    arcs (bearings NE=0-90, SE=90-180, SW=180-270, NW=270-360) with radial
+    steps at quadrant boundaries — the honest NHC-style rendering; no
+    smoothing across quadrants. Missing quadrants count as 0 (collapse to
+    center). Returns None when all four are 0/missing."""
+    import math
+    rr = [(q if q else 0) for q in (quads or [0, 0, 0, 0])]
+    if not any(rr):
+        return None
+    coslat = max(0.05, math.cos(math.radians(lat)))
+    ring = []
+    for q in range(4):
+        r_deg = rr[q] / 60.0  # nm → great-circle degrees
+        for b in range(q * 90, (q + 1) * 90 + 1, 10):
+            th = math.radians(b)
+            ring.append((lon + r_deg * math.sin(th) / coslat,
+                         lat + r_deg * math.cos(th)))
+    ring.append(ring[0])
+    return ring
+
+
+def compute_swaths(radii: dict, tracks: dict) -> dict:
+    """Per-storm lifetime swath union of the R34 and R64 wedges.
+    Longitudes are unwrapped along the track (continuous across the
+    dateline) so the union doesn't smear across the map; the frontend
+    renders >±180 fine (world copies). Returns
+    { sid: {"s34": coords|None, "s64": coords|None} } with MultiPolygon-
+    style coords rounded to 2 dp."""
+    from shapely.geometry import Polygon, MultiPolygon
+    from shapely.ops import unary_union
+
+    def _round_coords(geom):
+        polys = geom.geoms if isinstance(geom, MultiPolygon) else [geom]
+        out = []
+        for p in polys:
+            rings = [[[round(x, 2), round(y, 2)] for x, y in p.exterior.coords]]
+            for hole in p.interiors:
+                rings.append([[round(x, 2), round(y, 2)] for x, y in hole.coords])
+            out.append(rings)
+        return out
+
+    swaths: dict[str, dict] = {}
+    for sid, rows in radii.items():
+        pos_by_t = {}
+        prev_lo = None
+        offset = 0.0
+        for pt in tracks.get(sid, []):
+            lo = pt["lo"]
+            if prev_lo is not None:
+                if lo - prev_lo > 180: offset -= 360
+                elif lo - prev_lo < -180: offset += 360
+            prev_lo = lo
+            pos_by_t[pt["t"]] = (pt["la"], lo + offset)
+
+        entry = {}
+        for key, idx in (("s34", 1), ("s64", 3)):
+            wedges = []
+            for row in rows:
+                pos = pos_by_t.get(row[0])
+                quads = row[idx] if len(row) > idx else None
+                if pos is None or not quads:
+                    continue
+                ring = _wedge_polygon(pos[0], pos[1], quads)
+                if ring is None:
+                    continue
+                poly = Polygon(ring)
+                if not poly.is_valid:
+                    poly = poly.buffer(0)
+                if not poly.is_empty:
+                    wedges.append(poly)
+            if not wedges:
+                entry[key] = None
+                continue
+            union = unary_union(wedges).simplify(0.03, preserve_topology=True)
+            entry[key] = _round_coords(union)
+        swaths[sid] = entry
+    return swaths
+
+
+def write_radii_outputs(radii: dict, tracks: dict, storms_by_sid: dict,
+                        root: Path) -> None:
+    """Emit ibtracs_radii/radii_YYYY.json (keyed by SEASON year so the
+    frontend can derive the filename from storm.year) + manifest with the
+    per-basin climo histograms."""
+    out_dir = root / "ibtracs_radii"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    LOG.info("computing lifetime swath unions (shapely)")
+    swaths = compute_swaths(radii, tracks)
+
+    by_year: dict[int, dict] = {}
+    for sid, rows in radii.items():
+        meta = storms_by_sid.get(sid)
+        if not meta or meta.get("year") is None:
+            continue
+        sw = swaths.get(sid) or {}
+        by_year.setdefault(meta["year"], {})[sid] = {
+            "rows": rows,
+            "s34": sw.get("s34"),
+            "s64": sw.get("s64"),
+        }
+
+    total_bytes = 0
+    for year in sorted(by_year):
+        path = out_dir / f"radii_{year}.json"
+        tmp = path.with_suffix(".json.tmp")
+        with tmp.open("w") as f:
+            json.dump(by_year[year], f, separators=(",", ":"))
+        tmp.replace(path)
+        total_bytes += path.stat().st_size
+
+    climo = compute_radii_climo(tracks, radii, storms_by_sid)
+    manifest = {
+        "years": sorted(by_year),
+        "quadrant_order": ["NE", "SE", "SW", "NW"],
+        "row_schema": ["t", "r34_nm", "r50_nm", "r64_nm", "rmw_nm",
+                       "poci_mb", "roci_nm"],
+        "climo_window": "2004+",
+        "climo": climo,
+    }
+    tmp = (out_dir / "manifest.json").with_suffix(".json.tmp")
+    with tmp.open("w") as f:
+        json.dump(manifest, f, separators=(",", ":"))
+    tmp.replace(out_dir / "manifest.json")
+    LOG.info(f"wrote ibtracs_radii/: {len(by_year)} season files, "
+             f"{total_bytes / 1e6:.1f} MB total + manifest")
+
+
 def write_outputs(tracks: dict, storms: list, chunk0: dict, chunk1: dict,
                   intensity_changes: dict, root: Path) -> None:
     """Write all five JSON files atomically (write to .tmp then rename)."""
@@ -443,7 +689,7 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
     args = parse_args()
     nc = download_ibtracs(force=args.no_cache and not args.keep_cache)
-    tracks, storms = parse(nc, args.since)
+    tracks, storms, radii = parse(nc, args.since)
     if not tracks:
         LOG.error("no storms parsed — aborting")
         return 1
@@ -464,6 +710,7 @@ def main() -> int:
     else:
         out = ROOT
     write_outputs(tracks, storms, chunk0, chunk1, ic, out)
+    write_radii_outputs(radii, tracks, storms_by_sid, out)
     LOG.info("DONE")
     return 0
 

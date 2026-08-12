@@ -30,7 +30,7 @@ function _ga(action, params) {
 
 // ── Configuration ────────────────────────────────────────────
 var API_BASE = 'https://api.tcatlas.org';
-var DATA_VER = 'v20260408';  // Cache-busting version for static JSON files
+var DATA_VER = 'v20260811';  // Cache-busting version for static JSON files
 var STORMS_JSON = 'ibtracs_storms.json?' + DATA_VER;
 var TRACKS_MANIFEST = 'ibtracs_tracks_manifest.json?' + DATA_VER;
 var TRACKS_JSON_FALLBACK = 'ibtracs_tracks.json?' + DATA_VER;  // Fallback for single-file mode
@@ -2290,7 +2290,7 @@ function renderStormDetail(storm) {
     var hasNHCFDeck = storm.atcf_id && (storm.basin === 'NA' || storm.basin === 'EP');
     if (hasNHCFDeck) {
         fdeckToggleWrap.style.display = '';
-        document.getElementById('fdeck-toggle-btn').textContent = 'Show F-Deck';
+        document.getElementById('fdeck-toggle-btn').textContent = 'F-Deck';
         document.getElementById('fdeck-toggle-btn').classList.remove('active');
         document.getElementById('fdeck-status').textContent = '';
     } else {
@@ -2301,6 +2301,10 @@ function renderStormDetail(storm) {
     vdmData = null;
     vdmLoaded = false;
     vdmMapLayers = [];
+
+    // Wind-field (wind radii) overlay — toggle shown only for storms with
+    // IBTrACS quadrant radii (storm.radii flag, ~2001+ US-agency storms)
+    _wfReset(storm);
 
     // IR overlay — show toggle for storms with IR data (HURSAT 1978-2015, MergIR 1998+)
     var irToggleWrap = document.getElementById('ir-toggle-wrap');
@@ -2330,7 +2334,7 @@ function renderStormDetail(storm) {
     var hovScrollWrap = document.getElementById('hovmoller-scroll-wrap');
     if (hovScrollWrap) hovScrollWrap.style.display = 'none';
     var hovBtn = document.getElementById('hovmoller-toggle-btn');
-    if (hovBtn) hovBtn.textContent = 'Hovmöller';
+    if (hovBtn) { hovBtn.textContent = 'Hovmöller'; hovBtn.classList.remove('active'); }
     var titleEl2 = document.getElementById('timeline-panel-title');
     if (titleEl2) titleEl2.textContent = 'Intensity Timeline';
 
@@ -2622,7 +2626,7 @@ window.toggleHovmoller = function () {
         if (timelineEl) timelineEl.style.display = '';
         if (modelCtrl && window._modelControlsWasVisible) modelCtrl.style.display = '';
         if (titleEl) titleEl.textContent = 'Intensity Timeline';
-        if (btn) btn.textContent = 'Hovmöller';
+        if (btn) btn.classList.remove('active');
         return;
     }
 
@@ -2634,7 +2638,7 @@ window.toggleHovmoller = function () {
     if (scrollWrap) scrollWrap.style.display = '';
     if (panel) panel.style.overflow = 'visible';
     if (titleEl) titleEl.textContent = 'IR Hovmöller';
-    if (btn) btn.textContent = 'Timeline';
+    if (btn) btn.classList.add('active');
 
     // Fetch if not cached for this storm
     if (hovmollerSid !== selectedStorm.sid || !hovmollerData) {
@@ -2656,8 +2660,7 @@ function fetchHovmoller() {
 
     var btn = document.getElementById('hovmoller-toggle-btn');
     var statusEl = document.getElementById('hovmoller-status');
-    if (btn) btn.textContent = 'Loading…';
-    if (statusEl) statusEl.textContent = '';
+    if (statusEl) statusEl.textContent = 'Loading…';
 
     var trackData = track.map(function (pt) {
         return { t: pt.t, la: pt.la, lo: pt.lo, w: pt.w, p: pt.p };
@@ -2691,7 +2694,7 @@ function fetchHovmoller() {
         })
         .catch(function (err) {
             console.warn('[GA] Hovmöller fetch failed:', err.message || err);
-            if (btn) btn.textContent = 'Hovmöller';
+            if (btn) btn.classList.remove('active');
             if (statusEl) statusEl.textContent = 'Error';
         });
 }
@@ -2886,9 +2889,8 @@ window.toggleFDeck = function () {
         // First time — fetch data
         var btn = document.getElementById('fdeck-toggle-btn');
         var status = document.getElementById('fdeck-status');
-        btn.textContent = 'Loading...';
         btn.disabled = true;
-        status.textContent = '';
+        status.textContent = 'Loading…';
 
         var url = API_BASE + '/global/fdeck?atcf_id=' + encodeURIComponent(selectedStorm.atcf_id);
         fetch(url)
@@ -2900,7 +2902,6 @@ window.toggleFDeck = function () {
                 fdeckData = data.fixes;
                 fdeckLoaded = true;
                 fdeckVisible = true;
-                btn.textContent = 'Hide F-Deck';
                 btn.classList.add('active');
                 btn.disabled = false;
 
@@ -2912,7 +2913,6 @@ window.toggleFDeck = function () {
                 addFDeckTraces();
             })
             .catch(function (err) {
-                btn.textContent = 'Show F-Deck';
                 btn.disabled = false;
                 status.textContent = 'Not available';
                 status.style.color = '#f87171';
@@ -2926,11 +2926,9 @@ window.toggleFDeck = function () {
     var btn = document.getElementById('fdeck-toggle-btn');
 
     if (fdeckVisible) {
-        btn.textContent = 'Hide F-Deck';
         btn.classList.add('active');
         addFDeckTraces();
     } else {
-        btn.textContent = 'Show F-Deck';
         btn.classList.remove('active');
         removeFDeckTraces();
     }
@@ -4163,6 +4161,11 @@ function renderDetailMap(track, storm) {
     detailMap.createPane('sondes');
     detailMap.getPane('sondes').style.zIndex = 660;
 
+    // Wind-field wedges/swath must also beat the IR imageOverlay (z 640-650)
+    // but stay under sonde markers (660).
+    detailMap.createPane('windfield');
+    detailMap.getPane('windfield').style.zIndex = 655;
+
     // Load Natural Earth 110m coastlines as thin dark outlines above IR
     // Source: Natural Earth via GitHub (simplified 110m resolution, ~30KB)
     _loadCoastlineOverlay(detailMap);
@@ -4310,7 +4313,6 @@ function loadHURSAT(storm) {
             // Hide genesis/LMI/dissipation markers so they don't obscure IR
             trackAnnotationMarkers.forEach(function (m) { if (detailMap) detailMap.removeLayer(m); });
             var toggleBtn = document.getElementById('ir-toggle-btn');
-            toggleBtn.textContent = 'Hide IR';
             toggleBtn.classList.add('active');
             var irCtrl = document.getElementById('ir-map-controls');
             irCtrl.style.display = '';
@@ -4405,6 +4407,8 @@ function removeIROverlay() {
     if (irTbTooltip && detailMap) {
         try { detailMap.closePopup(irTbTooltip); } catch (e) {}
     }
+    // IR clock stopped — hand the wind-field overlay its manual slider back
+    if (_wfVisible) _wfSyncSliderVisibility();
 }
 
 window.toggleIROverlay = function () {
@@ -4415,7 +4419,6 @@ window.toggleIROverlay = function () {
     var controls = document.getElementById('ir-map-controls');
 
     if (irOverlayVisible) {
-        toggleBtn.textContent = 'Hide IR';
         toggleBtn.classList.add('active');
         controls.style.display = '';
         var irCbar2 = document.getElementById('ir-colorbar-strip');
@@ -4438,7 +4441,6 @@ window.toggleIROverlay = function () {
             loadIRFrame(irFrameIdx);
         }
     } else {
-        toggleBtn.textContent = 'Show IR';
         toggleBtn.classList.remove('active');
         controls.style.display = 'none';
         var irCbar3 = document.getElementById('ir-colorbar-strip');
@@ -4460,6 +4462,8 @@ window.toggleIROverlay = function () {
         }
         // Remove intensity chart time marker
         updateIntensityMarker(null);
+        // IR clock stopped — hand the wind-field overlay its manual slider back
+        if (_wfVisible) _wfSyncSliderVisibility();
     }
 };
 
@@ -5398,6 +5402,7 @@ function updateIRMeta(idx) {
     updateIntensityMarker(rawDt);
     updateHovmollerMarker(rawDt);
     updateHovCenterMarker(rawDt);
+    updateWindFieldForTime(rawDt);
 
     // Sync model forecast overlay to current IR frame time
     if (_modelVisible && _modelAutoSync && _modelData) {
@@ -5830,7 +5835,7 @@ window.toggleGlobalMWOverlay = function () {
     if (_gaMwVisible) {
         // Hide
         _gaMwVisible = false;
-        if (btn) btn.innerHTML = _icon('dish') + 'MW';
+        if (btn) btn.classList.remove('active');
         if (controls) controls.style.display = 'none';
         if (_gaMwMapOverlay && detailMap) { detailMap.removeLayer(_gaMwMapOverlay); }
         if (_gaMwMarkers && detailMap) { detailMap.removeLayer(_gaMwMarkers); }
@@ -5841,7 +5846,7 @@ window.toggleGlobalMWOverlay = function () {
 
     // Show
     _gaMwVisible = true;
-    if (btn) btn.textContent = 'Hide MW';
+    if (btn) btn.classList.add('active');
     if (controls) controls.style.display = '';
     _repositionMWControls();
 
@@ -6000,7 +6005,7 @@ function removeGlobalMWOverlay() {
     _gaMwLastAtcf = null;
     _gaMwMarkerDt = null;
     var btn = document.getElementById('ga-mw-toggle-btn');
-    if (btn) btn.innerHTML = _icon('dish') + 'MW';
+    if (btn) btn.classList.remove('active');
     var controls = document.getElementById('ga-mw-controls');
     if (controls) controls.style.display = 'none';
 }
@@ -6425,7 +6430,7 @@ window.toggleGlobalNexradOverlay = function () {
     if (_gaNexradVisible) {
         _ga('ga_nexrad_toggle', { visible: false, sid: selectedStorm ? selectedStorm.sid : null });
         _gaNexradVisible = false;
-        if (btn) btn.innerHTML = _icon('tornado') + 'Ground Radar';
+        if (btn) btn.classList.remove('active');
         if (controls) controls.style.display = 'none';
         if (_gaNexradMapOverlay && detailMap) detailMap.removeLayer(_gaNexradMapOverlay);
         if (_gaNexradExtremaMarkers && _gaNexradExtremaMarkers.length && detailMap) {
@@ -6442,7 +6447,7 @@ window.toggleGlobalNexradOverlay = function () {
 
     _ga('ga_nexrad_toggle', { visible: true, sid: selectedStorm ? selectedStorm.sid : null });
     _gaNexradVisible = true;
-    if (btn) btn.innerHTML = _icon('tornado') + 'Hide Ground Radar';
+    if (btn) btn.classList.add('active');
     if (controls) controls.style.display = '';
 
     // If overlay already loaded, just show it
@@ -6786,7 +6791,7 @@ function removeGlobalNexradOverlay() {
     if (_gaNexradScanTimer) { clearTimeout(_gaNexradScanTimer); _gaNexradScanTimer = null; }
     if (_gaNexradUpdateTimer) { clearTimeout(_gaNexradUpdateTimer); _gaNexradUpdateTimer = null; }
     var btn = document.getElementById('ga-nexrad-toggle-btn');
-    if (btn) btn.innerHTML = _icon('tornado') + 'Ground Radar';
+    if (btn) btn.classList.remove('active');
     var controls = document.getElementById('ga-nexrad-controls');
     if (controls) controls.style.display = 'none';
     var siteSelect = document.getElementById('ga-nexrad-site-select');
@@ -6795,6 +6800,416 @@ function removeGlobalNexradOverlay() {
     if (scanSelect) scanSelect.innerHTML = '';
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+// ── WIND FIELD OVERLAY (IBTrACS wind radii) ───────────────────
+//    Best-track quadrant R34/R50/R64 wedges + RMW ring drawn on
+//    the detail map, synced to the IR animation clock, plus a
+//    precomputed lifetime swath union. Data: ibtracs_radii/
+//    sidecar built by pipeline/refresh_ibtracs.py. Collaboration
+//    with Dan Chavas (Purdue) — display & climatology follow his
+//    extremewx IBTrACS viewer.
+// ═══════════════════════════════════════════════════════════════
+
+var _wfVisible = false;
+var _wfLoaded = false;        // fetch settled (ok or failed) for current storm
+var _wfStorm = null;          // {rows, s34, s64} for current storm
+var _wfTimesMs = [];          // parsed row times (ms), parallel to rows
+var _wfManifest = null;       // climo manifest (fetched once per session)
+var _wfSeasonCache = {};      // year → season file JSON
+var _wfLayer = null;          // L.geoJSON: wedges + RMW at current time
+var _wfSwathLayer = null;     // L.geoJSON: lifetime swath
+var _wfSwathOn = false;
+var _wfRmwOn = true;
+var _wfLastKey = '';          // last rendered time key (skip redundant setData)
+var _wfSliderIdx = 0;         // manual slider position (no-IR mode)
+
+var _WF_STYLES = {
+    r34:   { color: '#38bdf8', weight: 1.6, opacity: 0.95, fillColor: '#38bdf8', fillOpacity: 0.10 },
+    r50:   { color: '#fbbf24', weight: 1.4, opacity: 0.95, fillColor: '#fbbf24', fillOpacity: 0.10 },
+    r64:   { color: '#f87171', weight: 1.6, opacity: 0.95, fillColor: '#f87171', fillOpacity: 0.14 },
+    rmw:   { color: '#ffffff', weight: 1.3, opacity: 0.9,  fillColor: '#ffffff', fillOpacity: 0 },
+    s34:   { color: '#38bdf8', weight: 1.8, opacity: 0.75, fillColor: '#38bdf8', fillOpacity: 0.06 },
+    s64:   { color: '#f87171', weight: 1.8, opacity: 0.75, fillColor: '#f87171', fillOpacity: 0.08 }
+};
+
+function _wfStyleFn(f) {
+    return _WF_STYLES[f.properties && f.properties.kind] || {};
+}
+
+// Console debug handle (harmless in production; used by dev tooling)
+window._wfDebug = function () {
+    return { visible: _wfVisible, loaded: _wfLoaded, rows: _wfStorm && _wfStorm.rows.length,
+             layer: _wfLayer, map: detailMap, lastKey: _wfLastKey };
+};
+
+/** Reset wind-field state on storm change. Called from renderStormDetail. */
+function _wfReset(storm) {
+    _wfVisible = false;
+    _wfLoaded = false;
+    _wfStorm = null;
+    _wfTimesMs = [];
+    _wfLastKey = '';
+    _wfSwathOn = false;
+    _wfRmwOn = true;
+    _wfSliderIdx = 0;
+    if (_wfLayer && detailMap) { try { detailMap.removeLayer(_wfLayer); } catch (e) {} }
+    if (_wfSwathLayer && detailMap) { try { detailMap.removeLayer(_wfSwathLayer); } catch (e) {} }
+    _wfLayer = null;
+    _wfSwathLayer = null;
+    var wrap = document.getElementById('ga-wf-toggle-wrap');
+    if (wrap) wrap.style.display = storm && storm.radii ? '' : 'none';
+    var btn = document.getElementById('ga-wf-toggle-btn');
+    if (btn) btn.classList.remove('active');
+    var controls = document.getElementById('ga-wf-controls');
+    if (controls) controls.style.display = 'none';
+    var status = document.getElementById('ga-wf-status');
+    if (status) status.textContent = '';
+    var swBtn = document.getElementById('ga-wf-swath-btn');
+    if (swBtn) swBtn.classList.remove('active');
+    var rmwBtn = document.getElementById('ga-wf-rmw-btn');
+    if (rmwBtn) rmwBtn.classList.add('active');
+}
+
+window.toggleWindField = function () {
+    var btn = document.getElementById('ga-wf-toggle-btn');
+    var controls = document.getElementById('ga-wf-controls');
+    if (_wfVisible) {
+        _wfVisible = false;
+        if (btn) btn.classList.remove('active');
+        if (controls) controls.style.display = 'none';
+        if (_wfLayer && detailMap) { try { detailMap.removeLayer(_wfLayer); } catch (e) {} _wfLayer = null; }
+        if (_wfSwathLayer && detailMap) { try { detailMap.removeLayer(_wfSwathLayer); } catch (e) {} _wfSwathLayer = null; }
+        _wfLastKey = '';
+        return;
+    }
+    _wfVisible = true;
+    _ga('ga_toggle_wind_field', { sid: selectedStorm && selectedStorm.sid, storm_name: selectedStorm && selectedStorm.name });
+    if (btn) btn.classList.add('active');
+    if (controls) controls.style.display = '';
+    if (_wfLoaded) { _wfShowInitial(); } else { _wfLoad(selectedStorm); }
+};
+
+window.toggleWindFieldSwath = function () {
+    _wfSwathOn = !_wfSwathOn;
+    var b = document.getElementById('ga-wf-swath-btn');
+    if (b) b.classList.toggle('active', _wfSwathOn);
+    _wfRenderSwath();
+};
+
+window.toggleWindFieldRmw = function () {
+    _wfRmwOn = !_wfRmwOn;
+    var b = document.getElementById('ga-wf-rmw-btn');
+    if (b) b.classList.toggle('active', _wfRmwOn);
+    _wfLastKey = '';
+    _wfRerender();
+};
+
+window.seekWindField = function (val) {
+    _wfSliderIdx = parseInt(val, 10) || 0;
+    if (_wfStorm && _wfStorm.rows[_wfSliderIdx]) {
+        _wfRender(_wfStorm.rows[_wfSliderIdx][0]);
+    }
+};
+
+function _wfLoad(storm) {
+    var status = document.getElementById('ga-wf-status');
+    if (status) status.textContent = 'Loading...';
+    var year = storm.year;
+    var seasonReq = _wfSeasonCache[year]
+        ? Promise.resolve(_wfSeasonCache[year])
+        : fetch('ibtracs_radii/radii_' + year + '.json?' + DATA_VER)
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (j) { _wfSeasonCache[year] = j; return j; });
+    var manReq = _wfManifest
+        ? Promise.resolve(_wfManifest)
+        : fetch('ibtracs_radii/manifest.json?' + DATA_VER)
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) { _wfManifest = j; return j; })
+            .catch(function () { return null; });  // climo is optional
+    Promise.all([seasonReq, manReq]).then(function (res) {
+        _wfLoaded = true;
+        var season = res[0] || {};
+        var entry = season[storm.sid];
+        if (!entry || !entry.rows || !entry.rows.length) {
+            if (status) status.textContent = 'No radii data';
+            return;
+        }
+        _wfStorm = entry;
+        _wfTimesMs = entry.rows.map(function (row) { return _parseUtcMs(row[0]); });
+        if (status) status.textContent = '';
+        var slider = document.getElementById('ga-wf-slider');
+        if (slider) { slider.max = entry.rows.length - 1; slider.value = 0; }
+        if (_wfVisible) _wfShowInitial();
+    }).catch(function (err) {
+        _wfLoaded = true;
+        if (status) status.textContent = 'Unavailable';
+        console.warn('wind-field load failed', err);
+    });
+}
+
+/** First render after toggle-on: follow the IR clock if it's running,
+    else jump to the peak-intensity fix and expose the manual slider. */
+function _wfShowInitial() {
+    if (!_wfStorm) return;
+    _wfSyncSliderVisibility();
+    var t = _wfCurrentIRTime();
+    if (t) { _wfRender(t); return; }
+    // Peak fix: row nearest the storm's max wind time
+    var track = allTracks[selectedStorm.sid] || [];
+    var peak = null;
+    for (var i = 0; i < track.length; i++) {
+        if (track[i].w != null && (!peak || track[i].w > peak.w)) peak = track[i];
+    }
+    var idx = 0;
+    if (peak) {
+        var pm = _parseUtcMs(peak.t), best = Infinity;
+        for (var j = 0; j < _wfTimesMs.length; j++) {
+            var d = Math.abs(_wfTimesMs[j] - pm);
+            if (d < best) { best = d; idx = j; }
+        }
+    }
+    _wfSliderIdx = idx;
+    var slider = document.getElementById('ga-wf-slider');
+    if (slider) slider.value = idx;
+    _wfRender(_wfStorm.rows[idx][0]);
+}
+
+function _wfCurrentIRTime() {
+    if (irOverlayVisible && irMeta && irMeta.frames && irMeta.frames[irFrameIdx]) {
+        return irMeta.frames[irFrameIdx].datetime || null;
+    }
+    return null;
+}
+
+/** Show the manual slider only when the IR animation isn't driving the clock. */
+function _wfSyncSliderVisibility() {
+    var slider = document.getElementById('ga-wf-slider');
+    if (slider) slider.style.display = _wfCurrentIRTime() ? 'none' : '';
+}
+
+/** Per-frame hook from updateIRMeta. */
+function updateWindFieldForTime(dtStr) {
+    if (!_wfVisible || !_wfStorm) return;
+    _wfSyncSliderVisibility();
+    if (dtStr) _wfRender(dtStr);
+}
+
+function _wfRerender() {
+    if (!_wfVisible || !_wfStorm) return;
+    var t = _wfCurrentIRTime();
+    if (!t && _wfStorm.rows[_wfSliderIdx]) t = _wfStorm.rows[_wfSliderIdx][0];
+    if (t) _wfRender(t);
+}
+
+/** Interpolate quadrant radii + scalars at an arbitrary time.
+    Returns {r34, r50, r64, rmw, poci, roci, exact} or null when the
+    time falls outside the radii record (±3 h grace). */
+function _wfValuesAt(ms) {
+    var n = _wfTimesMs.length;
+    if (!n) return null;
+    var GRACE = 3 * 3600000;
+    if (ms < _wfTimesMs[0] - GRACE || ms > _wfTimesMs[n - 1] + GRACE) return null;
+    var lo = -1, hi = -1;
+    for (var i = 0; i < n; i++) {
+        if (_wfTimesMs[i] <= ms) lo = i;
+        if (_wfTimesMs[i] >= ms) { hi = i; break; }
+    }
+    if (lo < 0) lo = hi;
+    if (hi < 0) hi = lo;
+    var ra = _wfStorm.rows[lo], rb = _wfStorm.rows[hi];
+    var ta = _wfTimesMs[lo], tb = _wfTimesMs[hi];
+    // Radii gaps (e.g. post-landfall) shouldn't be bridged by interpolation
+    if (tb - ta > 6.5 * 3600000) {
+        var nearer = (ms - ta) < (tb - ms) ? lo : hi;
+        if (Math.abs(_wfTimesMs[nearer] - ms) > GRACE) return null;
+        ra = rb = _wfStorm.rows[nearer]; ta = tb = _wfTimesMs[nearer];
+    }
+    var f = (tb > ta) ? (ms - ta) / (tb - ta) : 0;
+    function lerp(a, b) {
+        if (a == null && b == null) return null;
+        if (a == null) return b;
+        if (b == null) return a;
+        return a + f * (b - a);
+    }
+    function lerpQuad(qa, qb) {
+        if (!qa && !qb) return null;
+        var out = [], any = false;
+        for (var k = 0; k < 4; k++) {
+            var v = lerp(qa ? qa[k] : null, qb ? qb[k] : null);
+            out.push(v);
+            if (v != null && v > 0) any = true;
+        }
+        return any || out.some(function (v) { return v != null; }) ? out : null;
+    }
+    return {
+        r34: lerpQuad(ra[1], rb[1]),
+        r50: lerpQuad(ra[2], rb[2]),
+        r64: lerpQuad(ra[3], rb[3]),
+        rmw: lerp(ra[4], rb[4]),
+        poci: lerp(ra[5], rb[5]),
+        roci: lerp(ra[6], rb[6]),
+        exact: f === 0 || f === 1
+    };
+}
+
+/** Quadrant wedge ring — mirrors _wedge_polygon in refresh_ibtracs.py:
+    quarter-circle arcs (NE=0-90° etc.) with radial steps at quadrant
+    boundaries. Returns [[lng,lat],...] or null when all quads are 0. */
+function _wfWedgeRing(lat, lon, quads) {
+    if (!quads) return null;
+    var any = false;
+    for (var q = 0; q < 4; q++) { if (quads[q]) { any = true; break; } }
+    if (!any) return null;
+    var coslat = Math.max(0.05, Math.cos(lat * Math.PI / 180));
+    var ring = [];
+    for (var qi = 0; qi < 4; qi++) {
+        var rDeg = (quads[qi] || 0) / 60;
+        for (var b = qi * 90; b <= (qi + 1) * 90; b += 6) {
+            var th = b * Math.PI / 180;
+            ring.push([lon + rDeg * Math.sin(th) / coslat, lat + rDeg * Math.cos(th)]);
+        }
+    }
+    ring.push(ring[0]);
+    return ring;
+}
+
+function _wfCircleRing(lat, lon, rNm) {
+    var coslat = Math.max(0.05, Math.cos(lat * Math.PI / 180));
+    var rDeg = rNm / 60, ring = [];
+    for (var i = 0; i <= 48; i++) {
+        var th = i / 48 * 2 * Math.PI;
+        ring.push([lon + rDeg * Math.sin(th) / coslat, lat + rDeg * Math.cos(th)]);
+    }
+    return ring;
+}
+
+function _wfRender(dtStr) {
+    if (!detailMap || !_wfStorm) return;
+    var key = dtStr + '|' + (_wfRmwOn ? 1 : 0);
+    if (key === _wfLastKey) return;
+    _wfLastKey = key;
+
+    var ms = _parseUtcMs(dtStr);
+    var vals = isNaN(ms) ? null : _wfValuesAt(ms);
+    var track = allTracks[selectedStorm.sid] || [];
+    var pos = findTrackPointAtTime(track, dtStr);
+
+    var features = [];
+    if (vals && pos) {
+        // Largest first so smaller thresholds stay hoverable/visible on top
+        [['r34', vals.r34], ['r50', vals.r50], ['r64', vals.r64]].forEach(function (kv) {
+            var ring = _wfWedgeRing(pos.la, pos.lo, kv[1]);
+            if (ring) features.push({ type: 'Feature', properties: { kind: kv[0] },
+                geometry: { type: 'Polygon', coordinates: [ring] } });
+        });
+        if (_wfRmwOn && vals.rmw) {
+            features.push({ type: 'Feature', properties: { kind: 'rmw' },
+                geometry: { type: 'Polygon', coordinates: [_wfCircleRing(pos.la, pos.lo, vals.rmw)] } });
+        }
+    }
+    var fc = { type: 'FeatureCollection', features: features };
+    if (!_wfLayer) {
+        _wfLayer = L.geoJSON(fc, { style: _wfStyleFn, pane: 'windfield' }).addTo(detailMap);
+    } else {
+        _wfLayer.setData(fc);
+    }
+    _wfUpdateReadout(dtStr, vals);
+}
+
+function _wfRenderSwath() {
+    if (!detailMap || !_wfStorm) return;
+    if (!_wfSwathOn) {
+        if (_wfSwathLayer) { try { detailMap.removeLayer(_wfSwathLayer); } catch (e) {} _wfSwathLayer = null; }
+        return;
+    }
+    var features = [];
+    [['s34', _wfStorm.s34], ['s64', _wfStorm.s64]].forEach(function (kv) {
+        if (kv[1]) features.push({ type: 'Feature', properties: { kind: kv[0] },
+            geometry: { type: 'MultiPolygon', coordinates: kv[1] } });
+    });
+    var fc = { type: 'FeatureCollection', features: features };
+    if (!_wfSwathLayer) {
+        _wfSwathLayer = L.geoJSON(fc, { style: _wfStyleFn, pane: 'windfield' }).addTo(detailMap);
+    } else {
+        _wfSwathLayer.setData(fc);
+    }
+}
+
+/** Percentile of `val` within the manifest's per-basin histogram. */
+function _wfPctile(basin, key, val) {
+    if (!_wfManifest || !_wfManifest.climo) return null;
+    var b = _wfManifest.climo[basin];
+    var h = b && b[key];
+    if (!h || !h.n) return null;
+    var below = 0;
+    for (var i = 0; i < h.counts.length; i++) {
+        var upper = h.lo + (i + 1) * h.step;
+        if (upper <= val) { below += h.counts[i]; }
+        else {
+            var lower = h.lo + i * h.step;
+            var frac = Math.max(0, Math.min(1, (val - lower) / h.step));
+            below += h.counts[i] * frac;
+            break;
+        }
+    }
+    return Math.round(100 * below / h.n);
+}
+
+function _wfOrdinal(p) {
+    var s = ['th', 'st', 'nd', 'rd'], v = p % 100;
+    return p + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+function _wfQuadStr(q) {
+    if (!q) return '–';
+    return q.map(function (v) { return v == null ? '–' : Math.round(v); }).join('/');
+}
+
+function _wfNzMean(q) {
+    if (!q) return null;
+    var vals = q.filter(function (v) { return v != null && v > 0; });
+    if (!vals.length) return null;
+    return vals.reduce(function (a, b) { return a + b; }, 0) / vals.length;
+}
+
+function _wfUpdateReadout(dtStr, vals) {
+    var el = document.getElementById('ga-wf-readout');
+    var timeEl = document.getElementById('ga-wf-time');
+    if (timeEl) timeEl.textContent = _formatIRDatetime(dtStr);
+    if (!el) return;
+    if (!vals) {
+        el.innerHTML = '<span style="color:var(--slate);">No wind-radii analysis at this time' +
+            (_wfCurrentIRTime() ? ' — radii are 6-hourly and end at landfall/dissipation' : '') + '.</span>';
+        return;
+    }
+    var basin = selectedStorm ? selectedStorm.basin : null;
+    var parts = [];
+    function add(label, color, quads) {
+        if (!quads) return;
+        var mean = _wfNzMean(quads);
+        var pct = (mean != null && basin) ? _wfPctile(basin, label === 'R34' ? 'r34' : (label === 'R64' ? 'r64' : null), mean) : null;
+        parts.push('<span style="color:' + color + ';font-weight:600;">' + label + '</span> ' +
+            _wfQuadStr(quads) + ' nm' +
+            (mean != null ? ' <span style="color:var(--slate);">(mean ' + Math.round(mean) +
+                (pct != null ? ' &middot; ' + _wfOrdinal(pct) + ' pctile' : '') + ')</span>' : ''));
+    }
+    add('R34', '#0284c7', vals.r34);
+    if (vals.r50) parts.push('<span style="color:#b45309;font-weight:600;">R50</span> ' + _wfQuadStr(vals.r50) + ' nm');
+    add('R64', '#dc2626', vals.r64);
+    if (vals.rmw != null) {
+        var rmwPct = basin ? _wfPctile(basin, 'rmw', vals.rmw) : null;
+        parts.push('<span style="font-weight:600;">RMW</span> ' + Math.round(vals.rmw) + ' nm' +
+            (rmwPct != null ? ' <span style="color:var(--slate);">(' + _wfOrdinal(rmwPct) + ')</span>' : ''));
+    }
+    if (vals.poci != null) parts.push('<span style="font-weight:600;">POCI</span> ' + Math.round(vals.poci) + ' mb');
+    if (vals.roci != null) parts.push('<span style="font-weight:600;">ROCI</span> ' + Math.round(vals.roci) + ' nm');
+    el.innerHTML = parts.join(' &nbsp;&middot;&nbsp; ') +
+        (vals.exact ? '' : ' <span style="color:var(--slate);font-size:9px;">(interpolated)</span>');
+    if (basin && _wfManifest && _wfManifest.climo && _wfManifest.climo[basin]) {
+        el.innerHTML += ' <span style="color:var(--slate);font-size:9px;">&middot; pctile vs ' + basin + ' climo 2004+</span>';
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // ── MODEL FORECAST OVERLAY (ATCF A-DECK) ──────────────────────
@@ -6947,7 +7362,7 @@ window.toggleModelOverlay = function () {
 
     if (_modelVisible) {
         _modelVisible = false;
-        if (btn) btn.innerHTML = _icon('network') + 'Models';
+        if (btn) btn.classList.remove('active');
         if (controls) controls.style.display = 'none';
         if (chartControls) chartControls.style.display = 'none';
         _clearModelLayers();
@@ -6956,7 +7371,7 @@ window.toggleModelOverlay = function () {
     }
 
     _modelVisible = true;
-    if (btn) btn.textContent = 'Hide Models';
+    if (btn) btn.classList.add('active');
     if (controls) controls.style.display = '';
     if (chartControls) chartControls.style.display = '';
 
@@ -7393,7 +7808,7 @@ function removeModelOverlay() {
     _modelLastAtcf = null;
     _modelVisible = false;
     var btn = document.getElementById('ga-models-toggle-btn');
-    if (btn) btn.innerHTML = _icon('network') + 'Models';
+    if (btn) btn.classList.remove('active');
     var controls = document.getElementById('ga-model-controls');
     if (controls) controls.style.display = 'none';
     var chartControls = document.getElementById('model-chart-controls');
@@ -11236,7 +11651,7 @@ function _gaFLReset() {
     }
     _gaFLRemoveFromMap();
     var btn = document.getElementById('ga-fl-toggle-btn');
-    if (btn) btn.innerHTML = _icon('plane') + 'Recon';
+    if (btn) btn.classList.remove('active');
     var controls = document.getElementById('ga-fl-controls');
     if (controls) controls.style.display = 'none';
     var ts = document.getElementById('ga-fl-ts-panel');
@@ -11311,7 +11726,7 @@ window.toggleGlobalFLOverlay = function () {
     if (_gaFLVisible) {
         _ga('ga_fl_toggle', { visible: false, sid: selectedStorm ? selectedStorm.sid : null });
         _gaFLVisible = false;
-        if (btn) btn.innerHTML = _icon('plane') + 'Recon';
+        if (btn) btn.classList.remove('active');
         if (controls) controls.style.display = 'none';
         _gaFLRemoveFromMap();
         return;
@@ -11319,7 +11734,7 @@ window.toggleGlobalFLOverlay = function () {
 
     _ga('ga_fl_toggle', { visible: true, sid: selectedStorm ? selectedStorm.sid : null });
     _gaFLVisible = true;
-    if (btn) btn.textContent = 'Hide Recon';
+    if (btn) btn.classList.add('active');
     if (controls) controls.style.display = '';
 
     if (_gaFLData && detailMap) {

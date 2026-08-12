@@ -822,6 +822,46 @@ input[type="range"].ga-range::-moz-range-thumb {
     color: #ffffff;
 }
 
+/* ── Layer bar: uniform overlay-toggle cards ─────────────────
+   Each toggle is a column: constant-label button on top, tiny
+   status caption underneath (collapses when empty). State is
+   the .active fill — no more Show/Hide label swapping, which
+   made the row jitter and read like ten different widgets. */
+.ga-layerbar {
+    flex-wrap: wrap;
+    row-gap: 4px;
+    align-items: flex-start;
+    padding-top: 8px;
+    padding-bottom: 8px;
+}
+.ga-layerbar h3 { align-self: center; }
+.ga-layer-item {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    min-width: 0;
+}
+.ga-layer-item .ir-toggle-btn,
+.ga-layer-item .ga-btn {
+    justify-content: center;
+    white-space: nowrap;
+    width: 100%;
+}
+.ga-layer-item .ir-status {
+    margin: 0;
+    font-size: 8px;
+    line-height: 1.2;
+    color: var(--text-dim);
+    text-align: center;
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    align-self: center;
+}
+.ir-status:empty { display: none; }
+
 /* ── IR Vertical Colorbar Strip (right of map) ───────────── */
 .ir-cbar-strip {
     flex-shrink: 0;
@@ -1990,6 +2030,19 @@ input[type="range"].ga-range::-moz-range-thumb {
     background: var(--um-green-tint);
     color: var(--um-green);
     border-color: var(--um-green);
+}
+
+/* ── Wind-field (wind radii) legend chips ── */
+.ga-wf-chip {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    padding: 1px 7px;
+    border-radius: 9px;
+    color: var(--wf-c, var(--text));
+    border: 1px solid var(--wf-c, var(--border));
+    background: color-mix(in srgb, var(--wf-c, transparent) 12%, transparent);
+    font-variant-numeric: tabular-nums;
 }
 
 /* ── Flight-level panel buttons (Time Series / X-Sec / Radial) ──

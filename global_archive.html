@@ -92,7 +92,7 @@
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260804b">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260804b">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260811">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -354,15 +354,15 @@
                         <div id="ga-fl-ts-top-anchor"></div>
                         <div class="panel-header">
                             <h3 id="timeline-panel-title">Intensity Timeline</h3>
-                            <div id="fdeck-toggle-wrap" style="display:none;">
-                                <button id="fdeck-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleFDeck()">
-                                    Show F-Deck
+                            <div id="fdeck-toggle-wrap" class="ga-layer-item" style="display:none;">
+                                <button id="fdeck-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleFDeck()" title="Overlay fix-level intensity estimates (Dvorak, SFMR, flight-level, dropsonde) on the timeline">
+                                    F-Deck
                                 </button>
                                 <span id="fdeck-status" class="ir-status"></span>
                             </div>
-                            <div id="hovmoller-toggle-wrap" style="display:none;">
-                                <button id="hovmoller-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleHovmoller()">
-                                    IR Hovm&ouml;ller
+                            <div id="hovmoller-toggle-wrap" class="ga-layer-item" style="display:none;">
+                                <button id="hovmoller-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleHovmoller()" title="Swap the timeline for a storm-centered IR Hovm&ouml;ller (radius vs time)">
+                                    Hovm&ouml;ller
                                 </button>
                                 <span id="hovmoller-status" class="ir-status"></span>
                             </div>
@@ -400,37 +400,43 @@
 
                     <!-- Track Map + IR Overlay -->
                     <div class="detail-panel detail-map-panel">
-                        <div class="panel-header">
+                        <div class="panel-header ga-layerbar">
                             <h3 style="font-size:11px;color:var(--slate);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Overlays</h3>
-                            <div id="ir-toggle-wrap" style="display:none;">
-                                <button id="ir-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleIROverlay()">
-                                    Show IR
+                            <div id="ir-toggle-wrap" class="ga-layer-item" style="display:none;">
+                                <button id="ir-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleIROverlay()" title="Animated infrared satellite imagery (HURSAT / MergIR)">
+                                    IR
                                 </button>
                                 <span id="ir-status" class="ir-status"></span>
                             </div>
-                            <div id="ga-mw-toggle-wrap" style="display:none;">
+                            <div id="ga-mw-toggle-wrap" class="ga-layer-item" style="display:none;">
                                 <button id="ga-mw-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleGlobalMWOverlay()" title="Passive microwave satellite imagery (TC-PRIMED)">
                                     <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a7.31 7.31 0 0 0 10 10Z"/><path d="m9 15 3-3"/><path d="M17 13a6 6 0 0 0-6-6"/><path d="M21 13A10 10 0 0 0 11 3"/></svg>MW
                                 </button>
                                 <span id="ga-mw-status" class="ir-status"></span>
                             </div>
-                            <div id="ga-models-toggle-wrap" style="display:none;">
+                            <div id="ga-models-toggle-wrap" class="ga-layer-item" style="display:none;">
                                 <button id="ga-models-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleModelOverlay()" title="Model intensity and track forecasts">
                                     <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>Models
                                 </button>
                                 <span id="ga-models-status" class="ir-status"></span>
                             </div>
-                            <div id="ga-nexrad-toggle-wrap" style="display:none;">
+                            <div id="ga-nexrad-toggle-wrap" class="ga-layer-item" style="display:none;">
                                 <button id="ga-nexrad-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleGlobalNexradOverlay()" title="NEXRAD WSR-88D ground-based radar">
-                                    <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 4H3"/><path d="M18 8H6"/><path d="M19 12H9"/><path d="M16 16h-6"/><path d="M13 20h-3"/></svg>Ground Radar
+                                    <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 4H3"/><path d="M18 8H6"/><path d="M19 12H9"/><path d="M16 16h-6"/><path d="M13 20h-3"/></svg>88D Radar
                                 </button>
                                 <span id="ga-nexrad-status" class="ir-status"></span>
                             </div>
-                            <div id="ga-fl-toggle-wrap" style="display:none;">
-                                <button id="ga-fl-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleGlobalFLOverlay()">
+                            <div id="ga-fl-toggle-wrap" class="ga-layer-item" style="display:none;">
+                                <button id="ga-fl-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleGlobalFLOverlay()" title="Aircraft reconnaissance flight-level data + dropsondes">
                                     &#9992; Recon
                                 </button>
                                 <span id="ga-fl-status" class="ir-status"></span>
+                            </div>
+                            <div id="ga-wf-toggle-wrap" class="ga-layer-item" style="display:none;">
+                                <button id="ga-wf-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleWindField()" title="Best-track wind radii (R34/R50/R64 quadrants + RMW) drawn on the map, synced to the IR clock">
+                                    <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="11"/></svg>Wind Field
+                                </button>
+                                <span id="ga-wf-status" class="ir-status"></span>
                             </div>
                         </div>
                         <div class="detail-map-ir-row">
@@ -618,6 +624,24 @@
                                 <span id="ga-nexrad-frame-status" style="font-size:9px;color:var(--slate);"></span>
                             </div>
                             <div id="ga-nexrad-colorbar" style="margin-top:4px;"></div>
+                        </div>
+                        <!-- Wind-field (best-track wind radii) controls -->
+                        <div id="ga-wf-controls" style="display:none;background:var(--surface-raised);border:1px solid rgba(56,189,248,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
+                            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                <label style="font-size:10px;font-weight:600;color:#0284c7;text-transform:uppercase;letter-spacing:0.5px;">Wind Field</label>
+                                <span class="ga-wf-chip" style="--wf-c:#38bdf8;">R34</span>
+                                <span class="ga-wf-chip" style="--wf-c:#fbbf24;">R50</span>
+                                <span class="ga-wf-chip" style="--wf-c:#f87171;">R64</span>
+                                <button id="ga-wf-rmw-btn" class="ga-btn ga-btn-xs active" onclick="toggleWindFieldRmw()" title="Radius of maximum winds ring">RMW</button>
+                                <button id="ga-wf-swath-btn" class="ga-btn ga-btn-xs" onclick="toggleWindFieldSwath()" title="Lifetime footprint: union of every fix's 34-kt and 64-kt wind extent">Swath</button>
+                                <input type="range" id="ga-wf-slider" class="ga-range" min="0" max="0" value="0" style="flex:1;min-width:120px;display:none;" oninput="seekWindField(this.value)" title="Step through wind-radii fixes (shown when IR animation is off)">
+                                <span id="ga-wf-time" style="font-size:9px;color:var(--slate);font-variant-numeric:tabular-nums;"></span>
+                            </div>
+                            <div id="ga-wf-readout" style="margin-top:4px;font-size:10px;color:var(--text);font-variant-numeric:tabular-nums;"></div>
+                            <div style="margin-top:4px;font-size:8.5px;color:var(--slate);opacity:0.85;">
+                                Radii: NOAA IBTrACS v04r01 (NHC / JTWC best track), quadrants NE/SE/SW/NW &middot; routinely analyzed ~2004 onward.
+                                Display &amp; climatology after <a href="https://web.ics.purdue.edu/~dchavas/extremewx/tc/ibtracs_viewer.html" target="_blank" rel="noopener" style="color:#0284c7;text-decoration:none;">Dan Chavas&rsquo; TC wind-field viewers &#8599;</a> &mdash; see his site for interactive radii climatologies and idealized wind-field tools.
+                            </div>
                         </div>
                         <!-- Flight-level reconnaissance controls -->
                         <div id="ga-fl-controls" style="display:none;background:var(--surface-raised);border:1px solid rgba(96,165,250,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
