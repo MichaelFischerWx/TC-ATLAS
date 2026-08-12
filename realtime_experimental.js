@@ -381,7 +381,12 @@
             'for NHC basins and a satellite ocean-heat-content analysis for ' +
             'JTWC basins &mdash; plus an intensity-trend state; this ' +
             'reduced, but did not eliminate, the tendency to read high ' +
-            'while storms weaken over open water. The ' +
+            'while storms weaken over open water. Since 2026-08-05 a ' +
+            'composition layer (GHOST 2.1p, op-2026c) refines the high end: ' +
+            'once a trackable eye persists and the storm reads &ge;90 kt, ' +
+            'specialist estimators tuned on major hurricanes take over ' +
+            'Vmax/Pmin, with per-frame quality control that masks ' +
+            'land-contaminated or corrupt scenes before smoothing. The ' +
             'Verification tables describe the manuscript&rsquo;s held-out ' +
             'configuration. The best-track ' +
             'reference (NHC, or JTWC for West Pacific / Indian Ocean ' +
@@ -993,6 +998,15 @@
             html = '<div class="exp-arch-note">Archived storm — ' +
                 'retrospective GHOST run over the completed lifetime; ' +
                 '“latest” values are the storm’s final analysis.</div>' + html;
+        }
+        /* Model-version stamp (op-2026c ships model_version + a VERSION
+           CHANGE note in the JSON; older runs have neither). */
+        if (j.model_version) {
+            html += '<div class="exp-arch-note">Model: ' + j.model_version +
+                ' — eye-gated high-end refinement over the operational ' +
+                'model; per-frame quality control masks land-contaminated ' +
+                'and corrupt scenes (chart gaps are frames with no ' +
+                'QC-clean estimate).</div>';
         }
         box.innerHTML = html;
     }
