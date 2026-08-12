@@ -1889,7 +1889,8 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     # Shift the western half by +360° to make the longitude axis
     # continuous; bounds will have lon_max > 180 which Leaflet handles
     # natively via worldCopyJump.
-    if np.any(flat_lon > 150) and np.any(flat_lon < -150):
+    shift_dateline = bool(np.any(flat_lon > 150) and np.any(flat_lon < -150))
+    if shift_dateline:
         flat_lon = np.where(flat_lon < 0, flat_lon + 360.0, flat_lon)
 
     # Define regular grid
@@ -1905,6 +1906,21 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     max_grid_dim = _adaptive_grid_cap(lat_max - lat_min, lon_max - lon_min)
     n_lat = min(int((lat_max - lat_min) / grid_res_deg) + 1, max_grid_dim)
     n_lon = min(int((lon_max - lon_min) / grid_res_deg) + 1, max_grid_dim)
+
+    # Along-track resampling before the tree — see _alongtrack_factor.
+    eff_res_deg = max((lat_max - lat_min) / max(n_lat - 1, 1),
+                      (lon_max - lon_min) / max(n_lon - 1, 1))
+    factor, src_spacing_deg = _alongtrack_factor(lats, lons, eff_res_deg)
+    if factor > 1:
+        (up_data,), lats, lons = _upsample_alongtrack(
+            [data], lats, lons, factor)
+        mask = (np.isfinite(up_data.ravel()) & np.isfinite(lats.ravel())
+                & np.isfinite(lons.ravel()))
+        flat_data = up_data.ravel()[mask]
+        flat_lat = lats.ravel()[mask]
+        flat_lon = lons.ravel()[mask]
+        if shift_dateline:
+            flat_lon = np.where(flat_lon < 0, flat_lon + 360.0, flat_lon)
 
     grid_lat = np.linspace(lat_min, lat_max, n_lat)
     grid_lon = np.linspace(lon_min, lon_max, n_lon)
@@ -1922,8 +1938,7 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     gridded = flat_data[idx].reshape(glon.shape)
     # Mask grid points far from any actual swath data to prevent
     # nearest-neighbor extrapolation beyond the swath edge.
-    # Threshold: ~3x the grid resolution in degrees (~6 km at equator)
-    max_dist_deg = grid_res_deg * 3.0
+    max_dist_deg = _nn_search_radius_deg(grid_res_deg, src_spacing_deg)
     far_mask = (dists > max_dist_deg).reshape(glon.shape)
     gridded[far_mask] = np.nan
     # Fill the small interior NaN holes left by the kd-tree threshold
@@ -1997,6 +2012,138 @@ def _fill_speckle_holes(arr: np.ndarray, max_hole_pixels: int = 6) -> np.ndarray
     return out
 
 
+# ── Along-track resampling ──────────────────────────────────────────────
+# A conically-scanning imager samples densely ALONG each scan but only once
+# per scan period along-track. GMI at 89 GHz is the extreme case in our
+# sensor set: ~4.4 km between samples along a scan, but ~13 km between
+# successive scans. The 89 GHz grid resolution is picked from the along-scan
+# figure (_SENSOR_NATIVE_KM in mw_ingest), so the along-track axis ends up
+# ~6x under-sampled relative to the grid it is rendered on.
+#
+# The nearest-neighbour regrid below then quantizes the field into bands
+# exactly max_dist_deg (3 cells) wide running parallel to the scan arcs:
+# cells farther than that from any sample are NaN'd, and _fill_speckle_holes
+# smears the survivors outward. Near the swath rim — where successive scan
+# arcs curve away from each other — the outermost band separates from the
+# rest and reads as a SECOND swath edge, alongside a fringe of single
+# samples stretched into ~4x7 km tiles that can be mistaken for convection.
+# Measured on GMI/Genevieve 2026-07-26 22:54Z: banding period along the
+# inward normal = 3 cells = 0.06 deg, i.e. the cutoff radius itself.
+#
+# Fix: linearly interpolate TB *and* geolocation between successive scans
+# before the KD-tree, so source spacing is isotropic at the grid scale.
+# This is what GPM's own L1C-R resampling does.
+#
+# Self-gating on measured geometry vs the grid actually rendered, so it
+# fires per (sensor, band, path) rather than by sensor name:
+#   fires   — GMI 89 everywhere; SSMIS 89 and ATMS 89 on the WHOLE-ARC path,
+#             which grids every 89 GHz sensor at _BAND_GRID_RES 0.02 deg
+#             regardless of that sensor's own scan spacing.
+#   skips   — every 37 GHz product; AMSR2 89 (the 89A/89B horn merge already
+#             halves its along-track spacing); SSMIS/ATMS 89 storm CROPS,
+#             which grid at 0.050/0.060 deg from _CROP_GRID_RES; and any arc
+#             wide enough that _adaptive_grid_cap has coarsened the cells
+#             until they bridge the scan gaps on their own.
+_ALONGTRACK_MAX_FACTOR = 6
+_ALONGTRACK_MAX_POINTS = 4_000_000
+# Act only once the midpoint of a scan gap falls outside the KD-tree radius
+# (spacing/2 > 3*eff_res), with a 0.8 safety margin -> spacing > 4.8*eff_res.
+_ALONGTRACK_TRIGGER = 4.8
+
+
+def _swath_scan_spacing_deg(lats: np.ndarray, lons: np.ndarray) -> float:
+    """Median angular distance (deg) between successive scan lines, measured
+    down the middle of the swath. Returns 0.0 when the geometry isn't a 2-D
+    (scan, pixel) swath or is too short to measure."""
+    if lats.ndim != 2 or lats.shape[0] < 3 or lats.shape[1] < 1:
+        return 0.0
+    mid = lats.shape[1] // 2
+    col_lat = np.asarray(lats[:, mid], dtype=np.float64)
+    col_lon = np.asarray(lons[:, mid], dtype=np.float64)
+    dlat = np.diff(col_lat)
+    # Dateline-safe: wrap each step into [-180, 180) before scaling by cos(lat).
+    dlon = (np.diff(col_lon) + 180.0) % 360.0 - 180.0
+    mean_lat = np.nanmean(col_lat)
+    if not np.isfinite(mean_lat):
+        return 0.0
+    dlon = dlon * np.cos(np.radians(mean_lat))
+    step = np.hypot(dlat, dlon)
+    step = step[np.isfinite(step) & (step > 0)]
+    if step.size == 0:
+        return 0.0
+    return float(np.median(step))
+
+
+def _alongtrack_factor(lats: np.ndarray, lons: np.ndarray,
+                       eff_res_deg: float) -> Tuple[int, float]:
+    """How many sub-intervals to split each scan gap into so the along-track
+    source spacing lands at ~2x the rendered cell size.
+
+    Returns (factor, source_spacing_after_deg). factor == 1 means "leave the
+    swath alone" — either it is already well sampled for this grid, the
+    geometry isn't measurable, or the upsample would blow the point budget
+    (wide multi-orbit arcs, the 2026-05-26 ingest-timeout shape)."""
+    spacing = _swath_scan_spacing_deg(lats, lons)
+    if spacing <= 0.0 or eff_res_deg <= 0.0:
+        return 1, spacing
+    if spacing <= _ALONGTRACK_TRIGGER * eff_res_deg:
+        return 1, spacing
+    factor = int(np.ceil(spacing / (2.0 * eff_res_deg)))
+    factor = max(2, min(_ALONGTRACK_MAX_FACTOR, factor))
+    n_out = ((lats.shape[0] - 1) * factor + 1) * lats.shape[1]
+    if n_out > _ALONGTRACK_MAX_POINTS:
+        return 1, spacing
+    return factor, spacing / factor
+
+
+def _upsample_alongtrack(data_channels: list, lats: np.ndarray,
+                         lons: np.ndarray, factor: int) -> tuple:
+    """Insert `factor - 1` linearly-interpolated scan lines into every gap.
+
+    Operates on the raw (scan, pixel) arrays, so the interpolation follows
+    the swath's own geometry rather than a map projection. Longitude is
+    interpolated along the SHORT way round each gap so a dateline crossing
+    doesn't sweep the wrong direction. Where one endpoint of a gap is NaN
+    the other endpoint is carried through, so coverage never shrinks."""
+    n = lats.shape[0]
+    dst = np.linspace(0.0, n - 1.0, (n - 1) * factor + 1, dtype=np.float64)
+    i0 = np.clip(dst.astype(np.int64), 0, n - 2)
+    wt = (dst - i0)[:, None]
+
+    def lerp(arr, dtype):
+        a = np.asarray(arr, dtype=dtype)
+        a0, a1 = a[i0], a[i0 + 1]
+        w = wt.astype(dtype, copy=False)
+        out = a0 * (1 - w) + a1 * w
+        bad = ~np.isfinite(out)
+        if bad.any():
+            out[bad] = np.where(np.isfinite(a0[bad]), a0[bad], a1[bad])
+        return out
+
+    lat_up = lerp(lats, np.float64)
+    lon = np.asarray(lons, dtype=np.float64)
+    lo0, lo1 = lon[i0], lon[i0 + 1]
+    step = (lo1 - lo0 + 180.0) % 360.0 - 180.0
+    lon_up = (lo0 + step * wt + 180.0) % 360.0 - 180.0
+    bad = ~np.isfinite(lon_up)
+    if bad.any():
+        lon_up[bad] = np.where(np.isfinite(lo0[bad]), lo0[bad], lo1[bad])
+    return ([lerp(ch, np.float32) for ch in data_channels], lat_up, lon_up)
+
+
+def _nn_search_radius_deg(grid_res_deg: float, src_spacing_deg: float) -> float:
+    """Nearest-neighbour cutoff for the regrid.
+
+    Historically this was a flat 3 x grid_res_deg — the radius was tied to
+    the OUTPUT grid, so asking for a finer render made the masking MORE
+    aggressive and manufactured holes that then had to be smeared shut. The
+    floor below ties it to the INPUT sampling instead, so a grid that
+    out-resolves its source degrades to blur rather than to banding. Inert
+    for every current sensor/band once along-track resampling has run; it
+    exists so the next sensor or a grid-res change can't reintroduce this."""
+    return max(grid_res_deg * 3.0, 0.75 * src_spacing_deg)
+
+
 def _regrid_swath_multi(
     data_channels: list, lats: np.ndarray, lons: np.ndarray,
     channel_names: list = None, grid_res_deg: float = 0.02
@@ -2033,7 +2180,8 @@ def _regrid_swath_multi(
     # have lon_max > 180; Leaflet's L.imageOverlay handles that
     # natively (the map's worldCopyJump option draws the image
     # seamlessly across the dateline).
-    if np.any(flat_lon > 150) and np.any(flat_lon < -150):
+    shift_dateline = bool(np.any(flat_lon > 150) and np.any(flat_lon < -150))
+    if shift_dateline:
         flat_lon = np.where(flat_lon < 0, flat_lon + 360.0, flat_lon)
 
     # Define regular grid
@@ -2047,6 +2195,32 @@ def _regrid_swath_multi(
     max_grid_dim = _adaptive_grid_cap(lat_max - lat_min, lon_max - lon_min)
     n_lat = min(int((lat_max - lat_min) / grid_res_deg) + 1, max_grid_dim)
     n_lon = min(int((lon_max - lon_min) / grid_res_deg) + 1, max_grid_dim)
+
+    # Bring the along-track sampling up to the grid BEFORE the KD-tree, so
+    # the nearest-neighbour fill can't band the field into scan-parallel
+    # arcs. Gated on the grid actually rendered (the adaptive cap can make
+    # cells much coarser than grid_res_deg on a wide arc, and a coarse grid
+    # bridges the scan gaps on its own). Bounds stay derived from the ORIGINAL
+    # samples — interpolated scans live inside that hull, so the image extent
+    # is unchanged. See _alongtrack_factor.
+    eff_res_deg = max((lat_max - lat_min) / max(n_lat - 1, 1),
+                      (lon_max - lon_min) / max(n_lon - 1, 1))
+    factor, src_spacing_deg = _alongtrack_factor(lats, lons, eff_res_deg)
+    if factor > 1:
+        data_channels, lats, lons = _upsample_alongtrack(
+            data_channels, lats, lons, factor)
+        mask = np.isfinite(lats.ravel()) & np.isfinite(lons.ravel())
+        for ch in data_channels:
+            mask &= np.isfinite(ch.ravel())
+        flat_lat = lats.ravel()[mask]
+        flat_lon = lons.ravel()[mask]
+        if shift_dateline:
+            flat_lon = np.where(flat_lon < 0, flat_lon + 360.0, flat_lon)
+        logger.debug(
+            "along-track upsample x%d: scan spacing %.3f deg -> %.3f deg "
+            "at %.3f deg/cell (%d source points)",
+            factor, src_spacing_deg * factor, src_spacing_deg,
+            eff_res_deg, len(flat_lat))
 
     grid_lat = np.linspace(lat_min, lat_max, n_lat)
     grid_lon = np.linspace(lon_min, lon_max, n_lon)
@@ -2065,7 +2239,7 @@ def _regrid_swath_multi(
     from scipy.spatial import cKDTree
     tree = cKDTree(np.column_stack([flat_lon, flat_lat]))
     dists, idx = tree.query(np.column_stack([glon.ravel(), glat.ravel()]))
-    max_dist_deg = grid_res_deg * 3.0
+    max_dist_deg = _nn_search_radius_deg(grid_res_deg, src_spacing_deg)
     far_mask = (dists > max_dist_deg).reshape(glon.shape)
 
     channels = {}
@@ -2130,6 +2304,18 @@ def _regrid_swath_window(
     lons = lons.copy()
     lons[lons > 180] -= 360
 
+    # Along-track resampling, same policy as _regrid_swath_multi. The window
+    # grid's cell size is known up front (max_grid_dim can only coarsen it,
+    # never refine it), so the decision needs no data. This is the path the
+    # storm crops and the IR/MW compare modal are rendered from — the one
+    # where GMI 89 GHz banding was most visible.
+    n_lat_pre = min(int((2.0 * half_deg) / grid_res_deg) + 1, max_grid_dim)
+    eff_res_deg = (2.0 * half_deg) / max(n_lat_pre - 1, 1)
+    factor, src_spacing_deg = _alongtrack_factor(lats, lons, eff_res_deg)
+    if factor > 1:
+        data_channels, lats, lons = _upsample_alongtrack(
+            data_channels, lats, lons, factor)
+
     # Common validity mask across all channels (same convention as
     # _regrid_swath_multi so RGB composites stay co-registered).
     mask = np.isfinite(lats.ravel()) & np.isfinite(lons.ravel())
@@ -2177,7 +2363,7 @@ def _regrid_swath_window(
     # query yields the nearest-source index and distance for every channel.
     tree = cKDTree(np.column_stack([flat_lon, flat_lat]))
     dists, idx = tree.query(np.column_stack([glon.ravel(), glat.ravel()]))
-    max_dist_deg = grid_res_deg * 3.0
+    max_dist_deg = _nn_search_radius_deg(grid_res_deg, src_spacing_deg)
     # Mask grid cells with no nearby swath sample (off-swath / polar gap).
     far_mask = (dists > max_dist_deg).reshape(glon.shape)
 
