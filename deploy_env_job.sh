@@ -38,7 +38,18 @@ fi
 JOB_NAME="tc-atlas-env-job"
 REGION="us-east1"                 # match the API service so cross-region traffic stays cheap
 SCHEDULER_NAME="tc-atlas-env-schedule"
-SCHEDULE="15 */6 * * *"           # every 6h at :15 (after GFS publish window)
+# Cloud Run is now the BACKSTOP, not the primary builder. The overlays are
+# normally built on Michael's Mac (com.fischerwx.tcatlas-env, hourly poll,
+# run_env_overlays_local.sh) because GCS ingress is free — the same work
+# costs ~$5.25/mo here and ~$0.15/mo there.
+#
+# This fires 90 min after the local window opens, giving a ~23 min local run
+# plenty of room. With SKIP_IF_FRESH=1 the job reads env/_run_marker.json,
+# sees the cycle is already published, and exits in ~15 s (~$0.06/mo). When
+# the Mac is asleep, offline, or the run failed, no marker appears and this
+# does the full build — so the fallback needs no failure detection at all.
+# It was "15 */6 * * *" when Cloud Run was primary.
+SCHEDULE="45 1,7,13,19 * * *"     # 90 min after each local build window
 TIMEZONE="UTC"
 BUCKET="${GCS_IR_CACHE_BUCKET:-tc-atlas-ir-cache}"
 
@@ -85,7 +96,7 @@ if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; 
         --cpu 1 \
         --max-retries 1 \
         --task-timeout 2700 \
-        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},CR_VCPU=1,CR_MEM_GIB=3"
+        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},CR_VCPU=1,CR_MEM_GIB=3,SKIP_IF_FRESH=1"
 else
     gcloud run jobs create "${JOB_NAME}" \
         --region "${REGION}" \
@@ -94,7 +105,7 @@ else
         --cpu 1 \
         --max-retries 1 \
         --task-timeout 2700 \
-        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},CR_VCPU=1,CR_MEM_GIB=3"
+        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},CR_VCPU=1,CR_MEM_GIB=3,SKIP_IF_FRESH=1"
 fi
 
 # ── Cloud Scheduler — invoke the Run Job on a cadence ─────────────

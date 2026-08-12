@@ -3075,6 +3075,104 @@ def build_genesis_prob(csv_text: str, lead_days: int, valid_time: str
 # Entry point
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# Local-first / cloud-backstop handoff
+# --------------------------------------------------------------------------
+# The overlays are normally built on Michael's Mac (launchd, hourly, quiet
+# exit when the current cycle is already done) — same shape as the GHOST
+# publisher. Cloud Run stays scheduled as a BACKSTOP: it fires ~90 min after
+# the local window opens and exits in seconds if the local run already
+# published, so a laptop that is asleep, offline, or broken degrades to the
+# old all-cloud behavior instead of to stale overlays.
+#
+# The handoff is a marker object rather than a "does env/mpi exist" probe,
+# because a partially-failed run leaves some layers fresh and some stale —
+# the marker is written ONLY after a run completes, and records how many
+# builders actually succeeded so the backstop can re-run a bad local pass.
+
+RUN_MARKER_PATH = f"{GCS_PREFIX}/_run_marker.json"
+
+# A run that produced fewer than this fraction of its layers is treated as
+# failed for handoff purposes, so the cloud backstop redoes it. Not 1.0: a
+# single flaky NOMADS field shouldn't trigger a full duplicate run.
+RUN_MARKER_MIN_OK = 0.80
+
+
+def write_run_marker(date_str: str, hour_str: str, results: dict,
+                     duration_s: float) -> None:
+    """Record that this (cycle, source) finished, for the backstop's benefit."""
+    if not GCS_BUCKET:
+        return
+    ok = sum(1 for v in results.values() if v)
+    total = max(len(results), 1)
+    payload = {
+        "init_cycle": f"{date_str}-{hour_str}",
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "source": os.environ.get("ENV_BUILD_SOURCE", "cloud"),
+        "layers_ok": ok,
+        "layers_total": total,
+        "ok_fraction": round(ok / total, 4),
+        "duration_s": round(duration_s, 1),
+        "forecast_hours_max": int(os.environ.get("FORECAST_HOURS_MAX", "12")),
+    }
+    try:
+        from google.cloud import storage
+        blob = storage.Client().bucket(GCS_BUCKET).blob(RUN_MARKER_PATH)
+        # Must never be served stale — the backstop's decision depends on it.
+        blob.cache_control = "no-store"
+        blob.upload_from_string(json.dumps(payload, indent=2),
+                                content_type="application/json", timeout=30)
+        log.info("Run marker written: %s", payload)
+    except Exception as e:
+        # Non-fatal. A missing marker makes the backstop run, which is the
+        # safe direction to fail in.
+        log.warning("Run marker write failed (backstop will re-run): %s", e)
+
+
+def cycle_already_published(date_str: str, hour_str: str) -> bool:
+    """True if this GFS cycle was already built to completion by someone.
+
+    Only consulted when SKIP_IF_FRESH=1 (set on the Cloud Run job, never
+    locally). Any error answers False: an unreadable marker must cause the
+    backstop to RUN, never to skip and leave the site stale.
+    """
+    if not GCS_BUCKET:
+        return False
+    try:
+        from google.cloud import storage
+        blob = storage.Client().bucket(GCS_BUCKET).blob(RUN_MARKER_PATH)
+        marker = json.loads(blob.download_as_text(timeout=20))
+    except Exception as e:
+        log.info("No readable run marker (%s) — backstop will build", e)
+        return False
+
+    if marker.get("init_cycle") != f"{date_str}-{hour_str}":
+        log.info("Marker is for cycle %s, want %s-%s — backstop will build",
+                 marker.get("init_cycle"), date_str, hour_str)
+        return False
+    frac = float(marker.get("ok_fraction") or 0.0)
+    if frac < RUN_MARKER_MIN_OK:
+        log.warning("Marker for %s-%s only %.0f%% complete (<%.0f%%) — "
+                    "backstop will rebuild", date_str, hour_str, frac * 100,
+                    RUN_MARKER_MIN_OK * 100)
+        return False
+    # A local run that requested fewer forecast hours than this job would
+    # build is NOT equivalent — rebuild rather than silently shipping a
+    # thinner product than the schedule promises.
+    if marker.get("forecast_hours_max", 12) < int(
+            os.environ.get("FORECAST_HOURS_MAX", "12")):
+        log.warning("Marker built only f000-f%03d, this job wants f000-f%s — "
+                    "backstop will rebuild",
+                    marker.get("forecast_hours_max", 12),
+                    os.environ.get("FORECAST_HOURS_MAX", "12"))
+        return False
+    log.info("Cycle %s-%s already published by %s at %s (%d/%d layers) — "
+             "backstop exiting", date_str, hour_str, marker.get("source"),
+             marker.get("completed_at"), marker.get("layers_ok", 0),
+             marker.get("layers_total", 0))
+    return True
+
+
 def emit_cost_telemetry(duration_s: float, layer_count: int) -> None:
     """Emit a structured log line for monthly Cloud Run spend tracking.
     Aggregate via:
@@ -3104,6 +3202,17 @@ def main() -> int:
     _t0 = _time.time()
     date_str, hour_str = latest_gfs_cycle()
     log.info("Latest GFS cycle: %s %sZ", date_str, hour_str)
+
+    # Already-built early exit. BOTH runners set SKIP_IF_FRESH=1; the only
+    # thing that differs is when they fire. The local launchd job polls
+    # hourly and builds whichever cycle is newly available (skipping the
+    # other ~5 wake-ups per cycle); the Cloud Run backstop fires ~90 min
+    # later and finds the work already done, exiting after a container start
+    # plus one GCS read (~10-15 s). Whoever gets there first builds it, so
+    # a sleeping Mac degrades to the old all-cloud behavior automatically.
+    if os.environ.get("SKIP_IF_FRESH") == "1" and \
+            cycle_already_published(date_str, hour_str):
+        return 0
 
     # Pull the cyclogenesis CSV ONCE up front so the three probability
     # builders share the same payload + init cycle. Walk back if today's
@@ -3294,7 +3403,11 @@ def main() -> int:
         log.warning("Skipping genesis_prob_* layers: cyclogenesis CSV unavailable")
 
     log.info("Done. Results: %s", results)
-    emit_cost_telemetry(_time.time() - _t0, layer_count=len(results))
+    _elapsed = _time.time() - _t0
+    # Written last, and only on a real run — this is what tells the cloud
+    # backstop it can stand down for this cycle.
+    write_run_marker(date_str, hour_str, results, _elapsed)
+    emit_cost_telemetry(_elapsed, layer_count=len(results))
     # Exit nonzero so Scheduler retries if every field failed, but we
     # don't want one OISST hiccup to mask an otherwise-good run.
     return 0 if any(results.values()) else 1
