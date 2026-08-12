@@ -645,7 +645,7 @@
         clearLayers: function () { this._data = _emptyFC(); this._setData(); return this; },
         setData: function (d) { this._data = _normFC(d); this._setData(); return this; },
         _addToGL: function (map) {
-            this._map = map; var gl = map._gl, id = this._id, self = this;
+            this._map = map; var gl = map._gl, self = this;
             var fn = this._styleIsFn(), st = fn ? {} : (this.options.style || {});
             this._rmFlag = false;
             // Verify-and-retry: a layer toggled on while the IR animation is
@@ -654,9 +654,17 @@
             // ErrorEvent — "source not found" — instead of throwing), or a
             // map whose 'load' event is minutes away because frames keep the
             // style perpetually busy. Poll until the add verifiably lands.
+            //
+            // CRITICAL: each retry uses a FRESH source id. Removing a geojson
+            // source while its worker is mid-parse and re-adding the SAME id
+            // leaves a zombie source cache that never reports loaded and
+            // never builds tiles (and pins isStyleLoaded() false for the
+            // whole map). Nothing outside this closure hangs onto the old id
+            // — _removeFromGL and _setData read this._id at call time.
             var attempt = function () {
                 if (self._rmFlag || self._map !== map) return;
-                if (gl.getSource(id)) { self._added = true; return; }
+                var id = self._id;
+                if (gl.getSource(id) && gl.getLayer(id + '-l')) { self._added = true; return; }
                 if (!(map._loaded || gl.isStyleLoaded())) { setTimeout(attempt, 150); return; }
                 try {
                     gl.addSource(id, { type: 'geojson', data: self._data });
@@ -671,10 +679,12 @@
                         paint: { 'line-color': lineColor, 'line-width': lineWidth, 'line-opacity': lineOpac } }, gz);
                 } catch (e) { /* fall through to verification */ }
                 // A rejected add fires an ErrorEvent rather than throwing —
-                // verify, clean up the partial state, and retry.
+                // verify; on failure clean up the partial state and retry
+                // under a brand-new id (see zombie note above).
                 if (!gl.getSource(id) || !gl.getLayer(id + '-l')) {
                     ['-l', '-f'].forEach(function (suf) { try { if (gl.getLayer(id + suf)) gl.removeLayer(id + suf); } catch (e2) {} });
                     try { if (gl.getSource(id)) gl.removeSource(id); } catch (e2) {}
+                    self._id = uid('geo');
                     setTimeout(attempt, 250);
                     return;
                 }

@@ -2032,6 +2032,43 @@ input[type="range"].ga-range::-moz-range-thumb {
     border-color: var(--um-green);
 }
 
+/* ── Wind-field on-map legend ── */
+.ga-wf-legend {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    z-index: 900;
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    backdrop-filter: blur(4px);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 10px;
+    line-height: 1.7;
+    color: var(--text);
+    pointer-events: none;
+}
+.ga-wf-legend-title {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--slate);
+    margin-bottom: 2px;
+}
+.ga-wf-legend-row { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.ga-wf-legend-line {
+    display: inline-block;
+    width: 18px;
+    height: 3px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+.ga-wf-legend-swathline {
+    background: linear-gradient(90deg, #38bdf8 50%, #f87171 50%);
+    opacity: 0.75;
+}
+
 /* ── Wind-field (wind radii) legend chips ── */
 .ga-wf-chip {
     font-size: 9px;

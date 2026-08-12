@@ -500,24 +500,37 @@ def compute_radii_climo(tracks: dict, radii: dict, storms_by_sid: dict) -> dict:
     return out
 
 
+def _radius_at(bearing: float, quads: list) -> float:
+    """Smoothly interpolated radius at a compass bearing. Mirrors
+    radiusAt() in Dan Chavas' extremewx ibtracs_viewer: the four quadrant
+    values are the radius at each quadrant CENTER (NE=45°, SE=135°,
+    SW=225°, NW=315°) and the radius blends linearly between adjacent
+    centers. A 0/missing quadrant pulls the curve smoothly toward the
+    storm center — no hard radial steps at the 90° boundaries."""
+    x = (bearing - 45.0) % 360.0
+    seg = int(x // 90)
+    t = (x - seg * 90) / 90.0
+    a = quads[seg] or 0
+    b = quads[(seg + 1) % 4] or 0
+    return a * (1 - t) + b * t
+
+
 def _wedge_polygon(lat: float, lon: float, quads: list) -> Optional[list]:
-    """Quadrant wind-radii wedge as a shapely-ready ring. Quarter-circle
-    arcs (bearings NE=0-90, SE=90-180, SW=180-270, NW=270-360) with radial
-    steps at quadrant boundaries — the honest NHC-style rendering; no
-    smoothing across quadrants. Missing quadrants count as 0 (collapse to
-    center). Returns None when all four are 0/missing."""
+    """Quadrant wind-radii footprint as a shapely-ready ring, sampled
+    every 3° with the smooth cross-quadrant interpolation of _radius_at
+    (matches Dan Chavas' viewer). Returns None when all four quadrants
+    are 0/missing."""
     import math
-    rr = [(q if q else 0) for q in (quads or [0, 0, 0, 0])]
+    rr = [(q if q and q > 0 else 0) for q in (quads or [0, 0, 0, 0])]
     if not any(rr):
         return None
     coslat = max(0.05, math.cos(math.radians(lat)))
     ring = []
-    for q in range(4):
-        r_deg = rr[q] / 60.0  # nm → great-circle degrees
-        for b in range(q * 90, (q + 1) * 90 + 1, 10):
-            th = math.radians(b)
-            ring.append((lon + r_deg * math.sin(th) / coslat,
-                         lat + r_deg * math.cos(th)))
+    for b in range(0, 360, 3):
+        r_deg = _radius_at(b, rr) / 60.0  # nm → great-circle degrees
+        th = math.radians(b)
+        ring.append((lon + r_deg * math.sin(th) / coslat,
+                     lat + r_deg * math.cos(th)))
     ring.append(ring[0])
     return ring
 
@@ -555,22 +568,55 @@ def compute_swaths(radii: dict, tracks: dict) -> dict:
             prev_lo = lo
             pos_by_t[pt["t"]] = (pt["la"], lo + offset)
 
+        def _min_pos(quads):
+            vals = [v for v in (quads or []) if v and v > 0]
+            return min(vals) if vals else 0
+
+        def _add_wedge(wedges, lat, lon, quads):
+            ring = _wedge_polygon(lat, lon, quads)
+            if ring is None:
+                return
+            poly = Polygon(ring)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            if not poly.is_empty:
+                wedges.append(poly)
+
         entry = {}
         for key, idx in (("s34", 1), ("s64", 3)):
-            wedges = []
+            # Each fix's footprint PLUS interpolated bridge footprints
+            # between consecutive fixes, so small or spaced-out shapes
+            # merge into ONE coherent swath (mirrors swathPolys in Dan
+            # Chavas' viewer: step below the smallest radius of the pair
+            # so consecutive footprints overlap).
+            items = []
             for row in rows:
                 pos = pos_by_t.get(row[0])
                 quads = row[idx] if len(row) > idx else None
-                if pos is None or not quads:
+                items.append((pos, quads) if pos and quads else None)
+            wedges = []
+            for i, cur in enumerate(items):
+                if cur is None:
                     continue
-                ring = _wedge_polygon(pos[0], pos[1], quads)
-                if ring is None:
+                (la, lo), qa = cur
+                _add_wedge(wedges, la, lo, qa)
+                nxt = items[i + 1] if i + 1 < len(items) else None
+                if nxt is None:
                     continue
-                poly = Polygon(ring)
-                if not poly.is_valid:
-                    poly = poly.buffer(0)
-                if not poly.is_empty:
-                    wedges.append(poly)
+                (lb, lob), qb = nxt
+                # great-circle distance in nm (1° lat = 60 nm)
+                import math
+                dnm = 60.0 * math.hypot(lb - la,
+                                        (lob - lo) * math.cos(math.radians((la + lb) / 2)))
+                sc = min(_min_pos(qa), _min_pos(qb))
+                if sc <= 0:
+                    continue
+                n = min(200, max(0, int(math.ceil(dnm / (sc * 0.33))) - 1))
+                for k in range(1, n + 1):
+                    t = k / (n + 1)
+                    qi = [(qa[q] or 0) + ((qb[q] or 0) - (qa[q] or 0)) * t
+                          for q in range(4)]
+                    _add_wedge(wedges, la + (lb - la) * t, lo + (lob - lo) * t, qi)
             if not wedges:
                 entry[key] = None
                 continue

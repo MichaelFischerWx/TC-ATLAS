@@ -88,11 +88,11 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundles, discoverable from byte 0. Tokens MUST match
          the script tags below. -->
-    <link rel="preload" as="script" href="global_archive.js?v=20260812a">
+    <link rel="preload" as="script" href="global_archive.js?v=20260812b">
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260804b">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260811">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260812b">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -442,6 +442,15 @@
                         <div class="detail-map-ir-row">
                         <div class="detail-map-wrap">
                             <div id="detail-map" class="detail-map-container"></div>
+                            <!-- Wind-field legend (shown while the Wind Field overlay is on) -->
+                            <div id="ga-wf-legend" class="ga-wf-legend" style="display:none;">
+                                <div class="ga-wf-legend-title">Wind field</div>
+                                <div class="ga-wf-legend-row"><span class="ga-wf-legend-line" style="background:#38bdf8;"></span>R34 &middot; 34 kt (TS force)</div>
+                                <div class="ga-wf-legend-row"><span class="ga-wf-legend-line" style="background:#fbbf24;"></span>R50 &middot; 50 kt</div>
+                                <div class="ga-wf-legend-row"><span class="ga-wf-legend-line" style="background:#f87171;"></span>R64 &middot; 64 kt (hurricane)</div>
+                                <div class="ga-wf-legend-row" id="ga-wf-legend-rmw"><span class="ga-wf-legend-line" style="background:#94a3b8;"></span>RMW ring</div>
+                                <div class="ga-wf-legend-row" id="ga-wf-legend-swath" style="display:none;"><span class="ga-wf-legend-line ga-wf-legend-swathline"></span>Lifetime swath</div>
+                            </div>
                             <!-- Loading spinner overlay (stays inside map) -->
                             <div id="ir-frame-loading" class="ir-map-loading" style="display:none;">
                                 <div class="ga-spinner"></div>
@@ -638,9 +647,11 @@
                                 <span id="ga-wf-time" style="font-size:9px;color:var(--slate);font-variant-numeric:tabular-nums;"></span>
                             </div>
                             <div id="ga-wf-readout" style="margin-top:4px;font-size:10px;color:var(--text);font-variant-numeric:tabular-nums;"></div>
-                            <div style="margin-top:4px;font-size:8.5px;color:var(--slate);opacity:0.85;">
-                                Radii: NOAA IBTrACS v04r01 (NHC / JTWC best track), quadrants NE/SE/SW/NW &middot; routinely analyzed ~2004 onward.
-                                Display &amp; climatology after <a href="https://web.ics.purdue.edu/~dchavas/extremewx/tc/ibtracs_viewer.html" target="_blank" rel="noopener" style="color:#0284c7;text-decoration:none;">Dan Chavas&rsquo; TC wind-field viewers &#8599;</a> &mdash; see his site for interactive radii climatologies and idealized wind-field tools.
+                            <div style="margin-top:6px;font-size:11px;color:var(--text);line-height:1.5;border-top:1px solid var(--border);padding-top:6px;">
+                                Wind-radii display &amp; climatology after
+                                <a href="https://web.ics.purdue.edu/~dchavas/extremewx/tc/ibtracs_viewer.html" target="_blank" rel="noopener" style="color:#0284c7;font-weight:600;">Dan Chavas&rsquo; TC wind-field viewers &#8599;</a>
+                                &mdash; visit his site for interactive radii climatologies, trends, and idealized wind-field tools.
+                                <span style="color:var(--slate);">Data: NOAA IBTrACS v04r01 (NHC / JTWC best track), quadrants NE/SE/SW/NW, routinely analyzed ~2004 onward.</span>
                             </div>
                         </div>
                         <!-- Flight-level reconnaissance controls -->
@@ -1070,9 +1081,9 @@
     });
     </script>
     <script defer src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-    <script defer src="lflet_gl.js?v=20260812a"></script>
+    <script defer src="lflet_gl.js?v=20260812b"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
-    <script defer src="global_archive.js?v=20260812a"></script>
+    <script defer src="global_archive.js?v=20260812b"></script>
 </body>
 </html>

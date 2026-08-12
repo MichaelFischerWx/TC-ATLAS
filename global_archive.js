@@ -30,7 +30,7 @@ function _ga(action, params) {
 
 // ── Configuration ────────────────────────────────────────────
 var API_BASE = 'https://api.tcatlas.org';
-var DATA_VER = 'v20260811';  // Cache-busting version for static JSON files
+var DATA_VER = 'v20260812';  // Cache-busting version for static JSON files
 var STORMS_JSON = 'ibtracs_storms.json?' + DATA_VER;
 var TRACKS_MANIFEST = 'ibtracs_tracks_manifest.json?' + DATA_VER;
 var TRACKS_JSON_FALLBACK = 'ibtracs_tracks.json?' + DATA_VER;  // Fallback for single-file mode
@@ -6825,12 +6825,12 @@ var _wfLastKey = '';          // last rendered time key (skip redundant setData)
 var _wfSliderIdx = 0;         // manual slider position (no-IR mode)
 
 var _WF_STYLES = {
-    r34:   { color: '#38bdf8', weight: 1.6, opacity: 0.95, fillColor: '#38bdf8', fillOpacity: 0.10 },
-    r50:   { color: '#fbbf24', weight: 1.4, opacity: 0.95, fillColor: '#fbbf24', fillOpacity: 0.10 },
-    r64:   { color: '#f87171', weight: 1.6, opacity: 0.95, fillColor: '#f87171', fillOpacity: 0.14 },
-    rmw:   { color: '#ffffff', weight: 1.3, opacity: 0.9,  fillColor: '#ffffff', fillOpacity: 0 },
-    s34:   { color: '#38bdf8', weight: 1.8, opacity: 0.75, fillColor: '#38bdf8', fillOpacity: 0.06 },
-    s64:   { color: '#f87171', weight: 1.8, opacity: 0.75, fillColor: '#f87171', fillOpacity: 0.08 }
+    r34:   { color: '#38bdf8', weight: 2.6, opacity: 0.95, fillColor: '#38bdf8', fillOpacity: 0.10 },
+    r50:   { color: '#fbbf24', weight: 2.4, opacity: 0.95, fillColor: '#fbbf24', fillOpacity: 0.10 },
+    r64:   { color: '#f87171', weight: 2.6, opacity: 0.95, fillColor: '#f87171', fillOpacity: 0.14 },
+    rmw:   { color: '#ffffff', weight: 1.8, opacity: 0.95, fillColor: '#ffffff', fillOpacity: 0 },
+    s34:   { color: '#38bdf8', weight: 2.2, opacity: 0.75, fillColor: '#38bdf8', fillOpacity: 0.06 },
+    s64:   { color: '#f87171', weight: 2.2, opacity: 0.75, fillColor: '#f87171', fillOpacity: 0.08 }
 };
 
 function _wfStyleFn(f) {
@@ -6869,6 +6869,19 @@ function _wfReset(storm) {
     if (swBtn) swBtn.classList.remove('active');
     var rmwBtn = document.getElementById('ga-wf-rmw-btn');
     if (rmwBtn) rmwBtn.classList.add('active');
+    _wfSyncLegend();
+}
+
+/** Show the on-map legend only while the overlay is on; per-row
+    visibility follows the RMW / Swath sub-toggles. */
+function _wfSyncLegend() {
+    var lg = document.getElementById('ga-wf-legend');
+    if (!lg) return;
+    lg.style.display = _wfVisible ? '' : 'none';
+    var rowRmw = document.getElementById('ga-wf-legend-rmw');
+    if (rowRmw) rowRmw.style.display = _wfRmwOn ? '' : 'none';
+    var rowSw = document.getElementById('ga-wf-legend-swath');
+    if (rowSw) rowSw.style.display = _wfSwathOn ? '' : 'none';
 }
 
 window.toggleWindField = function () {
@@ -6881,12 +6894,14 @@ window.toggleWindField = function () {
         if (_wfLayer && detailMap) { try { detailMap.removeLayer(_wfLayer); } catch (e) {} _wfLayer = null; }
         if (_wfSwathLayer && detailMap) { try { detailMap.removeLayer(_wfSwathLayer); } catch (e) {} _wfSwathLayer = null; }
         _wfLastKey = '';
+        _wfSyncLegend();
         return;
     }
     _wfVisible = true;
     _ga('ga_toggle_wind_field', { sid: selectedStorm && selectedStorm.sid, storm_name: selectedStorm && selectedStorm.name });
     if (btn) btn.classList.add('active');
     if (controls) controls.style.display = '';
+    _wfSyncLegend();
     if (_wfLoaded) { _wfShowInitial(); } else { _wfLoad(selectedStorm); }
 };
 
@@ -6894,6 +6909,7 @@ window.toggleWindFieldSwath = function () {
     _wfSwathOn = !_wfSwathOn;
     var b = document.getElementById('ga-wf-swath-btn');
     if (b) b.classList.toggle('active', _wfSwathOn);
+    _wfSyncLegend();
     _wfRenderSwath();
 };
 
@@ -6901,6 +6917,7 @@ window.toggleWindFieldRmw = function () {
     _wfRmwOn = !_wfRmwOn;
     var b = document.getElementById('ga-wf-rmw-btn');
     if (b) b.classList.toggle('active', _wfRmwOn);
+    _wfSyncLegend();
     _wfLastKey = '';
     _wfRerender();
 };
@@ -6953,6 +6970,8 @@ function _wfLoad(storm) {
 function _wfShowInitial() {
     if (!_wfStorm) return;
     _wfSyncSliderVisibility();
+    // Restore the swath if its sub-toggle was left on across an off/on cycle
+    if (_wfSwathOn && !_wfSwathLayer) _wfRenderSwath();
     var t = _wfCurrentIRTime();
     if (t) { _wfRender(t); return; }
     // Peak fix: row nearest the storm's max wind time
@@ -7053,22 +7072,35 @@ function _wfValuesAt(ms) {
     };
 }
 
-/** Quadrant wedge ring — mirrors _wedge_polygon in refresh_ibtracs.py:
-    quarter-circle arcs (NE=0-90° etc.) with radial steps at quadrant
-    boundaries. Returns [[lng,lat],...] or null when all quads are 0. */
+/** Smoothly interpolated radius at a compass bearing — mirrors radiusAt()
+    in Dan Chavas' extremewx viewer (and _radius_at in refresh_ibtracs.py):
+    quadrant values are the radius at the quadrant CENTERS (NE=45°,
+    SE=135°, SW=225°, NW=315°), blended linearly between adjacent centers.
+    A 0/missing quadrant pulls the curve smoothly toward the center. */
+function _wfRadiusAt(bearing, v) {
+    var x = ((bearing - 45) % 360 + 360) % 360;
+    var seg = Math.floor(x / 90), t = (x - seg * 90) / 90;
+    var a = v[seg] || 0, b = v[(seg + 1) % 4] || 0;
+    return a * (1 - t) + b * t;
+}
+
+/** Quadrant wind-radii footprint as a smooth closed ring (3° sampling).
+    Returns [[lng,lat],...] or null when all quads are 0/missing. */
 function _wfWedgeRing(lat, lon, quads) {
     if (!quads) return null;
-    var any = false;
-    for (var q = 0; q < 4; q++) { if (quads[q]) { any = true; break; } }
+    var v = [], any = false;
+    for (var q = 0; q < 4; q++) {
+        var r = (quads[q] != null && quads[q] > 0) ? quads[q] : 0;
+        v.push(r);
+        if (r > 0) any = true;
+    }
     if (!any) return null;
     var coslat = Math.max(0.05, Math.cos(lat * Math.PI / 180));
     var ring = [];
-    for (var qi = 0; qi < 4; qi++) {
-        var rDeg = (quads[qi] || 0) / 60;
-        for (var b = qi * 90; b <= (qi + 1) * 90; b += 6) {
-            var th = b * Math.PI / 180;
-            ring.push([lon + rDeg * Math.sin(th) / coslat, lat + rDeg * Math.cos(th)]);
-        }
+    for (var b = 0; b < 360; b += 3) {
+        var rDeg = _wfRadiusAt(b, v) / 60;
+        var th = b * Math.PI / 180;
+        ring.push([lon + rDeg * Math.sin(th) / coslat, lat + rDeg * Math.cos(th)]);
     }
     ring.push(ring[0]);
     return ring;
