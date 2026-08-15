@@ -1512,6 +1512,13 @@ window.switchTab = function (tabName) {
             setTimeout(function () { compareMap.invalidateSize(); }, 100);
         }
     }
+    // GHOST Reanalysis lives in global_archive_ghostra.js and boots on first
+    // activation. It reads allTracks/allStorms from this file, so it must not
+    // run before the storm database has loaded — hence activation-time, not
+    // load-time, init.
+    if (tabName === 'reanalysis' && typeof activateGhostRAView === 'function') {
+        activateGhostRAView();
+    }
     // Environment tab is a launch card to climatology_globe.html — no
     // dynamic boot needed (the engine lives on its own page so the
     // vendored GC-ATLAS engine can run un-scoped).
@@ -14858,5 +14865,37 @@ function _gaFLRenderTimeSeries() {
         }
     });
 }
+
+/* ══════════════════════════════════════════════════════════════
+   Bridge for global_archive_ghostra.js (the GHOST Reanalysis tab).
+   That tab lives in its own file — this page's logic is one IIFE, so
+   allTracks / allStorms / syncIRToTime / showToast are module-private and
+   invisible to it. Rather than move a 600-line tab in here or leak the
+   module's state wholesale, expose the narrow surface it actually needs.
+
+   getTrack() reads allTracks through the closure on every call on purpose:
+   the single-file fallback in loadTracks() REASSIGNS allTracks, so a cached
+   reference would silently go stale.
+   ══════════════════════════════════════════════════════════════ */
+window.GAArchive = {
+    getTrack: function (sid) { return (allTracks && allTracks[sid]) || null; },
+    tracksReady: function () { return !!allTracks && Object.keys(allTracks).length > 0; },
+    getStorm: function (sid) {
+        for (var i = 0; i < allStorms.length; i++) {
+            if (allStorms[i].sid === sid) return allStorms[i];
+        }
+        return null;
+    },
+    syncIRToTime: function (dt) { return syncIRToTime(dt); },
+    toast: function (msg) { return showToast(msg); },
+    // NB: only selectStormFromPopup(sid) is on window — selectStorm(storm) is
+    // module-private, so it has to come through here.
+    selectStorm: function (storm) { return selectStorm(storm); },
+    // The IR colormaps are 256x4 Uint8Array LUTs indexed by the raw uint8 Tb
+    // byte — handing them out keeps the reanalysis tab's IR chip pixel-identical
+    // to Storm Detail instead of re-deriving an approximation of the ramp.
+    irColormaps: function () { return IR_COLORMAPS; },
+    irColormapName: function () { return irSelectedColormap; }
+};
 
 })();

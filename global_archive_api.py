@@ -1501,15 +1501,47 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
 
                 da = ds["Tb"].isel(time=tidx)
 
-                # Subset spatially using coordinate selection
-                da_sub = da.sel(
-                    lat=slice(lat_min, lat_max),
-                    lon=slice(lon_min, lon_max),
-                )
+                # Subset spatially using coordinate selection.
+                #
+                # ANTIMERIDIAN: the MergIR grid runs lon -180..180, so a plain
+                # slice() truncates any box straddling the dateline — a storm at
+                # 179E asks for 169..189 and silently gets back only 169..180.
+                # The 50%-coverage guard below does NOT catch it (11 of 20
+                # degrees passes), so the frame renders as a narrow strip with
+                # the storm jammed against the edge. Wrap instead: take the two
+                # pieces and concatenate them in west-to-east order.
+                if lon_min < -180.0 or lon_max > 180.0:
+                    if lon_max > 180.0:          # e.g. 169..189 -> 169..180 + -180..-171
+                        west_part = da.sel(lat=slice(lat_min, lat_max),
+                                           lon=slice(lon_min, 180.0))
+                        east_part = da.sel(lat=slice(lat_min, lat_max),
+                                           lon=slice(-180.0, lon_max - 360.0))
+                    else:                         # e.g. -189..-169 -> 171..180 + -180..-169
+                        west_part = da.sel(lat=slice(lat_min, lat_max),
+                                           lon=slice(lon_min + 360.0, 180.0))
+                        east_part = da.sel(lat=slice(lat_min, lat_max),
+                                           lon=slice(-180.0, lon_max))
+                    da_sub = xr.concat([west_part, east_part], dim="lon")
+                    # Unwrap the eastern piece's coords so the concatenated
+                    # array is monotonic; the caller reports REQUESTED bounds
+                    # anyway, and monotonic lons keep the size/validity checks
+                    # below meaningful.
+                    _lons = np.concatenate([
+                        west_part.coords["lon"].values,
+                        east_part.coords["lon"].values + 360.0,
+                    ])
+                    tb = da_sub.values
+                    actual_lats = da_sub.coords["lat"].values
+                    actual_lons = _lons
+                else:
+                    da_sub = da.sel(
+                        lat=slice(lat_min, lat_max),
+                        lon=slice(lon_min, lon_max),
+                    )
 
-                tb = da_sub.values
-                actual_lats = da_sub.coords["lat"].values
-                actual_lons = da_sub.coords["lon"].values
+                    tb = da_sub.values
+                    actual_lats = da_sub.coords["lat"].values
+                    actual_lons = da_sub.coords["lon"].values
 
                 ds.close()
                 os.unlink(tmp.name)

@@ -2757,3 +2757,263 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-weight: 600;
 }
 
+
+/* ══════════════════════════════════════════════════════════════
+   GHOST Reanalysis tab (global_archive_ghostra.js)
+   Everything is written against the shared theme variables so the tab
+   inherits light/dark with the rest of the page. The point-cloud ramps
+   are DATA colours and live in the JS — they are a validated set, not a
+   theme, and are deliberately not flipped per mode.
+   ══════════════════════════════════════════════════════════════ */
+.ga-beta-chip {
+    font-size: 0.55rem; font-weight: 800; letter-spacing: .06em;
+    padding: 1px 5px; border-radius: 999px; margin-left: 5px;
+    background: #f43f5e; color: #fff; vertical-align: 1.5px;
+}
+.gra-toolbar {
+    display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap;
+    padding: 8px 14px; background: var(--surface-raised);
+    border-bottom: 1px solid var(--border);
+}
+.gra-tgroup { display: flex; flex-direction: column; gap: 5px; }
+.gra-tgroup > label {
+    font-size: 0.6rem; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--slate); font-weight: 700;
+}
+.gra-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.gra-seg { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.gra-seg button {
+    font-family: 'DM Sans', sans-serif; font-size: 0.72rem; padding: 4px 9px;
+    border: 0; border-right: 1px solid var(--border); cursor: pointer;
+    background: var(--surface); color: var(--slate);
+}
+.gra-seg button:last-child { border-right: 0; }
+.gra-seg button:hover { color: var(--text); }
+.gra-seg button.active { background: var(--blue); color: #fff; font-weight: 700; }
+.gra-rng { display: flex; align-items: center; gap: 6px; }
+.gra-rng input[type=range] { width: 88px; accent-color: var(--blue); }
+.gra-rng output {
+    font-size: 0.72rem; color: var(--text); min-width: 56px;
+    font-variant-numeric: tabular-nums;
+}
+.gra-chk {
+    font-size: 0.72rem; color: var(--slate); display: flex;
+    align-items: center; gap: 4px; cursor: pointer;
+}
+/* Height is set from the panel's MEASURED offset by sizeTab(), not from a
+   hard-coded calc: the chrome above it is ~138px (page offset + topbar +
+   stats strip + tab bar), not the 52+42 the older layout classes assume, and
+   the toolbar itself wraps to two rows at narrow widths. Guessing it left the
+   panel ~44px past the fold, which quietly clipped the bottom-anchored legend.
+   The calc here is only a pre-JS fallback. */
+#tab-reanalysis.active {
+    display: flex; flex-direction: column;
+    height: calc(100vh - 138px);
+}
+.gra-toolbar { flex: none; }
+.gra-layout { flex: 1; height: auto; min-height: 0; }
+#gra-map { width: 100%; height: 100%; background: var(--navy); }
+.gra-count {
+    position: absolute; left: 10px; top: 10px; z-index: 500;
+    background: rgba(15, 23, 42, .86); color: #fff; font-size: 0.72rem;
+    padding: 4px 9px; border-radius: 6px; font-variant-numeric: tabular-nums;
+}
+.gra-legend { position: absolute; left: 10px; bottom: 10px; z-index: 500; max-width: 330px; }
+.gra-legend .gra-lt { font-size: 0.65rem; font-weight: 700; margin-bottom: 4px; color: var(--text); }
+.gra-legend .gra-bar { height: 9px; border-radius: 2px; }
+.gra-legend .gra-ticks {
+    display: flex; justify-content: space-between; font-size: 0.6rem;
+    color: var(--slate); font-variant-numeric: tabular-nums; margin-top: 2px;
+}
+.gra-legend .gra-note { font-size: 0.6rem; color: var(--cyan); margin-top: 5px; line-height: 1.35; }
+.gra-legend .gra-sw {
+    display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+    margin-right: 3px; vertical-align: -1px;
+}
+.gra-legend .gra-swatches {
+    display: flex; flex-wrap: wrap; gap: 3px 9px;
+    font-size: 0.62rem; color: var(--slate);
+}
+/* ── leaderboard ── */
+.gra-sub { font-size: 0.66rem; color: var(--slate); }
+.gra-list { overflow-y: auto; flex: 1; }
+.gra-item {
+    padding: 6px 14px; border-bottom: 1px solid var(--border); cursor: pointer;
+    display: grid; grid-template-columns: 1fr auto; gap: 1px 8px;
+}
+.gra-item:hover { background: var(--surface); }
+.gra-item.active { background: var(--surface); box-shadow: inset 3px 0 0 var(--blue); }
+.gra-item .gra-nm { font-size: 0.78rem; font-weight: 700; color: var(--text); }
+.gra-item .gra-meta, .gra-item .gra-num {
+    font-size: 0.66rem; color: var(--slate); font-variant-numeric: tabular-nums;
+}
+.gra-item .gra-num { text-align: right; }
+.gra-item .gra-g { color: #f43f5e; font-weight: 700; }
+.gra-flag {
+    font-size: 0.52rem; padding: 0 4px; border-radius: 3px; margin-left: 4px;
+    font-weight: 800; vertical-align: 1px;
+    background: rgba(244, 115, 33, .16); color: var(--cyan);
+}
+.gra-flag.oob { background: rgba(46, 125, 255, .16); color: #4f7fd1; }
+.gra-foot {
+    padding: 8px 14px; border-top: 1px solid var(--border);
+    font-size: 0.6rem; color: var(--slate); line-height: 1.4;
+}
+/* ── IR chip ── */
+/* The chip must never exceed the map it floats over — on a short window the
+   IR canvas alone is taller than the map area, and the overflow silently
+   clipped the values row, the sparkline and the colormap picker. Flex column +
+   a flexible canvas means it shrinks instead of spilling. */
+.gra-ir {
+    position: absolute; right: 10px; bottom: 10px; z-index: 600; width: 320px;
+    max-height: calc(100% - 20px);
+    background: var(--surface-raised); border: 1px solid var(--border);
+    border-radius: 9px; overflow: hidden; display: none;
+    box-shadow: 0 4px 18px rgba(15, 22, 35, .22);
+}
+.gra-ir.open { display: flex; flex-direction: column; }
+.gra-ir-head, .gra-ir-time, .gra-ir-foot, .gra-ir-spark, .gra-ir-status { flex: none; }
+.gra-ir-canvaswrap { flex: 1 1 auto; min-height: 90px; overflow: hidden; }
+.gra-ir-head {
+    padding: 6px 9px; background: #0f172a; color: #fff;
+    display: flex; align-items: center; gap: 6px; font-size: 0.78rem; font-weight: 700;
+}
+.gra-ir-sub { font-size: 0.62rem; color: #94a3b8; font-weight: 500; }
+.gra-ir-head .ga-btn { margin-left: auto; }
+.gra-ir-x {
+    cursor: pointer; border: 0; background: none; color: #94a3b8;
+    font-size: 1rem; line-height: 1; padding: 0 2px;
+}
+.gra-ir-time {
+    font-size: 0.62rem; padding: 3px 9px; background: #1e293b; color: #cbd5e1;
+    display: flex; gap: 6px; font-variant-numeric: tabular-nums;
+}
+.gra-ir-delta { margin-left: auto; }
+.gra-ir-delta.far { color: #fca5a5; }
+.gra-ir-canvaswrap { position: relative; background: #000; line-height: 0; }
+#gra-ir-canvas { width: 100%; height: 100%; max-height: 300px; object-fit: contain; display: block; cursor: crosshair; }
+.gra-ir-hover {
+    position: absolute; left: 0; right: 0; bottom: 0; font-size: 0.62rem;
+    background: rgba(15, 23, 42, .8); color: #e2e8f0; padding: 2px 6px;
+    font-variant-numeric: tabular-nums; pointer-events: none;
+}
+.gra-ir-status { padding: 8px 9px; font-size: 0.68rem; color: var(--slate); }
+.gra-ir-status:empty { display: none; }
+.gra-ir-foot { padding: 6px 9px; display: flex; align-items: center; gap: 6px; }
+.gra-ir-vals { font-size: 0.66rem; color: var(--slate); font-variant-numeric: tabular-nums; }
+.gra-ir-vals b { color: var(--text); }
+.gra-ir-vals .gra-g { color: #f43f5e; }
+.gra-ir-spark { padding: 0 9px 8px; }
+.gra-ir-spark svg { width: 100%; height: 52px; display: block; }
+.gra-ir-cmap { margin-left: auto; font-size: 0.62rem; padding: 1px 4px; max-width: 108px; }
+.gra-group {
+    padding: 5px 14px 3px; font-size: 0.6rem; font-weight: 800;
+    text-transform: uppercase; letter-spacing: .07em;
+    color: var(--slate); background: var(--surface);
+    border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1;
+}
+.gra-search { width: 100%; margin-top: 8px; font-size: 0.74rem; }
+.gra-ir-zoom {
+    position: absolute; right: 5px; top: 4px; font-size: 0.58rem;
+    background: rgba(15, 23, 42, .72); color: #e2e8f0; padding: 1px 5px;
+    border-radius: 3px; pointer-events: none;
+}
+.gra-ir-zoom:empty { display: none; }
+.gra-tip {
+    position: absolute; z-index: 620; display: none; pointer-events: none;
+    min-width: 186px; padding: 6px 9px; border-radius: 7px;
+    background: rgba(15, 23, 42, .94); color: #e2e8f0;
+    font-size: 0.66rem; line-height: 1.5; font-variant-numeric: tabular-nums;
+    box-shadow: 0 3px 14px rgba(15, 22, 35, .3);
+}
+.gra-tip.on { display: block; }
+.gra-tip-hd { font-weight: 700; font-size: 0.74rem; color: #fff; margin-bottom: 3px; }
+.gra-tip-sub { font-weight: 400; color: #94a3b8; font-size: 0.6rem; margin-left: 6px; }
+.gra-tip-row { display: flex; gap: 6px; align-items: baseline; }
+.gra-tip-k { color: #94a3b8; min-width: 62px; }
+.gra-tip-k.gra-tip-g { color: #fda4af; font-weight: 700; }
+.gra-tip-row b { color: #fff; font-weight: 700; }
+.gra-tip-na { color: #64748b; }
+.gra-tip-flag {
+    margin-top: 3px; font-size: 0.56rem; color: #7dd3fc;
+    text-transform: uppercase; letter-spacing: .06em; font-weight: 700;
+}
+
+/* About panel — the "what is this" a colleague arriving cold needs. */
+.gra-about {
+    position: absolute; z-index: 640; display: none;
+    left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: min(560px, calc(100% - 40px)); max-height: calc(100% - 40px);
+    overflow-y: auto; padding: 18px 22px 20px;
+    background: var(--surface-raised); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 10px 40px rgba(15, 22, 35, .3);
+    color: var(--text);
+}
+.gra-about.open { display: block; }
+.gra-about h3 { margin: 0 26px 10px 0; font-size: 1rem; }
+.gra-about h4 {
+    margin: 14px 0 5px; font-size: 0.66rem; text-transform: uppercase;
+    letter-spacing: .07em; color: var(--slate);
+}
+.gra-about p, .gra-about li { font-size: 0.78rem; line-height: 1.55; margin: 0 0 7px; }
+.gra-about ul { margin: 0 0 4px; padding-left: 18px; }
+.gra-about li { margin-bottom: 5px; }
+.gra-about-lede { font-size: 0.85rem !important; }
+.gra-about-note { color: var(--slate); }
+.gra-about-cite {
+    margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border);
+    font-size: 0.7rem !important; color: var(--slate);
+}
+.gra-about-cite a { color: var(--blue); }
+.gra-about-x {
+    position: absolute; right: 12px; top: 10px; border: 0; background: none;
+    color: var(--slate); font-size: 1.3rem; line-height: 1; cursor: pointer;
+}
+
+/* ── GHOST Reanalysis on small screens ─────────────────────────────────
+   The archive already stacks .browser-layout below 768px (map 50vh, sidebar
+   full width, page scrolls). Three things still break on a phone: the panel's
+   measured height fights that stacking, seven toolbar groups stacked vertically
+   consume the whole screen before the map starts, and the 320px IR chip is
+   wider than the map it floats over. */
+.gra-more { display: none; }
+
+@media (max-width: 768px) {
+    /* let the stacking rules own the height — sizeTab() also no-ops here */
+    #tab-reanalysis.active { display: block; height: auto; }
+    #tab-reanalysis .gra-layout { height: auto; }
+    /* .browser-map-wrap carries flex:1 1 0% from the desktop rule. Once the
+       layout stacks into a column that basis of 0 becomes the MAIN size, so the
+       archive's `height: 50vh` is ignored and the map collapses to zero with no
+       free space to grow into. Take the pane out of the flex sizing entirely
+       and give it a real height. Scoped to this tab so the Storm Browser keeps
+       whatever behaviour it already relies on. */
+    #tab-reanalysis .browser-map-wrap {
+        flex: none; height: 52vh; min-height: 320px;
+    }
+    #tab-reanalysis .browser-sidebar { flex: none; height: auto; }
+    #gra-map { height: 100%; }
+
+    .gra-toolbar { gap: 10px 14px; padding: 8px 12px; }
+    .gra-more { display: block; order: -1; width: 100%; text-align: left; }
+    /* collapsed by default: keep only shading + basin, which are the two
+       controls worth having permanently on a small screen */
+    .gra-toolbar:not(.open) > .gra-tgroup:nth-of-type(n+3) { display: none; }
+    .gra-seg button { padding: 6px 10px; }        /* touch targets */
+    .basin-chip { padding: 5px 12px; }
+    .gra-rng input[type=range] { width: 104px; }
+
+    /* chip spans the map instead of overhanging it */
+    .gra-ir { left: 8px; right: 8px; width: auto; max-height: calc(100% - 16px); }
+    #gra-ir-canvas { max-height: 40vh; }
+
+    /* the explainer gets the whole viewport, not a 50vh map pane */
+    .gra-about {
+        position: fixed; width: calc(100% - 20px); max-height: 82vh;
+        padding: 16px 16px 18px;
+    }
+    .gra-legend { max-width: calc(100% - 20px); }
+    .gra-count { font-size: 0.66rem; }
+    .browser-sidebar { overflow-y: visible; }
+    .gra-list { max-height: 60vh; }
+}

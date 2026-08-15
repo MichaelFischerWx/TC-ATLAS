@@ -88,11 +88,11 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundles, discoverable from byte 0. Tokens MUST match
          the script tags below. -->
-    <link rel="preload" as="script" href="global_archive.js?v=20260812b">
+    <link rel="preload" as="script" href="global_archive.js?v=20260815a">
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260804b">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260812b">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260815a">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -145,6 +145,10 @@
         </button>
         <button class="ga-tab" role="tab" aria-selected="false" data-tab="compare" onclick="switchTab('compare')">
             Compare Storms
+        </button>
+        <button class="ga-tab" role="tab" aria-selected="false" data-tab="reanalysis" onclick="switchTab('reanalysis')"
+                title="GHOST-FPM recon-independent intensity reanalysis (research, not an official analysis)">
+            GHOST Reanalysis <span class="ga-beta-chip">BETA</span>
         </button>
         <!-- Climatology + Environment moved to tc_climatology.html
              (TC Climatology in the top nav). Old #tab=climatology and
@@ -1031,6 +1035,189 @@
             </div>
         </section>
 
+        <!-- TAB 4: GHOST REANALYSIS (recon-independent intensity estimates) -->
+        <section id="tab-reanalysis" class="ga-tab-content" role="tabpanel">
+            <div class="gra-toolbar">
+                <button id="gra-more" class="ga-btn ga-btn-xs gra-more">Filters &amp; options &#9662;</button>
+                <div class="gra-tgroup">
+                    <label>Shade frames by</label>
+                    <div class="gra-seg" id="gra-modes">
+                        <button class="active" data-mode="gp">GHOST P<sub>min</sub></button>
+                        <button data-mode="gv">GHOST V<sub>max</sub></button>
+                        <button data-mode="bp">BT P<sub>min</sub></button>
+                        <button data-mode="bv">BT V<sub>max</sub></button>
+                        <button data-mode="diff">GHOST &minus; BT</button>
+                    </div>
+                </div>
+                <div class="gra-tgroup">
+                    <label>Basin</label>
+                    <div class="basin-chips" id="gra-basins"></div>
+                </div>
+                <div class="gra-tgroup">
+                    <label>Filter by</label>
+                    <div class="gra-seg" id="gra-unit">
+                        <button class="active" data-unit="hPa">P<sub>min</sub></button>
+                        <button data-unit="kt">V<sub>max</sub></button>
+                    </div>
+                </div>
+                <div class="gra-tgroup">
+                    <label id="gra-obslabel">Observed P<sub>min</sub> (hPa)</label>
+                    <div class="gra-rng">
+                        <input type="range" id="gra-obslo" min="880" max="1020" value="880" step="5">
+                        <input type="range" id="gra-obshi" min="880" max="1020" value="1020" step="5">
+                        <output id="gra-obsout">880&ndash;1020</output>
+                    </div>
+                </div>
+                <div class="gra-tgroup">
+                    <label id="gra-ghlabel">GHOST P<sub>min</sub> (hPa)</label>
+                    <div class="gra-rng">
+                        <input type="range" id="gra-ghlo" min="880" max="1020" value="880" step="5">
+                        <input type="range" id="gra-ghhi" min="880" max="1020" value="1020" step="5">
+                        <output id="gra-ghout">880&ndash;1020</output>
+                    </div>
+                </div>
+                <div class="gra-tgroup">
+                    <label>Season</label>
+                    <div class="gra-rng">
+                        <input type="range" id="gra-yrlo" min="1998" max="2025" value="1998" step="1">
+                        <input type="range" id="gra-yrhi" min="1998" max="2025" value="2025" step="1">
+                        <output id="gra-yrout">1998&ndash;2025</output>
+                    </div>
+                </div>
+                <div class="gra-tgroup">
+                    <label>Filters</label>
+                    <div class="gra-row">
+                        <label class="gra-chk"><input type="checkbox" id="gra-recon"> Recon-proximate only</label>
+                        <label class="gra-chk"><input type="checkbox" id="gra-hidesus" checked> Hide QC-suspect</label>
+                        <button class="ga-btn ga-btn-xs" id="gra-preset">GHOST &ge;15 hPa deeper, non-recon</button>
+                        <button class="ga-btn ga-btn-xs ga-btn-ghost" id="gra-reset">Reset</button>
+                        <button class="ga-btn ga-btn-xs" id="gra-about-btn" title="What is GHOST?">About GHOST</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="browser-layout gra-layout">
+                <div class="browser-map-wrap">
+                    <div id="gra-map"></div>
+                    <div id="gra-count" class="gra-count">&mdash;</div>
+                    <div id="gra-tip" class="gra-tip"></div>
+                    <div id="gra-legend" class="ga-legend gra-legend"></div>
+
+                    <!-- IR chip: the MergIR frame behind the estimate -->
+                    <div id="gra-ir" class="gra-ir">
+                        <div class="gra-ir-head">
+                            <span id="gra-ir-name"></span>
+                            <span id="gra-ir-basin" class="gra-ir-sub"></span>
+                            <button id="gra-ir-detail" class="ga-btn ga-btn-xs" title="Open the full Storm Detail view at this time">Storm Detail &rarr;</button>
+                            <button id="gra-ir-close" class="gra-ir-x" title="Close">&times;</button>
+                        </div>
+                        <div class="gra-ir-time">
+                            <span id="gra-ir-stamp">&mdash;</span><span id="gra-ir-dt" class="gra-ir-delta"></span>
+                        </div>
+                        <div class="gra-ir-canvaswrap">
+                            <canvas id="gra-ir-canvas" width="320" height="320"></canvas>
+                            <div id="gra-ir-hover" class="gra-ir-hover"></div>
+                            <div id="gra-ir-zoom" class="gra-ir-zoom"></div>
+                        </div>
+                        <div id="gra-ir-status" class="gra-ir-status"></div>
+                        <div class="gra-ir-foot">
+                            <button id="gra-ir-prev" class="ga-btn ga-btn-xs">&larr;</button>
+                            <button id="gra-ir-next" class="ga-btn ga-btn-xs">&rarr;</button>
+                            <span id="gra-ir-vals" class="gra-ir-vals"></span>
+                            <select id="gra-ir-cmap" class="ga-select ga-select-sm gra-ir-cmap"
+                                    title="IR colormap"></select>
+                        </div>
+                        <div id="gra-ir-spark" class="gra-ir-spark"></div>
+                    </div>
+
+                    <!-- What-is-this panel. Opens once on a first visit (then
+                         remembered), or from the About GHOST button. -->
+                    <div id="gra-about" class="gra-about">
+                        <button id="gra-about-x" class="gra-about-x" title="Close">&times;</button>
+                        <h3>GHOST-FPM &mdash; recon-independent intensity reanalysis</h3>
+                        <p class="gra-about-lede">GHOST estimates tropical cyclone intensity
+                            &mdash; <strong>minimum central pressure and maximum sustained
+                            wind</strong> &mdash; from geostationary infrared imagery and the
+                            large-scale environment alone. <strong>No aircraft reconnaissance,
+                            and no best-track intensity, is used as input.</strong></p>
+
+                        <h4>What goes in</h4>
+                        <ul>
+                            <li><strong>Merged global geostationary infrared imagery</strong>
+                                (NASA MergIR, ~4&nbsp;km, half-hourly) &mdash; the same imagery
+                                the frame viewer on this page displays.</li>
+                            <li><strong>Large-scale environmental fields</strong> from
+                                reanalysis (thermodynamic and kinematic).</li>
+                            <li><strong>Storm position</strong> from IBTrACS &mdash; position
+                                only, never intensity.</li>
+                        </ul>
+                        <p class="gra-about-note">Because the estimate never sees reconnaissance
+                            or best-track intensity, it can be compared against them
+                            independently. That is what the <em>GHOST&nbsp;&minus;&nbsp;BT</em>
+                            view is for.</p>
+
+                        <h4>How to read it</h4>
+                        <ul>
+                            <li>Outside the recon stratum, best-track pressure is itself largely
+                                Dvorak-derived &mdash; so a disagreement there is
+                                model-vs-model, not error. Use <em>Recon-proximate only</em>
+                                for the decisive comparison.</li>
+                            <li><span class="gra-flag oob">OOB</span> out-of-basin: the model is
+                                trained on Atlantic / East-Pacific reconnaissance labels, so
+                                West and Central Pacific storms are an out-of-basin
+                                application.</li>
+                            <li><span class="gra-flag">QC</span> flagged for large
+                                trace-vs-best-track disagreement; these sink to the bottom of
+                                the default ordering.</li>
+                            <li><strong>The estimator does not saturate.</strong> The deepest
+                                storm in the record (best track 872&nbsp;hPa) is estimated at
+                                868.6&nbsp;hPa &mdash; there is no ceiling at the extreme tail.</li>
+                            <li>Pooled against <em>all</em> best-track pressure the estimates look
+                                compressed toward the middle (slope&nbsp;0.81; about
+                                +19&nbsp;hPa weak below 900&nbsp;hPa, about &minus;7&nbsp;hPa deep
+                                above 980). Restricted to reconnaissance-proximate frames that
+                                compression largely disappears &mdash; slope&nbsp;0.98, mean bias
+                                +1.9&nbsp;hPa &mdash; so much of it reflects what the best track
+                                is outside the recon era rather than the estimate itself. Deep
+                                recon frames (&le;920&nbsp;hPa) still run about +4.5&nbsp;hPa
+                                weak.</li>
+                        </ul>
+
+                        <p class="gra-about-cite"><strong>Manuscript in preparation.</strong>
+                            GHOST (Geostationary-based Hurricane Objective Strength Technique)
+                            is an unpublished research method; this page is provided for
+                            scientific transparency and is <strong>not an official forecast or
+                            analysis</strong>. Please contact Dr.&nbsp;Michael Fischer
+                            (<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu</a>)
+                            before citing or redistributing these estimates.</p>
+                    </div>
+
+                    <div id="gra-loading" class="map-overlay-loading">
+                        <div class="ga-spinner"></div><span>Loading reanalysis&hellip;</span>
+                    </div>
+                </div>
+
+                <aside class="browser-sidebar">
+                    <div class="sidebar-section">
+                        <h3 class="sidebar-title" id="gra-title">Deepest TCs</h3>
+                        <div id="gra-sub" class="gra-sub">&mdash;</div>
+                        <input type="text" id="gra-search" class="ga-input ga-input-sm gra-search"
+                               placeholder="Search name or ATCF (e.g. Ioke, WP012006)"
+                               autocomplete="off" spellcheck="false">
+                        <div class="basin-chips" id="gra-sorts" style="margin-top:8px;">
+                            <button class="basin-chip active" data-sort="ghost">GHOST P<sub>min</sub></button>
+                            <button class="basin-chip" data-sort="bt">BT P<sub>min</sub></button>
+                            <button class="basin-chip" data-sort="diff">|&Delta;|</button>
+                            <button class="basin-chip" data-sort="basin">Basin</button>
+                            <button class="basin-chip" data-sort="year">Season</button>
+                        </div>
+                    </div>
+                    <div id="gra-list" class="gra-list"></div>
+                    <div class="gra-foot" id="gra-foot"></div>
+                </aside>
+            </div>
+        </section>
+
         <!-- Climatology + Environment tabs moved to tc_climatology.html.
              Old #tab=climatology / #tab=environment URLs redirect via the
              inline <head> script. The "TC Climatology →" tab button at the
@@ -1084,6 +1271,10 @@
     <script defer src="lflet_gl.js?v=20260812b"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
-    <script defer src="global_archive.js?v=20260812b"></script>
+    <script defer src="global_archive.js?v=20260815a"></script>
+    <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
+         (it reads allTracks/allStorms off global_archive.js), but it does no
+         work until switchTab('reanalysis') calls activateGhostRAView(). -->
+    <script defer src="global_archive_ghostra.js?v=20260815a"></script>
 </body>
 </html>
