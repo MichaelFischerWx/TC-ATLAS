@@ -2648,7 +2648,16 @@
     /* Tab switching between Map, Satellite, Subseasonal, and Seasonal views */
     (function () {
         var currentView = 'map';
-        var VALID_VIEWS = { map: 1, satellite: 1, subseasonal: 1, seasonal: 1, recon: 1, experimental: 1 };
+        /* experimental_v2 is an UNLISTED view: same #exp-main section and the
+           same module, but activated with the FPM model profile instead of
+           GHOST. Deliberately absent from the tab bar — reachable only by
+           its hash (realtime_ir.html#experimental_v2). */
+        var VALID_VIEWS = { map: 1, satellite: 1, subseasonal: 1, seasonal: 1, recon: 1,
+                            experimental: 1, experimental_v2: 1 };
+        /* Which tab button lights up for a view. Unlisted views borrow the
+           tab of the section they live in, so the header doesn't read as
+           "no tab selected". */
+        var _tabForView = { experimental_v2: 'experimental' };
         /* Seed the data-view attribute so CSS hides map-only toggles
            correctly even on first paint (before any user click). */
         document.documentElement.setAttribute('data-view', 'map');
@@ -2721,12 +2730,14 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260812b';
+        var _LAZY_ASSET_V = '?v=20260815a';
         var _lazyViewMods = {
             recon:       { js: ['realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
             seasonal:    { js: ['realtime_seasonal.js'], css: ['realtime_seasonal_styles.css'] },
-            experimental:{ js: ['realtime_experimental.js'] }
+            experimental:{ js: ['realtime_experimental.js'] },
+            /* Same module, different model profile — see VALID_VIEWS. */
+            experimental_v2:{ js: ['realtime_experimental.js'] }
         };
         var _lazyLoads = {};    /* src -> Promise */
         function _loadOnce(src, isCss) {
@@ -2765,7 +2776,8 @@
         /* A failed module load must NOT reveal a dead/blank section —
            surface an inline error + retry in the target section instead. */
         var _viewSectionIds = { recon: 'recon-main', subseasonal: 'sub-main',
-                               seasonal: 'seasonal-main', experimental: 'exp-main' };
+                               seasonal: 'seasonal-main', experimental: 'exp-main',
+                               experimental_v2: 'exp-main' };
         function _showTabLoadError(view) {
             var sec = document.getElementById(_viewSectionIds[view] || '');
             if (!sec) return;
@@ -2798,7 +2810,8 @@
                with zero visible response reads as broken. */
             var tabs = document.querySelectorAll('.ir-view-tab');
             for (var i = 0; i < tabs.length; i++) {
-                var isTarget = tabs[i].getAttribute('data-view') === view;
+                var isTarget = tabs[i].getAttribute('data-view') ===
+                    (_tabForView[view] || view);
                 tabs[i].classList.toggle('active', isTarget);
                 tabs[i].classList.toggle('is-loading', isTarget && !!_lazyViewMods[view]);
             }
@@ -2829,7 +2842,8 @@
             var tabs = document.querySelectorAll('.ir-view-tab');
 
             for (var i = 0; i < tabs.length; i++) {
-                tabs[i].classList.toggle('active', tabs[i].getAttribute('data-view') === view);
+                tabs[i].classList.toggle('active',
+                    tabs[i].getAttribute('data-view') === (_tabForView[view] || view));
             }
 
             /* Tag <html> with the active view so map-only floating
@@ -2931,9 +2945,11 @@
             } else if (view === 'recon') {
                 if (reconMain) reconMain.style.display = '';
                 if (window.activateReconView) window.activateReconView();
-            } else if (view === 'experimental') {
+            } else if (view === 'experimental' || view === 'experimental_v2') {
                 if (expMain) expMain.style.display = 'block';
-                if (window.activateExperimentalView) window.activateExperimentalView();
+                if (window.activateExperimentalView)
+                    window.activateExperimentalView(
+                        view === 'experimental_v2' ? 'fpm' : 'ghost');
             } else {
                 irMain.style.display = '';
                 if (legend) legend.style.display = '';
@@ -2953,10 +2969,10 @@
             var h = (window.location.hash || '').replace(/^#/, '');
             if (!h) return null;
             // param-style: pick out tab=X
-            var tabMatch = h.match(/(?:^|&)tab=([a-z]+)/);
+            var tabMatch = h.match(/(?:^|&)tab=([a-z0-9_]+)/);
             if (tabMatch && VALID_VIEWS[tabMatch[1]]) return tabMatch[1];
             // legacy "view=X" form
-            var m = h.match(/^view=([a-z]+)/);
+            var m = h.match(/^view=([a-z0-9_]+)/);
             if (m && VALID_VIEWS[m[1]]) return m[1];
             // bare short form (strip any &-suffix)
             var bare = h.split('&')[0];

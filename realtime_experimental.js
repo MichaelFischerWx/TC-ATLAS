@@ -1,16 +1,28 @@
-/* realtime_experimental.js — RT Monitor "Experimental" tab.
+/* realtime_experimental.js — RT Monitor "Experimental" tabs.
  *
- * GHOST Stage-0/1 ML diagnostics (recon-independent Vmax/Pmin/RMW from
- * geostationary IR + SHIPS environment), produced by the TC-SWARM
- * realtime/ghost_rt pipeline every 30 min, published to
- * gs://tc-atlas-ir-cache/ghost-rt/ and mirrored to Cloudflare R2. Read here
- * from https://cdn.tcatlas.org/ghost-rt/ (free egress, edge-cached) with GCS
- * as the fallback. Public since 2026-07-26; the method is described in a
- * manuscript in preparation. Research guidance, NOT an official forecast or
- * analysis.
+ * ONE module, TWO model profiles — same panels, same JSON contract, different
+ * producer:
+ *
+ *   #experimental     GHOST Stage-0/1 ML diagnostics (recon-independent
+ *                     Vmax/Pmin/RMW from geostationary IR + SHIPS
+ *                     environment), TC-SWARM realtime/ghost_rt -> ghost-rt/.
+ *   #experimental_v2  FPM v1.0, the first-principles Pmin model (a different
+ *                     architecture on the same IR frames: ridge on physical
+ *                     predictors under a memory kernel, not a boosted-tree
+ *                     stack). TC-SWARM realtime/fpm_rt -> fpm-rt/. Unlisted
+ *                     link — no tab button.
+ *
+ * Both publish to gs://tc-atlas-ir-cache/ and mirror to Cloudflare R2; read
+ * here from https://cdn.tcatlas.org/ (free egress, edge-cached) with GCS as
+ * the fallback. Research guidance, NOT an official forecast or analysis.
+ *
+ * Panels are driven by the active profile (see PROFILES below) rather than
+ * forked into a second file, so panel work keeps reaching both pages. Where a
+ * profile lacks a quantity (FPM has no RMW — that is GHOST Stage-1, a
+ * different model), the panel is gated off rather than rendered empty.
  *
  * Lazy-loaded on first tab activation (see _lazyViewMods in
- * realtime_ir.html). Public API: window.activateExperimentalView().
+ * realtime_ir.html). Public API: window.activateExperimentalView(profileKey).
  */
 (function () {
     'use strict';
@@ -25,11 +37,75 @@
        the tab keeps working (at the old cost) instead of breaking. */
     var CDN_BASE = 'https://cdn.tcatlas.org/';
     var GCS_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/';
-    var PREFIX = 'ghost-rt';
-    /* Season-archive prefix (retrospective runs published by TC-SWARM
-       realtime/ghost_archive_season.py). Season-scoped on purpose — bump
-       for a new season once its first archived storm exists. */
-    var ARCH_PREFIX = 'ghost-rt/archive2026';
+
+    /* ---------------- model profiles ----------------
+       Everything that differs between the GHOST page and the FPM page lives
+       here. `arch` is season-scoped on purpose — bump it for a new season
+       once that season's first archived storm exists. `file` is the per-storm
+       object stem: <prefix>/<file><ATCF>.json.
+
+       `panels.rmw` gates the size panel/tile/trace: GHOST predicts RMW in
+       Stage-1, FPM does not model size at all, and an empty third panel would
+       read as a broken feed rather than an absent quantity.
+
+       `windIsDerived` marks a profile whose Vmax is not a wind model but a
+       pressure-wind relationship applied to the model's own Pmin. That has to
+       be visible in the UI — a WPR wind inherits the pressure error and adds
+       its own, and reading it as a peer of GHOST's Vmax would overstate it. */
+    var PROFILES = {
+        ghost: {
+            key: 'ghost',
+            prefix: 'ghost-rt',
+            arch: 'ghost-rt/archive2026',
+            file: 'ghost_',
+            name: 'GHOST',
+            color: '#f43f5e',
+            title: 'GHOST — ML Structure Diagnostics',
+            headline: 'vmax_kt',
+            windIsDerived: false,
+            /* Vmax saturates near 150-160 kt (isotonic cap + Cat-5 handoff ramp).
+               A pressure model has no such ceiling. */
+            saturates: true,
+            panels: { rmw: true, shap: true, dist: true, track: true,
+                      comp: true }
+        },
+        fpm: {
+            key: 'fpm',
+            prefix: 'fpm-rt',
+            arch: 'fpm-rt/archive2026',
+            file: 'fpm_',
+            name: 'FPM',
+            /* Indigo against GHOST's rose: the two pages are meant to be
+               opened side by side, so the traces must not read as the same
+               model at a glance. */
+            color: '#6366f1',
+            title: 'FPM v1.0 — First-Principles Pressure Model',
+            headline: 'pmin_hpa',
+            windIsDerived: true,
+            saturates: false,
+            /* Basins where the model runs but was NOT part of the frozen
+               v1.0 validation. Shown with estimates, carrying a standing
+               disclaimer on every storm — the alternative (hiding them) makes
+               the storm list silently disagree with the rest of the site.
+               Keyed by ATCF basin prefix; the producer may override per storm
+               with a `caveat` string in the payload. */
+            provisional: {
+                WP: 'West Pacific estimates are <strong>provisional</strong>. ' +
+                    'FPM v1.0 was frozen on Atlantic and East/Central Pacific ' +
+                    'boards only — this basin has no held-out board, no ' +
+                    'aircraft-anchored verification of any kind, and its ' +
+                    'training frames are mid-rebuild following an imagery ' +
+                    'quality-control change. Read these as experimental ' +
+                    'within an already-experimental product.'
+            },
+            panels: { rmw: false, shap: false, dist: true, track: true,
+                      comp: true }
+        }
+    };
+    var M = PROFILES.ghost;      // active profile; set by activate()
+    var MODEL_COL = M.color;
+    var PREFIX = M.prefix;
+    var ARCH_PREFIX = M.arch;
 
     var _root = null;          // #exp-main
     var _index = null;         // manifest {generated, storms:[{atcf,name}]}
@@ -43,7 +119,6 @@
                              // over-reading; peers give honest context
     var _showShap = false;   // model-driver (SHAP) panel
     var _showVerif = false;  // manuscript verification statistics
-    var GHOST_COL = '#f43f5e';   // one color for every GHOST trace
     var COMP_STYLE = {
         'D-PRINT':       '#a855f7',
         /* ADT comes from the CIMSS feed (~30 min) and carries MSLP, so it
@@ -92,6 +167,16 @@
         var n = parseInt(hex.slice(1), 16);
         return 'rgba(' + (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' +
                (n & 255) + ',' + a + ')';
+    }
+
+    /* Standing disclaimer for a storm the active model runs but was not
+       validated on. Payload wins over the profile default, so the producer
+       can narrow or sharpen the wording per storm without a frontend change;
+       an explicit `caveat: ""` suppresses it. */
+    function provisionalNote(atcf, j) {
+        if (j && typeof j.caveat === 'string') return j.caveat || null;
+        var basin = (atcf || '').slice(0, 2).toUpperCase();
+        return (M.provisional && M.provisional[basin]) || null;
     }
 
     /* Last frame with a finite value for `key` (frames hold nulls where a
@@ -215,7 +300,7 @@
        it is computed with the manuscript's evaluation code on the same
        held-out 2025 frames (TC-SWARM realtime/rmse_by_intensity_2025.py,
        run 2026-07-26) and is labeled as such in the UI. */
-    var VERIF_HTML =
+    var GHOST_VERIF_HTML =
         '<div class="exp-verif-h">Preliminary verification' +
         '<span class="exp-verif-src">from the manuscript in preparation. ' +
         '&ldquo;Held out&rdquo; = the season\'s storms were withheld from ' +
@@ -317,6 +402,219 @@
         'storm-grouped cross-validation over all development seasons gives ' +
         '10.1 kt and 8.2 hPa.</p>';
 
+    /* FPM v1.0 verification. Quoted verbatim from the frozen boards
+       (TC-SWARM experiments/stage0_intensity/docs_FPM_V1_0_MANIFEST.md and
+       docs_FPM_V1_0_EP_MANIFEST.md, cut 2026-08-15). Do NOT edit by hand —
+       regenerate from fpm_v1_freeze.py / fpm_v1_ep_extend.py.
+
+       Two things are stated here that it would be easy to quietly omit, and
+       both are load-bearing:
+       (1) the page runs the FROZEN fit while the headline number is the
+           leave-one-year-out one — the honest held-out figure is the LOYO
+           column, and the gap between them is the in-sample optimism;
+       (2) EP has no LOYO equivalent at all, so its numbers inherit a weaker
+           protocol. Presenting the two basins as if they were scored the
+           same way would be the single most misleading thing this table
+           could do. */
+    var FPM_VERIF_HTML =
+        '<div class="exp-verif-h">FPM v1.0 verification' +
+        '<span class="exp-verif-src">from the frozen v1.0 boards ' +
+        '(cut 2026-08-15). Pooled over frames, not per-storm means &mdash; ' +
+        'these are not comparable to the GHOST page&rsquo;s per-storm ' +
+        'numbers.</span></div>' +
+
+        '<div class="exp-verif-t"><table><caption>Minimum pressure &mdash; ' +
+        'Atlantic, 1998&ndash;2025 (27,215 frames / 451 storms)</caption>' +
+        '<thead><tr><th>Channel</th><th>Protocol</th><th>RMSE</th>' +
+        '<th>Bias</th></tr></thead><tbody>' +
+        '<tr class="me"><td>FPM v1.0 <em>(running on this page)</em></td>' +
+        '<td>frozen fit</td><td>7.16 hPa</td><td>&minus;1.34 hPa</td></tr>' +
+        '<tr><td>FPM v1.0</td><td>leave-one-year-out</td><td>7.32 hPa</td>' +
+        '<td>&minus;1.40 hPa</td></tr>' +
+        '<tr><td>FPM without the weak-end gate</td><td>frozen fit</td>' +
+        '<td>16.92 hPa</td><td>&minus;11.89 hPa</td></tr>' +
+        '</tbody></table></div>' +
+
+        '<p class="exp-verif-note">The middle row is the honest one. This ' +
+        'page necessarily runs the <em>frozen</em> fit &mdash; a ' +
+        'leave-one-year-out model is a scoring protocol, not something that ' +
+        'can be run forward on a storm happening now &mdash; so read 7.32 ' +
+        'hPa as the expected out-of-sample error and the 0.16 hPa gap as ' +
+        'the in-sample optimism. The third row shows how much of the ' +
+        'skill is the weak-end gate: without it the model runs nearly 12 ' +
+        'hPa too deep on average, because the pressure-deficit formulation ' +
+        'it is built on has little to say about a system that barely has a ' +
+        'vortex.</p>' +
+
+        '<div class="exp-verif-t"><table><caption>Error by best-track ' +
+        'pressure &mdash; Atlantic, held-out (leave-one-year-out) channel. ' +
+        '&ldquo;Aircraft-anchored&rdquo; = within &plusmn;3 h of a ' +
+        'reconnaissance fix carrying a <em>measured</em> ' +
+        'pressure</caption><thead>' +
+        '<tr><th>Best-track pressure</th><th>Frames</th><th>RMSE</th>' +
+        '<th>Bias</th><th>Anchored<br>frames</th><th>Anchored<br>RMSE</th>' +
+        '</tr></thead><tbody>' +
+        '<tr><td>&gt;1005 hPa</td><td>7,937</td><td>5.26</td>' +
+        '<td>&minus;3.48</td><td>710</td><td>4.07</td></tr>' +
+        '<tr><td>990&ndash;1005</td><td>10,552</td><td>6.73</td>' +
+        '<td>&minus;1.60</td><td>2,358</td><td>4.69</td></tr>' +
+        '<tr><td>970&ndash;990</td><td>5,053</td><td>8.86</td>' +
+        '<td>&minus;0.16</td><td>1,297</td><td>7.43</td></tr>' +
+        '<tr><td>950&ndash;970</td><td>2,360</td><td>9.94</td>' +
+        '<td>+1.87</td><td>955</td><td>10.32</td></tr>' +
+        '<tr><td>940&ndash;950</td><td>663</td><td>9.94</td>' +
+        '<td>+1.92</td><td>420</td><td>10.32</td></tr>' +
+        '<tr><td>920&ndash;940</td><td>512</td><td>9.36</td>' +
+        '<td>+1.27</td><td>377</td><td>8.85</td></tr>' +
+        '<tr><td>&le;920</td><td>138</td><td>11.63</td><td>+6.84</td>' +
+        '<td>118</td><td>11.70</td></tr>' +
+        '</tbody></table></div>' +
+
+        '<p class="exp-verif-note">The deep tail is where this model is ' +
+        'both most interesting and least certain. Below 920 hPa it reads ' +
+        'about 7 hPa too shallow &mdash; on 138 frames from a handful of ' +
+        'storms, so treat the number as an indication rather than a rate. ' +
+        'Note that the anchored column does not improve there: at extreme ' +
+        'intensity the disagreement is with an actual barometer, not with ' +
+        'best-track convention.</p>' +
+
+        '<div class="exp-verif-t"><table><caption>East / Central Pacific ' +
+        '&mdash; 2000&ndash;2025 (6,840 frames / 82 storms)</caption>' +
+        '<thead><tr><th>Channel</th><th>Protocol</th><th>RMSE</th>' +
+        '<th>Bias</th></tr></thead><tbody>' +
+        '<tr class="me"><td>FPM v1.0 <em>(running on this page)</em></td>' +
+        '<td>frozen fit</td><td>10.93 hPa</td><td>&minus;2.59 hPa</td></tr>' +
+        '<tr><td><em>&mdash; aircraft-anchored frames only (n=335)</em></td>' +
+        '<td><em>frozen fit</em></td><td><em>7.50 hPa</em></td>' +
+        '<td><em>&minus;1.53 hPa</em></td></tr>' +
+        '<tr><td>Ridge, ungated</td><td>leave-one-storm-out</td>' +
+        '<td>14.58 hPa</td><td>&minus;8.88 hPa</td></tr>' +
+        '</tbody></table></div>' +
+
+        '<p class="exp-verif-note">The East Pacific is weaker evidence than ' +
+        'the Atlantic and should be read that way. There is no ' +
+        'leave-one-year-out board for this basin &mdash; the only held-out ' +
+        'channel is an <em>ungated</em> leave-one-storm-out ridge, which is ' +
+        'not the model this page runs, so the two rows above are not a ' +
+        'like-for-like pair. Aircraft verification is also genuinely ' +
+        'sparse: 4.9% of East Pacific frames are anchored to a measured ' +
+        'pressure versus 22.9% in the Atlantic, and below 920 hPa the ' +
+        'entire basin record holds <strong>eight</strong> barometer-anchored ' +
+        'frames. Nothing about the East Pacific deep end can be established ' +
+        'from this sample, and nothing here claims it.</p>' +
+
+        '<p class="exp-verif-note"><strong>On the wind trace.</strong> FPM ' +
+        'models pressure only. The maximum-wind curve on this page is that ' +
+        'pressure passed through a fitted pressure&ndash;wind relationship ' +
+        '(the deficit, translation speed, latitude and a size term), so it ' +
+        'inherits the pressure error and adds its own. It is not an ' +
+        'independent wind estimate and should not be compared against ' +
+        'GHOST&rsquo;s Vmax as though it were one.</p>';
+
+    /* Per-profile page copy. Kept beside the verification blocks rather than
+       inline in renderShell so the two models' claims sit next to each other
+       and stay easy to audit against their manifests. */
+    var GHOST_LEDE =
+        '<div class="exp-lede">GHOST provides <strong>independent, ' +
+        'real-time estimates of tropical cyclone intensity (maximum ' +
+        'sustained wind and minimum central pressure) and radius of ' +
+        'maximum wind</strong> — derived from geostationary infrared ' +
+        'imagery and the large-scale environment alone, with no aircraft ' +
+        'reconnaissance required.</div>' +
+        '<div class="exp-cite"><strong>Manuscript in preparation.</strong> ' +
+        'GHOST (Geostationary-based Hurricane Objective Strength ' +
+        'Technique) is an unpublished research method; this page is ' +
+        'provided for scientific transparency and is <strong>not an ' +
+        'official forecast or analysis</strong>. Please contact the ' +
+        'author — Dr. Michael Fischer ' +
+        '(<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu' +
+        '</a>) — before citing or redistributing these estimates.</div>';
+
+    var FPM_LEDE =
+        '<div class="exp-lede">FPM estimates <strong>minimum central ' +
+        'pressure in real time from geostationary infrared imagery ' +
+        'alone</strong>, with no aircraft reconnaissance required. It is a ' +
+        '<strong>different architecture</strong> from GHOST, not a retune ' +
+        'of it: where GHOST is a boosted-tree stack over a large learned ' +
+        'feature set, FPM is a small ridge regression on physically chosen ' +
+        'predictors &mdash; eye warmth and size, eyewall structure, the ' +
+        'radial shape of the core, and how far the cold canopy extends ' +
+        '&mdash; fitted against the environmental pressure deficit rather ' +
+        'than against pressure directly, because the deficit is what the ' +
+        'vortex actually sets.</div>' +
+        '<div class="exp-cite"><strong>Unlisted research page.</strong> ' +
+        'FPM v1.0 is an unpublished research method under active ' +
+        'development, shown here beside GHOST for comparison. It is ' +
+        '<strong>not an official forecast or analysis</strong>, and it is ' +
+        'not the model behind the GHOST tab. Please contact the author ' +
+        '— Dr. Michael Fischer ' +
+        '(<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu' +
+        '</a>) — before citing or redistributing these estimates.</div>';
+
+    /* Shared tail for both profiles: how the best-track reference behaves and
+       why plan-view centers can lag. True of the frames themselves, which
+       both producers share. */
+    var TRACK_CAVEAT =
+        'The best-track reference (NHC, or JTWC for West Pacific / Indian ' +
+        'Ocean storms) is linearly interpolated between 6-hourly analyses ' +
+        '(dots mark the real ones) and STOPS at the latest analysis &mdash; ' +
+        'the model continues past it, so the most recent stretch has no ' +
+        'reference to compare against yet. Below hurricane strength the ' +
+        'plotted storm center comes from that interpolated track (the IR ' +
+        'eye-lock engages only once an eye is trackable), so plan-view ' +
+        'centers can lag a reforming or fast-moving storm — each panel ' +
+        'is stamped with its center source.';
+
+    var GHOST_NOTE =
+        '<div class="exp-note">Guidance, not official analysis. ' +
+        'Weak systems (TD / weak TS) have a known high-bias. Near ' +
+        'Category-5 strength the estimates saturate (ceiling ' +
+        '&asymp;150&ndash;160 kt): a flat, maxed-out trace means ' +
+        '&ldquo;at or above the ceiling&rdquo;, and the strongest ' +
+        'storms are typically under-read. The operational model ' +
+        '(op-2026b, updated 2026-07-28) trains on 2000&ndash;2025 and ' +
+        'adds ocean predictors &mdash; sea-surface temperature, ocean ' +
+        'heat content and their recent changes, from operational SHIPS ' +
+        'for NHC basins and a satellite ocean-heat-content analysis for ' +
+        'JTWC basins &mdash; plus an intensity-trend state; this ' +
+        'reduced, but did not eliminate, the tendency to read high ' +
+        'while storms weaken over open water. Since 2026-08-05 a ' +
+        'composition layer (GHOST 2.1p, op-2026c) refines the high end: ' +
+        'once a trackable eye persists and the storm reads &ge;90 kt, ' +
+        'specialist estimators tuned on major hurricanes take over ' +
+        'Vmax/Pmin, with per-frame quality control that masks ' +
+        'land-contaminated or corrupt scenes before smoothing. The ' +
+        'Verification tables describe the manuscript&rsquo;s held-out ' +
+        'configuration. ' + TRACK_CAVEAT + '</div>';
+
+    var FPM_NOTE =
+        '<div class="exp-note">Guidance, not official analysis. ' +
+        '<strong>Pressure is the model; wind is derived.</strong> The ' +
+        'maximum-wind trace is FPM&rsquo;s pressure passed through a fitted ' +
+        'pressure&ndash;wind relationship, so it inherits the pressure ' +
+        'error and adds its own &mdash; treat the pressure panel as the ' +
+        'primary product. There is no size (RMW) panel here: FPM does not ' +
+        'model size, and GHOST&rsquo;s RMW comes from a separate stage that ' +
+        'is not part of this model. ' +
+        '<strong>Basins:</strong> FPM v1.0&rsquo;s frozen boards cover the ' +
+        'Atlantic and East / Central Pacific. West Pacific storms are shown ' +
+        'as well, but they are <strong>provisional</strong>: no held-out ' +
+        'board exists for that basin, there is no aircraft-anchored ' +
+        'verification in it at all, and its training frames are mid-rebuild ' +
+        'after an imagery quality-control change. Every West Pacific storm ' +
+        'carries that disclaimer on its own page. ' +
+        '<strong>Known behavior:</strong> below about 920 hPa the model ' +
+        'reads roughly 7 hPa too shallow, and a weak-end gate carries much ' +
+        'of the skill below tropical-storm strength &mdash; see ' +
+        'Verification. ' + TRACK_CAVEAT + '</div>';
+
+    PROFILES.ghost.verif = GHOST_VERIF_HTML;
+    PROFILES.ghost.lede = GHOST_LEDE;
+    PROFILES.ghost.note = GHOST_NOTE;
+    PROFILES.fpm.verif = FPM_VERIF_HTML;
+    PROFILES.fpm.lede = FPM_LEDE;
+    PROFILES.fpm.note = FPM_NOTE;
+
     /* ---------------- main UI ---------------- */
 
     // Producer heartbeat: index.json is rewritten by every run (even when all
@@ -335,8 +633,8 @@
         var staleHtml = '';
         if (_index && (ageH === null || ageH > STALE_H)) {
             staleHtml =
-                '<div class="exp-stale">&#9888;&#65039; GHOST updates are ' +
-                'paused — the last successful run was ' +
+                '<div class="exp-stale">&#9888;&#65039; ' + M.name +
+                ' updates are paused — the last successful run was ' +
                 (ageH === null ? 'an unknown time' :
                  ageH > 48 ? Math.round(ageH / 24) + ' days' :
                  ageH.toFixed(1) + ' hours') +
@@ -348,56 +646,13 @@
             '<div class="exp-head">' +
             '  <div>' +
             '    <span class="exp-badge">EXPERIMENTAL</span>' +
-            '    <span class="exp-title">GHOST — ML Structure Diagnostics</span>' +
+            '    <span class="exp-title">' + M.title + '</span>' +
             '  </div>' +
             '  <div class="exp-meta">Updated ' + genStr +
             '    · refreshes every 30 minutes · ' +
             '<a href="#" id="exp-refresh">reload</a></div>' +
             '</div>' +
-            staleHtml +
-            '<div class="exp-lede">GHOST provides <strong>independent, ' +
-            'real-time estimates of tropical cyclone intensity (maximum ' +
-            'sustained wind and minimum central pressure) and radius of ' +
-            'maximum wind</strong> \u2014 derived from geostationary infrared ' +
-            'imagery and the large-scale environment alone, with no aircraft ' +
-            'reconnaissance required.</div>' +
-            '<div class="exp-cite"><strong>Manuscript in preparation.</strong> ' +
-            'GHOST (Geostationary-based Hurricane Objective Strength ' +
-            'Technique) is an unpublished research method; this page is ' +
-            'provided for scientific transparency and is <strong>not an ' +
-            'official forecast or analysis</strong>. Please contact the ' +
-            'author \u2014 Dr. Michael Fischer ' +
-            '(<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu' +
-            '</a>) \u2014 before citing or redistributing these estimates.</div>' +
-            '<div class="exp-note">Guidance, not official analysis. ' +
-            'Weak systems (TD / weak TS) have a known high-bias. Near ' +
-            'Category-5 strength the estimates saturate (ceiling ' +
-            '&asymp;150&ndash;160 kt): a flat, maxed-out trace means ' +
-            '&ldquo;at or above the ceiling&rdquo;, and the strongest ' +
-            'storms are typically under-read. The operational model ' +
-            '(op-2026b, updated 2026-07-28) trains on 2000&ndash;2025 and ' +
-            'adds ocean predictors &mdash; sea-surface temperature, ocean ' +
-            'heat content and their recent changes, from operational SHIPS ' +
-            'for NHC basins and a satellite ocean-heat-content analysis for ' +
-            'JTWC basins &mdash; plus an intensity-trend state; this ' +
-            'reduced, but did not eliminate, the tendency to read high ' +
-            'while storms weaken over open water. Since 2026-08-05 a ' +
-            'composition layer (GHOST 2.1p, op-2026c) refines the high end: ' +
-            'once a trackable eye persists and the storm reads &ge;90 kt, ' +
-            'specialist estimators tuned on major hurricanes take over ' +
-            'Vmax/Pmin, with per-frame quality control that masks ' +
-            'land-contaminated or corrupt scenes before smoothing. The ' +
-            'Verification tables describe the manuscript&rsquo;s held-out ' +
-            'configuration. The best-track ' +
-            'reference (NHC, or JTWC for West Pacific / Indian Ocean ' +
-            'storms) is linearly interpolated between 6-hourly analyses ' +
-            '(dots mark the real ones) and STOPS at the latest analysis — ' +
-            'GHOST continues past it, so the most recent stretch has no ' +
-            'reference to compare against yet. Below hurricane strength ' +
-            'the plotted storm center comes from that interpolated track ' +
-            '(the IR eye-lock engages only once an eye is trackable), so ' +
-            'plan-view centers can lag a reforming or fast-moving storm ' +
-            '— each panel is stamped with its center source.</div>';
+            staleHtml + M.lede + M.note;
         var arch = (_archIndex && _archIndex.storms) || [];
         if (!storms.length && !arch.length) {
             html += '<div class="exp-empty">No active storms right now — ' +
@@ -409,7 +664,24 @@
         if (storms.length) {
             html += '<div class="exp-chips" id="exp-chips">';
             storms.forEach(function (s) {
-                html += '<button class="exp-chip" data-atcf="' + s.atcf + '">' +
+                /* A storm the producer could not run at all is listed but not
+                   selectable, with the reason on the chip. Dropping it
+                   instead would make the storm list silently disagree with
+                   the Map tab, which reads as a broken feed rather than a
+                   stated limit. Note this is NOT how out-of-validation
+                   basins are handled — those render normally and carry a
+                   disclaimer (see provisionalNote). */
+                if (s.excluded) {
+                    html += '<button class="exp-chip exp-chip-off" disabled ' +
+                        'title="' + s.excluded + '">' +
+                        (s.name || s.atcf) + ' <span>' + s.atcf + '</span>' +
+                        '<em class="exp-chip-int">not available</em>' +
+                        '</button>';
+                    return;
+                }
+                html += '<button class="exp-chip' +
+                    (provisionalNote(s.atcf) ? ' exp-chip-prov' : '') +
+                    '" data-atcf="' + s.atcf + '">' +
                     (s.name || s.atcf) + ' <span>' + s.atcf + '</span>' +
                     '<em class="exp-chip-int" id="exp-int-' + s.atcf + '"></em>' +
                     '</button>';
@@ -430,7 +702,7 @@
                 ((_archIndex && _archIndex.year) || '') +
                 ' season archive (' + arch.length + ') <b>&#9662;</b>' +
                 '</button>' +
-                '<span>retrospective GHOST runs of completed storms</span>' +
+                '<span>retrospective ' + M.name + ' runs of completed storms</span>' +
                 '</div>' +
                 '<div class="exp-arch-body" id="exp-arch-body"' +
                 (archOpen ? '' : ' hidden') + '>';
@@ -461,16 +733,32 @@
                             '</button>';
                         return;
                     }
-                    var pk = s.ghost_peak_kt;
+                    /* `peak_kt` is the producer-neutral field; ghost_peak_kt
+                       is the original GHOST spelling, still read so an index
+                       published before the rename keeps its chip labels. */
+                    var pk = (s.peak_kt != null) ? s.peak_kt : s.ghost_peak_kt;
+                    var pp = s.peak_hpa;
                     var cat = windToCategory(pk);
+                    /* Label the chip with whatever the model actually
+                       predicts: a pressure model's "peak" is its deepest
+                       pressure, and quoting a derived wind there would put
+                       the weakest number on the storm's headline. The
+                       category swatch still needs a wind, so it only appears
+                       when one was published. */
+                    var chipLbl = '';
+                    if (M.headline === 'pmin_hpa' && pp != null) {
+                        chipLbl = (pk != null
+                                ? '<i style="background:' + SS_COLORS[cat] + '"></i>'
+                                : '') + 'min ' + Math.round(pp) + ' hPa';
+                    } else if (pk != null) {
+                        chipLbl = '<i style="background:' + SS_COLORS[cat] +
+                            '"></i>peak ' + Math.round(pk) + ' kt';
+                    }
                     html += '<button class="exp-chip exp-chip-arch" ' +
                         'data-atcf="' + s.atcf + '">' + (s.name || s.atcf) +
                         ' <span>' + s.atcf + '</span>' +
-                        '<em class="exp-chip-int">' +
-                        (pk != null
-                            ? '<i style="background:' + SS_COLORS[cat] +
-                              '"></i>peak ' + Math.round(pk) + ' kt'
-                            : '') + '</em></button>';
+                        '<em class="exp-chip-int">' + chipLbl +
+                        '</em></button>';
                 });
                 html += '</div>';
             });
@@ -498,7 +786,7 @@
                Both cdn.tcatlas.org and the GCS fallback send
                access-control-allow-origin: *, so the image still loads. */
             '<img id="exp-plan" class="exp-plan" crossorigin="anonymous" ' +
-            'alt="GHOST plan view">' +
+            'alt="' + M.name + ' plan view">' +
             '</div>' +
             '<div class="exp-ranges" id="exp-ranges">' +
             '<span class="exp-ranges-label">Show</span>';
@@ -514,8 +802,14 @@
             '" id="exp-track-btn">Track map</button>' +
             '<button class="exp-range exp-distbtn' + (_showDist ? ' active' : '') +
             '" id="exp-dist-btn">Distribution</button>' +
-            '<button class="exp-range exp-shapbtn' + (_showShap ? ' active' : '') +
-            '" id="exp-shap-btn">Model drivers</button>' +
+            /* SHAP attribution is published by the GHOST producer only — the
+               ridge model's drivers are its coefficients, which is a
+               different explanation and not this panel. */
+            (M.panels.shap
+                ? '<button class="exp-range exp-shapbtn' +
+                  (_showShap ? ' active' : '') +
+                  '" id="exp-shap-btn">Model drivers</button>'
+                : '') +
             '<button class="exp-range exp-verifbtn' + (_showVerif ? ' active' : '') +
             '" id="exp-verif-btn">Verification</button>' +
             '<button class="exp-range exp-dl" id="exp-dl" ' +
@@ -544,22 +838,22 @@
             body.hidden = !_archOpen;
             archT.classList.toggle('open', _archOpen);
             archT.setAttribute('aria-expanded', _archOpen);
-            track('ghost_archive_toggle', { open: _archOpen });
+            track(M.key + '_archive_toggle', { open: _archOpen });
         });
         var vBtn = document.getElementById('exp-verif-btn');
         if (vBtn) vBtn.addEventListener('click', function () {
             _showVerif = !_showVerif;
-            track('ghost_verification', { on: _showVerif });
+            track(M.key + '_verification', { on: _showVerif });
             vBtn.classList.toggle('active', _showVerif);
             var box = document.getElementById('exp-verif');
             if (!box) return;
             box.style.display = _showVerif ? 'block' : 'none';
-            if (_showVerif) box.innerHTML = VERIF_HTML;
+            if (_showVerif) box.innerHTML = M.verif;
         });
         var trackBtn = document.getElementById('exp-track-btn');
         if (trackBtn) trackBtn.addEventListener('click', function () {
             _showTrack = !_showTrack;
-            track('ghost_track_map', { on: _showTrack });
+            track(M.key + '_track_map', { on: _showTrack });
             trackBtn.classList.toggle('active', _showTrack);
             var box = document.getElementById('exp-track');
             if (box) box.style.display = _showTrack ? 'block' : 'none';
@@ -568,7 +862,7 @@
         var distBtn = document.getElementById('exp-dist-btn');
         if (distBtn) distBtn.addEventListener('click', function () {
             _showDist = !_showDist;
-            track('ghost_distribution', { on: _showDist });
+            track(M.key + '_distribution', { on: _showDist });
             distBtn.classList.toggle('active', _showDist);
             var box = document.getElementById('exp-dist');
             if (box) box.style.display = _showDist ? 'block' : 'none';
@@ -577,7 +871,7 @@
         var shapBtn = document.getElementById('exp-shap-btn');
         if (shapBtn) shapBtn.addEventListener('click', function () {
             _showShap = !_showShap;
-            track('ghost_model_drivers', { on: _showShap });
+            track(M.key + '_model_drivers', { on: _showShap });
             shapBtn.classList.toggle('active', _showShap);
             var box = document.getElementById('exp-shap');
             if (box) box.style.display = _showShap ? 'block' : 'none';
@@ -586,7 +880,7 @@
         var compBtn = document.getElementById('exp-comp');
         if (compBtn) compBtn.addEventListener('click', function () {
             _showComp = !_showComp;
-            track('ghost_comparators', { on: _showComp });
+            track(M.key + '_comparators', { on: _showComp });
             compBtn.classList.toggle('active', _showComp);
             if (_storm && _series[_storm]) drawSeries(_series[_storm]);
         });
@@ -601,7 +895,7 @@
         if (pDl) pDl.addEventListener('click', function () {
             var img = document.getElementById('exp-plan');
             if (!img || !img.src || !window.TCExport || !_storm) return;
-            track('ghost_plan_download', { storm: _storm });
+            track(M.key + '_plan_download', { storm: _storm });
             pDl.disabled = true;
             var stamp = (_index && _index.generated || '').slice(0, 10);
             /* Normal caching: img.src is already displayed and its URL is
@@ -631,20 +925,20 @@
                        anchor, touch share sheet, and the overlay fallback
                        whose Save button carries a brand-new activation.
                        Same silent-failure class as commit aa6f708c. */
-                    return TCExport.save(b, 'TC-ATLAS_GHOST_' + _storm +
+                    return TCExport.save(b, 'TC-ATLAS_' + M.name + '_' + _storm +
                         '_planview' + (stamp ? '_' + stamp : '') + '.png');
                 })
                 .catch(function (e) {
                     /* Never swallow silently -- a dead save button with no
                        trace is what made this bug survive two audits. */
-                    if (window.console) console.warn('GHOST plan save failed', e);
+                    if (window.console) console.warn(M.name + ' plan save failed', e);
                 })
                 .then(function () { pDl.disabled = false; });
         });
         _root.querySelectorAll('.exp-range[data-h]').forEach(function (b) {
             b.addEventListener('click', function () {
                 _rangeH = parseInt(b.getAttribute('data-h'), 10);
-                track('ghost_range', { hours: _rangeH || 'lifetime' });
+                track(M.key + '_range', { hours: _rangeH || 'lifetime' });
                 _root.querySelectorAll('.exp-range[data-h]').forEach(
                     function (o) { o.classList.toggle('active', o === b); });
                 /* Data already spans the full lifetime — a range change is a
@@ -652,12 +946,19 @@
                 if (_storm && _series[_storm]) applyRange(_series[_storm]);
             });
         });
-        var known = storms.concat(arch.filter(function (s) {
+        var sel = storms.filter(function (s) { return !s.excluded; });
+        var known = sel.concat(arch.filter(function (s) {
             return !s.excluded; }));
-        var want = _storm && known.some(function (s) { return s.atcf === _storm; })
-            ? _storm : known[0].atcf;
-        selectStorm(want);
-        stampChipIntensities(storms);
+        /* Every listed storm can be excluded — e.g. only West Pacific
+           systems are active and this model isn't validated there. Nothing
+           is selectable then, and known[0] would throw. */
+        if (known.length) {
+            var want = _storm &&
+                known.some(function (s) { return s.atcf === _storm; })
+                ? _storm : known[0].atcf;
+            selectStorm(want);
+        }
+        stampChipIntensities(sel);
     }
 
     /* Archived storms live under the season prefix; live ones under the
@@ -665,7 +966,7 @@
        Returns a bucket-relative path -- fetchJson() picks CDN vs GCS. */
     function seriesPath(atcf) {
         return (_archSet[atcf] ? ARCH_PREFIX : PREFIX) +
-            '/ghost_' + atcf + '.json';
+            '/' + M.file + atcf + '.json';
     }
 
     /* Fill each storm chip with its latest GHOST intensity + category. Also
@@ -674,7 +975,7 @@
         storms.forEach(function (s) {
             var p = _series[s.atcf]
                 ? Promise.resolve(_series[s.atcf])
-                : fetchJson(PREFIX + '/ghost_' + s.atcf + '.json')
+                : fetchJson(PREFIX + '/' + M.file + s.atcf + '.json')
                     .then(function (j) { _series[s.atcf] = j; return j; });
             p.then(function (j) {
                 var em = document.getElementById('exp-int-' + s.atcf);
@@ -682,8 +983,14 @@
                 var lf = lastFiniteFrame(j.frames || [], 'vmax_kt');
                 if (!lf) return;
                 var cat = windToCategory(lf.v);
+                /* Pressure-first models lead with pressure; the wind is
+                   still shown (it carries the category) but second. */
+                var lp = M.headline === 'pmin_hpa'
+                    ? lastFiniteFrame(j.frames || [], 'pmin_hpa') : null;
                 em.innerHTML = '<i style="background:' + SS_COLORS[cat] +
-                    '"></i>' + Math.round(lf.v) + ' kt · ' + categoryShort(cat);
+                    '"></i>' + (lp
+                        ? Math.round(lp.v) + ' hPa · ' + Math.round(lf.v) + ' kt'
+                        : Math.round(lf.v) + ' kt · ' + categoryShort(cat));
             }).catch(function () {});
         });
     }
@@ -698,7 +1005,7 @@
     }
 
     function selectStorm(atcf) {
-        if (_storm && _storm !== atcf) track('ghost_storm_select', { storm: atcf });
+        if (_storm && _storm !== atcf) track(M.key + '_storm_select', { storm: atcf });
         _storm = atcf;
         _root.querySelectorAll('.exp-chip').forEach(function (c) {
             c.classList.toggle('active', c.getAttribute('data-atcf') === atcf);
@@ -709,7 +1016,7 @@
                 ? (_archIndex && _archIndex.generated)
                 : (_index && _index.generated);
             var planPath = (_archSet[atcf] ? ARCH_PREFIX : PREFIX) +
-                '/ghost_' + atcf + '_plan.png?t=' +
+                '/' + M.file + atcf + '_plan.png?t=' +
                 encodeURIComponent(gen || Date.now());
             /* Same CDN-first/GCS-fallback contract as fetchJson, but an <img>
                can only express it through onerror. Guarded so a failing GCS
@@ -744,7 +1051,7 @@
        paper exports as a see-through PNG), snapshot, then redraw to restore
        the live transparent styling. */
     function saveChartPng(btn) {
-        track('ghost_download_png', { storm: _storm || 'none' });
+        track(M.key + '_download_png', { storm: _storm || 'none' });
         var el = document.getElementById('exp-plot');
         if (!el || typeof Plotly === 'undefined' || !window.TCExport) return;
         if (!_storm || !_series[_storm]) return;
@@ -779,7 +1086,7 @@
                 xref: 'paper', yref: 'paper', x: 0.065, y: -0.135,
                 xanchor: 'left', yanchor: 'top', showarrow: false,
                 align: 'left',
-                text: '<b style="color:#F47321">EXPERIMENTAL</b> &#183; GHOST is ' +
+                text: '<b style="color:#F47321">EXPERIMENTAL</b> &#183; ' + M.name + ' is ' +
                       'an unpublished research method (manuscript in ' +
                       'preparation) &#8212; <b>not an official forecast or ' +
                       'analysis</b>.<br>Recon-independent estimates from ' +
@@ -790,7 +1097,7 @@
         })
             .then(function () {
                 return TCExport.savePlotly(el,
-                    'TC-ATLAS_GHOST_' + _storm + '_' + stamp + '.png', {
+                    'TC-ATLAS_' + M.name + '_' + _storm + '_' + stamp + '.png', {
                         format: 'png',
                         width: Math.max(el.clientWidth, 1400),
                         height: Math.max(el.clientHeight, 800),
@@ -820,12 +1127,19 @@
            data coords are included in Plotly's autorange, so stale bands
            would stretch the Vmax axis. paintBands() re-adds them clipped to
            the realised range once it is known. */
-        Plotly.relayout(el, {
+        /* The size panel is absent on pressure-only models, so read the
+           realised layout rather than assuming three rows — relayouting a
+           yaxis3 that doesn't exist would quietly conjure one. */
+        var up = {
             shapes: [], annotations: [],
-            'xaxis.range': rng, 'xaxis2.range': rng, 'xaxis3.range': rng,
-            'yaxis.autorange': true, 'yaxis2.autorange': true,
-            'yaxis3.autorange': true
-        }).then(function () { paintBands(el); });
+            'xaxis.range': rng, 'xaxis2.range': rng,
+            'yaxis.autorange': true, 'yaxis2.autorange': true
+        };
+        if (el.layout && el.layout.yaxis3) {
+            up['xaxis3.range'] = rng;
+            up['yaxis3.autorange'] = true;
+        }
+        Plotly.relayout(el, up).then(function () { paintBands(el); });
     }
 
     /* Saffir-Simpson category bands + "TS / Cat 1 / …" labels on the Vmax
@@ -898,9 +1212,14 @@
         var cat = windToCategory(v.v);
         var asOf = '<div class="exp-tile-sub">at ' + v.t.slice(11, 16) + 'Z</div>';
 
-        var html =
+        var windTile =
             '<div class="exp-tile">' +
-            '<div class="exp-tile-k">GHOST max wind</div>' +
+            '<div class="exp-tile-k">' + M.name + ' max wind' +
+            (M.windIsDerived
+                ? ' <span class="exp-tile-sub" title="Not a wind model — ' +
+                  'this is the modeled pressure passed through a fitted ' +
+                  'pressure–wind relationship">(derived)</span>'
+                : '') + '</div>' +
             '<div class="exp-tile-v">' + Math.round(v.v) +
             ' <span class="exp-tile-u">kt</span>' +
             '<span class="exp-cat" style="background:' + SS_COLORS[cat] +
@@ -926,16 +1245,16 @@
                emitted 155.1 kt on held-out 2025). A flat, maxed-out value
                means "at or above the ceiling", not a measurement — and
                decays from saturation are invisible at first. */
-            (v.v >= 145
+            (M.saturates && v.v >= 145
                 ? '<div class="exp-tile-sub exp-ceil">near the model’s ' +
                   'saturation ceiling (~150–160 kt) — read as ' +
                   '“at least”, not a precise value</div>'
                 : '') +
             asOf + '</div>';
 
-        if (p) html +=
+        var presTile = !p ? '' :
             '<div class="exp-tile">' +
-            '<div class="exp-tile-k">GHOST min pressure</div>' +
+            '<div class="exp-tile-k">' + M.name + ' min pressure</div>' +
             '<div class="exp-tile-v">' + Math.round(p.v) +
             ' <span class="exp-tile-u">hPa</span></div>' +
             deltaLine(tp, 'hPa', 0, false) +
@@ -950,11 +1269,16 @@
             })() +
             '<div class="exp-tile-sub">at ' + p.t.slice(11, 16) + 'Z</div></div>';
 
-        if (r) {
+        /* Lead with what the model actually predicts. */
+        var html = (M.headline === 'pmin_hpa')
+            ? presTile + windTile
+            : windTile + presTile;
+
+        if (r && M.panels.rmw) {
             var ph = lastFiniteFrame(fr, 'pinhole_prob');
             html +=
                 '<div class="exp-tile">' +
-                '<div class="exp-tile-k">GHOST eyewall radius (RMW)</div>' +
+                '<div class="exp-tile-k">' + M.name + ' eyewall radius (RMW)</div>' +
                 '<div class="exp-tile-v">' + Math.round(r.v) +
                 ' <span class="exp-tile-u">km</span></div>' +
                 deltaLine(trm, 'km', 0, false) +
@@ -989,15 +1313,21 @@
                 '<div class="exp-tile-d">at ' + fix.t.slice(11, 16) + 'Z · ' +
                 (ageH >= 1 ? Math.round(ageH) + ' h ago' : 'current') + '</div>' +
                 (gAt !== null
-                    ? '<div class="exp-tile-sub">GHOST at that time: ' +
+                    ? '<div class="exp-tile-sub">' + M.name + ' at that time: ' +
                       Math.round(gAt) + ' kt (' +
                       fmtSigned(gAt - fix.btk_vmax_kt, 0) + ')</div>' : '') +
                 '</div>';
         }
         if (_archSet[j.storm]) {
             html = '<div class="exp-arch-note">Archived storm — ' +
-                'retrospective GHOST run over the completed lifetime; ' +
+                'retrospective ' + M.name + ' run over the completed lifetime; ' +
                 '“latest” values are the storm’s final analysis.</div>' + html;
+        }
+        /* Out-of-validation basin: estimates ARE shown, but the disclaimer
+           goes above the numbers, not in a footnote under them. */
+        var prov = provisionalNote(j.storm, j);
+        if (prov) {
+            html = '<div class="exp-prov-note">⚠️ ' + prov + '</div>' + html;
         }
         /* Model-version stamp (op-2026c ships model_version + a VERSION
            CHANGE note in the JSON; older runs have neither). */
@@ -1068,12 +1398,12 @@
               y0: 0, y1: 1, fillcolor: 'rgba(244,63,94,0.10)',
               line: { width: 0 }, layer: 'below' },
             { type: 'line', xref: 'x', yref: 'paper', x0: v.v, x1: v.v,
-              y0: 0, y1: 1, line: { color: GHOST_COL, width: 2 } }
+              y0: 0, y1: 1, line: { color: MODEL_COL, width: 2 } }
         ];
         var ann = [{
             x: v.v, y: 0.97, xref: 'x', yref: 'paper', showarrow: false,
-            text: 'GHOST ' + Math.round(v.v),
-            font: { size: 10, color: GHOST_COL }, xanchor: 'left'
+            text: M.name + ' ' + Math.round(v.v),
+            font: { size: 10, color: MODEL_COL }, xanchor: 'left'
         }];
         if (ref) {
             shapes.push({ type: 'line', xref: 'x', yref: 'paper',
@@ -1086,8 +1416,8 @@
         }
         Plotly.react(elId, [{
             x: xs, y: ys, mode: 'lines+markers',
-            line: { color: GHOST_COL, width: 2, shape: 'spline' },
-            marker: { size: 5, color: GHOST_COL },
+            line: { color: MODEL_COL, width: 2, shape: 'spline' },
+            marker: { size: 5, color: MODEL_COL },
             hovertemplate: '%{y}% of similar CV frames verified \u2264 ' +
                 '%{x:.0f}<extra></extra>'
         }], {
@@ -1110,7 +1440,7 @@
 
     /* The producer publishes the IR-recentered center for every frame
        (center_lat/lon + eye_recentered) but until now nothing displayed
-       them. Full-lifetime track colored by GHOST intensity; open circles
+       them. Full-lifetime track colored by model intensity; open circles
        mark frames where no IR eye lock was found and the center fell back
        to the interpolated/extrapolated NHC track. */
     function drawTrack(j) {
@@ -1150,8 +1480,8 @@
         var la = Math.min.apply(null, lats), lb = Math.max.apply(null, lats);
 
         box.innerHTML =
-            '<div class="exp-shap-head">GHOST center track' +
-            '<span class="exp-shap-sub">full lifetime, colored by GHOST ' +
+            '<div class="exp-shap-head">' + M.name + ' center track' +
+            '<span class="exp-shap-sub">full lifetime, colored by ' + M.name + ' ' +
             'intensity. Open circles = no IR eye lock; the center there comes ' +
             'from the interpolated ' + (j.agency || 'NHC') +
             ' track instead.</span></div>' +
@@ -1406,6 +1736,12 @@
         function col(k) { return fr.map(function (f) {
             return (f[k] === null || f[k] === undefined) ? null : f[k];
         }); }
+        /* Two gates, both required: the profile has to claim a size product
+           AND the payload has to actually carry one. Either alone would
+           render an empty third panel — indistinguishable from a broken
+           feed — on a run where the size stage failed. */
+        var hasRmw = M.panels.rmw &&
+            fr.some(function (f) { return f.rmw_km != null; });
         var dark = document.documentElement.getAttribute('data-theme') === 'dark';
         var font = { family: '-apple-system, BlinkMacSystemFont, "Segoe UI", ' +
                              'Roboto, Helvetica, Arial, sans-serif',
@@ -1435,8 +1771,8 @@
             /* One GHOST color across all three panels so the single legend
                entry means the same thing everywhere (the y-axis titles already
                say which quantity each panel shows). */
-            { x: t, y: col('vmax_kt'), name: 'GHOST', yaxis: 'y',
-              line: { color: GHOST_COL, width: 2.4 },
+            { x: t, y: col('vmax_kt'), name: M.name, yaxis: 'y',
+              line: { color: MODEL_COL, width: 2.4 },
               hovertemplate: '%{y:.1f} kt' });
         traces = traces.concat([
             { x: t, y: col('btk_vmax_kt'), name: ag + ' best track (interp)',
@@ -1462,18 +1798,21 @@
                     hovertemplate: '%{y:.0f} hPa (p75)',
                     name: 'IQR' } : null;
             })(),
-            { x: t, y: col('pmin_hpa'), name: 'GHOST', yaxis: 'y2',
-              line: { color: GHOST_COL, width: 2.4 }, showlegend: false,
+            { x: t, y: col('pmin_hpa'), name: M.name, yaxis: 'y2',
+              line: { color: MODEL_COL, width: 2.4 }, showlegend: false,
               hovertemplate: '%{y:.0f} hPa' },
             { x: t, y: col('btk_mslp_hpa'), name: ag + ' best track (interp)',
               yaxis: 'y2', line: nhc, showlegend: false, connectgaps: false,
               hovertemplate: '%{y:.0f} hPa' },
-            { x: t, y: col('rmw_km'), name: 'GHOST', yaxis: 'y3',
-              line: { color: GHOST_COL, width: 2.4 }, showlegend: false,
-              hovertemplate: '%{y:.0f} km' },
-            { x: t, y: col('btk_rmw_km'), name: ag + ' RMW', yaxis: 'y3',
+            /* Size panel only where the model actually predicts size. Nulls
+               are dropped by the filter below, the same way the conditional
+               IQR bands are. */
+            hasRmw ? { x: t, y: col('rmw_km'), name: M.name, yaxis: 'y3',
+              line: { color: MODEL_COL, width: 2.4 }, showlegend: false,
+              hovertemplate: '%{y:.0f} km' } : null,
+            hasRmw ? { x: t, y: col('btk_rmw_km'), name: ag + ' RMW', yaxis: 'y3',
               line: nhc, showlegend: false, connectgaps: false,
-              hovertemplate: '%{y:.0f} km' }
+              hovertemplate: '%{y:.0f} km' } : null
         ]);
         /* Mobile: 7 legend entries (now carrying update times) wrap to three
            rows and used to sit ON TOP of the Vmax panel, and the fixed 58 px
@@ -1489,9 +1828,10 @@
         var topM = narrow ? (_showComp ? 116 : 64)
                           : (_showComp ? 88 : 48);
         var layout = {
-            grid: { rows: 3, columns: 1, pattern: 'independent',
+            grid: { rows: hasRmw ? 3 : 2, columns: 1, pattern: 'independent',
                     roworder: 'top to bottom' },
-            height: (narrow ? 640 : 560) + (topM - (narrow ? 104 : 26)),
+            height: (narrow ? (hasRmw ? 640 : 470) : (hasRmw ? 560 : 415)) +
+                    (topM - (narrow ? 104 : 26)),
             margin: narrow ? { l: 8, r: 8, t: topM, b: 44 }
                            : { l: 58, r: 16, t: topM, b: 40 },
             paper_bgcolor: 'rgba(0,0,0,0)',
@@ -1508,18 +1848,29 @@
                paintBands) — shapes in data coords participate in Plotly's
                y-autorange, so declaring the 250-kt C5 band here would blow
                the Vmax axis out to 250 regardless of the storm. */
-            xaxis:  { anchor: 'y',  gridcolor: grid, matches: 'x3',
+            /* The bottom panel owns the tick labels and every other x-axis
+               matches it — which panel that is depends on whether the size
+               panel exists. */
+            xaxis:  { anchor: 'y',  gridcolor: grid,
+                      matches: hasRmw ? 'x3' : 'x2',
                       showticklabels: false },
-            xaxis2: { anchor: 'y2', gridcolor: grid, matches: 'x3',
-                      showticklabels: false },
-            xaxis3: { anchor: 'y3', gridcolor: grid, automargin: true },
-            yaxis:  { title: { text: 'Vmax (kt)', standoff: 4 }, automargin: true, gridcolor: grid,
-                      domain: [0.70, 1.00] },
+            xaxis2: { anchor: 'y2', gridcolor: grid,
+                      matches: hasRmw ? 'x3' : undefined,
+                      showticklabels: !hasRmw, automargin: !hasRmw },
+            yaxis:  { title: { text: M.windIsDerived
+                                 ? 'Vmax (kt, derived)' : 'Vmax (kt)',
+                               standoff: 4 },
+                      automargin: true, gridcolor: grid,
+                      domain: hasRmw ? [0.70, 1.00] : [0.56, 1.00] },
             yaxis2: { title: { text: 'Pmin (hPa)', standoff: 4 }, automargin: true, gridcolor: grid,
-                      domain: [0.36, 0.64] },
-            yaxis3: { title: { text: 'RMW (km)', standoff: 4 }, automargin: true,   gridcolor: grid,
-                      domain: [0.00, 0.30], rangemode: 'tozero' }
+                      domain: hasRmw ? [0.36, 0.64] : [0.00, 0.46] }
         };
+        if (hasRmw) {
+            layout.xaxis3 = { anchor: 'y3', gridcolor: grid, automargin: true };
+            layout.yaxis3 = { title: { text: 'RMW (km)', standoff: 4 },
+                              automargin: true, gridcolor: grid,
+                              domain: [0.00, 0.30], rangemode: 'tozero' };
+        }
         /* Assign subplot x-axes by the trace's y-axis, not by position —
            the conditional IQR band shifts indices. */
         traces = traces.filter(function (tr) { return tr; });
@@ -1629,7 +1980,7 @@
         if (fr.some(function (r) { return r.vmax_inst_kt != null; })) {
             traces.push({
                 x: t, y: col('vmax_inst_kt'),
-                name: 'GHOST instantaneous', yaxis: 'y', xaxis: 'x',
+                name: M.name + ' instantaneous', yaxis: 'y', xaxis: 'x',
                 mode: 'lines',
                 /* GHOST's own single-frame Stage-A read — same crimson family
                    as the published trace (dotted + translucent), NOT a
@@ -1741,7 +2092,7 @@
             renderShell();
         }).catch(function () {
             _root.innerHTML = '<div class="exp-inner"><div class="exp-empty">' +
-                'Could not load GHOST output right now — the hourly job may be ' +
+                'Could not load ' + M.name + ' output right now — the publisher may be ' +
                 'mid-publish. Try again shortly.</div></div>';
         });
     }
@@ -1768,7 +2119,9 @@
     function refreshIfStale(force) {
         if (!_root || !PREFIX) return;
         if (document.hidden) return;
-        if (document.documentElement.getAttribute('data-view') !== 'experimental') return;
+        if (!/^experimental/.test(
+                document.documentElement.getAttribute('data-view') || ''))
+            return;
         if (!force && Date.now() - _lastLoad < REFRESH_MS) return;
         _series = {};
         loadIndex();
@@ -1778,10 +2131,32 @@
         refreshIfStale(false);
     });
 
-    window.activateExperimentalView = function () {
+    /* Switch the active model profile. Every piece of fetched state is keyed
+       to the producer, so a switch must drop ALL of it — leaving _series or
+       _archSet behind would paint one model's storms with the other's numbers
+       (they share ATCF ids, so nothing would visibly fail). */
+    function setProfile(key) {
+        var p = PROFILES[key] || PROFILES.ghost;
+        if (p === M) return false;
+        M = p;
+        MODEL_COL = M.color;
+        PREFIX = M.prefix;
+        ARCH_PREFIX = M.arch;
+        _index = null; _archIndex = null; _archSet = {};
+        _storm = null; _series = {}; _archOpen = null;
+        _lastLoad = 0;
+        return true;
+    }
+
+    window.activateExperimentalView = function (profileKey) {
         _root = document.getElementById('exp-main');
         if (!_root) return;
-        track('ghost_view_open', { narrow: window.innerWidth < 640 });
+        var switched = setProfile(profileKey || 'ghost');
+        track(M.key + '_view_open', { narrow: window.innerWidth < 640 });
+        /* A profile switch reuses the same #exp-main node, so the previous
+           model's DOM is still mounted — blank it before the fetch or the old
+           storm chips stay clickable against the new prefix. */
+        if (switched) _root.innerHTML = '';
         loadIndex();
     };
 })();
