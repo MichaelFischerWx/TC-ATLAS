@@ -606,7 +606,15 @@
         '<strong>Known behavior:</strong> below about 920 hPa the model ' +
         'reads roughly 7 hPa too shallow, and a weak-end gate carries much ' +
         'of the skill below tropical-storm strength &mdash; see ' +
-        'Verification. ' + TRACK_CAVEAT + '</div>';
+        'Verification. ' +
+        '<strong>Not fully independent of GHOST at the weak end:</strong> ' +
+        'that gate is keyed on GHOST&rsquo;s wind estimate, blending the ' +
+        'weak-end reader in below roughly 90 kt and switching it off above. ' +
+        'The pressure model itself is entirely separate, but the published ' +
+        'value for a weak system is a blend whose weight GHOST sets, so the ' +
+        'two pages are not independent estimates there. Where GHOST has no ' +
+        'wind for a frame the gate falls back to keying on FPM&rsquo;s own ' +
+        'pressure. ' + TRACK_CAVEAT + '</div>';
 
     PROFILES.ghost.verif = GHOST_VERIF_HTML;
     PROFILES.ghost.lede = GHOST_LEDE;
