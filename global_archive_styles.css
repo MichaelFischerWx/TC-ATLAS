@@ -3019,3 +3019,4 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .gra-ir-cover { color: #fbbf24; font-weight: 700; }
 .gra-ir-cover:empty { display: none; }
+.gra-flag.unc { background: rgba(148,163,184,.22); color: var(--slate); }

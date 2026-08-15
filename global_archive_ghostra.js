@@ -595,6 +595,8 @@
                 '<div class="gra-nm">' + (s.name || s.atcf) +
                 (s.suspect ? '<span class="gra-flag" title="QC-suspect (' + (s.qc_src || '') + ')">QC</span>' : '') +
                 (s.out_of_basin ? '<span class="gra-flag oob" title="Out-of-basin apply — trained on AL/EP recon labels">OOB</span>' : '') +
+                (s.min_uncorroborated ? '<span class="gra-flag unc" title="This storm&rsquo;s deepest frame is also its largest disagreement with best track (' +
+                    s.min_gap + ' hPa), with no reconnaissance nearby — the minimum has no independent support">?</span>' : '') +
                 '</div>' +
                 '<div class="gra-num gra-g">' + (s.ghost_min_hpa !== null ? s.ghost_min_hpa.toFixed(1) : '—') + '</div>' +
                 '<div class="gra-meta">' + s.year + ' · ' + s.basin + ' · ' + s.n + ' fr</div>' +
