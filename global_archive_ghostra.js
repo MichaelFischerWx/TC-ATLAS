@@ -888,10 +888,21 @@
         _off.width = tb.cols; _off.height = tb.rows;
         var octx = _off.getContext('2d');
         var im = octx.createImageData(tb.cols, tb.rows);
+        /* NO-DATA must not look like a temperature. MergIR is a merge of several
+           geostationary satellites; when one granule is missing for a half-hour
+           its whole longitude sector comes back null — Haiyan 2013 18Z has 150
+           contiguous dead columns straight through the eastern eyewall. Painted
+           flat black those pixels read as ~273 K, i.e. warm clear air, which is
+           the opposite of the truth. A desaturated checker belongs to no
+           colormap and cannot be mistaken for a Tb value. */
+        var nodata = 0;
         for (var i = 0, n = tb.rows * tb.cols; i < n; i++) {
             var v = tb.raw[i], o = i * 4;
-            if (v === 0) {                       // invalid pixel
-                im.data[o] = im.data[o + 1] = im.data[o + 2] = 0; im.data[o + 3] = 255;
+            if (v === 0) {
+                nodata++;
+                var yy = (i / tb.cols) | 0, xx = i - yy * tb.cols;
+                var q = (((xx >> 3) + (yy >> 3)) & 1) ? 122 : 98;
+                im.data[o] = im.data[o + 1] = im.data[o + 2] = q; im.data[o + 3] = 255;
             } else if (lut) {
                 var k = v * 4;
                 im.data[o] = lut[k]; im.data[o + 1] = lut[k + 1];
@@ -902,6 +913,14 @@
             }
         }
         octx.putImageData(im, 0, 0);
+        tb.nodata = nodata / (tb.rows * tb.cols);
+        var cov = $('gra-ir-cover');
+        if (cov) {
+            cov.textContent = tb.nodata > 0.02
+                ? Math.round(tb.nodata * 100) + '% no data' : '';
+            cov.title = 'Missing satellite coverage in the MergIR merge at this '
+                + 'time — not cloud-free sky. Step a frame for fuller coverage.';
+        }
         if (cx === 0 && cy === 0) { cx = tb.cols / 2; cy = tb.rows / 2; }
         blit();
     }

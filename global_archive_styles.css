@@ -3017,3 +3017,5 @@ input[type="range"].ga-range::-moz-range-thumb {
     .browser-sidebar { overflow-y: visible; }
     .gra-list { max-height: 60vh; }
 }
+.gra-ir-cover { color: #fbbf24; font-weight: 700; }
+.gra-ir-cover:empty { display: none; }
