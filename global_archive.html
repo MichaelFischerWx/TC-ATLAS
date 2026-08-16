@@ -92,7 +92,7 @@
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260804b">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260816b">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260816c">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -1148,6 +1148,8 @@
                         <div class="gra-ir-ctr" id="gra-ir-ctr">
                             <label class="gra-ir-ctr-tog"><input type="checkbox" id="gra-ir-centres" checked>
                                 centre</label>
+                            <label class="gra-ir-ctr-tog"><input type="checkbox" id="gra-ir-coast" checked>
+                                coast</label>
                             <span class="gra-ir-ctr-key"><i class="bt"></i>best track</span>
                             <span class="gra-ir-ctr-key eye"><i class="eye"></i>eye fix</span>
                         </div>
@@ -1316,6 +1318,6 @@
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
-    <script defer src="global_archive_ghostra.js?v=20260816b"></script>
+    <script defer src="global_archive_ghostra.js?v=20260816c"></script>
 </body>
 </html>

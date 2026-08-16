@@ -1273,7 +1273,7 @@
                 + 'time — not cloud-free sky. Step a frame for fuller coverage.';
         }
         if (cx === 0 && cy === 0) { cx = tb.cols / 2; cy = tb.rows / 2; }
-        wireCentres(); syncCentreKey();
+        wireCentres(); syncCentreKey(); if (irCoast) loadCoast();
         blit();
     }
 
@@ -1293,9 +1293,100 @@
         ctx.imageSmoothingEnabled = false;       // keep pixels honest when zoomed
         var r = srcRect();
         ctx.drawImage(_off, r.sx, r.sy, r.sw, r.sh, 0, 0, c.width, c.height);
+        drawCoast(ctx, c, r);
         drawCentres(ctx, c, r);
         var z = $('gra-ir-zoom');
         if (z) z.textContent = zoom > 1.01 ? zoom.toFixed(1) + '× — double-click to reset' : '';
+    }
+
+    /* ── coastlines ───────────────────────────────────────────────────────
+       The chip is a native MergIR grid — a regular lat/lon box — so lat/lon
+       maps to source pixel LINEARLY. `bounds` rides along on the frame payload
+       ({south,north,west,east}), which is what makes this cheap: no projection,
+       no reprojection, just a scale.
+
+       Segments are clipped and converted to SOURCE pixels once per frame, not
+       per blit — blit() runs on every zoom and pan step, and walking ~100k
+       coastline vertices there would make panning stutter.
+
+       Vendored Natural Earth 10m simplified (~0.2 MB gzip), the same asset the
+       realtime viewer uses; the full 9.3 MB 10m file is not worth it at chip
+       scale. */
+    var coastGeo = null, coastLoading = false, coastSegs = null, coastKey = '';
+    var irCoast = true;
+
+    function loadCoast() {
+        if (coastGeo || coastLoading) return;
+        coastLoading = true;
+        fetch('assets/coastlines/ne_10m_coastline_simplified.geojson')
+            .then(function (r) { return r.json(); })
+            .then(function (g) { coastGeo = g; coastSegs = null; blit(); })
+            .catch(function () { coastLoading = false; });   // silent: decoration
+    }
+
+    /* Unwrap a longitude toward the chip's own frame. A chip straddling the
+       dateline carries west/east past ±180, and a vertex left in -180..180
+       would be projected a world away — the same trap the map marker hits. */
+    function unwrap(lon, mid) {
+        while (lon - mid > 180) lon -= 360;
+        while (mid - lon > 180) lon += 360;
+        return lon;
+    }
+
+    function buildCoast() {
+        if (!coastGeo || !tb || !tb.b) { coastSegs = []; return; }
+        var b = tb.b, key = [b.south, b.north, b.west, b.east].join(',');
+        if (coastKey === key && coastSegs) return;
+        coastKey = key; coastSegs = [];
+        var midLon = (b.west + b.east) / 2, pad = 0.5;
+        var sx = tb.cols / (b.east - b.west), sy = tb.rows / (b.north - b.south);
+        var feats = coastGeo.features || [];
+        for (var i = 0; i < feats.length; i++) {
+            var gm = feats[i].geometry; if (!gm) continue;
+            var lines = gm.type === 'LineString' ? [gm.coordinates]
+                      : gm.type === 'MultiLineString' ? gm.coordinates : null;
+            if (!lines) continue;
+            for (var L = 0; L < lines.length; L++) {
+                var cs = lines[L], run = null;
+                for (var k = 0; k < cs.length; k++) {
+                    var lon = unwrap(cs[k][0], midLon), lat = cs[k][1];
+                    var inside = lon >= b.west - pad && lon <= b.east + pad &&
+                                 lat >= b.south - pad && lat <= b.north + pad;
+                    if (inside) {
+                        if (!run) { run = []; coastSegs.push(run); }
+                        run.push((lon - b.west) * sx, (b.north - lat) * sy);
+                    } else if (run) {
+                        run.push((lon - b.west) * sx, (b.north - lat) * sy);  // 1 pt past
+                        run = null;
+                    }
+                }
+            }
+        }
+    }
+
+    function drawCoast(ctx, c, r) {
+        if (!irCoast || !tb || !tb.b) return;
+        if (!coastGeo) { loadCoast(); return; }
+        buildCoast();
+        if (!coastSegs.length) return;
+        var kx = c.width / r.sw, ky = c.height / r.sh;
+        ctx.save();
+        ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        var w = Math.max(1.6, c.width / 300);
+        var passes = [['rgba(0,0,0,.55)', w * 2.4], ['rgba(255,255,255,.92)', w]];
+        for (var pi = 0; pi < passes.length; pi++) {
+            ctx.strokeStyle = passes[pi][0]; ctx.lineWidth = passes[pi][1];
+            ctx.beginPath();
+            for (var i = 0; i < coastSegs.length; i++) {
+                var g = coastSegs[i];
+                for (var k = 0; k < g.length; k += 2) {
+                    var X = (g[k] - r.sx) * kx, Y = (g[k + 1] - r.sy) * ky;
+                    if (k === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+                }
+            }
+            ctx.stroke();
+        }
+        ctx.restore();
     }
 
     /* ── centre marks ─────────────────────────────────────────────────────
@@ -1368,6 +1459,15 @@
         if (!el || el._wired) return;
         el._wired = true;
         el.addEventListener('change', function () { irCentres = el.checked; blit(); });
+        var co = $('gra-ir-coast');
+        if (co && !co._wired) {
+            co._wired = true;
+            co.addEventListener('change', function () {
+                irCoast = co.checked;
+                if (irCoast) loadCoast();
+                blit();
+            });
+        }
     }
 
     function syncCentreKey() {
