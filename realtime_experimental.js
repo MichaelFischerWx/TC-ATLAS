@@ -509,13 +509,19 @@
         'frames. Nothing about the East Pacific deep end can be established ' +
         'from this sample, and nothing here claims it.</p>' +
 
-        '<p class="exp-verif-note"><strong>On the wind trace.</strong> FPM ' +
-        'models pressure only. The maximum-wind curve on this page is that ' +
-        'pressure passed through a fitted pressure&ndash;wind relationship ' +
-        '(the deficit, translation speed, latitude and a size term), so it ' +
-        'inherits the pressure error and adds its own. It is not an ' +
-        'independent wind estimate and should not be compared against ' +
-        'GHOST&rsquo;s Vmax as though it were one.</p>';
+        '<p class="exp-verif-note"><strong>Why there is no wind here.</strong> ' +
+        'FPM models pressure only. A wind trace can be derived from it ' +
+        'through a fitted pressure&ndash;wind relationship, and that is ' +
+        'what the Global Archive&rsquo;s reanalysis publishes &mdash; but ' +
+        'the real-time form of it over-reads weak storms outside the ' +
+        'Atlantic badly enough to be misleading. On the 2026 East ' +
+        'Pacific season it peaked 20&ndash;29 kt above best track on ' +
+        'every storm, because the weak-end blend closes at a much lower ' +
+        'wind in that basin and hands the storm to a reader fitted on ' +
+        'Category 4&ndash;5 hurricanes. The Atlantic wind was fine. ' +
+        'Rather than publish a quantity that is right in one basin and ' +
+        'wrong in another, it is withheld until the blend is repaired. ' +
+        'None of this affects the pressure numbers above.</p>';
 
     /* Per-profile page copy. Kept beside the verification blocks rather than
        inline in renderShell so the two models' claims sit next to each other
@@ -595,13 +601,16 @@
 
     var FPM_NOTE =
         '<div class="exp-note">Guidance, not official analysis. ' +
-        '<strong>Pressure is the model; wind is derived.</strong> The ' +
-        'maximum-wind trace is FPM&rsquo;s pressure passed through a fitted ' +
-        'pressure&ndash;wind relationship, so it inherits the pressure ' +
-        'error and adds its own &mdash; treat the pressure panel as the ' +
-        'primary product. There is no size (RMW) panel here: FPM does not ' +
-        'model size, and GHOST&rsquo;s RMW comes from a separate stage that ' +
-        'is not part of this model. ' +
+        '<strong>This page shows pressure only.</strong> FPM models '  +
+        'minimum central pressure; it does not model wind or size. A '  +
+        'maximum-wind trace derived from the pressure was withheld in '  +
+        'August 2026 because it over-reads weak storms outside the '  +
+        'Atlantic &mdash; the weak-end blend hands those storms to a '  +
+        'reader fitted on major hurricanes, which read a 40-kt tropical '  +
+        'storm near 70 kt. The pressure channel is unaffected by that '  +
+        'and is the product here. There is likewise no size (RMW) '  +
+        'panel: GHOST&rsquo;s RMW comes from a separate stage that is '  +
+        'not part of this model. ' +
         '<strong>Basins:</strong> FPM v1.0&rsquo;s frozen boards cover the ' +
         'Atlantic and East / Central Pacific. West Pacific storms are shown ' +
         'as well, but they are <strong>provisional</strong>: no held-out ' +
