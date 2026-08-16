@@ -734,10 +734,16 @@
             ? '<br><b class="gra-mismatch">served as ' + version +
               ' but the tree identifies itself as ' + index.version +
               '</b>' : '';
+        /* The identity line (version, per-basin protocol, any version
+           mismatch) stays ALWAYS VISIBLE — it is what tells a reader which
+           model produced the numbers beside it. Everything below it is
+           reference prose, and it used to starve the leaderboard down to ~2
+           visible storms, so it collapses. */
         $('gra-foot').innerHTML =
             'GHOST-FPM ' + (version || index.version || '') +
             (index.title ? ' — ' + index.title : '') + mism +
             (per ? '<br>' + per : '<br>' + (index.model || '')) +
+            '<details class="gra-foot-more"><summary>What these numbers are</summary>' +
             '<br>Recon-independent research estimates from geostationary IR + ' +
             'reanalysis environment. Not an official analysis. ' +
             '<b>OOB</b> = out-of-basin apply (trained on AL/EP recon labels); ' +
@@ -755,7 +761,7 @@
             'and a leave-one-storm-out correction to the strongest cases. ' +
             'Neither can be computed for a storm happening now, so the ' +
             'real-time FPM page reads a few knots lower for the same storm ' +
-            'above about 110 kt. The pressure is the same model on both.';
+            'above about 110 kt. The pressure is the same model on both.' + '</details>';
     }
 
     /* The per-basin protocol table in the About panel. This is the statement
@@ -1220,6 +1226,10 @@
        Zoom is preserved across frame steps on purpose — that is how you watch
        an eye evolve — and reset when the storm changes. */
     var _off = null, zoom = 1, cx = 0, cy = 0;
+    /* Centre marks default ON: the chip otherwise shows a scene with no
+       indication of where the storm is claimed to be, which is the one
+       thing a reader checking an estimate wants to see. */
+    var irCentres = true;
 
     function repaint() {
         if (!tb) return;
@@ -1263,6 +1273,7 @@
                 + 'time — not cloud-free sky. Step a frame for fuller coverage.';
         }
         if (cx === 0 && cy === 0) { cx = tb.cols / 2; cy = tb.rows / 2; }
+        wireCentres(); syncCentreKey();
         blit();
     }
 
@@ -1282,8 +1293,86 @@
         ctx.imageSmoothingEnabled = false;       // keep pixels honest when zoomed
         var r = srcRect();
         ctx.drawImage(_off, r.sx, r.sy, r.sw, r.sh, 0, 0, c.width, c.height);
+        drawCentres(ctx, c, r);
         var z = $('gra-ir-zoom');
         if (z) z.textContent = zoom > 1.01 ? zoom.toFixed(1) + '× — double-click to reset' : '';
+    }
+
+    /* ── centre marks ─────────────────────────────────────────────────────
+       Two different centres can exist for one frame and they are not the same
+       quantity, which is exactly why both are worth drawing:
+
+         BEST TRACK  the interpolated track position. The chip is CUT about it
+                     (`/global/ir/frame?...&lat=f.lat&lon=f.lon`), so it is the
+                     chip centre by construction, not an estimate — always exact,
+                     always available.
+
+         EYE FIX     where the science pipeline's `recenter_ir` put the origin
+                     when it found an eye. It is NOT in this data path today, so
+                     it draws only when a frame supplies it. Worth showing when
+                     it lands: that recentring maximises an eye-quality objective
+                     and can therefore lock onto a corrupt pixel — the Amanda
+                     2014 spike was exactly that, the origin pinned to a coded
+                     329 K pixel 20 km off track — and ~21% of centre-found
+                     frames hit the 50 km clamp, which nothing surfaces today. */
+    function srcToCanvas(sx, sy, r, c) {
+        return { x: (sx - r.sx) / r.sw * c.width,
+                 y: (sy - r.sy) / r.sh * c.height };
+    }
+
+    /* Line widths are in SOURCE pixels but the canvas is displayed at roughly a
+       third of its internal size (550 px backing store inside a ~180 px box), so
+       a nominal 1 px stroke renders sub-pixel and vanishes. Scale off the
+       backing store and keep a dark halo underneath so the mark survives both
+       the cold-cloud purples and the warm-eye reds. */
+    function crosshair(ctx, x, y, col, gap, arm, w) {
+        ctx.save();
+        ctx.lineCap = 'round';
+        var passes = [['rgba(0,0,0,.65)', w * 2.2], [col, w]];
+        for (var i = 0; i < passes.length; i++) {
+            ctx.strokeStyle = passes[i][0];
+            ctx.lineWidth = passes[i][1];
+            ctx.beginPath();
+            ctx.moveTo(x - gap - arm, y); ctx.lineTo(x - gap, y);
+            ctx.moveTo(x + gap, y);       ctx.lineTo(x + gap + arm, y);
+            ctx.moveTo(x, y - gap - arm); ctx.lineTo(x, y - gap);
+            ctx.moveTo(x, y + gap);       ctx.lineTo(x, y + gap + arm);
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+
+    function drawCentres(ctx, c, r) {
+        if (!tb || !irCentres) return;
+        var g = Math.max(4, c.width / 42), a = Math.max(8, c.width / 15);
+        var w = Math.max(2.5, c.width / 150);
+        // best track = chip centre, by construction
+        var bt = srcToCanvas(tb.cols / 2, tb.rows / 2, r, c);
+        crosshair(ctx, bt.x, bt.y, '#38bdf8', g, a, w);
+        // eye fix, only if the frame actually carries one
+        if (tb.eye_col != null && tb.eye_row != null) {
+            var ey = srcToCanvas(tb.eye_col, tb.eye_row, r, c);
+            crosshair(ctx, ey.x, ey.y, '#f43f5e', g, a, w);
+            ctx.save();                                  // tie the two together
+            ctx.setLineDash([w * 2, w * 2]); ctx.lineWidth = w * 0.8;
+            ctx.strokeStyle = 'rgba(244,63,94,.85)';
+            ctx.beginPath(); ctx.moveTo(bt.x, bt.y); ctx.lineTo(ey.x, ey.y); ctx.stroke();
+            ctx.restore();
+        }
+    }
+
+    /* Toggle + key state. The eye-fix key stays dimmed unless the frame
+       supplies one — an absent channel must not read as "no displacement". */
+    function wireCentres() {
+        var el = $('gra-ir-centres');
+        if (!el || el._wired) return;
+        el._wired = true;
+        el.addEventListener('change', function () { irCentres = el.checked; blit(); });
+    }
+
+    function syncCentreKey() {
+        var k = document.querySelector('.gra-ir-ctr-key.eye');
+        if (k) k.classList.toggle('on', !!(tb && tb.eye_col != null && tb.eye_row != null));
     }
 
     function resetZoom() {

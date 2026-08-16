@@ -2836,7 +2836,10 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 /* ── leaderboard ── */
 .gra-sub { font-size: 0.66rem; color: var(--slate); }
-.gra-list { overflow-y: auto; flex: 1; }
+/* min-height:0 is load-bearing: without it a flex child refuses to shrink
+   below its content height, so a long .gra-foot starved the list down to
+   ~2 visible storms. */
+.gra-list { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
 .gra-item {
     padding: 6px 14px; border-bottom: 1px solid var(--border); cursor: pointer;
     display: grid; grid-template-columns: 1fr auto; gap: 1px 8px;
@@ -2858,6 +2861,10 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gra-foot {
     padding: 8px 14px; border-top: 1px solid var(--border);
     font-size: 0.6rem; color: var(--slate); line-height: 1.4;
+    /* Reference prose, not the point of the panel: the identity line stays
+       visible, the rest collapses, and the whole block is bounded so it can
+       never squeeze the leaderboard again. */
+    flex: 0 0 auto; max-height: 168px; overflow-y: auto;
 }
 /* ── IR chip ── */
 /* The chip must never exceed the map it floats over — on a short window the
@@ -2897,6 +2904,28 @@ input[type="range"].ga-range::-moz-range-thumb {
     background: rgba(15, 23, 42, .8); color: #e2e8f0; padding: 2px 6px;
     font-variant-numeric: tabular-nums; pointer-events: none;
 }
+.gra-ir-ctr {
+    display: flex; align-items: center; gap: 10px; flex: none;
+    padding: 3px 9px 5px; font-size: 0.6rem; color: var(--slate);
+}
+.gra-ir-ctr-tog { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.gra-ir-ctr-tog input { margin: 0; }
+.gra-ir-ctr-key { display: flex; align-items: center; gap: 4px; }
+/* The eye-fix key is dimmed until a frame actually carries one, so an absent
+   channel reads as absent rather than as "no displacement". */
+.gra-ir-ctr-key.eye { opacity: .38; }
+.gra-ir-ctr-key.eye.on { opacity: 1; }
+.gra-ir-ctr-key i {
+    width: 9px; height: 9px; display: inline-block; position: relative;
+}
+.gra-ir-ctr-key i::before, .gra-ir-ctr-key i::after {
+    content: ''; position: absolute; background: currentColor;
+}
+.gra-ir-ctr-key i::before { left: 4px; top: 0; width: 1px; height: 9px; }
+.gra-ir-ctr-key i::after { top: 4px; left: 0; height: 1px; width: 9px; }
+.gra-ir-ctr-key i.bt { color: #38bdf8; }
+.gra-ir-ctr-key i.eye { color: #f43f5e; }
+
 .gra-ir-status { padding: 8px 9px; font-size: 0.68rem; color: var(--slate); }
 .gra-ir-status:empty { display: none; }
 .gra-ir-foot { padding: 6px 9px; display: flex; align-items: center; gap: 6px; }
@@ -3075,3 +3104,11 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gra-ir-cover { color: #fbbf24; font-weight: 700; }
 .gra-ir-cover:empty { display: none; }
 .gra-flag.unc { background: rgba(148,163,184,.22); color: var(--slate); }
+
+.gra-foot-more > summary {
+    cursor: pointer; margin-top: 4px; color: var(--blue);
+    font-size: 0.6rem; list-style: none;
+}
+.gra-foot-more > summary::-webkit-details-marker { display: none; }
+.gra-foot-more > summary::before { content: '▸ '; }
+.gra-foot-more[open] > summary::before { content: '▾ '; }
