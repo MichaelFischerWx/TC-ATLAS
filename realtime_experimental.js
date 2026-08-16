@@ -98,7 +98,13 @@
                     'quality-control change. Read these as experimental ' +
                     'within an already-experimental product.'
             },
-            panels: { rmw: false, shap: false, dist: true, track: true,
+            /* Same panel set as GHOST except `rmw`, and that one is a real
+               absence rather than a producer gap: FPM models pressure and
+               nothing else, so there is no size estimate to draw. The
+               drivers panel IS on — a ridge's contributions are exact
+               coefficients, which is a better explanation than the boosted
+               stack's approximated one, not a lesser substitute. */
+            panels: { rmw: false, shap: true, dist: true, track: true,
                       comp: true }
         }
     };
@@ -614,7 +620,21 @@
         'value for a weak system is a blend whose weight GHOST sets, so the ' +
         'two pages are not independent estimates there. Where GHOST has no ' +
         'wind for a frame the gate falls back to keying on FPM&rsquo;s own ' +
-        'pressure. ' + TRACK_CAVEAT + '</div>';
+        'pressure. ' +
+        /* The Global Archive's reanalysis tab publishes its own
+           "GHOST-FPM Vmax" from the same pressure model but the full offline
+           wind recipe. The two disagree at the top, and a reader comparing
+           the same storm across the two pages has to be told why. Decision
+           recorded in TC-SWARM realtime/FPM_WIND_CONSISTENCY.md. */
+        '<strong>Against the archived reanalysis:</strong> the Global ' +
+        'Archive&rsquo;s GHOST Reanalysis tab shows a &ldquo;GHOST-FPM ' +
+        'V<sub>max</sub>&rdquo; for past storms. It comes from the same ' +
+        'pressure model but a fuller wind recipe &mdash; one that uses ' +
+        'best-track wind radii for size and a leave-one-storm-out correction ' +
+        'at the strongest end. Neither can be computed while a storm is ' +
+        'happening, so the wind on this page reads a few knots lower above ' +
+        'about 110 kt. The pressure is the same model on both. ' +
+        TRACK_CAVEAT + '</div>';
 
     PROFILES.ghost.verif = GHOST_VERIF_HTML;
     PROFILES.ghost.lede = GHOST_LEDE;
@@ -810,9 +830,9 @@
             '" id="exp-track-btn">Track map</button>' +
             '<button class="exp-range exp-distbtn' + (_showDist ? ' active' : '') +
             '" id="exp-dist-btn">Distribution</button>' +
-            /* SHAP attribution is published by the GHOST producer only — the
-               ridge model's drivers are its coefficients, which is a
-               different explanation and not this panel. */
+            /* Both producers publish driver attribution now; the panel is
+               payload-shaped (see drawShap), so what differs between them is
+               the units and the method, not the chart. */
             (M.panels.shap
                 ? '<button class="exp-range exp-shapbtn' +
                   (_showShap ? ' active' : '') +
@@ -1337,14 +1357,17 @@
         if (prov) {
             html = '<div class="exp-prov-note">⚠️ ' + prov + '</div>' + html;
         }
-        /* Model-version stamp (op-2026c ships model_version + a VERSION
-           CHANGE note in the JSON; older runs have neither). */
+        /* Model-version stamp. The description comes from the payload when
+           the producer supplies one — the fallback below describes GHOST's
+           op-2026c composition layer specifically, and printing that under
+           any other model's version string would be a plain misstatement. */
         if (j.model_version) {
             html += '<div class="exp-arch-note">Model: ' + j.model_version +
-                ' — eye-gated high-end refinement over the operational ' +
+                ' — ' + (j.model_version_note ||
+                'eye-gated high-end refinement over the operational ' +
                 'model; per-frame quality control masks land-contaminated ' +
                 'and corrupt scenes (chart gaps are frames with no ' +
-                'QC-clean estimate).</div>';
+                'QC-clean estimate).') + '</div>';
         }
         box.innerHTML = html;
     }
@@ -1625,7 +1648,78 @@
         irb_rad_grad2_val: 'Curvature of the cloud-top temperature profile near its steepest edge',
         cold_frac65_outer_mean: 'Fraction of cold cloud in the outer (100–200 km) band',
         r_eye: 'Apparent eye radius from the infrared imagery',
-        r_cold: 'Radius of the surrounding cold-top ring'
+        r_cold: 'Radius of the surrounding cold-top ring',
+
+        /* ---- FPM predictors ----
+           A different model with a different feature set, so the hover text
+           has to cover it too — otherwise every bar on the FPM drivers panel
+           reads "Model input feature", which is worse than no panel. Names
+           are the ridge's own design columns (fpm_v1_core.design_names /
+           weak_names); `^2` and `log_` are stripped by featGloss below. */
+        grad_in: 'How sharply cloud tops cool outward through the inner core',
+        rad_rng_30: 'Warmest-to-coldest spread of cloud tops inside 30 km',
+        mo_r200: 'Mean cloud-top temperature on the 200 km ring',
+        m_r50: 'Mean cloud-top temperature on the 50 km ring',
+        m_r100: 'Mean cloud-top temperature on the 100 km ring',
+        m_r150: 'Mean cloud-top temperature on the 150 km ring',
+        m_r200: 'Mean cloud-top temperature on the 200 km ring',
+        m_r300: 'Mean cloud-top temperature on the 300 km ring',
+        sd_r50: 'Unevenness of cloud tops around the 50 km ring',
+        sd_r100: 'Unevenness of cloud tops around the 100 km ring',
+        sd_r150: 'Unevenness of cloud tops around the 150 km ring',
+        sd_r300: 'Unevenness of cloud tops around the 300 km ring',
+        r_eyewall: 'Radius of the coldest cloud-top ring — the eyewall’s infrared scale, and the inner limit of the pressure integral',
+        tb_ring: 'Cloud-top temperature of the eyewall ring — how deep eyewall convection is reaching',
+        ring_azstd: 'Unevenness of cloud tops around the eyewall ring',
+        ring_wn1: 'One-sided (wavenumber-1) asymmetry of the eyewall ring',
+        ring_wn2: 'Elliptical (wavenumber-2) asymmetry of the eyewall ring',
+        ring_closed_215: 'How completely the −58 °C (215 K) ring closes around the center',
+        ring_range: 'Warmest-to-coldest spread around the eyewall ring',
+        rad_sd_30: 'Radial structure of the core inside 30 km',
+        rad_sd_50: 'Radial structure of the core inside 50 km',
+        band_w: 'Thickness of the central dense overcast',
+        band_lo: 'Inner edge of the central dense overcast',
+        band_azsd_out: 'Unevenness of the outer banding around the storm',
+        cdo_depth: 'Coldness of the central dense overcast — how deep its convection is',
+        cdo_ext: 'How far the cold shield extends beyond the eyewall',
+        cold_int300: 'Total cold-cloud coverage out to 300 km — the outer scale of the pressure integral',
+        slope_out2: 'How quickly cloud tops warm outward beyond the canopy',
+        asym_in: 'Departure of the inner core from axisymmetry',
+        edge_ragged: 'Raggedness of the cloud canopy’s outer edge',
+        dyn_rad: 'Radius at which the cloud-top profile changes character',
+        dep_r100: 'How much colder the 100 km ring is than the surrounding airmass',
+        dep_eye: 'How much warmer the eye is than the surrounding airmass',
+        eye_wc: 'Warm-core prominence — the warmest eye pixels against the eye’s own mean',
+        eye_tb: 'Cloud-top temperature in the eye',
+        eye_defined: 'Whether a warm eye is resolvable at all in this frame',
+        eye_contrast_deblurred: 'Eye-to-eyewall warmth contrast, corrected for the imagery blurring a small eye',
+        cf220_200: 'Fraction of cloud colder than −53 °C within 200 km',
+        cfrel65_200: 'Fraction within 200 km colder than the local airmass by 65 K — a threshold that means the same thing in any environment',
+        cfrel45_200: 'Fraction within 200 km colder than the local airmass by 45 K',
+        cfrel65_100: 'Fraction within 100 km colder than the local airmass by 65 K',
+        rrel55: 'Area-equivalent radius of cloud 55 K colder than the local airmass',
+        rrel75: 'Area-equivalent radius of cloud 75 K colder than the local airmass',
+        r_cold220: 'Radius of the −53 °C (220 K) cold shield',
+        r_cold235: 'Radius of the −38 °C (235 K) cold shield',
+        absLat: 'Storm latitude',
+        doy_sin: 'Time of year (seasonal phase)',
+        translation_speed_24h: 'Forward speed of the storm, averaged over the last day',
+        slow_mover_flag: 'Whether the storm has been moving slowly enough to churn its own ocean',
+        land_fraction: 'Share of the surrounding area that is land',
+        land_fraction_x_deficit: 'Land interaction, scaled by how deep the storm already is',
+        mpi: 'Maximum potential intensity of the current ocean–atmosphere environment',
+        mpi_x_deficit: 'Environmental potential, scaled by how deep the storm already is',
+        disp: 'Offset between the best-fit spiral pattern and the storm center',
+        norm: 'Spiral organization relative to the overall sharpness of the imagery',
+        offcen_gain: 'How much better the spiral pattern fits off-center than at the center',
+        min_sharp: 'How sharply the spiral fit degrades away from its best center — a well-defined center scores high',
+        coh_inner: 'How well the inner cloud field aligns with a spiral',
+        coh_outer: 'How well the outer cloud field aligns with a spiral',
+        coh_io: 'Inner-minus-outer spiral coherence — whether organization is concentrated in the core',
+        grad_conc: 'Share of the image’s structure concentrated in the inner core',
+        hours_since_genesis: 'How long the system has existed',
+        hours_since_own_peak: 'How long since the model’s own deepest reading',
+        decline_from_own_peak: 'How far the model has backed off its own peak — a decay clock'
     };
     function featGloss(f) {
         if (FEATURE_GLOSS[f]) return FEATURE_GLOSS[f];
@@ -1633,7 +1727,29 @@
         var sfx = /_km$/.test(f)
             ? ' — smoothed over the last few hours'
             : (/_tr$/.test(f) ? ' — its recent trend' : '');
+        /* FPM decorates its design columns: `^2` is the squared (curvature)
+           copy of a core term, `log_` a log-compressed size term, `d3_` a
+           3-hour change. Strip and annotate rather than losing the gloss. */
+        if (/\^2$/.test(base)) {
+            base = base.replace(/\^2$/, '');
+            sfx = ' — its squared term, letting the fit curve rather than ' +
+                  'run straight' + sfx;
+        }
+        if (/^log_/.test(base)) {
+            base = base.replace(/^log_/, '');
+            sfx = ' — on a log scale' + sfx;
+        }
+        if (/^d3_/.test(base)) {
+            base = base.replace(/^d3_/, '');
+            sfx = ' — its change over the last 3 hours' + sfx;
+        }
         if (FEATURE_GLOSS[base]) return FEATURE_GLOSS[base] + sfx;
+        if (/^m_r\d+$/.test(base))
+            return 'Mean cloud-top temperature on the ' +
+                   base.slice(3) + ' km ring' + sfx;
+        if (/^sd_r\d+$/.test(base))
+            return 'Unevenness of cloud tops around the ' +
+                   base.slice(4) + ' km ring' + sfx;
         if (/^(s0_|irb_|eye_|ir_)/.test(base))
             return 'Infrared cloud-top structure metric' + sfx;
         if (/^(dv_|spiral)/.test(base))
@@ -1661,7 +1777,24 @@
         var box = document.getElementById('exp-shap');
         if (!box || typeof Plotly === 'undefined') return;
         var sh = j.shap;
-        if (!sh || !sh.vmax_latest) {
+        /* Two payload shapes, both supported on purpose. GHOST publishes
+           `vmax_latest` / `rmw_latest` / `vmax_base` (TreeSHAP over a boosted
+           stack); FPM publishes a generic `panels` array with its own units
+           and titles, because a ridge's drivers are exact coefficients in
+           hectopascals rather than approximated contributions in knots. New
+           producers should use `panels` \u2014 the old keys are read so the
+           GHOST objects already on the CDN keep rendering. */
+        var panels = (sh && sh.panels) ? sh.panels : null;
+        if (!panels && sh && sh.vmax_latest) {
+            panels = [{ key: 'v', unit: ' kt', title: 'Intensity drivers (kt)',
+                        bars: sh.vmax_latest }];
+            if (sh.rmw_latest) {
+                panels.push({ key: 'r', unit: ' %',
+                              title: 'Size (RMW) drivers (% effect)',
+                              bars: sh.rmw_latest });
+            }
+        }
+        if (!panels || !panels.length) {
             box.innerHTML = '<div class="exp-empty">No driver attribution in ' +
                 'this storm\'s file yet (republish to populate).</div>';
             return;
@@ -1670,16 +1803,21 @@
         var grid = dark ? '#1e293b' : '#e2e8f0';
         var fc = dark ? '#cbd5e1' : '#334155';
         var last = (j.frames || []).slice(-1)[0];
+        var gUnit = sh.groups_unit || 'kt';
+        var blurb = sh.note ||
+            ('exact TreeSHAP. Explains the intensity model\u2019s first-pass ' +
+             'estimate (base ' + (sh.vmax_base || 0).toFixed(1) + ' kt) and ' +
+             'the size model \u2014 not the calibrated, time-smoothed values ' +
+             'plotted above.');
         box.innerHTML =
             '<div class="exp-shap-head">Model drivers &mdash; ' +
             (last ? last.t.slice(0, 16).replace('T', ' ') + 'Z' : '') +
-            '<span class="exp-shap-sub">exact TreeSHAP. Explains the ' +
-            'intensity model\u2019s first-pass estimate (base ' +
-            (sh.vmax_base || 0).toFixed(1) + ' kt) and the size model &mdash; ' +
-            'not the calibrated, time-smoothed values plotted above. ' +
-            'Hover a bar for what that feature measures.</span></div>' +
+            '<span class="exp-shap-sub">' + blurb +
+            ' Hover a bar for what that feature measures.</span></div>' +
             '<div class="exp-shap-grid">' +
-            '<div id="exp-shap-v"></div><div id="exp-shap-r"></div></div>' +
+            panels.map(function (p, i) {
+                return '<div id="exp-shap-p' + i + '"></div>';
+            }).join('') + '</div>' +
             '<div id="exp-shap-t"></div>';
 
         function barFig(el, rows, unit, title) {
@@ -1706,8 +1844,9 @@
             }, { displayModeBar: false, responsive: true })
               .then(function () { Plotly.Plots.resize(el); });
         }
-        barFig('exp-shap-v', sh.vmax_latest, ' kt', 'Intensity drivers (kt)');
-        barFig('exp-shap-r', sh.rmw_latest, ' %', 'Size (RMW) drivers (% effect)');
+        panels.forEach(function (p, i) {
+            barFig('exp-shap-p' + i, p.bars, p.unit || ' kt', p.title || '');
+        });
 
         if (sh.groups && j.frames) {
             var t = j.frames.map(function (f) { return f.t; });
@@ -1729,7 +1868,7 @@
                 font: { color: fc, size: 10 }, hovermode: 'x unified',
                 legend: { orientation: 'h', y: -0.22, font: { size: 10 } },
                 xaxis: { gridcolor: grid },
-                yaxis: { title: { text: 'kt', font: { size: 10 } },
+                yaxis: { title: { text: gUnit, font: { size: 10 } },
                          gridcolor: grid, zeroline: true, zerolinecolor: fc }
             }, { displayModeBar: false, responsive: true })
               .then(function () { Plotly.Plots.resize('exp-shap-t'); });
@@ -1971,7 +2110,13 @@
                 marker: mk, showlegend: false,
                 hovertemplate: '%{y:.0f} hPa (extrapolated)<extra>Recon</extra>'
             });
-            var rr = rec.filter(function (r) { return r.rmw_km != null; });
+            /* hasRmw, not just "the fix carries an RMW": on a profile with
+               no size panel there is no y3/x3 for this to land on, and
+               Plotly would CREATE one with a default full-height domain —
+               drawing a phantom kilometre axis and a second x-axis straight
+               across both real panels. */
+            var rr = hasRmw
+                ? rec.filter(function (r) { return r.rmw_km != null; }) : [];
             if (rr.length) traces.push({
                 x: rr.map(function (r) { return r.t; }),
                 y: rr.map(function (r) { return r.rmw_km; }),
@@ -1981,24 +2126,33 @@
                     'flight-level wind<extra>Recon</extra>'
             });
         }
-        /* Instantaneous Stage-A read: the calibrated per-frame estimate
-           BEFORE Stage-B inertia and the 5-h causal kernel — it leads the
-           published value during RI and is noisier in steady state. Off by
-           default; click the legend entry to show. */
-        if (fr.some(function (r) { return r.vmax_inst_kt != null; })) {
+        /* Instantaneous read: the per-frame estimate BEFORE the causal
+           kernel (and, for GHOST, before Stage-B inertia) — it leads the
+           published value during rapid change and is noisier in steady
+           state. Off by default; click the legend entry to show. Drawn in
+           the model's own color, dotted and translucent, because it is the
+           SAME model without its memory — not a comparator product.
+
+           Both panels, where the payload has both: on a pressure-first
+           profile the wind panel is derived, so the pressure trace is the
+           one that shows what the kernel is actually doing. */
+        var instCol = hexToRgba(MODEL_COL, 0.75);
+        [{ f: 'vmax_inst_kt', ax: 'y', xax: 'x', u: ' kt', dp: 0 },
+         { f: 'pmin_inst_hpa', ax: 'y2', xax: 'x2', u: ' hPa', dp: 1 }
+        ].forEach(function (s) {
+            if (!fr.some(function (r) { return r[s.f] != null; })) return;
             traces.push({
-                x: t, y: col('vmax_inst_kt'),
-                name: M.name + ' instantaneous', yaxis: 'y', xaxis: 'x',
-                mode: 'lines',
-                /* GHOST's own single-frame Stage-A read — same crimson family
-                   as the published trace (dotted + translucent), NOT a
-                   comparator product. */
-                line: { width: 1.2, dash: 'dot', color: 'rgba(244,63,94,0.75)' },
+                x: t, y: col(s.f),
+                name: M.name + ' instantaneous', yaxis: s.ax, xaxis: s.xax,
+                mode: 'lines', legendgroup: 'inst',
+                showlegend: s.f === (M.headline === 'pmin_hpa'
+                    ? 'pmin_inst_hpa' : 'vmax_inst_kt'),
+                line: { width: 1.2, dash: 'dot', color: instCol },
                 visible: 'legendonly',
-                hovertemplate: '%{y:.0f} kt — GHOST single-frame read, no ' +
-                    'inertia/smoothing<extra>GHOST inst</extra>'
+                hovertemplate: '%{y:.' + s.dp + 'f}' + s.u + ' — single-frame '
+                    + 'read, no smoothing<extra>' + M.name + ' inst</extra>'
             });
-        }
+        });
         /* SAR surface-wind analyses (Ifremer CyclObs: RCM / Sentinel-1 /
            RADARSAT-2). Star per pass on the Vmax + RMW panels — the only
            direct surface-wind truth available in JTWC basins. CyclObs
@@ -2031,7 +2185,8 @@
                 }),
                 hovertemplate: '%{text}<extra>SAR</extra>'
             });
-            var sr = j.sar.filter(function (r) { return r.rmw_km != null; });
+            var sr = hasRmw
+                ? j.sar.filter(function (r) { return r.rmw_km != null; }) : [];
             if (sr.length) traces.push({
                 x: sr.map(function (r) { return r.t; }),
                 y: sr.map(function (r) { return r.rmw_km; }),
@@ -2053,6 +2208,28 @@
                     (j.sar_next.indexOf('(') > 0
                         ? ' ' + j.sar_next.slice(j.sar_next.indexOf('(')) : '')
             }]);
+        }
+        /* Backstop for the whole class of bug fixed above: a trace pointing
+           at an axis this layout never declared makes Plotly invent it with
+           a default full-figure domain, which silently draws a phantom axis
+           across the real panels. Cheaper to drop the trace than to ship a
+           chart nobody can read — and it is logged, so the cause is
+           findable rather than merely invisible. */
+        var axOK = function (a, pre) {
+            return !a || a === pre || layout[pre + 'axis' + a.slice(1)] !== undefined;
+        };
+        var dropped = traces.filter(function (tr) {
+            return !(axOK(tr.yaxis, 'y') && axOK(tr.xaxis, 'x'));
+        });
+        if (dropped.length) {
+            traces = traces.filter(function (tr) {
+                return dropped.indexOf(tr) < 0;
+            });
+            console.warn('[experimental] dropped ' + dropped.length +
+                ' trace(s) bound to an axis this layout does not define: ' +
+                dropped.map(function (d) {
+                    return d.name + '@' + (d.yaxis || 'y');
+                }).join(', '));
         }
         Plotly.react(el, traces, layout, {
             responsive: true,
