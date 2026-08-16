@@ -74,7 +74,7 @@ def _get_gcs_bucket():
 
 
 # Bump this version whenever rendering logic changes to invalidate stale cache.
-_GCS_CACHE_VERSION = "v6"  # v6: actual data bounds from loaders (fixes geo-alignment offset)
+_GCS_CACHE_VERSION = "v7"  # v7: wrap-aware dateline crop (e0e16253); v6 cropped strips near 180
 
 
 def _gcs_cache_key(sid: str, frame_idx: int, source: str = "ir") -> str:

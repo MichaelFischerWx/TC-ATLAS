@@ -89,7 +89,7 @@ TB_VMIN = 170.0
 TB_VMAX = 310.0
 TB_SCALE = 254.0 / (TB_VMAX - TB_VMIN)
 
-GCS_CACHE_VERSION = "v6"  # Must match global_archive_api.py
+GCS_CACHE_VERSION = "v7"  # Must match global_archive_api.py
 
 # Rate limiting — be respectful to NASA GES DISC
 MIN_REQUEST_INTERVAL = 0.5   # seconds between requests (conservative for bulk)

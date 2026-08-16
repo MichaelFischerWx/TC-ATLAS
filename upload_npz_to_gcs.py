@@ -34,7 +34,7 @@ import numpy as np
 # Configuration — must match precache_mergir.py and global_archive_api.py
 # ---------------------------------------------------------------------------
 
-GCS_CACHE_VERSION = "v6"
+GCS_CACHE_VERSION = "v7"
 TB_VMIN = 170.0
 TB_VMAX = 310.0
 TB_SCALE = 254.0 / (TB_VMAX - TB_VMIN)
