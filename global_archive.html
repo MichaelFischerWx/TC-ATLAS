@@ -88,11 +88,11 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundles, discoverable from byte 0. Tokens MUST match
          the script tags below. -->
-    <link rel="preload" as="script" href="global_archive.js?v=20260815a">
+    <link rel="preload" as="script" href="global_archive.js?v=20260816a">
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260804b">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260815c">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260816a">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -1094,6 +1094,22 @@
                         <button class="ga-btn ga-btn-xs" id="gra-about-btn" title="What is GHOST?">About GHOST</button>
                     </div>
                 </div>
+                <!-- Published data version. The list comes from
+                     <root>/versions.json, written by the producer's release
+                     manifest — nothing here names a version, so a rollback is
+                     a change to that one object rather than a coordinated edit
+                     across the JS constants and the cache tokens. Disabled
+                     (but still shown) when only one version exists or the URL
+                     pins one, because a reader always needs to be able to see
+                     WHICH version produced the number in front of them. -->
+                <div class="gra-tgroup">
+                    <label>Data version</label>
+                    <div class="gra-row">
+                        <select id="gra-version" class="ga-select ga-select-sm gra-version"
+                                title="Published data version — earlier versions stay reachable so a cited number keeps resolving"></select>
+                        <span id="gra-version-note" class="gra-version-note"></span>
+                    </div>
+                </div>
             </div>
 
             <div class="browser-layout gra-layout">
@@ -1167,7 +1183,12 @@
                             <li><span class="gra-flag oob">OOB</span> out-of-basin: the model is
                                 trained on Atlantic / East-Pacific reconnaissance labels, so
                                 West and Central Pacific storms are an out-of-basin
-                                application.</li>
+                                application &mdash; <strong>zero frames from those basins were
+                                in training</strong>. That is a <em>stricter</em> condition than
+                                the held-out channels offered for the Atlantic and East Pacific,
+                                not a weaker one: nothing about the basin, in any season, was
+                                fitted. It is also why no held-out column is published there
+                                &mdash; there is nothing left to hold out.</li>
                             <li><span class="gra-flag">QC</span> flagged for large
                                 trace-vs-best-track disagreement; these sink to the bottom of
                                 the default ordering.</li>
@@ -1189,6 +1210,13 @@
                                 recon frames (&le;920&nbsp;hPa) still run about +4.5&nbsp;hPa
                                 weak.</li>
                         </ul>
+
+                        <!-- Filled by renderProtocols() from index.json's per-basin
+                             `models` object, so it states what the LOADED version
+                             actually contains rather than what the page was written
+                             believing. A version published before that object
+                             existed renders each row as "not stated". -->
+                        <div id="gra-protocols"></div>
 
                         <p class="gra-about-cite"><strong>Manuscript in preparation.</strong>
                             GHOST (Geostationary-based Hurricane Objective Strength Technique)
@@ -1278,10 +1306,10 @@
     <script defer src="lflet_gl.js?v=20260812b"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
-    <script defer src="global_archive.js?v=20260815a"></script>
+    <script defer src="global_archive.js?v=20260816a"></script>
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
-    <script defer src="global_archive_ghostra.js?v=20260815c"></script>
+    <script defer src="global_archive_ghostra.js?v=20260816a"></script>
 </body>
 </html>

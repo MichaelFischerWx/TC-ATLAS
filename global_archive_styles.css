@@ -2938,6 +2938,61 @@ input[type="range"].ga-range::-moz-range-thumb {
     margin-top: 3px; font-size: 0.56rem; color: #7dd3fc;
     text-transform: uppercase; letter-spacing: .06em; font-weight: 700;
 }
+.gra-tip-k.gra-tip-h { color: #c4b5fd; }
+.gra-tip-none { color: #64748b; font-style: italic; }
+.gra-tip-proto {
+    margin-top: 4px; padding-top: 3px;
+    border-top: 1px solid rgba(148, 163, 184, .25);
+    font-size: 0.58rem; color: #94a3b8;
+}
+
+/* ── protocol + data version ──────────────────────────────────────────
+   The protocol is a claim about what the estimate has NOT seen, so it gets one
+   muted, consistent treatment everywhere it appears — sidebar foot, hover card,
+   storm header, explainer — rather than a badge competing with the QC / OOB
+   flags for attention. `transfer` is the only tinted one, because it is the
+   row a reader is most likely to mis-rank: it reads as the weakest claim on
+   the page and is in fact the strictest. */
+.gra-proto-b { font-weight: 800; color: var(--text); }
+.gra-proto-p { color: var(--slate); }
+.gra-proto-p.transfer { color: #4f7fd1; font-weight: 700; }
+.gra-proto-tbl {
+    width: 100%; border-collapse: collapse; margin: 4px 0 10px;
+    font-size: 0.72rem;
+}
+.gra-proto-tbl th, .gra-proto-tbl td {
+    text-align: left; padding: 4px 8px 4px 0; vertical-align: top;
+    border-bottom: 1px solid var(--border);
+}
+.gra-proto-tbl thead th {
+    font-size: 0.6rem; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--slate); font-weight: 700;
+}
+.gra-proto-tbl tbody th { font-weight: 700; color: var(--text); white-space: nowrap; }
+.gra-proto-tbl code { font-size: 0.66rem; color: var(--slate); }
+.gra-version { max-width: 210px; font-size: 0.7rem; }
+.gra-version-note {
+    font-size: 0.6rem; color: var(--slate); font-variant-numeric: tabular-nums;
+}
+
+/* ── held out, and the absence of it ──────────────────────────────────
+   A held-out estimate sits BESIDE the product value, never in place of it, and
+   the three states must stay visually distinct: a real value, a basin with
+   nothing to hold out, and a storm the channel does not cover. The absent form
+   is deliberately dashed and italic — a flat number, or a repeat of the
+   product, would read as independent corroboration of a value that has none. */
+.gra-ho {
+    display: inline-block; margin-left: 6px; font-size: 0.62rem;
+    color: #a78bfa; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.gra-ho i { font-style: normal; font-weight: 500; opacity: .8; }
+.gra-ho-na {
+    color: var(--slate); font-weight: 500; font-style: italic;
+    border-bottom: 1px dashed var(--border); cursor: help;
+}
+.gra-ir-vals .gra-ho b { color: #a78bfa; }
+.gra-absent { color: var(--slate); font-style: italic; }
+.gra-mismatch { color: #e34948; }
 
 /* About panel — the "what is this" a colleague arriving cold needs. */
 .gra-about {

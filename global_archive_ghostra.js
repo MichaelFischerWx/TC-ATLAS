@@ -31,15 +31,41 @@
        from the CDN so egress is free and edge-cached, exactly like ghost-rt.
        On localhost, default to the sibling ghost-ra/ tree instead: it is where
        build_ghostra_publish.py writes, and it means a dev server just works
-       without remembering a query string. ?ghostra=<base> overrides either. */
+       without remembering a query string. ?ghostra=<base> overrides either.
+
+       The ROOT is the tree ABOVE the version directory. The version itself is
+       resolved at boot from <root>/versions.json, never hard-coded here: it
+       used to be spelled out in three constants that had to move in lockstep
+       with four cache tokens, which meant a rollback was a coordinated edit
+       across several files instead of a choice a reader can make. */
     var LOCALHOST = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
-    var CDN = 'https://cdn.tcatlas.org/ghost-ra/v1';
+    var CDN_ROOT = 'https://cdn.tcatlas.org/ghost-ra';
     /* GCS is the primary WRITE; R2 is a best-effort mirror. Read from the CDN
        (free egress, edge-cached) but fall back to GCS if a mirror write ever
        failed — same arrangement realtime_experimental.js uses for ghost-rt, so
        a missed mirror degrades to the old egress cost instead of an empty tab. */
-    var GCS = 'https://storage.googleapis.com/tc-atlas-ir-cache/ghost-ra/v1';
-    var DATA = (qs.get('ghostra') || (LOCALHOST ? 'ghost-ra/v1' : CDN)).replace(/\/$/, '');
+    var GCS_ROOT = 'https://storage.googleapis.com/tc-atlas-ir-cache/ghost-ra';
+    /* Used ONLY when versions.json cannot be read — a tree published before
+       the manifest existed, or a dev directory holding a single version. It is
+       a last resort, not the default: the default comes from the data. */
+    var FALLBACK_VERSION = 'v1';
+
+    /* ?ghostra= has meant "the version directory" since this tab shipped
+       (?ghostra=/ghost-ra/v1 is in the error message below and in people's
+       bookmarks), and it now also accepts a bare root. Split on whether the
+       last segment looks like a version so both keep working: a pinned
+       directory disables the picker, a root drives it. */
+    var _ov = (qs.get('ghostra') || '').replace(/\/+$/, '');
+    var pinned = null, ROOT;
+    if (_ov) {
+        var m = _ov.match(/^(.*)\/(v[0-9][0-9A-Za-z._-]*)$/);
+        if (m) { ROOT = m[1]; pinned = m[2]; } else { ROOT = _ov; }
+    } else {
+        ROOT = LOCALHOST ? 'ghost-ra' : CDN_ROOT;
+    }
+    var version = pinned || qs.get('ghostra_v') || null;   // resolved in boot()
+    var versionList = null;      // from versions.json, or synthesised
+    function DATA() { return ROOT + '/' + version; }
     var API = 'https://api.tcatlas.org';
 
     /* Never hand an error page to JSON.parse. A missing object on the CDN comes
@@ -63,8 +89,8 @@
        published tree — a local dev path has nowhere to fall back to. */
     function getJSON(url) {
         return _fetchJSON(url).catch(function (e) {
-            if (DATA !== CDN || url.indexOf(CDN) !== 0) throw e;
-            return _fetchJSON(GCS + url.slice(CDN.length));
+            if (ROOT !== CDN_ROOT || url.indexOf(CDN_ROOT) !== 0) throw e;
+            return _fetchJSON(GCS_ROOT + url.slice(CDN_ROOT.length));
         });
     }
 
@@ -139,6 +165,11 @@
     var sel = null, selLine = null, presetOn = false;
     var posMarker = null, selLonMid = null;   // frame position marker + track unwrap ref
     var stormCache = {}, irMeta = {}, irFrames = {}, ir = null, tb = null;
+    /* basin -> the producer's held-out declaration, or null where the manifest
+       says none exists. Kept separate from the data so "no held-out channel
+       was published" and "this frame happens to have no held-out value" stay
+       distinguishable — the page has to render those two differently. */
+    var heldout = {};
 
     function $(id) { return document.getElementById(id); }
 
@@ -152,31 +183,103 @@
         sizeTab();
         watchToolbar();
         initMap();
-        getJSON(DATA + '/index.json')
+        resolveVersion().then(loadVersion);
+    };
+
+    /* Which published versions exist, and which one to open on.
+       <root>/versions.json is written by the producer's release manifest
+       (ghostra_release_manifest.write_versions_index). A rollback is a change
+       to its `default` — one object — instead of a coordinated revert across
+       three JS constants and four cache tokens.
+
+       It is allowed to be missing: a tree published before the manifest
+       existed, or a pinned dev directory, has none. In that case synthesise a
+       single-entry list so the picker still describes what is loaded rather
+       than disappearing. */
+    function resolveVersion() {
+        if (pinned) {                      // ?ghostra=…/v1 — an explicit tree
+            versionList = [{ version: pinned, title: pinned + ' (pinned by URL)' }];
+            version = pinned;
+            return Promise.resolve();
+        }
+        return getJSON(ROOT + '/versions.json').then(function (j) {
+            versionList = (j.versions || []).slice();
+            var have = {};
+            versionList.forEach(function (v) { have[v.version] = 1; });
+            var stored = null;
+            try { stored = localStorage.getItem('gra-version'); } catch (e) { }
+            version = (qs.get('ghostra_v') && have[qs.get('ghostra_v')] && qs.get('ghostra_v'))
+                || (stored && have[stored] && stored)
+                || (have[j.default] && j.default)
+                || (versionList.length ? versionList[versionList.length - 1].version : FALLBACK_VERSION);
+        }).catch(function () {
+            version = qs.get('ghostra_v') || FALLBACK_VERSION;
+            versionList = [{ version: version, title: version, synthetic: true }];
+        });
+    }
+
+    /* Load (or reload) one version's tree. Everything version-scoped is reset
+       here — the feature collection, the storm and IR caches, the selection —
+       because a version is a different dataset, not a filter over the same
+       one, and a stale storm record surviving the switch would silently mix
+       two model vintages in the storm view. */
+    function loadVersion() {
+        index = null; byId = {}; visSids = null;
+        fc = { type: 'FeatureCollection', features: [] };
+        stormCache = {}; irMeta = {}; irFrames = {}; ir = null; tb = null;
+        sel = null; basinsOn = {};
+        $('gra-loading').style.display = '';
+        $('gra-loading').innerHTML =
+            '<div class="ga-spinner"></div><span>Loading reanalysis&hellip;</span>';
+        renderVersions();
+        return getJSON(DATA() + '/index.json')
             .then(function (j) {
                 index = j;
                 j.storms.forEach(function (s) { byId[s.sid] = s; });
                 (j.basins || []).forEach(function (b) { basinsOn[b] = true; });
                 renderBasins();
                 renderFoot();
+                renderProtocols();
+                renderVersions();   // index.json can caption the picker better
                 sizeTab();          // basin chips just changed the toolbar height
                 return Promise.all((j.basins || []).map(loadPoints));
             })
             .then(function () {
+                clearSel();
                 addLayer(); applyFilter(true); fitAll();
                 $('gra-loading').style.display = 'none';
             })
             .catch(function (e) {
-                var pub = DATA.indexOf('http') === 0;
+                var pub = DATA().indexOf('http') === 0;
+                $('gra-loading').style.display = '';
                 $('gra-loading').innerHTML =
                     '<span style="max-width:340px;text-align:center;line-height:1.5;">' +
-                    'Could not load the reanalysis from<br><code>' + DATA + '</code>' +
+                    'Could not load the reanalysis from<br><code>' + DATA() + '</code>' +
                     '<br><small>' + e.message + '</small>' +
                     (pub ? '<br><small>If the tree has not been published yet, point the ' +
                         'tab at a local build with <code>?ghostra=/ghost-ra/v1</code>.</small>' : '') +
                     '</span>';
             });
-    };
+    }
+
+    /* Switching version rewrites the URL so the view stays shareable — someone
+       citing a number can hand over a link that still resolves to the tree the
+       number came from after the next release ships. */
+    function setVersion(v) {
+        if (!v || v === version) return;
+        version = v;
+        try { localStorage.setItem('gra-version', v); } catch (e) { }
+        try {
+            var u = new URL(location.href);
+            u.searchParams.set('ghostra_v', v);
+            history.replaceState(null, '', u.toString());
+        } catch (e) { }
+        whenGL(function () {
+            if (gl.getSource(SRC)) gl.getSource(SRC).setData(
+                { type: 'FeatureCollection', features: [] });
+        });
+        loadVersion();
+    }
 
     /* Fill exactly from the panel's top to the bottom of the window.
        The chrome above it measures ~138px (page offset + topbar + stats strip
@@ -219,16 +322,25 @@
     /* Parallel arrays → GeoJSON, once. Every later interaction is a setFilter
        or setPaintProperty; the source is never rebuilt. */
     function loadPoints(basin) {
-        return getJSON(DATA + '/points/' + basin + '.json')
+        return getJSON(DATA() + '/points/' + basin + '.json')
             .then(function (P) {
+                /* P.heldout is the producer's statement about this basin: an
+                   object when a held-out channel was published, null when the
+                   manifest declares there is none to publish. `ho` is absent
+                   entirely in the second case — deliberately, so absence is a
+                   missing key rather than an array of nulls that a careless
+                   reader would treat as data. */
+                heldout[basin] = P.heldout || null;
                 for (var i = 0; i < P.n; i++) {
                     var gp = P.gp[i], bp = P.bp[i];
+                    var ho = (P.ho && P.ho[i] !== undefined) ? P.ho[i] : null;
                     var st = byId[P.sids[P.si[i]]];
                     fc.features.push({
                         type: 'Feature',
                         geometry: { type: 'Point', coordinates: [P.lo[i], P.la[i]] },
                         properties: {
                             s: P.sids[P.si[i]], tm: P.tm[i], b: basin, rc: P.rc[i], gp: gp,
+                            ho: ho === null ? MISSING : ho,
                             gv: P.gv[i] === null ? MISSING : P.gv[i],
                             bp: bp === null ? MISSING : bp,
                             bv: P.bv[i] === null ? MISSING : P.bv[i],
@@ -358,14 +470,35 @@
 
     function showTip(t) {
         var p = t.p, st = byId[p.s] || {};
-        var t = new Date(p.tm * 60000).toISOString().replace('T', ' ').slice(0, 16);
+        /* NOT `var t` — the timestamp used to be declared over the parameter,
+           which left the edge-flip below reading `.x` off a string. It read
+           undefined, every comparison was false, and the card never flipped:
+           near the right or bottom of the map it simply ran off. */
+        var ts = new Date(p.tm * 60000).toISOString().replace('T', ' ').slice(0, 16);
         var d = (p.d === MISSING) ? null : p.d;
         var el = $('gra-tip');
         el.innerHTML =
             '<div class="gra-tip-hd">' + (st.name || st.atcf || p.s) +
-            '<span class="gra-tip-sub">' + p.b + ' · ' + t + 'Z</span></div>' +
+            '<span class="gra-tip-sub">' + p.b + ' · ' + ts + 'Z</span></div>' +
             '<div class="gra-tip-row"><span class="gra-tip-k gra-tip-g">GHOST</span>' +
             '<b>' + fmt(p.gp, 1) + '</b> hPa <b>' + fmt(p.gv, 0) + '</b> kt</div>' +
+            /* Held out beside the product, never instead of it. Where the
+               basin has no held-out channel the row says so in words — an
+               em-dash here would read as "we looked and found nothing",
+               which is a different claim from "there is nothing to look
+               for". */
+            (heldout[p.b]
+                ? '<div class="gra-tip-row"><span class="gra-tip-k gra-tip-h">' +
+                  (PROTO_SHORT[heldout[p.b].protocol] || 'held out') + '</span>' +
+                  '<b>' + fmt(p.ho, 1) + '</b> hPa' +
+                  (p.ho !== MISSING && p.gp !== undefined
+                      ? ' <span class="gra-tip-na">(' +
+                        (p.ho - p.gp > 0 ? '+' : '−') +
+                        Math.abs(p.ho - p.gp).toFixed(1) + ')</span>' : '') +
+                  '</div>'
+                : '<div class="gra-tip-row"><span class="gra-tip-k gra-tip-h">' +
+                  'held out</span><span class="gra-tip-none">' +
+                  heldoutAbsence(p.b) + '</span></div>') +
             '<div class="gra-tip-row"><span class="gra-tip-k">Best track</span>' +
             '<b>' + fmt(p.bp, 0) + '</b> hPa <b>' + fmt(p.bv, 0) + '</b> kt</div>' +
             (d === null ? '' :
@@ -373,13 +506,19 @@
                 '<b style="color:' + (d < 0 ? '#2a78d6' : '#e34948') + '">' +
                 (d > 0 ? '+' : '−') + Math.abs(d).toFixed(1) + '</b> hPa ' +
                 (d < 0 ? 'deeper' : 'weaker') + ' than best track</div>') +
-            (p.rc === 1 ? '<div class="gra-tip-flag">recon-proximate</div>' : '');
-        // flip the card away from the pointer near the panel edges
-        var w = gl.getCanvas().clientWidth, h = gl.getCanvas().clientHeight;
-        var right = t.x > w - 210, below = t.y > h - 130;
-        el.style.left = (right ? t.x - 200 : t.x + 14) + 'px';
-        el.style.top = (below ? t.y - 118 : t.y + 14) + 'px';
+            (p.rc === 1 ? '<div class="gra-tip-flag">recon-proximate</div>' : '') +
+            (protoLine(p.b) ? '<div class="gra-tip-proto">' + protoLine(p.b) +
+                '</div>' : '');
+        /* Flip the card away from the pointer near the panel edges. The height
+           is MEASURED, not assumed: the card grew a held-out row and a
+           protocol line, and the old constant flipped it too late — the extra
+           rows simply fell off the bottom of the map. */
         el.classList.add('on');
+        var w = gl.getCanvas().clientWidth, h = gl.getCanvas().clientHeight;
+        var cw = el.offsetWidth || 200, chh = el.offsetHeight || 130;
+        var right = t.x > w - (cw + 20), below = t.y > h - (chh + 20);
+        el.style.left = (right ? t.x - cw : t.x + 14) + 'px';
+        el.style.top = (below ? Math.max(2, t.y - chh - 4) : t.y + 14) + 'px';
     }
 
     function colorExpr() {
@@ -532,18 +671,209 @@
         $('gra-legend').innerHTML = h;
     }
 
+    /* ── what the number IS, per basin ───────────────────────────────────
+       index.models is written by the gated publisher from the release
+       manifest: one entry per basin naming the column, the protocol and the
+       held-out companion. Everything below reads it and degrades to "not
+       stated in this version" when it is absent, which is exactly what a tree
+       published before the manifest existed deserves — it did not say, so the
+       page must not pretend it did. */
+    var PROTO_SHORT = {
+        frozen: 'frozen in-sample',
+        loyo: 'leave-one-year-out',
+        loso: 'leave-one-storm-out',
+        transfer: 'out-of-basin transfer'
+    };
+
+    function basinModel(b) {
+        return (index && index.models && index.models[b]) || null;
+    }
+
+    /* Why there is no held-out value here. The two reasons are not the same
+       claim and must not share a phrasing: an out-of-basin transfer has
+       nothing to hold out, whereas an older published version simply did not
+       ship the channel it had. */
+    function heldoutAbsence(b) {
+        var m = basinModel(b);
+        return (m && m.protocol === 'transfer')
+            ? 'no held-out channel — every frame here is already out of sample'
+            : 'no held-out channel in this data version';
+    }
+
+    /* The one sentence a reader needs before believing a basin's number. */
+    function protoLine(b) {
+        var m = basinModel(b);
+        if (!m) return null;
+        var s = PROTO_SHORT[m.protocol] || m.protocol || '—';
+        if (m.protocol === 'transfer') {
+            s += ' — zero ' + b + ' frames in training';
+        } else if (m.heldout_protocol) {
+            s += ', ' + (PROTO_SHORT[m.heldout_protocol] || m.heldout_protocol) +
+                ' shown alongside';
+        } else {
+            s += ', no held-out channel published';
+        }
+        return s;
+    }
+
     function renderFoot() {
+        var basins = (index.basins || []);
+        var per = basins.map(function (b) {
+            var m = basinModel(b);
+            if (!m) return null;
+            return '<span class="gra-proto-b">' + b + '</span> ' +
+                '<span class="gra-proto-p ' + (m.protocol || '') + '">' +
+                (PROTO_SHORT[m.protocol] || m.protocol || '—') + '</span>';
+        }).filter(Boolean).join(' · ');
+        /* A tree that self-identifies as a different version than the path it
+           was served from is a mis-copy — the exact shape of a rollback done
+           with `cp -R` — and the reader is the one who would cite the wrong
+           number. Say so rather than concatenating the two labels into one
+           plausible-looking string. */
+        var mism = (index.version && version && index.version !== version)
+            ? '<br><b class="gra-mismatch">served as ' + version +
+              ' but the tree identifies itself as ' + index.version +
+              '</b>' : '';
         $('gra-foot').innerHTML =
-            'GHOST-FPM ' + (index.version || '') + ' · ' + (index.model || '') +
+            'GHOST-FPM ' + (version || index.version || '') +
+            (index.title ? ' — ' + index.title : '') + mism +
+            (per ? '<br>' + per : '<br>' + (index.model || '')) +
             '<br>Recon-independent research estimates from geostationary IR + ' +
             'reanalysis environment. Not an official analysis. ' +
             '<b>OOB</b> = out-of-basin apply (trained on AL/EP recon labels); ' +
-            '<b>QC</b> = flagged by the producer’s trace-vs-best-track test.';
+            '<b>QC</b> = flagged by the producer’s trace-vs-best-track test.' +
+            /* Two surfaces publish a "GHOST-FPM Vmax" from the same pressure
+               model, and they do NOT agree at the top. This one runs the full
+               offline wind recipe; the real-time page cannot, because both of
+               the extra pieces need something a live storm does not have (a
+               held-out fold, and a best-track size analysis). Shipping both
+               numbers silently was the one option ruled out — see
+               TC-SWARM realtime/FPM_WIND_CONSISTENCY.md. */
+            '<br><b>On the wind:</b> V<sub>max</sub> here is derived from the ' +
+            'pressure by a fitted relationship, and it is the <i>offline</i> ' +
+            'form of it — including a size term fed by best-track wind radii ' +
+            'and a leave-one-storm-out correction to the strongest cases. ' +
+            'Neither can be computed for a storm happening now, so the ' +
+            'real-time FPM page reads a few knots lower for the same storm ' +
+            'above about 110 kt. The pressure is the same model on both.';
+    }
+
+    /* The per-basin protocol table in the About panel. This is the statement
+       the page previously did not make: Atlantic and East Pacific are frozen
+       in-sample fits with a held-out channel available beside them, while the
+       West Pacific is an out-of-basin transfer with no West Pacific frame in
+       training at all — a STRICTER condition than either, and one a reader
+       would otherwise read as the weakest row on the page. */
+    function renderProtocols() {
+        var el = $('gra-protocols');
+        if (!el) return;
+        var basins = (index.basins || []);
+        var rows = basins.map(function (b) {
+            var m = basinModel(b);
+            if (!m) {
+                return '<tr><th>' + (BASIN_LABEL[b] || b) + '</th>' +
+                    '<td colspan="2" class="gra-absent">not stated in this ' +
+                    'published version</td></tr>';
+            }
+            var ho = m.heldout_protocol
+                ? (PROTO_SHORT[m.heldout_protocol] || m.heldout_protocol)
+                : '<span class="gra-absent">none — nothing to hold out</span>';
+            return '<tr><th>' + (BASIN_LABEL[b] || b) + '</th>' +
+                '<td><span class="gra-proto-p ' + (m.protocol || '') + '">' +
+                (PROTO_SHORT[m.protocol] || m.protocol) + '</span>' +
+                (m.column ? '<br><code>' + m.column + '</code>' : '') + '</td>' +
+                '<td>' + ho + '</td></tr>';
+        }).join('');
+        var detail = basins.map(function (b) {
+            var m = basinModel(b);
+            return m && m.protocol_detail
+                ? '<p class="gra-about-note"><strong>' + (BASIN_LABEL[b] || b) +
+                  ':</strong> ' + m.protocol_detail + '</p>'
+                : '';
+        }).join('');
+        el.innerHTML =
+            '<h4>What the estimate is, per basin</h4>' +
+            '<table class="gra-proto-tbl"><thead><tr><th>Basin</th>' +
+            '<th>Displayed estimate</th><th>Held out</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody></table>' + detail;
+    }
+
+    /* ── version picker ──────────────────────────────────────────────── */
+    function renderVersions() {
+        /* NOT named `sel` — that is the selected storm's SID at module scope,
+           and shadowing it here is one careless edit away from clearing the
+           selection every time the picker repaints. */
+        var vsel = $('gra-version');
+        if (!vsel) return;
+        var list = versionList || [];
+        if (list.length <= 1) {
+            /* One version, or a pinned tree: show it, disabled. A control that
+               vanishes leaves the reader unable to tell WHICH version they are
+               looking at, which is the state this whole change exists to end. */
+            vsel.innerHTML = '<option>' +
+                ((list[0] && (list[0].title || list[0].version)) || version || '—') +
+                '</option>';
+            vsel.disabled = true;
+        } else {
+            vsel.disabled = false;
+            vsel.innerHTML = list.map(function (v) {
+                return '<option value="' + v.version + '"' +
+                    (v.version === version ? ' selected' : '') + '>' +
+                    (v.title || v.version) + '</option>';
+            }).join('');
+            vsel.value = version;
+        }
+        var note = $('gra-version-note');
+        if (note) {
+            var cur = list.filter(function (v) { return v.version === version; })[0];
+            note.textContent = pinned ? 'pinned by URL'
+                : (cur && cur.cut_date ? 'cut ' + cur.cut_date : '');
+        }
     }
 
     // ══════════════════════════════════════════════════════════════
     //  leaderboard
     // ══════════════════════════════════════════════════════════════
+    /* The held-out minimum, beside the product minimum, in the leaderboard's
+       own number column.
+
+       Three states, and they must not look alike:
+         a value          the storm has a held-out estimate — show it, and the
+                          divergence is the information (Patricia: 868.6
+                          frozen, 885.9 held out)
+         "not held out"   the basin has NO held-out channel because there is
+                          nothing to hold out — an out-of-basin transfer is
+                          already out of sample everywhere
+         "—"              a held-out channel exists for this basin but not for
+                          this storm
+       Rendering any of them as a repeat of the product value, or as a flat
+       fill, would turn an absence into apparent corroboration. */
+    function heldoutCell(s) {
+        var m = basinModel(s.basin);
+        if (s.heldout_min_hpa !== null && s.heldout_min_hpa !== undefined) {
+            var d = (s.ghost_min_hpa !== null && s.ghost_min_hpa !== undefined)
+                ? s.heldout_min_hpa - s.ghost_min_hpa : null;
+            return '<span class="gra-ho" title="' +
+                ((PROTO_SHORT[s.heldout_protocol] || 'held out')) +
+                ' minimum — the same model refit without this storm&rsquo;s ' +
+                'season">HO ' + s.heldout_min_hpa.toFixed(1) +
+                (d !== null ? ' <i>' + (d > 0 ? '+' : '−') +
+                    Math.abs(d).toFixed(1) + '</i>' : '') + '</span>';
+        }
+        if (m && m.protocol === 'transfer') {
+            return '<span class="gra-ho gra-ho-na" title="Out-of-basin ' +
+                'transfer: zero ' + s.basin + ' frames were in training, so ' +
+                'every frame is already out of sample and there is nothing to ' +
+                'hold out">not held out</span>';
+        }
+        if (s.heldout_available === false || !m || !m.heldout_column) {
+            return '<span class="gra-ho gra-ho-na" title="' +
+                heldoutAbsence(s.basin) + '">no held-out channel</span>';
+        }
+        return '<span class="gra-ho gra-ho-na" title="A held-out channel ' +
+            'exists for this basin but not for this storm">HO —</span>';
+    }
+
     function renderList() {
         if (!index) return;
         var r = ranges();
@@ -598,7 +928,8 @@
                 (s.min_uncorroborated ? '<span class="gra-flag unc" title="This storm&rsquo;s deepest frame is also its largest disagreement with best track (' +
                     s.min_gap + ' hPa), with no reconnaissance nearby — the minimum has no independent support">?</span>' : '') +
                 '</div>' +
-                '<div class="gra-num gra-g">' + (s.ghost_min_hpa !== null ? s.ghost_min_hpa.toFixed(1) : '—') + '</div>' +
+                '<div class="gra-num gra-g">' + (s.ghost_min_hpa !== null ? s.ghost_min_hpa.toFixed(1) : '—') +
+                heldoutCell(s) + '</div>' +
                 '<div class="gra-meta">' + s.year + ' · ' + s.basin + ' · ' + s.n + ' fr</div>' +
                 '<div class="gra-num">BT ' + (s.bt_min_hpa !== null ? s.bt_min_hpa.toFixed(0) : '—') +
                 (d !== null ? ' <span style="color:' + (d < 0 ? '#2a78d6' : '#e34948') + '">' +
@@ -704,7 +1035,15 @@
         var s = byId[sid];
         $('gra-ir').classList.add('open');
         $('gra-ir-name').textContent = s.name || s.atcf;
-        $('gra-ir-basin').textContent = s.basin + ' · ' + s.year;
+        /* Name the protocol on the storm the reader has open, not only in the
+           explainer they may never have expanded. Short form in the header —
+           the full sentence is a hover away, and a three-line chip header eats
+           the IR canvas it sits above. */
+        var _bm = basinModel(s.basin);
+        var _bp = $('gra-ir-basin');
+        _bp.textContent = s.basin + ' · ' + s.year +
+            (_bm ? ' · ' + (PROTO_SHORT[_bm.protocol] || _bm.protocol) : '');
+        _bp.title = protoLine(s.basin) || '';
         $('gra-ir-vals').innerHTML = '';
         $('gra-ir-hover').textContent = '';
         $('gra-ir-status').textContent = '';
@@ -982,7 +1321,7 @@
 
     function loadStorm(sid, cb) {
         if (stormCache[sid]) return cb();
-        getJSON(DATA + '/storm/' + sid + '.json')
+        getJSON(DATA() + '/storm/' + sid + '.json')
             .catch(function () { return null; })
             .then(function (j) { if (j) { stormCache[sid] = j; cb(); } });
     }
@@ -990,9 +1329,14 @@
     /* Which series a storm carries depends on its channel: the lifecycle trace
        (genesis→decay, 3-hourly) where it exists, the recon board otherwise. */
     function series(st) {
+        /* `lho` is written by the gated publisher from the board the release
+           manifest declares, aligned to whichever time array it names in
+           `lho_key`. Absent means absent — do not fall back to a payload
+           array of unknown provenance to fill the line in. */
+        var ho = (st.lho && st.lho_key === (st.lt ? 'lt' : 't')) ? st.lho : null;
         return st.lt
-            ? { t: st.lt, gp: st.lp, bp: st.lbp, gv: st.lv || st.wv, bv: st.lbv || st.vw }
-            : { t: st.t, gp: st.duo || st.g2, bp: st.p, gv: st.wv, bv: st.vw };
+            ? { t: st.lt, gp: st.lp, bp: st.lbp, gv: st.lv || st.wv, bv: st.lbv || st.vw, ho: ho }
+            : { t: st.t, gp: st.duo || st.g2, bp: st.p, gv: st.wv, bv: st.vw, ho: ho };
     }
 
     function valsAt(sid, ms) {
@@ -1008,9 +1352,16 @@
         var f = function (a, dp) {
             return (a && a[bi] !== null && a[bi] !== undefined) ? a[bi].toFixed(dp) : '—';
         };
+        var b = st.basin || (byId[sid] && byId[sid].basin);
+        var hoTxt = S.ho
+            ? '<span class="gra-ho">HO <b>' + f(S.ho, 1) + '</b></span>'
+            : '<span class="gra-ho gra-ho-na" title="' + heldoutAbsence(b) +
+              '">' + ((basinModel(b) || {}).protocol === 'transfer'
+                  ? 'not held out' : 'no HO') + '</span>';
         $('gra-ir-vals').innerHTML =
             '<span class="gra-g">GHOST</span> <b>' + f(S.gp, 1) + '</b> hPa / <b>' +
-            f(S.gv, 0) + '</b> kt &nbsp;·&nbsp; BT <b>' + f(S.bp, 0) + '</b> hPa / <b>' +
+            f(S.gv, 0) + '</b> kt &nbsp;·&nbsp; ' + hoTxt +
+            ' &nbsp;·&nbsp; BT <b>' + f(S.bp, 0) + '</b> hPa / <b>' +
             f(S.bv, 0) + '</b> kt';
     }
 
@@ -1024,7 +1375,8 @@
         var S = series(st);
         if (!S.t || S.t.length < 2) { $('gra-ir-spark').innerHTML = ''; return; }
         var W = 302, H = 52, P = 2;
-        var vals = [].concat(S.gp || [], S.bp || []).filter(function (v) { return v != null; });
+        var vals = [].concat(S.gp || [], S.bp || [], S.ho || [])
+            .filter(function (v) { return v != null; });
         if (!vals.length) { $('gra-ir-spark').innerHTML = ''; return; }
         var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
         if (hi - lo < 5) { hi += 3; lo -= 3; }
@@ -1049,12 +1401,25 @@
                     '" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity=".7"/>';
             }
         }
+        /* The held-out trace is DASHED and drawn under the product line. When
+           there is none the path is simply not emitted and the key says why —
+           an absent line is the honest rendering of an absent channel, and
+           anything drawn in its place would be an imputation. */
+        var bas = st.basin || (byId[sid] && byId[sid].basin);
+        var hoPath = S.ho
+            ? '<path d="' + path(S.ho) + '" fill="none" stroke="#f43f5e" ' +
+              'stroke-width="1.2" stroke-dasharray="3 2" opacity=".75"/>'
+            : '';
+        var hoKey = S.ho
+            ? ' &nbsp; <b style="color:#f43f5e;">- -</b> held out'
+            : ' &nbsp; <span class="gra-absent">' + heldoutAbsence(bas) + '</span>';
         $('gra-ir-spark').innerHTML =
             '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="color:var(--text)">' +
             '<path d="' + path(S.bp) + '" fill="none" stroke="var(--slate)" stroke-width="1.4"/>' +
+            hoPath +
             '<path d="' + path(S.gp) + '" fill="none" stroke="#f43f5e" stroke-width="1.7"/>' + cur + '</svg>' +
             '<div style="display:flex;justify-content:space-between;font-size:0.58rem;color:var(--slate);margin-top:1px;">' +
-            '<span><b style="color:#f43f5e;">—</b> GHOST &nbsp; <b>—</b> best track</span>' +
+            '<span><b style="color:#f43f5e;">—</b> GHOST &nbsp; <b>—</b> best track' + hoKey + '</span>' +
             '<span>' + Math.round(hi) + '–' + Math.round(lo) + ' hPa</span></div>';
     }
 
@@ -1123,6 +1488,9 @@
         Array.prototype.forEach.call($('gra-unit').children, function (el) {
             el.onclick = function () { setUnit(el.dataset.unit); };
         });
+        if ($('gra-version')) {
+            $('gra-version').onchange = function () { setVersion(this.value); };
+        }
         // one delegated listener instead of rebinding ~400 rows per render
         $('gra-list').onclick = function (e) {
             var row = e.target.closest ? e.target.closest('.gra-item') : null;
