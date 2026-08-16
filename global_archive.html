@@ -92,7 +92,7 @@
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260804b">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260816c">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260816d">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -1132,28 +1132,34 @@
                             <span id="gra-ir-cover" class="gra-ir-cover"></span>
                             <span id="gra-ir-dt" class="gra-ir-delta"></span>
                         </div>
-                        <div class="gra-ir-canvaswrap">
-                            <canvas id="gra-ir-canvas" width="320" height="320"></canvas>
-                            <div id="gra-ir-hover" class="gra-ir-hover"></div>
-                            <div id="gra-ir-zoom" class="gra-ir-zoom"></div>
+                        <div class="gra-ir-body">
+                          <div class="gra-ir-left">
+                            <div class="gra-ir-canvaswrap">
+                                <canvas id="gra-ir-canvas" width="320" height="320"></canvas>
+                                <div id="gra-ir-hover" class="gra-ir-hover"></div>
+                                <div id="gra-ir-zoom" class="gra-ir-zoom"></div>
+                            </div>
+                            <div id="gra-ir-status" class="gra-ir-status"></div>
+                            <div class="gra-ir-foot">
+                                <button id="gra-ir-prev" class="ga-btn ga-btn-xs">&larr;</button>
+                                <button id="gra-ir-next" class="ga-btn ga-btn-xs">&rarr;</button>
+                                <select id="gra-ir-cmap" class="ga-select ga-select-sm gra-ir-cmap"
+                                        title="IR colormap"></select>
+                            </div>
+                            <div class="gra-ir-ctr" id="gra-ir-ctr">
+                                <label class="gra-ir-ctr-tog"><input type="checkbox" id="gra-ir-centres" checked>
+                                    centre</label>
+                                <label class="gra-ir-ctr-tog"><input type="checkbox" id="gra-ir-coast" checked>
+                                    coast</label>
+                                <span class="gra-ir-ctr-key"><i class="bt"></i>best track</span>
+                                <span class="gra-ir-ctr-key eye"><i class="eye"></i>eye fix</span>
+                            </div>
+                          </div>
+                          <div class="gra-ir-right">
+                            <div id="gra-ir-vals" class="gra-ir-vals"></div>
+                            <div id="gra-ir-spark" class="gra-ir-spark"></div>
+                          </div>
                         </div>
-                        <div id="gra-ir-status" class="gra-ir-status"></div>
-                        <div class="gra-ir-foot">
-                            <button id="gra-ir-prev" class="ga-btn ga-btn-xs">&larr;</button>
-                            <button id="gra-ir-next" class="ga-btn ga-btn-xs">&rarr;</button>
-                            <span id="gra-ir-vals" class="gra-ir-vals"></span>
-                            <select id="gra-ir-cmap" class="ga-select ga-select-sm gra-ir-cmap"
-                                    title="IR colormap"></select>
-                        </div>
-                        <div class="gra-ir-ctr" id="gra-ir-ctr">
-                            <label class="gra-ir-ctr-tog"><input type="checkbox" id="gra-ir-centres" checked>
-                                centre</label>
-                            <label class="gra-ir-ctr-tog"><input type="checkbox" id="gra-ir-coast" checked>
-                                coast</label>
-                            <span class="gra-ir-ctr-key"><i class="bt"></i>best track</span>
-                            <span class="gra-ir-ctr-key eye"><i class="eye"></i>eye fix</span>
-                        </div>
-                        <div id="gra-ir-spark" class="gra-ir-spark"></div>
                     </div>
 
                     <!-- What-is-this panel. Opens once on a first visit (then
@@ -1318,6 +1324,6 @@
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
-    <script defer src="global_archive_ghostra.js?v=20260816c"></script>
+    <script defer src="global_archive_ghostra.js?v=20260816d"></script>
 </body>
 </html>

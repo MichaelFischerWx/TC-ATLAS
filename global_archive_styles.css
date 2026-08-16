@@ -2872,13 +2872,29 @@ input[type="range"].ga-range::-moz-range-thumb {
    clipped the values row, the sparkline and the colormap picker. Flex column +
    a flexible canvas means it shrinks instead of spilling. */
 .gra-ir {
-    position: absolute; right: 10px; bottom: 10px; z-index: 600; width: 320px;
+    /* Once a storm is open the map is context, not the subject — the chip and
+       its lifecycle trace are. Two columns instead of a 320 px stack. */
+    position: absolute; right: 10px; bottom: 10px; z-index: 600; width: 700px;
     max-height: calc(100% - 20px);
     background: var(--surface-raised); border: 1px solid var(--border);
     border-radius: 9px; overflow: hidden; display: none;
     box-shadow: 0 4px 18px rgba(15, 22, 35, .22);
 }
 .gra-ir.open { display: flex; flex-direction: column; }
+.gra-ir-body { display: flex; flex: 1 1 auto; min-height: 0; }
+.gra-ir-left {
+    flex: 0 0 336px; display: flex; flex-direction: column; min-width: 0;
+    border-right: 1px solid var(--border);
+}
+.gra-ir-right {
+    flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0;
+    padding: 6px 10px 8px;
+}
+@media (max-width: 900px) {
+    .gra-ir { width: calc(100% - 20px); }
+    .gra-ir-body { flex-direction: column; }
+    .gra-ir-left { flex: none; border-right: 0; border-bottom: 1px solid var(--border); }
+}
 .gra-ir-head, .gra-ir-time, .gra-ir-foot, .gra-ir-spark, .gra-ir-status { flex: none; }
 .gra-ir-canvaswrap { flex: 1 1 auto; min-height: 90px; overflow: hidden; }
 .gra-ir-head {
@@ -2932,8 +2948,11 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gra-ir-vals { font-size: 0.66rem; color: var(--slate); font-variant-numeric: tabular-nums; }
 .gra-ir-vals b { color: var(--text); }
 .gra-ir-vals .gra-g { color: #f43f5e; }
-.gra-ir-spark { padding: 0 9px 8px; }
-.gra-ir-spark svg { width: 100%; height: 52px; display: block; }
+/* The 52px height belonged to the old one-variable sparkline. The chart is a
+   two-panel figure with its own viewBox, so it must scale by ASPECT — pinning a
+   height squashes both panels and their labels. */
+.gra-ir-spark { padding: 0; }
+.gra-ir-spark svg { width: 100%; height: auto; display: block; }
 .gra-ir-cmap { margin-left: auto; font-size: 0.62rem; padding: 1px 4px; max-width: 108px; }
 .gra-group {
     padding: 5px 14px 3px; font-size: 0.6rem; font-weight: 800;
@@ -3112,3 +3131,29 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gra-foot-more > summary::-webkit-details-marker { display: none; }
 .gra-foot-more > summary::before { content: '▸ '; }
 .gra-foot-more[open] > summary::before { content: '▾ '; }
+
+/* ── lifecycle chart (reanalysis IR panel) ── */
+.gra-chart { width: 100%; height: auto; display: block; cursor: crosshair; }
+.gra-chart .gc-bg { fill: var(--surface); stroke: var(--border); stroke-width: .5; }
+.gra-chart .gc-t {
+    font-size: 7.5px; fill: var(--text); font-weight: 700;
+    letter-spacing: .02em;
+}
+.gra-chart .gc-ax { font-size: 7px; fill: var(--slate); }
+.gra-chart .gc-cur { stroke: var(--blue); stroke-width: 1.2; }
+.gra-chart .gc-hov { stroke: var(--text); stroke-width: .8; stroke-dasharray: 2 2; opacity: .75; }
+.gra-chart-key {
+    font-size: 0.58rem; color: var(--slate); margin-top: 3px; line-height: 1.5;
+}
+/* Fixed height: the readout appears on hover, and letting it size the column
+   would make the whole panel jump every time the pointer crosses the chart. */
+.gra-chart-read {
+    min-height: 42px; margin-top: 4px; font-size: 0.6rem; color: var(--text);
+    display: flex; flex-direction: column; gap: 1px;
+    font-variant-numeric: tabular-nums;
+}
+.gra-chart-read i {
+    display: inline-block; width: 7px; height: 7px; border-radius: 1px;
+    margin-right: 4px; vertical-align: 0;
+}
+.gra-ir-right .gra-ir-vals { font-size: 0.64rem; margin-bottom: 4px; }

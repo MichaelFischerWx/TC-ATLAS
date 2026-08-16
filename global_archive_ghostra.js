@@ -1558,58 +1558,156 @@
        The full multi-product chart (SATCON / D-PRINT / DMINT / AiDT, which the
        per-storm JSON already carries) is the next phase — this is only enough
        to make a selection mean something. */
+    /* ── lifecycle chart ─────────────────────────────────────────────────
+       Two stacked panels sharing one time axis — NEVER a dual axis. Pressure
+       and wind are different units on different scales, and overlaying them on
+       twin y-axes invites exactly the false crossings-and-convergences reading
+       that a reader cannot unsee. Two panels cost vertical space and buy an
+       honest comparison.
+
+       The old sparkline plotted pressure only, unlabelled, and dropped wind
+       entirely — so it was impossible to tell what was even being shown. */
     function drawSpark(sid) {
+        var host = $('gra-ir-spark');
         var st = stormCache[sid];
-        if (!st) { $('gra-ir-spark').innerHTML = ''; return; }
+        if (!st) { host.innerHTML = ''; return; }
         var S = series(st);
-        if (!S.t || S.t.length < 2) { $('gra-ir-spark').innerHTML = ''; return; }
-        var W = 302, H = 52, P = 2;
-        var vals = [].concat(S.gp || [], S.bp || [], S.ho || [])
-            .filter(function (v) { return v != null; });
-        if (!vals.length) { $('gra-ir-spark').innerHTML = ''; return; }
-        var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
-        if (hi - lo < 5) { hi += 3; lo -= 3; }
+        if (!S.t || S.t.length < 2) { host.innerHTML = ''; return; }
+
+        var W = 352, PL = 34, PR = 6, PT = 12, HP = 84, GAP = 26, HV = 62, PB = 16;
+        var H = PT + HP + GAP + HV + PB;
         var t0 = Date.parse(S.t[0] + 'Z'), t1 = Date.parse(S.t[S.t.length - 1] + 'Z');
-        var X = function (i) { return P + (Date.parse(S.t[i] + 'Z') - t0) / (t1 - t0 || 1) * (W - 2 * P); };
-        var Y = function (v) { return P + (v - lo) / (hi - lo) * (H - 2 * P); };  // low pressure at top
-        var path = function (a) {
+        var span = (t1 - t0) || 1;
+        var X = function (ms) { return PL + (ms - t0) / span * (W - PL - PR); };
+        var Xi = function (i) { return X(Date.parse(S.t[i] + 'Z')); };
+
+        function rng(arrs, padFrac) {
+            var v = [];
+            for (var a = 0; a < arrs.length; a++) {
+                var A = arrs[a];
+                for (var i = 0; A && i < A.length; i++) if (A[i] != null) v.push(A[i]);
+            }
+            if (!v.length) return null;
+            var lo = Math.min.apply(null, v), hi = Math.max.apply(null, v);
+            if (hi - lo < 4) { hi += 2; lo -= 2; }
+            var pad = (hi - lo) * (padFrac || 0.08);
+            return { lo: lo - pad, hi: hi + pad };
+        }
+        var rp = rng([S.gp, S.bp, S.ho], 0.08);
+        var rv = rng([S.gv, S.bv], 0.10);
+
+        // pressure: LOW at top, the convention every forecaster reads
+        var Yp = rp ? function (v) { return PT + (v - rp.lo) / (rp.hi - rp.lo) * HP; } : null;
+        var yv0 = PT + HP + GAP;
+        var Yv = rv ? function (v) { return yv0 + HV - (v - rv.lo) / (rv.hi - rv.lo) * HV; } : null;
+
+        function path(a, Y) {
+            if (!a || !Y) return '';
             var d = '', pen = false;
-            for (var i = 0; a && i < a.length; i++) {
+            for (var i = 0; i < a.length; i++) {
                 if (a[i] == null) { pen = false; continue; }
-                d += (pen ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(a[i]).toFixed(1) + ' ';
+                d += (pen ? 'L' : 'M') + Xi(i).toFixed(1) + ' ' + Y(a[i]).toFixed(1) + ' ';
                 pen = true;
             }
             return d;
-        };
-        var cur = '';
-        if (ir && ir.idx !== null && irMeta[sid] && irMeta[sid].frames) {
-            var x = P + (Date.parse(irMeta[sid].frames[ir.idx].datetime + 'Z') - t0) /
-                (t1 - t0 || 1) * (W - 2 * P);
-            if (x >= 0 && x <= W) {
-                cur = '<line x1="' + x.toFixed(1) + '" x2="' + x.toFixed(1) + '" y1="0" y2="' + H +
-                    '" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity=".7"/>';
-            }
         }
-        /* The held-out trace is DASHED and drawn under the product line. When
-           there is none the path is simply not emitted and the key says why —
-           an absent line is the honest rendering of an absent channel, and
-           anything drawn in its place would be an imputation. */
+        function line(a, Y, col, w, dash) {
+            var d = path(a, Y);
+            return d ? '<path d="' + d + '" fill="none" stroke="' + col + '" stroke-width="' + w +
+                '"' + (dash ? ' stroke-dasharray="3 2"' : '') + ' stroke-linejoin="round"/>' : '';
+        }
+        function ylab(Y, r, unit) {
+            if (!Y || !r) return '';
+            var a = Math.round(r.lo + (r.hi - r.lo) * 0.08), b = Math.round(r.hi - (r.hi - r.lo) * 0.08);
+            return ['<text x="' + (PL - 4) + '" y="' + (Y(a) + 3).toFixed(1) + '" class="gc-ax" text-anchor="end">' + a + '</text>',
+                    '<text x="' + (PL - 4) + '" y="' + (Y(b) + 3).toFixed(1) + '" class="gc-ax" text-anchor="end">' + b + '</text>'].join('');
+        }
+        // a few date ticks so the axis is readable rather than decorative
+        var ticks = '';
+        for (var k = 0; k <= 3; k++) {
+            var ms = t0 + span * k / 3, x = X(ms), dt = new Date(ms);
+            var lab = (dt.getUTCMonth() + 1) + '/' + dt.getUTCDate();
+            ticks += '<text x="' + x.toFixed(1) + '" y="' + (H - 4) + '" class="gc-ax" text-anchor="' +
+                (k === 0 ? 'start' : k === 3 ? 'end' : 'middle') + '">' + lab + '</text>';
+        }
+
         var bas = st.basin || (byId[sid] && byId[sid].basin);
-        var hoPath = S.ho
-            ? '<path d="' + path(S.ho) + '" fill="none" stroke="#f43f5e" ' +
-              'stroke-width="1.2" stroke-dasharray="3 2" opacity=".75"/>'
-            : '';
-        var hoKey = S.ho
-            ? ' &nbsp; <b style="color:#f43f5e;">- -</b> held out'
-            : ' &nbsp; <span class="gra-absent">' + heldoutAbsence(bas) + '</span>';
-        $('gra-ir-spark').innerHTML =
-            '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="color:var(--text)">' +
-            '<path d="' + path(S.bp) + '" fill="none" stroke="var(--slate)" stroke-width="1.4"/>' +
-            hoPath +
-            '<path d="' + path(S.gp) + '" fill="none" stroke="#f43f5e" stroke-width="1.7"/>' + cur + '</svg>' +
-            '<div style="display:flex;justify-content:space-between;font-size:0.58rem;color:var(--slate);margin-top:1px;">' +
-            '<span><b style="color:#f43f5e;">—</b> GHOST &nbsp; <b>—</b> best track' + hoKey + '</span>' +
-            '<span>' + Math.round(hi) + '–' + Math.round(lo) + ' hPa</span></div>';
+        var hoKey = S.ho ? '<b style="color:#f43f5e">- -</b> held out'
+                         : '<span class="gra-absent">' + heldoutAbsence(bas) + '</span>';
+
+        host.innerHTML =
+            '<svg id="gra-chart-svg" viewBox="0 0 ' + W + ' ' + H + '" class="gra-chart">' +
+            '<rect x="' + PL + '" y="' + PT + '" width="' + (W - PL - PR) + '" height="' + HP + '" class="gc-bg"/>' +
+            '<rect x="' + PL + '" y="' + yv0 + '" width="' + (W - PL - PR) + '" height="' + HV + '" class="gc-bg"/>' +
+            '<text x="' + PL + '" y="' + (PT - 3) + '" class="gc-t">Minimum pressure (hPa)</text>' +
+            '<text x="' + PL + '" y="' + (yv0 - 3) + '" class="gc-t">Maximum wind (kt)</text>' +
+            ylab(Yp, rp) + ylab(Yv, rv) + ticks +
+            line(S.bp, Yp, 'var(--slate)', 1.5) + line(S.ho, Yp, '#f43f5e', 1.2, 1) +
+            line(S.gp, Yp, '#f43f5e', 1.9) +
+            line(S.bv, Yv, 'var(--slate)', 1.5) + line(S.gv, Yv, '#f43f5e', 1.9) +
+            '<line id="gc-cur" class="gc-cur" x1="0" x2="0" y1="' + PT + '" y2="' + (yv0 + HV) + '"/>' +
+            '<line id="gc-hov" class="gc-hov" x1="0" x2="0" y1="' + PT + '" y2="' + (yv0 + HV) + '" style="display:none"/>' +
+            '</svg>' +
+            '<div class="gra-chart-key"><b style="color:#f43f5e">—</b> GHOST-FPM &nbsp; ' +
+            '<b style="color:var(--slate)">—</b> best track &nbsp; ' + hoKey + '</div>' +
+            '<div id="gra-chart-read" class="gra-chart-read"></div>';
+
+        var svg = $('gra-chart-svg');
+        function markCurrent() {
+            var cl = $('gc-cur');
+            if (!cl || !ir || ir.idx === null || !irMeta[sid] || !irMeta[sid].frames) return;
+            var f = irMeta[sid].frames[ir.idx];
+            if (!f) return;
+            var x = X(Date.parse(f.datetime + 'Z')).toFixed(1);
+            cl.setAttribute('x1', x); cl.setAttribute('x2', x);
+        }
+        markCurrent();
+
+        /* Hover reads the SERIES; click snaps to the nearest IR FRAME, which is
+           a coarser grid — so the readout can show a time the chip cannot. Snap
+           on click rather than silently showing the nearest frame's values under
+           the cursor. */
+        function msAt(ev) {
+            var b = svg.getBoundingClientRect();
+            var x = (ev.clientX - b.left) / b.width * W;
+            return t0 + (x - PL) / (W - PL - PR) * span;
+        }
+        function nearestIdx(arrT, ms) {
+            var bi = 0, bd = Infinity;
+            for (var i = 0; i < arrT.length; i++) {
+                var d = Math.abs(Date.parse(arrT[i] + 'Z') - ms);
+                if (d < bd) { bd = d; bi = i; }
+            }
+            return bi;
+        }
+        var fmt = function (a, i, dp) {
+            return (a && a[i] != null) ? a[i].toFixed(dp) : '—';
+        };
+        svg.addEventListener('mousemove', function (ev) {
+            var ms = msAt(ev), i = nearestIdx(S.t, ms);
+            var hv = $('gc-hov'), x = Xi(i).toFixed(1);
+            hv.style.display = ''; hv.setAttribute('x1', x); hv.setAttribute('x2', x);
+            var d = new Date(Date.parse(S.t[i] + 'Z'));
+            $('gra-chart-read').innerHTML =
+                '<b>' + d.toISOString().slice(0, 16).replace('T', ' ') + 'Z</b>' +
+                '<span><i style="background:#f43f5e"></i>GHOST ' + fmt(S.gp, i, 1) + ' hPa / ' + fmt(S.gv, i, 0) + ' kt</span>' +
+                '<span><i style="background:var(--slate)"></i>BT ' + fmt(S.bp, i, 0) + ' hPa / ' + fmt(S.bv, i, 0) + ' kt</span>' +
+                (S.ho ? '<span class="gra-ho">HO ' + fmt(S.ho, i, 1) + ' hPa</span>' : '');
+        });
+        svg.addEventListener('mouseleave', function () {
+            var hv = $('gc-hov'); if (hv) hv.style.display = 'none';
+            $('gra-chart-read').innerHTML = '';
+        });
+        svg.addEventListener('click', function (ev) {
+            var m = irMeta[sid];
+            if (!m || !m.available || !m.frames || !m.frames.length) return;
+            var ms = msAt(ev), bi = 0, bd = Infinity;
+            for (var i = 0; i < m.frames.length; i++) {
+                var d = Math.abs(Date.parse(m.frames[i].datetime + 'Z') - ms);
+                if (d < bd) { bd = d; bi = i; }
+            }
+            showFrame(sid, bi);      // moves the chip AND the map marker
+        });
     }
 
     // ══════════════════════════════════════════════════════════════
