@@ -1158,15 +1158,12 @@
         /* The size panel is absent on pressure-only models, so read the
            realised layout rather than assuming three rows — relayouting a
            yaxis3 that doesn't exist would quietly conjure one. */
-        var up = {
-            shapes: [], annotations: [],
-            'xaxis.range': rng, 'xaxis2.range': rng,
-            'yaxis.autorange': true, 'yaxis2.autorange': true
-        };
-        if (el.layout && el.layout.yaxis3) {
-            up['xaxis3.range'] = rng;
-            up['yaxis3.autorange'] = true;
-        }
+        var up = { shapes: [], annotations: [] };
+        ['', '2', '3'].forEach(function (n) {
+            if (!el.layout || !el.layout['yaxis' + n]) return;
+            up['xaxis' + n + '.range'] = rng;
+            up['yaxis' + n + '.autorange'] = true;
+        });
         Plotly.relayout(el, up).then(function () { paintBands(el); });
     }
 
@@ -1178,6 +1175,11 @@
     function paintBands(el) {
         var fl = el._fullLayout;
         if (!fl || !fl.yaxis || !fl.yaxis.range) return;
+        /* The bands are Saffir-Simpson WIND categories drawn on 'y'. When a
+           pressure-only payload drops the wind panel, 'y' becomes the
+           pressure axis and these would be nonsense (a 64-kt "Cat 1" band
+           across 990 hPa). Only paint when the first panel really is wind. */
+        if (!el._expFirstIsWind) return;
         var yr = fl.yaxis.range.slice();
         var y0 = yr[0], y1 = yr[1];
         var dark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -1213,7 +1215,11 @@
         var v = lastFiniteFrame(fr, 'vmax_kt');
         var p = lastFiniteFrame(fr, 'pmin_hpa');
         var r = lastFiniteFrame(fr, 'rmw_km');
-        if (!v) { box.innerHTML = ''; return; }
+        /* A pressure-only payload is legitimate, not a failed run: FPM's
+           derived wind is withheld in basins where the weak gate hands the
+           storm to a major-hurricane arm. Bail only if the profile's OWN
+           headline quantity is missing. */
+        if (!(M.headline === 'pmin_hpa' ? p : v)) { box.innerHTML = ''; return; }
 
         /* Trend line: arrow + delta, tinted by strengthening vs weakening
            (falling pressure and contracting RMW both read as strengthening).
@@ -1237,10 +1243,13 @@
         var tv = trend24(fr, 'vmax_kt');
         var tp = trend24(fr, 'pmin_hpa');
         var trm = trend24(fr, 'rmw_km');
-        var cat = windToCategory(v.v);
-        var asOf = '<div class="exp-tile-sub">at ' + v.t.slice(11, 16) + 'Z</div>';
+        var cat = windToCategory(v && v.v);
+        var asOf = v
+            ? '<div class="exp-tile-sub">at ' + v.t.slice(11, 16) + 'Z</div>' : '';
 
-        var windTile =
+        /* No wind in the payload -> no wind tile. See the headline guard
+           above: this is a withheld quantity, not a broken feed. */
+        var windTile = !v ? '' :
             '<div class="exp-tile">' +
             '<div class="exp-tile-k">' + M.name + ' max wind' +
             (M.windIsDerived
@@ -1330,7 +1339,13 @@
             }
         }
         if (fix) {
-            var ageH = (new Date(v.t) - new Date(fix.t)) / 3.6e6;
+            /* Age is measured against the newest frame the model published,
+               whichever quantity that is — `v` is null on a pressure-only
+               payload and dereferencing it here threw, which selectStorm's
+               catch swallowed silently and took the whole chart with it. */
+            var latest = v || p || r;
+            var ageH = latest
+                ? (new Date(latest.t) - new Date(fix.t)) / 3.6e6 : 0;
             var gAt = (fix.vmax_kt !== null && isFinite(fix.vmax_kt))
                 ? fix.vmax_kt : null;
             html +=
@@ -1889,6 +1904,11 @@
            feed — on a run where the size stage failed. */
         var hasRmw = M.panels.rmw &&
             fr.some(function (f) { return f.rmw_km != null; });
+        /* Same contract for the wind: a pressure-only payload is a
+           deliberate product decision (the derived wind is withheld where
+           the weak gate hands a storm to the major-hurricane arm), not a
+           failed stage. */
+        var hasWind = fr.some(function (f) { return f.vmax_kt != null; });
         var dark = document.documentElement.getAttribute('data-theme') === 'dark';
         var font = { family: '-apple-system, BlinkMacSystemFont, "Segoe UI", ' +
                              'Roboto, Helvetica, Arial, sans-serif',
@@ -1974,11 +1994,41 @@
            which wrap to 2-3 rows at desktop widths too, not just on phones. */
         var topM = narrow ? (_showComp ? 116 : 64)
                           : (_showComp ? 88 : 48);
+        /* Panels are built from what the payload actually carries, top to
+           bottom, and the traces are REMAPPED onto the rendered axis ids.
+           Traces are authored against fixed ids (y=wind, y2=pressure,
+           y3=size); if wind is absent, pressure has to become the FIRST
+           axis or Plotly renders an empty box where the wind panel was. */
+        var PANELS = [];
+        if (hasWind) PANELS.push({ src: 'y', title: M.windIsDerived
+                                     ? 'Vmax (kt, derived)' : 'Vmax (kt)' });
+        PANELS.push({ src: 'y2', title: 'Pmin (hPa)' });
+        if (hasRmw) PANELS.push({ src: 'y3', title: 'RMW (km)',
+                                  rangemode: 'tozero' });
+        var nP = PANELS.length;
+        var axOf = {};
+        PANELS.forEach(function (pn, i) {
+            axOf[pn.src] = (i === 0) ? 'y' : 'y' + (i + 1);
+        });
+
+        /* DROP traces whose panel does not exist, do not default them onto
+           'y'. A withheld wind still leaves its best-track markers in the
+           trace list, and defaulting them would plot 35 kt on a 1000 hPa
+           axis -- off-scale, and it drags the pressure autorange with it. */
+        traces = traces.filter(function (tr) {
+            return tr && axOf[tr.yaxis || 'y'];
+        });
+        traces.forEach(function (tr) {
+            tr.yaxis = axOf[tr.yaxis || 'y'];
+            tr.xaxis = 'x' + (tr.yaxis === 'y' ? '' : tr.yaxis.slice(1));
+        });
+
+        var PH = { 1: narrow ? 300 : 260, 2: narrow ? 470 : 415,
+                   3: narrow ? 640 : 560 };
         var layout = {
-            grid: { rows: hasRmw ? 3 : 2, columns: 1, pattern: 'independent',
+            grid: { rows: nP, columns: 1, pattern: 'independent',
                     roworder: 'top to bottom' },
-            height: (narrow ? (hasRmw ? 640 : 470) : (hasRmw ? 560 : 415)) +
-                    (topM - (narrow ? 104 : 26)),
+            height: PH[nP] + (topM - (narrow ? 104 : 26)),
             margin: narrow ? { l: 8, r: 8, t: topM, b: 44 }
                            : { l: 58, r: 16, t: topM, b: 40 },
             paper_bgcolor: 'rgba(0,0,0,0)',
@@ -1990,40 +2040,33 @@
                     xanchor: 'left', font: { size: 9 },
                     itemwidth: 30, tracegroupgap: 2 }
                 : { orientation: 'h', y: 1.0, yanchor: 'bottom', x: 0,
-                    xanchor: 'left', font: { size: 11 } },
+                    xanchor: 'left', font: { size: 11 } }
             /* Saffir-Simpson bands are painted AFTER autorange settles (see
-               paintBands) — shapes in data coords participate in Plotly's
+               paintBands) - shapes in data coords participate in Plotly's
                y-autorange, so declaring the 250-kt C5 band here would blow
                the Vmax axis out to 250 regardless of the storm. */
-            /* The bottom panel owns the tick labels and every other x-axis
-               matches it — which panel that is depends on whether the size
-               panel exists. */
-            xaxis:  { anchor: 'y',  gridcolor: grid,
-                      matches: hasRmw ? 'x3' : 'x2',
-                      showticklabels: false },
-            xaxis2: { anchor: 'y2', gridcolor: grid,
-                      matches: hasRmw ? 'x3' : undefined,
-                      showticklabels: !hasRmw, automargin: !hasRmw },
-            yaxis:  { title: { text: M.windIsDerived
-                                 ? 'Vmax (kt, derived)' : 'Vmax (kt)',
-                               standoff: 4 },
-                      automargin: true, gridcolor: grid,
-                      domain: hasRmw ? [0.70, 1.00] : [0.56, 1.00] },
-            yaxis2: { title: { text: 'Pmin (hPa)', standoff: 4 }, automargin: true, gridcolor: grid,
-                      domain: hasRmw ? [0.36, 0.64] : [0.00, 0.46] }
         };
-        if (hasRmw) {
-            layout.xaxis3 = { anchor: 'y3', gridcolor: grid, automargin: true };
-            layout.yaxis3 = { title: { text: 'RMW (km)', standoff: 4 },
-                              automargin: true, gridcolor: grid,
-                              domain: [0.00, 0.30], rangemode: 'tozero' };
-        }
-        /* Assign subplot x-axes by the trace's y-axis, not by position —
-           the conditional IQR band shifts indices. */
-        traces = traces.filter(function (tr) { return tr; });
-        traces.forEach(function (tr) {
-            if (tr.yaxis === 'y2') tr.xaxis = tr.xaxis || 'x2';
-            if (tr.yaxis === 'y3') tr.xaxis = tr.xaxis || 'x3';
+        el._expFirstIsWind = (PANELS[0].src === 'y');
+        var GAP = 0.06;
+        var PHGT = (1 - GAP * (nP - 1)) / nP;
+        var bottomX = 'x' + (nP === 1 ? '' : nP);
+        PANELS.forEach(function (pn, i) {
+            var n = (i === 0) ? '' : String(i + 1);
+            var top = 1 - i * (PHGT + GAP);
+            var last = (i === nP - 1);
+            layout['yaxis' + n] = {
+                title: { text: pn.title, standoff: 4 }, automargin: true,
+                gridcolor: grid,
+                domain: [Math.max(0, top - PHGT), top]
+            };
+            if (pn.rangemode) layout['yaxis' + n].rangemode = pn.rangemode;
+            /* Only the bottom panel shows dates; the rest match it so the
+               three panels pan and zoom together. */
+            layout['xaxis' + n] = {
+                anchor: 'y' + n, gridcolor: grid,
+                showticklabels: last, automargin: last
+            };
+            if (!last) layout['xaxis' + n].matches = bottomX;
         });
 
         /* Operational satellite estimators, scored against the same target.
