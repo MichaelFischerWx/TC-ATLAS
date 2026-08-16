@@ -1703,13 +1703,20 @@
                 var x = X(Date.parse(d.t[i] + 'Z'));
                 if (!isFinite(x)) continue;
                 if (d.p && d.p[i] != null && Yp) {
-                    /* A dropsonde-measured central pressure and one extrapolated
-                       from flight level are different observations; if the f-deck
-                       distinguishes them, so does the chart — filled for measured,
-                       hollow for extrapolated. */
-                    var meas = !d.src || d.src[i] !== 'x';
+                    /* FOUR states, not two. ATCF field 16 (PRESSURE DERIVATION)
+                       exists for exactly this distinction and is populated on 0
+                       of 11,347 aircraft lines, so it survives only as free text
+                       in the comment: D dropsonde 38%, X extrapolated 8%, B both
+                       1%, U NOT RECORDED 53%. And the marker is era-dependent —
+                       0% recorded before 2002, 93-100% from 2019.
+
+                       So "unknown" gets its own rendering. Collapsing U into
+                       "measured" would assert a provenance the record does not
+                       carry, on half the fixes and on every pre-2002 one. */
+                    var k = d.src ? String(d.src[i] || 'U').toUpperCase() : 'U';
+                    var cls = k === 'D' ? '' : k === 'X' ? ' est' : k === 'B' ? ' both' : ' unk';
                     out += '<circle cx="' + x.toFixed(1) + '" cy="' + Yp(d.p[i]).toFixed(1) +
-                        '" r="2.4" class="gc-vdm' + (meas ? '' : ' est') + '"/>';
+                        '" r="2.4" class="gc-vdm' + cls + '"/>';
                 }
                 if (d.v && d.v[i] != null && Yv) {
                     out += '<circle cx="' + x.toFixed(1) + '" cy="' + Yv(d.v[i]).toFixed(1) +
@@ -1801,10 +1808,16 @@
             }
             if (bi < 0) return '';
             var p = (d.p && d.p[bi] != null) ? d.p[bi].toFixed(0) + ' hPa' : '';
+            /* `v` is the SURFACE wind (f-deck field 11), not flight level —
+               flight-level wind is deliberately not published, because beside a
+               best-track Vmax it would read as surface and overstate the storm. */
             var v = (d.v && d.v[bi] != null) ? d.v[bi].toFixed(0) + ' kt' : '';
-            var meas = !d.src || d.src[bi] !== 'x';
-            return '<span class="gc-vdm-read"><i></i>aircraft ' + [p, v].filter(Boolean).join(' / ') +
-                (meas ? '' : ' (extrapolated)') + '</span>';
+            var K = d.src ? String(d.src[bi] || 'U').toUpperCase() : 'U';
+            var how = K === 'D' ? ' dropsonde' : K === 'X' ? ' extrapolated'
+                    : K === 'B' ? ' dropsonde + extrapolated' : ' (derivation not recorded)';
+            return '<span class="gc-vdm-read"><i class="' +
+                (K === 'D' ? '' : K === 'X' ? 'est' : K === 'B' ? 'both' : 'unk') +
+                '"></i>aircraft ' + [p, v].filter(Boolean).join(' / ') + how + '</span>';
         }
 
         svg.addEventListener('mouseleave', function () {

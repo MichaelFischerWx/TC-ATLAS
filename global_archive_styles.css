@@ -3161,13 +3161,20 @@ input[type="range"].ga-range::-moz-range-thumb {
 /* Aircraft (f-deck) fixes on the lifecycle chart. Filled = measured central
    pressure; hollow = extrapolated from flight level. The distinction is real
    and a page presenting these as observations should not flatten it. */
-.gra-chart .gc-vdm { fill: var(--cyan); stroke: #fff; stroke-width: .6; }
-.gra-chart .gc-vdm.est { fill: none; stroke: var(--cyan); stroke-width: 1.1; }
+.gra-chart .gc-vdm { fill: var(--cyan); stroke: #fff; stroke-width: .6; }   /* D dropsonde */
+.gra-chart .gc-vdm.est  { fill: none; stroke: var(--cyan); stroke-width: 1.1; }  /* X extrapolated */
+.gra-chart .gc-vdm.both { fill: var(--cyan); stroke: var(--cyan); stroke-width: 1.4; fill-opacity: .45; }
+/* U — derivation not recorded. 53% of fixes and ALL pre-2002 ones. Muted rather
+   than styled like either claim, because the record does not say which it is. */
+.gra-chart .gc-vdm.unk  { fill: var(--slate); stroke: #fff; stroke-width: .5; fill-opacity: .8; }
 .gra-chart-key .gc-vdm-key { color: var(--cyan); }
 .gra-chart-read .gc-vdm-read i {
     display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-    background: var(--cyan); margin-right: 4px;
+    background: var(--cyan); margin-right: 4px; box-sizing: border-box;
 }
+.gra-chart-read .gc-vdm-read i.est  { background: none; border: 1.5px solid var(--cyan); }
+.gra-chart-read .gc-vdm-read i.both { background: var(--cyan); opacity: .5; border: 1.5px solid var(--cyan); }
+.gra-chart-read .gc-vdm-read i.unk  { background: var(--slate); }
 
 /* Expanded satellite view. The chip is the thing people actually want to look
    at closely — eyewall structure, convective banding — and 320px is a preview,
