@@ -1102,10 +1102,31 @@
             radius: 7, color: '#ffffff', weight: 2.5,
             fillColor: '#f43f5e', fillOpacity: 0.95
         }).addTo(gmap);
-        // nudge into view only if the frame sits off-screen — panning on every
-        // arrow-key step would make the map jitter while scrubbing
+        /* Keep the marker in the part of the map the IR panel is NOT covering.
+           The panel is bottom-right anchored and ~700 px wide, so a plain
+           panTo() centres the storm underneath it — which is exactly where you
+           cannot see it. Aim for the centre of the unoccluded strip instead.
+
+           Still only nudges when the marker is outside that strip: re-centring
+           on every arrow-key step would make the map jitter while scrubbing. */
         try {
-            if (!gmap.getBounds().contains([lat, lon])) gmap.panTo([lat, lon]);
+            var panel = document.querySelector('.gra-ir');
+            var size = gmap.getSize();
+            var occW = (panel && panel.classList.contains('open'))
+                ? panel.getBoundingClientRect().width + 20 : 0;
+            var freeW = size.x - occW;
+            if (freeW < 220) {                       // narrow window: no strip to aim at
+                if (!gmap.getBounds().contains([lat, lon])) gmap.panTo([lat, lon]);
+                return;
+            }
+            var pt = gmap.latLngToContainerPoint([lat, lon]);
+            var pad = 60;
+            var inFree = pt.x > pad && pt.x < freeW - pad &&
+                         pt.y > pad && pt.y < size.y - pad;
+            if (!inFree) {
+                gmap.panBy([Math.round(pt.x - freeW / 2),
+                            Math.round(pt.y - size.y / 2)], { animate: true });
+            }
         } catch (e) { }
     }
 
@@ -1273,7 +1294,7 @@
                 + 'time — not cloud-free sky. Step a frame for fuller coverage.';
         }
         if (cx === 0 && cy === 0) { cx = tb.cols / 2; cy = tb.rows / 2; }
-        wireCentres(); syncCentreKey(); if (irCoast) loadCoast();
+        wireCentres(); wireExpand(); syncCentreKey(); if (irCoast) loadCoast();
         blit();
     }
 
@@ -1475,6 +1496,23 @@
         if (k) k.classList.toggle('on', !!(tb && tb.eye_col != null && tb.eye_row != null));
     }
 
+    /* Expand/collapse. blit() is re-run because the canvas backing store is
+       fixed but its DISPLAYED size changes, and the crosshair/coastline stroke
+       widths are derived from the backing store — they stay correct, but the
+       repaint keeps the marks crisp after the layout settles. */
+    function wireExpand() {
+        var b = $('gra-ir-expand');
+        if (!b || b._wired) return;
+        b._wired = true;
+        b.addEventListener('click', function () {
+            var panel = document.querySelector('.gra-ir');
+            var big = panel.classList.toggle('big');
+            b.innerHTML = big ? '&#10231;' : '&#10530;';
+            b.title = big ? 'Shrink the satellite view' : 'Expand the satellite view';
+            setTimeout(function () { blit(); if (ir && ir.sid) drawSpark(ir.sid); }, 60);
+        });
+    }
+
     function resetZoom() {
         zoom = 1;
         cx = tb ? tb.cols / 2 : 0;
@@ -1482,9 +1520,28 @@
         blit();
     }
 
-    /* Screen point -> source pixel, through the current zoom/pan. */
+    /* Screen point -> source pixel, through the current zoom/pan.
+
+       The canvas is `object-fit: contain`, so its CONTENT is letterboxed inside
+       the element box whenever the two aspects differ — 550x549 backing store
+       inside a 336x300 box leaves ~18px blank bars left and right. Mapping the
+       cursor linearly across getBoundingClientRect() therefore stretched every
+       reading by ~12% off-centre and, in the bars, produced an out-of-range
+       index that made the handler return with the PREVIOUS text still showing —
+       which is what surfaced as a spurious "no data" on Patricia and Maemi.
+
+       Map through the rendered image rect instead. This also fixes drag-panning,
+       which used the same helper. */
+    function fitRect(el) {
+        var b = el.getBoundingClientRect();
+        var k = Math.min(b.width / el.width, b.height / el.height);
+        var w = el.width * k, h = el.height * k;
+        return { left: b.left + (b.width - w) / 2, top: b.top + (b.height - h) / 2,
+                 width: w, height: h };
+    }
+
     function toSrc(e, el) {
-        var b = el.getBoundingClientRect(), r = srcRect();
+        var b = fitRect(el), r = srcRect();
         return {
             x: r.sx + (e.clientX - b.left) / b.width * r.sw,
             y: r.sy + (e.clientY - b.top) / b.height * r.sh
@@ -1631,7 +1688,41 @@
                 (k === 0 ? 'start' : k === 3 ? 'end' : 'middle') + '">' + lab + '</text>';
         }
 
+        /* Aircraft fixes: the only barometer truth in this product. Everything
+           else on the chart is either a model estimate or a best-track value
+           that is itself largely Dvorak-derived outside the recon stratum, so
+           marking WHEN a plane was actually there is the single most useful
+           annotation available. Absent for most storms and for the whole West
+           Pacific, which has no aircraft recon ever — so an empty array must
+           render as nothing, never as a zero. */
+        function vdmMarks(st, X, Yp, Yv) {
+            var d = st.vdm;
+            if (!d || !d.t || !d.t.length) return '';
+            var out = '';
+            for (var i = 0; i < d.t.length; i++) {
+                var x = X(Date.parse(d.t[i] + 'Z'));
+                if (!isFinite(x)) continue;
+                if (d.p && d.p[i] != null && Yp) {
+                    /* A dropsonde-measured central pressure and one extrapolated
+                       from flight level are different observations; if the f-deck
+                       distinguishes them, so does the chart — filled for measured,
+                       hollow for extrapolated. */
+                    var meas = !d.src || d.src[i] !== 'x';
+                    out += '<circle cx="' + x.toFixed(1) + '" cy="' + Yp(d.p[i]).toFixed(1) +
+                        '" r="2.4" class="gc-vdm' + (meas ? '' : ' est') + '"/>';
+                }
+                if (d.v && d.v[i] != null && Yv) {
+                    out += '<circle cx="' + x.toFixed(1) + '" cy="' + Yv(d.v[i]).toFixed(1) +
+                        '" r="2.4" class="gc-vdm"/>';
+                }
+            }
+            return out;
+        }
+
         var bas = st.basin || (byId[sid] && byId[sid].basin);
+        var vdmKey = (st.vdm && st.vdm.t && st.vdm.t.length)
+            ? ' &nbsp; <b class="gc-vdm-key">&#9679;</b> aircraft (' + st.vdm.t.length + ')'
+            : '';
         var hoKey = S.ho ? '<b style="color:#f43f5e">- -</b> held out'
                          : '<span class="gra-absent">' + heldoutAbsence(bas) + '</span>';
 
@@ -1645,11 +1736,12 @@
             line(S.bp, Yp, 'var(--slate)', 1.5) + line(S.ho, Yp, '#f43f5e', 1.2, 1) +
             line(S.gp, Yp, '#f43f5e', 1.9) +
             line(S.bv, Yv, 'var(--slate)', 1.5) + line(S.gv, Yv, '#f43f5e', 1.9) +
+            vdmMarks(st, X, Yp, Yv) +
             '<line id="gc-cur" class="gc-cur" x1="0" x2="0" y1="' + PT + '" y2="' + (yv0 + HV) + '"/>' +
             '<line id="gc-hov" class="gc-hov" x1="0" x2="0" y1="' + PT + '" y2="' + (yv0 + HV) + '" style="display:none"/>' +
             '</svg>' +
             '<div class="gra-chart-key"><b style="color:#f43f5e">—</b> GHOST-FPM &nbsp; ' +
-            '<b style="color:var(--slate)">—</b> best track &nbsp; ' + hoKey + '</div>' +
+            '<b style="color:var(--slate)">—</b> best track &nbsp; ' + hoKey + vdmKey + '</div>' +
             '<div id="gra-chart-read" class="gra-chart-read"></div>';
 
         var svg = $('gra-chart-svg');
@@ -1692,8 +1784,29 @@
                 '<b>' + d.toISOString().slice(0, 16).replace('T', ' ') + 'Z</b>' +
                 '<span><i style="background:#f43f5e"></i>GHOST ' + fmt(S.gp, i, 1) + ' hPa / ' + fmt(S.gv, i, 0) + ' kt</span>' +
                 '<span><i style="background:var(--slate)"></i>BT ' + fmt(S.bp, i, 0) + ' hPa / ' + fmt(S.bv, i, 0) + ' kt</span>' +
-                (S.ho ? '<span class="gra-ho">HO ' + fmt(S.ho, i, 1) + ' hPa</span>' : '');
+                (S.ho ? '<span class="gra-ho">HO ' + fmt(S.ho, i, 1) + ' hPa</span>' : '') +
+                vdmAt(st, Date.parse(S.t[i] + 'Z'));
         });
+        /* Only within +-3 h: the same window the recon flag uses, so what the
+           readout calls an aircraft fix is the same thing the recon stratum
+           counts. A looser window would quietly attribute a distant fix to a
+           frame it never constrained. */
+        function vdmAt(st, ms) {
+            var d = st.vdm;
+            if (!d || !d.t || !d.t.length) return '';
+            var bi = -1, bd = 3 * 3600 * 1000;
+            for (var i = 0; i < d.t.length; i++) {
+                var g = Math.abs(Date.parse(d.t[i] + 'Z') - ms);
+                if (g <= bd) { bd = g; bi = i; }
+            }
+            if (bi < 0) return '';
+            var p = (d.p && d.p[bi] != null) ? d.p[bi].toFixed(0) + ' hPa' : '';
+            var v = (d.v && d.v[bi] != null) ? d.v[bi].toFixed(0) + ' kt' : '';
+            var meas = !d.src || d.src[bi] !== 'x';
+            return '<span class="gc-vdm-read"><i></i>aircraft ' + [p, v].filter(Boolean).join(' / ') +
+                (meas ? '' : ' (extrapolated)') + '</span>';
+        }
+
         svg.addEventListener('mouseleave', function () {
             var hv = $('gc-hov'); if (hv) hv.style.display = 'none';
             $('gra-chart-read').innerHTML = '';
@@ -1881,7 +1994,7 @@
         cv.onmousemove = function (e) {
             if (!tb) return;
             if (drag) {
-                var b = cv.getBoundingClientRect(), r = srcRect();
+                var b = fitRect(cv), r = srcRect();
                 cx = drag.cx - (e.clientX - drag.x) / b.width * r.sw;
                 cy = drag.cy - (e.clientY - drag.y) / b.height * r.sh;
                 blit();

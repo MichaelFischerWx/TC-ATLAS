@@ -3157,3 +3157,24 @@ input[type="range"].ga-range::-moz-range-thumb {
     margin-right: 4px; vertical-align: 0;
 }
 .gra-ir-right .gra-ir-vals { font-size: 0.64rem; margin-bottom: 4px; }
+
+/* Aircraft (f-deck) fixes on the lifecycle chart. Filled = measured central
+   pressure; hollow = extrapolated from flight level. The distinction is real
+   and a page presenting these as observations should not flatten it. */
+.gra-chart .gc-vdm { fill: var(--cyan); stroke: #fff; stroke-width: .6; }
+.gra-chart .gc-vdm.est { fill: none; stroke: var(--cyan); stroke-width: 1.1; }
+.gra-chart-key .gc-vdm-key { color: var(--cyan); }
+.gra-chart-read .gc-vdm-read i {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--cyan); margin-right: 4px;
+}
+
+/* Expanded satellite view. The chip is the thing people actually want to look
+   at closely — eyewall structure, convective banding — and 320px is a preview,
+   not a look. Widening the panel and letting the canvas grow beats a separate
+   lightbox: zoom/pan state, frame stepping and the chart all keep working. */
+.gra-ir.big { width: min(1180px, calc(100% - 20px)); }
+.gra-ir.big .gra-ir-left { flex: 0 0 700px; }
+.gra-ir.big #gra-ir-canvas { max-height: 620px; }
+.gra-ir.big .gra-ir-right { padding: 8px 14px 10px; }
+@media (max-width: 900px) { .gra-ir.big .gra-ir-left { flex: none; } }
