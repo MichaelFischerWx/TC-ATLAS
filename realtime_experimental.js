@@ -2136,6 +2136,32 @@
            Both panels, where the payload has both: on a pressure-first
            profile the wind panel is derived, so the pressure trace is the
            one that shows what the kernel is actually doing. */
+        /* The OTHER model, where the producer ships it. On the FPM page this
+           is GHOST, drawn in GHOST's own rose so the two pages' colors keep
+           meaning the same thing when opened side by side.
+
+           The hover carries the coupling rather than leaving it to the page
+           note: below ~90 kt GHOST's wind sets the blend weight of FPM's
+           weak-end reader, so at the weak end these are NOT two independent
+           estimates, and a chart that puts them side by side is exactly
+           where someone would otherwise assume they are. */
+        var otherCol = (M.key === 'fpm' ? PROFILES.ghost.color : MODEL_COL);
+        [{ f: 'ghost_vmax_kt', ax: 'y', xax: 'x', u: ' kt', dp: 0 },
+         { f: 'ghost_pmin_hpa', ax: 'y2', xax: 'x2', u: ' hPa', dp: 1 }
+        ].forEach(function (s) {
+            if (!fr.some(function (r) { return r[s.f] != null; })) return;
+            traces.push({
+                x: t, y: col(s.f), name: 'GHOST', yaxis: s.ax, xaxis: s.xax,
+                mode: 'lines', legendgroup: 'ghost',
+                showlegend: s.f === (M.headline === 'pmin_hpa'
+                    ? 'ghost_pmin_hpa' : 'ghost_vmax_kt'),
+                line: { width: 1.6, color: otherCol },
+                connectgaps: false,
+                hovertemplate: '%{y:.' + s.dp + 'f}' + s.u +
+                    ' — GHOST<extra></extra>'
+            });
+        });
+
         var instCol = hexToRgba(MODEL_COL, 0.75);
         [{ f: 'vmax_inst_kt', ax: 'y', xax: 'x', u: ' kt', dp: 0 },
          { f: 'pmin_inst_hpa', ax: 'y2', xax: 'x2', u: ' hPa', dp: 1 }
