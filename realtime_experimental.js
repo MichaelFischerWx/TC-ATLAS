@@ -53,6 +53,33 @@
        be visible in the UI — a WPR wind inherits the pressure error and adds
        its own, and reading it as a peer of GHOST's Vmax would overstate it. */
     var PROFILES = {
+        /* #experimental_v2 (2026-08-18): the paper/product model — GHOST as the
+           EQUAL MEAN of two members: FPM (first-principles ridge) and the GHOST
+           tree stack for Pmin, with the tree's direct head + v2.4 corrections
+           for Vmax. Real-time APPROXIMATION: the FPM member is the frozen v1.0
+           RT chain (v2.1 not yet frozen for RT); the tree member is GHOST-RT.
+           Producer: TC-SWARM realtime/blend_rt_all.py -> ghostb-rt/. */
+        blend: {
+            key: 'blend',
+            prefix: 'ghostb-rt',
+            arch: 'ghostb-rt/archive2026',
+            file: 'blend_',
+            name: 'GHOST blend',
+            color: '#10b981',
+            title: 'GHOST (paper model) \u2014 blended Pmin, tree Vmax',
+            headline: 'pmin_hpa',
+            windIsDerived: false,
+            saturates: true,
+            provisional: {
+                WP: 'West Pacific estimates are <strong>provisional</strong>: ' +
+                    'both members run as out-of-basin transfer there and the ' +
+                    'labels are JTWC Dvorak, not aircraft.'
+            },
+            /* No SHAP: the ridge\u2019s coefficients are FPM\u2019s drivers, the
+               tree\u2019s SHAP is GHOST\u2019s; neither describes the mean. */
+            panels: { rmw: false, shap: false, dist: true, track: true,
+                      comp: true }
+        },
         ghost: {
             key: 'ghost',
             prefix: 'ghost-rt',
@@ -648,6 +675,49 @@
     PROFILES.ghost.verif = GHOST_VERIF_HTML;
     PROFILES.ghost.lede = GHOST_LEDE;
     PROFILES.ghost.note = GHOST_NOTE;
+    var BLEND_LEDE =
+        '<div class="exp-lede"><strong>GHOST</strong>, as it will be described in the ' +
+        'paper: minimum central pressure is the <strong>equal mean of two ' +
+        'independent estimators</strong> read from the same geostationary ' +
+        'infrared frames &mdash; a small first-principles ridge on the ' +
+        'environmental pressure deficit (FPM) and the boosted-tree stack with ' +
+        'its deep-eye tier (the GHOST tree member) &mdash; and maximum wind is ' +
+        'the tree&rsquo;s direct wind head with the v2.4 Cat-5 corrections. ' +
+        'Held out by season on the 28-year Atlantic archive the mean is ' +
+        'better than either member pooled (6.5 vs 7.1 / 7.6 hPa RMSE) and ' +
+        'ties the deployed stack below 920 hPa; where the tree abstains its ' +
+        'last value is carried for six hours and the frame is flagged.</div>' +
+        '<div class="exp-cite"><strong>Unlisted research page &mdash; provisional ' +
+        'real-time approximation.</strong> The FPM member shown here is the ' +
+        'frozen v1.0 real-time chain; the paper&rsquo;s v2.1 (EP/CP-anchored ' +
+        'specialist and land-decay floor) is not yet frozen for real time. ' +
+        'Not an official forecast or analysis.</div>';
+    var BLEND_NOTE =
+        '<div class="exp-note">Guidance, not official analysis. Pressure = ' +
+        'mean of the two members (both shown in the tooltip); wind = the ' +
+        'tree member only. Frames with <code>members = 1</code> carry the ' +
+        'tree&rsquo;s last accepted value across a QC abstention. Known ' +
+        'limits carried from the paper: compact late-season storms and freshly ' +
+        'formed eyes are over-read by both members; rapid weakening under a ' +
+        'persistent cold canopy is seen late.</div>';
+    var BLEND_VERIF_HTML =
+        '<div class="exp-verif-h">GHOST blend verification' +
+        '<span class="exp-verif-src">symmetric held-out board, 20,508 shared ' +
+        'Atlantic frames / 447 storms, both members leave-one-year-out ' +
+        '(2026-08-17). Pooled over frames.</span></div>' +
+        '<div class="exp-verif-t"><table><caption>Minimum pressure &mdash; RMSE / bias (hPa)</caption>' +
+        '<tr><th>cut</th><th>FPM member</th><th>tree member</th><th>GHOST (mean)</th></tr>' +
+        '<tr><td>all frames</td><td>7.1 / \u22120.9</td><td>7.6 / \u22120.1</td><td><strong>6.5 / \u22120.4</strong></td></tr>' +
+        '<tr><td>&le;940 hPa</td><td>10.4 / +2.4</td><td>10.3 / +0.4</td><td><strong>9.1 / +1.4</strong></td></tr>' +
+        '<tr><td>&le;920 hPa</td><td>12.4 / +7.5</td><td>10.8 / +4.5</td><td><strong>10.8 / +6.0</strong></td></tr>' +
+        '<tr><td>aircraft-verified frames</td><td>7.4 / +0.8</td><td>7.9 / +0.8</td><td><strong>6.9 / +0.8</strong></td></tr>' +
+        '</table></div>' +
+        '<div class="exp-verif-n">The deep-tail gain is over the FPM member; against the ' +
+        'deployed tree stack the mean ties on RMSE below 920 hPa and sits between the ' +
+        'members on bias. Full record: TC-SWARM docs/FINAL_MODEL_DECISION_2026-08-17.md.</div>';
+    PROFILES.blend.verif = BLEND_VERIF_HTML;
+    PROFILES.blend.lede = BLEND_LEDE;
+    PROFILES.blend.note = BLEND_NOTE;
     PROFILES.fpm.verif = FPM_VERIF_HTML;
     PROFILES.fpm.lede = FPM_LEDE;
     PROFILES.fpm.note = FPM_NOTE;
@@ -2197,10 +2267,29 @@
            weak-end reader, so at the weak end these are NOT two independent
            estimates, and a chart that puts them side by side is exactly
            where someone would otherwise assume they are. */
+        /* On the BLEND page the two MEMBERS are drawn as thin traces under the
+           mean: FPM in indigo, the tree member in rose (each page's own color),
+           so a reader can see how far apart they were on every frame and which
+           one the mean is leaning on. `ghost_vmax_kt` is the wind itself there
+           (the blend's Vmax IS the tree's), so it is not repeated. */
+        if (M.key === 'blend') {
+            [{ f: 'fpm_pmin_hpa', nm: 'FPM member', c: PROFILES.fpm.color },
+             { f: 'tree_pmin_hpa', nm: 'tree member', c: PROFILES.ghost.color }
+            ].forEach(function (s) {
+                if (!fr.some(function (r) { return r[s.f] != null; })) return;
+                traces.push({
+                    x: t, y: col(s.f), name: s.nm, yaxis: 'y2', xaxis: 'x2',
+                    mode: 'lines', legendgroup: s.f, showlegend: true,
+                    line: { width: 1.3, color: s.c, dash: 'dot' },
+                    connectgaps: false,
+                    hovertemplate: '%{y:.1f} hPa — ' + s.nm + '<extra></extra>'
+                });
+            });
+        }
         var otherCol = (M.key === 'fpm' ? PROFILES.ghost.color : MODEL_COL);
         [{ f: 'ghost_vmax_kt', ax: 'y', xax: 'x', u: ' kt', dp: 0 },
          { f: 'ghost_pmin_hpa', ax: 'y2', xax: 'x2', u: ' hPa', dp: 1 }
-        ].forEach(function (s) {
+        ].filter(function (s) { return M.key !== 'blend'; }).forEach(function (s) {
             if (!fr.some(function (r) { return r[s.f] != null; })) return;
             traces.push({
                 x: t, y: col(s.f), name: 'GHOST', yaxis: s.ax, xaxis: s.xax,

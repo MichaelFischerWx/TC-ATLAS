@@ -2653,11 +2653,11 @@
            GHOST. Deliberately absent from the tab bar — reachable only by
            its hash (realtime_ir.html#experimental_v2). */
         var VALID_VIEWS = { map: 1, satellite: 1, subseasonal: 1, seasonal: 1, recon: 1,
-                            experimental: 1, experimental_v2: 1 };
+                            experimental: 1, experimental_v2: 1, experimental_fpm: 1 };
         /* Which tab button lights up for a view. Unlisted views borrow the
            tab of the section they live in, so the header doesn't read as
            "no tab selected". */
-        var _tabForView = { experimental_v2: 'experimental' };
+        var _tabForView = { experimental_v2: 'experimental', experimental_fpm: 'experimental' };
         /* Seed the data-view attribute so CSS hides map-only toggles
            correctly even on first paint (before any user click). */
         document.documentElement.setAttribute('data-view', 'map');
@@ -2737,7 +2737,10 @@
             seasonal:    { js: ['realtime_seasonal.js'], css: ['realtime_seasonal_styles.css'] },
             experimental:{ js: ['realtime_experimental.js'] },
             /* Same module, different model profile — see VALID_VIEWS. */
-            experimental_v2:{ js: ['realtime_experimental.js'] }
+            experimental_v2:{ js: ['realtime_experimental.js'] },
+            /* #experimental_v2 = the blended paper model (2026-08-18);
+               the FPM-only view moved to #experimental_fpm. */
+            experimental_fpm:{ js: ['realtime_experimental.js'] }
         };
         var _lazyLoads = {};    /* src -> Promise */
         function _loadOnce(src, isCss) {
@@ -2777,7 +2780,7 @@
            surface an inline error + retry in the target section instead. */
         var _viewSectionIds = { recon: 'recon-main', subseasonal: 'sub-main',
                                seasonal: 'seasonal-main', experimental: 'exp-main',
-                               experimental_v2: 'exp-main' };
+                               experimental_v2: 'exp-main', experimental_fpm: 'exp-main' };
         function _showTabLoadError(view) {
             var sec = document.getElementById(_viewSectionIds[view] || '');
             if (!sec) return;
@@ -2945,11 +2948,13 @@
             } else if (view === 'recon') {
                 if (reconMain) reconMain.style.display = '';
                 if (window.activateReconView) window.activateReconView();
-            } else if (view === 'experimental' || view === 'experimental_v2') {
+            } else if (view === 'experimental' || view === 'experimental_v2' ||
+                       view === 'experimental_fpm') {
                 if (expMain) expMain.style.display = 'block';
                 if (window.activateExperimentalView)
                     window.activateExperimentalView(
-                        view === 'experimental_v2' ? 'fpm' : 'ghost');
+                        view === 'experimental_v2' ? 'blend' :
+                        view === 'experimental_fpm' ? 'fpm' : 'ghost');
             } else {
                 irMain.style.display = '';
                 if (legend) legend.style.display = '';
