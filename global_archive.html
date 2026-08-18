@@ -1167,7 +1167,7 @@
                          remembered), or from the About GHOST button. -->
                     <div id="gra-about" class="gra-about">
                         <button id="gra-about-x" class="gra-about-x" title="Close">&times;</button>
-                        <h3>GHOST-FPM &mdash; recon-independent intensity reanalysis</h3>
+                        <h3>GHOST &mdash; recon-independent intensity reanalysis</h3>
                         <p class="gra-about-lede">GHOST estimates tropical cyclone intensity
                             &mdash; <strong>minimum central pressure and maximum sustained
                             wind</strong> &mdash; from geostationary infrared imagery and the
@@ -1188,6 +1188,29 @@
                             or best-track intensity, it can be compared against them
                             independently. That is what the <em>GHOST&nbsp;&minus;&nbsp;BT</em>
                             view is for.</p>
+
+                        <h4>How it is built (data version v4, the paper model)</h4>
+                        <ul>
+                            <li><strong>P<sub>min</sub></strong> is the <strong>equal mean of two
+                                independent members</strong> read from the same imagery: a
+                                small first-principles ridge on the environmental pressure
+                                deficit (FPM), and a boosted-tree stack with a deep-eye tier
+                                (the tree member). Where the tree abstains on a frame its
+                                last value is carried for six hours; where it never existed
+                                the ridge stands alone.</li>
+                            <li><strong>V<sub>max</sub></strong> is the tree member&rsquo;s
+                                <em>direct</em> wind head (with the Cat-5 corrections) &mdash;
+                                not derived from the pressure. In the Atlantic it abstains on
+                                QC-rejected frames.</li>
+                            <li><strong>Every published value is held out.</strong> Atlantic
+                                and East Pacific members were fitted leave-one-year-out; West
+                                and Central Pacific are out-of-basin transfer. There is no
+                                separate frozen channel &mdash; the number shown is the
+                                held-out one.</li>
+                            <li>The same blend runs live on the Real-Time Monitor&rsquo;s
+                                Experimental tab. Earlier data versions (v1, v2: a single FPM
+                                channel per basin) remain selectable below.</li>
+                        </ul>
 
                         <h4>How to read it</h4>
                         <ul>
@@ -1210,20 +1233,16 @@
                             <li><span class="gra-flag unc">?</span> the storm&rsquo;s deepest
                                 frame is also its largest disagreement with the best track, with
                                 no reconnaissance nearby &mdash; a disagreement is not by itself
-                                an error, but that minimum has no independent support. 84 of the
-                                752 published storms.</li>
-                            <li><strong>The estimator does not saturate.</strong> The deepest
-                                storm in the record (best track 872&nbsp;hPa) is estimated at
-                                868.6&nbsp;hPa &mdash; there is no ceiling at the extreme tail.</li>
-                            <li>Pooled against <em>all</em> best-track pressure the estimates look
-                                compressed toward the middle (slope&nbsp;0.81; about
-                                +19&nbsp;hPa weak below 900&nbsp;hPa, about &minus;7&nbsp;hPa deep
-                                above 980). Restricted to reconnaissance-proximate frames that
-                                compression largely disappears &mdash; slope&nbsp;0.98, mean bias
-                                +1.9&nbsp;hPa &mdash; so much of it reflects what the best track
-                                is outside the recon era rather than the estimate itself. Deep
-                                recon frames (&le;920&nbsp;hPa) still run about +4.5&nbsp;hPa
-                                weak.</li>
+                                an error, but that minimum has no independent support. 17 of the
+                                724 storms in v4.</li>
+                            <li><strong>Known cost of the mean at the extreme tail.</strong>
+                                Where the tree member saturates on the very deepest storms the
+                                mean halves the ridge&rsquo;s deeper read: Patricia&nbsp;2015
+                                (best track 872&nbsp;hPa) is 893&nbsp;hPa in v4 (ridge 886, tree
+                                900). Below 920&nbsp;hPa the Atlantic estimates run about
+                                +6&nbsp;hPa weak on average; pooled over everything the
+                                Atlantic RMSE is 6.6&nbsp;hPa (slope&nbsp;0.92), East Pacific
+                                8.0, West Pacific 10.8 against Dvorak-era JTWC labels.</li>
                         </ul>
 
                         <!-- Filled by renderProtocols() from index.json's per-basin
@@ -1325,6 +1344,6 @@
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
-    <script defer src="global_archive_ghostra.js?v=20260816f"></script>
+    <script defer src="global_archive_ghostra.js?v=20260818a"></script>
 </body>
 </html>

@@ -689,15 +689,31 @@
         return (index && index.models && index.models[b]) || null;
     }
 
+    /* v4 and later publish the paper model (a two-member blend). Detected
+       from the index's own model declaration, not from the version string. */
+    function isBlendVersion() {
+        var ms = (index && index.models) || {};
+        return Object.keys(ms).some(function (b) {
+            return ms[b] && ms[b].column === 'reco'; });
+    }
+
     /* Why there is no held-out value here. The two reasons are not the same
        claim and must not share a phrasing: an out-of-basin transfer has
        nothing to hold out, whereas an older published version simply did not
        ship the channel it had. */
     function heldoutAbsence(b) {
         var m = basinModel(b);
-        return (m && m.protocol === 'transfer')
-            ? 'no held-out channel — every frame here is already out of sample'
-            : 'no held-out channel in this data version';
+        if (m && m.protocol === 'transfer') {
+            return 'no held-out channel — every frame here is already out of sample';
+        }
+        /* v4+: the published estimate IS the held-out one (leave-one-year-out
+           members), so there is no second, frozen channel to hold out from. */
+        if (m && (m.protocol === 'loyo' || m.protocol === 'loso')) {
+            return 'the published estimate is itself held out (' +
+                (PROTO_SHORT[m.protocol] || m.protocol) +
+                ') — there is no separate frozen channel';
+        }
+        return 'no held-out channel in this data version';
     }
 
     /* The one sentence a reader needs before believing a basin's number. */
@@ -710,6 +726,8 @@
         } else if (m.heldout_protocol) {
             s += ', ' + (PROTO_SHORT[m.heldout_protocol] || m.heldout_protocol) +
                 ' shown alongside';
+        } else if (m.protocol === 'loyo' || m.protocol === 'loso') {
+            s += ' — the published value is the held-out one';
         } else {
             s += ', no held-out channel published';
         }
@@ -755,13 +773,29 @@
                held-out fold, and a best-track size analysis). Shipping both
                numbers silently was the one option ruled out — see
                TC-SWARM realtime/FPM_WIND_CONSISTENCY.md. */
-            '<br><b>On the wind:</b> V<sub>max</sub> here is derived from the ' +
-            'pressure by a fitted relationship, and it is the <i>offline</i> ' +
-            'form of it — including a size term fed by best-track wind radii ' +
-            'and a leave-one-storm-out correction to the strongest cases. ' +
-            'Neither can be computed for a storm happening now, so the ' +
-            'real-time FPM page reads a few knots lower for the same storm ' +
-            'above about 110 kt. The pressure is the same model on both.' + '</details>';
+            (isBlendVersion()
+            /* v4+ (paper model): the wind is the tree member's DIRECT wind
+               head, not a pressure-wind relationship; the pressure is the
+               equal mean of the two members. */
+            ? '<br><b>On the model:</b> P<sub>min</sub> is the equal mean of ' +
+              'two independent held-out members — the first-principles ' +
+              'ridge (FPM v2.1) and the boosted-tree stack (tree member) — ' +
+              'with the tree’s last value carried for six hours where it ' +
+              'abstains. V<sub>max</sub> is the tree member’s <i>direct</i> ' +
+              'wind head with the v2.4 Cat-5 corrections; it is not derived ' +
+              'from the pressure. In the Atlantic the wind abstains on ' +
+              'QC-rejected frames (about a quarter); in the Pacific basins ' +
+              'the last accepted wind is carried across them. The same ' +
+              'blend runs in real time on the Real-Time Monitor’s ' +
+              'Experimental tab.'
+            : '<br><b>On the wind:</b> V<sub>max</sub> here is derived from the ' +
+              'pressure by a fitted relationship, and it is the <i>offline</i> ' +
+              'form of it — including a size term fed by best-track wind radii ' +
+              'and a leave-one-storm-out correction to the strongest cases. ' +
+              'Neither can be computed for a storm happening now, so the ' +
+              'real-time FPM page reads a few knots lower for the same storm ' +
+              'above about 110 kt. The pressure is the same model on both.') +
+            '</details>';
     }
 
     /* The per-basin protocol table in the About panel. This is the statement
@@ -871,6 +905,11 @@
                 'transfer: zero ' + s.basin + ' frames were in training, so ' +
                 'every frame is already out of sample and there is nothing to ' +
                 'hold out">not held out</span>';
+        }
+        if (m && !m.heldout_column &&
+                (m.protocol === 'loyo' || m.protocol === 'loso')) {
+            return '<span class="gra-ho gra-ho-na" title="' +
+                heldoutAbsence(s.basin) + '">held out</span>';
         }
         if (s.heldout_available === false || !m || !m.heldout_column) {
             return '<span class="gra-ho gra-ho-na" title="' +
