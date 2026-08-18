@@ -150,9 +150,9 @@
     };
 
     var MODES = {
-        gp: { f: 'gp', kind: 'seq', t: 'GHOST-FPM P<sub>min</sub> (hPa)' },
+        gp: { f: 'gp', kind: 'seq', t: 'GHOST P<sub>min</sub> (hPa)' },
         bp: { f: 'bp', kind: 'seq', t: 'Best track P<sub>min</sub> (hPa)' },
-        gv: { f: 'gv', kind: 'ss', t: 'GHOST-FPM V<sub>max</sub> (kt)' },
+        gv: { f: 'gv', kind: 'ss', t: 'GHOST V<sub>max</sub> (kt)' },
         bv: { f: 'bv', kind: 'ss', t: 'Best track V<sub>max</sub> (kt)' },
         diff: { f: 'd', kind: 'div', t: 'GHOST &minus; best track P<sub>min</sub> (hPa)' }
     };
@@ -758,7 +758,7 @@
            reference prose, and it used to starve the leaderboard down to ~2
            visible storms, so it collapses. */
         $('gra-foot').innerHTML =
-            'GHOST-FPM ' + (version || index.version || '') +
+            'GHOST ' + (version || index.version || '') +
             (index.title ? ' — ' + index.title : '') + mism +
             (per ? '<br>' + per : '<br>' + (index.model || '')) +
             '<details class="gra-foot-more"><summary>What these numbers are</summary>' +
@@ -1786,7 +1786,7 @@
             '<line id="gc-cur" class="gc-cur" x1="0" x2="0" y1="' + PT + '" y2="' + (yv0 + HV) + '"/>' +
             '<line id="gc-hov" class="gc-hov" x1="0" x2="0" y1="' + PT + '" y2="' + (yv0 + HV) + '" style="display:none"/>' +
             '</svg>' +
-            '<div class="gra-chart-key"><b style="color:#f43f5e">—</b> GHOST-FPM &nbsp; ' +
+            '<div class="gra-chart-key"><b style="color:#f43f5e">—</b> GHOST &nbsp; ' +
             '<b style="color:var(--slate)">—</b> best track &nbsp; ' + hoKey + vdmKey + '</div>' +
             '<div id="gra-chart-read" class="gra-chart-read"></div>';
 
