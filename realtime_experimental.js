@@ -332,7 +332,7 @@
         return get(CDN_BASE).catch(function () { return get(GCS_BASE); });
     }
 
-    /* Verification numbers are quoted from the manuscript (Fischer, under review).
+    /* Verification numbers are quoted from the manuscript (Fischer, in preparation).
        Held-out means the season's storms were withheld from training in every
        basin. Do NOT edit these by hand without checking the source.
        EXCEPTION: the "error by storm strength" table is NOT from the paper —
@@ -341,7 +341,7 @@
        run 2026-07-26) and is labeled as such in the UI. */
     var GHOST_VERIF_HTML =
         '<div class="exp-verif-h">Preliminary verification' +
-        '<span class="exp-verif-src">from the manuscript under review. ' +
+        '<span class="exp-verif-src">from the manuscript in preparation. ' +
         '&ldquo;Held out&rdquo; = the season\'s storms were withheld from ' +
         'training. Per-storm-mean unless noted.</span></div>' +
 
@@ -570,10 +570,10 @@
         'pressure is one of the two members averaged on the ' +
         '<a href="#experimental">Experimental tab</a>.</div>' +
         '<div class="exp-cite"><strong>Unlisted member page &mdash; ' +
-        'manuscript under review.</strong> ' +
+        'manuscript in preparation.</strong> ' +
         'GHOST (Geostationary-based Hurricane Objective Strength ' +
         'Technique) is a research method described in a manuscript ' +
-        'currently under peer review; this page is ' +
+        'in preparation; this page is ' +
         'provided for scientific transparency and is <strong>not an ' +
         'official forecast or analysis</strong>. Please contact the ' +
         'author — Dr. Michael Fischer ' +
@@ -594,7 +594,7 @@
         'vortex actually sets.</div>' +
         '<div class="exp-cite"><strong>Unlisted research page.</strong> ' +
         'FPM is a research method under active development (the ' +
-        'manuscript under review describes a later refinement of it), ' +
+        'manuscript in preparation describes a later refinement of it), ' +
         'shown here on its own for comparison. It is ' +
         '<strong>not an official forecast or analysis</strong>; on the ' +
         '<a href="#experimental">Experimental tab</a> its pressure is one ' +
@@ -690,7 +690,7 @@
     PROFILES.ghost.note = GHOST_NOTE;
     var BLEND_LEDE =
         '<div class="exp-lede"><strong>GHOST</strong>, as described in the ' +
-        'manuscript under review: minimum central pressure is the <strong>equal mean of two ' +
+        'manuscript in preparation: minimum central pressure is the <strong>equal mean of two ' +
         'independent estimators</strong> read from the same geostationary ' +
         'infrared frames &mdash; a small first-principles ridge on the ' +
         'environmental pressure deficit (FPM) and the boosted-tree stack with ' +
@@ -702,7 +702,7 @@
         '8.5); where the tree abstains its last value is carried for six ' +
         'hours and the frame is flagged.</div>' +
         '<div class="exp-cite"><strong>Provisional real-time approximation ' +
-        'of a method under peer review.</strong> The FPM member running here ' +
+        'of a method whose manuscript is in preparation.</strong> The FPM member running here ' +
         'is the frozen real-time version of that model; the manuscript&rsquo;s ' +
         'latest refinements to it (an East/Central Pacific specialist and a ' +
         'land-decay floor) are not yet in the real-time chain. ' +
@@ -710,7 +710,7 @@
         '<a href="#experimental_tree">#experimental_tree</a>, FPM: ' +
         '<a href="#experimental_fpm">#experimental_fpm</a>). GHOST ' +
         '(Geostationary-based Hurricane Objective Strength Technique) is ' +
-        'described in a manuscript currently under review; this page is provided for ' +
+        'described in a manuscript in preparation; this page is provided for ' +
         'scientific transparency and is <strong>not an official forecast or ' +
         'analysis</strong>. Please contact the author &mdash; Dr. Michael ' +
         'Fischer (<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu' +
@@ -1243,7 +1243,7 @@
                 xanchor: 'left', yanchor: 'top', showarrow: false,
                 align: 'left',
                 text: '<b style="color:#F47321">EXPERIMENTAL</b> &#183; ' + M.name + ' is ' +
-                      'a research method (manuscript under review) ' +
+                      'a research method (manuscript in preparation) ' +
                       '&#8212; <b>not an official forecast or ' +
                       'analysis</b>.<br>Recon-independent estimates from ' +
                       'infrared imagery + reanalysis environment. Contact the ' +
@@ -1795,7 +1795,7 @@
             { xref: 'paper', yref: 'paper', x: 0.055, y: 0, xanchor: 'left', yanchor: 'top',
               yshift: -66, showarrow: false, align: 'left',
               text: '<b style="color:#F47321">EXPERIMENTAL</b> &#183; ' + M.name + ' is a ' +
-                    'research method (manuscript under review) &#8212; <b>not an official ' +
+                    'research method (manuscript in preparation) &#8212; <b>not an official ' +
                     'forecast or analysis</b>. Contact the author before citing or redistributing.',
               font: { size: 10.5, color: fg2 } }
         ];
