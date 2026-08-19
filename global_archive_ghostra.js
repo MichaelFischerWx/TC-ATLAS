@@ -999,10 +999,10 @@
             '<div style="padding:16px;color:var(--slate);font-size:0.72rem;">' +
             (q ? 'No storm matches &ldquo;' + q + '&rdquo;.' : 'No storms match the filters.') +
             '</div>';
-
-        Array.prototype.forEach.call($('gra-list').querySelectorAll('.gra-item'), function (el) {
-            el.onclick = function () { select(el.dataset.sid, null); };
-        });
+        /* Row clicks are handled by ONE delegated listener on #gra-list (see
+           wire()). A per-row onclick used to be bound here as well, so every
+           row click ran select() TWICE — two storm-JSON fetches, two /ir/meta
+           calls and two frame fetches per open. */
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -1119,8 +1119,11 @@
         });
     }
 
+    var _metaInflight = {};
     function loadIRMeta(sid, tm, t) {
         if (irMeta[sid]) return pickFrame(sid, tm);
+        if (_metaInflight[sid]) return;          // already on its way; it will pickFrame
+        _metaInflight[sid] = true;
         $('gra-ir-status').textContent = 'Loading IR frame list…';
         /* Pass the track VERBATIM, exactly as the Storm Detail tab does. The
            frame index space is derived from whatever track /ir/meta is handed,
@@ -1130,14 +1133,15 @@
         getJSON(API + '/global/ir/meta?sid=' + encodeURIComponent(sid) +
             '&track=' + encodeURIComponent(JSON.stringify(trk)))
             .then(function (j) {
+                delete _metaInflight[sid];
                 irMeta[sid] = j;
                 if (!j.available) {
                     $('gra-ir-status').textContent = 'No IR available: ' + (j.reason || 'unknown');
                     return;
                 }
-                pickFrame(sid, tm);
+                if (ir && ir.sid === sid) pickFrame(sid, tm);   // not if the reader moved on
             })
-            .catch(function (e) { $('gra-ir-status').textContent = 'IR metadata failed: ' + e; });
+            .catch(function (e) { delete _metaInflight[sid]; $('gra-ir-status').textContent = 'IR metadata failed: ' + e; });
     }
 
     /* Put a marker where the displayed frame actually is. Without it the chip
@@ -1252,6 +1256,8 @@
 
         var key = sid + '/' + idx;
         if (irFrames[key]) return paint(irFrames[key]);
+        if (irFrames[key] === false) return;      // already being fetched
+        irFrames[key] = false;
         $('gra-ir-status').textContent = 'Fetching IR frame…';
 
         /* Direct from the CDN prefix the meta response advertises — no Cloud
@@ -1267,10 +1273,10 @@
             })
             : fetch(api).then(function (r) { return r.json(); })
         ).then(function (j) {
-            if (!j || !j.tb_data) { $('gra-ir-status').textContent = 'No IR data for this frame.'; return; }
+            if (!j || !j.tb_data) { delete irFrames[key]; $('gra-ir-status').textContent = 'No IR data for this frame.'; return; }
             irFrames[key] = j;
-            if (ir.sid === sid && ir.idx === idx) paint(j);
-        }).catch(function (e) { $('gra-ir-status').textContent = 'IR frame failed: ' + e; });
+            if (ir && ir.sid === sid && ir.idx === idx) paint(j);
+        }).catch(function (e) { delete irFrames[key]; $('gra-ir-status').textContent = 'IR frame failed: ' + e; });
     }
 
     /* The frame payload is base64 uint8 brightness temperature, NOT a PNG:
@@ -1650,11 +1656,15 @@
         sel.onchange = function () { cmap = sel.value; repaint(); };
     }
 
+    var _stormInflight = {};
     function loadStorm(sid, cb) {
         if (stormCache[sid]) return cb();
-        getJSON(DATA() + '/storm/' + sid + '.json')
-            .catch(function () { return null; })
-            .then(function (j) { if (j) { stormCache[sid] = j; cb(); } });
+        if (!_stormInflight[sid]) {
+            _stormInflight[sid] = getJSON(DATA() + '/storm/' + sid + '.json')
+                .catch(function () { return null; })
+                .then(function (j) { delete _stormInflight[sid]; if (j) stormCache[sid] = j; return j; });
+        }
+        _stormInflight[sid].then(function (j) { if (j) cb(); });
     }
 
     /* Aircraft fix TIMES from the archive's f-deck endpoint — every AIRC-derived
