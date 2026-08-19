@@ -2924,11 +2924,15 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gra-ir-delta.far { color: #fca5a5; }
 .gra-ir-canvaswrap { position: relative; background: #000; line-height: 0; }
 #gra-ir-canvas { width: 100%; height: 100%; max-height: 300px; object-fit: contain; display: block; cursor: crosshair; }
+/* line-height is set explicitly: the wrap carries line-height:0 to kill the
+   canvas's inline gap, and an inherited 0 here gives this label a 4px-tall
+   box whose glyphs spill past bottom:0 and get clipped by overflow:hidden. */
 .gra-ir-hover {
     position: absolute; left: 0; right: 0; bottom: 0; font-size: 0.62rem;
-    background: rgba(15, 23, 42, .8); color: #e2e8f0; padding: 2px 6px;
-    font-variant-numeric: tabular-nums; pointer-events: none;
+    line-height: 1.45; background: rgba(15, 23, 42, .8); color: #e2e8f0;
+    padding: 2px 6px; font-variant-numeric: tabular-nums; pointer-events: none;
 }
+.gra-ir-hover:empty { display: none; }
 .gra-ir-ctr {
     display: flex; align-items: center; gap: 10px; flex: none;
     padding: 3px 9px 5px; font-size: 0.6rem; color: var(--slate);
@@ -2938,7 +2942,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gra-ir-ctr-key { display: flex; align-items: center; gap: 4px; }
 /* The eye-fix key is dimmed until a frame actually carries one, so an absent
    channel reads as absent rather than as "no displacement". */
-.gra-ir-ctr-key.eye { opacity: .38; }
+.gra-ir-ctr-key.eye { opacity: .55; }
 .gra-ir-ctr-key.eye.on { opacity: 1; }
 .gra-ir-ctr-key i {
     width: 9px; height: 9px; display: inline-block; position: relative;
@@ -2971,7 +2975,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .gra-search { width: 100%; margin-top: 8px; font-size: 0.74rem; }
 .gra-ir-zoom {
-    position: absolute; right: 5px; top: 4px; font-size: 0.58rem;
+    position: absolute; right: 5px; top: 4px; font-size: 0.58rem; line-height: 1.45;
     background: rgba(15, 23, 42, .72); color: #e2e8f0; padding: 1px 5px;
     border-radius: 3px; pointer-events: none;
 }
@@ -3115,9 +3119,26 @@ input[type="range"].ga-range::-moz-range-thumb {
     .basin-chip { padding: 5px 12px; }
     .gra-rng input[type=range] { width: 104px; }
 
-    /* chip spans the map instead of overhanging it */
-    .gra-ir { left: 8px; right: 8px; width: auto; max-height: calc(100% - 16px); }
-    #gra-ir-canvas { max-height: 40vh; }
+    /* The chip becomes a bottom SHEET over the page, not a card inside the
+       52vh map pane. Inside the pane its max-height was ~45vh, the canvas
+       took 40vh of that, and the lifecycle chart underneath was simply
+       clipped away by overflow:hidden — on a phone the intensity traces were
+       never visible. Fixed to the viewport, capped at 88vh, and the BODY
+       scrolls: canvas first, then values + chart, all reachable. */
+    .gra-ir, .gra-ir.big {
+        position: fixed; left: 6px; right: 6px; bottom: 6px; top: auto;
+        width: auto; max-height: 88vh; z-index: 1200;
+        box-shadow: 0 -6px 30px rgba(15, 22, 35, .38);
+    }
+    .gra-ir-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    .gra-ir-left, .gra-ir.big .gra-ir-left { flex: none; }
+    .gra-ir-right { flex: none; padding: 6px 10px 12px; }
+    .gra-ir-canvaswrap { flex: none; }
+    #gra-ir-canvas, .gra-ir.big #gra-ir-canvas { max-height: 34vh; }
+    #gra-ir-expand { display: none; }          /* nothing to expand into */
+    .gra-ir-head { flex-wrap: wrap; row-gap: 4px; }
+    .gra-ir-ctr { flex-wrap: wrap; row-gap: 3px; }
+    .gra-chart-read { min-height: 0; }
 
     /* the explainer gets the whole viewport, not a 50vh map pane */
     .gra-about {
@@ -3149,6 +3170,38 @@ input[type="range"].ga-range::-moz-range-thumb {
     letter-spacing: .02em;
 }
 .gra-chart .gc-ax { font-size: 7px; fill: var(--slate); }
+/* Storm-nature bands (IBTrACS `nature`): tropical is the unmarked default;
+   anything else is shaded so a reader sees at once which stretch of the trace
+   is a post-tropical / subtropical / disturbance phase, where an IR intensity
+   estimate means something different. Hatch for extratropical so it survives
+   both themes and print. */
+.gra-chart .gc-nat-ET { fill: url(#gc-hatch); }
+.gra-chart .gc-nat-SS { fill: rgba(56, 189, 248, .17); }
+.gra-chart .gc-nat-DS { fill: rgba(250, 204, 21, .16); }
+.gra-chart .gc-nat-MX { fill: rgba(167, 139, 250, .16); }
+.gra-chart .gc-nat-NR { fill: rgba(148, 163, 184, .12); }
+.gra-chart .gc-hatch-l { stroke: rgba(148, 163, 184, .55); stroke-width: .8; }
+/* Recon strip between the panels: light band = a frame the recon stratum
+   counts (aircraft MSLP within ±3 h, the same flag the filter uses); ticks =
+   individual aircraft fixes from the f-deck. */
+.gra-chart .gc-rec-band { fill: var(--cyan); fill-opacity: .22; }
+.gra-chart .gc-rec-tick { fill: var(--cyan); }
+.gra-chart .gc-rec-lab { font-size: 6.5px; fill: var(--slate); }
+.gra-chart-key .gc-nat-key i {
+    display: inline-block; width: 9px; height: 8px; vertical-align: -1px;
+    margin-right: 3px; border-radius: 1px;
+}
+.gra-chart-key .gc-nat-key i.ET {
+    background: repeating-linear-gradient(135deg, rgba(148,163,184,.65) 0 1px, transparent 1px 3px);
+}
+.gra-chart-key .gc-nat-key i.SS { background: rgba(56, 189, 248, .45); }
+.gra-chart-key .gc-nat-key i.DS { background: rgba(250, 204, 21, .5); }
+.gra-chart-key .gc-nat-key i.MX { background: rgba(167, 139, 250, .5); }
+.gra-chart-key .gc-nat-key i.NR { background: rgba(148, 163, 184, .4); }
+.gra-chart-key .gc-rec-key i {
+    display: inline-block; width: 9px; height: 5px; vertical-align: 1px;
+    margin-right: 3px; background: var(--cyan); opacity: .55;
+}
 .gra-chart .gc-cur { stroke: var(--blue); stroke-width: 1.2; }
 .gra-chart .gc-hov { stroke: var(--text); stroke-width: .8; stroke-dasharray: 2 2; opacity: .75; }
 .gra-chart-key {

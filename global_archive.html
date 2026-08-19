@@ -92,7 +92,7 @@
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260804b">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260818c">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260819a">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -1153,7 +1153,7 @@
                                 <label class="gra-ir-ctr-tog"><input type="checkbox" id="gra-ir-coast" checked>
                                     coast</label>
                                 <span class="gra-ir-ctr-key"><i class="bt"></i>best track</span>
-                                <span class="gra-ir-ctr-key eye"><i class="eye"></i>eye fix</span>
+                                <span class="gra-ir-ctr-key eye"><i class="eye"></i><span>IR eye fix</span></span>
                             </div>
                           </div>
                           <div class="gra-ir-right">
@@ -1230,6 +1230,17 @@
                             <li><span class="gra-flag">QC</span> flagged for large
                                 trace-vs-best-track disagreement; these sink to the bottom of
                                 the default ordering.</li>
+                            <li><strong>On the frame</strong>, the blue cross is the best-track
+                                position the scene is cut about; the red cross is the
+                                <strong>IR eye fix</strong> &mdash; where the pipeline&rsquo;s
+                                centre-finder placed the eye before computing the frame&rsquo;s
+                                predictors (accepted only within 50&nbsp;km of the track;
+                                otherwise the best-track centre was used). On the lifecycle
+                                chart, hatched spans are stretches the best track calls
+                                extratropical or subtropical, and the <em>recon</em> strip
+                                marks frames with an aircraft pressure fix within
+                                &plusmn;3&nbsp;h (ticks: individual aircraft fixes from the
+                                f-deck).</li>
                             <li><span class="gra-flag unc">?</span> the storm&rsquo;s deepest
                                 frame is also its largest disagreement with the best track, with
                                 no reconnaissance nearby &mdash; a disagreement is not by itself
@@ -1344,6 +1355,6 @@
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
-    <script defer src="global_archive_ghostra.js?v=20260818b"></script>
+    <script defer src="global_archive_ghostra.js?v=20260819a"></script>
 </body>
 </html>

@@ -165,6 +165,15 @@
     var sel = null, selLine = null, presetOn = false;
     var posMarker = null, selLonMid = null;   // frame position marker + track unwrap ref
     var stormCache = {}, irMeta = {}, irFrames = {}, ir = null, tb = null;
+    /* Per-storm sidecars the chart / chip fetch lazily:
+         fdeckCache[sid]  aircraft fix times from the archive's /global/fdeck
+                          (SFMR + flight-level + dropsonde + other AIRC), or
+                          null when the endpoint has nothing (WP/CP/IO have no
+                          f-deck aircraft feed) — a MISS is cached too, so a
+                          storm without recon is asked once, not per frame.
+         eyeCache[sid]    the pipeline's IR-recentred centre per lifecycle
+                          frame (<root>/eye/<sid>.json, ghostra_eye_sidecar.py). */
+    var fdeckCache = {}, eyeCache = {};
     /* basin -> the producer's held-out declaration, or null where the manifest
        says none exists. Kept separate from the data so "no held-out channel
        was published" and "this frame happens to have no held-out value" stay
@@ -1095,6 +1104,7 @@
         ir = { sid: sid, want: tm, idx: null };
         _off = null; zoom = 1; cx = 0; cy = 0;   // new storm, new view
         fillCmapPicker();
+        loadEye(sid);
         loadStorm(sid, function () {
             drawSpark(sid);
             // the per-storm JSON can arrive after the frame list, in which case
@@ -1266,6 +1276,7 @@
         for (i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i);
         tb = { raw: raw, rows: j.tb_rows, cols: j.tb_cols, vmin: j.tb_vmin,
                scale: 254 / (j.tb_vmax - j.tb_vmin), b: j.bounds };
+        applyEye();
         repaint();
     }
 
@@ -1530,9 +1541,38 @@
         }
     }
 
+    /* The eye-fix key carries its own state text: how far the IR centre sits
+       from the best track when it locked, and WHY there is no mark when it did
+       not — a clamped frame (optimum >50 km off track, pipeline fell back to
+       best track) is a different fact from a frame with no eye signal, and
+       both differ from "not computed". */
     function syncCentreKey() {
         var k = document.querySelector('.gra-ir-ctr-key.eye');
-        if (k) k.classList.toggle('on', !!(tb && tb.eye_col != null && tb.eye_row != null));
+        if (!k) return;
+        var on = !!(tb && tb.eye_col != null && tb.eye_row != null);
+        k.classList.toggle('on', on);
+        var lab = k.querySelector('span'), e = tb && tb.eye;
+        if (!lab) return;
+        var E = ir && eyeCache[ir.sid];
+        if (on) {
+            lab.textContent = 'IR eye fix' + (e && e.d != null ? ' · ' + Math.round(e.d) + ' km off track' : '');
+            k.title = 'Where the pipeline’s IR centre-finder placed the eye for this frame ' +
+                '(core-Tb minimisation, accepted within 50 km of the best track). ' +
+                'GHOST’s features were computed about this point.';
+        } else if (e && e.r === 'clamped') {
+            lab.textContent = 'IR eye fix · clamped' + (e.d != null ? ' (' + Math.round(e.d) + ' km)' : '');
+            k.title = 'The centre-finder’s optimum lay more than 50 km from the best track, so the ' +
+                'pipeline fell back to the best-track centre for this frame.';
+        } else if (e) {
+            lab.textContent = 'IR eye fix · no lock';
+            k.title = 'No usable eye signal on this frame — the pipeline used the best-track centre.';
+        } else if (E === false) {
+            lab.textContent = 'IR eye fix · loading';
+            k.title = '';
+        } else {
+            lab.textContent = 'IR eye fix';
+            k.title = 'Not available for this frame.';
+        }
     }
 
     /* Expand/collapse. blit() is re-run because the canvas backing store is
@@ -1611,6 +1651,83 @@
             .then(function (j) { if (j) { stormCache[sid] = j; cb(); } });
     }
 
+    /* Aircraft fix TIMES from the archive's f-deck endpoint — every AIRC-derived
+       fix type, not only the ones carrying a wind: the question the strip
+       answers is "was a plane in the storm", not "what did it measure". NHC
+       basins only; anywhere else the endpoint 404s and the miss is cached so
+       the storm is asked once. The chart re-renders itself when the fetch
+       lands, if that storm is still the one open. */
+    function loadFdeck(sid, st) {
+        if (fdeckCache[sid] !== undefined) return;
+        var atcf = (st && st.atcf) || (byId[sid] && byId[sid].atcf);
+        var b = (atcf || '').slice(0, 2);
+        if (!atcf || (b !== 'AL' && b !== 'EP' && b !== 'CP')) { fdeckCache[sid] = null; return; }
+        fdeckCache[sid] = false;                       // in flight
+        _fetchJSON(API + '/global/fdeck?atcf_id=' + encodeURIComponent(atcf))
+            .then(function (j) {
+                var F = (j && j.fixes) || {}, ts = [];
+                ['SFMR', 'FL_WIND', 'DROPSONDE', 'AIRC_OTHER'].forEach(function (k) {
+                    (F[k] || []).forEach(function (r) {
+                        var ms = Date.parse(String(r.time).replace(' ', 'T') + 'Z');
+                        if (isFinite(ms)) ts.push(ms);
+                    });
+                });
+                ts.sort(function (a, b) { return a - b; });
+                // dedupe: SFMR + FL at the same minute is one aircraft, one time
+                var u = [];
+                for (var i = 0; i < ts.length; i++) if (!u.length || ts[i] - u[u.length - 1] >= 60e3) u.push(ts[i]);
+                fdeckCache[sid] = u.length ? { t: u } : null;
+            })
+            .catch(function () { fdeckCache[sid] = null; })
+            .then(function () { if (ir && ir.sid === sid) drawSpark(sid); });
+    }
+
+    /* The IR-recentred centre the pipeline used, per lifecycle frame. Absent
+       for a storm (older sidecar build, or a frame the finder never saw)
+       means the mark simply does not draw — never "no displacement". */
+    function loadEye(sid) {
+        if (eyeCache[sid] !== undefined) return;
+        eyeCache[sid] = false;
+        getJSON(ROOT + '/eye/' + sid + '.json')
+            .then(function (j) {
+                if (!j || !j.t) { eyeCache[sid] = null; return; }
+                var ms = new Array(j.t.length);
+                for (var i = 0; i < j.t.length; i++) ms[i] = Date.parse(j.t[i] + 'Z');
+                j.ms = ms;
+                eyeCache[sid] = j;
+            })
+            .catch(function () { eyeCache[sid] = null; })
+            .then(function () { if (ir && ir.sid === sid && tb) { applyEye(); syncCentreKey(); blit(); } });
+    }
+
+    /* Resolve the open frame's eye fix into SOURCE pixel coordinates on the
+       chip. The chip is a regular lat/lon box (bounds on the payload) so this
+       is a scale, the same one the coastline uses. Frames are matched to the
+       sidecar by time within the fetch's own ±20 min tolerance. */
+    function applyEye() {
+        if (!tb) return;
+        tb.eye_col = tb.eye_row = null; tb.eye = null;
+        var E = ir && eyeCache[ir.sid];
+        var m = ir && irMeta[ir.sid];
+        if (!E || !E.ms || !m || !m.frames || ir.idx === null) return;
+        var f = m.frames[ir.idx];
+        if (!f) return;
+        var want = Date.parse(f.datetime + 'Z'), bi = -1, bd = 20 * 60e3;
+        for (var i = 0; i < E.ms.length; i++) {
+            var d = Math.abs(E.ms[i] - want);
+            if (d <= bd) { bd = d; bi = i; }
+        }
+        if (bi < 0) return;
+        tb.eye = { f: E.f ? E.f[bi] : 0, d: E.d ? E.d[bi] : null, r: E.r ? E.r[bi] : '',
+                   la: E.la ? E.la[bi] : null, lo: E.lo ? E.lo[bi] : null };
+        if (!tb.eye.f || tb.eye.la == null || tb.eye.lo == null || !tb.b) return;
+        var b = tb.b, mid = (b.west + b.east) / 2, lon = tb.eye.lo;
+        while (lon - mid > 180) lon -= 360;
+        while (mid - lon > 180) lon += 360;
+        tb.eye_col = (lon - b.west) / (b.east - b.west) * tb.cols;
+        tb.eye_row = (b.north - tb.eye.la) / (b.north - b.south) * tb.rows;
+    }
+
     /* Which series a storm carries depends on its channel: the lifecycle trace
        (genesis→decay, 3-hourly) where it exists, the recon board otherwise. */
     function series(st) {
@@ -1670,12 +1787,98 @@
         var S = series(st);
         if (!S.t || S.t.length < 2) { host.innerHTML = ''; return; }
 
-        var W = 352, PL = 34, PR = 6, PT = 12, HP = 84, GAP = 26, HV = 62, PB = 16;
+        /* GAP holds the recon strip (band + ticks) between the panels, so it is
+           wider than a title alone needs. */
+        var W = 352, PL = 34, PR = 6, PT = 12, HP = 84, GAP = 34, HV = 62, PB = 16;
         var H = PT + HP + GAP + HV + PB;
         var t0 = Date.parse(S.t[0] + 'Z'), t1 = Date.parse(S.t[S.t.length - 1] + 'Z');
         var span = (t1 - t0) || 1;
         var X = function (ms) { return PL + (ms - t0) / span * (W - PL - PR); };
         var Xi = function (i) { return X(Date.parse(S.t[i] + 'Z')); };
+        var XL = PL, XR = W - PR;
+        var clampX = function (x) { return Math.max(XL, Math.min(XR, x)); };
+
+        /* ── storm nature (IBTrACS `nature`): TS tropical, ET extratropical,
+           SS subtropical, DS disturbance, MX mixed, NR not reported. Read off
+           the archive's own track — the same object the frame index is cut
+           from — so the bands line up with the frames by construction. Each
+           track point owns the interval to the next point; only non-tropical
+           stretches are drawn. */
+        var NAT_NAME = { ET: 'extratropical', SS: 'subtropical', DS: 'disturbance',
+                         MX: 'mixed', NR: 'nature not reported', TS: 'tropical' };
+        var natSpans = [], natSeen = {};
+        var trk = GA() ? GA().getTrack(sid) : null;
+        if (trk && trk.length) {
+            var cur = null;
+            for (var q = 0; q < trk.length; q++) {
+                var tp = trk[q], nn = (tp.n || 'NR').toUpperCase();
+                var tms = Date.parse(tp.t + 'Z');
+                if (!isFinite(tms)) continue;
+                var tnext = q + 1 < trk.length ? Date.parse(trk[q + 1].t + 'Z') : tms + 3 * 3600e3;
+                if (cur && cur.n === nn) { cur.b = tnext; }
+                else { cur = { n: nn, a: tms, b: tnext }; natSpans.push(cur); }
+            }
+        }
+        function natureAt(ms) {
+            for (var i = 0; i < natSpans.length; i++) {
+                if (ms >= natSpans[i].a && ms < natSpans[i].b) return natSpans[i].n;
+            }
+            return null;
+        }
+        function natBands(y, h) {
+            var out = '';
+            for (var i = 0; i < natSpans.length; i++) {
+                var sp = natSpans[i];
+                if (sp.n === 'TS' || sp.b < t0 || sp.a > t1) continue;
+                var xa = clampX(X(sp.a)), xb = clampX(X(sp.b));
+                if (xb - xa < 0.5) continue;
+                natSeen[sp.n] = true;
+                out += '<rect x="' + xa.toFixed(1) + '" y="' + y + '" width="' + (xb - xa).toFixed(1) +
+                    '" height="' + h + '" class="gc-nat-' + sp.n + '"/>';
+            }
+            return out;
+        }
+
+        /* ── recon: two layers of the same fact.
+             band  = `lr`, the recon-proximate flag on each published frame
+                     (an f-deck aircraft MSLP within ±3 h — the SAME definition
+                     the "Recon-proximate only" filter and the recon stratum
+                     use, so what the chart shades is what the filter keeps).
+             ticks = individual aircraft fix times from the f-deck, fetched
+                     once per storm; drawn on top when they arrive. */
+        var yStrip = PT + HP + 8, hStrip = 6;
+        function reconStrip() {
+            var out = '';
+            var lr = st.lr;
+            if (lr && lr.length === S.t.length) {
+                var half = 1.5 * 3600e3;
+                for (var i = 0; i < lr.length; i++) {
+                    if (!lr[i]) continue;
+                    var ms = Date.parse(S.t[i] + 'Z');
+                    var xa = clampX(X(ms - half)), xb = clampX(X(ms + half));
+                    out += '<rect x="' + xa.toFixed(1) + '" y="' + yStrip + '" width="' +
+                        Math.max(0.6, xb - xa).toFixed(1) + '" height="' + hStrip + '" class="gc-rec-band"/>';
+                }
+            }
+            var fx = fdeckCache[sid];
+            if (fx && fx.t && fx.t.length) {
+                for (var k = 0; k < fx.t.length; k++) {
+                    var x = X(fx.t[k]);
+                    if (x < XL - 0.5 || x > XR + 0.5) continue;
+                    out += '<rect x="' + (x - 0.6).toFixed(1) + '" y="' + (yStrip - 1) +
+                        '" width="1.2" height="' + (hStrip + 2) + '" class="gc-rec-tick"/>';
+                }
+            }
+            if (!out) return '';
+            return '<text x="' + (PL - 4) + '" y="' + (yStrip + hStrip - 0.5) +
+                '" class="gc-rec-lab" text-anchor="end">recon</text>' + out;
+        }
+        function reconCount(ms) {          // aircraft fixes within ±3 h of ms
+            var fx = fdeckCache[sid], n = 0;
+            if (fx && fx.t) for (var i = 0; i < fx.t.length; i++) if (Math.abs(fx.t[i] - ms) <= 3 * 3600e3) n++;
+            return n;
+        }
+        loadFdeck(sid, st);
 
         function rng(arrs, padFrac) {
             var v = [];
@@ -1772,10 +1975,26 @@
         var hoKey = S.ho ? '<b style="color:#f43f5e">- -</b> held out'
                          : '<span class="gra-absent">' + heldoutAbsence(bas) + '</span>';
 
+        // bands are built first so natSeen is populated for the key
+        var bandsP = natBands(PT, HP), bandsV = natBands(yv0, HV);
+        var strip = reconStrip();
+        var natKey = '';
+        ['ET', 'SS', 'DS', 'MX', 'NR'].forEach(function (n) {
+            if (natSeen[n]) natKey += ' &nbsp; <span class="gc-nat-key"><i class="' + n + '"></i>' + NAT_NAME[n] + '</span>';
+        });
+        var fx = fdeckCache[sid];
+        var recKey = strip
+            ? ' &nbsp; <span class="gc-rec-key"><i></i>recon' +
+              (fx && fx.t && fx.t.length ? ' (' + fx.t.length + ' aircraft fixes)' : '') + '</span>'
+            : (fx === undefined ? '' : '');
+
         host.innerHTML =
             '<svg id="gra-chart-svg" viewBox="0 0 ' + W + ' ' + H + '" class="gra-chart">' +
+            '<defs><pattern id="gc-hatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">' +
+            '<line x1="0" y1="0" x2="0" y2="4" class="gc-hatch-l"/></pattern></defs>' +
             '<rect x="' + PL + '" y="' + PT + '" width="' + (W - PL - PR) + '" height="' + HP + '" class="gc-bg"/>' +
             '<rect x="' + PL + '" y="' + yv0 + '" width="' + (W - PL - PR) + '" height="' + HV + '" class="gc-bg"/>' +
+            bandsP + bandsV + strip +
             '<text x="' + PL + '" y="' + (PT - 3) + '" class="gc-t">Minimum pressure (hPa)</text>' +
             '<text x="' + PL + '" y="' + (yv0 - 3) + '" class="gc-t">Maximum wind (kt)</text>' +
             ylab(Yp, rp) + ylab(Yv, rv) + ticks +
@@ -1787,7 +2006,8 @@
             '<line id="gc-hov" class="gc-hov" x1="0" x2="0" y1="' + PT + '" y2="' + (yv0 + HV) + '" style="display:none"/>' +
             '</svg>' +
             '<div class="gra-chart-key"><b style="color:#f43f5e">—</b> GHOST &nbsp; ' +
-            '<b style="color:var(--slate)">—</b> best track &nbsp; ' + hoKey + vdmKey + '</div>' +
+            '<b style="color:var(--slate)">—</b> best track &nbsp; ' + hoKey + vdmKey +
+            natKey + recKey + '</div>' +
             '<div id="gra-chart-read" class="gra-chart-read"></div>';
 
         var svg = $('gra-chart-svg');
@@ -1821,18 +2041,35 @@
         var fmt = function (a, i, dp) {
             return (a && a[i] != null) ? a[i].toFixed(dp) : '—';
         };
-        svg.addEventListener('mousemove', function (ev) {
+        function hoverAt(ev) {
             var ms = msAt(ev), i = nearestIdx(S.t, ms);
             var hv = $('gc-hov'), x = Xi(i).toFixed(1);
             hv.style.display = ''; hv.setAttribute('x1', x); hv.setAttribute('x2', x);
-            var d = new Date(Date.parse(S.t[i] + 'Z'));
+            var tms = Date.parse(S.t[i] + 'Z'), d = new Date(tms);
+            var nat = natureAt(tms);
+            var rc = (st.lr && st.lr[i]) ? true : false, nfx = reconCount(tms);
             $('gra-chart-read').innerHTML =
-                '<b>' + d.toISOString().slice(0, 16).replace('T', ' ') + 'Z</b>' +
+                '<b>' + d.toISOString().slice(0, 16).replace('T', ' ') + 'Z' +
+                (nat && nat !== 'TS' ? ' <span class="gc-nat-key"><i class="' + nat + '"></i>' + NAT_NAME[nat] + '</span>' : '') +
+                (rc || nfx ? ' <span class="gc-rec-key"><i></i>recon' + (nfx ? ' (' + nfx + ' fix' + (nfx > 1 ? 'es' : '') + ' ±3 h)' : '') + '</span>' : '') +
+                '</b>' +
                 '<span><i style="background:#f43f5e"></i>GHOST ' + fmt(S.gp, i, 1) + ' hPa / ' + fmt(S.gv, i, 0) + ' kt</span>' +
                 '<span><i style="background:var(--slate)"></i>BT ' + fmt(S.bp, i, 0) + ' hPa / ' + fmt(S.bv, i, 0) + ' kt</span>' +
                 (S.ho ? '<span class="gra-ho">HO ' + fmt(S.ho, i, 1) + ' hPa</span>' : '') +
-                vdmAt(st, Date.parse(S.t[i] + 'Z'));
-        });
+                vdmAt(st, tms);
+        }
+        svg.addEventListener('mousemove', hoverAt);
+        /* Touch: a finger dragged across the chart scrubs the readout the way
+           the pointer does; lifting it leaves the last value showing (there is
+           no "leave" on a phone). Tap still snaps a frame via the click path. */
+        svg.addEventListener('touchmove', function (ev) {
+            if (!ev.touches || !ev.touches.length) return;
+            hoverAt(ev.touches[0]);
+            ev.preventDefault();
+        }, { passive: false });
+        svg.addEventListener('touchstart', function (ev) {
+            if (ev.touches && ev.touches.length) hoverAt(ev.touches[0]);
+        }, { passive: true });
         /* Only within +-3 h: the same window the recon flag uses, so what the
            readout calls an aircraft fix is the same thing the recon stratum
            counts. A looser window would quietly attribute a distant fix to a
