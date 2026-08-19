@@ -70,9 +70,9 @@
             prefix: 'ghostb-rt',
             arch: 'ghostb-rt/archive2026',
             file: 'blend_',
-            name: 'GHOST blend',
+            name: 'GHOST',
             color: '#10b981',
-            title: 'GHOST (paper model) \u2014 blended Pmin, tree Vmax',
+            title: 'GHOST \u2014 Real-Time Intensity Estimates',
             headline: 'pmin_hpa',
             windIsDerived: false,
             saturates: true,
@@ -91,9 +91,9 @@
             prefix: 'ghost-rt',
             arch: 'ghost-rt/archive2026',
             file: 'ghost_',
-            name: 'GHOST',
+            name: 'GHOST tree member',
             color: '#f43f5e',
-            title: 'GHOST — ML Structure Diagnostics',
+            title: 'GHOST tree member — ML Structure Diagnostics',
             headline: 'vmax_kt',
             windIsDerived: false,
             /* Vmax saturates near 150-160 kt (isotonic cap + Cat-5 handoff ramp).
@@ -696,10 +696,11 @@
         'environmental pressure deficit (FPM) and the boosted-tree stack with ' +
         'its deep-eye tier (the GHOST tree member) &mdash; and maximum wind is ' +
         'the tree&rsquo;s direct wind head with its high-end corrections. ' +
-        'Held out by season on the 28-year Atlantic archive the mean is ' +
-        'better than either member pooled (6.5 vs 7.1 / 7.6 hPa RMSE) and ' +
-        'ties the deployed stack below 920 hPa; where the tree abstains its ' +
-        'last value is carried for six hours and the frame is flagged.</div>' +
+        'Held out by season over the Atlantic and East / Central Pacific ' +
+        'archive, the mean is better than either member on aircraft-verified ' +
+        'frames (7.0 vs 7.4 / 8.0 hPa RMSE) and over all frames (7.1 vs 7.8 / ' +
+        '8.5); where the tree abstains its last value is carried for six ' +
+        'hours and the frame is flagged.</div>' +
         '<div class="exp-cite"><strong>Provisional real-time approximation ' +
         'of a method under peer review.</strong> The FPM member running here ' +
         'is the frozen real-time version of that model; the manuscript&rsquo;s ' +
@@ -722,21 +723,47 @@
         'limits carried from the paper: compact late-season storms and freshly ' +
         'formed eyes are over-read by both members; rapid weakening under a ' +
         'persistent cold canopy is seen late.</div>';
+    /* Numbers from TC-SWARM realtime/verif_site_table.py over the held-out
+       (leave-one-year-out) AL/EP/CP series of GHOST as published -- the same
+       board GHOST-RA v4 was gated on (payload built 2026-08-18). "Aircraft-
+       verified" = the best-track value at that time is anchored by an
+       aircraft fix in the ATCF f-deck. Pooled over frames. Regenerate the
+       table from the script; do not hand-edit numbers here. */
     var BLEND_VERIF_HTML =
-        '<div class="exp-verif-h">GHOST blend verification' +
-        '<span class="exp-verif-src">symmetric held-out board, 20,508 shared ' +
-        'Atlantic frames / 447 storms, both members leave-one-year-out ' +
-        '(2026-08-17). Pooled over frames.</span></div>' +
+        '<div class="exp-verif-h">GHOST verification' +
+        '<span class="exp-verif-src">held out by season (leave-one-year-out) ' +
+        'over the Atlantic and East / Central Pacific archive, 1998&ndash;2025: ' +
+        '34,055 frames / 533 storms. &ldquo;Aircraft-verified&rdquo; = the ' +
+        'best-track value at that time is anchored by an aircraft fix ' +
+        '(6,570 frames / 328 storms; 23% of Atlantic frames, 5% of East / ' +
+        'Central Pacific frames). Pooled over frames; RMSE / bias.</span></div>' +
         '<div class="exp-verif-t"><table><caption>Minimum pressure &mdash; RMSE / bias (hPa)</caption>' +
-        '<tr><th>cut</th><th>FPM member</th><th>tree member</th><th>GHOST (mean)</th></tr>' +
-        '<tr><td>all frames</td><td>7.1 / \u22120.9</td><td>7.6 / \u22120.1</td><td><strong>6.5 / \u22120.4</strong></td></tr>' +
-        '<tr><td>&le;940 hPa</td><td>10.4 / +2.4</td><td>10.3 / +0.4</td><td><strong>9.1 / +1.4</strong></td></tr>' +
-        '<tr><td>&le;920 hPa</td><td>12.4 / +7.5</td><td>10.8 / +4.5</td><td><strong>10.8 / +6.0</strong></td></tr>' +
-        '<tr><td>aircraft-verified frames</td><td>7.4 / +0.8</td><td>7.9 / +0.8</td><td><strong>6.9 / +0.8</strong></td></tr>' +
+        '<tr><th>cut</th><th>frames / storms</th><th>GHOST</th><th>FPM member</th><th>tree member</th></tr>' +
+        '<tr class="me"><td>aircraft-verified, all basins</td><td>6,570 / 328</td><td><strong>7.0 / +0.7</strong></td><td>7.4 / +0.8</td><td>8.0 / +0.5</td></tr>' +
+        '<tr><td>&nbsp;&nbsp;&mdash; Atlantic</td><td>6,235 / 292</td><td><strong>7.0 / +0.8</strong></td><td>7.4 / +0.8</td><td>7.9 / +0.8</td></tr>' +
+        '<tr><td>&nbsp;&nbsp;&mdash; East / Central Pacific</td><td>335 / 36</td><td><strong>7.6 / −2.2</strong></td><td>7.9 / −0.6</td><td>10.5 / −3.9</td></tr>' +
+        '<tr><td>aircraft-verified, &le;940 hPa</td><td>528 / 55</td><td><strong>9.2 / +0.4</strong></td><td>10.2 / +1.2</td><td>10.9 / −0.2</td></tr>' +
+        '<tr><td>aircraft-verified, &le;920 hPa</td><td>126 / 17</td><td><strong>10.9 / +6.4</strong></td><td>12.3 / +7.5</td><td>11.6 / +5.4</td></tr>' +
+        '<tr><td>all frames, all basins</td><td>34,055 / 533</td><td><strong>7.1 / −1.0</strong></td><td>7.8 / −1.1</td><td>8.5 / −1.0</td></tr>' +
         '</table></div>' +
-        '<div class="exp-verif-n">The deep-tail gain is over the FPM member; against the ' +
-        'deployed tree stack the mean ties on RMSE below 920 hPa and sits between the ' +
-        'members on bias. Full record: TC-SWARM docs/FINAL_MODEL_DECISION_2026-08-17.md.</div>';
+        '<div class="exp-verif-t"><table><caption>Maximum wind &mdash; RMSE / bias (kt); GHOST wind is the tree member&rsquo;s</caption>' +
+        '<tr><th>cut</th><th>frames / storms</th><th>GHOST</th></tr>' +
+        '<tr class="me"><td>aircraft-verified, all basins</td><td>6,570 / 328</td><td><strong>10.3 / −0.3</strong></td></tr>' +
+        '<tr><td>&nbsp;&nbsp;&mdash; Atlantic</td><td>6,235 / 292</td><td>10.2 / −0.5</td></tr>' +
+        '<tr><td>&nbsp;&nbsp;&mdash; East / Central Pacific</td><td>335 / 36</td><td>11.4 / +3.2</td></tr>' +
+        '<tr><td>aircraft-verified, &le;940 hPa</td><td>528 / 55</td><td>10.8 / +1.7</td></tr>' +
+        '<tr><td>all frames, all basins</td><td>34,055 / 533</td><td>11.4 / +4.5</td></tr>' +
+        '</table></div>' +
+        '<div class="exp-verif-n">The Central Pacific contributes one aircraft-sampled ' +
+        'storm; it is pooled with the East Pacific rather than shown alone. Below ' +
+        '920 hPa every channel reads too shallow (positive bias) &mdash; the ' +
+        'strongest storms are under-read. Reference: on the 2,661 aircraft-verified ' +
+        'frames where CIMSS SATCON also has an estimate, GHOST is 7.4 / +1.0 hPa ' +
+        'against SATCON&rsquo;s 6.6 / −0.0, and 10.4 / −0.9 kt against ' +
+        '9.1 / −2.2 (2,137 wind pairs); SATCON uses microwave sounders as ' +
+        'well as infrared, so it is a ceiling for an infrared-only method rather ' +
+        'than a peer. All-frame rows include times whose best track is itself ' +
+        'satellite-based, so the aircraft-verified rows are the decisive ones.</div>';
     PROFILES.blend.verif = BLEND_VERIF_HTML;
     PROFILES.blend.lede = BLEND_LEDE;
     PROFILES.blend.note = BLEND_NOTE;
@@ -1621,13 +1648,21 @@
         var la = Math.min.apply(null, lats), lb = Math.max.apply(null, lats);
 
         box.innerHTML =
-            '<div class="exp-shap-head">' + M.name + ' center track' +
-            '<span class="exp-shap-sub">full lifetime, colored by ' + M.name + ' ' +
+            '<div class="exp-plan-head">' +
+            '<span class="exp-shap-head" style="margin:0">' + M.name + ' center track</span>' +
+            '<button class="exp-range exp-dl" id="exp-track-dl" ' +
+            'title="Download track map as PNG" ' +
+            'aria-label="Download track map as PNG">&#x2913; Download</button>' +
+            '</div>' +
+            '<div class="exp-shap-head" style="font-weight:400">' +
+            '<span class="exp-shap-sub" style="margin-top:0">full lifetime, colored by ' + M.name + ' ' +
             'intensity. Open circles = no IR eye lock; the center there comes ' +
             'from the interpolated ' + (j.agency || 'NHC') +
             ' track instead.</span></div>' +
             '<div id="exp-track-map"></div>' +
             '<div class="exp-track-leg" id="exp-track-leg"></div>';
+        var tDl = document.getElementById('exp-track-dl');
+        if (tDl) tDl.addEventListener('click', function () { saveTrackPng(tDl, j); });
         var leg = document.getElementById('exp-track-leg');
         if (leg) {
             var legHtml = '';
@@ -1688,6 +1723,118 @@
             }
         }, { displayModeBar: false, responsive: true })
           .then(function () { Plotly.Plots.resize('exp-track-map'); });
+    }
+
+    /* Track map -> PNG with the site footer (logo + URL + disclaimer).
+       Geo figures cannot go through Plotly's PNG rasterizer on Safari (the
+       complex basemap SVG comes back BLANK -- see the genesis composite in
+       realtime_ir.js, _panelExportURL), so this exports SVG, base64-encodes
+       it and draws it onto a canvas at 2x, then hands the blob to TCExport
+       (the ONE save path). The logo is embedded as a data URI: an <image>
+       with a relative href inside an SVG-as-image does not resolve. */
+    var _logoDataUrl = null;
+    function logoDataUrl() {
+        if (_logoDataUrl) return Promise.resolve(_logoDataUrl);
+        return fetch('tc-atlas-favicon-96.png').then(function (r) { return r.blob(); })
+            .then(function (b) {
+                return new Promise(function (res, rej) {
+                    var fr = new FileReader();
+                    fr.onload = function () { _logoDataUrl = fr.result; res(_logoDataUrl); };
+                    fr.onerror = rej;
+                    fr.readAsDataURL(b);
+                });
+            })
+            .catch(function () { return null; });
+    }
+    function saveTrackPng(btn, j) {
+        var gd = document.getElementById('exp-track-map');
+        if (!gd || !gd.data || typeof Plotly === 'undefined' || !window.TCExport || !_storm) return;
+        track(M.key + '_track_download', { storm: _storm });
+        if (btn) btn.disabled = true;
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var bg = dark ? '#0d1117' : '#ffffff';
+        var fg = dark ? '#e2e8f0' : '#0f172a';
+        var fg2 = dark ? '#94a3b8' : '#475569';
+        var fr = j.frames || [];
+        var last = fr.length ? fr[fr.length - 1] : null;
+        var stamp = last ? last.t.slice(0, 16).replace(/[:T-]/g, '') : '';
+        var name = (j.name ? j.name + ' (' + j.storm + ')' : j.storm);
+        var W = 1200, TOP = 78, BOT = 118;
+        var mapH = Math.round(W * (gd.clientHeight || 400) / Math.max(1, gd.clientWidth || 800));
+        mapH = Math.max(320, Math.min(720, mapH));
+        var H = TOP + mapH + BOT;
+        var lay = JSON.parse(JSON.stringify(gd.layout || {}));
+        lay.width = W; lay.height = H;
+        lay.margin = { l: 8, r: 8, t: TOP, b: BOT };
+        lay.paper_bgcolor = bg;
+        if (lay.geo) lay.geo.bgcolor = bg;
+        var catLeg = ['TD', 'TS', 'C1', 'C2', 'C3', 'C4', 'C5'].map(function (k) {
+            return '<span style="color:' + SS_COLORS[k] + '">&#9679;</span> ' + categoryShort(k);
+        }).join('&nbsp;&nbsp;') + '&nbsp;&nbsp;&#9675; track-based center';
+        var lastTxt = last && last.vmax_kt != null
+            ? ' &#183; latest ' + last.t.slice(0, 16).replace('T', ' ') + 'Z: ' +
+              Math.round(last.vmax_kt) + ' kt' +
+              (last.pmin_hpa != null ? ' / ' + Math.round(last.pmin_hpa) + ' hPa' : '')
+            : '';
+        lay.annotations = [
+            { xref: 'paper', yref: 'paper', x: 0, y: 1, xanchor: 'left', yanchor: 'bottom',
+              yshift: 40, showarrow: false, align: 'left',
+              text: '<b>' + M.name + ' center track &#8212; ' + name + '</b>',
+              font: { size: 18, color: fg } },
+            { xref: 'paper', yref: 'paper', x: 0, y: 1, xanchor: 'left', yanchor: 'bottom',
+              yshift: 18, showarrow: false, align: 'left',
+              text: 'full lifetime, colored by ' + M.name + ' intensity; filled = IR eye-lock, ' +
+                    'open = interpolated ' + (j.agency || 'NHC') + ' track' + lastTxt,
+              font: { size: 12, color: fg2 } },
+            { xref: 'paper', yref: 'paper', x: 0, y: 0, xanchor: 'left', yanchor: 'top',
+              yshift: -14, showarrow: false, align: 'left',
+              text: catLeg, font: { size: 12, color: fg2 } },
+            { xref: 'paper', yref: 'paper', x: 0.055, y: 0, xanchor: 'left', yanchor: 'top',
+              yshift: -44, showarrow: false, align: 'left',
+              text: '<b>TC-ATLAS</b> &#183; tcatlas.org', font: { size: 13, color: fg2 } },
+            { xref: 'paper', yref: 'paper', x: 0.055, y: 0, xanchor: 'left', yanchor: 'top',
+              yshift: -66, showarrow: false, align: 'left',
+              text: '<b style="color:#F47321">EXPERIMENTAL</b> &#183; ' + M.name + ' is a ' +
+                    'research method (manuscript under review) &#8212; <b>not an official ' +
+                    'forecast or analysis</b>. Contact the author before citing or redistributing.',
+              font: { size: 10.5, color: fg2 } }
+        ];
+        var fname = 'TC-ATLAS_' + M.name.replace(/\s+/g, '-') + '_track_' + _storm + '_' + stamp + '.png';
+        logoDataUrl().then(function (logo) {
+            if (logo) {
+                /* Layout images take no pixel shift: paper units, where one
+                   unit is the plot area (W wide, mapH tall). 26-px logo whose
+                   top sits 40 px below the plot area, level with the URL. */
+                var px = 26;
+                lay.images = [{ source: logo, xref: 'paper', yref: 'paper',
+                                x: 0.008, y: -40 / mapH, sizex: px / W, sizey: px / mapH,
+                                sizing: 'contain', xanchor: 'left', yanchor: 'top',
+                                layer: 'above' }];
+            }
+            return Plotly.toImage({ data: gd.data, layout: lay }, { format: 'svg', width: W, height: H });
+        }).then(function (url) {
+            var svg = url.indexOf(';base64,') !== -1
+                ? atob(url.slice(url.indexOf(',') + 1))
+                : decodeURIComponent(url.slice(url.indexOf(',') + 1));
+            var b64 = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
+            return new Promise(function (res, rej) {
+                var im = new Image();
+                im.onload = function () {
+                    var sc = 2, c = document.createElement('canvas');
+                    c.width = W * sc; c.height = H * sc;
+                    var ctx = c.getContext('2d');
+                    ctx.fillStyle = bg; ctx.fillRect(0, 0, c.width, c.height);
+                    ctx.drawImage(im, 0, 0, c.width, c.height);
+                    c.toBlob(function (blob) { blob ? res(blob) : rej(new Error('toBlob')); }, 'image/png');
+                };
+                im.onerror = function () { rej(new Error('svg decode')); };
+                im.src = b64;
+            });
+        }).then(function (blob) {
+            return TCExport.save(blob, fname);
+        }).catch(function (e) {
+            if (window.console) console.warn('track map save failed', e);
+        }).then(function () { if (btn) btn.disabled = false; });
     }
 
     /* Plain-language glosses for the SHAP feature names. CONCEPTUAL ONLY —
