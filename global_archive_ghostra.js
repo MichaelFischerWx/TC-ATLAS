@@ -71,8 +71,14 @@
     /* Never hand an error page to JSON.parse. A missing object on the CDN comes
        back as HTML, and the resulting "Unexpected token '<'" tells the reader
        nothing about what actually went wrong. */
-    function _fetchJSON(url) {
-        return fetch(url, { cache: 'no-store' }).then(function (r) {
+    /* Default to the browser's normal HTTP cache. Everything under the versioned
+       tree, the eye sidecars, the frame list and the f-deck all carry an origin
+       max-age (300 s .. 86400 s) — re-pulling them with `no-store` on every tab
+       open threw that away and made each open a fresh CDN / Cloud Run round
+       trip. Only versions.json — the one object whose CHANGE is the point — is
+       fetched no-store, so a republish or rollback is seen immediately. */
+    function _fetchJSON(url, noStore) {
+        return fetch(url, noStore ? { cache: 'no-store' } : {}).then(function (r) {
             if (!r.ok) throw new Error('HTTP ' + r.status + ' — ' + url);
             return r.text().then(function (t) {
                 try {
@@ -87,10 +93,10 @@
 
     /* Try the CDN, fall back to GCS for the same object. Only when reading the
        published tree — a local dev path has nowhere to fall back to. */
-    function getJSON(url) {
-        return _fetchJSON(url).catch(function (e) {
+    function getJSON(url, noStore) {
+        return _fetchJSON(url, noStore).catch(function (e) {
             if (ROOT !== CDN_ROOT || url.indexOf(CDN_ROOT) !== 0) throw e;
-            return _fetchJSON(GCS_ROOT + url.slice(CDN_ROOT.length));
+            return _fetchJSON(GCS_ROOT + url.slice(CDN_ROOT.length), noStore);
         });
     }
 
@@ -211,7 +217,7 @@
             version = pinned;
             return Promise.resolve();
         }
-        return getJSON(ROOT + '/versions.json').then(function (j) {
+        return getJSON(ROOT + '/versions.json', true).then(function (j) {
             versionList = (j.versions || []).slice();
             var have = {};
             versionList.forEach(function (v) { have[v.version] = 1; });

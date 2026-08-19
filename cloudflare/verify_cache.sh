@@ -103,6 +103,21 @@ for feed in ghost-rt fpm-rt; do
   fi
 done
 
+# Global Archive: IR frames (immutable, mirrored to R2) + the GHOST Reanalysis
+# tree and its eye sidecars (2026-08-19). Wilma 2005 is a fixed, always-present
+# probe: frame 30 is its peak, and its storm/eye objects exist in every
+# published version so far.
+assert_cacheable "v7/ir frame"        "$CDN/v7/ir/2005289N18282/30.json"
+assert_cacheable "ghost-ra/versions"  "$CDN/ghost-ra/versions.json"
+GRA_V=$(curl -s --compressed "$CDN/ghost-ra/versions.json" | jq -r '.default // empty' 2>/dev/null)
+if [ -n "$GRA_V" ]; then
+  assert_cacheable "ghost-ra/$GRA_V/storm" "$CDN/ghost-ra/$GRA_V/storm/2005289N18282.json"
+else
+  echo "SKIP  cacheable  ghost-ra storm payload (versions.json unreadable)"
+fi
+assert_cacheable "ghost-ra/eye"       "$CDN/ghost-ra/eye/2005289N18282.json"
+assert_cacheable "global/fdeck"       "$HOST/global/fdeck?atcf_id=AL252005"
+
 echo "== should BYPASS =="
 assert_bypassed "genesis-near"   "$HOST/ir-monitor/weatherlab-genesis-near?lat=15&lon=-50"
 assert_bypassed "genesis-cycles" "$HOST/ir-monitor/weatherlab-genesis-cycles"

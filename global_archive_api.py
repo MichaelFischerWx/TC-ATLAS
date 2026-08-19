@@ -1881,6 +1881,14 @@ def _load_gridsat_subset_inner(target_dt, center_lat, center_lon, requests_mod, 
 
 # ── Unified IR Endpoints ──────────────────────────────────────
 
+# The "unavailable" replies below carry no origin max-age. Now that
+# /global/ir/meta is in the Cloudflare respect-origin CACHE rule, a reply
+# with NO Cache-Control would fall to CF's status-code default TTL (2 h for
+# a 200) — a transient "not found on NCEI" would then be served to every
+# viewer of that storm for two hours. Say no-store explicitly.
+_NO_STORE = {"Cache-Control": "no-store"}
+
+
 @router.get("/ir/meta")
 def ir_meta(
     sid: str = Query(..., description="IBTrACS storm ID"),
@@ -1923,13 +1931,13 @@ def ir_meta(
                 "sid": sid, "available": False, "source": "mergir",
                 "reason": "MergIR requires Earthdata credentials (not configured)",
             }
-            return JSONResponse(result)
+            return JSONResponse(result, headers=_NO_STORE)  # unavailable: never edge-cache
     else:
         result = {
             "sid": sid, "available": False,
             "reason": f"No IR data available for year {year}",
         }
-        return JSONResponse(result)
+        return JSONResponse(result, headers=_NO_STORE)  # unavailable: never edge-cache
 
     # Handle HURSAT path
     if source == "hursat":
@@ -1939,7 +1947,7 @@ def ir_meta(
                 "sid": sid, "available": False, "source": "hursat",
                 "reason": "HURSAT data not found on NCEI",
             }
-            return JSONResponse(result)
+            return JSONResponse(result, headers=_NO_STORE)  # unavailable: never edge-cache
 
         frame_list = [
             {
@@ -1990,7 +1998,7 @@ def ir_meta(
                 "sid": sid, "available": False, "source": "gridsat",
                 "reason": "Track data required for GridSat (pass track parameter)",
             }
-            return JSONResponse(result)
+            return JSONResponse(result, headers=_NO_STORE)  # unavailable: never edge-cache
 
         gridsat_frames = _build_mergir_frame_list(track_points)
         if not gridsat_frames:
@@ -1998,7 +2006,7 @@ def ir_meta(
                 "sid": sid, "available": False, "source": "gridsat",
                 "reason": "No valid track times for GridSat",
             }
-            return JSONResponse(result)
+            return JSONResponse(result, headers=_NO_STORE)  # unavailable: never edge-cache
 
         frame_list = [
             {
@@ -2056,7 +2064,7 @@ def ir_meta(
                 "sid": sid, "available": False, "source": "mergir",
                 "reason": "Track data required for MergIR (pass track parameter)",
             }
-            return JSONResponse(result)
+            return JSONResponse(result, headers=_NO_STORE)  # unavailable: never edge-cache
 
         # Build MergIR frame list from track
         mergir_frames = _build_mergir_frame_list(track_points)
@@ -2065,7 +2073,7 @@ def ir_meta(
                 "sid": sid, "available": False, "source": "mergir",
                 "reason": "No valid track times for MergIR",
             }
-            return JSONResponse(result)
+            return JSONResponse(result, headers=_NO_STORE)  # unavailable: never edge-cache
 
         frame_list = [
             {
