@@ -1919,8 +1919,8 @@ function selectStorm(storm) {
     document.getElementById('card-ace').textContent = (storm.ace || 0).toFixed(1);
 
     var hursatEl = document.getElementById('card-hursat');
-    if (storm.hursat) {
-        hursatEl.innerHTML = '<span style="color:#34d399;">Available (1978–2015)</span>';
+    if (stormHasIR(storm)) {
+        hursatEl.innerHTML = '<span style="color:#34d399;">Available</span>';
     } else {
         hursatEl.innerHTML = '<span style="color:#6b7280;">Not available</span>';
     }
@@ -1957,8 +1957,11 @@ function selectStorm(storm) {
     // back to HURSAT and caches that result, poisoning all subsequent requests
     // for this SID (including frame requests).  Skip prefetch if tracks aren't
     // loaded yet — the detail view will fetch properly when opened.
-    var hasIR = storm.hursat || storm.year >= 1998;
-    var needsTrack = storm.year >= 2000;  // MergIR/GridSat need track positions
+    var hasIR = stormHasIR(storm);
+    // GridSat starts in 1980 and, like MergIR, needs track positions to build
+    // the frame list.  Prefetching without a track makes the server return an
+    // uncached HURSAT fallback that we would then pin in irMetaPrefetchCache.
+    var needsTrack = storm.year >= 1980;
     var track = allTracks[storm.sid] || [];
     if (hasIR && !irMetaPrefetchCache[storm.sid] && (!needsTrack || track.length > 0)) {
         var trackP = track.length > 0 ? '&track=' + encodeURIComponent(JSON.stringify(track)) : '';
@@ -2315,14 +2318,14 @@ function renderStormDetail(storm) {
 
     // IR overlay — show toggle for storms with IR data (HURSAT 1978-2015, MergIR 1998+)
     var irToggleWrap = document.getElementById('ir-toggle-wrap');
-    var hasIR = storm.hursat || storm.year >= 1998;
+    var hasIR = stormHasIR(storm);
     if (hasIR) {
         irToggleWrap.style.display = '';
         document.getElementById('ir-status').textContent = 'Loading...';
         loadHURSAT(storm);
     } else {
         irToggleWrap.style.display = 'none';
-        document.getElementById('ir-map-controls').style.display = 'none';
+        setIRControlsVisible(false);
         var irCbar4 = document.getElementById('ir-colorbar-strip');
         if (irCbar4) irCbar4.style.display = 'none';
         stopIRPlayback();
@@ -4246,6 +4249,27 @@ function renderDetailMap(track, storm) {
 //  HURSAT IR ANIMATION
 // ══════════════════════════════════════════════════════════════
 
+// Backend IR coverage floors (see global_archive_api.py): HURSAT-B1 1978-2015,
+// GridSat-B1 1980-2024, MergIR 1998-present.  The `hursat` flag in
+// ibtracs_storms.json was never populated (it is false for every storm), so the
+// year floor is what actually decides whether satellite imagery exists.  This
+// gate used to read `storm.year >= 1998` (the MergIR floor), which silently hid
+// IR for every pre-1998 storm even though the API serves GridSat/HURSAT frames.
+var IR_MIN_YEAR = 1978;
+function stormHasIR(storm) {
+    return !!(storm && (storm.hursat || storm.year >= IR_MIN_YEAR));
+}
+
+// `.ir-bar` and `.ir-map-controls` both carry `display: block !important`, which
+// outranks an inline `display:none` — hiding the playback bar has to go through
+// a class.  Without this a storm with no IR still shows a dead Play/slider bar.
+function setIRControlsVisible(show) {
+    var el = document.getElementById('ir-map-controls');
+    if (!el) return;
+    el.classList.toggle('ir-hidden', !show);
+    el.style.display = show ? '' : 'none';
+}
+
 function loadHURSAT(storm) {
     _ga('ga_load_ir_imagery', { sid: storm.sid, storm_name: storm.name, year: storm.year });
     irFrames = [];
@@ -4321,8 +4345,7 @@ function loadHURSAT(storm) {
             trackAnnotationMarkers.forEach(function (m) { if (detailMap) detailMap.removeLayer(m); });
             var toggleBtn = document.getElementById('ir-toggle-btn');
             toggleBtn.classList.add('active');
-            var irCtrl = document.getElementById('ir-map-controls');
-            irCtrl.style.display = '';
+            setIRControlsVisible(true);
             var irCbar = document.getElementById('ir-colorbar-strip');
             if (irCbar) irCbar.style.display = 'flex';
             if (detailMap) setTimeout(function () { detailMap.invalidateSize(); }, 50);
@@ -4423,11 +4446,10 @@ window.toggleIROverlay = function () {
     irOverlayVisible = !irOverlayVisible;
 
     var toggleBtn = document.getElementById('ir-toggle-btn');
-    var controls = document.getElementById('ir-map-controls');
 
     if (irOverlayVisible) {
         toggleBtn.classList.add('active');
-        controls.style.display = '';
+        setIRControlsVisible(true);
         var irCbar2 = document.getElementById('ir-colorbar-strip');
         if (irCbar2) irCbar2.style.display = 'flex';
         if (detailMap) setTimeout(function () { detailMap.invalidateSize(); }, 50);
@@ -4449,7 +4471,7 @@ window.toggleIROverlay = function () {
         }
     } else {
         toggleBtn.classList.remove('active');
-        controls.style.display = 'none';
+        setIRControlsVisible(false);
         var irCbar3 = document.getElementById('ir-colorbar-strip');
         if (irCbar3) irCbar3.style.display = 'none';
         if (detailMap) setTimeout(function () { detailMap.invalidateSize(); }, 50);

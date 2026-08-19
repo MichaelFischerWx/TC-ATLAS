@@ -895,6 +895,15 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 
 /* ── IR Compact Playback Bar (below map) ─────────────────── */
+/* Both .ir-bar and the legacy .ir-map-controls rule below force
+   `display: block !important`, which beats the inline display:none the JS
+   writes.  Hiding the bar therefore goes through .ir-hidden (see
+   setIRControlsVisible in global_archive.js). */
+#ir-map-controls.ir-hidden,
+.ir-map-controls.ir-hidden,
+.ir-bar.ir-hidden {
+    display: none !important;
+}
 .ir-bar {
     position: relative !important;
     bottom: auto !important;
