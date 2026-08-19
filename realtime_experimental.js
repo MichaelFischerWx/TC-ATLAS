@@ -1,18 +1,24 @@
 /* realtime_experimental.js — RT Monitor "Experimental" tabs.
  *
- * ONE module, TWO model profiles — same panels, same JSON contract, different
- * producer:
+ * ONE module, THREE model profiles — same panels, same JSON contract,
+ * different producer:
  *
- *   #experimental     GHOST Stage-0/1 ML diagnostics (recon-independent
- *                     Vmax/Pmin/RMW from geostationary IR + SHIPS
- *                     environment), TC-SWARM realtime/ghost_rt -> ghost-rt/.
- *   #experimental_v2  FPM v1.0, the first-principles Pmin model (a different
- *                     architecture on the same IR frames: ridge on physical
- *                     predictors under a memory kernel, not a boosted-tree
- *                     stack). TC-SWARM realtime/fpm_rt -> fpm-rt/. Unlisted
- *                     link — no tab button.
+ *   #experimental       GHOST as the paper describes it (listed tab since
+ *                       2026-08-18): Pmin = equal mean of the FPM and tree
+ *                       members, Vmax = the tree's direct head. TC-SWARM
+ *                       realtime/blend_rt_all -> ghostb-rt/. #experimental_v2
+ *                       is an alias (the hash it was unlisted under).
+ *   #experimental_tree  the GHOST tree member alone: Stage-0/1 boosted-tree
+ *                       stack (recon-independent Vmax/Pmin/RMW from
+ *                       geostationary IR + SHIPS environment), TC-SWARM
+ *                       realtime/ghost_rt -> ghost-rt/. Was the listed tab
+ *                       until 2026-08-18; unlisted now — no tab button.
+ *   #experimental_fpm   the FPM v1.0 member alone: the first-principles
+ *                       Pmin model (ridge on physical predictors under a
+ *                       memory kernel). TC-SWARM realtime/fpm_rt -> fpm-rt/.
+ *                       Unlisted.
  *
- * Both publish to gs://tc-atlas-ir-cache/ and mirror to Cloudflare R2; read
+ * All publish to gs://tc-atlas-ir-cache/ and mirror to Cloudflare R2; read
  * here from https://cdn.tcatlas.org/ (free egress, edge-cached) with GCS as
  * the fallback. Research guidance, NOT an official forecast or analysis.
  *
@@ -106,7 +112,7 @@
                opened side by side, so the traces must not read as the same
                model at a glance. */
             color: '#6366f1',
-            title: 'FPM v1.0 — First-Principles Pressure Model',
+            title: 'FPM — First-Principles Pressure Model',
             headline: 'pmin_hpa',
             windIsDerived: true,
             saturates: false,
@@ -118,7 +124,7 @@
                with a `caveat` string in the payload. */
             provisional: {
                 WP: 'West Pacific estimates are <strong>provisional</strong>. ' +
-                    'FPM v1.0 was frozen on Atlantic and East/Central Pacific ' +
+                    'FPM was frozen on Atlantic and East/Central Pacific ' +
                     'boards only — this basin has no held-out board, no ' +
                     'aircraft-anchored verification of any kind, and its ' +
                     'training frames are mid-rebuild following an imagery ' +
@@ -135,7 +141,7 @@
                       comp: true }
         }
     };
-    var M = PROFILES.ghost;      // active profile; set by activate()
+    var M = PROFILES.blend;      // active profile; set by activate()
     var MODEL_COL = M.color;
     var PREFIX = M.prefix;
     var ARCH_PREFIX = M.arch;
@@ -326,7 +332,7 @@
         return get(CDN_BASE).catch(function () { return get(GCS_BASE); });
     }
 
-    /* Verification numbers are quoted from the manuscript (Fischer, in prep).
+    /* Verification numbers are quoted from the manuscript (Fischer, under review).
        Held-out means the season's storms were withheld from training in every
        basin. Do NOT edit these by hand without checking the source.
        EXCEPTION: the "error by storm strength" table is NOT from the paper —
@@ -335,7 +341,7 @@
        run 2026-07-26) and is labeled as such in the UI. */
     var GHOST_VERIF_HTML =
         '<div class="exp-verif-h">Preliminary verification' +
-        '<span class="exp-verif-src">from the manuscript in preparation. ' +
+        '<span class="exp-verif-src">from the manuscript under review. ' +
         '&ldquo;Held out&rdquo; = the season\'s storms were withheld from ' +
         'training. Per-storm-mean unless noted.</span></div>' +
 
@@ -450,8 +456,8 @@
            same way would be the single most misleading thing this table
            could do. */
     var FPM_VERIF_HTML =
-        '<div class="exp-verif-h">FPM v1.0 verification' +
-        '<span class="exp-verif-src">from the frozen v1.0 boards ' +
+        '<div class="exp-verif-h">FPM verification' +
+        '<span class="exp-verif-src">from the frozen real-time boards ' +
         '(cut 2026-08-15). Pooled over frames, not per-storm means &mdash; ' +
         'these are not comparable to the GHOST page&rsquo;s per-storm ' +
         'numbers.</span></div>' +
@@ -460,9 +466,9 @@
         'Atlantic, 1998&ndash;2025 (27,215 frames / 451 storms)</caption>' +
         '<thead><tr><th>Channel</th><th>Protocol</th><th>RMSE</th>' +
         '<th>Bias</th></tr></thead><tbody>' +
-        '<tr class="me"><td>FPM v1.0 <em>(running on this page)</em></td>' +
+        '<tr class="me"><td>FPM <em>(running on this page)</em></td>' +
         '<td>frozen fit</td><td>7.16 hPa</td><td>&minus;1.34 hPa</td></tr>' +
-        '<tr><td>FPM v1.0</td><td>leave-one-year-out</td><td>7.32 hPa</td>' +
+        '<tr><td>FPM</td><td>leave-one-year-out</td><td>7.32 hPa</td>' +
         '<td>&minus;1.40 hPa</td></tr>' +
         '<tr><td>FPM without the weak-end gate</td><td>frozen fit</td>' +
         '<td>16.92 hPa</td><td>&minus;11.89 hPa</td></tr>' +
@@ -515,7 +521,7 @@
         '&mdash; 2000&ndash;2025 (6,840 frames / 82 storms)</caption>' +
         '<thead><tr><th>Channel</th><th>Protocol</th><th>RMSE</th>' +
         '<th>Bias</th></tr></thead><tbody>' +
-        '<tr class="me"><td>FPM v1.0 <em>(running on this page)</em></td>' +
+        '<tr class="me"><td>FPM <em>(running on this page)</em></td>' +
         '<td>frozen fit</td><td>10.93 hPa</td><td>&minus;2.59 hPa</td></tr>' +
         '<tr><td><em>&mdash; aircraft-anchored frames only (n=335)</em></td>' +
         '<td><em>frozen fit</em></td><td><em>7.50 hPa</em></td>' +
@@ -554,15 +560,20 @@
        inline in renderShell so the two models' claims sit next to each other
        and stay easy to audit against their manifests. */
     var GHOST_LEDE =
-        '<div class="exp-lede">GHOST provides <strong>independent, ' +
+        '<div class="exp-lede">The <strong>GHOST tree member</strong> on its ' +
+        'own: the boosted-tree stack that provides <strong>independent, ' +
         'real-time estimates of tropical cyclone intensity (maximum ' +
         'sustained wind and minimum central pressure) and radius of ' +
         'maximum wind</strong> — derived from geostationary infrared ' +
         'imagery and the large-scale environment alone, with no aircraft ' +
-        'reconnaissance required.</div>' +
-        '<div class="exp-cite"><strong>Manuscript in preparation.</strong> ' +
+        'reconnaissance required. Its wind is GHOST&rsquo;s wind; its ' +
+        'pressure is one of the two members averaged on the ' +
+        '<a href="#experimental">Experimental tab</a>.</div>' +
+        '<div class="exp-cite"><strong>Unlisted member page &mdash; ' +
+        'manuscript under review.</strong> ' +
         'GHOST (Geostationary-based Hurricane Objective Strength ' +
-        'Technique) is an unpublished research method; this page is ' +
+        'Technique) is a research method described in a manuscript ' +
+        'currently under peer review; this page is ' +
         'provided for scientific transparency and is <strong>not an ' +
         'official forecast or analysis</strong>. Please contact the ' +
         'author — Dr. Michael Fischer ' +
@@ -582,10 +593,12 @@
         'than against pressure directly, because the deficit is what the ' +
         'vortex actually sets.</div>' +
         '<div class="exp-cite"><strong>Unlisted research page.</strong> ' +
-        'FPM v1.0 is an unpublished research method under active ' +
-        'development, shown here beside GHOST for comparison. It is ' +
-        '<strong>not an official forecast or analysis</strong>, and it is ' +
-        'not the model behind the GHOST tab. Please contact the author ' +
+        'FPM is a research method under active development (the ' +
+        'manuscript under review describes a later refinement of it), ' +
+        'shown here on its own for comparison. It is ' +
+        '<strong>not an official forecast or analysis</strong>; on the ' +
+        '<a href="#experimental">Experimental tab</a> its pressure is one ' +
+        'of the two members GHOST averages. Please contact the author ' +
         '— Dr. Michael Fischer ' +
         '(<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu' +
         '</a>) — before citing or redistributing these estimates.</div>';
@@ -611,14 +624,14 @@
         '&asymp;150&ndash;160 kt): a flat, maxed-out trace means ' +
         '&ldquo;at or above the ceiling&rdquo;, and the strongest ' +
         'storms are typically under-read. The operational model ' +
-        '(op-2026b, updated 2026-07-28) trains on 2000&ndash;2025 and ' +
+        '(updated 2026-07-28) trains on 2000&ndash;2025 and ' +
         'adds ocean predictors &mdash; sea-surface temperature, ocean ' +
         'heat content and their recent changes, from operational SHIPS ' +
         'for NHC basins and a satellite ocean-heat-content analysis for ' +
         'JTWC basins &mdash; plus an intensity-trend state; this ' +
         'reduced, but did not eliminate, the tendency to read high ' +
         'while storms weaken over open water. Since 2026-08-05 a ' +
-        'composition layer (GHOST 2.1p, op-2026c) refines the high end: ' +
+        'composition layer refines the high end: ' +
         'once a trackable eye persists and the storm reads &ge;90 kt, ' +
         'specialist estimators tuned on major hurricanes take over ' +
         'Vmax/Pmin, with per-frame quality control that masks ' +
@@ -638,7 +651,7 @@
         'and is the product here. There is likewise no size (RMW) '  +
         'panel: GHOST&rsquo;s RMW comes from a separate stage that is '  +
         'not part of this model. ' +
-        '<strong>Basins:</strong> FPM v1.0&rsquo;s frozen boards cover the ' +
+        '<strong>Basins:</strong> FPM&rsquo;s frozen boards cover the ' +
         'Atlantic and East / Central Pacific. West Pacific storms are shown ' +
         'as well, but they are <strong>provisional</strong>: no held-out ' +
         'board exists for that basin, there is no aircraft-anchored ' +
@@ -676,22 +689,31 @@
     PROFILES.ghost.lede = GHOST_LEDE;
     PROFILES.ghost.note = GHOST_NOTE;
     var BLEND_LEDE =
-        '<div class="exp-lede"><strong>GHOST</strong>, as it will be described in the ' +
-        'paper: minimum central pressure is the <strong>equal mean of two ' +
+        '<div class="exp-lede"><strong>GHOST</strong>, as described in the ' +
+        'manuscript under review: minimum central pressure is the <strong>equal mean of two ' +
         'independent estimators</strong> read from the same geostationary ' +
         'infrared frames &mdash; a small first-principles ridge on the ' +
         'environmental pressure deficit (FPM) and the boosted-tree stack with ' +
         'its deep-eye tier (the GHOST tree member) &mdash; and maximum wind is ' +
-        'the tree&rsquo;s direct wind head with the v2.4 Cat-5 corrections. ' +
+        'the tree&rsquo;s direct wind head with its high-end corrections. ' +
         'Held out by season on the 28-year Atlantic archive the mean is ' +
         'better than either member pooled (6.5 vs 7.1 / 7.6 hPa RMSE) and ' +
         'ties the deployed stack below 920 hPa; where the tree abstains its ' +
         'last value is carried for six hours and the frame is flagged.</div>' +
-        '<div class="exp-cite"><strong>Unlisted research page &mdash; provisional ' +
-        'real-time approximation.</strong> The FPM member shown here is the ' +
-        'frozen v1.0 real-time chain; the paper&rsquo;s v2.1 (EP/CP-anchored ' +
-        'specialist and land-decay floor) is not yet frozen for real time. ' +
-        'Not an official forecast or analysis.</div>';
+        '<div class="exp-cite"><strong>Provisional real-time approximation ' +
+        'of a method under peer review.</strong> The FPM member running here ' +
+        'is the frozen real-time version of that model; the manuscript&rsquo;s ' +
+        'latest refinements to it (an East/Central Pacific specialist and a ' +
+        'land-decay floor) are not yet in the real-time chain. ' +
+        'Each member can be viewed on its own (tree: ' +
+        '<a href="#experimental_tree">#experimental_tree</a>, FPM: ' +
+        '<a href="#experimental_fpm">#experimental_fpm</a>). GHOST ' +
+        '(Geostationary-based Hurricane Objective Strength Technique) is ' +
+        'described in a manuscript currently under review; this page is provided for ' +
+        'scientific transparency and is <strong>not an official forecast or ' +
+        'analysis</strong>. Please contact the author &mdash; Dr. Michael ' +
+        'Fischer (<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu' +
+        '</a>) &mdash; before citing or redistributing these estimates.</div>';
     var BLEND_NOTE =
         '<div class="exp-note">Guidance, not official analysis. Pressure = ' +
         'mean of the two members (both shown in the tooltip); wind = the ' +
@@ -1194,8 +1216,8 @@
                 xanchor: 'left', yanchor: 'top', showarrow: false,
                 align: 'left',
                 text: '<b style="color:#F47321">EXPERIMENTAL</b> &#183; ' + M.name + ' is ' +
-                      'an unpublished research method (manuscript in ' +
-                      'preparation) &#8212; <b>not an official forecast or ' +
+                      'a research method (manuscript under review) ' +
+                      '&#8212; <b>not an official forecast or ' +
                       'analysis</b>.<br>Recon-independent estimates from ' +
                       'infrared imagery + reanalysis environment. Contact the ' +
                       'author before citing or redistributing.',
@@ -1451,18 +1473,12 @@
         if (prov) {
             html = '<div class="exp-prov-note">⚠️ ' + prov + '</div>' + html;
         }
-        /* Model-version stamp. The description comes from the payload when
-           the producer supplies one — the fallback below describes GHOST's
-           op-2026c composition layer specifically, and printing that under
-           any other model's version string would be a plain misstatement. */
-        if (j.model_version) {
-            html += '<div class="exp-arch-note">Model: ' + j.model_version +
-                ' — ' + (j.model_version_note ||
-                'eye-gated high-end refinement over the operational ' +
-                'model; per-frame quality control masks land-contaminated ' +
-                'and corrupt scenes (chart gaps are frames with no ' +
-                'QC-clean estimate).') + '</div>';
-        }
+        /* The producers stamp `model_version` / `model_version_note` into
+           every payload (internal version strings: layer versions, member
+           versions, cap rules). They used to be printed here verbatim;
+           removed 2026-08-18 (author's call: version bookkeeping confuses
+           readers). The stamps stay in the JSON for provenance -- read them
+           there, not here. */
         box.innerHTML = html;
     }
 
@@ -2488,7 +2504,7 @@
        _archSet behind would paint one model's storms with the other's numbers
        (they share ATCF ids, so nothing would visibly fail). */
     function setProfile(key) {
-        var p = PROFILES[key] || PROFILES.ghost;
+        var p = PROFILES[key] || PROFILES.blend;
         if (p === M) return false;
         M = p;
         MODEL_COL = M.color;
@@ -2503,7 +2519,7 @@
     window.activateExperimentalView = function (profileKey) {
         _root = document.getElementById('exp-main');
         if (!_root) return;
-        var switched = setProfile(profileKey || 'ghost');
+        var switched = setProfile(profileKey || 'blend');
         track(M.key + '_view_open', { narrow: window.innerWidth < 640 });
         /* A profile switch reuses the same #exp-main node, so the previous
            model's DOM is still mounted — blank it before the fetch or the old
