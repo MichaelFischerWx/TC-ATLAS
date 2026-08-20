@@ -30586,8 +30586,10 @@
         // '#ir-gif-prog' is the GIF export's own progress toast, which lives
         // inside the captured node — without this it bakes "GIF · capturing
         // 0/18" into every frame of the export it is reporting on.
+        // '#ir-detail-layers' is the env-layers control (button + menu).
         ['.leaflet-control-zoom', '.maplibregl-ctrl-group',
-         '#ir-product-toggle', '#ir-image-loader', '#ir-gif-prog'].forEach(function (sel) {
+         '#ir-product-toggle', '#ir-detail-layers', '#ir-image-loader',
+         '#ir-gif-prog'].forEach(function (sel) {
             var els = clonedDoc.querySelectorAll(sel);
             for (var i = 0; i < els.length; i++) els[i].style.display = 'none';
         });
@@ -30597,17 +30599,23 @@
             // labels sit on the left edge (lat) and bottom edge (lon), so
             // the top-right corner is clear of the grid. Subtle chip keeps
             // it legible over bright imagery and mirrors the timestamp chip
-            // at top-left.
+            // at top-left. Same-origin logo — html2canvas reads it without
+            // tainting, and it's already in cache from the topbar.
             var wm = clonedDoc.createElement('div');
             wm.style.cssText = 'position:absolute;right:10px;top:8px;z-index:2000;' +
-                'pointer-events:none;text-align:right;font-family:"DM Sans",sans-serif;' +
-                'line-height:1.2;padding:4px 8px;border-radius:5px;' +
+                'pointer-events:none;display:flex;align-items:center;gap:7px;' +
+                'font-family:"DM Sans",sans-serif;' +
+                'line-height:1.2;padding:4px 9px 4px 7px;border-radius:5px;' +
                 'background:rgba(15,22,35,0.55);text-shadow:0 1px 2px rgba(0,0,0,0.7);';
             wm.innerHTML =
+                '<img src="tc-atlas-favicon-64.png" alt="" ' +
+                'style="width:22px;height:22px;flex:0 0 auto;display:block;' +
+                'border-radius:5px;">' +
+                '<div style="text-align:left;">' +
                 '<div style="font-weight:700;font-size:12px;letter-spacing:0.3px;' +
                 'color:rgba(255,255,255,0.95);">TC-ATLAS</div>' +
                 '<div style="font-weight:500;font-size:9px;color:rgba(255,255,255,0.78);">' +
-                'tcatlas.org</div>';
+                'tcatlas.org</div></div>';
             host.appendChild(wm);
         }
     }
@@ -30617,20 +30625,20 @@
      *  GIF over-layer uses _irExportOnClone so the watermark lands on top. */
     function _irExportOnCloneControls(clonedDoc) {
         ['.leaflet-control-zoom', '.maplibregl-ctrl-group',
-         '#ir-product-toggle', '#ir-image-loader', '#ir-gif-prog'].forEach(function (sel) {
+         '#ir-product-toggle', '#ir-detail-layers', '#ir-image-loader',
+         '#ir-gif-prog'].forEach(function (sel) {
             var els = clonedDoc.querySelectorAll(sel);
             for (var i = 0; i < els.length; i++) els[i].style.display = 'none';
         });
     }
 
-    /** GIF over-layer onclone: controls hidden + watermark (via _irExportOnClone),
-     *  PLUS zero out the container/map backgrounds so the captured layer is
-     *  TRANSPARENT — only the vector panes (coastlines/grid/labels/track) +
-     *  watermark contribute. Without this, html2canvas paints the elements'
-     *  own light-gray backgrounds (backgroundColor:null doesn't suppress those),
-     *  and drawing the layer over the IR would paint the data out. */
-    function _irExportOnCloneVec(clonedDoc) {
-        _irExportOnClone(clonedDoc);
+    /** Zero out the container/map backgrounds in the CLONE so the captured
+     *  layer is TRANSPARENT — only the DOM overlays (chips/labels/markers/
+     *  watermark) contribute. Without this, html2canvas paints the elements'
+     *  own opaque backgrounds (backgroundColor:null doesn't suppress those,
+     *  e.g. .ir-image-container's #080e1a), and compositing the layer over
+     *  the GL imagery paints the satellite data out. */
+    function _irExportZeroBg(clonedDoc) {
         ['ir-image-container', 'ir-detail-map'].forEach(function (id) {
             var e = clonedDoc.getElementById(id);
             if (e) e.style.background = 'transparent';
@@ -30639,30 +30647,75 @@
         for (var i = 0; i < conts.length; i++) conts[i].style.background = 'transparent';
     }
 
+    /** Overlay onclone for composites over a GL snapshot: controls hidden +
+     *  watermark (via _irExportOnClone), PLUS transparent backgrounds. */
+    function _irExportOnCloneVec(clonedDoc) {
+        _irExportOnClone(clonedDoc);
+        _irExportZeroBg(clonedDoc);
+    }
+
+    /** Same, minus the watermark — for per-frame composites that hand-stamp
+     *  the chrome with _irStampExportChrome (lite GIF path). */
+    function _irExportOnCloneControlsVec(clonedDoc) {
+        _irExportOnCloneControls(clonedDoc);
+        _irExportZeroBg(clonedDoc);
+    }
+
     function _roundRectPath(cx, x, y, w, h, r) {
         cx.beginPath(); cx.moveTo(x + r, y);
         cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r);
         cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath();
     }
+    /** Same-origin site logo for canvas-stamped exports. Kicked off lazily;
+     *  a stamp that runs before it finishes just draws the text-only chip
+     *  (the file is already in cache from the topbar, so in practice it's
+     *  ready by the time any capture resolves). Same-origin → no taint. */
+    var _irExportLogoImg = null;
+    function _irExportLogo() {
+        if (!_irExportLogoImg) {
+            _irExportLogoImg = new Image();
+            _irExportLogoImg.src = 'tc-atlas-favicon-64.png';
+        }
+        return (_irExportLogoImg.complete && _irExportLogoImg.naturalWidth)
+            ? _irExportLogoImg : null;
+    }
+
     /** Hand-draw the timestamp/satellite chip (top-left) + TC-ATLAS watermark
-     *  (top-right) onto a 2D export canvas. Used by the iOS export path, which
-     *  can't use html2canvas (see _irDownloadCurrentFrame). System font stack —
-     *  a web font may not be available to a canvas draw. */
+     *  (top-right, with the site logo) onto a 2D export canvas. Used by the
+     *  iOS export path, which can't use html2canvas (see
+     *  _irDownloadCurrentFrame), and per-frame by the lite GIF path. System
+     *  font stack — a web font may not be available to a canvas draw. */
     function _irStampExportChrome(cx, W, H) {
         var fs = Math.max(13, Math.round(W / 46));
         var pad = Math.round(fs * 0.6);
         var m = Math.round(W / 70);
-        function chip(x, y, lines, align, weight) {
+        function chip(x, y, lines, align, weight, icon) {
             cx.font = (weight || 600) + ' ' + fs + "px -apple-system, system-ui, 'Segoe UI', sans-serif";
             var lh = Math.round(fs * 1.28), tw = 0, i;
             for (i = 0; i < lines.length; i++) tw = Math.max(tw, cx.measureText(lines[i]).width);
-            var bw = tw + pad * 2, bh = lines.length * lh + pad;
+            var bh = lines.length * lh + pad;
+            // Icon square scaled to the chip's inner height, left of the text.
+            var iw = icon ? (bh - pad) : 0;
+            var gap = icon ? Math.round(pad * 0.8) : 0;
+            var bw = tw + pad * 2 + iw + gap;
             var bx = align === 'right' ? (x - bw) : x;
             cx.fillStyle = 'rgba(15,22,35,0.62)';
             _roundRectPath(cx, bx, y, bw, bh, Math.round(fs * 0.35)); cx.fill();
+            if (icon) {
+                // Rounded clip — the favicon is a white tile; square corners
+                // read as a sticker slapped on the imagery.
+                try {
+                    cx.save();
+                    _roundRectPath(cx, bx + pad * 0.8, y + (bh - iw) / 2, iw, iw,
+                                   Math.max(2, Math.round(iw * 0.22)));
+                    cx.clip();
+                    cx.drawImage(icon, bx + pad * 0.8, y + (bh - iw) / 2, iw, iw);
+                    cx.restore();
+                } catch (e) { try { cx.restore(); } catch (e2) {} }
+            }
             cx.fillStyle = 'rgba(255,255,255,0.96)';
             cx.textBaseline = 'top'; cx.textAlign = align === 'right' ? 'right' : 'left';
-            var tx = align === 'right' ? (bx + bw - pad) : (bx + pad);
+            var tx = align === 'right' ? (bx + bw - pad) : (bx + pad + iw + gap);
             for (i = 0; i < lines.length; i++) cx.fillText(lines[i], tx, y + pad * 0.5 + i * lh);
         }
         var lines = [];
@@ -30677,7 +30730,7 @@
             lines.push(eyeEl.textContent.trim());
         }
         if (lines.length) chip(m, m, lines, 'left', 600);
-        chip(W - m, m, ['TC-ATLAS', 'tcatlas.org'], 'right', 700);
+        chip(W - m, m, ['TC-ATLAS', 'tcatlas.org'], 'right', 700, _irExportLogo());
     }
 
     /** Temporarily overlay the CURRENT frame at one zoom level deeper, so the
@@ -30761,6 +30814,7 @@
         if (!currentStormId) return;
         _ga('ir_export_png', { storm: currentStormId });
         window._irCloseDownloadMenu();
+        _irExportLogo();   // warm the watermark logo for the canvas-stamp path
         var node = document.getElementById('ir-image-container');
         if (!node) return;
         var hiddenTrack = _irExportShowTrack() ? null : _irHideTrackForExport();
@@ -30856,7 +30910,11 @@
                 // (~2600 px wide ≈ 8.5" at 300 DPI) instead of the
                 // display's pixel ratio (only ~880 px on a 1× screen).
                 logging: false, scale: _exportScale,
-                onclone: _irExportOnClone,
+                // Compositing over a GL snapshot needs the overlay capture
+                // TRANSPARENT — the container's own opaque background would
+                // otherwise paint the satellite imagery out (that's how
+                // saved storm PNGs lost the map under the GL facade).
+                onclone: glCanvas ? _irExportOnCloneVec : _irExportOnClone,
                 // Skip EVERY <canvas> — not just the GL one. A single cross-origin
                 // tile taints the WebGL canvas, and html2canvas throws
                 // SecurityError ("the operation is insecure") on iOS the instant it
@@ -30998,7 +31056,10 @@
             var overlayP = window.html2canvas(node, {
                 backgroundColor: null, useCORS: true, allowTaint: false,
                 logging: false, scale: capScale,
-                onclone: _irExportOnCloneControls,
+                // ControlsVec: also zero the container backgrounds — this
+                // overlay is drawn OVER the per-frame GL snapshot, and the
+                // container's opaque background would paint the imagery out.
+                onclone: _irExportOnCloneControlsVec,
                 ignoreElements: function (el) {
                     return el.tagName === 'CANVAS' || el.id === 'ir-overlay-info';
                 }
@@ -31091,6 +31152,7 @@
         }
         _ga('ir_export_gif', { storm: currentStormId });
         window._irCloseDownloadMenu();
+        _irExportLogo();   // warm the watermark logo for the per-frame stamps
 
         var state = activeFrameState();
         if (!state || !state.valid || state.valid.length === 0) {
