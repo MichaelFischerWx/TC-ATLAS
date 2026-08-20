@@ -861,63 +861,27 @@
        Regenerate from the source; do not hand-edit numbers here. */
     var TILT_VERIF_HTML =
         '<div class="exp-verif-h">TILT-RF verification' +
-        '<span class="exp-verif-src">manuscript configuration: 605 ' +
-        'aircraft-radar-measured cases / 70 Atlantic storms, 2005&ndash;2025, ' +
-        'held out by season blocks (a case is only ever scored by a model ' +
-        'that never saw its season). Out-of-training rows: the frozen model ' +
-        'applied to 7,863 hourly satellite cases / 98 storms (2023&ndash;2025 ' +
-        'Atlantic + East Pacific), none selected for reconnaissance.' +
+        '<span class="exp-verif-src">held out by season blocks over 605 ' +
+        'aircraft-radar-measured cases / 70 Atlantic storms, 2005&ndash;2025 ' +
+        '(a case is only ever scored by a model that never saw its season).' +
         '</span></div>' +
         '<div class="exp-verif-t"><table>' +
-        '<caption>Tilt estimate &mdash; held-out vector RMSE (605 cases)</caption>' +
-        '<tr><th>model</th><th>RMSE</th><th>paired difference</th></tr>' +
-        '<tr class="me"><td>deployed configuration (10 predictors, adds ' +
-        'mid-level 700&ndash;400 hPa shear)</td><td><strong>28.8 km</strong></td>' +
-        '<td>better than the manuscript model by 1.6 km [0.6, 2.8]</td></tr>' +
-        '<tr><td>manuscript configuration (64 predictors)</td>' +
-        '<td>30.4 km</td><td>&mdash;</td></tr>' +
-        '<tr><td>physically motivated downshear null (shear&rarr;tilt map)</td>' +
-        '<td>32.2 km</td><td>worse than the manuscript model by 1.8 km [0.1, 3.6]</td></tr>' +
-        '<tr><td>environment-only forest (no imagery)</td>' +
-        '<td>30.7 km</td><td>vs manuscript model: not resolved</td></tr>' +
+        '<caption>Tilt estimate &mdash; held-out error, deployed model</caption>' +
+        '<tr><th>statistic</th><th>value</th></tr>' +
+        '<tr class="me"><td>vector RMSE</td><td><strong>28.8 km</strong></td></tr>' +
+        '<tr><td>median vector error</td><td>13.4 km</td></tr>' +
+        '<tr><td>75% of cases within</td><td>24 km</td></tr>' +
+        '<tr><td>90% of cases within</td><td>39 km</td></tr>' +
         '</table></div>' +
-        '<div class="exp-verif-n">The infrared contribution is modest and ' +
-        'honest accounting keeps it that way: over the environment plus ' +
-        'mid-level shear alone, the imagery adds about 0.6 km with a ' +
-        'confidence interval touching zero &mdash; its gains concentrate ' +
-        'on strongly tilted vortices and on cases departing from the ' +
-        'climatological downshear-left preference. The typical (median) ' +
-        'vector error is well below the RMSE, which a right-skewed tail ' +
-        'inflates. Both real-time substitutions are verified: shear from ' +
-        'the operationally available diagnostic (&minus;0.1 km ' +
-        '[&minus;0.3, +0.1]) and mid-level shear from GFS analyses in ' +
-        'place of the reanalysis it was trained on (+0.1 km ' +
-        '[&minus;1.0, +1.3] on the 297 training cases from 2021&ndash;2025, ' +
-        'with the deployed model still better than the manuscript model ' +
-        'when fed GFS: &minus;2.4 km [&minus;4.0, &minus;0.9]).</div>' +
-        '<div class="exp-verif-t"><table>' +
-        '<caption>Rapid-intensification stratification &mdash; ' +
-        'out-of-training Atlantic (4,058 cases / 49 storms)</caption>' +
-        '<tr><th>tilt</th><th>RI rate vs climatology (low &rarr; high ' +
-        'ventilation)</th></tr>' +
-        '<tr class="me"><td>aligned (&lt;15 km)</td>' +
-        '<td><strong>4.5&times;</strong> &rarr; 1.4&times; &rarr; 0.7&times;</td></tr>' +
-        '<tr><td>moderate (15&ndash;30 km)</td>' +
-        '<td>1.6&times; &rarr; 0.6&times; &rarr; 0.1&times;</td></tr>' +
-        '<tr><td>large (&gt;30 km)</td>' +
-        '<td>0.2&times; &rarr; 0.03&times; &rarr; 0.05&times;</td></tr>' +
-        '</table></div>' +
-        '<div class="exp-verif-n">The stratification is monotone on both ' +
-        'axes out of training sample: estimated tilt and ventilation ' +
-        'together separate a &gt;4&times;-climatology RI regime from a ' +
-        'near-zero one. As a deterministic RI discriminator the estimated ' +
-        'tilt alone reaches a peak skill score of 0.50 on these cases, and ' +
-        '0.61 combined with environment &mdash; competitive with published ' +
-        'environment-based methods. <strong>East Pacific:</strong> the ' +
-        'same test finds the tilt&ndash;RI relationship does not transfer ' +
-        '(tilt co-varies with ventilation there), so RI guidance is not ' +
-        'shown for that basin. The tilt estimate itself has only been ' +
-        'verified against radar in the Atlantic.</div>';
+        '<div class="exp-verif-n">The typical (median) error sits well ' +
+        'below the RMSE, which a right-skewed tail inflates. Both ' +
+        'real-time input substitutions are verified against the training ' +
+        'sources: shear from the operationally available diagnostic ' +
+        '(&minus;0.1 km [&minus;0.3, +0.1]) and mid-level shear from GFS ' +
+        'analyses (+0.1 km [&minus;1.0, +1.3] over the 297 held-out cases ' +
+        'from 2021&ndash;2025 where both could be computed). The tilt ' +
+        'estimate has only been verified against radar in the ' +
+        'Atlantic.</div>';
     PROFILES.tilt.verif = TILT_VERIF_HTML;
     PROFILES.tilt.lede = TILT_LEDE;
     PROFILES.tilt.note = TILT_NOTE;
@@ -1150,8 +1114,14 @@
                   (_showShap ? ' active' : '') +
                   '" id="exp-shap-btn">Model drivers</button>'
                 : '') +
-            '<button class="exp-range exp-verifbtn' + (_showVerif ? ' active' : '') +
-            '" id="exp-verif-btn">Verification</button>' +
+            /* Tilt page: the Verification disclosure lives at the BOTTOM of
+               the page instead of the control bar (author's call) — the
+               model summary is the page itself; the numbers are opt-in. */
+            (M.panels.tilt
+                ? ''
+                : '<button class="exp-range exp-verifbtn' +
+                  (_showVerif ? ' active' : '') +
+                  '" id="exp-verif-btn">Verification</button>') +
             '<button class="exp-range exp-dl" id="exp-dl" ' +
             'title="Download chart as PNG" aria-label="Download chart as PNG">' +
             '&#x2913; Download</button>' +
@@ -1159,9 +1129,15 @@
             '<div id="exp-plot" class="exp-plot"></div>' +
             /* RI-guidance card (TILT-RF only): NOT behind a toggle — the
                stratification is the model's operational point, so it sits
-               directly under the chart. */
+               directly under the chart. The Verification disclosure follows
+               it, at the foot of the page. */
             (M.panels.tilt
-                ? '<div id="exp-tilt-ri" class="exp-tilt-ri"></div>' : '') +
+                ? '<div id="exp-tilt-ri" class="exp-tilt-ri"></div>' +
+                  '<div class="exp-verif-foot">' +
+                  '<button class="exp-range exp-verifbtn' +
+                  (_showVerif ? ' active' : '') +
+                  '" id="exp-verif-btn">Verification</button></div>'
+                : '') +
             '<div id="exp-track" class="exp-track" style="display:none;"></div>' +
             '<div id="exp-dist" class="exp-shap" style="display:none;"></div>' +
             '<div id="exp-shap" class="exp-shap" style="display:none;"></div>' +
