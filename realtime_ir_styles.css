@@ -7314,3 +7314,32 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     .exp-cite, .exp-note { font-size: 12px; padding: 9px 10px; }
     .exp-verif-note { font-size: 11.5px; }
 }
+
+/* ---- Experimental tab: TILT-RF additions (2026-08-20) ---- */
+/* Model switcher between the listed profiles (GHOST | TILT-RF). Reuses the
+   site-wide .sub-view-toggle segmented control; this only spaces it. */
+.exp-model-toggle { margin: 10px 0 4px; }
+.exp-model-toggle .sub-view-btn { font-size: 12.5px; padding: 6px 13px; }
+
+/* RI-guidance card (always visible under the tilt chart). */
+.exp-tilt-ri { margin-top: 14px; }
+.exp-tilt-ri-t table { width: 100%; max-width: 640px; }
+.exp-tilt-ri-t td, .exp-tilt-ri-t th { text-align: center; }
+.exp-tilt-ri-t td:first-child { text-align: left; }
+.exp-tilt-ri-t td strong { font-size: 14.5px; }
+.exp-tilt-ri-t td .exp-tile-sub { display: block; margin-top: 1px; }
+/* The storm's current cell: amber ring + tag, readable in both themes. */
+.exp-tilt-ri-t td.exp-ri-here {
+    position: relative;
+    box-shadow: inset 0 0 0 2px #d97706;
+    background: rgba(217,119,6,0.08);
+}
+[data-theme="dark"] .exp-tilt-ri-t td.exp-ri-here {
+    background: rgba(217,119,6,0.14);
+}
+.exp-ri-tag {
+    display: block; font-style: normal; font-size: 9.5px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em; color: #d97706;
+    margin-top: 2px;
+}
+.exp-tilt-ri-note { margin-top: 0; }

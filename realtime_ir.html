@@ -2656,15 +2656,18 @@
              #experimental_tree  the GHOST tree member alone (the old tab)
              #experimental_fpm   the FPM member alone
              #experimental_v2    alias of #experimental (kept for links that
-                                 were shared while the blend was unlisted). */
+                                 were shared while the blend was unlisted)
+             #experimental_tilt  TILT-RF vortex tilt — LISTED via the
+                                 in-section model switcher, not its own tab. */
         var VALID_VIEWS = { map: 1, satellite: 1, subseasonal: 1, seasonal: 1, recon: 1,
                             experimental: 1, experimental_v2: 1, experimental_fpm: 1,
-                            experimental_tree: 1 };
+                            experimental_tree: 1, experimental_tilt: 1 };
         /* Which tab button lights up for a view. Unlisted views borrow the
            tab of the section they live in, so the header doesn't read as
            "no tab selected". */
         var _tabForView = { experimental_v2: 'experimental', experimental_fpm: 'experimental',
-                            experimental_tree: 'experimental' };
+                            experimental_tree: 'experimental',
+                            experimental_tilt: 'experimental' };
         /* Seed the data-view attribute so CSS hides map-only toggles
            correctly even on first paint (before any user click). */
         document.documentElement.setAttribute('data-view', 'map');
@@ -2737,7 +2740,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260819b';
+        var _LAZY_ASSET_V = '?v=20260820b';
         var _lazyViewMods = {
             recon:       { js: ['realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
@@ -2746,7 +2749,8 @@
             /* Same module, different model profile — see VALID_VIEWS. */
             experimental_v2:{ js: ['realtime_experimental.js'] },
             experimental_fpm:{ js: ['realtime_experimental.js'] },
-            experimental_tree:{ js: ['realtime_experimental.js'] }
+            experimental_tree:{ js: ['realtime_experimental.js'] },
+            experimental_tilt:{ js: ['realtime_experimental.js'] }
         };
         var _lazyLoads = {};    /* src -> Promise */
         function _loadOnce(src, isCss) {
@@ -2787,7 +2791,8 @@
         var _viewSectionIds = { recon: 'recon-main', subseasonal: 'sub-main',
                                seasonal: 'seasonal-main', experimental: 'exp-main',
                                experimental_v2: 'exp-main', experimental_fpm: 'exp-main',
-                               experimental_tree: 'exp-main' };
+                               experimental_tree: 'exp-main',
+                               experimental_tilt: 'exp-main' };
         function _showTabLoadError(view) {
             var sec = document.getElementById(_viewSectionIds[view] || '');
             if (!sec) return;
@@ -2956,14 +2961,17 @@
                 if (reconMain) reconMain.style.display = '';
                 if (window.activateReconView) window.activateReconView();
             } else if (view === 'experimental' || view === 'experimental_v2' ||
-                       view === 'experimental_fpm' || view === 'experimental_tree') {
+                       view === 'experimental_fpm' || view === 'experimental_tree' ||
+                       view === 'experimental_tilt') {
                 if (expMain) expMain.style.display = 'block';
                 /* #experimental and its alias #experimental_v2 = the blend
-                   (the paper model); the members' own pages are unlisted. */
+                   (the paper model); #experimental_tilt = TILT-RF (the other
+                   listed profile); the members' own pages are unlisted. */
                 if (window.activateExperimentalView)
                     window.activateExperimentalView(
                         view === 'experimental_fpm' ? 'fpm' :
-                        view === 'experimental_tree' ? 'ghost' : 'blend');
+                        view === 'experimental_tree' ? 'ghost' :
+                        view === 'experimental_tilt' ? 'tilt' : 'blend');
             } else {
                 irMain.style.display = '';
                 if (legend) legend.style.display = '';

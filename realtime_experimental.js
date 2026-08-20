@@ -139,8 +139,52 @@
                stack's approximated one, not a lesser substitute. */
             panels: { rmw: false, shap: true, dist: true, track: true,
                       comp: true }
+        },
+        /* #experimental_tilt (2026-08-20): TILT-RF — vortex tilt (2->6 km
+           center displacement) from geostationary IR with a random forest,
+           trained against airborne Doppler radar centers. A STRUCTURE model,
+           not an intensity model: the payload carries tilt vectors, the
+           shear-relative direction, and an RI-guidance stratification —
+           no Vmax/Pmin/RMW — so it takes its own tile/chart/panel path
+           (panels.tilt) rather than empty intensity panels.
+           Producer: TC-SWARM realtime/tiltrf_rt_all.py -> tiltrf-rt/. */
+        tilt: {
+            key: 'tilt',
+            prefix: 'tiltrf-rt',
+            arch: 'tiltrf-rt/archive2026',   // none published yet; optional
+            file: 'tiltrf_',
+            name: 'TILT-RF',
+            /* Amber against GHOST teal / tree rose / FPM indigo. */
+            color: '#d97706',
+            title: 'TILT-RF — Real-Time Vortex Tilt',
+            headline: 'tilt_mag_km',
+            windIsDerived: false,
+            saturates: false,
+            planTitle: 'IR + tilt vector — latest analyses',
+            /* Every basin outside the North Atlantic is an untested
+               transfer: the training radar sample (airborne Doppler) is
+               Atlantic-only, and no other basin has radar ground truth to
+               verify a tilt against. Estimates are shown with this standing
+               disclaimer rather than hidden. */
+            provisional: (function () {
+                var s = 'Estimates outside the North Atlantic are an ' +
+                    '<strong>untested transfer</strong>: the model was ' +
+                    'trained and verified against airborne Doppler radar ' +
+                    'centers, which exist only for Atlantic storms, so ' +
+                    'nothing here has been checked against a measured tilt ' +
+                    'in this basin.';
+                return { EP: s, CP: s, WP: s, IO: s, SH: s };
+            })(),
+            panels: { rmw: false, shap: false, dist: false, track: false,
+                      comp: false, tilt: true }
         }
     };
+    /* The two LISTED profiles reachable from the Experimental tab's
+       in-section model switcher; the rest stay hash-only (unlisted). */
+    var LISTED_PROFILES = [
+        { key: 'blend', view: 'experimental',      label: 'Intensity — GHOST' },
+        { key: 'tilt',  view: 'experimental_tilt', label: 'Vortex tilt — TILT-RF' }
+    ];
     var M = PROFILES.blend;      // active profile; set by activate()
     var MODEL_COL = M.color;
     var PREFIX = M.prefix;
@@ -771,6 +815,113 @@
     PROFILES.fpm.lede = FPM_LEDE;
     PROFILES.fpm.note = FPM_NOTE;
 
+    var TILT_LEDE =
+        '<div class="exp-lede"><strong>TILT-RF</strong> estimates ' +
+        '<strong>vortex tilt</strong> — the horizontal displacement between ' +
+        'a storm&rsquo;s low-level (2 km) and mid-level (6 km) circulation ' +
+        'centers — <strong>in real time from geostationary infrared ' +
+        'imagery alone</strong>, with no aircraft or ground radar required. ' +
+        'It is a random forest trained against tilt measured by airborne ' +
+        'Doppler radar. Tilt is a leading structural signal: storms that ' +
+        'are aligned (small tilt) in a favorable environment intensify far ' +
+        'more often than tilted ones, and realignment often precedes rapid ' +
+        'intensification.</div>' +
+        '<div class="exp-cite"><strong>Manuscript in preparation.</strong> ' +
+        'TILT-RF is a research method; this page is provided for ' +
+        'scientific transparency and is <strong>not an official forecast ' +
+        'or analysis</strong>. Please contact the author &mdash; Dr. ' +
+        'Michael Fischer ' +
+        '(<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu' +
+        '</a>) &mdash; before citing or redistributing these estimates.</div>';
+
+    var TILT_NOTE =
+        '<div class="exp-note">Guidance, not official analysis. ' +
+        '<strong>Validity range:</strong> estimates are emitted only while ' +
+        'the working best-track wind is 30&ndash;82 kt. Above that the ' +
+        'model does not fail loudly &mdash; it goes uninformative (strong ' +
+        'storms are almost always nearly aligned, so the estimate adds ' +
+        'nothing beyond what the intensity already implies) &mdash; and ' +
+        'publishing a number there would invite reading skill into it, so ' +
+        'none is shown. ' +
+        '<strong>Direction convention:</strong> the arrow points from the ' +
+        'low-level center toward the displaced mid-level center; the ' +
+        'shear-relative panel is degrees counterclockwise from downshear ' +
+        '(sheared storms typically tilt downshear-left). ' +
+        '<strong>RI guidance</strong> (Atlantic only) stratifies observed ' +
+        'rapid-intensification frequency by tilt and ventilation. Read it ' +
+        'as relative ordering &mdash; which regime a storm is in &mdash; ' +
+        'not as a forecast probability. In the East Pacific the ' +
+        'relationship did not survive out-of-sample testing and no table ' +
+        'is shown there. Environment (shear, humidity, potential ' +
+        'intensity) comes from GFS analyses, the same source the guidance ' +
+        'table was built with. ' + TRACK_CAVEAT + '</div>';
+
+    /* Manuscript numbers + the out-of-training verification (TC-SWARM
+       companion analysis, ~/github/TILT-RF/large_sample_ri/REPORT.md).
+       Regenerate from the source; do not hand-edit numbers here. */
+    var TILT_VERIF_HTML =
+        '<div class="exp-verif-h">TILT-RF verification' +
+        '<span class="exp-verif-src">manuscript configuration: 605 ' +
+        'aircraft-radar-measured cases / 70 Atlantic storms, 2005&ndash;2025, ' +
+        'held out by season blocks (a case is only ever scored by a model ' +
+        'that never saw its season). Out-of-training rows: the frozen model ' +
+        'applied to 7,863 hourly satellite cases / 98 storms (2023&ndash;2025 ' +
+        'Atlantic + East Pacific), none selected for reconnaissance.' +
+        '</span></div>' +
+        '<div class="exp-verif-t"><table>' +
+        '<caption>Tilt estimate &mdash; held-out vector RMSE (605 cases)</caption>' +
+        '<tr><th>model</th><th>RMSE</th><th>paired difference</th></tr>' +
+        '<tr class="me"><td>deployed configuration (10 predictors, adds ' +
+        'mid-level 700&ndash;400 hPa shear)</td><td><strong>28.8 km</strong></td>' +
+        '<td>better than the manuscript model by 1.6 km [0.6, 2.8]</td></tr>' +
+        '<tr><td>manuscript configuration (64 predictors)</td>' +
+        '<td>30.4 km</td><td>&mdash;</td></tr>' +
+        '<tr><td>physically motivated downshear null (shear&rarr;tilt map)</td>' +
+        '<td>32.2 km</td><td>worse than the manuscript model by 1.8 km [0.1, 3.6]</td></tr>' +
+        '<tr><td>environment-only forest (no imagery)</td>' +
+        '<td>30.7 km</td><td>vs manuscript model: not resolved</td></tr>' +
+        '</table></div>' +
+        '<div class="exp-verif-n">The infrared contribution is modest and ' +
+        'honest accounting keeps it that way: over the environment plus ' +
+        'mid-level shear alone, the imagery adds about 0.6 km with a ' +
+        'confidence interval touching zero &mdash; its gains concentrate ' +
+        'on strongly tilted vortices and on cases departing from the ' +
+        'climatological downshear-left preference. The typical (median) ' +
+        'vector error is well below the RMSE, which a right-skewed tail ' +
+        'inflates. Both real-time substitutions are verified: shear from ' +
+        'the operationally available diagnostic (&minus;0.1 km ' +
+        '[&minus;0.3, +0.1]) and mid-level shear from GFS analyses in ' +
+        'place of the reanalysis it was trained on (+0.1 km ' +
+        '[&minus;1.0, +1.3] on the 297 training cases from 2021&ndash;2025, ' +
+        'with the deployed model still better than the manuscript model ' +
+        'when fed GFS: &minus;2.4 km [&minus;4.0, &minus;0.9]).</div>' +
+        '<div class="exp-verif-t"><table>' +
+        '<caption>Rapid-intensification stratification &mdash; ' +
+        'out-of-training Atlantic (4,058 cases / 49 storms)</caption>' +
+        '<tr><th>tilt</th><th>RI rate vs climatology (low &rarr; high ' +
+        'ventilation)</th></tr>' +
+        '<tr class="me"><td>aligned (&lt;15 km)</td>' +
+        '<td><strong>4.5&times;</strong> &rarr; 1.4&times; &rarr; 0.7&times;</td></tr>' +
+        '<tr><td>moderate (15&ndash;30 km)</td>' +
+        '<td>1.6&times; &rarr; 0.6&times; &rarr; 0.1&times;</td></tr>' +
+        '<tr><td>large (&gt;30 km)</td>' +
+        '<td>0.2&times; &rarr; 0.03&times; &rarr; 0.05&times;</td></tr>' +
+        '</table></div>' +
+        '<div class="exp-verif-n">The stratification is monotone on both ' +
+        'axes out of training sample: estimated tilt and ventilation ' +
+        'together separate a &gt;4&times;-climatology RI regime from a ' +
+        'near-zero one. As a deterministic RI discriminator the estimated ' +
+        'tilt alone reaches a peak skill score of 0.50 on these cases, and ' +
+        '0.61 combined with environment &mdash; competitive with published ' +
+        'environment-based methods. <strong>East Pacific:</strong> the ' +
+        'same test finds the tilt&ndash;RI relationship does not transfer ' +
+        '(tilt co-varies with ventilation there), so RI guidance is not ' +
+        'shown for that basin. The tilt estimate itself has only been ' +
+        'verified against radar in the Atlantic.</div>';
+    PROFILES.tilt.verif = TILT_VERIF_HTML;
+    PROFILES.tilt.lede = TILT_LEDE;
+    PROFILES.tilt.note = TILT_NOTE;
+
     /* ---------------- main UI ---------------- */
 
     // Producer heartbeat: index.json is rewritten by every run (even when all
@@ -797,6 +948,23 @@
                 ' ago. Estimates and imagery below are from that run and do ' +
                 'not reflect current storm status.</div>';
         }
+        /* Model switcher between the LISTED profiles (GHOST intensity /
+           TILT-RF tilt). Only shown when the active profile is itself
+           listed — on the unlisted member pages (#experimental_tree/_fpm) a
+           two-way toggle with neither side active would misread. */
+        var switcher = '';
+        if (LISTED_PROFILES.some(function (p) { return p.key === M.key; })) {
+            switcher = '<div class="sub-view-toggle exp-model-toggle" ' +
+                'role="tablist" aria-label="Model">';
+            LISTED_PROFILES.forEach(function (p) {
+                switcher += '<button class="sub-view-btn' +
+                    (p.key === M.key ? ' active' : '') +
+                    '" role="tab" aria-selected="' + (p.key === M.key) +
+                    '" data-profile="' + p.key + '" data-view="' + p.view +
+                    '">' + p.label + '</button>';
+            });
+            switcher += '</div>';
+        }
         var html =
             '<div class="exp-inner">' +
             '<div class="exp-head">' +
@@ -808,7 +976,7 @@
             '    · refreshes every 30 minutes · ' +
             '<a href="#" id="exp-refresh">reload</a></div>' +
             '</div>' +
-            staleHtml + M.lede + M.note;
+            switcher + staleHtml + M.lede + M.note;
         var arch = (_archIndex && _archIndex.storms) || [];
         if (!storms.length && !arch.length) {
             html += '<div class="exp-empty">No active storms right now — ' +
@@ -927,7 +1095,8 @@
                out of view — they open BELOW the chart, verification last. */
             '<div class="exp-plan-wrap">' +
             '<div class="exp-plan-head">' +
-            '<span class="exp-plan-title">IR plan-view evolution</span>' +
+            '<span class="exp-plan-title">' +
+            (M.planTitle || 'IR plan-view evolution') + '</span>' +
             '<button class="exp-range exp-dl" id="exp-plan-dl" ' +
             'title="Download plan view as PNG" ' +
             'aria-label="Download plan view as PNG">&#x2913; Download</button>' +
@@ -952,12 +1121,27 @@
                 r.label + '</button>';
         });
         html += '<span class="exp-ranges-sep"></span>' +
-            '<button class="exp-range exp-comp' + (_showComp ? ' active' : '') +
-            '" id="exp-comp">Operational comparators</button>' +
-            '<button class="exp-range exp-trackbtn' + (_showTrack ? ' active' : '') +
-            '" id="exp-track-btn">Track map</button>' +
-            '<button class="exp-range exp-distbtn' + (_showDist ? ' active' : '') +
-            '" id="exp-dist-btn">Distribution</button>' +
+            /* Panel toggles are profile-gated: a structure model has no
+               operational intensity comparators, no predictive-distribution
+               lookup and no per-frame driver payload, and rendering their
+               buttons against a payload that can't feed them would read as
+               a broken feed. `comp`/`dist`/`track` default ON for the
+               intensity profiles, whose panel sets predate the gates. */
+            (M.panels.comp !== false
+                ? '<button class="exp-range exp-comp' +
+                  (_showComp ? ' active' : '') +
+                  '" id="exp-comp">Operational comparators</button>'
+                : '') +
+            (M.panels.track !== false
+                ? '<button class="exp-range exp-trackbtn' +
+                  (_showTrack ? ' active' : '') +
+                  '" id="exp-track-btn">Track map</button>'
+                : '') +
+            (M.panels.dist !== false
+                ? '<button class="exp-range exp-distbtn' +
+                  (_showDist ? ' active' : '') +
+                  '" id="exp-dist-btn">Distribution</button>'
+                : '') +
             /* Both producers publish driver attribution now; the panel is
                payload-shaped (see drawShap), so what differs between them is
                the units and the method, not the chart. */
@@ -973,6 +1157,11 @@
             '&#x2913; Download</button>' +
             '</div>' +
             '<div id="exp-plot" class="exp-plot"></div>' +
+            /* RI-guidance card (TILT-RF only): NOT behind a toggle — the
+               stratification is the model's operational point, so it sits
+               directly under the chart. */
+            (M.panels.tilt
+                ? '<div id="exp-tilt-ri" class="exp-tilt-ri"></div>' : '') +
             '<div id="exp-track" class="exp-track" style="display:none;"></div>' +
             '<div id="exp-dist" class="exp-shap" style="display:none;"></div>' +
             '<div id="exp-shap" class="exp-shap" style="display:none;"></div>' +
@@ -980,6 +1169,23 @@
             '</div>';
         _root.innerHTML = html;
         bindRefresh();
+        /* Model switcher: go through switchIRView when the tab controller
+           is present so the hash, the data-view attribute and the header
+           highlight all follow (deep links keep working); fall back to a
+           bare profile swap if this module is ever hosted elsewhere. */
+        _root.querySelectorAll('.exp-model-toggle .sub-view-btn')
+            .forEach(function (b) {
+                b.addEventListener('click', function () {
+                    var prof = b.getAttribute('data-profile');
+                    if (prof === M.key) return;
+                    track('exp_model_switch', { to: prof });
+                    if (typeof window.switchIRView === 'function') {
+                        window.switchIRView(b.getAttribute('data-view'));
+                    } else {
+                        window.activateExperimentalView(prof);
+                    }
+                });
+            });
         var chips = _root.querySelectorAll('.exp-chip');
         chips.forEach(function (c) {
             c.addEventListener('click', function () {
@@ -1136,6 +1342,17 @@
             p.then(function (j) {
                 var em = document.getElementById('exp-int-' + s.atcf);
                 if (!em) return;
+                if (M.panels.tilt) {
+                    /* Structure chip: latest tilt, or the scope reason. */
+                    var tfr = j.frames || [];
+                    var lt = lastFiniteFrame(tfr, 'tilt_mag_km');
+                    var lastF = tfr[tfr.length - 1];
+                    em.innerHTML = lt && lastF && lastF.in_scope
+                        ? Math.round(lt.v) + ' km tilt'
+                        : (lt ? Math.round(lt.v) + ' km (gated now)'
+                              : 'outside validity');
+                    return;
+                }
                 var lf = lastFiniteFrame(j.frames || [], 'vmax_kt');
                 if (!lf) return;
                 var cat = windToCategory(lf.v);
@@ -1292,7 +1509,13 @@
             up['xaxis' + n + '.range'] = rng;
             up['yaxis' + n + '.autorange'] = true;
         });
-        Plotly.relayout(el, up).then(function () { paintBands(el); });
+        Plotly.relayout(el, up).then(function () {
+            /* Range changes rebuild shapes from scratch (they were just
+               cleared above): category bands on the intensity charts,
+               validity shading on the tilt chart. */
+            if (M.panels.tilt) paintScopeBands(el, j);
+            else paintBands(el);
+        });
     }
 
     /* Saffir-Simpson category bands + "TS / Cat 1 / …" labels on the Vmax
@@ -1337,6 +1560,7 @@
     /* ---------------- latest-estimate stat tiles ---------------- */
 
     function renderTiles(j) {
+        if (M.panels.tilt) return renderTiltTiles(j);
         var box = document.getElementById('exp-tiles');
         if (!box) return;
         var fr = j.frames || [];
@@ -1506,6 +1730,336 @@
            removed 2026-08-18 (author's call: version bookkeeping confuses
            readers). The stamps stay in the JSON for provenance -- read them
            there, not here. */
+        box.innerHTML = html;
+    }
+
+    /* ---------------- TILT-RF panels ---------------- */
+
+    /* Shear-relative quadrant name. Positive = counterclockwise (left of
+       shear for a NH storm); the physically expected residence quadrant for
+       a sheared TC is downshear-left. */
+    function shearQuadrant(d) {
+        if (d == null || !isFinite(d)) return null;
+        if (d >= -45 && d < 45) return 'downshear';
+        if (d >= 45 && d < 135) return 'downshear-left';
+        if (d >= -135 && d < -45) return 'downshear-right';
+        return 'upshear';
+    }
+
+    function renderTiltTiles(j) {
+        var box = document.getElementById('exp-tiles');
+        if (!box) return;
+        var fr = j.frames || [];
+        if (!fr.length) { box.innerHTML = ''; return; }
+        var lastF = fr[fr.length - 1];
+        var lt = lastFiniteFrame(fr, 'tilt_mag_km');
+        var scope = (j.scope_kt && j.scope_kt.length === 2)
+            ? j.scope_kt : [30, 82];
+
+        var html = '';
+        if (lastF.in_scope && lastF.tilt_mag_km != null) {
+            var quad = shearQuadrant(lastF.shear_rel_deg);
+            var tr = trend24(fr, 'tilt_mag_km');
+            /* Falling tilt = aligning = the favorable direction; a 5-km
+               deadband keeps frame-to-frame wiggle neutral. */
+            var dLine;
+            if (!tr) {
+                dLine = '<div class="exp-tile-d">— <span class="exp-tile-sub">' +
+                    '(needs 24 h of history)</span></div>';
+            } else {
+                var cls = Math.abs(tr.d) < 5 ? '' : (tr.d < 0 ? 'exp-up' : 'exp-down');
+                var hLbl = Math.abs(tr.h - 24) < 1.5 ? '24 h'
+                    : Math.round(tr.h) + ' h';
+                dLine = '<div class="exp-tile-d"><span class="' + cls + '">' +
+                    (tr.d >= 0 ? '▲' : '▼') + ' ' + fmtSigned(tr.d, 0) +
+                    ' km</span> over ' + hLbl +
+                    (Math.abs(tr.d) >= 5
+                        ? ' <span class="exp-tile-sub">(' +
+                          (tr.d < 0 ? 'aligning' : 'tilting over') + ')</span>'
+                        : '') + '</div>';
+            }
+            html +=
+                '<div class="exp-tile">' +
+                '<div class="exp-tile-k">' + M.name + ' vortex tilt</div>' +
+                '<div class="exp-tile-v">' + Math.round(lastF.tilt_mag_km) +
+                ' <span class="exp-tile-u">km</span></div>' +
+                dLine +
+                (lastF.tilt_dir_deg != null
+                    ? '<div class="exp-tile-sub">mid-level center displaced ' +
+                      'toward ' + Math.round(lastF.tilt_dir_deg) + '&deg;' +
+                      (quad ? ' &middot; ' + quad : '') + '</div>'
+                    : '') +
+                '<div class="exp-tile-sub">at ' + lastF.t.slice(11, 16) +
+                'Z</div></div>';
+        } else {
+            /* Out of scope is the product working as designed; the tile
+               says why, and keeps the last valid estimate in view. */
+            var v = lastF.vmax_used_kt;
+            var why = (v == null || !isFinite(v))
+                ? 'no working best-track wind to gate on'
+                : (v < scope[0]
+                    ? Math.round(v) + ' kt is below the ' + scope[0] +
+                      '&ndash;' + scope[1] + ' kt validity range'
+                    : Math.round(v) + ' kt is above the ' + scope[0] +
+                      '&ndash;' + scope[1] + ' kt validity range &mdash; ' +
+                      'storms this strong are almost always nearly aligned, ' +
+                      'and the estimate would add nothing the intensity ' +
+                      'doesn&rsquo;t already imply');
+            html +=
+                '<div class="exp-tile">' +
+                '<div class="exp-tile-k">' + M.name + ' vortex tilt</div>' +
+                '<div class="exp-tile-v">no estimate</div>' +
+                '<div class="exp-tile-sub">' + why + '</div>' +
+                (lt ? '<div class="exp-tile-sub">last estimate ' +
+                      Math.round(lt.v) + ' km at ' +
+                      lt.t.slice(5, 16).replace('T', ' ') + 'Z</div>' : '') +
+                '</div>';
+        }
+
+        /* Environment tile: the two axes of the RI-guidance table. */
+        var sh = lastFiniteFrame(fr, 'shdc_kt');
+        var vpF = lastFiniteFrame(fr, 'vp');
+        if (sh || vpF) {
+            var vpLbl = '';
+            if (vpF) {
+                var vv = vpF.v;
+                vpLbl = vv < 2.5 ? 'low' : (vv < 5 ? 'moderate' : 'high');
+            }
+            html +=
+                '<div class="exp-tile">' +
+                '<div class="exp-tile-k">Environment (GFS)</div>' +
+                (sh ? '<div class="exp-tile-v">' + Math.round(sh.v) +
+                      ' <span class="exp-tile-u">kt shear</span></div>' +
+                      (sh.f.sddc_deg != null
+                          ? '<div class="exp-tile-d">toward ' +
+                            Math.round(sh.f.sddc_deg) + '&deg;</div>' : '')
+                    : '<div class="exp-tile-v">—</div>') +
+                (vpF ? '<div class="exp-tile-sub">ventilation ' +
+                       vpF.v.toFixed(1) + ' (' + vpLbl + ')' +
+                       (vpF.f.env_held ? ' &middot; held from the last ' +
+                        'GFS cycle' : '') + '</div>' : '') +
+                '</div>';
+        }
+
+        /* Latest agency analysis — same convention as the intensity tiles. */
+        var agT = j.agency || 'NHC';
+        var fix = null;
+        for (var i = fr.length - 1; i >= 0; i--) {
+            if (fr[i].btk_is_fix && fr[i].btk_vmax_kt != null &&
+                isFinite(fr[i].btk_vmax_kt)) { fix = fr[i]; break; }
+        }
+        if (fix) {
+            var ageH = (new Date(lastF.t) - new Date(fix.t)) / 3.6e6;
+            var cat = windToCategory(fix.btk_vmax_kt);
+            html +=
+                '<div class="exp-tile">' +
+                '<div class="exp-tile-k">Last ' + agT + ' analysis</div>' +
+                '<div class="exp-tile-v">' + Math.round(fix.btk_vmax_kt) +
+                ' <span class="exp-tile-u">kt</span>' +
+                '<span class="exp-cat" style="background:' + SS_COLORS[cat] +
+                ';color:' + catInk(cat) + '">' + categoryShort(cat) +
+                '</span></div>' +
+                '<div class="exp-tile-d">at ' + fix.t.slice(11, 16) + 'Z · ' +
+                (ageH >= 1 ? Math.round(ageH) + ' h ago' : 'current') +
+                '</div></div>';
+        }
+
+        if (_archSet[j.storm]) {
+            html = '<div class="exp-arch-note">Archived storm — ' +
+                'retrospective ' + M.name + ' run over the completed ' +
+                'lifetime.</div>' + html;
+        }
+        var prov = provisionalNote(j.storm, j);
+        if (prov) {
+            html = '<div class="exp-prov-note">⚠️ ' + prov + '</div>' + html;
+        }
+        box.innerHTML = html;
+        drawRiGuidance(j);
+    }
+
+    /* Two-panel tilt chart: magnitude, then shear-relative direction. The
+       direction axis is labeled with quadrant names instead of guide-line
+       shapes so applyRange's shape reset can't strip them. */
+    function drawTiltSeries(j) {
+        var el = document.getElementById('exp-plot');
+        if (!el || typeof Plotly === 'undefined') return;
+        var fr = j.frames || [];
+        var t = fr.map(function (f) { return f.t; });
+        function col(k) { return fr.map(function (f) {
+            return (f[k] === null || f[k] === undefined) ? null : f[k];
+        }); }
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var font = { family: '-apple-system, BlinkMacSystemFont, "Segoe UI", ' +
+                             'Roboto, Helvetica, Arial, sans-serif',
+                     color: dark ? '#cbd5e1' : '#334155' };
+        var grid = dark ? '#1e293b' : '#e2e8f0';
+        var traces = [
+            { x: t, y: col('tilt_mag_km'), name: M.name + ' tilt',
+              yaxis: 'y', mode: 'lines', connectgaps: false,
+              line: { color: MODEL_COL, width: 2.4 },
+              hovertemplate: '%{y:.0f} km' },
+            { x: t, y: col('shear_rel_deg'), name: 'direction (shear-relative)',
+              yaxis: 'y2', mode: 'markers',
+              marker: { color: MODEL_COL, size: 4, opacity: 0.85 },
+              hovertemplate: '%{y:.0f}° from downshear' }
+        ];
+        var narrow = window.innerWidth < 640;
+        el._expFirstIsWind = false;
+        var layout = {
+            font: font,
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            margin: { l: narrow ? 66 : 76, r: 12,
+                      t: narrow ? 64 : 48, b: 40 },
+            showlegend: true,
+            legend: { orientation: 'h', x: 0, xanchor: 'left',
+                      y: 1.0, yanchor: 'bottom',
+                      font: narrow ? { size: 10 } : undefined },
+            hovermode: 'x unified',
+            xaxis: { gridcolor: grid, domain: [0, 1], anchor: 'y2' },
+            yaxis: { title: { text: 'Tilt (km)' }, gridcolor: grid,
+                     rangemode: 'tozero', domain: [0.56, 1] },
+            yaxis2: { gridcolor: grid, domain: [0, 0.44],
+                      range: [-185, 185],
+                      tickvals: [-180, -90, 0, 90, 180],
+                      ticktext: ['upshear', 'right of<br>shear', 'downshear',
+                                 'left of<br>shear', 'upshear'],
+                      tickfont: { size: 10 } }
+        };
+        Plotly.react(el, traces, layout, {
+            responsive: true,
+            displaylogo: false,
+            modeBarButtonsToRemove: ['toImage', 'lasso2d', 'select2d']
+        }).then(function () { applyRange(j); });
+    }
+
+    /* Gray validity shading over out-of-scope stretches, both panels.
+       Rebuilt by applyRange on every range change (which clears shapes). */
+    function paintScopeBands(el, j) {
+        var fr = (j && j.frames) || [];
+        if (!fr.length) return;
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var shapes = [], ann = [];
+        var runStart = null;
+        var fl = el._fullLayout;
+        var xr = fl && fl.xaxis && fl.xaxis.range;
+        var xSpan = xr ? (new Date(xr[1]) - new Date(xr[0])) : null;
+        function closeRun(endT) {
+            if (runStart === null) return;
+            shapes.push({
+                type: 'rect', xref: 'x', yref: 'paper',
+                x0: runStart, x1: endT, y0: 0, y1: 1,
+                fillcolor: dark ? 'rgba(148,163,184,0.10)'
+                                : 'rgba(100,116,139,0.09)',
+                line: { width: 0 }, layer: 'below'
+            });
+            if (xSpan && (new Date(endT) - new Date(runStart)) > 0.18 * xSpan) {
+                ann.push({
+                    xref: 'x', yref: 'paper',
+                    x: new Date((new Date(runStart).getTime() +
+                                 new Date(endT).getTime()) / 2).toISOString(),
+                    y: 0.985, yanchor: 'top', showarrow: false,
+                    text: 'outside 30–82 kt validity',
+                    font: { size: 9.5,
+                            color: dark ? '#94a3b8' : '#64748b' }
+                });
+            }
+            runStart = null;
+        }
+        fr.forEach(function (f) {
+            if (!f.in_scope) {
+                if (runStart === null) runStart = f.t;
+            } else closeRun(f.t);
+        });
+        closeRun(fr[fr.length - 1].t);
+        Plotly.relayout(el, { shapes: shapes, annotations: ann });
+    }
+
+    /* RI-guidance card: observed RI frequency vs climatology, stratified by
+       tilt x ventilation, with the storm's current cell highlighted.
+       Payload-driven — the producer only ships the table where it survived
+       out-of-training verification (Atlantic), and ships a `ri_guidance_note`
+       explaining the absence elsewhere. */
+    function drawRiGuidance(j) {
+        var box = document.getElementById('exp-tilt-ri');
+        if (!box) return;
+        if (!j.ri_guidance) {
+            box.innerHTML = j.ri_guidance_note
+                ? '<div class="exp-note exp-tilt-ri-note">' +
+                  j.ri_guidance_note + '</div>'
+                : '';
+            return;
+        }
+        var g = j.ri_guidance;
+        var TILT_BINS = ['0-15', '15-30', '>30'];
+        var TILT_LBL = { '0-15': 'aligned (&lt;15 km)',
+                         '15-30': 'moderate (15–30 km)',
+                         '>30': 'large (&gt;30 km)' };
+        var VENT_BINS = ['0-2.5', '2.5-5', '>5'];
+        var VENT_LBL = { '0-2.5': 'low', '2.5-5': 'moderate', '>5': 'high' };
+        var cells = {};
+        (g.cells || []).forEach(function (c) {
+            cells[c.tilt_bin + '|' + c.vent_bin] = c;
+        });
+        /* The storm's current cell: newest in-scope frame carrying both
+           coordinates. */
+        var cur = null;
+        var fr = j.frames || [];
+        for (var i = fr.length - 1; i >= 0; i--) {
+            var f = fr[i];
+            if (f.in_scope && f.tilt_mag_km != null && f.vp != null) {
+                var te = g.tilt_edges_km || [15, 30];
+                var ve = g.vent_edges || [2.5, 5];
+                cur = TILT_BINS[f.tilt_mag_km < te[0] ? 0
+                        : (f.tilt_mag_km < te[1] ? 1 : 2)] + '|' +
+                      VENT_BINS[f.vp < ve[0] ? 0 : (f.vp < ve[1] ? 1 : 2)];
+                break;
+            }
+        }
+        var html = '<div class="exp-shap-head">Rapid-intensification ' +
+            'guidance — tilt × ventilation' +
+            '<span class="exp-verif-src"> observed frequency of ' +
+            'RI (≥30 kt in 24 h) relative to climatology, over ' +
+            (g.n ? g.n.toLocaleString() : '') + ' out-of-training Atlantic ' +
+            'cases' + (g.storms ? ' / ' + g.storms + ' storms' : '') +
+            '</span></div>' +
+            '<div class="exp-verif-t exp-tilt-ri-t"><table>' +
+            '<tr><th>tilt \\ ventilation</th>';
+        VENT_BINS.forEach(function (v) {
+            html += '<th>' + VENT_LBL[v] + '<br><span class="exp-tile-sub">' +
+                v + '</span></th>';
+        });
+        html += '</tr>';
+        TILT_BINS.forEach(function (tb) {
+            html += '<tr><td>' + TILT_LBL[tb] + '</td>';
+            VENT_BINS.forEach(function (vb) {
+                var c = cells[tb + '|' + vb];
+                var here = cur === tb + '|' + vb;
+                if (!c) { html += '<td>—</td>'; return; }
+                html += '<td class="' + (here ? 'exp-ri-here' : '') + '">' +
+                    '<strong>' + (c.lift >= 10 ? Math.round(c.lift)
+                        : c.lift.toFixed(c.lift < 0.1 ? 2 : 1)) +
+                    '×</strong>' +
+                    '<span class="exp-tile-sub"> RI ' +
+                    (c.ri_fraction * 100).toFixed(c.ri_fraction < 0.01 ? 1 : 0) +
+                    '%</span>' +
+                    (here ? '<em class="exp-ri-tag">this storm</em>' : '') +
+                    '</td>';
+            });
+            html += '</tr>';
+        });
+        html += '</table></div>' +
+            '<div class="exp-verif-n">' +
+            (g.base_rate != null
+                ? 'Climatological RI frequency in this sample: ' +
+                  (g.base_rate * 100).toFixed(1) + '% of hourly cases. '
+                : '') +
+            (cur === null
+                ? 'No current cell is highlighted — the storm is ' +
+                  'outside the validity range or missing an environment ' +
+                  'value. '
+                : '') +
+            (g.caveat || '') + '</div>';
         box.innerHTML = html;
     }
 
@@ -2133,6 +2687,7 @@
     }
 
     function drawSeries(j) {
+        if (M.panels.tilt) return drawTiltSeries(j);
         var el = document.getElementById('exp-plot');
         if (!el || typeof Plotly === 'undefined') return;
         var fr = j.frames || [];
