@@ -2566,25 +2566,16 @@
             ctx.fillText('RMW', X(0), Y(rw) - 3);
         }
         if (_frvOpt.tilt) {
-            if (tf && tf.ok && tf.x != null) {
-                ctx.strokeStyle = '#d97706';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.moveTo(X(0), Y(0));
-                ctx.lineTo(X(tf.x), Y(tf.y));
-                ctx.stroke();
-                glyph('M', tf.x, tf.y, '#d97706');
-            }
             /* Aircraft-observed mid-level center when a TDR fix sits within
-               30 min of this frame: a diamond, labeled, so estimate and
-               observation can be compared in place. */
+               30 min of this frame (matching the verification pairing
+               window). Drawn FIRST so the model glyphs stay legible when
+               estimate and observation coincide — which is the good case —
+               and the offset label flips to whichever side M isn't on. */
             var tms = new Date(t).getTime();
-            var ob = null, obd = Infinity;
-            (s.tdrObs || []).forEach(function (o) {
-                var d = Math.abs(o.ms - tms);
-                if (d < obd) { obd = d; ob = o; }
-            });
-            if (ob && obd <= 30 * 60e3) {
+            (s.tdrObs || []).forEach(function (ob) {
+                var off = ob.ms - tms;
+                if (Math.abs(off) > 30 * 60e3) return;
+                var mins = Math.round(Math.abs(off) / 60e3);
                 ctx.save();
                 ctx.translate(X(ob.x), Y(ob.y));
                 ctx.rotate(Math.PI / 4);
@@ -2594,14 +2585,28 @@
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(-5, -5, 10, 10);
                 ctx.restore();
+                var lbl = mins <= 10 ? 'obs'
+                    : 'obs ' + (off > 0 ? '+' : '−') + mins + 'm';
+                var mNear = tf && tf.ok && tf.x != null &&
+                    Math.hypot(X(tf.x) - X(ob.x), Y(tf.y) - Y(ob.y)) < 26;
+                var below = !(mNear && Y(tf.y) >= Y(ob.y));
                 ctx.font = '9px -apple-system, sans-serif';
                 ctx.textAlign = 'center';
-                ctx.textBaseline = 'top';
+                ctx.textBaseline = below ? 'top' : 'bottom';
                 ctx.lineWidth = 2.5;
                 ctx.strokeStyle = '#000000';
-                ctx.strokeText('obs', X(ob.x), Y(ob.y) + 8);
+                ctx.strokeText(lbl, X(ob.x), Y(ob.y) + (below ? 8 : -8));
                 ctx.fillStyle = '#ffffff';
-                ctx.fillText('obs', X(ob.x), Y(ob.y) + 8);
+                ctx.fillText(lbl, X(ob.x), Y(ob.y) + (below ? 8 : -8));
+            });
+            if (tf && tf.ok && tf.x != null) {
+                ctx.strokeStyle = '#d97706';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(X(0), Y(0));
+                ctx.lineTo(X(tf.x), Y(tf.y));
+                ctx.stroke();
+                glyph('M', tf.x, tf.y, '#d97706');
             }
             /* 'L' when a low/mid pair is meaningful (tilt data exists or
                this IS the tilt page); a plain center cross otherwise. */
