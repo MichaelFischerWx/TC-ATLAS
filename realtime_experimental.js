@@ -615,7 +615,8 @@
         'imagery and the large-scale environment alone, with no aircraft ' +
         'reconnaissance required. Its wind is GHOST&rsquo;s wind; its ' +
         'pressure is one of the two members averaged on the ' +
-        '<a href="#experimental">Experimental tab</a>.</div>' +
+        '<a href="#experimental">Experimental tab</a>.</div>';
+    var GHOST_CITE =
         '<div class="exp-cite"><strong>Unlisted member page &mdash; ' +
         'manuscript in preparation.</strong> ' +
         'GHOST (Geostationary-based Hurricane Objective Strength ' +
@@ -638,7 +639,8 @@
         'radial shape of the core, and how far the cold canopy extends ' +
         '&mdash; fitted against the environmental pressure deficit rather ' +
         'than against pressure directly, because the deficit is what the ' +
-        'vortex actually sets.</div>' +
+        'vortex actually sets.</div>';
+    var FPM_CITE =
         '<div class="exp-cite"><strong>Unlisted research page.</strong> ' +
         'FPM is a research method under active development (the ' +
         'manuscript in preparation describes a later refinement of it), ' +
@@ -734,6 +736,7 @@
 
     PROFILES.ghost.verif = GHOST_VERIF_HTML;
     PROFILES.ghost.lede = GHOST_LEDE;
+    PROFILES.ghost.cite = GHOST_CITE;
     PROFILES.ghost.note = GHOST_NOTE;
     var BLEND_LEDE =
         '<div class="exp-lede"><strong>GHOST</strong>, as described in the ' +
@@ -747,7 +750,8 @@
         'archive, the mean is better than either member on aircraft-verified ' +
         'frames (7.0 vs 7.4 / 8.0 hPa RMSE) and over all frames (7.1 vs 7.8 / ' +
         '8.5); where the tree abstains its last value is carried for six ' +
-        'hours and the frame is flagged.</div>' +
+        'hours and the frame is flagged.</div>';
+    var BLEND_CITE =
         '<div class="exp-cite"><strong>Provisional real-time approximation ' +
         'of a method whose manuscript is in preparation.</strong> The FPM member running here ' +
         'is the frozen real-time version of that model; the manuscript&rsquo;s ' +
@@ -813,9 +817,11 @@
         'satellite-based, so the aircraft-verified rows are the decisive ones.</div>';
     PROFILES.blend.verif = BLEND_VERIF_HTML;
     PROFILES.blend.lede = BLEND_LEDE;
+    PROFILES.blend.cite = BLEND_CITE;
     PROFILES.blend.note = BLEND_NOTE;
     PROFILES.fpm.verif = FPM_VERIF_HTML;
     PROFILES.fpm.lede = FPM_LEDE;
+    PROFILES.fpm.cite = FPM_CITE;
     PROFILES.fpm.note = FPM_NOTE;
 
     var TILT_LEDE =
@@ -828,7 +834,8 @@
         'Doppler radar. Tilt is a leading structural signal: storms that ' +
         'are aligned (small tilt) in a favorable environment intensify far ' +
         'more often than tilted ones, and realignment often precedes rapid ' +
-        'intensification.</div>' +
+        'intensification.</div>';
+    var TILT_CITE =
         '<div class="exp-cite"><strong>Manuscript in preparation.</strong> ' +
         'TILT-RF is a research method; this page is provided for ' +
         'scientific transparency and is <strong>not an official forecast ' +
@@ -887,6 +894,7 @@
         'Atlantic.</div>';
     PROFILES.tilt.verif = TILT_VERIF_HTML;
     PROFILES.tilt.lede = TILT_LEDE;
+    PROFILES.tilt.cite = TILT_CITE;
     PROFILES.tilt.note = TILT_NOTE;
 
     /* ---------------- main UI ---------------- */
@@ -943,7 +951,10 @@
             '    · refreshes every 30 minutes · ' +
             '<a href="#" id="exp-refresh">reload</a></div>' +
             '</div>' +
-            switcher + staleHtml + M.lede + M.note;
+            /* Only the one-paragraph lede stays up top (author's call,
+               2026-08-21): the citation and usage-notes boxes were burying
+               the analyses below the fold — they now close the page. */
+            switcher + staleHtml + M.lede;
         var arch = (_archIndex && _archIndex.storms) || [];
         if (!storms.length && !arch.length) {
             html += '<div class="exp-empty">No active storms right now — ' +
@@ -997,44 +1008,59 @@
                 if (!groups[b]) { groups[b] = []; basinOrder.push(b); }
                 groups[b].push(s);
             });
+            /* Custom dropdown (a native <select> can't carry the category
+               swatches or right-aligned stats): a trigger button and a
+               popover of storm rows grouped by basin, closed by outside
+               click / Esc / selection. */
             html += '<div class="exp-arch-h">' +
-                '<span class="exp-arch-lbl">' +
-                ((_archIndex && _archIndex.year) || '') + ' season archive' +
-                '</span>' +
-                '<select id="exp-arch-sel" class="exp-arch-sel" ' +
-                'aria-label="Season archive storm">' +
-                '<option value="">Browse ' + arch.length +
-                ' completed storms…</option>';
+                '<div class="exp-archdd" id="exp-archdd">' +
+                '<button class="exp-archdd-btn" id="exp-archdd-btn" ' +
+                'aria-haspopup="listbox" aria-expanded="false">' +
+                '<span id="exp-archdd-lbl">' +
+                ((_archIndex && _archIndex.year) || '') + ' season archive · ' +
+                arch.length + ' storms</span> <b>&#9662;</b></button>' +
+                '<div class="exp-archdd-menu" id="exp-archdd-menu" hidden ' +
+                'role="listbox">';
             basinOrder.forEach(function (b) {
-                html += '<optgroup label="' + (BASIN_NAMES[b] || b) + '">';
+                html += '<div class="exp-archdd-basin">' +
+                    (BASIN_NAMES[b] || b) + '</div>';
                 groups[b].forEach(function (s) {
-                    var nm = (s.name || s.atcf) + ' (' + s.atcf + ')';
-                    if (s.excluded) {
-                        html += '<option value="" disabled>' + nm +
-                            ' — not scoreable</option>';
-                        return;
-                    }
-                    /* Label with what the active model predicts: tilt
-                       statistics on the structure profile, deepest pressure
-                       on pressure-first ones, peak wind otherwise. */
                     var pk = (s.peak_kt != null) ? s.peak_kt
                         : s.ghost_peak_kt;
+                    var cat = windToCategory(pk);
+                    if (s.excluded) {
+                        html += '<button class="exp-archdd-item off" ' +
+                            'disabled title="' + s.excluded + '">' +
+                            '<i></i><span class="exp-archdd-nm">' +
+                            (s.name || s.atcf) + '</span>' +
+                            '<span class="exp-archdd-id">' + s.atcf +
+                            '</span><em>not scoreable</em></button>';
+                        return;
+                    }
+                    /* Stat = what the active model predicts: tilt on the
+                       structure profile, deepest pressure on pressure-first
+                       ones, peak wind otherwise. */
                     var stat = '';
                     if (M.panels.tilt && s.median_tilt_km != null) {
-                        stat = Math.round(s.median_tilt_km) +
-                            ' km median tilt';
+                        stat = Math.round(s.median_tilt_km) + ' km tilt';
                     } else if (M.headline === 'pmin_hpa' &&
                                s.peak_hpa != null) {
                         stat = 'min ' + Math.round(s.peak_hpa) + ' hPa';
                     } else if (pk != null) {
                         stat = 'peak ' + Math.round(pk) + ' kt';
                     }
-                    html += '<option value="' + s.atcf + '">' + nm +
-                        (stat ? ' — ' + stat : '') + '</option>';
+                    html += '<button class="exp-archdd-item" data-atcf="' +
+                        s.atcf + '" role="option">' +
+                        '<i style="background:' +
+                        (pk != null ? SS_COLORS[cat] : 'transparent') +
+                        '"></i>' +
+                        '<span class="exp-archdd-nm">' + (s.name || s.atcf) +
+                        '</span>' +
+                        '<span class="exp-archdd-id">' + s.atcf + '</span>' +
+                        '<em>' + stat + '</em></button>';
                 });
-                html += '</optgroup>';
             });
-            html += '</select>' +
+            html += '</div></div>' +
                 '<span class="exp-arch-note-inline">retrospective ' +
                 M.name + ' runs of completed storms</span></div>';
         }
@@ -1144,18 +1170,23 @@
             '</div></div></div>' +
             /* RI-guidance card (TILT-RF only): NOT behind a toggle — the
                stratification is the model's operational point, so it sits
-               directly under the chart. The Verification disclosure follows
-               it, at the foot of the page. */
+               directly under the chart. */
             (M.panels.tilt
-                ? '<div id="exp-tilt-ri" class="exp-tilt-ri"></div>' +
-                  '<div class="exp-verif-foot">' +
+                ? '<div id="exp-tilt-ri" class="exp-tilt-ri"></div>' : '') +
+            '<div id="exp-track" class="exp-track" style="display:none;"></div>' +
+            '<div id="exp-dist" class="exp-shap" style="display:none;"></div>' +
+            '<div id="exp-shap" class="exp-shap" style="display:none;"></div>' +
+            /* Page foot: the citation and usage-notes boxes (moved down from
+               the header so the analyses lead), then the Verification
+               disclosure. */
+            '<div class="exp-foot">' + (M.cite || '') + (M.note || '') +
+            '</div>' +
+            (M.panels.tilt
+                ? '<div class="exp-verif-foot">' +
                   '<button class="exp-range exp-verifbtn' +
                   (_showVerif ? ' active' : '') +
                   '" id="exp-verif-btn">Verification</button></div>'
                 : '') +
-            '<div id="exp-track" class="exp-track" style="display:none;"></div>' +
-            '<div id="exp-dist" class="exp-shap" style="display:none;"></div>' +
-            '<div id="exp-shap" class="exp-shap" style="display:none;"></div>' +
             '<div id="exp-verif" class="exp-verif" style="display:none;"></div>' +
             '</div>';
         _root.innerHTML = html;
@@ -1183,12 +1214,38 @@
                 selectStorm(c.getAttribute('data-atcf'));
             });
         });
-        var archSel = document.getElementById('exp-arch-sel');
-        if (archSel) archSel.addEventListener('change', function () {
-            if (!archSel.value) return;
-            track(M.key + '_archive_select', { storm: archSel.value });
-            selectStorm(archSel.value);
-        });
+        var ddBtn = document.getElementById('exp-archdd-btn');
+        var ddMenu = document.getElementById('exp-archdd-menu');
+        if (ddBtn && ddMenu) {
+            function closeDD() {
+                ddMenu.hidden = true;
+                ddBtn.setAttribute('aria-expanded', 'false');
+                document.removeEventListener('click', onDoc, true);
+                document.removeEventListener('keydown', onKey);
+            }
+            function onDoc(e) {
+                if (!ddMenu.contains(e.target) && e.target !== ddBtn &&
+                    !ddBtn.contains(e.target)) closeDD();
+            }
+            function onKey(e) { if (e.key === 'Escape') closeDD(); }
+            ddBtn.addEventListener('click', function () {
+                if (ddMenu.hidden) {
+                    ddMenu.hidden = false;
+                    ddBtn.setAttribute('aria-expanded', 'true');
+                    document.addEventListener('click', onDoc, true);
+                    document.addEventListener('keydown', onKey);
+                } else closeDD();
+            });
+            ddMenu.querySelectorAll('.exp-archdd-item[data-atcf]')
+                .forEach(function (it) {
+                    it.addEventListener('click', function () {
+                        closeDD();
+                        track(M.key + '_archive_select',
+                              { storm: it.getAttribute('data-atcf') });
+                        selectStorm(it.getAttribute('data-atcf'));
+                    });
+                });
+        }
         bindFrameViewer();
         var vBtn = document.getElementById('exp-verif-btn');
         if (vBtn) vBtn.addEventListener('click', function () {
@@ -1371,10 +1428,28 @@
         _root.querySelectorAll('.exp-chip').forEach(function (c) {
             c.classList.toggle('active', c.getAttribute('data-atcf') === atcf);
         });
-        /* Keep the archive dropdown in sync: show the archived storm being
-           viewed, or fall back to the placeholder for a live one. */
-        var aSel = document.getElementById('exp-arch-sel');
-        if (aSel) aSel.value = _archSet[atcf] ? atcf : '';
+        /* Keep the archive dropdown in sync: the trigger names the archived
+           storm being viewed, or reverts to the browse label for a live
+           one; the menu marks the active row. */
+        var ddLbl = document.getElementById('exp-archdd-lbl');
+        if (ddLbl) {
+            if (_archSet[atcf]) {
+                var row = ((_archIndex && _archIndex.storms) || [])
+                    .filter(function (s) { return s.atcf === atcf; })[0];
+                ddLbl.textContent = 'Archive: ' +
+                    ((row && row.name) || atcf) + ' (' + atcf + ')';
+            } else {
+                ddLbl.textContent =
+                    ((_archIndex && _archIndex.year) || '') +
+                    ' season archive · ' +
+                    (((_archIndex && _archIndex.storms) || []).length) +
+                    ' storms';
+            }
+            _root.querySelectorAll('.exp-archdd-item').forEach(function (it) {
+                it.classList.toggle('active',
+                    it.getAttribute('data-atcf') === atcf);
+            });
+        }
         var img = document.getElementById('exp-plan');
         if (img) {
             var gen = _archSet[atcf]
