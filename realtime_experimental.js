@@ -82,8 +82,11 @@
                     'labels are JTWC Dvorak, not aircraft.'
             },
             /* No SHAP: the ridge\u2019s coefficients are FPM\u2019s drivers, the
-               tree\u2019s SHAP is GHOST\u2019s; neither describes the mean. */
-            panels: { rmw: false, shap: false, dist: true, track: true,
+               tree\u2019s SHAP is GHOST\u2019s; neither describes the mean.
+               rmw is ON again (2026-08-20): the blend publisher now joins
+               the tree\u2019s Stage-1 size channel per frame \u2014 it had been
+               silently dropped when the blend became the listed tab. */
+            panels: { rmw: true, shap: false, dist: true, track: true,
                       comp: true }
         },
         ghost: {
@@ -1125,6 +1128,15 @@
             '<input type="range" id="exp-frv-slider" min="0" max="0" ' +
             'value="0" step="1">' +
             '<span id="exp-frv-time" class="exp-frv-time"></span>' +
+            '</div>' +
+            '<div class="exp-frv-opts" id="exp-frv-opts">' +
+            [['coast', 'coastlines'], ['rings', 'range rings'],
+             ['tilt', 'L/M tilt'], ['rmw', 'RMW'],
+             ['shear', 'shear']].map(function (o) {
+                return '<label><input type="checkbox" data-opt="' + o[0] +
+                    '"' + (_frvOpt[o[0]] ? ' checked' : '') + '> ' +
+                    o[1] + '</label>';
+            }).join('') +
             '</div></div></div>' +
             /* RI-guidance card (TILT-RF only): NOT behind a toggle — the
                stratification is the model's operational point, so it sits
@@ -2049,8 +2061,13 @@
        can be scrubbed frame by frame; clicking the time-series chart seeks
        the viewer to that time. */
     var _strip = null;       // {atcf, meta, lut, sheets:{}, i0, i1, idx,
-                             //  frameByTime}
+                             //  frameByTime, tiltBy, rmwBy}
     var _stripTimer = null;
+    /* Overlay layers, all on by default; unavailable ones (no companion
+       payload for this storm) get their checkbox disabled instead of
+       silently drawing nothing. Session-sticky across storms. */
+    var _frvOpt = { coast: true, rings: true, tilt: true, rmw: true,
+                    shear: true };
 
     function stripPath(atcf, name) {
         return 'irstrips/' + atcf.slice(4) + '/' + atcf + '_' + name;
@@ -2101,12 +2118,67 @@
                 lut[4 * i + 3] = (i === meta.missing) ? 0 : 255;
             }
             _strip = { atcf: atcf, meta: meta, lut: lut, sheets: {},
-                       i0: i0, i1: i1, idx: i1, frameByTime: fbt };
+                       i0: i0, i1: i1, idx: i1, frameByTime: fbt,
+                       tiltBy: {}, rmwBy: {} };
+            /* Annotation layers come from BOTH products' payloads: the
+               tilt vector and shear from TILT-RF's, the size estimate from
+               GHOST's. Seed from the payload in hand, then fetch the
+               companion; the storm may be excluded there (404) — the
+               layer's toggle just goes dark. */
+            function seedTilt(frames) {
+                (frames || []).forEach(function (f) {
+                    _strip.tiltBy[f.t] = { x: f.tilt_x_km, y: f.tilt_y_km,
+                                           ok: !!f.in_scope,
+                                           shdc: f.shdc_kt,
+                                           sddc: f.sddc_deg };
+                });
+            }
+            function seedRmw(frames) {
+                (frames || []).forEach(function (f) {
+                    if (f.rmw_km != null && isFinite(f.rmw_km))
+                        _strip.rmwBy[f.t] = f.rmw_km;
+                });
+            }
+            var comp = M.panels.tilt ? PROFILES.blend : PROFILES.tilt;
+            if (M.panels.tilt) seedTilt(j.frames);
+            else seedRmw(j.frames);
+            fetchJson(comp.arch + '/' + comp.file + atcf + '.json')
+                .then(function (cj) {
+                    if (_strip !== null && _strip.atcf === atcf) {
+                        if (M.panels.tilt) seedRmw(cj.frames);
+                        else seedTilt(cj.frames);
+                        frvToggleState();
+                        drawStripFrame(_strip.idx);
+                    }
+                }).catch(function () { frvToggleState(); });
             var sl = document.getElementById('exp-frv-slider');
             sl.min = i0; sl.max = i1; sl.value = i1;
             box.style.display = 'block';
+            frvToggleState();
             drawStripFrame(i1);
         }).catch(function () { /* no strips for this storm — stay hidden */ });
+    }
+
+    /* Enable/disable each layer's checkbox by whether ANY frame carries its
+       data, with the reason in the tooltip. */
+    function frvToggleState() {
+        var s = _strip;
+        if (!s) return;
+        var hasTilt = Object.keys(s.tiltBy).length > 0;
+        var hasRmw = Object.keys(s.rmwBy).length > 0;
+        var spec = {
+            rings: [true, ''],
+            tilt: [hasTilt, 'no tilt estimate for this storm'],
+            shear: [hasTilt, 'no shear diagnostics for this storm'],
+            rmw: [hasRmw, 'no size (RMW) estimate for this storm']
+        };
+        _root.querySelectorAll('.exp-frv-opts input').forEach(function (cb) {
+            var k = cb.getAttribute('data-opt');
+            if (!spec[k]) return;
+            cb.disabled = !spec[k][0];
+            cb.parentElement.title = spec[k][0] ? '' : spec[k][1];
+            cb.parentElement.classList.toggle('off', !spec[k][0]);
+        });
     }
 
     function stripSheet(k) {
@@ -2195,24 +2267,114 @@
         }).catch(function () {});
     }
 
-    /* km -> canvas px for the ±extent domain, north up. */
+    /* Coastline segments come from the geojson the map already ships, so
+       showing land in the storm-centered frame costs one (browser-cached)
+       fetch and a per-frame reprojection — no new storage at all. */
+    var _coastLines = null;      // [{c: [[lon,lat]...], bb:[w,s,e,n]}]
+    var _coastReq = null;
+
+    function ensureCoast() {
+        if (_coastReq) return _coastReq;
+        /* FULL-resolution Natural Earth 10m (already shipped for the
+           explorer), not the map's simplified copy: at a ±200 km window the
+           simplified vertices are visibly chunky. 9.3 MB, but lazy — it
+           only ever loads when a frame viewer actually draws coastlines,
+           and the browser caches it across storms. */
+        _coastReq = fetch('assets/coastlines/ne_10m_coastline.geojson')
+            .then(function (r) { return r.json(); })
+            .then(function (g) {
+                var lines = [];
+                (g.features || []).forEach(function (ft) {
+                    var gm = ft.geometry || {};
+                    var arr = gm.type === 'LineString' ? [gm.coordinates]
+                        : gm.type === 'MultiLineString' ? gm.coordinates : [];
+                    arr.forEach(function (c) {
+                        var w = 999, s_ = 999, e = -999, n = -999;
+                        c.forEach(function (p) {
+                            if (p[0] < w) w = p[0];
+                            if (p[0] > e) e = p[0];
+                            if (p[1] < s_) s_ = p[1];
+                            if (p[1] > n) n = p[1];
+                        });
+                        lines.push({ c: c, bb: [w, s_, e, n] });
+                    });
+                });
+                _coastLines = lines;
+                return lines;
+            })
+            .catch(function () { _coastReq = null; return null; });
+        return _coastReq;
+    }
+
+    function drawCoast(ctx, S, ext, clat, clon, X, Y) {
+        var margin = ext / 111.32 + 2.5;      // deg box around the center
+        var coslat = Math.cos(clat * Math.PI / 180);
+        ctx.save();
+        ctx.strokeStyle = 'rgba(250,240,160,0.85)';
+        ctx.lineWidth = 1.2;
+        _coastLines.forEach(function (L) {
+            /* Cheap bbox reject in lon/lat space, dateline-normalized. */
+            var dW = ((L.bb[0] - clon + 540) % 360) - 180;
+            var dE = ((L.bb[2] - clon + 540) % 360) - 180;
+            if ((dW > margin && dE > margin) ||
+                (dW < -margin && dE < -margin) ||
+                L.bb[3] < clat - margin || L.bb[1] > clat + margin) return;
+            ctx.beginPath();
+            var pen = false;
+            L.c.forEach(function (p) {
+                var dx = (((p[0] - clon + 540) % 360) - 180) *
+                    111.32 * coslat;
+                var dy = (p[1] - clat) * 111.32;
+                if (Math.abs(dx) > ext * 1.25 || Math.abs(dy) > ext * 1.25) {
+                    pen = false;
+                    return;
+                }
+                if (pen) ctx.lineTo(X(dx), Y(dy));
+                else ctx.moveTo(X(dx), Y(dy));
+                pen = true;
+            });
+            ctx.stroke();
+        });
+        ctx.restore();
+    }
+
+    /* km -> canvas px for the ±extent domain, north up. Layer stack, all
+       user-toggleable: coastlines, range rings, RMW ring (GHOST size),
+       L/M centers + tilt vector (TILT-RF), shear vector inset. */
     function drawStripOverlay(ctx, S, t) {
         var s = _strip;
         var ext = s.meta.extent_km || 200;
         function X(km) { return (km + ext) / (2 * ext) * S; }
         function Y(km) { return (ext - km) / (2 * ext) * S; }
+        var f = s.frameByTime[t];
+        var tf = s.tiltBy[t];
+        var rw = s.rmwBy[t];
+        if (_frvOpt.coast && f && f.center_lat != null) {
+            if (_coastLines) {
+                drawCoast(ctx, S, ext, f.center_lat, f.center_lon, X, Y);
+            } else {
+                var want = s.idx;
+                ensureCoast().then(function (ok) {
+                    if (ok && _strip === s && s.idx === want)
+                        drawStripFrame(want);
+                });
+            }
+        }
         ctx.save();
-        ctx.strokeStyle = 'rgba(255,255,255,0.45)';
-        ctx.setLineDash([4, 4]);
-        ctx.lineWidth = 1;
-        [50, 100, 150].forEach(function (r) {
-            ctx.beginPath();
-            ctx.arc(X(0), Y(0), r / (2 * ext) * S, 0, 2 * Math.PI);
-            ctx.stroke();
-        });
-        ctx.setLineDash([]);
-        function glyph(txt, xkm, ykm, color) {
-            ctx.font = 'bold 15px -apple-system, sans-serif';
+        if (_frvOpt.rings) {
+            ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+            ctx.setLineDash([4, 4]);
+            ctx.lineWidth = 1;
+            [50, 100, 150].forEach(function (r) {
+                ctx.beginPath();
+                ctx.arc(X(0), Y(0), r / (2 * ext) * S, 0, 2 * Math.PI);
+                ctx.stroke();
+            });
+            ctx.setLineDash([]);
+        }
+        function glyph(txt, xkm, ykm, color, size) {
+            ctx.font = 'bold ' + (size || 15) +
+                'px -apple-system, sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.lineWidth = 3;
@@ -2221,27 +2383,70 @@
             ctx.fillStyle = color;
             ctx.fillText(txt, X(xkm), Y(ykm));
         }
-        var f = s.frameByTime[t];
-        if (M.panels.tilt) {
-            if (f && f.in_scope && f.tilt_x_km != null) {
+        if (_frvOpt.rmw && rw != null) {
+            ctx.strokeStyle = 'rgba(103,232,249,0.95)';   // cyan: size ring
+            ctx.lineWidth = 1.6;
+            ctx.beginPath();
+            ctx.arc(X(0), Y(0), rw / (2 * ext) * S, 0, 2 * Math.PI);
+            ctx.stroke();
+            ctx.font = '10px -apple-system, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.lineWidth = 2.5;
+            ctx.strokeStyle = '#000000';
+            ctx.strokeText('RMW', X(0), Y(rw) - 3);
+            ctx.fillStyle = 'rgba(103,232,249,0.95)';
+            ctx.fillText('RMW', X(0), Y(rw) - 3);
+        }
+        if (_frvOpt.tilt) {
+            if (tf && tf.ok && tf.x != null) {
                 ctx.strokeStyle = '#d97706';
                 ctx.lineWidth = 2;
                 ctx.beginPath();
                 ctx.moveTo(X(0), Y(0));
-                ctx.lineTo(X(f.tilt_x_km), Y(f.tilt_y_km));
+                ctx.lineTo(X(tf.x), Y(tf.y));
                 ctx.stroke();
-                glyph('M', f.tilt_x_km, f.tilt_y_km, '#d97706');
+                glyph('M', tf.x, tf.y, '#d97706');
             }
-            glyph('L', 0, 0, '#ffffff');
-        } else {
-            if (f && f.rmw_km != null && isFinite(f.rmw_km)) {
-                ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-                ctx.lineWidth = 1.5;
-                ctx.beginPath();
-                ctx.arc(X(0), Y(0), f.rmw_km / (2 * ext) * S, 0, 2 * Math.PI);
-                ctx.stroke();
-            }
-            glyph('+', 0, 0, '#ffffff');
+            /* 'L' when a low/mid pair is meaningful (tilt data exists or
+               this IS the tilt page); a plain center cross otherwise. */
+            glyph((M.panels.tilt || tf) ? 'L' : '+', 0, 0, '#ffffff');
+        }
+        if (_frvOpt.shear && tf && tf.sddc != null && isFinite(tf.sddc)) {
+            var th = tf.sddc * Math.PI / 180;
+            var ux = Math.sin(th), uy = Math.cos(th);
+            var cx = S - 44, cy = 40, ln = 20;
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(cx - ln * ux, cy + ln * uy);
+            ctx.lineTo(cx + ln * ux, cy - ln * uy);
+            ctx.stroke();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(cx - ln * ux, cy + ln * uy);
+            ctx.lineTo(cx + ln * ux, cy - ln * uy);
+            ctx.stroke();
+            /* arrowhead */
+            var ax = cx + ln * ux, ay = cy - ln * uy;
+            ctx.beginPath();
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(ax - 7 * ux - 4 * uy, ay + 7 * uy - 4 * ux);
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(ax - 7 * ux + 4 * uy, ay + 7 * uy + 4 * ux);
+            ctx.stroke();
+            ctx.font = '10px -apple-system, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.lineWidth = 2.5;
+            ctx.strokeStyle = '#000000';
+            var shl = (tf.shdc != null && isFinite(tf.shdc))
+                ? Math.round(tf.shdc) + ' kt shear' : 'shear';
+            ctx.strokeText(shl, cx, cy + ln + 6);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(shl, cx, cy + ln + 6);
         }
         ctx.restore();
     }
@@ -2251,6 +2456,20 @@
         if (sl) sl.addEventListener('input', function () {
             stopStripPlay();
             seekStrip(+sl.value);
+        });
+        _root.querySelectorAll('.exp-frv-opts input').forEach(function (cb) {
+            /* The checked ATTRIBUTE is not enough: browser form restoration
+               re-applies remembered checkbox states by position across
+               reloads, which kept switching the first layer off. Assert the
+               property from module state after every render. */
+            cb.checked = !!_frvOpt[cb.getAttribute('data-opt')];
+            cb.setAttribute('autocomplete', 'off');
+            cb.addEventListener('change', function () {
+                _frvOpt[cb.getAttribute('data-opt')] = cb.checked;
+                track(M.key + '_frame_layer',
+                      { layer: cb.getAttribute('data-opt'), on: cb.checked });
+                if (_strip) drawStripFrame(_strip.idx);
+            });
         });
         var pl = document.getElementById('exp-frv-play');
         if (pl) pl.addEventListener('click', function () {
