@@ -1128,6 +1128,10 @@
             '<input type="range" id="exp-frv-slider" min="0" max="0" ' +
             'value="0" step="1">' +
             '<span id="exp-frv-time" class="exp-frv-time"></span>' +
+            '<button id="exp-frv-gif" class="exp-range exp-dl" ' +
+            'title="Download the loop as an animated GIF (current layers ' +
+            'baked in)" aria-label="Download animated GIF">&#x2913; GIF' +
+            '</button>' +
             '</div>' +
             '<div class="exp-frv-opts" id="exp-frv-opts">' +
             [['coast', 'coastlines'], ['rings', 'range rings'],
@@ -2207,62 +2211,71 @@
         drawStripFrame(idx);
     }
 
+    /* One-line status suffix for a frame: the active model's estimate. */
+    function stripInfo(t) {
+        var f = _strip && _strip.frameByTime[t];
+        if (!f) return '';
+        if (M.panels.tilt) {
+            return (f.in_scope && f.tilt_mag_km != null)
+                ? ' · tilt ' + Math.round(f.tilt_mag_km) + ' km'
+                : ' · no estimate (outside validity)';
+        }
+        if (f.vmax_kt != null) {
+            return ' · ' + Math.round(f.vmax_kt) + ' kt' +
+                (f.pmin_hpa != null
+                    ? ' / ' + Math.round(f.pmin_hpa) + ' hPa' : '');
+        }
+        return f.pmin_hpa != null
+            ? ' · ' + Math.round(f.pmin_hpa) + ' hPa' : '';
+    }
+
+    /* Pure renderer: composite frame idx (sheet image already loaded) plus
+       the toggled overlays into any square context. Shared by the live
+       canvas and the GIF exporter so the export IS what the user sees. */
+    function renderStripInto(ctx, S, idx, img) {
+        var s = _strip;
+        var m = s.meta;
+        var k = Math.floor(idx / m.per_sheet);
+        var j = idx - k * m.per_sheet;
+        var col = j % m.nx;
+        /* Sheets are stored north-up (rows flipped at build time), so
+           row r of the GRID sits at (ny-1-r) from the image top. */
+        var row = Math.floor(j / m.nx);
+        var off = document.createElement('canvas');
+        off.width = m.w; off.height = m.h;
+        var octx = off.getContext('2d', { willReadFrequently: true });
+        octx.drawImage(img, col * m.w, (m.ny - 1 - row) * m.h,
+                       m.w, m.h, 0, 0, m.w, m.h);
+        var id = octx.getImageData(0, 0, m.w, m.h);
+        var px = id.data;
+        for (var i = 0; i < px.length; i += 4) {
+            var u = px[i] * 4;                     // grayscale: R = index
+            px[i] = s.lut[u]; px[i + 1] = s.lut[u + 1];
+            px[i + 2] = s.lut[u + 2]; px[i + 3] = s.lut[u + 3];
+        }
+        octx.putImageData(id, 0, 0);
+        ctx.clearRect(0, 0, S, S);
+        ctx.fillStyle = '#0b1220';
+        ctx.fillRect(0, 0, S, S);
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(off, 0, 0, S, S);
+        drawStripOverlay(ctx, S, m.times[idx]);
+    }
+
     function drawStripFrame(idx) {
         var s = _strip;
         if (!s) return;
         s.idx = idx;
         var m = s.meta;
-        var k = Math.floor(idx / m.per_sheet);
-        stripSheet(k).then(function (img) {
+        stripSheet(Math.floor(idx / m.per_sheet)).then(function (img) {
             if (_strip !== s || s.idx !== idx) return;
             var cv = document.getElementById('exp-frv');
             if (!cv) return;
-            var j = idx - k * m.per_sheet;
-            var col = j % m.nx;
-            /* Sheets are stored north-up (rows flipped at build time), so
-               row r of the GRID sits at (ny-1-r) from the image top. */
-            var row = Math.floor(j / m.nx);
-            var sx = col * m.w;
-            var sy = (m.ny - 1 - row) * m.h;
-            var off = document.createElement('canvas');
-            off.width = m.w; off.height = m.h;
-            var octx = off.getContext('2d', { willReadFrequently: true });
-            octx.drawImage(img, sx, sy, m.w, m.h, 0, 0, m.w, m.h);
-            var id = octx.getImageData(0, 0, m.w, m.h);
-            var px = id.data;
-            for (var i = 0; i < px.length; i += 4) {
-                var u = px[i] * 4;                 // grayscale: R = index
-                px[i] = s.lut[u]; px[i + 1] = s.lut[u + 1];
-                px[i + 2] = s.lut[u + 2]; px[i + 3] = s.lut[u + 3];
-            }
-            octx.putImageData(id, 0, 0);
-            var ctx = cv.getContext('2d');
-            var S = cv.width;                      // square canvas
-            ctx.clearRect(0, 0, S, S);
-            ctx.fillStyle = '#0b1220';
-            ctx.fillRect(0, 0, S, S);
-            ctx.imageSmoothingEnabled = true;
-            ctx.drawImage(off, 0, 0, S, S);
-            drawStripOverlay(ctx, S, m.times[idx]);
+            renderStripInto(cv.getContext('2d'), cv.width, idx, img);
             var lbl = document.getElementById('exp-frv-time');
             if (lbl) {
-                var f = s.frameByTime[m.times[idx]];
-                var info = '';
-                if (f) {
-                    if (M.panels.tilt) {
-                        info = (f.in_scope && f.tilt_mag_km != null)
-                            ? ' · tilt ' + Math.round(f.tilt_mag_km) + ' km'
-                            : ' · no estimate (outside validity)';
-                    } else if (f.vmax_kt != null) {
-                        info = ' · ' + Math.round(f.vmax_kt) + ' kt';
-                        if (f.pmin_hpa != null)
-                            info += ' / ' + Math.round(f.pmin_hpa) + ' hPa';
-                    } else if (f.pmin_hpa != null) {
-                        info = ' · ' + Math.round(f.pmin_hpa) + ' hPa';
-                    }
-                }
                 lbl.textContent = m.times[idx].slice(5, 16)
-                    .replace('T', ' ') + 'Z' + info;
+                    .replace('T', ' ') + 'Z' + stripInfo(m.times[idx]);
             }
         }).catch(function () {});
     }
@@ -2471,6 +2484,10 @@
                 if (_strip) drawStripFrame(_strip.idx);
             });
         });
+        var gifBtn = document.getElementById('exp-frv-gif');
+        if (gifBtn) gifBtn.addEventListener('click', function () {
+            exportStripGif(gifBtn);
+        });
         var pl = document.getElementById('exp-frv-play');
         if (pl) pl.addEventListener('click', function () {
             if (_stripTimer) { stopStripPlay(); return; }
@@ -2483,6 +2500,122 @@
                 if (nxt > _strip.i1) { stopStripPlay(); return; }
                 seekStrip(nxt);
             }, 140);
+        });
+    }
+
+    /* ---- GIF export of the archived frame loop ----
+       Encoded client-side with the vendored gifenc (~8 kB), one GLOBAL
+       palette sampled across the loop (per-frame quantization makes smooth
+       IR ramps flicker — the GC-ATLAS exporter learned this the hard way),
+       frames rendered through the SAME path as the on-screen viewer so the
+       current layer toggles are baked in. Saved via TCExport, the one save
+       path. Memory stays flat: each frame is palettized and written to the
+       encoder immediately, never held as RGBA. */
+    var GIF_MAX_FRAMES = 150;
+    var GIF_SIZE = 480;
+    var GIF_DELAY_MS = 100;
+
+    function drawGifCaption(ctx, S, t) {
+        var j = _series[_storm] || {};
+        var name = (j.name ? j.name + ' ' : '') + (_storm || '');
+        ctx.save();
+        ctx.fillStyle = 'rgba(11,18,32,0.82)';
+        ctx.fillRect(0, S - 22, S, 22);
+        ctx.font = '11px -apple-system, sans-serif';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#e2e8f0';
+        ctx.textAlign = 'left';
+        ctx.fillText(name + ' · ' + t.slice(5, 16).replace('T', ' ') + 'Z' +
+                     stripInfo(t), 8, S - 11);
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText('tcatlas.org · EXPERIMENTAL', S - 8, S - 11);
+        ctx.restore();
+    }
+
+    function exportStripGif(btn) {
+        if (!_strip || !window.TCExport || btn.disabled) return;
+        var s = _strip, m = s.meta;
+        track(M.key + '_frame_gif', { storm: _storm });
+        var count = s.i1 - s.i0 + 1;
+        var stride = Math.ceil(count / GIF_MAX_FRAMES);
+        var idxs = [];
+        for (var i = s.i0; i <= s.i1; i += stride) idxs.push(i);
+        btn.disabled = true;
+        var label0 = btn.textContent;
+        btn.textContent = 'GIF …';
+        var off = document.createElement('canvas');
+        off.width = GIF_SIZE; off.height = GIF_SIZE;
+        var ctx = off.getContext('2d', { willReadFrequently: true });
+        var sheets = {};
+        var need = {};
+        idxs.forEach(function (ix) {
+            need[Math.floor(ix / m.per_sheet)] = true;
+        });
+        Promise.all([
+            _frvOpt.coast ? ensureCoast() : Promise.resolve(null),
+            /* './' is load-bearing: import() rejects bare specifiers (they
+               read as module names), unlike fetch(). Resolves against the
+               document (site root), same as every other asset path here. */
+            import('./assets/vendor/gifenc/gifenc.esm.js'),
+            Promise.all(Object.keys(need).map(function (k) {
+                return stripSheet(+k).then(function (im) { sheets[k] = im; });
+            }))
+        ]).then(function (res) {
+            var enc = res[1];
+            if (_strip !== s) throw new Error('storm changed');
+            function draw(ix) {
+                renderStripInto(ctx, GIF_SIZE, ix, sheets[
+                    Math.floor(ix / m.per_sheet)]);
+                drawGifCaption(ctx, GIF_SIZE, m.times[ix]);
+                return ctx.getImageData(0, 0, GIF_SIZE, GIF_SIZE);
+            }
+            /* Pass 1: global palette from every ~8th frame, spatially
+               subsampled 4x — plenty for a 256-color ramp. */
+            var samp = [];
+            for (var a = 0; a < idxs.length; a += 8) {
+                var d = draw(idxs[a]).data;
+                for (var p = 0; p < d.length; p += 16) {
+                    samp.push(d[p], d[p + 1], d[p + 2], 255);
+                }
+            }
+            var palette = enc.quantize(new Uint8ClampedArray(samp), 256);
+            /* Pass 2: palettize + write each frame immediately, chunked so
+               the button's progress counter actually paints. */
+            var gif = enc.GIFEncoder();
+            var kdone = 0;
+            function chunk(resolve, reject) {
+                try {
+                    var until = Math.min(kdone + 10, idxs.length);
+                    for (; kdone < until; kdone++) {
+                        var id = draw(idxs[kdone]);
+                        var indexed = enc.applyPalette(id.data, palette);
+                        gif.writeFrame(indexed, GIF_SIZE, GIF_SIZE, {
+                            palette: palette,
+                            delay: kdone === idxs.length - 1
+                                ? 600 : GIF_DELAY_MS
+                        });
+                    }
+                    btn.textContent = 'GIF ' + kdone + '/' + idxs.length;
+                    if (kdone < idxs.length) {
+                        setTimeout(function () { chunk(resolve, reject); }, 0);
+                    } else {
+                        gif.finish();
+                        resolve(new Blob([gif.bytes()],
+                                         { type: 'image/gif' }));
+                    }
+                } catch (e) { reject(e); }
+            }
+            return new Promise(chunk);
+        }).then(function (blob) {
+            return TCExport.save(blob, 'TC-ATLAS_' + M.name + '_' + _storm +
+                                 '_frames.gif');
+        }).catch(function (e) {
+            /* Never swallow silently — the dead-save-button lesson. */
+            if (window.console) console.warn('frame GIF export failed', e);
+        }).then(function () {
+            btn.disabled = false;
+            btn.textContent = label0;
         });
     }
 
