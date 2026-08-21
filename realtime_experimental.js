@@ -980,20 +980,10 @@
                 'storms right now — browse the season archive below.</div>';
         }
         if (arch.length) {
-            /* Collapsed by default (auto-open when there are no live storms,
-               so the page never renders empty). Chips grouped by basin. */
-            var archOpen = (_archOpen === null) ? !storms.length : _archOpen;
-            html += '<div class="exp-arch-h">' +
-                '<button class="exp-arch-toggle' +
-                (archOpen ? ' open' : '') + '" id="exp-arch-toggle" ' +
-                'aria-expanded="' + archOpen + '">' +
-                ((_archIndex && _archIndex.year) || '') +
-                ' season archive (' + arch.length + ') <b>&#9662;</b>' +
-                '</button>' +
-                '<span>retrospective ' + M.name + ' runs of completed storms</span>' +
-                '</div>' +
-                '<div class="exp-arch-body" id="exp-arch-body"' +
-                (archOpen ? '' : ' hidden') + '>';
+            /* One dropdown, grouped by basin, instead of a wall of chips —
+               a season of 25+ storms drowned the live row. Excluded storms
+               stay LISTED as disabled options carrying their reason:
+               silently missing reads as a broken producer. */
             var BASIN_NAMES = { AL: 'Atlantic', EP: 'East Pacific',
                                 CP: 'Central Pacific', WP: 'West Pacific',
                                 IO: 'North Indian',
@@ -1004,53 +994,46 @@
                 if (!groups[b]) { groups[b] = []; basinOrder.push(b); }
                 groups[b].push(s);
             });
+            html += '<div class="exp-arch-h">' +
+                '<span class="exp-arch-lbl">' +
+                ((_archIndex && _archIndex.year) || '') + ' season archive' +
+                '</span>' +
+                '<select id="exp-arch-sel" class="exp-arch-sel" ' +
+                'aria-label="Season archive storm">' +
+                '<option value="">Browse ' + arch.length +
+                ' completed storms…</option>';
             basinOrder.forEach(function (b) {
-                html += '<div class="exp-arch-basin">' +
-                    (BASIN_NAMES[b] || b) + '</div>' +
-                    '<div class="exp-chips exp-chips-arch">';
+                html += '<optgroup label="' + (BASIN_NAMES[b] || b) + '">';
                 groups[b].forEach(function (s) {
-                    /* Filter-excluded storms (weak/overland whole life) are
-                       listed but not selectable — silently missing reads as
-                       a bug, and the reason is scientifically meaningful. */
+                    var nm = (s.name || s.atcf) + ' (' + s.atcf + ')';
                     if (s.excluded) {
-                        html += '<button class="exp-chip exp-chip-arch ' +
-                            'exp-chip-off" disabled title="' + s.excluded +
-                            '">' + (s.name || s.atcf) +
-                            ' <span>' + s.atcf + '</span>' +
-                            '<em class="exp-chip-int">not scoreable</em>' +
-                            '</button>';
+                        html += '<option value="" disabled>' + nm +
+                            ' — not scoreable</option>';
                         return;
                     }
-                    /* `peak_kt` is the producer-neutral field; ghost_peak_kt
-                       is the original GHOST spelling, still read so an index
-                       published before the rename keeps its chip labels. */
-                    var pk = (s.peak_kt != null) ? s.peak_kt : s.ghost_peak_kt;
-                    var pp = s.peak_hpa;
-                    var cat = windToCategory(pk);
-                    /* Label the chip with whatever the model actually
-                       predicts: a pressure model's "peak" is its deepest
-                       pressure, and quoting a derived wind there would put
-                       the weakest number on the storm's headline. The
-                       category swatch still needs a wind, so it only appears
-                       when one was published. */
-                    var chipLbl = '';
-                    if (M.headline === 'pmin_hpa' && pp != null) {
-                        chipLbl = (pk != null
-                                ? '<i style="background:' + SS_COLORS[cat] + '"></i>'
-                                : '') + 'min ' + Math.round(pp) + ' hPa';
+                    /* Label with what the active model predicts: tilt
+                       statistics on the structure profile, deepest pressure
+                       on pressure-first ones, peak wind otherwise. */
+                    var pk = (s.peak_kt != null) ? s.peak_kt
+                        : s.ghost_peak_kt;
+                    var stat = '';
+                    if (M.panels.tilt && s.median_tilt_km != null) {
+                        stat = Math.round(s.median_tilt_km) +
+                            ' km median tilt';
+                    } else if (M.headline === 'pmin_hpa' &&
+                               s.peak_hpa != null) {
+                        stat = 'min ' + Math.round(s.peak_hpa) + ' hPa';
                     } else if (pk != null) {
-                        chipLbl = '<i style="background:' + SS_COLORS[cat] +
-                            '"></i>peak ' + Math.round(pk) + ' kt';
+                        stat = 'peak ' + Math.round(pk) + ' kt';
                     }
-                    html += '<button class="exp-chip exp-chip-arch" ' +
-                        'data-atcf="' + s.atcf + '">' + (s.name || s.atcf) +
-                        ' <span>' + s.atcf + '</span>' +
-                        '<em class="exp-chip-int">' + chipLbl +
-                        '</em></button>';
+                    html += '<option value="' + s.atcf + '">' + nm +
+                        (stat ? ' — ' + stat : '') + '</option>';
                 });
-                html += '</div>';
+                html += '</optgroup>';
             });
-            html += '</div>';
+            html += '</select>' +
+                '<span class="exp-arch-note-inline">retrospective ' +
+                M.name + ' runs of completed storms</span></div>';
         }
         html +=
             '<div class="exp-tiles" id="exp-tiles"></div>' +
@@ -1127,6 +1110,22 @@
             '&#x2913; Download</button>' +
             '</div>' +
             '<div id="exp-plot" class="exp-plot"></div>' +
+            /* Frame viewer (archived storms): shown by setupFrameViewer()
+               only when packed frames exist. Sits directly under the chart
+               because clicking the chart is what seeks it. */
+            '<div id="exp-frames" class="exp-frames" style="display:none;">' +
+            '<div class="exp-shap-head">Frame viewer' +
+            '<span class="exp-verif-src"> every archived infrared frame — ' +
+            'drag to scrub, or click a time on the chart above</span></div>' +
+            '<div class="exp-frv-wrap">' +
+            '<canvas id="exp-frv" width="480" height="480"></canvas>' +
+            '<div class="exp-frv-bar">' +
+            '<button id="exp-frv-play" class="exp-range" ' +
+            'aria-label="Play frames">▶</button>' +
+            '<input type="range" id="exp-frv-slider" min="0" max="0" ' +
+            'value="0" step="1">' +
+            '<span id="exp-frv-time" class="exp-frv-time"></span>' +
+            '</div></div></div>' +
             /* RI-guidance card (TILT-RF only): NOT behind a toggle — the
                stratification is the model's operational point, so it sits
                directly under the chart. The Verification disclosure follows
@@ -1168,16 +1167,13 @@
                 selectStorm(c.getAttribute('data-atcf'));
             });
         });
-        var archT = document.getElementById('exp-arch-toggle');
-        if (archT) archT.addEventListener('click', function () {
-            var body = document.getElementById('exp-arch-body');
-            if (!body) return;
-            _archOpen = body.hidden;          // toggling from current state
-            body.hidden = !_archOpen;
-            archT.classList.toggle('open', _archOpen);
-            archT.setAttribute('aria-expanded', _archOpen);
-            track(M.key + '_archive_toggle', { open: _archOpen });
+        var archSel = document.getElementById('exp-arch-sel');
+        if (archSel) archSel.addEventListener('change', function () {
+            if (!archSel.value) return;
+            track(M.key + '_archive_select', { storm: archSel.value });
+            selectStorm(archSel.value);
         });
+        bindFrameViewer();
         var vBtn = document.getElementById('exp-verif-btn');
         if (vBtn) vBtn.addEventListener('click', function () {
             _showVerif = !_showVerif;
@@ -1359,6 +1355,10 @@
         _root.querySelectorAll('.exp-chip').forEach(function (c) {
             c.classList.toggle('active', c.getAttribute('data-atcf') === atcf);
         });
+        /* Keep the archive dropdown in sync: show the archived storm being
+           viewed, or fall back to the placeholder for a live one. */
+        var aSel = document.getElementById('exp-arch-sel');
+        if (aSel) aSel.value = _archSet[atcf] ? atcf : '';
         var img = document.getElementById('exp-plan');
         if (img) {
             var gen = _archSet[atcf]
@@ -1384,6 +1384,7 @@
             if (_storm !== atcf) return;
             renderTiles(res[0]);
             drawSeries(res[0]);
+            setupFrameViewer(res[0]);
             if (_showTrack) drawTrack(res[0]);
             if (_showDist) drawDist(res[0]);
             if (_showShap) drawShap(res[0]);
@@ -1906,7 +1907,7 @@
             responsive: true,
             displaylogo: false,
             modeBarButtonsToRemove: ['toImage', 'lasso2d', 'select2d']
-        }).then(function () { applyRange(j); });
+        }).then(function () { applyRange(j); bindChartSeek(el); });
     }
 
     /* Gray validity shading over out-of-scope stretches, both panels.
@@ -2037,6 +2038,255 @@
                 : '') +
             (g.caveat || '') + '</div>';
         box.innerHTML = html;
+    }
+
+    /* ---------------- IR frame viewer (archived storms) ----------------
+       Every settled 201x201 recentered frame of an archived storm is packed
+       into 8x8 spritesheets of display-ready palette indices (TC-SWARM
+       realtime/build_ir_strips.py -> irstrips/<year>/), ~15 KB/frame, one
+       copy shared by every profile. The viewer renders them on a canvas
+       with the payload's own per-frame annotations, so alignment attempts
+       can be scrubbed frame by frame; clicking the time-series chart seeks
+       the viewer to that time. */
+    var _strip = null;       // {atcf, meta, lut, sheets:{}, i0, i1, idx,
+                             //  frameByTime}
+    var _stripTimer = null;
+
+    function stripPath(atcf, name) {
+        return 'irstrips/' + atcf.slice(4) + '/' + atcf + '_' + name;
+    }
+
+    function stopStripPlay() {
+        if (_stripTimer) { clearInterval(_stripTimer); _stripTimer = null; }
+        var b = document.getElementById('exp-frv-play');
+        if (b) b.textContent = '▶';
+    }
+
+    /* Fetch + wire the viewer for the selected storm; hides itself when no
+       strips exist (live storms, pre-strip archives). */
+    function setupFrameViewer(j) {
+        var box = document.getElementById('exp-frames');
+        if (!box) return;
+        stopStripPlay();
+        _strip = null;
+        box.style.display = 'none';
+        if (!_archSet[j.storm]) return;            // archived storms only
+        var atcf = j.storm;
+        /* Same cache-bust contract as the plan PNG: strips are rebuilt when
+           a storm is re-archived, and the archive index's `generated` stamp
+           is what changes with it — without this, a browser-cached manifest
+           from before a rebuild can miss the payload window entirely. */
+        var bust = '?t=' + encodeURIComponent(
+            (_archIndex && _archIndex.generated) || '');
+        fetchJson(stripPath(atcf, 'meta.json') + bust).then(function (meta) {
+            if (_storm !== atcf || !meta || !meta.times || !meta.times.length)
+                return;
+            var fbt = {};
+            (j.frames || []).forEach(function (f) { fbt[f.t] = f; });
+            var t0 = (j.frames || []).length ? j.frames[0].t : meta.times[0];
+            var t1 = (j.frames || []).length
+                ? j.frames[j.frames.length - 1].t
+                : meta.times[meta.times.length - 1];
+            var i0 = meta.times.length, i1 = -1;
+            meta.times.forEach(function (t, i) {
+                if (t >= t0 && i < i0) i0 = i;
+                if (t <= t1) i1 = i;
+            });
+            if (i1 < i0) return;      // no overlap with the payload window
+            var lut = new Uint8Array(1024);        // RGBA per index
+            for (var i = 0; i < 256; i++) {
+                lut[4 * i] = meta.lut[3 * i];
+                lut[4 * i + 1] = meta.lut[3 * i + 1];
+                lut[4 * i + 2] = meta.lut[3 * i + 2];
+                lut[4 * i + 3] = (i === meta.missing) ? 0 : 255;
+            }
+            _strip = { atcf: atcf, meta: meta, lut: lut, sheets: {},
+                       i0: i0, i1: i1, idx: i1, frameByTime: fbt };
+            var sl = document.getElementById('exp-frv-slider');
+            sl.min = i0; sl.max = i1; sl.value = i1;
+            box.style.display = 'block';
+            drawStripFrame(i1);
+        }).catch(function () { /* no strips for this storm — stay hidden */ });
+    }
+
+    function stripSheet(k) {
+        var s = _strip;
+        if (s.sheets[k]) return s.sheets[k];
+        s.sheets[k] = new Promise(function (resolve, reject) {
+            function tryBase(base, next) {
+                var im = new Image();
+                im.crossOrigin = 'anonymous';
+                im.onload = function () { resolve(im); };
+                im.onerror = next ? function () { tryBase(next, null); }
+                                  : reject;
+                im.src = base + stripPath(s.atcf, k + '.png') +
+                    '?t=' + encodeURIComponent(s.meta.generated || '');
+            }
+            tryBase(CDN_BASE, GCS_BASE);
+        });
+        return s.sheets[k];
+    }
+
+    function seekStrip(idx) {
+        if (!_strip) return;
+        idx = Math.max(_strip.i0, Math.min(_strip.i1, Math.round(idx)));
+        var sl = document.getElementById('exp-frv-slider');
+        if (sl && +sl.value !== idx) sl.value = idx;
+        drawStripFrame(idx);
+    }
+
+    function drawStripFrame(idx) {
+        var s = _strip;
+        if (!s) return;
+        s.idx = idx;
+        var m = s.meta;
+        var k = Math.floor(idx / m.per_sheet);
+        stripSheet(k).then(function (img) {
+            if (_strip !== s || s.idx !== idx) return;
+            var cv = document.getElementById('exp-frv');
+            if (!cv) return;
+            var j = idx - k * m.per_sheet;
+            var col = j % m.nx;
+            /* Sheets are stored north-up (rows flipped at build time), so
+               row r of the GRID sits at (ny-1-r) from the image top. */
+            var row = Math.floor(j / m.nx);
+            var sx = col * m.w;
+            var sy = (m.ny - 1 - row) * m.h;
+            var off = document.createElement('canvas');
+            off.width = m.w; off.height = m.h;
+            var octx = off.getContext('2d', { willReadFrequently: true });
+            octx.drawImage(img, sx, sy, m.w, m.h, 0, 0, m.w, m.h);
+            var id = octx.getImageData(0, 0, m.w, m.h);
+            var px = id.data;
+            for (var i = 0; i < px.length; i += 4) {
+                var u = px[i] * 4;                 // grayscale: R = index
+                px[i] = s.lut[u]; px[i + 1] = s.lut[u + 1];
+                px[i + 2] = s.lut[u + 2]; px[i + 3] = s.lut[u + 3];
+            }
+            octx.putImageData(id, 0, 0);
+            var ctx = cv.getContext('2d');
+            var S = cv.width;                      // square canvas
+            ctx.clearRect(0, 0, S, S);
+            ctx.fillStyle = '#0b1220';
+            ctx.fillRect(0, 0, S, S);
+            ctx.imageSmoothingEnabled = true;
+            ctx.drawImage(off, 0, 0, S, S);
+            drawStripOverlay(ctx, S, m.times[idx]);
+            var lbl = document.getElementById('exp-frv-time');
+            if (lbl) {
+                var f = s.frameByTime[m.times[idx]];
+                var info = '';
+                if (f) {
+                    if (M.panels.tilt) {
+                        info = (f.in_scope && f.tilt_mag_km != null)
+                            ? ' · tilt ' + Math.round(f.tilt_mag_km) + ' km'
+                            : ' · no estimate (outside validity)';
+                    } else if (f.vmax_kt != null) {
+                        info = ' · ' + Math.round(f.vmax_kt) + ' kt';
+                        if (f.pmin_hpa != null)
+                            info += ' / ' + Math.round(f.pmin_hpa) + ' hPa';
+                    } else if (f.pmin_hpa != null) {
+                        info = ' · ' + Math.round(f.pmin_hpa) + ' hPa';
+                    }
+                }
+                lbl.textContent = m.times[idx].slice(5, 16)
+                    .replace('T', ' ') + 'Z' + info;
+            }
+        }).catch(function () {});
+    }
+
+    /* km -> canvas px for the ±extent domain, north up. */
+    function drawStripOverlay(ctx, S, t) {
+        var s = _strip;
+        var ext = s.meta.extent_km || 200;
+        function X(km) { return (km + ext) / (2 * ext) * S; }
+        function Y(km) { return (ext - km) / (2 * ext) * S; }
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 1;
+        [50, 100, 150].forEach(function (r) {
+            ctx.beginPath();
+            ctx.arc(X(0), Y(0), r / (2 * ext) * S, 0, 2 * Math.PI);
+            ctx.stroke();
+        });
+        ctx.setLineDash([]);
+        function glyph(txt, xkm, ykm, color) {
+            ctx.font = 'bold 15px -apple-system, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = color === '#ffffff' ? '#000000' : '#ffffff';
+            ctx.strokeText(txt, X(xkm), Y(ykm));
+            ctx.fillStyle = color;
+            ctx.fillText(txt, X(xkm), Y(ykm));
+        }
+        var f = s.frameByTime[t];
+        if (M.panels.tilt) {
+            if (f && f.in_scope && f.tilt_x_km != null) {
+                ctx.strokeStyle = '#d97706';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(X(0), Y(0));
+                ctx.lineTo(X(f.tilt_x_km), Y(f.tilt_y_km));
+                ctx.stroke();
+                glyph('M', f.tilt_x_km, f.tilt_y_km, '#d97706');
+            }
+            glyph('L', 0, 0, '#ffffff');
+        } else {
+            if (f && f.rmw_km != null && isFinite(f.rmw_km)) {
+                ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.arc(X(0), Y(0), f.rmw_km / (2 * ext) * S, 0, 2 * Math.PI);
+                ctx.stroke();
+            }
+            glyph('+', 0, 0, '#ffffff');
+        }
+        ctx.restore();
+    }
+
+    function bindFrameViewer() {
+        var sl = document.getElementById('exp-frv-slider');
+        if (sl) sl.addEventListener('input', function () {
+            stopStripPlay();
+            seekStrip(+sl.value);
+        });
+        var pl = document.getElementById('exp-frv-play');
+        if (pl) pl.addEventListener('click', function () {
+            if (_stripTimer) { stopStripPlay(); return; }
+            if (!_strip) return;
+            track(M.key + '_frame_play', { storm: _storm });
+            pl.textContent = '❚❚';
+            _stripTimer = setInterval(function () {
+                if (!_strip) { stopStripPlay(); return; }
+                var nxt = _strip.idx + 1;
+                if (nxt > _strip.i1) { stopStripPlay(); return; }
+                seekStrip(nxt);
+            }, 140);
+        });
+    }
+
+    /* Chart click -> seek the viewer to the nearest frame. Bound after
+       every Plotly.react; removeAllListeners keeps it single. */
+    function bindChartSeek(el) {
+        if (!el || typeof el.on !== 'function') return;
+        if (el.removeAllListeners) el.removeAllListeners('plotly_click');
+        el.on('plotly_click', function (ev) {
+            if (!_strip || !ev.points || !ev.points.length) return;
+            var tms = new Date(ev.points[0].x).getTime();
+            var best = _strip.i0, bd = Infinity;
+            for (var i = _strip.i0; i <= _strip.i1; i++) {
+                var d = Math.abs(new Date(_strip.meta.times[i]).getTime() - tms);
+                if (d < bd) { bd = d; best = i; }
+            }
+            stopStripPlay();
+            track(M.key + '_chart_seek', { storm: _storm });
+            seekStrip(best);
+            var box = document.getElementById('exp-frames');
+            if (box) box.scrollIntoView({ behavior: 'smooth',
+                                          block: 'nearest' });
+        });
     }
 
     /* ---------------- conditional-distribution panel ---------------- */
@@ -3096,7 +3346,7 @@
             responsive: true,
             displaylogo: false,
             modeBarButtonsToRemove: ['toImage', 'lasso2d', 'select2d']
-        }).then(function () { applyRange(j); });
+        }).then(function () { applyRange(j); bindChartSeek(el); });
     }
 
     /* ---------------- entry ---------------- */

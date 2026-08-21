@@ -7344,3 +7344,36 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 }
 .exp-tilt-ri-note { margin-top: 0; }
 .exp-verif-foot { margin-top: 14px; }
+
+/* ---- Experimental: archive dropdown + IR frame viewer (2026-08-20) ---- */
+.exp-arch-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.exp-arch-lbl {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: #64748b;
+}
+[data-theme="dark"] .exp-arch-lbl { color: #94a3b8; }
+.exp-arch-sel {
+    font: inherit; font-size: 13px; padding: 6px 10px; max-width: 340px;
+    border: 1px solid #e2e8f0; border-radius: 8px;
+    background: #ffffff; color: #0f172a;
+}
+[data-theme="dark"] .exp-arch-sel {
+    background: #0f172a; color: #e2e8f0; border-color: #1e293b;
+}
+.exp-arch-note-inline { font-size: 12px; color: #64748b; }
+[data-theme="dark"] .exp-arch-note-inline { color: #94a3b8; }
+.exp-frames { margin-top: 14px; }
+.exp-frv-wrap { max-width: 480px; }
+#exp-frv {
+    width: 100%; height: auto; display: block; border-radius: 10px;
+    background: #0b1220;
+}
+.exp-frv-bar {
+    display: flex; align-items: center; gap: 10px; margin-top: 8px;
+}
+.exp-frv-bar input[type="range"] { flex: 1 1 auto; }
+.exp-frv-time {
+    font-size: 12px; font-variant-numeric: tabular-nums; color: #475569;
+    white-space: nowrap;
+}
+[data-theme="dark"] .exp-frv-time { color: #94a3b8; }
