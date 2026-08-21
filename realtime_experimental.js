@@ -1021,43 +1021,52 @@
                 arch.length + ' storms</span> <b>&#9662;</b></button>' +
                 '<div class="exp-archdd-menu" id="exp-archdd-menu" hidden ' +
                 'role="listbox">';
+            /* Row text is the encoding (author's call — the swatch-and-
+               button rows read as chrome): the storm NAME is shaded by the
+               active model's own metric. Intensity pages shade by
+               Saffir-Simpson peak; the tilt page shades by median tilt
+               class, aligned (teal) through strongly tilted (red). */
+            function tiltShade(km) {
+                if (km == null) return null;
+                if (km < 12) return '#0d9488';
+                if (km < 20) return '#ca8a04';
+                if (km < 32) return '#ea580c';
+                return '#dc2626';
+            }
             basinOrder.forEach(function (b) {
                 html += '<div class="exp-archdd-basin">' +
                     (BASIN_NAMES[b] || b) + '</div>';
                 groups[b].forEach(function (s) {
                     var pk = (s.peak_kt != null) ? s.peak_kt
                         : s.ghost_peak_kt;
-                    var cat = windToCategory(pk);
                     if (s.excluded) {
-                        html += '<button class="exp-archdd-item off" ' +
-                            'disabled title="' + s.excluded + '">' +
-                            '<i></i><span class="exp-archdd-nm">' +
+                        html += '<div class="exp-archdd-item off" title="' +
+                            s.excluded + '"><span class="exp-archdd-nm">' +
                             (s.name || s.atcf) + '</span>' +
                             '<span class="exp-archdd-id">' + s.atcf +
-                            '</span><em>not scoreable</em></button>';
+                            '</span><em>not scoreable</em></div>';
                         return;
                     }
-                    /* Stat = what the active model predicts: tilt on the
-                       structure profile, deepest pressure on pressure-first
-                       ones, peak wind otherwise. */
-                    var stat = '';
+                    var stat = '', shade = null;
                     if (M.panels.tilt && s.median_tilt_km != null) {
                         stat = Math.round(s.median_tilt_km) + ' km tilt';
+                        shade = tiltShade(s.median_tilt_km);
                     } else if (M.headline === 'pmin_hpa' &&
                                s.peak_hpa != null) {
                         stat = 'min ' + Math.round(s.peak_hpa) + ' hPa';
+                        shade = pk != null ? SS_COLORS[windToCategory(pk)]
+                                           : null;
                     } else if (pk != null) {
                         stat = 'peak ' + Math.round(pk) + ' kt';
+                        shade = SS_COLORS[windToCategory(pk)];
                     }
-                    html += '<button class="exp-archdd-item" data-atcf="' +
-                        s.atcf + '" role="option">' +
-                        '<i style="background:' +
-                        (pk != null ? SS_COLORS[cat] : 'transparent') +
-                        '"></i>' +
-                        '<span class="exp-archdd-nm">' + (s.name || s.atcf) +
-                        '</span>' +
+                    html += '<div class="exp-archdd-item" data-atcf="' +
+                        s.atcf + '" role="option" tabindex="0">' +
+                        '<span class="exp-archdd-nm"' +
+                        (shade ? ' style="color:' + shade + '"' : '') + '>' +
+                        (s.name || s.atcf) + '</span>' +
                         '<span class="exp-archdd-id">' + s.atcf + '</span>' +
-                        '<em>' + stat + '</em></button>';
+                        '<em>' + stat + '</em></div>';
                 });
             });
             html += '</div></div>' +
@@ -1172,7 +1181,10 @@
                stratification is the model's operational point, so it sits
                directly under the chart. */
             (M.panels.tilt
-                ? '<div id="exp-tilt-ri" class="exp-tilt-ri"></div>' : '') +
+                ? '<div id="exp-tdr-note" class="exp-tdr-note" ' +
+                  'style="display:none;"></div>' +
+                  '<div id="exp-tilt-ri" class="exp-tilt-ri"></div>'
+                : '') +
             '<div id="exp-track" class="exp-track" style="display:none;"></div>' +
             '<div id="exp-dist" class="exp-shap" style="display:none;"></div>' +
             '<div id="exp-shap" class="exp-shap" style="display:none;"></div>' +
@@ -1971,6 +1983,44 @@
               marker: { color: MODEL_COL, size: 4, opacity: 0.85 },
               hovertemplate: '%{y:.0f}° from downshear' }
         ];
+        /* Aircraft-observed tilt (the site's TDR Center Track WCM fixes) —
+           independent verification overlaid where missions flew. Observed
+           shear-relative direction rotates the observed heading by the
+           nearest frame's shear heading: CCW-from-downshear = sddc − dir. */
+        if (j.tdr_tilt && j.tdr_tilt.length) {
+            var obsMark = { symbol: 'diamond', size: 8,
+                            color: dark ? '#f8fafc' : '#0f172a',
+                            line: { width: 1.2,
+                                    color: dark ? '#0f172a' : '#ffffff' } };
+            var tms = fr.map(function (f) {
+                return new Date(f.t).getTime(); });
+            function nearestFrame(ot) {
+                var bt = new Date(ot).getTime();
+                var bi = 0, bd = Infinity;
+                for (var q = 0; q < tms.length; q++) {
+                    var d = Math.abs(tms[q] - bt);
+                    if (d < bd) { bd = d; bi = q; }
+                }
+                return bd <= 45 * 60e3 ? fr[bi] : null;
+            }
+            var srel = j.tdr_tilt.map(function (o) {
+                var f = nearestFrame(o.t);
+                if (!f || f.sddc_deg == null || o.dir_deg == null)
+                    return null;
+                var d = (f.sddc_deg - o.dir_deg + 540) % 360 - 180;
+                return d;
+            });
+            traces.push(
+                { x: j.tdr_tilt.map(function (o) { return o.t; }),
+                  y: j.tdr_tilt.map(function (o) { return o.mag_km; }),
+                  name: 'aircraft-observed (TDR)', yaxis: 'y',
+                  mode: 'markers', marker: obsMark,
+                  hovertemplate: '%{y:.0f} km observed' },
+                { x: j.tdr_tilt.map(function (o) { return o.t; }),
+                  y: srel, name: 'observed direction', yaxis: 'y2',
+                  mode: 'markers', marker: obsMark, showlegend: false,
+                  hovertemplate: '%{y:.0f}° observed' });
+        }
         var narrow = window.innerWidth < 640;
         el._expFirstIsWind = false;
         var layout = {
@@ -1999,6 +2049,31 @@
             displaylogo: false,
             modeBarButtonsToRemove: ['toImage', 'lasso2d', 'select2d']
         }).then(function () { applyRange(j); bindChartSeek(el); });
+        /* Aircraft-verification line under the chart, only where a storm
+           actually has paired radar fixes. */
+        var tn = document.getElementById('exp-tdr-note');
+        if (tn) {
+            var st = j.tdr_stats;
+            if (st && st.n_paired) {
+                tn.innerHTML = '<strong>Aircraft verification, this storm:'
+                    + '</strong> ' + st.n_obs + ' radar center fixes (Center '
+                    + 'Track WCM), ' + st.n_paired + ' paired with in-scope '
+                    + 'estimates — magnitude MAE ' + st.mag_mae_km
+                    + ' km (bias ' + (st.mag_bias_km >= 0 ? '+' : '−')
+                    + Math.abs(st.mag_bias_km) + '), vector RMSE '
+                    + st.vector_rmse_km + ' km'
+                    + (st.dir_mae_deg != null
+                        ? ', direction MAE ' + st.dir_mae_deg + '°' : '')
+                    + '. Diamonds on the chart are the observed fixes — '
+                    + 'single-sweep real-time analyses, so small samples. '
+                    + 'The model is known to under-read the largest tilts '
+                    + 'of broad, weakly organized vortices (its magnitude '
+                    + 'scale is compressed toward the mean).';
+                tn.style.display = 'block';
+            } else {
+                tn.style.display = 'none';
+            }
+        }
     }
 
     /* Gray validity shading over out-of-scope stretches, both panels.
@@ -2198,7 +2273,11 @@
             }
             _strip = { atcf: atcf, meta: meta, lut: lut, sheets: {},
                        i0: i0, i1: i1, idx: i1, frameByTime: fbt,
-                       tiltBy: {}, rmwBy: {} };
+                       tiltBy: {}, rmwBy: {},
+                       tdrObs: (j.tdr_tilt || []).map(function (o) {
+                           return { ms: new Date(o.t).getTime(),
+                                    x: o.x_km, y: o.y_km };
+                       }) };
             /* Annotation layers come from BOTH products' payloads: the
                tilt vector and shear from TILT-RF's, the size estimate from
                GHOST's. Seed from the payload in hand, then fetch the
@@ -2495,6 +2574,34 @@
                 ctx.lineTo(X(tf.x), Y(tf.y));
                 ctx.stroke();
                 glyph('M', tf.x, tf.y, '#d97706');
+            }
+            /* Aircraft-observed mid-level center when a TDR fix sits within
+               30 min of this frame: a diamond, labeled, so estimate and
+               observation can be compared in place. */
+            var tms = new Date(t).getTime();
+            var ob = null, obd = Infinity;
+            (s.tdrObs || []).forEach(function (o) {
+                var d = Math.abs(o.ms - tms);
+                if (d < obd) { obd = d; ob = o; }
+            });
+            if (ob && obd <= 30 * 60e3) {
+                ctx.save();
+                ctx.translate(X(ob.x), Y(ob.y));
+                ctx.rotate(Math.PI / 4);
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#000000';
+                ctx.strokeRect(-5, -5, 10, 10);
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(-5, -5, 10, 10);
+                ctx.restore();
+                ctx.font = '9px -apple-system, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.lineWidth = 2.5;
+                ctx.strokeStyle = '#000000';
+                ctx.strokeText('obs', X(ob.x), Y(ob.y) + 8);
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText('obs', X(ob.x), Y(ob.y) + 8);
             }
             /* 'L' when a low/mid pair is meaningful (tilt data exists or
                this IS the tilt page); a plain center cross otherwise. */
