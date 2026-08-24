@@ -36,7 +36,7 @@ from functools import lru_cache
 
 import numpy as np
 import requests
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from PIL import Image
 
@@ -5327,56 +5327,139 @@ def _parse_hrd_legacy_csv(text: str) -> list:
     return observations
 
 
-_FL_GCS_CACHE_PREFIX = "recon/v6"  # v6: filter calibration records (wspd > 200), fix m/s unit heuristic
+_FL_GCS_CACHE_PREFIX = "recon/v7"  # v7: split light/1s pre-gzipped blobs (dropdown latency)
+_FL_GCS_V6_PREFIX = "recon/v6"     # legacy combined blobs — read-only fallback, avoids AOML refetch
 
 
-def _fl_gcs_cache_key(filename: str, center_lat: float, center_lon: float) -> str:
-    """Build GCS object key for a cached flight-level result."""
-    return f"{_FL_GCS_CACHE_PREFIX}/{filename}_{center_lat:.1f}_{center_lon:.1f}.json"
+def _fl_gcs_key(filename: str, center_lat: float, center_lon: float, kind: str) -> str:
+    """GCS object key for a cached flight-level blob. kind: 'light' (no obs_1s) or '1s'."""
+    return f"{_FL_GCS_CACHE_PREFIX}/{filename}_{center_lat:.1f}_{center_lon:.1f}.{kind}.json.gz"
 
 
-def _fl_gcs_get(filename: str, center_lat: float, center_lon: float):
-    """Try reading a cached flight-level result from GCS."""
+def _fl_gcs_get_gz(key: str, max_age_days: float | None = None):
+    """Download a pre-gzipped cache blob. Returns bytes or None.
+
+    With max_age_days set, blob metadata is checked first and stale blobs are
+    treated as misses (current-season files may get QC revisions upstream).
+    """
     bucket = _get_gcs_bucket()
     if bucket is None:
         return None
-    key = _fl_gcs_cache_key(filename, center_lat, center_lon)
     try:
-        blob = bucket.blob(key)
-        data = blob.download_as_bytes(timeout=5)
+        if max_age_days is not None:
+            import time as _time
+            blob = bucket.get_blob(key)
+            if blob is None or blob.updated is None:
+                return None
+            age_days = (_time.time() - blob.updated.timestamp()) / 86400
+            if age_days > max_age_days:
+                logger.info(f"GCS recon cache expired ({age_days:.0f}d old): {key}")
+                return None
+            return blob.download_as_bytes(timeout=10)
+        return bucket.blob(key).download_as_bytes(timeout=10)
+    except Exception:
+        return None
+
+
+def _fl_gcs_get_v6(filename: str, center_lat: float, center_lon: float):
+    """Read a legacy v6 combined cache blob (full result incl. obs_1s)."""
+    bucket = _get_gcs_bucket()
+    if bucket is None:
+        return None
+    key = f"{_FL_GCS_V6_PREFIX}/{filename}_{center_lat:.1f}_{center_lon:.1f}.json"
+    try:
+        data = bucket.blob(key).download_as_bytes(timeout=10)
         return json.loads(data)
     except Exception:
         return None
 
 
-def _fl_gcs_put(filename: str, center_lat: float, center_lon: float, result: dict):
-    """Write a parsed flight-level result to GCS (background, fire-and-forget)."""
+def _fl_gcs_put_split(filename: str, center_lat: float, center_lon: float,
+                      light_gz: bytes, ones_gz: bytes | None):
+    """Upload pre-gzipped light/1s blobs (background, fire-and-forget)."""
     bucket = _get_gcs_bucket()
     if bucket is None:
         return
 
     def _upload():
-        key = _fl_gcs_cache_key(filename, center_lat, center_lon)
         try:
-            blob = bucket.blob(key)
-            blob.upload_from_string(
-                json.dumps(result, separators=(",", ":")),
-                content_type="application/json",
-            )
+            bucket.blob(_fl_gcs_key(filename, center_lat, center_lon, "light")).upload_from_string(
+                light_gz, content_type="application/gzip")
+            if ones_gz:
+                bucket.blob(_fl_gcs_key(filename, center_lat, center_lon, "1s")).upload_from_string(
+                    ones_gz, content_type="application/gzip")
         except Exception as e:
             logger.warning(f"GCS recon cache write failed: {e}")
 
-    import threading
     threading.Thread(target=_upload, daemon=True).start()
+
+
+def _fl_file_year(filename: str) -> int:
+    m = re.search(r"(\d{4})", filename)
+    return int(m.group(1)) if m else 0
+
+
+def _fl_is_historical(file_year: int) -> bool:
+    """Historical (≥2 seasons old) recon files are immutable; recent ones may get QC revisions."""
+    import time as _time
+    return bool(file_year) and int(_time.strftime("%Y")) - file_year >= 2
+
+
+def _fl_cache_headers(file_year: int) -> dict:
+    if _fl_is_historical(file_year):
+        cc = "public, max-age=31536000, immutable"
+    else:
+        cc = "public, max-age=3600"
+    return {"Cache-Control": cc}
+
+
+def _fl_gz_response(gz_bytes: bytes, request: Request, file_year: int) -> Response:
+    """Stream a pre-gzipped JSON payload straight through (GZipMiddleware skips
+    responses that already carry Content-Encoding)."""
+    headers = _fl_cache_headers(file_year)
+    headers["Vary"] = "Accept-Encoding"
+    if "gzip" in (request.headers.get("accept-encoding") or "").lower():
+        headers["Content-Encoding"] = "gzip"
+        return Response(gz_bytes, media_type="application/json", headers=headers)
+    import gzip as _gzip
+    return Response(_gzip.decompress(gz_bytes), media_type="application/json", headers=headers)
+
+
+def _fl_split_result(result: dict):
+    """Serialize a full parse result into (light_gz, ones_gz, summary).
+
+    The light payload drops obs_1s AND the legacy `observations` duplicate of
+    obs_10s (which doubled the raw payload); clients read obs_10s.
+    """
+    import gzip as _gzip
+    light = {k: v for k, v in result.items() if k not in ("obs_1s", "observations")}
+    light["observations"] = []
+    light["obs_1s"] = []
+    light_gz = _gzip.compress(json.dumps(light, separators=(",", ":")).encode(), 6)
+    ones_gz = None
+    if result.get("obs_1s"):
+        ones = {"success": True, "obs_1s": result["obs_1s"],
+                "source_url": result.get("source_url")}
+        ones_gz = _gzip.compress(json.dumps(ones, separators=(",", ":")).encode(), 6)
+    return light_gz, ones_gz, result.get("summary")
+
+
+def _fl_mem_put(cache_key: str, light_gz: bytes, summary: dict | None, now: float):
+    """In-memory LRU holds the gzipped light payload (~300 KB) + summary."""
+    _fl_data_cache[cache_key] = ((light_gz, summary), now)
+    if len(_fl_data_cache) > _FL_DATA_CACHE_MAX:
+        _fl_data_cache.popitem(last=False)
 
 
 
 @router.get("/flightlevel/data")
 def get_fl_data(
+    request: Request,
     file_url: str = Query(..., description="Full URL of the FL data file on AOML FTP"),
     center_lat: float = Query(0.0, description="Storm center latitude for relative coords"),
     center_lon: float = Query(0.0, description="Storm center longitude for relative coords"),
-    include_1s: bool = Query(False, description="Include 1-second resolution data (large payload)"),
+    include_1s: bool = Query(False, description="Legacy: full payload with obs_1s inline"),
+    only_1s: bool = Query(False, description="Return just the obs_1s array (background prefetch)"),
 ):
     """Fetch and parse a specific flight-level mission file."""
     h = _load_fl_helpers()
@@ -5388,50 +5471,97 @@ def get_fl_data(
         raise HTTPException(400, "Invalid file URL")
 
     filename = file_url.rsplit("/", 1)[-1]
-
-    # Check in-memory cache
+    file_year = _fl_file_year(filename)
+    max_age = None if _fl_is_historical(file_year) else 7.0
     import time as _time
     now = _time.time()
     cache_key = f"{file_url}_{center_lat}_{center_lon}"
-    if cache_key in _fl_data_cache:
-        cached, ts = _fl_data_cache[cache_key]
-        if now - ts < _FL_DATA_CACHE_TTL:
-            _fl_data_cache.move_to_end(cache_key)
-            if not include_1s:
-                return cached  # In-memory cache never has obs_1s (memory-efficient)
-            # 1s requested: in-memory cache doesn't store obs_1s,
-            # fall through to GCS/AOML for full data
-            if cached.get("obs_1s"):
-                return cached
 
-    # Check GCS persistent cache
-    gcs_result = _fl_gcs_get(filename, center_lat, center_lon)
-    if gcs_result:
-        cached_at = gcs_result.get("_cached_at", 0)
-        import re
-        year_m = re.search(r'(\d{4})', filename)
-        file_year = int(year_m.group(1)) if year_m else 0
-        current_year = int(_time.strftime("%Y"))
+    # ── only_1s: background prefetch of the 1-second array alone ──
+    if only_1s:
+        gz = _fl_gcs_get_gz(_fl_gcs_key(filename, center_lat, center_lon, "1s"), max_age)
+        if gz:
+            return _fl_gz_response(gz, request, file_year)
+        result, needs_write = _fl_full_result(file_url, filename, center_lat, center_lon, h, now)
+        if not result.get("success"):
+            return result
+        if needs_write:
+            light_gz, ones_gz, summary = _fl_split_result(result)
+            _fl_gcs_put_split(filename, center_lat, center_lon, light_gz, ones_gz)
+            _fl_mem_put(cache_key, light_gz, summary, now)
+        return JSONResponse(
+            {"success": True, "obs_1s": result.get("obs_1s") or [], "source_url": file_url},
+            headers=_fl_cache_headers(file_year),
+        )
+
+    # ── light path (default): in-memory gz → GCS v7 → v6 → AOML ──
+    if not include_1s:
+        if cache_key in _fl_data_cache:
+            (gz, _summ), ts = _fl_data_cache[cache_key]
+            if now - ts < _FL_DATA_CACHE_TTL:
+                _fl_data_cache.move_to_end(cache_key)
+                return _fl_gz_response(gz, request, file_year)
+        gz = _fl_gcs_get_gz(_fl_gcs_key(filename, center_lat, center_lon, "light"), max_age)
+        if gz:
+            _fl_mem_put(cache_key, gz, None, now)
+            return _fl_gz_response(gz, request, file_year)
+        result, needs_write = _fl_full_result(file_url, filename, center_lat, center_lon, h, now)
+        if not result.get("success"):
+            return result
+        light_gz, ones_gz, summary = _fl_split_result(result)
+        if needs_write:
+            _fl_gcs_put_split(filename, center_lat, center_lon, light_gz, ones_gz)
+        _fl_mem_put(cache_key, light_gz, summary, now)
+        return _fl_gz_response(light_gz, request, file_year)
+
+    # ── legacy include_1s: combined payload for old cached frontends ──
+    result, needs_write = _fl_full_result(file_url, filename, center_lat, center_lon, h, now)
+    if not result.get("success"):
+        return result
+    if needs_write:
+        light_gz, ones_gz, summary = _fl_split_result(result)
+        _fl_gcs_put_split(filename, center_lat, center_lon, light_gz, ones_gz)
+        _fl_mem_put(cache_key, light_gz, summary, now)
+    return JSONResponse(result, headers=_fl_cache_headers(file_year))
+
+
+def _fl_full_result(file_url: str, filename: str, center_lat: float, center_lon: float,
+                    h: dict, now: float):
+    """Full parsed result (incl. obs_1s): v7 blobs → legacy v6 blob → AOML.
+
+    Returns (result, needs_v7_write) — the flag is True when the result did
+    not come from v7 blobs, so callers should persist the split blobs.
+    """
+    file_year = _fl_file_year(filename)
+    historical = _fl_is_historical(file_year)
+    max_age = None if historical else 7.0
+
+    import gzip as _gzip
+    light_gz = _fl_gcs_get_gz(_fl_gcs_key(filename, center_lat, center_lon, "light"), max_age)
+    if light_gz:
+        try:
+            result = json.loads(_gzip.decompress(light_gz))
+            ones_gz = _fl_gcs_get_gz(_fl_gcs_key(filename, center_lat, center_lon, "1s"), max_age)
+            if ones_gz:
+                result["obs_1s"] = json.loads(_gzip.decompress(ones_gz)).get("obs_1s") or []
+            return result, False
+        except Exception:
+            pass
+
+    # Legacy v6 combined blob (avoids an AOML refetch during migration)
+    v6 = _fl_gcs_get_v6(filename, center_lat, center_lon)
+    if v6:
+        cached_at = v6.get("_cached_at", 0)
         age_days = (now - cached_at) / 86400 if cached_at else 9999
+        if historical or age_days < 7:
+            return v6, True
 
-        # Historical data (≥2 years old): trust indefinitely
-        # Recent data: trust for 7 days, then refetch to catch QC revisions
-        if (current_year - file_year) >= 2 or age_days < 7:
-            _fl_data_cache[cache_key] = (gcs_result, now)
-            if not include_1s:
-                # Return without 1s data for faster response
-                resp = {k: v for k, v in gcs_result.items() if k != "obs_1s"}
-                resp["obs_1s"] = []
-                return resp
-            # If 1s requested but GCS cache has empty obs_1s (stale entry),
-            # fall through to re-fetch from AOML
-            if gcs_result.get("obs_1s"):
-                return gcs_result
-            else:
-                logger.info(f"GCS cache missing obs_1s for {filename}, re-fetching")
-        else:
-            logger.info(f"GCS recon cache expired ({age_days:.0f}d old): {filename}")
+    return _fl_fetch_and_parse(file_url, filename, center_lat, center_lon, h, now), True
 
+
+def _fl_fetch_and_parse(file_url: str, filename: str, center_lat: float, center_lon: float,
+                        h: dict, now: float) -> dict:
+    """Fetch an FL file from AOML and parse it into the full result dict."""
     # Fetch the file from AOML
     try:
         import requests as _req
@@ -5544,9 +5674,6 @@ def get_fl_data(
     meta = _parse_fl_filename(filename, None)
     mission_id = meta["mission_id"] if meta else filename
 
-    # Always store full data (including 1s) in cache; strip obs_1s from
-    # response only — this fixes the bug where include_1s=true requests
-    # would return empty obs_1s from a cache populated by include_1s=false.
     result = {
         "success": True,
         "observations": obs_10s,  # Default resolution
@@ -5564,23 +5691,8 @@ def get_fl_data(
         "center_lon": center_lon if has_sr else None,
         "summary": summary,
         "_source_size": source_size,
-        "_cached_at": now,  # epoch timestamp for GCS TTL check
+        "_cached_at": now,  # epoch timestamp for the legacy v6 TTL check
     }
-
-    # In-memory cache: store WITHOUT 1s data to control memory usage
-    # (1s arrays can be 10+ MB per mission). GCS stores the full result.
-    mem_result = {k: v for k, v in result.items() if k != "obs_1s"}
-    mem_result["obs_1s"] = []
-    _fl_data_cache[cache_key] = (mem_result, now)
-    if len(_fl_data_cache) > _FL_DATA_CACHE_MAX:
-        _fl_data_cache.popitem(last=False)
-
-    # Persist full result (including 1s) to GCS for cross-instance cache hits
-    _fl_gcs_put(filename, center_lat, center_lon, result)
-
-    # Return without 1s data if not requested (reduces response size)
-    if not include_1s:
-        return mem_result
 
     return result
 
@@ -5594,26 +5706,37 @@ _FL_STATS_CACHE_MAX = 100
 
 def _extract_summary_from_caches(file_url: str) -> dict | None:
     """Try to extract summary stats from in-memory or GCS caches."""
+    import gzip as _gzip
     filename = file_url.rsplit("/", 1)[-1]
+
+    def _summary_from_light_gz(gz: bytes):
+        try:
+            return json.loads(_gzip.decompress(gz)).get("summary")
+        except Exception:
+            return None
+
     # Check in-memory cache (any center coords)
-    for ck, (cached, _ts) in _fl_data_cache.items():
+    for ck, ((gz, summ), _ts) in _fl_data_cache.items():
         if ck.startswith(file_url + "_"):
-            summ = cached.get("summary")
-            if summ:
-                return summ
-    # Check GCS — try common center coord (0.0, 0.0) first
-    gcs_result = _fl_gcs_get(filename, 0.0, 0.0)
-    if gcs_result and gcs_result.get("summary"):
-        return gcs_result["summary"]
-    # Try listing GCS blobs with this filename prefix
+            return summ or _summary_from_light_gz(gz)
+    # List GCS blobs with this filename prefix: v7 light blobs, then legacy v6
     bucket = _get_gcs_bucket()
     if bucket:
-        prefix = f"{_FL_GCS_CACHE_PREFIX}/{filename}_"
         try:
+            prefix = f"{_FL_GCS_CACHE_PREFIX}/{filename}_"
+            for blob in bucket.list_blobs(prefix=prefix, max_results=4):
+                if not blob.name.endswith(".light.json.gz"):
+                    continue
+                summ = _summary_from_light_gz(blob.download_as_bytes(timeout=5))
+                if summ:
+                    return summ
+        except Exception:
+            pass
+        try:
+            prefix = f"{_FL_GCS_V6_PREFIX}/{filename}_"
             blobs = list(bucket.list_blobs(prefix=prefix, max_results=1))
             if blobs:
-                data = blobs[0].download_as_bytes(timeout=5)
-                parsed = json.loads(data)
+                parsed = json.loads(blobs[0].download_as_bytes(timeout=5))
                 if parsed.get("summary"):
                     return parsed["summary"]
         except Exception:

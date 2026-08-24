@@ -11685,7 +11685,7 @@ var _gaFLMapLayers = [];    // Leaflet layers for cleanup
 var _gaFLColorVar = 'fl_wspd_ms';
 var _gaFLAutoSync = true;
 var _gaFLTooltipOpen = false;
-var _gaFLFetching = false;
+var _gaFLMainAbort = null;  // AbortController for the in-flight mission load
 var _gaFLTSHighlight = null;
 var _gaFLResVisible = { '1s': false, '10s': true, '30s': false };
 var _gaFLMinobVisible = true;
@@ -11699,7 +11699,10 @@ function _gaFLReset() {
     _gaFLData10s = null;
     _gaFLData30s = null;
     _gaFLMissions = null;
-    _gaFLFetching = false;
+    if (_gaFLMainAbort) { _gaFLMainAbort.abort(); _gaFLMainAbort = null; }
+    if (_gaFL1sTimer) { clearTimeout(_gaFL1sTimer); _gaFL1sTimer = null; }
+    _gaFL1sFireNow = null;
+    if (_gaFL1sAbort) { _gaFL1sAbort.abort(); _gaFL1sAbort = null; }
     _gaFLTSOpen = false;
     _gaFLClientCache = {};
     // Must clear with the storm — otherwise the next storm, which may well have
@@ -12120,6 +12123,47 @@ window.gaFLSelectMission = function () {
 
 var _gaFLClientCache = {};  // fileUrl → parsed JSON (browser-side cache)
 var _gaFL1sAbort = null;    // AbortController for pending 1s background fetch
+var _gaFL1sTimer = null;    // deferred-start timer for the 1s prefetch
+var _gaFL1sFireNow = null;  // fires the pending prefetch immediately (1s button)
+
+// Background prefetch of the 1-second data so it's ready when the user wants
+// it. Deferred so the main payload, IR frames, and dropsondes win the
+// bandwidth race, and fetches only the obs_1s array (only_1s=true) instead of
+// re-downloading the 10s/30s data already in hand.
+function _gaFLPrefetch1s(fileUrl, baseUrl, json) {
+    if (!json || !json.has_1s || (json.obs_1s && json.obs_1s.length > 0)) return;
+    var btn1s = document.getElementById('ga-fl-res-1s');
+    if (btn1s) { btn1s.style.display = ''; btn1s.style.opacity = '0.5'; btn1s.textContent = '1s ⏳'; }
+    if (_gaFL1sTimer) { clearTimeout(_gaFL1sTimer); _gaFL1sTimer = null; }
+    if (_gaFL1sAbort) _gaFL1sAbort.abort();
+    var ctrl = new AbortController();
+    _gaFL1sAbort = ctrl;
+    var fire = function () {
+        _gaFL1sTimer = null;
+        _gaFL1sFireNow = null;
+        fetch(baseUrl + '&only_1s=true', { signal: ctrl.signal })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (j.success && j.obs_1s && j.obs_1s.length > 0) {
+                    json.obs_1s = j.obs_1s;
+                    _gaFLClientCache[fileUrl] = json;
+                    if (_gaFLData === json) _gaFLData1s = j.obs_1s;
+                    if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s'; }
+                    if (_gaFLResVisible['1s'] && _gaFLTSOpen) _gaFLRenderTimeSeries();
+                } else {
+                    // Server confirms this mission has no 1s data
+                    json.has_1s = false;
+                    if (btn1s) btn1s.style.display = 'none';
+                }
+            })
+            .catch(function (err) {
+                if (err && err.name === 'AbortError') return;
+                if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s ❌'; }
+            });
+    };
+    _gaFL1sFireNow = fire;
+    _gaFL1sTimer = setTimeout(fire, 2000);
+}
 
 function _gaFLApplyData(json) {
     _vdmCloseTextOverlay();  // close VDM text on mission change
@@ -12196,7 +12240,11 @@ function _gaFLApplyData(json) {
 }
 
 function _gaFLLoadMissionData(fileUrl) {
-    if (_gaFLFetching) return;
+    // A new selection supersedes any in-flight load — abort it (and any
+    // pending 1s prefetch) rather than silently ignoring the click.
+    if (_gaFLMainAbort) { _gaFLMainAbort.abort(); _gaFLMainAbort = null; }
+    if (_gaFL1sTimer) { clearTimeout(_gaFL1sTimer); _gaFL1sTimer = null; _gaFL1sFireNow = null; }
+    if (_gaFL1sAbort) { _gaFL1sAbort.abort(); _gaFL1sAbort = null; }
 
     // HDOB fallback missions carry an "hdob:" pseudo-URL and are already in
     // memory — assemble and apply them here so every caller (mission picker,
@@ -12211,106 +12259,49 @@ function _gaFLLoadMissionData(fileUrl) {
         return;
     }
 
-    // Check browser-side cache first — instant load for previously viewed missions
-    if (_gaFLClientCache[fileUrl]) {
-        var cached = _gaFLClientCache[fileUrl];
-        _gaFLApplyData(cached);
-        // If 1s data is missing from cache, fetch it in the background
-        if (cached.has_1s && (!cached.obs_1s || cached.obs_1s.length === 0)) {
-            var centerLat = 0, centerLon = 0;
-            if (selectedStorm) {
-                centerLat = selectedStorm.lmi_lat || selectedStorm.genesis_lat || 0;
-                centerLon = selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0;
-            }
-            var bgUrl = API_BASE + '/global/flightlevel/data?file_url=' +
-                encodeURIComponent(fileUrl);
-            if (centerLat) bgUrl += '&center_lat=' + centerLat + '&center_lon=' + centerLon;
-            var btn1s = document.getElementById('ga-fl-res-1s');
-            if (btn1s) { btn1s.style.display = ''; btn1s.style.opacity = '0.5'; btn1s.textContent = '1s \u23f3'; }
-            if (_gaFL1sAbort) _gaFL1sAbort.abort();
-            _gaFL1sAbort = new AbortController();
-            fetch(bgUrl + '&include_1s=true', { signal: _gaFL1sAbort.signal })
-                .then(function (r) { return r.json(); })
-                .then(function (j) {
-                    if (j.success && j.obs_1s && j.obs_1s.length > 0) {
-                        cached.obs_1s = j.obs_1s;
-                        _gaFLData1s = j.obs_1s;
-                        _gaFLClientCache[fileUrl] = cached;
-                        if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s'; }
-                        if (_gaFLResVisible['1s'] && _gaFLTSOpen) _gaFLRenderTimeSeries();
-                    } else {
-                        if (btn1s) btn1s.style.display = 'none';
-                        cached.has_1s = false;
-                    }
-                }).catch(function (err) {
-                    if (err && err.name === 'AbortError') return;
-                    if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s \u274c'; }
-                });
-        }
-        return;
-    }
-
-    _gaFLFetching = true;
-    var status = document.getElementById('ga-fl-frame-status');
-    if (status) status.textContent = 'Loading\u2026';
-
     var centerLat = 0, centerLon = 0;
     if (selectedStorm) {
         centerLat = selectedStorm.lmi_lat || selectedStorm.genesis_lat || 0;
         centerLon = selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0;
     }
-
     var baseUrl = API_BASE + '/global/flightlevel/data?file_url=' +
         encodeURIComponent(fileUrl);
     if (centerLat) baseUrl += '&center_lat=' + centerLat + '&center_lon=' + centerLon;
 
-    // Fast load: fetch 10s/30s first (small payload ~1.3 MB), then 1s in background
-    fetch(baseUrl)
+    // Check browser-side cache first — instant load for previously viewed missions
+    if (_gaFLClientCache[fileUrl]) {
+        var cached = _gaFLClientCache[fileUrl];
+        _gaFLApplyData(cached);
+        _gaFLPrefetch1s(fileUrl, baseUrl, cached);
+        return;
+    }
+
+    var status = document.getElementById('ga-fl-frame-status');
+    if (status) status.textContent = 'Loading\u2026';
+
+    // Fast load: fetch the light 10s/30s payload first, then 1s in background
+    var mainCtrl = new AbortController();
+    _gaFLMainAbort = mainCtrl;
+    fetch(baseUrl, { signal: mainCtrl.signal })
         .then(function (r) { return r.json(); })
         .then(function (json) {
-            _gaFLFetching = false;
+            if (_gaFLMainAbort === mainCtrl) _gaFLMainAbort = null;
             if (!json.success) {
                 if (status) status.textContent = json.detail || 'Parse failed';
                 return;
             }
             _gaFLClientCache[fileUrl] = json;
             _gaFLApplyData(json);
-
-            // Background: fetch 1s data and merge in
-            // Abort any previous 1s fetch to avoid blocking new requests
-            if (_gaFL1sAbort) _gaFL1sAbort.abort();
-            if (json.has_1s && (!json.obs_1s || json.obs_1s.length === 0)) {
-                var btn1s = document.getElementById('ga-fl-res-1s');
-                if (btn1s) { btn1s.style.display = ''; btn1s.style.opacity = '0.5'; btn1s.textContent = '1s \u23f3'; }
-
-                _gaFL1sAbort = new AbortController();
-                fetch(baseUrl + '&include_1s=true', { signal: _gaFL1sAbort.signal })
-                    .then(function (r2) { return r2.json(); })
-                    .then(function (json1s) {
-                        if (json1s.success && json1s.obs_1s && json1s.obs_1s.length > 0) {
-                            json.obs_1s = json1s.obs_1s;
-                            _gaFLData1s = json1s.obs_1s;
-                            _gaFLClientCache[fileUrl] = json;
-                            if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s'; }
-                            if (_gaFLResVisible['1s'] && _gaFLTSOpen) _gaFLRenderTimeSeries();
-                        } else {
-                            // 1s data not returned — reset button but don't hide
-                            // (might be a stale server cache; keep button visible)
-                            if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s'; }
-                        }
-                    })
-                    .catch(function (err) {
-                        // Aborted fetches are expected when switching missions
-                        if (err && err.name === 'AbortError') return;
-                        if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s \u274c'; }
-                    });
-            }
+            _gaFLPrefetch1s(fileUrl, baseUrl, json);
         })
         .catch(function (e) {
-            _gaFLFetching = false;
+            // Aborted fetches are expected when switching missions
+            if (e && e.name === 'AbortError') return;
+            if (_gaFLMainAbort === mainCtrl) _gaFLMainAbort = null;
             if (status) status.textContent = 'Error: ' + e.message;
         });
 }
+
 
 function _gaFLSyncIRToMissionMidpoint(json) {
     if (!_gaFLAutoSync || !irMeta || !irMeta.frames || irMeta.frames.length === 0) return;
@@ -14318,6 +14309,11 @@ window.gaFLToggleRes = function (res) {
         var r = b.getAttribute('data-res');
         if (r === res) b.classList.toggle('active', _gaFLResVisible[res]);
     });
+    // User wants 1s now — skip the deferred prefetch delay if it hasn't fired
+    if (res === '1s' && _gaFLResVisible['1s'] && !_gaFLData1s && _gaFL1sFireNow) {
+        if (_gaFL1sTimer) { clearTimeout(_gaFL1sTimer); _gaFL1sTimer = null; }
+        _gaFL1sFireNow();
+    }
     if (_gaFLData) _gaFLRenderTimeSeries();
 };
 
