@@ -66,7 +66,10 @@ TCPRIMED_PREFIX = "v01r01/final"
 _GCS_MW_CACHE_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_mw_client = None
 _gcs_mw_bucket = None
-_GCS_MW_VERSION = "mw-v2"  # v2: invalidate pre-2026-08-12 renders (speckle holes; SSM/I NN-radius fix)
+# v2 invalidated pre-2026-08-12 renders (speckle holes frozen in cache).
+# v3: along-scan NN-radius floor + cos(lat) KD-tree metric + 400 px
+# speckle fill (2026-08-24).
+_GCS_MW_VERSION = "mw-v3"
 
 
 def _get_mw_gcs_bucket():
@@ -1911,6 +1914,7 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     eff_res_deg = max((lat_max - lat_min) / max(n_lat - 1, 1),
                       (lon_max - lon_min) / max(n_lon - 1, 1))
     factor, src_spacing_deg = _alongtrack_factor(lats, lons, eff_res_deg)
+    alongscan_deg = _swath_alongscan_spacing_deg(lats, lons)
     if factor > 1:
         (up_data,), lats, lons = _upsample_alongtrack(
             [data], lats, lons, factor)
@@ -1933,12 +1937,19 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     # used to be built on the same points just for the far_mask. One tree
     # build + one query for an identical result (~2x cheaper, less memory).
     from scipy.spatial import cKDTree
-    tree = cKDTree(np.column_stack([flat_lon, flat_lat]))
-    dists, idx = tree.query(np.column_stack([glon.ravel(), glat.ravel()]))
+    # Query in true angular degrees: scale lon by cos(mid-domain lat) so the
+    # E-W metric matches the N-S one. A raw-degree query overstates E-W
+    # separations by 1/cos(lat) (~10% at 25N), silently shrinking coverage
+    # against a radius calibrated from cos-corrected spacing measurements.
+    coslat = max(0.2, float(np.cos(np.radians((lat_min + lat_max) / 2.0))))
+    tree = cKDTree(np.column_stack([flat_lon * coslat, flat_lat]))
+    dists, idx = tree.query(
+        np.column_stack([glon.ravel() * coslat, glat.ravel()]))
     gridded = flat_data[idx].reshape(glon.shape)
     # Mask grid points far from any actual swath data to prevent
     # nearest-neighbor extrapolation beyond the swath edge.
-    max_dist_deg = _nn_search_radius_deg(grid_res_deg, src_spacing_deg)
+    max_dist_deg = _nn_search_radius_deg(
+        grid_res_deg, src_spacing_deg, alongscan_deg)
     far_mask = (dists > max_dist_deg).reshape(glon.shape)
     gridded[far_mask] = np.nan
     # Fill the small interior NaN holes left by the kd-tree threshold
@@ -1965,12 +1976,12 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     }
 
 
-def _fill_speckle_holes(arr: np.ndarray, max_hole_pixels: int = 6) -> np.ndarray:
+def _fill_speckle_holes(arr: np.ndarray, max_hole_pixels: int = 400) -> np.ndarray:
     """Fill small NaN clusters in a regridded 2D array.
 
     `griddata(method="nearest") + far_mask` produces speckle holes where
     the regular lat/lon grid samples a cell that falls between actual
-    swath pixels and the kd-tree distance exceeds `3 * grid_res_deg`.
+    swath pixels and the kd-tree distance exceeds the NN search radius.
     Visually these are scattered transparent dots that read as noise in
     the overlay (the IR/ocean background shows through `set_bad(alpha=0)`).
 
@@ -1979,14 +1990,21 @@ def _fill_speckle_holes(arr: np.ndarray, max_hole_pixels: int = 6) -> np.ndarray
     edges, QC-flagged sectors — are left untouched so they correctly
     disappear into the underlying layer rather than being smeared across.
 
+    The threshold sits in the wide gap between the two populations: on the
+    2026-08-24 white-speckle postmortem case (SSM/I F11 89 GHz, Andrew
+    1992) real footprint-corner holes measured 7–264 px while the smallest
+    genuine off-swath region was ~21,700 px, so the old default of 6
+    passed the speckles straight through. 400 clears the largest observed
+    speckle with margin and stays ~50x under the smallest real gap.
+
     Vectorized: component sizes come from a single `bincount` and the
     fill comes from one `distance_transform_edt`, so the cost is
     O(grid_cells) regardless of how many holes there are. The earlier
     per-component dilation loop was O(n_holes × grid_cells) — it hung the
     NRT ingest for >600s once the 2026-05-26 cap bump pushed dense SSMIS
     grids to ~2.25M cells with tens of thousands of speckle holes. For
-    ≤6 px holes nearest-valid is visually identical to the prior
-    neighbour-median fill.
+    footprint-gap-sized holes nearest-valid is visually identical to the
+    prior neighbour-median fill.
     """
     mask = np.isnan(arr)
     if not mask.any() or mask.all():
@@ -2074,6 +2092,32 @@ def _swath_scan_spacing_deg(lats: np.ndarray, lons: np.ndarray) -> float:
     return float(np.median(step))
 
 
+def _swath_alongscan_spacing_deg(lats: np.ndarray, lons: np.ndarray) -> float:
+    """Median angular distance (deg) between adjacent pixels ALONG the middle
+    scan line — the across-track sibling of _swath_scan_spacing_deg. This is
+    the sensor's along-scan sampling (12.7 km for SSM/I 85 GHz, ~4.4 km for
+    GMI 89), which along-track upsampling never changes, so it sets its own
+    floor on the NN search radius. Returns 0.0 when the geometry isn't a 2-D
+    (scan, pixel) swath or the row is too short to measure."""
+    if lats.ndim != 2 or lats.shape[0] < 1 or lats.shape[1] < 3:
+        return 0.0
+    mid = lats.shape[0] // 2
+    row_lat = np.asarray(lats[mid, :], dtype=np.float64)
+    row_lon = np.asarray(lons[mid, :], dtype=np.float64)
+    dlat = np.diff(row_lat)
+    # Dateline-safe: wrap each step into [-180, 180) before scaling by cos(lat).
+    dlon = (np.diff(row_lon) + 180.0) % 360.0 - 180.0
+    mean_lat = np.nanmean(row_lat)
+    if not np.isfinite(mean_lat):
+        return 0.0
+    dlon = dlon * np.cos(np.radians(mean_lat))
+    step = np.hypot(dlat, dlon)
+    step = step[np.isfinite(step) & (step > 0)]
+    if step.size == 0:
+        return 0.0
+    return float(np.median(step))
+
+
 def _alongtrack_factor(lats: np.ndarray, lons: np.ndarray,
                        eff_res_deg: float) -> Tuple[int, float]:
     """How many sub-intervals to split each scan gap into so the along-track
@@ -2131,17 +2175,27 @@ def _upsample_alongtrack(data_channels: list, lats: np.ndarray,
     return ([lerp(ch, np.float32) for ch in data_channels], lat_up, lon_up)
 
 
-def _nn_search_radius_deg(grid_res_deg: float, src_spacing_deg: float) -> float:
+def _nn_search_radius_deg(grid_res_deg: float, src_spacing_deg: float,
+                          alongscan_deg: float = 0.0) -> float:
     """Nearest-neighbour cutoff for the regrid.
 
     Historically this was a flat 3 x grid_res_deg — the radius was tied to
     the OUTPUT grid, so asking for a finer render made the masking MORE
     aggressive and manufactured holes that then had to be smeared shut. The
     floor below ties it to the INPUT sampling instead, so a grid that
-    out-resolves its source degrades to blur rather than to banding. Inert
-    for every current sensor/band once along-track resampling has run; it
-    exists so the next sensor or a grid-res change can't reintroduce this."""
-    return max(grid_res_deg * 3.0, 0.75 * src_spacing_deg)
+    out-resolves its source degrades to blur rather than to banding.
+
+    The input floor is the WIDER of the two swath axes: the post-upsample
+    along-track scan spacing AND the along-scan pixel spacing
+    (`alongscan_deg`), which along-track upsampling never changes. SSM/I is
+    the case that bites: 12.7 km (~0.11 deg) between pixels along each scan,
+    so a radius keyed only to the upsampled scan spacing collapsed to the
+    3 x 0.02-deg grid floor and NaN'd the Voronoi corners between
+    footprints (the 2026-08-24 white-speckle postmortem). Distances are
+    compared in true angular degrees — the KD-tree scales lon by cos(lat),
+    matching how both spacing measurements are taken."""
+    return max(grid_res_deg * 3.0,
+               0.75 * max(src_spacing_deg, alongscan_deg))
 
 
 def _regrid_swath_multi(
@@ -2206,6 +2260,7 @@ def _regrid_swath_multi(
     eff_res_deg = max((lat_max - lat_min) / max(n_lat - 1, 1),
                       (lon_max - lon_min) / max(n_lon - 1, 1))
     factor, src_spacing_deg = _alongtrack_factor(lats, lons, eff_res_deg)
+    alongscan_deg = _swath_alongscan_spacing_deg(lats, lons)
     if factor > 1:
         data_channels, lats, lons = _upsample_alongtrack(
             data_channels, lats, lons, factor)
@@ -2237,9 +2292,14 @@ def _regrid_swath_multi(
     # internally per channel) plus a separate far_mask tree — collapsing
     # (K+1) tree builds to 1 for a K-channel composite. Identical result.
     from scipy.spatial import cKDTree
-    tree = cKDTree(np.column_stack([flat_lon, flat_lat]))
-    dists, idx = tree.query(np.column_stack([glon.ravel(), glat.ravel()]))
-    max_dist_deg = _nn_search_radius_deg(grid_res_deg, src_spacing_deg)
+    # True-angular query metric — lon scaled by cos(mid-domain lat); see
+    # _regrid_swath for the rationale.
+    coslat = max(0.2, float(np.cos(np.radians((lat_min + lat_max) / 2.0))))
+    tree = cKDTree(np.column_stack([flat_lon * coslat, flat_lat]))
+    dists, idx = tree.query(
+        np.column_stack([glon.ravel() * coslat, glat.ravel()]))
+    max_dist_deg = _nn_search_radius_deg(
+        grid_res_deg, src_spacing_deg, alongscan_deg)
     far_mask = (dists > max_dist_deg).reshape(glon.shape)
 
     channels = {}
@@ -2312,6 +2372,7 @@ def _regrid_swath_window(
     n_lat_pre = min(int((2.0 * half_deg) / grid_res_deg) + 1, max_grid_dim)
     eff_res_deg = (2.0 * half_deg) / max(n_lat_pre - 1, 1)
     factor, src_spacing_deg = _alongtrack_factor(lats, lons, eff_res_deg)
+    alongscan_deg = _swath_alongscan_spacing_deg(lats, lons)
     if factor > 1:
         data_channels, lats, lons = _upsample_alongtrack(
             data_channels, lats, lons, factor)
@@ -2361,9 +2422,14 @@ def _regrid_swath_window(
 
     # Single shared KD-tree query (see _regrid_swath_multi): one build +
     # query yields the nearest-source index and distance for every channel.
-    tree = cKDTree(np.column_stack([flat_lon, flat_lat]))
-    dists, idx = tree.query(np.column_stack([glon.ravel(), glat.ravel()]))
-    max_dist_deg = _nn_search_radius_deg(grid_res_deg, src_spacing_deg)
+    # True-angular query metric — lon scaled by cos(window-center lat); see
+    # _regrid_swath for the rationale.
+    coslat = max(0.2, float(np.cos(np.radians(float(center_lat)))))
+    tree = cKDTree(np.column_stack([flat_lon * coslat, flat_lat]))
+    dists, idx = tree.query(
+        np.column_stack([glon.ravel() * coslat, glat.ravel()]))
+    max_dist_deg = _nn_search_radius_deg(
+        grid_res_deg, src_spacing_deg, alongscan_deg)
     # Mask grid cells with no nearby swath sample (off-swath / polar gap).
     far_mask = (dists > max_dist_deg).reshape(glon.shape)
 
