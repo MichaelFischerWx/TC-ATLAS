@@ -66,7 +66,7 @@ TCPRIMED_PREFIX = "v01r01/final"
 _GCS_MW_CACHE_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_mw_client = None
 _gcs_mw_bucket = None
-_GCS_MW_VERSION = "mw-v1"
+_GCS_MW_VERSION = "mw-v2"  # v2: invalidate pre-2026-08-12 renders (speckle holes; SSM/I NN-radius fix)
 
 
 def _get_mw_gcs_bucket():
