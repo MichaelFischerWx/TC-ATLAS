@@ -395,6 +395,14 @@
             this._whenStyle(function () { self._glAdd(def, z); });
             return;
         }
+        // A queued add can outlive its layer: overlays removed while this
+        // add waited behind a style (re)load have already torn down their
+        // source, so addLayer would only throw maplibre's "source ... not
+        // found" into the error channel. Live re-adds always re-create
+        // their source first, so a missing source means "stale add" — as
+        // does an id that is already present (double-queued add). Skip.
+        if (typeof def.source === 'string' && !this._gl.getSource(def.source)) return;
+        if (this._gl.getLayer(def.id)) return;
         z = z == null ? 400 : z;
         var layers = this._gl.getStyle().layers, before = null;
         for (var i = 0; i < layers.length; i++) {
