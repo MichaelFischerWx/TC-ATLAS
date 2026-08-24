@@ -14677,15 +14677,38 @@
         if (!stormsAvail || !stormsAvail.length) return null;
         var p0 = disturbance.mean.points[0];
         if (p0.lat == null || p0.lon == null) return null;
-        // 350 km (was 600): in basins like the E-Pac, invests sit 500–900 km apart,
-        // and the disturbance position here is an ENSEMBLE-MEAN start point that can
-        // drift toward a neighbor — 600 km let it grab the wrong invest (e.g. a
-        // disturbance mislabeled "94E"). A genuine match is usually well inside 350.
-        var best = null, bestDist = 350;  // km threshold
+        // 350 km base (was 600): in basins like the E-Pac, invests sit 500–900 km
+        // apart, and the disturbance position here is an ENSEMBLE-MEAN start point
+        // that can drift toward a neighbor — 600 km let it grab the wrong invest
+        // (e.g. a disturbance mislabeled "94E"). A genuine match is usually well
+        // inside 350 — WHEN the mean track starts at tau 0. But DeepMind's tracker
+        // often starts member tracks 12–24 h into the run for weak pre-genesis
+        // waves, so the anchor can lag a freshly-designated invest's CURRENT
+        // position by a day of wave motion (2026-08-24: Invest 96L sat 409 km
+        // from D13's tau-24 anchor and never matched). Widen the gate with the
+        // track's start hour (~a wave's motion per day), capped at the old 600,
+        // and measure against the first day of the mean track, not one point —
+        // tau-0 anchors keep the tight 350 that stopped the E-Pac wrong grabs.
+        var startTau = (p0.tau != null) ? p0.tau : 0;
+        var gateKm = Math.min(600, 350 + 12.5 * Math.max(0, startTau));
+        var early = [];
+        for (var k = 0; k < disturbance.mean.points.length; k++) {
+            var mp = disturbance.mean.points[k];
+            if (mp.lat == null || mp.lon == null) continue;
+            if ((mp.tau != null ? mp.tau : startTau) - startTau > 24) break;
+            early.push(mp);
+        }
+        if (!early.length) early = [p0];
+        var best = null, bestDist = gateKm;
         for (var i = 0; i < stormsAvail.length; i++) {
             var s = stormsAvail[i];
             if (!s || s.lat == null || s.lon == null) continue;
-            var d = _genesisHaversineKm(p0.lat, p0.lon, s.lat, s.lon);
+            var d = Infinity;
+            for (var e = 0; e < early.length; e++) {
+                var dd = _genesisHaversineKm(early[e].lat, early[e].lon,
+                                             s.lat, s.lon);
+                if (dd < d) d = dd;
+            }
             if (d < bestDist) { bestDist = d; best = s; }
         }
         if (!best) return null;
@@ -15703,18 +15726,25 @@
                     + gInit.slice(0, 4) + '-' + gInit.slice(4, 6) + '-'
                     + gInit.slice(6, 8) + ' ' + gInit.slice(8, 10) + 'Z</span>'
                 : '';
-            // Wave-family line: one emerald line, matching the connector
-            // chain on the map. The full union explanation lives in the
+            // Wave-family line: one violet line, matching the corridor
+            // ribbon on the map. The full union explanation lives in the
             // detail modal — the hover card just states the grouping.
+            // Siblings are filtered by track_id, NOT display label: an
+            // ATCF-matched cluster's displayShort becomes the storm code
+            // ("96L"), which would leave its own cluster code in the list.
             var famLine = '';
             if (fam && !probsPending && fam.n_union) {
-                var sibs = (fam.cluster_shorts || []).filter(function (s) {
-                    return s !== d.displayShort;
-                }).join(' + ');
+                var sibs = [];
+                for (var fs = 0; fs < (fam.cluster_ids || []).length; fs++) {
+                    if (fam.cluster_ids[fs] !== trackId) {
+                        sibs.push((fam.cluster_shorts || [])[fs]);
+                    }
+                }
+                sibs = sibs.join(' + ');
                 var uPct = Math.round(100 * (fam.union_fraction || 0));
-                famLine = '<br><span style="color:#059669; font-weight:600;">'
+                famLine = '<br><span style="color:#7c3aed; font-weight:600;">'
                     + '<span style="display:inline-block; width:7px; height:7px;'
-                    + ' border-radius:50%; background:#10b981; margin-right:5px;'
+                    + ' border-radius:50%; background:#8b5cf6; margin-right:5px;'
                     + ' vertical-align:1px;"></span>'
                     + 'Same wave as ' + sibs
                     + ' &middot; combined: <strong>' + uPct + '%</strong></span>';
@@ -15782,13 +15812,15 @@
             }
         }
 
-        // Wave-family connectors: a fine dotted emerald chain linking the
-        // sibling genesis scenarios of one physical wave, ordered by
+        // Wave-family connectors: a soft translucent violet RIBBON linking
+        // the sibling genesis scenarios of one physical wave, ordered by
         // genesis timing. Always visible (not hover-gated) — touch users
         // never see marker tooltips, so the grouping has to be readable
-        // from the map alone. Deliberately subordinate to the dashed
-        // category-colored mean tracks: thinner, dotted, and in the
-        // family emerald that never encodes intensity.
+        // from the map alone. Solid-wide-translucent + violet is chosen so
+        // it can NEVER be confused with the dashed category-colored mean
+        // tracks: different pattern AND a hue no intensity class uses
+        // (TS tracks/markers are emerald #34d399, which an earlier dotted
+        // green chain collided with).
         var famsToDraw = (_rtGenesisClusters && _rtGenesisClusters.families) || [];
         for (var fi = 0; fi < famsToDraw.length; fi++) {
             var famF = famsToDraw[fi];
@@ -15805,7 +15837,7 @@
             if (chain.length < 2) continue;
             var famTipHtml = '<div style="white-space:normal; max-width:220px;">'
                 + '<span style="display:inline-block; width:7px; height:7px;'
-                + ' border-radius:50%; background:#10b981; margin-right:5px;'
+                + ' border-radius:50%; background:#8b5cf6; margin-right:5px;'
                 + ' vertical-align:1px;"></span>'
                 + '<b>Wave family ' + chainShorts.join(' + ') + '</b>'
                 + '<br>Develops somewhere along this corridor: <strong>'
@@ -15816,8 +15848,7 @@
             for (var si = 0; si < famSegs.length; si++) {
                 if (famSegs[si].length < 2) continue;
                 var famLink = L.polyline(famSegs[si], {
-                    color: '#10b981', weight: 2.2, opacity: 0.9,
-                    dashArray: '1,7',
+                    color: '#8b5cf6', weight: 6, opacity: 0.32,
                     interactive: true, bubblingMouseEvents: false,
                 }).addTo(map);
                 // Facade tolerance: polyline tooltips may be unsupported
