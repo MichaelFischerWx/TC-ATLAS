@@ -11138,6 +11138,36 @@ _TCA_FAM_EXCL_MIN_EXP = 4.0
 _TCA_FAM_EXCL_KM = 1500.0
 
 
+def _tca_family_mean(fam_clusters):
+    """Deduplicated NET mean track across a family's clusters — the
+    'what does the wave as a whole do' track a per-cluster mean cannot
+    show in a start/stop/re-develop scenario. Pools every member of
+    every constituent, deduping per sample with the merge pass's rule
+    (keep the entry whose first-genesis sits closest to the largest
+    cluster's peak), then averages per valid time. Positions only by
+    design: a per-tau family mean mixes lifecycle stages (early
+    developers dissipating while late ones spin up), so the wind values
+    that ride along must not be presented as an intensity forecast."""
+    dom = max(fam_clusters, key=lambda c: c["n_members_total"])
+    best_per_sample: dict = {}
+    for c in fam_clusters:
+        for sk, mem in (c.get("members") or {}).items():
+            pts = mem.get("points") or []
+            first = next(
+                (p for p in pts
+                 if (p.get("wind") or 0) >= 34
+                 and p.get("lat") is not None and p.get("lon") is not None),
+                None)
+            d = (_tca_haversine_km(first["lat"], first["lon"],
+                                   dom["peak_lat"], dom["peak_lon"])
+                 if first else float("inf"))
+            cur = best_per_sample.get(sk)
+            if cur is None or d < cur[0]:
+                best_per_sample[sk] = (d, pts)
+    mean_pts = _tca_mean_track([pts for _d, pts in best_per_sample.values()])
+    return {"points": mean_pts}
+
+
 def _tca_family_pass(clusters, ensemble_size):
     """Union-find over family-linked cluster pairs. Returns a list of
     family dicts (only groups of >= 2 clusters), largest union first:
@@ -11203,6 +11233,10 @@ def _tca_family_pass(clusters, ensemble_size):
             "union_fraction": round(len(union) / ensemble_size, 4),
             "sum_fraction": round(total / ensemble_size, 4),
             "n_multi": total - len(union),
+            # Full deduplicated net mean track (see _tca_family_mean).
+            # Served unclipped; the map ribbon clips it to the corridor
+            # client-side so future views can use the whole track.
+            "family_mean": _tca_family_mean([clusters[i] for i in idxs]),
         })
     fams.sort(key=lambda f: -f["n_union"])
     for k, f in enumerate(fams):

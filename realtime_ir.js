@@ -15898,6 +15898,48 @@
             }
             // Fewer than 2 siblings rendered (min-fraction floor) — no chain.
             if (chain.length < 2) continue;
+            // Prefer the family's deduplicated NET MEAN track as the ribbon
+            // path — the actual corridor the wave follows, curved through
+            // recurves — over the straight marker-to-marker chord. Clipped
+            // to the corridor (just past the last sibling's mean genesis
+            // time): beyond that the per-cluster dashed mean tracks already
+            // tell the story, and a full-length violet band would shadow
+            // them. Falls back to the chord against an API/cache that
+            // predates family_mean.
+            var ribbon = null;
+            var fmPts = (famF.family_mean && famF.family_mean.points) || [];
+            if (fmPts.length >= 2) {
+                var clipTau = null;
+                var idxClusters = (_rtGenesisClusters
+                                   && _rtGenesisClusters.clusters) || [];
+                for (var cc = 0; cc < idxClusters.length; cc++) {
+                    if ((famF.cluster_ids || []).indexOf(
+                            idxClusters[cc].track_id) >= 0
+                            && idxClusters[cc].peak_mean_tau != null) {
+                        clipTau = Math.max(clipTau == null ? 0 : clipTau,
+                                           idxClusters[cc].peak_mean_tau);
+                    }
+                }
+                ribbon = [];
+                for (var fp = 0; fp < fmPts.length; fp++) {
+                    var fpp = fmPts[fp];
+                    if (fpp.lat == null || fpp.lon == null) continue;
+                    if (clipTau != null && fpp.tau != null
+                            && fpp.tau > clipTau + 12) break;
+                    ribbon.push([fpp.lat, fpp.lon]);
+                }
+                if (ribbon.length >= 2) {
+                    // The mean's earliest shared coverage can start a few
+                    // hundred km downstream of the earliest sibling's
+                    // marker — anchor the ribbon to the marker it links.
+                    var mk0 = chain[0];
+                    var dLat = Math.abs(mk0[0] - ribbon[0][0]);
+                    var dLon = Math.abs(mk0[1] - ribbon[0][1]);
+                    if (dLat > 1 || dLon > 1) ribbon.unshift(mk0);
+                } else {
+                    ribbon = null;
+                }
+            }
             var famTipHtml = '<div style="white-space:normal; max-width:220px;">'
                 + '<span style="display:inline-block; width:7px; height:7px;'
                 + ' border-radius:50%; background:#8b5cf6; margin-right:5px;'
@@ -15906,8 +15948,13 @@
                 + '<br>Develops somewhere along this corridor: <strong>'
                 + Math.round(100 * (famF.union_fraction || 0)) + '%</strong>'
                 + ' <span style="opacity:0.7;">(each member counted once)</span>'
+                + (ribbon
+                    ? '<br><span style="opacity:0.7; font-size:0.85em;">'
+                        + 'ribbon follows the family&rsquo;s deduplicated '
+                        + 'net mean track</span>'
+                    : '')
                 + '</div>';
-            var famSegs = splitAtAntimeridian(chain);
+            var famSegs = splitAtAntimeridian(ribbon || chain);
             for (var si = 0; si < famSegs.length; si++) {
                 if (famSegs[si].length < 2) continue;
                 var famLink = L.polyline(famSegs[si], {
