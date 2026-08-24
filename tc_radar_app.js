@@ -15238,7 +15238,7 @@ function loadMicrowaveOverpass() {
     if (status) status.textContent = 'Loading ' + product + '...';
 
     var url = API_BASE + '/microwave/data?s3_key=' + encodeURIComponent(op.s3_key) +
-        '&product=' + product;
+        '&product=' + product + '&mwv=3';
     if (currentCaseData) {
         url += '&center_lat=' + currentCaseData.latitude +
                '&center_lon=' + currentCaseData.longitude;

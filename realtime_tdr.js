@@ -8336,7 +8336,7 @@
         if (status) status.textContent = 'Loading ' + product + '...';
 
         var dataUrl = API_BASE + '/microwave/data?s3_key=' + encodeURIComponent(op.s3_key) +
-            '&product=' + product;
+            '&product=' + product + '&mwv=3';
         if (_rtCaseMeta) {
             dataUrl += '&center_lat=' + (_rtCaseMeta.latitude || 0) +
                        '&center_lon=' + (_rtCaseMeta.longitude || 0);

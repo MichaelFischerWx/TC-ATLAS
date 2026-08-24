@@ -5942,7 +5942,7 @@ window.loadGlobalMWOverpass = function () {
     if (status) status.textContent = 'Loading ' + product + '...';
 
     var url = API_BASE + '/microwave/data?s3_key=' + encodeURIComponent(op.s3_key) +
-        '&product=' + product;
+        '&product=' + product + '&mwv=3';
 
     // Pass storm center if available from the selected storm
     if (selectedStorm) {
@@ -10109,7 +10109,7 @@ window.loadCompareMWOverpass = function (side) {
 
     var product = _cmpMW.product;
     var url = API_BASE + '/microwave/data?s3_key=' + encodeURIComponent(op.s3_key) +
-        '&product=' + product;
+        '&product=' + product + '&mwv=3';
 
     // Pass storm center for cropping
     if (s.storm) {
