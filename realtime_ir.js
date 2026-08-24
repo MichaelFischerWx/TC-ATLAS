@@ -15523,6 +15523,60 @@
         };
     }
 
+    // Current display-short per cluster track_id, captured AFTER the ATCF
+    // matching pass each render. The server's family cluster_shorts are
+    // the raw cluster codes ("D13") and know nothing about a client-side
+    // ATCF match that relabeled the cluster ("96L") — every place that
+    // prints family member names must map ids through this first.
+    var _genesisShortByTid = {};
+
+    // Display-short for a family member id: matched/current label first,
+    // server-provided cluster code as the fallback.
+    function _genesisFamShort(tid, fallback) {
+        return _genesisShortByTid[tid] || fallback || tid;
+    }
+
+    // In-page methods modal (static markup in realtime_ir.html). The
+    // canonical clustering/family description lives HERE on the monitor,
+    // where the markers are — the home page only keeps a pointer stub.
+    function _genesisMethodsKeydown(e) {
+        if (e.key === 'Escape') window._irCloseGenesisMethods();
+    }
+    window._irOpenGenesisMethods = function () {
+        var m = document.getElementById('rt-genesis-methods-modal');
+        if (!m) return;
+        m.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+        document.addEventListener('keydown', _genesisMethodsKeydown);
+        _ga('rt_genesis_methods_open', {});
+    };
+    window._irCloseGenesisMethods = function () {
+        var m = document.getElementById('rt-genesis-methods-modal');
+        if (!m) return;
+        m.style.display = 'none';
+        document.removeEventListener('keydown', _genesisMethodsKeydown);
+        // Keep the page scroll-locked if the genesis detail modal is
+        // still open underneath (the ⓘ note opens methods on top of it).
+        var det = document.getElementById(_GENESIS_MODAL_ID);
+        if (!det || det.style.display === 'none' || !det.style.display) {
+            document.body.style.overflow = '';
+        }
+    };
+    // Backdrop click closes; clicks inside the content don't bubble out.
+    (function () {
+        var m = document.getElementById('rt-genesis-methods-modal');
+        if (m) {
+            m.addEventListener('click', function (e) {
+                if (e.target === m) window._irCloseGenesisMethods();
+            });
+        }
+        // Deep link: realtime_ir.html#genesis-methods (used by the home
+        // page changelog + methods stub) opens the modal on load.
+        if (/genesis-methods/.test(location.hash || '')) {
+            setTimeout(function () { window._irOpenGenesisMethods(); }, 600);
+        }
+    })();
+
     // Wave family containing the given cluster track_id, or null. Families
     // only exist on the server-cluster path (the client-side fallback
     // clustering computes none), and only for the currently-loaded index.
@@ -15595,6 +15649,13 @@
         // Hide the redundant track name labels for matched storms too —
         // the disturbance pin already shows the official name.
         _scheduleStormLabelSync();
+
+        // Post-match labels for family rendering (see _genesisShortByTid).
+        _genesisShortByTid = {};
+        for (var sb = 0; sb < disturbances.length; sb++) {
+            var sbTid = (disturbances[sb].raw || {}).track_id;
+            if (sbTid) _genesisShortByTid[sbTid] = disturbances[sb].displayShort;
+        }
 
         // Rendered marker position per cluster track_id — the family
         // connector pass below chains these after the loop.
@@ -15737,7 +15798,8 @@
                 var sibs = [];
                 for (var fs = 0; fs < (fam.cluster_ids || []).length; fs++) {
                     if (fam.cluster_ids[fs] !== trackId) {
-                        sibs.push((fam.cluster_shorts || [])[fs]);
+                        sibs.push(_genesisFamShort(fam.cluster_ids[fs],
+                                  (fam.cluster_shorts || [])[fs]));
                     }
                 }
                 sibs = sibs.join(' + ');
@@ -15830,7 +15892,8 @@
                 var pos = famPos[famF.cluster_ids[ci]];
                 if (pos) {
                     chain.push(pos);
-                    chainShorts.push((famF.cluster_shorts || [])[ci]);
+                    chainShorts.push(_genesisFamShort(famF.cluster_ids[ci],
+                                     (famF.cluster_shorts || [])[ci]));
                 }
             }
             // Fewer than 2 siblings rendered (min-fraction floor) — no chain.
@@ -17097,8 +17160,9 @@
             // them — without this note the modal reads as one observed
             // disturbance with one independent probability. Links to the
             // public methods writeup on the home page.
-            '<a href="index.html#genesis-clustering" target="_blank" '
-                + 'rel="noopener" style="opacity:0.8; color:inherit; '
+            '<a href="#genesis-methods" '
+                + 'onclick="window._irOpenGenesisMethods(); return false;" '
+                + 'style="opacity:0.8; color:inherit; '
                 + 'text-decoration:underline dotted;" '
                 + 'title="TC-ATLAS clusters the ensemble&#39;s member tracks by '
                 + 'where each member FIRST reaches tropical-storm strength '
@@ -17165,9 +17229,17 @@
                 + 'the per-cluster percentages would double-count '
                 + _famForSub.n_multi + ' member'
                 + (_famForSub.n_multi === 1 ? '' : 's') + '.';
+            // Family member names go through the post-match label map so
+            // an ATCF-matched sibling reads "96L", not its old cluster code.
+            var _famNames = [];
+            for (var fn = 0; fn < (_famForSub.cluster_ids || []).length; fn++) {
+                _famNames.push(_genesisFamShort(_famForSub.cluster_ids[fn],
+                               (_famForSub.cluster_shorts || [])[fn]));
+            }
+            if (!_famNames.length) _famNames = _famForSub.cluster_shorts;
             subParts.push('<span class="rt-genesis-fam-pill" title="'
                 + _famTip.replace(/"/g, '&quot;') + '">Wave family: '
-                + _famForSub.cluster_shorts.join(' + ') + ' · '
+                + _famNames.join(' + ') + ' · '
                 + Math.round(100 * (_famForSub.union_fraction || 0))
                 + '% combined</span>');
         }
@@ -22380,7 +22452,7 @@
             '<span class="rt-gen-toast-dot"></span>'
             + '<span class="rt-gen-toast-body">'
             + '<b>' + lead + nDisturbances + ' genesis cluster' + plural + '</b>'
-            + '<span class="rt-gen-toast-sub">Google DeepMind ensemble · clusters of member genesis points, not observed disturbances · tap a marker for the ' + _genesisVariantMemberTag() + ' detail · <a href="index.html#genesis-clustering" target="_blank" rel="noopener" style="color:inherit; text-decoration:underline dotted;" onclick="event.stopPropagation()">methods</a></span>'
+            + '<span class="rt-gen-toast-sub">Google DeepMind ensemble · clusters of member genesis points, not observed disturbances · tap a marker for the ' + _genesisVariantMemberTag() + ' detail · <a href="#genesis-methods" style="color:inherit; text-decoration:underline dotted;" onclick="event.stopPropagation(); window._irOpenGenesisMethods(); return false;">methods</a></span>'
             + '</span>'
             + '<span class="rt-gen-toast-close" aria-label="Dismiss">×</span>';
 
@@ -24488,10 +24560,10 @@
             // The methods link must not toggle the layer row it sits in.
             substatus: _genesisVariantModelLabel() + ' · ≥5% reach TS (≥34 kt)'
                 + (genStatus ? ' — ' + genStatus : '')
-                + ' · <a href="index.html#genesis-clustering" target="_blank" '
-                + 'rel="noopener" style="color:inherit; '
+                + ' · <a href="#genesis-methods" style="color:inherit; '
                 + 'text-decoration:underline dotted;" '
-                + 'onclick="event.stopPropagation()">methods</a>',
+                + 'onclick="event.stopPropagation(); '
+                + 'window._irOpenGenesisMethods(); return false;">methods</a>',
             checked: !!_rtGenesisVisible
         });
         // Ensemble-size picker — 1000-member (richer stats, publishes later)

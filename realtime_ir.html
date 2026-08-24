@@ -83,7 +83,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20260824c">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20260824e">
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -117,7 +117,7 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260824b">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260824c">
     <link rel="stylesheet" href="satellite_styles.css?v=20260811b">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260804a">
 </head>
@@ -2635,7 +2635,7 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
     <script defer src="tc_mw_layer.js?v=20260811b"></script>
-    <script defer src="realtime_ir.js?v=20260824c"></script>
+    <script defer src="realtime_ir.js?v=20260824e"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
@@ -3130,6 +3130,29 @@
                 <button type="button" class="recon-skewt-close" aria-label="Close" title="Close (Esc)" onclick="window._reconCloseSkewT()">&times;</button>
             </div>
             <div class="recon-skewt-body"></div>
+        </div>
+    </div>
+
+    <!-- Genesis clustering methods — the canonical algorithm description,
+         opened in-page from the DeepMind ensemble UI (modal method note,
+         cluster arrival toast, Display-menu row). Deep-linkable via
+         #genesis-methods; the home page keeps only a pointer stub. -->
+    <div id="rt-genesis-methods-modal" class="rt-genesis-modal" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="rt-genesis-methods-title">
+        <div class="rt-genesis-modal-content" style="max-width:780px;">
+            <div class="rt-genesis-modal-header">
+                <div>
+                    <h2 id="rt-genesis-methods-title">Methods · Cyclogenesis clusters &amp; wave families</h2>
+                    <p>How TC-ATLAS turns DeepMind's raw ensemble tracks into the genesis markers on this map</p>
+                </div>
+                <button type="button" class="rt-genesis-modal-close" aria-label="Close" onclick="window._irCloseGenesisMethods()">×</button>
+            </div>
+            <div class="rt-genesis-methods-body">
+                <p>The genesis markers summarize Google DeepMind's experimental FNV3 cyclogenesis ensembles (a 1,000-member set, plus an earlier-publishing 50-member companion). The markers are produced by TC-ATLAS's own clustering of the raw ensemble tracks &mdash; they are <strong>model genesis scenarios, not observed disturbances</strong> &mdash; as follows.</p>
+                <p><strong>Genesis definition.</strong> Each ensemble member's forecast tracks are scanned for the first point at which the member reaches tropical-storm strength (&ge;34 kt). We deliberately use TS strength rather than tropical-depression genesis: it filters out weak vortices whose closed-circulation status is ambiguous in an automated tracker, so these probabilities read slightly differently than NHC outlook percentages.</p>
+                <p><strong>Clustering.</strong> First-genesis points are binned on a 3&deg; grid, local density peaks seed the clusters, and each member genesis event is assigned to the nearest peak within 1,000 km whose mean genesis time agrees to within &plusmn;60 hours. A marker's formation probability is the count of <em>distinct</em> ensemble members in its cluster divided by the ensemble size &mdash; no member is counted twice within a marker. A member landing in two clusters closer than ~500 km is kept only in the nearer one, and a conservative merge step reconnects a single system that genesis-timing spread has split into adjacent fragments (the fragments' mean tracks must travel together at shared valid times, and their members must overlap in space like one population rather than two systems in tandem).</p>
+                <p><strong>Wave families (linking).</strong> One physical wave whose members disagree about <em>where</em> genesis first occurs still appears as several clusters strung along its corridor. A linking pass groups those sibling scenarios into a family &mdash; without changing any per-cluster number &mdash; using two independent tests. The <em>corridor test</em> compares cluster-mean positions at the same valid times (so a second wave trailing on the same track never matches: at any instant it is far behind), backstopped by a member-spread ratio that separates one population from two systems traveling in tandem. The <em>exclusivity test</em> uses membership statistics: sibling scenarios compete for members, because a member that first develops in one place cannot also first develop in another &mdash; so shared membership between true siblings collapses far below the chance rate expected of independent systems. Linked clusters are drawn with a translucent violet ribbon and violet marker rings on the map, and their combined probability counts each ensemble member once &mdash; which is why the per-cluster percentages must <strong>never simply be added</strong>: some members produce a genesis event in more than one cluster (develop, decay, and re-develop downstream), and the family union removes that double counting.</p>
+                <p>The clustering and linking are fully automated and their thresholds were calibrated against known same-wave and known-distinct cluster pairs; like any automated method they can occasionally split one system or group two. Questions and suggestions are welcome via the <a href="index.html#contact" target="_blank" rel="noopener">contact section</a> on the home page.</p>
+            </div>
         </div>
     </div>
 
