@@ -149,10 +149,21 @@
         AL: 'Atlantic', EP: 'East Pacific',
         CP: 'Central Pacific', WP: 'West Pacific'
     };
+    /* The leaderboard speaks the filter's currency: in hPa it ranks the
+       deepest storms; in kt it ranks the most intense. One switch (funit)
+       drives the sliders, the sort, the row values, and these headings, so
+       the panel never shows a pressure ranking under a wind title. */
     var SORT_TITLE = {
-        ghost: 'Deepest TCs — GHOST', bt: 'Deepest TCs — best track',
-        diff: 'Largest disagreements', basin: 'Deepest TCs by basin',
-        year: 'By season'
+        hPa: {
+            ghost: 'Deepest TCs — GHOST', bt: 'Deepest TCs — best track',
+            diff: 'Largest disagreements', basin: 'Deepest TCs by basin',
+            year: 'By season'
+        },
+        kt: {
+            ghost: 'Most intense TCs — GHOST', bt: 'Most intense TCs — best track',
+            diff: 'Largest disagreements', basin: 'Most intense TCs by basin',
+            year: 'By season'
+        }
     };
 
     var MODES = {
@@ -951,13 +962,21 @@
             return basinsOn[s.basin] && s.year >= r.ylo && s.year <= r.yhi &&
                 !(r.sus && s.suspect) && (!visSids || visSids[s.sid]);
         });
-        var deep = function (s) { return s.ghost_min_hpa === null ? 9e9 : s.ghost_min_hpa; };
+        /* Value accessors follow the filter currency. `== null` (not ===)
+           because a tree published before the peak-kt columns existed simply
+           lacks the field. rank() flips the sign for kt so ascending sort
+           still puts the most intense storm first in either unit. */
+        var kt = funit === 'kt';
+        var gval = function (s) { var v = kt ? s.ghost_peak_kt : s.ghost_min_hpa; return v == null ? null : v; };
+        var bval = function (s) { var v = kt ? s.bt_peak_kt : s.bt_min_hpa; return v == null ? null : v; };
+        var rank = function (v) { return v === null ? 9e9 : (kt ? -v : v); };
+        var deep = function (s) { return rank(gval(s)); };
         var key = {
             ghost: deep,
-            bt: function (s) { return s.bt_min_hpa === null ? 9e9 : s.bt_min_hpa; },
+            bt: function (s) { return rank(bval(s)); },
             diff: function (s) {
-                return (s.ghost_min_hpa === null || s.bt_min_hpa === null) ? 1
-                    : -Math.abs(s.ghost_min_hpa - s.bt_min_hpa);
+                return (gval(s) === null || bval(s) === null) ? 1
+                    : -Math.abs(gval(s) - bval(s));
             },
             // basin is a GROUPING, not a ranking — order the groups, then keep
             // the deepest-first ordering inside each so the list still answers
@@ -969,12 +988,14 @@
             year: function (s) { return -s.year; }
         }[sortKey];
         rows.sort(function (a, b) { return key(a) - key(b); });
-        $('gra-title').textContent = q ? 'Search results' : (SORT_TITLE[sortKey] || 'Storms');
+        $('gra-title').textContent = q ? 'Search results' : (SORT_TITLE[funit][sortKey] || 'Storms');
 
         var lastBasin = null;
         $('gra-list').innerHTML = rows.slice(0, 400).map(function (s) {
-            var d = (s.ghost_min_hpa !== null && s.bt_min_hpa !== null)
-                ? s.ghost_min_hpa - s.bt_min_hpa : null;
+            var gv = gval(s), bv = bval(s);
+            var d = (gv !== null && bv !== null) ? gv - bv : null;
+            // blue always means "GHOST more intense": deeper in hPa, stronger in kt
+            var dBlue = kt ? d > 0 : d < 0;
             var hdr = '';
             if (sortKey === 'basin' && s.basin !== lastBasin) {
                 lastBasin = s.basin;
@@ -988,11 +1009,11 @@
                 (s.min_uncorroborated ? '<span class="gra-flag unc" title="This storm&rsquo;s deepest frame is also its largest disagreement with best track (' +
                     s.min_gap + ' hPa), with no reconnaissance nearby — the minimum has no independent support">?</span>' : '') +
                 '</div>' +
-                '<div class="gra-num gra-g">' + (s.ghost_min_hpa !== null ? s.ghost_min_hpa.toFixed(1) : '—') +
+                '<div class="gra-num gra-g">' + (gv !== null ? gv.toFixed(kt ? 0 : 1) : '—') +
                 heldoutCell(s) + '</div>' +
                 '<div class="gra-meta">' + s.year + ' · ' + s.basin + ' · ' + s.n + ' fr</div>' +
-                '<div class="gra-num">BT ' + (s.bt_min_hpa !== null ? s.bt_min_hpa.toFixed(0) : '—') +
-                (d !== null ? ' <span style="color:' + (d < 0 ? '#2a78d6' : '#e34948') + '">' +
+                '<div class="gra-num">BT ' + (bv !== null ? bv.toFixed(0) : '—') +
+                (d !== null ? ' <span style="color:' + (dBlue ? '#2a78d6' : '#e34948') + '">' +
                     (d > 0 ? '+' : '−') + Math.abs(d).toFixed(0) + '</span>' : '') +
                 '</div></div>';
         }).join('') ||
@@ -2170,6 +2191,12 @@
             lo.step = hi.step = U.step;
             lo.value = U.min; hi.value = U.max;
             $('gra-' + pair[0] + 'label').innerHTML = pair[1] + ' ' + U.label;
+        });
+        // the leaderboard's GHOST/BT chips rank in the same currency
+        var quant = u === 'kt' ? 'V<sub>max</sub>' : 'P<sub>min</sub>';
+        Array.prototype.forEach.call($('gra-sorts').children, function (x) {
+            if (x.dataset.sort === 'ghost') x.innerHTML = 'GHOST ' + quant;
+            if (x.dataset.sort === 'bt') x.innerHTML = 'BT ' + quant;
         });
         applyFilter(true);
     }
