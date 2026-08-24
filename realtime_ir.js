@@ -22349,7 +22349,7 @@
             '<span class="rt-gen-toast-dot"></span>'
             + '<span class="rt-gen-toast-body">'
             + '<b>' + lead + nDisturbances + ' genesis cluster' + plural + '</b>'
-            + '<span class="rt-gen-toast-sub">Google DeepMind ensemble · clusters of member genesis points, not observed disturbances · tap a marker for the ' + _genesisVariantMemberTag() + ' detail</span>'
+            + '<span class="rt-gen-toast-sub">Google DeepMind ensemble · clusters of member genesis points, not observed disturbances · tap a marker for the ' + _genesisVariantMemberTag() + ' detail · <a href="index.html#genesis-clustering" target="_blank" rel="noopener" style="color:inherit; text-decoration:underline dotted;" onclick="event.stopPropagation()">methods</a></span>'
             + '</span>'
             + '<span class="rt-gen-toast-close" aria-label="Dismiss">×</span>';
 
@@ -24454,8 +24454,13 @@
         html += row({
             action: 'genesis',
             label: '<b>Cyclogenesis clusters</b>',
+            // The methods link must not toggle the layer row it sits in.
             substatus: _genesisVariantModelLabel() + ' · ≥5% reach TS (≥34 kt)'
-                + (genStatus ? ' — ' + genStatus : ''),
+                + (genStatus ? ' — ' + genStatus : '')
+                + ' · <a href="index.html#genesis-clustering" target="_blank" '
+                + 'rel="noopener" style="color:inherit; '
+                + 'text-decoration:underline dotted;" '
+                + 'onclick="event.stopPropagation()">methods</a>',
             checked: !!_rtGenesisVisible
         });
         // Ensemble-size picker — 1000-member (richer stats, publishes later)
