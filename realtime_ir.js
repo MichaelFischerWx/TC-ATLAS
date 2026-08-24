@@ -14598,7 +14598,7 @@
         // potential genesis.
         qualifying.sort(function (a, b) { return b.fraction - a.fraction; });
         for (var k = 0; k < qualifying.length; k++) {
-            qualifying[k].displayLabel = 'Disturbance ' + (k + 1);
+            qualifying[k].displayLabel = 'Genesis cluster D' + (k + 1);
             qualifying[k].displayShort = 'D' + (k + 1);
         }
         return qualifying;
@@ -15048,7 +15048,7 @@
         });
         disturbances.sort(function (a, b) { return b.fraction - a.fraction; });
         disturbances.forEach(function (d, idx) {
-            d.displayLabel = 'Disturbance ' + (idx + 1);
+            d.displayLabel = 'Genesis cluster D' + (idx + 1);
             d.displayShort = 'D' + (idx + 1);
         });
         return disturbances;
@@ -15356,7 +15356,7 @@
                 peakWind: peakWind,
                 peakTau: peakTau,
                 mean: { points: meanPts },
-                // Provenance: this disturbance is the client-side estimate,
+                // Provenance: this cluster is the client-side estimate,
                 // not a server cluster. The detail modal must not address it
                 // by index against the backend.
                 clientCluster: true,
@@ -15373,7 +15373,7 @@
         }
         disturbances.sort(function (a, b) { return b.fraction - a.fraction; });
         disturbances.forEach(function (d, idx) {
-            d.displayLabel = 'Disturbance ' + (idx + 1);
+            d.displayLabel = 'Genesis cluster D' + (idx + 1);
             d.displayShort = 'D' + (idx + 1);
         });
         return disturbances;
@@ -15487,10 +15487,30 @@
             gateRadiusKm: c.gate_radius_km,
             gateTimeH: c.gate_time_h,
             contribTrackIds: c.contrib_track_ids,
-            displayLabel: c.display_label,
+            // Normalize the server's label: cached cluster payloads (GCS,
+            // keyed per cycle) and a not-yet-redeployed API still say
+            // "Disturbance N", which reads as an observed system rather
+            // than an automated genesis cluster.
+            displayLabel: (c.display_label
+                    && c.display_label.indexOf('Disturbance ') === 0)
+                ? 'Genesis cluster D' + c.display_label.slice(12)
+                : c.display_label,
             displayShort: c.display_short,
             cappedTotal: c.capped_total,
         };
+    }
+
+    // Wave family containing the given cluster track_id, or null. Families
+    // only exist on the server-cluster path (the client-side fallback
+    // clustering computes none), and only for the currently-loaded index.
+    function _genesisFamilyFor(trackId) {
+        var fams = (_rtGenesisClusters && _rtGenesisClusters.families) || [];
+        for (var i = 0; i < fams.length; i++) {
+            if ((fams[i].cluster_ids || []).indexOf(trackId) >= 0) {
+                return fams[i];
+            }
+        }
+        return null;
     }
 
     function _renderGenesis() {
@@ -15553,6 +15573,9 @@
         // the disturbance pin already shows the official name.
         _scheduleStormLabelSync();
 
+        // Rendered marker position per cluster track_id — the family
+        // connector pass below chains these after the loop.
+        var famPos = {};
         for (var di = 0; di < disturbances.length; di++) {
             var d = disturbances[di];
             var trackId = d.raw.track_id || '';
@@ -15561,6 +15584,9 @@
 
             var style = _genesisCatStyle(d.peakWind);
             var pctText = (d.fraction * 100).toFixed(0) + '%';
+            // Wave family (if any) — drives the marker ring, the hover
+            // card's family line, and the connector chain after the loop.
+            var fam = _genesisFamilyFor(trackId);
 
             // Stash for the modal. We include the raw member dict and
             // ensemble mean so the detail modal can render straight
@@ -15572,6 +15598,7 @@
             _genesisDisturbanceMeta[trackId] = {
                 label: d.displayLabel,
                 short: d.displayShort,
+                family: _genesisFamilyFor(trackId),
                 // Genesis (ensemble-mean) position of THIS disturbance — the spot
                 // the user clicked. DeepMind reuses numeric track_ids across
                 // basins within a cycle, so the detail fetch must anchor its
@@ -15622,6 +15649,7 @@
             // "WPac has a strong D1 (C2 peak), Atlantic has a weak D3
             // (TD only)" without clicking.
             var p0 = mean.points[0];
+            famPos[trackId] = [p0.lat, p0.lon];
             // Confidence scales 50 → 1000 members onto 14 → 28 px.
             var baseSize = 14 + Math.min(14, Math.round((d.fraction - 0.05) * 18));
             // A matched, *named* storm (e.g. "Amanda") carries its real name in
@@ -15644,7 +15672,9 @@
             // past the circle; 1-2 char labels keep the larger glyph.
             var _fontScale = (innerLabel && innerLabel.length >= 3) ? 0.40 : 0.5;
             var html =
-                '<div class="rt-gen-marker' + (animateEntry ? ' rt-gen-marker--enter' : '') + '" style="background:' + style.bold + ';'
+                '<div class="rt-gen-marker' + (animateEntry ? ' rt-gen-marker--enter' : '')
+                + (fam ? ' rt-gen-marker--fam' : '')
+                + '" style="background:' + style.bold + ';'
                 + 'width:' + baseSize + 'px;height:' + baseSize + 'px;line-height:'
                 + baseSize + 'px;font-size:' + Math.max(8, Math.round(baseSize * _fontScale))
                 + 'px;">' + innerLabel + '</div>' + namePill;
@@ -15663,28 +15693,50 @@
 
             var probLine = probsPending
                 ? '<br><span style="opacity:0.75; font-style:italic;">Probabilities loading…</span>'
-                : '<br>Chance of reaching tropical-storm strength '
-                    + '(&ge;34 kt): <strong>' + pctText + '</strong>'
+                : '<br>First reach TS strength (&ge;34 kt) here: '
+                    + '<strong>' + pctText + '</strong>'
                     + ' <span style="opacity:0.7;">(' + d.total + ' of '
-                    + _GENESIS_ENSEMBLE_SIZE + ' members)</span>'
-                    // Not NHC's tropical-depression genesis: this is the
-                    // model odds of a member reaching ≥34 kt (TS strength).
-                    + '<br><span style="opacity:0.6; font-size:0.8em;">'
-                    + 'model odds of TS formation, not NHC TD genesis</span>';
+                    + _GENESIS_ENSEMBLE_SIZE + ' members)</span>';
             var gInit = effInit || '';
             var initLine = gInit
                 ? '<br><span style="opacity:0.75; font-size:0.85em;">Init: '
                     + gInit.slice(0, 4) + '-' + gInit.slice(4, 6) + '-'
                     + gInit.slice(6, 8) + ' ' + gInit.slice(8, 10) + 'Z</span>'
                 : '';
-            var tip = '<div style="min-width:180px;">'
+            // Wave-family line: one emerald line, matching the connector
+            // chain on the map. The full union explanation lives in the
+            // detail modal — the hover card just states the grouping.
+            var famLine = '';
+            if (fam && !probsPending && fam.n_union) {
+                var sibs = (fam.cluster_shorts || []).filter(function (s) {
+                    return s !== d.displayShort;
+                }).join(' + ');
+                var uPct = Math.round(100 * (fam.union_fraction || 0));
+                famLine = '<br><span style="color:#059669; font-weight:600;">'
+                    + '<span style="display:inline-block; width:7px; height:7px;'
+                    + ' border-radius:50%; background:#10b981; margin-right:5px;'
+                    + ' vertical-align:1px;"></span>'
+                    + 'Same wave as ' + sibs
+                    + ' &middot; combined: <strong>' + uPct + '%</strong></span>';
+            }
+            // Leaflet's core tooltip CSS is white-space:nowrap, so the
+            // caution copy would render as one huge unwrapped line that
+            // clips at the viewport edge — force wrapping + a max width.
+            var tip = '<div style="min-width:180px; max-width:250px; '
+                + 'white-space:normal;">'
                 + '<b>' + d.displayLabel + '</b>'
                 + initLine
                 + probLine
+                + famLine
                 + '<br>Predicted peak Vmax: <strong style="color:' + style.bold
                 + ';">' + d.peakWind.toFixed(0) + ' kt · ' + style.cat
                 + '</strong>'
                 + (d.peakTau != null ? ' at +' + d.peakTau + 'h' : '')
+                // Single-line footnote: the method + not-additive caveats,
+                // compressed — the modal's ⓘ note carries the full text.
+                + '<br><span style="opacity:0.55; font-size:0.78em;">'
+                + 'automated ensemble clustering &middot; TS-strength odds, '
+                + 'not NHC genesis &middot; cluster %s are not additive</span>'
                 + '<br><span style="opacity:0.75; font-size:0.85em;">'
                 + 'Click for full ' + _genesisVariantMemberTag()
                 + ' detail →</span>'
@@ -15727,6 +15779,53 @@
                     })(trackId);
                     _rtGenesisLayers.push(meanLine);
                 }
+            }
+        }
+
+        // Wave-family connectors: a fine dotted emerald chain linking the
+        // sibling genesis scenarios of one physical wave, ordered by
+        // genesis timing. Always visible (not hover-gated) — touch users
+        // never see marker tooltips, so the grouping has to be readable
+        // from the map alone. Deliberately subordinate to the dashed
+        // category-colored mean tracks: thinner, dotted, and in the
+        // family emerald that never encodes intensity.
+        var famsToDraw = (_rtGenesisClusters && _rtGenesisClusters.families) || [];
+        for (var fi = 0; fi < famsToDraw.length; fi++) {
+            var famF = famsToDraw[fi];
+            var chain = [];
+            var chainShorts = [];
+            for (var ci = 0; ci < (famF.cluster_ids || []).length; ci++) {
+                var pos = famPos[famF.cluster_ids[ci]];
+                if (pos) {
+                    chain.push(pos);
+                    chainShorts.push((famF.cluster_shorts || [])[ci]);
+                }
+            }
+            // Fewer than 2 siblings rendered (min-fraction floor) — no chain.
+            if (chain.length < 2) continue;
+            var famTipHtml = '<div style="white-space:normal; max-width:220px;">'
+                + '<span style="display:inline-block; width:7px; height:7px;'
+                + ' border-radius:50%; background:#10b981; margin-right:5px;'
+                + ' vertical-align:1px;"></span>'
+                + '<b>Wave family ' + chainShorts.join(' + ') + '</b>'
+                + '<br>Develops somewhere along this corridor: <strong>'
+                + Math.round(100 * (famF.union_fraction || 0)) + '%</strong>'
+                + ' <span style="opacity:0.7;">(each member counted once)</span>'
+                + '</div>';
+            var famSegs = splitAtAntimeridian(chain);
+            for (var si = 0; si < famSegs.length; si++) {
+                if (famSegs[si].length < 2) continue;
+                var famLink = L.polyline(famSegs[si], {
+                    color: '#10b981', weight: 2.2, opacity: 0.9,
+                    dashArray: '1,7',
+                    interactive: true, bubblingMouseEvents: false,
+                }).addTo(map);
+                // Facade tolerance: polyline tooltips may be unsupported
+                // by the GL layer — the chain still draws without one.
+                try {
+                    famLink.bindTooltip(famTipHtml, { sticky: true });
+                } catch (e) { /* non-fatal */ }
+                _rtGenesisLayers.push(famLink);
             }
         }
 
@@ -15786,7 +15885,7 @@
     // wrong basin) with a wide margin against false alarms.
     var _GENESIS_DETAIL_MAX_DRIFT_KM = 1000;
 
-    /** Distance (km) between the clicked disturbance's genesis position and
+    /** Distance (km) between the clicked cluster's genesis position and
      *  the one described by a loaded detail payload. null when either side
      *  has no usable anchor (nothing to check — caller renders as-is). */
     function _genesisDetailDriftKm(json, meta) {
@@ -15852,7 +15951,7 @@
             // contributors. We want one entry per unique forecast member
             // — keep the candidate whose first-genesis is closest to the
             // cluster peak (that's the genesis event most clearly
-            // belonging to this disturbance).
+            // belonging to this cluster).
             var best = {};   // sampleId → { dist2, points }
             var peakLat = meta.peakLat;
             var peakLon = meta.peakLon;
@@ -16073,7 +16172,7 @@
                   '</div>' +
                 '</div>' +
                 '<div id="rt-genesis-jump-trends" class="rt-genesis-modal-chart-wrap" style="position:relative;">' +
-                  '<div id="rt-genesis-trends-empty" class="rt-genesis-trend-note" style="padding:10px 4px;">No multi-cycle history yet for this disturbance.</div>' +
+                  '<div id="rt-genesis-trends-empty" class="rt-genesis-trend-note" style="padding:10px 4px;">No multi-cycle history yet for this cluster.</div>' +
                   '<div id="rt-genesis-modal-trend" class="rt-genesis-trend-wrap" style="display:none;">' +
                     '<div class="rt-genesis-trend-head">' +
                       '<span class="rt-genesis-trend-title">Run-to-run trend</span>' +
@@ -16112,7 +16211,7 @@
                 // for pre-genesis systems that have no ATCF id.
                 '<div id="rt-genesis-pane-intchange" class="rt-genesis-pane" style="display:none;">' +
                   '<div class="rt-genesis-modal-chart-wrap" style="position:relative;">' +
-                    '<div id="rt-genesis-ic-empty" class="rt-genesis-trend-note" style="padding:10px 4px;">No intensity-change distribution yet for this disturbance.</div>' +
+                    '<div id="rt-genesis-ic-empty" class="rt-genesis-trend-note" style="padding:10px 4px;">No intensity-change distribution yet for this cluster.</div>' +
                     // Three stacked figures (like the Trends pane), not a
                     // single chart behind a cramped view toggle.
                     '<div id="rt-genesis-ic-wrap" style="display:none;">' +
@@ -16594,6 +16693,7 @@
                 n_members: meta ? Object.keys(meta.members || {}).length : 0,
                 members: (meta && meta.members) || {},
                 ensemble_mean: (meta && meta.ensembleMean) || { points: [] },
+                family: (meta && meta.family) || null,
                 _source: meta ? meta.source : null,
                 _fromCache: true,
             };
@@ -16602,7 +16702,7 @@
         // "tcac-N" ids come from the client-side estimate: the index is ours,
         // not the backend's, so it must never be sent to the index-keyed
         // cluster endpoint. Rebuild from the contributing DM tracks instead
-        // (pure geometry — replays this disturbance's own gate), falling back
+        // (pure geometry — replays this cluster's own gate), falling back
         // to the capped members already in hand.
         var isClientCluster = (trackId && trackId.indexOf('tcac-') === 0)
             || !!(meta && meta.clientCluster);
@@ -16629,7 +16729,7 @@
                 prom = Promise.resolve(_fromCache());
             } else {
                 prom = Promise.reject(
-                    new Error('ensemble members not loaded for this disturbance'));
+                    new Error('ensemble members not loaded for this cluster'));
             }
         } else if (trackId && trackId.indexOf('tca-') === 0) {
             // TC-ATLAS path — hit the per-cluster server endpoint which
@@ -16711,7 +16811,7 @@
                 return json;
             }
             console.warn('[Genesis] detail payload for ' + trackId + ' is '
-                + Math.round(drift) + ' km from the clicked disturbance — '
+                + Math.round(drift) + ' km from the clicked cluster — '
                 + 'discarding and rebuilding locally');
             _ga('rt_genesis_detail_mismatch', {
                 track_id: trackId, drift_km: Math.round(drift),
@@ -16721,7 +16821,7 @@
                 return _fetchAndReclusterTCA(trackId, meta).then(function (j2) {
                     var d2 = _genesisDetailDriftKm(j2, meta);
                     if (d2 != null && d2 > _GENESIS_DETAIL_MAX_DRIFT_KM) {
-                        throw new Error('ensemble data for this disturbance '
+                        throw new Error('ensemble data for this cluster '
                             + 'is unavailable for this cycle');
                     }
                     return j2;
@@ -16730,7 +16830,7 @@
             if (meta && meta.members && Object.keys(meta.members).length) {
                 return _fromCache();
             }
-            throw new Error('ensemble data for this disturbance is '
+            throw new Error('ensemble data for this cluster is '
                 + 'unavailable for this cycle');
         }).then(function (json) {
             if (!json || reqSeq !== _genesisDetailReqSeq) return;
@@ -16882,7 +16982,7 @@
             el.innerHTML = '<span style="color:#00e5ff;">'
                 + 'Next cycle due — checking…</span>';
             el.title = 'Past expected publish time. The backend probes '
-                + 'every request; reopen this disturbance to pick it up.';
+                + 'every request; reopen this cluster to pick it up.';
         }
     }
 
@@ -16961,8 +17061,24 @@
                 + _genesisVariantModelLabel(_detVariant)
                 + (_detVariant === 'small' ? ' · preliminary' : '')
                 + '</span>',
+            // Method note: the D markers are automated clusters of member
+            // genesis events, and one real system can span several of
+            // them — without this note the modal reads as one observed
+            // disturbance with one independent probability. Links to the
+            // public methods writeup on the home page.
+            '<a href="index.html#genesis-clustering" target="_blank" '
+                + 'rel="noopener" style="opacity:0.8; color:inherit; '
+                + 'text-decoration:underline dotted;" '
+                + 'title="TC-ATLAS clusters the ensemble&#39;s member tracks by '
+                + 'where each member FIRST reaches tropical-storm strength '
+                + '(34 kt). Markers are model genesis scenarios, not observed '
+                + 'disturbances at initialization &mdash; one real system can '
+                + 'span several clusters when members disagree on where it '
+                + 'first develops, so cluster percentages are not additive. '
+                + 'Click for the full methods description.">'
+                + 'automated genesis clustering ⓘ</a>',
         ];
-        // If this disturbance was paired with an officially-tracked ATCF
+        // If this cluster was paired with an officially-tracked ATCF
         // storm (named TC, TD, or invest within 600 km of the cluster's
         // current ensemble-mean position), surface the ATCF id so the
         // user knows the FNV3 ensemble is forecasting a real already-
@@ -16984,7 +17100,7 @@
         }
         if (_metaForSub && _metaForSub.atcfMatch) {
             var _am = _metaForSub.atcfMatch;
-            var _matchTip = 'Disturbance cluster center within '
+            var _matchTip = 'Genesis cluster center within '
                 + Math.round(_am.distKm) + ' km of ' + _am.atcfId
                 + ' (' + (_am.name || '?')
                 + (_am.category ? ', ' + _am.category : '')
@@ -17002,6 +17118,28 @@
         // detail of the FNV3 backend (cluster member cap on/off) that
         // researchers don't need to read. Still tracked on json._uncapped
         // for downstream logic.
+        // Wave-family pill: this cluster is one genesis scenario of a wave
+        // whose other scenarios are separate markers — surface the
+        // deduplicated union so the modal's headline % reads in context.
+        var _famForSub = json.family
+            || (_metaForSub && _metaForSub.family) || null;
+        if (_famForSub && (_famForSub.cluster_shorts || []).length > 1
+                && _famForSub.n_union) {
+            var _famTip = 'These clusters are genesis scenarios of the same '
+                + 'physical wave (linked by shared-corridor tracks and '
+                + 'member statistics). Counting each ensemble member once, '
+                + _famForSub.n_union + ' members ('
+                + Math.round(100 * (_famForSub.union_fraction || 0))
+                + '%) develop a TC somewhere along the corridor; summing '
+                + 'the per-cluster percentages would double-count '
+                + _famForSub.n_multi + ' member'
+                + (_famForSub.n_multi === 1 ? '' : 's') + '.';
+            subParts.push('<span class="rt-genesis-fam-pill" title="'
+                + _famTip.replace(/"/g, '&quot;') + '">Wave family: '
+                + _famForSub.cluster_shorts.join(' + ') + ' · '
+                + Math.round(100 * (_famForSub.union_fraction || 0))
+                + '% combined</span>');
+        }
         if (json._dmExcluded) {
             subParts.push('<span style="opacity:0.8; color:#f97316;" '
                 + 'title="DeepMind\'s per-cycle tracker reuses numeric track_ids '
@@ -17865,7 +18003,7 @@
     ];
 
     /* Run-to-run trend sparkline.
-       Fetches /weatherlab-genesis-trend for the clicked disturbance's
+       Fetches /weatherlab-genesis-trend for the clicked cluster's
        genesis-density anchor (peak_lat/peak_lon — the only run-to-run-
        stable handle, since D-numbers are re-ranked each cycle) and draws
        a compact dual-axis chart: formation probability (bars, left axis)
@@ -17905,7 +18043,7 @@
         if (_icw) _icw.style.display = 'none';
         if (_ice) { _ice.textContent = 'Loading intensity-change distribution…'; _ice.style.display = ''; }
 
-        // Resolve the genesis-density anchor for this disturbance.
+        // Resolve the genesis-density anchor for this cluster.
         var meta = _genesisDisturbanceMeta[json && json.track_id] || {};
         var aLat = (meta.peakLat != null) ? meta.peakLat : null;
         var aLon = (meta.peakLon != null) ? meta.peakLon : null;
@@ -17969,7 +18107,7 @@
     }
 
     /**
-     * Intensity Change pane: RI histogram for this disturbance, built from the
+     * Intensity Change pane: RI histogram for this cluster, built from the
      * freshest matched cluster's member ΔV distribution (served on the
      * genesis-trend response as `intensity_change`). Reuses the shared
      * `_rtDrawChangeHistCore` so it looks identical to the storm-card panel.
@@ -17988,7 +18126,7 @@
         if (!ic || !taus || !taus.length || !has) {
             _genesisIcData = null;
             wrap.style.display = 'none';
-            empty.textContent = 'No intensity-change distribution for this disturbance.';
+            empty.textContent = 'No intensity-change distribution for this cluster.';
             empty.style.display = '';
             var purgeEl = document.getElementById('rt-genesis-ic-chart');
             if (purgeEl && typeof Plotly !== 'undefined') Plotly.purge(purgeEl);
@@ -18396,7 +18534,7 @@
         if (anyVisible) { empty.style.display = 'none'; return; }
         empty.textContent = _genesisTrendLoading
             ? 'Loading run-to-run trend…'
-            : 'No multi-cycle history yet for this disturbance.';
+            : 'No multi-cycle history yet for this cluster.';
         empty.style.display = '';
     }
 
@@ -21868,7 +22006,7 @@
         var nDist = _genesisDisturbanceCount() || 0;
         var head, trackBit;
         if (nDist > 0) {
-            head = nDist + ' disturbance' + (nDist === 1 ? '' : 's');
+            head = nDist + ' genesis cluster' + (nDist === 1 ? '' : 's');
             trackBit = ' · ' + nTracks + ' genesis track'
                 + (nTracks === 1 ? '' : 's');
         } else {
@@ -21917,6 +22055,10 @@
                     variant: json.variant || _genesisEnsembleVariant,
                     params: json.params,
                     clusters: json.clusters || [],
+                    // Wave families: sibling clusters that are genesis
+                    // scenarios of ONE physical wave, with the deduplicated
+                    // union probability (see _tca_family_pass server-side).
+                    families: json.families || [],
                 };
                 // Cluster index is authoritative for the tcatlas divisor.
                 if (json.ensemble_size) {
@@ -22136,7 +22278,7 @@
             ? cyc.variants[_genesisEnsembleVariant].n_tracks
             : cyc.n_tracks;
         if (nDistCyc != null && nDistCyc > 0) {
-            cycCountBit = ' · ' + nDistCyc + ' disturbance'
+            cycCountBit = ' · ' + nDistCyc + ' cluster'
                 + (nDistCyc === 1 ? '' : 's');
         } else if (cycVarTracks != null) {
             cycCountBit = ' · ' + cycVarTracks + ' track'
@@ -22206,8 +22348,8 @@
         toast.innerHTML =
             '<span class="rt-gen-toast-dot"></span>'
             + '<span class="rt-gen-toast-body">'
-            + '<b>' + lead + nDisturbances + ' cyclogenesis disturbance' + plural + '</b>'
-            + '<span class="rt-gen-toast-sub">Google DeepMind ensemble · tap a marker for the ' + _genesisVariantMemberTag() + ' detail</span>'
+            + '<b>' + lead + nDisturbances + ' genesis cluster' + plural + '</b>'
+            + '<span class="rt-gen-toast-sub">Google DeepMind ensemble · clusters of member genesis points, not observed disturbances · tap a marker for the ' + _genesisVariantMemberTag() + ' detail</span>'
             + '</span>'
             + '<span class="rt-gen-toast-close" aria-label="Dismiss">×</span>';
 
@@ -24306,12 +24448,12 @@
             var nd = _genesisDisturbanceCount();
             if (nt === 0) genStatus = 'no genesis predicted in 15 days';
             else if (nd != null && nd > 0) {
-                genStatus = nd + ' disturbance' + (nd === 1 ? '' : 's');
+                genStatus = nd + ' genesis cluster' + (nd === 1 ? '' : 's');
             } else genStatus = nt + ' track' + (nt === 1 ? '' : 's');
         }
         html += row({
             action: 'genesis',
-            label: '<b>Cyclogenesis disturbances</b>',
+            label: '<b>Cyclogenesis clusters</b>',
             substatus: _genesisVariantModelLabel() + ' · ≥5% reach TS (≥34 kt)'
                 + (genStatus ? ' — ' + genStatus : ''),
             checked: !!_rtGenesisVisible
@@ -24375,7 +24517,7 @@
                 + '<summary class="ir-tuner-summary">'
                 +   '<span class="ir-tuner-summary-label">Advanced clustering controls</span>'
                 +   '<span class="ir-tuner-status">'
-                +     '<strong>' + statusN + '</strong> disturbance'
+                +     '<strong>' + statusN + '</strong> cluster'
                 +     (statusN === 1 ? '' : 's')
                 +   '</span>'
                 + '</summary>'
@@ -24444,7 +24586,7 @@
         html += row({
             action: 'genesis-spaghetti',
             label: 'Member spaghetti',
-            substatus: 'Per-member track polylines, colored by parent disturbance',
+            substatus: 'Per-member track polylines, colored by parent cluster',
             checked: !!_rtGenesisSpaghettiVisible,
             disabled: !_rtGenesisVisible
         });
@@ -24632,7 +24774,7 @@
             if (status) {
                 var n = document.querySelectorAll('.rt-gen-marker').length;
                 status.innerHTML =
-                    '<strong>' + n + '</strong> disturbance'
+                    '<strong>' + n + '</strong> cluster'
                     + (n === 1 ? '' : 's');
             }
         }

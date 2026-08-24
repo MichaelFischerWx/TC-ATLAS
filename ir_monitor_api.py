@@ -9711,9 +9711,17 @@ def refresh_genesis_cache() -> dict:
         n_clusters = None
         if data:
             try:
-                _, _, clusters, _ = _tca_get_or_compute_clusters(
+                c_init, c_params, clusters, c_dh = _tca_get_or_compute_clusters(
                     3.0, 8, 1000.0, 60.0, 25, 500.0, variant=variant)
                 n_clusters = len(clusters) if clusters else 0
+                # Warm the wave-family memo too — the family pass runs at
+                # serve time, so without this the first index request of a
+                # fresh cycle pays the pairwise affinity/R computation.
+                if clusters and c_dh:
+                    ens = (_genesis_variant_clusters_size(
+                               variant, c_dh[0], c_dh[1])
+                           or (1000 if variant == "large" else 50))
+                    _tca_get_families(c_init, c_params, clusters, ens)
             except Exception:
                 traceback.print_exc()
         out[variant] = {
@@ -11094,6 +11102,132 @@ def _tca_merge_pass(clusters, merge_km, merge_overlap_h, ensemble_size,
     return out
 
 
+# ---------------------------------------------------------------------------
+# Wave-family linking — non-destructive sibling grouping of genesis clusters
+# ---------------------------------------------------------------------------
+# One physical wave whose members disagree about WHERE genesis first occurs
+# is carved into several clusters along the corridor (the merge pass only
+# reconnects near-adjacent timing fragments). A "family" groups those
+# sibling clusters WITHOUT merging them, so the UI can show a deduplicated
+# union probability ("this wave develops somewhere: 43%") next to the
+# per-cluster scenario percentages, which are NOT additive. Linking changes
+# no cluster numbers — a wrong link is cosmetic, not a wrong probability —
+# so its gates are deliberately looser than the merge pass's.
+#
+# Two signals per cluster pair (calibrated 2026-08-24 on the 08-24 06Z and
+# 08-23 18Z cycles via genesis_family_harness.py):
+#   corridor — the merge pass's D̄/F mean-track affinity at SHARED valid
+#     times (a trailing wave 2000 km behind on the same track never
+#     matches: positions are compared at the same instant), thresholds
+#     loosened to 800 km / 0.55, backstopped by the member-spread ratio R
+#     (true same-wave pairs measured R 1.08-1.38; tandem-but-distinct
+#     systems in the same corridor R 2.23-5.44).
+#   exclusivity — sibling clusters COMPETE for members (a member that
+#     first develops at A cannot also first develop at B), so their
+#     sample-key overlap collapses far below the independence rate
+#     |A|·|B|/N (same-wave D12/D14 measured obs/exp 0.03), while
+#     independent systems sit at ~1.0 (every realization forecasts the
+#     whole globe, so cross-basin overlap ≈ chance). Guarded by a loose
+#     distance sanity check so a statistical fluke can't link basins.
+_TCA_FAM_KM = 800.0
+_TCA_FAM_MIN_F = 0.55
+_TCA_FAM_OVERLAP_H = 24.0
+_TCA_FAM_MAX_R = 1.6
+_TCA_FAM_EXCL_RATIO = 0.35
+_TCA_FAM_EXCL_MIN_EXP = 4.0
+_TCA_FAM_EXCL_KM = 1500.0
+
+
+def _tca_family_pass(clusters, ensemble_size):
+    """Union-find over family-linked cluster pairs. Returns a list of
+    family dicts (only groups of >= 2 clusters), largest union first:
+      { family_id, cluster_ids, cluster_shorts, n_union, union_fraction,
+        sum_fraction, n_multi }
+    where n_multi = members counted in 2+ clusters of the family (the
+    re-genesis double-counts the union removes). Runs at SERVE time on
+    the cached cluster set, so it works for archived cycles without a
+    cluster-cache version bump."""
+    n = len(clusters)
+    if n < 2 or not ensemble_size:
+        return []
+    sets = [set((c.get("members") or {}).keys()) for c in clusters]
+    # Thin ensembles (50-member variant) have noisy mean-track geometry;
+    # require the R backstop to CONFIRM (not just fail to veto) there.
+    thin = ensemble_size < 400
+    parent = list(range(n))
+
+    def _find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            aff = _tca_cluster_affinity(clusters[i], clusters[j],
+                                        _TCA_FAM_KM, _TCA_FAM_OVERLAP_H)
+            dbar, f_close = aff if aff else (None, None)
+            linked = False
+            if (dbar is not None and dbar < _TCA_FAM_KM
+                    and f_close >= _TCA_FAM_MIN_F):
+                r = _tca_member_ratio(clusters[i], clusters[j])
+                linked = ((r is not None and r <= _TCA_FAM_MAX_R) if thin
+                          else (r is None or r <= _TCA_FAM_MAX_R))
+            if (not linked and dbar is not None and dbar < _TCA_FAM_EXCL_KM):
+                exp = len(sets[i]) * len(sets[j]) / ensemble_size
+                if (exp >= _TCA_FAM_EXCL_MIN_EXP
+                        and len(sets[i] & sets[j]) / exp
+                            <= _TCA_FAM_EXCL_RATIO):
+                    linked = True
+            if linked:
+                parent[_find(i)] = _find(j)
+
+    groups: dict = {}
+    for i in range(n):
+        groups.setdefault(_find(i), []).append(i)
+    fams = []
+    for idxs in groups.values():
+        if len(idxs) < 2:
+            continue
+        union = set()
+        total = 0
+        for i in idxs:
+            union |= sets[i]
+            total += len(sets[i])
+        ordered = sorted(idxs,
+                         key=lambda i: clusters[i].get("peak_mean_tau") or 0)
+        fams.append({
+            "cluster_ids": [clusters[i]["track_id"] for i in ordered],
+            "cluster_shorts": [clusters[i]["display_short"] for i in ordered],
+            "n_union": len(union),
+            "union_fraction": round(len(union) / ensemble_size, 4),
+            "sum_fraction": round(total / ensemble_size, 4),
+            "n_multi": total - len(union),
+        })
+    fams.sort(key=lambda f: -f["n_union"])
+    for k, f in enumerate(fams):
+        f["family_id"] = f"fam-{k + 1}"
+    return fams
+
+
+# Serve-time memo — families are cheap (affinity on mean polylines for all
+# pairs; R only for corridor candidates) but not free, and every index /
+# detail request for a cycle wants the same answer.
+_TCA_FAMILY_MEMO: dict = {}
+
+
+def _tca_get_families(init_time, params, clusters, ensemble_size):
+    key = (init_time, params, ensemble_size)
+    hit = _TCA_FAMILY_MEMO.get(key)
+    if hit is not None:
+        return hit
+    fams = _tca_family_pass(clusters, ensemble_size)
+    if len(_TCA_FAMILY_MEMO) > 24:
+        _TCA_FAMILY_MEMO.clear()
+    _TCA_FAMILY_MEMO[key] = fams
+    return fams
+
+
 def _tca_compute_clusters(raw_data: dict,
                           grid_deg: float = 3.0,
                           peak_min_members: int = 8,
@@ -11328,7 +11462,7 @@ def _tca_compute_clusters(raw_data: dict,
     # Sort by formation prob desc → D1 is largest. Re-label after sort.
     out.sort(key=lambda c: -c["n_members_total"])
     for idx, c in enumerate(out):
-        c["display_label"] = f"Disturbance {idx + 1}"
+        c["display_label"] = f"Genesis cluster D{idx + 1}"
         c["display_short"] = f"D{idx + 1}"
     return out
 
@@ -11503,6 +11637,11 @@ def get_weatherlab_genesis_clusters(
     cycle_dt = _genesis_cycle_dt(used_date, used_hour)
     cycle_age_h = (now - cycle_dt).total_seconds() / 3600.0
     next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time)
+    ens_size = (_genesis_variant_clusters_size(variant_n, used_date, used_hour)
+                or (1000 if variant_n == "large" else 50))
+    families = _tca_get_families(init_time, params, clusters, ens_size)
+    fam_by_tid = {tid: f["family_id"]
+                  for f in families for tid in f["cluster_ids"]}
     return JSONResponse(
         content={
             "model": _genesis_variant_label(variant_n),
@@ -11521,7 +11660,10 @@ def get_weatherlab_genesis_clusters(
                 "merge_km": params[6] if len(params) > 6 else 0,
                 "merge_overlap_h": params[7] if len(params) > 7 else 48,
             },
-            "clusters": [_tca_cluster_index_view(c) for c in clusters],
+            "clusters": [dict(_tca_cluster_index_view(c),
+                              family_id=fam_by_tid.get(c["track_id"]))
+                         for c in clusters],
+            "families": families,
             "n_clusters": len(clusters),
             "cycle_age_hours": round(cycle_age_h, 2),
             "next_cycle_eta_hours": round(next_eta_h, 2)
@@ -11571,6 +11713,11 @@ def get_weatherlab_genesis_cluster(
     if dh is not None:
         used_date, used_hour = dh
         cycle_age_h = (now - _genesis_cycle_dt(used_date, used_hour)).total_seconds() / 3600.0
+    ens_size = ((_genesis_variant_clusters_size(variant_n, used_date, used_hour)
+                 if used_date else None)
+                or (1000 if variant_n == "large" else 50))
+    families = _tca_get_families(init_time, params, clusters, ens_size)
+    family = next((f for f in families if tca_id in f["cluster_ids"]), None)
     return JSONResponse(
         content={
             "model": _genesis_variant_label(variant_n),
@@ -11592,6 +11739,10 @@ def get_weatherlab_genesis_cluster(
             "peak_lon": match["peak_lon"],
             "peak_mean_tau": match["peak_mean_tau"],
             "contrib_track_ids": match["contrib_track_ids"],
+            # Wave family this cluster belongs to (None when standalone):
+            # sibling genesis scenarios of the same physical wave, with the
+            # deduplicated union probability. See _tca_family_pass.
+            "family": family,
             "members": match["members"],
             "ensemble_mean": match["ensemble_mean"],
             "cycle_age_hours": round(cycle_age_h, 2)

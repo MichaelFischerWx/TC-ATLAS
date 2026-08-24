@@ -7447,3 +7447,34 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     border-color: rgba(45,212,191,0.25);
 }
 .exp-archdd-item em, .exp-archdd-id { text-transform: none; letter-spacing: 0; }
+
+/* ── Wave-family accents ──────────────────────────────────────────
+   Emerald marks the "same physical wave" grouping everywhere it
+   appears (map connector chain, sibling-marker ring, detail-modal
+   pill). Deliberately a deeper emerald than the TS category color
+   (#34d399) and never used to encode intensity, so grouping and
+   intensity stay visually separable. */
+.rt-genesis-fam-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: #065f46;
+    background: rgba(16, 185, 129, 0.16);
+    border: 1px solid rgba(16, 185, 129, 0.55);
+    border-radius: 999px;
+    cursor: help;
+}
+[data-theme="dark"] .rt-genesis-fam-pill {
+    color: #a7f3d0;
+    background: rgba(16, 185, 129, 0.22);
+    border-color: rgba(16, 185, 129, 0.65);
+}
+/* Sibling-marker ring: keeps the base white border + drop shadow and
+   adds the emerald family ring outside them. */
+.rt-gen-marker--fam {
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.35),
+                0 0 0 3px rgba(16, 185, 129, 0.9),
+                0 1px 4px rgba(0,0,0,0.55);
+}
