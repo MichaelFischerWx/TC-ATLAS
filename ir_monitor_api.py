@@ -9721,7 +9721,8 @@ def refresh_genesis_cache() -> dict:
                     ens = (_genesis_variant_clusters_size(
                                variant, c_dh[0], c_dh[1])
                            or (1000 if variant == "large" else 50))
-                    _tca_get_families(c_init, c_params, clusters, ens)
+                    _tca_get_families(c_init, c_params, clusters, ens,
+                                      variant=variant)
             except Exception:
                 traceback.print_exc()
         out[variant] = {
@@ -11164,6 +11165,93 @@ _TCA_FAM_RESCUE_MIN_COS = 0.25   # later genesis within ~75° of motion
 # only — the thin variant keeps its stricter R-confirm rule.
 _TCA_FAM_CONCORD_MAX_R = 1.75
 _TCA_FAM_CONCORD_RATIO = 0.6
+# Kinematic (phase-line) test — the third linking signal, for the cohort
+# structure the other two cannot see: members of ONE wave that stay weak
+# and develop far downstream have tracks that never co-travel with the
+# early developers (corridor blind) and may miss the exclusivity gate.
+# But their genesis events must sit on the SAME phase line: anchored on
+# an invest's position at cycle init (DeepMind's ATCF-keyed stub tracks
+# carry exactly that, cycle-intrinsically — archivable), each cluster's
+# implied propagation speed anchor→genesis is computable. 2026-08-25 00Z:
+# the Bahamas and Gulf cohorts imply 6.1 and 6.2 deg/day from Invest 96L
+# (one wave, developing 65 h apart along one phase line) while the
+# trailing mid-Atlantic pair implies 3.2-3.7 deg/day (kinematically a
+# different, slower system). Guards: anti-correlated membership
+# (ratio <= 0.6 — genuinely distinct systems sit at the ~1.0 chance
+# rate), speeds inside the physical wave band and agreeing within 25%,
+# the later cohort monotonically farther down the same bearing from the
+# anchor. Speed agreement makes a long time-separation gate unnecessary
+# (two simultaneous distinct systems can never agree on speed from one
+# anchor), so only a token ordering minimum is kept.
+_TCA_FAM_KIN_MIN_DTAU = 24.0
+_TCA_FAM_KIN_MAX_RATIO = 0.6
+_TCA_FAM_KIN_SPEED_TOL = 0.25      # relative agreement of implied speeds
+_TCA_FAM_KIN_SPEED_MIN = 250.0     # km/day — physical easterly-wave band
+_TCA_FAM_KIN_SPEED_MAX = 1000.0
+_TCA_FAM_KIN_MIN_TAU = 24.0        # anchor->genesis lever arm required
+_TCA_FAM_KIN_MIN_BCOS = 0.5        # both cohorts down the same bearing
+
+
+def _tca_kinematic_anchors(raw_data):
+    """Invest positions at cycle init, from the CSV's ATCF-keyed stub
+    tracks (every member carries the invest's tau-0 fix). Returns
+    {atcf_id: (lat, lon)} — cycle-intrinsic, so archived cycles anchor
+    on where the invest WAS, not where it is now."""
+    import re as _re
+    anchors = {}
+    for tid, storm in (raw_data or {}).items():
+        if not _re.match(r"^[A-Z]{2}\d{6}$", str(tid)):
+            continue
+        for mem in (storm.get("members") or {}).values():
+            pts = mem.get("points") or []
+            if pts and pts[0].get("lat") is not None:
+                anchors[str(tid)] = (pts[0]["lat"], pts[0]["lon"])
+                break
+    return anchors
+
+
+def _tca_kinematic_link_ok(ca, cb, anchors):
+    """Phase-line consistency for one cluster pair against any anchor
+    (see the _TCA_FAM_KIN_* constants). Membership anti-correlation is
+    gated by the caller."""
+    ta = ca.get("peak_mean_tau") or 0
+    tb = cb.get("peak_mean_tau") or 0
+    if abs(ta - tb) < _TCA_FAM_KIN_MIN_DTAU:
+        return False
+    early, late = (ca, cb) if ta <= tb else (cb, ca)
+    te = early.get("peak_mean_tau") or 0
+    tl = late.get("peak_mean_tau") or 0
+    if te < _TCA_FAM_KIN_MIN_TAU:
+        return False
+
+    def _dlon(a, b):
+        d = a - b
+        if d > 180: d -= 360
+        elif d < -180: d += 360
+        return d
+
+    for alat, alon in (anchors or {}).values():
+        de = _tca_haversine_km(alat, alon, early["peak_lat"], early["peak_lon"])
+        dl = _tca_haversine_km(alat, alon, late["peak_lat"], late["peak_lon"])
+        if dl <= de:
+            continue                      # later cohort must be farther along
+        se = de / (te / 24.0)
+        sl = dl / (tl / 24.0)
+        if not (_TCA_FAM_KIN_SPEED_MIN <= se <= _TCA_FAM_KIN_SPEED_MAX
+                and _TCA_FAM_KIN_SPEED_MIN <= sl <= _TCA_FAM_KIN_SPEED_MAX):
+            continue
+        if abs(se - sl) / max(se, sl) > _TCA_FAM_KIN_SPEED_TOL:
+            continue
+        cosl = max(0.2, math.cos(math.radians(alat)))
+        ex = _dlon(early["peak_lon"], alon) * cosl
+        ey = early["peak_lat"] - alat
+        lx = _dlon(late["peak_lon"], alon) * cosl
+        ly = late["peak_lat"] - alat
+        den = math.hypot(ex, ey) * math.hypot(lx, ly)
+        if den <= 0 or (ex * lx + ey * ly) / den < _TCA_FAM_KIN_MIN_BCOS:
+            continue
+        return True
+    return False
 
 
 def _tca_family_rescue_ok(ca, cb):
@@ -11232,7 +11320,7 @@ def _tca_family_mean(fam_clusters):
     return {"points": mean_pts}
 
 
-def _tca_family_pass(clusters, ensemble_size):
+def _tca_family_pass(clusters, ensemble_size, anchors=None):
     """Union-find over family-linked cluster pairs. Returns a list of
     family dicts (only groups of >= 2 clusters), largest union first:
       { family_id, cluster_ids, cluster_shorts, n_union, union_fraction,
@@ -11299,6 +11387,18 @@ def _tca_family_pass(clusters, ensemble_size):
                         and len(sets[i] & sets[j]) / exp
                             <= _TCA_FAM_EXCL_RATIO):
                     linked = True
+            if not linked and anchors:
+                # Kinematic phase-line test (see _TCA_FAM_KIN_*): the
+                # stay-weak-and-develop-downstream cohort structure the
+                # corridor test is blind to. Membership must be
+                # anti-correlated — distinct systems sit at chance rate.
+                exp = len(sets[i]) * len(sets[j]) / ensemble_size
+                if (exp >= _TCA_FAM_EXCL_MIN_EXP
+                        and len(sets[i] & sets[j]) / exp
+                            <= _TCA_FAM_KIN_MAX_RATIO
+                        and _tca_kinematic_link_ok(clusters[i], clusters[j],
+                                                   anchors)):
+                    linked = True
             if linked:
                 parent[_find(i)] = _find(j)
 
@@ -11340,12 +11440,24 @@ def _tca_family_pass(clusters, ensemble_size):
 _TCA_FAMILY_MEMO: dict = {}
 
 
-def _tca_get_families(init_time, params, clusters, ensemble_size):
-    key = (init_time, params, ensemble_size)
+def _tca_get_families(init_time, params, clusters, ensemble_size,
+                      variant=None):
+    key = (init_time, params, ensemble_size, variant)
     hit = _TCA_FAMILY_MEMO.get(key)
     if hit is not None:
         return hit
-    fams = _tca_family_pass(clusters, ensemble_size)
+    # Kinematic anchors come from the same cycle's CSV (in-process cache
+    # hit in the steady state — the prewarm keeps both variants warm).
+    anchors = {}
+    if init_time and variant and len(str(init_time)) == 10:
+        it = str(init_time)
+        try:
+            raw = _fetch_weatherlab_genesis_csv(
+                f"{it[:4]}-{it[4:6]}-{it[6:8]}", it[8:10], variant)
+            anchors = _tca_kinematic_anchors(raw)
+        except Exception:
+            anchors = {}
+    fams = _tca_family_pass(clusters, ensemble_size, anchors=anchors)
     if len(_TCA_FAMILY_MEMO) > 24:
         _TCA_FAMILY_MEMO.clear()
     _TCA_FAMILY_MEMO[key] = fams
@@ -11763,7 +11875,8 @@ def get_weatherlab_genesis_clusters(
     next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time)
     ens_size = (_genesis_variant_clusters_size(variant_n, used_date, used_hour)
                 or (1000 if variant_n == "large" else 50))
-    families = _tca_get_families(init_time, params, clusters, ens_size)
+    families = _tca_get_families(init_time, params, clusters, ens_size,
+                                 variant=variant_n)
     fam_by_tid = {tid: f["family_id"]
                   for f in families for tid in f["cluster_ids"]}
     return JSONResponse(
@@ -11840,7 +11953,8 @@ def get_weatherlab_genesis_cluster(
     ens_size = ((_genesis_variant_clusters_size(variant_n, used_date, used_hour)
                  if used_date else None)
                 or (1000 if variant_n == "large" else 50))
-    families = _tca_get_families(init_time, params, clusters, ens_size)
+    families = _tca_get_families(init_time, params, clusters, ens_size,
+                                 variant=variant_n)
     family = next((f for f in families if tca_id in f["cluster_ids"]), None)
     return JSONResponse(
         content={
@@ -11917,7 +12031,8 @@ def get_weatherlab_genesis_family(
     ens_size = ((_genesis_variant_clusters_size(variant_n, used_date, used_hour)
                  if used_date else None)
                 or (1000 if variant_n == "large" else 50))
-    families = _tca_get_families(init_time, params, clusters, ens_size)
+    families = _tca_get_families(init_time, params, clusters, ens_size,
+                                 variant=variant_n)
     fam = next((f for f in families if f["family_id"] == family_id), None)
     if fam is None:
         raise HTTPException(

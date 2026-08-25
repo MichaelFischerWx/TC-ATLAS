@@ -142,6 +142,12 @@ def main():
               f"genesis_tau~{tau:6.0f}h  peakV={c.get('peak_wind')}kt")
 
     fams, rows, sets = link_families(clusters, ens)
+    # The FAMILIES section below prints PRODUCTION output (the real
+    # _tca_family_pass with kinematic anchors), not this file's local
+    # corridor/exclusivity verdicts — the pairwise table above remains a
+    # diagnostic view of two of the signals only.
+    prod_fams = m._tca_family_pass(
+        clusters, ens, anchors=m._tca_kinematic_anchors(raw))
 
     print(f"\n=== PAIRWISE METRICS (corridor: D<{FAM_KM:.0f} F>={FAM_MIN_F} "
           f"R<={FAM_MAX_R} | exclusivity: ratio<={EXCL_RATIO} "
@@ -161,29 +167,25 @@ def main():
               f"ovl={mm['obs']:3d}/exp{mm['exp']:5.1f} ratio={ratio_s}"
               f"  -> {'LINK (' + why + ')' if linked else '.'}")
 
-    print(f"\n=== FAMILIES ===")
-    for root, idxs in sorted(fams.items(), key=lambda kv: -len(kv[1])):
-        if len(idxs) == 1:
-            continue
-        union = set()
-        naive = 0
-        for i in idxs:
-            union |= sets[i]
-            naive += len(sets[i])
-        labels = " + ".join(clusters[i]["display_short"]
-                            for i in sorted(idxs, key=lambda i: clusters[i].get("peak_mean_tau") or 0))
-        print(f"  {labels}: union {len(union)}/{ens} = "
-              f"{100*len(union)/ens:.1f}%  (naive sum {100*naive/ens:.1f}%, "
-              f"{naive - len(union)} members in 2+ clusters)")
-        for i in sorted(idxs, key=lambda i: clusters[i].get("peak_mean_tau") or 0):
-            cond = 100 * len(sets[i]) / max(1, len(union))
-            print(f"      {clusters[i]['display_short']:>4} "
-                  f"({clusters[i]['peak_lat']:.0f}N,{clusters[i]['peak_lon']:.0f}E, "
-                  f"tau~{clusters[i]['peak_mean_tau']:.0f}h): "
-                  f"{100*len(sets[i])/ens:.1f}% of ensemble; "
+    print(f"\n=== FAMILIES (production _tca_family_pass, all signals incl. kinematic) ===")
+    byshort = {c["display_short"]: c for c in clusters}
+    setbyshort = {c["display_short"]: set((c.get("members") or {}).keys())
+                  for c in clusters}
+    for f in prod_fams:
+        shorts = f["cluster_shorts"]
+        print(f"  {' + '.join(shorts)}: union {f['n_union']}/{ens} = "
+              f"{100*f['union_fraction']:.1f}%  (naive sum "
+              f"{100*f['sum_fraction']:.1f}%, {f['n_multi']} members in 2+ clusters)")
+        for s in shorts:
+            c = byshort.get(s)
+            if not c: continue
+            n = len(setbyshort.get(s) or [])
+            cond = 100 * n / max(1, f["n_union"])
+            print(f"      {s:>4} ({c['peak_lat']:.0f}N,{c['peak_lon']:.0f}E, "
+                  f"tau~{c['peak_mean_tau']:.0f}h): {100*n/ens:.1f}% of ensemble; "
                   f"~{cond:.0f}% of the family's developing members")
-    if all(len(v) == 1 for v in fams.values()):
-        print("  (no multi-cluster families under these gates)")
+    if not prod_fams:
+        print("  (no multi-cluster families)")
 
 
 if __name__ == "__main__":
