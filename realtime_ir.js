@@ -15672,6 +15672,14 @@
         return null;
     }
 
+    // Hover widgets are dead weight on touch-primary devices — worse, the
+    // first tap becomes the "hover", so the tap that should open the
+    // modal only opens the tooltip (reported on mobile for 02C). Detect
+    // hover-incapable pointers once and skip binding tooltips entirely
+    // there; the modal carries everything the hover card says.
+    var _IR_NO_HOVER = !!(window.matchMedia
+        && window.matchMedia('(hover: none)').matches);
+
     function _renderGenesis() {
         _clearGenesis();
         _genesisDisturbanceMeta = {};
@@ -15918,7 +15926,9 @@
                         + ' detail →')
                 + '</span>'
                 + '</div>';
-            marker.bindTooltip(tip, { direction: 'top', offset: [0, -8] });
+            if (!_IR_NO_HOVER) {
+                marker.bindTooltip(tip, { direction: 'top', offset: [0, -8] });
+            }
             (function (id) {
                 marker.on('click', function (e) {
                     if (L.DomEvent && L.DomEvent.stopPropagation) {
@@ -16060,9 +16070,11 @@
                 }).addTo(map);
                 // Facade tolerance: polyline tooltips may be unsupported
                 // by the GL layer — the chain still draws without one.
-                try {
-                    famLink.bindTooltip(famTipHtml, { sticky: true });
-                } catch (e) { /* non-fatal */ }
+                if (!_IR_NO_HOVER) {
+                    try {
+                        famLink.bindTooltip(famTipHtml, { sticky: true });
+                    } catch (e) { /* non-fatal */ }
+                }
                 (function (fid) {
                     famLink.on('click', function (e) {
                         if (L.DomEvent && L.DomEvent.stopPropagation) {
