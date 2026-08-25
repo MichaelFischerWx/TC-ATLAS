@@ -11151,6 +11151,19 @@ _TCA_FAM_EXCL_KM = 1500.0
 _TCA_FAM_RESCUE_MAX_R = 1.5
 _TCA_FAM_RESCUE_MIN_DTAU = 48.0
 _TCA_FAM_RESCUE_MIN_COS = 0.25   # later genesis within ~75° of motion
+# Concordance override: R fluctuates cycle to cycle (the same Atlantic
+# wave measured 1.08 at 12Z and 1.66 at 18Z on 2026-08-24), so a hard
+# R cliff makes a family flap between cycles. When the OTHER two
+# independent signals agree emphatically — corridor geometry passes AND
+# membership is strongly anti-correlated — a hair-over R must not veto
+# alone. Anti-correlation is the discriminator R noise cannot fake:
+# genuinely distinct tandem systems overlap at the chance rate
+# (ratio ≈ 1.0; every measured false pair sat at 0.79-1.06), while
+# sibling scenarios compete for members (0.03-0.55). R stays a sanity
+# ceiling below the measured distinct-pair band (1.68+). Full ensembles
+# only — the thin variant keeps its stricter R-confirm rule.
+_TCA_FAM_CONCORD_MAX_R = 1.75
+_TCA_FAM_CONCORD_RATIO = 0.6
 
 
 def _tca_family_rescue_ok(ca, cb):
@@ -11265,6 +11278,13 @@ def _tca_family_pass(clusters, ensemble_size):
                 r = _tca_member_ratio(clusters[i], clusters[j])
                 linked = ((r is not None and r <= _TCA_FAM_MAX_R) if thin
                           else (r is None or r <= _TCA_FAM_MAX_R))
+                if (not linked and not thin and r is not None
+                        and r <= _TCA_FAM_CONCORD_MAX_R):
+                    exp = len(sets[i]) * len(sets[j]) / ensemble_size
+                    if (exp >= _TCA_FAM_EXCL_MIN_EXP
+                            and len(sets[i] & sets[j]) / exp
+                                <= _TCA_FAM_CONCORD_RATIO):
+                        linked = True
             elif thin and aff is None:
                 # Thin-variant rescue (see _TCA_FAM_RESCUE_* above): the
                 # corridor test had no mean-track window to judge, but the

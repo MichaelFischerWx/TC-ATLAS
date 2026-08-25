@@ -24740,8 +24740,16 @@
             action: 'genesis',
             label: '<b>Cyclogenesis clusters</b>',
             // The methods link must not toggle the layer row it sits in.
+            // Family count is stated even when zero — otherwise a cycle
+            // with no linked families looks like the feature vanished.
             substatus: _genesisVariantModelLabel() + ' · ≥5% reach TS (≥34 kt)'
                 + (genStatus ? ' — ' + genStatus : '')
+                + (function () {
+                    var nf = ((_rtGenesisClusters
+                               && _rtGenesisClusters.families) || []).length;
+                    return ' · ' + (nf ? nf + ' wave famil'
+                        + (nf === 1 ? 'y' : 'ies') : 'no wave families');
+                })()
                 + ' · <a href="#genesis-methods" style="color:inherit; '
                 + 'text-decoration:underline dotted;" '
                 + 'onclick="event.stopPropagation(); '
