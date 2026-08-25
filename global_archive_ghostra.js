@@ -1210,18 +1210,32 @@
         } catch (e) { }
     }
 
-    /* Time of the storm's deepest GHOST estimate — where a reader who just
-       searched a storm by name actually wants to land. */
+    /* Index of the extreme of one series: sign=+1 for a maximum (wind),
+       sign=-1 for a minimum (pressure). Shared by the landing-frame pick
+       and the peak markers on the chart so they can never disagree. */
+    function peakIdx(t, a, sign) {
+        if (!t || !a) return -1;
+        var bi = -1, best = -Infinity;
+        for (var i = 0; i < a.length && i < t.length; i++) {
+            if (a[i] == null) continue;
+            var v = sign * a[i];
+            if (v > best) { best = v; bi = i; }
+        }
+        return bi;
+    }
+
+    /* Time of the storm's GHOST peak in the ACTIVE currency — the highest
+       Vmax when the tab is ranking in kt, the deepest Pmin in hPa — so a
+       reader who sorted storms by wind lands on the wind peak they ranked
+       by. Falls back to the other channel when one is absent (old trees). */
     function peakTime(sid) {
         var st = stormCache[sid];
         if (!st) return null;
         var S = series(st);
-        if (!S.t || !S.gp) return null;
-        var bi = -1, best = Infinity;
-        for (var i = 0; i < S.gp.length && i < S.t.length; i++) {
-            if (S.gp[i] == null) continue;
-            if (S.gp[i] < best) { best = S.gp[i]; bi = i; }
-        }
+        if (!S.t) return null;
+        var kt = funit === 'kt';
+        var bi = kt ? peakIdx(S.t, S.gv, +1) : peakIdx(S.t, S.gp, -1);
+        if (bi < 0) bi = kt ? peakIdx(S.t, S.gp, -1) : peakIdx(S.t, S.gv, +1);
         return bi < 0 ? null : Date.parse(S.t[bi] + 'Z');
     }
 
@@ -1266,7 +1280,8 @@
         var pk = peakTime(sid);
         var atPeak = pk !== null &&
             Math.abs(Date.parse(f.datetime + 'Z') - pk) <= 90 * 60000;
-        el.textContent = atPeak ? 'GHOST peak'
+        el.textContent = atPeak
+            ? (funit === 'kt' ? 'GHOST peak Vmax' : 'GHOST peak Pmin')
             : (dt === null ? '' : (dt === 0 ? 'exact match'
                 : 'Δ ' + (dt > 0 ? '+' : '−') + Math.abs(dt) + ' min vs GHOST'));
         el.className = 'gra-ir-delta' + (dt !== null && Math.abs(dt) > 45 ? ' far' : '');
@@ -2031,6 +2046,35 @@
         // bands are built first so natSeen is populated for the key
         var bandsP = natBands(PT, HP), bandsV = natBands(yv0, HV);
         var strip = reconStrip();
+
+        /* Dashed markers at the times of GHOST peak Vmax and peak Pmin,
+           drawn through both panels — the two moments a reader compares,
+           and they often differ (the wind typically peaks before the
+           pressure bottoms). Computed by the same peakIdx the landing-frame
+           pick uses, so the marker and the "GHOST peak" chip can never
+           disagree. Coincident peaks (within a line width) collapse to a
+           single line so the chart never shows a fake double marker. */
+        var iPk = peakIdx(S.t, S.gp, -1), iVk = peakIdx(S.t, S.gv, +1);
+        var xPk = iPk >= 0 ? clampX(Xi(iPk)) : null;
+        var xVk = iVk >= 0 ? clampX(Xi(iVk)) : null;
+        function peakLine(x, cls) {
+            return '<line class="' + cls + '" x1="' + x.toFixed(1) + '" x2="' +
+                x.toFixed(1) + '" y1="' + PT + '" y2="' + (yv0 + HV) + '"/>';
+        }
+        var peakLines = '', peakKey = '';
+        if (xPk !== null && xVk !== null && Math.abs(xPk - xVk) < 2.5) {
+            peakLines = peakLine(xPk, 'gc-peak-p');
+            peakKey = ' &nbsp; <span class="gc-peak-key"><i class="p"></i>peak P<sub>min</sub> &amp; V<sub>max</sub></span>';
+        } else {
+            if (xPk !== null) {
+                peakLines += peakLine(xPk, 'gc-peak-p');
+                peakKey += ' &nbsp; <span class="gc-peak-key"><i class="p"></i>peak P<sub>min</sub></span>';
+            }
+            if (xVk !== null) {
+                peakLines += peakLine(xVk, 'gc-peak-v');
+                peakKey += ' &nbsp; <span class="gc-peak-key"><i class="v"></i>peak V<sub>max</sub></span>';
+            }
+        }
         var natKey = '';
         ['ET', 'SS', 'DS', 'MX', 'NR'].forEach(function (n) {
             if (natSeen[n]) natKey += ' &nbsp; <span class="gc-nat-key"><i class="' + n + '"></i>' + NAT_NAME[n] + '</span>';
@@ -2055,12 +2099,13 @@
             line(S.gp, Yp, '#f43f5e', 1.9) +
             line(S.bv, Yv, 'var(--slate)', 1.5) + line(S.gv, Yv, '#f43f5e', 1.9) +
             vdmMarks(st, X, Yp, Yv) +
+            peakLines +
             '<line id="gc-cur" class="gc-cur" x1="0" x2="0" y1="' + PT + '" y2="' + (yv0 + HV) + '"/>' +
             '<line id="gc-hov" class="gc-hov" x1="0" x2="0" y1="' + PT + '" y2="' + (yv0 + HV) + '" style="display:none"/>' +
             '</svg>' +
             '<div class="gra-chart-key"><b style="color:#f43f5e">—</b> GHOST &nbsp; ' +
             '<b style="color:var(--slate)">—</b> best track &nbsp; ' + hoKey + vdmKey +
-            natKey + recKey + '</div>' +
+            natKey + recKey + peakKey + '</div>' +
             '<div id="gra-chart-read" class="gra-chart-read"></div>';
 
         var svg = $('gra-chart-svg');

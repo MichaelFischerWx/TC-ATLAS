@@ -3204,6 +3204,17 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .gra-chart .gc-cur { stroke: var(--blue); stroke-width: 1.2; }
 .gra-chart .gc-hov { stroke: var(--text); stroke-width: .8; stroke-dasharray: 2 2; opacity: .75; }
+/* Peak-time markers: GHOST peak Pmin (red, the GHOST trace color) and peak
+   Vmax (amber) as dashed verticals through both panels. Dash pattern differs
+   from .gc-hov so a hovering cursor never impersonates a peak. */
+.gra-chart .gc-peak-p { stroke: #f43f5e; stroke-width: 1; stroke-dasharray: 5 3; opacity: .5; }
+.gra-chart .gc-peak-v { stroke: #f59e0b; stroke-width: 1; stroke-dasharray: 5 3; opacity: .65; }
+.gra-chart-key .gc-peak-key i {
+    display: inline-block; width: 0; height: 9px; vertical-align: -1px;
+    margin-right: 4px; border-left: 2px dashed #f43f5e; opacity: .8;
+}
+.gra-chart-key .gc-peak-key i.v { border-left-color: #f59e0b; }
+.gra-chart-key .gc-peak-key sub { font-size: 0.5rem; }
 .gra-chart-key {
     font-size: 0.58rem; color: var(--slate); margin-top: 3px; line-height: 1.5;
 }
