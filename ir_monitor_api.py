@@ -11136,6 +11136,49 @@ _TCA_FAM_MAX_R = 1.6
 _TCA_FAM_EXCL_RATIO = 0.35
 _TCA_FAM_EXCL_MIN_EXP = 4.0
 _TCA_FAM_EXCL_KM = 1500.0
+# Thin-variant rescue: at N=50 a 5-10-member cohort's mean track is
+# truncated by thin-tau gating, so two cohorts of ONE wave can share no
+# mean-track window at all (corridor test returns None) even though
+# their MEMBERS demonstrably comingle at shared valid times. When that
+# member-level ratio is strongly same-population, link — guarded by two
+# physical requirements that killed both false-positive classes found
+# in calibration (2026-08-24 00Z/06Z small): genesis times must differ
+# by >= 48 h (simultaneous genesis 1000+ km apart = two systems, e.g.
+# D5/D18 R=1.14 diluted by the big cluster's spread), and the later
+# genesis must lie DOWNSTREAM along the earlier cohort's own motion
+# (a later genesis upstream = the next wave in the train, e.g. D13/D22
+# R=1.49 six degrees east and five days later).
+_TCA_FAM_RESCUE_MAX_R = 1.5
+_TCA_FAM_RESCUE_MIN_DTAU = 48.0
+_TCA_FAM_RESCUE_MIN_COS = 0.25   # later genesis within ~75° of motion
+
+
+def _tca_family_rescue_ok(ca, cb):
+    """Physical-plausibility guards for the thin-variant R-only rescue
+    link (see the constants above)."""
+    ta = ca.get("peak_mean_tau") or 0
+    tb = cb.get("peak_mean_tau") or 0
+    if abs(ta - tb) < _TCA_FAM_RESCUE_MIN_DTAU:
+        return False
+    early, late = (ca, cb) if ta <= tb else (cb, ca)
+    pts = [p for p in ((early.get("ensemble_mean") or {}).get("points") or [])
+           if p.get("lat") is not None and p.get("lon") is not None]
+    if len(pts) < 2:
+        return False
+    def _dlon(a, b):
+        d = a - b
+        if d > 180: d -= 360
+        elif d < -180: d += 360
+        return d
+    cosl = max(0.2, math.cos(math.radians(pts[0]["lat"])))
+    mvx = _dlon(pts[-1]["lon"], pts[0]["lon"]) * cosl
+    mvy = pts[-1]["lat"] - pts[0]["lat"]
+    dx = _dlon(late["peak_lon"], early["peak_lon"]) * cosl
+    dy = late["peak_lat"] - early["peak_lat"]
+    den = math.hypot(mvx, mvy) * math.hypot(dx, dy)
+    if den <= 0:
+        return False
+    return (mvx * dx + mvy * dy) / den >= _TCA_FAM_RESCUE_MIN_COS
 
 
 def _tca_family_members(fam_clusters):
@@ -11222,6 +11265,14 @@ def _tca_family_pass(clusters, ensemble_size):
                 r = _tca_member_ratio(clusters[i], clusters[j])
                 linked = ((r is not None and r <= _TCA_FAM_MAX_R) if thin
                           else (r is None or r <= _TCA_FAM_MAX_R))
+            elif thin and aff is None:
+                # Thin-variant rescue (see _TCA_FAM_RESCUE_* above): the
+                # corridor test had no mean-track window to judge, but the
+                # members themselves comingle at shared valid times.
+                r = _tca_member_ratio(clusters[i], clusters[j])
+                if (r is not None and r <= _TCA_FAM_RESCUE_MAX_R
+                        and _tca_family_rescue_ok(clusters[i], clusters[j])):
+                    linked = True
             if (not linked and dbar is not None and dbar < _TCA_FAM_EXCL_KM):
                 exp = len(sets[i]) * len(sets[j]) / ensemble_size
                 if (exp >= _TCA_FAM_EXCL_MIN_EXP

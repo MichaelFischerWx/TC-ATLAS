@@ -15912,8 +15912,11 @@
                 + 'automated ensemble clustering &middot; TS-strength odds, '
                 + 'not NHC genesis &middot; cluster %s are not additive</span>'
                 + '<br><span style="opacity:0.75; font-size:0.85em;">'
-                + 'Click for full ' + _genesisVariantMemberTag()
-                + ' detail →</span>'
+                + (fam
+                    ? 'Click for the whole wave-train detail →'
+                    : 'Click for full ' + _genesisVariantMemberTag()
+                        + ' detail →')
+                + '</span>'
                 + '</div>';
             marker.bindTooltip(tip, { direction: 'top', offset: [0, -8] });
             (function (id) {
@@ -15921,7 +15924,17 @@
                     if (L.DomEvent && L.DomEvent.stopPropagation) {
                         L.DomEvent.stopPropagation(e);
                     }
-                    openGenesisDetail(id);
+                    // Family members open the WHOLE wave train by default —
+                    // the family view is the honest first read (union
+                    // probability, net mean, all scenarios); the per-
+                    // cluster views are one click deeper via the chips in
+                    // the family modal's subtitle.
+                    var famC = _genesisFamilyFor(id);
+                    if (famC && famC.family_id) {
+                        window._irOpenGenesisFamily(famC.family_id);
+                    } else {
+                        openGenesisDetail(id);
+                    }
                 });
             })(trackId);
             _rtGenesisLayers.push(marker);
@@ -16843,6 +16856,10 @@
         _ga('rt_genesis_detail_close');
     }
     window.closeGenesisDetail = closeGenesisDetail;
+    // Drill-down from the family modal's cluster chips into one genesis
+    // scenario (the per-cluster view the marker no longer opens directly
+    // for family members).
+    window._irOpenGenesisCluster = function (tid) { openGenesisDetail(tid); };
 
     // Show/hide the ensemble-modal loading overlay. Shown the moment the
     // modal opens (during the member-set fetch) and kept up through the
@@ -17376,16 +17393,35 @@
                                (_famForSub.cluster_shorts || [])[fn]));
             }
             if (!_famNames.length) _famNames = _famForSub.cluster_shorts;
-            // Clickable from a CLUSTER's modal (opens the whole-family
-            // view); inert when the family view itself is already open.
+            // From a CLUSTER's modal the whole pill opens the family view;
+            // from the FAMILY's own modal each member name is a drill-down
+            // chip into that single genesis scenario. Together with the
+            // markers defaulting to the family view, this is the two-way
+            // toggle: marker/ribbon → wave train, chips → one scenario,
+            // pill → back to the wave train.
             var _famSelf = json.track_id === _famForSub.family_id;
+            var _famNamesHtml;
+            if (_famSelf) {
+                var _chips = [];
+                for (var fc = 0; fc < (_famForSub.cluster_ids || []).length; fc++) {
+                    _chips.push('<span style="text-decoration:underline dotted;'
+                        + ' cursor:pointer;" onclick="window._irOpenGenesisCluster(\''
+                        + _famForSub.cluster_ids[fc] + '\')">'
+                        + _famNames[fc] + '</span>');
+                }
+                _famNamesHtml = _chips.join(' + ');
+            } else {
+                _famNamesHtml = _famNames.join(' + ');
+            }
             subParts.push('<span class="rt-genesis-fam-pill"'
                 + (_famSelf ? '' : ' style="cursor:pointer;"'
                     + ' onclick="window._irOpenGenesisFamily(\''
                     + _famForSub.family_id + '\')"')
                 + ' title="' + _famTip.replace(/"/g, '&quot;')
-                + (_famSelf ? '' : ' Click to view the whole wave train.')
-                + '">Wave family: ' + _famNames.join(' + ') + ' · '
+                + (_famSelf
+                    ? ' Click a cluster code to view that genesis scenario alone.'
+                    : ' Click to view the whole wave train.')
+                + '">Wave family: ' + _famNamesHtml + ' · '
                 + Math.round(100 * (_famForSub.union_fraction || 0))
                 + '% combined</span>');
         }
