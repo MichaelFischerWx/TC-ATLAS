@@ -17412,30 +17412,30 @@
             // toggle: marker/ribbon → wave train, chips → one scenario,
             // pill → back to the wave train.
             var _famSelf = json.track_id === _famForSub.family_id;
-            var _famNamesHtml;
-            if (_famSelf) {
-                var _chips = [];
-                for (var fc = 0; fc < (_famForSub.cluster_ids || []).length; fc++) {
-                    _chips.push('<span style="text-decoration:underline dotted;'
-                        + ' cursor:pointer;" onclick="window._irOpenGenesisCluster(\''
-                        + _famForSub.cluster_ids[fc] + '\')">'
-                        + _famNames[fc] + '</span>');
-                }
-                _famNamesHtml = _chips.join(' + ');
-            } else {
-                _famNamesHtml = _famNames.join(' + ');
-            }
             subParts.push('<span class="rt-genesis-fam-pill"'
                 + (_famSelf ? '' : ' style="cursor:pointer;"'
                     + ' onclick="window._irOpenGenesisFamily(\''
                     + _famForSub.family_id + '\')"')
                 + ' title="' + _famTip.replace(/"/g, '&quot;')
-                + (_famSelf
-                    ? ' Click a cluster code to view that genesis scenario alone.'
-                    : ' Click to view the whole wave train.')
-                + '">Wave family: ' + _famNamesHtml + ' · '
+                + (_famSelf ? '' : ' Click to view the whole wave train.')
+                + '">Wave family: ' + _famNames.join(' + ') + ' · '
                 + Math.round(100 * (_famForSub.union_fraction || 0))
                 + '% combined</span>');
+            // Family view only: an EXPLICIT drill-down selector. The old
+            // affordance (dotted-underlined names inside the pill) read as
+            // decoration, not as navigation — nobody clicked it, and its
+            // explanatory tooltip doesn't exist on touch.
+            if (_famSelf) {
+                var _chipRow = [];
+                for (var fc = 0; fc < (_famForSub.cluster_ids || []).length; fc++) {
+                    _chipRow.push('<span class="rt-genesis-clu-chip" '
+                        + 'onclick="window._irOpenGenesisCluster(\''
+                        + _famForSub.cluster_ids[fc] + '\')">'
+                        + _famNames[fc] + '</span>');
+                }
+                subParts.push('<span style="opacity:0.85;">View an individual '
+                    + 'genesis cluster: ' + _chipRow.join(' ') + '</span>');
+            }
         }
         if (json._dmExcluded) {
             subParts.push('<span style="opacity:0.8; color:#f97316;" '
