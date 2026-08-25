@@ -14699,6 +14699,28 @@
             early.push(mp);
         }
         if (!early.length) early = [p0];
+        // Back-extrapolate the anchor to tau 0 along the mean track's own
+        // initial motion: a thin late-starting cohort can begin more than
+        // a day of wave motion downstream of the invest it grew from
+        // (18Z 50-member: D16's 7-member anchor sat ~905 km from Invest
+        // 96L — beyond any sane static gate, but its own ~6°/day motion
+        // rewound 36 h lands right on the invest). Displacement capped so
+        // a noisy two-point motion estimate can't fling the probe across
+        // a basin; skipped across the antimeridian.
+        if (startTau > 0 && early.length >= 2) {
+            var q0 = early[0], q1 = early[early.length - 1];
+            var dtq = (q1.tau != null ? q1.tau : startTau)
+                    - (q0.tau != null ? q0.tau : startTau);
+            if (dtq >= 6 && Math.abs(q1.lon - q0.lon) < 90) {
+                var backScale = Math.min(startTau, 48) / dtq;
+                var bLat = q0.lat - (q1.lat - q0.lat) * backScale;
+                var bLon = q0.lon - (q1.lon - q0.lon) * backScale;
+                if (Math.abs(bLat - q0.lat) <= 8
+                        && Math.abs(bLon - q0.lon) <= 12) {
+                    early.push({ lat: bLat, lon: bLon });
+                }
+            }
+        }
         var best = null, bestDist = gateKm;
         for (var i = 0; i < stormsAvail.length; i++) {
             var s = stormsAvail[i];

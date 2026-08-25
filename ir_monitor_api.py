@@ -11184,6 +11184,17 @@ def _tca_family_pass(clusters, ensemble_size):
     # Thin ensembles (50-member variant) have noisy mean-track geometry;
     # require the R backstop to CONFIRM (not just fail to veto) there.
     thin = ensemble_size < 400
+    # Mirror the merge pass's size-aware loosening: thin clusters (5-17
+    # members) read as wider D̄ / lower F / shorter shared windows for the
+    # SAME wave, so fixed 1000-member gates under-link the small variant
+    # (2026-08-24 18Z: the D11/D14 intermediate cohort sat at D̄=846,
+    # above the flat 800). Safe under the mandatory thin-R confirm —
+    # validated on the same cycle: loosened geometry admitted two
+    # tandem-distinct candidates (WPac, EPac) and R vetoed both at 23-25.
+    _t = max(0.0, min(1.0, (400.0 - ensemble_size) / 340.0))
+    eff_km = _TCA_FAM_KM * (1.0 + 0.55 * _t)
+    eff_min_f = _TCA_FAM_MIN_F - 0.15 * _t
+    eff_overlap = _TCA_FAM_OVERLAP_H * (1.0 - 0.375 * _t)
     parent = list(range(n))
 
     def _find(x):
@@ -11195,11 +11206,11 @@ def _tca_family_pass(clusters, ensemble_size):
     for i in range(n):
         for j in range(i + 1, n):
             aff = _tca_cluster_affinity(clusters[i], clusters[j],
-                                        _TCA_FAM_KM, _TCA_FAM_OVERLAP_H)
+                                        eff_km, eff_overlap)
             dbar, f_close = aff if aff else (None, None)
             linked = False
-            if (dbar is not None and dbar < _TCA_FAM_KM
-                    and f_close >= _TCA_FAM_MIN_F):
+            if (dbar is not None and dbar < eff_km
+                    and f_close >= eff_min_f):
                 r = _tca_member_ratio(clusters[i], clusters[j])
                 linked = ((r is not None and r <= _TCA_FAM_MAX_R) if thin
                           else (r is None or r <= _TCA_FAM_MAX_R))
