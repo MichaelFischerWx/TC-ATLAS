@@ -1380,17 +1380,25 @@ def _mergir_subset_url(dt: datetime, center_lat: float, center_lon: float) -> st
     lon_min = center_lon - MERGIR_HALF_DOMAIN - margin
     lon_max = center_lon + MERGIR_HALF_DOMAIN + margin
 
-    # Clamp to grid bounds
+    # Clamp lat to grid bounds
     lat_min = max(lat_min, -60.0)
     lat_max = min(lat_max, 60.0)
-    lon_min = max(lon_min, -180.0)
-    lon_max = min(lon_max, 180.0)
 
     # Grid spacing: ~0.036364° for lat, ~0.036378° for lon
     lat_idx_min = int((lat_min + 60.0) / 0.036364)
     lat_idx_max = min(int((lat_max + 60.0) / 0.036364), 3300)
-    lon_idx_min = int((lon_min + 180.0) / 0.036378)
-    lon_idx_max = min(int((lon_max + 180.0) / 0.036378), 9895)
+    # ANTIMERIDIAN: an OPeNDAP constraint is ONE contiguous index range, so a
+    # box straddling ±180 cannot be lon-subset server-side. The old clamp to
+    # [-180, 180] silently dropped everything across the dateline, and the
+    # wrap-aware crop downstream can't restore data the download never had —
+    # the chip shipped ~40% narrower than its declared bounds. Request the
+    # full lon axis instead (lat still subset: ~25 MB, not the ~130 MB full
+    # file) and let _sel_latlon_wrap take the two pieces locally.
+    if lon_min < -180.0 or lon_max > 180.0:
+        lon_idx_min, lon_idx_max = 0, 9895
+    else:
+        lon_idx_min = int((lon_min + 180.0) / 0.036378)
+        lon_idx_max = min(int((lon_max + 180.0) / 0.036378), 9895)
 
     # Build constraint expression for server-side subsetting
     # Request both time steps (usually 2 per file), subset lat/lon
@@ -1402,6 +1410,40 @@ def _mergir_subset_url(dt: datetime, center_lat: float, center_lon: float) -> st
     )
 
     return f"{base}.nc4?{constraint}"
+
+
+def _sel_latlon_wrap(da, lat_min, lat_max, lon_min, lon_max, xr):
+    """Box-select from a lon −180..180 grid, surviving the antimeridian.
+
+    A box straddling ±180 cannot be one slice(): select the two pieces and
+    concatenate west-to-east, shifting coords ±360 so the returned lons are
+    monotonic and numerically match the requested (unwrapped) range. Raises
+    if either piece comes back empty — that means the source file itself is
+    truncated at the dateline (e.g. a lon-clamped OPeNDAP subset) and the
+    caller must try the next source rather than serve a mislabeled chip.
+
+    Returns (values, lats, lons) with lats in file order (not flipped).
+    """
+    if lon_min < -180.0 or lon_max > 180.0:
+        if lon_max > 180.0:          # e.g. 169..189 -> 169..180 + -180..-171
+            west_part = da.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min, 180.0))
+            east_part = da.sel(lat=slice(lat_min, lat_max), lon=slice(-180.0, lon_max - 360.0))
+            west_lons = west_part.coords["lon"].values
+            east_lons = east_part.coords["lon"].values + 360.0
+        else:                         # e.g. -189..-169 -> 171..180 + -180..-169
+            west_part = da.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min + 360.0, 180.0))
+            east_part = da.sel(lat=slice(lat_min, lat_max), lon=slice(-180.0, lon_max))
+            west_lons = west_part.coords["lon"].values - 360.0
+            east_lons = east_part.coords["lon"].values
+        if len(west_lons) == 0 or len(east_lons) == 0:
+            raise ValueError(
+                "antimeridian piece empty — source file does not span the dateline"
+            )
+        da_sub = xr.concat([west_part, east_part], dim="lon")
+        return (da_sub.values, da_sub.coords["lat"].values,
+                np.concatenate([west_lons, east_lons]))
+    da_sub = da.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min, lon_max))
+    return da_sub.values, da_sub.coords["lat"].values, da_sub.coords["lon"].values
 
 
 def _load_mergir_subset(target_dt: datetime, center_lat: float, center_lon: float):
@@ -1533,47 +1575,14 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
 
                 da = ds["Tb"].isel(time=tidx)
 
-                # Subset spatially using coordinate selection.
-                #
-                # ANTIMERIDIAN: the MergIR grid runs lon -180..180, so a plain
-                # slice() truncates any box straddling the dateline — a storm at
-                # 179E asks for 169..189 and silently gets back only 169..180.
-                # The 50%-coverage guard below does NOT catch it (11 of 20
-                # degrees passes), so the frame renders as a narrow strip with
-                # the storm jammed against the edge. Wrap instead: take the two
-                # pieces and concatenate them in west-to-east order.
-                if lon_min < -180.0 or lon_max > 180.0:
-                    if lon_max > 180.0:          # e.g. 169..189 -> 169..180 + -180..-171
-                        west_part = da.sel(lat=slice(lat_min, lat_max),
-                                           lon=slice(lon_min, 180.0))
-                        east_part = da.sel(lat=slice(lat_min, lat_max),
-                                           lon=slice(-180.0, lon_max - 360.0))
-                    else:                         # e.g. -189..-169 -> 171..180 + -180..-169
-                        west_part = da.sel(lat=slice(lat_min, lat_max),
-                                           lon=slice(lon_min + 360.0, 180.0))
-                        east_part = da.sel(lat=slice(lat_min, lat_max),
-                                           lon=slice(-180.0, lon_max))
-                    da_sub = xr.concat([west_part, east_part], dim="lon")
-                    # Unwrap the eastern piece's coords so the concatenated
-                    # array is monotonic; the caller reports REQUESTED bounds
-                    # anyway, and monotonic lons keep the size/validity checks
-                    # below meaningful.
-                    _lons = np.concatenate([
-                        west_part.coords["lon"].values,
-                        east_part.coords["lon"].values + 360.0,
-                    ])
-                    tb = da_sub.values
-                    actual_lats = da_sub.coords["lat"].values
-                    actual_lons = _lons
-                else:
-                    da_sub = da.sel(
-                        lat=slice(lat_min, lat_max),
-                        lon=slice(lon_min, lon_max),
-                    )
-
-                    tb = da_sub.values
-                    actual_lats = da_sub.coords["lat"].values
-                    actual_lons = da_sub.coords["lon"].values
+                # Subset spatially, wrap-aware. A box straddling ±180 comes
+                # back as two pieces concatenated west-to-east; the OPeNDAP
+                # subset URL requests the full lon axis in that case so both
+                # pieces exist in the file. If either piece is still empty
+                # (truncated file), this raises into the except below and the
+                # next source is tried instead of serving a mislabeled chip.
+                tb, actual_lats, actual_lons = _sel_latlon_wrap(
+                    da, lat_min, lat_max, lon_min, lon_max, xr)
 
                 ds.close()
                 os.unlink(tmp.name)
@@ -1596,16 +1605,27 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
                         f"E={actual_bounds['east']:.2f}"
                     )
 
-                    # Validate subset covers at least ~50% of requested domain.
-                    # OPeNDAP subsets can sometimes return truncated data.
-                    expected_range = 2 * MERGIR_HALF_DOMAIN  # 20°
+                    # Validate the subset covers the requested domain. The old
+                    # 50% threshold let a dateline frame missing its wrapped
+                    # segment (12° of 20° = 60%) through, and the requested-
+                    # bounds labeling below then stretched 12° of pixels across
+                    # a declared 20° box — the storm drew east of the crosshair
+                    # (Genevieve 2014 at 178°E, 2026-08-25 report). Strict 95%
+                    # on lon (no legitimate shortfall exists — the wrap handles
+                    # ±180); lat measured against the CLAMPED expectation so
+                    # high-latitude storms at the grid's 60° edge still pass.
+                    expected_lat_range = (min(center_lat + MERGIR_HALF_DOMAIN, 60.0)
+                                          - max(center_lat - MERGIR_HALF_DOMAIN, -60.0))
+                    expected_lon_range = 2 * MERGIR_HALF_DOMAIN
                     actual_lat_range = actual_bounds["north"] - actual_bounds["south"]
                     actual_lon_range = actual_bounds["east"] - actual_bounds["west"]
-                    if actual_lat_range < expected_range * 0.5 or actual_lon_range < expected_range * 0.5:
+                    if (actual_lat_range < expected_lat_range * 0.95
+                            or actual_lon_range < expected_lon_range * 0.95):
                         logger.warning(
-                            f"MergIR: {url_label} subset too small "
+                            f"MergIR: {url_label} subset TRUNCATED "
                             f"({actual_lat_range:.1f}° lat × {actual_lon_range:.1f}° lon, "
-                            f"expected ~{expected_range}°), trying next source"
+                            f"expected {expected_lat_range:.1f}° × {expected_lon_range:.1f}°), "
+                            f"trying next source"
                         )
                         continue
 
@@ -1624,9 +1644,13 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
                     # Use REQUESTED bounds (not actual) for frame-to-frame
                     # consistency — avoids jitter/cropping in animation.
                     # Actual vs requested differs by <0.5° (sub-pixel).
+                    # lat clamped to the MergIR grid edge (±60): claiming
+                    # bounds beyond the data stretches the chip exactly like
+                    # the dateline bug did. Lon stays unclamped — the wrap
+                    # concatenation really does span the requested range.
                     requested_bounds = {
-                        "south": center_lat - MERGIR_HALF_DOMAIN,
-                        "north": center_lat + MERGIR_HALF_DOMAIN,
+                        "south": max(center_lat - MERGIR_HALF_DOMAIN, -60.0),
+                        "north": min(center_lat + MERGIR_HALF_DOMAIN, 60.0),
                         "west": center_lon - MERGIR_HALF_DOMAIN,
                         "east": center_lon + MERGIR_HALF_DOMAIN,
                     }
@@ -1724,11 +1748,12 @@ def _load_gridsat_subset_inner(target_dt, center_lat, center_lon, requests_mod, 
     lon_min = center_lon - GRIDSAT_HALF_DOMAIN
     lon_max = center_lon + GRIDSAT_HALF_DOMAIN
 
-    # Clamp to GridSat domain
+    # Clamp lat to GridSat domain. Lon is deliberately NOT clamped: a box
+    # straddling ±180 keeps its unwrapped range and _sel_latlon_wrap selects
+    # the two pieces — the old clamp dropped everything across the dateline
+    # while the requested bounds still claimed 20°, mislabeling the chip.
     lat_min = max(lat_min, -70.0)
     lat_max = min(lat_max, 70.0)
-    lon_min = max(lon_min, -180.0)
-    lon_max = min(lon_max, 180.0)
 
     # Strategy 1: OPeNDAP via THREDDS (efficient server-side subsetting)
     # Requires the netCDF4 C library for DAP protocol support
@@ -1758,15 +1783,10 @@ def _load_gridsat_subset_inner(target_dt, center_lat, center_lon, requests_mod, 
             if "time" in da.dims:
                 da = da.isel(time=0)
 
-            # Spatial subset
-            da_sub = da.sel(
-                lat=slice(lat_min, lat_max),
-                lon=slice(lon_min, lon_max),
-            )
-
-            tb = da_sub.values
-            actual_lats = da_sub.coords["lat"].values
-            actual_lons = da_sub.coords["lon"].values
+            # Spatial subset, wrap-aware (the DAP handle spans the full grid,
+            # so both antimeridian pieces are always available here)
+            tb, actual_lats, actual_lons = _sel_latlon_wrap(
+                da, lat_min, lat_max, lon_min, lon_max, xr)
             ds.close()
 
             if tb is not None and tb.size > 0 and len(actual_lats) > 1 and len(actual_lons) > 1:
@@ -1860,14 +1880,10 @@ def _load_gridsat_subset_inner(target_dt, center_lat, center_lon, requests_mod, 
         if "time" in da.dims:
             da = da.isel(time=0)
 
-        da_sub = da.sel(
-            lat=slice(lat_min, lat_max),
-            lon=slice(lon_min, lon_max),
-        )
-
-        tb = da_sub.values
-        actual_lats = da_sub.coords["lat"].values
-        actual_lons = da_sub.coords["lon"].values
+        # Wrap-aware subset — the downloaded file spans the full grid, so both
+        # antimeridian pieces are always available here
+        tb, actual_lats, actual_lons = _sel_latlon_wrap(
+            da, lat_min, lat_max, lon_min, lon_max, xr)
         ds.close()
         os.unlink(tmp.name)
         tmp = None
