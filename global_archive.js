@@ -294,8 +294,14 @@ var IR_COLORMAPS = {};
     ]);
 
     // Dvorak BD-curve grayscale (BW) — from satcmaps.bd05()
-    // Exact operational BD enhancement with stepped cold bands:
-    //   +30 to +9°C  (303–282K): black(0) → white(255) ramp
+    // Operational BD enhancement with stepped cold bands, ONE deliberate
+    // deviation: bd05 ramps the warm side +30..+9°C to full white (255),
+    // which renders a warm EYE (~+5..+15°C) the same white as the -69/-75°C
+    // W band — on Sam 2021 the eye visually merged with the eyewall ring and
+    // the black-band cloud beside it read as a displaced "eye".  The warm
+    // ramp therefore tops out at light gray 210: pure white is unique to
+    // the W band, and a warm eye reads as a bright-gray disc inside it.
+    //   +30 to +9°C  (303–282K): black(0) → light gray(210) ramp  [bd05: 255]
     //   +9  to -30°C (282–243K): gray 109 → 202 ramp
     //   -30 to -41°C (243–232K): flat gray 60
     //   -41 to -53°C (232–220K): flat gray 110
@@ -331,8 +337,9 @@ var IR_COLORMAPS = {};
                 // -30 to +9°C: gray ramp 202 → 109
                 gray = Math.round(202 + (tb - 243) * (109 - 202) / (282 - 243));
             } else if (tb <= 303) {
-                // +9 to +30°C: white(255) → black(0)
-                gray = Math.round(255 + (tb - 282) * (0 - 255) / (303 - 282));
+                // +9 to +30°C: light gray(210) → black(0); capped below the
+                // W band's 255 so a warm eye can never impersonate it
+                gray = Math.round(210 + (tb - 282) * (0 - 210) / (303 - 282));
             } else {
                 gray = 0;        // above +30°C (black)
             }

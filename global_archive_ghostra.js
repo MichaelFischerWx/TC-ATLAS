@@ -1825,8 +1825,9 @@
            array of unknown provenance to fill the line in. */
         var ho = (st.lho && st.lho_key === (st.lt ? 'lt' : 't')) ? st.lho : null;
         return st.lt
-            ? { t: st.lt, gp: st.lp, bp: st.lbp, gv: st.lv || st.wv, bv: st.lbv || st.vw, ho: ho }
-            : { t: st.t, gp: st.duo || st.g2, bp: st.p, gv: st.wv, bv: st.vw, ho: ho };
+            ? { t: st.lt, gp: st.lp, bp: st.lbp, gv: st.lv || st.wv, bv: st.lbv || st.vw, ho: ho,
+                fl: st.lvfill || null }
+            : { t: st.t, gp: st.duo || st.g2, bp: st.p, gv: st.wv, bv: st.vw, ho: ho, fl: null };
     }
 
     function valsAt(sid, ms) {
@@ -2074,7 +2075,25 @@
            pick uses, so the marker and the "GHOST peak" chip can never
            disagree. Coincident peaks (within a line width) collapse to a
            single line so the chart never shows a fake double marker. */
-        var iPk = peakIdx(S.t, S.gp, -1), iVk = peakIdx(S.t, S.gv, +1);
+        /* v5.1 wind fill: filled values (S.fl) draw DASHED and may not set
+           the peak marker — same rule as the publisher's ghost_peak_kt. */
+        var gvSolid = S.gv, gvFill = null, anyFill = false;
+        if (S.gv && S.fl) {
+            gvSolid = []; gvFill = [];
+            for (var fi = 0; fi < S.gv.length; fi++) {
+                var isF = !!S.fl[fi];
+                anyFill = anyFill || (isF && S.gv[fi] != null);
+                gvSolid.push(isF ? null : S.gv[fi]);
+                // fill path carries its own points plus the adjacent solid
+                // point on each side, so the dashes meet the solid line
+                var nearF = isF || !!S.fl[fi - 1] || !!S.fl[fi + 1];
+                gvFill.push(nearF ? S.gv[fi] : null);
+            }
+            if (!anyFill) { gvSolid = S.gv; gvFill = null; }
+        }
+        var gvForPeak = (gvSolid && gvSolid.some(function (v) { return v != null; }))
+            ? gvSolid : S.gv;
+        var iPk = peakIdx(S.t, S.gp, -1), iVk = peakIdx(S.t, gvForPeak, +1);
         var xPk = iPk >= 0 ? clampX(Xi(iPk)) : null;
         var xVk = iVk >= 0 ? clampX(Xi(iVk)) : null;
         function peakLine(x, cls) {
@@ -2117,14 +2136,23 @@
             ylab(Yp, rp) + ylab(Yv, rv) + ticks +
             line(S.bp, Yp, 'var(--slate)', 1.5) + line(S.ho, Yp, '#f43f5e', 1.2, 1) +
             line(S.gp, Yp, '#f43f5e', 1.9) +
-            line(S.bv, Yv, 'var(--slate)', 1.5) + line(S.gv, Yv, '#f43f5e', 1.9) +
+            line(S.bv, Yv, 'var(--slate)', 1.5) +
+            (gvFill ? line(gvFill, Yv, '#f43f5e', 1.4, 1) : '') +
+            line(gvSolid, Yv, '#f43f5e', 1.9) +
             vdmMarks(st, X, Yp, Yv) +
             peakLines +
             '<line id="gc-cur" class="gc-cur" x1="0" x2="0" y1="' + PT + '" y2="' + (yv0 + HV) + '"/>' +
             '<line id="gc-hov" class="gc-hov" x1="0" x2="0" y1="' + PT + '" y2="' + (yv0 + HV) + '" style="display:none"/>' +
             '</svg>' +
             '<div class="gra-chart-key"><b style="color:#f43f5e">—</b> GHOST &nbsp; ' +
-            '<b style="color:var(--slate)">—</b> best track &nbsp; ' + hoKey + vdmKey +
+            '<b style="color:var(--slate)">—</b> best track &nbsp; ' +
+            (anyFill ? '<b style="color:#f43f5e">- -</b> <span title="The direct ' +
+                'wind head is withheld on QC-masked frames (overland or ' +
+                'output-spike); the dashed wind is filled from the published ' +
+                'pressure (AL: min with the raw wind head) and is excluded ' +
+                'from every published metric and the storm peak.">wind filled ' +
+                'from P<sub>min</sub> (QC gap)</span> &nbsp; ' : '') +
+            hoKey + vdmKey +
             natKey + recKey + peakKey + '</div>' +
             '<div id="gra-chart-read" class="gra-chart-read"></div>';
 
