@@ -788,6 +788,38 @@ def _get_extracted_frames(sid: str, storm_lon: float = 0.0) -> list | None:
     return frames if frames else None
 
 
+def _hursat_frame_near(sid: str, frame_dt: datetime, storm_lon: float = 0.0,
+                       tol_minutes: float = 90.0):
+    """The HURSAT frame tuple (dt_str, nc_path[, satellite]) closest in time
+    to frame_dt, or None if nothing lands within tol_minutes.
+
+    HURSAT may ONLY be matched by time, never by a shared index: the MergIR
+    frame index space is 3-hourly over the IBTrACS track, while HURSAT's file
+    list starts on its own date and has its own gaps.  Indexing one with the
+    other served Nida 2009's 11-25 18:00 slot with imagery from 11-27 15:00 —
+    a weakening storm, crop centred 5° away — under the original label."""
+    if frame_dt is None:
+        return None
+    try:
+        frames = _get_extracted_frames(sid, storm_lon=storm_lon)
+    except Exception:
+        return None
+    if not frames:
+        return None
+    best, best_off = None, None
+    for ft in frames:
+        try:
+            fdt = datetime.fromisoformat(ft[0].replace("Z", "+00:00").split("+")[0])
+        except (ValueError, TypeError):
+            continue
+        off = abs((fdt - frame_dt).total_seconds())
+        if best_off is None or off < best_off:
+            best, best_off = ft, off
+    if best is None or best_off > tol_minutes * 60.0:
+        return None
+    return best
+
+
 def _parse_datetime_from_filename(filename: str) -> str:
     """
     Extract datetime from HURSAT filename.
@@ -2459,16 +2491,12 @@ def ir_frame(
             except ValueError:
                 logger.warning(f"ir_frame: unparseable dt={dt!r} for {sid} frame {frame_idx}")
 
-        # If we don't have frame_dt from meta, try to get it from HURSAT frame list
-        if frame_dt is None:
-            try:
-                hursat_frames = _get_extracted_frames(sid, storm_lon=lon or 0.0)
-                if hursat_frames and frame_idx < len(hursat_frames):
-                    dt_str = hursat_frames[frame_idx][0]
-                    frame_dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00").split("+")[0])
-            except Exception:
-                pass
-
+        # No meta and no client dt: there is no trustworthy time for this
+        # index, so fall through to the HURSAT-native path below, whose list
+        # and labels at least agree with each other.  (This used to read
+        # hursat_frames[frame_idx][0] as the "MergIR" time — the same
+        # index-space confusion as the render fallback, but worse: it then
+        # fetched MergIR imagery at that wrong time.)
         if frame_dt is None:
             # Can't determine frame time — fall back to HURSAT path
             logger.warning(f"ir_frame: no frame datetime for {sid} frame {frame_idx}, falling back to HURSAT")
@@ -2493,16 +2521,21 @@ def ir_frame(
                 half_domain = GRIDSAT_HALF_DOMAIN
                 ir_scale = 4  # 8km → 4x upscale
 
+        hursat_dt_str = None
+        hursat_satellite = None
         if frame_2d is None:
-            # Final cascade: try HURSAT if available
+            # Final cascade: HURSAT, matched by TIME (see _hursat_frame_near).
+            # A frame_idx here indexes the MergIR list and means nothing to
+            # HURSAT's own file list.  If no HURSAT scan lands within the
+            # tolerance, 502 honestly rather than serve another hour's storm.
             try:
-                hursat_frames = _get_extracted_frames(sid, storm_lon=frame_lon)
-                if hursat_frames and frame_idx < len(hursat_frames):
-                    frame_tuple = hursat_frames[frame_idx]
-                    nc_path = frame_tuple[1]
-                    frame_2d, ir_bounds = _load_frame_from_nc(nc_path)
+                frame_tuple = _hursat_frame_near(sid, frame_dt, storm_lon=frame_lon)
+                if frame_tuple:
+                    frame_2d, ir_bounds = _load_frame_from_nc(frame_tuple[1])
                     if frame_2d is not None:
                         actual_source = "hursat"
+                        hursat_dt_str = frame_tuple[0]
+                        hursat_satellite = frame_tuple[2] if len(frame_tuple) > 2 else None
                         half_domain = GRIDSAT_HALF_DOMAIN  # Use consistent domain
                         ir_scale = 4
             except Exception as e:
@@ -2536,6 +2569,13 @@ def ir_frame(
             "bounds": bounds,
             **tb_encoded,
         }
+        # A substituted scan declares its own time so the viewer can say
+        # "nearest available scan, taken HH:MMZ" instead of silently wearing
+        # the requested frame's label.
+        if actual_source == "hursat" and hursat_dt_str:
+            result["actual_datetime"] = hursat_dt_str
+            if hursat_satellite:
+                result["satellite"] = hursat_satellite
 
     else:
         # HURSAT path (default)

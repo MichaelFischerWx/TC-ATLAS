@@ -1305,6 +1305,22 @@
        global_archive.js:decodeTbData reads. */
     function paint(j) {
         $('gra-ir-status').textContent = '';
+        /* A substituted scan must say so on its face. When the primary mosaic
+           has no image for the requested hour, the API now serves the nearest
+           scan from the coarser storm-centered archive and declares the scan's
+           OWN time — before it did, Nida 2009's 18:00 Nov 25 slot silently
+           wore imagery from Nov 27. */
+        var sub = $('gra-ir-sub');
+        if (sub) {
+            if (j.source === 'hursat') {
+                var at = (j.actual_datetime || '').replace('T', ' ').slice(0, 16);
+                sub.textContent = 'backup scan' + (at ? ' · taken ' + at + 'Z' : '');
+                sub.title = 'The primary satellite mosaic has no image for this hour, ' +
+                    'so this is the nearest scan from a coarser storm-centered archive' +
+                    (at ? ', taken ' + at + 'Z' : '') + '. GHOST does not read this ' +
+                    'picture — the estimate is unaffected.';
+            } else { sub.textContent = ''; sub.title = ''; }
+        }
         var bin = atob(j.tb_data), raw = new Uint8Array(bin.length), i;
         for (i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i);
         tb = { raw: raw, rows: j.tb_rows, cols: j.tb_cols, vmin: j.tb_vmin,
