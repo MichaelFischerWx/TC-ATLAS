@@ -11138,16 +11138,13 @@ _TCA_FAM_EXCL_MIN_EXP = 4.0
 _TCA_FAM_EXCL_KM = 1500.0
 
 
-def _tca_family_mean(fam_clusters):
-    """Deduplicated NET mean track across a family's clusters — the
-    'what does the wave as a whole do' track a per-cluster mean cannot
-    show in a start/stop/re-develop scenario. Pools every member of
-    every constituent, deduping per sample with the merge pass's rule
-    (keep the entry whose first-genesis sits closest to the largest
-    cluster's peak), then averages per valid time. Positions only by
-    design: a per-tau family mean mixes lifecycle stages (early
-    developers dissipating while late ones spin up), so the wind values
-    that ride along must not be presented as an intensity forecast."""
+def _tca_family_members(fam_clusters):
+    """Deduplicated union member set across a family's clusters — the
+    merge pass's per-sample rule (keep the entry whose first-genesis
+    sits closest to the largest cluster's peak). Returns
+    {sample_key: {"points": [...]}} — the wave train's full membership,
+    each realization counted once. Shared by the net-mean computation
+    and the whole-family detail endpoint so they can never disagree."""
     dom = max(fam_clusters, key=lambda c: c["n_members_total"])
     best_per_sample: dict = {}
     for c in fam_clusters:
@@ -11164,7 +11161,18 @@ def _tca_family_mean(fam_clusters):
             cur = best_per_sample.get(sk)
             if cur is None or d < cur[0]:
                 best_per_sample[sk] = (d, pts)
-    mean_pts = _tca_mean_track([pts for _d, pts in best_per_sample.values()])
+    return {sk: {"points": pts} for sk, (_d, pts) in best_per_sample.items()}
+
+
+def _tca_family_mean(fam_clusters):
+    """Deduplicated NET mean track across a family's clusters — the
+    'what does the wave as a whole do' track a per-cluster mean cannot
+    show in a start/stop/re-develop scenario. Positions only by
+    design: a per-tau family mean mixes lifecycle stages (early
+    developers dissipating while late ones spin up), so the wind values
+    that ride along must not be presented as an intensity forecast."""
+    members = _tca_family_members(fam_clusters)
+    mean_pts = _tca_mean_track([m["points"] for m in members.values()])
     return {"points": mean_pts}
 
 
@@ -11790,6 +11798,94 @@ def get_weatherlab_genesis_cluster(
             "family": family,
             "members": match["members"],
             "ensemble_mean": match["ensemble_mean"],
+            "cycle_age_hours": round(cycle_age_h, 2)
+                                if cycle_age_h is not None else None,
+            "next_cycle_eta_hours": round(next_eta_h, 2)
+                                    if next_eta_h is not None else None,
+            "fetched_at": now.isoformat(),
+        },
+        headers={"Cache-Control": "public, max-age=900"},
+    )
+
+
+@router.get("/weatherlab-genesis-family/{family_id}")
+def get_weatherlab_genesis_family(
+    family_id: str,
+    grid_deg: float = 3.0,
+    peak_min_members: int = 8,
+    assign_radius_km: float = 1000.0,
+    time_window_h: float = 60.0,
+    cluster_min_members: int = 25,
+    same_system_km: float = 500.0,
+    variant: str = _GENESIS_VARIANT_DEFAULT,
+    init_time: str = None,
+    merge_km: float = _TCA_MERGE_DEFAULT_KM,
+    merge_overlap_h: float = 48.0,
+):
+    """Whole-wave-train detail: the deduplicated union member set of one
+    wave family (fam-N), shaped like /weatherlab-genesis-cluster/{id} so
+    the frontend's existing detail modal renders it unchanged — density
+    plumes, member spaghetti, and the genesis-time histogram across the
+    ENTIRE family rather than one contributing genesis cluster. The
+    ensemble_mean is the family net mean (positions meaningful; do not
+    present its winds as an intensity forecast)."""
+    variant_n = _genesis_variant_norm(variant)
+    init_time, params, clusters, dh = _tca_get_or_compute_clusters(
+        grid_deg, peak_min_members, assign_radius_km,
+        time_window_h, cluster_min_members, same_system_km,
+        variant=variant_n, init_time=init_time,
+        merge_km=merge_km, merge_overlap_h=merge_overlap_h)
+    if clusters is None:
+        raise HTTPException(status_code=404, detail="No cycle data available")
+    now = _dt.now(timezone.utc)
+    used_date = used_hour = None
+    cycle_age_h = None
+    if dh is not None:
+        used_date, used_hour = dh
+        cycle_age_h = (now - _genesis_cycle_dt(used_date, used_hour)).total_seconds() / 3600.0
+    ens_size = ((_genesis_variant_clusters_size(variant_n, used_date, used_hour)
+                 if used_date else None)
+                or (1000 if variant_n == "large" else 50))
+    families = _tca_get_families(init_time, params, clusters, ens_size)
+    fam = next((f for f in families if f["family_id"] == family_id), None)
+    if fam is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Family {family_id} not found in cycle {init_time}")
+    fam_clusters = [c for c in clusters
+                    if c["track_id"] in fam["cluster_ids"]]
+    members = _tca_family_members(fam_clusters)
+    dom = max(fam_clusters, key=lambda c: c["n_members_total"])
+    contrib: dict = {}
+    for c in fam_clusters:
+        for tid, cnt in (c.get("contrib_track_ids") or {}).items():
+            contrib[tid] = contrib.get(tid, 0) + cnt
+    label = "Wave family: " + " + ".join(fam["cluster_shorts"])
+    next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time)
+    return JSONResponse(
+        content={
+            "model": _genesis_variant_label(variant_n),
+            "variant": variant_n,
+            "ensemble_size": ens_size,
+            "method": "tcatlas",
+            "init_time": init_time,
+            "track_id": family_id,
+            "display_label": label,
+            "display_short": family_id,
+            "n_members": len(members),
+            "n_members_total": len(members),
+            "fraction": fam["union_fraction"],
+            # Anchor fields from the dominant constituent so trend/anchor
+            # consumers behave like a big cluster.
+            "peak_wind": dom["peak_wind"],
+            "peak_tau": dom["peak_tau"],
+            "peak_lat": dom["peak_lat"],
+            "peak_lon": dom["peak_lon"],
+            "peak_mean_tau": dom["peak_mean_tau"],
+            "contrib_track_ids": contrib,
+            "family": fam,
+            "members": members,
+            "ensemble_mean": fam.get("family_mean") or {"points": []},
             "cycle_age_hours": round(cycle_age_h, 2)
                                 if cycle_age_h is not None else None,
             "next_cycle_eta_hours": round(next_eta_h, 2)

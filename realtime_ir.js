@@ -15599,6 +15599,66 @@
         }
     })();
 
+    // Whole-wave-train viewer: fetch the family's deduplicated union
+    // member set from /weatherlab-genesis-family/{id} and open it in the
+    // standard detail modal — density plume, member spaghetti, and the
+    // genesis-time histogram across the ENTIRE family rather than one
+    // contributing genesis cluster. Seeds the meta + detail cache the
+    // same way the invest near-search does, so openGenesisDetail's
+    // cachedFull short-circuit renders it without another fetch.
+    window._irOpenGenesisFamily = function (familyId) {
+        _rtToast('Loading wave-family ensemble…');
+        _ga('rt_genesis_family_open', { family_id: familyId });
+        var curParams = _genesisCurrentClusterParams();
+        var qs = '?' + Object.keys(curParams).map(function (k) {
+            return k + '=' + encodeURIComponent(curParams[k]);
+        }).join('&') + _genesisQueryString(false);
+        fetch(API_BASE + '/ir-monitor/weatherlab-genesis-family/'
+                + encodeURIComponent(familyId) + qs, { cache: 'no-store' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (json) {
+                // Family member names through the post-match label map so
+                // a matched sibling reads "96L", not its old cluster code.
+                var ids = (json.family && json.family.cluster_ids) || [];
+                var shorts = (json.family && json.family.cluster_shorts) || [];
+                var names = [];
+                for (var k = 0; k < ids.length; k++) {
+                    names.push(_genesisFamShort(ids[k], shorts[k]));
+                }
+                var label = 'Wave family: '
+                    + (names.length ? names.join(' + ') : familyId);
+                var mp0 = ((json.ensemble_mean || {}).points || [])[0] || {};
+                _genesisDisturbanceMeta[familyId] = {
+                    label: label,
+                    short: familyId,
+                    family: json.family || null,
+                    genesisLat: mp0.lat,
+                    genesisLon: mp0.lon,
+                    fraction: json.fraction,
+                    fractionText: json.fraction != null
+                        ? (json.fraction * 100).toFixed(0) + '%' : '',
+                    peakWind: json.peak_wind,
+                    members: json.members,
+                    ensembleMean: json.ensemble_mean,
+                    source: 'tcatlas',
+                    initTime: json.init_time,
+                    variant: json.variant,
+                    ensembleSize: json.ensemble_size,
+                };
+                json.display_label = label;
+                _genesisDetailCache[familyId + '@'
+                    + (json.init_time || 'latest') + '#' + json.variant] = json;
+                openGenesisDetail(familyId);
+            })
+            .catch(function (err) {
+                console.warn('[Genesis] family fetch failed', err);
+                _rtToast('Could not load the wave-family ensemble');
+            });
+    };
+
     // Wave family containing the given cluster track_id, or null. Families
     // only exist on the server-cluster path (the client-side fallback
     // clustering computes none), and only for the currently-loaded index.
@@ -15975,6 +16035,8 @@
                         + 'ribbon follows the family&rsquo;s deduplicated '
                         + 'net mean track</span>'
                     : '')
+                + '<br><span style="opacity:0.75; font-size:0.85em;">'
+                + 'Click for the whole wave-train detail →</span>'
                 + '</div>';
             var famSegs = splitAtAntimeridian(ribbon || chain);
             for (var si = 0; si < famSegs.length; si++) {
@@ -15988,6 +16050,14 @@
                 try {
                     famLink.bindTooltip(famTipHtml, { sticky: true });
                 } catch (e) { /* non-fatal */ }
+                (function (fid) {
+                    famLink.on('click', function (e) {
+                        if (L.DomEvent && L.DomEvent.stopPropagation) {
+                            L.DomEvent.stopPropagation(e);
+                        }
+                        window._irOpenGenesisFamily(fid);
+                    });
+                })(famF.family_id);
                 _rtGenesisLayers.push(famLink);
             }
         }
@@ -17306,9 +17376,16 @@
                                (_famForSub.cluster_shorts || [])[fn]));
             }
             if (!_famNames.length) _famNames = _famForSub.cluster_shorts;
-            subParts.push('<span class="rt-genesis-fam-pill" title="'
-                + _famTip.replace(/"/g, '&quot;') + '">Wave family: '
-                + _famNames.join(' + ') + ' · '
+            // Clickable from a CLUSTER's modal (opens the whole-family
+            // view); inert when the family view itself is already open.
+            var _famSelf = json.track_id === _famForSub.family_id;
+            subParts.push('<span class="rt-genesis-fam-pill"'
+                + (_famSelf ? '' : ' style="cursor:pointer;"'
+                    + ' onclick="window._irOpenGenesisFamily(\''
+                    + _famForSub.family_id + '\')"')
+                + ' title="' + _famTip.replace(/"/g, '&quot;')
+                + (_famSelf ? '' : ' Click to view the whole wave train.')
+                + '">Wave family: ' + _famNames.join(' + ') + ' · '
                 + Math.round(100 * (_famForSub.union_fraction || 0))
                 + '% combined</span>');
         }
