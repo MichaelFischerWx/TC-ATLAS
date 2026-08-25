@@ -180,7 +180,7 @@
     var fc = { type: 'FeatureCollection', features: [] };
     var mode = 'gp', sortKey = 'ghost', basinsOn = {}, visSids = null;
     var sel = null, selLine = null, presetOn = false;
-    var posMarker = null, selLonMid = null;   // frame position marker + track unwrap ref
+    var posMarker = null, posPulse = null, selLonMid = null;   // frame position marker (+pulse halo) + track unwrap ref
     var stormCache = {}, irMeta = {}, irFrames = {}, ir = null, tb = null;
     /* Per-storm sidecars the chart / chip fetch lazily:
          fdeckCache[sid]  aircraft fix times from the archive's /global/fdeck
@@ -968,7 +968,18 @@
            still puts the most intense storm first in either unit. */
         var kt = funit === 'kt';
         var gval = function (s) { var v = kt ? s.ghost_peak_kt : s.ghost_min_hpa; return v == null ? null : v; };
-        var bval = function (s) { var v = kt ? s.bt_peak_kt : s.bt_min_hpa; return v == null ? null : v; };
+        /* BT column: prefer the TRUE best-track extreme (bt_v_peak /
+           bt_p_peak — computed from the source series INCLUDING non-synoptic
+           special entries; Michael 2018's Cat-5 140 kt / 919 hPa live on a
+           17:30Z special the 3-hourly grid never sees). The frame-matched
+           value is the fallback for trees that predate the field, and the
+           GHOST column stays grid-limited by construction — GHOST only
+           exists on published frames, so its peak IS the grid peak. */
+        var bval = function (s) {
+            var v = kt ? (s.bt_v_peak != null ? s.bt_v_peak : s.bt_peak_kt)
+                       : (s.bt_p_peak != null ? s.bt_p_peak : s.bt_min_hpa);
+            return v == null ? null : v;
+        };
         var rank = function (v) { return v === null ? 9e9 : (kt ? -v : v); };
         var deep = function (s) { return rank(gval(s)); };
         var key = {
@@ -1012,7 +1023,7 @@
                 '<div class="gra-num gra-g">' + (gv !== null ? gv.toFixed(kt ? 0 : 1) : '—') +
                 heldoutCell(s) + '</div>' +
                 '<div class="gra-meta">' + s.year + ' · ' + s.basin + ' · ' + s.n + ' fr</div>' +
-                '<div class="gra-num">BT ' + (bv !== null ? bv.toFixed(0) : '—') +
+                '<div class="gra-num" title="official best-track peak (includes non-synoptic special entries); Δ = GHOST at published frames minus this">BT ' + (bv !== null ? bv.toFixed(0) : '—') +
                 (d !== null ? ' <span style="color:' + (dBlue ? '#2a78d6' : '#e34948') + '">' +
                     (d > 0 ? '+' : '−') + Math.abs(d).toFixed(0) + '</span>' : '') +
                 '</div></div>';
@@ -1178,6 +1189,15 @@
             while (selLonMid - lon > 180) lon += 360;
         }
         if (posMarker) { gmap.removeLayer(posMarker); posMarker = null; }
+        if (posPulse) { gmap.removeLayer(posPulse); posPulse = null; }
+        /* Pulsing halo UNDER the dot: the detail panel hides most of the map,
+           so the one visible clue to "where is this frame" needs to move —
+           a static 7-px dot at the edge of a busy track simply vanishes.
+           DOM marker (divIcon) because GL circleMarkers can't animate. */
+        posPulse = L.marker([lat, lon], {
+            icon: L.divIcon({ className: 'gra-pos-pulse', html: '<i></i><i></i>' }),
+            interactive: false, keyboard: false
+        }).addTo(gmap);
         posMarker = L.circleMarker([lat, lon], {
             radius: 7, color: '#ffffff', weight: 2.5,
             fillColor: '#f43f5e', fillOpacity: 0.95

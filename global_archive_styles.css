@@ -3215,6 +3215,21 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .gra-chart-key .gc-peak-key i.v { border-left-color: #f59e0b; }
 .gra-chart-key .gc-peak-key sub { font-size: 0.5rem; }
+/* Current-frame position on the map: expanding rings under the red dot so a
+   selected storm's location reads at a glance even beside a dense track.
+   Sized here (not iconSize) — the GL facade's divIcon ignores iconSize. */
+.gra-pos-pulse { width: 52px; height: 52px; position: relative; pointer-events: none; }
+.gra-pos-pulse i {
+    position: absolute; inset: 0; border-radius: 50%;
+    border: 2.5px solid #f43f5e; opacity: 0;
+    animation: gra-pos-ping 2.2s ease-out infinite;
+}
+.gra-pos-pulse i + i { animation-delay: 1.1s; }
+@keyframes gra-pos-ping {
+    0%   { transform: scale(.18); opacity: .9; }
+    75%  { transform: scale(1);   opacity: 0; }
+    100% { transform: scale(1);   opacity: 0; }
+}
 .gra-chart-key {
     font-size: 0.58rem; color: var(--slate); margin-top: 3px; line-height: 1.5;
 }
