@@ -49,6 +49,7 @@ var allMarkerMap = {};       // SID → L.marker (for lookup)
 var trackLayer = null;       // L.layerGroup for browser track
 var detailTrackLayer = null; // L.layerGroup for detail track
 var activeBasins = ['ALL'];  // Active basin filter
+var activeMonths = ['ALL'];  // Active month filter (1-12 numbers, or ['ALL'])
 var filterDebounce = null;   // Debounce timer
 var mapViewMode = 'tracks'; // 'cluster' or 'tracks'
 var trackViewLayer = null;   // L.layerGroup for track-view polylines
@@ -1774,7 +1775,13 @@ function renderTracks(storms) {
     if (!trackViewLayer) return;
     trackViewLayer.clearLayers();
 
-    var showMarkers = storms.length <= 3000;
+    // Genesis/LMI dot toggles: either, both, or neither. The ≤3000-storm
+    // cap keeps the canvas responsive with the full 13k-storm archive.
+    var genChk = document.getElementById('toggle-genesis-dots');
+    var lmiChk = document.getElementById('toggle-lmi-dots');
+    var wantGenesis = !genChk || genChk.checked;
+    var wantLmi = !lmiChk || lmiChk.checked;
+    var showMarkers = storms.length <= 3000 && (wantGenesis || wantLmi);
 
     storms.forEach(function (s) {
         var track = allTracks[s.sid];
@@ -1817,7 +1824,7 @@ function renderTracks(storms) {
         }
 
         // Genesis marker
-        if (showMarkers) {
+        if (showMarkers && wantGenesis) {
             var gen = _trackGenesisPoint(track);
             if (gen) {
                 L.circleMarker([gen.la, gen.lo], {
@@ -1828,8 +1835,10 @@ function renderTracks(storms) {
                  .on('click', function () { selectStorm(s); })
                  .addTo(trackViewLayer);
             }
+        }
 
-            // LMI marker
+        // LMI marker
+        if (showMarkers && wantLmi) {
             var lmiPt = null, lmiW = -1;
             for (var k = 0; k < pts.length; k++) {
                 if (pts[k].w != null && pts[k].w > lmiW) { lmiW = pts[k].w; lmiPt = pts[k]; }
@@ -1880,6 +1889,11 @@ function _addTrackPolyline(coords, isTC, segColor, storm) {
     });
     line.addTo(trackViewLayer);
 }
+
+window.onDotToggleChange = function () {
+    _ga('ga_dot_toggle', {});
+    if (mapViewMode === 'tracks') renderTracks(filteredStorms);
+};
 
 window.setMapView = function (mode) {
     if (mapViewMode !== mode) _ga('ga_map_view_change', { mode: mode });
@@ -2093,6 +2107,59 @@ window.toggleBasin = function (btn) {
     updateHashSilently();
 };
 
+window.toggleMonth = function (btn) {
+    var month = btn.getAttribute('data-month');
+
+    if (month === 'ALL') {
+        document.querySelectorAll('.month-chip').forEach(function (c) { c.classList.remove('active'); });
+        btn.classList.add('active');
+        activeMonths = ['ALL'];
+    } else {
+        document.querySelector('.month-chip[data-month="ALL"]').classList.remove('active');
+        btn.classList.toggle('active');
+
+        activeMonths = [];
+        document.querySelectorAll('.month-chip.active').forEach(function (c) {
+            var m = c.getAttribute('data-month');
+            if (m !== 'ALL') activeMonths.push(parseInt(m, 10));
+        });
+
+        if (activeMonths.length === 0) {
+            document.querySelector('.month-chip[data-month="ALL"]').classList.add('active');
+            activeMonths = ['ALL'];
+        }
+    }
+    onFilterChange();
+};
+
+// Set of calendar months (1-12) the storm was active in, walked from
+// start_date to end_date so multi-month storms match every month they
+// touched. Dates are 'YYYY-MM-DD' strings — slice the month out rather
+// than Date-parse to avoid timezone off-by-one at month boundaries.
+// Cached per storm: applyFilters runs on every filter keystroke.
+function _stormActiveMonths(s) {
+    if (s._months) return s._months;
+    var months = {};
+    var sd = s.start_date, ed = s.end_date || s.start_date;
+    if (sd && sd.length >= 7) {
+        var y0 = parseInt(sd.slice(0, 4), 10), m0 = parseInt(sd.slice(5, 7), 10);
+        var y1 = y0, m1 = m0;
+        if (ed && ed.length >= 7) {
+            y1 = parseInt(ed.slice(0, 4), 10);
+            m1 = parseInt(ed.slice(5, 7), 10);
+        }
+        var span = (y1 - y0) * 12 + (m1 - m0);
+        // Clamp: a bad end_date shouldn't flag all 12 months
+        if (span < 0) span = 0;
+        if (span > 11) span = 11;
+        for (var i = 0; i <= span; i++) {
+            months[((m0 - 1 + i) % 12) + 1] = true;
+        }
+    }
+    s._months = months;
+    return months;
+}
+
 window.onFilterChange = function () {
     clearTimeout(filterDebounce);
     filterDebounce = setTimeout(applyFilters, 150);
@@ -2144,6 +2211,15 @@ function applyFilters() {
         if (activeBasins[0] !== 'ALL' && activeBasins.indexOf(s.basin) === -1) return false;
         // Year filter
         if (s.year < yearMin || s.year > yearMax) return false;
+        // Month filter — match if the storm was active during ANY selected month
+        if (activeMonths[0] !== 'ALL') {
+            var mset = _stormActiveMonths(s);
+            var mHit = false;
+            for (var mi = 0; mi < activeMonths.length; mi++) {
+                if (mset[activeMonths[mi]]) { mHit = true; break; }
+            }
+            if (!mHit) return false;
+        }
         // Intensity filter
         if ((s.peak_wind_kt || 0) < windMin) return false;
         // ACE filter
@@ -2201,6 +2277,10 @@ window.resetFilters = function () {
     document.querySelectorAll('.basin-chip').forEach(function (c) { c.classList.remove('active'); });
     document.querySelector('.basin-chip[data-basin="ALL"]').classList.add('active');
     activeBasins = ['ALL'];
+
+    document.querySelectorAll('.month-chip').forEach(function (c) { c.classList.remove('active'); });
+    document.querySelector('.month-chip[data-month="ALL"]').classList.add('active');
+    activeMonths = ['ALL'];
 
     filteredStorms = allStorms.slice();
     if (mapViewMode === 'tracks') {

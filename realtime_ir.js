@@ -6470,7 +6470,12 @@
                     ? '<button class="ir-popup-btn ir-popup-btn-dm" '
                         + 'onclick="window._irOpenInvestEnsemble(\'' + s.atcf_id + '\','
                         + (s.lat) + ',' + (s.lon) + ','
-                        + JSON.stringify(s.name || s.atcf_id) + ')">'
+                        // The onclick attribute is delimited by double quotes,
+                        // so the JSON string literal's own quotes must ride
+                        // along as &quot; entities — raw quotes truncate the
+                        // attribute and the button dies with a syntax error.
+                        + JSON.stringify(s.name || s.atcf_id).replace(/"/g, '&quot;')
+                        + ')">'
                         + 'DeepMind Ensemble</button>'
                     : '') +
                 '</div>';

@@ -444,7 +444,8 @@ input[type="range"].ga-range::-moz-range-thumb {
     flex-wrap: wrap;
     gap: 4px;
 }
-.basin-chip {
+.basin-chip,
+.month-chip {
     padding: 3px 10px;
     border-radius: 12px;
     font-family: 'DM Sans', sans-serif;
@@ -456,11 +457,13 @@ input[type="range"].ga-range::-moz-range-thumb {
     cursor: pointer;
     transition: all 0.15s;
 }
-.basin-chip:hover {
+.basin-chip:hover,
+.month-chip:hover {
     border-color: var(--blue);
     color: var(--text);
 }
-.basin-chip.active {
+.basin-chip.active,
+.month-chip.active {
     background: var(--blue);
     color: white;
     border-color: var(--blue);
@@ -570,6 +573,38 @@ input[type="range"].ga-range::-moz-range-thumb {
     border-color: var(--blue);
     color: #ffffff;
 }
+
+/* Genesis / LMI dot toggles (Tracks view) */
+.track-dot-toggles {
+    display: flex;
+    gap: 14px;
+    margin-top: 8px;
+}
+.dot-toggle {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+}
+.dot-toggle input[type="checkbox"] {
+    accent-color: var(--blue);
+    margin: 0;
+    cursor: pointer;
+}
+.dot-swatch {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 1px solid #fff;
+    box-shadow: 0 0 0 1px var(--border);
+    display: inline-block;
+}
+.dot-swatch-genesis { background: #60a5fa; }
+.dot-swatch-lmi { background: #f59e0b; }
 
 /* Floating map storm card */
 .map-storm-card {
@@ -3116,7 +3151,7 @@ input[type="range"].ga-range::-moz-range-thumb {
        controls worth having permanently on a small screen */
     .gra-toolbar:not(.open) > .gra-tgroup:nth-of-type(n+3) { display: none; }
     .gra-seg button { padding: 6px 10px; }        /* touch targets */
-    .basin-chip { padding: 5px 12px; }
+    .basin-chip, .month-chip { padding: 5px 12px; }
     .gra-rng input[type=range] { width: 104px; }
 
     /* The chip becomes a bottom SHEET over the page, not a card inside the

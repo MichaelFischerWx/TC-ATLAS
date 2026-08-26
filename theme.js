@@ -204,6 +204,17 @@
     // swapping. On theme:change we call .setUrl() with the matching
     // light_* or dark_* variant — Leaflet repaints the tiles in place.
     var _cartoLayers = [];
+    // CARTO now watermarks unauthenticated raster basemap tiles with
+    // "API KEY REQUIRED". Keys are free (5M tiles/month, non-commercial)
+    // and issued instantly at https://carto.com/basemaps/apikey — paste
+    // the key here and bump theme.js's ?v= token on every page.
+    var CARTO_BASEMAP_KEY = 'cb1_279y_1_ee38c6417ffd46ab745cc82a';
+    function cartoKeyed(url) {
+        if (!CARTO_BASEMAP_KEY) return url;
+        if (url.indexOf('key=') >= 0) return url;
+        return url + (url.indexOf('?') >= 0 ? '&' : '?')
+            + 'key=' + CARTO_BASEMAP_KEY;
+    }
     function cartoSwapUrl(currentUrl, theme) {
         // Map the prefix segment after cartocdn.com/<here>/{z}/...
         // We swap the leading word ("light_" ↔ "dark_") and keep the
@@ -229,7 +240,7 @@
                 && url.indexOf('basemaps.cartocdn.com') >= 0) {
                 var current = (document.documentElement.getAttribute('data-theme') === 'dark')
                     ? 'dark' : 'light';
-                var swapped = cartoSwapUrl(url, current);
+                var swapped = cartoKeyed(cartoSwapUrl(url, current));
                 var layer = origFactory(swapped, opts);
                 if (_cartoLayers.indexOf(layer) < 0) _cartoLayers.push(layer);
                 return layer;
@@ -248,7 +259,7 @@
                 if (_cartoLayers.indexOf(this) < 0) _cartoLayers.push(this);
                 var current = (document.documentElement.getAttribute('data-theme') === 'dark')
                     ? 'dark' : 'light';
-                var swapped = cartoSwapUrl(this._url, current);
+                var swapped = cartoKeyed(cartoSwapUrl(this._url, current));
                 if (swapped !== this._url) this._url = swapped;
             }
             return origOnAdd.call(this, map);
@@ -303,7 +314,7 @@
                             && typeof layer._url === 'string'
                             && layer._url.indexOf('basemaps.cartocdn.com') >= 0) {
                             if (_cartoLayers.indexOf(layer) < 0) _cartoLayers.push(layer);
-                            var swapped = cartoSwapUrl(layer._url, current);
+                            var swapped = cartoKeyed(cartoSwapUrl(layer._url, current));
                             if (swapped !== layer._url && layer.setUrl) {
                                 layer.setUrl(swapped);
                             }
@@ -324,7 +335,7 @@
             try {
                 var layer = _cartoLayers[i];
                 if (!layer || !layer._url) continue;
-                var newUrl = cartoSwapUrl(layer._url, theme);
+                var newUrl = cartoKeyed(cartoSwapUrl(layer._url, theme));
                 if (newUrl !== layer._url) layer.setUrl(newUrl);
             } catch (err) {}
         }

@@ -63,7 +63,7 @@
     <meta name="apple-mobile-web-app-title" content="TC-ATLAS">
 
     <title>Global TC Archive — TC-ATLAS</title>
-    <script src="theme.js?v=20260804a"></script>
+    <script src="theme.js?v=20260826b"></script>
     <script defer src="tc_export.js?v=20260803c"></script>
 
     <!-- Map engine: MapLibre GL + Leaflet-compat facade (lflet_gl.js). leaflet.css is
@@ -88,11 +88,11 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundles, discoverable from byte 0. Tokens MUST match
          the script tags below. -->
-    <link rel="preload" as="script" href="global_archive.js?v=20260825c">
+    <link rel="preload" as="script" href="global_archive.js?v=20260826a">
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260804b">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260825b">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260826a">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -231,6 +231,23 @@
                             </div>
                         </div>
 
+                        <label class="filter-label">Month(s)</label>
+                        <div class="basin-chips" id="month-chips">
+                            <button class="month-chip active" data-month="ALL" onclick="toggleMonth(this)">All</button>
+                            <button class="month-chip" data-month="1" onclick="toggleMonth(this)">Jan</button>
+                            <button class="month-chip" data-month="2" onclick="toggleMonth(this)">Feb</button>
+                            <button class="month-chip" data-month="3" onclick="toggleMonth(this)">Mar</button>
+                            <button class="month-chip" data-month="4" onclick="toggleMonth(this)">Apr</button>
+                            <button class="month-chip" data-month="5" onclick="toggleMonth(this)">May</button>
+                            <button class="month-chip" data-month="6" onclick="toggleMonth(this)">Jun</button>
+                            <button class="month-chip" data-month="7" onclick="toggleMonth(this)">Jul</button>
+                            <button class="month-chip" data-month="8" onclick="toggleMonth(this)">Aug</button>
+                            <button class="month-chip" data-month="9" onclick="toggleMonth(this)">Sep</button>
+                            <button class="month-chip" data-month="10" onclick="toggleMonth(this)">Oct</button>
+                            <button class="month-chip" data-month="11" onclick="toggleMonth(this)">Nov</button>
+                            <button class="month-chip" data-month="12" onclick="toggleMonth(this)">Dec</button>
+                        </div>
+
                         <label class="filter-label">Min Peak Intensity</label>
                         <div class="intensity-filter">
                             <div class="intensity-scale">
@@ -304,6 +321,16 @@
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17 C8 9, 16 5, 21 12"/></svg>
                                 Tracks
                             </button>
+                        </div>
+                        <div class="track-dot-toggles" id="track-dot-toggles">
+                            <label class="dot-toggle" title="Mark each storm's first track point (Tracks view; shown when 3,000 or fewer storms match)">
+                                <input type="checkbox" id="toggle-genesis-dots" checked onchange="onDotToggleChange()">
+                                <span class="dot-swatch dot-swatch-genesis"></span>Genesis
+                            </label>
+                            <label class="dot-toggle" title="Mark each storm's lifetime maximum intensity point (Tracks view; shown when 3,000 or fewer storms match)">
+                                <input type="checkbox" id="toggle-lmi-dots" checked onchange="onDotToggleChange()">
+                                <span class="dot-swatch dot-swatch-lmi"></span>LMI
+                            </label>
                         </div>
                     </div>
 
@@ -1352,7 +1379,7 @@
     <script defer src="lflet_gl.js?v=20260824a"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
-    <script defer src="global_archive.js?v=20260825c"></script>
+    <script defer src="global_archive.js?v=20260826a"></script>
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
