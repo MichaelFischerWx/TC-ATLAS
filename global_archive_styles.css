@@ -380,7 +380,11 @@ input[type="range"].ga-range::-moz-range-thumb {
 
 .browser-layout {
     display: flex;
-    height: calc(100vh - 52px - 42px); /* viewport minus topbar minus tabs */
+    /* Viewport minus everything above the map: body margin (8) + topbar
+       (53) + dataset-stats-strip (27) + tab row (50) = 138. The old
+       94px value predated the stats strip, so the map ran ~44px past
+       the viewport and clipped the bottom of the Saffir-Simpson legend. */
+    height: calc(100vh - 138px);
 }
 .browser-map-wrap {
     flex: 1;
