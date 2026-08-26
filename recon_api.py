@@ -102,13 +102,19 @@ _STORM_CORE_DEG = 5.0   # true-distance proximity for a non-conflicting flight (
 # header label the NHC name doesn't match (USAF filed "PTC01-C" for a storm NHC
 # lists as "One-C"). USAF files a non-storm form ("WXWXA") on unnumbered
 # missions, which resolves to None and leaves label/proximity attribution.
-_MISSION_BASIN = {"L": "AL", "E": "EP", "C": "CP"}
-_MISSION_BASIN_LTR = {v: k for k, v in _MISSION_BASIN.items()}   # AL -> L
+# Atlantic missions file the basin letter as "A", NOT ATCF's "L" ("2709A IAN"):
+# every archive season 2018-2026 uses A, including the current one, so "L"
+# here is defensive only. E/C are stable across eras. _MISSION_BASIN_LTR must
+# stay AL->"L" — it feeds the ATCF short-form label match ("90L"/"01L") in
+# _label_matches_storm, where the convention really is L.
+_MISSION_BASIN = {"A": "AL", "L": "AL", "E": "EP", "C": "CP"}
+_MISSION_BASIN_LTR = {"AL": "L", "EP": "E", "CP": "C"}   # ATCF short-form letters
 
 
 def _mission_atcf(token: str, year: int):
-    """'0201C' + 2026 -> 'CP012026'. None for a non-storm mission id or serial."""
-    m = re.fullmatch(r"\d{2}(\d{2})([LEC])", (token or "").upper().strip())
+    """'0201C' + 2026 -> 'CP012026'; '2709A' + 2022 -> 'AL092022'.
+    None for a non-storm mission id ('WXWXA', '07WSA') or serial."""
+    m = re.fullmatch(r"\d{2}(\d{2})([ALEC])", (token or "").upper().strip())
     if not m or m.group(1) == "00":
         return None
     return "%s%s%04d" % (_MISSION_BASIN[m.group(2)], m.group(1), year)
