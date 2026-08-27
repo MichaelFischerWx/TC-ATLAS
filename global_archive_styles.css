@@ -1993,6 +1993,24 @@ input[type="range"].ga-range::-moz-range-thumb {
     flex-shrink: 0;
 }
 
+/* Cursor lat/lon readout (bottom-left of the browser map) */
+.ga-latlon-readout {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    z-index: 800;
+    pointer-events: none;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+    padding: 3px 9px;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    white-space: nowrap;
+}
+
 /* ── Climatology Stats Tables (shared by all modal drill-downs) ── */
 .clim-stats-table {
     background: rgba(15, 22, 35,0.02);

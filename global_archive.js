@@ -1713,10 +1713,34 @@ function initBrowserMap() {
     };
     legend.addTo(stormMap);
 
+    // Cursor lat/lon readout (bottom-left) — a coordinate reference for
+    // reading genesis or LMI positions off the map. Stays hidden until
+    // the first mousemove, so touch devices simply never show it.
+    var llReadout = document.createElement('div');
+    llReadout.className = 'ga-latlon-readout';
+    llReadout.style.display = 'none';
+    stormMap.getContainer().appendChild(llReadout);
+    stormMap.on('mousemove', function (e) {
+        if (!e.latlng) return;
+        llReadout.textContent = _fmtLL(e.latlng.lat, e.latlng.lng);
+        llReadout.style.display = '';
+    });
+    stormMap.on('mouseout', function () {
+        llReadout.style.display = 'none';
+    });
+
     // (Microwave passes overlay deliberately NOT mounted on Global Archive
     // — that layer is a real-time feature with a rolling 48-hour window,
     // not relevant to a historical archive of TCs going back to 1842.
     // The MW control still lives on the Real-Time Monitor page.)
+}
+
+// "23.1°N 75.1°W" — normalizes longitudes wrapped past the antimeridian.
+function _fmtLL(lat, lon) {
+    while (lon > 180) lon -= 360;
+    while (lon < -180) lon += 360;
+    return Math.abs(lat).toFixed(1) + '°' + (lat < 0 ? 'S' : 'N') + ' '
+        + Math.abs(lon).toFixed(1) + '°' + (lon < 0 ? 'W' : 'E');
 }
 
 function renderMarkers(storms) {
@@ -1831,7 +1855,8 @@ function renderTracks(storms) {
                     renderer: trackCanvasRenderer,
                     radius: 3, color: '#fff', weight: 1,
                     fillColor: '#60a5fa', fillOpacity: 0.9, opacity: 0.8
-                }).bindTooltip((s.name || 'UNNAMED') + ' ' + s.year + ' genesis', { className: 'ga-tooltip' })
+                }).bindTooltip((s.name || 'UNNAMED') + ' ' + s.year + ' genesis · '
+                        + _fmtLL(gen.la, gen.lo), { className: 'ga-tooltip' })
                  .on('click', function () { selectStorm(s); })
                  .addTo(trackViewLayer);
             }
@@ -1848,7 +1873,8 @@ function renderTracks(storms) {
                     renderer: trackCanvasRenderer,
                     radius: 4, color: '#fff', weight: 1.5,
                     fillColor: getIntensityColor(lmiW), fillOpacity: 0.9, opacity: 0.9
-                }).bindTooltip((s.name || 'UNNAMED') + ' ' + s.year + ' LMI: ' + lmiW + ' kt', { className: 'ga-tooltip' })
+                }).bindTooltip((s.name || 'UNNAMED') + ' ' + s.year + ' LMI: ' + lmiW + ' kt · '
+                        + _fmtLL(lmiPt.la, lmiPt.lo), { className: 'ga-tooltip' })
                  .on('click', function () { selectStorm(s); })
                  .addTo(trackViewLayer);
             }
@@ -2031,9 +2057,19 @@ function _showMapStormCard(storm, color, cat) {
     mc.style.display = '';
 }
 
+// Full deselect: clear the highlighted track, hide both storm cards, and
+// fly back to the view the user was browsing before selecting.
 window.dismissMapStormCard = function () {
     var mc = document.getElementById('map-storm-card');
     if (mc) mc.style.display = 'none';
+    var card = document.getElementById('storm-card');
+    if (card) card.style.display = 'none';
+    if (trackLayer) trackLayer.clearLayers();
+    selectedStorm = null;
+    if (_preSelectView && stormMap) {
+        stormMap.flyTo(_preSelectView.center, _preSelectView.zoom);
+    }
+    _preSelectView = null;
 };
 
 window.selectStormFromPopup = function (sid) {
@@ -2044,12 +2080,22 @@ window.selectStormFromPopup = function (sid) {
     }
 };
 
+// Map view (center/zoom) captured when a storm gets selected, so
+// deselecting can return to where the user was browsing. Captured only
+// once per selection session — hopping storm-to-storm keeps the ORIGINAL
+// browse view as the restore target.
+var _preSelectView = null;
+
 function showTrackOnBrowserMap(sid) {
     if (!trackLayer) return;
     trackLayer.clearLayers();
 
     var track = allTracks[sid];
     if (!track || track.length < 2) return;
+
+    if (!_preSelectView && stormMap) {
+        _preSelectView = { center: stormMap.getCenter(), zoom: stormMap.getZoom() };
+    }
 
     // Draw track as colored segments
     for (var i = 1; i < track.length; i++) {
@@ -2243,7 +2289,10 @@ function applyFilters() {
     };
     if (comparators[sortBy]) filteredStorms.sort(comparators[sortBy]);
 
-    // Clear the previously selected individual storm track and card
+    // Clear the previously selected individual storm track and card.
+    // The saved pre-selection view is dropped WITHOUT restoring — the
+    // user changed filters, so wherever they are now is the new context.
+    _preSelectView = null;
     if (trackLayer) trackLayer.clearLayers();
     if (selectedStorm) {
         selectedStorm = null;
@@ -2292,6 +2341,7 @@ window.resetFilters = function () {
     // Hide storm card
     document.getElementById('storm-card').style.display = 'none';
     selectedStorm = null;
+    _preSelectView = null;
     if (trackLayer) trackLayer.clearLayers();
 };
 
@@ -5722,8 +5772,14 @@ document.addEventListener('DOMContentLoaded', function () {
                 var el = document.getElementById(modals[i].id);
                 if (el && el.style.display !== 'none') {
                     modals[i].close();
-                    break;
+                    return;
                 }
+            }
+            // No modal open — Esc deselects the storm on the browser map
+            // (same as the floating card's × button).
+            var tb = document.getElementById('tab-browser');
+            if (selectedStorm && tb && tb.offsetParent !== null) {
+                dismissMapStormCard();
             }
             return;
         }
