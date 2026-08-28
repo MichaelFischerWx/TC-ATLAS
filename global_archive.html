@@ -348,7 +348,7 @@
                             <div class="card-row"><span class="card-label">Min Pressure</span><span id="card-pres" class="card-value mono"></span></div>
                             <div class="card-row"><span class="card-label">Duration</span><span id="card-dates" class="card-value"></span></div>
                             <div class="card-row"><span class="card-label" title="Accumulated Cyclone Energy — a measure of a storm's total intensity over its lifetime, summing the square of max wind every 6 hours. Higher = stronger and/or longer-lived.">ACE</span><span id="card-ace" class="card-value mono"></span></div>
-                            <div id="card-hursat-row" class="card-row"><span class="card-label">HURSAT IR</span><span id="card-hursat" class="card-value"></span></div>
+                            <div id="card-hursat-row" class="card-row"><span class="card-label" title="Animated IR imagery in the storm detail view. Served from MergIR (1998+), GridSat-B1 (1980+), or HURSAT-B1 (1978–2015) — the viewer shows which.">IR Archive</span><span id="card-hursat" class="card-value"></span></div>
                             <div id="card-tc-radar" class="card-row" style="display:none;"><span class="card-label">TC-RADAR</span><span id="card-tc-radar-value" class="card-value"></span></div>
                         </div>
                     </div>
@@ -434,7 +434,7 @@
                         <div class="panel-header ga-layerbar">
                             <h3 style="font-size:11px;color:var(--slate);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Overlays</h3>
                             <div id="ir-toggle-wrap" class="ga-layer-item" style="display:none;">
-                                <button id="ir-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleIROverlay()" title="Animated infrared satellite imagery (HURSAT / MergIR)">
+                                <button id="ir-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleIROverlay()" title="Animated infrared satellite imagery (MergIR / GridSat / HURSAT)">
                                     IR
                                 </button>
                                 <span id="ir-status" class="ir-status"></span>
