@@ -1716,16 +1716,25 @@ function initBrowserMap() {
     // Cursor lat/lon readout (bottom-left) — a coordinate reference for
     // reading genesis or LMI positions off the map. Stays hidden until
     // the first mousemove, so touch devices simply never show it.
+    // Bound to the container's DOM events, NOT the map's mousemove/mouseout:
+    // with the 13k-track canvas pane sitting over the GL canvas, the map
+    // fires a mouseout on every internal layer crossing, which re-hid the
+    // readout on the same pointer move that showed it. The container's
+    // mouseleave only fires when the cursor truly exits the map.
     var llReadout = document.createElement('div');
     llReadout.className = 'ga-latlon-readout';
     llReadout.style.display = 'none';
-    stormMap.getContainer().appendChild(llReadout);
-    stormMap.on('mousemove', function (e) {
-        if (!e.latlng) return;
-        llReadout.textContent = _fmtLL(e.latlng.lat, e.latlng.lng);
+    var llMapEl = stormMap.getContainer();
+    llMapEl.appendChild(llReadout);
+    llMapEl.addEventListener('mousemove', function (ev) {
+        var rect = llMapEl.getBoundingClientRect();
+        var ll = stormMap.containerPointToLatLng(
+            [ev.clientX - rect.left, ev.clientY - rect.top]);
+        if (!ll) return;
+        llReadout.textContent = _fmtLL(ll.lat, ll.lng);
         llReadout.style.display = '';
     });
-    stormMap.on('mouseout', function () {
+    llMapEl.addEventListener('mouseleave', function () {
         llReadout.style.display = 'none';
     });
 
