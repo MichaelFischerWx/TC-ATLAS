@@ -14669,19 +14669,31 @@
         };
     }
 
-    // Find the active-storm record closest to a disturbance's current
-    // ensemble-mean position, within 600 km. Returns null if no storm
-    // qualifies. Used to re-label a disturbance that's already an
-    // officially-tracked TC/invest by JTWC or NHC. Greedy: caller is
-    // expected to remove the matched storm from the pool so two
-    // disturbances can't claim the same system.
-    function _genesisMatchStormToDisturbance(disturbance, stormsAvail) {
+    // A cluster whose ensemble tracks only BEGIN this far into the run
+    // (h) may not claim an active storm at all. The tau-widened gate and
+    // back-extrapolated probe below exist for DeepMind's 12-48 h tracker
+    // lag on weak waves — but a REDEVELOPMENT cluster (a wave's members
+    // regenerating far downstream, days out) starts at tau 120-210 and
+    // was handed the same fully-widened 600 km gate. 2026-08-29 12Z: the
+    // Bahamas redevelopment cluster (start tau 126, genesis ~195 h)
+    // claimed Invest 97L at 575 km while the true Gulf cluster sat
+    // 176 km away — a marker labeled "97L" a week from genesis, with the
+    // real invest's pin suppressed. A cohort that does not exist for the
+    // next 3 days cannot be the storm on the map right now.
+    var _GEN_MATCH_MAX_START_TAU = 72;
+
+    // List every active storm inside a disturbance's match gate, with
+    // distances. Used to re-label a disturbance that's already an
+    // officially-tracked TC/invest by JTWC or NHC. Returns [] when none
+    // qualify. Assignment happens globally in
+    // _genesisApplyActiveStormMatches — see the nearest-pair note there.
+    function _genesisStormCandidates(disturbance, stormsAvail) {
         if (!disturbance || !disturbance.mean
                 || !disturbance.mean.points
-                || !disturbance.mean.points.length) return null;
-        if (!stormsAvail || !stormsAvail.length) return null;
+                || !disturbance.mean.points.length) return [];
+        if (!stormsAvail || !stormsAvail.length) return [];
         var p0 = disturbance.mean.points[0];
-        if (p0.lat == null || p0.lon == null) return null;
+        if (p0.lat == null || p0.lon == null) return [];
         // 350 km base (was 600): in basins like the E-Pac, invests sit 500–900 km
         // apart, and the disturbance position here is an ENSEMBLE-MEAN start point
         // that can drift toward a neighbor — 600 km let it grab the wrong invest
@@ -14695,6 +14707,7 @@
         // and measure against the first day of the mean track, not one point —
         // tau-0 anchors keep the tight 350 that stopped the E-Pac wrong grabs.
         var startTau = (p0.tau != null) ? p0.tau : 0;
+        if (startTau > _GEN_MATCH_MAX_START_TAU) return [];
         var gateKm = Math.min(600, 350 + 12.5 * Math.max(0, startTau));
         var early = [];
         for (var k = 0; k < disturbance.mean.points.length; k++) {
@@ -14726,7 +14739,7 @@
                 }
             }
         }
-        var best = null, bestDist = gateKm;
+        var out = [];
         for (var i = 0; i < stormsAvail.length; i++) {
             var s = stormsAvail[i];
             if (!s || s.lat == null || s.lon == null) continue;
@@ -14736,10 +14749,9 @@
                                              s.lat, s.lon);
                 if (dd < d) d = dd;
             }
-            if (d < bestDist) { bestDist = d; best = s; }
+            if (d < gateKm) out.push({ storm: s, distKm: d });
         }
-        if (!best) return null;
-        return { storm: best, distKm: bestDist };
+        return out;
     }
 
     // Apply ATCF storm matches to a sorted disturbance list in place.
@@ -14747,32 +14759,51 @@
     // "Disturbance N / DN" to the storm's official name ("TD 01W" /
     // "01W" or "Bonnie" / "Bonnie"), and `atcfMatch` is stashed for
     // downstream UI (modal subtitle pill, tooltip).
+    //
+    // Assignment is by GLOBAL nearest pair, not list order. The old
+    // disturbance-major greedy walked clusters biggest-first, so a
+    // larger cluster inside its (widened) gate could claim a storm away
+    // from a smaller cluster sitting far closer — at 2026-08-29 12Z the
+    // 170-member Bahamas cluster (575 km) out-ranked the 154-member Gulf
+    // cluster (176 km) for Invest 97L purely on size. Sorting all
+    // candidate pairs by distance makes iteration order irrelevant; each
+    // storm and each disturbance still binds at most once.
     function _genesisApplyActiveStormMatches(disturbances, stormsArr) {
         // Always rebuild from scratch — stale matches from a prior run
         // would suppress storm markers that no longer have a partner.
         _genesisMatchedAtcfIds = {};
         if (!disturbances || !disturbances.length) return;
-        var pool = (stormsArr || []).slice();
+        var pairs = [];
         for (var i = 0; i < disturbances.length; i++) {
-            var d = disturbances[i];
-            var match = _genesisMatchStormToDisturbance(d, pool);
-            if (!match) continue;
-            var label = _genesisFormatStormLabel(match.storm);
+            var cands = _genesisStormCandidates(disturbances[i],
+                                                stormsArr || []);
+            for (var c = 0; c < cands.length; c++) {
+                pairs.push({ di: i, storm: cands[c].storm,
+                             distKm: cands[c].distKm });
+            }
+        }
+        pairs.sort(function (a, b) { return a.distKm - b.distKm; });
+        var claimedStorms = [], claimedDist = {};
+        for (var p = 0; p < pairs.length; p++) {
+            var pr = pairs[p];
+            if (claimedDist[pr.di]) continue;
+            if (claimedStorms.indexOf(pr.storm) >= 0) continue;
+            var label = _genesisFormatStormLabel(pr.storm);
             if (!label) continue;
+            var d = disturbances[pr.di];
             d.atcfMatch = {
                 atcfId: label.atcfId,
-                name: match.storm.name,
-                category: match.storm.category,
-                vmaxKt: match.storm.vmax_kt,
-                distKm: match.distKm,
+                name: pr.storm.name,
+                category: pr.storm.category,
+                vmaxKt: pr.storm.vmax_kt,
+                distKm: pr.distKm,
             };
             d.atcfLabel = label;
             d.displayLabel = label.full;
             d.displayShort = label.short;
             _genesisMatchedAtcfIds[label.atcfId.toUpperCase()] = true;
-            // Remove from pool so a second disturbance can't claim it.
-            var idx = pool.indexOf(match.storm);
-            if (idx >= 0) pool.splice(idx, 1);
+            claimedDist[pr.di] = true;
+            claimedStorms.push(pr.storm);
         }
     }
 
