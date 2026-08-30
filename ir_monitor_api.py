@@ -10893,7 +10893,20 @@ _TCA_MERGE_DEFAULT_KM = 450.0
 # cache key is formed, so without this token a deploy would keep serving
 # pre-change clusters under the unchanged merge_km=450 key. v2 = size-aware
 # geometric gates for thin ensembles.
-_TCA_MERGE_ALGO_VERSION = 2
+# Step-5a temporal-coherence trim (see _tca_compute_clusters): a
+# genesis-tau hole of at least _TCA_TAIL_GAP_H isolating a minority tail
+# of at most _TCA_TAIL_MAX_FRAC of the cluster drops the tail. Calibrated
+# 2026-08-30 over five cycles: legitimate clusters' largest internal gaps
+# were all <= 24 h; the contaminated 97L cluster's was 54 h with a 7%
+# tail.
+_TCA_TAIL_GAP_H = 36.0
+_TCA_TAIL_MAX_FRAC = 0.25
+
+# v3: step-5a temporal-coherence trim added (the 2026-08-30 97L
+# stray-member fix). The bump invalidates stale merge-on caches;
+# merge-off requests (tuner slider at 0) keep unversioned 6-tuple keys
+# and serve stale clusters until natural expiry.
+_TCA_MERGE_ALGO_VERSION = 3
 
 
 def _tca_size_aware_merge_gates(obs_size, merge_km, merge_overlap_h):
@@ -11595,6 +11608,47 @@ def _tca_compute_clusters(raw_data: dict,
                 best_i = i
         if best_i >= 0:
             cluster_entries[best_i].append(e)
+
+    # Step 5a: temporal-coherence trim. One disturbance's genesis timing
+    # is quasi-continuous across the ensemble; a multi-day HOLE in a
+    # cluster's genesis-tau distribution followed by a small minority
+    # tail means a DIFFERENT system reaching the same neighborhood on a
+    # later passage — the box gates above can't see it, because each
+    # tail member is individually inside both axis limits. 2026-08-30
+    # 06Z: Invest 97L's Gulf cluster (82 members, genesis days 1-2) had
+    # a completely empty day 3, then 6 members entering through the
+    # Florida Straits with genesis at tau 114-138 whose late LMIs
+    # (48-104 kt at 168-216 h) were the ONLY members alive past 168 h —
+    # painting a phantom week-2 re-intensification onto the invest's
+    # intensity summary. Measured across five cycles, every legitimate
+    # cluster's largest internal gap was <= 24 h (the diffuse week-2
+    # clusters included), so a >= 36 h gap isolating a <= 25% tail fires
+    # only on genuine bimodality; a global distance-time tightening was
+    # tried first and cut 3-9% of ALL assignments. Runs BEFORE the
+    # merge pass, whose reconnected fragments are multimodal by design.
+    # Trimmed entries become unassigned — an under-sampled second mode
+    # re-enters when it is big enough to form its own density peak.
+    for ci in range(len(cluster_entries)):
+        ents = cluster_entries[ci]
+        while len(ents) >= peak_min_members:
+            seq = [e for e in ents if e["first_tau"] is not None]
+            if len(seq) < len(ents) or len(seq) < 2:
+                break
+            seq.sort(key=lambda e: e["first_tau"])
+            gap_h, gap_i = 0.0, -1
+            for k in range(len(seq) - 1):
+                g = seq[k + 1]["first_tau"] - seq[k]["first_tau"]
+                if g > gap_h:
+                    gap_h, gap_i = g, k
+            n_lo, n_hi = gap_i + 1, len(seq) - gap_i - 1
+            if gap_h < _TCA_TAIL_GAP_H \
+                    or min(n_lo, n_hi) > _TCA_TAIL_MAX_FRAC * len(seq):
+                break
+            drop = set(id(e) for e in
+                       (seq[:gap_i + 1] if n_lo <= n_hi
+                        else seq[gap_i + 1:]))
+            ents = [e for e in ents if id(e) not in drop]
+        cluster_entries[ci] = ents
 
     # Step 5b: distance-gated cross-cluster member dedup. A member (sample)
     # can land in more than one cluster only via separate DeepMind tracks.
