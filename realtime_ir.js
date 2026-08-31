@@ -19948,12 +19948,24 @@
                 bordercolor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,22,35,0.10)',
                 borderwidth: 1, font: { size: 9, color: isDark ? '#e2e8f0' : '#1f2937' },
                 itemsizing: 'constant', itemwidth: 30, tracegroupgap: 0 };
+        // The full one-line title needs ~550 px; on a phone-width panel it
+        // clips at the right edge (and slides under the floating ⤓ PNG
+        // button), so mobile gets the same words broken across two lines.
+        var aceTitle = isMobile
+            ? 'Accumulated Cyclone Energy (ACE)<br>cumulative per member vs lead time (6-hourly, ≥34 kt)'
+            : 'Accumulated Cyclone Energy (ACE) — cumulative per member vs lead time (6-hourly, ≥34 kt)';
         var layout = Object.assign({}, theme, {
-            margin: isMobile ? { l: 46, r: 12, t: 38, b: 84 } : { l: 52, r: 16, t: 40, b: 44 },
+            margin: isMobile ? { l: 46, r: 12, t: 52, b: 84 } : { l: 52, r: 16, t: 40, b: 44 },
             paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-            title: { text: 'Accumulated Cyclone Energy (ACE) — cumulative per member vs lead time (6-hourly, ≥34 kt)',
-                     font: { size: 10.5, color: theme.font && theme.font.color },
-                     x: 0, xanchor: 'left', y: 0.99, yanchor: 'top' },
+            // Mobile's two-line title keeps Plotly's default vertical
+            // auto-placement (centered in the top margin): an explicit
+            // y/yanchor on a <br> title anchors on the last line and pushes
+            // the first one off the top of the canvas.
+            title: Object.assign(
+                { text: aceTitle,
+                  font: { size: 10.5, color: theme.font && theme.font.color },
+                  x: 0, xanchor: 'left' },
+                isMobile ? {} : { y: 0.99, yanchor: 'top' }),
             xaxis: { title: { text: 'Lead time', font: { size: 11 }, standoff: 12 },
                      tickfont: { size: 10 }, tickmode: 'array',
                      tickvals: xVals.filter(function (_v, i) { return i % 4 === 0; }),
@@ -22205,7 +22217,31 @@
         // Plotly's `scale` multiplies the figure's layout dimensions (fonts +
         // lines scale crisply) rather than re-laying-out at a bigger size.
         var EXPORT_SCALE = 4;
+        // Floor the export canvas at desktop-panel size. The saved figure is
+        // re-laid-out by Plotly at the requested pixel size with the same
+        // absolute font sizes, so exporting a 283 px phone panel bakes in a
+        // clipped title and squeezed axes; at >= 860 px everything fits the
+        // way the desktop modal shows it. Desktop saves are already near the
+        // floor, so their output barely changes. The footer stamp scales off
+        // outW/900, which this floor also brings in line with the chart's 4x
+        // font scale (phone exports used to get a proportionally tiny
+        // caption + watermark).
         var baseW = Math.round(rect.width), baseH = Math.round(rect.height);
+        if (baseW >= 50 && baseW < 860) {
+            // Widen to the floor but deepen only halfway toward the same
+            // ratio — these are time-series/map panels, and a full
+            // proportional blow-up of a squat phone panel would produce a
+            // near-square figure instead of the wide layout they're
+            // designed around.
+            baseH = Math.max(Math.round(baseH * (860 / baseW) * 0.5), baseH);
+            baseW = 860;
+        } else if (baseW < 50) {
+            // Hidden or not-yet-laid-out panel: a degenerate rect would
+            // blow the ratio up (and 0 crashes Plotly.toImage) — use the
+            // desktop default outright.
+            baseW = 860;
+            baseH = Math.max(baseH, 395);
+        }
         var outW = baseW * EXPORT_SCALE, outH = baseH * EXPORT_SCALE;
         // Stamp the storm + model cycle into the saved figure.
         var caption = [_genesisExportStorm, _genesisExportInit]
