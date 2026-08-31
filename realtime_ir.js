@@ -4454,7 +4454,12 @@
             if (st) {
                 var last = series[series.length - 1];
                 st.textContent = payload.n + ' obs · latest ' +
-                    (last.time_utc || '').replace('T', ' ').replace('Z', ' UTC');
+                    (last.time_utc || '').replace('T', ' ').replace('Z', ' UTC') +
+                    // Panels only exist for variables the station reports, so
+                    // a missing pressure trace is the STATION's gap, not a
+                    // page bug — say so instead of leaving the reader to
+                    // wonder where the pressure panel went.
+                    (has('pressure_hpa') ? '' : ' · no pressure in this station\u2019s feed');
             }
         });
     }

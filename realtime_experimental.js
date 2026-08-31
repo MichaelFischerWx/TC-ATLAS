@@ -2146,7 +2146,7 @@
         });
         /* The storm's current cell: newest in-scope frame carrying both
            coordinates. */
-        var cur = null;
+        var cur = null, curF = null;
         var fr = j.frames || [];
         for (var i = fr.length - 1; i >= 0; i--) {
             var f = fr[i];
@@ -2156,16 +2156,17 @@
                 cur = TILT_BINS[f.tilt_mag_km < te[0] ? 0
                         : (f.tilt_mag_km < te[1] ? 1 : 2)] + '|' +
                       VENT_BINS[f.vp < ve[0] ? 0 : (f.vp < ve[1] ? 1 : 2)];
+                curF = f;
                 break;
             }
         }
         var html = '<div class="exp-shap-head">Rapid-intensification ' +
             'guidance — tilt × ventilation' +
-            '<span class="exp-verif-src"> observed frequency of ' +
-            'RI (≥30 kt in 24 h) relative to climatology, over ' +
-            (g.n ? g.n.toLocaleString() : '') + ' out-of-training Atlantic ' +
-            'cases' + (g.storms ? ' / ' + g.storms + ' storms' : '') +
-            '</span></div>' +
+            '<span class="exp-verif-src"> each cell: how often storms in ' +
+            'that regime went on to RI (≥30 kt in the next 24 h), from ' +
+            (g.n ? g.n.toLocaleString() : '') + ' hourly Atlantic cases' +
+            (g.storms ? ' across ' + g.storms + ' storms' : '') +
+            ' the model never trained on</span></div>' +
             '<div class="exp-verif-t exp-tilt-ri-t"><table>' +
             '<tr><th>tilt \\ ventilation</th>';
         VENT_BINS.forEach(function (v) {
@@ -2179,13 +2180,30 @@
                 var c = cells[tb + '|' + vb];
                 var here = cur === tb + '|' + vb;
                 if (!c) { html += '<td>—</td>'; return; }
-                html += '<td class="' + (here ? 'exp-ri-here' : '') + '">' +
-                    '<strong>' + (c.lift >= 10 ? Math.round(c.lift)
-                        : c.lift.toFixed(c.lift < 0.1 ? 2 : 1)) +
-                    '×</strong>' +
-                    '<span class="exp-tile-sub"> RI ' +
+                /* Lead with the RI rate (the number a reader can use
+                   directly); the climatology multiple is the comparison.
+                   Tint by that multiple so the favorable corner reads at a
+                   glance: red = RI more likely than climatology, blue =
+                   less. Alpha is log-scaled and capped so a 7× cell does
+                   not blow out the text in either theme. */
+                var lift = c.lift, tint = '';
+                if (lift != null && isFinite(lift) && lift > 0) {
+                    var a = Math.min(0.28, Math.abs(Math.log(lift)) * 0.13);
+                    if (a > 0.02)
+                        tint = 'background:rgba(' +
+                            (lift > 1 ? '220,38,38' : '46,125,255') + ',' +
+                            a.toFixed(2) + ');';
+                }
+                var liftTxt = lift >= 10 ? Math.round(lift)
+                    : lift.toFixed(lift < 0.1 ? 2 : 1);
+                html += '<td class="' + (here ? 'exp-ri-here' : '') +
+                    '" style="' + tint + '" title="' + c.n +
+                    ' hourly cases in this cell">' +
+                    '<strong>RI ' +
                     (c.ri_fraction * 100).toFixed(c.ri_fraction < 0.01 ? 1 : 0) +
-                    '%</span>' +
+                    '%</strong>' +
+                    '<span class="exp-tile-sub">' + liftTxt +
+                    '× climatology</span>' +
                     (here ? '<em class="exp-ri-tag">this storm</em>' : '') +
                     '</td>';
             });
@@ -2193,14 +2211,19 @@
         });
         html += '</table></div>' +
             '<div class="exp-verif-n">' +
-            (g.base_rate != null
-                ? 'Climatological RI frequency in this sample: ' +
-                  (g.base_rate * 100).toFixed(1) + '% of hourly cases. '
-                : '') +
-            (cur === null
-                ? 'No current cell is highlighted — the storm is ' +
+            (curF !== null
+                ? '<strong>This storm now:</strong> tilt ' +
+                  curF.tilt_mag_km.toFixed(0) + ' km · ventilation ' +
+                  curF.vp.toFixed(1) + ' (at ' +
+                  (curF.t || '').slice(11, 16) + 'Z) — the outlined cell. '
+                : 'No current cell is highlighted — the storm is ' +
                   'outside the validity range or missing an environment ' +
-                  'value. '
+                  'value. ') +
+            (g.base_rate != null
+                ? 'RI followed ' + (g.base_rate * 100).toFixed(1) +
+                  '% of all hourly cases in this sample; a cell\u2019s ' +
+                  '\u201c\u00d7 climatology\u201d is its rate relative ' +
+                  'to that. '
                 : '') +
             (g.caveat || '') + '</div>';
         box.innerHTML = html;
