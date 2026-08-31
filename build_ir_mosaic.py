@@ -1382,7 +1382,18 @@ def write_preview(rgba, out_dir, width=1536):
 
 
 def fetch_active_points():
-    """Active storms within GOES-E/W + Himawari coverage → [(lat,lon),…].
+    """Active storms within GOES-E/W + Himawari coverage → [(lat,lon),…],
+    or None when the storm list is UNKNOWN (every fetch attempt failed).
+
+    None vs []: [] is an answer ("no active storms — a quiet cycle"); None is
+    the absence of one. The caller must treat None frames as gaps so the
+    storm-card lite loop skips them — on 2026-08-31 16:40Z a single 20-s
+    timeout here (the vis band pass; IR and WV two minutes earlier both got
+    the 10-storm list) silently produced a vis frame with ZERO storm sectors
+    that the loop then displayed overzoomed from the z4 global pyramid: the
+    "one blurry frame" bug. Retries absorb the transient case — the API
+    behind this saturates under burst load (project_api_saturation_429) and
+    each band pass is a fresh process making a cold request.
     The API sits behind Cloudflare and 403s a bare urllib UA, so send a
     browser-ish User-Agent + Origin (production would call the origin URL)."""
     req = urllib.request.Request(
@@ -1392,11 +1403,20 @@ def fetch_active_points():
                                "Chrome/126 Safari/537.36",
                  "Origin": "https://tcatlas.org",
                  "Referer": "https://tcatlas.org/"})
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            storms = (json.load(r) or {}).get("storms", [])
-    except Exception as e:
-        log(f"  active-storms fetch failed: {e}"); return []
+    storms = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                storms = (json.load(r) or {}).get("storms", [])
+            break
+        except Exception as e:
+            log(f"  active-storms fetch failed (try {attempt + 1}/3): {e}")
+            if attempt < 2:
+                time.sleep(5 * (attempt + 1))
+    if storms is None:
+        log("  active-storms UNKNOWN after 3 tries — no storm sectors this "
+            "frame; it will be gap-listed so the storm loop skips it")
+        return None
     pts = []
     for s in storms:
         lon = s.get("lon"); lat = s.get("lat")
@@ -1455,9 +1475,13 @@ def main():
     latest = now.replace(minute=now.minute - (now.minute % 10), second=0, microsecond=0)
 
     # storm points (resolved once, reused for every frame)
-    points = []
+    points, storms_unknown = [], False
     if args.storm:
-        points += fetch_active_points()
+        got = fetch_active_points()
+        if got is None:
+            storms_unknown = True     # fetch failed — see is_gap below
+        else:
+            points += got
     if args.storm_at:
         la, lo = (float(v) for v in args.storm_at.split(","))
         points.append({"lat": la, "lon": lo, "atcf_id": None, "name": None,
@@ -1659,8 +1683,14 @@ def main():
                         log(f"  {product} pack upload failed: {ex}")
                 # A gap only counts when there WERE storms to cover (tiles
                 # non-empty) but none rendered — not a no-storm quiet cycle.
+                # storms_unknown (active-storms fetch failed) also gaps: the
+                # frame baked no sectors for ANY band, and without the deny-
+                # list entry the storm-card loop shows it overzoomed from the
+                # z4 global pyramid (the 2026-08-31 blurry-frame bug). This is
+                # the one path where IR/WV gap too — same missing sectors.
                 frames = update_r2_manifest(ts, args.zmax, product,
-                                            is_gap=(bool(tiles) and n_storm == 0),
+                                            is_gap=((bool(tiles) or storms_unknown)
+                                                    and n_storm == 0),
                                             pack=pack_ok, storm_zmax=frame_szm)
                 timings["upload"] = time.time() - t1
                 log(f"  {product} R2: {ok} up ({errs} failed); manifest {len(frames)} frames")
