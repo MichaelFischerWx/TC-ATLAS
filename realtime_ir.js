@@ -1168,8 +1168,8 @@
     // prewarm. The composite spans CONUS (+ PR), so the panel only shows
     // for storms within that box. See project_nexrad_gl memory.
     var _rtRadarVisible = false;       // overlay toggle state
-    var _rtRadarTileLayer = null;      // L.tileLayer (GL raster) on radarPane
-    var _rtRadarCurLayer = null;       // IEM layer name currently shown (skip redundant setUrl)
+    var _rtRadarLayers = {};           // radar source key → L.tileLayer, opacity-toggled (see _rtRadarShow)
+    var _rtRadarCurKey = null;         // radar source key currently visible (skip redundant flips)
     var _rtRadarOpacity = 0.7;         // overlay opacity
     var _rtRadarLastAtcf = null;       // last storm we evaluated coverage for
     var _rtRadarUpdateTimer = null;    // throttle timer for frame-sync
@@ -30707,6 +30707,38 @@
         if (bucket > 55) bucket = 55;
         return 'nexrad-n0q-m' + (bucket < 10 ? '0' : '') + bucket + 'm';
     }
+    // IEM's time-enabled WMS: the SAME national N0Q composite, but reaching
+    // back years at 5-min steps instead of the tile cache's ~1 h. MapLibre
+    // substitutes {bbox-epsg-3857} per tile, so the GetMap template drops
+    // straight into a raster source like any XYZ url. Used for satellite
+    // frames older than the tile-cache window, which previously all clamped
+    // to m55m — the radar sat frozen through most of a 6-h loop while the
+    // satellite animated (user report 2026-08-31).
+    var _IEM_WMST = 'https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0q-t.cgi' +
+        '?service=WMS&request=GetMap&version=1.1.1&layers=nexrad-n0q-wmst' +
+        '&styles=&format=image%2Fpng&transparent=true&srs=EPSG%3A3857' +
+        '&width=256&height=256&bbox={bbox-epsg-3857}';
+    /** Radar source for a frame time: {key, url, label}.
+     *  key   — identity for the layer pool / redundant-flip check
+     *  url   — tile template (XYZ for the cached last hour, WMS-T beyond)
+     *  label — status-line text */
+    function _rtRadarSrcForFrameTime(frameTimeStr) {
+        var t = _parseFrameTimeMs(frameTimeStr);
+        var ageMin = isFinite(t) ? (Date.now() - t) / 60000 : 0;
+        if (!isFinite(t) || ageMin <= 57.5) {
+            var name = _iemLayerForFrameTime(frameTimeStr);
+            var m = /m(\d{2})m/.exec(name);
+            return { key: name, url: _iemRadarUrl(name),
+                     label: m ? 'valid ~' + parseInt(m[1], 10) + ' min ago'
+                              : 'latest scan' };
+        }
+        // Round to IEM's 5-min composite grid.
+        var snap = new Date(Math.round(t / 300000) * 300000);
+        var iso = snap.toISOString().slice(0, 16) + ':00Z';
+        return { key: 'wmst-' + iso,
+                 url: _IEM_WMST + '&time=' + encodeURIComponent(iso),
+                 label: 'valid ' + iso.slice(11, 16) + 'Z' };
+    }
 
     /**
      * Decide whether the US radar panel is relevant for this storm (i.e. it's
@@ -30743,15 +30775,6 @@
             ? animFrameTimes[animIndex] : null;
     }
 
-    /** Reflect the shown radar age in the panel status line. */
-    function _rtSetRadarFrameStatus(layerName) {
-        var el = document.getElementById('rt-radar-frame-status');
-        if (!el) return;
-        var m = /m(\d{2})m/.exec(layerName || '');
-        el.textContent = m ? ('valid ~' + parseInt(m[1], 10) + ' min ago')
-                           : 'latest scan';
-    }
-
     /**
      * Create (once) and attach the IEM radar tile layer to the detail map,
      * pointed at the layer matching the current frame time. Idempotent —
@@ -30759,19 +30782,34 @@
      */
     function _rtEnsureRadarLayer() {
         if (!detailMap || typeof L === 'undefined') return;
-        var layerName = _iemLayerForFrameTime(_rtCurrentFrameTime());
-        _rtRadarCurLayer = layerName;
-        if (!_rtRadarTileLayer) {
-            _rtRadarTileLayer = L.tileLayer(_iemRadarUrl(layerName), {
+        _rtRadarShow(_rtRadarSrcForFrameTime(_rtCurrentFrameTime()));
+    }
+
+    /** Show one pooled radar layer, hide the rest. Layers stay attached at
+     *  opacity 0 so MapLibre keeps their tiles resident and a frame flip is
+     *  an instant paint change with no refetch — the same pattern the global
+     *  map's _gRadarShowBucket uses, and the reason the loop can sync radar
+     *  per satellite frame without flicker. The pool is bounded by the loop's
+     *  distinct 5-min buckets (≤ ~72 for a 6-h loop); it is cleared wholesale
+     *  on storm switch / toggle-off. */
+    function _rtRadarShow(src) {
+        if (!detailMap) return;
+        if (!_rtRadarLayers[src.key]) {
+            _rtRadarLayers[src.key] = L.tileLayer(src.url, {
                 pane: 'radarPane',
-                opacity: _rtRadarOpacity,
+                opacity: 0,
                 attribution: 'Radar: IEM / NWS',
             });
-        } else {
-            _rtRadarTileLayer.setUrl(_iemRadarUrl(layerName));
         }
-        _rtRadarTileLayer.addTo(detailMap);
-        _rtSetRadarFrameStatus(layerName);
+        _rtRadarLayers[src.key].addTo(detailMap);
+        for (var k in _rtRadarLayers) {
+            if (_rtRadarLayers.hasOwnProperty(k)) {
+                _rtRadarLayers[k].setOpacity(k === src.key ? _rtRadarOpacity : 0);
+            }
+        }
+        _rtRadarCurKey = src.key;
+        var el = document.getElementById('rt-radar-frame-status');
+        if (el) el.textContent = src.label;
     }
 
     /** Toggle the US radar overlay on/off. */
@@ -30783,7 +30821,13 @@
             _rtRadarVisible = false;
             if (btn) btn.textContent = 'Radar';
             if (controls) controls.style.display = 'none';
-            if (_rtRadarTileLayer && detailMap) detailMap.removeLayer(_rtRadarTileLayer);
+            if (detailMap) {
+                for (var k in _rtRadarLayers) {
+                    if (_rtRadarLayers.hasOwnProperty(k)) detailMap.removeLayer(_rtRadarLayers[k]);
+                }
+            }
+            _rtRadarLayers = {};
+            _rtRadarCurKey = null;
             return;
         }
 
@@ -30798,7 +30842,9 @@
     /** Opacity slider handler (0-100 \u2192 0-1). */
     window._rtSetRadarOpacity = function (pct) {
         _rtRadarOpacity = Math.max(0, Math.min(1, (parseFloat(pct) || 70) / 100));
-        if (_rtRadarTileLayer) _rtRadarTileLayer.setOpacity(_rtRadarOpacity);
+        if (_rtRadarCurKey && _rtRadarLayers[_rtRadarCurKey]) {
+            _rtRadarLayers[_rtRadarCurKey].setOpacity(_rtRadarOpacity);
+        }
     };
 
     /**
@@ -30809,14 +30855,14 @@
     function _rtUpdateRadarForFrame() {
         if (!_rtRadarVisible) return;
         if (_rtRadarUpdateTimer) clearTimeout(_rtRadarUpdateTimer);
+        // Short debounce: scrubbing coalesces to one flip; playback at the
+        // slowest cadence (~600 ms/frame) still flips every frame.
         _rtRadarUpdateTimer = setTimeout(function () {
-            if (!_rtRadarVisible || !_rtRadarTileLayer) return;
-            var layerName = _iemLayerForFrameTime(_rtCurrentFrameTime());
-            if (layerName === _rtRadarCurLayer) return;
-            _rtRadarCurLayer = layerName;
-            _rtRadarTileLayer.setUrl(_iemRadarUrl(layerName));
-            _rtSetRadarFrameStatus(layerName);
-        }, 150);
+            if (!_rtRadarVisible) return;
+            var src = _rtRadarSrcForFrameTime(_rtCurrentFrameTime());
+            if (src.key === _rtRadarCurKey) return;
+            _rtRadarShow(src);
+        }, 100);
     }
 
     /** Static NWS N0Q base-reflectivity (dBZ) legend. */
@@ -30849,11 +30895,13 @@
      * Full radar overlay cleanup (called when switching/closing storms).
      */
     function _rtRemoveRadarOverlay() {
-        if (_rtRadarTileLayer && detailMap) {
-            detailMap.removeLayer(_rtRadarTileLayer);
+        if (detailMap) {
+            for (var k in _rtRadarLayers) {
+                if (_rtRadarLayers.hasOwnProperty(k)) detailMap.removeLayer(_rtRadarLayers[k]);
+            }
         }
-        _rtRadarTileLayer = null;
-        _rtRadarCurLayer = null;
+        _rtRadarLayers = {};
+        _rtRadarCurKey = null;
         _rtRadarVisible = false;
         _rtRadarLastAtcf = null;
         if (_rtRadarUpdateTimer) { clearTimeout(_rtRadarUpdateTimer); _rtRadarUpdateTimer = null; }
