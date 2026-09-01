@@ -36,6 +36,7 @@ import gzip
 import io
 import json
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Iterable
@@ -148,9 +149,30 @@ def tile_meta_key(level: int | None, month: int, *,
 
 def fetch_tile(url: str, vmin: float, vmax: float,
                shape: tuple[int, int] = (181, 360)) -> np.ndarray:
-    """Stream-decompress, dequantize → float32 (lat, lon). NaN for sentinel."""
-    r = requests.get(url, timeout=60)
-    r.raise_for_status()
+    """Stream-decompress, dequantize → float32 (lat, lon). NaN for sentinel.
+
+    Retries transient network failures: the PI-solve rebuild makes ~26
+    tile GETs per month × 444 months, and a single unretried GCS read
+    timeout killed a 40-minute run 168 months in (2026-09-01). 404s
+    (genuinely missing tiles) still raise immediately via
+    raise_for_status on the final attempt."""
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            r = requests.get(url, timeout=60)
+            r.raise_for_status()
+            break
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_err = e
+            time.sleep(2.0 * (attempt + 1))
+        except requests.HTTPError as e:
+            # Retry server-side hiccups; 4xx (missing tile) is final.
+            if e.response is None or e.response.status_code < 500:
+                raise
+            last_err = e
+            time.sleep(2.0 * (attempt + 1))
+    else:
+        raise last_err  # type: ignore[misc]
     raw = gzip.decompress(r.content)
     u16 = np.frombuffer(raw, dtype=np.uint16)
     if u16.size != shape[0] * shape[1]:
