@@ -745,7 +745,7 @@
      *  there was no way to know the amber diamond meant a dropsonde). Appended
      *  into the map element so the Save-PNG export picks it up too. */
     function _hdobAddLegend(mapEl) {
-        if (!mapEl || mapEl.querySelector('.recon-hdob-legend')) return;
+        if (!mapEl || mapEl.querySelector('.recon-hdob-mapkey')) return;
         var rows = [
             { sym: '<span class="recon-hdob-legend-diamond"></span>', label: 'Dropsonde' },
             { sym: '<span style="color:#f87171;font-size:14px;line-height:13px;">⊕</span>', label: 'Center fix (VDM)' },
@@ -757,7 +757,7 @@
                    '<span>' + r.label + '</span></div>';
         }).join('');
         var box = document.createElement('div');
-        box.className = 'recon-hdob-legend';
+        box.className = 'recon-hdob-mapkey';
         box.innerHTML = html;
         mapEl.appendChild(box);
     }
@@ -950,12 +950,16 @@
                     break;
                 }
             }
-            // Plane SVG points UP (north) at rotation 0; rotate by heading.
-            var svg = '<svg width="26" height="26" viewBox="0 0 24 24" style="transform:rotate(' +
-                hdg.toFixed(0) + 'deg);filter:drop-shadow(0 0 1.5px rgba(0,0,0,0.8));">' +
+            // Plane SVG points UP (north) at rotation 0; rotate by heading. The
+            // rotation must be an SVG <g transform>, not CSS on the root <svg> —
+            // html2canvas rasterizes inline SVG as a standalone image, where a
+            // root-level CSS transform is dropped and the saved plane points north.
+            var svg = '<svg width="26" height="26" viewBox="0 0 24 24" ' +
+                'style="filter:drop-shadow(0 0 1.5px rgba(0,0,0,0.8));">' +
+                '<g transform="rotate(' + hdg.toFixed(0) + ' 12 12)">' +
                 '<path d="M12 2 L14.2 10 L22 13.5 L22 15.5 L14.2 13.5 L13.4 19 L16 21 L16 22.3 ' +
                 'L12 21.2 L8 22.3 L8 21 L10.6 19 L9.8 13.5 L2 15.5 L2 13.5 L9.8 10 Z" ' +
-                'fill="#fde047" stroke="#1f2937" stroke-width="0.7" stroke-linejoin="round"/></svg>';
+                'fill="#fde047" stroke="#1f2937" stroke-width="0.7" stroke-linejoin="round"/></g></svg>';
             var icon = L.divIcon({ className: 'recon-hdob-aircraft', html: svg,
                                    iconSize: [26, 26], iconAnchor: [13, 13] });
             var mk = L.marker([last.lat, last.lon], { icon: icon, interactive: true, zIndexOffset: 1000 });
@@ -1125,8 +1129,13 @@
         if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
         var scale = 2;
         var cr = chartEl.getBoundingClientRect();
+        // Render the chart at the MAP's height (it's usually the taller panel):
+        // Plotly re-lays-out at the requested size, so the subplots stretch to
+        // fill and the composite has no dead paper under the chart column.
+        var mr = mapEl.getBoundingClientRect();
         var chartP = window.Plotly.toImage(chartEl, {
-            format: 'png', width: Math.round(cr.width), height: Math.round(cr.height), scale: scale
+            format: 'png', width: Math.round(cr.width),
+            height: Math.round(Math.max(cr.height, mr.height)), scale: scale
         });
         var mapP = kit.ensureHtml2canvas().then(function () {
             return window.html2canvas(mapEl, {

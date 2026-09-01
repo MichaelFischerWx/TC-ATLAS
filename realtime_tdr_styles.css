@@ -731,8 +731,11 @@
 /* Map symbol key. Lives INSIDE the map element so it is captured by the
    Save-PNG export (html2canvas targets the map div). It is chrome, so it sits
    above all map DATA — panes (max 700) and markers (up to 1000 via
-   zIndexOffset) — but below popups (1100), which should cover it. */
-.recon-hdob-legend {
+   zIndexOffset) — but below popups (1100), which should cover it.
+   NOT .recon-hdob-legend: that class is the barb-color chip row in the
+   toolbar, and sharing it once absolutely-positioned the chips over the chart. */
+.recon-hdob-mapkey {
+    display: flex; align-items: center; gap: 3px; flex-wrap: wrap;
     position: absolute; left: 8px; bottom: 8px; z-index: 1050;
     pointer-events: none; user-select: none;
     background: rgba(255, 255, 255, 0.86);
@@ -742,7 +745,7 @@
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
     backdrop-filter: blur(2px);
 }
-:root[data-theme="dark"] .recon-hdob-legend {
+:root[data-theme="dark"] .recon-hdob-mapkey {
     background: rgba(15, 23, 42, 0.82);
     border-color: rgba(148, 163, 184, 0.28);
     color: #e2e8f0;
