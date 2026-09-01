@@ -1098,7 +1098,11 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
             m = re.search(r"\.(\d{12})\.txt$", url)
             fdt = datetime.strptime(m.group(1), "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
             parsed = _parse_hdob_bulletin(txt, fdt) if txt else None
-            if len(_bulletin_cache) < _BULLETIN_CACHE_MAX:
+            # Cache only when the fetch returned text. Bulletins are immutable;
+            # fetch FAILURES aren't — memoizing one as "empty bulletin" silently
+            # drops that 10-min block of obs (often the max-wind leg) until the
+            # instance restarts. Left uncached, the next rebuild retries it.
+            if txt is not None and len(_bulletin_cache) < _BULLETIN_CACHE_MAX:
                 _bulletin_cache[url] = parsed
         if not parsed:
             continue
@@ -1223,7 +1227,8 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
                 parsed = _parse_vdm_text(raw, year) if raw else None
                 if parsed is not None:
                     parsed["time"] = _resolve_vdm_time(parsed, year, sd, ed)
-                if len(_bulletin_cache) < _BULLETIN_CACHE_MAX:
+                # Only memoize a real fetch; a failed one must retry next build.
+                if raw is not None and len(_bulletin_cache) < _BULLETIN_CACHE_MAX:
                     _bulletin_cache["vdm::" + url] = parsed if parsed else False
                 txt = parsed if parsed else False
             if not txt:
@@ -1282,7 +1287,8 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
                 m = re.search(r"\.(\d{12})\.txt$", url)
                 fdt = datetime.strptime(m.group(1), "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
                 cached = _parse_tempdrop_bulletin(txt, fdt) if txt else []
-                if len(_bulletin_cache) < _BULLETIN_CACHE_MAX:
+                # Only memoize a real fetch; a failed one must retry next build.
+                if txt is not None and len(_bulletin_cache) < _BULLETIN_CACHE_MAX:
                     _bulletin_cache["drop::" + url] = cached
             for d in cached:
                 if not (since_iso <= (d["t"] or "") <= sim_iso):
@@ -1419,7 +1425,8 @@ def recon_active_missions(hours: int = Query(6, ge=1, le=24)):
                 m = re.search(r"\.(\d{12})\.txt$", url)
                 fdt = datetime.strptime(m.group(1), "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
                 parsed = _parse_hdob_bulletin(txt, fdt) if txt else None
-                if len(_bulletin_cache) < _BULLETIN_CACHE_MAX:
+                # Only memoize a real fetch; a failed one must retry next build.
+                if txt is not None and len(_bulletin_cache) < _BULLETIN_CACHE_MAX:
                     _bulletin_cache[url] = parsed
             _merge_mission(parsed, basin)
         # Pull the low-latency newest bulletin so a just-launched flight (or the
