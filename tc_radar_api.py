@@ -322,6 +322,23 @@ def _client_ip(request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+# Automated-client tier. Browsers all send "Mozilla/"; scripted pollers don't.
+# One such client ("tropical-dashboard-practice-project/1.0", since 2026-08-09)
+# re-pulls every active storm's full 4 h ir-frame.jpg loop every few minutes —
+# ~24% of all API requests and nearly every logged 5xx (it asks for the newest,
+# not-yet-published frame each pass). Scripted clients get a much smaller
+# per-IP budget; our own jobs/scripts are exempt by UA prefix.
+_bot_rate_max_requests = int(os.environ.get("BOT_RATE_MAX_REQUESTS", "30"))
+_BOT_EXEMPT_UA_PREFIXES = ("Google-Cloud-Scheduler", "tc-atlas-", "GoogleHC")
+
+
+def _is_automated_client(request: StarletteRequest) -> bool:
+    ua = request.headers.get("user-agent", "")
+    if not ua or ua.startswith(_BOT_EXEMPT_UA_PREFIXES):
+        return False
+    return "Mozilla/" not in ua
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Lightweight per-IP rate limiter with abuse alerting."""
 
@@ -334,6 +351,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         client_ip = _client_ip(request)
+        automated = _is_automated_client(request)
+        max_requests = _bot_rate_max_requests if automated else _rate_max_requests
 
         now = _time.monotonic()
         with _rate_lock:
@@ -347,18 +366,29 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             while bucket and bucket[0] < cutoff:
                 bucket.pop(0)
 
-            if len(bucket) >= _rate_max_requests:
+            if len(bucket) >= max_requests:
                 _rate_rejections[client_ip] += 1
                 rej_count = _rate_rejections[client_ip]
                 if rej_count == _rate_alert_threshold:
+                    ua_note = (" (automated client: "
+                               + request.headers.get("user-agent", "")[:60] + ")") if automated else ""
                     _rate_logger.warning(
                         f"RATE_LIMIT_ABUSE: IP {client_ip} hit rate limit "
                         f"{rej_count} times in current window — "
-                        f"path={path}, threshold={_rate_max_requests}/{_rate_window}s"
+                        f"path={path}, threshold={max_requests}/{_rate_window}s{ua_note}"
                     )
+                retry_after = max(1, int(_rate_window - (now - bucket[0]))) if bucket else _rate_window
+                if automated:
+                    detail = (f"Rate limit for automated clients is {max_requests} requests per "
+                              f"{_rate_window}s per IP. Poll /ir-monitor/storm/{{id}}/ir-frames-meta "
+                              f"and fetch only frames you have not seen; do not re-download whole "
+                              f"loops each cycle. Questions: https://tcatlas.org")
+                else:
+                    detail = "Too many requests. Please slow down."
                 return JSONResponse(
                     status_code=429,
-                    content={"detail": "Too many requests. Please slow down."},
+                    content={"detail": detail},
+                    headers={"Retry-After": str(retry_after)},
                 )
 
             bucket.append(now)
