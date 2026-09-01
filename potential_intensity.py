@@ -24,6 +24,39 @@ doi:10.4231/EY35-9M10): `calculation_files_PI_vPI/{ventilation,pcmin,
 Vp_VIreduced_calc}.m` and `Data4Figs/Data_Fig3/*.mat`. Deviations are
 deliberate and flagged inline.
 
+Re-audited 2026-08-28 against Chavas's successor package **tcpyVPI 1.1.0**
+(github.com/drchavas/tcpyVPI, doi:10.5281/zenodo.19319996). Its 1.1.0
+release fixed two results-changing unit bugs in its own input handling —
+surface pressure passed to tcpyPI in Pa instead of hPa (~25% PI high
+bias), and specific humidity passed as mixing ratio (~2% more) — neither
+of which ever existed here: build_env_overlays converts PRMSL/100 and
+q/(1−q)·1000 explicitly, and `pi_grid` masks on IFL (which tcpyVPI did
+not even check before 1.1.0). Our trigonometric vPI closed form matches
+tcpyVPI's verbatim Cardano code to 4e-15 over VI ∈ [0, VI_max]. Notably,
+tcpyVPI's own parameter choices moved TOWARD ours relative to the 2025
+MATLAB: it runs CKCD=0.9 + reversible ascent (we do too; the paper used
+0.7 + pseudoadiabatic) and 850-200 shear (we do too; the paper used
+850-250). Where it still differs from us: V_reduc=1.0 (we keep 0.8),
+the standard L_v=2.501e6 (we keep Bryan 2008's inflated 2.555e6, the
+pairing Bryan recommends for pseudoadiabatic entropy), NO disc/annulus
+averaging for χ_m (pointwise; we keep the MATLAB's spatial averaging,
+which is the right model of a hypothetical storm's environment on a
+map), and vPI above VI_max emitted as NaN rather than the MATLAB's 0
+(ours keeps 0 = "no equilibrium TC", which is the physically meaningful
+answer for a map). It also adds a genesis index,
+GPIv = (102.1·vPI·η_c)^4.9·cos(lat)·dx·dy, which we do not compute.
+
+The same audit surfaced a code-vs-paper discrepancy in the published
+bundle itself: the paper text puts the entropy deficit at 600 hPa
+(following Hoogewind et al. 2019) with 850-200 shear, while the archived
+setup_ventilation.m ran 700 hPa and 850-250. This module originally
+followed the MATLAB (700); on 2026-08-28 CHI_MID_HPA moved to 600,
+which is what T&E, Hoogewind, the paper text, tcpyVPI, and the storm
+page's favorability.py all agree on. The regional validation table
+above was computed at 700 and its VI values will read slightly
+differently at 600; the reference .mat fields themselves appear to have
+been produced with the MATLAB's 700/850-250 settings.
+
 Three independent checks, all passed:
 
  1. The closed-form vPI here agrees with the reference's Cardano-radical
@@ -96,15 +129,27 @@ PI_MISS_HANDLE = 1      # tcpyPI's NaN policy for missing mixing ratio
 # Chavas et al. (2025) exact — swap in to reproduce their published fields.
 PI_PARAMS_CHAVAS = dict(ckcd=0.7, ascent_flag=1, v_reduc=1.0)
 
-CHI_MID_HPA = 700.0     # entropy-deficit level. Chavas uses 700; Tang &
-                        # Emanuel (2012) use 600. We follow Chavas here
-                        # because this feeds vPI. The per-storm VI on the
-                        # storm page (favorability.py) stays at 600 = T&E.
+CHI_MID_HPA = 600.0     # entropy-deficit level. 600 hPa is what T&E
+                        # (2012), Hoogewind et al. (2019), the Chavas
+                        # et al. (2025) paper TEXT ("calculated at 600
+                        # hPa, following Hoogewind"), tcpyVPI, and the
+                        # storm page (favorability.py) all use. The lone
+                        # dissenter is the archived MATLAB bundle
+                        # (setup_ventilation.m: pmid = 70000 Pa), which
+                        # this module originally followed — a code-vs-
+                        # paper discrepancy in the published bundle
+                        # itself. Switched 700 → 600 on 2026-08-28, and
+                        # Chavas confirmed 600 is the intended level
+                        # (pers. comm. to M. Fischer, 2026-09). The
+                        # docstring's regional validation numbers predate
+                        # the switch. build_era5_vpi_indices.py stays at
+                        # 700 until its planned rebuild (the GC-ATLAS
+                        # ERA5 manifest doesn't index 600 hPa).
 CHI_R_INNER_KM = 100.0  # hypothetical inner-core disc (saturation entropy)
 CHI_R_OUTER_KM = 300.0  # hypothetical environmental annulus outer radius
 
-SHEAR_LOW_HPA = 850     # T&E 2012 deep-layer shear. Chavas used 850-250.
-SHEAR_UPP_HPA = 200
+SHEAR_LOW_HPA = 850     # T&E 2012 deep-layer shear. Chavas's 2025 MATLAB
+SHEAR_UPP_HPA = 200     # used 850-250, but his tcpyVPI now uses 850-200 too.
 
 VI_MAX = 0.145          # genesis/ventilation threshold, Hoogewind et al. (2020)
 

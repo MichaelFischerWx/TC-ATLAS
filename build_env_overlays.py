@@ -2624,7 +2624,7 @@ def build_ventilation_index(date_str: str, hour_str: str, *,
                          0.20, 0.30, 0.50],
         description=(
             "VI = V_shear · χ_m / PI (Tang & Emanuel 2012) — "
-            "deep-layer shear times the 700 hPa entropy deficit, scaled by "
+            "deep-layer shear times the 600 hPa entropy deficit, scaled by "
             "potential intensity. LOWER is more favorable. The 0.145 "
             "contour is the genesis threshold (Hoogewind et al. 2020): "
             "above it no steady TC can be sustained. " + _PI_VORTEX_NOTE
