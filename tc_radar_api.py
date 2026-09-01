@@ -458,8 +458,12 @@ class CacheHeaderMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         path = request.url.path
 
-        # Only cache successful responses
-        if response.status_code == 200:
+        # Never cache errors: Cloudflare's default negative caching would pin
+        # a transient 404 (e.g. cold instance whose NHC poll failed) at a colo
+        # for minutes, serving "not found" long after the origin recovered.
+        if response.status_code >= 400:
+            response.headers['Cache-Control'] = 'no-store'
+        elif response.status_code == 200:
             if any(path.startswith(p) for p in self.IMMUTABLE_PREFIXES):
                 # Immutable scientific data: browser holds 1d, CDN holds 7d.
                 # s-maxage + immutable let Cloud CDN absorb repeat hits without
