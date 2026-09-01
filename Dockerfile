@@ -38,7 +38,6 @@ COPY ir_monitor_api.py .
 COPY favorability.py .
 COPY og_card.py .
 COPY og_refresh.py .
-COPY prewarm_job.py .
 COPY ogcard_job.py .
 COPY tc_center_fix.py .
 COPY nexrad_api.py .
