@@ -3990,6 +3990,9 @@
     // skip that for now). Hover tooltip shows the full obs.
     var _surfaceObsLayer = null;
     var _surfaceObsAbortController = null;
+    var _surfaceObsLoading = false;      // fetch in flight (layer not built yet)
+    var _surfaceObsRetryTimer = null;    // pending auto-retry after a failure
+    var _surfaceObsAutoRetried = false;  // one silent retry per card open
 
     // Global-map (viewport) surface-obs overlay — independent of the
     // storm-card overlay above. Live METAR (land) + NDBC (marine) plots
@@ -3999,6 +4002,7 @@
     var _rtObsAbort = null;          // in-flight fetch AbortController
     var _rtObsDebounce = null;       // moveend debounce timer
     var _rtObsLastKey = '';          // last fetched bbox key (skip redundant pulls)
+    var _rtObsRetryTimer = null;     // pending self-heal retry after a failed pull
     var _RT_OBS_MIN_ZOOM = 5;        // below this the world is too dense to plot
 
     function _kt(v) { return (v == null) ? null : Math.round(v); }
@@ -4123,10 +4127,24 @@
             _ga('ir_surface_obs_toggle', { on: false });
             return;
         }
+        if (_surfaceObsLoading) {
+            // A click while the fetch is in flight means "turn it off" —
+            // without this guard it read as OFF→ON and kicked off a SECOND
+            // fetch (orphaning the first layer and desyncing the button).
+            _surfaceObsLoading = false;
+            if (_surfaceObsAbortController) {
+                try { _surfaceObsAbortController.abort(); } catch (e) {}
+                _surfaceObsAbortController = null;
+            }
+            if (btn) btn.classList.remove('active');
+            _ga('ir_surface_obs_toggle', { on: false });
+            return;
+        }
         if (btn) btn.classList.add('active');
         _ga('ir_surface_obs_toggle', { on: true });
 
         var atcfId = currentStormId;
+        _surfaceObsLoading = true;
         _surfaceObsAbortController = new AbortController();
         var sig = _surfaceObsAbortController.signal;
         fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) +
@@ -4182,15 +4200,30 @@
                     _rtObsBindClick(marker, ob);
                     lg.addLayer(marker);
                 }
+                _surfaceObsLoading = false;
                 _surfaceObsLayer = lg.addTo(detailMap);
                 console.log('[RT Monitor] Surface obs: ' + obs.length +
                             ' stations within ' +
                             (data.bbox ? '10°' : 'bbox'));
             })
             .catch(function (err) {
+                _surfaceObsLoading = false;
                 if (err && err.name === 'AbortError') return;
                 console.warn('[RT Monitor] surface obs fetch failed:', err && err.message);
                 if (btn) btn.classList.remove('active');
+                // One silent self-heal per card open before bothering the
+                // user: the load fires exactly once on card open, so a
+                // transient blip (cold instance, upstream hiccup) used to
+                // cost obs for the whole session.
+                if (!_surfaceObsAutoRetried && currentStormId === atcfId) {
+                    _surfaceObsAutoRetried = true;
+                    _surfaceObsRetryTimer = setTimeout(function () {
+                        _surfaceObsRetryTimer = null;
+                        if (currentStormId === atcfId && !_surfaceObsLayer &&
+                            !_surfaceObsLoading) window._irToggleSurfaceObs();
+                    }, 6000);
+                    return;
+                }
                 _rtToast('Couldn’t load surface observations — tap Obs to retry');
             });
     };
@@ -4205,6 +4238,9 @@
             try { _surfaceObsAbortController.abort(); } catch (e) {}
             _surfaceObsAbortController = null;
         }
+        _surfaceObsLoading = false;
+        _surfaceObsAutoRetried = false;
+        if (_surfaceObsRetryTimer) { clearTimeout(_surfaceObsRetryTimer); _surfaceObsRetryTimer = null; }
         var btn = document.getElementById('ir-detail-obs-toggle');
         if (btn) btn.classList.remove('active');
     }
@@ -4775,7 +4811,19 @@
             .catch(function (err) {
                 if (err && err.name === 'AbortError') return;
                 console.warn('[RT Monitor] viewport surface obs fetch failed:', err && err.message);
-                _rtObsSetHint('Surface obs unavailable');
+                _rtObsSetHint('Surface obs unavailable — retrying');
+                // Un-commit the viewport key: it was claimed BEFORE the fetch,
+                // so a failure used to latch this viewport as "done" and the
+                // hint stuck at "unavailable" (no retry) until the user panned
+                // far enough to change the rounded key. Clear it and self-heal
+                // on a timer so a transient upstream blip recovers on its own.
+                _rtObsLastKey = '';
+                if (!_rtObsRetryTimer) {
+                    _rtObsRetryTimer = setTimeout(function () {
+                        _rtObsRetryTimer = null;
+                        _rtObsRefresh();
+                    }, 15000);
+                }
             });
     }
 
@@ -4797,6 +4845,7 @@
         } else {
             map.off('moveend', _rtObsOnMove);
             if (_rtObsDebounce) { clearTimeout(_rtObsDebounce); _rtObsDebounce = null; }
+            if (_rtObsRetryTimer) { clearTimeout(_rtObsRetryTimer); _rtObsRetryTimer = null; }
             if (_rtObsAbort) { try { _rtObsAbort.abort(); } catch (e) {} _rtObsAbort = null; }
             if (_rtObsLayer) { map.removeLayer(_rtObsLayer); _rtObsLayer = null; }
             _rtObsLastKey = '';
@@ -5369,6 +5418,227 @@
         _gRadarShowBucket(_iemLayerForFrameTime(_gRadarFrameTime()));
     };
 
+    // ── Global-map measure tool ──────────────────────────────────────────
+    // Armed via the "Measure" pill: map panning pauses (wheel/pinch zoom stay
+    // live) and a mouse/touch drag draws a great-circle line with a
+    // km · n mi · bearing readout. Endpoints are stored as lat/lng, and the
+    // canvas overlay re-projects on every map move, so the line and its
+    // length stay geographically true through any zoom or pan. The finished
+    // line persists until the next drag, Esc, or toggling the pill off.
+    var _measOn = false;          // tool armed (pill active)
+    var _measDrag = false;        // pointer currently down mid-drag
+    var _measPts = null;          // [startLatLng, endLatLng] or null
+    var _measCanvas = null;
+    var _measRedrawBound = null;
+    var _measKeyBound = null;
+
+    function _measDistKm(a, b) {
+        var R = 6371, d2r = Math.PI / 180;
+        var p1 = a.lat * d2r, p2 = b.lat * d2r;
+        var dp = (b.lat - a.lat) * d2r, dl = (b.lng - a.lng) * d2r;
+        var s = Math.sin(dp / 2) * Math.sin(dp / 2)
+              + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
+        return 2 * R * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+    }
+    function _measBearing(a, b) {
+        var d2r = Math.PI / 180;
+        var p1 = a.lat * d2r, p2 = b.lat * d2r, dl = (b.lng - a.lng) * d2r;
+        var y = Math.sin(dl) * Math.cos(p2);
+        var x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+        return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+    }
+    /** n+1 [lat,lng] samples along the great circle a→b (slerp on the unit
+     *  sphere). Lngs are unwrapped for continuity so the projected polyline
+     *  doesn't jump when the line crosses the antimeridian. */
+    function _measArc(a, b, n) {
+        var d2r = Math.PI / 180, r2d = 180 / Math.PI;
+        function vec(p) { var la = p.lat * d2r, lo = p.lng * d2r;
+            return [Math.cos(la) * Math.cos(lo), Math.cos(la) * Math.sin(lo), Math.sin(la)]; }
+        var va = vec(a), vb = vec(b);
+        var dot = Math.max(-1, Math.min(1, va[0] * vb[0] + va[1] * vb[1] + va[2] * vb[2]));
+        var w = Math.acos(dot), sw = Math.sin(w);
+        var pts = [], prevLng = a.lng;
+        for (var i = 0; i <= n; i++) {
+            var t = i / n, lat, lng;
+            if (sw < 1e-9) { lat = a.lat; lng = a.lng; }
+            else {
+                var f1 = Math.sin((1 - t) * w) / sw, f2 = Math.sin(t * w) / sw;
+                var x = f1 * va[0] + f2 * vb[0], y = f1 * va[1] + f2 * vb[1], z = f1 * va[2] + f2 * vb[2];
+                lat = Math.atan2(z, Math.sqrt(x * x + y * y)) * r2d;
+                lng = Math.atan2(y, x) * r2d;
+            }
+            while (lng - prevLng > 180) lng -= 360;
+            while (lng - prevLng < -180) lng += 360;
+            prevLng = lng;
+            pts.push([lat, lng]);
+        }
+        return pts;
+    }
+
+    function _measEnsureCanvas() {
+        if (_measCanvas && _measCanvas.parentNode) return _measCanvas;
+        // Above markers/tooltips (600/650) so the readout is never buried,
+        // below popups (700). pointerEvents:none (pane default) — the map
+        // keeps receiving the drag.
+        if (!map.getPanes()['measurePane']) {
+            var pane = map.createPane('measurePane');
+            if (pane) pane.style.zIndex = 690;
+        }
+        var c = document.createElement('canvas');
+        c.style.position = 'absolute';
+        c.style.left = 0;
+        c.style.top = 0;
+        c.style.pointerEvents = 'none';
+        map.getPane('measurePane').appendChild(c);
+        _measCanvas = c;
+        return c;
+    }
+
+    function _measRedraw() {
+        if (!map) return;
+        var c = _measEnsureCanvas();
+        var size = map.getSize();
+        var dpr = window.devicePixelRatio || 1;
+        if (c.width !== Math.round(size.x * dpr) || c.height !== Math.round(size.y * dpr)) {
+            c.width = Math.round(size.x * dpr);
+            c.height = Math.round(size.y * dpr);
+            c.style.width = size.x + 'px';
+            c.style.height = size.y + 'px';
+        }
+        var ctx = c.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, size.x, size.y);
+        if (!_measPts) return;
+
+        var a = _measPts[0], b = _measPts[1];
+        var arc = _measArc(a, b, 64);
+        // Shift the whole line into the world copy nearest the current view
+        // (drag endpoints can carry unwrapped lngs after panning across the
+        // dateline; project() accepts any lng, we just want the near copy).
+        var shift = Math.round((map.getCenter().lng - arc[0][1]) / 360) * 360;
+        var pts = [];
+        for (var i = 0; i < arc.length; i++) {
+            pts.push(map.latLngToContainerPoint([arc[i][0], arc[i][1] + shift]));
+        }
+
+        function strokeLine(width, style) {
+            ctx.beginPath();
+            ctx.moveTo(pts[0].x, pts[0].y);
+            for (var j = 1; j < pts.length; j++) ctx.lineTo(pts[j].x, pts[j].y);
+            ctx.lineWidth = width;
+            ctx.strokeStyle = style;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.stroke();
+        }
+        // Two-pass (dark halo + light ink) so the line reads on IR, Vis, and
+        // radar alike — same trick as the wind-barb layers.
+        strokeLine(4.5, 'rgba(11,18,32,0.85)');
+        strokeLine(2, '#ffffff');
+        [pts[0], pts[pts.length - 1]].forEach(function (p) {
+            ctx.beginPath(); ctx.arc(p.x, p.y, 4.5, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(11,18,32,0.85)'; ctx.fill();
+            ctx.beginPath(); ctx.arc(p.x, p.y, 2.8, 0, Math.PI * 2);
+            ctx.fillStyle = '#ffffff'; ctx.fill();
+        });
+
+        var km = _measDistKm(a, b), nmi = km * 0.539957;
+        var brg = ('00' + Math.round(_measBearing(a, b))).slice(-3);
+        var txt = (km >= 100 ? Math.round(km) : km.toFixed(1)) + ' km · '
+                + (nmi >= 100 ? Math.round(nmi) : nmi.toFixed(1)) + ' n mi · '
+                + brg + '°';
+        var mid = pts[Math.floor(pts.length / 2)];
+        ctx.font = '600 11px "DM Sans", sans-serif';
+        var tw = ctx.measureText(txt).width;
+        var bw = tw + 14, bh = 20;
+        var bx = Math.max(4, Math.min(size.x - bw - 4, mid.x - bw / 2));
+        var by = Math.max(4, mid.y - 30);
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(bx, by, bw, bh, 5); else ctx.rect(bx, by, bw, bh);
+        ctx.fillStyle = 'rgba(15,23,42,0.88)';
+        ctx.fill();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+        ctx.stroke();
+        ctx.fillStyle = '#e2e8f0';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(txt, bx + bw / 2, by + bh / 2 + 0.5);
+    }
+
+    function _measDown(e) {
+        if (!_measOn || !e.latlng) return;
+        var oe = e.originalEvent;
+        if (oe && typeof oe.button === 'number' && oe.button !== 0) return;
+        // Two-finger gesture = pinch zoom, not a measurement.
+        if (oe && oe.touches && oe.touches.length > 1) { _measDrag = false; return; }
+        if (e.type && e.type.indexOf('touch') === 0 && oe && oe.cancelable) oe.preventDefault();
+        _measDrag = true;
+        _measPts = [e.latlng, e.latlng];
+        _measRedraw();
+    }
+    function _measMove(e) {
+        if (!_measOn || !_measDrag || !e.latlng) return;
+        var oe = e.originalEvent;
+        if (oe && oe.touches && oe.touches.length > 1) return;
+        if (e.type && e.type.indexOf('touch') === 0 && oe && oe.cancelable) oe.preventDefault();
+        _measPts[1] = e.latlng;
+        _measRedraw();
+    }
+    function _measUp() {
+        if (!_measOn || !_measDrag) return;
+        _measDrag = false;
+        // A stray click with no real drag clears instead of leaving a dot.
+        if (_measPts) {
+            var p0 = map.latLngToContainerPoint(_measPts[0]);
+            var p1 = map.latLngToContainerPoint(_measPts[1]);
+            if (p0.distanceTo(p1) < 4) _measPts = null;
+        }
+        _measRedraw();
+    }
+
+    window._rtMeasureToggle = function () {
+        if (!map) return;
+        var btn = document.getElementById('ir-measure-mode-btn');
+        var cont = map.getContainer();
+        if (_measOn) {
+            _measOn = false;
+            _measDrag = false;
+            _measPts = null;
+            if (btn) btn.classList.remove('active');
+            if (cont) cont.classList.remove('ir-measuring');
+            if (map.dragging) map.dragging.enable();
+            map.off('mousedown', _measDown); map.off('mousemove', _measMove);
+            map.off('mouseup', _measUp);
+            map.off('touchstart', _measDown); map.off('touchmove', _measMove);
+            map.off('touchend', _measUp);
+            if (_measRedrawBound) {
+                map.off('move', _measRedrawBound);
+                map.off('zoom', _measRedrawBound);
+                map.off('resize', _measRedrawBound);
+                _measRedrawBound = null;
+            }
+            if (_measKeyBound) { document.removeEventListener('keydown', _measKeyBound); _measKeyBound = null; }
+            _measRedraw();   // clears the canvas
+            return;
+        }
+        _measOn = true;
+        if (btn) btn.classList.add('active');
+        if (cont) cont.classList.add('ir-measuring');
+        _ga('rt_global_measure_toggle', { on: true });
+        if (map.dragging) map.dragging.disable();
+        map.on('mousedown', _measDown); map.on('mousemove', _measMove);
+        map.on('mouseup', _measUp);
+        map.on('touchstart', _measDown); map.on('touchmove', _measMove);
+        map.on('touchend', _measUp);
+        _measRedrawBound = function () { _measRedraw(); };
+        map.on('move', _measRedrawBound);
+        map.on('zoom', _measRedrawBound);
+        map.on('resize', _measRedrawBound);
+        _measKeyBound = function (e) { if (e.key === 'Escape') window._rtMeasureToggle(); };
+        document.addEventListener('keydown', _measKeyBound);
+    };
+
     /** Keep the rt-anim slider, play button, and speed pill in sync
      *  with globalAnim* state. Called whenever a frame is shown, the
      *  animation starts/pauses, frames finish loading, or cleanup
@@ -5779,6 +6049,20 @@
                 radarBtn.title = 'Toggle US NEXRAD base reflectivity (IEM) — overlays the satellite, synced to the loop (CONUS only)';
                 radarBtn.innerHTML = '<span class="ir-radar-mode-glyph" aria-hidden="true">◈</span><span class="ir-radar-mode-text">Radar</span>';
                 radarBtn.addEventListener('click', function () { window._gToggleRadar(); });
+
+                // ── Measure tool toggle (sibling of 3D / Radar) ────────────
+                // Drag anywhere on the map for a great-circle distance readout
+                // (km + n mi + bearing) — sized for eyeballing core diameters
+                // on radar, eyewall widths, storm-to-coast gaps. The endpoints
+                // are geographic, so the line rescales with zoom.
+                var measBtn = L.DomUtil.create('button', 'ir-measure-mode-btn', wrap);
+                measBtn.id = 'ir-measure-mode-btn';
+                measBtn.type = 'button';
+                measBtn.title = 'Measure distance — drag on the map for a great-circle readout (km · n mi · bearing). Drag again for a new line; Esc or click here to exit.';
+                measBtn.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">'
+                    + '<path d="M2.2 13.8 13.8 2.2M2.2 13.8l2.9-.7M2.2 13.8l.7-2.9M13.8 2.2l-2.9.7M13.8 2.2l-.7 2.9M6.2 9.8l1.3 1.3M9.8 6.2l1.3 1.3"/>'
+                    + '</svg><span class="ir-measure-mode-text">Measure</span>';
+                measBtn.addEventListener('click', function () { window._rtMeasureToggle(); });
 
                 // ── Microwave one-click toggle + options chevron ────
                 // Sibling of the IR/GeoColor pills so users don't have

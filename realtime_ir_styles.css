@@ -1165,6 +1165,43 @@ html, body { margin: 0; padding: 0; }
     border-color: rgba(34, 197, 94, 0.55);
     color: #86efac;
 }
+/* Measure tool toggle — sibling pill of ⛰3D / ◈Radar in the global-map
+   control bar. Cyan active state (a readout utility, not an overlay product).
+   While armed the map cursor goes crosshair and drags draw the distance line. */
+.ir-layers-wrap .ir-measure-mode-btn { order: 2; }
+.ir-measure-mode-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border-radius: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(22, 27, 36, 0.92);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    padding: 4px 10px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #cbd5e1;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.ir-measure-mode-btn svg { opacity: 0.9; }
+.ir-measure-mode-btn:hover {
+    background: rgba(34, 211, 238, 0.14);
+    border-color: rgba(34, 211, 238, 0.40);
+    color: #ffffff;
+}
+.ir-measure-mode-btn.active {
+    background: rgba(34, 211, 238, 0.20);
+    border-color: rgba(34, 211, 238, 0.55);
+    color: #67e8f9;
+}
+#ir-map.ir-measuring,
+#ir-map.ir-measuring canvas {
+    cursor: crosshair !important;
+}
+
 /* Radar dBZ legend (created in JS, appended to the map). Desktop: bottom-right,
    clear of the genesis/anim dock (which is bottom-left). */
 .ir-radar-global-legend {
@@ -1196,6 +1233,7 @@ html, body { margin: 0; padding: 0; }
     .ir-layers-wrap { gap: 2px; }
     .ir-layers-wrap .ir-3d-mode-btn,
     .ir-layers-wrap .ir-radar-mode-btn,
+    .ir-layers-wrap .ir-measure-mode-btn,
     .ir-layers-wrap .ir-mw-toggle-btn { padding: 4px 6px; }
     .ir-mode-segment .ir-mode-btn { padding: 4px 6px; }
 }

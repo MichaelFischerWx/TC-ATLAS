@@ -220,6 +220,17 @@
             if (this._ctrl) return; this._ctrl = new maplibregl.NavigationControl({ showCompass: false });
             this._map._gl.addControl(this._ctrl, (pos || 'topleft').replace('top', 'top-').replace('bottom', 'bottom-')); }, _map: this };
         if (options.zoomControl !== false) this.zoomControl.setPosition('topleft');
+
+        // Leaflet's map.dragging handler, bridged to MapLibre's dragPan (which
+        // covers mouse AND single-finger touch panning). Pinch zoom and wheel
+        // zoom stay live. Used by the RT measure tool so a drag draws a
+        // distance line instead of panning the map.
+        var _dragSelf = this;
+        this.dragging = {
+            enable: function () { try { _dragSelf._gl.dragPan.enable(); } catch (e) {} return this; },
+            disable: function () { try { _dragSelf._gl.dragPan.disable(); } catch (e) {} return this; },
+            enabled: function () { try { return _dragSelf._gl.dragPan.isEnabled(); } catch (e) { return true; } }
+        };
     }
 
     Map.prototype.getContainer = function () { return this._gl.getContainer(); };
