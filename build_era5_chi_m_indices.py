@@ -22,10 +22,13 @@ vorticity.
 
 Levels:
     boundary layer = 1000 mb
-    mid-trop       = 700 mb  (Tippett 2011 / Camargo 2014 convention —
-                              the canonical Emanuel/Tang 600 mb level
-                              is missing from the GC-ATLAS climo
-                              manifest)
+    mid-trop       = 600 mb  (Tang & Emanuel 2012 / Hoogewind 2019 /
+                              Chavas 2025, who confirmed 600 as the
+                              intended level — pers. comm., 2026-09.
+                              The GC-ATLAS tile store has no 600 mb
+                              t/q, so those two grids come from the
+                              CDS sidecar era5_600_sidecar.py; ran at
+                              700 mb until 2026-09-01)
 
 Entropy formulation: Bryan (2008) eq. (16), reversible moist entropy
 (formally-exact thermodynamic entropy of a parcel that conserves total
@@ -40,10 +43,11 @@ means because it doesn't depend on integration history):
 For unsaturated parcels r_t = r_v. For saturated air H=1 so the last
 term vanishes.
 
-Inputs (all monthly, from GC-ATLAS):
-    pressure_levels/t at 1000, 700 mb        (K)
-    pressure_levels/q at 1000, 700 mb        (kg/kg)
-    single_levels/sst                         (K — ERA5 native)
+Inputs (all monthly means):
+    pressure_levels/t at 1000 mb             (K — GC-ATLAS tiles)
+    pressure_levels/q at 1000 mb             (kg/kg — GC-ATLAS tiles)
+    t + q at 600 mb                           (CDS via era5_600_sidecar)
+    single_levels/sst                         (K — ERA5 native, GC-ATLAS)
 
 Outputs (added to data/indices_monthly_era5_chi_m.json + uploaded to
 gs://${GCS_IR_CACHE_BUCKET}/seasonal/indices_monthly_era5_chi_m.json):
@@ -92,15 +96,14 @@ P_REF   = 100000.0    # Pa  (1000 hPa reference pressure)
 L_V_0   = 2.501e6     # J/kg, latent heat of vaporization at T_REF
 
 # Pressure-level constants for the three entropy evaluations.
-# Mid-trop is 700 mb instead of the Emanuel/Tang canonical 600 mb:
-# the GC-ATLAS climo manifest lists 500, 700, 850 (no 600 entry — its
-# tile files exist in GCS but the manifest indexing skips that level).
-# 700 mb is the level Tippett et al. (2011), Camargo et al. (2014),
-# and most modern TGPI work use for χ_m anyway, so the literature
-# alignment is fine. Qualitative interpretation is identical: low χ_m
-# = saturated mid-trop = favorable; high χ_m = dry = suppressive.
+# Mid-trop is the Emanuel/Tang canonical 600 mb, matching the RT map
+# layers (potential_intensity.py), the storm page (favorability.py),
+# and Chavas's own confirmation that 600 is the intended level
+# (pers. comm. to M. Fischer, 2026-09). The GC-ATLAS tile store has no
+# 600 mb t/q (700 was used here until 2026-09-01 for that reason), so
+# the mid-level grids come from the CDS sidecar era5_600_sidecar.py.
 P_BOUND = 100000.0    # 1000 mb (boundary-layer entropy)
-P_MID   = 70000.0     # 700 mb  (mid-trop entropy)
+P_MID   = 60000.0     # 600 mb  (mid-trop entropy)
 P_SURF  = 101325.0    # standard surface pressure for SST saturation
 
 
@@ -181,9 +184,20 @@ def _ensure_sst_kelvin(sst: np.ndarray) -> np.ndarray:
 
 def compute_chi_m_grid(T_b: np.ndarray, q_b: np.ndarray,
                        T_m: np.ndarray, q_m: np.ndarray,
-                       sst: np.ndarray
+                       sst: np.ndarray, asdeq: np.ndarray
                        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Pointwise χ_m, s_b, s_m on a (lat, lon) grid."""
+    """Pointwise χ_m, s_b, s_m on a (lat, lon) grid.
+
+    Denominator = the BE-2002 air-sea disequilibrium `asdeq` inverted
+    from the PI solve (era5_pi_monthly), which is what Tang & Emanuel's
+    supplement (ES128) actually specifies — "evaluated at the radius of
+    maximum wind for a TC at its potential intensity". The previous
+    gridded approximation s*_SST − s_b (still computed here for the s_b
+    diagnostic) measured ~38% larger (86.1 vs 53.3 J/(kg·K) at 15N/45W)
+    → χ_m biased low → vPI biased high. Guards follow ventilation.m /
+    potential_intensity.chi_m_grid: numerator clamped at 0, denominator
+    floored at 1 J/(kg·K), asdeq < 0 (net enthalpy flux INTO the ocean)
+    → χ_m undefined."""
     r_b = mixing_ratio_from_q(q_b)
     r_m = mixing_ratio_from_q(q_m)
     s_b = bryan_moist_entropy(T_b, r_b, P_BOUND, saturated=False)
@@ -191,13 +205,11 @@ def compute_chi_m_grid(T_b: np.ndarray, q_b: np.ndarray,
     # Mid-trop SATURATION entropy: same T_m, but r_v = r_sat(T_m, p_m).
     r_m_sat = sat_mixing_ratio(T_m, P_MID)
     s_m_sat = bryan_moist_entropy(T_m, r_m_sat, P_MID, saturated=True)
-    # SST saturation entropy: at sea-level p, with T = SST.
-    r_sst_sat = sat_mixing_ratio(sst, P_SURF)
-    s_sst_sat = bryan_moist_entropy(sst, r_sst_sat, P_SURF, saturated=True)
-    # χ_m = (s_m* - s_m) / (s_SST* - s_b)
-    num   = s_m_sat - s_m
-    denom = s_sst_sat - s_b
-    chi_m = np.where(denom > 1.0, num / denom, np.nan)   # 1 J/(kg·K) floor
+    # χ_m = (s_m* - s_m) / asdeq
+    num = np.maximum(0.0, s_m_sat - s_m)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        chi_m = num / np.maximum(asdeq, 1.0)
+    chi_m = np.where(np.isfinite(chi_m) & (asdeq >= 0), chi_m, np.nan)
     return chi_m, s_b, s_m
 
 
@@ -207,19 +219,28 @@ SHORT_FIELDS = ("chi_m", "s_b", "s_m")
 def grids_for(manifest: dict, month: int, *,
               period: str = "default", year: int | None = None
               ) -> tuple[np.ndarray, np.ndarray, np.ndarray,
-                         np.ndarray, np.ndarray] | None:
-    """Fetch the 5 input grids for one (month, year) — T+q at 1000 and
-    600 mb plus SST. Returns None if any are missing."""
+                         np.ndarray, np.ndarray, np.ndarray] | None:
+    """Fetch the 6 input grids for one (month, year) — T+q at 1000 and
+    600 mb, SST, and the BE-2002 asdeq from the shared PI solve.
+    Returns None if any are missing."""
     kw = dict(kind="mean", period=period, year=year)
     T_b = fetch_field_grid(manifest, "t", 1000, month, **kw)
     q_b = fetch_field_grid(manifest, "q", 1000, month, **kw)
-    T_m = fetch_field_grid(manifest, "t", 700,  month, **kw)
-    q_m = fetch_field_grid(manifest, "q", 700,  month, **kw)
+    # Mid-level t/q at 600 mb come from the CDS sidecar (the GC-ATLAS
+    # tile store has no 600 mb level); climo when year is None.
+    from era5_600_sidecar import load_tq600
+    mid = load_tq600(month, year=None if period == "default" else year)
+    T_m, q_m = mid if mid is not None else (None, None)
     sst = fetch_field_grid(manifest, "sst", None, month, **kw)
-    if any(g is None for g in (T_b, q_b, T_m, q_m, sst)):
+    # BE-2002 air-sea disequilibrium from the shared monthly PI solve
+    # (cached on disk; the vPI builder reuses the same solves).
+    from era5_pi_monthly import pi_for
+    pi = pi_for(manifest, month, period=period, year=year)
+    asdeq = pi["asdeq"] if pi is not None else None
+    if any(g is None for g in (T_b, q_b, T_m, q_m, sst, asdeq)):
         return None
     sst = _ensure_sst_kelvin(sst)
-    return (T_b, q_b, T_m, q_m, sst)
+    return (T_b, q_b, T_m, q_m, sst, asdeq)
 
 
 def compute_region_means(manifest: dict, month: int, *,
@@ -252,12 +273,14 @@ def main() -> None:
 
     out: dict = {
         "metadata": {
-            "source": "gc-atlas-era5 (T+q@1000,600 + SST)",
-            "method": "Bryan (2008) reversible moist entropy; "
-                      "χ_m = (s_m* - s_m)/(s_SST* - s_b) "
-                      "[Emanuel 2010, Tang & Emanuel 2012]",
+            "source": "gc-atlas-era5 (T+q@1000 + SST) + CDS ERA5 "
+                      "monthly means (T+q@600, era5_600_sidecar)",
+            "method": "Bryan (2008) reversible moist entropy numerator; "
+                      "denominator = BE-2002 air-sea disequilibrium "
+                      "inverted from the PI solve (T&E 2012 suppl. ES128); "
+                      "χ_m = (s_m* - s_m)/asdeq",
             "boundary_level_hpa": 1000,
-            "mid_level_hpa": 700,
+            "mid_level_hpa": 600,
             "clim_period": CLIM_PERIOD,
             "per_year_start": PER_YEAR_START,
             "per_year_end_inclusive": PER_YEAR_END,
@@ -274,7 +297,7 @@ def main() -> None:
             },
             "s_m": {
                 "units": "J kg⁻¹ K⁻¹",
-                "long_name": "Mid-trop moist entropy (700 mb)",
+                "long_name": "Mid-trop moist entropy (600 mb)",
             },
         },
         "regions": {r: list(box) for r, box in REGIONS.items()},

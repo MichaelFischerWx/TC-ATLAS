@@ -57,3 +57,4 @@ data/*.parquet
 
 # GHOST-RA local dev data (published to cdn.tcatlas.org/ghost-ra/, not to Pages)
 ghost-ra/
+data/era5_600_monthly/

@@ -118,6 +118,9 @@ if run "C1. build_era5_indices.py" "$PY" build_era5_indices.py; then
         gsutil -h "Content-Type:application/json" \
                cp data/indices_monthly_era5.json "$BUCKET/indices_monthly_era5.json"
 fi
+# C2/C3 read mid-level (600 hPa) t/q from the CDS sidecar, which needs
+# the current year's file topped up as CDS publishes new months.
+run "C1b. era5_600_sidecar.py --refresh" "$PY" era5_600_sidecar.py --refresh
 run "C2. build_era5_chi_m_indices.py"  "$PY" build_era5_chi_m_indices.py
 run "C3. build_era5_vpi_indices.py"    "$PY" build_era5_vpi_indices.py
 

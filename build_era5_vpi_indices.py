@@ -30,8 +30,12 @@ directly in their Fig. 1 + Eq. 4 derivation.
 The ventilation index (Tang & Emanuel 2012) is
     VI = (V_shear · χ_m) / PI
 where V_shear is the 200-850 hPa vector wind shear magnitude and χ_m
-is the mid-tropospheric entropy deficit (here at 700 hPa following the
-constraint that GC-ATLAS's climo manifest doesn't index 600 hPa).
+is the mid-tropospheric entropy deficit at 600 hPa — the T&E /
+Hoogewind / Chavas level, confirmed by Chavas as intended (pers.
+comm., 2026-09), and the level every other TC-ATLAS VI surface uses.
+The GC-ATLAS tile store has no 600 hPa t/q, so the mid-level grids
+come from the CDS sidecar era5_600_sidecar.py (700 was used here
+until 2026-09-01 for that reason).
 
 Pointwise computation is essential — basin-mean inputs run head-on
 into Jensen's inequality (vPI is a strongly nonlinear function of VI
@@ -41,13 +45,15 @@ averaged pointwise vPI by 20-100%. Chavas's Fig. 3c shows Atlantic
 MDR annual-mean vPI ≈ 40-60 m/s; that's recoverable only by
 computing pointwise then averaging.
 
-Inputs (all monthly mean, GC-ATLAS 1° tiles, 181 lat × 360 lon):
-    pressure_levels/t at 1000, 700 mb        (K)
-    pressure_levels/q at 1000, 700 mb        (kg/kg)
-    pressure_levels/u at 200, 850 mb         (m/s)
-    pressure_levels/v at 200, 850 mb         (m/s)
-    single_levels/sst                          (K)
-    single_levels/mpi                          (m/s) — Bister & Emanuel
+Inputs (all monthly mean, 181 lat × 360 lon on the GC-ATLAS 1° frame):
+    t + q at 600 mb                           (CDS via era5_600_sidecar)
+    pressure_levels/u at 200, 850 mb         (m/s — GC-ATLAS tiles)
+    pressure_levels/v at 200, 850 mb         (m/s — GC-ATLAS tiles)
+    PI (VMAX) + BE-2002 asdeq                 (era5_pi_monthly: tcpyPI
+        on the GC-ATLAS profile tiles + 600-mb sidecar; VMAX matches
+        the catalog's mpi tile to r=1.0000, and asdeq is the T&E
+        suppl.-ES128 χ_m denominator the old s*_SST − s_b gridded
+        approximation overshot by ~38%)
 
 Outputs:
     data/indices_monthly_era5_vpi.json
@@ -79,8 +85,7 @@ from build_era5_indices import (  # type: ignore  # noqa: E402
 )
 from build_era5_chi_m_indices import (  # type: ignore  # noqa: E402
     bryan_moist_entropy, sat_mixing_ratio, mixing_ratio_from_q,
-    _ensure_sst_kelvin,
-    P_BOUND, P_MID, P_SURF,
+    P_MID,
 )
 
 # Chavas et al. (2025) constants
@@ -88,29 +93,30 @@ VI_MAX = 0.145              # Hoogewind 2019 / Chavas Fig. 1
 _TWO_OVER_SQRT3 = 2.0 / np.sqrt(3.0)
 
 
-def compute_vpi_field(T_b: np.ndarray, q_b: np.ndarray,
-                      T_m: np.ndarray, q_m: np.ndarray,
-                      sst: np.ndarray, mpi: np.ndarray,
+def compute_vpi_field(T_m: np.ndarray, q_m: np.ndarray,
+                      mpi: np.ndarray, asdeq: np.ndarray,
                       u200: np.ndarray, v200: np.ndarray,
                       u850: np.ndarray, v850: np.ndarray
                       ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Pointwise (vPI, VI, chi_m) fields on the GC-ATLAS grid.
 
     All inputs are 2-D (lat, lon) float arrays at the same shape.
-    NaNs propagate (land cells → NaN vPI). Land masking happens
-    naturally via SST being NaN over land.
+    NaNs propagate (land cells → NaN vPI, via the PI solve's SST mask).
+    `mpi` and `asdeq` come from the same era5_pi_monthly solve, so the
+    VI normalization and the χ_m denominator are mutually consistent —
+    the T&E (2012, suppl. ES128) definition, matching the RT map
+    layers. The old gridded s*_SST − s_b denominator measured ~38% too
+    large → χ_m too small → vPI biased high.
     """
-    # χ_m field — same Bryan-entropy machinery as the chi_m builder.
-    r_b   = mixing_ratio_from_q(q_b)
+    # χ_m numerator — same Bryan-entropy machinery as the chi_m builder.
     r_m   = mixing_ratio_from_q(q_m)
-    s_b   = bryan_moist_entropy(T_b, r_b, P_BOUND, saturated=False)
     s_m   = bryan_moist_entropy(T_m, r_m, P_MID,   saturated=False)
     r_m_s = sat_mixing_ratio(T_m, P_MID)
     s_m_s = bryan_moist_entropy(T_m, r_m_s, P_MID, saturated=True)
-    r_SST = sat_mixing_ratio(sst, P_SURF)
-    s_SST = bryan_moist_entropy(sst, r_SST, P_SURF, saturated=True)
-    denom_chi = s_SST - s_b
-    chi_m = np.where(denom_chi > 1.0, (s_m_s - s_m) / denom_chi, np.nan)
+    num = np.maximum(0.0, s_m_s - s_m)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        chi_m = num / np.maximum(asdeq, 1.0)
+    chi_m = np.where(np.isfinite(chi_m) & (asdeq >= 0), chi_m, np.nan)
 
     # Shear field — magnitude of the 200-850 vector wind difference.
     du, dv = u200 - u850, v200 - v850
@@ -135,16 +141,10 @@ def compute_vpi_field(T_b: np.ndarray, q_b: np.ndarray,
 def grids_for(manifest: dict, month: int, *,
               period: str = "default", year: int | None = None
               ) -> dict | None:
-    """Fetch the 10 input grids for one (month, year). Returns None if
+    """Fetch the 8 input grids for one (month, year). Returns None if
     any are missing — vPI requires all of them simultaneously."""
     kw = dict(kind="mean", period=period, year=year)
     fields = {
-        "T_b":  ("t",   1000),
-        "q_b":  ("q",   1000),
-        "T_m":  ("t",   700),
-        "q_m":  ("q",   700),
-        "sst":  ("sst", None),
-        "mpi":  ("mpi", None),
         "u200": ("u",   200),
         "v200": ("v",   200),
         "u850": ("u",   850),
@@ -156,7 +156,24 @@ def grids_for(manifest: dict, month: int, *,
         if g is None:
             return None
         out[name] = g
-    out["sst"] = _ensure_sst_kelvin(out["sst"])
+    # Mid-level t/q at 600 mb come from the CDS sidecar (the GC-ATLAS
+    # tile store has no 600 mb level); climo when year is None.
+    from era5_600_sidecar import load_tq600
+    mid = load_tq600(month, year=None if period == "default" else year)
+    if mid is None:
+        return None
+    out["T_m"], out["q_m"] = mid
+    # PI + BE-2002 air-sea disequilibrium from the shared monthly solve
+    # (cached on disk; the chi_m builder reuses the same solves). The
+    # computed VMAX reproduces the catalog's mpi tile to r=1.0000 /
+    # -0.08 m/s (checked Sep 2005), and using it keeps VI's
+    # normalization and χ_m's denominator on the identical PI state.
+    from era5_pi_monthly import pi_for
+    pi = pi_for(manifest, month, period=period, year=year)
+    if pi is None:
+        return None
+    out["mpi"] = pi["vmax_ms"]
+    out["asdeq"] = pi["asdeq"]
     return out
 
 
@@ -243,12 +260,15 @@ def main() -> None:
 
     out: dict = {
         "metadata": {
-            "source": "gc-atlas-era5 (T+q@1000,700 + SST + MPI + u/v@200,850)",
+            "source": "gc-atlas-era5 (T+q@1000 + SST + MPI + u/v@200,850) "
+                      "+ CDS ERA5 monthly means (T+q@600, era5_600_sidecar)",
             "method": "Pointwise vPI per Chavas et al. (2025) Eq. 4; "
+                      "χ_m denominator = BE-2002 asdeq inverted from the "
+                      "PI solve (T&E 2012 suppl. ES128); "
                       "cos(lat)-weighted regional mean of the vPI field",
             "vi_max": VI_MAX,
             "boundary_level_hpa": 1000,
-            "mid_level_hpa": 700,
+            "mid_level_hpa": 600,
             "clim_period": CLIM_PERIOD,
             "per_year_start": PER_YEAR_START,
             "per_year_end_inclusive": PER_YEAR_END,

@@ -2843,7 +2843,7 @@
             u850:   'u at 850 hPa (m s⁻¹)',
             chi_m:  'Sat. entropy deficit χ_m',          // dimensionless
             s_b:    's_b at 1000 hPa (J kg⁻¹ K⁻¹)',
-            s_m:    's_m at 700 hPa  (J kg⁻¹ K⁻¹)',
+            s_m:    's_m at 600 hPa  (J kg⁻¹ K⁻¹)',
             vi:     'Ventilation Index VI = shear·χ_m/V_PI',  // dimensionless
             vpi:    'Ventilated PI V_VPI (m s⁻¹)',
         };
