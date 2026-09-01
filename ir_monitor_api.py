@@ -13889,16 +13889,18 @@ _NDBC_LATEST_URL = "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"
 _NDBC_STATIONS_URL = "https://www.ndbc.noaa.gov/activestations.xml"
 _NDBC_CACHE: dict = {"text": None, "stations": None, "fetched_at": 0.0}
 _NDBC_CACHE_LOCK = threading.Lock()
-_NDBC_CACHE_TTL_S = 10 * 60   # 10 min — matches buoy report cadence
+_NDBC_CACHE_TTL_S = 5 * 60    # 5 min — NDBC regenerates latest_obs.txt every ~5-10 min
 # NDBC text feeds report wind in m/s; the station plot + barbs use knots
 # (METAR is already knots), so buoy winds must be converted.
 _MS_TO_KT = 1.9438445
 
 
 def _fetch_ndbc_latest_text() -> tuple[str | None, bool]:
-    """Cached one-shot pull of NDBC's latest_obs.txt. ~150 KB. Refreshes
-    every 10 min — buoys report on 10-min cycles so refreshing faster
-    just costs bandwidth without new data.
+    """Cached one-shot pull of NDBC's latest_obs.txt. ~110 KB. Refreshes
+    every 5 min — NDBC regenerates the file every ~5-10 min, and most
+    buoys report hourly at ~:50 with the file catching up over the next
+    10-20 min, so 5 min tracks the feed; faster just re-downloads the same
+    file. Ingress is free, so this cadence is cost-neutral.
 
     Returns (text, fresh): on upstream failure the last cached copy is
     served even past its TTL (a 20-minute-old buoy feed beats buoys
@@ -14073,7 +14075,7 @@ def get_storm_surface_obs(
             "observations": thinned,
         },
         headers={"Cache-Control": "no-store" if degraded
-                 else "public, max-age=600"},
+                 else "public, max-age=300, stale-while-revalidate=600"},
     )
 
 
@@ -14088,7 +14090,7 @@ def get_storm_surface_obs(
 _METAR_BBOX_URL = "https://aviationweather.gov/api/data/metar"
 _METAR_CACHE: "OrderedDict[tuple, dict]" = OrderedDict()
 _METAR_CACHE_LOCK = threading.Lock()
-_METAR_CACHE_TTL_S = 10 * 60      # METARs refresh ~hourly; 10 min stays fresh
+_METAR_CACHE_TTL_S = 5 * 60       # METARs ~hourly at :53 + specials; 5 min tracks them
 _METAR_CACHE_MAX = 64             # cap distinct bbox tiles held in memory
 
 
@@ -14288,7 +14290,7 @@ def get_surface_obs_viewport(
             "observations": thinned,
         },
         headers={"Cache-Control": "no-store" if degraded
-                 else "public, max-age=300"},
+                 else "public, max-age=300, stale-while-revalidate=600"},
     )
 
 

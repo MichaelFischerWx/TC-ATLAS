@@ -3993,6 +3993,8 @@
     var _surfaceObsLoading = false;      // fetch in flight (layer not built yet)
     var _surfaceObsRetryTimer = null;    // pending auto-retry after a failure
     var _surfaceObsAutoRetried = false;  // one silent retry per card open
+    var _surfaceObsPrevLayer = null;     // old layer kept on-map during a periodic refresh
+    var _rtObsLastPeriodicMs = 0;        // throttle for the poll-tick obs refresh
 
     // Global-map (viewport) surface-obs overlay — independent of the
     // storm-card overlay above. Live METAR (land) + NDBC (marine) plots
@@ -4136,6 +4138,10 @@
                 try { _surfaceObsAbortController.abort(); } catch (e) {}
                 _surfaceObsAbortController = null;
             }
+            if (_surfaceObsPrevLayer) {
+                try { detailMap.removeLayer(_surfaceObsPrevLayer); } catch (e) {}
+                _surfaceObsPrevLayer = null;
+            }
             if (btn) btn.classList.remove('active');
             _ga('ir_surface_obs_toggle', { on: false });
             return;
@@ -4201,6 +4207,10 @@
                     lg.addLayer(marker);
                 }
                 _surfaceObsLoading = false;
+                if (_surfaceObsPrevLayer) {
+                    try { detailMap.removeLayer(_surfaceObsPrevLayer); } catch (e) {}
+                    _surfaceObsPrevLayer = null;
+                }
                 _surfaceObsLayer = lg.addTo(detailMap);
                 console.log('[RT Monitor] Surface obs: ' + obs.length +
                             ' stations within ' +
@@ -4210,6 +4220,17 @@
                 _surfaceObsLoading = false;
                 if (err && err.name === 'AbortError') return;
                 console.warn('[RT Monitor] surface obs fetch failed:', err && err.message);
+                if (_surfaceObsPrevLayer) {
+                    // Periodic refresh failed: keep showing the previous obs
+                    // (a few minutes stale beats none) and try again next tick.
+                    if (currentStormId === atcfId && !_surfaceObsLayer) {
+                        _surfaceObsLayer = _surfaceObsPrevLayer;
+                    } else {
+                        try { detailMap.removeLayer(_surfaceObsPrevLayer); } catch (e) {}
+                    }
+                    _surfaceObsPrevLayer = null;
+                    return;
+                }
                 if (btn) btn.classList.remove('active');
                 // One silent self-heal per card open before bothering the
                 // user: the load fires exactly once on card open, so a
@@ -4234,6 +4255,10 @@
             try { detailMap.removeLayer(_surfaceObsLayer); } catch (e) {}
         }
         _surfaceObsLayer = null;
+        if (_surfaceObsPrevLayer && detailMap) {
+            try { detailMap.removeLayer(_surfaceObsPrevLayer); } catch (e) {}
+        }
+        _surfaceObsPrevLayer = null;
         if (_surfaceObsAbortController) {
             try { _surfaceObsAbortController.abort(); } catch (e) {}
             _surfaceObsAbortController = null;
@@ -4244,6 +4269,43 @@
         var btn = document.getElementById('ir-detail-obs-toggle');
         if (btn) btn.classList.remove('active');
     }
+
+    /** Periodic re-pull of whatever surface-obs layers are showing. Rides
+     *  the existing 10-min storm poll (no new timer) so an open card or a
+     *  parked global-map view stops freezing at whatever obs it loaded
+     *  first. Buoys report hourly at ~:50 and NDBC's feed catches up over
+     *  the next 10-20 min; METARs land at ~:53 plus specials — so a 10-min
+     *  re-pull tracks the feeds without hammering them. Server-side the
+     *  upstream pulls are cached 5 min, so this costs one small request per
+     *  open view per tick and almost never a new upstream fetch. */
+    function _rtObsPeriodicRefresh() {
+        if (document.visibilityState !== 'visible') return;
+        var cardActive = !!(_surfaceObsLayer && !_surfaceObsLoading && !_surfaceObsPrevLayer &&
+                            detailMap && currentStormId);
+        if (!cardActive && !(_rtObsOn && map)) return;   // nothing showing — nothing to refresh
+        var nowMs = Date.now();
+        if (nowMs - _rtObsLastPeriodicMs < 4 * 60 * 1000) return;  // poll can re-fire on retries/visibility
+        _rtObsLastPeriodicMs = nowMs;
+        // Storm card: refetch in place, keeping the old markers until the
+        // new set is ready.
+        if (cardActive) {
+            _surfaceObsPrevLayer = _surfaceObsLayer;
+            _surfaceObsLayer = null;
+            window._irToggleSurfaceObs();   // no layer present → reads as ON → fetch
+            if (!_surfaceObsLoading && _surfaceObsPrevLayer) {
+                // Toggle bailed (no map/storm); restore.
+                _surfaceObsLayer = _surfaceObsPrevLayer;
+                _surfaceObsPrevLayer = null;
+            }
+        }
+        // Global-map viewport overlay: drop the viewport dedupe key so the
+        // same bbox is pulled again.
+        if (_rtObsOn && map) {
+            _rtObsLastKey = '';
+            _rtObsRefresh();
+        }
+    }
+    window._rtObsPeriodicRefresh = _rtObsPeriodicRefresh;   // debug hook
 
     // ── Global-map surface-obs overlay (viewport METAR + NDBC) ──────
     // Mirrors the storm-card overlay but is driven by the live map
@@ -7132,6 +7194,7 @@
     /** Poll /ir-monitor/active-storms */
     function pollActiveStorms() {
         var loaderEl = document.getElementById('ir-loader');
+        try { _rtObsPeriodicRefresh(); } catch (e) { console.warn('[RT Monitor] obs periodic refresh:', e); }
 
         // Show cached storms immediately while fresh fetch runs
         if (stormData.length === 0) {
