@@ -214,18 +214,6 @@ else
     echo "  Now serving: ${SERVING_REV}"
 fi
 
-# ── Re-point the prewarm job at the freshly built image ──────────
-# tc-atlas-prewarm-job REUSES this service's container image. The
-# keep-3 Artifact Registry cleanup prunes old digests, so the job MUST
-# be re-pinned to the new build on every deploy or it breaks ~3 deploys
-# later ("Image not found", failing silently every 10 min). The script
-# pins the :latest tag, idempotently refreshing the job + scheduler.
-if [[ -x "${SCRIPT_DIR}/deploy_prewarm_job.sh" ]]; then
-    echo ""
-    echo "Re-pointing prewarm job at the new image..."
-    "${SCRIPT_DIR}/deploy_prewarm_job.sh"
-fi
-
 # ── Re-point the OG-card job + refresh rt-version.json ────────────
 # tc-atlas-ogcard-job owns the social OG card + rt-version.json (so the prewarm
 # scheduler can be paused). It REUSES this service's image and must be re-pinned

@@ -8,8 +8,9 @@
 # RGBA. The frontend GPU-recolors them (mosaic_gl_layer.js); measured egress:
 # IR -65%, WV -69%, Vis -43%.
 #
-# REUSES the image built by deploy_mosaic_job.sh (gcr.io/<proj>/tc-atlas-mosaic-job)
-# — does NOT build. Run ./deploy_mosaic_job.sh first if the image is stale.
+# Builds the image (Dockerfile.mosaic → gcr.io/<proj>/tc-atlas-mosaic-job:latest)
+# then updates the Job + Scheduler. Pass --no-build to skip the build step.
+# (deploy_mosaic_job.sh, the retired v2 RGBA builder, was removed 2026-09-01.)
 #
 # DUAL-WRITE: while both this and tc-atlas-mosaic-job are scheduled, R2 carries
 # v2 (RGBA) AND v3 (idx). That's the safe cutover overlap; once the frontend
@@ -37,9 +38,24 @@ IMAGE="gcr.io/${PROJECT}/tc-atlas-mosaic-job:latest"   # shared builder image (i
 R2_ENDPOINT_URL="${R2_ENDPOINT_URL:-https://4f3e5ab095ae4962e91af5b33c6deb54.r2.cloudflarestorage.com}"
 R2_BUCKET="${R2_BUCKET:-tc-atlas-rt}"
 
-if ! gcloud artifacts docker images describe "${IMAGE}" >/dev/null 2>&1 \
+NO_BUILD=0
+for arg in "$@"; do [[ "$arg" == "--no-build" ]] && NO_BUILD=1; done
+if [[ "${NO_BUILD}" == "0" ]]; then
+    BUILD_CFG="$(mktemp -t tc-atlas-mosaic-cloudbuild.XXXXXX.yaml)"
+    trap 'rm -f "${BUILD_CFG}"' EXIT
+    cat > "${BUILD_CFG}" <<EOF
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-f', 'Dockerfile.mosaic', '-t', '${IMAGE}', '.']
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['push', '${IMAGE}']
+images: ['${IMAGE}']
+EOF
+    echo "Building mosaic container (Dockerfile.mosaic)..."
+    gcloud builds submit --config "${BUILD_CFG}" .
+elif ! gcloud artifacts docker images describe "${IMAGE}" >/dev/null 2>&1 \
    && ! gcloud container images describe "${IMAGE}" >/dev/null 2>&1; then
-    echo "ERROR: ${IMAGE} not found. Build it first: ./deploy_mosaic_job.sh"
+    echo "ERROR: ${IMAGE} not found; run without --no-build."
     exit 1
 fi
 
@@ -86,7 +102,7 @@ MOSAIC_VIS_HIRES="${MOSAIC_VIS_HIRES:-1}"
 # of failing the execution and paging.
 COMMON_FLAGS=(
   --region "${REGION}" --image "${IMAGE}"
-  --memory "${MOSAIC_JOB_MEMORY}" --cpu "${MOSAIC_JOB_CPU}" --max-retries 1 --task-timeout 600
+  --memory "${MOSAIC_JOB_MEMORY}" --cpu "${MOSAIC_JOB_CPU}" --max-retries 1 --task-timeout 900
   --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET},MOSAIC_TILE_MODE=idx,MOSAIC_R2_PREFIX=mosaic-v3,MOSAIC_PACK=${MOSAIC_PACK},MOSAIC_VIS_HIRES=${MOSAIC_VIS_HIRES},MALLOC_ARENA_MAX=2,MALLOC_TRIM_THRESHOLD_=0"
   --set-secrets  "R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
   --command "python"
