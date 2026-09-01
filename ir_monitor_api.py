@@ -13895,14 +13895,19 @@ _NDBC_CACHE_TTL_S = 10 * 60   # 10 min — matches buoy report cadence
 _MS_TO_KT = 1.9438445
 
 
-def _fetch_ndbc_latest_text() -> str | None:
+def _fetch_ndbc_latest_text() -> tuple[str | None, bool]:
     """Cached one-shot pull of NDBC's latest_obs.txt. ~150 KB. Refreshes
     every 10 min — buoys report on 10-min cycles so refreshing faster
-    just costs bandwidth without new data."""
+    just costs bandwidth without new data.
+
+    Returns (text, fresh): on upstream failure the last cached copy is
+    served even past its TTL (a 20-minute-old buoy feed beats buoys
+    silently vanishing) with fresh=False so callers can mark the response
+    degraded and keep it out of long-lived CDN caches."""
     with _NDBC_CACHE_LOCK:
         if (_NDBC_CACHE["text"] is not None and
                 (time.time() - _NDBC_CACHE["fetched_at"]) < _NDBC_CACHE_TTL_S):
-            return _NDBC_CACHE["text"]
+            return _NDBC_CACHE["text"], True
     try:
         import urllib.request
         req = urllib.request.Request(
@@ -13911,11 +13916,12 @@ def _fetch_ndbc_latest_text() -> str | None:
             text = resp.read().decode("utf-8", errors="ignore")
     except Exception as ex:
         print(f"[Surface Obs] NDBC fetch failed: {ex}")
-        return None
+        with _NDBC_CACHE_LOCK:
+            return _NDBC_CACHE["text"], False
     with _NDBC_CACHE_LOCK:
         _NDBC_CACHE["text"] = text
         _NDBC_CACHE["fetched_at"] = time.time()
-    return text
+    return text, True
 
 
 def _parse_ndbc_latest(text: str) -> list[dict]:
@@ -14002,7 +14008,13 @@ def get_storm_surface_obs(
                 storm = dict(s)
                 break
     if not storm:
-        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+        # no-store: Cloudflare's default negative caching holds a 404 for
+        # minutes per colo, so a transient miss (cold instance whose NHC
+        # poll failed) kept serving "not found" to everyone — including the
+        # user's manual retries — long after the instance recovered.
+        raise HTTPException(status_code=404,
+                            detail=f"Storm {atcf_id} not found",
+                            headers={"Cache-Control": "no-store"})
 
     center_lat = storm["lat"]
     center_lon = storm["lon"]
@@ -14021,11 +14033,14 @@ def get_storm_surface_obs(
     lon_boxes = [(w, e)] if w <= e else [(w, 180.0), (-180.0, e)]
 
     metars: list[dict] = []
+    metar_ok = True
     for (lw, le_) in lon_boxes:
-        metars.extend(_fetch_metars_bbox(s_, lw, n, le_))
+        tile_obs, tile_ok = _fetch_metars_bbox(s_, lw, n, le_)
+        metars.extend(tile_obs)
+        metar_ok = metar_ok and tile_ok
 
     ndbc: list[dict] = []
-    text = _fetch_ndbc_latest_text()
+    text, ndbc_ok = _fetch_ndbc_latest_text()
     if text:
         for ob in _parse_ndbc_latest(text):
             if not (s_ <= ob["lat"] <= n):
@@ -14038,6 +14053,10 @@ def get_storm_surface_obs(
     total_before = len(combined)
     thinned = _grid_thin_obs(combined, s_, n, lon_boxes, max_stations)
 
+    # A degraded blend (either upstream failed) must NOT be CDN-cached for
+    # 10 minutes: one bad moment on one instance was being served to every
+    # user at that colo as "no obs" until the edge cache expired.
+    degraded = not (metar_ok and ndbc_ok)
     return JSONResponse(
         content={
             "atcf_id": atcf_id.upper(),
@@ -14050,9 +14069,11 @@ def get_storm_surface_obs(
             "n_obs": len(thinned),
             "n_before_thinning": total_before,
             "sources": ["METAR", "NDBC"],
+            "sources_ok": {"METAR": metar_ok, "NDBC": ndbc_ok},
             "observations": thinned,
         },
-        headers={"Cache-Control": "public, max-age=600"},
+        headers={"Cache-Control": "no-store" if degraded
+                 else "public, max-age=600"},
     )
 
 
@@ -14083,10 +14104,13 @@ def _metar_num(v):
 
 
 def _fetch_metars_bbox(south: float, west: float,
-                       north: float, east: float) -> list[dict]:
+                       north: float, east: float) -> tuple[list[dict], bool]:
     """Cached METAR pull for an integer-degree bbox tile. Snaps the
     requested bbox out to whole degrees so adjacent viewports share a
-    cache entry. Returns obs normalized to the same schema as NDBC."""
+    cache entry. Returns (obs, fresh) normalized to the same schema as
+    NDBC — on upstream failure the expired cached tile (if any) is served
+    with fresh=False so a fetched-empty tile and a failed fetch stop
+    looking identical to callers (and to the CDN cache downstream)."""
     key = (int(math.floor(south)), int(math.floor(west)),
            int(math.ceil(north)), int(math.ceil(east)))
     now = time.time()
@@ -14094,7 +14118,7 @@ def _fetch_metars_bbox(south: float, west: float,
         hit = _METAR_CACHE.get(key)
         if hit and (now - hit["fetched_at"]) < _METAR_CACHE_TTL_S:
             _METAR_CACHE.move_to_end(key)
-            return hit["obs"]
+            return hit["obs"], True
 
     s, w, n, e = key
     url = f"{_METAR_BBOX_URL}?format=json&bbox={s},{w},{n},{e}"
@@ -14108,7 +14132,9 @@ def _fetch_metars_bbox(south: float, west: float,
         raw = json.loads(body) if body else []
     except Exception as ex:
         print(f"[Surface Obs] METAR fetch failed for {key}: {ex}")
-        return []
+        with _METAR_CACHE_LOCK:
+            stale = _METAR_CACHE.get(key)
+            return (stale["obs"] if stale else []), False
 
     obs: list[dict] = []
     for m in (raw or []):
@@ -14144,7 +14170,7 @@ def _fetch_metars_bbox(south: float, west: float,
         _METAR_CACHE.move_to_end(key)
         while len(_METAR_CACHE) > _METAR_CACHE_MAX:
             _METAR_CACHE.popitem(last=False)
-    return obs
+    return obs, True
 
 
 def _ob_richness(ob: dict) -> int:
@@ -14228,11 +14254,14 @@ def get_surface_obs_viewport(
     lon_boxes = [(w, e)] if w <= e else [(w, 180.0), (-180.0, e)]
 
     metars: list[dict] = []
+    metar_ok = True
     for (lw, le_) in lon_boxes:
-        metars.extend(_fetch_metars_bbox(south, lw, north, le_))
+        tile_obs, tile_ok = _fetch_metars_bbox(south, lw, north, le_)
+        metars.extend(tile_obs)
+        metar_ok = metar_ok and tile_ok
 
     ndbc: list[dict] = []
-    text = _fetch_ndbc_latest_text()
+    text, ndbc_ok = _fetch_ndbc_latest_text()
     if text:
         for ob in _parse_ndbc_latest(text):
             if not (south <= ob["lat"] <= north):
@@ -14245,6 +14274,8 @@ def get_surface_obs_viewport(
     total_before = len(combined)
     thinned = _grid_thin_obs(combined, south, north, lon_boxes, max_stations)
 
+    # Degraded blend → keep it out of the CDN cache (see storm endpoint).
+    degraded = not (metar_ok and ndbc_ok)
     return JSONResponse(
         content={
             "bbox": {"north": north, "south": south,
@@ -14253,9 +14284,11 @@ def get_surface_obs_viewport(
             "n_obs": len(thinned),
             "n_before_thinning": total_before,
             "sources": ["METAR", "NDBC"],
+            "sources_ok": {"METAR": metar_ok, "NDBC": ndbc_ok},
             "observations": thinned,
         },
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": "no-store" if degraded
+                 else "public, max-age=300"},
     )
 
 
