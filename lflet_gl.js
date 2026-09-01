@@ -239,6 +239,12 @@
     Map.prototype.setView = function (ll, zoom) {
         this._gl.jumpTo({ center: ll2ml(ll), zoom: zoom != null ? zoom : this._gl.getZoom() }); return this; };
     Map.prototype.panTo = function (ll, opts) { (opts && opts.animate === false ? this._gl.jumpTo : this._gl.easeTo).call(this._gl, { center: ll2ml(ll) }); return this; };
+    // Leaflet panBy([x, y]) and maplibregl panBy([x, y]) share a convention: the
+    // view (map center) moves +x px right / +y px down, so content slides the
+    // opposite way. Leaflet durations are seconds; maplibregl wants ms.
+    Map.prototype.panBy = function (offset, opts) { var pt = toPoint(offset), o = {};
+        if (opts && opts.animate === false) o.duration = 0; else if (opts && opts.duration != null) o.duration = opts.duration * 1000;
+        this._gl.panBy([pt.x, pt.y], o); return this; };
     Map.prototype.fitBounds = function (b, opts) {
         b = (b instanceof LatLngBounds) ? b : new LatLngBounds(b);
         if (!b.isValid()) return this;
@@ -456,7 +462,15 @@
         delete this._layers[layer._lid];
         return this;
     };
-    Map.prototype.hasLayer = function (layer) { return !!(layer && this._layers[layer._lid]); };
+    // Popups are not registered in _layers (eachLayer callers expect real layers),
+    // so hasLayer answers for an open popup via maplibregl.Popup.isOpen().
+    Map.prototype.hasLayer = function (layer) { if (!layer) return false;
+        if (layer instanceof Popup) return !!(layer._mlp && typeof layer._mlp.isOpen === 'function' && layer._mlp.isOpen());
+        return !!this._layers[layer._lid]; };
+    Map.prototype.closePopup = function (popup) { var p = popup || this._popup;
+        if (p && p._mlp) { try { p._mlp.remove(); } catch (e) {} }
+        if (p && p._lid && this._layers[p._lid]) delete this._layers[p._lid];
+        if (p) p._map = null; if (!popup || this._popup === p) this._popup = null; return this; };
     Map.prototype.eachLayer = function (fn) { var s = this; Object.keys(this._layers).forEach(function (k) { fn(s._layers[k]); }); return this; };
     Map.prototype.whenReady = function (fn) { if (this._gl.loaded()) fn(); else this._gl.once('load', fn); return this; };
     Map.prototype.stop = function () { this._gl.stop(); return this; };
@@ -482,6 +496,10 @@
     Layer.prototype.once = function (t, fn) { if (t === 'load' && fn) setTimeout(fn, 0); return this; };
     Layer.prototype.off = function () { return this; };
     Layer.prototype.setZIndex = function () { return this; };
+    Layer.prototype.openPopup = function (latlng) { var p = this._popup, m = this._map; if (!p || !m) return this;
+        var ll = latlng || (typeof this.getLatLng === 'function' ? this.getLatLng() : null) || p._ll; if (!ll) return this;
+        p.setLatLng(ll).openOn(m); return this; };
+    Layer.prototype.closePopup = function () { if (this._popup) { if (this._map) this._map.closePopup(this._popup); else if (this._popup._mlp) this._popup._mlp.remove(); } return this; };
     Layer.extend = extend;
 
     // ── TileLayer → raster source ──
@@ -1071,7 +1089,12 @@
     Popup.prototype.setContent = function (c) { this._content = c; if (this._mlp) this._mlp.setHTML(typeof c === 'string' ? c : (c.outerHTML || '')); return this; };
     Popup.prototype.setLatLng = function (ll) { this._ll = toLatLng(ll); return this; };
     Popup.prototype._ml = function () { if (!this._mlp) { this._mlp = new maplibregl.Popup({ offset: this.options.offset || 12, closeButton: this.options.closeButton !== false, maxWidth: this.options.maxWidth || '320px' }); this._mlp.setHTML(typeof this._content === 'string' ? this._content : (this._content.outerHTML || '')); } return this._mlp; };
-    Popup.prototype.addTo = function (map) { var p = this._ml(); if (this._ll) p.setLngLat(mlWrap(this._ll)); p.addTo(map._gl); return this; };
+    Popup.prototype.addTo = function (map) { var self = this, p = this._ml(); if (this._ll) p.setLngLat(mlWrap(this._ll)); p.addTo(map._gl);
+        this._map = map; map._popup = this;
+        if (!this._closeBridged) { this._closeBridged = true; p.on('close', function () { if (self._map && self._map._popup === self) self._map._popup = null; self._map = null; }); }
+        return this; };
+    Popup.prototype.remove = function () { if (this._map) this._map.closePopup(this); else if (this._mlp) this._mlp.remove(); return this; };
+    Popup.prototype.isOpen = function () { return !!(this._mlp && this._mlp.isOpen()); };
     Popup.prototype.openOn = Popup.prototype.addTo;
 
     function DivIcon(opts) { opts = opts || {}; this._html = opts.html || ''; this._className = opts.className || ''; }
