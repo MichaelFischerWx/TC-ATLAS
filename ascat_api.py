@@ -209,6 +209,20 @@ def _get_earthdata_session():
     return session
 
 
+def _check_ascat_url(url: str) -> None:
+    """SSRF guard: data_url must be https on an Earthdata host (CMR granule links
+    are opendap.earthdata.nasa.gov / archive.podaac.earthdata.nasa.gov)."""
+    from urllib.parse import urlparse
+    try:
+        host = (urlparse(url).hostname or "").lower()
+        ok = urlparse(url).scheme == "https" and (
+            host == "earthdata.nasa.gov" or host.endswith(".earthdata.nasa.gov"))
+    except Exception:
+        ok = False
+    if not ok:
+        raise HTTPException(status_code=400, detail="data_url host not permitted")
+
+
 def _fetch_ascat_winds(
     data_url: str,
     center_lat: float, center_lon: float,
@@ -445,6 +459,7 @@ def get_ascat_winds(
     Fetch wind vectors from a specific ASCAT pass, subsetted to the storm region.
     Returns array of {lat, lon, speed_kt, dir_deg} observations.
     """
+    _check_ascat_url(data_url)
     # Check cache
     cache_key = (data_url, round(center_lat, 1), round(center_lon, 1))
     with _wind_cache_lock:

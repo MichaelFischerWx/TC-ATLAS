@@ -37,11 +37,17 @@ from datetime import datetime, timezone, timedelta
 import numpy as np
 
 # ── Reuse the production satellite stack ───────────────────────────────────
+# Opt this job (and ONLY this job — the API service imports satellite_ir too)
+# into its bounded Himawari segment cache so the Vis z7 storm windows and the
+# full-disk pass share segment downloads/decompression. Must precede the import:
+# satellite_ir reads the flag at module load. Size via HIMAWARI_SEG_CACHE_MAX.
+os.environ.setdefault("HIMAWARI_SEG_CACHE", "1")
 from satellite_ir import (
     GOES_BUCKETS, GOES_SAT_HEIGHT, IR_BAND, IR_VMIN, IR_VMAX, _IR_LUT,
     find_goes_file, get_goes_fs,
     HIMAWARI_BUCKET, HIMAWARI_LON_0, HIMAWARI_SAT_HEIGHT, HIMAWARI_SWEEP,
     find_himawari_file, open_himawari_subset,
+    himawari_seg_cache_stats, himawari_seg_cache_clear,
     VIS_BAND, WV_BAND, HIMAWARI_VIS_BAND, HIMAWARI_WV_BAND, BAND_RANGES,
 )
 # Shared gated IR center-finder (g1/g2/g3 policy) — reused, never reimplemented.
@@ -595,6 +601,9 @@ def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=No
     return data, x, y, lon_0, sat_h, sweep, scan_dt, hires
 
 
+_hima_prefix_memo = {}   # (dt, band, tol) → (prefix, scan_dt); see read_himawari_full_disk
+
+
 def read_himawari_full_disk(dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=None,
                             windows_only=False):
     """Full-disk Himawari band via the existing HSD reader: a huge box centred on
@@ -605,9 +614,21 @@ def read_himawari_full_disk(dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=N
     sectors) via a second, small open_himawari_subset call per box (target 500 m
     → scale_factor 1). Re-downloads the 1-3 segments the box touches (~30 MB
     compressed each) — acceptable next to the full-disk read, and the returned
-    window is only ~tens of MB."""
-    prefix, scan_dt = find_himawari_file(dt, tolerance_min=tol, band=band,
-                                         return_dt=True)
+    window is only ~tens of MB (and with satellite_ir's segment cache on, the
+    full-disk pass re-uses the segments the windows already pulled)."""
+    # The z7 windows pass and pass A resolve the same scan minutes apart —
+    # longer than _cached_fs_ls's 120 s TTL — so memoize the resolved prefix
+    # per process to spare the second S3 listing. Misses are NOT memoized so
+    # a late-posting scan can still be picked up within the run.
+    mkey = (dt, band, tol)
+    hit = _hima_prefix_memo.get(mkey)
+    if hit is not None:
+        prefix, scan_dt = hit
+    else:
+        prefix, scan_dt = find_himawari_file(dt, tolerance_min=tol, band=band,
+                                             return_dt=True)
+        if prefix:
+            _hima_prefix_memo[mkey] = (prefix, scan_dt)
     if not prefix:
         return None
     if windows_only:
@@ -742,6 +763,8 @@ def read_all_sat_windows(dt, timings, product="vis", hires_windows=None):
                                     for (w, wx, wy) in hires])
             log(f"  {label} {product}: {len(out[sat_key]['hi'])} native window(s) (z7 pass)")
         _release_memory()      # return each file's transient before the next sat
+    h, m, _n = himawari_seg_cache_stats()
+    log(f"[satellite_ir] seg-cache: {h} hits / {m} misses")
     return out
 
 
@@ -1593,6 +1616,9 @@ def main():
             # Pass A: full disks ONLY (no native windows) — the z7 windows above
             # are already rendered and freed, so the two never co-reside.
             sats = read_all_sats(dt, timings, product, hires_windows=None)
+            # Pass A was this scan's last Himawari reader: drop the cached
+            # segments (~100 MB each) before rendering.
+            himawari_seg_cache_clear()
             if not sats:
                 log(f"  {product}: no satellite data — skip")
                 if pool is not None:

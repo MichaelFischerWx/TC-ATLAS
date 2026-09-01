@@ -20,6 +20,7 @@ All are lazy-imported so the module won't crash if they're missing.
 import base64
 import gc
 import io
+import os
 import re
 import threading
 import time
@@ -63,6 +64,66 @@ def _cached_fs_ls(fs, prefix, detail=False):
         while len(_fs_ls_cache) > _FS_LS_MAX_ENTRIES:
             _fs_ls_cache.popitem(last=False)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Himawari HSD segment cache (OPT-IN; mosaic job only)
+# ---------------------------------------------------------------------------
+# open_himawari_subset() downloads + bz2-decompresses every segment a window
+# touches (~30 MB compressed → ~100 MB decompressed for 0.5 km Band 3). The
+# mosaic job's Vis band opens the SAME scan once per storm window (z7 pass) and
+# once for the full disk, so overlapping windows re-fetch identical segments —
+# ~5 min of a 600 s job. This bounded LRU keeps the parsed full-resolution
+# uint16 counts + header per (s3_prefix, band, seg_num) so those calls share one
+# download/decompress; the per-call physical conversion (which depends on
+# center_lat and scale_factor) still runs each time.
+#
+# OFF by default: the API service imports this module too and is memory-bound
+# (4 GiB, 20 concurrent requests). build_ir_mosaic.py sets HIMAWARI_SEG_CACHE=1
+# before importing us (it is also honoured if a caller flips the module
+# attribute after import — the flag is read per call). Capped at
+# HIMAWARI_SEG_CACHE_MAX segments (default 4 ≈ 400 MB of B03 counts).
+HIMAWARI_SEG_CACHE = os.environ.get("HIMAWARI_SEG_CACHE", "0") == "1"
+HIMAWARI_SEG_CACHE_MAX = max(1, int(os.environ.get("HIMAWARI_SEG_CACHE_MAX", "4") or 4))
+_seg_cache: "OrderedDict[tuple, tuple[dict, np.ndarray]]" = OrderedDict()
+_seg_cache_lock = threading.Lock()
+_seg_cache_hits = 0
+_seg_cache_misses = 0
+
+
+def _seg_cache_get(key):
+    """(hdr, counts) for key or None; bumps the hit/miss counters."""
+    global _seg_cache_hits, _seg_cache_misses
+    with _seg_cache_lock:
+        hit = _seg_cache.get(key)
+        if hit is not None:
+            _seg_cache.move_to_end(key)
+            _seg_cache_hits += 1
+        else:
+            _seg_cache_misses += 1
+        return hit
+
+
+def _seg_cache_put(key, hdr, counts):
+    with _seg_cache_lock:
+        _seg_cache[key] = (hdr, counts)
+        _seg_cache.move_to_end(key)
+        while len(_seg_cache) > HIMAWARI_SEG_CACHE_MAX:
+            _seg_cache.popitem(last=False)
+
+
+def himawari_seg_cache_stats():
+    """(hits, misses, segments_resident) — for the mosaic job's end-of-pass log."""
+    with _seg_cache_lock:
+        return _seg_cache_hits, _seg_cache_misses, len(_seg_cache)
+
+
+def himawari_seg_cache_clear():
+    """Drop resident segments (counters are kept). The mosaic job calls this once
+    the last reader of a scan (pass A) is done so the ~100 MB/segment goes back
+    to the OS before rendering."""
+    with _seg_cache_lock:
+        _seg_cache.clear()
 
 # ---------------------------------------------------------------------------
 # Lazy imports (same pattern as realtime_tdr_api.py)
@@ -897,28 +958,44 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
     # Download, decompress, and parse each segment
     seg_arrays = {}
     header = None
+    # Segment cache: look up always when enabled; STORE only when this read
+    # touches no more segments than the cache holds — a full-disk read (10
+    # segments through a 4-slot LRU) would just churn it and pin ~400 MB for
+    # nothing, while its lookups still hit whatever a preceding storm-window
+    # pass left behind.
+    use_cache = bool(HIMAWARI_SEG_CACHE)
+    store_cache = use_cache and len(seg_files) <= HIMAWARI_SEG_CACHE_MAX
     for seg_num in sorted(seg_files.keys()):
         fpath = seg_files[seg_num]
         try:
-            print(f"[satellite_ir] Downloading segment {seg_num}: {fpath.split('/')[-1]}")
-            compressed = fs.cat_file(fpath)
-            print(f"[satellite_ir]   compressed size: {len(compressed)} bytes, decompressing...")
-            raw_data = bz2.decompress(compressed)
-            print(f"[satellite_ir]   decompressed size: {len(raw_data)} bytes")
-            del compressed
+            ckey = (s3_prefix, band, seg_num)
+            cached = _seg_cache_get(ckey) if use_cache else None
+            if cached is not None:
+                hdr, counts = cached
+                print(f"[satellite_ir] Segment {seg_num} from seg-cache: {fpath.split('/')[-1]}")
+            else:
+                print(f"[satellite_ir] Downloading segment {seg_num}: {fpath.split('/')[-1]}")
+                compressed = fs.cat_file(fpath)
+                print(f"[satellite_ir]   compressed size: {len(compressed)} bytes, decompressing...")
+                raw_data = bz2.decompress(compressed)
+                print(f"[satellite_ir]   decompressed size: {len(raw_data)} bytes")
+                del compressed
 
-            hdr = _parse_hsd_header(raw_data)
+                hdr = _parse_hsd_header(raw_data)
+                nlines = hdr["n_lines"]
+                ncols = hdr["n_columns"]
+                data_offset = hdr["data_offset"]
+
+                # Extract raw counts (uint16 little-endian per HSD spec). The
+                # frombuffer view is read-only, so a cached copy can't be
+                # mutated by a later caller.
+                counts = np.frombuffer(raw_data[data_offset:data_offset + nlines * ncols * 2],
+                                       dtype="<u2").reshape(nlines, ncols)
+                del raw_data
+                if store_cache:
+                    _seg_cache_put(ckey, hdr, counts)
             if header is None:
                 header = hdr
-
-            nlines = hdr["n_lines"]
-            ncols = hdr["n_columns"]
-            data_offset = hdr["data_offset"]
-
-            # Extract raw counts (uint16 little-endian per HSD spec)
-            counts = np.frombuffer(raw_data[data_offset:data_offset + nlines * ncols * 2],
-                                   dtype="<u2").reshape(nlines, ncols)
-            del raw_data
 
             # Subsample high-res bands to 2km immediately to save memory
             if scale_factor > 1:

@@ -971,7 +971,8 @@ def get_nearby_sites(
                 "distance_km": round(dist, 1),
             })
     results.sort(key=lambda x: x["distance_km"])
-    return JSONResponse({"sites": results, "count": len(results)})
+    return JSONResponse({"sites": results, "count": len(results)},
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 
 @router.get("/scans")
@@ -1017,7 +1018,7 @@ def get_available_scans(
         ],
         "count": len(scans),
         "closest_index": closest_idx,
-    })
+    }, headers={"Cache-Control": "public, max-age=60" if scans else "no-store"})
 
 
 @router.get("/frame")

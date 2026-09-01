@@ -36,6 +36,7 @@ import math
 import os
 import queue
 import re
+import signal
 import threading
 import time
 from collections import OrderedDict
@@ -307,6 +308,20 @@ _rate_rejections: dict[str, int] = _collections.defaultdict(int)
 _rate_lock = threading.Lock()
 
 
+def _client_ip(request) -> str:
+    """Real client IP behind Cloudflare → Cloud Run. Prefer CF-Connecting-IP
+    (set by Cloudflare, not spoofable through the proxy); else the LAST
+    X-Forwarded-For element (Cloud Run appends the true peer — the first
+    element is client-supplied and trivially forged); else the socket peer."""
+    cf = request.headers.get("cf-connecting-ip", "").strip()
+    if cf:
+        return cf
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[-1].strip() or "unknown"
+    return request.client.host if request.client else "unknown"
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Lightweight per-IP rate limiter with abuse alerting."""
 
@@ -318,11 +333,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if any(path.startswith(p) for p in self.EXEMPT_PREFIXES):
             return await call_next(request)
 
-        # Get client IP (Cloud Run sets X-Forwarded-For)
-        forwarded = request.headers.get("x-forwarded-for", "")
-        client_ip = forwarded.split(",")[0].strip() if forwarded else (
-            request.client.host if request.client else "unknown"
-        )
+        client_ip = _client_ip(request)
 
         now = _time.monotonic()
         with _rate_lock:
@@ -401,10 +412,7 @@ class HeavyConcurrencyMiddleware(BaseHTTPMiddleware):
         if not any(path.startswith(p) for p in _HEAVY_PREFIXES):
             return await call_next(request)
 
-        forwarded = request.headers.get("x-forwarded-for", "")
-        client_ip = forwarded.split(",")[0].strip() if forwarded else (
-            request.client.host if request.client else "unknown"
-        )
+        client_ip = _client_ip(request)
 
         with _inflight_lock:
             if _inflight_counts[client_ip] >= _max_inflight_per_ip:
@@ -498,6 +506,65 @@ class CompositeGCMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(CompositeGCMiddleware)
+
+
+# ---------------------------------------------------------------------------
+# Memory watchdog — recycle the worker before Cloud Run OOM-kills the instance
+# ---------------------------------------------------------------------------
+# RSS ratchets over the instance lifetime (numpy full-disk arrays, allocator
+# fragmentation) until Cloud Run kills the container at 4 GiB (~37x/day).
+# Instead: once RSS exceeds RSS_RECYCLE_MIB and no request is in flight, send
+# SIGTERM to *this worker*; gunicorn's master respawns a fresh one and the
+# graceful-timeout lets any straggler finish. Fires at most once per process.
+_total_inflight = 0
+_total_inflight_lock = threading.Lock()
+
+
+class InflightCounterMiddleware(BaseHTTPMiddleware):
+    """Count ALL in-flight requests (the heavy-prefix cap above only counts frames)."""
+    async def dispatch(self, request, call_next):
+        global _total_inflight
+        with _total_inflight_lock:
+            _total_inflight += 1
+        try:
+            return await call_next(request)
+        finally:
+            with _total_inflight_lock:
+                _total_inflight -= 1
+
+
+app.add_middleware(InflightCounterMiddleware)
+
+
+def _rss_mib() -> Optional[float]:
+    try:
+        with open("/proc/self/statm") as f:
+            pages = int(f.read().split()[1])
+        return pages * os.sysconf("SC_PAGE_SIZE") / (1024 * 1024)
+    except Exception:
+        return None
+
+
+def _mem_watchdog():
+    threshold = float(os.environ.get("RSS_RECYCLE_MIB", "3400"))
+    over_since = None
+    while True:
+        time.sleep(20)
+        rss = _rss_mib()
+        if rss is None:
+            return  # /proc unavailable (local dev on macOS) — silently give up
+        if rss <= threshold:
+            over_since = None
+            continue
+        over_since = over_since or time.monotonic()
+        idle = _total_inflight == 0
+        stuck = (time.monotonic() - over_since) > 300  # never drained in 5 min
+        if idle or stuck:
+            print(f"[mem-watchdog] RSS {rss:.0f} MiB > {threshold:.0f} — recycling worker"
+                  f"{'' if idle else f' (in-flight={_total_inflight}, over for >5 min)'}",
+                  flush=True)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return  # at most once per process
 
 
 # ---------------------------------------------------------------------------
@@ -956,6 +1023,8 @@ def startup():
         for era in ("early", "recent"):
             threading.Thread(target=prewarm_and_enrich, args=(dt, era), daemon=True).start()
 
+    threading.Thread(target=_mem_watchdog, name="mem-watchdog", daemon=True).start()
+
 
 def _enrich_metadata_with_ships(ds, data_type, era):
     """
@@ -1167,6 +1236,9 @@ def health():
     }
 
 
+_genesis_prime_lock = threading.Lock()
+
+
 @app.get("/warmup")
 def warmup():
     """
@@ -1224,10 +1296,20 @@ def warmup():
     #    The per-instance daemon thread is the primary mechanism; this primes
     #    a brand-new instance the scheduler happens to hit. Fire-and-forget so
     #    the warmup request never blocks on the (rare) CSV download.
+    #    Single-flight: a second /warmup while a refresh is running must not
+    #    stack another CSV download + parse on the same instance.
     try:
         from ir_monitor_api import refresh_genesis_cache
-        threading.Thread(target=refresh_genesis_cache, daemon=True).start()
-        result["genesis_priming"] = True
+        if not _genesis_prime_lock.acquire(blocking=False):
+            result["genesis_priming"] = "already-running"
+        else:
+            def _prime():
+                try:
+                    refresh_genesis_cache()
+                finally:
+                    _genesis_prime_lock.release()
+            threading.Thread(target=_prime, daemon=True).start()
+            result["genesis_priming"] = True
     except Exception as e:
         result["genesis_priming"] = False
         result["genesis_error"] = str(e)
@@ -2304,9 +2386,11 @@ def get_ir_frame(
     dt = "merge" if data_type == "merge" else "swath"
     r2_key = f"tcradar-ir/v1/{dt}/{case_index}_{lag_index}.json"
     if _r2_frame_exists(r2_key):
+        # Target is a pure function of (dt, case, lag) and the object never
+        # changes once mirrored → the redirect itself is safely cacheable.
         return RedirectResponse(
             _public_frame_url(r2_key), status_code=302,
-            headers={"Cache-Control": "no-store"},
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
         )
 
     ir_store = get_ir_dataset()

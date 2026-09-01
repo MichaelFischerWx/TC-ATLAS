@@ -59,7 +59,7 @@ try:
 except Exception:
     pass
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 
 from scipy.interpolate import RegularGridInterpolator
@@ -106,6 +106,27 @@ def _get_pyproj_module():
 # Configuration
 # ---------------------------------------------------------------------------
 SEB_BASE = "https://seb.omao.noaa.gov/pub/flight/radar"
+# Hosts a client-supplied file_url may point at (SSRF guard in _open_rt_dataset)
+_RT_URL_ALLOWED_HOSTS = frozenset({"seb.omao.noaa.gov"})
+
+
+def _check_rt_url(url: str) -> None:
+    """Reject file_url values that aren't https on an allowlisted host."""
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(url)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid file_url")
+    if u.scheme != "https" or (u.hostname or "").lower() not in _RT_URL_ALLOWED_HOSTS:
+        raise HTTPException(status_code=400, detail="file_url host not permitted")
+
+
+def _require_ops_key(request: Request) -> None:
+    """Gate ops/debug routes behind env OPS_SECRET (header X-Ops-Key).
+    Unset env = open (current behavior); mismatch = 404 so the route isn't advertised."""
+    secret = os.environ.get("OPS_SECRET", "")
+    if secret and request.headers.get("x-ops-key", "") != secret:
+        raise HTTPException(status_code=404, detail="Not Found")
 
 # Variable mapping: real-time TDR → display metadata
 # key: variable name in the NetCDF file
@@ -473,6 +494,7 @@ def _open_rt_dataset(file_url: str) -> xr.Dataset:
     the same active storm) from stacking dataset copies and OOMing the 4 GiB
     instance under ``containerConcurrency=20``.
     """
+    _check_rt_url(file_url)
     ds = _rt_ds_cache_get(file_url)
     if ds is not None:
         return ds
@@ -1122,7 +1144,8 @@ def list_missions():
 
     # Sort reverse chronological
     missions.sort(reverse=True)
-    return JSONResponse({"missions": missions})
+    return JSONResponse({"missions": missions},
+                        headers={"Cache-Control": "public, max-age=120"})
 
 
 def _mission_file_entries(mission: str) -> list[dict]:
@@ -1478,9 +1501,12 @@ def get_rt_volume(
 
 @router.get("/ir_debug")
 def debug_ir(
+    request: Request,
     file_url: str = Query(..., description="URL to the TDR xy.nc(.gz) file"),
 ):
     """Diagnostic: show what the IR pipeline sees without rendering frames."""
+    _require_ops_key(request)
+    _check_rt_url(file_url)
     info = {"steps": []}
 
     # Step 1: Check dependencies
@@ -4070,14 +4096,16 @@ def _cache_summary() -> dict:
 
 
 @router.get("/memory")
-def memory_status():
+def memory_status(request: Request):
     """Show current memory usage and cache occupancy."""
+    _require_ops_key(request)
     return JSONResponse(_cache_summary())
 
 
 @router.post("/clear_cache")
-def clear_all_rt_caches():
+def clear_all_rt_caches(request: Request):
     """Emergency cache flush — frees all cached datasets and results."""
+    _require_ops_key(request)
     for url, (ds, _) in list(_rt_ds_cache.items()):
         try:
             ds.close()

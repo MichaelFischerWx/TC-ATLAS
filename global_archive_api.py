@@ -156,6 +156,14 @@ _R2_BUCKET = os.environ.get("R2_BUCKET", "")
 # Served from R2 ONLY (no public GCS copy), so the public base is always the R2
 # custom domain — independent of the RT-bundle PUBLIC_BUNDLE_BASE cutover flag.
 _R2_PUBLIC_BASE = os.environ.get("R2_PUBLIC_BASE", "https://cdn.tcatlas.org").rstrip("/")
+
+
+def _require_ops_key(request: Request) -> None:
+    """Gate ops/debug routes behind env OPS_SECRET (header X-Ops-Key).
+    Unset env = open (current behavior); mismatch = 404 so the route isn't advertised."""
+    secret = os.environ.get("OPS_SECRET", "")
+    if secret and request.headers.get("x-ops-key", "") != secret:
+        raise HTTPException(status_code=404, detail="Not Found")
 _r2_client = None
 _r2_client_init = False
 
@@ -2420,9 +2428,11 @@ def ir_frame(
     # _maybe_heal_frame healing runs only on the FIRST access (acceptable —
     # healing is a one-shot quality upgrade; bump _GCS_CACHE_VERSION to redo).
     if _r2_frame_exists(r2_key):
+        # Target is a pure function of (sid, frame_idx, _GCS_CACHE_VERSION) and
+        # the mirrored object never changes → the redirect is safely cacheable.
         return RedirectResponse(
             _public_frame_url(r2_key), status_code=302,
-            headers={"Cache-Control": "no-store"},
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
         )
 
     # Check in-memory frame cache
@@ -4982,8 +4992,9 @@ def ir_heal_status():
 
 
 @router.get("/hursat/inspect")
-def hursat_inspect(sid: str = Query("1992230N11325", description="IBTrACS storm ID")):
+def hursat_inspect(request: Request, sid: str = Query("1992230N11325", description="IBTrACS storm ID")):
     """Inspect the first extracted NetCDF file to see variables and structure."""
+    _require_ops_key(request)
     import xarray as xr
 
     frames = _get_extracted_frames(sid, storm_lon=0.0)
@@ -5027,8 +5038,9 @@ def hursat_inspect(sid: str = Query("1992230N11325", description="IBTrACS storm 
 
 
 @router.get("/hursat/debug")
-def hursat_debug(sid: str = Query("1992230N11325", description="IBTrACS storm ID to test")):
+def hursat_debug(request: Request, sid: str = Query("1992230N11325", description="IBTrACS storm ID to test")):
     """Debug endpoint: test NCEI connectivity for a storm."""
+    _require_ops_key(request)
     import requests
 
     year = _parse_sid_year(sid)
