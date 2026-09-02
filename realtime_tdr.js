@@ -1098,7 +1098,10 @@
     function _hdobSearText() {
         var sp = _hdobData && _hdobData.sear;
         if (!sp) return '';
-        var head = 'SEAR 10-m estimate (experimental, MLBT): ';
+        // Always-visible explainer (hover tooltips don't exist on phones).
+        var head = 'SEAR (experimental): a machine-learning model that estimates the 10-m wind ' +
+                   'from the flight-level wind, its distance from the center, and the storm environment. ' +
+                   'Not an official product. ';
         if (sp.status !== 'ok' || !(sp.passes || []).length) {
             if (sp.status === 'awaiting_fix') return head + 'awaiting the first center fix.';
             if (sp.status === 'no_env') return head + 'no GFS environment yet.';
@@ -1110,7 +1113,7 @@
             return String(p.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(p.tail) + ' ' + Math.round(p.y_kt) + ' kt' +
                 (p.fix_source === 'hdob' ? '*' : '');
         });
-        return head + 'pass maxima ' + parts.join(' · ') + ' (updated ' + String(sp.generated).slice(11, 16) + 'Z)' +
+        return head + 'Pass maxima ' + parts.join(' · ') + ' (updated ' + String(sp.generated).slice(11, 16) + 'Z)' +
             (anyPrelim ? ' — * preliminary center from the flight-level pressure minimum, no VDM yet' : '');
     }
 
@@ -1130,10 +1133,11 @@
                 if (o.sear_kt != null && (!best.sear || o.sear_kt > best.sear.v)) best.sear = { v: o.sear_kt, t: o.t, tail: ac.tail, prelim: o.sear_fix === 'hdob' };
             });
         });
-        function tile(label, b, unit, cls, extra) {
+        function tile(label, b, unit, cls, extra, tip) {
             if (!b) return '';
             var sub = String(b.t || '').slice(11, 16) + 'Z · ' + _hdobTailDisplay(b.tail) + (extra || '');
-            return '<div class="recon-vdm-stat' + (cls ? ' ' + cls : '') + '">' +
+            return '<div class="recon-vdm-stat' + (cls ? ' ' + cls : '') + '"' +
+                (tip ? ' title="' + tip + '"' : '') + '>' +
                 '<div class="recon-vdm-stat-val">' + Math.round(b.v) +
                 '<span class="recon-vdm-stat-unit">' + unit + '</span></div>' +
                 '<div class="recon-vdm-stat-label">' + label + '</div>' +
@@ -1142,7 +1146,8 @@
         var html = tile('Max FL wind', best.fl, 'kt') +
                    tile('Min extrap SLP', best.slp, 'mb', 'is-accent') +
                    tile('Max SFMR', best.sfmr, 'kt') +
-                   tile('Max SEAR 10-m (exp)', best.sear, 'kt', 'is-sear', best.sear && best.sear.prelim ? ' · prelim fix' : '');
+                   tile('Max SEAR 10-m (exp)', best.sear, 'kt', 'is-sear', best.sear && best.sear.prelim ? ' · prelim fix' : '',
+                        'SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Not an official product.');
         el.innerHTML = html;
         el.style.display = html ? '' : 'none';
     }

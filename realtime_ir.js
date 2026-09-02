@@ -30240,7 +30240,7 @@
             _rtReconRow('SFMR sfc', ob.sfmr_kt != null ? ob.sfmr_kt + ' kt' : null) +
             _rtReconRow('SFMR rain', ob.sfmr_rain != null ? ob.sfmr_rain + ' mm/hr' : null) +
             // Experimental SEAR 10-m estimate (MLBT), joined by (tail, time) in _rtSearAttach.
-            _rtReconRow('SEAR 10-m est', ob.sear_kt != null ?
+            _rtReconRow('<span title="SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Not an official product.">SEAR 10-m est (exp)</span>', ob.sear_kt != null ?
                 ob.sear_kt + ' kt' +
                 (ob.sear_corr_kt != null && ob.sear_corr_kt !== ob.sear_kt ? ' · RMW-corr ' + ob.sear_corr_kt : '') +
                 (ob.sear_fix === 'hdob' ? ' · prelim fix' : '') : null) +
