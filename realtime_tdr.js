@@ -1469,9 +1469,14 @@
         var dark = document.documentElement.getAttribute('data-theme') !== 'light';
         var grid = dark ? 'rgba(148,163,184,0.15)' : 'rgba(100,116,139,0.15)';
         var fg = dark ? '#8b9ec2' : '#374151';
+        // Legend sits ABOVE the plot, anchored at its bottom edge, with the top
+        // margin sized for however many rows it wraps to (three on a phone):
+        // top-anchored at y=1.06 it grew DOWN over the wind panel on mobile.
+        var legendRows = Math.max(1, Math.ceil((traces.length * 118) / Math.max(240, el.clientWidth || 600)));
         var layout = {
-            autosize: true, margin: { l: 52, r: 50, t: 6, b: 34 }, showlegend: true,
-            legend: { orientation: 'h', y: 1.06, font: { size: 10, color: fg } },
+            autosize: true, margin: { l: 52, r: 50, t: 8 + legendRows * 18, b: 34 }, showlegend: true,
+            legend: { orientation: 'h', y: 1.0, yanchor: 'bottom', x: 0, xanchor: 'left',
+                      font: { size: 10, color: fg } },
             paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', hovermode: 'closest',
             xaxis: { type: 'date', range: _xrange, gridcolor: grid, tickfont: { size: 10, color: fg }, domain: [0, 1],
                      showspikes: true, spikemode: 'across', spikedash: 'dash', spikethickness: 1,
