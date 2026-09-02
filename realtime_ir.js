@@ -29941,6 +29941,7 @@
     var _RECON_COLORVARS = [
         { key: 'wspd_kt', label: 'FL Wind (30s)', unit: 'kt', kind: 'wind' },
         { key: 'sfmr_kt', label: 'SFMR Sfc',      unit: 'kt', kind: 'wind' },
+        { key: 'sear_kt', label: 'SEAR 10-m est', unit: 'kt', kind: 'wind' },
         { key: 'temp_c',  label: 'Temp',          unit: '°C', kind: 'temp' },
         { key: 'dewpt_c', label: 'Dewpt',         unit: '°C', kind: 'temp' }
     ];
@@ -30238,6 +30239,11 @@
             _rtReconRow('Peak wind (10s)', ob.peak_fl_kt != null ? ob.peak_fl_kt + ' kt' : null) +
             _rtReconRow('SFMR sfc', ob.sfmr_kt != null ? ob.sfmr_kt + ' kt' : null) +
             _rtReconRow('SFMR rain', ob.sfmr_rain != null ? ob.sfmr_rain + ' mm/hr' : null) +
+            // Experimental SEAR 10-m estimate (MLBT), joined by (tail, time) in _rtSearAttach.
+            _rtReconRow('SEAR 10-m est', ob.sear_kt != null ?
+                ob.sear_kt + ' kt' +
+                (ob.sear_corr_kt != null && ob.sear_corr_kt !== ob.sear_kt ? ' · RMW-corr ' + ob.sear_corr_kt : '') +
+                (ob.sear_fix === 'hdob' ? ' · prelim fix' : '') : null) +
             _rtReconRow('FL pres', ob.fl_pres_mb != null ? ob.fl_pres_mb + ' mb' : null) +
             _rtReconRow('Extrap SLP', ob.extrap_sfc_p_mb != null ? ob.extrap_sfc_p_mb + ' mb' : null) +
             _rtReconRow('FL alt', ob.geo_alt_m != null ? (ob.geo_alt_m + ' m · ' + (ob.geo_alt_m / 1000).toFixed(2) + ' km') : null) +
@@ -30613,6 +30619,67 @@
         }
     }
 
+    // ── SEAR 10-m wind estimates (experimental, MLBT) ─────────────────────
+    // Published by the Mac-side job MLBT/realtime/sear_rt.py (launchd
+    // com.fischerwx.sear-rt, quarter-hourly) to sear-rt/<ATCF>.json on GCS,
+    // mirrored to R2 so cdn.tcatlas.org serves it at zero egress. Per-ob
+    // estimates are joined onto the recon blob's tracks by (tail, time) so the
+    // barb color picker, the ob popup and the Recon-tab chart read them like
+    // any other HDOB field. A storm without a published object costs one
+    // 404 pair per minute (CDN, then GCS) — cached here for _SEAR_TTL_MS.
+    var _SEAR_CDN = 'https://cdn.tcatlas.org/sear-rt/';
+    var _SEAR_GCS = 'https://storage.googleapis.com/tc-atlas-ir-cache/sear-rt/';
+    var _SEAR_TTL_MS = 60 * 1000;
+    var _searCache = {};   // atcf -> { ts, data | null }
+    function _rtSearFetch(atcf) {
+        var c = _searCache[atcf];
+        if (c && (Date.now() - c.ts) < _SEAR_TTL_MS) return Promise.resolve(c.data);
+        function get(base) {
+            return fetch(base + atcf + '.json', { cache: 'no-store' }).then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            });
+        }
+        return get(_SEAR_CDN).catch(function () { return get(_SEAR_GCS); })
+            .catch(function () { return null; })
+            .then(function (d) { _searCache[atcf] = { ts: Date.now(), data: d }; return d; });
+    }
+    /** Join the published SEAR estimates onto a /recon/realtime blob in place.
+     *  Resolves with the SEAR payload (or null); sets blob.sear too. */
+    function _rtSearAttach(blob, atcf) {
+        if (!blob || !atcf) return Promise.resolve(null);
+        return _rtSearFetch(String(atcf).toUpperCase()).then(function (sp) {
+            var idx = {};
+            var acs = (sp && sp.aircraft) || {};
+            Object.keys(acs).forEach(function (tail) {
+                var a = acs[tail], m = {};
+                for (var i = 0; i < (a.t || []).length; i++) m[a.t[i]] = i;
+                idx[tail] = m;
+            });
+            (blob.aircraft || []).forEach(function (ac) {
+                var a = acs[ac.tail], m = idx[ac.tail];
+                (ac.track || []).forEach(function (o) {
+                    var i = m ? m[o.t] : undefined;
+                    if (i == null) { o.sear_kt = null; o.sear_30s_kt = null; o.sear_corr_kt = null; o.sear_fix = null; return; }
+                    o.sear_kt = a.yp[i]; o.sear_30s_kt = a.y[i]; o.sear_corr_kt = a.ypc[i];
+                    o.sear_fix = a.fix ? a.fix[i] : null;
+                });
+            });
+            blob.sear = sp;
+            return sp;
+        });
+    }
+    /** One-line SEAR summary for status strips: '· SEAR 126 kt (18:08Z)'. */
+    function _rtSearStatus(sp) {
+        if (!sp) return '';
+        if (sp.status !== 'ok' || !(sp.passes || []).length) {
+            return sp.status === 'awaiting_fix' ? ' · SEAR: awaiting fix' : '';
+        }
+        var last = sp.passes[sp.passes.length - 1];
+        return ' · SEAR ' + Math.round(last.y_kt) + ' kt (' + String(last.t).slice(11, 16) + 'Z' +
+            (last.fix_source === 'hdob' ? ', prelim' : '') + ')';
+    }
+
     /** Fetch the recon blob and re-render. */
     function _rtReconFetch() {
         if (!_rtReconAtcf) return;
@@ -30632,11 +30699,18 @@
                 if (!j || j.error) { if (statusEl) statusEl.textContent = 'no data'; return; }
                 _rtReconData = j;
                 _rtReconRender();
-                if (statusEl) {
+                function setStatus() {
+                    if (!statusEl) return;
                     var c = j.counts || {};
                     statusEl.textContent = (c.obs || 0) + ' obs · ' + (c.dropsondes || 0) +
-                        ' sondes · ' + (c.vdms || 0) + ' VDM';
+                        ' sondes · ' + (c.vdms || 0) + ' VDM' + _rtSearStatus(j.sear);
                 }
+                setStatus();
+                // Experimental SEAR 10-m estimates ride along after the blob paints.
+                _rtSearAttach(j, _rtReconAtcf).then(function (sp) {
+                    if (_rtReconData !== j) return;      // superseded by a newer poll
+                    if (sp) { _rtReconRender(); setStatus(); }
+                });
             })
             .catch(function () { if (statusEl) statusEl.textContent = 'fetch error'; });
     }
@@ -30975,6 +31049,9 @@
             }
         },
         legendStops: function (key) { return _reconLegendStops(key || _rtReconColorVar); },
+        // Experimental SEAR 10-m estimates: join onto a recon blob (see _rtSearAttach)
+        attachSear: _rtSearAttach,
+        searStatus: _rtSearStatus,
         // Replay override (for dev/test), parsed: {atcf, anchor, speed, name} | null
         replayInfo: function () {
             if (!_rtReconReplayOverride) return null;

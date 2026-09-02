@@ -83,7 +83,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20260901b">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20260902a">
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -119,7 +119,7 @@
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
     <link rel="stylesheet" href="realtime_ir_styles.css?v=20260901a">
     <link rel="stylesheet" href="satellite_styles.css?v=20260811b">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260901a">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260902a">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -2191,6 +2191,7 @@
                         <div class="recon-hdob-flighttoggle" id="recon-hdob-restoggle" style="display:none;"></div>
                         <div class="recon-hdob-vartoggles" id="recon-hdob-vartoggles"></div>
                         <div id="recon-hdob-srcnote" class="recon-hdob-srcnote"></div>
+                        <div id="recon-hdob-summary" class="recon-hdob-summary" style="display:none"></div>
                         <div id="recon-hdob-chart" class="recon-hdob-chart"></div>
                         <div class="recon-hdob-hint">Click the chart to mark that position on the map · click a barb, ◇ dropsonde, or ⊕ center fix for details.</div>
                     </div>
@@ -2635,7 +2636,7 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
     <script defer src="tc_mw_layer.js?v=20260811b"></script>
-    <script defer src="realtime_ir.js?v=20260901b"></script>
+    <script defer src="realtime_ir.js?v=20260902a"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays

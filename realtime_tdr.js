@@ -393,7 +393,7 @@
     // ~10× larger, and the round-trip was the bulk of the toggle lag). Cleared on
     // storm/mission switch; the background refresh still keeps both current.
     var _hdobResCache = { '10': null, '1': null };
-    var _hdobVarVis = { peak_fl_kt: true, wspd_kt: false, sfmr_kt: true,
+    var _hdobVarVis = { peak_fl_kt: true, wspd_kt: false, sfmr_kt: true, sear_kt: true,
                         fl_pres_mb: true, extrap_sfc_p_mb: true, geo_alt_m: true,
                         temp_c: false, dewpt_c: false, vdm: true };
     var _HDOB_VARS = [
@@ -404,6 +404,10 @@
           tip: '30-second average flight-level wind' },
         { key: 'sfmr_kt',    name: 'SFMR Sfc', unit: 'kt', color: '#fb923c', axis: 'y',
           tip: 'SFMR-retrieved surface wind' },
+        // Experimental 10-m estimate from the flight-level wind (MLBT / SEAR),
+        // joined onto the track by (tail, time) via _ReconKit.attachSear.
+        { key: 'sear_kt',    name: 'SEAR 10-m (exp)', unit: 'kt', color: '#ec4899', axis: 'y', dash: 'dot',
+          tip: 'Experimental SEAR 10-m wind estimate from the peak flight-level wind (TC-RADAR + dropsonde trained; MLBT). Not an official product.' },
         // Extrap SLP shares the WIND panel on a twin (right, inverted) axis — wind
         // peaks flank the pressure minimum at the eye, the classic recon view.
         { key: 'extrap_sfc_p_mb', name: 'Extrap SLP', unit: 'mb', color: '#e879f9', axis: 'y5',
@@ -827,6 +831,14 @@
                 var has = ((c.obs || 0) + (c.dropsondes || 0) + (c.vdms || 0)) > 0;
                 _hdobShowEmpty(!has);
                 if (has) _hdobRender();
+                // Experimental SEAR 10-m estimates join the track after the blob
+                // paints; a repaint then picks up the extra chart series / popup row.
+                if (has && kit.attachSear) {
+                    kit.attachSear(j, _hdobSearAtcf()).then(function (sp) {
+                        if (req !== _hdobReqSeq || _hdobData !== j) return;
+                        if (sp) _hdobRender();
+                    });
+                }
                 if (has && !_hdobLoggedLoad) {
                     _hdobLoggedLoad = true;
                     _ga('recon_hdob_loaded', {
@@ -881,6 +893,7 @@
         _hdobBuildFlightToggle();
         _hdobBuildResToggle();
         _hdobBuildSourceNote();
+        _hdobBuildSummary();
         _hdobBuildToggles();   // refresh pills so the FL-wind label tracks source/res
         // The map honors the flight selection (all flights when none picked);
         // framing/satellite above use the full set so they don't jump on filter.
@@ -1065,12 +1078,82 @@
         return '';
     }
 
+    /** Storm id to look the SEAR object up under. Mission mode falls back to a
+     *  basin placeholder (EP992026) when the HDOB mission id doesn't decode
+     *  (NOAA3 "LOWELL" 2026-09-02); resolve the flight's label through the
+     *  storm picker so the lookup still lands on the real storm. */
+    function _hdobSearAtcf() {
+        var id = _hdobAtcf || '';
+        if (_hdobMissionTail && /99\d{4}$/.test(id) && _hdobName) {
+            var want = String(_hdobName).toUpperCase();
+            for (var i = 0; i < _hdobStormOpts.length; i++) {
+                var o = _hdobStormOpts[i];
+                if (o && o.atcf && String(o.name || '').toUpperCase() === want) return o.atcf;
+            }
+        }
+        return id;
+    }
+
+    /** Experimental SEAR line: latest pass maxima + product stamp, or why none. */
+    function _hdobSearText() {
+        var sp = _hdobData && _hdobData.sear;
+        if (!sp) return '';
+        var head = 'SEAR 10-m estimate (experimental, MLBT): ';
+        if (sp.status !== 'ok' || !(sp.passes || []).length) {
+            if (sp.status === 'awaiting_fix') return head + 'awaiting the first center fix.';
+            if (sp.status === 'no_env') return head + 'no GFS environment yet.';
+            return head + 'no scored passes yet.';
+        }
+        var anyPrelim = false;
+        var parts = sp.passes.slice(-4).map(function (p) {
+            if (p.fix_source === 'hdob') anyPrelim = true;
+            return String(p.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(p.tail) + ' ' + Math.round(p.y_kt) + ' kt' +
+                (p.fix_source === 'hdob' ? '*' : '');
+        });
+        return head + 'pass maxima ' + parts.join(' · ') + ' (updated ' + String(sp.generated).slice(11, 16) + 'Z)' +
+            (anyPrelim ? ' — * preliminary center from the HDOB height minimum, no VDM yet' : '');
+    }
+
+    /** Mission-extremes strip for the displayed sortie: max flight-level wind,
+     *  min extrapolated SLP, max SEAR 10-m estimate — each with its time. */
+    function _hdobBuildSummary() {
+        var el = document.getElementById('recon-hdob-summary');
+        if (!el) return;
+        var aircraft = _hdobFilterAircraft((_hdobData && _hdobData.aircraft) || [], 'chart');
+        var best = { fl: null, slp: null, sear: null, sfmr: null };
+        aircraft.forEach(function (ac) {
+            (ac.track || []).forEach(function (o) {
+                var fl = (o.peak_fl_kt != null) ? o.peak_fl_kt : o.wspd_kt;
+                if (fl != null && (!best.fl || fl > best.fl.v)) best.fl = { v: fl, t: o.t, tail: ac.tail };
+                if (o.extrap_sfc_p_mb != null && (!best.slp || o.extrap_sfc_p_mb < best.slp.v)) best.slp = { v: o.extrap_sfc_p_mb, t: o.t, tail: ac.tail };
+                if (o.sfmr_kt != null && (!best.sfmr || o.sfmr_kt > best.sfmr.v)) best.sfmr = { v: o.sfmr_kt, t: o.t, tail: ac.tail };
+                if (o.sear_kt != null && (!best.sear || o.sear_kt > best.sear.v)) best.sear = { v: o.sear_kt, t: o.t, tail: ac.tail, prelim: o.sear_fix === 'hdob' };
+            });
+        });
+        function tile(label, b, unit, cls, extra) {
+            if (!b) return '';
+            var sub = String(b.t || '').slice(11, 16) + 'Z · ' + _hdobTailDisplay(b.tail) + (extra || '');
+            return '<div class="recon-vdm-stat' + (cls ? ' ' + cls : '') + '">' +
+                '<div class="recon-vdm-stat-val">' + Math.round(b.v) +
+                '<span class="recon-vdm-stat-unit">' + unit + '</span></div>' +
+                '<div class="recon-vdm-stat-label">' + label + '</div>' +
+                '<div class="recon-vdm-stat-sub">' + sub + '</div></div>';
+        }
+        var html = tile('Max FL wind', best.fl, 'kt') +
+                   tile('Min extrap SLP', best.slp, 'mb', 'is-accent') +
+                   tile('Max SFMR', best.sfmr, 'kt') +
+                   tile('Max SEAR 10-m (exp)', best.sear, 'kt', 'is-sear', best.sear && best.sear.prelim ? ' · prelim fix' : '');
+        el.innerHTML = html;
+        el.style.display = html ? '' : 'none';
+    }
+
     function _hdobBuildSourceNote() {
         var el = document.getElementById('recon-hdob-srcnote');
         if (!el) return;
-        var t = _hdobSourceText();
+        var t = _hdobSourceText(), s = _hdobSearText();
         el.textContent = t;
-        el.style.display = t ? '' : 'none';
+        if (s) { var d = document.createElement('div'); d.textContent = s; el.appendChild(d); }
+        el.style.display = (t || s) ? '' : 'none';
     }
 
     /** NOAA flight-level wind resolution toggle [10-s mean | 1-s]. Shown only when

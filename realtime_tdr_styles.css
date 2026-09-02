@@ -1095,3 +1095,21 @@
     padding: 32px 12px;
     text-align: center;
 }
+
+/* Live Flight summary strip: mission extremes (max FL wind, min extrap SLP,
+   max SEAR 10-m estimate) for the displayed sortie. Reuses the VDM stat tiles. */
+.recon-hdob-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 8px;
+    padding: 2px 10px 8px;
+}
+.recon-hdob-summary .recon-vdm-stat-sub {
+    margin-top: 2px;
+    font-size: 10px;
+    color: var(--slate);
+    font-variant-numeric: tabular-nums;
+}
+.recon-hdob-summary .recon-vdm-stat.is-sear {
+    border-color: #ec4899;
+}
