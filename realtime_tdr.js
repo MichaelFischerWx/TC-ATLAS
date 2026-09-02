@@ -1111,7 +1111,7 @@
                 (p.fix_source === 'hdob' ? '*' : '');
         });
         return head + 'pass maxima ' + parts.join(' · ') + ' (updated ' + String(sp.generated).slice(11, 16) + 'Z)' +
-            (anyPrelim ? ' — * preliminary center from the HDOB height minimum, no VDM yet' : '');
+            (anyPrelim ? ' — * preliminary center from the flight-level pressure minimum, no VDM yet' : '');
     }
 
     /** Mission-extremes strip for the displayed sortie: max flight-level wind,
