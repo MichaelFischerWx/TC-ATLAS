@@ -83,7 +83,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20260902e">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20260903a">
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -119,7 +119,7 @@
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
     <link rel="stylesheet" href="realtime_ir_styles.css?v=20260901a">
     <link rel="stylesheet" href="satellite_styles.css?v=20260811b">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260902a">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260903a">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -846,6 +846,8 @@
                                 <span style="color:#fbbf24;">◇ dropsonde</span>, or
                                 <span style="color:#f87171;">⊕ center fix</span> for details.
                             </div>
+                            <!-- Per-symbol show/hide (mirrors the Live Flight tab's pills) -->
+                            <div id="rt-recon-layers" class="rt-recon-layers" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-top:6px;"></div>
                             <!-- Barb base-dot color: variable picker + dynamic legend -->
                             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;">
                                 <span style="font-size:9px;font-weight:600;color:#64748b;">Barb color</span>
@@ -2206,6 +2208,8 @@
                                 <button class="ir-product-btn" data-rprod="vis" onclick="window._reconHdobSetSat('vis')" title="Visible reflectance — daytime only">Visible</button>
                                 <button class="ir-product-btn" data-rprod="off" onclick="window._reconHdobSetSat('off')" title="Hide satellite (plain basemap)">Off</button>
                             </span>
+                            <span id="recon-hdob-layers" class="recon-hdob-layers" title="Show or hide each map symbol"></span>
+                            <span id="recon-hdob-passstep" class="recon-hdob-passstep" style="display:none;" title="Step the satellite backdrop between the frames archived for each center pass"></span>
                             <button id="recon-hdob-grid" class="recon-hdob-gridbtn" onclick="window._reconHdobToggleGrid()" title="Toggle lat/lon grid">Grid</button>
                             <button id="recon-hdob-save" class="recon-hdob-gridbtn" onclick="window._reconHdobExport()" title="Save chart + map as one PNG (with whatever's selected)">⤓ Save PNG</button>
                         </div>
@@ -2636,7 +2640,7 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
     <script defer src="tc_mw_layer.js?v=20260811b"></script>
-    <script defer src="realtime_ir.js?v=20260902e"></script>
+    <script defer src="realtime_ir.js?v=20260903a"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
@@ -2741,7 +2745,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260902e';
+        var _LAZY_ASSET_V = '?v=20260903a';
         var _lazyViewMods = {
             recon:       { js: ['realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

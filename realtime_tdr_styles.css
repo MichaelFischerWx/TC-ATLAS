@@ -650,6 +650,27 @@
 }
 .recon-hdob-flighttoggle button.on { color: #fff; border-color: transparent; background: #2563eb; }
 .recon-hdob-satgroup { margin-left: auto; display: inline-flex; gap: 3px; align-items: center; }
+/* Per-symbol show/hide pills (barbs, sondes, VDM fixes, SEAR passes, aircraft). */
+.recon-hdob-layers { display: inline-flex; gap: 3px; align-items: center; flex-wrap: wrap; }
+.recon-hdob-layers .lbl { font-size: 11px; font-weight: 600; color: var(--slate); margin-right: 2px; }
+.recon-hdob-layers button {
+    font-size: 10.5px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: inherit;
+    border: 1px solid var(--border); background: var(--surface); color: var(--slate); line-height: 1.3;
+}
+.recon-hdob-layers button.on { color: #fff; border-color: transparent; }
+/* Pass stepper: ◀ Pass 3/5 · 00:42Z ▶ · Latest — steps the backdrop between the
+   archived per-pass satellite frames. */
+.recon-hdob-passstep { display: inline-flex; gap: 3px; align-items: center; }
+.recon-hdob-passstep .lbl { font-size: 11px; font-weight: 600; color: var(--slate); margin-right: 2px; }
+.recon-hdob-passstep button {
+    font-size: 11px; padding: 2px 7px; border-radius: 5px; cursor: pointer; font-family: inherit;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text); line-height: 1.3;
+}
+.recon-hdob-passstep button:disabled { opacity: 0.4; cursor: default; }
+.recon-hdob-passstep button.on { color: #fff; border-color: transparent; background: #ec4899; }
+.recon-hdob-passstep .cur { font-size: 11px; color: var(--text); min-width: 120px; text-align: center; }
+.recon-hdob-searlbl.sel span { font-size: 12px !important; background: #ec4899; color: #fff !important; text-shadow: none !important; padding: 0 4px; border-radius: 3px; }
+.recon-hdob-searctr.sel span { font-size: 19px !important; }
 /* Lat/lon grid toggle on the recon map toolbar */
 .recon-hdob-gridbtn {
     background: transparent; border: 1px solid var(--border); color: var(--slate);

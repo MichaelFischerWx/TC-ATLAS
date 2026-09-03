@@ -1163,6 +1163,13 @@
     var _rtReconVisible = false;       // overlay toggle state
     var _rtReconLayer = null;          // _ReconBarbLayer canvas instance
     var _rtReconMarkers = [];          // dropsonde + VDM markers/circles
+    // Per-symbol visibility for the storm-card overlay (same pills as Live Flight).
+    var _rtReconLayerVis = { barbs: true, sondes: true, vdm: true };
+    var _RT_RECON_LAYERS = [
+        { key: 'barbs',  name: 'Barbs',     color: '#2563eb', tip: 'Flight-level wind barbs + track dots' },
+        { key: 'sondes', name: 'Sondes',    color: '#d97706', tip: 'Dropsonde launch points (◇)' },
+        { key: 'vdm',    name: 'VDM fixes', color: '#ef4444', tip: 'Vortex Data Message center fixes (⊕)' }
+    ];
     var _reconSondeByKey = {};         // key -> sonde dict, for the skew-T modal lookup
     var _rtReconPollTimer = null;      // 60s refresh interval
     var _rtReconAtcf = null;           // current storm ATCF id
@@ -2020,6 +2027,18 @@
     // never requests tiles that don't exist.
     var _mosaicPackFrames = {};   // product -> { ts: 1 }
     var _mosaicStormZmax = {};    // product -> { ts: zmax }
+    // Frames archived off the rolling mosaic (recon-sat/<ATCF>/<band>/<ts>/, the
+    // per-pass copies the SEAR publisher keeps for finished missions). They are
+    // packed like their source, so the packed-tile reader must know them even
+    // though the live frames.json no longer lists them.
+    var _mosaicPackPinned = {};   // product -> { ts: zmax }
+    function _pinPackFrames(product, tsZmax) {
+        var pin = _mosaicPackPinned[product] || (_mosaicPackPinned[product] = {});
+        Object.keys(tsZmax || {}).forEach(function (ts) { pin[ts] = tsZmax[ts] || 6; });
+        var pf = _mosaicPackFrames[product] || (_mosaicPackFrames[product] = {});
+        var zm = _mosaicStormZmax[product] || (_mosaicStormZmax[product] = {});
+        Object.keys(pin).forEach(function (ts) { pf[ts] = 1; if (!zm[ts]) zm[ts] = pin[ts]; });
+    }
     function _stormZmaxFor(product, ts) {
         var m = _mosaicStormZmax[product], v = (m && ts) ? m[ts] : null;
         return (v && v > 6) ? v : 6;
@@ -2030,6 +2049,7 @@
             for (i = 0; i < pl.length; i++) pf[pl[i]] = 1;
             _mosaicPackFrames[product] = pf;
             _mosaicStormZmax[product] = j.storm_zmax || {};
+            if (_mosaicPackPinned[product]) _pinPackFrames(product, null);
         }
         if (product !== 'ir') return;
         var frames = (j && j.frames) || [], tr = (j && j.ir_trange) || null;
@@ -30257,6 +30277,7 @@
             _rtReconRow('<span title="SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Not an official product.">SEAR 10-m est (exp)</span>', ob.sear_kt != null ?
                 ob.sear_kt + ' kt' +
                 (ob.sear_corr_kt != null && ob.sear_corr_kt !== ob.sear_kt ? ' · RMW-corr ' + ob.sear_corr_kt : '') +
+                (ob.sear_az != null ? ' · ' + _rtSearWhere(ob.sear_az, ob.sear_r_km) : '') +
                 (ob.sear_fix === 'hdob' ? ' · prelim fix' : '') : null) +
             _rtReconRow('FL pres', ob.fl_pres_mb != null ? ob.fl_pres_mb + ' mb' : null) +
             _rtReconRow('Extrap SLP', ob.extrap_sfc_p_mb != null ? ob.extrap_sfc_p_mb + ' mb' : null) +
@@ -30589,7 +30610,32 @@
         for (var i = 0; i < _rtReconMarkers.length; i++) {
             try { detailMap.removeLayer(_rtReconMarkers[i]); } catch (e) {}
         }
-        _rtReconMarkers = _reconBuildMarkers(detailMap, _rtReconData);
+        var blob = _rtReconData ? Object.assign({}, _rtReconData, {
+            dropsondes: _rtReconLayerVis.sondes ? (_rtReconData.dropsondes || []) : [],
+            vdms:       _rtReconLayerVis.vdm    ? (_rtReconData.vdms || []) : []
+        }) : null;
+        _rtReconMarkers = _reconBuildMarkers(detailMap, blob);
+    }
+
+    /** Show/hide pills for the overlay's symbol families. */
+    function _rtReconBuildLayerToggles() {
+        var box = document.getElementById('rt-recon-layers');
+        if (!box) return;
+        box.innerHTML = '<span style="font-size:9px;font-weight:600;color:#64748b;">Show</span>';
+        _RT_RECON_LAYERS.forEach(function (cfg) {
+            var b = document.createElement('button');
+            b.textContent = cfg.name; b.title = cfg.tip;
+            var on = !!_rtReconLayerVis[cfg.key];
+            b.style.cssText = 'font-size:9.5px;padding:1px 7px;border-radius:10px;cursor:pointer;font-family:inherit;' +
+                'line-height:1.4;border:1px solid ' + (on ? 'transparent' : '#334155') + ';' +
+                'background:' + (on ? cfg.color : 'transparent') + ';color:' + (on ? '#fff' : '#94a3b8') + ';';
+            b.onclick = function () {
+                _rtReconLayerVis[cfg.key] = !_rtReconLayerVis[cfg.key];
+                _rtReconBuildLayerToggles();
+                if (_rtReconData) _rtReconRender();
+            };
+            box.appendChild(b);
+        });
     }
 
     /** Update the canvas layer + markers from _rtReconData. */
@@ -30604,11 +30650,15 @@
                 if (t > latestMs) latestMs = t;
             }
         }
-        if (!_rtReconLayer) {
-            _rtReconLayer = new _ReconBarbLayer();
-            _rtReconLayer.addTo(detailMap);
+        if (_rtReconLayerVis.barbs) {
+            if (!_rtReconLayer) {
+                _rtReconLayer = new _ReconBarbLayer();
+                _rtReconLayer.addTo(detailMap);
+            }
+            _rtReconLayer.setData(aircraft, latestMs);
+        } else if (_rtReconLayer) {
+            try { detailMap.removeLayer(_rtReconLayer); } catch (e) {} _rtReconLayer = null;
         }
-        _rtReconLayer.setData(aircraft, latestMs);
         _rtReconRenderMarkers();
 
         // Replay/dev only: the detail map is centered on whatever active storm
@@ -30678,23 +30728,38 @@
                 var a = acs[ac.tail], m = idx[ac.tail];
                 (ac.track || []).forEach(function (o) {
                     var i = m ? m[o.t] : undefined;
-                    if (i == null) { o.sear_kt = null; o.sear_30s_kt = null; o.sear_corr_kt = null; o.sear_fix = null; return; }
+                    if (i == null) { o.sear_kt = null; o.sear_30s_kt = null; o.sear_corr_kt = null; o.sear_fix = null; o.sear_az = null; o.sear_r_km = null; return; }
                     o.sear_kt = a.yp[i]; o.sear_30s_kt = a.y[i]; o.sear_corr_kt = a.ypc[i];
                     o.sear_fix = a.fix ? a.fix[i] : null;
+                    // storm-relative geometry of the ob (publisher ≥ 2026-09-03)
+                    o.sear_az = a.az ? a.az[i] : null; o.sear_r_km = a.r ? a.r[i] : null;
                 });
             });
             blob.sear = sp;
             return sp;
         });
     }
-    /** One-line SEAR summary for status strips: '· SEAR 126 kt (18:08Z)'. */
+    /** 8-point compass label for a bearing in degrees clockwise from north. */
+    function _rtCompass8(az) {
+        if (az == null || isNaN(az)) return '';
+        var n = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+        return n[Math.round((((az % 360) + 360) % 360) / 45) % 8];
+    }
+    /** 'NE 14 km of center' — where in the storm a SEAR estimate was made. */
+    function _rtSearWhere(az, rKm) {
+        var c = _rtCompass8(az);
+        if (!c) return '';
+        return c + (rKm != null ? ' ' + Math.round(rKm) + ' km' : '') + ' of center';
+    }
+    /** One-line SEAR summary for status strips: '· SEAR 126 kt NE (18:08Z)'. */
     function _rtSearStatus(sp) {
         if (!sp) return '';
         if (sp.status !== 'ok' || !(sp.passes || []).length) {
             return sp.status === 'awaiting_fix' ? ' · SEAR: awaiting fix' : '';
         }
         var last = sp.passes[sp.passes.length - 1];
-        return ' · SEAR ' + Math.round(last.y_kt) + ' kt (' + String(last.t).slice(11, 16) + 'Z' +
+        var q = _rtCompass8(last.az_deg) || last.quad || '';
+        return ' · SEAR ' + Math.round(last.y_kt) + ' kt' + (q ? ' ' + q : '') + ' (' + String(last.t).slice(11, 16) + 'Z' +
             (last.fix_source === 'hdob' ? ', prelim' : '') + ')';
     }
 
@@ -30749,6 +30814,7 @@
         if (btn) btn.textContent = 'Hide';
         if (controls) controls.style.display = '';
         _rtReconBuildBarbVarUI();
+        _rtReconBuildLayerToggles();
         _rtReconFetch();
         _rtReconPollTimer = setInterval(_rtReconFetch, _RT_RECON_POLL_MS);
     };
@@ -30933,7 +30999,7 @@
             var vt = Object.keys(_reconVisTime).map(function (k) { return _reconVisTime[k].ts; }).join(',');
             return (_reconGibsTimeStr || 'pending') + '|' + vt;
         },
-        gibsProductLayer: function (product, lonHint, opacity) {
+        gibsProductLayer: function (product, lonHint, opacity, timeIso) {
             var sat = _reconPickGibsSat(lonHint);
             var op = opacity == null ? 0.92 : opacity;
             // The recon map renders on the MapLibre GL facade (lflet_gl.js), whose
@@ -30960,6 +31026,15 @@
                 layer = GIBS_IR_LAYERS[sat] || GIBS_IR_LAYERS['GOES-East'];
                 matrix = GIBS_TILEMATRIX; t = _reconLatestGibsTime(); maxNative = GIBS_MAX_ZOOM;
             }
+            // An explicit time (a finished sortie's center pass) pins the layer to
+            // that 10-min slot; GIBS keeps months of geostationary imagery.
+            if (timeIso) {
+                var td = new Date(timeIso);
+                if (!isNaN(td.getTime())) {
+                    td.setUTCMinutes(Math.floor(td.getUTCMinutes() / 10) * 10, 0, 0);
+                    t = td.toISOString().slice(0, 19) + 'Z';
+                }
+            }
             var url = GIBS_BASE + '/' + layer + '/default/' + t + '/' + matrix + '/{z}/{y}/{x}.png';
             return L.tileLayer(url, {
                 opacity: op, tileSize: 256, maxZoom: 12, maxNativeZoom: maxNative,
@@ -30975,59 +31050,106 @@
         // Coverage matches the Global Map (GOES-E/W + Himawari) — always covers
         // NHC/USAF recon basins (Atlantic + E/C Pacific).
         reconMosaicLayer: function (targetMap) {
-            var obj = null, gen = 0, curProduct = null, curFrame = null, curOpacity = 0.92;
+            var obj = null, gen = 0, curProduct = null, curFrame = null, curOpacity = 0.92, curAt = null, curKey = null;
             function clear() {
-                curProduct = null; curFrame = null;
+                curProduct = null; curFrame = null; curAt = null; curKey = null;
                 if (obj) { try { obj.destroy(); } catch (e) {} obj = null; }
             }
-            function fetchLatest(product) {
+            // Frame ids are YYYYMMDDHHMM (UTC).
+            function frameMs(f) {
+                var s = String(f);
+                return Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12));
+            }
+            // Latest frame, or — for a finished sortie — the frame nearest atIso.
+            // The mosaic keeps only ~3 h, so a miss (nothing within 40 min) resolves
+            // null and the caller falls back to the GIBS archive at that time.
+            function fetchFrame(product, atIso) {
                 return fetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
                     .then(function (r) { return r.json(); })
-                    .then(function (j) { _irApplyTrange(j, product); var f = (j && j.frames) || [];
-                                         return f.length ? f[f.length - 1] : null; });
+                    .then(function (j) {
+                        _irApplyTrange(j, product); var f = (j && j.frames) || [];
+                        if (!f.length) return null;
+                        if (!atIso) return f[f.length - 1];
+                        var want = Date.parse(atIso), best = null, bd = Infinity;
+                        for (var i = 0; i < f.length; i++) {
+                            var d = Math.abs(frameMs(f[i]) - want);
+                            if (d < bd) { bd = d; best = f[i]; }
+                        }
+                        return bd <= 40 * 60 * 1000 ? best : null;
+                    });
             }
-            function build(product, opacity) {
+            // Mount one frame from an arbitrary tile root (the live mosaic or a
+            // recon-sat archive copy). key = root|frame identifies what is up.
+            function mount(product, root, frame, zmax, myGen) {
+                if (myGen !== gen || !targetMap) return false;
+                obj = window.createMosaicGLLayer({
+                    id: 'recon-mosaic-idx',
+                    tileUrl: function (f, z, x, y) { return root + '/' + f + '/' + z + '/' + x + '/' + y + '.png'; },
+                    frameMaxZoom: function (f) { return zmax || _stormZmaxFor(product, f); },
+                    fetchTile: function (f, z, x, y) {
+                        return _v3TileBlob(root + '/' + f + '/' + z + '/' + x + '/' + y + '.png');
+                    },
+                    frames: [frame], maxZoom: 7, baseMaxZoom: 4, tileSize: 512,
+                    lut: _idxLutForProduct(product, _irColormap || 'claude-ir'),
+                    onError: function (m) { try { console.error('[recon-mosaic] ' + m); } catch (e) {} }
+                });
+                curKey = root + '|' + frame;
+                var addGen = myGen;
+                var doAdd = function () {
+                    if (addGen !== gen || !obj) return;
+                    try { targetMap._glAdd(obj.layer, 200); obj.setFrame(0); obj.setOpacity(curOpacity); curFrame = frame; }
+                    catch (e) { try { console.error('[recon-mosaic] add failed', e); } catch (e2) {} }
+                };
+                if (targetMap._whenStyle) targetMap._whenStyle(doAdd); else doAdd();
+                return true;
+            }
+            // Archived frame: {root, ts, zmax} from a recon-sat manifest.
+            function buildArchived(product, opacity, arch) {
                 if (opacity != null) curOpacity = opacity;
+                var key = arch.root + '/' + product + '|' + arch.ts;
+                if (obj && key === curKey) { try { obj.setOpacity(curOpacity); } catch (e) {} return Promise.resolve(true); }
+                var myGen = ++gen;
+                clear();
+                curProduct = product; curAt = 'archived:' + arch.ts;
+                var pin = {}; pin[arch.ts] = arch.zmax || 6;
+                _pinPackFrames(product, pin);
+                return Promise.resolve(mount(product, arch.root + '/' + product, arch.ts, arch.zmax || 6, myGen));
+            }
+            // Resolves true when a frame is (or stays) on the map, false otherwise.
+            function build(product, opacity, atIso) {
+                if (opacity != null) curOpacity = opacity;
+                atIso = atIso || null;
                 // Same product already up → just refresh to the latest frame, no
-                // destroy/re-add (avoids a per-poll flash).
-                if (obj && product === curProduct) {
+                // destroy/re-add (avoids a per-poll flash). A frozen (atIso) frame
+                // never refreshes: it IS the mission's frame.
+                if (obj && product === curProduct && atIso === curAt) {
+                    if (atIso) return Promise.resolve(true);
                     var g0 = gen;
-                    return fetchLatest(product).then(function (latest) {
-                        if (g0 !== gen || !obj || !latest) return;
+                    return fetchFrame(product, null).then(function (latest) {
+                        if (g0 !== gen || !obj || !latest) return true;
                         if (latest !== curFrame) { obj.setFrames([latest]); obj.setFrame(0); curFrame = latest; }
                         obj.setOpacity(curOpacity);
-                    }).catch(function () {});
+                        return true;
+                    }).catch(function () { return true; });
                 }
-                var myGen = ++gen;                       // product change / first build
+                var myGen = ++gen;                       // product / time change, first build
                 clear();
-                curProduct = product;
-                return fetchLatest(product).then(function (latest) {
-                    if (myGen !== gen || !targetMap || !latest) return;
-                    obj = window.createMosaicGLLayer({
-                        id: 'recon-mosaic-idx',
-                        tileUrl: function (f, z, x, y) { return _ir2aRoot(product) + '/' + f + '/' + z + '/' + x + '/' + y + '.png'; },
-                        frameMaxZoom: function (f) { return _stormZmaxFor(product, f); },
-                        fetchTile: function (f, z, x, y) {
-                            return _v3TileBlob(_ir2aRoot(product) + '/' + f + '/' + z + '/' + x + '/' + y + '.png');
-                        },
-                        frames: [latest], maxZoom: 7, baseMaxZoom: 4, tileSize: 512,
-                        lut: _idxLutForProduct(product, _irColormap || 'claude-ir'),
-                        onError: function (m) { try { console.error('[recon-mosaic] ' + m); } catch (e) {} }
-                    });
-                    // Add once the GL style is ready (a fresh recon map's style
-                    // often hasn't loaded yet — _glAdd would throw on getStyle()).
-                    // z200 = tilePane, below coastlines(350) + labels(400).
-                    var addGen = myGen;
-                    var doAdd = function () {
-                        if (addGen !== gen || !obj) return;   // superseded before style ready
-                        try { targetMap._glAdd(obj.layer, 200); obj.setFrame(0); obj.setOpacity(curOpacity); curFrame = latest; }
-                        catch (e) { try { console.error('[recon-mosaic] add failed', e); } catch (e2) {} }
-                    };
-                    if (targetMap._whenStyle) targetMap._whenStyle(doAdd); else doAdd();
-                }).catch(function (e) { try { console.error('[recon-mosaic] frames load failed', e); } catch (e2) {} });
+                curProduct = product; curAt = atIso;
+                return fetchFrame(product, atIso).then(function (latest) {
+                    if (myGen !== gen || !targetMap) return false;
+                    if (!latest) { if (myGen === gen) clear(); return false; }
+                    return mount(product, _ir2aRoot(product), latest, null, myGen);
+                }).catch(function (e) { try { console.error('[recon-mosaic] frames load failed', e); } catch (e2) {} return false; });
             }
             return {
-                setProduct: function (product, opacity) { return build(product, opacity); },
+                // setProduct(product, opacity[, atIso]) → Promise<bool>. atIso pins
+                // the backdrop to the mosaic frame nearest that time (finished
+                // sortie); omitted = latest frame, refreshed on each call.
+                setProduct: function (product, opacity, atIso) { return build(product, opacity, atIso); },
+                // setArchived(product, opacity, {root, ts, zmax}) → Promise<bool>:
+                // a frame copied off the rolling mosaic by the recon-sat archive.
+                setArchived: function (product, opacity, arch) { return buildArchived(product, opacity, arch); },
+                frameId: function () { return curFrame; },
                 remove: clear,
                 coversLon: function (lon) { return _mosaicCoversLon(lon); }
             };
@@ -31069,6 +31191,8 @@
         legendStops: function (key) { return _reconLegendStops(key || _rtReconColorVar); },
         // Experimental SEAR 10-m estimates: join onto a recon blob (see _rtSearAttach)
         attachSear: _rtSearAttach,
+        compass8: _rtCompass8,
+        searWhere: _rtSearWhere,
         searStatus: _rtSearStatus,
         // Replay override (for dev/test), parsed: {atcf, anchor, speed, name} | null
         replayInfo: function () {

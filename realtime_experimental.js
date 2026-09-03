@@ -3700,40 +3700,86 @@
             });
         }
         /* Aircraft verification fixes: one diamond per recon center pass.
-           Flight-level wind arrives already surface-adjusted by the producer
-           (x0.90 at 700 mb / x0.80 at 850 mb, Franklin et al. 2003) so the
-           Vmax marker is apples-to-apples with GHOST; hover keeps the raw
-           flight-level and SFMR values. RMW passes through unadjusted —
-           GHOST predicts the 2-km RMW, so the FL wind-max radius is the
-           natural comparison. */
+           The Vmax marker is the producer's surface wind for the pass: the
+           SEAR 10-m pass peak (flight-level -> 10-m model, the same estimate
+           the Recon tab's Live Flight chart shows) where a SEAR pass was
+           published for the fix, else the flight-level wind x0.90 at 700 mb
+           / x0.80 at 850 mb (Franklin et al. 2003). Hover keeps the raw
+           flight-level, the ratio value and SFMR. RMW passes through
+           unadjusted — GHOST predicts the 2-km RMW, so the FL wind-max
+           radius is the natural comparison. */
         if (j.recon && j.recon.length) {
             var ink = dark ? '#f1f5f9' : '#0f172a';
             var ring = dark ? '#0f172a' : '#ffffff';
             var rec = j.recon;
+            var nSear = rec.filter(function (r) {
+                return r.sfc_src === 'sear'; }).length;
             var mk = { symbol: 'diamond', size: 9, color: ink,
                        line: { width: 1.5, color: ring } };
             traces.push({
                 x: rec.map(function (r) { return r.t; }),
                 y: rec.map(function (r) { return r.vmax_sfc_kt; }),
-                name: 'Recon (sfc-adjusted)', yaxis: 'y', xaxis: 'x',
+                name: nSear === rec.length ? 'Recon (SEAR 10-m)'
+                    : nSear ? 'Recon (SEAR 10-m / sfc-adjusted)'
+                    : 'Recon (sfc-adjusted)',
+                yaxis: 'y', xaxis: 'x',
                 mode: 'markers', marker: mk,
                 text: rec.map(function (r) {
-                    return r.vmax_sfc_kt + ' kt sfc — FL ' + r.fl_wind_kt +
-                        ' kt' +
+                    var fl = r.fl_wind_kt == null ? '' :
+                        'FL ' + r.fl_wind_kt + ' kt' +
                         (r.fl_wind_t
                             ? ' (' + r.fl_wind_t.slice(11, 16) + 'Z)' : '') +
-                        ' @ ' + r.fl_level_mb + ' mb ×' + r.sfc_factor +
+                        (r.fl_level_mb != null
+                            ? ' @ ' + r.fl_level_mb + ' mb'
+                            : r.sear_height_km != null
+                                ? ' @ ' + r.sear_height_km.toFixed(1) + ' km'
+                                : '');
+                    var head, sfc;
+                    if (r.sfc_src === 'sear') {
+                        head = r.vmax_sfc_kt + ' kt SEAR 10-m peak' +
+                            (r.sear_t ? ' (' + r.sear_t.slice(11, 16) + 'Z' +
+                                (r.sear_tail ? ', ' + r.sear_tail : '') + ')'
+                                : '') +
+                            (r.sear_corr_kt != null &&
+                             Math.round(r.sear_corr_kt) !== r.vmax_sfc_kt
+                                ? ' · RMW-corr ' + Math.round(r.sear_corr_kt)
+                                : '') +
+                            (r.sear_quad
+                                ? ' · ' + r.sear_quad +
+                                  (r.sear_r_km != null
+                                      ? ' ' + Math.round(r.sear_r_km) + ' km' : '') +
+                                  ' of center'
+                                : '') +
+                            (r.sear_fix_source === 'hdob' ? ' · prelim fix' : '');
+                        sfc = fl + (r.fl_ratio_sfc_kt != null
+                            ? ' · ×' + r.sfc_factor + ' = ' +
+                              r.fl_ratio_sfc_kt + ' kt' : '');
+                    } else {
+                        head = r.vmax_sfc_kt + ' kt sfc';
+                        sfc = fl + ' ×' + r.sfc_factor;
+                    }
+                    return head + '<br>' + sfc +
                         (r.sfmr_kt != null ? ' · SFMR ' + r.sfmr_kt + ' kt' : '') +
                         (r.eye ? '<br>eye: ' + r.eye : '') +
-                        '<br>' + (r.src === 'hdob'
+                        '<br>' + (r.src === 'sear'
+                            ? 'SEAR pass' + (r.sear_fix_source === 'vdm'
+                                ? ' on a Vortex Data Message fix'
+                                : ' on a preliminary HDOB-derived fix') +
+                              ' (no matching VDM here yet)'
+                            : r.src === 'hdob'
                             ? 'derived from HDOBs (VDM not posted yet)'
-                            : 'official Vortex Data Message fix');
+                            : 'official Vortex Data Message fix') +
+                        (r.sfc_src === 'sear'
+                            ? '<br>SEAR: experimental flight-level → 10-m ' +
+                              'estimate, not an official product'
+                            : '');
                 }),
                 hovertemplate: '%{text}<extra>Recon</extra>'
             });
-            traces.push({
-                x: rec.map(function (r) { return r.t; }),
-                y: rec.map(function (r) { return r.pmin_hpa; }),
+            var rp = rec.filter(function (r) { return r.pmin_hpa != null; });
+            if (rp.length) traces.push({
+                x: rp.map(function (r) { return r.t; }),
+                y: rp.map(function (r) { return r.pmin_hpa; }),
                 name: 'Recon', yaxis: 'y2', xaxis: 'x2', mode: 'markers',
                 marker: mk, showlegend: false,
                 hovertemplate: '%{y:.0f} hPa (extrapolated)<extra>Recon</extra>'
