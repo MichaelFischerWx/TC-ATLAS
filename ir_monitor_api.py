@@ -7810,9 +7810,32 @@ def get_storm_metadata(atcf_id: str):
 _WEATHERLAB_BASE = (
     "https://deepmind.google.com/science/weatherlab/download/cyclones/FNV3"
 )
+# WeatherNext 3 cyclones (WeatherLab "WN3 r0", experimental, 2026-09):
+# byte-identical CSV schema to FNV3, 64 members instead of 50. Published
+# on the same 6-hourly download cadence (00/06/12/18Z) with the same
+# ~3-5 h lag, so every FNV3 cycle-walking helper applies unchanged.
+_WEATHERLAB_WNV3_BASE = (
+    "https://deepmind.google.com/science/weatherlab/download/cyclones/WNV3"
+)
+_WL_MODELS = {
+    "fnv3": {"base": _WEATHERLAB_BASE, "prefix": "FNV3",
+             "label": "DeepMind FNV3", "nominal": 50},
+    "wnv3": {"base": _WEATHERLAB_WNV3_BASE, "prefix": "WNV3",
+             "label": "DeepMind WeatherNext 3 (experimental)", "nominal": 64},
+}
+_WL_MODEL_DEFAULT = "fnv3"
+
+
+def _wl_model_norm(model) -> str:
+    """Normalize a `model` query param to a _WL_MODELS key (default FNV3).
+    Forgiving on aliases so 'wn3' / 'weathernext3' / 'WNV3' all resolve."""
+    m = (model or "").strip().lower().replace("-", "").replace("_", "")
+    if m in ("wnv3", "wn3", "weathernext3", "wn3r0", "wnv3r0"):
+        return "wnv3"
+    return _WL_MODEL_DEFAULT
 _weatherlab_cache: dict = {}   # (date_str, hour_str) -> {"data": {...}, "ts": float}
 _WEATHERLAB_CACHE_TTL = 7200   # 2 hours (CSV only changes every 6h)
-_WEATHERLAB_CACHE_MAX = 4
+_WEATHERLAB_CACHE_MAX = 8   # 4 cycles x 2 models
 # Same publish-lag profile as the LARGE_ENSEMBLE CSV — paired ensemble
 # lands ~3–5 h after init. Mirror the negative cache so probes for an
 # unpublished cycle don't cost 30 s each on every request.
@@ -7996,13 +8019,19 @@ def _parse_weatherlab_size(cols: list, cmap: dict) -> dict:
     return out
 
 
-def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
+def _fetch_weatherlab_csv(date_str: str, hour_str: str,
+                          model: str = _WL_MODEL_DEFAULT) -> dict | None:
     """Fetch and parse WeatherLab ensemble CSV for a given init time.
+
+    `model` selects the WeatherLab cyclone model ('fnv3' default, or
+    'wnv3' = WeatherNext 3 experimental); the parse is identical.
 
     Returns dict keyed by track_id (ATCF ID), each containing:
       { "members": { "0": {"points": [...]}, ... }, "ensemble_mean": {...} }
     """
-    cache_key = (date_str, hour_str)
+    model_n = _wl_model_norm(model)
+    spec = _WL_MODELS[model_n]
+    cache_key = (date_str, hour_str, model_n)
     hit = _weatherlab_cache_lookup(
         _weatherlab_cache, cache_key,
         _WEATHERLAB_CACHE_TTL, _WEATHERLAB_MISS_TTL)
@@ -8012,12 +8041,12 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
     # Fetch ensemble members
     date_fmt = date_str.replace("-", "_")
     ens_url = (
-        f"{_WEATHERLAB_BASE}/ensemble/paired/csv/"
-        f"FNV3_{date_fmt}T{hour_str}_00_paired.csv"
+        f"{spec['base']}/ensemble/paired/csv/"
+        f"{spec['prefix']}_{date_fmt}T{hour_str}_00_paired.csv"
     )
     mean_url = (
-        f"{_WEATHERLAB_BASE}/ensemble_mean/paired/csv/"
-        f"FNV3_{date_fmt}T{hour_str}_00_paired.csv"
+        f"{spec['base']}/ensemble_mean/paired/csv/"
+        f"{spec['prefix']}_{date_fmt}T{hour_str}_00_paired.csv"
     )
 
     try:
@@ -8141,7 +8170,8 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
         oldest = min(parsed_keys, key=lambda k: _weatherlab_cache[k]["ts"])
         del _weatherlab_cache[oldest]
 
-    print(f"[WeatherLab] Parsed {len(result)} storms from {date_str} {hour_str}z")
+    print(f"[WeatherLab] Parsed {len(result)} storms from {date_str} "
+          f"{hour_str}z [{model_n}]")
     return result
 
 
@@ -8208,13 +8238,16 @@ def _weatherlab_match_id(data: dict, atcf_id: str,
 
 
 @router.get("/storm/{atcf_id}/weatherlab")
-def get_storm_weatherlab(atcf_id: str):
+def get_storm_weatherlab(atcf_id: str, model: str = _WL_MODEL_DEFAULT):
     """Fetch DeepMind WeatherLab ensemble forecasts for a storm.
 
-    Returns 50 ensemble member tracks + ensemble mean with position,
-    intensity, and pressure at 6-hourly intervals out to ~13 days.
+    Returns the ensemble member tracks (50 for FNV3, 64 for WNV3) + the
+    ensemble mean with position, intensity, and pressure at 6-hourly
+    intervals out to ~13 days. `model=wnv3` selects the experimental
+    WeatherNext 3 cyclone model.
     """
     atcf_id = atcf_id.upper().strip()
+    model_n = _wl_model_norm(model)
 
     # Walk maturity-gated candidates newest-first. Cycles too young to
     # plausibly be on the CDN are skipped, and 404s are cached short-TTL,
@@ -8226,7 +8259,7 @@ def get_storm_weatherlab(atcf_id: str):
     used_hour = None
     track_id = None
     for date_str, hour_str in _genesis_candidates(now=now):
-        data = _fetch_weatherlab_csv(date_str, hour_str)
+        data = _fetch_weatherlab_csv(date_str, hour_str, model_n)
         # Exact ID first; fall back to the nearest invest track, which is how
         # a freshly-upgraded storm appears while DeepMind's pairing catches up.
         track_id = _weatherlab_match_id(data, atcf_id) if data else None
@@ -8255,7 +8288,8 @@ def get_storm_weatherlab(atcf_id: str):
 
     return JSONResponse(
         content={
-            "model": "DeepMind FNV3",
+            "model": _WL_MODELS[model_n]["label"],
+            "model_key": model_n,
             "init_time": init_time,
             # track_id differs from atcf_id when DeepMind is still carrying
             # the system under its invest number (see _weatherlab_match_id).
@@ -9110,7 +9144,7 @@ def get_env_layers():
 
 
 @router.get("/weatherlab-global")
-def get_weatherlab_global():
+def get_weatherlab_global(model: str = _WL_MODEL_DEFAULT):
     """Latest WeatherLab ensemble forecasts for every track in the paired CSV.
 
     Returns one entry per track (active storm or invest in ATCF) with the
@@ -9122,11 +9156,13 @@ def get_weatherlab_global():
     surface disturbances that haven't yet received an invest number.
     """
     now = _dt.now(timezone.utc)
+    model_n = _wl_model_norm(model)
+    model_label = _WL_MODELS[model_n]["label"]
     data = None
     used_date = None
     used_hour = None
     for date_str, hour_str in _genesis_candidates(now=now):
-        d = _fetch_weatherlab_csv(date_str, hour_str)
+        d = _fetch_weatherlab_csv(date_str, hour_str, model_n)
         if d:
             data = d
             used_date = date_str
@@ -9136,7 +9172,8 @@ def get_weatherlab_global():
     if not data:
         return JSONResponse(
             content={
-                "model": "DeepMind FNV3",
+                "model": model_label,
+                "model_key": model_n,
                 "init_time": None,
                 "tracks": [],
                 "n_tracks": 0,
@@ -9159,7 +9196,8 @@ def get_weatherlab_global():
 
     return JSONResponse(
         content={
-            "model": "DeepMind FNV3",
+            "model": model_label,
+            "model_key": model_n,
             "init_time": init_time,
             "tracks": tracks,
             "n_tracks": len(tracks),
@@ -12230,7 +12268,48 @@ def _fetch_weatherlab_large_csv(date_str: str, hour_str: str,
             member_series[track_id][member] = {}
         member_series[track_id][member][tau] = {"wind": wind, "pres": pres}
 
-    # Reorganise into per-tau arrays
+    result = _wl_member_series_to_dist(member_series)
+
+    # Cache. Exclude miss-sentinel entries from the cap so 404 probes
+    # can't evict a freshly-parsed multi-MB cycle.
+    _weatherlab_large_cache[cache_key] = {"data": result, "ts": time.time()}
+    parsed_keys = [k for k, v in _weatherlab_large_cache.items()
+                   if v["data"] != _WEATHERLAB_LARGE_MISS]
+    if len(parsed_keys) > 4:
+        oldest = min(parsed_keys, key=lambda k: _weatherlab_large_cache[k]["ts"])
+        del _weatherlab_large_cache[oldest]
+
+    print(f"[WeatherLab 1K] Parsed {len(result)} storms, "
+          f"{sum(r['n_members'] for r in result.values())} total members")
+    return result
+
+
+def _wl_paired_to_dist(data: dict) -> dict:
+    """Build the /weatherlab-ensemble distribution payload from a parsed
+    PAIRED ensemble dict (the `_fetch_weatherlab_csv` shape). Used for
+    models that have no separate large-ensemble product (WNV3: 64
+    members) so the storm-card histogram panels work unchanged."""
+    member_series: dict = {}
+    for track_id, storm in (data or {}).items():
+        ms = {}
+        for mkey, mval in (storm.get("members") or {}).items():
+            try:
+                m_int = int(mkey)
+            except (TypeError, ValueError):
+                continue
+            ms[m_int] = {p["tau"]: {"wind": p.get("wind"), "pres": p.get("pres")}
+                         for p in (mval.get("points") or [])
+                         if p.get("tau") is not None}
+        if ms:
+            member_series[track_id] = ms
+    return _wl_member_series_to_dist(member_series)
+
+
+def _wl_member_series_to_dist(member_series: dict) -> dict:
+    """{track: {member_int: {tau: {wind, pres}}}} -> per-track per-tau
+    arrays (intensity + 12/24 h intensity change) for the histogram
+    panels. Shared by the FNV3 1000-member parser and the paired-CSV
+    path (WNV3)."""
     result = {}
     for track_id, members in member_series.items():
         all_taus = set()
@@ -12290,30 +12369,24 @@ def _fetch_weatherlab_large_csv(date_str: str, hour_str: str,
             "intensity_change_12h": change_12h,
             "intensity_change_24h": change_24h,
         }
-
-    # Cache. Exclude miss-sentinel entries from the cap so 404 probes
-    # can't evict a freshly-parsed multi-MB cycle.
-    _weatherlab_large_cache[cache_key] = {"data": result, "ts": time.time()}
-    parsed_keys = [k for k, v in _weatherlab_large_cache.items()
-                   if v["data"] != _WEATHERLAB_LARGE_MISS]
-    if len(parsed_keys) > 4:
-        oldest = min(parsed_keys, key=lambda k: _weatherlab_large_cache[k]["ts"])
-        del _weatherlab_large_cache[oldest]
-
-    print(f"[WeatherLab 1K] Parsed {len(result)} storms, "
-          f"{sum(r['n_members'] for r in result.values())} total members")
     return result
 
 
 @router.get("/storm/{atcf_id}/weatherlab-ensemble")
-def get_storm_weatherlab_ensemble(atcf_id: str):
-    """Fetch 1000-member ensemble intensity distributions from WeatherLab.
+def get_storm_weatherlab_ensemble(atcf_id: str,
+                                  model: str = _WL_MODEL_DEFAULT):
+    """Fetch ensemble intensity distributions from WeatherLab.
+
+    FNV3 (default): the 1000-member LARGE_ENSEMBLE. WNV3 (`model=wnv3`):
+    WeatherNext 3 has no large-ensemble product, so the distributions come
+    from its 64-member paired ensemble instead.
 
     Returns per-lead-time arrays of wind speeds and intensity changes
     for histogram rendering. Data is cached server-side so users never
     download the full 20MB CSV.
     """
     atcf_id = atcf_id.upper().strip()
+    model_n = _wl_model_norm(model)
 
     now = _dt.now(timezone.utc)
     data = None
@@ -12321,20 +12394,26 @@ def get_storm_weatherlab_ensemble(atcf_id: str):
     used_hour = None
     track_id = None
     for date_str, hour_str in _genesis_candidates(now=now):
-        # Fetch ALL storms (no filter) so the full CSV is cached for all
-        # subsequent per-storm requests within the TTL window.
-        data = _fetch_weatherlab_large_csv(date_str, hour_str,
-                                           target_track=None)
+        if model_n == "wnv3":
+            paired = _fetch_weatherlab_csv(date_str, hour_str, model_n)
+            data = _wl_paired_to_dist(paired) if paired else None
+        else:
+            # Fetch ALL storms (no filter) so the full CSV is cached for all
+            # subsequent per-storm requests within the TTL window.
+            paired = None
+            data = _fetch_weatherlab_large_csv(date_str, hour_str,
+                                               target_track=None)
         if not data:
             continue
         if atcf_id in data:
             track_id = atcf_id
         else:
             # The 1000-member CSV carries no positions, so resolve the
-            # invest→named remap off the 50-member cycle (same track IDs)
+            # invest→named remap off the paired cycle (same track IDs)
             # and reuse the answer here. See _weatherlab_match_id.
-            alias = _weatherlab_match_id(
-                _fetch_weatherlab_csv(date_str, hour_str), atcf_id)
+            if paired is None:
+                paired = _fetch_weatherlab_csv(date_str, hour_str, model_n)
+            alias = _weatherlab_match_id(paired, atcf_id) if paired else None
             if alias and alias in data:
                 track_id = alias
         if track_id:
@@ -12351,9 +12430,13 @@ def get_storm_weatherlab_ensemble(atcf_id: str):
     storm = data[track_id]
     init_time = used_date.replace("-", "") + used_hour
 
+    model_label = ("DeepMind FNV3 (1000 members)" if model_n == "fnv3"
+                   else _WL_MODELS[model_n]["label"]
+                   + f" ({storm['n_members']} members)")
     return JSONResponse(
         content={
-            "model": "DeepMind FNV3 (1000 members)",
+            "model": model_label,
+            "model_key": model_n,
             "init_time": init_time,
             "track_id": track_id,
             "matched_by": "exact" if track_id == atcf_id else "invest_proximity",

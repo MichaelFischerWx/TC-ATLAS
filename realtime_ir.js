@@ -831,6 +831,25 @@
 
     // ── Global DeepMind Ensemble Overlay (RT main map) ────────
     var _rtGlobalWLData = null;        // API response from /weatherlab-global
+    // DeepMind cyclone model powering every WeatherLab surface (storm-card
+    // spaghetti + intensity fan + distribution panels, Global Map 10-day
+    // layer): 'fnv3' (default — 50-member paired ensemble, 1K large
+    // ensemble for the histograms) or 'wnv3' (WeatherNext 3, experimental,
+    // 64 members; histograms come from the same 64). Persisted so the
+    // choice sticks across storm cards and reloads. The cyclogenesis
+    // layer keeps its own 1000/50 FNV3 variant picker for now.
+    var _DM_MODEL_LS_KEY = 'tc-atlas-dm-model';
+    var _rtDmModel = 'fnv3';
+    try { if (localStorage.getItem(_DM_MODEL_LS_KEY) === 'wnv3') _rtDmModel = 'wnv3'; } catch (e) {}
+    // Set while a model switch is refetching the open storm card, so the
+    // load callbacks re-enable the overlay (and clear a stale chart on 404).
+    var _rtDmReenable = false;
+    var _rtDmSwitching = false;
+    function _dmIsWn3() { return _rtDmModel === 'wnv3'; }
+    function _dmModelQs(prefix) { return (prefix || '?') + 'model=' + _rtDmModel; }
+    // Compact source tag for chart headers.
+    function _dmModelTag() { return _dmIsWn3() ? 'WeatherNext 3 \u00b7 experimental' : 'DeepMind 1K'; }
+    function _dmModelName() { return _dmIsWn3() ? 'WeatherNext 3 (experimental)' : 'DeepMind FNV3'; }
     var _rtGlobalWLVisible = false;    // toggle state
     var _rtGlobalWLLoading = false;
     var _rtGlobalWLLayers = [];        // Leaflet polylines + markers on `map`
@@ -14164,37 +14183,115 @@
         if (!storm || !storm.atcf_id) return;
         var atcfId = storm.atcf_id;
         _rtWeatherlabData = null;
+        _rtApplyDmModelUi();
 
+        // Cache + response are keyed by model so a WN3 <-> FNV3 switch
+        // never paints the other model's tracks.
+        var model = _rtDmModel;
+        var cacheKey = 'weatherlab_' + model;
         var cached = _panelCache[atcfId];
         var dataPromise;
-        if (cached && cached.weatherlab && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
-            dataPromise = Promise.resolve(cached.weatherlab);
+        if (cached && cached[cacheKey] && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
+            dataPromise = Promise.resolve(cached[cacheKey]);
         } else {
-            dataPromise = fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/weatherlab', { cache: 'no-store' })
+            dataPromise = fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/weatherlab' + _dmModelQs(), { cache: 'no-store' })
                 .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
                 .then(function (json) {
                     if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
-                    _panelCache[atcfId].weatherlab = json;
+                    _panelCache[atcfId][cacheKey] = json;
                     return json;
                 });
         }
 
         dataPromise
             .then(function (json) {
+                if (model !== _rtDmModel || currentStormId !== atcfId) return;   // stale
                 _rtWeatherlabData = json;
                 var btn = document.getElementById('rt-weatherlab-btn');
-                if (btn) btn.title = json.n_members + ' members, init ' + json.init_time;
-                console.log('[WeatherLab] Loaded ' + json.n_members + ' members for ' + atcfId);
+                if (btn) btn.title = _dmModelName() + ': ' + json.n_members + ' members, init ' + json.init_time;
+                console.log('[WeatherLab] Loaded ' + json.n_members + ' members for ' + atcfId + ' [' + model + ']');
                 // Render the percentile-bands forecast chart into the card's
                 // intensity chart container, replacing the simple history
                 // line with the ensemble fan-chart used in the genesis modal.
                 try { _rtRenderCardForecastIntensity(json); }
                 catch (e) { console.warn('[RT Monitor] card forecast chart render failed:', e); }
+                if (_rtDmReenable) {
+                    _rtDmReenable = false;
+                    if (!_rtWeatherlabVisible) window._rtToggleWeatherlab();
+                }
+                _rtDmSwitching = false;
             })
             .catch(function () {
-                // Silent — WeatherLab may not have data for this storm
+                // Silent — WeatherLab may not have data for this storm.
+                // After a model switch, though, don't leave the OTHER
+                // model's fan chart on screen under the new label.
+                if (model !== _rtDmModel || currentStormId !== atcfId) return;
+                _rtDmReenable = false;
+                if (_rtDmSwitching) {
+                    _rtDmSwitching = false;
+                    var el = document.getElementById('ir-intensity-chart');
+                    if (el && el.data) {
+                        try { Plotly.purge(el); } catch (e) {}
+                        el.innerHTML = '<div style="text-align:center;color:#64748b;padding:40px 0;font-size:0.8rem;">No '
+                            + _dmModelName() + ' forecast for this storm yet</div>';
+                    }
+                    var btn = document.getElementById('rt-weatherlab-btn');
+                    if (btn) btn.title = 'No ' + _dmModelName() + ' data available';
+                }
             });
     }
+
+    /** Reflect the active DeepMind model on the storm-card WN3 pill and
+     *  every "DeepMind 1K" source tag. Cheap; safe to call any time. */
+    function _rtApplyDmModelUi() {
+        var wn3 = _dmIsWn3();
+        var pill = document.getElementById('rt-dm-model-btn');
+        if (pill) {
+            pill.setAttribute('data-next', wn3 ? 'fnv3' : 'wnv3');
+            pill.setAttribute('aria-pressed', wn3 ? 'true' : 'false');
+            pill.style.background = wn3 ? 'rgba(0,229,255,0.35)' : 'transparent';
+            pill.style.opacity = wn3 ? '1' : '0.75';
+            pill.title = wn3
+                ? 'Showing WeatherNext 3 (experimental, 64 members). Click to switch back to FNV3.'
+                : 'Switch DeepMind graphics to WeatherNext 3 (experimental, 64 members, not yet operational).';
+        }
+        var tags = document.querySelectorAll('.rt-dm-src-tag');
+        for (var i = 0; i < tags.length; i++) tags[i].textContent = _dmModelTag();
+        var src = document.getElementById('ir-intensity-source');
+        if (src && src.textContent !== 'Best track') src.textContent = _dmModelTag();
+    }
+
+    /** Swap the DeepMind model behind every WeatherLab surface. Refetches
+     *  the open storm card (re-enabling the overlay if it was on) and the
+     *  Global Map 10-day layer if it's on. */
+    window._rtSetDmModel = function (model) {
+        model = (model === 'wnv3') ? 'wnv3' : 'fnv3';
+        if (model === _rtDmModel) return;
+        _rtDmModel = model;
+        try { localStorage.setItem(_DM_MODEL_LS_KEY, model); } catch (e) {}
+        _rtApplyDmModelUi();
+
+        // Storm card.
+        var wasVisible = _rtWeatherlabVisible;
+        if (_rtWeatherlabVisible) window._rtToggleWeatherlab();   // off + clear
+        _rtWeatherlabData = null;
+        _rtDmEnsData = null;
+        var storm = _deferredStormRef;
+        if (storm && currentStormId && _deferredLoadsStarted) {
+            _rtDmReenable = wasVisible;
+            _rtDmSwitching = true;
+            _rtLoadWeatherlab(storm);
+            _rtLoadDmEnsemble(storm);
+        }
+
+        // Global Map layer.
+        _rtGlobalWLData = null;
+        if (_rtGlobalWLVisible) {
+            _clearGlobalWeatherlab();
+            _loadGlobalWeatherlab();
+        }
+        _ga('rt_dm_model', { model: model });
+    };
 
     /** Render the ensemble percentile-bands forecast plot into the storm
      *  card's intensity chart container (`ir-intensity-chart`), mirroring
@@ -14222,7 +14319,7 @@
         var heading = document.getElementById('ir-intensity-heading');
         if (heading) heading.textContent = 'Intensity Forecast';
         var _fsrc = document.getElementById('ir-intensity-source');
-        if (_fsrc) _fsrc.textContent = 'DeepMind 1K';
+        if (_fsrc) _fsrc.textContent = _dmModelTag();
         // Ensure the panel (and its Vmax|MSLP toggle) is visible whenever the
         // DeepMind forecast bands render.
         var _fsec = document.getElementById('ir-intensity-section');
@@ -14757,7 +14854,7 @@
                 var p0 = mean.points[0];
                 var labelHtml = '<b>' + trackId + '</b>' +
                     (isInvest ? ' <span style="opacity:0.7">(invest)</span>' : '') +
-                    '<br>DeepMind ensemble · ' +
+                    '<br>' + _dmModelName() + ' · ' +
                     (trk.n_members || memberKeys.length) + ' members';
                 var lmiPt = null, lmiWind = -1;
                 for (var lj = 0; lj < mean.points.length; lj++) {
@@ -14793,16 +14890,18 @@
         var statusEl = document.getElementById('ir-global-wl-status');
         if (statusEl) statusEl.textContent = 'Loading…';
 
-        fetch(API_BASE + '/ir-monitor/weatherlab-global', { cache: 'no-store' })
+        var model = _rtDmModel;
+        fetch(API_BASE + '/ir-monitor/weatherlab-global' + _dmModelQs(), { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (data) {
+                if (model !== _rtDmModel) return;   // switched mid-flight
                 _rtGlobalWLData = data;
                 if (_rtGlobalWLVisible) _renderGlobalWeatherlab();
                 if (statusEl) {
                     var n = data && data.n_tracks ? data.n_tracks : 0;
                     statusEl.textContent = n === 0
-                        ? '0 tracks · WeatherLab paired'
-                        : n + ' track' + (n === 1 ? '' : 's') +
+                        ? '0 tracks · WeatherLab paired' + (_dmIsWn3() ? ' · WN3' : '')
+                        : n + ' track' + (n === 1 ? '' : 's') + (_dmIsWn3() ? ' · WN3' : '') +
                           (data.init_time ? ' · init ' + data.init_time.slice(0, 8) + ' ' + data.init_time.slice(8) + 'Z' : '');
                 }
                 _ga('rt_global_wl_loaded', { n_tracks: data && data.n_tracks });
@@ -25189,13 +25288,32 @@
 
         // ── FORECAST ────────────────────────────────────────────────
         html += '<div class="ir-global-menu-section">Forecast</div>';
-        var wlStatus = _rtGlobalWLLoading ? 'Loading 50-member tracks…' : '';
+        var wlMembers = _dmIsWn3() ? '64-member' : '50-member';
+        var wlStatus = _rtGlobalWLLoading ? 'Loading ' + wlMembers + ' tracks…' : '';
         html += row({
             action: 'wl',
             label: '<b>DeepMind 10-day</b>',
-            substatus: 'WeatherLab 50-member spaghetti for every active storm/invest' + (wlStatus ? ' — ' + wlStatus : ''),
+            substatus: 'WeatherLab ' + (_dmIsWn3() ? 'WeatherNext 3 ' : '') + wlMembers
+                + ' spaghetti for every active storm/invest' + (wlStatus ? ' — ' + wlStatus : ''),
             checked: !!_rtGlobalWLVisible
         });
+        // Model picker — FNV3 (operational-track WeatherLab model) vs the
+        // experimental WeatherNext 3. Shared with the storm-card WN3 pill.
+        var _wn3 = _dmIsWn3();
+        html += '<div class="ir-global-menu-row ir-global-method-row" style="opacity:'
+            + (_rtGlobalWLVisible ? 1 : 0.45) + ';">'
+            + '<span style="font-size:0.72rem; opacity:0.75; margin-right:8px;">Model:</span>'
+            + '<button type="button" class="ir-global-genvariant-chip ir-global-dmmodel-chip" data-dmmodel="fnv3"'
+            + ' style="background:' + (!_wn3 ? 'rgba(0,229,255,0.28)' : 'transparent')
+            + '; color:' + (!_wn3 ? '#00e5ff' : 'inherit') + ';">FNV3</button>'
+            + '<button type="button" class="ir-global-genvariant-chip ir-global-dmmodel-chip" data-dmmodel="wnv3"'
+            + ' title="WeatherNext 3 cyclone model — experimental, 64 members, not yet operational"'
+            + ' style="background:' + (_wn3 ? 'rgba(0,229,255,0.28)' : 'transparent')
+            + '; color:' + (_wn3 ? '#00e5ff' : 'inherit') + ';">WN3</button>'
+            + (_wn3
+                ? '<span style="font-size:0.66rem; opacity:0.7; margin-left:8px;">experimental</span>'
+                : '')
+            + '</div>';
         var genStatus = '';
         if (_rtGenesisLoading) genStatus = 'Loading members…';
         else if (_rtGenesisData) {
@@ -25512,7 +25630,23 @@
         // Ensemble-size (1000 / 50) picker chips. _genesisSetVariant
         // handles the cycle-jump + re-fetch; we just refresh the menu so
         // the active chip + labels update.
-        var gvChips = content.querySelectorAll('.ir-global-genvariant-chip');
+        var dmChips = content.querySelectorAll('.ir-global-dmmodel-chip');
+        for (var dm = 0; dm < dmChips.length; dm++) {
+            (function (chipEl) {
+                chipEl.addEventListener('click', function (ev) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    var v = chipEl.getAttribute('data-dmmodel');
+                    if (!v || v === _rtDmModel) return;
+                    window._rtSetDmModel(v);
+                    if (typeof toggleLayersPanel === 'function') {
+                        toggleLayersPanel();  // close
+                        toggleLayersPanel();  // reopen with refreshed HTML
+                    }
+                });
+            })(dmChips[dm]);
+        }
+        var gvChips = content.querySelectorAll('.ir-global-genvariant-chip:not(.ir-global-dmmodel-chip)');
         for (var gv = 0; gv < gvChips.length; gv++) {
             (function (chipEl) {
                 chipEl.addEventListener('click', function (ev) {
@@ -26343,24 +26477,27 @@
         var atcfId = storm.atcf_id;
         _rtDmEnsData = null;
 
+        var model = _rtDmModel;
+        var cacheKey = 'dmEns_' + model;
         var cached = _panelCache[atcfId];
         var dataPromise;
-        if (cached && cached.dmEns && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
-            dataPromise = Promise.resolve(cached.dmEns);
+        if (cached && cached[cacheKey] && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
+            dataPromise = Promise.resolve(cached[cacheKey]);
         } else {
-            dataPromise = fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/weatherlab-ensemble', { cache: 'no-store' })
+            dataPromise = fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/weatherlab-ensemble' + _dmModelQs(), { cache: 'no-store' })
                 .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
                 .then(function (json) {
                     if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
-                    _panelCache[atcfId].dmEns = json;
+                    _panelCache[atcfId][cacheKey] = json;
                     return json;
                 });
         }
 
         dataPromise
             .then(function (json) {
+                if (model !== _rtDmModel || currentStormId !== atcfId) return;   // stale
                 _rtDmEnsData = json;
-                console.log('[WeatherLab 1K] Loaded ' + json.n_members + ' members');
+                console.log('[WeatherLab ensemble] Loaded ' + json.n_members + ' members [' + model + ']');
                 if (_rtWeatherlabVisible) {
                     _rtShowDmPanels();
                 }
@@ -26993,7 +27130,7 @@
             tauStr = ' \u2014 +' + (taus[_rtDmChangeTauIdx] || 0) + 'h (' + _rtDmChangeInt + 'h change)';
         }
 
-        var title = 'GDMI 1K ' + info.label + ' \u2014 ' + stormName + ' (' + stormId + ')' +
+        var title = (_dmIsWn3() ? 'WeatherNext 3 (exp.) ' : 'GDMI 1K ') + info.label + ' \u2014 ' + stormName + ' (' + stormId + ')' +
                     (initFmt ? ' \u2014 Init ' + initFmt : '') + tauStr;
 
         // Theme-dependent colors
