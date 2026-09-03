@@ -1221,10 +1221,28 @@
         // Plotly re-lays-out at the requested size, so the subplots stretch to
         // fill and the composite has no dead paper under the chart column.
         var mr = mapEl.getBoundingClientRect();
-        var chartP = window.Plotly.toImage(chartEl, {
-            format: 'png', width: Math.round(cr.width),
-            height: Math.round(Math.max(cr.height, mr.height)), scale: scale
-        });
+        // A chart whose container reports no size (mid-layout, hidden pane)
+        // still has Plotly's own layout size to render at.
+        var fl = chartEl._fullLayout || {};
+        var chartW = Math.round(cr.width || fl.width || 700);
+        var chartH = Math.round(Math.max(cr.height || fl.height || 540, mr.height || 0));
+        // PNG first; Safari's SVG->canvas step inside toImage can throw a
+        // SecurityError ("The operation is insecure") on some charts, and a
+        // base64 SVG data URL drawn to canvas is the path that survives there
+        // (see the genesis composite fix, commit 541f2775).
+        // Promise-wrapped: toImage throws SYNCHRONOUSLY on a chart with no
+        // layout size yet ("Height and width should be pixel values").
+        var chartP = Promise.resolve().then(function () {
+                if (!(chartW > 0) || !(chartH > 0)) throw new Error('chart has no size yet');
+                return window.Plotly.toImage(chartEl, { format: 'png', width: chartW, height: chartH, scale: scale });
+            })
+            .catch(function () {
+                return window.Plotly.toImage(chartEl, { format: 'svg', width: chartW * scale, height: chartH * scale })
+                    .then(function (u) {
+                        var svg = decodeURIComponent(u.replace(/^data:image\/svg\+xml[^,]*,/, ''));
+                        return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
+                    });
+            });
         // Map capture, storm-card pattern (see _irDownloadCurrentFrame): read the
         // GL canvas directly, then html2canvas the DOM overlays (barb canvas,
         // markers, legend) with the GL canvas SKIPPED and the container's own
@@ -1239,8 +1257,17 @@
             });
         }
         var glMap = _hdobMap && _hdobMap._gl;
-        var snapP = stage('map readback', glMap && kit.glSnapshot ? kit.glSnapshot(glMap) : Promise.resolve(null));
-        var overlayP = stage('map overlay', kit.ensureHtml2canvas().then(function () {
+        // Map stages degrade instead of aborting: a failed readback saves
+        // without the satellite, a failed overlay saves the satellite alone.
+        var dropped = [];
+        function soft(name, p) {
+            return stage(name, p).catch(function (e) {
+                console.warn('[Recon] export stage failed, continuing without it:', e && e.message);
+                dropped.push(name); return null;
+            });
+        }
+        var snapP = soft('map readback', glMap && kit.glSnapshot ? kit.glSnapshot(glMap) : Promise.resolve(null));
+        var overlayP = soft('map overlay', kit.ensureHtml2canvas().then(function () {
             return window.html2canvas(mapEl, {
                 useCORS: true, allowTaint: false, backgroundColor: null, logging: false, scale: scale,
                 ignoreElements: function (el) {
@@ -1254,8 +1281,8 @@
         }));
         var mapP = Promise.all([snapP, overlayP]).then(function (r) {
             var snap = r[0], overlay = r[1];
-            var W = overlay ? overlay.width : Math.round(mr.width * scale);
-            var H = overlay ? overlay.height : Math.round(mr.height * scale);
+            var W = (overlay && overlay.width) || (snap && snap.width) || Math.round(mr.width * scale) || 600;
+            var H = (overlay && overlay.height) || (snap && snap.height) || Math.round(mr.height * scale) || 600;
             var comp = document.createElement('canvas');
             comp.width = W; comp.height = H;
             var cx = comp.getContext('2d');
@@ -1266,7 +1293,17 @@
             } else if (typeof rtToast === 'function') {
                 rtToast('Saved without the satellite layer — the browser couldn’t read the map canvas.', 'warn');
             }
-            if (overlay) { try { cx.drawImage(overlay, 0, 0); } catch (e) {} }
+            if (overlay && overlay.width && overlay.height) { try { cx.drawImage(overlay, 0, 0); } catch (e) {} }
+            // Prove the composite is still readable (a tainted overlay would
+            // poison every later toBlob); if not, fall back to the raw snapshot.
+            try { cx.getImageData(0, 0, 1, 1); }
+            catch (e) {
+                dropped.push('map overlay (tainted)');
+                var c2 = document.createElement('canvas'); c2.width = W; c2.height = H;
+                var x2 = c2.getContext('2d'); x2.fillStyle = '#0a0c12'; x2.fillRect(0, 0, W, H);
+                if (snap && !snap.__glBlank) { try { x2.drawImage(snap, 0, 0, snap.width, snap.height, 0, 0, W, H); } catch (e2) {} }
+                return c2;
+            }
             return comp;
         });
         // Wait on the brand logo too, so a cold cache can't drop it from the save.
@@ -1280,8 +1317,13 @@
             }));
         }).then(function (o) {
             try { _hdobComposite(o.chart, o.map, scale); }
-            catch (e) { e.message = (e.message || String(e)) + ' [composite]'; throw e; }
-            _ga('recon_hdob_export', { ok: true, id: _hdobMissionTail || _hdobAtcf });
+            catch (e) {   // DOMException.message is read-only: wrap, don't mutate
+                var ce = new Error((e && e.message ? e.message : String(e)) + ' [composite]'); ce.stage = 'composite'; throw ce;
+            }
+            _ga('recon_hdob_export', { ok: true, id: _hdobMissionTail || _hdobAtcf, dropped: dropped.join(',') });
+            if (dropped.length && typeof rtToast === 'function') {
+                rtToast('Saved without: ' + dropped.join(', ') + ' (browser blocked that layer).', 'warn');
+            }
             if (btn) { btn.textContent = orig; btn.disabled = false; }
         }).catch(function (err) {
             console.error('[Recon] composite export failed', err);
