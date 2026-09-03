@@ -30650,11 +30650,15 @@
         if (c && (Date.now() - c.ts) < _SEAR_TTL_MS) return Promise.resolve(c.data);
         function get(base) {
             return fetch(base + atcf + '.json', { cache: 'no-store' }).then(function (r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
+                if (!r.ok) { var e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }
                 return r.json();
             });
         }
-        return get(_SEAR_CDN).catch(function () { return get(_SEAR_GCS); })
+        // A CDN 404 is authoritative (the publisher always mirrors to R2): a
+        // storm with no recon simply has no object. Falling through to GCS on
+        // 404 would bill a Class-B op per viewer per minute for nothing
+        // (2026-09-02 cost review). GCS stays the fallback for edge/network errors.
+        return get(_SEAR_CDN).catch(function (e) { if (e && e.status === 404) return null; return get(_SEAR_GCS); })
             .catch(function () { return null; })
             .then(function (d) { _searCache[atcf] = { ts: Date.now(), data: d }; return d; });
     }
