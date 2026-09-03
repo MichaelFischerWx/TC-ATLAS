@@ -425,10 +425,24 @@
         // (z>=5), then swapped in place. Both vendored locally — GitHub's raw
         // host is rate-limited and would silently drop big fetches.
         var _COAST_HI_ZOOM = 5;
+        // Phones: the 10-m tier is a ~3 MB download that parses to ~9 MB of
+        // JSON on the main thread, and the Live Flight recon map opens at
+        // zoom ~6, so every mobile open paid it before the IR could paint
+        // (2026-09-02). Small screens hold the simplified tier until a real
+        // close-up; save-data users never upgrade.
+        var _COAST_HI_ZOOM_SMALL = 8;
+        function _coastHiZoom() {
+            try {
+                var c = navigator.connection;
+                if (c && c.saveData) return Infinity;
+                if (window.innerWidth < 768) return _COAST_HI_ZOOM_SMALL;
+            } catch (e) {}
+            return _COAST_HI_ZOOM;
+        }
         function _maybeUpgrade(m) {
             if (!m || m._coastTier === 'hi') return;
             var z; try { z = m.getZoom(); } catch (e) { return; }
-            if (z == null || z < _COAST_HI_ZOOM) return;
+            if (z == null || z < _coastHiZoom()) return;
             // Only for maps the user can actually SEE — the storm-card
             // prefetch builds a hidden detail map at storm zoom, which must
             // not pull the 9 MB tier during page load. moveend refires when
@@ -31082,6 +31096,9 @@
         // Lazy-load html2canvas (shared with the global-map PNG export) so the
         // Recon tab can capture its Leaflet map into a composite figure.
         ensureHtml2canvas: _ensureHtml2canvas,
+        // Direct GL readback (repaint → grab → blank check); the Live Flight
+        // export composites this under an html2canvas pass that skips the GL canvas.
+        glSnapshot: _glSnapshot,
         // Draw the shared Natural-Earth coastline (cased line, coastlinePane) on a
         // consumer's map — same asset + style the global/detail maps use, so the
         // Recon map gets a crisp coastline over the satellite (esp. the grayscale

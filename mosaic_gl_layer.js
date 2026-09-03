@@ -302,6 +302,13 @@
         buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
         makeLutTex();
+        // MapLibre calls onAdd on a later style pass, AFTER the caller's
+        // setFrame()/setOpacity() (which saw no map and could not schedule a
+        // repaint). Without this the first render -- and therefore the first
+        // tile request -- waited for an unrelated repaint (a resize, a pan);
+        // on the recon map that meant no IR until the phone's address bar
+        // collapsed or the window changed size (2026-09-02, Lowell).
+        try { m.triggerRepaint(); } catch (e) {}
       },
       render: function (gfx, matrix) {
         if (!prog || !active) return;

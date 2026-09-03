@@ -1225,22 +1225,62 @@
             format: 'png', width: Math.round(cr.width),
             height: Math.round(Math.max(cr.height, mr.height)), scale: scale
         });
-        var mapP = kit.ensureHtml2canvas().then(function () {
-            return window.html2canvas(mapEl, {
-                useCORS: true, allowTaint: false, backgroundColor: null, logging: false, scale: scale
+        // Map capture, storm-card pattern (see _irDownloadCurrentFrame): read the
+        // GL canvas directly, then html2canvas the DOM overlays (barb canvas,
+        // markers, legend) with the GL canvas SKIPPED and the container's own
+        // background zeroed. Handing html2canvas the whole element, WebGL canvas
+        // included, produced "The operation is insecure" on iOS Safari
+        // (2026-09-02) — a tainted-canvas SecurityError at readback. Each stage
+        // is labeled so the alert names the step that failed.
+        function stage(name, p) {
+            return Promise.resolve(p).catch(function (e) {
+                var err = new Error((e && e.message ? e.message : String(e)) + ' [' + name + ']');
+                err.stage = name; throw err;
             });
+        }
+        var glMap = _hdobMap && _hdobMap._gl;
+        var snapP = stage('map readback', glMap && kit.glSnapshot ? kit.glSnapshot(glMap) : Promise.resolve(null));
+        var overlayP = stage('map overlay', kit.ensureHtml2canvas().then(function () {
+            return window.html2canvas(mapEl, {
+                useCORS: true, allowTaint: false, backgroundColor: null, logging: false, scale: scale,
+                ignoreElements: function (el) {
+                    return el.tagName === 'CANVAS' && /maplibregl-canvas/.test(el.className || '');
+                },
+                onclone: function (doc) {
+                    var m = doc.getElementById('recon-hdob-map');
+                    if (m) m.style.background = 'transparent';
+                }
+            });
+        }));
+        var mapP = Promise.all([snapP, overlayP]).then(function (r) {
+            var snap = r[0], overlay = r[1];
+            var W = overlay ? overlay.width : Math.round(mr.width * scale);
+            var H = overlay ? overlay.height : Math.round(mr.height * scale);
+            var comp = document.createElement('canvas');
+            comp.width = W; comp.height = H;
+            var cx = comp.getContext('2d');
+            cx.fillStyle = '#0a0c12'; cx.fillRect(0, 0, W, H);
+            if (snap && !snap.__glBlank) {
+                try { cx.drawImage(snap, 0, 0, snap.width, snap.height, 0, 0, W, H); }
+                catch (e) { console.warn('[Recon] GL composite failed:', e); }
+            } else if (typeof rtToast === 'function') {
+                rtToast('Saved without the satellite layer — the browser couldn’t read the map canvas.', 'warn');
+            }
+            if (overlay) { try { cx.drawImage(overlay, 0, 0); } catch (e) {} }
+            return comp;
         });
         // Wait on the brand logo too, so a cold cache can't drop it from the save.
         var logoP = kit.watermarkReady ? kit.watermarkReady() : Promise.resolve();
-        Promise.all([chartP, mapP, logoP]).then(function (res) {
-            return new Promise(function (resolve, reject) {
+        Promise.all([stage('chart', chartP), mapP, logoP]).then(function (res) {
+            return stage('chart decode', new Promise(function (resolve, reject) {
                 var cimg = new Image();
                 cimg.onload = function () { resolve({ chart: cimg, map: res[1] }); };
                 cimg.onerror = reject;
                 cimg.src = res[0];
-            });
+            }));
         }).then(function (o) {
-            _hdobComposite(o.chart, o.map, scale);
+            try { _hdobComposite(o.chart, o.map, scale); }
+            catch (e) { e.message = (e.message || String(e)) + ' [composite]'; throw e; }
             _ga('recon_hdob_export', { ok: true, id: _hdobMissionTail || _hdobAtcf });
             if (btn) { btn.textContent = orig; btn.disabled = false; }
         }).catch(function (err) {
