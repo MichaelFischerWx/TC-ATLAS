@@ -880,8 +880,80 @@
         box.appendChild(prev); box.appendChild(cur); box.appendChild(next); box.appendChild(auto);
     }
 
+    /** Download the storm's SEAR estimates as plain text. Prefers the publisher's
+     *  sear-rt/<ATCF>.txt (identical to what partners can curl); for a storm
+     *  published before that file existed, formats the same tables client-side
+     *  from the JSON joined onto the recon blob. */
+    window._reconHdobSearTxt = function () {
+        var sp = _hdobData && _hdobData.sear;
+        if (!sp || !window.TCExport) { rtToast('No SEAR estimates loaded for this storm.', 'warn'); return; }
+        var atcf = String(sp.atcf || _hdobSearAtcf() || 'storm').toUpperCase();
+        var stamp = String(sp.generated || '').replace(/[-:]/g, '').slice(0, 13) || 'latest';
+        var fname = 'TC-ATLAS_SEAR_' + atcf + '_' + stamp + '.txt';
+        _ga('recon_hdob_sear_txt', { atcf: atcf });
+        var url = (sp.text_url || ('https://cdn.tcatlas.org/sear-rt/' + atcf + '.txt')) + '?nc=' + Date.now();
+        fetch(url, { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.text() : null; })
+            .catch(function () { return null; })
+            .then(function (txt) {
+                if (!txt) txt = _hdobSearTextClient(sp);
+                TCExport.saveText(txt, fname, 'text/plain;charset=utf-8');
+            });
+    };
+
+    function _hdobPad(v, w, nd, right) {
+        var t;
+        if (v == null || (typeof v === 'number' && !isFinite(v))) t = '----';
+        else t = (typeof v === 'number') ? v.toFixed(nd || 0) : String(v);
+        if (t.length > w) t = t.slice(0, w);
+        return right === false ? t + ' '.repeat(w - t.length) : ' '.repeat(w - t.length) + t;
+    }
+    function _hdobSearTextClient(sp) {
+        var kit = window._ReconKit;
+        var L = [];
+        L.push('TC-ATLAS / SEAR real-time 10-m wind estimates from aircraft reconnaissance');
+        L.push('Storm: ' + (sp.name || _hdobName || '?') + ' (' + (sp.atcf || '') + ')   Generated: ' + sp.generated + '   Status: ' + sp.status);
+        L.push('Model: ' + (sp.model || ''));
+        L.push('JSON: https://cdn.tcatlas.org/sear-rt/' + sp.atcf + '.json   Viewer: https://tcatlas.org/realtime_ir.html#recon-hdob');
+        L.push('');
+        L.push('EXPERIMENTAL RESEARCH PRODUCT (MLBT / SEAR) -- NOT an official NHC/NOAA/USAF product.');
+        L.push('10-m wind estimated from the flight-level wind, its storm-relative position and the GFS environment. Not a measurement.');
+        L.push('Preliminary center fixes (FIX=hdob) come from the flight-level pressure/height minimum, not a VDM. Times UTC, winds kt, missing = ----.');
+        L.push('(Formatted in the browser from the published JSON; the publisher\u2019s own .txt was not available for this storm.)');
+        L.push('');
+        L.push('== PASS MAXIMA ==');
+        L.push(_hdobPad('FIX_TIME_UTC', 20, 0, false) + ' ' + _hdobPad('PEAK_TIME_UTC', 20, 0, false) + ' ' + _hdobPad('TAIL', 6, 0, false) + ' ' +
+               _hdobPad('FIX', 5, 0, false) + ' ' + _hdobPad('SEAR_PK', 7) + ' ' + _hdobPad('SEAR_RMWC', 9) + ' ' + _hdobPad('FL_PK', 6) + ' ' +
+               _hdobPad('SFMR', 5) + ' ' + _hdobPad('RMW_KM', 6) + ' ' + _hdobPad('R_KM', 5) + ' ' + _hdobPad('AZ', 4) + ' ' +
+               _hdobPad('LAT', 8) + ' ' + _hdobPad('LON', 9));
+        (sp.passes || []).forEach(function (p) {
+            L.push(_hdobPad(p.fix_t, 20, 0, false) + ' ' + _hdobPad(p.t, 20, 0, false) + ' ' + _hdobPad(p.tail, 6, 0, false) + ' ' +
+                   _hdobPad(p.fix_source, 5, 0, false) + ' ' + _hdobPad(p.y_kt, 7) + ' ' + _hdobPad(p.y_corr_kt, 9) + ' ' + _hdobPad(p.fl_peak_kt, 6) + ' ' +
+                   _hdobPad(p.sfmr_kt, 5) + ' ' + _hdobPad(p.rmw_km, 6) + ' ' + _hdobPad(p.r_km, 5) + ' ' + _hdobPad(p.az_deg, 4) + ' ' +
+                   _hdobPad(p.lat, 8, 3) + ' ' + _hdobPad(p.lon, 9, 3));
+        });
+        L.push('');
+        L.push('== SCORED OBSERVATIONS ==');
+        L.push(_hdobPad('TIME_UTC', 20, 0, false) + ' ' + _hdobPad('TAIL', 6, 0, false) + ' ' + _hdobPad('LAT', 8) + ' ' + _hdobPad('LON', 9) + ' ' +
+               _hdobPad('FL_KT', 6) + ' ' + _hdobPad('FL_PK', 6) + ' ' + _hdobPad('SFMR', 5) + ' ' + _hdobPad('SLP_MB', 6) + ' ' +
+               _hdobPad('R_KM', 6) + ' ' + _hdobPad('AZ', 4) + ' ' + _hdobPad('R/RMW', 5) + ' ' + _hdobPad('FIX', 5, 0, false) + ' ' +
+               _hdobPad('SEAR_30S', 8) + ' ' + _hdobPad('SEAR_PK', 7) + ' ' + _hdobPad('SEAR_RMWC', 9));
+        ((_hdobData && _hdobData.aircraft) || []).forEach(function (ac) {
+            (ac.track || []).forEach(function (o) {
+                if (o.sear_kt == null) return;
+                L.push(_hdobPad(o.t, 20, 0, false) + ' ' + _hdobPad(ac.tail, 6, 0, false) + ' ' + _hdobPad(o.lat, 8, 3) + ' ' + _hdobPad(o.lon, 9, 3) + ' ' +
+                       _hdobPad(o.wspd_kt, 6) + ' ' + _hdobPad(o.peak_fl_kt, 6) + ' ' + _hdobPad(o.sfmr_kt, 5) + ' ' + _hdobPad(o.extrap_sfc_p_mb, 6) + ' ' +
+                       _hdobPad(o.sear_r_km, 6) + ' ' + _hdobPad(o.sear_az, 4) + ' ' + _hdobPad(null, 5) + ' ' + _hdobPad(o.sear_fix, 5, 0, false) + ' ' +
+                       _hdobPad(o.sear_30s_kt, 8) + ' ' + _hdobPad(o.sear_kt, 7) + ' ' + _hdobPad(o.sear_corr_kt, 9));
+            });
+        });
+        return L.join('\n') + '\n';
+    }
+
     /** Show/hide pills for each map symbol family. */
     function _hdobBuildLayerToggles() {
+        var btnTxt = document.getElementById('recon-hdob-seartxt');
+        if (btnTxt) btnTxt.style.display = (_hdobData && _hdobData.sear && _hdobData.sear.status === 'ok') ? '' : 'none';
         var box = document.getElementById('recon-hdob-layers');
         if (!box) return;
         box.innerHTML = '';

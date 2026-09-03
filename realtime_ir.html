@@ -83,7 +83,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20260903a">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20260903b">
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -601,6 +601,10 @@
                                 <button id="rt-weatherlab-btn" class="rt-model-filter-btn"
                                     onclick="window._rtToggleWeatherlab()"
                                     style="color:#00e5ff;border-color:rgba(0,229,255,0.4);background:rgba(0,229,255,0.15);">DeepMind</button>
+                                <button id="rt-dm-model-btn" class="rt-model-filter-btn" data-next="wnv3"
+                                    onclick="window._rtSetDmModel(this.getAttribute('data-next'))"
+                                    title="Switch DeepMind graphics to WeatherNext 3 (experimental, 64 members, not yet operational)."
+                                    style="color:#00e5ff;border-color:rgba(0,229,255,0.4);opacity:0.75;">WN3</button>
                                 <span style="flex:1;"></span>
                                 <button id="rt-model-interp-btn" class="rt-model-filter-btn"
                                     onclick="window._rtToggleModelInterp()">Late Cycle</button>
@@ -635,7 +639,7 @@
                             Intensity Distribution
                         </h3>
                         <div style="display:flex;align-items:center;gap:6px;">
-                            <span style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
+                            <span class="rt-dm-src-tag" style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
                             <button class="rt-dm-export-btn" onclick="window._rtShowExportMenu('intensity', this)" title="Save as PNG">&#8681;</button>
                         </div>
                     </div>
@@ -684,7 +688,7 @@
                             Lifetime Max Intensity
                         </h3>
                         <div style="display:flex;align-items:center;gap:6px;">
-                            <span style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
+                            <span class="rt-dm-src-tag" style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
                             <button class="rt-dm-export-btn" onclick="window._rtShowExportMenu('lmi', this)" title="Save as PNG">&#8681;</button>
                         </div>
                     </div>
@@ -2212,6 +2216,7 @@
                             <span id="recon-hdob-passstep" class="recon-hdob-passstep" style="display:none;" title="Step the satellite backdrop between the frames archived for each center pass"></span>
                             <button id="recon-hdob-grid" class="recon-hdob-gridbtn" onclick="window._reconHdobToggleGrid()" title="Toggle lat/lon grid">Grid</button>
                             <button id="recon-hdob-save" class="recon-hdob-gridbtn" onclick="window._reconHdobExport()" title="Save chart + map as one PNG (with whatever's selected)">⤓ Save PNG</button>
+                            <button id="recon-hdob-seartxt" class="recon-hdob-gridbtn" style="display:none;" onclick="window._reconHdobSearTxt()" title="Download every SEAR 10-m estimate for this storm as a plain-text table (pass maxima + scored observations). The same file is served at cdn.tcatlas.org/sear-rt/&lt;ATCF&gt;.txt for scripted pulls.">⤓ SEAR .txt</button>
                         </div>
                         <div id="recon-hdob-map" class="recon-hdob-map"></div>
                     </div>
@@ -2640,7 +2645,7 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
     <script defer src="tc_mw_layer.js?v=20260811b"></script>
-    <script defer src="realtime_ir.js?v=20260903a"></script>
+    <script defer src="realtime_ir.js?v=20260903b"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
@@ -2745,7 +2750,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260903a';
+        var _LAZY_ASSET_V = '?v=20260903b';
         var _lazyViewMods = {
             recon:       { js: ['realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
