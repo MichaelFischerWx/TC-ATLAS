@@ -13742,14 +13742,99 @@ def _oisst_point_url(lat: float, lon: float, final: bool = False) -> str:
     return f"{base}?sst{sel},anom{sel}"
 
 
+# NOAA PSL OPeNDAP mirror of OISST v2.1 (daily mean + anomaly, includes the
+# preliminary last ~2 days). Answers a point query in ~0.5 s from Cloud Run,
+# where the CoastWatch ERDDAP takes ~15 s per query (it was silently timing
+# out and leaving the storm card with no SST). Same host the seasonal job
+# already reads, so reachability from GCP is proven.
+_OISST_PSL = "https://psl.noaa.gov/thredds/dodsC/Datasets/noaa.oisst.v2.highres"
+_OISST_PSL_EPOCH = _dt(1800, 1, 1, tzinfo=timezone.utc)
+_OISST_COASTWATCH_TIMEOUT = 8.0   # bounded fallback; PSL is the primary path
+_psl_len_cache: dict = {}         # year -> (n_time, ts)
+
+
+def _psl_dap_value(url: str, var: str, timeout: float) -> Optional[tuple]:
+    """Fetch a 1x1x1 OPeNDAP .ascii grid response; return (value, time_days)
+    or None. Land/fill values come back as None for the value."""
+    try:
+        r = _requests.get(url, timeout=timeout)
+        if r.status_code != 200:
+            return None
+        val = None
+        tday = None
+        lines = r.text.splitlines()
+        for i, ln in enumerate(lines):
+            if ln.startswith(f"{var}.{var}[") and i + 1 < len(lines):
+                try:
+                    val = float(lines[i + 1].split(",")[-1].strip())
+                except ValueError:
+                    val = None
+            elif ln.startswith(f"{var}.time[") and i + 1 < len(lines):
+                try:
+                    tday = float(lines[i + 1].strip())
+                except ValueError:
+                    tday = None
+        if val is None or val != val or abs(val) > 1e30 or val < -5 or val > 60:
+            val = None
+        return (val, tday)
+    except Exception as e:
+        logger.debug(f"[oisst-psl] {var} query failed: {e}")
+        return None
+
+
+def _psl_time_len(year: int, timeout: float) -> int:
+    hit = _psl_len_cache.get(year)
+    if hit and time.time() - hit[1] < 3600:
+        return hit[0]
+    try:
+        r = _requests.get(f"{_OISST_PSL}/sst.day.mean.{year}.nc.dds", timeout=timeout)
+        m = re.search(r"time = (\d+)", r.text) if r.status_code == 200 else None
+        n = int(m.group(1)) if m else 0
+    except Exception:
+        n = 0
+    _psl_len_cache[year] = (n, time.time())
+    return n
+
+
+def _fetch_oisst_psl_row(lat: float, lon: float, timeout: float) -> Optional[dict]:
+    """Latest OISST SST + anomaly at the nearest 0.25° cell from PSL, shaped
+    like the ERDDAP row ({sst, anom, time}) so the callers don't care."""
+    year = _dt.now(timezone.utc).year
+    n = _psl_time_len(year, timeout)
+    if n <= 0:
+        year -= 1
+        n = _psl_time_len(year, timeout)
+        if n <= 0:
+            return None
+    it = n - 1
+    ilat = min(719, max(0, int(round((float(lat) + 89.875) / 0.25))))
+    lon360 = float(lon) % 360.0
+    ilon = int(round((lon360 - 0.125) / 0.25)) % 1440
+    sel = f"%5B{it}%5D%5B{ilat}%5D%5B{ilon}%5D"
+    sst = _psl_dap_value(f"{_OISST_PSL}/sst.day.mean.{year}.nc.ascii?sst{sel}", "sst", timeout)
+    if sst is None or sst[1] is None:
+        return None
+    anom = _psl_dap_value(f"{_OISST_PSL}/sst.day.anom.{year}.nc.ascii?anom{sel}", "anom", timeout)
+    date = (_OISST_PSL_EPOCH + timedelta(days=sst[1])).strftime("%Y-%m-%dT00:00:00Z")
+    return {"sst": sst[0], "anom": anom[0] if anom else None, "time": date, "via": "psl"}
+
+
 def _oisst_point_row(lat: float, lon: float, timeout: float) -> Optional[dict]:
-    """NRT OISST row for the point, falling back to the final aggregation
-    only when NRT returns nothing (network miss or no row)."""
-    row = _erddap_point_json(_oisst_point_url(lat, lon), timeout=timeout)
+    """OISST row for the point: PSL OPeNDAP first, then CoastWatch NRT, then
+    the CoastWatch final aggregation (each only when the previous returned
+    nothing). CoastWatch calls are capped at _OISST_COASTWATCH_TIMEOUT."""
+    row = _fetch_oisst_psl_row(lat, lon, timeout=min(timeout, 10.0))
     if row:
         return row
-    return _erddap_point_json(_oisst_point_url(lat, lon, final=True),
-                              timeout=timeout)
+    cw = min(timeout, _OISST_COASTWATCH_TIMEOUT)
+    row = _erddap_point_json(_oisst_point_url(lat, lon), timeout=cw)
+    if row:
+        row["via"] = "coastwatch-nrt"
+        return row
+    row = _erddap_point_json(_oisst_point_url(lat, lon, final=True), timeout=cw)
+    if row:
+        row["via"] = "coastwatch-final"
+    return row
 
 
 def _sst_point_key(lat: float, lon: float) -> tuple:
@@ -13775,6 +13860,7 @@ def _oisst_row_to_dict(row: Optional[dict]) -> Optional[dict]:
         "sst_c": _erddap_num(row.get("sst")),
         "sst_anom_c": _erddap_num(row.get("anom")),
         "sst_date": t[:10] if t else None,
+        "sst_via": row.get("via"),
     }
 
 
@@ -13908,7 +13994,7 @@ def get_storm_ocean(atcf_id: str):
         "lat": slat,
         "lon": slon,
         "last_fix_utc": last_fix,
-        "sst_source": "NOAA OISST v2.1 (CoastWatch ERDDAP)",
+        "sst_source": "NOAA OISST v2.1 (PSL / CoastWatch)",
         "ohc_source": "NOAA/AOML Tropical Cyclone Heat Potential",
         **sst,
         **ohc,
