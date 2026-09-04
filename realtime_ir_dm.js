@@ -1096,7 +1096,20 @@
         }
         var mx = [], my = [], mt = [], mw = [];
         mean.forEach(function (p) { if (p.lat != null && p.tau <= maxTau) { mx.push(U(p.lon)); my.push(p.lat); mt.push(p.tau); mw.push(p.wind); } });
-        var allLat = my.slice(), allLon = mx.slice();
+        // Framing anchor. A late-forming cluster (median genesis beyond the
+        // horizon) has NO mean points inside the window, and genesisBounds
+        // falls back to a fixed western-Pacific box when handed nothing —
+        // an Atlantic wave then opened on a map of Japan. Frame on the
+        // full-lifetime mean instead, then on the member cloud.
+        var fLat = my.slice(), fLon = mx.slice(), framedOutsideWindow = false;
+        if (!fLat.length) {
+            mean.forEach(function (p) { if (p.lat != null) { fLon.push(U(p.lon)); fLat.push(p.lat); } });
+            if (!fLat.length) for (var mk = 0; mk < d.memberKeys.length; mk++) {
+                (d.members[d.memberKeys[mk]].points || []).forEach(function (p) { if (p.lat != null && p.lon != null) { fLon.push(U(p.lon)); fLat.push(p.lat); } });
+            }
+            framedOutsideWindow = fLat.length > 0;
+        }
+        var allLat = fLat.slice(), allLon = fLon.slice();
         var traces = [];
         // Filled contours low→high.
         if (M.risk.thresh) {
@@ -1174,8 +1187,8 @@
         }
         var rect = el.getBoundingClientRect();
         var aspect = rect.height > 0 ? Math.max(0.8, (rect.width - 20) / rect.height) : 2.0;
-        var bounds = B.genesisBounds(my, mx, allLat, allLon, aspect);
-        var insetLat = my.length ? my[0] : 0, insetLon = mx.length ? T().wrapLon(mx[0]) : 0;
+        var bounds = B.genesisBounds(fLat, fLon, allLat, allLon, aspect);
+        var insetLat = fLat.length ? fLat[0] : 0, insetLon = fLon.length ? T().wrapLon(fLon[0]) : 0;
         var layout = B.geoLayout(bounds, { domainY: [0, 1], insetLon: insetLon, insetLat: insetLat, insetDomain: { x: [0.01, 0.17], y: [0.02, 0.36] } });
         layout.margin = { l: 4, r: 4, t: 8, b: 4 };
         // Burn the liability note into the map itself (survives screenshots).
@@ -1205,9 +1218,23 @@
             bgcolor: isDark ? 'rgba(15,23,42,0.72)' : 'rgba(255,255,255,0.78)',
             bordercolor: 'rgba(0,229,255,0.45)', borderwidth: 1, borderpad: 5,
         }]);
+        // The liability box is pinned to the frame by index: capture it BEFORE
+        // the window note is appended.
+        var annIdx = layout.annotations.length - 1;
+        if (framedOutsideWindow) {
+            var firstMean = mean.filter(function (p) { return p.lat != null; })[0];
+            layout.annotations.push({
+                xref: 'paper', yref: 'paper', x: 0.5, y: 0.985, xanchor: 'center', yanchor: 'top', showarrow: false, align: 'center',
+                text: 'No cluster member is tracked within ' + maxTau + ' h'
+                    + (firstMean ? ' — the ensemble mean first appears at +' + Math.round(firstMean.tau) + ' h' : '')
+                    + (maxTau < 168 ? '<br>Try the 168 h window' : ''),
+                font: { size: 11, color: isDark ? '#fbbf24' : '#b45309' },
+                bgcolor: isDark ? 'rgba(15,23,42,0.72)' : 'rgba(255,255,255,0.85)',
+                bordercolor: 'rgba(245,158,11,0.55)', borderwidth: 1, borderpad: 5,
+            });
+        }
         layout.dragmode = 'pan';
         layout.hovermode = 'closest';
-        var annIdx = layout.annotations.length - 1;
         Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: true })
             .then(function () { anchorAnnotationToFrame(el, annIdx); });
         if (!el._rtdmRelayoutBound) {
