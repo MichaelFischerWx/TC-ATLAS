@@ -1325,6 +1325,16 @@
         if (hi - lo < 2) return '';
         return lo + '\u2013' + hi + ' kt';
     }
+    /** Headline for a pass: preliminary-center passes lead with the RMW range
+     *  ('129–148 kt'), since the point value depends on a center we have not
+     *  confirmed; VDM-fixed passes lead with the point value. (Michael,
+     *  2026-09-04: a range beats an uncertain guess.) */
+    function _hdobSearHeadline(p) {
+        var rg = _hdobSearRange(p);
+        if (p && p.fix_source === 'hdob' && rg) return rg;
+        return Math.round(p.y_kt) + ' kt';
+    }
+    function _hdobSearIsRangeLed(p) { return !!(p && p.fix_source === 'hdob' && _hdobSearRange(p)); }
     /** Multiline HTML: how the estimate was built + center/fix caveats. */
     function _hdobSearDetail(p) {
         if (!p) return '';
@@ -1409,7 +1419,9 @@
             var mk = L.circleMarker([p.lat, p.lon],
                 { radius: isSel ? 6 : 4, color: PINK, weight: isSel ? 3 : 2, opacity: 0.95, fillColor: '#fff', fillOpacity: 0.9 });
             var rg = _hdobSearRange(p), det = _hdobSearDetail(p);
-            var tip = '<b>SEAR ' + Math.round(p.y_kt) + ' kt</b> 10-m estimate (exp)' + (rg ? ' · <b>' + rg + '</b>' : '') +
+            var rangeLed = _hdobSearIsRangeLed(p);
+            var tip = '<b>SEAR ' + _hdobSearHeadline(p) + '</b> 10-m estimate (exp)' +
+                (rangeLed ? ' · point ' + Math.round(p.y_kt) + ' kt' : (rg ? ' · <b>' + rg + '</b>' : '')) +
                 (where ? '<br>' + where : '') + '<br>' + when +
                 (p.fl_peak_kt != null ? ' · FL peak ' + Math.round(p.fl_peak_kt) + ' kt' : '') +
                 (det ? '<br><span style="opacity:.8">' + det + '</span>' : '');
@@ -1419,7 +1431,7 @@
             var lIcon = L.divIcon({ className: 'recon-hdob-searlbl' + (isSel ? ' sel' : ''),
                 html: '<span style="color:' + PINK + ';font-size:10px;font-weight:700;white-space:nowrap;' +
                       'text-shadow:0 0 2px #fff,0 0 2px #fff,0 0 3px #fff;">' +
-                      Math.round(p.y_kt) + ' kt' + (q ? ' ' + q : '') + '</span>',
+                      _hdobSearHeadline(p) + (q ? ' ' + q : '') + '</span>',
                 iconSize: [1, 1], iconAnchor: [-6, 6] });
             var lm = L.marker([p.lat, p.lon], { icon: lIcon, interactive: false, zIndexOffset: 800 });
             lm.addTo(map); _hdobSearMarkers.push(lm);
@@ -1639,14 +1651,15 @@
             var rg = _hdobSearRange(p);
             if (rg) anyRange = true;
             if (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30) anyStale = true;
-            return String(p.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(p.tail) + ' ' + Math.round(p.y_kt) + ' kt' +
-                (rg ? ' [' + rg.replace(' kt', '') + ']' : '') +
+            var led = _hdobSearIsRangeLed(p);
+            return String(p.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(p.tail) + ' ' + _hdobSearHeadline(p) +
+                (!led && rg ? ' [' + rg.replace(' kt', '') + ']' : '') +
                 (q ? ' (' + q + (p.r_km != null ? ' ' + Math.round(p.r_km) + ' km' : '') + ')' : '') +
                 (p.fix_source === 'hdob' ? '*' : '') +
                 (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30 ? '\u2020' : '');
         });
         return head + 'Pass maxima (quadrant, radius from center) ' + parts.join(' · ') + ' (updated ' + String(sp.generated).slice(11, 16) + 'Z)' +
-            (anyRange ? ' — [lo–hi] = the same observation re-scored with the RMW of each eyewall crossing of that pass; SEAR is most sensitive to r/RMW, so read the range' : '') +
+            (anyRange ? ' — ranges = the same observation re-scored with the RMW of each eyewall crossing of that pass; SEAR is most sensitive to r/RMW, so preliminary-center passes are given as a range rather than a point value' : '') +
             (anyPrelim ? ' — * preliminary center from the calm-wind and pressure-plateau centroids of the eye crossing, no VDM yet' : '') +
             (anyStale ? ' — \u2020 nearest center fix more than 30 min away, center extrapolated' : '');
     }
@@ -1668,11 +1681,14 @@
             });
         });
         // the pass-maximum record behind the SEAR tile carries the RMW range
-        var searRange = '';
+        var searRange = '', searRangeLed = false;
         if (best.sear && _hdobData && _hdobData.sear && _hdobData.sear.passes) {
             var bt = String(best.sear.t).slice(0, 16);
             _hdobData.sear.passes.forEach(function (p) {
-                if (_hdobTailEq(p.tail, best.sear.tail) && String(p.t).slice(0, 16) === bt) searRange = _hdobSearRange(p);
+                if (_hdobTailEq(p.tail, best.sear.tail) && String(p.t).slice(0, 16) === bt) {
+                    searRange = _hdobSearRange(p); searRangeLed = _hdobSearIsRangeLed(p);
+                    if (searRangeLed) best.sear.valText = searRange.replace(' kt', '');
+                }
             });
         }
         function tile(label, b, unit, cls, extra, tip) {
@@ -1680,7 +1696,7 @@
             var sub = String(b.t || '').slice(11, 16) + 'Z · ' + _hdobTailDisplay(b.tail) + (extra || '');
             return '<div class="recon-vdm-stat' + (cls ? ' ' + cls : '') + '"' +
                 (tip ? ' title="' + tip + '"' : '') + '>' +
-                '<div class="recon-vdm-stat-val">' + Math.round(b.v) +
+                '<div class="recon-vdm-stat-val"' + (b.valText ? ' style="font-size:.78em;letter-spacing:-.01em"' : '') + '>' + (b.valText || Math.round(b.v)) +
                 '<span class="recon-vdm-stat-unit">' + unit + '</span></div>' +
                 '<div class="recon-vdm-stat-label">' + label + '</div>' +
                 '<div class="recon-vdm-stat-sub">' + sub + '</div></div>';
@@ -1691,7 +1707,7 @@
                    tile('Max SEAR 10-m (exp)', best.sear, 'kt', 'is-sear',
                         (best.sear && best.sear.az != null && window._ReconKit && window._ReconKit.searWhere
                             ? ' · ' + window._ReconKit.searWhere(best.sear.az, best.sear.r) : '') +
-                        (searRange ? ' · ' + searRange : '') +
+                        (searRangeLed ? ' · point ' + Math.round(best.sear.v) + ' kt' : (searRange ? ' · ' + searRange : '')) +
                         (best.sear && best.sear.prelim ? ' · prelim fix' : ''),
                         'SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Not an official product.');
         el.innerHTML = html;

@@ -31453,11 +31453,13 @@
         }
         var last = sp.passes[sp.passes.length - 1];
         var q = _rtCompass8(last.az_deg) || last.quad || '';
-        var rg = last.y_range_kt, rgs = '';
+        var rg = last.y_range_kt, rgs = '', head = Math.round(last.y_kt) + ' kt';
         if (rg && rg.length === 2 && rg[0] != null && rg[1] != null && Math.round(rg[1]) - Math.round(rg[0]) >= 2) {
-            rgs = ' [' + Math.round(rg[0]) + '\u2013' + Math.round(rg[1]) + ']';   // re-scored with each eyewall crossing's RMW
+            rgs = Math.round(rg[0]) + '\u2013' + Math.round(rg[1]);   // re-scored with each eyewall crossing's RMW
+            // preliminary center: the range IS the estimate; VDM-fixed: point value, range after
+            if (last.fix_source === 'hdob') head = rgs + ' kt'; else head += ' [' + rgs + ']';
         }
-        return ' · SEAR ' + Math.round(last.y_kt) + ' kt' + rgs + (q ? ' ' + q : '') + ' (' + String(last.t).slice(11, 16) + 'Z' +
+        return ' · SEAR ' + head + (q ? ' ' + q : '') + ' (' + String(last.t).slice(11, 16) + 'Z' +
             (last.fix_source === 'hdob' ? ', prelim' : '') + ')';
     }
 
