@@ -968,10 +968,19 @@
             xs.push(lab); ys.push(v); txt.push(fmtTauDate(fc.init, p.tau) + ' (official +' + p.tau + ' h)');
         });
         if (!xs.length) return;
-        Plotly.addTraces(el, [{ type: 'scatter', mode: 'lines+markers', x: xs, y: ys, text: txt,
-            line: { color: OFCL_RED, width: 2.4, dash: 'dash' }, marker: { size: 6, color: OFCL_RED, line: { color: '#fff', width: 1 } },
-            name: (fc.name || fc.tech) + ' forecast', hovertemplate: '%{text}<br>' + esc(fc.name || fc.tech) + ': %{y:.0f} ' + (mslp ? 'hPa' : 'kt') + '<extra>authoritative forecast</extra>',
-            showlegend: true, _rtdm: 1 }]);
+        // Same cased black/white dashed line as on the maps (consistent, and it
+        // reads over the orange percentile bands). The casing trace carries the
+        // legend entry; the inner dashed trace would vanish on the legend's
+        // light background.
+        var hov = '%{text}<br>' + esc(fc.name || fc.tech) + ': %{y:.0f} ' + (mslp ? 'hPa' : 'kt') + '<extra>authoritative forecast</extra>';
+        Plotly.addTraces(el, [
+            { type: 'scatter', mode: 'lines+markers', x: xs, y: ys, text: txt, hovertemplate: hov,
+              line: { color: ofclCasing(), width: 4.6 }, marker: { size: 7.5, color: ofclCasing() },
+              name: (fc.name || fc.tech) + ' forecast', showlegend: true, _rtdm: 1 },
+            { type: 'scatter', mode: 'lines+markers', x: xs, y: ys, hoverinfo: 'skip',
+              line: { color: ofclInner(), width: 2.2, dash: 'dash' }, marker: { size: 4.5, color: ofclInner() },
+              showlegend: false, _rtdm: 1 },
+        ]);
     }
     function renderGenesisPane(name) {
         if (!M.data) return;
@@ -1007,7 +1016,7 @@
             // .rt-genesis-modal-chart-wrap = same wrapper as the other modal
             // charts, so the ⤓ PNG button gets its own strip above the map on
             // phones instead of sitting on the plot.
-            + '<div class="rt-genesis-modal-chart-wrap" style="position:relative; max-width:860px; margin:0 auto;">'
+            + '<div class="rt-genesis-modal-chart-wrap" style="position:relative; max-width:860px; margin:0 auto; padding-top:32px;">'
             + '<button type="button" class="rt-genesis-modal-save" title="Save the wind-risk map as PNG (with TC-ATLAS watermark and the not-an-official-forecast note)" onclick="window.RTDM.exportModalRiskMap()">⤓ PNG</button>'
             + '<div id="rt-genesis-modal-riskmap" style="width:100%; height:420px;"></div>'
             + '</div>'
@@ -1192,7 +1201,17 @@
             bordercolor: 'rgba(0,229,255,0.45)', borderwidth: 1, borderpad: 5,
         }]);
         layout.dragmode = 'pan';
-        Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: true });
+        var annIdx = layout.annotations.length - 1;
+        Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: true })
+            .then(function () { anchorAnnotationToFrame(el, annIdx); });
+        if (!el._rtdmRelayoutBound) {
+            el._rtdmRelayoutBound = true;
+            // Zoom / pan / resize move the frame: keep the box pinned to it.
+            el.on('plotly_relayout', function (ev) {
+                if (ev && (ev['annotations[' + annIdx + '].x'] != null)) return;   // our own relayout
+                anchorAnnotationToFrame(el, annIdx);
+            });
+        }
         if (!el._rtdmClickBound) {
             el._rtdmClickBound = true;
             el.on('plotly_click', function (ev) {
@@ -1206,7 +1225,16 @@
     // official forecast) bottom-left, TC-ATLAS logo + tcatlas.org bottom-right.
     function exportModalRiskMap() {
         var el = $('rt-genesis-modal-riskmap'); if (!el || !el.data || !M.data || typeof Plotly === 'undefined') return;
-        var W = 1600, H = Math.max(600, Math.round(W * el.clientHeight / Math.max(1, el.clientWidth)));
+        // Size the export to the MAP FRAME's aspect (not the container's): a geo
+        // frame is letterboxed inside the plot area, and Plotly anchors the
+        // legend box to the plot area — matching aspects makes the frame fill
+        // the image so the box lands inside the map, and no blank margins.
+        var W = 1600, H;
+        try {
+            var sp = el._fullLayout.geo._subplot;
+            H = Math.round((W - 8) * sp.yaxis._length / sp.xaxis._length) + 12;
+        } catch (e) { H = Math.round(W * el.clientHeight / Math.max(1, el.clientWidth)); }
+        H = Math.max(500, Math.min(2200, H));
         var r = M.risk;
         // Keep it to one line clear of the watermark: the map's own annotation
         // already carries the swath / cone wording.
@@ -1223,7 +1251,9 @@
         var SYS = '-apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif';
         var lay = JSON.parse(JSON.stringify(el.layout));
         lay.font = Object.assign({}, lay.font, { family: SYS });
-        (lay.annotations || []).forEach(function (a) { a.font = Object.assign({}, a.font, { family: SYS }); a.borderpad = Math.max(a.borderpad || 0, 6); });
+        (lay.annotations || []).forEach(function (a) { a.font = Object.assign({}, a.font, { family: SYS }); a.borderpad = Math.max(a.borderpad || 0, 6);
+            // The frame fills the export, so anchor just inside its corner.
+            if (a.xanchor === 'left' && a.yanchor === 'bottom') { a.x = 0.008; a.y = 0.012; } });
         if (lay.geo && lay.geo.lonaxis && lay.geo.lonaxis.tickfont) lay.geo.lonaxis.tickfont.family = SYS;
         if (lay.geo && lay.geo.lataxis && lay.geo.lataxis.tickfont) lay.geo.lataxis.tickfont.family = SYS;
         var shim = { data: el.data, layout: lay };
@@ -1231,6 +1261,25 @@
             B.stampExport(url, W, H, function (blob) { if (blob) B.saveImageBlob(blob, fn); }, caption);
         }).catch(function (e) { console.warn('[RTDM] risk map export failed', e); });
         B.ga('rt_dm_modal_risk_export', { thresh: r.thresh });
+    }
+    // Plotly annotations use "paper" coordinates = the whole plot area, but a
+    // geo map draws its frame centred and letterboxed inside that area, so a
+    // box at paper (0,0) can land outside the map. Read the frame's pixel
+    // rectangle from the rendered subplot and move the box just inside its
+    // bottom-left corner.
+    function anchorAnnotationToFrame(el, idx) {
+        try {
+            var fl = el._fullLayout, sp = fl && fl.geo && fl.geo._subplot;
+            if (!sp || !sp.xaxis || !sp.yaxis || !fl._size) return;
+            var ax = sp.xaxis, ay = sp.yaxis, sz = fl._size;
+            var left = ax._offset, bottom = ay._offset + ay._length;
+            var x = (left - sz.l) / sz.w + 6 / sz.w;
+            var y = 1 - (bottom - sz.t) / sz.h + 6 / sz.h;
+            var upd = {}; upd['annotations[' + idx + '].x'] = x; upd['annotations[' + idx + '].y'] = y;
+            var cur = fl.annotations && fl.annotations[idx];
+            if (cur && Math.abs(cur.x - x) < 1e-4 && Math.abs(cur.y - y) < 1e-4) return;
+            Plotly.relayout(el, upd);
+        } catch (e) { /* leave the paper-anchored fallback */ }
     }
     function renderModalLandfall() {
         var el = $('rt-genesis-pane-landfall'); if (!el || !M.data) return;
