@@ -31457,7 +31457,7 @@
         if (rg && rg.length === 2 && rg[0] != null && rg[1] != null && Math.round(rg[1]) - Math.round(rg[0]) >= 2) {
             rgs = Math.round(rg[0]) + '\u2013' + Math.round(rg[1]);   // re-scored with each eyewall crossing's RMW
             // preliminary center: the range IS the estimate; VDM-fixed: point value, range after
-            if (last.fix_source === 'hdob') head = rgs + ' kt'; else head += ' [' + rgs + ']';
+            if (last.fix_source === 'hdob') head = rgs + ' kt (likely ' + Math.round(last.y_kt) + ')'; else head += ' [' + rgs + ']';
         }
         return ' · SEAR ' + head + (q ? ' ' + q : '') + ' (' + String(last.t).slice(11, 16) + 'Z' +
             (last.fix_source === 'hdob' ? ', prelim' : '') + ')';

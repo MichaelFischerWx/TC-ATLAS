@@ -83,7 +83,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20260904i">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20260904j">
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -2673,7 +2673,7 @@
     <script defer src="tc_mw_layer.js?v=20260811b"></script>
     <script defer src="tc_dm_analytics.js?v=20260904b"></script>
     <script defer src="realtime_ir_dm.js?v=20260904r"></script>
-    <script defer src="realtime_ir.js?v=20260904i"></script>
+    <script defer src="realtime_ir.js?v=20260904j"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
@@ -2778,7 +2778,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260904g';
+        var _LAZY_ASSET_V = '?v=20260904h';
         var _lazyViewMods = {
             recon:       { js: ['realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

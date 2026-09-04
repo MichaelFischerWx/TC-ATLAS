@@ -1335,6 +1335,8 @@
         return Math.round(p.y_kt) + ' kt';
     }
     function _hdobSearIsRangeLed(p) { return !!(p && p.fix_source === 'hdob' && _hdobSearRange(p)); }
+    /** 'most likely 147 kt' — the point estimate that accompanies a range-led headline. */
+    function _hdobSearLikely(p) { return (p && p.y_kt != null) ? 'most likely ' + Math.round(p.y_kt) + ' kt' : ''; }
     /** Multiline HTML: how the estimate was built + center/fix caveats. */
     function _hdobSearDetail(p) {
         if (!p) return '';
@@ -1421,7 +1423,7 @@
             var rg = _hdobSearRange(p), det = _hdobSearDetail(p);
             var rangeLed = _hdobSearIsRangeLed(p);
             var tip = '<b>SEAR ' + _hdobSearHeadline(p) + '</b> 10-m estimate (exp)' +
-                (rangeLed ? ' · point ' + Math.round(p.y_kt) + ' kt' : (rg ? ' · <b>' + rg + '</b>' : '')) +
+                (rangeLed ? ' · ' + _hdobSearLikely(p) : (rg ? ' · <b>' + rg + '</b>' : '')) +
                 (where ? '<br>' + where : '') + '<br>' + when +
                 (p.fl_peak_kt != null ? ' · FL peak ' + Math.round(p.fl_peak_kt) + ' kt' : '') +
                 (det ? '<br><span style="opacity:.8">' + det + '</span>' : '');
@@ -1653,13 +1655,14 @@
             if (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30) anyStale = true;
             var led = _hdobSearIsRangeLed(p);
             return String(p.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(p.tail) + ' ' + _hdobSearHeadline(p) +
+                (led ? ' (' + _hdobSearLikely(p).replace(' kt', '') + ')' : '') +
                 (!led && rg ? ' [' + rg.replace(' kt', '') + ']' : '') +
                 (q ? ' (' + q + (p.r_km != null ? ' ' + Math.round(p.r_km) + ' km' : '') + ')' : '') +
                 (p.fix_source === 'hdob' ? '*' : '') +
                 (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30 ? '\u2020' : '');
         });
         return head + 'Pass maxima (quadrant, radius from center) ' + parts.join(' · ') + ' (updated ' + String(sp.generated).slice(11, 16) + 'Z)' +
-            (anyRange ? ' — ranges = the same observation re-scored with the RMW of each eyewall crossing of that pass; SEAR is most sensitive to r/RMW, so preliminary-center passes are given as a range rather than a point value' : '') +
+            (anyRange ? ' — ranges = the same observation re-scored with the RMW of each eyewall crossing of that pass; SEAR is most sensitive to r/RMW, so preliminary-center passes lead with the range and give the most likely value in parentheses' : '') +
             (anyPrelim ? ' — * preliminary center from the calm-wind and pressure-plateau centroids of the eye crossing, no VDM yet' : '') +
             (anyStale ? ' — \u2020 nearest center fix more than 30 min away, center extrapolated' : '');
     }
@@ -1707,7 +1710,7 @@
                    tile('Max SEAR 10-m (exp)', best.sear, 'kt', 'is-sear',
                         (best.sear && best.sear.az != null && window._ReconKit && window._ReconKit.searWhere
                             ? ' · ' + window._ReconKit.searWhere(best.sear.az, best.sear.r) : '') +
-                        (searRangeLed ? ' · point ' + Math.round(best.sear.v) + ' kt' : (searRange ? ' · ' + searRange : '')) +
+                        (searRangeLed ? ' · most likely ' + Math.round(best.sear.v) + ' kt' : (searRange ? ' · ' + searRange : '')) +
                         (best.sear && best.sear.prelim ? ' · prelim fix' : ''),
                         'SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Not an official product.');
         el.innerHTML = html;
