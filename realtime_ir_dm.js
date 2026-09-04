@@ -668,8 +668,412 @@
             .then(function () { try { Plotly.purge(tmp); } catch (e) {} if (tmp.parentNode) tmp.parentNode.removeChild(tmp); });
     }
 
+    // ═════════════════════════════════════════════════════════════════════
+    //  GLOBAL MAP — basin-wide wind-risk layer, point probe, popup lines
+    // ═════════════════════════════════════════════════════════════════════
+    var G = { thresh: 0, horizon: 120, layers: [], grids: {}, clickBound: false, probe: null, pending: false };
+    function gMap() { return B && B.globalMap && B.globalMap(); }
+    function gData() { return B && B.globalWL && B.globalWL(); }
+    function globalSetRisk(th) {
+        G.thresh = th;
+        if (th && !gData()) { G.pending = true; B.loadGlobalWL(); }
+        drawGlobalRisk();
+        if (B) B.ga('rt_dm_global_risk', { thresh: th, horizon: G.horizon });
+    }
+    function globalSetHorizon(h) { G.horizon = h; G.grids = {}; drawGlobalRisk(); }
+    function onGlobalData() {
+        G.grids = {};
+        if (G.pending || G.thresh) { G.pending = false; drawGlobalRisk(); }
+    }
+    function globalGrid(th) {
+        var key = th + '@' + G.horizon;
+        if (G.grids[key] === undefined) {
+            var d = gData(), grids = [];
+            var tracks = d && d.tracks || [];
+            for (var i = 0; i < tracks.length; i++) {
+                var g = T().windProbGrid(tracks[i].members || {}, { thresh: th, maxTau: G.horizon, cellDeg: 0.2, stepH: 2 });
+                if (g) grids.push(g);
+            }
+            G.grids[key] = T().compositeGrids(grids) || null;
+        }
+        return G.grids[key];
+    }
+    function clearGlobalRisk() {
+        removeLayersOn(gMap(), G.layers);
+        if (G.probe) { try { gMap().removeLayer(G.probe); } catch (e) {} G.probe = null; }
+        if (G.clickBound && gMap()) { try { gMap().off('click', onGlobalClick); } catch (e) {} G.clickBound = false; }
+    }
+    function removeLayersOn(map, arr) {
+        for (var i = 0; i < arr.length; i++) { try { if (map) map.removeLayer(arr[i]); } catch (e) {} }
+        arr.length = 0;
+    }
+    function drawGlobalRisk() {
+        var map = gMap(); if (!map) return;
+        removeLayersOn(map, G.layers);
+        if (!G.thresh) { clearGlobalRisk(); B.refreshLayersCount(); return; }
+        if (!gData()) return;   // arrives via onGlobalData
+        var g = globalGrid(G.thresh);
+        if (g) {
+            var parts = T().rasterizeMercator(g, probColor, { pxPerCell: 4 });
+            for (var i = 0; i < parts.length; i++) {
+                G.layers.push(L.imageOverlay(parts[i].url, parts[i].bounds, { opacity: 0.6, pane: 'dmProbPane', interactive: false }).addTo(map));
+            }
+        }
+        if (!G.clickBound) { map.on('click', onGlobalClick); G.clickBound = true; }
+        B.refreshLayersCount();
+    }
+    function onGlobalClick(ev) {
+        if (!G.thresh) return;
+        var ll = ev && ev.latlng; if (!ll) return;
+        var lat = ll.lat, lon = ll.lng != null ? ll.lng : ll.lon;
+        var d = gData(); if (!d) return;
+        var tracks = d.tracks || [], best = null;
+        for (var i = 0; i < tracks.length; i++) {
+            var pp = T().pointProbabilities(tracks[i].members || {}, lat, lon, { maxTau: G.horizon, mean: tracks[i].ensemble_mean });
+            if (!best || pp.p34 > best.pp.p34 || (pp.p34 === best.pp.p34 && pp.p64 > best.pp.p64)) best = { pp: pp, id: tracks[i].track_id };
+        }
+        var map = gMap();
+        if (G.probe) { try { map.removeLayer(G.probe); } catch (e) {} }
+        var html;
+        if (!best || !best.pp.p34) {
+            html = '<div class="rt-dm-probe"><div class="rt-dm-probe-h">' + B.fmtLatLon(lat, lon) + '</div>'
+                + 'No ensemble member brings tropical-storm-force wind here within ' + G.horizon + ' h.'
+                + '<div class="rt-dm-probe-note">' + esc(modelTag()) + ' · experimental, not a forecast</div></div>';
+        } else {
+            var pp = best.pp, q = T().percentiles(pp.arrival34, [0.1, 0.5, 0.9]);
+            var nm = B.stormName ? (B.stormNameById(best.id) || best.id) : best.id;
+            html = '<div class="rt-dm-probe"><div class="rt-dm-probe-h">' + B.fmtLatLon(lat, lon) + ' <span style="opacity:0.7;font-weight:400;">· ' + esc(nm) + '</span></div>'
+                + '<div class="rt-dm-probe-row"><span>≥34 kt</span><b style="color:#34d399;">' + pct(pp.p34) + '</b></div>'
+                + '<div class="rt-dm-probe-row"><span>≥50 kt</span><b style="color:#fbbf24;">' + pct(pp.p50) + '</b></div>'
+                + '<div class="rt-dm-probe-row"><span>≥64 kt</span><b style="color:#ef4444;">' + pct(pp.p64) + '</b></div>'
+                + '<div class="rt-dm-probe-row"><span>TS wind arrives</span><b>' + fmtTauDate(d.init_time, q[1]) + '</b></div>'
+                + '<div class="rt-dm-probe-note">within ' + G.horizon + ' h · ' + pp.n + ' members · 80% arrive +' + q[0] + '–' + q[2] + ' h<br>'
+                + esc(modelTag()) + ' · experimental, not a forecast — see NHC / JTWC</div></div>';
+        }
+        G.probe = L.circleMarker([lat, lon], { radius: 6, color: '#fff', weight: 2, fillColor: CYAN, fillOpacity: 1, pane: 'dmProbPane' }).addTo(map);
+        G.probe.bindPopup(html, { maxWidth: 260 });
+        try { G.probe.openPopup(); } catch (e) {}
+        B.ga('rt_dm_global_probe', { thresh: G.thresh });
+    }
+    // Layers-panel chip row HTML (rendered by realtime_ir.js inside its menu).
+    function globalRiskRowHtml() {
+        function chip(label, on, attr, title) {
+            return '<button type="button" class="ir-global-genvariant-chip ir-global-dmrisk-chip" ' + attr
+                + (title ? ' title="' + esc(title) + '"' : '')
+                + ' style="background:' + (on ? 'rgba(0,229,255,0.28)' : 'transparent') + '; color:' + (on ? '#00e5ff' : 'inherit') + ';">' + label + '</button>';
+        }
+        var h = '<div class="ir-global-menu-row ir-global-method-row" style="opacity:' + (G.thresh ? 1 : 0.7) + ';">'
+            + '<span style="font-size:0.72rem; opacity:0.75; margin-right:8px;" title="Chance of wind at or above the threshold within the window, from every active storm and invest\'s ensemble">Wind risk:</span>'
+            + chip('Off', !G.thresh, 'data-dmrisk="0"')
+            + chip('≥34 kt', G.thresh === 34, 'data-dmrisk="34"', 'Tropical-storm-force wind chance')
+            + chip('≥50 kt', G.thresh === 50, 'data-dmrisk="50"')
+            + chip('≥64 kt', G.thresh === 64, 'data-dmrisk="64"', 'Hurricane-force wind chance')
+            + '</div>';
+        if (G.thresh) {
+            h += '<div class="ir-global-menu-row ir-global-method-row">'
+                + '<span style="font-size:0.72rem; opacity:0.75; margin-right:8px;">Within:</span>'
+                + chip('72 h', G.horizon === 72, 'data-dmhorizon="72"') + chip('120 h', G.horizon === 120, 'data-dmhorizon="120"') + chip('168 h', G.horizon === 168, 'data-dmhorizon="168"')
+                + '<span style="font-size:0.62rem; opacity:0.65; margin-left:8px;">click the map for a point readout</span></div>'
+                + '<div class="ir-global-menu-row" style="display:block; padding:2px 0 4px;">'
+                + '<div class="rt-dm-legend-bar" style="background:' + legendCSS() + '; height:6px; max-width:260px;"></div>'
+                + '<div class="rt-dm-legend-ticks" style="max-width:260px;"><span>5%</span><span>20%</span><span>40%</span><span>60%</span><span>80%</span><span>100%</span></div>'
+                + '<div style="font-size:0.58rem; opacity:0.65; margin-top:2px;">Experimental research guidance, not a forecast — official wind-speed probabilities: NHC / CPHC / JTWC.</div></div>';
+        }
+        return h;
+    }
+    function bindGlobalRiskChips(content) {
+        var chips = content.querySelectorAll('.ir-global-dmrisk-chip');
+        for (var i = 0; i < chips.length; i++) {
+            (function (el) {
+                el.addEventListener('click', function (ev) {
+                    ev.preventDefault(); ev.stopPropagation();
+                    if (el.hasAttribute('data-dmrisk')) globalSetRisk(parseInt(el.getAttribute('data-dmrisk'), 10) || 0);
+                    else if (el.hasAttribute('data-dmhorizon')) globalSetHorizon(parseInt(el.getAttribute('data-dmhorizon'), 10) || 120);
+                    if (B.rerenderLayersPanel) B.rerenderLayersPanel();
+                });
+            })(chips[i]);
+        }
+    }
+    // Storm-popup lines: landfall + RI from the storm's own ensemble.
+    function fillPopupLines(atcfId, el) {
+        if (!el) return;
+        var d = gData();
+        if (!d) {
+            el.innerHTML = '<span class="ir-popup-dm-tag">DeepMind: loading ensemble…</span>';
+            if (!G._popupWait) { G._popupWait = true; B.loadGlobalWL(); }
+            G._popupPending = { id: atcfId, el: el };
+            return;
+        }
+        var trk = (d.tracks || []).filter(function (t) { return t.track_id === atcfId; })[0];
+        if (!trk) { el.innerHTML = '<span class="ir-popup-dm-tag">' + esc(modelTag()) + ': no run for this system yet</span>'; return; }
+        var ri = T().riFromMembers(trk.members || {}, { thresh: 30 });
+        var i48 = idxAtOrBelow(ri.taus, 48);
+        var riTxt = i48 >= 0 ? pct(ri.pBy[i48]) : '—';
+        var html = '<span class="ir-popup-dm-tag">' + esc(modelTag()) + ' · ' + (trk.n_members || Object.keys(trk.members || {}).length) + ' members · init ' + fmtInit(d.init_time) + '</span><br>'
+            + 'RI (≥30 kt/24 h) by +48 h: <b>' + riTxt + '</b><br>';
+        if (S.landMask) {
+            var lf = T().landfall(trk.members || {}, S.landMask, { maxTau: 168, stepH: 1, horizons: [120] });
+            if (lf.events.length) {
+                var q = T().percentiles(lf.taus, [0.5]), wq = T().percentiles(lf.winds, [0.5]);
+                html += 'Landfall within 7 d: <b>' + pct(lf.pAny) + '</b> · median ' + fmtTauDate(d.init_time, q[0]) + ' as <b>' + catLabel(T().catOf(wq[0])) + '</b><br>';
+            } else html += 'Landfall within 7 d: <b>0%</b><br>';
+        } else {
+            html += '<span id="ir-popup-dm-lf-' + atcfId + '">Landfall: computing…</span><br>';
+            ensureLandMask().then(function () { var e2 = document.getElementById('ir-popup-dm-lf-' + atcfId); if (e2 && e2.closest('.ir-popup-dm')) fillPopupLines(atcfId, e2.closest('.ir-popup-dm')); }).catch(function () {});
+        }
+        html += '<span class="ir-popup-dm-note">Experimental research guidance, not a forecast — see NHC / JTWC.</span>';
+        el.innerHTML = html;
+    }
+    function onGlobalDataForPopup() {
+        if (G._popupPending && document.body.contains(G._popupPending.el)) fillPopupLines(G._popupPending.id, G._popupPending.el);
+        G._popupPending = null; G._popupWait = false;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    //  DEEPMIND MODAL — Wind Risk + Landfall panes on the Plotly geo map
+    // ═════════════════════════════════════════════════════════════════════
+    var M = { data: null, risk: { thresh: 34, horizon: 120, swath: 90, grids: {}, contours: {}, swaths: {}, probe: null }, lf: null, rendered: {} };
+    function onGenesisDetail(d) {
+        // d = { memberKeys, members, mean, stats, init, variant, label, alreadyTC }
+        M.data = d; M.risk.grids = {}; M.risk.contours = {}; M.risk.swaths = {}; M.risk.probe = null; M.lf = null; M.rendered = {};
+        var r = $('rt-genesis-pane-risk'), l = $('rt-genesis-pane-landfall');
+        if (r) r.innerHTML = ''; if (l) l.innerHTML = '';
+    }
+    function onGenesisClose() { M.data = null; M.rendered = {}; }
+    function renderGenesisPane(name) {
+        if (!M.data) return;
+        if (name === 'risk') renderModalRisk();
+        else if (name === 'landfall') renderModalLandfall();
+    }
+    function modalChip(label, on, onclick, title) {
+        return '<button type="button" class="rt-dm-chip' + (on ? ' active' : '') + '" onclick="' + onclick + '"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + label + '</button>';
+    }
+    function modalModelTag() {
+        var v = M.data && M.data.variant;
+        return v === 'wnv3' ? 'WeatherNext 3 (experimental)' : 'DeepMind FNV3';
+    }
+    function renderModalRisk() {
+        var el = $('rt-genesis-pane-risk'); if (!el || !M.data) return;
+        var r = M.risk;
+        var html = '<div class="rt-genesis-risk-controls">'
+            + '<div class="rt-dm-row"><span class="rt-dm-row-l">Wind chance</span>'
+            + modalChip('Off', r.thresh === 0, 'window.RTDM.modalRisk(0)') + modalChip('≥34 kt', r.thresh === 34, 'window.RTDM.modalRisk(34)')
+            + modalChip('≥50 kt', r.thresh === 50, 'window.RTDM.modalRisk(50)') + modalChip('≥64 kt', r.thresh === 64, 'window.RTDM.modalRisk(64)') + '</div>'
+            + '<div class="rt-dm-row"><span class="rt-dm-row-l">Within</span>'
+            + modalChip('72 h', r.horizon === 72, 'window.RTDM.modalHorizon(72)') + modalChip('120 h', r.horizon === 120, 'window.RTDM.modalHorizon(120)') + modalChip('168 h', r.horizon === 168, 'window.RTDM.modalHorizon(168)') + '</div>'
+            + '<div class="rt-dm-row"><span class="rt-dm-row-l">Track swath</span>'
+            + modalChip('Off', r.swath === 0, 'window.RTDM.modalSwath(0)') + modalChip('50%', r.swath === 50, 'window.RTDM.modalSwath(50)', 'Half of the members stay inside this swath')
+            + modalChip('90%', r.swath === 90, 'window.RTDM.modalSwath(90)', 'Nine in ten members stay inside this swath') + '</div>'
+            + '</div>'
+            + '<div id="rt-genesis-modal-riskmap" style="width:100%; height:400px;"></div>'
+            + '<div class="rt-dm-legend" style="max-width:420px;"><span class="rt-dm-legend-t">' + (r.thresh ? 'P(≥' + r.thresh + ' kt) within ' + r.horizon + ' h — filled contours at 10 / 30 / 50 / 70 / 90 %' : 'Wind-chance layer off') + '</span>'
+            + (r.thresh ? '<div class="rt-dm-legend-bar" style="background:' + legendCSS() + ';"></div><div class="rt-dm-legend-ticks"><span>5%</span><span>20%</span><span>40%</span><span>60%</span><span>80%</span><span>100%</span></div>' : '') + '</div>'
+            + '<div class="rt-genesis-probe"><span>Probe a point:</span>'
+            + '<input id="rt-genesis-probe-lat" placeholder="lat" inputmode="decimal" value="' + (r.probe ? r.probe.lat.toFixed(2) : '') + '">'
+            + '<input id="rt-genesis-probe-lon" placeholder="lon" inputmode="decimal" value="' + (r.probe ? r.probe.lon.toFixed(2) : '') + '">'
+            + '<button type="button" class="rt-dm-chip" onclick="window.RTDM.modalProbe()">Go</button>'
+            + (r.probe ? '<button type="button" class="rt-dm-chip" onclick="window.RTDM.modalProbe(null)">Clear</button>' : '')
+            + '<span class="rt-dm-readout-sub">°N / °E (use negative for S / W)</span></div>'
+            + '<div id="rt-genesis-probe-out"></div>'
+            + note('Wind chances count members whose modeled wind field reaches a location within the window, using each member\'s own wind radii; '
+                + 'the swath is the union of the members\' 50 % / 90 % position ellipses through the window (the ensemble analogue of a lifetime wind swath). '
+                + 'Experimental research guidance from ' + esc(modalModelTag()) + ' — <b>not a forecast</b>. Official forecasts, watches and warnings: '
+                + '<a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener">NHC</a> / CPHC / JTWC or your national weather service.');
+        el.innerHTML = html;
+        B.whenPlotly(function () { drawModalRiskMap(); renderModalProbe(); });
+    }
+    function modalRisk(th) { M.risk.thresh = th; renderModalRisk(); }
+    function modalHorizon(h) { M.risk.horizon = h; M.risk.grids = {}; M.risk.contours = {}; M.risk.swaths = {}; renderModalRisk(); }
+    function modalSwath(v) { M.risk.swath = v; renderModalRisk(); }
+    function modalProbe(clear) {
+        if (clear === null) { M.risk.probe = null; renderModalRisk(); return; }
+        var la = parseFloat(($('rt-genesis-probe-lat') || {}).value), lo = parseFloat(($('rt-genesis-probe-lon') || {}).value);
+        if (!isFinite(la) || !isFinite(lo)) { var o = $('rt-genesis-probe-out'); if (o) o.innerHTML = '<div class="rt-dm-hint">Enter a latitude and longitude, e.g. 21.3 and -157.9.</div>'; return; }
+        M.risk.probe = { lat: la, lon: lo };
+        renderModalRisk();
+    }
+    function renderModalProbe() {
+        var o = $('rt-genesis-probe-out'); if (!o || !M.data) return;
+        var p = M.risk.probe; if (!p) { o.innerHTML = ''; return; }
+        var pp = T().pointProbabilities(M.data.members, p.lat, p.lon, { maxTau: M.risk.horizon, mean: M.data.mean });
+        var q = T().percentiles(pp.arrival34, [0.1, 0.5, 0.9]);
+        var html = '<div class="rt-dm-tiles rt-dm-tiles-3" style="max-width:520px;">'
+            + tile('≥34 kt', pct(pp.p34), 'within ' + M.risk.horizon + ' h', '#34d399') + tile('≥50 kt', pct(pp.p50), '', '#fbbf24') + tile('≥64 kt', pct(pp.p64), 'hurricane', '#ef4444') + '</div>';
+        if (pp.arrival34.length) html += '<div class="rt-dm-readout-sub">TS wind arrives: median ' + fmtTauDate(M.data.init, q[1]) + ' (+' + q[1] + ' h) · 80% of members +' + q[0] + '–' + q[2] + ' h' + (pp.nearest ? ' · mean track passes ' + Math.round(pp.nearest.km) + ' km away at +' + pp.nearest.tau + ' h' : '') + '</div>';
+        else html += '<div class="rt-dm-readout-sub">No member brings tropical-storm-force wind to this point within ' + M.risk.horizon + ' h.</div>';
+        o.innerHTML = html;
+    }
+    function modalGrid() {
+        var r = M.risk, key = r.thresh + '@' + r.horizon;
+        if (r.grids[key] === undefined) r.grids[key] = T().windProbGrid(M.data.members, { thresh: r.thresh, maxTau: r.horizon, cellDeg: 0.2, stepH: 2 }) || null;
+        return r.grids[key];
+    }
+    function modalContours() {
+        var r = M.risk, key = r.thresh + '@' + r.horizon;
+        if (r.contours[key] === undefined) { var g = modalGrid(); r.contours[key] = g ? T().probContours(g, [0.1, 0.3, 0.5, 0.7, 0.9], { smooth: 2, minCells: 4 }) : []; }
+        return r.contours[key];
+    }
+    function modalSwathRings() {
+        var r = M.risk, key = r.swath + '@' + r.horizon;
+        if (r.swaths[key] === undefined) r.swaths[key] = r.swath ? T().trackSwath(M.data.members, { level: r.swath / 100, maxTau: r.horizon, cellDeg: 0.1 }).rings : [];
+        return r.swaths[key];
+    }
+    function drawModalRiskMap() {
+        var el = $('rt-genesis-modal-riskmap'); if (!el || !M.data) return;
+        var d = M.data, mean = d.mean && d.mean.points || [];
+        var isDark = B.isDark();
+        var refLon = B.circMeanLon(mean.filter(function (p) { return p.lon != null; }).map(function (p) { return p.lon; }));
+        function U(lon) { return T().unwrapLon(lon, refLon); }
+        var maxTau = M.risk.horizon;
+        // Spaghetti (one trace, null-separated) + mean.
+        var sx = [], sy = [];
+        for (var i = 0; i < d.memberKeys.length; i++) {
+            var pts = (d.members[d.memberKeys[i]].points || []).filter(function (p) { return p.lat != null && p.tau <= maxTau; });
+            var last = null;
+            for (var j = 0; j < pts.length; j++) { var lo = U(pts[j].lon); if (last != null && Math.abs(lo - last) > 180) { sx.push(null); sy.push(null); } sx.push(lo); sy.push(pts[j].lat); last = lo; }
+            sx.push(null); sy.push(null);
+        }
+        var mx = [], my = [], mt = [], mw = [];
+        mean.forEach(function (p) { if (p.lat != null && p.tau <= maxTau) { mx.push(U(p.lon)); my.push(p.lat); mt.push(p.tau); mw.push(p.wind); } });
+        var allLat = my.slice(), allLon = mx.slice();
+        var traces = [];
+        // Filled contours low→high.
+        if (M.risk.thresh) {
+            var cts = modalContours();
+            for (var c = 0; c < cts.length; c++) {
+                var col = probColor(cts[c].level + 0.05) || [124, 58, 237, 160];
+                var rings = cts[c].rings;
+                for (var rr = 0; rr < rings.length; rr++) {
+                    var ring = rings[rr];
+                    var lon = ring.map(function (q) { return U(q[1]); }), lat = ring.map(function (q) { return q[0]; });
+                    lon.push(lon[0]); lat.push(lat[0]);
+                    allLat = allLat.concat(lat); allLon = allLon.concat(lon);
+                    traces.push({ type: 'scattergeo', mode: 'lines', lon: lon, lat: lat, fill: 'toself',
+                                  fillcolor: 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + (0.42).toFixed(2) + ')',
+                                  line: { color: 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',0.9)', width: 0.8 },
+                                  name: '≥' + Math.round(cts[c].level * 100) + '%', hoverinfo: 'name', showlegend: false });
+                }
+            }
+        }
+        traces.push({ type: 'scattergeo', mode: 'lines', lon: sx, lat: sy, line: { color: isDark ? 'rgba(249,115,22,0.22)' : 'rgba(249,115,22,0.28)', width: 0.9 }, hoverinfo: 'skip', showlegend: false });
+        // Swath — Chavas-style smooth outline, cyan fill.
+        if (M.risk.swath) {
+            var sw = modalSwathRings();
+            for (var s2 = 0; s2 < sw.length; s2++) {
+                var rg = sw[s2], slon = rg.map(function (q) { return U(q[1]); }), slat = rg.map(function (q) { return q[0]; });
+                slon.push(slon[0]); slat.push(slat[0]);
+                allLat = allLat.concat(slat); allLon = allLon.concat(slon);
+                traces.push({ type: 'scattergeo', mode: 'lines', lon: slon, lat: slat, fill: 'toself',
+                              fillcolor: 'rgba(0,229,255,' + (M.risk.swath === 90 ? 0.08 : 0.14) + ')',
+                              line: { color: 'rgba(0,229,255,0.85)', width: 2.2, dash: M.risk.swath === 90 ? 'dash' : 'solid' },
+                              name: M.risk.swath + '% track swath', hoverinfo: 'name', showlegend: false });
+            }
+        }
+        traces.push({ type: 'scattergeo', mode: 'lines+markers', lon: mx, lat: my, line: { color: '#f97316', width: 3 },
+                      marker: { size: mt.map(function (t) { return t % 24 === 0 ? 7 : 0; }), color: mw, colorscale: B.ssScale(), cmin: 0, cmax: 200, line: { color: isDark ? '#0f172a' : '#fff', width: 1 } },
+                      text: mt.map(function (t, k) { return '+' + t + ' h · ' + fmtTauDate(d.init, t) + (mw[k] != null ? ' · ' + Math.round(mw[k]) + ' kt' : ''); }),
+                      hovertemplate: '%{text}<extra>ensemble mean</extra>', showlegend: false });
+        if (M.risk.probe) {
+            traces.push({ type: 'scattergeo', mode: 'markers+text', lon: [U(M.risk.probe.lon)], lat: [M.risk.probe.lat], text: ['probe'], textposition: 'top center',
+                          textfont: { size: 10, color: CYAN }, marker: { size: 11, color: CYAN, line: { color: '#fff', width: 2 } }, hoverinfo: 'skip', showlegend: false });
+            allLat.push(M.risk.probe.lat); allLon.push(U(M.risk.probe.lon));
+        }
+        var rect = el.getBoundingClientRect();
+        var aspect = rect.height > 0 ? Math.max(0.8, rect.width / rect.height) : 2.0;
+        var bounds = B.genesisBounds(my, mx, allLat, allLon, aspect);
+        var insetLat = my.length ? my[0] : 0, insetLon = mx.length ? T().wrapLon(mx[0]) : 0;
+        var layout = B.geoLayout(bounds, { domainY: [0, 1], insetLon: insetLon, insetLat: insetLat, insetDomain: { x: [0.01, 0.17], y: [0.02, 0.36] } });
+        layout.margin = { l: 4, r: 4, t: 8, b: 4 };
+        Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: false });
+    }
+    function renderModalLandfall() {
+        var el = $('rt-genesis-pane-landfall'); if (!el || !M.data) return;
+        if (!S.landMask) {
+            el.innerHTML = '<div class="rt-dm-hint">Loading coastline mask…</div>';
+            ensureLandMask().then(function () { renderModalLandfall(); }).catch(function () { el.innerHTML = '<div class="rt-dm-hint">Land mask unavailable.</div>'; });
+            return;
+        }
+        var d = M.data;
+        if (!M.lf) M.lf = T().landfall(d.members, S.landMask, { maxTau: 360, stepH: 1, horizons: [72, 120, 168] });
+        var lf = M.lf, init = d.init, n = lf.n;
+        var html = '';
+        var preGenesis = !d.alreadyTC;
+        if (!lf.events.length) {
+            html += '<div class="rt-dm-tiles" style="max-width:420px;">' + tile('Landfall chance', '0%', 'no member brings the center over land within 15 days', '#34d399') + '</div>';
+        } else {
+            var q = T().percentiles(lf.taus, [0.1, 0.5, 0.9]), wq = T().percentiles(lf.winds, [0.5]), medCat = T().catOf(wq[0]);
+            html += '<div class="rt-dm-tiles rt-dm-tiles-3" style="max-width:640px;">'
+                + tile('Landfall chance', pct(lf.pAny), 'within 15 d · ' + pct(lf.pBy['120']) + ' by +120 h' + (preGenesis ? ' · of all members, forming or not' : ''), lf.pAny >= 0.5 ? '#ef4444' : lf.pAny >= 0.2 ? '#fb923c' : '#fbbf24')
+                + tile('Median timing', '+' + q[1] + ' h', fmtTauDate(init, q[1]) + ' · 80% in +' + q[0] + '–' + q[2] + ' h')
+                + tile('Intensity at landfall', catLabel(medCat), 'median ' + Math.round(wq[0]) + ' kt among landfalling members', catColor(medCat))
+                + '</div>';
+            html += '<div class="rt-dm-sub-h"><span>When members make landfall</span>' + exportBtn('rt-genesis-lf-chart', 'Landfall timing') + '</div>'
+                + '<div id="rt-genesis-lf-chart" class="rt-dm-chart" style="height:180px;"></div>';
+            // Hotspots: cluster events on a 1° grid, top 5.
+            var cells = {};
+            lf.events.forEach(function (e) { var k = Math.round(e.lat) + ',' + Math.round(e.lon); (cells[k] = cells[k] || []).push(e); });
+            var hot = Object.keys(cells).map(function (k) { return { k: k, ev: cells[k] }; }).sort(function (a, b) { return b.ev.length - a.ev.length; }).slice(0, 5);
+            html += '<div class="rt-dm-sub-h"><span>Where</span><span class="rt-dm-readout-sub">member landfalls grouped to 1°</span></div><div class="rt-genesis-hotspots">';
+            hot.forEach(function (h) {
+                var la = h.ev.reduce(function (a, e) { return a + e.lat; }, 0) / h.ev.length, lo = h.ev.reduce(function (a, e) { return a + e.lon; }, 0) / h.ev.length;
+                var tq = T().percentiles(h.ev.map(function (e) { return e.tau; }), [0.5]), wq2 = T().percentiles(h.ev.filter(function (e) { return e.wind != null; }).map(function (e) { return e.wind; }), [0.5]);
+                html += '<div class="rt-genesis-hot"><span class="rt-genesis-hot-p">' + pct(h.ev.length / n) + '</span><span>near ' + B.fmtLatLon(la, lo) + '</span>'
+                    + '<span class="rt-dm-readout-sub">median ' + fmtTauDate(init, tq[0]) + (wq2[0] != null ? ' · ' + catLabel(T().catOf(wq2[0])) : '') + '</span></div>';
+            });
+            html += '</div>';
+        }
+        html += '<div class="rt-dm-sub-h"><span>Members still tracking the system</span>' + exportBtn('rt-genesis-surv-chart', 'Ensemble survival') + '</div>'
+            + '<div id="rt-genesis-surv-chart" class="rt-dm-chart" style="height:120px;"></div>';
+        html += note('"Landfall" = the member\'s center first crossing from sea to land on a 0.1° coastline mask (small islands and narrow peninsulas can be missed; timing ±1 h).'
+            + (preGenesis ? ' For a pre-genesis cluster the chance is over all members, so it already folds in the odds of forming.' : '')
+            + ' Experimental research guidance from ' + esc(modalModelTag()) + ' — <b>not a forecast</b>. For official track forecasts, watches and warnings see '
+            + '<a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener">NHC</a> / CPHC / JTWC or your national weather service.');
+        el.innerHTML = html;
+        B.whenPlotly(function () {
+            if (lf.events.length) { var lfEl = $('rt-genesis-lf-chart'); if (lfEl) drawLfChartInto(lfEl, lf, init); }
+            var sv = $('rt-genesis-surv-chart'); if (sv) drawSurvivalInto(sv, d.members, T().survival(d.members, allTaus(d.members)).taus);
+        });
+    }
+    function allTaus(members) {
+        var set = {}; Object.keys(members).forEach(function (k) { (members[k].points || []).forEach(function (p) { set[p.tau] = 1; }); });
+        return Object.keys(set).map(Number).sort(function (a, b) { return a - b; });
+    }
+    // Chart helpers shared by card + modal (element-targeted variants).
+    function drawLfChartInto(el, lf, init) {
+        var bin = 12, maxT = 0, cats = ['TD', 'TS', 'C1', 'C2', 'C3', 'C4', 'C5'], byBin = {};
+        for (var i = 0; i < lf.events.length; i++) { var e = lf.events[i], b = Math.floor(e.tau / bin) * bin; if (b > maxT) maxT = b; var c = T().catOf(e.wind); byBin[b] = byBin[b] || {}; byBin[b][c] = (byBin[b][c] || 0) + 1; }
+        var xs = []; for (var t = 0; t <= maxT; t += bin) xs.push(t);
+        var traces = [];
+        for (var ci = 0; ci < cats.length; ci++) {
+            var ys = xs.map(function (t) { return 100 * ((byBin[t] && byBin[t][cats[ci]]) || 0) / lf.n; });
+            if (!ys.some(function (v) { return v > 0; })) continue;
+            traces.push({ type: 'bar', name: catLabel(cats[ci]), x: xs.map(function (t) { return '+' + t + 'h'; }), y: ys, marker: { color: catColor(cats[ci]) },
+                          text: xs.map(function (t) { return fmtTauDate(init, t) + ' – ' + fmtTauDate(init, t + bin); }),
+                          hovertemplate: '%{text}<br>' + catLabel(cats[ci]) + ': %{y:.1f}% of members<extra></extra>' });
+        }
+        var layout = B.chartLayout({ margin: { l: 36, r: 8, t: 6, b: 30 }, fontSize: 10, legend: true,
+            yaxis: { title: { text: '% members', font: { size: 10 } }, rangemode: 'tozero', ticksuffix: '%' }, xaxis: { tickfont: { size: 9 }, nticks: 10 }, extra: { barmode: 'stack' } });
+        layout.legend.font.size = 9;
+        Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true });
+    }
+    function drawSurvivalInto(el, members, taus) {
+        var sv = T().survival(members, taus);
+        var layout = B.chartLayout({ margin: { l: 36, r: 8, t: 6, b: 26 }, fontSize: 10,
+            yaxis: { range: [0, 105], ticksuffix: '%', title: { text: '% members', font: { size: 10 } } }, xaxis: { tickfont: { size: 9 }, nticks: 10 } });
+        Plotly.react(el, [{ type: 'scatter', mode: 'lines', x: sv.taus.map(function (t) { return '+' + t + 'h'; }), y: sv.frac.map(function (f) { return 100 * f; }),
+                            fill: 'tozeroy', fillcolor: 'rgba(0,229,255,0.12)', line: { color: CYAN, width: 2 },
+                            hovertemplate: '%{x}: %{y:.0f}% of members still carry the system<extra></extra>' }], layout, { displayModeBar: false, responsive: true });
+    }
+
     window.RTDM = {
         attach: function (bridge) { B = bridge; },
+        // Global Map
+        globalSetRisk: globalSetRisk, globalSetHorizon: globalSetHorizon, onGlobalData: function () { onGlobalData(); onGlobalDataForPopup(); },
+        globalRiskRowHtml: globalRiskRowHtml, bindGlobalRiskChips: bindGlobalRiskChips, fillPopupLines: fillPopupLines,
+        globalRiskOn: function () { return !!G.thresh; }, clearGlobalRisk: clearGlobalRisk,
+        // DeepMind modal
+        onGenesisDetail: onGenesisDetail, onGenesisClose: onGenesisClose, renderGenesisPane: renderGenesisPane,
+        modalRisk: modalRisk, modalHorizon: modalHorizon, modalSwath: modalSwath, modalProbe: modalProbe,
         onWeatherlab: onWeatherlab, onEnsemble: onEnsemble, onPanels: onPanels, onStormClose: onStormClose,
         setTab: setTab, setRisk: setRisk, setHorizon: setHorizon, toggleEllipses: toggleEllipses, clearPoint: clearPoint,
         toggleLfPoints: toggleLfPoints, loadOther: loadOther, toggleCmpOverlay: toggleCmpOverlay,

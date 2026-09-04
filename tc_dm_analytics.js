@@ -652,6 +652,245 @@
         return out;
     }
 
+    // ── 11. binary-mask boundary tracing → smooth rings ───────────────────
+    // mask: Uint8Array (row-major, row 0 = north) on a grid {lat0, lon0, dLat,
+    // dLon, nx, ny}. Returns rings of [lat, lon] (grid's unwrapped-lon frame),
+    // outer boundaries only (holes dropped), Chaikin-smoothed so the 0.1–0.2°
+    // cell steps read as the smooth Chavas-style swath outlines rather than
+    // staircases. Region cells are traced clockwise in screen (y-down)
+    // space; inner (hole) rings come out with the opposite signed area.
+    function boundaryRings(mask, g, opts) {
+        opts = opts || {};
+        var nx = g.nx, ny = g.ny, smooth = opts.smooth != null ? opts.smooth : 2;
+        var minCells = opts.minCells || 6;
+        function inside(r, c) { return r >= 0 && r < ny && c >= 0 && c < nx && mask[r * nx + c] === 1; }
+        // Directed boundary edges keyed by start corner "x,y".
+        var out = {};
+        function addEdge(x0, y0, x1, y1) { var k = x0 + ',' + y0; (out[k] = out[k] || []).push([x1, y1]); }
+        for (var r = 0; r < ny; r++) for (var c = 0; c < nx; c++) {
+            if (mask[r * nx + c] !== 1) continue;
+            if (!inside(r - 1, c)) addEdge(c, r, c + 1, r);           // top: L→R
+            if (!inside(r, c + 1)) addEdge(c + 1, r, c + 1, r + 1);   // right: T→B
+            if (!inside(r + 1, c)) addEdge(c + 1, r + 1, c, r + 1);   // bottom: R→L
+            if (!inside(r, c - 1)) addEdge(c, r + 1, c, r);           // left: B→T
+        }
+        var rings = [];
+        var keys = Object.keys(out);
+        for (var ki = 0; ki < keys.length; ki++) {
+            var k = keys[ki];
+            while (out[k] && out[k].length) {
+                var start = k.split(',').map(Number), cur = start, ring = [start];
+                var guard = 0;
+                while (guard++ < 1e6) {
+                    var ck = cur[0] + ',' + cur[1], lst = out[ck];
+                    if (!lst || !lst.length) break;
+                    var nxt = lst.pop();
+                    if (nxt[0] === start[0] && nxt[1] === start[1]) break;
+                    ring.push(nxt); cur = nxt;
+                }
+                if (ring.length >= 4) rings.push(ring);
+            }
+        }
+        var result = [];
+        for (var ri = 0; ri < rings.length; ri++) {
+            var rg = rings[ri];
+            // Signed area in grid units (y-down). A single cell traces
+            // TL→TR→BR→BL, which makes this sum NEGATIVE for outer rings;
+            // holes (traced the other way round) come out positive.
+            var area = 0;
+            for (var i = 0; i < rg.length; i++) {
+                var a = rg[i], b = rg[(i + 1) % rg.length];
+                area += (b[0] - a[0]) * (b[1] + a[1]);
+            }
+            if (area >= 0) continue;                 // hole
+            if (Math.abs(area) / 2 < minCells) continue;   // speck
+            var pts = rg;
+            for (var it = 0; it < smooth; it++) pts = chaikinClosed(pts);
+            // Keep rings light for the renderers (Plotly/GL): uniform decimation.
+            var maxPts = opts.maxPts || 700;
+            if (pts.length > maxPts) {
+                var stepK = pts.length / maxPts, dec = [];
+                for (var di = 0; di < pts.length; di += stepK) dec.push(pts[Math.floor(di)]);
+                pts = dec;
+            }
+            result.push(pts.map(function (p) { return [g.lat0 - p[1] * g.dLat, g.lon0 + p[0] * g.dLon]; }));
+        }
+        return result;
+    }
+    function chaikinClosed(pts) {
+        var out = [], n = pts.length;
+        for (var i = 0; i < n; i++) {
+            var p = pts[i], q = pts[(i + 1) % n];
+            out.push([0.75 * p[0] + 0.25 * q[0], 0.75 * p[1] + 0.25 * q[1]]);
+            out.push([0.25 * p[0] + 0.75 * q[0], 0.25 * p[1] + 0.75 * q[1]]);
+        }
+        return out;
+    }
+    // Filled-contour rings of a probability grid at ascending `levels`
+    // (fractions). Draw low→high so higher levels paint on top.
+    function probContours(g, levels, opts) {
+        opts = opts || {};
+        var out = [];
+        if (!g) return out;
+        // Bilinearly upsample the grid first so the iso-lines follow the
+        // field between cell centres instead of stepping cell by cell.
+        var up = opts.upsample || 3;
+        var gg = up > 1 ? upsampleGrid(g, up) : g;
+        for (var li = 0; li < levels.length; li++) {
+            var mask = new Uint8Array(gg.nx * gg.ny);
+            for (var i = 0; i < mask.length; i++) mask[i] = gg.prob[i] >= levels[li] ? 1 : 0;
+            out.push({ level: levels[li], rings: boundaryRings(mask, gg, { smooth: opts.smooth != null ? opts.smooth : 3,
+                                                                          minCells: (opts.minCells || 4) * up * up, maxPts: opts.maxPts }) });
+        }
+        return out;
+    }
+    function upsampleGrid(g, k) {
+        var nx = g.nx * k, ny = g.ny * k, prob = new Float32Array(nx * ny);
+        for (var y = 0; y < ny; y++) {
+            var fy = (y + 0.5) / k - 0.5, r0 = Math.max(0, Math.min(g.ny - 1, Math.floor(fy))), r1 = Math.min(g.ny - 1, r0 + 1), wy = Math.max(0, Math.min(1, fy - r0));
+            for (var x = 0; x < nx; x++) {
+                var fx = (x + 0.5) / k - 0.5, c0 = Math.max(0, Math.min(g.nx - 1, Math.floor(fx))), c1 = Math.min(g.nx - 1, c0 + 1), wx = Math.max(0, Math.min(1, fx - c0));
+                prob[y * nx + x] = (g.prob[r0 * g.nx + c0] * (1 - wx) + g.prob[r0 * g.nx + c1] * wx) * (1 - wy)
+                                 + (g.prob[r1 * g.nx + c0] * (1 - wx) + g.prob[r1 * g.nx + c1] * wx) * wy;
+            }
+        }
+        return { lat0: g.lat0, lon0: g.lon0, dLat: g.dLat / k, dLon: g.dLon / k, nx: nx, ny: ny, prob: prob };
+    }
+
+    // ── 12. track swath — union of position ellipses along the forecast ───
+    // Bivariate-normal 50 % or 90 % ellipses at every 6-h lead, interpolated
+    // hourly between leads so fast movers leave no gaps, rasterized on a fine
+    // grid and traced into a single smooth outline (the ensemble analogue of
+    // the Chavas lifetime wind swath). Returns { rings, level, taus }.
+    function trackSwath(members, opts) {
+        opts = opts || {};
+        var level = opts.level || 0.9, maxTau = opts.maxTau != null ? opts.maxTau : 120;
+        var cell = opts.cellDeg || 0.1, stepH = opts.stepH || 1;
+        var kScale = Math.sqrt(level >= 0.9 ? 4.605 : level >= 0.68 ? 2.279 : 1.386);
+        var tauSet = {};
+        var keys = memberKeys(members);
+        for (var i = 0; i < keys.length; i++) {
+            var pts = members[keys[i]].points || [];
+            for (var j = 0; j < pts.length; j++) if (pts[j].tau <= maxTau) tauSet[pts[j].tau] = 1;
+        }
+        var taus = Object.keys(tauSet).map(Number).sort(function (a, b) { return a - b; });
+        var ells = trackEllipses(members, taus, { minN: opts.minN || 5, nPts: 8 });
+        if (ells.length < 1) return { rings: [], level: level, taus: taus };
+        // Unwrap ellipse centres into one frame.
+        var ref = ells[0].lon;
+        for (var e = 0; e < ells.length; e++) { ells[e].ulon = unwrapLon(ells[e].lon, ref); ref = ells[e].ulon; }
+        // Ellipse frame: angle of the major axis from trackEllipses is
+        // implicit in poly50; recover axis angle from sigma orientation by
+        // refitting: use the 50 % ring's farthest point as the major axis.
+        function axisAngle(el) {
+            var best = 0, bd = -1, kx = 111.2 * Math.cos(el.lat * D2R);
+            for (var q = 0; q < el.poly50.length; q++) {
+                var dx = unwrapLon(el.poly50[q][1], el.lon) - el.lon, dy = el.poly50[q][0] - el.lat;
+                var d = (dx * kx) * (dx * kx) + (dy * 111.2) * (dy * 111.2);
+                if (d > bd) { bd = d; best = Math.atan2(dy * 111.2, dx * kx); }
+            }
+            return best;
+        }
+        var samples = [];
+        for (var a = 0; a < ells.length; a++) {
+            var E = ells[a]; E.ang = axisAngle(E);
+            if (a === 0) samples.push({ lat: E.lat, lon: E.ulon, s1: E.sigmaKm[0], s2: E.sigmaKm[1], ang: E.ang });
+            else {
+                var P = ells[a - 1], nSub = Math.max(1, Math.round((E.tau - P.tau) / stepH));
+                var dAng = E.ang - P.ang; while (dAng > Math.PI / 2) dAng -= Math.PI; while (dAng < -Math.PI / 2) dAng += Math.PI;
+                for (var sIdx = 1; sIdx <= nSub; sIdx++) {
+                    var f = sIdx / nSub;
+                    samples.push({ lat: lerp(P.lat, E.lat, f), lon: lerp(P.ulon, E.ulon, f),
+                                   s1: lerp(P.sigmaKm[0], E.sigmaKm[0], f), s2: lerp(P.sigmaKm[1], E.sigmaKm[1], f),
+                                   ang: P.ang + dAng * f });
+                }
+            }
+        }
+        // Grid extent from sample bounding boxes.
+        var minLat = 90, maxLat = -90, minLon = 1e9, maxLon = -1e9;
+        for (var s0 = 0; s0 < samples.length; s0++) {
+            var sm = samples[s0], rDeg = kScale * sm.s1 / 111.2, rLon = rDeg / Math.max(0.2, Math.cos(sm.lat * D2R));
+            minLat = Math.min(minLat, sm.lat - rDeg); maxLat = Math.max(maxLat, sm.lat + rDeg);
+            minLon = Math.min(minLon, sm.lon - rLon); maxLon = Math.max(maxLon, sm.lon + rLon);
+        }
+        var g = { lat0: Math.min(85, Math.ceil((maxLat + cell) / cell) * cell), lon0: Math.floor((minLon - cell) / cell) * cell,
+                  dLat: cell, dLon: cell };
+        g.ny = Math.max(1, Math.round((g.lat0 - Math.max(-85, Math.floor((minLat - cell) / cell) * cell)) / cell));
+        g.nx = Math.max(1, Math.round((Math.ceil((maxLon + cell) / cell) * cell - g.lon0) / cell));
+        if (g.nx * g.ny > 6e6) return { rings: [], level: level, taus: taus };
+        var mask = new Uint8Array(g.nx * g.ny);
+        for (var si = 0; si < samples.length; si++) {
+            var S = samples[si], kx = 111.2 * Math.cos(S.lat * D2R), ky = 111.2;
+            var A = kScale * S.s1, Bm = kScale * Math.max(S.s2, 3), ca = Math.cos(S.ang), sa = Math.sin(S.ang);
+            var rDegS = A / ky, rLonS = A / kx;
+            var r0 = Math.max(0, Math.floor((g.lat0 - (S.lat + rDegS)) / cell)), r1 = Math.min(g.ny - 1, Math.ceil((g.lat0 - (S.lat - rDegS)) / cell));
+            var c0 = Math.max(0, Math.floor((S.lon - rLonS - g.lon0) / cell)), c1 = Math.min(g.nx - 1, Math.ceil((S.lon + rLonS - g.lon0) / cell));
+            for (var rr = r0; rr <= r1; rr++) {
+                var dy = ((g.lat0 - (rr + 0.5) * cell) - S.lat) * ky;
+                for (var cc = c0; cc <= c1; cc++) {
+                    var idx = rr * g.nx + cc; if (mask[idx]) continue;
+                    var dx = ((g.lon0 + (cc + 0.5) * cell) - S.lon) * kx;
+                    var u = dx * ca + dy * sa, v = -dx * sa + dy * ca;
+                    if ((u * u) / (A * A) + (v * v) / (Bm * Bm) <= 1) mask[idx] = 1;
+                }
+            }
+        }
+        return { rings: boundaryRings(mask, g, { smooth: 3, minCells: 10 }), level: level, taus: taus, grid: g };
+    }
+
+    // ── 13. composite several probability grids (max) into one ────────────
+    function compositeGrids(grids) {
+        grids = (grids || []).filter(Boolean);
+        if (!grids.length) return null;
+        if (grids.length === 1) return grids[0];
+        var cell = grids[0].dLat, refLon = grids[0].lon0 + grids[0].nx * cell / 2;
+        var shifted = grids.map(function (g) {
+            var c = g.lon0 + g.nx * g.dLon / 2, u = unwrapLon(c, refLon);
+            return { g: g, shift: u - c };
+        });
+        var north = -90, south = 90, west = 1e9, east = -1e9;
+        shifted.forEach(function (sg) {
+            var g = sg.g;
+            north = Math.max(north, g.lat0); south = Math.min(south, g.lat0 - g.ny * g.dLat);
+            west = Math.min(west, g.lon0 + sg.shift); east = Math.max(east, g.lon0 + g.nx * g.dLon + sg.shift);
+        });
+        var nx = Math.round((east - west) / cell), ny = Math.round((north - south) / cell);
+        if (nx * ny > 6e6) return null;
+        var prob = new Float32Array(nx * ny), maxP = 0;
+        shifted.forEach(function (sg) {
+            var g = sg.g, rOff = Math.round((north - g.lat0) / cell), cOff = Math.round((g.lon0 + sg.shift - west) / cell);
+            var scale = g.dLat / cell;
+            for (var r = 0; r < g.ny; r++) for (var c = 0; c < g.nx; c++) {
+                var v = g.prob[r * g.nx + c]; if (!(v > 0)) continue;
+                var R = rOff + Math.round(r * scale), C = cOff + Math.round(c * scale);
+                if (R < 0 || R >= ny || C < 0 || C >= nx) continue;
+                var i = R * nx + C; if (v > prob[i]) prob[i] = v; if (v > maxP) maxP = v;
+            }
+        });
+        return { lat0: north, lon0: west, dLat: cell, dLon: cell, nx: nx, ny: ny, prob: prob, maxProb: maxP,
+                 n: grids[0].n, thresh: grids[0].thresh, maxTau: grids[0].maxTau, lonRef: refLon };
+    }
+
+    // ── 14. RI probability straight from paired members ───────────────────
+    // (For the Global Map popup, where only the 50/64-member payload exists.)
+    function riFromMembers(members, opts) {
+        var keys = memberKeys(members), series = [];
+        var tauSet = {};
+        for (var i = 0; i < keys.length; i++) {
+            var m = {}, pts = members[keys[i]].points || [];
+            for (var j = 0; j < pts.length; j++) if (pts[j].wind != null) { m[pts[j].tau] = pts[j].wind; tauSet[pts[j].tau] = 1; }
+            series.push(m);
+        }
+        var taus = Object.keys(tauSet).map(Number).sort(function (a, b) { return a - b; });
+        var ch = {};
+        for (var t = 0; t < taus.length; t++) {
+            var tau = taus[t]; if (!tauSet[tau - 24]) continue;
+            ch[String(tau)] = { dv: series.map(function (m) {
+                return (m[tau] != null && m[tau - 24] != null) ? m[tau] - m[tau - 24] : null; }) };
+        }
+        return riProbability({ intensity_change_24h: ch, n_members: keys.length }, opts);
+    }
+
     // Compact percentile helper for the UI.
     function percentiles(arr, qs) {
         var s = (arr || []).slice().sort(function (a, b) { return a - b; });
@@ -675,6 +914,8 @@
         vsForecast: vsForecast,
         loadLandMask: loadLandMask,
         rasterizeMercator: rasterizeMercator,
+        boundaryRings: boundaryRings, probContours: probContours, trackSwath: trackSwath,
+        compositeGrids: compositeGrids, riFromMembers: riFromMembers,
         percentiles: percentiles,
     };
 }));

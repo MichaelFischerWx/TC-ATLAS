@@ -7795,3 +7795,22 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     .rt-dm-tiles-3 { grid-template-columns: repeat(3, 1fr); }
     .rt-dm-tile-v { font-size: 0.95rem; }
 }
+
+/* ── DeepMind ensemble lines inside the Global Map storm popup ───────── */
+.ir-popup-dm { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(148,163,184,0.18); font-size: 0.68rem; line-height: 1.4; color: var(--text-dim, #94a3b8); }
+.ir-popup-dm b { color: var(--text, #e2e8f0); font-weight: 600; }
+.ir-popup-dm .ir-popup-dm-tag { color: #00e5ff; font-size: 0.6rem; }
+.ir-popup-dm .ir-popup-dm-note { font-size: 0.56rem; opacity: 0.75; margin-top: 2px; }
+/* Point-probe popup on the Global Map wind-risk layer */
+.rt-dm-probe { font-size: 0.7rem; line-height: 1.45; min-width: 190px; }
+.rt-dm-probe .rt-dm-probe-h { font-weight: 600; margin-bottom: 3px; }
+.rt-dm-probe .rt-dm-probe-row { display: flex; justify-content: space-between; gap: 10px; }
+.rt-dm-probe .rt-dm-probe-note { font-size: 0.56rem; opacity: 0.75; margin-top: 4px; }
+/* Modal Wind Risk / Landfall panes */
+.rt-genesis-risk-controls { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 6px 2px 4px; }
+.rt-genesis-risk-controls .rt-dm-row { margin: 0; }
+.rt-genesis-probe { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; font-size: 0.7rem; }
+.rt-genesis-probe input { width: 74px; font-size: 0.7rem; padding: 3px 6px; border-radius: 4px; border: 1px solid var(--border-light, rgba(148,163,184,0.3)); background: var(--surface-raised, transparent); color: var(--text, #e2e8f0); font-variant-numeric: tabular-nums; }
+.rt-genesis-hotspots { font-size: 0.7rem; line-height: 1.5; }
+.rt-genesis-hotspots .rt-genesis-hot { display: flex; gap: 8px; align-items: baseline; }
+.rt-genesis-hotspots .rt-genesis-hot-p { font-weight: 700; min-width: 40px; font-variant-numeric: tabular-nums; }

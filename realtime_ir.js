@@ -6045,6 +6045,8 @@
         // Coastline overlay — Natural Earth 50m GeoJSON as thin black outlines
         // (same approach as global archive) so land masses are clearly visible.
         map.createPane('coastlinePane');
+        // Wind-risk raster + point probe from the DeepMind ensemble (realtime_ir_dm.js).
+        try { map.createPane('dmProbPane').style.zIndex = 380; } catch (e) {}
         map.getPane('coastlinePane').style.zIndex = 450;
         map.getPane('coastlinePane').style.pointerEvents = 'none';
         _loadCoastlineOverlay(map);
@@ -6900,6 +6902,7 @@
             // behind by an advisory cycle.
             var pin = _extrapolateStormPin(s);
             var marker = L.marker([pin.lat, pin.lon], { icon: icon });
+            if (s.atcf_id) _rtStormNames[s.atcf_id] = s.name || s.atcf_id;
 
             // Popup content
             var vmaxStr = s.vmax_kt != null ? s.vmax_kt + ' kt' : '\u2014';
@@ -6944,9 +6947,21 @@
                         + ')">'
                         + 'DeepMind Ensemble</button>'
                     : '') +
+                  // Landfall + RI odds from the system's own ensemble, filled
+                  // on popup open by realtime_ir_dm.js (lazy: first open
+                  // pulls the global WeatherLab payload + land mask).
+                  (s.atcf_id ? '<div class="ir-popup-dm" data-atcf="' + s.atcf_id + '"></div>' : '') +
                 '</div>';
 
             marker.bindPopup(popupHtml, { maxWidth: 260 });
+            if (s.atcf_id && window.RTDM) {
+                (function (id) {
+                    marker.on('popupopen', function () {
+                        var el = document.querySelector('.ir-popup-dm[data-atcf="' + id + '"]');
+                        if (el) { try { window.RTDM.fillPopupLines(id, el); } catch (e) { console.warn('[RTDM]', e); } }
+                    });
+                })(s.atcf_id);
+            }
 
             // Also open detail on double-click
             // + predictive prefetch on hover/popup: warm the browser cache
@@ -14377,8 +14392,20 @@
             fmtLatLon: function (a, b) { return _wlFmtLatLon(a, b); },
             whenPlotly: function (fn) { if (typeof Plotly !== 'undefined') fn(); else _whenPlotly(fn); },
             ga: function (a, p) { _ga(a, p); },
+            // Global Map + DeepMind modal
+            globalMap: function () { return map; },
+            globalWL: function () { return _rtGlobalWLData; },
+            loadGlobalWL: function () { _loadGlobalWeatherlab(); },
+            refreshLayersCount: function () { if (typeof _refreshLayersCount === 'function') _refreshLayersCount(); },
+            rerenderLayersPanel: function () { if (typeof toggleLayersPanel === 'function') { toggleLayersPanel(); toggleLayersPanel(); } },
+            stormNameById: function (id) { return _rtStormNames[id] || null; },
+            geoLayout: function (b, o) { return _dmGeoLayout(b, o); },
+            genesisBounds: function (a, b, c, d, e) { return _genesisBoundsFromMean(a, b, c, d, e); },
+            circMeanLon: function (l) { return _genesisCircMeanLon(l); },
+            ssScale: function () { return _GENESIS_SS_SCALE; },
         });
     }
+    var _rtStormNames = {};   // atcf_id → name, filled as storm markers render
 
     /**
      * Load WeatherLab ensemble data for a storm (called from openStormDetail).
@@ -14501,9 +14528,9 @@
             _rtLoadDmEnsemble(storm);
         }
 
-        // Global Map layer.
+        // Global Map layer (+ the wind-risk layer built from it).
         _rtGlobalWLData = null;
-        if (_rtGlobalWLVisible) {
+        if (_rtGlobalWLVisible || (window.RTDM && window.RTDM.globalRiskOn())) {
             _clearGlobalWeatherlab();
             _loadGlobalWeatherlab();
         }
@@ -15114,6 +15141,7 @@
             .then(function (data) {
                 if (model !== _rtDmModel) return;   // switched mid-flight
                 _rtGlobalWLData = data;
+                if (window.RTDM) { try { window.RTDM.onGlobalData(data); } catch (e) { console.warn('[RTDM]', e); } }
                 if (_rtGlobalWLVisible) _renderGlobalWeatherlab();
                 if (statusEl) {
                     var n = data && data.n_tracks ? data.n_tracks : 0;
@@ -17144,6 +17172,8 @@
                 '<button type="button" class="rt-genesis-jump-btn" data-pane="trends" role="tab">Trends</button>' +
                 '<button type="button" class="rt-genesis-jump-btn" data-pane="intchange" role="tab">Intensity Change</button>' +
                 '<button type="button" class="rt-genesis-jump-btn" data-pane="structure" role="tab">Structure</button>' +
+                '<button type="button" class="rt-genesis-jump-btn" data-pane="risk" role="tab">Wind Risk</button>' +
+                '<button type="button" class="rt-genesis-jump-btn" data-pane="landfall" role="tab">Landfall</button>' +
               '</div>' +
               '<div class="rt-genesis-modal-body">' +
                 // Loading overlay — covers the panel area while the member
@@ -17303,6 +17333,10 @@
                   '<div id="rt-genesis-modal-ike" style="width:100%; height:240px;"></div>' +
                 '</div>' +
                 '</div>' + // close #rt-genesis-pane-structure
+                // ── Wind Risk + Landfall panes (rendered lazily on first
+                //    show by realtime_ir_dm.js — contours, swath, landfall) ──
+                '<div id="rt-genesis-pane-risk" class="rt-genesis-pane" style="display:none;"></div>' +
+                '<div id="rt-genesis-pane-landfall" class="rt-genesis-pane" style="display:none;"></div>' +
                 // ── This-run pane (visible by default) ───────────────
                 '<div id="rt-genesis-pane-thisrun" class="rt-genesis-pane">' +
                 // Sub-nav: the per-disturbance panels stack vertically and
@@ -17510,9 +17544,14 @@
             trends:    m.querySelector('#rt-genesis-pane-trends'),
             intchange: m.querySelector('#rt-genesis-pane-intchange'),
             structure: m.querySelector('#rt-genesis-pane-structure'),
+            risk:      m.querySelector('#rt-genesis-pane-risk'),
+            landfall:  m.querySelector('#rt-genesis-pane-landfall'),
         };
         function _genesisShowPane(name) {
             if (!panes[name]) return;
+            if ((name === 'risk' || name === 'landfall') && window.RTDM) {
+                try { window.RTDM.renderGenesisPane(name); } catch (e) { console.warn('[RTDM]', e); }
+            }
             Object.keys(panes).forEach(function (k) {
                 if (panes[k]) panes[k].style.display = (k === name) ? '' : 'none';
             });
@@ -17591,6 +17630,7 @@
     function closeGenesisDetail() {
         var m = document.getElementById(_GENESIS_MODAL_ID);
         if (!m) return;
+        if (window.RTDM) { try { window.RTDM.onGenesisClose(); } catch (e) {} }
         // Invalidate any in-flight detail fetch so a late response can't
         // repaint into (or reopen state under) a closed modal.
         _genesisDetailReqSeq++;
@@ -18227,6 +18267,19 @@
         _renderGenesisMap(memberKeys, members, mean, stats);
         // Top panel is up — reveal it now; the rest fill in below the fold.
         _genesisShowLoader(false);
+        if (window.RTDM) {
+            try {
+                window.RTDM.onGenesisDetail({
+                    memberKeys: memberKeys, members: members, mean: mean, stats: stats,
+                    init: json.init_time, variant: _detVariant, label: _genesisExportStorm,
+                    alreadyTC: _genesisAlreadyTC,
+                });
+                // Re-render if the user is already sitting on one of our panes.
+                var _actPane = m.querySelector('.rt-genesis-jump-btn.active');
+                var _actName = _actPane && _actPane.getAttribute('data-pane');
+                if (_actName === 'risk' || _actName === 'landfall') window.RTDM.renderGenesisPane(_actName);
+            } catch (e) { console.warn('[RTDM]', e); }
+        }
 
         var _steps = [
             // Intensity + scrubber must run together and after the map: the
@@ -25701,6 +25754,9 @@
                 ? '<span style="font-size:0.66rem; opacity:0.7; margin-left:8px;">experimental</span>'
                 : '')
             + '</div>';
+        // Basin-wide wind-risk layer (P ≥34/50/64 kt within N h from every
+        // active system's ensemble) — rendered + bound by realtime_ir_dm.js.
+        if (window.RTDM && window.RTDM.globalRiskRowHtml) html += window.RTDM.globalRiskRowHtml();
         var genStatus = '';
         if (_rtGenesisLoading) genStatus = 'Loading members…';
         else if (_rtGenesisData) {
@@ -26056,6 +26112,7 @@
         // Ensemble-size (1000 / 50) picker chips. _genesisSetVariant
         // handles the cycle-jump + re-fetch; we just refresh the menu so
         // the active chip + labels update.
+        if (window.RTDM && window.RTDM.bindGlobalRiskChips) window.RTDM.bindGlobalRiskChips(content);
         var dmChips = content.querySelectorAll('.ir-global-dmmodel-chip');
         for (var dm = 0; dm < dmChips.length; dm++) {
             (function (chipEl) {
