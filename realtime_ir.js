@@ -17175,6 +17175,14 @@
                 '<button type="button" class="rt-genesis-jump-btn" data-pane="risk" role="tab">Wind Risk</button>' +
                 '<button type="button" class="rt-genesis-jump-btn" data-pane="landfall" role="tab">Landfall</button>' +
               '</div>' +
+              // Persistent liability / official-guidance strip: visible on
+              // every pane, above the scrolling body, so no figure in this
+              // modal can be read as an NHC / JTWC product.
+              '<div class="rt-genesis-disclaimer" role="note">' +
+                '<b>Not an official forecast.</b> Experimental research output from Google DeepMind ensembles, processed by TC-ATLAS. ' +
+                'Swaths and contours here are ensemble statistics, <b>not the NHC forecast cone</b>. For forecasts, watches and warnings use ' +
+                '<a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener">NHC</a>, CPHC, JTWC or your national meteorological service.' +
+              '</div>' +
               '<div class="rt-genesis-modal-body">' +
                 // Loading overlay — covers the panel area while the member
                 // set fetches and the Plotly charts render (see

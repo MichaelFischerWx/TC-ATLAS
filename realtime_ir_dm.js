@@ -72,6 +72,17 @@
             + 'onclick="window.RTDM.exportChart(\'' + elId + '\',\'' + esc(label).replace(/'/g, '') + '\')">&#8681;</button>';
     }
     function modelTag() { return B ? B.modelTag() : 'DeepMind'; }
+    // On-map liability badge: shown on any map while an ensemble overlay is
+    // drawn, so a screenshot of the map alone still says what it is.
+    var BADGE_TEXT = 'DeepMind ensemble \u00b7 experimental research guidance \u00b7 NOT an official forecast or NHC cone';
+    function showBadge(map, key, text) {
+        if (!map || !map.getContainer) return;
+        var host = map.getContainer(); if (!host) return;
+        var id = 'rt-dm-badge-' + key, el = document.getElementById(id);
+        if (!el) { el = document.createElement('div'); el.id = id; el.className = 'rt-dm-map-badge'; host.appendChild(el); }
+        el.textContent = text || BADGE_TEXT;
+    }
+    function hideBadge(key) { var el = document.getElementById('rt-dm-badge-' + key); if (el && el.parentNode) el.parentNode.removeChild(el); }
     function nMembers() { var w = B && B.wl(); return w ? (w.n_members || Object.keys(w.members || {}).length) : 0; }
 
     // ── panel / tabs ──────────────────────────────────────────────────────
@@ -219,8 +230,8 @@
             + chip('120 h', r.horizon === 120, 'window.RTDM.setHorizon(120)')
             + chip('168 h', r.horizon === 168, 'window.RTDM.setHorizon(168)')
             + '<span class="rt-dm-row-sp"></span>'
-            + chip('Track ellipses', r.ellipses, 'window.RTDM.toggleEllipses()',
-                   '50% and 90% ellipses of member positions every 24 h')
+            + chip('Ensemble ellipses', r.ellipses, 'window.RTDM.toggleEllipses()',
+                   '50% and 90% ellipses of member positions every 24 h — an ensemble statistic, not the NHC forecast cone')
             + '</div>';
         html += '<div id="rt-dm-risk-legend" class="rt-dm-legend"' + (r.thresh ? '' : ' style="display:none;"') + '>'
             + '<span class="rt-dm-legend-t">P(≥' + (r.thresh || 34) + ' kt) within ' + r.horizon + ' h</span>'
@@ -255,6 +266,7 @@
         return S.risk.grids[key] || null;
     }
     function clearRiskLayers() {
+        hideBadge('card');
         removeLayers(S.risk.layers); removeLayers(S.risk.ellipseLayers);
         if (S.risk.marker) { try { B.map().removeLayer(S.risk.marker); } catch (e) {} S.risk.marker = null; }
     }
@@ -271,6 +283,7 @@
             var ov = L.imageOverlay(parts[i].url, parts[i].bounds, { opacity: 0.62, pane: 'dmProbPane', interactive: false });
             ov.addTo(map); S.risk.layers.push(ov);
         }
+        showBadge(map, 'card');
     }
     function drawEllipses() {
         removeLayers(S.risk.ellipseLayers);
@@ -278,14 +291,15 @@
         var taus = [];
         for (var t = 24; t <= S.risk.horizon; t += 24) taus.push(t);
         var ells = T().trackEllipses(wl.members, taus);
+        showBadge(map, 'card');
         for (var i = 0; i < ells.length; i++) {
             var e = ells[i];
             var p90 = L.polygon(e.poly90, { color: CYAN, weight: 1, opacity: 0.55, dashArray: '4,4',
                                             fillColor: CYAN, fillOpacity: 0.06, interactive: false, pane: 'dmProbPane' }).addTo(map);
             var p50 = L.polygon(e.poly50, { color: CYAN, weight: 1.2, opacity: 0.8,
                                             fillColor: CYAN, fillOpacity: 0.14, interactive: true, pane: 'dmProbPane' }).addTo(map);
-            p50.bindTooltip('<b>+' + e.tau + ' h</b> · ' + e.n + ' members<br>50% / 90% position ellipses<br>'
-                + 'σ ' + Math.round(e.sigmaKm[0]) + ' × ' + Math.round(e.sigmaKm[1]) + ' km', { direction: 'top' });
+            p50.bindTooltip('<b>+' + e.tau + ' h</b> · ' + e.n + ' members<br>50% / 90% ensemble position ellipses<br>'
+                + 'σ ' + Math.round(e.sigmaKm[0]) + ' × ' + Math.round(e.sigmaKm[1]) + ' km<br><i>not the NHC cone</i>', { direction: 'top' });
             S.risk.ellipseLayers.push(p90, p50);
         }
     }
@@ -699,6 +713,7 @@
         return G.grids[key];
     }
     function clearGlobalRisk() {
+        hideBadge('global');
         removeLayersOn(gMap(), G.layers);
         if (G.probe) { try { gMap().removeLayer(G.probe); } catch (e) {} G.probe = null; }
         if (G.clickBound && gMap()) { try { gMap().off('click', onGlobalClick); } catch (e) {} G.clickBound = false; }
@@ -720,6 +735,7 @@
             }
         }
         if (!G.clickBound) { map.on('click', onGlobalClick); G.clickBound = true; }
+        showBadge(map, 'global');
         B.refreshLayersCount();
     }
     function onGlobalClick(ev) {
@@ -861,9 +877,9 @@
             + modalChip('≥50 kt', r.thresh === 50, 'window.RTDM.modalRisk(50)') + modalChip('≥64 kt', r.thresh === 64, 'window.RTDM.modalRisk(64)') + '</div>'
             + '<div class="rt-dm-row"><span class="rt-dm-row-l">Within</span>'
             + modalChip('72 h', r.horizon === 72, 'window.RTDM.modalHorizon(72)') + modalChip('120 h', r.horizon === 120, 'window.RTDM.modalHorizon(120)') + modalChip('168 h', r.horizon === 168, 'window.RTDM.modalHorizon(168)') + '</div>'
-            + '<div class="rt-dm-row"><span class="rt-dm-row-l">Track swath</span>'
-            + modalChip('Off', r.swath === 0, 'window.RTDM.modalSwath(0)') + modalChip('50%', r.swath === 50, 'window.RTDM.modalSwath(50)', 'Half of the members stay inside this swath')
-            + modalChip('90%', r.swath === 90, 'window.RTDM.modalSwath(90)', 'Nine in ten members stay inside this swath') + '</div>'
+            + '<div class="rt-dm-row"><span class="rt-dm-row-l">Ensemble swath</span>'
+            + modalChip('Off', r.swath === 0, 'window.RTDM.modalSwath(0)') + modalChip('50%', r.swath === 50, 'window.RTDM.modalSwath(50)', 'Half of the members stay inside this swath — an ensemble statistic, not the NHC forecast cone')
+            + modalChip('90%', r.swath === 90, 'window.RTDM.modalSwath(90)', 'Nine in ten members stay inside this swath — an ensemble statistic, not the NHC forecast cone') + '</div>'
             + '</div>'
             + '<div id="rt-genesis-modal-riskmap" style="width:100%; height:400px;"></div>'
             + '<div class="rt-dm-legend" style="max-width:420px;"><span class="rt-dm-legend-t">' + (r.thresh ? 'P(≥' + r.thresh + ' kt) within ' + r.horizon + ' h — filled contours at 10 / 30 / 50 / 70 / 90 %' : 'Wind-chance layer off') + '</span>'
@@ -875,8 +891,8 @@
             + (r.probe ? '<button type="button" class="rt-dm-chip" onclick="window.RTDM.modalProbe(null)">Clear</button>' : '')
             + '<span class="rt-dm-readout-sub">°N / °E (use negative for S / W)</span></div>'
             + '<div id="rt-genesis-probe-out"></div>'
-            + note('Wind chances count members whose modeled wind field reaches a location within the window, using each member\'s own wind radii; '
-                + 'the swath is the union of the members\' 50 % / 90 % position ellipses through the window (the ensemble analogue of a lifetime wind swath). '
+            + note('<b>Not an official forecast and not the NHC cone.</b> Wind chances count members whose modeled wind field reaches a location within the window, using each member\'s own wind radii; '
+                + 'the ensemble swath is the union of the members\' 50 % / 90 % position ellipses through the window (the ensemble analogue of a lifetime wind swath) and is unrelated to the NHC cone of uncertainty, which is built from official track-error statistics. '
                 + 'Experimental research guidance from ' + esc(modalModelTag()) + ' — <b>not a forecast</b>. Official forecasts, watches and warnings: '
                 + '<a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener">NHC</a> / CPHC / JTWC or your national weather service.');
         el.innerHTML = html;
@@ -966,7 +982,7 @@
                 traces.push({ type: 'scattergeo', mode: 'lines', lon: slon, lat: slat, fill: 'toself',
                               fillcolor: 'rgba(0,229,255,' + (M.risk.swath === 90 ? 0.08 : 0.14) + ')',
                               line: { color: 'rgba(0,229,255,0.85)', width: 2.2, dash: M.risk.swath === 90 ? 'dash' : 'solid' },
-                              name: M.risk.swath + '% track swath', hoverinfo: 'name', showlegend: false });
+                              name: M.risk.swath + '% ensemble swath (not the NHC cone)', hoverinfo: 'name', showlegend: false });
             }
         }
         traces.push({ type: 'scattergeo', mode: 'lines+markers', lon: mx, lat: my, line: { color: '#f97316', width: 3 },
@@ -984,6 +1000,15 @@
         var insetLat = my.length ? my[0] : 0, insetLon = mx.length ? T().wrapLon(mx[0]) : 0;
         var layout = B.geoLayout(bounds, { domainY: [0, 1], insetLon: insetLon, insetLat: insetLat, insetDomain: { x: [0.01, 0.17], y: [0.02, 0.36] } });
         layout.margin = { l: 4, r: 4, t: 8, b: 4 };
+        // Burn the liability note into the map itself (survives screenshots).
+        layout.annotations = (layout.annotations || []).concat([{
+            xref: 'paper', yref: 'paper', x: 0.995, y: 0.99, xanchor: 'right', yanchor: 'top', showarrow: false, align: 'right',
+            text: '<b>Not an official forecast</b><br>' + esc(modalModelTag()) + ' ensemble · experimental<br>'
+                + (M.risk.swath ? M.risk.swath + '% ensemble swath — not the NHC cone' : 'ensemble wind chances — not NHC probabilities'),
+            font: { size: 10, color: isDark ? '#e2e8f0' : '#0f172a' },
+            bgcolor: isDark ? 'rgba(15,23,42,0.72)' : 'rgba(255,255,255,0.78)',
+            bordercolor: 'rgba(0,229,255,0.45)', borderwidth: 1, borderpad: 5,
+        }]);
         Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: false });
     }
     function renderModalLandfall() {
