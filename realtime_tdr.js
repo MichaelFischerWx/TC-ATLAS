@@ -1354,9 +1354,9 @@
             L.push('Largest term: ' + co[0][0] + ' ' + co[0][1] + ' (' + (co[0][2] >= 0 ? '+' : '') + co[0][2].toFixed(2) + ' on the 500 m\u2192150 m ratio)');
         }
         if (p.fix_source === 'hdob') {
-            L.push('Preliminary center: ' + (p.center_method === 'HDOB_WIND+PRES' ? 'wind + pressure centroids' :
+            L.push('Preliminary center: ' + (p.center_method === 'HDOB_WC82' ? 'Willoughby\u2013Chelmow wind center' : p.center_method === 'HDOB_WIND+PRES' ? 'wind + pressure centroids' :
                    p.center_method === 'HDOB_WIND_CTR' ? 'calm-wind centroid' : p.center_method === 'HDOB_PMIN_PLATEAU' ? 'pressure-plateau centroid' : 'flight-level pressure minimum') +
-                   (p.ctr_spread_km != null ? ', ' + Math.round(p.ctr_spread_km) + ' km apart' : '') + ' (no VDM yet)');
+                   (p.ctr_spread_km != null ? (p.center_method === 'HDOB_WC82' ? ', ' + Math.round(p.ctr_spread_km) + ' km from the centroid' : ', ' + Math.round(p.ctr_spread_km) + ' km apart') : '') + ' (no VDM yet)');
         }
         if (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30) {
             L.push('\u26a0 nearest center fix is ' + Math.round(Math.abs(p.fix_dt_min)) + ' min away \u2014 center extrapolated');
