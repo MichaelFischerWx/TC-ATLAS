@@ -25,6 +25,7 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -272,25 +273,35 @@ def _parse_hdob_line(fields: list, base_date: datetime):
     day_off, hh_wrap = divmod(hh, 24)
     obs_dt = base_date.replace(hour=hh_wrap, minute=mm, second=ss) + timedelta(days=day_off)
 
-    # Field 5 is the extrapolated SURFACE pressure (low-level flight) OR the
-    # geopotential-height D-value (higher flight). Same decode as the global
-    # archive HDOB parser (global_archive_api.py): >=5000 ⇒ negative D-value;
-    # <1000 ⇒ 1000+x/10 mb; else x/10 mb. The extrapolated SLP is the headline
-    # surface-pressure number from an eye penetration.
+    # Field 5 is the extrapolated SURFACE pressure OR the geopotential D-value,
+    # and WHICH one is decided by the flight level, not by the value (NHC HDOB
+    # spec): static pressure >= 550.0 mb (at/below the 550-mb level) -> surface
+    # pressure in tenths with the leading 1 dropped ("9462" = 946.2, "0089" =
+    # 1008.9); above 550 mb -> D-value in meters, negative values +5000. Deciding
+    # by value range (the old rule) read every eyewall SLP below 1000 mb — the
+    # headline number of a penetration — as a -4xxx m D-value (Lowell, 2026-09-04:
+    # 931 mb in the eye came through as None), and a +277 m D-value at 547 mb as
+    # a 1027.7-mb surface pressure. Global-archive parser uses the same rule.
     _xxxx = _safe_int(fields[5])
+    _flp = _decode_fl_pres(fields[3])
     extrap_sfc_p_mb = dval_m = None
     if _xxxx is not None:
-        if _xxxx >= 5000:
-            dval_m = -(_xxxx - 5000)
-        elif _xxxx < 1000:
-            extrap_sfc_p_mb = round(1000 + _xxxx / 10.0, 1)
-        else:
-            extrap_sfc_p_mb = round(_xxxx / 10.0, 1)
+        if _flp is not None and _flp >= 550.0:
+            extrap_sfc_p_mb = round(1000 + _xxxx / 10.0, 1) if _xxxx < 1000 else round(_xxxx / 10.0, 1)
+        elif _flp is not None:
+            dval_m = -(_xxxx - 5000) if _xxxx >= 5000 else _xxxx
+        else:   # no usable flight level: fall back to the value-range heuristic
+            if _xxxx >= 5000:
+                dval_m = -(_xxxx - 5000)
+            elif _xxxx < 1000:
+                extrap_sfc_p_mb = round(1000 + _xxxx / 10.0, 1)
+            else:
+                extrap_sfc_p_mb = round(_xxxx / 10.0, 1)
 
     return {
         "t": obs_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "lat": lat, "lon": lon,
-        "fl_pres_mb": _decode_fl_pres(fields[3]),
+        "fl_pres_mb": _flp,
         "geo_alt_m": _safe_int(fields[4]),
         "sfc_p_or_dval": _safe_int(fields[5]),
         "extrap_sfc_p_mb": extrap_sfc_p_mb,
@@ -658,11 +669,128 @@ def _fetch_texts(urls: list) -> dict:
     return out
 
 
-def _fetch_latest_hdob(atcf_id: str, now: datetime) -> list:
+# ── Live-bulletin retention ───────────────────────────────────────────────
+# The tgftp "newest bulletin" feed is a single slot per basin: it holds ONLY the
+# bulletin posted last. With two aircraft up (Lowell, 2026-09-04: AF309 + NOAA9)
+# each new posting evicts the other plane's — and its own previous — 10-min
+# block, while the NHC archive directory trails by 1-2 bulletins. Any block that
+# was seen only in the live slot therefore VANISHED from the track when
+# superseded and REAPPEARED once the archive caught up ("data randomly dropping
+# out and coming back"). Every live bulletin we see is now kept for
+# _LIVE_KEEP_H in-process, and mirrored to GCS so the other Cloud Run instances
+# (and a restarted one) serve the same track. Obs dedup by ISO time in
+# _build_blob makes the archive copy and the retained copy harmless together.
+_LIVE_KEEP_H = 24
+_LIVE_KEEP: dict = {}            # (basin, tail, last_ob_t) -> {"parsed", "text", "seen"}
+_LIVE_KEEP_LOCK = threading.Lock()
+_LIVE_GCS_PREFIX = "recon-live"
+_LIVE_GCS_LIST_TTL = 60
+_live_gcs_list_cache: dict = {}  # basin -> (ts, set(blob names))
+_gcs_recon_bucket = None
+_GCS_RECON_BUCKET_NAME = os.environ.get("GCS_IR_CACHE_BUCKET", "")
+
+
+def _get_recon_gcs_bucket():
+    global _gcs_recon_bucket
+    if not _GCS_RECON_BUCKET_NAME:
+        return None
+    if _gcs_recon_bucket is not None:
+        return _gcs_recon_bucket
+    try:
+        from google.cloud import storage
+        _gcs_recon_bucket = storage.Client().bucket(_GCS_RECON_BUCKET_NAME)
+    except Exception as e:
+        logger.warning("recon-live GCS unavailable: %s", e)
+        _gcs_recon_bucket = None
+    return _gcs_recon_bucket
+
+
+def _live_blob_name(basin: str, tail: str, last_t: str) -> str:
+    return f"{_LIVE_GCS_PREFIX}/{basin}/{last_t[:10]}/{tail}_{last_t.replace('-', '').replace(':', '')}.txt"
+
+
+def _live_gcs_put_async(name: str, text: str):
+    def _put():
+        try:
+            b = _get_recon_gcs_bucket()
+            if b is not None:
+                b.blob(name).upload_from_string(text, content_type="text/plain")
+        except Exception as e:
+            logger.warning("recon-live put %s failed: %s", name, e)
+    threading.Thread(target=_put, daemon=True).start()
+
+
+def _live_gcs_sync(basin: str, now: datetime):
+    """Pull live bulletins other instances retained (listing cached
+    _LIVE_GCS_LIST_TTL s; only unseen objects are downloaded)."""
+    b = _get_recon_gcs_bucket()
+    if b is None:
+        return
+    c = _live_gcs_list_cache.get(basin)
+    if c and (time.time() - c[0]) < _LIVE_GCS_LIST_TTL:
+        names = c[1]
+    else:
+        names = set()
+        try:
+            for d in (now, now - timedelta(days=1)):
+                pfx = f"{_LIVE_GCS_PREFIX}/{basin}/{d.strftime('%Y-%m-%d')}/"
+                for bl in b.list_blobs(prefix=pfx):
+                    names.add(bl.name)
+        except Exception as e:
+            logger.warning("recon-live list failed: %s", e)
+            return
+        _live_gcs_list_cache[basin] = (time.time(), names)
+    with _LIVE_KEEP_LOCK:
+        known = {_live_blob_name(k[0], k[1], k[2]) for k in _LIVE_KEEP}
+    for name in sorted(names - known):
+        try:
+            txt = b.blob(name).download_as_text()
+            parsed = _parse_hdob_bulletin(txt, now)
+        except Exception as e:
+            logger.warning("recon-live get %s failed: %s", name, e)
+            continue
+        if not parsed or not parsed.get("obs"):
+            continue
+        key = (basin, parsed.get("tail"), parsed["obs"][-1].get("t"))
+        with _LIVE_KEEP_LOCK:
+            _LIVE_KEEP.setdefault(key, {"parsed": parsed, "text": txt, "seen": time.time()})
+
+
+def _live_retain(basin: str, fresh: list, now: datetime, since_iso: str = None) -> list:
+    """Record freshly fetched live bulletins, sync the shared store, prune, and
+    return every retained bulletin for the basin (newest slot included) whose
+    last ob falls inside the window."""
+    with _LIVE_KEEP_LOCK:
+        for p in fresh:
+            key = (basin, p.get("tail"), p["obs"][-1].get("t"))
+            if key not in _LIVE_KEEP:
+                _LIVE_KEEP[key] = {"parsed": p, "text": p.get("_text", ""), "seen": time.time()}
+                if p.get("_text"):
+                    _live_gcs_put_async(_live_blob_name(*key), p["_text"])
+    try:
+        _live_gcs_sync(basin, now)
+    except Exception as e:
+        logger.warning("recon-live sync failed: %s", e)
+    cutoff = (now - timedelta(hours=_LIVE_KEEP_H)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    lo = since_iso or cutoff
+    out = []
+    with _LIVE_KEEP_LOCK:
+        for key in list(_LIVE_KEEP):
+            if key[2] < cutoff:
+                del _LIVE_KEEP[key]
+            elif key[0] == basin and key[2] >= lo:
+                out.append(_LIVE_KEEP[key]["parsed"])
+    out.sort(key=lambda p: p["obs"][-1].get("t") or "")
+    return out
+
+
+def _fetch_latest_hdob(atcf_id: str, now: datetime, since_iso: str = None) -> list:
     """Fetch the low-latency 'newest HDOB' feed(s) for this storm's basin and
-    return parsed bulletins (list, possibly empty). Closes the ~20-min archive
-    lag with the freshest leg. NOT cached on URL (the file's *contents* change in
-    place each issuance, unlike the timestamped archive files)."""
+    return parsed bulletins (list, possibly empty) — the ones in the slot NOW
+    plus every earlier live bulletin retained for the basin (see
+    _live_retain). Closes the ~20-min archive lag with the freshest leg. NOT
+    cached on URL (the file's *contents* change in place each issuance, unlike
+    the timestamped archive files)."""
     basin = "EP" if atcf_id[:2].upper() in ("EP", "CP") else "AL"
     urls = _LATEST_HDOB_FEEDS.get(basin, [])
     out = []
@@ -681,8 +809,13 @@ def _fetch_latest_hdob(atcf_id: str, now: datetime) -> list:
         if key in seen:
             continue
         seen.add(key)
+        parsed["_text"] = txt
         out.append(parsed)
-    return out
+    try:
+        return _live_retain(basin, out, now, since_iso)
+    except Exception as e:
+        logger.warning("recon-live retention failed, serving the live slot only: %s", e)
+        return out
 
 
 def _near_track(lat, lon, track_pts, tol_deg=4.0) -> bool:
@@ -1119,7 +1252,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
     # ~20 min. Same accumulation path (dedup by ISO time). Skipped in replay,
     # where the live feed would inject obs from after the simulated clock.
     if live_feed:
-        for parsed in _fetch_latest_hdob(atcf_id, sim_now):
+        for parsed in _fetch_latest_hdob(atcf_id, sim_now, since.strftime("%Y-%m-%dT%H:%M:%SZ")):
             tk = aircraft.setdefault(parsed["tail"], {})
             if parsed.get("storm"):
                 aircraft_names.setdefault(parsed["tail"], set()).add(parsed["storm"])

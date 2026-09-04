@@ -6991,10 +6991,19 @@ def _parse_minob_obs_modern(fields: list) -> dict | None:
     # Field 5 carries the extrapolated surface pressure on low-level legs and the
     # geopotential D-value higher up, distinguished by the same encoding the
     # real-time parser uses: >=5000 is a negative D-value, <1000 is 1000+x/10 mb.
+    # Per the NHC HDOB spec the choice is made by FLIGHT LEVEL: static pressure
+    # >= 550.0 mb -> extrapolated surface pressure (tenths, leading 1 dropped);
+    # above 550 mb -> D-value in meters (negative +5000). Deciding by value range
+    # turned every sub-1000-mb eyewall SLP ("9462" = 946.2 mb) into a bogus
+    # -4xxx m D-value and a modest positive D-value at 547 mb into a 1027-mb SLP.
     d_value_m = None
     sfc_pres_hpa = None
     if d_val_raw is not None:
-        if d_val_raw >= 5000:
+        if fl_pres_mb is not None and fl_pres_mb >= 550.0:
+            sfc_pres_hpa = round(1000 + d_val_raw / 10.0, 1) if d_val_raw < 1000 else round(d_val_raw / 10.0, 1)
+        elif fl_pres_mb is not None:
+            d_value_m = -(d_val_raw - 5000) if d_val_raw >= 5000 else d_val_raw
+        elif d_val_raw >= 5000:
             d_value_m = -(d_val_raw - 5000)
         elif d_val_raw < 1000:
             sfc_pres_hpa = round(1000 + d_val_raw / 10.0, 1)
