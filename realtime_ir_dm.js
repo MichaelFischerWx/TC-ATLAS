@@ -941,11 +941,15 @@
     }
     // Cased black/white dashed official track for scattergeo maps (3 traces).
     function ofclGeoTraces(lon, lat, sz, txt, fc) {
+        // Lines are hover-silent so the wind-chance lattice always wins;
+        // only the 24-h dots carry the official-forecast tooltip.
+        var dl = [], dla = [], dt = [];
+        for (var i = 0; i < lon.length; i++) if (sz[i] > 0) { dl.push(lon[i]); dla.push(lat[i]); dt.push(txt[i]); }
         return [
             { type: 'scattergeo', mode: 'lines', lon: lon, lat: lat, line: { color: ofclCasing(), width: 5 }, opacity: 0.9, hoverinfo: 'skip', showlegend: false, _rtdm: 1 },
-            { type: 'scattergeo', mode: 'lines+markers', lon: lon, lat: lat, text: txt, hovertemplate: '%{text}<extra></extra>',
-              line: { color: ofclInner(), width: 2.4, dash: 'dash' }, marker: { size: sz, color: ofclInner(), line: { color: ofclCasing(), width: 1.6 } },
-              name: ofclLabel(fc), showlegend: false, _rtdm: 1 },
+            { type: 'scattergeo', mode: 'lines', lon: lon, lat: lat, line: { color: ofclInner(), width: 2.4, dash: 'dash' }, hoverinfo: 'skip', showlegend: false, _rtdm: 1 },
+            { type: 'scattergeo', mode: 'markers', lon: dl, lat: dla, text: dt, hovertemplate: '%{text}<extra></extra>',
+              marker: { size: 7, color: ofclInner(), line: { color: ofclCasing(), width: 1.6 } }, name: ofclLabel(fc), showlegend: false, _rtdm: 1 },
         ];
     }
     // Intensity fan (categorical '+Xh' x axis). Valid-time aligned: official
@@ -1131,10 +1135,11 @@
         // Saffir–Simpson colour for intensity; the official track is the DASHED
         // cased line, so the two never read as one.
         traces.push({ type: 'scattergeo', mode: 'lines', lon: mx, lat: my, line: { color: ofclCasing(), width: 4.6 }, opacity: 0.9, hoverinfo: 'skip', showlegend: false });
-        traces.push({ type: 'scattergeo', mode: 'lines+markers', lon: mx, lat: my, line: { color: ofclInner(), width: 2.2 },
-                      marker: { size: mt.map(function (t) { return t % 24 === 0 ? 8 : 0; }), color: mw, colorscale: B.ssScale(), cmin: 0, cmax: 200, line: { color: ofclCasing(), width: 1.4 } },
-                      text: mt.map(function (t, k) { return '+' + t + ' h · ' + fmtTauDate(d.init, t) + (mw[k] != null ? ' · ' + Math.round(mw[k]) + ' kt' : ''); }),
-                      hovertemplate: '%{text}<extra>ensemble mean</extra>', showlegend: false });
+        traces.push({ type: 'scattergeo', mode: 'lines', lon: mx, lat: my, line: { color: ofclInner(), width: 2.2 }, hoverinfo: 'skip', showlegend: false });
+        var dmx = [], dmy = [], dmw = [], dmt = [];
+        mt.forEach(function (t, k) { if (t % 24 === 0) { dmx.push(mx[k]); dmy.push(my[k]); dmw.push(mw[k]); dmt.push('+' + t + ' h · ' + fmtTauDate(d.init, t) + (mw[k] != null ? ' · ' + Math.round(mw[k]) + ' kt' : '')); } });
+        traces.push({ type: 'scattergeo', mode: 'markers', lon: dmx, lat: dmy, text: dmt, hovertemplate: '%{text}<extra>ensemble mean</extra>',
+                      marker: { size: 8, color: dmw, colorscale: B.ssScale(), cmin: 0, cmax: 200, line: { color: ofclCasing(), width: 1.4 } }, showlegend: false });
         // Hover grid: Plotly geo only reports hovers on drawn points, so lay an
         // invisible lattice over the field carrying P(≥34/50/64) per cell.
         // Clicking a lattice point sets the probe (arrival timing below).
@@ -1294,22 +1299,34 @@
         var lf = M.lf, init = d.init, n = lf.n;
         var html = '';
         var preGenesis = !d.alreadyTC;
+        // Modal-native chrome: the same stat row / chart wrap / ⤓ PNG button
+        // the other panes use, so this pane doesn't read as a different app.
+        function mstat(label, value, hint, color) {
+            return '<div class="rt-genesis-stat"><div class="rt-genesis-stat-label">' + label + '</div>'
+                + '<div class="rt-genesis-stat-value"' + (color ? ' style="color:' + color + ';"' : '') + '>' + value + '</div>'
+                + (hint ? '<div class="rt-genesis-stat-hint">' + hint + '</div>' : '') + '</div>';
+        }
+        function msection(title, note, chartId, height, label) {
+            return '<div class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">'
+                + '<button type="button" class="rt-genesis-modal-save" title="Save as PNG" onclick="window.RTDM.exportChart(\'' + chartId + '\',\'' + label + '\')">⤓ PNG</button>'
+                + '<div class="rt-genesis-trend-head"><span class="rt-genesis-trend-title">' + title + '</span>' + (note ? '<span class="rt-genesis-trend-note">' + note + '</span>' : '') + '</div>'
+                + '<div id="' + chartId + '" style="width:100%; height:' + height + 'px;"></div></div>';
+        }
         if (!lf.events.length) {
-            html += '<div class="rt-dm-callout" style="border-color:rgba(52,211,153,0.35); background:rgba(52,211,153,0.08);"><b style="color:#34d399;">Landfall chance 0%</b> — no member brings the center over land within 15 days.</div>';
+            html += '<div class="rt-genesis-stat-row">' + mstat('Landfall chance', '0%', 'no member brings the center over land within 15 days', '#34d399') + '</div>';
         } else {
             var q = T().percentiles(lf.taus, [0.1, 0.5, 0.9]), wq = T().percentiles(lf.winds, [0.5]), medCat = T().catOf(wq[0]);
-            html += '<div class="rt-dm-tiles rt-dm-tiles-3" style="max-width:640px;">'
-                + tile('Landfall chance', pct(lf.pAny), 'within 15 d · ' + pct(lf.pBy['120']) + ' by +120 h' + (preGenesis ? ' · of all members, forming or not' : ''), lf.pAny >= 0.5 ? '#ef4444' : lf.pAny >= 0.2 ? '#fb923c' : '#fbbf24')
-                + tile('Median timing', '+' + q[1] + ' h', fmtTauDate(init, q[1]) + ' · 80% in +' + q[0] + '–' + q[2] + ' h')
-                + tile('Intensity at landfall', catLabel(medCat), 'median ' + Math.round(wq[0]) + ' kt among landfalling members', catColor(medCat))
+            html += '<div class="rt-genesis-stat-row">'
+                + mstat('Landfall chance', pct(lf.pAny), 'within 15 d · ' + pct(lf.pBy['120']) + ' by +120 h' + (preGenesis ? ' · of all members, forming or not' : ''), lf.pAny >= 0.5 ? '#ef4444' : lf.pAny >= 0.2 ? '#fb923c' : '#f59e0b')
+                + mstat('Median timing', '+' + q[1] + ' h', fmtTauDate(init, q[1]) + ' · 80% in +' + q[0] + '–' + q[2] + ' h')
+                + mstat('Intensity at landfall', catLabel(medCat), 'median ' + Math.round(wq[0]) + ' kt among landfalling members', catColor(medCat))
                 + '</div>';
-            html += '<div class="rt-dm-sub-h"><span>When members make landfall</span>' + exportBtn('rt-genesis-lf-chart', 'Landfall timing') + '</div>'
-                + '<div id="rt-genesis-lf-chart" class="rt-dm-chart" style="height:180px;"></div>';
+            html += msection('When members make landfall', '12-h bins, stacked by intensity at landfall', 'rt-genesis-lf-chart', 200, 'Landfall timing');
             // Hotspots: cluster events on a 1° grid, top 5.
             var cells = {};
             lf.events.forEach(function (e) { var k = Math.round(e.lat) + ',' + Math.round(e.lon); (cells[k] = cells[k] || []).push(e); });
             var hot = Object.keys(cells).map(function (k) { return { k: k, ev: cells[k] }; }).sort(function (a, b) { return b.ev.length - a.ev.length; }).slice(0, 5);
-            html += '<div class="rt-dm-sub-h"><span>Where</span><span class="rt-dm-readout-sub">member landfalls grouped to 1°</span></div><div class="rt-genesis-hotspots">';
+            html += '<div class="rt-genesis-trend-head" style="margin-top:14px;"><span class="rt-genesis-trend-title">Where</span><span class="rt-genesis-trend-note">member landfalls grouped to 1°</span></div><div class="rt-genesis-hotspots">';
             hot.forEach(function (h) {
                 var la = h.ev.reduce(function (a, e) { return a + e.lat; }, 0) / h.ev.length, lo = h.ev.reduce(function (a, e) { return a + e.lon; }, 0) / h.ev.length;
                 var tq = T().percentiles(h.ev.map(function (e) { return e.tau; }), [0.5]), wq2 = T().percentiles(h.ev.filter(function (e) { return e.wind != null; }).map(function (e) { return e.wind; }), [0.5]);
@@ -1318,8 +1335,7 @@
             });
             html += '</div>';
         }
-        html += '<div class="rt-dm-sub-h"><span>Members still tracking the system</span>' + exportBtn('rt-genesis-surv-chart', 'Ensemble survival') + '</div>'
-            + '<div id="rt-genesis-surv-chart" class="rt-dm-chart" style="height:120px;"></div>';
+        html += msection('Members still tracking the system', 'share of members that still carry the system at each lead', 'rt-genesis-surv-chart', 140, 'Ensemble survival');
         html += note('"Landfall" = the member\'s center first crossing from sea to land on a 0.1° coastline mask (small islands and narrow peninsulas can be missed; timing ±1 h).'
             + (preGenesis ? ' For a pre-genesis cluster the chance is over all members, so it already folds in the odds of forming.' : '')
             + ' Experimental research guidance from ' + esc(modalModelTag()) + ' — <b>not a forecast</b>. For official track forecasts, watches and warnings see '
