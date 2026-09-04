@@ -154,7 +154,14 @@
       evictIfNeeded();
       _pendingResolve(key);
       if (map) map.triggerRepaint();
+      // First decoded tile of the session: the host can drop its
+      // "loading imagery" placeholder now that pixels are on the way.
+      if (!_firstTileFired && typeof opts.onFirstTile === 'function') {
+        _firstTileFired = true;
+        try { opts.onFirstTile(); } catch (e) { /* host callback — non-fatal */ }
+      }
     }
+    var _firstTileFired = false;
 
     function loadTile(frame, z, x, y, band) {
       band = band || 0;

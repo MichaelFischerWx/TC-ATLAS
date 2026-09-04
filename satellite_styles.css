@@ -138,6 +138,13 @@
    ("Global / Map", "Storm / Satellite"). Shorter forms kick in at
    ≤640px while still leaving room on small tablets. */
 .ir-view-tab .tab-short { display: none; }
+/* Narrow viewports scroll the tab strip; a right-edge fade (toggled by JS
+   only while more tabs are hidden to the right) says so. */
+.ir-view-tabs { position: relative; }
+.ir-view-tabs.has-more {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 34px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 34px), transparent);
+}
 @media (max-width: 640px) {
     .ir-view-tab .tab-full  { display: none; }
     .ir-view-tab .tab-short { display: inline; }

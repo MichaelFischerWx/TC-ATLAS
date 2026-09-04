@@ -2378,7 +2378,8 @@
                 frameMaxZoom: function (f) { return _stormZmaxFor(_ir2aProduct, f); },
                 fetchTile: function (f, z, x, y) { return _v3TileBlob(_ir2aTileUrl(f, z, x, y)); },
                 lut: _idxLutForProduct(_ir2aProduct, _irColormap || 'claude-ir'),
-                onError: function (m) { console.error('[ir2a] ' + m); }
+                onError: function (m) { console.error('[ir2a] ' + m); },
+                onFirstTile: _hideGlobalLoadingPill
             };
             if (_ir2aProduct === 'combo') {
                 glOpts.tileUrl2 = _ir2aTileUrlVis;
@@ -5982,6 +5983,13 @@
     // ═══════════════════════════════════════════════════════════
 
     /** Initialize the Leaflet map */
+    function _hideGlobalLoadingPill() {
+        var pill = document.getElementById('ir-global-loading');
+        if (!pill || pill.classList.contains('is-hidden')) return;
+        pill.classList.add('is-hidden');
+        setTimeout(function () { if (pill.parentNode) pill.parentNode.removeChild(pill); }, 400);
+    }
+
     function initMap() {
         map = L.map('ir-map', {
             center: [20, -40],
@@ -6058,6 +6066,22 @@
         if (_labelsVisible) _labelsLayer.addTo(map);
 
         map.zoomControl.setPosition('topleft');
+
+        // "Loading satellite imagery" pill: a cold load can sit 10+ s on a
+        // bare basemap before the first mosaic tile decodes, which reads as
+        // broken. Hidden by the mosaic layer's first decoded tile (or by a
+        // safety timer so it can never linger if the GL path is unavailable).
+        (function () {
+            var host = document.getElementById('ir-map');
+            if (!host || document.getElementById('ir-global-loading')) return;
+            var pill = document.createElement('div');
+            pill.id = 'ir-global-loading';
+            pill.className = 'ir-global-loading';
+            pill.setAttribute('aria-live', 'polite');
+            pill.innerHTML = '<div class="ir-loader-spinner"></div><span>Loading satellite imagery\u2026</span>';
+            host.appendChild(pill);
+            setTimeout(_hideGlobalLoadingPill, 30000);
+        })();
 
         // Allow zooming in past the GIBS native level; the composite layers
         // upscale (maxNativeZoom stays native) so the satellite stays visible
@@ -6568,6 +6592,24 @@
                 L.DomEvent.disableClickPropagation(bar);
                 L.DomEvent.disableScrollPropagation(bar);
 
+                // Phone: the dock covered the bottom third of the map, so it
+                // starts collapsed to a one-line handle there (CSS hides the
+                // handle on desktop and the dock is always expanded).
+                var handle = L.DomUtil.create('button', 'rt-dock-handle', bar);
+                handle.type = 'button';
+                handle.id = 'ir-dock-handle';
+                function _setDockCollapsed(c) {
+                    bar.classList.toggle('is-collapsed', c);
+                    handle.innerHTML = (c ? 'Satellite loop &amp; DeepMind runs' : 'Hide loop controls')
+                        + '<span class="rt-dock-handle-caret">' + (c ? '&#9650;' : '&#9660;') + '</span>';
+                    handle.setAttribute('aria-expanded', c ? 'false' : 'true');
+                }
+                handle.addEventListener('click', function () {
+                    _setDockCollapsed(!bar.classList.contains('is-collapsed'));
+                });
+                _setDockCollapsed(!!(window.matchMedia
+                    && window.matchMedia('(max-width: 768px)').matches));
+
                 // ── Dock row 0: DeepMind cycle stepper (hidden until the
                 // cyclogenesis layer is on AND ≥2 cycles exist). Populated +
                 // shown/hidden by _updateGenesisCycleBar. Sits above the
@@ -6920,6 +6962,36 @@
             marker.addTo(map);
             stormMarkers.push(marker);
         }
+        _fitNarrowViewToStorms(storms);
+    }
+
+    // On a phone the desktop default view (Atlantic-centered, zoom 3) crops
+    // to an empty strip of ocean with every active system off-screen. Once,
+    // on the first storm render, fit the viewport to the systems instead —
+    // desktop keeps its wide default because the storms are already in view.
+    var _narrowFitDone = false;
+    function _fitNarrowViewToStorms(storms) {
+        if (_narrowFitDone || !map) return;
+        if (!(window.matchMedia && window.matchMedia('(max-width: 768px)').matches)) return;
+        // A deep link is about to open a storm card / basin — don't fight it.
+        if (window.location.hash && window.location.hash.length > 1) { _narrowFitDone = true; return; }
+        var pts = [];
+        for (var i = 0; i < (storms || []).length; i++) {
+            var s = storms[i];
+            if (s && s.lat != null && s.lon != null && isFinite(s.lat) && isFinite(s.lon)) {
+                pts.push([s.lat, s.lon]);
+            }
+        }
+        if (!pts.length) return;
+        _narrowFitDone = true;
+        try {
+            if (pts.length === 1) {
+                map.setView(pts[0], 4, { animate: false });
+            } else {
+                map.fitBounds(L.latLngBounds(pts).pad(0.25),
+                              { animate: false, maxZoom: 5, padding: [24, 24] });
+            }
+        } catch (e) { /* facade without fitBounds — keep default view */ }
     }
 
     // ── Predictive prefetch on hover (Tier-1 UX win) ─────────────
@@ -7469,7 +7541,36 @@
      *  map under a spinner that never resolves. Retry re-opens the storm
      *  card, which re-runs the whole frame pipeline (fresh bundle fetch,
      *  GIBS fallback and all). */
+    var _detailPillArmed = false, _detailPillTimer = null;
+    function _showDetailLoadingPill() {
+        var host = document.getElementById('ir-image-container');
+        if (!host) return;
+        var pill = document.getElementById('ir-detail-loading');
+        if (!pill) {
+            pill = document.createElement('div');
+            pill.id = 'ir-detail-loading';
+            pill.className = 'ir-global-loading';
+            pill.setAttribute('aria-live', 'polite');
+            pill.innerHTML = '<div class="ir-loader-spinner"></div><span>Loading satellite imagery\u2026</span>';
+            host.appendChild(pill);
+        }
+        pill.style.display = '';
+        pill.classList.remove('is-hidden');
+        _detailPillArmed = true;
+        clearTimeout(_detailPillTimer);
+        _detailPillTimer = setTimeout(_hideDetailLoadingPill, 30000);
+    }
+    function _hideDetailLoadingPill() {
+        _detailPillArmed = false;
+        clearTimeout(_detailPillTimer);
+        var pill = document.getElementById('ir-detail-loading');
+        if (!pill || pill.classList.contains('is-hidden')) return;
+        pill.classList.add('is-hidden');
+        setTimeout(function () { pill.style.display = 'none'; }, 400);
+    }
+
     function _showNoImageryError() {
+        _hideDetailLoadingPill();
         var loader = document.getElementById('ir-image-loader');
         if (!loader) return;
         loader.style.display = 'flex';
@@ -9078,6 +9179,11 @@
             zoomDelta: 0.5
         });
         window.__irDetailMap = detailMap;   // console/diagnostics handle
+        // "Loading imagery" pill until the first frame's pixels are on the
+        // GL canvas. The facade's layer 'load' fires when a source is ADDED
+        // (tiles/images stream after), so the frame-progress loader closes
+        // long before anything is visible — this pill waits for GL 'idle'.
+        _showDetailLoadingPill();
         // Env-value hover: while an analysis layer is draped over the storm,
         // hovering reads that layer's value at the cursor (reuses the global
         // map's canvas-sampling tooltip). No-ops when no layer is active.
@@ -9661,10 +9767,15 @@
                 anomEl.title = 'SST anomaly vs OISST climatology';
             } else { anomEl.textContent = ''; anomEl.className = 'ir-fav-sub'; }
         }
-        // Ocean heat content (TCHP).
-        var ohc = oc && oc.ohc_kj_cm2 != null ? oc.ohc_kj_cm2 : null;
+        // Ocean heat content (TCHP). The AOML feed can sit on a months-old
+        // grid; the API nulls the value past 10 days (ohc_stale) and older
+        // cached payloads are caught here by the date check, so a stale
+        // grid reads "n/a" instead of a bogus "0 kJ/cm²".
+        var ohcStale = !!(oc && (oc.ohc_stale || _rtOceanDateAgeDays(oc.ohc_date) > 10));
+        var ohc = oc && oc.ohc_kj_cm2 != null && !ohcStale ? oc.ohc_kj_cm2 : null;
         _favApply('ir-fav-ohc', 'ir-fav-ohc-val', _favOhc(ohc),
             ohc != null ? Math.round(ohc) + ' kJ/cm²' : (oc ? 'n/a' : '…'));
+        var sstStale = !!(oc && sst != null && _rtOceanDateAgeDays(oc.sst_date) > 7);
 
         // Composite ventilation index (from the /shear payload).
         var vent = env && env.ventilation ? env.ventilation : null;
@@ -9683,11 +9794,20 @@
         var note = document.getElementById('ir-fav-note');
         if (note) {
             if (oc && oc.sst_date) {
-                var bits = ['OISST ' + oc.sst_date];
-                if (oc.ohc_date) bits.push('TCHP ' + oc.ohc_date);
+                var bits = ['OISST ' + oc.sst_date + (sstStale ? ' (stale)' : '')];
+                if (ohcStale) bits.push('TCHP feed stale — last grid ' + oc.ohc_date);
+                else if (oc.ohc_date) bits.push('TCHP ' + oc.ohc_date);
                 note.textContent = bits.join(' · ');
             } else if (oc) { note.textContent = ''; }
         }
+    }
+    /** Whole days between a YYYY-MM-DD source date and now; Infinity when
+     *  the date is missing/unparseable so callers treat it as stale. */
+    function _rtOceanDateAgeDays(iso) {
+        if (!iso) return Infinity;
+        var t = Date.parse(iso);
+        if (!isFinite(t)) return Infinity;
+        return (Date.now() - t) / 86400000;
     }
     /** Fetch OISST SST/anomaly/relative + AOML TCHP at the storm center and
      *  refresh the favorability meters. Cached per storm; quiet on failure. */
@@ -10656,6 +10776,23 @@
         // Bundle path may leave null placeholders for frames that failed
         // server-side; skip them rather than throwing on .setOpacity().
         if (!animFrameLayers[idx]) return;
+        if (_detailPillArmed) {
+            _detailPillArmed = false;
+            var _pillLy = animFrameLayers[idx];
+            if (_pillLy && typeof _pillLy._probeLoad === 'function') {
+                // Facade image overlay: its 'load' is a real Image() probe of
+                // the frame URL (fires once; already-fired overlays never
+                // re-fire, hence the _fired check).
+                if (_pillLy._fired) _hideDetailLoadingPill();
+                else _pillLy.on('load', _hideDetailLoadingPill);
+            } else {
+                // Tile-backed frame (lite path): first GL idle after this
+                // frame's tiles land. A playing loop never idles, so the
+                // 30 s safety timer in _showDetailLoadingPill backstops it.
+                try { detailMap._gl.once('idle', _hideDetailLoadingPill); }
+                catch (e) { _hideDetailLoadingPill(); }
+            }
+        }
 
         // Ensure this frame + the lookahead are decoded, evict the rest.
         _applyDecodeWindow(animFrameLayers, idx);
@@ -17908,7 +18045,15 @@
         var _detSize = json.ensemble_size
             || _genesisVariantNominal(_detVariant);
         var stats = _computeGenesisStats(memberKeys, members, _detSize);
-        _renderGenesisStatsStrip(stats, memberKeys.length);
+        // A cluster paired with an already-classified ATCF system gets the
+        // developed-storm strip (current intensity + forecast peak) instead
+        // of formation odds that trivially read 100% / +0 h for a hurricane.
+        var _metaEarly = _genesisDisturbanceMeta[json.track_id];
+        var _devMatch = (_metaEarly && _metaEarly.atcfMatch
+                         && _metaEarly.atcfMatch.atcfId
+                         && !_irIsInvest(_metaEarly.atcfMatch.atcfId))
+            ? _metaEarly.atcfMatch : null;
+        _renderGenesisStatsStrip(stats, memberKeys.length, _devMatch);
         // "Already a TC": genesis has effectively already happened (median
         // first-34 kt at +0 h), so formation probability / genesis time are
         // trivially 100% / +0 h and meaningless. The overall summary figure
@@ -17964,6 +18109,12 @@
                 _openStormBtn.setAttribute('data-atcf-id',
                                            _metaForSub.atcfMatch.atcfId);
                 _openStormBtn.style.display = '';
+                // For a classified storm the IR card is the main event —
+                // make the button read as the primary action.
+                _openStormBtn.classList.toggle('is-primary', !!_devMatch);
+                _openStormBtn.textContent = _devMatch
+                    ? '→ IR Detail: ' + (_devMatch.name || _devMatch.atcfId)
+                    : '→ IR Detail';
             } else {
                 _openStormBtn.removeAttribute('data-atcf-id');
                 _openStormBtn.style.display = 'none';
@@ -18832,9 +18983,14 @@
         };
     }
 
-    function _renderGenesisStatsStrip(stats, nMembers) {
+    function _renderGenesisStatsStrip(stats, nMembers, devMatch) {
         var el = document.getElementById('rt-genesis-modal-stats');
         if (!el) return;
+        el.classList.toggle('rt-genesis-stat-row-dev', !!devMatch);
+        if (devMatch) {
+            _renderDevelopedStatsStrip(el, stats, nMembers, devMatch);
+            return;
+        }
         var formPct = (stats.formationProb * 100).toFixed(0) + '%';
         var medGen = (stats.genesisMedianTau != null)
             ? '+' + stats.genesisMedianTau + ' h'
@@ -18860,6 +19016,60 @@
             tile('Peak Vmax · P10 / P50 / P90',
                  p10 + ' · ' + p50 + ' · ' + p90,
                  'across cluster member lifetime-max intensities');
+    }
+
+    /** Stats strip for a cluster paired with a classified storm. Genesis
+     *  has already happened, so lead with where the storm IS (official
+     *  intensity) and where the ensemble takes it (peak spread + timing),
+     *  which is what a user clicking a hurricane pin is asking. */
+    function _renderDevelopedStatsStrip(el, stats, nMembers, m) {
+        function tile(label, value, hint) {
+            return '<div class="rt-genesis-stat">'
+                +    '<div class="rt-genesis-stat-label">' + label + '</div>'
+                +    '<div class="rt-genesis-stat-value">' + value + '</div>'
+                +    (hint ? '<div class="rt-genesis-stat-hint">' + hint + '</div>' : '')
+                + '</div>';
+        }
+        var s = null;
+        for (var i = 0; i < stormData.length; i++) {
+            if (String(stormData[i].atcf_id || '').toUpperCase() === String(m.atcfId).toUpperCase()) {
+                s = stormData[i]; break;
+            }
+        }
+        var vmax = s && s.vmax_kt != null ? s.vmax_kt : m.vmaxKt;
+        var cat = s ? (s.category || windToCategory(s.vmax_kt)) : null;
+        var catStr = cat ? categoryShort(cat) : (m.category || '');
+        var mslp = s && s.mslp_hpa != null ? ' · ' + s.mslp_hpa + ' hPa' : '';
+        var nowVal = vmax != null ? Math.round(vmax) + ' kt' : '—';
+        var p10 = stats.peakP10 != null ? stats.peakP10.toFixed(0) + ' kt' : '—';
+        var p50 = stats.peakP50 != null ? stats.peakP50.toFixed(0) + ' kt' : '—';
+        var p90 = stats.peakP90 != null ? stats.peakP90.toFixed(0) + ' kt' : '—';
+        // Median hour of each member's lifetime-max intensity — "when does
+        // the ensemble think this storm peaks" — plus the share of members
+        // whose peak is still ahead of the init time.
+        var taus = (stats.peakTaus || []).filter(function (t) { return t != null && isFinite(t); })
+            .sort(function (a, b) { return a - b; });
+        var medTau = taus.length ? taus[Math.floor((taus.length - 1) / 2)] : null;
+        var ahead = taus.filter(function (t) { return t > 0; }).length;
+        var aheadPct = taus.length ? Math.round(100 * ahead / taus.length) : null;
+        var strengthen = (vmax != null && stats.peakP50 != null)
+            ? (stats.peakP50 - vmax) : null;
+        var trendStr = strengthen == null ? ''
+            : (strengthen >= 5 ? 'median peak +' + Math.round(strengthen) + ' kt above current'
+               : strengthen <= -5 ? 'median peak ' + Math.round(strengthen) + ' kt below current (weakening)'
+               : 'median peak near current intensity');
+        el.innerHTML =
+            tile('Current intensity',
+                 nowVal + (catStr ? ' · ' + catStr : '') ,
+                 'official ' + m.atcfId + ' advisory' + mslp) +
+            tile('Forecast peak Vmax · P10 / P50 / P90',
+                 p10 + ' · ' + p50 + ' · ' + p90,
+                 trendStr || ('across ' + nMembers + ' member lifetime-max intensities')) +
+            tile('Time of peak (median)',
+                 medTau != null ? (medTau <= 0 ? 'now' : '+' + medTau + ' h') : '—',
+                 aheadPct != null
+                     ? aheadPct + '% of members peak after this run\'s init time'
+                     : '');
     }
 
     /* Theme palette + SS palette helpers ─────────────────────────
@@ -25388,6 +25598,10 @@
      *  Groups are: FORECAST (DeepMind + Genesis), ANALYSIS (env layers
      *  grouped by physical category), WIND BARBS, and a shared opacity
      *  slider that drives every env layer. */
+    var _lpGroupOpen = (function () {
+        try { return JSON.parse(localStorage.getItem('tca_lp_groups') || '{}') || {}; }
+        catch (e) { return {}; }
+    })();
     function _renderLayersPanel() {
         var panel = document.getElementById('ir-layers-panel');
         // Write content into the dedicated sub-div so the persistent
@@ -25676,13 +25890,32 @@
         }
 
         // ── ANALYSIS (env grouped by physical category) ─────────────
+        // Collapsible groups: 17 analysis + 5 wind rows made the panel ~3
+        // screens tall. Each physical group folds to one line (with an "N on"
+        // badge when it holds an active layer); a group with an active layer
+        // or one the user opened stays open across re-renders.
+        function groupOpen(key, nOn) {
+            return nOn > 0 || _lpGroupOpen[key] === true;
+        }
+        function groupHead(label, n, nOn) {
+            return '<summary class="ir-lp-group-head">' + label
+                + (nOn ? '<span class="ir-lp-group-count">' + nOn + ' on</span>'
+                       : '<span class="ir-lp-group-n">' + n + '</span>')
+                + '</summary>';
+        }
+        var envOn = envLayers.filter(function (L_) { return !!_rtEnvActive[L_.name]; }).length;
         if (envLayers.length) {
-            html += '<div class="ir-global-menu-section with-divider">Analysis</div>';
+            html += '<div class="ir-global-menu-section with-divider">Analysis'
+                + (envOn ? '<span class="ir-lp-section-count">' + envOn + ' on</span>' : '')
+                + '</div>';
             for (var ggi = 0; ggi < _ENV_MENU_GROUPS.length; ggi++) {
                 var grp = _ENV_MENU_GROUPS[ggi];
                 var inGroup = envLayers.filter(grp.match);
                 if (inGroup.length === 0) continue;
-                html += '<div class="ir-global-menu-subhead">' + grp.label + '</div>';
+                var gOn = inGroup.filter(function (L_) { return !!_rtEnvActive[L_.name]; }).length;
+                html += '<details class="ir-lp-group" data-group="' + _escAttr(grp.label) + '"'
+                    + (groupOpen(grp.label, gOn) ? ' open' : '') + '>'
+                    + groupHead(grp.label, inGroup.length, gOn);
                 for (var li = 0; li < inGroup.length; li++) {
                     var L_ = inGroup[li];
                     html += row({
@@ -25695,13 +25928,17 @@
                         checked: !!_rtEnvActive[L_.name]
                     });
                 }
+                html += '</details>';
             }
             // Anything env-categorized that didn't match a group
             var ungrouped = envLayers.filter(function (L_) {
                 return !_ENV_MENU_GROUPS.some(function (g) { return g.match(L_); });
             });
             if (ungrouped.length) {
-                html += '<div class="ir-global-menu-subhead">Other</div>';
+                var uOn = ungrouped.filter(function (L_) { return !!_rtEnvActive[L_.name]; }).length;
+                html += '<details class="ir-lp-group" data-group="Other"'
+                    + (groupOpen('Other', uOn) ? ' open' : '') + '>'
+                    + groupHead('Other', ungrouped.length, uOn);
                 for (var ui = 0; ui < ungrouped.length; ui++) {
                     var Lu = ungrouped[ui];
                     html += row({
@@ -25713,12 +25950,19 @@
                         checked: !!_rtEnvActive[Lu.name]
                     });
                 }
+                html += '</details>';
             }
         }
 
         // ── WIND BARBS ──────────────────────────────────────────────
         if (windLayers.length) {
-            html += '<div class="ir-global-menu-section with-divider">Wind Barbs</div>';
+            var wOn = windLayers.filter(function (L_) { return !!_rtEnvActive[L_.name]; }).length;
+            html += '<div class="ir-global-menu-section with-divider">Wind Barbs'
+                + (wOn ? '<span class="ir-lp-section-count">' + wOn + ' on</span>' : '')
+                + '</div>';
+            html += '<details class="ir-lp-group" data-group="Wind Barbs"'
+                + (groupOpen('Wind Barbs', wOn) ? ' open' : '') + '>'
+                + groupHead('Levels', windLayers.length, wOn);
             for (var wi = 0; wi < windLayers.length; wi++) {
                 var WL = windLayers[wi];
                 // Compact level label: strip "Wind Barbs" suffix. Handles
@@ -25735,6 +25979,7 @@
                     checked: !!_rtEnvActive[WL.name]
                 });
             }
+            html += '</details>';
         }
 
         // ── Microwave is NOT listed here ──────────────────────────
@@ -25757,6 +26002,13 @@
         }
 
         content.innerHTML = html;
+        // Remember which analysis groups the user opened (session + reload).
+        Array.prototype.forEach.call(content.querySelectorAll('details.ir-lp-group'), function (d) {
+            d.addEventListener('toggle', function () {
+                _lpGroupOpen[d.getAttribute('data-group')] = d.open;
+                try { localStorage.setItem('tca_lp_groups', JSON.stringify(_lpGroupOpen)); } catch (e) {}
+            });
+        });
 
         // ── Wire up change handlers ─────────────────────────────────
         // The whole row is a <label> wrapping the checkbox, so any click
@@ -28571,6 +28823,7 @@
             card.appendChild(meta);
             listEl.appendChild(card);
         }
+        _rtMwCapStormList(listEl, px);
 
         // Drain the thumbnail draw queue with bounded concurrency. Desktop:
         // limit = task count → every draw starts immediately (unchanged from
@@ -28586,6 +28839,29 @@
             }
         }
         _mwPump();
+    }
+
+    // Storm-card sidebar only: show the newest few passes and fold the rest
+    // behind "Show all" so the list no longer needs its own scroll box (which
+    // trapped the mouse wheel and hid the sections below it). The satellite
+    // tab's panel keeps the full list — it has the room.
+    var _RT_MW_CARD_CAP = 4;
+    function _rtMwCapStormList(listEl, px) {
+        if (px !== 'rt-mw-storm' || !listEl) return;
+        var cards = Array.prototype.filter.call(listEl.children, function (c) {
+            return c.classList && c.classList.contains('rt-mw-storm-card');
+        });
+        if (cards.length <= _RT_MW_CARD_CAP + 1) return;
+        for (var i = _RT_MW_CARD_CAP; i < cards.length; i++) cards[i].classList.add('rt-mw-card-hidden');
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'rt-mw-show-all';
+        btn.textContent = 'Show all ' + cards.length + ' passes';
+        btn.addEventListener('click', function () {
+            for (var j = 0; j < cards.length; j++) cards[j].classList.remove('rt-mw-card-hidden');
+            btn.remove();
+        });
+        listEl.appendChild(btn);
     }
 
     // Crop a storm-centered sub-rectangle out of the pass PNG. The
@@ -31816,9 +32092,26 @@
         if (section) section.style.display = 'none';
     }
 
+    // Narrow viewports scroll the view-tab strip; toggle a right-edge fade
+    // while tabs are still hidden past the right edge so the strip reads as
+    // scrollable ("Recon" / "Experimental" were simply cut off on a phone).
+    function _initTabStripHint() {
+        var strip = document.querySelector('.ir-view-tabs');
+        if (!strip) return;
+        function upd() {
+            var more = strip.scrollWidth - strip.clientWidth - strip.scrollLeft > 6;
+            strip.classList.toggle('has-more', more);
+        }
+        strip.addEventListener('scroll', upd, { passive: true });
+        window.addEventListener('resize', upd);
+        upd();
+        setTimeout(upd, 500);   // after web fonts settle
+    }
+
     function init() {
         initMap();
         bindEvents();
+        _initTabStripHint();
 
         // Discover the live RT bundle version (best-effort, non-blocking).
         // Kicks off immediately so the correct prefix is usually set before

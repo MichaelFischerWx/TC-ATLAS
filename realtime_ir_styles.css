@@ -7554,6 +7554,173 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     background: rgba(139, 92, 246, 0.25);
 }
 
+
+/* ════════════════════════════════════════════════════════════════
+   UX pass 2026-09-03 (GA: RT page = 63% of views, 27% of users on phones)
+   ════════════════════════════════════════════════════════════════ */
+
+/* Genesis modal — developed-storm variant of the stats strip. Blue instead
+   of the pre-genesis orange so "this is a classified storm" reads at a glance,
+   and the → IR Detail button becomes the primary (solid) action. */
+.rt-genesis-stat-row.rt-genesis-stat-row-dev {
+    background: rgba(46, 125, 255, 0.08);
+    border-color: rgba(46, 125, 255, 0.35);
+}
+[data-theme="dark"] .rt-genesis-stat-row.rt-genesis-stat-row-dev {
+    background: rgba(46, 125, 255, 0.12);
+    border-color: rgba(46, 125, 255, 0.40);
+}
+.rt-genesis-modal-open-storm.is-primary {
+    background: #2e7dff;
+    color: #ffffff;
+    border-color: #2e7dff;
+    box-shadow: 0 2px 8px rgba(46, 125, 255, 0.35);
+}
+.rt-genesis-modal-open-storm.is-primary:hover { background: #1f6be6; }
+[data-theme="dark"] .rt-genesis-modal-open-storm.is-primary { color: #ffffff; }
+
+/* Storm-card sidebar: the microwave pass list was its own 460px scroll box
+   inside the scrolling sidebar, so a mouse wheel got trapped in it and the
+   ASCAT / Radar / Official-forecast sections below were hard to reach. Let
+   it grow to its content; the JS caps it at a few passes with "Show all". */
+#rt-mw-storm-list { max-height: none; overflow: visible; padding-right: 0; }
+#rt-mw-storm-list .rt-mw-card-hidden { display: none; }
+.rt-mw-show-all {
+    align-self: flex-start;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim, #64748b);
+    border-radius: 6px;
+    font: 600 0.7rem 'DM Sans', sans-serif;
+    padding: 5px 10px;
+    cursor: pointer;
+}
+.rt-mw-show-all:hover { color: var(--text); border-color: rgba(46, 125, 255, 0.5); }
+
+/* Model Forecasts — the toggle used to sit alone with nothing under it. */
+.rt-models-hint {
+    font-size: 0.68rem;
+    color: var(--text-dim, #64748b);
+    margin: -2px 0 6px;
+    line-height: 1.35;
+}
+
+/* Global map: "loading imagery" pill until the first mosaic tile decodes. */
+.ir-global-loading {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 650;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 14px;
+    border-radius: 20px;
+    background: rgba(15, 23, 42, 0.78);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #e2e8f0;
+    font: 500 0.78rem 'DM Sans', sans-serif;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    transition: opacity 0.25s ease;
+}
+.ir-global-loading.is-hidden { opacity: 0; }
+.ir-global-loading .ir-loader-spinner { width: 14px; height: 14px; border-width: 2px; }
+
+/* Global-map animation dock: collapsible on phones. The dock (DeepMind cycle
+   stepper + scrubber + colorbar) covered the bottom third of a 390px map. A
+   handle row keeps the loop one tap away; collapsed is the phone default. */
+.rt-dock-handle {
+    display: none;
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: #cbd5e1;
+    font: 600 0.72rem 'DM Sans', sans-serif;
+    padding: 4px 0 2px;
+    cursor: pointer;
+    text-align: left;
+}
+.rt-dock-handle .rt-dock-handle-caret { float: right; opacity: 0.8; }
+@media (max-width: 768px) {
+    .rt-dock-handle { display: block; }
+    .rt-anim-bar.is-collapsed { padding: 4px 10px; min-width: 200px; }
+    .rt-anim-bar.is-collapsed .rt-anim-row,
+    .rt-anim-bar.is-collapsed .rt-dock-cycle { display: none !important; }
+    /* The control cluster wraps into rows at the top-right; keep those rows
+       clear of the ☰ Display pill pinned top-left so the IR/Vis/WV segment
+       never slides underneath it. */
+    .ir-layers-wrap { max-width: calc(100vw - 64px); }
+    /* Storm-card header: let the name share the row with ← All Storms so the
+       sticky block above the map is two rows, not three. */
+    .ir-detail-header { gap: 6px 8px; padding: 6px 10px; }
+    .ir-detail-title { flex: 1 1 auto; }
+}
+
+/* Layers panel — collapsible analysis groups + sticky section headers. */
+.ir-layers-panel .ir-global-menu-section.with-divider {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: rgba(22, 27, 36, 0.97);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.ir-lp-section-count,
+.ir-lp-group-count {
+    margin-left: auto;
+    background: rgba(46, 125, 255, 0.22);
+    color: #93c5fd;
+    border-radius: 9px;
+    padding: 1px 7px;
+    font-size: 0.58rem;
+    font-weight: 600;
+    text-transform: none;
+    letter-spacing: 0;
+}
+.ir-lp-group { border: none; margin: 0; padding: 0; }
+.ir-lp-group-head {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px 4px 8px;
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #94a3b8;
+    user-select: none;
+    -webkit-user-select: none;
+}
+.ir-lp-group-head::-webkit-details-marker { display: none; }
+.ir-lp-group-head::before {
+    content: '\25B8';
+    font-size: 0.7rem;
+    line-height: 1;
+    opacity: 0.75;
+    transition: transform 0.12s ease;
+}
+.ir-lp-group[open] > .ir-lp-group-head::before { transform: rotate(90deg); }
+.ir-lp-group-head:hover { color: #e2e8f0; background: rgba(255, 255, 255, 0.04); }
+.ir-lp-group-n {
+    margin-left: auto;
+    color: #64748b;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+}
+.ir-lp-group[open] > .ir-lp-group-head { color: #cbd5e1; }
+.ir-lp-group > .ir-global-menu-row { padding-left: 22px; }
+@media (max-width: 768px) {
+    .ir-layers-panel .ir-lp-group-head { padding-left: 14px; padding-right: 14px; font-size: 0.66rem; min-height: 34px; }
+    .ir-layers-panel .ir-lp-group > .ir-global-menu-row { padding-left: 26px; }
+}
+
 /* ── DeepMind Ensemble tabbed panel (realtime_ir_dm.js) ─────────────────
    One compact module for the ensemble diagnostics: Intensity · Wind Risk ·
    Landfall · Compare. Tabs keep the storm card short; each tab owns its own

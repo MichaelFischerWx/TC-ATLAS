@@ -13658,11 +13658,22 @@ def get_storm_shear(
 # griddap .json — an HTTP GET + tiny JSON parse, so the API image only needs
 # `requests` (no OPeNDAP / NetCDF stack). Powers the Storm Info favorability
 # meters. Cached per (storm, UTC day); refreshes daily.
+# Near-real-time (preliminary) OISST first: the "final" aggregation lags by
+# two weeks or more (it was stuck at 2026-08-19 on 2026-09-03), which put a
+# 15-day-old SST on every storm card. NRT is current to ~1 day; the final
+# dataset is only the fallback when NRT has no row for the point.
 _OISST_ERDDAP = ("https://coastwatch.pfeg.noaa.gov/erddap/griddap/"
-                 "ncdcOisst21Agg_LonPM180.json")
+                 "ncdcOisst21NrtAgg_LonPM180.json")
+_OISST_ERDDAP_FINAL = ("https://coastwatch.pfeg.noaa.gov/erddap/griddap/"
+                       "ncdcOisst21Agg_LonPM180.json")
 _TCHP_ERDDAP = "https://erddap.aoml.noaa.gov/hdb/erddap/griddap/TCHP.json"
+# The AOML TCHP feed stops updating for months at a time (last grid
+# 2026-01-26 as of 2026-09-03). Older than this and the number is not the
+# storm's ocean heat content — report it as missing but keep the date so the
+# card can say why.
+_TCHP_MAX_AGE_DAYS = 10
 _OCEAN_CACHE_TTL = 6 * 3600       # 6h; OISST/TCHP update ~daily
-_OCEAN_CACHE_VER = "ocean-v1"
+_OCEAN_CACHE_VER = "ocean-v2"     # v2: NRT OISST + TCHP staleness gate
 _ocean_mem_cache: dict = {}
 _ocean_mem_lock = threading.Lock()
 _OCEAN_MEM_MAX = 200
@@ -13724,10 +13735,21 @@ _sst_point_lock = threading.Lock()
 _sst_point_inflight: set = set()
 
 
-def _oisst_point_url(lat: float, lon: float) -> str:
+def _oisst_point_url(lat: float, lon: float, final: bool = False) -> str:
     lon180 = _norm_lon180(lon)
     sel = f"%5B(last)%5D%5B(0.0)%5D%5B({lat:.4f})%5D%5B({lon180:.4f})%5D"
-    return f"{_OISST_ERDDAP}?sst{sel},anom{sel}"
+    base = _OISST_ERDDAP_FINAL if final else _OISST_ERDDAP
+    return f"{base}?sst{sel},anom{sel}"
+
+
+def _oisst_point_row(lat: float, lon: float, timeout: float) -> Optional[dict]:
+    """NRT OISST row for the point, falling back to the final aggregation
+    only when NRT returns nothing (network miss or no row)."""
+    row = _erddap_point_json(_oisst_point_url(lat, lon), timeout=timeout)
+    if row:
+        return row
+    return _erddap_point_json(_oisst_point_url(lat, lon, final=True),
+                              timeout=timeout)
 
 
 def _sst_point_key(lat: float, lon: float) -> tuple:
@@ -13761,8 +13783,7 @@ def _sst_point_bg_refresh(lat: float, lon: float, key: tuple) -> None:
     memo — nobody is waiting on it."""
     try:
         got = _oisst_row_to_dict(
-            _erddap_point_json(_oisst_point_url(lat, lon),
-                               timeout=_SST_SLOW_TIMEOUT))
+            _oisst_point_row(lat, lon, timeout=_SST_SLOW_TIMEOUT))
         if got:
             _sst_point_store(key, got)
             logger.info(f"[oisst] slow-path refresh ok for {key}: "
@@ -13784,7 +13805,7 @@ def _fetch_oisst_point(lat: float, lon: float, timeout: float = 15.0) -> dict:
         if hit and time.time() - hit["ts"] < _SST_POINT_TTL:
             return dict(hit["data"])
 
-    row = _erddap_point_json(_oisst_point_url(lat, lon), timeout=timeout)
+    row = _oisst_point_row(lat, lon, timeout=timeout)
     got = _oisst_row_to_dict(row)
     if got is not None:            # ERDDAP answered (even NaN over land)
         _sst_point_store(key, got)
@@ -13823,11 +13844,22 @@ def _fetch_tchp_point(lat: float, lon: float) -> dict:
     if not row:
         return {"ohc_kj_cm2": None, "ohc_date": None}
     t = row.get("time") or ""
-    return {
-        "ohc_kj_cm2": _erddap_num(
-            row.get("Tropical_Cyclone_Heat_Potential"), ndigits=1, nonneg=True),
-        "ohc_date": t[:10] if t else None,
-    }
+    ohc_date = t[:10] if t else None
+    val = _erddap_num(
+        row.get("Tropical_Cyclone_Heat_Potential"), ndigits=1, nonneg=True)
+    stale = False
+    if ohc_date:
+        try:
+            age = (_dt.now(timezone.utc)
+                   - _dt.strptime(ohc_date, "%Y-%m-%d").replace(tzinfo=timezone.utc))
+            stale = age.days > _TCHP_MAX_AGE_DAYS
+        except ValueError:
+            stale = False
+    if stale:
+        # A months-old grid is not this storm's OHC. Null the value, keep
+        # the date, and flag it so the card can explain the gap.
+        return {"ohc_kj_cm2": None, "ohc_date": ohc_date, "ohc_stale": True}
+    return {"ohc_kj_cm2": val, "ohc_date": ohc_date}
 
 
 @router.get("/storm/{atcf_id}/ocean")
