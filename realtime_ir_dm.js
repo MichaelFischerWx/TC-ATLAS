@@ -1215,7 +1215,19 @@
             + ' · NOT an official forecast';
         var fn = 'TC-ATLAS_' + (M.data.atcf || (M.data.label || 'system').replace(/[^a-z0-9]+/gi, '_')) + '_wind_risk'
             + (r.thresh ? '_p' + r.thresh + '_' + r.horizon + 'h' : '') + '_' + (M.data.variant === 'wnv3' ? 'WN3' : 'FNV3') + '_init' + (M.data.init || '') + '.png';
-        B.panelExportURL(el, 2.2, W, H, 1).then(function (url) {
+        // Export goes through an SVG image, where the DM Sans web font is not
+        // available: text falls back to a wider system face than the one
+        // Plotly measured the legend box with, and the box clips it. Export a
+        // copy whose fonts name the system stack up front so measurement and
+        // rendering use the same face.
+        var SYS = '-apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif';
+        var lay = JSON.parse(JSON.stringify(el.layout));
+        lay.font = Object.assign({}, lay.font, { family: SYS });
+        (lay.annotations || []).forEach(function (a) { a.font = Object.assign({}, a.font, { family: SYS }); a.borderpad = Math.max(a.borderpad || 0, 6); });
+        if (lay.geo && lay.geo.lonaxis && lay.geo.lonaxis.tickfont) lay.geo.lonaxis.tickfont.family = SYS;
+        if (lay.geo && lay.geo.lataxis && lay.geo.lataxis.tickfont) lay.geo.lataxis.tickfont.family = SYS;
+        var shim = { data: el.data, layout: lay };
+        B.panelExportURL(shim, 2.2, W, H, 1).then(function (url) {
             B.stampExport(url, W, H, function (blob) { if (blob) B.saveImageBlob(blob, fn); }, caption);
         }).catch(function (e) { console.warn('[RTDM] risk map export failed', e); });
         B.ga('rt_dm_modal_risk_export', { thresh: r.thresh });
