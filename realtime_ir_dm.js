@@ -23,7 +23,19 @@
     var OTHER = '#f472b6';      // the *other* model in Compare (pink, reads on cyan)
     var OFCL_RED = '#ff4757';
 
-    var OFCL_STYLE = { color: '#ff4757', weight: 2.6, opacity: 0.95, dashArray: '9,6', interactive: false, pane: 'dmProbPane' };
+    // Official track on MAPS: a cased black-and-white dashed line (railroad
+    // style) — reads over the yellow→purple field, the cyan swath, the orange
+    // mean, and bare ocean in both themes. Charts keep the plain red line.
+    function ofclCasing() { return B.isDark() ? '#f8fafc' : '#0f172a'; }
+    function ofclInner() { return B.isDark() ? '#0f172a' : '#ffffff'; }
+    function ofclStyles() {
+        return {
+            casing: { color: ofclCasing(), weight: 5, opacity: 0.9, interactive: false, pane: 'dmProbPane' },
+            inner:  { color: ofclInner(), weight: 2.4, opacity: 1, dashArray: '8,7', interactive: false, pane: 'dmProbPane' },
+            marker: { radius: 4.5, color: ofclCasing(), weight: 1.6, fillColor: ofclInner(), fillOpacity: 1, pane: 'dmProbPane' },
+        };
+    }
+    function ofclSwatch() { return '<span style="color:' + (B.isDark() ? '#f8fafc' : '#0f172a') + ';">━ ━</span>'; }
     function ofclLabel(fc) { return (fc.name || fc.tech) + ' forecast · issued ' + fmtInit(fc.init) + ' UTC'; }
     // Official points deduped by tau (a-deck repeats rows per radius line).
     function ofclPoints(fc) {
@@ -244,7 +256,7 @@
         var fcCard = officialTrack();
         if (fcCard) {
             html += '<div class="rt-dm-row"><span class="rt-dm-row-l">Reference</span>'
-                + chip('<span style="color:' + OFCL_RED + ';">— —</span> ' + esc(fcCard.name || fcCard.tech), r.nhc, 'window.RTDM.toggleNhc()',
+                + chip(ofclSwatch() + ' ' + esc(fcCard.name || fcCard.tech), r.nhc, 'window.RTDM.toggleNhc()',
                        'Show the official forecast track (red dashed) as the authoritative reference')
                 + '<span class="rt-dm-readout-sub">' + esc(ofclLabel(fcCard)) + ' · the authoritative forecast</span></div>';
         }
@@ -276,12 +288,13 @@
     function drawCardNhc() {
         removeLayers(S.risk.nhcLayers);
         var map = B.map(), fc = officialTrack(); if (!map || !fc) return;
-        var pts = ofclPoints(fc);
+        var pts = ofclPoints(fc), st = ofclStyles();
         var segs = B.splitAtAntimeridian(pts.map(function (p) { return [p.lat, p.lon]; }));
-        for (var i = 0; i < segs.length; i++) if (segs[i].length >= 2) S.risk.nhcLayers.push(L.polyline(segs[i], OFCL_STYLE).addTo(map));
+        for (var i = 0; i < segs.length; i++) if (segs[i].length >= 2) S.risk.nhcLayers.push(L.polyline(segs[i], st.casing).addTo(map));
+        for (var i2 = 0; i2 < segs.length; i2++) if (segs[i2].length >= 2) S.risk.nhcLayers.push(L.polyline(segs[i2], st.inner).addTo(map));
         for (var j = 0; j < pts.length; j++) {
             var p = pts[j]; if (p.tau % 24 !== 0) continue;
-            var m = L.circleMarker([p.lat, p.lon], { radius: 4, color: '#fff', weight: 1.2, fillColor: OFCL_RED, fillOpacity: 1, pane: 'dmProbPane' }).addTo(map);
+            var m = L.circleMarker([p.lat, p.lon], st.marker).addTo(map);
             m.bindTooltip('<b>' + esc(fc.name || fc.tech) + '</b> +' + p.tau + ' h · ' + fmtTauDate(fc.init, p.tau) + '<br>' + B.fmtLatLon(p.lat, p.lon)
                 + (p.wind != null ? '<br>' + p.wind + ' kt' : '') + '<br><i>official forecast — authoritative</i>', { direction: 'top', offset: [0, -6] });
             S.risk.nhcLayers.push(m);
@@ -921,13 +934,19 @@
         pts.forEach(function (p) { lon.push(T().unwrapLon(p.lon, ref)); lat.push(p.lat); sz.push(p.tau % 24 === 0 ? 7 : 0);
             txt.push('<b>' + esc(fc.name || fc.tech) + '</b> +' + p.tau + ' h · ' + fmtTauDate(fc.init, p.tau) + (p.wind != null ? ' · ' + p.wind + ' kt' : '') + '<br>official forecast — authoritative'); });
         var last = pts.length - 1;
-        Plotly.addTraces(el, [
-            { type: 'scattergeo', mode: 'lines+markers', lon: lon, lat: lat, text: txt, hovertemplate: '%{text}<extra></extra>',
-              line: { color: OFCL_RED, width: 2.6, dash: 'dash' }, marker: { size: sz, color: OFCL_RED, line: { color: '#fff', width: 1 } },
-              name: ofclLabel(fc), showlegend: false, _rtdm: 1 },
+        Plotly.addTraces(el, ofclGeoTraces(lon, lat, sz, txt, fc).concat([
             { type: 'scattergeo', mode: 'text', lon: [lon[last]], lat: [lat[last]], text: ['  ' + (fc.name || fc.tech)], textposition: 'middle right',
-              textfont: { size: 10, color: OFCL_RED }, hoverinfo: 'skip', showlegend: false, _rtdm: 1 },
-        ]);
+              textfont: { size: 10, color: ofclCasing() }, hoverinfo: 'skip', showlegend: false, _rtdm: 1 },
+        ]));
+    }
+    // Cased black/white dashed official track for scattergeo maps (3 traces).
+    function ofclGeoTraces(lon, lat, sz, txt, fc) {
+        return [
+            { type: 'scattergeo', mode: 'lines', lon: lon, lat: lat, line: { color: ofclCasing(), width: 5 }, opacity: 0.9, hoverinfo: 'skip', showlegend: false, _rtdm: 1 },
+            { type: 'scattergeo', mode: 'lines+markers', lon: lon, lat: lat, text: txt, hovertemplate: '%{text}<extra></extra>',
+              line: { color: ofclInner(), width: 2.4, dash: 'dash' }, marker: { size: sz, color: ofclInner(), line: { color: ofclCasing(), width: 1.6 } },
+              name: ofclLabel(fc), showlegend: false, _rtdm: 1 },
+        ];
     }
     // Intensity fan (categorical '+Xh' x axis). Valid-time aligned: official
     // tau + (official init − ensemble init) → ensemble tau label.
@@ -979,13 +998,16 @@
             + modalChip('Off', r.swath === 0, 'window.RTDM.modalSwath(0)') + modalChip('50%', r.swath === 50, 'window.RTDM.modalSwath(50)', 'Half of the members stay inside this swath — an ensemble statistic, not the NHC forecast cone')
             + modalChip('90%', r.swath === 90, 'window.RTDM.modalSwath(90)', 'Nine in ten members stay inside this swath — an ensemble statistic, not the NHC forecast cone') + '</div>'
             + (modalOfficial() ? '<div class="rt-dm-row"><span class="rt-dm-row-l">Reference</span>'
-                + modalChip('<span style="color:' + OFCL_RED + ';">— —</span> ' + esc(modalOfficial().name || modalOfficial().tech), r.nhc, 'window.RTDM.modalNhc()', 'Official forecast track (red dashed) — the authoritative guidance')
+                + modalChip(ofclSwatch() + ' ' + esc(modalOfficial().name || modalOfficial().tech), r.nhc, 'window.RTDM.modalNhc()', 'Official forecast track (red dashed) — the authoritative guidance')
                 + '<span class="rt-dm-readout-sub">' + esc(ofclLabel(modalOfficial())) + '</span></div>' : '')
             + '</div>'
             + '<div class="rt-dm-readout-sub" style="margin:0 0 2px;">Hover the field for wind chances at any point · click to set the probe · scroll or pinch to zoom, drag to pan</div>'
             // Capped width + centred: at full modal width a compact system left
             // wide empty ocean on both sides; ~2:1 keeps the field filling the frame.
-            + '<div style="position:relative; max-width:860px; margin:0 auto;">'
+            // .rt-genesis-modal-chart-wrap = same wrapper as the other modal
+            // charts, so the ⤓ PNG button gets its own strip above the map on
+            // phones instead of sitting on the plot.
+            + '<div class="rt-genesis-modal-chart-wrap" style="position:relative; max-width:860px; margin:0 auto;">'
             + '<button type="button" class="rt-genesis-modal-save" title="Save the wind-risk map as PNG (with TC-ATLAS watermark and the not-an-official-forecast note)" onclick="window.RTDM.exportModalRiskMap()">⤓ PNG</button>'
             + '<div id="rt-genesis-modal-riskmap" style="width:100%; height:420px;"></div>'
             + '</div>'
@@ -1095,8 +1117,13 @@
                               name: M.risk.swath + '% ensemble swath (not the NHC cone)', hoverinfo: 'name', showlegend: false });
             }
         }
-        traces.push({ type: 'scattergeo', mode: 'lines+markers', lon: mx, lat: my, line: { color: '#f97316', width: 3 },
-                      marker: { size: mt.map(function (t) { return t % 24 === 0 ? 7 : 0; }), color: mw, colorscale: B.ssScale(), cmin: 0, cmax: 200, line: { color: isDark ? '#0f172a' : '#fff', width: 1 } },
+        // Ensemble mean: cased SOLID white line (the orange of the This-run map
+        // vanished into the orange/red probability shading here). Dots keep the
+        // Saffir–Simpson colour for intensity; the official track is the DASHED
+        // cased line, so the two never read as one.
+        traces.push({ type: 'scattergeo', mode: 'lines', lon: mx, lat: my, line: { color: ofclCasing(), width: 4.6 }, opacity: 0.9, hoverinfo: 'skip', showlegend: false });
+        traces.push({ type: 'scattergeo', mode: 'lines+markers', lon: mx, lat: my, line: { color: ofclInner(), width: 2.2 },
+                      marker: { size: mt.map(function (t) { return t % 24 === 0 ? 8 : 0; }), color: mw, colorscale: B.ssScale(), cmin: 0, cmax: 200, line: { color: ofclCasing(), width: 1.4 } },
                       text: mt.map(function (t, k) { return '+' + t + ' h · ' + fmtTauDate(d.init, t) + (mw[k] != null ? ' · ' + Math.round(mw[k]) + ' kt' : ''); }),
                       hovertemplate: '%{text}<extra>ensemble mean</extra>', showlegend: false });
         // Hover grid: Plotly geo only reports hovers on drawn points, so lay an
@@ -1120,10 +1147,10 @@
         }
         if (M.risk.nhc && modalOfficial()) {
             var fcm = modalOfficial(), fpts = ofclPoints(fcm);
-            traces.push({ type: 'scattergeo', mode: 'lines+markers', lon: fpts.map(function (p) { return U(p.lon); }), lat: fpts.map(function (p) { return p.lat; }),
-                          text: fpts.map(function (p) { return '<b>' + esc(fcm.name || fcm.tech) + '</b> +' + p.tau + ' h · ' + fmtTauDate(fcm.init, p.tau) + (p.wind != null ? ' · ' + p.wind + ' kt' : '') + '<br>official forecast — authoritative'; }),
-                          hovertemplate: '%{text}<extra></extra>', line: { color: OFCL_RED, width: 2.6, dash: 'dash' },
-                          marker: { size: fpts.map(function (p) { return p.tau % 24 === 0 ? 7 : 0; }), color: OFCL_RED, line: { color: '#fff', width: 1 } }, showlegend: false });
+            var flon = fpts.map(function (p) { return U(p.lon); }), flat = fpts.map(function (p) { return p.lat; });
+            var ftxt = fpts.map(function (p) { return '<b>' + esc(fcm.name || fcm.tech) + '</b> +' + p.tau + ' h · ' + fmtTauDate(fcm.init, p.tau) + (p.wind != null ? ' · ' + p.wind + ' kt' : '') + '<br>official forecast — authoritative'; });
+            var fsz = fpts.map(function (p) { return p.tau % 24 === 0 ? 7 : 0; });
+            ofclGeoTraces(flon, flat, fsz, ftxt, fcm).forEach(function (t) { traces.push(t); });
             fpts.forEach(function (p) { allLat.push(p.lat); allLon.push(U(p.lon)); });
         }
         if (M.risk.probe) {
@@ -1139,15 +1166,17 @@
         layout.margin = { l: 4, r: 4, t: 8, b: 4 };
         // Burn the liability note into the map itself (survives screenshots).
         layout.annotations = (layout.annotations || []).concat([{
-            xref: 'paper', yref: 'paper', x: 0.995, y: 0.99, xanchor: 'right', yanchor: 'top', showarrow: false, align: 'right',
+            // Bottom-left: clear of the ⤓ PNG button (top-right) on every width.
+            xref: 'paper', yref: 'paper', x: 0.005, y: 0.01, xanchor: 'left', yanchor: 'bottom', showarrow: false, align: 'left',
             text: '<b>Not an official forecast</b><br>' + esc(modalModelTag()) + ' ensemble · experimental<br>'
-                + (M.risk.swath ? M.risk.swath + '% ensemble swath — not the NHC cone' : 'ensemble wind chances — not NHC probabilities'),
+                + '<span style="color:' + ofclCasing() + ';">━━</span> ensemble mean (solid)<br>'
+                + (M.risk.swath ? '<span style="color:' + CYAN + ';">╌╌</span> ' + M.risk.swath + '% ensemble swath — not the NHC cone' : 'wind chances — not NHC probabilities'),
             font: { size: 10, color: isDark ? '#e2e8f0' : '#0f172a' },
             bgcolor: isDark ? 'rgba(15,23,42,0.72)' : 'rgba(255,255,255,0.78)',
             bordercolor: 'rgba(0,229,255,0.45)', borderwidth: 1, borderpad: 5,
         }]);
         var ann = layout.annotations[layout.annotations.length - 1];
-        if (M.risk.nhc && modalOfficial()) ann.text += '<br><span style="color:' + OFCL_RED + '">— —</span> ' + esc(modalOfficial().name || modalOfficial().tech) + ' forecast — authoritative';
+        if (M.risk.nhc && modalOfficial()) ann.text += '<br>' + ofclSwatch() + ' ' + esc(modalOfficial().name || modalOfficial().tech) + ' forecast (dashed) — authoritative';
         layout.dragmode = 'pan';
         Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: true });
         if (!el._rtdmClickBound) {

@@ -7864,3 +7864,34 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     .rt-genesis-modal-chart-wrap { padding-top: 32px; }
     .rt-genesis-modal-save { top: 2px; right: 2px; }
 }
+
+/* ── DeepMind modal: finish the single-accent pass. The developed-storm
+   stat box, ATCF pill, IR-Detail button and the pane chips still carried
+   the site blue / DeepMind cyan; only the disclaimer strip keeps cyan. ── */
+.rt-genesis-stat-row.rt-genesis-stat-row-dev {
+    background: rgba(249, 115, 22, 0.07);
+    border-color: rgba(249, 115, 22, 0.22);
+    border-left-color: #f97316;
+}
+[data-theme="dark"] .rt-genesis-stat-row.rt-genesis-stat-row-dev {
+    background: rgba(249, 115, 22, 0.10);
+    border-color: rgba(249, 115, 22, 0.28);
+}
+.rt-genesis-atcf-pill {
+    background: rgba(249, 115, 22, 0.16);
+    border-color: rgba(249, 115, 22, 0.55);
+}
+[data-theme="dark"] .rt-genesis-atcf-pill { color: #fed7aa; background: rgba(249, 115, 22, 0.22); }
+.rt-genesis-modal-open-storm {
+    background: #f97316 !important;
+    border-color: #ea580c !important;
+    color: #fff !important;
+}
+.rt-genesis-modal-open-storm:hover { background: #ea580c !important; }
+/* Pane chips (card + modal) — orange active state, cyan reserved for notes */
+.rt-dm-chip:hover { border-color: rgba(249, 115, 22, 0.55); }
+.rt-dm-chip.active { background: rgba(249, 115, 22, 0.16); border-color: rgba(249, 115, 22, 0.6); color: #ea580c; }
+[data-theme="dark"] .rt-dm-chip.active { background: rgba(249, 115, 22, 0.24); color: #fdba74; }
+.rt-dm-tabs button.active { background: rgba(249, 115, 22, 0.16); color: #ea580c; box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.4); }
+[data-theme="dark"] .rt-dm-tabs button.active { color: #fdba74; background: rgba(249, 115, 22, 0.22); }
+.rt-genesis-modal-open-storm.is-primary { box-shadow: 0 2px 8px rgba(249, 115, 22, 0.35) !important; }
