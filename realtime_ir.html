@@ -83,7 +83,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20260904a">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20260904d">
     <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -117,7 +117,7 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260901a">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260904c">
     <link rel="stylesheet" href="satellite_styles.css?v=20260811b">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260903a">
 </head>
@@ -632,6 +632,25 @@
                     </div>
                 </div>
 
+                <!-- DeepMind Ensemble — one tabbed module (realtime_ir_dm.js) so the
+                     ensemble diagnostics don't stack the card: Intensity keeps the
+                     existing distribution panels; Wind Risk / Landfall / Compare are
+                     rendered on demand. Shown with the DeepMind overlay. -->
+                <div class="ir-info-section" id="rt-dm-panel" style="display:none;">
+                    <div class="rt-dm-panel-h">
+                        <h3 class="ir-info-heading">DeepMind Ensemble</h3>
+                        <span id="rt-dm-panel-src"></span>
+                    </div>
+                    <div class="rt-dm-tabs" id="rt-dm-tabs" role="tablist">
+                        <button type="button" role="tab" data-dmtab="intensity" class="active" aria-selected="true" onclick="window.RTDM.setTab('intensity')">Intensity</button>
+                        <button type="button" role="tab" data-dmtab="risk" onclick="window.RTDM.setTab('risk')">Wind Risk</button>
+                        <button type="button" role="tab" data-dmtab="landfall" onclick="window.RTDM.setTab('landfall')">Landfall</button>
+                        <button type="button" role="tab" data-dmtab="compare" onclick="window.RTDM.setTab('compare')">Compare</button>
+                    </div>
+                    <div class="rt-dm-disclaimer">Experimental research guidance from Google DeepMind ensembles &mdash; not an official forecast.
+                        Watches, warnings and official forecasts come from <a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener">NHC</a> / CPHC / JTWC or your national weather service.</div>
+                    <div id="rt-dm-tab-intensity">
+                    <div id="rt-dm-outlook"></div>
                 <!-- DeepMind Intensity Distribution (1000 members) -->
                 <div class="ir-info-section" id="rt-dm-intensity-dist" style="display:none;">
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
@@ -702,6 +721,11 @@
                     </div>
                     <div id="rt-dm-lmi-tau-chart"></div>
                 </div>
+                    </div><!-- /rt-dm-tab-intensity -->
+                    <div id="rt-dm-tab-risk" hidden></div>
+                    <div id="rt-dm-tab-landfall" hidden></div>
+                    <div id="rt-dm-tab-compare" hidden></div>
+                </div><!-- /rt-dm-panel -->
 
                 <!-- Observations divider -->
                 <div class="ir-section-divider">Observations</div>
@@ -2645,7 +2669,9 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
     <script defer src="tc_mw_layer.js?v=20260811b"></script>
-    <script defer src="realtime_ir.js?v=20260904a"></script>
+    <script defer src="tc_dm_analytics.js?v=20260904a"></script>
+    <script defer src="realtime_ir_dm.js?v=20260904a"></script>
+    <script defer src="realtime_ir.js?v=20260904d"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays

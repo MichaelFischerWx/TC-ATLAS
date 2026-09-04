@@ -9191,6 +9191,10 @@
 
         // Coastline overlay — Natural Earth 10m black outlines (matches global archive)
         detailMap.createPane('coastlinePane');
+        // DeepMind Ensemble panel overlays (wind-probability raster, track
+        // ellipses, landfall points, other-model tracks): above the IR image
+        // frames (350) and below the spaghetti / marker panes (400+).
+        try { detailMap.createPane('dmProbPane').style.zIndex = 380; } catch (e) {}
         detailMap.getPane('coastlinePane').style.zIndex = 450;
         detailMap.getPane('coastlinePane').style.pointerEvents = 'none';
         _loadCoastlineOverlay(detailMap);
@@ -14196,6 +14200,49 @@
     var _WEATHERLAB_MEMBER_COLOR = 'rgba(0, 229, 255, 0.25)';
     var _WEATHERLAB_MEAN_COLOR = _DM_MEAN_COLOR;
 
+    // Bridge for the tabbed DeepMind Ensemble panel (realtime_ir_dm.js). It
+    // reads live state through these getters and never touches the IIFE
+    // directly; the RTDM.on* hooks below tell it when data or visibility
+    // changes. Loaded before this file (deferred, document order).
+    function _rtDmFetchOtherModel(model) {
+        var atcfId = currentStormId; if (!atcfId) return Promise.reject(new Error('no storm'));
+        var cacheKey = 'weatherlab_' + model;
+        var cached = _panelCache[atcfId];
+        if (cached && cached[cacheKey] && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
+            return Promise.resolve(cached[cacheKey]);
+        }
+        return fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/weatherlab?model=' + model, { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (json) {
+                if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
+                _panelCache[atcfId][cacheKey] = json;
+                return json;
+            });
+    }
+    if (window.RTDM && typeof window.RTDM.attach === 'function') {
+        window.RTDM.attach({
+            map: function () { return detailMap; },
+            wl: function () { return _rtWeatherlabData; },
+            ens: function () { return _rtDmEnsData; },
+            model: function () { return _rtDmModel; },
+            modelTag: function () { return _dmIsWn3() ? 'WeatherNext 3 (experimental)' : 'DeepMind FNV3'; },
+            stormId: function () { return currentStormId; },
+            stormName: function () { var e = document.getElementById('ir-detail-name'); return e ? e.textContent.trim() : ''; },
+            adeck: function () { return _rtModelData; },
+            fetchWeatherlab: _rtDmFetchOtherModel,
+            chartLayout: function (o) { return _dmChartLayout(o); },
+            isDark: function () { return _dmIsDark(); },
+            refLineColor: function () { return _dmRefLineColor(); },
+            ssColors: SS_COLORS,
+            saveImageBlob: function (b, f) { return _saveImageBlob(b, f); },
+            dataURLToBlob: function (u) { return _dataURLToBlob(u); },
+            splitAtAntimeridian: function (ll) { return splitAtAntimeridian(ll); },
+            fmtLatLon: function (a, b) { return _wlFmtLatLon(a, b); },
+            whenPlotly: function (fn) { if (typeof Plotly !== 'undefined') fn(); else _whenPlotly(fn); },
+            ga: function (a, p) { _ga(a, p); },
+        });
+    }
+
     /**
      * Load WeatherLab ensemble data for a storm (called from openStormDetail).
      */
@@ -14235,6 +14282,7 @@
                 // line with the ensemble fan-chart used in the genesis modal.
                 try { _rtRenderCardForecastIntensity(json); }
                 catch (e) { console.warn('[RT Monitor] card forecast chart render failed:', e); }
+                if (window.RTDM) { try { window.RTDM.onWeatherlab(json); } catch (e) { console.warn('[RTDM]', e); } }
                 if (_rtDmReenable) {
                     _rtDmReenable = false;
                     if (!_rtWeatherlabVisible) window._rtToggleWeatherlab();
@@ -14385,6 +14433,7 @@
             if (distEl) distEl.style.display = 'none';
             if (changeEl) changeEl.style.display = 'none';
             if (lmiEl) lmiEl.style.display = 'none';
+            if (window.RTDM) { try { window.RTDM.onPanels(false); } catch (e) {} }
             return;
         }
 
@@ -26623,6 +26672,7 @@
                 if (model !== _rtDmModel || currentStormId !== atcfId) return;   // stale
                 _rtDmEnsData = json;
                 console.log('[WeatherLab ensemble] Loaded ' + json.n_members + ' members [' + model + ']');
+                if (window.RTDM) { try { window.RTDM.onEnsemble(json); } catch (e) { console.warn('[RTDM]', e); } }
                 if (_rtWeatherlabVisible) {
                     _rtShowDmPanels();
                 }
@@ -26656,6 +26706,7 @@
         if (distEl) distEl.style.display = '';
         if (changeEl) changeEl.style.display = '';
         if (lmiEl) lmiEl.style.display = '';
+        if (window.RTDM) { try { window.RTDM.onPanels(true); } catch (e) { console.warn('[RTDM]', e); } }
 
         _rtDmHistTauIdx = default24;
         _rtRenderIntensityHist();
@@ -27481,6 +27532,7 @@
         if (btn) { btn.style.background = 'rgba(0,229,255,0.15)'; btn.title = ''; }
         var filterEl = document.getElementById('rt-weatherlab-filter');
         if (filterEl) filterEl.style.display = 'none';
+        if (window.RTDM) { try { window.RTDM.onStormClose(); } catch (e) {} }
     }
 
     // ═══════════════════════════════════════════════════════════
