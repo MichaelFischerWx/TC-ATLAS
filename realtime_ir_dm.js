@@ -403,7 +403,7 @@
         var lf = S.lf.data, init = wl.init_time;
         var html = '';
         if (!lf.events.length) {
-            html += '<div class="rt-dm-tiles">' + tile('Landfall chance', '0%', 'no member brings the center over land within 15 days', '#34d399') + '</div>';
+            html += '<div class="rt-dm-callout" style="border-color:rgba(52,211,153,0.35); background:rgba(52,211,153,0.08);"><b style="color:#34d399;">Landfall chance 0%</b> — no member brings the center over land within 15 days.</div>';
         } else {
             var q = T().percentiles(lf.taus, [0.1, 0.5, 0.9]);
             var wq = T().percentiles(lf.winds, [0.5]);
@@ -881,16 +881,18 @@
             + modalChip('Off', r.swath === 0, 'window.RTDM.modalSwath(0)') + modalChip('50%', r.swath === 50, 'window.RTDM.modalSwath(50)', 'Half of the members stay inside this swath — an ensemble statistic, not the NHC forecast cone')
             + modalChip('90%', r.swath === 90, 'window.RTDM.modalSwath(90)', 'Nine in ten members stay inside this swath — an ensemble statistic, not the NHC forecast cone') + '</div>'
             + '</div>'
-            + '<div id="rt-genesis-modal-riskmap" style="width:100%; height:400px;"></div>'
-            + '<div class="rt-dm-legend" style="max-width:420px;"><span class="rt-dm-legend-t">' + (r.thresh ? 'P(≥' + r.thresh + ' kt) within ' + r.horizon + ' h — filled contours at 10 / 30 / 50 / 70 / 90 %' : 'Wind-chance layer off') + '</span>'
+            // Capped width + centred: at full modal width a compact system left
+            // wide empty ocean on both sides; ~2:1 keeps the field filling the frame.
+            + '<div id="rt-genesis-modal-riskmap" style="width:100%; max-width:860px; height:420px; margin:0 auto;"></div>'
+            + '<div class="rt-dm-legend" style="max-width:860px; margin:6px auto 2px;"><span class="rt-dm-legend-t">' + (r.thresh ? 'P(≥' + r.thresh + ' kt) within ' + r.horizon + ' h — filled contours at 10 / 30 / 50 / 70 / 90 %' : 'Wind-chance layer off') + '</span>'
             + (r.thresh ? '<div class="rt-dm-legend-bar" style="background:' + legendCSS() + ';"></div><div class="rt-dm-legend-ticks"><span>5%</span><span>20%</span><span>40%</span><span>60%</span><span>80%</span><span>100%</span></div>' : '') + '</div>'
-            + '<div class="rt-genesis-probe"><span>Probe a point:</span>'
+            + '<div class="rt-genesis-probe" style="max-width:860px; margin:6px auto;"><span>Probe a point:</span>'
             + '<input id="rt-genesis-probe-lat" placeholder="lat" inputmode="decimal" value="' + (r.probe ? r.probe.lat.toFixed(2) : '') + '">'
             + '<input id="rt-genesis-probe-lon" placeholder="lon" inputmode="decimal" value="' + (r.probe ? r.probe.lon.toFixed(2) : '') + '">'
             + '<button type="button" class="rt-dm-chip" onclick="window.RTDM.modalProbe()">Go</button>'
             + (r.probe ? '<button type="button" class="rt-dm-chip" onclick="window.RTDM.modalProbe(null)">Clear</button>' : '')
             + '<span class="rt-dm-readout-sub">°N / °E (use negative for S / W)</span></div>'
-            + '<div id="rt-genesis-probe-out"></div>'
+            + '<div id="rt-genesis-probe-out" style="max-width:860px; margin:0 auto;"></div>'
             + note('<b>Not an official forecast and not the NHC cone.</b> Wind chances count members whose modeled wind field reaches a location within the window, using each member\'s own wind radii; '
                 + 'the ensemble swath is the union of the members\' 50 % / 90 % position ellipses through the window (the ensemble analogue of a lifetime wind swath) and is unrelated to the NHC cone of uncertainty, which is built from official track-error statistics. '
                 + 'Experimental research guidance from ' + esc(modalModelTag()) + ' — <b>not a forecast</b>. Official forecasts, watches and warnings: '
@@ -995,7 +997,7 @@
             allLat.push(M.risk.probe.lat); allLon.push(U(M.risk.probe.lon));
         }
         var rect = el.getBoundingClientRect();
-        var aspect = rect.height > 0 ? Math.max(0.8, rect.width / rect.height) : 2.0;
+        var aspect = rect.height > 0 ? Math.max(0.8, (rect.width - 20) / rect.height) : 2.0;
         var bounds = B.genesisBounds(my, mx, allLat, allLon, aspect);
         var insetLat = my.length ? my[0] : 0, insetLon = mx.length ? T().wrapLon(mx[0]) : 0;
         var layout = B.geoLayout(bounds, { domainY: [0, 1], insetLon: insetLon, insetLat: insetLat, insetDomain: { x: [0.01, 0.17], y: [0.02, 0.36] } });
@@ -1024,7 +1026,7 @@
         var html = '';
         var preGenesis = !d.alreadyTC;
         if (!lf.events.length) {
-            html += '<div class="rt-dm-tiles" style="max-width:420px;">' + tile('Landfall chance', '0%', 'no member brings the center over land within 15 days', '#34d399') + '</div>';
+            html += '<div class="rt-dm-callout" style="border-color:rgba(52,211,153,0.35); background:rgba(52,211,153,0.08);"><b style="color:#34d399;">Landfall chance 0%</b> — no member brings the center over land within 15 days.</div>';
         } else {
             var q = T().percentiles(lf.taus, [0.1, 0.5, 0.9]), wq = T().percentiles(lf.winds, [0.5]), medCat = T().catOf(wq[0]);
             html += '<div class="rt-dm-tiles rt-dm-tiles-3" style="max-width:640px;">'
