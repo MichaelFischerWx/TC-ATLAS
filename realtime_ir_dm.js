@@ -1108,7 +1108,7 @@
                     traces.push({ type: 'scattergeo', mode: 'lines', lon: lon, lat: lat, fill: 'toself',
                                   fillcolor: 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + (0.42).toFixed(2) + ')',
                                   line: { color: 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',0.9)', width: 0.8 },
-                                  name: '≥' + Math.round(cts[c].level * 100) + '%', hoverinfo: 'name', showlegend: false });
+                                  name: '≥' + Math.round(cts[c].level * 100) + '%', hoverinfo: 'skip', showlegend: false });
                 }
             }
         }
@@ -1123,7 +1123,7 @@
                 traces.push({ type: 'scattergeo', mode: 'lines', lon: slon, lat: slat, fill: 'toself',
                               fillcolor: 'rgba(0,229,255,' + (M.risk.swath === 90 ? 0.08 : 0.14) + ')',
                               line: { color: 'rgba(0,229,255,0.85)', width: 2.2, dash: M.risk.swath === 90 ? 'dash' : 'solid' },
-                              name: M.risk.swath + '% ensemble swath (not the NHC cone)', hoverinfo: 'name', showlegend: false });
+                              name: M.risk.swath + '% ensemble swath (not the NHC cone)', hoverinfo: 'skip', showlegend: false });
             }
         }
         // Ensemble mean: cased SOLID white line (the orange of the This-run map
@@ -1141,7 +1141,7 @@
         if (M.risk.thresh) {
             var g34 = gridFor(34), g50 = gridFor(50), g64 = gridFor(64), gBase = modalGrid();
             if (gBase) {
-                var stepC = Math.max(1, Math.round(0.4 / gBase.dLon));
+                var stepC = Math.max(1, Math.round(0.25 / gBase.dLon));
                 var hl = [], hla = [], ht = [];
                 for (var rr2 = 0; rr2 < gBase.ny; rr2 += stepC) for (var cc2 = 0; cc2 < gBase.nx; cc2 += stepC) {
                     var pv = gBase.prob[rr2 * gBase.nx + cc2]; if (!(pv >= 0.03)) continue;
@@ -1151,7 +1151,7 @@
                     ht.push(B.fmtLatLon(cl, T().wrapLon(cn)) + '<br>≥34 kt <b>' + pct(p34) + '</b> · ≥50 kt <b>' + pct(p50) + '</b> · ≥64 kt <b>' + pct(p64) + '</b><br><span style="font-size:0.8em">within ' + M.risk.horizon + ' h · click for arrival timing</span>');
                 }
                 traces.push({ type: 'scattergeo', mode: 'markers', lon: hl, lat: hla, text: ht, hovertemplate: '%{text}<extra></extra>',
-                              marker: { size: 9, opacity: 0.001, color: '#000' }, showlegend: false, _hoverGrid: 1 });
+                              marker: { size: 12, opacity: 0.001, color: '#000' }, showlegend: false, _hoverGrid: 1 });
             }
         }
         if (M.risk.nhc && modalOfficial()) {
@@ -1201,6 +1201,7 @@
             bordercolor: 'rgba(0,229,255,0.45)', borderwidth: 1, borderpad: 5,
         }]);
         layout.dragmode = 'pan';
+        layout.hovermode = 'closest';
         var annIdx = layout.annotations.length - 1;
         Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: true })
             .then(function () { anchorAnnotationToFrame(el, annIdx); });
