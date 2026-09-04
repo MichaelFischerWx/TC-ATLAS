@@ -558,7 +558,8 @@
             var s = storms[i];
             if (!s || !s.atcf_id) continue;
             var o = { atcf: s.atcf_id.toUpperCase(), name: s.name || s.atcf_id,
-                      lat: s.lat, lon: s.lon, recon: !!s.has_recon };
+                      lat: s.lat, lon: s.lon, recon: !!s.has_recon,
+                      vmax: (s.vmax_kt != null && isFinite(s.vmax_kt)) ? +s.vmax_kt : -1 };
             (s.has_recon ? reconOpts : otherOpts).push(o);
         }
         opts = opts.concat(reconOpts).concat(otherOpts);
@@ -592,10 +593,16 @@
             missionOpts.push(mm);
         }
         // Re-sort now that missions have flagged their storms: replay pinned first,
-        // then recon-active. (The initial has_recon split above can't see them.)
+        // then recon-active, and within each group STRONGEST first (Vmax) — with
+        // two EPac missions up, a 75-kt Karina listed (and defaulted) ahead of a
+        // 130-kt Lowell purely by ATCF number read as the site not knowing which
+        // storm mattered. (The initial has_recon split above can't see missions.)
         uniq.sort(function (a, b) {
             if (!!a.replay !== !!b.replay) return a.replay ? -1 : 1;
-            return (b.recon ? 1 : 0) - (a.recon ? 1 : 0);
+            if (!!a.recon !== !!b.recon) return a.recon ? -1 : 1;
+            var va = (a.vmax != null) ? a.vmax : -1, vb = (b.vmax != null) ? b.vmax : -1;
+            if (va !== vb) return vb - va;
+            return String(a.atcf).localeCompare(String(b.atcf));
         });
         _hdobStormOpts = uniq;
         var cur = sel.value;
@@ -1439,7 +1446,7 @@
             var pick = aircraft.filter(function (a) { return _hdobAcId(a) === _hdobFlightSel; });
             return pick.length ? pick : aircraft;   // selection stale → fall back to all
         }
-        if (which === 'chart') return [aircraft[0]];
+        if (which === 'chart') return [_hdobDefaultAircraft(aircraft)];
         // Map, no selection: first (freshest) sortie per tail.
         var seen = {}, out = [];
         for (var i = 0; i < aircraft.length; i++) {
@@ -1448,6 +1455,36 @@
             seen[t] = 1; out.push(aircraft[i]);
         }
         return out;
+    }
+
+    /** The flight to show when the user hasn't picked one. The server lists
+     *  sorties freshest-first, and "freshest" alone chose a P-3 that had just
+     *  started streaming IWG1 on the ramp (1000 mb, 20 kt, 24 m) over the USAF
+     *  crew in the eyewall (Lowell, 2026-09-04). Among sorties still reporting
+     *  (last ob within 45 min of the newest), take the one whose track carries
+     *  the strongest flight-level wind — the plane that is actually in the
+     *  storm; ties and no-active-flight fall back to the freshest. */
+    function _hdobDefaultAircraft(aircraft) {
+        var newest = 0, i;
+        for (i = 0; i < aircraft.length; i++) {
+            var tr = aircraft[i].track || [];
+            var ms = tr.length ? Date.parse(_hdobX(tr[tr.length - 1].t)) : 0;
+            if (ms > newest) newest = ms;
+        }
+        var best = aircraft[0], bestW = -1;
+        for (i = 0; i < aircraft.length; i++) {
+            var t2 = aircraft[i].track || [];
+            if (!t2.length) continue;
+            var last = Date.parse(_hdobX(t2[t2.length - 1].t));
+            if (!(newest - last <= 45 * 60000)) continue;
+            var w = 0;
+            for (var j = 0; j < t2.length; j++) {
+                var v = (t2[j].peak_fl_kt != null) ? t2[j].peak_fl_kt : t2[j].wspd_kt;
+                if (v != null && v > w) w = v;
+            }
+            if (w > bestW) { bestW = w; best = aircraft[i]; }
+        }
+        return best;
     }
 
     function _hdobTailEq(a, b) {
