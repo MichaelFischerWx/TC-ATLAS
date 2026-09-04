@@ -17461,7 +17461,9 @@
         var _titleVariant = (meta && meta.variant) || _genesisEnsembleVariant;
         var titleName = meta ? meta.label : ('Genesis track ' + trackId);
         _genesisExportStorm = titleName;
-        titleEl.textContent = titleName + ' · FNV3 '
+        titleEl.textContent = titleName + ' · '
+            + (_GENESIS_VARIANTS[_genesisVariantNorm(_titleVariant)].model === 'wnv3'
+                ? 'WeatherNext 3 ' : 'FNV3 ')
             + _genesisVariantMemberTag(_titleVariant) + ' ensemble';
         subEl.innerHTML = 'Loading ensemble members…';
         m.style.display = 'flex';
@@ -21851,7 +21853,7 @@
     // on-screen font sizes while the export gets readable proportions.
     // Also fills in default sizes for fields Plotly leaves implicit
     // (so the scale actually takes effect everywhere).
-    function _figForExport(el, scale) {
+    function _figForExport(el, scale, h) {
         if (!el || !el.data || !el.layout) return el;
         var layout = _jsonClone(el.layout);
         var data = _jsonClone(el.data);
@@ -21896,16 +21898,20 @@
                 if (typeof cb.tickfont.size !== 'number') {
                     cb.tickfont.size = 12;
                 }
+                // Horizontal bars keep whatever side the source chose
+                // (the track-map export puts it at the bar's right end so
+                // it can't stack onto the map's axis labels).
+                var horiz = cb.orientation === 'h';
                 if (cb.title && typeof cb.title === 'object') {
                     cb.title.font = cb.title.font || { size: 14 };
                     if (typeof cb.title.font.size !== 'number') {
                         cb.title.font.size = 14;
                     }
-                    cb.title.side = 'top';
+                    if (!horiz) cb.title.side = 'top';
                 } else if (typeof cb.title === 'string') {
                     cb.title = { text: cb.title,
                                  font: { size: 14 },
-                                 side: 'top' };
+                                 side: horiz ? 'top' : 'top' };
                 }
                 // Extra padding so the (still-scaled) ticks don't crowd
                 // the colorbar border. Defaults: xpad=10, ypad=10.
@@ -21960,6 +21966,52 @@
             b: Math.round(Math.max(m.b != null ? m.b : 80, 50) * scale),
             pad: m.pad,
         };
+        // Phone-width charts park a horizontal legend (or colorbar) BELOW
+        // the x-axis at a paper-fraction y tuned for the on-screen panel
+        // height, and carry tall margins to make room. Scaled 2.8× into a
+        // fixed-height export panel, those margins swallow the plot and the
+        // legend lands on top of the axis title. When the panel height is
+        // known, re-derive the bottom band in pixels: axis ticks + title,
+        // then the legend/bar underneath, and place them by pixel math.
+        if (h) {
+            var xa = layout.xaxis || {};
+            var tickPx = (xa.tickfont && xa.tickfont.size) || 12 * scale;
+            var xtPx = (xa.title && xa.title.font && xa.title.font.size) || 0;
+            var standoff = (xa.title && xa.title.standoff) || 8;
+            var axisBand = Math.round(tickPx * 1.4 + (xtPx ? standoff + xtPx * 1.3 : 0));
+            var below = [];   // pixel heights of things stacked under the axis
+            var leg = layout.legend;
+            var legBelow = !!(leg && leg.orientation === 'h' && typeof leg.y === 'number' && leg.y < 0);
+            if (legBelow) below.push(Math.round(((leg.font && leg.font.size) || 12 * scale) * 2.2));
+            var barsBelow = [];
+            for (var bi = 0; bi < data.length; bi++) {
+                var bcb = data[bi] && ((data[bi].marker && data[bi].marker.colorbar) || data[bi].colorbar);
+                if (bcb && bcb.orientation === 'h' && typeof bcb.y === 'number' && bcb.y < 0) {
+                    barsBelow.push(bcb);
+                    below.push(Math.round((bcb.thickness || 30) + ((bcb.tickfont && bcb.tickfont.size) || 12 * scale) * 1.5
+                                          + ((bcb.title && bcb.title.font && bcb.title.font.size) || 0) * 1.4));
+                }
+            }
+            if (below.length) {
+                var gap = Math.round(6 * scale);
+                var bandTotal = axisBand + below.reduce(function (a, b) { return a + b + gap; }, 0);
+                layout.margin.b = Math.max(layout.margin.b, bandTotal + gap);
+                // Keep at least ~45% of the panel for the plot itself.
+                var maxTop = Math.max(Math.round(30 * scale), Math.round(h * 0.55) - layout.margin.b);
+                layout.margin.t = Math.min(layout.margin.t, maxTop);
+                var plotH = Math.max(1, h - layout.margin.t - layout.margin.b);
+                var cursor = axisBand + gap;   // px below the plot's bottom edge
+                if (legBelow) {
+                    leg.y = -(cursor / plotH); leg.yanchor = 'top';
+                    cursor += below[0] + gap;
+                }
+                for (var ci = 0; ci < barsBelow.length; ci++) {
+                    barsBelow[ci].y = -(cursor / plotH); barsBelow[ci].yanchor = 'top';
+                    barsBelow[ci].ypad = 0;
+                    cursor += below[legBelow ? ci + 1 : ci] + gap;
+                }
+            }
+        }
         return { data: data, layout: layout };
     }
 
@@ -22310,6 +22362,13 @@
             var latSpan = (gr.lataxis && gr.lataxis.range)
                 ? Math.abs(gr.lataxis.range[1] - gr.lataxis.range[0]) : 30;
             var minSep = 0.085 * Math.max(lonSpan, latSpan);
+            // LMI star in the right ~30% of the window → label to its left.
+            var _lmiLeft = false;
+            if (gr.lonaxis && gr.lonaxis.range && lonSpan > 0) {
+                var _lr = gr.lonaxis.range;
+                var _lf = (mt.lon[li] - Math.min(_lr[0], _lr[1])) / lonSpan;
+                _lmiLeft = _lf > 0.7;
+            }
             var anchors = [{ lon: mt.lon[li], lat: mt.lat[li] }];   // reserve LMI
             var tkLon = [], tkLat = [], tkTxt = [];
             for (var j = 0; j < n; j++) {
@@ -22337,10 +22396,13 @@
             data.push({
                 type: 'scattergeo', mode: 'markers+text',
                 lon: [mt.lon[li]], lat: [mt.lat[li]],
-                text: ['  LMI +' + mt.tau[li] + ' h · ' + Math.round(mt.wind[li] || 0) + ' kt'],
+                // Label on the side with room: a star near the right edge of
+                // the window gets its text on the left so it isn't clipped.
+                text: [(_lmiLeft ? '' : '  ') + 'LMI +' + mt.tau[li] + ' h · '
+                       + Math.round(mt.wind[li] || 0) + ' kt' + (_lmiLeft ? '  ' : '')],
                 marker: { symbol: 'star', size: 15, color: '#fde047',
                           line: { color: isDark ? '#0f172a' : '#1f2937', width: 1.2 } },
-                textposition: 'middle right',
+                textposition: _lmiLeft ? 'middle left' : 'middle right',
                 textfont: { size: 12, color: ink, family: _DM_FONT_STACK },
                 hoverinfo: 'skip', showlegend: false,
             });
@@ -22355,7 +22417,20 @@
             var tcb = data[ti] && data[ti].marker && data[ti].marker.colorbar;
             if (tcb && tcb.orientation === 'h') {
                 horizBar = true;
-                tcb.y = 0.075; tcb.yanchor = 'bottom';
+                // At export scale the bar's ticks (below) + title (above)
+                // stack ~120 px tall, more than the 15% band the on-screen
+                // layout reserves — the title printed straight across the
+                // map's longitude labels. Put the title at the bar's right
+                // end instead, shorten the bar to make room, and lift the
+                // map's bottom edge so bar, ticks, and caption each get
+                // their own band.
+                tcb.y = 0.10; tcb.yanchor = 'bottom';
+                tcb.len = 0.78; tcb.x = 0.42; tcb.xanchor = 'center';
+                if (tcb.title && typeof tcb.title === 'object') tcb.title.side = 'right';
+                if (layout.geo && layout.geo.domain) {
+                    var dy = layout.geo.domain.y || [0, 1];
+                    layout.geo.domain.y = [Math.max(dy[0], 0.26), dy[1]];
+                }
             }
         }
         // One-line legend so a frozen reader knows what each layer is.
@@ -22385,7 +22460,7 @@
     // where the uri-encoded / PNG path fails on Safari. Falls back to PNG if
     // the SVG round-trip throws, so we never do worse than before.
     function _panelExportURL(el, scale, W, h, outScale) {
-        var fig = _figForExport(el, scale);
+        var fig = _figForExport(el, scale, h);
         var isGeo = !!(el && el.layout && (el.layout.geo || el.layout.geo2));
         if (!isGeo) {
             // outScale supersamples the raster (2× → crisp on Retina / when
