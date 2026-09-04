@@ -31453,7 +31453,11 @@
         }
         var last = sp.passes[sp.passes.length - 1];
         var q = _rtCompass8(last.az_deg) || last.quad || '';
-        return ' · SEAR ' + Math.round(last.y_kt) + ' kt' + (q ? ' ' + q : '') + ' (' + String(last.t).slice(11, 16) + 'Z' +
+        var rg = last.y_range_kt, rgs = '';
+        if (rg && rg.length === 2 && rg[0] != null && rg[1] != null && Math.round(rg[1]) - Math.round(rg[0]) >= 2) {
+            rgs = ' [' + Math.round(rg[0]) + '\u2013' + Math.round(rg[1]) + ']';   // re-scored with each eyewall crossing's RMW
+        }
+        return ' · SEAR ' + Math.round(last.y_kt) + ' kt' + rgs + (q ? ' ' + q : '') + ' (' + String(last.t).slice(11, 16) + 'Z' +
             (last.fix_source === 'hdob' ? ', prelim' : '') + ')';
     }
 

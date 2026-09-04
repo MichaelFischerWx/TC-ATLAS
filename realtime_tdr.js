@@ -1313,6 +1313,48 @@
      *  pass's peak 10-m estimate, joined to the pass center by a dashed radial —
      *  so the quadrant an estimate came from is read off the map, not inferred.
      *  Honors the flight selection like the sonde/VDM markers. */
+    /** ' · 128–147 kt with either eyewall RMW' — the pass re-scored with the RMW
+     *  measured on its inbound and outbound eyewall crossings. SEAR's largest
+     *  sensitivity is r/RMW, so a single number without this spread overstates
+     *  the precision (Lowell 2026-09-04 20:23Z: 147 kt at the two-leg mean RMW,
+     *  128 kt at the outbound leg's own RMW). */
+    function _hdobSearRange(p) {
+        var r = p && p.y_range_kt;
+        if (!r || r.length !== 2 || r[0] == null || r[1] == null) return '';
+        var lo = Math.round(r[0]), hi = Math.round(r[1]);
+        if (hi - lo < 2) return '';
+        return lo + '\u2013' + hi + ' kt';
+    }
+    /** Multiline HTML: how the estimate was built + center/fix caveats. */
+    function _hdobSearDetail(p) {
+        if (!p) return '';
+        var L = [];
+        var c = p.chain;
+        if (c && c.s1 != null && c.s2 != null && c.f10 != null && p.fl_peak_kt != null) {
+            L.push('FL ' + Math.round(p.fl_peak_kt) + ' kt \u00d7 ' + c.s1.toFixed(2) + ' (to 500 m) \u00d7 ' + c.s2.toFixed(2) +
+                   ' (to 150 m) \u00d7 ' + c.f10.toFixed(3) + ' (to 10 m) = ' + Math.round(p.y_kt) + ' kt');
+        }
+        var rg = _hdobSearRange(p);
+        if (rg) {
+            L.push('Range ' + rg + ': re-scored with the RMW of each eyewall crossing' +
+                   (p.rmw_in_km != null && p.rmw_out_km != null ? ' (in ' + Math.round(p.rmw_in_km) + ' km, out ' + Math.round(p.rmw_out_km) + ' km)' : ''));
+        }
+        var co = p.contrib && p.contrib.s2;
+        if (co && co.length) {
+            L.push('Largest term: ' + co[0][0] + ' ' + co[0][1] + ' (' + (co[0][2] >= 0 ? '+' : '') + co[0][2].toFixed(2) + ' on the 500 m\u2192150 m ratio)');
+        }
+        if (p.fix_source === 'hdob') {
+            L.push('Preliminary center: ' + (p.center_method === 'HDOB_WIND+PRES' ? 'wind + pressure centroids' :
+                   p.center_method === 'HDOB_WIND_CTR' ? 'calm-wind centroid' : p.center_method === 'HDOB_PMIN_PLATEAU' ? 'pressure-plateau centroid' : 'flight-level pressure minimum') +
+                   (p.ctr_spread_km != null ? ', ' + Math.round(p.ctr_spread_km) + ' km apart' : '') + ' (no VDM yet)');
+        }
+        if (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30) {
+            L.push('\u26a0 nearest center fix is ' + Math.round(Math.abs(p.fix_dt_min)) + ' min away \u2014 center extrapolated');
+        }
+        return L.join('<br>');
+    }
+    window._hdobSearDetail = _hdobSearDetail;
+
     function _hdobRenderSearPasses(map, selPass) {
         for (var i = 0; i < _hdobSearMarkers.length; i++) { try { map.removeLayer(_hdobSearMarkers[i]); } catch (e) {} }
         _hdobSearMarkers = [];
@@ -1366,10 +1408,11 @@
             // its quadrant read off the map without hovering.
             var mk = L.circleMarker([p.lat, p.lon],
                 { radius: isSel ? 6 : 4, color: PINK, weight: isSel ? 3 : 2, opacity: 0.95, fillColor: '#fff', fillOpacity: 0.9 });
-            var tip = '<b>SEAR ' + Math.round(p.y_kt) + ' kt</b> 10-m estimate (exp)' +
+            var rg = _hdobSearRange(p), det = _hdobSearDetail(p);
+            var tip = '<b>SEAR ' + Math.round(p.y_kt) + ' kt</b> 10-m estimate (exp)' + (rg ? ' · <b>' + rg + '</b>' : '') +
                 (where ? '<br>' + where : '') + '<br>' + when +
                 (p.fl_peak_kt != null ? ' · FL peak ' + Math.round(p.fl_peak_kt) + ' kt' : '') +
-                (prelim ? '<br>preliminary center' : '');
+                (det ? '<br><span style="opacity:.8">' + det + '</span>' : '');
             try { mk.bindTooltip(tip, { direction: 'top', offset: [0, -6] }); } catch (e) {}
             mk.addTo(map); _hdobSearMarkers.push(mk);
             var q = (kit && kit.compass8) ? kit.compass8(p.az_deg) : (p.quad || '');
@@ -1587,18 +1630,25 @@
             if (sp.status === 'no_env') return head + 'no GFS environment yet.';
             return head + 'no scored passes yet.';
         }
-        var anyPrelim = false;
+        var anyPrelim = false, anyRange = false, anyStale = false;
         var parts = sp.passes.slice(-4).map(function (p) {
             if (p.fix_source === 'hdob') anyPrelim = true;
             var kit = window._ReconKit;
             var q = (kit && kit.compass8) ? kit.compass8(p.az_deg) : '';
             if (!q && p.quad) q = p.quad;
+            var rg = _hdobSearRange(p);
+            if (rg) anyRange = true;
+            if (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30) anyStale = true;
             return String(p.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(p.tail) + ' ' + Math.round(p.y_kt) + ' kt' +
+                (rg ? ' [' + rg.replace(' kt', '') + ']' : '') +
                 (q ? ' (' + q + (p.r_km != null ? ' ' + Math.round(p.r_km) + ' km' : '') + ')' : '') +
-                (p.fix_source === 'hdob' ? '*' : '');
+                (p.fix_source === 'hdob' ? '*' : '') +
+                (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30 ? '\u2020' : '');
         });
         return head + 'Pass maxima (quadrant, radius from center) ' + parts.join(' · ') + ' (updated ' + String(sp.generated).slice(11, 16) + 'Z)' +
-            (anyPrelim ? ' — * preliminary center from the flight-level pressure minimum, no VDM yet' : '');
+            (anyRange ? ' — [lo–hi] = the same observation re-scored with the RMW of each eyewall crossing of that pass; SEAR is most sensitive to r/RMW, so read the range' : '') +
+            (anyPrelim ? ' — * preliminary center from the calm-wind and pressure-plateau centroids of the eye crossing, no VDM yet' : '') +
+            (anyStale ? ' — \u2020 nearest center fix more than 30 min away, center extrapolated' : '');
     }
 
     /** Mission-extremes strip for the displayed sortie: max flight-level wind,
@@ -1617,6 +1667,14 @@
                 if (o.sear_kt != null && (!best.sear || o.sear_kt > best.sear.v)) best.sear = { v: o.sear_kt, t: o.t, tail: ac.tail, prelim: o.sear_fix === 'hdob', az: o.sear_az, r: o.sear_r_km };
             });
         });
+        // the pass-maximum record behind the SEAR tile carries the RMW range
+        var searRange = '';
+        if (best.sear && _hdobData && _hdobData.sear && _hdobData.sear.passes) {
+            var bt = String(best.sear.t).slice(0, 16);
+            _hdobData.sear.passes.forEach(function (p) {
+                if (_hdobTailEq(p.tail, best.sear.tail) && String(p.t).slice(0, 16) === bt) searRange = _hdobSearRange(p);
+            });
+        }
         function tile(label, b, unit, cls, extra, tip) {
             if (!b) return '';
             var sub = String(b.t || '').slice(11, 16) + 'Z · ' + _hdobTailDisplay(b.tail) + (extra || '');
@@ -1633,6 +1691,7 @@
                    tile('Max SEAR 10-m (exp)', best.sear, 'kt', 'is-sear',
                         (best.sear && best.sear.az != null && window._ReconKit && window._ReconKit.searWhere
                             ? ' · ' + window._ReconKit.searWhere(best.sear.az, best.sear.r) : '') +
+                        (searRange ? ' · ' + searRange : '') +
                         (best.sear && best.sear.prelim ? ' · prelim fix' : ''),
                         'SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Not an official product.');
         el.innerHTML = html;
