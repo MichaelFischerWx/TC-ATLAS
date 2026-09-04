@@ -1165,18 +1165,32 @@
         var layout = B.geoLayout(bounds, { domainY: [0, 1], insetLon: insetLon, insetLat: insetLat, insetDomain: { x: [0.01, 0.17], y: [0.02, 0.36] } });
         layout.margin = { l: 4, r: 4, t: 8, b: 4 };
         // Burn the liability note into the map itself (survives screenshots).
+        // Plotly annotations clip rather than wrap, so fit the box to the map:
+        // pick the largest font whose longest line fits, then shorten lines.
+        var mapW = Math.max(200, el.clientWidth || 600);
+        var fcm2 = M.risk.nhc && modalOfficial();
+        function annLines(short) {
+            var L = ['<b>Not an official forecast</b>',
+                     esc(short ? (M.data.variant === 'wnv3' ? 'WN3' : 'FNV3') + ' ensemble' : modalModelTag() + ' ensemble · experimental'),
+                     '<span style="color:' + ofclCasing() + ';">━━</span> ensemble mean' + (short ? '' : ' (solid)')];
+            if (M.risk.swath) L.push('<span style="color:' + CYAN + ';">╌╌</span> ' + M.risk.swath + '% ensemble swath' + (short ? ' — not NHC cone' : ' — not the NHC cone'));
+            else L.push(short ? 'wind chances — not NHC' : 'wind chances — not NHC probabilities');
+            if (fcm2) L.push(ofclSwatch() + ' ' + esc(fcm2.name || fcm2.tech) + (short ? ' (dashed)' : ' forecast (dashed) — authoritative'));
+            return L;
+        }
+        function plainLen(t) { return t.replace(/<[^>]*>/g, '').length; }
+        var annFont = 10, lines = annLines(false), maxPx = mapW - 28;
+        function widest(ls) { return Math.max.apply(null, ls.map(function (t) { return plainLen(t) * annFont * 0.56; })); }
+        while (widest(lines) > maxPx && annFont > 8) annFont--;
+        if (widest(lines) > maxPx) { lines = annLines(true); while (widest(lines) > maxPx && annFont > 7) annFont--; }
         layout.annotations = (layout.annotations || []).concat([{
             // Bottom-left: clear of the ⤓ PNG button (top-right) on every width.
             xref: 'paper', yref: 'paper', x: 0.005, y: 0.01, xanchor: 'left', yanchor: 'bottom', showarrow: false, align: 'left',
-            text: '<b>Not an official forecast</b><br>' + esc(modalModelTag()) + ' ensemble · experimental<br>'
-                + '<span style="color:' + ofclCasing() + ';">━━</span> ensemble mean (solid)<br>'
-                + (M.risk.swath ? '<span style="color:' + CYAN + ';">╌╌</span> ' + M.risk.swath + '% ensemble swath — not the NHC cone' : 'wind chances — not NHC probabilities'),
-            font: { size: 10, color: isDark ? '#e2e8f0' : '#0f172a' },
+            text: lines.join('<br>'),
+            font: { size: annFont, color: isDark ? '#e2e8f0' : '#0f172a' },
             bgcolor: isDark ? 'rgba(15,23,42,0.72)' : 'rgba(255,255,255,0.78)',
             bordercolor: 'rgba(0,229,255,0.45)', borderwidth: 1, borderpad: 5,
         }]);
-        var ann = layout.annotations[layout.annotations.length - 1];
-        if (M.risk.nhc && modalOfficial()) ann.text += '<br>' + ofclSwatch() + ' ' + esc(modalOfficial().name || modalOfficial().tech) + ' forecast (dashed) — authoritative';
         layout.dragmode = 'pan';
         Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: true });
         if (!el._rtdmClickBound) {
