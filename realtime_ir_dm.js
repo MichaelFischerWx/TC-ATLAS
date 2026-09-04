@@ -23,12 +23,20 @@
     var OTHER = '#f472b6';      // the *other* model in Compare (pink, reads on cyan)
     var OFCL_RED = '#ff4757';
 
+    var OFCL_STYLE = { color: '#ff4757', weight: 2.6, opacity: 0.95, dashArray: '9,6', interactive: false, pane: 'dmProbPane' };
+    function ofclLabel(fc) { return (fc.name || fc.tech) + ' forecast · issued ' + fmtInit(fc.init) + ' UTC'; }
+    // Official points deduped by tau (a-deck repeats rows per radius line).
+    function ofclPoints(fc) {
+        var seen = {}, out = [];
+        (fc.track.points || []).forEach(function (p) { if (p.lat != null && !seen[p.tau]) { seen[p.tau] = 1; out.push(p); } });
+        return out.sort(function (a, b) { return a.tau - b.tau; });
+    }
     var S = {
         visible: false,
         tab: 'intensity',
         stormId: null,
         risk: { thresh: 0, horizon: 120, layers: [], ellipses: false, ellipseLayers: [],
-                grids: {}, point: null, marker: null, clickBound: false },
+                grids: {}, point: null, marker: null, clickBound: false, nhc: true, nhcLayers: [] },
         lf:   { data: null, layers: [], showPts: true, loading: false },
         cmp:  { other: null, otherModel: null, loading: false, overlay: false, layers: [] },
         landMask: null,
@@ -140,7 +148,7 @@
     function resetStorm() {
         clearAllMapLayers();
         S.risk = { thresh: 0, horizon: 120, layers: [], ellipses: false, ellipseLayers: [],
-                   grids: {}, point: null, marker: null, clickBound: false };
+                   grids: {}, point: null, marker: null, clickBound: false, nhc: true, nhcLayers: [] };
         S.lf = { data: null, layers: [], showPts: true, loading: false };
         S.cmp = { other: null, otherModel: null, loading: false, overlay: false, layers: [] };
         var pr = $('rt-dm-point-readout'); if (pr) pr.innerHTML = '';
@@ -233,6 +241,13 @@
             + chip('Ensemble ellipses', r.ellipses, 'window.RTDM.toggleEllipses()',
                    '50% and 90% ellipses of member positions every 24 h — an ensemble statistic, not the NHC forecast cone')
             + '</div>';
+        var fcCard = officialTrack();
+        if (fcCard) {
+            html += '<div class="rt-dm-row"><span class="rt-dm-row-l">Reference</span>'
+                + chip('<span style="color:' + OFCL_RED + ';">— —</span> ' + esc(fcCard.name || fcCard.tech), r.nhc, 'window.RTDM.toggleNhc()',
+                       'Show the official forecast track (red dashed) as the authoritative reference')
+                + '<span class="rt-dm-readout-sub">' + esc(ofclLabel(fcCard)) + ' · the authoritative forecast</span></div>';
+        }
         html += '<div id="rt-dm-risk-legend" class="rt-dm-legend"' + (r.thresh ? '' : ' style="display:none;"') + '>'
             + '<span class="rt-dm-legend-t">P(≥' + (r.thresh || 34) + ' kt) within ' + r.horizon + ' h</span>'
             + '<div class="rt-dm-legend-bar" style="background:' + legendCSS() + ';"></div>'
@@ -248,6 +263,7 @@
         // Restore map state for this tab.
         if (r.thresh) drawRiskOverlay();
         if (r.ellipses) drawEllipses();
+        if (r.nhc) drawCardNhc();
         bindClick();
     }
     function setRisk(th) {
@@ -256,6 +272,21 @@
     }
     function setHorizon(h) { S.risk.horizon = h; S.risk.grids = {}; renderRisk(); }
     function toggleEllipses() { S.risk.ellipses = !S.risk.ellipses; renderRisk(); }
+    function toggleNhc() { S.risk.nhc = !S.risk.nhc; renderRisk(); }
+    function drawCardNhc() {
+        removeLayers(S.risk.nhcLayers);
+        var map = B.map(), fc = officialTrack(); if (!map || !fc) return;
+        var pts = ofclPoints(fc);
+        var segs = B.splitAtAntimeridian(pts.map(function (p) { return [p.lat, p.lon]; }));
+        for (var i = 0; i < segs.length; i++) if (segs[i].length >= 2) S.risk.nhcLayers.push(L.polyline(segs[i], OFCL_STYLE).addTo(map));
+        for (var j = 0; j < pts.length; j++) {
+            var p = pts[j]; if (p.tau % 24 !== 0) continue;
+            var m = L.circleMarker([p.lat, p.lon], { radius: 4, color: '#fff', weight: 1.2, fillColor: OFCL_RED, fillOpacity: 1, pane: 'dmProbPane' }).addTo(map);
+            m.bindTooltip('<b>' + esc(fc.name || fc.tech) + '</b> +' + p.tau + ' h · ' + fmtTauDate(fc.init, p.tau) + '<br>' + B.fmtLatLon(p.lat, p.lon)
+                + (p.wind != null ? '<br>' + p.wind + ' kt' : '') + '<br><i>official forecast — authoritative</i>', { direction: 'top', offset: [0, -6] });
+            S.risk.nhcLayers.push(m);
+        }
+    }
 
     function riskGrid(th) {
         var key = th + '@' + S.risk.horizon;
@@ -267,7 +298,7 @@
     }
     function clearRiskLayers() {
         hideBadge('card');
-        removeLayers(S.risk.layers); removeLayers(S.risk.ellipseLayers);
+        removeLayers(S.risk.layers); removeLayers(S.risk.ellipseLayers); removeLayers(S.risk.nhcLayers);
         if (S.risk.marker) { try { B.map().removeLayer(S.risk.marker); } catch (e) {} S.risk.marker = null; }
     }
     function drawRiskOverlay() {
@@ -550,8 +581,9 @@
         if (S.cmp.overlay && S.cmp.other) drawCmpOverlay();
     }
     // Latest a-deck cycle's official track (OFCL for NHC basins, JTWC elsewhere).
-    function officialTrack() {
-        var ad = B.adeck(); if (!ad || !ad.cycles || !ad.init_times || !ad.init_times.length) return null;
+    function officialTrack() { return officialTrackFrom(B.adeck()); }
+    function officialTrackFrom(ad) {
+        if (!ad || !ad.cycles || !ad.init_times || !ad.init_times.length) return null;
         for (var i = ad.init_times.length - 1; i >= 0 && i >= ad.init_times.length - 3; i--) {
             var init = ad.init_times[i], cyc = ad.cycles[init] || {};
             var techs = ['OFCL', 'JTWC'];
@@ -848,14 +880,80 @@
     // ═════════════════════════════════════════════════════════════════════
     //  DEEPMIND MODAL — Wind Risk + Landfall panes on the Plotly geo map
     // ═════════════════════════════════════════════════════════════════════
-    var M = { data: null, risk: { thresh: 34, horizon: 120, swath: 90, grids: {}, contours: {}, swaths: {}, probe: null }, lf: null, rendered: {} };
+    var M = { data: null, adeck: null, risk: { thresh: 34, horizon: 120, swath: 90, nhc: true, grids: {}, contours: {}, swaths: {}, probe: null }, lf: null, rendered: {} };
     function onGenesisDetail(d) {
-        // d = { memberKeys, members, mean, stats, init, variant, label, alreadyTC }
-        M.data = d; M.risk.grids = {}; M.risk.contours = {}; M.risk.swaths = {}; M.risk.probe = null; M.lf = null; M.rendered = {};
+        // d = { memberKeys, members, mean, stats, init, variant, label, alreadyTC, atcf }
+        M.data = d; M.adeck = null; M.risk.grids = {}; M.risk.contours = {}; M.risk.swaths = {}; M.risk.probe = null; M.lf = null; M.rendered = {};
         var r = $('rt-genesis-pane-risk'), l = $('rt-genesis-pane-landfall');
         if (r) r.innerHTML = ''; if (l) l.innerHTML = '';
+        // Official forecast for designated systems: fetched once, then laid
+        // onto the This-run map, the intensity fan, and the Wind Risk map.
+        if (d.atcf && B.fetchAdeck) {
+            var want = d.atcf;
+            B.fetchAdeck(want).then(function (ad) {
+                if (!M.data || M.data.atcf !== want) return;
+                M.adeck = ad;
+                decorateTrackMap('rt-genesis-modal-map'); decorateIntensity('rt-genesis-modal-int');
+                if (S_modalPaneVisible('risk')) drawModalRiskMap();
+            }).catch(function () {});
+        }
     }
-    function onGenesisClose() { M.data = null; M.rendered = {}; }
+    function S_modalPaneVisible(name) { var p = $('rt-genesis-pane-' + name); return !!(p && p.style.display !== 'none'); }
+    function onGenesisClose() { M.data = null; M.adeck = null; M.rendered = {}; }
+    function modalOfficial() { return M.adeck ? officialTrackFrom(M.adeck) : null; }
+
+    // ── NHC reference on existing charts ───────────────────────────────
+    // Remove any trace we added before (idempotent re-decoration).
+    function stripOurTraces(el) {
+        if (!el || !el.data) return;
+        var idx = [];
+        for (var i = 0; i < el.data.length; i++) if (el.data[i] && el.data[i]._rtdm) idx.push(i);
+        if (idx.length) { try { Plotly.deleteTraces(el, idx); } catch (e) {} }
+    }
+    // This-run track map (scattergeo, unwrapped-lon frame on el._genesisLonRef).
+    function decorateTrackMap(elId) {
+        var el = $(elId); if (!el || !el.data || typeof Plotly === 'undefined') return;
+        stripOurTraces(el);
+        var fc = modalOfficial(); if (!fc) return;
+        var ref = el._genesisLonRef != null ? el._genesisLonRef : 0;
+        var pts = ofclPoints(fc);
+        var lon = [], lat = [], txt = [], sz = [];
+        pts.forEach(function (p) { lon.push(T().unwrapLon(p.lon, ref)); lat.push(p.lat); sz.push(p.tau % 24 === 0 ? 7 : 0);
+            txt.push('<b>' + esc(fc.name || fc.tech) + '</b> +' + p.tau + ' h · ' + fmtTauDate(fc.init, p.tau) + (p.wind != null ? ' · ' + p.wind + ' kt' : '') + '<br>official forecast — authoritative'); });
+        var last = pts.length - 1;
+        Plotly.addTraces(el, [
+            { type: 'scattergeo', mode: 'lines+markers', lon: lon, lat: lat, text: txt, hovertemplate: '%{text}<extra></extra>',
+              line: { color: OFCL_RED, width: 2.6, dash: 'dash' }, marker: { size: sz, color: OFCL_RED, line: { color: '#fff', width: 1 } },
+              name: ofclLabel(fc), showlegend: false, _rtdm: 1 },
+            { type: 'scattergeo', mode: 'text', lon: [lon[last]], lat: [lat[last]], text: ['  ' + (fc.name || fc.tech)], textposition: 'middle right',
+              textfont: { size: 10, color: OFCL_RED }, hoverinfo: 'skip', showlegend: false, _rtdm: 1 },
+        ]);
+    }
+    // Intensity fan (categorical '+Xh' x axis). Valid-time aligned: official
+    // tau + (official init − ensemble init) → ensemble tau label.
+    function decorateIntensity(elId) {
+        var el = $(elId); if (!el || !el.data || typeof Plotly === 'undefined') return;
+        stripOurTraces(el);
+        var fc, dmInit;
+        if (elId === 'ir-intensity-chart') { fc = officialTrack(); dmInit = B.wl() && B.wl().init_time; }
+        else { fc = modalOfficial(); dmInit = M.data && M.data.init; }
+        if (!fc || !dmInit) return;
+        var off = T().initOffsetH(dmInit, fc.init);
+        var cats = {}; (el.data[0] && el.data[0].x || []).forEach(function (x) { cats[x] = 1; });
+        if (!Object.keys(cats).length) return;
+        var mslp = B.intensityMetric && B.intensityMetric() === 'mslp';
+        var xs = [], ys = [], txt = [];
+        ofclPoints(fc).forEach(function (p) {
+            var v = mslp ? p.pres : p.wind; if (v == null) return;
+            var lab = '+' + (p.tau + off) + 'h'; if (!cats[lab]) return;
+            xs.push(lab); ys.push(v); txt.push(fmtTauDate(fc.init, p.tau) + ' (official +' + p.tau + ' h)');
+        });
+        if (!xs.length) return;
+        Plotly.addTraces(el, [{ type: 'scatter', mode: 'lines+markers', x: xs, y: ys, text: txt,
+            line: { color: OFCL_RED, width: 2.4, dash: 'dash' }, marker: { size: 6, color: OFCL_RED, line: { color: '#fff', width: 1 } },
+            name: (fc.name || fc.tech) + ' forecast', hovertemplate: '%{text}<br>' + esc(fc.name || fc.tech) + ': %{y:.0f} ' + (mslp ? 'hPa' : 'kt') + '<extra>authoritative forecast</extra>',
+            showlegend: true, _rtdm: 1 }]);
+    }
     function renderGenesisPane(name) {
         if (!M.data) return;
         if (name === 'risk') renderModalRisk();
@@ -880,10 +978,17 @@
             + '<div class="rt-dm-row"><span class="rt-dm-row-l">Ensemble swath</span>'
             + modalChip('Off', r.swath === 0, 'window.RTDM.modalSwath(0)') + modalChip('50%', r.swath === 50, 'window.RTDM.modalSwath(50)', 'Half of the members stay inside this swath — an ensemble statistic, not the NHC forecast cone')
             + modalChip('90%', r.swath === 90, 'window.RTDM.modalSwath(90)', 'Nine in ten members stay inside this swath — an ensemble statistic, not the NHC forecast cone') + '</div>'
+            + (modalOfficial() ? '<div class="rt-dm-row"><span class="rt-dm-row-l">Reference</span>'
+                + modalChip('<span style="color:' + OFCL_RED + ';">— —</span> ' + esc(modalOfficial().name || modalOfficial().tech), r.nhc, 'window.RTDM.modalNhc()', 'Official forecast track (red dashed) — the authoritative guidance')
+                + '<span class="rt-dm-readout-sub">' + esc(ofclLabel(modalOfficial())) + '</span></div>' : '')
             + '</div>'
+            + '<div class="rt-dm-readout-sub" style="margin:0 0 2px;">Hover the field for wind chances at any point · click to set the probe · scroll or pinch to zoom, drag to pan</div>'
             // Capped width + centred: at full modal width a compact system left
             // wide empty ocean on both sides; ~2:1 keeps the field filling the frame.
-            + '<div id="rt-genesis-modal-riskmap" style="width:100%; max-width:860px; height:420px; margin:0 auto;"></div>'
+            + '<div style="position:relative; max-width:860px; margin:0 auto;">'
+            + '<button type="button" class="rt-genesis-modal-save" title="Save the wind-risk map as PNG (with TC-ATLAS watermark and the not-an-official-forecast note)" onclick="window.RTDM.exportModalRiskMap()">⤓ PNG</button>'
+            + '<div id="rt-genesis-modal-riskmap" style="width:100%; height:420px;"></div>'
+            + '</div>'
             + '<div class="rt-dm-legend" style="max-width:860px; margin:6px auto 2px;"><span class="rt-dm-legend-t">' + (r.thresh ? 'P(≥' + r.thresh + ' kt) within ' + r.horizon + ' h — filled contours at 10 / 30 / 50 / 70 / 90 %' : 'Wind-chance layer off') + '</span>'
             + (r.thresh ? '<div class="rt-dm-legend-bar" style="background:' + legendCSS() + ';"></div><div class="rt-dm-legend-ticks"><span>5%</span><span>20%</span><span>40%</span><span>60%</span><span>80%</span><span>100%</span></div>' : '') + '</div>'
             + '<div class="rt-genesis-probe" style="max-width:860px; margin:6px auto;"><span>Probe a point:</span>'
@@ -903,8 +1008,10 @@
     function modalRisk(th) { M.risk.thresh = th; renderModalRisk(); }
     function modalHorizon(h) { M.risk.horizon = h; M.risk.grids = {}; M.risk.contours = {}; M.risk.swaths = {}; renderModalRisk(); }
     function modalSwath(v) { M.risk.swath = v; renderModalRisk(); }
+    function modalNhc() { M.risk.nhc = !M.risk.nhc; renderModalRisk(); }
     function modalProbe(clear) {
         if (clear === null) { M.risk.probe = null; renderModalRisk(); return; }
+        if (clear && typeof clear === 'object' && clear.lat != null) { M.risk.probe = { lat: clear.lat, lon: clear.lon }; renderModalRisk(); return; }
         var la = parseFloat(($('rt-genesis-probe-lat') || {}).value), lo = parseFloat(($('rt-genesis-probe-lon') || {}).value);
         if (!isFinite(la) || !isFinite(lo)) { var o = $('rt-genesis-probe-out'); if (o) o.innerHTML = '<div class="rt-dm-hint">Enter a latitude and longitude, e.g. 21.3 and -157.9.</div>'; return; }
         M.risk.probe = { lat: la, lon: lo };
@@ -921,11 +1028,12 @@
         else html += '<div class="rt-dm-readout-sub">No member brings tropical-storm-force wind to this point within ' + M.risk.horizon + ' h.</div>';
         o.innerHTML = html;
     }
-    function modalGrid() {
-        var r = M.risk, key = r.thresh + '@' + r.horizon;
-        if (r.grids[key] === undefined) r.grids[key] = T().windProbGrid(M.data.members, { thresh: r.thresh, maxTau: r.horizon, cellDeg: 0.2, stepH: 2 }) || null;
+    function gridFor(th) {
+        var r = M.risk, key = th + '@' + r.horizon;
+        if (r.grids[key] === undefined) r.grids[key] = T().windProbGrid(M.data.members, { thresh: th, maxTau: r.horizon, cellDeg: 0.2, stepH: 2 }) || null;
         return r.grids[key];
     }
+    function modalGrid() { return gridFor(M.risk.thresh); }
     function modalContours() {
         var r = M.risk, key = r.thresh + '@' + r.horizon;
         if (r.contours[key] === undefined) { var g = modalGrid(); r.contours[key] = g ? T().probContours(g, [0.1, 0.3, 0.5, 0.7, 0.9], { smooth: 2, minCells: 4 }) : []; }
@@ -991,6 +1099,33 @@
                       marker: { size: mt.map(function (t) { return t % 24 === 0 ? 7 : 0; }), color: mw, colorscale: B.ssScale(), cmin: 0, cmax: 200, line: { color: isDark ? '#0f172a' : '#fff', width: 1 } },
                       text: mt.map(function (t, k) { return '+' + t + ' h · ' + fmtTauDate(d.init, t) + (mw[k] != null ? ' · ' + Math.round(mw[k]) + ' kt' : ''); }),
                       hovertemplate: '%{text}<extra>ensemble mean</extra>', showlegend: false });
+        // Hover grid: Plotly geo only reports hovers on drawn points, so lay an
+        // invisible lattice over the field carrying P(≥34/50/64) per cell.
+        // Clicking a lattice point sets the probe (arrival timing below).
+        if (M.risk.thresh) {
+            var g34 = gridFor(34), g50 = gridFor(50), g64 = gridFor(64), gBase = modalGrid();
+            if (gBase) {
+                var stepC = Math.max(1, Math.round(0.4 / gBase.dLon));
+                var hl = [], hla = [], ht = [];
+                for (var rr2 = 0; rr2 < gBase.ny; rr2 += stepC) for (var cc2 = 0; cc2 < gBase.nx; cc2 += stepC) {
+                    var pv = gBase.prob[rr2 * gBase.nx + cc2]; if (!(pv >= 0.03)) continue;
+                    var cl = gBase.lat0 - (rr2 + 0.5) * gBase.dLat, cn = gBase.lon0 + (cc2 + 0.5) * gBase.dLon;
+                    var p34 = T().gridSample(g34, cl, cn), p50 = T().gridSample(g50, cl, cn), p64 = T().gridSample(g64, cl, cn);
+                    hl.push(U(cn)); hla.push(cl);
+                    ht.push(B.fmtLatLon(cl, T().wrapLon(cn)) + '<br>≥34 kt <b>' + pct(p34) + '</b> · ≥50 kt <b>' + pct(p50) + '</b> · ≥64 kt <b>' + pct(p64) + '</b><br><span style="font-size:0.8em">within ' + M.risk.horizon + ' h · click for arrival timing</span>');
+                }
+                traces.push({ type: 'scattergeo', mode: 'markers', lon: hl, lat: hla, text: ht, hovertemplate: '%{text}<extra></extra>',
+                              marker: { size: 9, opacity: 0.001, color: '#000' }, showlegend: false, _hoverGrid: 1 });
+            }
+        }
+        if (M.risk.nhc && modalOfficial()) {
+            var fcm = modalOfficial(), fpts = ofclPoints(fcm);
+            traces.push({ type: 'scattergeo', mode: 'lines+markers', lon: fpts.map(function (p) { return U(p.lon); }), lat: fpts.map(function (p) { return p.lat; }),
+                          text: fpts.map(function (p) { return '<b>' + esc(fcm.name || fcm.tech) + '</b> +' + p.tau + ' h · ' + fmtTauDate(fcm.init, p.tau) + (p.wind != null ? ' · ' + p.wind + ' kt' : '') + '<br>official forecast — authoritative'; }),
+                          hovertemplate: '%{text}<extra></extra>', line: { color: OFCL_RED, width: 2.6, dash: 'dash' },
+                          marker: { size: fpts.map(function (p) { return p.tau % 24 === 0 ? 7 : 0; }), color: OFCL_RED, line: { color: '#fff', width: 1 } }, showlegend: false });
+            fpts.forEach(function (p) { allLat.push(p.lat); allLon.push(U(p.lon)); });
+        }
         if (M.risk.probe) {
             traces.push({ type: 'scattergeo', mode: 'markers+text', lon: [U(M.risk.probe.lon)], lat: [M.risk.probe.lat], text: ['probe'], textposition: 'top center',
                           textfont: { size: 10, color: CYAN }, marker: { size: 11, color: CYAN, line: { color: '#fff', width: 2 } }, hoverinfo: 'skip', showlegend: false });
@@ -1011,7 +1146,36 @@
             bgcolor: isDark ? 'rgba(15,23,42,0.72)' : 'rgba(255,255,255,0.78)',
             bordercolor: 'rgba(0,229,255,0.45)', borderwidth: 1, borderpad: 5,
         }]);
-        Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: false });
+        var ann = layout.annotations[layout.annotations.length - 1];
+        if (M.risk.nhc && modalOfficial()) ann.text += '<br><span style="color:' + OFCL_RED + '">— —</span> ' + esc(modalOfficial().name || modalOfficial().tech) + ' forecast — authoritative';
+        layout.dragmode = 'pan';
+        Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: true });
+        if (!el._rtdmClickBound) {
+            el._rtdmClickBound = true;
+            el.on('plotly_click', function (ev) {
+                var pt = ev && ev.points && ev.points[0]; if (!pt || !pt.data || !pt.data._hoverGrid) return;
+                modalProbe({ lat: pt.lat, lon: T().wrapLon(pt.lon) });
+            });
+        }
+    }
+    // PNG of the modal Wind Risk map: rasterize the geo panel (SVG path on
+    // Safari) then stamp the footer — caption (storm · model · layer · NOT an
+    // official forecast) bottom-left, TC-ATLAS logo + tcatlas.org bottom-right.
+    function exportModalRiskMap() {
+        var el = $('rt-genesis-modal-riskmap'); if (!el || !el.data || !M.data || typeof Plotly === 'undefined') return;
+        var W = 1600, H = Math.max(600, Math.round(W * el.clientHeight / Math.max(1, el.clientWidth)));
+        var r = M.risk;
+        // Keep it to one line clear of the watermark: the map's own annotation
+        // already carries the swath / cone wording.
+        var caption = (M.data.label || '') + ' · ' + modalModelTag() + ' · init ' + fmtInit(M.data.init)
+            + (r.thresh ? ' · P(≥' + r.thresh + ' kt) within ' + r.horizon + ' h' : '')
+            + ' · NOT an official forecast';
+        var fn = 'TC-ATLAS_' + (M.data.atcf || (M.data.label || 'system').replace(/[^a-z0-9]+/gi, '_')) + '_wind_risk'
+            + (r.thresh ? '_p' + r.thresh + '_' + r.horizon + 'h' : '') + '_' + (M.data.variant === 'wnv3' ? 'WN3' : 'FNV3') + '_init' + (M.data.init || '') + '.png';
+        B.panelExportURL(el, 2.2, W, H, 1).then(function (url) {
+            B.stampExport(url, W, H, function (blob) { if (blob) B.saveImageBlob(blob, fn); }, caption);
+        }).catch(function (e) { console.warn('[RTDM] risk map export failed', e); });
+        B.ga('rt_dm_modal_risk_export', { thresh: r.thresh });
     }
     function renderModalLandfall() {
         var el = $('rt-genesis-pane-landfall'); if (!el || !M.data) return;
@@ -1100,7 +1264,10 @@
         globalRiskOn: function () { return !!G.thresh; }, clearGlobalRisk: clearGlobalRisk,
         // DeepMind modal
         onGenesisDetail: onGenesisDetail, onGenesisClose: onGenesisClose, renderGenesisPane: renderGenesisPane,
-        modalRisk: modalRisk, modalHorizon: modalHorizon, modalSwath: modalSwath, modalProbe: modalProbe,
+        modalRisk: modalRisk, modalHorizon: modalHorizon, modalSwath: modalSwath, modalProbe: modalProbe, modalNhc: modalNhc,
+        decorateTrackMap: decorateTrackMap, decorateIntensity: decorateIntensity, toggleNhc: toggleNhc,
+        exportModalRiskMap: exportModalRiskMap,
+        _m: M,
         onWeatherlab: onWeatherlab, onEnsemble: onEnsemble, onPanels: onPanels, onStormClose: onStormClose,
         setTab: setTab, setRisk: setRisk, setHorizon: setHorizon, toggleEllipses: toggleEllipses, clearPoint: clearPoint,
         toggleLfPoints: toggleLfPoints, loadOther: loadOther, toggleCmpOverlay: toggleCmpOverlay,

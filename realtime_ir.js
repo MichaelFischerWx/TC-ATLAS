@@ -14403,6 +14403,19 @@
             genesisBounds: function (a, b, c, d, e) { return _genesisBoundsFromMean(a, b, c, d, e); },
             circMeanLon: function (l) { return _genesisCircMeanLon(l); },
             ssScale: function () { return _GENESIS_SS_SCALE; },
+            intensityMetric: function () { return _rtIntensityMetric; },
+            panelExportURL: function (el, scale, W, h, ss) { return _panelExportURL(el, scale, W, h, ss); },
+            stampExport: function (url, w, h, cb, caption) { return _tcStampExport(url, w, h, cb, caption); },
+            // a-deck for any storm id (the modal may show a storm other than
+            // the open card); shares the card's panel cache.
+            fetchAdeck: function (atcfId) {
+                var c = _panelCache[atcfId];
+                if (c && c.models && (Date.now() - c.cachedAt) < PANEL_CACHE_TTL_MS) return Promise.resolve(c.models);
+                return _rtFetchJSON(API_BASE + '/global/adeck?atcf_id=' + encodeURIComponent(atcfId)).then(function (json) {
+                    if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
+                    _panelCache[atcfId].models = json; return json;
+                });
+            },
         });
     }
     var _rtStormNames = {};   // atcf_id → name, filled as storm markers render
@@ -17557,12 +17570,15 @@
         };
         function _genesisShowPane(name) {
             if (!panes[name]) return;
-            if ((name === 'risk' || name === 'landfall') && window.RTDM) {
-                try { window.RTDM.renderGenesisPane(name); } catch (e) { console.warn('[RTDM]', e); }
-            }
             Object.keys(panes).forEach(function (k) {
                 if (panes[k]) panes[k].style.display = (k === name) ? '' : 'none';
             });
+            // Wind Risk / Landfall render lazily — AFTER the pane is shown so
+            // the map measures its real width (a hidden pane measures 0 and
+            // the map falls back to a wide desktop aspect on phones).
+            if ((name === 'risk' || name === 'landfall') && window.RTDM) {
+                try { window.RTDM.renderGenesisPane(name); } catch (e) { console.warn('[RTDM]', e); }
+            }
             jumpBtns.forEach(function (b) {
                 b.classList.toggle('active', b.getAttribute('data-pane') === name);
             });
@@ -18281,6 +18297,12 @@
                     memberKeys: memberKeys, members: members, mean: mean, stats: stats,
                     init: json.init_time, variant: _detVariant, label: _genesisExportStorm,
                     alreadyTC: _genesisAlreadyTC,
+                    // ATCF id when this is a designated system (invest / named);
+                    // pre-genesis clusters have none and get no official track.
+                    // Designated systems: the paired track id, or the ATCF match
+                    // a genesis cluster was labeled with (subtitle's "ATCF:" pill).
+                    atcf: (/^[A-Z]{2}\d{6}$/.test(String(json.track_id || '')) ? json.track_id
+                           : ((typeof _metaForSub !== 'undefined' && _metaForSub && _metaForSub.atcfMatch && _metaForSub.atcfMatch.atcfId) || null)),
                 });
                 // Re-render if the user is already sitting on one of our panes.
                 var _actPane = m.querySelector('.rt-genesis-jump-btn.active');
@@ -20321,7 +20343,10 @@
         // so we don't over-zoom and crowd the legend.
         var rect = el.getBoundingClientRect();
         var containerAspect = rect.height > 0
-            ? Math.max(0.8, (rect.width - 70) / rect.height) : 2.2;
+            ? (_genesisNarrow()
+                ? Math.max(0.5, rect.width / (rect.height * 0.85))   // horizontal bar below, geo domain = 85 % of height
+                : Math.max(0.8, (rect.width - 70) / rect.height))
+            : 2.2;
         var bounds = _genesisBoundsFromMean(meanLats, meanLons,
                                              stats.genLats, genLonsU,
                                              containerAspect);
@@ -20541,6 +20566,9 @@
                       insetMarker],
                      layout,
                      { responsive: true, displayModeBar: false });
+        if (window.RTDM && window.RTDM.decorateTrackMap) {
+            try { window.RTDM.decorateTrackMap(el.id); } catch (e) { console.warn('[RTDM]', e); }
+        }
     }
 
     // Build a 2D density grid from member positions: raw histogram
@@ -21076,6 +21104,10 @@
         });
         Plotly.react(el, traces, layout,
                      { responsive: true, displayModeBar: false });
+        // NHC official forecast as the reference line (realtime_ir_dm.js).
+        if (window.RTDM && window.RTDM.decorateIntensity) {
+            try { window.RTDM.decorateIntensity(el.id); } catch (e) { console.warn('[RTDM]', e); }
+        }
     }
 
     /* Genesis-time histogram (figure 3).
@@ -22126,6 +22158,13 @@
             if (desiredLonSpan > lonSpan) {
                 var extra = (desiredLonSpan - lonSpan) / 2;
                 bLon = [bLon[0] - extra, bLon[1] + extra];
+            } else {
+                // Container is TALLER than the data (phone width): pad lat
+                // instead so the map fills the frame instead of leaving a
+                // short box with empty space beneath it.
+                var desiredLatSpan = lonSpan * cosLat / targetAspect;
+                var extraLat = (desiredLatSpan - latSpan) / 2;
+                if (extraLat > 0) bLat = [Math.max(-80, bLat[0] - extraLat), Math.min(80, bLat[1] + extraLat)];
             }
         }
         return { lat: bLat, lon: bLon };

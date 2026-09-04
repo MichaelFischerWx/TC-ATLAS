@@ -7832,3 +7832,35 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 .rt-genesis-disclaimer a { color: #00e5ff; text-decoration: none; }
 .rt-genesis-disclaimer a:hover { text-decoration: underline; }
 @media (max-width: 768px) { .rt-dm-map-badge { font-size: 0.56rem; max-width: 85%; } .rt-genesis-disclaimer { font-size: 0.62rem; } }
+
+/* ── DeepMind modal: one accent (the modal's orange), and the PNG button
+   off the plot on phones ────────────────────────────────────────────────
+   The tab pills, jump chips and save buttons used the site-wide blue while
+   every control inside the panes (Density/Members, Peak Vmax, chips) is
+   orange — two accents in one view. Unify on orange; the cyan disclaimer
+   strip stays cyan on purpose (DeepMind's color, and it must stand out). */
+.rt-genesis-jump-btn:hover,
+[data-theme="dark"] .rt-genesis-jump-btn:hover {
+    background: rgba(249, 115, 22, 0.10);
+    border-color: rgba(249, 115, 22, 0.45);
+}
+.rt-genesis-jump-btn.active {
+    background: rgba(249, 115, 22, 0.16);
+    border-color: rgba(249, 115, 22, 0.6);
+    color: #ea580c;
+}
+[data-theme="dark"] .rt-genesis-jump-btn.active {
+    background: rgba(249, 115, 22, 0.24);
+    border-color: rgba(249, 115, 22, 0.65);
+    color: #fdba74;
+}
+.rt-genesis-subnav-chip.active { color: #ea580c; border-bottom-color: #f97316; }
+[data-theme="dark"] .rt-genesis-subnav-chip.active { color: #fdba74; border-bottom-color: #fb923c; }
+.rt-genesis-modal-save { background: rgba(249, 115, 22, 0.14); }
+.rt-genesis-modal-save:hover { background: rgba(249, 115, 22, 0.26); border-color: rgba(249, 115, 22, 0.55); }
+/* Phones: the absolutely-positioned ⤓ PNG button sat on top of the plot's
+   top-right corner. Reserve a strip above each chart for it instead. */
+@media (max-width: 768px) {
+    .rt-genesis-modal-chart-wrap { padding-top: 32px; }
+    .rt-genesis-modal-save { top: 2px; right: 2px; }
+}
