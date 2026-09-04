@@ -9285,17 +9285,40 @@ _genesis_cycle_first_seen: dict = {}
 # probability, clustering gates) must scale off the OBSERVED sample count,
 # never a hard-coded 1000.
 _GENESIS_VARIANT_DEFAULT = "large"
-_GENESIS_VARIANT_NOMINAL_SIZE = {"large": 1000, "small": 50}
+# Cyclogenesis ensemble variants. A variant = (WeatherLab model, ensemble
+# product); every genesis cache/GCS/R2 key is namespaced by the variant id,
+# so adding one here is all the backend needs. `base` names the module
+# constant holding the download root (resolved at call time because the
+# LARGE base is defined further down the module).
+#   large — FNV3 1000-member LARGE_ENSEMBLE (richest stats, publishes last)
+#   small — FNV3 50-member (publishes first; a preliminary look)
+#   wnv3  — WeatherNext 3, 64 members (experimental, 2026-09; same CSV
+#           schema and 6-hourly cadence as FNV3)
+_GENESIS_VARIANTS = {
+    "large": {"base": "_WEATHERLAB_LARGE_BASE", "prefix": "FNV3_LARGE_ENSEMBLE",
+              "nominal": 1000, "label": "DeepMind FNV3 LARGE_ENSEMBLE",
+              "model": "fnv3"},
+    "small": {"base": "_WEATHERLAB_BASE", "prefix": "FNV3",
+              "nominal": 50, "label": "DeepMind FNV3 (50-member)",
+              "model": "fnv3"},
+    "wnv3":  {"base": "_WEATHERLAB_WNV3_BASE", "prefix": "WNV3",
+              "nominal": 64, "label": "DeepMind WeatherNext 3 (experimental)",
+              "model": "wnv3"},
+}
+_GENESIS_VARIANT_ORDER = tuple(_GENESIS_VARIANTS)   # preference order
+_GENESIS_VARIANT_NOMINAL_SIZE = {k: v["nominal"] for k, v in _GENESIS_VARIANTS.items()}
 
 
 def _genesis_variant_norm(variant) -> str:
-    """Normalize an incoming variant string to 'large' or 'small'."""
-    v = (variant or "").strip().lower()
+    """Normalize an incoming variant string to a _GENESIS_VARIANTS key."""
+    v = (variant or "").strip().lower().replace("-", "_")
     # Accept a few friendly aliases so the query param is forgiving.
     if v in ("small", "50", "fnv3", "fnv3_ensemble"):
         return "small"
     if v in ("large", "1000", "fnv3_large_ensemble", "large_ensemble"):
         return "large"
+    if v in ("wnv3", "wn3", "weathernext3", "weathernext_3", "64"):
+        return "wnv3"
     return _GENESIS_VARIANT_DEFAULT
 
 
@@ -9303,16 +9326,19 @@ def _genesis_variant_source(variant) -> tuple:
     """Return (base_url, file_prefix) for the cyclogenesis CSV of this
     variant. Resolved at call time so it can reference _WEATHERLAB_LARGE_BASE,
     which is defined later in the module."""
-    if _genesis_variant_norm(variant) == "small":
-        return _WEATHERLAB_BASE, "FNV3"
-    return _WEATHERLAB_LARGE_BASE, "FNV3_LARGE_ENSEMBLE"
+    spec = _GENESIS_VARIANTS[_genesis_variant_norm(variant)]
+    return globals()[spec["base"]], spec["prefix"]
 
 
 def _genesis_variant_label(variant) -> str:
     """Human-readable model string for response payloads."""
-    if _genesis_variant_norm(variant) == "small":
-        return "DeepMind FNV3 (50-member)"
-    return "DeepMind FNV3 LARGE_ENSEMBLE"
+    return _GENESIS_VARIANTS[_genesis_variant_norm(variant)]["label"]
+
+
+def _genesis_variant_nominal(variant) -> int:
+    """Nominal ensemble size — the divisor fallback when the observed
+    member count for a cycle isn't available."""
+    return _GENESIS_VARIANTS[_genesis_variant_norm(variant)]["nominal"]
 
 
 def _genesis_data_ensemble_size(data: dict) -> int:
@@ -9742,7 +9768,7 @@ def refresh_genesis_cache() -> dict:
     values) so the steady-state request is the same cache key.
     """
     out = {}
-    for variant in ("large", "small"):
+    for variant in _GENESIS_VARIANT_ORDER:
         used_date, used_hour, data = _resolve_latest_genesis_cycle(
             require_data=True, variant=variant)
         init_time = (used_date.replace("-", "") + used_hour) if used_date else None
@@ -9758,7 +9784,7 @@ def refresh_genesis_cache() -> dict:
                 if clusters and c_dh:
                     ens = (_genesis_variant_clusters_size(
                                variant, c_dh[0], c_dh[1])
-                           or (1000 if variant == "large" else 50))
+                           or _genesis_variant_nominal(variant))
                     _tca_get_families(c_init, c_params, clusters, ens,
                                       variant=variant)
             except Exception:
@@ -10008,7 +10034,7 @@ def _compute_genesis_cycles(now=None, limit: int = _GENESIS_CYCLES_MAX) -> list:
     if now is None:
         now = _dt.now(timezone.utc)
     candidates = _genesis_candidates(now=now)
-    tasks = [(d, h, v) for (d, h) in candidates for v in ("large", "small")]
+    tasks = [(d, h, v) for (d, h) in candidates for v in _GENESIS_VARIANT_ORDER]
     briefs = {}
     if tasks:
         from concurrent.futures import ThreadPoolExecutor
@@ -10025,18 +10051,18 @@ def _compute_genesis_cycles(now=None, limit: int = _GENESIS_CYCLES_MAX) -> list:
     cycles = []
     for date_str, hour_str in candidates:
         per_variant = {}
-        for variant in ("large", "small"):
+        for variant in _GENESIS_VARIANT_ORDER:
             avail, n = briefs.get((date_str, hour_str, variant), (False, None))
             per_variant[variant] = {"available": bool(avail), "n_tracks": n}
-        if not (per_variant["large"]["available"]
-                or per_variant["small"]["available"]):
-            continue   # neither variant published for this cycle yet
+        avail_order = [v for v in _GENESIS_VARIANT_ORDER
+                       if per_variant[v]["available"]]
+        if not avail_order:
+            continue   # no variant published for this cycle yet
         cycles.append({
             "init_time": date_str.replace("-", "") + hour_str,
-            # Back-compat scalar = the large count if present, else small.
-            "n_tracks": (per_variant["large"]["n_tracks"]
-                         if per_variant["large"]["available"]
-                         else per_variant["small"]["n_tracks"]),
+            # Back-compat scalar = the first available variant's count in
+            # preference order (large, then small, then wnv3).
+            "n_tracks": per_variant[avail_order[0]]["n_tracks"],
             "variants": per_variant,
         })
         if len(cycles) >= limit:
@@ -11966,7 +11992,7 @@ def get_weatherlab_genesis_clusters(
     cycle_age_h = (now - cycle_dt).total_seconds() / 3600.0
     next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time)
     ens_size = (_genesis_variant_clusters_size(variant_n, used_date, used_hour)
-                or (1000 if variant_n == "large" else 50))
+                or _genesis_variant_nominal(variant_n))
     families = _tca_get_families(init_time, params, clusters, ens_size,
                                  variant=variant_n)
     fam_by_tid = {tid: f["family_id"]
@@ -12044,7 +12070,7 @@ def get_weatherlab_genesis_cluster(
         cycle_age_h = (now - _genesis_cycle_dt(used_date, used_hour)).total_seconds() / 3600.0
     ens_size = ((_genesis_variant_clusters_size(variant_n, used_date, used_hour)
                  if used_date else None)
-                or (1000 if variant_n == "large" else 50))
+                or _genesis_variant_nominal(variant_n))
     families = _tca_get_families(init_time, params, clusters, ens_size,
                                  variant=variant_n)
     family = next((f for f in families if tca_id in f["cluster_ids"]), None)
@@ -12122,7 +12148,7 @@ def get_weatherlab_genesis_family(
         cycle_age_h = (now - _genesis_cycle_dt(used_date, used_hour)).total_seconds() / 3600.0
     ens_size = ((_genesis_variant_clusters_size(variant_n, used_date, used_hour)
                  if used_date else None)
-                or (1000 if variant_n == "large" else 50))
+                or _genesis_variant_nominal(variant_n))
     families = _tca_get_families(init_time, params, clusters, ens_size,
                                  variant=variant_n)
     fam = next((f for f in families if f["family_id"] == family_id), None)

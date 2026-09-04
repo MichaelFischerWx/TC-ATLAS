@@ -952,8 +952,30 @@
     //             OBSERVED ensemble size returned by the backend, not 1000.
     // The default is resolved on load to whatever gives the freshest cycle
     // (see _loadGenesisCycleList).
-    var _genesisEnsembleVariant = 'large';
-    var _GENESIS_VARIANT_NOMINAL = { large: 1000, small: 50 };
+    //   'wnv3'  = 64-member WeatherNext 3 (experimental). Selected whenever
+    //             the sitewide DeepMind model toggle (_rtDmModel) is WN3;
+    //             the 1000/50 size choice only applies to FNV3.
+    var _genesisEnsembleVariant = (_rtDmModel === 'wnv3') ? 'wnv3' : 'large';
+    // Display/behavior table — one row per backend variant id. `tag` is the
+    // dock's member tag, `chip` the picker chip text, `note` the small
+    // qualifier shown beside the picker + in the modal byline.
+    var _GENESIS_VARIANTS = {
+        large: { chip: '1000', tag: '1000-mbr', label: 'FNV3 LARGE_ENSEMBLE', note: '',
+                 model: 'fnv3',
+                 title: 'DeepMind 1000-member ensemble (FNV3 LARGE_ENSEMBLE) — richer stats, publishes later' },
+        small: { chip: '50', tag: '50-mbr', label: 'FNV3 (50-member)', note: 'preliminary',
+                 model: 'fnv3',
+                 title: 'DeepMind 50-member ensemble (FNV3) — coarser, publishes earlier' },
+        wnv3:  { chip: 'WN3', tag: 'WN3 64-mbr', label: 'WeatherNext 3 (64-member)', note: 'experimental',
+                 model: 'wnv3',
+                 title: 'WeatherNext 3 cyclogenesis ensemble (64 members) — experimental, not yet operational' }
+    };
+    var _GENESIS_VARIANT_ORDER = ['large', 'small', 'wnv3'];
+    var _GENESIS_VARIANT_NOMINAL = { large: 1000, small: 50, wnv3: 64 };
+    function _genesisVariantNorm(v) { return _GENESIS_VARIANTS[v] ? v : 'large'; }
+    // Last FNV3 ensemble size the user chose (or the freshest-cycle default),
+    // restored when the model toggle goes WN3 -> FNV3.
+    var _genesisFnv3Size = 'large';
     // Tuner disclosure state — collapsed by default. The user can
     // expand it via the disclosure summary; their preference persists
     // across menu re-renders within the page session.
@@ -6572,13 +6594,11 @@
                 // for the freshest cycle.
                 var cycVar = L.DomUtil.create('span', 'rt-dock-variant', cyc);
                 cycVar.id = 'ir-dock-variant';
-                ['large', 'small'].forEach(function (v) {
+                _GENESIS_VARIANT_ORDER.forEach(function (v) {
                     var vb = L.DomUtil.create('button', 'rt-dock-var-btn', cycVar);
                     vb.setAttribute('data-variant', v);
-                    vb.textContent = (v === 'large') ? '1000' : '50';
-                    vb.title = (v === 'large')
-                        ? 'DeepMind 1000-member ensemble (FNV3 LARGE_ENSEMBLE) — richer stats, publishes later'
-                        : 'DeepMind 50-member ensemble (FNV3) — coarser, publishes earlier';
+                    vb.textContent = _GENESIS_VARIANTS[v].chip;
+                    vb.title = _GENESIS_VARIANTS[v].title;
                     vb.addEventListener('click', function () { _genesisSetVariant(v); });
                 });
 
@@ -14261,11 +14281,23 @@
         if (src && src.textContent !== 'Best track') src.textContent = _dmModelTag();
     }
 
-    /** Swap the DeepMind model behind every WeatherLab surface. Refetches
-     *  the open storm card (re-enabling the overlay if it was on) and the
-     *  Global Map 10-day layer if it's on. */
+    /** Swap the DeepMind model behind every WeatherLab surface: the open
+     *  storm card (re-enabling the overlay if it was on), the Global Map
+     *  10-day layer if it's on, and the cyclogenesis layer's variant. */
     window._rtSetDmModel = function (model) {
         model = (model === 'wnv3') ? 'wnv3' : 'fnv3';
+        if (model === _rtDmModel) return;
+        _rtApplyDmModel(model);
+        // Genesis follows the model: WN3 -> its own ensemble; FNV3 -> the
+        // last FNV3 size the user had. (fromModel: don't loop back here.)
+        var want = (model === 'wnv3') ? 'wnv3' : _genesisFnv3Size;
+        if (want !== _genesisEnsembleVariant) _genesisSetVariant(want, { fromModel: true });
+    };
+
+    /** Model switch for the storm card + 10-day layer only (no genesis
+     *  side effects) — the shared core of _rtSetDmModel and of a genesis
+     *  picker click that implies a model change. */
+    function _rtApplyDmModel(model) {
         if (model === _rtDmModel) return;
         _rtDmModel = model;
         try { localStorage.setItem(_DM_MODEL_LS_KEY, model); } catch (e) {}
@@ -14291,7 +14323,7 @@
             _loadGlobalWeatherlab();
         }
         _ga('rt_dm_model', { model: model });
-    };
+    }
 
     /** Render the ensemble percentile-bands forecast plot into the storm
      *  card's intensity chart container (`ir-intensity-chart`), mirroring
@@ -15023,8 +15055,11 @@
     }
     // Model byline shown in the modal subtitle / menus.
     function _genesisVariantModelLabel(variant) {
-        return (variant || _genesisEnsembleVariant) === 'small'
-            ? 'FNV3 (50-member)' : 'FNV3 LARGE_ENSEMBLE';
+        return _GENESIS_VARIANTS[_genesisVariantNorm(variant || _genesisEnsembleVariant)].label;
+    }
+    // Short qualifier ('preliminary' / 'experimental' / '') for a variant.
+    function _genesisVariantNote(variant) {
+        return _GENESIS_VARIANTS[_genesisVariantNorm(variant || _genesisEnsembleVariant)].note;
     }
 
     // Small "pending / not-yet-published" clock glyph in the site's inline-SVG
@@ -16776,8 +16811,7 @@
             }
             var memArrays = sampleKeys.map(function (k) { return best[k].points; });
             return {
-                model: (meta.variant === 'small')
-                    ? 'DeepMind FNV3 (50-member)' : 'DeepMind FNV3 LARGE_ENSEMBLE',
+                model: 'DeepMind ' + _genesisVariantModelLabel(meta.variant),
                 variant: meta.variant || _genesisEnsembleVariant,
                 ensemble_size: meta.ensembleSize || null,
                 init_time: initTime || meta.initTime,
@@ -17467,8 +17501,7 @@
         function _fromCache() {
             // Build a backend-shaped response from the cluster cache.
             return {
-                model: (meta && meta.variant === 'small')
-                    ? 'DeepMind FNV3 (50-member)' : 'DeepMind FNV3 LARGE_ENSEMBLE',
+                model: 'DeepMind ' + _genesisVariantModelLabel(meta && meta.variant),
                 variant: _detailVariant,
                 ensemble_size: (meta && meta.ensembleSize) || null,
                 init_time: meta && meta.initTime,
@@ -17693,7 +17726,8 @@
             }
             var R = _IR_DM_NEAR_RADIUS_KM;
             fetch(API_BASE + '/ir-monitor/weatherlab-genesis-near?lat=' + lat
-                    + '&lon=' + lon + '&radius_km=' + R + '&variant=large',
+                    + '&lon=' + lon + '&radius_km=' + R + '&variant='
+                    + (_dmIsWn3() ? 'wnv3' : 'large'),
                     { cache: 'no-store' })
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -17732,7 +17766,9 @@
                 });
         }
 
-        tryPaired(['large', 'small'], 0);
+        // Under WN3 the only cyclogenesis product is WN3 itself; under FNV3
+        // try the richer 1000-member set first, then the 50-member.
+        tryPaired(_dmIsWn3() ? ['wnv3'] : ['large', 'small'], 0);
     };
 
     // Format a remaining-ms duration as "~Xh Ym" / "~Mm" / "<1m".
@@ -17842,7 +17878,7 @@
             '<strong>' + memberKeys.length + '</strong> ensemble members',
             '<span style="opacity:0.8;">'
                 + _genesisVariantModelLabel(_detVariant)
-                + (_detVariant === 'small' ? ' · preliminary' : '')
+                + (_genesisVariantNote(_detVariant) ? ' · ' + _genesisVariantNote(_detVariant) : '')
                 + '</span>',
             // Method note: the D markers are automated clusters of member
             // genesis events, and one real system can span several of
@@ -22985,9 +23021,15 @@
         if (!_genesisCycleList.length) return false;   // wait for a list
         _genesisVariantInitialized = true;
         var freshest = _genesisCycleList[0];
-        var want =
-            _genesisCycleHasVariant(freshest, 'large') ? 'large'
-            : (_genesisCycleHasVariant(freshest, 'small') ? 'small' : 'large');
+        var want;
+        if (_dmIsWn3()) {
+            // Sitewide model toggle is WN3: the genesis layer follows it.
+            want = 'wnv3';
+        } else {
+            want = _genesisCycleHasVariant(freshest, 'large') ? 'large'
+                : (_genesisCycleHasVariant(freshest, 'small') ? 'small' : 'large');
+            _genesisFnv3Size = want;
+        }
         _genesisActiveCycle = null;
         if (want !== _genesisEnsembleVariant) {
             _genesisEnsembleVariant = want;
@@ -23000,8 +23042,16 @@
     // the new variant, jump to the freshest cycle that does (or unpin to
     // follow the latest of the new variant). Clears variant-scoped caches so
     // stale markers/clusters from the other ensemble don't linger.
-    function _genesisSetVariant(v) {
-        v = (v === 'small') ? 'small' : 'large';
+    // `opts.fromModel` marks a call from the sitewide model toggle, which has
+    // already switched _rtDmModel; otherwise picking WN3 / an FNV3 size here
+    // flips the sitewide model to match (one source of truth for the model).
+    function _genesisSetVariant(v, opts) {
+        v = _genesisVariantNorm(v);
+        if (v !== 'wnv3') _genesisFnv3Size = v;
+        if (!(opts && opts.fromModel)) {
+            var wantModel = _GENESIS_VARIANTS[v].model;
+            if (wantModel !== _rtDmModel) _rtApplyDmModel(wantModel);
+        }
         if (v === _genesisEnsembleVariant) return;
         _genesisEnsembleVariant = v;
         _genesisVariantInitialized = true;   // user override sticks
@@ -23139,8 +23189,7 @@
                 + (cycVarTracks === 1 ? '' : 's');
         }
         // Member tag so the user always knows which ensemble is in view.
-        var memberTag = (_genesisEnsembleVariant === 'small')
-            ? ' · 50-mbr' : ' · 1000-mbr';
+        var memberTag = ' · ' + _GENESIS_VARIANTS[_genesisVariantNorm(_genesisEnsembleVariant)].tag;
         // Compact init (drop the year — the dock is tight): "06-01 06Z".
         var compactInit = (curInit && curInit.length >= 10)
             ? curInit.slice(4, 6) + '-' + curInit.slice(6, 8)
@@ -23173,7 +23222,7 @@
             var active = (v === _genesisEnsembleVariant);
             b.classList.toggle('is-active', active);
             var gap = freshest && !_genesisCycleHasVariant(freshest, v);
-            var lbl = (v === 'large') ? '1000' : '50';
+            var lbl = (_GENESIS_VARIANTS[v] || {}).chip || v;
             b.innerHTML = lbl + (gap ? _GENESIS_PENDING_SVG : '');
         }
     }
@@ -25349,26 +25398,27 @@
         // Defaults to whatever gives the freshest cycle; toggling to a
         // variant the current cycle lacks jumps to the freshest run that
         // has it. Mirrors the Method chip row styling.
-        var _vSmall = _genesisEnsembleVariant === 'small';
-        var lgBg  = !_vSmall ? 'rgba(249,115,22,0.32)' : 'transparent';
-        var smBg  =  _vSmall ? 'rgba(249,115,22,0.32)' : 'transparent';
-        var lgCol = !_vSmall ? '#f97316' : 'inherit';
-        var smCol =  _vSmall ? '#f97316' : 'inherit';
-        // Note when a variant isn't published for the freshest cycle.
+        // One chip per variant (1000 / 50 / WN3). Picking WN3 here also flips
+        // the sitewide DeepMind model (and vice versa) so the storm card,
+        // 10-day layer, and genesis markers never disagree on the model.
+        // A clock glyph marks a variant not published for the freshest cycle.
         var _freshest = _genesisCycleList[0];
-        var lgGap = (_freshest && !_genesisCycleHasVariant(_freshest, 'large'));
-        var smGap = (_freshest && !_genesisCycleHasVariant(_freshest, 'small'));
+        var _curVar = _genesisVariantNorm(_genesisEnsembleVariant);
         html += '<div class="ir-global-menu-row ir-global-method-row" style="opacity:'
             + (_rtGenesisVisible ? 1 : 0.45) + ';">'
-            + '<span style="font-size:0.72rem; opacity:0.75; margin-right:8px;">Members:</span>'
-            + '<button type="button" class="ir-global-genvariant-chip" data-genvariant="large"'
-            + ' style="background:' + lgBg + '; color:' + lgCol + ';">'
-            + '1000' + (lgGap ? _GENESIS_PENDING_SVG : '') + '</button>'
-            + '<button type="button" class="ir-global-genvariant-chip" data-genvariant="small"'
-            + ' style="background:' + smBg + '; color:' + smCol + ';">'
-            + '50' + (smGap ? _GENESIS_PENDING_SVG : '') + '</button>'
-            + (_vSmall
-                ? '<span style="font-size:0.66rem; opacity:0.7; margin-left:8px;">preliminary</span>'
+            + '<span style="font-size:0.72rem; opacity:0.75; margin-right:8px;">Ensemble:</span>';
+        _GENESIS_VARIANT_ORDER.forEach(function (v) {
+            var on = (v === _curVar);
+            var gap = (_freshest && !_genesisCycleHasVariant(_freshest, v));
+            html += '<button type="button" class="ir-global-genvariant-chip" data-genvariant="' + v + '"'
+                + ' title="' + _escAttr(_GENESIS_VARIANTS[v].title) + '"'
+                + ' style="background:' + (on ? 'rgba(249,115,22,0.32)' : 'transparent')
+                + '; color:' + (on ? '#f97316' : 'inherit') + ';">'
+                + _GENESIS_VARIANTS[v].chip + (gap ? _GENESIS_PENDING_SVG : '') + '</button>';
+        });
+        html += (_GENESIS_VARIANTS[_curVar].note
+                ? '<span style="font-size:0.66rem; opacity:0.7; margin-left:8px;">'
+                  + _GENESIS_VARIANTS[_curVar].note + '</span>'
                 : '')
             + '</div>';
         // Clustering-method picker — two radio-style chips inline so
