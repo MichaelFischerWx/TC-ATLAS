@@ -1718,11 +1718,22 @@
             });
         }
         var snapP = soft('map readback', glMap && kit.glSnapshot ? kit.glSnapshot(glMap) : Promise.resolve(null));
+        // The science content — flight path + barbs (the 2-D recon canvas) and
+        // the aircraft / sonde / VDM icons — is painted DIRECTLY from the live
+        // DOM with the 2-D API, never through html2canvas. A user's save
+        // (2026-09-04, Lowell) came back with the satellite but none of the
+        // overlay: html2canvas had failed or returned blank in that browser, and
+        // everything that mattered rode on it. Now html2canvas only carries the
+        // residual chrome (legend key, zoom control), and losing it costs nothing.
+        var directP = soft('map layers', Promise.resolve().then(function () { return _hdobDrawMapLayersDirect(mapEl, scale); }));
+        var _DIRECT_ICON_RE = /(^|\s)(recon-hdob-aircraft|rt-recon-sonde-icon|rt-recon-vdm-icon)(\s|$)/;
         var overlayP = soft('map overlay', kit.ensureHtml2canvas().then(function () {
             return window.html2canvas(mapEl, {
                 useCORS: true, allowTaint: false, backgroundColor: null, logging: false, scale: scale,
                 ignoreElements: function (el) {
-                    return el.tagName === 'CANVAS' && /maplibregl-canvas/.test(el.className || '');
+                    var cls = (typeof el.className === 'string') ? el.className : '';
+                    if (el.tagName === 'CANVAS' && /maplibregl-canvas|leaflet-recon-canvas/.test(cls)) return true;
+                    return _DIRECT_ICON_RE.test(cls);   // painted by the direct pass
                 },
                 onclone: function (doc) {
                     var m = doc.getElementById('recon-hdob-map');
@@ -1730,8 +1741,8 @@
                 }
             });
         }));
-        var mapP = Promise.all([snapP, overlayP]).then(function (r) {
-            var snap = r[0], overlay = r[1];
+        var mapP = Promise.all([snapP, overlayP, directP]).then(function (r) {
+            var snap = r[0], overlay = r[1], direct = r[2];
             var W = (overlay && overlay.width) || (snap && snap.width) || Math.round(mr.width * scale) || 600;
             var H = (overlay && overlay.height) || (snap && snap.height) || Math.round(mr.height * scale) || 600;
             var comp = document.createElement('canvas');
@@ -1744,6 +1755,7 @@
             } else if (typeof rtToast === 'function') {
                 rtToast('Saved without the satellite layer — the browser couldn’t read the map canvas.', 'warn');
             }
+            if (direct && direct.width && direct.height) { try { cx.drawImage(direct, 0, 0, direct.width, direct.height, 0, 0, W, H); } catch (e) {} }
             if (overlay && overlay.width && overlay.height) { try { cx.drawImage(overlay, 0, 0); } catch (e) {} }
             // Prove the composite is still readable (a tainted overlay would
             // poison every later toBlob); if not, fall back to the raw snapshot.
@@ -1783,6 +1795,67 @@
             if (btn) { btn.textContent = orig; btn.disabled = false; }
         });
     };
+
+    /** Paint the recon map's own layers straight from the live DOM at `scale`×:
+     *  the 2-D recon canvas (flight path + barbs + track dots) and the
+     *  aircraft / dropsonde / VDM divIcon markers, each redrawn with the 2-D
+     *  API from the same geometry the icon HTML uses. Same-origin canvases and
+     *  vector paths only, so the result can never taint. Returns a canvas
+     *  sized to the map element (transparent where nothing is drawn). */
+    function _hdobDrawMapLayersDirect(mapEl, scale) {
+        var mr = mapEl.getBoundingClientRect();
+        if (!(mr.width > 0) || !(mr.height > 0)) return null;
+        var W = Math.round(mr.width * scale), H = Math.round(mr.height * scale);
+        var c = document.createElement('canvas'); c.width = W; c.height = H;
+        var ctx = c.getContext('2d');
+        ctx.scale(scale, scale);
+        function rel(el) { var r = el.getBoundingClientRect(); return { x: r.left - mr.left, y: r.top - mr.top, w: r.width, h: r.height }; }
+        // 1. The barb/track canvas, at its on-screen offset (it is positioned
+        //    with a translate via L.DomUtil.setPosition).
+        var rc = mapEl.querySelector('canvas.leaflet-recon-canvas');
+        if (rc && rc.width && rc.height) {
+            var rr = rel(rc);
+            try { ctx.drawImage(rc, rr.x, rr.y, rr.w || rc.width, rr.h || rc.height); } catch (e) { console.warn('[Recon] direct barb draw failed:', e); }
+        }
+        // 2. Marker icons — selected by the divIcon classes, not
+        //    .leaflet-marker-icon: the GL facade hands the icon element to a
+        //    maplibregl.Marker (anchor: center) and never adds Leaflet's class.
+        var icons = mapEl.querySelectorAll('.recon-hdob-aircraft, .rt-recon-sonde-icon, .rt-recon-vdm-icon');
+        var PLANE = 'M12 2 L14.2 10 L22 13.5 L22 15.5 L14.2 13.5 L13.4 19 L16 21 L16 22.3 L12 21.2 L8 22.3 L8 21 L10.6 19 L9.8 13.5 L2 15.5 L2 13.5 L9.8 10 Z';
+        for (var i = 0; i < icons.length; i++) {
+            var el = icons[i];
+            var cls = (typeof el.className === 'string') ? el.className : '';
+            var cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) continue;
+            var r = rel(el);
+            if (!(r.w > 0) || r.x + r.w < 0 || r.y + r.h < 0 || r.x > mr.width || r.y > mr.height) continue;
+            var cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+            ctx.save();
+            if (/recon-hdob-aircraft/.test(cls)) {
+                var mrot = /rotate\((-?[\d.]+)/.exec(el.innerHTML || ''), hdg = mrot ? parseFloat(mrot[1]) : 0;
+                ctx.translate(cx, cy); ctx.rotate(hdg * Math.PI / 180);
+                var k = 26 / 24; ctx.scale(k, k); ctx.translate(-12, -12);
+                ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 1.5;
+                var path = (typeof Path2D === 'function') ? new Path2D(PLANE) : null;
+                if (path) {
+                    ctx.fillStyle = '#fde047'; ctx.fill(path);
+                    ctx.shadowBlur = 0; ctx.lineWidth = 0.7; ctx.lineJoin = 'round'; ctx.strokeStyle = '#1f2937'; ctx.stroke(path);
+                } else { ctx.fillStyle = '#fde047'; ctx.beginPath(); ctx.arc(12, 12, 6, 0, Math.PI * 2); ctx.fill(); }
+            } else if (/rt-recon-sonde-icon/.test(cls)) {
+                ctx.translate(cx, cy); ctx.rotate(Math.PI / 4);
+                ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 3;
+                ctx.fillStyle = '#fbbf24'; ctx.fillRect(-5.5, -5.5, 11, 11);
+                ctx.shadowBlur = 0; ctx.lineWidth = 1.5; ctx.strokeStyle = '#1f2937'; ctx.strokeRect(-5.5, -5.5, 11, 11);
+            } else if (/rt-recon-vdm-icon/.test(cls)) {
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.font = '15px sans-serif';
+                ctx.shadowColor = '#000'; ctx.shadowBlur = 2;
+                ctx.fillStyle = '#f87171'; ctx.fillText('\u2295', cx, cy + 0.5);
+            }
+            ctx.restore();
+        }
+        return c;
+    }
 
     /** Lay chart (left) + map (right) onto a canvas with a header + TC-ATLAS
      *  watermark, theme-matched, and trigger the download. Inputs are already
