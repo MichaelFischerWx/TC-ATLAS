@@ -1707,27 +1707,27 @@
                 '<div class="recon-vdm-stat-label">' + label + '</div>' +
                 '<div class="recon-vdm-stat-sub">' + sub + '</div></div>';
         }
-        // 2026-09-05: the SEAR tile leads with the consensus of the last three eyewall
-        // crossings (what the MLBT record's smoother does); the strongest crossing is context.
-        var cons = _hdobData && _hdobData.sear && _hdobData.sear.consensus;
-        var searTile = cons && cons.kt != null
-            ? { v: cons.kt, t: cons.t_last, tail: best.sear ? best.sear.tail : '', cons: true }
-            : best.sear;
+        // 2026-09-05 (PI): Vmax is a maximum -- the tile shows the STRONGEST crossing of the last 3 h,
+        // with the window's other crossings and the RMW range beside it so its credibility is explicit.
+        var hd = _hdobData && _hdobData.sear && _hdobData.sear.headline;
+        var searTile = hd && hd.kt != null ? { v: hd.kt, t: hd.t, tail: hd.tail, prelim: hd.fix_source === 'hdob' } : best.sear;
+        var searSub = '';
+        if (hd && hd.kt != null) {
+            if (hd.range_kt && hd.range_kt[0] != null && hd.range_kt[1] != null && Math.round(hd.range_kt[1]) - Math.round(hd.range_kt[0]) >= 2)
+                searSub += ' · RMW range ' + Math.round(hd.range_kt[0]) + '–' + Math.round(hd.range_kt[1]);
+            if (hd.others_kt && hd.others_kt.length)
+                searSub += ' · other crossings ' + Math.round(hd.others_min_kt) + (hd.others_kt.length > 1 ? '–' + Math.round(hd.others_max_kt) : '') + ' kt';
+            if (hd.fix_source === 'hdob') searSub += ' · prelim fix';
+        } else if (best.sear) {
+            searSub = (best.sear.az != null && window._ReconKit && window._ReconKit.searWhere ? ' · ' + window._ReconKit.searWhere(best.sear.az, best.sear.r) : '') +
+                      (searRangeLed ? ' · most likely ' + Math.round(best.sear.v) + ' kt' : (searRange ? ' · ' + searRange : '')) +
+                      (best.sear.prelim ? ' · prelim fix' : '');
+        }
         var html = tile('Max FL wind', best.fl, 'kt') +
                    tile('Min extrap SLP', best.slp, 'mb', 'is-accent') +
                    tile('Max SFMR', best.sfmr, 'kt') +
-                   (cons && cons.kt != null
-                    ? tile('SEAR 10-m (exp)', searTile, 'kt', 'is-sear',
-                           ' · median of last ' + cons.n + ' crossings · strongest ' + Math.round(cons.strongest_kt) + ' kt' +
-                           (best.sear && best.sear.prelim ? ' · prelim fix' : ''),
-                           'SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Consensus of the last crossings; a single crossing is one sample of a maximum. Not an official product.')
-                    : '') +
-                   (cons && cons.kt != null ? '' : tile('Max SEAR 10-m (exp)', best.sear, 'kt', 'is-sear',
-                        (best.sear && best.sear.az != null && window._ReconKit && window._ReconKit.searWhere
-                            ? ' · ' + window._ReconKit.searWhere(best.sear.az, best.sear.r) : '') +
-                        (searRangeLed ? ' · most likely ' + Math.round(best.sear.v) + ' kt' : (searRange ? ' · ' + searRange : '')) +
-                        (best.sear && best.sear.prelim ? ' · prelim fix' : ''),
-                        'SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Not an official product.'));
+                   tile('Max SEAR 10-m (exp)', searTile, 'kt', 'is-sear', searSub,
+                        'SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Strongest crossing of the last 3 h; a single crossing carries about 7-10 kt of RMW uncertainty. Not an official product.');
         el.innerHTML = html;
         el.style.display = html ? '' : 'none';
     }
