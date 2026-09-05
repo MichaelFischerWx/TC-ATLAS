@@ -30970,7 +30970,7 @@
             // Experimental SEAR 10-m estimate (MLBT), joined by (tail, time) in _rtSearAttach.
             _rtReconRow('<span title="SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Not an official product.">SEAR 10-m est (exp)</span>', ob.sear_kt != null ?
                 ob.sear_kt + ' kt' +
-                (ob.sear_corr_kt != null && ob.sear_corr_kt !== ob.sear_kt ? ' · RMW-corr ' + ob.sear_corr_kt : '') +
+                (ob.sear_uncorr_kt != null && ob.sear_uncorr_kt !== ob.sear_kt ? ' · before RMW corr ' + ob.sear_uncorr_kt : '') +
                 (ob.sear_az != null ? ' · ' + _rtSearWhere(ob.sear_az, ob.sear_r_km) : '') +
                 (ob.sear_fix === 'hdob' ? ' · prelim fix' : '') : null) +
             _rtReconRow('FL pres', ob.fl_pres_mb != null ? ob.fl_pres_mb + ' mb' : null) +
@@ -31423,7 +31423,9 @@
                 (ac.track || []).forEach(function (o) {
                     var i = m ? m[o.t] : undefined;
                     if (i == null) { o.sear_kt = null; o.sear_30s_kt = null; o.sear_corr_kt = null; o.sear_fix = null; o.sear_az = null; o.sear_r_km = null; return; }
-                    o.sear_kt = a.yp[i]; o.sear_30s_kt = a.y[i]; o.sear_corr_kt = a.ypc[i];
+                    // 2026-09-05: headline is the RMW-corrected value (what the MLBT record assimilates);
+                    // the uncorrected 10-s-peak chain is kept as sear_uncorr_kt.
+                    o.sear_kt = (a.ypc && a.ypc[i] != null) ? a.ypc[i] : a.yp[i]; o.sear_uncorr_kt = a.yp[i]; o.sear_30s_kt = a.y[i]; o.sear_corr_kt = a.ypc[i];
                     o.sear_fix = a.fix ? a.fix[i] : null;
                     // storm-relative geometry of the ob (publisher ≥ 2026-09-03)
                     o.sear_az = a.az ? a.az[i] : null; o.sear_r_km = a.r ? a.r[i] : null;
@@ -31453,11 +31455,12 @@
         }
         var last = sp.passes[sp.passes.length - 1];
         var q = _rtCompass8(last.az_deg) || last.quad || '';
-        var rg = last.y_range_kt, rgs = '', head = Math.round(last.y_kt) + ' kt';
+        var yh = (last.y_corr_kt != null) ? last.y_corr_kt : last.y_kt;   // RMW-corrected headline (2026-09-05)
+        var rg = last.y_range_kt, rgs = '', head = Math.round(yh) + ' kt';
         if (rg && rg.length === 2 && rg[0] != null && rg[1] != null && Math.round(rg[1]) - Math.round(rg[0]) >= 2) {
             rgs = Math.round(rg[0]) + '\u2013' + Math.round(rg[1]);   // re-scored with each eyewall crossing's RMW
             // preliminary center: the range IS the estimate; VDM-fixed: point value, range after
-            if (last.fix_source === 'hdob') head = rgs + ' kt (likely ' + Math.round(last.y_kt) + ')'; else head += ' [' + rgs + ']';
+            if (last.fix_source === 'hdob') head = rgs + ' kt (likely ' + Math.round(yh) + ')'; else head += ' [' + rgs + ']';
         }
         return ' · SEAR ' + head + (q ? ' ' + q : '') + ' (' + String(last.t).slice(11, 16) + 'Z' +
             (last.fix_source === 'hdob' ? ', prelim' : '') + ')';

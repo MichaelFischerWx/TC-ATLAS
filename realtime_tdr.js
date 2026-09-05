@@ -1329,14 +1329,16 @@
      *  ('129–148 kt'), since the point value depends on a center we have not
      *  confirmed; VDM-fixed passes lead with the point value. (Michael,
      *  2026-09-04: a range beats an uncertain guess.) */
+    /** RMW-corrected value is the headline (2026-09-05): it is what the MLBT record assimilates. */
+    function _hdobSearVal(p) { return (p && p.y_corr_kt != null) ? p.y_corr_kt : (p ? p.y_kt : null); }
     function _hdobSearHeadline(p) {
         var rg = _hdobSearRange(p);
         if (p && p.fix_source === 'hdob' && rg) return rg;
-        return Math.round(p.y_kt) + ' kt';
+        return Math.round(_hdobSearVal(p)) + ' kt';
     }
     function _hdobSearIsRangeLed(p) { return !!(p && p.fix_source === 'hdob' && _hdobSearRange(p)); }
     /** 'most likely 147 kt' — the point estimate that accompanies a range-led headline. */
-    function _hdobSearLikely(p) { return (p && p.y_kt != null) ? 'most likely ' + Math.round(p.y_kt) + ' kt' : ''; }
+    function _hdobSearLikely(p) { return (p && _hdobSearVal(p) != null) ? 'most likely ' + Math.round(_hdobSearVal(p)) + ' kt' : ''; }
     /** Multiline HTML: how the estimate was built + center/fix caveats. */
     function _hdobSearDetail(p) {
         if (!p) return '';
@@ -1344,7 +1346,8 @@
         var c = p.chain;
         if (c && c.s1 != null && c.s2 != null && c.f10 != null && p.fl_peak_kt != null) {
             L.push('FL ' + Math.round(p.fl_peak_kt) + ' kt \u00d7 ' + c.s1.toFixed(2) + ' (to 500 m) \u00d7 ' + c.s2.toFixed(2) +
-                   ' (to 150 m) \u00d7 ' + c.f10.toFixed(3) + ' (to 10 m) = ' + Math.round(p.y_kt) + ' kt');
+                   ' (to 150 m) \u00d7 ' + c.f10.toFixed(3) + ' (to 10 m) = ' + Math.round(p.y_kt) + ' kt' +
+                   (c.corr != null && p.y_corr_kt != null ? ' \u00d7 ' + c.corr.toFixed(3) + ' (TDR resolution, RMW ' + Math.round(p.rmw_km) + ' km) = ' + Math.round(p.y_corr_kt) + ' kt' : ''));
         }
         var rg = _hdobSearRange(p);
         if (rg) {
