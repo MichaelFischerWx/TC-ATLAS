@@ -31455,6 +31455,11 @@
         }
         var last = sp.passes[sp.passes.length - 1];
         var q = _rtCompass8(last.az_deg) || last.quad || '';
+        if (sp.consensus && sp.consensus.kt != null) {   // consensus of the last crossings (2026-09-05)
+            return ' · SEAR ' + Math.round(sp.consensus.kt) + ' kt (last ' + sp.consensus.n + ' crossings, strongest ' +
+                Math.round(sp.consensus.strongest_kt) + ')' + (q ? ' ' + q : '') + ' (' + String(last.t).slice(11, 16) + 'Z' +
+                (last.fix_source === 'hdob' ? ', prelim' : '') + ')';
+        }
         var yh = (last.y_corr_kt != null) ? last.y_corr_kt : last.y_kt;   // RMW-corrected headline (2026-09-05)
         var rg = last.y_range_kt, rgs = '', head = Math.round(yh) + ' kt';
         if (rg && rg.length === 2 && rg[0] != null && rg[1] != null && Math.round(rg[1]) - Math.round(rg[0]) >= 2) {

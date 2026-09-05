@@ -1707,15 +1707,27 @@
                 '<div class="recon-vdm-stat-label">' + label + '</div>' +
                 '<div class="recon-vdm-stat-sub">' + sub + '</div></div>';
         }
+        // 2026-09-05: the SEAR tile leads with the consensus of the last three eyewall
+        // crossings (what the MLBT record's smoother does); the strongest crossing is context.
+        var cons = _hdobData && _hdobData.sear && _hdobData.sear.consensus;
+        var searTile = cons && cons.kt != null
+            ? { v: cons.kt, t: cons.t_last, tail: best.sear ? best.sear.tail : '', cons: true }
+            : best.sear;
         var html = tile('Max FL wind', best.fl, 'kt') +
                    tile('Min extrap SLP', best.slp, 'mb', 'is-accent') +
                    tile('Max SFMR', best.sfmr, 'kt') +
-                   tile('Max SEAR 10-m (exp)', best.sear, 'kt', 'is-sear',
+                   (cons && cons.kt != null
+                    ? tile('SEAR 10-m (exp)', searTile, 'kt', 'is-sear',
+                           ' · median of last ' + cons.n + ' crossings · strongest ' + Math.round(cons.strongest_kt) + ' kt' +
+                           (best.sear && best.sear.prelim ? ' · prelim fix' : ''),
+                           'SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Consensus of the last crossings; a single crossing is one sample of a maximum. Not an official product.')
+                    : '') +
+                   (cons && cons.kt != null ? '' : tile('Max SEAR 10-m (exp)', best.sear, 'kt', 'is-sear',
                         (best.sear && best.sear.az != null && window._ReconKit && window._ReconKit.searWhere
                             ? ' · ' + window._ReconKit.searWhere(best.sear.az, best.sear.r) : '') +
                         (searRangeLed ? ' · most likely ' + Math.round(best.sear.v) + ' kt' : (searRange ? ' · ' + searRange : '')) +
                         (best.sear && best.sear.prelim ? ' · prelim fix' : ''),
-                        'SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Not an official product.');
+                        'SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Not an official product.'));
         el.innerHTML = html;
         el.style.display = html ? '' : 'none';
     }
