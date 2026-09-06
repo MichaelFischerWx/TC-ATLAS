@@ -7039,6 +7039,14 @@ def _parse_minob_obs_modern(fields: list) -> dict | None:
 _ALT_EXC_DZ_M, _ALT_EXC_RECOVER_M = 60.0, 50.0   # residual vs the hydrostatic expectation (m)
 
 
+def _archive_gap_s(a, b) -> float:
+    try:
+        from datetime import datetime as _dt
+        return (_dt.fromisoformat(str(b.get("time", "")).replace("Z", "")) - _dt.fromisoformat(str(a.get("time", "")).replace("Z", ""))).total_seconds()
+    except Exception:
+        return 0.0
+
+
 def _mask_altitude_excursions_archive(flat_obs: list) -> None:
     """In-place, per aircraft in time order (flat_obs is already time-sorted).
     Hydrostatic residual form -- see recon_api._mask_altitude_excursions."""
@@ -7049,6 +7057,9 @@ def _mask_altitude_excursions_archive(flat_obs: list) -> None:
         in_exc, ref, prev = False, None, None
         for ob in track:
             alt, sp = ob.get("geo_alt_m"), ob.get("fl_pres_mb")
+            if prev is not None and (ob.get("mission_id") != prev.get("mission_id") or _archive_gap_s(prev, ob) > 600.0):
+                in_exc, ref, prev = False, alt, ob   # new mission or data gap: start over
+                continue
             if prev is not None and alt is not None and sp is not None \
                     and prev.get("geo_alt_m") is not None and prev.get("fl_pres_mb") is not None and sp > 0:
                 dp = sp - prev["fl_pres_mb"]

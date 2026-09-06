@@ -334,6 +334,16 @@ def _parse_hdob_line(fields: list, base_date: datetime):
 # Masked obs keep their winds/SFMR; only the pressure-derived fields are nulled
 # and the ob is tagged qc_alt_excursion so the chart/tiles skip it.
 ALT_EXC_DZ_M, ALT_EXC_RECOVER_M = 60.0, 50.0   # residual vs the hydrostatic expectation (m)
+ALT_EXC_GAP_S = 600.0                            # data gap that resets the test (s)
+
+
+def _ob_gap_s(a, b) -> float:
+    try:
+        ta = datetime.fromisoformat(str(a["t"]).replace("Z", "").split(".")[0])
+        tb = datetime.fromisoformat(str(b["t"]).replace("Z", "").split(".")[0])
+        return (tb - ta).total_seconds()
+    except Exception:
+        return 0.0
 
 
 def _mask_altitude_excursions(track: list) -> list:
@@ -349,6 +359,9 @@ def _mask_altitude_excursions(track: list) -> list:
     in_exc, ref, prev = False, None, None
     for ob in track:
         alt, sp = ob.get("geo_alt_m"), ob.get("fl_pres_mb")
+        if prev is not None and _ob_gap_s(prev, ob) > ALT_EXC_GAP_S:
+            in_exc, ref, prev = False, alt, ob       # a data gap: start over from here
+            continue
         if prev is not None and alt is not None and sp is not None \
                 and prev.get("geo_alt_m") is not None and prev.get("fl_pres_mb") is not None and sp > 0:
             dp = sp - prev["fl_pres_mb"]
@@ -1349,6 +1362,12 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         sorties = _split_sorties(track)
         n = len(sorties)
         for si, st in enumerate(sorties):
+            # QC runs per sortie on COPIES: the merged tail track carries a
+            # landing-to-takeoff jump between sorties that a hydrostatic test
+            # reads as a permanent excursion (2026-09-06: every ob of a G-IV
+            # sortie masked), and the obs are shared cached dicts that must
+            # not be mutated across requests.
+            st = _mask_altitude_excursions([dict(o) for o in st])
             aircraft_out.append({
                 "tail": tail, "track": st, "src": src,
                 "sortie": st[0]["t"],        # stable per-tail id (start time)
@@ -1362,7 +1381,6 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         track = [obmap[k] for k in sorted(obmap) if k <= sim_iso]
         if not track:
             continue
-        track = _mask_altitude_excursions(track)
         # Mission mode: keep only the requested aircraft, whole track, no
         # storm attribution (the user explicitly selected this flight).
         if mission_tail:
