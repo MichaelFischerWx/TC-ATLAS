@@ -333,25 +333,41 @@ def _parse_hdob_line(fields: list, base_date: datetime):
 # change). Real descents/climbs (dz/dp ~ 10-15 m/mb) never trip the entry test.
 # Masked obs keep their winds/SFMR; only the pressure-derived fields are nulled
 # and the ob is tagged qc_alt_excursion so the chart/tiles skip it.
-ALT_EXC_DZ_M, ALT_EXC_DP_MB = 60.0, 2.0
-ALT_EXC_RECOVER_M, ALT_EXC_LEVEL_DP_MB = 50.0, 5.0
+ALT_EXC_DZ_M, ALT_EXC_RECOVER_M = 60.0, 50.0   # residual vs the hydrostatic expectation (m)
 
 
 def _mask_altitude_excursions(track: list) -> list:
     """Null extrap_sfc_p_mb / dval_m through radar-altimeter excursions (see above).
-    `track` must be one aircraft's obs in time order. Returns the same list."""
-    in_exc, good_alt, prev = False, None, None
+    `track` must be one aircraft's obs in time order. Returns the same list.
+
+    Hydrostatic form: the altitude a real level change should produce is
+    dz_exp = -(R*T/(g*p))*dp (~11 m/mb at 700 mb, ~40 m/mb at 150 mb, T from
+    the ob or a standard lapse); the residual alt - ref, where ref follows
+    the altitude outside excursions and advances by dz_exp inside them, is
+    what must stay small. This holds at every flight level -- the earlier
+    fixed-threshold form flagged the G-IV's 60-m climb steps at 150 mb."""
+    in_exc, ref, prev = False, None, None
     for ob in track:
         alt, sp = ob.get("geo_alt_m"), ob.get("fl_pres_mb")
         if prev is not None and alt is not None and sp is not None \
-                and prev.get("geo_alt_m") is not None and prev.get("fl_pres_mb") is not None:
-            dz, dp = alt - prev["geo_alt_m"], sp - prev["fl_pres_mb"]
+                and prev.get("geo_alt_m") is not None and prev.get("fl_pres_mb") is not None and sp > 0:
+            dp = sp - prev["fl_pres_mb"]
+            tc = ob.get("temp_c") if ob.get("temp_c") is not None else prev.get("temp_c")
+            T = (tc + 273.15) if tc is not None else (288.15 - 0.0065 * alt)
+            dz_exp = -(287.05 * T / (9.80665 * (0.5 * (sp + prev["fl_pres_mb"])))) * dp
+            if ref is None:
+                ref = prev["geo_alt_m"]
+            ref = ref + dz_exp                       # where the altitude should be now
+            resid = alt - ref
             if not in_exc:
-                if abs(dp) < ALT_EXC_DP_MB and abs(dz) > ALT_EXC_DZ_M:
-                    in_exc, good_alt = True, prev["geo_alt_m"]
-            else:
-                if abs(alt - good_alt) <= ALT_EXC_RECOVER_M or abs(dp) > ALT_EXC_LEVEL_DP_MB:
-                    in_exc = False
+                if abs(resid) > ALT_EXC_DZ_M:
+                    in_exc = True                    # ref stays hydrostatic from the last good alt
+                else:
+                    ref = alt                        # follow the altitude outside excursions
+            elif abs(resid) <= ALT_EXC_RECOVER_M:
+                in_exc, ref = False, alt
+        else:
+            ref = alt if alt is not None else ref
         if in_exc:
             ob["qc_alt_excursion"] = True
             ob["extrap_sfc_p_mb"] = None

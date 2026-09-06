@@ -7036,26 +7036,38 @@ def _parse_minob_obs_modern(fields: list) -> dict | None:
 # 100+ km from the eye with message QC flags 00. Entry: |dz| > 60 m with
 # |dp| < 2 mb; hold until altitude is back within 50 m of the last good value or
 # |dp| > 5 mb (a real level change). Pressure-derived fields nulled, ob tagged.
-_ALT_EXC_DZ_M, _ALT_EXC_DP_MB, _ALT_EXC_RECOVER_M, _ALT_EXC_LEVEL_DP_MB = 60.0, 2.0, 50.0, 5.0
+_ALT_EXC_DZ_M, _ALT_EXC_RECOVER_M = 60.0, 50.0   # residual vs the hydrostatic expectation (m)
 
 
 def _mask_altitude_excursions_archive(flat_obs: list) -> None:
-    """In-place, per aircraft in time order (flat_obs is already time-sorted)."""
+    """In-place, per aircraft in time order (flat_obs is already time-sorted).
+    Hydrostatic residual form -- see recon_api._mask_altitude_excursions."""
     by_ac = {}
     for o in flat_obs:
         by_ac.setdefault(o.get("aircraft"), []).append(o)
     for track in by_ac.values():
-        in_exc, good_alt, prev = False, None, None
+        in_exc, ref, prev = False, None, None
         for ob in track:
             alt, sp = ob.get("geo_alt_m"), ob.get("fl_pres_mb")
             if prev is not None and alt is not None and sp is not None \
-                    and prev.get("geo_alt_m") is not None and prev.get("fl_pres_mb") is not None:
-                dz, dp = alt - prev["geo_alt_m"], sp - prev["fl_pres_mb"]
+                    and prev.get("geo_alt_m") is not None and prev.get("fl_pres_mb") is not None and sp > 0:
+                dp = sp - prev["fl_pres_mb"]
+                tc = ob.get("temp_c") if ob.get("temp_c") is not None else prev.get("temp_c")
+                T = (tc + 273.15) if tc is not None else (288.15 - 0.0065 * alt)
+                dz_exp = -(287.05 * T / (9.80665 * (0.5 * (sp + prev["fl_pres_mb"])))) * dp
+                if ref is None:
+                    ref = prev["geo_alt_m"]
+                ref = ref + dz_exp
+                resid = alt - ref
                 if not in_exc:
-                    if abs(dp) < _ALT_EXC_DP_MB and abs(dz) > _ALT_EXC_DZ_M:
-                        in_exc, good_alt = True, prev["geo_alt_m"]
-                elif abs(alt - good_alt) <= _ALT_EXC_RECOVER_M or abs(dp) > _ALT_EXC_LEVEL_DP_MB:
-                    in_exc = False
+                    if abs(resid) > _ALT_EXC_DZ_M:
+                        in_exc = True
+                    else:
+                        ref = alt
+                elif abs(resid) <= _ALT_EXC_RECOVER_M:
+                    in_exc, ref = False, alt
+            else:
+                ref = alt if alt is not None else ref
             if in_exc:
                 ob["qc_alt_excursion"] = True
                 ob["sfc_pres_hpa"] = None
