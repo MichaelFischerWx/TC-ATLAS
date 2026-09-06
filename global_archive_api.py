@@ -7029,6 +7029,40 @@ def _parse_minob_obs_modern(fields: list) -> dict | None:
     })
 
 
+# Radar-altimeter excursion QC (same rule as recon_api._mask_altitude_excursions):
+# the extrapolated SLP is hydrostatic from the geopotential altitude, so an
+# altimeter dropout (rain, spray, a bank) drags it hundreds of mb in one 30-s ob
+# at constant static pressure — Lowell 2026-09-06 AF309 08:25-08:29Z read 916 mb
+# 100+ km from the eye with message QC flags 00. Entry: |dz| > 60 m with
+# |dp| < 2 mb; hold until altitude is back within 50 m of the last good value or
+# |dp| > 5 mb (a real level change). Pressure-derived fields nulled, ob tagged.
+_ALT_EXC_DZ_M, _ALT_EXC_DP_MB, _ALT_EXC_RECOVER_M, _ALT_EXC_LEVEL_DP_MB = 60.0, 2.0, 50.0, 5.0
+
+
+def _mask_altitude_excursions_archive(flat_obs: list) -> None:
+    """In-place, per aircraft in time order (flat_obs is already time-sorted)."""
+    by_ac = {}
+    for o in flat_obs:
+        by_ac.setdefault(o.get("aircraft"), []).append(o)
+    for track in by_ac.values():
+        in_exc, good_alt, prev = False, None, None
+        for ob in track:
+            alt, sp = ob.get("geo_alt_m"), ob.get("fl_pres_mb")
+            if prev is not None and alt is not None and sp is not None \
+                    and prev.get("geo_alt_m") is not None and prev.get("fl_pres_mb") is not None:
+                dz, dp = alt - prev["geo_alt_m"], sp - prev["fl_pres_mb"]
+                if not in_exc:
+                    if abs(dp) < _ALT_EXC_DP_MB and abs(dz) > _ALT_EXC_DZ_M:
+                        in_exc, good_alt = True, prev["geo_alt_m"]
+                elif abs(alt - good_alt) <= _ALT_EXC_RECOVER_M or abs(dp) > _ALT_EXC_LEVEL_DP_MB:
+                    in_exc = False
+            if in_exc:
+                ob["qc_alt_excursion"] = True
+                ob["sfc_pres_hpa"] = None
+                ob["d_value_m"] = None
+            prev = ob
+
+
 def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
                          storm_filter: str = "") -> list:
     """Parse a MINOB/HDOB text message (one or more SXXX50/URNT15 bulletins).
@@ -7383,6 +7417,7 @@ def get_minobs(
             flat_obs.append(obs)
 
     flat_obs.sort(key=lambda o: o.get("time", ""))
+    _mask_altitude_excursions_archive(flat_obs)
 
     result = {
         "success": True,

@@ -317,6 +317,49 @@ def _parse_hdob_line(fields: list, base_date: datetime):
     }
 
 
+# ── HDOB QC: radar-altimeter excursions ─────────────────────────────────────
+#
+# The extrapolated surface pressure is hydrostatic from the geopotential (radar)
+# altitude at flight level. When the radar altimeter drops out — heavy rain,
+# sea spray, a steep bank — the reported altitude can fall hundreds of metres
+# in one 30-s ob while the static pressure does not move, and the extrapolated
+# SLP plunges with it (Lowell 2026-09-06, AF309 08:25-08:29Z: altitude 3084 ->
+# 2323 m at a constant 697 mb, "SLP" 1000 -> 916 mb, 100+ km from the eye, wind
+# 50 kt, message QC flags 00). The bulletin does not flag it, so we do: an
+# altitude change of more than ALT_EXC_DZ_M between consecutive obs with the
+# static pressure changing less than ALT_EXC_DP_MB opens an excursion; it stays
+# open until the altitude is back within ALT_EXC_RECOVER_M of the last good
+# value, or the pressure moves more than ALT_EXC_LEVEL_DP_MB (a real level
+# change). Real descents/climbs (dz/dp ~ 10-15 m/mb) never trip the entry test.
+# Masked obs keep their winds/SFMR; only the pressure-derived fields are nulled
+# and the ob is tagged qc_alt_excursion so the chart/tiles skip it.
+ALT_EXC_DZ_M, ALT_EXC_DP_MB = 60.0, 2.0
+ALT_EXC_RECOVER_M, ALT_EXC_LEVEL_DP_MB = 50.0, 5.0
+
+
+def _mask_altitude_excursions(track: list) -> list:
+    """Null extrap_sfc_p_mb / dval_m through radar-altimeter excursions (see above).
+    `track` must be one aircraft's obs in time order. Returns the same list."""
+    in_exc, good_alt, prev = False, None, None
+    for ob in track:
+        alt, sp = ob.get("geo_alt_m"), ob.get("fl_pres_mb")
+        if prev is not None and alt is not None and sp is not None \
+                and prev.get("geo_alt_m") is not None and prev.get("fl_pres_mb") is not None:
+            dz, dp = alt - prev["geo_alt_m"], sp - prev["fl_pres_mb"]
+            if not in_exc:
+                if abs(dp) < ALT_EXC_DP_MB and abs(dz) > ALT_EXC_DZ_M:
+                    in_exc, good_alt = True, prev["geo_alt_m"]
+            else:
+                if abs(alt - good_alt) <= ALT_EXC_RECOVER_M or abs(dp) > ALT_EXC_LEVEL_DP_MB:
+                    in_exc = False
+        if in_exc:
+            ob["qc_alt_excursion"] = True
+            ob["extrap_sfc_p_mb"] = None
+            ob["dval_m"] = None
+        prev = ob
+    return track
+
+
 def _parse_hdob_bulletin(text: str, fname_dt: datetime):
     """Parse one URNT15/AHONT1 bulletin -> {tail, storm, atcf, obs:[...]} (or None).
 
@@ -1303,6 +1346,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         track = [obmap[k] for k in sorted(obmap) if k <= sim_iso]
         if not track:
             continue
+        track = _mask_altitude_excursions(track)
         # Mission mode: keep only the requested aircraft, whole track, no
         # storm attribution (the user explicitly selected this flight).
         if mission_tail:
