@@ -1662,7 +1662,13 @@ footer a:hover { text-decoration: underline; }
     .map-toolbar .toolbar-explore-btn { flex: 1 1 100%; }
     .scroll-prompt { display: none !important; }
     .basemap-switch { transform: scale(0.9); transform-origin: top right; }
-    #side-panel-inner { width: 100%; padding: 12px; }
+    #side-panel-inner { width: 100%; padding: 12px; overflow: visible; flex: none; }
+    /* Phones: no nested scroll box. The section grows with the panel and the
+       whole page scrolls, so nothing is clipped at the section's edge. */
+    #map-section { height: auto; min-height: calc(100vh - 46px); }
+    #map-wrapper { overflow: visible; }
+    #side-panel.open { max-height: none; overflow: visible; height: auto; }
+    #map-wrapper.focus-mode #side-panel.open { max-height: none; overflow: visible; }
     /* Focus mode on phones: the map carries the radar field, so give it real
        height instead of a 150-px strip, and keep the control strip compact. */
     #map-wrapper.focus-mode #map-container { flex: 0 0 48vh; max-width: 100%; min-height: 320px; }
