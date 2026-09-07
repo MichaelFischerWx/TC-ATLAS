@@ -2983,7 +2983,7 @@ function _irMakeGray(img) {
         var q = ((d[i] >> 3) << 10) | ((d[i+1] >> 3) << 5) | (d[i+2] >> 3);
         var idx = _irInvLUT[q];
         // Slight gamma lift so mid-level cloud is legible under a colored field
-        var v = Math.round(255 * Math.pow(idx / 255, 0.85));
+        var v = Math.round(255 * Math.pow(idx / 255, 0.7));   // lift: cold tops read white over a dark basemap
         d[i] = v; d[i+1] = v; d[i+2] = v;
     }
     ctx.putImageData(im, 0, 0);
@@ -3268,6 +3268,9 @@ function showIRMapOverlay(frameIdx) {
     if (!url) return;  // skip null frames
     var bounds = _irGetBounds(_irData);
     if (_irMapOverlay) {
+        // Gray IR carries no color to blend with, so let it sit nearly opaque;
+        // color IR keeps the 0.75 that lets the basemap read through.
+        if (_irMapVisible) { try { _irMapOverlay.setOpacity(_irUseGray() ? 0.92 : 0.75); } catch (e) {} }
         // Fast path: bypass Leaflet's setUrl() to avoid its async load cycle.
         // Directly set the <img> src — if a pre-decoded Image exists for this
         // frame, the browser can resolve the data URL from its cache near-instantly.
@@ -3367,7 +3370,7 @@ function _updateIRSlider() {
 
 function toggleIRMapVisibility() {
     _irMapVisible = !_irMapVisible;
-    if (_irMapOverlay) _irMapOverlay.setOpacity(_irMapVisible ? 0.75 : 0);
+    if (_irMapOverlay) _irMapOverlay.setOpacity(_irMapVisible ? (_irUseGray() ? 0.92 : 0.75) : 0);
     if (_irMapVisible) { _showIRMapColorbar(); } else { _hideIRMapColorbar(); }
     var btn = document.getElementById('ir-toggle-btn');
     if (btn) btn.innerHTML = _icon('satellite') + (_irMapVisible ? 'IR On' : 'IR Off');

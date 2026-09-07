@@ -50,8 +50,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
     <!-- Preconnect to critical origins -->
-    <link rel="preconnect" href="https://unpkg.com">
-    <link rel="preconnect" href="https://cdn.plot.ly">
+        <link rel="preconnect" href="https://cdn.plot.ly">
     <link rel="preconnect" href="https://api.tcatlas.org">
     <!-- CARTO basemap tiles are the first pixels on the explorer map. -->
     <link rel="preconnect" href="https://a.basemaps.cartocdn.com">
@@ -60,8 +59,8 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundle + parser-injected map engine, discoverable
          from byte 0. Tokens MUST match the script tags below. -->
-    <link rel="preload" as="script" href="tc_radar_app.js?v=20260907g">
-    <link rel="preload" as="script" href="assets/vendor/leaflet/leaflet.js?v=1.9.4">
+    <link rel="preload" as="script" href="tc_radar_app.js?v=20260907h">
+    <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260907f">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260903a">
 </head>
@@ -367,20 +366,19 @@
         </div>
     </div>
 
-    <!-- Map engine: default Leaflet; ?gl=1 loads the MapLibre GL facade
-         (lflet_gl.js) for the in-progress GL migration (3D IR + NEXRAD relief,
-         smooth zoom, engine parity with RT + Archive). document.write keeps the
-         loads synchronous so tc_radar_app.js sees the right window.L.
-         The default-branch scripts are VENDORED (assets/vendor/) so they load
-         same-origin: Chrome's slow-connection intervention only blocks
-         document.write()-injected scripts from OTHER origins, so serving them
-         ourselves keeps the ordering guarantee on every connection class. -->
+    <!-- Map engine: MapLibre GL via the Leaflet-API facade (lflet_gl.js) is the
+         default, matching the RT Monitor and Global Archive. ?gl=0 keeps plain
+         Leaflet reachable as an escape hatch for one release. document.write
+         keeps the loads synchronous so tc_radar_app.js sees the right window.L.
+         Both engines are VENDORED (assets/vendor/): Chrome's slow-connection
+         intervention only blocks document.write()-injected scripts from OTHER
+         origins, so serving them ourselves keeps the ordering guarantee. -->
     <script>
       (function () {
-        var gl = false; try { gl = /[?&]gl=1\b/.test(location.search); } catch (e) {}
+        var gl = true; try { gl = !/[?&]gl=0\b/.test(location.search); } catch (e) {}
         if (gl) {
           document.write('<link href="assets/vendor/maplibre/maplibre-gl.css?v=4.7.1" rel="stylesheet">');
-          document.write('<scr' + 'ipt src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"><\/scr' + 'ipt>');
+          document.write('<scr' + 'ipt src="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1"><\/scr' + 'ipt>');
           document.write('<scr' + 'ipt src="lflet_gl.js?v=20260907a"><\/scr' + 'ipt>');
         } else {
           document.write('<scr' + 'ipt src="assets/vendor/leaflet/leaflet.js?v=1.9.4"><\/scr' + 'ipt>');
@@ -419,7 +417,7 @@
     </script>
     <script defer src="skewt.js?v=20260725d"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
-    <script defer src="tc_radar_app.js?v=20260907g"></script>
+    <script defer src="tc_radar_app.js?v=20260907h"></script>
     <!-- realtime_tdr.js (Recon tab, ~114 KB gz) is NOT loaded here any more:
          the Recon UI lives on realtime_ir.html and none of its 71 window.*
          exports or rt-* DOM ids exist on this page. realtime_tdr_styles.css

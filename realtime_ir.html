@@ -62,8 +62,7 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 
     <!-- Preconnect to critical origins -->
-    <link rel="preconnect" href="https://unpkg.com">
-    <link rel="preconnect" href="https://cdn.plot.ly">
+        <link rel="preconnect" href="https://cdn.plot.ly">
     <link rel="preconnect" href="https://api.tcatlas.org">
     <!-- IR/band frame bundles now serve from the R2 CDN (cdn.tcatlas.org);
          rt-version.json, the OG card and the microwave manifests still come
@@ -84,7 +83,7 @@
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
     <link rel="preload" as="script" href="realtime_ir.js?v=20260904j">
-    <link rel="preload" as="script" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js">
+    <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
          returning visitors reuse their browser cache (GitHub Pages serves
@@ -2645,7 +2644,7 @@
          the parser unblocked, and makes every URL visible to the preload
          scanner so the whole bundle downloads IN PARALLEL. The old
          document.write chain forced a serial download of ~3 MB. -->
-    <script defer src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script defer src="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1"></script>
     <script defer src="lflet_gl.js?v=20260907a"></script>
     <!-- Single-channel idx mosaic WebGL layer (flag-gated ?ir2a=1). -->
     <script defer src="mosaic_gl_layer.js?v=20260904a"></script>

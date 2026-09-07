@@ -181,7 +181,14 @@
         // zoom-anim transform (canvas layers redraw on move), so report false.
         this._zoomAnimated = false;
         this._animatingZoom = false;
-        var _self = this; this._gl.on('load', function () { _self._loaded = true; });
+        // 'style.load' fires as soon as the style JSON is parsed — sources and
+        // layers are accepted from then on. 'load' additionally waits for every
+        // base tile of the initial view, which on a slow raster host (GIBS Blue
+        // Marble measured at ~17 s) left every vector layer queued and the map
+        // blank. Mark ready on the earlier event; 'load' stays as a backstop.
+        var _self = this;
+        this._gl.on('style.load', function () { _self._loaded = true; });
+        this._gl.on('load', function () { _self._loaded = true; });
         // Self-heal container-size changes. MapLibre reads the container size
         // once at construction; if the element was hidden/zero-sized/wrong at
         // that moment (embedded webviews, panel resizes, phone rotation) the
@@ -476,7 +483,7 @@
     Map.prototype.stop = function () { this._gl.stop(); return this; };
     Map.prototype._whenStyle = function (fn) {
         if (this._loaded || this._gl.isStyleLoaded()) { fn(); return; }
-        this._gl.once('load', fn);
+        this._gl.once('style.load', fn);
     };
 
     // ── Layer base + Leaflet-style .extend ──
@@ -975,7 +982,8 @@
     // ── Markers / popups (DOM) ──
     function makeIconEl(icon) {
         var el = document.createElement('div');
-        if (icon && icon._html != null) { el.innerHTML = icon._html; if (icon._className) el.className = icon._className; }
+        if (icon && icon._html != null) { el.innerHTML = icon._html; if (icon._className) el.className = icon._className;
+            if (icon._size) { el.style.width = icon._size[0] + 'px'; el.style.height = icon._size[1] + 'px'; } }
         else { el.style.width = '12px'; el.style.height = '12px'; el.style.borderRadius = '50%'; el.style.background = '#3388ff'; el.style.border = '2px solid #fff'; }
         return el;
     }
@@ -983,8 +991,8 @@
     var Marker = extend.call(Layer, {
         initialize: function (latlng, opts) { this._ll = toLatLng(latlng); this.options = opts || {}; this._evts = {}; },
         _addToGL: function (map) { this._map = map;
-            this._m = new maplibregl.Marker({ element: this.options.icon ? makeIconEl(this.options.icon) : undefined, anchor: 'center' })
-                .setLngLat(mlWrap(this._ll)).addTo(map._gl);
+            var mo = markerAnchorOpts(this.options.icon); mo.element = this.options.icon ? makeIconEl(this.options.icon) : undefined;
+            this._m = new maplibregl.Marker(mo).setLngLat(mlWrap(this._ll)).addTo(map._gl);
             if (this._popup) { this._m.setPopup(this._popup._ml()); this._bridgePopup(); }
             // maplibregl markers all share one DOM container ordered by insertion, so
             // Leaflet pane z-order doesn't apply. Honor zIndexOffset as a CSS z-index
@@ -1103,7 +1111,15 @@
     Popup.prototype.isOpen = function () { return !!(this._mlp && this._mlp.isOpen()); };
     Popup.prototype.openOn = Popup.prototype.addTo;
 
-    function DivIcon(opts) { opts = opts || {}; this._html = opts.html || ''; this._className = opts.className || ''; }
+    function DivIcon(opts) { opts = opts || {}; this._html = opts.html || ''; this._className = opts.className || '';
+        this._size = opts.iconSize || null; this._anchor = opts.iconAnchor || null; }
+    // Leaflet places the icon so that iconAnchor (px from the icon's top-left)
+    // sits on the latlng; with no anchor the icon is centered. MapLibre's Marker
+    // expresses the same as anchor:'top-left' + offset.
+    function markerAnchorOpts(icon) {
+        if (icon && icon._anchor) return { anchor: 'top-left', offset: [-icon._anchor[0], -icon._anchor[1]] };
+        return { anchor: 'center' };
+    }
     function Icon(opts) { opts = opts || {}; this._html = '<img src="' + (opts.iconUrl || '') + '">'; this._className = opts.className || ''; }
 
     // ── LayerGroup ──
@@ -1114,7 +1130,9 @@
         addLayer: function (l) { this._members.push(l); if (this._map) this._map.addLayer(l); return this; },
         removeLayer: function (l) { var i = this._members.indexOf(l); if (i >= 0) this._members.splice(i, 1); if (this._map) this._map.removeLayer(l); return this; },
         clearLayers: function () { var m = this._map; this._members.forEach(function (l) { if (m) m.removeLayer(l); }); this._members = []; return this; },
-        eachLayer: function (fn) { this._members.forEach(fn); return this; }
+        eachLayer: function (fn) { this._members.forEach(fn); return this; },
+        getLayers: function () { return this._members.slice(); },
+        hasLayer: function (l) { return this._members.indexOf(l) >= 0; }
     });
 
     // ── MarkerClusterGroup → MapLibre native (supercluster) clustering ──

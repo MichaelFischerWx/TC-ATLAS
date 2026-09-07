@@ -23,10 +23,20 @@ API = "https://api.tcatlas.org"
 
 
 class Handler(SimpleHTTPRequestHandler):
+    # Vendor-path fallback: until assets/vendor/maplibre/maplibre-gl.js is
+    # committed, serve it from unpkg in memory so the GL page can be tested.
+    VENDOR_FALLBACK = {
+        "/assets/vendor/maplibre/maplibre-gl.js": "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js",
+    }
+
     def do_GET(self):
-        if not self.path.startswith("/__api/"):
+        bare = self.path.split("?")[0]
+        if bare in self.VENDOR_FALLBACK and not os.path.exists(bare.lstrip("/")):
+            url = self.VENDOR_FALLBACK[bare]
+        elif not self.path.startswith("/__api/"):
             return super().do_GET()
-        url = API + self.path[len("/__api"):]
+        else:
+            url = API + self.path[len("/__api"):]
         req = urllib.request.Request(url, headers={"User-Agent": "tc-atlas-dev-proxy",
                                                    "Accept-Encoding": "identity"})
         try:
