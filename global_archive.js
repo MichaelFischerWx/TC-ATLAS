@@ -1658,6 +1658,117 @@ function gaOnPlot(plotPromise, el, evt, fn) {
 //  TAB SWITCHING
 // ══════════════════════════════════════════════════════════════
 
+// ── Storm Detail HUD: keep the map visible ─────────────────────────────
+// Reflows the existing detail controls at startup (moves nodes, never
+// recreates them, so every id/handler the feature code relies on is kept):
+//   • header → one-line pill; the five actions fold into a "⋯" menu
+//   • overlay toggles → a vertical icon rail on the left
+//   • IR bar → play/step + a timeline STRIP (intensity curve drawn under the
+//     scrubber) + time; everything else behind one ⚙ popover
+//   • drawer starts closed; a tool that shows a control panel opens it
+function _gaHudInit() {
+    var main = document.querySelector('#tab-detail .detail-main');
+    if (!main || main._hud) return;
+    main._hud = true;
+
+    // (a) actions menu
+    var row = main.querySelector('.detail-header-row');
+    var actions = main.querySelector('.detail-header-actions');
+    if (row && actions) {
+        var trig = document.createElement('button');
+        trig.type = 'button'; trig.className = 'ga-btn ga-btn-sm detail-actions-trigger';
+        trig.title = 'Storm actions'; trig.setAttribute('aria-haspopup', 'true'); trig.innerHTML = '&#8943;';
+        var pop = document.createElement('div'); pop.className = 'detail-actions-pop'; pop.hidden = true;
+        pop.appendChild(actions);
+        trig.onclick = function (e) { e.stopPropagation(); pop.hidden = !pop.hidden; trig.classList.toggle('active', !pop.hidden); };
+        pop.addEventListener('click', function () { pop.hidden = true; trig.classList.remove('active'); });
+        document.addEventListener('click', function (e) { if (!pop.hidden && !pop.contains(e.target) && e.target !== trig) { pop.hidden = true; trig.classList.remove('active'); } });
+        row.appendChild(trig); row.appendChild(pop);
+    }
+
+    // (b) layers rail
+    var bar = main.querySelector('.ga-layerbar');
+    var card = main.querySelector('.detail-float-tl');
+    if (bar && card) {
+        var rail = document.createElement('div'); rail.className = 'detail-rail';
+        rail.appendChild(bar);
+        // a "Panel" item opens the drawer (timeline chart + tool panels)
+        var pi = document.createElement('div'); pi.className = 'ga-layer-item detail-rail-panel';
+        pi.innerHTML = '<button type="button" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleDetailSidebar()" title="Intensity timeline &amp; tool panels">' + _icon('chartBar') + 'Panel</button>';
+        bar.appendChild(pi);
+        card.parentNode.insertBefore(rail, card.nextSibling);
+    }
+
+    // (c) IR bar: strip + settings popover
+    var irbar = document.getElementById('ir-map-controls');
+    var row1 = irbar && irbar.querySelector('.ir-bar-row1');
+    var slider = document.getElementById('ir-slider');
+    if (row1 && slider) {
+        var strip = document.createElement('div'); strip.className = 'ir-strip';
+        var cv = document.createElement('canvas'); cv.id = 'ir-strip-canvas'; cv.className = 'ir-strip-canvas';
+        slider.parentNode.insertBefore(strip, slider); strip.appendChild(cv); strip.appendChild(slider);
+        var more = document.createElement('div'); more.className = 'ir-bar-more'; more.id = 'ir-bar-more'; more.hidden = true;
+        var moreRow = document.createElement('div'); moreRow.className = 'ir-bar-more-row'; more.appendChild(moreRow);
+        ['ir-frame-info', 'ir-source-badge', 'ir-speed', 'ir-ctx-btn', 'ir-3d-btn', 'ir-follow-btn', 'ir-track-toggle-btn', 'ir-gif-btn', 'ir-png-btn'].forEach(function (id) {
+            var el = document.getElementById(id); if (el) moreRow.appendChild(el);
+        });
+        var opBtn = row1.querySelector('.ir-opacity-btn'); if (opBtn) moreRow.insertBefore(opBtn, moreRow.children[3] || null);
+        var row2 = irbar.querySelector('.ir-bar-row2'); if (row2) more.appendChild(row2);
+        var gear = document.createElement('button'); gear.type = 'button'; gear.className = 'ga-btn ga-btn-sm ir-bar-gear'; gear.title = 'Loop settings: speed, opacity, colormap, context, 3D, export'; gear.innerHTML = '&#9881;';
+        gear.onclick = function (e) { e.stopPropagation(); more.hidden = !more.hidden; gear.classList.toggle('active', !more.hidden); };
+        document.addEventListener('click', function (e) { if (!more.hidden && !more.contains(e.target) && e.target !== gear) { more.hidden = true; gear.classList.remove('active'); } });
+        row1.appendChild(gear); irbar.appendChild(more);
+    }
+
+    // (d) a tool that reveals its control panel opens the drawer to it (desktop)
+    var side = document.getElementById('detail-side');
+    if (side && window.MutationObserver) {
+        var watched = [].slice.call(side.querySelectorAll('.detail-side-stack > div, #scorecard-panel, #environment-panel'));
+        var mo = new MutationObserver(function (muts) {
+            muts.forEach(function (m) {
+                var el = m.target;
+                if (el.style.display === 'none' || el._wasShown) { if (el.style.display === 'none') el._wasShown = false; return; }
+                el._wasShown = true;
+                var lay = document.getElementById('detail-layout');
+                var sheet = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+                if (lay && lay.classList.contains('side-collapsed') && !sheet && !_gaIsTouch()) toggleDetailSidebar();
+                el._hudRevealed = (el._hudRevealed || 0) + 1;
+                setTimeout(function () { try { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {} }, 80);
+            });
+        });
+        watched.forEach(function (el) { mo.observe(el, { attributes: true, attributeFilter: ['style'] }); });
+    }
+}
+
+/** Intensity curve under the IR scrubber: one bar per frame, category-colored. */
+function _gaStripDraw() {
+    var cv = document.getElementById('ir-strip-canvas');
+    if (!cv || !irMeta || !irMeta.frames || !selectedStorm) return;
+    var track = allTracks[selectedStorm.sid];
+    var W = cv.parentNode.clientWidth, H = cv.parentNode.clientHeight;
+    if (!W || !H) return;
+    var dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    var g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+    var n = irMeta.frames.length; if (!n) return;
+    var winds = new Array(n), vmax = 40;
+    for (var i = 0; i < n; i++) {
+        var f = irMeta.frames[i], pt = (f && f.datetime && track) ? findTrackPointAtTime(track, f.datetime) : null;
+        winds[i] = pt && pt.w != null ? pt.w : null; if (winds[i] > vmax) vmax = winds[i];
+    }
+    var pad = 7, bw = (W - 2 * pad) / n;   // pad ≈ slider thumb radius so bars align with the thumb travel
+    for (var k = 0; k < n; k++) {
+        if (winds[k] == null) continue;
+        var h = Math.max(2, (winds[k] / vmax) * (H - 4));
+        g.fillStyle = getIntensityColor(winds[k]); g.globalAlpha = 0.85;
+        g.fillRect(pad + k * bw, H - 2 - h, Math.max(1, bw - 0.5), h);
+    }
+    g.globalAlpha = 1;
+}
+document.addEventListener('DOMContentLoaded', _gaHudInit);
+window.addEventListener('resize', function () { setTimeout(_gaStripDraw, 150); });
+
+
 // ── Storm Detail map-dominant layout helpers ──────────────────────────
 // The detail layout is sized to the viewport below the tab bar
 // (height: calc(100vh - --ga-detail-top)); the offset is measured, not
@@ -1692,6 +1803,7 @@ window.toggleDetailSidebar = function () {
     setTimeout(function () {
         if (detailMap) { try { detailMap.invalidateSize(); } catch (e) {} }
         window.dispatchEvent(new Event('resize'));   // Plotly responsive charts re-fit the side panel
+        _gaStripDraw();
     }, 60);
 };
 document.addEventListener('DOMContentLoaded', function () {
@@ -1699,7 +1811,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var pref = null;
     try { pref = localStorage.getItem('ga-detail-side'); } catch (e) {}
     // Phones start map-only (the drawer is a bottom sheet there); desktop starts open.
-    if (lay && (pref === 'collapsed' || (pref === null && _gaIsTouch()))) lay.classList.add('side-collapsed');
+    if (lay && pref !== 'open') lay.classList.add('side-collapsed');   // map first: the drawer opens when a tool needs it
     _gaDetailSideSync();
     window.addEventListener('resize', _gaDetailSideSync);
 });
@@ -4696,6 +4808,7 @@ function loadHURSAT(storm) {
                 return;
             }
             irMeta = meta;
+            setTimeout(_gaStripDraw, 0);
             // CDN hit/miss tallies gate the direct-fetch probe, and coverage is
             // per storm — carrying them across storms would let one uncached
             // storm disable the fast path for every storm opened after it.

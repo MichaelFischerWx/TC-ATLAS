@@ -3467,3 +3467,102 @@ input[type="range"].ga-range::-moz-range-thumb {
     /* While the bottom sheet is open it owns the bottom of the screen; the loop keeps running underneath */
     .detail-layout:not(.side-collapsed) .detail-main #ir-map-controls.ir-bar { display: none !important; }
 }
+
+
+/* ── Storm Detail HUD (2026-09-07): minimise what covers the map ───────── */
+/* header pill */
+.detail-float-tl { max-width: min(680px, calc(100% - 20px)); }
+.detail-float-tl .detail-header { padding: 4px 8px 4px 4px; gap: 0; }
+.detail-float-tl .detail-header-row { flex-wrap: nowrap; align-items: center; gap: 8px; position: relative; }
+.detail-float-tl .detail-back-btn { padding: 4px 8px; font-size: 0.72rem; }
+.detail-float-tl .detail-header-title-group { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.detail-float-tl .detail-storm-title { font-size: 1rem; white-space: nowrap; }
+.detail-float-tl .detail-storm-subtitle { font-size: 0.72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.detail-actions-trigger { flex-shrink: 0; font-size: 1rem; line-height: 1; padding: 2px 8px; }
+.detail-actions-pop {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 640;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3); padding: 8px;
+}
+.detail-actions-pop .detail-header-actions { flex-direction: column; align-items: stretch; gap: 6px; }
+.detail-actions-pop .detail-header-actions > * { justify-content: flex-start; }
+
+/* layers rail */
+.detail-rail {
+    position: absolute; top: 58px; left: 10px; z-index: 609;
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+    padding: 4px;
+}
+.detail-rail .ga-layerbar { display: flex; flex-direction: column; gap: 2px; padding: 0; border: 0; background: transparent; }
+.detail-rail .ga-layerbar h3 { display: none; }
+.detail-rail .ga-layer-item { width: 64px; }
+.detail-rail .ga-layer-item .ga-btn {
+    flex-direction: column; gap: 3px; padding: 6px 2px; font-size: 0.6rem; letter-spacing: 0.02em;
+    border-radius: 8px; width: 100%; height: auto;
+}
+.detail-rail .ga-layer-item .ga-btn .icon-inline { width: 16px; height: 16px; margin: 0; }
+.detail-rail .ga-layer-item .ir-status { display: none; }   /* status lives in the tool's own panel */
+.detail-rail .detail-rail-panel { border-top: 1px solid var(--border); margin-top: 2px; padding-top: 2px; }
+
+/* IR bar → timeline strip */
+.detail-fs .detail-main #ir-map-controls.ir-bar { padding: 5px 8px; }
+.detail-fs #ir-map-controls .ir-bar-row1 { gap: 5px; }
+.ir-strip { position: relative; flex: 1; min-width: 120px; height: 30px; margin: 0 4px; }
+.ir-strip-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; border-radius: 4px; }
+.ir-strip .ir-slider { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); width: 100%; margin: 0; background: transparent; height: 100%; }
+.ir-strip .ir-slider::-webkit-slider-runnable-track { background: transparent; height: 100%; }
+.ir-strip .ir-slider::-moz-range-track { background: transparent; }
+.ir-strip .ir-slider::-webkit-slider-thumb { width: 3px; height: 30px; border-radius: 2px; border: 0; background: var(--text); box-shadow: 0 0 0 1px var(--surface); margin-top: 0; }
+.ir-strip .ir-slider::-moz-range-thumb { width: 3px; height: 30px; border-radius: 2px; border: 0; background: var(--text); }
+.ir-bar-gear { flex-shrink: 0; font-size: 0.95rem; line-height: 1; padding: 2px 7px; }
+.ir-bar-more {
+    position: absolute; right: 8px; bottom: calc(100% + 6px); z-index: 630;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3); padding: 8px 10px;
+    display: flex; flex-direction: column; gap: 6px; max-width: min(620px, calc(100vw - 40px));
+}
+.ir-bar-more[hidden] { display: none; }
+.ir-bar-more-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ir-bar-more .ir-bar-row2 { flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: 6px; }
+
+/* compact floating legend instead of a full-height column */
+.detail-fs .ir-cbar-strip {
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    height: 170px; width: 30px; z-index: 604;
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 0;
+    align-self: auto;
+}
+.detail-fs .ir-cbar-strip canvas { flex: 1; }
+
+/* drawer: narrower, translucent, keeps the legend visible */
+.detail-side { width: 380px; right: 48px; }
+.detail-side-toggle { right: 428px; }
+.detail-layout:not(.side-collapsed) .detail-main #ir-map-controls.ir-bar { right: 438px !important; }
+.detail-layout:not(.side-collapsed) .ir-cbar-strip { right: 10px; }
+.detail-layout.side-collapsed .detail-side-toggle { right: 48px; }
+
+@media (max-width: 1100px) {
+    .detail-side { width: 340px; }
+    .detail-side-toggle { right: 388px; }
+    .detail-layout:not(.side-collapsed) .detail-main #ir-map-controls.ir-bar { right: 398px !important; }
+}
+@media (max-width: 768px) {
+    .detail-float-tl .detail-header-title-group { flex-wrap: nowrap; }
+    .detail-float-tl .detail-storm-subtitle { display: none; }
+    .detail-rail { top: 52px; left: 6px; right: auto; padding: 3px; }
+    .detail-rail .ga-layerbar { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; max-width: calc(100vw - 24px); }
+    .detail-rail .ga-layerbar::-webkit-scrollbar { display: none; }
+    .detail-rail .ga-layer-item { width: 54px; flex: 0 0 auto; }
+    .detail-rail .detail-rail-panel { border-top: 0; border-left: 1px solid var(--border); margin: 0 0 0 2px; padding: 0 0 0 2px; }
+    .detail-fs .detail-main #ir-map-controls .ir-bar-row2,
+    .detail-fs .detail-main #ir-map-controls #ir-3d-btn,
+    .detail-fs .detail-main #ir-map-controls #ir-gif-btn,
+    .detail-fs .detail-main #ir-map-controls #ir-png-btn { display: none !important; }
+    .ir-bar-more { right: 6px; left: 6px; max-width: none; }
+    .detail-fs .ir-cbar-strip { height: 120px; top: auto; bottom: 64px; transform: none; }
+    .detail-side-toggle { right: 6px; }
+}
