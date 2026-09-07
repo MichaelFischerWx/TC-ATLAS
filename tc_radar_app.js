@@ -3337,6 +3337,7 @@ function _injectIRMapControls() {
             '<span class="ir-label" id="ir-map-label">IR t=0</span>' +
             '<button class="ir-ctrl-btn" id="ir-gray-btn" onclick="irCycleGray()" title="IR colormap: Auto = grayscale while the radar field is draped, else color">IR: ' + (_irGrayMode === 'auto' ? 'Auto' : _irGrayMode === 'gray' ? 'Gray' : 'Color') + '</button>' +
             '<button class="ir-ctrl-btn' + (_sgOn ? ' active' : '') + '" id="storm-grid-btn" onclick="toggleStormGrid()" title="Storm-relative grid: 50-km range rings and N/E axes about the case center">' + _icon('target') + 'Grid</button>' +
+            '<span class="ir-label radar-op-wrap" title="Opacity of the draped radar field">TDR <input type="range" class="ir-slider radar-op-slider" min="0" max="100" value="' + Math.round(_radarMapOpacity * 100) + '" oninput="setRadarOpacity(this.value/100)"> <span id="radar-op-val">' + Math.round(_radarMapOpacity * 100) + '%</span></span>' +
         '</div>';
     mapWrapper.appendChild(ctrl);
     _stormGridDraw();
@@ -3511,7 +3512,7 @@ function toggleTDRVisibility() {
 
     // The draped map field follows the same toggle; with it hidden the IR
     // reverts to color in 'auto' mode so the satellite view reads on its own.
-    if (_radarMapOverlay) { try { _radarMapOverlay.setOpacity(_tdrVisible ? 0.9 : 0); } catch (e) {} }
+    if (_radarMapOverlay) { try { _radarMapOverlay.setOpacity(_tdrVisible ? _radarMapOpacity : 0); } catch (e) {} }
     if (_radarMapRing) { try { _radarMapRing.setStyle({ opacity: _tdrVisible ? 1 : 0 }); } catch (e) {} }
     _irRefreshMapFrame();
 
@@ -3729,6 +3730,16 @@ function _removeRubberBand() {
 // ═══════════════════════════════════════════════════════════════════════
 var _lastPlanRender = null, _radarMapOn = false;
 var _radarMapOverlay = null, _radarMapRing = null, _radarMapTip = null;
+// Draped radar field opacity. Default 1.0: the radar analysis is the subject
+// in focus mode and the IR shows through only where the swath has no data.
+var _radarMapOpacity = 1.0;
+try { var _ro = parseFloat(localStorage.getItem('tcr_radar_opacity')); if (_ro >= 0 && _ro <= 1) _radarMapOpacity = _ro; } catch (e) {}
+window.setRadarOpacity = function(v) {
+    _radarMapOpacity = Math.max(0, Math.min(1, parseFloat(v) || 0));
+    try { localStorage.setItem('tcr_radar_opacity', String(_radarMapOpacity)); } catch (e) {}
+    if (_radarMapOverlay && _tdrVisible) { try { _radarMapOverlay.setOpacity(_radarMapOpacity); } catch (e) {} }
+    var lbl = document.getElementById('radar-op-val'); if (lbl) lbl.textContent = Math.round(_radarMapOpacity * 100) + '%';
+};
 var _radarMapHoverBound = false;
 // Two-panel mode (default in focus mode, both map engines): the radar field is draped on the IR map, so
 // the map IS the plan view and the redundant Plotly plan pane is hidden. The
@@ -3792,13 +3803,13 @@ function _radarMapDraw() {
             var v = zr ? zr[c] : null, pi = (r * cols + c) * 4;
             if (v == null || isNaN(v)) { d[pi+3] = 0; continue; }
             var rgb = _csColor(p.colorscale, p.vmin, p.vmax, v);
-            d[pi] = rgb[0]; d[pi+1] = rgb[1]; d[pi+2] = rgb[2]; d[pi+3] = 235;
+            d[pi] = rgb[0]; d[pi+1] = rgb[1]; d[pi+2] = rgb[2]; d[pi+3] = 255;   // fully opaque; overall opacity is the TDR slider
         }
     }
     ctx.putImageData(im, 0, 0);
     var bounds = _radarMapBounds(p);
     if (_radarMapOverlay) { try { map.removeLayer(_radarMapOverlay); } catch (e) {} }
-    _radarMapOverlay = L.imageOverlay(cv.toDataURL('image/png'), bounds, { opacity: _tdrVisible ? 0.9 : 0, interactive: false }).addTo(map);
+    _radarMapOverlay = L.imageOverlay(cv.toDataURL('image/png'), bounds, { opacity: _tdrVisible ? _radarMapOpacity : 0, interactive: false }).addTo(map);
     // RMW ring
     if (_radarMapRing) { try { map.removeLayer(_radarMapRing); } catch (e) {} _radarMapRing = null; }
     if (p.rmw_km && !isNaN(p.rmw_km)) {
@@ -3888,7 +3899,15 @@ function _maybeAutoTwoPanel() {
     // Re-apply every render: renderPlotFromJSON rebuilds the dual-panel HTML,
     // which resets the plan pane to visible — re-hide it here.
     _applyTwoPanelMode(true);
-    if (firstArm) { try { map.fitBounds(_radarMapBounds(_lastPlanRender), { padding: [30, 30] }); } catch (e) {} }
+    if (firstArm) _radarMapFrame();
+}
+// Frame the draped field. The map container is often mid-resize here (the
+// side panel's 0.35 s width transition, or the mobile height change), so
+// re-measure first and fit again once the transition has settled.
+function _radarMapFrame() {
+    function fit() { try { map.invalidateSize(); map.fitBounds(_radarMapBounds(_lastPlanRender), { padding: [30, 30] }); } catch (e) {} }
+    fit();
+    setTimeout(fit, 450);
 }
 
 window._radarToMap = function () {
@@ -3901,7 +3920,7 @@ window._radarToMap = function () {
         _radarMapDraw();
         if (btn) btn.classList.add('active');
         _applyTwoPanelMode(true);
-        try { map.fitBounds(_radarMapBounds(_lastPlanRender), { padding: [30, 30] }); } catch (e) {}
+        _radarMapFrame();
     } else {
         _twoPanelDisabled = true;   // user wants the classic 3-panel; don't re-arm
         _radarMapOff();

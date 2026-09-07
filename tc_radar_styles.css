@@ -1652,8 +1652,16 @@ footer a:hover { text-decoration: underline; }
     #map-container { min-height: 300px; }
     #side-panel.open { width: 100%; border-left: none; border-top: 1px solid var(--border-light); height: auto; max-height: 65vh; }
     #side-panel-inner { width: 100%; padding: 12px; }
-    #map-wrapper.focus-mode #map-container { flex: 0 0 150px; max-width: 100%; min-height: 150px; }
-    #map-wrapper.focus-mode #side-panel.open { width: 100%; max-height: calc(100vh - 200px); overflow-y: auto; }
+    /* Focus mode on phones: the map carries the radar field, so give it real
+       height instead of a 150-px strip, and keep the control strip compact. */
+    #map-wrapper.focus-mode #map-container { flex: 0 0 48vh; max-width: 100%; min-height: 320px; }
+    #map-wrapper.focus-mode #side-panel.open { width: 100%; min-width: 0; max-height: none; overflow-y: auto; }
+    #side-panel.focus-panel .explorer-controls { grid-template-columns: 1fr 1fr; }
+    #ir-map-controls { left: 8px; right: 8px; bottom: 8px; padding: 4px 6px; }
+    #ir-map-controls .ir-ctrl-btn { padding: 3px 6px; font-size: 10px; }
+    #ir-map-controls .ir-label { font-size: 10px; }
+    #ir-map-controls .radar-op-slider { width: 70px; }
+    .storm-grid-label { font-size: 9px; }
     .explorer-layout { flex-direction: column !important; }
     .explorer-controls { width: 100% !important; max-height: none !important; border-left: none !important; padding-left: 0 !important; border-top: 1px solid var(--border); padding-top: 10px; }
     .content-section { padding: 3rem 16px; }
@@ -2652,3 +2660,6 @@ footer a:hover { text-decoration: underline; }
 .ir-ctrl-btn.active { background: rgba(255, 224, 120, 0.22); }
 /* Focus-mode map control row gained IR-mode + Grid buttons; let it wrap in narrow map panes */
 #ir-map-controls .ir-ctrl-row { flex-wrap: wrap; row-gap: 4px; }
+
+.radar-op-wrap { display: inline-flex; align-items: center; gap: 4px; }
+.radar-op-slider { width: 90px; }
