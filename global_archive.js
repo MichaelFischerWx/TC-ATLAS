@@ -1658,6 +1658,52 @@ function gaOnPlot(plotPromise, el, evt, fn) {
 //  TAB SWITCHING
 // ══════════════════════════════════════════════════════════════
 
+// ── Storm Detail map-dominant layout helpers ──────────────────────────
+// The detail layout is sized to the viewport below the tab bar
+// (height: calc(100vh - --ga-detail-top)); the offset is measured, not
+// hardcoded, so topbar/stats/tab heights can change freely.
+function _gaDetailFit() {
+    var lay = document.getElementById('detail-layout');
+    if (!lay) return;
+    var tab = document.getElementById('tab-detail');
+    if (!tab || !tab.classList.contains('active')) return;
+    var top = Math.round(lay.getBoundingClientRect().top + window.scrollY);
+    if (top > 0 && top < 400) document.documentElement.style.setProperty('--ga-detail-top', top + 'px');
+}
+var _gaDetailFitTimer = null;
+window.addEventListener('resize', function () {
+    if (_gaDetailFitTimer) clearTimeout(_gaDetailFitTimer);
+    _gaDetailFitTimer = setTimeout(_gaDetailFit, 120);
+});
+function _gaDetailSideSync() {
+    var lay = document.getElementById('detail-layout'), btn = document.getElementById('detail-side-toggle');
+    if (!lay || !btn) return;
+    var collapsed = lay.classList.contains('side-collapsed');
+    var sheet = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+    btn.innerHTML = sheet ? (collapsed ? '&#9650;' : '&#9660;') : (collapsed ? '&#10094;' : '&#10095;');
+    btn.title = collapsed ? 'Show the timeline & control panel' : 'Hide the panel (map only)';
+}
+window.toggleDetailSidebar = function () {
+    var lay = document.getElementById('detail-layout');
+    if (!lay) return;
+    lay.classList.toggle('side-collapsed');
+    try { localStorage.setItem('ga-detail-side', lay.classList.contains('side-collapsed') ? 'collapsed' : 'open'); } catch (e) {}
+    _gaDetailSideSync();
+    setTimeout(function () {
+        if (detailMap) { try { detailMap.invalidateSize(); } catch (e) {} }
+        window.dispatchEvent(new Event('resize'));   // Plotly responsive charts re-fit the side panel
+    }, 60);
+};
+document.addEventListener('DOMContentLoaded', function () {
+    var lay = document.getElementById('detail-layout');
+    var pref = null;
+    try { pref = localStorage.getItem('ga-detail-side'); } catch (e) {}
+    // Phones start map-only (the drawer is a bottom sheet there); desktop starts open.
+    if (lay && (pref === 'collapsed' || (pref === null && _gaIsTouch()))) lay.classList.add('side-collapsed');
+    _gaDetailSideSync();
+    window.addEventListener('resize', _gaDetailSideSync);
+});
+
 window.switchTab = function (tabName) {
     _ga('ga_switch_tab', { tab_name: tabName });
     // If switching to detail without a selected storm, redirect through viewStormDetail
@@ -1676,6 +1722,7 @@ window.switchTab = function (tabName) {
     document.querySelectorAll('.ga-tab-content').forEach(function (panel) {
         panel.classList.toggle('active', panel.id === 'tab-' + tabName);
     });
+    if (tabName === 'detail') _gaDetailFit();
     // Lazy-init
     if (tabName === 'browser' && stormMap) {
         setTimeout(function () { stormMap.invalidateSize(); }, 100);
@@ -2557,6 +2604,7 @@ window.viewStormDetail = function () {
     document.querySelectorAll('.ga-tab-content').forEach(function (panel) {
         panel.classList.toggle('active', panel.id === 'tab-detail');
     });
+    _gaDetailFit();
 
     // Put the storm in the URL so a hard refresh comes back to it. This
     // bypasses switchTab (see above), which is the only other thing that

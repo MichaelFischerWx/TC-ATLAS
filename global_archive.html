@@ -87,11 +87,11 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundles, discoverable from byte 0. Tokens MUST match
          the script tags below. -->
-    <link rel="preload" as="script" href="global_archive.js?v=20260907b">
+    <link rel="preload" as="script" href="global_archive.js?v=20260907d">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260826d">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260907d">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -357,7 +357,10 @@
 
         <!-- TAB 2: STORM DETAIL -->
         <section id="tab-detail" class="ga-tab-content" role="tabpanel">
-            <div class="detail-layout">
+            <div class="detail-layout detail-fs" id="detail-layout">
+                <div class="detail-body">
+                    <div class="detail-main">
+                    <div class="detail-float-tl">
                 <div class="detail-header">
                     <div class="detail-header-row">
                         <button class="ga-btn ga-btn-ghost detail-back-btn" onclick="switchTab('browser')">← Back to Browser</button>
@@ -376,60 +379,6 @@
                         <button class="ga-btn ga-btn-sm" onclick="downloadStormKML()" title="Download track as KML for Google Earth"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>KML</button>
                     </div>
                 </div>
-
-                <div class="detail-grid">
-                    <!-- Intensity Timeline -->
-                    <div class="detail-panel">
-                        <!-- FL time series moves here when open (above intensity timeline) -->
-                        <div id="ga-fl-ts-top-anchor"></div>
-                        <div class="panel-header">
-                            <h3 id="timeline-panel-title">Intensity Timeline</h3>
-                            <div id="fdeck-toggle-wrap" class="ga-layer-item" style="display:none;">
-                                <button id="fdeck-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleFDeck()" title="Overlay fix-level intensity estimates (Dvorak, SFMR, flight-level, dropsonde) on the timeline">
-                                    F-Deck
-                                </button>
-                                <span id="fdeck-status" class="ir-status"></span>
-                            </div>
-                            <div id="hovmoller-toggle-wrap" class="ga-layer-item" style="display:none;">
-                                <button id="hovmoller-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleHovmoller()" title="Swap the timeline for a storm-centered IR Hovm&ouml;ller (radius vs time)">
-                                    Hovm&ouml;ller
-                                </button>
-                                <span id="hovmoller-status" class="ir-status"></span>
-                            </div>
-                            <div id="scorecard-toggle-wrap" style="display:none;">
-                                <button id="scorecard-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleScorecard()">
-                                    <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>Scorecard
-                                </button>
-                                <button id="env-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleEnvironment()">
-                                    <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>Environment
-                                </button>
-                            </div>
-                        </div>
-                        <div id="hovmoller-scroll-wrap" style="display:none;">
-                            <div id="hovmoller-chart"></div>
-                        </div>
-                        <div id="timeline-chart" class="chart-container js-theme-chart"></div>
-                        <div id="model-chart-controls" style="display:none;padding:6px 12px 8px;border-top:1px solid rgba(255,255,255,0.06);">
-                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;">
-                                <span style="font-size:9px;color:var(--slate);margin-right:2px;">Show:</span>
-                                <button class="ga-btn ga-btn-xs model-filter-btn active" data-mtype="official" onclick="toggleModelTypeFilter('official')">Official</button>
-                                <button class="ga-btn ga-btn-xs model-filter-btn active" data-mtype="dynamical" onclick="toggleModelTypeFilter('dynamical')" style="font-size:9px;">Dynamical</button>
-                                <button class="ga-btn ga-btn-xs model-filter-btn active" data-mtype="consensus" onclick="toggleModelTypeFilter('consensus')" style="font-size:9px;">Consensus</button>
-                                <button class="ga-btn ga-btn-xs model-filter-btn active" data-mtype="ai" onclick="toggleModelTypeFilter('ai')">AI</button>
-                                <button class="ga-btn ga-btn-xs model-filter-btn" data-mtype="statistical" onclick="toggleModelTypeFilter('statistical')" style="font-size:9px;">Statistical</button>
-                                <span style="flex:1;"></span>
-                                <button class="ga-btn ga-btn-xs" onclick="toggleModelInterp()" id="model-interp-btn" title="Click to show only interpolated (late cycle) models — NHC verification standard." style="font-size:9px;">Late Cycle</button>
-                                <button class="ga-btn ga-btn-xs" onclick="toggleModelIntensity()" id="model-intensity-btn2" title="Toggle intensity forecasts on chart" style="font-size:9px;color:#1d4ed8;"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Intensity</button>
-                            </div>
-                            <div id="model-legend" class="model-legend"></div>
-                            <div style="text-align:right;padding-top:3px;">
-                                <a href="https://www.nhc.noaa.gov/modelsummary.shtml" target="_blank" rel="noopener" style="font-size:8.5px;color:var(--slate);text-decoration:none;opacity:0.7;" onmouseover="this.style.opacity='1';this.style.color='#94a3b8'" onmouseout="this.style.opacity='0.7';this.style.color='#64748b'">Learn more about forecast models &#8599;</a>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Track Map + IR Overlay -->
-                    <div class="detail-panel detail-map-panel">
                         <div class="panel-header ga-layerbar">
                             <h3 style="font-size:11px;color:var(--slate);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Overlays</h3>
                             <div id="ir-toggle-wrap" class="ga-layer-item" style="display:none;">
@@ -469,6 +418,7 @@
                                 <span id="ga-wf-status" class="ir-status"></span>
                             </div>
                         </div>
+                    </div><!-- /detail-float-tl -->
                         <div class="detail-map-ir-row">
                         <div class="detail-map-wrap">
                             <div id="detail-map" class="detail-map-container"></div>
@@ -629,7 +579,59 @@
                                 <button class="ga-btn ga-btn-sm ir-cmap-btn active" data-cmap="claude-ir" onclick="switchColormap('claude-ir')">Claude IR</button>
                             </div>
                         </div>
-                        <!-- Controls below the map so they don't cover the imagery -->
+                    </div>
+                    <button id="detail-side-toggle" class="detail-side-toggle" type="button" onclick="toggleDetailSidebar()" title="Hide / show the side panel" aria-label="Toggle side panel">&#10095;</button>
+                    <aside class="detail-side" id="detail-side">
+                    <!-- Intensity Timeline -->
+                    <div class="detail-panel">
+                        <!-- FL time series moves here when open (above intensity timeline) -->
+                        <div id="ga-fl-ts-top-anchor"></div>
+                        <div class="panel-header">
+                            <h3 id="timeline-panel-title">Intensity Timeline</h3>
+                            <div id="fdeck-toggle-wrap" class="ga-layer-item" style="display:none;">
+                                <button id="fdeck-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleFDeck()" title="Overlay fix-level intensity estimates (Dvorak, SFMR, flight-level, dropsonde) on the timeline">
+                                    F-Deck
+                                </button>
+                                <span id="fdeck-status" class="ir-status"></span>
+                            </div>
+                            <div id="hovmoller-toggle-wrap" class="ga-layer-item" style="display:none;">
+                                <button id="hovmoller-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleHovmoller()" title="Swap the timeline for a storm-centered IR Hovm&ouml;ller (radius vs time)">
+                                    Hovm&ouml;ller
+                                </button>
+                                <span id="hovmoller-status" class="ir-status"></span>
+                            </div>
+                            <div id="scorecard-toggle-wrap" style="display:none;">
+                                <button id="scorecard-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleScorecard()">
+                                    <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>Scorecard
+                                </button>
+                                <button id="env-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleEnvironment()">
+                                    <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>Environment
+                                </button>
+                            </div>
+                        </div>
+                        <div id="hovmoller-scroll-wrap" style="display:none;">
+                            <div id="hovmoller-chart"></div>
+                        </div>
+                        <div id="timeline-chart" class="chart-container js-theme-chart"></div>
+                        <div id="model-chart-controls" style="display:none;padding:6px 12px 8px;border-top:1px solid rgba(255,255,255,0.06);">
+                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;">
+                                <span style="font-size:9px;color:var(--slate);margin-right:2px;">Show:</span>
+                                <button class="ga-btn ga-btn-xs model-filter-btn active" data-mtype="official" onclick="toggleModelTypeFilter('official')">Official</button>
+                                <button class="ga-btn ga-btn-xs model-filter-btn active" data-mtype="dynamical" onclick="toggleModelTypeFilter('dynamical')" style="font-size:9px;">Dynamical</button>
+                                <button class="ga-btn ga-btn-xs model-filter-btn active" data-mtype="consensus" onclick="toggleModelTypeFilter('consensus')" style="font-size:9px;">Consensus</button>
+                                <button class="ga-btn ga-btn-xs model-filter-btn active" data-mtype="ai" onclick="toggleModelTypeFilter('ai')">AI</button>
+                                <button class="ga-btn ga-btn-xs model-filter-btn" data-mtype="statistical" onclick="toggleModelTypeFilter('statistical')" style="font-size:9px;">Statistical</button>
+                                <span style="flex:1;"></span>
+                                <button class="ga-btn ga-btn-xs" onclick="toggleModelInterp()" id="model-interp-btn" title="Click to show only interpolated (late cycle) models — NHC verification standard." style="font-size:9px;">Late Cycle</button>
+                                <button class="ga-btn ga-btn-xs" onclick="toggleModelIntensity()" id="model-intensity-btn2" title="Toggle intensity forecasts on chart" style="font-size:9px;color:#1d4ed8;"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Intensity</button>
+                            </div>
+                            <div id="model-legend" class="model-legend"></div>
+                            <div style="text-align:right;padding-top:3px;">
+                                <a href="https://www.nhc.noaa.gov/modelsummary.shtml" target="_blank" rel="noopener" style="font-size:8.5px;color:var(--slate);text-decoration:none;opacity:0.7;" onmouseover="this.style.opacity='1';this.style.color='#94a3b8'" onmouseout="this.style.opacity='0.7';this.style.color='#64748b'">Learn more about forecast models &#8599;</a>
+                            </div>
+                        </div>
+                    </div>
+                        <div class="detail-side-stack">
                         <div id="ga-mw-controls" style="display:none;background:var(--surface-raised);border:1px solid rgba(251,146,60,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
                             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                                 <label style="font-size:10px;font-weight:600;color:#b8540d;text-transform:uppercase;letter-spacing:0.5px;">MW Overpass</label>
@@ -797,9 +799,7 @@
                                 <button class="ga-btn ga-btn-xs" onclick="syncModelsToIRNow()" id="model-sync-ir-btn" title="Snap forecast cycle to current IR frame time" style="font-size:9px;color:#fbbf24;">&#8635; Sync IR</button>
                             </div>
                         </div>
-                    </div>
-                </div>
-
+                        </div>
                 <!-- Hidden panel for backward compat (ir-panel display logic) -->
                 <div id="ir-panel" style="display:none;"></div>
 
@@ -827,6 +827,8 @@
                             Loading environmental data...
                         </div>
                     </div>
+                </div>
+                    </aside>
                 </div>
             </div>
         </section>
@@ -1379,7 +1381,7 @@
     <script defer src="lflet_gl.js?v=20260907b"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
-    <script defer src="global_archive.js?v=20260907b"></script>
+    <script defer src="global_archive.js?v=20260907d"></script>
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->

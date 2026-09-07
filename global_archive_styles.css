@@ -3330,3 +3330,140 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gra-ir.big #gra-ir-canvas { max-height: 620px; }
 .gra-ir.big .gra-ir-right { padding: 8px 14px 10px; }
 @media (max-width: 900px) { .gra-ir.big .gra-ir-left { flex: none; } }
+
+
+/* ── Storm Detail: full-screen map (2026-09-07) ──────────────────────────
+   Same model as the RT monitor's Global Map: the map IS the page below the
+   tab bar and everything else floats over it — storm header + overlay
+   toggles in a card at top-left, the IR animation bar docked along the
+   bottom, and the intensity timeline + every contextual control panel
+   (MW / radar / wind field / recon / sondes / models / scorecard /
+   environment) in a collapsible drawer over the right edge. Heights come
+   from --ga-detail-top, measured by _gaDetailFit(). ── */
+.detail-layout.detail-fs {
+    max-width: none;
+    height: calc(100vh - var(--ga-detail-top, 130px));
+    min-height: 520px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+}
+.detail-body { position: relative; flex: 1; min-height: 0; }
+.detail-main {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    background: var(--navy);
+    overflow: hidden;
+}
+.detail-main .detail-map-ir-row { position: absolute; inset: 0; display: flex; }
+.detail-fs .detail-map-container { height: 100%; }
+.detail-fs .ir-cbar-strip { height: auto; align-self: stretch; z-index: 602; background: var(--surface); }
+
+/* floating chrome shared look */
+.detail-float-tl, .detail-side, .detail-fs .detail-main #ir-map-controls.ir-bar {
+    background: color-mix(in srgb, var(--surface) 90%, transparent);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+}
+@supports not (background: color-mix(in srgb, red 50%, transparent)) {
+    .detail-float-tl, .detail-side, .detail-fs .detail-main #ir-map-controls.ir-bar { background: var(--surface); }
+}
+
+/* top-left card: header (title + actions) and the overlay toggle bar */
+.detail-float-tl {
+    position: absolute; top: 10px; left: 10px; z-index: 610;
+    max-width: min(760px, calc(100% - 20px));
+    display: flex; flex-direction: column;
+}
+.detail-float-tl .detail-header { margin: 0; padding: 8px 12px 6px; gap: 6px; }
+.detail-float-tl .detail-header-row { gap: 10px; }
+.detail-float-tl .detail-storm-title { font-size: 1.15rem; }
+.detail-float-tl .detail-storm-subtitle { font-size: 0.74rem; }
+.detail-float-tl .detail-header-actions { gap: 6px; }
+.detail-float-tl .ga-layerbar {
+    border-top: 1px solid var(--border); border-bottom: 0;
+    padding: 6px 12px 8px;
+}
+
+/* IR animation bar docked along the bottom of the map */
+.detail-fs .detail-main #ir-map-controls.ir-bar {
+    position: absolute !important;
+    left: 10px !important; right: 10px !important; bottom: 10px !important;
+    z-index: 612 !important;
+    margin: 0; padding: 6px 10px;
+}
+.detail-layout:not(.side-collapsed) .detail-main #ir-map-controls.ir-bar { right: 460px !important; }
+
+/* right drawer */
+.detail-side {
+    position: absolute; top: 10px; right: 40px; bottom: 10px;
+    width: 410px; max-width: calc(100% - 60px);
+    z-index: 606;
+    overflow-y: auto; overflow-x: hidden;
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 8px;
+    scrollbar-width: thin;
+}
+.detail-side > .detail-panel, .detail-side > .scorecard-panel { margin-top: 0 !important; flex-shrink: 0; }
+.detail-side .chart-container { height: 260px; }
+.detail-side .scorecard-content, .detail-side #environment-content { overflow-x: auto; }
+.detail-side-stack { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+.detail-side-stack > div { margin-top: 0 !important; }
+.detail-side-toggle {
+    position: absolute; top: 50%; right: 452px;
+    transform: translateY(-50%);
+    z-index: 620;
+    width: 22px; height: 52px; padding: 0;
+    border-radius: 6px 0 0 6px;
+    border: 1px solid var(--border); border-right: 0;
+    background: var(--surface-raised); color: var(--slate);
+    font-size: 11px; line-height: 1; cursor: pointer;
+}
+.detail-side-toggle:hover { color: var(--text); }
+.detail-layout.side-collapsed .detail-side { display: none; }
+.detail-layout.side-collapsed .detail-side-toggle { right: 40px; border-radius: 6px 0 0 6px; }
+
+@media (max-width: 1100px) {
+    .detail-side { width: 360px; }
+    .detail-side-toggle { right: 402px; }
+    .detail-layout:not(.side-collapsed) .detail-main #ir-map-controls.ir-bar { right: 410px !important; }
+}
+@media (max-width: 768px) {
+    .detail-layout.detail-fs { min-height: 0; height: calc(100dvh - var(--ga-detail-top, 130px)); }
+    .detail-float-tl { top: 6px; left: 6px; right: 6px; max-width: none; }
+    .detail-float-tl .detail-header-actions { flex-wrap: wrap; }
+    .detail-fs .detail-main #ir-map-controls.ir-bar { left: 6px !important; right: 6px !important; bottom: 6px !important; }
+    /* drawer becomes a bottom sheet */
+    .detail-side { top: auto; left: 6px; right: 6px; bottom: 6px; width: auto; max-width: none; height: 58%; border-radius: 12px; }
+    .detail-layout:not(.side-collapsed) .detail-main #ir-map-controls.ir-bar { right: 6px !important; bottom: calc(58% + 12px) !important; }
+    .detail-side-toggle {
+        top: auto; bottom: calc(58% + 14px); right: 6px; transform: none;
+        width: 52px; height: 22px; border-radius: 6px 6px 0 0; border-right: 1px solid var(--border); border-bottom: 0;
+    }
+    .detail-layout.side-collapsed .detail-side-toggle { bottom: 6px; right: 6px; border-radius: 6px; border-bottom: 1px solid var(--border); }
+    .detail-side .chart-container { height: 220px; }
+    /* Header card: one scrollable line each for actions and overlay toggles */
+    .detail-float-tl .detail-header-actions,
+    .detail-float-tl .ga-layerbar {
+        flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+    }
+    .detail-float-tl .detail-header-actions::-webkit-scrollbar,
+    .detail-float-tl .ga-layerbar::-webkit-scrollbar { display: none; }
+    .detail-float-tl .detail-header-actions { justify-content: flex-start; }   /* flex-end + overflow = unreachable left edge */
+    .detail-float-tl .detail-header-actions > *, .detail-float-tl .ga-layer-item { flex: 0 0 auto; }
+    .detail-float-tl .detail-storm-subtitle { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* IR bar: essentials only, single scrollable row; colormaps + exports + 3D are desktop features */
+    .detail-fs .detail-main #ir-map-controls .ir-bar-row1 { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+    .detail-fs .detail-main #ir-map-controls .ir-bar-row1::-webkit-scrollbar { display: none; }
+    .detail-fs .detail-main #ir-map-controls .ir-bar-row1 > * { flex: 0 0 auto; }
+    .detail-fs .detail-main #ir-map-controls .ir-bar-row1 .ir-bar-slider { flex: 0 0 120px; }
+    .detail-fs .detail-main #ir-map-controls .ir-bar-row2,
+    .detail-fs .detail-main #ir-map-controls #ir-3d-btn,
+    .detail-fs .detail-main #ir-map-controls #ir-gif-btn,
+    .detail-fs .detail-main #ir-map-controls #ir-png-btn { display: none !important; }
+    /* While the bottom sheet is open it owns the bottom of the screen; the loop keeps running underneath */
+    .detail-layout:not(.side-collapsed) .detail-main #ir-map-controls.ir-bar { display: none !important; }
+}
