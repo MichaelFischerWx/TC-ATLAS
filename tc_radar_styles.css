@@ -2697,3 +2697,34 @@ footer a:hover { text-decoration: underline; }
 @media (max-width: 768px) { .track-hint { font-size: 10px; bottom: 26px; } }
 /* Blue Marble: Leaflet's default white tile background would flash between tiles */
 body.basemap-satellite .leaflet-container { background: #0b1526; }
+
+/* ── Focus-mode Explore Data: primary row + "More options" ─────────── */
+.explorer-more-btn { display: none; }
+#side-panel.focus-panel .explorer-controls { grid-template-columns: minmax(200px, 1.4fr) minmax(220px, 1.6fr) minmax(150px, 1fr); align-items: end; }
+#side-panel.focus-panel .explorer-controls .explorer-title { grid-column: 1 / -1; }
+#side-panel.focus-panel .explorer-controls .explorer-row-more { display: none; }
+#side-panel.focus-panel .explorer-controls.show-more .explorer-row-more { display: block; }
+#side-panel.focus-panel .explorer-controls .generate-btn { margin: 0 0 2px; align-self: end; }
+#side-panel.focus-panel .explorer-more-btn { display: inline-block; grid-column: 1 / -1; justify-self: start; margin-top: 2px;
+    background: none; border: none; color: var(--blue, #2e7dff); font: 600 11px/1.2 'DM Sans', sans-serif; cursor: pointer; padding: 4px 0; }
+#side-panel.focus-panel .explorer-more-btn:hover { text-decoration: underline; }
+@media (max-width: 768px) { #side-panel.focus-panel .explorer-controls { grid-template-columns: 1fr 1fr; } #side-panel.focus-panel .explorer-controls .generate-btn { grid-column: 1 / -1; } }
+
+/* ── Dark translucent map furniture over the satellite basemap ──────── */
+body.basemap-satellite .intensity-legend,
+body.basemap-satellite .map-colorbar,
+body.basemap-satellite .basemap-switch,
+body.basemap-satellite #ir-map-controls,
+body.basemap-satellite .leaflet-bar,
+body.basemap-satellite .maplibregl-ctrl-group {
+    background: rgba(15, 22, 35, 0.8); border-color: rgba(255,255,255,0.16); color: #e2e8f0; box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+body.basemap-satellite .intensity-legend h4, body.basemap-satellite .intensity-legend .legend-item span, body.basemap-satellite .map-colorbar { color: #e2e8f0; }
+body.basemap-satellite .basemap-btn { color: #cbd5e1; }
+body.basemap-satellite .basemap-btn + .basemap-btn { border-left-color: rgba(255,255,255,0.16); }
+body.basemap-satellite .leaflet-bar a, body.basemap-satellite .maplibregl-ctrl-group button { background: transparent; color: #e2e8f0; border-bottom-color: rgba(255,255,255,0.16); }
+body.basemap-satellite .leaflet-bar a:hover, body.basemap-satellite .maplibregl-ctrl-group button:hover { background: rgba(255,255,255,0.1); }
+body.basemap-satellite .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(1) brightness(1.4); }
+body.basemap-satellite #ir-map-controls .ir-ctrl-btn { background: rgba(255,255,255,0.08); color: #e2e8f0; border-color: rgba(255,255,255,0.18); }
+body.basemap-satellite #ir-map-controls .ir-label, body.basemap-satellite #ir-map-controls .radar-op-wrap { color: #e2e8f0; }

@@ -963,7 +963,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '</optgroup>' +
                     '</select>' +
                 '</div>' +
-                '<div class="explorer-row"><label>Contour Overlay</label>' +
+                '<div class="explorer-row explorer-row-more"><label>Contour Overlay</label>' +
                     '<select class="explorer-select" id="ep-overlay" style="font-size:11px;">' +
                         '<option value="">None</option>' +
                         '<optgroup label="WCM Recentered (2 km)">' +
@@ -998,7 +998,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<span style="font-size:9px;color:var(--slate);" id="ep-contour-units"></span>' +
                     '</div>' +
                 '</div>' +
-                '<div class="explorer-row"><label>Colormap</label>' +
+                '<div class="explorer-row explorer-row-more"><label>Colormap</label>' +
                     '<select class="explorer-select" id="ep-cmap" style="font-size:11px;" onchange="applyCmap()">' +
                         '<option value="">Default (from variable)</option>' +
                         '<optgroup label="Sequential"><option value="Viridis">Viridis</option><option value="Inferno">Inferno</option><option value="Magma">Magma</option><option value="Plasma">Plasma</option><option value="Cividis">Cividis</option><option value="Hot">Hot</option><option value="YlOrRd">YlOrRd</option><option value="YlGnBu">YlGnBu</option><option value="Blues">Blues</option><option value="Reds">Reds</option><option value="Greys">Greys</option></optgroup>' +
@@ -1007,7 +1007,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<optgroup label="Other"><option value="Jet">Jet</option><option value="Rainbow">Rainbow</option><option value="Electric">Electric</option><option value="Earth">Earth</option><option value="Blackbody">Blackbody</option></optgroup>' +
                     '</select>' +
                 '</div>' +
-                '<div class="explorer-row"><label>Color Range</label>' +
+                '<div class="explorer-row explorer-row-more"><label>Color Range</label>' +
                     '<div style="display:flex;align-items:center;gap:4px;">' +
                         '<input type="number" id="ep-vmin" placeholder="min" step="any" style="width:60px;padding:2px 4px;font-size:10px;border:1px solid var(--border-light);border-radius:4px;background:var(--navy);color:var(--text);" onchange="applyColorRange()">' +
                         '<span style="font-size:10px;color:var(--slate);">to</span>' +
@@ -1028,13 +1028,16 @@ function openSidePanel(caseData, fromQuickSelect) {
                     '</div>' +
                 '</div>' +
                 '<button class="generate-btn" id="ep-btn" onclick="generateCustomPlot()">Generate Plan View</button>' +
-                '<div class="explorer-row" id="az-controls" style="margin-top:6px;"><label>Min. Coverage Threshold</label>' +
+                // Focus mode shows Variable + Height + the button; everything else
+                // (contours, colormap, range, coverage, coordinate) sits behind this.
+                '<button type="button" class="explorer-more-btn" id="ep-more-btn" onclick="toggleExplorerMore()" aria-expanded="false">More options \u25BE</button>' +
+                '<div class="explorer-row explorer-row-more" id="az-controls" style="margin-top:6px;"><label>Min. Coverage Threshold</label>' +
                     '<div style="display:flex;align-items:center;gap:6px;">' +
                         '<input type="range" id="az-coverage" min="0" max="100" step="5" value="50" class="az-cov-slider" oninput="document.getElementById(\'az-cov-val\').textContent = this.value+\'%\'">' +
                         '<span style="font-size:11px;font-weight:600;color:var(--cyan);min-width:32px;font-family:\'JetBrains Mono\',monospace;" id="az-cov-val">50%</span>' +
                     '</div>' +
                 '</div>' +
-                '<div class="explorer-row" style="margin-top:6px;"><label>Azim. Mean Coordinate</label>' +
+                '<div class="explorer-row explorer-row-more" style="margin-top:6px;"><label>Azim. Mean Coordinate</label>' +
                     '<select class="explorer-select" id="az-coord-mode" style="font-size:11px;">' +
                         '<option value="standard">Standard (km)</option>' +
                         '<option value="hybrid">R\u2095 Hybrid (Fischer et al. 2025)</option>' +
@@ -1107,6 +1110,7 @@ function openSidePanel(caseData, fromQuickSelect) {
         var _ctrls = document.querySelector('#side-panel .explorer-controls');
         var _disp = document.getElementById('display-area');
         if (_ctrls && _disp && _disp.nextElementSibling !== _ctrls) _disp.insertAdjacentElement('afterend', _ctrls);
+        try { if (_ctrls && localStorage.getItem('tcr_explorer_more') === '1') { _ctrls.classList.add('show-more'); var _mb = document.getElementById('ep-more-btn'); if (_mb) { _mb.textContent = 'Fewer options \u25B4'; _mb.setAttribute('aria-expanded', 'true'); } } } catch (e) {}
         // And render the default plan view without a click: in focus mode the
         // map is the plan view, so an empty map on open is a dead end.
         setTimeout(function() {
@@ -4007,6 +4011,14 @@ window._radarToMap = function () {
     }
 };
 
+window.toggleExplorerMore = function() {
+    var c = document.querySelector('#side-panel .explorer-controls');
+    var b = document.getElementById('ep-more-btn');
+    if (!c) return;
+    var on = c.classList.toggle('show-more');
+    if (b) { b.textContent = on ? 'Fewer options \u25B4' : 'More options \u25BE'; b.setAttribute('aria-expanded', on ? 'true' : 'false'); }
+    try { localStorage.setItem('tcr_explorer_more', on ? '1' : '0'); } catch (e) {}
+};
 function generateCustomPlot(callback) {
     if (currentCaseIndex === null) return;
     // Ensure Plotly is loaded before generating any plots
