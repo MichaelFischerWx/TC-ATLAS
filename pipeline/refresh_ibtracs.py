@@ -695,6 +695,16 @@ def write_outputs(tracks: dict, storms: list, chunk0: dict, chunk1: dict,
     atomic_write(root / "ibtracs_tracks_1.json", chunk1)
     atomic_write(root / "ibtracs_tracks.json", tracks)
 
+    # Explorer-only subset (bin/build_tdr_ibtracs_subset.py): the TC-RADAR
+    # explorer draws ~90 storms and fetches this ~85 KB gz file instead of
+    # the full archive. Rebuilt here so it never drifts from the chunks.
+    try:
+        import subprocess
+        subprocess.run([sys.executable, str(root / "bin" / "build_tdr_ibtracs_subset.py"),
+                        "--root", str(root)], check=True)
+    except Exception as e:  # noqa: BLE001
+        LOG.warning(f"ibtracs_tdr_subset.json not rebuilt: {e}")
+
     # Storms metadata + global summary.
     basin_counts: dict[str, int] = {}
     hursat_count = 0

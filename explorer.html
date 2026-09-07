@@ -60,10 +60,10 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundle + parser-injected map engine, discoverable
          from byte 0. Tokens MUST match the script tags below. -->
-    <link rel="preload" as="script" href="tc_radar_app.js?v=20260824a">
+    <link rel="preload" as="script" href="tc_radar_app.js?v=20260907a">
     <link rel="preload" as="script" href="assets/vendor/leaflet/leaflet.js?v=1.9.4">
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260901a">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260903a">
 </head>
 <body>
     <a href="#map-section" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -400,15 +400,10 @@
 
          Lazy-loading was tried and reverted. tc_radar_app.js routes all its own
          chart creation through tcrNewPlot/tcrReact, which is easy to gate, but
-         this page ALSO loads realtime_tdr.js (18 direct Plotly.newPlot calls),
-         vol3d.js (3) and skewt.js (1) — 22 creation sites that bypass those
-         wrappers entirely, spread across the TDR/recon, 3D-isosurface and
-         Skew-T surfaces. Gating them all is a much larger refactor than the
-         ~700 ms of deferred parse+execute is worth, and the recon surface can't
-         be exercised without live mission data, so a regression there would
-         likely reach users before anyone noticed.
-
-         If this is revisited: the blocker is those 22 sites, not tc_radar_app. -->
+         vol3d.js (3 direct Plotly.newPlot calls) and skewt.js (1) bypass those
+         wrappers. realtime_tdr.js (18 more sites) was dropped from this page in
+         Sept 2026, which shrinks the refactor if this is revisited — the
+         remaining blocker is the 4 sites in vol3d.js + skewt.js. -->
     <script defer src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <!-- ensurePlotly() is a pass-through here: Plotly is already loaded by the
          deferred tag above, and its callers live in the deferred app scripts
@@ -424,7 +419,11 @@
     </script>
     <script defer src="skewt.js?v=20260725d"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
-    <script defer src="tc_radar_app.js?v=20260824a"></script>
-    <script defer src="realtime_tdr.js?v=20260902e"></script>
+    <script defer src="tc_radar_app.js?v=20260907a"></script>
+    <!-- realtime_tdr.js (Recon tab, ~114 KB gz) is NOT loaded here any more:
+         the Recon UI lives on realtime_ir.html and none of its 71 window.*
+         exports or rt-* DOM ids exist on this page. realtime_tdr_styles.css
+         stays — a few shared classes (ir-ctrl-btn, fl-ts-*, rt-sub-panel-*)
+         style explorer elements. -->
 </body>
 </html>

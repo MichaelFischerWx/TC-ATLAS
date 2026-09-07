@@ -358,7 +358,8 @@ map.getPane('coastlines').style.zIndex = 450;
 map.getPane('coastlines').style.pointerEvents = 'none';
 
 // Two-tier coastline: vendored simplified file (~170 KB gz) at overview
-// zooms, full 10m detail only after the user zooms in. Never hit the
+// zooms, full 10m detail (~2.9 MB gz) only once the user zooms well past
+// focus mode's zoom 6 — the simplified file is visually sufficient there. Never hit the
 // rate-limited raw.githubusercontent host for this.
 (function() {
     var COAST_STYLE = {
@@ -372,10 +373,12 @@ map.getPane('coastlines').style.pointerEvents = 'none';
     var _coastLayer = null;
     var _coastTier = null;
     var _coastHiRequested = false;
+    var _coastRenderer = null;   // shared canvas renderer: 2,139 features as one <canvas>, not 2,139 SVG paths
     function _setCoast(geojson, tier) {
         if (_coastTier === 'hi' && tier !== 'hi') return;
         if (_coastLayer) { try { map.removeLayer(_coastLayer); } catch (e) {} }
-        _coastLayer = L.geoJSON(geojson, { pane: 'coastlines', style: COAST_STYLE }).addTo(map);
+        if (!_coastRenderer) _coastRenderer = L.canvas({ pane: 'coastlines', padding: 0.5 });
+        _coastLayer = L.geoJSON(geojson, { pane: 'coastlines', renderer: _coastRenderer, style: COAST_STYLE }).addTo(map);
         _coastTier = tier;
     }
     fetch('assets/coastlines/ne_10m_coastline_simplified.geojson')
@@ -385,7 +388,7 @@ map.getPane('coastlines').style.pointerEvents = 'none';
     function _maybeUpgradeCoast() {
         if (_coastHiRequested) return;
         var z; try { z = map.getZoom(); } catch (e) { return; }
-        if (z == null || z < _glZ(6)) return;
+        if (z == null || z < _glZ(8)) return;
         _coastHiRequested = true;
         fetch('assets/coastlines/ne_10m_coastline.geojson')
             .then(function(r) { return r.json(); })
@@ -457,9 +460,11 @@ function enterFocusMode(caseData) {
     setTimeout(function() {
         map.invalidateSize();
         // If IR data was already fetched before focus mode, show it now
+        // and start the deferred lag-frame fetch for the animation.
         if (_irData && _irFrameURLs.length) {
             _injectIRMapControls();
             showIRMapOverlay(0);
+            _startIRLagFrames(_irData.case_index);
         }
     }, 380);
 }
@@ -974,15 +979,15 @@ function openSidePanel(caseData, fromQuickSelect) {
         }
     });
 
-    // Fetch ERA5 environmental data for this case
+    // ERA5 and the NEXRAD-site lookup are deferred to their toggles
+    // (toggleERA5PlotlyUnderlay / toggleEnvOverlay / toggleNexradOverlay):
+    // both overlays are off by default, so prefetching here cost two Cloud
+    // Run requests per case open that most sessions never used.
     _era5Data = null; _era5PlotlyVisible = false;
-    fetchERA5Data(caseData.case_index, 'shear_mag', function(data) {
-        // ERA5 data pre-fetched for the Environment overlay (top-nav)
-    });
-
-    // Fetch nearby NEXRAD 88D sites for this case
     _nexradMapOverlay = null; _nexradPlanViewVisible = false; _nexradSrData = null;
-    fetchNexradSites(caseData);
+    _nexradSitesFor = null;
+    var _nxSel = document.getElementById('nexrad-site-select');
+    if (_nxSel) _nxSel.innerHTML = '<option value="">Enable 88D to search\u2026</option>';
 
     setTimeout(function() { map.invalidateSize(); }, 360);
 }
@@ -1135,23 +1140,30 @@ function _era5RenderCanvas(data2d, field) {
 }
 
 // ── ERA5 data fetch ──────────────────────────────────────────
+var _era5Seq = 0;
 function fetchERA5Data(caseIndex, field, callback) {
     _ga('fetch_era5', { case_index: caseIndex, field: field });
-    if (_era5Fetching) return;
+    // Per-request sequence token: a newer request supersedes an older one
+    // (the old boolean guard silently DROPPED the newer request during fast
+    // case switching and let the stale response land in _era5Data).
+    var seq = ++_era5Seq;
     _era5Fetching = true;
     var url = API_BASE + '/era5?case_index=' + caseIndex + '&field=' + (field || 'shear_mag') + '&radius_km=300' + '&data_type=' + _activeDataType;
     fetch(url)
         .then(function(r) {
+            if (seq !== _era5Seq) return null;
             if (!r.ok) { _era5Fetching = false; if (callback) callback(null); return null; }
             return r.json();
         })
         .then(function(data) {
+            if (seq !== _era5Seq) return;
             _era5Fetching = false;
             if (!data) return;
             _era5Data = data;
             if (callback) callback(data);
         })
         .catch(function(err) {
+            if (seq !== _era5Seq) return;
             console.warn('ERA5 fetch failed:', err);
             _era5Fetching = false; _era5Data = null;
             if (callback) callback(null);
@@ -1218,6 +1230,15 @@ function toggleERA5PlotlyUnderlay() {
     _era5PlotlyVisible = !_era5PlotlyVisible;
     var plotDiv = document.getElementById('plotly-chart');
     if (!plotDiv || !plotDiv.data) { _era5PlotlyVisible = false; return; }
+    // ERA5 is no longer prefetched on case open — fetch on first use.
+    if (_era5PlotlyVisible && (!_era5Data || _era5Data.case_index !== currentCaseIndex)) {
+        _era5PlotlyVisible = false;
+        var _wantCase = currentCaseIndex;
+        fetchERA5Data(_wantCase, 'shear_mag', function(data) {
+            if (data && currentCaseIndex === _wantCase && !_era5PlotlyVisible) toggleERA5PlotlyUnderlay();
+        });
+        return;
+    }
 
     if (_era5PlotlyVisible && _era5Data) {
         var trace = buildERA5PlotlyTrace(_era5Data);
@@ -2836,20 +2857,29 @@ function _removeIRLoadingIndicator() {
 var _irAllFramesLoaded = false;
 var _irLoadedCount = 0;
 
+// Per-session cache of /ir responses keyed by data_type:case. The
+// "Focus & IR Satellite" button re-runs openSidePanel for the same case,
+// which used to re-download the ~400 KB gz /ir payload every time.
+var _irRespCache = {};
+var _irLagFramesStarted = false;
 function fetchIRData(caseIndex, callback) {
     if (_irFetching) return;
     _irFetching = true;
     _irAllFramesLoaded = false;
+    _irLagFramesStarted = false;
     _irLoadedCount = 0;
     _irBoundsSet = false;  // force setBounds() on new case (center may differ)
 
     // Phase 1: Fetch metadata + t=0 frame for instant display
     var url = API_BASE + '/ir?case_index=' + caseIndex + '&data_type=' + _activeDataType;
-    fetch(url)
-        .then(function(r) {
+    var cacheKey = _activeDataType + ':' + caseIndex;
+    var p = _irRespCache[cacheKey]
+        ? Promise.resolve(_irRespCache[cacheKey])
+        : fetch(url).then(function(r) {
             if (!r.ok) { _irFetching = false; if (callback) callback(null); return null; }
-            return r.json();
-        })
+            return r.json().then(function(j) { if (j) _irRespCache[cacheKey] = j; return j; });
+        });
+    p
         .then(function(data) {
             _irFetching = false;
             if (!data) return;
@@ -2877,14 +2907,24 @@ function fetchIRData(caseIndex, callback) {
                 if (callback) callback(data);
             }
 
-            // Phase 2: Fetch remaining frames in parallel
-            _fetchRemainingFramesParallel(caseIndex, 1);
+            // Phase 2: the 8 lag frames only matter for the map animation,
+            // which exists in focus mode. Outside focus mode the side panel
+            // uses frame0 alone (plan-view underlay), so defer the 8 extra
+            // requests until enterFocusMode() asks for them.
+            if (_focusMode) _startIRLagFrames(caseIndex);
         })
         .catch(function(err) {
             console.warn('IR fetch failed:', err);
             _irFetching = false; _irData = null;
             if (callback) callback(null);
         });
+}
+
+function _startIRLagFrames(caseIndex) {
+    if (_irLagFramesStarted) return;
+    if (!_irData || _irData.case_index !== caseIndex) return;
+    _irLagFramesStarted = true;
+    _fetchRemainingFramesParallel(caseIndex, 1);
 }
 
 function _fetchRemainingFramesParallel(caseIndex, startIdx) {
@@ -6253,6 +6293,33 @@ function initializeFilters() {
     updateWspd05Slider(); updateWspd20Slider();
 }
 
+// Build (or rebuild) the clustered case-marker layer from a case list.
+// Lazy: only called when the Clusters view is shown or the data type flips
+// while clusters are already built. Populates `markers` + `allMarkers`.
+function _buildClusterMarkers(cases) {
+    if (!markers) {
+        markers = L.markerClusterGroup({
+            maxClusterRadius: 30, disableClusteringAtZoom: 10, spiderfyOnMaxZoom: true, showCoverageOnHover: false, zoomToBoundsOnClick: true,
+            iconCreateFunction: function(cluster) {
+                var n = cluster.getChildCount();
+                var bg = n<10?'rgba(46,125,255,0.25)':n<50?'rgba(46,125,255,0.4)':n<100?'rgba(46,125,255,0.6)':n<200?'rgba(46,125,255,0.75)':'rgba(46,125,255,0.9)';
+                return L.divIcon({ html:'<div style="background:'+bg+';color:white;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;border:2px solid rgba(15, 22, 35,0.3);box-shadow:0 2px 8px rgba(0,0,0,0.4);backdrop-filter:blur(4px);font-family:\'JetBrains Mono\',monospace;">'+n+'</div>', className:'custom-cluster-icon', iconSize:L.point(40,40) });
+            }
+        });
+    } else {
+        markers.clearLayers();
+    }
+    allMarkers = [];
+    cases.forEach(function(caseData) {
+        var color = getIntensityColor(caseData.vmax_kt);
+        var icon = L.divIcon({ className:'custom-div-icon', html:'<div class="custom-marker" style="background-color:'+color+';width:16px;height:16px;box-shadow:0 0 6px '+color+'40;"></div>', iconSize:[16,16], iconAnchor:[8,8] });
+        var marker = L.marker([caseData.latitude, caseData.longitude], { icon: icon });
+        marker.bindPopup(createPopupContent(caseData), { maxWidth:320,minWidth:260,autoPan:true,autoPanPadding:[50,50],keepInView:true,closeButton:true,closeOnEscapeKey:true });
+        allMarkers.push({ caseIndex: caseData.case_index, marker: marker });
+        markers.addLayer(marker);
+    });
+}
+
 // ── Fetch enriched metadata (max wind speeds from API) ───────
 function _fetchEnrichedWindData(dataType) {
     fetch(API_BASE + '/metadata_all?data_type=' + dataType)
@@ -6278,14 +6345,11 @@ function _fetchEnrichedWindData(dataType) {
         .catch(function(err) { console.warn('Enriched metadata not available (' + dataType + '): ' + err.message); });
 }
 
-// ── Pre-warm API ─────────────────────────────────────────────
-fetch(API_BASE + '/health').catch(function(){});
-
 // ── Load data ────────────────────────────────────────────────
 var mergeData = null;
 fetch('tc_radar_metadata_merge.json')
     .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-    .then(function(data) { mergeData = data; console.log('Merge metadata loaded: ' + data.total_cases + ' cases'); _fetchEnrichedWindData('merge'); })
+    .then(function(data) { mergeData = data; console.log('Merge metadata loaded: ' + data.total_cases + ' cases'); if (!data.enrichment_baked) _fetchEnrichedWindData('merge'); })
     .catch(function(err) { console.warn('Merge metadata not available: ' + err.message); });
 
 fetch('tc_radar_metadata.json')
@@ -6306,28 +6370,14 @@ fetch('tc_radar_metadata.json')
         _populateYearDropdown();
         _populateStormDropdown('');
 
-        markers = L.markerClusterGroup({
-            maxClusterRadius: 30, disableClusteringAtZoom: 10, spiderfyOnMaxZoom: true, showCoverageOnHover: false, zoomToBoundsOnClick: true,
-            iconCreateFunction: function(cluster) {
-                var n = cluster.getChildCount();
-                var bg = n<10?'rgba(46,125,255,0.25)':n<50?'rgba(46,125,255,0.4)':n<100?'rgba(46,125,255,0.6)':n<200?'rgba(46,125,255,0.75)':'rgba(46,125,255,0.9)';
-                return L.divIcon({ html:'<div style="background:'+bg+';color:white;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;border:2px solid rgba(15, 22, 35,0.3);box-shadow:0 2px 8px rgba(0,0,0,0.4);backdrop-filter:blur(4px);font-family:\'JetBrains Mono\',monospace;">'+n+'</div>', className:'custom-cluster-icon', iconSize:L.point(40,40) });
-            }
-        });
-
-        data.cases.forEach(function(caseData) {
-            var color = getIntensityColor(caseData.vmax_kt);
-            var icon = L.divIcon({ className:'custom-div-icon', html:'<div class="custom-marker" style="background-color:'+color+';width:16px;height:16px;box-shadow:0 0 6px '+color+'40;"></div>', iconSize:[16,16], iconAnchor:[8,8] });
-            var marker = L.marker([caseData.latitude, caseData.longitude], { icon: icon });
-            marker.bindPopup(createPopupContent(caseData), { maxWidth:320,minWidth:260,autoPan:true,autoPanPadding:[50,50],keepInView:true,closeButton:true,closeOnEscapeKey:true });
-            allMarkers.push({ caseIndex: caseData.case_index, marker: marker });
-            markers.addLayer(marker);
-        });
-
-        // Default view: tracks (load IBTrACS); clusters kept ready but not added to map
+        // Default view: tracks. Cluster markers are built lazily by
+        // _buildClusterMarkers() on the first Clusters toggle — building
+        // 1,510 L.markers + popup HTML strings here cost ~200 ms of
+        // main-thread time at boot for a layer that was never added.
         if (_mapViewMode === 'tracks') {
             _loadIBTrACSData(function() { _renderArchiveTracks(); });
         } else {
+            _buildClusterMarkers(data.cases);
             map.addLayer(markers);
         }
 
@@ -6378,8 +6428,10 @@ fetch('tc_radar_metadata.json')
         _irMapColorbar.addTo(map);
         initializeFilters();
 
-        // Fetch enriched metadata from API to populate max wind speed fields
-        _fetchEnrichedWindData('swath');
+        // Zarr-derived fields (max_er_wspd_*, sddc/shdc) are baked into the
+        // static JSON by bin/bake_tc_radar_enrichment.py; only fall back to
+        // the two uncached /metadata_all round-trips if that hasn't run.
+        if (!data.enrichment_baked) _fetchEnrichedWindData('swath');
 
         // Check for composite permalink in URL hash
         _checkCompPermalink();
@@ -7137,12 +7189,36 @@ function _buildTDRtoSIDMapping() {
 // full copies and a user who visits both Explorer and Global Archive downloads
 // all of it twice. This file previously fetched them with no token at all.
 var IBTRACS_DATA_VER = 'v20260408';
+// Token for the explorer-only subset (bin/build_tdr_ibtracs_subset.py).
+var IBTRACS_TDR_VER = 'v20260907';
 
-// Load IBTrACS storms + tracks (chunked)
+// Load IBTrACS storms + tracks. Fast path: the explorer only ever draws the
+// ~90 storms that have TC-RADAR analyses, so fetch the prebuilt subset
+// (~85 KB gz) instead of the full 13.5k-storm archive (~6.8 MB gz, ~46 MB
+// parsed) that used to sit on the critical path of the default map view.
+// Falls back to the full chunked files if the subset is missing.
 function _loadIBTrACSData(onDone) {
     if (_tracksLoaded || _tracksLoading) { if (onDone) onDone(); return; }
     _tracksLoading = true;
+    fetch('ibtracs_tdr_subset.json?' + IBTRACS_TDR_VER)
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function(sub) {
+            if (!sub || !sub.storms || !sub.tracks) throw new Error('malformed subset');
+            _ibtStorms = sub.storms;
+            _ibtStorms.forEach(function(s) { _ibtStormsBySID[s.sid] = s; });
+            _allTracks = sub.tracks;
+            _tracksLoaded = true; _tracksLoading = false;
+            _buildTDRtoSIDMapping();
+            console.log('IBTrACS TDR subset loaded: ' + _ibtStorms.length + ' storms, ' + Object.keys(_allTracks).length + ' tracks');
+            if (onDone) onDone();
+        })
+        .catch(function(err) {
+            console.warn('IBTrACS subset unavailable (' + err.message + '); loading full archive');
+            _loadIBTrACSFull(onDone);
+        });
+}
 
+function _loadIBTrACSFull(onDone) {
     // 1) Load storm metadata
     var stormsReady = false, tracksReady = false;
     function checkDone() { if (stormsReady && tracksReady) { _tracksLoaded = true; _tracksLoading = false; _buildTDRtoSIDMapping(); console.log('IBTrACS loaded: ' + _ibtStorms.length + ' storms, ' + Object.keys(_allTracks).length + ' tracks'); if (onDone) onDone(); } }
@@ -7222,14 +7298,15 @@ window.setArchiveMapView = function(mode) {
     });
 
     if (mode === 'cluster') {
-        // Remove tracks, show clusters
+        // Remove tracks, show clusters (built on first use)
         if (_trackViewLayer) map.removeLayer(_trackViewLayer);
-        map.addLayer(markers);
+        if (!markers) { var _d = _getActiveData(); if (_d) _buildClusterMarkers(_d.cases); }
+        if (markers) { map.addLayer(markers); updateMarkers(); }
     } else {
         // Show tracks — load IBTrACS if not yet loaded
-        map.removeLayer(markers);
+        if (markers) map.removeLayer(markers);
         if (!_tracksLoaded) {
-            showToast('Loading best-track data (~45 MB)…', 'info', 4000);
+            showToast('Loading best-track data…', 'info', 2500);
             _loadIBTrACSData(function() {
                 _renderArchiveTracks();
             });
@@ -7427,17 +7504,8 @@ function switchDataType(dt) {
     document.getElementById('explore-btn').disabled = true;
     filters.stormName = 'all';
 
-    // Rebuild markers
-    markers.clearLayers();
-    allMarkers = [];
-    src.cases.forEach(function(caseData) {
-        var color = getIntensityColor(caseData.vmax_kt);
-        var icon = L.divIcon({ className:'custom-div-icon', html:'<div class="custom-marker" style="background-color:'+color+';width:16px;height:16px;box-shadow:0 0 6px '+color+'40;"></div>', iconSize:[16,16], iconAnchor:[8,8] });
-        var marker = L.marker([caseData.latitude, caseData.longitude], { icon: icon });
-        marker.bindPopup(createPopupContent(caseData), { maxWidth:320,minWidth:260,autoPan:true,autoPanPadding:[50,50],keepInView:true,closeButton:true,closeOnEscapeKey:true });
-        allMarkers.push({ caseIndex: caseData.case_index, marker: marker });
-        markers.addLayer(marker);
-    });
+    // Rebuild cluster markers only if that layer has been built
+    if (markers) _buildClusterMarkers(src.cases);
     updateMarkers();
 }
 
@@ -15985,12 +16053,15 @@ function fetchNexradSites(caseData) {
     var lat = caseData.latitude;
     var lon = caseData.longitude;
     if (!lat || !lon) return;
+    if (_nexradSitesFor === caseData.case_index) return;   // already fetched for this case
+    _nexradSitesFor = caseData.case_index;
 
     siteSelect.innerHTML = '<option value="">Searching...</option>';
 
     fetch(API_BASE + '/nexrad/sites?lat=' + lat + '&lon=' + lon + '&max_range_km=460')
         .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function (json) {
+            if (_nexradSitesFor !== caseData.case_index) return;   // case changed meanwhile
             siteSelect.innerHTML = '';
             if (!json.sites || json.sites.length === 0) {
                 siteSelect.innerHTML = '<option value="">No nearby 88D</option>';
@@ -16009,11 +16080,16 @@ function fetchNexradSites(caseData) {
                 opt.textContent = s.site + ' — ' + s.name + ' (' + s.distance_km + ' km)';
                 siteSelect.appendChild(opt);
             }
+            // Sites are fetched lazily on the 88D toggle, so the overlay is
+            // usually already on by the time they land — load the nearest.
+            if (_nexradVisible && siteSelect.value) loadTdrNexradScans();
         })
         .catch(function () {
+            _nexradSitesFor = null;
             siteSelect.innerHTML = '<option value="">Error</option>';
         });
 }
+var _nexradSitesFor = null;   // case_index whose 88D site list is loaded/loading
 
 /**
  * Load available scans for the selected NEXRAD site.
@@ -16226,6 +16302,7 @@ window.toggleNexradOverlay = function () {
         if (btn) btn.classList.add('active');
         if (panel) panel.style.display = '';
         if (_nexradMapOverlay) _nexradMapOverlay.addTo(map);
+        if (currentCaseData) fetchNexradSites(currentCaseData);   // deferred from openSidePanel
 
         // Auto-enable plan view
         _nexradPlanViewVisible = true;

@@ -487,10 +487,15 @@ class CacheHeaderMiddleware(BaseHTTPMiddleware):
         '/azimuthal_mean', '/quadrant_mean',
         '/cross_section', '/plot', '/volume',
         '/anomaly', '/hybrid', '/scatter', '/climatology',
+        '/cfad/',  # /cfad/single — full-volume histogram, pure function of the case
         '/ir/',  # TC-RADAR /ir/ endpoints only, NOT /ir-monitor/
     )
+    # Exact-path immutables that a prefix can't express: bare '/ir' (the
+    # ~400 KB gz frame0+offsets payload the explorer fetches per case) must
+    # not be matched by prefix or '/ir-monitor/*' would be cached too.
+    IMMUTABLE_EXACT = ('/ir',)
     SEMI_STABLE_PREFIXES = ('/composite',)
-    SHORT_CACHE_PATHS = ('/health', '/metadata', '/variables', '/levels')
+    SHORT_CACHE_PATHS = ('/health', '/metadata', '/metadata_all', '/variables', '/levels')
 
     async def dispatch(self, request, call_next):
         response = await call_next(request)
@@ -502,7 +507,7 @@ class CacheHeaderMiddleware(BaseHTTPMiddleware):
         if response.status_code >= 400:
             response.headers['Cache-Control'] = 'no-store'
         elif response.status_code == 200:
-            if any(path.startswith(p) for p in self.IMMUTABLE_PREFIXES):
+            if path in self.IMMUTABLE_EXACT or any(path.startswith(p) for p in self.IMMUTABLE_PREFIXES):
                 # Immutable scientific data: browser holds 1d, CDN holds 7d.
                 # s-maxage + immutable let Cloud CDN absorb repeat hits without
                 # origin round-trips; 'immutable' skips conditional revalidation.
@@ -1385,14 +1390,22 @@ def get_metadata_all(
 # ---------------------------------------------------------------------------
 # Helper: matplotlib colormap → Plotly colorscale
 # ---------------------------------------------------------------------------
-def _cmap_to_plotly(cmap_name: str, n_steps: int = 64) -> list:
-    """Convert a matplotlib colormap name to a Plotly-compatible colorscale list."""
+@lru_cache(maxsize=64)
+def _cmap_to_plotly_cached(cmap_name: str, n_steps: int) -> tuple:
     cmap = plt.get_cmap(cmap_name)
-    return [
-        [round(i / (n_steps - 1), 4),
-         f"rgb({int(c[0]*255)},{int(c[1]*255)},{int(c[2]*255)})"]
+    return tuple(
+        (round(i / (n_steps - 1), 4),
+         f"rgb({int(c[0]*255)},{int(c[1]*255)},{int(c[2]*255)})")
         for i, c in enumerate(cmap(np.linspace(0, 1, n_steps)))
-    ]
+    )
+
+
+def _cmap_to_plotly(cmap_name: str, n_steps: int = 64) -> list:
+    """Convert a matplotlib colormap name to a Plotly-compatible colorscale list.
+
+    Memoized (17 call sites recomputed it per request); callers get a fresh
+    list-of-lists copy so nobody can mutate the shared cached value."""
+    return [list(t) for t in _cmap_to_plotly_cached(cmap_name, n_steps)]
 
 
 def _extract_2d_slice(ds, local_idx, variable_key, z_idx):
@@ -1505,6 +1518,24 @@ def get_data(
     if overlay and overlay not in VARIABLES:
         raise HTTPException(status_code=400, detail=f"Unknown overlay variable '{overlay}'. See /variables.")
 
+    # R2 fast path: a /data slice is a pure function of the query and the
+    # archive never changes, so mirror each response to R2 and 302 to
+    # cdn.tcatlas.org — same pattern as /ir_frame. The in-process
+    # _data_cache holds 20 entries against ~1.9M possible keys, so nearly
+    # every repeat request across users was a full Zarr read + JSON build on
+    # Cloud Run. Bump the 'v1' segment if the payload schema or VARIABLES
+    # definitions change.
+    from global_archive_api import (
+        _r2_frame_exists, _r2_mirror_frame_async, _public_frame_url,
+    )
+    r2_key = (f"tcradar-data/v1/{data_type}/{case_index}_{variable}_{round(level_km, 1):.1f}"
+              f"_{overlay or 'none'}_{int(wind_barbs)}_{int(tilt_profile)}.json")
+    if _r2_frame_exists(r2_key):
+        return RedirectResponse(
+            _public_frame_url(r2_key), status_code=302,
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
+        )
+
     # Serve from cache if available (instant — no S3 read or computation)
     cache_key = (case_index, variable, round(level_km, 1), data_type, overlay, wind_barbs, tilt_profile)
     with _data_cache_lock:
@@ -1512,6 +1543,7 @@ def get_data(
         if _cached is not None:
             _data_cache.move_to_end(cache_key)
     if _cached is not None:
+        _r2_mirror_frame_async(r2_key, _cached)   # R2 HEAD missed → (re)mirror
         return JSONResponse(_cached, headers={"X-Cache": "HIT"})
 
     try:
@@ -1620,16 +1652,16 @@ def get_data(
         except Exception as e:
             print(f"Tilt profile extraction failed: {e}")
 
-    # Store in cache
+    # Store in cache. (No gc.collect() here any more — the evicted dicts are
+    # plain refcounted containers and are freed on popitem; the forced full
+    # collection added a pause to the request that happened to evict.)
     with _data_cache_lock:
         _data_cache[cache_key] = result
-        _evicted = False
         while len(_data_cache) > _DATA_CACHE_MAX:
             _data_cache.popitem(last=False)  # evict oldest entry
-            _evicted = True
-    if _evicted:
-        gc.collect()
 
+    # Mirror to R2 so subsequent requests 302 to cdn.tcatlas.org (off Cloud Run)
+    _r2_mirror_frame_async(r2_key, result)
     return JSONResponse(result, headers={"X-Cache": "MISS"})
 
 
@@ -3149,6 +3181,18 @@ def azimuthal_mean(
     if overlay and overlay not in VARIABLES:
         raise HTTPException(status_code=400, detail=f"Unknown overlay variable '{overlay}'.")
 
+    # R2 fast path (see /data): pure function of the query, immutable archive.
+    from global_archive_api import (
+        _r2_frame_exists, _r2_mirror_frame_async, _public_frame_url,
+    )
+    r2_key = (f"tcradar-azmean/v1/{data_type}/{case_index}_{variable}_{max_radius_km:g}"
+              f"_{dr_km:g}_{coverage_min:g}_{overlay or 'none'}.json")
+    if _r2_frame_exists(r2_key):
+        return RedirectResponse(
+            _public_frame_url(r2_key), status_code=302,
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
+        )
+
     try:
         ds, local_idx = resolve_case(case_index, data_type)
     except Exception as e:
@@ -3230,6 +3274,7 @@ def azimuthal_mean(
         except Exception:
             pass
 
+    _r2_mirror_frame_async(r2_key, result)
     return JSONResponse(result)
 
 
@@ -9244,11 +9289,14 @@ def hovmoller(
     for ci, meta in storm_cases:
         try:
             ds, local_idx = resolve_case(ci, data_type)
-            vol, ref_var = _extract_3d_volume(ds, local_idx, variable)
 
             height_vals = ds["height"].values
             z_idx = int(np.argmin(np.abs(height_vals - height_km)))
             actual_height = float(height_vals[z_idx])
+
+            # One 2-D slab per case (was: the full 37-level volume per case,
+            # 5-15 times per request, of which one level was used).
+            slab, ref_var = _extract_2d_slice(ds, local_idx, variable, z_idx)
 
             # Determine spatial grid
             if variable in DERIVED_VARIABLES:
@@ -9267,16 +9315,7 @@ def hovmoller(
             else:
                 continue
 
-            dim_list = [d for d in ds[ref_varname].dims if d != "num_cases"]
-            h_axis = dim_list.index("height")
-
-            # Extract 2D slab at height
-            if h_axis == 0:
-                slab = vol[z_idx, :, :]
-            elif h_axis == 2:
-                slab = vol[:, :, z_idx]
-            else:
-                slab = vol[:, z_idx, :]
+            slab = np.asarray(slab, dtype=float)
 
             # Compute azimuthal mean at this single height
             xx, yy = np.meshgrid(x_coords, y_coords)
