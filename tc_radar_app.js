@@ -1100,6 +1100,23 @@ function openSidePanel(caseData, fromQuickSelect) {
     var _nxSel = document.getElementById('nexrad-site-select');
     if (_nxSel) _nxSel.innerHTML = '<option value="">Enable 88D to search\u2026</option>';
 
+    // Focus mode: the controls (variable, level, Generate) belong right under
+    // the plot, not below the layer/analysis/evolution rows where they fell
+    // off the bottom of a desktop viewport. Move the node up in the DOM.
+    if (_focusMode) {
+        var _ctrls = document.querySelector('#side-panel .explorer-controls');
+        var _disp = document.getElementById('display-area');
+        if (_ctrls && _disp && _disp.nextElementSibling !== _ctrls) _disp.insertAdjacentElement('afterend', _ctrls);
+        // And render the default plan view without a click: in focus mode the
+        // map is the plan view, so an empty map on open is a dead end.
+        setTimeout(function() {
+                if (currentCaseIndex !== caseData.case_index || !_focusMode) return;
+                var pc = document.getElementById('plotly-chart');
+                if (pc && pc.data) return;   // deep link or user already generated one
+                generateCustomPlot();
+            }, 80);
+    }
+
     setTimeout(function() { map.invalidateSize(); }, 360);
 }
 
@@ -3872,7 +3889,7 @@ function _radarMapDraw() {
     ctx.putImageData(im, 0, 0);
     var bounds = _radarMapBounds(p);
     if (_radarMapOverlay) { try { map.removeLayer(_radarMapOverlay); } catch (e) {} }
-    _radarMapOverlay = L.imageOverlay(cv.toDataURL('image/png'), bounds, { opacity: _tdrVisible ? _radarMapOpacity : 0, interactive: false }).addTo(map);
+    _radarMapOverlay = L.imageOverlay(cv.toDataURL('image/png'), bounds, { opacity: _tdrVisible ? _radarMapOpacity : 0, interactive: false, crisp: true }).addTo(map);
     // RMW ring
     if (_radarMapRing) { try { map.removeLayer(_radarMapRing); } catch (e) {} _radarMapRing = null; }
     if (p.rmw_km && !isNaN(p.rmw_km)) {
@@ -4029,7 +4046,7 @@ function generateCustomPlot(callback) {
     var cacheKey = _activeDataType + '_' + currentCaseIndex + '_' + variable + '_' + level_km + '_' + overlay + (wantBarbs ? '_barbs' : '') + (wantTilt ? '_tilt' : '');
     if (_dataCache[cacheKey]) {
         renderPlotFromJSON(_dataCache[cacheKey], resultDiv);
-        btn.disabled = false; btn.textContent = 'Generate Plan View';
+        btn.disabled = false; btn.textContent = 'Update Plan View';
         if (callback) callback(); return;
     }
     var controller = new AbortController();
@@ -4045,7 +4062,7 @@ function generateCustomPlot(callback) {
             var msg = err.name === 'AbortError' ? '\u26A0\uFE0F Request timed out (90s). The API may be cold-starting \u2014 try again in a minute.' : '\u26A0\uFE0F ' + err.message;
             resultDiv.innerHTML = '<div class="explorer-status error">' + msg + '</div>'; animStop();
         })
-        .finally(function() { clearTimeout(timeout); btn.disabled = false; btn.textContent = 'Generate Plan View'; });
+        .finally(function() { clearTimeout(timeout); btn.disabled = false; btn.textContent = 'Update Plan View'; });
 }
 
 // ── Contour overlay helper ────────────────────────────────────

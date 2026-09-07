@@ -624,7 +624,10 @@
                 var imgZ = self.options.pane ? map._paneZ(self.options.pane) : 350;
                 map._glAdd({ id: id, type: 'raster', source: id,
                     paint: { 'raster-opacity': self.options.opacity != null ? self.options.opacity : 1,
-                             'raster-resampling': 'nearest', 'raster-fade-duration': 0,
+                             // Linear (GPU bilinear) by default so a 4-km satellite frame reads
+                             // as imagery, not tiles; {crisp:true} keeps hard pixel edges for
+                             // gridded analysis fields (radar drape) where each cell is a value.
+                             'raster-resampling': self.options.crisp ? 'nearest' : 'linear', 'raster-fade-duration': 0,
                              'raster-opacity-transition': { duration: 0 } } }, imgZ); self._added = true; }); },
         _removeFromGL: function (map) { var gl = map._gl; try { if (gl.getLayer(this._id)) gl.removeLayer(this._id); if (gl.getSource(this._id)) gl.removeSource(this._id); } catch (e) {} },
         setOpacity: function (o) { var gl = this._map && this._map._gl; if (gl && gl.getLayer(this._id)) gl.setPaintProperty(this._id, 'raster-opacity', o); this.options.opacity = o; return this; },
