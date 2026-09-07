@@ -482,6 +482,160 @@ function renderTbToDataURI(tbData, rows, cols, colormap, southLat, northLat) {
     return uri;
 }
 
+// ── Near-global IR context layer ──────────────────────────────────────
+// One 8 km image per 3-hourly synoptic time (MergIR 2000+, GridSat-B1
+// 1980-1999), built by bin/build_ir_context.py and served from R2 at
+// cdn.tcatlas.org/ir-context/v1/{YYYY}/{YYYYMMDDHH}.webp. Lossy (q90) and
+// VISUAL ONLY: it is drawn under the exact 4 km storm frame and is never
+// read for values (Tb hover, profiles and exports all use the storm frame).
+// The WebP carries the 8-bit Tb index in RGB (same 0/1..255 convention as
+// the storm frames) and the validity mask in alpha, so it feeds the same
+// colormap + Mercator warp as the storm frame.
+var _CTX_BASE = 'https://cdn.tcatlas.org/ir-context/v1';
+var _CTX_LRU_MAX = 10;
+// PREVIEW GATE: the layer and its button exist only with ?ctx=1 in the URL
+// (or after opting in once) until the context archive is fully built.
+var _ctxFlag = /[?&]ctx=1\b/.test(location.search);
+var _ctxEnabled = (function () {
+    try {
+        var v = localStorage.getItem('ga-ir-context');
+        if (v === '1') return true;
+        if (v === '0') return false;
+    } catch (e) {}
+    return _ctxFlag && !_gaIsTouch();      // default off on phones: ~1.2 MB per frame
+})();
+var _ctxIndex = {};            // year -> {ts:{}, bounds} | false | Promise
+var _ctxDecoded = [];          // LRU of {ts, idx, rows, cols}
+var _ctxOverlay = null, _ctxOverlayMap = null, _ctxShownKey = null, _ctxReq = 0;
+var _ctxMaxTex = 0;
+
+function _ctxMaxTexSize() {
+    if (_ctxMaxTex) return _ctxMaxTex;
+    try {
+        var c = document.createElement('canvas');
+        var g = c.getContext('webgl') || c.getContext('experimental-webgl');
+        _ctxMaxTex = g ? g.getParameter(g.MAX_TEXTURE_SIZE) : 4096;
+    } catch (e) { _ctxMaxTex = 4096; }
+    return _ctxMaxTex;
+}
+
+/** Frame metadata datetime ('YYYY-MM-DDTHH:MM:00') → {ts:'YYYYMMDDHH', year} at the 3-h synoptic floor. */
+function _ctxTsFromFrame(frameMeta) {
+    if (!frameMeta || !frameMeta.datetime) return null;
+    var d = new Date(frameMeta.datetime.replace(' UTC', '').replace(' ', 'T') + (/[Zz]$/.test(frameMeta.datetime) ? '' : 'Z'));
+    if (isNaN(d.getTime())) return null;
+    var h = Math.floor(d.getUTCHours() / 3) * 3;
+    var p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+    return { year: d.getUTCFullYear(),
+             ts: d.getUTCFullYear() + p2(d.getUTCMonth() + 1) + p2(d.getUTCDate()) + p2(h) };
+}
+
+function _ctxGetIndex(year) {
+    var cur = _ctxIndex[year];
+    if (cur !== undefined && !(cur && typeof cur.then === 'function')) return Promise.resolve(cur);
+    if (cur) return cur;
+    var pr = fetch(_CTX_BASE + '/' + year + '/index.json')
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (doc) {
+            var set = {};
+            (doc.ts || []).forEach(function (t) { set[t] = 1; });
+            var idx = { ts: set, bounds: doc.bounds || { south: -60, north: 60, west: -180, east: 180 }, src: doc.src };
+            _ctxIndex[year] = idx; return idx;
+        })
+        .catch(function () { _ctxIndex[year] = false; return false; });
+    _ctxIndex[year] = pr;
+    return pr;
+}
+
+/** Decode one context WebP into the 8-bit index array (0 = missing). */
+function _ctxFetchDecoded(year, ts) {
+    for (var i = 0; i < _ctxDecoded.length; i++) {
+        if (_ctxDecoded[i].ts === ts) {
+            var hit = _ctxDecoded.splice(i, 1)[0]; _ctxDecoded.push(hit); return Promise.resolve(hit);
+        }
+    }
+    return new Promise(function (resolve, reject) {
+        var img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = function () {
+            try {
+                // Halve on phones (bandwidth already paid, but decode + texture
+                // memory matter) and wherever the GL texture limit is smaller.
+                var f = (_gaIsTouch() || img.naturalWidth > _ctxMaxTexSize()) ? 2 : 1;
+                var cols = Math.floor(img.naturalWidth / f), rows = Math.floor(img.naturalHeight / f);
+                var c = document.createElement('canvas'); c.width = cols; c.height = rows;
+                var g = c.getContext('2d', { willReadFrequently: true });
+                g.drawImage(img, 0, 0, cols, rows);
+                var px = g.getImageData(0, 0, cols, rows).data;
+                var idx = new Uint8Array(cols * rows);
+                for (var k = 0, n = cols * rows; k < n; k++) {
+                    idx[k] = px[k * 4 + 3] < 128 ? 0 : (px[k * 4] || 1);
+                }
+                var rec = { ts: ts, idx: idx, rows: rows, cols: cols };
+                _ctxDecoded.push(rec);
+                while (_ctxDecoded.length > _CTX_LRU_MAX) _ctxDecoded.shift();
+                resolve(rec);
+            } catch (e) { reject(e); }
+        };
+        img.onerror = function () { reject(new Error('context image failed')); };
+        img.src = _CTX_BASE + '/' + year + '/' + ts + '.webp';
+    });
+}
+
+function _ctxRemove() {
+    if (_ctxOverlay && _ctxOverlayMap) { try { _ctxOverlayMap.removeLayer(_ctxOverlay); } catch (e) {} }
+    _ctxOverlay = null; _ctxOverlayMap = null; _ctxShownKey = null;
+}
+
+/** Show the context image matching a storm frame (called from displayIROnMap). */
+function _ctxUpdate(frameMeta) {
+    if (!_ctxEnabled || !detailMap || !irOverlayVisible) { _ctxRemove(); return; }
+    var t = _ctxTsFromFrame(frameMeta);
+    if (!t || t.year < 1980) { _ctxRemove(); return; }
+    var key = t.ts + '|' + irSelectedColormap;
+    if (key === _ctxShownKey && _ctxOverlay && _ctxOverlayMap === detailMap) {
+        _ctxOverlay.setOpacity(irOpacity); return;
+    }
+    var req = ++_ctxReq;
+    _ctxGetIndex(t.year).then(function (index) {
+        if (req !== _ctxReq) return;
+        if (!index || !index.ts[t.ts]) { _ctxRemove(); return; }
+        return _ctxFetchDecoded(t.year, t.ts).then(function (dec) {
+            if (req !== _ctxReq || !detailMap || !irOverlayVisible) return;
+            var b = index.bounds;
+            var uri = renderTbToDataURI(dec.idx, dec.rows, dec.cols, irSelectedColormap, b.south, b.north);
+            var bounds = L.latLngBounds([b.south, Math.max(-180, b.west)], [b.north, Math.min(180, b.east)]);
+            if (_ctxOverlay && _ctxOverlayMap === detailMap && detailMap.hasLayer(_ctxOverlay)) {
+                _ctxOverlay.setBounds(bounds); _ctxOverlay.setUrl(uri);
+            } else {
+                _ctxRemove();
+                // tilePane: above the basemap, below the storm frame (350) and vectors.
+                _ctxOverlay = L.imageOverlay(uri, bounds, { opacity: irOpacity, interactive: false,
+                    pane: 'tilePane', className: 'ir-context-image' }).addTo(detailMap);
+                _ctxOverlayMap = detailMap;
+            }
+            _ctxOverlay.setOpacity(irOpacity);
+            _ctxShownKey = key;
+        });
+    }).catch(function (e) { console.warn('[ir-context]', e); });
+}
+
+function _ctxSyncButton() {
+    var b = document.getElementById('ir-ctx-btn');
+    if (!b) return;
+    b.style.display = (_ctxFlag || _ctxEnabled) ? '' : 'none';
+    b.classList.toggle('active', !!_ctxEnabled);
+}
+
+window.toggleIRContext = function () {
+    _ctxEnabled = !_ctxEnabled;
+    try { localStorage.setItem('ga-ir-context', _ctxEnabled ? '1' : '0'); } catch (e) {}
+    _ctxSyncButton();
+    if (!_ctxEnabled) { _ctxRemove(); return; }
+    _ctxUpdate(irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null);
+};
+document.addEventListener('DOMContentLoaded', _ctxSyncButton);
+
 function _renderTbToDataURIImpl(tbData, rows, cols, colormap, southLat, northLat) {
     if (!_irRenderCanvas) {
         _irRenderCanvas = document.createElement('canvas');
@@ -1313,6 +1467,8 @@ function switchColormap(name) {
     irSelectedColormap = name;
     // Update colorbar to match
     renderColorbarCanvas(name);
+    _ctxShownKey = null;
+    _ctxUpdate(irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null);
     // Re-render current frame if we have data
     if (irCurrentTbData && irCurrentBounds && detailMap) {
         var sLat = irCurrentBounds ? irCurrentBounds.getSouth() : null;
@@ -4286,6 +4442,7 @@ function _bearing(lat1, lon1, lat2, lon2) {
 function renderDetailMap(track, storm) {
     // Destroy existing map and IR overlay references
     irOverlayLayer = null;
+    _ctxOverlay = null; _ctxOverlayMap = null; _ctxShownKey = null;
     irPositionMarker = null;
     hovCenterMarker = null;
     hovRejectMarker = null;
@@ -4577,6 +4734,7 @@ function removeIROverlay() {
         try { detailMap.removeLayer(irOverlayLayer); } catch (e) {}
     }
     irOverlayLayer = null;
+    _ctxRemove();
     if (irPositionMarker && detailMap) {
         try { detailMap.removeLayer(irPositionMarker); } catch (e) {}
     }
@@ -4645,6 +4803,7 @@ window.toggleIROverlay = function () {
         if (irOverlayLayer && detailMap) {
             detailMap.removeLayer(irOverlayLayer);
         }
+        _ctxRemove();
         if (irPositionMarker && detailMap) {
             detailMap.removeLayer(irPositionMarker);
         }
@@ -4664,6 +4823,7 @@ window.toggleIROverlay = function () {
 window.cycleIROpacity = function () {
     irOpacityIdx = (irOpacityIdx + 1) % irOpacityLevels.length;
     irOpacity = irOpacityLevels[irOpacityIdx];
+    if (_ctxOverlay) { try { _ctxOverlay.setOpacity(irOpacity); } catch (e) {} }
     document.getElementById('ir-opacity-label').textContent = Math.round(irOpacity * 100) + '%';
     if (irOverlayLayer) {
         irOverlayLayer.setOpacity(irOpacity);
@@ -4797,6 +4957,9 @@ function displayIROnMap(data) {
             className: 'ir-overlay-image'
         }).addTo(detailMap);
     }
+    // Near-global context under the storm frame (async; no-op when disabled).
+    // Skipped mid-playback on phones so the loop keeps its frame rate.
+    if (!(irPlaying && _gaIsTouch())) _ctxUpdate(frameMeta);
 
     // Store bounds for hover display
     irCurrentBounds = imageBounds;
