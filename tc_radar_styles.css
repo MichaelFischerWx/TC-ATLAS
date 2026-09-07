@@ -1649,8 +1649,19 @@ footer a:hover { text-decoration: underline; }
     .filter-drawer.open { max-height: 600px; }
     .filter-grid { grid-template-columns: 1fr; }
     #map-wrapper { flex-direction: column; }
-    #map-container { min-height: 300px; }
+    /* Closed panel must not reserve height in the stacked layout — it left a
+       250-px map over 300 px of blank panel. Map takes the rest of the viewport. */
+    #side-panel:not(.open) { display: none; }
+    #map-container { min-height: 300px; flex: 1 1 auto; max-height: none; }
     #side-panel.open { width: 100%; border-left: none; border-top: 1px solid var(--border-light); height: auto; max-height: 65vh; }
+    /* Compact toolbar: placeholders carry the meaning, labels go, count moves onto the map. */
+    .map-toolbar { padding: 6px 10px; gap: 6px 8px; }
+    .map-toolbar .toolbar-group { flex: 1 1 45%; }
+    .map-toolbar .toolbar-group .toolbar-label { display: none; }
+    .map-toolbar .toolbar-count { display: none; }
+    .map-toolbar .toolbar-explore-btn { flex: 1 1 100%; }
+    .scroll-prompt { display: none !important; }
+    .basemap-switch { transform: scale(0.9); transform-origin: top right; }
     #side-panel-inner { width: 100%; padding: 12px; }
     /* Focus mode on phones: the map carries the radar field, so give it real
        height instead of a 150-px strip, and keep the control strip compact. */
@@ -2663,3 +2674,17 @@ footer a:hover { text-decoration: underline; }
 
 .radar-op-wrap { display: inline-flex; align-items: center; gap: 4px; }
 .radar-op-slider { width: 90px; }
+
+/* Basemap switcher (top-right map control) */
+.basemap-switch { display: inline-flex; background: rgba(255,255,255,0.92); border: 1px solid rgba(15,22,35,0.15); border-radius: 6px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.15); }
+.basemap-btn { border: none; background: transparent; padding: 4px 9px; font: 600 10px/1.2 'DM Sans', sans-serif; letter-spacing: .02em; color: #334155; cursor: pointer; }
+.basemap-btn + .basemap-btn { border-left: 1px solid rgba(15,22,35,0.12); }
+.basemap-btn.active { background: var(--blue, #2e7dff); color: #fff; }
+:root[data-theme="dark"] .basemap-switch { background: rgba(15,22,35,0.88); border-color: rgba(255,255,255,0.15); }
+:root[data-theme="dark"] .basemap-btn { color: #cbd5e1; }
+/* Basin-scale hint while individual fixes are hidden */
+.track-hint { position: absolute; left: 10px; bottom: 34px; z-index: 800; pointer-events: none; max-width: calc(100% - 150px);
+    background: rgba(15,22,35,0.78); color: #e2e8f0; font: 500 11px/1.3 'DM Sans', sans-serif; padding: 5px 10px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 768px) { .track-hint { font-size: 10px; bottom: 26px; } }
+/* Blue Marble: Leaflet's default white tile background would flash between tiles */
+body.basemap-satellite .leaflet-container { background: #0b1526; }

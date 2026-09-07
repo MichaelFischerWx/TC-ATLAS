@@ -346,11 +346,61 @@ const filters = {
 // renders as N+1, so subtract 1 to keep the same extent. No-op on plain Leaflet.
 function _glZ(leafletZoom) { return window.LFLET_GL ? leafletZoom - 1 : leafletZoom; }
 const map = L.map('map', { center:[20,-60], zoom:_glZ(4), zoomControl:true, tap:true, tapTolerance:15 });
+// Phones: the same 4° view that fills a desktop shows only the Caribbean on
+// a 375-px map, so start one level out and centered on the basin.
+function _homeView(animate) {
+    var narrow = false; try { narrow = map.getSize().x < 640; } catch (e) {}
+    map.setView(narrow ? [22, -62] : [20, -60], _glZ(narrow ? 3 : 4), { animate: !!animate });
+}
+_homeView(false);
 
-L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
-    maxZoom:19, subdomains:'abcd'
-}).addTo(map);
+// ── Basemap ──────────────────────────────────────────────────
+// 'satellite' = NASA GIBS Blue Marble shaded relief + bathymetry (free, no
+// key, native to zoom 8 and upsampled beyond): a dark, label-free surface
+// that lets intensity-colored tracks and the gray IR read cleanly. 'map' =
+// the CARTO street basemap, which theme.js swaps light/dark with the site
+// theme. Choice persists per browser.
+var _BASEMAP_ATTR_CARTO = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>';
+var _basemapId = 'satellite';
+try { _basemapId = localStorage.getItem('tcr_basemap') || 'satellite'; } catch (e) {}
+if (_basemapId !== 'map') _basemapId = 'satellite';
+var _baseLayer = null;
+function _basemapIsDark() { return _basemapId === 'satellite' || document.documentElement.getAttribute('data-theme') === 'dark'; }
+function _applyBasemap() {
+    if (_baseLayer) { try { map.removeLayer(_baseLayer); } catch (e) {} _baseLayer = null; }
+    if (_basemapId === 'satellite') {
+        _baseLayer = L.tileLayer('https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg', {
+            attribution: 'Blue Marble &copy; <a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>', maxNativeZoom: 8, maxZoom: 19, zIndex: 1 });
+    } else {
+        _baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { attribution: _BASEMAP_ATTR_CARTO, maxZoom: 19, subdomains: 'abcd', zIndex: 1 });
+    }
+    _baseLayer.addTo(map);
+    document.body.classList.toggle('basemap-satellite', _basemapId === 'satellite');
+    document.querySelectorAll('.basemap-btn').forEach(function(b) { b.classList.toggle('active', b.getAttribute('data-basemap') === _basemapId); });
+    if (typeof window._coastRestyle === 'function') window._coastRestyle();
+    if (typeof _renderArchiveTracks === 'function' && typeof _tracksLoaded !== 'undefined' && _tracksLoaded && _mapViewMode === 'tracks') _renderArchiveTracks();
+}
+window.setBasemap = function(id) {
+    _basemapId = (id === 'map') ? 'map' : 'satellite';
+    try { localStorage.setItem('tcr_basemap', _basemapId); } catch (e) {}
+    _applyBasemap();
+};
+_applyBasemap();
+// Switcher control (top-right, under the zoom buttons on the left it would crowd the grid toggles)
+(function() {
+    try {
+        var ctl = L.control({ position: 'topright' });
+        ctl.onAdd = function() {
+            var div = L.DomUtil.create('div', 'basemap-switch');
+            div.innerHTML =
+                '<button class="basemap-btn' + (_basemapId === 'satellite' ? ' active' : '') + '" data-basemap="satellite" onclick="setBasemap(\'satellite\')" title="Blue Marble (NASA)">Satellite</button>' +
+                '<button class="basemap-btn' + (_basemapId === 'map' ? ' active' : '') + '" data-basemap="map" onclick="setBasemap(\'map\')" title="Street map (follows light/dark theme)">Map</button>';
+            L.DomEvent.disableClickPropagation(div);
+            return div;
+        };
+        ctl.addTo(map);
+    } catch (e) { /* facade without L.control: no switcher, default basemap stays */ }
+})();
 
 // Coastline outlines rendered above overlays (NEXRAD, IR) but below markers
 map.createPane('coastlines');
@@ -374,6 +424,16 @@ map.getPane('coastlines').style.pointerEvents = 'none';
         fillOpacity: 0,
         interactive: false
     };
+    // Black lines vanish on Blue Marble / dark CARTO; pick the ink per basemap.
+    function _coastInk() { return (typeof _basemapIsDark === 'function' && _basemapIsDark()) ? '#f8fafc' : '#000000'; }
+    function _coastOpacity() { return (typeof _basemapIsDark === 'function' && _basemapIsDark()) ? 0.55 : 0.7; }
+    window._coastRestyle = function() {
+        COAST_STYLE.color = _coastInk(); COAST_STYLE.opacity = _coastOpacity();
+        var st = { color: COAST_STYLE.color, opacity: COAST_STYLE.opacity };
+        try { if (_loLayer) _loLayer.setStyle(st); } catch (e) {}
+        try { if (_hiGroup) _hiGroup.eachLayer(function(l) { if (l.setStyle) l.setStyle(st); }); } catch (e) {}
+    };
+    COAST_STYLE.color = _coastInk(); COAST_STYLE.opacity = _coastOpacity();
     var HI_ZOOM = 6;            // Leaflet zoom at/above which hi tiles are used (focus mode zooms to 6)
     var TILE_STEP = 10;
     var _coastRenderer = null;  // shared canvas renderer: thousands of features as one <canvas>, not SVG paths
@@ -541,7 +601,7 @@ function exitFocusMode() {
     // Restore map filter to all
     filters.stormName = 'all';
     updateMarkers();
-    setTimeout(function() { map.invalidateSize(); map.setView([20, -60], _glZ(4), { animate: true }); }, 380);
+    setTimeout(function() { map.invalidateSize(); _homeView(true); }, 380);
 }
 
 // Storm dropdown: filters the map AND populates the case dropdown
@@ -7574,6 +7634,15 @@ function _renderArchiveTracks() {
     var stormKeys = Object.keys(tdrStorms);
     var rendered = 0;
 
+    // Declutter by zoom. With every storm shown, 1,510 same-size fixes on 87
+    // tracks is a hairball at basin scale, so fixes appear only once the user
+    // zooms in (or narrows to one storm); tracks stay thin until then.
+    var z = 4; try { z = map.getZoom(); } catch (e) {}
+    var single = stormKeys.length <= 3;
+    var fixTier = single ? 2 : (z >= _glZ(7) ? 2 : (z >= _glZ(5) ? 1 : 0));
+    _tracksLastTier = fixTier + ':' + single;
+    _trackEmphasis = single ? 'single' : 'all';
+
     stormKeys.forEach(function(key) {
         var storm = tdrStorms[key];
         var sid = _tdrToSID[key];
@@ -7581,18 +7650,18 @@ function _renderArchiveTracks() {
 
         if (track && track.length >= 2) {
             // Draw best-track polyline
-            _drawBestTrack(track, storm, sid);
+            _drawBestTrack(track, storm, sid, track);
             rendered++;
         }
 
-        // Always draw TDR center-fix markers (even if no best-track match)
+        if (fixTier === 0) return;   // fixes hidden at basin scale; click a track to select its storm
         storm.cases.forEach(function(c) {
             var color = getIntensityColor(c.vmax_kt);
             var cm = L.circleMarker([c.latitude, c.longitude], {
                 renderer: _trackCanvasRenderer,
-                radius: 5,
-                color: '#fff',
-                weight: 1.5,
+                radius: fixTier === 2 ? 5 : 3,
+                color: fixTier === 2 ? '#fff' : 'rgba(255,255,255,0.6)',
+                weight: fixTier === 2 ? 1.5 : 0.8,
                 fillColor: color,
                 fillOpacity: 0.95,
                 opacity: 0.9
@@ -7614,11 +7683,57 @@ function _renderArchiveTracks() {
     var nCases = 0;
     stormKeys.forEach(function(k) { nCases += tdrStorms[k].cases.length; });
     document.getElementById('filtered-count').textContent = nCases;
+    _trackHintUpdate(fixTier === 0 && stormKeys.length > 3);
     console.log('Rendered ' + rendered + ' best tracks + TDR markers for ' + stormKeys.length + ' storms');
+}
+var _tracksLastTier = null, _trackEmphasis = 'all';
+// Re-tier fixes when a zoom crosses a threshold (cheap: canvas markers).
+map.on('zoomend', function() {
+    if (_mapViewMode !== 'tracks' || !_tracksLoaded || _focusMode) return;
+    var z = map.getZoom();
+    var keys = Object.keys(_getFilteredTDRStorms());
+    var single = keys.length <= 3;
+    var tier = single ? 2 : (z >= _glZ(7) ? 2 : (z >= _glZ(5) ? 1 : 0));
+    if ((tier + ':' + single) !== _tracksLastTier) _renderArchiveTracks();
+});
+// One-line hint on the map while fixes are hidden.
+function _trackHintUpdate(show) {
+    var el = document.getElementById('track-hint');
+    var mapEl = document.getElementById('map-container');
+    if (!mapEl) return;
+    if (show && !el) {
+        el = document.createElement('div');
+        el.id = 'track-hint';
+        el.className = 'track-hint';
+        el.textContent = 'Tap a track to select that storm, or zoom in to see individual radar analyses';
+        mapEl.appendChild(el);
+    } else if (!show && el) {
+        el.remove();
+    }
+}
+// Selecting a storm from its track: drive the toolbar's storm input so the
+// case dropdown, filters and count all update through the existing handler.
+function _selectStormFromTrack(storm, track) {
+    var inp = document.getElementById('storm-select');
+    if (!inp) return;
+    inp.value = storm.name;
+    inp.dispatchEvent(new Event('change', { bubbles: true }));
+    // Frame the radar analyses (the part of the track the explorer has data
+    // for), not the whole best track — a 20° lifetime track would leave the
+    // fixes as a small cluster. Deferred a tick so the re-render from the
+    // change handler settles first.
+    setTimeout(function() {
+        try {
+            var pts = [];
+            storm.cases.forEach(function(c) { if (c.latitude != null) pts.push([c.latitude, c.longitude]); });
+            if (pts.length === 1) map.setView(pts[0], _glZ(6), { animate: true });
+            else if (pts.length >= 2) map.fitBounds(L.latLngBounds(pts), { padding: [50, 50], maxZoom: _glZ(7) });
+        } catch (e) {}
+    }, 50);
 }
 
 // Draw a single storm's best-track polyline
-function _drawBestTrack(track, storm, sid) {
+function _drawBestTrack(track, storm, sid, fullTrack) {
     // Collect valid points
     var pts = [];
     for (var i = 0; i < track.length; i++) {
@@ -7638,7 +7753,7 @@ function _drawBestTrack(track, storm, sid) {
 
         if (ptColor !== segColor || isTC !== segIsTC) {
             if (runCoords.length >= 2) {
-                _addArchiveTrackPolyline(runCoords, segIsTC, segColor, storm);
+                _addArchiveTrackPolyline(runCoords, segIsTC, segColor, storm, fullTrack);
             }
             runCoords = [[pts[j - 1].la, pts[j - 1].lo]];
             segColor = ptColor;
@@ -7647,32 +7762,37 @@ function _drawBestTrack(track, storm, sid) {
         runCoords.push([p.la, p.lo]);
     }
     if (runCoords.length >= 2) {
-        _addArchiveTrackPolyline(runCoords, segIsTC, segColor, storm);
+        _addArchiveTrackPolyline(runCoords, segIsTC, segColor, storm, fullTrack);
     }
 }
 
-function _addArchiveTrackPolyline(coords, isTC, segColor, storm) {
+function _addArchiveTrackPolyline(coords, isTC, segColor, storm, fullTrack) {
+    var single = _trackEmphasis === 'single';
+    var dark = (typeof _basemapIsDark === 'function') && _basemapIsDark();
     var opts = {
         renderer: _trackCanvasRenderer,
         interactive: true
     };
+    var baseW, baseO;
     if (isTC) {
+        baseW = single ? 3 : 1.6;
+        baseO = single ? 0.95 : 0.5;
         opts.color = segColor;
-        opts.weight = 1.8;
-        opts.opacity = 0.55;
     } else {
-        opts.color = '#6b7280';
-        opts.weight = 0.8;
-        opts.opacity = 0.2;
+        baseW = single ? 1.4 : 0.8;
+        baseO = single ? 0.6 : 0.25;
+        opts.color = dark ? '#cbd5e1' : '#6b7280';
         opts.dashArray = '4,3';
     }
+    opts.weight = baseW; opts.opacity = baseO;
     var line = L.polyline(coords, opts);
     line.bindTooltip(
-        '<strong>' + storm.name + '</strong> (' + storm.year + ')',
+        '<strong>' + storm.name + '</strong> (' + storm.year + ')' + (single ? '' : '<br><span style="opacity:.75">click to select</span>'),
         { sticky: true, className: 'track-tooltip' }
     );
-    line.on('mouseover', function() { if (isTC) this.setStyle({ weight: 3.5, opacity: 1 }); });
-    line.on('mouseout', function() { if (isTC) this.setStyle({ weight: 1.8, opacity: 0.55 }); });
+    line.on('mouseover', function() { this.setStyle({ weight: baseW + 1.8, opacity: 1 }); });
+    line.on('mouseout', function() { this.setStyle({ weight: baseW, opacity: baseO }); });
+    line.on('click', function() { if (!single) _selectStormFromTrack(storm, fullTrack); });
     _trackViewLayer.addLayer(line);
 }
 
