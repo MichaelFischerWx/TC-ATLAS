@@ -840,13 +840,19 @@
     CanvasRenderer.prototype._dispatch = function (arr, e) { var L = arr[e.features[0].properties._bi]; if (!L) return;
         if (L._evts && L._evts.click) L._evts.click.forEach(function (fn) { try { fn({ type: 'click', target: L, latlng: e.lngLat }); } catch (x) {} });
         if (L._popup && this._map) L._popup._ml().setLngLat(e.lngLat).addTo(this._map._gl); };
+    CanvasRenderer.prototype._fireTip = function (L, type) { var fns = L && L._evts && L._evts[type]; if (!fns) return;
+        fns.forEach(function (fn) { try { fn({ type: type, target: L }); } catch (x) {} }); };
     CanvasRenderer.prototype._hover = function (arr, e) { var L = arr[e.features[0].properties._bi]; if (!L || !L._tip) { this._unhover(); return; }
+        // tooltipopen/tooltipclose parity with DOM markers (the archive's recon
+        // overlay uses them to give recon tooltips precedence over IR hover).
+        if (this._tipLayer !== L) { if (this._tipLayer) this._fireTip(this._tipLayer, 'tooltipclose'); this._tipLayer = L; this._fireTip(L, 'tooltipopen'); }
         if (!this._tipEl) { this._tipEl = document.createElement('div'); this._tipEl.style.cssText = 'position:fixed;z-index:1200;pointer-events:none;white-space:nowrap;'; }
         this._tipEl.className = 'leaflet-tooltip ' + (L._tip.opts.className || '');
         var c = L._tip.content; this._tipEl.innerHTML = typeof c === 'string' ? c : (c && c.outerHTML || '');
         document.body.appendChild(this._tipEl);
         this._tipEl.style.left = (e.originalEvent.clientX + 12) + 'px'; this._tipEl.style.top = (e.originalEvent.clientY - 8) + 'px'; };
-    CanvasRenderer.prototype._unhover = function () { if (this._tipEl && this._tipEl.parentNode) this._tipEl.parentNode.removeChild(this._tipEl); };
+    CanvasRenderer.prototype._unhover = function () { if (this._tipEl && this._tipEl.parentNode) this._tipEl.parentNode.removeChild(this._tipEl);
+        if (this._tipLayer) { this._fireTip(this._tipLayer, 'tooltipclose'); this._tipLayer = null; } };
 
     // ── Circle (radius in METRES) → geojson polygon ──
     var Circle = extend.call(Layer, {

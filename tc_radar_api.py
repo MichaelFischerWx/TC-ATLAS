@@ -522,6 +522,13 @@ class CacheHeaderMiddleware(BaseHTTPMiddleware):
                 )
             elif path in self.SHORT_CACHE_PATHS:
                 response.headers['Cache-Control'] = 'public, max-age=300'
+            elif path.startswith('/global/') and 'cache-control' not in response.headers:
+                # The Cloudflare cache rule now covers all of /global/ with
+                # respect_origin. A 200 with NO Cache-Control would fall back
+                # to Cloudflare's default 2 h edge TTL, so every archive
+                # handler must opt in explicitly; anything that forgot (ops
+                # probes, partial/negative dicts) is pinned to no-store.
+                response.headers['Cache-Control'] = 'no-store'
 
         return response
 

@@ -38,6 +38,7 @@ import numpy as np
 import requests
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 from PIL import Image
 
 from tc_center_fix import find_ir_center, apply_center_gates
@@ -1246,6 +1247,7 @@ def hursat_frame(
 # MergIR caches
 _mergir_meta_cache: OrderedDict = OrderedDict()
 _MERGIR_META_CACHE_MAX = 100
+_mergir_meta_ts: dict = {}   # cache_key → insert epoch (current-season expiry)
 
 # Box size for storm-centered subset (degrees from center)
 MERGIR_HALF_DOMAIN = 10.0  # 10° each direction = 20°×20° box — fills Leaflet panel
@@ -1960,14 +1962,20 @@ def ir_meta(
     import json as json_mod
 
     cache_key = f"ir_{sid}"
-    if cache_key in _mergir_meta_cache:
-        _mergir_meta_cache.move_to_end(cache_key)
-        return JSONResponse(
-            _mergir_meta_cache[cache_key],
-            headers={"Cache-Control": "public, max-age=3600, s-maxage=86400"},
-        )
-
     year = _parse_sid_year(sid)
+    # Past seasons: frame list is fixed → long edge TTL. Current season: the
+    # track (and so the frame list) is still growing → short TTL, and the
+    # per-instance memory entry expires after 10 min instead of living until
+    # eviction (an active storm used to serve yesterday's frame list).
+    _meta_cc = ("public, max-age=3600, s-maxage=86400" if _fl_is_historical(year)
+                else "public, max-age=300, s-maxage=900")
+    if cache_key in _mergir_meta_cache:
+        _hit = _mergir_meta_cache[cache_key]
+        _hit_ts = _mergir_meta_ts.get(cache_key, 0)
+        if _fl_is_historical(year) or (_time.time() - _hit_ts) < 600:
+            _mergir_meta_cache.move_to_end(cache_key)
+            return JSONResponse(_hit, headers={"Cache-Control": _meta_cc})
+        _mergir_meta_cache.pop(cache_key, None)
 
     # Determine source — priority: MergIR (2000+) > GridSat (1980-2024) > HURSAT (fallback)
     source = None
@@ -2167,6 +2175,7 @@ def ir_meta(
 
     # Cache and return
     _mergir_meta_cache[cache_key] = result
+    _mergir_meta_ts[cache_key] = _time.time()
     if len(_mergir_meta_cache) > _MERGIR_META_CACHE_MAX:
         _mergir_meta_cache.popitem(last=False)
 
@@ -2193,10 +2202,7 @@ def ir_meta(
                     logger.debug(f"[Hovmöller] Background precompute failed for {sid}: {e}")
             threading.Thread(target=_bg_hovmoller, daemon=True).start()
 
-    return JSONResponse(
-        result,
-        headers={"Cache-Control": "public, max-age=3600, s-maxage=86400"},
-    )
+    return JSONResponse(result, headers={"Cache-Control": _meta_cc})
 
 
 # ---------------------------------------------------------------------------
@@ -3144,8 +3150,11 @@ async def ir_hovmoller(
             headers={"Cache-Control": "public, max-age=86400, s-maxage=86400, immutable"},
         )
 
-    # Check GCS cache
-    gcs_result = _gcs_get_hovmoller(sid)
+    # Check GCS cache. This handler is async (it awaits the POST body), so
+    # every blocking call below goes through the threadpool — a Hovmöller
+    # miss can take minutes and previously pinned the single uvicorn worker,
+    # stalling every other request on the instance.
+    gcs_result = await run_in_threadpool(_gcs_get_hovmoller, sid)
     if gcs_result is not None:
         with _hovmoller_cache_lock:
             _hovmoller_cache[sid] = gcs_result
@@ -3196,7 +3205,7 @@ async def ir_hovmoller(
     if source in ("mergir", "gridsat"):
         frame_list = _build_mergir_frame_list(track_points)
     else:
-        frames = _get_extracted_frames(sid, storm_lon=storm_lon)
+        frames = await run_in_threadpool(_get_extracted_frames, sid, storm_lon=storm_lon)
         frame_list = []
         if frames:
             for i, ft in enumerate(frames):
@@ -3448,8 +3457,10 @@ async def ir_hovmoller(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # Non-streaming mode (default): delegate to shared helper
-    result = _precompute_hovmoller(sid, track_points, storm_lon, max_radius_km, dr_km)
+    # Non-streaming mode (default): delegate to shared helper (threadpool —
+    # this is the multi-minute frame crunch).
+    result = await run_in_threadpool(
+        _precompute_hovmoller, sid, track_points, storm_lon, max_radius_km, dr_km)
 
     if not result:
         raise HTTPException(status_code=502, detail="No frames could be processed")
@@ -3733,9 +3744,10 @@ def get_fdeck(atcf_id: str = Query(..., description="ATCF storm ID, e.g., AL1220
     counts = {k: len(v) for k, v in result.items()}
     return JSONResponse(
         content={"atcf_id": atcf_id, "fixes": result, "counts": counts},
-        # s-maxage lets Cloudflare collapse N visitors → 1 origin fetch.
-        # Fixes update at most ~6-hourly, so a 15-min edge cache is safe.
-        headers={"Cache-Control": "public, max-age=3600, s-maxage=900, stale-while-revalidate=300"},
+        # Past seasons are immutable (year-long edge TTL); live storms update
+        # ~6-hourly, so a 15-min edge cache collapses N visitors → 1 fetch.
+        headers={"Cache-Control": _CC_IMMUTABLE_SEASON if _fl_is_historical(_atcf_year(atcf_id) or 0)
+                 else "public, max-age=3600, s-maxage=900, stale-while-revalidate=300"},
     )
 
 
@@ -4154,9 +4166,10 @@ def get_adeck(atcf_id: str = Query(..., description="ATCF storm ID, e.g., AL0920
             "models": result["models"],
             "n_cycles": len(result["init_times"]),
         },
-        # s-maxage lets Cloudflare collapse N visitors → 1 origin fetch.
-        # Model forecasts update at most ~6-hourly, so 15-min edge is safe.
-        headers={"Cache-Control": "public, max-age=3600, s-maxage=900, stale-while-revalidate=300"},
+        # Past seasons are immutable (year-long edge TTL); live storms update
+        # ~6-hourly, so a 15-min edge cache collapses N visitors → 1 fetch.
+        headers={"Cache-Control": _CC_IMMUTABLE_SEASON if _fl_is_historical(_atcf_year(atcf_id) or 0)
+                 else "public, max-age=3600, s-maxage=900, stale-while-revalidate=300"},
     )
 
 
@@ -4517,7 +4530,9 @@ def get_ships(atcf_id: str = Query(..., description="ATCF storm ID, e.g., AL0920
                 } for k, v in SHIPS_VARIABLES.items()
             },
         },
-        headers={"Cache-Control": "public, max-age=3600"},
+        # Developmental SHIPS files are static once a season is posted.
+        headers={"Cache-Control": _CC_IMMUTABLE_SEASON if _fl_is_historical(_atcf_year(atcf_id) or 0)
+                 else "public, max-age=900, s-maxage=900, stale-while-revalidate=300"},
     )
 
 
@@ -4939,7 +4954,7 @@ def get_tcprimed_env(
 
     return JSONResponse(
         content=result,
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={"Cache-Control": _CC_IMMUTABLE_SEASON},  # TC-PRIMED is a frozen 1998-2023 dataset
     )
 
 
@@ -5204,6 +5219,15 @@ def _parse_fl_filename(filename: str, year: int):
 
 @router.get("/flightlevel/missions")
 def get_fl_missions(
+    storm_name: str = Query(..., description="Storm name (e.g., KATRINA)"),
+    year: int = Query(..., description="Storm year"),
+):
+    """Route wrapper: season-aware cache headers around _fl_missions_result."""
+    result = _fl_missions_result(storm_name=storm_name, year=year)
+    return _season_json(result, year, positive=bool(result.get("missions")))
+
+
+def _fl_missions_result(
     storm_name: str = Query(..., description="Storm name, e.g., 'Laura'"),
     year: int = Query(..., ge=1960, le=2030, description="Year"),
 ):
@@ -5877,13 +5901,14 @@ def get_fl_mission_stats(
         cached, ts = _fl_stats_cache[stats_key]
         if now - ts < _FL_STATS_CACHE_TTL:
             _fl_stats_cache.move_to_end(stats_key)
-            return cached
+            return _season_json(cached, year, positive=bool(cached.get("stats")))
 
     # Get mission list (reuses the mission discovery cache)
-    missions_resp = get_fl_missions(storm_name=storm_name, year=year)
+    missions_resp = _fl_missions_result(storm_name=storm_name, year=year)
     missions = missions_resp.get("missions", [])
     if not missions:
-        return {"success": True, "stats": {}, "pending": []}
+        return _season_json({"success": True, "stats": {}, "pending": []},
+                            year, positive=False)
 
     stats = {}
     pending = []
@@ -5911,7 +5936,7 @@ def get_fl_mission_stats(
         _fl_stats_cache[stats_key] = (result, now)
         if len(_fl_stats_cache) > _FL_STATS_CACHE_MAX:
             _fl_stats_cache.popitem(last=False)
-        return result
+        return _season_json(result, year, positive=bool(stats))
 
     # Fire background thread to fetch uncached missions
     def _bg_fetch():
@@ -5935,7 +5960,8 @@ def get_fl_mission_stats(
 
     threading.Thread(target=_bg_fetch, daemon=True).start()
 
-    return result
+    # Partial result: the client re-polls, so only a brief browser TTL.
+    return JSONResponse(result, headers={"Cache-Control": "public, max-age=30"})
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -5958,12 +5984,28 @@ def get_global_dropsondes(
     """Fetch dropsonde profiles for a storm from AOML HRD archive."""
     import time as _time
     now = _time.time()
-    cache_key = f"ga_sonde_{storm_name.lower()}_{year}_{mission_id}"
+    # Storm-relative fields depend on the centre, so it is part of the key
+    # (rounded to 0.1° — the frontend passes the LMI position, stable per storm).
+    _ckey = f"{round(center_lat, 1)}_{round(center_lon, 1)}"
+    cache_key = f"ga_sonde_{storm_name.lower()}_{year}_{mission_id}_{_ckey}"
     if cache_key in _sonde_cache:
         cached, ts = _sonde_cache[cache_key]
         if now - ts < _SONDE_CACHE_TTL:
             _sonde_cache.move_to_end(cache_key)
-            return cached
+            return _season_json(cached, year)
+
+    # GCS persistent cache: the FRD archive is immutable for past seasons,
+    # yet every new Cloud Run instance used to re-download up to 8 tarballs
+    # (30+ s) because the memory cache is per-instance and 20 entries deep.
+    _gcs_key = (f"sondes/{year}_{storm_name.lower()}_"
+                f"{(mission_id or 'all').lower()}_{_ckey}.json")
+    _is_hist = _fl_is_historical(year)
+    gcs_hit = _recon_gcs_get(_gcs_key, max_age_days=None if _is_hist else 7)
+    if gcs_hit is not None and gcs_hit.get("n_sondes"):
+        _sonde_cache[cache_key] = (gcs_hit, now)
+        if len(_sonde_cache) > _SONDE_CACHE_MAX:
+            _sonde_cache.popitem(last=False)
+        return _season_json(gcs_hit, year)
 
     # Import sonde helpers from tc_radar_api
     try:
@@ -5992,8 +6034,9 @@ def get_global_dropsondes(
             operproc_urls.append(storm_url + "/operproc/")
 
     if not operproc_urls:
-        return {"success": True, "dropsondes": [], "n_sondes": 0,
-                "message": "No dropsonde archive for this year"}
+        return _season_json({"success": True, "dropsondes": [], "n_sondes": 0,
+                             "message": "No dropsonde archive for this year"},
+                            year, positive=False)
     # Collect FRD tarballs from all archive directories (HURR + AFRES)
     import re as _re
     all_tarballs = []  # list of (operproc_url, tarball_name)
@@ -6020,16 +6063,32 @@ def get_global_dropsondes(
             all_tarballs.append((operproc_url, t))
 
     if not all_tarballs:
-        return {"success": True, "dropsondes": [], "n_sondes": 0,
-                "message": "No dropsonde tarballs found" + (f" for mission {mission_id}" if mission_id else "")}
+        return _season_json(
+            {"success": True, "dropsondes": [], "n_sondes": 0,
+             "message": "No dropsonde tarballs found" + (f" for mission {mission_id}" if mission_id else "")},
+            year, positive=False)
 
-    # Fetch and parse all matching tarballs — use the same response builder
-    # as TC-RADAR (_build_archive_sonde_response) for consistent output format
-    all_sondes = []
-    for operproc_url, tarball in all_tarballs[:8]:  # Limit to 8 tarballs
-        tarball_url = operproc_url + tarball
+    # Fetch all matching tarballs concurrently (multi-MB each; 4 at a time),
+    # then parse — use the same response builder as TC-RADAR
+    # (_build_archive_sonde_response) for consistent output format.
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+    _tb_urls = [operproc_url + tarball for operproc_url, tarball in all_tarballs[:8]]
+
+    def _fetch_tb(u):
         try:
-            frd_contents = _fetch_and_extract_frd_tarball(tarball_url)
+            return _fetch_and_extract_frd_tarball(u)
+        except Exception as e:
+            logger.warning(f"Failed to fetch/extract tarball {u}: {e}")
+            return None
+
+    with _TPE(max_workers=min(4, len(_tb_urls))) as _pool:
+        _tb_results = list(_pool.map(_fetch_tb, _tb_urls))
+
+    all_sondes = []
+    for tarball_url, frd_contents in zip(_tb_urls, _tb_results):
+        if frd_contents is None:
+            continue
+        try:
             for fname, text in frd_contents:
                 try:
                     parsed = _parse_frd_file(text)
@@ -6045,7 +6104,7 @@ def get_global_dropsondes(
                 except Exception as e:
                     logger.warning(f"Failed to parse FRD file {fname}: {e}")
         except Exception as e:
-            logger.warning(f"Failed to fetch/extract tarball {tarball}: {e}")
+            logger.warning(f"Failed to process tarball {tarball_url}: {e}")
 
     # Sort by launch time
     all_sondes.sort(key=lambda s: s.get("launch_time", "") or "")
@@ -6067,8 +6126,9 @@ def get_global_dropsondes(
         _sonde_cache[cache_key] = (result, now)
         if len(_sonde_cache) > _SONDE_CACHE_MAX:
             _sonde_cache.popitem(last=False)
+        _recon_gcs_put(_gcs_key, result)
 
-    return result
+    return _season_json(result, year, positive=bool(all_sondes))
 
 
 # ── Vortex Data Messages (VDM) ─────────────────────────────────────
@@ -6383,15 +6443,25 @@ def get_vdm(
     # origin fetch (the per-file recon pull is the expensive part). Past-year
     # recon is immutable → long s-maxage; current-year storms may still be
     # flying missions → shorter edge TTL with revalidation.
-    if year < int(_time.strftime("%Y")):
-        _vdm_cc = "public, max-age=3600, s-maxage=604800"
-    else:
-        _vdm_cc = "public, max-age=300, s-maxage=1800, stale-while-revalidate=300"
+    _vdm_cc = _season_cc(year)
     if cache_key in _vdm_cache:
         cached, ts = _vdm_cache[cache_key]
         if now - ts < _VDM_CACHE_TTL:
             _vdm_cache.move_to_end(cache_key)
             return JSONResponse(cached, headers={"Cache-Control": _vdm_cc})
+
+    # GCS persistent cache (memory cache is per-instance; the per-file pull
+    # from the NHC archive is the expensive part and the data is immutable
+    # for past seasons). The date window only narrows the listing scan, not
+    # the storm's VDM set, so the key is storm+year like the memory cache.
+    _vdm_gcs_key = f"vdm/{year}_{storm_name.lower()}.json"
+    _vdm_gcs = _recon_gcs_get(_vdm_gcs_key,
+                              max_age_days=None if _fl_is_historical(year) else 7)
+    if _vdm_gcs is not None and _vdm_gcs.get("n_vdms"):
+        _vdm_cache[cache_key] = (_vdm_gcs, now)
+        if len(_vdm_cache) > _VDM_CACHE_MAX:
+            _vdm_cache.popitem(last=False)
+        return JSONResponse(_vdm_gcs, headers={"Cache-Control": _vdm_cc})
 
     from tc_radar_api import _hrd_fetch_text, _hrd_parse_directory
 
@@ -6408,8 +6478,9 @@ def get_vdm(
         try:
             entries = _hrd_parse_directory(repnt2_url)
         except Exception:
-            return {"success": True, "vdms": [], "n_vdms": 0,
-                    "message": f"Could not list {basin_prefix} directory"}
+            return JSONResponse({"success": True, "vdms": [], "n_vdms": 0,
+                                 "message": f"Could not list {basin_prefix} directory"},
+                                headers={"Cache-Control": _CC_NO_STORE})
 
         # Filter by date range from filenames (REPNT2-KNHC.YYYYMMDDHHmm.txt)
         import re
@@ -6528,7 +6599,11 @@ def get_vdm(
     if len(_vdm_cache) > _VDM_CACHE_MAX:
         _vdm_cache.popitem(last=False)
 
-    return JSONResponse(result, headers={"Cache-Control": _vdm_cc})
+    if vdms:
+        _recon_gcs_put(_vdm_gcs_key, result)
+    # An empty set is not edge-cached: it may be a transient listing failure.
+    return JSONResponse(result, headers={
+        "Cache-Control": _vdm_cc if vdms else _CC_NO_STORE})
 
 
 # ── Minute Observations (MINOB / HDOB) ─────────────────────────────
@@ -6542,17 +6617,149 @@ _MINOB_CACHE_MAX = 50
 # the bump every previously-viewed storm would keep serving the old decode.
 _MINOB_GCS_PREFIX = "recon/minob/v4"
 
+# Season-aware Cache-Control for archive recon/fix endpoints. Everything from
+# two or more seasons ago is immutable (the archives are frozen once the
+# season's post-analysis is done), so browsers hold it a day and the
+# Cloudflare edge holds it a year: repeat viewers of a past storm never reach
+# Cloud Run. Current/last season may still gain files → short edge TTL with
+# stale-while-revalidate. Endpoints must still opt in via cloudflare/
+# cache_ruleset.json (respect_origin) for the s-maxage to matter.
+_CC_IMMUTABLE_SEASON = "public, max-age=86400, s-maxage=31536000, immutable"
+_CC_LIVE_SEASON = "public, max-age=300, s-maxage=1800, stale-while-revalidate=300"
+_CC_NO_STORE = "no-store"
+
+
+def _season_cc(year) -> str:
+    try:
+        y = int(year)
+    except (TypeError, ValueError):
+        return _CC_LIVE_SEASON
+    return _CC_IMMUTABLE_SEASON if _fl_is_historical(y) else _CC_LIVE_SEASON
+
+
+def _season_json(payload: dict, year, positive: bool = True) -> JSONResponse:
+    """JSONResponse with season-aware caching. `positive=False` marks an
+    empty/negative result (nothing found upstream), which is never cached:
+    a transient archive outage must not be pinned at the edge for a year."""
+    cc = _season_cc(year) if positive else _CC_NO_STORE
+    return JSONResponse(payload, headers={"Cache-Control": cc})
+
+
+def _atcf_year(atcf_id: str):
+    m = re.search(r"(\d{4})$", (atcf_id or "").strip())
+    return int(m.group(1)) if m else None
+
+
+# Generic small-JSON GCS cache for recon products that were previously
+# memory-only (VDM, dropsondes). Same bucket/prefix family as minobs.
+_RECON_GCS_PREFIX = "recon/misc/v1"
+
+
+def _recon_gcs_get(key: str, max_age_days=None):
+    """Return the cached JSON object at recon/misc/v1/<key>, or None.
+    `max_age_days` (None = forever) bounds blob age for current-season data
+    that may still be growing."""
+    bucket = _get_gcs_bucket()
+    if bucket is None:
+        return None
+    try:
+        blob = bucket.blob(f"{_RECON_GCS_PREFIX}/{key}")
+        if max_age_days is not None:
+            blob.reload(timeout=8)
+            upd = blob.updated
+            if upd is None:
+                return None
+            from datetime import datetime as _dt, timezone as _tz
+            age = (_dt.now(_tz.utc) - upd).total_seconds()
+            if age > max_age_days * 86400:
+                return None
+        data = blob.download_as_bytes(timeout=8)
+        return json.loads(data)
+    except Exception:
+        return None
+
+
+def _recon_gcs_put(key: str, obj: dict):
+    bucket = _get_gcs_bucket()
+    if bucket is None:
+        return
+
+    def _upload():
+        try:
+            blob = bucket.blob(f"{_RECON_GCS_PREFIX}/{key}")
+            blob.upload_from_string(
+                json.dumps(obj, separators=(",", ":")),
+                content_type="application/json",
+            )
+        except Exception as e:
+            logger.warning(f"GCS recon cache write failed ({key}): {e}")
+
+    import threading
+    threading.Thread(target=_upload, daemon=True).start()
+
+
+def _fetch_texts_parallel(urls, timeout: int = 10, workers: int = 12):
+    """Fetch many small archive text files concurrently over one pooled
+    session. Returns a list of (url, text_or_None) in input order.
+
+    The NHC recon archive stores one file per HDOB/VDM bulletin; a long
+    storm is well over a thousand files. Fetching them serially with a
+    fresh TLS handshake each (the old _hrd_fetch_text loop) took minutes —
+    past Cloudflare's 100 s limit and often past Cloud Run's 300 s — so the
+    response never reached the client or the GCS cache."""
+    urls = list(urls)
+    if not urls:
+        return []
+    from concurrent.futures import ThreadPoolExecutor
+    try:
+        import requests as _req
+        sess = _req.Session()
+        adapter = _req.adapters.HTTPAdapter(pool_connections=workers, pool_maxsize=workers)
+        sess.mount("https://", adapter)
+        sess.mount("http://", adapter)
+    except ImportError:
+        sess = None
+
+    def _one(u):
+        try:
+            if sess is not None:
+                r = sess.get(u, timeout=timeout)
+                r.raise_for_status()
+                return r.text
+            from tc_radar_api import _hrd_fetch_text
+            return _hrd_fetch_text(u, timeout=timeout)
+        except Exception as e:
+            logger.warning(f"recon fetch failed {u}: {e}")
+            return None
+
+    with ThreadPoolExecutor(max_workers=min(workers, len(urls))) as pool:
+        texts = list(pool.map(_one, urls))
+    if sess is not None:
+        try:
+            sess.close()
+        except Exception:
+            pass
+    return list(zip(urls, texts))
+
 
 def _minob_gcs_key(storm_name: str, year: int) -> str:
     return f"{_MINOB_GCS_PREFIX}/{year}_{storm_name.lower()}.json"
 
 
-def _minob_gcs_get(storm_name: str, year: int):
+def _minob_gcs_get(storm_name: str, year: int, max_age_days=None):
     bucket = _get_gcs_bucket()
     if bucket is None:
         return None
     try:
         blob = bucket.blob(_minob_gcs_key(storm_name, year))
+        if max_age_days is not None:
+            blob.reload(timeout=8)
+            upd = blob.updated
+            if upd is None:
+                return None
+            from datetime import datetime as _dt, timezone as _tz
+            if (_dt.now(_tz.utc) - upd).total_seconds() > max_age_days * 86400:
+                return None
         data = blob.download_as_bytes(timeout=8)
         return json.loads(data)
     except Exception:
@@ -7293,17 +7500,20 @@ def get_minobs(
         cached, ts = _minob_cache[cache_key]
         if now - ts < _MINOB_CACHE_TTL:
             _minob_cache.move_to_end(cache_key)
-            return cached
+            return _season_json(cached, year, positive=bool(cached.get("n_obs")))
 
-    # Check GCS persistent cache (historical storms cached indefinitely)
-    from datetime import datetime as _dt
-    _is_historical = (year <= _dt.utcnow().year - 2)
-    gcs_result = _minob_gcs_get(storm_name, year)
+    # Check GCS persistent cache. Historical storms are cached indefinitely;
+    # a current/last-season storm may still be flying, so its blob is only
+    # honoured for 7 days (previously the age test was computed and ignored,
+    # freezing live storms at their first cached state).
+    _is_historical = _fl_is_historical(year)
+    gcs_result = _minob_gcs_get(storm_name, year,
+                                max_age_days=None if _is_historical else 7)
     if gcs_result is not None:
         _minob_cache[cache_key] = (gcs_result, now)
         if len(_minob_cache) > _MINOB_CACHE_MAX:
             _minob_cache.popitem(last=False)
-        return gcs_result
+        return _season_json(gcs_result, year)
 
     from tc_radar_api import _hrd_fetch_text, _hrd_parse_directory
     import re
@@ -7336,14 +7546,15 @@ def get_minobs(
                 elif "HDOBS" in e_upper and entry.lower().endswith(".txt"):
                     target_files.append(entry)
 
-            for fname in target_files:
+            for url, text in _fetch_texts_parallel([storm_dir + f for f in target_files]):
+                if text is None:
+                    continue
                 try:
-                    text = _hrd_fetch_text(storm_dir + fname, timeout=10)
                     msgs = _parse_minob_message(text, year, start_date, end_date,
                                                 storm_filter=storm_name)
                     all_messages.extend(msgs)
                 except Exception as e:
-                    logger.warning(f"Failed to fetch/parse MINOB {fname}: {e}")
+                    logger.warning(f"Failed to parse MINOB {url}: {e}")
 
     elif year <= 2011:
         # Era 4 (2006-2011): HDOB/ directory
@@ -7363,6 +7574,7 @@ def get_minobs(
         else:
             sd = ed = None
 
+        target_urls = []
         for entry in entries:
             if not entry.lower().endswith(".txt"):
                 continue
@@ -7376,12 +7588,15 @@ def get_minobs(
                         continue
                 except ValueError:
                     pass
+            target_urls.append(hdob_url + entry)
+        for url, text in _fetch_texts_parallel(target_urls):
+            if text is None:
+                continue
             try:
-                text = _hrd_fetch_text(hdob_url + entry, timeout=10)
                 msgs = _parse_minob_message(text, year, start_date, end_date)
                 all_messages.extend(msgs)
             except Exception as e:
-                logger.warning(f"Failed to fetch/parse HDOB {entry}: {e}")
+                logger.warning(f"Failed to parse HDOB {url}: {e}")
 
     else:
         # Era 5 (2012+): AHONT1 (Atlantic) or AHOPN1 (Pacific)
@@ -7404,6 +7619,7 @@ def get_minobs(
         else:
             sd = ed = None
 
+        target_urls = []
         for entry in entries:
             if not entry.lower().endswith(".txt"):
                 continue
@@ -7417,13 +7633,16 @@ def get_minobs(
                         continue
                 except ValueError:
                     pass
+            target_urls.append(hdob_url + entry)
+        for url, text in _fetch_texts_parallel(target_urls):
+            if text is None:
+                continue
             try:
-                text = _hrd_fetch_text(hdob_url + entry, timeout=10)
                 msgs = _parse_minob_message(text, year, start_date, end_date,
                                             storm_filter=storm_name)
                 all_messages.extend(msgs)
             except Exception as e:
-                logger.warning(f"Failed to fetch/parse AHONT1 {entry}: {e}")
+                logger.warning(f"Failed to parse {basin_dir} {url}: {e}")
 
     # Flatten observations with parent metadata
     flat_obs = []
@@ -7460,4 +7679,4 @@ def get_minobs(
     if flat_obs:
         _minob_gcs_put(storm_name, year, result)
 
-    return result
+    return _season_json(result, year, positive=bool(flat_obs))

@@ -464,7 +464,25 @@ var IR_COLORMAPS = {};
 
 // Render Tb uint8 data to a data URI PNG using canvas + selected colormap
 var _irRenderCanvas = null;
+// Memo of the last rendered URI per decoded Tb array (WeakMap: entries die
+// with the frame). Scrubbing back and forth re-showed the same frame with the
+// same colormap and re-ran the Mercator warp + PNG encode every time.
+var _irTbUriMemo = (typeof WeakMap !== 'undefined') ? new WeakMap() : null;
+
 function renderTbToDataURI(tbData, rows, cols, colormap, southLat, northLat) {
+    var memoKey = colormap + '|' + rows + 'x' + cols + '|' + southLat + '|' + northLat;
+    if (_irTbUriMemo && tbData && typeof tbData === 'object') {
+        var hit = _irTbUriMemo.get(tbData);
+        if (hit && hit.key === memoKey) return hit.uri;
+    }
+    var uri = _renderTbToDataURIImpl(tbData, rows, cols, colormap, southLat, northLat);
+    if (_irTbUriMemo && tbData && typeof tbData === 'object') {
+        try { _irTbUriMemo.set(tbData, { key: memoKey, uri: uri }); } catch (e) {}
+    }
+    return uri;
+}
+
+function _renderTbToDataURIImpl(tbData, rows, cols, colormap, southLat, northLat) {
     if (!_irRenderCanvas) {
         _irRenderCanvas = document.createElement('canvas');
     }
@@ -2500,7 +2518,9 @@ function renderStormDetail(storm) {
         if (storm.atcf_id && storm.year >= 1987) {
             mwToggleWrap.style.display = '';
             document.getElementById('ga-mw-status').textContent = '';
-            loadGlobalMWOverpasses(storm);
+            // Overpass list is fetched lazily when the MW toggle is pressed
+            // (toggleGlobalMWOverlay) — not on every storm click.
+            removeGlobalMWOverlay();
         } else {
             mwToggleWrap.style.display = 'none';
             removeGlobalMWOverlay();
@@ -2536,12 +2556,13 @@ function renderStormDetail(storm) {
         }
     }
 
-    // Model forecast overlay — load a-deck data if storm has ATCF ID
-    if (storm.atcf_id && typeof loadModelForecasts === 'function') {
-        loadModelForecasts(storm);
-    } else if (typeof removeModelOverlay === 'function') {
-        removeModelOverlay();
-    }
+    // Model forecast overlay — the a-deck (0.2–5 MB) is fetched lazily when
+    // the Models or Scorecard toggle is pressed, not on every storm click.
+    if (typeof removeModelOverlay === 'function') removeModelOverlay();
+    var _modelsWrap = document.getElementById('ga-models-toggle-wrap');
+    if (_modelsWrap) _modelsWrap.style.display = storm.atcf_id ? '' : 'none';
+    var _modelsStatus = document.getElementById('ga-models-status');
+    if (_modelsStatus) _modelsStatus.textContent = '';
 
     // Scorecard — reset and show toggle if storm has ATCF ID
     if (typeof removeScorecard === 'function') removeScorecard();
@@ -2550,12 +2571,8 @@ function renderStormDetail(storm) {
         scorecardWrap.style.display = storm.atcf_id ? '' : 'none';
     }
 
-    // Pre-fetch environmental data in background so it's
-    // ready when the user clicks the Environment button
-    if (storm.atcf_id) {
-        if (typeof loadTCPrimedEnvData === 'function') loadTCPrimedEnvData(storm);
-        if (typeof loadSHIPSData === 'function') loadSHIPSData(storm);
-    }
+    // SHIPS + TC-PRIMED env data load lazily from toggleEnvironment /
+    // toggleScorecard — no background prefetch per storm click.
 }
 
 function renderIntensityTimeline(track, storm) {
@@ -3196,7 +3213,7 @@ function _vdmFetch() {
             vdmLoaded = true;
             _vdmRenderOnMap();
             // Re-render time series to include VDM markers
-            if (_gaFLTSOpen && _gaFLData) _gaFLRenderTimeSeries();
+            _gaFLScheduleTS();
         })
         .catch(function () {});
 }
@@ -3250,7 +3267,7 @@ function _minobFetch() {
                     : 'MINOB minute observations (peak 10-sec wind)');
             }
             // Re-render FL time series if open to add MINOB overlay
-            if (_gaFLTSOpen && _gaFLData) _gaFLRenderTimeSeries();
+            _gaFLScheduleTS();
             // Re-render map to add gap-fill if HRD data is truncated
             if (_gaFLData10s && detailMap) _gaFLRenderMinobGapFill();
         })
@@ -4465,6 +4482,8 @@ function loadHURSAT(storm) {
     }
 
     metaPromise.then(function (meta) {
+            // A faster click on another storm superseded this load.
+            if (!selectedStorm || selectedStorm.sid !== storm.sid) return;
             if (!meta.available || meta.n_frames === 0) {
                 var reason = meta.reason || 'No satellite frames found';
                 document.getElementById('ir-status').textContent = reason;
@@ -4752,9 +4771,6 @@ function displayIROnMap(data) {
         irCurrentTbCols = data.tb_cols;
         irCurrentTbVmin = data.tb_vmin || 170.0;
         irCurrentTbVmax = data.tb_vmax || 310.0;
-        console.log('[IR] Tb grid: ' + data.tb_rows + '×' + data.tb_cols +
-            ' (' + tbArr.length + ' bytes), bounds: S=' + bounds.south +
-            ' N=' + bounds.north + ' W=' + bounds.west + ' E=' + bounds.east);
         imageURI = renderTbToDataURI(tbArr, data.tb_rows, data.tb_cols, irSelectedColormap, bounds.south, bounds.north);
     } else {
         // Legacy PNG format (from old cache entries)
@@ -4764,15 +4780,23 @@ function displayIROnMap(data) {
         imageURI = data.frame;
     }
 
-    // Remove old overlay and create fresh one each frame
-    if (irOverlayLayer) {
-        try { detailMap.removeLayer(irOverlayLayer); } catch (e) {}
+    // Update the existing overlay in place (MapLibre updateImage +
+    // setCoordinates) instead of removing/re-adding a source+layer per frame.
+    if (irOverlayLayer && irOverlayLayer._map === detailMap && detailMap.hasLayer(irOverlayLayer) &&
+            typeof irOverlayLayer.setUrl === 'function' && typeof irOverlayLayer.setBounds === 'function') {
+        irOverlayLayer.setBounds(imageBounds);
+        irOverlayLayer.setUrl(imageURI);
+        if (typeof irOverlayLayer.setOpacity === 'function') irOverlayLayer.setOpacity(irOpacity);
+    } else {
+        if (irOverlayLayer) {
+            try { detailMap.removeLayer(irOverlayLayer); } catch (e) {}
+        }
+        irOverlayLayer = L.imageOverlay(imageURI, imageBounds, {
+            opacity: irOpacity,
+            interactive: false,
+            className: 'ir-overlay-image'
+        }).addTo(detailMap);
     }
-    irOverlayLayer = L.imageOverlay(imageURI, imageBounds, {
-        opacity: irOpacity,
-        interactive: false,
-        className: 'ir-overlay-image'
-    }).addTo(detailMap);
 
     // Store bounds for hover display
     irCurrentBounds = imageBounds;
@@ -5954,6 +5978,7 @@ function loadGlobalMWOverpasses(storm) {
     fetch(API_BASE + '/microwave/storm_overpasses?atcf_id=' + encodeURIComponent(atcfId))
         .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function (json) {
+            if (_gaMwLastAtcf !== atcfId) return;   // storm changed while in flight
             _gaMwOverpassData = json.overpasses || [];
             sel.innerHTML = '';
 
@@ -5999,6 +6024,11 @@ function loadGlobalMWOverpasses(storm) {
             sel.value = String(defaultIdx);
 
             if (status) status.textContent = _gaMwOverpassData.length + ' overpass(es)';
+            // Lazy path: the toggle was pressed before the list existed.
+            if (_gaMwVisible) {
+                addMWTrackMarkers();
+                loadGlobalMWOverpass();
+            }
         })
         .catch(function (e) {
             sel.innerHTML = '<option value="">Error</option>';
@@ -6031,10 +6061,13 @@ window.toggleGlobalMWOverlay = function () {
     if (controls) controls.style.display = '';
     _repositionMWControls();
 
-    // If overpasses loaded, show markers on track and auto-load first
+    // If overpasses loaded, show markers on track and auto-load first;
+    // otherwise fetch the list now (its completion handler shows them).
     if (_gaMwOverpassData.length > 0) {
         addMWTrackMarkers();
         loadGlobalMWOverpass();
+    } else if (selectedStorm && selectedStorm.atcf_id) {
+        loadGlobalMWOverpasses(selectedStorm);
     }
 };
 
@@ -7493,6 +7526,7 @@ function loadModelForecasts(storm) {
     fetch(API_BASE + '/global/adeck?atcf_id=' + encodeURIComponent(atcfId))
         .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function (json) {
+            if (_modelLastAtcf !== atcfId) return;   // storm changed while in flight
             _modelData = json;
 
             // Populate cycle dropdown
@@ -7558,6 +7592,11 @@ function loadModelForecasts(storm) {
             if (_modelVisible) {
                 _syncModelCycleToIR();
             }
+            // Scorecard opened before the a-deck arrived (lazy path)
+            if (_scorecardVisible && !_scorecardData && selectedStorm) {
+                _scorecardData = computeScorecard(_modelData, allTracks[selectedStorm.sid], selectedStorm);
+                renderScorecardTable();
+            }
         })
         .catch(function (e) {
             if (statusEl) statusEl.textContent = 'Unavailable';
@@ -7597,6 +7636,8 @@ window.toggleModelOverlay = function () {
 
     if (_modelData) {
         _syncModelCycleToIR();
+    } else if (selectedStorm && selectedStorm.atcf_id) {
+        loadModelForecasts(selectedStorm);   // lazy a-deck load
     }
 };
 
@@ -11013,10 +11054,13 @@ window.toggleScorecard = function () {
         btn.classList.add('active');
         btn.innerHTML = _icon('chartBar') + 'Scorecard';
 
-        // Compute scorecard if not already done
+        // Compute scorecard if not already done (a-deck is lazy: fetch it
+        // now if missing; the load handler renders the table on arrival)
         if (!_scorecardData && _modelData && selectedStorm) {
             var track = allTracks[selectedStorm.sid];
             _scorecardData = computeScorecard(_modelData, track, selectedStorm);
+        } else if (!_modelData && selectedStorm && selectedStorm.atcf_id) {
+            loadModelForecasts(selectedStorm);
         }
 
         renderScorecardTable();
@@ -12012,8 +12056,12 @@ var _gaHdobMissions = [];
 function _gaHdobFallback(status, _tries) {
     _tries = _tries || 0;
     var flStatus = document.getElementById('ga-fl-status');
-    if (!minobDone && _tries < 40) {              // ~20 s ceiling; cold years are slow
-        if (status) status.textContent = 'Searching HDOBs…';
+    // ~90 s ceiling: the first open of a long storm has the server walking
+    // >1000 archive files (parallel now, but still tens of seconds); later
+    // opens hit the GCS/edge cache in well under a second.
+    if (!minobDone && _tries < 180) {
+        if (status) status.textContent = _tries < 30 ? 'Searching HDOBs…'
+            : 'Searching HDOBs… (first load of a long storm can take a minute)';
         setTimeout(function () { _gaHdobFallback(status, _tries + 1); }, 500);
         return;
     }
@@ -12376,7 +12424,7 @@ function _gaFLApplyData(json) {
     }
 
     _gaFLRenderOnMap();
-    if (_gaFLTSOpen) _gaFLRenderTimeSeries();
+    _gaFLScheduleTS();
     // Re-render structure views if open
     if (_gaSondeViewMode === 'xsec') _renderCrossSection('ga-sonde-skewt');
     else if (_gaSondeViewMode === 'radial') _renderRadialProfile('ga-sonde-skewt');
@@ -12415,6 +12463,19 @@ function _gaFLLoadMissionData(fileUrl) {
     if (selectedStorm) {
         centerLat = selectedStorm.lmi_lat || selectedStorm.genesis_lat || 0;
         centerLon = selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0;
+    }
+    // Fire the dropsonde fetch now, in parallel with the flight-level load.
+    // Its only input is the mission id, which the missions list already
+    // carries; waiting for /flightlevel/data put a full round trip (and the
+    // backend's tarball pull) on the critical path for nothing.
+    if (selectedStorm) {
+        for (var _mi = 0; _mi < _gaFLMissions.length; _mi++) {
+            var _me = _gaFLMissions[_mi];
+            if (_me.file_url === fileUrl) {
+                if (_me.mission_id) _gaSondeFetch(selectedStorm.name, selectedStorm.year, _me.mission_id, centerLat, centerLon);
+                break;
+            }
+        }
     }
     var baseUrl = API_BASE + '/global/flightlevel/data?file_url=' +
         encodeURIComponent(fileUrl);
@@ -12525,6 +12586,8 @@ function _gaFLRenderOnMap() {
     var zoom = detailMap.getZoom();
     var circleStep = zoom >= 10 ? 1 : zoom >= 8 ? 2 : zoom >= 6 ? 6 : 12;
     var barbStep = zoom >= 10 ? 3 : circleStep * 2;  // reduce barb clutter at high zoom
+    _gaFLLastSteps = circleStep + '|' + barbStep;
+    var batch = _gaFLBatchRenderer();
 
     // Colored track segments (always full resolution)
     for (var i = 1; i < obs.length; i++) {
@@ -12533,7 +12596,7 @@ function _gaFLRenderOnMap() {
         var val = p1[_gaFLColorVar];
         var color = _gaFLColorByVar(val);
         var seg = L.polyline([[p0.lat, p0.lon], [p1.lat, p1.lon]], {
-            color: color, weight: 3.5, opacity: 0.9, interactive: false
+            color: color, weight: 3.5, opacity: 0.9, interactive: false, renderer: batch
         });
         seg.addTo(detailMap);
         _gaFLMapLayers.push(seg);
@@ -12560,7 +12623,7 @@ function _gaFLRenderOnMap() {
         var circle = L.circleMarker([o.lat, o.lon], {
             radius: 4, fillColor: _gaFLColorByVar(o[_gaFLColorVar]), fillOpacity: 0.8,
             color: '#fff', weight: 0.5, opacity: 0.6,
-            pane: 'markerPane'
+            pane: 'markerPane', renderer: batch
         }).bindTooltip(tip, { sticky: true, pane: 'tooltipPane', className: 'ga-fl-tooltip' });
         circle.on('tooltipopen', function () { _gaFLTooltipOpen = true; });
         circle.on('tooltipclose', function () { _gaFLTooltipOpen = false; });
@@ -12590,15 +12653,48 @@ function _gaFLRenderOnMap() {
     // Gap-fill: render MINOB wind barbs after HRD truncation point
     _gaFLRenderMinobGapFill();
 
-    // Re-render markers on zoom change for adaptive density
+    // Re-render markers on zoom change for adaptive density — only when the
+    // density tier actually changes (a zoom within a tier is a no-op).
     if (!_gaFLZoomHandler) {
         _gaFLZoomHandler = function () {
-            if (_gaFLVisible && _gaFLData10s) _gaFLRenderOnMap();
+            if (!_gaFLVisible || !_gaFLData10s || !detailMap) return;
+            var z = detailMap.getZoom();
+            var cs = z >= 10 ? 1 : z >= 8 ? 2 : z >= 6 ? 6 : 12;
+            var bs = z >= 10 ? 3 : cs * 2;
+            if ((cs + '|' + bs) !== _gaFLLastSteps) _gaFLRenderOnMap();
         };
         detailMap.on('zoomend', _gaFLZoomHandler);
     }
 }
+var _gaFLTSTimer = null;
+
+/** Coalesce time-series redraws: /data, /vdm and /minobs can all land within
+ *  the same few ms and each used to trigger a full Plotly.newPlot. */
+function _gaFLScheduleTS() {
+    if (_gaFLTSTimer) return;
+    _gaFLTSTimer = setTimeout(function () {
+        _gaFLTSTimer = null;
+        if (_gaFLTSOpen && _gaFLData) _gaFLRenderTimeSeries();
+    }, 60);
+}
+
 var _gaFLZoomHandler = null;
+var _gaFLBatch = null;        // shared L.canvas batch renderer (one GL source per geometry type)
+var _gaFLLastSteps = '';      // circleStep|barbStep of the last render (skip no-op zoom rebuilds)
+
+/**
+ * Batch renderer for the recon track/circles. On the MapLibre facade a plain
+ * L.polyline becomes its own GeoJSON source + layer; a mission is ~3000
+ * 10-s segments, i.e. ~3000 style mutations per render (and per zoomend).
+ * L.canvas() collapses all of them into two sources. Re-created when the
+ * detail map is rebuilt for a new storm (the renderer is bound to one map).
+ */
+function _gaFLBatchRenderer() {
+    if (!_gaFLBatch || (_gaFLBatch._map && _gaFLBatch._map !== detailMap)) {
+        _gaFLBatch = L.canvas({ padding: 0.5 });
+    }
+    return _gaFLBatch;
+}
 
 
 // Find the HDOB mission_id whose time range best overlaps the HRD data
@@ -12790,9 +12886,10 @@ function _gaFLRenderMinobGapFill() {
 
         // Dashed connecting line between HRD anchor and nearest gap ob
         var connectOb = isPre ? gapObs[gapObs.length - 1] : gapObs[0];
+        var batch = _gaFLBatchRenderer();
         var dashSeg = L.polyline(
             [[hrdAnchor.lat, hrdAnchor.lon], [connectOb.lat, connectOb.lon]],
-            { color: '#f97316', weight: 2.5, opacity: 0.7, dashArray: '6,4', interactive: false }
+            { color: '#f97316', weight: 2.5, opacity: 0.7, dashArray: '6,4', interactive: false, renderer: batch }
         );
         dashSeg.addTo(detailMap);
         _gaFLMinobMapLayers.push(dashSeg);
@@ -12802,7 +12899,7 @@ function _gaFLRenderMinobGapFill() {
             var p0 = gapObs[i - 1], p1 = gapObs[i];
             var color = _gaFLWindColor(p1.wspd_ms);
             var seg = L.polyline([[p0.lat, p0.lon], [p1.lat, p1.lon]], {
-                color: color, weight: 3, opacity: 0.7, dashArray: '6,4', interactive: false
+                color: color, weight: 3, opacity: 0.7, dashArray: '6,4', interactive: false, renderer: batch
             });
             seg.addTo(detailMap);
             _gaFLMinobMapLayers.push(seg);
@@ -12823,7 +12920,7 @@ function _gaFLRenderMinobGapFill() {
                 '<br>' + o.aircraft + ' ' + o.mission_id;
             var circle = L.circleMarker([o.lat, o.lon], {
                 radius: 4, fillColor: _gaFLWindColor(o.wspd_ms), fillOpacity: 0.7,
-                color: '#f97316', weight: 1, opacity: 0.8, pane: 'markerPane'
+                color: '#f97316', weight: 1, opacity: 0.8, pane: 'markerPane', renderer: batch
             }).bindTooltip(tip, { sticky: true, pane: 'tooltipPane', className: 'ga-fl-tooltip' });
             circle.on('tooltipopen', function () { _gaFLTooltipOpen = true; });
             circle.on('tooltipclose', function () { _gaFLTooltipOpen = false; });
@@ -13125,8 +13222,11 @@ var _SONDE_COLORS = [
     '#facc15','#2dd4bf','#f97316','#818cf8','#fb7185'
 ];
 
+var _gaSondeInflight = {};   // cacheKey → true while a request is out
+
 function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
     var cacheKey = stormName + '_' + year + '_' + (missionId || '');
+    if (_gaSondeInflight[cacheKey]) return;   // already fetching this mission
 
     // Check client-side cache first
     if (_gaSondeClientCache[cacheKey] !== undefined) {
@@ -13167,9 +13267,11 @@ function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
         'Loading dropsondes…</span>';
     if (_sondeWrapEl) _sondeWrapEl.innerHTML = '';
 
+    _gaSondeInflight[cacheKey] = true;
     fetch(url)
         .then(function (r) { return r.json(); })
         .then(function (json) {
+            delete _gaSondeInflight[cacheKey];
             if (!json.success || !json.dropsondes || json.dropsondes.length === 0) {
                 _gaSondeClientCache[cacheKey] = null;  // cache empty result
                 var el = document.getElementById('ga-sonde-info');
@@ -13188,7 +13290,7 @@ function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
             _gaSondeRenderOnMap();
             _gaSondeRenderTable();
         })
-        .catch(function () { _gaSondeHideUI(); });
+        .catch(function () { delete _gaSondeInflight[cacheKey]; _gaSondeHideUI(); });
 }
 
 function _gaSondeShowUI() {
