@@ -357,10 +357,14 @@ map.createPane('coastlines');
 map.getPane('coastlines').style.zIndex = 450;
 map.getPane('coastlines').style.pointerEvents = 'none';
 
-// Two-tier coastline: vendored simplified file (~170 KB gz) at overview
-// zooms, full 10m detail (~2.9 MB gz) only once the user zooms well past
-// focus mode's zoom 6 — the simplified file is visually sufficient there. Never hit the
-// rate-limited raw.githubusercontent host for this.
+// Coastlines. Two tiers on separate canvas layers:
+//   lo  — vendored simplified 10 m file (~170 KB gz) for overview zooms
+//   hi  — full-detail 10 m lines, pre-split into 10°×10° static tiles
+//         (assets/coastlines/tiles10/, bin/build_coastline_tiles.py, ~20 KB gz
+//         each). At focus zooms the view spans a few degrees, so 2–6 tiles
+//         give true 10 m detail instead of the old 2.9 MB whole-world upgrade.
+// The tier visible at any moment is chosen by zoom; hi tiles are fetched for
+// the current view on moveend and cached for the session.
 (function() {
     var COAST_STYLE = {
         color: '#000000',
@@ -370,32 +374,74 @@ map.getPane('coastlines').style.pointerEvents = 'none';
         fillOpacity: 0,
         interactive: false
     };
-    var _coastLayer = null;
-    var _coastTier = null;
-    var _coastHiRequested = false;
-    var _coastRenderer = null;   // shared canvas renderer: 2,139 features as one <canvas>, not 2,139 SVG paths
-    function _setCoast(geojson, tier) {
-        if (_coastTier === 'hi' && tier !== 'hi') return;
-        if (_coastLayer) { try { map.removeLayer(_coastLayer); } catch (e) {} }
+    var HI_ZOOM = 6;            // Leaflet zoom at/above which hi tiles are used (focus mode zooms to 6)
+    var TILE_STEP = 10;
+    var _coastRenderer = null;  // shared canvas renderer: thousands of features as one <canvas>, not SVG paths
+    var _loLayer = null, _hiGroup = null;
+    var _hiTiles = {};          // name → true (loaded or in flight)
+    var _hiIndex = null;        // Set of tile names that exist (from tiles10/index.json)
+    function _renderer() {
         if (!_coastRenderer) _coastRenderer = L.canvas({ pane: 'coastlines', padding: 0.5 });
-        _coastLayer = L.geoJSON(geojson, { pane: 'coastlines', renderer: _coastRenderer, style: COAST_STYLE }).addTo(map);
-        _coastTier = tier;
+        return _coastRenderer;
+    }
+    function _useHi() {
+        var z; try { z = map.getZoom(); } catch (e) { return false; }
+        return z != null && z >= _glZ(HI_ZOOM);
+    }
+    function _applyTier() {
+        var hi = _useHi();
+        if (_loLayer) { if (hi) { if (map.hasLayer(_loLayer)) map.removeLayer(_loLayer); } else if (!map.hasLayer(_loLayer)) _loLayer.addTo(map); }
+        if (_hiGroup) { if (hi) { if (!map.hasLayer(_hiGroup)) _hiGroup.addTo(map); } else if (map.hasLayer(_hiGroup)) map.removeLayer(_hiGroup); }
+        if (hi) _loadHiTilesForView();
+    }
+    function _tileName(lat0, lon0) { return lat0 + '_' + lon0 + '.json'; }
+    function _loadHiTilesForView() {
+        var b; try { b = map.getBounds(); } catch (e) { return; }
+        if (!b) return;
+        if (!_hiIndex) {
+            if (_hiIndex === null) {
+                _hiIndex = false;   // in flight
+                fetch('assets/coastlines/tiles10/index.json')
+                    .then(function(r) { return r.ok ? r.json() : null; })
+                    .then(function(j) { _hiIndex = new Set((j && j.tiles) || []); _loadHiTilesForView(); })
+                    .catch(function() { _hiIndex = new Set(); });
+            }
+            return;
+        }
+        if (!_hiGroup) { _hiGroup = L.layerGroup(); if (_useHi()) _hiGroup.addTo(map); }
+        var pad = 0.5;
+        var s = Math.floor((b.getSouth() - pad) / TILE_STEP) * TILE_STEP;
+        var n = Math.floor((b.getNorth() + pad) / TILE_STEP) * TILE_STEP;
+        var w = Math.floor((b.getWest() - pad) / TILE_STEP) * TILE_STEP;
+        var e = Math.floor((b.getEast() + pad) / TILE_STEP) * TILE_STEP;
+        if (e - w > 120) return;   // absurdly wide view at a "hi" zoom (GL wrap) — skip
+        for (var la = Math.max(-90, s); la <= Math.min(80, n); la += TILE_STEP) {
+            for (var lo = w; lo <= e; lo += TILE_STEP) {
+                var lonN = ((lo + 180) % 360 + 360) % 360 - 180;   // wrap to [-180, 180)
+                var name = _tileName(la, lonN);
+                if (_hiTiles[name] || !_hiIndex.has(name)) continue;
+                _hiTiles[name] = true;
+                (function(nm) {
+                    fetch('assets/coastlines/tiles10/' + nm)
+                        .then(function(r) { return r.ok ? r.json() : null; })
+                        .then(function(gj) {
+                            if (!gj) return;
+                            _hiGroup.addLayer(L.geoJSON(gj, { pane: 'coastlines', renderer: _renderer(), style: COAST_STYLE }));
+                        })
+                        .catch(function() { delete _hiTiles[nm]; });
+                })(name);
+            }
+        }
     }
     fetch('assets/coastlines/ne_10m_coastline_simplified.geojson')
         .then(function(r) { return r.json(); })
-        .then(function(geojson) { _setCoast(geojson, 'lo'); })
+        .then(function(geojson) {
+            _loLayer = L.geoJSON(geojson, { pane: 'coastlines', renderer: _renderer(), style: COAST_STYLE });
+            _applyTier();
+        })
         .catch(function() {});
-    function _maybeUpgradeCoast() {
-        if (_coastHiRequested) return;
-        var z; try { z = map.getZoom(); } catch (e) { return; }
-        if (z == null || z < _glZ(8)) return;
-        _coastHiRequested = true;
-        fetch('assets/coastlines/ne_10m_coastline.geojson')
-            .then(function(r) { return r.json(); })
-            .then(function(geojson) { _setCoast(geojson, 'hi'); })
-            .catch(function() { _coastHiRequested = false; });
-    }
-    map.on('zoomend', _maybeUpgradeCoast);
+    map.on('zoomend', _applyTier);
+    map.on('moveend', function() { if (_useHi()) _loadHiTilesForView(); });
 })();
 
 // ── Filter drawer toggle ─────────────────────────────────────
