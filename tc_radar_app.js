@@ -466,6 +466,9 @@ function enterFocusMode(caseData) {
             showIRMapOverlay(0);
             _startIRLagFrames(_irData.case_index);
         }
+        // A plan view generated before focus mode can now be draped.
+        _maybeAutoTwoPanel();
+        _stormGridDraw();
     }, 380);
 }
 
@@ -473,6 +476,8 @@ function exitFocusMode() {
     if (!_focusMode) return;
     _focusMode = false;
     if (_focusMarker) { map.removeLayer(_focusMarker); _focusMarker = null; }
+    if (_radarMapOn) _radarMapOff();   // the map is leaving the storm; restore the 3-panel plot
+    _stormGridRemove();
     removeIRMapOverlay();
     removeNexradMapOverlay();
     cleanupERA5();
@@ -657,7 +662,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                 '<div class="overlay-strip">' +
                     '<span class="overlay-strip-label">Layers</span>' +
                     '<button class="overlay-pill" id="ir-underlay-btn" onclick="toggleIRPlotlyUnderlay()" disabled data-color="cyan" title="IR Satellite Underlay">' + _icon('satellite') + 'IR</button>' +
-                    (window.LFLET_GL ? '<button class="overlay-pill" id="radar-map-btn" onclick="window._radarToMap()" data-color="orange" title="Drape the current plan-view field onto the IR map (GL prototype)">&#8862; Radar&rarr;Map</button>' : '') +
+                    '<button class="overlay-pill" id="radar-map-btn" onclick="window._radarToMap()" data-color="orange" title="Drape the plan-view field onto the IR map (two-panel). Click again to return to the separate plan-view plot.">&#8862; Radar&rarr;Map</button>' +
                     '<button class="overlay-pill active" id="tdr-toggle-btn" onclick="toggleTDRVisibility()" data-color="red" title="TDR Radar Visibility">' + _icon('radio') + 'TDR</button>' +
                     '<button class="overlay-pill" id="btn-archive-fl" onclick="archiveToggleFlightLevel()" data-color="blue" title="Flight-Level Data">' + _icon('plane') + 'FL</button>' +
                     '<button class="overlay-pill" id="btn-archive-sonde" onclick="archiveToggleDropsondes()" data-color="blue" title="Dropsonde Data">' + _icon('parachute') + 'Sondes</button>' +
@@ -2746,6 +2751,7 @@ var _irAnimFrame = 0;
 var _irAnimTimer = null;
 var _irAnimPlaying = false;
 var _irMapVisible = true;
+var _irFrameURLsGray = [];   // luminance twins of _irFrameURLs (see _irMakeGray)
 var _irPlotlyVisible = false;
 var _irUserDisabled = false;  // sticky: true if user explicitly turned IR underlay off this case
 var _tdrVisible = true;
@@ -2817,17 +2823,98 @@ function _mercatorReproject(src, southLat, northLat) {
  * Reproject an IR frame data URL to Mercator. Returns the reprojected URL
  * via callback (async because we need to load the image first).
  */
+// ── Grayscale IR ─────────────────────────────────────────────
+// The server ships IR frames already colored with the site IR colormap
+// (tc_radar_api._CLAUDE_IR_TB_STOPS). When the radar field is draped on the
+// map, two rainbows collide, so we invert the colormap client-side back to
+// its 0-255 index (high index = cold) and emit a luminance frame: cold tops
+// bright, warm surface dark. Both variants are built at reprojection time
+// so toggling is a src swap, not a re-fetch.
+var _IR_TB_STOPS = [
+    [310,12,12,22],[293,70,70,82],[283,120,120,132],[273,180,180,192],[263,216,218,228],
+    [253,140,210,220],[248,68,180,196],[243,32,148,166],[238,40,178,116],[233,96,208,68],
+    [228,192,220,40],[223,238,196,48],[218,228,132,48],[213,214,78,56],[208,180,36,68],
+    [203,196,48,156],[198,168,64,200],[193,120,48,180],[183,64,24,140],[173,28,12,96]
+];
+var _irLUT = null, _irInvLUT = null;
+function _irBuildLUTs() {
+    if (_irLUT) return;
+    var stops = _IR_TB_STOPS.map(function(s) { return [1 - (s[0] - 160) / 170, s[1], s[2], s[3]]; })
+        .sort(function(a, b) { return a[0] - b[0]; });
+    _irLUT = new Uint8Array(256 * 3);
+    for (var i = 0; i < 256; i++) {
+        var f = i / 255, lo = stops[0], hi = stops[stops.length - 1];
+        for (var k = 0; k < stops.length - 1; k++) { if (stops[k][0] <= f && f <= stops[k+1][0]) { lo = stops[k]; hi = stops[k+1]; break; } }
+        var t = hi[0] === lo[0] ? 0 : Math.max(0, Math.min(1, (f - lo[0]) / (hi[0] - lo[0])));
+        _irLUT[i*3]   = Math.round(lo[1] + t * (hi[1] - lo[1]));
+        _irLUT[i*3+1] = Math.round(lo[2] + t * (hi[2] - lo[2]));
+        _irLUT[i*3+2] = Math.round(lo[3] + t * (hi[3] - lo[3]));
+    }
+    // Inverse: 5 bits/channel (32768 cells) → nearest LUT index. ~8M distance
+    // ops once per session (~20 ms); PNG pixels are exact LUT colors so the
+    // quantized nearest match is exact for them.
+    _irInvLUT = new Uint8Array(32768);
+    for (var q = 0; q < 32768; q++) {
+        var r = ((q >> 10) & 31) * 8 + 4, g = ((q >> 5) & 31) * 8 + 4, b = (q & 31) * 8 + 4;
+        var best = 0, bd = 1e9;
+        for (var j = 0; j < 256; j++) {
+            var dr = r - _irLUT[j*3], dg = g - _irLUT[j*3+1], db = b - _irLUT[j*3+2];
+            var d = dr*dr + dg*dg + db*db;
+            if (d < bd) { bd = d; best = j; }
+        }
+        _irInvLUT[q] = best;
+    }
+}
+function _irMakeGray(img) {
+    _irBuildLUTs();
+    var w = img.width || img.naturalWidth, h = img.height || img.naturalHeight;
+    if (!w || !h) return null;
+    var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    var ctx = cv.getContext('2d'); ctx.drawImage(img, 0, 0);
+    var im = ctx.getImageData(0, 0, w, h), d = im.data;
+    for (var i = 0; i < d.length; i += 4) {
+        if (d[i+3] === 0) continue;
+        var q = ((d[i] >> 3) << 10) | ((d[i+1] >> 3) << 5) | (d[i+2] >> 3);
+        var idx = _irInvLUT[q];
+        // Slight gamma lift so mid-level cloud is legible under a colored field
+        var v = Math.round(255 * Math.pow(idx / 255, 0.85));
+        d[i] = v; d[i+1] = v; d[i+2] = v;
+    }
+    ctx.putImageData(im, 0, 0);
+    return cv;
+}
+var _irGrayMode = 'auto';   // 'auto' (gray while radar is draped) | 'gray' | 'color'
+try { _irGrayMode = localStorage.getItem('tcr_ir_gray') || 'auto'; } catch (e) {}
+function _irUseGray() {
+    if (_irGrayMode === 'gray') return true;
+    if (_irGrayMode === 'color') return false;
+    return !!(_radarMapOn && _tdrVisible);
+}
+function _irRefreshMapFrame() {
+    if (_irMapOverlay && _irData && _irFrameURLs.length) showIRMapOverlay(_irAnimFrame);
+    var b = document.getElementById('ir-gray-btn');
+    if (b) b.innerHTML = 'IR: ' + (_irGrayMode === 'auto' ? 'Auto' : _irGrayMode === 'gray' ? 'Gray' : 'Color');
+}
+window.irCycleGray = function() {
+    _irGrayMode = _irGrayMode === 'auto' ? 'gray' : _irGrayMode === 'gray' ? 'color' : 'auto';
+    try { localStorage.setItem('tcr_ir_gray', _irGrayMode); } catch (e) {}
+    _irRefreshMapFrame();
+};
+
+// Reproject one server frame to Mercator; callback(colorUrl, grayUrl).
 function _reprojectIRFrame(dataUrl, irData, callback) {
-    if (!dataUrl || !irData) { callback(dataUrl); return; }
+    if (!dataUrl || !irData) { callback(dataUrl, null); return; }
     var latOff = irData.lat_offsets;
     var southLat = irData.center_lat + latOff[0];
     var northLat = irData.center_lat + latOff[latOff.length - 1];
     var img = new Image();
     img.onload = function() {
         var reprojUrl = _mercatorReproject(img, southLat, northLat);
-        callback(reprojUrl || dataUrl);
+        var grayUrl = null;
+        try { var gc = _irMakeGray(img); if (gc) grayUrl = _mercatorReproject(gc, southLat, northLat); } catch (e) {}
+        callback(reprojUrl || dataUrl, grayUrl);
     };
-    img.onerror = function() { callback(dataUrl); };
+    img.onerror = function() { callback(dataUrl, null); };
     img.src = dataUrl;
 }
 
@@ -2887,7 +2974,8 @@ function fetchIRData(caseIndex, callback) {
             // Initialize frame array with just frame0 in position 0
             var n = data.n_frames || 9;
             _irFrameURLs = new Array(n);
-            for (var i = 0; i < n; i++) _irFrameURLs[i] = null;
+            _irFrameURLsGray = new Array(n);
+            for (var i = 0; i < n; i++) { _irFrameURLs[i] = null; _irFrameURLsGray[i] = null; }
             _irOriginalURLs = new Array(n);
             for (var j = 0; j < n; j++) _irOriginalURLs[j] = null;
             // Pre-allocate decode-cache slots so we can populate them
@@ -2899,8 +2987,9 @@ function fetchIRData(caseIndex, callback) {
                 _irLoadedCount = 1;
                 _irOriginalURLs[0] = data.frame0;
                 // Reproject frame0 to Mercator, then fire callback
-                _reprojectIRFrame(data.frame0, data, function(reprojUrl) {
+                _reprojectIRFrame(data.frame0, data, function(reprojUrl, grayUrl) {
                     _irFrameURLs[0] = reprojUrl;
+                    _irFrameURLsGray[0] = grayUrl;
                     if (callback) callback(data);
                 });
             } else {
@@ -2950,8 +3039,9 @@ function _fetchRemainingFramesParallel(caseIndex, startIdx) {
                         if (data.frame) {
                             _irOriginalURLs[data.lag_index] = data.frame;
                             return new Promise(function(resolve) {
-                                _reprojectIRFrame(data.frame, _irData, function(reprojUrl) {
+                                _reprojectIRFrame(data.frame, _irData, function(reprojUrl, grayUrl) {
                                     _irFrameURLs[data.lag_index] = reprojUrl;
+                                    _irFrameURLsGray[data.lag_index] = grayUrl;
                                     resolve();
                                 });
                             });
@@ -3068,7 +3158,7 @@ function showIRMapOverlay(frameIdx) {
     var idx = (frameIdx !== undefined) ? frameIdx : _irAnimFrame;
     idx = Math.max(0, Math.min(idx, _irFrameURLs.length - 1));
     _irAnimFrame = idx;
-    var url = _irFrameURLs[idx];
+    var url = (_irUseGray() && _irFrameURLsGray[idx]) || _irFrameURLs[idx];
     if (!url) return;  // skip null frames
     var bounds = _irGetBounds(_irData);
     if (_irMapOverlay) {
@@ -3101,7 +3191,7 @@ function removeIRMapOverlay() {
     _removeIRLoadingIndicator();
     _hideIRMapColorbar();
     if (_irMapOverlay) { map.removeLayer(_irMapOverlay); _irMapOverlay = null; }
-    _irData = null; _irFrameURLs = []; _irOriginalURLs = []; _irAnimFrame = 0; _irMapVisible = true; _irAllFramesLoaded = false; _irLoadedCount = 0; _irBoundsSet = false; _irDecodedImages = [];
+    _irData = null; _irFrameURLs = []; _irFrameURLsGray = []; _irOriginalURLs = []; _irAnimFrame = 0; _irMapVisible = true; _irAllFramesLoaded = false; _irLoadedCount = 0; _irBoundsSet = false; _irDecodedImages = [];
     var ctrl = document.getElementById('ir-map-controls');
     if (ctrl) ctrl.remove();
 }
@@ -3199,9 +3289,60 @@ function _injectIRMapControls() {
                 disabledAttr +
                 ' oninput="showIRMapOverlay(' + (n - 1) + ' - parseInt(this.value))" class="ir-slider">' +
             '<span class="ir-label" id="ir-map-label">IR t=0</span>' +
+            '<button class="ir-ctrl-btn" id="ir-gray-btn" onclick="irCycleGray()" title="IR colormap: Auto = grayscale while the radar field is draped, else color">IR: ' + (_irGrayMode === 'auto' ? 'Auto' : _irGrayMode === 'gray' ? 'Gray' : 'Color') + '</button>' +
+            '<button class="ir-ctrl-btn' + (_sgOn ? ' active' : '') + '" id="storm-grid-btn" onclick="toggleStormGrid()" title="Storm-relative grid: 50-km range rings and N/E axes about the case center">' + _icon('target') + 'Grid</button>' +
         '</div>';
     mapWrapper.appendChild(ctrl);
+    _stormGridDraw();
 }
+
+// ── Storm-relative grid on the map ───────────────────────────
+// Range rings every 50 km to 200 km plus N/E axes through the case center,
+// labeled in km, so the draped radar field keeps the storm-relative frame
+// the Plotly plan view used to provide. Center follows the draped field when
+// present (its center is the plan-view origin), else the case fix.
+var _sgLayer = null, _sgOn = true;
+try { _sgOn = localStorage.getItem('tcr_storm_grid') !== '0'; } catch (e) {}
+function _stormGridCenter() {
+    var p = _lastPlanRender;
+    if (_radarMapOn && p && p.center_lat != null) return [p.center_lat, p.center_lon];
+    if (currentCaseData && currentCaseData.latitude != null) return [currentCaseData.latitude, currentCaseData.longitude];
+    return null;
+}
+function _stormGridRemove() {
+    if (_sgLayer) { try { map.removeLayer(_sgLayer); } catch (e) {} _sgLayer = null; }
+}
+function _stormGridDraw() {
+    _stormGridRemove();
+    if (!_sgOn || !_focusMode) return;
+    var c = _stormGridCenter();
+    if (!c) return;
+    var lat0 = c[0], lon0 = c[1];
+    var cosLat = Math.cos(lat0 * Math.PI / 180) || 1;
+    function ll(xKm, yKm) { return [lat0 + yKm / 111.0, lon0 + xKm / (111.0 * cosLat)]; }
+    var ink = 'rgba(255, 224, 120, 0.9)';
+    var g = L.layerGroup();
+    var rings = [50, 100, 150, 200];
+    rings.forEach(function(rk) {
+        g.addLayer(L.circle([lat0, lon0], { radius: rk * 1000, color: ink, weight: 1, opacity: 0.85,
+            dashArray: '3 5', fill: false, interactive: false }));
+        g.addLayer(L.marker(ll(rk * 0.7071, rk * 0.7071), { interactive: false, icon: L.divIcon({
+            className: 'storm-grid-label', html: rk + ' km', iconSize: [44, 14], iconAnchor: [-2, 7] }) }));
+    });
+    var R = 200;
+    g.addLayer(L.polyline([ll(-R, 0), ll(R, 0)], { color: ink, weight: 1, opacity: 0.7, interactive: false }));
+    g.addLayer(L.polyline([ll(0, -R), ll(0, R)], { color: ink, weight: 1, opacity: 0.7, interactive: false }));
+    g.addLayer(L.marker(ll(R, 0), { interactive: false, icon: L.divIcon({ className: 'storm-grid-label', html: 'E', iconSize: [14, 14], iconAnchor: [-4, 7] }) }));
+    g.addLayer(L.marker(ll(0, R), { interactive: false, icon: L.divIcon({ className: 'storm-grid-label', html: 'N', iconSize: [14, 14], iconAnchor: [7, 18] }) }));
+    _sgLayer = g.addTo(map);
+}
+window.toggleStormGrid = function() {
+    _sgOn = !_sgOn;
+    try { localStorage.setItem('tcr_storm_grid', _sgOn ? '1' : '0'); } catch (e) {}
+    var b = document.getElementById('storm-grid-btn');
+    if (b) b.classList.toggle('active', _sgOn);
+    _stormGridDraw();
+};
 
 // ── Plotly IR underlay ───────────────────────────────────────
 function buildIRPlotlyImage(irData) {
@@ -3277,7 +3418,7 @@ function toggleIRPlotlyUnderlay() {
 function toggleTDRVisibility() {
     _tdrVisible = !_tdrVisible;
     var plotDiv = document.getElementById('plotly-chart');
-    if (!plotDiv || !plotDiv.data) { _tdrVisible = true; return; }
+    if (!plotDiv || !plotDiv.data) { _tdrVisible = true; _irRefreshMapFrame(); return; }
 
     // Collect TDR trace indices — skip any trace tagged as _isMW
     var lastPlotData = window._lastPlotlyData;
@@ -3321,6 +3462,12 @@ function toggleTDRVisibility() {
             }, fsIndices);
         }
     }
+
+    // The draped map field follows the same toggle; with it hidden the IR
+    // reverts to color in 'auto' mode so the satellite view reads on its own.
+    if (_radarMapOverlay) { try { _radarMapOverlay.setOpacity(_tdrVisible ? 0.9 : 0); } catch (e) {} }
+    if (_radarMapRing) { try { _radarMapRing.setStyle({ opacity: _tdrVisible ? 1 : 0 }); } catch (e) {} }
+    _irRefreshMapFrame();
 
     var btn = document.getElementById('tdr-toggle-btn');
     if (btn) {
@@ -3537,7 +3684,7 @@ function _removeRubberBand() {
 var _lastPlanRender = null, _radarMapOn = false;
 var _radarMapOverlay = null, _radarMapRing = null, _radarMapTip = null;
 var _radarMapHoverBound = false;
-// Two-panel mode (?gl=1 default): the radar field is draped on the IR map, so
+// Two-panel mode (default in focus mode, both map engines): the radar field is draped on the IR map, so
 // the map IS the plan view and the redundant Plotly plan pane is hidden. The
 // user can toggle back to the classic 3-panel via the Radar→Map pill; doing so
 // sets _twoPanelDisabled so it doesn't re-arm on the next variable/level change.
@@ -3605,7 +3752,7 @@ function _radarMapDraw() {
     ctx.putImageData(im, 0, 0);
     var bounds = _radarMapBounds(p);
     if (_radarMapOverlay) { try { map.removeLayer(_radarMapOverlay); } catch (e) {} }
-    _radarMapOverlay = L.imageOverlay(cv.toDataURL('image/png'), bounds, { opacity: 0.9, interactive: false }).addTo(map);
+    _radarMapOverlay = L.imageOverlay(cv.toDataURL('image/png'), bounds, { opacity: _tdrVisible ? 0.9 : 0, interactive: false }).addTo(map);
     // RMW ring
     if (_radarMapRing) { try { map.removeLayer(_radarMapRing); } catch (e) {} _radarMapRing = null; }
     if (p.rmw_km && !isNaN(p.rmw_km)) {
@@ -3613,6 +3760,20 @@ function _radarMapDraw() {
             color: '#fff', weight: 1.5, dashArray: '5 5', fill: false, interactive: false }).addTo(map);
     }
     if (!_radarMapHoverBound) { map.on('mousemove', _radarMapHover); map.on('mouseout', _radarMapHideTip); _radarMapHoverBound = true; }
+    _stormGridDraw();
+    _irRefreshMapFrame();   // 'auto' IR mode goes grayscale under the draped field
+}
+// Take the radar field off the map (focus exit, or the user's Radar→Map toggle).
+function _radarMapOff() {
+    _radarMapOn = false;
+    if (_radarMapOverlay) { try { map.removeLayer(_radarMapOverlay); } catch (e) {} _radarMapOverlay = null; }
+    if (_radarMapRing) { try { map.removeLayer(_radarMapRing); } catch (e) {} _radarMapRing = null; }
+    _radarMapHideTip();
+    var btn = document.getElementById('radar-map-btn');
+    if (btn) btn.classList.remove('active');
+    _applyTwoPanelMode(false);
+    _stormGridDraw();
+    _irRefreshMapFrame();
 }
 function _radarMapHover(e) {
     var p = _lastPlanRender;
@@ -3672,7 +3833,7 @@ function _applyTwoPanelMode(on) {
 // on the IR map and hide the redundant Plotly plan pane — unless the user has
 // explicitly toggled back to 3-panel this session.
 function _maybeAutoTwoPanel() {
-    if (!window.LFLET_GL || _twoPanelDisabled || !_lastPlanRender) return;
+    if (!_focusMode || _twoPanelDisabled || !_lastPlanRender) return;
     var firstArm = !_radarMapOn;   // only re-frame the map the first time
     _radarMapOn = true;
     _radarMapDraw();
@@ -3688,6 +3849,7 @@ window._radarToMap = function () {
     var btn = document.getElementById('radar-map-btn');
     if (!_radarMapOn) {
         if (!_lastPlanRender) { showToast('Generate a plan view first.', 'warn'); return; }
+        if (!_focusMode) { showToast('Use "Focus & IR Satellite" first — the map has to be on the storm.', 'warn'); return; }
         _radarMapOn = true;
         _twoPanelDisabled = false;
         _radarMapDraw();
@@ -3695,13 +3857,8 @@ window._radarToMap = function () {
         _applyTwoPanelMode(true);
         try { map.fitBounds(_radarMapBounds(_lastPlanRender), { padding: [30, 30] }); } catch (e) {}
     } else {
-        _radarMapOn = false;
         _twoPanelDisabled = true;   // user wants the classic 3-panel; don't re-arm
-        if (_radarMapOverlay) { try { map.removeLayer(_radarMapOverlay); } catch (e) {} _radarMapOverlay = null; }
-        if (_radarMapRing) { try { map.removeLayer(_radarMapRing); } catch (e) {} _radarMapRing = null; }
-        _radarMapHideTip();
-        if (btn) btn.classList.remove('active');
-        _applyTwoPanelMode(false);
+        _radarMapOff();
     }
 };
 
@@ -4240,8 +4397,8 @@ function renderPlotFromJSON(json, resultDiv) {
         level_km: json.actual_level_km, rmw_km: meta.rmw_km,
         center_lat: (currentCaseData && currentCaseData.latitude), center_lon: (currentCaseData && currentCaseData.longitude)
     };
-    if (window.LFLET_GL && !_twoPanelDisabled) {
-        // Two-panel default: defer so the Plotly plan chart renders at full size
+    if (_focusMode && !_twoPanelDisabled) {
+        // Two-panel default (focus mode, either map engine): defer so the Plotly plan chart renders at full size
         // first (clean toggle-back), then drape on the map + hide the plan pane.
         // Deferred + idempotent so it also re-hides the pane on variable/level
         // re-renders (which rebuild the dual-panel HTML).
@@ -15698,8 +15855,11 @@ function _showIRMapColorbar() {
     var el = document.getElementById('ir-map-colorbar');
     if (!el) return;
 
-    // Standard IR brightness temperature colorbar (approx CIRA RAMMB style)
-    var gradientStops = 'linear-gradient(to right, #FFFFFF, #C8C8C8, #969696, #646464, #323232, #003264, #0064C8, #0096FF, #00C8FF, #00FF96, #00C800, #96FF00, #FFFF00, #FFC800, #FF9600, #FF0000, #C80000, #960000, #640000, #320000)';
+    // Standard IR brightness temperature colorbar (approx CIRA RAMMB style);
+    // luminance ramp (warm dark → cold bright) when the gray variant is shown.
+    var gradientStops = _irUseGray()
+        ? 'linear-gradient(to right, #f4f4f4, #9a9a9a, #4a4a4a, #0c0c16)'
+        : 'linear-gradient(to right, #FFFFFF, #C8C8C8, #969696, #646464, #323232, #003264, #0064C8, #0096FF, #00C8FF, #00FF96, #00C800, #96FF00, #FFFF00, #FFC800, #FF9600, #FF0000, #C80000, #960000, #640000, #320000)';
     el.innerHTML =
         '<div style="font-size:9px;font-weight:600;color:#60a5fa;margin-bottom:2px;">IR Brightness Temp</div>' +
         '<div style="width:140px;height:10px;border-radius:3px;background:' + gradientStops + ';border:1px solid rgba(15, 22, 35,0.15);"></div>' +

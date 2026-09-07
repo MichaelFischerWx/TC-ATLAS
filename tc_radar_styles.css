@@ -2629,3 +2629,16 @@ footer a:hover { text-decoration: underline; }
         font-size: 12px !important;
     }
 }
+
+/* Storm-relative grid labels on the focus-mode map (tc_radar_app.js _stormGridDraw) */
+.storm-grid-label {
+    font: 600 10px/14px 'JetBrains Mono', monospace;
+    color: rgba(255, 224, 120, 0.95);
+    text-shadow: 0 0 2px #000, 0 0 4px rgba(0,0,0,0.9);
+    white-space: nowrap;
+    pointer-events: none;
+    background: none; border: none;
+}
+.ir-ctrl-btn.active { background: rgba(255, 224, 120, 0.22); }
+/* Focus-mode map control row gained IR-mode + Grid buttons; let it wrap in narrow map panes */
+#ir-map-controls .ir-ctrl-row { flex-wrap: wrap; row-gap: 4px; }
