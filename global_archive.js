@@ -1699,7 +1699,7 @@ function _gaHudInit() {
         rail.appendChild(bar);
         // a "Panel" item opens the drawer (timeline chart + tool panels)
         var pi = document.createElement('div'); pi.className = 'ga-layer-item detail-rail-panel';
-        pi.innerHTML = '<button type="button" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleDetailSidebar()" title="Intensity timeline &amp; tool panels">' + _icon('chartBar') + 'Panel</button>';
+        pi.innerHTML = '<button type="button" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleDetailSidebar()" title="Intensity timeline: best-track wind &amp; pressure, F-deck fixes, Hovm\u00f6ller, Scorecard, Environment (tool panels open here too)">' + _icon('chartBar') + '<span class="rail-lbl">Timeline</span></button>';
         bar.appendChild(pi);
         card.parentNode.insertBefore(rail, card.nextSibling);
     }

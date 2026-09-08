@@ -3489,21 +3489,26 @@ input[type="range"].ga-range::-moz-range-thumb {
 
 /* layers rail */
 .detail-rail {
-    position: absolute; top: 58px; left: 10px; z-index: 609;
+    position: absolute; top: 56px; left: 10px; z-index: 609;
     background: color-mix(in srgb, var(--surface) 88%, transparent);
     -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
     border: 1px solid var(--border); border-radius: 10px;
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
-    padding: 4px;
+    padding: 6px;
 }
-.detail-rail .ga-layerbar { display: flex; flex-direction: column; gap: 2px; padding: 0; border: 0; background: transparent; }
+.detail-rail .ga-layerbar { display: flex; flex-direction: column; gap: 4px; padding: 0; border: 0; background: transparent; }
 .detail-rail .ga-layerbar h3 { display: none; }
-.detail-rail .ga-layer-item { width: 64px; }
+.detail-rail .ga-layer-item { width: 72px; }
 .detail-rail .ga-layer-item .ga-btn {
-    flex-direction: column; gap: 3px; padding: 6px 2px; font-size: 0.6rem; letter-spacing: 0.02em;
-    border-radius: 8px; width: 100%; height: auto;
+    display: flex !important; flex-direction: column; align-items: center; justify-content: center;
+    gap: 4px; padding: 8px 4px; font-size: 0.66rem; line-height: 1.1; letter-spacing: 0;
+    border-radius: 8px; width: 100%; height: auto; white-space: nowrap;
 }
-.detail-rail .ga-layer-item .ga-btn .icon-inline { width: 16px; height: 16px; margin: 0; }
+.detail-rail .ga-layer-item .ga-btn .icon-inline { width: 17px; height: 17px; margin: 0; display: block; }
+.detail-rail .ga-layer-item .ga-btn .rail-ico { font-size: 15px; line-height: 17px; height: 17px; display: block; }
+.detail-rail .ga-layer-item .ga-btn .rail-lbl { display: block; }
+/* the map's own zoom control lives bottom-left, clear of the rail and the bar */
+.detail-fs .detail-main .maplibregl-ctrl-top-left, .detail-fs .detail-main .leaflet-top.leaflet-left { top: auto !important; bottom: 72px !important; left: 10px !important; }
 .detail-rail .ga-layer-item .ir-status { display: none; }   /* status lives in the tool's own panel */
 .detail-rail .detail-rail-panel { border-top: 1px solid var(--border); margin-top: 2px; padding-top: 2px; }
 
@@ -3538,6 +3543,12 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .detail-fs .ir-cbar-strip canvas { flex: 1; }
 
+/* drawer panel headers: title on its own line, buttons wrap instead of cropping */
+.detail-side .panel-header { flex-wrap: wrap; row-gap: 6px; padding: 10px 12px; }
+.detail-side .panel-header h3 { flex: 1 0 100%; }
+.detail-side .panel-header .ga-layer-item, .detail-side .panel-header .ga-btn { flex: 0 0 auto; white-space: nowrap; width: auto; }
+.detail-side .panel-header .ga-layer-item { flex-direction: row; align-items: center; gap: 6px; }
+
 /* drawer: narrower, translucent, keeps the legend visible */
 .detail-side { width: 380px; right: 48px; }
 .detail-side-toggle { right: 428px; }
@@ -3556,7 +3567,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     .detail-rail { top: 52px; left: 6px; right: auto; padding: 3px; }
     .detail-rail .ga-layerbar { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; max-width: calc(100vw - 24px); }
     .detail-rail .ga-layerbar::-webkit-scrollbar { display: none; }
-    .detail-rail .ga-layer-item { width: 54px; flex: 0 0 auto; }
+    .detail-rail .ga-layer-item { width: 60px; flex: 0 0 auto; }
     .detail-rail .detail-rail-panel { border-top: 0; border-left: 1px solid var(--border); margin: 0 0 0 2px; padding: 0 0 0 2px; }
     .detail-fs .detail-main #ir-map-controls .ir-bar-row2,
     .detail-fs .detail-main #ir-map-controls #ir-3d-btn,
