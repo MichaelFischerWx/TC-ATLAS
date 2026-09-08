@@ -561,7 +561,7 @@ function _ctxFetchDecoded(year, ts) {
             try {
                 // Halve on phones (bandwidth already paid, but decode + texture
                 // memory matter) and wherever the GL texture limit is smaller.
-                var f = (_gaIsTouch() || img.naturalWidth > _ctxMaxTexSize()) ? 2 : 1;
+                var f = img.naturalWidth > _ctxMaxTexSize() ? img.naturalWidth / _ctxMaxTexSize() : 1;   // scale only if the GPU cannot take the frame
                 var cols = Math.floor(img.naturalWidth / f), rows = Math.floor(img.naturalHeight / f);
                 var c = document.createElement('canvas'); c.width = cols; c.height = rows;
                 var g = c.getContext('2d', { willReadFrequently: true });

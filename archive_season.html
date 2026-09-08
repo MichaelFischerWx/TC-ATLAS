@@ -160,9 +160,9 @@
     var p = new Promise(function (res, rej) {
       var img = new Image(); img.crossOrigin = 'anonymous';
       img.onload = function () { try {
-        // Phones: halve (GridSat frames are 5143 px wide, over the 4096 GL texture cap on most iPhones,
-        // and a 10-megapixel canvas pair is real memory on a phone). Desktop keeps full resolution.
-        var f = (isTouch || img.naturalWidth > maxTex) ? 2 : 1;
+        // Full resolution everywhere; only a device whose GL texture limit is smaller than the frame
+        // (rare 4096-px GPUs vs 4948/5143-px frames) gets scaled down, and then only to fit.
+        var f = img.naturalWidth > maxTex ? img.naturalWidth / maxTex : 1;
         var cols = Math.floor(img.naturalWidth / f), rows = Math.floor(img.naturalHeight / f), c = document.createElement('canvas'); c.width = cols; c.height = rows;
         var g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0, cols, rows); var px = g.getImageData(0, 0, cols, rows).data, out = new Uint8Array(cols * rows);
         // Missing pixels (alpha 0) are nearest-filled in RGB by the builder. Thin GridSat scan-line
@@ -321,7 +321,8 @@
     if (!map.getSource(lid)) {
       map.addSource(lid, { type: 'image', url: url, coordinates: co });
       var before = (typeof this.before === 'function') ? this.before() : this.before;
-      map.addLayer({ id: lid, type: 'raster', source: lid, paint: { 'raster-opacity': 0, 'raster-opacity-transition': { duration: 0 }, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, map.getLayer(before) ? before : undefined);
+      map.addLayer({ id: lid, type: 'raster', source: lid, paint: { 'raster-opacity': 0, 'raster-opacity-transition': { duration: 0 }, 'raster-fade-duration': 0,
+        'raster-resampling': (this.id === 'ctx' && isTouch) ? 'linear' : 'nearest' } }, map.getLayer(before) ? before : undefined);
       return;
     }
     map.getSource(lid).updateImage({ url: url, coordinates: co });
