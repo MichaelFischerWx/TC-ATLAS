@@ -354,6 +354,32 @@ function _homeView(animate) {
 }
 _homeView(false);
 
+// Size the map section to the viewport so the map's bottom edge (where the
+// IR controls and colorbar live) is on screen. The section used to be
+// min-height 100vh-52px while ~100 px of topbar+stats sat above it, so the
+// bottom strip started below the fold. Phones use the flowing layout instead.
+function _fitMapSection() {
+    var sec = document.getElementById('map-section');
+    if (!sec) return;
+    if (window.innerWidth <= 768) { sec.style.height = ''; var w0 = document.getElementById('map-wrapper'); if (w0) { w0.style.height = ''; w0.style.flex = ''; } return; }
+    var top = sec.getBoundingClientRect().top + window.scrollY;
+    sec.style.boxSizing = 'border-box';
+    sec.style.height = Math.max(520, window.innerHeight - top) + 'px';
+    // Pin the map row itself: flex children (toolbar, closed filter drawer)
+    // can push the section past its set height by a few px, which is
+    // exactly the strip at the map's bottom edge.
+    var wrap = document.getElementById('map-wrapper');
+    if (wrap) {
+        var wtop = wrap.getBoundingClientRect().top + window.scrollY;
+        wrap.style.height = Math.max(400, window.innerHeight - wtop) + 'px';
+        wrap.style.flex = 'none';
+    }
+    try { map.invalidateSize(); } catch (e) {}
+}
+_fitMapSection();
+window.addEventListener('load', function() { _fitMapSection(); setTimeout(_fitMapSection, 600); });   // re-measure after fonts/late layout
+(function() { var t; window.addEventListener('resize', function() { clearTimeout(t); t = setTimeout(_fitMapSection, 120); }); })();
+
 // ── Basemap ──────────────────────────────────────────────────
 // 'satellite' = NASA GIBS Blue Marble shaded relief + bathymetry (free, no
 // key, native to zoom 8 and upsampled beyond): a dark, label-free surface
@@ -601,8 +627,10 @@ function exitFocusMode() {
     // Restore map filter to all
     filters.stormName = 'all';
     updateMarkers();
-    setTimeout(function() { map.invalidateSize(); _homeView(true); }, 380);
+    var _skipHome = _exitKeepView; _exitKeepView = false;
+    setTimeout(function() { map.invalidateSize(); if (!_skipHome) _homeView(true); }, 380);
 }
+var _exitKeepView = false;   // set by callers that will frame something themselves (storm switch)
 
 // Storm dropdown: filters the map AND populates the case dropdown
 document.getElementById('storm-select').addEventListener('change', function() {
@@ -627,9 +655,19 @@ document.getElementById('storm-select').addEventListener('change', function() {
     // User is engaging with filters — hide the featured-cases strip
     if (storm && typeof window.dismissFeaturedCases === 'function') window.dismissFeaturedCases();
 
+    // Choosing a different storm while a case is in focus: leave focus mode so
+    // the map shows that storm's track and analyses to pick from (focus mode
+    // suppresses the track layer, which left the map empty).
+    if (storm && _focusMode && currentCaseData && storm !== currentCaseData.storm_name) {
+        _exitKeepView = true;   // we frame the new storm below; skip exit's basin view
+        exitFocusMode(); closeSidePanel();
+        this.value = storm;
+    }
+
     // Update map filter
     filters.stormName = storm || 'all';
     updateMarkers();
+    if (storm) _fitToStormFixes(storm);
 
     // Populate case dropdown
     caseSelect.innerHTML = '';
@@ -3010,20 +3048,101 @@ function _irMakeGray(img) {
     ctx.putImageData(im, 0, 0);
     return cv;
 }
-var _irGrayMode = 'auto';   // 'auto' (gray while radar is draped) | 'gray' | 'color'
+// IR colormap mode: 'auto' (gray while the radar field is draped, else the
+// site color map) | 'color' (site) | 'gray' | 'bd' (Dvorak BD enhancement) |
+// 'rainbow'. Non-color variants are built client-side from the inverse LUT.
+var _irGrayMode = 'auto';
 try { _irGrayMode = localStorage.getItem('tcr_ir_gray') || 'auto'; } catch (e) {}
-function _irUseGray() {
-    if (_irGrayMode === 'gray') return true;
-    if (_irGrayMode === 'color') return false;
-    return !!(_radarMapOn && _tdrVisible);
+var _IR_CMAP_NAMES = { auto: 'Auto', color: 'TC-ATLAS color', gray: 'Grayscale', bd: 'Dvorak BD', rainbow: 'Rainbow enhanced' };
+function _irActiveCmap() {
+    if (_irGrayMode === 'auto') return (_radarMapOn && _tdrVisible) ? 'gray' : 'color';
+    return _IR_CMAP_NAMES[_irGrayMode] ? _irGrayMode : 'color';
+}
+function _irUseGray() { return _irActiveCmap() !== 'color'; }   // "non-site colormap" (opacity + colorbar decisions)
+// LUTs indexed by the site colormap's 0-255 index (high = cold). Tb(idx) = 330 - 170*idx/255.
+var _irVariantLUT = {};
+function _irVariantLUTFor(name) {
+    if (_irVariantLUT[name]) return _irVariantLUT[name];
+    var lut = new Uint8Array(256 * 3);
+    function setRGB(i, r, g, b) { lut[i*3] = r; lut[i*3+1] = g; lut[i*3+2] = b; }
+    for (var i = 0; i < 256; i++) {
+        var tb = 330 - 170 * i / 255, tc = tb - 273.15;
+        var g = Math.round(255 * Math.pow(i / 255, 0.7));   // luminance ramp: warm dark → cold bright
+        if (name === 'gray') { setRGB(i, g, g, g); continue; }
+        if (name === 'bd') {
+            // Dvorak BD enhancement (°C bands) over the gray ramp
+            var v = tc > -30 ? g : tc > -42 ? 150 : tc > -54 ? 205 : tc > -64 ? 80 : tc > -70 ? 0 : tc > -76 ? 255 : tc > -80 ? 140 : 60;
+            setRGB(i, v, v, v); continue;
+        }
+        if (name === 'rainbow') {
+            if (tc > -20) { setRGB(i, g, g, g); continue; }
+            var c = tc > -30 ? [0,200,255] : tc > -40 ? [0,90,255] : tc > -50 ? [0,190,0] : tc > -60 ? [255,230,0] : tc > -70 ? [255,60,0] : tc > -80 ? [200,0,180] : [255,255,255];
+            setRGB(i, c[0], c[1], c[2]); continue;
+        }
+        setRGB(i, g, g, g);
+    }
+    _irVariantLUT[name] = lut;
+    return lut;
+}
+function _irMakeVariant(img, name) {
+    _irBuildLUTs();
+    var lut = _irVariantLUTFor(name);
+    var w = img.width || img.naturalWidth, h = img.height || img.naturalHeight;
+    if (!w || !h) return null;
+    var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    var ctx = cv.getContext('2d'); ctx.drawImage(img, 0, 0);
+    var im = ctx.getImageData(0, 0, w, h), d = im.data;
+    for (var i = 0; i < d.length; i += 4) {
+        if (d[i+3] === 0) continue;
+        var q = ((d[i] >> 3) << 10) | ((d[i+1] >> 3) << 5) | (d[i+2] >> 3);
+        var idx = _irInvLUT[q];
+        d[i] = lut[idx*3]; d[i+1] = lut[idx*3+1]; d[i+2] = lut[idx*3+2];
+    }
+    ctx.putImageData(im, 0, 0);
+    return cv;
+}
+// Lazily built, reprojected variant frames: { bd: [url...], rainbow: [...] }
+var _irVariantURLs = {};
+var _irVariantBuilding = {};
+function _irEnsureVariant(name, idx, cb) {
+    var arr = _irVariantURLs[name] = _irVariantURLs[name] || [];
+    if (arr[idx]) { cb(arr[idx]); return; }
+    var key = name + ':' + idx;
+    if (_irVariantBuilding[key]) return;
+    var src = _irOriginalURLs[idx]; if (!src || !_irData) return;
+    _irVariantBuilding[key] = true;
+    var irData = _irData, caseIdx = irData.case_index;
+    var latOff = irData.lat_offsets;
+    var southLat = irData.center_lat + latOff[0], northLat = irData.center_lat + latOff[latOff.length - 1];
+    var img = new Image();
+    img.onload = function() {
+        delete _irVariantBuilding[key];
+        if (!_irData || _irData.case_index !== caseIdx) return;
+        try { var c = _irMakeVariant(img, name); var u = c && _mercatorReproject(c, southLat, northLat); if (u) { arr[idx] = u; cb(u); } } catch (e) {}
+    };
+    img.onerror = function() { delete _irVariantBuilding[key]; };
+    img.src = src;
+}
+function _irColorbarGradient() {
+    var cm = _irActiveCmap();
+    if (cm === 'color') return 'linear-gradient(to right, #FFFFFF, #C8C8C8, #969696, #646464, #323232, #003264, #0064C8, #0096FF, #00C8FF, #00FF96, #00C800, #96FF00, #FFFF00, #FFC800, #FF9600, #FF0000, #C80000, #960000, #640000, #320000)';
+    var lut = _irVariantLUTFor(cm), stops = [];
+    // colorbar runs 190 K (left) → 310 K (right); idx = (330 - Tb) * 255/170
+    for (var k = 0; k <= 24; k++) {
+        var tb = 190 + 120 * k / 24, i = Math.max(0, Math.min(255, Math.round((330 - tb) * 255 / 170)));
+        stops.push('rgb(' + lut[i*3] + ',' + lut[i*3+1] + ',' + lut[i*3+2] + ')');
+    }
+    return 'linear-gradient(to right, ' + stops.join(', ') + ')';
 }
 function _irRefreshMapFrame() {
     if (_irMapOverlay && _irData && _irFrameURLs.length) showIRMapOverlay(_irAnimFrame);
-    var b = document.getElementById('ir-gray-btn');
-    if (b) b.innerHTML = 'IR: ' + (_irGrayMode === 'auto' ? 'Auto' : _irGrayMode === 'gray' ? 'Gray' : 'Color');
+    var sel = document.getElementById('ir-cmap-sel');
+    if (sel && sel.value !== _irGrayMode) sel.value = _irGrayMode;
+    var tb = document.getElementById('tdr-map-btn');
+    if (tb) { tb.classList.toggle('active', _tdrVisible); tb.textContent = _tdrVisible ? 'TDR On' : 'TDR Off'; }
 }
-window.irCycleGray = function() {
-    _irGrayMode = _irGrayMode === 'auto' ? 'gray' : _irGrayMode === 'gray' ? 'color' : 'auto';
+window.irSetCmap = function(v) {
+    _irGrayMode = _IR_CMAP_NAMES[v] ? v : 'auto';
     try { localStorage.setItem('tcr_ir_gray', _irGrayMode); } catch (e) {}
     _irRefreshMapFrame();
 };
@@ -3081,6 +3200,7 @@ function fetchIRData(caseIndex, callback) {
     _irFetching = true;
     _irAllFramesLoaded = false;
     _irLagFramesStarted = false;
+    _irVariantURLs = {}; _irVariantBuilding = {};
     _irLoadedCount = 0;
     _irBoundsSet = false;  // force setBounds() on new case (center may differ)
 
@@ -3285,7 +3405,15 @@ function showIRMapOverlay(frameIdx) {
     var idx = (frameIdx !== undefined) ? frameIdx : _irAnimFrame;
     idx = Math.max(0, Math.min(idx, _irFrameURLs.length - 1));
     _irAnimFrame = idx;
-    var url = (_irUseGray() && _irFrameURLsGray[idx]) || _irFrameURLs[idx];
+    var cm = _irActiveCmap();
+    var url = cm === 'color' ? _irFrameURLs[idx]
+            : cm === 'gray' ? (_irFrameURLsGray[idx] || _irFrameURLs[idx])
+            : ((_irVariantURLs[cm] || [])[idx] || null);
+    if (!url && cm !== 'color' && cm !== 'gray') {
+        // Variant not built yet: show the site color frame now, swap when ready.
+        _irEnsureVariant(cm, idx, function() { if (_irAnimFrame === idx && _irActiveCmap() === cm) showIRMapOverlay(idx); });
+        url = _irFrameURLs[idx];
+    }
     if (!url) return;  // skip null frames
     var bounds = _irGetBounds(_irData);
     if (_irMapOverlay) {
@@ -3321,9 +3449,10 @@ function removeIRMapOverlay() {
     _removeIRLoadingIndicator();
     _hideIRMapColorbar();
     if (_irMapOverlay) { map.removeLayer(_irMapOverlay); _irMapOverlay = null; }
-    _irData = null; _irFrameURLs = []; _irFrameURLsGray = []; _irOriginalURLs = []; _irAnimFrame = 0; _irMapVisible = true; _irAllFramesLoaded = false; _irLoadedCount = 0; _irBoundsSet = false; _irDecodedImages = [];
+    _irData = null; _irFrameURLs = []; _irFrameURLsGray = []; _irVariantURLs = {}; _irVariantBuilding = {}; _irOriginalURLs = []; _irAnimFrame = 0; _irMapVisible = true; _irAllFramesLoaded = false; _irLoadedCount = 0; _irBoundsSet = false; _irDecodedImages = [];
     var ctrl = document.getElementById('ir-map-controls');
     if (ctrl) ctrl.remove();
+    _positionIRColorbar();
 }
 
 function irAnimStep(dir) {
@@ -3409,6 +3538,7 @@ function _injectIRMapControls() {
     var ctrl = document.createElement('div');
     ctrl.id = 'ir-map-controls';
     ctrl.className = 'ir-map-controls';
+    var cmapOpts = Object.keys(_IR_CMAP_NAMES).map(function(k) { return '<option value="' + k + '"' + (k === _irGrayMode ? ' selected' : '') + '>' + _IR_CMAP_NAMES[k] + '</option>'; }).join('');
     ctrl.innerHTML =
         '<div class="ir-ctrl-row">' +
             '<button class="ir-ctrl-btn" id="ir-toggle-btn" onclick="toggleIRMapVisibility()">' + _icon('satellite') + 'IR On</button>' +
@@ -3419,13 +3549,29 @@ function _injectIRMapControls() {
                 disabledAttr +
                 ' oninput="showIRMapOverlay(' + (n - 1) + ' - parseInt(this.value))" class="ir-slider">' +
             '<span class="ir-label" id="ir-map-label">IR t=0</span>' +
-            '<button class="ir-ctrl-btn" id="ir-gray-btn" onclick="irCycleGray()" title="IR colormap: Auto = grayscale while the radar field is draped, else color">IR: ' + (_irGrayMode === 'auto' ? 'Auto' : _irGrayMode === 'gray' ? 'Gray' : 'Color') + '</button>' +
+        '</div>' +
+        '<div class="ir-ctrl-row">' +
+            '<label class="ir-ctrl-lbl" for="ir-cmap-sel" title="IR colormap. Auto = grayscale while the radar field is draped, TC-ATLAS color otherwise">IR map</label>' +
+            '<select id="ir-cmap-sel" class="ir-ctrl-select" onchange="irSetCmap(this.value)">' + cmapOpts + '</select>' +
             '<button class="ir-ctrl-btn' + (_sgOn ? ' active' : '') + '" id="storm-grid-btn" onclick="toggleStormGrid()" title="Storm-relative grid: 50-km range rings and N/E axes about the case center">' + _icon('target') + 'Grid</button>' +
-            '<span class="ir-label radar-op-wrap" title="Opacity of the draped radar field">TDR <input type="range" class="ir-slider radar-op-slider" min="0" max="100" value="' + Math.round(_radarMapOpacity * 100) + '" oninput="setRadarOpacity(this.value/100)"> <span id="radar-op-val">' + Math.round(_radarMapOpacity * 100) + '%</span></span>' +
+            '<button class="ir-ctrl-btn' + (_tdrVisible ? ' active' : '') + '" id="tdr-map-btn" onclick="toggleTDRVisibility()" title="Show / hide the draped radar analysis">' + (_tdrVisible ? 'TDR On' : 'TDR Off') + '</button>' +
+            '<span class="ir-label radar-op-wrap" title="Opacity of the draped radar field"><input type="range" class="ir-slider radar-op-slider" min="0" max="100" value="' + Math.round(_radarMapOpacity * 100) + '" oninput="setRadarOpacity(this.value/100)"> <span id="radar-op-val">' + Math.round(_radarMapOpacity * 100) + '%</span></span>' +
         '</div>';
     mapWrapper.appendChild(ctrl);
     _stormGridDraw();
+    _positionIRColorbar();
 }
+// Lift the IR colorbar (a bottom-left map control) above the control strip so
+// the two cards never overlap; re-run on strip changes and resize.
+function _positionIRColorbar() {
+    var cb = document.getElementById('ir-map-colorbar');
+    var ctrl = document.getElementById('ir-map-controls');
+    if (!cb) return;
+    // Offset the colorbar element itself (its parent differs between Leaflet
+    // corner containers and the GL facade's control wrapper).
+    cb.style.marginBottom = ctrl ? (ctrl.offsetHeight + 10) + 'px' : '';
+}
+window.addEventListener('resize', function() { setTimeout(_positionIRColorbar, 150); });
 
 // ── Storm-relative grid on the map ───────────────────────────
 // Range rings every 50 km to 200 km plus N/E axes through the case center,
@@ -3879,18 +4025,40 @@ function _radarMapDraw() {
     var p = _lastPlanRender;
     if (!p || !p.z || !p.z.length || p.center_lat == null) return;
     var rows = p.z.length, cols = p.z[0].length;
-    var cv = document.createElement('canvas'); cv.width = cols; cv.height = rows;
-    var ctx = cv.getContext('2d'); var im = ctx.createImageData(cols, rows), d = im.data;
+    // Render at 1 px per cell, or 4× when wind barbs are drawn into the field
+    // so the glyph strokes stay crisp (the overlay is sampled nearest).
+    var S = (p.barbs && _windBarbsEnabled) ? 4 : 1;
+    var cv = document.createElement('canvas'); cv.width = cols * S; cv.height = rows * S;
+    var ctx = cv.getContext('2d'); var im = ctx.createImageData(cols * S, rows * S), d = im.data;
     for (var r = 0; r < rows; r++) {
         var zr = p.z[rows - 1 - r];   // canvas top = north = last data row
         for (var c = 0; c < cols; c++) {
-            var v = zr ? zr[c] : null, pi = (r * cols + c) * 4;
-            if (v == null || isNaN(v)) { d[pi+3] = 0; continue; }
+            var v = zr ? zr[c] : null;
+            if (v == null || isNaN(v)) continue;   // alpha stays 0
             var rgb = _csColor(p.colorscale, p.vmin, p.vmax, v);
-            d[pi] = rgb[0]; d[pi+1] = rgb[1]; d[pi+2] = rgb[2]; d[pi+3] = 255;   // fully opaque; overall opacity is the TDR slider
+            for (var sy = 0; sy < S; sy++) for (var sx = 0; sx < S; sx++) {
+                var pi = ((r * S + sy) * cols * S + (c * S + sx)) * 4;
+                d[pi] = rgb[0]; d[pi+1] = rgb[1]; d[pi+2] = rgb[2]; d[pi+3] = 255;   // fully opaque; overall opacity is the TDR slider
+            }
         }
     }
     ctx.putImageData(im, 0, 0);
+    if (S > 1) {
+        // Wind barbs: reuse the plan view's glyph geometry (km-space line
+        // segments) and stroke them onto the field with a light halo.
+        var xMin = p.x[0], xMax = p.x[p.x.length - 1], yMin = p.y[0], yMax = p.y[p.y.length - 1];
+        var shapes = _buildPlanViewWindBarbs(p.barbs, { xMin: xMin, xMax: xMax, yMin: yMin, yMax: yMax });
+        var W = cols * S, H = rows * S;
+        function X(x) { return (x - xMin) / (xMax - xMin) * W; }
+        function Y(y) { return (yMax - y) / (yMax - yMin) * H; }
+        ctx.lineCap = 'round';
+        [['rgba(255,255,255,0.85)', 3.2], ['rgba(0,0,0,0.9)', 1.4]].forEach(function(pass) {
+            ctx.strokeStyle = pass[0]; ctx.lineWidth = pass[1];
+            ctx.beginPath();
+            shapes.forEach(function(sh) { if (sh.type !== 'line') return; ctx.moveTo(X(sh.x0), Y(sh.y0)); ctx.lineTo(X(sh.x1), Y(sh.y1)); });
+            ctx.stroke();
+        });
+    }
     var bounds = _radarMapBounds(p);
     if (_radarMapOverlay) { try { map.removeLayer(_radarMapOverlay); } catch (e) {} }
     _radarMapOverlay = L.imageOverlay(cv.toDataURL('image/png'), bounds, { opacity: _tdrVisible ? _radarMapOpacity : 0, interactive: false, crisp: true }).addTo(map);
@@ -4552,6 +4720,7 @@ function renderPlotFromJSON(json, resultDiv) {
         vmax: (activeVmax != null ? activeVmax : varInfo.vmax), colorscale: activeColorscale,
         units: varInfo.units, display_name: varInfo.display_name,
         level_km: json.actual_level_km, rmw_km: meta.rmw_km,
+        barbs: json.wind_barbs || null,
         center_lat: (currentCaseData && currentCaseData.latitude), center_lon: (currentCaseData && currentCaseData.longitude)
     };
     if (_focusMode && !_twoPanelDisabled) {
@@ -7743,6 +7912,19 @@ function _trackHintUpdate(show) {
         el.remove();
     }
 }
+// Frame the filtered cases of one storm (used by track click and the toolbar).
+function _fitToStormFixes(name) {
+    var d = _getActiveData(); if (!d) return;
+    var pts = [];
+    d.cases.forEach(function(c) { if (c.storm_name === name && passesFilters(c) && c.latitude != null) pts.push([c.latitude, c.longitude]); });
+    setTimeout(function() {
+        try {
+            map.invalidateSize();
+            if (pts.length === 1) map.setView(pts[0], _glZ(6), { animate: true });
+            else if (pts.length >= 2) map.fitBounds(L.latLngBounds(pts), { padding: [50, 50], maxZoom: _glZ(7) });
+        } catch (e) {}
+    }, 450);
+}
 // Selecting a storm from its track: drive the toolbar's storm input so the
 // case dropdown, filters and count all update through the existing handler.
 function _selectStormFromTrack(storm, track) {
@@ -7754,14 +7936,7 @@ function _selectStormFromTrack(storm, track) {
     // for), not the whole best track — a 20° lifetime track would leave the
     // fixes as a small cluster. Deferred a tick so the re-render from the
     // change handler settles first.
-    setTimeout(function() {
-        try {
-            var pts = [];
-            storm.cases.forEach(function(c) { if (c.latitude != null) pts.push([c.latitude, c.longitude]); });
-            if (pts.length === 1) map.setView(pts[0], _glZ(6), { animate: true });
-            else if (pts.length >= 2) map.fitBounds(L.latLngBounds(pts), { padding: [50, 50], maxZoom: _glZ(7) });
-        } catch (e) {}
-    }, 50);
+    // (the change handler above frames the storm's fixes)
 }
 
 // Draw a single storm's best-track polyline
@@ -16074,9 +16249,7 @@ function _showIRMapColorbar() {
 
     // Standard IR brightness temperature colorbar (approx CIRA RAMMB style);
     // luminance ramp (warm dark → cold bright) when the gray variant is shown.
-    var gradientStops = _irUseGray()
-        ? 'linear-gradient(to right, #f4f4f4, #9a9a9a, #4a4a4a, #0c0c16)'
-        : 'linear-gradient(to right, #FFFFFF, #C8C8C8, #969696, #646464, #323232, #003264, #0064C8, #0096FF, #00C8FF, #00FF96, #00C800, #96FF00, #FFFF00, #FFC800, #FF9600, #FF0000, #C80000, #960000, #640000, #320000)';
+    var gradientStops = _irColorbarGradient();
     el.innerHTML =
         '<div style="font-size:9px;font-weight:600;color:#60a5fa;margin-bottom:2px;">IR Brightness Temp</div>' +
         '<div style="width:140px;height:10px;border-radius:3px;background:' + gradientStops + ';border:1px solid rgba(15, 22, 35,0.15);"></div>' +

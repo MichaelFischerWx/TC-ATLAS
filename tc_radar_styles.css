@@ -2728,3 +2728,20 @@ body.basemap-satellite .leaflet-bar a:hover, body.basemap-satellite .maplibregl-
 body.basemap-satellite .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(1) brightness(1.4); }
 body.basemap-satellite #ir-map-controls .ir-ctrl-btn { background: rgba(255,255,255,0.08); color: #e2e8f0; border-color: rgba(255,255,255,0.18); }
 body.basemap-satellite #ir-map-controls .ir-label, body.basemap-satellite #ir-map-controls .radar-op-wrap { color: #e2e8f0; }
+
+/* ── IR control strip: two aligned rows, no overlap ──────────────────── */
+.ir-map-controls { flex-direction: column; align-items: stretch; gap: 4px; max-width: calc(100% - 16px); }
+#ir-map-controls .ir-ctrl-row { flex-wrap: nowrap; row-gap: 4px; }
+#ir-map-controls .ir-label { min-width: 0; text-align: left; white-space: nowrap; }
+#ir-map-controls .ir-ctrl-lbl { font: 600 10px/1.2 'DM Sans', sans-serif; color: var(--slate); white-space: nowrap; }
+.ir-ctrl-select { font: 500 11px/1.2 'DM Sans', sans-serif; padding: 3px 4px; border-radius: 5px; border: 1px solid rgba(15,22,35,0.15); background: var(--surface, #fff); color: var(--text); max-width: 150px; }
+body.basemap-satellite .ir-ctrl-select { background: rgba(255,255,255,0.08); color: #e2e8f0; border-color: rgba(255,255,255,0.18); }
+body.basemap-satellite .ir-ctrl-select option { color: #0f172a; }
+body.basemap-satellite #ir-map-controls .ir-ctrl-lbl { color: #94a3b8; }
+/* Slider: give the input the thumb's height so the thumb centers on the track */
+.ir-slider, #ir-map-controls .ir-slider { height: 14px; margin: 0; background: transparent; vertical-align: middle; }
+.ir-slider::-webkit-slider-runnable-track { height: 4px; background: var(--navy); border-radius: 2px; }
+.ir-slider::-moz-range-track { height: 4px; background: var(--navy); border-radius: 2px; }
+.ir-slider::-moz-range-thumb { width: 14px; height: 14px; background: #60a5fa; border: 2px solid white; border-radius: 50%; }
+body.basemap-satellite .ir-slider::-webkit-slider-runnable-track, body.basemap-satellite .ir-slider::-moz-range-track { background: rgba(255,255,255,0.28); }
+@media (max-width: 768px) { #ir-map-controls .ir-ctrl-row { flex-wrap: wrap; } }
