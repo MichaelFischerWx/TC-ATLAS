@@ -106,7 +106,97 @@
                 }
             }
         }
-        return { pos: new Float32Array(pos), nrm: new Float32Array(nrm), n: pos.length / 3, iso: iso };
+        var P = new Float32Array(pos), bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+        for (var q = 0; q < P.length; q += 3) {
+            if (P[q] < bb[0]) bb[0] = P[q]; if (P[q] > bb[3]) bb[3] = P[q];
+            if (P[q+1] < bb[1]) bb[1] = P[q+1]; if (P[q+1] > bb[4]) bb[4] = P[q+1];
+            if (P[q+2] < bb[2]) bb[2] = P[q+2]; if (P[q+2] > bb[5]) bb[5] = P[q+2];
+        }
+        return { pos: P, nrm: new Float32Array(nrm), n: pos.length / 3, iso: iso, bbox: bb };
+    }
+
+    // ── Hover readout: ray-cast the cursor against the shells ──
+    // Ray from the free camera through the cursor's ground point, in the mesh's
+    // local Mercator frame with z un-exaggerated; Möller–Trumbore per triangle
+    // after a slab test on each shell's bounding box. ~100k triangles ≈ a few ms.
+    function rayBox(o, d, bb) {
+        var tmin = -Infinity, tmax = Infinity;
+        for (var a = 0; a < 3; a++) {
+            if (Math.abs(d[a]) < 1e-20) { if (o[a] < bb[a] || o[a] > bb[a+3]) return false; continue; }
+            var t1 = (bb[a] - o[a]) / d[a], t2 = (bb[a+3] - o[a]) / d[a];
+            if (t1 > t2) { var tt = t1; t1 = t2; t2 = tt; }
+            tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+            if (tmin > tmax) return false;
+        }
+        return tmax >= 0;
+    }
+    function rayMesh(o, d, m) {
+        if (!rayBox(o, d, m.bbox)) return Infinity;
+        var P = m.pos, best = Infinity, EPS = 1e-12;
+        for (var i = 0; i < P.length; i += 9) {
+            var ax = P[i], ay = P[i+1], az = P[i+2];
+            var e1x = P[i+3]-ax, e1y = P[i+4]-ay, e1z = P[i+5]-az;
+            var e2x = P[i+6]-ax, e2y = P[i+7]-ay, e2z = P[i+8]-az;
+            var px = d[1]*e2z - d[2]*e2y, py = d[2]*e2x - d[0]*e2z, pz = d[0]*e2y - d[1]*e2x;
+            var det = e1x*px + e1y*py + e1z*pz;
+            if (det > -EPS && det < EPS) continue;
+            var inv = 1 / det, tx = o[0]-ax, ty = o[1]-ay, tz = o[2]-az;
+            var u = (tx*px + ty*py + tz*pz) * inv; if (u < 0 || u > 1) continue;
+            var qx = ty*e1z - tz*e1y, qy = tz*e1x - tx*e1z, qz = tx*e1y - ty*e1x;
+            var v = (d[0]*qx + d[1]*qy + d[2]*qz) * inv; if (v < 0 || u + v > 1) continue;
+            var t = (e2x*qx + e2y*qy + e2z*qz) * inv;
+            if (t > 0 && t < best) best = t;
+        }
+        return best;
+    }
+    var _tip = null, _hoverPending = false, _lastEvt = null;
+    function tipEl() {
+        if (_tip) return _tip;
+        _tip = document.createElement('div'); _tip.id = 'vol-gl-tip';
+        _tip.style.cssText = 'position:fixed;z-index:1300;pointer-events:none;display:none;background:rgba(15,22,35,0.92);color:#fff;' +
+            'font:600 11px/1.35 "DM Sans",sans-serif;padding:4px 8px;border-radius:5px;white-space:nowrap;border:1px solid rgba(255,255,255,0.15);';
+        document.body.appendChild(_tip); return _tip;
+    }
+    function hideTip() { if (_tip) _tip.style.display = 'none'; }
+    function syncCam() {
+        if (!state.on) return;
+        var gl = state.map._gl, b = Math.round(gl.getBearing()), p = Math.round(gl.getPitch());
+        var bs = document.getElementById('vol-gl-bear'), bv = document.getElementById('vol-gl-bear-val');
+        var ts = document.getElementById('vol-gl-tilt'), tv = document.getElementById('vol-gl-tilt-val');
+        if (bs) bs.value = b; if (bv) bv.textContent = b + '°';
+        if (ts) ts.value = p; if (tv) tv.textContent = p + '°';
+        state.opts.tilt = p;
+    }
+    function onMove(e) { _lastEvt = e; if (_hoverPending) return; _hoverPending = true; requestAnimationFrame(doHover); }
+    function doHover() {
+        _hoverPending = false;
+        var e = _lastEvt; if (!e || !state.on || !state.meshes.length) { hideTip(); return; }
+        var gl = state.map._gl, MC = maplibregl.MercatorCoordinate;
+        // Camera position: MapLibre 4.x exposes it on the transform ({lngLat, altitude});
+        // 5.x also has getFreeCameraOptions(). Try both.
+        var cam = null;
+        try { if (gl.getFreeCameraOptions) cam = gl.getFreeCameraOptions().position; } catch (err) {}
+        if (!cam) { try { var cp = gl.transform.getCameraPosition(); cam = MC.fromLngLat(cp.lngLat, cp.altitude); } catch (err2) {} }
+        if (!cam) { hideTip(); return; }
+        var ground = MC.fromLngLat(gl.unproject(e.point), 0);
+        var ex = state.opts.exag, O = state.origin;
+        var o = [cam.x - O.x, cam.y - O.y, cam.z / ex];
+        var d = [ground.x - cam.x, ground.y - cam.y, (0 - cam.z) / ex];
+        var best = Infinity, hitIso = null;
+        state.meshes.forEach(function (m) { var t = rayMesh(o, d, m); if (t < best) { best = t; hitIso = m.iso; } });
+        if (!isFinite(best)) { hideTip(); return; }
+        var hx = o[0] + best * d[0], hy = o[1] + best * d[1], hz = (o[2] + best * d[2]);   // hz in un-exaggerated mercator z
+        var hKm = hz / state.meterUnits / 1000;
+        var ll = new MC(hx + O.x, hy + O.y, 0).toLngLat();
+        var cosLat = Math.cos(state.opts.centerLat * Math.PI / 180) || 1;
+        var xKm = (ll.lng - state.opts.centerLon) * 111.0 * cosLat, yKm = (ll.lat - state.opts.centerLat) * 111.0;
+        var vi = state.json.variable || {};
+        var tip = tipEl();
+        tip.innerHTML = '<b>' + hitIso + ' ' + (vi.units || '') + '</b> shell &middot; z = ' + hKm.toFixed(1) + ' km<br>' +
+            '<span style="opacity:.8">r = ' + Math.round(Math.hypot(xKm, yKm)) + ' km &middot; x ' + Math.round(xKm) + ', y ' + Math.round(yKm) + ' km</span>';
+        var oe = e.originalEvent || {};
+        tip.style.left = ((oe.clientX || 0) + 14) + 'px'; tip.style.top = ((oe.clientY || 0) - 8) + 'px';
+        tip.style.display = 'block';
     }
 
     // ── Geographic mapping: km offsets → Mercator units about the origin ──
@@ -201,13 +291,33 @@
         });
     }
 
+    // Standard thresholds by variable family (what a radar meteorologist would
+    // pick), keyed by shell count; fall back to fractions of the data range.
+    var STD_ISOS = {
+        reflectivity: { 1: [30], 2: [20, 40], 3: [20, 35, 50] },       // dBZ
+        wind:         { 1: [40], 2: [30, 50], 3: [25, 40, 55] },       // m/s (tangential / total / earth-rel speed)
+        radial:       { 1: [10], 2: [5, 15], 3: [5, 10, 20] },         // m/s
+        upward:       { 1: [2], 2: [1, 3], 3: [1, 3, 5] }              // m/s
+    };
+    function isoFamily(key) {
+        key = String(key || '');
+        if (/reflectivity/.test(key)) return 'reflectivity';
+        if (/upward|vertical/.test(key)) return 'upward';
+        if (/radial/.test(key)) return 'radial';
+        if (/tangential|wind_speed/.test(key)) return 'wind';
+        return null;
+    }
     function defaultIsos(json, count) {
-        var vi = json.variable || {}, lo = vi.vmin, hi = vi.vmax;
-        var dmax = (vi.data_max != null) ? vi.data_max : hi;
-        if (lo == null || hi == null) { lo = 0; hi = dmax || 1; }
-        var top = Math.min(hi, dmax != null ? dmax : hi);
+        var vi = json.variable || {};
+        var fam = isoFamily(vi.key);
+        var dmax = (vi.data_max != null) ? vi.data_max : vi.vmax;
+        if (fam && STD_ISOS[fam][count]) {
+            // keep only levels the data actually reaches
+            var std = STD_ISOS[fam][count].filter(function (v) { return dmax == null || v < dmax; });
+            if (std.length) return std;
+        }
+        var lo = vi.vmin != null ? vi.vmin : 0, top = dmax != null ? dmax : (vi.vmax != null ? vi.vmax : 1);
         var isos = [];
-        // Inner shell at ~45% of range, outer up to ~80%: low thresholds swallow the frame.
         for (var i = 1; i <= count; i++) isos.push(lo + (top - lo) * (0.45 + 0.35 * (i - 1) / Math.max(1, count - 1)));
         return isos.map(function (v) { return Math.round(v * 10) / 10; });
     }
@@ -244,12 +354,14 @@
               '<input type="range" id="vol-gl-iso" min="' + lo + '" max="' + hi + '" step="' + step + '" value="' + isos[0] + '" oninput="TCVolGL.update({isoBase: parseFloat(this.value)})">' +
               '<span id="vol-gl-iso-val">' + isos.map(function (v) { return v; }).join(' / ') + '</span></div>' +
             '<div class="vol-gl-row"><label>Shells</label>' +
-              '<select id="vol-gl-shells" onchange="TCVolGL.update({surfaces: parseInt(this.value)})">' + [1, 2, 3].map(function (n) { return '<option value="' + n + '"' + (n === (state.opts.surfaces || 2) ? ' selected' : '') + '>' + n + '</option>'; }).join('') + '</select>' +
+              '<select id="vol-gl-shells" onchange="TCVolGL.update({surfaces: parseInt(this.value)})">' + [1, 2, 3].map(function (n) { return '<option value="' + n + '"' + (n === (state.opts.surfaces || 1) ? ' selected' : '') + '>' + n + '</option>'; }).join('') + '</select>' +
               '<label>Opacity</label><input type="range" id="vol-gl-op" min="0.2" max="1" step="0.05" value="' + state.opts.opacity + '" oninput="TCVolGL.update({opacity: parseFloat(this.value)})"></div>' +
             '<div class="vol-gl-row"><label>Height ×</label>' +
-              '<input type="range" id="vol-gl-exag" min="2" max="40" step="1" value="' + state.opts.exag + '" oninput="TCVolGL.update({exag: parseFloat(this.value)})"><span id="vol-gl-exag-val">' + state.opts.exag + '×</span>' +
-              '<label>Tilt</label><input type="range" id="vol-gl-tilt" min="0" max="75" step="1" value="' + state.opts.tilt + '" oninput="TCVolGL.update({tilt: parseFloat(this.value)})"></div>' +
-            '<div class="vol-gl-row vol-gl-foot"><span>Drag with right mouse / two fingers to rotate</span>' +
+              '<input type="range" id="vol-gl-exag" min="2" max="40" step="1" value="' + state.opts.exag + '" oninput="TCVolGL.update({exag: parseFloat(this.value)})"><span id="vol-gl-exag-val">' + state.opts.exag + '×</span></div>' +
+            '<div class="vol-gl-row"><label>Tilt</label><input type="range" id="vol-gl-tilt" min="0" max="75" step="1" value="' + state.opts.tilt + '" oninput="TCVolGL.update({tilt: parseFloat(this.value)})"><span id="vol-gl-tilt-val">' + state.opts.tilt + '°</span>' +
+              '<label>Rotate</label><input type="range" id="vol-gl-bear" min="-180" max="180" step="1" value="' + Math.round(state.map._gl.getBearing()) + '" oninput="TCVolGL.update({bearing: parseFloat(this.value)})"><span id="vol-gl-bear-val">' + Math.round(state.map._gl.getBearing()) + '°</span></div>' +
+            '<div class="vol-gl-row vol-gl-foot"><span>Mouse: right-drag or Ctrl+drag rotates &middot; scroll zooms &middot; hover a shell for height. Touch: two-finger twist rotates.</span></div>' +
+            '<div class="vol-gl-row vol-gl-foot"><span>Sliders above set tilt and rotation exactly.</span>' +
               '<button class="vol-gl-link" onclick="if (typeof open3DModal===\'function\') open3DModal();">Open storm-relative 3D</button></div>';
     }
 
@@ -259,7 +371,7 @@
             if (!window.maplibregl || !map || !map._gl) return false;
             if (state.on) api.hide();
             state.map = map; state.json = json;
-            state.opts = Object.assign({ exag: 6, tilt: 55, opacity: 0.85, surfaces: 2, iso: null }, opts || {});
+            state.opts = Object.assign({ exag: 6, tilt: 55, opacity: 0.9, surfaces: 1, iso: null }, opts || {});
             var gl = map._gl;
             state.prevPitch = gl.getPitch(); state.prevBearing = gl.getBearing();
             try { gl.dragRotate.enable(); gl.touchZoomRotate.enableRotation(); } catch (e) {}
@@ -268,6 +380,8 @@
             try { gl.addLayer(state.layer); } catch (e) { console.error('[tc_vol_gl] addLayer', e); return false; }
             state.on = true;
             card(isos);
+            gl.on('mousemove', onMove); gl.on('mouseout', hideTip);
+            gl.on('rotate', syncCam); gl.on('pitch', syncCam);
             gl.easeTo({ pitch: state.opts.tilt, duration: 600 });
             document.body.classList.add('vol-gl-on');
             if (typeof state.opts.onShow === 'function') { try { state.opts.onShow(); } catch (e) {} }
@@ -277,15 +391,17 @@
             if (!state.on) return;
             var needMesh = false;
             if (o.isoBase != null) {
-                var n = state.opts.surfaces || 2, vi = state.json.variable || {}, hi = vi.data_max != null ? vi.data_max : vi.vmax;
+                var n = state.opts.surfaces || 1, vi = state.json.variable || {}, hi = vi.data_max != null ? vi.data_max : vi.vmax;
                 var isos = [];
                 for (var i = 0; i < n; i++) isos.push(Math.round((o.isoBase + (hi - o.isoBase) * 0.5 * i / Math.max(1, n - 1)) * 10) / 10);
                 state.opts.iso = isos; needMesh = true;
             }
+            if (o.surfaces != null) { var ss = document.getElementById('vol-gl-shells'); if (ss && String(ss.value) !== String(o.surfaces)) ss.value = String(o.surfaces); }
             if (o.surfaces != null) { state.opts.surfaces = o.surfaces; state.opts.iso = null; needMesh = true; }
             if (o.opacity != null) state.opts.opacity = o.opacity;
             if (o.exag != null) { state.opts.exag = o.exag; var ev = document.getElementById('vol-gl-exag-val'); if (ev) ev.textContent = o.exag + '×'; }
-            if (o.tilt != null) { state.opts.tilt = o.tilt; try { state.map._gl.easeTo({ pitch: o.tilt, duration: 300 }); } catch (e) {} }
+            if (o.tilt != null) { state.opts.tilt = o.tilt; var tv = document.getElementById('vol-gl-tilt-val'); if (tv) tv.textContent = o.tilt + '°'; try { state.map._gl.easeTo({ pitch: o.tilt, duration: 300 }); } catch (e) {} }
+            if (o.bearing != null) { var bv = document.getElementById('vol-gl-bear-val'); if (bv) bv.textContent = o.bearing + '°'; try { state.map._gl.easeTo({ bearing: o.bearing, duration: 300 }); } catch (e) {} }
             if (needMesh) { var isos2 = remesh(); var iv = document.getElementById('vol-gl-iso-val'); if (iv) iv.textContent = isos2.join(' / ');
                 var isl = document.getElementById('vol-gl-iso'); if (isl && o.surfaces != null) isl.value = isos2[0]; }
             try { state.map._gl.triggerRepaint(); } catch (e) {}
@@ -296,6 +412,8 @@
             try { if (gl.getLayer(LAYER_ID)) gl.removeLayer(LAYER_ID); } catch (e) {}
             try { gl.easeTo({ pitch: 0, bearing: 0, duration: 500 }); gl.dragRotate.disable(); gl.touchZoomRotate.disableRotation(); } catch (e) {}
             var el = document.getElementById('vol-gl-card'); if (el) el.remove();
+            try { gl.off('mousemove', onMove); gl.off('mouseout', hideTip); gl.off('rotate', syncCam); gl.off('pitch', syncCam); } catch (e) {}
+            hideTip();
             document.body.classList.remove('vol-gl-on');
             if (state.opts && typeof state.opts.onHide === 'function') { try { state.opts.onHide(); } catch (e) {} }
             state.on = false; state.meshes = []; state.layer = null;
