@@ -42,8 +42,8 @@
   .lbl.follow { border-color:var(--um-orange); box-shadow:0 0 0 1px var(--um-orange); }
   .lbl .open { margin-left:6px; color:#cbd5e1; opacity:.8; }
   .lbl .open:hover { color:#fff; opacity:1; }
-  .ring { cursor:pointer; pointer-events:auto; }
-  .ring { position:absolute; left:-16px; top:-16px; width:32px; height:32px; border-radius:50%; border:2.5px solid #fff; box-shadow:0 0 0 1.5px rgba(0,0,0,.55), inset 0 0 0 1.5px rgba(0,0,0,.45); background:transparent; }
+  .dot { cursor:pointer; pointer-events:auto; }
+  .dot { position:absolute; left:-3px; top:-3px; width:6px; height:6px; border-radius:50%; background:#fff; box-shadow:0 0 0 1.5px rgba(0,0,0,.6); }
   .tick { position:absolute; left:14px; top:-14px; width:14px; height:14px; border-top:1.5px solid rgba(255,255,255,.7); border-right:0; transform:skewX(-45deg); transform-origin:left bottom; pointer-events:none; }
   .lbl b { font-weight:700; letter-spacing:.02em; }
   .lbl .g { color:#7dd3fc; margin-left:4px; }
@@ -61,6 +61,7 @@
     <option value="NI">N. Indian</option><option value="SI">S. Indian</option><option value="SP">S. Pacific</option><option value="GL">Global</option>
   </select>
   <button id="src" title="Intensity source shown in labels and marker colours">Best track</button>
+  <button id="markers" class="active" title="Show storm circles and labels">Markers</button>
   <button id="trails" class="active" title="Show 48-h track trails">Trails</button>
   <button id="secbtn" class="active" title="When zoomed in, overlay the nearest storm's exact 4 km sector frame on the 8 km context">4 km sector</button>
   <button id="follow" title="Release the storm lock"></button>
@@ -70,7 +71,7 @@
 <div id="legend" class="hud">
   <div class="row"><i style="background:#60a5fa"></i>TD/TS &lt;64 kt <i style="background:#fbbf24;margin-left:8px"></i>Cat 1-2 <i style="background:#f87171;margin-left:8px"></i>Cat 3 <i style="background:#ef4444;margin-left:8px"></i>Cat 4 <i style="background:#c084fc;margin-left:8px"></i>Cat 5</div>
   <div class="row"><span style="color:#fde68a">kt</span> best track &nbsp;<span style="color:#7dd3fc">G</span> GHOST reanalysis, where available</div>
-  <div class="row">Click a storm to lock the view on it.</div>
+  <div class="row">Dashed circle = 300 km radius locator (not a wind radius). Click a storm to lock the view on it.</div>
 </div>
 <div id="tb"></div>
 <div id="cbar" class="hud"><span>310 K</span><canvas width="1" height="126"></canvas><span>170 K</span></div>
@@ -227,7 +228,7 @@
     p.catch(function () { delete secFrames[key]; });
     return p;
   }
-  function removeSector() { if (map.getLayer('sector')) map.removeLayer('sector'); if (map.getSource('sector')) map.removeSource('sector'); secShown = null; secCur = null; if (secEl) secEl.textContent = ''; }
+  function removeSector() { secBuf.hide(); secShown = null; secCur = null; if (secEl) secEl.textContent = ''; }
   var secCur = null;   // {s, m, i, fr} currently on the map (hover readout uses fr.rec/fr.b)
   // Resolve the sector for a time step: null (none applies), {none:true,s} (no frames), or
   // {s,m,i,fr}. Never rejects, so a step can always commit.
@@ -240,22 +241,25 @@
       return getSectorFrame(s, m, i).then(function (fr) { return { s: s, m: m, i: i, fr: fr }; }).catch(function () { return { none: true, s: s }; });
     }).catch(function () { return null; });
   }
-  function applySector(res) {
-    if (!res) { if (secShown) removeSector(); return; }
-    if (res.none) { removeSector(); if (secEl) secEl.textContent = 'no 4 km frames for ' + res.s.name; return; }
-    var key = res.s.sid + ':' + res.i; if (key === secShown && map.getSource('sector')) return;
-    var fr = res.fr, co = [[Math.max(-179.99, fr.b.west), fr.b.north], [Math.min(179.99, fr.b.east), fr.b.north], [Math.min(179.99, fr.b.east), fr.b.south], [Math.max(-179.99, fr.b.west), fr.b.south]];
-    var src = map.getSource('sector');
-    if (!src) { map.addSource('sector', { type: 'image', url: fr.url, coordinates: co });
-      map.addLayer({ id: 'sector', type: 'raster', source: 'sector', paint: { 'raster-opacity': 1, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, 'coast-halo'); }
-    else src.updateImage({ url: fr.url, coordinates: co });
-    secShown = key; secCur = res;
-    if (secEl) secEl.textContent = '4 km sector · ' + res.s.name + ' (' + (res.m.source === 'mergir' ? 'MergIR' : res.m.source === 'gridsat' ? 'GridSat' : 'HURSAT') + ')';
-    for (var k = 1; k <= 3; k++) { var j = res.i + k; if (j < res.m.frames.length) getSectorFrame(res.s, res.m, j).catch(function () {}); }
+  function secCoords(fr) { return [[Math.max(-179.99, fr.b.west), fr.b.north], [Math.min(179.99, fr.b.east), fr.b.north], [Math.min(179.99, fr.b.east), fr.b.south], [Math.max(-179.99, fr.b.west), fr.b.south]]; }
+  // Stage the sector for a step: loads the back buffer (hidden) and returns a function that
+  // shows it — called by commit() together with the context flip and the markers.
+  function stageSector(res) {
+    if (!res) return Promise.resolve(function () { if (secShown) removeSector(); });
+    if (res.none) return Promise.resolve(function () { removeSector(); if (secEl) secEl.textContent = 'no 4 km frames for ' + res.s.name; });
+    var key = res.s.sid + ':' + res.i;
+    if (key === secShown && secBuf.has()) return Promise.resolve(function () {});
+    return secBuf.load(res.fr.url, secCoords(res.fr)).then(function (k) {
+      return function () {
+        secBuf.flip(k); secShown = key; secCur = res;
+        if (secEl) secEl.textContent = '4 km sector · ' + res.s.name + ' (' + (res.m.source === 'mergir' ? 'MergIR' : res.m.source === 'gridsat' ? 'GridSat' : 'HURSAT') + ')';
+        for (var q = 1; q <= 3; q++) { var j = res.i + q; if (j < res.m.frames.length) getSectorFrame(res.s, res.m, j).catch(function () {}); }
+      };
+    });
   }
   function updateSector(ts) {   // view changed (zoom/pan) with the time unchanged
     if (!ts) return; var seq = ++secSeq;
-    sectorFor(ts).then(function (res) { if (seq === secSeq) applySector(res); });
+    sectorFor(ts).then(function (res) { return stageSector(res); }).then(function (showFn) { if (seq === secSeq) showFn(); });
   }
   map.on('moveend', function () { if (frames.length) updateSector(frames[idx]); });
 
@@ -282,6 +286,42 @@
   window.__season = { map: map, zoom: function () { return map.getZoom(); }, forceReady: function () { mapReady = true; ensureLayers(); if (pending) { pending = false; show(idx); } }, sector: function () { return updateSector(frames[idx]); }, nearest: function () { var s = frames.length && nearestStorm(tsMs(frames[idx])); return s && s.name; }, state: function () { return { frames: frames.length, idx: idx, ready: mapReady, secOn: secOn, shown: secShown }; } };
   $('secbtn').onclick = function () { secOn = !secOn; this.classList.toggle('active', secOn); if (!secOn) removeSector(); else if (frames.length) updateSector(frames[idx]); };
   function coords() { var w = Math.max(-179.99, bounds.west), e = Math.min(179.99, bounds.east), n = Math.min(85, bounds.north), s = Math.max(-85, bounds.south); return [[w, n], [e, n], [e, s], [w, s]]; }
+  // Double-buffered raster: MapLibre decodes an updated image source asynchronously, so a
+  // single source would show the new frame a beat after the markers moved. Each product has
+  // two image sources/layers; the next frame loads into the hidden one, we wait for MapLibre
+  // to report that source loaded, then flip opacities in the same tick as the markers.
+  function Buffered(id, beforeId) { this.id = id; this.before = beforeId; this.front = 0; }
+  Buffered.prototype.layer = function (k) { return this.id + '-' + k; };
+  Buffered.prototype.ensure = function (k, url, co) {
+    var lid = this.layer(k);
+    if (!map.getSource(lid)) {
+      map.addSource(lid, { type: 'image', url: url, coordinates: co });
+      var before = (typeof this.before === 'function') ? this.before() : this.before;
+      map.addLayer({ id: lid, type: 'raster', source: lid, paint: { 'raster-opacity': 0, 'raster-opacity-transition': { duration: 0 }, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, map.getLayer(before) ? before : undefined);
+      return;
+    }
+    map.getSource(lid).updateImage({ url: url, coordinates: co });
+  };
+  Buffered.prototype.load = function (url, co) {   // into the back buffer; resolves when the texture is there (or after a cap)
+    var self = this, k = 1 - this.front, lid = this.layer(k);
+    return new Promise(function (res) {
+      var done = false, t = setTimeout(finish, 600);
+      function finish() { if (done) return; done = true; clearTimeout(t); map.off('sourcedata', onData); res(k); }
+      function onData(e) { if (e.sourceId === lid && e.isSourceLoaded && e.dataType === 'source') finish(); }
+      map.on('sourcedata', onData);
+      self.ensure(k, url, co);
+    });
+  };
+  Buffered.prototype.flip = function (k) {
+    var f = this.layer(this.front), b = this.layer(k);
+    if (map.getLayer(b)) map.setPaintProperty(b, 'raster-opacity', this.id === 'ctx' ? opacity : 1);
+    if (map.getLayer(f) && f !== b) map.setPaintProperty(f, 'raster-opacity', 0);
+    this.front = k;
+  };
+  Buffered.prototype.hide = function () { var self = this; [0, 1].forEach(function (k) { var l = self.layer(k); if (map.getLayer(l)) map.setPaintProperty(l, 'raster-opacity', 0); }); };
+  Buffered.prototype.has = function () { return !!map.getLayer(this.layer(0)); };
+  var secBuf = new Buffered('sector', 'coast-halo');
+  var ctxBuf = new Buffered('ctx', function () { return map.getLayer('sector-0') ? 'sector-0' : 'coast-halo'; });
   function ensureLayers() {
     if (!mapReady || map.getSource('trails')) return;
     // Coastlines above the imagery (same Natural Earth files as Storm Detail): the
@@ -291,6 +331,13 @@
     map.addLayer({ id: 'coast', type: 'line', source: 'coast', layout: { 'line-join': 'round' }, paint: { 'line-color': '#111827', 'line-width': ['interpolate', ['linear'], ['zoom'], 2, 0.7, 6, 1.2] } });
     map.addSource('trails', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     map.addLayer({ id: 'trails', type: 'line', source: 'trails', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'c'], 'line-width': 2.2, 'line-opacity': ['get', 'o'] } });
+    // 300 km locator circles (geographic, scale with zoom; dashed so they never read as a wind radius)
+    map.addSource('rings', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'rings-halo', type: 'line', source: 'rings', paint: { 'line-color': 'rgba(0,0,0,0.55)', 'line-width': 3.5, 'line-opacity': 0.6 } });
+    map.addLayer({ id: 'rings', type: 'line', source: 'rings', paint: { 'line-color': ['get', 'c'], 'line-width': 1.8, 'line-dasharray': [3, 2] } });
+    map.on('click', 'rings', function (e) { var sid = e.features[0].properties.sid; var st = storms.filter(function (x) { return x.sid === sid; })[0]; if (st) setFollow(followSid === sid ? null : st); });
+    map.on('mouseenter', 'rings', function () { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'rings', function () { map.getCanvas().style.cursor = ''; });
     map.addLayer({ id: 'labels', type: 'raster', source: 'labels', paint: { 'raster-opacity': 0.8 } });
     loadCoast('lo');
   }
@@ -331,9 +378,15 @@
     });
     return { type: 'FeatureCollection', features: feats };
   }
+  var markersOn = true;
+  function circleFeature(lon, lat, km, props) {
+    var pts = [], n = 48, dLat = km / 111.32, dLon = km / (111.32 * Math.max(0.15, Math.cos(lat * Math.PI / 180)));
+    for (var i = 0; i <= n; i++) { var a = i / n * 2 * Math.PI; pts.push([lon + dLon * Math.cos(a), lat + dLat * Math.sin(a)]); }
+    return { type: 'Feature', properties: props, geometry: { type: 'LineString', coordinates: pts } };
+  }
   function drawStorms(ts) {
     if (!mapReady) return;
-    var ms = tsMs(ts), seen = {};
+    var ms = tsMs(ts), seen = {}, ringFeats = [];
     storms.forEach(function (s) {
       var st = stormState(s, ms); if (!st || st.la == null || st.lo == null) return;
       seen[s.sid] = true;
@@ -345,22 +398,24 @@
       var m = markers[s.sid];
       if (!m) {
         var el = document.createElement('div'); el.style.cssText = 'position:relative;width:0;height:0;';
-        el.innerHTML = '<div class="ring"></div><div class="lbl" style="position:absolute;left:22px;top:-34px;"></div>';
+        el.innerHTML = '<div class="dot"></div><div class="lbl" style="position:absolute;left:10px;top:-24px;"></div>';
         var lock = function (e) { e.stopPropagation(); setFollow(followSid === s.sid ? null : s); };
-        el.querySelector('.ring').onclick = lock;
+        el.querySelector('.dot').onclick = lock;
         el.querySelector('.lbl').onclick = function (e) {
           if (e.target.classList.contains('open')) { e.stopPropagation(); window.open('global_archive.html#tab=detail&storm=' + encodeURIComponent(s.sid), '_blank'); return; }
           lock(e);
         };
         m = markers[s.sid] = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([st.lo, st.la]).addTo(map);
       } else m.setLngLat([st.lo, st.la]);
-      var el2 = m.getElement(); el2.querySelector('.ring').style.borderColor = col; el2.querySelector('.lbl').innerHTML = html;
+      var el2 = m.getElement(); el2.querySelector('.lbl').innerHTML = html; el2.style.display = markersOn ? '' : 'none';
       el2.querySelector('.lbl').classList.toggle('follow', s.sid === followSid);
+      ringFeats.push(circleFeature(st.lo, st.la, 300, { c: col, sid: s.sid }));
       if (s.sid === followSid) map.jumpTo({ center: [st.lo, st.la] });
     });
     if (followSid && !seen[followSid]) setFollow(null);   // storm ended
     Object.keys(markers).forEach(function (sid) { if (!seen[sid]) { markers[sid].remove(); delete markers[sid]; } });
     var src = map.getSource('trails'); if (src) src.setData(trailsOn ? trailFeatures(ms) : { type: 'FeatureCollection', features: [] });
+    var rs = map.getSource('rings'); if (rs) rs.setData({ type: 'FeatureCollection', features: markersOn ? ringFeats : [] });
   }
 
   // A step is prepared off-screen (context frame + sector frame, both cached/prefetched)
@@ -368,19 +423,21 @@
   // map advances ahead of anything else.
   function prepare(ts) {
     return Promise.all([decode(ts).then(function (rec) { return render(ts, rec); }), sectorFor(ts)])
-      .then(function (r) { return { url: r[0], sec: r[1] }; });
+      .then(function (r) {
+        // stage the sector first so its layers exist before the context layers are created beneath them
+        return stageSector(r[1]).then(function (showSec) {
+          return ctxBuf.load(r[0], coords()).then(function (k) { return { k: k, showSec: showSec }; });
+        });
+      });
   }
   function commit(i, ts, prep) {
     idx = i; slider.value = idx; dtEl.textContent = fmt(ts); curTs = ts;
     try { history.replaceState(null, '', '?year=' + year + '&basin=' + basin + (useGhost ? '&src=ghost' : '') + '&t=' + ts); } catch (e) {}
-    var src = map.getSource('ctx');
-    if (!src) { map.addSource('ctx', { type: 'image', url: prep.url, coordinates: coords() });
-      map.addLayer({ id: 'ctx', type: 'raster', source: 'ctx', paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, map.getLayer('sector') ? 'sector' : 'coast-halo'); }
-    else src.updateImage({ url: prep.url, coordinates: coords() });
-    applySector(prep.sec);
-    drawStorms(ts);
+    ctxBuf.flip(prep.k);          // context frame (already decoded in the back buffer)
+    prep.showSec();               // sector frame
+    drawStorms(ts);               // circles, labels, trails
     status.textContent = '';
-    for (var k = 1; k <= 4; k++) decode(frames[(idx + k) % frames.length]).catch(function () {});
+    for (var q = 1; q <= 4; q++) decode(frames[(idx + q) % frames.length]).catch(function () {});
   }
   function show(i) {
     if (!frames.length) return; if (!mapReady) { pending = true; idx = i; return; }
@@ -406,6 +463,7 @@
   document.addEventListener('keydown', function (e) { if (e.target.tagName === 'SELECT') return; if (e.key === 'ArrowLeft') step(-1); else if (e.key === 'ArrowRight') step(1); else if (e.key === ' ') { e.preventDefault(); $('play').click(); } });
   $('src').onclick = function () { useGhost = !useGhost; this.textContent = useGhost ? 'GHOST' : 'Best track'; this.classList.toggle('active', useGhost); if (frames.length) drawStorms(frames[idx]); drawStrip(); };
   $('trails').onclick = function () { trailsOn = !trailsOn; this.classList.toggle('active', trailsOn); if (frames.length) drawStorms(frames[idx]); };
+  $('markers').onclick = function () { markersOn = !markersOn; this.classList.toggle('active', markersOn); if (frames.length) drawStorms(frames[idx]); };
   $('basin').value = basin; $('basin').onchange = function () { basin = this.value; map.flyTo({ center: VIEWS[basin].slice(0,2), zoom: VIEWS[basin][2] }); };
 
   function drawStrip() {
