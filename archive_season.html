@@ -189,6 +189,7 @@
     if (!frames.length) return; if (!mapReady) { pending = true; idx = i; return; }
     idx = (i + frames.length) % frames.length; var ts = frames[idx], seq = ++reqSeq;
     slider.value = idx; dtEl.textContent = fmt(ts); drawStorms(ts);
+    try { history.replaceState(null, '', '?year=' + year + '&basin=' + basin + (useGhost ? '&src=ghost' : '') + '&t=' + ts); } catch (e) {}
     decode(ts).then(function (rec) { return render(ts, rec); }).then(function (url) {
       if (seq !== reqSeq) return;
       var src = map.getSource('ctx');
@@ -238,8 +239,10 @@
       $('src').style.display = ng ? '' : 'none';
       drawStrip();
       if (frames.length) {
-        var first = 0;
-        for (var i = 0; i < frames.length; i++) { var ms = tsMs(frames[i]); if (storms.some(function (s) { return stormState(s, ms); })) { first = i; break; } }
+        // ?t=YYYYMMDDHH jumps straight to a time; otherwise start at the first frame with an active storm
+        var want = q.get('t'), first = -1;
+        if (want && /^\d{10}$/.test(want)) { for (var w = 0; w < frames.length; w++) { if (frames[w] >= want) { first = w; break; } } }
+        if (first < 0) { first = 0; for (var i = 0; i < frames.length; i++) { var ms = tsMs(frames[i]); if (storms.some(function (s) { return stormState(s, ms); })) { first = i; break; } } }
         show(first);
       }
     });
