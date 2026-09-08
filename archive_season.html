@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Season Replay — TC-ATLAS</title>
+<link rel="icon" href="tc-atlas-favicon-32.png">
+<link href="assets/vendor/maplibre/maplibre-gl.css?v=4.7.1" rel="stylesheet">
+<style>
+  :root { --bg:#0b1220; --panel:rgba(15,23,42,.88); --border:#1e293b; --text:#e2e8f0; --muted:#94a3b8; --accent:#2e7dff; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow:hidden; }
+  #map { position:absolute; inset:0; }
+  .hud { position:absolute; z-index:5; background:var(--panel); border:1px solid var(--border); border-radius:10px; -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px); box-shadow:0 6px 24px rgba(0,0,0,.3); }
+  #top { top:10px; left:10px; display:flex; align-items:center; gap:8px; padding:6px 10px; flex-wrap:wrap; max-width:calc(100% - 20px); }
+  #top b { font-size:14px; }
+  select, button { background:#1e293b; color:var(--text); border:1px solid #334155; border-radius:6px; padding:4px 9px; font-size:12px; cursor:pointer; }
+  button.active { background:var(--accent); border-color:var(--accent); }
+  #bar { left:10px; right:10px; bottom:10px; display:flex; align-items:center; gap:8px; padding:6px 10px; }
+  #strip { position:relative; flex:1; height:30px; min-width:120px; }
+  #strip canvas { position:absolute; inset:0; width:100%; height:100%; border-radius:4px; }
+  #slider { position:absolute; inset:0; width:100%; height:100%; margin:0; -webkit-appearance:none; appearance:none; background:transparent; }
+  #slider::-webkit-slider-runnable-track { background:transparent; height:100%; }
+  #slider::-webkit-slider-thumb { -webkit-appearance:none; width:3px; height:30px; background:#fff; border-radius:2px; cursor:ew-resize; }
+  #slider::-moz-range-thumb { width:3px; height:30px; background:#fff; border:0; border-radius:2px; }
+  #dt { font-variant-numeric:tabular-nums; font-weight:600; min-width:150px; text-align:right; }
+  #legend { right:10px; top:10px; padding:8px 10px; font-size:11px; color:var(--muted); display:flex; flex-direction:column; gap:4px; }
+  #legend .row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  #legend i { display:inline-block; width:10px; height:10px; border-radius:50%; border:1px solid #fff; }
+  #cbar { position:absolute; right:10px; top:50%; transform:translateY(-50%); width:30px; height:170px; padding:6px 0; display:flex; flex-direction:column; align-items:center; z-index:5; }
+  #cbar canvas { flex:1; width:12px; border-radius:2px; }
+  #cbar span { font-size:9px; color:var(--muted); }
+  #status { color:var(--muted); font-size:11px; }
+  .lbl { pointer-events:auto; cursor:pointer; background:rgba(15,23,42,.82); border:1px solid rgba(255,255,255,.18); border-radius:6px; padding:2px 6px; font-size:11px; white-space:nowrap; color:#fff; }
+  .lbl b { font-weight:700; letter-spacing:.02em; }
+  .lbl .g { color:#7dd3fc; margin-left:4px; }
+  .lbl .b { color:#fde68a; margin-left:4px; }
+  @media (max-width:768px) { #legend { display:none; } #dt { min-width:0; font-size:11px; } #top b { font-size:13px; } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="top" class="hud">
+  <b>Season Replay</b>
+  <select id="year" title="Season"></select>
+  <select id="basin" title="Map focus">
+    <option value="AL">Atlantic</option><option value="EP">E. Pacific</option><option value="WP">W. Pacific</option>
+    <option value="NI">N. Indian</option><option value="SI">S. Indian</option><option value="SP">S. Pacific</option><option value="GL">Global</option>
+  </select>
+  <button id="src" title="Intensity source shown in labels and marker colours">Best track</button>
+  <button id="trails" class="active" title="Show 48-h track trails">Trails</button>
+  <span id="status"></span>
+</div>
+<div id="legend" class="hud">
+  <div class="row"><i style="background:#60a5fa"></i>TD/TS &lt;64 kt <i style="background:#fbbf24;margin-left:8px"></i>Cat 1-2 <i style="background:#f87171;margin-left:8px"></i>Cat 3 <i style="background:#ef4444;margin-left:8px"></i>Cat 4 <i style="background:#c084fc;margin-left:8px"></i>Cat 5</div>
+  <div class="row"><span style="color:#fde68a">kt</span> best track &nbsp;<span style="color:#7dd3fc">G</span> GHOST reanalysis, where available</div>
+</div>
+<div id="cbar" class="hud"><span>310 K</span><canvas width="1" height="256"></canvas><span>170 K</span></div>
+<div id="bar" class="hud">
+  <button id="play" title="Play / pause (space)">&#9654;</button>
+  <button id="prev" title="Previous frame (left arrow)">&#9664;</button>
+  <button id="next" title="Next frame (right arrow)">&#9654;</button>
+  <div id="strip"><canvas id="stripc"></canvas><input id="slider" type="range" min="0" max="0" value="0"></div>
+  <span id="dt">&mdash;</span>
+  <select id="speed" title="Speed"><option value="900">0.5x</option><option value="450" selected>1x</option><option value="220">2x</option><option value="110">4x</option></select>
+</div>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+(function () {
+  'use strict';
+  var q = new URLSearchParams(location.search);
+  var CTX = 'https://cdn.tcatlas.org/ir-context/v1', SEA = 'https://cdn.tcatlas.org/archive/seasons/v1';
+  var CK = '?key=cb1_279y_1_ee38c6417ffd46ab745cc82a';
+  var LUT = new Uint8Array([0,0,0,0,28,12,96,255,28,12,96,255,28,12,96,255,28,12,96,255,28,12,96,255,28,12,96,255,29,12,97,255,31,13,100,255,33,14,102,255,35,14,105,255,37,15,107,255,39,16,109,255,41,16,112,255,43,17,114,255,45,18,117,255,47,18,119,255,49,19,122,255,51,20,124,255,53,20,126,255,55,21,129,255,57,22,131,255,59,22,134,255,61,23,136,255,63,24,139,255,65,25,141,255,68,26,143,255,71,27,145,255,75,29,148,255,78,30,150,255,81,31,152,255,84,32,154,255,87,34,156,255,90,35,159,255,93,36,161,255,96,38,163,255,99,39,165,255,102,40,167,255,105,42,170,255,108,43,172,255,112,44,174,255,115,46,176,255,118,47,178,255,121,48,181,255,127,50,183,255,132,52,185,255,137,54,187,255,143,56,189,255,148,57,192,255,153,59,194,255,158,61,196,255,164,63,198,255,169,64,199,255,172,62,194,255,175,60,189,255,178,58,184,255,181,57,180,255,184,55,175,255,187,53,170,255,190,51,165,255,193,50,160,255,196,48,155,255,194,47,145,255,192,45,135,255,190,44,126,255,189,43,116,255,187,41,106,255,185,40,97,255,183,39,87,255,182,37,77,255,180,36,68,255,184,41,67,255,188,46,65,255,191,50,64,255,195,55,63,255,199,59,61,255,203,64,60,255,206,69,59,255,210,73,57,255,214,78,56,255,216,84,55,255,217,90,54,255,219,96,53,255,220,102,52,255,222,108,52,255,223,114,51,255,225,120,50,255,226,126,49,255,228,131,48,255,229,138,48,255,230,146,48,255,231,153,48,255,232,160,48,255,233,167,48,255,235,174,48,255,236,181,48,255,237,188,48,255,238,195,48,255,234,198,47,255,229,201,46,255,224,204,45,255,219,206,45,255,213,209,44,255,208,211,43,255,203,214,42,255,198,217,41,255,193,219,40,255,184,219,42,255,173,218,45,255,163,216,49,255,152,215,52,255,142,214,55,255,131,212,58,255,120,211,61,255,110,210,64,255,99,208,67,255,92,206,72,255,86,202,77,255,79,199,82,255,73,196,88,255,67,192,93,255,61,189,98,255,55,186,103,255,48,183,109,255,42,179,114,255,39,176,119,255,39,173,125,255,38,169,130,255,37,166,136,255,36,163,142,255,35,159,147,255,34,156,153,255,33,153,158,255,32,149,164,255,34,150,168,255,38,153,171,255,42,157,174,255,46,161,178,255,50,164,181,255,54,168,184,255,58,171,188,255,62,175,191,255,66,178,194,255,72,182,197,255,80,185,200,255,88,188,203,255,96,192,205,255,104,195,208,255,112,198,211,255,119,201,213,255,127,205,216,255,135,208,218,255,142,210,220,255,146,211,221,255,150,211,221,255,154,212,222,255,158,212,222,255,163,212,222,255,167,213,223,255,171,213,223,255,175,214,224,255,179,214,224,255,184,215,225,255,188,215,225,255,192,215,225,255,196,216,226,255,200,216,226,255,205,217,227,255,209,217,227,255,213,218,228,255,215,217,227,255,213,215,225,255,211,213,223,255,210,211,222,255,208,209,220,255,206,207,218,255,204,205,216,255,202,203,214,255,200,201,212,255,198,199,210,255,196,196,208,255,194,194,206,255,192,192,204,255,190,190,202,255,188,188,200,255,186,186,198,255,184,184,196,255,182,182,194,255,180,180,192,255,176,176,188,255,173,173,185,255,170,170,182,255,166,166,178,255,163,163,175,255,160,160,172,255,156,156,168,255,153,153,165,255,150,150,162,255,147,147,159,255,143,143,155,255,140,140,152,255,137,137,149,255,133,133,145,255,130,130,142,255,127,127,139,255,123,123,135,255,120,120,132,255,117,117,129,255,115,115,127,255,112,112,124,255,109,109,121,255,106,106,118,255,104,104,116,255,101,101,113,255,98,98,110,255,95,95,107,255,92,92,104,255,90,90,102,255,87,87,99,255,84,84,96,255,81,81,93,255,79,79,91,255,76,76,88,255,73,73,85,255,70,70,82,255,68,68,80,255,67,67,78,255,65,65,76,255,63,63,75,255,61,61,73,255,59,59,71,255,57,57,69,255,55,55,67,255,53,53,65,255,51,51,63,255,50,50,61,255,48,48,59,255,46,46,57,255,44,44,55,255,42,42,53,255,40,40,51,255,38,38,49,255,36,36,47,255,35,35,45,255,33,33,43,255,31,31,41,255,29,29,40,255,27,27,38,255,25,25,36,255,23,23,34,255,21,21,32,255,20,20,30,255,18,18,28,255,16,16,26,255,14,14,24,255,12,12,22,255]);
+  var VIEWS = { AL:[-60,22,3], EP:[-115,15,3], WP:[140,18,3], NI:[80,15,3.4], SI:[70,-18,3], SP:[165,-18,3], GL:[0,10,1.6] };
+  var year = parseInt(q.get('year') || '2005', 10), basin = q.get('basin') || 'AL', useGhost = q.get('src') === 'ghost';
+  var trailsOn = true, opacity = 1;
+  var $ = function (id) { return document.getElementById(id); };
+
+  (function () { var c = document.querySelector('#cbar canvas').getContext('2d'), im = c.createImageData(1, 256);
+    for (var i = 0; i < 256; i++) { var v = 255 - i, li = v * 4; im.data[i*4] = LUT[li]; im.data[i*4+1] = LUT[li+1]; im.data[i*4+2] = LUT[li+2]; im.data[i*4+3] = v ? 255 : 0; }
+    c.putImageData(im, 0, 0); })();
+
+  var map = new maplibregl.Map({ container: 'map', center: VIEWS[basin].slice(0,2), zoom: VIEWS[basin][2], minZoom: 1, maxZoom: 7,
+    style: { version: 8, sources: {
+      carto: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png' + CK, 'https://b.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png' + CK], tileSize: 256, attribution: '&copy; CARTO &middot; IBTrACS &middot; MergIR (NASA) &middot; GridSat-B1 (NOAA) &middot; GHOST reanalysis (TC-ATLAS)' },
+      labels: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png' + CK], tileSize: 256 } },
+      layers: [{ id: 'carto', type: 'raster', source: 'carto' }] } });
+  map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
+  var mapReady = false, pending = false;
+  map.on('load', function () { mapReady = true; ensureLayers(); if (pending) { pending = false; show(idx); } });
+
+  var frames = [], bounds = null, idx = 0, playing = false, timer = null, reqSeq = 0;
+  var storms = [], markers = {};
+  var decoded = {}, dOrder = [], rendered = {}, rOrder = [];
+  var canvas = document.createElement('canvas');
+  var slider = $('slider'), dtEl = $('dt'), status = $('status');
+
+  function fmt(ts) { return ts.slice(0,4) + '-' + ts.slice(4,6) + '-' + ts.slice(6,8) + ' ' + ts.slice(8,10) + ':00 UTC'; }
+  function tsMs(ts) { return Date.UTC(+ts.slice(0,4), +ts.slice(4,6) - 1, +ts.slice(6,8), +ts.slice(8,10)); }
+  function isoMs(iso) { return Date.parse(iso + (iso.length === 16 ? ':00Z' : 'Z')); }
+  function catColor(v) { if (v == null) return '#9ca3af'; if (v < 64) return '#60a5fa'; if (v < 96) return '#fbbf24'; if (v < 113) return '#f87171'; if (v < 137) return '#ef4444'; return '#c084fc'; }
+  function lru(store, order, k, v, max) { store[k] = v; order.push(k); while (order.length > max) { var o = order.shift(); if (o !== k && store[o]) { if (store[o].url) URL.revokeObjectURL(store[o].url); delete store[o]; } } }
+
+  function decode(ts) {
+    if (decoded[ts]) return Promise.resolve(decoded[ts]);
+    if (decoded[ts + ':p']) return decoded[ts + ':p'];
+    var p = new Promise(function (res, rej) {
+      var img = new Image(); img.crossOrigin = 'anonymous';
+      img.onload = function () { var cols = img.naturalWidth, rows = img.naturalHeight, c = document.createElement('canvas'); c.width = cols; c.height = rows;
+        var g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0); var px = g.getImageData(0, 0, cols, rows).data, out = new Uint8Array(cols * rows);
+        for (var k = 0, n = cols * rows; k < n; k++) out[k] = px[k*4+3] < 128 ? 0 : (px[k*4] || 1);
+        delete decoded[ts + ':p']; var rec = { idx: out, rows: rows, cols: cols }; lru(decoded, dOrder, ts, rec, 24); res(rec); };
+      img.onerror = function () { delete decoded[ts + ':p']; rej(new Error('ctx ' + ts)); };
+      img.src = CTX + '/' + ts.slice(0,4) + '/' + ts + '.webp'; });
+    decoded[ts + ':p'] = p; return p;
+  }
+  function render(ts, rec) {
+    if (rendered[ts]) return Promise.resolve(rendered[ts].url);
+    var rows = rec.rows, cols = rec.cols; canvas.width = cols; canvas.height = rows;
+    var g = canvas.getContext('2d'), im = g.createImageData(cols, rows), px = im.data;
+    var mY = function (d) { var r = d * Math.PI / 180; return Math.log(Math.tan(Math.PI / 4 + r / 2)); }, mN = mY(bounds.north), mS = mY(bounds.south), mR = mN - mS;
+    for (var r = 0; r < rows; r++) { var lat = (2 * Math.atan(Math.exp(mN - (r / (rows - 1)) * mR)) - Math.PI / 2) * 180 / Math.PI;
+      var sr = Math.round((bounds.north - lat) / (bounds.north - bounds.south) * (rows - 1)); if (sr < 0) sr = 0; if (sr >= rows) sr = rows - 1;
+      var so = sr * cols, po = r * cols * 4;
+      for (var c = 0; c < cols; c++) { var v = rec.idx[so + c]; if (v) { var pi = po + c * 4, li = v * 4; px[pi] = LUT[li]; px[pi+1] = LUT[li+1]; px[pi+2] = LUT[li+2]; px[pi+3] = 255; } } }
+    g.putImageData(im, 0, 0);
+    return new Promise(function (res) { canvas.toBlob(function (b) { var url = URL.createObjectURL(b); lru(rendered, rOrder, ts, { url: url }, 24); res(url); }, 'image/png'); });
+  }
+  function coords() { var w = Math.max(-179.99, bounds.west), e = Math.min(179.99, bounds.east), n = Math.min(85, bounds.north), s = Math.max(-85, bounds.south); return [[w, n], [e, n], [e, s], [w, s]]; }
+  function ensureLayers() {
+    if (!mapReady || map.getSource('trails')) return;
+    map.addSource('trails', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'trails', type: 'line', source: 'trails', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'c'], 'line-width': 2.2, 'line-opacity': ['get', 'o'] } });
+    map.addLayer({ id: 'labels', type: 'raster', source: 'labels', paint: { 'raster-opacity': 0.8 } });
+  }
+
+  function stormState(s, ms) {
+    var t = s.t; if (!t || !t.length) return null;
+    var t0 = isoMs(t[0]), t1 = isoMs(t[t.length - 1]);
+    if (ms < t0 - 3 * 3600e3 || ms > t1 + 3 * 3600e3) return null;
+    var j = 0; while (j < t.length - 1 && isoMs(t[j + 1]) <= ms) j++;
+    var a = j, b = Math.min(j + 1, t.length - 1), ma = isoMs(t[a]), mb = isoMs(t[b]);
+    var f = (mb > ma) ? Math.max(0, Math.min(1, (ms - ma) / (mb - ma))) : 0;
+    var lerp = function (x, y) { return (x == null || y == null) ? (x != null ? x : y) : x + (y - x) * f; };
+    var lo0 = s.lo[a], lo1 = s.lo[b]; if (lo0 != null && lo1 != null && Math.abs(lo1 - lo0) > 180) lo1 += (lo1 < lo0 ? 360 : -360);
+    var near = f < 0.5 ? a : b;
+    return { la: lerp(s.la[a], s.la[b]), lo: lerp(lo0, lo1), bv: s.bv[near], bp: s.bp[near], gv: s.gv ? s.gv[near] : null, gp: s.gp ? s.gp[near] : null, n: s.n[near], k: j };
+  }
+  function trailFeatures(ms) {
+    var feats = [], since = ms - 48 * 3600e3;
+    storms.forEach(function (s) {
+      var st = stormState(s, ms); if (!st) return;
+      var pts = [];
+      for (var i = 0; i <= st.k; i++) { var m = isoMs(s.t[i]); if (m < since || s.la[i] == null) continue; pts.push([s.lo[i], s.la[i], m, i]); }
+      pts.push([st.lo, st.la, ms, st.k]);
+      for (var p = 1; p < pts.length; p++) {
+        var a = pts[p - 1], b = pts[p]; if (Math.abs(b[0] - a[0]) > 180) continue;
+        var v = useGhost && s.gv && s.gv[b[3]] != null ? s.gv[b[3]] : s.bv[b[3]];
+        feats.push({ type: 'Feature', properties: { c: catColor(v), o: 0.25 + 0.75 * Math.max(0, Math.min(1, (a[2] - since) / (48 * 3600e3))) }, geometry: { type: 'LineString', coordinates: [[a[0], a[1]], [b[0], b[1]]] } });
+      }
+    });
+    return { type: 'FeatureCollection', features: feats };
+  }
+  function drawStorms(ts) {
+    if (!mapReady) return;
+    var ms = tsMs(ts), seen = {};
+    storms.forEach(function (s) {
+      var st = stormState(s, ms); if (!st || st.la == null || st.lo == null) return;
+      seen[s.sid] = true;
+      var v = useGhost && st.gv != null ? st.gv : st.bv, col = catColor(v);
+      var html = '<b>' + (s.name === 'UNNAMED' ? (s.atcf || s.sid) : s.name) + '</b>' +
+        (st.bv != null ? '<span class="b">' + Math.round(st.bv) + ' kt</span>' : '') +
+        (st.gv != null ? '<span class="g">G ' + Math.round(st.gv) + '</span>' : '');
+      var m = markers[s.sid];
+      if (!m) {
+        var el = document.createElement('div'); el.style.cssText = 'position:relative;width:0;height:0;';
+        el.innerHTML = '<div class="dot" style="position:absolute;left:-6px;top:-6px;width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.4);"></div><div class="lbl" style="position:absolute;left:10px;top:-11px;"></div>';
+        el.querySelector('.lbl').onclick = function () { window.open('global_archive.html#tab=detail&storm=' + encodeURIComponent(s.sid), '_blank'); };
+        m = markers[s.sid] = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([st.lo, st.la]).addTo(map);
+      } else m.setLngLat([st.lo, st.la]);
+      var el2 = m.getElement(); el2.querySelector('.dot').style.background = col; el2.querySelector('.lbl').innerHTML = html;
+    });
+    Object.keys(markers).forEach(function (sid) { if (!seen[sid]) { markers[sid].remove(); delete markers[sid]; } });
+    var src = map.getSource('trails'); if (src) src.setData(trailsOn ? trailFeatures(ms) : { type: 'FeatureCollection', features: [] });
+  }
+
+  function show(i) {
+    if (!frames.length) return; if (!mapReady) { pending = true; idx = i; return; }
+    idx = (i + frames.length) % frames.length; var ts = frames[idx], seq = ++reqSeq;
+    slider.value = idx; dtEl.textContent = fmt(ts); drawStorms(ts);
+    decode(ts).then(function (rec) { return render(ts, rec); }).then(function (url) {
+      if (seq !== reqSeq) return;
+      var src = map.getSource('ctx');
+      if (!src) { map.addSource('ctx', { type: 'image', url: url, coordinates: coords() });
+        map.addLayer({ id: 'ctx', type: 'raster', source: 'ctx', paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, 'trails'); }
+      else src.updateImage({ url: url, coordinates: coords() });
+      status.textContent = '';
+      for (var k = 1; k <= 4; k++) decode(frames[(idx + k) % frames.length]).catch(function () {});
+    }).catch(function () { status.textContent = 'no imagery for this time'; });
+  }
+  function step(d) { pause(); show(idx + d); }
+  function pause() { playing = false; $('play').classList.remove('active'); if (timer) { clearTimeout(timer); timer = null; } }
+  function tick() { if (!playing) return; show(idx + 1); timer = setTimeout(tick, parseInt($('speed').value, 10)); }
+  $('play').onclick = function () { if (playing) { pause(); return; } playing = true; this.classList.add('active'); tick(); };
+  $('prev').onclick = function () { step(-1); }; $('next').onclick = function () { step(1); };
+  slider.oninput = function () { pause(); show(parseInt(this.value, 10)); };
+  document.addEventListener('keydown', function (e) { if (e.target.tagName === 'SELECT') return; if (e.key === 'ArrowLeft') step(-1); else if (e.key === 'ArrowRight') step(1); else if (e.key === ' ') { e.preventDefault(); $('play').click(); } });
+  $('src').onclick = function () { useGhost = !useGhost; this.textContent = useGhost ? 'GHOST' : 'Best track'; this.classList.toggle('active', useGhost); if (frames.length) drawStorms(frames[idx]); drawStrip(); };
+  $('trails').onclick = function () { trailsOn = !trailsOn; this.classList.toggle('active', trailsOn); if (frames.length) drawStorms(frames[idx]); };
+  $('basin').value = basin; $('basin').onchange = function () { basin = this.value; map.flyTo({ center: VIEWS[basin].slice(0,2), zoom: VIEWS[basin][2] }); };
+
+  function drawStrip() {
+    var cv = $('stripc'), W = cv.parentNode.clientWidth, H = cv.parentNode.clientHeight; if (!W || !H || !frames.length) return;
+    var dpr = devicePixelRatio || 1; cv.width = W * dpr; cv.height = H * dpr; var g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+    var bw = (W - 6) / frames.length;
+    for (var i = 0; i < frames.length; i++) { var ms = tsMs(frames[i]), vmax = null;
+      for (var s = 0; s < storms.length; s++) { var st = stormState(storms[s], ms); if (!st) continue; var v = useGhost && st.gv != null ? st.gv : st.bv; if (v != null && (vmax == null || v > vmax)) vmax = v; }
+      if (vmax == null) continue; var h = Math.max(2, vmax / 170 * (H - 4)); g.fillStyle = catColor(vmax); g.globalAlpha = 0.85; g.fillRect(3 + i * bw, H - 2 - h, Math.max(1, bw - 0.4), h); }
+    g.globalAlpha = 1;
+  }
+  window.addEventListener('resize', function () { setTimeout(drawStrip, 120); });
+
+  function loadSeason(y) {
+    year = y; pause(); frames = []; storms = []; Object.keys(markers).forEach(function (k) { markers[k].remove(); }); markers = {};
+    status.textContent = 'loading season…'; dtEl.textContent = '—';
+    history.replaceState(null, '', '?year=' + y + '&basin=' + basin + (useGhost ? '&src=ghost' : ''));
+    Promise.all([
+      fetch(CTX + '/' + y + '/index.json').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
+      fetch(SEA + '/' + y + '.json').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
+    ]).then(function (res) {
+      var ctx = res[0], sea = res[1];
+      if (ctx) { bounds = ctx.bounds; frames = (ctx.ts || []).slice().sort(); }
+      storms = sea ? sea.storms : [];
+      slider.max = Math.max(0, frames.length - 1);
+      var ng = storms.filter(function (s) { return s.gv; }).length;
+      status.textContent = frames.length ? (frames.length + ' frames · ' + storms.length + ' storms' + (ng ? ' · GHOST for ' + ng : '')) : 'No imagery built for ' + y + ' yet' + (storms.length ? ' (' + storms.length + ' storms in the index)' : '');
+      $('src').style.display = ng ? '' : 'none';
+      drawStrip();
+      if (frames.length) {
+        var first = 0;
+        for (var i = 0; i < frames.length; i++) { var ms = tsMs(frames[i]); if (storms.some(function (s) { return stormState(s, ms); })) { first = i; break; } }
+        show(first);
+      }
+    });
+  }
+  var ysel = $('year'); for (var yy = 2026; yy >= 1980; yy--) { var o = document.createElement('option'); o.value = yy; o.textContent = yy; ysel.appendChild(o); }
+  ysel.value = year; ysel.onchange = function () { loadSeason(parseInt(this.value, 10)); };
+  loadSeason(year);
+})();
+</script>
+</body>
+</html>
