@@ -19,7 +19,7 @@
   html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:13px/1.4 'DM Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow:hidden; }
   :root { --hdr:52px; }
   .topbar { position:relative; z-index:20; }
-  #map { position:absolute; left:0; right:0; bottom:0; top:var(--hdr); }
+  #ira-map { position:absolute; left:0; right:0; bottom:0; top:var(--hdr); height:auto; }
   #top { top:calc(var(--hdr) + 10px) !important; }
   #legend { top:calc(var(--hdr) + 10px) !important; }
   .hud { position:absolute; z-index:5; background:var(--panel); border:1px solid var(--border); border-radius:10px; -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px); box-shadow:0 6px 24px rgba(0,0,0,.3); }
@@ -108,7 +108,7 @@
             <button class="nav-hamburger" onclick="this.classList.toggle('open');document.querySelector('.topbar-nav').classList.toggle('mobile-open')" aria-label="Menu">&#9776;</button>
         </div>
     </header>
-<div id="map"></div>
+<div id="ira-map"></div>
 <div id="top" class="hud">
   <b>Global IR Archive</b>
   <select id="year" title="Season"></select>
@@ -170,7 +170,7 @@
     c.putImageData(im, 0, 0); })();
 
   var dark = document.documentElement.getAttribute('data-theme') === 'dark', TV = dark ? 'dark' : 'light';
-  var map = new maplibregl.Map({ container: 'map', center: VIEWS[basin].slice(0,2), zoom: VIEWS[basin][2], minZoom: 1, maxZoom: 7,
+  var map = new maplibregl.Map({ container: 'ira-map', center: VIEWS[basin].slice(0,2), zoom: VIEWS[basin][2], minZoom: 1, maxZoom: 7,
     style: { version: 8, sources: {
       carto: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/' + TV + '_nolabels/{z}/{x}/{y}.png' + CK, 'https://b.basemaps.cartocdn.com/' + TV + '_nolabels/{z}/{x}/{y}.png' + CK], tileSize: 256, attribution: '&copy; CARTO &middot; IBTrACS &middot; MergIR (NASA) &middot; GridSat-B1 (NOAA) &middot; GHOST reanalysis (TC-ATLAS)' },
       labels: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/' + TV + '_only_labels/{z}/{x}/{y}.png' + CK], tileSize: 256 } },
