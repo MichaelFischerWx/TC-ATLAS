@@ -2763,3 +2763,17 @@ body.basemap-satellite .ir-slider::-webkit-slider-runnable-track, body.basemap-s
 .vol-gl-link:hover { background: rgba(255,255,255,0.1); }
 body.vol-gl-on .storm-grid-label { opacity: 0.7; }
 @media (max-width: 768px) { .vol-gl-card { width: calc(100% - 16px); top: auto; bottom: 88px; } }
+
+/* ── TDR colorbar on the map (editable range) ─────────────────────────── */
+.tdr-map-colorbar { position: absolute; left: 8px; bottom: 140px; z-index: 900; width: 232px; display: none; }
+.tdr-cb-title { font-size: 9px; font-weight: 600; color: #F47321; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tdr-cb-row { display: flex; align-items: center; gap: 4px; }
+.tdr-cb-grad { flex: 1; height: 10px; border-radius: 3px; border: 1px solid rgba(15,22,35,0.15); }
+.tdr-cb-row input[type=number] { width: 48px; padding: 1px 3px; font: 600 10px 'JetBrains Mono', monospace; border: 1px solid rgba(15,22,35,0.2); border-radius: 3px; background: rgba(255,255,255,0.7); color: var(--text); text-align: center; -moz-appearance: textfield; }
+.tdr-cb-row input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+.tdr-cb-foot { display: flex; justify-content: space-between; align-items: center; font-size: 8px; color: var(--slate); margin-top: 2px; }
+.tdr-cb-reset { background: none; border: none; color: var(--blue, #2e7dff); font: 600 9px 'DM Sans', sans-serif; cursor: pointer; padding: 0; }
+body.basemap-satellite .tdr-cb-row input[type=number] { background: rgba(255,255,255,0.1); color: #e2e8f0; border-color: rgba(255,255,255,0.22); }
+body.basemap-satellite .tdr-cb-foot { color: #94a3b8; }
+body.basemap-satellite .tdr-cb-grad { border-color: rgba(255,255,255,0.2); }
+body.basemap-satellite .tdr-cb-reset { color: #93c5fd; }

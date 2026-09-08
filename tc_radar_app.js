@@ -3571,6 +3571,11 @@ function _positionIRColorbar() {
     // Offset the colorbar element itself (its parent differs between Leaflet
     // corner containers and the GL facade's control wrapper).
     cb.style.marginBottom = ctrl ? (ctrl.offsetHeight + 10) + 'px' : '';
+    var tcb = document.getElementById('tdr-map-colorbar');
+    if (tcb && tcb.style.display !== 'none') {
+        var irVisible = cb.style.display !== 'none' && cb.offsetHeight > 0;
+        tcb.style.bottom = ((ctrl ? ctrl.offsetHeight + 10 : 0) + (irVisible ? cb.offsetHeight + 6 : 0) + 8) + 'px';
+    }
 }
 window.addEventListener('resize', function() { setTimeout(_positionIRColorbar, 150); });
 
@@ -4075,7 +4080,56 @@ function _radarMapDraw() {
     if (_focusMarker && map.hasLayer(_focusMarker)) { try { map.removeLayer(_focusMarker); } catch (e) {} }
     _stormGridDraw();
     _irRefreshMapFrame();   // 'auto' IR mode goes grayscale under the draped field
+    _tdrColorbarUpdate(p);
 }
+
+// ── TDR colorbar on the map ───────────────────────────────────
+// Shows the draped variable's ramp with EDITABLE min/max at its ends: typing
+// rescales the field live (and keeps the panel's Color Range inputs in sync).
+function _tdrColorbarUpdate(p) {
+    var host = document.getElementById('map-container');
+    if (!host || !p) return;
+    var el = document.getElementById('tdr-map-colorbar');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'tdr-map-colorbar';
+        el.className = 'map-colorbar tdr-map-colorbar';
+        el.innerHTML =
+            '<div class="tdr-cb-title"><span id="tdr-cb-name"></span> <span id="tdr-cb-units"></span></div>' +
+            '<div class="tdr-cb-row">' +
+                '<input type="number" id="tdr-cb-min" step="any" title="Minimum of the color range — type to rescale" oninput="_tdrRangeFromMap()">' +
+                '<div class="tdr-cb-grad" id="tdr-cb-grad"></div>' +
+                '<input type="number" id="tdr-cb-max" step="any" title="Maximum of the color range — type to rescale" oninput="_tdrRangeFromMap()">' +
+            '</div>' +
+            '<div class="tdr-cb-foot"><span id="tdr-cb-level"></span><button class="tdr-cb-reset" onclick="resetColorRange()" title="Restore the variable\'s default range">reset</button></div>';
+        host.appendChild(el);
+    }
+    var stops = [];
+    for (var k = 0; k <= 24; k++) { var c = _csColor(p.colorscale, 0, 1, k / 24); stops.push('rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')'); }
+    document.getElementById('tdr-cb-grad').style.background = 'linear-gradient(to right, ' + stops.join(', ') + ')';
+    document.getElementById('tdr-cb-name').textContent = p.display_name || '';
+    document.getElementById('tdr-cb-units').textContent = p.units ? '(' + p.units + ')' : '';
+    document.getElementById('tdr-cb-level').textContent = (p.level_km != null ? p.level_km.toFixed(1) + ' km' : '');
+    var mn = document.getElementById('tdr-cb-min'), mx = document.getElementById('tdr-cb-max');
+    if (document.activeElement !== mn) mn.value = _fmtRange(p.vmin);
+    if (document.activeElement !== mx) mx.value = _fmtRange(p.vmax);
+    el.style.display = 'block';
+    _positionIRColorbar();
+}
+function _fmtRange(v) { if (v == null || isNaN(v)) return ''; return String(Math.round(v * 100) / 100); }
+function _tdrColorbarRemove() { var el = document.getElementById('tdr-map-colorbar'); if (el) el.style.display = 'none'; _positionIRColorbar(); }
+var _tdrRangeTimer = null;
+window._tdrRangeFromMap = function() {
+    clearTimeout(_tdrRangeTimer);
+    _tdrRangeTimer = setTimeout(function() {
+        var mn = parseFloat((document.getElementById('tdr-cb-min') || {}).value);
+        var mx = parseFloat((document.getElementById('tdr-cb-max') || {}).value);
+        if (isNaN(mn) || isNaN(mx) || mn >= mx) return;
+        var a = document.getElementById('ep-vmin'), b = document.getElementById('ep-vmax');
+        if (a) a.value = mn; if (b) b.value = mx;
+        applyColorRange();
+    }, 120);
+};
 // Take the radar field off the map (focus exit, or the user's Radar→Map toggle).
 function _radarMapOff() {
     _radarMapOn = false;
@@ -4085,6 +4139,7 @@ function _radarMapOff() {
     var btn = document.getElementById('radar-map-btn');
     if (btn) btn.classList.remove('active');
     _applyTwoPanelMode(false);
+    _tdrColorbarRemove();
     if (_focusMode && _focusMarker && !map.hasLayer(_focusMarker)) { try { _focusMarker.addTo(map); } catch (e) {} }
     _stormGridDraw();
     _irRefreshMapFrame();
