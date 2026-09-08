@@ -15007,8 +15007,9 @@ function _archiveSondeMapDraw(data) {
     data.dropsondes.forEach(function(sd, idx) {
         var p = sd.profile || {};
         if (!p.x_km || p.x_km.length < 1) return;
-        var path = [], maxW = null;
+        var path = [], maxW = null, minAlt = null;
         for (var i = 0; i < p.x_km.length; i++) {
+            if (p.alt_km && p.alt_km[i] != null && (minAlt === null || p.alt_km[i] < minAlt)) minAlt = p.alt_km[i];
             if (p.x_km[i] == null || p.y_km[i] == null) continue;
             var q = _relLatLon(p.x_km[i], p.y_km[i]); if (q) path.push(q);
             if (p.wspd && p.wspd[i] != null && (maxW === null || p.wspd[i] > maxW)) maxW = p.wspd[i];
@@ -15025,8 +15026,27 @@ function _archiveSondeMapDraw(data) {
             (maxW != null ? 'Max wind ' + maxW.toFixed(1) + ' m/s<br>' : '') +
             (sfc.wspd != null ? 'Sfc wind ' + Number(sfc.wspd).toFixed(1) + ' m/s' : '') +
             (sfc.pres != null ? ' \u00b7 ' + Number(sfc.pres).toFixed(1) + ' hPa' : '') +
-            (sd.hit_surface === false ? '<br><span style="opacity:.7">did not reach surface</span>' : ''),
+            (sd.hit_surface === false ? '<br><span style="opacity:.7">did not reach surface \u2014 lowest ' + (minAlt != null ? (minAlt < 1 ? Math.round(minAlt * 1000) + ' m' : minAlt.toFixed(2) + ' km') : '?') + '</span>' : '') +
+            '<br><span style="opacity:.6">click for Skew-T</span>',
             { className: 'track-tooltip', direction: 'top', offset: [0, -6] });
+        // Click → open this sonde's Skew-T in the panel and bring it into view.
+        mk.on('click', function() {
+            if (!_archiveSondeActive) return;
+            try { archiveShowSondeSkewT(idx); } catch (e) { return; }
+            setTimeout(function() {
+                var c = document.getElementById('archive-skewt-container');
+                var inner = document.getElementById('side-panel-inner');
+                if (!c || c.style.display === 'none') return;
+                // Scroll the panel's own container (not the window — that would
+                // drag the map off the top of the viewport on desktop).
+                if (inner && getComputedStyle(inner).overflowY !== 'visible') {
+                    var top = c.getBoundingClientRect().top - inner.getBoundingClientRect().top + inner.scrollTop - 8;
+                    inner.scrollTo({ top: top, behavior: 'smooth' });
+                } else {
+                    c.scrollIntoView({ behavior: 'smooth', block: 'start' });   // phones: page flows
+                }
+            }, 80);
+        });
         g.addLayer(mk);
     });
     _archSondeMapLayer = g.addTo(map);
