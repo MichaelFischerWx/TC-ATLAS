@@ -1730,8 +1730,7 @@ function _gaHudInit() {
                 if (el.style.display === 'none' || el._wasShown) { if (el.style.display === 'none') el._wasShown = false; return; }
                 el._wasShown = true;
                 var lay = document.getElementById('detail-layout');
-                var sheet = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
-                if (lay && lay.classList.contains('side-collapsed') && !sheet && !_gaIsTouch()) toggleDetailSidebar();
+                if (lay && lay.classList.contains('side-collapsed')) toggleDetailSidebar();
                 el._hudRevealed = (el._hudRevealed || 0) + 1;
                 setTimeout(function () { try { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {} }, 80);
             });
@@ -12910,6 +12909,7 @@ function _gaFLRenderOnMap() {
     var zoom = detailMap.getZoom();
     var circleStep = zoom >= 10 ? 1 : zoom >= 8 ? 2 : zoom >= 6 ? 6 : 12;
     var barbStep = zoom >= 10 ? 3 : circleStep * 2;  // reduce barb clutter at high zoom
+    if (_gaIsTouch()) { circleStep *= 2; barbStep *= 2; }   // phones: half the markers, no hover anyway
     _gaFLLastSteps = circleStep + '|' + barbStep;
     var batch = _gaFLBatchRenderer();
 
@@ -12985,6 +12985,7 @@ function _gaFLRenderOnMap() {
             var z = detailMap.getZoom();
             var cs = z >= 10 ? 1 : z >= 8 ? 2 : z >= 6 ? 6 : 12;
             var bs = z >= 10 ? 3 : cs * 2;
+            if (_gaIsTouch()) { cs *= 2; bs *= 2; }
             if ((cs + '|' + bs) !== _gaFLLastSteps) _gaFLRenderOnMap();
         };
         detailMap.on('zoomend', _gaFLZoomHandler);
@@ -13182,6 +13183,7 @@ function _gaFLRenderMinobGapFill() {
 
     var zoom = detailMap.getZoom();
     var barbStep = zoom >= 10 ? 1 : zoom >= 8 ? 2 : 3;
+    if (_gaIsTouch()) barbStep *= 2;
     var prodLabel = (selectedStorm && selectedStorm.year >= 1997) ? 'HDOB' : 'MINOB';
 
     // Helper: render a gap segment (array of obs + HRD anchor point + whether pre or post)
