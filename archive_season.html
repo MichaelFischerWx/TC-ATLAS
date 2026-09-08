@@ -544,9 +544,10 @@
   ysel.value = year; ysel.onchange = function () { loadSeason(parseInt(this.value, 10)); };
   loadSeason(year);
   // Which seasons have imagery yet (the archive is still being built): mark the picker and say so.
+  // A year counts as populated only with a full season (>= 2000 frames), not a test window.
   fetch(CTX + '/index.json', { cache: 'no-cache' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (root) {
     if (!root || !root.years) return;
-    var have = Object.keys(root.years).filter(function (y) { return root.years[y] && root.years[y].n >= 2000; }   // a full season, not a test window).map(Number).sort(function (a, b) { return a - b; });
+    var have = Object.keys(root.years).filter(function (y) { return root.years[y] && root.years[y].n >= 2000; }).map(Number).sort(function (a, b) { return a - b; });
     if (!have.length) return;
     [].forEach.call(ysel.options, function (o) { var y = +o.value; if (have.indexOf(y) < 0) { o.textContent = y + ' · imagery soon'; } });
     var missing = []; for (var y = 1980; y <= new Date().getUTCFullYear(); y++) if (have.indexOf(y) < 0) missing.push(y);
