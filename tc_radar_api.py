@@ -7336,6 +7336,29 @@ def _parse_tdr_scan_time(dt_str: str) -> Optional[datetime]:
     return None
 
 
+
+# ---------------------------------------------------------------------------
+# Recon archive replies: mirror successful (immutable, per-case) results to R2
+# and 302 repeat requests to cdn.tcatlas.org, like /ir_frame and /data. HRD
+# .frd / .sec.txt parsing is 3-25 s cold, so this removes the wait for every
+# visitor after the first. Failures (success: false) are neither mirrored nor
+# cached — a transient HRD fetch error must not be pinned for a day.
+# ---------------------------------------------------------------------------
+def _archive_reply(result: dict, r2_key: str):
+    if isinstance(result, dict) and result.get("success"):
+        from global_archive_api import _r2_mirror_frame_async
+        _r2_mirror_frame_async(r2_key, result)
+        return JSONResponse(result, headers={"Cache-Control": "public, max-age=86400, s-maxage=604800, immutable"})
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+def _archive_r2_redirect(r2_key: str):
+    from global_archive_api import _r2_frame_exists, _public_frame_url
+    if _r2_frame_exists(r2_key):
+        return RedirectResponse(_public_frame_url(r2_key), status_code=302,
+                                headers={"Cache-Control": "public, max-age=86400, immutable"})
+    return None
+
 @app.get("/flightlevel/archive")
 def get_archive_flight_level(
     case_index: int = Query(..., ge=0, description="0-based case index"),
@@ -7353,17 +7376,23 @@ def get_archive_flight_level(
     """
     now = time.time()
     cache_key = f"{data_type}_{case_index}_avg{avg_interval_s}"
+    r2_key_early = f"tcradar-fl/v1/{data_type}/{case_index}_avg{avg_interval_s:g}.json"
     if cache_key in _hrd_fl_cache:
         cached, ts = _hrd_fl_cache[cache_key]
         if now - ts < _HRD_FL_CACHE_TTL:
             _hrd_fl_cache.move_to_end(cache_key)
-            return JSONResponse(cached)
+            return _archive_reply(cached, r2_key_early)
 
     # Look up case metadata
     cache = _merge_metadata_cache if data_type == "merge" else _metadata_cache
     case_meta = cache.get(case_index)
     if not case_meta:
         raise HTTPException(status_code=404, detail=f"case_index {case_index} not found")
+
+    r2_key = f"tcradar-fl/v1/{data_type}/{case_index}_avg{avg_interval_s:g}.json"
+    _rd = _archive_r2_redirect(r2_key)
+    if _rd is not None:
+        return _rd
 
     storm_name = case_meta.get("storm_name", "").strip()
     mission_id = case_meta.get("mission_id", "").strip()
@@ -7405,7 +7434,7 @@ def get_archive_flight_level(
             "reason": "no_mission_id",
             "message": "No mission ID in metadata for this case",
         }
-        return JSONResponse(result)
+        return _archive_reply(result, r2_key)
 
     # Parse TDR scan datetime
     scan_dt = _parse_tdr_scan_time(dt_str)
@@ -7415,7 +7444,7 @@ def get_archive_flight_level(
             "reason": "bad_datetime",
             "message": f"Could not parse datetime: {dt_str}",
         }
-        return JSONResponse(result)
+        return _archive_reply(result, r2_key)
 
     year = scan_dt.year
     scan_time_sec = scan_dt.hour * 3600 + scan_dt.minute * 60 + scan_dt.second
@@ -7431,7 +7460,7 @@ def get_archive_flight_level(
         _hrd_fl_cache[cache_key] = (result, now)
         if len(_hrd_fl_cache) > _HRD_FL_CACHE_MAX:
             _hrd_fl_cache.popitem(last=False)
-        return JSONResponse(result)
+        return _archive_reply(result, r2_key)
 
     # List files in the storm directory
     storm_url = f"{HRD_FL_BASE}/{year}/{hrd_storm}/"
@@ -7443,7 +7472,7 @@ def get_archive_flight_level(
             "reason": "dir_fetch_error",
             "message": f"Could not list HRD directory: {e}",
         }
-        return JSONResponse(result)
+        return _archive_reply(result, r2_key)
 
     # --- Priority 2: HRD .trak file (2-min center fixes) ---
     if center_lat is None:
@@ -7493,7 +7522,7 @@ def get_archive_flight_level(
         _hrd_fl_cache[cache_key] = (result, now)
         if len(_hrd_fl_cache) > _HRD_FL_CACHE_MAX:
             _hrd_fl_cache.popitem(last=False)
-        return JSONResponse(result)
+        return _archive_reply(result, r2_key)
 
     # Fetch and parse the best-match file
     fl_url = f"{storm_url}{matched_files[0]}"
@@ -7505,7 +7534,7 @@ def get_archive_flight_level(
             "reason": "fetch_error",
             "message": f"Could not fetch {matched_files[0]}: {e}",
         }
-        return JSONResponse(result)
+        return _archive_reply(result, r2_key)
 
     raw_obs = _parse_hrd_1sec(fl_text)
     if not raw_obs:
@@ -7514,7 +7543,7 @@ def get_archive_flight_level(
             "reason": "parse_error",
             "message": f"No valid observations parsed from {matched_files[0]}",
         }
-        return JSONResponse(result)
+        return _archive_reply(result, r2_key)
 
     # Time-window filter: keep records within ±FL_TIME_WINDOW_MIN of scan
     window_sec = _FL_TIME_WINDOW_MIN * 60
@@ -7541,7 +7570,7 @@ def get_archive_flight_level(
         _hrd_fl_cache[cache_key] = (result, now)
         if len(_hrd_fl_cache) > _HRD_FL_CACHE_MAX:
             _hrd_fl_cache.popitem(last=False)
-        return JSONResponse(result)
+        return _archive_reply(result, r2_key)
 
     # ── Multi-resolution averaging ──────────────────────────────
     # Produce 1s (raw), 10s, and 30s averaged windows in a single pass
@@ -7751,7 +7780,7 @@ def get_archive_flight_level(
     if len(_hrd_fl_cache) > _HRD_FL_CACHE_MAX:
         _hrd_fl_cache.popitem(last=False)
 
-    return JSONResponse(result)
+    return _archive_reply(result, r2_key)
 
 
 # ---------------------------------------------------------------------------
@@ -8321,17 +8350,23 @@ def get_archive_dropsondes(
     """
     now = time.time()
     cache_key = f"sonde_{data_type}_{case_index}"
+    r2_key_early = f"tcradar-sondes/v1/{data_type}/{case_index}.json"
     if cache_key in _hrd_sonde_cache:
         cached, ts = _hrd_sonde_cache[cache_key]
         if now - ts < _HRD_SONDE_CACHE_TTL:
             _hrd_sonde_cache.move_to_end(cache_key)
-            return JSONResponse(cached)
+            return _archive_reply(cached, r2_key_early)
 
     # Look up case metadata
     cache = _merge_metadata_cache if data_type == "merge" else _metadata_cache
     case_meta = cache.get(case_index)
     if not case_meta:
         raise HTTPException(status_code=404, detail=f"case_index {case_index} not found")
+
+    r2_key = f"tcradar-sondes/v1/{data_type}/{case_index}.json"
+    _rd = _archive_r2_redirect(r2_key)
+    if _rd is not None:
+        return _rd
 
     storm_name = case_meta.get("storm_name", "").strip()
     mission_id = case_meta.get("mission_id", "").strip()
@@ -8414,7 +8449,7 @@ def get_archive_dropsondes(
             "message": "No storm center available for this case",
             "dropsondes": [],
         }
-        return JSONResponse(result)
+        return _archive_reply(result, r2_key)
 
     if not mission_id:
         result = {
@@ -8423,7 +8458,7 @@ def get_archive_dropsondes(
             "message": "No mission ID in metadata for this case",
             "dropsondes": [],
         }
-        return JSONResponse(result)
+        return _archive_reply(result, r2_key)
 
     # Parse scan datetime
     scan_dt = _parse_tdr_scan_time(dt_str)
@@ -8434,7 +8469,7 @@ def get_archive_dropsondes(
             "message": f"Could not parse datetime: {dt_str}",
             "dropsondes": [],
         }
-        return JSONResponse(result)
+        return _archive_reply(result, r2_key)
 
     year = scan_dt.year
 
@@ -8454,7 +8489,7 @@ def get_archive_dropsondes(
             "_diag": _diag,
         }
         _hrd_sonde_cache[cache_key] = (result, now)
-        return JSONResponse(result)
+        return _archive_reply(result, r2_key)
 
     # Search each season directory (HURR, AFRES) for the mission tarball
     tarball_url = None
@@ -8496,7 +8531,7 @@ def get_archive_dropsondes(
             "_diag": _diag,
         }
         _hrd_sonde_cache[cache_key] = (result, now)
-        return JSONResponse(result)
+        return _archive_reply(result, r2_key)
 
     # Fetch and extract .frd files
     frd_files = _fetch_and_extract_frd_tarball(tarball_url)
@@ -8514,7 +8549,7 @@ def get_archive_dropsondes(
             "_diag": _diag,
         }
         _hrd_sonde_cache[cache_key] = (result, now)
-        return JSONResponse(result)
+        return _archive_reply(result, r2_key)
 
     # Parse all .frd files
     dropsondes = []
@@ -8566,7 +8601,7 @@ def get_archive_dropsondes(
     if len(_hrd_sonde_cache) > _HRD_SONDE_CACHE_MAX:
         _hrd_sonde_cache.popitem(last=False)
 
-    return JSONResponse(result)
+    return _archive_reply(result, r2_key)
 
 
 # ---------------------------------------------------------------------------
