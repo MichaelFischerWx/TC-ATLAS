@@ -76,6 +76,8 @@
   var year = parseInt(q.get('year') || '2005', 10), basin = q.get('basin') || 'AL', useGhost = q.get('src') === 'ghost';
   var trailsOn = true, opacity = 1;
   var $ = function (id) { return document.getElementById(id); };
+  var isTouch = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+  var maxTex = (function () { try { var g = document.createElement('canvas').getContext('webgl'); return g ? g.getParameter(g.MAX_TEXTURE_SIZE) : 4096; } catch (e) { return 4096; } })();
 
   (function () { var c = document.querySelector('#cbar canvas').getContext('2d'), im = c.createImageData(1, 256);
     for (var i = 0; i < 256; i++) { var v = 255 - i, li = v * 4; im.data[i*4] = LUT[li]; im.data[i*4+1] = LUT[li+1]; im.data[i*4+2] = LUT[li+2]; im.data[i*4+3] = v ? 255 : 0; }
@@ -107,10 +109,15 @@
     if (decoded[ts + ':p']) return decoded[ts + ':p'];
     var p = new Promise(function (res, rej) {
       var img = new Image(); img.crossOrigin = 'anonymous';
-      img.onload = function () { var cols = img.naturalWidth, rows = img.naturalHeight, c = document.createElement('canvas'); c.width = cols; c.height = rows;
-        var g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0); var px = g.getImageData(0, 0, cols, rows).data, out = new Uint8Array(cols * rows);
+      img.onload = function () { try {
+        // Phones: halve (GridSat frames are 5143 px wide, over the 4096 GL texture cap on most iPhones,
+        // and a 10-megapixel canvas pair is real memory on a phone). Desktop keeps full resolution.
+        var f = (isTouch || img.naturalWidth > maxTex) ? 2 : 1;
+        var cols = Math.floor(img.naturalWidth / f), rows = Math.floor(img.naturalHeight / f), c = document.createElement('canvas'); c.width = cols; c.height = rows;
+        var g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0, cols, rows); var px = g.getImageData(0, 0, cols, rows).data, out = new Uint8Array(cols * rows);
         for (var k = 0, n = cols * rows; k < n; k++) out[k] = px[k*4+3] < 128 ? 0 : (px[k*4] || 1);
-        delete decoded[ts + ':p']; var rec = { idx: out, rows: rows, cols: cols }; lru(decoded, dOrder, ts, rec, 24); res(rec); };
+        delete decoded[ts + ':p']; var rec = { idx: out, rows: rows, cols: cols }; lru(decoded, dOrder, ts, rec, isTouch ? 8 : 24); res(rec);
+        } catch (e) { delete decoded[ts + ':p']; rej(e); } };
       img.onerror = function () { delete decoded[ts + ':p']; rej(new Error('ctx ' + ts)); };
       img.src = CTX + '/' + ts.slice(0,4) + '/' + ts + '.webp'; });
     decoded[ts + ':p'] = p; return p;
@@ -125,7 +132,7 @@
       var so = sr * cols, po = r * cols * 4;
       for (var c = 0; c < cols; c++) { var v = rec.idx[so + c]; if (v) { var pi = po + c * 4, li = v * 4; px[pi] = LUT[li]; px[pi+1] = LUT[li+1]; px[pi+2] = LUT[li+2]; px[pi+3] = 255; } } }
     g.putImageData(im, 0, 0);
-    return new Promise(function (res) { canvas.toBlob(function (b) { var url = URL.createObjectURL(b); lru(rendered, rOrder, ts, { url: url }, 24); res(url); }, 'image/png'); });
+    return new Promise(function (res, rej) { canvas.toBlob(function (b) { if (!b) { rej(new Error('canvas toBlob returned null')); return; } var url = URL.createObjectURL(b); lru(rendered, rOrder, ts, { url: url }, isTouch ? 8 : 24); res(url); }, 'image/png'); });
   }
   function coords() { var w = Math.max(-179.99, bounds.west), e = Math.min(179.99, bounds.east), n = Math.min(85, bounds.north), s = Math.max(-85, bounds.south); return [[w, n], [e, n], [e, s], [w, s]]; }
   function ensureLayers() {
@@ -198,7 +205,7 @@
       else src.updateImage({ url: url, coordinates: coords() });
       status.textContent = '';
       for (var k = 1; k <= 4; k++) decode(frames[(idx + k) % frames.length]).catch(function () {});
-    }).catch(function () { status.textContent = 'no imagery for this time'; });
+    }).catch(function (e) { status.textContent = 'imagery failed: ' + (e && e.message ? e.message : e); console.warn('[season]', ts, e); });
   }
   function step(d) { pause(); show(idx + d); }
   function pause() { playing = false; $('play').classList.remove('active'); if (timer) { clearTimeout(timer); timer = null; } }
