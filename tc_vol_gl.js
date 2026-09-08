@@ -236,8 +236,8 @@
         'void main(){',
         '  vec3 n = normalize(vNrm);',
         '  float diff = abs(dot(n, normalize(uLight)));',
-        '  float spec = pow(max(dot(n, normalize(uLight + vec3(0.0,0.0,1.0))), 0.0), 24.0) * 0.25;',
-        '  vec3 c = uColor.rgb * (0.35 + 0.65 * diff) + spec;',
+        '  float spec = pow(max(dot(n, normalize(uLight + vec3(0.0,0.0,1.0))), 0.0), 32.0) * 0.10;',
+        '  vec3 c = uColor.rgb * (0.40 + 0.60 * diff) + spec;',
         '  gl_FragColor = vec4(c, uColor.a);',
         '}'].join('\n');
 
@@ -272,7 +272,7 @@
                 ms.forEach(function (m, idx) {
                     if (!m.vboP || !m.n) return;
                     var c = m.color;
-                    var alpha = n === 1 ? state.opts.opacity : state.opts.opacity * (1 - 0.55 * idx / (n - 1));
+                    var alpha = n === 1 ? state.opts.opacity : state.opts.opacity * (1 - 0.65 * idx / (n - 1));   // outer shells translucent enough to see the core
                     gl.uniform4f(uColor, c[0] / 255, c[1] / 255, c[2] / 255, alpha);
                     gl.bindBuffer(gl.ARRAY_BUFFER, m.vboP); gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
                     gl.bindBuffer(gl.ARRAY_BUFFER, m.vboN); gl.enableVertexAttribArray(aNrm); gl.vertexAttribPointer(aNrm, 3, gl.FLOAT, false, 0, 0);
@@ -307,6 +307,22 @@
         if (/tangential|wind_speed/.test(key)) return 'wind';
         return null;
     }
+    // Shell colors. Reflectivity uses the familiar radar ramp by threshold
+    // (green → yellow → orange → red → magenta) instead of sampling the
+    // variable's -10..70 dBZ colorscale, which put 20 and 35 dBZ both in its
+    // cool half. Other variables sample their own colorscale via opts.colorFor.
+    function familyColor(key, iso) {
+        if (/reflectivity/.test(String(key || ''))) {
+            if (iso < 15) return [140, 200, 140];
+            if (iso < 25) return [46, 204, 64];     // green
+            if (iso < 32.5) return [170, 220, 40];  // yellow-green
+            if (iso < 40) return [255, 220, 0];     // yellow
+            if (iso < 47.5) return [255, 140, 0];   // orange
+            if (iso < 55) return [255, 65, 54];     // red
+            return [200, 40, 180];                  // magenta
+        }
+        return null;
+    }
     function defaultIsos(json, count) {
         var vi = json.variable || {};
         var fam = isoFamily(vi.key);
@@ -331,7 +347,7 @@
         var isos = (o.iso && o.iso.length) ? o.iso : defaultIsos(json, o.surfaces || 2);
         state.meshes = isos.map(function (iso) {
             var m = buildMesh(json, iso, geo);
-            m.color = o.colorFor ? o.colorFor(iso) : [255, 160, 40];
+            m.color = familyColor((json.variable || {}).key, iso) || (o.colorFor ? o.colorFor(iso) : [255, 160, 40]);
             return m;
         });
         if (state.gl) uploadAll(state.gl);
