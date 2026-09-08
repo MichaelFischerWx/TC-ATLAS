@@ -608,6 +608,7 @@ function exitFocusMode() {
     if (!_focusMode) return;
     _focusMode = false;
     if (_focusMarker) { map.removeLayer(_focusMarker); _focusMarker = null; }
+    if (window.TCVolGL && TCVolGL.isOn()) TCVolGL.hide();
     if (_radarMapOn) _radarMapOff();   // the map is leaving the storm; restore the 3-panel plot
     _stormGridRemove();
     removeIRMapOverlay();
@@ -8234,8 +8235,26 @@ document.addEventListener('keydown', function(e) { if (e.key==='Escape') { close
 // Monitor Recon tab). fetch3DVolume() stays here — it is archive-only
 // (uses currentCaseIndex / _activeDataType).
 
+// In focus mode on the GL engine the volume renders ON the map (tc_vol_gl.js)
+// over the IR, tilted; otherwise (Leaflet, or browse mode) the Plotly modal.
+function _show3D(json) {
+    if (_focusMode && window.LFLET_GL && window.TCVolGL && currentCaseData) {
+        var vi = json.variable || {};
+        var ok = TCVolGL.show(map, json, {
+            centerLat: currentCaseData.latitude, centerLon: currentCaseData.longitude,
+            colorFor: function(v) { try { return _csColor(_lastPlanRender && _lastPlanRender.colorscale || vi.colorscale, vi.vmin, vi.vmax, v); } catch (e) { return [255, 160, 40]; } },
+            // Dim the flat 2-D drape under the volume so the shells read as the field.
+            onShow: function() { if (_radarMapOverlay && _tdrVisible) { try { _radarMapOverlay.setOpacity(Math.min(_radarMapOpacity, 0.3)); } catch (e) {} } },
+            onHide: function() { if (_radarMapOverlay && _tdrVisible) { try { _radarMapOverlay.setOpacity(_radarMapOpacity); } catch (e) {} }
+                                 var vb2 = document.getElementById('vol-btn'); if (vb2) vb2.classList.remove('active'); }
+        });
+        if (ok) { var vb = document.getElementById('vol-btn'); if (vb) vb.classList.add('active'); return; }
+    }
+    open3DModal();
+}
 function fetch3DVolume() {
     if (currentCaseIndex === null) return;
+    if (window.TCVolGL && TCVolGL.isOn()) { TCVolGL.hide(); var vb0 = document.getElementById('vol-btn'); if (vb0) vb0.classList.remove('active'); return; }
     var variable = document.getElementById('ep-var').value;
     _ga('view_3d_volume', { case_index: currentCaseIndex, variable: variable, data_type: _activeDataType });
     var btn = document.getElementById('vol-btn');
@@ -8245,7 +8264,7 @@ function fetch3DVolume() {
     var cacheKey = '3d_' + _activeDataType + '_' + currentCaseIndex + '_' + variable;
     if (_dataCache[cacheKey]) {
         _last3DJson = _dataCache[cacheKey];
-        open3DModal();
+        _show3D(_last3DJson);
         btn.disabled = false; btn.innerHTML = _icon('monitor') + '3D Volume';
         return;
     }
@@ -8258,7 +8277,7 @@ function fetch3DVolume() {
         .then(function(json) {
             _dataCache[cacheKey] = json;
             _last3DJson = json;
-            open3DModal();
+            _show3D(json);
         })
         .catch(function(err) {
             var msg = err.name === 'AbortError' ? 'Request timed out (120s).' : err.message;
