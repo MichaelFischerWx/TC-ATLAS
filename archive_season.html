@@ -7,22 +7,26 @@
 <title>Season Replay — TC-ATLAS</title>
 <link rel="icon" href="tc-atlas-favicon-32.png">
 <link href="assets/vendor/maplibre/maplibre-gl.css?v=4.7.1" rel="stylesheet">
+<script src="theme.js?v=20260908a"></script>
 <style>
-  :root { --bg:#0b1220; --panel:rgba(15,23,42,.88); --border:#1e293b; --text:#e2e8f0; --muted:#94a3b8; --accent:#2e7dff; }
-  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow:hidden; }
+  /* Site palette (mirrors tc_radar_styles.css); theme.js sets data-theme="dark" from the user's site-wide choice */
+  :root { --bg:#ffffff; --surface:#f7f8fa; --surface-raised:#ffffff; --border:rgba(15,22,35,.08); --text:#0f1623; --muted:#5b6573; --um-green:#005030; --um-orange:#F47321; --panel:rgba(255,255,255,.88); --ctl:#eef1f5; --ctl-border:rgba(15,22,35,.12); }
+  [data-theme="dark"] { --bg:#0a0e14; --surface:#111722; --surface-raised:#161d2a; --border:rgba(255,255,255,.08); --text:#e6ebf2; --muted:#8993a4; --um-green:#2e9c6a; --panel:rgba(17,23,34,.88); --ctl:#1c2432; --ctl-border:rgba(255,255,255,.12); }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:13px/1.4 'DM Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow:hidden; }
   #map { position:absolute; inset:0; }
   .hud { position:absolute; z-index:5; background:var(--panel); border:1px solid var(--border); border-radius:10px; -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px); box-shadow:0 6px 24px rgba(0,0,0,.3); }
   #top { top:10px; left:10px; display:flex; align-items:center; gap:8px; padding:6px 10px; flex-wrap:wrap; max-width:calc(100% - 20px); }
   #top b { font-size:14px; }
-  select, button { background:#1e293b; color:var(--text); border:1px solid #334155; border-radius:6px; padding:4px 9px; font-size:12px; cursor:pointer; }
-  button.active { background:var(--accent); border-color:var(--accent); }
+  select, button { background:var(--ctl); color:var(--text); border:1px solid var(--ctl-border); border-radius:6px; padding:4px 9px; font-size:12px; font-weight:600; cursor:pointer; }
+  button.active { background:var(--um-green); border-color:var(--um-green); color:#fff; }
+  #follow { display:none; background:var(--um-orange); border-color:var(--um-orange); color:#fff; }
   #bar { left:10px; right:10px; bottom:10px; display:flex; align-items:center; gap:8px; padding:6px 10px; }
   #strip { position:relative; flex:1; height:30px; min-width:120px; }
   #strip canvas { position:absolute; inset:0; width:100%; height:100%; border-radius:4px; }
   #slider { position:absolute; inset:0; width:100%; height:100%; margin:0; -webkit-appearance:none; appearance:none; background:transparent; }
   #slider::-webkit-slider-runnable-track { background:transparent; height:100%; }
-  #slider::-webkit-slider-thumb { -webkit-appearance:none; width:3px; height:30px; background:#fff; border-radius:2px; cursor:ew-resize; }
-  #slider::-moz-range-thumb { width:3px; height:30px; background:#fff; border:0; border-radius:2px; }
+  #slider::-webkit-slider-thumb { -webkit-appearance:none; width:3px; height:30px; background:var(--text); box-shadow:0 0 0 1px var(--surface-raised); border-radius:2px; cursor:ew-resize; }
+  #slider::-moz-range-thumb { width:3px; height:30px; background:var(--text); border:0; border-radius:2px; }
   #dt { font-variant-numeric:tabular-nums; font-weight:600; min-width:150px; text-align:right; }
   #legend { right:10px; top:10px; padding:8px 10px; font-size:11px; color:var(--muted); display:flex; flex-direction:column; gap:4px; }
   #legend .row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
@@ -31,8 +35,15 @@
   #cbar canvas { display:block; width:12px; height:126px; min-height:0; border-radius:2px; }
   #cbar span { font-size:9px; color:var(--muted); }
   #status { color:var(--muted); font-size:11px; }
+  #tb { position:absolute; z-index:6; pointer-events:none; display:none; background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:3px 7px; font-size:11px; color:var(--text); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  #tb b { font-size:12px; }
+  #tb small { color:var(--muted); margin-left:5px; }
   .lbl { pointer-events:auto; cursor:pointer; background:rgba(15,23,42,.78); border:1px solid rgba(255,255,255,.18); border-radius:6px; padding:2px 6px; font-size:11px; white-space:nowrap; color:#fff; }
-  .ring { position:absolute; left:-16px; top:-16px; width:32px; height:32px; border-radius:50%; border:2.5px solid #fff; box-shadow:0 0 0 1.5px rgba(0,0,0,.55), inset 0 0 0 1.5px rgba(0,0,0,.45); background:transparent; pointer-events:none; }
+  .lbl.follow { border-color:var(--um-orange); box-shadow:0 0 0 1px var(--um-orange); }
+  .lbl .open { margin-left:6px; color:#cbd5e1; opacity:.8; }
+  .lbl .open:hover { color:#fff; opacity:1; }
+  .ring { cursor:pointer; pointer-events:auto; }
+  .ring { position:absolute; left:-16px; top:-16px; width:32px; height:32px; border-radius:50%; border:2.5px solid #fff; box-shadow:0 0 0 1.5px rgba(0,0,0,.55), inset 0 0 0 1.5px rgba(0,0,0,.45); background:transparent; }
   .tick { position:absolute; left:14px; top:-14px; width:14px; height:14px; border-top:1.5px solid rgba(255,255,255,.7); border-right:0; transform:skewX(-45deg); transform-origin:left bottom; pointer-events:none; }
   .lbl b { font-weight:700; letter-spacing:.02em; }
   .lbl .g { color:#7dd3fc; margin-left:4px; }
@@ -51,18 +62,21 @@
   </select>
   <button id="src" title="Intensity source shown in labels and marker colours">Best track</button>
   <button id="trails" class="active" title="Show 48-h track trails">Trails</button>
-  <button id="secbtn" class="active" title="When zoomed in (level 5+), overlay the nearest storm's exact 4 km sector frame on the 8 km context">4 km sector</button>
+  <button id="secbtn" class="active" title="When zoomed in, overlay the nearest storm's exact 4 km sector frame on the 8 km context">4 km sector</button>
+  <button id="follow" title="Release the storm lock"></button>
   <span id="status"></span>
   <span id="sec" style="color:#7dd3fc;font-size:11px"></span>
 </div>
 <div id="legend" class="hud">
   <div class="row"><i style="background:#60a5fa"></i>TD/TS &lt;64 kt <i style="background:#fbbf24;margin-left:8px"></i>Cat 1-2 <i style="background:#f87171;margin-left:8px"></i>Cat 3 <i style="background:#ef4444;margin-left:8px"></i>Cat 4 <i style="background:#c084fc;margin-left:8px"></i>Cat 5</div>
   <div class="row"><span style="color:#fde68a">kt</span> best track &nbsp;<span style="color:#7dd3fc">G</span> GHOST reanalysis, where available</div>
+  <div class="row">Click a storm to lock the view on it.</div>
 </div>
+<div id="tb"></div>
 <div id="cbar" class="hud"><span>310 K</span><canvas width="1" height="126"></canvas><span>170 K</span></div>
 <div id="bar" class="hud">
-  <button id="play" title="Play / pause (space)">&#9654;</button>
   <button id="prev" title="Previous frame (left arrow)">&#9664;</button>
+  <button id="play" title="Play / pause (space)">&#9654; Play</button>
   <button id="next" title="Next frame (right arrow)">&#9654;</button>
   <div id="strip"><canvas id="stripc"></canvas><input id="slider" type="range" min="0" max="0" value="0"></div>
   <span id="dt">&mdash;</span>
@@ -88,17 +102,26 @@
     for (var i = 0; i < H; i++) { var v = Math.max(1, Math.round(255 - i * 254 / (H - 1))), li = v * 4; im.data[i*4] = LUT[li]; im.data[i*4+1] = LUT[li+1]; im.data[i*4+2] = LUT[li+2]; im.data[i*4+3] = 255; }
     c.putImageData(im, 0, 0); })();
 
+  var dark = document.documentElement.getAttribute('data-theme') === 'dark', TV = dark ? 'dark' : 'light';
   var map = new maplibregl.Map({ container: 'map', center: VIEWS[basin].slice(0,2), zoom: VIEWS[basin][2], minZoom: 1, maxZoom: 7,
     style: { version: 8, sources: {
-      carto: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png' + CK, 'https://b.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png' + CK], tileSize: 256, attribution: '&copy; CARTO &middot; IBTrACS &middot; MergIR (NASA) &middot; GridSat-B1 (NOAA) &middot; GHOST reanalysis (TC-ATLAS)' },
-      labels: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png' + CK], tileSize: 256 } },
+      carto: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/' + TV + '_nolabels/{z}/{x}/{y}.png' + CK, 'https://b.basemaps.cartocdn.com/' + TV + '_nolabels/{z}/{x}/{y}.png' + CK], tileSize: 256, attribution: '&copy; CARTO &middot; IBTrACS &middot; MergIR (NASA) &middot; GridSat-B1 (NOAA) &middot; GHOST reanalysis (TC-ATLAS)' },
+      labels: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/' + TV + '_only_labels/{z}/{x}/{y}.png' + CK], tileSize: 256 } },
       layers: [{ id: 'carto', type: 'raster', source: 'carto' }] } });
   map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
   var mapReady = false, pending = false;
   map.on('load', function () { mapReady = true; ensureLayers(); if (pending) { pending = false; show(idx); } });
 
-  var frames = [], bounds = null, idx = 0, playing = false, timer = null, reqSeq = 0;
-  var storms = [], markers = {};
+  var frames = [], bounds = null, idx = 0, playing = false, timer = null, reqSeq = 0, curTs = null;
+  var storms = [], markers = {}, followSid = null;
+  function setFollow(s) {
+    followSid = s ? s.sid : null;
+    var b = $('follow'); b.style.display = followSid ? '' : 'none'; b.textContent = s ? '\u25CE Locked on ' + s.name + ' \u2715' : '';
+    Object.keys(markers).forEach(function (k) { markers[k].getElement().querySelector('.lbl').classList.toggle('follow', k === followSid); });
+    if (s && frames.length) { var st = stormState(s, tsMs(frames[idx])); if (st) map.jumpTo({ center: [st.lo, st.la], zoom: Math.max(map.getZoom(), 5.5) }); }
+  }
+  $('follow').onclick = function () { setFollow(null); };
+  map.on('dragstart', function () { if (followSid) setFollow(null); });
   var decoded = {}, dOrder = [], rendered = {}, rOrder = [];
   var canvas = document.createElement('canvas');
   var slider = $('slider'), dtEl = $('dt'), status = $('status');
@@ -133,14 +156,19 @@
     decoded[ts + ':p'] = p; return p;
   }
   // Equirectangular index grid → colormapped, Mercator-row-remapped PNG object URL.
-  function renderIdx(rec, b, cv) {
+  function renderIdx(rec, b, cv, feather) {
     var rows = rec.rows, cols = rec.cols; cv.width = cols; cv.height = rows;
     var g = cv.getContext('2d'), im = g.createImageData(cols, rows), px = im.data;
     var mY = function (d) { var r = d * Math.PI / 180; return Math.log(Math.tan(Math.PI / 4 + r / 2)); }, mN = mY(b.north), mS = mY(b.south), mR = mN - mS;
+    // feather: alpha ramps from 0 at the box edge to 1 over `feather` of the box, so the
+    // 4 km sector melts into the 8 km context instead of showing a hard rectangle
+    var fw = feather ? Math.max(1, Math.round(cols * feather)) : 0, fh = feather ? Math.max(1, Math.round(rows * feather)) : 0;
+    var ramp = function (d, w) { var t = d / w; if (t >= 1) return 1; return t * t * (3 - 2 * t); };
     for (var r = 0; r < rows; r++) { var lat = (2 * Math.atan(Math.exp(mN - (r / (rows - 1)) * mR)) - Math.PI / 2) * 180 / Math.PI;
       var sr = Math.round((b.north - lat) / (b.north - b.south) * (rows - 1)); if (sr < 0) sr = 0; if (sr >= rows) sr = rows - 1;
-      var so = sr * cols, po = r * cols * 4;
-      for (var c = 0; c < cols; c++) { var v = rec.idx[so + c]; if (v) { var pi = po + c * 4, li = v * 4; px[pi] = LUT[li]; px[pi+1] = LUT[li+1]; px[pi+2] = LUT[li+2]; px[pi+3] = 255; } } }
+      var so = sr * cols, po = r * cols * 4, fy = fh ? ramp(Math.min(r, rows - 1 - r) + 0.5, fh) : 1;
+      for (var c = 0; c < cols; c++) { var v = rec.idx[so + c]; if (v) { var pi = po + c * 4, li = v * 4; px[pi] = LUT[li]; px[pi+1] = LUT[li+1]; px[pi+2] = LUT[li+2];
+        px[pi+3] = fw ? Math.round(255 * Math.min(fy, ramp(Math.min(c, cols - 1 - c) + 0.5, fw))) : 255; } } }
     g.putImageData(im, 0, 0);
     return new Promise(function (res, rej) { cv.toBlob(function (bl) { if (!bl) { rej(new Error('canvas toBlob returned null')); return; } res(URL.createObjectURL(bl)); }, 'image/png'); });
   }
@@ -157,6 +185,7 @@
   var secMeta = {}, secFrames = {}, secOrder = [], secSeq = 0, secShown = null, secEl = $('sec');
   function stormTrackFor(s) { var out = []; for (var i = 0; i < s.t.length; i++) { if (s.la[i] == null) continue; out.push({ t: s.t[i], la: s.la[i], lo: s.lo[i], w: s.bv[i], p: s.bp[i], n: s.n[i] }); } return out; }
   function nearestStorm(ms) {
+    if (followSid) { for (var f = 0; f < storms.length; f++) if (storms[f].sid === followSid && stormState(storms[f], ms)) return storms[f]; }
     var c = map.getCenter(), best = null, bd = SECTOR_MAX_DEG;
     storms.forEach(function (s) { var st = stormState(s, ms); if (!st || st.la == null) return;
       var dlo = ((st.lo - c.lng + 540) % 360) - 180, d = Math.sqrt(Math.pow(st.la - c.lat, 2) + Math.pow(dlo * Math.cos(c.lat * Math.PI / 180), 2));
@@ -190,37 +219,66 @@
         if (!d || !d.tb_data) throw new Error('no frame data');
         var bin = atob(d.tb_data), arr = new Uint8Array(bin.length); for (var k = 0; k < bin.length; k++) arr[k] = bin.charCodeAt(k);
         var b = d.bounds || { south: f.lat - 10, north: f.lat + 10, west: f.lon - 10, east: f.lon + 10 };
-        return renderIdx({ idx: arr, rows: d.tb_rows, cols: d.tb_cols }, b, secCanvas).then(function (url) { return { url: url, b: b }; });
+        var rec = { idx: arr, rows: d.tb_rows, cols: d.tb_cols };
+        return renderIdx(rec, b, secCanvas, 0.08).then(function (url) { return { url: url, b: b, rec: rec }; });
       });
     secFrames[key] = { p: p }; secOrder.push(key);
     while (secOrder.length > (isTouch ? 10 : 30)) { var o = secOrder.shift(); var rec = secFrames[o]; delete secFrames[o]; if (rec) rec.p.then(function (x) { try { URL.revokeObjectURL(x.url); } catch (e) {} }, function () {}); }
     p.catch(function () { delete secFrames[key]; });
     return p;
   }
-  function removeSector() { if (map.getLayer('sector')) map.removeLayer('sector'); if (map.getSource('sector')) map.removeSource('sector'); secShown = null; if (secEl) secEl.textContent = ''; }
-  function updateSector(ts) {
-    if (!mapReady || !ts) return;
-    if (!secOn || map.getZoom() < SECTOR_ZOOM) { if (secShown) removeSector(); return; }
-    var s = nearestStorm(tsMs(ts)); if (!s) { removeSector(); return; }
-    var seq = ++secSeq;
-    getMeta(s).then(function (m) {
-      if (seq !== secSeq) return;
-      if (m.none) { removeSector(); if (secEl) secEl.textContent = 'no 4 km frames for ' + s.name; return; }
-      var i = frameIdxFor(m, ts); if (i < 0) { removeSector(); return; }
-      return getSectorFrame(s, m, i).then(function (fr) {
-        if (seq !== secSeq) return;
-        var co = [[Math.max(-179.99, fr.b.west), fr.b.north], [Math.min(179.99, fr.b.east), fr.b.north], [Math.min(179.99, fr.b.east), fr.b.south], [Math.max(-179.99, fr.b.west), fr.b.south]];
-        var src = map.getSource('sector');
-        if (!src) { map.addSource('sector', { type: 'image', url: fr.url, coordinates: co });
-          map.addLayer({ id: 'sector', type: 'raster', source: 'sector', paint: { 'raster-opacity': 1, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, 'trails'); }
-        else src.updateImage({ url: fr.url, coordinates: co });
-        secShown = s.sid + ':' + i;
-        if (secEl) secEl.textContent = '4 km sector · ' + s.name + ' (' + (m.source === 'mergir' ? 'MergIR' : m.source === 'gridsat' ? 'GridSat' : 'HURSAT') + ')';
-        for (var k = 1; k <= 2; k++) { var j = i + k; if (j < m.frames.length) getSectorFrame(s, m, j).catch(function () {}); }
-      });
-    }).catch(function (e) { if (secEl) secEl.textContent = 'sector unavailable'; console.warn('[sector]', e); });
+  function removeSector() { if (map.getLayer('sector')) map.removeLayer('sector'); if (map.getSource('sector')) map.removeSource('sector'); secShown = null; secCur = null; if (secEl) secEl.textContent = ''; }
+  var secCur = null;   // {s, m, i, fr} currently on the map (hover readout uses fr.rec/fr.b)
+  // Resolve the sector for a time step: null (none applies), {none:true,s} (no frames), or
+  // {s,m,i,fr}. Never rejects, so a step can always commit.
+  function sectorFor(ts) {
+    if (!mapReady || !secOn || map.getZoom() < SECTOR_ZOOM) return Promise.resolve(null);
+    var s = nearestStorm(tsMs(ts)); if (!s) return Promise.resolve(null);
+    return getMeta(s).then(function (m) {
+      if (m.none) return { none: true, s: s };
+      var i = frameIdxFor(m, ts); if (i < 0) return { none: true, s: s };
+      return getSectorFrame(s, m, i).then(function (fr) { return { s: s, m: m, i: i, fr: fr }; }).catch(function () { return { none: true, s: s }; });
+    }).catch(function () { return null; });
+  }
+  function applySector(res) {
+    if (!res) { if (secShown) removeSector(); return; }
+    if (res.none) { removeSector(); if (secEl) secEl.textContent = 'no 4 km frames for ' + res.s.name; return; }
+    var key = res.s.sid + ':' + res.i; if (key === secShown && map.getSource('sector')) return;
+    var fr = res.fr, co = [[Math.max(-179.99, fr.b.west), fr.b.north], [Math.min(179.99, fr.b.east), fr.b.north], [Math.min(179.99, fr.b.east), fr.b.south], [Math.max(-179.99, fr.b.west), fr.b.south]];
+    var src = map.getSource('sector');
+    if (!src) { map.addSource('sector', { type: 'image', url: fr.url, coordinates: co });
+      map.addLayer({ id: 'sector', type: 'raster', source: 'sector', paint: { 'raster-opacity': 1, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, 'trails'); }
+    else src.updateImage({ url: fr.url, coordinates: co });
+    secShown = key; secCur = res;
+    if (secEl) secEl.textContent = '4 km sector · ' + res.s.name + ' (' + (res.m.source === 'mergir' ? 'MergIR' : res.m.source === 'gridsat' ? 'GridSat' : 'HURSAT') + ')';
+    for (var k = 1; k <= 3; k++) { var j = res.i + k; if (j < res.m.frames.length) getSectorFrame(res.s, res.m, j).catch(function () {}); }
+  }
+  function updateSector(ts) {   // view changed (zoom/pan) with the time unchanged
+    if (!ts) return; var seq = ++secSeq;
+    sectorFor(ts).then(function (res) { if (seq === secSeq) applySector(res); });
   }
   map.on('moveend', function () { if (frames.length) updateSector(frames[idx]); });
+
+  // ---- hover brightness temperature ----
+  var tbEl = $('tb');
+  function sampleIdx(rec, b, lat, lon) {
+    if (!rec || lat > b.north || lat < b.south) return 0;
+    var w = b.west, e = b.east; if (lon < w) lon += 360; if (lon > e) lon -= 360; if (lon < w || lon > e) return 0;
+    var r = Math.min(rec.rows - 1, Math.max(0, Math.floor((b.north - lat) / (b.north - b.south) * rec.rows)));
+    var c = Math.min(rec.cols - 1, Math.max(0, Math.floor((lon - w) / (e - w) * rec.cols)));
+    return rec.idx[r * rec.cols + c] || 0;
+  }
+  function tbK(v) { return 170 + (v - 1) / 254 * 140; }
+  map.on('mousemove', function (ev) {
+    if (!curTs || isTouch) return;
+    var lat = ev.lngLat.lat, lon = ((ev.lngLat.lng + 180) % 360 + 360) % 360 - 180, v = 0, src = '';
+    if (secCur && secCur.fr && secCur.fr.rec) { v = sampleIdx(secCur.fr.rec, secCur.fr.b, lat, lon); if (v) src = '4 km · ' + secCur.s.name; }
+    if (!v && decoded[curTs] && bounds) { v = sampleIdx(decoded[curTs], bounds, lat, lon); if (v) src = '8 km'; }
+    if (!v) { tbEl.style.display = 'none'; return; }
+    tbEl.innerHTML = '<b>' + tbK(v).toFixed(1) + ' K</b><small>' + src + ' · ' + Math.abs(lat).toFixed(2) + (lat >= 0 ? 'N ' : 'S ') + Math.abs(lon).toFixed(2) + (lon >= 0 ? 'E' : 'W') + '</small>';
+    tbEl.style.display = 'block'; tbEl.style.left = (ev.point.x + 14) + 'px'; tbEl.style.top = (ev.point.y + 14) + 'px';
+  });
+  map.on('mouseout', function () { tbEl.style.display = 'none'; });
   window.__season = { map: map, zoom: function () { return map.getZoom(); }, forceReady: function () { mapReady = true; ensureLayers(); if (pending) { pending = false; show(idx); } }, sector: function () { return updateSector(frames[idx]); }, nearest: function () { var s = frames.length && nearestStorm(tsMs(frames[idx])); return s && s.name; }, state: function () { return { frames: frames.length, idx: idx, ready: mapReady, secOn: secOn, shown: secShown }; } };
   $('secbtn').onclick = function () { secOn = !secOn; this.classList.toggle('active', secOn); if (!secOn) removeSector(); else if (frames.length) updateSector(frames[idx]); };
   function coords() { var w = Math.max(-179.99, bounds.west), e = Math.min(179.99, bounds.east), n = Math.min(85, bounds.north), s = Math.max(-85, bounds.south); return [[w, n], [e, n], [e, s], [w, s]]; }
@@ -267,39 +325,67 @@
       var v = useGhost && st.gv != null ? st.gv : st.bv, col = catColor(v);
       var html = '<b>' + (s.name === 'UNNAMED' ? (s.atcf || s.sid) : s.name) + '</b>' +
         (st.bv != null ? '<span class="b">' + Math.round(st.bv) + ' kt</span>' : '') +
-        (st.gv != null ? '<span class="g">G ' + Math.round(st.gv) + '</span>' : '');
+        (st.gv != null ? '<span class="g">G ' + Math.round(st.gv) + '</span>' : '') +
+        '<span class="open" title="Open in Storm Detail">&#8599;</span>';
       var m = markers[s.sid];
       if (!m) {
         var el = document.createElement('div'); el.style.cssText = 'position:relative;width:0;height:0;';
         el.innerHTML = '<div class="ring"></div><div class="lbl" style="position:absolute;left:22px;top:-34px;"></div>';
-        el.querySelector('.lbl').onclick = function () { window.open('global_archive.html#tab=detail&storm=' + encodeURIComponent(s.sid), '_blank'); };
+        var lock = function (e) { e.stopPropagation(); setFollow(followSid === s.sid ? null : s); };
+        el.querySelector('.ring').onclick = lock;
+        el.querySelector('.lbl').onclick = function (e) {
+          if (e.target.classList.contains('open')) { e.stopPropagation(); window.open('global_archive.html#tab=detail&storm=' + encodeURIComponent(s.sid), '_blank'); return; }
+          lock(e);
+        };
         m = markers[s.sid] = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([st.lo, st.la]).addTo(map);
       } else m.setLngLat([st.lo, st.la]);
       var el2 = m.getElement(); el2.querySelector('.ring').style.borderColor = col; el2.querySelector('.lbl').innerHTML = html;
+      el2.querySelector('.lbl').classList.toggle('follow', s.sid === followSid);
+      if (s.sid === followSid) map.jumpTo({ center: [st.lo, st.la] });
     });
+    if (followSid && !seen[followSid]) setFollow(null);   // storm ended
     Object.keys(markers).forEach(function (sid) { if (!seen[sid]) { markers[sid].remove(); delete markers[sid]; } });
     var src = map.getSource('trails'); if (src) src.setData(trailsOn ? trailFeatures(ms) : { type: 'FeatureCollection', features: [] });
   }
 
+  // A step is prepared off-screen (context frame + sector frame, both cached/prefetched)
+  // and then committed in one go with the markers, trails and clock — nothing on the
+  // map advances ahead of anything else.
+  function prepare(ts) {
+    return Promise.all([decode(ts).then(function (rec) { return render(ts, rec); }), sectorFor(ts)])
+      .then(function (r) { return { url: r[0], sec: r[1] }; });
+  }
+  function commit(i, ts, prep) {
+    idx = i; slider.value = idx; dtEl.textContent = fmt(ts); curTs = ts;
+    try { history.replaceState(null, '', '?year=' + year + '&basin=' + basin + (useGhost ? '&src=ghost' : '') + '&t=' + ts); } catch (e) {}
+    var src = map.getSource('ctx');
+    if (!src) { map.addSource('ctx', { type: 'image', url: prep.url, coordinates: coords() });
+      map.addLayer({ id: 'ctx', type: 'raster', source: 'ctx', paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, map.getLayer('sector') ? 'sector' : 'trails'); }
+    else src.updateImage({ url: prep.url, coordinates: coords() });
+    applySector(prep.sec);
+    drawStorms(ts);
+    status.textContent = '';
+    for (var k = 1; k <= 4; k++) decode(frames[(idx + k) % frames.length]).catch(function () {});
+  }
   function show(i) {
     if (!frames.length) return; if (!mapReady) { pending = true; idx = i; return; }
-    idx = (i + frames.length) % frames.length; var ts = frames[idx], seq = ++reqSeq;
-    slider.value = idx; dtEl.textContent = fmt(ts); drawStorms(ts); updateSector(ts);
-    try { history.replaceState(null, '', '?year=' + year + '&basin=' + basin + (useGhost ? '&src=ghost' : '') + '&t=' + ts); } catch (e) {}
-    decode(ts).then(function (rec) { return render(ts, rec); }).then(function (url) {
-      if (seq !== reqSeq) return;
-      var src = map.getSource('ctx');
-      if (!src) { map.addSource('ctx', { type: 'image', url: url, coordinates: coords() });
-        map.addLayer({ id: 'ctx', type: 'raster', source: 'ctx', paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, map.getLayer('sector') ? 'sector' : 'trails'); }
-      else src.updateImage({ url: url, coordinates: coords() });
-      status.textContent = '';
-      for (var k = 1; k <= 4; k++) decode(frames[(idx + k) % frames.length]).catch(function () {});
-    }).catch(function (e) { status.textContent = 'imagery failed: ' + (e && e.message ? e.message : e); console.warn('[season]', ts, e); });
+    var j = (i + frames.length) % frames.length, ts = frames[j], seq = ++reqSeq;
+    status.textContent = 'loading…';
+    prepare(ts).then(function (prep) { if (seq !== reqSeq) return; commit(j, ts, prep); })
+      .catch(function (e) { if (seq !== reqSeq) return; status.textContent = 'imagery failed: ' + (e && e.message ? e.message : e); console.warn('[season]', ts, e); });
   }
   function step(d) { pause(); show(idx + d); }
-  function pause() { playing = false; $('play').classList.remove('active'); if (timer) { clearTimeout(timer); timer = null; } }
-  function tick() { if (!playing) return; show(idx + 1); timer = setTimeout(tick, parseInt($('speed').value, 10)); }
-  $('play').onclick = function () { if (playing) { pause(); return; } playing = true; this.classList.add('active'); tick(); };
+  function pause() { playing = false; $('play').classList.remove('active'); $('play').innerHTML = '&#9654; Play'; if (timer) { clearTimeout(timer); timer = null; } }
+  function tick() {
+    if (!playing || !frames.length) return;
+    var j = (idx + 1) % frames.length, ts = frames[j], seq = ++reqSeq, t0 = performance.now();
+    prepare(ts).then(function (prep) {
+      if (!playing || seq !== reqSeq) return;
+      commit(j, ts, prep);
+      timer = setTimeout(tick, Math.max(30, parseInt($('speed').value, 10) - (performance.now() - t0)));
+    }).catch(function () { if (playing) timer = setTimeout(tick, 300); });
+  }
+  $('play').onclick = function () { if (playing) { pause(); return; } playing = true; this.classList.add('active'); this.innerHTML = '&#10074;&#10074; Pause'; tick(); };
   $('prev').onclick = function () { step(-1); }; $('next').onclick = function () { step(1); };
   slider.oninput = function () { pause(); show(parseInt(this.value, 10)); };
   document.addEventListener('keydown', function (e) { if (e.target.tagName === 'SELECT') return; if (e.key === 'ArrowLeft') step(-1); else if (e.key === 'ArrowRight') step(1); else if (e.key === ' ') { e.preventDefault(); $('play').click(); } });
@@ -319,7 +405,7 @@
   window.addEventListener('resize', function () { setTimeout(drawStrip, 120); });
 
   function loadSeason(y) {
-    year = y; pause(); frames = []; storms = []; Object.keys(markers).forEach(function (k) { markers[k].remove(); }); markers = {};
+    year = y; pause(); setFollow(null); frames = []; storms = []; Object.keys(markers).forEach(function (k) { markers[k].remove(); }); markers = {};
     if (mapReady) removeSector();
     status.textContent = 'loading season…'; dtEl.textContent = '—';
     history.replaceState(null, '', '?year=' + y + '&basin=' + basin + (useGhost ? '&src=ghost' : ''));

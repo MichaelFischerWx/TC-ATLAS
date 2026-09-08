@@ -3517,11 +3517,11 @@ input[type="range"].ga-range::-moz-range-thumb {
 .detail-fs #ir-map-controls .ir-bar-row1 { gap: 5px; }
 .ir-strip { position: relative; flex: 1; min-width: 120px; height: 30px; margin: 0 4px; }
 .ir-strip-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; border-radius: 4px; }
-.ir-strip .ir-slider { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); width: 100%; margin: 0; background: transparent; height: 100%; }
-.ir-strip .ir-slider::-webkit-slider-runnable-track { background: transparent; height: 100%; }
-.ir-strip .ir-slider::-moz-range-track { background: transparent; }
-.ir-strip .ir-slider::-webkit-slider-thumb { width: 3px; height: 30px; border-radius: 2px; border: 0; background: var(--text); box-shadow: 0 0 0 1px var(--surface); margin-top: 0; }
-.ir-strip .ir-slider::-moz-range-thumb { width: 3px; height: 30px; border-radius: 2px; border: 0; background: var(--text); }
+.ir-strip input[type="range"].ga-range { position: absolute !important; left: 0; right: 0; top: 0 !important; width: 100%; height: 100% !important; margin: 0 !important; background: transparent !important; border-radius: 0; }
+.ir-strip input[type="range"].ga-range::-webkit-slider-runnable-track { background: transparent !important; height: 100%; border: 0; }
+.ir-strip input[type="range"].ga-range::-moz-range-track { background: transparent !important; border: 0; }
+.ir-strip input[type="range"].ga-range::-webkit-slider-thumb { width: 3px; height: 30px; border-radius: 2px; border: 0; background: var(--text); box-shadow: 0 0 0 1px var(--surface-raised); margin-top: 0; }
+.ir-strip input[type="range"].ga-range::-moz-range-thumb { width: 3px; height: 30px; border-radius: 2px; border: 0; background: var(--text); }
 .ir-bar-gear { flex-shrink: 0; font-size: 0.95rem; line-height: 1; padding: 2px 7px; }
 .ir-bar-more {
     position: absolute; right: 8px; bottom: calc(100% + 6px); z-index: 630;
