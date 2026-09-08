@@ -453,6 +453,7 @@
             if (o.surfaces != null) { var ss = document.getElementById('vol-gl-shells'); if (ss && String(ss.value) !== String(o.surfaces)) ss.value = String(o.surfaces); }
             if (o.surfaces != null) { state.opts.surfaces = o.surfaces; state.opts.iso = null; needMesh = true; }
             if (o.opacity != null) state.opts.opacity = o.opacity;
+            if (o.recolor) { state.meshes.forEach(function (m) { m.color = familyColor((state.json.variable || {}).key, m.iso) || (state.opts.colorFor ? state.opts.colorFor(m.iso) : m.color); }); }
             if (o.cutaway != null) { state.opts.cutaway = !!o.cutaway; var cbx = document.getElementById('vol-gl-cut'); if (cbx) cbx.checked = state.opts.cutaway; }
             if (o.cutKm != null) { state.opts.cutKm = o.cutKm; var ck = document.getElementById('vol-gl-cutkm-val'); if (ck) ck.textContent = o.cutKm + ' km'; if (!state.opts.cutaway) { state.opts.cutaway = true; var cb = document.getElementById('vol-gl-cut'); if (cb) cb.checked = true; } }
             if (o.zMaxKm != null) { state.opts.zMaxKm = o.zMaxKm; var zv = document.getElementById('vol-gl-zmax-val'); if (zv) zv.textContent = o.zMaxKm >= 18 ? 'all' : o.zMaxKm + ' km'; }

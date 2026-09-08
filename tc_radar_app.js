@@ -1037,7 +1037,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<span style="font-size:9px;color:var(--slate);" id="ep-contour-units"></span>' +
                     '</div>' +
                 '</div>' +
-                '<div class="explorer-row explorer-row-more"><label>Colormap</label>' +
+                '<div class="explorer-row"><label>Colormap</label>' +
                     '<select class="explorer-select" id="ep-cmap" style="font-size:11px;" onchange="applyCmap()">' +
                         '<option value="">Default (from variable)</option>' +
                         '<optgroup label="Sequential"><option value="Viridis">Viridis</option><option value="Inferno">Inferno</option><option value="Magma">Magma</option><option value="Plasma">Plasma</option><option value="Cividis">Cividis</option><option value="Hot">Hot</option><option value="YlOrRd">YlOrRd</option><option value="YlGnBu">YlGnBu</option><option value="Blues">Blues</option><option value="Reds">Reds</option><option value="Greys">Greys</option></optgroup>' +
@@ -1046,7 +1046,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<optgroup label="Other"><option value="Jet">Jet</option><option value="Rainbow">Rainbow</option><option value="Electric">Electric</option><option value="Earth">Earth</option><option value="Blackbody">Blackbody</option></optgroup>' +
                     '</select>' +
                 '</div>' +
-                '<div class="explorer-row explorer-row-more"><label>Color Range</label>' +
+                '<div class="explorer-row"><label>Color Range</label>' +
                     '<div style="display:flex;align-items:center;gap:4px;">' +
                         '<input type="number" id="ep-vmin" placeholder="min" step="any" style="width:60px;padding:2px 4px;font-size:10px;border:1px solid var(--border-light);border-radius:4px;background:var(--navy);color:var(--text);" onchange="applyColorRange()">' +
                         '<span style="font-size:10px;color:var(--slate);">to</span>' +
@@ -4291,6 +4291,7 @@ function applyCmap() {
         Plotly.restyle(plotDiv, { colorscale: [colorscale] }, [0]);
     });
     if (window._lastPlotlyData) window._lastPlotlyData.heatmap.colorscale = colorscale;
+    _radarMapRestyle({ colorscale: colorscale });
 }
 
 function _getActiveVmin() { var inp = document.getElementById('ep-vmin'); if (inp && inp.value !== '') return parseFloat(inp.value); return _defaultVmin; }
@@ -4304,6 +4305,17 @@ function applyColorRange() {
         Plotly.restyle(plotDiv, { zmin: [zmin], zmax: [zmax] }, [0]);
     });
     if (window._lastPlotlyData) { window._lastPlotlyData.heatmap.zmin = zmin; window._lastPlotlyData.heatmap.zmax = zmax; }
+    _radarMapRestyle({ vmin: zmin, vmax: zmax });
+}
+// Re-color the draped map field (and the on-map 3D shells) after a colormap or
+// range change — they render from _lastPlanRender, not from Plotly.
+function _radarMapRestyle(ch) {
+    if (!_lastPlanRender) return;
+    if (ch.vmin != null) _lastPlanRender.vmin = ch.vmin;
+    if (ch.vmax != null) _lastPlanRender.vmax = ch.vmax;
+    if (ch.colorscale) _lastPlanRender.colorscale = ch.colorscale;
+    if (_radarMapOn) _radarMapDraw();
+    if (window.TCVolGL && TCVolGL.isOn()) TCVolGL.update({ recolor: true });
 }
 
 function resetColorRange() {
@@ -4316,6 +4328,7 @@ function resetColorRange() {
             Plotly.restyle(plotDiv, { zmin: [_defaultVmin], zmax: [_defaultVmax] }, [0]);
         });
         if (window._lastPlotlyData) { window._lastPlotlyData.heatmap.zmin = _defaultVmin; window._lastPlotlyData.heatmap.zmax = _defaultVmax; }
+        _radarMapRestyle({ vmin: _defaultVmin, vmax: _defaultVmax });
     }
 }
 
