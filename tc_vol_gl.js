@@ -145,7 +145,10 @@
             var qx = ty*e1z - tz*e1y, qy = tz*e1x - tx*e1z, qz = tx*e1y - ty*e1x;
             var v = (d[0]*qx + d[1]*qy + d[2]*qz) * inv; if (v < 0 || u + v > 1) continue;
             var t = (e2x*qx + e2y*qy + e2z*qz) * inv;
-            if (t > 0 && t < best) best = t;
+            if (t > 0 && t < best) {
+                if (clipped([o[0] + t*d[0], o[1] + t*d[1], o[2] + t*d[2]])) continue;
+                best = t;
+            }
         }
         return best;
     }
@@ -222,18 +225,21 @@
     var VS = [
         'attribute vec3 aPos; attribute vec3 aNrm;',
         'uniform mat4 uMatrix; uniform vec3 uOrigin; uniform float uExag;',
-        'varying vec3 vNrm; varying float vDepth;',
+        'varying vec3 vNrm; varying vec3 vLocal;',
         'void main(){',
         '  vec3 p = vec3(aPos.x + uOrigin.x, aPos.y + uOrigin.y, aPos.z * uExag);',
         '  gl_Position = uMatrix * vec4(p, 1.0);',
         '  vNrm = normalize(vec3(aNrm.x, aNrm.y, aNrm.z / max(uExag, 0.001)));',
-        '  vDepth = gl_Position.w;',
+        '  vLocal = aPos;',   // local (origin-relative) x/y, un-exaggerated z
         '}'].join('\n');
     var FS = [
         'precision mediump float;',
         'uniform vec4 uColor; uniform vec3 uLight;',
-        'varying vec3 vNrm; varying float vDepth;',
+        'uniform vec3 uCut; uniform float uZMax;',   // uCut = (nx, ny, d): discard where nx*x + ny*y > d; uZMax: discard above
+        'varying vec3 vNrm; varying vec3 vLocal;',
         'void main(){',
+        '  if (vLocal.z > uZMax) discard;',
+        '  if (uCut.x * vLocal.x + uCut.y * vLocal.y > uCut.z) discard;',
         '  vec3 n = normalize(vNrm);',
         '  float diff = abs(dot(n, normalize(uLight)));',
         '  float spec = pow(max(dot(n, normalize(uLight + vec3(0.0,0.0,1.0))), 0.0), 32.0) * 0.10;',
@@ -242,7 +248,7 @@
         '}'].join('\n');
 
     function makeLayer() {
-        var prog = null, uMatrix, uOrigin, uExag, uColor, uLight, aPos, aNrm;
+        var prog = null, uMatrix, uOrigin, uExag, uColor, uLight, uCut, uZMax, aPos, aNrm;
         return {
             id: LAYER_ID, type: 'custom', renderingMode: '3d',
             onAdd: function (map, gl) {
@@ -251,6 +257,7 @@
                 prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(prog);
                 uMatrix = gl.getUniformLocation(prog, 'uMatrix'); uOrigin = gl.getUniformLocation(prog, 'uOrigin'); uExag = gl.getUniformLocation(prog, 'uExag');
                 uColor = gl.getUniformLocation(prog, 'uColor'); uLight = gl.getUniformLocation(prog, 'uLight');
+                uCut = gl.getUniformLocation(prog, 'uCut'); uZMax = gl.getUniformLocation(prog, 'uZMax');
                 aPos = gl.getAttribLocation(prog, 'aPos'); aNrm = gl.getAttribLocation(prog, 'aNrm');
                 state.gl = gl; uploadAll(gl);
             },
@@ -263,6 +270,8 @@
                 gl.uniform3f(uOrigin, state.origin.x, state.origin.y, 0);
                 gl.uniform1f(uExag, state.opts.exag);
                 gl.uniform3f(uLight, -0.4, 0.5, 0.75);
+                var cut = cutPlane(); gl.uniform3f(uCut, cut[0], cut[1], cut[2]);
+                gl.uniform1f(uZMax, zMaxLocal());
                 gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL);
                 gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
                 gl.disable(gl.CULL_FACE);   // tet winding is not guaranteed consistent; lighting uses |n·l| so both faces shade alike
@@ -282,6 +291,31 @@
                 gl.depthMask(true);
             }
         };
+    }
+    // Cutaway plane in local Mercator x/y: removes the half-space on the
+    // camera's side of a vertical plane through the center (offset by
+    // opts.cutKm along the view direction). Mercator y grows southward, so the
+    // bearing→direction conversion flips y. Returns (nx, ny, d) with the
+    // discard test nx*x + ny*y > d; a huge d disables it.
+    function cutPlane() {
+        var o = state.opts;
+        if (!o.cutaway) return [0, 0, 1e9];
+        var b = 0; try { b = state.map._gl.getBearing() * Math.PI / 180; } catch (e) {}
+        // camera sits south of center at bearing 0 (looking north): direction to camera = (sin b, -cos b) in (east, north)
+        var ex = Math.sin(b), ny = -Math.cos(b);           // toward camera, east/north
+        var nx = ex, nyM = -ny;                           // to Mercator (y down)
+        var kmUnits = 1000 * state.meterUnits;             // mercator units per km (at center latitude)
+        var d = (o.cutKm || 0) * kmUnits;
+        return [nx, nyM, d];
+    }
+    function zMaxLocal() {
+        var o = state.opts;
+        if (o.zMaxKm == null || o.zMaxKm >= 18) return 1e9;
+        return o.zMaxKm * 1000 * state.meterUnits;
+    }
+    function clipped(pLocal) {   // for the hover ray: same test as the shader
+        var c = cutPlane(); if (c[0] * pLocal[0] + c[1] * pLocal[1] > c[2]) return true;
+        return pLocal[2] > zMaxLocal();
     }
     function uploadAll(gl) {
         state.meshes.forEach(function (m) {
@@ -376,6 +410,10 @@
               '<input type="range" id="vol-gl-exag" min="2" max="40" step="1" value="' + state.opts.exag + '" oninput="TCVolGL.update({exag: parseFloat(this.value)})"><span id="vol-gl-exag-val">' + state.opts.exag + '×</span></div>' +
             '<div class="vol-gl-row"><label>Tilt</label><input type="range" id="vol-gl-tilt" min="0" max="75" step="1" value="' + state.opts.tilt + '" oninput="TCVolGL.update({tilt: parseFloat(this.value)})"><span id="vol-gl-tilt-val">' + state.opts.tilt + '°</span>' +
               '<label>Rotate</label><input type="range" id="vol-gl-bear" min="-180" max="180" step="1" value="' + Math.round(state.map._gl.getBearing()) + '" oninput="TCVolGL.update({bearing: parseFloat(this.value)})"><span id="vol-gl-bear-val">' + Math.round(state.map._gl.getBearing()) + '°</span></div>' +
+            '<div class="vol-gl-row"><label title="Remove the half of the volume nearest the camera so inner cores show as a vertical section">' +
+              '<input type="checkbox" id="vol-gl-cut" ' + (state.opts.cutaway ? 'checked' : '') + ' onchange="TCVolGL.update({cutaway: this.checked})"> Cutaway</label>' +
+              '<input type="range" id="vol-gl-cutkm" min="-150" max="150" step="5" value="' + (state.opts.cutKm || 0) + '" oninput="TCVolGL.update({cutKm: parseFloat(this.value)})" title="Slide the cut plane toward/away from the camera"><span id="vol-gl-cutkm-val">' + (state.opts.cutKm || 0) + ' km</span>' +
+              '<label>Below</label><input type="range" id="vol-gl-zmax" min="1" max="18" step="0.5" value="' + state.opts.zMaxKm + '" oninput="TCVolGL.update({zMaxKm: parseFloat(this.value)})" title="Show only the volume below this height"><span id="vol-gl-zmax-val">' + (state.opts.zMaxKm >= 18 ? 'all' : state.opts.zMaxKm + ' km') + '</span></div>' +
             '<div class="vol-gl-row vol-gl-foot"><span>Mouse: right-drag or Ctrl+drag rotates &middot; scroll zooms &middot; hover a shell for height. Touch: two-finger twist rotates.</span></div>' +
             '<div class="vol-gl-row vol-gl-foot"><span>Sliders above set tilt and rotation exactly.</span>' +
               '<button class="vol-gl-link" onclick="if (typeof open3DModal===\'function\') open3DModal();">Open storm-relative 3D</button></div>';
@@ -387,7 +425,7 @@
             if (!window.maplibregl || !map || !map._gl) return false;
             if (state.on) api.hide();
             state.map = map; state.json = json;
-            state.opts = Object.assign({ exag: 6, tilt: 55, opacity: 0.9, surfaces: 1, iso: null }, opts || {});
+            state.opts = Object.assign({ exag: 6, tilt: 55, opacity: 0.9, surfaces: 1, iso: null, cutaway: false, cutKm: 0, zMaxKm: 18 }, opts || {});
             var gl = map._gl;
             state.prevPitch = gl.getPitch(); state.prevBearing = gl.getBearing();
             try { gl.dragRotate.enable(); gl.touchZoomRotate.enableRotation(); } catch (e) {}
@@ -415,6 +453,9 @@
             if (o.surfaces != null) { var ss = document.getElementById('vol-gl-shells'); if (ss && String(ss.value) !== String(o.surfaces)) ss.value = String(o.surfaces); }
             if (o.surfaces != null) { state.opts.surfaces = o.surfaces; state.opts.iso = null; needMesh = true; }
             if (o.opacity != null) state.opts.opacity = o.opacity;
+            if (o.cutaway != null) { state.opts.cutaway = !!o.cutaway; var cbx = document.getElementById('vol-gl-cut'); if (cbx) cbx.checked = state.opts.cutaway; }
+            if (o.cutKm != null) { state.opts.cutKm = o.cutKm; var ck = document.getElementById('vol-gl-cutkm-val'); if (ck) ck.textContent = o.cutKm + ' km'; if (!state.opts.cutaway) { state.opts.cutaway = true; var cb = document.getElementById('vol-gl-cut'); if (cb) cb.checked = true; } }
+            if (o.zMaxKm != null) { state.opts.zMaxKm = o.zMaxKm; var zv = document.getElementById('vol-gl-zmax-val'); if (zv) zv.textContent = o.zMaxKm >= 18 ? 'all' : o.zMaxKm + ' km'; }
             if (o.exag != null) { state.opts.exag = o.exag; var ev = document.getElementById('vol-gl-exag-val'); if (ev) ev.textContent = o.exag + '×'; }
             if (o.tilt != null) { state.opts.tilt = o.tilt; var tv = document.getElementById('vol-gl-tilt-val'); if (tv) tv.textContent = o.tilt + '°'; try { state.map._gl.easeTo({ pitch: o.tilt, duration: 300 }); } catch (e) {} }
             if (o.bearing != null) { var bv = document.getElementById('vol-gl-bear-val'); if (bv) bv.textContent = o.bearing + '°'; try { state.map._gl.easeTo({ bearing: o.bearing, duration: 300 }); } catch (e) {} }
