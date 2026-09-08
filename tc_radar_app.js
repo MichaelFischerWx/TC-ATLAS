@@ -609,6 +609,7 @@ function exitFocusMode() {
     _focusMode = false;
     if (_focusMarker) { map.removeLayer(_focusMarker); _focusMarker = null; }
     if (window.TCVolGL && TCVolGL.isOn()) TCVolGL.hide();
+    _archiveFLMapRemove(); _archiveSondeMapRemove();
     if (_radarMapOn) _radarMapOff();   // the map is leaving the storm; restore the 3-panel plot
     _stormGridRemove();
     removeIRMapOverlay();
@@ -4371,6 +4372,8 @@ function _radarMapRestyle(ch) {
     if (ch.colorscale) _lastPlanRender.colorscale = ch.colorscale;
     if (_radarMapOn) _radarMapDraw();
     if (window.TCVolGL && TCVolGL.isOn()) TCVolGL.update({ recolor: true });
+    if (_archFLMapLayer && _archiveFLData) _archiveFLMapDraw(_archiveFLData);
+    if (_archSondeMapLayer && _archiveSondeData) _archiveSondeMapDraw(_archiveSondeData);
 }
 
 function resetColorRange() {
@@ -14241,6 +14244,7 @@ function archiveToggleFlightLevel() {
 
     if (_archiveFLData && _archiveFLData._caseIndex === currentCaseIndex) {
         _archiveRenderFLOverlay(_archiveFLData);
+        if (_focusMode) _archiveFLMapDraw(_archiveFLData);
         _archiveRenderFLTimeSeries(_archiveFLData);
         if (btn) { btn.innerHTML = _icon('plane') + 'FL'; btn.disabled = false; btn.classList.add('active'); }
         return;
@@ -14268,6 +14272,7 @@ function archiveToggleFlightLevel() {
             }
 
             _archiveRenderFLOverlay(json);
+            if (_focusMode) _archiveFLMapDraw(json);
             _archiveRenderFLTimeSeries(json);
             if (btn) { btn.innerHTML = _icon('plane') + 'FL'; btn.disabled = false; btn.classList.add('active'); }
         })
@@ -14278,7 +14283,54 @@ function archiveToggleFlightLevel() {
         });
 }
 
+// ── Flight-level obs on the MAP (focus mode) ─────────────────
+// The Plotly overlay lives on the (hidden, in two-panel mode) plan view, so
+// the same 10-s observations are drawn on the map. Positions are STORM-
+// RELATIVE (x_km/y_km about the analysis center, as on the plan view), not
+// the aircraft's earth position: the radar composite is storm-relative, and
+// obs up to ±30 min from analysis time would otherwise sit displaced by the
+// storm's motion. Track as a thin line, obs as dots colored by FL wind speed
+// on the current TDR colorscale/range so they compare directly with the drape.
+function _relLatLon(xKm, yKm) {
+    var c = _stormGridCenter() || (currentCaseData ? [currentCaseData.latitude, currentCaseData.longitude] : null);
+    if (!c) return null;
+    var cosLat = Math.cos(c[0] * Math.PI / 180) || 1;
+    return [c[0] + yKm / 111.0, c[1] + xKm / (111.0 * cosLat)];
+}
+var _archFLMapLayer = null;
+function _archiveFLMapRemove() { if (_archFLMapLayer) { try { map.removeLayer(_archFLMapLayer); } catch (e) {} _archFLMapLayer = null; } }
+function _archiveFLMapDraw(flData) {
+    _archiveFLMapRemove();
+    if (!flData) return;
+    var obs = flData.obs_10s || flData.observations;
+    if (!obs || !obs.length) return;
+    if (!_trackCanvasRenderer) _trackCanvasRenderer = L.canvas({ padding: 0.5 });
+    var cs = (_lastPlanRender && _lastPlanRender.colorscale) || 'Jet';
+    var vmin = (_lastPlanRender && _lastPlanRender.vmin != null) ? _lastPlanRender.vmin : 0;
+    var vmax = (_lastPlanRender && _lastPlanRender.vmax != null) ? _lastPlanRender.vmax : 80;
+    var g = L.layerGroup(), line = [];
+    obs.forEach(function(o) { if (o.x_km != null && o.y_km != null) { var q = _relLatLon(o.x_km, o.y_km); if (q) line.push(q); } });
+    if (line.length >= 2) g.addLayer(L.polyline(line, { renderer: _trackCanvasRenderer, color: 'rgba(255,255,255,0.55)', weight: 1, interactive: false }));
+    obs.forEach(function(o) {
+        if (o.x_km == null || o.y_km == null) return;
+        var ll = _relLatLon(o.x_km, o.y_km); if (!ll) return;
+        var ws = o.fl_wspd_ms;
+        var rgb = ws != null ? _csColor(cs, vmin, vmax, ws) : [160, 160, 160];
+        var cm = L.circleMarker(ll, { renderer: _trackCanvasRenderer, radius: 3.5, color: '#111', weight: 0.6,
+            fillColor: 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')', fillOpacity: 0.95, opacity: 0.9 });
+        var alt = o.gps_alt_m != null ? (o.gps_alt_m / 1000).toFixed(1) + ' km' : '';
+        cm.bindTooltip('<strong>FL ' + (o.time || '') + ' UTC</strong> <span style="opacity:.7">(storm-relative)</span><br>' +
+            (ws != null ? 'Wind ' + ws.toFixed(1) + ' m/s' + (o.fl_wdir_deg != null ? ' / ' + Math.round(o.fl_wdir_deg) + '\u00b0' : '') + '<br>' : '') +
+            (o.sfmr_wspd_ms != null ? 'SFMR ' + o.sfmr_wspd_ms.toFixed(1) + ' m/s<br>' : '') +
+            (alt ? 'Alt ' + alt + ' \u00b7 ' : '') + (o.r_km != null ? 'r ' + Math.round(o.r_km) + ' km' : ''),
+            { className: 'track-tooltip', direction: 'top', offset: [0, -4] });
+        g.addLayer(cm);
+    });
+    _archFLMapLayer = g.addTo(map);
+}
+
 function _archiveRemoveFLOverlay() {
+    _archiveFLMapRemove();
     var plotDiv = document.getElementById('plotly-chart');
     if (!plotDiv || !plotDiv.data) return;
 
@@ -14853,6 +14905,7 @@ function _archFLTSRender(flData) {
 function _archiveFLReset() {
     _archiveFLActive = false;
     _archiveFLData = null;
+    _archiveFLMapRemove();
     _archiveFLTraceIndices = [];
     var btn = document.getElementById('btn-archive-fl');
     if (btn) { btn.innerHTML = _icon('plane') + 'FL'; btn.classList.remove('fl-active'); btn.classList.remove('active'); btn.disabled = false; }
@@ -14895,6 +14948,7 @@ function archiveToggleDropsondes() {
 
     if (_archiveSondeData && _archiveSondeData._caseIndex === currentCaseIndex) {
         _archiveRenderSondeOverlay(_archiveSondeData);
+        if (_focusMode) _archiveSondeMapDraw(_archiveSondeData);
         _archiveRenderSondePanel(_archiveSondeData);
         if (btn) { btn.innerHTML = _icon('parachute') + 'Sondes'; btn.disabled = false; btn.classList.add('active'); }
         return;
@@ -14925,6 +14979,7 @@ function archiveToggleDropsondes() {
             }
 
             _archiveRenderSondeOverlay(json);
+            if (_focusMode) _archiveSondeMapDraw(json);
             _archiveRenderSondePanel(json);
             if (btn) { btn.innerHTML = _icon('parachute') + 'Sondes'; btn.disabled = false; btn.classList.add('active'); }
         })
@@ -14935,7 +14990,50 @@ function archiveToggleDropsondes() {
         });
 }
 
+// ── Dropsondes on the MAP (focus mode) ────────────────────────
+// Storm-relative like the FL layer: drift path from launch to splash, a
+// marker at the splash point colored by the sonde's peak wind on the TDR
+// colorscale, tooltip with launch time and surface values.
+var _archSondeMapLayer = null;
+function _archiveSondeMapRemove() { if (_archSondeMapLayer) { try { map.removeLayer(_archSondeMapLayer); } catch (e) {} _archSondeMapLayer = null; } }
+function _archiveSondeMapDraw(data) {
+    _archiveSondeMapRemove();
+    if (!data || !data.dropsondes || !data.dropsondes.length) return;
+    if (!_trackCanvasRenderer) _trackCanvasRenderer = L.canvas({ padding: 0.5 });
+    var cs = (_lastPlanRender && _lastPlanRender.colorscale) || 'Jet';
+    var vmin = (_lastPlanRender && _lastPlanRender.vmin != null) ? _lastPlanRender.vmin : 0;
+    var vmax = (_lastPlanRender && _lastPlanRender.vmax != null) ? _lastPlanRender.vmax : 80;
+    var g = L.layerGroup();
+    data.dropsondes.forEach(function(sd, idx) {
+        var p = sd.profile || {};
+        if (!p.x_km || p.x_km.length < 1) return;
+        var path = [], maxW = null;
+        for (var i = 0; i < p.x_km.length; i++) {
+            if (p.x_km[i] == null || p.y_km[i] == null) continue;
+            var q = _relLatLon(p.x_km[i], p.y_km[i]); if (q) path.push(q);
+            if (p.wspd && p.wspd[i] != null && (maxW === null || p.wspd[i] > maxW)) maxW = p.wspd[i];
+        }
+        if (!path.length) return;
+        if (path.length >= 2) g.addLayer(L.polyline(path, { renderer: _trackCanvasRenderer, color: 'rgba(255,255,255,0.8)', weight: 1.2, dashArray: '3 3', interactive: false }));
+        var rgb = maxW != null ? _csColor(cs, vmin, vmax, maxW) : [200, 200, 200];
+        var end = path[path.length - 1];
+        var mk = L.circleMarker(end, { renderer: _trackCanvasRenderer, radius: 6, color: '#fff', weight: 1.5,
+            fillColor: 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')', fillOpacity: 0.95, opacity: 1 });
+        var sfc = sd.surface || {};
+        var tOff = sd.time_offset_min != null ? ((sd.time_offset_min >= 0 ? '+' : '') + sd.time_offset_min.toFixed(0) + ' min') : '';
+        mk.bindTooltip('<strong>Sonde ' + (sd.sonde_id || idx) + '</strong> ' + (sd.launch_time || '') + (tOff ? ' (' + tOff + ')' : '') + '<br>' +
+            (maxW != null ? 'Max wind ' + maxW.toFixed(1) + ' m/s<br>' : '') +
+            (sfc.wspd != null ? 'Sfc wind ' + Number(sfc.wspd).toFixed(1) + ' m/s' : '') +
+            (sfc.pres != null ? ' \u00b7 ' + Number(sfc.pres).toFixed(1) + ' hPa' : '') +
+            (sd.hit_surface === false ? '<br><span style="opacity:.7">did not reach surface</span>' : ''),
+            { className: 'track-tooltip', direction: 'top', offset: [0, -6] });
+        g.addLayer(mk);
+    });
+    _archSondeMapLayer = g.addTo(map);
+}
+
 function _archiveRemoveSondeOverlay() {
+    _archiveSondeMapRemove();
     var plotDiv = document.getElementById('plotly-chart');
     if (!plotDiv || !plotDiv.data) return;
 
@@ -15795,6 +15893,7 @@ function archiveShowSondeWind(idx) {
 function _archiveSondeReset() {
     _archiveSondeActive = false;
     _archiveSondeData = null;
+    _archiveSondeMapRemove();
     _archiveSondeTraceIndices = [];
     var btn = document.getElementById('btn-archive-sonde');
     if (btn) { btn.innerHTML = _icon('parachute') + 'Sondes'; btn.classList.remove('sonde-active'); btn.classList.remove('active'); btn.disabled = false; }
