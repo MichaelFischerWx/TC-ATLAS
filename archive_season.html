@@ -8,12 +8,20 @@
 <link rel="icon" href="tc-atlas-favicon-32.png">
 <link href="assets/vendor/maplibre/maplibre-gl.css?v=4.7.1" rel="stylesheet">
 <script src="theme.js?v=20260908a"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
 <style>
   /* Site palette (mirrors tc_radar_styles.css); theme.js sets data-theme="dark" from the user's site-wide choice */
   :root { --bg:#ffffff; --surface:#f7f8fa; --surface-raised:#ffffff; --border:rgba(15,22,35,.08); --text:#0f1623; --muted:#5b6573; --um-green:#005030; --um-orange:#F47321; --panel:rgba(255,255,255,.88); --ctl:#eef1f5; --ctl-border:rgba(15,22,35,.12); }
   [data-theme="dark"] { --bg:#0a0e14; --surface:#111722; --surface-raised:#161d2a; --border:rgba(255,255,255,.08); --text:#e6ebf2; --muted:#8993a4; --um-green:#2e9c6a; --panel:rgba(17,23,34,.88); --ctl:#1c2432; --ctl-border:rgba(255,255,255,.12); }
   html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:13px/1.4 'DM Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow:hidden; }
-  #map { position:absolute; inset:0; }
+  :root { --hdr:52px; }
+  .topbar { position:relative; z-index:20; }
+  #map { position:absolute; left:0; right:0; bottom:0; top:var(--hdr); }
+  #top { top:calc(var(--hdr) + 10px) !important; }
+  #legend { top:calc(var(--hdr) + 10px) !important; }
   .hud { position:absolute; z-index:5; background:var(--panel); border:1px solid var(--border); border-radius:10px; -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px); box-shadow:0 6px 24px rgba(0,0,0,.3); }
   #top { top:10px; left:10px; display:flex; align-items:center; gap:8px; padding:6px 10px; flex-wrap:wrap; max-width:calc(100% - 20px); }
   @media (min-width:1100px) { #top { max-width:calc(100% - 520px); } }   /* leave the legend its own column */
@@ -63,15 +71,46 @@
   .lbl .g { color:#7dd3fc; margin-left:4px; }
   .lbl .b { color:#fde68a; margin-left:4px; }
   #dt { white-space:nowrap; }
-  @media (max-width:768px) { #legend { display:none; } #dt { min-width:0; font-size:11.5px; } #top b { font-size:13px; } #bar { gap:6px; padding:6px 8px; } #speed { padding:4px 4px; } }
+  @media (max-width:768px) {
+    #legend { display:none; } #top b { font-size:13px; }
+    #bar { flex-wrap:wrap; gap:6px 8px; padding:6px 8px; }
+    #dt { min-width:0; font-size:12px; flex:1; text-align:right; }
+    #speed { padding:4px 4px; }
+    #strip { flex:1 0 100%; order:10; height:26px; }
+  }
 </style>
 </head>
 <body>
+    <header class="topbar" role="banner">
+        <div class="topbar-inner">
+            <div class="topbar-brand">
+                <img src="tc-atlas-favicon-64.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
+                <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                <div class="topbar-divider"></div>
+                <div class="topbar-subtitle">Global IR Archive</div>
+            </div>
+            <nav aria-label="Main navigation">
+                <ul class="topbar-nav">
+                    <li><a href="index.html" role="button">Home</a></li>
+                    <li><a href="explorer.html" role="button"><span class="nav-full">TC-RADAR</span><span class="nav-short">Radar</span></a></li>
+                    <li><a href="realtime_ir.html" role="button"><span class="nav-full">Real-Time Monitor</span><span class="nav-short">RT Monitor</span></a></li>
+                    <li><a href="global_archive.html" role="button" class="ga-nav-active nav-active"><span class="nav-full">Global Archive</span><span class="nav-short">Global</span></a></li>
+                    <li><a href="tc_climatology.html" role="button"><span class="nav-full">TC Climatology</span><span class="nav-short">Climo</span></a></li>
+                    <li><a href="explorer.html?tab=composites" role="button"><span class="nav-full">Composites</span><span class="nav-short">Comp.</span></a></li>
+                    <li><a href="index.html#about" role="button">About</a></li>
+                    <li><a href="index.html#cite" role="button">Cite</a></li>
+                </ul>
+            </nav>
+                        <button class="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
+                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
+            <button class="nav-hamburger" onclick="this.classList.toggle('open');document.querySelector('.topbar-nav').classList.toggle('mobile-open')" aria-label="Menu">&#9776;</button>
+        </div>
+    </header>
 <div id="map"></div>
 <div id="top" class="hud">
-  <a class="home" href="index.html" title="TC-ATLAS home"><img src="tc-atlas-favicon-32.png" alt="">TC-ATLAS</a>
   <b>Global IR Archive</b>
-  <a class="back" href="global_archive.html" title="Storm browser, storm detail, GHOST reanalysis">Global Archive &rarr;</a>
   <select id="year" title="Season"></select>
   <select id="basin" title="Map focus">
     <option value="AL">Atlantic</option><option value="EP">E. Pacific</option><option value="WP">W. Pacific</option>
@@ -121,6 +160,8 @@
   if (!q.get('year') && !q.get('t')) q.set('t', '1995082900');   // opening frame: Humberto, Iris, Karen and Luis all named at once
   var trailsOn = true, opacity = 1;
   var $ = function (id) { return document.getElementById(id); };
+  function fitHeader() { var hb = document.querySelector('.topbar'); if (hb) document.documentElement.style.setProperty('--hdr', hb.getBoundingClientRect().height + 'px'); }
+  fitHeader(); window.addEventListener('resize', fitHeader);
   var isTouch = window.matchMedia && matchMedia('(pointer: coarse)').matches;
   var maxTex = (function () { try { var g = document.createElement('canvas').getContext('webgl'); return g ? g.getParameter(g.MAX_TEXTURE_SIZE) : 4096; } catch (e) { return 4096; } })();
 
@@ -136,7 +177,7 @@
       layers: [{ id: 'carto', type: 'raster', source: 'carto' }] } });
   map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
   var mapReady = false, pending = false;
-  map.on('load', function () { mapReady = true; ensureLayers(); if (pending) { pending = false; show(idx); } });
+  map.on('load', function () { mapReady = true; ensureLayers(); fitHeader(); map.resize(); if (pending) { pending = false; show(idx); } });
 
   var frames = [], bounds = null, idx = 0, playing = false, timer = null, reqSeq = 0, curTs = null;
   var storms = [], markers = {}, followSid = null;
