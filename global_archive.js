@@ -607,7 +607,8 @@ function _ctxUpdate(frameMeta) {
         if (!index || !index.ts[t.ts]) { _ctxRemove(); return; }
         return _ctxFetchDecoded(t.year, t.ts).then(function (dec) {
             if (req !== _ctxReq || !detailMap || !irOverlayVisible) return;
-            var b = index.bounds;
+            // grid from the frame's aspect ratio (GridSat fallback frames can sit inside a MergIR year)
+            var b = (dec.rows / dec.cols > 0.36) ? { south: -70.035, north: 69.965, west: -180.035, east: 179.975 } : { south: -60, north: 60, west: -180, east: 180 };
             var uri = renderTbToDataURI(dec.idx, dec.rows, dec.cols, irSelectedColormap, b.south, b.north);
             var bounds = L.latLngBounds([b.south, Math.max(-180, b.west)], [b.north, Math.min(180, b.east)]);
             if (_ctxOverlay && _ctxOverlayMap === detailMap && detailMap.hasLayer(_ctxOverlay)) {

@@ -185,8 +185,9 @@
     return new Promise(function (res, rej) { cv.toBlob(function (bl) { if (!bl) { rej(new Error('canvas toBlob returned null')); return; } res(URL.createObjectURL(bl)); }, 'image/png'); });
   }
   function render(ts, rec) {
-    if (rendered[ts]) return Promise.resolve(rendered[ts].url);
-    return renderIdx(rec, bounds, canvas).then(function (url) { lru(rendered, rOrder, ts, { url: url }, isTouch ? 8 : 24); return url; });
+    if (rendered[ts]) return Promise.resolve(rendered[ts]);
+    var b = boundsFor(rec);
+    return renderIdx(rec, b, canvas).then(function (url) { var r = { url: url, b: b }; lru(rendered, rOrder, ts, r, isTouch ? 8 : 24); return r; });
   }
 
   // ---- 4 km storm sector (the archive's per-storm frames) over the context ----
@@ -288,7 +289,7 @@
     if (!curTs || isTouch) return;
     var lat = ev.lngLat.lat, lon = ((ev.lngLat.lng + 180) % 360 + 360) % 360 - 180, v = 0, src = '';
     if (secCur && secCur.fr && secCur.fr.rec) { v = sampleIdx(secCur.fr.rec, secCur.fr.b, lat, lon); if (v) src = '4 km · ' + secCur.s.name; }
-    if (!v && decoded[curTs] && bounds) { v = sampleIdx(decoded[curTs], bounds, lat, lon); if (v) src = '8 km'; }
+    if (!v && decoded[curTs]) { v = sampleIdx(decoded[curTs], boundsFor(decoded[curTs]), lat, lon); if (v) src = '8 km'; }
     if (!v) { tbEl.style.display = 'none'; return; }
     tbEl.innerHTML = '<b>' + tbK(v).toFixed(1) + ' K</b><small>' + src + ' · ' + Math.abs(lat).toFixed(2) + (lat >= 0 ? 'N ' : 'S ') + Math.abs(lon).toFixed(2) + (lon >= 0 ? 'E' : 'W') + '</small>';
     tbEl.style.display = 'block'; tbEl.style.left = (ev.point.x + 14) + 'px'; tbEl.style.top = (ev.point.y + 14) + 'px';
@@ -296,7 +297,9 @@
   map.on('mouseout', function () { tbEl.style.display = 'none'; });
   window.__season = { map: map, zoom: function () { return map.getZoom(); }, forceReady: function () { mapReady = true; ensureLayers(); if (pending) { pending = false; show(idx); } }, sector: function () { return updateSector(frames[idx]); }, nearest: function () { var s = frames.length && nearestStorm(tsMs(frames[idx])); return s && s.name; }, state: function () { return { frames: frames.length, idx: idx, ready: mapReady, secOn: secOn, shown: secShown }; } };
   $('secbtn').onclick = function () { secOn = !secOn; this.classList.toggle('active', secOn); if (!secOn) removeSector(); else if (frames.length) updateSector(frames[idx]); };
-  function coords() { var w = Math.max(-179.99, bounds.west), e = Math.min(179.99, bounds.east), n = Math.min(85, bounds.north), s = Math.max(-85, bounds.south); return [[w, n], [e, n], [e, s], [w, s]]; }
+  var GRID_BOUNDS = { gridsat: { south: -70.035, north: 69.965, west: -180.035, east: 179.975 }, mergir: { south: -60, north: 60, west: -180, east: 180 } };
+  function boundsFor(rec) { return (rec && rec.rows / rec.cols > 0.36) ? GRID_BOUNDS.gridsat : GRID_BOUNDS.mergir; }
+  function coordsFor(b) { var w = Math.max(-179.99, b.west), e = Math.min(179.99, b.east), n = Math.min(85, b.north), s = Math.max(-85, b.south); return [[w, n], [e, n], [e, s], [w, s]]; }
   // Double-buffered raster: MapLibre decodes an updated image source asynchronously, so a
   // single source would show the new frame a beat after the markers moved. Each product has
   // two image sources/layers; the next frame loads into the hidden one, we wait for MapLibre
@@ -437,7 +440,7 @@
       .then(function (r) {
         // stage the sector first so its layers exist before the context layers are created beneath them
         return stageSector(r[1]).then(function (showSec) {
-          return ctxBuf.load(r[0], coords()).then(function (k) { return { k: k, showSec: showSec }; });
+          return ctxBuf.load(r[0].url, coordsFor(r[0].b)).then(function (k) { return { k: k, showSec: showSec }; });
         });
       });
   }

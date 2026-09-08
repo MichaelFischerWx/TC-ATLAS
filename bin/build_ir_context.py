@@ -65,7 +65,8 @@ MERGIR_DIRECT = "https://disc2.gesdisc.eosdis.nasa.gov/data/MERGED_IR/GPM_MERGIR
 GRIDSAT_DIRECT = "https://www.ncei.noaa.gov/data/geostationary-ir-channel-brightness-temperature-gridsat-b1/access"
 TB_VMIN, TB_VMAX = 170.0, 310.0
 WEBP_QUALITY = 90
-MERGIR_FIRST_YEAR = 2000     # archive uses MergIR from 2000 on, GridSat before
+MERGIR_FIRST_YEAR = 1998     # MergIR record begins 1998-02-07 (matches the archive's sector ladder); GridSat before,
+                             # and GridSat is the per-timestamp fallback when a MergIR file is missing (e.g. Jan 1998)
 GRIDSAT_FIRST_YEAR = 1980
 
 _print_lock = threading.Lock()
@@ -230,7 +231,8 @@ def write_year_index(r2, year, src, bounds_by_src, dry, out):
     if bounds is None:
         bounds = DEFAULT_BOUNDS[src]
     doc = {"year": year, "src": src, "n": len(ts), "ts": ts,
-           "bounds": bounds, "vmin": TB_VMIN, "vmax": TB_VMAX,
+           "bounds": bounds, "bounds_by_src": {k: (bounds_by_src.get(k) or DEFAULT_BOUNDS[k]) for k in DEFAULT_BOUNDS},
+           "vmin": TB_VMIN, "vmax": TB_VMAX,
            "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     body = json.dumps(doc, separators=(",", ":")).encode()
     if dry:
@@ -269,7 +271,14 @@ def process_one(dt, session, r2, tmpdir, dry, out, bounds_by_src):
                 return dt, "stopped", 0, 0.0
             try:
                 if download(session, url, local) is None:
-                    return dt, "missing", 0, 0.0
+                    if src == "mergir" and dt.year <= 2024:
+                        # MergIR gap → GridSat-B1 for this timestamp (its record runs to 2024)
+                        src = "gridsat"; url = f"{GRIDSAT_DIRECT}/{dt.year}/GRIDSAT-B1.{dt:%Y.%m.%d.%H}.v02r01.nc"
+                        local = os.path.join(tmpdir, f"{dt:%Y%m%d%H}_{src}.nc")
+                        if download(session, url, local) is None:
+                            return dt, "missing", 0, 0.0
+                    else:
+                        return dt, "missing", 0, 0.0
                 last_err = None
                 break
             except Exception as e:           # network blip, wake-from-sleep, 5xx
