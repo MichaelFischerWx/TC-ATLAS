@@ -46,8 +46,8 @@
   .lbl.follow { border-color:var(--um-orange); box-shadow:0 0 0 1px var(--um-orange); }
   .lbl .open { margin-left:6px; color:#cbd5e1; opacity:.8; }
   .lbl .open:hover { color:#fff; opacity:1; }
-  .dot { cursor:pointer; pointer-events:auto; }
-  .dot { position:absolute; left:-3px; top:-3px; width:6px; height:6px; border-radius:50%; background:#fff; box-shadow:0 0 0 1.5px rgba(0,0,0,.6); }
+
+
   .tick { position:absolute; left:14px; top:-14px; width:14px; height:14px; border-top:1.5px solid rgba(255,255,255,.7); border-right:0; transform:skewX(-45deg); transform-origin:left bottom; pointer-events:none; }
   .lbl b { font-weight:700; letter-spacing:.02em; }
   .lbl .g { color:#7dd3fc; margin-left:4px; }
@@ -409,9 +409,9 @@
       var m = markers[s.sid];
       if (!m) {
         var el = document.createElement('div'); el.style.cssText = 'position:relative;width:0;height:0;';
-        el.innerHTML = '<div class="dot"></div><div class="lbl" style="position:absolute;left:10px;top:-24px;"></div>';
+        // no centre dot: the eye stays visible; the dashed circle and the label are the click targets
+        el.innerHTML = '<div class="lbl" style="position:absolute;left:14px;top:-26px;"></div>';
         var lock = function (e) { e.stopPropagation(); setFollow(followSid === s.sid ? null : s); };
-        el.querySelector('.dot').onclick = lock;
         el.querySelector('.lbl').onclick = function (e) {
           if (e.target.classList.contains('open')) { e.stopPropagation(); window.open('global_archive.html#tab=detail&storm=' + encodeURIComponent(s.sid), '_blank'); return; }
           lock(e);
