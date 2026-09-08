@@ -539,7 +539,7 @@ function _ctxGetIndex(year) {
         .then(function (doc) {
             var set = {};
             (doc.ts || []).forEach(function (t) { set[t] = 1; });
-            var idx = { ts: set, bounds: doc.bounds || { south: -60, north: 60, west: -180, east: 180 }, src: doc.src };
+            var idx = { ts: set, bounds: doc.bounds || (year < 2000 ? { south: -70.035, north: 69.965, west: -180.035, east: 179.975 } : { south: -60, north: 60, west: -180, east: 180 }), src: doc.src };
             _ctxIndex[year] = idx; return idx;
         })
         .catch(function () { _ctxIndex[year] = false; return false; });

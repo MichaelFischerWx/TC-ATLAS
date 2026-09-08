@@ -238,7 +238,7 @@
       fetch(SEA + '/' + y + '.json').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
     ]).then(function (res) {
       var ctx = res[0], sea = res[1];
-      if (ctx) { bounds = ctx.bounds; frames = (ctx.ts || []).slice().sort(); }
+      if (ctx) { bounds = ctx.bounds || (y < 2000 ? { south: -70.035, north: 69.965, west: -180.035, east: 179.975 } : { south: -60, north: 60, west: -180, east: 180 }); frames = (ctx.ts || []).slice().sort(); }
       storms = sea ? sea.storms : [];
       slider.max = Math.max(0, frames.length - 1);
       var ng = storms.filter(function (s) { return s.gv; }).length;

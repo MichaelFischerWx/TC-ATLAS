@@ -72,6 +72,12 @@ _print_lock = threading.Lock()
 _STOP = threading.Event()      # set by SIGINT/SIGTERM: finish in-flight, write indexes, exit
 INDEX_FLUSH_EVERY = 200        # rewrite the year index this often so an interrupted run leaves a usable index
 RETRIES = 3                    # per-frame attempts (sleep/wake and GES DISC hiccups fail transiently)
+# Native grid edges per source — used for the index when a pass processed no
+# frame of that source (e.g. a resume pass that found everything already built).
+DEFAULT_BOUNDS = {
+    "gridsat": {"south": -70.035, "north": 69.965, "west": -180.035, "east": 179.975},
+    "mergir": {"south": -60.0, "north": 60.0, "west": -180.0, "east": 180.0},
+}
 _NC_LOCK = threading.Lock()    # HDF5/netCDF4 is NOT thread-safe: concurrent opens segfault the process.
                                # Downloads and WebP encoding stay parallel; only the file read is serialized.
 
@@ -214,8 +220,17 @@ def write_year_index(r2, year, src, bounds_by_src, dry, out):
     else:
         d = os.path.join(out, str(year))
         ts = sorted(f[:-5] for f in os.listdir(d) if f.endswith(".webp")) if os.path.isdir(d) else []
+    bounds = bounds_by_src.get(src)
+    if bounds is None and r2:          # keep what the previous index had
+        try:
+            prev = json.loads(r2.get_object(Bucket=R2_BUCKET, Key=f"{PREFIX}/{year}/index.json")["Body"].read())
+            bounds = prev.get("bounds") or None
+        except Exception:
+            bounds = None
+    if bounds is None:
+        bounds = DEFAULT_BOUNDS[src]
     doc = {"year": year, "src": src, "n": len(ts), "ts": ts,
-           "bounds": bounds_by_src.get(src), "vmin": TB_VMIN, "vmax": TB_VMAX,
+           "bounds": bounds, "vmin": TB_VMIN, "vmax": TB_VMAX,
            "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     body = json.dumps(doc, separators=(",", ":")).encode()
     if dry:
@@ -228,8 +243,8 @@ def write_year_index(r2, year, src, bounds_by_src, dry, out):
 
 def write_root_index(r2, years_meta, bounds_by_src, dry, out):
     doc = {"prefix": PREFIX, "quality": WEBP_QUALITY, "vmin": TB_VMIN, "vmax": TB_VMAX,
-           "sources": {"mergir": {"res_deg": 0.0727, "bounds": bounds_by_src.get("mergir")},
-                       "gridsat": {"res_deg": 0.07, "bounds": bounds_by_src.get("gridsat")}},
+           "sources": {"mergir": {"res_deg": 0.0727, "bounds": bounds_by_src.get("mergir") or DEFAULT_BOUNDS["mergir"]},
+                       "gridsat": {"res_deg": 0.07, "bounds": bounds_by_src.get("gridsat") or DEFAULT_BOUNDS["gridsat"]}},
            "years": years_meta, "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     body = json.dumps(doc, separators=(",", ":")).encode()
     if dry:
