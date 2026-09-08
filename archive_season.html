@@ -51,7 +51,9 @@
   </select>
   <button id="src" title="Intensity source shown in labels and marker colours">Best track</button>
   <button id="trails" class="active" title="Show 48-h track trails">Trails</button>
+  <button id="secbtn" class="active" title="When zoomed in (level 5+), overlay the nearest storm's exact 4 km sector frame on the 8 km context">4 km sector</button>
   <span id="status"></span>
+  <span id="sec" style="color:#7dd3fc;font-size:11px"></span>
 </div>
 <div id="legend" class="hud">
   <div class="row"><i style="background:#60a5fa"></i>TD/TS &lt;64 kt <i style="background:#fbbf24;margin-left:8px"></i>Cat 1-2 <i style="background:#f87171;margin-left:8px"></i>Cat 3 <i style="background:#ef4444;margin-left:8px"></i>Cat 4 <i style="background:#c084fc;margin-left:8px"></i>Cat 5</div>
@@ -73,6 +75,7 @@
   var q = new URLSearchParams(location.search);
   var CTX = 'https://cdn.tcatlas.org/ir-context/v1', SEA = 'https://cdn.tcatlas.org/archive/seasons/v1';
   var CK = '?key=cb1_279y_1_ee38c6417ffd46ab745cc82a';
+  var API = 'https://api.tcatlas.org', SECTOR_ZOOM = 4.5, SECTOR_MAX_DEG = 14;
   var LUT = new Uint8Array([0,0,0,0,28,12,96,255,28,12,96,255,28,12,96,255,28,12,96,255,28,12,96,255,28,12,96,255,29,12,97,255,31,13,100,255,33,14,102,255,35,14,105,255,37,15,107,255,39,16,109,255,41,16,112,255,43,17,114,255,45,18,117,255,47,18,119,255,49,19,122,255,51,20,124,255,53,20,126,255,55,21,129,255,57,22,131,255,59,22,134,255,61,23,136,255,63,24,139,255,65,25,141,255,68,26,143,255,71,27,145,255,75,29,148,255,78,30,150,255,81,31,152,255,84,32,154,255,87,34,156,255,90,35,159,255,93,36,161,255,96,38,163,255,99,39,165,255,102,40,167,255,105,42,170,255,108,43,172,255,112,44,174,255,115,46,176,255,118,47,178,255,121,48,181,255,127,50,183,255,132,52,185,255,137,54,187,255,143,56,189,255,148,57,192,255,153,59,194,255,158,61,196,255,164,63,198,255,169,64,199,255,172,62,194,255,175,60,189,255,178,58,184,255,181,57,180,255,184,55,175,255,187,53,170,255,190,51,165,255,193,50,160,255,196,48,155,255,194,47,145,255,192,45,135,255,190,44,126,255,189,43,116,255,187,41,106,255,185,40,97,255,183,39,87,255,182,37,77,255,180,36,68,255,184,41,67,255,188,46,65,255,191,50,64,255,195,55,63,255,199,59,61,255,203,64,60,255,206,69,59,255,210,73,57,255,214,78,56,255,216,84,55,255,217,90,54,255,219,96,53,255,220,102,52,255,222,108,52,255,223,114,51,255,225,120,50,255,226,126,49,255,228,131,48,255,229,138,48,255,230,146,48,255,231,153,48,255,232,160,48,255,233,167,48,255,235,174,48,255,236,181,48,255,237,188,48,255,238,195,48,255,234,198,47,255,229,201,46,255,224,204,45,255,219,206,45,255,213,209,44,255,208,211,43,255,203,214,42,255,198,217,41,255,193,219,40,255,184,219,42,255,173,218,45,255,163,216,49,255,152,215,52,255,142,214,55,255,131,212,58,255,120,211,61,255,110,210,64,255,99,208,67,255,92,206,72,255,86,202,77,255,79,199,82,255,73,196,88,255,67,192,93,255,61,189,98,255,55,186,103,255,48,183,109,255,42,179,114,255,39,176,119,255,39,173,125,255,38,169,130,255,37,166,136,255,36,163,142,255,35,159,147,255,34,156,153,255,33,153,158,255,32,149,164,255,34,150,168,255,38,153,171,255,42,157,174,255,46,161,178,255,50,164,181,255,54,168,184,255,58,171,188,255,62,175,191,255,66,178,194,255,72,182,197,255,80,185,200,255,88,188,203,255,96,192,205,255,104,195,208,255,112,198,211,255,119,201,213,255,127,205,216,255,135,208,218,255,142,210,220,255,146,211,221,255,150,211,221,255,154,212,222,255,158,212,222,255,163,212,222,255,167,213,223,255,171,213,223,255,175,214,224,255,179,214,224,255,184,215,225,255,188,215,225,255,192,215,225,255,196,216,226,255,200,216,226,255,205,217,227,255,209,217,227,255,213,218,228,255,215,217,227,255,213,215,225,255,211,213,223,255,210,211,222,255,208,209,220,255,206,207,218,255,204,205,216,255,202,203,214,255,200,201,212,255,198,199,210,255,196,196,208,255,194,194,206,255,192,192,204,255,190,190,202,255,188,188,200,255,186,186,198,255,184,184,196,255,182,182,194,255,180,180,192,255,176,176,188,255,173,173,185,255,170,170,182,255,166,166,178,255,163,163,175,255,160,160,172,255,156,156,168,255,153,153,165,255,150,150,162,255,147,147,159,255,143,143,155,255,140,140,152,255,137,137,149,255,133,133,145,255,130,130,142,255,127,127,139,255,123,123,135,255,120,120,132,255,117,117,129,255,115,115,127,255,112,112,124,255,109,109,121,255,106,106,118,255,104,104,116,255,101,101,113,255,98,98,110,255,95,95,107,255,92,92,104,255,90,90,102,255,87,87,99,255,84,84,96,255,81,81,93,255,79,79,91,255,76,76,88,255,73,73,85,255,70,70,82,255,68,68,80,255,67,67,78,255,65,65,76,255,63,63,75,255,61,61,73,255,59,59,71,255,57,57,69,255,55,55,67,255,53,53,65,255,51,51,63,255,50,50,61,255,48,48,59,255,46,46,57,255,44,44,55,255,42,42,53,255,40,40,51,255,38,38,49,255,36,36,47,255,35,35,45,255,33,33,43,255,31,31,41,255,29,29,40,255,27,27,38,255,25,25,36,255,23,23,34,255,21,21,32,255,20,20,30,255,18,18,28,255,16,16,26,255,14,14,24,255,12,12,22,255]);
   var VIEWS = { AL:[-60,22,3], EP:[-115,15,3], WP:[140,18,3], NI:[80,15,3.4], SI:[70,-18,3], SP:[165,-18,3], GL:[0,10,1.6] };
   var year = parseInt(q.get('year') || '2005', 10), basin = q.get('basin') || 'AL', useGhost = q.get('src') === 'ghost';
@@ -129,18 +132,97 @@
       img.src = CTX + '/' + ts.slice(0,4) + '/' + ts + '.webp'; });
     decoded[ts + ':p'] = p; return p;
   }
-  function render(ts, rec) {
-    if (rendered[ts]) return Promise.resolve(rendered[ts].url);
-    var rows = rec.rows, cols = rec.cols; canvas.width = cols; canvas.height = rows;
-    var g = canvas.getContext('2d'), im = g.createImageData(cols, rows), px = im.data;
-    var mY = function (d) { var r = d * Math.PI / 180; return Math.log(Math.tan(Math.PI / 4 + r / 2)); }, mN = mY(bounds.north), mS = mY(bounds.south), mR = mN - mS;
+  // Equirectangular index grid → colormapped, Mercator-row-remapped PNG object URL.
+  function renderIdx(rec, b, cv) {
+    var rows = rec.rows, cols = rec.cols; cv.width = cols; cv.height = rows;
+    var g = cv.getContext('2d'), im = g.createImageData(cols, rows), px = im.data;
+    var mY = function (d) { var r = d * Math.PI / 180; return Math.log(Math.tan(Math.PI / 4 + r / 2)); }, mN = mY(b.north), mS = mY(b.south), mR = mN - mS;
     for (var r = 0; r < rows; r++) { var lat = (2 * Math.atan(Math.exp(mN - (r / (rows - 1)) * mR)) - Math.PI / 2) * 180 / Math.PI;
-      var sr = Math.round((bounds.north - lat) / (bounds.north - bounds.south) * (rows - 1)); if (sr < 0) sr = 0; if (sr >= rows) sr = rows - 1;
+      var sr = Math.round((b.north - lat) / (b.north - b.south) * (rows - 1)); if (sr < 0) sr = 0; if (sr >= rows) sr = rows - 1;
       var so = sr * cols, po = r * cols * 4;
       for (var c = 0; c < cols; c++) { var v = rec.idx[so + c]; if (v) { var pi = po + c * 4, li = v * 4; px[pi] = LUT[li]; px[pi+1] = LUT[li+1]; px[pi+2] = LUT[li+2]; px[pi+3] = 255; } } }
     g.putImageData(im, 0, 0);
-    return new Promise(function (res, rej) { canvas.toBlob(function (b) { if (!b) { rej(new Error('canvas toBlob returned null')); return; } var url = URL.createObjectURL(b); lru(rendered, rOrder, ts, { url: url }, isTouch ? 8 : 24); res(url); }, 'image/png'); });
+    return new Promise(function (res, rej) { cv.toBlob(function (bl) { if (!bl) { rej(new Error('canvas toBlob returned null')); return; } res(URL.createObjectURL(bl)); }, 'image/png'); });
   }
+  function render(ts, rec) {
+    if (rendered[ts]) return Promise.resolve(rendered[ts].url);
+    return renderIdx(rec, bounds, canvas).then(function (url) { lru(rendered, rOrder, ts, { url: url }, isTouch ? 8 : 24); return url; });
+  }
+
+  // ---- 4 km storm sector (the archive's per-storm frames) over the context ----
+  // Zoomed in past SECTOR_ZOOM, the active storm nearest the map centre gets its
+  // exact 4 km frame (the same frames Storm Detail shows: CDN mirror first, API
+  // render on a miss) laid over the 8 km context for the current time step.
+  var secOn = true, secCanvas = document.createElement('canvas');
+  var secMeta = {}, secFrames = {}, secOrder = [], secSeq = 0, secShown = null, secEl = $('sec');
+  function stormTrackFor(s) { var out = []; for (var i = 0; i < s.t.length; i++) { if (s.la[i] == null) continue; out.push({ t: s.t[i], la: s.la[i], lo: s.lo[i], w: s.bv[i], p: s.bp[i], n: s.n[i] }); } return out; }
+  function nearestStorm(ms) {
+    var c = map.getCenter(), best = null, bd = SECTOR_MAX_DEG;
+    storms.forEach(function (s) { var st = stormState(s, ms); if (!st || st.la == null) return;
+      var dlo = ((st.lo - c.lng + 540) % 360) - 180, d = Math.sqrt(Math.pow(st.la - c.lat, 2) + Math.pow(dlo * Math.cos(c.lat * Math.PI / 180), 2));
+      if (d < bd) { bd = d; best = s; } });
+    return best;
+  }
+  function getMeta(s) {
+    if (secMeta[s.sid]) return secMeta[s.sid];
+    var lmi = s.lo[0]; for (var i = 0; i < s.bv.length; i++) if (s.bv[i] != null && s.bv[i] === s.peak_kt) { lmi = s.lo[i]; break; }
+    var url = API + '/global/ir/meta?sid=' + encodeURIComponent(s.sid) + '&track=' + encodeURIComponent(JSON.stringify(stormTrackFor(s))) + (lmi != null ? '&storm_lon=' + lmi : '');
+    secMeta[s.sid] = fetch(url).then(function (r) { if (!r.ok) throw new Error('meta ' + r.status); return r.json(); })
+      .then(function (m) { if (!m || !m.available || !m.frames || !m.frames.length) return { none: true }; m.byTime = {}; m.frames.forEach(function (f, i) { if (f.datetime) m.byTime[f.datetime.slice(0, 13)] = i; }); return m; })
+      .catch(function () { delete secMeta[s.sid]; return { none: true }; });
+    return secMeta[s.sid];
+  }
+  function frameIdxFor(m, ts) {
+    var key = ts.slice(0,4) + '-' + ts.slice(4,6) + '-' + ts.slice(6,8) + 'T' + ts.slice(8,10);
+    if (m.byTime[key] != null) return m.byTime[key];
+    var want = tsMs(ts), best = -1, bd = 95 * 60e3;   // nearest within ~1.5 h
+    m.frames.forEach(function (f, i) { var d = Math.abs(isoMs(f.datetime) - want); if (d < bd) { bd = d; best = i; } });
+    return best;
+  }
+  function getSectorFrame(s, m, i) {
+    var key = s.sid + ':' + i; if (secFrames[key]) return secFrames[key].p;
+    var f = m.frames[i];
+    var cdn = m.frame_cdn_base ? m.frame_cdn_base + '/' + encodeURIComponent(s.sid) + '/' + i + '.json' : null;
+    var api = API + '/global/ir/frame?sid=' + encodeURIComponent(s.sid) + '&frame_idx=' + i + (f.lat != null ? '&lat=' + f.lat + '&lon=' + f.lon : '') + (f.datetime ? '&dt=' + encodeURIComponent(f.datetime) : '') + '&_v=v5';
+    var p = (cdn ? fetch(cdn).then(function (r) { if (!r.ok) throw 0; return r.json(); }) : Promise.reject(0))
+      .catch(function () { if (secEl) secEl.textContent = '4 km sector · rendering ' + s.name + '…'; return fetch(api).then(function (r) { if (!r.ok) throw new Error('frame ' + r.status); return r.json(); }); })
+      .then(function (d) {
+        if (!d || !d.tb_data) throw new Error('no frame data');
+        var bin = atob(d.tb_data), arr = new Uint8Array(bin.length); for (var k = 0; k < bin.length; k++) arr[k] = bin.charCodeAt(k);
+        var b = d.bounds || { south: f.lat - 10, north: f.lat + 10, west: f.lon - 10, east: f.lon + 10 };
+        return renderIdx({ idx: arr, rows: d.tb_rows, cols: d.tb_cols }, b, secCanvas).then(function (url) { return { url: url, b: b }; });
+      });
+    secFrames[key] = { p: p }; secOrder.push(key);
+    while (secOrder.length > (isTouch ? 10 : 30)) { var o = secOrder.shift(); var rec = secFrames[o]; delete secFrames[o]; if (rec) rec.p.then(function (x) { try { URL.revokeObjectURL(x.url); } catch (e) {} }, function () {}); }
+    p.catch(function () { delete secFrames[key]; });
+    return p;
+  }
+  function removeSector() { if (map.getLayer('sector')) map.removeLayer('sector'); if (map.getSource('sector')) map.removeSource('sector'); secShown = null; if (secEl) secEl.textContent = ''; }
+  function updateSector(ts) {
+    if (!mapReady || !ts) return;
+    if (!secOn || map.getZoom() < SECTOR_ZOOM) { if (secShown) removeSector(); return; }
+    var s = nearestStorm(tsMs(ts)); if (!s) { removeSector(); return; }
+    var seq = ++secSeq;
+    getMeta(s).then(function (m) {
+      if (seq !== secSeq) return;
+      if (m.none) { removeSector(); if (secEl) secEl.textContent = 'no 4 km frames for ' + s.name; return; }
+      var i = frameIdxFor(m, ts); if (i < 0) { removeSector(); return; }
+      return getSectorFrame(s, m, i).then(function (fr) {
+        if (seq !== secSeq) return;
+        var co = [[Math.max(-179.99, fr.b.west), fr.b.north], [Math.min(179.99, fr.b.east), fr.b.north], [Math.min(179.99, fr.b.east), fr.b.south], [Math.max(-179.99, fr.b.west), fr.b.south]];
+        var src = map.getSource('sector');
+        if (!src) { map.addSource('sector', { type: 'image', url: fr.url, coordinates: co });
+          map.addLayer({ id: 'sector', type: 'raster', source: 'sector', paint: { 'raster-opacity': 1, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, 'trails'); }
+        else src.updateImage({ url: fr.url, coordinates: co });
+        secShown = s.sid + ':' + i;
+        if (secEl) secEl.textContent = '4 km sector · ' + s.name + ' (' + (m.source === 'mergir' ? 'MergIR' : m.source === 'gridsat' ? 'GridSat' : 'HURSAT') + ')';
+        for (var k = 1; k <= 2; k++) { var j = i + k; if (j < m.frames.length) getSectorFrame(s, m, j).catch(function () {}); }
+      });
+    }).catch(function (e) { if (secEl) secEl.textContent = 'sector unavailable'; console.warn('[sector]', e); });
+  }
+  map.on('moveend', function () { if (frames.length) updateSector(frames[idx]); });
+  window.__season = { map: map, zoom: function () { return map.getZoom(); }, forceReady: function () { mapReady = true; ensureLayers(); if (pending) { pending = false; show(idx); } }, sector: function () { return updateSector(frames[idx]); }, nearest: function () { var s = frames.length && nearestStorm(tsMs(frames[idx])); return s && s.name; }, state: function () { return { frames: frames.length, idx: idx, ready: mapReady, secOn: secOn, shown: secShown }; } };
+  $('secbtn').onclick = function () { secOn = !secOn; this.classList.toggle('active', secOn); if (!secOn) removeSector(); else if (frames.length) updateSector(frames[idx]); };
   function coords() { var w = Math.max(-179.99, bounds.west), e = Math.min(179.99, bounds.east), n = Math.min(85, bounds.north), s = Math.max(-85, bounds.south); return [[w, n], [e, n], [e, s], [w, s]]; }
   function ensureLayers() {
     if (!mapReady || map.getSource('trails')) return;
@@ -202,13 +284,13 @@
   function show(i) {
     if (!frames.length) return; if (!mapReady) { pending = true; idx = i; return; }
     idx = (i + frames.length) % frames.length; var ts = frames[idx], seq = ++reqSeq;
-    slider.value = idx; dtEl.textContent = fmt(ts); drawStorms(ts);
+    slider.value = idx; dtEl.textContent = fmt(ts); drawStorms(ts); updateSector(ts);
     try { history.replaceState(null, '', '?year=' + year + '&basin=' + basin + (useGhost ? '&src=ghost' : '') + '&t=' + ts); } catch (e) {}
     decode(ts).then(function (rec) { return render(ts, rec); }).then(function (url) {
       if (seq !== reqSeq) return;
       var src = map.getSource('ctx');
       if (!src) { map.addSource('ctx', { type: 'image', url: url, coordinates: coords() });
-        map.addLayer({ id: 'ctx', type: 'raster', source: 'ctx', paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, 'trails'); }
+        map.addLayer({ id: 'ctx', type: 'raster', source: 'ctx', paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, map.getLayer('sector') ? 'sector' : 'trails'); }
       else src.updateImage({ url: url, coordinates: coords() });
       status.textContent = '';
       for (var k = 1; k <= 4; k++) decode(frames[(idx + k) % frames.length]).catch(function () {});
@@ -238,6 +320,7 @@
 
   function loadSeason(y) {
     year = y; pause(); frames = []; storms = []; Object.keys(markers).forEach(function (k) { markers[k].remove(); }); markers = {};
+    if (mapReady) removeSector();
     status.textContent = 'loading season…'; dtEl.textContent = '—';
     history.replaceState(null, '', '?year=' + y + '&basin=' + basin + (useGhost ? '&src=ghost' : ''));
     Promise.all([
