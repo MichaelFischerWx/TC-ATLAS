@@ -23,6 +23,8 @@
   #top .back:hover { color:var(--um-green); }
   #note { flex:1 0 100%; font-size:11.5px; color:var(--muted); border-top:1px solid var(--border); padding-top:6px; margin-top:2px; display:none; }
   #note b { color:var(--text); }
+  #note .x { float:right; margin-left:8px; cursor:pointer; color:var(--muted); font-size:13px; line-height:1; padding:0 2px; }
+  #note .x:hover { color:var(--text); }
   select, button { background:var(--ctl); color:var(--text); border:1px solid var(--ctl-border); border-radius:6px; padding:4px 9px; font-size:12px; font-weight:600; cursor:pointer; }
   button.active { background:var(--um-green); border-color:var(--um-green); color:#fff; }
   #follow { display:none; background:var(--um-orange); border-color:var(--um-orange); color:#fff; }
@@ -557,8 +559,12 @@
     var note = $('note');
     if (missing.length) {
       var lo = have[0], hi = have[have.length - 1];
-      note.innerHTML = '<b>Imagery built for ' + lo + '\u2013' + hi + ' so far.</b> The remaining seasons are being added; storm tracks and intensities already show for every year.';
-      note.style.display = 'block';
+      var dismissed = false; try { dismissed = sessionStorage.getItem('ira-note') === '1'; } catch (e) {}
+      if (!dismissed) {
+        note.innerHTML = '<span class="x" title="Dismiss">\u2715</span><b>Imagery built for ' + lo + '\u2013' + hi + ' so far.</b> The remaining seasons are being added; storm tracks and intensities already show for every year.';
+        note.style.display = 'block';
+        note.querySelector('.x').onclick = function () { note.style.display = 'none'; try { sessionStorage.setItem('ira-note', '1'); } catch (e) {} };
+      }
     }
   }).catch(function () {});
 })();
