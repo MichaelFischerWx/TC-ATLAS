@@ -392,6 +392,15 @@ def main():
             n = write_year_index(r2, year, source_for(datetime(year, 6, 1)), bounds_by_src, args.dry_run, args.out)
             years_meta[str(year)] = {"n": n, "src": source_for(datetime(year, 6, 1))}
         log(f"{year} {'STOPPED' if _STOP.is_set() else 'done'}: {n_ok} built, {n_missing} missing upstream, {n_err} errors (rerun picks them up), {bytes_total/1e9:.2f} GB, {(time.time()-t_year)/60:.1f} min")
+        if not args.no_index and r2:
+            try:   # keep the root index current so the Season Replay page can mark populated years
+                prev = json.loads(r2.get_object(Bucket=R2_BUCKET, Key=f"{PREFIX}/index.json")["Body"].read())
+                merged = prev.get("years", {}); merged.update(years_meta)
+                for k, v in (prev.get("sources") or {}).items():
+                    if v.get("bounds") and k not in bounds_by_src: bounds_by_src[k] = v["bounds"]
+                write_root_index(r2, merged, bounds_by_src, False, args.out)
+            except Exception:
+                write_root_index(r2, years_meta, bounds_by_src, False, args.out)
         n_err_total += n_err
         if _STOP.is_set():
             break
