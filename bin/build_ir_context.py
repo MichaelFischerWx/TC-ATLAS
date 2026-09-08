@@ -314,8 +314,14 @@ def main():
     # anything left from a previous run is purged here.
     tmpdir = args.tmp or os.path.expanduser("~/.cache/tc-atlas-ir-context")
     os.makedirs(tmpdir, exist_ok=True)
+    # Purge only STALE scratch files (>1 h, left by a crashed run). A second
+    # instance (e.g. a one-year repair while the main build runs) must not
+    # delete the other run's in-flight downloads — that produced 14
+    # FileNotFoundError frames on 2026-09-08.
     for f in os.listdir(tmpdir):
-        try: os.remove(os.path.join(tmpdir, f))
+        fp = os.path.join(tmpdir, f)
+        try:
+            if time.time() - os.path.getmtime(fp) > 3600: os.remove(fp)
         except OSError: pass
 
     import signal
@@ -329,6 +335,7 @@ def main():
     bounds_by_src = {}
     years_meta = {}
 
+    n_err_total = 0
     year = start.year
     while year <= end.year:
         y0 = max(start, datetime(year, 1, 1)); y1 = min(end + timedelta(days=1), datetime(year + 1, 1, 1), now)
@@ -376,6 +383,7 @@ def main():
             n = write_year_index(r2, year, source_for(datetime(year, 6, 1)), bounds_by_src, args.dry_run, args.out)
             years_meta[str(year)] = {"n": n, "src": source_for(datetime(year, 6, 1))}
         log(f"{year} {'STOPPED' if _STOP.is_set() else 'done'}: {n_ok} built, {n_missing} missing upstream, {n_err} errors (rerun picks them up), {bytes_total/1e9:.2f} GB, {(time.time()-t_year)/60:.1f} min")
+        n_err_total += n_err
         if _STOP.is_set():
             break
         year += 1
@@ -393,8 +401,11 @@ def main():
     for f in os.listdir(tmpdir):
         try: os.remove(os.path.join(tmpdir, f))
         except OSError: pass
-    log("stopped cleanly (rerun to resume)" if _STOP.is_set() else "all done")
-    sys.exit(3 if _STOP.is_set() else 0)
+    if _STOP.is_set():
+        log("stopped cleanly (rerun to resume)"); sys.exit(3)
+    if n_err_total:
+        log(f"all done with {n_err_total} transient errors — exit 4 so the supervisor runs a catch-up pass"); sys.exit(4)
+    log("all done"); sys.exit(0)
 
 
 if __name__ == "__main__":

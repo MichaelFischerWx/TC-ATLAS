@@ -15,7 +15,7 @@ set -u
 START="${1:?start YYYY-MM-DD}"; END="${2:?end YYYY-MM-DD}"; WORKERS="${3:-4}"
 cd "$(dirname "$0")/.." || exit 1
 STOPFILE="$HOME/.ir_context_stop"; rm -f "$STOPFILE"
-attempt=0
+attempt=0; catchup=0
 while :; do
   attempt=$((attempt+1))
   echo "[$(date -u +%FT%TZ)] supervisor: pass $attempt ($START → $END, $WORKERS workers)"
@@ -23,6 +23,7 @@ while :; do
   rc=$?
   if [ $rc -eq 0 ]; then echo "[$(date -u +%FT%TZ)] supervisor: build complete"; break; fi
   if [ -f "$STOPFILE" ] || [ $rc -eq 3 ]; then echo "[$(date -u +%FT%TZ)] supervisor: stopped (rc=$rc)"; break; fi
+  if [ $rc -eq 4 ]; then catchup=$((catchup+1)); if [ $catchup -gt 3 ]; then echo "[$(date -u +%FT%TZ)] supervisor: errors persist after 3 catch-up passes; giving up"; break; fi; echo "[$(date -u +%FT%TZ)] supervisor: catch-up pass $catchup for transient errors"; continue; fi
   echo "[$(date -u +%FT%TZ)] supervisor: builder exited rc=$rc; restarting in 60 s"
   sleep 60
 done
