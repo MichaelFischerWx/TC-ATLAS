@@ -4069,6 +4069,9 @@ function _radarMapDraw() {
             color: '#fff', weight: 1.5, dashArray: '5 5', fill: false, interactive: false }).addTo(map);
     }
     if (!_radarMapHoverBound) { map.on('mousemove', _radarMapHover); map.on('mouseout', _radarMapHideTip); _radarMapHoverBound = true; }
+    // The case-center dot sits on the eye and hides the field there; the
+    // grid crosshair + RMW ring already mark the center while draped.
+    if (_focusMarker && map.hasLayer(_focusMarker)) { try { map.removeLayer(_focusMarker); } catch (e) {} }
     _stormGridDraw();
     _irRefreshMapFrame();   // 'auto' IR mode goes grayscale under the draped field
 }
@@ -4081,6 +4084,7 @@ function _radarMapOff() {
     var btn = document.getElementById('radar-map-btn');
     if (btn) btn.classList.remove('active');
     _applyTwoPanelMode(false);
+    if (_focusMode && _focusMarker && !map.hasLayer(_focusMarker)) { try { _focusMarker.addTo(map); } catch (e) {} }
     _stormGridDraw();
     _irRefreshMapFrame();
 }
