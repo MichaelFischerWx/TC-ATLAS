@@ -247,7 +247,7 @@
     var fr = res.fr, co = [[Math.max(-179.99, fr.b.west), fr.b.north], [Math.min(179.99, fr.b.east), fr.b.north], [Math.min(179.99, fr.b.east), fr.b.south], [Math.max(-179.99, fr.b.west), fr.b.south]];
     var src = map.getSource('sector');
     if (!src) { map.addSource('sector', { type: 'image', url: fr.url, coordinates: co });
-      map.addLayer({ id: 'sector', type: 'raster', source: 'sector', paint: { 'raster-opacity': 1, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, 'trails'); }
+      map.addLayer({ id: 'sector', type: 'raster', source: 'sector', paint: { 'raster-opacity': 1, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, 'coast-halo'); }
     else src.updateImage({ url: fr.url, coordinates: co });
     secShown = key; secCur = res;
     if (secEl) secEl.textContent = '4 km sector · ' + res.s.name + ' (' + (res.m.source === 'mergir' ? 'MergIR' : res.m.source === 'gridsat' ? 'GridSat' : 'HURSAT') + ')';
@@ -284,10 +284,25 @@
   function coords() { var w = Math.max(-179.99, bounds.west), e = Math.min(179.99, bounds.east), n = Math.min(85, bounds.north), s = Math.max(-85, bounds.south); return [[w, n], [e, n], [e, s], [w, s]]; }
   function ensureLayers() {
     if (!mapReady || map.getSource('trails')) return;
+    // Coastlines above the imagery (same Natural Earth files as Storm Detail): the
+    // simplified set at once, the full 10 m set once the view zooms past level 5.
+    map.addSource('coast', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'coast-halo', type: 'line', source: 'coast', layout: { 'line-join': 'round' }, paint: { 'line-color': 'rgba(255,255,255,0.55)', 'line-width': ['interpolate', ['linear'], ['zoom'], 2, 1.6, 6, 2.6] } });
+    map.addLayer({ id: 'coast', type: 'line', source: 'coast', layout: { 'line-join': 'round' }, paint: { 'line-color': '#111827', 'line-width': ['interpolate', ['linear'], ['zoom'], 2, 0.7, 6, 1.2] } });
     map.addSource('trails', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     map.addLayer({ id: 'trails', type: 'line', source: 'trails', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'c'], 'line-width': 2.2, 'line-opacity': ['get', 'o'] } });
     map.addLayer({ id: 'labels', type: 'raster', source: 'labels', paint: { 'raster-opacity': 0.8 } });
+    loadCoast('lo');
   }
+  var coastTier = null, coastLoading = false;
+  function loadCoast(tier) {
+    if (coastTier === 'hi' || coastLoading || coastTier === tier) return;
+    coastLoading = true;
+    var url = tier === 'hi' ? 'assets/coastlines/ne_10m_coastline.geojson' : 'assets/coastlines/ne_10m_coastline_simplified.geojson';
+    fetch(url).then(function (r) { return r.json(); }).then(function (gj) { var src = map.getSource('coast'); if (src) src.setData(gj); coastTier = tier; })
+      .catch(function (e) { console.warn('[coast]', e); }).then(function () { coastLoading = false; if (coastTier !== 'hi' && map.getZoom() >= 5) loadCoast('hi'); });
+  }
+  map.on('zoomend', function () { if (mapReady && map.getZoom() >= 5) loadCoast('hi'); });
 
   function stormState(s, ms) {
     var t = s.t; if (!t || !t.length) return null;
@@ -360,7 +375,7 @@
     try { history.replaceState(null, '', '?year=' + year + '&basin=' + basin + (useGhost ? '&src=ghost' : '') + '&t=' + ts); } catch (e) {}
     var src = map.getSource('ctx');
     if (!src) { map.addSource('ctx', { type: 'image', url: prep.url, coordinates: coords() });
-      map.addLayer({ id: 'ctx', type: 'raster', source: 'ctx', paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, map.getLayer('sector') ? 'sector' : 'trails'); }
+      map.addLayer({ id: 'ctx', type: 'raster', source: 'ctx', paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, map.getLayer('sector') ? 'sector' : 'coast-halo'); }
     else src.updateImage({ url: prep.url, coordinates: coords() });
     applySector(prep.sec);
     drawStorms(ts);
