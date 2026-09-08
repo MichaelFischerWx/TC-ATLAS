@@ -568,8 +568,13 @@ function _ctxFetchDecoded(year, ts) {
                 g.drawImage(img, 0, 0, cols, rows);
                 var px = g.getImageData(0, 0, cols, rows).data;
                 var idx = new Uint8Array(cols * rows);
-                for (var k = 0, n = cols * rows; k < n; k++) {
-                    idx[k] = px[k * 4 + 3] < 128 ? 0 : (px[k * 4] || 1);
+                // Sparse scan-line gaps use the builder's nearest-filled value; only a large
+                // outage (>4% of the image) keeps its transparency mask.
+                var n = cols * rows, masked = 0;
+                for (var q = 3; q < n * 4; q += 4) if (px[q] < 128) masked++;
+                var keepMask = masked > 0.04 * n;
+                for (var k = 0; k < n; k++) {
+                    idx[k] = (keepMask && px[k * 4 + 3] < 128) ? 0 : (px[k * 4] || 1);
                 }
                 var rec = { ts: ts, idx: idx, rows: rows, cols: cols };
                 _ctxDecoded.push(rec);

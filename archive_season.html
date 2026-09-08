@@ -28,10 +28,12 @@
   #legend .row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
   #legend i { display:inline-block; width:10px; height:10px; border-radius:50%; border:1px solid #fff; }
   #cbar { position:absolute; right:10px; top:50%; transform:translateY(-50%); width:30px; height:170px; padding:6px 0; display:flex; flex-direction:column; align-items:center; z-index:5; }
-  #cbar canvas { flex:1; width:12px; border-radius:2px; }
+  #cbar canvas { display:block; width:12px; height:126px; min-height:0; border-radius:2px; }
   #cbar span { font-size:9px; color:var(--muted); }
   #status { color:var(--muted); font-size:11px; }
-  .lbl { pointer-events:auto; cursor:pointer; background:rgba(15,23,42,.82); border:1px solid rgba(255,255,255,.18); border-radius:6px; padding:2px 6px; font-size:11px; white-space:nowrap; color:#fff; }
+  .lbl { pointer-events:auto; cursor:pointer; background:rgba(15,23,42,.78); border:1px solid rgba(255,255,255,.18); border-radius:6px; padding:2px 6px; font-size:11px; white-space:nowrap; color:#fff; }
+  .ring { position:absolute; left:-16px; top:-16px; width:32px; height:32px; border-radius:50%; border:2.5px solid #fff; box-shadow:0 0 0 1.5px rgba(0,0,0,.55), inset 0 0 0 1.5px rgba(0,0,0,.45); background:transparent; pointer-events:none; }
+  .tick { position:absolute; left:14px; top:-14px; width:14px; height:14px; border-top:1.5px solid rgba(255,255,255,.7); border-right:0; transform:skewX(-45deg); transform-origin:left bottom; pointer-events:none; }
   .lbl b { font-weight:700; letter-spacing:.02em; }
   .lbl .g { color:#7dd3fc; margin-left:4px; }
   .lbl .b { color:#fde68a; margin-left:4px; }
@@ -55,7 +57,7 @@
   <div class="row"><i style="background:#60a5fa"></i>TD/TS &lt;64 kt <i style="background:#fbbf24;margin-left:8px"></i>Cat 1-2 <i style="background:#f87171;margin-left:8px"></i>Cat 3 <i style="background:#ef4444;margin-left:8px"></i>Cat 4 <i style="background:#c084fc;margin-left:8px"></i>Cat 5</div>
   <div class="row"><span style="color:#fde68a">kt</span> best track &nbsp;<span style="color:#7dd3fc">G</span> GHOST reanalysis, where available</div>
 </div>
-<div id="cbar" class="hud"><span>310 K</span><canvas width="1" height="256"></canvas><span>170 K</span></div>
+<div id="cbar" class="hud"><span>310 K</span><canvas width="1" height="126"></canvas><span>170 K</span></div>
 <div id="bar" class="hud">
   <button id="play" title="Play / pause (space)">&#9654;</button>
   <button id="prev" title="Previous frame (left arrow)">&#9664;</button>
@@ -79,8 +81,8 @@
   var isTouch = window.matchMedia && matchMedia('(pointer: coarse)').matches;
   var maxTex = (function () { try { var g = document.createElement('canvas').getContext('webgl'); return g ? g.getParameter(g.MAX_TEXTURE_SIZE) : 4096; } catch (e) { return 4096; } })();
 
-  (function () { var c = document.querySelector('#cbar canvas').getContext('2d'), im = c.createImageData(1, 256);
-    for (var i = 0; i < 256; i++) { var v = 255 - i, li = v * 4; im.data[i*4] = LUT[li]; im.data[i*4+1] = LUT[li+1]; im.data[i*4+2] = LUT[li+2]; im.data[i*4+3] = v ? 255 : 0; }
+  (function () { var cv = document.querySelector('#cbar canvas'), H = cv.height, c = cv.getContext('2d'), im = c.createImageData(1, H);
+    for (var i = 0; i < H; i++) { var v = Math.max(1, Math.round(255 - i * 254 / (H - 1))), li = v * 4; im.data[i*4] = LUT[li]; im.data[i*4+1] = LUT[li+1]; im.data[i*4+2] = LUT[li+2]; im.data[i*4+3] = 255; }
     c.putImageData(im, 0, 0); })();
 
   var map = new maplibregl.Map({ container: 'map', center: VIEWS[basin].slice(0,2), zoom: VIEWS[basin][2], minZoom: 1, maxZoom: 7,
@@ -115,7 +117,12 @@
         var f = (isTouch || img.naturalWidth > maxTex) ? 2 : 1;
         var cols = Math.floor(img.naturalWidth / f), rows = Math.floor(img.naturalHeight / f), c = document.createElement('canvas'); c.width = cols; c.height = rows;
         var g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0, cols, rows); var px = g.getImageData(0, 0, cols, rows).data, out = new Uint8Array(cols * rows);
-        for (var k = 0, n = cols * rows; k < n; k++) out[k] = px[k*4+3] < 128 ? 0 : (px[k*4] || 1);
+        // Missing pixels (alpha 0) are nearest-filled in RGB by the builder. Thin GridSat scan-line
+        // gaps look far better filled than as dark streaks; only a large outage (>4% of the image)
+        // keeps its mask so a whole missing sector is not smeared.
+        var n = cols * rows, masked = 0; for (var q = 3; q < n * 4; q += 4) if (px[q] < 128) masked++;
+        var keepMask = masked > 0.04 * n;
+        for (var k = 0; k < n; k++) out[k] = (keepMask && px[k*4+3] < 128) ? 0 : (px[k*4] || 1);
         delete decoded[ts + ':p']; var rec = { idx: out, rows: rows, cols: cols }; lru(decoded, dOrder, ts, rec, isTouch ? 8 : 24); res(rec);
         } catch (e) { delete decoded[ts + ':p']; rej(e); } };
       img.onerror = function () { delete decoded[ts + ':p']; rej(new Error('ctx ' + ts)); };
@@ -182,11 +189,11 @@
       var m = markers[s.sid];
       if (!m) {
         var el = document.createElement('div'); el.style.cssText = 'position:relative;width:0;height:0;';
-        el.innerHTML = '<div class="dot" style="position:absolute;left:-6px;top:-6px;width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.4);"></div><div class="lbl" style="position:absolute;left:10px;top:-11px;"></div>';
+        el.innerHTML = '<div class="ring"></div><div class="lbl" style="position:absolute;left:22px;top:-34px;"></div>';
         el.querySelector('.lbl').onclick = function () { window.open('global_archive.html#tab=detail&storm=' + encodeURIComponent(s.sid), '_blank'); };
         m = markers[s.sid] = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([st.lo, st.la]).addTo(map);
       } else m.setLngLat([st.lo, st.la]);
-      var el2 = m.getElement(); el2.querySelector('.dot').style.background = col; el2.querySelector('.lbl').innerHTML = html;
+      var el2 = m.getElement(); el2.querySelector('.ring').style.borderColor = col; el2.querySelector('.lbl').innerHTML = html;
     });
     Object.keys(markers).forEach(function (sid) { if (!seen[sid]) { markers[sid].remove(); delete markers[sid]; } });
     var src = map.getSource('trails'); if (src) src.setData(trailsOn ? trailFeatures(ms) : { type: 'FeatureCollection', features: [] });
