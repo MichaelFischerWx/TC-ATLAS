@@ -313,22 +313,28 @@
   function secCoords(fr) { return [[Math.max(-179.99, fr.b.west), fr.b.north], [Math.min(179.99, fr.b.east), fr.b.north], [Math.min(179.99, fr.b.east), fr.b.south], [Math.max(-179.99, fr.b.west), fr.b.south]]; }
   // Stage the sector for a step: loads the back buffer (hidden) and returns a function that
   // shows it — called by commit() together with the context flip and the markers.
-  function stageSector(res) {
+  // `seq` is the step sequence (reqSeq) the sector belongs to: a result that arrives after
+  // playback has moved on (late API render, moveend refresh) must neither write the back
+  // buffer nor flip, or it drags the sector back to an old frame.
+  var noop = function () {};
+  function stageSector(res, seq) {
+    if (seq !== reqSeq) return Promise.resolve(noop);
     if (!res) return Promise.resolve(function () { if (secShown) removeSector(); });
     if (res.none) return Promise.resolve(function () { removeSector(); if (secEl) secEl.textContent = 'no 4 km frames for ' + res.s.name; });
     var key = res.s.sid + ':' + res.i;
-    if (key === secShown && secBuf.has()) return Promise.resolve(function () {});
+    if (key === secShown && secBuf.has()) return Promise.resolve(noop);
     return secBuf.load(res.fr.url, secCoords(res.fr)).then(function (k) {
       return function () {
-        secBuf.flip(k); secShown = key; secCur = res;
+        if (seq !== reqSeq || !secBuf.flip(k)) return;
+        secShown = key; secCur = res;
         if (secEl) secEl.textContent = '4 km sector · ' + res.s.name + ' (' + (res.m.source === 'mergir' ? 'MergIR' : res.m.source === 'gridsat' ? 'GridSat' : 'HURSAT') + ')';
         for (var q = 1; q <= 6; q++) { var j = res.i + q; if (j < res.m.frames.length) getSectorFrame(res.s, res.m, j).catch(function () {}); }
       };
     });
   }
   function updateSector(ts) {   // view changed (zoom/pan) with the time unchanged
-    if (!ts) return; var seq = ++secSeq;
-    sectorFor(ts).then(function (res) { return stageSector(res); }).then(function (showFn) { if (seq === secSeq) showFn(); });
+    if (!ts) return; var seq = ++secSeq, rs = reqSeq;
+    sectorFor(ts).then(function (res) { return stageSector(res, rs); }).then(function (showFn) { if (seq === secSeq) showFn(); });
   }
   map.on('moveend', function () { if (frames.length) updateSector(frames[idx]); });
 
@@ -361,7 +367,7 @@
   // single source would show the new frame a beat after the markers moved. Each product has
   // two image sources/layers; the next frame loads into the hidden one, we wait for MapLibre
   // to report that source loaded, then flip opacities in the same tick as the markers.
-  function Buffered(id, beforeId) { this.id = id; this.before = beforeId; this.front = 0; }
+  function Buffered(id, beforeId) { this.id = id; this.before = beforeId; this.front = 0; this.seq = 0; }
   Buffered.prototype.layer = function (k) { return this.id + '-' + k; };
   Buffered.prototype.ensure = function (k, url, co) {
     var lid = this.layer(k);
@@ -375,20 +381,25 @@
     map.getSource(lid).updateImage({ url: url, coordinates: co });
   };
   Buffered.prototype.load = function (url, co) {   // into the back buffer; resolves when the texture is there (or after a cap)
-    var self = this, k = 1 - this.front, lid = this.layer(k);
+    // A newer load into the same back buffer replaces this image (MapLibre aborts the older
+    // request), so a superseded load resolves null and its caller must not flip: flipping
+    // would show the newer image under the older frame's key, and the two buffers then
+    // alternate between stale frames while everything else advances.
+    var self = this, k = 1 - this.front, lid = this.layer(k), seq = ++this.seq;
     return new Promise(function (res) {
       var done = false, t = setTimeout(finish, 600);
-      function finish() { if (done) return; done = true; clearTimeout(t); map.off('sourcedata', onData); res(k); }
+      function finish() { if (done) return; done = true; clearTimeout(t); map.off('sourcedata', onData); res(seq === self.seq ? k : null); }
       function onData(e) { if (e.sourceId === lid && e.isSourceLoaded && e.dataType === 'source') finish(); }
       map.on('sourcedata', onData);
       self.ensure(k, url, co);
     });
   };
   Buffered.prototype.flip = function (k) {
+    if (k == null) return false;
     var f = this.layer(this.front), b = this.layer(k);
     if (map.getLayer(b)) map.setPaintProperty(b, 'raster-opacity', this.id === 'ctx' ? opacity : 1);
     if (map.getLayer(f) && f !== b) map.setPaintProperty(f, 'raster-opacity', 0);
-    this.front = k;
+    this.front = k; return true;
   };
   Buffered.prototype.hide = function () { var self = this; [0, 1].forEach(function (k) { var l = self.layer(k); if (map.getLayer(l)) map.setPaintProperty(l, 'raster-opacity', 0); }); };
   Buffered.prototype.has = function () { return !!map.getLayer(this.layer(0)); };
@@ -504,17 +515,17 @@
     });
     return quick;
   }
-  function prepare(ts) {
+  function prepare(ts, seq) {
     return Promise.all([decode(ts).then(function (rec) { return render(ts, rec); }), sectorForBudgeted(ts)])
       .then(function (r) {
         var sec = r[1];
         if (sec && sec.late) {   // arrives after commit: apply if we are still on this time step
           var lateP = sec.late; sec = undefined;
-          var stageLate = function () { lateP.then(function (res) { return stageSector(res); }).then(function (showFn) { if (curTs === ts) showFn(); }).catch(function () {}); };
+          var stageLate = function () { lateP.then(function (res) { return stageSector(res, seq); }).then(function (showFn) { if (seq === reqSeq && curTs === ts) showFn(); }).catch(function () {}); };
           return ctxBuf.load(r[0].url, coordsFor(r[0].b)).then(function (k) { return { k: k, showSec: stageLate }; });
         }
         // stage the sector first so its layers exist before the context layers are created beneath them
-        return stageSector(sec).then(function (showSec) {
+        return stageSector(sec, seq).then(function (showSec) {
           return ctxBuf.load(r[0].url, coordsFor(r[0].b)).then(function (k) { return { k: k, showSec: showSec }; });
         });
       });
@@ -532,7 +543,7 @@
     if (!frames.length) return; if (!mapReady) { pending = true; idx = i; return; }
     var j = (i + frames.length) % frames.length, ts = frames[j], seq = ++reqSeq;
     status.textContent = 'loading…';
-    prepare(ts).then(function (prep) { if (seq !== reqSeq) return; commit(j, ts, prep); })
+    prepare(ts, seq).then(function (prep) { if (seq !== reqSeq) return; commit(j, ts, prep); })
       .catch(function (e) { if (seq !== reqSeq) return; status.textContent = 'imagery failed: ' + (e && e.message ? e.message : e); console.warn('[season]', ts, e); });
   }
   function step(d) { pause(); show(idx + d); }
@@ -540,7 +551,7 @@
   function tick() {
     if (!playing || !frames.length) return;
     var j = (idx + 1) % frames.length, ts = frames[j], seq = ++reqSeq, t0 = performance.now();
-    prepare(ts).then(function (prep) {
+    prepare(ts, seq).then(function (prep) {
       if (!playing || seq !== reqSeq) return;
       commit(j, ts, prep);
       timer = setTimeout(tick, Math.max(30, parseInt($('speed').value, 10) - (performance.now() - t0)));
