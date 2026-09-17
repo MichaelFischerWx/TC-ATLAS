@@ -2913,6 +2913,16 @@
                     }
                 }
                 cx.putImageData(im, 0, 0);
+                // MapLibre's getImage accepts an ImageBitmap as the response data,
+                // so hand it the recolored canvas directly. The old path PNG-encoded
+                // every tile (toBlob) only for MapLibre to decode it again: two more
+                // main-thread passes per tile, which is what froze the storm card
+                // for 30-60 s (and phones far longer) while all 18 frames recolored.
+                if (typeof createImageBitmap === 'function') {
+                    return createImageBitmap(c).then(function (bmp2) { return { data: bmp2 }; }, function () {
+                        return new Promise(function (resolve) { c.toBlob(function (bl) { bl.arrayBuffer().then(function (ab) { resolve({ data: ab }); }); }, 'image/png'); });
+                    });
+                }
                 return new Promise(function (resolve) { c.toBlob(function (bl) { bl.arrayBuffer().then(function (ab) { resolve({ data: ab }); }); }, 'image/png'); });
             }).catch(function (e) {
                 // A missing edge tile is routine; anything else means the
@@ -7497,6 +7507,7 @@
 
     /** Clean up pre-loaded frame layers */
     function cleanupFrameLayers() {
+        _liteStageCancel();   // a staged lite deck must not keep adding layers after teardown
         for (var i = 0; i < animFrameLayers.length; i++) {
             if (animFrameLayers[i] && !animFrameLayers[i]._isLiteIdxStub && detailMap) {
                 detailMap.removeLayer(animFrameLayers[i]);
@@ -8308,7 +8319,13 @@
                 opacity: 0, pane: 'tilePane', keepBuffer: 2
             });
             ly._mosaicTs = frames[i];   // marks this as a lite/mosaic layer
-            ly.addTo(detailMap);
+            // Only the frame the card opens on goes on the map now. Every layer
+            // in the style fetches + recolors its viewport tiles even at opacity
+            // 0, so adding all 18 at once made the visible frame wait behind 17
+            // hidden ones (blank map + "Loading satellite imagery" for 30-60 s on
+            // desktop, indefinitely on phones). The rest stage in newest-first
+            // after the first frame paints (see _liteStageStart below).
+            if (i === n - 1) ly.addTo(detailMap);
             animFrameLayers.push(ly);
             animFrameTimes.push(_mosaicTsToIso(frames[i]));
             validFrames.push(i);
@@ -8346,8 +8363,59 @@
             detailMap.on('zoomend', _litePrefetchSchedule);
             detailMap.on('moveend', _litePrefetchSchedule);
         }
-        _litePrefetchSchedule();
+        // Viewport prefetch waits for the staged frames — it would otherwise
+        // compete with the visible frame's own tile fetches.
+        _liteStageStart(animFrameLayers.slice(0, n - 1), function () { _litePrefetchSchedule(); });
         console.log('[RT Monitor] Lite mosaic loop: ' + n + ' frames (' + product + ')');
+    }
+
+    // ── Lite deck staging ─────────────────────────────────────────────────
+    // Adds the hidden frames of a lite deck to the GL map a few at a time,
+    // newest-first, each batch after the map goes idle (= the previous batch's
+    // tiles landed). Scrubbing or playing into a frame that hasn't been staged
+    // yet flushes the remainder at once (showFrame → _liteStageFlush), so the
+    // loop never waits on a layer that isn't on the map.
+    var _liteStagePending = null, _liteStageDone = null, _liteStageTimer = null;
+    var _LITE_STAGE_BATCH = 3;
+    function _liteStageStart(layers, onDone) {
+        _liteStageCancel();
+        _liteStagePending = layers.slice().reverse();   // newest first
+        _liteStageDone = onDone || null;
+        _liteStageWait();
+    }
+    function _liteStageCancel() {
+        if (_liteStageTimer) { clearTimeout(_liteStageTimer); _liteStageTimer = null; }
+        _liteStagePending = null; _liteStageDone = null;
+    }
+    function _liteStageWait() {
+        if (!_liteStagePending) return;
+        var gl = detailMap && detailMap._gl, fired = false;
+        function go() { if (fired) return; fired = true; _liteStageTimer = null; _liteStageNext(); }
+        try { gl.once('idle', go); } catch (e) {}
+        // Backstop: a playing loop never idles, and neither does a map with a
+        // tile stuck loading. Don't let staging hang on either.
+        _liteStageTimer = setTimeout(go, 2500);
+    }
+    function _liteStageNext() {
+        if (!_liteStagePending || !detailMap) return;
+        var added = 0;
+        while (_liteStagePending.length && added < _LITE_STAGE_BATCH) {
+            var ly = _liteStagePending.shift();
+            if (ly && !ly._added && !ly._map) { try { ly.addTo(detailMap); } catch (e) {} }
+            added++;
+        }
+        if (_liteStagePending.length) { _liteStageWait(); return; }
+        var cb = _liteStageDone; _liteStagePending = null; _liteStageDone = null;
+        if (cb) { try { cb(); } catch (e) {} }
+    }
+    function _liteStageFlush() {
+        if (!_liteStagePending || !detailMap) return;
+        var rest = _liteStagePending, cb = _liteStageDone;
+        _liteStageCancel();
+        for (var i = 0; i < rest.length; i++) {
+            if (rest[i] && !rest[i]._added && !rest[i]._map) { try { rest[i].addTo(detailMap); } catch (e) {} }
+        }
+        if (cb) { try { cb(); } catch (e) {} }
     }
 
     function _initDetailMapJPG(storm, satLayerName) {
@@ -10791,6 +10859,8 @@
         // Bundle path may leave null placeholders for frames that failed
         // server-side; skip them rather than throwing on .setOpacity().
         if (!animFrameLayers[idx]) return;
+        if (_liteActive && _liteStagePending && animFrameLayers[idx]._mosaicTs &&
+            !animFrameLayers[idx]._map) _liteStageFlush();
         if (_detailPillArmed) {
             _detailPillArmed = false;
             var _pillLy = animFrameLayers[idx];
