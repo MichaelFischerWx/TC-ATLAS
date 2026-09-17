@@ -4825,7 +4825,9 @@ function loadHURSAT(storm) {
             var sourceLabel = meta.source === 'mergir' ? 'MergIR 4km' : (meta.source === 'gridsat' ? 'GridSat-B1' : 'HURSAT-B1');
             document.getElementById('ir-status').textContent =
                 meta.n_frames + ' frames (' + sourceLabel + ')';
-            document.getElementById('ir-source-badge').textContent = sourceLabel;
+            var badge = document.getElementById('ir-source-badge');
+            badge.textContent = sourceLabel;
+            badge.title = (meta.source === 'mergir' ? 'NASA GES DISC MergIR (doi:10.5067/P4HZB9N27EKU)' : meta.source === 'gridsat' ? 'NOAA NCEI GridSat-B1 CDR (doi:10.7289/V59P2ZKR)' : 'NOAA NCEI HURSAT-B1') + ' — click for data credits and citations';
 
             // Auto-show IR overlay
             irOverlayVisible = true;

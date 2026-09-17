@@ -87,7 +87,7 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundles, discoverable from byte 0. Tokens MUST match
          the script tags below. -->
-    <link rel="preload" as="script" href="global_archive.js?v=20260908f">
+    <link rel="preload" as="script" href="global_archive.js?v=20260916a">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
@@ -550,7 +550,7 @@
                         <div id="ir-map-controls" class="ir-map-controls ir-bar ir-hidden" style="display:none;position:relative;bottom:auto;left:auto;z-index:auto;">
                             <div class="ir-bar-row1">
                                 <span id="ir-frame-info" class="ir-frame-info"></span>
-                                <span class="panel-badge" id="ir-source-badge">HURSAT-B1</span>
+                                <a class="panel-badge" id="ir-source-badge" href="index.html#data-credits" target="_blank" rel="noopener" title="Imagery source — click for data credits and citations" style="text-decoration:none;">HURSAT-B1</a>
                                 <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepIRFrame(-1)" title="Previous frame">&#9664;</button>
                                 <button id="ir-play-btn" class="ga-btn ga-btn-sm" aria-label="Play IR animation" onclick="toggleIRPlay()">&#9654;</button>
                                 <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepIRFrame(1)" title="Next frame">&#9654;</button>
@@ -1211,8 +1211,10 @@
                         <h4>What goes in</h4>
                         <ul>
                             <li><strong>Merged global geostationary infrared imagery</strong>
-                                (NASA MergIR, ~4&nbsp;km, half-hourly) &mdash; the same imagery
-                                the frame viewer on this page displays.</li>
+                                (NASA GES DISC MergIR, ~4&nbsp;km, half-hourly,
+                                <a href="https://doi.org/10.5067/P4HZB9N27EKU" target="_blank" rel="noopener">doi:10.5067/P4HZB9N27EKU</a>;
+                                NOAA NCEI GridSat-B1 before 1998) &mdash; the same imagery
+                                the frame viewer on this page displays. <a href="index.html#data-credits">Data credits</a>.</li>
                             <li><strong>Large-scale environmental fields</strong> from
                                 reanalysis (thermodynamic and kinematic).</li>
                             <li><strong>Storm position</strong> from IBTrACS &mdash; position
@@ -1385,7 +1387,7 @@
     <script defer src="lflet_gl.js?v=20260907b"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260725d"></script>
-    <script defer src="global_archive.js?v=20260908f"></script>
+    <script defer src="global_archive.js?v=20260916a"></script>
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->

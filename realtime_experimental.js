@@ -616,6 +616,12 @@
         'reconnaissance required. Its wind is GHOST&rsquo;s wind; its ' +
         'pressure is one of the two members averaged on the ' +
         '<a href="#experimental">Experimental tab</a>.</div>';
+    var DATA_CREDIT =
+        ' <span class="exp-data-credit">Trained on NASA GES DISC MergIR ' +
+        '(<a href="https://doi.org/10.5067/P4HZB9N27EKU" target="_blank" rel="noopener">doi:10.5067/P4HZB9N27EKU</a>) ' +
+        'and NOAA NCEI GridSat-B1 (<a href="https://doi.org/10.7289/V59P2ZKR" target="_blank" rel="noopener">doi:10.7289/V59P2ZKR</a>) ' +
+        'infrared imagery with IBTrACS best tracks; runs on live GOES and Himawari imagery. ' +
+        '<a href="index.html#data-credits">Data credits</a>.</span>';
     var GHOST_CITE =
         '<div class="exp-cite"><strong>Unlisted member page &mdash; ' +
         'manuscript in preparation.</strong> ' +
@@ -626,7 +632,7 @@
         'official forecast or analysis</strong>. Please contact the ' +
         'author — Dr. Michael Fischer ' +
         '(<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu' +
-        '</a>) — before citing or redistributing these estimates.</div>';
+        '</a>) — before citing or redistributing these estimates.' + DATA_CREDIT + '</div>';
 
     var FPM_LEDE =
         '<div class="exp-lede">FPM estimates <strong>minimum central ' +
@@ -650,7 +656,7 @@
         'of the two members GHOST averages. Please contact the author ' +
         '— Dr. Michael Fischer ' +
         '(<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu' +
-        '</a>) — before citing or redistributing these estimates.</div>';
+        '</a>) — before citing or redistributing these estimates.' + DATA_CREDIT + '</div>';
 
     /* Shared tail for both profiles: how the best-track reference behaves and
        why plan-view centers can lag. True of the frames themselves, which
@@ -765,7 +771,7 @@
         'scientific transparency and is <strong>not an official forecast or ' +
         'analysis</strong>. Please contact the author &mdash; Dr. Michael ' +
         'Fischer (<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu' +
-        '</a>) &mdash; before citing or redistributing these estimates.</div>';
+        '</a>) &mdash; before citing or redistributing these estimates.' + DATA_CREDIT + '</div>';
     var BLEND_NOTE =
         '<div class="exp-note">Guidance, not official analysis. Pressure = ' +
         'mean of the two members (both shown in the tooltip); wind = the ' +
@@ -842,7 +848,7 @@
         'or analysis</strong>. Please contact the author &mdash; Dr. ' +
         'Michael Fischer ' +
         '(<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu' +
-        '</a>) &mdash; before citing or redistributing these estimates.</div>';
+        '</a>) &mdash; before citing or redistributing these estimates.' + DATA_CREDIT + '</div>';
 
     var TILT_NOTE =
         '<div class="exp-note">Guidance, not official analysis. ' +
