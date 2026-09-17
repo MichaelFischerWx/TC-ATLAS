@@ -6,6 +6,14 @@
 <meta name="description" content="Animate any tropical cyclone season since 1980 over near-global infrared satellite imagery, with every storm's best-track and GHOST reanalysis intensity.">
 <title>Global IR Archive — TC-ATLAS</title>
 <link rel="icon" href="tc-atlas-favicon-32.png">
+<!-- Google Analytics (GA4) — same sitewide property as every other page -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-EFM8GFFKLK"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-EFM8GFFKLK');
+</script>
 <link href="assets/vendor/maplibre/maplibre-gl.css?v=4.7.1" rel="stylesheet">
 <script src="theme.js?v=20260908a"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -16,7 +24,10 @@
   /* Site palette (mirrors tc_radar_styles.css); theme.js sets data-theme="dark" from the user's site-wide choice */
   :root { --bg:#ffffff; --surface:#f7f8fa; --surface-raised:#ffffff; --border:rgba(15,22,35,.08); --text:#0f1623; --muted:#5b6573; --um-green:#005030; --um-orange:#F47321; --panel:rgba(255,255,255,.88); --ctl:#eef1f5; --ctl-border:rgba(15,22,35,.12); }
   [data-theme="dark"] { --bg:#0a0e14; --surface:#111722; --surface-raised:#161d2a; --border:rgba(255,255,255,.08); --text:#e6ebf2; --muted:#8993a4; --um-green:#2e9c6a; --panel:rgba(17,23,34,.88); --ctl:#1c2432; --ctl-border:rgba(255,255,255,.12); }
-  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:13px/1.4 'DM Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow:hidden; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); overflow:hidden; }
+  /* Base size on BODY only: the site header (tc_radar_styles.css) is sized in rem, so a 13px html
+     root shrank the nav, logo and subtitle to 81% of every other page. */
+  body { font:13px/1.4 'DM Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
   :root { --hdr:52px; }
   .topbar { position:relative; z-index:20; }
   #ira-map { position:absolute; left:0; right:0; bottom:0; top:var(--hdr); height:auto; }
@@ -25,6 +36,11 @@
   .hud { position:absolute; z-index:5; background:var(--panel); border:1px solid var(--border); border-radius:10px; -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px); box-shadow:0 6px 24px rgba(0,0,0,.3); }
   #top { top:10px; left:10px; display:flex; align-items:center; gap:8px; padding:6px 10px; flex-wrap:wrap; max-width:calc(100% - 20px); }
   @media (min-width:1100px) { #top { max-width:calc(100% - 520px); } }   /* leave the legend its own column */
+  /* Tablet band: the top card spans the width, so the legend moves to the bottom-left above the bar
+     instead of sitting on top of the card's buttons. */
+  @media (min-width:769px) and (max-width:1099px) {
+    #legend { top:auto !important; right:auto; left:10px; bottom:var(--barh, 52px); max-width:calc(100% - 80px); }
+  }
   #top b { font-size:14px; }
   #top .home { display:flex; align-items:center; gap:6px; text-decoration:none; color:var(--text); font-weight:700; font-size:14px; margin-right:2px; }
   #top .home img { width:20px; height:20px; border-radius:4px; }
@@ -194,14 +210,18 @@
     c.putImageData(im, 0, 0); })();
 
   var dark = document.documentElement.getAttribute('data-theme') === 'dark', TV = dark ? 'dark' : 'light';
+  // Below the wide layout the legend sits bottom-left above the bar, so the attribution collapses to its
+  // (i) button there (MapLibre only auto-compacts under 640 px).
+  var COMPACT_ATTR = isTouch || innerWidth <= 1099;
   var map = new maplibregl.Map({ container: 'ira-map', center: VIEWS[basin].slice(0,2), zoom: VIEWS[basin][2], minZoom: 1, maxZoom: 7,
+    attributionControl: COMPACT_ATTR ? { compact: true } : undefined,
     style: { version: 8, sources: {
       carto: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/' + TV + '_nolabels/{z}/{x}/{y}.png' + CK, 'https://b.basemaps.cartocdn.com/' + TV + '_nolabels/{z}/{x}/{y}.png' + CK], tileSize: 256, attribution: '&copy; <a href="https://carto.com/">CARTO</a> &middot; <a href="https://www.ncei.noaa.gov/products/international-best-track-archive">IBTrACS</a> &middot; IR: <a href="https://doi.org/10.5067/P4HZB9N27EKU">MergIR</a> (NASA GES DISC) &middot; <a href="https://doi.org/10.7289/V59P2ZKR">GridSat-B1</a> (NOAA NCEI CDR) &middot; GHOST (TC-ATLAS) &middot; <a href="index.html#data-credits">Data credits</a>' },
       labels: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/' + TV + '_only_labels/{z}/{x}/{y}.png' + CK], tileSize: 256 } },
       layers: [{ id: 'carto', type: 'raster', source: 'carto' }] } });
   map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
   // Phones: start the attribution collapsed to its (i) button so it never stacks two lines over the map; still one tap away
-  if (isTouch || innerWidth <= 768) map.once('load', function () { var a = document.querySelector('#ira-map .maplibregl-ctrl-attrib'); if (a) a.classList.remove('maplibregl-compact-show'); });
+  if (COMPACT_ATTR) map.once('load', function () { var a = document.querySelector('#ira-map .maplibregl-ctrl-attrib'); if (a) a.classList.remove('maplibregl-compact-show'); });
   var mapReady = false, pending = false;
   map.on('load', function () { mapReady = true; ensureLayers(); fitHeader(); map.resize(); if (pending) { pending = false; show(idx); } });
 
