@@ -142,6 +142,7 @@
 <div id="legend" class="hud">
   <div class="row"><i style="background:#60a5fa"></i>TD/TS <i style="background:#fbbf24;margin-left:6px"></i>Cat 1&ndash;2 <i style="background:#f87171;margin-left:6px"></i>Cat 3 <i style="background:#ef4444;margin-left:6px"></i>Cat 4 <i style="background:#c084fc;margin-left:6px"></i>Cat 5 <span class="sep">|</span> <span style="color:#fde68a">kt</span> best track <span class="sep">|</span> <span style="color:#7dd3fc">G</span> GHOST</div>
   <div class="row">Dashed circle: 300 km locator, not a wind radius. Click a storm to lock on.</div>
+  <div class="row">IR: NASA GES DISC MergIR (1998+) &middot; NOAA NCEI GridSat-B1 (1980&ndash;97, gap fill) &middot; <a href="index.html#data-credits" style="color:var(--um-green)">credits &amp; citations</a></div>
 </div>
 <div id="ginfo" class="hud" role="dialog" aria-label="About GHOST">
   <h4>GHOST intensity estimates <span class="x" title="Close">&#10005;</span></h4>
@@ -195,7 +196,7 @@
   var dark = document.documentElement.getAttribute('data-theme') === 'dark', TV = dark ? 'dark' : 'light';
   var map = new maplibregl.Map({ container: 'ira-map', center: VIEWS[basin].slice(0,2), zoom: VIEWS[basin][2], minZoom: 1, maxZoom: 7,
     style: { version: 8, sources: {
-      carto: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/' + TV + '_nolabels/{z}/{x}/{y}.png' + CK, 'https://b.basemaps.cartocdn.com/' + TV + '_nolabels/{z}/{x}/{y}.png' + CK], tileSize: 256, attribution: '&copy; CARTO &middot; IBTrACS &middot; MergIR (NASA) &middot; GridSat-B1 (NOAA) &middot; GHOST reanalysis (TC-ATLAS)' },
+      carto: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/' + TV + '_nolabels/{z}/{x}/{y}.png' + CK, 'https://b.basemaps.cartocdn.com/' + TV + '_nolabels/{z}/{x}/{y}.png' + CK], tileSize: 256, attribution: '&copy; <a href="https://carto.com/">CARTO</a> &middot; <a href="https://www.ncei.noaa.gov/products/international-best-track-archive">IBTrACS</a> &middot; IR: <a href="https://doi.org/10.5067/P4HZB9N27EKU">MergIR</a> (NASA GES DISC) &middot; <a href="https://doi.org/10.7289/V59P2ZKR">GridSat-B1</a> (NOAA NCEI CDR) &middot; GHOST (TC-ATLAS) &middot; <a href="index.html#data-credits">Data credits</a>' },
       labels: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/' + TV + '_only_labels/{z}/{x}/{y}.png' + CK], tileSize: 256 } },
       layers: [{ id: 'carto', type: 'raster', source: 'carto' }] } });
   map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
