@@ -19278,7 +19278,13 @@
        and predicted peak Vmax (line, right axis) across the last ~4
        DeepMind cycles. Degrades silently: if the endpoint isn't deployed
        or fewer than 2 cycles match, the panel stays hidden. */
+    var _genTrendLastArgs = null;   // last (json, stats) so a failed fetch can be retried in place
+    function _retryGenesisTrend() {
+        if (_genTrendLastArgs) _renderGenesisTrend(_genTrendLastArgs.json, _genTrendLastArgs.stats);
+    }
+    window._retryGenesisTrend = _retryGenesisTrend;
     function _renderGenesisTrend(json, stats) {
+        _genTrendLastArgs = { json: json, stats: stats };
         var wrap = document.getElementById('rt-genesis-modal-trend');
         var el = document.getElementById('rt-genesis-modal-trend-chart');
         var noteEl = document.getElementById('rt-genesis-trend-note');
@@ -19350,10 +19356,11 @@
                 + '&lon=' + encodeURIComponent(aLon)
                 + (_trendVariant ? '&variant=' + encodeURIComponent(_trendVariant) : '')
                 + '&count=5', { cache: 'no-store' })
-            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (r) { if (!r.ok) { var e = new Error('HTTP ' + r.status); e.status = r.status; throw e; } return r.json(); })
             .then(function (data) {
                 if (wrap.dataset.trackId !== (reqTrackId || '')) return;  // stale
                 _genesisTrendLoading = false;
+                wrap._trendRetried = false;
                 _genTrendData = data; _genTrendInit = loadedInit;   // for the window toggle
                 _drawGenesisTrend(data, loadedInit);
                 _drawTrackTrend(data, loadedInit);
@@ -19362,15 +19369,36 @@
                 _drawGenesisIntChange(data, loadedInit);
                 _genesisTrendsUpdateEmpty();
             })
-            .catch(function () {
-                // Endpoint absent or failed — Trends stays hidden; clear the
-                // loading flag so its note settles on the definitive "no
-                // history" message instead of spinning on "Loading…" forever.
-                // Give the Intensity Change pane its own definitive message too.
+            .catch(function (err) {
+                if (wrap.dataset.trackId !== (reqTrackId || '')) return;  // stale
+                // A failed fetch is NOT "no history". The API sheds load with
+                // 429s when it's saturated (seen 2026-09-17 19:50Z, when this
+                // note wrongly read "No multi-cycle history" on a storm with
+                // six matched cycles). Retry a busy/transient failure once
+                // after a short pause; if it still fails, say so and offer a
+                // manual retry instead of the definitive no-history note.
+                var st = err && err.status, busy = (st === 429 || st === 503 || st === 502 || !st);
+                if (busy && !wrap._trendRetried) {
+                    wrap._trendRetried = true;
+                    setTimeout(function () {
+                        if (wrap.dataset.trackId !== (reqTrackId || '')) return;
+                        _renderGenesisTrend(json, stats);
+                    }, 4000);
+                    return;
+                }
+                wrap._trendRetried = false;
                 _genesisTrendLoading = false;
                 _genesisTrendsUpdateEmpty();
+                var empty = document.getElementById('rt-genesis-trends-empty');
+                if (empty) {
+                    empty.dataset.err = '1';
+                    empty.innerHTML = (busy ? 'The server is busy; the run-to-run trend could not be loaded. '
+                                            : 'The run-to-run trend could not be loaded. ')
+                        + '<a href="#" onclick="window._retryGenesisTrend(); return false;">Retry</a>';
+                    empty.style.display = '';
+                }
                 var ice = document.getElementById('rt-genesis-ic-empty');
-                if (ice) ice.textContent = 'Intensity-change distribution unavailable.';
+                if (ice) ice.textContent = 'Intensity-change distribution could not be loaded.';
             });
     }
 
@@ -19799,7 +19827,9 @@
             var n = document.getElementById(id);
             return n && n.style.display !== 'none';
         });
-        if (anyVisible) { empty.style.display = 'none'; return; }
+        if (anyVisible) { empty.style.display = 'none'; empty.dataset.err = ''; return; }
+        if (empty.dataset.err === '1' && !_genesisTrendLoading) { empty.style.display = ''; return; }   // keep the failure + Retry note
+        empty.dataset.err = '';
         empty.textContent = _genesisTrendLoading
             ? 'Loading run-to-run trend…'
             : 'No multi-cycle history yet for this cluster.';

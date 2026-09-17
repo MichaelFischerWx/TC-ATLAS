@@ -82,7 +82,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20260916a">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20260917a">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -118,7 +118,7 @@
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
     <link rel="stylesheet" href="realtime_ir_styles.css?v=20260904g">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260903a">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260917a">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -2294,8 +2294,8 @@
 
         <!-- Visualization panel (shown after file selected) -->
         <div id="rt-viz-panel" class="rt-viz-panel" style="display:none;">
-            <div class="rt-viz-layout rt-map-collapsed">
-                <!-- LEFT (30%): Leaflet map with IR overlay + storm marker -->
+            <div class="rt-viz-layout">
+                <!-- LEFT (58%): geographic map — the primary surface, as in the explorer focus mode -->
                 <div class="rt-viz-map-panel">
                     <div id="rt-map-wrapper" class="rt-map-wrapper">
                         <div id="rt-map" style="width:100%;height:100%;"></div>
@@ -2303,7 +2303,7 @@
                     </div>
                 </div>
 
-                <!-- RIGHT (70%): Explorer layout (plot left, controls right) -->
+                <!-- RIGHT (42%): analysis panel — plot on top, controls as a wrapped grid below -->
                 <div class="rt-viz-content-panel">
                     <div class="explorer-layout">
                         <!-- LEFT: Plot display + action buttons -->
@@ -2311,7 +2311,7 @@
                             <div id="rt-display-area"></div>
                             <div class="overlay-strip" style="margin-top:8px;">
                                 <span class="overlay-strip-label">Layers</span>
-                                <button class="overlay-pill" id="rt-map-toggle-btn" onclick="rtToggleMapPanel()" data-color="slate" title="Show / hide the geographic map — hide it to give the plan view full width"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" x2="9" y1="3" y2="21"/></svg>Map</button>
+                                <button class="overlay-pill active" id="rt-map-toggle-btn" onclick="rtToggleMapPanel()" data-color="slate" title="Show / hide the geographic map — hide it to give the plan view full width"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" x2="9" y1="3" y2="21"/></svg>Map</button>
                                 <button class="overlay-pill" id="rt-ir-underlay-btn" onclick="rtToggleIRUnderlay()" disabled data-color="cyan" title="IR Satellite Underlay"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/></svg>IR</button>
                                 <button class="overlay-pill" id="rt-ir-play-btn" onclick="rtMapIRAnimToggle()" disabled data-color="cyan" title="Play / pause the IR loop (animates the plan-view background even when the map is hidden)"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg>Loop</button>
                                 <span class="rt-ir-opacity-wrap" title="IR underlay opacity" style="display:inline-flex;align-items:center;gap:4px;font-size:0.66rem;color:#64748b;">
@@ -2672,7 +2672,7 @@
     <script defer src="tc_mw_layer.js?v=20260811b"></script>
     <script defer src="tc_dm_analytics.js?v=20260904b"></script>
     <script defer src="realtime_ir_dm.js?v=20260904r"></script>
-    <script defer src="realtime_ir.js?v=20260916a"></script>
+    <script defer src="realtime_ir.js?v=20260917a"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
