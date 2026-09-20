@@ -2208,6 +2208,30 @@ def _last_processed_start_utc(sensor: Optional[str] = None) -> Optional[_dt]:
     return max(_dt.fromisoformat(e["scan_start"]) for e in entries)
 
 
+# Sensors whose granules reach PPS OUT OF TIME ORDER. WSF-M MWI is posted
+# in ~2-hourly batches and an older scan can land hours after a newer one
+# (2026-09-20: the 12:49-13:09Z scans were posted at 16:08Z, two hours
+# after the 13:19Z scan) — a strictly-forward cursor skips those for good.
+# The backfill re-lists this many hours behind the cursor and picks up
+# anything the manifest has never seen. Sized to the worst posting lag
+# measured (~7 h).
+_BACKFILL_REORDER_SLACK_H = {"MWI": 8.0}
+
+
+def _manifest_scan_starts(sensor: str) -> set:
+    """scan_start strings of every manifest entry for `sensor`, sentinels
+    included — the 'already dealt with' set for the reorder-slack re-list."""
+    try:
+        txt = _download_text(MANIFEST_KEY)
+        entries = json.loads(txt).get("entries", []) if txt else []
+    except Exception as exc:
+        logger.warning("[%s] manifest read for reorder slack failed (%s)",
+                       sensor, exc)
+        return set()
+    return {_dt.fromisoformat(e["scan_start"]).isoformat()
+            for e in entries if e.get("sensor") == sensor}
+
+
 def update_manifest(new_entries: list[dict]) -> None:
     """Merge new_entries into the rolling 48-hour manifest."""
     existing_txt = _download_text(MANIFEST_KEY)
@@ -3696,6 +3720,7 @@ def _cli(argv=None):
                 logger.info("[backfill] skipped this tick (in-window "
                             "frontfill only; safety-net not due)")
             for sensor in backfill_sensors:
+                reorder_cutoff, reorder_seen = None, set()
                 if time.time() - start_time > _MAX_RUNTIME_SECONDS:
                     logger.warning("[budget] runtime budget exceeded (%.0fs) "
                                    "before starting sensor %s — exiting "
@@ -3712,6 +3737,11 @@ def _cli(argv=None):
                     else:
                         # +1s so we don't reprocess the boundary granule.
                         since = last + timedelta(seconds=1)
+                        slack_h = _BACKFILL_REORDER_SLACK_H.get(sensor)
+                        if slack_h:
+                            reorder_cutoff = last
+                            reorder_seen = _manifest_scan_starts(sensor)
+                            since = last - timedelta(hours=slack_h)
                 else:
                     since = _dt.now(timezone.utc) - timedelta(hours=args.since_hours)
                 logger.info("[%s] polling PPS for granules since %s",
@@ -3742,6 +3772,15 @@ def _cli(argv=None):
                     # serving the page. Fail-safe: any guard error returns
                     # False → full processing, never a dropped pass.
                     fname = url.rsplit("/", 1)[-1]
+                    # Reorder slack: behind the cursor, only a granule the
+                    # manifest has never seen (a late PPS arrival) is work.
+                    late = (reorder_cutoff is not None
+                            and scan_start <= reorder_cutoff)
+                    if late:
+                        if scan_start.isoformat() in reorder_seen:
+                            continue
+                        logger.info("[%s] late arrival behind cursor: %s",
+                                    sensor, fname)
                     if _frontfill_skip_granule(sensor, fname):
                         all_entries.append({
                             "sensor": sensor,
@@ -3756,8 +3795,25 @@ def _cli(argv=None):
                             "_skip_reason": "already-rendered-by-frontfill",
                         })
                         continue
+                    n_before = len(all_entries)
                     _process_one_granule(url, scan_start, sensor,
                                          source_tag=None)
+                    if late and len(all_entries) == n_before:
+                        # Rendered nothing (e.g. wholly poleward of the
+                        # clip) — mark it seen so the slack re-list
+                        # doesn't download it again every run.
+                        all_entries.append({
+                            "sensor": sensor,
+                            "platform": "_skip",
+                            "scan_start": scan_start.isoformat(),
+                            "scan_end": scan_start.isoformat(),
+                            "orbit_id": f"RENDERED-SKIP-{fname}",
+                            "product": _RENDERED_SENTINEL_PRODUCT,
+                            "png_url": "",
+                            "geojson_url": "",
+                            "bounds": [[0.0, 0.0], [0.0, 0.0]],
+                            "_skip_reason": "no-renderable-data",
+                        })
                 if budget_exceeded:
                     break
         finally:
