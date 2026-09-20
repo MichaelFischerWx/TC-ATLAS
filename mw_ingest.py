@@ -177,6 +177,8 @@ _OVERPASS_POST_PAD_MIN = {       # close it POST_PAD after eta, per sensor
     "ATMS":  120,   # latency empirically noisy (see ATMS_NRT_LATENCY_MIN)
     "SSMIS": 120,
     "AMSR2": 120,
+    "AMSR3": 120,
+    "MWI":   150,   # posting lag is wide: median ~150 min, p90 ~250
 }
 _OVERPASS_POST_PAD_DEFAULT_MIN = 120   # unknown sensor → pad generously
 
@@ -266,6 +268,8 @@ PREDICT_STEP_SECONDS = 60      # 1-min propagation step
 # stay at 24h — they don't gain anything from a longer window.
 GMI_PREDICT_HORIZON_H   = 72   # GPM 65°-incl, 1 sat, daily-ish coverage
 AMSR2_PREDICT_HORIZON_H = 48   # GCOM-W1 sun-sync, 1 sat, smaller swath
+AMSR3_PREDICT_HORIZON_H = 48   # GOSAT-GW sun-sync, 1 sat
+WSFM_PREDICT_HORIZON_H  = 48   # WSF-M1 sun-sync, 1 sat
 
 # Satellites we ingest from. catnr = NORAD ID; swath_half_km is the
 # sensor's swath half-width (km) used as the pass-detection radius.
@@ -277,6 +281,12 @@ AMSR2_PREDICT_HORIZON_H = 48   # GCOM-W1 sun-sync, 1 sat, smaller swath
 GMI_NRT_LATENCY_MIN   = 45
 SSMIS_NRT_LATENCY_MIN = 180
 AMSR2_NRT_LATENCY_MIN = 200
+# AMSR3 (GOSAT-GW) posts full-orbit granules ~22 min after scan_end
+# (measured 2026-09-20, 107 granules), so an overpass lands 22-122 min
+# later depending on where in the ~100-min granule it falls.
+AMSR3_NRT_LATENCY_MIN = 60
+# WSF-M MWI: 10-min granules, measured 2026-09-20 over 1154 granules.
+WSFM_NRT_LATENCY_MIN  = 150
 ATMS_NRT_LATENCY_MIN  = 210  # NPP/NOAA-20/NOAA-21 via PPS. Empirical
                              # 2026-07-26: newest granule on PPS lagged
                              # scan_start by ~3.4h (was set to 60, which
@@ -294,9 +304,17 @@ PREDICT_SATELLITES = [
      "swath_half_km": 875.0, "nrt_latency_min": SSMIS_NRT_LATENCY_MIN},
     {"platform": "F18",     "sensor": "SSMIS", "catnr": 35951,
      "swath_half_km": 875.0, "nrt_latency_min": SSMIS_NRT_LATENCY_MIN},
-    {"platform": "GCOM-W1", "sensor": "AMSR2", "catnr": 38337,
-     "swath_half_km": 725.0, "nrt_latency_min": AMSR2_NRT_LATENCY_MIN,
-     "predict_horizon_h": AMSR2_PREDICT_HORIZON_H},
+    # AMSR2 (GCOM-W1, catnr 38337, half-swath 725 km) retired 2026-09-20:
+    # PPS removed 1C/AMSR2/ and no granule had landed for over a week, so
+    # predicting its passes only advertised data that never arrived. The
+    # reader config stays in _PPS_SENSORS and the watchlist probes for the
+    # directory's return; re-add the entry here if it does.
+    {"platform": "GOSAT-GW", "sensor": "AMSR3", "catnr": 64694,
+     "swath_half_km": 765.0, "nrt_latency_min": AMSR3_NRT_LATENCY_MIN,
+     "predict_horizon_h": AMSR3_PREDICT_HORIZON_H},
+    {"platform": "WSFM1",   "sensor": "MWI",   "catnr": 59481,
+     "swath_half_km": 745.0, "nrt_latency_min": WSFM_NRT_LATENCY_MIN,
+     "predict_horizon_h": WSFM_PREDICT_HORIZON_H},
     # ATMS — cross-track sounder, ~2300 km swath (half-width 1150 km).
     # Three satellites: Suomi NPP, NOAA-20 (JPSS-1), NOAA-21 (JPSS-2).
     {"platform": "NPP",     "sensor": "ATMS",  "catnr": 37849,
@@ -312,6 +330,8 @@ _SENSOR_NRT_LATENCY_MIN = {
     "GMI":   GMI_NRT_LATENCY_MIN,
     "SSMIS": SSMIS_NRT_LATENCY_MIN,
     "AMSR2": AMSR2_NRT_LATENCY_MIN,
+    "AMSR3": AMSR3_NRT_LATENCY_MIN,
+    "MWI":   WSFM_NRT_LATENCY_MIN,
     "ATMS":  ATMS_NRT_LATENCY_MIN,
 }
 
@@ -920,6 +940,55 @@ _PPS_SENSORS = {
             "89h":     {"group": "S5", "channels": {"TB_89.0H": 1}},
         },
     },
+    "AMSR3": {
+        "list_path":  "1C/AMSR3/",
+        "data_path":  "1C/AMSR3/",
+        # 1C.GOSATGW.AMSR3.XCAL2026-V.YYYYMMDD-SHHMMSS-EHHMMSS.V08A.RT-NC
+        "fname_re":   r"1C\.GOSATGW\.AMSR3\.[\w\-]+\.(\d{8})-S(\d{6})-"
+                      r"E(\d{6})\.V\w+\.RT-NC$",
+        "platform_fn": lambda f: "GOSATGW",
+        # Same layout idea as AMSR2, shifted one group by the extra
+        # 10.25 GHz band: 36.42 GHz in S5, 89 GHz A-Scan in S6 and B-Scan
+        # in S7 (folded together like AMSR2's S5+S6). Verified from
+        # Tc.LongName on a 2026-09-20 granule.
+        "merge_groups": {"S6": "S7"},
+        "products": {
+            "37color": {"group": "S5", "channels": {
+                "TB_36.42V": 0, "TB_36.42H": 1,
+            }},
+            "89pct":   {"group": "S6", "channels": {
+                "TB_89.0V": 0, "TB_89.0H": 1,
+            }},
+            "37v":     {"group": "S5", "channels": {"TB_36.42V": 0}},
+            "37h":     {"group": "S5", "channels": {"TB_36.42H": 1}},
+            "89v":     {"group": "S6", "channels": {"TB_89.0V": 0}},
+            "89h":     {"group": "S6", "channels": {"TB_89.0H": 1}},
+        },
+    },
+    "MWI": {
+        "list_path":  "1C/WSFM/",
+        "data_path":  "1C/WSFM/",
+        # 1C.WSFM1.MWI.XCAL2026-V.YYYYMMDD-SHHMMSS-EHHMMSS.V08A.RT-NC
+        "fname_re":   r"1C\.(WSFM\d)\.MWI\.[\w\-]+\.(\d{8})-S(\d{6})-"
+                      r"E(\d{6})\.V\w+\.RT-NC$",
+        "platform_fn": None,  # captured from fname_re group 1 (WSFM1, ...)
+        # Weather System Follow-on Microwave Imager. 10-min single-pass
+        # granules; every group shares one 571-pixel scan geometry.
+        # S4 = 36.75 GHz V/H (S5 is a second 37.3 GHz pair, unused),
+        # S6 = 89 GHz V/H. Verified from Tc.LongName, 2026-09-20.
+        "products": {
+            "37color": {"group": "S4", "channels": {
+                "TB_36.75V": 0, "TB_36.75H": 1,
+            }},
+            "89pct":   {"group": "S6", "channels": {
+                "TB_89.0V": 0, "TB_89.0H": 1,
+            }},
+            "37v":     {"group": "S4", "channels": {"TB_36.75V": 0}},
+            "37h":     {"group": "S4", "channels": {"TB_36.75H": 1}},
+            "89v":     {"group": "S6", "channels": {"TB_89.0V": 0}},
+            "89h":     {"group": "S6", "channels": {"TB_89.0H": 1}},
+        },
+    },
     "ATMS": {
         "list_path":  "1C/ATMS/",
         "data_path":  "1C/ATMS/",
@@ -1229,7 +1298,7 @@ class RenderedProduct:
 # Sensors whose NRT granules bundle multiple orbital passes and must
 # be split per-pass to keep each rendered PNG to a single-orbit bbox.
 # GMI and ATMS NRT granules are already ~5-min single-pass chunks.
-_MULTI_PASS_SENSORS = {"SSMIS", "AMSR2"}
+_MULTI_PASS_SENSORS = {"SSMIS", "AMSR2", "AMSR3"}
 
 
 # Per-band grid resolution. 37 GHz has coarser native footprint (~15-37 km
@@ -1251,6 +1320,8 @@ _BAND_GRID_RES = {37: 0.05, 89: 0.02}
 _SENSOR_NATIVE_KM = {
     "GMI":   {37: 9.2,  89: 4.4},
     "AMSR2": {37: 7.3,  89: 3.5},
+    "AMSR3": {37: 7.3,  89: 3.5},   # same 2 m dish class as AMSR2
+    "MWI":   {37: 9.0,  89: 4.3},   # 4.3 km sample spacing (measured)
     "SSMIS": {37: 28.0, 89: 13.2},
     "ATMS":  {89: 16.0},
 }
@@ -1264,6 +1335,8 @@ _SENSOR_NATIVE_KM = {
 _CROP_GRID_RES = {
     "GMI":   {37: 0.040, 89: 0.020},   # 4.4 / 2.2 km
     "AMSR2": {37: 0.033, 89: 0.018},   # 3.7 / 2.0 km
+    "AMSR3": {37: 0.033, 89: 0.018},   # 3.7 / 2.0 km
+    "MWI":   {37: 0.040, 89: 0.020},   # 4.4 / 2.2 km
     "SSMIS": {37: 0.090, 89: 0.050},   # 10.0 / 5.5 km
     "ATMS":  {89: 0.060},              # 6.7 km
 }
@@ -3122,9 +3195,10 @@ def run_predict_passes(upload: bool = True) -> dict:
 # finally publishes it we see a clear log line and can extend
 # _PPS_SENSORS with one new entry.
 _PPS_SENSOR_WATCHLIST = [
-    ("WSF",     "WSF-M (MWI) — Space Force microwave imager"),
-    ("MWI",     "WSF-M (MWI) — alternate path"),
-    ("WSF-M",   "WSF-M (MWI) — full-name path"),
+    # WSF-M landed as 1C/WSFM/ and AMSR3 as 1C/AMSR3/ (both ingested since
+    # 2026-09-20). Still waiting on the second WSF-M and the MetOp-SG MWI.
+    ("MWI",     "MetOp-SG MWI — EUMETSAT conical imager"),
+    ("AMSR2",   "AMSR2 — directory vanished from PPS 2026-09; is it back?"),
 ]
 
 
@@ -3177,11 +3251,11 @@ def _cli(argv=None):
     # higher-resolution AMSR2. AMSR2 native 89 GHz footprint is ~5 km
     # vs SSMIS ~13 km, so an AMSR2 pass carries more diagnostic value
     # per granule for TC inner-core analysis.
-    ap.add_argument("--sensors", default="GMI,AMSR2,SSMIS,ATMS",
+    ap.add_argument("--sensors", default="GMI,AMSR3,MWI,SSMIS,ATMS",
                     help="Operational/poll mode: comma-separated list of "
-                         "PPS sensors to ingest (default GMI,AMSR2,SSMIS,"
-                         "ATMS; AMSR2 prioritized over SSMIS by resolution). "
-                         "Quiet-mode gate narrows this to GMI+AMSR2 when "
+                         "PPS sensors to ingest (default GMI,AMSR3,MWI,SSMIS,"
+                         "ATMS; sharpest imagers first). "
+                         "Quiet-mode gate narrows this to GMI+AMSR3 when "
                          "there are 0 active storms AND 0 disturbances, so "
                          "ATMS only ingests when something's actually worth "
                          "watching.")
@@ -3309,7 +3383,7 @@ def _cli(argv=None):
             # populated. Manual --since-hours invocations skip the gate.
             # Fail-safe: if either gate API call fails, keep the full sensor
             # list (better to over-ingest than to drop coverage silently).
-            QUIET_MODE_SENSORS = {"GMI", "AMSR2"}
+            QUIET_MODE_SENSORS = {"GMI", "AMSR2", "AMSR3"}
             if args.operational and not args.since_hours:
                 storms_ok = disturb_ok = True
                 try:

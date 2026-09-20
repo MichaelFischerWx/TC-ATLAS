@@ -6253,7 +6253,7 @@
                 var mwTopBtn = L.DomUtil.create('button', 'ir-mw-toggle-btn', mwGroup);
                 mwTopBtn.id = 'ir-mw-toggle-btn';
                 mwTopBtn.type = 'button';
-                mwTopBtn.title = 'Toggle real-time microwave swaths (GMI / SSMI/S / AMSR2)';
+                mwTopBtn.title = 'Toggle real-time microwave swaths (GMI / AMSR3 / WSF-M / SSMI/S / ATMS)';
                 mwTopBtn.innerHTML = '<span class="ir-mw-toggle-dot"></span>'
                                    + '<span class="ir-mw-toggle-text">Microwave</span>';
                 mwTopBtn.addEventListener('click', function () {
@@ -28274,7 +28274,8 @@
     // Sensor display order + labels for the upcoming-pass strip.
     var _RT_MW_SENSOR_ORDER = [
         { key: 'GMI',   label: 'GMI' },
-        { key: 'AMSR2', label: 'AMSR2' },
+        { key: 'AMSR3', label: 'AMSR3' },
+        { key: 'MWI',   label: 'WSF-M' },
         { key: 'SSMIS', label: 'SSMIS' },
         { key: 'ATMS',  label: 'ATMS' }
     ];
@@ -28283,7 +28284,8 @@
     var _RT_MW_THUMB_PX = 160;                        // canvas size
     var _RT_MW_SENSOR_COLOR = {
         GMI:   '#4ade80', SSMIS: '#60a5fa',
-        AMSR2: '#fb923c', ATMS:  '#c084fc'
+        AMSR2: '#fb923c', ATMS:  '#c084fc',
+        AMSR3: '#f472b6', MWI:   '#2dd4bf'
     };
     var _rtMwManifest = null;
     var _rtMwManifestFetchedAt = 0;
@@ -28338,7 +28340,7 @@
     // skip downloading their PNGs. The per-card PNG-crop check (frac <
     // _RT_MW_MIN_COVERAGE) remains the final authority — this gate only
     // matches the schedule dashboard's coverage definition in tc_mw_layer.js.
-    var _RT_MW_SWATH_HALF_KM = { GMI: 445, SSMIS: 875, AMSR2: 725, ATMS: 1150 };
+    var _RT_MW_SWATH_HALF_KM = { GMI: 445, SSMIS: 875, AMSR2: 725, AMSR3: 765, MWI: 745, ATMS: 1150 };
     var _RT_MW_SWATH_HALF_KM_DEFAULT = 900;
     // Loose by design: this is only a cheap PNG-download skip, and the
     // per-card crop check (frac < _RT_MW_MIN_COVERAGE) is the real authority.

@@ -49,7 +49,8 @@
     // and is shown in the MW options popover where there's room.
     var ATTRIBUTION  = 'Microwave: NASA GPM/PPS NRT';
     var POPOVER_ACK  = 'Brightness temperatures: GMI (NASA/GPM), '
-                     + 'SSMI/S (DMSP F16/F17/F18), AMSR2 (JAXA/GCOM-W1), '
+                     + 'SSMI/S (DMSP F16/F17/F18), '
+                     + 'AMSR3 (JAXA/GOSAT-GW), MWI (U.S. Space Force/WSF-M), '
                      + 'ATMS (NPP/NOAA-20/NOAA-21). NRT data via NASA GPM '
                      + 'Precipitation Processing System. Orbital predictions '
                      + 'via CelesTrak TLEs.';
@@ -69,6 +70,8 @@
         GMI:   '#4ade80',   // green
         SSMIS: '#60a5fa',   // blue
         AMSR2: '#fb923c',   // orange
+        AMSR3: '#f472b6',   // pink
+        MWI:   '#2dd4bf',   // teal
         ATMS:  '#c084fc'    // purple — cross-track sounder, 89v-only
     };
 
@@ -97,7 +100,7 @@
     // its min distance to the pass's center-track polyline is within this
     // half-width — the same definition predict_passes() uses for upcoming
     // passes, so ingested and predicted coverage agree.
-    var _SWATH_HALF_KM = { GMI: 445, SSMIS: 875, AMSR2: 725, ATMS: 1150 };
+    var _SWATH_HALF_KM = { GMI: 445, SSMIS: 875, AMSR2: 725, AMSR3: 765, MWI: 745, ATMS: 1150 };
     var _SWATH_HALF_KM_DEFAULT = 900;
     // Small margin so the cheap geometric proxy errs toward inclusion; the
     // satellite page's PNG-crop check trims any remaining false positives.
@@ -284,7 +287,8 @@
     var KNOWN_SENSORS = [
         { key: 'GMI',   label: 'GMI'   },
         { key: 'SSMIS', label: 'SSMI/S' },
-        { key: 'AMSR2', label: 'AMSR2' },
+        { key: 'AMSR3', label: 'AMSR3' },
+        { key: 'MWI',   label: 'WSF-M' },
         { key: 'ATMS',  label: 'ATMS'  }
     ];
 
@@ -1477,7 +1481,7 @@
             var s = displayList[si];
             // Latest per sensor from manifest — first newest-first orbit
             // whose bounds cover the storm position.
-            var latest = { GMI: null, SSMIS: null, AMSR2: null, ATMS: null };
+            var latest = { GMI: null, SSMIS: null, AMSR2: null, AMSR3: null, MWI: null, ATMS: null };
             for (var oi = 0; oi < manifest.length; oi++) {
                 var o = manifest[oi];
                 if (!o.sensor || latest[o.sensor]) continue;
@@ -1486,7 +1490,7 @@
                 }
             }
             // Upcoming per sensor from predictions — first future entry.
-            var upcoming = { GMI: null, SSMIS: null, AMSR2: null, ATMS: null };
+            var upcoming = { GMI: null, SSMIS: null, AMSR2: null, AMSR3: null, MWI: null, ATMS: null };
             var predStorm = predByAtcf[s.atcf_id];
             if (predStorm && Array.isArray(predStorm.passes)) {
                 for (var ppi = 0; ppi < predStorm.passes.length; ppi++) {
