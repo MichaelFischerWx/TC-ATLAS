@@ -3163,6 +3163,22 @@ def _interpolate_track_position(records: list, target_dt) -> tuple | None:
     return (lat_q, lon_q)
 
 
+def _invest_coexists(inv_records: list, genesis: dict, radius_deg: float) -> bool:
+    """True if the invest has a fix at the SAME time as the named storm, after
+    the named storm's first fix, and the two are more than `radius_deg` apart.
+    A pre-genesis invest stops being fixed once its system is renumbered, so
+    simultaneous, well-separated fixes mean two distinct systems."""
+    track = genesis.get("track") or {}
+    common = [r for r in inv_records
+              if r.get("tau", 0) == 0 and r["datetime"] in track
+              and r["datetime"] > genesis["datetime"]]
+    if not common:
+        return False
+    last = max(common, key=lambda r: r["datetime"])
+    nlat, nlon = track[last["datetime"]]
+    return _haversine_deg(last["lat"], last["lon"], nlat, nlon) > radius_deg
+
+
 def _filter_genesis_invests(storms: list, radius_deg: float = 5.0,
                             genesis_radius_deg: float = 12.0) -> list:
     """
@@ -3198,7 +3214,9 @@ def _filter_genesis_invests(storms: list, radius_deg: float = 5.0,
                     first = t0_records[0]
                     named_genesis[ns["atcf_id"]] = {
                         "lat": first["lat"], "lon": first["lon"],
-                        "datetime": first["datetime"]
+                        "datetime": first["datetime"],
+                        "track": {r["datetime"]: (r["lat"], r["lon"])
+                                  for r in t0_records},
                     }
         except Exception:
             pass
@@ -3228,7 +3246,14 @@ def _filter_genesis_invests(storms: list, radius_deg: float = 5.0,
                     inv_records = _fetch_jtwc_bdeck(inv["atcf_id"].lower())
                     if not inv_records:
                         inv_records = _fetch_bdeck(inv["atcf_id"].lower())
-                    if inv_records:
+                    if inv_records and _invest_coexists(
+                            inv_records, genesis, radius_deg):
+                        # Tracked at the same synoptic times as the named
+                        # storm, well apart from it — a separate disturbance
+                        # that merely formed near the same spot (99E vs
+                        # Odalys, 2026-09), not its pre-genesis invest.
+                        pass
+                    elif inv_records:
                         gen_dt = genesis["datetime"]
                         for r in inv_records:
                             if r.get("tau", 0) != 0:
