@@ -305,10 +305,10 @@ PREDICT_SATELLITES = [
     {"platform": "F18",     "sensor": "SSMIS", "catnr": 35951,
      "swath_half_km": 875.0, "nrt_latency_min": SSMIS_NRT_LATENCY_MIN},
     # AMSR2 (GCOM-W1, catnr 38337, half-swath 725 km) retired 2026-09-20:
-    # PPS removed 1C/AMSR2/ and no granule had landed for over a week, so
-    # predicting its passes only advertised data that never arrived. The
-    # reader config stays in _PPS_SENSORS and the watchlist probes for the
-    # directory's return; re-add the entry here if it does.
+    # JAXA ended AMSR2 standard NRT delivery in September 2026 as part of
+    # the planned hand-off to AMSR3. The last PPS granule was 2026-09-01
+    # and PPS removed 1C/AMSR2/ on 09-16, so predicting its passes only
+    # advertised data that never arrived. AMSR3 below is the successor.
     {"platform": "GOSAT-GW", "sensor": "AMSR3", "catnr": 64694,
      "swath_half_km": 765.0, "nrt_latency_min": AMSR3_NRT_LATENCY_MIN,
      "predict_horizon_h": AMSR3_PREDICT_HORIZON_H},
@@ -3198,7 +3198,6 @@ _PPS_SENSOR_WATCHLIST = [
     # WSF-M landed as 1C/WSFM/ and AMSR3 as 1C/AMSR3/ (both ingested since
     # 2026-09-20). Still waiting on the second WSF-M and the MetOp-SG MWI.
     ("MWI",     "MetOp-SG MWI — EUMETSAT conical imager"),
-    ("AMSR2",   "AMSR2 — directory vanished from PPS 2026-09; is it back?"),
 ]
 
 
