@@ -116,7 +116,7 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260920b">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260920c">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260917a">
 </head>
@@ -429,8 +429,9 @@
                         </div>
                     </div>
                     <!-- IR vigor legend (shown only when the Vigor product is active) -->
-                    <div id="ir-vigor-legend" class="ir-tb-legend ir-vigor-legend" style="display:none;">
-                        <span>IR Vigor (K above coldest 4-h mean within 200 km)</span>
+                    <div id="ir-vigor-legend" class="ir-tb-legend ir-vigor-legend" style="display:none;"
+                         title="Brightness temperature minus the coldest 4-hour-mean temperature within 200 km, following the storm. Below 0 = colder than anything recently sustained nearby.">
+                        <span>IR Vigor (K vs coldest 4-h mean)</span>
                         <div class="ir-tb-legend-bar ir-vigor-legend-bar"></div>
                         <div class="ir-tb-legend-labels">
                             <span>-20</span>

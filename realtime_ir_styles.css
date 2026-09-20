@@ -1299,6 +1299,9 @@ html, body { margin: 0; padding: 0; }
         rgb(225, 228, 232) 50%, rgb(255, 255, 150) 60%, rgb(255, 220, 50) 70%,
         rgb(255, 140, 0) 80%, rgb(225, 45, 0) 90%, rgb(110, 0, 25) 100%);
 }
+/* The bar must span exactly what the labels span, or the 0 tick (placed at
+   20% of the label row) drifts off the colour break. */
+.ir-vigor-legend .ir-tb-legend-bar { width: 100%; min-width: 160px; }
 .ir-vigor-legend .ir-tb-legend-labels { position: relative; }
 .ir-vigor-legend .ir-vigor-zero {
     position: absolute; left: 20%; transform: translateX(-50%);
