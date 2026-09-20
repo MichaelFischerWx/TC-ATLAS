@@ -1293,10 +1293,15 @@ html, body { margin: 0; padding: 0; }
    left → right. */
 .ir-vigor-legend-bar {
     background: linear-gradient(to right,
-        rgb(10, 10, 30) 0%, rgb(20, 40, 120) 10%, rgb(40, 80, 180) 20%,
-        rgb(80, 140, 220) 30%, rgb(160, 200, 240) 40%, rgb(230, 230, 230) 50%,
-        rgb(255, 255, 150) 60%, rgb(255, 220, 50) 70%, rgb(255, 140, 0) 80%,
-        rgb(230, 50, 0) 90%, rgb(200, 0, 150) 100%);
+        rgb(255, 255, 255) 0%, rgb(255, 170, 240) 8%, rgb(245, 70, 205) 14%,
+        rgb(170, 0, 140) 20%,
+        rgb(12, 22, 95) 20%, rgb(40, 90, 190) 30%, rgb(110, 170, 230) 40%,
+        rgb(225, 228, 232) 50%, rgb(255, 255, 150) 60%, rgb(255, 220, 50) 70%,
+        rgb(255, 140, 0) 80%, rgb(225, 45, 0) 90%, rgb(110, 0, 25) 100%);
+}
+.ir-vigor-legend .ir-tb-legend-labels { position: relative; }
+.ir-vigor-legend .ir-vigor-zero {
+    position: absolute; left: 20%; transform: translateX(-50%);
 }
 
 .ir-wv-legend-bar {

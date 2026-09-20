@@ -2846,16 +2846,23 @@
     var _vigorTrack = null;       // [{ms, lat, lon}] best track for the open storm
     var _vigorIdxLRU = new Map(); // url|f → Promise<Uint8Array|null> (downsampled idx tile)
     var _VIGOR_IDX_LRU_MAX = 400;
+    // Two ramps with a hard break at 0 K. Below zero — tops colder than the
+    // coldest the storm has sustained nearby, i.e. fresh deep convection —
+    // gets its own hue family (magenta → white by −20 K) so it can't be
+    // mistaken for the blues just above zero. Stops are in kelvin; keep the
+    // .ir-vigor-legend-bar gradient in realtime_ir_styles.css in step.
     var _vigorLut = (function () {
-        var stops = [[0.00, 10, 10, 30], [0.10, 20, 40, 120], [0.20, 40, 80, 180],
-                     [0.30, 80, 140, 220], [0.40, 160, 200, 240], [0.50, 230, 230, 230],
-                     [0.60, 255, 255, 150], [0.70, 255, 220, 50], [0.80, 255, 140, 0],
-                     [0.90, 230, 50, 0], [1.00, 200, 0, 150]];
+        var neg = [[-20, 255, 255, 255], [-12, 255, 170, 240], [-6, 245, 70, 205], [0, 170, 0, 140]];
+        var pos = [[0, 12, 22, 95], [10, 40, 90, 190], [20, 110, 170, 230], [30, 225, 228, 232],
+                   [40, 255, 255, 150], [50, 255, 220, 50], [60, 255, 140, 0],
+                   [70, 225, 45, 0], [80, 110, 0, 25]];
         var lut = new Uint8Array(256 * 3);
         for (var i = 0; i < 256; i++) {
-            var fr = i / 255, k = 0;
-            while (k < stops.length - 2 && fr > stops[k + 1][0]) k++;
-            var lo = stops[k], hi = stops[k + 1], t = (fr - lo[0]) / (hi[0] - lo[0]);
+            var kv = _VIGOR_VMIN + i * (_VIGOR_VMAX - _VIGOR_VMIN) / 255;
+            var stops = kv < 0 ? neg : pos, k = 0;
+            while (k < stops.length - 2 && kv > stops[k + 1][0]) k++;
+            var lo = stops[k], hi = stops[k + 1], t = (kv - lo[0]) / (hi[0] - lo[0]);
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
             for (var ch = 0; ch < 3; ch++) lut[i * 3 + ch] = Math.round(lo[ch + 1] + t * (hi[ch + 1] - lo[ch + 1]));
         }
         return lut;
