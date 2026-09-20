@@ -82,7 +82,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20260920a">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20260920b">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -116,7 +116,7 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260904g">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260920a">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260917a">
 </head>
@@ -367,6 +367,7 @@
                         <button id="ir-product-eir" class="ir-product-btn ir-product-active" title="Clean infrared (Band 13, ~10.3 µm)">IR</button>
                         <button id="ir-product-vis" class="ir-product-btn" title="Red visible (Band 2 / Band 3 — daytime only)">Visible</button>
                         <button id="ir-product-wv" class="ir-product-btn" title="Mid-level water vapor (Band 8, ~6.2 µm)">WV</button>
+                        <button id="ir-product-vigor" class="ir-product-btn" title="IR vigor — brightness temperature minus the coldest 4-hour-mean temperature within 200 km, following the storm. Near or below zero marks cloud tops as cold as the coldest the storm has recently sustained.">Vigor</button>
                         <!-- Combo (Vis+IR sandwich) — the JS side is complete
                              (setProductMode/_initDetailMapMosaic/_comboTileUrl +
                              the sandwich branch of the idxcolor:// protocol),
@@ -425,6 +426,16 @@
                             <span>+35</span>
                             <span>-30</span>
                             <span>-85</span>
+                        </div>
+                    </div>
+                    <!-- IR vigor legend (shown only when the Vigor product is active) -->
+                    <div id="ir-vigor-legend" class="ir-tb-legend ir-vigor-legend" style="display:none;">
+                        <span>IR Vigor (K above coldest 4-h mean within 200 km)</span>
+                        <div class="ir-tb-legend-bar ir-vigor-legend-bar"></div>
+                        <div class="ir-tb-legend-labels">
+                            <span>-20</span>
+                            <span>30</span>
+                            <span>80</span>
                         </div>
                     </div>
                     <!-- WV brightness-temp legend (shown only when WV product active) -->
@@ -2672,7 +2683,7 @@
     <script defer src="tc_mw_layer.js?v=20260920a"></script>
     <script defer src="tc_dm_analytics.js?v=20260904b"></script>
     <script defer src="realtime_ir_dm.js?v=20260904r"></script>
-    <script defer src="realtime_ir.js?v=20260920a"></script>
+    <script defer src="realtime_ir.js?v=20260920b"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays

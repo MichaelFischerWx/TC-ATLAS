@@ -2256,7 +2256,8 @@
                         urls.push(_ir2aRoot('ir') + '/' + ts + tail);
                         if (vts) urls.push(_ir2aRoot('vis') + '/' + vts + tail);
                     } else {
-                        urls.push(_ir2aRoot(st.product) + '/' + ts + tail);
+                        // vigor is computed from IR tiles — warm those.
+                        urls.push(_ir2aRoot(st.product === 'vigor' ? 'ir' : st.product) + '/' + ts + tail);
                     }
                 }
             }
@@ -2830,6 +2831,207 @@
     }
     // Recolor an idx tile → RGBA (forward LUT) so a RASTER layer can drape it on 3D
     // terrain (custom 2D layers don't drape). idxcolor://<product>/<realurl>.
+    // ── IR vigor (storm card) ───────────────────────────────────────────
+    // vigor = Tb(now) − the coldest 4-hour-mean Tb within 200 km, with every
+    // earlier frame shifted so the storm center stays put (objective IR eye
+    // fix when the sidecar has one, else the interpolated best track). Built
+    // per map tile, in the browser, from the same IR idx tiles the loop
+    // already streams off the CDN — so it costs the API nothing. Near/below
+    // 0 K = cloud tops as cold as the coldest the storm has sustained nearby.
+    // The slow field (mean → local coldest) is worked on a ~5 km grid; the
+    // current Tb it is subtracted from stays at full tile resolution.
+    var _VIGOR_VMIN = -20, _VIGOR_VMAX = 80;
+    var _VIGOR_LOOKBACK_MS = 4 * 3600 * 1000, _VIGOR_RADIUS_KM = 200, _VIGOR_MAX_PRIORS = 8;
+    var _vigorAllFrames = [];     // every ts in the IR manifest (priors can predate the loop)
+    var _vigorTrack = null;       // [{ms, lat, lon}] best track for the open storm
+    var _vigorIdxLRU = new Map(); // url|f → Promise<Uint8Array|null> (downsampled idx tile)
+    var _VIGOR_IDX_LRU_MAX = 400;
+    var _vigorLut = (function () {
+        var stops = [[0.00, 10, 10, 30], [0.10, 20, 40, 120], [0.20, 40, 80, 180],
+                     [0.30, 80, 140, 220], [0.40, 160, 200, 240], [0.50, 230, 230, 230],
+                     [0.60, 255, 255, 150], [0.70, 255, 220, 50], [0.80, 255, 140, 0],
+                     [0.90, 230, 50, 0], [1.00, 200, 0, 150]];
+        var lut = new Uint8Array(256 * 3);
+        for (var i = 0; i < 256; i++) {
+            var fr = i / 255, k = 0;
+            while (k < stops.length - 2 && fr > stops[k + 1][0]) k++;
+            var lo = stops[k], hi = stops[k + 1], t = (fr - lo[0]) / (hi[0] - lo[0]);
+            for (var ch = 0; ch < 3; ch++) lut[i * 3 + ch] = Math.round(lo[ch + 1] + t * (hi[ch + 1] - lo[ch + 1]));
+        }
+        return lut;
+    })();
+
+    /** Storm center at a frame time: IR eye fix → interpolated best track
+     *  (held at the ends) → null (caller then leaves that frame unshifted). */
+    function _vigorCenterAt(ts) {
+        var ec = _eyeCenterForTs(ts);
+        if (ec && isFinite(ec.lat) && isFinite(ec.lon)) return ec;
+        var tr = _vigorTrack;
+        if (!tr || !tr.length) return null;
+        var t = _tsToMs(ts), prev = null, next = null;
+        for (var i = 0; i < tr.length; i++) {
+            if (tr[i].ms <= t) prev = tr[i];
+            if (tr[i].ms >= t) { next = tr[i]; break; }
+        }
+        if (prev && next && next.ms !== prev.ms) {
+            var w = (t - prev.ms) / (next.ms - prev.ms);
+            return { lat: prev.lat + (next.lat - prev.lat) * w, lon: prev.lon + (next.lon - prev.lon) * w };
+        }
+        var use = prev || next;
+        return { lat: use.lat, lon: use.lon };
+    }
+    function _vigorSetTrack(history) {
+        var out = [];
+        for (var i = 0; i < (history || []).length; i++) {
+            var h = history[i], ms = Date.parse(h.time);
+            if (isFinite(ms) && isFinite(h.lat) && isFinite(h.lon)) out.push({ ms: ms, lat: +h.lat, lon: +h.lon });
+        }
+        out.sort(function (a, b) { return a.ms - b.ms; });
+        _vigorTrack = out;
+    }
+    function _vigorMercY(lat) {
+        var ph = Math.max(-85, Math.min(85, lat)) * Math.PI / 180;
+        return 0.5 - Math.log(Math.tan(Math.PI / 4 + ph / 2)) / (2 * Math.PI);
+    }
+    /** Earlier frames feeding `ts`, each with the storm's displacement
+     *  (prior − now) in normalized Web-Mercator units. */
+    function _vigorPriorsFor(ts) {
+        var t = _tsToMs(ts), cand = [];
+        for (var i = 0; i < _vigorAllFrames.length; i++) {
+            var dt = t - _tsToMs(_vigorAllFrames[i]);
+            if (dt > 0 && dt <= _VIGOR_LOOKBACK_MS) cand.push(_vigorAllFrames[i]);
+        }
+        var step = Math.max(1, Math.ceil(cand.length / _VIGOR_MAX_PRIORS)), out = [];
+        var c0 = _vigorCenterAt(ts);
+        for (var k = cand.length - 1; k >= 0; k -= step) {
+            var ck = c0 ? _vigorCenterAt(cand[k]) : null, dx = 0, dy = 0;
+            if (c0 && ck) {
+                dx = (ck.lon - c0.lon) / 360;
+                if (dx > 0.5) dx -= 1; else if (dx < -0.5) dx += 1;
+                dy = _vigorMercY(ck.lat) - _vigorMercY(c0.lat);
+            }
+            out.push({ ts: cand[k], dx: dx, dy: dy });
+        }
+        return out;
+    }
+    /** One IR idx tile, nearest-sampled down by `f`, as a w×w Uint8Array. */
+    function _vigorIdxTile(url, f) {
+        var key = url + '|' + f, hit = _vigorIdxLRU.get(key);
+        if (hit) { _vigorIdxLRU.delete(key); _vigorIdxLRU.set(key, hit); return hit; }
+        var p = _v3TileBlob(url).then(function (b) {
+            return b ? createImageBitmap(b) : null;
+        }).then(function (bmp) {
+            if (!bmp) return null;
+            var w = Math.max(1, Math.round(bmp.width / f));
+            var c = document.createElement('canvas'); c.width = w; c.height = w;
+            var cx = c.getContext('2d', { willReadFrequently: true });
+            cx.imageSmoothingEnabled = false;
+            cx.drawImage(bmp, 0, 0, w, w);
+            var d = cx.getImageData(0, 0, w, w).data, out = new Uint8Array(w * w);
+            for (var i = 0; i < out.length; i++) out[i] = d[i * 4];
+            if (bmp.close) bmp.close();
+            return out;
+        }).catch(function () { return null; });
+        _vigorIdxLRU.set(key, p);
+        while (_vigorIdxLRU.size > _VIGOR_IDX_LRU_MAX) _vigorIdxLRU.delete(_vigorIdxLRU.keys().next().value);
+        return p;
+    }
+    /** Sliding-window maximum along one axis (monotonic deque, O(n)). */
+    function _vigorMaxPass(src, dst, nLines, lineLen, lineStride, stepStride, half) {
+        var dq = new Int32Array(lineLen);
+        for (var l = 0; l < nLines; l++) {
+            var base = l * lineStride, head = 0, tail = 0;
+            for (var i = 0; i < lineLen + half; i++) {
+                if (i < lineLen) {
+                    var v = src[base + i * stepStride];
+                    while (tail > head && src[base + dq[tail - 1] * stepStride] <= v) tail--;
+                    dq[tail++] = i;
+                }
+                var o = i - half;
+                if (o < 0) continue;
+                while (dq[head] < o - half) head++;
+                dst[base + o * stepStride] = src[base + dq[head] * stepStride];
+            }
+        }
+    }
+    /** Build one vigor tile. `url` is the real IR tile URL (…/<ts>/z/x/y.png). */
+    function _vigorBuildTile(url) {
+        var m = url.match(/^(.*)\/(\d{12})\/(\d+)\/(\d+)\/(\d+)\.png$/);
+        if (!m) return Promise.reject(new Error('vigor: bad tile url'));
+        var root = m[1], ts = m[2], z = +m[3], x = +m[4], y = +m[5], n = Math.pow(2, z);
+        var f = Math.max(1, Math.pow(2, z - 4));
+        var times = [{ ts: ts, dx: 0, dy: 0 }].concat(_vigorPriorsFor(ts));
+        function tileUrl(t, xx, yy) {
+            if (yy < 0 || yy >= n) return null;
+            return root + '/' + t + '/' + z + '/' + (((xx % n) + n) % n) + '/' + yy + '.png';
+        }
+        var jobs = [];
+        times.forEach(function (tm) {
+            for (var j = -1; j <= 1; j++) for (var i = -1; i <= 1; i++) {
+                var u = tileUrl(tm.ts, x + i, y + j);
+                jobs.push(u ? _vigorIdxTile(u, f) : Promise.resolve(null));
+            }
+        });
+        return Promise.all([_v3TileBlob(url).then(function (b) {
+            if (!b) throw new Error('tile absent');
+            // A short/corrupt pack slice does happen; it is a hole, same as
+            // a missing tile, not a vigor failure.
+            return createImageBitmap(b).catch(function () { throw new Error('tile absent'); });
+        }), Promise.all(jobs)]).then(function (res) {
+            var bmp = res[0], tiles = res[1], W = bmp.width;
+            var w = Math.max(1, Math.round(W / f)), S = 3 * w, N = S * S;
+            var sum = new Float32Array(N), cnt = new Uint8Array(N), mos = new Uint8Array(N);
+            for (var k = 0; k < times.length; k++) {
+                mos.fill(0);
+                for (var q = 0; q < 9; q++) {
+                    var td = tiles[k * 9 + q];
+                    if (!td || td.length !== w * w) continue;
+                    var ox = (q % 3) * w, oy = ((q / 3) | 0) * w;
+                    for (var r = 0; r < w; r++) mos.set(td.subarray(r * w, (r + 1) * w), (oy + r) * S + ox);
+                }
+                var sx = Math.round(times[k].dx * n * w), sy = Math.round(times[k].dy * n * w);
+                var r0 = Math.max(0, -sy), r1 = Math.min(S, S - sy), c0 = Math.max(0, -sx), c1 = Math.min(S, S - sx);
+                for (var rr = r0; rr < r1; rr++) {
+                    var o = rr * S, so = (rr + sy) * S + sx;
+                    for (var cc = c0; cc < c1; cc++) {
+                        var v = mos[so + cc];
+                        if (v !== 0) { sum[o + cc] += v; cnt[o + cc]++; }
+                    }
+                }
+            }
+            // idx rises as Tb falls, so the coldest mean is the MAX mean idx.
+            var mean = new Float32Array(N);
+            for (var a = 0; a < N; a++) mean[a] = cnt[a] ? sum[a] / cnt[a] : -1;
+            var latC = (0.5 - (y + 0.5) / n) * 2 * Math.PI;
+            latC = Math.atan(Math.sinh(latC));
+            var pxKm = 40075.0 * Math.max(0.2, Math.cos(latC)) / (n * w);
+            var R = Math.max(1, Math.min(w, Math.round(_VIGOR_RADIUS_KM / pxKm)));
+            var tmp = new Float32Array(N), mx = new Float32Array(N);
+            _vigorMaxPass(mean, tmp, S, S, S, 1, R);
+            _vigorMaxPass(tmp, mx, S, S, 1, S, R);
+
+            var c = document.createElement('canvas'); c.width = W; c.height = W;
+            var cx = c.getContext('2d', { willReadFrequently: true });
+            cx.drawImage(bmp, 0, 0);
+            var im = cx.getImageData(0, 0, W, W), d = im.data;
+            var kPerIdx = (_irIdxRange[1] - _irIdxRange[0]) / 255;
+            var sc = 255 / (_VIGOR_VMAX - _VIGOR_VMIN), lut = _vigorLut;
+            for (var Y = 0; Y < W; Y++) {
+                var hy = (w + ((Y / f) | 0)) * S + w;
+                for (var X = 0; X < W; X++) {
+                    var pi = (Y * W + X) * 4, idx = d[pi], cold = mx[hy + ((X / f) | 0)];
+                    if (idx === 0 || cold < 0) { d[pi + 3] = 0; continue; }
+                    var e = Math.round(((cold - idx) * kPerIdx - _VIGOR_VMIN) * sc);
+                    e = e < 0 ? 0 : (e > 255 ? 255 : e);
+                    d[pi] = lut[e * 3]; d[pi + 1] = lut[e * 3 + 1]; d[pi + 2] = lut[e * 3 + 2]; d[pi + 3] = 255;
+                }
+            }
+            cx.putImageData(im, 0, 0);
+            if (bmp.close) bmp.close();
+            return createImageBitmap(c).then(function (b2) { return { data: b2 }; });
+        });
+    }
+
     var _idxColorReady = false, _idxColorWarned = 0;
     function _idxColorEnsureProtocol() {
         if (_idxColorReady || !window.maplibregl || !maplibregl.addProtocol) return;
@@ -2844,6 +3046,15 @@
             // _comboTileUrl. The pairing has to ride in the HEAD: a query
             // suffix on the tile URL is silently dropped somewhere in
             // MapLibre's tile path and the layer then renders nothing at all.
+            if (cmapOv === 'vigor') {
+                return _vigorBuildTile(url).catch(function (e) {
+                    if (_idxColorWarned < 4 && !/tile absent/.test(String(e && e.message))) {
+                        _idxColorWarned++;
+                        console.warn('[idxcolor] vigor tile failed for ' + params.url, e);
+                    }
+                    throw e;
+                });
+            }
             var combo = (product.indexOf('combo') === 0), visUrl = null;
             if (combo) {
                 var visTs = product.slice(5);
@@ -7891,6 +8102,7 @@
                 // Combo re-enters the loader so BOTH manifests reload and the
                 // new IR frames get paired against a fresh Vis list.
                 if (productMode === 'combo') _initDetailMapMosaic(storm, 'combo');
+                else if (productMode === 'vigor') _initDetailMapMosaic(storm, 'vigor');
                 else _buildMosaicAnimLayers(storm, sframes, product);
                 console.log('[RT Monitor] Lite ' + (productMode === 'combo' ? 'combo' : product)
                             + ' frames refreshed — latest ' + newLatest);
@@ -8223,9 +8435,10 @@
         // product (e.g. GOES Vis Band-2 gap): IR → raw-Tb cutout; Vis/WV →
         // the band bundle, so a storm outside mosaic coverage still loops.
         function _fallback() {
-            if (product === 'combo') {
-                // No sandwich without both bands — drop back to plain IR and
-                // put the toggle back on IR so the UI doesn't lie.
+            if (product === 'combo' || product === 'vigor') {
+                // No sandwich without both bands (and no vigor without IR
+                // idx tiles) — drop back to plain IR and put the toggle back
+                // on IR so the UI doesn't lie.
                 productMode = 'eir';
                 _irSyncProductButtons('eir');
                 _initDetailMapMosaic(storm, 'ir');
@@ -8251,6 +8464,29 @@
                 _comboVisFrames = (js[1] && js[1].frames) || [];
                 return _liteStormFrames(js[0]);
             });
+        } else if (product === 'vigor') {
+            // Vigor rides the IR timeline. Its storm-relative shift needs the
+            // eye-fix sidecar and the best track, both fetched async — give
+            // them a moment to land so the first tiles aren't earth-relative.
+            framesP = fetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' })
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                    _irApplyTrange(j, 'ir');
+                    _vigorAllFrames = ((j && j.frames) || []).slice();
+                    _vigorTrack = null;
+                    fetchStormMetadata(atcfId, function (err, meta) {
+                        if (currentStormId !== atcfId) return;
+                        _vigorSetTrack((!err && meta && meta.intensity_history) || []);
+                    });
+                    return new Promise(function (resolve) {
+                        var tries = 0;
+                        (function wait() {
+                            var eyeOk = _eyeDiag && _eyeDiag.atcf === atcfId;
+                            if ((eyeOk && _vigorTrack) || ++tries > 25) { resolve(_liteStormFrames(j)); return; }
+                            setTimeout(wait, 100);
+                        })();
+                    });
+                });
         } else if (product === 'ir' && !(_IR2A && window.createMosaicGLLayer)) {
             framesP = _loadMosaicFrames();   // legacy v2 IR path
         } else {
@@ -8300,10 +8536,16 @@
                          && window.maplibregl && window.maplibregl.addProtocol);
         var idxMode = (_IR2A && (product === 'ir' || product === 'vis' || product === 'wv')
                        && window.maplibregl && window.maplibregl.addProtocol);
-        if (idxMode || comboMode) _idxColorEnsureProtocol();
+        // 'vigor' is IR idx tiles run through the vigor builder — the head
+        // "ir:vigor" keeps the URL shape of a plain IR layer (see the protocol).
+        var vigorMode = (_IR2A && product === 'vigor'
+                         && window.maplibregl && window.maplibregl.addProtocol);
+        if (idxMode || comboMode || vigorMode) _idxColorEnsureProtocol();
         for (var i = 0; i < n; i++) {
             var url = comboMode
                 ? _comboTileUrl(frames[i], _comboPairVis(frames[i]))
+                : vigorMode
+                ? ('idxcolor://ir:vigor/' + _ir2aRoot('ir') + '/' + frames[i] + '/{z}/{x}/{y}.png')
                 : idxMode
                 ? ('idxcolor://' + product + '/' + _ir2aRoot(product) + '/' + frames[i] + '/{z}/{x}/{y}.png')
                 : (product === 'ir' ? _irColorTileUrl(_mosaicTileUrl(frames[i], product)) : _mosaicTileUrl(frames[i], product));
@@ -8314,7 +8556,7 @@
                 // bands are globally gapless (same rule as the Global Map).
                 // crisp = nearest-neighbor overzoom past native (the sharp
                 // "pixel" look instead of a bilinear blur).
-                tileSize: 512, maxNativeZoom: _stormZmaxFor(product, frames[i]),
+                tileSize: 512, maxNativeZoom: vigorMode ? 6 : _stormZmaxFor(product, frames[i]),
                 maxZoom: GIBS_VIS_MAX_ZOOM, crisp: true,
                 opacity: 0, pane: 'tilePane', keepBuffer: 2
             });
@@ -8350,7 +8592,7 @@
         var _satLbl = document.getElementById('ir-satellite-label');
         if (_satLbl) _satLbl.textContent =
             ({ ir: 'Infrared', vis: 'Visible', wv: 'Water Vapor',
-               combo: 'Vis+IR Combo' }[product] || 'Infrared')
+               combo: 'Vis+IR Combo', vigor: 'IR Vigor' }[product] || 'Infrared')
             + ' — ' + detailSatName;
         _deferredStormRef = storm;
         _triggerDeferredLoads();
@@ -10495,10 +10737,13 @@
         // "Infrared" label. Vis/WV drive their own time + label via
         // showVisFrame/showWvFrame; an IR-frame (re)load firing while the user
         // is on Visible must not clobber those with the IR time/label.
-        if (productMode !== 'eir') return;
+        // (Lite shares these arrays across products, so there the time is
+        // always the shown frame's; only the channel label stays IR-only.)
+        if (productMode !== 'eir' && !_liteActive) return;
         _cacheAnimEls();
         var timeStr = animFrameTimes[animIndex];
         if (_elFrameTime) _elFrameTime.textContent = fmtUTC(timeStr);
+        if (productMode !== 'eir') return;
         // Name the channel (matches the Vis/WV/GeoColor labels) so the
         // saved image always states what's shown, even with the product
         // toggle stripped from the export.
@@ -11470,7 +11715,8 @@
     /** Reflect the active product on the IR / Visible / WV / Combo toggle. */
     function _irSyncProductButtons(mode) {
         var ids = { eir: 'ir-product-eir', vis: 'ir-product-vis',
-                    wv: 'ir-product-wv', combo: 'ir-product-combo' };
+                    wv: 'ir-product-wv', combo: 'ir-product-combo',
+                    vigor: 'ir-product-vigor' };
         for (var k in ids) {
             var b = document.getElementById(ids[k]);
             if (b) b.classList.toggle('ir-product-active', mode === k);
@@ -11481,9 +11727,12 @@
      *  from two bands, so it only exists on the Lite path — the Detailed
      *  (raw-Tb) path has no Vis idx tiles to sandwich with. */
     function _irSyncComboAvail() {
+        var on = !!_liteActive;
+        // Vigor is tile-built too, so it shares Combo's Lite-only rule.
+        var vb = document.getElementById('ir-product-vigor');
+        if (vb) { vb.disabled = !on; vb.style.opacity = on ? '' : '0.45'; }
         var b = document.getElementById('ir-product-combo');
         if (!b) return;
-        var on = !!_liteActive;
         b.disabled = !on;
         b.style.opacity = on ? '' : '0.45';
         b.title = on
@@ -11503,6 +11752,8 @@
         // visible (carries a pre-rendered NASA colorbar).
         var tbLeg = document.getElementById('ir-tb-legend');
         if (tbLeg) tbLeg.style.display = (mode === 'eir' || mode === 'combo') ? 'block' : 'none';
+        var vgLeg = document.getElementById('ir-vigor-legend');
+        if (vgLeg) vgLeg.style.display = (mode === 'vigor') ? 'block' : 'none';
         var wvLeg = document.getElementById('ir-wv-legend');
         if (wvLeg) wvLeg.style.display = (mode === 'wv') ? 'block' : 'none';
 
@@ -11510,7 +11761,7 @@
         stopAnimation();
         // 'combo' shares the IR animation arrays (it IS the IR timeline with a
         // Vis band sampled underneath), so it hides the same layers as 'eir'.
-        if (prevMode === 'eir' || prevMode === 'combo') hideAllAnimFrames();
+        if (prevMode === 'eir' || prevMode === 'combo' || prevMode === 'vigor') hideAllAnimFrames();
         else if (prevMode === 'vis')      hideAllVisFrames();
         else if (prevMode === 'wv')       hideAllWvFrames();
 
@@ -11534,7 +11785,7 @@
             // rebuilt on each switch — no prewarm band bundle. Falls back to the
             // band bundle / raw-Tb per product if the mosaic lacks coverage.
             _initDetailMapMosaic(_deferredStormRef, mode === 'eir' ? 'ir' : mode);
-        } else if (mode === 'combo') {
+        } else if (mode === 'combo' || mode === 'vigor') {
             // Combo has no Detailed-path renderer (no Vis idx tiles to
             // sandwich). The button is disabled off-lite; this is the guard
             // for anything that reaches here another way.
@@ -13044,6 +13295,11 @@
         if (wvBtn) wvBtn.addEventListener('click', function () {
             if (productMode === 'wv') return;
             setProductMode('wv');
+        });
+        var vigorBtn = document.getElementById('ir-product-vigor');
+        if (vigorBtn) vigorBtn.addEventListener('click', function () {
+            if (productMode === 'vigor' || vigorBtn.disabled) return;
+            setProductMode('vigor');
         });
         var comboBtn = document.getElementById('ir-product-combo');
         if (comboBtn) comboBtn.addEventListener('click', function () {
@@ -32738,7 +32994,7 @@
         // Combo has no deeper level to sample (capped at z6, where both bands
         // are gapless) and a plain-IR hi-res layer on top would break the
         // sandwich — so there's nothing to add.
-        if (productMode === 'combo') return null;
+        if (productMode === 'combo' || productMode === 'vigor') return null;
         var product = (productMode === 'vis') ? 'vis' : (productMode === 'wv' ? 'wv' : 'ir');
         var zmax = _stormZmaxFor(product, ts);
         // MapLibre rounds for raster sources, so this is the level on screen.
