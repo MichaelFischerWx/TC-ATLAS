@@ -32970,6 +32970,68 @@
         chip(W - m, m, ['TC-ATLAS', 'tcatlas.org'], 'right', 700, _irExportLogo());
     }
 
+    /** Hand-draw whichever product legend is on screen (IR Tb / WV / Vigor)
+     *  into the bottom-left of a 2D export canvas — for the iOS still path,
+     *  which has no DOM capture to carry it. Mirrors the live legend rather
+     *  than keeping a second copy of each palette: the bar's computed CSS
+     *  gradient supplies the stops, the label spans supply the ticks (an
+     *  absolutely-placed span, e.g. Vigor's 0, keeps its left %). */
+    function _irStampExportLegend(cx, W, H) {
+        var ids = ['ir-tb-legend', 'ir-wv-legend', 'ir-vigor-legend'], el = null;
+        for (var n = 0; n < ids.length; n++) {
+            var c = document.getElementById(ids[n]);
+            if (c && c.offsetWidth > 0 && c.style.display !== 'none') { el = c; break; }
+        }
+        if (!el) return;
+        var bar = el.querySelector('.ir-tb-legend-bar'), titleEl = el.querySelector('span');
+        if (!bar) return;
+        var bgImg = window.getComputedStyle(bar).backgroundImage || '';
+        var re = /(rgba?\([^)]+\))\s*([\d.]+%)?/g, mm, stops = [];
+        while ((mm = re.exec(bgImg))) stops.push([mm[2] ? parseFloat(mm[2]) / 100 : null, mm[1]]);
+        if (stops.length < 2) return;
+        for (var k = 0; k < stops.length; k++) if (stops[k][0] == null) stops[k][0] = k / (stops.length - 1);
+        var ticks = [], spans = el.querySelectorAll('.ir-tb-legend-labels span'), flow = [];
+        for (var q = 0; q < spans.length; q++) {
+            var st = window.getComputedStyle(spans[q]);
+            if (st.position === 'absolute') {
+                var pw = spans[q].parentNode.offsetWidth || 1;
+                ticks.push({ f: (spans[q].offsetLeft + 0) / pw, t: spans[q].textContent, a: 'center', abs: true });
+            } else flow.push(spans[q]);
+        }
+        for (var g = 0; g < flow.length; g++) {
+            var fr = flow.length === 1 ? 0 : g / (flow.length - 1);
+            ticks.push({ f: fr, t: flow[g].textContent, a: g === 0 ? 'left' : (g === flow.length - 1 ? 'right' : 'center') });
+        }
+        var fs = Math.max(11, Math.round(W / 58)), pad = Math.round(fs * 0.7), m = Math.round(W / 70);
+        var font = "px -apple-system, system-ui, 'Segoe UI', sans-serif";
+        var title = titleEl ? titleEl.textContent.trim() : '';
+        cx.save();
+        cx.font = '600 ' + fs + font;
+        var barW = Math.max(Math.round(W * 0.30), Math.ceil(cx.measureText(title).width));
+        var barH = Math.round(fs * 0.85), lh = Math.round(fs * 1.3);
+        var bw = barW + pad * 2, bh = pad * 2 + lh + barH + lh;
+        var bx = m, by = H - m - bh;
+        cx.fillStyle = 'rgba(15,22,35,0.66)';
+        _roundRectPath(cx, bx, by, bw, bh, Math.round(fs * 0.35)); cx.fill();
+        cx.fillStyle = 'rgba(255,255,255,0.96)'; cx.textBaseline = 'top'; cx.textAlign = 'left';
+        cx.fillText(title, bx + pad, by + pad * 0.7);
+        var x0 = bx + pad, y0 = by + pad + lh;
+        var grad = cx.createLinearGradient(x0, 0, x0 + barW, 0);
+        for (var i = 0; i < stops.length; i++) {
+            try { grad.addColorStop(Math.max(0, Math.min(1, stops[i][0])), stops[i][1]); } catch (e) {}
+        }
+        cx.fillStyle = grad; cx.fillRect(x0, y0, barW, barH);
+        cx.strokeStyle = 'rgba(255,255,255,0.3)'; cx.lineWidth = 1;
+        cx.strokeRect(x0 + 0.5, y0 + 0.5, barW - 1, barH - 1);
+        cx.font = '500 ' + Math.round(fs * 0.9) + font;
+        cx.fillStyle = 'rgba(255,255,255,0.92)';
+        for (var t = 0; t < ticks.length; t++) {
+            cx.textAlign = ticks[t].a;
+            cx.fillText(ticks[t].t, x0 + ticks[t].f * barW, y0 + barH + Math.round(fs * 0.3));
+        }
+        cx.restore();
+    }
+
     /** Temporarily overlay the CURRENT frame at one zoom level deeper, so the
      *  export samples detail the card is carrying but not drawing.
      *
@@ -33108,6 +33170,7 @@
                         _rtToast('Saved without the map layer — the browser couldn’t read the map canvas.');
                     }
                     _irStampExportChrome(cx, W, H);
+                    _irStampExportLegend(cx, W, H);
                     _irRestoreTrackAfterExport(hiddenTrack); hiddenTrack = null;
                     var tsx = (_activeFrameTimeStr() || animFrameTimes[animIndex] || '')
                                 .replace(/[:\-T]/g, '').replace('Z', '');
