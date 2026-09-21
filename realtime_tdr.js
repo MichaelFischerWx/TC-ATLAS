@@ -3645,9 +3645,10 @@
         var p = _rtPlan;
         if (!_rtMap || !p || !p.z || !p.z.length || p.center_lat == null) return;
         var rows = p.z.length, cols = p.z[0].length;
-        // 1 px per cell, or 4× when barbs are stroked into the field so the
-        // glyphs stay crisp (the overlay is sampled nearest).
-        var S = (p.barbs && _rtBarbsEnabled) ? 4 : 1;
+        // 1 px per cell: the overlay is sampled nearest, so each cell is a hard-
+        // edged value. Barbs are NOT painted in here — they are vector lines
+        // (_rtDrapeBarbs) so they stay sharp at every zoom.
+        var S = 1;
         var cv = document.createElement('canvas'); cv.width = cols * S; cv.height = rows * S;
         var ctx = cv.getContext('2d'), im = ctx.createImageData(cols * S, rows * S), d = im.data;
         var lut = _rtCsLUT(p.colorscale), span = (p.vmax - p.vmin) || 1;
@@ -3665,20 +3666,6 @@
             }
         }
         ctx.putImageData(im, 0, 0);
-        if (S > 1) {
-            var xMin = p.x[0], xMax = p.x[p.x.length - 1], yMin = p.y[0], yMax = p.y[p.y.length - 1];
-            var shapes = _buildPlanViewWindBarbs(p.barbs, { xMin: xMin, xMax: xMax, yMin: yMin, yMax: yMax });
-            var W = cols * S, H = rows * S;
-            var X = function (x) { return (x - xMin) / (xMax - xMin) * W; };
-            var Y = function (y) { return (yMax - y) / (yMax - yMin) * H; };
-            ctx.lineCap = 'round';
-            [['rgba(255,255,255,0.85)', 3.2], ['rgba(0,0,0,0.9)', 1.4]].forEach(function (pass) {
-                ctx.strokeStyle = pass[0]; ctx.lineWidth = pass[1];
-                ctx.beginPath();
-                shapes.forEach(function (sh) { if (sh.type !== 'line') return; ctx.moveTo(X(sh.x0), Y(sh.y0)); ctx.lineTo(X(sh.x1), Y(sh.y1)); });
-                ctx.stroke();
-            });
-        }
         // Own pane so the field stays above the IR / MW / 88D image overlays
         // (all z 350) even when one of those is re-added later, and below the
         // vector overlays (flight track, sondes) at 400.
@@ -3708,7 +3695,46 @@
         }
         // The centre dot sits on the eye and hides the field there.
         if (_rtMapMarker && _rtMap.hasLayer && _rtMap.hasLayer(_rtMapMarker)) { try { _rtMap.removeLayer(_rtMapMarker); } catch (e) {} }
+        _rtDrapeBarbs(p);
         _rtDrapeColorbar(p);
+    }
+
+    // Wind barbs as VECTOR lines over the draped field. Painted into the raster
+    // they were limited to a few image pixels per 2-km cell and sampled with
+    // hard edges, so thin diagonal strokes came out jagged and got blockier on
+    // zoom-in. As GL lines the stroke width is constant in screen pixels and
+    // antialiased at every zoom. Same glyph geometry as the plan view
+    // (_buildPlanViewWindBarbs, km space) projected to lon/lat; a white halo
+    // under a dark stroke keeps them legible over any part of the colormap.
+    var _rtBarbHalo = null, _rtBarbInk = null;
+    function _rtDrapeBarbsRemove() {
+        if (_rtMap) {
+            if (_rtBarbHalo) { try { _rtMap.removeLayer(_rtBarbHalo); } catch (e) {} }
+            if (_rtBarbInk) { try { _rtMap.removeLayer(_rtBarbInk); } catch (e) {} }
+        }
+        _rtBarbHalo = null; _rtBarbInk = null;
+    }
+    function _rtDrapeBarbs(p) {
+        if (!_rtMap || !p || !p.barbs || !_rtBarbsEnabled) { _rtDrapeBarbsRemove(); return; }
+        var shapes = _buildPlanViewWindBarbs(p.barbs,
+            { xMin: p.x[0], xMax: p.x[p.x.length - 1], yMin: p.y[0], yMax: p.y[p.y.length - 1] });
+        var lines = [];
+        for (var i = 0; i < shapes.length; i++) {
+            var sh = shapes[i]; if (sh.type !== 'line') continue;
+            var a = _rtLatLngFromKm(sh.x0, sh.y0), b = _rtLatLngFromKm(sh.x1, sh.y1);
+            lines.push([[a[1], a[0]], [b[1], b[0]]]);   // GeoJSON is [lon, lat]
+        }
+        if (!lines.length) { _rtDrapeBarbsRemove(); return; }
+        var fc = { type: 'FeatureCollection', features: [
+            { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: lines } }] };
+        if (_rtBarbHalo && _rtBarbInk) { _rtBarbHalo.setData(fc); _rtBarbInk.setData(fc); return; }
+        _rtDrapeBarbsRemove();
+        // Above the draped field (380), below flight track / sondes (400).
+        // Two panes so the halo always sits under the ink.
+        try { var ph = _rtMap.getPane('rtBarbHaloPane') || _rtMap.createPane('rtBarbHaloPane'); ph.style.zIndex = 388; ph.style.pointerEvents = 'none';
+              var pk = _rtMap.getPane('rtBarbInkPane') || _rtMap.createPane('rtBarbInkPane'); pk.style.zIndex = 390; pk.style.pointerEvents = 'none'; } catch (e) {}
+        _rtBarbHalo = L.geoJSON(fc, { pane: 'rtBarbHaloPane', interactive: false, style: { color: '#ffffff', weight: 3.6, opacity: 0.85 } }).addTo(_rtMap);
+        _rtBarbInk = L.geoJSON(fc, { pane: 'rtBarbInkPane', interactive: false, style: { color: '#0b1220', weight: 1.5, opacity: 1 } }).addTo(_rtMap);
     }
 
     function _rtFmtRange(v) { if (v == null || isNaN(v)) return ''; return String(Math.round(v * 100) / 100); }
@@ -3851,6 +3877,7 @@
             if (_rtMapMarker && _rtMap.hasLayer && !_rtMap.hasLayer(_rtMapMarker)) { try { _rtMapMarker.addTo(_rtMap); } catch (e) {} }
         }
         _rtDrapeOverlay = null; _rtDrapeRing = null;
+        _rtDrapeBarbsRemove();
         _rtDrapeHideTip();
         _rtCsMapClear();
         var cb = document.getElementById('rt-drape-colorbar'); if (cb) cb.style.display = 'none';

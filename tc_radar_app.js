@@ -3750,6 +3750,7 @@ function toggleTDRVisibility() {
     // The draped map field follows the same toggle; with it hidden the IR
     // reverts to color in 'auto' mode so the satellite view reads on its own.
     if (_radarMapOverlay) { try { _radarMapOverlay.setOpacity(_tdrVisible ? _radarMapOpacity : 0); } catch (e) {} }
+    _radarMapBarbs(_lastPlanRender);   // vector barbs follow the field's On/Off
     if (_radarMapRing) { try { _radarMapRing.setStyle({ opacity: _tdrVisible ? 1 : 0 }); } catch (e) {} }
     _irRefreshMapFrame();
 
@@ -4032,9 +4033,10 @@ function _radarMapDraw() {
     var p = _lastPlanRender;
     if (!p || !p.z || !p.z.length || p.center_lat == null) return;
     var rows = p.z.length, cols = p.z[0].length;
-    // Render at 1 px per cell, or 4× when wind barbs are drawn into the field
-    // so the glyph strokes stay crisp (the overlay is sampled nearest).
-    var S = (p.barbs && _windBarbsEnabled) ? 4 : 1;
+    // 1 px per cell: the overlay is sampled nearest, so each cell is a hard-edged
+    // value. Wind barbs are NOT painted in here — they are vector lines
+    // (_radarMapBarbs) so they stay sharp at every zoom.
+    var S = 1;
     var cv = document.createElement('canvas'); cv.width = cols * S; cv.height = rows * S;
     var ctx = cv.getContext('2d'); var im = ctx.createImageData(cols * S, rows * S), d = im.data;
     for (var r = 0; r < rows; r++) {
@@ -4050,22 +4052,6 @@ function _radarMapDraw() {
         }
     }
     ctx.putImageData(im, 0, 0);
-    if (S > 1) {
-        // Wind barbs: reuse the plan view's glyph geometry (km-space line
-        // segments) and stroke them onto the field with a light halo.
-        var xMin = p.x[0], xMax = p.x[p.x.length - 1], yMin = p.y[0], yMax = p.y[p.y.length - 1];
-        var shapes = _buildPlanViewWindBarbs(p.barbs, { xMin: xMin, xMax: xMax, yMin: yMin, yMax: yMax });
-        var W = cols * S, H = rows * S;
-        function X(x) { return (x - xMin) / (xMax - xMin) * W; }
-        function Y(y) { return (yMax - y) / (yMax - yMin) * H; }
-        ctx.lineCap = 'round';
-        [['rgba(255,255,255,0.85)', 3.2], ['rgba(0,0,0,0.9)', 1.4]].forEach(function(pass) {
-            ctx.strokeStyle = pass[0]; ctx.lineWidth = pass[1];
-            ctx.beginPath();
-            shapes.forEach(function(sh) { if (sh.type !== 'line') return; ctx.moveTo(X(sh.x0), Y(sh.y0)); ctx.lineTo(X(sh.x1), Y(sh.y1)); });
-            ctx.stroke();
-        });
-    }
     var bounds = _radarMapBounds(p);
     if (_radarMapOverlay) { try { map.removeLayer(_radarMapOverlay); } catch (e) {} }
     _radarMapOverlay = L.imageOverlay(cv.toDataURL('image/png'), bounds, { opacity: _tdrVisible ? _radarMapOpacity : 0, interactive: false, crisp: true }).addTo(map);
@@ -4075,6 +4061,7 @@ function _radarMapDraw() {
         _radarMapRing = L.circle([p.center_lat, p.center_lon], { radius: p.rmw_km * 1000,
             color: '#fff', weight: 1.5, dashArray: '5 5', fill: false, interactive: false }).addTo(map);
     }
+    _radarMapBarbs(p);
     if (!_radarMapHoverBound) { map.on('mousemove', _radarMapHover); map.on('mouseout', _radarMapHideTip); _radarMapHoverBound = true; }
     // The case-center dot sits on the eye and hides the field there; the
     // grid crosshair + RMW ring already mark the center while draped.
@@ -4082,6 +4069,47 @@ function _radarMapDraw() {
     _stormGridDraw();
     _irRefreshMapFrame();   // 'auto' IR mode goes grayscale under the draped field
     _tdrColorbarUpdate(p);
+}
+
+// ── Wind barbs as VECTOR lines over the draped field ──────────
+// Painted into the raster they were limited to a few image pixels per 2-km
+// cell and sampled with hard edges, so thin diagonal strokes came out jagged
+// and got blockier on zoom-in. As map lines the stroke width is constant in
+// screen pixels and antialiased at every zoom. Same glyph geometry as the plan
+// view (_buildPlanViewWindBarbs, km space), projected with the same km→deg
+// constants as _radarMapBounds; a white halo under a dark stroke keeps them
+// legible over any part of the colormap. They follow the TDR On/Off toggle,
+// as they did when they were part of the image.
+var _radarBarbHalo = null, _radarBarbInk = null;
+function _radarMapBarbsRemove() {
+    if (_radarBarbHalo) { try { map.removeLayer(_radarBarbHalo); } catch (e) {} _radarBarbHalo = null; }
+    if (_radarBarbInk) { try { map.removeLayer(_radarBarbInk); } catch (e) {} _radarBarbInk = null; }
+}
+function _radarMapBarbs(p) {
+    if (!p || !p.barbs || !_windBarbsEnabled || !_tdrVisible || !_radarMapOn || p.center_lat == null) { _radarMapBarbsRemove(); return; }
+    var shapes = _buildPlanViewWindBarbs(p.barbs, { xMin: p.x[0], xMax: p.x[p.x.length - 1], yMin: p.y[0], yMax: p.y[p.y.length - 1] });
+    var cosLat = Math.cos(p.center_lat * Math.PI / 180) || 1, kx = 111.0 * cosLat, ky = 111.0;
+    var lines = [];
+    for (var i = 0; i < shapes.length; i++) {
+        var sh = shapes[i]; if (sh.type !== 'line') continue;
+        lines.push([[p.center_lon + sh.x0 / kx, p.center_lat + sh.y0 / ky], [p.center_lon + sh.x1 / kx, p.center_lat + sh.y1 / ky]]);   // [lon, lat]
+    }
+    if (!lines.length) { _radarMapBarbsRemove(); return; }
+    var fc = { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: lines } }] };
+    if (_radarBarbHalo && _radarBarbInk) {   // update in place (both map engines)
+        _radarBarbHalo.clearLayers(); _radarBarbHalo.addData(fc);
+        _radarBarbInk.clearLayers(); _radarBarbInk.addData(fc);
+        return;
+    }
+    _radarMapBarbsRemove();
+    // Above the draped field, halo under ink. On the GL engine image overlays
+    // sit at z 350 and vectors at 400, so 388/390 slots between them; real
+    // Leaflet keeps the image in overlayPane (400), so go just above that.
+    var zH = window.LFLET_GL ? 388 : 410, zI = zH + 2;
+    try { var ph = map.getPane('radarBarbHaloPane') || map.createPane('radarBarbHaloPane'); ph.style.zIndex = zH; ph.style.pointerEvents = 'none';
+          var pk = map.getPane('radarBarbInkPane') || map.createPane('radarBarbInkPane'); pk.style.zIndex = zI; pk.style.pointerEvents = 'none'; } catch (e) {}
+    _radarBarbHalo = L.geoJSON(fc, { pane: 'radarBarbHaloPane', interactive: false, style: { color: '#ffffff', weight: 3.6, opacity: 0.85 } }).addTo(map);
+    _radarBarbInk = L.geoJSON(fc, { pane: 'radarBarbInkPane', interactive: false, style: { color: '#0b1220', weight: 1.5, opacity: 1 } }).addTo(map);
 }
 
 // ── TDR colorbar on the map ───────────────────────────────────
@@ -4136,6 +4164,7 @@ function _radarMapOff() {
     _radarMapOn = false;
     if (_radarMapOverlay) { try { map.removeLayer(_radarMapOverlay); } catch (e) {} _radarMapOverlay = null; }
     if (_radarMapRing) { try { map.removeLayer(_radarMapRing); } catch (e) {} _radarMapRing = null; }
+    _radarMapBarbsRemove();
     _radarMapHideTip();
     var btn = document.getElementById('radar-map-btn');
     if (btn) btn.classList.remove('active');
