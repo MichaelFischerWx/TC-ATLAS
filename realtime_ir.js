@@ -10118,7 +10118,12 @@
         if (viSub) {
             viSub.textContent = vent
                 ? ('shear ' + Math.round(vent.shear_kt) + ' kt · χₘ ' + vent.chi_m +
-                   ' · PI ' + Math.round(vent.mpi_kt) + ' kt')
+                   ' · empirical PI ' + Math.round(vent.mpi_kt) + ' kt')
+                : '';
+            // Say which PI this is: the Global Map's Potential Intensity
+            // layer is the thermodynamic one and the two routinely differ.
+            viSub.title = vent
+                ? 'Empirical potential intensity (DeMaria & Kaplan 1994): a function of the sea-surface temperature under the storm only. The Global Map’s Maximum Potential Intensity layer is the thermodynamic (Bister–Emanuel) value from the GFS analysis, which also depends on the atmospheric profile, so the two differ — most over very warm water, where the empirical value runs higher.'
                 : '';
         }
 
