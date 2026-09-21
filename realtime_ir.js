@@ -33425,6 +33425,11 @@
                                                0, 0, outW, outH);
                             }
                             _irStampExportChrome(cctx, outW, outH);
+                            // The colorbar normally rides in on `overlay`. When
+                            // that capture is unavailable (html2canvas throws on
+                            // iOS, or it lost the 8 s race) stamp it by hand so
+                            // the loop never ships without its scale.
+                            if (!overlay) _irStampExportLegend(cctx, outW, outH);
                             gif.addFrame(cctx, { delay: animIntervalMs, copy: true });
                             i++;
                             toast.textContent = 'GIF · capturing ' + i + '/' + exportFrames.length;
