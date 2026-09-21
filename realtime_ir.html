@@ -118,7 +118,7 @@
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
     <link rel="stylesheet" href="realtime_ir_styles.css?v=20260920c">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260921b">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260921c">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -2324,6 +2324,7 @@
                             <div class="overlay-strip" style="margin-top:8px;">
                                 <span class="overlay-strip-label">Layers</span>
                                 <button class="overlay-pill active" id="rt-map-toggle-btn" onclick="rtToggleMapPanel()" data-color="slate" title="Show / hide the geographic map — hide it to give the plan view full width"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" x2="9" y1="3" y2="21"/></svg>Map</button>
+                                <button class="overlay-pill" id="rt-drape-btn" onclick="rtToggleDrape()" disabled data-color="blue" title="Draw the radar field on the map (the map becomes the plan view). Turn off to bring back the Plotly plan view with contours, tilt, fullscreen and save."><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg>Radar on map</button>
                                 <button class="overlay-pill" id="rt-ir-underlay-btn" onclick="rtToggleIRUnderlay()" disabled data-color="cyan" title="IR Satellite Underlay"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/></svg>IR</button>
                                 <button class="overlay-pill" id="rt-ir-play-btn" onclick="rtMapIRAnimToggle()" disabled data-color="cyan" title="Play / pause the IR loop (animates the plan-view background even when the map is hidden)"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg>Loop</button>
                                 <span class="rt-ir-opacity-wrap" title="IR underlay opacity" style="display:inline-flex;align-items:center;gap:4px;font-size:0.66rem;color:#64748b;">
@@ -2657,7 +2658,7 @@
          scanner so the whole bundle downloads IN PARALLEL. The old
          document.write chain forced a serial download of ~3 MB. -->
     <script defer src="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1"></script>
-    <script defer src="lflet_gl.js?v=20260907b"></script>
+    <script defer src="lflet_gl.js?v=20260921a"></script>
     <!-- Single-channel idx mosaic WebGL layer (flag-gated ?ir2a=1). -->
     <script defer src="mosaic_gl_layer.js?v=20260904a"></script>
     <script>
@@ -2789,7 +2790,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260916a';
+        var _LAZY_ASSET_V = '?v=20260921a';
         var _lazyViewMods = {
             recon:       { js: ['realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

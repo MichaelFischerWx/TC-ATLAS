@@ -3360,7 +3360,7 @@
                     '</div>' +
                 '</div>' +
             '</div>' +
-            '<div style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover for values \u00b7 scroll to zoom \u00b7 drag to pan \u00b7 \u26F6 expand</div>';
+            '<div id="rt-plan-hint" style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover for values \u00b7 scroll to zoom \u00b7 drag to pan \u00b7 \u26F6 expand</div>';
 
         var zData = json.data, x = json.x, y = json.y, varInfo = json.variable, meta = json.case_meta || {};
         _rtDefaultColorscale = varInfo.colorscale;
@@ -3513,6 +3513,23 @@
         Plotly.newPlot('rt-plotly-chart', _planTraces, _planLayout, config);
         _rtLastPlotlyData = { heatmap: heatmap, overlayTraces: overlayTraces, maxTraces: maxTraces, baseLayout: baseLayout, title: title, config: config, json: json };
 
+        // Capture the field for the map drape (storm-relative km → lat/lon) and
+        // arm the two-panel default. Deferred so the Plotly plan chart renders
+        // at full size first (clean toggle-back); idempotent, so it also
+        // re-hides the pane after variable / level re-renders.
+        var _dm = (meta && meta.latitude != null) ? meta : (_rtCaseMeta || {});
+        _rtPlan = {
+            z: zData, x: x, y: y,
+            vmin: (activeVmin != null ? activeVmin : varInfo.vmin), vmax: (activeVmax != null ? activeVmax : varInfo.vmax),
+            colorscale: activeColorscale, default_colorscale: (varDefault || varInfo.colorscale),
+            units: varInfo.units, display_name: varInfo.display_name, level_km: json.actual_level_km,
+            rmw_km: json.wcm_rmw_km, rmw_cx: json.wcm_center_x_km || 0, rmw_cy: json.wcm_center_y_km || 0,
+            barbs: json.wind_barbs || null, ctrk: !!_ctrk,
+            center_lat: (_dm.latitude != null && !(_dm.latitude === 0 && _dm.longitude === 0)) ? _dm.latitude : null,
+            center_lon: _dm.longitude
+        };
+        setTimeout(_rtDrapeAuto, 60);
+
         // newPlot replaces layout.images, so re-apply the IR underlay if active.
         if (_rtIRPlotlyVisible) _rtApplyIRUnderlay();
 
@@ -3543,6 +3560,369 @@
 
         // Click handler for cross-section
         document.getElementById('rt-plotly-chart').on('plotly_click', rtHandlePlotClick);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  Radar → Map: drape the plan-view field on the geographic map
+    //  Ported from tc_radar_app.js (_radarMapDraw and friends) so the
+    //  real-time tab matches the explorer's focus mode: the map IS the plan
+    //  view, and the redundant Plotly plan pane is hidden while draped. The
+    //  "Radar on map" pill (or collapsing the map) brings the pane back, which
+    //  is also where the Plotly-only layers live (contour overlay, tilt,
+    //  max marker, centre-track mode, fullscreen / save).
+    // ══════════════════════════════════════════════════════════════
+    var _rtPlan = null;            // last plan-view field, captured by rtRenderPlot
+    var _rtDrapeOn = false;        // field currently on the map
+    var _rtDrapeDisabled = false;  // user turned the drape off — don't re-arm
+    var _rtDrapeOverlay = null, _rtDrapeRing = null, _rtDrapeTip = null;
+    var _rtDrapeHoverBound = false, _rtDrapeFramedFor = null;
+    var _rtDrapeOpacity = 1.0;
+    try { var _rtDo = parseFloat(localStorage.getItem('rt_radar_opacity')); if (_rtDo >= 0 && _rtDo <= 1) _rtDrapeOpacity = _rtDo; } catch (e) {}
+
+    var _RT_NAMED_CS = {
+        Viridis: [[0,'rgb(68,1,84)'],[0.25,'rgb(59,82,139)'],[0.5,'rgb(33,145,140)'],[0.75,'rgb(94,201,98)'],[1,'rgb(253,231,37)']],
+        Jet: [[0,'rgb(0,0,131)'],[0.125,'rgb(0,60,170)'],[0.375,'rgb(5,255,255)'],[0.625,'rgb(255,255,0)'],[0.875,'rgb(250,0,0)'],[1,'rgb(128,0,0)']],
+        RdBu: [[0,'rgb(5,10,172)'],[0.35,'rgb(106,137,247)'],[0.5,'rgb(190,190,190)'],[0.6,'rgb(220,170,132)'],[0.7,'rgb(230,145,90)'],[1,'rgb(178,10,28)']],
+        Portland: [[0,'rgb(12,51,131)'],[0.25,'rgb(10,136,186)'],[0.5,'rgb(242,211,56)'],[0.75,'rgb(242,143,56)'],[1,'rgb(217,30,30)']],
+        Hot: [[0,'rgb(0,0,0)'],[0.3,'rgb(230,0,0)'],[0.6,'rgb(255,210,0)'],[1,'rgb(255,255,255)']],
+        Greys: [[0,'rgb(0,0,0)'],[1,'rgb(255,255,255)']]
+    };
+    function _rtCsParse(c) {
+        c = String(c).trim();
+        var m = /rgba?\(([^)]+)\)/.exec(c);
+        if (m) { var q = m[1].split(',').map(parseFloat); return [q[0] || 0, q[1] || 0, q[2] || 0]; }
+        if (c[0] === '#') { var h = c.slice(1); if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+            return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)]; }
+        return [128,128,128];
+    }
+    function _rtCsResolve(cs) {
+        if (Array.isArray(cs)) return cs;
+        if (typeof cs === 'string' && _RT_NAMED_CS[cs]) return _RT_NAMED_CS[cs];
+        return _RT_NAMED_CS.Viridis;
+    }
+    // 256-entry lookup table for a colorscale (one build per draw, not per cell).
+    function _rtCsLUT(cs) {
+        var stops = _rtCsResolve(cs), lut = new Uint8Array(256 * 3), k = 0;
+        for (var i = 0; i < 256; i++) {
+            var f = i / 255;
+            while (k < stops.length - 2 && f > stops[k + 1][0]) k++;
+            var a = stops[k], b = stops[k + 1] || stops[k];
+            var t = (b[0] === a[0]) ? 0 : Math.max(0, Math.min(1, (f - a[0]) / (b[0] - a[0])));
+            var ca = _rtCsParse(a[1]), cb = _rtCsParse(b[1]);
+            lut[i*3] = Math.round(ca[0] + t * (cb[0] - ca[0]));
+            lut[i*3+1] = Math.round(ca[1] + t * (cb[1] - ca[1]));
+            lut[i*3+2] = Math.round(ca[2] + t * (cb[2] - ca[2]));
+        }
+        return lut;
+    }
+
+    // Storm-relative km ↔ lat/lon, same constants as the coastline projection.
+    function _rtKmPerDeg(p) { return { lat: 110.574, lon: 111.320 * (Math.cos(p.center_lat * Math.PI / 180) || 1) }; }
+    function _rtDrapeBounds(p) {
+        var k = _rtKmPerDeg(p), nx = p.x.length, ny = p.y.length;
+        // x/y are cell centres: pad half a cell so each pixel sits on its cell.
+        var hx = nx > 1 ? (p.x[nx-1] - p.x[0]) / (nx - 1) / 2 : 0;
+        var hy = ny > 1 ? (p.y[ny-1] - p.y[0]) / (ny - 1) / 2 : 0;
+        return L.latLngBounds(
+            [p.center_lat + (p.y[0] - hy) / k.lat, p.center_lon + (p.x[0] - hx) / k.lon],
+            [p.center_lat + (p.y[ny-1] + hy) / k.lat, p.center_lon + (p.x[nx-1] + hx) / k.lon]);
+    }
+    function _rtKmFromLatLng(ll) {
+        var p = _rtPlan; if (!p || p.center_lat == null) return null;
+        var k = _rtKmPerDeg(p);
+        return { x: (ll.lng - p.center_lon) * k.lon, y: (ll.lat - p.center_lat) * k.lat };
+    }
+    function _rtLatLngFromKm(x, y) {
+        var p = _rtPlan, k = _rtKmPerDeg(p);
+        return [p.center_lat + y / k.lat, p.center_lon + x / k.lon];
+    }
+    function _rtMapPanelVisible() {
+        var lay = document.querySelector('.rt-viz-layout');
+        return !!(lay && !lay.classList.contains('rt-map-collapsed'));
+    }
+
+    function _rtDrapeDraw() {
+        var p = _rtPlan;
+        if (!_rtMap || !p || !p.z || !p.z.length || p.center_lat == null) return;
+        var rows = p.z.length, cols = p.z[0].length;
+        // 1 px per cell, or 4× when barbs are stroked into the field so the
+        // glyphs stay crisp (the overlay is sampled nearest).
+        var S = (p.barbs && _rtBarbsEnabled) ? 4 : 1;
+        var cv = document.createElement('canvas'); cv.width = cols * S; cv.height = rows * S;
+        var ctx = cv.getContext('2d'), im = ctx.createImageData(cols * S, rows * S), d = im.data;
+        var lut = _rtCsLUT(p.colorscale), span = (p.vmax - p.vmin) || 1;
+        for (var r = 0; r < rows; r++) {
+            var zr = p.z[rows - 1 - r];   // canvas top = north = last data row
+            if (!zr) continue;
+            for (var c = 0; c < cols; c++) {
+                var v = zr[c];
+                if (v == null || isNaN(v)) continue;   // alpha stays 0 → IR shows through
+                var li = Math.max(0, Math.min(255, Math.round((v - p.vmin) / span * 255))) * 3;
+                for (var sy = 0; sy < S; sy++) for (var sx = 0; sx < S; sx++) {
+                    var pi = ((r * S + sy) * cols * S + (c * S + sx)) * 4;
+                    d[pi] = lut[li]; d[pi+1] = lut[li+1]; d[pi+2] = lut[li+2]; d[pi+3] = 255;
+                }
+            }
+        }
+        ctx.putImageData(im, 0, 0);
+        if (S > 1) {
+            var xMin = p.x[0], xMax = p.x[p.x.length - 1], yMin = p.y[0], yMax = p.y[p.y.length - 1];
+            var shapes = _buildPlanViewWindBarbs(p.barbs, { xMin: xMin, xMax: xMax, yMin: yMin, yMax: yMax });
+            var W = cols * S, H = rows * S;
+            var X = function (x) { return (x - xMin) / (xMax - xMin) * W; };
+            var Y = function (y) { return (yMax - y) / (yMax - yMin) * H; };
+            ctx.lineCap = 'round';
+            [['rgba(255,255,255,0.85)', 3.2], ['rgba(0,0,0,0.9)', 1.4]].forEach(function (pass) {
+                ctx.strokeStyle = pass[0]; ctx.lineWidth = pass[1];
+                ctx.beginPath();
+                shapes.forEach(function (sh) { if (sh.type !== 'line') return; ctx.moveTo(X(sh.x0), Y(sh.y0)); ctx.lineTo(X(sh.x1), Y(sh.y1)); });
+                ctx.stroke();
+            });
+        }
+        // Own pane so the field stays above the IR / MW / 88D image overlays
+        // (all z 350) even when one of those is re-added later, and below the
+        // vector overlays (flight track, sondes) at 400.
+        // (getPane auto-creates on the GL facade, so always (re)assert the z.)
+        try { var pane = _rtMap.getPane('rtDrapePane') || _rtMap.createPane('rtDrapePane'); pane.style.zIndex = 380; pane.style.pointerEvents = 'none'; } catch (e) {}
+        // Update in place on re-renders (variable / level / colormap / barbs):
+        // no flicker, and no remove-then-add churn against the GL style queue.
+        var url = cv.toDataURL('image/png'), bounds = _rtDrapeBounds(p);
+        if (_rtDrapeOverlay) {
+            _rtDrapeOverlay.setUrl(url); _rtDrapeOverlay.setBounds(bounds); _rtDrapeOverlay.setOpacity(_rtDrapeOpacity);
+        } else {
+            _rtDrapeOverlay = L.imageOverlay(url, bounds,
+                { opacity: _rtDrapeOpacity, interactive: false, crisp: true, pane: 'rtDrapePane' }).addTo(_rtMap);
+        }
+        var hasRmw = p.rmw_km && !isNaN(p.rmw_km);
+        if (_rtDrapeRing && !hasRmw) { try { _rtMap.removeLayer(_rtDrapeRing); } catch (e) {} _rtDrapeRing = null; }
+        if (hasRmw) {
+            var rc = _rtLatLngFromKm(p.rmw_cx || 0, p.rmw_cy || 0);
+            if (_rtDrapeRing) { _rtDrapeRing.setLatLng(rc); _rtDrapeRing.setRadius(p.rmw_km * 1000); }
+            else _rtDrapeRing = L.circle(rc, { radius: p.rmw_km * 1000,
+                color: '#fff', weight: 1.5, dashArray: '5 5', fill: false, interactive: false }).addTo(_rtMap);
+        }
+        if (!_rtDrapeHoverBound) {
+            _rtMap.on('mousemove', _rtDrapeHover); _rtMap.on('mouseout', _rtDrapeHideTip);
+            _rtMap.on('click', _rtCsMapClick); _rtMap.on('mousemove', _rtCsMapMove);
+            _rtDrapeHoverBound = true;
+        }
+        // The centre dot sits on the eye and hides the field there.
+        if (_rtMapMarker && _rtMap.hasLayer && _rtMap.hasLayer(_rtMapMarker)) { try { _rtMap.removeLayer(_rtMapMarker); } catch (e) {} }
+        _rtDrapeColorbar(p);
+    }
+
+    function _rtFmtRange(v) { if (v == null || isNaN(v)) return ''; return String(Math.round(v * 100) / 100); }
+    // Colorbar on the map with EDITABLE min/max: typing rescales the field
+    // live and keeps the panel's Color Range inputs in sync.
+    function _rtDrapeColorbar(p) {
+        var host = document.getElementById('rt-map-wrapper');
+        if (!host || !p) return;
+        var el = document.getElementById('rt-drape-colorbar');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'rt-drape-colorbar';
+            el.className = 'rt-drape-colorbar';
+            el.innerHTML =
+                '<div class="rt-cb-title"><span id="rt-cb-name"></span> <span id="rt-cb-units"></span></div>' +
+                '<div class="rt-cb-row">' +
+                    '<input type="number" id="rt-cb-min" step="any" aria-label="Color range minimum" title="Minimum of the color range — type to rescale" oninput="_rtDrapeRangeFromMap()">' +
+                    '<div class="rt-cb-grad" id="rt-cb-grad"></div>' +
+                    '<input type="number" id="rt-cb-max" step="any" aria-label="Color range maximum" title="Maximum of the color range — type to rescale" oninput="_rtDrapeRangeFromMap()">' +
+                '</div>' +
+                '<div class="rt-cb-foot"><span id="rt-cb-level"></span>' +
+                    '<span class="rt-cb-op" title="Opacity of the radar field on the map"><input type="range" id="rt-cb-opacity" min="0" max="100" aria-label="Radar field opacity" oninput="_rtDrapeSetOpacity(this.value/100)"><span id="rt-cb-op-val"></span></span>' +
+                    '<button class="rt-cb-reset" onclick="rtResetColorRange()" title="Restore the variable\'s default range">reset</button></div>';
+            host.appendChild(el);
+            // Keep map drags / clicks from firing through the colorbar.
+            ['mousedown', 'click', 'dblclick', 'wheel', 'touchstart'].forEach(function (ev) {
+                el.addEventListener(ev, function (e) { e.stopPropagation(); });
+            });
+        }
+        var lut = _rtCsLUT(p.colorscale), stops = [];
+        for (var k = 0; k <= 24; k++) { var i = Math.round(k / 24 * 255) * 3; stops.push('rgb(' + lut[i] + ',' + lut[i+1] + ',' + lut[i+2] + ')'); }
+        document.getElementById('rt-cb-grad').style.background = 'linear-gradient(to right, ' + stops.join(', ') + ')';
+        document.getElementById('rt-cb-name').textContent = p.display_name || '';
+        document.getElementById('rt-cb-units').textContent = p.units ? '(' + p.units + ')' : '';
+        document.getElementById('rt-cb-level').textContent = (p.level_km != null ? p.level_km.toFixed(1) + ' km' : '');
+        var mn = document.getElementById('rt-cb-min'), mx = document.getElementById('rt-cb-max');
+        if (document.activeElement !== mn) mn.value = _rtFmtRange(p.vmin);
+        if (document.activeElement !== mx) mx.value = _rtFmtRange(p.vmax);
+        var op = document.getElementById('rt-cb-opacity'); if (op && document.activeElement !== op) op.value = Math.round(_rtDrapeOpacity * 100);
+        var opv = document.getElementById('rt-cb-op-val'); if (opv) opv.textContent = Math.round(_rtDrapeOpacity * 100) + '%';
+        el.style.display = 'block';
+    }
+    var _rtDrapeRangeTimer = null;
+    window._rtDrapeRangeFromMap = function () {
+        clearTimeout(_rtDrapeRangeTimer);
+        _rtDrapeRangeTimer = setTimeout(function () {
+            var mn = parseFloat((document.getElementById('rt-cb-min') || {}).value);
+            var mx = parseFloat((document.getElementById('rt-cb-max') || {}).value);
+            if (isNaN(mn) || isNaN(mx) || mn >= mx) return;
+            var a = document.getElementById('rt-vmin'), b = document.getElementById('rt-vmax');
+            if (a) a.value = mn; if (b) b.value = mx;
+            rtApplyColorRange();
+        }, 120);
+    };
+    window._rtDrapeSetOpacity = function (v) {
+        _rtDrapeOpacity = Math.max(0, Math.min(1, parseFloat(v) || 0));
+        try { localStorage.setItem('rt_radar_opacity', String(_rtDrapeOpacity)); } catch (e) {}
+        if (_rtDrapeOverlay) { try { _rtDrapeOverlay.setOpacity(_rtDrapeOpacity); } catch (e) {} }
+        var opv = document.getElementById('rt-cb-op-val'); if (opv) opv.textContent = Math.round(_rtDrapeOpacity * 100) + '%';
+    };
+    // Re-color the draped field after a colormap / range change in the panel.
+    function _rtDrapeRecolor() {
+        if (!_rtPlan) return;
+        var sel = document.getElementById('rt-cmap'), cs = sel && sel.value;
+        if (cs) { try { _rtPlan.colorscale = JSON.parse(cs); } catch (e) { _rtPlan.colorscale = cs; } }
+        else _rtPlan.colorscale = _rtPlan.default_colorscale;
+        var mn = _rtGetVmin(), mx = _rtGetVmax();
+        if (mn != null && !isNaN(mn)) _rtPlan.vmin = mn;
+        if (mx != null && !isNaN(mx)) _rtPlan.vmax = mx;
+        if (_rtDrapeOn) _rtDrapeDraw();
+    }
+
+    function _rtDrapeHover(e) {
+        var p = _rtPlan;
+        if (!_rtDrapeOn || !p || _rtCsMode) { _rtDrapeHideTip(); return; }
+        var km = _rtKmFromLatLng(e.latlng); if (!km) return;
+        var ci = Math.round((km.x - p.x[0]) / (p.x[p.x.length-1] - p.x[0]) * (p.x.length - 1));
+        var ri = Math.round((km.y - p.y[0]) / (p.y[p.y.length-1] - p.y[0]) * (p.y.length - 1));
+        if (ci < 0 || ci >= p.x.length || ri < 0 || ri >= p.y.length) { _rtDrapeHideTip(); return; }
+        var v = p.z[ri] ? p.z[ri][ci] : null;
+        if (v == null || isNaN(v)) { _rtDrapeHideTip(); return; }
+        if (!_rtDrapeTip) {
+            _rtDrapeTip = document.createElement('div');
+            _rtDrapeTip.style.cssText = 'position:fixed;z-index:1300;pointer-events:none;background:rgba(15,22,35,0.92);' +
+                'color:#fff;font:600 11px/1.3 "DM Sans",sans-serif;padding:3px 7px;border-radius:4px;white-space:nowrap;';
+            document.body.appendChild(_rtDrapeTip);
+        }
+        _rtDrapeTip.textContent = v.toFixed(1) + ' ' + p.units + '  ·  ' + Math.round(km.x) + ', ' + Math.round(km.y) + ' km';
+        var oe = e.originalEvent || {};
+        _rtDrapeTip.style.left = ((oe.clientX || 0) + 14) + 'px'; _rtDrapeTip.style.top = ((oe.clientY || 0) - 6) + 'px';
+        _rtDrapeTip.style.display = 'block';
+    }
+    function _rtDrapeHideTip() { if (_rtDrapeTip) _rtDrapeTip.style.display = 'none'; }
+
+    // Hide / restore the Plotly plan pane (the map carries it while draped) and
+    // let the azimuthal-mean pane fill the row.
+    function _rtApplyTwoPanel(on) {
+        var wrap = document.getElementById('rt-dual-panel-wrap');
+        if (!wrap) return;
+        var left = document.getElementById('rt-dual-pane-left');
+        var right = document.getElementById('rt-dual-pane-right');
+        var divider = wrap.querySelector('.dual-pane-divider');
+        if (on) {
+            if (left) left.style.display = 'none';
+            if (divider) divider.style.display = 'none';
+            // A narrow-width media query hides the last .dual-pane; while draped
+            // it is the only pane, so force it visible.
+            if (right) { right.style.display = 'flex'; right.style.flex = '1 1 100%'; right.style.maxWidth = '100%'; }
+        } else {
+            if (left) left.style.display = '';
+            if (divider) divider.style.display = '';
+            if (right) { right.style.display = ''; right.style.flex = ''; right.style.maxWidth = ''; }
+        }
+        var hint = document.getElementById('rt-plan-hint');
+        if (hint) hint.textContent = on
+            ? 'Radar field is on the map · hover it for values · “Radar on map” brings the plan view back'
+            : 'Hover for values · scroll to zoom · drag to pan · ⛶ expand';
+        try {
+            if (window.Plotly) {
+                var az = document.getElementById('rt-dual-az-chart'); if (az && az.data) Plotly.Plots.resize(az);
+                var pv = document.getElementById('rt-plotly-chart'); if (!on && pv && pv.data) Plotly.Plots.resize(pv);
+            }
+        } catch (e) {}
+    }
+    function _rtDrapeSyncBtn() {
+        var btn = document.getElementById('rt-drape-btn');
+        if (btn) { btn.disabled = !_rtPlan; btn.classList.toggle('active', _rtDrapeOn); }
+    }
+    // Frame the draped field; the panel is often mid-reflow, so fit twice.
+    function _rtDrapeFrame() {
+        function fit() { try { _rtMap.invalidateSize(); _rtMap.fitBounds(_rtDrapeBounds(_rtPlan), { padding: [30, 30] }); } catch (e) {} }
+        fit(); setTimeout(fit, 450);
+    }
+    // Take the field off the map and bring the Plotly plan pane back.
+    function _rtDrapeOff() {
+        _rtDrapeOn = false;
+        if (_rtMap) {
+            if (_rtDrapeOverlay) { try { _rtMap.removeLayer(_rtDrapeOverlay); } catch (e) {} }
+            if (_rtDrapeRing) { try { _rtMap.removeLayer(_rtDrapeRing); } catch (e) {} }
+            if (_rtMapMarker && _rtMap.hasLayer && !_rtMap.hasLayer(_rtMapMarker)) { try { _rtMapMarker.addTo(_rtMap); } catch (e) {} }
+        }
+        _rtDrapeOverlay = null; _rtDrapeRing = null;
+        _rtDrapeHideTip();
+        _rtCsMapClear();
+        var cb = document.getElementById('rt-drape-colorbar'); if (cb) cb.style.display = 'none';
+        _rtApplyTwoPanel(false);
+        _rtDrapeSyncBtn();
+    }
+    // Default after every plan-view render: drape + hide the plan pane, unless
+    // the user turned it off, the map is collapsed, or centre-track mode (a
+    // Plotly-only view) is showing.
+    function _rtDrapeAuto() {
+        var can = _rtPlan && _rtMap && !_rtDrapeDisabled && _rtMapPanelVisible() && !_rtPlan.ctrk;
+        if (!can) { if (_rtDrapeOn) _rtDrapeOff(); else _rtDrapeSyncBtn(); return; }
+        _rtDrapeOn = true;
+        _rtDrapeDraw();
+        // renderPlot rebuilds the dual-panel HTML each time → re-hide the pane.
+        _rtApplyTwoPanel(true);
+        _rtDrapeSyncBtn();
+        if (_rtDrapeFramedFor !== _currentFileUrl) { _rtDrapeFramedFor = _currentFileUrl; _rtDrapeFrame(); }
+    }
+    window.rtToggleDrape = function () {
+        if (_rtDrapeOn) { _rtDrapeDisabled = true; _rtDrapeOff(); }
+        else {
+            if (!_rtPlan) return;
+            _rtDrapeDisabled = false;
+            if (!_rtMapPanelVisible()) { rtToggleMapPanel(); return; }   // re-arms via the toggle
+            _rtDrapeAuto();
+        }
+        _ga('rt_toggle_drape', { on: _rtDrapeOn });
+    };
+
+    // ── Cross-section picking on the draped map ──────────────────
+    // Same compute as the Plotly path (rtFetchCrossSection); only the point
+    // picking differs: map clicks → storm-relative km.
+    var _rtCsMapA = null, _rtCsMapLayers = [], _rtCsMapRubber = null;
+    function _rtCsMapClear() {
+        if (_rtMap) {
+            _rtCsMapLayers.forEach(function (l) { try { _rtMap.removeLayer(l); } catch (e) {} });
+            if (_rtCsMapRubber) { try { _rtMap.removeLayer(_rtCsMapRubber); } catch (e) {} }
+        }
+        _rtCsMapLayers = []; _rtCsMapRubber = null; _rtCsMapA = null;
+        var w = document.getElementById('rt-map-wrapper'); if (w) w.classList.remove('rt-cs-picking');
+    }
+    function _rtCsMapDot(ll) {
+        return L.circleMarker(ll, { radius: 5, color: '#fff', weight: 1.5, fillColor: '#ef4444', fillOpacity: 1, interactive: false }).addTo(_rtMap);
+    }
+    function _rtCsMapMove(e) {
+        if (!_rtCsMode || !_rtCsMapA || !_rtDrapeOn) return;
+        var pts = [[_rtCsMapA.lat, _rtCsMapA.lng], [e.latlng.lat, e.latlng.lng]];
+        if (!_rtCsMapRubber) _rtCsMapRubber = L.polyline(pts, { color: '#ef4444', weight: 2, dashArray: '5 5', interactive: false }).addTo(_rtMap);
+        else _rtCsMapRubber.setLatLngs(pts);
+    }
+    function _rtCsMapClick(e) {
+        if (!_rtCsMode || !_rtDrapeOn) return;
+        var km = _rtKmFromLatLng(e.latlng); if (!km) return;
+        var status = document.getElementById('rt-cs-status'), btn = document.getElementById('rt-cs-btn');
+        if (!_rtCsMapA) {
+            _rtCsMapA = e.latlng; _rtCsPointA = km;
+            _rtCsMapLayers.push(_rtCsMapDot(e.latlng));
+            if (btn) btn.textContent = '✂ Click point B on the map…';
+            if (status) status.textContent = 'A: (' + km.x.toFixed(0) + ', ' + km.y.toFixed(0) + ') km — now click the end point';
+        } else {
+            var a = _rtCsPointA, b = km, llA = _rtCsMapA;
+            _rtCsMode = false; _rtCsPointA = null;
+            if (_rtCsMapRubber) { try { _rtMap.removeLayer(_rtCsMapRubber); } catch (e2) {} _rtCsMapRubber = null; }
+            _rtCsMapA = null;
+            _rtCsMapLayers.push(L.polyline([[llA.lat, llA.lng], [e.latlng.lat, e.latlng.lng]], { color: '#ef4444', weight: 2.5, interactive: false }).addTo(_rtMap));
+            _rtCsMapLayers.push(_rtCsMapDot(e.latlng));
+            var w = document.getElementById('rt-map-wrapper'); if (w) w.classList.remove('rt-cs-picking');
+            if (btn) { btn.classList.remove('active'); btn.textContent = '✂ Cross Section'; }
+            if (status) status.textContent = 'A→B: (' + a.x.toFixed(0) + ',' + a.y.toFixed(0) + ') → (' + b.x.toFixed(0) + ',' + b.y.toFixed(0) + ') km';
+            rtFetchCrossSection(a, b);
+        }
     }
 
     // ── Shear vector inset (uses SHIPS SDDC) ─────────────────────
@@ -3734,6 +4114,7 @@
             var el = document.getElementById(id);
             if (el && el.data && el.data.length) Plotly.restyle(el, { colorscale: [colorscale] }, [0]);
         });
+        _rtDrapeRecolor();
     };
 
     window.rtApplyColorRange = function () {
@@ -3742,6 +4123,7 @@
             var el = document.getElementById(id);
             if (el && el.data && el.data.length) Plotly.restyle(el, { zmin: [zmin], zmax: [zmax] }, [0]);
         });
+        _rtDrapeRecolor();
     };
 
     window.rtResetColorRange = function () {
@@ -3753,6 +4135,7 @@
                 if (el && el.data && el.data.length) Plotly.restyle(el, { zmin: [_rtDefaultVmin], zmax: [_rtDefaultVmax] }, [0]);
             });
         }
+        _rtDrapeRecolor();
     };
 
     // ── Fullscreen modal (reuse the existing plotModal) ──────────
@@ -3843,9 +4226,13 @@
     window.rtToggleCrossSection = function () {
         _rtCsMode = !_rtCsMode; _rtCsPointA = null; _rtRemoveRubberBand();
         var btn = document.getElementById('rt-cs-btn'), status = document.getElementById('rt-cs-status');
+        // While draped the plan view is the map, so the line is drawn there.
+        var onMap = _rtDrapeOn;
+        _rtCsMapClear();
         if (_rtCsMode) {
-            btn.classList.add('active'); btn.textContent = '✂ Click point A on plot…';
-            if (status) status.textContent = 'Click the starting point on the plan view above';
+            btn.classList.add('active'); btn.textContent = '✂ Click point A on ' + (onMap ? 'the map…' : 'plot…');
+            if (status) status.textContent = 'Click the starting point on the ' + (onMap ? 'map' : 'plan view above');
+            if (onMap) { var w = document.getElementById('rt-map-wrapper'); if (w) w.classList.add('rt-cs-picking'); }
         } else {
             btn.classList.remove('active'); btn.textContent = '✂ Cross Section';
             if (status) status.textContent = '';
@@ -4068,6 +4455,9 @@
             (meta.latitude ? meta.latitude.toFixed(2) + '°N, ' + Math.abs(meta.longitude).toFixed(2) + '°' + (meta.longitude < 0 ? 'W' : 'E') : '') +
             '</span></div>';
         _rtMapMarker.bindPopup(popupHtml, { maxWidth: 280, minWidth: 200 });
+        // While the radar field is draped the dot would cover the eye; the RMW
+        // ring marks the centre instead. _rtDrapeOff puts the marker back.
+        if (_rtDrapeOn) { try { _rtMap.removeLayer(_rtMapMarker); } catch (e) {} }
     }
 
     function _rtFetchMaxWind(fileUrl, meta) {
@@ -4268,6 +4658,8 @@
         _rtIRMapVisible = true;
         _rtIRMapBoundsSet = false;
         _rtMaxWind2km = null;
+        _rtPlan = null; _rtDrapeFramedFor = null;
+        if (_rtDrapeOn) _rtDrapeOff(); else _rtDrapeSyncBtn();
         if (_rtMapMarker && _rtMap) { _rtMap.removeLayer(_rtMapMarker); _rtMapMarker = null; }
         if (_rtMapIRAnimPlaying) {
             _rtMapIRAnimPlaying = false;
@@ -4868,6 +5260,9 @@
         setTimeout(function () {
             try { window.dispatchEvent(new Event('resize')); } catch (e) {}
             if (!collapsed && _rtMap) { try { _rtMap.invalidateSize(); } catch (e) {} }
+            // The drape needs a visible map: collapsing brings the Plotly plan
+            // pane back, reopening drapes again (unless the user turned it off).
+            _rtDrapeAuto();
         }, 60);
         if (typeof _ga === 'function') _ga('rt_toggle_map_panel', { collapsed: collapsed });
     };

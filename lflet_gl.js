@@ -444,6 +444,11 @@
     Map.prototype.addLayer = function (layer) {
         if (!layer) return this;
         layer._map = this;
+        // A layer's GL add can be queued behind the style load (_whenStyle). If
+        // the layer is removed before that fires, _removeFromGL finds nothing
+        // to remove and the queued add would land later as an orphan nobody
+        // holds a reference to. _glGone lets the queued add see the removal.
+        layer._glGone = false;
         if (layer._addToGL) layer._addToGL(this);
         else if (typeof layer.onAdd === 'function') this._addCustomLayer(layer);
         this._layers[layer._lid || (layer._lid = uid())] = layer;
@@ -461,6 +466,7 @@
     };
     Map.prototype.removeLayer = function (layer) {
         if (!layer) return this;
+        layer._glGone = true;
         if (layer._removeFromGL) layer._removeFromGL(this);
         else {
             if (layer._glRedraw) { this._gl.off('move', layer._glRedraw); this._gl.off('moveend', layer._glRedraw); layer._glRedraw = null; }
@@ -617,7 +623,7 @@
             return [[w, n], [e, n], [e, s], [w, s]]; },
         setBounds: function (b) { this._bounds = b; var gl = this._map && this._map._gl, src = gl && gl.getSource(this._id); if (src) src.setCoordinates(this._coords()); return this; },
         _addToGL: function (map) { this._map = map; var gl = map._gl, id = this._id, self = this;
-            map._whenStyle(function () { if (gl.getSource(id)) return;
+            map._whenStyle(function () { if (self._glGone || gl.getSource(id)) return;
                 gl.addSource(id, { type: 'image', url: self._url, coordinates: self._coords() });
                 // Default image overlays (env filled fields, IR frames) sit above
                 // the tile basemap but below vector overlays; an explicit pane wins.
@@ -872,7 +878,7 @@
                 pts.push([c.lng + (R * Math.cos(a)) / (111320 * Math.cos(latR)), c.lat + (R * Math.sin(a)) / 110540]); }
             return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [pts] } }; },
         _addToGL: function (map) { this._map = map; var gl = map._gl, id = this._id, self = this, o = this.options;
-            map._whenStyle(function () { if (gl.getSource(id)) return; gl.addSource(id, { type: 'geojson', data: self._geo() });
+            map._whenStyle(function () { if (self._glGone || gl.getSource(id)) return; gl.addSource(id, { type: 'geojson', data: self._geo() });
                 var cz = map._paneZ(o.pane || 'overlayPane');
                 if (o.fill !== false) map._glAdd({ id: id + '-f', type: 'fill', source: id, paint: { 'fill-color': o.fillColor || o.color || '#3388ff', 'fill-opacity': o.fillOpacity != null ? o.fillOpacity : 0.2 } }, cz - 1);
                 map._glAdd({ id: id, type: 'line', source: id, paint: { 'line-color': o.color || '#3388ff', 'line-width': o.weight != null ? o.weight : 2, 'line-opacity': o.opacity != null ? o.opacity : 1 } }, cz); self._added = true; }); },

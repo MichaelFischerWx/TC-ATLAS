@@ -153,9 +153,10 @@
         height: auto;
         min-height: 0;
     }
+    /* The map is the plan view now (radar draped on it) — near-square. */
     .rt-map-wrapper {
-        min-height: 260px !important;
-        height: 260px !important;
+        min-height: 340px !important;
+        height: 340px !important;
     }
     .rt-viz-content-panel {
         flex: 1;
@@ -235,6 +236,37 @@
     position: absolute;
     inset: 0;
 }
+/* ── Radar field draped on the map: colorbar with editable range ── */
+.rt-drape-colorbar {
+    position: absolute; left: 8px; bottom: 64px; z-index: 900; width: 236px; display: none;
+    background: rgba(255, 255, 255, 0.9); padding: 6px 10px; border-radius: 6px;
+    border: 1px solid rgba(15, 22, 35, 0.1); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    backdrop-filter: blur(6px);
+}
+.rt-cb-title { font-size: 10px; font-weight: 600; color: #F47321; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rt-cb-row { display: flex; align-items: center; gap: 4px; }
+.rt-cb-grad { flex: 1; height: 10px; border-radius: 3px; border: 1px solid rgba(15, 22, 35, 0.15); }
+.rt-cb-row input[type=number] {
+    width: 48px; padding: 1px 3px; font: 600 10px 'JetBrains Mono', monospace;
+    border: 1px solid rgba(15, 22, 35, 0.2); border-radius: 3px; background: rgba(255, 255, 255, 0.7);
+    color: var(--text); text-align: center; -moz-appearance: textfield;
+}
+.rt-cb-row input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+.rt-cb-foot { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 9px; color: var(--slate); margin-top: 3px; }
+.rt-cb-op { display: inline-flex; align-items: center; gap: 3px; font-variant-numeric: tabular-nums; }
+.rt-cb-op input[type=range] { width: 64px; }
+.rt-cb-reset { background: none; border: none; color: var(--blue, #2e7dff); font: 600 9px 'DM Sans', sans-serif; cursor: pointer; padding: 0; }
+/* Phone: compact, top-right (zoom buttons are top-left, IR controls along
+   the bottom) so it doesn't sit on the field; the opacity slider drops out.
+   Must follow the base rule above — same specificity, so order decides. */
+@media (max-width: 768px) {
+    .rt-drape-colorbar { width: 172px; left: auto; right: 8px; top: 8px; bottom: auto; padding: 4px 7px; }
+    .rt-drape-colorbar .rt-cb-op { display: none; }
+    .rt-drape-colorbar .rt-cb-row input[type=number] { width: 38px; }
+}
+/* Cross-section picking on the draped map */
+.rt-map-wrapper.rt-cs-picking, .rt-map-wrapper.rt-cs-picking canvas { cursor: crosshair !important; }
+
 .rt-map-ir-controls {
     position: absolute;
     bottom: 8px;
