@@ -10078,6 +10078,86 @@
     /** Repaint the three favorability meters from whatever's cached for the
      *  current storm (shear from _rtEnvCache, SST/OHC from _rtOceanCache).
      *  Safe to call repeatedly as each async source lands. */
+    // ── Gridded (thermodynamic) PI at the storm position ────────────────
+    // Reads the Global Map MPI layer's raw data PNG — the same static file
+    // its hover readout uses — so this is one cached download, no API work.
+    // The layer already excises TC circulations before the PI solve, so the
+    // value AT the center is an environmental one, not the storm's own hole.
+    var _rtGridPi = { url: null, ctx: null, w: 0, h: 0, layer: null, loading: null };
+    function _rtGridPiLoad() {
+        if (_rtGridPi.loading) return _rtGridPi.loading;
+        // Own copy of the metadata: _loadEnvMetadata() skips its menu render
+        // when _rtEnvMetadata is already set, so don't populate that here.
+        var metaP = (_rtEnvMetadata && _rtEnvMetadata.layers && _rtEnvMetadata.layers.length)
+            ? Promise.resolve(_rtEnvMetadata)
+            : fetch(API_BASE + '/ir-monitor/env/layers', { cache: 'no-store' })
+                .then(function (r) { return r.ok ? r.json() : null; });
+        _rtGridPi.loading = metaP.then(function (meta) {
+            var layers = (meta && meta.layers) || [], lay = null;
+            for (var i = 0; i < layers.length; i++) if (layers[i].name === 'mpi') { lay = layers[i]; break; }
+            if (!lay || !lay.data_url) return null;
+            return new Promise(function (resolve) {
+                var img = new Image();
+                img.crossOrigin = 'anonymous';   // required, or getImageData taints
+                img.onload = function () {
+                    try {
+                        var c = document.createElement('canvas');
+                        c.width = img.naturalWidth; c.height = img.naturalHeight;
+                        var cx = c.getContext('2d', { willReadFrequently: true });
+                        cx.drawImage(img, 0, 0);
+                        _rtGridPi.ctx = cx; _rtGridPi.w = c.width; _rtGridPi.h = c.height;
+                        _rtGridPi.layer = lay;
+                        resolve(true);
+                    } catch (e) { resolve(null); }
+                };
+                img.onerror = function () { resolve(null); };
+                img.src = lay.data_url;
+            });
+        }).catch(function () { return null; });
+        return _rtGridPi.loading;
+    }
+    /** Mean gridded PI (kt) over the valid cells within ±0.5° of a point —
+     *  a small box so a coastal NaN cell doesn't blank the readout. */
+    function _rtGridPiSample(lat, lon) {
+        var g = _rtGridPi;
+        if (!g.ctx || !g.layer) return null;
+        var lo = g.layer.data_vmin != null ? g.layer.data_vmin : g.layer.vmin;
+        var hi = g.layer.data_vmax != null ? g.layer.data_vmax : g.layer.vmax;
+        var sum = 0, n = 0;
+        try {
+            for (var dy = -0.5; dy <= 0.5; dy += 0.25) for (var dx = -0.5; dx <= 0.5; dx += 0.25) {
+                var lo2 = lon + dx; if (lo2 > 180) lo2 -= 360; if (lo2 < -180) lo2 += 360;
+                var x = Math.min(g.w - 1, Math.max(0, Math.floor((lo2 + 180) / 360 * g.w)));
+                var y = Math.min(g.h - 1, Math.max(0, Math.floor((90 - (lat + dy)) / 180 * g.h)));
+                var d = g.ctx.getImageData(x, y, 1, 1).data;
+                if (d[3] === 0) continue;
+                sum += lo + (d[0] / 255) * (hi - lo); n++;
+            }
+        } catch (e) { return null; }
+        return n ? sum / n : null;
+    }
+    function _rtRenderGridPi(atcfId) {
+        var viSub = document.getElementById('ir-fav-vi-sub');
+        if (!viSub) return;
+        var el = document.getElementById('ir-fav-pi-sub');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'ir-fav-pi-sub'; el.className = 'ir-fav-vi-sub';
+            viSub.parentNode.insertBefore(el, viSub.nextSibling);
+        }
+        var storm = null;
+        for (var i = 0; i < stormData.length; i++) if (stormData[i].atcf_id === atcfId) { storm = stormData[i]; break; }
+        if (!storm) { el.textContent = ''; return; }
+        _rtGridPiLoad().then(function () {
+            if (currentStormId !== atcfId) return;
+            var v = _rtGridPiSample(storm.lat, storm.lon);
+            if (v == null) { el.textContent = ''; return; }
+            var vt = (_rtGridPi.layer.valid_time || '').replace(/^\d{4}-(\d\d)-(\d\d)T(\d\d).*$/, '$1/$2 $3Z');
+            el.textContent = 'thermodynamic PI ' + Math.round(v) + ' kt (GFS ' + vt + ')';
+            el.title = 'Thermodynamic potential intensity (Bister & Emanuel 2002) at the storm position, read from the Global Map’s Maximum Potential Intensity layer: GFS temperature and humidity profile over OISST, with tropical-cyclone circulations removed from the analysis first, expressed as a 10 m wind. It is shown for reference; the ventilation index above uses the empirical PI so that it stays comparable with its climatology.';
+        });
+    }
+
     function _rtUpdateFavMeters(atcfId) {
         if (!atcfId || currentStormId !== atcfId) return;
         var env = _rtEnvCache[atcfId];
@@ -10126,6 +10206,7 @@
                 ? 'Empirical potential intensity (DeMaria & Kaplan 1994): a function of the sea-surface temperature under the storm only. The Global Map’s Maximum Potential Intensity layer is the thermodynamic (Bister–Emanuel) value from the GFS analysis, which also depends on the atmospheric profile, so the two differ — most over very warm water, where the empirical value runs higher.'
                 : '';
         }
+        _rtRenderGridPi(atcfId);
 
         // Footer note: SST source date + any coverage caveat.
         var note = document.getElementById('ir-fav-note');
