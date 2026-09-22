@@ -31510,9 +31510,11 @@
         var plev = [], t = [], q = [], u = [], v = [];
         for (var i = 0; i < lv.p_hpa.length; i++) {
             var p = lv.p_hpa[i], tc = lv.t_c[i];
-            if (p == null || tc == null || p < 50 || p > 1100) continue;
+            // keep a level that has EITHER a temperature or a wind: eyewall sondes
+            // lose T at the strongest levels and those winds must stay on the plot
+            if (p == null || (tc == null && lv.wspd_kt[i] == null) || p < 50 || p > 1100) continue;
             if (plev.length && p >= plev[plev.length - 1]) continue;   // keep strictly decreasing
-            plev.push(p); t.push(tc + 273.15);
+            plev.push(p); t.push(tc != null ? tc + 273.15 : null);
             var td = lv.td_c[i];
             if (td != null) { var es = 6.112 * Math.exp(17.67 * td / (td + 243.5)); q.push(0.622 * es / (p - es)); }
             else q.push(null);

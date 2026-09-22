@@ -578,7 +578,16 @@ def _decode_tempdrop_profile(text: str) -> dict:
             else:
                 break
             t, td = _td_temp(g[i + 1])
-            wd, ws = _td_wind(g[i + 2])
+            wgrp = g[i + 2]
+            # The wind group may be ABSENT on the last level (Polo 2026-09-22 OB 06:
+            # "70388 16200 88999" -- the 700-mb wind is simply not there and the
+            # tropopause marker follows). Decoding "88999" as ddff gave 165 deg /
+            # 499 kt. A terminator in the wind slot means missing wind, end of section.
+            if wgrp[:2] in ("88", "77", "66") or wgrp.startswith(("31313", "51515", "21212")):
+                if p is not None:
+                    mand.append({"p": p, "hgt": hgt, "t": t, "td": td, "wdir": None, "wspd": None})
+                break
+            wd, ws = _td_wind(wgrp)
             if p is not None:
                 mand.append({"p": p, "hgt": hgt, "t": t, "td": td,
                              "wdir": wd, "wspd": ws})
@@ -959,21 +968,44 @@ def _hires_attach(drops: list, since: datetime, until: datetime, track_pts, stor
         return re.sub(r"[^A-Z0-9]", "", str(t or "").upper())
 
     used = set()
+
+    def _obn(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    # Pass 1: (tail, OB number) -- the sonde's own per-flight sequence, present in both
+    # feeds. Pass 2: time + position for sondes with no numbered twin. Two passes so a
+    # sonde whose BUFR is missing cannot steal a neighbour's (Polo 2026-09-22: OB 06's
+    # BUFR never came, and a one-pass greedy match handed it OB 08's 18:14:59 profile --
+    # the tab then plotted a different sonde than the one in the popup).
     for d in drops:
-        best = None
+        dob = _obn(d.get("ob"))
+        if dob is None:
+            continue
+        for s in hs:
+            if s["id"] not in used and s.get("ob") == dob and _tail_key(s["tail"]) == _tail_key(d.get("tail")):
+                used.add(s["id"]); d["hires"] = _hires_summary(s); break
+    for d in drops:
+        if d.get("hires"):
+            continue
+        dob = _obn(d.get("ob"))
+        best, best_dt = None, None
         for s in hs:
             if s["id"] in used:
                 continue
+            if dob is not None and s.get("ob") is not None and s["ob"] != dob:
+                continue                              # both numbered and different: not the same sonde
             same_tail = _tail_key(s["tail"]) == _tail_key(d.get("tail"))
-            if same_tail and d.get("ob") and s.get("ob") is not None and int(d["ob"]) == s["ob"]:
-                best = s; break
             try:
                 dt = abs((datetime.strptime(s["t"], "%Y-%m-%dT%H:%M:%SZ") -
                           datetime.strptime(d["t"], "%Y-%m-%dT%H:%M:%SZ")).total_seconds())
             except Exception:
                 continue
-            if dt <= 300 and _deg_dist(s["lat"], s["lon"], d["lat"], d["lon"]) <= 0.35 and (best is None or same_tail):
-                best = s
+            if dt <= 300 and _deg_dist(s["lat"], s["lon"], d["lat"], d["lon"]) <= 0.35 and same_tail \
+                    and (best is None or dt < best_dt):
+                best, best_dt = s, dt
         if best:
             used.add(best["id"])
             d["hires"] = _hires_summary(best)
