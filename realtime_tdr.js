@@ -831,14 +831,50 @@
         return { root: m.root || (_RECSAT_CDN + _hdobRecsatKey), ts: best, zmax: e.zmax || 6 };
     }
 
+    /** SEAR passes that belong to the flights on display (2026-09-22). The SEAR
+     *  product merges three days of recon, so a pass scored for yesterday's
+     *  sortie stays in the JSON while a new mission is enroute; shown as-is it
+     *  read as today's estimate. Scope = the sorties _hdobFilterAircraft shows
+     *  for the map (a picked flight, else the freshest sortie per tail), each
+     *  matched by tail AND by time inside that sortie's window (+-45 min). With
+     *  no flight picked and at least one sortie still reporting, sorties that
+     *  landed more than 90 min before the newest ob are dropped too, so an
+     *  enroute plane isn't decorated with the previous flight's passes. Entries
+     *  without sortie times (older payloads) fall back to tail-only matching. */
+    function _hdobSearPassesInScope(passes) {
+        passes = passes || [];
+        if (!passes.length) return [];
+        var all = (_hdobData && _hdobData.aircraft) || [];
+        var shown = _hdobFilterAircraft(all, 'map');
+        if (!shown.length) return passes.slice();
+        if (!_hdobFlightSel) {
+            var newest = 0;
+            shown.forEach(function (a) { var e = Date.parse(_hdobX(a.sortie_end || '')); if (e > newest) newest = e; });
+            var live = shown.filter(function (a) { return newest - Date.parse(_hdobX(a.sortie_end || '')) <= 90 * 60000; });
+            if (live.length && live.length < shown.length) shown = live;
+        }
+        var PAD = 45 * 60000;
+        return passes.filter(function (p) {
+            var t = Date.parse(p.fix_t || p.t);
+            for (var i = 0; i < shown.length; i++) {
+                var a = shown[i];
+                if (!_hdobTailEq(p.tail, a.tail)) continue;
+                var s = Date.parse(_hdobX(a.sortie_start || '')), e = Date.parse(_hdobX(a.sortie_end || ''));
+                if (isNaN(s) || isNaN(e) || isNaN(t)) return true;
+                if (t >= s - PAD && t <= e + PAD) return true;
+            }
+            return false;
+        });
+    }
+
     /** Center passes to step between: SEAR passes (VDM + preliminary fixes),
      *  else the VDMs. Honors the flight selection. Time-ordered. */
     function _hdobPassList() {
         var out = [], sp = _hdobData && _hdobData.sear;
         var selTail = _hdobFlightSel ? _hdobFlightSel.split('#')[0] : null;
-        if (sp && sp.passes && sp.passes.length) {
-            sp.passes.forEach(function (p) {
-                if (selTail && !_hdobTailEq(p.tail, selTail)) return;
+        var scoped = sp ? _hdobSearPassesInScope(sp.passes) : [];
+        if (scoped.length) {
+            scoped.forEach(function (p) {
                 out.push({ t: p.fix_t || p.t, tail: p.tail, src: p.fix_source, pass: p });
             });
         } else {
@@ -1089,7 +1125,7 @@
             var t = Date.parse(_hdobX(v.t)); if (inWin(t)) times.push(t);
         });
         if (_hdobData.sear && _hdobData.sear.passes) {
-            _hdobData.sear.passes.forEach(function (p) {
+            _hdobSearPassesInScope(_hdobData.sear.passes).forEach(function (p) {
                 var t = Date.parse(p.fix_t || p.t);
                 if (!inWin(t)) return;
                 // one fix per pass: skip a SEAR fix that duplicates a VDM time
@@ -1379,10 +1415,9 @@
         if (!passes.length) return;
         var selT = selPass && selPass.pass ? (selPass.pass.fix_t || selPass.pass.t) : null;
         var kit = window._ReconKit;
-        var selTail = _hdobFlightSel ? _hdobFlightSel.split('#')[0] : null;
         var PINK = '#ec4899';
-        var shown = passes.filter(function (p) {
-            return p.lat != null && p.lon != null && p.y_kt != null && !(selTail && !_hdobTailEq(p.tail, selTail));
+        var shown = _hdobSearPassesInScope(passes).filter(function (p) {
+            return p.lat != null && p.lon != null && p.y_kt != null;
         }).sort(function (a, b) { return String(a.fix_t || a.t) < String(b.fix_t || b.t) ? -1 : 1; });
         // Pass-to-pass center track first (under everything): the pseudo-fixes
         // read as a smooth motion vector, not a scatter of points.
@@ -1647,8 +1682,14 @@
             if (sp.status === 'no_env') return head + 'no GFS environment yet.';
             return head + 'no scored passes yet.';
         }
+        var scoped = _hdobSearPassesInScope(sp.passes);
+        if (!scoped.length) {
+            var older = sp.passes[sp.passes.length - 1];
+            return head + 'no scored center passes yet for this flight' +
+                (older ? ' (previous flight: ' + String(older.t).slice(5, 16).replace('T', ' ') + 'Z ' + _hdobTailDisplay(older.tail) + ' ' + _hdobSearHeadline(older) + ')' : '') + '.';
+        }
         var anyPrelim = false, anyRange = false, anyStale = false;
-        var parts = sp.passes.slice(-4).map(function (p) {
+        var parts = scoped.slice(-4).map(function (p) {
             if (p.fix_source === 'hdob') anyPrelim = true;
             var kit = window._ReconKit;
             var q = (kit && kit.compass8) ? kit.compass8(p.az_deg) : '';
@@ -1710,6 +1751,15 @@
         // 2026-09-05 (PI): Vmax is a maximum -- the tile shows the STRONGEST crossing of the last 3 h,
         // with the window's other crossings and the RMW range beside it so its credibility is explicit.
         var hd = _hdobData && _hdobData.sear && _hdobData.sear.headline;
+        // The headline is the product's newest window, which may belong to a
+        // previous flight (Polo 2026-09-22: yesterday's 66 kt over an enroute
+        // plane). Only use it when its pass is among the flights on display.
+        if (hd && hd.kt != null) {
+            var hdIn = _hdobSearPassesInScope(_hdobData.sear.passes).some(function (p) {
+                return _hdobTailEq(p.tail, hd.tail) && String(p.t).slice(0, 16) === String(hd.t).slice(0, 16);
+            });
+            if (!hdIn) hd = null;
+        }
         var searTile = hd && hd.kt != null ? { v: hd.kt, t: hd.t, tail: hd.tail, prelim: hd.fix_source === 'hdob' } : best.sear;
         var searSub = '';
         if (hd && hd.kt != null) {

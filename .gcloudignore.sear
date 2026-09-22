@@ -1,0 +1,4 @@
+*
+!Dockerfile.sear
+!sear_job_ctx/
+!sear_job_ctx/**

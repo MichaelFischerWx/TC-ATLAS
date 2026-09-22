@@ -1,0 +1,50 @@
+# --------------------------------------------------------------------------
+# TC-ATLAS SEAR real-time publisher -- Cloud Run Job container (BACKSTOP)
+# --------------------------------------------------------------------------
+# The Mac carries SEAR (com.fischerwx.sear-rt, MLBT/realtime). This image is
+# the greedy fallback: Scheduler fires it 7 min after each Mac slot, it reads
+# sear-rt/_run_marker.json and exits in ~2 s when the Mac already published;
+# otherwise it scores the active recon missions itself and publishes to
+# GCS + R2 exactly like the Mac does.
+#
+# Build context = sear_job_ctx/ (staged by deploy_sear_job.sh from
+# ~/github/MLBT, which has no git remote): realtime/sear_rt.py,
+# SEAR/Scripts/*.py and the two shipped model files (~10 MB). The 4 GB
+# SEAR/Data tree is training data and is NOT needed at inference.
+# --------------------------------------------------------------------------
+FROM python:3.12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libeccodes-dev libeccodes-data libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Pins match the Mac's conda env the models were pickled under
+# (Python 3.12.2, lightgbm 4.6.0, scikit-learn 1.8.0, joblib 1.5.3, pandas 2.3.3).
+RUN pip install --no-cache-dir \
+        "numpy>=2,<3" \
+        "pandas==2.3.3" \
+        "scikit-learn==1.8.0" \
+        "lightgbm==4.6.0" \
+        "joblib==1.5.3" \
+        xarray \
+        cfgrib \
+        eccodes \
+        google-cloud-storage \
+        boto3
+
+COPY sear_job_ctx/ /app/
+
+# config.py derives MODEL_DIR from its own location: /app/SEAR/Scripts -> /app/SEAR/Model
+ENV SEAR_SCRIPTS=/app/SEAR/Scripts \
+    SEAR_RT_CACHE=/tmp/sear_rt_cache \
+    SEAR_RMW_MODE=leg \
+    SEAR_RUN_SOURCE=cloud \
+    SEAR_SKIP_IF_FRESH_MIN=10 \
+    GOOGLE_CLOUD_PROJECT=tc-atlas-web \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app/realtime
+ENTRYPOINT ["python", "sear_rt.py"]

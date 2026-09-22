@@ -58,3 +58,6 @@ data/*.parquet
 # GHOST-RA local dev data (published to cdn.tcatlas.org/ghost-ra/, not to Pages)
 ghost-ra/
 data/era5_600_monthly/
+
+# staged build context for deploy_sear_job.sh (copied from ~/github/MLBT)
+sear_job_ctx/
