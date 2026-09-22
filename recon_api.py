@@ -333,7 +333,18 @@ def _parse_hdob_line(fields: list, base_date: datetime):
 # change). Real descents/climbs (dz/dp ~ 10-15 m/mb) never trip the entry test.
 # Masked obs keep their winds/SFMR; only the pressure-derived fields are nulled
 # and the ob is tagged qc_alt_excursion so the chart/tiles skip it.
+#
+# 2026-09-22 (Polo, NOAA3 18:11-18:15Z): a REAL eye trips the residual test.
+# The plane held 694 mb while the geometric height of that surface fell
+# 2680 -> 2220 m over ~90 s into an 889-mb pinhole eye -- hydrostatically the
+# same signature as an altimeter dropout, and the site blanked the record
+# pressure while the 1-s stream (unmasked) had it. The discriminator is the
+# RATE: a dropout is a step of hundreds of metres in one ob (Lowell: 761 m in
+# 30 s = 25 m/s) while the 700-mb surface into a Cat-5 eye descends at ~5-8
+# m/s at P-3 ground speed. An excursion now opens only when the residual also
+# GREW faster than ALT_EXC_RATE_MS; a gradual real descent never trips it.
 ALT_EXC_DZ_M, ALT_EXC_RECOVER_M = 60.0, 50.0   # residual vs the hydrostatic expectation (m)
+ALT_EXC_RATE_MS = 12.0                           # residual growth rate that marks a dropout (m/s)
 ALT_EXC_GAP_S = 600.0                            # data gap that resets the test (s)
 
 
@@ -373,10 +384,11 @@ def _mask_altitude_excursions(track: list) -> list:
             ref = ref + dz_exp                       # where the altitude should be now
             resid = alt - ref
             if not in_exc:
-                if abs(resid) > ALT_EXC_DZ_M:
+                gap = max(_ob_gap_s(prev, ob), 1.0)
+                if abs(resid) > ALT_EXC_DZ_M and abs(resid) / gap > ALT_EXC_RATE_MS:
                     in_exc = True                    # ref stays hydrostatic from the last good alt
                 else:
-                    ref = alt                        # follow the altitude outside excursions
+                    ref = alt                        # follow the altitude outside excursions (incl. a real eye)
             elif abs(resid) <= ALT_EXC_RECOVER_M:
                 in_exc, ref = False, alt
         else:
