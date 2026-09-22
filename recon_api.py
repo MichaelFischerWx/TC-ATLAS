@@ -656,6 +656,338 @@ def _parse_tempdrop_bulletin(text: str, fname_dt: datetime) -> list:
     return out
 
 
+# ── high-resolution dropsondes (NWS tgftp BUFR, WMO template 309053) ─────────
+#
+# TEMP DROP carries only mandatory + significant levels (~15-25 per sonde). The
+# NWS "high-resolution" dropwinsonde feed carries the full ASPEN-processed
+# profile (~250 levels: 1-s pressure, height, T, Td, wind, and the sonde's
+# lat/lon drift), one BUFR message per file in a ~300-slot RING BUFFER that is
+# overwritten as new sondes post — so every message we see is archived to GCS
+# (recon/sondes-hires/v1/<day>/<id>.json) by content, and the archive is read
+# back for the look-back window, which also makes the set identical across
+# API instances. Michael asked for this 2026-09-22 (Polo: BUFR sondes were on
+# the feed while the REPPN3 attribution returned none).
+#
+# A message is matched to its TEMP DROP twin by (tail, OB number), else by
+# time + position; unmatched ones are listed as dropsondes in their own right
+# (src "bufr"), so a sonde appears as soon as EITHER feed has it.
+
+_HIRES_BASE = "https://tgftp.nws.noaa.gov/SL.us008001/DF.bf/DC.vsndn/DS.dropw/RE.high/"
+_HIRES_LIST_TTL = 60          # ls-lt is tiny; a new sonde shows within a minute
+_HIRES_GCS_PREFIX = "recon/sondes-hires/v1"
+_HIRES_GCS_LIST_TTL = 300
+_HIRES_MAX_AGE_H = 72         # ignore ring-buffer slots older than this
+_hires_list_cache = {"ts": 0.0, "rows": []}
+_hires_slot_seen: dict = {}   # (name, size, mtime_iso) -> id | None (None = undecodable)
+_hires_by_id: dict = {}       # id -> full sonde dict (levels included)
+_hires_gcs_days: dict = {}    # day 'YYYY-MM-DD' -> ts of last archive listing
+_hires_lock = threading.Lock()   # eccodes is not thread-safe; decode serially
+_MONTHS = {m: i for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
+
+
+def _hires_fetch_bytes(url: str, timeout: int = 20):
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "TC-ATLAS recon/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read()
+    except Exception as e:
+        logger.debug("hires fetch failed %s: %s", url, e)
+        return None
+
+
+def _hires_list(now: datetime) -> list:
+    """[(name, size, mtime_dt)] from the directory's `ls-lt` (newest first).
+    The listing has no year: assume the current one, roll back at New Year."""
+    if (time.time() - _hires_list_cache["ts"]) < _HIRES_LIST_TTL:
+        return _hires_list_cache["rows"]
+    raw = _hires_fetch_bytes(_HIRES_BASE + "ls-lt", timeout=15)
+    if raw is None:
+        return _hires_list_cache["rows"]
+    rows = []
+    for line in raw.decode("ascii", "replace").splitlines():
+        m = re.match(r"^\S+\s+\d+\s+\S+\s+\S+\s+(\d+)\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2})\s+(sn\.\d+\.bin)$", line.strip())
+        if not m:
+            continue
+        size, mon, day, hh, mn, name = int(m.group(1)), _MONTHS.get(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5)), m.group(6)
+        if not mon:
+            continue
+        try:
+            mt = datetime(now.year, mon, day, hh, mn, tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if mt > now + timedelta(days=2):        # December listing read in January
+            mt = mt.replace(year=now.year - 1)
+        rows.append((name, size, mt))
+    _hires_list_cache.update(ts=time.time(), rows=rows)
+    return rows
+
+
+def _hires_decode(raw: bytes):
+    """One BUFR dropsonde message -> sonde dict (levels surface-first), or None.
+    Missing values arrive as -1e100 / 2147483647 and become None."""
+    try:
+        import eccodes as ec
+    except Exception as e:  # pragma: no cover
+        logger.warning("eccodes unavailable, hires sondes off: %s", e)
+        return None
+    i = raw.find(b"BUFR")
+    if i < 0:
+        return None
+    h = None
+    try:
+        with _hires_lock:
+            h = ec.codes_new_from_message(raw[i:])
+            ec.codes_set(h, "unpack", 1)
+
+            def one(key, default=None):
+                try:
+                    v = ec.codes_get(h, key)
+                except Exception:
+                    return default
+                if isinstance(v, str):
+                    return v.strip() or default
+                return v
+
+            def arr(key):
+                try:
+                    return list(ec.codes_get_array(h, key))
+                except Exception:
+                    return []
+
+            yr, mo, dy, hh, mn, ss = (one(k, 0) for k in ("year", "month", "day", "hour", "minute", "second"))
+            lat, lon = one("latitude"), one("longitude")
+            tail = str(one("aircraftFlightNumber", "") or "").upper()
+            ob = one("observationSequenceNumber")
+            P = arr("pressure"); Z = arr("nonCoordinateGeopotentialHeight")
+            T = arr("airTemperature"); TD = arr("dewpointTemperature")
+            WD = arr("windDirection"); WS = arr("windSpeed"); DT = arr("timePeriod")
+            DLAT = arr("latitudeDisplacement"); DLON = arr("longitudeDisplacement")
+    except Exception as e:
+        logger.warning("hires BUFR decode failed: %s", e)
+        return None
+    finally:
+        if h is not None:
+            try:
+                ec.codes_release(h)
+            except Exception:
+                pass
+    if not P or lat is None or lon is None or abs(lat) > 1e50 or not yr:
+        return None
+
+    def ok(v):
+        return v is not None and -1e50 < v < 1e9
+
+    def num(v, nd=1):
+        return round(float(v), nd) if ok(v) else None
+
+    n = len(P)
+    lv = {"p_hpa": [], "z_m": [], "t_c": [], "td_c": [], "wdir": [], "wspd_kt": [], "dt_s": [], "lat": [], "lon": []}
+    for k in range(n):
+        if not ok(P[k]):
+            continue
+        lv["p_hpa"].append(round(P[k] / 100.0, 1))
+        lv["z_m"].append(int(Z[k]) if k < len(Z) and ok(Z[k]) else None)
+        lv["t_c"].append(num(T[k] - 273.15) if k < len(T) and ok(T[k]) else None)
+        lv["td_c"].append(num(TD[k] - 273.15) if k < len(TD) and ok(TD[k]) else None)
+        lv["wdir"].append(int(round(WD[k])) if k < len(WD) and ok(WD[k]) else None)
+        lv["wspd_kt"].append(num(WS[k] * 1.943844) if k < len(WS) and ok(WS[k]) else None)
+        lv["dt_s"].append(int(DT[k]) if k < len(DT) and ok(DT[k]) else None)
+        lv["lat"].append(round(lat + DLAT[k], 4) if k < len(DLAT) and ok(DLAT[k]) else None)
+        lv["lon"].append(round(lon + DLON[k], 4) if k < len(DLON) and ok(DLON[k]) else None)
+    if len(lv["p_hpa"]) < 5:
+        return None
+    # surface-first ordering (ASPEN writes splash → launch; make it explicit)
+    order = sorted(range(len(lv["p_hpa"])), key=lambda k: -lv["p_hpa"][k])
+    for key in lv:
+        lv[key] = [lv[key][k] for k in order]
+    t0 = datetime(int(yr), int(mo), int(dy), int(hh), int(mn), int(ss or 0), tzinfo=timezone.utc)
+    tiso = t0.strftime("%Y-%m-%dT%H:%M:%SZ")
+    obn = int(ob) if ok(ob) else None
+    sid = f"{tiso[:10]}/{tail or 'UNK'}_{tiso[11:13]}{tiso[14:16]}{tiso[17:19]}_{obn if obn is not None else 0:02d}"
+    # splash point = the last level with a valid drifted position
+    splat = splon = None
+    for k in range(len(lv["lat"])):
+        if lv["lat"][k] is not None and lv["lon"][k] is not None:
+            splat, splon = lv["lat"][k], lv["lon"][k]
+            break
+    return {"id": sid, "t": tiso, "lat": round(float(lat), 4), "lon": round(float(lon), 4),
+            "splash_lat": splat, "splash_lon": splon, "tail": tail, "ob": obn,
+            "n_levels": len(lv["p_hpa"]), "levels": lv, **_hires_derived(lv)}
+
+
+def _hires_derived(lv: dict) -> dict:
+    """Layer winds from the full profile: lowest valid wind, WL150 (mean of the
+    lowest 150 m), MBL (lowest 500 m), sounding maximum. Heights are geopotential
+    above the splash point; a level without height is skipped."""
+    out = {"sfc_wind_kt": None, "sfc_dir": None, "sfc_z_m": None, "wl150_kt": None, "mbl_kt": None,
+           "max_wind_kt": None, "max_wind_p_hpa": None, "max_wind_z_m": None}
+    wl, mbl = [], []
+    for k in range(len(lv["p_hpa"])):
+        w, z = lv["wspd_kt"][k], lv["z_m"][k]
+        if w is None:
+            continue
+        if out["sfc_wind_kt"] is None and (z is None or z <= 30):
+            out.update(sfc_wind_kt=w, sfc_dir=lv["wdir"][k], sfc_z_m=z)
+        if z is not None:
+            if z <= 150:
+                wl.append(w)
+            if z <= 500:
+                mbl.append(w)
+        if out["max_wind_kt"] is None or w > out["max_wind_kt"]:
+            out.update(max_wind_kt=w, max_wind_p_hpa=lv["p_hpa"][k], max_wind_z_m=z)
+    if len(wl) >= 3:
+        out["wl150_kt"] = round(sum(wl) / len(wl), 1)
+    if len(mbl) >= 5:
+        out["mbl_kt"] = round(sum(mbl) / len(mbl), 1)
+    return out
+
+
+def _hires_summary(s: dict) -> dict:
+    """The small per-sonde record that rides in the recon blob (no levels)."""
+    keys = ("id", "t", "lat", "lon", "splash_lat", "splash_lon", "tail", "ob", "n_levels",
+            "sfc_wind_kt", "sfc_dir", "sfc_z_m", "wl150_kt", "mbl_kt", "max_wind_kt", "max_wind_p_hpa", "max_wind_z_m")
+    return {k: s.get(k) for k in keys}
+
+
+def _hires_archive_put(s: dict):
+    _live_gcs_put_async(f"{_HIRES_GCS_PREFIX}/{s['id']}.json",
+                        json.dumps(s, separators=(",", ":"), allow_nan=False))
+
+
+def _hires_archive_sync(since: datetime, until: datetime):
+    """Load archived sondes for the window's UTC days (listing cached
+    _HIRES_GCS_LIST_TTL s per day; only unseen ids are downloaded)."""
+    b = _get_recon_gcs_bucket()
+    if b is None:
+        return
+    day = since.replace(hour=0, minute=0, second=0, microsecond=0)
+    todo = []
+    while day <= until:
+        dkey = day.strftime("%Y-%m-%d")
+        if (time.time() - _hires_gcs_days.get(dkey, 0)) >= _HIRES_GCS_LIST_TTL:
+            try:
+                for bl in b.list_blobs(prefix=f"{_HIRES_GCS_PREFIX}/{dkey}/"):
+                    sid = bl.name[len(_HIRES_GCS_PREFIX) + 1:-5]
+                    if sid not in _hires_by_id:
+                        todo.append(bl)
+                _hires_gcs_days[dkey] = time.time()
+            except Exception as e:
+                logger.warning("hires archive list %s failed: %s", dkey, e)
+        day += timedelta(days=1)
+    if not todo:
+        return
+
+    def _get(bl):
+        try:
+            return json.loads(bl.download_as_bytes())
+        except Exception as e:
+            logger.debug("hires archive get %s failed: %s", bl.name, e)
+            return None
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            for s in ex.map(_get, todo):
+                if s and s.get("id"):
+                    _hires_by_id.setdefault(s["id"], s)
+    except Exception as e:
+        logger.warning("hires archive sync failed: %s", e)
+
+
+def _hires_sondes(since: datetime, until: datetime) -> list:
+    """All high-resolution sondes launched in [since, until]: ring buffer first
+    (new slots decoded + archived), then the archive for anything the buffer
+    has already overwritten. Sorted by time."""
+    try:
+        rows = _hires_list(until)
+        cutoff = until - timedelta(hours=_HIRES_MAX_AGE_H)
+        fresh = [(nm, sz, mt) for nm, sz, mt in rows if mt >= cutoff and mt >= since - timedelta(hours=1)]
+        new = [(nm, sz, mt) for nm, sz, mt in fresh if (nm, sz, mt.isoformat()) not in _hires_slot_seen]
+        if new:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                blobs = list(ex.map(lambda r: _hires_fetch_bytes(_HIRES_BASE + r[0]), new))
+            for (nm, sz, mt), raw in zip(new, blobs):
+                if raw is None:
+                    continue                      # retry next build
+                s = _hires_decode(raw)
+                _hires_slot_seen[(nm, sz, mt.isoformat())] = s["id"] if s else None
+                if s and s["id"] not in _hires_by_id:
+                    _hires_by_id[s["id"]] = s
+                    _hires_archive_put(s)
+            if len(_hires_slot_seen) > 4000:
+                for k in list(_hires_slot_seen)[:1000]:
+                    _hires_slot_seen.pop(k, None)
+    except Exception as e:
+        logger.warning("hires ring-buffer pass failed: %s", e)
+    try:
+        _hires_archive_sync(since, until)
+    except Exception as e:
+        logger.warning("hires archive pass failed: %s", e)
+    lo, hi = since.strftime("%Y-%m-%dT%H:%M:%SZ"), until.strftime("%Y-%m-%dT%H:%M:%SZ")
+    out = [s for s in _hires_by_id.values() if lo <= s["t"] <= hi]
+    out.sort(key=lambda s: s["t"])
+    return out
+
+
+def _hires_attach(drops: list, since: datetime, until: datetime, track_pts, storm_lat, storm_lon,
+                  mission_tail: str = "") -> list:
+    """Join high-res sondes onto the TEMP DROP list (by tail+OB, else time+place);
+    the rest that pass the same storm gate are appended as src 'bufr'."""
+    try:
+        hs = _hires_sondes(since, until)
+    except Exception as e:
+        logger.warning("hires sondes unavailable: %s", e)
+        return drops
+    if not hs:
+        return drops
+
+    def _tail_key(t):
+        return re.sub(r"[^A-Z0-9]", "", str(t or "").upper())
+
+    used = set()
+    for d in drops:
+        best = None
+        for s in hs:
+            if s["id"] in used:
+                continue
+            same_tail = _tail_key(s["tail"]) == _tail_key(d.get("tail"))
+            if same_tail and d.get("ob") and s.get("ob") is not None and int(d["ob"]) == s["ob"]:
+                best = s; break
+            try:
+                dt = abs((datetime.strptime(s["t"], "%Y-%m-%dT%H:%M:%SZ") -
+                          datetime.strptime(d["t"], "%Y-%m-%dT%H:%M:%SZ")).total_seconds())
+            except Exception:
+                continue
+            if dt <= 300 and _deg_dist(s["lat"], s["lon"], d["lat"], d["lon"]) <= 0.35 and (best is None or same_tail):
+                best = s
+        if best:
+            used.add(best["id"])
+            d["hires"] = _hires_summary(best)
+    for s in hs:
+        if s["id"] in used:
+            continue
+        near = bool(track_pts) and _near_track(s["lat"], s["lon"], track_pts)
+        if not near and storm_lat is not None and storm_lon is not None:
+            near = _deg_dist(s["lat"], s["lon"], storm_lat, storm_lon) <= _STORM_CORE_DEG
+        if mission_tail:
+            if not (near or _tail_key(s["tail"]) == _tail_key(mission_tail)):
+                continue
+        elif not near:
+            continue
+        drops.append({
+            "t": s["t"], "lat": s["lat"], "lon": s["lon"],
+            "splash_lat": s.get("splash_lat"), "splash_lon": s.get("splash_lon"),
+            "sfc_dir": s.get("sfc_dir"), "sfc_wind_kt": (round(s["wl150_kt"]) if s.get("wl150_kt") is not None else None),
+            "mbl_dir": None, "mbl_wind_kt": (round(s["mbl_kt"]) if s.get("mbl_kt") is not None else None),
+            "tail": s["tail"], "storm": None, "ob": (f"{s['ob']:02d}" if s.get("ob") is not None else None),
+            "profile": None, "src": "bufr", "hires": _hires_summary(s),
+        })
+    drops.sort(key=lambda x: x.get("t") or "")
+    return drops
+
+
 # ── replay clock ─────────────────────────────────────────────────────────────
 
 def _replay_now(atcf_id: str, replay: str, speed: float):
@@ -1523,6 +1855,11 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         drops.sort(key=lambda x: x.get("t") or "")
     except Exception as e:
         logger.warning("recon dropsonde assembly failed for %s: %s", atcf_id, e)
+    # Full-resolution BUFR twins (+ sondes only that feed has yet)
+    try:
+        drops = _hires_attach(drops, since, sim_now, track_pts, storm_lat, storm_lon, mission_tail)
+    except Exception as e:
+        logger.warning("recon hires sonde join failed for %s: %s", atcf_id, e)
 
     n_obs = sum(len(a["track"]) for a in aircraft_out)
     return {
@@ -1586,6 +1923,28 @@ def recon_realtime(
     if len(_blob_cache) > 200:
         _blob_cache.pop(next(iter(_blob_cache)))
     return JSONResponse(blob, headers={"Cache-Control": cc})
+
+
+@router.get("/sonde-hires")
+def recon_sonde_hires(id: str = Query(..., description="hires sonde id from the recon blob (dropsondes[].hires.id)")):
+    """Full high-resolution dropsonde profile (all levels) for one sonde."""
+    sid = id.strip()
+    if not re.match(r"^\d{4}-\d{2}-\d{2}/[A-Z0-9]+_\d{6}_\d{2}$", sid):
+        return JSONResponse({"error": "bad id"}, status_code=400)
+    s = _hires_by_id.get(sid)
+    if s is None:
+        b = _get_recon_gcs_bucket()
+        if b is not None:
+            try:
+                bl = b.blob(f"{_HIRES_GCS_PREFIX}/{sid}.json")
+                if bl.exists():
+                    s = json.loads(bl.download_as_bytes())
+                    _hires_by_id[sid] = s
+            except Exception as e:
+                logger.warning("hires get %s failed: %s", sid, e)
+    if s is None:
+        return JSONResponse({"error": "not found"}, status_code=404, headers={"Cache-Control": "public, max-age=60"})
+    return JSONResponse(s, headers={"Cache-Control": "public, max-age=86400, s-maxage=86400"})
 
 
 @router.get("/active-missions")

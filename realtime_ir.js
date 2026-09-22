@@ -31501,6 +31501,41 @@
         return { plev: plev, t: t, q: q, u: u, v: v, showParcel: false };
     }
 
+    /** renderSkewT() profiles from a full-resolution BUFR sounding
+     *  (/recon/sonde-hires): every level with a temperature; q from Td;
+     *  u/v from the met wind. Levels arrive surface-first (high p → low p). */
+    function _reconHiresProfiles(h) {
+        var lv = h && h.levels;
+        if (!lv || !lv.p_hpa || lv.p_hpa.length < 5) return null;
+        var plev = [], t = [], q = [], u = [], v = [];
+        for (var i = 0; i < lv.p_hpa.length; i++) {
+            var p = lv.p_hpa[i], tc = lv.t_c[i];
+            if (p == null || tc == null || p < 50 || p > 1100) continue;
+            if (plev.length && p >= plev[plev.length - 1]) continue;   // keep strictly decreasing
+            plev.push(p); t.push(tc + 273.15);
+            var td = lv.td_c[i];
+            if (td != null) { var es = 6.112 * Math.exp(17.67 * td / (td + 243.5)); q.push(0.622 * es / (p - es)); }
+            else q.push(null);
+            var ws = lv.wspd_kt[i], wd = lv.wdir[i];
+            if (ws != null && wd != null) {
+                var sp = ws * 0.514444, r = wd * Math.PI / 180;
+                u.push(-sp * Math.sin(r)); v.push(-sp * Math.cos(r));
+            } else { u.push(null); v.push(null); }
+        }
+        if (plev.length < 5) return null;
+        return { plev: plev, t: t, q: q, u: u, v: v, showParcel: false, hires: true };
+    }
+
+    /** One-line provenance for the modal: which feed the plotted profile came from. */
+    function _reconHiresBadge(h) {
+        if (!h) return '';
+        var bits = [h.n_levels + ' levels (1-s)'];
+        if (h.wl150_kt != null) bits.push('WL150 ' + Math.round(h.wl150_kt) + ' kt');
+        if (h.mbl_kt != null) bits.push('MBL ' + Math.round(h.mbl_kt) + ' kt');
+        if (h.max_wind_kt != null) bits.push('max ' + Math.round(h.max_wind_kt) + ' kt' + (h.max_wind_p_hpa != null ? ' at ' + Math.round(h.max_wind_p_hpa) + ' hPa' : ''));
+        return '<div class="recon-skewt-subhead" style="color:#fbbf24;">Full-resolution sounding (NWS BUFR): ' + bits.join(' · ') + '</div>';
+    }
+
     /** Mandatory-level table + significant-wind table + footer (TT-style).
      *  Rows go LOW pressure (aloft) → HIGH pressure (surface) so the surface
      *  reads at the BOTTOM, consistent with the skew-T. Wind cells are tinted
@@ -31570,7 +31605,7 @@
         var barbX = spdMax * 1.12 + 4;
         var traces = [{
             x: spd, y: P, type: 'scatter', mode: 'lines+markers', name: 'Wind speed',
-            line: { color: lineC, width: 1.6 }, marker: { size: 7, color: colr, line: { color: lineC, width: 0.5 } },
+            line: { color: lineC, width: 1.6 }, marker: { size: P.length > 60 ? 3 : 7, color: colr, line: { color: lineC, width: 0.5 } },
             customdata: dir, hovertemplate: '%{x:.0f} kt · %{customdata:.0f}° · %{y} hPa<extra></extra>'
         }];
         var shapes = [];
@@ -31617,6 +31652,17 @@
         if (typeof _ga === 'function') { try { _ga('recon_skewt_view', { mode: mode }); } catch (e) {} }
     };
 
+    var _reconSkewTKey = null;        // sonde the modal currently shows (a late hires fetch must not paint over another)
+
+    function _reconSkewTBody(sonde, extraTop) {
+        return '<div class="recon-skewt-toggle">' +
+            '<button class="on" data-skv="skewt" onclick="window._reconSkewTView(\'skewt\')">Skew-T</button>' +
+            '<button data-skv="wind" onclick="window._reconSkewTView(\'wind\')">Wind profile</button>' +
+            '</div>' +
+            '<div class="recon-skewt-plot"><div id="recon-skewt-plot" style="width:100%;height:560px;"></div></div>' +
+            '<div class="recon-skewt-side">' + (extraTop || '') + _reconSkewTTable(sonde) + '</div>';
+    }
+
     window._reconShowSkewT = function (key) {
         var sonde = _reconSondeByKey[key];
         if (!sonde) return;
@@ -31625,20 +31671,34 @@
         var body = modal.querySelector('.recon-skewt-body');
         var profiles = _reconSondeProfiles(sonde);
         _reconSkewTProfiles = profiles;
+        _reconSkewTKey = key;
+        // Full-resolution twin: fetch it and replace the TEMP DROP profile once it lands.
+        var hr = sonde.hires;
+        if (hr && hr.id) {
+            fetch(API_BASE + '/recon/sonde-hires?id=' + encodeURIComponent(hr.id))
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (h) {
+                    if (!h || _reconSkewTKey !== key) return;
+                    var hp = _reconHiresProfiles(h);
+                    if (!hp) return;
+                    _reconSkewTProfiles = hp;
+                    var mode = 'skewt';
+                    var onBtn = modal.querySelector('.recon-skewt-toggle button.on');
+                    if (onBtn) mode = onBtn.getAttribute('data-skv') || 'skewt';
+                    body.innerHTML = _reconSkewTBody(sonde, _reconHiresBadge(h));
+                    window._reconSkewTView(mode);
+                })
+                .catch(function () {});
+        }
         var loc = (sonde.lat != null && sonde.lon != null) ? _rtFmtLatLon(sonde.lat, sonde.lon) : '';
         modal.querySelector('.recon-skewt-title').textContent =
             'Dropsonde · ' + _rtReconTailName(sonde.tail) + (loc ? ' · ' + loc : '') +
             (sonde.t ? ' · ' + _rtFmtTime(sonde.t) : '');
         if (!profiles || typeof renderSkewT !== 'function') {
-            body.innerHTML = '<div style="padding:30px;color:#94a3b8;">No decoded profile available for this dropsonde yet.</div>';
+            body.innerHTML = '<div style="padding:30px;color:#94a3b8;">' +
+                (hr && hr.id ? 'Loading the full-resolution sounding…' : 'No decoded profile available for this dropsonde yet.') + '</div>';
         } else {
-            body.innerHTML =
-                '<div class="recon-skewt-toggle">' +
-                '<button class="on" data-skv="skewt" onclick="window._reconSkewTView(\'skewt\')">Skew-T</button>' +
-                '<button data-skv="wind" onclick="window._reconSkewTView(\'wind\')">Wind profile</button>' +
-                '</div>' +
-                '<div class="recon-skewt-plot"><div id="recon-skewt-plot" style="width:100%;height:560px;"></div></div>' +
-                '<div class="recon-skewt-side">' + _reconSkewTTable(sonde) + '</div>';
+            body.innerHTML = _reconSkewTBody(sonde, hr && hr.id ? '<div class="recon-skewt-subhead" style="color:#94a3b8;">TEMP DROP levels · loading the full-resolution sounding…</div>' : '');
         }
         modal.style.display = 'flex';
         // Render after the modal is laid out so Plotly measures a real width
@@ -31686,6 +31746,8 @@
             var prof = d.profile || {};
             var hasProfile = (prof.mandatory && prof.mandatory.length) ||
                              (prof.sig_temp && prof.sig_temp.length);
+            var hr = d.hires || null;   // full-resolution BUFR twin (2026-09-22)
+            if (hr && hr.id) hasProfile = true;
             var sh = '<div class="ir-popup" style="font-size:11px;min-width:170px;">' +
                 '<div style="font-weight:700;color:#fbbf24;margin-bottom:4px;">◇ Dropsonde' +
                 (d.tail ? ' · ' + _rtReconTailName(d.tail) : '') + '</div>' +
@@ -31697,6 +31759,11 @@
                     (d.mbl_dir != null ? d.mbl_dir + '° / ' : '') + d.mbl_wind_kt + ' kt' : null) +
                 _rtReconRow('Environment', d.environment) +
                 _rtReconRow('Splash', _rtFmtLatLon(d.splash_lat, d.splash_lon)) +
+                (hr ? _rtReconRow('<span title="Mean wind of the lowest 150 m from the full-resolution (1-s) sounding">WL150 (hi-res)</span>',
+                        hr.wl150_kt != null ? Math.round(hr.wl150_kt) + ' kt' : null) +
+                      _rtReconRow('Max in sounding', hr.max_wind_kt != null ? Math.round(hr.max_wind_kt) + ' kt' +
+                        (hr.max_wind_p_hpa != null ? ' at ' + Math.round(hr.max_wind_p_hpa) + ' hPa' : '') : null) +
+                      _rtReconRow('Levels', hr.n_levels != null ? hr.n_levels + ' (1-s)' : null) : '') +
                 (hasProfile ? '<button class="rt-recon-skewt-btn" onclick="window._reconShowSkewT(\'' +
                     sk.replace(/'/g, "\\'") + '\')">Skew-T profile ↗</button>' : '') +
                 '</div>';
