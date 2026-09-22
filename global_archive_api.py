@@ -6137,6 +6137,10 @@ NHC_RECON_BASE = "https://www.nhc.noaa.gov/archive/recon"
 
 _vdm_cache: OrderedDict = OrderedDict()
 _VDM_CACHE_TTL = 7 * 86400   # 7 days — archive data is immutable
+# A CURRENT-season storm may be mid-mission: Polo 2026-09-22 had its 18:13Z
+# VDM posted at 18:51Z while the tab (memory 7 d, GCS 7 d, listing 1 h) still
+# showed two messages from the day before. Live storms get minutes, not days.
+_VDM_LIVE_TTL = 300
 _VDM_CACHE_MAX = 50
 
 
@@ -6443,10 +6447,13 @@ def get_vdm(
     # origin fetch (the per-file recon pull is the expensive part). Past-year
     # recon is immutable → long s-maxage; current-year storms may still be
     # flying missions → shorter edge TTL with revalidation.
-    _vdm_cc = _season_cc(year)
+    _vdm_live = not _fl_is_historical(year)
+    # Edge TTL to match: the season default (s-maxage 1800) would hold a stale
+    # message list at Cloudflare for half an hour during a live mission.
+    _vdm_cc = _season_cc(year) if not _vdm_live else "public, max-age=120, s-maxage=240, stale-while-revalidate=120"
     if cache_key in _vdm_cache:
         cached, ts = _vdm_cache[cache_key]
-        if now - ts < _VDM_CACHE_TTL:
+        if now - ts < (_VDM_LIVE_TTL if _vdm_live else _VDM_CACHE_TTL):
             _vdm_cache.move_to_end(cache_key)
             return JSONResponse(cached, headers={"Cache-Control": _vdm_cc})
 
@@ -6456,7 +6463,7 @@ def get_vdm(
     # the storm's VDM set, so the key is storm+year like the memory cache.
     _vdm_gcs_key = f"vdm/{year}_{storm_name.lower()}.json"
     _vdm_gcs = _recon_gcs_get(_vdm_gcs_key,
-                              max_age_days=None if _fl_is_historical(year) else 7)
+                              max_age_days=None if not _vdm_live else _VDM_LIVE_TTL / 86400.0)
     if _vdm_gcs is not None and _vdm_gcs.get("n_vdms"):
         _vdm_cache[cache_key] = (_vdm_gcs, now)
         if len(_vdm_cache) > _VDM_CACHE_MAX:
@@ -6476,7 +6483,8 @@ def get_vdm(
             basin_prefix = "REPPN2"  # Central Pacific also uses REPPN2
         repnt2_url = f"{NHC_RECON_BASE}/{year}/{basin_prefix}/"
         try:
-            entries = _hrd_parse_directory(repnt2_url)
+            # live season: re-list within minutes so a VDM posted mid-flight shows
+            entries = _hrd_parse_directory(repnt2_url, max_age=240 if _vdm_live else 3600)
         except Exception:
             return JSONResponse({"success": True, "vdms": [], "n_vdms": 0,
                                  "message": f"Could not list {basin_prefix} directory"},
