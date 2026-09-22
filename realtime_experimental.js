@@ -3532,6 +3532,16 @@
             { x: t, y: col('vmax_kt'), name: M.name, yaxis: 'y',
               line: { color: MODEL_COL, width: 2.4 },
               hovertemplate: '%{y:.1f} kt' });
+        /* The displayed wind is smoothed over the preceding hours, so it
+           trails a fast ramp; the per-frame value is what the current
+           image alone says. Shown as a thin trace so the two can be read
+           together. */
+        if (fr.some(function (f) { return f.vmax_inst_kt != null; })) {
+            traces.push(
+                { x: t, y: col('vmax_inst_kt'), name: M.name + ' (this frame)',
+                  yaxis: 'y', line: { color: MODEL_COL, width: 1, dash: 'dot' },
+                  opacity: 0.75, hovertemplate: '%{y:.1f} kt (this frame)' });
+        }
         traces = traces.concat([
             { x: t, y: col('btk_vmax_kt'), name: ag + ' best track (interp)',
               yaxis: 'y', line: nhc, connectgaps: false,
