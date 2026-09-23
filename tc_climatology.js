@@ -29,7 +29,7 @@ function _ga(action, params) {
 }
 
 // ── Data version + URLs ─────────────────────────────────────────
-var DATA_VER = 'v20260408';
+var DATA_VER = 'v20260812';
 var STORMS_JSON  = 'ibtracs_storms.json?' + DATA_VER;
 var TRACKS_MANIFEST = 'ibtracs_tracks_manifest.json?' + DATA_VER;
 var TRACKS_JSON_FALLBACK = 'ibtracs_tracks.json?' + DATA_VER;

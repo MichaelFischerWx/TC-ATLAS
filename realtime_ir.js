@@ -7267,7 +7267,7 @@
         // Try GCS direct → silently fall through to API. We deliberately
         // don't use AbortController here — once started, let it finish
         // populating cache even if user mouses away.
-        fetch(gcsUrl).then(function (r) {
+        _cdnBundleFetch(gcsUrl).then(function (r) {
             if (r.ok) return r;
             return fetch(apiUrl);
         }).catch(function () {
@@ -8135,7 +8135,7 @@
 
         // Conditional revalidation against GCS so the browser typically
         // gets a 304 when the prewarm hasn't run since the last poll.
-        fetch(gcsUrl, { cache: 'no-cache' })
+        _cdnBundleFetch(gcsUrl, { cache: 'no-cache' })
             .then(function (r) {
                 if (!r.ok) throw new Error('gcs ' + r.status);
                 return r.arrayBuffer();
@@ -8203,7 +8203,7 @@
      *  refresh helpers so they don't tear down and rebuild layers on
      *  every poll when nothing has changed. */
     function _bundleHasNewerLatest(bundleUrl, fallbackUrl, currentLatest) {
-        return fetch(bundleUrl, { cache: 'no-cache' })
+        return _cdnBundleFetch(bundleUrl, { cache: 'no-cache' })
             .then(function (r) {
                 if (!r.ok) throw new Error('GCS ' + r.status);
                 return r.arrayBuffer();
@@ -8690,7 +8690,7 @@
         // public,max-age=300 so the browser can serve repeat opens
         // instantly without re-downloading.
         var gcsBundleUrl = _gcsFramesBundleUrl(atcfId);
-        fetch(gcsBundleUrl)
+        _cdnBundleFetch(gcsBundleUrl)
             .then(function (r) {
                 if (!r.ok) throw new Error('gcs bundle HTTP ' + r.status);
                 return r.arrayBuffer();
@@ -8742,6 +8742,18 @@
     var _RT_BUNDLE_ROOT = _CDN_BUNDLE_ROOT;
     var _RT_BUNDLE_VERSION = 'rt-v12';   // fallback; _loadBundleVersion() may update
     var _GCS_BUNDLE_BASE = _RT_BUNDLE_ROOT + '/' + _RT_BUNDLE_VERSION + '/bundles';
+    // The canonical bundles/{frames,band,raw}/<ID>.bin keys are written only
+    // by the prewarm cycle, which has been off since 2026-06 — so a CDN-first
+    // fetch is a guaranteed 404 (or a months-old bundle for early-season
+    // storms) before every API fallback. Off unless rt-version.json sets
+    // "prewarmed": true, so re-enabling prewarm needs no frontend deploy.
+    var _RT_BUNDLES_PREWARMED = false;
+    function _cdnBundleFetch(url, opts) {
+        if (!_RT_BUNDLES_PREWARMED) {
+            return Promise.resolve(new Response(null, { status: 404 }));
+        }
+        return fetch(url, opts);
+    }
     function _gcsFramesBundleUrl(atcfId) {
         return _GCS_BUNDLE_BASE + '/frames/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin';
     }
@@ -8783,6 +8795,7 @@
                     _RT_BUNDLE_VERSION = v;
                 }
                 _GCS_BUNDLE_BASE = _RT_BUNDLE_ROOT + '/' + _RT_BUNDLE_VERSION + '/bundles';
+                _RT_BUNDLES_PREWARMED = (j.prewarmed === true);
             })
             .catch(function () { /* keep pinned fallback */ });
     }
@@ -12248,7 +12261,7 @@
         if (forceApi) {
             source = _viaApi();
         } else {
-            source = fetch(gcsUrl, { signal: signal })
+            source = _cdnBundleFetch(gcsUrl, { signal: signal })
                 .then(function (r) {
                     if (!r.ok) throw new Error('gcs raw bundle HTTP ' + r.status);
                     return r.arrayBuffer();
@@ -12722,7 +12735,7 @@
                    + '/band-frames-bundle?band=' + band;
         var stormIdAtFetch = currentStormId;
 
-        fetch(gcsUrl)
+        _cdnBundleFetch(gcsUrl)
             .then(function (r) {
                 if (!r.ok) throw new Error('GCS bundle HTTP ' + r.status);
                 return r.arrayBuffer();
@@ -12958,7 +12971,7 @@
         var gcsUrl = _gcsBandBundleUrl(stormId, band);
         var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId)
                    + '/band-frames-bundle?band=' + band;
-        return fetch(gcsUrl)
+        return _cdnBundleFetch(gcsUrl)
             .then(function (r) { if (!r.ok) throw new Error('gcs ' + r.status); return r.arrayBuffer(); })
             .catch(function () {
                 return fetch(apiUrl).then(function (r) {
@@ -13653,7 +13666,7 @@
             + '/ir-frames-bundle?lookback_hours=' + JPG_PRIMARY_LOOKBACK_H
             + '&radius_deg=' + JPG_PRIMARY_RADIUS_DEG
             + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
-        fetch(gcs).then(function (r) {
+        _cdnBundleFetch(gcs).then(function (r) {
             if (!r.ok) throw new Error('gcs ' + r.status);
             return r.arrayBuffer();
         }).catch(function () {
@@ -32002,7 +32015,10 @@
             url += '&replay=' + _rtReconReplay.anchor + '&speed=' + _rtReconReplay.speed;
         } else if (_rtReconLat != null && _rtReconLon != null) {
             // Live only: gate HDOB to this storm (replay storm ≠ opened storm).
-            url += '&lat=' + _rtReconLat + '&lon=' + _rtReconLon;
+            // Snapped to 0.5° (the server does the same) so viewers share one
+            // Cloudflare cache entry as the storm position drifts.
+            url += '&lat=' + Math.round(_rtReconLat * 2) / 2 +
+                   '&lon=' + Math.round(_rtReconLon * 2) / 2;
         }
         if (statusEl && !_rtReconData) statusEl.textContent = 'loading…';
         fetch(url, { cache: 'no-store' })

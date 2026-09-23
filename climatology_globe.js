@@ -21,7 +21,7 @@ import { setFieldCache } from './vendor/gc-atlas/era5.js';
 import { FIELDS } from './vendor/gc-atlas/data.js';
 import { computeACE, anomalyTransform, correlate } from './correlation.js';
 
-const DATA_VER = 'v20260408';
+const DATA_VER = 'v20260812';
 const TRACKS_MANIFEST = 'ibtracs_tracks_manifest.json?' + DATA_VER;
 const TRACKS_JSON_FALLBACK = 'ibtracs_tracks.json?' + DATA_VER;
 const STORMS_JSON = 'ibtracs_storms.json?' + DATA_VER;

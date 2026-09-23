@@ -4486,10 +4486,27 @@ def _adopt_shared_storm_cache() -> bool:
     return True
 
 
-def _ensure_fresh_cache():
-    """If the cache is stale (older than TTL), re-poll."""
-    global _last_poll_time
-    if time.time() - _last_poll_time > _STORM_CACHE_TTL:
+# Single-flight guard for the storm re-poll. A full poll takes 60-70 s, and
+# _ensure_fresh_cache() runs at the top of ~15 endpoints — without this, every
+# request that lands while a poll is in flight sees the old _last_poll_time and
+# starts ANOTHER poll (logs 2026-09-22: 4 concurrent polls within 0.5 s, and 5
+# back-to-back across 70 s), and each of those requests waits the full minute.
+_poll_flight_lock = threading.Lock()
+# While a refresh is in flight, other requests serve the cached list rather
+# than queueing behind it — as long as it is younger than this. Past it (or on
+# a cold instance with no list at all) they wait for the one poll instead.
+_STORM_STALE_SERVE_MAX = 1800
+
+
+def _refresh_storm_cache(max_age: float, wait: bool) -> None:
+    """Adopt another instance's result or re-poll, if the cache is older than
+    max_age — at most one refresh per instance at a time. wait=False returns
+    immediately when another refresh already holds the lock."""
+    if not _poll_flight_lock.acquire(blocking=wait):
+        return
+    try:
+        if time.time() - _last_poll_time <= max_age:
+            return   # a refresh finished while we waited for the lock
         # Another instance may have already done this work — adopting its
         # result costs one small GCS read instead of a full re-poll.
         try:
@@ -4501,6 +4518,17 @@ def _ensure_fresh_cache():
             _poll_active_storms()
         except Exception:
             traceback.print_exc()
+    finally:
+        _poll_flight_lock.release()
+
+
+def _ensure_fresh_cache():
+    """If the cache is stale (older than TTL), re-poll — single-flight, with
+    the other callers served the stale list while it runs."""
+    age = time.time() - _last_poll_time
+    if age <= _STORM_CACHE_TTL:
+        return
+    _refresh_storm_cache(_STORM_CACHE_TTL, wait=age > _STORM_STALE_SERVE_MAX)
 
 
 # ---------------------------------------------------------------------------
@@ -4553,21 +4581,10 @@ def refresh_active_storms_cache():
     (avoids double-polling when the background thread just ran).
     Returns summary dict for the warmup response.
     """
-    if time.time() - _last_poll_time > 60:
-        # Prefer another instance's recent result over repeating the work —
-        # priming the cache is the point here, and adopting primes it just as
-        # well for a fraction of the cost. Falls through to a real poll when
-        # nothing fresh is published.
-        adopted = False
-        try:
-            adopted = _adopt_shared_storm_cache()
-        except Exception:
-            traceback.print_exc()
-        if not adopted:
-            try:
-                _poll_active_storms()
-            except Exception:
-                traceback.print_exc()
+    # Prefer another instance's recent result over repeating the work (handled
+    # in _refresh_storm_cache). If a request-driven refresh is already running
+    # on this instance, don't start a second one — report the current cache.
+    _refresh_storm_cache(60, wait=False)
 
     with _active_storms_lock:
         return {

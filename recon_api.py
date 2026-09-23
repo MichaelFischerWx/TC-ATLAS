@@ -1941,6 +1941,13 @@ def recon_realtime(
         return JSONResponse({"error": "bad atcf_id"}, status_code=400)
 
     fl_res = _IWG1_FINE_S if fl1s else _IWG1_DECIMATE_S
+    # lat/lon only feed the 5° _STORM_CORE_DEG proximity gate, so snap them to
+    # 0.5°: the storm's drifting best-track position (14.7/-101.6 → 14.6/-101.5 …)
+    # otherwise splits one storm's blob across several cache keys, each a ~5 s build.
+    if lat is not None:
+        lat = round(lat * 2) / 2
+    if lon is not None:
+        lon = round(lon * 2) / 2
 
     if replay and not _ALLOW_REPLAY:
         replay = ""  # ignore replay in production → live data only
