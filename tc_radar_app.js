@@ -64,7 +64,8 @@ var _ICON_PATHS = {
     beaker:    '<path d="M9 2v7.527a2 2 0 0 1-.211.896L4.72 18.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-4.069-8.127A2 2 0 0 1 15 9.527V2"/><path d="M6 2h12"/><path d="M8.5 14h7"/>',
     waves:     '<path d="M2 6c2 0 2-1 4-1s2 1 4 1 2-1 4-1 2 1 4 1 2-1 4-1"/><path d="M2 12c2 0 2-1 4-1s2 1 4 1 2-1 4-1 2 1 4 1 2-1 4-1"/><path d="M2 18c2 0 2-1 4-1s2 1 4 1 2-1 4-1 2 1 4 1 2-1 4-1"/>',
     thermo:    '<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4 4 0 1 0 5 0z"/>',
-    download:  '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'
+    download:  '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+    image:     '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>'
 };
 function _icon(name) {
     return '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (_ICON_PATHS[name] || '') + '</svg>';
@@ -607,6 +608,7 @@ function enterFocusMode(caseData) {
 function exitFocusMode() {
     if (!_focusMode) return;
     _focusMode = false;
+    _quicklookSync();
     if (_focusMarker) { map.removeLayer(_focusMarker); _focusMarker = null; }
     if (window.TCVolGL && TCVolGL.isOn()) TCVolGL.hide();
     _archiveFLMapRemove(); _archiveSondeMapRemove();
@@ -727,6 +729,11 @@ function exploreCaseGo() {
 
 // ── Side panel ───────────────────────────────────────────────
 function openSidePanel(caseData, fromQuickSelect) {
+    // The panel is rebuilt from scratch below. Carry the field, level and
+    // colour settings over from the analysis the user was just looking at so
+    // stepping to another pass shows the same thing (reflectivity vs
+    // reflectivity), whichever way the new case was opened.
+    var _prevView = document.getElementById('ep-var') ? _captureViewState() : null;
     // Hide featured-cases strip once any case opens — persist so
     // returning users don't see the onboarding banner again.
     _featuredCasesDismissed = true;
@@ -796,7 +803,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<div class="panel-image-wrap" id="thumb-img-wrap">' +
                             '<img id="thumb-img" src="' + imageUrl + '" alt="Quick-look: ' + caseData.storm_name + '">' +
                         '</div>' +
-                        '<div class="panel-image-label">Quick-look (2-km V<sub>t</sub>, WCM) \u00b7 ' + (_activeDataType === 'merge' ? 'Merged' : 'Swath') + ' \u00b7 click to enlarge</div>' +
+                        '<div class="panel-image-label">Quick-look (reflectivity + 2-km V<sub>H</sub>, WCM) \u00b7 ' + (_activeDataType === 'merge' ? 'Merged' : 'Swath') + ' \u00b7 click to enlarge</div>' +
                     '</div>' +
                     '<div class="explorer-result" id="ep-result"></div>' +
                     '<div class="cs-result" id="cs-result"></div>' +
@@ -807,6 +814,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                 // ── OVERLAYS: compact pill toggle strip ──
                 '<div class="overlay-strip">' +
                     '<span class="overlay-strip-label">Layers</span>' +
+                    '<button class="overlay-pill" id="quicklook-btn" onclick="toggleQuicklook()" data-color="slate" title="Pre-generated quick-look plan views (reflectivity + 2-km wind speed). Stays on as you step between analyses.">' + _icon('image') + 'Quick-look</button>' +
                     '<button class="overlay-pill" id="ir-underlay-btn" onclick="toggleIRPlotlyUnderlay()" disabled data-color="cyan" title="IR Satellite Underlay">' + _icon('satellite') + 'IR</button>' +
                     '<button class="overlay-pill" id="radar-map-btn" onclick="window._radarToMap()" data-color="orange" title="Drape the plan-view field onto the IR map (two-panel). Click again to return to the separate plan-view plot.">&#8862; Radar&rarr;Map</button>' +
                     '<button class="overlay-pill active" id="tdr-toggle-btn" onclick="toggleTDRVisibility()" data-color="red" title="TDR Radar Visibility">' + _icon('radio') + 'TDR</button>' +
@@ -865,14 +873,21 @@ function openSidePanel(caseData, fromQuickSelect) {
                 '<div class="fl-archive-status" id="fl-archive-status" style="display:none;font-size:10px;color:#fbbf24;padding:2px 8px;"></div>' +
                 // ── ANALYSIS: primary action buttons ──
                 '<div class="action-section">' +
-                    '<span class="action-section-label">Analysis</span>' +
+                    '<div class="action-section-head"><span class="action-section-label">Analysis</span>' +
+                        // Z* Anomaly used to be its own button; it is a coordinate
+                        // choice for the azimuthal mean, so it lives here.
+                        '<label class="az-coord-inline" title="Radial coordinate for the azimuthal mean">Azim. mean in' +
+                            '<select id="az-coord-mode" onchange="_azCoordChanged()">' +
+                                '<option value="standard">Standard (km)</option>' +
+                                '<option value="hybrid">R\u2095 hybrid (Fischer et al. 2025)</option>' +
+                                '<option value="anomaly">Z* anomaly (Fischer et al. 2025)</option>' +
+                            '</select></label></div>' +
                     '<div class="display-actions">' +
                         '<button class="cs-btn" id="cs-btn" onclick="toggleCrossSection()" disabled>\u2702 Cross Section</button>' +
                         '<button class="cs-btn" id="az-btn" onclick="dispatchAzimuthalMean()" disabled>\u27F3 Azim. Mean</button>' +
                         '<button class="cs-btn" id="sq-btn" onclick="fetchShearQuadrants()" disabled>\u25D1 Shear Quads</button>' +
                         '<button class="cs-btn" id="vol-btn" onclick="fetch3DVolume()" disabled>' + _icon('monitor') + '3D Volume</button>' +
-                        '<button class="cs-btn is-tinted" data-accent="vp" id="vp-scatter-btn" onclick="fetchVPScatter()">\u2B24 VP Scatter</button>' +
-                        '<button class="cs-btn is-tinted" data-accent="anomaly" id="anom-btn" onclick="document.getElementById(\'az-coord-mode\').value=\'anomaly\';dispatchAzimuthalMean();" disabled>Z* Anomaly</button>' +
+                        '<button class="cs-btn is-tinted" data-accent="vp" id="vp-scatter-btn" onclick="fetchVPScatter()">\u2234 VP Scatter</button>' +
                         '<button class="cs-btn is-tinted" data-accent="cfad" id="cfad-btn" onclick="toggleSingleCFADConfig()" disabled>\u2593 CFAD</button>' +
                     '</div>' +
                 '</div>' +
@@ -974,7 +989,7 @@ function openSidePanel(caseData, fromQuickSelect) {
             // ── RIGHT: Controls panel ──
             '<div class="explorer-controls">' +
                 '<div class="explorer-title">Explore Data</div>' +
-                '<div class="explorer-row"><label>Variable</label>' +
+                '<div class="explorer-row ep-r-var"><label>Variable</label>' +
                     '<select class="explorer-select" id="ep-var">' +
                         '<optgroup label="WCM Recentered (2 km)">' +
                             '<option value="recentered_tangential_wind">Tangential Wind</option>' +
@@ -1003,7 +1018,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '</optgroup>' +
                     '</select>' +
                 '</div>' +
-                '<div class="explorer-row explorer-row-more"><label>Contour Overlay</label>' +
+                '<div class="explorer-row explorer-row-more ep-r-contour"><label>Contour Overlay</label>' +
                     '<select class="explorer-select" id="ep-overlay" style="font-size:11px;">' +
                         '<option value="">None</option>' +
                         '<optgroup label="WCM Recentered (2 km)">' +
@@ -1038,7 +1053,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<span style="font-size:9px;color:var(--slate);" id="ep-contour-units"></span>' +
                     '</div>' +
                 '</div>' +
-                '<div class="explorer-row"><label>Colormap</label>' +
+                '<div class="explorer-row ep-r-cmap"><label>Colormap</label>' +
                     '<select class="explorer-select" id="ep-cmap" style="font-size:11px;" onchange="applyCmap()">' +
                         '<option value="">Default (from variable)</option>' +
                         '<optgroup label="Sequential"><option value="Viridis">Viridis</option><option value="Inferno">Inferno</option><option value="Magma">Magma</option><option value="Plasma">Plasma</option><option value="Cividis">Cividis</option><option value="Hot">Hot</option><option value="YlOrRd">YlOrRd</option><option value="YlGnBu">YlGnBu</option><option value="Blues">Blues</option><option value="Reds">Reds</option><option value="Greys">Greys</option></optgroup>' +
@@ -1047,7 +1062,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<optgroup label="Other"><option value="Jet">Jet</option><option value="Rainbow">Rainbow</option><option value="Electric">Electric</option><option value="Earth">Earth</option><option value="Blackbody">Blackbody</option></optgroup>' +
                     '</select>' +
                 '</div>' +
-                '<div class="explorer-row"><label>Color Range</label>' +
+                '<div class="explorer-row ep-r-range"><label>Color Range</label>' +
                     '<div style="display:flex;align-items:center;gap:4px;">' +
                         '<input type="number" id="ep-vmin" placeholder="min" step="any" style="width:60px;padding:2px 4px;font-size:10px;border:1px solid var(--border-light);border-radius:4px;background:var(--navy);color:var(--text);" onchange="applyColorRange()">' +
                         '<span style="font-size:10px;color:var(--slate);">to</span>' +
@@ -1055,7 +1070,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<button onclick="resetColorRange()" title="Reset" style="padding:2px 5px;font-size:9px;border:1px solid var(--border-light);border-radius:4px;background:var(--navy);cursor:pointer;color:var(--slate);">\u21BA</button>' +
                     '</div>' +
                 '</div>' +
-                '<div class="explorer-row"><label>Height Level</label>' +
+                '<div class="explorer-row ep-r-level"><label>Height Level</label>' +
                     '<div class="explorer-level-row">' +
                         '<input type="range" id="ep-level" min="0" max="18" step="0.5" value="2" oninput="document.getElementById(\'ep-level-val\').textContent = parseFloat(this.value).toFixed(1)+\' km\'">' +
                         '<span class="explorer-level-value" id="ep-level-val">2.0 km</span>' +
@@ -1064,25 +1079,18 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<button class="anim-btn" onclick="animStep(-1)" title="Previous level">\u25C0</button>' +
                         '<button class="anim-btn" id="anim-play-btn" onclick="animToggle()" title="Play/Pause">\u25B6</button>' +
                         '<button class="anim-btn" onclick="animStep(1)" title="Next level">\u25B6\u25B6</button>' +
-                        '<span class="anim-speed" id="anim-speed-label">0.8s / level</span>' +
+                        '<span class="anim-speed" id="anim-speed-label" title="Animation speed">0.8s / level</span>' +
                     '</div>' +
                 '</div>' +
                 '<button class="generate-btn" id="ep-btn" onclick="generateCustomPlot()">Generate Plan View</button>' +
                 // Focus mode shows Variable + Height + the button; everything else
                 // (contours, colormap, range, coverage, coordinate) sits behind this.
                 '<button type="button" class="explorer-more-btn" id="ep-more-btn" onclick="toggleExplorerMore()" aria-expanded="false">More options \u25BE</button>' +
-                '<div class="explorer-row explorer-row-more" id="az-controls" style="margin-top:6px;"><label>Min. Coverage Threshold</label>' +
+                '<div class="explorer-row explorer-row-more ep-r-cov" id="az-controls" style="margin-top:6px;"><label>Min. Coverage Threshold</label>' +
                     '<div style="display:flex;align-items:center;gap:6px;">' +
                         '<input type="range" id="az-coverage" min="0" max="100" step="5" value="50" class="az-cov-slider" oninput="document.getElementById(\'az-cov-val\').textContent = this.value+\'%\'">' +
                         '<span style="font-size:11px;font-weight:600;color:var(--cyan);min-width:32px;font-family:\'JetBrains Mono\',monospace;" id="az-cov-val">50%</span>' +
                     '</div>' +
-                '</div>' +
-                '<div class="explorer-row explorer-row-more" style="margin-top:6px;"><label>Azim. Mean Coordinate</label>' +
-                    '<select class="explorer-select" id="az-coord-mode" style="font-size:11px;">' +
-                        '<option value="standard">Standard (km)</option>' +
-                        '<option value="hybrid">R\u2095 Hybrid (Fischer et al. 2025)</option>' +
-                        '<option value="anomaly">Z* Anomaly (Fischer et al. 2025)</option>' +
-                    '</select>' +
                 '</div>' +
             '</div>' +
         '</div>';
@@ -1096,9 +1104,13 @@ function openSidePanel(caseData, fromQuickSelect) {
             var fallback = 'https://raw.githubusercontent.com/MichaelFischerWx/michaelfischerwx.github.io/main/TC-RADAR/images/v3m/' + imgPrefix + padded + '.png';
             if (this.src.indexOf('raw.githubusercontent') === -1) {
                 this.src = fallback;
+                _quicklookSync();
             } else {
                 // Both failed, hide thumbnail
                 document.getElementById('thumbnail-wrap').style.display = 'none';
+                var qb = document.getElementById('quicklook-btn');
+                if (qb) { qb.disabled = true; qb.title = 'No quick-look image for this analysis'; }
+                _quicklookSync();
             }
         };
         thumbWrap.onclick = function() {
@@ -1106,9 +1118,11 @@ function openSidePanel(caseData, fromQuickSelect) {
             openImageModal(src, caseData.storm_name + ' \u2013 ' + caseData.datetime);
         };
     }
+    _quicklookSync();
 
     // Update variable optgroups for current data type
     _updateExplorerOriginalGroups();
+    if (_prevView) _applyControlState(_prevView);
 
     document.getElementById('side-panel').classList.add('open');
 
@@ -1143,13 +1157,13 @@ function openSidePanel(caseData, fromQuickSelect) {
     var _nxSel = document.getElementById('nexrad-site-select');
     if (_nxSel) _nxSel.innerHTML = '<option value="">Enable 88D to search\u2026</option>';
 
-    // Focus mode: the controls (variable, level, Generate) belong right under
-    // the plot, not below the layer/analysis/evolution rows where they fell
-    // off the bottom of a desktop viewport. Move the node up in the DOM.
+    // Focus mode: the map is the plan view, so the controls that drive it
+    // (variable, level, colours, Update) lead the panel, above the charts
+    // and the layer/analysis rows. Move the node up in the DOM.
     if (_focusMode) {
         var _ctrls = document.querySelector('#side-panel .explorer-controls');
         var _disp = document.getElementById('display-area');
-        if (_ctrls && _disp && _disp.nextElementSibling !== _ctrls) _disp.insertAdjacentElement('afterend', _ctrls);
+        if (_ctrls && _disp && _disp.previousElementSibling !== _ctrls) _disp.insertAdjacentElement('beforebegin', _ctrls);
         try { if (_ctrls && localStorage.getItem('tcr_explorer_more') === '1') { _ctrls.classList.add('show-more'); var _mb = document.getElementById('ep-more-btn'); if (_mb) { _mb.textContent = 'Fewer options \u25B4'; _mb.setAttribute('aria-expanded', 'true'); } } } catch (e) {}
         // And render the default plan view without a click: in focus mode the
         // map is the plan view, so an empty map on open is a dead end.
@@ -1157,12 +1171,102 @@ function openSidePanel(caseData, fromQuickSelect) {
                 if (currentCaseIndex !== caseData.case_index || !_focusMode) return;
                 var pc = document.getElementById('plotly-chart');
                 if (pc && pc.data) return;   // deep link or user already generated one
+                var eb = document.getElementById('ep-btn');
+                if (eb && eb.disabled) return;   // one is already on its way (case stepping)
                 generateCustomPlot();
             }, 80);
     }
 
     setTimeout(function() { map.invalidateSize(); }, 360);
 }
+
+// ── Quick-look thumbnail (pre-generated reflectivity + 2-km V_H PNG) ──
+// A generated plan view replaces it; the Quick-look pill brings it back and,
+// while on, keeps it up across plan-view renders and case stepping. In focus
+// mode on a wide screen it floats on the map (#ql-map-card) so the panel
+// still opens on the plots and controls; on phones it stays in the panel.
+var _quicklookOn = false;
+var _qlMin = false;   // map card collapsed to its title bar (sticky, per browser)
+try { _qlMin = localStorage.getItem('tcr_ql_min') === '1'; } catch (e) {}
+var _QL_MAP_MQ = window.matchMedia ? window.matchMedia('(min-width: 1025px)') : null;
+function _quicklookOnMap() { return _focusMode && (!_QL_MAP_MQ || _QL_MAP_MQ.matches); }
+function _thumbHide() {
+    if (_quicklookOn && !_quicklookOnMap()) return;
+    var w = document.getElementById('thumbnail-wrap');
+    if (w) w.style.display = 'none';
+    _quicklookSync();
+}
+function _qlMapCard() {
+    var card = document.getElementById('ql-map-card');
+    if (card) return card;
+    var host = document.getElementById('map-container');
+    if (!host) return null;
+    card = document.createElement('div');
+    card.id = 'ql-map-card';
+    card.hidden = true;
+    card.innerHTML =
+        '<div class="ql-map-head"><span class="ql-map-title" onclick="qlMapMinimize()">Quick-look</span>' +
+        '<button type="button" class="ql-map-x ql-map-min" onclick="qlMapMinimize()"></button>' +
+        '<button type="button" class="ql-map-x" onclick="toggleQuicklook()" title="Close quick-look" aria-label="Close quick-look">\u2715</button></div>' +
+        '<img alt="Quick-look plan view" title="Click to enlarge">';
+    card.querySelector('img').onclick = function() {
+        var t = card.querySelector('.ql-map-title');
+        openImageModal(this.src, t ? t.textContent : 'Quick-look');
+    };
+    host.appendChild(card);
+    return card;
+}
+function _quicklookSync() {
+    var w = document.getElementById('thumbnail-wrap');
+    var b = document.getElementById('quicklook-btn');
+    var img = document.getElementById('thumb-img');
+    var avail = !!img && !(b && b.disabled);
+    var onMap = _quicklookOnMap();
+    var showCard = onMap && _quicklookOn && avail;
+    if (onMap && w) w.style.display = 'none';   // never both
+    var card = showCard ? _qlMapCard() : document.getElementById('ql-map-card');
+    if (card) {
+        if (showCard) {
+            var im = card.querySelector('img');
+            if (im.getAttribute('src') !== img.src) im.src = img.src;
+            var cd = currentCaseData || window._lastCaseData;
+            card.querySelector('.ql-map-title').textContent = 'Quick-look' +
+                (cd ? ' \u00b7 ' + cd.storm_name + ' ' + cd.datetime : '');
+        }
+        card.hidden = !showCard;
+        card.classList.toggle('is-min', _qlMin);
+        var mb = card.querySelector('.ql-map-min');
+        mb.textContent = _qlMin ? '\u25A2' : '\u2013';
+        mb.title = _qlMin ? 'Expand quick-look' : 'Minimize quick-look';
+        mb.setAttribute('aria-label', mb.title);
+        mb.setAttribute('aria-expanded', _qlMin ? 'false' : 'true');
+    }
+    if (b) b.classList.toggle('active', onMap ? showCard : (!!w && w.style.display !== 'none' && avail));
+}
+function toggleQuicklook() {
+    var w = document.getElementById('thumbnail-wrap');
+    var b = document.getElementById('quicklook-btn');
+    if (!w || (b && b.disabled)) return;
+    var show;
+    if (_quicklookOnMap()) {
+        show = !_quicklookOn;
+    } else {
+        show = w.style.display === 'none';
+        w.style.display = show ? '' : 'none';
+    }
+    _quicklookOn = show;
+    _quicklookSync();
+    _ga('toggle_quicklook', { on: show, case_index: currentCaseIndex, on_map: _quicklookOnMap() });
+    if (show && !_quicklookOnMap()) w.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+window.toggleQuicklook = toggleQuicklook;
+function qlMapMinimize() {
+    _qlMin = !_qlMin;
+    try { localStorage.setItem('tcr_ql_min', _qlMin ? '1' : '0'); } catch (e) {}
+    _quicklookSync();
+}
+window.qlMapMinimize = qlMapMinimize;
+if (_QL_MAP_MQ && _QL_MAP_MQ.addEventListener) _QL_MAP_MQ.addEventListener('change', function() { _quicklookSync(); });
 
 function closeSidePanel() {
     document.getElementById('side-panel').classList.remove('open');
@@ -2784,22 +2888,25 @@ function _captureViewState() {
     return state;
 }
 
-// Restore view state after panel rebuild
-function _restoreViewState(state) {
-    if (!state) return;
-    // Restore explore-data controls
-    var epVar = document.getElementById('ep-var');
-    if (epVar && state.variable) epVar.value = state.variable;
+// Put the explore-data controls back after a panel rebuild. A select only
+// takes a value it still offers (the Original group differs swath vs merge).
+function _applyControlState(state) {
+    function setSel(id, v) {
+        var el = document.getElementById(id);
+        if (!el || !v) return;
+        for (var i = 0; i < el.options.length; i++) {
+            if (el.options[i].value === v) { el.value = v; return; }
+        }
+    }
+    setSel('ep-var', state.variable);
     var epLevel = document.getElementById('ep-level');
     var epLevelVal = document.getElementById('ep-level-val');
     if (epLevel && state.level) {
         epLevel.value = state.level;
         if (epLevelVal) epLevelVal.textContent = parseFloat(state.level).toFixed(1) + ' km';
     }
-    var epOverlay = document.getElementById('ep-overlay');
-    if (epOverlay && state.overlay) epOverlay.value = state.overlay;
-    var epCmap = document.getElementById('ep-cmap');
-    if (epCmap && state.cmap) epCmap.value = state.cmap;
+    setSel('ep-overlay', state.overlay);
+    setSel('ep-cmap', state.cmap);
     var epVmin = document.getElementById('ep-vmin');
     var epVmax = document.getElementById('ep-vmax');
     if (epVmin && state.vmin) epVmin.value = state.vmin;
@@ -2812,8 +2919,13 @@ function _restoreViewState(state) {
         azCov.value = state.coverage;
         if (azCovVal) azCovVal.textContent = state.coverage + '%';
     }
-    var azCoord = document.getElementById('az-coord-mode');
-    if (azCoord && state.coordMode) azCoord.value = state.coordMode;
+    setSel('az-coord-mode', state.coordMode);
+}
+
+// Restore view state after panel rebuild
+function _restoreViewState(state) {
+    if (!state) return;
+    _applyControlState(state);
     // Restore wind barbs / tilt state (globals persist, but buttons are rebuilt)
     _windBarbsEnabled = state.barbsEnabled;
     _tiltProfileEnabled = state.tiltEnabled;
@@ -4302,8 +4414,7 @@ function generateCustomPlot(callback) {
     var csResult = document.getElementById('cs-result'); if (csResult) csResult.innerHTML = '';
     var csStatus = document.getElementById('cs-status'); if (csStatus) csStatus.textContent = '';
     if (!_animPlaying) {
-        var thumbWrap = document.getElementById('thumbnail-wrap');
-        if (thumbWrap) thumbWrap.style.display = 'none';
+        _thumbHide();
         resultDiv.innerHTML = _hurricaneLoadingHTML('Fetching data from API\u2026 (may take ~30s if service is waking up)', true);
         var panelInner = document.getElementById('side-panel-inner');
         if (panelInner) panelInner.scrollTop = 0;
@@ -4748,9 +4859,8 @@ function buildTCCenterMarkerTrace(lat, lon, extra) {
 }
 
 function renderPlotFromJSON(json, resultDiv) {
-    // Hide thumbnail, show plot in its place
-    var thumbWrap = document.getElementById('thumbnail-wrap');
-    if (thumbWrap) thumbWrap.style.display = 'none';
+    // Hide thumbnail (unless pinned by the Quick-look pill), show plot in its place
+    _thumbHide();
 
     // Build dual-panel HTML: plan view (left) + azimuthal mean placeholder (right)
     resultDiv.innerHTML =
@@ -5226,6 +5336,13 @@ function _renderDualAzimuthalMean(json) {
 
 // ── Azimuthal Mean (dispatcher for coordinate mode selector) ──
 // Routes to the correct fetch function based on the az-coord-mode dropdown
+// Picking a coordinate is a request for that azimuthal mean: run it.
+function _azCoordChanged() {
+    var btn = document.getElementById('az-btn');
+    if (currentCaseIndex !== null && btn && !btn.disabled) dispatchAzimuthalMean();
+}
+window._azCoordChanged = _azCoordChanged;
+
 function dispatchAzimuthalMean() {
     _ga('azimuthal_mean', { case_index: currentCaseIndex, data_type: _activeDataType });
     var mode = (document.getElementById('az-coord-mode') || {}).value || 'standard';
@@ -5257,7 +5374,7 @@ function fetchAzimuthalMean() {
         .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
         .then(function(json) { _lastAzJson = json; _lastHybridAzJson = null; _lastAnomalyAzJson = null; _lastVPScatterJson = null; renderAzimuthalMeanInto('az-result', json, false); openPlotModal(); })
         .catch(function(err) { resultDiv.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + (err.name === 'AbortError' ? 'Request timed out (90s).' : err.message) + '</div>'; })
-        .finally(function() { clearTimeout(timeout); btn.disabled = false; btn.textContent = '\u27F3 Azimuthal Mean'; });
+        .finally(function() { clearTimeout(timeout); btn.disabled = false; btn.textContent = '\u27F3 Azim. Mean'; });
 }
 
 
@@ -5337,7 +5454,7 @@ function fetchVPScatter(colorBy) {
     _loadVPScatter(colorBy)
         .then(function(json) { _lastVPScatterJson = json; _lastAzJson = null; _lastHybridAzJson = null; _lastAnomalyAzJson = null; renderVPScatterInto('az-result', json, false); openPlotModal(); })
         .catch(function(err) { resultDiv.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + err.message + '</div>'; })
-        .finally(function() { if (btn) { btn.disabled = false; btn.textContent = '\u2B24 VP Scatter'; } });
+        .finally(function() { if (btn) { btn.disabled = false; btn.textContent = '\u2234 VP Scatter'; } });
 }
 
 
@@ -5379,8 +5496,7 @@ function renderAzimuthalMeanInto(targetId, json, fullsize) {
     if (azShearInset.shapes.length) layout.shapes = (layout.shapes || []).concat(azShearInset.shapes);
 
     if (!fullsize) {
-        var thumbWrap = document.getElementById('thumbnail-wrap');
-        if (thumbWrap) thumbWrap.style.display = 'none';
+        _thumbHide();
         el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_AzMean') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'">\u26F6</button></div><div style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover \u00b7 zoom \u00b7 pan \u00b7 \u26F6 expand</div>';
         tcrNewPlot('az-chart', [heatmap].concat(azOverlayTraces).concat(azMaxTraces), layout, { responsive:true,displayModeBar:false,displaylogo:false });
         var panelInner = document.getElementById('side-panel-inner');
@@ -5483,8 +5599,7 @@ function renderHybridAzimuthalMeanInto(targetId, json, fullsize) {
     };
 
     if (!fullsize) {
-        var thumbWrap = document.getElementById('thumbnail-wrap');
-        if (thumbWrap) thumbWrap.style.display = 'none';
+        _thumbHide();
         el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_HybridAzMean') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>' +
             '<div style="text-align:right;margin-top:3px;"><a href="https://doi.org/10.1175/MWR-D-24-0118.1" target="_blank" rel="noopener" ' +
             'style="font-size:9px;color:rgba(180,195,220,0.5);text-decoration:none;" ' +
@@ -5581,8 +5696,7 @@ function renderAnomalyAzimuthalMeanInto(targetId, json, fullsize) {
     };
 
     if (!fullsize) {
-        var thumbWrap = document.getElementById('thumbnail-wrap');
-        if (thumbWrap) thumbWrap.style.display = 'none';
+        _thumbHide();
         el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_Anomaly') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>' +
             '<div style="text-align:right;margin-top:3px;"><a href="https://doi.org/10.1175/MWR-D-24-0118.1" target="_blank" rel="noopener" ' +
             'style="font-size:9px;color:rgba(180,195,220,0.5);text-decoration:none;" ' +
@@ -5843,8 +5957,7 @@ function renderVPScatterInto(targetId, json, fullsize) {
     };
 
     if (!fullsize) {
-        var thumbWrap = document.getElementById('thumbnail-wrap');
-        if (thumbWrap) thumbWrap.style.display = 'none';
+        _thumbHide();
         el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:360px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'VP_Scatter') + _archExportBtnHTML('exportVPScatterCSV','exportVPScatterJSON','vp-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>' +
             '<div style="display:flex;gap:6px;justify-content:center;align-items:center;margin-top:6px;">' +
             '<button class="cs-btn" onclick="fetchVPScatter(\'dvmax_12h\')" style="font-size:10px;padding:2px 8px;">12-h \u0394Vmax</button>' +
@@ -5989,8 +6102,7 @@ function renderSingleCFADInto(targetId, json, fullsize) {
 
     var el = document.getElementById(targetId);
     if (!fullsize && el) {
-        var thumbWrap = document.getElementById('thumbnail-wrap');
-        if (thumbWrap) thumbWrap.style.display = 'none';
+        _thumbHide();
         el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:360px;border-radius:6px;overflow:hidden;"></div>' +
             _archExportBtnHTML('exportCFADCSV','exportCFADJSON','cfad-exp-drop',40) +
             '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>';
@@ -6524,8 +6636,7 @@ function renderQuadrantMeansInto(targetId, json, fullsize) {
     layout.annotations = annotations;
 
     if (!fullsize) {
-        var thumbWrap = document.getElementById('thumbnail-wrap');
-        if (thumbWrap) thumbWrap.style.display = 'none';
+        _thumbHide();
         el.innerHTML = '<div style="position:relative;"><div id="sq-chart" style="width:100%;height:400px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('sq-chart', 'TDR_Profile') + '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'">\u26F6</button></div><div style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover \u00b7 zoom \u00b7 pan \u00b7 \u26F6 expand</div>';
         tcrNewPlot('sq-chart', traces, layout, { responsive:true, displayModeBar:false, displaylogo:false });
         var panelInner = document.getElementById('side-panel-inner');
@@ -16194,8 +16305,7 @@ function _createStandaloneMWPlanView() {
         // Create it now so we have a plotly-chart div to render into.
         var resultDiv = document.getElementById('explorer-result');
         if (!resultDiv) return;
-        var thumbWrap = document.getElementById('thumbnail-wrap');
-        if (thumbWrap) thumbWrap.style.display = 'none';
+        _thumbHide();
         resultDiv.innerHTML =
             '<div class="dual-panel-wrap" id="dual-panel-wrap">' +
                 '<div class="dual-pane" id="dual-pane-left">' +

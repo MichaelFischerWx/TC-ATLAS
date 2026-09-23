@@ -375,7 +375,7 @@ body { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
    as a wrapped grid instead of a fixed 280-px rail. */
 #map-wrapper.focus-mode #map-container { flex: 1 1 58%; max-width: none; min-width: 0; }
 #map-wrapper.focus-mode #side-panel.open { width: 42%; min-width: 540px; flex: 0 0 auto; }
-#map-wrapper.focus-mode #side-panel-inner { width: 100%; }
+#map-wrapper.focus-mode #side-panel-inner { width: 100%; box-sizing: border-box; }
 #side-panel.focus-panel .explorer-layout { flex-direction: column; gap: 10px; }
 #side-panel.focus-panel .explorer-controls {
     width: 100%; position: static; max-height: none; overflow: visible;
@@ -2777,3 +2777,93 @@ body.basemap-satellite .tdr-cb-row input[type=number] { background: rgba(255,255
 body.basemap-satellite .tdr-cb-foot { color: #94a3b8; }
 body.basemap-satellite .tdr-cb-grad { border-color: rgba(255,255,255,0.2); }
 body.basemap-satellite .tdr-cb-reset { color: #93c5fd; }
+
+/* Quick-look thumbnail floating on the focus-mode map (tc_radar_app.js
+   _quicklookSync). Top-right, under the Satellite/Map switch, so the side
+   panel keeps its plots and controls at the top. */
+#ql-map-card {
+    position: absolute; top: 52px; right: 10px; z-index: 1001;
+    width: min(44%, 460px);
+    background: var(--navy); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.28); overflow: hidden;
+}
+#ql-map-card[hidden] { display: none; }
+#ql-map-card .ql-map-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    padding: 3px 4px 3px 9px; font-size: 10.5px; font-weight: 600; color: var(--text);
+    border-bottom: 1px solid var(--border);
+}
+#ql-map-card .ql-map-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ql-map-card .ql-map-x {
+    border: none; background: transparent; color: var(--slate); cursor: pointer;
+    font-size: 12px; line-height: 1; padding: 3px 6px; border-radius: 4px;
+}
+#ql-map-card .ql-map-x:hover { background: rgba(127,127,127,0.18); color: var(--text); }
+#ql-map-card img { display: block; width: 100%; height: auto; cursor: zoom-in; background: #fff; }
+#ql-map-card .ql-map-title { flex: 1; cursor: pointer; }
+#ql-map-card .ql-map-min { margin-left: auto; font-size: 13px; }
+#ql-map-card.is-min { width: auto; max-width: min(44%, 460px); }
+#ql-map-card.is-min img { display: none; }
+#ql-map-card.is-min .ql-map-head { border-bottom: none; }
+
+/* ── Focus-mode panel tidy-up (2026-09-23) ─────────────────────────────
+   Explore Data leads the panel (moved above #display-area in JS) as an
+   aligned grid: Variable | Height | Update, then Colormap | Range | More,
+   then the More-options row. Labels share one baseline row. */
+#side-panel.focus-panel .explorer-controls {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.75fr) minmax(0, 0.95fr);
+    grid-template-areas:
+        "title   title  title"
+        "var     level  go"
+        "cmap    range  more"
+        "contour cov    cov";
+    align-items: start; gap: 4px 16px;
+    border-top: none; padding-top: 2px;
+    border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 4px;
+}
+#side-panel.focus-panel .explorer-controls .explorer-title { grid-area: title; margin-bottom: 4px; }
+#side-panel.focus-panel .ep-r-var     { grid-area: var; }
+#side-panel.focus-panel .ep-r-level   { grid-area: level; }
+#side-panel.focus-panel .ep-r-cmap    { grid-area: cmap; }
+#side-panel.focus-panel .ep-r-range   { grid-area: range; }
+#side-panel.focus-panel .ep-r-contour { grid-area: contour; }
+#side-panel.focus-panel .ep-r-cov     { grid-area: cov; margin-top: 0 !important; }
+#side-panel.focus-panel .explorer-controls .explorer-row { margin-bottom: 4px; }
+#side-panel.focus-panel .explorer-controls .explorer-row > label { line-height: 14px; }
+#side-panel.focus-panel .explorer-controls .generate-btn {
+    grid-area: go; align-self: start; margin: 17px 0 0; height: 30px; padding: 0;
+}
+#side-panel.focus-panel .explorer-more-btn { grid-area: more; justify-self: end; align-self: end; margin: 0 0 6px; }
+/* Height: slider, value and step/play buttons on one line */
+#side-panel.focus-panel .ep-r-level { flex-direction: row; flex-wrap: wrap; align-items: center; column-gap: 6px; }
+#side-panel.focus-panel .ep-r-level > label { flex: 0 0 100%; }
+#side-panel.focus-panel .ep-r-level .explorer-level-row { flex: 1 1 80px; min-width: 0; min-height: 30px; gap: 6px; }
+#side-panel.focus-panel .ep-r-level .explorer-level-value { min-width: 40px; flex-shrink: 0; }
+#side-panel.focus-panel .ep-r-level input[type="range"] { min-width: 0; }
+#side-panel.focus-panel .ep-r-level .anim-btn { width: 26px; }
+#side-panel.focus-panel .ep-r-level .anim-controls { margin-top: 0; }
+#side-panel.focus-panel .ep-r-level .anim-speed { display: none; }
+#side-panel.focus-panel .ep-r-range input[type="number"] { flex: 1 1 0; min-width: 0; width: auto !important; height: 28px; box-sizing: border-box; }
+#side-panel.focus-panel .ep-r-range > div { height: 30px; }
+#side-panel.focus-panel .explorer-controls .explorer-select { height: 30px; box-sizing: border-box; }
+@media (max-width: 768px) {
+    #side-panel.focus-panel .explorer-controls {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        grid-template-areas: "title title" "var var" "level level" "cmap range" "go go" "more more" "contour cov";
+    }
+    #side-panel.focus-panel .explorer-controls .generate-btn { margin-top: 2px; }
+}
+
+/* Analysis / Storm Evolution: even grid, one line per button */
+.action-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.action-section-head .action-section-label { margin-bottom: 0; }
+.az-coord-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; color: var(--slate); white-space: nowrap; }
+.az-coord-inline select {
+    font: 500 11px/1.2 'DM Sans', sans-serif; color: var(--text); background: var(--surface-raised);
+    border: 1px solid var(--border-light); border-radius: 5px; padding: 2px 4px; max-width: 190px;
+}
+#side-panel .display-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+#side-panel .display-actions .cs-btn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 7px 6px; }
+
+/* Close × scrolls with the panel instead of floating over the charts */
+#side-panel-inner { position: relative; box-sizing: border-box; }
