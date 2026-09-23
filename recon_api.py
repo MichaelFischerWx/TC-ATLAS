@@ -67,6 +67,23 @@ _BULLETIN_CACHE_MAX = 4000
 # it's cheap) while still collapsing bursts of concurrent polls onto one build.
 _blob_cache: dict = {}
 _BLOB_TTL = 50
+# Single-flight per cache key: a live build takes ~5-16 s, and without this
+# every request for the same storm that lands mid-build starts its own. While
+# one request rebuilds, the others get the previous blob if it is younger than
+# _BLOB_STALE_MAX (Cloudflare already serves up to ~105 s old via s-maxage+SWR).
+_BLOB_STALE_MAX = 180
+_blob_locks: dict = {}
+_blob_locks_guard = threading.Lock()
+
+
+def _blob_lock(key: str) -> threading.Lock:
+    with _blob_locks_guard:
+        lk = _blob_locks.get(key)
+        if lk is None:
+            if len(_blob_locks) > 400:
+                _blob_locks.clear()   # held locks stay referenced by their holders
+            lk = _blob_locks[key] = threading.Lock()
+        return lk
 
 # Directory-listing freshness for the recon endpoint. The shared archive default
 # is 1 h (immutable data). We don't need to re-list NHC's big bulletin directories
@@ -2001,11 +2018,21 @@ def recon_realtime(
     if hit and (now - hit[1]) < _BLOB_TTL:
         return JSONResponse(hit[0], headers={"Cache-Control": cc})
 
-    blob = _build_blob(atcf_id, hours, sim_now, name=name, storm_lat=lat, storm_lon=lon,
-                       mission_tail=tail, live_feed=not replay, fl_res=fl_res)
-    _blob_cache[cache_key] = (blob, now)
-    if len(_blob_cache) > 200:
-        _blob_cache.pop(next(iter(_blob_cache)))
+    lock = _blob_lock(cache_key)
+    have_stale = hit is not None and (now - hit[1]) < _BLOB_STALE_MAX
+    if not lock.acquire(blocking=not have_stale):
+        return JSONResponse(hit[0], headers={"Cache-Control": cc})   # build in flight
+    try:
+        hit = _blob_cache.get(cache_key)
+        if hit and (time.time() - hit[1]) < _BLOB_TTL:
+            return JSONResponse(hit[0], headers={"Cache-Control": cc})   # built while we waited
+        blob = _build_blob(atcf_id, hours, sim_now, name=name, storm_lat=lat, storm_lon=lon,
+                           mission_tail=tail, live_feed=not replay, fl_res=fl_res)
+        _blob_cache[cache_key] = (blob, now)
+        if len(_blob_cache) > 200:
+            _blob_cache.pop(next(iter(_blob_cache)))
+    finally:
+        lock.release()
     return JSONResponse(blob, headers={"Cache-Control": cc})
 
 
