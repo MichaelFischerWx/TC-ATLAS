@@ -255,6 +255,7 @@ MERGIR_START_YEAR = 1998  # Extended back from Feb 2000 in June 2025
 # No authentication required (public NCEI data)
 GRIDSAT_THREDDS = "https://www.ncei.noaa.gov/thredds/dodsC/cdr/gridsat"
 GRIDSAT_DIRECT = "https://www.ncei.noaa.gov/data/geostationary-ir-channel-brightness-temperature-gridsat-b1/access"
+GRIDSAT_AWS = "https://noaa-cdr-gridsat-b1-pds.s3.amazonaws.com/data"  # NOAA Open Data mirror
 GRIDSAT_START_YEAR = 1980
 GRIDSAT_END_YEAR = 2024  # Updates paused since March 2024
 GRIDSAT_HALF_DOMAIN = 10.0  # 10° each direction = 20°×20° box — fills Leaflet panel
@@ -1714,6 +1715,14 @@ def _gridsat_direct_url(dt: datetime) -> str:
     )
 
 
+def _gridsat_aws_url(dt: datetime) -> str:
+    """Same file on the NOAA Open Data (AWS) mirror."""
+    return _gridsat_direct_url(dt).replace(GRIDSAT_DIRECT, GRIDSAT_AWS)
+
+
+_gridsat_dap_down_until = 0.0   # OPeNDAP circuit breaker (see _load_gridsat_subset_inner)
+
+
 def _load_gridsat_subset(target_dt: datetime, center_lat: float, center_lon: float):
     """
     Fetch a single GridSat-B1 Tb snapshot, cropped to a
@@ -1765,7 +1774,104 @@ def _load_gridsat_subset_inner(target_dt, center_lat, center_lon, requests_mod, 
     lat_min = max(lat_min, -70.0)
     lat_max = min(lat_max, 70.0)
 
-    # Strategy 1: OPeNDAP via THREDDS (efficient server-side subsetting)
+    # Strategy 1: whole-file download + local subset. AWS Open Data mirror
+    # first (~30 MB in ~3 s from GCP, and it stayed up through NCEI's
+    # 2026-09-23 THREDDS outage), then NCEI's own HTTPS copy. Each file is one
+    # HDF5 chunk per variable, so a ranged read would pull the same ~28 MB.
+    ncei = _get_ncei_session()
+    for direct_url in (_gridsat_aws_url(file_dt), direct_url):
+        tmp = None
+        try:
+            logger.info(f"GridSat: downloading full file {direct_url[:100]}...")
+            resp = ncei.get(direct_url, timeout=120, stream=True)
+            if resp.status_code != 200:
+                logger.info(f"GridSat: HTTP {resp.status_code} for direct download")
+                resp.close()
+                continue
+
+            # Stream to disk instead of buffering entire file in memory
+            tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
+            file_size = 0
+            for chunk in resp.iter_content(chunk_size=256 * 1024):
+                tmp.write(chunk)
+                file_size += len(chunk)
+            tmp.close()
+            resp.close()
+            logger.info(f"GridSat: streamed {file_size / 1024 / 1024:.1f} MB to disk")
+
+            ds = xr.open_dataset(tmp.name, engine="h5netcdf",
+                                 decode_times=False)
+
+            var_name = None
+            for candidate in ["irwin_cdr", "irwin", "Tb", "IRWIN"]:
+                if candidate in ds:
+                    var_name = candidate
+                    break
+            if var_name is None:
+                for v in ds.data_vars:
+                    if ds[v].ndim >= 2:
+                        var_name = v
+                        break
+
+            if var_name is None:
+                ds.close()
+                os.unlink(tmp.name)
+                continue
+
+            da = ds[var_name]
+            if "time" in da.dims:
+                da = da.isel(time=0)
+
+            # Wrap-aware subset — the downloaded file spans the full grid, so both
+            # antimeridian pieces are always available here
+            tb, actual_lats, actual_lons = _sel_latlon_wrap(
+                da, lat_min, lat_max, lon_min, lon_max, xr)
+            ds.close()
+            os.unlink(tmp.name)
+            tmp = None
+
+            if tb is not None and tb.size > 0 and len(actual_lats) > 1 and len(actual_lons) > 1:
+                actual_bounds = {
+                    "south": float(np.min(actual_lats)),
+                    "north": float(np.max(actual_lats)),
+                    "west": float(np.min(actual_lons)),
+                    "east": float(np.max(actual_lons)),
+                }
+
+                # Validate data completeness
+                valid_frac = np.count_nonzero(np.isfinite(tb) & (tb > 0)) / tb.size
+                if valid_frac < 0.3:
+                    logger.warning(
+                        f"GridSat: direct download data too sparse ({valid_frac:.0%} valid)"
+                    )
+                    continue
+
+                # Flip to north-at-top if needed
+                if len(actual_lats) >= 2 and actual_lats[-1] > actual_lats[0]:
+                    tb = tb[::-1]
+                # Use requested bounds for animation consistency
+                requested_bounds = {
+                    "south": center_lat - GRIDSAT_HALF_DOMAIN,
+                    "north": center_lat + GRIDSAT_HALF_DOMAIN,
+                    "west": center_lon - GRIDSAT_HALF_DOMAIN,
+                    "east": center_lon + GRIDSAT_HALF_DOMAIN,
+                }
+                return tb, requested_bounds
+
+        except Exception as e:
+            logger.warning(f"GridSat: direct download failed: {e}")
+            if tmp:
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
+
+    # Strategy 2: OPeNDAP via THREDDS (server-side subset). Last resort: when
+    # NCEI's DAP server is down each open burns ~45-60 s before erroring, so a
+    # failure trips a 10-min breaker and later frames skip straight past it.
+    global _gridsat_dap_down_until
+    if _time.time() < _gridsat_dap_down_until:
+        return None, None
     # Requires the netCDF4 C library for DAP protocol support
     try:
         import netCDF4 as _nc4  # noqa: F401 — needed by xarray's netcdf4 engine
@@ -1845,94 +1951,7 @@ def _load_gridsat_subset_inner(target_dt, center_lat, center_lon, requests_mod, 
 
     except Exception as e:
         logger.warning(f"GridSat: OPeNDAP failed: {e}")
-
-    # Strategy 2: Direct HTTPS download + local subsetting
-    tmp = None
-    try:
-        logger.info(f"GridSat: downloading full file {direct_url[:100]}...")
-        ncei = _get_ncei_session()
-        resp = ncei.get(direct_url, timeout=120, stream=True)
-        if resp.status_code != 200:
-            logger.info(f"GridSat: HTTP {resp.status_code} for direct download")
-            resp.close()
-            return None, None
-
-        # Stream to disk instead of buffering entire file in memory
-        tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
-        file_size = 0
-        for chunk in resp.iter_content(chunk_size=256 * 1024):
-            tmp.write(chunk)
-            file_size += len(chunk)
-        tmp.close()
-        resp.close()
-        logger.info(f"GridSat: streamed {file_size / 1024 / 1024:.1f} MB to disk")
-
-        ds = xr.open_dataset(tmp.name, engine="h5netcdf",
-                             decode_times=False)
-
-        var_name = None
-        for candidate in ["irwin_cdr", "irwin", "Tb", "IRWIN"]:
-            if candidate in ds:
-                var_name = candidate
-                break
-        if var_name is None:
-            for v in ds.data_vars:
-                if ds[v].ndim >= 2:
-                    var_name = v
-                    break
-
-        if var_name is None:
-            ds.close()
-            os.unlink(tmp.name)
-            return None, None
-
-        da = ds[var_name]
-        if "time" in da.dims:
-            da = da.isel(time=0)
-
-        # Wrap-aware subset — the downloaded file spans the full grid, so both
-        # antimeridian pieces are always available here
-        tb, actual_lats, actual_lons = _sel_latlon_wrap(
-            da, lat_min, lat_max, lon_min, lon_max, xr)
-        ds.close()
-        os.unlink(tmp.name)
-        tmp = None
-
-        if tb is not None and tb.size > 0 and len(actual_lats) > 1 and len(actual_lons) > 1:
-            actual_bounds = {
-                "south": float(np.min(actual_lats)),
-                "north": float(np.max(actual_lats)),
-                "west": float(np.min(actual_lons)),
-                "east": float(np.max(actual_lons)),
-            }
-
-            # Validate data completeness
-            valid_frac = np.count_nonzero(np.isfinite(tb) & (tb > 0)) / tb.size
-            if valid_frac < 0.3:
-                logger.warning(
-                    f"GridSat: direct download data too sparse ({valid_frac:.0%} valid)"
-                )
-                return None, None
-
-            # Flip to north-at-top if needed
-            if len(actual_lats) >= 2 and actual_lats[-1] > actual_lats[0]:
-                tb = tb[::-1]
-            # Use requested bounds for animation consistency
-            requested_bounds = {
-                "south": center_lat - GRIDSAT_HALF_DOMAIN,
-                "north": center_lat + GRIDSAT_HALF_DOMAIN,
-                "west": center_lon - GRIDSAT_HALF_DOMAIN,
-                "east": center_lon + GRIDSAT_HALF_DOMAIN,
-            }
-            return tb, requested_bounds
-
-    except Exception as e:
-        logger.warning(f"GridSat: direct download failed: {e}")
-        if tmp:
-            try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
+        _gridsat_dap_down_until = _time.time() + 600
 
     return None, None
 

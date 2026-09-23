@@ -4449,8 +4449,8 @@ def _gcs_storm_cache_put(storms: list, updated_utc: str, count_by_basin: dict):
         print(f"[IR Monitor] shared storm-cache put failed: {ex}")
 
 
-def _adopt_shared_storm_cache() -> bool:
-    """Adopt a still-fresh shared poll result into this instance's memory.
+def _adopt_shared_storm_cache(max_age: float = _STORM_CACHE_TTL) -> bool:
+    """Adopt a shared poll result no older than max_age into this instance's memory.
 
     True  → adopted; caller must NOT poll.
     False → nothing usable; caller polls as before.
@@ -4465,9 +4465,9 @@ def _adopt_shared_storm_cache() -> bool:
         return False
     age = time.time() - polled_at
     # Reject the future (clock skew) and anything already expired.
-    if age < 0 or age > _STORM_CACHE_TTL:
+    if age < 0 or age > max_age:
         print(f"[IR Monitor] shared storm-cache: age {age:.0f}s outside "
-              f"(0, {_STORM_CACHE_TTL}] — polling")
+              f"(0, {max_age:.0f}] — polling")
         return False
     storms = shared.get("storms")
     if not isinstance(storms, list):
@@ -4508,9 +4508,14 @@ def _refresh_storm_cache(max_age: float, wait: bool) -> None:
         if time.time() - _last_poll_time <= max_age:
             return   # a refresh finished while we waited for the lock
         # Another instance may have already done this work — adopting its
-        # result costs one small GCS read instead of a full re-poll.
+        # result costs one small GCS read instead of a full re-poll. A cold
+        # instance (nothing in memory) takes it even if stale, up to
+        # _STORM_STALE_SERVE_MAX: its waiting callers get an answer now, and the
+        # next request does the single-flight refresh while serving that copy.
+        cold = _last_poll_time == 0.0
         try:
-            if _adopt_shared_storm_cache():
+            if _adopt_shared_storm_cache(
+                    _STORM_STALE_SERVE_MAX if cold else _STORM_CACHE_TTL):
                 return
         except Exception:
             traceback.print_exc()   # never let the shared path block a poll
