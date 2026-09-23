@@ -31532,6 +31532,7 @@
             if (td != null) { var es = 6.112 * Math.exp(17.67 * td / (td + 243.5)); q.push(0.622 * es / (p - es)); }
             else q.push(null);
             var ws = lv.wspd_kt[i], wd = lv.wdir[i];
+            if (ws != null && ws > 250) ws = null;      // decode artefact, never a measurement
             if (ws != null && wd != null) {
                 var sp = ws * 0.514444, r = wd * Math.PI / 180;
                 u.push(-sp * Math.sin(r)); v.push(-sp * Math.cos(r));
@@ -31566,7 +31567,7 @@
         var mand = (prof.mandatory || []).slice().reverse();
         var sigW = (prof.sig_wind || []).slice().reverse();
         function windCell(wdir, wspd) {
-            if (wspd == null) return '<td>–</td>';
+            if (wspd == null || wspd > 250) return '<td>–</td>';
             return '<td style="border-left:4px solid ' + _reconWindColor(wspd) + ';font-weight:600;">' +
                 (wdir != null ? wdir + '° / ' : '') + wspd + ' kt</td>';
         }

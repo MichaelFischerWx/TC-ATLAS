@@ -515,6 +515,12 @@ def _td_temp(grp: str):
     return round(temp, 1), td
 
 
+# Physical ceiling for any sonde wind we will publish (kt). The strongest
+# dropsonde wind on record is ~215 kt; anything above this is a decode
+# artefact (a section marker read as ddff, a garbled BUFR level), never data.
+_SONDE_MAX_KT = 250.0
+
+
 def _td_wind(grp: str):
     """ddff group → (dir_deg, speed_kt). Direction is to the nearest 5°; a units
     digit of 1-4 means that many hundreds of knots are folded out of the speed
@@ -526,6 +532,8 @@ def _td_wind(grp: str):
     if extra:                  # speed ≥ 100 kt: hundreds encoded into direction
         ff += extra * 100
         d3 -= extra
+    if ff > _SONDE_MAX_KT:     # no dropsonde has ever measured this; a marker/garbled group
+        return None, None
     return d3 % 360, ff
 
 
@@ -813,7 +821,7 @@ def _hires_decode(raw: bytes):
         lv["t_c"].append(num(T[k] - 273.15) if k < len(T) and ok(T[k]) else None)
         lv["td_c"].append(num(TD[k] - 273.15) if k < len(TD) and ok(TD[k]) else None)
         lv["wdir"].append(int(round(WD[k])) if k < len(WD) and ok(WD[k]) else None)
-        lv["wspd_kt"].append(num(WS[k] * 1.943844) if k < len(WS) and ok(WS[k]) else None)
+        lv["wspd_kt"].append(num(WS[k] * 1.943844) if k < len(WS) and ok(WS[k]) and WS[k] * 1.943844 <= _SONDE_MAX_KT else None)
         lv["dt_s"].append(int(DT[k]) if k < len(DT) and ok(DT[k]) else None)
         lv["lat"].append(round(lat + DLAT[k], 4) if k < len(DLAT) and ok(DLAT[k]) else None)
         lv["lon"].append(round(lon + DLON[k], 4) if k < len(DLON) and ok(DLON[k]) else None)
