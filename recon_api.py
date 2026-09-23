@@ -987,28 +987,53 @@ def _hires_attach(drops: list, since: datetime, until: datetime, track_pts, stor
         for s in hs:
             if s["id"] not in used and s.get("ob") == dob and _tail_key(s["tail"]) == _tail_key(d.get("tail")):
                 used.add(s["id"]); d["hires"] = _hires_summary(s); break
-    for d in drops:
+    # Pass 2 is a GLOBAL nearest-in-time assignment over all (drop, sonde) pairs,
+    # not a per-drop greedy pick: eyewall drops go out ~1-2 min apart (Polo
+    # 2026-09-22: OB 05 at 18:11:54, OB 07 at 18:13:32), so a per-drop scan let
+    # an unnumbered CENTER profile (22 kt) land on the EYEWALL drop released
+    # 98 s earlier while the real owner, further down the list, got nothing --
+    # the modal then plotted a 22-kt sounding above a 129-179 kt table.
+    # A twin must also agree with the TEMP DROP's own MBL wind (62626 line):
+    # the two feeds describe the same instrument, so a factor-of-two
+    # disagreement means a wrong twin, never a real difference.
+    def _consistent(d, s):
+        a, b = d.get("mbl_wind_kt"), s.get("mbl_kt")
+        if a is None or b is None:
+            a, b = d.get("sfc_wind_kt"), s.get("sfc_wind_kt")
+        if a is None or b is None:
+            return True                               # nothing to check against
+        a, b = float(a), float(b)
+        if max(a, b) < 25:
+            return True                               # calm: absolute noise dominates
+        return abs(a - b) <= max(15.0, 0.4 * max(a, b))
+
+    pairs = []
+    for di, d in enumerate(drops):
         if d.get("hires"):
             continue
         dob = _obn(d.get("ob"))
-        best, best_dt = None, None
         for s in hs:
             if s["id"] in used:
                 continue
             if dob is not None and s.get("ob") is not None and s["ob"] != dob:
                 continue                              # both numbered and different: not the same sonde
-            same_tail = _tail_key(s["tail"]) == _tail_key(d.get("tail"))
+            if _tail_key(s["tail"]) != _tail_key(d.get("tail")):
+                continue
             try:
                 dt = abs((datetime.strptime(s["t"], "%Y-%m-%dT%H:%M:%SZ") -
                           datetime.strptime(d["t"], "%Y-%m-%dT%H:%M:%SZ")).total_seconds())
             except Exception:
                 continue
-            if dt <= 300 and _deg_dist(s["lat"], s["lon"], d["lat"], d["lon"]) <= 0.35 and same_tail \
-                    and (best is None or dt < best_dt):
-                best, best_dt = s, dt
-        if best:
-            used.add(best["id"])
-            d["hires"] = _hires_summary(best)
+            if dt <= 300 and _deg_dist(s["lat"], s["lon"], d["lat"], d["lon"]) <= 0.35 \
+                    and _consistent(d, s):
+                pairs.append((dt, di, s["id"], s))
+    pairs.sort(key=lambda x: (x[0], x[1]))
+    taken_drop = set()
+    for dt, di, sid, s in pairs:
+        if sid in used or di in taken_drop:
+            continue
+        used.add(sid); taken_drop.add(di)
+        drops[di]["hires"] = _hires_summary(s)
     for s in hs:
         if s["id"] in used:
             continue

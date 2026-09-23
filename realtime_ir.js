@@ -31544,7 +31544,13 @@
     /** One-line provenance for the modal: which feed the plotted profile came from. */
     function _reconHiresBadge(h) {
         if (!h) return '';
+        // Name the twin: the plot and the tables come from two feeds joined by
+        // OB number/time, and a reader must be able to see they are the same drop.
         var bits = [h.n_levels + ' levels (1-s)'];
+        if (h.ob != null || h.t) {
+            bits.unshift('OB ' + (h.ob != null ? String(h.ob).replace(/^(\d)$/, '0$1') : '?') +
+                (h.t ? ' released ' + String(h.t).slice(11, 19) + 'Z' : ''));
+        }
         if (h.wl150_kt != null) bits.push('WL150 ' + Math.round(h.wl150_kt) + ' kt');
         if (h.mbl_kt != null) bits.push('MBL ' + Math.round(h.mbl_kt) + ' kt');
         if (h.max_wind_kt != null) bits.push('max ' + Math.round(h.max_wind_kt) + ' kt' + (h.max_wind_p_hpa != null ? ' at ' + Math.round(h.max_wind_p_hpa) + ' hPa' : ''));
@@ -31694,6 +31700,15 @@
                 .then(function (r) { return r.ok ? r.json() : null; })
                 .then(function (h) {
                     if (!h || _reconSkewTKey !== key) return;
+                    // Same guard as the server join: the TEMP DROP's own MBL wind
+                    // (62626) and the twin's must agree, or this is not the same
+                    // sonde and the TEMP DROP barbs stay on the plot.
+                    var mA = sonde.mbl_wind_kt, mB = h.mbl_kt;
+                    if (mA != null && mB != null && Math.max(mA, mB) >= 25 &&
+                            Math.abs(mA - mB) > Math.max(15, 0.4 * Math.max(mA, mB))) {
+                        console.warn('[Recon] hi-res twin rejected for ' + key + ': MBL ' + mA + ' vs ' + mB + ' kt');
+                        return;
+                    }
                     var hp = _reconHiresProfiles(h);
                     if (!hp) return;
                     _reconSkewTProfiles = hp;
