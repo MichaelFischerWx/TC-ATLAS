@@ -2867,3 +2867,30 @@ body.basemap-satellite .tdr-cb-reset { color: #93c5fd; }
 
 /* Close × scrolls with the panel instead of floating over the charts */
 #side-panel-inner { position: relative; box-sizing: border-box; }
+
+/* ── Focus mode: map overlay bar (tc_radar_app.js _mapLayerBarSync) ────
+   FL / Sondes / MW / 88D / Barbs pills, moved out of the panel onto the
+   map's top-left beside the zoom buttons. One neutral look + one "on"
+   accent, matching the IR control strip, instead of per-layer tints. */
+#map-layer-bar {
+    position: absolute; top: 10px; left: 52px; z-index: 1000;
+    max-width: calc(100% - 52px - 150px);
+    display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px;
+    padding: 4px 6px 4px 9px; border-radius: 8px;
+    background: rgba(255,255,255,0.92); border: 1px solid rgba(15,22,35,0.15);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+#map-layer-bar .map-layer-lbl { font: 700 9.5px/1 'DM Sans', sans-serif; letter-spacing: 0.06em; text-transform: uppercase; color: var(--slate); }
+#map-layer-bar .map-layer-pills { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+#map-layer-bar .overlay-pill { background: rgba(15,22,35,0.04); border-color: rgba(15,22,35,0.16); color: #334155; padding: 3px 9px; }
+#map-layer-bar .overlay-pill:hover:not(:disabled) { background: rgba(15,22,35,0.10); }
+#map-layer-bar .overlay-pill.active { background: rgba(234,179,8,0.20); border-color: rgba(202,138,4,0.65); color: #6b4a03; }
+body.basemap-satellite #map-layer-bar { background: rgba(15,22,35,0.8); border-color: rgba(255,255,255,0.16); box-shadow: 0 2px 10px rgba(0,0,0,0.35); }
+body.basemap-satellite #map-layer-bar .map-layer-lbl { color: #cbd5e1; }
+body.basemap-satellite #map-layer-bar .overlay-pill { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.18); color: #e2e8f0; }
+body.basemap-satellite #map-layer-bar .overlay-pill:hover:not(:disabled) { background: rgba(255,255,255,0.16); }
+body.basemap-satellite #map-layer-bar .overlay-pill.active { background: rgba(255,224,120,0.24); border-color: rgba(255,224,120,0.7); color: #fde68a; }
+@media (max-width: 1024px) { #map-layer-bar { left: 48px; max-width: calc(100% - 48px - 130px); top: 8px; } }
+/* The map strip already has "TDR On" + opacity; drop the duplicate pill. */
+#side-panel.focus-panel #tdr-toggle-btn { display: none; }

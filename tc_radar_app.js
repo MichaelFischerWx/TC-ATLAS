@@ -609,6 +609,7 @@ function exitFocusMode() {
     if (!_focusMode) return;
     _focusMode = false;
     _quicklookSync();
+    _mapLayerBarSync();
     if (_focusMarker) { map.removeLayer(_focusMarker); _focusMarker = null; }
     if (window.TCVolGL && TCVolGL.isOn()) TCVolGL.hide();
     _archiveFLMapRemove(); _archiveSondeMapRemove();
@@ -1177,7 +1178,58 @@ function openSidePanel(caseData, fromQuickSelect) {
             }, 80);
     }
 
+    _mapLayerBarSync();
     setTimeout(function() { map.invalidateSize(); }, 360);
+}
+
+// ── Focus mode: map overlays live on the map ──────────────────
+// FL / Sondes / MW / 88D / Barbs draw on the map, so in focus mode their
+// pills move (the same DOM nodes, handlers untouched) into #map-layer-bar at
+// the map's top-left; the panel row keeps the view toggles and is relabelled
+// "View". The panel is rebuilt per case, so this re-runs from openSidePanel.
+// MW / 88D pickers stay in the panel; switching one on scrolls to it.
+// Phones keep them in the panel (the short map already carries colorbars
+// and the IR strip), same breakpoint as the Quick-look map card.
+var _MAP_LAYER_PILLS = ['btn-archive-fl', 'btn-archive-sonde', 'mw-overlay-btn', 'nexrad-overlay-btn', 'barb-btn'];
+function _mapLayerBarSync() {
+    var bar = document.getElementById('map-layer-bar');
+    var strip = document.querySelector('#side-panel .overlay-strip');
+    var lbl = strip && strip.querySelector('.overlay-strip-label');
+    var onMap = _quicklookOnMap();
+    if (lbl) lbl.textContent = onMap ? 'View' : 'Layers';
+    if (!onMap) {
+        if (bar) {
+            if (strip) bar.querySelectorAll('.overlay-pill').forEach(function(b) { strip.appendChild(b); });
+            bar.remove();
+        }
+        return;
+    }
+    var host = document.getElementById('map-container');
+    if (!host) return;
+    // Prefer the panel's (fresh, just-built) pill; fall back to the one already
+    // on the bar when the panel was not rebuilt. getElementById alone would
+    // return the stale bar copy, which comes first in document order.
+    var pills = _MAP_LAYER_PILLS.map(function(id) {
+        return (strip && strip.querySelector('#' + id)) || (bar && bar.querySelector('#' + id));
+    }).filter(Boolean);
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'map-layer-bar';
+        bar.innerHTML = '<span class="map-layer-lbl">Overlays</span><span class="map-layer-pills"></span>';
+        bar.addEventListener('click', function(e) {
+            var b = e.target.closest && e.target.closest('#mw-overlay-btn, #nexrad-overlay-btn');
+            if (!b) return;
+            var pid = b.id === 'mw-overlay-btn' ? 'mw-overpass-panel' : 'nexrad-panel';
+            setTimeout(function() {
+                var p = document.getElementById(pid);
+                if (p && p.style.display !== 'none') p.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }, 0);
+        });
+        host.appendChild(bar);
+    }
+    var row = bar.querySelector('.map-layer-pills');
+    row.innerHTML = '';   // the previous case's pills (its panel is gone)
+    pills.forEach(function(b) { row.appendChild(b); });
 }
 
 // ── Quick-look thumbnail (pre-generated reflectivity + 2-km V_H PNG) ──
@@ -1266,7 +1318,7 @@ function qlMapMinimize() {
     _quicklookSync();
 }
 window.qlMapMinimize = qlMapMinimize;
-if (_QL_MAP_MQ && _QL_MAP_MQ.addEventListener) _QL_MAP_MQ.addEventListener('change', function() { _quicklookSync(); });
+if (_QL_MAP_MQ && _QL_MAP_MQ.addEventListener) _QL_MAP_MQ.addEventListener('change', function() { _quicklookSync(); _mapLayerBarSync(); });
 
 function closeSidePanel() {
     document.getElementById('side-panel').classList.remove('open');
