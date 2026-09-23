@@ -33,7 +33,8 @@ RUN pip install --no-cache-dir \
         cfgrib \
         eccodes \
         google-cloud-storage \
-        boto3
+        boto3 \
+        netCDF4
 
 COPY sear_job_ctx/ /app/
 

@@ -82,7 +82,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20260922b">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20260922c">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -118,7 +118,7 @@
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
     <link rel="stylesheet" href="realtime_ir_styles.css?v=20260920c">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260922a">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260923a">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -2254,6 +2254,7 @@
                             <button id="recon-hdob-grid" class="recon-hdob-gridbtn" onclick="window._reconHdobToggleGrid()" title="Toggle lat/lon grid">Grid</button>
                             <button id="recon-hdob-save" class="recon-hdob-gridbtn" onclick="window._reconHdobExport()" title="Save chart + map as one PNG (with whatever's selected)">⤓ Save PNG</button>
                             <button id="recon-hdob-seartxt" class="recon-hdob-gridbtn" style="display:none;" onclick="window._reconHdobSearTxt()" title="Download every SEAR 10-m estimate for this storm as a plain-text table (pass maxima + scored observations). The same file is served at cdn.tcatlas.org/sear-rt/&lt;ATCF&gt;.txt for scripted pulls.">⤓ SEAR .txt</button>
+                            <button id="recon-hdob-searnc" class="recon-hdob-gridbtn" style="display:none;" onclick="window._reconHdobSearNc()" title="Download the SEAR estimates as a flat 1-D netCDF (time, lat, lon, wspd, wspd_min, wspd_max, wdir, quality) shaped for AWIPS satellite-wind ingest. Dated copies are listed at cdn.tcatlas.org/sear-rt/nc/&lt;ATCF&gt;_files.txt.">⤓ SEAR .nc</button>
                         </div>
                         <div id="recon-hdob-map" class="recon-hdob-map"></div>
                     </div>
@@ -2685,7 +2686,7 @@
     <script defer src="tc_mw_layer.js?v=20260920a"></script>
     <script defer src="tc_dm_analytics.js?v=20260904b"></script>
     <script defer src="realtime_ir_dm.js?v=20260904r"></script>
-    <script defer src="realtime_ir.js?v=20260922b"></script>
+    <script defer src="realtime_ir.js?v=20260922c"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
@@ -2790,7 +2791,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260922a';
+        var _LAZY_ASSET_V = '?v=20260923a';
         var _lazyViewMods = {
             recon:       { js: ['realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

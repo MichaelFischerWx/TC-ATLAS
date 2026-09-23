@@ -993,10 +993,26 @@
         return L.join('\n') + '\n';
     }
 
+    /** Download the publisher's 1-D netCDF (sear-rt/<ATCF>.nc): a plain anchor to the
+     *  CDN object, since it is binary and already the file partners curl. */
+    window._reconHdobSearNc = function () {
+        var sp = _hdobData && _hdobData.sear;
+        if (!sp) { rtToast('No SEAR estimates loaded for this storm.', 'warn'); return; }
+        var atcf = String(sp.atcf || _hdobSearAtcf() || 'storm').toUpperCase();
+        var url = sp.nc_url || ('https://cdn.tcatlas.org/sear-rt/' + atcf + '.nc');
+        _ga('recon_hdob_sear_nc', { atcf: atcf });
+        var a = document.createElement('a');
+        a.href = url + '?nc=' + Date.now();
+        a.download = 'TC-ATLAS_SEAR_' + atcf + '_' + (String(sp.generated || '').replace(/[-:]/g, '').slice(0, 13) || 'latest') + '.nc';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    };
+
     /** Show/hide pills for each map symbol family. */
     function _hdobBuildLayerToggles() {
         var btnTxt = document.getElementById('recon-hdob-seartxt');
         if (btnTxt) btnTxt.style.display = (_hdobData && _hdobData.sear && _hdobData.sear.status === 'ok') ? '' : 'none';
+        var btnNc = document.getElementById('recon-hdob-searnc');
+        if (btnNc) btnNc.style.display = (_hdobData && _hdobData.sear && _hdobData.sear.status === 'ok' && _hdobData.sear.nc_url) ? '' : 'none';
         var box = document.getElementById('recon-hdob-layers');
         if (!box) return;
         box.innerHTML = '';
