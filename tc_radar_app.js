@@ -610,6 +610,7 @@ function exitFocusMode() {
     _focusMode = false;
     _quicklookSync();
     _mapLayerBarSync();
+    _resultTabsSync();
     if (_focusMarker) { map.removeLayer(_focusMarker); _focusMarker = null; }
     if (window.TCVolGL && TCVolGL.isOn()) TCVolGL.hide();
     _archiveFLMapRemove(); _archiveSondeMapRemove();
@@ -1165,6 +1166,16 @@ function openSidePanel(caseData, fromQuickSelect) {
         var _ctrls = document.querySelector('#side-panel .explorer-controls');
         var _disp = document.getElementById('display-area');
         if (_ctrls && _disp && _disp.previousElementSibling !== _ctrls) _disp.insertAdjacentElement('beforebegin', _ctrls);
+        // Then the rows that act on the charts, so the buttons that open a
+        // result tab sit right above the tabs: View row, MW / 88D pickers,
+        // Analysis (+ CFAD options). Storm Evolution stays below the charts.
+        if (_disp) {
+            var _csb = document.getElementById('cs-btn');
+            [document.querySelector('#side-panel .overlay-strip'), document.getElementById('mw-overpass-panel'),
+             document.getElementById('nexrad-panel'), document.getElementById('fl-archive-status'),
+             _csb && _csb.closest('.action-section'), document.getElementById('cfad-config-popover')
+            ].forEach(function(el) { if (el) _disp.insertAdjacentElement('beforebegin', el); });
+        }
         try { if (_ctrls && localStorage.getItem('tcr_explorer_more') === '1') { _ctrls.classList.add('show-more'); var _mb = document.getElementById('ep-more-btn'); if (_mb) { _mb.textContent = 'Fewer options \u25B4'; _mb.setAttribute('aria-expanded', 'true'); } } } catch (e) {}
         // And render the default plan view without a click: in focus mode the
         // map is the plan view, so an empty map on open is a dead end.
@@ -1179,7 +1190,97 @@ function openSidePanel(caseData, fromQuickSelect) {
     }
 
     _mapLayerBarSync();
+    _resultTabsInit();
     setTimeout(function() { map.invalidateSize(); }, 360);
+}
+
+// ── Focus mode: analysis results as tabs ──────────────────────
+// Results used to stack under one another (overview, then az-mean-type
+// result, shear quads, cross-section), pushing everything down. In focus
+// mode each result container is a tab; the newest result is shown, older
+// ones stay a click away. Containers are watched (not the dozen render
+// functions), so any code path that fills or clears one updates the tabs.
+// az-result is shared by Azim. Mean / R_h / Z* / VP Scatter / CFAD; its tab
+// is named after the button (or coordinate) that last filled it.
+var _RESULT_TABS = [
+    { id: 'ep-result', label: function() { return 'Overview'; } },
+    { id: 'az-result', label: function() { return _azTabLabel; } },
+    { id: 'sq-result', label: function() { return 'Shear Quads'; } },
+    { id: 'cs-result', label: function() { return 'Cross Section'; } }
+];
+var _azTabLabel = 'Azim. Mean', _resultTabActive = 'ep-result', _resultTabObs = [];
+var _AZ_MODE_LABEL = { standard: 'Azim. Mean', hybrid: 'Azim. Mean (R\u2095)', anomaly: 'Z* Anomaly' };
+function _resultTabHas(el) { return !!el && el.innerHTML.trim() !== ''; }
+function _resultTabsInit() {
+    _resultTabObs.forEach(function(o) { o.disconnect(); });
+    _resultTabObs = [];
+    _resultTabActive = 'ep-result';
+    var disp = document.getElementById('display-area');
+    if (!disp) return;
+    var bar = document.getElementById('result-tabs');
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'result-tabs';
+        bar.className = 'result-tabs';
+        bar.setAttribute('role', 'tablist');
+        bar.addEventListener('click', function(e) {
+            var t = e.target.closest && e.target.closest('[data-tab]');
+            if (t) _resultTabShow(t.getAttribute('data-tab'));
+        });
+        disp.insertBefore(bar, disp.firstChild);
+    }
+    // Name the shared az-result tab after whatever is about to fill it.
+    var acts = document.getElementById('cs-btn');
+    acts = acts && acts.closest('.action-section');
+    if (acts && !acts._tabHooked) {
+        acts._tabHooked = true;
+        acts.addEventListener('click', function(e) {
+            var b = e.target.closest && e.target.closest('button');
+            if (!b) return;
+            if (b.id === 'az-btn') _azTabLabel = _AZ_MODE_LABEL[(document.getElementById('az-coord-mode') || {}).value] || 'Azim. Mean';
+            else if (b.id === 'vp-scatter-btn') _azTabLabel = 'VP Scatter';
+            else if (b.id === 'cfad-btn') _azTabLabel = 'CFAD';
+        }, true);
+        acts.addEventListener('change', function(e) {
+            if (e.target && e.target.id === 'az-coord-mode') _azTabLabel = _AZ_MODE_LABEL[e.target.value] || 'Azim. Mean';
+        }, true);
+    }
+    _RESULT_TABS.forEach(function(t) {
+        var el = document.getElementById(t.id);
+        if (!el || !window.MutationObserver) return;
+        var o = new MutationObserver(function() {
+            if (_resultTabHas(el)) _resultTabActive = t.id;          // newest result wins
+            else if (_resultTabActive === t.id) _resultTabActive = 'ep-result';
+            _resultTabsSync();
+        });
+        o.observe(el, { childList: true });
+        _resultTabObs.push(o);
+    });
+    _resultTabsSync();
+}
+function _resultTabsSync() {
+    var bar = document.getElementById('result-tabs');
+    var tabbed = _focusMode;
+    var present = _RESULT_TABS.filter(function(t) { return _resultTabHas(document.getElementById(t.id)); });
+    if (!present.some(function(t) { return t.id === _resultTabActive; })) _resultTabActive = present.length ? present[0].id : 'ep-result';
+    _RESULT_TABS.forEach(function(t) {
+        var el = document.getElementById(t.id);
+        if (el) el.classList.toggle('result-tab-hidden', tabbed && t.id !== _resultTabActive);
+    });
+    if (!bar) return;
+    bar.hidden = !tabbed || present.length < 2;
+    if (bar.hidden) return;
+    bar.innerHTML = present.map(function(t) {
+        var on = t.id === _resultTabActive;
+        return '<button type="button" role="tab" data-tab="' + t.id + '" aria-selected="' + on + '" class="result-tab' + (on ? ' active' : '') + '">' + t.label() + '</button>';
+    }).join('');
+}
+function _resultTabShow(id) {
+    _resultTabActive = id;
+    _resultTabsSync();
+    // Plotly sizes to its container; one drawn while hidden needs a nudge.
+    var el = document.getElementById(id);
+    if (el && window.Plotly) el.querySelectorAll('.js-plotly-plot').forEach(function(pd) { try { Plotly.Plots.resize(pd); } catch (e) {} });
 }
 
 // ── Focus mode: map overlays live on the map ──────────────────
@@ -5237,10 +5338,24 @@ function fetchCrossSection(a, b) {
     if (overlay) url += '&overlay=' + overlay;
     fetch(url)
         .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
-        .then(function(json) { csResult.innerHTML = '<div class="explorer-status" style="color:#10b981;">\u2713 Cross-section ready \u2014 opening expanded view</div>'; openPlotModal(json); })
+        .then(function(json) {
+            if (_focusMode) {
+                // Its own result tab: an inline chart, expandable to the full view.
+                _lastCsJson = json;
+                csResult.innerHTML = '<div style="position:relative;"><div id="cs-inline-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' +
+                    '<button onclick="openPlotModal(_lastCsJson)" title="Expand with the plan view" class="cs-inline-expand">\u26F6</button></div>';
+                renderCrossSectionInto('cs-inline-chart', json, false);
+                return;
+            }
+            csResult.innerHTML = '<div class="explorer-status" style="color:#10b981;">\u2713 Cross-section ready \u2014 opening expanded view</div>'; openPlotModal(json);
+        })
         .catch(function(err) { csResult.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + err.message + '</div>'; });
 }
 
+var _lastCsJson = null;
+// Outside focus mode a finished analysis opens the full view, as it always
+// has. In focus mode it lands in its own result tab instead (⛶ expands).
+function _autoExpand() { if (!_focusMode) openPlotModal(); }
 function renderCrossSectionInto(targetId, json, fullsize) {
     var el = document.getElementById(targetId); if (!el) return;
     var csData = json.cross_section, distance_km = json.distance_km, height_km = json.height_km, varInfo = json.variable, meta = _enrichCaseMeta(json.case_meta), ep = json.endpoints;
@@ -5424,7 +5539,7 @@ function fetchAzimuthalMean() {
     var timeout = setTimeout(function() { controller.abort(); }, 90000);
     fetch(url, { signal: controller.signal })
         .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
-        .then(function(json) { _lastAzJson = json; _lastHybridAzJson = null; _lastAnomalyAzJson = null; _lastVPScatterJson = null; renderAzimuthalMeanInto('az-result', json, false); openPlotModal(); })
+        .then(function(json) { _lastAzJson = json; _lastHybridAzJson = null; _lastAnomalyAzJson = null; _lastVPScatterJson = null; renderAzimuthalMeanInto('az-result', json, false); _autoExpand(); })
         .catch(function(err) { resultDiv.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + (err.name === 'AbortError' ? 'Request timed out (90s).' : err.message) + '</div>'; })
         .finally(function() { clearTimeout(timeout); btn.disabled = false; btn.textContent = '\u27F3 Azim. Mean'; });
 }
@@ -5451,7 +5566,7 @@ function fetchHybridAzimuthalMean() {
     var timeout = setTimeout(function() { controller.abort(); }, 90000);
     fetch(url, { signal: controller.signal })
         .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
-        .then(function(json) { _lastHybridAzJson = json; _lastAzJson = null; _lastAnomalyAzJson = null; _lastVPScatterJson = null; renderHybridAzimuthalMeanInto('az-result', json, false); openPlotModal(); })
+        .then(function(json) { _lastHybridAzJson = json; _lastAzJson = null; _lastAnomalyAzJson = null; _lastVPScatterJson = null; renderHybridAzimuthalMeanInto('az-result', json, false); _autoExpand(); })
         .catch(function(err) { resultDiv.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + (err.name === 'AbortError' ? 'Request timed out (90s).' : err.message) + '</div>'; })
         .finally(function() { clearTimeout(timeout); if (btn) { btn.disabled = false; btn.textContent = '\u27F3 Azim. Mean'; } });
 }
@@ -5473,7 +5588,7 @@ function fetchAnomalyAzimuthalMean() {
     var timeout = setTimeout(function() { controller.abort(); }, 90000);
     fetch(url, { signal: controller.signal })
         .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
-        .then(function(json) { _lastAnomalyAzJson = json; _lastAzJson = null; _lastHybridAzJson = null; _lastVPScatterJson = null; renderAnomalyAzimuthalMeanInto('az-result', json, false); openPlotModal(); })
+        .then(function(json) { _lastAnomalyAzJson = json; _lastAzJson = null; _lastHybridAzJson = null; _lastVPScatterJson = null; renderAnomalyAzimuthalMeanInto('az-result', json, false); _autoExpand(); })
         .catch(function(err) { resultDiv.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + (err.name === 'AbortError' ? 'Request timed out (90s).' : err.message) + '</div>'; })
         .finally(function() { clearTimeout(timeout); if (btn) { btn.disabled = false; btn.textContent = '\u27F3 Azim. Mean'; } });
 }
@@ -5504,7 +5619,7 @@ function fetchVPScatter(colorBy) {
     resultDiv.innerHTML = _hurricaneLoadingHTML('Loading VP scatter data\u2026', true);
     if (btn) { btn.disabled = true; btn.textContent = '\u27F3 Loading\u2026'; }
     _loadVPScatter(colorBy)
-        .then(function(json) { _lastVPScatterJson = json; _lastAzJson = null; _lastHybridAzJson = null; _lastAnomalyAzJson = null; renderVPScatterInto('az-result', json, false); openPlotModal(); })
+        .then(function(json) { _lastVPScatterJson = json; _lastAzJson = null; _lastHybridAzJson = null; _lastAnomalyAzJson = null; renderVPScatterInto('az-result', json, false); _autoExpand(); })
         .catch(function(err) { resultDiv.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + err.message + '</div>'; })
         .finally(function() { if (btn) { btn.disabled = false; btn.textContent = '\u2234 VP Scatter'; } });
 }
@@ -6074,7 +6189,7 @@ function fetchSingleCFAD() {
             _lastCFADJson = json;
             _lastAzJson = null; _lastHybridAzJson = null; _lastAnomalyAzJson = null; _lastVPScatterJson = null;
             renderSingleCFADInto('az-result', json, false);
-            openPlotModal();
+            _autoExpand();
         })
         .catch(function(e) { showToast('CFAD error: ' + e.message, 'error'); })
         .finally(function() { if (btn) { btn.disabled = false; btn.textContent = '\u2593 CFAD'; } });
@@ -6487,8 +6602,9 @@ function fetchShearQuadrants() {
             _lastSqJson = json;
             json.case_meta = _enrichCaseMeta(json.case_meta);
             if (json.case_meta && json.case_meta.sddc !== undefined) _currentSddc = (json.case_meta.sddc !== 9999) ? json.case_meta.sddc : null;
-            resultDiv.innerHTML = '<div class="explorer-status" style="color:#10b981;">\u2713 Shear quadrants ready \u2014 opening expanded view</div>';
-            openPlotModal();
+            if (_focusMode) renderQuadrantMeansInto('sq-result', json, false);   // its result tab
+            else resultDiv.innerHTML = '<div class="explorer-status" style="color:#10b981;">\u2713 Shear quadrants ready \u2014 opening expanded view</div>';
+            _autoExpand();
         })
         .catch(function(err) { resultDiv.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + (err.name === 'AbortError' ? 'Request timed out (90s).' : err.message) + '</div>'; })
         .finally(function() { clearTimeout(timeout); btn.disabled = false; btn.textContent = '\u25D1 Shear Quads'; });
@@ -6627,7 +6743,7 @@ function renderQuadrantMeansInto(targetId, json, fullsize) {
     var overlayLabel = json.overlay ? '<br><span style="font-size:0.85em;color:#9ca3af;">Contours: ' + json.overlay.display_name + ' (' + json.overlay.units + ')</span>' : '';
     layout.title = {
         text: meta.storm_name + ' | ' + meta.datetime + vmaxStr + shearStr + '<br>Shear-Relative Quadrant Mean: ' + varInfo.display_name + ' (\u2265' + covPct + '% cov.)' + overlayLabel,
-        font: { color: '#0f1623', size: fontSize.title }, y: 0.99, x: 0.5, xanchor: 'center'
+        font: { color: '#0f1623', size: fontSize.title }, y: fullsize ? 0.99 : 0.965, x: 0.5, xanchor: 'center', yanchor: fullsize ? 'auto' : 'top'
     };
 
     // Add shear vector inset between the 4 panels (center)

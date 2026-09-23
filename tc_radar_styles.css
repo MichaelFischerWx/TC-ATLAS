@@ -2894,3 +2894,20 @@ body.basemap-satellite #map-layer-bar .overlay-pill.active { background: rgba(25
 @media (max-width: 1024px) { #map-layer-bar { left: 48px; max-width: calc(100% - 48px - 130px); top: 8px; } }
 /* The map strip already has "TDR On" + opacity; drop the duplicate pill. */
 #side-panel.focus-panel #tdr-toggle-btn { display: none; }
+
+/* ── Focus mode: analysis results as tabs (tc_radar_app.js _resultTabsSync) ── */
+.result-tab-hidden { display: none !important; }
+.result-tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--border); margin: 2px 0 8px; }
+.result-tabs[hidden] { display: none; }
+.result-tab {
+    font: 600 11.5px/1.2 'DM Sans', sans-serif; color: var(--slate); background: none;
+    border: none; border-bottom: 2px solid transparent; margin-bottom: -1px;
+    padding: 7px 12px 6px; cursor: pointer; white-space: nowrap;
+}
+.result-tab:hover { color: var(--text); }
+.result-tab.active { color: var(--um-green); border-bottom-color: var(--um-green); }
+.cs-inline-expand {
+    position: absolute; top: 6px; right: 6px; z-index: 10; width: 30px; height: 30px; border: none; border-radius: 5px;
+    background: rgba(15,22,35,0.08); color: #5b6573; font-size: 16px; cursor: pointer;
+}
+.cs-inline-expand:hover { background: rgba(15,22,35,0.2); }
