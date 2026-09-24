@@ -227,6 +227,29 @@
             }
         );
     }
+    // Basemap credit. Most call sites pass no `attribution`, which left the
+    // map's attribution control empty (and hidden) on every page. CARTO and
+    // Esri both require visible credit, so supply it here when a call site
+    // doesn't. One string per provider so MapLibre de-duplicates it when the
+    // no-labels base and the labels-only overlay are both on. CARTO tiles are
+    // OpenStreetMap data, so a bare "© CARTO" (several call sites) is
+    // upgraded to the full credit; the 3rd entry is that "is it complete" test.
+    var _BASEMAP_CREDIT = [
+        [/basemaps\.cartocdn\.com/, '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>', /openstreetmap|OSM/i],
+        [/arcgisonline\.com/, 'Tiles &copy; <a href="https://www.esri.com/" target="_blank" rel="noopener">Esri</a>', /esri/i]
+    ];
+    function withCredit(url, opts) {
+        for (var i = 0; i < _BASEMAP_CREDIT.length; i++) {
+            if (_BASEMAP_CREDIT[i][0].test(url)) {
+                if (opts && opts.attribution && _BASEMAP_CREDIT[i][2].test(opts.attribution)) return opts;
+                var o = {};
+                for (var k in opts) if (Object.prototype.hasOwnProperty.call(opts, k)) o[k] = opts[k];
+                o.attribution = _BASEMAP_CREDIT[i][1];
+                return o;
+            }
+        }
+        return opts;
+    }
     function patchLeaflet() {
         if (typeof window.L === 'undefined' || !window.L.tileLayer) return false;
         if (window.L.__tcaPatched) return true;
@@ -236,6 +259,7 @@
         // constructed, so no tile fetch ever uses the wrong variant.
         var origFactory = window.L.tileLayer;
         var newFactory = function (url, opts) {
+            if (typeof url === 'string') opts = withCredit(url, opts);
             if (typeof url === 'string'
                 && url.indexOf('basemaps.cartocdn.com') >= 0) {
                 var current = (document.documentElement.getAttribute('data-theme') === 'dark')

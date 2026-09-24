@@ -6244,9 +6244,17 @@
         }
 
         // Dark basemap (underneath IR) — load first for fast initial paint
+        // Credit rides on the always-on basemap (labels default OFF, so credit
+        // on the labels layer alone left the attribution control empty). The
+        // CARTO part matches theme.js's default string, so MapLibre drops the
+        // labels layer's copy as a substring instead of listing CARTO twice.
+        // The IR/WV/Vis mosaic is a custom WebGL layer with no source of its
+        // own, so its satellite credit lives here too.
         var basemap = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
             subdomains: 'abcd',
-            maxZoom: 19
+            maxZoom: 19,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>'
+                + ' | Satellite: NOAA GOES-19/18, JMA Himawari-9 via <a href="https://registry.opendata.aws/noaa-goes/" target="_blank" rel="noopener">NOAA Open Data</a>'
         }).addTo(map);
         _globalBasemap = basemap;   // exposed so 3D mode can mute it (see _rt3DToggle)
 
@@ -6288,7 +6296,6 @@
         // Labels on top of IR — stashed on `_labelsLayer` so the "Labels"
         // toggle in the right rail can add/remove it without rebuilding.
         _labelsLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a> | IR: <a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>',
             subdomains: 'abcd',
             maxZoom: 19,
             pane: 'overlayPane'
