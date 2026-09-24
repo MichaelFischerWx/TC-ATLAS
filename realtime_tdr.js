@@ -911,10 +911,28 @@
         out.vdms = (src.vdms || []).filter(function (v) { return _hdobX(v.t) <= curIso; });
         out.counts = { obs: nobs, dropsondes: out.dropsondes.length, vdms: out.vdms.length };
         if (A.sear) {
-            out.sear = Object.assign({}, A.sear, {
-                passes: (A.sear.passes || []).filter(function (p) { return (p.t || '') <= curIso; }),
-                headline: null
-            });
+            var ps = (A.sear.passes || []).filter(function (p) { return (p.t || '') <= curIso; });
+            // Same headline rule as the live product: the strongest crossing within
+            // 3 h of the latest one in the window, so the tile matches the map label.
+            var hd = null;
+            if (ps.length) {
+                var lastMs = Date.parse(ps[ps.length - 1].t);
+                var win = ps.filter(function (p) { return lastMs - Date.parse(p.t) <= 3 * 3600000; });
+                var top = null;
+                win.forEach(function (p) {
+                    var y = (p.y_corr_kt != null) ? p.y_corr_kt : p.y_kt;
+                    if (y == null) return;
+                    if (!top || y > ((top.y_corr_kt != null) ? top.y_corr_kt : top.y_kt)) top = p;
+                });
+                if (top) {
+                    var others = win.filter(function (p) { return p !== top; }).map(function (p) { return (p.y_corr_kt != null) ? p.y_corr_kt : p.y_kt; }).filter(function (v) { return v != null; });
+                    hd = { kt: (top.y_corr_kt != null) ? top.y_corr_kt : top.y_kt, t: top.t, tail: top.tail, fix_source: top.fix_source,
+                           range_kt: top.y_range_kt || null, n_window: win.length, others_kt: others,
+                           others_min_kt: others.length ? Math.min.apply(null, others) : null,
+                           others_max_kt: others.length ? Math.max.apply(null, others) : null };
+                }
+            }
+            out.sear = Object.assign({}, A.sear, { passes: ps, headline: hd });
         }
         return out;
     }
@@ -996,6 +1014,17 @@
             if (pl[i].pass === top || (pl[i].t || '') === (top.fix_t || top.t)) { _hdobPassSel = i; break; }
         }
         if (_hdobPassSel != null) _hdobRender();
+        // Bring the map to the observation itself: fly to it at a core-scale zoom
+        // (never zooming OUT past what the user had) and ring it like a chart click.
+        if (_hdobMap && top.lat != null && top.lon != null) {
+            try {
+                var z = Math.max(_hdobMap.getZoom() || 0, 8);
+                _hdobMap.flyTo([top.lat, top.lon], z, { duration: 1.2 });
+                if (_hdobHighlight) { try { _hdobMap.removeLayer(_hdobHighlight); } catch (e) {} }
+                _hdobHighlight = L.circleMarker([top.lat, top.lon],
+                    { radius: 9, color: '#ec4899', weight: 3, fillColor: '#fff', fillOpacity: 0.9 }).addTo(_hdobMap);
+            } catch (e) {}
+        }
     };
     var _hdobArchiveSlideT = 0;
     window._reconArchiveSeek = function (minutes, final) {
@@ -1027,6 +1056,7 @@
         }, 250);
         _hdobArchiveBarSync();
     };
+    window._reconHdobState = function () { return { data: _hdobData, archive: _hdobArchive, passSel: _hdobPassSel, flightSel: _hdobFlightSel }; };   // debugging aid
     window._reconArchiveSpeed = function (v) { if (_hdobArchive) _hdobArchive.speed = Number(v) || 15; };
     window._reconArchiveExit = function (silent) {
         var A = _hdobArchive;
