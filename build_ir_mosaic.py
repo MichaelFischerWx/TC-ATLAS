@@ -944,8 +944,32 @@ def storm_tile_set(points, zooms, box_deg):
     return tiles
 
 
+def _storm_primary_sat(sats, centers, z, x, y):
+    """Sat key with the most nadir view of the storm center nearest this tile.
+    Storm sectors take their pixels from that ONE satellite (the global blend
+    feathers ~5° wide at the GOES-E/W cutline, ~106°W, which ghosts parallax- and
+    time-offset cold tops across an EPac storm). Other sats only fill pixels the
+    primary can't see, so the feather never runs through a storm sector."""
+    if not centers:
+        return None
+    n = 2 ** z
+    tlon = (x + 0.5) / n * 360.0 - 180.0
+    tlat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
+    clat, clon = min(centers, key=lambda c: (c[0] - tlat) ** 2 +
+                     (((c[1] - tlon + 180.0) % 360.0 - 180.0)
+                      * math.cos(math.radians(tlat))) ** 2)
+    best, best_c = None, -1.0
+    for k, s in sats.items():
+        c = math.cos(math.radians(clat)) * math.cos(math.radians(clon - s["lon_0"]))
+        if c > best_c:
+            best, best_c = k, c
+    return best
+
+
 def render_storm_tiles(sats, tiles, emit, timings, product="ir", dt=None,
-                       hi_only=False):
+                       hi_only=False, centers=None):
+    """centers: [(lat, lon), ...] of the storms the sectors were cut around —
+    each tile is drawn from its nearest storm's most-nadir satellite."""
     is_vis = PRODUCTS[product]["kind"] == "vis"
     night = PRODUCTS[product]["night"]
     t0 = time.time()
@@ -953,7 +977,8 @@ def render_storm_tiles(sats, tiles, emit, timings, product="ir", dt=None,
     base_zmax = STORM_ZOOMS[-1]
     for (z, x, y) in sorted(tiles):
         LON, LAT = tile_lonlat(z, x, y)
-        samples = []
+        primary = _storm_primary_sat(sats, centers, z, x, y)
+        samples, prim_valid = [], None
         for sat_key, s in sats.items():
             # Above the base storm zooms (Vis z7+), sample the NATIVE-resolution
             # storm window instead of the 2-km full disk — the per-tile projection
@@ -986,9 +1011,16 @@ def render_storm_tiles(sats, tiles, emit, timings, product="ir", dt=None,
                 # GOES-West-limb "jump" frame. See _VIS_STORM_MIN_COSZ.
                 valid = valid & (cosz >= _VIS_STORM_MIN_COSZ)
             if valid.any():
-                samples.append((g, cosz, valid))
+                if sat_key == primary:
+                    prim_valid = valid
+                    samples.insert(0, (g, cosz, valid))
+                else:
+                    samples.append((g, cosz, valid))
         if not samples:
             continue
+        if prim_valid is not None:
+            # Primary owns every pixel it sees; the rest only fill its gaps.
+            samples = samples[:1] + [(g, c, v & ~prim_valid) for (g, c, v) in samples[1:]]
         field = blend_samples(samples)
         img = to_index(field, product) if TILE_MODE == "idx" else colormap(field, product)
         if night and dt is not None:
@@ -1609,7 +1641,8 @@ def main():
                     win = read_all_sat_windows(dt, timings, product, hw)
                     if win:
                         n_storm_z7 = render_storm_tiles(win, tiles_hi, emit, timings,
-                                                        product, dt, hi_only=True)
+                                                        product, dt, hi_only=True,
+                                                        centers=day_pts)
                     del win
                     _release_memory()
 
@@ -1642,7 +1675,9 @@ def main():
             n_storm = n_storm_z7
             if tiles:
                 # z5/z6 storm sectors from the 2-km full disk (byte-identical to before).
-                n_storm += render_storm_tiles(sats, tiles, emit, timings, product, dt)
+                n_storm += render_storm_tiles(sats, tiles, emit, timings, product, dt,
+                                              centers=[(p["lat"], p["lon"]) if isinstance(p, dict)
+                                                       else tuple(p) for p in points])
             # Objective eye-fix + warm-eye/cold-top Tb, from the IR sats already
             # in memory (no extra read). IR pass only; storms >= 65 kt only.
             if product == "ir":
