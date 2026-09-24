@@ -1211,3 +1211,29 @@
 .recon-hdob-summary .recon-vdm-stat.is-sear {
     border-color: #ec4899;
 }
+
+
+/* ── Recon · Archive replay (2026-09-24) ─────────────────────────────── */
+.recon-hdob-replay {
+    margin: 6px 0 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-light);
+    border-left: 3px solid #ec4899;
+    border-radius: 8px;
+    background: var(--surface-raised);
+}
+.recon-hdob-replay-title { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+.recon-hdob-replay-title b { color: var(--text); }
+.recon-hdob-replay-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.recon-hdob-replay-slider { flex: 1 1 220px; min-width: 160px; accent-color: #ec4899; }
+.recon-hdob-replay-time { font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 600; min-width: 128px; }
+.recon-hdob-replay-speed { padding: 2px 6px; font-size: 11px; }
+.recon-hdob-replay-playbtn { min-width: 34px; font-size: 13px; }
+.recon-archive-id { font-size: 11px; font-weight: 600; color: var(--text-muted); margin-left: 4px; }
+.recon-archive-stats { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); }
+.recon-archive-stats b { color: var(--text); }
+.recon-archive-foot { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--text-muted); }
+.recon-archive-links a { color: var(--cyan); text-decoration: none; margin-left: 4px; }
+.recon-archive-links a:hover { text-decoration: underline; }
+.recon-archive-cta { font-size: 12px; font-weight: 600; color: #ec4899; }
+@media (max-width: 640px) { .recon-hdob-replay-time { min-width: 0; } }

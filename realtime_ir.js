@@ -31938,9 +31938,15 @@
     var _SEAR_GCS = 'https://storage.googleapis.com/tc-atlas-ir-cache/sear-rt/';
     var _SEAR_TTL_MS = 60 * 1000;
     var _searCache = {};   // atcf -> { ts, data | null }
-    function _rtSearFetch(atcf) {
-        var c = _searCache[atcf];
+    function _rtSearFetch(atcf, url) {
+        var ck = url || atcf;
+        var c = _searCache[ck];
         if (c && (Date.now() - c.ts) < _SEAR_TTL_MS) return Promise.resolve(c.data);
+        if (url) {   // explicit object (season archive): one source, no GCS fallback
+            return fetch(url, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; })
+                .catch(function () { return null; })
+                .then(function (d) { _searCache[ck] = { ts: Date.now(), data: d }; return d; });
+        }
         function get(base) {
             return fetch(base + atcf + '.json', { cache: 'no-store' }).then(function (r) {
                 if (!r.ok) { var e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }
@@ -31957,9 +31963,9 @@
     }
     /** Join the published SEAR estimates onto a /recon/realtime blob in place.
      *  Resolves with the SEAR payload (or null); sets blob.sear too. */
-    function _rtSearAttach(blob, atcf) {
+    function _rtSearAttach(blob, atcf, url) {
         if (!blob || !atcf) return Promise.resolve(null);
-        return _rtSearFetch(String(atcf).toUpperCase()).then(function (sp) {
+        return _rtSearFetch(String(atcf).toUpperCase(), url).then(function (sp) {
             var idx = {};
             var acs = (sp && sp.aircraft) || {};
             Object.keys(acs).forEach(function (tail) {

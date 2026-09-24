@@ -290,6 +290,8 @@
             }, 80);
         } else if (name === 'vdm') {
             _reconEnsureVdmStorms();
+        } else if (name === 'archive') {
+            _reconEnsureArchive();
         } else if (name === 'hdob') {
             _reconEnsureHdob();
             setTimeout(function () {
@@ -314,7 +316,7 @@
     };
 
     // Valid Recon sub-tab ids (shared by switchReconSub + activateReconView).
-    var _RECON_SUBS = { missions: 1, hdob: 1, tdr: 1, fl: 1, vdm: 1 };
+    var _RECON_SUBS = { missions: 1, hdob: 1, tdr: 1, fl: 1, vdm: 1, archive: 1 };
 
     // Parse the recon sub-tab from a "#recon-<sub>" hash, or null.
     function _reconSubFromHash() {
@@ -542,6 +544,7 @@
     function _hdobPopulateStorms() {
         var sel = document.getElementById('recon-hdob-storm');
         if (!sel) return;
+        if (_hdobArchive) return;   // archive replay owns the picker until the user exits
         var kit = window._ReconKit;
         var opts = [];
         var replay = (kit && kit.replayInfo) ? kit.replayInfo() : null;
@@ -678,6 +681,8 @@
      *  user (or an explicit deep-link) pins the selection against re-defaulting. */
     window._reconHdobSelectStorm = function (value, auto) {
         if (!value) return;
+        if (value.indexOf('archive:') === 0) { _reconArchiveOpen(value.slice(8)); return; }
+        if (_hdobArchive) _reconArchiveExit(true);
         if (!auto) _hdobAutoSel = null;
         _hdobData = null; _hdobFitDone = false; _hdobReplay = null; _hdobLoggedLoad = false;
         _hdobResCache = { '10': null, '1': null };   // payloads belong to the old selection
@@ -729,6 +734,281 @@
         if (_hdobPollTimer) clearInterval(_hdobPollTimer);
         _hdobPollTimer = setInterval(_hdobFetch, 60000);
     };
+
+    // ── Recon · Archive (season replay of past flights + SEAR) ─────────────
+    // sear-rt/archive/index.json lists every 2026 storm the SEAR publisher has
+    // re-scored with the CURRENT model set; each carries a 10-s playback blob
+    // (<ATCF>.recon.json.gz) and its SEAR product. Replay = the Live Flight
+    // renderer fed a copy of that blob truncated at a replay clock; the satellite
+    // backdrop is pinned to the same clock (archived per-pass frames when they
+    // exist, else GIBS), so a flight can be stepped or played back in time.
+    var _ARCHIVE_INDEX_URL = 'https://cdn.tcatlas.org/sear-rt/archive/index.json';
+    var _reconArchiveIdx = null, _reconArchiveIdxTs = 0;
+    var _hdobArchive = null;   // { entry, blob, sear, t0, t1, cur, playing, timer, speed }
+
+    function _reconArchiveFetchIndex() {
+        if (_reconArchiveIdx && (Date.now() - _reconArchiveIdxTs) < 5 * 60000) return Promise.resolve(_reconArchiveIdx);
+        return fetch(_ARCHIVE_INDEX_URL + '?nc=' + Math.floor(Date.now() / 60000), { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) { _reconArchiveIdx = j; _reconArchiveIdxTs = Date.now(); return j; })
+            .catch(function () { return null; });
+    }
+
+    function _reconArchiveFmtSpan(a, b) {
+        if (!a) return '';
+        var d1 = new Date(a), d2 = b ? new Date(b) : d1;
+        var mo = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        var s1 = mo[d1.getUTCMonth()] + ' ' + d1.getUTCDate();
+        var s2 = mo[d2.getUTCMonth()] + ' ' + d2.getUTCDate();
+        return s1 === s2 ? s1 : s1 + ' – ' + s2;
+    }
+
+    function _reconEnsureArchive() {
+        var grid = document.getElementById('recon-archive-grid');
+        if (!grid) return;
+        _reconArchiveFetchIndex().then(function (j) {
+            var storms = (j && j.storms) || [];
+            if (!storms.length) {
+                grid.innerHTML = '<div class="recon-missions-loading">No archived flights yet.</div>';
+                return;
+            }
+            storms = storms.slice().sort(function (a, b) { return (b.first_t || '') < (a.first_t || '') ? -1 : 1; });
+            var cnt = document.getElementById('recon-archive-count');
+            if (cnt) cnt.textContent = storms.length + ' storm' + (storms.length === 1 ? '' : 's') + ' · ' +
+                storms.reduce(function (n, e) { return n + (e.n_flights || 0); }, 0) + ' flights';
+            grid.innerHTML = storms.map(function (e) {
+                var id = e.atcf || '';
+                var short = id.slice(0, 2) + id.slice(2, 4);
+                var mx = (e.max_y_kt != null) ? Math.round(e.max_y_kt) + ' kt' : '—';
+                return '<button class="recon-mission-card recon-archive-card" onclick="window._reconArchiveOpen(\'' + id + '\')" ' +
+                    'title="Replay this storm’s recon flights with SEAR">' +
+                    '<div class="recon-mission-card-top"><span class="recon-mission-date">' + (e.name || id) +
+                    ' <span class="recon-archive-id">' + short + '</span></span>' +
+                    '<span class="recon-mission-rel">' + _reconArchiveFmtSpan(e.first_t, e.last_t) + '</span></div>' +
+                    '<div class="recon-archive-stats">' +
+                    '<span><b>' + (e.n_flights || 0) + '</b> flight' + (e.n_flights === 1 ? '' : 's') + '</span>' +
+                    '<span><b>' + (e.n_passes || 0) + '</b> center pass' + (e.n_passes === 1 ? '' : 'es') + '</span>' +
+                    '<span>max SEAR <b style="color:#ec4899;">' + mx + '</b></span>' +
+                    '</div>' +
+                    '<div class="recon-archive-foot"><span>' + (e.tails || []).map(_hdobTailDisplay).join(' · ') + '</span>' +
+                    '<span class="recon-archive-links">' +
+                    (e.txt ? '<a href="' + e.txt + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">.txt</a>' : '') +
+                    (e.nc ? ' <a href="' + e.nc + '" onclick="event.stopPropagation()">.nc</a>' : '') +
+                    '</span></div>' +
+                    '<div class="recon-archive-cta">▶ Replay flights</div>' +
+                    '</button>';
+            }).join('');
+        });
+    }
+
+    /** Fetch the playback blob; the CDN normally decodes the gzip, but read the
+     *  bytes and inflate ourselves if a proxy passes them through raw. */
+    function _reconArchiveFetchBlob(url) {
+        return fetch(url + '?nc=' + Math.floor(Date.now() / 300000), { cache: 'force-cache' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+            .then(function (buf) {
+                var u8 = new Uint8Array(buf);
+                if (u8.length > 2 && u8[0] === 0x1f && u8[1] === 0x8b && typeof DecompressionStream === 'function') {
+                    var ds = new DecompressionStream('gzip');
+                    return new Response(new Blob([buf]).stream().pipeThrough(ds)).text().then(JSON.parse);
+                }
+                return JSON.parse(new TextDecoder().decode(u8));
+            });
+    }
+
+    window._reconArchiveOpen = function (atcf) {
+        atcf = String(atcf || '').toUpperCase();
+        if (!atcf) return;
+        var statusEl = document.getElementById('recon-hdob-status');
+        _reconArchiveFetchIndex().then(function (j) {
+            var entry = ((j && j.storms) || []).filter(function (e) { return (e.atcf || '').toUpperCase() === atcf; })[0];
+            if (!entry) { rtToast('No archived flights for ' + atcf + '.', 'warn'); return; }
+            try { window.switchReconSub('hdob'); } catch (e) {}
+            if (statusEl) statusEl.textContent = 'loading archive…';
+            _ga('recon_archive_open', { id: atcf });
+            var kit = window._ReconKit;
+            return Promise.all([
+                _reconArchiveFetchBlob(entry.recon),
+                (kit && kit.attachSear) ? null : null
+            ]).then(function (res) {
+                var blob = res[0];
+                if (!blob || !(blob.aircraft || []).length) throw new Error('empty blob');
+                // Reset the live selection exactly like a picker change, then take over.
+                if (_hdobPollTimer) { clearInterval(_hdobPollTimer); _hdobPollTimer = null; }
+                _hdobArchive = null;
+                _hdobData = null; _hdobFitDone = false; _hdobReplay = null; _hdobLoggedLoad = false;
+                _hdobResCache = { '10': null, '1': null }; _hdobFlightSel = ''; _hdobFl1s = false;
+                _hdobFrozenAt = null; _hdobSatNote = ''; _hdobSatTarget = null; _hdobDropGibsFrozen();
+                _hdobPassSel = null; _hdobRecsat = null; _hdobRecsatKey = null; _hdobRecsatTs = 0;
+                _hdobMissionTail = null; _hdobAtcf = atcf; _hdobName = entry.name || atcf; _hdobLat = null; _hdobLon = null;
+                _hdobClearMapLayers();
+                var t0 = Infinity, t1 = -Infinity;
+                (blob.aircraft || []).forEach(function (ac) {
+                    (ac.track || []).forEach(function (o) {
+                        var ms = Date.parse(_hdobX(o.t)); if (isNaN(ms)) return;
+                        if (ms < t0) t0 = ms; if (ms > t1) t1 = ms;
+                    });
+                });
+                if (!isFinite(t0)) throw new Error('no obs');
+                _hdobArchive = { entry: entry, blob: blob, sear: null, t0: t0, t1: t1, cur: t1, playing: false, timer: null, speed: 15 };
+                // picker shows the archived storm
+                var sel = document.getElementById('recon-hdob-storm');
+                if (sel) {
+                    var opt = document.createElement('option');
+                    opt.value = 'archive:' + atcf; opt.textContent = '🗄 ' + (entry.name || atcf) + ' (' + atcf.slice(0, 4) + ') — archive';
+                    sel.appendChild(opt); sel.value = opt.value;
+                }
+                _hdobShowEmpty(false);
+                _hdobArchiveBar(true);
+                // SEAR product for the archive (re-scored with the current model): join once onto the full blob
+                var searP = (kit && kit.attachSear) ? kit.attachSear(blob, atcf, entry.json) : Promise.resolve(null);
+                _hdobArchiveApply();
+                _hdobFetchRecsat(atcf).then(function () { if (_hdobArchive && _hdobArchive.blob === blob) _hdobRender(); });
+                return searP.then(function (sp) {
+                    if (!_hdobArchive || _hdobArchive.blob !== blob) return;
+                    _hdobArchive.sear = sp || null;
+                    _hdobFitDone = false;
+                    _hdobArchiveApply();
+                });
+            });
+        }).catch(function (e) {
+            if (statusEl) statusEl.textContent = 'archive unavailable';
+            rtToast('Could not load the archived flights (' + (e && e.message || 'error') + ').', 'warn');
+        });
+    };
+
+    function _hdobClearMapLayers() {
+        if (!_hdobMap) return;
+        for (var sm = 0; sm < _hdobSearMarkers.length; sm++) { try { _hdobMap.removeLayer(_hdobSearMarkers[sm]); } catch (e) {} }
+        _hdobSearMarkers = [];
+        if (_hdobBarbLayer) { try { _hdobMap.removeLayer(_hdobBarbLayer); } catch (e) {} _hdobBarbLayer = null; }
+        for (var m = 0; m < _hdobMarkers.length; m++) { try { _hdobMap.removeLayer(_hdobMarkers[m]); } catch (e) {} }
+        _hdobMarkers = [];
+        for (var am = 0; am < _hdobAircraftMarkers.length; am++) { try { _hdobMap.removeLayer(_hdobAircraftMarkers[am]); } catch (e) {} }
+        _hdobAircraftMarkers = [];
+    }
+
+    /** Copy of the archived blob truncated at the replay clock (obs, sondes, VDMs,
+     *  SEAR passes with t <= cur). Per-ob SEAR fields were joined onto the full
+     *  blob once, so sliced tracks keep them. */
+    function _hdobArchiveSlice(cur) {
+        var A = _hdobArchive, src = A.blob, out = {};
+        Object.keys(src).forEach(function (k) { if (k !== 'aircraft' && k !== 'dropsondes' && k !== 'vdms' && k !== 'sear') out[k] = src[k]; });
+        var curIso = new Date(cur).toISOString().slice(0, 19) + 'Z';
+        var nobs = 0;
+        out.aircraft = [];
+        (src.aircraft || []).forEach(function (ac) {
+            var tr = ac.track || [], n = tr.length;
+            // tracks are time-ordered: binary search the cut
+            var lo = 0, hi = n;
+            while (lo < hi) { var mid = (lo + hi) >> 1; if (Date.parse(_hdobX(tr[mid].t)) <= cur) lo = mid + 1; else hi = mid; }
+            if (!lo) return;
+            var a = Object.assign({}, ac, { track: tr.slice(0, lo), sortie_end: tr[lo - 1].t });
+            nobs += lo;
+            out.aircraft.push(a);
+        });
+        out.dropsondes = (src.dropsondes || []).filter(function (d) { return (d.t || '') <= curIso; });
+        out.vdms = (src.vdms || []).filter(function (v) { return _hdobX(v.t) <= curIso; });
+        out.counts = { obs: nobs, dropsondes: out.dropsondes.length, vdms: out.vdms.length };
+        if (A.sear) {
+            out.sear = Object.assign({}, A.sear, {
+                passes: (A.sear.passes || []).filter(function (p) { return (p.t || '') <= curIso; }),
+                headline: null
+            });
+        }
+        return out;
+    }
+
+    function _hdobArchiveApply() {
+        var A = _hdobArchive;
+        if (!A) return;
+        _hdobData = _hdobArchiveSlice(A.cur);
+        var c = _hdobData.counts;
+        var statusEl = document.getElementById('recon-hdob-status');
+        if (statusEl) statusEl.textContent = c.obs + ' obs · ' + c.dropsondes + ' sondes · ' + c.vdms + ' VDM · archive';
+        _hdobArchiveBarSync();
+        if (c.obs) { _hdobShowEmpty(false); _hdobRender(); } else { _hdobShowEmpty(true); }
+    }
+
+    // ── replay bar ──
+    function _hdobArchiveBar(show) {
+        var bar = document.getElementById('recon-hdob-replay');
+        if (!bar) return;
+        bar.style.display = show ? '' : 'none';
+        if (!show) return;
+        var A = _hdobArchive, e = A.entry;
+        var ttl = document.getElementById('recon-hdob-replay-title');
+        if (ttl) ttl.innerHTML = '🗄 <b>' + (e.name || e.atcf) + '</b> ' + (e.atcf || '').slice(0, 4) + ' · ' +
+            _reconArchiveFmtSpan(e.first_t, e.last_t) + ' · ' + (e.n_flights || 0) + ' flight' + (e.n_flights === 1 ? '' : 's') +
+            ' · SEAR re-scored with the current model';
+        var sl = document.getElementById('recon-hdob-replay-slider');
+        if (sl) { sl.min = Math.floor(A.t0 / 60000); sl.max = Math.ceil(A.t1 / 60000); sl.value = Math.round(A.cur / 60000); }
+        var sp = document.getElementById('recon-hdob-replay-speed');
+        if (sp) sp.value = String(A.speed);
+        _hdobArchiveBarSync();
+    }
+    function _hdobArchiveBarSync() {
+        var A = _hdobArchive; if (!A) return;
+        var lbl = document.getElementById('recon-hdob-replay-time');
+        if (lbl) {
+            var d = new Date(A.cur);
+            lbl.textContent = d.toISOString().slice(5, 10).replace('-', '/') + ' ' + d.toISOString().slice(11, 16) + 'Z' +
+                (A.cur >= A.t1 ? ' (end of data)' : '');
+        }
+        var sl = document.getElementById('recon-hdob-replay-slider');
+        if (sl && Math.abs(Number(sl.value) - A.cur / 60000) > 0.6) sl.value = Math.round(A.cur / 60000);
+        var pb = document.getElementById('recon-hdob-replay-play');
+        if (pb) pb.textContent = A.playing ? '⏸' : '▶';
+    }
+    var _hdobArchiveSlideT = 0;
+    window._reconArchiveSeek = function (minutes, final) {
+        var A = _hdobArchive; if (!A) return;
+        A.cur = Math.max(A.t0, Math.min(A.t1, Number(minutes) * 60000));
+        var now = Date.now();
+        if (!final && now - _hdobArchiveSlideT < 150) { _hdobArchiveBarSync(); return; }   // throttle while dragging
+        _hdobArchiveSlideT = now;
+        _hdobArchiveApply();
+    };
+    window._reconArchiveStep = function (dir) {
+        var A = _hdobArchive; if (!A) return;
+        if (dir === 'start') A.cur = A.t0 + 60000;
+        else if (dir === 'end') A.cur = A.t1;
+        else A.cur = Math.max(A.t0, Math.min(A.t1, A.cur + dir * 10 * 60000));
+        _hdobArchiveApply();
+    };
+    window._reconArchivePlay = function () {
+        var A = _hdobArchive; if (!A) return;
+        if (A.playing) { clearInterval(A.timer); A.timer = null; A.playing = false; _hdobArchiveBarSync(); return; }
+        if (A.cur >= A.t1) A.cur = A.t0 + 60000;
+        A.playing = true;
+        _ga('recon_archive_play', { id: A.entry.atcf, speed: A.speed });
+        A.timer = setInterval(function () {
+            if (!_hdobArchive) return;
+            A.cur += A.speed * 60000 / 4;          // speed = simulated minutes per second, 4 ticks/s
+            if (A.cur >= A.t1) { A.cur = A.t1; clearInterval(A.timer); A.timer = null; A.playing = false; }
+            _hdobArchiveApply();
+        }, 250);
+        _hdobArchiveBarSync();
+    };
+    window._reconArchiveSpeed = function (v) { if (_hdobArchive) _hdobArchive.speed = Number(v) || 15; };
+    window._reconArchiveExit = function (silent) {
+        var A = _hdobArchive;
+        if (A && A.timer) clearInterval(A.timer);
+        _hdobArchive = null;
+        _hdobArchiveBar(false);
+        var sel = document.getElementById('recon-hdob-storm');
+        if (sel) {
+            Array.prototype.slice.call(sel.options).forEach(function (o) { if ((o.value || '').indexOf('archive:') === 0) sel.removeChild(o); });
+        }
+        if (silent) return;
+        _hdobData = null; _hdobClearMapLayers(); _hdobFrozenAt = null; _hdobDropGibsFrozen();
+        _hdobAutoSel = null;
+        _hdobPopulateStorms();
+        var v = sel && sel.value;
+        if (v) window._reconHdobSelectStorm(v, true);
+        else { _hdobShowEmpty(true); var st = document.getElementById('recon-hdob-status'); if (st) st.textContent = ''; }
+    };
+    _reconArchiveExit.__isArchive = true;
 
     // Pause the 60 s HDOB poll while the tab is hidden — a backgrounded tab
     // otherwise re-fetches recon data every minute for no viewer. Mirrors the
@@ -1056,7 +1336,7 @@
         var ctx = passInfo
             ? 'center pass ' + String(passInfo.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(passInfo.tail) +
               (passInfo.src === 'hdob' ? ' (preliminary fix)' : '')
-            : 'this mission\u2019s center pass (flight ended \u2014 imagery is not updating)';
+            : (_hdobArchive ? 'the replay clock (archive)' : 'this mission\u2019s center pass (flight ended \u2014 imagery is not updating)');
         var arch = frozenIso ? _hdobArchivedFrame(product, frozenIso) : null;
         if (arch) {
             var lblA = _HDOB_SAT_LABEL[product] || product;
@@ -1123,6 +1403,7 @@
      *  never posted), else the min-extrap-SLP ob, else the midpoint of the
      *  track. Replays are live by construction. */
     function _hdobFrozenCenterIso(aircraft) {
+        if (_hdobArchive) return new Date(_hdobArchive.cur).toISOString().slice(0, 19) + 'Z';   // pin imagery to the replay clock
         if (_hdobReplay || !_hdobData) return null;
         var lo = Infinity, hi = -Infinity;
         (aircraft || []).forEach(function (ac) {
@@ -1184,6 +1465,7 @@
     };
 
     function _hdobFetch() {
+        if (_hdobArchive) { _hdobArchiveApply(); return; }
         var kit = window._ReconKit;
         if (!kit || !_hdobAtcf) return;
         var statusEl = document.getElementById('recon-hdob-status');

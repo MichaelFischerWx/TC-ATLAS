@@ -82,7 +82,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20260923b">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20260924a">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -118,7 +118,7 @@
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
     <link rel="stylesheet" href="realtime_ir_styles.css?v=20260920c">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260923a">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260924a">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -2195,6 +2195,7 @@
             <button class="recon-sub-tab" data-sub="tdr" onclick="window.switchReconSub('tdr')"><span class="tab-full">Tail Doppler Radar</span><span class="tab-short">TDR</span></button>
             <button class="recon-sub-tab" data-sub="fl" onclick="window.switchReconSub('fl')">Flight-Level</button>
             <button class="recon-sub-tab" data-sub="vdm" onclick="window.switchReconSub('vdm')">VDM</button>
+            <button class="recon-sub-tab" data-sub="archive" onclick="window.switchReconSub('archive')"><span class="tab-full">Archive 🗄</span><span class="tab-short">Archive</span></button>
         </div>
 
         <!-- Live HDOB side-by-side: flight-level time series + interactive recon map -->
@@ -2211,6 +2212,23 @@
                             <option value="">—</option>
                         </select>
                         <span id="recon-hdob-status" class="recon-hdob-status"></span>
+                    </div>
+                </div>
+                <div id="recon-hdob-replay" class="recon-hdob-replay" style="display:none;" role="group" aria-label="Archive replay controls">
+                    <div id="recon-hdob-replay-title" class="recon-hdob-replay-title"></div>
+                    <div class="recon-hdob-replay-row">
+                        <button class="recon-hdob-gridbtn" onclick="window._reconArchiveStep('start')" title="Start of the first flight">⏮</button>
+                        <button class="recon-hdob-gridbtn" onclick="window._reconArchiveStep(-1)" title="Back 10 minutes">−10m</button>
+                        <button id="recon-hdob-replay-play" class="recon-hdob-gridbtn recon-hdob-replay-playbtn" onclick="window._reconArchivePlay()" title="Play / pause">▶</button>
+                        <button class="recon-hdob-gridbtn" onclick="window._reconArchiveStep(1)" title="Forward 10 minutes">+10m</button>
+                        <button class="recon-hdob-gridbtn" onclick="window._reconArchiveStep('end')" title="End of the last flight (everything shown)">⏭</button>
+                        <input id="recon-hdob-replay-slider" class="recon-hdob-replay-slider" type="range" min="0" max="100" step="1" value="100"
+                               oninput="window._reconArchiveSeek(this.value, false)" onchange="window._reconArchiveSeek(this.value, true)" aria-label="Replay time">
+                        <span id="recon-hdob-replay-time" class="recon-hdob-replay-time"></span>
+                        <select id="recon-hdob-replay-speed" class="toolbar-select recon-hdob-replay-speed" onchange="window._reconArchiveSpeed(this.value)" title="Playback speed (simulated minutes per second)">
+                            <option value="5">5 min/s</option><option value="15" selected>15 min/s</option><option value="60">1 h/s</option>
+                        </select>
+                        <button class="recon-hdob-gridbtn" onclick="window._reconArchiveExit()" title="Back to live recon">✕ Exit archive</button>
                     </div>
                 </div>
                 <div id="recon-hdob-empty" class="recon-hdob-empty">
@@ -2246,6 +2264,21 @@
                         </div>
                         <div id="recon-hdob-map" class="recon-hdob-map"></div>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="recon-sub-panel" data-sub="archive" style="display:none;">
+            <div class="recon-missions-wrap">
+                <div class="rt-header">
+                    <h2 class="rt-header-title">Recon Flight Archive</h2>
+                    <p class="rt-header-desc">Every 2026 storm with aircraft reconnaissance, re-scored with the current SEAR model so the season is one framework. Pick a storm to replay its flights on the Live Flight map — step or play the mission in time, with the satellite backdrop, dropsondes, VDM fixes and SEAR 10-m estimates as they would have appeared.</p>
+                </div>
+                <div class="recon-missions-toolbar">
+                    <span id="recon-archive-count" class="recon-missions-count"></span>
+                </div>
+                <div id="recon-archive-grid" class="recon-missions-grid">
+                    <div class="recon-missions-loading">Loading archive…</div>
                 </div>
             </div>
         </div>
@@ -2674,7 +2707,7 @@
     <script defer src="tc_mw_layer.js?v=20260920a"></script>
     <script defer src="tc_dm_analytics.js?v=20260904b"></script>
     <script defer src="realtime_ir_dm.js?v=20260904r"></script>
-    <script defer src="realtime_ir.js?v=20260923b"></script>
+    <script defer src="realtime_ir.js?v=20260924a"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
@@ -2779,7 +2812,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260923a';
+        var _LAZY_ASSET_V = '?v=20260924a';
         var _lazyViewMods = {
             recon:       { js: ['realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
