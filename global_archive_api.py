@@ -3907,6 +3907,10 @@ def _parse_adeck(raw_text: str) -> dict:
     """
     cycles = {}
     models_seen = set()
+    # CARQ tau-0 analysis position per init. Legacy (pre-~2000) a-decks carry
+    # the analysis ONLY in CARQ — OFCL/AVNO/etc. start at tau 12, so without
+    # an origin their tracks begin ~100+ nm downstream of the storm.
+    carq_origin = {}
 
     for line in raw_text.splitlines():
         line = line.strip()
@@ -3936,8 +3940,9 @@ def _parse_adeck(raw_text: str) -> dict:
             tech = parts[4].strip().upper()
             tau = int(parts[5]) if parts[5].strip() else 0
 
-            # Only keep models we care about
-            if tech not in ADECK_MODELS:
+            # Only keep models we care about (CARQ tau 0 is captured below
+            # as a line origin, never drawn as a model of its own)
+            if tech not in ADECK_MODELS and not (tech == "CARQ" and tau == 0):
                 continue
 
             # Skip negative taus (CARQ/WRNG historical records)
@@ -3965,6 +3970,11 @@ def _parse_adeck(raw_text: str) -> dict:
             # Parse wind and pressure (may be blank)
             wind = int(parts[8]) if parts[8].strip() else None
             pres = int(parts[9]) if parts[9].strip() else None
+
+            if tech == "CARQ":
+                if not (lat_val == 0 and lon_val == 0):
+                    carq_origin.setdefault(init_time, (round(lat_val, 2), round(lon_val, 2)))
+                continue
 
             # Build point
             point = {"tau": tau, "lat": round(lat_val, 2), "lon": round(lon_val, 2)}
@@ -3994,10 +4004,19 @@ def _parse_adeck(raw_text: str) -> dict:
         except (ValueError, IndexError):
             continue
 
-    # Sort points within each forecast by tau
+    # Sort points within each forecast by tau; anchor any track that starts
+    # after tau 0 at that init's CARQ analysis position. The origin is
+    # position-only (no wind/pres) so intensity curves stay honest, and is
+    # flagged synthetic so the map draws it as a line anchor, not an init dot.
     for init_time in cycles:
+        origin = carq_origin.get(init_time)
         for tech in cycles[init_time]:
-            cycles[init_time][tech]["points"].sort(key=lambda p: p["tau"])
+            pts = cycles[init_time][tech]["points"]
+            pts.sort(key=lambda p: p["tau"])
+            if (origin and pts and pts[0]["tau"] > 0
+                    and any(not (p["lat"] == 0 and p["lon"] == 0) for p in pts)):
+                pts.insert(0, {"tau": 0, "lat": origin[0], "lon": origin[1],
+                               "synthetic": True})
 
     # Build sorted init times list
     init_times = sorted(cycles.keys())

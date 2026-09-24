@@ -5438,6 +5438,14 @@ function updateHovCenterMarker(frameDtStr) {
 // `new Date()` of either is browser-dependent (some treat the no-tz
 // ISO form as local time, others as UTC; Safari < 17 famously
 // disagreed with Chrome). Force UTC for both by normalizing first.
+/** a-deck init "YYYYMMDDHH" → epoch ms, always UTC (never host-local). */
+function _adeckInitMs(s) {
+    return Date.UTC(+s.substring(0, 4), +s.substring(4, 6) - 1,
+                    +s.substring(6, 8), +s.substring(8, 10));
+}
+/** Intensity-only aids (SHIP/SHFR/...) carry 0,0 positions — never map them. */
+function _adeckHasPos(pt) { return !(pt.lat === 0 && pt.lon === 0); }
+
 function _parseUtcMs(s) {
     if (!s) return NaN;
     if (typeof s !== 'string') s = String(s);
@@ -8139,7 +8147,7 @@ function _syncModelCycleToIR() {
     if (irDtStr) {
         // Convert IR datetime to YYYYMMDDHH format for comparison
         // IR datetimes are like "2017-09-05T12:00:00" or "12 UTC 5 Sep 2017"
-        var irDate = new Date(irDtStr);
+        var irDate = new Date(_parseUtcMs(irDtStr));
         if (!isNaN(irDate.getTime())) {
             var irYMDH = irDate.getUTCFullYear().toString() +
                 ('0' + (irDate.getUTCMonth() + 1)).slice(-2) +
@@ -8185,12 +8193,7 @@ function _renderModelCycle(initTime) {
     _modelLegendModels = [];
 
     // Convert initTime to Date for forecast hour → datetime conversion
-    var initDate = new Date(
-        parseInt(initTime.substring(0,4)),
-        parseInt(initTime.substring(4,6)) - 1,
-        parseInt(initTime.substring(6,8)),
-        parseInt(initTime.substring(8,10))
-    );
+    var initDate = new Date(_adeckInitMs(initTime));
 
     var techKeys = Object.keys(cycle).sort();
 
@@ -8216,8 +8219,9 @@ function _renderModelCycle(initTime) {
         // Build polyline from forecast points
         var latlngs = [];
         for (var pi = 0; pi < points.length; pi++) {
-            latlngs.push([points[pi].lat, points[pi].lon]);
+            if (_adeckHasPos(points[pi])) latlngs.push([points[pi].lat, points[pi].lon]);
         }
+        if (latlngs.length < 2) continue;
 
         var line = L.polyline(latlngs, {
             color: color,
@@ -8232,7 +8236,10 @@ function _renderModelCycle(initTime) {
         // Add markers at tau-0 (init) and every 24h
         for (var mi = 0; mi < points.length; mi++) {
             var pt = points[mi];
-            var isTau0 = (pt.tau === 0);
+            if (!_adeckHasPos(pt)) continue;
+            // A synthetic origin (legacy a-deck, CARQ analysis prepended by
+            // the API) anchors the line only — the model had no tau-0 point.
+            var isTau0 = (pt.tau === 0 && !pt.synthetic);
             var is24h = (pt.tau > 0 && pt.tau % 24 === 0);
 
             if (isTau0 || is24h) {
@@ -8285,12 +8292,7 @@ function _renderModelIntensityTraces(initTime) {
     if (!chartEl || !chartEl.data) return;
 
     var cycle = _modelData.cycles[initTime];
-    var initDate = new Date(
-        parseInt(initTime.substring(0,4)),
-        parseInt(initTime.substring(4,6)) - 1,
-        parseInt(initTime.substring(6,8)),
-        parseInt(initTime.substring(8,10))
-    );
+    var initDate = new Date(_adeckInitMs(initTime));
 
     var newTraces = [];
     var techKeys = Object.keys(cycle).sort();
@@ -8866,19 +8868,14 @@ window.startGifExport = function () {
         function _drawModelTracks(ctx, bounds, frameDatetime) {
             if (!_modelData || !_modelData.cycles) return;
             // Find the best init cycle for this frame time
-            var frameMs = frameDatetime ? new Date(frameDatetime).getTime() : 0;
+            var frameMs = frameDatetime ? _parseUtcMs(frameDatetime) : 0;
             if (!frameMs) return;
 
             var inits = _modelData.init_times || [];
             var bestInit = null, bestDiff = Infinity;
             for (var ii = 0; ii < inits.length; ii++) {
                 var iStr = inits[ii];
-                var iDate = new Date(
-                    parseInt(iStr.substring(0,4)),
-                    parseInt(iStr.substring(4,6)) - 1,
-                    parseInt(iStr.substring(6,8)),
-                    parseInt(iStr.substring(8,10))
-                );
+                var iDate = new Date(_adeckInitMs(iStr));
                 var diff = frameMs - iDate.getTime();
                 // Use most recent init that is before or at this frame time
                 if (diff >= 0 && diff < bestDiff) {
@@ -8923,6 +8920,7 @@ window.startGifExport = function () {
 
                 var started = false;
                 for (var pi = 0; pi < points.length; pi++) {
+                    if (!_adeckHasPos(points[pi])) continue;
                     var p = _geoToPixel(points[pi].lat, points[pi].lon, bounds);
                     if (!started) { ctx.moveTo(p.x, p.y); started = true; }
                     else ctx.lineTo(p.x, p.y);
@@ -8933,7 +8931,7 @@ window.startGifExport = function () {
                 // Draw tau markers (every 24h)
                 for (var mi = 0; mi < points.length; mi++) {
                     var pt = points[mi];
-                    if (pt.tau > 0 && pt.tau % 24 === 0) {
+                    if (pt.tau > 0 && pt.tau % 24 === 0 && _adeckHasPos(pt)) {
                         var mp = _geoToPixel(pt.lat, pt.lon, bounds);
                         ctx.beginPath();
                         ctx.arc(mp.x, mp.y, isOfficial ? 3 : 2, 0, Math.PI * 2);
