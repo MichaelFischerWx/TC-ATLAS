@@ -368,19 +368,7 @@
                         <button id="ir-product-vis" class="ir-product-btn" title="Red visible (Band 2 / Band 3 — daytime only)">Visible</button>
                         <button id="ir-product-wv" class="ir-product-btn" title="Mid-level water vapor (Band 8, ~6.2 µm)">WV</button>
                         <button id="ir-product-vigor" class="ir-product-btn" title="IR vigor — brightness temperature minus the coldest 4-hour-mean temperature within 200 km, following the storm. Near or below zero marks cloud tops as cold as the coldest the storm has recently sustained.">Vigor</button>
-                        <!-- Combo (Vis+IR sandwich) — the JS side is complete
-                             (setProductMode/_initDetailMapMosaic/_comboTileUrl +
-                             the sandwich branch of the idxcolor:// protocol),
-                             and the blend output is verified correct against
-                             real tiles. What is NOT solved: MapLibre never
-                             streams tiles for the combo raster sources on the
-                             storm card — the source cache reports used=true,
-                             srcLoaded=true, zoom 6 within maxzoom 6, no error
-                             event, and _tiles stays empty, while an identical
-                             layer carrying a plain idxcolor://ir/ URL loads
-                             normally. Re-enable this button once that is fixed.
                         <button id="ir-product-combo" class="ir-product-btn" title="Sandwich composite — visible cloud texture with IR-colored cold tops (night side falls back to IR)">Combo</button>
-                        -->
                     </div>
                     <!-- Env layers control — drape GFS analyses (shear, RH, SST,
                          heights, vorticity, winds) over the zoomed storm view.
