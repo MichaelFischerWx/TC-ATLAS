@@ -959,7 +959,44 @@
         if (sl && Math.abs(Number(sl.value) - A.cur / 60000) > 0.6) sl.value = Math.round(A.cur / 60000);
         var pb = document.getElementById('recon-hdob-replay-play');
         if (pb) pb.textContent = A.playing ? '⏸' : '▶';
+        var pk = document.getElementById('recon-hdob-replay-peak'), top = _hdobArchivePeakPass();
+        if (pk) {
+            pk.style.display = top ? '' : 'none';
+            if (top) pk.title = 'Jump to the strongest SEAR estimate: ' + Math.round(top.y_corr_kt != null ? top.y_corr_kt : top.y_kt) +
+                ' kt, ' + String(top.t).slice(5, 16).replace('T', ' ') + 'Z ' + _hdobTailDisplay(top.tail);
+        }
     }
+    /** The pass maximum with the highest RMW-corrected estimate, or null. */
+    function _hdobArchivePeakPass() {
+        var A = _hdobArchive;
+        if (!A || !A.sear || !(A.sear.passes || []).length) return null;
+        var top = null;
+        A.sear.passes.forEach(function (p) {
+            var y = (p.y_corr_kt != null) ? p.y_corr_kt : p.y_kt;
+            if (y == null) return;
+            if (!top) { top = p; return; }
+            var ty = (top.y_corr_kt != null) ? top.y_corr_kt : top.y_kt;
+            if (y > ty) top = p;
+        });
+        return top;
+    }
+    /** Replay clock -> one minute past the strongest pass maximum, so that pass
+     *  (center, radials, tile) is on screen; the pass stepper is pointed at it
+     *  so the backdrop is that crossing's archived frame. */
+    window._reconArchivePeak = function () {
+        var A = _hdobArchive, top = _hdobArchivePeakPass();
+        if (!A || !top) return;
+        if (A.playing) { clearInterval(A.timer); A.timer = null; A.playing = false; }
+        A.cur = Math.min(A.t1, Date.parse(top.t) + 60000);
+        _hdobPassSel = null;
+        _ga('recon_archive_peak', { id: A.entry.atcf });
+        _hdobArchiveApply();
+        var pl = _hdobPassList();
+        for (var i = 0; i < pl.length; i++) {
+            if (pl[i].pass === top || (pl[i].t || '') === (top.fix_t || top.t)) { _hdobPassSel = i; break; }
+        }
+        if (_hdobPassSel != null) _hdobRender();
+    };
     var _hdobArchiveSlideT = 0;
     window._reconArchiveSeek = function (minutes, final) {
         var A = _hdobArchive; if (!A) return;

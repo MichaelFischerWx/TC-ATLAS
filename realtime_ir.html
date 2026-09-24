@@ -2222,6 +2222,7 @@
                         <button id="recon-hdob-replay-play" class="recon-hdob-gridbtn recon-hdob-replay-playbtn" onclick="window._reconArchivePlay()" title="Play / pause">▶</button>
                         <button class="recon-hdob-gridbtn" onclick="window._reconArchiveStep(1)" title="Forward 10 minutes">+10m</button>
                         <button class="recon-hdob-gridbtn" onclick="window._reconArchiveStep('end')" title="End of the last flight (everything shown)">⏭</button>
+                        <button id="recon-hdob-replay-peak" class="recon-hdob-gridbtn" style="display:none;color:#ec4899;" onclick="window._reconArchivePeak()" title="Jump the replay clock to the strongest SEAR 10-m estimate of the storm">Peak SEAR</button>
                         <input id="recon-hdob-replay-slider" class="recon-hdob-replay-slider" type="range" min="0" max="100" step="1" value="100"
                                oninput="window._reconArchiveSeek(this.value, false)" onchange="window._reconArchiveSeek(this.value, true)" aria-label="Replay time">
                         <span id="recon-hdob-replay-time" class="recon-hdob-replay-time"></span>
@@ -2812,7 +2813,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260924b';
+        var _LAZY_ASSET_V = '?v=20260924c';
         var _lazyViewMods = {
             recon:       { js: ['realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
