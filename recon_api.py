@@ -1351,7 +1351,7 @@ _IWG1_DECIMATE_S = 10     # default bin (s): 10-s vector-mean FL wind, matching 
 _IWG1_FINE_S = 1          # "1-s" toggle resolution (full-rate, on demand)
 _IWG1_MEAN_WIN_S = 10     # averaging window for the 10-s mean wind (sustained + peak basis)
 _IWG1_PEAK_WIN_S = 30     # window over which "peak FL wind" = max of the 10-s mean wind
-_IWG1_MIN_FETCH_S = 120   # min seconds between upstream NOAA-AOC polls per flight
+_IWG1_MIN_FETCH_S = 50    # min seconds between upstream NOAA-AOC polls per flight (< the 60-s client poll, so every poll sees new 1-s data)
 # Cache the NOAA flight-FOLDER discovery listing. Folders only appear at takeoff
 # / vanish after landing, so re-listing the AAMPS iwg1 index on every ~60-s blob
 # rebuild is wasted upstream load + handler time with zero freshness benefit (the
@@ -1426,10 +1426,12 @@ def _iwg1_fetch_text(flight: dict) -> str:
     the bytes added since the last poll. Falls back to a full GET if Range is
     unsupported.
 
-    Throttled to `_IWG1_MIN_FETCH_S`: 1-s data refreshes plenty often at ~2 min,
-    and the blob rebuilds every ~50 s, so without this we'd hit NOAA AOC 2-3× more
-    than needed. Between fetches we serve the cached text (the public still polls
-    OUR API every minute — only the upstream NOAA poll is rate-limited)."""
+    Throttled to `_IWG1_MIN_FETCH_S` (50 s): just under the 60-s client poll so
+    each poll carries the newest minute of 1-s data, while bursts of concurrent
+    blob rebuilds (several storms / the fl1s variant) still collapse onto ONE
+    upstream Range request per flight per ~minute. Each request pulls only the
+    ~60 lines appended since the last one, so the load on NOAA AOC is trivial.
+    Between fetches we serve the cached text."""
     flid = flight["flid"]
     cache = _iwg1_cache.setdefault(flid, {"text": "", "len": 0, "ts": 0.0})
     if cache["text"] and (time.time() - cache.get("ts", 0.0)) < _IWG1_MIN_FETCH_S:
