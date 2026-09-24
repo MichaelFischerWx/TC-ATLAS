@@ -32039,21 +32039,36 @@
     function _rtSearAttach(blob, atcf, url) {
         if (!blob || !atcf) return Promise.resolve(null);
         return _rtSearFetch(String(atcf).toUpperCase(), url).then(function (sp) {
-            var idx = {};
             var acs = (sp && sp.aircraft) || {};
-            Object.keys(acs).forEach(function (tail) {
-                var a = acs[tail], m = {};
-                for (var i = 0; i < (a.t || []).length; i++) m[a.t[i]] = i;
-                idx[tail] = m;
-            });
+            function iso(ms) { return new Date(ms).toISOString().slice(0, 19) + 'Z'; }
             (blob.aircraft || []).forEach(function (ac) {
-                var a = acs[ac.tail], m = idx[ac.tail];
+                var a = acs[ac.tail], T = (a && a.t) || [];
+                // SEAR is published at 1 s, but a NOAA track in 10-s mode has one ob
+                // per bin, stamped with the bin's LAST second. An exact-time join
+                // sampled SEAR only at :00/:10/... and missed peaks in between (Polo
+                // 09-24 15:51: 110.5 kt at :06, line showed 109.2), so the line
+                // disagreed with the pass-max tile. Take the max SEAR over each ob's
+                // window (previous ob, this ob], capped at 30 s so a data gap can't
+                // pull in an old value. 1-s and USAF 30-s tracks still map 1:1.
+                var val = function (k) { return (a.ypc && a.ypc[k] != null) ? a.ypc[k] : a.yp[k]; };
+                var j = 0, prevT = null;
                 (ac.track || []).forEach(function (o) {
-                    var i = m ? m[o.t] : undefined;
-                    if (i == null) { o.sear_kt = null; o.sear_30s_kt = null; o.sear_corr_kt = null; o.sear_fix = null; o.sear_az = null; o.sear_r_km = null; return; }
+                    var i = null;
+                    if (T.length && o.t) {
+                        if (prevT && o.t < prevT) { j = 0; prevT = null; }   // out-of-order track: rescan
+                        var tMs = Date.parse(o.t);
+                        var lo = iso(tMs - 30000);
+                        if (prevT && prevT > lo) lo = prevT;
+                        while (j < T.length && T[j] <= lo) j++;
+                        for (var k = j; k < T.length && T[k] <= o.t; k++) {
+                            if (val(k) != null && (i == null || val(k) > val(i))) i = k;
+                        }
+                    }
+                    prevT = o.t;
+                    if (i == null) { o.sear_kt = null; o.sear_t = null; o.sear_30s_kt = null; o.sear_corr_kt = null; o.sear_fix = null; o.sear_az = null; o.sear_r_km = null; return; }
                     // 2026-09-05: headline is the RMW-corrected value (what the MLBT record assimilates);
                     // the uncorrected 10-s-peak chain is kept as sear_uncorr_kt.
-                    o.sear_kt = (a.ypc && a.ypc[i] != null) ? a.ypc[i] : a.yp[i]; o.sear_uncorr_kt = a.yp[i]; o.sear_30s_kt = a.y[i]; o.sear_corr_kt = a.ypc[i];
+                    o.sear_kt = val(i); o.sear_t = T[i]; o.sear_uncorr_kt = a.yp[i]; o.sear_30s_kt = a.y[i]; o.sear_corr_kt = a.ypc[i];
                     o.sear_fix = a.fix ? a.fix[i] : null;
                     // storm-relative geometry of the ob (publisher ≥ 2026-09-03)
                     o.sear_az = a.az ? a.az[i] : null; o.sear_r_km = a.r ? a.r[i] : null;

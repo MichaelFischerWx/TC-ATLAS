@@ -2569,12 +2569,14 @@
                     for (var g = 0; g < tr.length; g++) {
                         var w = (tr[g].sear_az != null) ? window._ReconKit.searWhere(tr[g].sear_az, tr[g].sear_r_km) : '';
                         if (w) anyGeo = true;
-                        cd[g] = w ? ' · ' + w : '';
+                        // A 10-s ob carries the max 1-s SEAR in its bin (_rtSearAttach);
+                        // name the second it came from when that isn't the ob's own stamp.
+                        var st = tr[g].sear_t;
+                        cd[g] = (st && st !== tr[g].t ? ' (at ' + String(st).slice(11, 19) + 'Z)' : '') + (w ? ' · ' + w : '');
                     }
-                    if (anyGeo) {
-                        trace.customdata = cd;
-                        trace.hovertemplate = '%{x|%H:%M:%SZ} · %{y} kt · ' + _hdobTailDisplay(ac.tail) + '%{customdata}<extra></extra>';
-                    }
+                    // Whole knots, like the Max SEAR tile, so the two read identically.
+                    trace.customdata = cd;
+                    trace.hovertemplate = '%{x|%H:%M:%SZ} · %{y:.0f} kt%{customdata} · ' + _hdobTailDisplay(ac.tail) + '<extra></extra>';
                 }
                 traces.push(trace);
                 firstForVar = false;
