@@ -31569,9 +31569,72 @@
      *  Rows go LOW pressure (aloft) → HIGH pressure (surface) so the surface
      *  reads at the BOTTOM, consistent with the skew-T. Wind cells are tinted
      *  by speed (`_reconWindColor`) so strong winds pop. */
-    function _reconSkewTTable(sonde) {
+    /** Mandatory-level rows interpolated from a full-resolution BUFR sounding,
+     *  for sondes with no coded TEMP DROP twin (e.g. NHC hasn't posted the
+     *  REPPN3/REPNT3 bulletin). T/Td/height linear in log-p between the
+     *  bracketing 1-s levels; wind via u/v. Levels outside the sounding are
+     *  skipped (no 1000 mb below a 960-mb surface), and the lowest level is
+     *  added as a surface row. Same row shape as the TEMP DROP decode. */
+    function _reconHiresMandatory(h) {
+        var lv = h && h.levels;
+        if (!lv || !lv.p_hpa || lv.p_hpa.length < 5) return [];
+        function interp(key, p) {
+            var arr = lv[key], P = lv.p_hpa;
+            for (var i = 0; i < P.length - 1; i++) {
+                var p0 = P[i], p1 = P[i + 1];
+                if (p0 == null || p1 == null || arr[i] == null || arr[i + 1] == null) continue;
+                if ((p0 - p) * (p1 - p) > 0 || p0 === p1) continue;
+                var f = Math.log(p / p0) / Math.log(p1 / p0);
+                return arr[i] + f * (arr[i + 1] - arr[i]);
+            }
+            return null;
+        }
+        function wind(p) {
+            // u/v at p from the bracketing levels (dir wraps, so never interp it directly)
+            var W = lv.p_hpa.map(function (pp, i) {
+                var ws = lv.wspd_kt[i], wd = lv.wdir[i];
+                if (pp == null || ws == null || wd == null || ws > 250) return null;
+                var r = wd * Math.PI / 180;
+                return { p: pp, u: -ws * Math.sin(r), v: -ws * Math.cos(r) };
+            }).filter(Boolean);
+            for (var i = 0; i < W.length - 1; i++) {
+                var a = W[i], b = W[i + 1];
+                if ((a.p - p) * (b.p - p) > 0 || a.p === b.p) continue;
+                var f = Math.log(p / a.p) / Math.log(b.p / a.p);
+                var u = a.u + f * (b.u - a.u), v = a.v + f * (b.v - a.v);
+                var d = Math.round(Math.atan2(-u, -v) * 180 / Math.PI);
+                return { wspd: Math.round(Math.sqrt(u * u + v * v)), wdir: ((d % 360) + 360) % 360 || 360 };
+            }
+            return { wspd: null, wdir: null };
+        }
+        function r1(x) { return x != null ? Math.round(x * 10) / 10 : null; }
+        var rows = [];
+        // Surface: the lowest level carrying a pressure (surface-first ordering).
+        for (var i = 0; i < lv.p_hpa.length; i++) {
+            if (lv.p_hpa[i] == null) continue;
+            // The splash level itself usually has no wind; use the sounding's
+            // 10-m surface wind the backend derives (h.sfc_wind_kt / sfc_dir).
+            var ws = h.sfc_wind_kt != null ? h.sfc_wind_kt : lv.wspd_kt[i];
+            var wd = h.sfc_wind_kt != null ? h.sfc_dir : lv.wdir[i];
+            rows.push({ p: 'Sfc ' + Math.round(lv.p_hpa[i]), hgt: lv.z_m[i] != null ? Math.round(lv.z_m[i]) : null,
+                t: r1(lv.t_c[i]), td: r1(lv.td_c[i]),
+                wspd: ws != null && ws <= 250 ? Math.round(ws) : null, wdir: wd != null ? Math.round(wd) : null });
+            break;
+        }
+        [1000, 925, 850, 700, 500, 400, 300, 250, 200].forEach(function (p) {
+            var t = interp('t_c', p), z = interp('z_m', p);
+            if (t == null && z == null) return;      // outside the sounding
+            var w = wind(p);
+            rows.push({ p: p, hgt: z != null ? Math.round(z) : null, t: r1(t), td: r1(interp('td_c', p)),
+                wspd: w.wspd, wdir: w.wdir });
+        });
+        return rows;
+    }
+
+    function _reconSkewTTable(sonde, h) {
         var prof = sonde.profile || {};
-        var mand = (prof.mandatory || []).slice().reverse();
+        var fromHires = !(prof.mandatory && prof.mandatory.length) && h && h.levels;
+        var mand = (fromHires ? _reconHiresMandatory(h) : (prof.mandatory || [])).slice().reverse();
         var sigW = (prof.sig_wind || []).slice().reverse();
         function windCell(wdir, wspd) {
             if (wspd == null || wspd > 250) return '<td>–</td>';
@@ -31584,7 +31647,8 @@
                 '</td><td>' + (L.t != null ? L.t.toFixed(1) + '°' : '–') +
                 '</td><td>' + (rh != null ? rh + '%' : '–') + '</td>' + windCell(L.wdir, L.wspd) + '</tr>';
         }).join('');
-        var mandTbl = '<div class="recon-skewt-subhead">Mandatory levels</div>' +
+        var mandTbl = '<div class="recon-skewt-subhead">Mandatory levels' +
+            (fromHires ? ' <span style="font-weight:400;color:#94a3b8;">(interpolated from the 1-s sounding; no TEMP DROP message posted)</span>' : '') + '</div>' +
             '<table class="recon-skewt-tbl"><thead><tr><th>Level</th><th>Hgt</th><th>T</th><th>RH</th><th>Wind</th></tr></thead><tbody>' +
             mrows + '</tbody></table>';
         // Significant wind levels (≈ Tropical Tidbits "Table 2").
@@ -31599,6 +31663,8 @@
         }
         var allW = (prof.mandatory || []).concat(prof.sig_wind || []).filter(function (L) { return L.wspd != null; });
         var maxW = allW.length ? allW.reduce(function (a, b) { return b.wspd > a.wspd ? b : a; }) : null;
+        if (!maxW && h && h.max_wind_kt != null)
+            maxW = { wspd: Math.round(h.max_wind_kt), wdir: null, p: h.max_wind_p_hpa != null ? Math.round(h.max_wind_p_hpa) : '?' };
         var foot = '<div class="recon-skewt-foot">' +
             (sonde.sfc_wind_kt != null ? '<div>Surface (WL150) wind: ' + (sonde.sfc_dir != null ? sonde.sfc_dir + '° / ' : '') + sonde.sfc_wind_kt + ' kt</div>' : '') +
             (sonde.mbl_wind_kt != null ? '<div>Mean boundary-layer wind: ' + (sonde.mbl_dir != null ? sonde.mbl_dir + '° / ' : '') + sonde.mbl_wind_kt + ' kt</div>' : '') +
@@ -31683,13 +31749,13 @@
 
     var _reconSkewTKey = null;        // sonde the modal currently shows (a late hires fetch must not paint over another)
 
-    function _reconSkewTBody(sonde, extraTop) {
+    function _reconSkewTBody(sonde, extraTop, h) {
         return '<div class="recon-skewt-toggle">' +
             '<button class="on" data-skv="skewt" onclick="window._reconSkewTView(\'skewt\')">Skew-T</button>' +
             '<button data-skv="wind" onclick="window._reconSkewTView(\'wind\')">Wind profile</button>' +
             '</div>' +
             '<div class="recon-skewt-plot"><div id="recon-skewt-plot" style="width:100%;height:560px;"></div></div>' +
-            '<div class="recon-skewt-side">' + (extraTop || '') + _reconSkewTTable(sonde) + '</div>';
+            '<div class="recon-skewt-side">' + (extraTop || '') + _reconSkewTTable(sonde, h) + '</div>';
     }
 
     window._reconShowSkewT = function (key) {
@@ -31723,7 +31789,7 @@
                     var mode = 'skewt';
                     var onBtn = modal.querySelector('.recon-skewt-toggle button.on');
                     if (onBtn) mode = onBtn.getAttribute('data-skv') || 'skewt';
-                    body.innerHTML = _reconSkewTBody(sonde, _reconHiresBadge(h));
+                    body.innerHTML = _reconSkewTBody(sonde, _reconHiresBadge(h), h);
                     window._reconSkewTView(mode);
                 })
                 .catch(function () {});
