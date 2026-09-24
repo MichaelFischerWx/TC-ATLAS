@@ -118,7 +118,7 @@
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260811b">
     <link rel="stylesheet" href="realtime_ir_styles.css?v=20260920c">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260924a">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260924b">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -2195,7 +2195,7 @@
             <button class="recon-sub-tab" data-sub="tdr" onclick="window.switchReconSub('tdr')"><span class="tab-full">Tail Doppler Radar</span><span class="tab-short">TDR</span></button>
             <button class="recon-sub-tab" data-sub="fl" onclick="window.switchReconSub('fl')">Flight-Level</button>
             <button class="recon-sub-tab" data-sub="vdm" onclick="window.switchReconSub('vdm')">VDM</button>
-            <button class="recon-sub-tab" data-sub="archive" onclick="window.switchReconSub('archive')"><span class="tab-full">Archive 🗄</span><span class="tab-short">Archive</span></button>
+            <button class="recon-sub-tab" data-sub="archive" onclick="window.switchReconSub('archive')">Archive</button>
         </div>
 
         <!-- Live HDOB side-by-side: flight-level time series + interactive recon map -->
@@ -2812,7 +2812,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260924a';
+        var _LAZY_ASSET_V = '?v=20260924b';
         var _lazyViewMods = {
             recon:       { js: ['realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

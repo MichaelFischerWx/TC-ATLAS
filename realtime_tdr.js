@@ -855,7 +855,7 @@
                 var sel = document.getElementById('recon-hdob-storm');
                 if (sel) {
                     var opt = document.createElement('option');
-                    opt.value = 'archive:' + atcf; opt.textContent = '🗄 ' + (entry.name || atcf) + ' (' + atcf.slice(0, 4) + ') — archive';
+                    opt.value = 'archive:' + atcf; opt.textContent = (entry.name || atcf) + ' (' + atcf.slice(0, 4) + ') — archive';
                     sel.appendChild(opt); sel.value = opt.value;
                 }
                 _hdobShowEmpty(false);
@@ -938,7 +938,7 @@
         if (!show) return;
         var A = _hdobArchive, e = A.entry;
         var ttl = document.getElementById('recon-hdob-replay-title');
-        if (ttl) ttl.innerHTML = '🗄 <b>' + (e.name || e.atcf) + '</b> ' + (e.atcf || '').slice(0, 4) + ' · ' +
+        if (ttl) ttl.innerHTML = 'Archive replay: <b>' + (e.name || e.atcf) + '</b> ' + (e.atcf || '').slice(0, 4) + ' · ' +
             _reconArchiveFmtSpan(e.first_t, e.last_t) + ' · ' + (e.n_flights || 0) + ' flight' + (e.n_flights === 1 ? '' : 's') +
             ' · SEAR re-scored with the current model';
         var sl = document.getElementById('recon-hdob-replay-slider');
