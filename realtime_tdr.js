@@ -2066,7 +2066,7 @@
             return String(p.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(p.tail) + ' ' + _hdobSearHeadline(p) +
                 (led ? ' (' + _hdobSearLikely(p).replace(' kt', '') + ')' : '') +
                 (!led && rg ? ' [' + rg.replace(' kt', '') + ']' : '') +
-                (q ? ' (' + q + (p.r_km != null ? ' ' + Math.round(p.r_km) + ' km' : '') + ')' : '') +
+                (q ? ' (' + q + (p.r_km != null ? ' ' + Math.round(p.r_km) + ' km/' + Math.round(p.r_km * 0.5399568) + ' n mi' : '') + ')' : '') +
                 (p.fix_source === 'hdob' ? '*' : '') +
                 (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30 ? '\u2020' : '');
         });

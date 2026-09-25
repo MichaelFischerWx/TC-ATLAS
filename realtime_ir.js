@@ -32088,7 +32088,8 @@
     function _rtSearWhere(az, rKm) {
         var c = _rtCompass8(az);
         if (!c) return '';
-        return c + (rKm != null ? ' ' + Math.round(rKm) + ' km' : '') + ' of center';
+        // km + n mi (NHC asked for nautical miles, 2026-09-25)
+        return c + (rKm != null ? ' ' + Math.round(rKm) + ' km (' + Math.round(rKm * 0.5399568) + ' n mi)' : '') + ' of center';
     }
     /** One-line SEAR summary for status strips: '· SEAR 126 kt NE (18:08Z)'. */
     function _rtSearStatus(sp) {
