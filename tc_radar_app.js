@@ -337,6 +337,7 @@ const filters = {
     minTilt:0, maxTilt:200,
     minWspd05:0, maxWspd05:100,
     minWspd20:0, maxWspd20:100,
+    minSear:0, maxSear:200,
     minYear:1997, maxYear:2024,
     stormName:'all'
 };
@@ -5433,8 +5434,37 @@ function _searColorscale() {   // hard steps: each bin boundary appears twice
 function _searLoadIndex(dt) {
     if (_searIndex[dt] || _searIndexReq[dt]) return;
     _searIndexReq[dt] = fetch(_SEAR_CDN + dt + '/index.json').then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (j) { _searIndex[dt] = (j && j.cases) || {}; _searSyncBtn(); })
+        .then(function (j) { _searIndex[dt] = (j && j.cases) || {}; _searEnrich(dt); _searSyncBtn(); })
         .catch(function () { _searIndex[dt] = {}; });
+}
+// Copy each case's SEAR maximum onto the case objects so the filters, marker
+// set and the "Strongest by SEAR" ranking can use it like any other field.
+function _searEnrich(dt) {
+    var d = dt === 'merge' ? mergeData : allData, ix = _searIndex[dt];
+    if (!d || !d.cases || !ix) return;
+    d.cases.forEach(function (c) { var v = ix[String(c.case_index)]; c.sear_max_kt = (v != null) ? v : null; });
+    if (dt === _activeDataType) { updateMarkers(); _searRenderRank(); }   // updateMarkers no-ops until the map exists
+}
+function _searRenderRank() {
+    var el = document.getElementById('sear-rank'), d = _getActiveData();
+    if (!el || !d || !d.cases) return;
+    var ix = _searIndex[_activeDataType];
+    if (!ix) { _searLoadIndex(_activeDataType); return; }
+    if (d.cases.length && d.cases[0].sear_max_kt === undefined) {   // index arrived before the case metadata
+        d.cases.forEach(function (c) { var v = ix[String(c.case_index)]; c.sear_max_kt = (v != null) ? v : null; });
+    }
+    var rows = d.cases.filter(function (c) { return c.sear_max_kt != null && passesFilters(c); })
+        .sort(function (a, b) { return b.sear_max_kt - a.sear_max_kt || a.datetime.localeCompare(b.datetime); }).slice(0, 25);
+    if (!rows.length) { el.innerHTML = '<span class="sear-rank-empty">No analyses with a SEAR field match the filters.</span>'; return; }
+    el.innerHTML = rows.map(function (c, i) {
+        return '<button type="button" class="sear-rank-row" data-ci="' + c.case_index + '" title="Open this analysis">' +
+            '<span class="r">' + (i + 1) + '</span><span class="n">' + c.storm_name + ' ' + c.year + '</span>' +
+            '<span class="t">' + String(c.datetime).slice(5, 16).replace(' UTC', '') + 'Z</span>' +
+            '<span class="v">' + c.sear_max_kt + ' kt</span><span class="bt">BT ' + (c.vmax_kt != null ? c.vmax_kt : '—') + '</span></button>';
+    }).join('');
+    Array.prototype.forEach.call(el.querySelectorAll('.sear-rank-row'), function (b) {
+        b.onclick = function () { _ga('tcradar_sear_rank_click', { case_index: +b.getAttribute('data-ci') }); openFeaturedCase(+b.getAttribute('data-ci')); };
+    });
 }
 function _searHas() {
     var ix = _searIndex[_activeDataType];
@@ -7149,6 +7179,7 @@ function passesFilters(c) {
     if (filters.minTilt !== 0 || filters.maxTilt !== 200) { if (c.tilt_magnitude_km === null) return false; if (c.tilt_magnitude_km < filters.minTilt || c.tilt_magnitude_km > filters.maxTilt) return false; }
     if (filters.minWspd05 !== 0 || filters.maxWspd05 !== 100) { if (c.max_er_wspd_05km == null) return false; if (c.max_er_wspd_05km < filters.minWspd05 || c.max_er_wspd_05km > filters.maxWspd05) return false; }
     if (filters.minWspd20 !== 0 || filters.maxWspd20 !== 100) { if (c.max_er_wspd_20km == null) return false; if (c.max_er_wspd_20km < filters.minWspd20 || c.max_er_wspd_20km > filters.maxWspd20) return false; }
+    if (filters.minSear !== 0 || filters.maxSear !== 200) { if (c.sear_max_kt == null) return false; if (c.sear_max_kt < filters.minSear || c.sear_max_kt > filters.maxSear) return false; }
     if (c.year < filters.minYear || c.year > filters.maxYear) return false;
     if (filters.stormName !== 'all' && c.storm_name !== filters.stormName) return false;
     return true;
@@ -7158,6 +7189,7 @@ function updateMarkers() {
     if (!markers || !_getActiveData()) return; markers.clearLayers(); var n = 0;
     _getActiveData().cases.forEach(function(c) { if (passesFilters(c)) { var m = allMarkers.find(function(m) { return m.caseIndex === c.case_index; }); if (m) { markers.addLayer(m.marker); n++; } } });
     document.getElementById('filtered-count').textContent = n;
+    _searRenderRank();
 }
 
 function updateIntensitySlider() {
@@ -7195,6 +7227,13 @@ function updateWspd20Slider() {
     document.getElementById('min-wspd20-value').textContent = min; document.getElementById('max-wspd20-value').textContent = max;
     var rf = document.getElementById('wspd20-range-fill'); rf.style.left = (min/100*100)+'%'; rf.style.width = ((max-min)/100*100)+'%'; updateMarkers();
 }
+function updateSearSlider() {
+    var min = parseInt(document.getElementById('min-sear').value), max = parseInt(document.getElementById('max-sear').value);
+    if (min > max) { document.getElementById('min-sear').value = max; min = max; }
+    filters.minSear = min; filters.maxSear = max;
+    document.getElementById('min-sear-value').textContent = min; document.getElementById('max-sear-value').textContent = max;
+    var rf = document.getElementById('sear-range-fill'); rf.style.left = (min/200*100)+'%'; rf.style.width = ((max-min)/200*100)+'%'; updateMarkers();
+}
 function updateYearFilter() { var min = parseInt(document.getElementById('min-year').value), max = parseInt(document.getElementById('max-year').value); if (min > max) { document.getElementById('min-year').value = max; min = max; } filters.minYear = min; filters.maxYear = max; updateMarkers(); }
 function updateStormFilter() { filters.stormName = document.getElementById('storm-select').value || 'all'; updateMarkers(); }
 
@@ -7204,6 +7243,7 @@ function resetFilters() {
     filters.minTilt=0; filters.maxTilt=200; document.getElementById('min-tilt').value=0; document.getElementById('max-tilt').value=200; updateTiltSlider();
     filters.minWspd05=0; filters.maxWspd05=100; document.getElementById('min-wspd05').value=0; document.getElementById('max-wspd05').value=100; updateWspd05Slider();
     filters.minWspd20=0; filters.maxWspd20=100; document.getElementById('min-wspd20').value=0; document.getElementById('max-wspd20').value=100; updateWspd20Slider();
+    filters.minSear=0; filters.maxSear=200; document.getElementById('min-sear').value=0; document.getElementById('max-sear').value=200; updateSearSlider();
     // Reset year filter to full range
     var _resetData = _getActiveData();
     if (_resetData) {
@@ -7235,6 +7275,10 @@ function initializeFilters() {
     document.getElementById('max-wspd05').addEventListener('input', updateWspd05Slider);
     document.getElementById('min-wspd20').addEventListener('input', updateWspd20Slider);
     document.getElementById('max-wspd20').addEventListener('input', updateWspd20Slider);
+    document.getElementById('min-sear').addEventListener('input', updateSearSlider);
+    document.getElementById('max-sear').addEventListener('input', updateSearSlider);
+    var _srf = document.getElementById('sear-range-fill'); if (_srf) { _srf.style.left = '0%'; _srf.style.width = '100%'; }
+    _searLoadIndex('swath'); _searLoadIndex('merge');
     document.getElementById('min-year').addEventListener('change', updateYearFilter);
     document.getElementById('max-year').addEventListener('change', updateYearFilter);
     // Storm filtering handled by two-step handler at top of file

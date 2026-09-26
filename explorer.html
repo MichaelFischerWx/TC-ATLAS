@@ -59,9 +59,9 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundle + parser-injected map engine, discoverable
          from byte 0. Tokens MUST match the script tags below. -->
-    <link rel="preload" as="script" href="tc_radar_app.js?v=20260926a">
+    <link rel="preload" as="script" href="tc_radar_app.js?v=20260926b">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260923a">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260926a">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260903a">
 </head>
 <body>
@@ -149,6 +149,15 @@
                     <label>Max TDR Wind &mdash; 2.0 km (m/s)</label>
                     <div class="slider-values"><span id="min-wspd20-value">0</span><span id="max-wspd20-value">100</span></div>
                     <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="wspd20-range-fill"></div><input type="range" id="min-wspd20" aria-label="Minimum 2-km wind speed (m/s)" min="0" max="100" value="0" step="2"><input type="range" id="max-wspd20" aria-label="Maximum 2-km wind speed (m/s)" min="0" max="100" value="100" step="2"></div>
+                </div>
+                <div class="filter-group">
+                    <label>Max SEAR 10-m Wind (kt) <span class="sear-exp-tag" title="Experimental. SEAR surface model applied to each analysis' 500-m and 2-km TDR winds; in-sample (trained on sondes collocated with these analyses).">exp</span></label>
+                    <div class="slider-values"><span id="min-sear-value">0</span><span id="max-sear-value">200</span></div>
+                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="sear-range-fill"></div><input type="range" id="min-sear" aria-label="Minimum SEAR 10-m wind (kt)" min="0" max="200" value="0" step="5"><input type="range" id="max-sear" aria-label="Maximum SEAR 10-m wind (kt)" min="0" max="200" value="200" step="5"></div>
+                </div>
+                <div class="filter-group">
+                    <label>Strongest by SEAR 10-m <span class="sear-exp-tag" title="Analyses ranked by their maximum SEAR 10-m wind (experimental, in-sample), within the current filters. Click to open.">exp</span></label>
+                    <div id="sear-rank" class="sear-rank"><span class="sear-rank-empty">Loading…</span></div>
                 </div>
                 <div class="filter-group">
                     <label>Year Range</label>
@@ -418,7 +427,7 @@
     <script defer src="skewt.js?v=20260725d"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
     <script defer src="tc_vol_gl.js?v=20260908l"></script>
-    <script defer src="tc_radar_app.js?v=20260926a"></script>
+    <script defer src="tc_radar_app.js?v=20260926b"></script>
     <!-- realtime_tdr.js (Recon tab, ~114 KB gz) is NOT loaded here any more:
          the Recon UI lives on realtime_ir.html and none of its 71 window.*
          exports or rt-* DOM ids exist on this page. realtime_tdr_styles.css
