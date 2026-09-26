@@ -12245,9 +12245,43 @@ function _gaSearFetch() {
             [_gaFLData1s, _gaFLData10s, _gaFLData30s].forEach(_gaSearAttach);
             _gaFLRenderOnMap();
             _gaFLPopulateVarToggles();
+            _gaFLUpdateStatus();
             if (_gaFLTSOpen) _gaFLRenderTimeSeries();
         }
     }).catch(function () {});
+}
+/** Mission summary line under the mission picker: obs, max FL wind, min P, and
+ *  — while the SEAR pill is on and the mission has matches — the max SEAR 10-m. */
+function _gaFLUpdateStatus() {
+    var status = document.getElementById('ga-fl-frame-status'), json = _gaFLData;
+    if (!status || !json) return;
+    var summ = json.summary || {};
+    var parts = [json.n_obs_raw + ' obs'];
+    if (summ.max_fl_wspd_ms != null && summ.max_fl_wspd_ms <= 120) parts.push('Max: ' + Math.round(summ.max_fl_wspd_ms * 1.944) + ' kt');
+    var minP = summ.min_sfcpr_hpa != null ? summ.min_sfcpr_hpa : summ.min_static_pres_hpa;
+    if (minP != null && minP >= 850) parts.push('Min P: ' + minP + ' hPa');
+    var max1s = summ.max_fl_wspd_ms_1s;
+    var maxKt10 = summ.max_fl_wspd_ms != null ? Math.round(summ.max_fl_wspd_ms * 1.944) : null;
+    var maxKt1s = max1s != null && max1s <= 120 ? Math.round(max1s * 1.944) : null;
+    if (maxKt1s != null && maxKt10 != null && maxKt1s > maxKt10) {
+        parts.push('(1s: ' + maxKt1s + ' kt)');
+    }
+    status.textContent = parts.join(' \u00b7 ');
+    if (_gaFLVarsVisible.sear_kt) {
+        var best = null;
+        [_gaFLData10s, _gaFLData30s, _gaFLData1s].forEach(function (ds) {
+            if (!ds) return;
+            for (var i = 0; i < ds.length; i++) if (ds[i].sear_kt != null && (!best || ds[i].sear_kt > best.sear_kt)) best = ds[i];
+        });
+        if (best) {
+            var sp = document.createElement('span');
+            sp.style.color = '#be185d';
+            sp.title = 'Experimental SEAR 10-m wind estimate (MLBT record), maximum over this mission' +
+                (best.sear_r_km != null ? ' \u2014 ' + best.time + ' UTC, ' + _gaSearWhere(best.sear_az, best.sear_r_km) : '');
+            sp.textContent = ' \u00b7 SEAR max: ' + best.sear_kt + ' kt';
+            status.appendChild(sp);
+        }
+    }
 }
 function _gaSearHasData() {
     var ds = _gaFLData10s || _gaFLData30s || _gaFLData1s;
@@ -12811,20 +12845,7 @@ function _gaFLApplyData(json) {
         if (!show1s) _gaFLResVisible['1s'] = false;
     }
 
-    if (status) {
-        var summ = json.summary || {};
-        var parts = [json.n_obs_raw + ' obs'];
-        if (summ.max_fl_wspd_ms != null && summ.max_fl_wspd_ms <= 120) parts.push('Max: ' + Math.round(summ.max_fl_wspd_ms * 1.944) + ' kt');
-        var minP = summ.min_sfcpr_hpa != null ? summ.min_sfcpr_hpa : summ.min_static_pres_hpa;
-        if (minP != null && minP >= 850) parts.push('Min P: ' + minP + ' hPa');
-        var max1s = summ.max_fl_wspd_ms_1s;
-        var maxKt10 = summ.max_fl_wspd_ms != null ? Math.round(summ.max_fl_wspd_ms * 1.944) : null;
-        var maxKt1s = max1s != null && max1s <= 120 ? Math.round(max1s * 1.944) : null;
-        if (maxKt1s != null && maxKt10 != null && maxKt1s > maxKt10) {
-            parts.push('(1s: ' + maxKt1s + ' kt)');
-        }
-        status.textContent = parts.join(' \u00b7 ');
-    }
+    _gaFLUpdateStatus();
 
     _gaFLRenderOnMap();
     _gaFLScheduleTS();
@@ -15015,6 +15036,7 @@ function _gaFLPopulateVarToggles() {
         btn.onclick = function () {
             _gaFLVarsVisible[key] = !_gaFLVarsVisible[key];
             btn.classList.toggle('active', _gaFLVarsVisible[key]);
+            if (key === 'sear_kt') _gaFLUpdateStatus();
             btn.style.background = _gaFLVarsVisible[key] ? _gaFLColor(cfg) + '22' : '';
             if (_gaFLData) _gaFLRenderTimeSeries();
         };
