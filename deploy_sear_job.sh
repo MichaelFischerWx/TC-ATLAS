@@ -35,7 +35,7 @@ CTX="${SCRIPT_DIR}/sear_job_ctx"
 if [[ "${1:-}" != "--no-build" ]]; then
     # ── Stage the runtime files ──────────────────────────────────────
     rm -rf "${CTX}"; mkdir -p "${CTX}/realtime" "${CTX}/SEAR/Scripts" "${CTX}/SEAR/Model"
-    cp "${MLBT}/realtime/sear_rt.py" "${CTX}/realtime/"
+    cp "${MLBT}/realtime/sear_rt.py" "${MLBT}/realtime/sear_swath.py" "${CTX}/realtime/"
     cp "${MLBT}"/external/SEAR/Scripts/*.py "${CTX}/SEAR/Scripts/"
     # Only the two model files sear_rt.py loads (SEAR_RMW_MODE=leg set).
     python3 - "${MLBT}/external/SEAR/Scripts/config.py" "${MLBT}/external/SEAR/Model" "${CTX}/SEAR/Model" <<'PY'
