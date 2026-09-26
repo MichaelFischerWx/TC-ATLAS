@@ -12219,7 +12219,7 @@ var _gaFLTSOpen = false;
 
 
 // ── SEAR 10-m estimates (experimental) from MLBT's historical record ─────────
-// bin/build_sear_hist.py publishes one file per storm (Atlantic 2001-2025, E/C
+// bin/build_sear_hist.py publishes one file per storm (Atlantic 2008-2025, E/C
 // Pacific 2008-2024) at cdn.tcatlas.org/sear-hist/v1/<ATCF>.json: per-ob arrays
 // t (epoch s), lat, lon, y (10-m kt, 10-s-peak scale, RMW-corrected), r, az.
 // Obs are joined by time (+-20 s) and aircraft position (<= 8 km), so the same

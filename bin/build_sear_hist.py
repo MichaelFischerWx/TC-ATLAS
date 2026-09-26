@@ -2,7 +2,7 @@
 """Publish MLBT's historical SEAR record (experimental 10-m wind from flight-level recon) for the
 Global Archive recon section.
 
-Source: MLBT phase1/out/sear/ (Atlantic 2001-2025) and phase1/out/sear_ep/ (E/C Pacific 2008-2024),
+Source: MLBT phase1/out/sear/ (Atlantic 2008-2025) and phase1/out/sear_ep/ (E/C Pacific 2008-2024),
 written by phase1/sear_operator.py with the same Stage 1 v4 / Stage 2 v8 chain as the live product
 (re-scoring AL142024 on 2026-09-26 reproduced the record exactly).
 
