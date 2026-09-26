@@ -823,6 +823,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                     '<button class="overlay-pill" id="btn-archive-fl" onclick="archiveToggleFlightLevel()" data-color="blue" title="Flight-Level Data">' + _icon('plane') + 'FL</button>' +
                     '<button class="overlay-pill" id="btn-archive-sonde" onclick="archiveToggleDropsondes()" data-color="blue" title="Dropsonde Data">' + _icon('parachute') + 'Sondes</button>' +
                     '<button class="overlay-pill" id="barb-btn" onclick="toggleWindBarbs()" data-color="slate" title="Wind Barbs">' + _icon('wind') + 'Barbs</button>' +
+                    '<button class="overlay-pill" id="sear-btn" onclick="toggleSear()" data-color="pink" disabled title="SEAR 10-m wind (experimental): the surface wind estimated from this analysis\u2019 500-m and 2-km TDR winds. In-sample: SEAR\u2019s surface model was trained on dropsondes collocated with these analyses.">' + _icon('wind') + 'SEAR 10-m</button>' +
                     '<button class="overlay-pill" id="tilt-btn" onclick="toggleTiltProfile()" data-color="slate" title="Vortex Tilt Profile">' + _icon('target') + 'Tilt</button>' +
                     '<button class="overlay-pill" id="env-case-btn" onclick="toggleEnvOverlay()" data-color="emerald" title="ERA5 Environment Diagnostics">' + _icon('globe') + 'Env</button>' +
                     '<button class="overlay-pill" id="mw-overlay-btn" onclick="toggleMicrowaveOverlay()" data-color="orange" title="Microwave Satellite Overlay">' + _icon('dish') + 'MW</button>' +
@@ -4403,7 +4404,7 @@ function _tdrColorbarUpdate(p) {
     document.getElementById('tdr-cb-grad').style.background = 'linear-gradient(to right, ' + stops.join(', ') + ')';
     document.getElementById('tdr-cb-name').textContent = p.display_name || '';
     document.getElementById('tdr-cb-units').textContent = p.units ? '(' + p.units + ')' : '';
-    document.getElementById('tdr-cb-level').textContent = (p.level_km != null ? p.level_km.toFixed(1) + ' km' : '');
+    document.getElementById('tdr-cb-level').textContent = (p.level_km != null ? (p.level_km < 0.05 ? '10 m' : p.level_km.toFixed(1) + ' km') : '');
     var mn = document.getElementById('tdr-cb-min'), mx = document.getElementById('tdr-cb-max');
     if (document.activeElement !== mn) mn.value = _fmtRange(p.vmin);
     if (document.activeElement !== mx) mx.value = _fmtRange(p.vmax);
@@ -4544,6 +4545,8 @@ window.toggleExplorerMore = function() {
 };
 function generateCustomPlot(callback) {
     if (currentCaseIndex === null) return;
+    _searSyncBtn();
+    if (_searMode) { _searRender(callback); return; }
     // Ensure Plotly is loaded before generating any plots
     if (typeof Plotly === 'undefined') {
         ensurePlotly(function() { generateCustomPlot(callback); });
@@ -5103,7 +5106,7 @@ function renderPlotFromJSON(json, resultDiv) {
 
     var vmaxStr = meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : '';
     var overlayLabel = json.overlay ? '<br><span style="font-size:0.85em;color:#9ca3af;">Contours: ' + json.overlay.display_name + ' (' + json.overlay.units + ')</span>' : '';
-    var title = meta.storm_name + ' | ' + meta.datetime + vmaxStr + '<br>' + varInfo.display_name + ' @ ' + json.actual_level_km.toFixed(1) + ' km' + overlayLabel;
+    var title = meta.storm_name + ' | ' + meta.datetime + vmaxStr + '<br>' + varInfo.display_name + ' @ ' + (varInfo.key === 'sear_10m' ? '10 m' : json.actual_level_km.toFixed(1) + ' km') + overlayLabel;
 
     var heatmap = { z: zData, x: x, y: y, type: 'heatmap', colorscale: activeColorscale, zmin: activeVmin, zmax: activeVmax, colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, thickness: 12, len: 0.85 }, hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>X: %{x:.0f} km<br>Y: %{y:.0f} km<extra></extra>', hoverongaps: false };
     var shapes = [];
@@ -5406,8 +5409,87 @@ function _toggleDualPane() {
 }
 
 // ── Auto-fetch azimuthal mean into the right dual pane ────────
+
+// ── SEAR 10-m wind (experimental), precomputed per case ─────────────────────
+// bin/build_tcradar_sear.py runs SEAR Stage 2 on every case's own recentered 500-m +
+// 2-km winds (ERA5 shear from the matching TC-RADAR v4.0 case) and uploads one gzip
+// JSON per case to cdn.tcatlas.org/tcradar-sear/v1/{swath|merge}/{case}.json, in
+// the /data shape — so the plan view, map drape, hover, RMW ring and colorbar all
+// reuse the normal render path. Discrete recon wind scale (same as the RT recon
+// map). IN-SAMPLE: Stage 2 was trained on sondes collocated with these analyses.
+var _searMode = false, _searIndex = {}, _searIndexReq = {}, _searCache = {};
+var _SEAR_CDN = 'https://cdn.tcatlas.org/tcradar-sear/v1/';
+var _SEAR_STOPS = [[34, '#60a5fa'], [50, '#22c55e'], [64, '#eab308'], [83, '#f97316'], [96, '#ef4444'], [113, '#dc2626'], [137, '#c026d3'], [999, '#7c3aed']];
+var _SEAR_VMIN = 0, _SEAR_VMAX = 170;
+function _searColorscale() {   // hard steps: each bin boundary appears twice
+    var cs = [], lo = _SEAR_VMIN, span = _SEAR_VMAX - _SEAR_VMIN;
+    for (var i = 0; i < _SEAR_STOPS.length; i++) {
+        var hi = Math.min(_SEAR_STOPS[i][0], _SEAR_VMAX);
+        cs.push([(lo - _SEAR_VMIN) / span, _SEAR_STOPS[i][1]], [(hi - _SEAR_VMIN) / span, _SEAR_STOPS[i][1]]);
+        lo = hi; if (hi >= _SEAR_VMAX) break;
+    }
+    return cs;
+}
+function _searLoadIndex(dt) {
+    if (_searIndex[dt] || _searIndexReq[dt]) return;
+    _searIndexReq[dt] = fetch(_SEAR_CDN + dt + '/index.json').then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) { _searIndex[dt] = (j && j.cases) || {}; _searSyncBtn(); })
+        .catch(function () { _searIndex[dt] = {}; });
+}
+function _searHas() {
+    var ix = _searIndex[_activeDataType];
+    return !!(ix && currentCaseIndex !== null && ix[String(currentCaseIndex)] != null);
+}
+function _searSyncBtn() {
+    _searLoadIndex(_activeDataType);
+    var b = document.getElementById('sear-btn');
+    if (!b) return;
+    var has = _searHas();
+    b.disabled = !has;
+    if (!has && _searMode) _searMode = false;
+    b.classList.toggle('active', _searMode);
+    var ix = _searIndex[_activeDataType];
+    b.title = has ? 'SEAR 10-m wind (experimental), max ' + ix[String(currentCaseIndex)] + ' kt. Estimated from this analysis’ 500-m and 2-km TDR winds. In-sample: SEAR’s surface model was trained on dropsondes collocated with these analyses.'
+                  : 'SEAR 10-m wind: not available for this analysis (no 500-m TDR data or no ERA5 environment match).';
+}
+window.toggleSear = function () {
+    if (!_searHas()) return;
+    _searMode = !_searMode;
+    _ga('tcradar_sear_toggle', { on: _searMode ? 1 : 0, case_index: currentCaseIndex, data_type: _activeDataType });
+    _searSyncBtn();
+    generateCustomPlot();
+};
+function _searRender(callback) {
+    var resultDiv = document.getElementById('ep-result');
+    var key = _activeDataType + '_' + currentCaseIndex, ci = currentCaseIndex, dt = _activeDataType;
+    var go = function (j) {
+        if (ci !== currentCaseIndex || dt !== _activeDataType || !_searMode) return;
+        var json = { data: j.data, x: j.x, y: j.y, actual_level_km: 0.01,
+            variable: { key: 'sear_10m', display_name: 'SEAR 10-m wind (exp, in-sample)', units: 'kt',
+                        vmin: _SEAR_VMIN, vmax: _SEAR_VMAX, colorscale: _searColorscale() },
+            case_meta: { rmw_km: j.rmw_km } };
+        renderPlotFromJSON(json, resultDiv);
+        if (callback) callback();
+    };
+    if (_searCache[key]) { go(_searCache[key]); return; }
+    if (resultDiv && !_animPlaying) resultDiv.innerHTML = _hurricaneLoadingHTML('Loading SEAR 10-m field…', false);
+    fetch(_SEAR_CDN + dt + '/' + ci + '.json').then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function (j) { _searCache[key] = j; go(j); })
+        .catch(function (e) { if (resultDiv) resultDiv.innerHTML = '<div class="explorer-status error">⚠️ SEAR field unavailable (' + e.message + ')</div>'; });
+}
+// Picking a different 3-D variable or level means "show me that" — leave SEAR mode.
+document.addEventListener('change', function (e) {
+    var id = e.target && e.target.id;
+    if (_searMode && (id === 'ep-var' || id === 'ep-level')) { _searMode = false; _searSyncBtn(); }
+}, true);
+
 function _autoFetchDualAzimuthalMean() {
     if (currentCaseIndex === null) return;
+    if (_searMode) {
+        var ph = document.getElementById('dual-az-placeholder');
+        if (ph) ph.textContent = 'No azimuthal mean for the SEAR 10-m field (a single surface level). Turn SEAR off for the 3-D variables.';
+        return;
+    }
     var variable = document.getElementById('ep-var').value;
     var overlay = (document.getElementById('ep-overlay') || {}).value || '';
     var covSlider = document.getElementById('az-coverage');
