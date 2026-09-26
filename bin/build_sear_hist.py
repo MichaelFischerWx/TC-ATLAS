@@ -108,7 +108,7 @@ def main() -> int:
     fx["t"] = pd.to_datetime(fx.time, utc=True)
     wref = fx.wl150_atpeak_ms.where(np.isfinite(fx.wl150_atpeak_ms), fx.stage2_pred_wl150_ms).to_numpy(float)
     f_old = np.array([0.925, 0.898, 0.875, 0.853, 0.875])[np.clip(np.searchsorted([0, 20, 30, 40, 50], wref, side="right") - 1, 0, 4)]
-    fx["sc53"] = np.where(np.isfinite(wref), wl150_to_10m_factor(wref) / f_old, 1.0)   # fix record predates ruling 53
+    fx["sc53"] = 1.0   # sear_fix re-run under ruling 53 (2026-09-26); was wl150_to_10m_factor(wref) / f_old
     FX = dict(list(fx.groupby("atcf")))
     iso = lambda t: pd.Timestamp(t).strftime("%Y-%m-%dT%H:%M:%SZ")
     fnum = lambda v, nd=1: None if v is None or not np.isfinite(v) else round(float(v), nd)
