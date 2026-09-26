@@ -12273,12 +12273,31 @@ function _gaFLUpdateStatus() {
             if (!ds) return;
             for (var i = 0; i < ds.length; i++) if (ds[i].sear_kt != null && (!best || ds[i].sear_kt > best.sear_kt)) best = ds[i];
         });
-        if (best) {
+        // Pass maxima in this mission's time window: leg maxima and the fix operator's VDM-based
+        // passes (the eyewall passes older 1-s / 30-s legs miss; MLBT ruling 45).
+        var bestPass = null, base = _gaSearMissionBaseMs(), ds0 = _gaFLData10s || _gaFLData30s || _gaFLData1s;
+        if (_gaSear && _gaSear.passes && base != null && ds0 && ds0.length) {
+            var w0 = base + (ds0[0].time_sec - 900) * 1000, w1 = base + (ds0[ds0.length - 1].time_sec + 900) * 1000;   // the file's own span +-15 min
+            _gaSear.passes.forEach(function (p) {
+                var tp = Date.parse(p.t), v = p.y_corr_kt != null ? p.y_corr_kt : p.y_kt;
+                if (v != null && tp >= w0 && tp <= w1 && (!bestPass || v > bestPass.v)) bestPass = { v: v, p: p };
+            });
+        }
+        var useObs = best && (!bestPass || best.sear_kt >= Math.round(bestPass.v));
+        if (best || bestPass) {
             var sp = document.createElement('span');
             sp.style.color = '#be185d';
-            sp.title = 'Experimental SEAR 10-m wind estimate (MLBT record), maximum over this mission' +
-                (best.sear_r_km != null ? ' \u2014 ' + best.time + ' UTC, ' + _gaSearWhere(best.sear_az, best.sear_r_km) : '');
-            sp.textContent = ' \u00b7 SEAR max: ' + best.sear_kt + ' kt';
+            if (useObs) {
+                sp.title = 'Experimental SEAR 10-m wind estimate (MLBT record), maximum over this mission' +
+                    (best.sear_r_km != null ? ' \u2014 ' + best.time + ' UTC, ' + _gaSearWhere(best.sear_az, best.sear_r_km) : '');
+                sp.textContent = ' \u00b7 SEAR max: ' + best.sear_kt + ' kt';
+            } else {
+                var fix = String(bestPass.p.src || '').indexOf('fix') === 0;
+                sp.title = 'Experimental SEAR 10-m wind estimate (MLBT record) for the strongest ' +
+                    (fix ? 'center-fix pass (from the VDM\u2019s max 10-s flight-level wind, ' + (bestPass.p.fl_peak_kt || '?') + ' kt)' : 'eyewall pass') +
+                    ' at ' + bestPass.p.t.slice(11, 16) + ' UTC' + (fix ? ' \u2014 a pass these flight-level files do not sample' : '');
+                sp.textContent = ' \u00b7 SEAR max: ' + Math.round(bestPass.v) + ' kt' + (fix ? ' (VDM fix)' : '');
+            }
             status.appendChild(sp);
         }
     }
