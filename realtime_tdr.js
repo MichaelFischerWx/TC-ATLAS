@@ -386,12 +386,13 @@
     var _hdobRecsat = null, _hdobRecsatKey = null, _hdobRecsatTs = 0, _hdobPassSel = null;
     var _RECSAT_CDN = 'https://cdn.tcatlas.org/recon-sat/';
     // Per-symbol visibility on the map (toolbar pills).
-    var _hdobLayerVis = { barbs: true, sondes: true, vdm: true, sear: true, aircraft: true };
+    var _hdobLayerVis = { barbs: true, sondes: true, vdm: true, sear: true, tdr: true, aircraft: true };
     var _HDOB_LAYERS = [
         { key: 'barbs',    name: 'Barbs',      color: '#2563eb', tip: 'Flight-level wind barbs + track dots' },
         { key: 'sondes',   name: 'Sondes',     color: '#d97706', tip: 'Dropsonde launch points (◇)' },
         { key: 'vdm',      name: 'VDM fixes',  color: '#ef4444', tip: 'Vortex Data Message center fixes (⊕)' },
         { key: 'sear',     name: 'SEAR',       color: '#ec4899', tip: 'SEAR pass centers, peaks and radials (experimental)' },
+        { key: 'tdr',      name: 'TDR 10-m',   color: '#0891b2', tip: 'SEAR 10-m wind estimated from each P-3 tail-Doppler analysis (experimental)' },
         { key: 'aircraft', name: 'Aircraft',   color: '#ca8a04', tip: 'Latest aircraft position (✈)' }
     ];
     var _hdobMissions = [], _hdobMissionInfo = {}, _hdobMissionTail = null;  // mission-centric fallback
@@ -692,6 +693,7 @@
         _hdobPassSel = null; _hdobRecsat = null; _hdobRecsatKey = null; _hdobRecsatTs = 0;
         for (var sm = 0; sm < _hdobSearMarkers.length; sm++) { try { _hdobMap.removeLayer(_hdobSearMarkers[sm]); } catch (e) {} }
         _hdobSearMarkers = [];
+        _hdobTdrReset();
         if (value.indexOf('mission:') === 0) {
             // Mission mode: a standalone flight, attributed by aircraft tail.
             var tail = value.slice(8);
@@ -886,6 +888,7 @@
         _hdobMarkers = [];
         for (var am = 0; am < _hdobAircraftMarkers.length; am++) { try { _hdobMap.removeLayer(_hdobAircraftMarkers[am]); } catch (e) {} }
         _hdobAircraftMarkers = [];
+        _hdobTdrRemove();
     }
 
     /** Copy of the archived blob truncated at the replay clock (obs, sondes, VDMs,
@@ -1366,6 +1369,7 @@
         var lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = 'Show'; box.appendChild(lbl);
         _HDOB_LAYERS.forEach(function (cfg) {
             if (cfg.key === 'sear' && !(_hdobData && _hdobData.sear && _hdobData.sear.passes && _hdobData.sear.passes.length)) return;
+            if (cfg.key === 'tdr' && !(_hdobData && _hdobData.sear && _hdobData.sear.swath_url)) return;
             var b = document.createElement('button');
             b.textContent = cfg.name; b.title = cfg.tip;
             var on = !!_hdobLayerVis[cfg.key];
@@ -1662,6 +1666,7 @@
         // Sonde/VDM markers honour the flight selection too (was: always all).
         _hdobMarkers = kit.buildMarkers(map, _hdobFilterMarkerBlob(_hdobData));
         _hdobRenderSearPasses(map, passInfo);
+        _hdobRenderTdr(map, passInfo);
         _hdobRenderAircraft(map, _hdobLayerVis.aircraft ? mapAircraft : []);
         if (!_hdobFitDone) {
             // Anchor the initial view on the LATEST aircraft position — where the
@@ -1708,6 +1713,159 @@
             }
         }
         _hdobRenderChart();
+    }
+
+
+    // ── SEAR 10-m from each P-3 tail-Doppler analysis (experimental, 2026-09-26) ──
+    // MLBT sear_rt publishes sear-rt/swath/<ATCF>.json plus one 8-bit grayscale
+    // PNG per real-time TDR analysis (pixel = 10-m wind in kt, 0 = no data; rows
+    // uniform in Web-Mercator y, so an image overlay with the JSON bounds lands
+    // exactly on the GL map). The SEAR payload advertises it via swath_url, so a
+    // storm without TDR never probes the CDN for a 404. This tab shows ONE
+    // analysis at a time — the multi-analysis composite swath is deliberately
+    // not drawn here (Michael, 2026-09-26). The analysis follows the pass
+    // stepper / pinned sortie time, or the ◀ ▶ in the key.
+    var _hdobTdrMeta = null, _hdobTdrMetaUrl = null, _hdobTdrMetaGen = null;
+    var _hdobTdrSel = null;          // analysis file picked in the key; null = follow the pass / pinned time
+    var _hdobTdrOverlay = null, _hdobTdrShown = null, _hdobTdrKeyEl = null, _hdobTdrHoverBound = false;
+    var _hdobTdrImg = {};            // png url -> {vals, w, h, url} | 'loading' | 'error'
+    var _HDOB_TDR_MAX_DT_MS = 90 * 60000;   // an analysis further than this from the pass is not "that pass"
+
+    function _hdobTdrRemove() {
+        if (_hdobTdrOverlay && _hdobMap) { try { _hdobMap.removeLayer(_hdobTdrOverlay); } catch (e) {} }
+        _hdobTdrOverlay = null; _hdobTdrShown = null;
+        if (_hdobTdrKeyEl) _hdobTdrKeyEl.style.display = 'none';
+    }
+    function _hdobTdrReset() {
+        _hdobTdrRemove();
+        _hdobTdrMeta = null; _hdobTdrMetaUrl = null; _hdobTdrMetaGen = null; _hdobTdrSel = null;
+    }
+    function _hdobTdrLut() {
+        var kit = window._ReconKit, stops = (kit && kit.windStops) || [[34, '#60a5fa'], [64, '#eab308'], [9999, '#7c3aed']];
+        var lut = new Uint8Array(256 * 3);
+        for (var v = 0; v < 256; v++) {
+            var hex = stops[stops.length - 1][1];
+            for (var i = 0; i < stops.length; i++) { if (v < stops[i][0]) { hex = stops[i][1]; break; } }
+            lut[v * 3] = parseInt(hex.slice(1, 3), 16); lut[v * 3 + 1] = parseInt(hex.slice(3, 5), 16); lut[v * 3 + 2] = parseInt(hex.slice(5, 7), 16);
+        }
+        return lut;
+    }
+    /** Decode one analysis PNG into kt values (for hover) + a colorized data URL. */
+    function _hdobTdrLoad(url) {
+        var c = _hdobTdrImg[url];
+        if (c) return c;
+        _hdobTdrImg[url] = 'loading';
+        var img = new Image(); img.crossOrigin = 'anonymous';
+        img.onload = function () {
+            try {
+                var w = img.naturalWidth, h = img.naturalHeight, cv = document.createElement('canvas');
+                cv.width = w; cv.height = h;
+                var ctx = cv.getContext('2d', { willReadFrequently: true }); ctx.drawImage(img, 0, 0);
+                var im = ctx.getImageData(0, 0, w, h), px = im.data, vals = new Uint8Array(w * h), lut = _hdobTdrLut();
+                for (var i = 0; i < w * h; i++) {
+                    var v = px[i * 4]; vals[i] = v;
+                    if (!v) { px[i * 4 + 3] = 0; continue; }
+                    px[i * 4] = lut[v * 3]; px[i * 4 + 1] = lut[v * 3 + 1]; px[i * 4 + 2] = lut[v * 3 + 2]; px[i * 4 + 3] = 255;
+                }
+                ctx.putImageData(im, 0, 0);
+                _hdobTdrImg[url] = { vals: vals, w: w, h: h, url: cv.toDataURL('image/png') };
+            } catch (e) { _hdobTdrImg[url] = 'error'; }
+            if (_hdobData) _hdobRender();
+        };
+        img.onerror = function () { _hdobTdrImg[url] = 'error'; };
+        img.src = url;
+        return 'loading';
+    }
+    function _hdobTdrPick(passInfo) {
+        var an = (_hdobTdrMeta && _hdobTdrMeta.analyses) || [];
+        if (!an.length) return { a: null, why: '' };
+        if (_hdobTdrSel) for (var i = 0; i < an.length; i++) if (an[i].file === _hdobTdrSel) return { a: an[i], i: i };
+        var want = passInfo ? Date.parse(passInfo.t) : (_hdobFrozenAt ? Date.parse(_hdobFrozenAt) : NaN);
+        if (isNaN(want)) return { a: an[an.length - 1], i: an.length - 1 };   // live sortie: newest analysis
+        var bi = 0, bd = Infinity;
+        for (var k = 0; k < an.length; k++) { var d = Math.abs(Date.parse(an[k].t) - want); if (d < bd) { bd = d; bi = k; } }
+        if (bd > _HDOB_TDR_MAX_DT_MS) return { a: null, why: 'No TDR analysis within 90 min of ' + (passInfo ? 'this pass' : 'this sortie') + '.' };
+        return { a: an[bi], i: bi };
+    }
+    function _hdobTdrKey(map) {
+        if (_hdobTdrKeyEl) return _hdobTdrKeyEl;
+        var host = map.getContainer ? map.getContainer() : document.getElementById('recon-hdob-map');
+        var el = document.createElement('div'); el.className = 'recon-hdob-tdrkey'; el.style.display = 'none';
+        // keep map drags/zooms from starting on the key's buttons
+        ['mousedown', 'dblclick', 'wheel', 'touchstart', 'pointerdown'].forEach(function (ev) {
+            el.addEventListener(ev, function (e) { e.stopPropagation(); }, { passive: true });
+        });
+        host.appendChild(el); _hdobTdrKeyEl = el;
+        return el;
+    }
+    function _hdobTdrKeyHtml(pick, an) {
+        var kit = window._ReconKit, stops = (kit && kit.windStops) || [];
+        var a = pick.a, h = '<div class="tt">SEAR 10-m from TDR <span class="exp">experimental</span></div>';
+        if (an.length) {
+            var lbl = a ? (a.t.slice(11, 16) + 'Z · ' + a.mission + ' (' + (pick.i + 1) + '/' + an.length + ')') : '—';
+            h += '<div class="nav"><button data-d="-1" title="Earlier analysis">◀</button><span>' + lbl + '</span>' +
+                 '<button data-d="1" title="Later analysis">▶</button>' +
+                 '<button data-d="0" class="' + (_hdobTdrSel ? '' : 'on') + '" title="Follow the selected pass / sortie time">Auto</button></div>';
+        }
+        if (!a) return h + '<div class="info">' + (pick.why || '') + '</div>';
+        h += '<div class="bar">';
+        for (var i = 0; i < stops.length; i++) {
+            var lo = i ? stops[i - 1][0] : 0;
+            h += '<span style="background:' + stops[i][1] + '" title="' + (i ? lo + '+' : '<' + stops[i][0]) + ' kt">' + (i ? lo : '') + '</span>';
+        }
+        h += '</div><div class="info">Max ' + Math.round(a.max_kt) + ' kt, ' + Math.round(a.max_r_nm) + ' n mi from center · ' +
+             'analysis ' + a.window[0].slice(11, 16) + '–' + a.window[1].slice(11, 16) + 'Z · no color = no TDR data below 1 km</div>' +
+             '<div class="hov">Hover the map for a value</div>';
+        return h;
+    }
+    function _hdobTdrHover(e) {
+        var sh = _hdobTdrShown, el = _hdobTdrKeyEl;
+        if (!sh || !el) return;
+        var hv = el.querySelector('.hov');
+        if (!hv) return;
+        var ll = e.latlng, b = sh.a.bounds, merc = function (la) { return Math.log(Math.tan(Math.PI / 4 + la * Math.PI / 360)); };
+        var x = Math.floor((ll.lng - b[0][1]) / (b[1][1] - b[0][1]) * sh.w);
+        var y = Math.floor((merc(b[1][0]) - merc(ll.lat)) / (merc(b[1][0]) - merc(b[0][0])) * sh.h);
+        var v = (x >= 0 && x < sh.w && y >= 0 && y < sh.h) ? sh.vals[y * sh.w + x] : 0;
+        if (!v) { hv.textContent = 'Cursor: no TDR data'; return; }
+        var c = sh.a.center, dy = (ll.lat - c[0]) * 111.32, dx = (ll.lng - c[1]) * 111.32 * Math.cos(c[0] * Math.PI / 180);
+        var kit = window._ReconKit, az = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360, r = Math.sqrt(dx * dx + dy * dy);
+        hv.textContent = 'Cursor: ' + v + ' kt · ' + ((kit && kit.searWhere) ? kit.searWhere(az, r) : Math.round(r) + ' km from center');
+    }
+    function _hdobRenderTdr(map, passInfo) {
+        var sp = _hdobData && _hdobData.sear, url = sp && sp.swath_url;
+        if (!url || !_hdobLayerVis.tdr) { _hdobTdrRemove(); return; }
+        if (url !== _hdobTdrMetaUrl || (sp.generated && sp.generated !== _hdobTdrMetaGen)) {
+            _hdobTdrMetaUrl = url; _hdobTdrMetaGen = sp.generated || null;
+            fetch(url, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+                if (!j || url !== _hdobTdrMetaUrl) return;
+                _hdobTdrMeta = j;
+                if (_hdobData) _hdobRender();
+            }).catch(function () {});
+        }
+        var an = (_hdobTdrMeta && _hdobTdrMeta.analyses) || [];
+        if (!an.length) { _hdobTdrRemove(); return; }
+        var pick = _hdobTdrPick(passInfo), key = _hdobTdrKey(map);
+        key.innerHTML = _hdobTdrKeyHtml(pick, an); key.style.display = '';
+        Array.prototype.forEach.call(key.querySelectorAll('button'), function (b) {
+            b.onclick = function () {
+                var d = +b.getAttribute('data-d'), cur = pick.a ? pick.i : an.length - 1;
+                _hdobTdrSel = d === 0 ? null : an[Math.max(0, Math.min(an.length - 1, cur + d))].file;
+                _ga('recon_hdob_tdr_step', { dir: d });
+                _hdobRender();
+            };
+        });
+        if (!pick.a) { if (_hdobTdrOverlay) { try { map.removeLayer(_hdobTdrOverlay); } catch (e) {} _hdobTdrOverlay = null; } _hdobTdrShown = null; return; }
+        var img = _hdobTdrLoad(pick.a.png);
+        if (typeof img === 'string') return;            // loading (re-renders on load) or error
+        try { var pane = map.getPane('hdobTdrPane') || map.createPane('hdobTdrPane'); pane.style.zIndex = 380; pane.style.pointerEvents = 'none'; } catch (e) {}
+        var bounds = L.latLngBounds(pick.a.bounds);
+        if (!_hdobTdrShown || _hdobTdrShown.a.file !== pick.a.file || !_hdobTdrOverlay) {
+            if (_hdobTdrOverlay) { _hdobTdrOverlay.setUrl(img.url); _hdobTdrOverlay.setBounds(bounds); }
+            else _hdobTdrOverlay = L.imageOverlay(img.url, bounds, { opacity: 0.9, interactive: false, crisp: true, pane: 'hdobTdrPane' }).addTo(map);
+        }
+        _hdobTdrShown = { a: pick.a, vals: img.vals, w: img.w, h: img.h };
+        if (!_hdobTdrHoverBound) { map.on('mousemove', _hdobTdrHover); _hdobTdrHoverBound = true; }
     }
 
     /** SEAR pass peaks on the map: a pink ring at the aircraft position of each

@@ -32547,6 +32547,7 @@
         legendStops: function (key) { return _reconLegendStops(key || _rtReconColorVar); },
         // Experimental SEAR 10-m estimates: join onto a recon blob (see _rtSearAttach)
         attachSear: _rtSearAttach,
+        windStops: _RECON_WIND_STOPS,   // stepped recon wind scale (kt), shared by the TDR 10-m layer
         compass8: _rtCompass8,
         searWhere: _rtSearWhere,
         searStatus: _rtSearStatus,

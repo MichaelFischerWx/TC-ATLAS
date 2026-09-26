@@ -848,6 +848,28 @@
     border-color: rgba(148, 163, 184, 0.28);
     color: #e2e8f0;
 }
+/* SEAR 10-m from TDR: key + analysis stepper (top-right, clear of the symbol key; inside the map so
+   Save PNG captures it). Interactive, unlike .recon-hdob-mapkey. */
+.recon-hdob-tdrkey {
+    position: absolute; right: 8px; top: 8px; z-index: 1050; max-width: 290px;
+    background: rgba(255, 255, 255, 0.9); border: 1px solid rgba(15, 23, 42, 0.18);
+    border-radius: 5px; padding: 5px 8px; font-size: 10px; line-height: 1.45; color: #1f2937;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+:root[data-theme="dark"] .recon-hdob-tdrkey { background: rgba(15, 23, 42, 0.86); border-color: rgba(148, 163, 184, 0.28); color: #e2e8f0; }
+.recon-hdob-tdrkey .tt { font-weight: 700; }
+.recon-hdob-tdrkey .exp { font-weight: 400; color: #db2777; font-size: 9px; }
+.recon-hdob-tdrkey .nav { display: flex; align-items: center; gap: 4px; margin: 3px 0; }
+.recon-hdob-tdrkey .nav span { flex: 1 1 auto; text-align: center; white-space: nowrap; }
+.recon-hdob-tdrkey button {
+    font: inherit; padding: 0 6px; border-radius: 3px; cursor: pointer;
+    border: 1px solid rgba(100, 116, 139, 0.5); background: transparent; color: inherit;
+}
+.recon-hdob-tdrkey button.on { background: #0891b2; border-color: #0891b2; color: #fff; }
+.recon-hdob-tdrkey .bar { display: flex; margin: 3px 0 2px; }
+.recon-hdob-tdrkey .bar span { flex: 1 1 0; height: 12px; font-size: 8px; line-height: 12px; color: #fff; text-align: left; padding-left: 1px; text-shadow: 0 0 2px #000; }
+.recon-hdob-tdrkey .info, .recon-hdob-tdrkey .hov { opacity: 0.9; }
+.recon-hdob-tdrkey .hov { font-variant-numeric: tabular-nums; }
 .recon-hdob-legend-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .recon-hdob-legend-sym {
     width: 13px; text-align: center; flex: 0 0 13px;
