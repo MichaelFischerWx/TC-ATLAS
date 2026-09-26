@@ -12298,6 +12298,10 @@ function _gaFLUpdateStatus() {
                     ' at ' + bestPass.p.t.slice(11, 16) + ' UTC' + (fix ? ' \u2014 a pass these flight-level files do not sample' : '');
                 sp.textContent = ' \u00b7 SEAR max: ' + Math.round(bestPass.v) + ' kt' + (fix ? ' (VDM fix)' : '');
             }
+            if (_gaSear.era === 'extrapolated') {   // SEAR is trained on 1997+ data (MLBT ruling 54)
+                sp.textContent += ' (pre-1997, extrapolated)';
+                sp.title += ' \u2014 this storm predates SEAR\u2019s 1997+ training data (older aircraft navigation and an ERA5 or SHIPS environment); treat as an extrapolation.';
+            }
             status.appendChild(sp);
         }
     }

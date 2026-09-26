@@ -36,8 +36,11 @@ MLBT = Path.home() / "github" / "MLBT"
 # (dir, recompute_10m, thin_s): sear_hrd_all = HRD flight-level files 1998-2007 (NOAA 1-s/10-s, USAF 10-s;
 # ruling 45 addendum 3), scored before ruling 53 -> its 10-m values are recomputed from the stored WL150
 # with the current factor, and its 1-s rows thinned to the strongest per aircraft per 10 s.
-SRC = [(MLBT / "phase1" / "out" / "sear", False, 0), (MLBT / "phase1" / "out" / "sear_ep", False, 0),
-       (MLBT / "phase1" / "out" / "sear_hrd_all", True, 10)]
+SRC = [(MLBT / "phase1" / "out" / "sear", False, 0, False), (MLBT / "phase1" / "out" / "sear_ep", False, 0, False),
+       (MLBT / "phase1" / "out" / "sear_hrd_all", True, 10, True),
+       # phase1/sear_hrd_operator.py: HRD files for storms before the record (1960s-1997), scored under ruling 53
+       # (no recompute) on TC-ATLAS-parsed 10-s obs; pre-1997 = outside SEAR's training era (ruling 54)
+       (MLBT / "phase1" / "out" / "sear_hrd_pre", False, 0, True)]   # (dir, recompute_10m, thin_s, hrd_legs)
 OUT = Path.home() / "Data" / "sear_hist"
 PREFIX = "sear-hist/v1"
 KT = 1.943844
@@ -69,7 +72,9 @@ def main() -> int:
     sys.path.insert(0, str(MLBT / "external" / "SEAR" / "Scripts"))
     from reduction import wl150_to_10m_factor
     frames, legs, hdob_atcf = {}, {}, set()
-    for src, recompute, thin_s in SRC:
+    for src, recompute, thin_s, hrd in SRC:
+        if not (src / "sear_samples.parquet").exists():
+            continue
         s = pd.read_parquet(src / "sear_samples.parquet", columns=COLS)
         lm = pd.read_parquet(src / "sear_legmax.parquet")
         if a.atcf:
@@ -89,9 +94,9 @@ def main() -> int:
         for atcf, g in s.groupby("atcf"):   # a storm can be in several sources (HDOB + HRD legs): merge obs
             frames.setdefault(atcf, []).append(g.drop(columns=["_bin"], errors="ignore"))
         for atcf, l in lm.groupby("atcf"):
-            l = l.copy(); l["extra"] = bool(recompute)
+            l = l.copy(); l["extra"] = bool(hrd)
             legs.setdefault(atcf, []).append(l)
-            if not recompute:
+            if not hrd:
                 hdob_atcf.add(atcf)
     # Fix operator (VDM max 10-s FL wind / F-deck; phase1/sear_fix_operator.py): the passes the 1-s / 30-s legs
     # miss. Combined exactly like phase1/fuse_wind.py (ruling 45 + addendum): HDOB legs win; HRD legs only for
@@ -158,11 +163,12 @@ def main() -> int:
             continue
         mx = int(round(max(cand)))
         src_mx = "obs" if (omax is not None and omax >= (pmax or -1)) else next(q["src"] for q in passes if q["y_corr_kt"] == pmax)
-        out = {"atcf": atcf, "model": MODEL, "n": len(g), "max_kt": mx, "max_src": src_mx, "obs_max_kt": omax, "pass_max_kt": pmax,
+        era = "extrapolated" if int(atcf[-4:]) < 1997 else "trained"   # SEAR training data start 1997 (ruling 54)
+        out = {"atcf": atcf, "model": MODEL, "era": era, "n": len(g), "max_kt": mx, "max_src": src_mx, "obs_max_kt": omax, "pass_max_kt": pmax,
                "aircraft": tails, "obs": obs, "passes": passes, "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
         raw = gzip.compress(json.dumps(out, separators=(",", ":"), allow_nan=False).encode(), 9)
         (OUT / f"{atcf}.json").write_bytes(raw)
-        index["storms"][atcf] = {"max_kt": mx, "max_src": src_mx, "n": len(g), "n_passes": len(passes)}
+        index["storms"][atcf] = {"max_kt": mx, "max_src": src_mx, "era": era, "n": len(g), "n_passes": len(passes)}
         if cli is not None:
             cli.put_object(Bucket="tc-atlas-rt", Key=f"{PREFIX}/{atcf}.json", Body=raw, ContentType="application/json",
                            ContentEncoding="gzip", CacheControl="public, max-age=86400")
