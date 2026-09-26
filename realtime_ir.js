@@ -32407,6 +32407,7 @@
         // NHC/USAF recon basins (Atlantic + E/C Pacific).
         reconMosaicLayer: function (targetMap) {
             var obj = null, gen = 0, curProduct = null, curFrame = null, curOpacity = 0.92, curAt = null, curKey = null;
+            var irCmapOverride = null;   // e.g. 'graylinear' under a colored overlay (Live Flight TDR 10-m)
             function clear() {
                 curProduct = null; curFrame = null; curAt = null; curKey = null;
                 if (obj) { try { obj.destroy(); } catch (e) {} obj = null; }
@@ -32446,7 +32447,7 @@
                         return _v3TileBlob(root + '/' + f + '/' + z + '/' + x + '/' + y + '.png');
                     },
                     frames: [frame], maxZoom: 7, baseMaxZoom: 4, tileSize: 512,
-                    lut: _idxLutForProduct(product, _irColormap || 'claude-ir'),
+                    lut: _idxLutForProduct(product, (product === 'ir' && irCmapOverride) || _irColormap || 'claude-ir'),
                     onError: function (m) { try { console.error('[recon-mosaic] ' + m); } catch (e) {} }
                 });
                 curKey = root + '|' + frame;
@@ -32506,6 +32507,14 @@
                 // a frame copied off the rolling mosaic by the recon-sat archive.
                 setArchived: function (product, opacity, arch) { return buildArchived(product, opacity, arch); },
                 frameId: function () { return curFrame; },
+                // IR palette override for this map only (null = the page's IR colormap).
+                // Recolors in place on the GPU; persists across frame/product rebuilds.
+                setIrColormap: function (name) {
+                    name = name || null;
+                    if (name === irCmapOverride) return;
+                    irCmapOverride = name;
+                    if (obj && curProduct === 'ir') { try { obj.setColormap(_idxLutForProduct('ir', name || _irColormap || 'claude-ir')); } catch (e) {} }
+                },
                 remove: clear,
                 coversLon: function (lon) { return _mosaicCoversLon(lon); }
             };

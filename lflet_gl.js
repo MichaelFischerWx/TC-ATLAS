@@ -551,6 +551,7 @@
                 // crisp: pixel-exact overzoom (the IR mosaic; keeps the sharp,
                 // non-interpolated look past native zoom). Default basemap stays linear.
                 if (self.options.crisp) paint['raster-resampling'] = 'nearest';
+                if (self.options.saturation != null) paint['raster-saturation'] = self.options.saturation;   // -1 = grayscale
                 var layer = { id: id, type: 'raster', source: id, paint: paint };
                 map._glAdd(layer, map._paneZ(self.options.pane || 'tilePane'));
                 self._added = true;
@@ -567,6 +568,8 @@
             else if (t === 'tileerror') { (this._errCbs = this._errCbs || []).push(fn); } return this; },
         once: function (t, fn) { return this.on(t, fn); },
         setOpacity: function (o) { var gl = this._map && this._map._gl; if (gl && gl.getLayer(this._id)) gl.setPaintProperty(this._id, 'raster-opacity', o); this.options.opacity = o; return this; },
+        // GL-only extra (no Leaflet equivalent): -1 = grayscale, 0 = as served.
+        setSaturation: function (s) { var gl = this._map && this._map._gl; if (gl && gl.getLayer(this._id)) gl.setPaintProperty(this._id, 'raster-saturation', s); this.options.saturation = s; return this; },
         setUrl: function (url) {
             this._url = url;
             if (!this._map) return this;

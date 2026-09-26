@@ -1735,6 +1735,16 @@
         if (_hdobTdrOverlay && _hdobMap) { try { _hdobMap.removeLayer(_hdobTdrOverlay); } catch (e) {} }
         _hdobTdrOverlay = null; _hdobTdrShown = null;
         if (_hdobTdrKeyEl) _hdobTdrKeyEl.style.display = 'none';
+        _hdobTdrGraySat(false);
+    }
+    /** Gray the IR backdrop while a TDR field is drawn: the recon wind scale's
+     *  113+ kt magenta/purple is the same family as the colored IR, so the
+     *  eyewall vanished into cold cloud tops (Michael, 2026-09-26). Mosaic IR →
+     *  linear grayscale (warm black, cold white); a GIBS backdrop → desaturated.
+     *  Reverts when the field is hidden. */
+    function _hdobTdrGraySat(on) {
+        try { if (_hdobMosaic && _hdobMosaic.setIrColormap) _hdobMosaic.setIrColormap(on ? 'graylinear' : null); } catch (e) {}
+        try { if (_hdobGibsFrozen && _hdobGibsFrozen.setSaturation) _hdobGibsFrozen.setSaturation(on ? -1 : 0); } catch (e) {}
     }
     function _hdobTdrReset() {
         _hdobTdrRemove();
@@ -1855,9 +1865,10 @@
                 _hdobRender();
             };
         });
-        if (!pick.a) { if (_hdobTdrOverlay) { try { map.removeLayer(_hdobTdrOverlay); } catch (e) {} _hdobTdrOverlay = null; } _hdobTdrShown = null; return; }
+        if (!pick.a) { if (_hdobTdrOverlay) { try { map.removeLayer(_hdobTdrOverlay); } catch (e) {} _hdobTdrOverlay = null; } _hdobTdrShown = null; _hdobTdrGraySat(false); return; }
         var img = _hdobTdrLoad(pick.a.png);
         if (typeof img === 'string') return;            // loading (re-renders on load) or error
+        _hdobTdrGraySat(true);
         try { var pane = map.getPane('hdobTdrPane') || map.createPane('hdobTdrPane'); pane.style.zIndex = 380; pane.style.pointerEvents = 'none'; } catch (e) {}
         var bounds = L.latLngBounds(pick.a.bounds);
         if (!_hdobTdrShown || _hdobTdrShown.a.file !== pick.a.file || !_hdobTdrOverlay) {
