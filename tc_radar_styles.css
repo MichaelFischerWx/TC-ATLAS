@@ -1682,6 +1682,14 @@ footer a:hover { text-decoration: underline; }
     #ir-map-controls .ir-label { font-size: 10px; }
     #ir-map-controls .radar-op-slider { width: 70px; }
     .storm-grid-label { font-size: 9px; }
+    /* The storm sits at the map center: on phones the radar key goes to the top-left beside the
+       zoom buttons (compact), and the IR key yields while a radar field is draped (IR is the gray
+       'auto' ramp then), so neither covers the core. !important beats _positionIRColorbar's inline bottom. */
+    #tdr-map-colorbar { top: 8px; left: 50px; bottom: auto !important; width: 168px; padding: 3px 6px !important; }
+    #tdr-map-colorbar .tdr-cb-title { font-size: 9px; line-height: 1.25; white-space: normal; overflow: visible; text-overflow: clip; }
+    #tdr-map-colorbar input[type="number"] { width: 38px; font-size: 10px; padding: 1px 3px; }
+    #tdr-map-colorbar .tdr-cb-foot { font-size: 9px; }
+    #map-container.tdrcb-on #ir-map-colorbar { display: none !important; }
     .explorer-layout { flex-direction: column !important; }
     .explorer-controls { width: 100% !important; max-height: none !important; border-left: none !important; padding-left: 0 !important; border-top: 1px solid var(--border); padding-top: 10px; }
     .content-section { padding: 3rem 16px; }
@@ -1861,7 +1869,8 @@ footer a:hover { text-decoration: underline; }
     .topbar-nav { gap: 2px; }
     .topbar-nav a { padding: 4px 6px; font-size: 0.65rem; }
     #map-container { min-height: 250px; }
-    #side-panel.open { max-height: 70vh; }
+    /* (was max-height: 70vh -- with the panel's overflow visible on phones it capped the
+       box but not its content, which then painted over the About section below) */
     .plot-modal-box { width: 100vw; height: 100vh; border-radius: 0; }
     .leaflet-popup-content { min-width: 180px; max-width: 240px; font-size: 12px; }
 }
@@ -2766,7 +2775,7 @@ body.vol-gl-on .storm-grid-label { opacity: 0.7; }
 
 /* ── TDR colorbar on the map (editable range) ─────────────────────────── */
 .tdr-map-colorbar { position: absolute; left: 8px; bottom: 140px; z-index: 900; width: 232px; display: none; }
-.tdr-cb-title { font-size: 9px; font-weight: 600; color: #F47321; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tdr-cb-title { font-size: 9px; font-weight: 600; color: #F47321; margin-bottom: 3px; white-space: normal; line-height: 1.25; }
 .tdr-cb-row { display: flex; align-items: center; gap: 4px; }
 .tdr-cb-grad { flex: 1; height: 10px; border-radius: 3px; border: 1px solid rgba(15,22,35,0.15); }
 .tdr-cb-row input[type=number] { width: 48px; padding: 1px 3px; font: 600 10px 'JetBrains Mono', monospace; border: 1px solid rgba(15,22,35,0.2); border-radius: 3px; background: rgba(255,255,255,0.7); color: var(--text); text-align: center; -moz-appearance: textfield; }

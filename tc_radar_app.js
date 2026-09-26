@@ -4410,10 +4410,12 @@ function _tdrColorbarUpdate(p) {
     if (document.activeElement !== mn) mn.value = _fmtRange(p.vmin);
     if (document.activeElement !== mx) mx.value = _fmtRange(p.vmax);
     el.style.display = 'block';
+    host.classList.add('tdrcb-on');
     _positionIRColorbar();
 }
 function _fmtRange(v) { if (v == null || isNaN(v)) return ''; return String(Math.round(v * 100) / 100); }
-function _tdrColorbarRemove() { var el = document.getElementById('tdr-map-colorbar'); if (el) el.style.display = 'none'; _positionIRColorbar(); }
+function _tdrColorbarRemove() { var el = document.getElementById('tdr-map-colorbar'); if (el) el.style.display = 'none';
+    var host = document.getElementById('map-container'); if (host) host.classList.remove('tdrcb-on'); _positionIRColorbar(); }
 var _tdrRangeTimer = null;
 window._tdrRangeFromMap = function() {
     clearTimeout(_tdrRangeTimer);
@@ -5495,7 +5497,7 @@ function _searRender(callback) {
     var go = function (j) {
         if (ci !== currentCaseIndex || dt !== _activeDataType || !_searMode) return;
         var json = { data: j.data, x: j.x, y: j.y, actual_level_km: 0.01,
-            variable: { key: 'sear_10m', display_name: 'SEAR 10-m wind (exp, in-sample)', units: 'kt',
+            variable: { key: 'sear_10m', display_name: 'SEAR 10-m wind (exp, in-sample) \u00b7 max ' + j.max_kt + ' kt', units: 'kt',
                         vmin: _SEAR_VMIN, vmax: _SEAR_VMAX, colorscale: _searColorscale() },
             case_meta: { rmw_km: j.rmw_km } };
         renderPlotFromJSON(json, resultDiv);
