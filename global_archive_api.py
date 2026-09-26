@@ -7386,6 +7386,7 @@ def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
         storm_name = ""
         ob_number = None
         is_modern = False
+        modern_date = None        # the bulletin's own YYYYMMDD (modern HDOBs carry it)
 
         # Find MINOB/HDOB keyword
         found_keyword = False
@@ -7402,6 +7403,7 @@ def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
                     date_token = info_parts[k + 2]
                     if len(date_token) == 8 and date_token.isdigit():
                         is_modern = True
+                        modern_date = date_token
                 found_keyword = True
                 break
 
@@ -7435,6 +7437,26 @@ def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
             if obs is not None:
                 day = hdr_day
                 h, m, s = obs.pop("_hh"), obs.pop("_mm"), obs.pop("_ss")
+
+                if modern_date:
+                    # Modern HDOBs date themselves -- no dependence on the caller's
+                    # storm dates (without them every ob used to land on Jan 1).
+                    # The header date is the bulletin's first ob; an ob more than
+                    # 12 h "earlier" than that crossed midnight.
+                    from datetime import datetime, timedelta
+                    try:
+                        base = datetime.strptime(modern_date, "%Y%m%d")
+                        dt = base + timedelta(hours=h, minutes=m, seconds=s)
+                        if observations:
+                            first = datetime.strptime(observations[0]["time"], "%Y-%m-%dT%H:%M:%S")
+                            if (first - dt).total_seconds() > 12 * 3600:
+                                dt += timedelta(days=1)
+                        obs["time"] = dt.strftime("%Y-%m-%dT%H:%M:%S")
+                        observations.append(obs)
+                        i += 1
+                        continue
+                    except ValueError:
+                        pass
 
                 if day is not None and start_date and end_date:
                     from datetime import datetime, timedelta
@@ -7717,12 +7739,15 @@ def get_minobs(
         "missions": _minob_mission_summary(flat_obs),
     }
 
-    _minob_cache[cache_key] = (result, now)
-    if len(_minob_cache) > _MINOB_CACHE_MAX:
-        _minob_cache.popitem(last=False)
-
-    # Persist to GCS (historical storms cached indefinitely, recent 7-day)
-    if flat_obs:
-        _minob_gcs_put(storm_name, year, result)
+    # The cache key is (storm, year) only, so a result built WITHOUT the storm dates
+    # (pre-2012 bulletins then fall back to Jan 1) must never be cached -- one bare
+    # request used to pin a storm's obs to Jan 1 for everyone, indefinitely.
+    if start_date and end_date:
+        _minob_cache[cache_key] = (result, now)
+        if len(_minob_cache) > _MINOB_CACHE_MAX:
+            _minob_cache.popitem(last=False)
+        # Persist to GCS (historical storms cached indefinitely, recent 7-day)
+        if flat_obs:
+            _minob_gcs_put(storm_name, year, result)
 
     return _season_json(result, year, positive=bool(flat_obs))
