@@ -12217,6 +12217,77 @@ var _gaFLMinobVisible = true;
 var _gaFLXAxisMode = 'time';
 var _gaFLTSOpen = false;
 
+
+// ── SEAR 10-m estimates (experimental) from MLBT's historical record ─────────
+// bin/build_sear_hist.py publishes one file per storm (Atlantic 2001-2025, E/C
+// Pacific 2008-2024) at cdn.tcatlas.org/sear-hist/v1/<ATCF>.json: per-ob arrays
+// t (epoch s), lat, lon, y (10-m kt, 10-s-peak scale, RMW-corrected), r, az.
+// Obs are joined by time (+-20 s) and aircraft position (<= 8 km), so the same
+// code serves 30-s HDOB missions and NOAA's 1-s/10-s HRD files (no tail there).
+var _gaSear = null, _gaSearAtcf = null, _gaSearIndex = null, _gaSearIndexReq = null;
+var _GA_SEAR_CDN = 'https://cdn.tcatlas.org/sear-hist/v1/';
+function _gaSearFetch() {
+    var atcf = selectedStorm && selectedStorm.atcf_id ? String(selectedStorm.atcf_id).toUpperCase() : null;
+    _gaSear = null; _gaSearAtcf = atcf;
+    if (!atcf) return;
+    if (!_gaSearIndexReq) {
+        _gaSearIndexReq = fetch(_GA_SEAR_CDN + 'index.json').then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) { _gaSearIndex = (j && j.storms) || {}; return _gaSearIndex; })
+            .catch(function () { _gaSearIndex = {}; return _gaSearIndex; });
+    }
+    _gaSearIndexReq.then(function (ix) {
+        if (!ix[atcf] || _gaSearAtcf !== atcf) return null;   // no CDN probe for storms without a record
+        return fetch(_GA_SEAR_CDN + atcf + '.json').then(function (r) { return r.ok ? r.json() : null; });
+    }).then(function (j) {
+        if (!j || _gaSearAtcf !== atcf) return;
+        _gaSear = j;
+        if (_gaFLData) {                                     // mission already on screen: join + redraw
+            [_gaFLData1s, _gaFLData10s, _gaFLData30s].forEach(_gaSearAttach);
+            _gaFLRenderOnMap();
+            _gaFLPopulateVarToggles();
+            if (_gaFLTSOpen) _gaFLRenderTimeSeries();
+        }
+    }).catch(function () {});
+}
+function _gaSearHasData() {
+    var ds = _gaFLData10s || _gaFLData30s || _gaFLData1s;
+    if (!_gaSear || !ds) return false;
+    for (var i = 0; i < ds.length; i++) if (ds[i].sear_kt != null) return true;
+    return false;
+}
+function _gaSearMissionBaseMs() {
+    var sel = document.getElementById('ga-fl-mission-select');
+    var m = (_gaFLMissions && sel) ? _gaFLMissions[sel.selectedIndex] : null;
+    if (!m || !m.datetime) return null;
+    var t = Date.parse(String(m.datetime).slice(0, 10) + 'T00:00:00Z');
+    return isNaN(t) ? null : t;
+}
+function _gaSearAttach(obs) {
+    if (!obs || !obs.length) return;
+    var S = _gaSear && _gaSear.obs, base = _gaSearMissionBaseMs();
+    if (!S || base == null) { for (var z = 0; z < obs.length; z++) obs[z].sear_kt = null; return; }
+    var T = S.t, n = T.length;
+    for (var i = 0; i < obs.length; i++) {
+        var o = obs[i]; o.sear_kt = null; o.sear_r_km = null; o.sear_az = null;
+        if (o.time_sec == null || o.lat == null || o.lon == null) continue;
+        var ts = base / 1000 + o.time_sec;
+        var lo = 0, hi = n;                                   // first record at >= ts - 20 s
+        while (lo < hi) { var mid = (lo + hi) >> 1; if (T[mid] < ts - 20) lo = mid + 1; else hi = mid; }
+        var best = -1, bd = 8.0, cl = Math.cos(o.lat * Math.PI / 180);
+        for (var k = lo; k < n && T[k] <= ts + 20; k++) {
+            var dy = (S.lat[k] - o.lat) * 111.32, dx = (S.lon[k] - o.lon) * 111.32 * cl;
+            var d = Math.sqrt(dx * dx + dy * dy);
+            if (d <= bd) { bd = d; best = k; }
+        }
+        if (best >= 0) { o.sear_kt = S.y[best]; o.sear_r_km = S.r[best]; o.sear_az = S.az[best]; }
+    }
+}
+function _gaSearWhere(az, rKm) {
+    if (az == null || rKm == null) return '';
+    var c = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(((az % 360) + 360) % 360 / 45) % 8];
+    return c + ' ' + Math.round(rKm) + ' km (' + Math.round(rKm * 0.5399568) + ' n mi) of center';
+}
+
 function _gaFLReset() {
     _gaFLVisible = false;
     _gaFLData = null;
@@ -12230,6 +12301,7 @@ function _gaFLReset() {
     if (_gaFL1sAbort) { _gaFL1sAbort.abort(); _gaFL1sAbort = null; }
     _gaFLTSOpen = false;
     _gaFLClientCache = {};
+    _gaSear = null; _gaSearAtcf = null;
     // Must clear with the storm — otherwise the next storm, which may well have
     // HRD flight-level data, keeps routing mission loads through the HDOB path.
     _gaHdobMode = false;
@@ -12343,6 +12415,7 @@ function _gaFLDiscoverMissions(storm) {
     // Start VDM + MINOB fetch in parallel — only needs storm info, not mission
     _vdmFetch();
     _minobFetch();
+    _gaSearFetch();
 
     var url = API_BASE + '/global/flightlevel/missions?storm_name=' +
         encodeURIComponent(storm.name) + '&year=' + storm.year;
@@ -12676,7 +12749,7 @@ function _gaFLPrefetch1s(fileUrl, baseUrl, json) {
                 if (j.success && j.obs_1s && j.obs_1s.length > 0) {
                     json.obs_1s = j.obs_1s;
                     _gaFLClientCache[fileUrl] = json;
-                    if (_gaFLData === json) _gaFLData1s = j.obs_1s;
+                    if (_gaFLData === json) { _gaFLData1s = j.obs_1s; _gaSearAttach(_gaFLData1s); }
                     if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s'; }
                     if (_gaFLResVisible['1s'] && _gaFLTSOpen) _gaFLRenderTimeSeries();
                 } else {
@@ -12709,6 +12782,7 @@ function _gaFLApplyData(json) {
     _gaFLData1s = json.obs_1s;
     _gaFLData10s = json.obs_10s || json.observations;
     _gaFLData30s = json.obs_30s;
+    [_gaFLData1s, _gaFLData10s, _gaFLData30s].forEach(_gaSearAttach);
 
     // QC: if >10% of W values exceed ±30 m/s, the column is unreliable — null it out
     var datasets = [_gaFLData1s, _gaFLData10s, _gaFLData30s];
@@ -12949,7 +13023,9 @@ function _gaFLRenderOnMap() {
             'Alt: ' + (o.gps_alt_m != null ? Math.round(o.gps_alt_m) + ' m' : '\u2014') + '<br>' +
             posStr +
             'Pres: ' + (o.static_pres_hpa != null ? o.static_pres_hpa + ' hPa' : '\u2014') + '<br>' +
-            'Temp: ' + (o.temp_c != null ? o.temp_c + ' \u00b0C' : '\u2014');
+            'Temp: ' + (o.temp_c != null ? o.temp_c + ' \u00b0C' : '\u2014') +
+            (o.sear_kt != null ? '<br><span style="color:#be185d;">SEAR 10-m est (exp): <b>' + o.sear_kt + ' kt</b>' +
+                (o.sear_r_km != null ? ' \u00b7 ' + _gaSearWhere(o.sear_az, o.sear_r_km) : '') + '</span>' : '');
         var circle = L.circleMarker([o.lat, o.lon], {
             radius: 4, fillColor: _gaFLColorByVar(o[_gaFLColorVar]), fillOpacity: 0.8,
             color: '#fff', weight: 0.5, opacity: 0.6,
@@ -14825,6 +14901,9 @@ var _GA_FL_TS_CONFIG = {
     'theta_e':         { label: 'Theta-E',         btn: '\u03b8e', units: 'K', color: { light: '#a21caf', dark: '#e879f9' }, yaxis: 'y3' },
     'gps_alt_m':       { label: 'GPS Altitude',    btn: 'Alt',  units: 'm',   color: { light: '#374151', dark: '#9ca3af' }, yaxis: 'y4' },
     'vert_vel_ms':     { label: 'Vertical Velocity', btn: 'W',  units: 'm/s', color: { light: '#4d7c0f', dark: '#a3e635' }, yaxis: 'y6' },
+    // Experimental SEAR 10-m estimate joined from MLBT's historical record (_gaSearAttach);
+    // scored only near the storm, so gaps stay gaps.
+    'sear_kt':         { label: 'SEAR 10-m est (exp)', btn: 'SEAR', units: 'kt', color: { light: '#be185d', dark: '#f472b6' }, yaxis: 'y', noConnect: true },
 };
 
 // Helper: resolve per-variable color for the active theme.
@@ -14848,7 +14927,7 @@ var _GA_FL_RES_STYLE = {
     '30s': { opacity: 1.0,  width: 2.5 },
 };
 
-var _gaFLVarsVisible = { 'fl_wspd_ms': true, 'static_pres_hpa': false, 'temp_c': false, 'dewpoint_c': false, 'theta_e': false, 'gps_alt_m': false, 'sfcpr_hpa': true, 'vert_vel_ms': false };
+var _gaFLVarsVisible = { 'sear_kt': true, 'fl_wspd_ms': true, 'static_pres_hpa': false, 'temp_c': false, 'dewpoint_c': false, 'theta_e': false, 'gps_alt_m': false, 'sfcpr_hpa': true, 'vert_vel_ms': false };
 
 function _gaFLUpdatePanelButtons(activeId) {
     ['ga-fl-btn-ts', 'ga-fl-btn-xsec', 'ga-fl-btn-radial'].forEach(function (id) {
@@ -14924,6 +15003,7 @@ function _gaFLPopulateVarToggles() {
     container.innerHTML = '';
     Object.keys(_GA_FL_TS_CONFIG).forEach(function (key) {
         var cfg = _GA_FL_TS_CONFIG[key];
+        if (key === 'sear_kt' && !_gaSearHasData()) return;   // no SEAR record for this storm/mission
         var active = _gaFLVarsVisible[key];
         var col = _gaFLColor(cfg);
         var btn = document.createElement('button');
@@ -14996,7 +15076,7 @@ function _gaFLRenderTimeSeries() {
             traces.push({
                 x: xVals, y: yVals,
                 mode: 'lines',
-                connectgaps: true,
+                connectgaps: !cfg.noConnect,
                 name: cfg.btn + ' (' + resKey + ')',
                 line: { color: _gaFLColor(cfg), width: style.width, shape: 'linear' },
                 opacity: style.opacity,
