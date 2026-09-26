@@ -1793,7 +1793,14 @@
         var want = passInfo ? Date.parse(passInfo.t) : (_hdobFrozenAt ? Date.parse(_hdobFrozenAt) : NaN);
         if (isNaN(want)) return { a: an[an.length - 1], i: an.length - 1 };   // live sortie: newest analysis
         var bi = 0, bd = Infinity;
-        for (var k = 0; k < an.length; k++) { var d = Math.abs(Date.parse(an[k].t) - want); if (d < bd) { bd = d; bi = k; } }
+        // Archive replay: never show an analysis from after the replay clock — the latest one
+        // centred at or before it (a pass selected with the stepper still takes the nearest).
+        var causal = !!_hdobArchive && !passInfo;
+        for (var k = 0; k < an.length; k++) {
+            var tk = Date.parse(an[k].t);
+            if (causal && tk > want) continue;
+            var d = Math.abs(tk - want); if (d < bd) { bd = d; bi = k; }
+        }
         if (bd > _HDOB_TDR_MAX_DT_MS) return { a: null, why: 'No TDR analysis within 90 min of ' + (passInfo ? 'this pass' : 'this sortie') + '.' };
         return { a: an[bi], i: bi };
     }
