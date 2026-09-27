@@ -1154,6 +1154,7 @@
             '&#x2913; Download</button>' +
             '</div>' +
             '<div id="exp-plot" class="exp-plot"></div>' +
+            '<div id="exp-skill" class="exp-verif" style="display:none;"></div>' +
             /* Frame viewer (archived storms): shown by setupFrameViewer()
                only when packed frames exist. Sits directly under the chart
                because clicking the chart is what seeks it. */
@@ -3480,8 +3481,106 @@
         }
     }
 
+    /* This storm's scorecard (2026-09-27, Michael): RMSE / bias of every
+       intensity method on the chart against the agency best track as
+       interpolated to the GHOST frames (btk_vmax_kt / btk_mslp_hpa). Those
+       frame values are already linear in time between analyses and stop at
+       the last one, so a comparator is scored by interpolating between the
+       two bracketing frames (<= 3 h apart) and never past the last analysis.
+       Each row keeps its own sample (n), because f-deck products report a
+       few times a day while GHOST and ADT report every half hour. */
+    function btkAt(fr, key) {
+        var ts = [], vs = [];
+        fr.forEach(function (f) {
+            if (f[key] == null) return;
+            var ms = Date.parse(f.t);
+            if (!isNaN(ms)) { ts.push(ms); vs.push(f[key]); }
+        });
+        return function (iso) {
+            var x = Date.parse(iso);
+            if (isNaN(x) || !ts.length || x < ts[0] || x > ts[ts.length - 1]) return null;
+            var lo = 0, hi = ts.length - 1;
+            while (hi - lo > 1) { var m = (lo + hi) >> 1; if (ts[m] <= x) lo = m; else hi = m; }
+            if (ts[lo] === x) return vs[lo];
+            if (ts[hi] === x) return vs[hi];
+            if (ts[hi] - ts[lo] > 3 * 3.6e6) return null;
+            return vs[lo] + (vs[hi] - vs[lo]) * (x - ts[lo]) / (ts[hi] - ts[lo]);
+        };
+    }
+    function errStats(rows, key, ref) {
+        var n = 0, se = 0, sb = 0;
+        rows.forEach(function (r) {
+            var v = r[key];
+            if (v == null || !isFinite(v)) return;
+            var b = ref(r.t);
+            if (b == null) return;
+            n++; se += (v - b) * (v - b); sb += v - b;
+        });
+        return n ? { n: n, rmse: Math.sqrt(se / n), bias: sb / n } : null;
+    }
+    function drawStormSkill(j) {
+        var box = document.getElementById('exp-skill');
+        if (!box) return;
+        var fr = j.frames || [];
+        var vRef = btkAt(fr, 'btk_vmax_kt'), pRef = btkAt(fr, 'btk_mslp_hpa');
+        var rows = [{ name: M.name, me: true,
+                      v: errStats(fr, 'vmax_kt', vRef),
+                      p: errStats(fr, 'pmin_hpa', pRef) }];
+        Object.keys(j.comparators || {}).forEach(function (name) {
+            var cr = j.comparators[name] || [];
+            var r = { name: name, v: errStats(cr, 'vmax_kt', vRef),
+                      p: errStats(cr, 'pmin_hpa', pRef) };
+            if (r.v || r.p) rows.push(r);
+        });
+        if (!rows.some(function (r) { return r.v || r.p; })) {
+            box.style.display = 'none'; box.innerHTML = ''; return;
+        }
+        var hasP = rows.some(function (r) { return r.p; });
+        var head = rows.shift();
+        rows.sort(function (a, b) {
+            return (a.v ? a.v.rmse : 1e9) - (b.v ? b.v.rmse : 1e9);
+        });
+        rows.unshift(head);
+        function sgn(x) { var r = Math.round(x * 10) / 10; return (r > 0 ? '+' : r < 0 ? '\u2212' : '') + Math.abs(r).toFixed(1); }
+        function cells(st) {
+            if (!st) return '<td>\u2014</td><td>\u2014</td><td>\u2014</td>';
+            return '<td>' + st.rmse.toFixed(1) + '</td><td>' + sgn(st.bias) +
+                   '</td><td>' + st.n + '</td>';
+        }
+        var ag = j.agency || 'NHC';
+        var span = fr.length ? fr[0].t.slice(5, 10).replace('-', '/') + ' \u2013 ' +
+            (j.last_nhc_analysis || fr[fr.length - 1].t).slice(5, 16).replace('-', '/').replace('T', ' ') + 'Z' : '';
+        box.innerHTML =
+            '<div class="exp-verif-h">How each method has done on ' + (j.name || 'this storm') +
+            '<span class="exp-verif-src">error against the ' + ag + ' best track ' +
+            'interpolated to each estimate\u2019s time, over the storm\u2019s life so far (' +
+            span + ') \u00b7 bias = method minus best track</span></div>' +
+            '<div class="exp-verif-t"><table><thead><tr><th>Method</th>' +
+            '<th>Vmax RMSE (kt)</th><th>Bias</th><th>n</th>' +
+            (hasP ? '<th>Pmin RMSE (hPa)</th><th>Bias</th><th>n</th>' : '') +
+            '</tr></thead><tbody>' +
+            rows.map(function (r) {
+                return '<tr' + (r.me ? ' class="me"' : '') + '><td>' + r.name + '</td>' +
+                    cells(r.v) + (hasP ? cells(r.p) : '') + '</tr>';
+            }).join('') +
+            '</tbody></table></div>' +
+            '<p class="exp-verif-note">Each row is scored at its own times (n), ' +
+            'so a product that reports a few times a day is judged on fewer, ' +
+            'different moments than one that reports every half hour. The real-time ' +
+            'best track is ' + ag + '\u2019s working analysis, not the final ' +
+            'post-season record, and it is partly built from aircraft data and ' +
+            'from some of these same satellite estimates, so treat it as a ' +
+            'reference rather than independent truth.</p>';
+        box.style.display = '';
+    }
+
     function drawSeries(j) {
-        if (M.panels.tilt) return drawTiltSeries(j);
+        if (M.panels.tilt) {
+            var sk = document.getElementById('exp-skill');
+            if (sk) { sk.style.display = 'none'; sk.innerHTML = ''; }
+            return drawTiltSeries(j);
+        }
+        drawStormSkill(j);
         var el = document.getElementById('exp-plot');
         if (!el || typeof Plotly === 'undefined') return;
         var fr = j.frames || [];
