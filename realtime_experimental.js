@@ -3507,9 +3507,33 @@
             return vs[lo] + (vs[hi] - vs[lo]) * (x - ts[lo]) / (ts[hi] - ts[lo]);
         };
     }
-    function errStats(rows, key, ref) {
+    /* Tropical-cyclone times only (2026-09-27): the frames carry the b-deck
+       status step-held from the last analysis (btk_status), and a comparator
+       time takes the status of the frame at or before it. LO / DB / EX / WV
+       stretches -- Nolo spent a week as a remnant low at 25 kt -- are not
+       what any of these methods is built to estimate. Returns null when the
+       payload predates btk_status, so the caller can say it is unfiltered. */
+    var TC_STATUS = { TD: 1, TS: 1, HU: 1, TY: 1, ST: 1, TC: 1, SD: 1, SS: 1 };
+    function tcAt(fr) {
+        var ts = [], ok = [];
+        fr.forEach(function (f) {
+            if (f.btk_status === undefined) return;
+            var ms = Date.parse(f.t);
+            if (!isNaN(ms)) { ts.push(ms); ok.push(!!TC_STATUS[f.btk_status]); }
+        });
+        if (!ts.length) return null;
+        return function (iso) {
+            var x = Date.parse(iso);
+            if (isNaN(x) || x < ts[0]) return false;
+            var lo = 0, hi = ts.length - 1;
+            while (lo < hi) { var m = (lo + hi + 1) >> 1; if (ts[m] <= x) lo = m; else hi = m - 1; }
+            return ok[lo];
+        };
+    }
+    function errStats(rows, key, ref, keep) {
         var n = 0, se = 0, sb = 0;
         rows.forEach(function (r) {
+            if (keep && !keep(r)) return;
             var v = r[key];
             if (v == null || !isFinite(v)) return;
             var b = ref(r.t);
@@ -3523,13 +3547,20 @@
         if (!box) return;
         var fr = j.frames || [];
         var vRef = btkAt(fr, 'btk_vmax_kt'), pRef = btkAt(fr, 'btk_mslp_hpa');
+        var isTc = tcAt(fr);
+        var keep = isTc ? function (r) { return isTc(r.t); } : null;
+        /* The producer says filled winds must never be scored, and a carried
+           wind is the previous frame's value, not an estimate of this one. */
+        var keepV = function (r) {
+            return !r.vmax_filled && !r.vmax_carried && (!keep || keep(r));
+        };
         var rows = [{ name: M.name, me: true,
-                      v: errStats(fr, 'vmax_kt', vRef),
-                      p: errStats(fr, 'pmin_hpa', pRef) }];
+                      v: errStats(fr, 'vmax_kt', vRef, keepV),
+                      p: errStats(fr, 'pmin_hpa', pRef, keep) }];
         Object.keys(j.comparators || {}).forEach(function (name) {
             var cr = j.comparators[name] || [];
-            var r = { name: name, v: errStats(cr, 'vmax_kt', vRef),
-                      p: errStats(cr, 'pmin_hpa', pRef) };
+            var r = { name: name, v: errStats(cr, 'vmax_kt', vRef, keep),
+                      p: errStats(cr, 'pmin_hpa', pRef, keep) };
             if (r.v || r.p) rows.push(r);
         });
         if (!rows.some(function (r) { return r.v || r.p; })) {
@@ -3554,7 +3585,10 @@
             '<div class="exp-verif-h">How each method has done on ' + (j.name || 'this storm') +
             '<span class="exp-verif-src">error against the ' + ag + ' best track ' +
             'interpolated to each estimate\u2019s time, over the storm\u2019s life so far (' +
-            span + ') \u00b7 bias = method minus best track</span></div>' +
+            span + '), ' + (isTc ? 'counting only times ' + ag + ' classified it as a ' +
+            'tropical or subtropical cyclone' : 'all times (storm type not yet in this ' +
+            'storm\u2019s data, so remnant-low or disturbance stretches are included)') +
+            ' \u00b7 bias = method minus best track</span></div>' +
             '<div class="exp-verif-t"><table><thead><tr><th>Method</th>' +
             '<th>Vmax RMSE (kt)</th><th>Bias</th><th>n</th>' +
             (hasP ? '<th>Pmin RMSE (hPa)</th><th>Bias</th><th>n</th>' : '') +
