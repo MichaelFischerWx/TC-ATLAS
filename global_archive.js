@@ -469,13 +469,14 @@ var _irRenderCanvas = null;
 // same colormap and re-ran the Mercator warp + PNG encode every time.
 var _irTbUriMemo = (typeof WeakMap !== 'undefined') ? new WeakMap() : null;
 
-function renderTbToDataURI(tbData, rows, cols, colormap, southLat, northLat) {
-    var memoKey = colormap + '|' + rows + 'x' + cols + '|' + southLat + '|' + northLat;
+function renderTbToDataURI(tbData, rows, cols, colormap, southLat, northLat, feather) {
+    feather = feather || 0;
+    var memoKey = colormap + '|' + rows + 'x' + cols + '|' + southLat + '|' + northLat + '|' + feather;
     if (_irTbUriMemo && tbData && typeof tbData === 'object') {
         var hit = _irTbUriMemo.get(tbData);
         if (hit && hit.key === memoKey) return hit.uri;
     }
-    var uri = _renderTbToDataURIImpl(tbData, rows, cols, colormap, southLat, northLat);
+    var uri = _renderTbToDataURIImpl(tbData, rows, cols, colormap, southLat, northLat, feather);
     if (_irTbUriMemo && tbData && typeof tbData === 'object') {
         try { _irTbUriMemo.set(tbData, { key: memoKey, uri: uri }); } catch (e) {}
     }
@@ -492,9 +493,9 @@ function renderTbToDataURI(tbData, rows, cols, colormap, southLat, northLat) {
 // the storm frames) and the validity mask in alpha, so it feeds the same
 // colormap + Mercator warp as the storm frame.
 var _CTX_BASE = 'https://cdn.tcatlas.org/ir-context/v1';
-var _CTX_LRU_MAX = 10;
-// PREVIEW GATE: the layer and its button exist only with ?ctx=1 in the URL
-// (or after opting in once) until the context archive is fully built.
+var _CTX_LRU_MAX = 6;          // rendered PNG blob URLs kept (~6 MB each)
+// On by default on desktop; off on phones (~1.2 MB per 3-h step) unless the
+// viewer turns it on with the Globe button or ?ctx=1. The choice persists.
 var _ctxFlag = /[?&]ctx=1\b/.test(location.search);
 var _ctxEnabled = (function () {
     try {
@@ -502,12 +503,23 @@ var _ctxEnabled = (function () {
         if (v === '1') return true;
         if (v === '0') return false;
     } catch (e) {}
-    return _ctxFlag && !_gaIsTouch();      // default off on phones: ~1.2 MB per frame
+    return _ctxFlag || !_gaIsTouch();
 })();
+// Decode, colorize and PNG-encode run in a Web Worker (OffscreenCanvas); on the
+// main thread they cost ~250 ms per 3-h step and stuttered playback. Browsers
+// without OffscreenCanvas (Safari < 16.4) simply don't get the layer.
+var _ctxSupported = typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined' &&
+    typeof createImageBitmap === 'function' && !!OffscreenCanvas.prototype.convertToBlob;
+if (!_ctxSupported) _ctxEnabled = false;
+// Fraction of the storm frame's edge faded out while the context layer sits
+// under it, so the 20° box blends into the (up to 2.5 h older) context image.
+var _CTX_FEATHER = 0.08;
 var _ctxIndex = {};            // year -> {ts:{}, bounds} | false | Promise
-var _ctxDecoded = [];          // LRU of {ts, idx, rows, cols}
-var _ctxOverlay = null, _ctxOverlayMap = null, _ctxShownKey = null, _ctxReq = 0;
+var _ctxUrls = [];             // LRU of {key: 'ts|colormap', url, bounds}
+var _ctxPending = {};          // key -> Promise (render in flight)
+var _ctxOverlay = null, _ctxOverlayMap = null, _ctxShownKey = null, _ctxShownUrl = null, _ctxReq = 0;
 var _ctxMaxTex = 0;
+var _ctxWorker = null, _ctxWorkerSeq = 0, _ctxWorkerCbs = {};
 
 function _ctxMaxTexSize() {
     if (_ctxMaxTex) return _ctxMaxTex;
@@ -547,49 +559,169 @@ function _ctxGetIndex(year) {
     return pr;
 }
 
-/** Decode one context WebP into the 8-bit index array (0 = missing). */
-function _ctxFetchDecoded(year, ts) {
-    for (var i = 0; i < _ctxDecoded.length; i++) {
-        if (_ctxDecoded[i].ts === ts) {
-            var hit = _ctxDecoded.splice(i, 1)[0]; _ctxDecoded.push(hit); return Promise.resolve(hit);
+/** RGBA context pixels → 8-bit Tb index (0 = missing). The WebP encoder
+ *  zeroes RGB under transparent pixels, so a masked pixel carries no value
+ *  (reading it as-is gave index 1 = 170 K, painting the polar wedges outside
+ *  geostationary view solid "coldest"). Short runs (scan-line dropouts) take
+ *  the nearest valid neighbour; larger voids stay transparent. Pure — runs in
+ *  the worker. */
+function _ctxIndexFromRGBA(px, rows, cols) {
+    var n = rows * cols, idx = new Uint8Array(n), MAXGAP = 3;
+    for (var k = 0; k < n; k++) idx[k] = px[k * 4 + 3] < 128 ? 0 : (px[k * 4] || 1);
+    // pass 0: down each column (horizontal scan lines); pass 1: along each row
+    for (var pass = 0; pass < 2; pass++) {
+        var lines = pass ? rows : cols, len = pass ? cols : rows;
+        var step = pass ? 1 : cols, lineStep = pass ? cols : 1;
+        for (var ln = 0; ln < lines; ln++) {
+            var base = ln * lineStep, i = 0;
+            while (i < len) {
+                if (idx[base + i * step]) { i++; continue; }
+                var s0 = i;
+                while (i < len && !idx[base + i * step]) i++;
+                if (i - s0 <= MAXGAP && s0 > 0 && i < len) {
+                    var lo = idx[base + (s0 - 1) * step], hi = idx[base + i * step];
+                    for (var q = s0; q < i; q++) idx[base + q * step] = (q - s0 < i - q) ? lo : hi;
+                }
+            }
         }
     }
-    return new Promise(function (resolve, reject) {
-        var img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = function () {
-            try {
-                // Halve on phones (bandwidth already paid, but decode + texture
-                // memory matter) and wherever the GL texture limit is smaller.
-                var f = img.naturalWidth > _ctxMaxTexSize() ? img.naturalWidth / _ctxMaxTexSize() : 1;   // scale only if the GPU cannot take the frame
-                var cols = Math.floor(img.naturalWidth / f), rows = Math.floor(img.naturalHeight / f);
-                var c = document.createElement('canvas'); c.width = cols; c.height = rows;
-                var g = c.getContext('2d', { willReadFrequently: true });
-                g.drawImage(img, 0, 0, cols, rows);
-                var px = g.getImageData(0, 0, cols, rows).data;
-                var idx = new Uint8Array(cols * rows);
-                // Sparse scan-line gaps use the builder's nearest-filled value; only a large
-                // outage (>4% of the image) keeps its transparency mask.
-                var n = cols * rows, masked = 0;
-                for (var q = 3; q < n * 4; q += 4) if (px[q] < 128) masked++;
-                var keepMask = masked > 0.04 * n;
-                for (var k = 0; k < n; k++) {
-                    idx[k] = (keepMask && px[k * 4 + 3] < 128) ? 0 : (px[k * 4] || 1);
-                }
-                var rec = { ts: ts, idx: idx, rows: rows, cols: cols };
-                _ctxDecoded.push(rec);
-                while (_ctxDecoded.length > _CTX_LRU_MAX) _ctxDecoded.shift();
-                resolve(rec);
-            } catch (e) { reject(e); }
+    return idx;
+}
+
+/** Grid bounds from the frame's aspect ratio (GridSat-B1 ±70° vs MergIR ±60°;
+ *  GridSat fallback frames can sit inside a MergIR year). Pure. */
+function _ctxGridBounds(rows, cols) {
+    return (rows / cols > 0.36)
+        ? { south: -70.035, north: 69.965, west: -180.035, east: 179.975 }
+        : { south: -60, north: 60, west: -180, east: 180 };
+}
+
+/** Worker body (stringified; sees only the pure helpers above). Fetches and
+ *  decodes a context WebP, keeps the last few decoded frames so a colormap
+ *  change re-renders without refetching, and replies with a PNG blob. */
+function _ctxWorkerMain() {
+    var store = [], MAX = 6;
+    function decoded(m) {
+        for (var i = 0; i < store.length; i++) {
+            if (store[i].ts === m.ts) { var hit = store.splice(i, 1)[0]; store.push(hit); return Promise.resolve(hit); }
+        }
+        return fetch(m.src)
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+            .then(function (blob) { return createImageBitmap(blob); })
+            .then(function (bmp) {
+                // scale only if the GPU cannot take the frame as one texture
+                var f = bmp.width > m.maxTex ? bmp.width / m.maxTex : 1;
+                var cols = Math.floor(bmp.width / f), rows = Math.floor(bmp.height / f);
+                var oc = new OffscreenCanvas(cols, rows), g = oc.getContext('2d', { willReadFrequently: true });
+                g.drawImage(bmp, 0, 0, cols, rows);
+                if (bmp.close) bmp.close();
+                var rec = { ts: m.ts, idx: _ctxIndexFromRGBA(g.getImageData(0, 0, cols, rows).data, rows, cols),
+                            rows: rows, cols: cols };
+                store.push(rec);
+                while (store.length > MAX) store.shift();
+                return rec;
+            });
+    }
+    self.onmessage = function (e) {
+        var m = e.data;
+        decoded(m).then(function (rec) {
+            var b = _ctxGridBounds(rec.rows, rec.cols);
+            var oc = new OffscreenCanvas(rec.cols, rec.rows), g = oc.getContext('2d');
+            var im = g.createImageData(rec.cols, rec.rows);
+            _tbColorizePixels(rec.idx, rec.rows, rec.cols, m.lut, b.south, b.north, 0, im.data);
+            g.putImageData(im, 0, 0);
+            return oc.convertToBlob({ type: 'image/png' }).then(function (blob) {
+                self.postMessage({ id: m.id, blob: blob, bounds: b });
+            });
+        }).catch(function (err) { self.postMessage({ id: m.id, error: String((err && err.message) || err) }); });
+    };
+}
+
+function _ctxGetWorker() {
+    if (_ctxWorker) return _ctxWorker;
+    var src = [_tbFeatherRamp, _tbColorizePixels, _ctxIndexFromRGBA, _ctxGridBounds].map(String).join('\n') +
+        '\n(' + _ctxWorkerMain + ')();';
+    _ctxWorker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+    _ctxWorker.onmessage = function (e) {
+        var cb = _ctxWorkerCbs[e.data.id];
+        delete _ctxWorkerCbs[e.data.id];
+        if (cb) cb(e.data);
+    };
+    _ctxWorker.onerror = function (e) {
+        // The worker itself failed to start/run: fail every pending render.
+        var cbs = _ctxWorkerCbs; _ctxWorkerCbs = {};
+        Object.keys(cbs).forEach(function (id) { cbs[id]({ error: 'context worker: ' + (e.message || 'error') }); });
+    };
+    return _ctxWorker;
+}
+
+/** Render context time `t` in the current colormap → Promise<{url, bounds}>. */
+function _ctxRender(t) {
+    var key = t.ts + '|' + irSelectedColormap;
+    for (var i = 0; i < _ctxUrls.length; i++) {
+        if (_ctxUrls[i].key === key) { var hit = _ctxUrls.splice(i, 1)[0]; _ctxUrls.push(hit); return Promise.resolve(hit); }
+    }
+    if (_ctxPending[key]) return _ctxPending[key];
+    var lut = IR_COLORMAPS[irSelectedColormap] || IR_COLORMAPS['enhanced'];
+    var pr = new Promise(function (resolve, reject) {
+        var id = ++_ctxWorkerSeq;
+        _ctxWorkerCbs[id] = function (d) {
+            if (d.error) { reject(new Error(d.error)); return; }
+            var rec = { key: key, url: URL.createObjectURL(d.blob), bounds: d.bounds };
+            _ctxUrls.push(rec);
+            while (_ctxUrls.length > _CTX_LRU_MAX) {
+                // keep the shown URL alive: a style reload re-reads the source URL
+                var old = _ctxUrls.shift();
+                if (old.url !== _ctxShownUrl) { try { URL.revokeObjectURL(old.url); } catch (e) {} }
+            }
+            resolve(rec);
         };
-        img.onerror = function () { reject(new Error('context image failed')); };
-        img.src = _CTX_BASE + '/' + year + '/' + ts + '.webp';
+        _ctxGetWorker().postMessage({ id: id, ts: t.ts, src: _CTX_BASE + '/' + t.year + '/' + t.ts + '.webp',
+                                      maxTex: _ctxMaxTexSize(), lut: lut });
     });
+    _ctxPending[key] = pr;
+    var done = function () { delete _ctxPending[key]; };
+    pr.then(done, done);
+    return pr;
+}
+
+/** Track the URL on screen; revoke the previous one once nothing caches it. */
+function _ctxSetShownUrl(url) {
+    var prev = _ctxShownUrl;
+    _ctxShownUrl = url;
+    if (!prev || prev === url) return;
+    for (var i = 0; i < _ctxUrls.length; i++) if (_ctxUrls[i].url === prev) return;
+    try { URL.revokeObjectURL(prev); } catch (e) {}
+}
+
+/** Warm the next 2 distinct context times after frame `fromIdx`, one at a
+ *  time, so stepping/playback across a 3-h boundary swaps the background
+ *  without a stall. Desktop only. */
+var _ctxAheadGen = 0;
+function _ctxPrefetchAhead(fromIdx, curTs) {
+    if (_gaIsTouch() || !irMeta || !irMeta.frames) return;
+    var want = [], seen = {}, n = irMeta.frames.length;
+    seen[curTs] = 1;
+    for (var k = 1; k < n && want.length < 2; k++) {
+        var t = _ctxTsFromFrame(irMeta.frames[(fromIdx + k) % n]);
+        if (!t || t.year < 1980 || seen[t.ts]) continue;
+        seen[t.ts] = 1; want.push(t);
+    }
+    var gen = ++_ctxAheadGen;
+    (function next(i) {
+        if (i >= want.length || gen !== _ctxAheadGen || !_ctxEnabled) return;
+        var t = want[i];
+        _ctxGetIndex(t.year).then(function (index) {
+            if (!index || !index.ts[t.ts] || gen !== _ctxAheadGen) return null;
+            return _ctxRender(t);
+        }).catch(function () {}).then(function () { next(i + 1); });
+    })(0);
 }
 
 function _ctxRemove() {
     if (_ctxOverlay && _ctxOverlayMap) { try { _ctxOverlayMap.removeLayer(_ctxOverlay); } catch (e) {} }
     _ctxOverlay = null; _ctxOverlayMap = null; _ctxShownKey = null;
+    _ctxSetShownUrl(null);
 }
 
 /** Show the context image matching a storm frame (called from displayIROnMap). */
@@ -605,11 +737,9 @@ function _ctxUpdate(frameMeta) {
     _ctxGetIndex(t.year).then(function (index) {
         if (req !== _ctxReq) return;
         if (!index || !index.ts[t.ts]) { _ctxRemove(); return; }
-        return _ctxFetchDecoded(t.year, t.ts).then(function (dec) {
+        return _ctxRender(t).then(function (rec) {
             if (req !== _ctxReq || !detailMap || !irOverlayVisible) return;
-            // grid from the frame's aspect ratio (GridSat fallback frames can sit inside a MergIR year)
-            var b = (dec.rows / dec.cols > 0.36) ? { south: -70.035, north: 69.965, west: -180.035, east: 179.975 } : { south: -60, north: 60, west: -180, east: 180 };
-            var uri = renderTbToDataURI(dec.idx, dec.rows, dec.cols, irSelectedColormap, b.south, b.north);
+            var uri = rec.url, b = rec.bounds;
             var bounds = L.latLngBounds([b.south, Math.max(-180, b.west)], [b.north, Math.min(180, b.east)]);
             if (_ctxOverlay && _ctxOverlayMap === detailMap && detailMap.hasLayer(_ctxOverlay)) {
                 _ctxOverlay.setBounds(bounds); _ctxOverlay.setUrl(uri);
@@ -622,45 +752,76 @@ function _ctxUpdate(frameMeta) {
             }
             _ctxOverlay.setOpacity(irOpacity);
             _ctxShownKey = key;
+            _ctxSetShownUrl(uri);
+            _ctxPrefetchAhead(irFrameIdx, t.ts);
         });
     }).catch(function (e) { console.warn('[ir-context]', e); });
+}
+
+/** Edge feather for the storm frame: only while the context layer can sit under it. */
+function _irFrameFeather(frameMeta) {
+    if (!_ctxEnabled) return 0;
+    var t = _ctxTsFromFrame(frameMeta);
+    return (t && t.year >= 1980) ? _CTX_FEATHER : 0;
 }
 
 function _ctxSyncButton() {
     var b = document.getElementById('ir-ctx-btn');
     if (!b) return;
-    b.style.display = (_ctxFlag || _ctxEnabled) ? '' : 'none';
+    b.style.display = _ctxSupported ? '' : 'none';
     b.classList.toggle('active', !!_ctxEnabled);
 }
 
 window.toggleIRContext = function () {
+    if (!_ctxSupported) return;
     _ctxEnabled = !_ctxEnabled;
     try { localStorage.setItem('ga-ir-context', _ctxEnabled ? '1' : '0'); } catch (e) {}
     _ctxSyncButton();
+    // Re-render the storm frame so its edge feather follows the layer
+    // (switchColormap also refreshes/clears the context overlay).
+    if (irCurrentTbData && irCurrentBounds && detailMap) { switchColormap(irSelectedColormap); return; }
     if (!_ctxEnabled) { _ctxRemove(); return; }
     _ctxUpdate(irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null);
 };
 document.addEventListener('DOMContentLoaded', _ctxSyncButton);
 
-function _renderTbToDataURIImpl(tbData, rows, cols, colormap, southLat, northLat) {
+/** Alpha scale (0-255) for an edge feather: linear ramp over the outer
+ *  `feather` fraction of each side; 255 everywhere when feather is 0. */
+function _tbFeatherRamp(n, feather) {
+    var ramp = new Uint8Array(n);
+    var w = feather > 0 ? Math.max(1, n * feather) : 0;
+    for (var i = 0; i < n; i++) {
+        ramp[i] = w ? Math.round(255 * Math.min(1, Math.min(i, n - 1 - i) / w)) : 255;
+    }
+    return ramp;
+}
+
+function _renderTbToDataURIImpl(tbData, rows, cols, colormap, southLat, northLat, feather) {
     if (!_irRenderCanvas) {
         _irRenderCanvas = document.createElement('canvas');
     }
-
     var lut = IR_COLORMAPS[colormap] || IR_COLORMAPS['enhanced'];
+    _irRenderCanvas.width = cols;
+    _irRenderCanvas.height = rows;
+    var ctx = _irRenderCanvas.getContext('2d');
+    var imgData = ctx.createImageData(cols, rows);
+    _tbColorizePixels(tbData, rows, cols, lut, southLat, northLat, feather, imgData.data);
+    ctx.putImageData(imgData, 0, 0);
+    return _irRenderCanvas.toDataURL('image/png');
+}
 
+/** Colorize (+ Mercator-warp when lat bounds are given) Tb indices into an
+ *  RGBA `pixels` array of rows×cols. Pure (no DOM or outer state besides
+ *  _tbFeatherRamp) — the IR-context worker runs its source verbatim. */
+function _tbColorizePixels(tbData, rows, cols, lut, southLat, northLat, feather, pixels) {
     // If lat bounds provided, apply Mercator warping so the image aligns
     // correctly when Leaflet stretches it in Web Mercator screen space.
     // Without this, equirectangular data appears shifted (eye north of track).
     var warp = (southLat != null && northLat != null);
     var outRows = rows;
     var outCols = cols;
-
-    _irRenderCanvas.width = outCols;
-    _irRenderCanvas.height = outRows;
-    var ctx = _irRenderCanvas.getContext('2d');
-    var imgData = ctx.createImageData(outCols, outRows);
-    var pixels = imgData.data;
+    var rampX = feather ? _tbFeatherRamp(outCols, feather) : null;
+    var rampY = feather ? _tbFeatherRamp(outRows, feather) : null;
 
     if (warp) {
         // Mercator projection: y = ln(tan(π/4 + lat/2))
@@ -683,6 +844,7 @@ function _renderTbToDataURIImpl(tbData, rows, cols, colormap, southLat, northLat
             if (srcRow < 0) srcRow = 0;
             if (srcRow >= rows) srcRow = rows - 1;
 
+            var ry = rampY ? rampY[outRow] : 255;
             for (var c = 0; c < outCols; c++) {
                 var srcIdx = srcRow * cols + c;
                 var val = tbData[srcIdx];
@@ -694,7 +856,9 @@ function _renderTbToDataURIImpl(tbData, rows, cols, colormap, southLat, northLat
                     pixels[pi]     = lut[li];
                     pixels[pi + 1] = lut[li + 1];
                     pixels[pi + 2] = lut[li + 2];
-                    pixels[pi + 3] = lut[li + 3];
+                    var a = lut[li + 3];
+                    if (rampX) { var rf = rampX[c] < ry ? rampX[c] : ry; if (rf < 255) a = (a * rf / 255) | 0; }
+                    pixels[pi + 3] = a;
                 }
             }
         }
@@ -714,8 +878,6 @@ function _renderTbToDataURIImpl(tbData, rows, cols, colormap, southLat, northLat
             }
         }
     }
-    ctx.putImageData(imgData, 0, 0);
-    return _irRenderCanvas.toDataURL('image/png');
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1479,7 +1641,8 @@ function switchColormap(name) {
     if (irCurrentTbData && irCurrentBounds && detailMap) {
         var sLat = irCurrentBounds ? irCurrentBounds.getSouth() : null;
         var nLat = irCurrentBounds ? irCurrentBounds.getNorth() : null;
-        var dataURI = renderTbToDataURI(irCurrentTbData, irCurrentTbRows, irCurrentTbCols, name, sLat, nLat);
+        var dataURI = renderTbToDataURI(irCurrentTbData, irCurrentTbRows, irCurrentTbCols, name, sLat, nLat,
+            _irFrameFeather(irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null));
         if (irOverlayLayer) {
             try { detailMap.removeLayer(irOverlayLayer); } catch (e) {}
         }
@@ -5099,7 +5262,8 @@ function displayIROnMap(data) {
         irCurrentTbCols = data.tb_cols;
         irCurrentTbVmin = data.tb_vmin || 170.0;
         irCurrentTbVmax = data.tb_vmax || 310.0;
-        imageURI = renderTbToDataURI(tbArr, data.tb_rows, data.tb_cols, irSelectedColormap, bounds.south, bounds.north);
+        imageURI = renderTbToDataURI(tbArr, data.tb_rows, data.tb_cols, irSelectedColormap, bounds.south, bounds.north,
+            _irFrameFeather(frameMeta));
     } else {
         // Legacy PNG format (from old cache entries)
         irCurrentTbData = null;

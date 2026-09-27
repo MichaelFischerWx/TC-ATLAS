@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fischerwx.ir-context-refresh</string>
+
+    <!-- Every 6 h: append the newest 3-hourly IR context frames (and storm
+         sectors) to R2. launchd runs a missed interval when the Mac wakes. -->
+    <key>StartInterval</key>
+    <integer>21600</integer>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/mfischer/github/TC-ATLAS/bin/ir-context-refresh.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mfischer/github/TC-ATLAS</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mfischer/Library/Logs/ir-context-refresh.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/mfischer/Library/Logs/ir-context-refresh.stderr.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Nice + low-priority I/O: this shares the Mac with GHOST / SEAR RT. -->
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/anaconda3/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mfischer</string>
+    </dict>
+</dict>
+</plist>
