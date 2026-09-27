@@ -386,15 +386,22 @@
     var _hdobRecsat = null, _hdobRecsatKey = null, _hdobRecsatTs = 0, _hdobPassSel = null;
     var _RECSAT_CDN = 'https://cdn.tcatlas.org/recon-sat/';
     // Per-symbol visibility on the map (toolbar pills).
-    var _hdobLayerVis = { barbs: true, sondes: true, vdm: true, sear: true, tdr: true, aircraft: true };
+    var _hdobLayerVis = { barbs: true, sondes: true, vdm: true, sear: true, tdr: true, aircraft: true, old: false };
     var _HDOB_LAYERS = [
         { key: 'barbs',    name: 'Barbs',      color: '#2563eb', tip: 'Flight-level wind barbs + track dots' },
         { key: 'sondes',   name: 'Sondes',     color: '#d97706', tip: 'Dropsonde launch points (◇)' },
         { key: 'vdm',      name: 'VDM fixes',  color: '#ef4444', tip: 'Vortex Data Message center fixes (⊕)' },
         { key: 'sear',     name: 'SEAR',       color: '#ec4899', tip: 'SEAR pass centers, peaks and radials (experimental)' },
         { key: 'tdr',      name: 'TDR 10-m',   color: '#0891b2', tip: 'SEAR 10-m wind estimated from each P-3 tail-Doppler analysis (experimental)' },
-        { key: 'aircraft', name: 'Aircraft',   color: '#ca8a04', tip: 'Latest aircraft position (✈)' }
+        { key: 'aircraft', name: 'Aircraft',   color: '#ca8a04', tip: 'Latest aircraft position (✈)' },
+        { key: 'old',      name: 'Older than 12 h', color: '#64748b', tip: 'Sondes, VDMs, SEAR passes and TDR analyses more than 12 h before the latest ob (hidden by default)' }
     ];
+    // The live blob spans 24 h, so yesterday's sondes, fixes and TDR swath sat
+    // under today's enroute plane as if they were current (Michael, 2026-09-27).
+    // Point symbols older than this before the displayed flight's newest ob are
+    // hidden unless the 'Older than 12 h' pill is on. Archive replays are
+    // already cut at the replay clock and are not filtered.
+    var _HDOB_STALE_MS = 12 * 3600000;
     var _hdobMissions = [], _hdobMissionInfo = {}, _hdobMissionTail = null;  // mission-centric fallback
     var _hdobLoggedLoad = false;  // fire recon_hdob_loaded once per selection, not per poll
     var _hdobAircraftMarkers = [];  // ✈ glyph at each aircraft's latest ob, rotated to heading
@@ -447,6 +454,44 @@
     function _hdobX(t) {
         if (!t) return null;
         return (t.indexOf('Z') >= 0 || t.indexOf('+') >= 0) ? t : t + 'Z';
+    }
+
+    /** Epoch ms before which map symbols count as stale: 12 h before the newest
+     *  ob of the flights on display (the picked flight, else all), so a sortie
+     *  that landed hours ago still shows its own sondes. No cut in archive
+     *  replay. */
+    function _hdobStaleCut() {
+        if (_hdobArchive || !_hdobData) return -Infinity;
+        var ac = _hdobData.aircraft || [];
+        if (_hdobFlightSel) {
+            var sel = ac.filter(function (a) { return _hdobAcId(a) === _hdobFlightSel; });
+            if (sel.length) ac = sel;
+        }
+        var newest = -Infinity;
+        ac.forEach(function (a) {
+            var tr = a.track || [];
+            if (tr.length) { var ms = Date.parse(_hdobX(tr[tr.length - 1].t)); if (ms > newest) newest = ms; }
+        });
+        if (!isFinite(newest)) newest = Date.now();
+        return newest - _HDOB_STALE_MS;
+    }
+    /** True when this timestamp is stale and the 'Older' pill is off (unparseable = keep). */
+    function _hdobHideOld(t, cut) {
+        if (_hdobLayerVis.old) return false;
+        var ms = Date.parse(_hdobX(t));
+        return !isNaN(ms) && ms < cut;
+    }
+    /** How many sondes / VDMs / SEAR passes / TDR analyses the age cut hides. */
+    function _hdobStaleCount() {
+        var cut = _hdobStaleCut();
+        if (!isFinite(cut) || !_hdobData) return 0;
+        function old(t) { var ms = Date.parse(_hdobX(t)); return !isNaN(ms) && ms < cut; }
+        var n = 0;
+        (_hdobData.dropsondes || []).forEach(function (d) { if (old(d.t)) n++; });
+        (_hdobData.vdms || []).forEach(function (v) { if (old(v.t)) n++; });
+        ((_hdobData.sear && _hdobData.sear.passes) || []).forEach(function (p) { if (old(p.fix_t || p.t)) n++; });
+        ((_hdobTdrMeta && _hdobTdrMeta.analyses) || []).forEach(function (a) { if (old(a.t)) n++; });
+        return n;
     }
 
     /** Stable per-entry id. The backend splits a tail's window into sorties
@@ -1370,8 +1415,10 @@
         _HDOB_LAYERS.forEach(function (cfg) {
             if (cfg.key === 'sear' && !(_hdobData && _hdobData.sear && _hdobData.sear.passes && _hdobData.sear.passes.length)) return;
             if (cfg.key === 'tdr' && !(_hdobData && _hdobData.sear && _hdobData.sear.swath_url)) return;
+            var nOld = 0;
+            if (cfg.key === 'old' && !(nOld = _hdobStaleCount())) return;
             var b = document.createElement('button');
-            b.textContent = cfg.name; b.title = cfg.tip;
+            b.textContent = cfg.name + (nOld ? ' (' + nOld + ')' : ''); b.title = cfg.tip;
             var on = !!_hdobLayerVis[cfg.key];
             b.className = on ? 'on' : '';
             if (on) b.style.background = cfg.color;
@@ -1786,8 +1833,13 @@
         img.src = url;
         return 'loading';
     }
+    /** Analyses offered on the map: the stale ones drop out unless 'Older' is on. */
+    function _hdobTdrAnalyses() {
+        var cut = _hdobStaleCut();
+        return ((_hdobTdrMeta && _hdobTdrMeta.analyses) || []).filter(function (a) { return !_hdobHideOld(a.t, cut); });
+    }
     function _hdobTdrPick(passInfo) {
-        var an = (_hdobTdrMeta && _hdobTdrMeta.analyses) || [];
+        var an = _hdobTdrAnalyses();
         if (!an.length) return { a: null, why: '' };
         if (_hdobTdrSel) for (var i = 0; i < an.length; i++) if (an[i].file === _hdobTdrSel) return { a: an[i], i: i };
         var want = passInfo ? Date.parse(passInfo.t) : (_hdobFrozenAt ? Date.parse(_hdobFrozenAt) : NaN);
@@ -1860,7 +1912,7 @@
                 if (_hdobData) _hdobRender();
             }).catch(function () {});
         }
-        var an = (_hdobTdrMeta && _hdobTdrMeta.analyses) || [];
+        var an = _hdobTdrAnalyses();
         if (!an.length) { _hdobTdrRemove(); return; }
         var pick = _hdobTdrPick(passInfo), key = _hdobTdrKey(map);
         key.innerHTML = _hdobTdrKeyHtml(pick, an); key.style.display = '';
@@ -1957,8 +2009,9 @@
         var selT = selPass && selPass.pass ? (selPass.pass.fix_t || selPass.pass.t) : null;
         var kit = window._ReconKit;
         var PINK = '#ec4899';
+        var cut = _hdobStaleCut();
         var shown = _hdobSearPassesInScope(passes).filter(function (p) {
-            return p.lat != null && p.lon != null && p.y_kt != null;
+            return p.lat != null && p.lon != null && p.y_kt != null && !_hdobHideOld(p.fix_t || p.t, cut);
         }).sort(function (a, b) { return String(a.fix_t || a.t) < String(b.fix_t || b.t) ? -1 : 1; });
         // Pass-to-pass center track first (under everything): the pseudo-fixes
         // read as a smooth motion vector, not a scatter of points.
@@ -2135,10 +2188,11 @@
     function _hdobFilterMarkerBlob(blob) {
         if (!blob) return blob;
         var selTail = _hdobFlightSel ? _hdobFlightSel.split('#')[0] : null;
+        var cut = _hdobStaleCut();
         function keep(t) { return !selTail || _hdobTailEq(t, selTail); }
         return Object.assign({}, blob, {
-            dropsondes: _hdobLayerVis.sondes ? (blob.dropsondes || []).filter(function (d) { return keep(d.tail); }) : [],
-            vdms:       _hdobLayerVis.vdm    ? (blob.vdms || []).filter(function (x) { return keep(x.aircraft); }) : []
+            dropsondes: _hdobLayerVis.sondes ? (blob.dropsondes || []).filter(function (d) { return keep(d.tail) && !_hdobHideOld(d.t, cut); }) : [],
+            vdms:       _hdobLayerVis.vdm    ? (blob.vdms || []).filter(function (x) { return keep(x.aircraft) && !_hdobHideOld(x.t, cut); }) : []
         });
     }
 
