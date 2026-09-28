@@ -3977,8 +3977,10 @@
         // Build compass from available shear/motion data
         var _rtCompassHTML = '';
         {
-            // Real-time SHIPS SDDC is "where shear comes FROM"; flip 180° to match archive convention (downshear direction)
-            var _shSd = (_sd.sddc != null && _sd.sddc !== 9999) ? ((_sd.sddc + 180) % 360) : null;
+            // SHIPS SDDC is the shear HEADING (downshear, where the vector points TO) --
+            // same convention as the archive's sddc (realtime_tdr_api.py /ships), so no flip.
+            // (A 180-degree flip here drew the compass arrow upshear until 2026-09-28.)
+            var _shSd = (_sd.sddc != null && _sd.sddc !== 9999) ? _sd.sddc : null;
             var _shKt = _sd.shear_kt || null;
             var _moDir = null, _moSpd = null;
             // case_meta provides U/V storm motion (m/s); convert to met direction + kt
@@ -4264,93 +4266,26 @@
     }
 
     // ── Shear vector inset (uses SHIPS SDDC) ─────────────────────
-    function _rtBuildShearInset(isFullsize) {
-        var result = { shapes: [], annotations: [] };
-        // Shear from SHIPS
+    // Shear-heading label for the cross-section / azimuthal-mean panels (SHIPS
+    // SDDC = downshear heading, SHDC kt); empty until SHIPS has loaded.
+    function _rtPanelShearInset(isFullsize) {
         var sd = (_rtShipsData && _rtShipsData.ships_data) ? _rtShipsData.ships_data : {};
-        var sddc = sd.sddc;
-        var hasShear = (sddc != null && sddc !== 9999);
-
-        // Motion: try SHIPS first, then TDR file metadata (U/V components)
-        var motDir = sd.stm_heading_deg;
-        var motSpd = sd.stm_speed_kt;
-        var hasMotion = (motDir != null && motSpd != null && motSpd > 0);
-        if (!hasMotion && _rtCaseMeta) {
-            var su = _rtCaseMeta.storm_motion_east_ms;
-            var sv = _rtCaseMeta.storm_motion_north_ms;
-            if (su != null && sv != null && su !== -999 && sv !== -999) {
-                var spdMs = Math.sqrt(su * su + sv * sv);
-                if (spdMs > 0.1) {
-                    motSpd = Math.round(spdMs * 1.94384 * 10) / 10; // m/s → kt
-                    var mathAng = Math.atan2(sv, su) * 180 / Math.PI;
-                    motDir = ((90 - mathAng) % 360 + 360) % 360;
-                    hasMotion = true;
-                }
-            }
-        }
-        if (!hasShear && !hasMotion) return result;
-
-        var cx = isFullsize ? 0.09 : 0.12;
-        var cy = isFullsize ? 0.92 : 0.92;
-        var r = isFullsize ? 0.060 : 0.075;
-        var arrowLen = r * 0.85;
-        var dotR = r * 0.07;
-        var lw = isFullsize ? 2.5 : 2.5;
-        var fsL = isFullsize ? 12 : 10;
-        var labelGap = isFullsize ? 0.038 : 0.032;
-
-        var shapes = [
-            { type: 'circle', xref: 'paper', yref: 'paper',
-              x0: cx - r, y0: cy - r, x1: cx + r, y1: cy + r,
-              fillcolor: 'rgba(10,22,40,0.80)', line: { color: 'rgba(255,255,255,0.15)', width: 1 } },
-            { type: 'circle', xref: 'paper', yref: 'paper',
-              x0: cx - dotR, y0: cy - dotR, x1: cx + dotR, y1: cy + dotR,
-              fillcolor: 'rgba(255,255,255,0.4)', line: { width: 0 } }
-        ];
-        var annotations = [];
-
-        function _addArrow(theta, color) {
-            var adx = arrowLen * Math.cos(theta), ady = arrowLen * Math.sin(theta);
-            shapes.push({ type: 'line', xref: 'paper', yref: 'paper',
-                x0: cx - adx * 0.25, y0: cy - ady * 0.25, x1: cx + adx, y1: cy + ady,
-                line: { color: color, width: lw } });
-            var hl = arrowLen * 0.32, ha = 25 * Math.PI / 180;
-            var tx = cx + adx, ty = cy + ady;
-            shapes.push({ type: 'line', xref: 'paper', yref: 'paper',
-                x0: tx, y0: ty, x1: tx + hl * Math.cos(theta + Math.PI - ha), y1: ty + hl * Math.sin(theta + Math.PI - ha),
-                line: { color: color, width: lw } });
-            shapes.push({ type: 'line', xref: 'paper', yref: 'paper',
-                x0: tx, y0: ty, x1: tx + hl * Math.cos(theta + Math.PI + ha), y1: ty + hl * Math.sin(theta + Math.PI + ha),
-                line: { color: color, width: lw } });
-        }
-
-        if (hasShear) _addArrow((90 - sddc) * Math.PI / 180, '#f59e0b');
-        if (hasMotion) _addArrow((90 - motDir) * Math.PI / 180, '#22d3ee');
-
-        // Compact labels: "SHR 7 kt / 276°" above, "MOT 8 kt / 29°" below
-        if (hasShear) {
-            var shrTxt = '<b>Shear</b>  ';
-            if (sd.shear_kt != null) shrTxt += Math.round(sd.shear_kt) + ' kt / ';
-            shrTxt += sddc.toFixed(0) + '\u00b0';
-            annotations.push({ text: shrTxt, xref: 'paper', yref: 'paper',
-                x: cx, y: cy + r + labelGap,
-                showarrow: false, font: { color: '#f59e0b', size: fsL, family: 'JetBrains Mono, monospace' },
-                bgcolor: 'rgba(10,22,40,0.7)', borderpad: 2 });
-        }
-        if (hasMotion) {
-            var motTxt = '<b>Motion</b>  ' + Math.round(motSpd) + ' kt / ' + motDir.toFixed(0) + '\u00b0';
-            var motY = hasShear ? cy - r - labelGap : cy + r + labelGap;
-            annotations.push({ text: motTxt, xref: 'paper', yref: 'paper',
-                x: cx, y: motY,
-                showarrow: false, font: { color: '#22d3ee', size: fsL, family: 'JetBrains Mono, monospace' },
-                bgcolor: 'rgba(10,22,40,0.7)', borderpad: 2 });
-        }
-
-        // Tag all inset shapes/annotations so we can replace them later
-        shapes.forEach(function (s) { s._rtInset = true; });
-        annotations.forEach(function (a) { a._rtInset = true; });
-        return { shapes: shapes, annotations: annotations };
+        return TDRView.shearInsetCS(sd.sddc != null ? sd.sddc : null, isFullsize, sd.shear_kt != null ? sd.shear_kt : null);
     }
+    // Colormap for a panel: picker override > per-variable default (Jet for winds) > server default.
+    function _rtColorscale(vi) {
+        var sel = document.getElementById('rt-cmap');
+        if (sel && sel.value) { try { return JSON.parse(sel.value); } catch (e) { return sel.value; } }
+        return _rtDefaultCmapForVariable(vi.key || (document.getElementById('rt-var') || {}).value || '') || vi.colorscale;
+    }
+    // WCM RMW for the dashed RMW line: the panel's own value, else the plan view's
+// (the azimuthal-mean / quadrant endpoints don't return it).
+function _rtRmwKm(json) {
+    if (json && json.wcm_rmw_km != null) return json.wcm_rmw_km;
+    var pj = _rtLastPlotlyData && _rtLastPlotlyData.json;
+    return pj ? pj.wcm_rmw_km : null;
+}
+function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((document.getElementById('rt-var') || {}).value || ''); }
 
     // Apply shear+motion inset to an already-rendered plan-view plot.
     // Shear/motion vectors now rendered as HTML compass in metadata strip only.
@@ -4363,8 +4298,8 @@
     // Called after SHIPS loads so shear vector is incorporated.
     function _rtUpdateCompassStrip() {
         var sd = (_rtShipsData && _rtShipsData.ships_data) ? _rtShipsData.ships_data : {};
-        // Real-time SHIPS SDDC is "where shear comes FROM"; flip 180° to match archive convention (downshear direction)
-        var sddc = (sd.sddc != null && sd.sddc !== 9999) ? ((sd.sddc + 180) % 360) : null;
+        // SHIPS SDDC is the shear HEADING (downshear) -- same as the archive; no flip.
+        var sddc = (sd.sddc != null && sd.sddc !== 9999) ? sd.sddc : null;
         var shkt = sd.shear_kt || null;
 
         // Motion: prefer SHIPS heading/speed, fall back to TDR U/V
@@ -4611,40 +4546,18 @@
         var csResult = document.getElementById('rt-cs-result');
         csResult.innerHTML = '<div style="position:relative;"><div id="rt-cs-chart" style="width:100%;height:300px;border-radius:6px;overflow:hidden;margin-top:8px;"></div>' +
             _rtSaveBtnHTML('rt-cs-chart', 'TDR_CrossSection', 'position:absolute;top:14px;right:6px;z-index:10;') + '</div>';
-
-        var csData = json.cross_section, dist = json.distance_km, hgt = json.height_km, vi = json.variable, ep = json.endpoints;
-
-        var cmapSel = document.getElementById('rt-cmap');
-        var csColorscale = vi.colorscale;
-        var csVarDefault = _rtDefaultCmapForVariable(vi.key || (document.getElementById('rt-var') || {}).value || '');
-        if (cmapSel && cmapSel.value) { try { csColorscale = JSON.parse(cmapSel.value); } catch (e) { csColorscale = cmapSel.value; } }
-        else if (csVarDefault) { csColorscale = csVarDefault; }
-        var av = _rtGetVmin(), avx = _rtGetVmax();
-
-        var heatmap = {
-            z: csData, x: dist, y: hgt, type: 'heatmap',
-            colorscale: csColorscale,
-            zmin: av !== null ? av : vi.vmin,
-            zmax: avx !== null ? avx : vi.vmax,
-            colorbar: { title: { text: vi.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, thickness: 10, len: 0.85 },
-            hovertemplate: '<b>' + vi.display_name + '</b>: %{z:.2f} ' + vi.units + '<br>Distance: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>',
-            hoverongaps: false
-        };
-
-        var title = 'Cross Section: (' + ep.x0.toFixed(0) + ',' + ep.y0.toFixed(0) + ') → (' + ep.x1.toFixed(0) + ',' + ep.y1.toFixed(0) + ') km';
-        var plotBg = '#ffffff';
-        var layout = {
-            title: { text: title, font: { color: '#0f1623', size: 11 }, y: 0.97, x: 0.5, xanchor: 'center' },
-            paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-            xaxis: { title: { text: 'Distance along line (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false },
-            yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false },
-            margin: { l: 45, r: 12, t: 44, b: 38 },
-            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } },
-            showlegend: false
-        };
-
-        var csOverlays = rtBuildOverlayContours(json, null, null, true);
-        Plotly.newPlot('rt-cs-chart', [heatmap].concat(csOverlays), layout, { responsive: true, displayModeBar: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d', 'toggleSpikelines'] });
+        var ep = json.endpoints;
+        var fig = TDRView.sectionFigure({
+            z: json.cross_section, x: json.distance_km, y: json.height_km, varInfo: json.variable,
+            colorscale: _rtColorscale(json.variable), zmin: _rtGetVmin(), zmax: _rtGetVmax(),
+            title: 'Cross Section: (' + ep.x0.toFixed(0) + ',' + ep.y0.toFixed(0) + ') \u2192 (' + ep.x1.toFixed(0) + ',' + ep.y1.toFixed(0) + ') km' + TDRView.sectionTitleOverlay(json),
+            xTitle: 'Distance along line (km)', maxLabels: ['Dist', 'Z'], size: 'small',
+            margin: { l: 45, r: 12, t: json.overlay ? 62 : 44, b: 38 },
+            windMarker: _rtWindMarker(),
+            overlayTraces: rtBuildOverlayContours(json, null, null, true),
+            inset: _rtPanelShearInset(false)
+        });
+        Plotly.newPlot('rt-cs-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d', 'toggleSpikelines'] });
     }
 
     // ── 3D Volume ────────────────────────────────────────────────
@@ -5047,75 +4960,19 @@
     function _rtRenderDualAzimuthalMean(json) {
         var container = document.getElementById('rt-dual-az-container');
         if (!container) return;
-
-        var azData = json.azimuthal_mean, radius_km = json.radius_km, height_km = json.height_km;
-        var varInfo = json.variable, meta = json.case_meta || {};
-        var fontSize = { title:11, axis:10, tick:9, cbar:10, cbarTick:9, hover:11 };
-
-        var cmapSel = document.getElementById('rt-cmap');
-        var azColorscale = varInfo.colorscale;
-        var varDefault = _rtDefaultCmapForVariable(varInfo.key || (document.getElementById('rt-var') || {}).value || '');
-        if (cmapSel && cmapSel.value) { try { azColorscale = JSON.parse(cmapSel.value); } catch(e) { azColorscale = cmapSel.value; } }
-        else if (varDefault) { azColorscale = varDefault; }
-
-        var av = _rtGetVmin(), avx = _rtGetVmax();
-        var heatmap = { z: azData, x: radius_km, y: height_km, type: 'heatmap', colorscale: azColorscale,
-            zmin: av !== null ? av : varInfo.vmin, zmax: avx !== null ? avx : varInfo.vmax,
-            colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: fontSize.cbar } }, tickfont: { color: '#5b6573', size: fontSize.cbarTick }, thickness: 12, len: 0.85 },
-            hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>Radius: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>', hoverongaps: false };
-
+        var vi = json.variable, meta = json.case_meta || {};
         var covPct = Math.round((json.coverage_min || 0.5) * 100);
-        var title = (meta.storm_name || 'Real-Time TDR') + ' | ' + (meta.datetime || '') +
-            '<br>Azimuthal Mean: ' + varInfo.display_name + ' (\u2265' + covPct + '%)';
-
-        var shapes = [];
-        if (json.wcm_rmw_km && !isNaN(json.wcm_rmw_km)) shapes.push({ type:'line',xref:'x',yref:'paper',x0:json.wcm_rmw_km,x1:json.wcm_rmw_km,y0:0,y1:1,line:{color:'white',width:1.5,dash:'dash'} });
-
-        var plotBg = '#ffffff';
-        var layout = {
-            title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
-            paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-            xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false },
-            yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false },
-            margin: { l: 48, r: 14, t: json.overlay ? 58 : 46, b: 44 },
-            shapes: shapes,
-            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } },
-            showlegend: false
-        };
-
-        // Overlay contours
-        var azOverlayTraces = [];
-        if (json.overlay && json.overlay.azimuthal_mean) {
-            try {
-                var ov = json.overlay, ovData = ov.azimuthal_mean;
-                var flat = ovData.flat().filter(function(v) { return v !== null && !isNaN(v); });
-                if (flat.length > 0) {
-                    var mn = Infinity, mx = -Infinity;
-                    for (var i = 0; i < flat.length; i++) { if (flat[i] < mn) mn = flat[i]; if (flat[i] > mx) mx = flat[i]; }
-                    var interval = parseFloat(((mx - mn) / 10).toPrecision(1));
-                    if (!isFinite(interval) || interval <= 0) interval = (mx - mn) / 10 || 1;
-                    var baseContour = { z: ovData, x: radius_km, y: height_km, type: 'contour', showscale: false, hoverongaps: false, contours: { coloring: 'none', showlabels: true, labelfont: { size: 9, color: 'rgba(255,255,255,0.8)' } } };
-                    if (ov.vmax > interval) azOverlayTraces.push(Object.assign({}, baseContour, { contours: Object.assign({}, baseContour.contours, { start: interval, end: ov.vmax, size: interval }), line: { color: 'rgba(0,0,0,0.7)', width: 1.2, dash: 'solid' }, showlegend: false }));
-                    if (ov.vmin < -interval) azOverlayTraces.push(Object.assign({}, baseContour, { contours: Object.assign({}, baseContour.contours, { start: ov.vmin, end: -interval, size: interval }), line: { color: 'rgba(0,0,0,0.7)', width: 1.2, dash: 'dash' }, showlegend: false }));
-                }
-            } catch(e) { /* ignore overlay errors */ }
-        }
-
-        // Max value marker
-        var azMaxInfo = rtFindDataMax(azData, radius_km, height_km);
-        var azMaxTraces = [];
-        if (azMaxInfo) {
-            var azMaxAnnot = rtBuildMaxAnnotation(azMaxInfo, varInfo.units, 'R', 'Z', 9);
-            if (azMaxAnnot) layout.annotations = (layout.annotations || []).concat([azMaxAnnot]);
-            var currentVar = (document.getElementById('rt-var') || {}).value || '';
-            if (_rtMaxMarkerEnabled && rtIsWindVariable(currentVar)) {
-                var azMaxMarker = rtBuildMaxMarkerTrace(azMaxInfo, varInfo.units);
-                if (azMaxMarker) azMaxTraces.push(azMaxMarker);
-            }
-        }
-
+        var intInput = document.getElementById('rt-contour-int');
+        var fig = TDRView.sectionFigure({
+            z: json.azimuthal_mean, x: json.radius_km, y: json.height_km, varInfo: vi,
+            colorscale: _rtColorscale(vi), zmin: _rtGetVmin(), zmax: _rtGetVmax(),
+            title: (meta.storm_name || 'Real-Time TDR') + ' | ' + (meta.datetime || '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '%)',
+            size: 'dual', margin: { l: 48, r: 14, t: json.overlay ? 78 : 68, b: 44 }, rmwX: _rtRmwKm(json),
+            windMarker: _rtWindMarker(),
+            overlayTraces: TDRView.contourTraces(json.overlay, json.overlay && json.overlay.azimuthal_mean, json.radius_km, json.height_km, intInput ? parseFloat(intInput.value) : NaN)
+        });
         container.innerHTML = '<div id="rt-dual-az-chart" style="width:100%;height:100%;min-height:320px;"></div>';
-        Plotly.newPlot('rt-dual-az-chart', [heatmap].concat(azOverlayTraces).concat(azMaxTraces), layout, { responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d','select2d','toggleSpikelines'], displaylogo: false });
+        Plotly.newPlot('rt-dual-az-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d','select2d','toggleSpikelines'], displaylogo: false });
     }
 
     // Coverage slider display update
@@ -5166,80 +5023,22 @@
         var resultDiv = document.getElementById('rt-az-result');
         resultDiv.innerHTML = '<div style="position:relative;"><div id="rt-az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;margin-top:8px;"></div>' +
             _rtSaveBtnHTML('rt-az-chart', 'TDR_AzMean') +
-            '<button onclick="rtOpenFullscreen()" title="Expand to fullscreen" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;" onmouseover="this.style.background=\'rgba(255,255,255,0.2)\'" onmouseout="this.style.background=\'rgba(255,255,255,0.08)\'">⛶</button></div>' +
-            '<div style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Radius–height azimuthal mean · hover for values · ⛶ expand</div>';
-
-        var azData = json.azimuthal_mean, radius_km = json.radius_km, height_km = json.height_km;
-        var varInfo = json.variable, meta = json.case_meta || {};
+            '<button onclick="rtOpenFullscreen()" title="Expand to fullscreen" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'">\u26F6</button></div>' +
+            '<div style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Radius\u2013height azimuthal mean \u00b7 hover for values \u00b7 \u26F6 expand</div>';
+        var vi = json.variable, meta = json.case_meta || {};
         var covPct = Math.round((json.coverage_min || 0.5) * 100);
-
-        // Determine active colorscale
-        var cmapSel = document.getElementById('rt-cmap');
-        var azColorscale = varInfo.colorscale;
-        var varDefault = _rtDefaultCmapForVariable(varInfo.key || (document.getElementById('rt-var') || {}).value || '');
-        if (cmapSel && cmapSel.value) { try { azColorscale = JSON.parse(cmapSel.value); } catch (e) { azColorscale = cmapSel.value; } }
-        else if (varDefault) { azColorscale = varDefault; }
-
-        var av = _rtGetVmin(), avx = _rtGetVmax();
-
-        var heatmap = {
-            z: azData, x: radius_km, y: height_km, type: 'heatmap',
-            colorscale: azColorscale,
-            zmin: av !== null ? av : varInfo.vmin,
-            zmax: avx !== null ? avx : varInfo.vmax,
-            colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, thickness: 10, len: 0.85 },
-            hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>Radius: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>',
-            hoverongaps: false
-        };
-
-        var overlayLabel = json.overlay ? '<br><span style="font-size:0.85em;color:#9ca3af;">Contours: ' + json.overlay.display_name + ' (' + json.overlay.units + ')</span>' : '';
-        var title = (meta.storm_name || 'Real-Time TDR') + ' | ' + (meta.datetime || '') +
-            '<br>Azimuthal Mean: ' + varInfo.display_name + ' (≥' + covPct + '% coverage)' + overlayLabel;
-
-        var plotBg = '#ffffff';
-        var layout = {
-            title: { text: title, font: { color: '#0f1623', size: 10 }, y: 0.97, x: 0.5, xanchor: 'center' },
-            paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-            xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false },
-            yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false },
-            margin: { l: 48, r: 12, t: json.overlay ? 66 : 52, b: 38 },
-            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } },
-            showlegend: false
-        };
-
-        // Overlay contours
-        var azOverlayTraces = [];
-        if (json.overlay && json.overlay.azimuthal_mean) {
-            try {
-                var ov = json.overlay, ovData = ov.azimuthal_mean;
-                var flat = ovData.flat().filter(function (v) { return v !== null && !isNaN(v); });
-                if (flat.length > 0) {
-                    var mn = Infinity, mx = -Infinity;
-                    for (var i = 0; i < flat.length; i++) { if (flat[i] < mn) mn = flat[i]; if (flat[i] > mx) mx = flat[i]; }
-                    var interval = parseFloat(((mx - mn) / 10).toPrecision(1));
-                    if (!isFinite(interval) || interval <= 0) interval = (mx - mn) / 10 || 1;
-                    var baseContour = { z: ovData, x: radius_km, y: height_km, type: 'contour', showscale: false, hoverongaps: false, contours: { coloring: 'none', showlabels: true, labelfont: { size: 9, color: 'rgba(255,255,255,0.8)' } } };
-                    if (ov.vmax > interval) azOverlayTraces.push(Object.assign({}, baseContour, { contours: Object.assign({}, baseContour.contours, { start: interval, end: ov.vmax, size: interval }), line: { color: 'rgba(0,0,0,0.7)', width: 1.2, dash: 'solid' }, showlegend: false }));
-                    if (ov.vmin < -interval) azOverlayTraces.push(Object.assign({}, baseContour, { contours: Object.assign({}, baseContour.contours, { start: ov.vmin, end: -interval, size: interval }), line: { color: 'rgba(0,0,0,0.7)', width: 1.2, dash: 'dash' }, showlegend: false }));
-                }
-            } catch (e) { /* ignore overlay errors */ }
-        }
-
-        // Max value annotation for azimuthal mean
-        var azMaxInfo = rtFindDataMax(azData, radius_km, height_km);
-        var azMaxTraces = [];
-        if (azMaxInfo) {
-            var azMaxAnnot = rtBuildMaxAnnotation(azMaxInfo, varInfo.units, 'R', 'Z', 8);
-            if (azMaxAnnot) layout.annotations = (layout.annotations || []).concat([azMaxAnnot]);
-            var currentVar = (document.getElementById('rt-var') || {}).value || '';
-            if (_rtMaxMarkerEnabled && rtIsWindVariable(currentVar)) {
-                var azMaxMarker = rtBuildMaxMarkerTrace(azMaxInfo, varInfo.units);
-                if (azMaxMarker) azMaxTraces.push(azMaxMarker);
-            }
-        }
-
-        var config = { responsive: true, displayModeBar: false, displaylogo: false };
-        Plotly.newPlot('rt-az-chart', [heatmap].concat(azOverlayTraces).concat(azMaxTraces), layout, config);
+        var intInput = document.getElementById('rt-contour-int');
+        var fig = TDRView.sectionFigure({
+            z: json.azimuthal_mean, x: json.radius_km, y: json.height_km, varInfo: vi,
+            colorscale: _rtColorscale(vi), zmin: _rtGetVmin(), zmax: _rtGetVmax(),
+            title: (meta.storm_name || 'Real-Time TDR') + ' | ' + (meta.datetime || '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '% coverage)' + TDRView.sectionTitleOverlay(json),
+            size: 'small', rmwX: _rtRmwKm(json),
+            margin: { l: 45, r: 12, t: json.overlay ? 78 : 64, b: 38 },
+            windMarker: _rtWindMarker(),
+            overlayTraces: TDRView.contourTraces(json.overlay, json.overlay && json.overlay.azimuthal_mean, json.radius_km, json.height_km, intInput ? parseFloat(intInput.value) : NaN),
+            inset: _rtPanelShearInset(false)
+        });
+        Plotly.newPlot('rt-az-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: false, displaylogo: false });
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -8269,9 +8068,6 @@
     function _rtRenderQuadrants(data, variable) {
         var container = document.getElementById('rt-quad-result');
         if (!container) return;
-
-        // ── Single-chart subplot approach (matches archive) ──
-        // One Plotly.newPlot with 4 traces on 4 subplot axes — no CSS Grid.
         container.innerHTML =
             '<div class="storm-timeline-panel" style="margin-top:10px;">' +
             '<div class="fl-ts-header">' +
@@ -8281,160 +8077,17 @@
             '</div>' +
             '<div id="rt-quad-chart" style="width:100%;height:550px;border-radius:6px;overflow:hidden;"></div>' +
             '</div>';
-
-        var varInfo = null;
-        if (_rtLastPlotlyData && _rtLastPlotlyData.json && _rtLastPlotlyData.json.variable) {
-            varInfo = _rtLastPlotlyData.json.variable;
-        }
-        var cmap = varInfo ? varInfo.colorscale : 'RdBu';
-        var units = varInfo ? varInfo.units : '';
-        var dispName = varInfo ? varInfo.display_name : variable;
-        var vmin = varInfo ? varInfo.vmin : 0;
-        var vmax_val = varInfo ? varInfo.vmax : 80;
-
-        // Panel layout: shear points RIGHT
-        //   USL (top-left)  |  DSL (top-right)
-        //   USR (bot-left)  |  DSR (bot-right)
-        var panelOrder = [
-            { key: 'USL', label: 'Upshear Left',     row: 0, col: 0 },
-            { key: 'DSL', label: 'Downshear Left',   row: 0, col: 1 },
-            { key: 'USR', label: 'Upshear Right',    row: 1, col: 0 },
-            { key: 'DSR', label: 'Downshear Right',  row: 1, col: 1 }
-        ];
-
-        var quadColors = { DSL: '#f59e0b', DSR: '#f59e0b', USL: '#60a5fa', USR: '#60a5fa' };
-        var fontSize = { title: 11, axis: 9, tick: 8, cbar: 9, cbarTick: 8, hover: 10, panel: 10 };
-
-        // Subplot geometry (paper coordinates)
-        var gap = 0.10;
-        var cbarW = 0.04;
-        var leftM = 0.06, rightM = 0.02 + cbarW + 0.02;
-        var topM = 0.10, botM = 0.06;
-        var pw = (1 - leftM - rightM - gap) / 2;
-        var ph = (1 - topM - botM - gap) / 2;
-
-        var axConfigs = [
-            { x0: leftM,          x1: leftM + pw,          y0: 1 - topM - ph, y1: 1 - topM },
-            { x0: leftM + pw + gap, x1: leftM + 2*pw + gap, y0: 1 - topM - ph, y1: 1 - topM },
-            { x0: leftM,          x1: leftM + pw,          y0: botM,           y1: botM + ph },
-            { x0: leftM + pw + gap, x1: leftM + 2*pw + gap, y0: botM,           y1: botM + ph }
-        ];
-
-        var traces = [];
-        var annotations = [];
-        var shapes = [];
-        var plotBg = '#ffffff';
-
-        var layout = {
-            paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-            margin: { l: 45, r: 55, t: 70, b: 42 },
-            showlegend: false,
-            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } }
-        };
-
-        panelOrder.forEach(function (p, i) {
-            var qData = data.quadrant_means[p.key];
-            if (!qData || !qData.data) return;
-
-            var axSuffix = i === 0 ? '' : String(i + 1);
-            var showCbar = (i === 1); // top-right panel
-            var ac = axConfigs[i];
-
-            traces.push({
-                z: qData.data,
-                x: data.radius_km,
-                y: data.height_km,
-                type: 'heatmap',
-                colorscale: cmap,
-                zmin: vmin,
-                zmax: vmax_val,
-                xaxis: 'x' + axSuffix,
-                yaxis: 'y' + axSuffix,
-                showscale: showCbar,
-                colorbar: showCbar ? {
-                    title: { text: units, font: { color: '#5b6573', size: fontSize.cbar } },
-                    tickfont: { color: '#5b6573', size: fontSize.cbarTick },
-                    thickness: 10, len: 0.85, x: 1.02, y: 0.5
-                } : undefined,
-                hovertemplate: '<b>' + p.label + '</b><br>' + dispName + ': %{z:.2f} ' + units +
-                    '<br>Radius: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>',
-                hoverongaps: false
-            });
-
-            // Panel title annotation
-            annotations.push({
-                text: '<b>' + p.label + '</b>',
-                xref: 'paper', yref: 'paper',
-                x: (ac.x0 + ac.x1) / 2, y: ac.y1 + 0.005,
-                xanchor: 'center', yanchor: 'bottom', showarrow: false,
-                font: { color: quadColors[p.key] || '#ccc', size: fontSize.panel, family: 'JetBrains Mono, monospace' },
-                bgcolor: 'rgba(10,22,40,0.7)', borderpad: 2
-            });
-
-            // Axes
-            var showXLabel = (p.row === 1);
-            var showYLabel = (p.col === 0);
-            layout['xaxis' + axSuffix] = {
-                domain: [ac.x0, ac.x1],
-                title: showXLabel ? { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } } : undefined,
-                tickfont: { color: '#5b6573', size: fontSize.tick },
-                gridcolor: 'rgba(15,22,35,0.22)', zeroline: false,
-                anchor: 'y' + axSuffix
-            };
-            layout['yaxis' + axSuffix] = {
-                domain: [ac.y0, ac.y1],
-                title: showYLabel ? { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } } : undefined,
-                tickfont: { color: '#5b6573', size: fontSize.tick },
-                gridcolor: 'rgba(15,22,35,0.22)', zeroline: false,
-                anchor: 'x' + axSuffix
-            };
+        // The quadrant endpoint returns the variable KEY only; take the display info from the plan view.
+        var pj = (_rtLastPlotlyData && _rtLastPlotlyData.json) || {};
+        var varInfo = pj.variable || { display_name: variable, units: '', vmin: 0, vmax: 80, colorscale: 'RdBu' };
+        var covPct = Math.round((data.coverage_min || 0.5) * 100);
+        var intInput = document.getElementById('rt-contour-int');
+        var fig = TDRView.quadrantFigure(data, {
+            varInfo: varInfo, colorscale: _rtColorscale(varInfo), zmin: _rtGetVmin(), zmax: _rtGetVmax(),
+            rmw: pj.wcm_rmw_km, sddc: data.sddc, contourInterval: intInput ? parseFloat(intInput.value) : NaN,
+            title: 'Shear-Relative Quadrant Mean: ' + varInfo.display_name + ' (\u2265' + covPct + '% cov.)' + TDRView.sectionTitleOverlay(data)
         });
-
-        // Shear vector inset between the 4 panels
-        var sddc = data.sddc;
-        if (sddc !== null && sddc !== undefined && sddc !== 9999) {
-            var insetCx = leftM + pw + gap / 2;
-            var insetCy = botM + ph + gap / 2;
-            var insetR = Math.min(gap, 0.06) * 0.55;
-            var theta = (90 - sddc) * Math.PI / 180;
-            var arrowLen = insetR * 0.8;
-            var adx = arrowLen * Math.cos(theta);
-            var ady = arrowLen * Math.sin(theta);
-            shapes.push({ type: 'circle', xref: 'paper', yref: 'paper',
-                x0: insetCx - insetR, y0: insetCy - insetR, x1: insetCx + insetR, y1: insetCy + insetR,
-                fillcolor: 'rgba(10,22,40,0.9)', line: { color: 'rgba(245,158,11,0.4)', width: 1.5 } });
-            shapes.push({ type: 'line', xref: 'paper', yref: 'paper',
-                x0: insetCx - adx * 0.3, y0: insetCy - ady * 0.3, x1: insetCx + adx, y1: insetCy + ady,
-                line: { color: '#f59e0b', width: 2.5 } });
-            var headLen = arrowLen * 0.35, headAng = 25 * Math.PI / 180;
-            var tipX = insetCx + adx, tipY = insetCy + ady;
-            shapes.push({ type: 'line', xref: 'paper', yref: 'paper',
-                x0: tipX, y0: tipY,
-                x1: tipX + headLen * Math.cos(theta + Math.PI - headAng),
-                y1: tipY + headLen * Math.sin(theta + Math.PI - headAng),
-                line: { color: '#f59e0b', width: 2.5 } });
-            shapes.push({ type: 'line', xref: 'paper', yref: 'paper',
-                x0: tipX, y0: tipY,
-                x1: tipX + headLen * Math.cos(theta + Math.PI + headAng),
-                y1: tipY + headLen * Math.sin(theta + Math.PI + headAng),
-                line: { color: '#f59e0b', width: 2.5 } });
-            annotations.push({ text: 'DS', xref: 'paper', yref: 'paper',
-                x: insetCx + adx * 1.6, y: insetCy + ady * 1.6,
-                showarrow: false, font: { color: '#f59e0b', size: 7, family: 'JetBrains Mono,monospace' } });
-        }
-
-        // Main title
-        var shearStr = (sddc !== null && sddc !== undefined && sddc !== 9999) ? ' | Shear: ' + Number(sddc).toFixed(0) + '\u00b0' : '';
-        layout.title = {
-            text: 'Shear-Relative Quadrant Mean: ' + dispName + shearStr,
-            font: { color: '#0f1623', size: fontSize.title }, y: 0.99, x: 0.5, xanchor: 'center'
-        };
-        layout.shapes = shapes;
-        layout.annotations = annotations;
-
-        Plotly.newPlot('rt-quad-chart', traces, layout, {
-            responsive: true, displayModeBar: false, displaylogo: false
-        });
+        Plotly.newPlot('rt-quad-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: false, displaylogo: false });
     }
 
     window.rtFetchAnomaly = function () {
@@ -8494,94 +8147,22 @@
     function _rtRenderAnomaly(data, variable) {
         var container = document.getElementById('rt-anomaly-result');
         if (!container) return;
-
         var climNote = data.climatology_available ?
             'Clim. bin: ' + data.climatology_intensity_bin + ' kt (' + data.climatology_count + ' cases)' :
             'Climatology not available';
-
         var vmaxStr = data.vmax_kt != null ? data.vmax_kt : '?';
-
         container.innerHTML =
             '<div class="storm-timeline-panel" style="margin-top:10px;">' +
-            '<div class="fl-ts-header">' +
-            '<span class="fl-ts-title">Z* Anomaly \u2014 ' + variable + ' (Vmax: ' + vmaxStr + ' kt, RMW: ' + data.rmw_km + ' km)</span>' +
-            _rtSaveBtnHTML('rt-anomaly-chart', 'ZstarAnomaly', 'margin-left:auto;') +
-            '<button onclick="document.getElementById(\'rt-anomaly-result\').innerHTML=\'\'" class="fl-ts-close" title="Close">&times;</button>' +
-            '</div>' +
-            '<div style="font-size:9px;color:var(--slate);padding:2px 8px;">' + climNote + '</div>' +
-            '<div id="rt-anomaly-chart" style="width:100%;height:320px;"></div>' +
+                '<div class="fl-ts-header">' +
+                    '<span class="fl-ts-title">Z* Anomaly \u2014 ' + variable + ' (Vmax: ' + vmaxStr + ' kt, RMW: ' + data.rmw_km + ' km)</span>' +
+                    _rtSaveBtnHTML('rt-anomaly-chart', 'ZstarAnomaly', 'margin-left:auto;') +
+                    '<button onclick="document.getElementById(\'rt-anomaly-result\').innerHTML=\'\'" class="fl-ts-close" title="Close">&times;</button>' +
+                '</div>' +
+                '<div style="font-size:9px;color:var(--slate);padding:2px 8px;">' + climNote + '</div>' +
+                '<div id="rt-anomaly-chart" style="width:100%;height:320px;"></div>' +
             '</div>';
-
-        // Diverging colorscale: blue (negative) → white (0) → red (positive)
-        var zColorscale = [
-            [0.0, 'rgb(5,48,97)'], [0.1, 'rgb(33,102,172)'],
-            [0.2, 'rgb(67,147,195)'], [0.3, 'rgb(146,197,222)'],
-            [0.4, 'rgb(209,229,240)'], [0.5, 'rgb(247,247,247)'],
-            [0.6, 'rgb(253,219,199)'], [0.7, 'rgb(244,165,130)'],
-            [0.8, 'rgb(214,96,77)'], [0.9, 'rgb(178,24,43)'],
-            [1.0, 'rgb(103,0,31)']
-        ];
-
-        // Use sequential integer indices for x (equally spaced), with custom tick labels
-        var rHAxis = data.r_h_axis, nInner = data.n_inner;
-        var xIdxArr = [];
-        for (var i = 0; i < rHAxis.length; i++) xIdxArr.push(i);
-        var ticks = _rtBuildHybridXAxis(rHAxis, nInner);
-
-        // Vertical dashed line at the RMW boundary (index = nInner)
-        var shapes = [];
-        if (nInner > 0) {
-            shapes.push({
-                type: 'line', xref: 'x', yref: 'paper',
-                x0: nInner, x1: nInner, y0: 0, y1: 1,
-                line: { color: 'rgba(255,255,255,0.5)', width: 1.5, dash: 'dash' }
-            });
-        }
-
-        var trace = {
-            z: data.anomaly,
-            x: xIdxArr,
-            y: data.height_km,
-            type: 'heatmap',
-            colorscale: zColorscale,
-            zmin: -3, zmax: 3, zmid: 0,
-            colorbar: {
-                title: { text: '\u03c3', font: { color: '#5b6573', size: 9 } },
-                tickfont: { color: '#5b6573', size: 8 },
-                thickness: 10, len: 0.85,
-                tickvals: [-3, -2, -1, 0, 1, 2, 3],
-            },
-            hoverongaps: false,
-            hovertemplate: '<b>Z*</b>: %{z:.2f}\u03c3<br>R\u2095: %{customdata}<br>Height: %{y:.1f} km<extra></extra>',
-            customdata: data.height_km.map(function() {
-                return rHAxis.map(function(v, idx) {
-                    return idx < nInner ? (v.toFixed(2) + ' R/RMW') : ('+' + v.toFixed(0) + ' km');
-                });
-            })
-        };
-
-        var layout = {
-            paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
-            xaxis: {
-                title: { text: 'R\u2095 (inner: R/RMW | outer: RMW + km)', font: { size: 10, color: '#5b6573' } },
-                tickvals: ticks.tickvals, ticktext: ticks.ticktext,
-                tickfont: { size: 9, color: '#5b6573' },
-                gridcolor: 'rgba(15,22,35,0.22)', zeroline: false,
-            },
-            yaxis: {
-                title: { text: 'Height (km)', font: { size: 10, color: '#5b6573' } },
-                tickfont: { size: 9, color: '#5b6573', family: 'JetBrains Mono' },
-                gridcolor: 'rgba(15,22,35,0.22)',
-                range: [0, 15]
-            },
-            shapes: shapes,
-            margin: { l: 45, r: 12, t: 8, b: 40 },
-            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } }
-        };
-
-        Plotly.newPlot('rt-anomaly-chart', [trace], layout, {
-            responsive: true, displayModeBar: false, displaylogo: false
-        });
+        var fig = TDRView.anomalyFigure(data, { citation: false });
+        Plotly.newPlot('rt-anomaly-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: false, displaylogo: false });
     }
 
     // ── VP Favorability Scatter ──────────────────────────────────────
@@ -9340,81 +8921,13 @@
     };
 
     function _rtRenderCFAD(json) {
-        var cfad = json.cfad;
-        var binCenters = json.bin_centers;
-        var heightKm = json.height_km;
-        var varInfo = json.variable;
-        var normLabel = json.norm_label;
         var meta = json.case_meta || {};
-        var useLog = !!json._logScale;
-
-        // Apply log transform if requested
-        var plotData = cfad;
-        if (useLog) {
-            plotData = cfad.map(function(row) {
-                return row.map(function(v) { return v > 0 ? Math.log10(v) : null; });
-            });
-        }
-
-        var title = '';
-        if (meta.storm_name) title += meta.storm_name;
-        if (meta.datetime) title += ' | ' + meta.datetime;
-        title += '<br>CFAD: ' + varInfo.display_name + ' (' + varInfo.units + ')';
-        if (useLog) title += ' [log scale]';
-
-        var trace = {
-            z: plotData,
-            x: binCenters,
-            y: heightKm,
-            type: 'heatmap',
-            colorscale: [
-                [0,    'rgba(10,10,30,0)'],
-                [0.01, '#1a1a4e'],
-                [0.05, '#2d1b69'],
-                [0.10, '#4a0e7f'],
-                [0.20, '#7b2a8e'],
-                [0.35, '#b84e8e'],
-                [0.50, '#e0735e'],
-                [0.70, '#f5a623'],
-                [0.85, '#f5d76e'],
-                [1.0,  '#fafafa']
-            ],
-            colorbar: {
-                title: { text: useLog ? 'log₁₀(' + normLabel + ')' : normLabel, font: { color: '#5b6573', size: 11 } },
-                tickfont: { color: '#5b6573', size: 10 },
-                thickness: 12,
-                len: 0.7,
-            },
-            hoverongaps: false,
-            hovertemplate: useLog
-                ? '<b>' + varInfo.display_name + ':</b> %{x:.2f} ' + varInfo.units +
-                  '<br><b>Height:</b> %{y:.1f} km<br><b>log₁₀(Freq):</b> %{z:.2f}<extra></extra>'
-                : '<b>' + varInfo.display_name + ':</b> %{x:.2f} ' + varInfo.units +
-                  '<br><b>Height:</b> %{y:.1f} km<br><b>Freq:</b> %{z:.2f}' +
-                  (json.normalise === 'raw' ? '' : '%') + '<extra></extra>',
-        };
-
-        var layout = {
-            title: { text: title, font: { color: '#e0e0e0', size: 13 }, x: 0.5 },
-            xaxis: {
-                title: { text: varInfo.display_name + ' (' + varInfo.units + ')', font: { color: '#5b6573', size: 12 } },
-                color: '#5b6573', gridcolor: _tdrGrid(), zeroline: true, zerolinecolor: _tdrGrid(),
-            },
-            yaxis: {
-                title: { text: 'Height (km)', font: { color: '#5b6573', size: 12 } },
-                color: '#5b6573', gridcolor: _tdrGrid(),
-            },
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: '#ffffff',
-            margin: { t: 50, b: 45, l: 50, r: 10 },
-            font: { family: 'JetBrains Mono, monospace' },
-        };
-
+        var fig = TDRView.cfadFigure(json, { subtitle: meta.datetime ? ' | ' + meta.datetime : '' });
         var el = document.getElementById('rt-az-result');
         if (!el) el = document.getElementById('rt-cs-result');
         if (el) {
             el.innerHTML = '<div id="rt-cfad-chart" style="width:100%;height:400px;border-radius:6px;overflow:hidden;"></div>';
-            Plotly.newPlot('rt-cfad-chart', [trace], layout, { responsive: true, displayModeBar: true, displaylogo: false });
+            Plotly.newPlot('rt-cfad-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: true, displaylogo: false });
         }
     }
 

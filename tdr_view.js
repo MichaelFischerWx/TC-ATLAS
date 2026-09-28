@@ -225,6 +225,254 @@
         } catch (e) { console.warn('Contour overlay error:', e); return []; }
     }
 
+    /** Line contours of an arbitrary 2-D overlay field (az-mean / quadrant
+     *  panels carry the overlay under a different key than plan / CS). */
+    function contourTraces(ov, ovData, x, y, interval) {
+        if (!ov || !ovData) return [];
+        return overlayContours({ overlay: Object.assign({}, ov, { data: ovData }) }, x, y, false, interval);
+    }
+
+    // ── Radius/distance × height section figure ──────────────────────────
+    // Shared by the cross-section and azimuthal-mean panels on both pages.
+    // o = { z, x, y, varInfo, colorscale, zmin, zmax, title, xTitle,
+    //       size: 'small' | 'dual' | 'full', maxLabels: ['R','Z'],
+    //       windMarker: bool, overlayTraces, rmwX (vertical dashed line),
+    //       inset: {shapes, annotations}, margin }
+    // Returns { traces, layout }.
+    var SECTION_FONTS = {
+        small: { title: 10, axis: 9, tick: 8, cbar: 9, cbarTick: 8, hover: 11, max: 8, cbw: 10, ty: 0.96 },
+        dual:  { title: 11, axis: 10, tick: 9, cbar: 10, cbarTick: 9, hover: 11, max: 9, cbw: 12, ty: 0.94 },
+        full:  { title: 13, axis: 12, tick: 10, cbar: 12, cbarTick: 10, hover: 13, max: 10, cbw: 14, ty: 0.93 }
+    };
+    function sectionFigure(o) {
+        var f = SECTION_FONTS[o.size || 'small'], vi = o.varInfo, isX = o.xTitle || 'Radius (km)';
+        var xl = (o.maxLabels || ['R', 'Z']);
+        var heatmap = { z: o.z, x: o.x, y: o.y, type: 'heatmap', colorscale: o.colorscale,
+            zmin: o.zmin != null ? o.zmin : vi.vmin, zmax: o.zmax != null ? o.zmax : vi.vmax,
+            colorbar: { title: { text: vi.units, font: { color: '#5b6573', size: f.cbar } }, tickfont: { color: '#5b6573', size: f.cbarTick }, thickness: f.cbw, len: 0.85 },
+            hovertemplate: '<b>' + vi.display_name + '</b>: %{z:.2f} ' + vi.units + '<br>' + (xl[0] === 'R' ? 'Radius' : 'Distance') + ': %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>',
+            hoverongaps: false };
+        var ax = function (t) { return { title: { text: t, font: { color: '#5b6573', size: f.axis } }, tickfont: { color: '#5b6573', size: f.tick }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false }; };
+        var layout = {
+            title: { text: o.title, font: { color: '#0f1623', size: f.title }, y: f.ty, x: 0.5, xanchor: 'center', yanchor: 'top' },
+            paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
+            xaxis: ax(isX), yaxis: ax('Height (km)'),
+            margin: o.margin || { l: 45, r: 12, t: 44, b: 38 },
+            shapes: [], annotations: [],
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: f.hover } },
+            showlegend: false
+        };
+        if (o.rmwX && !isNaN(o.rmwX)) layout.shapes.push({ type: 'line', xref: 'x', yref: 'paper', x0: o.rmwX, x1: o.rmwX, y0: 0, y1: 1, line: { color: 'white', width: 1.5, dash: 'dash' } });
+        var traces = [heatmap].concat(o.overlayTraces || []);
+        var mi = findDataMax(o.z, o.x, o.y);
+        if (mi) {
+            layout.annotations.push(maxAnnotation(mi, vi.units, xl[0], xl[1], f.max));
+            if (o.windMarker) traces.push(maxMarkerTrace(mi, vi.units));
+        }
+        if (o.inset) {
+            layout.annotations = layout.annotations.concat(o.inset.annotations || []);
+            layout.shapes = layout.shapes.concat(o.inset.shapes || []);
+        }
+        return { traces: traces, layout: layout };
+    }
+    function sectionTitleOverlay(json) {
+        return json.overlay ? '<br><span style="font-size:0.85em;color:#9ca3af;">Contours: ' + json.overlay.display_name + ' (' + json.overlay.units + ')</span>' : '';
+    }
+
+    // ── Shear / motion insets for Plotly panels ─────────────────────────
+    // Compact direction label (cross-section / azimuthal-mean panels).
+    function shearInsetCS(sddc, isFullsize, shdc) {
+        if (sddc === null || sddc === undefined || sddc === 9999) return { shapes: [], annotations: [] };
+        var txt = '<b>Shear: ' + sddc.toFixed(0) + '°' +
+            ((shdc !== null && shdc !== undefined && shdc !== 9999) ? ' (' + shdc.toFixed(0) + ' kt)' : '') + '</b>';
+        return { shapes: [], annotations: [{ text: txt, xref: 'paper', yref: 'paper', x: 0.01, y: 1.0,
+            xanchor: 'left', yanchor: 'bottom', showarrow: false,
+            font: { color: '#f59e0b', size: isFullsize ? 10 : 8, family: 'JetBrains Mono, monospace' },
+            bgcolor: 'rgba(10,22,40,0.8)', borderpad: 2, bordercolor: 'rgba(245,158,11,0.3)', borderwidth: 1 }] };
+    }
+    // Arrow compass (downshear + heading) in paper coords, top-left.
+    function shearInset(sddc, isFullsize, shdc, motionDir, motionSpd) {
+        var hasShear = (sddc !== null && sddc !== undefined && sddc !== 9999);
+        var hasMotion = (motionDir !== null && motionDir !== undefined && motionDir !== 9999);
+        if (!hasShear && !hasMotion) return { shapes: [], annotations: [] };
+        var cx = isFullsize ? 0.09 : 0.12, cy = 0.92, r = isFullsize ? 0.060 : 0.075;
+        var arrowLen = r * 0.85, dotR = r * 0.07, lw = 2.5, fsL = isFullsize ? 12 : 10, labelGap = isFullsize ? 0.038 : 0.032;
+        var shapes = [
+            { type: 'circle', xref: 'paper', yref: 'paper', x0: cx - r, y0: cy - r, x1: cx + r, y1: cy + r,
+              fillcolor: 'rgba(10,22,40,0.80)', line: { color: 'rgba(15, 22, 35,0.15)', width: 1 } },
+            { type: 'circle', xref: 'paper', yref: 'paper', x0: cx - dotR, y0: cy - dotR, x1: cx + dotR, y1: cy + dotR,
+              fillcolor: 'rgba(15, 22, 35,0.4)', line: { width: 0 } }
+        ];
+        var annotations = [];
+        function arrow(theta, color) {
+            var adx = arrowLen * Math.cos(theta), ady = arrowLen * Math.sin(theta);
+            shapes.push({ type: 'line', xref: 'paper', yref: 'paper', x0: cx - adx * 0.25, y0: cy - ady * 0.25, x1: cx + adx, y1: cy + ady, line: { color: color, width: lw } });
+            var hl = arrowLen * 0.32, ha = 25 * Math.PI / 180, tx = cx + adx, ty = cy + ady;
+            shapes.push({ type: 'line', xref: 'paper', yref: 'paper', x0: tx, y0: ty, x1: tx + hl * Math.cos(theta + Math.PI - ha), y1: ty + hl * Math.sin(theta + Math.PI - ha), line: { color: color, width: lw } });
+            shapes.push({ type: 'line', xref: 'paper', yref: 'paper', x0: tx, y0: ty, x1: tx + hl * Math.cos(theta + Math.PI + ha), y1: ty + hl * Math.sin(theta + Math.PI + ha), line: { color: color, width: lw } });
+        }
+        if (hasShear) arrow((90 - sddc) * Math.PI / 180, '#f59e0b');
+        if (hasMotion) arrow((90 - motionDir) * Math.PI / 180, '#22d3ee');
+        if (hasShear) {
+            var shrTxt = '<b>Shear</b>  ';
+            if (shdc !== null && shdc !== undefined && shdc !== 9999) shrTxt += shdc.toFixed(0) + ' kt / ';
+            shrTxt += sddc.toFixed(0) + '°';
+            annotations.push({ text: shrTxt, xref: 'paper', yref: 'paper', x: cx, y: cy + r + labelGap, showarrow: false,
+                font: { color: '#f59e0b', size: fsL, family: 'JetBrains Mono, monospace' }, bgcolor: 'rgba(10,22,40,0.7)', borderpad: 2 });
+        }
+        if (hasMotion) {
+            var motTxt = '<b>Motion</b>  ';
+            if (motionSpd !== null && motionSpd !== undefined && motionSpd !== 9999) motTxt += motionSpd.toFixed(0) + ' kt / ';
+            motTxt += motionDir.toFixed(0) + '°';
+            annotations.push({ text: motTxt, xref: 'paper', yref: 'paper', x: cx, y: hasShear ? cy - r - labelGap : cy + r + labelGap, showarrow: false,
+                font: { color: '#22d3ee', size: fsL, family: 'JetBrains Mono, monospace' }, bgcolor: 'rgba(10,22,40,0.7)', borderpad: 2 });
+        }
+        return { shapes: shapes, annotations: annotations };
+    }
+
+    /** Theme-aware Plotly gridline color (TCATheme --plot-grid). */
+    function themeGrid() {
+        try { var v = window.TCATheme && window.TCATheme.readVar('--plot-grid'); if (v) return v; } catch (e) {}
+        return 'rgba(15,22,35,0.08)';
+    }
+
+    // ── CFAD (contoured frequency by altitude diagram) ───────────────────
+    // o = { fullsize, subtitle (string after the storm name) }. json._logScale → log10.
+    var CFAD_CS = [[0, 'rgba(10,10,30,0)'], [0.01, '#1a1a4e'], [0.05, '#2d1b69'], [0.10, '#4a0e7f'], [0.20, '#7b2a8e'],
+                   [0.35, '#b84e8e'], [0.50, '#e0735e'], [0.70, '#f5a623'], [0.85, '#f5d76e'], [1.0, '#fafafa']];
+    function cfadFigure(json, o) {
+        o = o || {};
+        var vi = json.variable, meta = json.case_meta || {}, useLog = !!json._logScale, normLabel = json.norm_label;
+        var z = useLog ? json.cfad.map(function (row) { return row.map(function (v) { return v > 0 ? Math.log10(v) : null; }); }) : json.cfad;
+        var title = (meta.storm_name || '') + (o.subtitle || '') + '<br>CFAD: ' + vi.display_name + ' (' + vi.units + ')' + (useLog ? ' [log scale]' : '');
+        var head = '<b>' + vi.display_name + ':</b> %{x:.2f} ' + vi.units + '<br><b>Height:</b> %{y:.1f} km<br>';
+        var trace = { z: z, x: json.bin_centers, y: json.height_km, type: 'heatmap', colorscale: CFAD_CS,
+            colorbar: { title: { text: useLog ? 'log₁₀(' + normLabel + ')' : normLabel, font: { color: '#5b6573', size: 11 } },
+                        tickfont: { color: '#5b6573', size: 10 }, thickness: 12, len: 0.7 },
+            hoverongaps: false,
+            hovertemplate: head + (useLog ? '<b>log₁₀(Freq):</b> %{z:.2f}' : '<b>Freq:</b> %{z:.2f}' + (json.normalise === 'raw' ? '' : '%')) + '<extra></extra>' };
+        var g = themeGrid();
+        var layout = {
+            title: { text: title, font: { color: '#0f1623', size: o.fullsize ? 15 : 13 }, x: 0.5 },
+            xaxis: { title: { text: vi.display_name + ' (' + vi.units + ')', font: { color: '#5b6573', size: 12 } }, color: '#5b6573', gridcolor: g, zeroline: true, zerolinecolor: g },
+            yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: 12 } }, color: '#5b6573', gridcolor: g },
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: '#ffffff',
+            margin: o.fullsize ? { t: 50, b: 50, l: 55, r: 20 } : { t: 50, b: 45, l: 50, r: 10 },
+            font: { family: 'JetBrains Mono, monospace' }
+        };
+        return { traces: [trace], layout: layout };
+    }
+
+    // ── Z* anomaly on the hybrid R_H axis (Fischer et al. 2025) ─────────
+    // d = { anomaly, r_h_axis, n_inner, height_km, colorscale? }
+    // o = { title (null = none, header lives in the page), fullsize, citation, margin }
+    var ANOM_CS = [[0.0, 'rgb(5,48,97)'], [0.1, 'rgb(33,102,172)'], [0.2, 'rgb(67,147,195)'], [0.3, 'rgb(146,197,222)'],
+                   [0.4, 'rgb(209,229,240)'], [0.5, 'rgb(247,247,247)'], [0.6, 'rgb(253,219,199)'], [0.7, 'rgb(244,165,130)'],
+                   [0.8, 'rgb(214,96,77)'], [0.9, 'rgb(178,24,43)'], [1.0, 'rgb(103,0,31)']];
+    var FISCHER_2025 = { text: 'Fischer et al. (2025, MWR) | doi:10.1175/MWR-D-24-0118.1', xref: 'paper', yref: 'paper',
+        x: 1.0, y: -0.01, xanchor: 'right', yanchor: 'top', showarrow: false, font: { color: 'rgba(150,150,150,0.5)', size: 8 } };
+    function anomalyFigure(d, o) {
+        o = o || {};
+        var f = o.fullsize ? { title: 13, axis: 12, tick: 10, cbar: 12, cbarTick: 10 } : { title: 10, axis: 9, tick: 8, cbar: 9, cbarTick: 8 };
+        var rH = d.r_h_axis, nInner = d.n_inner, xIdx = [];
+        for (var i = 0; i < rH.length; i++) xIdx.push(i);
+        var ticks = hybridXAxis(rH, nInner);
+        var trace = { z: d.anomaly, x: xIdx, y: d.height_km, type: 'heatmap',
+            colorscale: d.colorscale || ANOM_CS, zmin: -3, zmax: 3, zmid: 0,
+            colorbar: { title: { text: 'σ', font: { color: '#5b6573', size: f.cbar } }, tickfont: { color: '#5b6573', size: f.cbarTick },
+                        thickness: o.fullsize ? 14 : 10, len: 0.85, tickvals: [-3, -2, -1, 0, 1, 2, 3] },
+            hoverongaps: false,
+            hovertemplate: '<b>Z*</b>: %{z:.2f}σ<br>Rₕ: %{customdata}<br>Height: %{y:.1f} km<extra></extra>',
+            customdata: d.height_km.map(function () {
+                return rH.map(function (v, idx) { return idx < nInner ? (v.toFixed(2) + ' R/RMW') : ('+' + v.toFixed(0) + ' km'); });
+            }) };
+        var ax = function (t) { return { title: { text: t, font: { color: '#5b6573', size: f.axis } }, tickfont: { color: '#5b6573', size: f.tick }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false }; };
+        var layout = {
+            paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
+            xaxis: Object.assign(ax('Rₕ (inner: R/RMW | outer: RMW + km)'), { tickvals: ticks.tickvals, ticktext: ticks.ticktext }),
+            yaxis: Object.assign(ax('Height (km)'), { range: [0, 15] }),
+            shapes: nInner > 0 ? [{ type: 'line', xref: 'x', yref: 'paper', x0: nInner, x1: nInner, y0: 0, y1: 1, line: { color: 'rgba(15, 22, 35,0.5)', width: 1.5, dash: 'dash' } }] : [],
+            margin: o.margin || (o.title ? (o.fullsize ? { l: 55, r: 24, t: 112, b: 46 } : { l: 45, r: 12, t: 78, b: 38 }) : { l: 45, r: 12, t: 8, b: 40 }),
+            annotations: o.citation ? [FISCHER_2025] : [],
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } },
+            showlegend: false
+        };
+        if (o.title) layout.title = { text: o.title, font: { color: '#0f1623', size: f.title }, y: o.fullsize ? 0.93 : 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' };
+        return { traces: [trace], layout: layout };
+    }
+
+    // ── Shear-relative quadrant means (4 panels, downshear to the right) ─
+    // json = { quadrant_means:{USL,DSL,USR,DSR:{data}}, radius_km, height_km, overlay? }
+    // o = { varInfo, colorscale, zmin, zmax, rmw, sddc (downshear heading), title,
+    //       fullsize, contourInterval }
+    function quadrantFigure(json, o) {
+        var vi = o.varInfo, fs = !!o.fullsize, R = json.radius_km, H = json.height_km;
+        var f = fs ? { title: 14, axis: 11, tick: 10, cbar: 11, cbarTick: 10, hover: 12, panel: 12 }
+                   : { title: 11, axis: 9, tick: 8, cbar: 9, cbarTick: 8, hover: 10, panel: 10 };
+        var zmin = o.zmin != null ? o.zmin : vi.vmin, zmax = o.zmax != null ? o.zmax : vi.vmax;
+        // USL top-left, DSL top-right, USR bottom-left, DSR bottom-right (westerly-shear view)
+        var panels = [{ key: 'USL', label: 'Upshear Left', row: 0, col: 0 }, { key: 'DSL', label: 'Downshear Left', row: 0, col: 1 },
+                      { key: 'USR', label: 'Upshear Right', row: 1, col: 0 }, { key: 'DSR', label: 'Downshear Right', row: 1, col: 1 }];
+        var quadColors = { DSL: '#f59e0b', DSR: '#f59e0b', USL: '#60a5fa', USR: '#60a5fa' };
+        var gap = fs ? 0.08 : 0.10, cbarW = 0.04, leftM = 0.06, rightM = 0.02 + cbarW + 0.02;
+        var topM = fs ? 0.10 : 0.12, botM = 0.06;
+        var pw = (1 - leftM - rightM - gap) / 2, ph = (1 - topM - botM - gap) / 2;
+        var traces = [], annotations = [], shapes = [];
+        var layout = {
+            paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
+            margin: fs ? { l: 55, r: 70, t: 100, b: 50 } : { l: 45, r: 55, t: 84, b: 42 },
+            showlegend: false, hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: f.hover } }
+        };
+        var ov = json.overlay, interval = o.contourInterval;
+        panels.forEach(function (p, i) {
+            var sfx = i === 0 ? '' : String(i + 1);
+            var x0 = leftM + p.col * (pw + gap), x1 = x0 + pw;
+            var yTop = 1 - topM - p.row * ph - p.row * gap, yBot = yTop - ph;
+            layout['xaxis' + sfx] = { domain: [x0, x1], anchor: 'y' + sfx, tickfont: { color: '#5b6573', size: f.tick }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false,
+                title: p.row === 1 ? { text: 'Radius (km)', font: { color: '#5b6573', size: f.axis } } : undefined };
+            layout['yaxis' + sfx] = { domain: [yBot, yTop], anchor: 'x' + sfx, tickfont: { color: '#5b6573', size: f.tick }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false,
+                title: p.col === 0 ? { text: 'Height (km)', font: { color: '#5b6573', size: f.axis } } : undefined };
+            var q = json.quadrant_means[p.key];
+            if (!q || !q.data) return;
+            var showCbar = (i === 1);
+            traces.push({ z: q.data, x: R, y: H, type: 'heatmap', colorscale: o.colorscale, zmin: zmin, zmax: zmax,
+                xaxis: 'x' + sfx, yaxis: 'y' + sfx, showscale: showCbar,
+                colorbar: showCbar ? { title: { text: vi.units, font: { color: '#5b6573', size: f.cbar } }, tickfont: { color: '#5b6573', size: f.cbarTick },
+                                       thickness: fs ? 14 : 10, len: 0.85, x: 1.02, y: 0.5 } : undefined,
+                hovertemplate: '<b>' + p.label + '</b><br>' + vi.display_name + ': %{z:.2f} ' + vi.units + '<br>Radius: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>',
+                hoverongaps: false });
+            annotations.push({ text: '<b>' + p.label + '</b>', xref: 'paper', yref: 'paper', x: (x0 + x1) / 2, y: yTop + 0.005,
+                xanchor: 'center', yanchor: 'bottom', showarrow: false,
+                font: { color: quadColors[p.key], size: f.panel, family: 'JetBrains Mono, monospace' }, bgcolor: 'rgba(10,22,40,0.7)', borderpad: 2 });
+            if (o.rmw && !isNaN(o.rmw)) shapes.push({ type: 'line', xref: 'x' + sfx, yref: 'y' + sfx, x0: o.rmw, x1: o.rmw,
+                y0: H[0], y1: H[H.length - 1], line: { color: 'white', width: 1, dash: 'dash' } });
+            var ovQ = ov && ov.quadrant_means && ov.quadrant_means[p.key];
+            if (ovQ && ovQ.data) {
+                contourTraces(ov, ovQ.data, R, H, interval).forEach(function (t) {
+                    t.xaxis = 'x' + sfx; t.yaxis = 'y' + sfx; t.line.width = 1; t.contours.labelfont = { size: 8, color: 'rgba(15, 22, 35,0.7)' };
+                    traces.push(t);
+                });
+            }
+        });
+        // Downshear arrow in the gap between the panels
+        var sddc = o.sddc;
+        if (sddc !== null && sddc !== undefined && sddc !== 9999) {
+            var icx = leftM + pw + gap / 2, icy = botM + ph + gap / 2, ir = Math.min(gap, 0.06) * 0.55;
+            var th = (90 - sddc) * Math.PI / 180, al = ir * 0.8, adx = al * Math.cos(th), ady = al * Math.sin(th);
+            shapes.push({ type: 'circle', xref: 'paper', yref: 'paper', x0: icx - ir, y0: icy - ir, x1: icx + ir, y1: icy + ir,
+                fillcolor: 'rgba(10,22,40,0.9)', line: { color: 'rgba(245,158,11,0.4)', width: 1.5 } });
+            shapes.push({ type: 'line', xref: 'paper', yref: 'paper', x0: icx - adx * 0.3, y0: icy - ady * 0.3, x1: icx + adx, y1: icy + ady, line: { color: '#f59e0b', width: 2.5 } });
+            var hl = al * 0.35, ha = 25 * Math.PI / 180, tx = icx + adx, ty = icy + ady;
+            shapes.push({ type: 'line', xref: 'paper', yref: 'paper', x0: tx, y0: ty, x1: tx + hl * Math.cos(th + Math.PI - ha), y1: ty + hl * Math.sin(th + Math.PI - ha), line: { color: '#f59e0b', width: 2.5 } });
+            shapes.push({ type: 'line', xref: 'paper', yref: 'paper', x0: tx, y0: ty, x1: tx + hl * Math.cos(th + Math.PI + ha), y1: ty + hl * Math.sin(th + Math.PI + ha), line: { color: '#f59e0b', width: 2.5 } });
+            annotations.push({ text: 'DS', xref: 'paper', yref: 'paper', x: icx + adx * 1.6, y: icy + ady * 1.6, showarrow: false,
+                font: { color: '#f59e0b', size: fs ? 9 : 7, family: 'JetBrains Mono,monospace' } });
+        }
+        layout.title = { text: o.title, font: { color: '#0f1623', size: f.title }, y: fs ? 0.99 : 0.965, x: 0.5, xanchor: 'center', yanchor: fs ? 'auto' : 'top' };
+        layout.shapes = shapes; layout.annotations = annotations;
+        return { traces: traces, layout: layout };
+    }
+
     // ── R/RMW hybrid radius axis (inner bins in R*, outer in km past the RMW) ──
     function hybridXAxis(rHAxis, nInner) {
         var tickvals = [], ticktext = [];
@@ -604,7 +852,10 @@
         windBarbShapes: windBarbShapes,
         findDataMax: findDataMax, findDataMin: findDataMin, isWindVariable: isWindVariable,
         maxMarkerTrace: maxMarkerTrace, maxAnnotation: maxAnnotation, tcCenterMarkerTrace: tcCenterMarkerTrace,
-        overlayContours: overlayContours, hybridXAxis: hybridXAxis,
+        overlayContours: overlayContours, contourTraces: contourTraces, hybridXAxis: hybridXAxis,
+        sectionFigure: sectionFigure, sectionTitleOverlay: sectionTitleOverlay,
+        shearInset: shearInset, shearInsetCS: shearInsetCS, themeGrid: themeGrid, cfadFigure: cfadFigure,
+        anomalyFigure: anomalyFigure, FISCHER_2025: FISCHER_2025, quadrantFigure: quadrantFigure,
         startRubberBand: startRubberBand, stopRubberBand: stopRubberBand,
         shearCompassHTML: shearCompassHTML, intensityColor: intensityColor, intensityCategory: intensityCategory,
         createDrape: createDrape
