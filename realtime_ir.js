@@ -27366,6 +27366,20 @@
             html += '<div style="font-family:DM Sans,sans-serif;font-size:0.6rem;color:#94a3b8;'
                 + 'letter-spacing:0.02em;white-space:nowrap;">' + runTxt + '</div>';
         }
+        // Wind barbs get a title row with the same × (no scale to draw), so
+        // every map layer can be closed from here (2026-09-28: 200-mb barbs
+        // had only the run caption and no way off except the Layers panel).
+        Object.values(_rtEnvActive).forEach(function (e) {
+            if (!e || e.overlayKind !== 'wind' || !e.layer) return;
+            var W_ = e.layer;
+            html += '<div style="margin-top:6px;font-family:DM Sans,sans-serif;font-size:0.62rem;color:#c7d2e0;'
+                + 'display:flex;justify-content:space-between;align-items:center;gap:10px;">'
+                + '<span>' + W_.title + '</span>'
+                + '<span style="display:flex;align-items:center;gap:5px;">' + (W_.units || 'kt')
+                + '<button class="env-cbar-x" onclick="window._rtCloseEnvLayer(\'' + W_.name + '\')" '
+                + 'title="Remove ' + W_.title + '" aria-label="Remove ' + W_.title + ' layer">&times;</button>'
+                + '</span></div>';
+        });
         for (var i = 0; i < active.length; i++) {
             var L_ = active[i].layer;
             var lvls = L_.levels;
