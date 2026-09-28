@@ -676,6 +676,97 @@
         return { traces: traces, layout: layout };
     }
 
+    // ── VP vs vortex favorability scatter (Fischer et al. 2025, Fig. 9) ──
+    // json = /scatter/vp_favorability response { points, color_by, vortex_ready }
+    // o = { fullsize, current: { vp, vf, vh, vw, label, vmax, dv, annotate } | null }
+    // Returns { traces, layout } or { message } when there is nothing to plot.
+    function vpScatterFigure(json, o) {
+        o = o || {};
+        var points = json.points, colorBy = json.color_by || 'dvmax_12h', fs = !!o.fullsize;
+        if (!points || !points.length) return { message: 'No VP scatter data available.' };
+        var withVF = points.filter(function (p) { return p.vortex_favorability !== null && p.vortex_favorability !== undefined; });
+        if (!withVF.length) return { message: 'Vortex metrics still loading on the server (' + points.length + ' cases have VP data). Try again in ~1 min.' };
+        var f = fs ? { title: 13, axis: 12, tick: 10 } : { title: 10, axis: 9, tick: 8 };
+        var dvLabel = colorBy === 'dvmax_12h' ? '12-h ΔVmax (kt)' : '24-h ΔVmax (kt)';
+        var dvCS = [[0.0, 'rgb(0,128,128)'], [0.15, 'rgb(64,175,175)'], [0.3, 'rgb(140,210,210)'], [0.4, 'rgb(200,235,235)'],
+                    [0.5, 'rgb(245,245,245)'], [0.6, 'rgb(253,219,199)'], [0.7, 'rgb(244,165,130)'], [0.85, 'rgb(214,96,77)'], [1.0, 'rgb(178,24,43)']];
+        function marker(dvs, cbar) {
+            var m = { size: 7, color: dvs, colorscale: dvCS, cmin: -30, cmax: 30, opacity: 0.85, line: { color: 'rgba(15, 22, 35,0.5)', width: 0.75 } };
+            if (cbar) m.colorbar = { title: { text: dvLabel, font: { color: '#5b6573', size: f.tick } }, tickfont: { color: '#5b6573', size: f.tick }, thickness: 12, len: 0.85 };
+            else m.showscale = false;
+            return m;
+        }
+        var traces = [], annotations = [];
+        var dvs = withVF.map(function (p) { return p[colorBy] || 0; });
+        var vmaxs = withVF.map(function (p) { return p.vmax_kt != null ? p.vmax_kt : ''; });
+        var labels = withVF.map(function (p) { return p.storm_name + ' ' + p.datetime; });
+        traces.push({ x: withVF.map(function (p) { return p.vp; }), y: withVF.map(function (p) { return p.vortex_favorability; }),
+            mode: 'markers', type: 'scatter', xaxis: 'x', yaxis: 'y', marker: marker(dvs, false), text: labels, customdata: vmaxs,
+            hovertemplate: '<b>%{text}</b><br>Vmax: %{customdata} kt<br>VP: %{x:.1f}<br>Vortex Fav: %{y:.2f}<br>ΔVmax: %{marker.color:.0f} kt<extra></extra>',
+            name: 'Cases', legendgroup: 'cases' });
+        traces.push({ x: withVF.map(function (p) { return p.vortex_width; }), y: withVF.map(function (p) { return p.vortex_height; }),
+            mode: 'markers', type: 'scatter', xaxis: 'x2', yaxis: 'y2', marker: marker(dvs, true), text: labels, customdata: vmaxs,
+            hovertemplate: '<b>%{text}</b><br>Vmax: %{customdata} kt<br>Width: %{x:.2f}<br>Height: %{y:.2f}<br>ΔVmax: %{marker.color:.0f} kt<extra></extra>',
+            name: 'Cases', legendgroup: 'cases', showlegend: false });
+        // 2σ ellipses by intensification group: overwater (DTL > 0), Vmax ≤ 100 kt (as in the paper)
+        var grpColors = { RI: 'rgba(239,68,68,0.6)', SI: 'rgba(251,191,36,0.6)', NI: 'rgba(96,165,250,0.6)' };
+        var dtlKey = colorBy === 'dvmax_24h' ? 'dtl_min_24h' : 'dtl_min_12h';
+        var G = { RI: { vp: [], vf: [], h: [], w: [] }, SI: { vp: [], vf: [], h: [], w: [] }, NI: { vp: [], vf: [], h: [], w: [] } }, nEll = 0;
+        withVF.forEach(function (p) {
+            if (p.vmax_kt == null || p.vmax_kt > 100) return;
+            if (p[dtlKey] == null || p[dtlKey] <= 0) return;
+            var dv = p[colorBy] || 0, g = G[dv >= 20 ? 'RI' : (dv > 0 ? 'SI' : 'NI')];
+            g.vp.push(p.vp); g.vf.push(p.vortex_favorability);
+            if (p.vortex_height != null && p.vortex_width != null) { g.h.push(p.vortex_height); g.w.push(p.vortex_width); }
+            nEll++;
+        });
+        function ms(a) { var n = a.length; if (!n) return { m: 0, s: 0 }; var m = a.reduce(function (x, y) { return x + y; }, 0) / n;
+            return { m: m, s: Math.sqrt(a.reduce(function (x, y) { return x + (y - m) * (y - m); }, 0) / n) }; }
+        function ellipse(xs, ys, ax, ay, grp, legend) {
+            var sx = ms(xs), sy = ms(ys), ex = [], ey = [];
+            for (var a = 0; a <= 360; a += 5) { var r = a * Math.PI / 180; ex.push(sx.m + 2 * sx.s * Math.cos(r)); ey.push(sy.m + 2 * sy.s * Math.sin(r)); }
+            traces.push({ x: ex, y: ey, mode: 'lines', type: 'scatter', xaxis: ax, yaxis: ay, line: { color: grpColors[grp], width: 2, dash: 'dot' },
+                name: grp + (legend ? ' (2σ, n=' + xs.length + ')' : ' (2σ)'), legendgroup: grp, showlegend: !!legend });
+            traces.push({ x: [sx.m], y: [sy.m], mode: 'markers', type: 'scatter', xaxis: ax, yaxis: ay,
+                marker: { symbol: 'square', size: 10, color: grpColors[grp], line: { color: '#fff', width: 1 } }, name: grp + ' mean', legendgroup: grp, showlegend: false });
+        }
+        ['RI', 'SI', 'NI'].forEach(function (grp) {
+            var g = G[grp];
+            if (g.vp.length >= 3) ellipse(g.vp, g.vf, 'x', 'y', grp, true);
+            if (g.h.length >= 3) ellipse(g.w, g.h, 'x2', 'y2', grp, false);
+        });
+        // Current point (archive case or live storm) on top
+        var c = o.current;
+        if (c && c.vp != null) {
+            var star = { symbol: 'star', size: 18, color: '#facc15', opacity: 1, line: { color: '#ffffff', width: 2 } };
+            var extra = '<br>Vmax: ' + (c.vmax != null ? c.vmax + ' kt' : 'N/A') + (c.dv != null ? '<br>ΔVmax: ' + c.dv + ' kt' : '');
+            if (c.vf != null) traces.push({ x: [c.vp], y: [c.vf], mode: 'markers', type: 'scatter', xaxis: 'x', yaxis: 'y', marker: star, text: [c.label],
+                hovertemplate: '<b>%{text} ★</b>' + extra + '<br>VP: %{x:.2f}<br>Vortex Fav: %{y:.2f}<extra></extra>', name: '★ Current', legendgroup: 'current', showlegend: false });
+            if (c.vh != null && c.vw != null) traces.push({ x: [c.vw], y: [c.vh], mode: 'markers', type: 'scatter', xaxis: 'x2', yaxis: 'y2', marker: star, text: [c.label],
+                hovertemplate: '<b>%{text} ★</b>' + extra + '<br>Width: %{x:.2f}<br>Height: %{y:.2f}<extra></extra>', name: '★ Current', legendgroup: 'current', showlegend: false });
+            if (c.annotate) {
+                annotations.push({ x: c.vp, y: 1.03, xref: 'x', yref: 'paper', showarrow: false, yanchor: 'bottom',
+                    text: c.label + ' (VP=' + c.vp.toFixed(2) + (c.vf != null ? ', VF=' + c.vf.toFixed(2) : '') + ')', font: { color: '#b45309', size: 9 } });
+                if (c.vh != null && c.vw != null) annotations.push({ x: c.vw, y: 1.03, xref: 'x2', yref: 'paper', showarrow: false, yanchor: 'bottom',
+                    text: c.label + ' (VH=' + c.vh.toFixed(2) + ', VW=' + c.vw.toFixed(2) + ')', font: { color: '#b45309', size: 9 } });
+            }
+        }
+        var ax = function (t, extra) { return Object.assign({ title: { text: t, font: { color: '#5b6573', size: f.axis } }, tickfont: { color: '#5b6573', size: f.tick }, gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: false }, extra || {}); };
+        var layout = {
+            title: { text: 'VP vs Vortex Favorability & Decomposition' + (nEll > 0 ? '  |  Ellipses: overwater, ≤100 kt (n=' + nEll + ')' : ''),
+                     font: { color: '#0f1623', size: f.title }, y: 0.98, x: 0.5, xanchor: 'center' },
+            paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
+            xaxis: ax('Ventilation Proxy', { domain: [0, 0.45] }), yaxis: ax('Vortex Favorability'),
+            xaxis2: ax('Anomalous Vortex Width (W1–W2)', { domain: [0.55, 1.0], anchor: 'y2' }), yaxis2: ax('Anomalous Vortex Height (H1)', { anchor: 'x2' }),
+            margin: fs ? { l: 60, r: 60, t: 60, b: 65 } : { l: 50, r: 50, t: c && c.annotate ? 64 : 50, b: 55 },
+            showlegend: true,
+            legend: { font: { color: '#5b6573', size: 9 }, bgcolor: 'rgba(0,0,0,0.3)', x: 0.46, y: 0.98, xanchor: 'right', yanchor: 'top', orientation: 'h' },
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } },
+            annotations: annotations.concat([Object.assign({}, FISCHER_2025, { y: -0.12 })])
+        };
+        return { traces: traces, layout: layout };
+    }
+
     // ── R/RMW hybrid radius axis (inner bins in R*, outer in km past the RMW) ──
     function hybridXAxis(rHAxis, nInner) {
         var tickvals = [], ticktext = [];
@@ -1216,7 +1307,7 @@
         MULTI_FIELDS: MULTI_FIELDS, multiSectionControlsHTML: multiSectionControlsHTML,
         multiSectionFigure: multiSectionFigure, runMultiSection: runMultiSection, centerOnSection: centerOnSection,
         shearInset: shearInset, shearInsetCS: shearInsetCS, themeGrid: themeGrid, cfadFigure: cfadFigure,
-        anomalyFigure: anomalyFigure, FISCHER_2025: FISCHER_2025, quadrantFigure: quadrantFigure,
+        anomalyFigure: anomalyFigure, FISCHER_2025: FISCHER_2025, quadrantFigure: quadrantFigure, vpScatterFigure: vpScatterFigure,
         startRubberBand: startRubberBand, stopRubberBand: stopRubberBand,
         shearCompassHTML: shearCompassHTML, intensityColor: intensityColor, intensityCategory: intensityCategory,
         createDrape: createDrape, createResultTabs: createResultTabs, syncMapLayerBar: syncMapLayerBar,
