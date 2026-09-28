@@ -333,6 +333,272 @@
         if (vmax < 137) return 'Cat 4'; return 'Cat 5';
     }
 
+    // ── Map drape: the plan-view field on the geographic map ─────────────
+    // One instance per page. The page owns WHEN to drape (focus mode, pills,
+    // two-panel layout); the drape owns HOW: 1 px/cell canvas → imageOverlay
+    // in its own pane, RMW ring, vector barbs (white halo under dark ink), hover
+    // readout, editable colorbar, km↔lat/lon. Works on the lflet_gl facade and
+    // on real Leaflet (explorer ?gl=0).
+    //
+    // p (the plan record): { z, x, y, vmin, vmax, colorscale, units, display_name,
+    //   level_km, rmw_km, rmw_cx, rmw_cy (ring center, km; default 0), barbs,
+    //   center_lat, center_lon }
+    //
+    // opts: {
+    //   map: fn() → map (required)
+    //   prefix: 'rt' | 'tcr' — pane names + localStorage key
+    //   fieldVisible: fn() → bool (default true; false = opacity 0, barbs/ring hidden)
+    //   barbsVisible: fn() → bool (default true)
+    //   colorbar: { host: fn() → el, id (container), cls (inner class prefix), className, opacity: bool,
+    //               onRange(vmin, vmax), onReset(), onShow(), onHide() }
+    //   onDraw(p), onOff()   — page extras (center marker, storm grid, IR frame)
+    // }
+    function createDrape(opts) {
+        var prefix = opts.prefix || 'tdr';
+        var storeKey = prefix + '_radar_opacity';
+        var st = { p: null, on: false, overlay: null, ring: null, halo: null, ink: null, tip: null,
+                   hoverMap: null, opacity: 1.0, rangeTimer: null };
+        try { var o = parseFloat(localStorage.getItem(storeKey)); if (o >= 0 && o <= 1) st.opacity = o; } catch (e) {}
+        function M() { return opts.map(); }
+        function fieldVisible() { return opts.fieldVisible ? !!opts.fieldVisible() : true; }
+        function barbsVisible() { return opts.barbsVisible ? !!opts.barbsVisible() : true; }
+        // Image overlays sit at z 350 and vectors at 400 on the GL facade; real
+        // Leaflet keeps images in overlayPane (400), so go just above that there.
+        function zBase() { return window.LFLET_GL ? 380 : 405; }
+        function pane(name, z) {
+            var m = M();
+            try { var el = m.getPane(name) || m.createPane(name); el.style.zIndex = z; el.style.pointerEvents = 'none'; } catch (e) {}
+            return name;
+        }
+        function rm(layer) { if (layer) { try { M().removeLayer(layer); } catch (e) {} } }
+
+        // Storm-relative km ↔ lat/lon (WGS84 degree lengths at the center).
+        function kmPerDeg(p) { return { lat: 110.574, lon: 111.320 * (Math.cos(p.center_lat * Math.PI / 180) || 1) }; }
+        function latLngFromKm(x, y, p) { p = p || st.p; var k = kmPerDeg(p); return [p.center_lat + y / k.lat, p.center_lon + x / k.lon]; }
+        function kmFromLatLng(ll, p) {
+            p = p || st.p; if (!p || p.center_lat == null) return null;
+            var k = kmPerDeg(p);
+            return { x: (ll.lng - p.center_lon) * k.lon, y: (ll.lat - p.center_lat) * k.lat };
+        }
+        // x/y are cell centers: pad half a cell so each pixel sits on its cell.
+        function bounds(p) {
+            p = p || st.p;
+            var k = kmPerDeg(p), nx = p.x.length, ny = p.y.length;
+            var hx = nx > 1 ? (p.x[nx-1] - p.x[0]) / (nx - 1) / 2 : 0;
+            var hy = ny > 1 ? (p.y[ny-1] - p.y[0]) / (ny - 1) / 2 : 0;
+            return L.latLngBounds(
+                [p.center_lat + (p.y[0] - hy) / k.lat, p.center_lon + (p.x[0] - hx) / k.lon],
+                [p.center_lat + (p.y[ny-1] + hy) / k.lat, p.center_lon + (p.x[nx-1] + hx) / k.lon]);
+        }
+
+        function paintCanvas(p) {
+            var rows = p.z.length, cols = p.z[0].length;
+            var cv = document.createElement('canvas'); cv.width = cols; cv.height = rows;
+            var ctx = cv.getContext('2d'), im = ctx.createImageData(cols, rows), d = im.data;
+            var lut = csLUT(p.colorscale), span = (p.vmax - p.vmin) || 1;
+            for (var r = 0; r < rows; r++) {
+                var zr = p.z[rows - 1 - r];   // canvas top = north = last data row
+                if (!zr) continue;
+                for (var c = 0; c < cols; c++) {
+                    var v = zr[c];
+                    if (v == null || isNaN(v)) continue;   // alpha 0 → the IR shows through
+                    var li = Math.max(0, Math.min(255, Math.round((v - p.vmin) / span * 255))) * 3;
+                    var pi = (r * cols + c) * 4;
+                    d[pi] = lut[li]; d[pi+1] = lut[li+1]; d[pi+2] = lut[li+2]; d[pi+3] = 255;
+                }
+            }
+            ctx.putImageData(im, 0, 0);
+            return cv.toDataURL('image/png');
+        }
+
+        function draw(p) {
+            if (p) st.p = p;
+            p = st.p;
+            var m = M();
+            if (!m || !p || !p.z || !p.z.length || p.center_lat == null) return;
+            st.on = true;
+            var url = paintCanvas(p), b = bounds(p), op = fieldVisible() ? st.opacity : 0;
+            // Update in place on re-renders: no flicker, no remove/add churn
+            // against the GL style queue.
+            if (st.overlay && st.overlay.setUrl && st.overlay.setBounds) {
+                st.overlay.setUrl(url); st.overlay.setBounds(b); st.overlay.setOpacity(op);
+            } else {
+                rm(st.overlay);
+                st.overlay = L.imageOverlay(url, b, { opacity: op, interactive: false, crisp: true,
+                    pane: pane(prefix + 'DrapePane', zBase()) }).addTo(m);
+            }
+            var hasRmw = p.rmw_km && !isNaN(p.rmw_km);
+            if (!hasRmw) { rm(st.ring); st.ring = null; }
+            else {
+                var rc = latLngFromKm(p.rmw_cx || 0, p.rmw_cy || 0, p);
+                if (st.ring) { st.ring.setLatLng(rc); st.ring.setRadius(p.rmw_km * 1000); }
+                else st.ring = L.circle(rc, { radius: p.rmw_km * 1000, color: '#fff', weight: 1.5,
+                    dashArray: '5 5', fill: false, interactive: false }).addTo(m);
+                try { st.ring.setStyle({ opacity: fieldVisible() ? 1 : 0 }); } catch (e) {}
+            }
+            if (st.hoverMap !== m) {
+                m.on('mousemove', hover); m.on('mouseout', hideTip);
+                st.hoverMap = m;
+            }
+            drawBarbs();
+            colorbar();
+            if (opts.onDraw) opts.onDraw(p);
+        }
+
+        // Barbs as VECTOR lines (constant screen width, antialiased at every
+        // zoom); same glyphs as the plan view, projected to lon/lat.
+        function removeBarbs() { rm(st.halo); rm(st.ink); st.halo = st.ink = null; }
+        function drawBarbs() {
+            var p = st.p;
+            if (!st.on || !p || !p.barbs || !barbsVisible() || !fieldVisible() || p.center_lat == null) { removeBarbs(); return; }
+            var shapes = windBarbShapes(p.barbs, { xMin: p.x[0], xMax: p.x[p.x.length - 1], yMin: p.y[0], yMax: p.y[p.y.length - 1] });
+            var lines = [];
+            for (var i = 0; i < shapes.length; i++) {
+                var sh = shapes[i]; if (sh.type !== 'line') continue;
+                var a = latLngFromKm(sh.x0, sh.y0, p), c = latLngFromKm(sh.x1, sh.y1, p);
+                lines.push([[a[1], a[0]], [c[1], c[0]]]);   // GeoJSON is [lon, lat]
+            }
+            if (!lines.length) { removeBarbs(); return; }
+            var fc = { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {},
+                geometry: { type: 'MultiLineString', coordinates: lines } }] };
+            if (st.halo && st.ink) {
+                st.halo.clearLayers(); st.halo.addData(fc);
+                st.ink.clearLayers(); st.ink.addData(fc);
+                return;
+            }
+            removeBarbs();
+            var z = zBase() + 8;
+            st.halo = L.geoJSON(fc, { pane: pane(prefix + 'BarbHaloPane', z), interactive: false,
+                style: { color: '#ffffff', weight: 3.6, opacity: 0.85 } }).addTo(M());
+            st.ink = L.geoJSON(fc, { pane: pane(prefix + 'BarbInkPane', z + 2), interactive: false,
+                style: { color: '#0b1220', weight: 1.5, opacity: 1 } }).addTo(M());
+        }
+
+        function hover(e) {
+            var p = st.p;
+            if (!st.on || !p || !fieldVisible() || (opts.hoverSuppressed && opts.hoverSuppressed())) { hideTip(); return; }
+            var km = kmFromLatLng(e.latlng, p); if (!km) return;
+            var ci = Math.round((km.x - p.x[0]) / (p.x[p.x.length-1] - p.x[0]) * (p.x.length - 1));
+            var ri = Math.round((km.y - p.y[0]) / (p.y[p.y.length-1] - p.y[0]) * (p.y.length - 1));
+            if (ci < 0 || ci >= p.x.length || ri < 0 || ri >= p.y.length) { hideTip(); return; }
+            var v = p.z[ri] ? p.z[ri][ci] : null;
+            if (v == null || isNaN(v)) { hideTip(); return; }
+            if (!st.tip) {
+                st.tip = document.createElement('div');
+                st.tip.style.cssText = 'position:fixed;z-index:1300;pointer-events:none;background:rgba(15,22,35,0.92);' +
+                    'color:#fff;font:600 11px/1.3 "DM Sans",sans-serif;padding:3px 7px;border-radius:4px;white-space:nowrap;';
+                document.body.appendChild(st.tip);
+            }
+            st.tip.textContent = v.toFixed(1) + ' ' + p.units + '  ·  ' + Math.round(km.x) + ', ' + Math.round(km.y) + ' km';
+            var oe = e.originalEvent || {};
+            st.tip.style.left = ((oe.clientX || 0) + 14) + 'px'; st.tip.style.top = ((oe.clientY || 0) - 6) + 'px';
+            st.tip.style.display = 'block';
+        }
+        function hideTip() { if (st.tip) st.tip.style.display = 'none'; }
+
+        // Colorbar with EDITABLE min/max (typing rescales the field live).
+        function fmt(v) { return (v == null || isNaN(v)) ? '' : String(Math.round(v * 100) / 100); }
+        function colorbar() {
+            var cb = opts.colorbar, p = st.p;
+            if (!cb || !p) return;
+            var host = cb.host(); if (!host) return;
+            var id = cb.id, cls = cb.cls || id, el = document.getElementById(id);
+            if (!el) {
+                el = document.createElement('div');
+                el.id = id; el.className = cb.className || id;
+                el.innerHTML =
+                    '<div class="' + cls + '-title"><span data-k="name"></span> <span data-k="units"></span></div>' +
+                    '<div class="' + cls + '-row">' +
+                        '<input type="number" data-k="min" step="any" aria-label="Color range minimum" title="Minimum of the color range — type to rescale">' +
+                        '<div class="' + cls + '-grad" data-k="grad"></div>' +
+                        '<input type="number" data-k="max" step="any" aria-label="Color range maximum" title="Maximum of the color range — type to rescale">' +
+                    '</div>' +
+                    '<div class="' + cls + '-foot"><span data-k="level"></span>' +
+                        (cb.opacity ? '<span class="' + cls + '-op" title="Opacity of the radar field on the map"><input type="range" data-k="op" min="0" max="100" aria-label="Radar field opacity"><span data-k="opv"></span></span>' : '') +
+                        '<button class="' + cls + '-reset" data-k="reset" title="Restore the variable\'s default range">reset</button></div>';
+                host.appendChild(el);
+                // Keep map drags / clicks from firing through the colorbar.
+                ['mousedown', 'click', 'dblclick', 'wheel', 'touchstart'].forEach(function (ev) {
+                    el.addEventListener(ev, function (e) { e.stopPropagation(); });
+                });
+                var q = function (k) { return el.querySelector('[data-k="' + k + '"]'); };
+                var onRange = function () {
+                    clearTimeout(st.rangeTimer);
+                    st.rangeTimer = setTimeout(function () {
+                        var mn = parseFloat(q('min').value), mx = parseFloat(q('max').value);
+                        if (isNaN(mn) || isNaN(mx) || mn >= mx) return;
+                        if (cb.onRange) cb.onRange(mn, mx);
+                    }, 120);
+                };
+                q('min').addEventListener('input', onRange); q('max').addEventListener('input', onRange);
+                q('reset').addEventListener('click', function () { if (cb.onReset) cb.onReset(); });
+                if (cb.opacity) q('op').addEventListener('input', function () { setOpacity(this.value / 100); });
+            }
+            var g = function (k) { return el.querySelector('[data-k="' + k + '"]'); };
+            var lut = csLUT(p.colorscale), stops = [];
+            for (var k = 0; k <= 24; k++) { var i = Math.round(k / 24 * 255) * 3; stops.push('rgb(' + lut[i] + ',' + lut[i+1] + ',' + lut[i+2] + ')'); }
+            g('grad').style.background = 'linear-gradient(to right, ' + stops.join(', ') + ')';
+            g('name').textContent = p.display_name || '';
+            g('units').textContent = p.units ? '(' + p.units + ')' : '';
+            g('level').textContent = p.level_km != null ? (p.level_km < 0.05 ? '10 m' : p.level_km.toFixed(1) + ' km') : '';
+            if (document.activeElement !== g('min')) g('min').value = fmt(p.vmin);
+            if (document.activeElement !== g('max')) g('max').value = fmt(p.vmax);
+            if (cb.opacity) {
+                if (document.activeElement !== g('op')) g('op').value = Math.round(st.opacity * 100);
+                g('opv').textContent = Math.round(st.opacity * 100) + '%';
+            }
+            el.style.display = 'block';
+            if (cb.onShow) cb.onShow();
+        }
+        function hideColorbar() {
+            var cb = opts.colorbar; if (!cb) return;
+            var el = document.getElementById(cb.id); if (el) el.style.display = 'none';
+            if (cb.onHide) cb.onHide();
+        }
+
+        function setOpacity(v) {
+            st.opacity = Math.max(0, Math.min(1, parseFloat(v) || 0));
+            try { localStorage.setItem(storeKey, String(st.opacity)); } catch (e) {}
+            applyVisibility();
+            var cb = opts.colorbar, el = cb && document.getElementById(cb.id);
+            var opv = el && el.querySelector('[data-k="opv"]'); if (opv) opv.textContent = Math.round(st.opacity * 100) + '%';
+        }
+        /** Re-apply the field / ring / barb visibility (after fieldVisible() changed).
+         *  `dimTo` temporarily caps the field opacity (e.g. under a 3-D volume). */
+        function applyVisibility(dimTo) {
+            var op = fieldVisible() ? (dimTo != null ? Math.min(st.opacity, dimTo) : st.opacity) : 0;
+            if (st.overlay) { try { st.overlay.setOpacity(op); } catch (e) {} }
+            if (st.ring) { try { st.ring.setStyle({ opacity: fieldVisible() ? 1 : 0 }); } catch (e) {} }
+            drawBarbs();
+        }
+        /** Update part of the plan record (colormap / range) and redraw if on. */
+        function restyle(ch) {
+            if (!st.p) return;
+            for (var k in ch) if (ch[k] != null) st.p[k] = ch[k];
+            if (st.on) draw();
+        }
+        function off() {
+            st.on = false;
+            rm(st.overlay); rm(st.ring); st.overlay = st.ring = null;
+            removeBarbs(); hideTip(); hideColorbar();
+            if (opts.onOff) opts.onOff();
+        }
+        /** Frame the field; the map is often mid-reflow, so fit twice. */
+        function frame() {
+            if (!st.p) return;
+            function fit() { try { var m = M(); m.invalidateSize(); m.fitBounds(bounds(st.p), { padding: [30, 30] }); } catch (e) {} }
+            fit(); setTimeout(fit, 450);
+        }
+
+        return {
+            draw: draw, off: off, frame: frame, restyle: restyle, redrawBarbs: drawBarbs,
+            setOpacity: setOpacity, applyVisibility: applyVisibility,
+            bounds: bounds, kmFromLatLng: kmFromLatLng, latLngFromKm: latLngFromKm, hideTip: hideTip,
+            isOn: function () { return st.on; }, plan: function () { return st.p; },
+            opacity: function () { return st.opacity; }, hasOverlay: function () { return !!st.overlay; }
+        };
+    }
+
     window.TDRView = {
         NAMED_CS: NAMED_CS, csParse: csParse, csResolve: csResolve, csColor: csColor, csLUT: csLUT,
         windBarbShapes: windBarbShapes,
@@ -340,6 +606,7 @@
         maxMarkerTrace: maxMarkerTrace, maxAnnotation: maxAnnotation, tcCenterMarkerTrace: tcCenterMarkerTrace,
         overlayContours: overlayContours, hybridXAxis: hybridXAxis,
         startRubberBand: startRubberBand, stopRubberBand: stopRubberBand,
-        shearCompassHTML: shearCompassHTML, intensityColor: intensityColor, intensityCategory: intensityCategory
+        shearCompassHTML: shearCompassHTML, intensityColor: intensityColor, intensityCategory: intensityCategory,
+        createDrape: createDrape
     };
 })();

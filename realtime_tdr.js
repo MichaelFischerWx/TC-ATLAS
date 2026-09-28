@@ -4107,191 +4107,40 @@
     var _rtPlan = null;            // last plan-view field, captured by rtRenderPlot
     var _rtDrapeOn = false;        // field currently on the map
     var _rtDrapeDisabled = false;  // user turned the drape off — don't re-arm
-    var _rtDrapeOverlay = null, _rtDrapeRing = null, _rtDrapeTip = null;
     var _rtDrapeHoverBound = false, _rtDrapeFramedFor = null;
-    var _rtDrapeOpacity = 1.0;
-    try { var _rtDo = parseFloat(localStorage.getItem('rt_radar_opacity')); if (_rtDo >= 0 && _rtDo <= 1) _rtDrapeOpacity = _rtDo; } catch (e) {}
-    // Colormaps (named scales, parse, 256-entry LUT) live in tdr_view.js (TDRView).
 
-    // Storm-relative km ↔ lat/lon, same constants as the coastline projection.
-    function _rtKmPerDeg(p) { return { lat: 110.574, lon: 111.320 * (Math.cos(p.center_lat * Math.PI / 180) || 1) }; }
-    function _rtDrapeBounds(p) {
-        var k = _rtKmPerDeg(p), nx = p.x.length, ny = p.y.length;
-        // x/y are cell centres: pad half a cell so each pixel sits on its cell.
-        var hx = nx > 1 ? (p.x[nx-1] - p.x[0]) / (nx - 1) / 2 : 0;
-        var hy = ny > 1 ? (p.y[ny-1] - p.y[0]) / (ny - 1) / 2 : 0;
-        return L.latLngBounds(
-            [p.center_lat + (p.y[0] - hy) / k.lat, p.center_lon + (p.x[0] - hx) / k.lon],
-            [p.center_lat + (p.y[ny-1] + hy) / k.lat, p.center_lon + (p.x[nx-1] + hx) / k.lon]);
-    }
-    function _rtKmFromLatLng(ll) {
-        var p = _rtPlan; if (!p || p.center_lat == null) return null;
-        var k = _rtKmPerDeg(p);
-        return { x: (ll.lng - p.center_lon) * k.lon, y: (ll.lat - p.center_lat) * k.lat };
-    }
-    function _rtLatLngFromKm(x, y) {
-        var p = _rtPlan, k = _rtKmPerDeg(p);
-        return [p.center_lat + y / k.lat, p.center_lon + x / k.lon];
-    }
+    // The drape itself (canvas field, RMW ring at the WCM center, vector barbs,
+    // hover readout, editable colorbar, km <-> lat/lon) is TDRView.createDrape,
+    // shared with the TC-RADAR explorer; this file only decides WHEN to drape.
+    var _rtDrape = TDRView.createDrape({
+        map: function () { return _rtMap; },
+        prefix: 'rt',
+        barbsVisible: function () { return _rtBarbsEnabled; },
+        hoverSuppressed: function () { return _rtCsMode; },
+        colorbar: {
+            host: function () { return document.getElementById('rt-map-wrapper'); },
+            id: 'rt-drape-colorbar', cls: 'rt-cb', className: 'rt-drape-colorbar', opacity: true,
+            onRange: function (mn, mx) {
+                var a = document.getElementById('rt-vmin'), b = document.getElementById('rt-vmax');
+                if (a) a.value = mn; if (b) b.value = mx;
+                rtApplyColorRange();
+            },
+            onReset: function () { rtResetColorRange(); }
+        },
+        onDraw: function () {
+            if (!_rtDrapeHoverBound) { _rtMap.on('click', _rtCsMapClick); _rtMap.on('mousemove', _rtCsMapMove); _rtDrapeHoverBound = true; }
+            // The centre dot sits on the eye and hides the field there.
+            if (_rtMapMarker && _rtMap.hasLayer && _rtMap.hasLayer(_rtMapMarker)) { try { _rtMap.removeLayer(_rtMapMarker); } catch (e) {} }
+        },
+        onOff: function () {
+            if (_rtMap && _rtMapMarker && _rtMap.hasLayer && !_rtMap.hasLayer(_rtMapMarker)) { try { _rtMapMarker.addTo(_rtMap); } catch (e) {} }
+        }
+    });
     function _rtMapPanelVisible() {
         var lay = document.querySelector('.rt-viz-layout');
         return !!(lay && !lay.classList.contains('rt-map-collapsed'));
     }
-
-    function _rtDrapeDraw() {
-        var p = _rtPlan;
-        if (!_rtMap || !p || !p.z || !p.z.length || p.center_lat == null) return;
-        var rows = p.z.length, cols = p.z[0].length;
-        // 1 px per cell: the overlay is sampled nearest, so each cell is a hard-
-        // edged value. Barbs are NOT painted in here — they are vector lines
-        // (_rtDrapeBarbs) so they stay sharp at every zoom.
-        var S = 1;
-        var cv = document.createElement('canvas'); cv.width = cols * S; cv.height = rows * S;
-        var ctx = cv.getContext('2d'), im = ctx.createImageData(cols * S, rows * S), d = im.data;
-        var lut = TDRView.csLUT(p.colorscale), span = (p.vmax - p.vmin) || 1;
-        for (var r = 0; r < rows; r++) {
-            var zr = p.z[rows - 1 - r];   // canvas top = north = last data row
-            if (!zr) continue;
-            for (var c = 0; c < cols; c++) {
-                var v = zr[c];
-                if (v == null || isNaN(v)) continue;   // alpha stays 0 → IR shows through
-                var li = Math.max(0, Math.min(255, Math.round((v - p.vmin) / span * 255))) * 3;
-                for (var sy = 0; sy < S; sy++) for (var sx = 0; sx < S; sx++) {
-                    var pi = ((r * S + sy) * cols * S + (c * S + sx)) * 4;
-                    d[pi] = lut[li]; d[pi+1] = lut[li+1]; d[pi+2] = lut[li+2]; d[pi+3] = 255;
-                }
-            }
-        }
-        ctx.putImageData(im, 0, 0);
-        // Own pane so the field stays above the IR / MW / 88D image overlays
-        // (all z 350) even when one of those is re-added later, and below the
-        // vector overlays (flight track, sondes) at 400.
-        // (getPane auto-creates on the GL facade, so always (re)assert the z.)
-        try { var pane = _rtMap.getPane('rtDrapePane') || _rtMap.createPane('rtDrapePane'); pane.style.zIndex = 380; pane.style.pointerEvents = 'none'; } catch (e) {}
-        // Update in place on re-renders (variable / level / colormap / barbs):
-        // no flicker, and no remove-then-add churn against the GL style queue.
-        var url = cv.toDataURL('image/png'), bounds = _rtDrapeBounds(p);
-        if (_rtDrapeOverlay) {
-            _rtDrapeOverlay.setUrl(url); _rtDrapeOverlay.setBounds(bounds); _rtDrapeOverlay.setOpacity(_rtDrapeOpacity);
-        } else {
-            _rtDrapeOverlay = L.imageOverlay(url, bounds,
-                { opacity: _rtDrapeOpacity, interactive: false, crisp: true, pane: 'rtDrapePane' }).addTo(_rtMap);
-        }
-        var hasRmw = p.rmw_km && !isNaN(p.rmw_km);
-        if (_rtDrapeRing && !hasRmw) { try { _rtMap.removeLayer(_rtDrapeRing); } catch (e) {} _rtDrapeRing = null; }
-        if (hasRmw) {
-            var rc = _rtLatLngFromKm(p.rmw_cx || 0, p.rmw_cy || 0);
-            if (_rtDrapeRing) { _rtDrapeRing.setLatLng(rc); _rtDrapeRing.setRadius(p.rmw_km * 1000); }
-            else _rtDrapeRing = L.circle(rc, { radius: p.rmw_km * 1000,
-                color: '#fff', weight: 1.5, dashArray: '5 5', fill: false, interactive: false }).addTo(_rtMap);
-        }
-        if (!_rtDrapeHoverBound) {
-            _rtMap.on('mousemove', _rtDrapeHover); _rtMap.on('mouseout', _rtDrapeHideTip);
-            _rtMap.on('click', _rtCsMapClick); _rtMap.on('mousemove', _rtCsMapMove);
-            _rtDrapeHoverBound = true;
-        }
-        // The centre dot sits on the eye and hides the field there.
-        if (_rtMapMarker && _rtMap.hasLayer && _rtMap.hasLayer(_rtMapMarker)) { try { _rtMap.removeLayer(_rtMapMarker); } catch (e) {} }
-        _rtDrapeBarbs(p);
-        _rtDrapeColorbar(p);
-    }
-
-    // Wind barbs as VECTOR lines over the draped field. Painted into the raster
-    // they were limited to a few image pixels per 2-km cell and sampled with
-    // hard edges, so thin diagonal strokes came out jagged and got blockier on
-    // zoom-in. As GL lines the stroke width is constant in screen pixels and
-    // antialiased at every zoom. Same glyph geometry as the plan view
-    // (_buildPlanViewWindBarbs, km space) projected to lon/lat; a white halo
-    // under a dark stroke keeps them legible over any part of the colormap.
-    var _rtBarbHalo = null, _rtBarbInk = null;
-    function _rtDrapeBarbsRemove() {
-        if (_rtMap) {
-            if (_rtBarbHalo) { try { _rtMap.removeLayer(_rtBarbHalo); } catch (e) {} }
-            if (_rtBarbInk) { try { _rtMap.removeLayer(_rtBarbInk); } catch (e) {} }
-        }
-        _rtBarbHalo = null; _rtBarbInk = null;
-    }
-    function _rtDrapeBarbs(p) {
-        if (!_rtMap || !p || !p.barbs || !_rtBarbsEnabled) { _rtDrapeBarbsRemove(); return; }
-        var shapes = _buildPlanViewWindBarbs(p.barbs,
-            { xMin: p.x[0], xMax: p.x[p.x.length - 1], yMin: p.y[0], yMax: p.y[p.y.length - 1] });
-        var lines = [];
-        for (var i = 0; i < shapes.length; i++) {
-            var sh = shapes[i]; if (sh.type !== 'line') continue;
-            var a = _rtLatLngFromKm(sh.x0, sh.y0), b = _rtLatLngFromKm(sh.x1, sh.y1);
-            lines.push([[a[1], a[0]], [b[1], b[0]]]);   // GeoJSON is [lon, lat]
-        }
-        if (!lines.length) { _rtDrapeBarbsRemove(); return; }
-        var fc = { type: 'FeatureCollection', features: [
-            { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: lines } }] };
-        if (_rtBarbHalo && _rtBarbInk) { _rtBarbHalo.setData(fc); _rtBarbInk.setData(fc); return; }
-        _rtDrapeBarbsRemove();
-        // Above the draped field (380), below flight track / sondes (400).
-        // Two panes so the halo always sits under the ink.
-        try { var ph = _rtMap.getPane('rtBarbHaloPane') || _rtMap.createPane('rtBarbHaloPane'); ph.style.zIndex = 388; ph.style.pointerEvents = 'none';
-              var pk = _rtMap.getPane('rtBarbInkPane') || _rtMap.createPane('rtBarbInkPane'); pk.style.zIndex = 390; pk.style.pointerEvents = 'none'; } catch (e) {}
-        _rtBarbHalo = L.geoJSON(fc, { pane: 'rtBarbHaloPane', interactive: false, style: { color: '#ffffff', weight: 3.6, opacity: 0.85 } }).addTo(_rtMap);
-        _rtBarbInk = L.geoJSON(fc, { pane: 'rtBarbInkPane', interactive: false, style: { color: '#0b1220', weight: 1.5, opacity: 1 } }).addTo(_rtMap);
-    }
-
-    function _rtFmtRange(v) { if (v == null || isNaN(v)) return ''; return String(Math.round(v * 100) / 100); }
-    // Colorbar on the map with EDITABLE min/max: typing rescales the field
-    // live and keeps the panel's Color Range inputs in sync.
-    function _rtDrapeColorbar(p) {
-        var host = document.getElementById('rt-map-wrapper');
-        if (!host || !p) return;
-        var el = document.getElementById('rt-drape-colorbar');
-        if (!el) {
-            el = document.createElement('div');
-            el.id = 'rt-drape-colorbar';
-            el.className = 'rt-drape-colorbar';
-            el.innerHTML =
-                '<div class="rt-cb-title"><span id="rt-cb-name"></span> <span id="rt-cb-units"></span></div>' +
-                '<div class="rt-cb-row">' +
-                    '<input type="number" id="rt-cb-min" step="any" aria-label="Color range minimum" title="Minimum of the color range — type to rescale" oninput="_rtDrapeRangeFromMap()">' +
-                    '<div class="rt-cb-grad" id="rt-cb-grad"></div>' +
-                    '<input type="number" id="rt-cb-max" step="any" aria-label="Color range maximum" title="Maximum of the color range — type to rescale" oninput="_rtDrapeRangeFromMap()">' +
-                '</div>' +
-                '<div class="rt-cb-foot"><span id="rt-cb-level"></span>' +
-                    '<span class="rt-cb-op" title="Opacity of the radar field on the map"><input type="range" id="rt-cb-opacity" min="0" max="100" aria-label="Radar field opacity" oninput="_rtDrapeSetOpacity(this.value/100)"><span id="rt-cb-op-val"></span></span>' +
-                    '<button class="rt-cb-reset" onclick="rtResetColorRange()" title="Restore the variable\'s default range">reset</button></div>';
-            host.appendChild(el);
-            // Keep map drags / clicks from firing through the colorbar.
-            ['mousedown', 'click', 'dblclick', 'wheel', 'touchstart'].forEach(function (ev) {
-                el.addEventListener(ev, function (e) { e.stopPropagation(); });
-            });
-        }
-        var lut = TDRView.csLUT(p.colorscale), stops = [];
-        for (var k = 0; k <= 24; k++) { var i = Math.round(k / 24 * 255) * 3; stops.push('rgb(' + lut[i] + ',' + lut[i+1] + ',' + lut[i+2] + ')'); }
-        document.getElementById('rt-cb-grad').style.background = 'linear-gradient(to right, ' + stops.join(', ') + ')';
-        document.getElementById('rt-cb-name').textContent = p.display_name || '';
-        document.getElementById('rt-cb-units').textContent = p.units ? '(' + p.units + ')' : '';
-        document.getElementById('rt-cb-level').textContent = (p.level_km != null ? p.level_km.toFixed(1) + ' km' : '');
-        var mn = document.getElementById('rt-cb-min'), mx = document.getElementById('rt-cb-max');
-        if (document.activeElement !== mn) mn.value = _rtFmtRange(p.vmin);
-        if (document.activeElement !== mx) mx.value = _rtFmtRange(p.vmax);
-        var op = document.getElementById('rt-cb-opacity'); if (op && document.activeElement !== op) op.value = Math.round(_rtDrapeOpacity * 100);
-        var opv = document.getElementById('rt-cb-op-val'); if (opv) opv.textContent = Math.round(_rtDrapeOpacity * 100) + '%';
-        el.style.display = 'block';
-    }
-    var _rtDrapeRangeTimer = null;
-    window._rtDrapeRangeFromMap = function () {
-        clearTimeout(_rtDrapeRangeTimer);
-        _rtDrapeRangeTimer = setTimeout(function () {
-            var mn = parseFloat((document.getElementById('rt-cb-min') || {}).value);
-            var mx = parseFloat((document.getElementById('rt-cb-max') || {}).value);
-            if (isNaN(mn) || isNaN(mx) || mn >= mx) return;
-            var a = document.getElementById('rt-vmin'), b = document.getElementById('rt-vmax');
-            if (a) a.value = mn; if (b) b.value = mx;
-            rtApplyColorRange();
-        }, 120);
-    };
-    window._rtDrapeSetOpacity = function (v) {
-        _rtDrapeOpacity = Math.max(0, Math.min(1, parseFloat(v) || 0));
-        try { localStorage.setItem('rt_radar_opacity', String(_rtDrapeOpacity)); } catch (e) {}
-        if (_rtDrapeOverlay) { try { _rtDrapeOverlay.setOpacity(_rtDrapeOpacity); } catch (e) {} }
-        var opv = document.getElementById('rt-cb-op-val'); if (opv) opv.textContent = Math.round(_rtDrapeOpacity * 100) + '%';
-    };
+    function _rtDrapeDraw() { if (_rtMap && _rtPlan) _rtDrape.draw(_rtPlan); }
     // Re-color the draped field after a colormap / range change in the panel.
     function _rtDrapeRecolor() {
         if (!_rtPlan) return;
@@ -4303,28 +4152,6 @@
         if (mx != null && !isNaN(mx)) _rtPlan.vmax = mx;
         if (_rtDrapeOn) _rtDrapeDraw();
     }
-
-    function _rtDrapeHover(e) {
-        var p = _rtPlan;
-        if (!_rtDrapeOn || !p || _rtCsMode) { _rtDrapeHideTip(); return; }
-        var km = _rtKmFromLatLng(e.latlng); if (!km) return;
-        var ci = Math.round((km.x - p.x[0]) / (p.x[p.x.length-1] - p.x[0]) * (p.x.length - 1));
-        var ri = Math.round((km.y - p.y[0]) / (p.y[p.y.length-1] - p.y[0]) * (p.y.length - 1));
-        if (ci < 0 || ci >= p.x.length || ri < 0 || ri >= p.y.length) { _rtDrapeHideTip(); return; }
-        var v = p.z[ri] ? p.z[ri][ci] : null;
-        if (v == null || isNaN(v)) { _rtDrapeHideTip(); return; }
-        if (!_rtDrapeTip) {
-            _rtDrapeTip = document.createElement('div');
-            _rtDrapeTip.style.cssText = 'position:fixed;z-index:1300;pointer-events:none;background:rgba(15,22,35,0.92);' +
-                'color:#fff;font:600 11px/1.3 "DM Sans",sans-serif;padding:3px 7px;border-radius:4px;white-space:nowrap;';
-            document.body.appendChild(_rtDrapeTip);
-        }
-        _rtDrapeTip.textContent = v.toFixed(1) + ' ' + p.units + '  ·  ' + Math.round(km.x) + ', ' + Math.round(km.y) + ' km';
-        var oe = e.originalEvent || {};
-        _rtDrapeTip.style.left = ((oe.clientX || 0) + 14) + 'px'; _rtDrapeTip.style.top = ((oe.clientY || 0) - 6) + 'px';
-        _rtDrapeTip.style.display = 'block';
-    }
-    function _rtDrapeHideTip() { if (_rtDrapeTip) _rtDrapeTip.style.display = 'none'; }
 
     // Hide / restore the Plotly plan pane (the map carries it while draped) and
     // let the azimuthal-mean pane fill the row.
@@ -4360,24 +4187,11 @@
         var btn = document.getElementById('rt-drape-btn');
         if (btn) { btn.disabled = !_rtPlan; btn.classList.toggle('active', _rtDrapeOn); }
     }
-    // Frame the draped field; the panel is often mid-reflow, so fit twice.
-    function _rtDrapeFrame() {
-        function fit() { try { _rtMap.invalidateSize(); _rtMap.fitBounds(_rtDrapeBounds(_rtPlan), { padding: [30, 30] }); } catch (e) {} }
-        fit(); setTimeout(fit, 450);
-    }
     // Take the field off the map and bring the Plotly plan pane back.
     function _rtDrapeOff() {
         _rtDrapeOn = false;
-        if (_rtMap) {
-            if (_rtDrapeOverlay) { try { _rtMap.removeLayer(_rtDrapeOverlay); } catch (e) {} }
-            if (_rtDrapeRing) { try { _rtMap.removeLayer(_rtDrapeRing); } catch (e) {} }
-            if (_rtMapMarker && _rtMap.hasLayer && !_rtMap.hasLayer(_rtMapMarker)) { try { _rtMapMarker.addTo(_rtMap); } catch (e) {} }
-        }
-        _rtDrapeOverlay = null; _rtDrapeRing = null;
-        _rtDrapeBarbsRemove();
-        _rtDrapeHideTip();
+        _rtDrape.off();
         _rtCsMapClear();
-        var cb = document.getElementById('rt-drape-colorbar'); if (cb) cb.style.display = 'none';
         _rtApplyTwoPanel(false);
         _rtDrapeSyncBtn();
     }
@@ -4392,7 +4206,7 @@
         // renderPlot rebuilds the dual-panel HTML each time → re-hide the pane.
         _rtApplyTwoPanel(true);
         _rtDrapeSyncBtn();
-        if (_rtDrapeFramedFor !== _currentFileUrl) { _rtDrapeFramedFor = _currentFileUrl; _rtDrapeFrame(); }
+        if (_rtDrapeFramedFor !== _currentFileUrl) { _rtDrapeFramedFor = _currentFileUrl; _rtDrape.frame(); }
     }
     window.rtToggleDrape = function () {
         if (_rtDrapeOn) { _rtDrapeDisabled = true; _rtDrapeOff(); }
@@ -4428,7 +4242,7 @@
     }
     function _rtCsMapClick(e) {
         if (!_rtCsMode || !_rtDrapeOn) return;
-        var km = _rtKmFromLatLng(e.latlng); if (!km) return;
+        var km = _rtDrape.kmFromLatLng(e.latlng); if (!km) return;
         var status = document.getElementById('rt-cs-status'), btn = document.getElementById('rt-cs-btn');
         if (!_rtCsMapA) {
             _rtCsMapA = e.latlng; _rtCsPointA = km;
