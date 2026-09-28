@@ -1210,27 +1210,15 @@ var _RESULT_TABS = [
     { id: 'sq-result', label: function() { return 'Shear Quads'; } },
     { id: 'cs-result', label: function() { return 'Cross Section'; } }
 ];
-var _azTabLabel = 'Azim. Mean', _resultTabActive = 'ep-result', _resultTabObs = [];
+var _azTabLabel = 'Azim. Mean';
 var _AZ_MODE_LABEL = { standard: 'Azim. Mean', hybrid: 'Azim. Mean (R\u2095)', anomaly: 'Z* Anomaly' };
-function _resultTabHas(el) { return !!el && el.innerHTML.trim() !== ''; }
+// Tab mechanics are TDRView.createResultTabs (shared with the real-time tab).
+var _resultTabs = TDRView.createResultTabs({
+    host: function() { return document.getElementById('display-area'); },
+    barId: 'result-tabs', tabs: _RESULT_TABS, defaultId: 'ep-result',
+    enabled: function() { return _focusMode; }
+});
 function _resultTabsInit() {
-    _resultTabObs.forEach(function(o) { o.disconnect(); });
-    _resultTabObs = [];
-    _resultTabActive = 'ep-result';
-    var disp = document.getElementById('display-area');
-    if (!disp) return;
-    var bar = document.getElementById('result-tabs');
-    if (!bar) {
-        bar = document.createElement('div');
-        bar.id = 'result-tabs';
-        bar.className = 'result-tabs';
-        bar.setAttribute('role', 'tablist');
-        bar.addEventListener('click', function(e) {
-            var t = e.target.closest && e.target.closest('[data-tab]');
-            if (t) _resultTabShow(t.getAttribute('data-tab'));
-        });
-        disp.insertBefore(bar, disp.firstChild);
-    }
     // Name the shared az-result tab after whatever is about to fill it.
     var acts = document.getElementById('cs-btn');
     acts = acts && acts.closest('.action-section');
@@ -1247,43 +1235,10 @@ function _resultTabsInit() {
             if (e.target && e.target.id === 'az-coord-mode') _azTabLabel = _AZ_MODE_LABEL[e.target.value] || 'Azim. Mean';
         }, true);
     }
-    _RESULT_TABS.forEach(function(t) {
-        var el = document.getElementById(t.id);
-        if (!el || !window.MutationObserver) return;
-        var o = new MutationObserver(function() {
-            if (_resultTabHas(el)) _resultTabActive = t.id;          // newest result wins
-            else if (_resultTabActive === t.id) _resultTabActive = 'ep-result';
-            _resultTabsSync();
-        });
-        o.observe(el, { childList: true });
-        _resultTabObs.push(o);
-    });
-    _resultTabsSync();
+    _resultTabs.init();
 }
-function _resultTabsSync() {
-    var bar = document.getElementById('result-tabs');
-    var tabbed = _focusMode;
-    var present = _RESULT_TABS.filter(function(t) { return _resultTabHas(document.getElementById(t.id)); });
-    if (!present.some(function(t) { return t.id === _resultTabActive; })) _resultTabActive = present.length ? present[0].id : 'ep-result';
-    _RESULT_TABS.forEach(function(t) {
-        var el = document.getElementById(t.id);
-        if (el) el.classList.toggle('result-tab-hidden', tabbed && t.id !== _resultTabActive);
-    });
-    if (!bar) return;
-    bar.hidden = !tabbed || present.length < 2;
-    if (bar.hidden) return;
-    bar.innerHTML = present.map(function(t) {
-        var on = t.id === _resultTabActive;
-        return '<button type="button" role="tab" data-tab="' + t.id + '" aria-selected="' + on + '" class="result-tab' + (on ? ' active' : '') + '">' + t.label() + '</button>';
-    }).join('');
-}
-function _resultTabShow(id) {
-    _resultTabActive = id;
-    _resultTabsSync();
-    // Plotly sizes to its container; one drawn while hidden needs a nudge.
-    var el = document.getElementById(id);
-    if (el && window.Plotly) el.querySelectorAll('.js-plotly-plot').forEach(function(pd) { try { Plotly.Plots.resize(pd); } catch (e) {} });
-}
+function _resultTabsSync() { _resultTabs.sync(); }
+function _resultTabShow(id) { _resultTabs.show(id); }
 
 // ── Focus mode: map overlays live on the map ──────────────────
 // FL / Sondes / MW / 88D / Barbs draw on the map, so in focus mode their
@@ -1295,44 +1250,12 @@ function _resultTabShow(id) {
 // and the IR strip), same breakpoint as the Quick-look map card.
 var _MAP_LAYER_PILLS = ['btn-archive-fl', 'btn-archive-sonde', 'mw-overlay-btn', 'nexrad-overlay-btn', 'barb-btn'];
 function _mapLayerBarSync() {
-    var bar = document.getElementById('map-layer-bar');
-    var strip = document.querySelector('#side-panel .overlay-strip');
-    var lbl = strip && strip.querySelector('.overlay-strip-label');
-    var onMap = _quicklookOnMap();
-    if (lbl) lbl.textContent = onMap ? 'View' : 'Layers';
-    if (!onMap) {
-        if (bar) {
-            if (strip) bar.querySelectorAll('.overlay-pill').forEach(function(b) { strip.appendChild(b); });
-            bar.remove();
-        }
-        return;
-    }
-    var host = document.getElementById('map-container');
-    if (!host) return;
-    // Prefer the panel's (fresh, just-built) pill; fall back to the one already
-    // on the bar when the panel was not rebuilt. getElementById alone would
-    // return the stale bar copy, which comes first in document order.
-    var pills = _MAP_LAYER_PILLS.map(function(id) {
-        return (strip && strip.querySelector('#' + id)) || (bar && bar.querySelector('#' + id));
-    }).filter(Boolean);
-    if (!bar) {
-        bar = document.createElement('div');
-        bar.id = 'map-layer-bar';
-        bar.innerHTML = '<span class="map-layer-lbl">Overlays</span><span class="map-layer-pills"></span>';
-        bar.addEventListener('click', function(e) {
-            var b = e.target.closest && e.target.closest('#mw-overlay-btn, #nexrad-overlay-btn');
-            if (!b) return;
-            var pid = b.id === 'mw-overlay-btn' ? 'mw-overpass-panel' : 'nexrad-panel';
-            setTimeout(function() {
-                var p = document.getElementById(pid);
-                if (p && p.style.display !== 'none') p.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-            }, 0);
-        });
-        host.appendChild(bar);
-    }
-    var row = bar.querySelector('.map-layer-pills');
-    row.innerHTML = '';   // the previous case's pills (its panel is gone)
-    pills.forEach(function(b) { row.appendChild(b); });
+    TDRView.syncMapLayerBar({
+        on: _quicklookOnMap(), host: document.getElementById('map-container'),
+        strip: document.querySelector('#side-panel .overlay-strip'),
+        pillIds: _MAP_LAYER_PILLS, barId: 'map-layer-bar',
+        scrollTo: { 'mw-overlay-btn': 'mw-overpass-panel', 'nexrad-overlay-btn': 'nexrad-panel' }
+    });
 }
 
 // ── Quick-look thumbnail (pre-generated reflectivity + 2-km V_H PNG) ──

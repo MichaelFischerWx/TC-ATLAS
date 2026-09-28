@@ -1050,6 +1050,109 @@
         };
     }
 
+    // ── Result tabs: each result container is a tab; the newest result shows ──
+    // Containers are watched (not the render functions), so any code path that
+    // fills or clears one updates the tabs.
+    // o = { host: fn() → element the tab bar goes into (first child),
+    //       barId, tabs: [{ id, label: fn() → string }], enabled: fn() → bool,
+    //       defaultId }
+    function createResultTabs(o) {
+        var active = o.defaultId, obs = [];
+        function has(el) { return !!el && el.innerHTML.trim() !== ''; }
+        function sync() {
+            var bar = document.getElementById(o.barId), tabbed = o.enabled();
+            var present = o.tabs.filter(function (t) { return has(document.getElementById(t.id)); });
+            if (!present.some(function (t) { return t.id === active; })) active = present.length ? present[0].id : o.defaultId;
+            o.tabs.forEach(function (t) {
+                var el = document.getElementById(t.id);
+                if (el) el.classList.toggle('result-tab-hidden', tabbed && t.id !== active);
+            });
+            if (!bar) return;
+            bar.hidden = !tabbed || present.length < 2;
+            if (bar.hidden) return;
+            bar.innerHTML = present.map(function (t) {
+                var on = t.id === active;
+                return '<button type="button" role="tab" data-tab="' + t.id + '" aria-selected="' + on + '" class="result-tab' + (on ? ' active' : '') + '">' + t.label() + '</button>';
+            }).join('');
+        }
+        function show(id) {
+            active = id; sync();
+            // Plotly sizes to its container; one drawn while hidden needs a nudge.
+            var el = document.getElementById(id);
+            if (el && window.Plotly) el.querySelectorAll('.js-plotly-plot').forEach(function (pd) { try { Plotly.Plots.resize(pd); } catch (e) {} });
+        }
+        function init() {
+            obs.forEach(function (x) { x.disconnect(); }); obs = [];
+            active = o.defaultId;
+            var host = o.host(); if (!host) return;
+            var bar = document.getElementById(o.barId);
+            if (!bar) {
+                bar = document.createElement('div');
+                bar.id = o.barId; bar.className = 'result-tabs'; bar.setAttribute('role', 'tablist');
+                bar.addEventListener('click', function (e) {
+                    var t = e.target.closest && e.target.closest('[data-tab]');
+                    if (t) show(t.getAttribute('data-tab'));
+                });
+                host.insertBefore(bar, host.firstChild);
+            }
+            o.tabs.forEach(function (t) {
+                var el = document.getElementById(t.id);
+                if (!el || !window.MutationObserver) return;
+                var ob = new MutationObserver(function () {
+                    if (has(el)) active = t.id;                  // newest result wins
+                    else if (active === t.id) active = o.defaultId;
+                    sync();
+                });
+                ob.observe(el, { childList: true });
+                obs.push(ob);
+            });
+            sync();
+        }
+        return { init: init, sync: sync, show: show, active: function () { return active; } };
+    }
+
+    // ── Map overlay bar: move map-drawn layer pills onto the map ──────────
+    // The same DOM nodes (handlers untouched) move between the panel strip and
+    // a bar at the map's top-left. o = { on: bool, host: element (map
+    // container), strip: panel .overlay-strip, pillIds, barId, scrollTo:
+    // { pillId: panelId } — a picker panel to scroll into view when its
+    // layer is switched on }. The strip label reads 'View' while on.
+    function syncMapLayerBar(o) {
+        var bar = document.getElementById(o.barId), strip = o.strip;
+        var lbl = strip && strip.querySelector('.overlay-strip-label');
+        if (lbl) lbl.textContent = o.on ? 'View' : 'Layers';
+        if (!o.on) {
+            if (bar) {
+                if (strip) bar.querySelectorAll('.overlay-pill').forEach(function (b) { strip.appendChild(b); });
+                bar.remove();
+            }
+            return;
+        }
+        if (!o.host) return;
+        // Prefer the panel's (fresh) pill; fall back to the one already on the bar.
+        var pills = o.pillIds.map(function (id) {
+            return (strip && strip.querySelector('#' + id)) || (bar && bar.querySelector('#' + id));
+        }).filter(Boolean);
+        if (!bar) {
+            bar = document.createElement('div');
+            bar.id = o.barId; bar.className = 'tdrv-map-layer-bar';
+            bar.innerHTML = '<span class="map-layer-lbl">Overlays</span><span class="map-layer-pills"></span>';
+            bar.addEventListener('click', function (e) {
+                var b = e.target.closest && e.target.closest('.overlay-pill');
+                var pid = b && o.scrollTo && o.scrollTo[b.id];
+                if (!pid) return;
+                setTimeout(function () {
+                    var p = document.getElementById(pid);
+                    if (p && p.style.display !== 'none') p.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                }, 0);
+            });
+            o.host.appendChild(bar);
+        }
+        var row = bar.querySelector('.map-layer-pills');
+        row.innerHTML = '';
+        pills.forEach(function (b) { row.appendChild(b); });
+    }
+
     // Styles for the shared controls (both pages), injected once.
     (function injectCSS() {
         if (document.getElementById('tdrv-css')) return;
@@ -1080,6 +1183,6 @@
         anomalyFigure: anomalyFigure, FISCHER_2025: FISCHER_2025, quadrantFigure: quadrantFigure,
         startRubberBand: startRubberBand, stopRubberBand: stopRubberBand,
         shearCompassHTML: shearCompassHTML, intensityColor: intensityColor, intensityCategory: intensityCategory,
-        createDrape: createDrape
+        createDrape: createDrape, createResultTabs: createResultTabs, syncMapLayerBar: syncMapLayerBar
     };
 })();

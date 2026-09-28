@@ -85,53 +85,15 @@
     max-width: none;
 }
 
-/* The explorer-layout inside the RT content panel inherits
-   styles from tc_radar_styles.css (.explorer-layout, .explorer-display,
-   .explorer-controls). With the map open, stack the controls under the plot
-   as a wrapped grid (same as #side-panel.focus-panel in the explorer). */
+/* The explorer-layout inside the RT content panel uses the explorer's own
+   classes and, with the map open, the explorer's focus-mode rules
+   (tc_radar_styles.css :is(#side-panel.focus-panel, .tdr-focus-panel) ...):
+   the panel carries .tdr-focus-panel (realtime_tdr.js drops it while the map
+   is collapsed). One set of layout rules for both pages (2026-09-28). */
 .rt-viz-content-panel .explorer-layout {
     flex: 1;
     min-height: 0;
 }
-.rt-viz-layout:not(.rt-map-collapsed) .rt-viz-content-panel .explorer-layout {
-    flex-direction: column;
-    gap: 10px;
-}
-.rt-viz-layout:not(.rt-map-collapsed) .rt-viz-content-panel .explorer-controls {
-    width: 100%; position: static; max-height: none; overflow: visible;
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 2px 18px; align-items: start;
-    border-left: none; padding-left: 0; border-top: 1px solid var(--border); padding-top: 10px;
-}
-.rt-viz-layout:not(.rt-map-collapsed) .rt-viz-content-panel .explorer-controls > .explorer-title,
-.rt-viz-layout:not(.rt-map-collapsed) .rt-viz-content-panel .explorer-controls > .generate-btn {
-    grid-column: 1 / -1;
-}
-/* Collapsed: the old 280-px sticky rail beside the full-width plot */
-.rt-viz-layout.rt-map-collapsed .rt-viz-content-panel .explorer-controls {
-    overflow-y: auto;
-    max-height: calc(100vh - 140px);
-    /* Show scrollbar on macOS so users know the panel scrolls */
-    scrollbar-width: thin;
-    scrollbar-color: rgba(96,165,250,0.3) transparent;
-}
-.rt-viz-content-panel .explorer-controls::-webkit-scrollbar {
-    width: 6px;
-}
-.rt-viz-content-panel .explorer-controls::-webkit-scrollbar-thumb {
-    background: rgba(96,165,250,0.3);
-    border-radius: 3px;
-}
-
-/* Sticky Generate button — always visible at bottom of controls panel */
-.rt-viz-content-panel .generate-btn {
-    position: sticky;
-    bottom: 0;
-    z-index: 2;
-    margin-top: 8px;
-    /* Solid background so it doesn't overlap content transparently */
-    box-shadow: 0 -8px 12px rgba(255, 255, 255, 0.95);
-}
-
 /* ── Responsive: tablet ≤1024px (35/65 split) ────────────── */
 @media (max-width: 1024px) {
     .rt-viz-content-panel { min-width: 460px; }
@@ -1263,3 +1225,12 @@
 .recon-archive-links a:hover { text-decoration: underline; }
 .recon-archive-cta { font-size: 12px; font-weight: 600; color: #ec4899; }
 @media (max-width: 640px) { .recon-hdob-replay-time { min-width: 0; } }
+
+/* Compact storm header (explorer-style); details / SHIPS behind disclosures */
+.rt-meta-more { margin: 2px 0 4px; }
+.rt-meta-more > summary { cursor: pointer; font: 600 11px/1.3 'DM Sans', sans-serif; color: var(--slate); }
+.rt-meta-more > summary:hover { color: var(--text); }
+.rt-meta-more .rt-meta-sum { font-weight: 500; color: var(--slate); }
+.rt-meta-more[open] > summary { margin-bottom: 4px; }
+#rt-ships-panel { border-top: none !important; padding-top: 0 !important; margin-top: 0 !important; }
+.rt-viz-content-panel .panel-storm-name .case-nav-bar { font-size: 10px; }

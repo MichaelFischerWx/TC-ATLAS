@@ -3762,6 +3762,29 @@
         rtFetchIR();
     };
 
+    // ── Analysis stepper (◀ n of N ▶ within the mission), like the explorer's case nav ──
+    function _rtFileOptions() {
+        var sel = document.getElementById('rt-file-select');
+        return sel ? [].filter.call(sel.options, function (o) { return !!o.value; }) : [];
+    }
+    function _rtStepperHTML() {
+        var opts = _rtFileOptions(), sel = document.getElementById('rt-file-select');
+        if (opts.length < 2 || !sel) return '';
+        var i = opts.findIndex(function (o) { return o.value === sel.value; });
+        return '<span class="case-nav-bar">' +
+            '<button class="case-nav-btn" onclick="rtStepAnalysis(-1)" title="Previous analysis"' + (i <= 0 ? ' disabled' : '') + '>\u25C0</button>' +
+            '<span class="case-nav-pos">' + (i + 1) + ' of ' + opts.length + '</span>' +
+            '<button class="case-nav-btn" onclick="rtStepAnalysis(1)" title="Next analysis"' + (i >= opts.length - 1 ? ' disabled' : '') + '>\u25B6</button></span>';
+    }
+    window.rtStepAnalysis = function (d) {
+        var opts = _rtFileOptions(), sel = document.getElementById('rt-file-select');
+        var i = opts.findIndex(function (o) { return o.value === sel.value; });
+        var j = i + d;
+        if (i < 0 || j < 0 || j >= opts.length) return;
+        sel.value = opts[j].value;
+        rtExploreFile();
+    };
+
     // ── Fetch and display metadata ───────────────────────────────
     function rtFetchMeta(fileUrl) {
         fetchWithRetry(API_BASE + RT_PREFIX + '/data?file_url=' + encodeURIComponent(fileUrl) + '&variable=' + DEFAULT_RT_VAR + '&level_km=2')
@@ -3769,8 +3792,11 @@
             .then(function (json) {
                 var m = json.case_meta || {};
                 _rtCaseMeta = m;  // Store for SHIPS auto-fetch
-                var html = '<div class="rt-meta-title">' + (m.storm_name || 'Unknown') + '</div>' +
-                    '<div class="rt-meta-row">' + (m.mission_id || '') + ' · ' + (m.datetime || '') + '</div>' +
+                // Compact header like the explorer's (name + analysis stepper, one
+                // info line); the details sit behind a disclosure.
+                var html = '<div class="panel-storm-name">' + (m.storm_name || 'Unknown') + _rtStepperHTML() + '</div>' +
+                    '<div class="panel-mission">' + (m.mission_id || '') + ' \u00b7 ' + (m.datetime || '') + '</div>' +
+                    '<details class="rt-meta-more"><summary>Analysis details</summary>' +
                     '<div class="rt-meta-grid">' +
                     '<div class="rt-meta-item"><span class="rt-meta-label">Position</span><span class="rt-meta-val">' +
                     (m.latitude ? m.latitude.toFixed(2) + '°N, ' + Math.abs(m.longitude).toFixed(2) + '°' + (m.longitude < 0 ? 'W' : 'E') : '—') + '</span></div>' +
@@ -3782,7 +3808,7 @@
                     (m.melting_height_km > 0 ? m.melting_height_km.toFixed(1) + ' km' : '—') + '</span></div>' +
                     '<div class="rt-meta-item"><span class="rt-meta-label">Quality</span><span class="rt-meta-val">' +
                     (m.analysis_level === '1' ? 'Real-Time' : m.analysis_level === '2' ? 'Research' : m.analysis_level || '—') + '</span></div>' +
-                    '</div>';
+                    '</div></details>';
                 document.getElementById('rt-meta-panel').innerHTML = html;
 
                 // Init Leaflet map + fetch max 2-km wind for marker
@@ -3827,7 +3853,7 @@
         var cacheKey = _currentFileUrl + '_' + variable + '_' + level_km + '_' + overlay + (_rtBarbsEnabled ? '_barbs' : '') + (_rtStormRelative ? '_sr' : '');
         if (_rtDataCache[cacheKey]) {
             rtRenderPlot(_rtDataCache[cacheKey], resultDiv);
-            btn.disabled = false; btn.textContent = 'Generate Plot';
+            btn.disabled = false; btn.textContent = 'Update Plan View';
             if (callback) callback(); return;
         }
 
@@ -3846,7 +3872,7 @@
                 resultDiv.innerHTML = '<div class="explorer-status error">' + msg + '</div>';
                 rtAnimStop();
             })
-            .finally(function () { clearTimeout(timeout); btn.disabled = false; btn.textContent = 'Generate Plot'; });
+            .finally(function () { clearTimeout(timeout); btn.disabled = false; btn.textContent = 'Update Plan View'; });
     };
 
     // ── Max value helpers (mirrors archive findDataMax / buildMaxMarkerTrace / buildMaxAnnotation) ──
@@ -5268,6 +5294,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var collapsed = layoutEl.classList.toggle('rt-map-collapsed');
         var btn = document.getElementById('rt-map-toggle-btn');
         if (btn) btn.classList.toggle('active', !collapsed);
+        _rtFocusLayoutSync();
         // Reflow after the layout settles: a window resize event reflows every
         // responsive Plotly chart; re-showing the map needs a size recompute
         // (it was display:none, so Leaflet/GL measured 0×0).
@@ -5279,6 +5306,83 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             _rtDrapeAuto();
         }, 60);
         if (typeof _ga === 'function') _ga('rt_toggle_map_panel', { collapsed: collapsed });
+    };
+
+    // ── Explorer focus-mode layout (2026-09-28) ──────────────────
+    // With the map open the panel uses the explorer's focus-mode layout and
+    // CSS (.tdr-focus-panel): Explore Data grid + "More options", View row,
+    // Analysis grid, results as tabs, map-drawn layer pills on the map. With the
+    // map collapsed it falls back to the stacked panel + controls rail.
+    var _RT_MAP_LAYER_PILLS = ['rt-fl-btn', 'rt-sonde-btn', 'rt-mw-overlay-btn', 'rt-nexrad-btn', 'rt-barb-btn'];
+    var _RT_WIDE_MQ = window.matchMedia ? window.matchMedia('(min-width: 1025px)') : null;
+    var _rtAzTabLabel = 'Azim. Mean';
+    // The panel keeps the focus layout either way (collapsing the map just
+    // widens it); only the on-map overlay bar follows the map.
+    function _rtFocusOn() { return true; }
+    var _rtResultTabs = TDRView.createResultTabs({
+        host: function () { return document.getElementById('rt-results'); },
+        barId: 'rt-result-tabs', defaultId: 'rt-display-area',
+        enabled: _rtFocusOn,
+        tabs: [
+            { id: 'rt-display-area', label: function () { return 'Overview'; } },
+            { id: 'rt-az-result', label: function () { return _rtAzTabLabel; } },
+            { id: 'rt-anomaly-result', label: function () { return 'Z* Anomaly'; } },
+            { id: 'rt-quad-result', label: function () { return 'Shear Quads'; } },
+            { id: 'rt-cs-result', label: function () { return 'Cross Section'; } },
+            { id: 'rt-vp-result', label: function () { return 'VP Scatter'; } },
+            { id: 'rt-ctrk-result', label: function () { return 'Center Track'; } }
+        ]
+    });
+    function _rtFocusLayoutSync() {
+        TDRView.syncMapLayerBar({
+            on: _rtMapPanelVisible() && (!_RT_WIDE_MQ || _RT_WIDE_MQ.matches), host: document.getElementById('rt-map-wrapper'),
+            strip: document.querySelector('.rt-viz-content-panel .overlay-strip'),
+            pillIds: _RT_MAP_LAYER_PILLS, barId: 'map-layer-bar',
+            scrollTo: { 'rt-mw-overlay-btn': 'rt-mw-overpass-panel', 'rt-nexrad-btn': 'rt-nexrad-panel' }
+        });
+        _rtResultTabs.sync();
+    }
+    (function _rtFocusLayoutInit() {
+        var acts = document.getElementById('rt-cs-btn');
+        acts = acts && acts.closest('.action-section');
+        if (acts) acts.addEventListener('click', function (e) {
+            var b = e.target.closest && e.target.closest('button');
+            if (!b) return;
+            if (b.id === 'rt-az-btn') _rtAzTabLabel = 'Azim. Mean';
+            else if (b.id === 'rt-cfad-btn') _rtAzTabLabel = 'CFAD';
+        }, true);
+        try {
+            if (localStorage.getItem('rt_explorer_more') === '1') {
+                var c = document.querySelector('.rt-viz-content-panel .explorer-controls');
+                if (c) c.classList.add('show-more');
+                var mb = document.getElementById('rt-more-btn');
+                if (mb) { mb.textContent = 'Fewer options ▴'; mb.setAttribute('aria-expanded', 'true'); }
+            }
+        } catch (e) {}
+        _rtResultTabs.init();
+        _rtFocusLayoutSync();
+        if (_RT_WIDE_MQ && _RT_WIDE_MQ.addEventListener) _RT_WIDE_MQ.addEventListener('change', _rtFocusLayoutSync);
+    })();
+    window.rtToggleExplorerMore = function () {
+        var c = document.querySelector('.rt-viz-content-panel .explorer-controls');
+        var b = document.getElementById('rt-more-btn');
+        if (!c) return;
+        var on = c.classList.toggle('show-more');
+        if (b) { b.textContent = on ? 'Fewer options ▴' : 'More options ▾'; b.setAttribute('aria-expanded', on ? 'true' : 'false'); }
+        try { localStorage.setItem('rt_explorer_more', on ? '1' : '0'); } catch (e) {}
+    };
+    // "Azim. mean in" picker (the Z* anomaly used to be its own button).
+    window.rtDispatchAzimuthalMean = function () {
+        var mode = (document.getElementById('rt-az-coord-mode') || {}).value || 'standard';
+        if (mode === 'anomaly') {
+            var zb = document.getElementById('rt-anomaly-btn');
+            if (zb && zb.disabled) { rtToast('Z* anomaly needs SHIPS (Vmax) — still loading.', 'warn'); return; }
+            rtFetchAnomaly();
+        } else rtFetchAzimuthalMean();
+    };
+    window.rtAzCoordChanged = function () {
+        var btn = document.getElementById('rt-az-btn');
+        if (btn && !btn.disabled) rtDispatchAzimuthalMean();
     };
 
     window.rtToggleIRUnderlay = function () {
@@ -7878,8 +7982,11 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var atcfTag = data.atcf_id ? ' <span style="color:var(--slate);font-weight:400;">(' + data.atcf_id + ')</span>' : '';
         var autoTag = data.auto_detected ? ' <span style="color:var(--um-green, #005030);font-size:9px;font-weight:600;">auto</span>' : '';
 
+        var sumBits = [];
+        if (sd.vmax_kt != null) sumBits.push('Vmax ' + sd.vmax_kt + ' kt');
+        if (sd.shear_kt != null) sumBits.push('shear ' + sd.shear_kt + ' kt' + (sd.sddc != null ? ' / ' + sd.sddc + '\u00b0' : ''));
         var rows = [
-            '<div style="font-size:11px;font-weight:600;color:var(--um-orange, #F47321);margin-bottom:4px;">\ud83d\udce1 SHIPS Environmental Data' + atcfTag + autoTag + '</div>',
+            '<details class="rt-meta-more"><summary>SHIPS environment' + atcfTag + autoTag + (sumBits.length ? ' <span class="rt-meta-sum">\u00b7 ' + sumBits.join(' \u00b7 ') + '</span>' : '') + '</summary>',
             '<table style="width:100%;font-size:10px;color:var(--text, #0f1623);border-collapse:collapse;">',
         ];
 
@@ -7910,7 +8017,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 '<td style="padding:1px 4px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text, #0f1623);">' + f[1] + '</td></tr>');
         });
 
-        rows.push('</table>');
+        rows.push('</table></details>');
         panel.innerHTML = rows.join('');
         panel.style.display = '';
     }
