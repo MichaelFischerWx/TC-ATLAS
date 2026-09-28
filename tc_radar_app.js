@@ -4821,9 +4821,42 @@ function handlePlotClick(eventData) {
     }
 }
 
+// Multi-variable cross-section: the same A→B line for several fields, stacked
+// (TDRView.runMultiSection, shared with the real-time tab). Fields follow the
+// family of the selected variable (recentered_ / total_recentered_ / swath_ / merged_).
+var _csLastAB = null;
+function _mcsKeyFor(id) {
+    var cur = (document.getElementById('ep-var') || {}).value || '';
+    var m = /^(total_recentered_|recentered_|swath_|merged_)/.exec(cur), fam = m ? m[1] : 'recentered_';
+    var base = { refl: 'reflectivity', vt: 'tangential_wind', vr: 'radial_wind', w: 'upward_air_velocity', wspd: 'wind_speed' }[id];
+    var key = fam + base, sel = document.getElementById('ep-var');
+    if (sel && ![].some.call(sel.options, function(o) { return o.value === key; })) return null;
+    return key;
+}
+function _mcsControls() { return TDRView.multiSectionControlsHTML('ep-', _mcsKeyFor, 'runMultiCS'); }
+window.runMultiCS = function() {
+    if (!_csLastAB) return;
+    var a = _csLastAB.a, b = _csLastAB.b, p = _lastPlanRender;
+    _ga('cross_section_multi', { case_index: currentCaseIndex, data_type: _activeDataType });
+    var meta = currentCaseData || {};
+    TDRView.runMultiSection({
+        prefix: 'ep-', keyFor: _mcsKeyFor,
+        fetch: function(key) {
+            var url = API_BASE + '/cross_section?case_index=' + currentCaseIndex + '&variable=' + key + '&data_type=' + _activeDataType +
+                      '&x0=' + a.x + '&y0=' + a.y + '&x1=' + b.x + '&y1=' + b.y + '&n_points=150';
+            return fetch(url).then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); });
+        },
+        endpoints: { x0: a.x, y0: a.y, x1: b.x, y1: b.y },
+        locator: p ? { z: p.z, x: p.x, y: p.y, colorscale: p.colorscale, zmin: p.vmin, zmax: p.vmax } : null,
+        title: (meta.storm_name || '') + (meta.datetime ? ' | ' + meta.datetime : '') + ' \u2014 TDR cross-section (' +
+               Math.round(Math.hypot(b.x - a.x, b.y - a.y)) + ' km)',
+        plot: tcrNewPlot
+    });
+};
 function fetchCrossSection(a, b) {
     var variable = document.getElementById('ep-var').value;
     _ga('cross_section', { case_index: currentCaseIndex, variable: variable, data_type: _activeDataType });
+    _csLastAB = { a: a, b: b };
     var overlay = (document.getElementById('ep-overlay') || {}).value || '';
     var csResult = document.getElementById('cs-result'); if (!csResult) return;
     csResult.innerHTML = _hurricaneLoadingHTML('Computing cross-section\u2026', true);
@@ -4836,11 +4869,11 @@ function fetchCrossSection(a, b) {
                 // Its own result tab: an inline chart, expandable to the full view.
                 _lastCsJson = json;
                 csResult.innerHTML = '<div style="position:relative;"><div id="cs-inline-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' +
-                    '<button onclick="openPlotModal(_lastCsJson)" title="Expand with the plan view" class="cs-inline-expand">\u26F6</button></div>';
+                    '<button onclick="openPlotModal(_lastCsJson)" title="Expand with the plan view" class="cs-inline-expand">\u26F6</button></div>' + _mcsControls();
                 renderCrossSectionInto('cs-inline-chart', json, false);
                 return;
             }
-            csResult.innerHTML = '<div class="explorer-status" style="color:#10b981;">\u2713 Cross-section ready \u2014 opening expanded view</div>'; openPlotModal(json);
+            csResult.innerHTML = '<div class="explorer-status" style="color:#10b981;">\u2713 Cross-section ready \u2014 opening expanded view</div>' + _mcsControls(); openPlotModal(json);
         })
         .catch(function(err) { csResult.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + err.message + '</div>'; });
 }

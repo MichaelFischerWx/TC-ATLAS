@@ -371,6 +371,117 @@
         return json.overlay ? '<br><span style="font-size:0.85em;color:#9ca3af;">Contours: ' + json.overlay.display_name + ' (' + json.overlay.units + ')</span>' : '';
     }
 
+    // ── Multi-variable cross-section (stacked panels along one A→B line) ──
+    // Fields are page-agnostic ids; each page maps id → its variable key.
+    var MULTI_FIELDS = [
+        { id: 'refl', label: 'Reflectivity', title: 'Reflectivity', on: true },
+        { id: 'vt', label: 'Tangential', title: 'Tangential wind (+ cyclonic)', on: true },
+        { id: 'vr', label: 'Radial', title: 'Radial wind (+ outflow)', on: true },
+        { id: 'w', label: 'Vertical', title: 'Vertical velocity (+ up)', on: false },
+        { id: 'wspd', label: 'Wind speed', title: 'Wind speed', on: false }
+    ];
+    /** Chips + button under a single cross-section. keyFor(id) → variable key or
+     *  null (field not offered for this dataset). onRun: global function name. */
+    function multiSectionControlsHTML(prefix, keyFor, onRun) {
+        var chips = MULTI_FIELDS.map(function (f) {
+            var ok = !!keyFor(f.id);
+            return '<label class="tdrv-mcs-chip' + (ok ? '' : ' is-off') + '" title="' + (ok ? f.title : 'Not available for this dataset') + '">' +
+                '<input type="checkbox" data-mcs="' + f.id + '"' + (f.on && ok ? ' checked' : '') + (ok ? '' : ' disabled') + '> ' + f.label + '</label>';
+        }).join('');
+        return '<div class="tdrv-mcs" id="' + prefix + 'mcs">' +
+            '<div class="tdrv-mcs-row"><span class="tdrv-mcs-lbl">Multi-variable section</span>' + chips +
+            '<button class="cs-btn tdrv-mcs-go" onclick="' + onRun + '()">⧉ Show panels</button></div>' +
+            '<div id="' + prefix + 'mcs-result"></div></div>';
+    }
+    function multiSectionSelected(prefix) {
+        var box = document.getElementById(prefix + 'mcs');
+        var ids = box ? [].slice.call(box.querySelectorAll('input[data-mcs]:checked')).map(function (i) { return i.getAttribute('data-mcs'); }) : [];
+        return MULTI_FIELDS.filter(function (f) { return ids.indexOf(f.id) >= 0; });
+    }
+
+    /** Where A→B passes closest to the storm center (grid origin). */
+    function centerOnSection(ep) {
+        var dx = ep.x1 - ep.x0, dy = ep.y1 - ep.y0, L = Math.sqrt(dx * dx + dy * dy);
+        if (!L) return null;
+        var d = (-ep.x0 * dx - ep.y0 * dy) / L;            // along-line distance of the foot of the perpendicular
+        if (d < 0 || d > L) return null;
+        var off = Math.abs(ep.x0 * dy - ep.y0 * dx) / L;   // perpendicular miss distance (km)
+        return { d: d, off: off };
+    }
+
+    // panels = [{ json (/cross_section response), title }]
+    // o = { title, endpoints, locator: { z, x, y, colorscale, zmin, zmax } }
+    // Returns { traces, layout, height }.
+    function multiSectionFigure(panels, o) {
+        var n = panels.length, gap = 0.045, top = 0.10, bot = 0.07;
+        var rowH = (1 - top - bot - gap * (n - 1)) / n;
+        var traces = [], shapes = [], annotations = [];
+        var layout = { paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff', showlegend: false,
+            margin: { l: 52, r: 70, t: 56, b: 44 }, hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } },
+            title: { text: o.title, font: { color: '#0f1623', size: 12 }, x: 0.5, xanchor: 'center', y: 0.985, yanchor: 'top' } };
+        var ctr = o.endpoints ? centerOnSection(o.endpoints) : null;
+        panels.forEach(function (p, i) {
+            var j = p.json, vi = j.variable, sfx = i === 0 ? '' : String(i + 1);
+            var yTop = 1 - top - i * (rowH + gap), yBot = yTop - rowH;
+            traces.push({ z: j.cross_section, x: j.distance_km, y: j.height_km, type: 'heatmap',
+                colorscale: vi.colorscale, zmin: vi.vmin, zmax: vi.vmax, xaxis: 'x' + sfx, yaxis: 'y' + sfx,
+                colorbar: { title: { text: vi.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 },
+                            thickness: 10, len: rowH * 0.95, y: (yTop + yBot) / 2, yanchor: 'middle', x: 1.01 },
+                hovertemplate: '<b>' + vi.display_name + '</b>: %{z:.1f} ' + vi.units + '<br>Distance: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>',
+                hoverongaps: false });
+            layout['xaxis' + sfx] = { domain: [0, 1], anchor: 'y' + sfx, matches: i ? 'x' : undefined, showticklabels: i === n - 1,
+                title: i === n - 1 ? { text: 'Distance along section (km)   A → B', font: { color: '#5b6573', size: 10 } } : undefined,
+                tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15, 22, 35,0.12)', zeroline: false };
+            layout['yaxis' + sfx] = { domain: [yBot, yTop], anchor: 'x' + sfx, range: [0, 15],
+                title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 },
+                gridcolor: 'rgba(15, 22, 35,0.12)', zeroline: false };
+            annotations.push({ text: '<b>' + (p.title || vi.display_name) + '</b>', xref: 'paper', yref: 'paper', x: 0.5, y: yTop,
+                xanchor: 'center', yanchor: 'bottom', showarrow: false, font: { color: '#0f1623', size: 11 } });
+            if (ctr) shapes.push({ type: 'line', xref: 'x' + sfx, yref: 'y' + sfx + ' domain', x0: ctr.d, x1: ctr.d, y0: 0, y1: 1,
+                line: { color: 'rgba(15, 22, 35,0.65)', width: 1.2, dash: 'dash' } });
+        });
+        if (ctr) annotations.push({ text: ctr.off < 5 ? 'storm center' : 'closest to center (' + Math.round(ctr.off) + ' km off)',
+            xref: 'x', yref: 'paper', x: ctr.d, y: 1 - top, xanchor: 'left', yanchor: 'top', xshift: 3, showarrow: false,
+            font: { color: '#0f1623', size: 9 }, bgcolor: 'rgba(255,255,255,0.7)' });
+        // Locator: the plan-view field with the A→B line, top-left of the first panel.
+        var loc = o.locator, ep = o.endpoints;
+        if (loc && loc.z && ep) {
+            var yTop0 = 1 - top, span = Math.max(Math.abs(ep.x0), Math.abs(ep.x1), Math.abs(ep.y0), Math.abs(ep.y1), 40) * 1.25;
+            var lx = 'x' + (n + 1), ly = 'y' + (n + 1);
+            layout['xaxis' + (n + 1)] = { domain: [0.012, 0.012 + Math.min(0.22, rowH * 0.9)], anchor: ly, range: [-span, span],
+                showticklabels: false, showgrid: false, zeroline: false, mirror: true, showline: true, linecolor: 'rgba(15,22,35,0.5)', fixedrange: true };
+            layout['yaxis' + (n + 1)] = { domain: [yTop0 - rowH * 0.9, yTop0 - 0.004], anchor: lx, range: [-span, span], scaleanchor: lx,
+                showticklabels: false, showgrid: false, zeroline: false, mirror: true, showline: true, linecolor: 'rgba(15,22,35,0.5)', fixedrange: true };
+            traces.push({ z: loc.z, x: loc.x, y: loc.y, type: 'heatmap', colorscale: loc.colorscale, zmin: loc.zmin, zmax: loc.zmax,
+                showscale: false, hoverinfo: 'skip', xaxis: lx, yaxis: ly });
+            traces.push({ x: [ep.x0, ep.x1], y: [ep.y0, ep.y1], type: 'scatter', mode: 'lines+markers+text', xaxis: lx, yaxis: ly,
+                line: { color: '#0f1623', width: 2 }, marker: { size: [4, 8], symbol: ['circle', 'triangle-up'], angleref: 'previous', color: '#0f1623' },
+                text: ['A', 'B'], textposition: 'top center', textfont: { size: 9, color: '#0f1623' }, hoverinfo: 'skip' });
+        }
+        layout.shapes = shapes; layout.annotations = annotations;
+        return { traces: traces, layout: layout, height: Math.round(90 + n * 205) };
+    }
+
+    /** Fetch every selected field along the same line and draw the stack.
+     *  o = { prefix, keyFor(id), fetch(key) → Promise<json>, endpoints, locator,
+     *        title, plot(divId, traces, layout, config) } */
+    function runMultiSection(o) {
+        var box = document.getElementById(o.prefix + 'mcs-result'); if (!box) return;
+        var fields = multiSectionSelected(o.prefix).filter(function (f) { return o.keyFor(f.id); });
+        if (!fields.length) { box.innerHTML = '<div class="explorer-status">Pick at least one field.</div>'; return; }
+        box.innerHTML = '<div class="explorer-status">Computing ' + fields.length + ' sections…</div>';
+        Promise.all(fields.map(function (f) { return o.fetch(o.keyFor(f.id)); })).then(function (jsons) {
+            var fig = multiSectionFigure(fields.map(function (f, i) { return { json: jsons[i], title: f.title }; }),
+                { title: o.title, endpoints: o.endpoints, locator: o.locator });
+            var id = o.prefix + 'mcs-chart';
+            box.innerHTML = '<div id="' + id + '" style="width:100%;height:' + fig.height + 'px;"></div>';
+            o.plot(id, fig.traces, fig.layout, { responsive: true, displayModeBar: true, displaylogo: false,
+                modeBarButtonsToRemove: ['lasso2d', 'select2d', 'toggleSpikelines'] });
+        }).catch(function (err) {
+            box.innerHTML = '<div class="explorer-status error">⚠️ ' + (err && err.message || err) + '</div>';
+        });
+    }
+
     // ── Shear / motion insets for Plotly panels ─────────────────────────
     // Compact direction label (cross-section / azimuthal-mean panels).
     function shearInsetCS(sddc, isFullsize, shdc) {
@@ -939,6 +1050,21 @@
         };
     }
 
+    // Styles for the shared controls (both pages), injected once.
+    (function injectCSS() {
+        if (document.getElementById('tdrv-css')) return;
+        var st = document.createElement('style'); st.id = 'tdrv-css';
+        st.textContent =
+            '.tdrv-mcs{margin-top:8px;padding:6px 8px;border:1px solid var(--border-light,rgba(15,22,35,.12));border-radius:8px;background:var(--surface-raised,#fff)}' +
+            '.tdrv-mcs-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px}' +
+            '.tdrv-mcs-lbl{font-weight:600;color:var(--text,#0f1623);margin-right:2px}' +
+            '.tdrv-mcs-chip{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border:1px solid rgba(15,22,35,.18);border-radius:999px;cursor:pointer;color:var(--text,#0f1623);user-select:none}' +
+            '.tdrv-mcs-chip input{margin:0}' +
+            '.tdrv-mcs-chip.is-off{opacity:.45;cursor:not-allowed}' +
+            '.tdrv-mcs-go{margin-left:auto}';
+        document.head.appendChild(st);
+    })();
+
     window.TDRView = {
         NAMED_CS: NAMED_CS, csParse: csParse, csResolve: csResolve, csColor: csColor, csLUT: csLUT,
         windBarbShapes: windBarbShapes,
@@ -948,6 +1074,8 @@
         sectionFigure: sectionFigure, sectionTitleOverlay: sectionTitleOverlay,
         hasAnyData: hasAnyData, planFigure: planFigure, planTitle: planTitle, metaStripHTML: metaStripHTML,
         dualPanelHTML: dualPanelHTML, noDataHTML: noDataHTML,
+        MULTI_FIELDS: MULTI_FIELDS, multiSectionControlsHTML: multiSectionControlsHTML,
+        multiSectionFigure: multiSectionFigure, runMultiSection: runMultiSection, centerOnSection: centerOnSection,
         shearInset: shearInset, shearInsetCS: shearInsetCS, themeGrid: themeGrid, cfadFigure: cfadFigure,
         anomalyFigure: anomalyFigure, FISCHER_2025: FISCHER_2025, quadrantFigure: quadrantFigure,
         startRubberBand: startRubberBand, stopRubberBand: stopRubberBand,

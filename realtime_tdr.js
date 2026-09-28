@@ -4394,6 +4394,30 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         }
     }
 
+    // Multi-variable cross-section along the same A→B line (TDRView.runMultiSection,
+    // shared with the TC-RADAR explorer).
+    var _rtCsLastAB = null;
+    var _RT_MCS_KEYS = { refl: 'REFLECTIVITY', vt: 'TANGENTIAL_WIND', vr: 'RADIAL_WIND', w: 'W', wspd: 'WIND_SPEED' };
+    function _rtMcsKeyFor(id) { return _RT_MCS_KEYS[id] || null; }
+    window.rtRunMultiCS = function () {
+        if (!_rtCsLastAB || !_currentFileUrl) return;
+        var a = _rtCsLastAB.a, b = _rtCsLastAB.b, p = _rtPlan, meta = _rtCaseMeta || {};
+        _ga('rt_cross_section_multi', {});
+        TDRView.runMultiSection({
+            prefix: 'rt-', keyFor: _rtMcsKeyFor,
+            fetch: function (key) {
+                var url = API_BASE + RT_PREFIX + '/cross_section?file_url=' + encodeURIComponent(_currentFileUrl) +
+                    '&variable=' + key + '&x0=' + a.x + '&y0=' + a.y + '&x1=' + b.x + '&y1=' + b.y + '&n_points=150';
+                return fetch(url).then(function (r) { if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); });
+            },
+            endpoints: { x0: a.x, y0: a.y, x1: b.x, y1: b.y },
+            locator: p ? { z: p.z, x: p.x, y: p.y, colorscale: p.colorscale, zmin: p.vmin, zmax: p.vmax } : null,
+            title: (meta.storm_name || 'Real-Time TDR') + (meta.datetime ? ' | ' + meta.datetime : '') + ' \u2014 TDR cross-section (' +
+                   Math.round(Math.hypot(b.x - a.x, b.y - a.y)) + ' km)',
+            plot: function (id, t, l, c) { Plotly.newPlot(id, t, l, c); }
+        });
+    };
+
     function rtFetchCrossSection(a, b) {
         _ga('rt_cross_section', {});
         var variable = document.getElementById('rt-var').value;
@@ -4410,6 +4434,8 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             .then(function (json) {
                 csResult.innerHTML = '<div class="explorer-status" style="color:#10b981;">✓ Cross-section ready</div>';
                 rtRenderCrossSection(json);
+                _rtCsLastAB = { a: a, b: b };
+                csResult.insertAdjacentHTML('beforeend', TDRView.multiSectionControlsHTML('rt-', _rtMcsKeyFor, 'rtRunMultiCS'));
             })
             .catch(function (err) { csResult.innerHTML = '<div class="explorer-status error">⚠️ ' + err.message + '</div>'; });
     }
