@@ -232,6 +232,98 @@
         return overlayContours({ overlay: Object.assign({}, ov, { data: ovData }) }, x, y, false, interval);
     }
 
+    // ── Plan view (storm-relative x/y km) ────────────────────────────────
+    function hasAnyData(z) {
+        if (!z) return false;
+        for (var i = 0; i < z.length; i++) {
+            var r = z[i]; if (!r) continue;
+            for (var j = 0; j < r.length; j++) { var v = r[j]; if (v !== null && v !== undefined && !isNaN(v)) return true; }
+        }
+        return false;
+    }
+    // o = { z, x, y, varInfo, colorscale, zmin, zmax, title, hasOverlay,
+    //       rmw: { r, cx, cy } (dashed circle, km), barbs, overlayTraces, windMarker }
+    // Returns { heatmap, overlayTraces, maxTraces, barbShapes, layout (panel, with
+    // title), baseLayout (no title — the fullscreen view adds its own), config }.
+    function planFigure(o) {
+        var vi = o.varInfo;
+        var heatmap = { z: o.z, x: o.x, y: o.y, type: 'heatmap', colorscale: o.colorscale, zmin: o.zmin, zmax: o.zmax,
+            colorbar: { title: { text: vi.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, thickness: 12, len: 0.85 },
+            hovertemplate: '<b>' + vi.display_name + '</b>: %{z:.2f} ' + vi.units + '<br>X: %{x:.0f} km<br>Y: %{y:.0f} km<extra></extra>',
+            hoverongaps: false };
+        var shapes = [];
+        if (o.rmw && o.rmw.r && !isNaN(o.rmw.r)) {
+            var cx = o.rmw.cx || 0, cy = o.rmw.cy || 0, r = o.rmw.r;
+            shapes.push({ type: 'circle', xref: 'x', yref: 'y', x0: cx - r, y0: cy - r, x1: cx + r, y1: cy + r, line: { color: 'white', width: 1.5, dash: 'dash' } });
+        }
+        var barbShapes = o.barbs ? windBarbShapes(o.barbs, { xMin: o.x[0], xMax: o.x[o.x.length - 1], yMin: o.y[0], yMax: o.y[o.y.length - 1] }) : [];
+        var ax = function (t, extra) { return Object.assign({ title: { text: t, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false, range: [-250, 250] }, extra || {}); };
+        var baseLayout = { paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
+            xaxis: ax('Eastward distance (km)', { scaleanchor: 'y' }), yaxis: ax('Northward distance (km)'),
+            shapes: shapes.concat(barbShapes), annotations: [],
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } }, showlegend: false };
+        var maxTraces = [], mi = findDataMax(o.z, o.x, o.y);
+        if (mi) {
+            baseLayout.annotations.push(maxAnnotation(mi, vi.units, 'X', 'Y', 9));
+            if (o.windMarker) maxTraces.push(maxMarkerTrace(mi, vi.units));
+        }
+        var layout = Object.assign({}, baseLayout, {
+            title: { text: o.title, font: { color: '#0f1623', size: 11 }, y: 0.965, x: 0.5, xanchor: 'center', yanchor: 'top' },
+            margin: { l: 52, r: 16, t: o.hasOverlay ? 90 : 78, b: 44 },
+            shapes: baseLayout.shapes.slice(), annotations: baseLayout.annotations.slice()
+        });
+        return { heatmap: heatmap, overlayTraces: o.overlayTraces || [], maxTraces: maxTraces, barbShapes: barbShapes,
+                 layout: layout, baseLayout: baseLayout,
+                 config: { responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d', 'select2d', 'toggleSpikelines'], displaylogo: false } };
+    }
+    /** Two-line plan-view title. frameTag: e.g. ' · storm-relative'. */
+    function planTitle(stormLine, varInfo, levelKm, json, frameTag) {
+        var lvl = varInfo.key === 'sear_10m' ? '10 m' : (levelKm != null ? levelKm.toFixed(1) + ' km' : '');
+        return stormLine + '<br>' + varInfo.display_name + ' @ ' + lvl + (frameTag || '') + sectionTitleOverlay(json);
+    }
+    // Strip above the panes: shear/motion compass + 'Cat 3 100 kt · RMW · Tilt'.
+    // o = { vmax, rmw, tilt, sddc (downshear), shdc, motionDir, motionSpd, sddcDisplay }
+    function metaStripHTML(o) {
+        var compass = shearCompassHTML(o.sddc, o.shdc, o.motionDir, o.motionSpd, o.sddcDisplay);
+        var parts = [];
+        if (o.vmax) parts.push('<span style="color:' + intensityColor(o.vmax) + ';">' + intensityCategory(o.vmax) + '</span> ' + o.vmax + ' kt');
+        if (o.rmw != null) parts.push('RMW ' + o.rmw + ' km');
+        if (o.tilt != null) parts.push('Tilt ' + o.tilt + ' km');
+        var text = parts.length ? '<span class="meta-text">' + parts.join('  &middot;  ') + '</span>' : '';
+        return (compass || text) ? '<div class="dual-panel-strip">' + compass + text + '</div>' : '';
+    }
+    /** Plan view (left) + azimuthal-mean placeholder (right). ids: prefix ''
+     *  (explorer) or 'rt-'; onExpand/onToggle/onSave are global function names. */
+    function dualPanelHTML(p, o) {
+        var btn = 'position:absolute;top:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;width:28px;height:28px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;';
+        var hov = ' onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'"';
+        return '<div class="dual-panel-wrap" id="' + p + 'dual-panel-wrap">' +
+            '<div class="dual-pane" id="' + p + 'dual-pane-left">' +
+                '<div class="dual-pane-label">Plan View</div>' +
+                '<div class="dual-pane-inner" style="position:relative;">' +
+                    '<div id="' + p + 'plotly-chart" style="width:100%;height:100%;min-height:360px;"></div>' +
+                    '<button onclick="' + o.onExpand + '()" title="Expand to fullscreen" style="' + btn + 'left:6px;font-size:16px;"' + hov + '>⛶</button>' +
+                    (o.onSave ? '<button onclick="' + o.onSave + '()" title="Download this plan view as a PNG (branded)" style="' + btn + 'right:6px;font-size:15px;"' + hov + '><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>' : '') +
+                '</div>' +
+            '</div>' +
+            '<div class="dual-pane-divider" title="Toggle azimuthal mean panel" onclick="' + o.onToggle + '()"></div>' +
+            '<div class="dual-pane" id="' + p + 'dual-pane-right">' +
+                '<div class="dual-pane-label">Azimuthal Mean</div>' +
+                '<div class="dual-pane-inner" id="' + p + 'dual-az-container">' +
+                    '<div class="az-pane-placeholder" id="' + p + 'dual-az-placeholder">Generating azimuthal mean…</div>' +
+                '</div>' +
+            '</div>' +
+        '</div>' +
+        '<div id="' + p + 'plan-hint" style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover for values · scroll to zoom · drag to pan · ⛶ expand</div>';
+    }
+    function noDataHTML(stormName, varName, levelKm) {
+        return '<div class="explorer-status info" style="padding:18px 16px;text-align:center;line-height:1.5;">' +
+            '<div style="font-size:1.05rem;font-weight:600;color:var(--text-strong, #0f1623);margin-bottom:6px;">No radar data available</div>' +
+            '<div style="font-size:0.85rem;color:var(--slate);">' + (stormName || 'this case') + ' has no valid samples for <strong>' +
+            (varName || 'the selected variable') + '</strong>' + (levelKm != null ? ' at ' + levelKm.toFixed(1) + ' km' : '') + '.<br>' +
+            'Try a different height level, variable, or case.</div></div>';
+    }
+
     // ── Radius/distance × height section figure ──────────────────────────
     // Shared by the cross-section and azimuthal-mean panels on both pages.
     // o = { z, x, y, varInfo, colorscale, zmin, zmax, title, xTitle,
@@ -854,6 +946,8 @@
         maxMarkerTrace: maxMarkerTrace, maxAnnotation: maxAnnotation, tcCenterMarkerTrace: tcCenterMarkerTrace,
         overlayContours: overlayContours, contourTraces: contourTraces, hybridXAxis: hybridXAxis,
         sectionFigure: sectionFigure, sectionTitleOverlay: sectionTitleOverlay,
+        hasAnyData: hasAnyData, planFigure: planFigure, planTitle: planTitle, metaStripHTML: metaStripHTML,
+        dualPanelHTML: dualPanelHTML, noDataHTML: noDataHTML,
         shearInset: shearInset, shearInsetCS: shearInsetCS, themeGrid: themeGrid, cfadFigure: cfadFigure,
         anomalyFigure: anomalyFigure, FISCHER_2025: FISCHER_2025, quadrantFigure: quadrantFigure,
         startRubberBand: startRubberBand, stopRubberBand: stopRubberBand,

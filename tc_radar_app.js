@@ -4603,60 +4603,17 @@ function buildTCCenterMarkerTrace(lat, lon, extra) { return TDRView.tcCenterMark
 function renderPlotFromJSON(json, resultDiv) {
     // Hide thumbnail (unless pinned by the Quick-look pill), show plot in its place
     _thumbHide();
-
-    // Build dual-panel HTML: plan view (left) + azimuthal mean placeholder (right)
-    resultDiv.innerHTML =
-        '<div class="dual-panel-wrap" id="dual-panel-wrap">' +
-            '<div class="dual-pane" id="dual-pane-left">' +
-                '<div class="dual-pane-label">Plan View</div>' +
-                '<div class="dual-pane-inner" style="position:relative;">' +
-                    '<div id="plotly-chart" style="width:100%;height:100%;min-height:360px;"></div>' +
-                    '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;left:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:28px;height:28px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;" onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'">\u26F6</button>' +
-                '</div>' +
-            '</div>' +
-            '<div class="dual-pane-divider" title="Toggle azimuthal mean panel" onclick="_toggleDualPane()"></div>' +
-            '<div class="dual-pane" id="dual-pane-right">' +
-                '<div class="dual-pane-label">Azimuthal Mean</div>' +
-                '<div class="dual-pane-inner" id="dual-az-container">' +
-                    '<div class="az-pane-placeholder" id="dual-az-placeholder">Generating azimuthal mean\u2026</div>' +
-                '</div>' +
-            '</div>' +
-        '</div>' +
-        '<div style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover for values \u00b7 scroll to zoom \u00b7 drag to pan \u00b7 \u26F6 expand</div>';
-
-    // Scroll panel to top so plot is visible
+    var zData = json.data, x = json.x, y = json.y, varInfo = json.variable, meta = _enrichCaseMeta(json.case_meta);
+    // A grid with no valid samples would draw a blank plot; say so instead.
+    if (!TDRView.hasAnyData(zData)) {
+        resultDiv.innerHTML = TDRView.noDataHTML(meta && meta.storm_name, varInfo && varInfo.display_name, json.actual_level_km);
+        return;
+    }
+    // Plan view (left) + azimuthal-mean placeholder (right) — shared with the real-time tab
+    resultDiv.innerHTML = TDRView.dualPanelHTML('', { onExpand: 'openPlotModal', onToggle: '_toggleDualPane' });
     var panelInner = document.getElementById('side-panel-inner');
     if (panelInner) panelInner.scrollTop = 0;
 
-    var zData = json.data, x = json.x, y = json.y, varInfo = json.variable, meta = _enrichCaseMeta(json.case_meta);
-
-    // Detect cases where the radar grid is entirely empty (no valid samples).
-    // These appear as blank plots in the dual panel; warn the user instead.
-    var _hasAnyData = false;
-    if (zData && zData.length) {
-        for (var _zi = 0; _zi < zData.length && !_hasAnyData; _zi++) {
-            var _row = zData[_zi];
-            if (!_row) continue;
-            for (var _zj = 0; _zj < _row.length; _zj++) {
-                var _v = _row[_zj];
-                if (_v !== null && _v !== undefined && !isNaN(_v)) { _hasAnyData = true; break; }
-            }
-        }
-    }
-    if (!_hasAnyData) {
-        var _stormName = (meta && meta.storm_name) || 'this case';
-        var _vname = (varInfo && varInfo.display_name) || 'the selected variable';
-        var _level = (json.actual_level_km != null) ? (' at ' + json.actual_level_km.toFixed(1) + ' km') : '';
-        resultDiv.innerHTML =
-            '<div class="explorer-status info" style="padding:18px 16px;text-align:center;line-height:1.5;">' +
-                '<div style="font-size:1.05rem;font-weight:600;color:var(--text-strong, #0f1623);margin-bottom:6px;">No radar data available</div>' +
-                '<div style="font-size:0.85rem;color:var(--slate);">' +
-                    _stormName + ' has no valid samples for <strong>' + _vname + '</strong>' + _level + '.<br>' +
-                    'Try a different height level, variable, or case.' +
-                '</div>' +
-            '</div>';
-        return;
-    }
     _currentSddc = (meta.sddc !== undefined && meta.sddc !== null && meta.sddc !== 9999) ? meta.sddc : null;
     _currentShdc = (meta.shdc !== undefined && meta.shdc !== null && meta.shdc !== 9999) ? meta.shdc : null;
     _currentMotionDir = (meta.motion_dir !== undefined && meta.motion_dir !== null && meta.motion_dir !== 9999) ? meta.motion_dir : null;
@@ -4665,13 +4622,10 @@ function renderPlotFromJSON(json, resultDiv) {
     var vminInput = document.getElementById('ep-vmin'), vmaxInput = document.getElementById('ep-vmax');
     if (vminInput) vminInput.placeholder = varInfo.vmin; if (vmaxInput) vmaxInput.placeholder = varInfo.vmax;
 
-    var cmapSel = document.getElementById('ep-cmap');
-    var activeColorscale = varInfo.colorscale;
-    if (cmapSel && cmapSel.value) { try { activeColorscale = JSON.parse(cmapSel.value); } catch(e) { activeColorscale = cmapSel.value; } }
+    var activeColorscale = _explorerColorscale(varInfo);
     var activeVmin = _getActiveVmin(), activeVmax = _getActiveVmax();
-    // Capture the plan-view field so the GL "Radar→Map" prototype can drape this
-    // exact field on the IR map (storm-relative km → lat/lon). Refresh the overlay
-    // if it's already showing (variable/level/cmap change).
+    // Capture the plan-view field so the map drape can show this exact field
+    // (storm-relative km → lat/lon); refresh it if already showing.
     _lastPlanRender = {
         z: zData, x: x, y: y, vmin: (activeVmin != null ? activeVmin : varInfo.vmin),
         vmax: (activeVmax != null ? activeVmax : varInfo.vmax), colorscale: activeColorscale,
@@ -4681,70 +4635,26 @@ function renderPlotFromJSON(json, resultDiv) {
         center_lat: (currentCaseData && currentCaseData.latitude), center_lon: (currentCaseData && currentCaseData.longitude)
     };
     if (_focusMode && !_twoPanelDisabled) {
-        // Two-panel default (focus mode, either map engine): defer so the Plotly plan chart renders at full size
-        // first (clean toggle-back), then drape on the map + hide the plan pane.
-        // Deferred + idempotent so it also re-hides the pane on variable/level
-        // re-renders (which rebuild the dual-panel HTML).
+        // Two-panel default (focus mode): defer so the Plotly plan chart renders at full size
+        // first (clean toggle-back), then drape on the map + hide the plan pane. Idempotent,
+        // so it also re-hides the pane on variable/level re-renders.
         setTimeout(_maybeAutoTwoPanel, 60);
     } else if (_radarMapOn) {
         _radarMapDraw();
     }
 
-    var vmaxStr = meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : '';
-    var overlayLabel = json.overlay ? '<br><span style="font-size:0.85em;color:#9ca3af;">Contours: ' + json.overlay.display_name + ' (' + json.overlay.units + ')</span>' : '';
-    var title = meta.storm_name + ' | ' + meta.datetime + vmaxStr + '<br>' + varInfo.display_name + ' @ ' + (varInfo.key === 'sear_10m' ? '10 m' : json.actual_level_km.toFixed(1) + ' km') + overlayLabel;
-
-    var heatmap = { z: zData, x: x, y: y, type: 'heatmap', colorscale: activeColorscale, zmin: activeVmin, zmax: activeVmax, colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, thickness: 12, len: 0.85 }, hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>X: %{x:.0f} km<br>Y: %{y:.0f} km<extra></extra>', hoverongaps: false };
-    var shapes = [];
-    if (meta.rmw_km && !isNaN(meta.rmw_km)) shapes.push({ type: 'circle', xref: 'x', yref: 'y', x0: -meta.rmw_km, y0: -meta.rmw_km, x1: meta.rmw_km, y1: meta.rmw_km, line: { color: 'white', width: 1.5, dash: 'dash' } });
-
-    var plotBg = '#ffffff';
-    var baseLayout = { paper_bgcolor: plotBg, plot_bgcolor: plotBg, xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#5b6573' } }, tickfont: { color: '#5b6573' }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false, scaleanchor: 'y', range: [-250, 250] }, yaxis: { title: { text: 'Northward distance (km)', font: { color: '#5b6573' } }, tickfont: { color: '#5b6573' }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false, range: [-250, 250] }, shapes: shapes, hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } }, showlegend: false };
-    var config = { responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d','select2d','toggleSpikelines'], displaylogo: false };
-    var smallLayout = Object.assign({}, baseLayout, { title: { text: title, font: { color: '#0f1623', size: 11 }, y: 0.965, x: 0.5, xanchor: 'center', yanchor: 'top' }, margin: { l: 52, r: 16, t: json.overlay ? 90 : 78, b: 44 }, xaxis: Object.assign({}, baseLayout.xaxis, { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 } }), yaxis: Object.assign({}, baseLayout.yaxis, { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 } }) });
-
-    var overlayTraces = buildOverlayContours(json, x, y);
-
-    // Max value marker + annotation
-    var maxInfo = findDataMax(zData, x, y);
-    var maxTraces = [];
-    if (maxInfo) {
-        var maxAnnot = buildMaxAnnotation(maxInfo, varInfo.units, 'X', 'Y', 9);
-        if (maxAnnot) {
-            smallLayout.annotations = (smallLayout.annotations || []).concat([maxAnnot]);
-            baseLayout.annotations = (baseLayout.annotations || []).concat([maxAnnot]);
-        }
-        if (isWindVariable((document.getElementById('ep-var') || {}).value || '')) {
-            var maxMarker = buildMaxMarkerTrace(maxInfo, varInfo.units);
-            if (maxMarker) maxTraces.push(maxMarker);
-        }
-    }
-
-    // Metadata strip with compass widget (above dual panel)
-    var _metaStripHTML = '';
-    {
-        var compassHTML = buildShearCompassHTML(_currentSddc, _currentShdc, _currentMotionDir, _currentMotionSpd);
-        var badgeParts = [];
-        if (meta.vmax_kt) badgeParts.push('<span style="color:' + getIntensityColor(meta.vmax_kt) + ';">' + getIntensityCategory(meta.vmax_kt) + '</span> ' + meta.vmax_kt + ' kt');
-        if (meta.rmw_km) badgeParts.push('RMW ' + meta.rmw_km + ' km');
-        if (meta.tilt_magnitude_km != null) badgeParts.push('Tilt ' + meta.tilt_magnitude_km + ' km');
-        var metaText = badgeParts.length ? '<span class="meta-text">' + badgeParts.join('  &middot;  ') + '</span>' : '';
-        if (compassHTML || metaText) {
-            _metaStripHTML = '<div class="dual-panel-strip">' + compassHTML + metaText + '</div>';
-        }
-    }
-
-    // Shear + motion vectors now rendered as HTML compass in the metadata strip (not in Plotly)
-
-    // Wind barbs overlay
-    var barbShapes = [];
-    if (json.wind_barbs) {
-        var xArr = x, yArr = y;
-        var axR = { xMin: xArr[0], xMax: xArr[xArr.length - 1], yMin: yArr[0], yMax: yArr[yArr.length - 1] };
-        barbShapes = _buildPlanViewWindBarbs(json.wind_barbs, axR);
-        smallLayout.shapes = (smallLayout.shapes || []).concat(barbShapes);
-        baseLayout.shapes = (baseLayout.shapes || []).concat(barbShapes);
-    }
+    var title = TDRView.planTitle(meta.storm_name + ' | ' + meta.datetime + (meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : ''),
+                                  varInfo, json.actual_level_km, json);
+    var fig = TDRView.planFigure({
+        z: zData, x: x, y: y, varInfo: varInfo, colorscale: activeColorscale, zmin: activeVmin, zmax: activeVmax,
+        title: title, hasOverlay: !!json.overlay, rmw: { r: meta.rmw_km }, barbs: json.wind_barbs,
+        overlayTraces: buildOverlayContours(json, x, y),
+        windMarker: isWindVariable((document.getElementById('ep-var') || {}).value || '')
+    });
+    var heatmap = fig.heatmap, smallLayout = fig.layout, baseLayout = fig.baseLayout, config = fig.config;
+    var overlayTraces = fig.overlayTraces, maxTraces = fig.maxTraces, barbShapes = fig.barbShapes;
+    var _metaStripHTML = TDRView.metaStripHTML({ vmax: meta.vmax_kt, rmw: meta.rmw_km || null, tilt: meta.tilt_magnitude_km,
+        sddc: _currentSddc, shdc: _currentShdc, motionDir: _currentMotionDir, motionSpd: _currentMotionSpd });
 
     // Tilt profile overlay
     var tiltTraces = [];
@@ -4762,9 +4672,7 @@ function renderPlotFromJSON(json, resultDiv) {
 
     // Insert metadata strip above the dual panel wrap
     var dualWrap = document.getElementById('dual-panel-wrap');
-    if (dualWrap && _metaStripHTML) {
-        dualWrap.insertAdjacentHTML('beforebegin', _metaStripHTML);
-    }
+    if (dualWrap && _metaStripHTML) dualWrap.insertAdjacentHTML('beforebegin', _metaStripHTML);
 
     // TC center marker (cross at storm-relative origin with lat/lon hover)
     var _ccLat = (currentCaseData && currentCaseData.latitude != null) ? currentCaseData.latitude : (meta && meta.latitude);

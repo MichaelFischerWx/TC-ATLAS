@@ -3874,148 +3874,37 @@
 
     // ── Render plan-view from JSON ───────────────────────────────
     function rtRenderPlot(json, resultDiv) {
-        // Build dual-panel HTML: plan view (left) + azimuthal mean placeholder (right)
-        resultDiv.innerHTML =
-            '<div class="dual-panel-wrap" id="rt-dual-panel-wrap">' +
-                '<div class="dual-pane" id="rt-dual-pane-left">' +
-                    '<div class="dual-pane-label">Plan View</div>' +
-                    '<div class="dual-pane-inner" style="position:relative;">' +
-                        '<div id="rt-plotly-chart" style="width:100%;height:100%;min-height:360px;"></div>' +
-                        '<button onclick="rtOpenFullscreen()" title="Expand to fullscreen" style="position:absolute;top:6px;left:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:28px;height:28px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;" onmouseover="this.style.background=\'rgba(255,255,255,0.2)\'" onmouseout="this.style.background=\'rgba(255,255,255,0.08)\'">⛶</button>' +
-                        '<button onclick="rtSaveTDRView()" title="Download this plan view as a PNG (branded)" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:15px;width:28px;height:28px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;" onmouseover="this.style.background=\'rgba(255,255,255,0.2)\'" onmouseout="this.style.background=\'rgba(255,255,255,0.08)\'"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>' +
-                    '</div>' +
-                '</div>' +
-                '<div class="dual-pane-divider" title="Toggle azimuthal mean panel" onclick="_rtToggleDualPane()"></div>' +
-                '<div class="dual-pane" id="rt-dual-pane-right">' +
-                    '<div class="dual-pane-label">Azimuthal Mean</div>' +
-                    '<div class="dual-pane-inner" id="rt-dual-az-container">' +
-                        '<div class="az-pane-placeholder" id="rt-dual-az-placeholder">Generating azimuthal mean\u2026</div>' +
-                    '</div>' +
-                '</div>' +
-            '</div>' +
-            '<div id="rt-plan-hint" style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover for values \u00b7 scroll to zoom \u00b7 drag to pan \u00b7 \u26F6 expand</div>';
-
         var zData = json.data, x = json.x, y = json.y, varInfo = json.variable, meta = json.case_meta || {};
+        if (!TDRView.hasAnyData(zData)) {
+            resultDiv.innerHTML = TDRView.noDataHTML(meta.storm_name, varInfo && varInfo.display_name, json.actual_level_km);
+            return;
+        }
+        // Plan view (left) + azimuthal-mean placeholder (right) — shared with the explorer
+        resultDiv.innerHTML = TDRView.dualPanelHTML('rt-', { onExpand: 'rtOpenFullscreen', onToggle: '_rtToggleDualPane', onSave: 'rtSaveTDRView' });
         _rtDefaultColorscale = varInfo.colorscale;
         _rtDefaultVmin = varInfo.vmin;
         _rtDefaultVmax = varInfo.vmax;
 
-        // Determine active colorscale: user override > variable-specific default > server default
-        var cmapSel = document.getElementById('rt-cmap');
-        var activeColorscale = varInfo.colorscale;
+        // Colorscale: user override > variable-specific default > server default
         var varDefault = _rtDefaultCmapForVariable(varInfo.key || (document.getElementById('rt-var') || {}).value || '');
-        if (cmapSel && cmapSel.value) { try { activeColorscale = JSON.parse(cmapSel.value); } catch (e) { activeColorscale = cmapSel.value; } }
-        else if (varDefault) { activeColorscale = varDefault; }
-
+        var activeColorscale = _rtColorscale(varInfo);
         var activeVmin = _rtGetVmin(), activeVmax = _rtGetVmax();
-        var frameTag = json.storm_relative ? ' <span style="color:#2563eb;">· storm-relative</span>' : '';
-        var title = (meta.storm_name || 'Real-Time TDR') + ' | ' + (meta.datetime || '') +
-            '<br>' + varInfo.display_name + ' @ ' + json.actual_level_km.toFixed(1) + ' km' + frameTag;
-        if (json.overlay) title += '<br><span style="font-size:0.85em;color:#9ca3af;">Contours: ' + json.overlay.display_name + ' (' + json.overlay.units + ')</span>';
-
-        var heatmap = {
-            z: zData, x: x, y: y, type: 'heatmap',
-            colorscale: activeColorscale,
-            zmin: activeVmin, zmax: activeVmax,
-            colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, thickness: 12, len: 0.85 },
-            hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>X: %{x:.0f} km<br>Y: %{y:.0f} km<extra></extra>',
-            hoverongaps: false
-        };
-
-        var plotBg = '#ffffff';
-        var baseLayout = {
-            paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-            xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false, scaleanchor: 'y', range: [-250, 250] },
-            yaxis: { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(15,22,35,0.22)', zeroline: false, range: [-250, 250] },
-            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } },
-            showlegend: false
-        };
-        // RMW dashed circle on plan view, centered at WCM center (not grid origin)
-        var shapes = [];
-        if (json.wcm_rmw_km && !isNaN(json.wcm_rmw_km)) {
-            var wcmCx = json.wcm_center_x_km || 0;
-            var wcmCy = json.wcm_center_y_km || 0;
-            shapes.push({ type: 'circle', xref: 'x', yref: 'y',
-                x0: wcmCx - json.wcm_rmw_km, y0: wcmCy - json.wcm_rmw_km,
-                x1: wcmCx + json.wcm_rmw_km, y1: wcmCy + json.wcm_rmw_km,
-                line: { color: 'white', width: 1.5, dash: 'dash' } });
-        }
-        baseLayout.shapes = shapes;
-
-        var layout = Object.assign({}, baseLayout, {
-            title: { text: title, font: { color: '#0f1623', size: 14 }, y: 0.97, x: 0.5, xanchor: 'center', yanchor: 'top' },
-            margin: { l: 52, r: 16, t: json.overlay ? 58 : 46, b: 44 }
+        var frameTag = json.storm_relative ? ' <span style="color:#2563eb;">\u00b7 storm-relative</span>' : '';
+        var title = TDRView.planTitle((meta.storm_name || 'Real-Time TDR') + ' | ' + (meta.datetime || ''),
+                                      varInfo, json.actual_level_km, json, frameTag);
+        var fig = TDRView.planFigure({
+            z: zData, x: x, y: y, varInfo: varInfo, colorscale: activeColorscale, zmin: activeVmin, zmax: activeVmax,
+            title: title, hasOverlay: !!json.overlay,
+            // RMW circle at the WCM center, not the grid origin
+            rmw: { r: json.wcm_rmw_km, cx: json.wcm_center_x_km || 0, cy: json.wcm_center_y_km || 0 },
+            barbs: json.wind_barbs, overlayTraces: rtBuildOverlayContours(json, x, y, false),
+            windMarker: _rtWindMarker()
         });
-
-        var overlayTraces = rtBuildOverlayContours(json, x, y, false);
-        var config = { responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d', 'select2d', 'toggleSpikelines'], displaylogo: false };
-
-        // Max value marker + annotation (mirrors archive renderPlotFromJSON)
-        var maxInfo = rtFindDataMax(zData, x, y);
-        var maxTraces = [];
-        if (maxInfo) {
-            var maxAnnot = rtBuildMaxAnnotation(maxInfo, varInfo.units, 'X', 'Y', 9);
-            if (maxAnnot) {
-                layout.annotations = (layout.annotations || []).concat([maxAnnot]);
-                baseLayout.annotations = (baseLayout.annotations || []).concat([maxAnnot]);
-            }
-            var currentVar = (document.getElementById('rt-var') || {}).value || '';
-            if (_rtMaxMarkerEnabled && rtIsWindVariable(currentVar)) {
-                var maxMarker = rtBuildMaxMarkerTrace(maxInfo, varInfo.units);
-                if (maxMarker) maxTraces.push(maxMarker);
-            }
-        }
-
-        // Metadata strip with compass widget (above the dual panel)
-        var meta = json.case_meta || {};
-        var _sd = (_rtShipsData && _rtShipsData.ships_data) ? _rtShipsData.ships_data : {};
-        var _vmax = _sd.vmax_kt || meta.vmax_kt;
-        var badgeParts = [];
-        if (_vmax) badgeParts.push('<span style="color:' + (TDRView.intensityColor(_vmax)) + ';">' + (TDRView.intensityCategory(_vmax)) + '</span> ' + _vmax + ' kt');
-        if (json.wcm_rmw_km != null) badgeParts.push('RMW ' + json.wcm_rmw_km + ' km');
-        if (json.tilt_2_6_km != null) badgeParts.push('Tilt ' + json.tilt_2_6_km + ' km');
-        // Build compass from available shear/motion data
-        var _rtCompassHTML = '';
-        {
-            // SHIPS SDDC is the shear HEADING (downshear, where the vector points TO) --
-            // same convention as the archive's sddc (realtime_tdr_api.py /ships), so no flip.
-            // (A 180-degree flip here drew the compass arrow upshear until 2026-09-28.)
-            var _shSd = (_sd.sddc != null && _sd.sddc !== 9999) ? _sd.sddc : null;
-            var _shKt = _sd.shear_kt || null;
-            var _moDir = null, _moSpd = null;
-            // case_meta provides U/V storm motion (m/s); convert to met direction + kt
-            var _su = meta.storm_motion_east_ms, _sv = meta.storm_motion_north_ms;
-            if (_su != null && _sv != null && _su !== -999 && _sv !== -999) {
-                var _spdMs = Math.sqrt(_su * _su + _sv * _sv);
-                if (_spdMs > 0.1) {
-                    _moSpd = Math.round(_spdMs * 1.94384 * 10) / 10;
-                    var _mathAng = Math.atan2(_sv, _su) * 180 / Math.PI;
-                    _moDir = ((90 - _mathAng) % 360 + 360) % 360;
-                }
-            }
-            _rtCompassHTML = TDRView.shearCompassHTML(_shSd, _shKt, _moDir, _moSpd, _sd.sddc);
-        }
-        var metaText = badgeParts.length ? '<span class="meta-text">' + badgeParts.join('  &middot;  ') + '</span>' : '';
-        var _rtMetaStripHTML = '';
-        if (_rtCompassHTML || metaText) {
-            _rtMetaStripHTML = '<div class="dual-panel-strip">' + _rtCompassHTML + metaText + '</div>';
-        }
-
-        // Shear + motion vectors now rendered as HTML compass in the metadata strip (not in Plotly)
-
-        // Wind barb shapes (local _buildPlanViewWindBarbs, ported from archive)
-        if (json.wind_barbs) {
-            var axR = { xMin: x[0], xMax: x[x.length - 1], yMin: y[0], yMax: y[y.length - 1] };
-            var barbShapes = _buildPlanViewWindBarbs(json.wind_barbs, axR);
-            layout.shapes = (layout.shapes || []).concat(barbShapes);
-            baseLayout.shapes = (baseLayout.shapes || []).concat(barbShapes);
-        }
-
-        // Insert metadata strip above the dual panel
+        var heatmap = fig.heatmap, layout = fig.layout, baseLayout = fig.baseLayout, config = fig.config;
+        var overlayTraces = fig.overlayTraces, maxTraces = fig.maxTraces;
+        var _rtMetaStripHTML = _rtStripHTML(json);
         var rtDualWrap = document.getElementById('rt-dual-panel-wrap');
-        if (rtDualWrap && _rtMetaStripHTML) {
-            rtDualWrap.insertAdjacentHTML('beforebegin', _rtMetaStripHTML);
-        }
+        if (rtDualWrap && _rtMetaStripHTML) rtDualWrap.insertAdjacentHTML('beforebegin', _rtMetaStripHTML);
 
         // Coastline overlay (storm-relative km) — drawn above the heatmap/IR
         // underlay, below max markers. Included in the trace list so it exports.
@@ -4037,7 +3926,7 @@
         if (_ctrk) {
             _planTraces = coastTraces.concat(_ctrk.traces);
             _planLayout = Object.assign({}, layout, {
-                title: { text: _ctrk.title, font: { color: '#0f1623', size: 14 }, y: 0.97, x: 0.5, xanchor: 'center', yanchor: 'top' },
+                title: { text: _ctrk.title, font: { color: '#0f1623', size: 11 }, y: 0.965, x: 0.5, xanchor: 'center', yanchor: 'top' },
                 annotations: _ctrk.annotations,
                 shapes: []
             });
@@ -4294,56 +4183,40 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         // No longer adds shear inset to Plotly; compass strip handles display
     }
 
-    // ── Rebuild the HTML compass strip above the dual panel ───────
-    // Called after SHIPS loads so shear vector is incorporated.
-    function _rtUpdateCompassStrip() {
+    // ── Compass / intensity strip above the dual panel ────────────
+    // Shear from SHIPS (SDDC = downshear heading, same as the archive -- no
+    // flip); motion from SHIPS heading/speed, else the TDR file's U/V; Vmax
+    // from SHIPS, else case_meta; RMW / tilt from the plan-view response.
+    function _rtStripHTML(json) {
         var sd = (_rtShipsData && _rtShipsData.ships_data) ? _rtShipsData.ships_data : {};
-        // SHIPS SDDC is the shear HEADING (downshear) -- same as the archive; no flip.
-        var sddc = (sd.sddc != null && sd.sddc !== 9999) ? sd.sddc : null;
-        var shkt = sd.shear_kt || null;
-
-        // Motion: prefer SHIPS heading/speed, fall back to TDR U/V
+        var meta = (json && json.case_meta) || _rtCaseMeta || {};
         var moDir = null, moSpd = null;
         if (sd.stm_heading_deg != null && sd.stm_speed_kt != null && sd.stm_speed_kt > 0) {
-            moDir = sd.stm_heading_deg;
-            moSpd = sd.stm_speed_kt;
-        } else if (_rtCaseMeta) {
-            var su = _rtCaseMeta.storm_motion_east_ms, sv = _rtCaseMeta.storm_motion_north_ms;
+            moDir = sd.stm_heading_deg; moSpd = sd.stm_speed_kt;
+        } else {
+            var su = meta.storm_motion_east_ms, sv = meta.storm_motion_north_ms;
             if (su != null && sv != null && su !== -999 && sv !== -999) {
                 var spdMs = Math.sqrt(su * su + sv * sv);
                 if (spdMs > 0.1) {
                     moSpd = Math.round(spdMs * 1.94384 * 10) / 10;
-                    var mathAng = Math.atan2(sv, su) * 180 / Math.PI;
-                    moDir = ((90 - mathAng) % 360 + 360) % 360;
+                    moDir = ((90 - Math.atan2(sv, su) * 180 / Math.PI) % 360 + 360) % 360;
                 }
             }
         }
-
-        var compassHTML = TDRView.shearCompassHTML(sddc, shkt, moDir, moSpd, sd.sddc);
-
-        // Badge text (Vmax / RMW / Tilt)
-        var meta = _rtCaseMeta || {};
-        var _vmax = sd.vmax_kt || meta.vmax_kt;
-        var badgeParts = [];
-        if (_vmax) badgeParts.push('<span style="color:' + (TDRView.intensityColor(_vmax)) + ';">' + (TDRView.intensityCategory(_vmax)) + '</span> ' + _vmax + ' kt');
-        if (_rtLastPlotlyData && _rtLastPlotlyData.json) {
-            var j = _rtLastPlotlyData.json;
-            if (j.wcm_rmw_km != null) badgeParts.push('RMW ' + j.wcm_rmw_km + ' km');
-            if (j.tilt_2_6_km != null) badgeParts.push('Tilt ' + j.tilt_2_6_km + ' km');
-        }
-        var metaText = badgeParts.length ? '<span class="meta-text">' + badgeParts.join('  &middot;  ') + '</span>' : '';
-
-        if (!compassHTML && !metaText) return;
-        var newStrip = '<div class="dual-panel-strip">' + compassHTML + metaText + '</div>';
-
-        // Replace existing strip (if any), else insert before the dual panel wrap
-        var old = document.querySelector('.dual-panel-strip');
-        var rtDualWrap = document.getElementById('rt-dual-panel-wrap');
-        if (old) {
-            old.outerHTML = newStrip;
-        } else if (rtDualWrap) {
-            rtDualWrap.insertAdjacentHTML('beforebegin', newStrip);
-        }
+        var j = json || (_rtLastPlotlyData && _rtLastPlotlyData.json) || {};
+        return TDRView.metaStripHTML({
+            vmax: sd.vmax_kt || meta.vmax_kt, rmw: j.wcm_rmw_km, tilt: j.tilt_2_6_km,
+            sddc: (sd.sddc != null && sd.sddc !== 9999) ? sd.sddc : null, shdc: sd.shear_kt || null,
+            motionDir: moDir, motionSpd: moSpd, sddcDisplay: sd.sddc
+        });
+    }
+    // Called after SHIPS loads so the shear vector is incorporated.
+    function _rtUpdateCompassStrip() {
+        var html = _rtStripHTML(null);
+        if (!html) return;
+        var old = document.querySelector('.dual-panel-strip'), wrap = document.getElementById('rt-dual-panel-wrap');
+        if (old) old.outerHTML = html;
+        else if (wrap) wrap.insertAdjacentHTML('beforebegin', html);
     }
 
     // ── Overlay contours ─────────────────────────────────────────
