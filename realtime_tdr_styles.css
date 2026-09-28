@@ -1233,6 +1233,10 @@
 .recon-hdob-summary .recon-vdm-stat.is-sear {
     border-color: #ec4899;
 }
+.recon-hdob-summary .recon-vdm-stat.is-tdrsear {
+    border-style: dashed;
+    cursor: pointer;
+}
 
 
 /* ── Recon · Archive replay (2026-09-24) ─────────────────────────────── */

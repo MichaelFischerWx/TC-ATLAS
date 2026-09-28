@@ -1901,9 +1901,12 @@
         var kit = window._ReconKit, az = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360, r = Math.sqrt(dx * dx + dy * dy);
         hv.textContent = 'Cursor: ' + v + ' kt · ' + ((kit && kit.searWhere) ? kit.searWhere(az, r) : Math.round(r) + ' km from center');
     }
-    function _hdobRenderTdr(map, passInfo) {
+    /** Fetch the swath JSON (analysis list) once per SEAR payload generation.
+     *  Needed by the map layer AND the summary tile, so it runs even with the
+     *  TDR 10-m pill off. */
+    function _hdobTdrEnsureMeta() {
         var sp = _hdobData && _hdobData.sear, url = sp && sp.swath_url;
-        if (!url || !_hdobLayerVis.tdr) { _hdobTdrRemove(); return; }
+        if (!url) return;
         if (url !== _hdobTdrMetaUrl || (sp.generated && sp.generated !== _hdobTdrMetaGen)) {
             _hdobTdrMetaUrl = url; _hdobTdrMetaGen = sp.generated || null;
             fetch(url, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
@@ -1912,6 +1915,11 @@
                 if (_hdobData) _hdobRender();
             }).catch(function () {});
         }
+    }
+    function _hdobRenderTdr(map, passInfo) {
+        var sp = _hdobData && _hdobData.sear, url = sp && sp.swath_url;
+        if (!url || !_hdobLayerVis.tdr) { _hdobTdrRemove(); return; }
+        _hdobTdrEnsureMeta();
         var an = _hdobTdrAnalyses();
         if (!an.length) { _hdobTdrRemove(); return; }
         var pick = _hdobTdrPick(passInfo), key = _hdobTdrKey(map);
@@ -2302,8 +2310,31 @@
         });
         return head + 'Pass maxima (quadrant, radius from center) ' + parts.join(' · ') + ' (updated ' + String(sp.generated).slice(11, 16) + 'Z)' +
             (anyRange ? ' — ranges = the same observation re-scored with the RMW of each eyewall crossing of that pass; SEAR is most sensitive to r/RMW, so preliminary-center passes lead with the range and give the most likely value in parentheses' : '') +
-            (anyPrelim ? ' — * preliminary center from the calm-wind and pressure-plateau centroids of the eye crossing, no VDM yet' : '') +
+            (anyPrelim ? ' — * preliminary center from the calm-wind centroid of the eye crossing (pressure plateau or Willoughby–Chelmow when there are no calm obs), no VDM yet' : '') +
             (anyStale ? ' — \u2020 nearest center fix more than 30 min away, center extrapolated' : '');
+    }
+
+    /** Strongest TDR-SEAR analysis (swath JSON max_kt) centred within one of the
+     *  sorties on display (±45 min, like the SEAR passes; NOAA IWG1 tails first
+     *  since only the P-3s carry the TDR), and never after the replay clock. */
+    function _hdobTdrSummaryBest() {
+        var sp = _hdobData && _hdobData.sear;
+        if (!_hdobTdrMeta || !sp || _hdobTdrMetaUrl !== sp.swath_url) return null;
+        var shown = _hdobFilterAircraft(_hdobData.aircraft || [], 'chart').slice().sort(function (a, b) {
+            return (b.src === 'iwg1') - (a.src === 'iwg1');
+        });
+        var clock = _hdobArchive ? +_hdobArchive.cur : Infinity, PAD = 45 * 60000, best = null;
+        (_hdobTdrMeta.analyses || []).forEach(function (a) {
+            var t = Date.parse(a.t);
+            if (a.max_kt == null || isNaN(t) || t > clock) return;
+            var tail = null;
+            for (var i = 0; i < shown.length && !tail; i++) {
+                var s = Date.parse(_hdobX(shown[i].sortie_start || '')), e = Date.parse(_hdobX(shown[i].sortie_end || ''));
+                if (isNaN(s) || isNaN(e) || (t >= s - PAD && t <= e + PAD)) tail = shown[i].tail;
+            }
+            if (tail && (!best || a.max_kt > best.v)) best = { v: a.max_kt, t: a.t, tail: tail, a: a };
+        });
+        return best;
     }
 
     /** Mission-extremes strip for the displayed sortie: max flight-level wind,
@@ -2373,8 +2404,29 @@
                    tile('Max SFMR', best.sfmr, 'kt') +
                    tile('Max SEAR 10-m (exp)', searTile, 'kt', 'is-sear', searSub,
                         'SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Strongest crossing of the last 3 h; a single crossing carries about 7-10 kt of RMW uncertainty. Not an official product.');
+        // TDR-SEAR beside it (Michael, 2026-09-28): the analysis' own 500-m + 2-km winds instead of the
+        // flight-level wind, so it sees the low-level eyewall all the way around -- Polo 09-28 16:37Z read
+        // 99 kt in the NW (0.5-1 km ~100 kt ring under a tilted 2-3 km vortex) vs 79-88 kt flight-level SEAR.
+        _hdobTdrEnsureMeta();
+        var tdr = _hdobTdrSummaryBest();
+        if (tdr) {
+            var cov = tdr.a.coverage && tdr.a.coverage['r<60km'];
+            html += tile('Max TDR SEAR 10-m (exp)', tdr, 'kt', 'is-sear is-tdrsear',
+                (tdr.a.max_r_nm != null ? ' · ' + Math.round(tdr.a.max_r_nm) + ' n mi from center' : '') +
+                (cov != null && cov < 0.3 ? ' · thin coverage' : ''),
+                'TDR SEAR: experimental SEAR 10-m estimate from the P-3 tail-Doppler analysis (its 500-m and 2-km winds replace the flight-level wind). ' +
+                'It sees the low-level eyewall all around the storm, not only along the flight track, so it can differ from the flight-level SEAR, e.g. when the vortex is tilted. ' +
+                'Strongest analysis of the flight on display' + (cov != null ? ' (this one covers ' + Math.round(cov * 100) + '% of the area within 60 km)' : '') +
+                '. Click to show it on the map. Not an official product.');
+        }
         el.innerHTML = html;
         el.style.display = html ? '' : 'none';
+        var tdrEl = tdr && el.querySelector('.is-tdrsear');
+        if (tdrEl) tdrEl.onclick = function () {
+            _hdobTdrSel = tdr.a.file; _hdobLayerVis.tdr = true;
+            _ga('recon_hdob_tdr_tile', {});
+            _hdobRender();
+        };
     }
 
     function _hdobBuildSourceNote() {
