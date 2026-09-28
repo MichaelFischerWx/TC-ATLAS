@@ -3700,8 +3700,20 @@
         _tdrWireDom();
     }
 
+    // ── Feature hooks ──────────────────────────────────────────────
+    // Sondes / flight-level / NEXRAD attach their per-file reset, post-render
+    // and map-cleanup steps here instead of re-wrapping rtExploreFile,
+    // rtRenderPlot, rtOpen3DModal and _rtCleanupMap (which were reassigned up
+    // to three times each, 2026-09-28 cleanup).
+    var _rtHooks = { beforeExplore: [], afterRender: [], after3D: [], cleanupMap: [] };
+    function _rtOn(name, fn) { _rtHooks[name].push(fn); }
+    function _rtRunHooks(name, a, b) {
+        _rtHooks[name].forEach(function (fn) { try { fn(a, b); } catch (e) { console.warn('[rt hook ' + name + ']', e); } });
+    }
+
     // ── Go button: load the file and show viz panel ──────────────
     window.rtExploreFile = function () {
+        _rtRunHooks('beforeExplore');
         var fileUrl = document.getElementById('rt-file-select').value;
         if (!fileUrl) return;
         _ga('rt_explore_file', { file_url: fileUrl });
@@ -4010,6 +4022,7 @@
 
         // Click handler for cross-section
         document.getElementById('rt-plotly-chart').on('plotly_click', rtHandlePlotClick);
+        _rtRunHooks('afterRender', json, resultDiv);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -4291,9 +4304,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
     // ── Fullscreen modal (reuse the existing plotModal) ──────────
     window.rtOpenFullscreen = function () {
         if (!_rtLastPlotlyData) return;
-        var modal = document.getElementById('plotModal');
-        modal.classList.add('active');
-        document.body.style.overflow = 'hidden';
+        TDRView.openPlotModal();   // creates the dialog on this page (it had none)
 
         var d = _rtLastPlotlyData;
         var fullLayout = Object.assign({}, d.baseLayout, {
@@ -4532,6 +4543,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         }
         // Note: we don't restore saved because the modal references _last3DJson
         // while it's open. It'll be overwritten next time the archive mode uses it.
+        _rtRunHooks('after3D');
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -4808,6 +4820,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
     }
 
     function _rtCleanupMap() {
+        _rtRunHooks('cleanupMap');
         _rtRemoveIRFromMap();
         _rtIRMapVisible = true;
         _rtIRMapBoundsSet = false;
@@ -6921,16 +6934,10 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
     }
 
     // ── Hook: patch rtExploreFile to reset sonde state ───────────
-    var _origRtExploreFile = window.rtExploreFile;
-    window.rtExploreFile = function () {
-        _rtSondeCleanup();
-        _origRtExploreFile();
-    };
+    _rtOn('beforeExplore', _rtSondeCleanup);
 
     // ── Hook: patch rtRenderPlot to re-add sondes after re-render ──
-    var _origRtRenderPlot = rtRenderPlot;
-    rtRenderPlot = function (json, resultDiv) {
-        _origRtRenderPlot(json, resultDiv);
+    _rtOn('afterRender', function () {
         // Enable sonde + FL buttons after plot loads
         var sondeBtn = document.getElementById('rt-sonde-btn');
         if (sondeBtn) sondeBtn.disabled = false;
@@ -6945,7 +6952,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 if (_rtSondeMode === 'only') _rtSetTDRVisible(false);
             }, 100);
         }
-    };
+    });
 
     // ── Hook: patch height slider to update sonde markers ────────
     var _origLevelSlider = document.getElementById('rt-level');
@@ -6965,9 +6972,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
     var _rtSondeLevelTimer = null;
 
     // ── Hook: patch rtOpen3DModal to add sonde + tilt traces to 3D ──
-    var _origRtOpen3DModal = rtOpen3DModal;
-    rtOpen3DModal = function () {
-        _origRtOpen3DModal();
+    _rtOn('after3D', function () {
         _rt3DSondeTraceStart = -1; // reset for fresh 3D scene
         _rtTilt3DTraceStart = -1;  // reset tilt traces too
         var sondeBtn3D = document.getElementById('vol-sonde-toggle');
@@ -6981,7 +6986,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         // Add tilt hodograph to 3D if data available (from /volume?tilt_profile=true or plan-view fetch)
         var tilt = (_rtLast3DJson && _rtLast3DJson.tilt_profile) ? _rtLast3DJson.tilt_profile : _rtTiltData;
         setTimeout(function () { window._rtAddTiltTo3D(tilt); }, 600);
-    };
+    });
 
     // ── Listen for 3D re-renders (iso slider, caps toggle, etc.) ──
     // When render3DIsosurface() does Plotly.newPlot, all addTraces overlays
@@ -7771,23 +7776,16 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
     };
 
     // ── Patch rtExploreFile to clean up flight-level state ──────
-    var _origRtExploreFile2 = window.rtExploreFile;
-    window.rtExploreFile = function () {
-        _rtFLCleanup();
-        window.rtFLCloseTimeSeries();
-        _origRtExploreFile2();
-    };
+    _rtOn('beforeExplore', function () { _rtFLCleanup(); window.rtFLCloseTimeSeries(); });
 
     // ── Patch _rtCleanupMap to also remove FL layers ──────────
-    var _origCleanupMap2 = _rtCleanupMap;
-    _rtCleanupMap = function () {
+    _rtOn('cleanupMap', function () {
         _rtRemoveFLFromMap();
         if (_rtFLTSHighlight) {
             _rtMap.removeLayer(_rtFLTSHighlight);
             _rtFLTSHighlight = null;
         }
-        _origCleanupMap2();
-    };
+    });
 
     // ── SHIPS Environmental Data ──────────────────────────────────
     window.rtFetchSHIPS = function () {
@@ -9235,18 +9233,12 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
     }
 
     // ── Patch rtExploreFile to reset NEXRAD state ──────────────
-    var _origRtExploreFileNx = window.rtExploreFile;
-    window.rtExploreFile = function () {
-        _rtRemoveNexradOverlay();
-        _origRtExploreFileNx();
-    };
+    _rtOn('beforeExplore', _rtRemoveNexradOverlay);
 
     // ── Patch _rtCleanupMap to also remove NEXRAD layers ──────
-    var _origCleanupMapNx = _rtCleanupMap;
-    _rtCleanupMap = function () {
+    _rtOn('cleanupMap', function () {
         if (_rtNexradMapOverlay && _rtMap) { _rtMap.removeLayer(_rtNexradMapOverlay); _rtNexradMapOverlay = null; }
-        _origCleanupMapNx();
-    };
+    });
 
     // ═══════════════════════════════════════════════════════════════
     // ── MICROWAVE SATELLITE OVERLAY (TC-PRIMED) — REALTIME MODE ──

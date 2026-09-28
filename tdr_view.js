@@ -1153,6 +1153,42 @@
         pills.forEach(function (b) { row.appendChild(b); });
     }
 
+    // ── Fullscreen plot dialog (#plotModal) ──────────────────────────────
+    // explorer.html ships this markup; realtime_ir.html didn't, so its ⛶
+    // buttons did nothing. ensurePlotModal() creates it when absent (same ids +
+    // classes, styled by tc_radar_styles.css .plot-modal-*).
+    function ensurePlotModal() {
+        if (document.getElementById('plotModal')) return;
+        var d = document.createElement('div');
+        d.id = 'plotModal'; d.className = 'plot-modal-overlay';
+        d.innerHTML = '<div class="plot-modal-box" id="plotModalBox">' +
+            '<button class="plot-modal-close" title="Close (Esc)">&times;</button>' +
+            '<div id="plotly-fullscreen"></div>' +
+            '<div class="cs-full-divider" id="cs-full-divider" style="display:none;"></div><div id="cs-fullscreen" style="display:none;"></div>' +
+            '<div class="cs-full-divider" id="sq-full-divider" style="display:none;"></div><div id="sq-fullscreen" style="display:none;width:100%;"></div>' +
+            '<div class="cs-full-divider" id="az-full-divider" style="display:none;"></div><div id="az-fullscreen" style="display:none;"></div></div>';
+        d.addEventListener('click', function (e) { if (e.target === d || (e.target.closest && e.target.closest('.plot-modal-close'))) closePlotModal(); });
+        document.body.appendChild(d);
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closePlotModal(); });
+    }
+    function closePlotModal() {
+        var m = document.getElementById('plotModal'); if (!m) return;
+        m.classList.remove('active');
+        var box = document.getElementById('plotModalBox'); if (box) box.classList.remove('split');
+        document.body.style.overflow = '';
+        ['plotly-fullscreen', 'cs-fullscreen', 'az-fullscreen', 'sq-fullscreen'].forEach(function (id) {
+            var el = document.getElementById(id); if (!el) return;
+            if (window.Plotly) { try { Plotly.purge(el); } catch (e) {} }
+            if (id !== 'plotly-fullscreen') el.style.display = 'none';
+        });
+        ['cs-full-divider', 'az-full-divider', 'sq-full-divider'].forEach(function (id) { var el = document.getElementById(id); if (el) el.style.display = 'none'; });
+    }
+    function openPlotModal() {
+        ensurePlotModal();
+        document.getElementById('plotModal').classList.add('active');
+        document.body.style.overflow = 'hidden';
+    }
+
     // Styles for the shared controls (both pages), injected once.
     (function injectCSS() {
         if (document.getElementById('tdrv-css')) return;
@@ -1183,6 +1219,7 @@
         anomalyFigure: anomalyFigure, FISCHER_2025: FISCHER_2025, quadrantFigure: quadrantFigure,
         startRubberBand: startRubberBand, stopRubberBand: stopRubberBand,
         shearCompassHTML: shearCompassHTML, intensityColor: intensityColor, intensityCategory: intensityCategory,
-        createDrape: createDrape, createResultTabs: createResultTabs, syncMapLayerBar: syncMapLayerBar
+        createDrape: createDrape, createResultTabs: createResultTabs, syncMapLayerBar: syncMapLayerBar,
+        ensurePlotModal: ensurePlotModal, openPlotModal: openPlotModal, closePlotModal: closePlotModal
     };
 })();
