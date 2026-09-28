@@ -1051,7 +1051,14 @@ def startup():
             ds = get_dataset(data_type, era)
             print(f"Pre-warmed {data_type}/{era}")
             if sidecar_ok:
-                return  # caches already enriched from sidecar; skip live loops
+                # The sidecar covers SHIPS + max wind only; vortex metrics
+                # (merge, two-pass DB-mean centring) are deliberately left to
+                # the live path (see scripts/build_tc_radar_enrichment_sidecar.py).
+                # Returning before them left vortex_ready False and every VP
+                # scatter without favorability since 01f6dc98 (2026-06-04).
+                if data_type == "merge" and _climatology:
+                    _enrich_metadata_with_vortex_metrics(ds, era)
+                return  # skip the live SHIPS / max-wind loops
             _enrich_metadata_with_ships(ds, data_type, era)
             _enrich_metadata_with_max_wind(ds, data_type, era)
             _enrich_metadata_with_ships_extended(ds, data_type, era)
