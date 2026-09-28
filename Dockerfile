@@ -46,6 +46,8 @@ COPY recon_api.py .
 COPY tc_radar_metadata.json .
 COPY tc_radar_metadata_merge.json .
 COPY climatology_hybrid.npz .
+# Precomputed pass-1 vortex metrics (scripts/build_tc_radar_vortex_raw.py)
+COPY tc_radar_vortex_raw.json .
 COPY ibtracs_storms.json .
 # IBTrACS tracks ship as split chunks + manifest. The legacy combined
 # ibtracs_tracks.json is gitignored (the JSON is too large for git);

@@ -967,6 +967,35 @@ def _apply_enrichment_sidecar() -> bool:
     return True
 
 
+VORTEX_RAW_PATH = Path(os.environ.get("TC_RADAR_VORTEX_RAW", "./tc_radar_vortex_raw.json"))
+
+
+def _apply_vortex_raw() -> bool:
+    """Load precomputed pass-1 vortex metrics (scripts/build_tc_radar_vortex_raw.py)
+    and run pass 2 (database-mean centring). True when applied — the slow live
+    per-case pass is then skipped."""
+    global _vortex_eras_done
+    if not VORTEX_RAW_PATH.exists():
+        print(f"Vortex raw: {VORTEX_RAW_PATH} not found — live vortex pass will run")
+        return False
+    try:
+        cases = json.loads(VORTEX_RAW_PATH.read_text()).get("cases", {})
+    except Exception as e:
+        print(f"Vortex raw: parse failed ({e}) — live vortex pass will run")
+        return False
+    with _vortex_lock:
+        for ci_str, raw in cases.items():
+            ci = int(ci_str)
+            if ci in _merge_metadata_cache and raw.get("raw_h1_max") is not None and raw.get("raw_width_diff") is not None:
+                _vortex_raw[ci] = raw
+        if not _vortex_raw:
+            return False
+        _vortex_eras_done = 2
+        _finalize_vortex_metrics()
+    print(f"Vortex raw: {len(_vortex_raw)} cases from {VORTEX_RAW_PATH} (live pass skipped)")
+    return True
+
+
 @app.on_event("startup")
 def startup():
     # Load metadata
@@ -1041,6 +1070,7 @@ def startup():
     # False and we fall back to the original live enrichment (behaviour
     # identical to before the sidecar existed).
     sidecar_ok = _apply_enrichment_sidecar()
+    vortex_ok = _apply_vortex_raw()
 
     # Pre-warm datasets in background threads.
     # Also enrich metadata with SHIPS shear values once datasets are loaded —
@@ -1051,19 +1081,19 @@ def startup():
             ds = get_dataset(data_type, era)
             print(f"Pre-warmed {data_type}/{era}")
             if sidecar_ok:
-                # The sidecar covers SHIPS + max wind only; vortex metrics
-                # (merge, two-pass DB-mean centring) are deliberately left to
-                # the live path (see scripts/build_tc_radar_enrichment_sidecar.py).
-                # Returning before them left vortex_ready False and every VP
-                # scatter without favorability since 01f6dc98 (2026-06-04).
-                if data_type == "merge" and _climatology:
+                # The sidecar covers SHIPS + max wind only. Vortex metrics come
+                # from tc_radar_vortex_raw.json (pass 1 precomputed offline); only
+                # if that file is missing do we fall back to the slow live pass.
+                # (Returning before them entirely left vortex_ready False and
+                # every VP scatter empty from 01f6dc98, 2026-06-04, to 09-28.)
+                if data_type == "merge" and _climatology and not vortex_ok:
                     _enrich_metadata_with_vortex_metrics(ds, era)
                 return  # skip the live SHIPS / max-wind loops
             _enrich_metadata_with_ships(ds, data_type, era)
             _enrich_metadata_with_max_wind(ds, data_type, era)
             _enrich_metadata_with_ships_extended(ds, data_type, era)
             # Compute vortex metrics for merged cases (requires climatology)
-            if data_type == "merge" and _climatology:
+            if data_type == "merge" and _climatology and not vortex_ok:
                 _enrich_metadata_with_vortex_metrics(ds, era)
         except Exception as e:
             print(f"Pre-warm failed {data_type}/{era}: {e}")
