@@ -2808,9 +2808,19 @@
         }
     }
 
+    var _hdobChartWaiting = false;
     function _hdobRenderChart() {
         var el = document.getElementById('recon-hdob-chart');
-        if (!el || !window.Plotly || !_hdobData) return;
+        if (!el || !_hdobData) return;
+        // Plotly is injected async (realtime_ir.html); a deep-linked #recon-hdob can get its data
+        // first, and the chart then stayed blank until the next repaint (Michael, 2026-09-28).
+        if (!window.Plotly) {
+            if (!_hdobChartWaiting) {
+                _hdobChartWaiting = true;
+                window.addEventListener('plotly-ready', function () { _hdobChartWaiting = false; _hdobRenderChart(); }, { once: true });
+            }
+            return;
+        }
         // Chart shows one flight at a time (the selected one, or the freshest
         // when none is picked) so overlapping profile traces stay legible.
         var aircraft = _hdobFilterAircraft(_hdobData.aircraft || [], 'chart');
