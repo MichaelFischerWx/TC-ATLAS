@@ -1964,113 +1964,7 @@ function renderThetaProfile(profiles, divId) {
 // barbData = { u:[[]], v:[[]], x:[], y:[], units:'m/s', type:'storm_relative'|'earth_relative' }
 // axRanges = { xMin, xMax, yMin, yMax }
 // Returns array of Plotly shape objects (type:'line', xref:'x', yref:'y').
-function _buildPlanViewWindBarbs(barbData, axRanges) {
-    var shapes = [];
-    if (!barbData || !barbData.u || !barbData.v) return shapes;
-
-    var uGrid = barbData.u, vGrid = barbData.v;
-    var xCoords = barbData.x, yCoords = barbData.y;
-
-    var xSpan = axRanges.xMax - axRanges.xMin;
-    var ySpan = axRanges.yMax - axRanges.yMin;
-    var span = Math.max(xSpan, ySpan);
-    if (span <= 0) return shapes;
-
-    // Staff length in data units (km) — ~4% of axis span
-    var staffLen = span * 0.04;
-    var barbFrac = 0.38;    // feather length as fraction of staff
-    var gapFrac  = 0.12;    // gap between feathers
-    var flagWFrac = 0.38;   // flag width (50-kt pennant)
-    var flagHFrac = 0.18;   // flag height along staff
-
-    var lineColor = 'rgba(0,0,0,0.8)';
-    var lineWidth = 1.4;
-
-    function mkLine(x0, y0, x1, y1) {
-        return {
-            type: 'line', xref: 'x', yref: 'y',
-            x0: x0, y0: y0, x1: x1, y1: y1,
-            line: { color: lineColor, width: lineWidth }
-        };
-    }
-
-    for (var yi = 0; yi < uGrid.length; yi++) {
-        for (var xi = 0; xi < uGrid[yi].length; xi++) {
-            var uMs = uGrid[yi][xi], vMs = vGrid[yi][xi];
-            if (uMs === null || vMs === null) continue;
-
-            var spdKt = Math.sqrt(uMs * uMs + vMs * vMs) * 1.944;
-            if (spdKt < 2.5) continue;  // calm — skip
-
-            var xBase = xCoords[xi], yBase = yCoords[yi];
-
-            // Direction wind is coming FROM (meteorological convention)
-            var dirRad = Math.atan2(-uMs, -vMs);
-            var sinD = Math.sin(dirRad), cosD = Math.cos(dirRad);
-
-            // Staff: tip is in the "from" direction (away from base)
-            var xTip = xBase + staffLen * sinD;
-            var yTip = yBase + staffLen * cosD;
-
-            // Draw staff line
-            shapes.push(mkLine(xBase, yBase, xTip, yTip));
-
-            // Feather encoding
-            var remaining = Math.round(spdKt / 5) * 5;
-            var nFlags = Math.floor(remaining / 50); remaining -= nFlags * 50;
-            var nFull  = Math.floor(remaining / 10); remaining -= nFull * 10;
-            var nHalf  = Math.floor(remaining / 5);
-
-            // Perpendicular (left side of staff, looking from base to tip): rotate +90°
-            var perpX = cosD;
-            var perpY = -sinD;
-
-            var barbLen = staffLen * barbFrac;
-            var barbGap = staffLen * gapFrac;
-            var flagW   = staffLen * flagWFrac;
-            var flagH   = staffLen * flagHFrac;
-
-            var featherPos = 0;
-
-            // 50-kt flags (triangular pennants)
-            for (var fi = 0; fi < nFlags; fi++) {
-                var frac = featherPos / staffLen;
-                var fx  = xTip - (xTip - xBase) * frac;
-                var fy  = yTip - (yTip - yBase) * frac;
-                var frac2 = (featherPos + flagH) / staffLen;
-                var fx2 = xTip - (xTip - xBase) * frac2;
-                var fy2 = yTip - (yTip - yBase) * frac2;
-                var midFrac = (featherPos + flagH * 0.5) / staffLen;
-                var mx = xTip - (xTip - xBase) * midFrac;
-                var my = yTip - (yTip - yBase) * midFrac;
-                var outX = mx + flagW * perpX;
-                var outY = my + flagW * perpY;
-                shapes.push(mkLine(fx, fy, outX, outY));
-                shapes.push(mkLine(outX, outY, fx2, fy2));
-                featherPos += flagH + barbGap * 0.3;
-            }
-
-            // 10-kt full barbs
-            for (var fb = 0; fb < nFull; fb++) {
-                var frac = featherPos / staffLen;
-                var bx = xTip - (xTip - xBase) * frac;
-                var by = yTip - (yTip - yBase) * frac;
-                shapes.push(mkLine(bx, by, bx + barbLen * perpX, by + barbLen * perpY));
-                featherPos += barbGap;
-            }
-
-            // 5-kt half barbs
-            for (var hb = 0; hb < nHalf; hb++) {
-                var frac = featherPos / staffLen;
-                var hx = xTip - (xTip - xBase) * frac;
-                var hy = yTip - (yTip - yBase) * frac;
-                shapes.push(mkLine(hx, hy, hx + barbLen * 0.55 * perpX, hy + barbLen * 0.55 * perpY));
-                featherPos += barbGap;
-            }
-        }
-    }
-    return shapes;
-}
+function _buildPlanViewWindBarbs(barbData, axRanges) { return TDRView.windBarbShapes(barbData, axRanges); }
 
 // Set of variable keys eligible for wind barbs (wind speed variables)
 // Wind barbs are now available for ALL plan-view variables.
@@ -4193,39 +4087,11 @@ function _enrichCaseMeta(meta) {
     return meta;
 }
 
-function _startRubberBand(plotDiv, pxA, pyA) {
-    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.id = 'cs-rubber-band';
-    svg.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:5;';
-    var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    line.setAttribute('stroke', '#ef4444'); line.setAttribute('stroke-width', '2');
-    line.setAttribute('stroke-dasharray', '6,4');
-    line.setAttribute('x1', pxA); line.setAttribute('y1', pyA);
-    svg.appendChild(line);
-    var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    circle.setAttribute('r', '4'); circle.setAttribute('fill', 'rgba(239,68,68,0.5)');
-    circle.setAttribute('stroke', 'white'); circle.setAttribute('stroke-width', '1');
-    svg.appendChild(circle);
-    plotDiv.parentElement.style.position = 'relative';
-    plotDiv.parentElement.appendChild(svg);
-    _csMouseHandler = function(e) {
-        var rect = plotDiv.getBoundingClientRect();
-        line.setAttribute('x2', e.clientX - rect.left);
-        line.setAttribute('y2', e.clientY - rect.top);
-        circle.setAttribute('cx', e.clientX - rect.left);
-        circle.setAttribute('cy', e.clientY - rect.top);
-    };
-    plotDiv.addEventListener('mousemove', _csMouseHandler);
-}
+function _startRubberBand(plotDiv, pxA, pyA) { _csMouseHandler = TDRView.startRubberBand(plotDiv, pxA, pyA, 'cs-rubber-band'); }
 
 function _removeRubberBand() {
-    var svg = document.getElementById('cs-rubber-band');
-    if (svg) svg.remove();
-    if (_csMouseHandler) {
-        var plotDiv = document.getElementById('plotly-chart');
-        if (plotDiv) plotDiv.removeEventListener('mousemove', _csMouseHandler);
-        _csMouseHandler = null;
-    }
+    TDRView.stopRubberBand(document.getElementById('plotly-chart'), 'cs-rubber-band', _csMouseHandler);
+    _csMouseHandler = null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -4252,40 +4118,9 @@ var _radarMapHoverBound = false;
 // sets _twoPanelDisabled so it doesn't re-arm on the next variable/level change.
 var _twoPanelDisabled = false;
 
-var _NAMED_CS = {
-    Viridis: [[0,'rgb(68,1,84)'],[0.25,'rgb(59,82,139)'],[0.5,'rgb(33,145,140)'],[0.75,'rgb(94,201,98)'],[1,'rgb(253,231,37)']],
-    Jet: [[0,'rgb(0,0,131)'],[0.125,'rgb(0,60,170)'],[0.375,'rgb(5,255,255)'],[0.625,'rgb(255,255,0)'],[0.875,'rgb(250,0,0)'],[1,'rgb(128,0,0)']],
-    RdBu: [[0,'rgb(5,10,172)'],[0.35,'rgb(106,137,247)'],[0.5,'rgb(190,190,190)'],[0.6,'rgb(220,170,132)'],[0.7,'rgb(230,145,90)'],[1,'rgb(178,10,28)']],
-    Portland: [[0,'rgb(12,51,131)'],[0.25,'rgb(10,136,186)'],[0.5,'rgb(242,211,56)'],[0.75,'rgb(242,143,56)'],[1,'rgb(217,30,30)']],
-    Hot: [[0,'rgb(0,0,0)'],[0.3,'rgb(230,0,0)'],[0.6,'rgb(255,210,0)'],[1,'rgb(255,255,255)']],
-    Greys: [[0,'rgb(0,0,0)'],[1,'rgb(255,255,255)']]
-};
-function _csParse(s) {
-    s = String(s).trim();
-    var m = /rgba?\(([^)]+)\)/.exec(s);
-    if (m) { var p = m[1].split(',').map(parseFloat); return [p[0]||0, p[1]||0, p[2]||0]; }
-    if (s[0] === '#') { var h = s.slice(1); if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
-        return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)]; }
-    return [128,128,128];
-}
-function _csResolve(cs) {
-    if (Array.isArray(cs)) return cs;
-    if (typeof cs === 'string' && _NAMED_CS[cs]) return _NAMED_CS[cs];
-    return _NAMED_CS.Viridis;   // fallback for unmapped named scales
-}
-function _csColor(cs, vmin, vmax, val) {
-    var stops = _csResolve(cs);
-    var f = (vmax === vmin) ? 0 : (val - vmin) / (vmax - vmin);
-    f = Math.max(0, Math.min(1, f));
-    for (var i = 0; i < stops.length - 1; i++) {
-        if (f >= stops[i][0] && f <= stops[i+1][0]) {
-            var t = (stops[i+1][0] === stops[i][0]) ? 0 : (f - stops[i][0]) / (stops[i+1][0] - stops[i][0]);
-            var a = _csParse(stops[i][1]), b = _csParse(stops[i+1][1]);
-            return [Math.round(a[0]+t*(b[0]-a[0])), Math.round(a[1]+t*(b[1]-a[1])), Math.round(a[2]+t*(b[2]-a[2]))];
-        }
-    }
-    return _csParse(stops[stops.length-1][1]);
-}
+function _csParse(s) { return TDRView.csParse(s); }
+function _csResolve(cs) { return TDRView.csResolve(cs); }
+function _csColor(cs, vmin, vmax, val) { return TDRView.csColor(cs, vmin, vmax, val); }
 
 // km → lat/lon bounds of the plan-view grid (storm-centered).
 function _radarMapBounds(p) {
@@ -4607,29 +4442,8 @@ function generateCustomPlot(callback) {
 
 // ── Contour overlay helper ────────────────────────────────────
 function buildOverlayContours(json, x, y, isCS) {
-    if (!json.overlay) return [];
-    var ov = json.overlay;
-    var ovData = isCS ? ov.cross_section : ov.data;
-    if (!ovData) return [];
-    try {
-        var intInput = document.getElementById('ep-contour-int');
-        var interval = intInput ? parseFloat(intInput.value) : NaN;
-        if (isNaN(interval) || interval <= 0) {
-            var flat = ovData.flat().filter(function(v) { return v !== null && !isNaN(v); });
-            if (flat.length === 0) return [];
-            var mn = Infinity, mx = -Infinity;
-            for (var i = 0; i < flat.length; i++) { if (flat[i] < mn) mn = flat[i]; if (flat[i] > mx) mx = flat[i]; }
-            interval = parseFloat(((mx - mn) / 10).toPrecision(1));
-            if (!isFinite(interval) || interval <= 0) interval = (mx - mn) / 10 || 1;
-        }
-        var xCoord = isCS ? json.distance_km : x;
-        var yCoord = isCS ? json.height_km : y;
-        var baseContour = { z: ovData, x: xCoord, y: yCoord, type: 'contour', showscale: false, hoverongaps: false, contours: { coloring: 'none', showlabels: true, labelfont: { size: 9, color: 'rgba(15, 22, 35,0.8)' } } };
-        var traces = [];
-        if (ov.vmax > interval) traces.push(Object.assign({}, baseContour, { contours: Object.assign({}, baseContour.contours, { start: interval, end: ov.vmax, size: interval }), line: { color: 'rgba(0,0,0,0.7)', width: 1.2, dash: 'solid' }, hovertemplate: '<b>' + ov.display_name + '</b>: %{z:.2f} ' + ov.units + '<extra>contour</extra>', name: ov.display_name + ' (+)', showlegend: false }));
-        if (ov.vmin < -interval) traces.push(Object.assign({}, baseContour, { contours: Object.assign({}, baseContour.contours, { start: ov.vmin, end: -interval, size: interval }), line: { color: 'rgba(0,0,0,0.7)', width: 1.2, dash: 'dash' }, hovertemplate: '<b>' + ov.display_name + '</b>: %{z:.2f} ' + ov.units + '<extra>contour</extra>', name: ov.display_name + ' (\u2212)', showlegend: false }));
-        return traces;
-    } catch (e) { console.warn('Contour overlay error:', e); return []; }
+    var intInput = document.getElementById('ep-contour-int');
+    return TDRView.overlayContours(json, x, y, isCS, intInput ? parseFloat(intInput.value) : NaN);
 }
 
 // ── Colormap switcher ────────────────────────────────────────
@@ -4918,104 +4732,21 @@ function _tightDataExtent(zData, xCoords, yCoords, pad) {
 }
 
 // ── Max value helper ─────────────────────────────────────────
-function findDataMax(zData, xCoords, yCoords) {
-    var maxVal = -Infinity, maxI = 0, maxJ = 0;
-    for (var i = 0; i < zData.length; i++) {
-        if (!zData[i]) continue;
-        for (var j = 0; j < zData[i].length; j++) {
-            var v = zData[i][j];
-            if (v !== null && v !== undefined && isFinite(v) && v > maxVal) {
-                maxVal = v; maxI = i; maxJ = j;
-            }
-        }
-    }
-    if (!isFinite(maxVal)) return null;
-    return { value: maxVal, x: xCoords[maxJ], y: yCoords[maxI] };
-}
+function findDataMax(zData, xCoords, yCoords) { return TDRView.findDataMax(zData, xCoords, yCoords); }
 
-function findDataMin(zData, xCoords, yCoords) {
-    var minVal = Infinity, minI = 0, minJ = 0;
-    for (var i = 0; i < zData.length; i++) {
-        if (!zData[i]) continue;
-        for (var j = 0; j < zData[i].length; j++) {
-            var v = zData[i][j];
-            if (v !== null && v !== undefined && isFinite(v) && v < minVal) {
-                minVal = v; minI = i; minJ = j;
-            }
-        }
-    }
-    if (!isFinite(minVal)) return null;
-    return { value: minVal, x: xCoords[minJ], y: yCoords[minI] };
-}
+function findDataMin(zData, xCoords, yCoords) { return TDRView.findDataMin(zData, xCoords, yCoords); }
 
-function isWindVariable(varName) {
-    return varName && varName.toLowerCase().indexOf('wind') !== -1;
-}
+function isWindVariable(varName) { return TDRView.isWindVariable(varName); }
 
-function buildMaxMarkerTrace(maxInfo, units) {
-    if (!maxInfo) return null;
-    return {
-        x: [maxInfo.x], y: [maxInfo.y], type: 'scatter', mode: 'markers+text',
-        marker: { symbol: 'x', size: 10, color: 'white', line: { color: 'rgba(0,0,0,0.6)', width: 1.5 } },
-        text: [''], textposition: 'top right',
-        textfont: { color: 'white', size: 9 },
-        hoverinfo: 'text',
-        hovertext: ['Max: ' + maxInfo.value.toFixed(2) + ' ' + units + '\n@ (' + maxInfo.x.toFixed(0) + ', ' + maxInfo.y.toFixed(0) + ')'],
-        showlegend: false
-    };
-}
+function buildMaxMarkerTrace(maxInfo, units) { return TDRView.maxMarkerTrace(maxInfo, units); }
 
-function buildMaxAnnotation(maxInfo, units, xLabel, yLabel, fontSize) {
-    if (!maxInfo) return null;
-    var fs = fontSize || 9;
-    // Position at TOP-LEFT of paper (outside the plot area). Title is
-    // centered so the left margin column is empty; modebar lives at
-    // top-right so this never collides with it. Previously sat at
-    // y:-0.01 (below paper bottom) which overlapped the x-axis tick
-    // labels and the bottom of the data. Background is now white-glass
-    // with dark text so it reads cleanly on light theme; dark mode
-    // will theme via :root[data-theme="dark"] override below.
-    return {
-        text: '<b>Max:</b> ' + maxInfo.value.toFixed(2) + ' ' + units +
-              '  @  ' + xLabel + '=' + maxInfo.x.toFixed(0) + ', ' + yLabel + '=' + (Math.abs(maxInfo.y) < 100 ? maxInfo.y.toFixed(1) : maxInfo.y.toFixed(0)),
-        xref: 'paper', yref: 'paper', x: 0.01, y: 0.99,
-        xanchor: 'left', yanchor: 'top',
-        showarrow: false,
-        font: { color: '#0f1623', size: fs, family: 'DM Sans, sans-serif' },
-        bgcolor: 'rgba(255,255,255,0.85)',
-        borderpad: 3,
-        bordercolor: 'rgba(15, 22, 35,0.15)',
-        borderwidth: 1
-    };
-}
+function buildMaxAnnotation(maxInfo, units, xLabel, yLabel, fontSize) { return TDRView.maxAnnotation(maxInfo, units, xLabel, yLabel, fontSize); }
 
 // Marker at the storm-relative origin (0, 0) labeling the objectively
 // identified TC center. Hover surfaces the center's geographic lat/lon.
 // `extra` optionally merges extra trace fields (e.g. {_isMW:true} for the
 // microwave-overlay variant so it gets cleaned up with the MW layer).
-function buildTCCenterMarkerTrace(lat, lon, extra) {
-    if (lat == null || lon == null || !isFinite(lat) || !isFinite(lon)) return null;
-    var nsLat = lat >= 0 ? 'N' : 'S';
-    var ewLon = lon >= 0 ? 'E' : 'W';
-    var posStr = Math.abs(lat).toFixed(3) + '°' + nsLat +
-        ', ' + Math.abs(lon).toFixed(3) + '°' + ewLon;
-    var trace = {
-        x: [0], y: [0], type: 'scatter', mode: 'markers',
-        marker: {
-            symbol: 'cross', size: 14, color: '#ffffff',
-            line: { color: '#000000', width: 1 }
-        },
-        hovertemplate: '<b>TC Center</b><br>Lat/Lon: ' + posStr + '<extra></extra>',
-        showlegend: false,
-        name: 'TC Center',
-    };
-    if (extra) {
-        for (var k in extra) {
-            if (Object.prototype.hasOwnProperty.call(extra, k)) trace[k] = extra[k];
-        }
-    }
-    return trace;
-}
+function buildTCCenterMarkerTrace(lat, lon, extra) { return TDRView.tcCenterMarkerTrace(lat, lon, extra); }
 
 function renderPlotFromJSON(json, resultDiv) {
     // Hide thumbnail (unless pinned by the Quick-look pill), show plot in its place
@@ -5796,40 +5527,7 @@ var _fischerCitation = {
     font: { color: 'rgba(150,150,150,0.5)', size: 8 }
 };
 
-function _buildHybridXAxis(rHAxis, nInner) {
-    // Build tick labels for the hybrid coordinate
-    // Inner bins: show as fraction of RMW (e.g., 0.2, 0.4, ..., 0.8)
-    // Outer bins: show as "RMW", "+20", "+40", etc.
-    var tickvals = [], ticktext = [];
-    for (var i = 0; i < rHAxis.length; i++) {
-        if (i < nInner) {
-            // Inner: show every 0.2 R*
-            var val = rHAxis[i];
-            if (Math.abs(val % 0.2) < 0.03) {
-                tickvals.push(i);
-                ticktext.push((val).toFixed(1));
-            }
-        } else {
-            // Outer: show at RMW, +20, +40, +60, +80, +100
-            var km = rHAxis[i];
-            if (i === nInner) {
-                tickvals.push(i);
-                ticktext.push('RMW');
-            } else {
-                // Snap to nearest 20-km mark; only label once per target
-                var target = Math.round(km / 20) * 20;
-                if (target > 0 && Math.abs(km - target) < 2.0) {
-                    var thisLabel = '+' + target;
-                    if (ticktext.length === 0 || ticktext[ticktext.length - 1] !== thisLabel) {
-                        tickvals.push(i);
-                        ticktext.push(thisLabel);
-                    }
-                }
-            }
-        }
-    }
-    return { tickvals: tickvals, ticktext: ticktext };
-}
+function _buildHybridXAxis(rHAxis, nInner) { return TDRView.hybridXAxis(rHAxis, nInner); }
 
 function renderHybridAzimuthalMeanInto(targetId, json, fullsize) {
     var el = document.getElementById(targetId); if (!el) return;
@@ -6541,63 +6239,7 @@ function buildAzOverlayContours(json, radius_km, height_km) {
 // shdc: shear magnitude in kt
 // motionDir/motionSpd: motion vector direction and speed
 // sddcDisplay: optional — the direction value to show in the text label (if different from arrow direction)
-function buildShearCompassHTML(sddc, shdc, motionDir, motionSpd, sddcDisplay) {
-    var hasShear = (sddc !== null && sddc !== undefined && sddc !== 9999);
-    var hasMotion = (motionDir !== null && motionDir !== undefined && motionDir !== 9999);
-    if (!hasShear && !hasMotion) return '';
-
-    var size = 50, cx = size / 2, cy = size / 2, r = 18, arrowR = 15;
-    // SVG: circle + arrows
-    var svg = '<svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '" style="vertical-align:middle;">';
-    // Background circle
-    svg += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="rgba(10,22,40,0.8)" stroke="rgba(15, 22, 35,0.2)" stroke-width="1"/>';
-    // Center dot
-    svg += '<circle cx="' + cx + '" cy="' + cy + '" r="2" fill="rgba(15, 22, 35,0.5)"/>';
-
-    // Arrow helper: meteorological direction (where FROM) → SVG angle
-    // Met convention: 0°=N, 90°=E, clockwise. SVG: 0°=right, counter-clockwise.
-    // Arrow points in the direction the vector is headed (downshear, not upshear)
-    function drawArrow(dirDeg, color) {
-        var rad = (90 - dirDeg) * Math.PI / 180;
-        var tipX = cx + arrowR * Math.cos(rad);
-        var tipY = cy - arrowR * Math.sin(rad);
-        var baseX = cx - arrowR * 0.2 * Math.cos(rad);
-        var baseY = cy + arrowR * 0.2 * Math.sin(rad);
-        // Arrowhead
-        var hl = 5, ha = 28 * Math.PI / 180;
-        var aRad = Math.atan2(-(tipY - baseY), tipX - baseX);
-        var h1x = tipX - hl * Math.cos(aRad - ha);
-        var h1y = tipY + hl * Math.sin(aRad - ha);
-        var h2x = tipX - hl * Math.cos(aRad + ha);
-        var h2y = tipY + hl * Math.sin(aRad + ha);
-        svg += '<line x1="' + baseX.toFixed(1) + '" y1="' + baseY.toFixed(1) + '" x2="' + tipX.toFixed(1) + '" y2="' + tipY.toFixed(1) + '" stroke="' + color + '" stroke-width="2" stroke-linecap="round"/>';
-        svg += '<line x1="' + tipX.toFixed(1) + '" y1="' + tipY.toFixed(1) + '" x2="' + h1x.toFixed(1) + '" y2="' + h1y.toFixed(1) + '" stroke="' + color + '" stroke-width="2" stroke-linecap="round"/>';
-        svg += '<line x1="' + tipX.toFixed(1) + '" y1="' + tipY.toFixed(1) + '" x2="' + h2x.toFixed(1) + '" y2="' + h2y.toFixed(1) + '" stroke="' + color + '" stroke-width="2" stroke-linecap="round"/>';
-    }
-
-    if (hasShear) drawArrow(sddc, '#f59e0b');
-    if (hasMotion) drawArrow(motionDir, '#22d3ee');
-    svg += '</svg>';
-
-    // Text labels
-    var labels = '<span class="compass-labels">';
-    if (hasShear) {
-        var shrStr = 'Shear';
-        if (shdc !== null && shdc !== undefined && shdc !== 9999) shrStr += ' ' + shdc.toFixed(0) + ' kt';
-        var displayDir = (sddcDisplay !== null && sddcDisplay !== undefined) ? sddcDisplay : sddc;
-        shrStr += ' / ' + (typeof displayDir === 'number' ? displayDir.toFixed(0) : displayDir) + '\u00b0';
-        labels += '<span class="shear-lbl">' + shrStr + '</span>';
-    }
-    if (hasMotion) {
-        var motStr = 'Motion';
-        if (motionSpd !== null && motionSpd !== undefined && motionSpd !== 9999) motStr += ' ' + motionSpd.toFixed(0) + ' kt';
-        motStr += ' / ' + motionDir.toFixed(0) + '\u00b0';
-        labels += '<span class="motion-lbl">' + motStr + '</span>';
-    }
-    labels += '</span>';
-
-    return '<span class="shear-compass">' + svg + labels + '</span>';
-}
+function buildShearCompassHTML(sddc, shdc, motionDir, motionSpd, sddcDisplay) { return TDRView.shearCompassHTML(sddc, shdc, motionDir, motionSpd, sddcDisplay); }
 
 // ── Shear & Motion vector inset (kept for cross-section/azimuthal mean Plotly plots) ──
 function buildShearInset(sddc, isFullsize, shdc, motionDir, motionSpd) {
@@ -7040,16 +6682,8 @@ window.dismissFeaturedCases = function() {
 };
 
 // ── Intensity helpers ────────────────────────────────────────
-function getIntensityColor(vmax) {
-    if (!vmax) return '#6b7280'; if (vmax<34) return '#60a5fa'; if (vmax<64) return '#34d399';
-    if (vmax<83) return '#fbbf24'; if (vmax<96) return '#fb923c'; if (vmax<113) return '#f87171';
-    if (vmax<137) return '#ef4444'; return '#dc2626';
-}
-function getIntensityCategory(vmax) {
-    if (!vmax) return 'Unknown'; if (vmax<34) return 'TD'; if (vmax<64) return 'TS';
-    if (vmax<83) return 'Cat 1'; if (vmax<96) return 'Cat 2'; if (vmax<113) return 'Cat 3';
-    if (vmax<137) return 'Cat 4'; return 'Cat 5';
-}
+function getIntensityColor(vmax) { return TDRView.intensityColor(vmax); }
+function getIntensityCategory(vmax) { return TDRView.intensityCategory(vmax); }
 
 function createPopupContent(caseData) {
     var intensity = caseData.vmax_kt !== null ? caseData.vmax_kt + ' kt' : 'N/A';
