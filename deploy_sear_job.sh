@@ -35,18 +35,21 @@ CTX="${SCRIPT_DIR}/sear_job_ctx"
 if [[ "${1:-}" != "--no-build" ]]; then
     # ── Stage the runtime files ──────────────────────────────────────
     rm -rf "${CTX}"; mkdir -p "${CTX}/realtime" "${CTX}/SEAR/Scripts" "${CTX}/SEAR/Model"
-    cp "${MLBT}/realtime/sear_rt.py" "${MLBT}/realtime/sear_swath.py" "${CTX}/realtime/"
+    # sear_tdr_features.py: the TDR-swath Stage 2 features shared with training (2026-09-29)
+    cp "${MLBT}/realtime/sear_rt.py" "${MLBT}/realtime/sear_swath.py" "${MLBT}/realtime/sear_tdr_features.py" "${CTX}/realtime/"
     cp "${MLBT}"/external/SEAR/Scripts/*.py "${CTX}/SEAR/Scripts/"
-    # Only the two model files sear_rt.py loads (SEAR_RMW_MODE=leg set).
-    python3 - "${MLBT}/external/SEAR/Scripts/config.py" "${MLBT}/external/SEAR/Model" "${CTX}/SEAR/Model" <<'PY'
+    # The two flight-level model files sear_rt.py loads (SEAR_RMW_MODE=leg set) + the swath's own Stage 2.
+    python3 - "${MLBT}/external/SEAR/Scripts/config.py" "${MLBT}/external/SEAR/Model" "${CTX}/SEAR/Model" "${MLBT}/realtime/sear_swath.py" <<'PY'
 import re, shutil, sys, pathlib
-cfg, src, dst = sys.argv[1:]
+cfg, src, dst, swath = sys.argv[1:]
 txt = pathlib.Path(cfg).read_text()
 names = set(re.findall(r'MODEL_DIR / "([^"]+\.joblib)"', txt))
 want = [n for n in names if ("v4_rmwLocal_wrel" in n or "v8_lnrmw_mono_param" in n)]
-for n in want:
-    shutil.copy(pathlib.Path(src) / n, dst); print("  model:", n)
 assert len(want) == 2, want
+sw = re.findall(r'SWATH_STAGE2_MODEL = os\.environ\.get\("SEAR_SWATH_STAGE2_MODEL", "([^"]+\.joblib)"\)', pathlib.Path(swath).read_text())
+assert len(sw) == 1, sw
+for n in want + sw:
+    shutil.copy(pathlib.Path(src) / n, dst); print("  model:", n)
 PY
     du -sh "${CTX}"
 
