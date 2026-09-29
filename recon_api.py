@@ -1607,7 +1607,7 @@ def _parse_iwg1_text(text: str, sim_now: datetime, res: int = _IWG1_DECIMATE_S) 
 
 
 def _merge_iwg1(aircraft: dict, aircraft_names: dict, aircraft_src: dict,
-                sim_now: datetime, res: int = _IWG1_DECIMATE_S) -> None:
+                sim_now: datetime, res: int = _IWG1_DECIMATE_S, aircraft_tags: dict = None) -> None:
     """Source NOAA aircraft tracks from the 1-s IWG1 feed (overriding their 30-s
     HDOB track), binned to `res`-second mean winds. USAF aircraft are untouched.
     Best-effort: any flight that fails to fetch/parse leaves its HDOB track."""
@@ -1638,6 +1638,8 @@ def _merge_iwg1(aircraft: dict, aircraft_names: dict, aircraft_src: dict,
         aircraft_src[tail] = "iwg1"
         if label:
             aircraft_names.setdefault(tail, set()).add(label)
+            if aircraft_tags is not None:
+                aircraft_tags.setdefault(tail, []).append((obs[0]["t"], obs[-1]["t"], label, None))
     # IWG1 overrides the 30-s HDOB track, but only across the time spans it
     # actually covers: a NOAA sortie older than the IWG1 directory window
     # (HDOB-only) still survives, while an IWG1-covered sortie isn't polluted by
@@ -1665,6 +1667,19 @@ def _merge_iwg1(aircraft: dict, aircraft_names: dict, aircraft_src: dict,
 # a realistic turnaround, so it cleanly separates back-to-back missions by the
 # same aircraft (which HDOB keys by tail, merging them into one long track).
 _SORTIE_GAP_S = 3 * 3600
+# ...or a shorter break with the aircraft ON THE GROUND at either end: a quick
+# turnaround (NOAA 42, 2026-09-28: landed McAllen 20:44Z after Polo, next ob
+# 23:30Z parked, then Rachel) is under 3 h but is unambiguously two sorties.
+_SORTIE_GROUND_GAP_S = 30 * 60
+_GROUND_ALT_M = 150.0
+
+
+def _on_ground(ob) -> bool:
+    a = ob.get("geo_alt_m") if ob else None
+    try:
+        return a is not None and float(a) < _GROUND_ALT_M
+    except (TypeError, ValueError):
+        return False
 
 
 def _parse_ob_iso(t: str):
@@ -1688,16 +1703,17 @@ def _split_sorties(track: list, gap_s: int = _SORTIE_GAP_S) -> list:
     if not track:
         return []
     sorties, cur = [], [track[0]]
-    prev = _parse_ob_iso(track[0].get("t"))
+    prev, prev_ob = _parse_ob_iso(track[0].get("t")), track[0]
     for o in track[1:]:
         cur_t = _parse_ob_iso(o.get("t"))
-        if (prev is not None and cur_t is not None and
-                (cur_t - prev).total_seconds() > gap_s):
-            sorties.append(cur)
-            cur = []
+        if prev is not None and cur_t is not None:
+            gap = (cur_t - prev).total_seconds()
+            if gap > gap_s or (gap > _SORTIE_GROUND_GAP_S and (_on_ground(prev_ob) or _on_ground(o))):
+                sorties.append(cur)
+                cur = []
         cur.append(o)
         if cur_t is not None:
-            prev = cur_t
+            prev, prev_ob = cur_t, o
     if cur:
         sorties.append(cur)
     return sorties
@@ -1720,6 +1736,17 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
     aircraft_names: dict = {}   # tail -> {system labels from the bulletins}
     aircraft_atcf: dict = {}    # tail -> {ATCF ids decoded from the mission-ID field}
     aircraft_src: dict = {}     # tail -> data source ("iwg1" for NOAA 1-s)
+    # tail -> [(first_ob_t, last_ob_t, label, atcf)] per bulletin / IWG1 flight,
+    # so a tail that flew two storms in the window is attributed PER SORTIE
+    # (pooled per tail, yesterday's Polo mission ID claimed tonight's Rachel
+    # flight for Polo and vetoed it for Rachel -- NOAA 42, 2026-09-29).
+    aircraft_tags: dict = {}
+
+    def _tag(parsed):
+        ts = [o["t"] for o in parsed.get("obs") or [] if o.get("t")]
+        if ts and (parsed.get("storm") or parsed.get("atcf")):
+            aircraft_tags.setdefault(parsed["tail"], []).append(
+                (min(ts), max(ts), parsed.get("storm"), parsed.get("atcf")))
     hdob_dir = f"{NHC_RECON_BASE}/{year}/{dirs['hdob']}/"
     hdob_urls = _list_recent_files(hdob_dir, since, sim_now)
     _hdob_fetched = _fetch_texts([u for u in hdob_urls if u not in _bulletin_cache])
@@ -1744,6 +1771,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
             aircraft_names.setdefault(parsed["tail"], set()).add(parsed["storm"])
         if parsed.get("atcf"):
             aircraft_atcf.setdefault(parsed["tail"], set()).add(parsed["atcf"])
+        _tag(parsed)
         for ob in parsed["obs"]:
             tk[ob["t"]] = ob  # dedup by ISO time within a tail
 
@@ -1758,6 +1786,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
                 aircraft_names.setdefault(parsed["tail"], set()).add(parsed["storm"])
             if parsed.get("atcf"):
                 aircraft_atcf.setdefault(parsed["tail"], set()).add(parsed["atcf"])
+            _tag(parsed)
             for ob in parsed["obs"]:
                 tk[ob["t"]] = ob
 
@@ -1766,7 +1795,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
     # the IWG1 file is the current sortie, so in replay it would inject obs past
     # the simulated clock.
     if live_feed:
-        _merge_iwg1(aircraft, aircraft_names, aircraft_src, sim_now, fl_res)
+        _merge_iwg1(aircraft, aircraft_names, aircraft_src, sim_now, fl_res, aircraft_tags)
 
     # In replay, hide obs the simulated clock hasn't "reached" yet.
     sim_iso = sim_now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1784,12 +1813,15 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
 
     aircraft_out = []
 
-    def _emit_sorties(tail, track, src):
+    def _emit_sorties(tail, track, src, only=None):
         """Append one aircraft entry per sortie (a plane that flew twice in the
-        window becomes two selectable flights instead of one long merged track)."""
+        window becomes two selectable flights instead of one long merged track).
+        `only`: indices of the sorties to emit (per-sortie attribution)."""
         sorties = _split_sorties(track)
         n = len(sorties)
         for si, st in enumerate(sorties):
+            if only is not None and si not in only:
+                continue
             # QC runs per sortie on COPIES: the merged tail track carries a
             # landing-to-takeoff jump between sorties that a hydrostatic test
             # reads as a permanent excursion (2026-09-06: every ob of a G-IV
@@ -1815,33 +1847,49 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
             if tail.upper() == mission_tail:
                 _emit_sorties(tail, track, aircraft_src.get(tail, "hdob"))
             continue
-        labels = aircraft_names.get(tail, set())
-        name_ok = any(_label_matches(l) for l in labels)
-        # The mission ID names the storm the sortie was FILED for, so it settles
-        # attribution outright — both ways. A mission filed for a different storm
-        # is that storm's, however close it flies to this one.
-        mids = aircraft_atcf.get(tail, set())
-        atcf_ok = atcf_id.upper() in mids
-        atcf_conflict = bool(mids) and not atcf_ok
-        # A flight that explicitly labels itself a DIFFERENT specific system
-        # (not this storm, not a bare "INVEST") is that system's sortie — never
-        # attribute it here, even if it passes within the core. This is what
-        # keeps a non-TC research flight (e.g. TEXAQS surveying inland Texas)
-        # out of a nearby offshore storm, regardless of how close it drifts.
-        conflicting = any(
-            re.sub(r"[^A-Z0-9]", "", (l or "").upper()) not in _GENERIC_LABELS
-            and not _label_matches(l)
-            for l in labels
-        )
-        at_core = (storm_lat is not None and storm_lon is not None and
-                   any(_deg_dist(o["lat"], o["lon"], storm_lat, storm_lon) <= _STORM_CORE_DEG
-                       for o in track))
-        keep = atcf_ok or (not atcf_conflict and (name_ok or (at_core and not conflicting)))
-        # Only filter when we have something to match against (a name and/or a
-        # position). With neither (shouldn't happen via the UI) keep, as before.
-        if (norm_q or storm_lat is not None) and not keep:
-            continue
-        _emit_sorties(tail, track, aircraft_src.get(tail, "hdob"))
+        # Attribute EACH SORTIE by the labels / mission IDs sent during it
+        # (+/- 15 min); a tail with no timed tags falls back to its pooled sets.
+        tags = aircraft_tags.get(tail) or []
+        keep_idx = []
+        for si, st in enumerate(_split_sorties(track)):
+            if tags:
+                t0 = _parse_ob_iso(st[0].get("t")); t1 = _parse_ob_iso(st[-1].get("t"))
+                labels, mids = set(), set()
+                for a0, a1, lbl, mid in tags:
+                    b0 = _parse_ob_iso(a0); b1 = _parse_ob_iso(a1)
+                    if None in (t0, t1, b0, b1):
+                        continue
+                    if b1 >= t0 - timedelta(minutes=15) and b0 <= t1 + timedelta(minutes=15):
+                        if lbl: labels.add(lbl)
+                        if mid: mids.add(mid)
+            else:
+                labels = aircraft_names.get(tail, set())
+                mids = aircraft_atcf.get(tail, set())
+            name_ok = any(_label_matches(l) for l in labels)
+            # The mission ID names the storm the sortie was FILED for, so it settles
+            # attribution outright -- both ways. A mission filed for a different storm
+            # is that storm's, however close it flies to this one.
+            atcf_ok = atcf_id.upper() in mids
+            atcf_conflict = bool(mids) and not atcf_ok
+            # A sortie that explicitly labels itself a DIFFERENT specific system
+            # (not this storm, not a bare "INVEST") is that system's -- never
+            # attribute it here, even if it passes within the core (keeps a non-TC
+            # research flight, e.g. TEXAQS over inland Texas, out of a nearby storm).
+            conflicting = any(
+                re.sub(r"[^A-Z0-9]", "", (l or "").upper()) not in _GENERIC_LABELS
+                and not _label_matches(l)
+                for l in labels
+            )
+            at_core = (storm_lat is not None and storm_lon is not None and
+                       any(_deg_dist(o["lat"], o["lon"], storm_lat, storm_lon) <= _STORM_CORE_DEG
+                           for o in st))
+            keep = atcf_ok or (not atcf_conflict and (name_ok or (at_core and not conflicting)))
+            # Only filter when we have something to match against (a name and/or a
+            # position). With neither (shouldn't happen via the UI) keep, as before.
+            if keep or not (norm_q or storm_lat is not None):
+                keep_idx.append(si)
+        if keep_idx:
+            _emit_sorties(tail, track, aircraft_src.get(tail, "hdob"), only=set(keep_idx))
     # Freshest sortie first, so the frontend's default (aircraft[0]) is the
     # current flight and older sorties fall below it in the flight selector.
     aircraft_out.sort(key=lambda a: a["track"][-1]["t"], reverse=True)
