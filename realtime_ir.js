@@ -31166,9 +31166,15 @@
     // 64+ for scatterometer surface winds), flight-level winds in a major
     // hurricane routinely exceed 100 kt — so this extends through the
     // Saffir-Simpson categories to Cat 5. Used for FL Wind / SFMR / Peak Wind.
+    // 96-112 kt is a deep wine (2026-09-28): it was #dc2626, CIEDE2000 7.6 from
+    // the 83-95 kt red — near-identical right on the Cat 2/3 line NHC reads off
+    // the TDR 10-m layer. Now ΔE00 25.0 to the red and 24.4 to the magenta (≥ 22
+    // at 0.9 opacity over any gray IR); every adjacent pair is ≥ 12, the tightest
+    // being the unchanged magenta/violet (12.2). The explorer's SEAR 10-m scale
+    // (tc_radar_app.js _SEAR_STOPS) is a copy — keep the two in sync.
     var _RECON_WIND_STOPS = [
         [34,   '#60a5fa'], [50,  '#22c55e'], [64,  '#eab308'], [83,  '#f97316'],
-        [96,   '#ef4444'], [113, '#dc2626'], [137, '#c026d3'], [9999, '#7c3aed']
+        [96,   '#ef4444'], [113, '#9d174d'], [137, '#c026d3'], [9999, '#7c3aed']
     ];
     function _reconWindColor(v) {
         if (v == null || isNaN(v)) return '#9ca3af';
@@ -31194,15 +31200,29 @@
         }
         return _reconWindColor(val);  // recon wind scale (extends to Cat 5)
     }
-    /** Legend swatches [label,color] for the current color variable. */
+    /** Label ink for a legend chip: near-black or white, whichever has the higher
+     *  WCAG contrast on that color, so the dark bins' labels stay readable. */
+    function _reconChipInk(hex) {
+        var lin = [1, 3, 5].map(function (i) {
+            var c = parseInt(hex.slice(i, i + 2), 16) / 255;
+            return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+        });
+        var y = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+        return (y + 0.05) / 0.056 >= 1.05 / (y + 0.05) ? '#0b1220' : '#fff';   // 0.056 = #0b1220 + 0.05
+    }
+    /** Legend swatches [label, color, ink] for the current color variable. The
+     *  wind chips take their colors from _RECON_WIND_STOPS so they cannot drift. */
     function _reconLegendStops(key) {
+        var W = _RECON_WIND_STOPS, s;
         if (_reconVarKind(key) === 'temp') {
-            return [['<-10', '#06b6d4'], ['0', '#22d3ee'], ['10', '#34d399'],
-                    ['20', '#fbbf24'], ['25', '#fb923c'], ['30+', '#f87171']];
+            s = [['<-10', '#06b6d4'], ['0', '#22d3ee'], ['10', '#34d399'],
+                 ['20', '#fbbf24'], ['25', '#fb923c'], ['30+', '#f87171']];
+        } else {
+            s = [['<34', W[0][1]], ['34-50', W[1][1]], ['50-64', W[2][1]],
+                 ['64-83', W[3][1]], ['83-96', W[4][1]], ['96-113', W[5][1]],
+                 ['113-137', W[6][1]], ['137+', W[7][1]]];
         }
-        return [['<34', '#60a5fa'], ['34-50', '#22c55e'], ['50-64', '#eab308'],
-                ['64-83', '#f97316'], ['83-96', '#ef4444'], ['96-113', '#dc2626'],
-                ['113-137', '#c026d3'], ['137+', '#7c3aed']];
+        return s.map(function (x) { return [x[0], x[1], _reconChipInk(x[1])]; });
     }
 
     /**
@@ -32210,7 +32230,7 @@
         for (var i = 0; i < stops.length; i++) {
             var s = document.createElement('span');
             s.textContent = stops[i][0];
-            s.style.cssText = 'font-size:8px;color:#0b1220;font-weight:700;padding:1px 4px;border-radius:2px;background:' + stops[i][1] + ';';
+            s.style.cssText = 'font-size:8px;color:' + (stops[i][2] || '#0b1220') + ';font-weight:700;padding:1px 4px;border-radius:2px;background:' + stops[i][1] + ';';
             box.appendChild(s);
         }
     }

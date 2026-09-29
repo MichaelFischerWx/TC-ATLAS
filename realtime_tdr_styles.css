@@ -832,6 +832,12 @@
 .recon-hdob-tdrkey .bar span { flex: 1 1 0; height: 12px; font-size: 8px; line-height: 12px; color: #fff; text-align: left; padding-left: 1px; text-shadow: 0 0 2px #000; }
 .recon-hdob-tdrkey .info, .recon-hdob-tdrkey .hov { opacity: 0.9; }
 .recon-hdob-tdrkey .hov { font-variant-numeric: tabular-nums; }
+/* 80% band for the analysis peak (tooltip = the publisher's band_note) */
+.recon-hdob-tdrkey .band { white-space: nowrap; border-bottom: 1px dotted currentColor; cursor: help; }
+/* nothing drawn: the picked analysis' PNG is loading / failed */
+.recon-hdob-tdrkey .st { font-style: italic; }
+.recon-hdob-tdrkey .err { color: #b91c1c; font-style: normal; }
+:root[data-theme="dark"] .recon-hdob-tdrkey .err { color: #fca5a5; }
 .recon-hdob-legend-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .recon-hdob-legend-sym {
     width: 13px; text-align: center; flex: 0 0 13px;
@@ -1198,6 +1204,15 @@
 .recon-hdob-summary .recon-vdm-stat.is-tdrsear {
     border-style: dashed;
     cursor: pointer;
+}
+/* "(80%: lo–hi)" after the TDR SEAR maximum; wraps below it as a unit on narrow tiles */
+.recon-hdob-summary .recon-vdm-stat-band {
+    margin-left: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--slate);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
 }
 
 

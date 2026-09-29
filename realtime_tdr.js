@@ -576,6 +576,7 @@
         kit.legendStops().forEach(function (s) {
             var sw = document.createElement('span');
             sw.className = 'sw'; sw.textContent = s[0]; sw.style.background = s[1];
+            if (s[2]) sw.style.color = s[2];   // white label on the dark bins
             box.appendChild(sw);
         });
     }
@@ -1775,7 +1776,11 @@
     var _hdobTdrMeta = null, _hdobTdrMetaUrl = null, _hdobTdrMetaGen = null;
     var _hdobTdrSel = null;          // analysis file picked in the key; null = follow the pass / pinned time
     var _hdobTdrOverlay = null, _hdobTdrShown = null, _hdobTdrKeyEl = null, _hdobTdrHoverBound = false;
-    var _hdobTdrImg = {};            // png url -> {vals, w, h, url} | 'loading' | 'error'
+    // png url -> decoded {vals, w, h, url, peak} | {st: 'loading', n} | {st: 'error', n, at};
+    // n = failed attempts so far. A failed PNG is re-tried on a later render (backoff 1.5/3/6 s),
+    // _HDOB_TDR_RETRIES times automatically; after that the key's Retry button asks again.
+    var _hdobTdrImg = {};
+    var _HDOB_TDR_RETRIES = 3;
     var _HDOB_TDR_MAX_DT_MS = 90 * 60000;   // an analysis further than this from the pass is not "that pass"
 
     function _hdobTdrRemove() {
@@ -1796,6 +1801,7 @@
     function _hdobTdrReset() {
         _hdobTdrRemove();
         _hdobTdrMeta = null; _hdobTdrMetaUrl = null; _hdobTdrMetaGen = null; _hdobTdrSel = null;
+        for (var u in _hdobTdrImg) if (_hdobTdrImg[u].st === 'error') delete _hdobTdrImg[u];   // coming back re-tries
     }
     function _hdobTdrLut() {
         var kit = window._ReconKit, stops = (kit && kit.windStops) || [[34, '#60a5fa'], [64, '#eab308'], [9999, '#7c3aed']];
@@ -1807,31 +1813,76 @@
         }
         return lut;
     }
-    /** Decode one analysis PNG into kt values (for hover) + a colorized data URL. */
-    function _hdobTdrLoad(url) {
+    function _hdobTdrRetryMs(n) { return 1500 * Math.pow(2, Math.max(0, n - 1)); }
+    /** Decode one analysis PNG into kt values (for hover) + a colorized data URL.
+     *  Returns the decoded record, or the {st: 'loading' | 'error'} record while there
+     *  is none; an error is re-tried here on a later render (see _hdobTdrImg), or at
+     *  once with force (the key's Retry button). */
+    function _hdobTdrLoad(url, force) {
+        if (!url) return { st: 'error', n: _HDOB_TDR_RETRIES + 1, at: 0 };
         var c = _hdobTdrImg[url];
-        if (c) return c;
-        _hdobTdrImg[url] = 'loading';
+        if (c && (c.vals || c.st === 'loading')) return c;
+        if (c && !force && (c.n > _HDOB_TDR_RETRIES || Date.now() - c.at < _hdobTdrRetryMs(c.n))) return c;
+        var n = c ? c.n : 0, rec = { st: 'loading', n: n };
+        _hdobTdrImg[url] = rec;
         var img = new Image(); img.crossOrigin = 'anonymous';
+        function fail() {
+            if (_hdobTdrImg[url] !== rec) return;       // superseded (storm switch, Retry)
+            var er = { st: 'error', n: n + 1, at: Date.now() };
+            _hdobTdrImg[url] = er;
+            if (_hdobData) _hdobRender();               // the key reports the failure now…
+            if (er.n <= _HDOB_TDR_RETRIES) setTimeout(function () {
+                if (_hdobTdrImg[url] === er && _hdobData) _hdobRender();   // …and the next render re-tries
+            }, _hdobTdrRetryMs(er.n) + 50);
+        }
         img.onload = function () {
+            if (_hdobTdrImg[url] !== rec) return;
             try {
                 var w = img.naturalWidth, h = img.naturalHeight, cv = document.createElement('canvas');
+                if (!w || !h) throw new Error('empty PNG');
                 cv.width = w; cv.height = h;
                 var ctx = cv.getContext('2d', { willReadFrequently: true }); ctx.drawImage(img, 0, 0);
-                var im = ctx.getImageData(0, 0, w, h), px = im.data, vals = new Uint8Array(w * h), lut = _hdobTdrLut();
+                var im = ctx.getImageData(0, 0, w, h), px = im.data, vals = new Uint8Array(w * h), lut = _hdobTdrLut(), peak = 0;
                 for (var i = 0; i < w * h; i++) {
                     var v = px[i * 4]; vals[i] = v;
                     if (!v) { px[i * 4 + 3] = 0; continue; }
+                    if (v > peak) peak = v;
                     px[i * 4] = lut[v * 3]; px[i * 4 + 1] = lut[v * 3 + 1]; px[i * 4 + 2] = lut[v * 3 + 2]; px[i * 4 + 3] = 255;
                 }
                 ctx.putImageData(im, 0, 0);
-                _hdobTdrImg[url] = { vals: vals, w: w, h: h, url: cv.toDataURL('image/png') };
-            } catch (e) { _hdobTdrImg[url] = 'error'; }
+                _hdobTdrImg[url] = { vals: vals, w: w, h: h, url: cv.toDataURL('image/png'), peak: peak };
+            } catch (e) { fail(); return; }
             if (_hdobData) _hdobRender();
         };
-        img.onerror = function () { _hdobTdrImg[url] = 'error'; };
-        img.src = url;
-        return 'loading';
+        img.onerror = fail;
+        // A re-try asks the CDN again instead of replaying a cached 404 (a JSON can land before its PNGs).
+        img.src = n ? url + (url.indexOf('?') < 0 ? '?' : '&') + 'retry=' + n + '-' + (Date.now() % 1e6) : url;
+        return rec;
+    }
+    /** Displayed maximum (kt) of an analysis (or the swath): max_px_kt is exactly the value the
+     *  publisher wrote into the peak PNG pixel, so the key agrees with the hover readout at the
+     *  peak. max_kt is pre-rounded to 0.1 kt, and rounding it again could read 1 kt high
+     *  (raw 99.46 → max_kt 99.5 → "100" over a 99 pixel); it is only the fallback for JSONs
+     *  published before max_px_kt. */
+    function _hdobTdrPeakKt(o) {
+        if (!o) return null;
+        if (o.max_px_kt != null && isFinite(o.max_px_kt)) return Math.round(+o.max_px_kt);
+        return (o.max_kt != null && isFinite(o.max_kt)) ? Math.round(+o.max_kt) : null;
+    }
+    /** The publisher's 80% band for the 10-m peak (max_band_kt [lo, hi], one decimal) as whole
+     *  kt, rounded OUTWARD so a peak inside the published band never prints outside it; null
+     *  when absent (JSONs before 2026-09-28) or malformed. */
+    function _hdobTdrBand(o) {
+        var b = o && o.max_band_kt;
+        if (!b || b.length !== 2 || b[0] == null || b[1] == null) return null;
+        var lo = +b[0], hi = +b[1];
+        if (!isFinite(lo) || !isFinite(hi) || lo > hi) return null;
+        return { lo: Math.floor(lo), hi: Math.ceil(hi),
+                 note: String(o.band_note || (_hdobTdrMeta && _hdobTdrMeta.band_note) || '80% band for the peak 10-m wind') };
+    }
+    function _hdobTdrBandText(bd) { return '(80%: ' + bd.lo + '–' + bd.hi + ')'; }
+    function _hdobTdrEsc(s) {
+        return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
     }
     /** Analyses offered on the map: the stale ones drop out unless 'Older' is on. */
     function _hdobTdrAnalyses() {
@@ -1867,7 +1918,10 @@
         host.appendChild(el); _hdobTdrKeyEl = el;
         return el;
     }
-    function _hdobTdrKeyHtml(pick, an) {
+    /** Key for the picked analysis. It describes a field only once that field is on
+     *  the map (img decoded); while its PNG loads or after it failed nothing is drawn,
+     *  and the key says exactly that. */
+    function _hdobTdrKeyHtml(pick, an, img) {
         var kit = window._ReconKit, stops = (kit && kit.windStops) || [];
         var a = pick.a, h = '<div class="tt">SEAR 10-m from TDR <span class="exp">experimental</span></div>';
         if (an.length) {
@@ -1877,16 +1931,30 @@
                  '<button data-d="0" class="' + (_hdobTdrSel ? '' : 'on') + '" title="Follow the selected pass / sortie time">Auto</button></div>';
         }
         if (!a) return h + '<div class="info">' + (pick.why || '') + '</div>';
+        if (!img || !img.vals) {
+            var tl = a.t.slice(11, 16) + 'Z';
+            if (img && img.st === 'error') {
+                return h + '<div class="info st err">' + tl + ' field failed to load — ' +
+                    (img.n <= _HDOB_TDR_RETRIES ? 'retrying… ' : '') +
+                    '<button class="retry" title="Load this analysis again">Retry</button></div>';
+            }
+            return h + '<div class="info st">Loading the ' + tl + ' field…</div>';
+        }
         h += '<div class="bar">';
         for (var i = 0; i < stops.length; i++) {
             var lo = i ? stops[i - 1][0] : 0;
             h += '<span style="background:' + stops[i][1] + '" title="' + (i ? lo + '+' : '<' + stops[i][0]) + ' kt">' + (i ? lo : '') + '</span>';
         }
-        h += '</div><div class="info">Max ' + Math.round(a.max_kt) + ' kt, ' + Math.round(a.max_r_nm) + ' n mi from center · ' +
+        var pk = _hdobTdrPeakKt(a), bd = _hdobTdrBand(a);
+        h += '</div><div class="info">Max ' + (pk != null ? pk : '—') + ' kt' +
+             (bd ? ' <span class="band" title="' + _hdobTdrEsc(bd.note) + '">' + _hdobTdrBandText(bd) + '</span>' : '') +
+             ', ' + Math.round(a.max_r_nm) + ' n mi from center · ' +
              'analysis ' + a.window[0].slice(11, 16) + '–' + a.window[1].slice(11, 16) + 'Z · no color = no TDR data below 1 km</div>' +
              '<div class="hov">Hover the map for a value</div>';
         return h;
     }
+    /** Hover readout. Samples only _hdobTdrShown, which is set exclusively while the
+     *  picked analysis — the one the key names — is the field on the map. */
     function _hdobTdrHover(e) {
         var sh = _hdobTdrShown, el = _hdobTdrKeyEl;
         if (!sh || !el) return;
@@ -1899,7 +1967,10 @@
         if (!v) { hv.textContent = 'Cursor: no TDR data'; return; }
         var c = sh.a.center, dy = (ll.lat - c[0]) * 111.32, dx = (ll.lng - c[1]) * 111.32 * Math.cos(c[0] * Math.PI / 180);
         var kit = window._ReconKit, az = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360, r = Math.sqrt(dx * dx + dy * dy);
-        hv.textContent = 'Cursor: ' + v + ' kt · ' + ((kit && kit.searWhere) ? kit.searWhere(az, r) : Math.round(r) + ' km from center');
+        // the 80% band is published for the analysis peak only (no per-pixel band)
+        var bd = v === sh.peak ? _hdobTdrBand(sh.a) : null;
+        hv.textContent = 'Cursor: ' + v + ' kt' + (bd ? ' (analysis peak; 80%: ' + bd.lo + '–' + bd.hi + ')' : '') + ' · ' +
+            ((kit && kit.searWhere) ? kit.searWhere(az, r) : Math.round(r) + ' km from center');
     }
     /** Fetch the swath JSON (analysis list) once per SEAR payload generation.
      *  Needed by the map layer AND the summary tile, so it runs even with the
@@ -1923,8 +1994,16 @@
         var an = _hdobTdrAnalyses();
         if (!an.length) { _hdobTdrRemove(); return; }
         var pick = _hdobTdrPick(passInfo), key = _hdobTdrKey(map);
-        key.innerHTML = _hdobTdrKeyHtml(pick, an); key.style.display = '';
-        Array.prototype.forEach.call(key.querySelectorAll('button'), function (b) {
+        var img = pick.a ? _hdobTdrLoad(pick.a.png) : null, ready = !!(img && img.vals);
+        // The key, the drawn field and the hover readout must always name the same analysis.
+        // Anything else comes off the map BEFORE the key is rewritten: the previous field used to
+        // stay drawn (and hover-sampled) under the new label while the new PNG loaded or failed.
+        if (!ready || !_hdobTdrShown || _hdobTdrShown.png !== pick.a.png) {
+            if (_hdobTdrOverlay) { try { map.removeLayer(_hdobTdrOverlay); } catch (e) {} _hdobTdrOverlay = null; }
+            _hdobTdrShown = null;
+        }
+        key.innerHTML = _hdobTdrKeyHtml(pick, an, img); key.style.display = '';
+        Array.prototype.forEach.call(key.querySelectorAll('.nav button'), function (b) {
             b.onclick = function () {
                 var d = +b.getAttribute('data-d'), cur = pick.a ? pick.i : an.length - 1;
                 _hdobTdrSel = d === 0 ? null : an[Math.max(0, Math.min(an.length - 1, cur + d))].file;
@@ -1932,17 +2011,25 @@
                 _hdobRender();
             };
         });
-        if (!pick.a) { if (_hdobTdrOverlay) { try { map.removeLayer(_hdobTdrOverlay); } catch (e) {} _hdobTdrOverlay = null; } _hdobTdrShown = null; _hdobTdrGraySat(false); return; }
-        var img = _hdobTdrLoad(pick.a.png);
-        if (typeof img === 'string') return;            // loading (re-renders on load) or error
-        _hdobTdrGraySat(true);
-        try { var pane = map.getPane('hdobTdrPane') || map.createPane('hdobTdrPane'); pane.style.zIndex = 380; pane.style.pointerEvents = 'none'; } catch (e) {}
-        var bounds = L.latLngBounds(pick.a.bounds);
-        if (!_hdobTdrShown || _hdobTdrShown.a.file !== pick.a.file || !_hdobTdrOverlay) {
-            if (_hdobTdrOverlay) { _hdobTdrOverlay.setUrl(img.url); _hdobTdrOverlay.setBounds(bounds); }
-            else _hdobTdrOverlay = L.imageOverlay(img.url, bounds, { opacity: 0.9, interactive: false, crisp: true, pane: 'hdobTdrPane' }).addTo(map);
+        var rb = key.querySelector('button.retry');
+        if (rb) rb.onclick = function () {
+            _ga('recon_hdob_tdr_retry', {});
+            _hdobTdrLoad(pick.a.png, true);
+            _hdobRender();
+        };
+        // IR stays gray while a field is drawn or on its way (no color flash between analyses);
+        // no pick, or a load that has given up, gives the colored IR back.
+        _hdobTdrGraySat(!!pick.a && (ready || img.st === 'loading' || img.n <= _HDOB_TDR_RETRIES));
+        if (!ready) return;              // a load re-renders; a failure re-tries on a later render
+        if (pick.a.max_px_kt != null && +pick.a.max_px_kt !== img.peak && !img.warned) {
+            img.warned = true;           // publisher contract: max_px_kt IS the peak pixel
+            console.warn('[recon] TDR ' + pick.a.file + ': max_px_kt ' + pick.a.max_px_kt + ' but the PNG peaks at ' + img.peak + ' kt');
         }
-        _hdobTdrShown = { a: pick.a, vals: img.vals, w: img.w, h: img.h };
+        try { var pane = map.getPane('hdobTdrPane') || map.createPane('hdobTdrPane'); pane.style.zIndex = 380; pane.style.pointerEvents = 'none'; } catch (e) {}
+        // A new analysis gets a NEW overlay (url + bounds in one step): setUrl + setBounds on the old
+        // one moved the previous image onto the new bounds until the new image had decoded.
+        if (!_hdobTdrOverlay) _hdobTdrOverlay = L.imageOverlay(img.url, L.latLngBounds(pick.a.bounds), { opacity: 0.9, interactive: false, crisp: true, pane: 'hdobTdrPane' }).addTo(map);
+        _hdobTdrShown = { a: pick.a, png: pick.a.png, vals: img.vals, w: img.w, h: img.h, peak: img.peak };
         if (!_hdobTdrHoverBound) { map.on('mousemove', _hdobTdrHover); _hdobTdrHoverBound = true; }
     }
 
@@ -2314,9 +2401,9 @@
             (anyStale ? ' — \u2020 nearest center fix more than 30 min away, center extrapolated' : '');
     }
 
-    /** Strongest TDR-SEAR analysis (swath JSON max_kt) centred within one of the
-     *  sorties on display (±45 min, like the SEAR passes; NOAA IWG1 tails first
-     *  since only the P-3s carry the TDR), and never after the replay clock. */
+    /** Strongest TDR-SEAR analysis (by the displayed max, see _hdobTdrPeakKt) centred
+     *  within one of the sorties on display (±45 min, like the SEAR passes; NOAA IWG1
+     *  tails first since only the P-3s carry the TDR), and never after the replay clock. */
     function _hdobTdrSummaryBest() {
         var sp = _hdobData && _hdobData.sear;
         if (!_hdobTdrMeta || !sp || _hdobTdrMetaUrl !== sp.swath_url) return null;
@@ -2325,14 +2412,15 @@
         });
         var clock = _hdobArchive ? +_hdobArchive.cur : Infinity, PAD = 45 * 60000, best = null;
         (_hdobTdrMeta.analyses || []).forEach(function (a) {
-            var t = Date.parse(a.t);
-            if (a.max_kt == null || isNaN(t) || t > clock) return;
+            var t = Date.parse(a.t), v = _hdobTdrPeakKt(a);
+            if (v == null || isNaN(t) || t > clock) return;
             var tail = null;
             for (var i = 0; i < shown.length && !tail; i++) {
                 var s = Date.parse(_hdobX(shown[i].sortie_start || '')), e = Date.parse(_hdobX(shown[i].sortie_end || ''));
                 if (isNaN(s) || isNaN(e) || (t >= s - PAD && t <= e + PAD)) tail = shown[i].tail;
             }
-            if (tail && (!best || a.max_kt > best.v)) best = { v: a.max_kt, t: a.t, tail: tail, a: a };
+            // the tile shows v, so rank by it; the unrounded max only breaks ties
+            if (tail && (!best || v > best.v || (v === best.v && +a.max_kt > +best.a.max_kt))) best = { v: v, t: a.t, tail: tail, a: a };
         });
         return best;
     }
@@ -2370,7 +2458,8 @@
             return '<div class="recon-vdm-stat' + (cls ? ' ' + cls : '') + '"' +
                 (tip ? ' title="' + tip + '"' : '') + '>' +
                 '<div class="recon-vdm-stat-val"' + (b.valText ? ' style="font-size:.78em;letter-spacing:-.01em"' : '') + '>' + (b.valText || Math.round(b.v)) +
-                '<span class="recon-vdm-stat-unit">' + unit + '</span></div>' +
+                '<span class="recon-vdm-stat-unit">' + unit + '</span>' +
+                (b.bandText ? '<span class="recon-vdm-stat-band">' + b.bandText + '</span>' : '') + '</div>' +
                 '<div class="recon-vdm-stat-label">' + label + '</div>' +
                 '<div class="recon-vdm-stat-sub">' + sub + '</div></div>';
         }
@@ -2410,13 +2499,15 @@
         _hdobTdrEnsureMeta();
         var tdr = _hdobTdrSummaryBest();
         if (tdr) {
-            var cov = tdr.a.coverage && tdr.a.coverage['r<60km'];
+            var cov = tdr.a.coverage && tdr.a.coverage['r<60km'], tdrBand = _hdobTdrBand(tdr.a);
+            if (tdrBand) tdr.bandText = _hdobTdrBandText(tdrBand);
             html += tile('Max TDR SEAR 10-m (exp)', tdr, 'kt', 'is-sear is-tdrsear',
                 (tdr.a.max_r_nm != null ? ' · ' + Math.round(tdr.a.max_r_nm) + ' n mi from center' : '') +
                 (cov != null && cov < 0.3 ? ' · thin coverage' : ''),
                 'TDR SEAR: experimental SEAR 10-m estimate from the P-3 tail-Doppler analysis (its 500-m and 2-km winds replace the flight-level wind). ' +
                 'It sees the low-level eyewall all around the storm, not only along the flight track, so it can differ from the flight-level SEAR, e.g. when the vortex is tilted. ' +
                 'Strongest analysis of the flight on display' + (cov != null ? ' (this one covers ' + Math.round(cov * 100) + '% of the area within 60 km)' : '') +
+                (tdrBand ? '. Range in parentheses: ' + _hdobTdrEsc(tdrBand.note) : '') +
                 '. Click to show it on the map. Not an official product.');
         }
         el.innerHTML = html;

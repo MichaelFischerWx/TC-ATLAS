@@ -4846,7 +4846,8 @@ function _toggleDualPane() {
 // map). IN-SAMPLE: Stage 2 was trained on sondes collocated with these analyses.
 var _searMode = false, _searIndex = {}, _searIndexReq = {}, _searCache = {};
 var _SEAR_CDN = 'https://cdn.tcatlas.org/tcradar-sear/v1/';
-var _SEAR_STOPS = [[34, '#60a5fa'], [50, '#22c55e'], [64, '#eab308'], [83, '#f97316'], [96, '#ef4444'], [113, '#dc2626'], [137, '#c026d3'], [999, '#7c3aed']];
+// Copy of realtime_ir.js _RECON_WIND_STOPS — keep in sync (96-112 kt deep wine since 2026-09-28).
+var _SEAR_STOPS = [[34, '#60a5fa'], [50, '#22c55e'], [64, '#eab308'], [83, '#f97316'], [96, '#ef4444'], [113, '#9d174d'], [137, '#c026d3'], [999, '#7c3aed']];
 var _SEAR_VMIN = 0, _SEAR_VMAX = 170;
 function _searColorscale() {   // hard steps: each bin boundary appears twice
     var cs = [], lo = _SEAR_VMIN, span = _SEAR_VMAX - _SEAR_VMIN;
