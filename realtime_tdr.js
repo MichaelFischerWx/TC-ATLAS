@@ -1247,6 +1247,18 @@
      *  landed more than 90 min before the newest ob are dropped too, so an
      *  enroute plane isn't decorated with the previous flight's passes. Entries
      *  without sortie times (older payloads) fall back to tail-only matching. */
+    /** Is SEAR's current flight (payload headline.current_flight) among the flights on display? */
+    function _hdobCfInScope(cf) {
+        var shown = _hdobFilterAircraft((_hdobData && _hdobData.aircraft) || [], 'map');
+        if (!shown.length) return true;
+        var s0 = Date.parse(cf.start), s1 = Date.parse(cf.last_ob), PAD = 45 * 60000;
+        return shown.some(function (a) {
+            if (!_hdobTailEq(cf.tail, a.tail)) return false;
+            var s = Date.parse(_hdobX(a.sortie_start || '')), e = Date.parse(_hdobX(a.sortie_end || ''));
+            return isNaN(s) || isNaN(e) || isNaN(s0) || isNaN(s1) || (s1 >= s - PAD && s0 <= e + PAD);
+        });
+    }
+
     function _hdobSearPassesInScope(passes) {
         passes = passes || [];
         if (!passes.length) return [];
@@ -2476,6 +2488,7 @@
         // 2026-09-05 (PI): Vmax is a maximum -- the tile shows the STRONGEST crossing of the last 3 h,
         // with the window's other crossings and the RMW range beside it so its credibility is explicit.
         var hd = _hdobData && _hdobData.sear && _hdobData.sear.headline;
+        var hdCf = hd && hd.stale && hd.current_flight;   // newer flight, nothing scored yet (2026-09-29, Rachel)
         // The headline is the product's newest window, which may belong to a
         // previous flight (Polo 2026-09-22: yesterday's 66 kt over an enroute
         // plane). Only use it when its pass is among the flights on display.
@@ -2498,11 +2511,21 @@
                       (searRangeLed ? ' · most likely ' + Math.round(best.sear.v) + ' kt' : (searRange ? ' · ' + searRange : '')) +
                       (best.sear.prelim ? ' · prelim fix' : '');
         }
+        // The flight on display has no scored crossing (no center fix yet) while the headline is an earlier
+        // flight's: say so instead of dropping the tile (2026-09-29, Rachel: 60-kt flight-level winds, no fix).
+        var searTip = 'SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Strongest crossing of the last 3 h; a single crossing carries about 7-10 kt of RMW uncertainty. Not an official product.';
+        if (!searTile && hdCf && _hdobCfInScope(hdCf)) {
+            searTile = { valText: 'pending', t: hdCf.last_ob, tail: hdCf.tail };
+            searSub = ' · ' + (hdCf.n_fix ? 'no scored crossing yet' : 'awaiting a center fix');
+            searTip = 'SEAR scores an eyewall crossing once the flight has a center fix (a VDM, a TDR radar center, or a pressure minimum with calm winds). ' +
+                (hdCf.fl_max_kt != null ? 'This flight\'s 10-s flight-level maximum so far: ' + Math.round(hdCf.fl_max_kt) + ' kt. ' : '') +
+                'The last SEAR estimate, ' + Math.round(_hdobData.sear.headline.kt) + ' kt, is from an earlier flight (' +
+                String(_hdobData.sear.headline.t).slice(5, 16).replace('T', ' ') + 'Z). Not an official product.';
+        }
         var html = tile('Max FL wind', best.fl, 'kt') +
                    tile('Min extrap SLP', best.slp, 'mb', 'is-accent') +
                    tile('Max SFMR', best.sfmr, 'kt') +
-                   tile('Max SEAR 10-m (exp)', searTile, 'kt', 'is-sear', searSub,
-                        'SEAR: experimental machine-learning estimate of the 10-m wind from the flight-level wind. Strongest crossing of the last 3 h; a single crossing carries about 7-10 kt of RMW uncertainty. Not an official product.');
+                   tile('Max SEAR 10-m (exp)', searTile, searTile && searTile.valText === 'pending' ? '' : 'kt', 'is-sear', searSub, searTip);
         // TDR-SEAR beside it (Michael, 2026-09-28): the analysis' own 500-m + 2-km winds instead of the
         // flight-level wind, so it sees the low-level eyewall all the way around -- Polo 09-28 16:37Z read
         // 99 kt in the NW (0.5-1 km ~100 kt ring under a tilted 2-3 km vortex) vs 79-88 kt flight-level SEAR.

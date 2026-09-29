@@ -830,6 +830,40 @@ def _extract_3d(ds, variable: str, max_height_km: float = 18.0):
     return vol, levels[h_mask]
 
 
+def _rollover_fix(dt_str: str, produced: Optional[str]) -> str:
+    """Correct an analysis datetime built from the FLIGHT (takeoff) day + the analysis HH:MM:SS.
+
+    Files that write a post-midnight analysis hour as 04 (not SEB-style 28) come out exactly one day early for any
+    flight that took off before 00Z (Rachel 260928H2: 2026-09-28 04:31Z for 09-29 04:31Z; 2026-09-29). The SEB
+    listing's "Last modified" (production) time is a real UTC stamp. The error is only ever -1 day, so the only
+    correction is +1 day, made when the attribute time is implausibly far (> 20 h) before production AND the next
+    day's time lands just before production (-30 min skew .. +12 h; a file re-produced long afterwards is left alone). Unchanged when
+    either stamp is missing or unparseable."""
+    if not dt_str or not produced:
+        return dt_str
+    try:
+        a = _dt.strptime(dt_str, "%Y-%m-%d %H:%M:%SZ").replace(tzinfo=timezone.utc)
+        p = _dt.strptime(produced.replace("T", " ").rstrip("Z")[:16], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError, AttributeError):
+        return dt_str
+    nxt = a + timedelta(days=1)
+    if p - a > timedelta(hours=20) and timedelta(minutes=-30) <= p - nxt <= timedelta(hours=12):
+        return nxt.strftime("%Y-%m-%d %H:%M:%SZ")
+    return dt_str
+
+
+def _case_meta_for(ds, file_url: Optional[str]) -> dict:
+    """_build_case_meta with the analysis date made rollover-safe from the file's SEB production time."""
+    meta = _build_case_meta(ds)
+    if file_url and meta.get("datetime"):
+        try:
+            base, name = file_url.rsplit("/", 1)
+            meta["datetime"] = _rollover_fix(meta["datetime"], _dir_mtimes(base + "/").get(name))
+        except Exception:   # noqa: BLE001 -- the listing is best-effort; the attribute date stands
+            pass
+    return meta
+
+
 def _build_case_meta(ds) -> dict:
     """Build metadata dict from global attributes."""
     attrs = ds.attrs
@@ -1256,7 +1290,7 @@ def get_rt_data(
     x_km, y_km = _get_xy_coords(ds)
     data, actual_level = _extract_2d(ds, variable, level_km, storm_motion=storm_motion)
     var_info = _get_variable_info(variable)
-    case_meta = _build_case_meta(ds)
+    case_meta = _case_meta_for(ds, file_url)
 
     result = {
         "data": _clean_2d(data),
@@ -1397,7 +1431,7 @@ def get_rt_cross_section(
 
     cs_data = _extract_cs(variable)
     var_info = _get_variable_info(variable)
-    case_meta = _build_case_meta(ds)
+    case_meta = _case_meta_for(ds, file_url)
 
     result = {
         "cross_section": _clean_2d(cs_data),
@@ -1470,7 +1504,7 @@ def get_rt_volume(
     var_info["data_min"] = round(data_min, 3)
     var_info["data_max"] = round(data_max, 3)
 
-    case_meta = _build_case_meta(ds)
+    case_meta = _case_meta_for(ds, file_url)
 
     result = {
         "value": v_flat.tolist(),
@@ -1522,7 +1556,7 @@ def debug_ir(
     # Step 2: Open TDR file
     try:
         ds = _open_rt_dataset(file_url)
-        meta = _build_case_meta(ds)
+        meta = _case_meta_for(ds, file_url)
         info["meta"] = meta
         info["steps"].append("TDR file opened")
     except Exception as e:
@@ -1641,7 +1675,7 @@ def get_realtime_ir(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not open TDR file: {e}")
 
-    meta = _build_case_meta(ds)
+    meta = _case_meta_for(ds, file_url)
     center_lat = meta["latitude"]
     center_lon = meta["longitude"]
 
@@ -1737,7 +1771,7 @@ def get_realtime_ir_frame(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not open TDR file: {e}")
 
-    meta = _build_case_meta(ds)
+    meta = _case_meta_for(ds, file_url)
     center_lat = meta["latitude"]
     center_lon = meta["longitude"]
 
@@ -1860,7 +1894,7 @@ def get_rt_azimuthal_mean(
     )
 
     var_info = _get_variable_info(variable)
-    meta = _build_case_meta(ds)
+    meta = _case_meta_for(ds, file_url)
 
     result = {
         "azimuthal_mean": _clean_2d(az_mean),
@@ -2349,7 +2383,7 @@ def _build_dropsondes_result(file_url: str, now: float) -> dict:
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not open TDR file: {e}")
 
-    case_meta = _build_case_meta(ds)
+    case_meta = _case_meta_for(ds, file_url)
     center_lat = case_meta["latitude"]
     center_lon = case_meta["longitude"]
 
@@ -2873,7 +2907,7 @@ def get_flight_level(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not open TDR file: {e}")
 
-    case_meta = _build_case_meta(ds)
+    case_meta = _case_meta_for(ds, file_url)
     center_lat = case_meta["latitude"]
     center_lon = case_meta["longitude"]
 
@@ -3887,7 +3921,7 @@ def get_rt_quadrant_mean(
             coverage_min=coverage_min
         )
 
-        case_meta = _build_case_meta(ds)
+        case_meta = _case_meta_for(ds, file_url)
 
         result = {
             **case_meta,  # case_meta first so explicit keys can override
@@ -4036,7 +4070,7 @@ def get_rt_anomaly_azimuthal_mean(
             valid_climo = ~np.isnan(climo_mean) & (climo_std >= STD_FLOOR)
             z_anomaly[valid_climo] = (az_mean[valid_climo] - climo_mean[valid_climo]) / climo_std[valid_climo]
 
-        case_meta = _build_case_meta(ds)
+        case_meta = _case_meta_for(ds, file_url)
 
         result = {
             **case_meta,  # case_meta first so explicit keys below can override
@@ -5178,6 +5212,8 @@ def get_center_track(
             pt["url"] = e["url"]
             pt["filename"] = e["filename"]
             pt["datetime_utc"] = e.get("datetime_utc")
+            # per-file records are cached with the attribute date; make it rollover-safe here (2026-09-29)
+            pt["datetime"] = _rollover_fix(pt.get("datetime"), e.get("datetime_utc"))
             if not pt.get("time_label"):
                 pt["time_label"] = e.get("time_label", "")
             points.append(pt)
@@ -5288,7 +5324,7 @@ def get_rt_cfad(
     # Extract 3D volume (level, y, x)
     vol, heights = _extract_3d(ds, variable)
     x_km, y_km = _get_xy_coords(ds)
-    meta = _build_case_meta(ds)
+    meta = _case_meta_for(ds, file_url)
 
     # Variable display info
     if variable in RT_VARIABLES:

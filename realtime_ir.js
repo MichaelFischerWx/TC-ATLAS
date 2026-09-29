@@ -32135,6 +32135,15 @@
         var q = _rtCompass8(last.az_deg) || last.quad || '';
         if (sp.headline && sp.headline.kt != null) {   // strongest crossing of the last 3 h, with context (2026-09-05)
             var hd = sp.headline;
+            // 2026-09-29 (Rachel): a newer flight with no scored crossing yet -- say the headline is the earlier
+            // flight's (dated), and what the current flight has measured so far, instead of passing it off as current.
+            var cf = hd.stale && hd.current_flight;
+            if (cf) {
+                var cfBits = cf.fl_max_kt != null ? ['FL max ' + Math.round(cf.fl_max_kt) + ' kt'] : [];
+                cfBits.push(cf.n_fix ? 'no scored crossing yet' : 'awaiting a center fix');
+                return ' · SEAR ' + Math.round(hd.kt) + ' kt (earlier flight, ' + String(hd.t).slice(5, 10).replace('-', '/') + ' ' +
+                    String(hd.t).slice(11, 16) + 'Z) · current flight: ' + cfBits.join(', ');
+            }
             return ' · SEAR ' + Math.round(hd.kt) + ' kt' +
                 (hd.others_kt && hd.others_kt.length ? ' (other crossings ' + Math.round(hd.others_min_kt) + (hd.others_kt.length > 1 ? '–' + Math.round(hd.others_max_kt) : '') + ')' : '') +
                 ' (' + String(hd.t).slice(11, 16) + 'Z' + (hd.fix_source === 'hdob' ? ', prelim' : '') + ')';
