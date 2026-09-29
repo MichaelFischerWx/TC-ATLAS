@@ -632,13 +632,22 @@
             // The mission id decodes to the storm the sortie was FILED for, so it
             // beats proximity: a ferry leg is still hours from its target.
             var owner = mm.atcf ? byAtcf[String(mm.atcf).toUpperCase()] : null;
+            // ...then the bulletin label ("RACHEL"), then position.
+            if (!owner && mm.label) {
+                var ml = String(mm.label).toUpperCase().replace(/[^A-Z0-9]/g, '');
+                for (var li = 0; li < uniq.length && !owner; li++) {
+                    if (String(uniq[li].name || '').toUpperCase().replace(/[^A-Z0-9]/g, '') === ml) owner = uniq[li];
+                }
+            }
             if (!owner) {
                 for (var si = 0; si < uniq.length; si++) {
                     if (uniq[si].lat == null || uniq[si].lon == null) continue;
                     if (Math.abs(uniq[si].lat - mm.lat) <= 5 && Math.abs(uniq[si].lon - mm.lon) <= 5) { owner = uniq[si]; break; }
                 }
             }
-            if (owner) { owner.recon = true; continue; }
+            // A plane flying it NOW outranks earlier recon (Polo's finished
+            // flight vs NOAA 42 airborne into Rachel, 2026-09-29).
+            if (owner) { owner.recon = true; owner.airborne = true; continue; }
             _hdobMissionInfo[mm.tail] = mm;
             missionOpts.push(mm);
         }
@@ -649,6 +658,7 @@
         // storm mattered. (The initial has_recon split above can't see missions.)
         uniq.sort(function (a, b) {
             if (!!a.replay !== !!b.replay) return a.replay ? -1 : 1;
+            if (!!a.airborne !== !!b.airborne) return a.airborne ? -1 : 1;
             if (!!a.recon !== !!b.recon) return a.recon ? -1 : 1;
             var va = (a.vmax != null) ? a.vmax : -1, vb = (b.vmax != null) ? b.vmax : -1;
             if (va !== vb) return vb - va;
