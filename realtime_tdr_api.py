@@ -4852,12 +4852,35 @@ def _derived_cache_lookup(kind: str, params: dict):
     key = _derived_cache_key(kind, params)
     hit = _derived_mem_get(key)
     if hit is not None:
-        return dict(hit, cache="memory")
+        return _redate_cached(dict(hit, cache="memory"), params)
     gcs = _derived_from_gcs(key)
     if gcs is not None:
         _derived_mem_put(key, gcs, len(json.dumps(gcs)))
-        return dict(gcs, cache="gcs")
+        return _redate_cached(dict(gcs, cache="gcs"), params)
     return None
+
+
+def _redate_cached(hit: dict, params: dict) -> dict:
+    """Products cached before 2026-09-29 carry the attribute date, a day early for a post-midnight analysis written
+    as hour 04 (see _rollover_fix). Correct it from the mission listing only when that listing is ALREADY in memory
+    (the Recon tab lists a mission's files before requesting its products), so a cache hit never waits on SEB.
+    Shallow copy in, new meta dict out: the cached object itself is never mutated."""
+    fu = params.get("file_url")
+    if not fu or "/" not in fu:
+        return hit
+    base, name = fu.rsplit("/", 1)
+    with _rt_dir_lock:
+        cached = _rt_dir_cache.get(base + "/")
+        produced = cached[1].get(name) if cached else None
+    if not produced:
+        return hit
+    for k in ("case_meta", "meta"):
+        m = hit.get(k)
+        if isinstance(m, dict) and m.get("datetime"):
+            fixed = _rollover_fix(m["datetime"], produced)
+            if fixed != m["datetime"]:
+                hit[k] = dict(m, datetime=fixed)
+    return hit
 
 
 def _derived_cache_store(kind: str, params: dict, payload: dict):
