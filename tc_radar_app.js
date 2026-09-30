@@ -3085,7 +3085,10 @@ var _IR_TB_STOPS = [
     [310,12,12,22],[293,70,70,82],[283,120,120,132],[273,180,180,192],[263,216,218,228],
     [253,140,210,220],[248,68,180,196],[243,32,148,166],[238,40,178,116],[233,96,208,68],
     [228,192,220,40],[223,238,196,48],[218,228,132,48],[213,214,78,56],[208,180,36,68],
-    [203,196,48,156],[198,168,64,200],[193,120,48,180],[183,64,24,140],[173,28,12,96]
+    [203,196,48,156],[198,168,64,200],[193,120,48,180],
+    // ice-blue cold tail (2026-09-30) — MUST equal tc_radar_api._CLAUDE_IR_TB_STOPS,
+    // since this table inverts the server-rendered PNG back to its index
+    [190,64,24,140],[187,40,60,196],[184,76,116,236],[181,136,164,250],[176,152,168,248],[170,255,255,255]
 ];
 var _irLUT = null, _irInvLUT = null;
 function _irBuildLUTs() {
@@ -3213,9 +3216,9 @@ function _irColorbarGradient() {
     var cm = _irActiveCmap();
     if (cm === 'color') return 'linear-gradient(to right, #FFFFFF, #C8C8C8, #969696, #646464, #323232, #003264, #0064C8, #0096FF, #00C8FF, #00FF96, #00C800, #96FF00, #FFFF00, #FFC800, #FF9600, #FF0000, #C80000, #960000, #640000, #320000)';
     var lut = _irVariantLUTFor(cm), stops = [];
-    // colorbar runs 190 K (left) → 310 K (right); idx = (330 - Tb) * 255/170
-    for (var k = 0; k <= 24; k++) {
-        var tb = 190 + 120 * k / 24, i = Math.max(0, Math.min(255, Math.round((330 - tb) * 255 / 170)));
+    // colorbar runs 170 K (left) → 310 K (right); idx = (330 - Tb) * 255/170
+    for (var k = 0; k <= 28; k++) {
+        var tb = 170 + 140 * k / 28, i = Math.max(0, Math.min(255, Math.round((330 - tb) * 255 / 170)));
         stops.push('rgb(' + lut[i*3] + ',' + lut[i*3+1] + ',' + lut[i*3+2] + ')');
     }
     return 'linear-gradient(to right, ' + stops.join(', ') + ')';
@@ -3291,7 +3294,7 @@ function fetchIRData(caseIndex, callback) {
     _irBoundsSet = false;  // force setBounds() on new case (center may differ)
 
     // Phase 1: Fetch metadata + t=0 frame for instant display
-    var url = API_BASE + '/ir?case_index=' + caseIndex + '&data_type=' + _activeDataType;
+    var url = API_BASE + '/ir?case_index=' + caseIndex + '&data_type=' + _activeDataType + '&cm=2';   // cm = IR colormap version (cache key)
     var cacheKey = _activeDataType + ':' + caseIndex;
     var p = _irRespCache[cacheKey]
         ? Promise.resolve(_irRespCache[cacheKey])
@@ -3362,7 +3365,7 @@ function _fetchRemainingFramesParallel(caseIndex, startIdx) {
     var promises = [];
     for (var i = startIdx; i < _irFrameURLs.length; i++) {
         (function(lagIdx) {
-            var url = API_BASE + '/ir_frame?case_index=' + caseIndex + '&lag_index=' + lagIdx + '&data_type=' + _activeDataType;
+            var url = API_BASE + '/ir_frame?case_index=' + caseIndex + '&lag_index=' + lagIdx + '&data_type=' + _activeDataType + '&cm=2';
             promises.push(
                 fetch(url)
                     .then(function(r) { return r.ok ? r.json() : null; })
@@ -15524,7 +15527,7 @@ function _showIRMapColorbar() {
         '<div style="font-size:9px;font-weight:600;color:#60a5fa;margin-bottom:2px;">IR Brightness Temp</div>' +
         '<div style="width:140px;height:10px;border-radius:3px;background:' + gradientStops + ';border:1px solid rgba(15, 22, 35,0.15);"></div>' +
         '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
-            '<span>190 K</span><span>310 K</span>' +
+            '<span>170 K</span><span>310 K</span>' +
         '</div>';
     el.style.display = 'block';
 }

@@ -2328,7 +2328,9 @@ _CLAUDE_IR_TB_STOPS = [
     (233,  96, 208,  68), (228, 192, 220,  40), (223, 238, 196,  48),
     (218, 228, 132,  48), (213, 214,  78,  56), (208, 180,  36,  68),
     (203, 196,  48, 156), (198, 168,  64, 200), (193, 120,  48, 180),
-    (183,  64,  24, 140), (173,  28,  12,  96),
+    # ice-blue cold tail (2026-09-30) — same stops as satellite_ir._IR_TB_STOPS
+    (190,  64,  24, 140), (187,  40,  60, 196), (184,  76, 116, 236),
+    (181, 136, 164, 250), (176, 152, 168, 248), (170, 255, 255, 255),
 ]
 _IR_CMAP_VMIN, _IR_CMAP_VMAX = 160.0, 330.0  # match buildLUTfromTb
 
@@ -2490,7 +2492,8 @@ def get_ir_frame(
         _r2_frame_exists, _r2_mirror_frame_async, _public_frame_url,
     )
     dt = "merge" if data_type == "merge" else "swath"
-    r2_key = f"tcradar-ir/v1/{dt}/{case_index}_{lag_index}.json"
+    # v2 = ice-blue cold tail (2026-09-30); v1 objects hold the old baked colours.
+    r2_key = f"tcradar-ir/v2/{dt}/{case_index}_{lag_index}.json"
     if _r2_frame_exists(r2_key):
         # Target is a pure function of (dt, case, lag) and the object never
         # changes once mirrored → the redirect itself is safely cacheable.

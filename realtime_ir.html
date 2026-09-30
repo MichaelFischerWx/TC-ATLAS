@@ -82,7 +82,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20260929h">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20260930cm1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -116,7 +116,7 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260928a">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260924a">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20260930cm1">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260929s1">
 </head>
@@ -402,18 +402,18 @@
                          the global map). Populated by _renderDetailEnvColorbar. -->
                     <div id="ir-detail-env-cbars" class="ir-detail-env-cbars" style="display:none;"></div>
                     <!-- IR Tb colorbar legend (Claude IR; °C labels).
-                         Range chosen to span realistic cloud-top temps:
-                         +35 °C warm surface → -85 °C overshooting tops.
-                         (The underlying LUT spans -113 to +57 °C, but
-                         labels stop at -85 since cloud tops below that
-                         are vanishingly rare and showing -110 misleads.) -->
+                         The bar spans exactly +35 °C (warm surface) → -100 °C
+                         (coldest overshooting tops; the ice-blue tail below
+                         -83 °C), so the four evenly spaced labels sit on
+                         their true temperatures. -->
                     <div id="ir-tb-legend" class="ir-tb-legend">
                         <span>Brightness Temp (°C)</span>
                         <div class="ir-tb-legend-bar" id="ir-tb-legend-bar-gradient"></div>
                         <div class="ir-tb-legend-labels">
                             <span>+35</span>
-                            <span>-30</span>
-                            <span>-85</span>
+                            <span>-10</span>
+                            <span>-55</span>
+                            <span>-100</span>
                         </div>
                     </div>
                     <!-- IR vigor legend (shown only when the Vigor product is active) -->
@@ -2711,14 +2711,14 @@
     <script defer src="tc_mw_layer.js?v=20260920a"></script>
     <script defer src="tc_dm_analytics.js?v=20260904b"></script>
     <script defer src="realtime_ir_dm.js?v=20260904r"></script>
-    <script defer src="realtime_ir.js?v=20260929h"></script>
+    <script defer src="realtime_ir.js?v=20260930cm1"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
          eager for the map-tab recon-overlay sonde skew-Ts. The recon /
          subseasonal / seasonal tab modules (~1 MB combined) lazy-load on first
          tab activation — see _lazyViewMods in the tab controller below. -->
-    <script defer src="satellite.js?v=20260804a"></script>
+    <script defer src="satellite.js?v=20260930cm1"></script>
 
     <script>
     /* Tab switching between Map, Satellite, Subseasonal, and Seasonal views */

@@ -192,6 +192,12 @@ _gcs_rt_bucket = None
 #   - storm motion ≥ 0.5° causes round(lat/lon) to flip → all frames miss
 #   - different radius_deg requests collided on the same key → wrong cutout
 _GCS_RT_VERSION = "rt-v12"  # v12: GOES geos→latlon reprojection (E+W); raw/webp/bundle caches held fixed-grid GOES frames misregistered up to hundreds of km off-nadir
+# Rendered Claude-IR WebP frames carry the COLOURMAP version in their prefix, so a
+# colormap change re-renders them from the (unchanged, still-warm) raw-Tb cache
+# instead of bumping _GCS_RT_VERSION (which also drops every raw cache and is
+# pinned in the frontend). c2 = ice-blue cold tail, 2026-09-30.
+_IR_WEBP_PREFIX = "ir-webp-merc-c2"
+_IR_WEBP_PREFIX_OLD = ("ir-webp-merc",)   # still swept by the cache cleanup until it ages out
                             # (perimeter-sampled geos window + true geos_extent;
                             # evicts pre-fix frames with rotated black corners)
 
@@ -4330,8 +4336,8 @@ def _cleanup_old_gcs_frames(active_storms: list):
     targets = [
         (f"{_GCS_RT_VERSION}/ir-raw/", 2),
         (f"{_GCS_RT_VERSION}/band-raw/", 3),
-        (f"{_GCS_RT_VERSION}/ir-webp-merc/", 2),
-    ]
+        (f"{_GCS_RT_VERSION}/{_IR_WEBP_PREFIX}/", 2),
+    ] + [(f"{_GCS_RT_VERSION}/{_p}/", 2) for _p in _IR_WEBP_PREFIX_OLD]
     for _b in (WV_BAND, SWIR_BAND, VIS_BAND):
         targets.append((f"{_GCS_RT_VERSION}/band{_b}-webp/", 2))
 
@@ -4611,7 +4617,7 @@ def _latest_ir_webp(atcf_id: str):
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return None, None
-    keys = _gcs_rt_list_keys(f"{_GCS_RT_VERSION}/ir-webp-merc/{atcf_id.upper()}/")
+    keys = _gcs_rt_list_keys(f"{_GCS_RT_VERSION}/{_IR_WEBP_PREFIX}/{atcf_id.upper()}/")
     if not keys:
         return None, None
     latest = max(keys)
@@ -6349,7 +6355,7 @@ def _gcs_jpg_get(atcf_id: str, dt_str: str, band: int = 0,
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return None
-    prefix = "ir-webp-merc" if band == 0 else f"band{band}-webp"
+    prefix = _IR_WEBP_PREFIX if band == 0 else f"band{band}-webp"
     pos = _jpg_pos_key(lat, lon)
     key = f"{_GCS_RT_VERSION}/{prefix}/{atcf_id}/{dt_str}{pos}.webp"
     try:
@@ -6381,7 +6387,7 @@ def _gcs_jpg_put(atcf_id: str, dt_str: str, jpg_bytes: bytes, band: int = 0,
     if bucket is None:
         return
     def _upload():
-        prefix = "ir-webp-merc" if band == 0 else f"band{band}-webp"
+        prefix = _IR_WEBP_PREFIX if band == 0 else f"band{band}-webp"
         pos = _jpg_pos_key(lat, lon)
         key = f"{_GCS_RT_VERSION}/{prefix}/{atcf_id}/{dt_str}{pos}.webp"
         try:
@@ -6402,7 +6408,9 @@ _CLAUDE_IR_TB_STOPS = [
     (233, 96,208,68), (228, 192,220,40), (223, 238,196,48),
     (218, 228,132,48), (213, 214,78,56), (208, 180,36,68),
     (203, 196,48,156), (198, 168,64,200), (193, 120,48,180),
-    (183, 64,24,140), (173, 28,12,96),
+    # ice-blue cold tail (2026-09-30) — same stops as satellite_ir._IR_TB_STOPS
+    (190, 64,24,140), (187, 40,60,196), (184, 76,116,236),
+    (181, 136,164,250), (176, 152,168,248), (170, 255,255,255),
 ]
 
 def _build_claude_ir_jpg_lut() -> np.ndarray:

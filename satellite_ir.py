@@ -235,7 +235,7 @@ IR_PRODUCT = "ABI-L2-CMIPF"     # GOES full-disk Cloud & Moisture Imagery
 IR_BAND = 13                     # 10.3 µm clean longwave IR window
 IR_VARIABLE = "CMI"              # variable name in CMI file
 
-IR_VMIN = 190.0                  # brightness temperature colour limits (K)
+IR_VMIN = 170.0                  # brightness temperature colour limits (K); 170 K so cold tops below −83 °C keep a colour (was 190, which saturated CDOs)
 IR_VMAX = 310.0
 
 # Reprojection pitch for the raw-Tb IR path (fetch_ir_tb_raw only). Native
@@ -274,29 +274,43 @@ BAND_RANGES = {
 SWIR_BAND = 7
 
 # Claude IR colormap LUT — matches the client-side Claude IR colormap.
-# frac = 1 - (Tb - IR_VMIN) / (IR_VMAX - IR_VMIN), so frac 0 = warm, 1 = cold.
-# Grey warm side → teal → green → gold → orange → crimson → magenta → violet → indigo.
-_IR_STOPS = [
-    (0.000,  12,  12,  22),   # 310K  warm surface: near-black
-    (0.142,  70,  70,  82),   # 293K  dark grey-blue
-    (0.225, 120, 120, 132),   # 283K  medium grey
-    (0.308, 180, 180, 192),   # 273K  light grey (freezing)
-    (0.392, 216, 218, 228),   # 263K  pale blue-grey
-    (0.475, 140, 210, 220),   # 253K  light teal
-    (0.517,  68, 180, 196),   # 248K  teal
-    (0.558,  32, 148, 166),   # 243K  deep teal
-    (0.600,  40, 178, 116),   # 238K  teal-green
-    (0.642,  96, 208,  68),   # 233K  green
-    (0.683, 192, 220,  40),   # 228K  yellow-green
-    (0.725, 238, 196,  48),   # 223K  gold
-    (0.767, 228, 132,  48),   # 218K  orange
-    (0.808, 214,  78,  56),   # 213K  red-orange
-    (0.850, 180,  36,  68),   # 208K  crimson
-    (0.892, 196,  48, 156),   # 203K  magenta
-    (0.933, 168,  64, 200),   # 198K  purple
-    (0.975, 120,  48, 180),   # 193K  deep violet
-    (1.000,  64,  24, 140),   # 183K  indigo
+# Stops are anchored to Tb and converted to frac = 1 - (Tb - IR_VMIN) / (IR_VMAX - IR_VMIN)
+# (frac 0 = warm, 1 = cold). Grey warm side → teal → green → gold → orange → crimson →
+# magenta → violet → indigo, then an ICE-BLUE tail below −83 °C (2026-09-30): the ramp
+# darkened all the way down before, so a −90 °C CDO read as one flat indigo. The tail
+# turns LIGHTER past the indigo ring (royal → cornflower → periwinkle) and stays
+# saturated: a near-white ice blue is ΔE≈4 from the pale grey of −10 °C cloud, the
+# periwinkle is ΔE≥10 from every warm-side colour. White only at ≤ −103 °C.
+# Mirrored in ir_monitor_api._CLAUDE_IR_TB_STOPS, realtime_tdr_api, tc_radar_api and the
+# client IR_COLORMAPS['claude-ir'] tables (realtime_ir.js, satellite.js, global_archive.js).
+_IR_TB_STOPS = [
+    (310,  12,  12,  22),   # warm surface: near-black
+    (293,  70,  70,  82),   # dark grey-blue
+    (283, 120, 120, 132),   # medium grey
+    (273, 180, 180, 192),   # light grey (freezing)
+    (263, 216, 218, 228),   # pale blue-grey
+    (253, 140, 210, 220),   # -20 °C light teal
+    (248,  68, 180, 196),   # -25 °C teal
+    (243,  32, 148, 166),   # -30 °C deep teal
+    (238,  40, 178, 116),   # -35 °C teal-green
+    (233,  96, 208,  68),   # -40 °C green
+    (228, 192, 220,  40),   # -45 °C yellow-green
+    (223, 238, 196,  48),   # -50 °C gold
+    (218, 228, 132,  48),   # -55 °C orange
+    (213, 214,  78,  56),   # -60 °C red-orange
+    (208, 180,  36,  68),   # -65 °C crimson
+    (203, 196,  48, 156),   # -70 °C magenta
+    (198, 168,  64, 200),   # -75 °C purple
+    (193, 120,  48, 180),   # -80 °C deep violet
+    (190,  64,  24, 140),   # -83 °C indigo (the old floor; now the dark ring)
+    (187,  40,  60, 196),   # -86 °C royal blue
+    (184,  76, 116, 236),   # -89 °C cornflower
+    (181, 136, 164, 250),   # -92 °C light periwinkle
+    (176, 152, 168, 248),   # -97 °C periwinkle
+    (170, 255, 255, 255),   # -103 °C white (extreme overshooting tops)
 ]
+_IR_STOPS = [(round(1.0 - (tb - IR_VMIN) / (IR_VMAX - IR_VMIN), 6), r, g, b)
+             for tb, r, g, b in _IR_TB_STOPS]
 
 
 def _build_ir_lut() -> np.ndarray:

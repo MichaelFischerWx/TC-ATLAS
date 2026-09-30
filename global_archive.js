@@ -436,8 +436,10 @@ var IR_COLORMAPS = {};
     // Claude IR — custom enhancement optimized for TC analysis
     // Design: cool-toned grayscale warm side preserves cloud texture;
     // color begins at convective onset (-20°C); teal→green→amber→terracotta
-    // progression maps perceptually to intensifying convection; violet/indigo
-    // for extreme cold tops maintains contrast on overshooting structure.
+    // progression maps perceptually to intensifying convection; violet → an
+    // indigo ring at -83°C, then an ice-blue tail that turns LIGHTER for the
+    // coldest tops (2026-09-30; was darkening to near-black, which flattened
+    // -85 to -95°C CDOs into one indigo). Same stops as satellite_ir._IR_TB_STOPS.
     IR_COLORMAPS['claude-ir'] = buildLUTfromTb([
         {tb: 310, r:  12, g:  12, b:  22},  // +37°C near-black (cool undertone)
         {tb: 293, r:  70, g:  70, b:  82},  // +20°C dark cool gray
@@ -457,8 +459,12 @@ var IR_COLORMAPS = {};
         {tb: 203, r: 196, g:  48, b: 156},  // -70°C magenta
         {tb: 198, r: 168, g:  64, b: 200},  // -75°C purple
         {tb: 193, r: 120, g:  48, b: 180},  // -80°C deep violet
-        {tb: 183, r:  64, g:  24, b: 140},  // -90°C indigo
-        {tb: 173, r:  28, g:  12, b:  96}   // -100°C near-black indigo
+        {tb: 190, r:  64, g:  24, b: 140},  // -83°C indigo (dark ring)
+        {tb: 187, r:  40, g:  60, b: 196},  // -86°C royal blue
+        {tb: 184, r:  76, g: 116, b: 236},  // -89°C cornflower
+        {tb: 181, r: 136, g: 164, b: 250},  // -92°C light periwinkle
+        {tb: 176, r: 152, g: 168, b: 248},  // -97°C periwinkle
+        {tb: 170, r: 255, g: 255, b: 255}   // -103°C white (extreme overshooting tops)
     ]);
 })();
 

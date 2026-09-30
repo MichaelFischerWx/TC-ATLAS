@@ -198,7 +198,9 @@ IR_VMAX = 310.0
 _IR_ALPHA = 255
 
 try:
-    from satellite_ir import _IR_STOPS  # noqa: F401  (shared colour ramp)
+    # The stops are fracs over satellite_ir's IR_VMIN/IR_VMAX, so the limits MUST
+    # come from the same place (170 K floor since the 2026-09-30 ice-blue tail).
+    from satellite_ir import _IR_STOPS, IR_VMIN, IR_VMAX  # noqa: F401,F811  (shared colour ramp)
 except Exception as _e:  # pragma: no cover — keep the tab rendering if it moves
     logger.warning("realtime_tdr: satellite_ir IR stops unavailable (%s); "
                    "falling back to the local ramp", _e)

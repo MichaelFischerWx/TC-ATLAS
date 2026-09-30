@@ -359,8 +359,16 @@
             {tb: 203, r: 196, g:  48, b: 156},    // -70°C: magenta
             {tb: 198, r: 168, g:  64, b: 200},    // -75°C: purple
             {tb: 193, r: 120, g:  48, b: 180},    // -80°C: deep violet
-            {tb: 183, r:  64, g:  24, b: 140},    // -90°C: indigo
-            {tb: 173, r:  28, g:  12, b:  96}     // -100°C: near-black indigo
+            // Ice-blue cold tail (2026-09-30; = satellite_ir._IR_TB_STOPS). The ramp
+            // used to keep darkening to near-black, so a -90 °C CDO read as one
+            // flat indigo; it now turns LIGHTER past the indigo ring and stays
+            // saturated (a near-white ice would match the -10 °C pale grey).
+            {tb: 190, r:  64, g:  24, b: 140},    // -83°C: indigo (dark ring)
+            {tb: 187, r:  40, g:  60, b: 196},    // -86°C: royal blue
+            {tb: 184, r:  76, g: 116, b: 236},    // -89°C: cornflower
+            {tb: 181, r: 136, g: 164, b: 250},    // -92°C: light periwinkle
+            {tb: 176, r: 152, g: 168, b: 248},    // -97°C: periwinkle
+            {tb: 170, r: 255, g: 255, b: 255}     // -103°C: white (extreme overshooting tops)
         ]);
     })();
 
@@ -2046,8 +2054,10 @@
     // encoding uses [160,330] K (published per-frame as `ir_trange` in
     // frames.json) so the hover reads real cold-top temperatures. We track the
     // LATEST IR frame's range; frames without an entry fall back to legacy.
-    // COLOUR paths (LUT builders) clamp the decoded Tb back to [190,310] so the
-    // rendered image is unchanged; HOVER + 3D-height paths use the real value.
+    // COLOUR paths clamp the decoded Tb to the colormaps' own [160,310] span (was
+    // [190,310], which cut every map off at -83 °C — the flat-indigo CDO); the
+    // claude-ir builder keeps the exact baked colours at/above 190 K and adds the
+    // ice-blue tail below it. HOVER + 3D-height paths use the real value.
     var _IR_IDX_RANGE_LEGACY = [190.0, 310.0];
     var _irIdxRange = _IR_IDX_RANGE_LEGACY.slice();      // [vmin, vmax] of the current IR frames
     function _irIdxToTb(idx) {                            // idx (1..255) → Tb (K), real value
@@ -2055,7 +2065,7 @@
     }
     function _irIdxToTbColor(idx) {                       // decode, then clamp to the display window
         var tb = _irIdxToTb(idx);
-        return tb < 190 ? 190 : (tb > 310 ? 310 : tb);
+        return tb < 160 ? 160 : (tb > 310 ? 310 : tb);
     }
     // Adopt the latest IR frame's decode range from a freshly-loaded frames.json.
     // No-op for wv/vis. Rebuilds the live idx colour LUT if the range changed so
@@ -2283,6 +2293,23 @@
         for (var _k = 0; _k < b.length; _k++) u[_k] = b.charCodeAt(_k);
         return u;
     })();
+    // claude-ir below 190 K (-83 °C): the ice-blue cold tail, same stops as the
+    // IR_COLORMAPS['claude-ir'] table and satellite_ir._IR_TB_STOPS.
+    var _IR_COLD_TAIL = [[190, 64, 24, 140], [187, 40, 60, 196], [184, 76, 116, 236],
+                         [181, 136, 164, 250], [176, 152, 168, 248], [170, 255, 255, 255]];
+    function _irColdTail(tb) {
+        var T = _IR_COLD_TAIL;
+        for (var k = 0; k < T.length - 1; k++) {
+            if (tb <= T[k][0] && tb >= T[k + 1][0]) {
+                var f = (T[k][0] - tb) / (T[k][0] - T[k + 1][0]);
+                return [Math.round(T[k][1] + f * (T[k + 1][1] - T[k][1])),
+                        Math.round(T[k][2] + f * (T[k + 1][2] - T[k][2])),
+                        Math.round(T[k][3] + f * (T[k + 1][3] - T[k][3]))];
+            }
+        }
+        var e = tb > T[0][0] ? T[0] : T[T.length - 1];
+        return [e[1], e[2], e[3]];
+    }
     // Build an idx-keyed (0..255) RGBA LUT for a colormap. claude-ir uses the exact
     // backend LUT above; other operational maps map idx → Tb (310 - idx/255*120) →
     // IR_COLORMAPS index (160..330), matching v2's client recolor (irlut).
@@ -2290,15 +2317,17 @@
         var legacy = (_irIdxRange[0] === 190 && _irIdxRange[1] === 310);
         if (cmap === 'claude-ir') {
             if (legacy) return _IR_CLAUDE_IDX_LUT;   // fast path: baked LUT is exactly this
-            // Widened encoding: remap the baked 190–310 idx LUT through the new
-            // decode + display clamp so the SAME physical Tb keeps its exact
-            // colour (new idx → real Tb → clamp[190,310] → old 190–310 idx →
-            // baked colour). Cold tops clamp to the coldest baked colour, as today.
+            // Widened encoding: at/above 190 K remap the baked 190–310 idx LUT so
+            // the SAME physical Tb keeps its exact colour (new idx → real Tb → old
+            // 190–310 idx → baked colour); below 190 K the ice-blue cold tail.
             var outc = new Uint8Array(256 * 4);
             for (var j = 1; j < 256; j++) {
-                var oi = Math.max(1, Math.min(255, Math.round((310 - _irIdxToTbColor(j)) / 120 * 255)));
-                outc[j * 4] = _IR_CLAUDE_IDX_LUT[oi * 4]; outc[j * 4 + 1] = _IR_CLAUDE_IDX_LUT[oi * 4 + 1];
-                outc[j * 4 + 2] = _IR_CLAUDE_IDX_LUT[oi * 4 + 2]; outc[j * 4 + 3] = 255;
+                var tbj = _irIdxToTb(j), cj;
+                if (tbj >= 190) {
+                    var oi = Math.max(1, Math.min(255, Math.round((310 - Math.min(310, tbj)) / 120 * 255)));
+                    cj = [_IR_CLAUDE_IDX_LUT[oi * 4], _IR_CLAUDE_IDX_LUT[oi * 4 + 1], _IR_CLAUDE_IDX_LUT[oi * 4 + 2]];
+                } else cj = _irColdTail(tbj);
+                outc[j * 4] = cj[0]; outc[j * 4 + 1] = cj[1]; outc[j * 4 + 2] = cj[2]; outc[j * 4 + 3] = 255;
             }
             return outc;
         }
@@ -3482,7 +3511,7 @@
             cctx.fillStyle = g2; cctx.fillRect(0, outH - botH, outW, botH);
             // Tb colorbar (bottom-left) — IR/Combo; matches the on-screen legend.
             if ((globalProduct === 'ir' || globalProduct === 'combo') && typeof _rtDrawCompareColorbar === 'function') {
-                try { _rtDrawCompareColorbar(cctx, outW, outH, _IR_CBAR, ['+35', '-30', '-85'], 'Brightness Temp (°C)'); } catch (e) {}
+                try { _rtDrawCompareColorbar(cctx, outW, outH, _IR_CBAR, _IR_CBAR_LABELS, 'Brightness Temp (°C)'); } catch (e) {}
             }
             var wmText = 'TC-ATLAS · tcatlas.org';
             cctx.font = '700 ' + Math.round(12 * S) + 'px "DM Sans",system-ui,sans-serif';
@@ -6984,8 +7013,8 @@
                 // hide logic still works. Full scale lives in the tooltip.
                 var cbar = L.DomUtil.create('div', 'rt-dock-cbar', row);
                 cbar.id = 'ir-global-colorbar';
-                cbar.title = 'Brightness temperature (°C) — GIBS Clean IR: '
-                    + '+35 (warm / low cloud) → −85 (cold / deep convection)';
+                cbar.title = 'Brightness temperature (°C) — Claude IR: '
+                    + '+35 (warm / low cloud) → −100 (coldest overshooting tops)';
                 L.DomUtil.create('span', 'rt-dock-cbar-grad', cbar);
                 var cbarLbl = L.DomUtil.create('span', 'rt-dock-cbar-lbl', cbar);
                 cbarLbl.textContent = '°C';
@@ -29775,20 +29804,24 @@
         '37h':   { scale: _MW_CBAR_37, vmin: 125, vmax: 300, title: '37H (K)' },
         // 37color is an RGB composite — no 1D scale; handled separately.
     };
-    // Claude IR LUT (warm → cold, left → right). Same stops as the
-    // .ir-tb-legend-bar CSS gradient.
+    // Claude IR LUT (warm → cold, left → right) over exactly +35 → -100 °C, so
+    // the evenly spaced labels _IR_CBAR_LABELS land on their true temperatures.
+    // Same stops as the .ir-tb-legend-bar CSS gradient.
     var _IR_CBAR = [
-        [0.000, 'rgb(12,12,22)'],    [0.142, 'rgb(70,70,82)'],
-        [0.225, 'rgb(120,120,132)'], [0.308, 'rgb(180,180,192)'],
-        [0.392, 'rgb(216,218,228)'], [0.475, 'rgb(140,210,220)'],
-        [0.517, 'rgb(68,180,196)'],  [0.558, 'rgb(32,148,166)'],
-        [0.600, 'rgb(40,178,116)'],  [0.642, 'rgb(96,208,68)'],
-        [0.683, 'rgb(192,220,40)'],  [0.725, 'rgb(238,196,48)'],
-        [0.767, 'rgb(228,132,48)'],  [0.808, 'rgb(214,78,56)'],
-        [0.850, 'rgb(180,36,68)'],   [0.892, 'rgb(196,48,156)'],
-        [0.933, 'rgb(168,64,200)'],  [0.975, 'rgb(120,48,180)'],
-        [1.000, 'rgb(64,24,140)'],
+        [0.000, 'rgb(18,18,29)'],    [0.112, 'rgb(70,70,82)'],
+        [0.186, 'rgb(120,120,132)'], [0.260, 'rgb(180,180,192)'],
+        [0.334, 'rgb(216,218,228)'], [0.409, 'rgb(140,210,220)'],
+        [0.446, 'rgb(68,180,196)'],  [0.483, 'rgb(32,148,166)'],
+        [0.520, 'rgb(40,178,116)'],  [0.557, 'rgb(96,208,68)'],
+        [0.594, 'rgb(192,220,40)'],  [0.631, 'rgb(238,196,48)'],
+        [0.668, 'rgb(228,132,48)'],  [0.705, 'rgb(214,78,56)'],
+        [0.742, 'rgb(180,36,68)'],   [0.779, 'rgb(196,48,156)'],
+        [0.816, 'rgb(168,64,200)'],  [0.853, 'rgb(120,48,180)'],
+        [0.875, 'rgb(64,24,140)'],   [0.897, 'rgb(40,60,196)'],
+        [0.920, 'rgb(76,116,236)'],  [0.942, 'rgb(136,164,250)'],
+        [0.979, 'rgb(152,168,248)'], [1.000, 'rgb(201,209,251)'],
     ];
+    var _IR_CBAR_LABELS = ['+35', '-10', '-55', '-100'];
 
     function _rtRoundRectPath(ctx, x, y, w, h, r) {
         ctx.beginPath();
@@ -30551,7 +30584,7 @@
             _rtDrawInterpMarker(ctx, canvas.width, canvas.height,
                                 gLat, gLon, _RT_MW_COMPARE_HALF_DEG);
             _rtDrawCompareColorbar(ctx, canvas.width, canvas.height,
-                _IR_CBAR, ['+35', '-30', '-85'], 'IR Tb (°C)');
+                _IR_CBAR, _IR_CBAR_LABELS, 'IR Tb (°C)');
             if (done) done(null);
         });
     }
@@ -30868,7 +30901,7 @@
         var url = API_BASE
             + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
             + '/ir-frame.jpg?frame_index=' + frameIndex
-            + (atTime ? '&at=' + encodeURIComponent(atTime) : '')
+            + (atTime ? '&at=' + encodeURIComponent(atTime) + '&cm=2' : '')   // cm = colormap version (edge-cache key)
             + '&lookback_hours=' + _RT_MW_COMPARE_LOOKBACK_H
             + '&radius_deg=' + _RT_MW_COMPARE_RADIUS
             + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
@@ -30924,9 +30957,9 @@
                                 gLat, gLon,
                                 _RT_MW_COMPARE_HALF_DEG);
             // IR brightness-temperature colorbar (Claude LUT). Labels
-            // match the storm-card legend (+35 / -30 / -85 °C).
+            // match the storm-card legend (+35 / -10 / -55 / -100 °C).
             _rtDrawCompareColorbar(ctx, canvas.width, canvas.height,
-                _IR_CBAR, ['+35', '-30', '-85'], 'IR Tb (°C)');
+                _IR_CBAR, _IR_CBAR_LABELS, 'IR Tb (°C)');
             if (done) done(null);
         };
         // A frame's ir-frame.jpg can transient-fail (cold start / S3 hiccup)

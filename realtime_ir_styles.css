@@ -1260,31 +1260,36 @@ html, body { margin: 0; padding: 0; }
     height: 10px;
     border-radius: 2px;
     margin: 4px 0 2px;
-    /* Claude IR LUT (matches satellite_ir.py _IR_STOPS, server-side
-       pre-rendered into the WebP bundles): left = warm (+57°C / 330K),
-       right = cold (-113°C / 160K). Sequence: near-black grey →
-       grey-blue → light grey → pale blue → teal → green → gold →
-       orange → crimson → magenta → violet → indigo. */
+    /* Claude IR LUT (matches satellite_ir.py _IR_TB_STOPS) over exactly
+       +35 °C (left) → -100 °C (right), matching the +35/-10/-55/-100
+       labels. Sequence: near-black grey → grey-blue → light grey → pale
+       blue → teal → green → gold → orange → crimson → magenta → violet →
+       indigo ring → ice-blue cold tail (royal → cornflower → periwinkle). */
     background: linear-gradient(to right,
-        rgb(12, 12, 22)     0.0%,
-        rgb(70, 70, 82)    14.2%,
-        rgb(120, 120, 132) 22.5%,
-        rgb(180, 180, 192) 30.8%,
-        rgb(216, 218, 228) 39.2%,
-        rgb(140, 210, 220) 47.5%,
-        rgb(68, 180, 196)  51.7%,
-        rgb(32, 148, 166)  55.8%,
-        rgb(40, 178, 116)  60.0%,
-        rgb(96, 208, 68)   64.2%,
-        rgb(192, 220, 40)  68.3%,
-        rgb(238, 196, 48)  72.5%,
-        rgb(228, 132, 48)  76.7%,
-        rgb(214, 78, 56)   80.8%,
-        rgb(180, 36, 68)   85.0%,
-        rgb(196, 48, 156)  89.2%,
-        rgb(168, 64, 200)  93.3%,
-        rgb(120, 48, 180)  97.5%,
-        rgb(64, 24, 140)  100.0%
+        rgb(18, 18, 29)     0.0%,
+        rgb(70, 70, 82)    11.2%,
+        rgb(120, 120, 132) 18.6%,
+        rgb(180, 180, 192) 26.0%,
+        rgb(216, 218, 228) 33.4%,
+        rgb(140, 210, 220) 40.9%,
+        rgb(68, 180, 196)  44.6%,
+        rgb(32, 148, 166)  48.3%,
+        rgb(40, 178, 116)  52.0%,
+        rgb(96, 208, 68)   55.7%,
+        rgb(192, 220, 40)  59.4%,
+        rgb(238, 196, 48)  63.1%,
+        rgb(228, 132, 48)  66.8%,
+        rgb(214, 78, 56)   70.5%,
+        rgb(180, 36, 68)   74.2%,
+        rgb(196, 48, 156)  77.9%,
+        rgb(168, 64, 200)  81.6%,
+        rgb(120, 48, 180)  85.3%,
+        rgb(64, 24, 140)   87.5%,
+        rgb(40, 60, 196)   89.7%,
+        rgb(76, 116, 236)  92.0%,
+        rgb(136, 164, 250) 94.2%,
+        rgb(152, 168, 248) 97.9%,
+        rgb(201, 209, 251) 100.0%
     );
 }
 /* GIBS Band-8 WV is rendered with NASA's stock WV colormap: dry/warm
@@ -4513,11 +4518,10 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     width: 44px;
     height: 8px;
     border-radius: 2px;
-    /* GIBS Band 13 Clean Infrared default colormap (matches the NASA tiles
-       on the global map). */
+    /* Claude IR (the global map's default mosaic colormap), +35 → -100 °C. */
     background: linear-gradient(to right,
-        rgb(8,8,8), rgb(90,90,90), rgb(200,200,200), rgb(0,100,255),
-        rgb(0,255,0), rgb(255,180,0), rgb(255,0,0), rgb(180,0,180), rgb(255,255,255));
+        rgb(18,18,29), rgb(180,180,192), rgb(68,180,196), rgb(96,208,68),
+        rgb(228,132,48), rgb(196,48,156), rgb(64,24,140), rgb(136,164,250), rgb(201,209,251));
 }
 .rt-dock-cbar-lbl {
     font-family: 'DM Sans', sans-serif;

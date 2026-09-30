@@ -306,7 +306,8 @@ _VIS_STORM_MIN_COSZ = 0.35
 _WV_VMIN, _WV_VMAX = 170.0, 260.0
 
 # IR *index-encoding* range — DELIBERATELY WIDER than the display colour limits
-# (IR_VMIN/IR_VMAX = 190/310, imported from satellite_ir). to_index() quantizes Tb
+# (IR_VMIN/IR_VMAX = 170/310 since the 2026-09-30 ice-blue tail, was 190/310;
+# imported from satellite_ir). to_index() quantizes Tb
 # into the 1..255 idx over THIS range; the client decodes idx→Tb with the same
 # limits (published per-frame as `ir_trange` in frames.json) so cold tops below
 # −83 °C (190 K) read their real temperature instead of saturating. Precision is

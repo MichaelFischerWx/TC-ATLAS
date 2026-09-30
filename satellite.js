@@ -398,7 +398,9 @@
             {tb:233,r:96,g:208,b:68},{tb:228,r:192,g:220,b:40},{tb:223,r:238,g:196,b:48},
             {tb:218,r:228,g:132,b:48},{tb:213,r:214,g:78,b:56},{tb:208,r:180,g:36,b:68},
             {tb:203,r:196,g:48,b:156},{tb:198,r:168,g:64,b:200},{tb:193,r:120,g:48,b:180},
-            {tb:183,r:64,g:24,b:140},{tb:173,r:28,g:12,b:96}
+            // ice-blue cold tail (2026-09-30; = satellite_ir._IR_TB_STOPS)
+            {tb:190,r:64,g:24,b:140},{tb:187,r:40,g:60,b:196},{tb:184,r:76,g:116,b:236},
+            {tb:181,r:136,g:164,b:250},{tb:176,r:152,g:168,b:248},{tb:170,r:255,g:255,b:255}
         ]);
 
         // Claude Water Vapor colormap (Band 8: 170-260 K range).
@@ -2156,8 +2158,12 @@
         var _hovCrange = [-100, 40], _hovSpan = _hovCrange[1] - _hovCrange[0];
         function _tbCtoFrac(tbK) { return Math.max(0, Math.min(1, ((tbK - 273.15) - _hovCrange[0]) / _hovSpan)); }
         var hovColorscale = [
-            [0.00,                      'rgb(28,12,96)'],    // 173K = -100C
-            [_tbCtoFrac(183),           'rgb(64,24,140)'],   // -90C
+            [0.00,                      'rgb(201,209,251)'], // 173K = -100C (ice-blue tail)
+            [_tbCtoFrac(176),           'rgb(152,168,248)'], // -97C periwinkle
+            [_tbCtoFrac(181),           'rgb(136,164,250)'], // -92C light periwinkle
+            [_tbCtoFrac(184),           'rgb(76,116,236)'],  // -89C cornflower
+            [_tbCtoFrac(187),           'rgb(40,60,196)'],   // -86C royal blue
+            [_tbCtoFrac(190),           'rgb(64,24,140)'],   // -83C indigo
             [_tbCtoFrac(193),           'rgb(120,48,180)'],  // -80C
             [_tbCtoFrac(198),           'rgb(168,64,200)'],  // -75C
             [_tbCtoFrac(203),           'rgb(196,48,156)'],  // -70C
