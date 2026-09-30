@@ -1,0 +1,19 @@
+{
+  "_comment": "Desired WAF custom rules for the tcatlas.org zone (phase http_request_firewall_custom, entrypoint ruleset). Rule 1 was added in the dashboard 2026-09-23 and is recorded here as found; rule 2 is PROPOSED 2026-09-30 and not yet applied. Apply by PUTting the WHOLE rules array to /zones/{zone}/rulesets/{ruleset_id} (the per-rule endpoint 10405s with the cloudflare-rules-token), or add rule 2 in Security > WAF > Custom rules.",
+  "phase": "http_request_firewall_custom",
+  "ruleset_id": "b363c78e51304b0e8509dd6e2027517c",
+  "rules": [
+    {
+      "description": "Block tropical-dashboard-practice-project poller (API cost, 2026-09-23)",
+      "action": "block",
+      "enabled": true,
+      "expression": "(http.host eq \"api.tcatlas.org\" and http.user_agent contains \"tropical-dashboard-practice-project\")"
+    },
+    {
+      "description": "Block referer-less headless Chrome/124 scraping storm IR frames (on-demand full-disk renders, 2026-09-30)",
+      "action": "block",
+      "enabled": true,
+      "expression": "(http.host eq \"api.tcatlas.org\" and starts_with(http.request.uri.path, \"/ir-monitor/storm/\") and (ends_with(http.request.uri.path, \"/ir-frame.jpg\") or ends_with(http.request.uri.path, \"/ir-frames-meta\")) and http.referer eq \"\" and http.user_agent contains \"X11; Linux x86_64\" and http.user_agent contains \"Chrome/124.0\")"
+    }
+  ]
+}

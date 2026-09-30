@@ -7183,6 +7183,18 @@ def get_ir_frame_jpg(
     rendered on the fly and NOT written to the shared jpg cache, which
     holds only Mercator frames for the map.
     """
+    # The shared WebP cache (_gcs_jpg_get/_put) is keyed on storm + time +
+    # position, NOT radius, and every frontend caller sends radius_deg=10. Any
+    # other radius both missed the cache (a 30-85 s full-disk render each — a
+    # referer-less scraper sending radius_deg=6 ran ~47 min of renders in 72 min
+    # on 2026-09-30) and then wrote its smaller cutout under the radius-10 key,
+    # so later viewers got a 12° image stretched over 20° bounds. Refuse it
+    # before doing any work.
+    if abs(float(radius_deg) - _PREFETCH_RADIUS_DEG) > 1e-6:
+        raise HTTPException(
+            status_code=400,
+            detail=f"radius_deg must be {_PREFETCH_RADIUS_DEG:g} (the only cutout this endpoint serves)")
+
     _ensure_fresh_cache()
     storm = None
     with _active_storms_lock:
