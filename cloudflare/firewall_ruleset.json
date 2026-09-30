@@ -1,5 +1,5 @@
 {
-  "_comment": "Desired WAF custom rules for the tcatlas.org zone (phase http_request_firewall_custom, entrypoint ruleset). Rule 1 was added in the dashboard 2026-09-23 and is recorded here as found; rule 2 is PROPOSED 2026-09-30 and not yet applied. Apply by PUTting the WHOLE rules array to /zones/{zone}/rulesets/{ruleset_id} (the per-rule endpoint 10405s with the cloudflare-rules-token), or add rule 2 in Security > WAF > Custom rules.",
+  "_comment": "WAF custom rules for the tcatlas.org zone (phase http_request_firewall_custom, entrypoint ruleset) - mirrors the live dashboard. Rule 1 added 2026-09-23; rule 2 applied 2026-09-30 and verified (scraper UA + no referer -> 403, same UA with a tcatlas referer -> 200). Apply changes by PUTting the WHOLE rules array to /zones/{zone}/rulesets/{ruleset_id} (the per-rule endpoint 10405s with the cloudflare-rules-token), or edit in Security > Security rules and update this file. NOT covered here: the zone also has one rate-limiting rule (phase http_ratelimit, free-plan limit 1/1) 'tc-atlas: throttle band-raw-frame scraper bursts at edge' - hostname api.tcatlas.org and URI path ends with band-raw-frame, action Block.",
   "phase": "http_request_firewall_custom",
   "ruleset_id": "b363c78e51304b0e8509dd6e2027517c",
   "rules": [
