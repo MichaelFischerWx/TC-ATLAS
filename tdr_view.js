@@ -895,6 +895,34 @@
     //               onRange(vmin, vmax), onReset(), onShow(), onHide() }
     //   onDraw(p), onOff()   — page extras (center marker, storm grid, IR frame)
     // }
+    // "max 41.2 m/s (80 kt)" for a wind field; "min −3.1 / max 9.2 m/s" for a
+    // diverging one (w, vorticity); "max 48.7 dBZ" otherwise. Used by the drape
+    // colorbar and the RT map export so the extreme is readable as text.
+    function planExtremes(p) {
+        var mx = -Infinity, mn = Infinity;
+        for (var r = 0; r < (p && p.z ? p.z.length : 0); r++) {
+            var row = p.z[r]; if (!row) continue;
+            for (var c = 0; c < row.length; c++) {
+                var v = row[c];
+                if (v != null && isFinite(v)) { if (v > mx) mx = v; if (v < mn) mn = v; }
+            }
+        }
+        return isFinite(mx) ? { max: mx, min: mn } : null;
+    }
+    function planExtremesText(p) {
+        var e = planExtremes(p); if (!e) return '';
+        var u = p.units || '';
+        function n(v) {
+            if (Math.abs(v) > 0 && Math.abs(v) < 0.1) return (v * 1e4).toFixed(0).replace('-', '−') + '×10⁻⁴';
+            return (Math.round(v * 10) / 10).toString().replace('-', '−');
+        }
+        if (/wind/i.test(p.display_name || '') && /^m\/s$/.test(u)) {
+            return 'max ' + e.max.toFixed(1) + ' m/s (' + Math.round(e.max / 0.514444) + ' kt)';
+        }
+        if (p.vmin < 0) return 'min ' + n(e.min) + ' / max ' + n(e.max) + (u ? ' ' + u : '');
+        return 'max ' + n(e.max) + (u ? ' ' + u : '');
+    }
+
     function createDrape(opts) {
         var prefix = opts.prefix || 'tdr';
         var storeKey = prefix + '_radar_opacity';
@@ -1057,7 +1085,8 @@
                     '</div>' +
                     '<div class="' + cls + '-foot"><span data-k="level"></span>' +
                         (cb.opacity ? '<span class="' + cls + '-op" title="Opacity of the radar field on the map"><input type="range" data-k="op" min="0" max="100" aria-label="Radar field opacity"><span data-k="opv"></span></span>' : '') +
-                        '<button class="' + cls + '-reset" data-k="reset" title="Restore the variable\'s default range">reset</button></div>';
+                        '<button class="' + cls + '-reset" data-k="reset" title="Restore the variable\'s default range">reset</button></div>' +
+                    '<div data-k="ext" style="font-size:11px;font-weight:600;color:#1e293b;margin-top:3px;"></div>';
                 host.appendChild(el);
                 // Keep map drags / clicks from firing through the colorbar.
                 ['mousedown', 'click', 'dblclick', 'wheel', 'touchstart'].forEach(function (ev) {
@@ -1083,6 +1112,7 @@
             g('name').textContent = p.display_name || '';
             g('units').textContent = p.units ? '(' + p.units + ')' : '';
             g('level').textContent = p.level_km != null ? (p.level_km < 0.05 ? '10 m' : p.level_km.toFixed(1) + ' km') : '';
+            if (g('ext')) g('ext').textContent = planExtremesText(p);
             if (document.activeElement !== g('min')) g('min').value = fmt(p.vmin);
             if (document.activeElement !== g('max')) g('max').value = fmt(p.vmax);
             if (cb.opacity) {
@@ -1297,6 +1327,7 @@
 
     window.TDRView = {
         NAMED_CS: NAMED_CS, csParse: csParse, csResolve: csResolve, csColor: csColor, csLUT: csLUT,
+        planExtremes: planExtremes, planExtremesText: planExtremesText,
         windBarbShapes: windBarbShapes,
         findDataMax: findDataMax, findDataMin: findDataMin, isWindVariable: isWindVariable,
         maxMarkerTrace: maxMarkerTrace, maxAnnotation: maxAnnotation, tcCenterMarkerTrace: tcCenterMarkerTrace,

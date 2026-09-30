@@ -3996,6 +3996,7 @@
                 // info line); the details sit behind a disclosure.
                 var html = '<div class="panel-storm-name">' + (m.storm_name || 'Unknown') + _rtStepperHTML() + '</div>' +
                     '<div class="panel-mission">' + (m.mission_id || '') + ' \u00b7 ' + (m.datetime || '') + '</div>' +
+                    '<div class="panel-mission" id="rt-maxwind-line"></div>' +
                     '<details class="rt-meta-more"><summary>Analysis details</summary>' +
                     '<div class="rt-meta-grid">' +
                     '<div class="rt-meta-item"><span class="rt-meta-label">Position</span><span class="rt-meta-val">' +
@@ -4719,6 +4720,71 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             .finally(function () { clearTimeout(timeout); btn.disabled = false; btn.innerHTML = _icon('monitor') + '3D Volume'; });
     };
 
+    // ── Save the MAP view (radar draped on IR) as a branded PNG ──
+    // The drape, barbs, RMW ring and IR all render into the MapLibre canvas, so
+    // one GL readback (the Live Flight export's glSnapshot) captures the science;
+    // the title strip and colorbar are drawn here with the 2-D API (never
+    // html2canvas — iOS Safari taints it). Falls back to the Plotly plan-view
+    // save when the map isn't draped.
+    window.rtSaveTDRMap = function () {
+        var kit = window._ReconKit, glMap = _rtMap && _rtMap._gl;
+        var p = _rtDrape && _rtDrape.isOn() ? _rtDrape.plan() : null;
+        if (!p || !kit || !kit.glSnapshot || !glMap) {
+            if (typeof rtSaveTDRView === 'function') return rtSaveTDRView();
+            return;
+        }
+        var btn = document.getElementById('rt-map-save-btn');
+        if (btn) btn.disabled = true;
+        _ga('export_png', { chart: 'TDR_Map', module: 'realtime_tdr' });
+        Promise.all([kit.glSnapshot(glMap), kit.watermarkReady ? kit.watermarkReady() : null]).then(function (r) {
+            var snap = r[0];
+            if (!snap || snap.__glBlank) throw new Error('the browser could not read the map canvas');
+            var W = snap.width, H = snap.height;
+            var cssW = (glMap.getCanvas().clientWidth || W), k = W / cssW;     // device-pixel scale
+            var headH = Math.round(58 * k), footH = Math.round(46 * k);
+            var c = document.createElement('canvas'); c.width = W; c.height = H + headH + footH;
+            var x = c.getContext('2d');
+            x.fillStyle = '#ffffff'; x.fillRect(0, 0, c.width, c.height);
+            var meta = _rtCaseMeta || {};
+            var lvl = p.level_km != null ? (p.level_km < 0.05 ? '10 m' : p.level_km.toFixed(1) + ' km') : '';
+            var font = '-apple-system, "Segoe UI", Helvetica, Arial, sans-serif';
+            // Shrink a line's font until it fits the (possibly phone-narrow) width.
+            var fit = function (str, px, weight, y, color) {
+                var sz = px * k;
+                do { x.font = (weight ? weight + ' ' : '') + Math.round(sz) + 'px ' + font; sz -= 0.5 * k; }
+                while (x.measureText(str).width > W - 24 * k && sz > 8 * k);
+                x.fillStyle = color; x.fillText(str, 12 * k, y);
+            };
+            x.textBaseline = 'top';
+            fit((meta.storm_name || '') + '  \u00b7  ' + (meta.mission_id || '') + '  \u00b7  ' + (meta.datetime || ''), 17, '600', 9 * k, '#0f1623');
+            var ext = TDRView.planExtremesText ? TDRView.planExtremesText(p) : '';
+            fit((p.display_name || '') + (p.units ? ' (' + p.units + ')' : '') + '  \u00b7  ' + lvl + (ext ? '  \u00b7  ' + ext : ''), 13, '', 33 * k, '#374151');
+            x.drawImage(snap, 0, headH);
+            // Colorbar strip under the map.
+            var lut = TDRView.csLUT(p.colorscale), gx = 12 * k, gy = H + headH + 10 * k, gw = Math.min(W * 0.55, 420 * k), gh = 12 * k;
+            for (var i = 0; i < gw; i++) {
+                var li = Math.round(i / (gw - 1) * 255) * 3;
+                x.fillStyle = 'rgb(' + lut[li] + ',' + lut[li + 1] + ',' + lut[li + 2] + ')';
+                x.fillRect(gx + i, gy, 1.5, gh);
+            }
+            x.strokeStyle = '#9ca3af'; x.lineWidth = 1; x.strokeRect(gx, gy, gw, gh);
+            x.fillStyle = '#374151'; x.font = Math.round(11 * k) + 'px ' + font;
+            x.fillText(String(Math.round(p.vmin * 100) / 100), gx, gy + gh + 3 * k);
+            var mxs = String(Math.round(p.vmax * 100) / 100) + (p.units ? ' ' + p.units : '');
+            x.fillText(mxs, gx + gw - x.measureText(mxs).width, gy + gh + 3 * k);
+            var dataUrl = c.toDataURL('image/png');
+            var fn = (_currentFileUrl || '').split('/').pop().replace(/_xy\.nc(\.gz)?$/i, '') || 'TDR';
+            var name = 'TDR_Map_' + fn + '_' + (p.display_name || 'field').replace(/[^A-Za-z0-9]+/g, '') + '_' + lvl.replace(/\s+/g, '') + '.png';
+            var done = function (blob) { TCExport.save(blob || dataUrl, name); if (btn) btn.disabled = false; };
+            if (kit.stampExport) kit.stampExport(dataUrl, c.width, c.height, done, fn);
+            else done(null);
+        }).catch(function (e) {
+            if (btn) btn.disabled = false;
+            console.error('[rtSaveTDRMap]', e);
+            if (typeof rtToast === 'function') rtToast('Could not save the map: ' + (e && e.message ? e.message : e), 'warn');
+        });
+    };
+
     // ── vol3d.js preset-view hooks (Views menu, IR floor, downshear camera) ──
     var _rt3DViewFetches = {};   // url -> Promise; one fetch per field/box per analysis
     window.vol3dFetchVolume = function (variable, box) {
@@ -4825,13 +4891,13 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
 
         _rtMapMarker = L.marker([meta.latitude, meta.longitude], { icon: icon }).addTo(_rtMap);
 
-        var windStr = maxWind != null ? maxWind.toFixed(1) + ' m/s' : 'N/A';
+        var windStr = maxWind != null ? maxWind.toFixed(1) + ' m/s (' + Math.round(maxWind / 0.514444) + ' kt)' : 'N/A';
         var catStr = cat ? ' (' + cat + ')' : '';
         var popupHtml =
             '<div style="font-family:DM Sans,sans-serif;font-size:12px;line-height:1.5;min-width:180px;">' +
             '<strong style="font-size:14px;color:' + color + ';">' + (meta.storm_name || 'Unknown') + '</strong><br>' +
             '<span style="color:#aaa;">' + (meta.mission_id || '') + ' · ' + (meta.datetime || '') + '</span><br>' +
-            '<span style="margin-top:4px;display:inline-block;">Max 2-km Wind: <strong style="color:' + color + ';">' + windStr + catStr + '</strong></span><br>' +
+            '<span style="margin-top:4px;display:inline-block;">Max 2-km earth-rel. wind: <strong style="color:' + color + ';">' + windStr + catStr + '</strong></span><br>' +
             '<span style="color:#aaa;font-size:10px;">' +
             (meta.latitude ? meta.latitude.toFixed(2) + '°N, ' + Math.abs(meta.longitude).toFixed(2) + '°' + (meta.longitude < 0 ? 'W' : 'E') : '') +
             '</span></div>';
@@ -4842,9 +4908,10 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
     }
 
     function _rtFetchMaxWind(fileUrl, meta) {
-        // Fetch WIND_SPEED at 2 km to get max wind for the marker
+        // Max EARTH-RELATIVE wind at 2 km (explicitly earth-relative, so the
+        // number means the same thing whatever frame the plan view is in).
         var url = API_BASE + RT_PREFIX + '/data?file_url=' + encodeURIComponent(fileUrl) +
-            '&variable=WIND_SPEED&level_km=2';
+            '&variable=EARTH_REL_WSPD&level_km=2';
         fetch(url)
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (json) {
@@ -4859,11 +4926,22 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 }
                 _rtMaxWind2km = isFinite(maxVal) ? maxVal : null;
                 _rtUpdateMapMarker(meta, _rtMaxWind2km);
+                _rtShowMaxWindLine(fileUrl);
             })
             .catch(function () {
                 _rtMaxWind2km = null;
                 _rtUpdateMapMarker(meta, null);
+                _rtShowMaxWindLine(fileUrl);
             });
+    }
+
+    function _rtShowMaxWindLine(fileUrl) {
+        var el = document.getElementById('rt-maxwind-line');
+        if (!el || fileUrl !== _currentFileUrl) return;
+        if (_rtMaxWind2km == null) { el.textContent = ''; return; }
+        var kt = Math.round(_rtMaxWind2km / 0.514444), cat = _rtWindCategory(_rtMaxWind2km);
+        el.innerHTML = 'Max 2-km TDR wind (earth-rel.): <strong style="color:' + _rtWindColor(_rtMaxWind2km) + ';">' +
+            _rtMaxWind2km.toFixed(1) + ' m/s \u00b7 ' + kt + ' kt</strong>' + (cat ? ' (' + cat + ')' : '');
     }
 
     // ── IR overlay on Leaflet map ────────────────────────────────
