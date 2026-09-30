@@ -32101,10 +32101,8 @@
                         (hr.max_wind_p_hpa != null ? ' at ' + Math.round(hr.max_wind_p_hpa) + ' hPa' : '') : null) +
                       _rtReconRow('Levels', hr.n_levels != null ? hr.n_levels + ' (1-s)' : null) : '') +
                 (hasProfile ? '<button class="rt-recon-skewt-btn" onclick="window._reconShowSkewT(\'' +
-                    sk.replace(/'/g, "\\'") + '\')">Skew-T profile ↗</button>' : '') +
+                    sk.replace(/'/g, "\\'") + '\')">' + (window.SondeCard && window.SondeCard.on ? 'Sonde profile' : 'Skew-T profile') + ' ↗</button>' : '') +
                 '</div>';
-            if (window.SondeCard && window.SondeCard.on)       // v2: a glance, not a table
-                sh = window.SondeCard.glanceHTML(d, sk, _rtReconTailName, _rtFmtTime);
             m.bindPopup(sh, { maxWidth: 260, className: 'rt-recon-popup' });
             m.addTo(map); out.push(m);
         }

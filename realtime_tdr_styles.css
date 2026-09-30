@@ -810,6 +810,7 @@
 .sv2-seg button:focus-visible, .sv2-tile:focus-visible, .sv2-open:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 2px; }
 .sv2-caption { font-size: 12.5px; color: var(--slate); min-height: 1.4em; }
 .sv2-caption b { color: var(--text); font-weight: 600; }
+.sv2-caption .sv2-warn { color: var(--slate); font-style: italic; }
 .sv2-src { font-size: 10.5px; color: var(--sv2-muted); }
 .sv2-flight { border-top: 1px solid var(--sv2-rule); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .sv2-flight-h { font-size: 13px; font-weight: 600; color: var(--text); }

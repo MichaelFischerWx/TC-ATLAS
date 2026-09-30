@@ -664,10 +664,12 @@ def _parse_tempdrop_bulletin(text: str, fname_dt: datetime) -> list:
     m = re.search(r"61616\s+(\w+)\s+\w+\s+([A-Z][A-Z0-9\-]+)\s+OB\s+(\d+)", text)
     if m:
         tail, storm, ob = m.group(1).upper(), m.group(2).upper(), m.group(3)
-    mbl = re.search(r"MBL WND\s+(\d{3})(\d{2})", text)
-    wl = re.search(r"WL150\s+(\d{3})(\d{2})", text)
-    mbl_dir, mbl_kt = (int(mbl.group(1)), int(mbl.group(2))) if mbl else (None, None)
-    sfc_dir, sfc_kt = (int(wl.group(1)), int(wl.group(2))) if wl else (None, None)
+    # dddff with the FM-37 high-wind fold (28660 = 285° / 160 kt) — read literally
+    # these lost the hundreds digit on every eyewall drop ≥ 100 kt.
+    mbl = re.search(r"MBL WND\s+(\d{5})", text)
+    wl = re.search(r"WL150\s+(\d{5})", text)
+    mbl_dir, mbl_kt = _td_wind(mbl.group(1)) if mbl else (None, None)
+    sfc_dir, sfc_kt = _td_wind(wl.group(1)) if wl else (None, None)
     profile = _decode_tempdrop_profile(text)   # FM-37 mandatory + sig levels (skew-T)
 
     seen = set()
@@ -725,7 +727,7 @@ _HIRES_GCS_PREFIX = "recon/sondes-hires/v1"
 _HIRES_GCS_LIST_TTL = 300
 _HIRES_MAX_AGE_H = 72         # ignore ring-buffer slots older than this
 _hires_list_cache = {"ts": 0.0, "rows": []}
-_hires_slot_seen: dict = {}   # (name, size, mtime_iso) -> id | None (None = undecodable)
+_hires_slot_seen: dict = {}   # (name, size, mtime_iso) -> [ids] | None (None = undecodable)
 _hires_by_id: dict = {}       # id -> full sonde dict (levels included)
 _hires_gcs_days: dict = {}    # day 'YYYY-MM-DD' -> ts of last archive listing
 _hires_lock = threading.Lock()   # eccodes is not thread-safe; decode serially
@@ -942,6 +944,26 @@ def _hires_archive_sync(since: datetime, until: datetime):
         logger.warning("hires archive sync failed: %s", e)
 
 
+def _hires_decode_all(raw: bytes) -> list:
+    """EVERY BUFR message in one ring-buffer slot -> [sonde dict]. A slot file
+    bundles 1-6 soundings (2026-09-30: 84 messages in 40 files); decoding only
+    the first, as _hires_decode alone does, dropped over half of each flight's
+    1-s profiles (Rachel 09-30: 9 of ~34 drops). Messages are walked by the
+    3-byte total length in BUFR section 0, checked against the '7777' end marker."""
+    out, i, n = [], 0, len(raw)
+    while True:
+        j = raw.find(b"BUFR", i)
+        if j < 0 or j + 8 > n:
+            break
+        ln = int.from_bytes(raw[j + 4:j + 7], "big")
+        whole = 8 < ln <= n - j and raw[j + ln - 4:j + ln] == b"7777"
+        s = _hires_decode(raw[j:j + ln] if whole else raw[j:])
+        if s:
+            out.append(s)
+        i = j + ln if whole else j + 4      # unreadable length: rescan past this marker
+    return out
+
+
 def _hires_sondes(since: datetime, until: datetime) -> list:
     """All high-resolution sondes launched in [since, until]: ring buffer first
     (new slots decoded + archived), then the archive for anything the buffer
@@ -958,11 +980,12 @@ def _hires_sondes(since: datetime, until: datetime) -> list:
             for (nm, sz, mt), raw in zip(new, blobs):
                 if raw is None:
                     continue                      # retry next build
-                s = _hires_decode(raw)
-                _hires_slot_seen[(nm, sz, mt.isoformat())] = s["id"] if s else None
-                if s and s["id"] not in _hires_by_id:
-                    _hires_by_id[s["id"]] = s
-                    _hires_archive_put(s)
+                ss = _hires_decode_all(raw)
+                _hires_slot_seen[(nm, sz, mt.isoformat())] = [s["id"] for s in ss] or None
+                for s in ss:
+                    if s["id"] not in _hires_by_id:
+                        _hires_by_id[s["id"]] = s
+                        _hires_archive_put(s)
             if len(_hires_slot_seen) > 4000:
                 for k in list(_hires_slot_seen)[:1000]:
                     _hires_slot_seen.pop(k, None)
@@ -1020,8 +1043,12 @@ def _hires_attach(drops: list, since: datetime, until: datetime, track_pts, stor
         if dob is None:
             continue
         for s in hs:
+            # 60 s, not 5 min: true twins are ~10 s apart, and with the feeds numbered
+            # differently a same-number sonde 4-5 min away is the NEXT drop (Rachel
+            # 2026-09-30: TEMP DROP OB 02 03:09:28 took BUFR ob 2 03:14:12, the twin of
+            # OB 03). Anything looser is left to pass 2's global nearest-in-time match.
             if (s["id"] not in used and s.get("ob") == dob and _tail_key(s["tail"]) == _tail_key(d.get("tail"))
-                    and _dt_s(d, s) <= 300):
+                    and _dt_s(d, s) <= 60):
                 used.add(s["id"]); d["hires"] = _hires_summary(s); break
     # Pass 2 is a GLOBAL nearest-in-time assignment over all (drop, sonde) pairs,
     # not a per-drop greedy pick: eyewall drops go out ~1-2 min apart (Polo
@@ -1051,14 +1078,19 @@ def _hires_attach(drops: list, since: datetime, until: datetime, track_pts, stor
         for s in hs:
             if s["id"] in used:
                 continue
-            if dob is not None and s.get("ob") is not None and s["ob"] != dob:
-                continue                              # both numbered and different: not the same sonde
+            renumbered = dob is not None and s.get("ob") is not None and s["ob"] != dob
             if _tail_key(s["tail"]) != _tail_key(d.get("tail")):
                 continue
             try:
                 dt = abs((datetime.strptime(s["t"], "%Y-%m-%dT%H:%M:%SZ") -
                           datetime.strptime(d["t"], "%Y-%m-%dT%H:%M:%SZ")).total_seconds())
             except Exception:
+                continue
+            # Both numbered and different is USUALLY another sonde -- but the two feeds
+            # can number a flight differently (Rachel 2026-09-30 NOAA2: BUFR ran 3 ahead,
+            # TEMP DROP OB 22 06:08:38 = BUFR OB 25 06:08:28), so a renumbered pair still
+            # joins when released within 90 s (drops go out >= ~1-2 min apart).
+            if renumbered and dt > 90:
                 continue
             if dt <= 300 and _deg_dist(s["lat"], s["lon"], d["lat"], d["lon"]) <= 0.35 \
                     and _consistent(d, s):

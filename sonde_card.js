@@ -121,7 +121,7 @@
     function tsec(iso) { var t = Date.parse(/Z$|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z'); return isNaN(t) ? null : t / 1000; }
     function centerFn(vdms) {
         var V = (vdms || []).filter(function (v) { return v.lat != null && v.lon != null && v.t; })
-            .map(function (v) { return [tsec(v.t), v.lat, v.lon, v.max_fl_wind_range_nm]; })
+            .map(function (v) { return [tsec(v.t), v.lat, v.lon, v.max_fl_wind_range_nm, v.eye_diam_nm]; })
             .filter(function (v) { return v[0] != null; }).sort(function (a, b) { return a[0] - b[0]; });
         if (!V.length) return null;
         var f = function (t) {
@@ -135,6 +135,16 @@
         };
         // Flight-level RMW from the latest fix that reports one (nm → km).
         for (var k = V.length - 1; k >= 0; k--) if (V[k][3] != null) { f.rmw = V[k][3] * 1.852; break; }
+        // How trustworthy is the centre at time t? Bracketed by two fixes, or the
+        // minutes to the one nearest fix (the centre is held still past the ends,
+        // and a storm moving ~15 km/h makes that a real error within the hour).
+        f.gapMin = function (t) {
+            if (V.length > 1 && t >= V[0][0] && t <= V[V.length - 1][0]) return 0;
+            var g = Infinity; V.forEach(function (v) { g = Math.min(g, Math.abs(t - v[0]) / 60); });
+            return g;
+        };
+        // Eye radius from the latest fix that reports an eye diameter (nm → km).
+        for (var e = V.length - 1; e >= 0; e--) if (V[e][4] != null) { f.eyeR = V[e][4] / 2 * 1.852; break; }
         return f;
     }
 
@@ -174,9 +184,13 @@
             S.dAng = da; S.drift = Math.hypot(bot.x - top.x, bot.y - top.y);
         }
         S.fall = bot && bot.dt != null ? bot.dt : null;
-        var q = S.hasPos && S.rmw ? S.r_spl / S.rmw : null;
-        S.cls = q == null ? null : q < 0.4 ? 'Eye' : q < 1.7 ? 'Eyewall' : q < 4 ? 'Inner core' : 'Outer';
-        S.eye = S.hasPos && (S.cls === 'Eye' || S.r_spl < 4);
+        S.centerGap = center && t0 != null ? Math.round(center.gapMin(t0)) : null;
+        // Only "Eye" is labelled, and only when the drop splashed inside the VDM's
+        // reported eye (or within 4 km of the centre). A ratio to the flight-level
+        // RMW mislabels broad storms: Rachel 09-30's RMW was ~90 km, so an 89-kt
+        // drop 31 km out read as "Eye" and lost its Inflow view.
+        S.eye = S.hasPos && (S.r_spl < 4 || !!(center && center.eyeR && S.r_spl < center.eyeR));
+        S.cls = S.eye ? 'Eye' : null;
         S.inflowTop = null; S.vr0 = null;
         if (S.hasPos && !S.eye) {
             var run = 0;
@@ -190,7 +204,10 @@
             var m = null; L.forEach(function (r) { if (r.ws != null && (!m || r.ws > m.ws)) m = r; });
             if (m) { S.vmax = m.ws; S.vmaxz = m.z; }
         }
-        S.sfcp = bot ? bot.p : null;
+        // Only a true surface level is the splash (coded TEMP DROPs without a
+        // surface group start at 1000 hPa / ~100 m).
+        S.sfcp = bot && bot.z <= 15 ? bot.p : null;
+        S.lowZ = bot ? bot.z : null;
         return S;
     }
     function fromHires(h, sonde, center) {
@@ -208,7 +225,9 @@
             var best = valid[0]; valid.forEach(function (v) { if (Math.abs(v.z - r.z) < Math.abs(best.z - r.z)) best = v; });
             r.lat = best.lat; r.lon = best.lon;
         });
-        return finish({ src: 'hires', t: h.t || sonde.t, ob: h.ob != null ? h.ob : sonde.ob, n: h.n_levels || L.length,
+        // Display the TEMP DROP's OB (the popup's / NHC bulletin's number); the BUFR
+        // feed can number a flight differently (Rachel 09-30: BUFR ran 3 ahead).
+        return finish({ src: 'hires', t: sonde.t || h.t, ob: sonde.ob != null && sonde.ob !== '' ? sonde.ob : h.ob, n: h.n_levels || L.length,
                         wl150: h.wl150_kt, mbl: h.mbl_kt, vmax: h.max_wind_kt, vmaxz: h.max_wind_z_m, lv: L }, center);
     }
     // TEMP DROP (FM-37) fallback: mandatory levels carry heights; significant
@@ -331,6 +350,13 @@
         } else {
             el('path', { d: d, fill: 'none', stroke: tok('--text'), 'stroke-width': 2.2 }, root);
         }
+        // Coded TEMP DROP levels are a handful of points: show them as points so a
+        // 5-level sounding reads as "few levels", not as a broken 1-s profile.
+        if (S.src !== 'hires' || pts.length < 40) pts.forEach(function (r) {
+            var c = mode === 'wind' ? wc(r.ws) : mode === 'inflow' ? tok('--sv2-inflow') : tok('--text');
+            el('circle', { cx: X(r[key]), cy: Y(r.z), r: 3.4, fill: c, stroke: tok('--surface'), 'stroke-width': 1.5 }, root);
+            pl.block(X(r[key]) - 4, Y(r.z) - 4, X(r[key]) + 4, Y(r.z) + 4);
+        });
 
         // hover: one dot + a tooltip, no permanent readout
         var hl = el('line', { x1: m.l, x2: m.l + pw, y1: -9, y2: -9, stroke: tok('--sv2-rule2') }, root);
@@ -353,8 +379,12 @@
     function driftChart(box, S) {
         var W = box.clientWidth || 520, H = Math.round(Math.max(260, Math.min(360, W * 0.56)));
         var root = svg(W, H, box, 'Drift of this sonde around the storm center');
-        var rmw = S.rmw || 0;
-        var ext = Math.max(12, Math.max(S.r_rel, S.r_spl, rmw) + 5), cx = W / 2, cy = H / 2, sc = Math.min(W, H) / 2 / ext;
+        // Frame the DRIFT (plus the centre); the RMW ring only when it fits, so a broad
+        // storm's 80-km RMW can't shrink a 10-km fall to a speck (Rachel 09-30).
+        var ext = Math.max(12, Math.max(S.r_rel, S.r_spl) + 5);
+        var rmw = S.rmw && S.rmw <= ext * 1.6 ? S.rmw : 0;
+        if (rmw) ext = Math.max(ext, rmw + 4);
+        var cx = W / 2, cy = H / 2, sc = Math.min(W, H) / 2 / ext;
         function P(x, y) { return [cx + x * sc, cy - y * sc]; }
         if (rmw) el('circle', { cx: cx, cy: cy, r: rmw * sc, fill: 'none', stroke: tok('--sv2-rule2'), 'stroke-dasharray': '4 4' }, root);
         el('path', { d: 'M' + (cx - 6) + ',' + cy + 'h12M' + cx + ',' + (cy - 6) + 'v12', stroke: tok('--slate'), 'stroke-width': 1.5 }, root);
@@ -455,17 +485,27 @@
     var CAPS = {
         wind: function (S) { return 'Wind speed from release to the sea. Mean in the lowest 500 m: <b>' + r0(S.mbl) + ' kt</b>.'; },
         inflow: function (S) { return 'Air moving toward the center. <b>' + Math.abs(r0(S.vr0)) + ' kt inward</b> at the surface' + (S.inflowTop ? ', inflow layer <b>' + Math.round(S.inflowTop / 10) * 10 + ' m</b> deep.' : '.'); },
-        thermo: function (S) { var b = S.lv.filter(function (r) { return r.the != null; })[0]; return 'Equivalent potential temperature. <b>' + r0(b && b.the) + ' K</b> at the surface.'; },
-        drift: function (S) { return 'Fell for <b>' + r0(S.fall) + ' s</b> and drifted <b>' + r1(S.drift) + ' km</b>' + (Math.abs(S.dAng) >= 5 ? ', ' + Math.abs(Math.round(S.dAng)) + '° ' + (S.dAng > 0 ? 'cyclonically' : 'anticyclonically') + ' around the center' : '') + '.'; },
+        thermo: function (S) { var b = S.lv.filter(function (r) { return r.the != null; })[0]; return 'Equivalent potential temperature. <b>' + r0(b && b.the) + ' K</b> ' + (b && b.z <= 15 ? 'at the surface.' : 'at the lowest level (' + r0(b && b.z) + ' m).'); },
+        drift: function (S) { return 'Fell for <b>' + r0(S.fall) + ' s</b> and drifted <b>' + r1(S.drift) + ' km</b>' + (Math.abs(S.dAng) >= 5 ? ', ' + Math.abs(Math.round(S.dAng)) + '° ' + (S.dAng > 0 ? 'cyclonically' : 'anticyclonically') + ' around the center' : '') + '.' +
+            (S.centerGap > CENTER_OK_MIN ? ' <span class="sv2-warn">Center approximate: nearest fix ' + S.centerGap + ' min away.</span>' : ''); },
         skewt: function (S) { return S.src === 'hires' ? 'The classic skew-T of the same 1-s sounding.' : 'The classic skew-T of the coded TEMP DROP levels.'; }
     };
     var cur = null;            // { opts, S, mode }
     var mode = 'wind';
 
+    // Inflow (radial wind) is the view most sensitive to a misplaced centre:
+    // needs the drop bracketed by fixes or within 30 min of one.
+    var CENTER_OK_MIN = 30;
     function modeOk(md, S) {
-        if (md === 'inflow') return S.hasPos && !S.eye;
+        if (md === 'inflow') return S.hasPos && !S.eye && S.centerGap != null && S.centerGap <= CENTER_OK_MIN;
         if (md === 'drift') return S.hasPos;
         return true;
+    }
+    function modeWhyNot(md, S) {
+        if (!S.hasPos) return 'Needs the full-resolution sounding and a center fix';
+        if (md === 'inflow' && S.eye) return 'Eye drop: too close to the center for inflow';
+        if (md === 'inflow') return 'Nearest center fix is ' + S.centerGap + ' min from this drop: too far to split radial from tangential wind';
+        return '';
     }
     function renderChart() {
         if (!cur) return;
@@ -496,7 +536,7 @@
             var md = b.getAttribute('data-m');
             b.setAttribute('aria-pressed', md === mode ? 'true' : 'false');
             b.disabled = !modeOk(md, S);
-            b.title = b.disabled ? (md === 'inflow' && S.eye ? 'Eye drop: too close to the center for inflow' : 'Needs the full-resolution sounding and a center fix') : '';
+            b.title = b.disabled ? modeWhyNot(md, S) : '';
         });
         cur.body.querySelector('.sv2-caption').innerHTML = CAPS[mode](S);
     }
@@ -504,7 +544,7 @@
         var S = cur.S, o = cur.opts, sonde = o.sonde;
         var who = ['<b>' + esc(obLabel(S.ob) || 'Dropsonde') + '</b>', esc(o.tailName ? o.tailName(sonde.tail) : sonde.tail || ''), esc(hhmm(S.t))];
         if (S.cls) who.push(esc(S.cls));
-        if (S.hasPos) who.push(r0(S.r_spl) + ' km from center');
+        if (S.hasPos) who.push((S.centerGap > CENTER_OK_MIN ? '~' : '') + r0(S.r_spl) + ' km from center');
         cur.body.querySelector('.sv2-who').innerHTML = who.map(function (x) { return '<span>' + x + '</span>'; }).join('');
         cur.body.querySelector('.sv2-num').innerHTML = '<span style="color:' + wc(S.wl150) + '">' + r0(S.wl150) + '</span><small>kt</small>';
         cur.body.querySelector('.sv2-second').innerHTML =
@@ -512,7 +552,7 @@
             (S.sfcp != null ? '<span>splash <b>' + r1(S.sfcp) + ' hPa</b></span>' : '');
         cur.body.querySelector('.sv2-src').textContent = S.src === 'hires'
             ? 'Full-resolution sounding (NWS BUFR), ' + S.n + ' levels'
-            : 'Coded TEMP DROP levels' + (sonde.hires && sonde.hires.id ? ' · loading the full-resolution sounding…' : '');
+            : 'Coded TEMP DROP levels only (' + S.lv.length + ')' + (sonde.hires && sonde.hires.id ? ' · loading the full-resolution sounding…' : ' · no 1-s sounding received for this drop');
     }
     function renderTiles() {
         var o = cur.opts, g = cur.body.querySelector('.sv2-tiles');
