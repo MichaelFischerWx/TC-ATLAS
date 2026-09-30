@@ -2,15 +2,16 @@
 //
 // One number, one chart, one idea at a time: WL150 set large, a single
 // height-based chart that switches between Wind / Inflow / θe / Drift (plus
-// the classic Skew-T), and the rest of the flight as small tiles. Replaces
-// the popup table + skew-T-first modal when the page is opened with
-// ?sonde=v2 (off by default). realtime_ir.js owns the markers and the modal
-// element; this file only renders into them (window.SondeCard).
+// the classic Skew-T), and the rest of the flight as small tiles. The popup
+// keeps its metadata table; its button opens this card instead of the
+// skew-T-first modal. DEFAULT since 2026-09-30; ?sonde=v1 brings back the old
+// modal. realtime_ir.js owns the markers and the modal element; this file
+// only renders into them (window.SondeCard).
 (function () {
     'use strict';
 
     var NS = 'http://www.w3.org/2000/svg';
-    var ON = /[?&]sonde=v2\b/.test(location.search);
+    var ON = !/[?&]sonde=v1\b/.test(location.search);   // default on; ?sonde=v1 = legacy skew-T modal
 
     // ── colour ──────────────────────────────────────────────────────────
     // theme.js: dark = data-theme="dark"; light = no attribute.
