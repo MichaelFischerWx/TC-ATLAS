@@ -4719,6 +4719,31 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             .finally(function () { clearTimeout(timeout); btn.disabled = false; btn.innerHTML = _icon('monitor') + '3D Volume'; });
     };
 
+    // ── vol3d.js preset-view hooks (Views menu, IR floor, downshear camera) ──
+    var _rt3DViewFetches = {};   // url -> Promise; one fetch per field/box per analysis
+    window.vol3dFetchVolume = function (variable, box) {
+        var url = API_BASE + RT_PREFIX + '/volume?file_url=' + encodeURIComponent(_currentFileUrl) +
+            '&variable=' + variable + '&stride=' + box.stride + '&max_height_km=' + box.max_height_km +
+            '&radius_km=' + box.radius_km + '&tilt_profile=true';
+        if (!_rt3DViewFetches[url]) {
+            _rt3DViewFetches[url] = fetch(url)
+                .then(function (r) { if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+                .catch(function (e) { delete _rt3DViewFetches[url]; throw e; });
+        }
+        return _rt3DViewFetches[url];
+    };
+    window.vol3dFloorImage = function () {
+        if (!_rtIRData || !_rtIRData.bounds_km || !_rtIRFrameURLs.length) return null;
+        var src = _rtIRFrameURLs[_rtIRAnimFrame] || _rtIRFrameURLs[0];
+        if (!src) return null;
+        var b = _rtIRData.bounds_km;
+        return { src: src, x_min_km: b.x_min_km, x_max_km: b.x_max_km, y_min_km: b.y_min_km, y_max_km: b.y_max_km };
+    };
+    window.vol3dShearHeading = function () {
+        var sd = _rtShipsData && _rtShipsData.ships_data;
+        return (sd && sd.sddc != null) ? sd.sddc : null;
+    };
+
     function rtOpen3DModal() {
         _ga('rt_view_3d_volume', {});
         if (!_rtLast3DJson) return;
@@ -7018,7 +7043,10 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
 
         btn.classList.toggle('active');
         var vis = btn.classList.contains('active');
-        Plotly.restyle(chartDiv, { visible: vis }, [0]);
+        // Every isosurface (a preset view has several), not just trace 0.
+        var idx = [];
+        chartDiv.data.forEach(function (t, i) { if (t.type === 'isosurface') idx.push(i); });
+        Plotly.restyle(chartDiv, { visible: vis }, idx);
     };
 
     // ── 3D Volume: Toggle dropsonde traces ───────────────────────

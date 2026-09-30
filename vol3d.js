@@ -98,7 +98,11 @@ function open3DModal() {
     document.getElementById('vol-iso-max-val').textContent = rangeMax.toFixed(1);
     document.getElementById('vol-units').textContent = vi.units;
 
-    render3DIsosurface();
+    // Reopen in the view the user last picked (it refetches for this analysis).
+    if (_vol3dView && _vol3dViewsAvailable()) render3DView();
+    else { _vol3dView = null; render3DIsosurface(); }
+    var sel = document.getElementById('vol-view');
+    if (sel) sel.value = _vol3dView || '';
 }
 
 function close3DModal() {
@@ -266,21 +270,398 @@ function render3DIsosurface() {
     }
     if (savedCamera) layout.scene.camera = savedCamera;
 
-    _vol3dNewPlot('vol-3d-chart', [trace], layout, {
+    _vol3dLastWasView = false;
+    _vol3dSyncViewControls();
+    _vol3dFloorTrace(xRange, yRange, zRange[0]).then(function (floor) {
+        return _vol3dPlot([trace].concat(floor ? [floor] : []), layout);
+    });
+}
+
+// newPlot + the overlay bookkeeping every render path shares. Base traces
+// (isosurfaces, IR floor) go in the newPlot call so the tilt/sonde overlays
+// appended afterwards stay a contiguous tail — toggle3DTilt hides from
+// _3dTiltTraceStart to the end.
+function _vol3dPlot(traces, layout) {
+    return _vol3dNewPlot('vol-3d-chart', traces, layout, {
         responsive: true,
         displayModeBar: true,
         displaylogo: false,
         modeBarButtonsToRemove: ['toImage', 'resetCameraLastSave3d']
     }).then(function() {
-        // Reset TDR toggle to active (trace 0 is always visible after newPlot)
+        // Reset TDR toggle to active (isosurfaces are always visible after newPlot)
         var tdrBtn = document.getElementById('vol-tdr-toggle');
         if (tdrBtn && !tdrBtn.classList.contains('active')) tdrBtn.classList.add('active');
+        _vol3dSyncViewControls();
 
         // Reset overlay trace state and re-add any active overlays
         _3dTiltTraceStart = -1;
         _addTiltTo3D();
         // Fire a custom event so realtime_tdr.js can re-add its overlays (sondes, tilt)
         document.dispatchEvent(new CustomEvent('vol3d-rerendered'));
+    });
+}
+
+// ── Preset views ───────────────────────────────────────────────
+// One-click multi-field scenes. Each layer is ONE isosurface level in a flat
+// colour; each view has one strong "hero" field over faint grey context. The
+// host page opts in by defining
+//   window.vol3dFetchVolume(variable, {stride, radius_km, max_height_km}) -> Promise<volume json>
+// and optionally window.vol3dFloorImage() -> {src, x_min_km, x_max_km, y_min_km, y_max_km}
+// (satellite floor) and window.vol3dShearHeading() -> downshear heading (deg).
+// Without vol3dFetchVolume the Views row stays hidden.
+var VOL3D_VIEWS = [
+    { id: 'eyewall', label: 'Eyewall structure', layers: [
+        { v: 'REFLECTIVITY', lv: 30, c: '#d9dee5', o: 0.10, name: '30 dBZ' },
+        { v: 'REFLECTIVITY', lv: 40, c: '#9aa4b1', o: 0.25, name: '40 dBZ' },
+        { v: 'REFLECTIVITY', lv: 45, c: '#3f4a59', o: 0.80, name: '45 dBZ' }] },
+    { id: 'updrafts', label: 'Updrafts & downdrafts', layers: [
+        { v: 'REFLECTIVITY', lv: 30, c: '#d9dee5', o: 0.08, name: '30 dBZ' },
+        { v: 'W', lv: 3, c: '#e0892b', o: 0.80, name: 'w = +3 m s⁻¹' },
+        { v: 'W', lv: -2, c: '#3a6fb8', o: 0.45, name: 'w = −2 m s⁻¹' }] },
+    { id: 'vort', label: 'Vorticity & mesovortices', layers: [
+        { v: 'REFLECTIVITY', lv: 30, c: '#d9dee5', o: 0.08, name: '30 dBZ' },
+        { v: 'VORT', lv: 20e-4, c: '#efb3e6', o: 0.22, name: 'ζ = 20×10⁻⁴ s⁻¹' },
+        { v: 'VORT', lv: 30e-4, c: '#a8127f', o: 0.85, name: 'ζ = 30×10⁻⁴ s⁻¹' },
+        { v: 'W', lv: 3, c: '#e0892b', o: 0.30, name: 'w = +3 m s⁻¹' }] },
+    { id: 'wind', label: 'Wind field', layers: [
+        { v: 'WIND_SPEED', lv: 17.5, c: '#c4d8ea', o: 0.10, name: '34 kt' },
+        { v: 'WIND_SPEED', lv: 25.7, c: '#f0b73e', o: 0.25, name: '50 kt' },
+        { v: 'WIND_SPEED', lv: 32.9, c: '#c9372f', o: 0.80, name: '64 kt' }] }
+];
+// Missing cells (sentinel) are filled with a value on the "outside" of every
+// level, so a surface never traces the edge of radar coverage (a w = −2
+// shell would otherwise wrap every data gap, since 0 → −9999 crosses −2).
+var _VOL3D_FILL = { REFLECTIVITY: -30, W: 0, VORT: 0, WIND_SPEED: 0 };
+var VOL3D_MAX_HEIGHT_KM = 12;
+var VOL3D_Z_ASPECT = 0.33;      // box height / box width; exaggeration follows the domain
+var _vol3dView = null;          // active preset id, or null = single-variable mode
+var _vol3dViewSeq = 0;          // drops stale renders when the view changes mid-fetch
+var _vol3dFloor = 'ir';         // 'ir' | 'dbz' | 'none'
+var _vol3dDomain = '120';       // half-width km as a string, or 'fit' (3 × RMW)
+var _vol3dDeclutter = true;     // smooth + drop small fragments
+var _vol3dLastWasView = false;  // keep the user's camera only between views
+
+function _vol3dViewsAvailable() { return typeof window.vol3dFetchVolume === 'function'; }
+
+function _vol3dRmwKm() {
+    var tp = _last3DJson && _last3DJson.tilt_profile, rmw = null;
+    if (tp && tp.rmw_km && tp.height_km) {
+        var ref = tp.ref_height_km || 2, best = 1e9;
+        for (var i = 0; i < tp.height_km.length; i++) {
+            if (tp.rmw_km[i] != null && Math.abs(tp.height_km[i] - ref) < best) {
+                best = Math.abs(tp.height_km[i] - ref); rmw = tp.rmw_km[i];
+            }
+        }
+    }
+    return rmw;
+}
+
+// Half-width shown (km) and the box actually fetched. Everything up to ±120 km
+// uses the native 2-km grid from ONE ±120 km fetch (~280 KB gzipped per field),
+// so zooming is a client-side crop; only ±200 km drops to the 4-km grid, where
+// smoothing + declutter turn features into chunky slabs.
+function _vol3dDomainKm() {
+    if (_vol3dDomain === 'fit') {
+        var rmw = _vol3dRmwKm();
+        return Math.round(Math.max(30, Math.min(200, 3 * (rmw || 40))));
+    }
+    return parseFloat(_vol3dDomain) || 120;
+}
+function _vol3dFetchBox(d) {
+    if (d <= 120) return { radius_km: 120, stride: 1, max_height_km: VOL3D_MAX_HEIGHT_KM };
+    return { radius_km: 200, stride: 2, max_height_km: VOL3D_MAX_HEIGHT_KM };
+}
+
+// Crop a volume json to |x|,|y| <= d and fill sentinels -> {xA, yA, zA, v, nx, ny, nz}
+function _vol3dCrop(json, d, fill) {
+    var xA = json.x_axis, yA = json.y_axis, zA = json.z_axis, src = json.value, sen = json.sentinel;
+    var nx0 = xA.length, ny0 = yA.length, ix = [], iy = [];
+    for (var i = 0; i < nx0; i++) if (Math.abs(xA[i]) <= d) ix.push(i);
+    for (var j = 0; j < ny0; j++) if (Math.abs(yA[j]) <= d) iy.push(j);
+    var nx = ix.length, ny = iy.length, nz = zA.length, v = new Float32Array(nx * ny * nz), k = 0;
+    for (var iz = 0; iz < nz; iz++)
+        for (var a = 0; a < ny; a++)
+            for (var b = 0; b < nx; b++) {
+                var s = src[(iz * ny0 + iy[a]) * nx0 + ix[b]];
+                v[k++] = (s == null || s <= sen + 1) ? fill : s;
+            }
+    return { xA: ix.map(function (q) { return xA[q]; }), yA: iy.map(function (q) { return yA[q]; }),
+             zA: zA.slice(), v: v, nx: nx, ny: ny, nz: nz };
+}
+
+// One 1-2-1 pass along each axis (~Gaussian σ ≈ 0.7 cell): enough to round
+// off the single-cell TDR noise that shreds raw isosurfaces.
+function _vol3dSmooth(g) {
+    var nx = g.nx, ny = g.ny, nz = g.nz, a = g.v, b = new Float32Array(a.length);
+    function pass(src, dst, stride, n, idxOf) {
+        for (var p = 0; p < src.length; p++) {
+            var c = idxOf(p);
+            var lo = c > 0 ? src[p - stride] : src[p], hi = c < n - 1 ? src[p + stride] : src[p];
+            dst[p] = 0.25 * lo + 0.5 * src[p] + 0.25 * hi;
+        }
+    }
+    pass(a, b, 1, nx, function (p) { return p % nx; });
+    pass(b, a, nx, ny, function (p) { return Math.floor(p / nx) % ny; });
+    pass(a, b, nx * ny, nz, function (p) { return Math.floor(p / (nx * ny)); });
+    g.v = b;
+    return g;
+}
+
+// Remove connected regions (6-connectivity) of the layer's "inside" smaller
+// than minCells, by pushing them to the outside value. Per layer, since w=+3
+// and w=−2 have different insides.
+function _vol3dDeclutterLayer(g, lv, minCells, fill) {
+    var nx = g.nx, ny = g.ny, nz = g.nz, n = nx * ny * nz, v = new Float32Array(g.v);
+    var inside = lv >= 0 ? function (x) { return x >= lv; } : function (x) { return x <= lv; };
+    var seen = new Uint8Array(n), stack = new Int32Array(n), comp = new Int32Array(n);
+    for (var s = 0; s < n; s++) {
+        if (seen[s] || !inside(v[s])) continue;
+        var top = 0, cn = 0; stack[top++] = s; seen[s] = 1;
+        while (top) {
+            var p = stack[--top]; comp[cn++] = p;
+            var x = p % nx, y = Math.floor(p / nx) % ny, z = Math.floor(p / (nx * ny));
+            var nb = [x > 0 ? p - 1 : -1, x < nx - 1 ? p + 1 : -1, y > 0 ? p - nx : -1,
+                      y < ny - 1 ? p + nx : -1, z > 0 ? p - nx * ny : -1, z < nz - 1 ? p + nx * ny : -1];
+            for (var q = 0; q < 6; q++) {
+                var r = nb[q];
+                if (r >= 0 && !seen[r] && inside(v[r])) { seen[r] = 1; stack[top++] = r; }
+            }
+        }
+        if (cn < minCells) for (var c = 0; c < cn; c++) v[comp[c]] = fill;
+    }
+    return v;
+}
+
+function _vol3dFlat(g) {
+    var n = g.nx * g.ny * g.nz, x = new Array(n), y = new Array(n), z = new Array(n), k = 0;
+    for (var iz = 0; iz < g.nz; iz++)
+        for (var iy = 0; iy < g.ny; iy++)
+            for (var ix = 0; ix < g.nx; ix++) { x[k] = g.xA[ix]; y[k] = g.yA[iy]; z[k] = g.zA[iz]; k++; }
+    return { x: x, y: y, z: z };
+}
+
+function vol3dSetView(id) {
+    _vol3dView = id || null;
+    var sel = document.getElementById('vol-view');
+    if (sel && sel.value !== (id || '')) sel.value = id || '';
+    if (!_vol3dView) { render3DIsosurface(); return; }
+    render3DView();
+}
+function vol3dSetDomain(val) { _vol3dDomain = val; if (_vol3dView) render3DView(); }
+function vol3dSetFloor(val) { _vol3dFloor = val; if (_vol3dView) render3DView(); else render3DIsosurface(); }
+function toggle3DDeclutter() { _vol3dDeclutter = !_vol3dDeclutter; if (_vol3dView) render3DView(); }
+
+function render3DView() {
+    var view = null;
+    for (var i = 0; i < VOL3D_VIEWS.length; i++) if (VOL3D_VIEWS[i].id === _vol3dView) view = VOL3D_VIEWS[i];
+    if (!view || !_vol3dViewsAvailable()) return;
+    var seq = ++_vol3dViewSeq, d = _vol3dDomainKm(), box = _vol3dFetchBox(d);
+    var status = document.getElementById('vol-view-status');
+    if (status) status.textContent = 'Loading…';
+    _vol3dSyncViewControls();
+
+    var vars = [];
+    view.layers.forEach(function (L) { if (vars.indexOf(L.v) < 0) vars.push(L.v); });
+    if (_vol3dFloor === 'dbz' && vars.indexOf('REFLECTIVITY') < 0) vars.push('REFLECTIVITY');
+    Promise.all(vars.map(function (v) { return window.vol3dFetchVolume(v, box); })).then(function (vols) {
+        if (seq !== _vol3dViewSeq) return;
+        var grids = {};
+        vars.forEach(function (v, i) {
+            var g = _vol3dCrop(vols[i], d, _VOL3D_FILL[v] != null ? _VOL3D_FILL[v] : 0);
+            grids[v] = _vol3dDeclutter ? _vol3dSmooth(g) : g;
+        });
+        var g0 = grids[vars[0]], flat = _vol3dFlat(g0);
+        // ~20 cells on the 2-km grid ≈ 80 km³; the same volume is ~5 cells at 4 km.
+        var minCells = box.stride === 1 ? 20 : 5;
+
+        var traces = view.layers.map(function (L) {
+            var g = grids[L.v], fill = _VOL3D_FILL[L.v] != null ? _VOL3D_FILL[L.v] : 0;
+            var vals = _vol3dDeclutter ? _vol3dDeclutterLayer(g, L.lv, minCells, fill) : g.v;
+            return {
+                type: 'isosurface', x: flat.x, y: flat.y, z: flat.z, value: Array.prototype.slice.call(vals),
+                isomin: L.lv, isomax: L.lv, surface: { count: 1, fill: 1.0 },
+                caps: { x: { show: false }, y: { show: false }, z: { show: false } },
+                colorscale: [[0, L.c], [1, L.c]], showscale: false, opacity: L.o, flatshading: false,
+                name: L.name, hovertemplate: '<b>' + L.name + '</b><br>X: %{x:.0f} km  Y: %{y:.0f} km<br>Height: %{z:.1f} km<extra></extra>',
+                lighting: { ambient: 0.65, diffuse: 0.7, specular: 0.12, roughness: 0.8, fresnel: 0.1 },
+                lightposition: { x: 1000, y: -1000, z: 3000 }
+            };
+        });
+
+        var xR = [g0.xA[0], g0.xA[g0.nx - 1]], yR = [g0.yA[0], g0.yA[g0.ny - 1]], zR = [g0.zA[0], g0.zA[g0.nz - 1]];
+        var hSpan = Math.max(xR[1] - xR[0], yR[1] - yR[0]), vSpan = zR[1] - zR[0];
+        var exag = VOL3D_Z_ASPECT * hSpan / vSpan;
+        var meta = vols[0].case_meta || (_last3DJson && _last3DJson.case_meta) || {};
+        var legend = [], seen = {};
+        view.layers.forEach(function (L) {
+            if (seen[L.name]) return; seen[L.name] = 1;
+            legend.push('<span style="color:' + L.c + ';">■</span> ' + L.name);
+        });
+        var title = (meta.storm_name || '') + '  |  ' + (meta.datetime || '') + '  —  ' + view.label +
+            '<br><span style="font-size:12px;">' + legend.join('   ') + '</span>' +
+            '<br><span style="font-size:11px;color:#6b7280;">±' + d + ' km · ' + (box.stride === 1 ? 2 : 4) +
+            '-km grid · vertical exaggeration ×' + exag.toFixed(1) + (_vol3dDeclutter ? ' · smoothed, fragments < ' + minCells + ' cells removed' : '') + '</span>';
+        var layout = _vol3dSceneLayout(title);
+        var chartDiv = document.getElementById('vol-3d-chart');
+        if (_vol3dLastWasView && chartDiv && chartDiv.layout && chartDiv.layout.scene && chartDiv.layout.scene.camera) {
+            layout.scene.camera = JSON.parse(JSON.stringify(chartDiv.layout.scene.camera));
+        }
+        var floorP = _vol3dFloor === 'dbz'
+            ? Promise.resolve(_vol3dDbzFloorTrace(_vol3dCrop(vols[vars.indexOf('REFLECTIVITY')], d, -30), zR[0]))
+            : _vol3dFloorTrace(xR, yR, zR[0]);
+        return floorP.then(function (floor) {
+            if (seq !== _vol3dViewSeq) return;
+            if (status) status.textContent = '';
+            _vol3dLastWasView = true;
+            return _vol3dPlot(traces.concat(floor ? [floor] : []), layout);
+        });
+    }).catch(function (err) {
+        if (seq !== _vol3dViewSeq) return;
+        if (status) status.textContent = 'Could not load view: ' + (err && err.message ? err.message : err);
+    });
+}
+
+// Shared scene layout for the preset views: white backdrop, pale grid, box
+// height a fixed third of its width (exaggeration is stated in the subtitle).
+function _vol3dSceneLayout(title) {
+    var ax = function (t) {
+        return { title: { text: t, font: { color: '#5b6573', size: 11 } }, tickfont: { color: '#5b6573', size: 9 },
+                 gridcolor: 'rgba(15,22,35,0.07)', showbackground: true, backgroundcolor: '#f7f8fa' };
+    };
+    return {
+        title: { text: title, font: { color: '#0f1623', size: 15 }, y: 0.97, x: 0.5, xanchor: 'center' },
+        paper_bgcolor: '#ffffff',
+        scene: {
+            bgcolor: '#ffffff',
+            xaxis: ax('East (km)'), yaxis: ax('North (km)'), zaxis: ax('Height (km)'),
+            aspectmode: 'manual', aspectratio: { x: 1, y: 1, z: VOL3D_Z_ASPECT },
+            camera: _vol3dCameraFor('oblique')
+        },
+        margin: { l: 0, r: 0, t: 70, b: 0 },
+        hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } }
+    };
+}
+
+// ── Camera presets ─────────────────────────────────────────────
+function _vol3dCameraFor(id) {
+    var up = { x: 0, y: 0, z: 1 }, center = { x: 0, y: 0, z: -0.1 };
+    if (id === 'top') return { eye: { x: 0, y: -0.01, z: 1.7 }, up: { x: 0, y: 1, z: 0 }, center: { x: 0, y: 0, z: 0 } };
+    if (id === 'south') return { eye: { x: 0, y: -1.6, z: 0.25 }, up: up, center: center };
+    if (id === 'shear') {
+        // Stand UPSHEAR looking downshear: SHIPS SDDC is the heading the shear
+        // vector points TO (met. convention, 0 = north, 90 = east).
+        var h = typeof window.vol3dShearHeading === 'function' ? window.vol3dShearHeading() : null;
+        if (h == null || !isFinite(h)) return null;
+        var r = h * Math.PI / 180;
+        return { eye: { x: -1.5 * Math.sin(r), y: -1.5 * Math.cos(r), z: 0.45 }, up: up, center: center };
+    }
+    return { eye: { x: 1.0, y: -1.05, z: 0.6 }, up: up, center: center };   // oblique
+}
+
+function vol3dCamera(id) {
+    var cam = _vol3dCameraFor(id);
+    var chartDiv = document.getElementById('vol-3d-chart');
+    if (!cam || !chartDiv || !chartDiv.data) return;
+    Plotly.relayout(chartDiv, { 'scene.camera': cam });
+}
+
+// ── Floors ─────────────────────────────────────────────────────
+// Plotly 3-D has no image textures, but mesh3d takes per-vertex colours, so a
+// floor is a flat grid mesh. Both floors are deliberately quiet (lightened,
+// mostly desaturated) — context under the storm, not a competing colour field.
+function _vol3dGridMesh(xs, ys, z0, cols) {
+    var nx = xs.length, ny = ys.length, X = [], Y = [], Z = [], I = [], J = [], K = [];
+    for (var j = 0; j < ny; j++) for (var i = 0; i < nx; i++) { X.push(xs[i]); Y.push(ys[j]); Z.push(z0); }
+    for (var jj = 0; jj < ny - 1; jj++) for (var ii = 0; ii < nx - 1; ii++) {
+        var a = jj * nx + ii, b = a + 1, c = a + nx, e = c + 1;
+        I.push(a, a); J.push(b, e); K.push(e, c);
+    }
+    return { type: 'mesh3d', x: X, y: Y, z: Z, i: I, j: J, k: K, vertexcolor: cols, flatshading: true, opacity: 1,
+             lighting: { ambient: 1, diffuse: 0, specular: 0, roughness: 1, fresnel: 0 },
+             hoverinfo: 'skip', showscale: false, name: 'floor' };
+}
+function _vol3dQuiet(r, g, b) {
+    var l = 0.299 * r + 0.587 * g + 0.114 * b, s = 0.35, w = 0.35;   // keep 35 % saturation, lift 35 % to white
+    r = l + (r - l) * s; g = l + (g - l) * s; b = l + (b - l) * s;
+    return 'rgb(' + Math.round(r + (255 - r) * w) + ',' + Math.round(g + (255 - g) * w) + ',' + Math.round(b + (255 - b) * w) + ')';
+}
+
+// Reflectivity footprint: column-max dBZ in the lowest 3 km, in greys.
+function _vol3dDbzFloorTrace(g, z0) {
+    var cols = [], nxy = g.nx * g.ny, kmax = 0;
+    while (kmax < g.nz - 1 && g.zA[kmax + 1] <= 3) kmax++;
+    for (var p = 0; p < nxy; p++) {
+        var m = -99;
+        for (var k = 0; k <= kmax; k++) m = Math.max(m, g.v[k * nxy + p]);
+        cols.push(m >= 45 ? '#8d96a3' : m >= 40 ? '#adb5bf' : m >= 30 ? '#cdd2d9' : m >= 20 ? '#e3e6ea' : '#f4f5f7');
+    }
+    return _vol3dGridMesh(g.xA, g.yA, z0 - 0.02, cols);
+}
+
+var _vol3dFloorCache = { key: null, trace: null };
+function _vol3dFloorTrace(xR, yR, z0) {
+    var f = (_vol3dFloor !== 'none' && typeof window.vol3dFloorImage === 'function') ? window.vol3dFloorImage() : null;
+    if (!f || !f.src) return Promise.resolve(null);
+    var key = f.src.length + ':' + f.src.slice(-64) + ':' + xR + ':' + yR + ':' + z0;
+    if (_vol3dFloorCache.key === key) return Promise.resolve(_vol3dFloorCache.trace);
+    return new Promise(function (resolve) {
+        var img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onerror = function () { resolve(null); };
+        img.onload = function () {
+            try {
+                var cv = document.createElement('canvas');
+                cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+                var ctx = cv.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                var px = ctx.getImageData(0, 0, cv.width, cv.height).data;
+                var N = 110, xs = [], ys = [], cols = [];
+                for (var i = 0; i < N; i++) xs.push(xR[0] + (xR[1] - xR[0]) * i / (N - 1));
+                for (var j = 0; j < N; j++) ys.push(yR[0] + (yR[1] - yR[0]) * j / (N - 1));
+                for (var jy = 0; jy < N; jy++) {
+                    for (var ix = 0; ix < N; ix++) {
+                        var u = (xs[ix] - f.x_min_km) / (f.x_max_km - f.x_min_km);
+                        var v = (f.y_max_km - ys[jy]) / (f.y_max_km - f.y_min_km);
+                        var col = '#f4f5f7';
+                        if (u >= 0 && u <= 1 && v >= 0 && v <= 1) {
+                            var p = (Math.min(cv.height - 1, Math.floor(v * cv.height)) * cv.width +
+                                     Math.min(cv.width - 1, Math.floor(u * cv.width))) * 4;
+                            if (px[p + 3] > 0) col = _vol3dQuiet(px[p], px[p + 1], px[p + 2]);
+                        }
+                        cols.push(col);
+                    }
+                }
+                var trace = _vol3dGridMesh(xs, ys, z0 - 0.02, cols);
+                _vol3dFloorCache = { key: key, trace: trace };
+                resolve(trace);
+            } catch (e) { resolve(null); }   // tainted canvas etc. — just no floor
+        };
+        img.src = f.src;
+    });
+}
+
+// Views row state; the single-variable controls are inert while a view is up.
+function _vol3dSyncViewControls() {
+    var row = document.getElementById('vol-views-row');
+    if (row) row.style.display = _vol3dViewsAvailable() ? '' : 'none';
+    var hasIR = typeof window.vol3dFloorImage === 'function' && !!window.vol3dFloorImage();
+    var floorSel = document.getElementById('vol-floor');
+    if (floorSel) {
+        floorSel.value = _vol3dFloor;
+        var dbzOpt = floorSel.querySelector('option[value="dbz"]');
+        if (dbzOpt) dbzOpt.disabled = !_vol3dView;      // needs the view's reflectivity fetch
+        var irOpt = floorSel.querySelector('option[value="ir"]');
+        if (irOpt) irOpt.disabled = !hasIR;
+    }
+    var domSel = document.getElementById('vol-domain');
+    if (domSel) { domSel.value = _vol3dDomain; domSel.disabled = !_vol3dView; }
+    var dcl = document.getElementById('vol-declutter');
+    if (dcl) { dcl.classList.toggle('active', _vol3dDeclutter); dcl.disabled = !_vol3dView; }
+    var shearBtn = document.getElementById('vol-cam-shear');
+    if (shearBtn) shearBtn.disabled = !_vol3dCameraFor('shear');
+    ['vol-iso-min', 'vol-iso-max', 'vol-surfaces', 'vol-opacity', 'vol-caps'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.disabled = !!_vol3dView;
     });
 }
 
@@ -403,6 +784,19 @@ function _addTiltTo3D() {
     if (btn) btn.disabled = false;
 
     var traces = _build3DTiltTraces(_last3DJson.tilt_profile);
+    // Preset views keep the vortex axis + centre markers only: at a large RMW
+    // the rings cover the whole core and fight the vorticity magentas.
+    if (_vol3dView) {
+        traces = traces.slice(0, 2);
+        if (traces[1]) {
+            traces[1].text = traces[1].z.map(function (h) {
+                return Math.abs(h - 2) < 0.01 ? '2-km centre' : Math.abs(h - 6) < 0.01 ? '6-km centre' : '';
+            });
+            traces[1].textfont = { size: 10, color: '#4b5563' };
+            traces[1].marker.showscale = false;
+            delete traces[1].marker.colorbar;
+        }
+    }
     if (!traces.length) {
         if (btn) { btn.disabled = true; btn.classList.remove('active'); }
         return;

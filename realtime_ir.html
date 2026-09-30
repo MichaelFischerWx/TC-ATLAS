@@ -2653,6 +2653,37 @@
     <div id="vol3DModal" class="plot-modal-overlay" onclick="close3DModal()">
         <div class="vol3d-modal-box" onclick="event.stopPropagation()">
             <button class="plot-modal-close" onclick="close3DModal()" title="Close (Esc)">&times;</button>
+            <div id="vol-views-row" class="vol3d-controls" style="display:none;">
+                <label>View</label>
+                <select id="vol-view" onchange="vol3dSetView(this.value)" style="width:auto;">
+                    <option value="">Single variable</option>
+                    <option value="eyewall">Eyewall structure</option>
+                    <option value="updrafts">Updrafts &amp; downdrafts</option>
+                    <option value="vort">Vorticity &amp; mesovortices</option>
+                    <option value="wind">Wind field</option>
+                </select>
+                <label>Domain</label>
+                <select id="vol-domain" onchange="vol3dSetDomain(this.value)" style="width:auto;" title="Half-width of the box around the analysis centre">
+                    <option value="40">±40 km</option>
+                    <option value="80">±80 km</option>
+                    <option value="120" selected>±120 km</option>
+                    <option value="200">±200 km</option>
+                    <option value="fit">Fit 3×RMW</option>
+                </select>
+                <button id="vol-declutter" class="vol3d-toggle-btn active" onclick="toggle3DDeclutter()" title="Light smoothing + hide fragments smaller than ~80 km³">Declutter</button>
+                <label>Camera</label>
+                <button class="vol3d-toggle-btn" onclick="vol3dCamera('oblique')" title="Oblique view from the southeast">Oblique</button>
+                <button class="vol3d-toggle-btn" onclick="vol3dCamera('top')" title="Straight down">Top</button>
+                <button class="vol3d-toggle-btn" onclick="vol3dCamera('south')" title="Side view from the south">From S</button>
+                <button id="vol-cam-shear" class="vol3d-toggle-btn" onclick="vol3dCamera('shear')" title="Stand upshear, look downshear (SHIPS shear heading)">Downshear</button>
+                <label>Floor</label>
+                <select id="vol-floor" onchange="vol3dSetFloor(this.value)" style="width:auto;">
+                    <option value="ir" selected>GOES IR</option>
+                    <option value="dbz">Reflectivity footprint</option>
+                    <option value="none">None</option>
+                </select>
+                <span id="vol-view-status" style="font-size:11px;color:#8899aa;"></span>
+            </div>
             <div class="vol3d-controls">
                 <label>Iso Min <span id="vol-iso-min-val"></span></label>
                 <input type="number" id="vol-iso-min" step="any" style="width:65px;" onchange="render3DIsosurface()">
@@ -2725,7 +2756,7 @@
     <script defer src="tc_dm_analytics.js?v=20260904b"></script>
     <script defer src="realtime_ir_dm.js?v=20260904r"></script>
     <script defer src="realtime_ir.js?v=20260930sv2"></script>
-    <script defer src="vol3d.js?v=20260804a"></script>
+    <script defer src="vol3d.js?v=20260930v3"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
          eager for the map-tab recon-overlay sonde skew-Ts. The recon /
@@ -2829,7 +2860,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260930sv1';
+        var _LAZY_ASSET_V = '?v=20260930v3d';
         var _lazyViewMods = {
             recon:       { js: ['tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
