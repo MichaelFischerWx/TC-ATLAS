@@ -770,6 +770,85 @@
 @media (max-width: 720px) {
     .recon-skewt-body { grid-template-columns: 1fr; }
 }
+
+/* ── Dropsonde card v2 (sonde_card.js, ?sonde=v2) ─────────────────────
+   One number, one chart, one idea at a time. Colours come from the site
+   theme tokens; the wind ramp itself is drawn by sonde_card.js. */
+.recon-skewt-content.sv2-on {          /* light (theme.js sets no attribute) */
+    max-width: 640px;
+    --sv2-rule: rgba(15,22,35,0.08); --sv2-rule2: rgba(15,22,35,0.18);
+    --sv2-band: rgba(15,22,35,0.045); --sv2-muted: #8391a7; --sv2-inflow: #1d6fe0;
+}
+[data-theme="dark"] .recon-skewt-content.sv2-on {
+    --sv2-rule: rgba(148,163,184,0.12); --sv2-rule2: rgba(148,163,184,0.26);
+    --sv2-band: rgba(148,163,184,0.08); --sv2-muted: #5f7090; --sv2-inflow: #4ea1ff;
+}
+.recon-skewt-content.sv2-on .recon-skewt-body { display: block; padding: 14px 18px 16px; }
+.sv2 { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.sv2-who { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--slate);
+    display: flex; flex-wrap: wrap; gap: 3px 12px; }
+.sv2-who b { color: var(--text); font-weight: 600; }
+.sv2-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 20px; }
+.sv2-num { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums;
+    font-size: 56px; font-weight: 600; letter-spacing: -0.03em; line-height: 0.95; }
+.sv2-num small { font-size: 16px; font-weight: 400; letter-spacing: 0; color: var(--slate); margin-left: 4px; }
+.sv2-numlab { font-size: 11.5px; color: var(--slate); margin-top: 5px; }
+.sv2-second { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 12px; color: var(--slate);
+    display: flex; flex-direction: column; gap: 2px; text-align: right; font-variant-numeric: tabular-nums; }
+.sv2-second b { color: var(--text); font-weight: 500; }
+.sv2-chart { min-height: 260px; }
+.sv2-chart svg text { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+.sv2-chart svg text.sv2-ann { paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
+.sv2-wait { padding: 60px 0; text-align: center; color: var(--slate); font-size: 12px; }
+.sv2-seg { display: inline-flex; align-self: flex-start; max-width: 100%; flex-wrap: wrap;
+    border: 1px solid var(--sv2-rule2); border-radius: 8px; overflow: hidden; }
+.sv2-seg button { font: inherit; font-size: 12.5px; color: var(--slate); background: transparent; border: 0;
+    padding: 6px 13px; cursor: pointer; }
+.sv2-seg button + button { border-left: 1px solid var(--sv2-rule2); }
+.sv2-seg button[aria-pressed="true"] { background: var(--blue-glow); color: var(--text); box-shadow: inset 0 -2px 0 var(--blue); }
+.sv2-seg button:disabled { color: var(--sv2-muted); cursor: not-allowed; opacity: 0.6; }
+.sv2-seg button:focus-visible, .sv2-tile:focus-visible, .sv2-open:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 2px; }
+.sv2-caption { font-size: 12.5px; color: var(--slate); min-height: 1.4em; }
+.sv2-caption b { color: var(--text); font-weight: 600; }
+.sv2-src { font-size: 10.5px; color: var(--sv2-muted); }
+.sv2-flight { border-top: 1px solid var(--sv2-rule); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.sv2-flight-h { font-size: 13px; font-weight: 600; color: var(--text); }
+.sv2-flight-h span { font-weight: 400; color: var(--slate); font-size: 12px; margin-left: 6px; }
+.sv2-tiles { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 4px; scroll-snap-type: x proximity; }
+.sv2-tile { flex: 0 0 auto; width: 108px; scroll-snap-align: start; font: inherit; color: inherit; text-align: left;
+    background: var(--navy-mid); border: 1px solid var(--sv2-rule); border-radius: 9px; padding: 7px 8px 5px;
+    cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.sv2-tile:hover { border-color: var(--sv2-rule2); }
+.sv2-tile[aria-current="true"] { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset; }
+.sv2-t1 { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 10px; color: var(--slate);
+    display: flex; justify-content: space-between; }
+.sv2-tn { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 20px; font-weight: 600;
+    letter-spacing: -0.02em; line-height: 1; font-variant-numeric: tabular-nums; }
+.sv2-tm { height: 40px; }
+.sv2-tip { position: fixed; z-index: 4100; pointer-events: none; display: none; background: var(--surface);
+    color: var(--text); border: 1px solid var(--sv2-rule2, rgba(148,163,184,0.26)); border-radius: 7px; padding: 5px 9px;
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11.5px; white-space: nowrap;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.3); font-variant-numeric: tabular-nums; }
+.sv2-tip span { color: var(--slate); }
+/* popup glance */
+/* Map popups render white in both site themes, so the glance uses fixed ink. */
+.sv2-glance { display: flex; flex-direction: column; gap: 2px; min-width: 168px; color: #0f172a; }
+.sv2-glance-who { font-size: 11px; font-weight: 600; color: #475569; display: flex; align-items: center; gap: 6px; }
+.sv2-diamond { width: 8px; height: 8px; background: #fbbf24; transform: rotate(45deg); border: 1px solid #1f2937; flex: 0 0 auto; }
+.sv2-glance-num { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 34px; font-weight: 600;
+    letter-spacing: -0.03em; line-height: 1; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.sv2-glance-num small { font-size: 12px; font-weight: 400; color: #475569; letter-spacing: 0; margin-left: 3px; }
+.sv2-glance-lab { font-size: 10.5px; color: #475569; }
+.sv2-glance-sub { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11px; color: #475569; margin-top: 3px; }
+.sv2-glance-sub b { color: #0f172a; font-weight: 600; }
+.sv2-open { margin-top: 8px; padding: 6px 10px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    border-radius: 6px; border: 0; background: #005030; color: #fff; outline: none; }
+.sv2-open:hover { background: #2e7a5b; }
+@media (max-width: 560px) {
+    .sv2-num { font-size: 46px; }
+    .sv2-second { text-align: left; }
+    .recon-skewt-content.sv2-on .recon-skewt-body { padding: 12px 12px 14px; }
+}
 .recon-hdob-srcnote { padding: 2px 10px 6px; font-size: 10.5px; line-height: 1.35; color: var(--slate); }
 .recon-hdob-chart { flex: 1 1 auto; width: 100%; min-height: 540px; }
 .recon-hdob-hint { padding: 6px 10px; font-size: 10.5px; color: var(--slate); border-top: 1px solid var(--border); }

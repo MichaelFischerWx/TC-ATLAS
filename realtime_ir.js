@@ -31189,8 +31189,37 @@
         { key: 'sfmr_kt', label: 'SFMR Sfc',      unit: 'kt', kind: 'wind' },
         { key: 'sear_kt', label: 'SEAR 10-m est', unit: 'kt', kind: 'wind' },
         { key: 'temp_c',  label: 'Temp',          unit: '°C', kind: 'temp' },
-        { key: 'dewpt_c', label: 'Dewpt',         unit: '°C', kind: 'temp' }
+        { key: 'dewpt_c', label: 'Dewpt',         unit: '°C', kind: 'temp' },
+        // Derived per ob from T, Td and FL pressure (_reconObVal), 2026-09-30.
+        { key: 'rh_pct',   label: 'RH',            unit: '%',  kind: 'rh' },
+        { key: 'thetae_k', label: 'θe',            unit: 'K',  kind: 'thetae' }
     ];
+    // RH: dry browns → saturated blue. Flight-level θe (≈700 mb): the eye's warm,
+    // high-θe core reads hot against the lower-θe environment.
+    var _RECON_RH_STOPS = [[50, '#92400e'], [70, '#d97706'], [80, '#eab308'], [90, '#84cc16'],
+                           [95, '#22c55e'], [98, '#14b8a6'], [999, '#38bdf8']];
+    // Runs to 370 K+: a Cat-5 eyewall sits at 360-370 K at 700 mb (Polo 09-22) and
+    // saturated the first version's 360+ bin.
+    var _RECON_THETAE_STOPS = [[335, '#3b82f6'], [340, '#06b6d4'], [345, '#22c55e'], [350, '#eab308'],
+                               [355, '#f97316'], [360, '#ef4444'], [365, '#c026d3'], [370, '#a78bfa'], [9999, '#f5f3ff']];
+    /** Value of colour variable `key` for one ob; RH / θe are derived (and cached on the ob). */
+    function _reconObVal(ob, key) {
+        if (key !== 'rh_pct' && key !== 'thetae_k') return ob[key];
+        if (ob._rhTh === undefined) {
+            var tc = ob.temp_c, td = ob.dewpt_c, p = ob.fl_pres_mb, rh = null, th = null;
+            if (tc != null && td != null) {
+                var e = 6.112 * Math.exp(17.67 * td / (td + 243.5)), es = 6.112 * Math.exp(17.67 * tc / (tc + 243.5));
+                rh = Math.min(100, 100 * e / es);
+                if (p != null && p > 100) {       // Bolton (1980) θe
+                    var T = tc + 273.15, Td = td + 273.15, q = 0.622 * e / (p - e);
+                    var Tl = 1 / (1 / (Td - 56) + Math.log(T / Td) / 800) + 56;
+                    th = T * Math.pow(1000 / p, 0.2854 * (1 - 0.28 * q)) * Math.exp((3.376 / Tl - 0.00254) * q * 1000 * (1 + 0.81 * q));
+                }
+            }
+            ob._rhTh = [rh, th];
+        }
+        return ob._rhTh[key === 'rh_pct' ? 0 : 1];
+    }
     var _RECON_TEMP_STOPS = [
         [-20, '#3b82f6'], [-10, '#06b6d4'], [0, '#22d3ee'], [10, '#34d399'],
         [20, '#fbbf24'], [25, '#fb923c'], [999, '#f87171']
@@ -31225,14 +31254,87 @@
     /** Map a value of the selected variable to a base-dot color. */
     function _reconVarColor(key, val) {
         if (val == null || isNaN(val)) return '#9ca3af';  // grey = missing
-        if (_reconVarKind(key) === 'temp') {
-            for (var i = 0; i < _RECON_TEMP_STOPS.length; i++) {
-                if (val < _RECON_TEMP_STOPS[i][0]) return _RECON_TEMP_STOPS[i][1];
+        var kind = _reconVarKind(key);
+        var stops = kind === 'temp' ? _RECON_TEMP_STOPS : kind === 'rh' ? _RECON_RH_STOPS
+                  : kind === 'thetae' ? _RECON_THETAE_STOPS : null;
+        if (stops) {
+            for (var i = 0; i < stops.length; i++) {
+                if (val < stops[i][0]) return stops[i][1];
             }
-            return _RECON_TEMP_STOPS[_RECON_TEMP_STOPS.length - 1][1];
+            return stops[stops.length - 1][1];
         }
         return _reconWindColor(val);  // recon wind scale (extends to Cat 5)
     }
+    // ── Dropsonde diamond colour ("Sonde color", 2026-09-30) ──────────────────
+    // Colour the ◇ markers by a per-sonde number so the strongest drops stand out
+    // on the map; the strongest also stack on top so an overlap can't hide them.
+    // 1-s (BUFR) summary values first, the coded TEMP DROP groups as fallback.
+    var _RECON_SONDE_VARS = [
+        { key: 'none',  label: 'Default' },
+        { key: 'wl150', label: 'WL150' },
+        { key: 'mbl',   label: 'MBL wind' },
+        { key: 'peak',  label: 'Peak wind' },
+        { key: 'psfc',  label: 'Splash pressure' }
+    ];
+    // Splash pressure (hPa): low = intense, on the same hue order as the wind scale.
+    var _RECON_PSFC_STOPS = [[920, '#7c3aed'], [940, '#c026d3'], [960, '#9d174d'], [975, '#ef4444'],
+                             [990, '#f97316'], [1000, '#eab308'], [1006, '#22c55e'], [9999, '#60a5fa']];
+    var _reconSondeColorVar = 'none';
+    function _reconSondeVal(d, key) {
+        var h = d.hires || {}, prof = d.profile || {};
+        if (key === 'wl150') return h.wl150_kt != null ? h.wl150_kt : d.sfc_wind_kt;
+        if (key === 'mbl') return h.mbl_kt != null ? h.mbl_kt : d.mbl_wind_kt;
+        if (key === 'peak') {
+            if (h.max_wind_kt != null) return h.max_wind_kt;
+            var m = null;
+            (prof.mandatory || []).concat(prof.sig_wind || []).forEach(function (L) { if (L.wspd != null && L.wspd <= 250 && (m == null || L.wspd > m)) m = L.wspd; });
+            return m;
+        }
+        if (key === 'psfc') {
+            var s = (prof.mandatory || [])[0];                       // decoder puts the surface first
+            return s && s.hgt === 0 && s.p != null ? s.p : null;
+        }
+        return null;
+    }
+    function _reconSondeColor(key, v) {
+        if (key === 'none') return '#fbbf24';
+        if (v == null || isNaN(v)) return '#9ca3af';
+        if (key === 'psfc') {
+            for (var i = 0; i < _RECON_PSFC_STOPS.length; i++) if (v < _RECON_PSFC_STOPS[i][0]) return _RECON_PSFC_STOPS[i][1];
+            return _RECON_PSFC_STOPS[_RECON_PSFC_STOPS.length - 1][1];
+        }
+        return _reconWindColor(v);
+    }
+    /** Stacking rank: strongest on top (lowest pressure for psfc). */
+    function _reconSondeRank(key, v) {
+        if (key === 'none' || v == null || isNaN(v)) return 0;
+        return Math.round(key === 'psfc' ? 1100 - v : v);
+    }
+    function _reconSondeLegend(key) {
+        if (key === 'none') return [];
+        var s;
+        if (key === 'psfc') {
+            var P = _RECON_PSFC_STOPS;
+            s = [['<920', P[0][1]], ['920-940', P[1][1]], ['940-960', P[2][1]], ['960-975', P[3][1]],
+                 ['975-990', P[4][1]], ['990-1000', P[5][1]], ['1000-1006', P[6][1]], ['1006+', P[7][1]]];
+        } else s = _reconLegendStops('wspd_kt').map(function (x) { return [x[0], x[1]]; });
+        return s.map(function (x) { return [x[0], x[1], _reconChipInk(x[1])]; });
+    }
+    /** Restyle every drawn ◇ in place (both maps) for the current variable. */
+    function _reconRecolorSondes() {
+        var key = _reconSondeColorVar;
+        document.querySelectorAll('[data-sk]').forEach(function (el) {
+            var d = _reconSondeByKey[el.getAttribute('data-sk')];
+            if (!d) return;
+            var v = _reconSondeVal(d, key), big = key !== 'none';
+            el.style.background = _reconSondeColor(key, v);
+            el.style.width = el.style.height = big ? '13px' : '11px';
+            el.title = big && v != null ? (Math.round(v) + (key === 'psfc' ? ' hPa' : ' kt')) : '';
+            var host = el.closest('.maplibregl-marker, .leaflet-marker-icon');
+            if (host) host.style.zIndex = String(600 + _reconSondeRank(key, v));
+        });
+    }
+
     /** Label ink for a legend chip: near-black or white, whichever has the higher
      *  WCAG contrast on that color, so the dark bins' labels stay readable. */
     function _reconChipInk(hex) {
@@ -31247,9 +31349,16 @@
      *  wind chips take their colors from _RECON_WIND_STOPS so they cannot drift. */
     function _reconLegendStops(key) {
         var W = _RECON_WIND_STOPS, s;
-        if (_reconVarKind(key) === 'temp') {
+        var kind = _reconVarKind(key), R = _RECON_RH_STOPS, E = _RECON_THETAE_STOPS;
+        if (kind === 'temp') {
             s = [['<-10', '#06b6d4'], ['0', '#22d3ee'], ['10', '#34d399'],
                  ['20', '#fbbf24'], ['25', '#fb923c'], ['30+', '#f87171']];
+        } else if (kind === 'rh') {
+            s = [['<50%', R[0][1]], ['50-70', R[1][1]], ['70-80', R[2][1]], ['80-90', R[3][1]],
+                 ['90-95', R[4][1]], ['95-98', R[5][1]], ['98+', R[6][1]]];
+        } else if (kind === 'thetae') {
+            s = [['<335 K', E[0][1]], ['335-340', E[1][1]], ['340-345', E[2][1]], ['345-350', E[3][1]],
+                 ['350-355', E[4][1]], ['355-360', E[5][1]], ['360-365', E[6][1]], ['365-370', E[7][1]], ['370+', E[8][1]]];
         } else {
             s = [['<34', W[0][1]], ['34-50', W[1][1]], ['50-64', W[2][1]],
                  ['64-83', W[3][1]], ['83-96', W[4][1]], ['96-113', W[5][1]],
@@ -31259,9 +31368,11 @@
     }
 
     /**
-     * Draw one WMO wind barb (dir/speed) on a canvas at (x,y): a colored base
-     * dot encoding the selected variable, plus a NEUTRAL (cream) barb glyph for
-     * wind dir/speed. Dimmed when the ob is not in the latest leg (fresh=false).
+     * Draw one WMO wind barb (dir/speed) on a canvas at (x,y), glyph AND base
+     * dot coloured by the selected variable ("Barb color"), over a dark halo so
+     * it reads on any imagery. Dimmed when the ob is not in the latest leg.
+     * (Until 2026-09-30 only a ~3-px base dot carried the colour and the glyph
+     * was cream, so "Barb color" changed almost nothing visible.)
      */
     function _rtDrawReconBarb(ctx, x, y, dirDeg, spdKt, isSH, fresh, baseColor) {
         // Base dot — encodes the user-selected variable (FL wind / SFMR / temp …)
@@ -31269,10 +31380,10 @@
             ctx.save();
             ctx.globalAlpha = fresh ? 0.95 : 0.5;
             ctx.beginPath();
-            ctx.arc(x, y, fresh ? 3.3 : 2.6, 0, 2 * Math.PI);
+            ctx.arc(x, y, fresh ? 4.6 : 3.6, 0, 2 * Math.PI);
             ctx.fillStyle = baseColor;
             ctx.fill();
-            ctx.lineWidth = 0.7; ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.stroke();
+            ctx.lineWidth = 1.1; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.stroke();
             ctx.restore();
         }
         if (spdKt == null || spdKt < 2) return;
@@ -31312,17 +31423,17 @@
             lines.moveTo(0, pos); lines.lineTo(side * FEATHER_H, pos);
         }
 
-        // Neutral cream glyph (the base dot carries the color signal now).
-        var ink = 'rgba(244,240,224,0.96)';
+        // Glyph in the variable's colour (cream when no colour is given).
+        var ink = baseColor || 'rgba(244,240,224,0.96)';
         // dark halo
-        ctx.globalAlpha = fresh ? 0.7 : 0.4;
-        ctx.lineWidth = fresh ? 3.2 : 2.4;
+        ctx.globalAlpha = fresh ? 0.75 : 0.4;
+        ctx.lineWidth = fresh ? 4.0 : 3.0;
         ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.fillStyle = 'rgba(0,0,0,0.6)';
         ctx.stroke(lines);
         if (nPen) { ctx.fill(pennants); ctx.stroke(pennants); }
         // cream ink
         ctx.globalAlpha = fresh ? 1.0 : 0.55;
-        ctx.lineWidth = fresh ? 1.6 : 1.2;
+        ctx.lineWidth = fresh ? 2.0 : 1.4;
         ctx.strokeStyle = ink; ctx.fillStyle = ink;
         ctx.stroke(lines);
         if (nPen) { ctx.fill(pennants); ctx.stroke(pennants); }
@@ -31450,7 +31561,7 @@
                     var pt = this._map.latLngToContainerPoint([ob.lat, ob.lon]);
                     var fresh = this._latestMs &&
                         (this._latestMs - Date.parse(ob.t)) <= _RT_RECON_FRESH_MS;
-                    var bc = _reconVarColor(_rtReconColorVar, ob[_rtReconColorVar]);
+                    var bc = _reconVarColor(_rtReconColorVar, _reconObVal(ob, _rtReconColorVar));
                     _rtDrawReconBarb(ctx, pt.x, pt.y, ob.wdir, ob.wspd_kt, ob.lat < 0, fresh, bc);
                     this._drawn.push({ x: pt.x, y: pt.y, ob: ob, tail: this._aircraft[ai].tail });
                 }
@@ -31516,6 +31627,8 @@
             _rtReconRow('FL alt', ob.geo_alt_m != null ? (ob.geo_alt_m + ' m · ' + (ob.geo_alt_m / 1000).toFixed(2) + ' km') : null) +
             _rtReconRow('Temp', ob.temp_c != null ? ob.temp_c + ' °C' : null) +
             _rtReconRow('Dewpt', ob.dewpt_c != null ? ob.dewpt_c + ' °C' : null) +
+            _rtReconRow('RH', _reconObVal(ob, 'rh_pct') != null ? Math.round(_reconObVal(ob, 'rh_pct')) + ' %' : null) +
+            _rtReconRow('θe', _reconObVal(ob, 'thetae_k') != null ? Math.round(_reconObVal(ob, 'thetae_k')) + ' K' : null) +
             '</div>';
         L.popup({ maxWidth: 260, className: 'rt-recon-popup' })
             .setLatLng(latlng).setContent(html).openOn(map || detailMap);
@@ -31825,11 +31938,57 @@
             '<div class="recon-skewt-side">' + (extraTop || '') + _reconSkewTTable(sonde, h) + '</div>';
     }
 
+    var _reconSondeBlob = {};         // sonde key -> the recon blob it came from (flight list + VDM centre)
+
+    /** The rest of this sonde's flight for the v2 card's tiles: same aircraft,
+     *  within 8 h, time-ordered, one entry per physical drop (TEMP DROP + BUFR
+     *  twins share a hires id; keep the one carrying the coded profile). */
+    function _reconFlightSondes(key) {
+        var s0 = _reconSondeByKey[key], blob = _reconSondeBlob[key];
+        if (!s0 || !blob) return [];
+        var t0 = Date.parse(s0.t), byId = {}, out = [];
+        Object.keys(_reconSondeByKey).forEach(function (k) {
+            var d = _reconSondeByKey[k];
+            if (_reconSondeBlob[k] !== blob || d.tail !== s0.tail || Math.abs(Date.parse(d.t) - t0) > 8 * 3600e3) return;
+            var id = d.hires && d.hires.id;
+            if (id && byId[id]) {
+                var prev = byId[id];
+                if (!(prev.sonde.profile && prev.sonde.profile.mandatory && prev.sonde.profile.mandatory.length) &&
+                    d.profile && d.profile.mandatory && d.profile.mandatory.length) { prev.sonde = d; prev.key = k; }
+                if (k === key) prev.key = k;
+                return;
+            }
+            var it = { key: k, sonde: d }; if (id) byId[id] = it; out.push(it);
+        });
+        return out.sort(function (a, b) { return Date.parse(a.sonde.t) - Date.parse(b.sonde.t); });
+    }
+
     window._reconShowSkewT = function (key) {
         var sonde = _reconSondeByKey[key];
         if (!sonde) return;
         var modal = document.getElementById('recon-skewt-modal');
         if (!modal) return;
+        if (window.SondeCard && window.SondeCard.on) {      // design study v2 (?sonde=v2)
+            _reconSkewTKey = key;
+            window.SondeCard.open({
+                modal: modal, key: key, sonde: sonde, apiBase: API_BASE,
+                vdms: (_reconSondeBlob[key] || {}).vdms || [],
+                flight: _reconFlightSondes(key),
+                sortVar: _reconSondeColorVar === 'none' ? null : {
+                    label: (_RECON_SONDE_VARS.filter(function (v) { return v.key === _reconSondeColorVar; })[0] || {}).label,
+                    value: function (d) { return _reconSondeVal(d, _reconSondeColorVar); },
+                    asc: _reconSondeColorVar === 'psfc' },
+                tailName: _rtReconTailName,
+                onPick: function (k) { window._reconShowSkewT(k); },
+                renderSkewT: function (divId, h, extra) {
+                    var prof = (h && _reconHiresProfiles(h)) || _reconSondeProfiles(sonde);
+                    if (prof && extra) { prof.pTop = extra.pTop; prof.pBottom = extra.pBottom; prof.style = extra.style; }
+                    if (prof && typeof renderSkewT === 'function') { try { renderSkewT(prof, divId); } catch (e) {} }
+                }
+            });
+            if (typeof _ga === 'function') { try { _ga('recon_sonde_v2_open', { tail: sonde.tail || '' }); } catch (e) {} }
+            return;
+        }
         var body = modal.querySelector('.recon-skewt-body');
         var profiles = _reconSondeProfiles(sonde);
         _reconSkewTProfiles = profiles;
@@ -31883,7 +32042,11 @@
     };
     window._reconCloseSkewT = function () {
         var modal = document.getElementById('recon-skewt-modal');
-        if (modal) modal.style.display = 'none';
+        if (modal) {
+            modal.style.display = 'none';
+            var c = modal.querySelector('.recon-skewt-content'); if (c) c.classList.remove('sv2-on');
+        }
+        if (window.SondeCard) window.SondeCard.close();
     };
     document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') {
@@ -31904,16 +32067,18 @@
         for (var s = 0; s < sondes.length; s++) {
             var d = sondes[s];
             if (d.lat == null || d.lon == null) continue;
+            // Register for the skew-T modal; offer a profile button when decoded.
+            var sk = (d.tail || '?') + '|' + (d.t || '');
             var icon = L.divIcon({
                 className: 'rt-recon-sonde-icon',
-                html: '<div style="width:11px;height:11px;background:#fbbf24;border:1.5px solid #1f2937;' +
+                html: '<div data-sk="' + sk.replace(/"/g, '') + '" style="width:11px;height:11px;background:' +
+                    _reconSondeColor(_reconSondeColorVar, _reconSondeVal(d, _reconSondeColorVar)) + ';border:1.5px solid #1f2937;' +
                     'transform:rotate(45deg);box-shadow:0 0 3px rgba(0,0,0,0.5);"></div>',
                 iconSize: [11, 11], iconAnchor: [6, 6]
             });
             var m = L.marker([d.lat, d.lon], { icon: icon, interactive: true });
-            // Register for the skew-T modal; offer a profile button when decoded.
-            var sk = (d.tail || '?') + '|' + (d.t || '');
             _reconSondeByKey[sk] = d;
+            _reconSondeBlob[sk] = blob;
             var prof = d.profile || {};
             var hasProfile = (prof.mandatory && prof.mandatory.length) ||
                              (prof.sig_temp && prof.sig_temp.length);
@@ -31938,9 +32103,12 @@
                 (hasProfile ? '<button class="rt-recon-skewt-btn" onclick="window._reconShowSkewT(\'' +
                     sk.replace(/'/g, "\\'") + '\')">Skew-T profile ↗</button>' : '') +
                 '</div>';
+            if (window.SondeCard && window.SondeCard.on)       // v2: a glance, not a table
+                sh = window.SondeCard.glanceHTML(d, sk, _rtReconTailName, _rtFmtTime);
             m.bindPopup(sh, { maxWidth: 260, className: 'rt-recon-popup' });
             m.addTo(map); out.push(m);
         }
+        if (_reconSondeColorVar !== 'none') setTimeout(_reconRecolorSondes, 0);   // size + stacking need the live DOM
 
         // VDM center fixes — red crosshair + eye circle
         var vdms = blob.vdms || [];
@@ -32252,7 +32420,30 @@
     };
 
     /** Populate the overlay's barb-color picker + dynamic legend. */
+    function _rtReconBuildSondeVarUI() {
+        var sel = document.getElementById('rt-recon-sondevar');
+        if (sel && !sel.options.length) {
+            _RECON_SONDE_VARS.forEach(function (v) {
+                var o = document.createElement('option'); o.value = v.key; o.textContent = v.label; sel.appendChild(o);
+            });
+        }
+        if (sel) sel.value = _reconSondeColorVar;
+        var box = document.getElementById('rt-recon-sondelegend');
+        if (box) {
+            box.innerHTML = '';
+            _reconSondeLegend(_reconSondeColorVar).forEach(function (s) {
+                var c = document.createElement('span'); c.textContent = s[0];
+                c.style.cssText = 'font-size:8px;color:' + (s[2] || '#0b1220') + ';font-weight:700;padding:1px 4px;border-radius:2px;background:' + s[1] + ';';
+                box.appendChild(c);
+            });
+        }
+    }
+    window._rtReconSetSondeVar = function (key) {
+        _reconSondeColorVar = key || 'none'; _reconRecolorSondes(); _rtReconBuildSondeVarUI();
+        if (typeof _ga === 'function') { try { _ga('recon_sondevar', { var: key }); } catch (e) {} }
+    };
     function _rtReconBuildBarbVarUI() {
+        _rtReconBuildSondeVarUI();
         var sel = document.getElementById('rt-recon-barbvar');
         if (sel && !sel.options.length) {
             for (var i = 0; i < _RECON_COLORVARS.length; i++) {
@@ -32630,6 +32821,11 @@
             }
         },
         legendStops: function (key) { return _reconLegendStops(key || _rtReconColorVar); },
+        // Dropsonde ◇ colour variable (shared across both surfaces)
+        sondeVars: _RECON_SONDE_VARS,
+        getSondeVar: function () { return _reconSondeColorVar; },
+        setSondeVar: function (key) { _reconSondeColorVar = key || 'none'; _reconRecolorSondes(); },
+        sondeLegend: function (key) { return _reconSondeLegend(key || _reconSondeColorVar); },
         // Experimental SEAR 10-m estimates: join onto a recon blob (see _rtSearAttach)
         attachSear: _rtSearAttach,
         windStops: _RECON_WIND_STOPS,   // stepped recon wind scale (kt), shared by the TDR 10-m layer

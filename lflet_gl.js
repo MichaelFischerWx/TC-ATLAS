@@ -132,8 +132,18 @@
     var EVT = { moveend: 'moveend', movestart: 'movestart', move: 'move', zoom: 'zoom',
                 zoomend: 'zoomend', zoomstart: 'zoomstart', load: 'load', click: 'click',
                 mousemove: 'mousemove', mouseout: 'mouseout', resize: 'resize', dblclick: 'dblclick' };
+    // MapLibre fires map (and GL-layer) click events for clicks on DOM markers and
+    // popups too; Leaflet never does. Without this, clicking a dropsonde diamond on
+    // the recon map ALSO ran the barb layer's map-click handler and stacked the
+    // nearest flight-level-ob popup under the sonde's own (2026-09-30).
+    var _CLICKY = { click: 1, dblclick: 1, contextmenu: 1 };
+    function _overlayHit(e) {
+        var t = e && e.originalEvent && e.originalEvent.target;
+        return !!(t && t.closest && t.closest('.maplibregl-marker, .maplibregl-popup'));
+    }
     function wrapEvent(map, fn) {
         return function (e) {
+            if (e && _CLICKY[e.type] && _overlayHit(e)) return;
             var o = { type: e && e.type, target: map, originalEvent: e && e.originalEvent };
             if (e && e.lngLat) { o.latlng = new LatLng(e.lngLat.lat, e.lngLat.lng); }
             if (e && e.point) { o.containerPoint = new Point(e.point.x, e.point.y); o.layerPoint = o.containerPoint; }
@@ -825,7 +835,7 @@
                          'circle-stroke-width': ['get', '_sw'], 'circle-stroke-color': ['get', '_sc'] } }, zc);
             ['-ls', '-ld', '-cm'].forEach(function (suf) {
                 var arr = suf === '-cm' ? '_circs' : '_lines';
-                gl.on('click', id + suf, function (e) { self._dispatch(self[arr], e); });
+                gl.on('click', id + suf, function (e) { if (_overlayHit(e)) return; self._dispatch(self[arr], e); });
                 gl.on('mousemove', id + suf, function (e) { self._hover(self[arr], e); });
                 gl.on('mouseenter', id + suf, function () { gl.getCanvas().style.cursor = 'pointer'; });
                 gl.on('mouseleave', id + suf, function () { self._unhover(); gl.getCanvas().style.cursor = ''; });
@@ -927,6 +937,7 @@
         _wire: function (gl, hitId) {
             var self = this;
             this._glClick = function (e) {
+                if (_overlayHit(e)) return;
                 if (self._popup && self._map) self._popup._ml().setLngLat(e.lngLat).addTo(self._map._gl);
                 self._fire('click', e);
             };
@@ -1020,7 +1031,14 @@
         // Bridge the native maplibregl popup's open/close to Leaflet popupopen/popupclose
         // (e.g. RT monitor prefetches a storm's frame bundle on popupopen).
         _bridgePopup: function () { var self = this, p = this._popup && this._popup._mlp; if (!p || this._popupBridged) return; this._popupBridged = true;
-            p.on('open', function () { self._fireEvt('popupopen'); }); p.on('close', function () { self._fireEvt('popupclose'); }); },
+            // A marker popup is the map's open popup too, so opening one closes any other.
+            p.on('open', function () { var mp = self._map;
+                if (mp) { if (mp._popup && mp._popup !== self._popup) mp.closePopup(mp._popup); mp._popup = self._popup; self._popup._map = mp; }
+                self._fireEvt('popupopen'); });
+            p.on('close', function () { var mp = self._map;
+                if (mp && mp._popup === self._popup) mp._popup = null;
+                if (self._popup) self._popup._map = null;
+                self._fireEvt('popupclose'); }); },
         bindPopup: function (content, opts) { this._popup = content instanceof Popup ? content : new Popup(opts).setContent(content); if (this._m) { this._m.setPopup(this._popup._ml()); this._bridgePopup(); } return this; },
         bindTooltip: function (content, opts) { this._tip = { content: content, opts: opts || {} }; if (this._m) this._applyTooltip(); return this; },
         setTooltipContent: function (content) {
@@ -1093,7 +1111,7 @@
             // genesis/LMI dots this way.
             if (o.renderer && o.renderer._isBatch) { o.renderer._ensure(map); o.renderer._addCirc(this); this._batch = o.renderer; return; }
             this._m = new maplibregl.Marker({ element: this.options.icon._el, anchor: 'center' }).setLngLat(mlWrap(this._ll)).addTo(map._gl);
-            if (this._popup) this._m.setPopup(this._popup._ml()); this._applyTooltip(); this._applyEvents(); },
+            if (this._popup) { this._m.setPopup(this._popup._ml()); this._bridgePopup(); } this._applyTooltip(); this._applyEvents(); },
         _removeFromGL: function () { if (this._batch) { this._batch._removeCirc(this); return; } if (this._tipHide) this._tipHide(); if (this._m) this._m.remove(); },
         // setRadius/setStyle on circle dots (e.g. WeatherLab genesis markers rescaled
         // on zoom). Batched dots re-render via the renderer's circle source; DOM dots
@@ -1115,7 +1133,9 @@
     Popup.prototype.setContent = function (c) { this._content = c; if (this._mlp) this._mlp.setHTML(typeof c === 'string' ? c : (c.outerHTML || '')); return this; };
     Popup.prototype.setLatLng = function (ll) { this._ll = toLatLng(ll); return this; };
     Popup.prototype._ml = function () { if (!this._mlp) { this._mlp = new maplibregl.Popup({ offset: this.options.offset || 12, closeButton: this.options.closeButton !== false, maxWidth: this.options.maxWidth || '320px' }); this._mlp.setHTML(typeof this._content === 'string' ? this._content : (this._content.outerHTML || '')); } return this._mlp; };
-    Popup.prototype.addTo = function (map) { var self = this, p = this._ml(); if (this._ll) p.setLngLat(mlWrap(this._ll)); p.addTo(map._gl);
+    Popup.prototype.addTo = function (map) { var self = this, p = this._ml();
+        if (map._popup && map._popup !== this) map.closePopup(map._popup);   // Leaflet: one popup at a time
+        if (this._ll) p.setLngLat(mlWrap(this._ll)); p.addTo(map._gl);
         this._map = map; map._popup = this;
         if (!this._closeBridged) { this._closeBridged = true; p.on('close', function () { if (self._map && self._map._popup === self) self._map._popup = null; self._map = null; }); }
         return this; };
@@ -1186,8 +1206,8 @@
                 map._glAdd({ id: id + '-cnt', type: 'symbol', source: id, filter: ['has', 'point_count'],
                     layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-size': 12, 'text-font': ['Noto Sans Bold'], 'text-allow-overlap': true },
                     paint: { 'text-color': '#fff' } }, z + 1);
-                gl.on('click', id + '-pts', function (e) { var f = e.features[0], m = self._markers[f.properties._mi]; if (m) self._activate(m, e.lngLat); });
-                gl.on('click', id + '-cl', function (e) { var f = e.features[0]; var src = gl.getSource(id);
+                gl.on('click', id + '-pts', function (e) { if (_overlayHit(e)) return; var f = e.features[0], m = self._markers[f.properties._mi]; if (m) self._activate(m, e.lngLat); });
+                gl.on('click', id + '-cl', function (e) { if (_overlayHit(e)) return; var f = e.features[0]; var src = gl.getSource(id);
                     src.getClusterExpansionZoom(f.properties.cluster_id, function (err, zm) { if (!err) gl.easeTo({ center: f.geometry.coordinates, zoom: zm }); }); });
                 ['-pts', '-cl'].forEach(function (suf) {
                     gl.on('mouseenter', id + suf, function () { gl.getCanvas().style.cursor = 'pointer'; });

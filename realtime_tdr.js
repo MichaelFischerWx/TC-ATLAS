@@ -568,7 +568,33 @@
         }
         sel.value = kit.getColorVar();
         _hdobBuildBarbLegend();
+        _hdobBuildSondeVarUI();
     }
+    // Dropsonde ◇ colour: variable picker + legend (shared via _ReconKit).
+    function _hdobBuildSondeVarUI() {
+        var kit = window._ReconKit, sel = document.getElementById('recon-hdob-sondevar');
+        if (!kit || !sel || !kit.sondeVars) return;
+        if (!sel.options.length) kit.sondeVars.forEach(function (v) {
+            var o = document.createElement('option'); o.value = v.key; o.textContent = v.label; sel.appendChild(o);
+        });
+        sel.value = kit.getSondeVar();
+        var box = document.getElementById('recon-hdob-sondelegend');
+        if (!box) return;
+        box.innerHTML = '';
+        kit.sondeLegend().forEach(function (s) {
+            var sw = document.createElement('span');
+            sw.className = 'sw'; sw.textContent = s[0]; sw.style.background = s[1];
+            if (s[2]) sw.style.color = s[2];
+            box.appendChild(sw);
+        });
+    }
+    window._reconHdobSetSondeVar = function (key) {
+        var kit = window._ReconKit;
+        if (!kit || !kit.setSondeVar) return;
+        kit.setSondeVar(key);   // restyles every drawn ◇ in place
+        _hdobBuildSondeVarUI();
+        _ga('recon_hdob_sondevar', { var: key });
+    };
     function _hdobBuildBarbLegend() {
         var kit = window._ReconKit;
         var box = document.getElementById('recon-hdob-barblegend');

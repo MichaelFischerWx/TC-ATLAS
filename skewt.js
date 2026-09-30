@@ -668,6 +668,11 @@ function renderSkewT(profiles, divId) {
     }
     // Bottom: use max pressure + margin (usually ~1000-1020 hPa)
     var pBot = 1050;
+    // Optional caller overrides (sonde card, 2026-09-30): a 700-mb drop only fills
+    // the bottom third of 1050-500 hPa. Set BEFORE the barb shapes are built so
+    // their paper-space positions match the axis.
+    if (profiles.pTop > 0 && profiles.pTop < pBot) pMax = profiles.pTop;
+    if (profiles.pBottom > pMax) pBot = profiles.pBottom;
 
     var skewTAxRanges = {
         xMin: -40, xMax: xRangeMax,
@@ -688,6 +693,9 @@ function renderSkewT(profiles, divId) {
     var _legendBg = _skewtIsDark ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.85)';
     var _legendText = _skewtIsDark ? '#ccc' : '#0f1623';
     var _titleCol = _skewtIsDark ? '#00d4ff' : '#0f8a8e';
+    var _st = profiles.style || {};   // optional host styling (colours, font, no title)
+    if (_st.axisColor) _axisCol = _st.axisColor;
+    if (_st.textColor) _legendText = _st.textColor;
 
     var layout = {
         xaxis: {
@@ -708,13 +716,16 @@ function renderSkewT(profiles, divId) {
             zeroline: false, gridcolor: 'rgba(15,22,35,0.10)',
         },
         paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: _skewtIsDark ? 'rgba(247,248,250,0.05)' : '#ffffff',
-        margin: { l: 45, r: 10, t: 22, b: 35 },
-        title: { text: 'Skew-T / Log-P', font: { size: 10, color: _titleCol }, x: 0.5, y: 0.98 },
-        legend: { font: { color: _legendText, size: 9 }, x: 0.68, y: 0.98, bgcolor: _legendBg, bordercolor: 'rgba(15,22,35,0.12)', borderwidth: 1 },
+        plot_bgcolor: _st.plotBg || (_skewtIsDark ? 'rgba(247,248,250,0.05)' : '#ffffff'),
+        margin: _st.margin || { l: 45, r: 10, t: 22, b: 35 },
+        title: _st.noTitle ? undefined : { text: 'Skew-T / Log-P', font: { size: 10, color: _titleCol }, x: 0.5, y: 0.98 },
+        legend: { font: { color: _legendText, size: 9 }, x: 0.68, y: 0.98,
+                  bgcolor: _st.legendBg || _legendBg, bordercolor: _st.legendBorder || 'rgba(15,22,35,0.12)', borderwidth: 1 },
         showlegend: true,
         shapes: barbShapes,
     };
+    if (_st.font) layout.font = { family: _st.font };
+    if (_st.pTicks) layout.yaxis.tickvals = _st.pTicks.filter(function (v) { return v >= pMax && v <= pBot; });
     // Routed through ensurePlotly() when the host page provides one. This file is
     // shared by three pages that load Plotly differently: global_archive.html
     // lazy-injects it (so it may not exist yet when a user opens a Skew-T from a

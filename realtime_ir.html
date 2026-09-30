@@ -82,7 +82,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20260930cm1">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20260930sv1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -118,7 +118,7 @@
     <link rel="stylesheet" href="tc_radar_styles.css?v=20260928a">
     <link rel="stylesheet" href="realtime_ir_styles.css?v=20260930cm1">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260930sf2">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20260930sv1">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -883,6 +883,13 @@
                                 <select id="rt-recon-barbvar" onchange="window._rtReconSetBarbVar(this.value)"
                                     style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:4px;font-size:10px;padding:1px 4px;"></select>
                                 <span id="rt-recon-barblegend" style="display:flex;align-items:center;gap:3px;flex-wrap:wrap;"></span>
+                            </div>
+                            <!-- Dropsonde ◇ colour: variable picker + legend -->
+                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;">
+                                <span style="font-size:9px;font-weight:600;color:#64748b;">Sonde color</span>
+                                <select id="rt-recon-sondevar" onchange="window._rtReconSetSondeVar(this.value)"
+                                    style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:4px;font-size:10px;padding:1px 4px;"></select>
+                                <span id="rt-recon-sondelegend" style="display:flex;align-items:center;gap:3px;flex-wrap:wrap;"></span>
                             </div>
                         </div>
                     </div>
@@ -2250,6 +2257,11 @@
                             <label class="recon-hdob-maplabel">Barb color</label>
                             <select id="recon-hdob-barbvar" class="recon-hdob-barbvar" onchange="window._reconHdobSetBarbVar(this.value)"></select>
                             <span id="recon-hdob-barblegend" class="recon-hdob-legend"></span>
+                            <span style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;" title="Colour the ◇ dropsondes by a number from each sounding; the strongest draw on top. Grey = not reported.">
+                                <label class="recon-hdob-maplabel" for="recon-hdob-sondevar">Sonde color</label>
+                                <select id="recon-hdob-sondevar" class="recon-hdob-barbvar" onchange="window._reconHdobSetSondeVar(this.value)"></select>
+                                <span id="recon-hdob-sondelegend" class="recon-hdob-legend"></span>
+                            </span>
                             <span class="recon-hdob-satgroup" title="TC-ATLAS global satellite mosaic — the same fresh imagery as the Global Map (IR / Water Vapor / Visible)">
                                 <button class="ir-product-btn ir-product-active" data-rprod="ir" onclick="window._reconHdobSetSat('ir')" title="Clean infrared (Band 13, ~10.3 µm) — day &amp; night">IR</button>
                                 <button class="ir-product-btn" data-rprod="wv" onclick="window._reconHdobSetSat('wv')" title="Mid-level water vapor (~6.9 µm) — day &amp; night">WV</button>
@@ -2684,7 +2696,7 @@
          scanner so the whole bundle downloads IN PARALLEL. The old
          document.write chain forced a serial download of ~3 MB. -->
     <script defer src="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1"></script>
-    <script defer src="lflet_gl.js?v=20260926a"></script>
+    <script defer src="lflet_gl.js?v=20260930sv1"></script>
     <!-- Single-channel idx mosaic WebGL layer (flag-gated ?ir2a=1). -->
     <script defer src="mosaic_gl_layer.js?v=20260904a"></script>
     <script>
@@ -2707,11 +2719,12 @@
     })();
     </script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
-    <script defer src="skewt.js?v=20260725d"></script>
+    <script defer src="skewt.js?v=20260930sv1"></script>
+    <script defer src="sonde_card.js?v=20260930b"></script>
     <script defer src="tc_mw_layer.js?v=20260920a"></script>
     <script defer src="tc_dm_analytics.js?v=20260904b"></script>
     <script defer src="realtime_ir_dm.js?v=20260904r"></script>
-    <script defer src="realtime_ir.js?v=20260930cm1"></script>
+    <script defer src="realtime_ir.js?v=20260930sv1"></script>
     <script defer src="vol3d.js?v=20260804a"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
@@ -2816,7 +2829,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20260930td1';
+        var _LAZY_ASSET_V = '?v=20260930sv1';
         var _lazyViewMods = {
             recon:       { js: ['tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
