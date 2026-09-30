@@ -1202,9 +1202,21 @@
     border-color: #ec4899;
 }
 .recon-hdob-summary .recon-vdm-stat.is-tdrsear {
-    border-style: dashed;
     cursor: pointer;
 }
+/* TDR SEAR leads (2026-09-30); the flight-level SEAR beside it is the secondary estimate */
+.recon-hdob-summary .recon-vdm-stat.is-sear.is-second {
+    border-style: dashed;
+}
+/* eyewall sonde beat flight-level SEAR at release: surface-heavy eyewall */
+.recon-hdob-summary .recon-vdm-stat.is-sondeflag {
+    border-left: 3px solid #d97706;
+}
+.recon-hdob-summary .recon-sonde-flag {
+    color: #b45309;
+    font-weight: 600;
+}
+:root[data-theme="dark"] .recon-hdob-summary .recon-sonde-flag { color: #fbbf24; }
 /* "(80%: lo–hi)" after the TDR SEAR maximum; wraps below it as a unit on narrow tiles */
 .recon-hdob-summary .recon-vdm-stat-band {
     margin-left: 4px;

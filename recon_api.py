@@ -1005,12 +1005,22 @@ def _hires_attach(drops: list, since: datetime, until: datetime, track_pts, stor
     # sonde whose BUFR is missing cannot steal a neighbour's (Polo 2026-09-22: OB 06's
     # BUFR never came, and a one-pass greedy match handed it OB 08's 18:14:59 profile --
     # the tab then plotted a different sonde than the one in the popup).
+    # OB numbers restart every flight, so a (tail, OB) twin must also be released within 5 min of the
+    # TEMP DROP (Rachel 2026-09-29 16:32Z OB 05 got 04:21Z's OB 05; 04:16Z OB 06 got Polo 09-28's OB 06).
+    def _dt_s(d, s):
+        try:
+            return abs((datetime.fromisoformat(str(d["t"]).replace("Z", "+00:00")) -
+                        datetime.fromisoformat(str(s["t"]).replace("Z", "+00:00"))).total_seconds())
+        except (KeyError, TypeError, ValueError):
+            return float("inf")
+
     for d in drops:
         dob = _obn(d.get("ob"))
         if dob is None:
             continue
         for s in hs:
-            if s["id"] not in used and s.get("ob") == dob and _tail_key(s["tail"]) == _tail_key(d.get("tail")):
+            if (s["id"] not in used and s.get("ob") == dob and _tail_key(s["tail"]) == _tail_key(d.get("tail"))
+                    and _dt_s(d, s) <= 300):
                 used.add(s["id"]); d["hires"] = _hires_summary(s); break
     # Pass 2 is a GLOBAL nearest-in-time assignment over all (drop, sonde) pairs,
     # not a per-drop greedy pick: eyewall drops go out ~1-2 min apart (Polo

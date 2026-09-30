@@ -2382,6 +2382,27 @@
     }
 
     /** Experimental SEAR line: latest pass maxima + product stamp, or why none. */
+    /** Strongest flagged eyewall sonde on the flights on display (never after the replay clock): the sonde's
+     *  10-m wind (WL150 x the chain's wind-dependent factor) beat flight-level SEAR at its release point by
+     *  >= threshold -- a surface-heavy eyewall the flight-level estimate cannot see (Rachel 2026-09-30). */
+    function _hdobSondeFlag() {
+        var sk = _hdobData && _hdobData.sear && _hdobData.sear.sonde_check;
+        if (!sk || !(sk.sondes || []).length) return null;
+        var clock = _hdobArchive ? +_hdobArchive.cur : Infinity;
+        var fl = _hdobSearPassesInScope(sk.sondes).filter(function (q) { return q.flag && !(Date.parse(q.t) > clock); });
+        if (!fl.length) return null;
+        var top = fl.reduce(function (a, b) { return b.sonde_10m_kt > a.sonde_10m_kt ? b : a; });
+        return { top: top, n: fl.length, thr: sk.threshold_kt };
+    }
+
+    function _hdobSondeFlagText(f) {
+        var q = f.top;
+        return 'Eyewall sonde check: ' + String(q.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(q.tail) + ' WL150 ' + Math.round(q.wl150_kt) +
+            ' kt, reduced to ~' + Math.round(q.sonde_10m_kt) + ' kt at 10 m with the SEAR WL150\u219210 m factor (\u00d7' + q.f10.toFixed(2) + '; not the sonde\u2019s own 10-m wind), ' + Math.round(q.diff_kt) +
+            ' kt above flight-level SEAR at release' + (f.n > 1 ? ' (' + f.n + ' eyewall sondes \u2265' + Math.round(f.thr) + ' kt above)' : '') +
+            ' \u2014 the surface wind is stronger than the flight-level wind implies, so flight-level SEAR is likely low here. ';
+    }
+
     function _hdobSearText() {
         var sp = _hdobData && _hdobData.sear;
         if (!sp) return '';
@@ -2417,7 +2438,8 @@
                 (p.fix_source === 'hdob' ? '*' : '') +
                 (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30 ? '\u2020' : '');
         });
-        return head + 'Pass maxima (quadrant, radius from center) ' + parts.join(' · ') + ' (updated ' + String(sp.generated).slice(11, 16) + 'Z)' +
+        var sf = _hdobSondeFlag();
+        return head + (sf ? _hdobSondeFlagText(sf) : '') + 'Pass maxima (quadrant, radius from center) ' + parts.join(' · ') + ' (updated ' + String(sp.generated).slice(11, 16) + 'Z)' +
             (anyRange ? ' — ranges = the same observation re-scored with the RMW of each eyewall crossing of that pass; SEAR is most sensitive to r/RMW, so preliminary-center passes lead with the range and give the most likely value in parentheses' : '') +
             (anyPrelim ? ' — * preliminary center from the calm-wind centroid of the eye crossing (pressure plateau or Willoughby–Chelmow when there are no calm obs), no VDM yet' : '') +
             (anyStale ? ' — \u2020 nearest center fix more than 30 min away, center extrapolated' : '');
@@ -2522,27 +2544,38 @@
                 'The last SEAR estimate, ' + Math.round(_hdobData.sear.headline.kt) + ' kt, is from an earlier flight (' +
                 String(_hdobData.sear.headline.t).slice(5, 16).replace('T', ' ') + 'Z). Not an official product.';
         }
-        var html = tile('Max FL wind', best.fl, 'kt') +
-                   tile('Min extrap SLP', best.slp, 'mb', 'is-accent') +
-                   tile('Max SFMR', best.sfmr, 'kt') +
-                   tile('Max SEAR 10-m (exp)', searTile, searTile && searTile.valText === 'pending' ? '' : 'kt', 'is-sear', searSub, searTip);
-        // TDR-SEAR beside it (Michael, 2026-09-28): the analysis' own 500-m + 2-km winds instead of the
-        // flight-level wind, so it sees the low-level eyewall all the way around -- Polo 09-28 16:37Z read
-        // 99 kt in the NW (0.5-1 km ~100 kt ring under a tilted 2-3 km vortex) vs 79-88 kt flight-level SEAR.
+        // Sonde flag on the flight-level SEAR tile (2026-09-30): an eyewall sonde's 10-m wind beat SEAR at its
+        // release by >= the threshold, i.e. a surface-heavy eyewall the flight-level estimate cannot see.
+        var sflag = _hdobSondeFlag();
+        if (sflag && searTile && searTile.valText !== 'pending') {
+            // WL150 first, then the REDUCED 10-m value: the sonde's own 10-m wind is not what is shown (Michael, 09-30)
+            searSub += '<span class="recon-sonde-flag"> \u00b7 \u26a0 eyewall sonde ' + String(sflag.top.t).slice(11, 16) + 'Z: WL150 ' +
+                Math.round(sflag.top.wl150_kt) + ' kt \u2192 ~' + Math.round(sflag.top.sonde_10m_kt) + ' kt 10-m (reduced)</span>';
+            searTip += ' ' + _hdobSondeFlagText(sflag).replace(/"/g, '&quot;');
+        }
+        // TDR leads (Michael, 2026-09-30): the analysis' own 500-m + 2-km winds instead of the flight-level wind,
+        // so it sees the low-level eyewall directly and all the way around -- Polo 09-28 16:37Z read 99 kt in the NW
+        // (0.5-1 km ~100 kt ring under a tilted vortex) vs 79-88 kt flight-level SEAR; Rachel 09-30 73 kt vs 65 kt,
+        // eyewall sondes ~64-76 kt at 10 m.
         _hdobTdrEnsureMeta();
-        var tdr = _hdobTdrSummaryBest();
+        var tdr = _hdobTdrSummaryBest(), tdrHtml = '';
         if (tdr) {
             var cov = tdr.a.coverage && tdr.a.coverage['r<60km'], tdrBand = _hdobTdrBand(tdr.a);
             if (tdrBand) tdr.bandText = _hdobTdrBandText(tdrBand);
-            html += tile('Max TDR SEAR 10-m (exp)', tdr, 'kt', 'is-sear is-tdrsear',
+            tdrHtml = tile('Max TDR SEAR 10-m (exp)', tdr, 'kt', 'is-sear is-tdrsear',
                 (tdr.a.max_r_nm != null ? ' · ' + Math.round(tdr.a.max_r_nm) + ' n mi from center' : '') +
                 (cov != null && cov < 0.3 ? ' · thin coverage' : ''),
                 'TDR SEAR: experimental SEAR 10-m estimate from the P-3 tail-Doppler analysis (its 500-m and 2-km winds replace the flight-level wind). ' +
-                'It sees the low-level eyewall all around the storm, not only along the flight track, so it can differ from the flight-level SEAR, e.g. when the vortex is tilted. ' +
+                'It sees the low-level eyewall directly and all around the storm, not only along the flight track, so it leads the flight-level SEAR when both exist; they differ most when the eyewall is surface-heavy or the vortex is tilted. ' +
                 'Strongest analysis of the flight on display' + (cov != null ? ' (this one covers ' + Math.round(cov * 100) + '% of the area within 60 km)' : '') +
                 (tdrBand ? '. Range in parentheses: ' + _hdobTdrEsc(tdrBand.note) : '') +
                 '. Click to show it on the map. Not an official product.');
         }
+        var html = tile('Max FL wind', best.fl, 'kt') +
+                   tile('Min extrap SLP', best.slp, 'mb', 'is-accent') +
+                   tile('Max SFMR', best.sfmr, 'kt') + tdrHtml +
+                   tile(tdr ? 'Max FL SEAR 10-m (exp)' : 'Max SEAR 10-m (exp)', searTile, searTile && searTile.valText === 'pending' ? '' : 'kt',
+                        'is-sear' + (tdr ? ' is-second' : '') + (sflag ? ' is-sondeflag' : ''), searSub, searTip);
         el.innerHTML = html;
         el.style.display = html ? '' : 'none';
         var tdrEl = tdr && el.querySelector('.is-tdrsear');
