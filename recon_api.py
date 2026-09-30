@@ -61,12 +61,13 @@ _LATEST_HDOB_FEEDS = {
 _bulletin_cache: dict = {}
 _BULLETIN_CACHE_MAX = 4000
 
-# Assembled-blob cache (cache_key -> (blob, ts)). TTL sits just under the 60 s
-# client poll so each poll returns a freshly-assembled blob (a rebuild only
-# re-fetches the 1-2 newly-posted bulletins thanks to the per-bulletin cache, so
-# it's cheap) while still collapsing bursts of concurrent polls onto one build.
+# Assembled-blob cache (cache_key -> (blob, ts)). TTL sits just OVER the 60 s
+# client poll: at 50 s every poll missed and paid a full 4-8 s CPU rebuild
+# (measured 2026-09-30, one storm rebuilt every ~20 s across 3 pollers), which
+# starved the TDR endpoints sharing the 1-vCPU instance. Blobs are now at most
+# ~70 s old — HDOBs post every 30 s, so one poll in two shows the prior blob.
 _blob_cache: dict = {}
-_BLOB_TTL = 50
+_BLOB_TTL = 70
 # Single-flight per cache key: a live build takes ~5-16 s, and without this
 # every request for the same storm that lands mid-build starts its own. While
 # one request rebuilds, the others get the previous blob if it is younger than

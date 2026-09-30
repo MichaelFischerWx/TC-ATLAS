@@ -52,6 +52,7 @@
     // ── State ────────────────────────────────────────────────────
     var _currentFileUrl = null;
     var _rtDataCache = {};
+    var _rtPlanInflight = null;   // {fileUrl, promise} of the latest plan-view /data fetch (rtFetchMeta joins it)
     var _rtCaseMeta = null;  // case_meta for current file (keyed by _currentFileUrl)
     var _rtLast3DJson = null;
     var _rtLastPlotlyData = null;
@@ -3956,9 +3957,13 @@
 
     // ── Fetch and display metadata ───────────────────────────────
     function rtFetchMeta(fileUrl) {
-        fetchWithRetry(API_BASE + RT_PREFIX + '/data?file_url=' + encodeURIComponent(fileUrl) + '&variable=' + DEFAULT_RT_VAR + '&level_km=2')
-            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-            .then(function (json) {
+        // case_meta rides on every /data response, so join the plan view's
+        // in-flight request instead of firing a second (differently-keyed, so
+        // separately computed — often on another instance) /data call.
+        var p = (_rtPlanInflight && _rtPlanInflight.fileUrl === fileUrl) ? _rtPlanInflight.promise
+            : fetchWithRetry(API_BASE + RT_PREFIX + '/data?file_url=' + encodeURIComponent(fileUrl) + '&variable=' + DEFAULT_RT_VAR + '&level_km=2')
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+        p.then(function (json) {
                 var m = json.case_meta || {};
                 _rtCaseMeta = m;  // Store for SHIPS auto-fetch
                 // Compact header like the explorer's (name + analysis stepper, one
@@ -4033,8 +4038,10 @@
         if (_rtBarbsEnabled) url += '&wind_barbs=true';
         if (_rtStormRelative) url += '&storm_relative=true';
 
-        fetch(url, { signal: controller.signal })
-            .then(function (r) { if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+        var planPromise = fetch(url, { signal: controller.signal })
+            .then(function (r) { if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); });
+        _rtPlanInflight = { fileUrl: _currentFileUrl, promise: planPromise };
+        planPromise
             .then(function (json) { _rtDataCache[cacheKey] = json; if (json.case_meta) _rtCaseMeta = json.case_meta; rtRenderPlot(json, resultDiv); if (callback) callback(); })
             .catch(function (err) {
                 var msg = err.name === 'AbortError' ? '⚠️ Request timed out (120s).' : '⚠️ ' + err.message;

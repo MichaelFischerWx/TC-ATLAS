@@ -1,0 +1,9 @@
+{
+  "rule": [
+    {"action": {"type": "Delete"}, "condition": {"age": 7, "matchesPrefix": ["env/"]}},
+    {"action": {"type": "Delete"}, "condition": {"age": 14, "matchesPrefix": ["genesis-clusters/"]}},
+    {"action": {"type": "Delete"}, "condition": {"age": 2, "matchesPrefix": ["rt-v12/bundles/ondemand/"]}},
+    {"action": {"type": "Delete"}, "condition": {"age": 14, "matchesPrefix": ["nexrad/"]}},
+    {"action": {"type": "Delete"}, "condition": {"age": 7, "matchesPrefix": ["rt-tdr-derived/"]}}
+  ]
+}
