@@ -1466,6 +1466,8 @@ def get_rt_volume(
     stride:        int   = Query(2,                ge=1, le=5,     description="Spatial subsampling stride"),
     max_height_km: float = Query(15.0,             ge=1, le=18,   description="Maximum height (km)"),
     tilt_profile:  bool  = Query(False,                            description="Include WCM vortex tilt profile"),
+    radius_km:     Optional[float] = Query(None, ge=10, le=250,    description="Crop to |x|,|y| <= radius_km of the analysis centre "
+                                                                                "(lets the 3-D core views ask for stride=1 without the full-domain payload)"),
 ):
     """Return the full 3D volume for Plotly isosurface rendering (compact mode)."""
     if variable not in RT_VARIABLES and variable not in RT_DERIVED:
@@ -1473,6 +1475,8 @@ def get_rt_volume(
 
     _ck = {"file_url": file_url, "variable": variable, "stride": stride,
            "max_height_km": round(max_height_km, 3), "tilt_profile": tilt_profile}
+    if radius_km is not None:
+        _ck["radius_km"] = round(radius_km, 1)
     _hit = _derived_cache_lookup("volume", _ck)
     if _hit is not None:
         return _cached_json_response(_hit)
@@ -1489,6 +1493,11 @@ def get_rt_volume(
     x_sub = x_km[::stride]
     y_sub = y_km[::stride]
     vol_sub = vol[:, ::stride, ::stride]
+    if radius_km is not None:
+        xm = np.abs(x_sub) <= radius_km
+        ym = np.abs(y_sub) <= radius_km
+        x_sub, y_sub = x_sub[xm], y_sub[ym]
+        vol_sub = vol_sub[:, ym, :][:, :, xm]
 
     nz, ny, nx = vol_sub.shape
     v_flat = vol_sub.ravel()
@@ -1500,9 +1509,13 @@ def get_rt_volume(
 
     # Replace NaN with sentinel
     SENTINEL = -9999.0
-    v_flat = np.where(np.isfinite(v_flat), np.round(v_flat, 3), SENTINEL)
-
     var_info = _get_variable_info(variable)
+    # Round to the variable's scale, not a flat 3 decimals: vorticity is in s^-1
+    # (~1e-3), where 3 decimals snapped every value to 0.001 steps.
+    _span = max(abs(float(var_info.get("vmin", 0) or 0)), abs(float(var_info.get("vmax", 1) or 1)), 1e-12)
+    _decimals = max(3, int(np.ceil(-np.log10(_span))) + 4)
+    v_flat = np.where(np.isfinite(v_flat), np.round(v_flat, _decimals), SENTINEL)
+
     var_info["data_min"] = round(data_min, 3)
     var_info["data_max"] = round(data_max, 3)
 
@@ -4757,7 +4770,7 @@ def _get_or_compute_tilt(ds, file_url, min_height=0.5, max_height=8.0, ref_heigh
 # _vortex_db_means centring in /vortex_raw). The file_url already keys the
 # immutable raw analysis; the version keys everything else.
 # ---------------------------------------------------------------------------
-_DERIVED_CACHE_VERSION = "d1"
+_DERIVED_CACHE_VERSION = "d2"   # d2 2026-09-30: /volume rounds by variable scale (VORT was quantized to 1e-3)
 _DERIVED_CACHE_PREFIX = "rt-tdr-derived/" + _DERIVED_CACHE_VERSION
 _rt_derived_mem = OrderedDict()       # key -> (payload dict, nbytes)
 _rt_derived_mem_bytes = 0
