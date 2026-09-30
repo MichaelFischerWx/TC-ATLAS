@@ -1012,6 +1012,12 @@ def _hires_attach(drops: list, since: datetime, until: datetime, track_pts, stor
         return drops
     if not hs:
         return drops
+    # The TEMP DROP dicts are MEMOIZED across builds (_bulletin_cache). Joining onto
+    # them in place left last build's d["hires"] set while this build's `used` set
+    # started empty, so every joined twin was ALSO re-appended as a src "bufr" row
+    # -- each sonde drawn twice (Rachel 2026-09-30: 44 duplicates). Join on shallow
+    # copies with the twin cleared, so each build starts clean.
+    drops = [{k: v for k, v in d.items() if k != "hires"} for d in drops]
 
     def _tail_key(t):
         return re.sub(r"[^A-Z0-9]", "", str(t or "").upper())
