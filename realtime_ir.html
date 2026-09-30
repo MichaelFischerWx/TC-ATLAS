@@ -2671,6 +2671,7 @@
                     <option value="fit">Fit 3×RMW</option>
                 </select>
                 <button id="vol-declutter" class="vol3d-toggle-btn active" onclick="toggle3DDeclutter()" title="Light smoothing + hide fragments smaller than ~80 km³">Declutter</button>
+                <button id="vol-levels-btn" class="vol3d-toggle-btn" onclick="toggle3DLevels()" title="Isosurface levels: Auto (per analysis), Fixed, or type your own">Levels</button>
                 <label>Camera</label>
                 <button class="vol3d-toggle-btn" onclick="vol3dCamera('oblique')" title="Oblique view from the southeast">Oblique</button>
                 <button class="vol3d-toggle-btn" onclick="vol3dCamera('top')" title="Straight down">Top</button>
@@ -2684,6 +2685,7 @@
                 </select>
                 <span id="vol-view-status" style="font-size:11px;color:#8899aa;"></span>
             </div>
+            <div id="vol-levels-row" class="vol3d-controls" style="display:none;"></div>
             <div class="vol3d-controls">
                 <label>Iso Min <span id="vol-iso-min-val"></span></label>
                 <input type="number" id="vol-iso-min" step="any" style="width:65px;" onchange="render3DIsosurface()">
@@ -2756,7 +2758,7 @@
     <script defer src="tc_dm_analytics.js?v=20260904b"></script>
     <script defer src="realtime_ir_dm.js?v=20260904r"></script>
     <script defer src="realtime_ir.js?v=20260930sv2"></script>
-    <script defer src="vol3d.js?v=20260930v3"></script>
+    <script defer src="vol3d.js?v=20260930v4"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
          eager for the map-tab recon-overlay sonde skew-Ts. The recon /

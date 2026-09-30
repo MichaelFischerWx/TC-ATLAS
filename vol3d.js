@@ -309,25 +309,133 @@ function _vol3dPlot(traces, layout) {
 // and optionally window.vol3dFloorImage() -> {src, x_min_km, x_max_km, y_min_km, y_max_km}
 // (satellite floor) and window.vol3dShearHeading() -> downshear heading (deg).
 // Without vol3dFetchVolume the Views row stays hidden.
+// Layer spec: lv = the FIXED level (SI units); pct = percentile used in Auto
+// mode (null = always fixed: dBZ categories and the 34/50/64-kt radii are
+// meaningful as absolute values); scale/unit/step = how the level is shown and
+// typed (ζ in ×10⁻⁴ s⁻¹, wind in kt); minAbs = floor on |auto level| in display units.
+var _KT = 0.514444;
 var VOL3D_VIEWS = [
     { id: 'eyewall', label: 'Eyewall structure', layers: [
-        { v: 'REFLECTIVITY', lv: 30, c: '#d9dee5', o: 0.10, name: '30 dBZ' },
-        { v: 'REFLECTIVITY', lv: 40, c: '#9aa4b1', o: 0.25, name: '40 dBZ' },
-        { v: 'REFLECTIVITY', lv: 45, c: '#3f4a59', o: 0.80, name: '45 dBZ' }] },
+        { v: 'REFLECTIVITY', lv: 30, unit: 'dBZ', c: '#d9dee5', o: 0.10 },
+        { v: 'REFLECTIVITY', lv: 40, unit: 'dBZ', c: '#9aa4b1', o: 0.25 },
+        { v: 'REFLECTIVITY', lv: 45, unit: 'dBZ', c: '#3f4a59', o: 0.80 }] },
     { id: 'updrafts', label: 'Updrafts & downdrafts', layers: [
-        { v: 'REFLECTIVITY', lv: 30, c: '#d9dee5', o: 0.08, name: '30 dBZ' },
-        { v: 'W', lv: 3, c: '#e0892b', o: 0.80, name: 'w = +3 m s⁻¹' },
-        { v: 'W', lv: -2, c: '#3a6fb8', o: 0.45, name: 'w = −2 m s⁻¹' }] },
+        { v: 'REFLECTIVITY', lv: 30, unit: 'dBZ', c: '#d9dee5', o: 0.08 },
+        { v: 'W', lv: 3, pct: 0.97, sym: 'w', unit: 'm s⁻¹', step: 0.5, minAbs: 1, c: '#e0892b', o: 0.80 },
+        { v: 'W', lv: -2, pct: 0.97, sym: 'w', unit: 'm s⁻¹', step: 0.5, minAbs: 1, c: '#3a6fb8', o: 0.45 }] },
     { id: 'vort', label: 'Vorticity & mesovortices', layers: [
-        { v: 'REFLECTIVITY', lv: 30, c: '#d9dee5', o: 0.08, name: '30 dBZ' },
-        { v: 'VORT', lv: 20e-4, c: '#efb3e6', o: 0.22, name: 'ζ = 20×10⁻⁴ s⁻¹' },
-        { v: 'VORT', lv: 30e-4, c: '#a8127f', o: 0.85, name: 'ζ = 30×10⁻⁴ s⁻¹' },
-        { v: 'W', lv: 3, c: '#e0892b', o: 0.30, name: 'w = +3 m s⁻¹' }] },
+        { v: 'REFLECTIVITY', lv: 30, unit: 'dBZ', c: '#d9dee5', o: 0.08 },
+        { v: 'VORT', lv: 20e-4, pct: 0.90, sym: 'ζ', unit: '×10⁻⁴ s⁻¹', scale: 1e-4, minAbs: 5, c: '#efb3e6', o: 0.22 },
+        { v: 'VORT', lv: 30e-4, pct: 0.97, sym: 'ζ', unit: '×10⁻⁴ s⁻¹', scale: 1e-4, minAbs: 5, c: '#a8127f', o: 0.85 },
+        { v: 'W', lv: 3, pct: 0.95, sym: 'w', unit: 'm s⁻¹', step: 0.5, minAbs: 1, c: '#e0892b', o: 0.30 }] },
     { id: 'wind', label: 'Wind field', layers: [
-        { v: 'WIND_SPEED', lv: 17.5, c: '#c4d8ea', o: 0.10, name: '34 kt' },
-        { v: 'WIND_SPEED', lv: 25.7, c: '#f0b73e', o: 0.25, name: '50 kt' },
-        { v: 'WIND_SPEED', lv: 32.9, c: '#c9372f', o: 0.80, name: '64 kt' }] }
+        { v: 'WIND_SPEED', lv: 17.5, unit: 'kt', scale: _KT, c: '#c4d8ea', o: 0.10 },
+        { v: 'WIND_SPEED', lv: 25.7, unit: 'kt', scale: _KT, c: '#f0b73e', o: 0.25 },
+        { v: 'WIND_SPEED', lv: 32.9, unit: 'kt', scale: _KT, c: '#c9372f', o: 0.80 }] }
 ];
+
+// ── Level choice: Auto (per analysis) / Fixed / custom per layer ──
+// Auto = the layer's percentile of |value| over same-signed valid cells in the
+// displayed box between 1 and 10 km, rounded to the layer's step. Fixed keeps
+// cycles and storms comparable. A typed value overrides either, per view, and
+// persists in this browser.
+var _vol3dLevelMode = 'auto';
+var _vol3dLevelOverrides = {};          // viewId -> {layerIndex: value in display units}
+var _vol3dLevelsOpen = false;
+try {
+    var _vlSaved = JSON.parse(localStorage.getItem('vol3d_levels_v1') || 'null');
+    if (_vlSaved) { _vol3dLevelMode = _vlSaved.mode === 'fixed' ? 'fixed' : 'auto'; _vol3dLevelOverrides = _vlSaved.overrides || {}; }
+} catch (e) { /* storage blocked: session defaults */ }
+function _vol3dSaveLevels() {
+    try { localStorage.setItem('vol3d_levels_v1', JSON.stringify({ mode: _vol3dLevelMode, overrides: _vol3dLevelOverrides })); } catch (e) {}
+}
+
+function _vol3dLayerScale(L) { return L.scale || 1; }
+function _vol3dLayerStep(L) { return L.step || 1; }
+function _vol3dNice(L, siVal) {
+    var st = _vol3dLayerStep(L), disp = Math.round(siVal / _vol3dLayerScale(L) / st) * st;
+    return disp * _vol3dLayerScale(L);
+}
+function _vol3dFmtLevel(L, siVal) {
+    var disp = siVal / _vol3dLayerScale(L), st = _vol3dLayerStep(L);
+    var num = (st < 1 ? disp.toFixed(1) : Math.round(disp).toString()).replace('-', '−');
+    var sep = L.unit.charAt(0) === '×' ? '' : ' ';   // 20×10⁻⁴ s⁻¹, but 3.0 m s⁻¹
+    if (L.sym) return L.sym + ' = ' + (L.sym === 'w' && disp > 0 ? '+' : '') + num + sep + L.unit;
+    return num + sep + L.unit;
+}
+function _vol3dAutoLevel(g, L) {
+    var sign = L.lv >= 0 ? 1 : -1, nxy = g.nx * g.ny, vals = [];
+    for (var iz = 0; iz < g.nz; iz++) {
+        if (g.zA[iz] < 1 || g.zA[iz] > 10) continue;
+        for (var p = iz * nxy, e = p + nxy; p < e; p++) {
+            if (!g.ok[p]) continue;
+            var x = g.v[p] * sign;
+            if (x > 0) vals.push(x);
+        }
+    }
+    if (vals.length < 200) return null;              // too little echo to trust a percentile
+    vals.sort(function (a, b) { return a - b; });
+    var q = vals[Math.floor(L.pct * (vals.length - 1))];
+    var lv = _vol3dNice(L, q);
+    var minSi = (L.minAbs || 0) * _vol3dLayerScale(L);
+    if (lv < minSi) lv = minSi;
+    return sign * lv;
+}
+// -> [{val, tag}] per layer ('' fixed, 'p97' auto, 'custom' typed)
+function _vol3dResolveLevels(view, grids) {
+    var ov = _vol3dLevelOverrides[view.id] || {}, out = [];
+    view.layers.forEach(function (L, i) {
+        if (ov[i] != null && isFinite(ov[i])) { out.push({ val: ov[i] * _vol3dLayerScale(L), tag: 'custom' }); return; }
+        if (_vol3dLevelMode === 'auto' && L.pct) {
+            var a = _vol3dAutoLevel(grids[L.v], L);
+            if (a != null) {
+                // Two auto levels of one field must stay distinct (faint ⊃ hero).
+                for (var j = 0; j < i; j++) {
+                    if (view.layers[j].v === L.v && out[j].val === a) a += (a >= 0 ? 1 : -1) * _vol3dLayerStep(L) * _vol3dLayerScale(L);
+                }
+                out.push({ val: a, tag: 'p' + Math.round(L.pct * 100) }); return;
+            }
+        }
+        out.push({ val: L.lv, tag: '' });
+    });
+    return out;
+}
+
+function vol3dSetLevelMode(m) { _vol3dLevelMode = m === 'fixed' ? 'fixed' : 'auto'; _vol3dSaveLevels(); if (_vol3dView) render3DView(); }
+function vol3dSetLevel(i, val) {
+    var v = parseFloat(val);
+    if (!_vol3dLevelOverrides[_vol3dView]) _vol3dLevelOverrides[_vol3dView] = {};
+    if (isFinite(v)) _vol3dLevelOverrides[_vol3dView][i] = v; else delete _vol3dLevelOverrides[_vol3dView][i];
+    _vol3dSaveLevels(); render3DView();
+}
+function vol3dResetLevels() { delete _vol3dLevelOverrides[_vol3dView]; _vol3dSaveLevels(); render3DView(); }
+function toggle3DLevels() {
+    _vol3dLevelsOpen = !_vol3dLevelsOpen;
+    var row = document.getElementById('vol-levels-row');
+    if (row) row.style.display = _vol3dLevelsOpen && _vol3dView ? '' : 'none';
+    var b = document.getElementById('vol-levels-btn');
+    if (b) b.classList.toggle('active', _vol3dLevelsOpen);
+}
+function _vol3dRenderLevelsRow(view, lv) {
+    var row = document.getElementById('vol-levels-row');
+    if (!row) return;
+    row.style.display = _vol3dLevelsOpen && _vol3dView ? '' : 'none';
+    var html = '<label>Levels</label><select onchange="vol3dSetLevelMode(this.value)" style="width:auto;">' +
+        '<option value="auto"' + (_vol3dLevelMode === 'auto' ? ' selected' : '') + '>Auto (per analysis)</option>' +
+        '<option value="fixed"' + (_vol3dLevelMode === 'fixed' ? ' selected' : '') + '>Fixed</option></select>';
+    view.layers.forEach(function (L, i) {
+        var disp = lv[i].val / _vol3dLayerScale(L), st = _vol3dLayerStep(L);
+        html += '<span style="display:inline-flex;align-items:center;gap:4px;margin-left:8px;">' +
+            '<span style="color:' + L.c + ';font-size:13px;">■</span>' +
+            '<input type="number" step="' + st + '" value="' + (st < 1 ? disp.toFixed(1) : Math.round(disp)) + '"' +
+            ' onchange="vol3dSetLevel(' + i + ', this.value)" style="width:58px;' + (lv[i].tag === 'custom' ? 'border-color:#f59e0b;' : '') + '"' +
+            ' title="' + (L.sym || '') + ' level (' + L.unit + ')' + (lv[i].tag && lv[i].tag !== 'custom' ? ' — auto ' + lv[i].tag : '') + '">' +
+            '<span style="font-size:10px;color:#8899aa;">' + L.unit + '</span></span>';
+    });
+    html += '<button class="vol3d-toggle-btn" onclick="vol3dResetLevels()" title="Drop typed values for this view" style="margin-left:8px;">Reset</button>';
+    row.innerHTML = html;
+}
+
 // Missing cells (sentinel) are filled with a value on the "outside" of every
 // level, so a surface never traces the edge of radar coverage (a w = −2
 // shell would otherwise wrap every data gap, since 0 → −9999 crosses −2).
@@ -378,15 +486,16 @@ function _vol3dCrop(json, d, fill) {
     var nx0 = xA.length, ny0 = yA.length, ix = [], iy = [];
     for (var i = 0; i < nx0; i++) if (Math.abs(xA[i]) <= d) ix.push(i);
     for (var j = 0; j < ny0; j++) if (Math.abs(yA[j]) <= d) iy.push(j);
-    var nx = ix.length, ny = iy.length, nz = zA.length, v = new Float32Array(nx * ny * nz), k = 0;
+    var nx = ix.length, ny = iy.length, nz = zA.length, v = new Float32Array(nx * ny * nz), ok = new Uint8Array(nx * ny * nz), k = 0;
     for (var iz = 0; iz < nz; iz++)
         for (var a = 0; a < ny; a++)
             for (var b = 0; b < nx; b++) {
-                var s = src[(iz * ny0 + iy[a]) * nx0 + ix[b]];
-                v[k++] = (s == null || s <= sen + 1) ? fill : s;
+                var s = src[(iz * ny0 + iy[a]) * nx0 + ix[b]], good = !(s == null || s <= sen + 1);
+                ok[k] = good ? 1 : 0;
+                v[k++] = good ? s : fill;
             }
     return { xA: ix.map(function (q) { return xA[q]; }), yA: iy.map(function (q) { return yA[q]; }),
-             zA: zA.slice(), v: v, nx: nx, ny: ny, nz: nz };
+             zA: zA.slice(), v: v, ok: ok, nx: nx, ny: ny, nz: nz };
 }
 
 // One 1-2-1 pass along each axis (~Gaussian σ ≈ 0.7 cell): enough to round
@@ -474,15 +583,18 @@ function render3DView() {
         // ~20 cells on the 2-km grid ≈ 80 km³; the same volume is ~5 cells at 4 km.
         var minCells = box.stride === 1 ? 20 : 5;
 
-        var traces = view.layers.map(function (L) {
-            var g = grids[L.v], fill = _VOL3D_FILL[L.v] != null ? _VOL3D_FILL[L.v] : 0;
-            var vals = _vol3dDeclutter ? _vol3dDeclutterLayer(g, L.lv, minCells, fill) : g.v;
+        var lvls = _vol3dResolveLevels(view, grids);
+        _vol3dRenderLevelsRow(view, lvls);
+        var traces = view.layers.map(function (L, li) {
+            var g = grids[L.v], fill = _VOL3D_FILL[L.v] != null ? _VOL3D_FILL[L.v] : 0, lv = lvls[li].val;
+            var vals = _vol3dDeclutter ? _vol3dDeclutterLayer(g, lv, minCells, fill) : g.v;
+            var name = _vol3dFmtLevel(L, lv);
             return {
                 type: 'isosurface', x: flat.x, y: flat.y, z: flat.z, value: Array.prototype.slice.call(vals),
-                isomin: L.lv, isomax: L.lv, surface: { count: 1, fill: 1.0 },
+                isomin: lv, isomax: lv, surface: { count: 1, fill: 1.0 },
                 caps: { x: { show: false }, y: { show: false }, z: { show: false } },
                 colorscale: [[0, L.c], [1, L.c]], showscale: false, opacity: L.o, flatshading: false,
-                name: L.name, hovertemplate: '<b>' + L.name + '</b><br>X: %{x:.0f} km  Y: %{y:.0f} km<br>Height: %{z:.1f} km<extra></extra>',
+                name: name, hovertemplate: '<b>' + name + '</b><br>X: %{x:.0f} km  Y: %{y:.0f} km<br>Height: %{z:.1f} km<extra></extra>',
                 lighting: { ambient: 0.65, diffuse: 0.7, specular: 0.12, roughness: 0.8, fresnel: 0.1 },
                 lightposition: { x: 1000, y: -1000, z: 3000 }
             };
@@ -492,15 +604,19 @@ function render3DView() {
         var hSpan = Math.max(xR[1] - xR[0], yR[1] - yR[0]), vSpan = zR[1] - zR[0];
         var exag = VOL3D_Z_ASPECT * hSpan / vSpan;
         var meta = vols[0].case_meta || (_last3DJson && _last3DJson.case_meta) || {};
-        var legend = [], seen = {};
-        view.layers.forEach(function (L) {
-            if (seen[L.name]) return; seen[L.name] = 1;
-            legend.push('<span style="color:' + L.c + ';">■</span> ' + L.name);
+        var legend = [], anyAuto = false, anyCustom = false;
+        view.layers.forEach(function (L, li) {
+            var t = lvls[li].tag;
+            if (t === 'custom') anyCustom = true; else if (t) anyAuto = true;
+            legend.push('<span style="color:' + L.c + ';">■</span> ' + _vol3dFmtLevel(L, lvls[li].val) +
+                (t && t !== 'custom' ? ' <span style="color:#9ca3af;">(' + t + ')</span>' : ''));
         });
+        var lvNote = anyAuto ? 'auto levels = percentiles in this box, 1–10 km' : (_vol3dLevelMode === 'fixed' || !anyCustom ? 'fixed levels' : '');
+        if (anyCustom) lvNote += (lvNote ? ', ' : '') + 'custom levels';
         var title = (meta.storm_name || '') + '  |  ' + (meta.datetime || '') + '  —  ' + view.label +
             '<br><span style="font-size:12px;">' + legend.join('   ') + '</span>' +
             '<br><span style="font-size:11px;color:#6b7280;">±' + d + ' km · ' + (box.stride === 1 ? 2 : 4) +
-            '-km grid · vertical exaggeration ×' + exag.toFixed(1) + (_vol3dDeclutter ? ' · smoothed, fragments < ' + minCells + ' cells removed' : '') + '</span>';
+            '-km grid · vertical exaggeration ×' + exag.toFixed(1) + ' · ' + lvNote + (_vol3dDeclutter ? ' · smoothed, fragments < ' + minCells + ' cells removed' : '') + '</span>';
         var layout = _vol3dSceneLayout(title);
         var chartDiv = document.getElementById('vol-3d-chart');
         if (_vol3dLastWasView && chartDiv && chartDiv.layout && chartDiv.layout.scene && chartDiv.layout.scene.camera) {
@@ -657,6 +773,10 @@ function _vol3dSyncViewControls() {
     if (domSel) { domSel.value = _vol3dDomain; domSel.disabled = !_vol3dView; }
     var dcl = document.getElementById('vol-declutter');
     if (dcl) { dcl.classList.toggle('active', _vol3dDeclutter); dcl.disabled = !_vol3dView; }
+    var lvBtn = document.getElementById('vol-levels-btn');
+    if (lvBtn) { lvBtn.disabled = !_vol3dView; lvBtn.classList.toggle('active', _vol3dLevelsOpen && !!_vol3dView); }
+    var lvRow = document.getElementById('vol-levels-row');
+    if (lvRow && !_vol3dView) lvRow.style.display = 'none';
     var shearBtn = document.getElementById('vol-cam-shear');
     if (shearBtn) shearBtn.disabled = !_vol3dCameraFor('shear');
     ['vol-iso-min', 'vol-iso-max', 'vol-surfaces', 'vol-opacity', 'vol-caps'].forEach(function (id) {
