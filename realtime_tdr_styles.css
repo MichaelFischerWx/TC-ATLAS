@@ -1297,6 +1297,28 @@
     font-weight: 600;
 }
 :root[data-theme="dark"] .recon-hdob-summary .recon-sonde-flag { color: #fbbf24; }
+/* Live Flight note as bullets (2026-09-30) */
+.recon-srcnote-list { margin: 0; padding-left: 16px; }
+.recon-srcnote-list ul { margin: 2px 0 0; padding-left: 16px; list-style: circle; }
+.recon-srcnote-list li { margin: 1px 0; }
+.recon-srcnote-list li.warn { color: #b45309; font-weight: 600; }
+.recon-srcnote-list li.prelim { color: #b45309; }
+.recon-srcnote-list li.foot { font-size: 10px; opacity: .85; }
+:root[data-theme="dark"] .recon-srcnote-list li.warn,
+:root[data-theme="dark"] .recon-srcnote-list li.prelim { color: #fbbf24; }
+/* preliminary crossing: a range, never the headline number */
+.recon-hdob-summary .recon-prelim-sub {
+    margin-top: 3px; padding: 2px 5px; border: 1px dashed #d97706; border-radius: 4px;
+    color: #b45309; font-weight: 600; font-size: 10px;
+}
+:root[data-theme="dark"] .recon-hdob-summary .recon-prelim-sub { color: #fbbf24; border-color: #fbbf24; }
+.recon-hdob-summary .recon-vdm-stat.is-prelim { border-style: dashed; border-color: #d97706; }
+.recon-hdob-summary .recon-vdm-stat.is-prelim .recon-vdm-stat-label { color: #b45309; }
+:root[data-theme="dark"] .recon-hdob-summary .recon-vdm-stat.is-prelim .recon-vdm-stat-label { color: #fbbf24; }
+.recon-hdob-verif { padding: 4px 10px 12px; }
+.recon-hdob-verif .exp-verif-t table { min-width: 0; width: 100%; }
+.recon-verif-n { font-size: 10px; font-weight: 400; color: var(--slate); }
+.recon-sonde-link { color: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 /* "(80%: lo–hi)" after the TDR SEAR maximum; wraps below it as a unit on narrow tiles */
 .recon-hdob-summary .recon-vdm-stat-band {
     margin-left: 4px;

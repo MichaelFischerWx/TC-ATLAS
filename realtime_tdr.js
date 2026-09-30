@@ -2104,12 +2104,21 @@
      *  2026-09-04: a range beats an uncertain guess.) */
     /** RMW-corrected value is the headline (2026-09-05): it is what the MLBT record assimilates. */
     function _hdobSearVal(p) { return (p && p.y_corr_kt != null) ? p.y_corr_kt : (p ? p.y_kt : null); }
+    /** Preliminary vs final (2026-09-30, Michael): a crossing is FINAL once its outbound leg is flown and its center
+     *  is a VDM / TDR fix (or an hour passes without one); the publisher never changes a final value afterwards.
+     *  Until then it is PRELIMINARY and shown only as a range covering the unsettled center and RMW. Payloads from
+     *  before the final flag keep the old rule (preliminary = pressure-minimum center). */
+    function _hdobSearIsPrelim(p) { return !!p && (p.final === false || (p.final === undefined && p.fix_source === 'hdob')); }
+    function _hdobSearPrelimRange(p) {
+        var r = (p && (p.y_prelim_range_kt || p.range_kt)) || (p && p.y_range_kt);
+        if (!r || r.length !== 2 || r[0] == null || r[1] == null) return '';
+        return Math.round(r[0]) + '–' + Math.round(r[1]) + ' kt';
+    }
     function _hdobSearHeadline(p) {
-        var rg = _hdobSearRange(p);
-        if (p && p.fix_source === 'hdob' && rg) return rg;
+        if (_hdobSearIsPrelim(p)) return 'PRELIM ' + (_hdobSearPrelimRange(p) || '—');
         return Math.round(_hdobSearVal(p)) + ' kt';
     }
-    function _hdobSearIsRangeLed(p) { return !!(p && p.fix_source === 'hdob' && _hdobSearRange(p)); }
+    function _hdobSearIsRangeLed(p) { return _hdobSearIsPrelim(p); }
     /** 'most likely 147 kt' — the point estimate that accompanies a range-led headline. */
     function _hdobSearLikely(p) { return (p && _hdobSearVal(p) != null) ? 'most likely ' + Math.round(_hdobSearVal(p)) + ' kt' : ''; }
     /** Multiline HTML: how the estimate was built + center/fix caveats. */
@@ -2117,6 +2126,11 @@
         if (!p) return '';
         var L = [];
         var c = p.chain;
+        if (_hdobSearIsPrelim(p)) {
+            L.push('PRELIMINARY' + (p.pending_reason ? ' (' + p.pending_reason + ')' : '') + ': the range covers the unsettled center and RMW' +
+                   (p.final_by ? '; final by ~' + String(p.final_by).slice(11, 16) + 'Z' : ''));
+            c = null;
+        }
         if (c && c.s1 != null && c.s2 != null && c.f10 != null && p.fl_peak_kt != null) {
             L.push('FL ' + Math.round(p.fl_peak_kt) + ' kt \u00d7 ' + c.s1.toFixed(2) + ' (to 500 m) \u00d7 ' + c.s2.toFixed(2) +
                    ' (to 150 m) \u00d7 ' + c.f10.toFixed(3) + ' (to 10 m) = ' + Math.round(p.y_kt) + ' kt' +
@@ -2199,7 +2213,7 @@
             var rg = _hdobSearRange(p), det = _hdobSearDetail(p);
             var rangeLed = _hdobSearIsRangeLed(p);
             var tip = '<b>SEAR ' + _hdobSearHeadline(p) + '</b> 10-m estimate (exp)' +
-                (rangeLed ? ' · ' + _hdobSearLikely(p) : (rg ? ' · <b>' + rg + '</b>' : '')) +
+                (rangeLed ? ' · single value once final' : (rg ? ' · <b>' + rg + '</b>' : '')) +
                 (where ? '<br>' + where : '') + '<br>' + when +
                 (p.fl_peak_kt != null ? ' · FL peak ' + Math.round(p.fl_peak_kt) + ' kt' : '') +
                 (det ? '<br><span style="opacity:.8">' + det + '</span>' : '');
@@ -2430,46 +2444,120 @@
             ' \u2014 the surface wind is stronger than the flight-level wind implies, so flight-level SEAR is likely low here. ';
     }
 
-    function _hdobSearText() {
-        var sp = _hdobData && _hdobData.sear;
-        if (!sp) return '';
-        // Always-visible explainer (hover tooltips don't exist on phones).
-        var head = 'SEAR (experimental): a machine-learning model that estimates the 10-m wind ' +
-                   'from the flight-level wind, its distance from the center, and the storm environment. ' +
-                   'Not an official product. ';
-        if (sp.status !== 'ok' || !(sp.passes || []).length) {
-            if (sp.status === 'awaiting_fix') return head + 'awaiting the first center fix.';
-            if (sp.status === 'no_env') return head + 'no GFS environment yet.';
-            return head + 'no scored passes yet.';
+    /** Open the flagged sonde's profile modal (same modal as the map's sonde popup). */
+    function _hdobOpenSonde(t, tail) {
+        var T = Date.parse(t), best = null;
+        ((_hdobData && _hdobData.dropsondes) || []).forEach(function (d) {
+            var dt = Math.abs(Date.parse(d.t) - T);
+            if (!_hdobTailEq(d.tail, tail) || !(dt <= 20000)) return;
+            var score = dt - ((d.profile && d.profile.mandatory && d.profile.mandatory.length) ? 5000 : 0) - (d.hires ? 5000 : 0);
+            if (!best || score < best.score) best = { d: d, score: score };
+        });
+        if (best && typeof window._reconOpenSonde === 'function') { window._reconOpenSonde(best.d, _hdobData); _ga('recon_hdob_sonde_flag_open', {}); }
+    }
+
+    function _hdobSondeLink(q, label) {
+        return '<a href="#" class="recon-sonde-link" data-t="' + _hdobTdrEsc(q.t) + '" data-tail="' + _hdobTdrEsc(q.tail) + '">' + label + '</a>';
+    }
+
+    function _hdobWireSondeLinks(el) {
+        Array.prototype.forEach.call(el.querySelectorAll('.recon-sonde-link'), function (a) {
+            a.onclick = function (e) { e.preventDefault(); e.stopPropagation(); _hdobOpenSonde(a.getAttribute('data-t'), a.getAttribute('data-tail')); };
+        });
+    }
+
+    function _hdobVerCell(x) {
+        if (!x) return '\u2014';
+        return (x.bias_kt >= 0 ? '+' : '\u2212') + Math.abs(x.bias_kt).toFixed(1) + ' / ' + x.mae_kt.toFixed(1);
+    }
+
+    /** Verification summary table under Live Flight (2026-09-30, Michael: "like GHOST"), from the publisher's
+     *  sear_verify.py (payload.verification): 2026 season + the models' held-out 2025 test, both products. */
+    function _hdobBuildVerif() {
+        var el = document.getElementById('recon-hdob-verif');
+        if (!el) return;
+        var v = _hdobData && _hdobData.sear && _hdobData.sear.verification;
+        if (!v || !v.season_2026) { el.style.display = 'none'; el.innerHTML = ''; return; }
+        var S = v.season_2026 || {}, H = v.holdout_2025 || {};
+        function cell(x, strong) {
+            if (!x) return '<td>\u2014</td>';
+            return '<td style="white-space:nowrap">' + (strong ? '<strong>' : '') + _hdobVerCell(x) + (strong ? '</strong>' : '') +
+                '<br><span class="recon-verif-n">n = ' + x.n.toLocaleString() + ' \u00b7 ' + x.storms + ' storm' + (x.storms === 1 ? '' : 's') + '</span></td>';
         }
+        function rows(key) {
+            var s_ = S[key] || {}, h = H[key] || {};
+            var cuts = [['all (outside the eye)', 'all', 'all'], ['eyewall (r/RMW 0.75\u20131.25)', 'eyewall', 'eyewall'],
+                        ['outer (r/RMW &gt; 1.5)', 'outer', 'outer'],
+                        ['hurricane force\u2021', 'obs_ge_64kt', key === 'fl' ? 'fl_ge_100kt' : 'obs_ge_64kt']];
+            return cuts.map(function (c, i) {
+                return '<tr' + (i === 0 ? ' class="me"' : '') + '><td>' + c[0] + '</td>' + cell(s_[c[1]], i === 0) + cell(h[c[2]], false) + '</tr>';
+            }).join('');
+        }
+        function table(cap, key) {
+            return '<div class="exp-verif-t"><table><caption>' + cap + '</caption>' +
+                '<tr><th>cut</th><th>2026 season<br>bias / MAE</th><th>2025 test<br>bias / MAE</th></tr>' + rows(key) + '</table></div>';
+        }
+        var cm = S.common_sondes;
+        el.innerHTML =
+            '<div class="exp-verif-h">SEAR verification against dropsondes' +
+            '<span class="exp-verif-src">10-m wind, kt (bias / mean absolute error); the sonde&rsquo;s WL150 reduced to 10 m with the ' +
+            'same wind-dependent factor the products use; eye excluded. 2026 = this season in real time; 2025 test = storms held out ' +
+            'of training. Scores the FINAL estimates (every center and leg in hand) &mdash; preliminary values carry more error. ' +
+            'Updated ' + String(v.generated || '').slice(0, 16).replace('T', ' ') + 'Z.</span></div>' +
+            table('TDR SEAR &mdash; tail-Doppler analysis at the sonde&rsquo;s splash point', 'tdr') +
+            table('Flight-level SEAR &mdash; at the sonde&rsquo;s release point', 'fl') +
+            '<div class="exp-verif-note">' + (cm && cm.n ? 'On the ' + cm.n + ' sondes both products score: TDR SEAR ' + _hdobVerCell(cm.tdr) +
+            ' kt, flight-level SEAR ' + _hdobVerCell(cm.fl) + ' kt. ' : '') +
+            '\u2021 sonde 10-m wind &ge; 64 kt, except the flight-level 2025 test row: flight-level wind &ge; 100 kt. ' +
+            'Eyewalls whose surface wind exceeds the flight-level wind (e.g. Rachel 30 Sep) are where flight-level SEAR runs low; the eyewall-sonde flag marks them.</div>';
+        el.style.display = '';
+    }
+
+    /** SEAR lines of the Live Flight note, as bullet items (2026-09-30: one long paragraph was unreadable).
+     *  Returns [{text | html, cls}] -- text is set with textContent; only the sonde link is built as a node. */
+    function _hdobSearItems() {
+        var sp = _hdobData && _hdobData.sear;
+        if (!sp) return [];
+        var out = [{ text: 'SEAR (experimental): machine-learning estimate of the 10-m wind from the flight-level wind, its position ' +
+                           'in the storm and the environment. Not an official product.' + (sp.generated ? ' Updated ' + String(sp.generated).slice(11, 16) + 'Z.' : '') }];
+        if (sp.status !== 'ok' || !(sp.passes || []).length) {
+            out.push({ text: sp.status === 'awaiting_fix' ? 'Awaiting the first center fix.' : sp.status === 'no_env' ? 'No GFS environment yet.' : 'No scored crossings yet.' });
+            return out;
+        }
+        var sf = _hdobSondeFlag();
+        if (sf) out.push({ text: _hdobSondeFlagText(sf), sonde: sf.top, cls: 'warn' });
         var scoped = _hdobSearPassesInScope(sp.passes);
         if (!scoped.length) {
             var older = sp.passes[sp.passes.length - 1];
-            return head + 'no scored center passes yet for this flight' +
-                (older ? ' (previous flight: ' + String(older.t).slice(5, 16).replace('T', ' ') + 'Z ' + _hdobTailDisplay(older.tail) + ' ' + _hdobSearHeadline(older) + ')' : '') + '.';
+            out.push({ text: 'No scored crossings yet for this flight' + (older ? ' (previous flight: ' + String(older.t).slice(5, 16).replace('T', ' ') +
+                             'Z ' + _hdobTailDisplay(older.tail) + ' ' + _hdobSearHeadline(older) + ')' : '') + '.' });
+            return out;
         }
-        var anyPrelim = false, anyRange = false, anyStale = false;
-        var parts = scoped.slice(-4).map(function (p) {
-            if (p.fix_source === 'hdob') anyPrelim = true;
+        var anyStale = false, anyPrelimCtr = false, anyPrelim = false;
+        var sub = scoped.slice(-4).map(function (p) {
             var kit = window._ReconKit;
-            var q = (kit && kit.compass8) ? kit.compass8(p.az_deg) : '';
-            if (!q && p.quad) q = p.quad;
-            var rg = _hdobSearRange(p);
-            if (rg) anyRange = true;
+            var q = (kit && kit.compass8) ? kit.compass8(p.az_deg) : (p.quad || '');
+            var pre = _hdobSearIsPrelim(p), rg = _hdobSearRange(p);
+            if (pre) anyPrelim = true;
+            if (!pre && p.fix_source === 'hdob') anyPrelimCtr = true;
             if (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30) anyStale = true;
-            var led = _hdobSearIsRangeLed(p);
-            return String(p.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(p.tail) + ' ' + _hdobSearHeadline(p) +
-                (led ? ' (' + _hdobSearLikely(p).replace(' kt', '') + ')' : '') +
-                (!led && rg ? ' [' + rg.replace(' kt', '') + ']' : '') +
-                (q ? ' (' + q + (p.r_km != null ? ' ' + Math.round(p.r_km) + ' km/' + Math.round(p.r_km * 0.5399568) + ' n mi' : '') + ')' : '') +
-                (p.fix_source === 'hdob' ? '*' : '') +
-                (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30 ? '\u2020' : '');
+            return { text: String(p.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(p.tail) + ': ' + (pre ? 'PRELIMINARY ' + (_hdobSearPrelimRange(p) || '') :
+                        Math.round(_hdobSearVal(p)) + ' kt' + (rg ? ' (RMW range ' + rg.replace(' kt', '') + ')' : '')) +
+                        (q ? ' \u00b7 ' + q + (p.r_km != null ? ' ' + Math.round(p.r_km) + ' km / ' + Math.round(p.r_km * 0.5399568) + ' n mi' : '') : '') +
+                        (pre ? ' \u00b7 ' + (p.pending_reason || 'center not yet confirmed') + (p.final_by ? ', final by ~' + String(p.final_by).slice(11, 16) + 'Z' : '') :
+                         (p.fix_source === 'hdob' ? ' \u00b7 preliminary center*' : '')) +
+                        (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30 ? '\u2020' : ''),
+                     cls: pre ? 'prelim' : '' };
         });
-        var sf = _hdobSondeFlag();
-        return head + (sf ? _hdobSondeFlagText(sf) : '') + 'Pass maxima (quadrant, radius from center) ' + parts.join(' · ') + ' (updated ' + String(sp.generated).slice(11, 16) + 'Z)' +
-            (anyRange ? ' — ranges = the same observation re-scored with the RMW of each eyewall crossing of that pass; SEAR is most sensitive to r/RMW, so preliminary-center passes lead with the range and give the most likely value in parentheses' : '') +
-            (anyPrelim ? ' — * preliminary center from the calm-wind centroid of the eye crossing (pressure plateau or Willoughby–Chelmow when there are no calm obs), no VDM yet' : '') +
-            (anyStale ? ' — \u2020 nearest center fix more than 30 min away, center extrapolated' : '');
+        out.push({ text: 'Eyewall crossings, newest last (quadrant, radius from center):', sub: sub });
+        var foot = [];
+        if (anyPrelim) foot.push('PRELIMINARY = the outbound leg or a confirmed center (VDM or TDR radar) is still to come; shown as a range covering the unsettled center and RMW. ' +
+                                 'A crossing becomes final after both (or an hour without a confirmed center) and its value never changes after that.');
+        foot.push('RMW range = the same observation re-scored with the RMW of each eyewall leg; SEAR is most sensitive to r/RMW.');
+        if (anyPrelimCtr) foot.push('* center from the pressure minimum / calm-wind centroid of the eye crossing, no VDM or TDR center arrived within an hour.');
+        if (anyStale) foot.push('\u2020 nearest center fix more than 30 min away, center extrapolated.');
+        out.push({ text: foot.join(' '), cls: 'foot' });
+        return out;
     }
 
     /** Strongest TDR-SEAR analysis (by the displayed max, see _hdobTdrPeakKt) centred
@@ -2547,6 +2635,10 @@
             });
             if (!hdIn) hd = null;
         }
+        // FINAL values only (2026-09-30): payloads that mark crossings final/pending never fall back to the per-ob
+        // maximum (a preliminary number); older payloads keep the old fallback.
+        var marksFinal = (_hdobData.sear && _hdobData.sear.passes || []).some(function (p) { return p.final !== undefined; });
+        if (marksFinal) best.sear = null;
         var searTile = hd && hd.kt != null ? { v: hd.kt, t: hd.t, tail: hd.tail, prelim: hd.fix_source === 'hdob' } : best.sear;
         var searSub = '';
         if (hd && hd.kt != null) {
@@ -2554,7 +2646,7 @@
                 searSub += ' · RMW range ' + Math.round(hd.range_kt[0]) + '–' + Math.round(hd.range_kt[1]);
             if (hd.others_kt && hd.others_kt.length)
                 searSub += ' · other crossings ' + Math.round(hd.others_min_kt) + (hd.others_kt.length > 1 ? '–' + Math.round(hd.others_max_kt) : '') + ' kt';
-            if (hd.fix_source === 'hdob') searSub += ' · prelim fix';
+            if (hd.fix_source === 'hdob') searSub += ' · pressure-minimum center';
         } else if (best.sear) {
             searSub = (best.sear.az != null && window._ReconKit && window._ReconKit.searWhere ? ' · ' + window._ReconKit.searWhere(best.sear.az, best.sear.r) : '') +
                       (searRangeLed ? ' · most likely ' + Math.round(best.sear.v) + ' kt' : (searRange ? ' · ' + searRange : '')) +
@@ -2571,13 +2663,31 @@
                 'The last SEAR estimate, ' + Math.round(_hdobData.sear.headline.kt) + ' kt, is from an earlier flight (' +
                 String(_hdobData.sear.headline.t).slice(5, 16).replace('T', ' ') + 'Z). Not an official product.';
         }
+        // PRELIMINARY crossings newer than the final headline: a range, clearly labeled, never the headline number
+        var pend = (((_hdobData.sear || {}).headline || {}).pending || []).filter(function (q) {
+            return _hdobSearPassesInScope([q]).length && !(_hdobArchive && Date.parse(q.t) > +_hdobArchive.cur);
+        });
+        var pq = pend.length ? pend[pend.length - 1] : null, prelimTile = false;
+        if (pq) {
+            var prg = _hdobSearPrelimRange(pq) || 'range pending';
+            if (searTile && searTile.valText !== 'pending') {
+                searSub += '<div class="recon-prelim-sub">PRELIMINARY ' + String(pq.t).slice(11, 16) + 'Z crossing: ' + prg +
+                    ' \u00b7 ' + _hdobTdrEsc(pq.reason || '') + (pq.final_by ? ', final by ~' + String(pq.final_by).slice(11, 16) + 'Z' : '') + '</div>';
+            } else {
+                searTile = { valText: prg.replace(' kt', ''), t: pq.t, tail: pq.tail };
+                searSub = ' · ' + _hdobTdrEsc(pq.reason || '') + (pq.final_by ? ', final by ~' + String(pq.final_by).slice(11, 16) + 'Z' : '');
+                prelimTile = true;
+            }
+            searTip += ' PRELIMINARY crossings are shown as a range covering the unsettled center and RMW; a single value is published once ' +
+                'the outbound leg is flown and the center is confirmed by a VDM or TDR radar fix (or an hour passes without one), and it never changes after that.';
+        }
         // Sonde flag on the flight-level SEAR tile (2026-09-30): an eyewall sonde's 10-m wind beat SEAR at its
         // release by >= the threshold, i.e. a surface-heavy eyewall the flight-level estimate cannot see.
         var sflag = _hdobSondeFlag();
         if (sflag && searTile && searTile.valText !== 'pending') {
             // WL150 first, then the REDUCED 10-m value: the sonde's own 10-m wind is not what is shown (Michael, 09-30)
-            searSub += '<span class="recon-sonde-flag"> \u00b7 \u26a0 eyewall sonde ' + String(sflag.top.t).slice(11, 16) + 'Z: WL150 ' +
-                Math.round(sflag.top.wl150_kt) + ' kt \u2192 ~' + Math.round(sflag.top.sonde_10m_kt) + ' kt 10-m (reduced)</span>';
+            searSub += '<span class="recon-sonde-flag"> \u00b7 \u26a0 ' + _hdobSondeLink(sflag.top, 'eyewall sonde ' + String(sflag.top.t).slice(11, 16) + 'Z') +
+                ': WL150 ' + Math.round(sflag.top.wl150_kt) + ' kt \u2192 ~' + Math.round(sflag.top.sonde_10m_kt) + ' kt 10-m (reduced)</span>';
             searTip += ' ' + _hdobSondeFlagText(sflag).replace(/"/g, '&quot;');
         }
         // TDR leads (Michael, 2026-09-30): the analysis' own 500-m + 2-km winds instead of the flight-level wind,
@@ -2596,15 +2706,18 @@
                 'It sees the low-level eyewall directly and all around the storm, not only along the flight track, so it leads the flight-level SEAR when both exist; they differ most when the eyewall is surface-heavy or the vortex is tilted. ' +
                 'Strongest analysis of the flight on display' + (cov != null ? ' (this one covers ' + Math.round(cov * 100) + '% of the area within 60 km)' : '') +
                 (tdrBand ? '. Range in parentheses: ' + _hdobTdrEsc(tdrBand.note) : '') +
-                '. Click to show it on the map. Not an official product.');
+                '. Click to show it on the map. Verification against dropsondes: table below the map. Not an official product.');
         }
         var html = tile('Max FL wind', best.fl, 'kt') +
                    tile('Min extrap SLP', best.slp, 'mb', 'is-accent') +
                    tile('Max SFMR', best.sfmr, 'kt') + tdrHtml +
-                   tile(tdr ? 'Max FL SEAR 10-m (exp)' : 'Max SEAR 10-m (exp)', searTile, searTile && searTile.valText === 'pending' ? '' : 'kt',
-                        'is-sear' + (tdr ? ' is-second' : '') + (sflag ? ' is-sondeflag' : ''), searSub, searTip);
+                   tile(prelimTile ? 'PRELIMINARY FL SEAR 10-m (exp)' : (tdr ? 'Max FL SEAR 10-m (exp)' : 'Max SEAR 10-m (exp)'), searTile,
+                        searTile && searTile.valText === 'pending' ? '' : 'kt',
+                        'is-sear' + (tdr ? ' is-second' : '') + (prelimTile ? ' is-prelim' : '') + (sflag ? ' is-sondeflag' : ''), searSub,
+                        searTip + ' Verification against dropsondes: table below the map.');
         el.innerHTML = html;
         el.style.display = html ? '' : 'none';
+        _hdobWireSondeLinks(el);
         var tdrEl = tdr && el.querySelector('.is-tdrsear');
         if (tdrEl) tdrEl.onclick = function () {
             _hdobTdrSel = tdr.a.file; _hdobLayerVis.tdr = true;
@@ -2616,11 +2729,32 @@
     function _hdobBuildSourceNote() {
         var el = document.getElementById('recon-hdob-srcnote');
         if (!el) return;
-        var t = _hdobSourceText(), s = _hdobSearText();
-        el.textContent = t;
-        if (s) { var d = document.createElement('div'); d.textContent = s; el.appendChild(d); }
-        if (_hdobSatNote) { var d2 = document.createElement('div'); d2.textContent = _hdobSatNote; el.appendChild(d2); }
-        el.style.display = (t || s) ? '' : 'none';
+        var t = _hdobSourceText(), items = _hdobSearItems();
+        el.textContent = '';
+        var ul = document.createElement('ul'); ul.className = 'recon-srcnote-list';
+        function li(it, parent) {
+            var e = document.createElement('li'); if (it.cls) e.className = it.cls;
+            e.appendChild(document.createTextNode(it.text));
+            if (it.sonde) {   // the sonde the flag names opens its profile
+                var a = document.createElement('a'); a.href = '#'; a.className = 'recon-sonde-link';
+                a.setAttribute('data-t', it.sonde.t); a.setAttribute('data-tail', it.sonde.tail);
+                a.textContent = 'Open the ' + String(it.sonde.t).slice(11, 16) + 'Z sonde \u2197';
+                e.appendChild(document.createTextNode(' ')); e.appendChild(a);
+            }
+            if (it.sub && it.sub.length) {
+                var u2 = document.createElement('ul');
+                it.sub.forEach(function (x) { li(x, u2); });
+                e.appendChild(u2);
+            }
+            parent.appendChild(e);
+        }
+        if (t) li({ text: t }, ul);
+        items.forEach(function (it) { li(it, ul); });
+        if (_hdobSatNote) li({ text: _hdobSatNote }, ul);
+        el.appendChild(ul);
+        _hdobWireSondeLinks(el);
+        el.style.display = ul.children.length ? '' : 'none';
+        _hdobBuildVerif();
     }
 
     /** NOAA flight-level wind resolution toggle [10-s mean | 1-s]. Shown only when

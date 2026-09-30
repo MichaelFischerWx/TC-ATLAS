@@ -31963,6 +31963,16 @@
         return out.sort(function (a, b) { return Date.parse(a.sonde.t) - Date.parse(b.sonde.t); });
     }
 
+    /** Open a sonde's profile modal from outside the map layer (Live Flight's SEAR sonde flag, 2026-09-30):
+     *  registers the blob's sonde under the same tail|t key the map markers use, then opens it. */
+    window._reconOpenSonde = function (d, blob) {
+        if (!d) return false;
+        var k = (d.tail || '?') + '|' + (d.t || '');
+        if (!_reconSondeByKey[k]) { _reconSondeByKey[k] = d; _reconSondeBlob[k] = blob || {}; }
+        window._reconShowSkewT(k);
+        return true;
+    };
+
     window._reconShowSkewT = function (key) {
         var sonde = _reconSondeByKey[key];
         if (!sonde) return;
