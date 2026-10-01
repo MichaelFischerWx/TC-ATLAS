@@ -24727,7 +24727,7 @@
     // other overlay and honor the export "imagery only" mode.
     var _GENRAW_SRC = 'rt-genraw-src', _GENRAW_PTS = 'rt-genraw-pts';
     var _GENRAW_LAYERS = ['rt-genraw-heat', 'rt-genraw-case', 'rt-genraw-line',
-        'rt-genraw-hit', 'rt-genraw-hl-case', 'rt-genraw-hl', 'rt-genraw-dot'];
+        'rt-genraw-hit', 'rt-genraw-hl-case', 'rt-genraw-hl', 'rt-genraw-dot', 'rt-genraw-hl-dot'];
     // 'auto' = density for big ensembles, tracks for small; or forced.
     var _rtGenesisRawMode = (function () {
         try { return localStorage.getItem('tca_genraw_mode') || 'auto'; } catch (e) { return 'auto'; }
@@ -24776,6 +24776,8 @@
             // Dim the field while one member is lifted out of it.
             gl.setPaintProperty('rt-genraw-line', 'line-opacity', idx >= 0 ? st.alpha * 0.35 : st.alpha);
             gl.setPaintProperty('rt-genraw-case', 'line-opacity', idx >= 0 ? st.caseAlpha * 0.35 : st.caseAlpha);
+            gl.setPaintProperty('rt-genraw-dot', 'circle-opacity', idx >= 0 ? st.dotAlpha * 0.3 : st.dotAlpha);
+            gl.setFilter('rt-genraw-hl-dot', ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'i'], idx]]);
         } catch (e) {}
     }
 
@@ -24870,14 +24872,27 @@
             layout: { 'line-cap': 'round', 'line-join': 'round' },
             paint: { 'line-color': ['get', 'c'], 'line-opacity': 1,
                 'line-width': ['interpolate', ['linear'], ['zoom'], 2, 2.4, 8, 4] } }, 400);
+        // Genesis dots. At 1000 members (~2,600 dots) outlined dots fused
+        // into solid blobs that hid the imagery and the tracks' origins, so
+        // big ensembles get small, unstroked, translucent dots.
+        var bigEns = nEns >= 500;
+        var dotAlpha = mode === 'density' ? 0.35 : (bigEns ? 0.5 : 0.9);
         map._glAdd({ id: 'rt-genraw-dot', type: 'circle', source: _GENRAW_SRC,
             filter: ['==', ['geometry-type'], 'Point'],
             paint: { 'circle-color': ['get', 'c'],
-                'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, nEns < 500 ? 2.4 : 1.6, 8, 5],
-                'circle-opacity': mode === 'density' ? 0.35 : 0.9,
-                'circle-stroke-color': '#0a0e14', 'circle-stroke-width': mode === 'density' ? 0 : 0.8 } }, 400);
+                'circle-radius': ['interpolate', ['linear'], ['zoom'],
+                    2, bigEns ? 1.1 : 2.4, 8, bigEns ? 2.6 : 5],
+                'circle-opacity': dotAlpha,
+                'circle-stroke-color': '#0a0e14',
+                'circle-stroke-width': (mode === 'density' || bigEns) ? 0 : 0.8 } }, 400);
+        // The highlighted member's own genesis point.
+        map._glAdd({ id: 'rt-genraw-hl-dot', type: 'circle', source: _GENRAW_SRC,
+            filter: ['==', ['get', 'i'], -1],
+            paint: { 'circle-color': ['get', 'c'], 'circle-radius': 5,
+                'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 } }, 400);
 
-        var st = _genRawState = { items: items, hl: -1, alpha: alpha, caseAlpha: caseAlpha, mode: mode, n: n };
+        var st = _genRawState = { items: items, hl: -1, alpha: alpha, caseAlpha: caseAlpha,
+            dotAlpha: dotAlpha, mode: mode, n: n };
         function pick(e) {
             var f = e.features && e.features[0];
             return f ? f.properties.i : -1;
