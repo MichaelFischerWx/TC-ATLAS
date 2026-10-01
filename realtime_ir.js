@@ -6426,6 +6426,88 @@
                     else _exportMapPng();
                 });
 
+                // ── Phone overflow: [⋯] menu ─────────────────────────
+                // ≤768px the control bar wrapped to three rows (~110px of a
+                // 812px screen). CSS hides 3D / Radar / Measure / Microwave /
+                // Save there and shows this button instead; each menu item
+                // .click()s the ORIGINAL hidden button, so every toggle keeps
+                // one implementation and its own on/off state (.active).
+                var moreBtn = L.DomUtil.create('button', 'ir-global-toggle-btn ir-layers-icon-btn ir-more-btn', row);
+                moreBtn.id = 'ir-more-btn';
+                moreBtn.type = 'button';
+                moreBtn.title = 'More map tools — 3D, radar, measure, microwave, save';
+                moreBtn.setAttribute('aria-haspopup', 'true');
+                moreBtn.setAttribute('aria-expanded', 'false');
+                moreBtn.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
+                    + '<circle cx="3.5" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/>'
+                    + '<circle cx="12.5" cy="8" r="1.4" fill="currentColor"/></svg>';
+                var moreMenu = L.DomUtil.create('div', 'ir-export-menu ir-more-menu', wrap);
+                moreMenu.id = 'ir-more-menu';
+                moreMenu.style.display = 'none';
+                function _moreItems() {
+                    function on(el) { return !!(el && el.classList.contains('active')); }
+                    function item(act, glyph, label, isOn) {
+                        return '<button type="button" class="ir-export-menu-item' + (isOn ? ' is-on' : '') + '" data-act="' + act + '"'
+                            + (isOn != null ? ' aria-pressed="' + !!isOn + '"' : '') + '>'
+                            + '<span class="ir-export-menu-glyph" aria-hidden="true">' + glyph + '</span>' + label
+                            + (isOn ? '<span class="ir-more-on">On</span>' : '') + '</button>';
+                    }
+                    return item('3d', '⛰', '3D cloud tops', on(d3Btn))
+                        + item('radar', '◈', 'US radar', on(radarBtn))
+                        + item('measure', '↔', 'Measure distance', on(measBtn))
+                        + item('mw', '◉', 'Microwave', on(mwTopBtn))
+                        + item('mwopts', '▾', 'Microwave options…', null)
+                        + '<div class="ir-more-sep"></div>'
+                        + item('png', '⬇', 'Save image (PNG)', null)
+                        + item('gif', '◉', 'Save animation (GIF)', null);
+                }
+                function _closeMoreMenu() {
+                    moreMenu.style.display = 'none';
+                    moreBtn.setAttribute('aria-expanded', 'false');
+                    moreBtn.classList.remove('active');
+                }
+                moreBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    if (moreMenu.style.display !== 'none') { _closeMoreMenu(); return; }
+                    moreMenu.innerHTML = _moreItems();
+                    moreMenu.style.display = 'block';
+                    moreBtn.setAttribute('aria-expanded', 'true');
+                    moreBtn.classList.add('active');
+                    setTimeout(function () {
+                        document.addEventListener('click', function onAway(ev) {
+                            if (!moreMenu.contains(ev.target) && !moreBtn.contains(ev.target)) _closeMoreMenu();
+                            document.removeEventListener('click', onAway, true);
+                        }, true);
+                    }, 0);
+                });
+                moreMenu.addEventListener('click', function (e) {
+                    var it = e.target.closest ? e.target.closest('.ir-export-menu-item') : null;
+                    if (!it) return;
+                    e.stopPropagation();
+                    _closeMoreMenu();
+                    var act = it.getAttribute('data-act');
+                    if (act === 'png') _exportMapPng();
+                    else if (act === 'gif') _exportMapGif();
+                    else ({ '3d': d3Btn, radar: radarBtn, measure: measBtn, mw: mwTopBtn, mwopts: mwExpandBtn })[act].click();
+                });
+
+                // Dot on [⋯] while any tool it hides is on — on a phone the
+                // hidden buttons can't show their own .active state. Observed
+                // (not polled): the toggles flip .active from many code paths.
+                setTimeout(function () {
+                    var watched = [d3Btn, radarBtn, measBtn, mwTopBtn].filter(Boolean);
+                    function sync() {
+                        moreBtn.classList.toggle('has-active', watched.some(function (b) {
+                            return b.classList.contains('active');
+                        }));
+                    }
+                    if (typeof MutationObserver !== 'undefined') {
+                        var mo = new MutationObserver(sync);
+                        watched.forEach(function (b) { mo.observe(b, { attributes: true, attributeFilter: ['class'] }); });
+                    }
+                    sync();
+                }, 0);
+
                 // ── Compact IR/GeoColor mode switch (segmented) ─────
                 var seg = L.DomUtil.create('div', 'ir-mode-segment', wrap);
                 seg.id = 'ir-mode-segment';
@@ -24184,7 +24266,7 @@
             '<span class="rt-gen-toast-dot"></span>'
             + '<span class="rt-gen-toast-body">'
             + '<b>' + lead + nDisturbances + ' genesis cluster' + plural + '</b>'
-            + '<span class="rt-gen-toast-sub">Google DeepMind ensemble · clusters of member genesis points, not observed disturbances · tap a marker for the ' + _genesisVariantMemberTag() + ' detail · <a href="#genesis-methods" style="color:inherit; text-decoration:underline dotted;" onclick="event.stopPropagation(); window._irOpenGenesisMethods(); return false;">methods</a></span>'
+            + '<span class="rt-gen-toast-sub">DeepMind ' + _genesisVariantMemberTag() + ' ensemble guidance, not observed disturbances · tap a marker for details · <a href="#genesis-methods" class="ir-lp-link" onclick="event.stopPropagation(); window._irOpenGenesisMethods(); return false;">methods</a></span>'
             + '</span>'
             + '<span class="rt-gen-toast-close" aria-label="Dismiss">×</span>';
 
@@ -26686,7 +26768,7 @@
         html += row({
             action: 'genesis-raw',
             label: '<b>Raw ensemble members</b>',
-            substatus: 'Every member\'s track · hover one to highlight it',
+            substatus: 'Every member\'s track · hover or tap one to highlight it',
             checked: !!_rtGenesisRawVisible,
         });
         if (_rtGenesisRawVisible && _genRawState) {
