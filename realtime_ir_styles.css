@@ -4133,9 +4133,9 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
    orange border to signal "this only affects the TC-ATLAS path". */
 .ir-global-tuner {
     margin: 2px 12px 8px 32px;
-    border: 1px solid rgba(249, 115, 22, 0.22);
+    border: 1px solid rgba(244, 115, 33, 0.22);
     border-radius: 8px;
-    background: rgba(249, 115, 22, 0.05);
+    background: rgba(244, 115, 33, 0.05);
 }
 .ir-global-tuner[open] {
     padding: 0 12px 8px;
@@ -4154,7 +4154,7 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 .ir-tuner-summary::before {
     content: "▸";
     font-size: 0.7rem;
-    color: #f97316;
+    color: #F47321;
     margin-right: 6px;
     display: inline-block;
     transition: transform 0.12s;
@@ -4199,13 +4199,13 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     font-family: var(--font-mono);
     font-size: 0.7rem;
     font-weight: 700;
-    color: #f97316;
+    color: #F47321;
 }
 .ir-tuner-row input[type=range] {
     width: 100%;
     height: 4px;
     margin: 2px 0;
-    accent-color: #f97316;
+    accent-color: #F47321;
     cursor: pointer;
 }
 .ir-tuner-footer {
@@ -4215,7 +4215,7 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     gap: 8px;
     margin-top: 4px;
     padding-top: 6px;
-    border-top: 1px dashed rgba(249, 115, 22, 0.25);
+    border-top: 1px dashed rgba(244, 115, 33, 0.25);
 }
 .ir-tuner-status {
     font-size: 0.72rem;
@@ -4229,7 +4229,7 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     font-family: inherit;
     font-size: 0.66rem;
     padding: 3px 9px;
-    border: 1px solid rgba(249, 115, 22, 0.45);
+    border: 1px solid rgba(244, 115, 33, 0.45);
     background: transparent;
     color: #e2e8f0;  /* panel is dark in both themes */
     border-radius: 4px;
@@ -4237,11 +4237,11 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     transition: background 0.15s, border-color 0.15s;
 }
 .ir-tuner-reset:hover {
-    background: rgba(249, 115, 22, 0.18);
-    border-color: #f97316;
+    background: rgba(244, 115, 33, 0.18);
+    border-color: #F47321;
 }
 [data-theme="dark"] .ir-global-tuner {
-    background: rgba(249, 115, 22, 0.08);
+    background: rgba(244, 115, 33, 0.08);
 }
 [data-theme="dark"] .ir-tuner-row label { color: #e2e8f0; }
 [data-theme="dark"] .ir-tuner-status strong { color: #e2e8f0; }
@@ -4249,8 +4249,10 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 
 /* Segmented-control sub-rows under a layer toggle (Model / Wind risk /
    Ensemble / Method). One track per row, one chip per option; the active
-   chip lifts out of the track with an accent tint. Accent = cyan for
-   DeepMind-model rows, orange for cyclogenesis rows (data-accent). Chips
+   chip takes the same treatment as the map toolbar's .ir-global-toggle-btn
+   .active: UM green (dark-surface value #4a9b6e) by default, UM orange
+   #F47321 for cyclogenesis rows (data-accent="orange", = .active-orange).
+   The panel is dark in both themes, so dark-surface values are used. Chips
    keep their binding classes (.ir-global-*-chip); state is .is-on. */
 .ir-global-method-row {
     display: flex;
@@ -4267,7 +4269,7 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     flex: 0 0 58px;
     font-size: 0.64rem;
     font-weight: 500;
-    color: #94a3b8;
+    color: #8a93a3;   /* --text-faint (dark) */
 }
 .ir-seg-body {
     display: flex;
@@ -4277,18 +4279,20 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     min-width: 0;
 }
 .ir-seg {
-    --seg-accent: #00e5ff;
-    --seg-tint: rgba(0, 229, 255, 0.16);
+    --seg-accent: rgba(74, 155, 110, 0.65);   /* UM green */
+    --seg-tint: rgba(74, 155, 110, 0.28);
+    --seg-ink: #ffffff;
     display: inline-flex;
     gap: 2px;
     padding: 2px;
     border-radius: 7px;
-    background: rgba(255, 255, 255, 0.05);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    background: rgba(22, 27, 36, 0.92);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
 }
 .ir-seg[data-accent="orange"] {
-    --seg-accent: #fb923c;
-    --seg-tint: rgba(249, 115, 22, 0.18);
+    --seg-accent: rgba(244, 115, 33, 0.55);   /* UM orange */
+    --seg-tint: rgba(244, 115, 33, 0.22);
+    --seg-ink: #ffd2a8;
 }
 .ir-seg > button {
     -webkit-appearance: none;
@@ -4310,18 +4314,20 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     transition: background 0.15s, color 0.15s, box-shadow 0.15s;
 }
 .ir-seg > button:hover {
-    background: rgba(255, 255, 255, 0.07);
-    color: #f1f5f9;
+    background: rgba(74, 155, 110, 0.22);
+    color: #ffffff;
+}
+.ir-seg[data-accent="orange"] > button:not(.is-on):hover {
+    background: rgba(244, 115, 33, 0.18);
 }
 .ir-seg > button.is-on {
     background: var(--seg-tint);
-    color: var(--seg-accent);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--seg-accent) 45%, transparent),
-                0 1px 2px rgba(0, 0, 0, 0.35);
+    color: var(--seg-ink);
+    box-shadow: inset 0 0 0 1px var(--seg-accent), 0 1px 2px rgba(0, 0, 0, 0.35);
     cursor: default;
 }
 .ir-seg > button:focus-visible {
-    outline: 2px solid var(--seg-accent);
+    outline: 2px solid #4a9b6e;
     outline-offset: 1px;
 }
 .ir-seg > button svg { opacity: 0.75; }
@@ -4330,15 +4336,15 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: #fbbf24;
-    background: rgba(251, 191, 36, 0.12);
+    color: #ffd2a8;
+    background: rgba(244, 115, 33, 0.16);
     border-radius: 4px;
     padding: 2px 5px;
 }
 .ir-seg-hint {
     padding: 0 12px 4px 98px;     /* sits under the chips, past the caption */
     font-size: 0.6rem;
-    color: #64748b;
+    color: #8a93a3;   /* --text-faint (dark) */
 }
 @media (max-width: 768px) {
     .ir-seg > button { padding: 7px 10px; font-size: 0.7rem; }  /* touch targets */
