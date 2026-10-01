@@ -24436,6 +24436,7 @@
     window.toggleGenesisSpaghetti = toggleGenesisSpaghetti;
 
     function _clearGenesisRaw() {
+        _genRawGLClear();
         for (var i = 0; i < _rtGenesisRawLayers.length; i++) {
             if (map) map.removeLayer(_rtGenesisRawLayers[i]);
         }
@@ -24631,6 +24632,199 @@
         return hit;
     }
 
+    // ── Raw ensemble members on MapLibre directly ───────────────────
+    // One GeoJSON source + a handful of style layers instead of thousands of
+    // facade polylines, which buys what the facade can't express:
+    //   • a dark casing under every track so thin colored lines survive
+    //     bright cloud tops,
+    //   • zoom-scaled widths (hair-thin at basin scale, readable zoomed in),
+    //   • hover/tap highlight of ONE member (others dim) via a layer filter,
+    //   • a native heatmap "track density" view — the only legible way to
+    //     show ~2,700 members of the 1000-member ensemble at once.
+    // Layers go through map._glAdd (overlayPane z) so they stack like any
+    // other overlay and honor the export "imagery only" mode.
+    var _GENRAW_SRC = 'rt-genraw-src', _GENRAW_PTS = 'rt-genraw-pts';
+    var _GENRAW_LAYERS = ['rt-genraw-heat', 'rt-genraw-case', 'rt-genraw-line',
+        'rt-genraw-hit', 'rt-genraw-hl-case', 'rt-genraw-hl', 'rt-genraw-dot'];
+    // 'auto' = density for big ensembles, tracks for small; or forced.
+    var _rtGenesisRawMode = (function () {
+        try { return localStorage.getItem('tca_genraw_mode') || 'auto'; } catch (e) { return 'auto'; }
+    })();
+    var _genRawState = null;   // { items:[…], handlers:{…}, hl:-1, alpha, mode }
+    var _genRawPanelMode = null;
+
+    // Nominal ensemble size (50 / 64 / 1000) — NOT the member-track count,
+    // which is several times larger (one member can spin up several systems).
+    function _genRawEnsembleN() {
+        return _GENESIS_VARIANT_NOMINAL[_genesisVariantNorm(_genesisEnsembleVariant)] || 50;
+    }
+    function _genRawResolvedMode() {
+        if (_rtGenesisRawMode === 'tracks' || _rtGenesisRawMode === 'density') return _rtGenesisRawMode;
+        return _genRawEnsembleN() >= 500 ? 'density' : 'tracks';
+    }
+
+    function _genRawGLClear() {
+        var gl = map && map._gl;
+        if (!gl || !_genRawState) { _genRawState = null; return; }
+        var h = _genRawState.handlers;
+        try {
+            gl.off('mousemove', 'rt-genraw-hit', h.move);
+            gl.off('mouseleave', 'rt-genraw-hit', h.leave);
+            gl.off('click', 'rt-genraw-hit', h.click);
+        } catch (e) {}
+        _GENRAW_LAYERS.forEach(function (id) {
+            try { if (gl.getLayer(id)) gl.removeLayer(id); } catch (e) {}
+            if (map._glz) delete map._glz[id];
+        });
+        [_GENRAW_SRC, _GENRAW_PTS].forEach(function (id) {
+            try { if (gl.getSource(id)) gl.removeSource(id); } catch (e) {}
+        });
+        _genRawState = null;
+        _genRawPanelMode = null;
+    }
+
+    function _genRawHighlight(idx) {
+        var gl = map && map._gl, st = _genRawState;
+        if (!gl || !st || st.hl === idx) return;
+        st.hl = idx;
+        var f = ['all', ['!=', ['geometry-type'], 'Point'], ['==', ['get', 'i'], idx]];
+        try {
+            gl.setFilter('rt-genraw-hl-case', f);
+            gl.setFilter('rt-genraw-hl', f);
+            // Dim the field while one member is lifted out of it.
+            gl.setPaintProperty('rt-genraw-line', 'line-opacity', idx >= 0 ? st.alpha * 0.35 : st.alpha);
+            gl.setPaintProperty('rt-genraw-case', 'line-opacity', idx >= 0 ? st.caseAlpha * 0.35 : st.caseAlpha);
+        } catch (e) {}
+    }
+
+    // Re-render the Layers panel only when the resolved mode flips (its
+    // Tracks/Density chips + legend depend on it). Raw re-renders also fire
+    // on every clustering-tuner slider input; an unconditional panel
+    // re-render there would kill the slider drag.
+    function _updateGenesisRawLegend() {
+        var m = _genRawState ? _genRawState.mode : null;
+        if (m === _genRawPanelMode) return;
+        _genRawPanelMode = m;
+        var panel = document.getElementById('ir-layers-panel');
+        if (panel && panel.offsetParent !== null) _renderLayersPanel();
+    }
+
+    function _renderGenesisRawGL(items, trackLabelFor) {
+        var gl = map._gl;
+        var n = items.length;
+        var mode = _genRawResolvedMode();
+        var nEns = _genRawEnsembleN();
+        var feats = [], dots = [], heat = [];
+        for (var ii = 0; ii < n; ii++) {
+            var it = items[ii];
+            var color = _genesisCatStyle(it.peak).bold;
+            var latlngs = [];
+            for (var pj = 0; pj < it.pts.length; pj++) {
+                var p = it.pts[pj];
+                if (p.lat == null || p.lon == null) continue;
+                latlngs.push([p.lat, p.lon]);
+                if (mode === 'density') heat.push({ type: 'Feature', properties: {},
+                    geometry: { type: 'Point', coordinates: [((p.lon + 540) % 360) - 180, p.lat] } });
+            }
+            if (latlngs.length < 2) continue;
+            var segs = splitAtAntimeridian(latlngs);
+            var coords = [];
+            for (var si = 0; si < segs.length; si++) {
+                if (segs[si].length < 2) continue;
+                coords.push(segs[si].map(function (ll) { return [ll[1], ll[0]]; }));
+            }
+            if (!coords.length) continue;
+            feats.push({ type: 'Feature', properties: { i: ii, c: color },
+                geometry: { type: 'MultiLineString', coordinates: coords } });
+            if (it.first) dots.push({ type: 'Feature', properties: { i: ii, c: color },
+                geometry: { type: 'Point', coordinates: [((it.first.lon + 540) % 360) - 180, it.first.lat] } });
+        }
+        // Tracks: alpha falls with member count so the pile never saturates.
+        // In density mode the lines drop to a faint context layer.
+        var alpha = mode === 'density' ? 0.12
+            : Math.max(0.2, Math.min(0.75, 7 / Math.sqrt(Math.max(n, 1))));
+        var caseAlpha = mode === 'density' ? 0 : Math.min(0.35, alpha * 0.6);
+        var wMul = mode === 'density' ? 0.6 : (nEns < 500 ? 1 : 0.7);
+        var width = function (k) {
+            return ['interpolate', ['linear'], ['zoom'],
+                2, 0.9 * k * wMul, 5, 1.6 * k * wMul, 8, 2.6 * k * wMul];
+        };
+
+        gl.addSource(_GENRAW_SRC, { type: 'geojson', data: { type: 'FeatureCollection', features: feats.concat(dots) } });
+        if (mode === 'density') {
+            gl.addSource(_GENRAW_PTS, { type: 'geojson', data: { type: 'FeatureCollection', features: heat } });
+            // Weight normalized by member count so the ramp means the same
+            // thing for 50 and 1000 members: "fraction of members passing".
+            map._glAdd({ id: 'rt-genraw-heat', type: 'heatmap', source: _GENRAW_PTS,
+                paint: {
+                    'heatmap-weight': Math.min(1, 25 / nEns),
+                    'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 1, 0.6, 4, 1.1, 7, 2],
+                    'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 1, 7, 4, 16, 7, 34],
+                    'heatmap-opacity': 0.78,
+                    // Site palette: UM green (low) → amber → UM orange → red (high)
+                    'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'],
+                        0, 'rgba(74,155,110,0)', 0.08, 'rgba(74,155,110,0.35)',
+                        0.3, 'rgba(109,185,147,0.7)', 0.55, 'rgba(251,191,36,0.85)',
+                        0.8, 'rgba(244,115,33,0.92)', 1, 'rgba(220,38,38,0.95)']
+                } }, 400);
+        }
+        var lineOnly = ['!=', ['geometry-type'], 'Point'];   // older MapLibre reports Multi* as 'LineString'
+        map._glAdd({ id: 'rt-genraw-case', type: 'line', source: _GENRAW_SRC, filter: lineOnly,
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: { 'line-color': '#0a0e14', 'line-opacity': caseAlpha,
+                'line-width': ['interpolate', ['linear'], ['zoom'], 2, 2.2 * wMul, 5, 3 * wMul, 8, 4.4 * wMul] } }, 400);
+        map._glAdd({ id: 'rt-genraw-line', type: 'line', source: _GENRAW_SRC, filter: lineOnly,
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: { 'line-color': ['get', 'c'], 'line-opacity': alpha, 'line-width': width(1) } }, 400);
+        // Fat transparent band = hover/tap target (opacity-0 still hit-tests).
+        map._glAdd({ id: 'rt-genraw-hit', type: 'line', source: _GENRAW_SRC, filter: lineOnly,
+            paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 10 } }, 400);
+        var none = ['==', ['get', 'i'], -1];
+        map._glAdd({ id: 'rt-genraw-hl-case', type: 'line', source: _GENRAW_SRC, filter: none,
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: { 'line-color': '#ffffff', 'line-opacity': 0.9,
+                'line-width': ['interpolate', ['linear'], ['zoom'], 2, 4.5, 8, 7] } }, 400);
+        map._glAdd({ id: 'rt-genraw-hl', type: 'line', source: _GENRAW_SRC, filter: none,
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: { 'line-color': ['get', 'c'], 'line-opacity': 1,
+                'line-width': ['interpolate', ['linear'], ['zoom'], 2, 2.4, 8, 4] } }, 400);
+        map._glAdd({ id: 'rt-genraw-dot', type: 'circle', source: _GENRAW_SRC,
+            filter: ['==', ['geometry-type'], 'Point'],
+            paint: { 'circle-color': ['get', 'c'],
+                'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, nEns < 500 ? 2.4 : 1.6, 8, 5],
+                'circle-opacity': mode === 'density' ? 0.35 : 0.9,
+                'circle-stroke-color': '#0a0e14', 'circle-stroke-width': mode === 'density' ? 0 : 0.8 } }, 400);
+
+        var st = _genRawState = { items: items, hl: -1, alpha: alpha, caseAlpha: caseAlpha, mode: mode, n: n };
+        function pick(e) {
+            var f = e.features && e.features[0];
+            return f ? f.properties.i : -1;
+        }
+        st.handlers = {
+            move: function (e) {
+                gl.getCanvas().style.cursor = 'pointer';
+                _genRawHighlight(pick(e));
+            },
+            leave: function () {
+                gl.getCanvas().style.cursor = '';
+                _genRawHighlight(-1);
+            },
+            click: function (e) {
+                var idx = pick(e);
+                var it = st.items[idx];
+                if (!it) return;
+                _genRawHighlight(idx);
+                var initIso = (_rtGenesisData && _rtGenesisData.init_time) || null;
+                _openGenesisMemberPopup(L.latLng(e.lngLat.lat, e.lngLat.lng), it.key, it.pts,
+                    initIso, it.peak, trackLabelFor(it.trk));
+            }
+        };
+        gl.on('mousemove', 'rt-genraw-hit', st.handlers.move);
+        gl.on('mouseleave', 'rt-genraw-hit', st.handlers.leave);
+        gl.on('click', 'rt-genraw-hit', st.handlers.click);
+        _updateGenesisRawLegend();
+    }
+
     /** Render every ensemble member as: a small circle at its first-
      *  34kt point + its forecast track polyline. Independent of any
      *  clustering — gives the analyst the full ensemble distribution
@@ -24683,6 +24877,16 @@
         }
         items.sort(function (a, b) { return a.peak - b.peak; });
         var nMem = items.length;
+        if (map._gl && map._glAdd) {
+            map._whenStyle(function () {
+                _genRawGLClear();
+                _renderGenesisRawGL(items, function (trk) {
+                    return (trk.track_id && _genesisDisturbanceMeta[trk.track_id])
+                        ? _genesisDisturbanceMeta[trk.track_id].label : null;
+                });
+            });
+            return;
+        }
         var lineAlpha = Math.max(0.18, Math.min(0.6, 3.2 / Math.sqrt(Math.max(nMem, 1))));
         var lineWeight = nMem <= 150 ? 1.3 : nMem <= 600 ? 1.0 : 0.8;
         var dotRadius = nMem <= 150 ? 3 : 2.2;
@@ -26287,9 +26491,9 @@
         function _segRow(caption, chips, o) {
             o = o || {};
             return '<div class="ir-global-menu-row ir-global-method-row' + (o.dim ? ' is-dim' : '') + '">'
-                + '<span class="ir-seg-cap">' + caption + '</span>'
+                + '<span class="ir-seg-cap"' + (o.title ? ' title="' + _escAttr(o.title) + '"' : '') + '>' + caption + '</span>'
                 + '<span class="ir-seg-body"><span class="ir-seg" role="group" aria-label="' + _escAttr(caption) + '"'
-                + ' data-accent="' + (o.accent || 'cyan') + '">' + chips.join('') + '</span>'
+                + ' data-accent="' + (o.accent || 'green') + '">' + chips.join('') + '</span>'
                 + (o.note ? '<span class="ir-seg-note">' + o.note + '</span>' : '')
                 + '</span></div>';
         }
@@ -26301,78 +26505,78 @@
 
         // ── FORECAST ────────────────────────────────────────────────
         html += '<div class="ir-global-menu-section">Forecast</div>';
-        var wlMembers = _dmIsWn3() ? '64-member' : '50-member';
-        var wlStatus = _rtGlobalWLLoading ? 'Loading ' + wlMembers + ' tracks…' : '';
-        html += row({
-            action: 'wl',
-            label: '<b>DeepMind 10-day</b>',
-            substatus: 'WeatherLab ' + (_dmIsWn3() ? 'WeatherNext 3 ' : '') + wlMembers
-                + ' spaghetti for every active storm/invest' + (wlStatus ? ' — ' + wlStatus : ''),
-            checked: !!_rtGlobalWLVisible
-        });
-        // Model picker — FNV3 (operational-track WeatherLab model) vs the
-        // experimental WeatherNext 3. Shared with the storm-card WN3 pill.
+        // ONE model control for every DeepMind layer (10-day tracks, wind
+        // risk, cyclogenesis, storm cards). FNV3 vs the experimental
+        // WeatherNext 3; the FNV3 ensemble size (1000 / 50) is a genesis-only
+        // detail and lives under that row. Same state as the bottom-bar
+        // 1000 / 50 / WN3 quick picker — either one drives the other.
         var _wn3 = _dmIsWn3();
         html += _segRow('Model', [
             '<button type="button" class="ir-global-genvariant-chip ir-global-dmmodel-chip' + (!_wn3 ? ' is-on' : '')
-                + '" data-dmmodel="fnv3" aria-pressed="' + !_wn3 + '">FNV3</button>',
+                + '" data-dmmodel="fnv3" aria-pressed="' + !_wn3 + '"'
+                + ' title="DeepMind FNV3 (WeatherLab) — 50-member tracks; 1000- or 50-member cyclogenesis">FNV3</button>',
             '<button type="button" class="ir-global-genvariant-chip ir-global-dmmodel-chip' + (_wn3 ? ' is-on' : '')
                 + '" data-dmmodel="wnv3" aria-pressed="' + _wn3 + '"'
-                + ' title="WeatherNext 3 cyclone model — experimental, 64 members, not yet operational">WN3</button>'
-        ], { accent: 'cyan', dim: !_rtGlobalWLVisible, note: _wn3 ? 'experimental' : '' });
+                + ' title="WeatherNext 3 cyclone model — 64 members, experimental, not yet operational">WN3</button>'
+        ], { note: _wn3 ? 'experimental' : '',
+             title: 'DeepMind model for every layer below and the storm cards' });
+        var wlMembers = _wn3 ? '64' : '50';
+        html += row({
+            action: 'wl',
+            label: '<b>DeepMind 10-day</b>',
+            substatus: wlMembers + '-member tracks for every active storm & invest'
+                + (_rtGlobalWLLoading ? ' · loading…' : ''),
+            checked: !!_rtGlobalWLVisible
+        });
         // Basin-wide wind-risk layer (P ≥34/50/64 kt within N h from every
         // active system's ensemble) — rendered + bound by realtime_ir_dm.js.
         if (window.RTDM && window.RTDM.globalRiskRowHtml) html += window.RTDM.globalRiskRowHtml();
         var genStatus = '';
-        if (_rtGenesisLoading) genStatus = 'Loading members…';
+        if (_rtGenesisLoading) genStatus = 'loading…';
         else if (_rtGenesisData) {
             var nt = _rtGenesisData.n_tracks || 0;
             var nd = _genesisDisturbanceCount();
-            if (nt === 0) genStatus = 'no genesis predicted in 15 days';
+            if (nt === 0) genStatus = 'no genesis in 15 days';
             else if (nd != null && nd > 0) {
-                genStatus = nd + ' genesis cluster' + (nd === 1 ? '' : 's');
+                genStatus = nd + ' cluster' + (nd === 1 ? '' : 's');
             } else genStatus = nt + ' track' + (nt === 1 ? '' : 's');
         }
+        var _nfam = ((_rtGenesisClusters && _rtGenesisClusters.families) || []).length;
         html += row({
             action: 'genesis',
             label: '<b>Cyclogenesis clusters</b>',
-            // The methods link must not toggle the layer row it sits in.
-            // Family count is stated even when zero — otherwise a cycle
-            // with no linked families looks like the feature vanished.
-            substatus: _genesisVariantModelLabel() + ' · ≥5% reach TS (≥34 kt)'
-                + (genStatus ? ' — ' + genStatus : '')
-                + (function () {
-                    var nf = ((_rtGenesisClusters
-                               && _rtGenesisClusters.families) || []).length;
-                    return ' · ' + (nf ? nf + ' wave famil'
-                        + (nf === 1 ? 'y' : 'ies') : 'no wave families');
-                })()
-                + ' · <a href="#genesis-methods" style="color:inherit; '
-                + 'text-decoration:underline dotted;" '
+            // The definition lives in the tooltip; the line under the
+            // title is just counts. Family count is stated even when zero —
+            // otherwise a cycle with no linked families looks like the
+            // feature vanished. The methods link must not toggle the row.
+            tooltip: 'Clusters of ' + _genesisVariantModelLabel() + ' member genesis points where '
+                + '≥5% of members reach tropical-storm strength (≥34 kt). '
+                + 'Model guidance, not observed disturbances.',
+            substatus: (genStatus ? genStatus + ' · ' : '')
+                + (_nfam ? _nfam + ' wave famil' + (_nfam === 1 ? 'y' : 'ies') : 'no wave families')
+                + ' · <a href="#genesis-methods" class="ir-lp-link" '
                 + 'onclick="event.stopPropagation(); '
                 + 'window._irOpenGenesisMethods(); return false;">methods</a>',
             checked: !!_rtGenesisVisible
         });
-        // Ensemble-size picker — 1000-member (richer stats, publishes later)
-        // vs 50-member (publishes earlier, a fresher-but-coarser backup).
-        // Defaults to whatever gives the freshest cycle; toggling to a
-        // variant the current cycle lacks jumps to the freshest run that
-        // has it. Mirrors the Method chip row styling.
-        // One chip per variant (1000 / 50 / WN3). Picking WN3 here also flips
-        // the sitewide DeepMind model (and vice versa) so the storm card,
-        // 10-day layer, and genesis markers never disagree on the model.
-        // A clock glyph marks a variant not published for the freshest cycle.
+        // FNV3 ensemble size — 1000-member (richer stats, publishes later)
+        // vs 50-member (publishes earlier, coarser). Hidden under WN3, which
+        // has one 64-member ensemble. A clock glyph marks a size not yet
+        // published for the freshest cycle; picking it jumps to the freshest
+        // run that has it.
         var _freshest = _genesisCycleList[0];
         var _curVar = _genesisVariantNorm(_genesisEnsembleVariant);
-        html += _segRow('Ensemble', _GENESIS_VARIANT_ORDER.map(function (v) {
-            var on = (v === _curVar);
-            var gap = (_freshest && !_genesisCycleHasVariant(_freshest, v));
-            return '<button type="button" class="ir-global-genvariant-chip' + (on ? ' is-on' : '')
-                + '" data-genvariant="' + v + '" aria-pressed="' + on + '"'
-                + ' title="' + _escAttr(_GENESIS_VARIANTS[v].title
-                    + (gap ? ' (not yet published for the latest cycle)' : '')) + '">'
-                + _GENESIS_VARIANTS[v].chip + (gap ? _GENESIS_PENDING_SVG : '') + '</button>';
-        }), { accent: 'orange', dim: !_rtGenesisVisible, note: _GENESIS_VARIANTS[_curVar].note });
+        if (_curVar !== 'wnv3') {
+            html += _segRow('Ensemble', ['large', 'small'].map(function (v) {
+                var on = (v === _curVar);
+                var gap = (_freshest && !_genesisCycleHasVariant(_freshest, v));
+                return '<button type="button" class="ir-global-genvariant-chip' + (on ? ' is-on' : '')
+                    + '" data-genvariant="' + v + '" aria-pressed="' + on + '"'
+                    + ' title="' + _escAttr(_GENESIS_VARIANTS[v].title
+                        + (gap ? ' (not yet published for the latest cycle)' : '')) + '">'
+                    + _GENESIS_VARIANTS[v].chip + (gap ? _GENESIS_PENDING_SVG : '') + '</button>';
+            }), { accent: 'orange', dim: !_rtGenesisVisible, note: _GENESIS_VARIANTS[_curVar].note });
+        }
         // Clustering-method picker — two radio-style chips inline so
         // a forecaster can A/B DeepMind's own track_id grouping vs
         // our DBSCAN-style spatial clustering on member first-genesis
@@ -26468,7 +26672,7 @@
         html += row({
             action: 'genesis-spaghetti',
             label: 'Member spaghetti',
-            substatus: 'Per-member track polylines, colored by parent cluster',
+            substatus: 'Member tracks, colored by cluster',
             checked: !!_rtGenesisSpaghettiVisible,
             disabled: !_rtGenesisVisible
         });
@@ -26482,9 +26686,26 @@
         html += row({
             action: 'genesis-raw',
             label: '<b>Raw ensemble members</b>',
-            substatus: 'Every member: genesis dot + forecast track (no clustering)',
+            substatus: 'Every member\'s track · hover one to highlight it',
             checked: !!_rtGenesisRawVisible,
         });
+        if (_rtGenesisRawVisible && _genRawState) {
+            var rawMode = _genRawState.mode;
+            html += _segRow('Show', [
+                '<button type="button" class="ir-genraw-chip' + (rawMode === 'tracks' ? ' is-on' : '')
+                    + '" data-genraw="tracks" aria-pressed="' + (rawMode === 'tracks') + '"'
+                    + ' title="Every member as a line, colored by its peak intensity">Tracks</button>',
+                '<button type="button" class="ir-genraw-chip' + (rawMode === 'density' ? ' is-on' : '')
+                    + '" data-genraw="density" aria-pressed="' + (rawMode === 'density') + '"'
+                    + ' title="Where member tracks pile up — shaded by how many members pass through">Density</button>'
+            ], { accent: 'orange' });
+            if (rawMode === 'density') {
+                html += '<div class="ir-lp-legend">'
+                    + '<div class="ir-lp-legend-bar ir-genraw-ramp"></div>'
+                    + '<div class="ir-lp-legend-ticks"><span>Few members</span><span>Most members</span></div>'
+                    + '</div>';
+            }
+        }
         for (var gi = 0; gi < genesisProbLayers.length; gi++) {
             var GL = genesisProbLayers[gi];
             html += row({
@@ -26697,6 +26918,20 @@
                 });
             })(gvChips[gv]);
         }
+
+        // Raw-members Tracks / Density view.
+        Array.prototype.forEach.call(content.querySelectorAll('.ir-genraw-chip'), function (chipEl) {
+            chipEl.addEventListener('click', function (ev) {
+                ev.preventDefault();
+                ev.stopPropagation();
+                var m = chipEl.getAttribute('data-genraw');
+                if (!m || (_genRawState && _genRawState.mode === m)) return;
+                _rtGenesisRawMode = m;
+                try { localStorage.setItem('tca_genraw_mode', m); } catch (e) {}
+                _ga('rt_genesis_raw_mode', { mode: m });
+                _renderGenesisRaw();
+            });
+        });
 
         // TC-ATLAS tuner sliders — live re-clustering on every input.
         // Mutates the module-scope tunables, re-renders the disturbance

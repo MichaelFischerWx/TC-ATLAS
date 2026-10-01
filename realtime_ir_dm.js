@@ -826,7 +826,7 @@
         function seg(caption, chips, note, dim, capTitle) {
             return '<div class="ir-global-menu-row ir-global-method-row' + (dim ? ' is-dim' : '') + '">'
                 + '<span class="ir-seg-cap"' + (capTitle ? ' title="' + esc(capTitle) + '"' : '') + '>' + caption + '</span>'
-                + '<span class="ir-seg-body"><span class="ir-seg" role="group" aria-label="' + esc(caption) + '" data-accent="cyan">' + chips + '</span>'
+                + '<span class="ir-seg-body"><span class="ir-seg" role="group" aria-label="' + esc(caption) + '" data-accent="green">' + chips + '</span>'
                 + (note ? '<span class="ir-seg-note">' + note + '</span>' : '') + '</span></div>';
         }
         var h = seg('Wind risk',
@@ -838,11 +838,10 @@
         if (G.thresh) {
             h += seg('Within',
                 chip('72 h', G.horizon === 72, 'data-dmhorizon="72"') + chip('120 h', G.horizon === 120, 'data-dmhorizon="120"') + chip('168 h', G.horizon === 168, 'data-dmhorizon="168"'))
-                + '<div class="ir-seg-hint">Click the map for a point readout</div>'
-                + '<div class="ir-global-menu-row" style="display:block; padding:2px 12px 6px 32px; cursor:default;">'
-                + '<div class="rt-dm-legend-bar" style="background:' + legendCSS() + '; height:6px; max-width:260px;"></div>'
-                + '<div class="rt-dm-legend-ticks" style="max-width:260px;"><span>5%</span><span>20%</span><span>40%</span><span>60%</span><span>80%</span><span>100%</span></div>'
-                + '<div style="font-size:0.58rem; opacity:0.65; margin-top:2px;">Experimental research guidance, not a forecast — official wind-speed probabilities: NHC / CPHC / JTWC.</div></div>';
+                + '<div class="ir-lp-legend">'
+                + '<div class="ir-lp-legend-bar" style="background:' + legendCSS() + ';"></div>'
+                + '<div class="ir-lp-legend-ticks"><span>5%</span><span>20%</span><span>40%</span><span>60%</span><span>80%</span><span>100%</span></div>'
+                + '<div class="ir-lp-legend-note">Click the map for a point readout · experimental — official probabilities: NHC / CPHC / JTWC</div></div>';
         }
         return h;
     }

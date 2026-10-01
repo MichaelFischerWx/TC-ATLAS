@@ -2893,38 +2893,61 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     border-radius: 3px;
 }
 
-/* ── Dropdown menus (Genesis / Winds / Env Analysis) ────────── */
+/* ── Dropdown menus / unified Layers panel ─────────────────────
+   One set of panel tokens, taken from the site's DARK theme values in
+   tc_radar_styles.css (--text, --text-muted, --text-faint, --um-green,
+   --um-orange). The panel floats over imagery and is dark in BOTH site
+   themes, so it pins the dark values instead of following the theme.
+   Roles:
+     green  = selected / on   (checkbox, active chip, slider)
+     orange = cyclogenesis accent + "N on" counts (= the Layers badge)
+   Every panel rule below should use these, not ad-hoc slate hexes. */
 .ir-global-menu {
+    --lp-text: #e6e8eb;
+    --lp-muted: #9ca3af;
+    --lp-faint: #8a93a3;
+    --lp-line: rgba(255, 255, 255, 0.08);
+    --lp-line-strong: rgba(255, 255, 255, 0.12);
+    --lp-surface: #161b24;
+    --lp-hover: rgba(74, 155, 110, 0.10);
+    --lp-green: #4a9b6e;
+    --lp-green-light: #6db993;
+    --lp-orange: #F47321;
+    --lp-orange-ink: #ffd2a8;
+    --lp-orange-tint: rgba(244, 115, 33, 0.18);
     background: rgba(22, 27, 36, 0.95);
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 6px;
+    border: 1px solid var(--lp-line-strong);
+    border-radius: 8px;
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.30);
     overflow: hidden;
+    color: var(--lp-text);
 }
 .ir-global-menu-valid {
-    padding: 6px 10px;
+    padding: 7px 10px;
     font-size: 0.6rem;
-    color: #94a3b8;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--lp-faint);
+    border-bottom: 1px solid var(--lp-line);
 }
 .ir-global-menu-valid b {
-    color: #e2e8f0;
+    color: var(--lp-text);
     font-weight: 600;
 }
+/* Section title (Forecast / Analysis / Wind barbs) — the ONLY uppercase
+   label in the panel. Groups inside a section are sentence-case rows. */
 .ir-global-menu-section {
-    padding: 6px 10px 2px;
+    padding: 8px 10px 3px;
     font-size: 0.6rem;
-    color: #cbd5e1;
+    color: var(--lp-faint);
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
     font-weight: 600;
 }
 .ir-global-menu-section.with-divider {
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid var(--lp-line);
     margin-top: 4px;
-    padding-top: 6px;
+    padding-top: 8px;
 }
 .ir-global-menu-row {
     display: flex;
@@ -2933,23 +2956,23 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     padding: 4px 10px;
     cursor: pointer;
     font-size: 0.72rem;
-    color: #e2e8f0;
+    color: var(--lp-text);
     line-height: 1.25;
     transition: background 0.12s;
 }
 .ir-global-menu-row:hover {
-    background: rgba(74, 155, 110, 0.10);
+    background: var(--lp-hover);
 }
 .ir-global-menu-row input[type="checkbox"] {
     cursor: pointer;
-    accent-color: #4a9b6e;  /* UM green (dark-theme value reads on dark surface) */
+    accent-color: var(--lp-green);
 }
 .ir-global-menu-row .label {
     flex: 1;
 }
 .ir-global-menu-row .units {
     font-size: 0.6rem;
-    color: #94a3b8;
+    color: var(--lp-faint);
 }
 /* Color-ramp preview chip on an analysis-layer row — shows what the layer's
    scale looks like before you turn it on. Deliberately a thin, label-less
@@ -2978,74 +3001,104 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
 }
 .ir-global-menu-row .substatus {
     font-size: 0.62rem;
-    color: #94a3b8;
+    color: var(--lp-muted);
     display: block;
     margin-top: 1px;
 }
+/* Inline text link inside a row (e.g. "methods") */
+.ir-lp-link {
+    color: inherit;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+}
+.ir-lp-link:hover { color: var(--lp-green-light); }
 /* Small "ⓘ" hint that surfaces the row's full description via the
-   native title-attribute tooltip on hover. Used for subseasonal-forcing
-   layers whose abbreviated name (e.g. "MRG / TD-type") needs unpacking. */
+   native title-attribute tooltip on hover. */
 .ir-global-menu-row .ir-row-info {
     font-size: 0.72rem;
-    color: #94a3b8;
+    color: var(--lp-faint);
     opacity: 0.55;
     margin-left: 4px;
     flex: 0 0 auto;
-    transition: opacity 0.12s;
+    transition: opacity 0.12s, color 0.12s;
 }
 .ir-global-menu-row:hover .ir-row-info {
     opacity: 1;
-    color: var(--blue, #2e7dff);
+    color: var(--lp-green-light);
 }
 .ir-global-menu-empty {
     padding: 8px 10px;
     font-size: 0.7rem;
-    color: #94a3b8;
+    color: var(--lp-faint);
 }
 .ir-global-menu-help {
     padding: 6px 10px 8px;
     font-size: 0.55rem;
-    color: #94a3b8;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--lp-faint);
+    border-top: 1px solid var(--lp-line);
     margin-top: 6px;
     line-height: 1.4;
 }
 .ir-global-menu-opacity-wrap {
-    padding: 6px 10px 8px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 8px 10px 10px;
+    border-top: 1px solid var(--lp-line);
     margin-top: 4px;
 }
 .ir-global-menu-opacity {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 0.65rem;
-    color: #cbd5e1;
+    gap: 8px;
+    font-size: 0.64rem;
+    color: var(--lp-faint);
 }
 .ir-global-menu-opacity input[type="range"] {
     flex: 1;
     height: 14px;
-    accent-color: #4a9b6e;  /* UM green slider thumb/fill */
+    accent-color: var(--lp-green);
 }
 .ir-global-menu-opacity .pct {
     width: 30px;
     text-align: right;
-    color: #e2e8f0;
+    color: var(--lp-text);
     font-variant-numeric: tabular-nums;
 }
-
-/* Sub-headers inside the unified Layers panel — for the Wind Shear /
-   Vorticity / Heights / Moisture & SST physical-category groups
-   sitting INSIDE the larger ANALYSIS section. Tighter, dimmer than
-   the top-level .ir-global-menu-section so the hierarchy reads
-   "section → subhead → row" without competing weights. */
+/* Sub-headers inside the panel (legacy grouping, same tier as a group). */
 .ir-global-menu-subhead {
-    padding: 4px 10px 1px;
-    font-size: 0.58rem;
-    color: #94a3b8;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    padding: 6px 10px 2px;
+    font-size: 0.66rem;
+    color: var(--lp-muted);
     font-weight: 600;
+}
+
+/* Shared inline legend (wind-risk %, raw-member density) — sits under its
+   control row, indented to the chips. */
+.ir-lp-legend {
+    padding: 0 12px 8px 98px;
+}
+.ir-lp-legend-bar {
+    height: 6px;
+    border-radius: 3px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.ir-lp-legend-ticks {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 2px;
+    font-size: 0.55rem;
+    color: var(--lp-faint);
+    font-variant-numeric: tabular-nums;
+}
+.ir-lp-legend-note {
+    margin-top: 3px;
+    font-size: 0.56rem;
+    line-height: 1.35;
+    color: var(--lp-faint);
+}
+/* Raw-member density ramp — mirrors the heatmap-color stops in
+   realtime_ir.js _renderGenesisRawGL. */
+.ir-genraw-ramp {
+    background: linear-gradient(90deg, rgba(74,155,110,0.35), rgba(109,185,147,0.7) 28%,
+        rgba(251,191,36,0.85) 55%, rgba(244,115,33,0.92) 80%, rgba(220,38,38,0.95));
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -3479,8 +3532,21 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     .ir-layers-panel .ir-global-menu-row .units {
         font-size: 0.78rem;
     }
+    .ir-layers-panel .ir-global-menu-row .substatus {
+        font-size: 0.74rem;
+    }
+    /* Control sub-rows keep their indent under the row title (the generic
+       row padding above would otherwise flatten them to the edge). */
+    .ir-layers-panel .ir-global-method-row {
+        padding: 2px 14px 10px 35px;
+    }
+    .ir-layers-panel .ir-seg-cap { flex-basis: 66px; font-size: 0.74rem; }
+    .ir-layers-panel .ir-seg > button { padding: 8px 11px; font-size: 0.78rem; }  /* touch targets */
+    .ir-layers-panel .ir-lp-legend { padding-left: 109px; padding-right: 14px; }
+    .ir-layers-panel .ir-global-tuner { margin-left: 35px; margin-right: 14px; }
+    .ir-layers-panel .ir-tuner-summary-label { font-size: 0.8rem; }
     .ir-layers-panel .ir-global-menu-section {
-        font-size: 0.82rem;
+        font-size: 0.7rem;
         padding-left: 14px;
         padding-right: 14px;
         padding-top: 10px;
@@ -4126,36 +4192,36 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     transform: scale(1.05);
 }
 
-/* Live TC-ATLAS clustering tuner — appears under the method picker
-   when TC-ATLAS is the active method. Four sliders that mutate the
-   tunables in real time and re-render the disturbance markers on
-   every input event. Stays out of the way visually with a faint
-   orange border to signal "this only affects the TC-ATLAS path". */
+/* Live TC-ATLAS clustering tuner — a disclosure under the Method row
+   when TC-ATLAS is the active method. Sliders mutate the tunables and
+   re-cluster on every input. Cyclogenesis-orange accents mark it as part
+   of that layer; everything else uses the shared panel tokens. */
 .ir-global-tuner {
     margin: 2px 12px 8px 32px;
-    border: 1px solid rgba(244, 115, 33, 0.22);
+    border: 1px solid var(--lp-line-strong);
     border-radius: 8px;
-    background: rgba(244, 115, 33, 0.05);
+    background: var(--lp-surface);
 }
 .ir-global-tuner[open] {
-    padding: 0 12px 8px;
+    padding: 0 12px 10px;
 }
 .ir-tuner-summary {
     list-style: none;
     cursor: pointer;
-    padding: 7px 12px;
+    padding: 7px 10px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
     user-select: none;
 }
+.ir-global-tuner[open] .ir-tuner-summary { padding-left: 0; padding-right: 0; }
 .ir-tuner-summary::-webkit-details-marker { display: none; }
 .ir-tuner-summary::before {
-    content: "▸";
+    content: "\25B8";
     font-size: 0.7rem;
-    color: #F47321;
-    margin-right: 6px;
+    color: var(--lp-faint);
+    margin-right: 2px;
     display: inline-block;
     transition: transform 0.12s;
 }
@@ -4164,15 +4230,11 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 }
 .ir-tuner-summary-label {
     flex: 1;
-    font-size: 0.72rem;
+    font-size: 0.68rem;
     font-weight: 600;
-    color: #e2e8f0;  /* panel is dark in both themes */
-    text-transform: none;
-    letter-spacing: 0;
+    color: var(--lp-text);
 }
 .ir-tuner-summary .ir-tuner-status {
-    /* Status badge tucks into the summary row when collapsed so the
-       analyst still sees the cluster count without expanding. */
     font-variant-numeric: tabular-nums;
 }
 .ir-global-tuner[open] > :not(summary) {
@@ -4181,7 +4243,6 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 .ir-global-tuner[open] .ir-tuner-row + .ir-tuner-row {
     margin-top: 8px;
 }
-[data-theme="dark"] .ir-tuner-summary-label { color: #e2e8f0; }
 .ir-tuner-row {
     display: flex;
     flex-direction: column;
@@ -4191,69 +4252,64 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    font-size: 0.7rem;
-    color: #e2e8f0;  /* panel is dark in both themes */
-    font-weight: 600;
+    font-size: 0.64rem;
+    color: var(--lp-muted);
+    font-weight: 500;
 }
 .ir-tuner-val {
     font-family: var(--font-mono);
-    font-size: 0.7rem;
-    font-weight: 700;
-    color: #F47321;
+    font-size: 0.64rem;
+    font-weight: 600;
+    color: var(--lp-orange-ink);
 }
 .ir-tuner-row input[type=range] {
     width: 100%;
     height: 4px;
     margin: 2px 0;
-    accent-color: #F47321;
+    accent-color: var(--lp-orange);
     cursor: pointer;
 }
 .ir-tuner-footer {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 8px;
-    margin-top: 4px;
-    padding-top: 6px;
-    border-top: 1px dashed rgba(244, 115, 33, 0.25);
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--lp-line);
 }
 .ir-tuner-status {
-    font-size: 0.72rem;
-    color: var(--text-dim, #64748b);
+    font-size: 0.64rem;
+    color: var(--lp-faint);
 }
 .ir-tuner-status strong {
-    color: #e2e8f0;  /* panel is dark in both themes */
+    color: var(--lp-text);
     font-variant-numeric: tabular-nums;
 }
 .ir-tuner-reset {
     font-family: inherit;
-    font-size: 0.66rem;
-    padding: 3px 9px;
-    border: 1px solid rgba(244, 115, 33, 0.45);
+    font-size: 0.64rem;
+    font-weight: 600;
+    padding: 4px 10px;
+    border: 0;
+    box-shadow: inset 0 0 0 1px var(--lp-line-strong);
     background: transparent;
-    color: #e2e8f0;  /* panel is dark in both themes */
-    border-radius: 4px;
+    color: var(--lp-muted);
+    border-radius: 5px;
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background 0.15s, color 0.15s;
 }
 .ir-tuner-reset:hover {
-    background: rgba(244, 115, 33, 0.18);
-    border-color: #F47321;
+    background: var(--lp-hover);
+    color: var(--lp-text);
 }
-[data-theme="dark"] .ir-global-tuner {
-    background: rgba(244, 115, 33, 0.08);
-}
-[data-theme="dark"] .ir-tuner-row label { color: #e2e8f0; }
-[data-theme="dark"] .ir-tuner-status strong { color: #e2e8f0; }
-[data-theme="dark"] .ir-tuner-reset { color: #e2e8f0; }
 
 /* Segmented-control sub-rows under a layer toggle (Model / Wind risk /
-   Ensemble / Method). One track per row, one chip per option; the active
-   chip takes the same treatment as the map toolbar's .ir-global-toggle-btn
-   .active: UM green (dark-surface value #4a9b6e) by default, UM orange
-   #F47321 for cyclogenesis rows (data-accent="orange", = .active-orange).
-   The panel is dark in both themes, so dark-surface values are used. Chips
-   keep their binding classes (.ir-global-*-chip); state is .is-on. */
+   Ensemble / Method / Show). One track per row, one chip per option. The
+   active chip gets the map toolbar's .ir-global-toggle-btn.active look
+   (green tint, white text); cyclogenesis rows (data-accent="orange") get
+   .active-orange. Chips keep their binding classes (.ir-global-*-chip);
+   state is .is-on. Colors come from the .ir-global-menu tokens. */
 .ir-global-method-row {
     display: flex;
     align-items: center;
@@ -4269,7 +4325,7 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     flex: 0 0 58px;
     font-size: 0.64rem;
     font-weight: 500;
-    color: #8a93a3;   /* --text-faint (dark) */
+    color: var(--lp-faint);
 }
 .ir-seg-body {
     display: flex;
@@ -4279,20 +4335,22 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     min-width: 0;
 }
 .ir-seg {
-    --seg-accent: rgba(74, 155, 110, 0.65);   /* UM green */
+    --seg-accent: rgba(74, 155, 110, 0.65);
     --seg-tint: rgba(74, 155, 110, 0.28);
+    --seg-hover: rgba(74, 155, 110, 0.18);
     --seg-ink: #ffffff;
     display: inline-flex;
     gap: 2px;
     padding: 2px;
     border-radius: 7px;
-    background: rgba(22, 27, 36, 0.92);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+    background: var(--lp-surface);
+    box-shadow: inset 0 0 0 1px var(--lp-line-strong);
 }
 .ir-seg[data-accent="orange"] {
-    --seg-accent: rgba(244, 115, 33, 0.55);   /* UM orange */
+    --seg-accent: rgba(244, 115, 33, 0.55);
     --seg-tint: rgba(244, 115, 33, 0.22);
-    --seg-ink: #ffd2a8;
+    --seg-hover: rgba(244, 115, 33, 0.16);
+    --seg-ink: var(--lp-orange-ink);
 }
 .ir-seg > button {
     -webkit-appearance: none;
@@ -4308,17 +4366,14 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     border: 0;
     border-radius: 5px;
     background: transparent;
-    color: #cbd5e1;
+    color: var(--lp-muted);
     cursor: pointer;
     white-space: nowrap;
     transition: background 0.15s, color 0.15s, box-shadow 0.15s;
 }
 .ir-seg > button:hover {
-    background: rgba(74, 155, 110, 0.22);
-    color: #ffffff;
-}
-.ir-seg[data-accent="orange"] > button:not(.is-on):hover {
-    background: rgba(244, 115, 33, 0.18);
+    background: var(--seg-hover);
+    color: var(--lp-text);
 }
 .ir-seg > button.is-on {
     background: var(--seg-tint);
@@ -4327,7 +4382,7 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     cursor: default;
 }
 .ir-seg > button:focus-visible {
-    outline: 2px solid #4a9b6e;
+    outline: 2px solid var(--lp-green);
     outline-offset: 1px;
 }
 .ir-seg > button svg { opacity: 0.75; }
@@ -4336,18 +4391,10 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: #ffd2a8;
-    background: rgba(244, 115, 33, 0.16);
+    color: var(--lp-orange-ink);
+    background: var(--lp-orange-tint);
     border-radius: 4px;
     padding: 2px 5px;
-}
-.ir-seg-hint {
-    padding: 0 12px 4px 98px;     /* sits under the chips, past the caption */
-    font-size: 0.6rem;
-    color: #8a93a3;   /* --text-faint (dark) */
-}
-@media (max-width: 768px) {
-    .ir-seg > button { padding: 7px 10px; font-size: 0.7rem; }  /* touch targets */
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -7756,12 +7803,15 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     .ir-detail-title { flex: 1 1 auto; }
 }
 
-/* Layers panel — collapsible analysis groups + sticky section headers. */
+/* Layers panel — sticky section titles + collapsible analysis groups.
+   Hierarchy: SECTION (uppercase, faint) → Group (sentence-case row with a
+   chevron) → layer rows. "N on" counts use the same orange badge as the
+   Layers button so "how many are on" reads the same everywhere. */
 .ir-layers-panel .ir-global-menu-section.with-divider {
     position: sticky;
     top: 0;
     z-index: 2;
-    background: rgba(22, 27, 36, 0.97);
+    background: var(--lp-surface);
     display: flex;
     align-items: center;
     gap: 8px;
@@ -7769,14 +7819,15 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 .ir-lp-section-count,
 .ir-lp-group-count {
     margin-left: auto;
-    background: rgba(46, 125, 255, 0.22);
-    color: #93c5fd;
-    border-radius: 9px;
+    background: var(--lp-orange-tint);
+    color: var(--lp-orange-ink);
+    border-radius: 999px;
     padding: 1px 7px;
     font-size: 0.58rem;
     font-weight: 600;
     text-transform: none;
     letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
 }
 .ir-lp-group { border: none; margin: 0; padding: 0; }
 .ir-lp-group-head {
@@ -7785,36 +7836,35 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 10px 4px 8px;
-    font-size: 0.6rem;
+    padding: 5px 10px 5px 10px;
+    font-size: 0.7rem;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: #94a3b8;
+    color: var(--lp-muted);
     user-select: none;
     -webkit-user-select: none;
+    transition: background 0.12s, color 0.12s;
 }
 .ir-lp-group-head::-webkit-details-marker { display: none; }
 .ir-lp-group-head::before {
     content: '\25B8';
+    width: 13px;                  /* = checkbox column, so labels align */
     font-size: 0.7rem;
     line-height: 1;
-    opacity: 0.75;
+    color: var(--lp-faint);
     transition: transform 0.12s ease;
 }
 .ir-lp-group[open] > .ir-lp-group-head::before { transform: rotate(90deg); }
-.ir-lp-group-head:hover { color: #e2e8f0; background: rgba(255, 255, 255, 0.04); }
+.ir-lp-group-head:hover { color: var(--lp-text); background: var(--lp-hover); }
 .ir-lp-group-n {
     margin-left: auto;
-    color: #64748b;
+    color: var(--lp-faint);
     font-weight: 500;
-    text-transform: none;
-    letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
 }
-.ir-lp-group[open] > .ir-lp-group-head { color: #cbd5e1; }
+.ir-lp-group[open] > .ir-lp-group-head { color: var(--lp-text); }
 .ir-lp-group > .ir-global-menu-row { padding-left: 22px; }
 @media (max-width: 768px) {
-    .ir-layers-panel .ir-lp-group-head { padding-left: 14px; padding-right: 14px; font-size: 0.66rem; min-height: 34px; }
+    .ir-layers-panel .ir-lp-group-head { padding-left: 14px; padding-right: 14px; font-size: 0.82rem; min-height: 38px; }
     .ir-layers-panel .ir-lp-group > .ir-global-menu-row { padding-left: 26px; }
 }
 
