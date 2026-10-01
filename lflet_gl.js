@@ -199,6 +199,17 @@
         var _self = this;
         this._gl.on('style.load', function () { _self._loaded = true; });
         this._gl.on('load', function () { _self._loaded = true; });
+        // MapLibre's compact attribution starts EXPANDED and only collapses on
+        // the first drag. On a phone that's a two-line white slab over the
+        // bottom dock; start it collapsed to the (i) button instead.
+        if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) {
+            this._gl.once('load', function () {
+                try {
+                    var a = el && el.querySelector('.maplibregl-ctrl-attrib');
+                    if (a) { a.classList.remove('maplibregl-compact-show'); a.removeAttribute('open'); }
+                } catch (e) {}
+            });
+        }
         // Self-heal container-size changes. MapLibre reads the container size
         // once at construction; if the element was hidden/zero-sized/wrong at
         // that moment (embedded webviews, panel resizes, phone rotation) the

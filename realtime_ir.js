@@ -24659,83 +24659,98 @@
             return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
         }
 
+        // Gather every member first so line alpha/width can scale with how
+        // many are drawn: a fixed 18% alpha that keeps ~2,700 1000-ensemble
+        // tracks from saturating made the 50/64-member views nearly invisible.
+        // Weakest first, so stronger members paint on top of the TD/TS pile.
+        var items = [];
         for (var ti = 0; ti < rawTracks.length; ti++) {
-            var trk = rawTracks[ti];
-            var members = trk.members || {};
-            var keys = Object.keys(members);
-            for (var ki = 0; ki < keys.length; ki++) {
-                var pts = members[keys[ki]].points;
-                if (!pts || pts.length < 2) continue;
-
-                // Find this member's peak Vmax + first-34kt point
-                var firstGenPt = null, peakWind = 0;
-                for (var pi = 0; pi < pts.length; pi++) {
-                    var w = pts[pi].wind;
+            var members = rawTracks[ti].members || {};
+            var mkeys = Object.keys(members);
+            for (var mi = 0; mi < mkeys.length; mi++) {
+                var mpts = members[mkeys[mi]].points;
+                if (!mpts || mpts.length < 2) continue;
+                // This member's peak Vmax + first-34kt point
+                var firstPt = null, peak = 0;
+                for (var pi = 0; pi < mpts.length; pi++) {
+                    var w = mpts[pi].wind;
                     if (w == null) continue;
-                    if (firstGenPt == null && w >= 34) firstGenPt = pts[pi];
-                    if (w > peakWind) peakWind = w;
+                    if (firstPt == null && w >= 34) firstPt = mpts[pi];
+                    if (w > peak) peak = w;
                 }
-                var style = _genesisCatStyle(peakWind);
+                items.push({ trk: rawTracks[ti], key: mkeys[mi], pts: mpts, peak: peak, first: firstPt });
+            }
+        }
+        items.sort(function (a, b) { return a.peak - b.peak; });
+        var nMem = items.length;
+        var lineAlpha = Math.max(0.18, Math.min(0.6, 3.2 / Math.sqrt(Math.max(nMem, 1))));
+        var lineWeight = nMem <= 150 ? 1.3 : nMem <= 600 ? 1.0 : 0.8;
+        var dotRadius = nMem <= 150 ? 3 : 2.2;
 
-                // Track polyline — faint, member's own peak color.
-                var latlngs = [];
-                for (var pj = 0; pj < pts.length; pj++) {
-                    if (pts[pj].lat == null || pts[pj].lon == null) continue;
-                    latlngs.push([pts[pj].lat, pts[pj].lon]);
-                }
-                if (latlngs.length < 2) continue;
-                var segs = splitAtAntimeridian(latlngs);
-                // Capture loop locals for the closure (avoids the var-
-                // hoisting trap that would have every popup show the
-                // last member's data).
-                var memberKeyLocal = keys[ki];
-                var ptsLocal = pts;
-                var peakWindLocal = peakWind;
-                var initIso = (_rtGenesisData && _rtGenesisData.init_time) || null;
-                var trackLabel = null;
-                if (trk.track_id && _genesisDisturbanceMeta[trk.track_id]) {
-                    trackLabel = _genesisDisturbanceMeta[trk.track_id].label;
-                }
-                for (var si = 0; si < segs.length; si++) {
-                    if (segs[si].length < 2) continue;
-                    var lineOpts = {
-                        color: rgba(style.bold, 0.18),
-                        weight: 0.7,
-                        opacity: 1.0,
-                        interactive: false,
-                    };
-                    if (batch) lineOpts.renderer = batch;
-                    var line = L.polyline(segs[si], lineOpts).addTo(map);
-                    _rtGenesisRawLayers.push(line);
+        for (var ii = 0; ii < items.length; ii++) {
+            var trk = items[ii].trk;
+            var pts = items[ii].pts;
+            var firstGenPt = items[ii].first, peakWind = items[ii].peak;
+            var style = _genesisCatStyle(peakWind);
 
-                    // Wider invisible hit-target so the thin visible
-                    // line is actually clickable. Click → popup with
-                    // this member's intensity time series.
-                    (function (segLatLngs, mk, pp, pw, init, label) {
-                        var hit = _addGenesisMemberHitLayer(map, segLatLngs, function (e) {
-                            _openGenesisMemberPopup(e.latlng, mk, pp, init, pw, label);
-                        }, batch);
-                        _rtGenesisRawLayers.push(hit);
-                    })(segs[si], memberKeyLocal, ptsLocal, peakWindLocal, initIso, trackLabel);
-                }
+            // Track polyline — faint, member's own peak color.
+            var latlngs = [];
+            for (var pj = 0; pj < pts.length; pj++) {
+                if (pts[pj].lat == null || pts[pj].lon == null) continue;
+                latlngs.push([pts[pj].lat, pts[pj].lon]);
+            }
+            if (latlngs.length < 2) continue;
+            var segs = splitAtAntimeridian(latlngs);
+            // Capture loop locals for the closure (avoids the var-
+            // hoisting trap that would have every popup show the
+            // last member's data).
+            var memberKeyLocal = items[ii].key;
+            var ptsLocal = pts;
+            var peakWindLocal = peakWind;
+            var initIso = (_rtGenesisData && _rtGenesisData.init_time) || null;
+            var trackLabel = null;
+            if (trk.track_id && _genesisDisturbanceMeta[trk.track_id]) {
+                trackLabel = _genesisDisturbanceMeta[trk.track_id].label;
+            }
+            for (var si = 0; si < segs.length; si++) {
+                if (segs[si].length < 2) continue;
+                var lineOpts = {
+                    color: rgba(style.bold, lineAlpha),
+                    weight: lineWeight,
+                    opacity: 1.0,
+                    interactive: false,
+                };
+                if (batch) lineOpts.renderer = batch;
+                var line = L.polyline(segs[si], lineOpts).addTo(map);
+                _rtGenesisRawLayers.push(line);
 
-                // Genesis dot — only if this member actually reaches
-                // TC strength. Tiny circle at the first-34kt position.
-                if (firstGenPt) {
-                    var dotOpts = {
-                        radius: 2.2,
-                        color: rgba(style.bold, 0.85),
-                        fillColor: rgba(style.bold, 0.55),
-                        fillOpacity: 1,
-                        weight: 1,
-                        opacity: 1,
-                        interactive: false,
-                    };
-                    if (batch) dotOpts.renderer = batch;
-                    var dot = L.circleMarker(
-                        [firstGenPt.lat, firstGenPt.lon], dotOpts).addTo(map);
-                    _rtGenesisRawLayers.push(dot);
-                }
+                // Wider invisible hit-target so the thin visible
+                // line is actually clickable. Click → popup with
+                // this member's intensity time series.
+                (function (segLatLngs, mk, pp, pw, init, label) {
+                    var hit = _addGenesisMemberHitLayer(map, segLatLngs, function (e) {
+                        _openGenesisMemberPopup(e.latlng, mk, pp, init, pw, label);
+                    }, batch);
+                    _rtGenesisRawLayers.push(hit);
+                })(segs[si], memberKeyLocal, ptsLocal, peakWindLocal, initIso, trackLabel);
+            }
+
+            // Genesis dot — only if this member actually reaches
+            // TC strength. Tiny circle at the first-34kt position.
+            if (firstGenPt) {
+                var dotOpts = {
+                    radius: dotRadius,
+                    color: rgba(style.bold, 0.85),
+                    fillColor: rgba(style.bold, 0.55),
+                    fillOpacity: 1,
+                    weight: 1,
+                    opacity: 1,
+                    interactive: false,
+                };
+                if (batch) dotOpts.renderer = batch;
+                var dot = L.circleMarker(
+                    [firstGenPt.lat, firstGenPt.lon], dotOpts).addTo(map);
+                _rtGenesisRawLayers.push(dot);
             }
         }
     }
@@ -26266,6 +26281,19 @@
                 + '</label>';
         }
 
+        // Segmented-control sub-row under a layer toggle (Model / Ensemble /
+        // Method …). Chips keep their binding classes; .is-on marks the
+        // active one and the accent comes from the group's data attribute.
+        function _segRow(caption, chips, o) {
+            o = o || {};
+            return '<div class="ir-global-menu-row ir-global-method-row' + (o.dim ? ' is-dim' : '') + '">'
+                + '<span class="ir-seg-cap">' + caption + '</span>'
+                + '<span class="ir-seg-body"><span class="ir-seg" role="group" aria-label="' + _escAttr(caption) + '"'
+                + ' data-accent="' + (o.accent || 'cyan') + '">' + chips.join('') + '</span>'
+                + (o.note ? '<span class="ir-seg-note">' + o.note + '</span>' : '')
+                + '</span></div>';
+        }
+
         var html = '';
         if (validShort) {
             html += '<div class="ir-global-menu-valid"><b>' + validShort + '</b></div>';
@@ -26285,20 +26313,13 @@
         // Model picker — FNV3 (operational-track WeatherLab model) vs the
         // experimental WeatherNext 3. Shared with the storm-card WN3 pill.
         var _wn3 = _dmIsWn3();
-        html += '<div class="ir-global-menu-row ir-global-method-row" style="opacity:'
-            + (_rtGlobalWLVisible ? 1 : 0.45) + ';">'
-            + '<span style="font-size:0.72rem; opacity:0.75; margin-right:8px;">Model:</span>'
-            + '<button type="button" class="ir-global-genvariant-chip ir-global-dmmodel-chip" data-dmmodel="fnv3"'
-            + ' style="background:' + (!_wn3 ? 'rgba(0,229,255,0.28)' : 'transparent')
-            + '; color:' + (!_wn3 ? '#00e5ff' : 'inherit') + ';">FNV3</button>'
-            + '<button type="button" class="ir-global-genvariant-chip ir-global-dmmodel-chip" data-dmmodel="wnv3"'
-            + ' title="WeatherNext 3 cyclone model — experimental, 64 members, not yet operational"'
-            + ' style="background:' + (_wn3 ? 'rgba(0,229,255,0.28)' : 'transparent')
-            + '; color:' + (_wn3 ? '#00e5ff' : 'inherit') + ';">WN3</button>'
-            + (_wn3
-                ? '<span style="font-size:0.66rem; opacity:0.7; margin-left:8px;">experimental</span>'
-                : '')
-            + '</div>';
+        html += _segRow('Model', [
+            '<button type="button" class="ir-global-genvariant-chip ir-global-dmmodel-chip' + (!_wn3 ? ' is-on' : '')
+                + '" data-dmmodel="fnv3" aria-pressed="' + !_wn3 + '">FNV3</button>',
+            '<button type="button" class="ir-global-genvariant-chip ir-global-dmmodel-chip' + (_wn3 ? ' is-on' : '')
+                + '" data-dmmodel="wnv3" aria-pressed="' + _wn3 + '"'
+                + ' title="WeatherNext 3 cyclone model — experimental, 64 members, not yet operational">WN3</button>'
+        ], { accent: 'cyan', dim: !_rtGlobalWLVisible, note: _wn3 ? 'experimental' : '' });
         // Basin-wide wind-risk layer (P ≥34/50/64 kt within N h from every
         // active system's ensemble) — rendered + bound by realtime_ir_dm.js.
         if (window.RTDM && window.RTDM.globalRiskRowHtml) html += window.RTDM.globalRiskRowHtml();
@@ -26343,42 +26364,28 @@
         // A clock glyph marks a variant not published for the freshest cycle.
         var _freshest = _genesisCycleList[0];
         var _curVar = _genesisVariantNorm(_genesisEnsembleVariant);
-        html += '<div class="ir-global-menu-row ir-global-method-row" style="opacity:'
-            + (_rtGenesisVisible ? 1 : 0.45) + ';">'
-            + '<span style="font-size:0.72rem; opacity:0.75; margin-right:8px;">Ensemble:</span>';
-        _GENESIS_VARIANT_ORDER.forEach(function (v) {
+        html += _segRow('Ensemble', _GENESIS_VARIANT_ORDER.map(function (v) {
             var on = (v === _curVar);
             var gap = (_freshest && !_genesisCycleHasVariant(_freshest, v));
-            html += '<button type="button" class="ir-global-genvariant-chip" data-genvariant="' + v + '"'
-                + ' title="' + _escAttr(_GENESIS_VARIANTS[v].title) + '"'
-                + ' style="background:' + (on ? 'rgba(249,115,22,0.32)' : 'transparent')
-                + '; color:' + (on ? '#f97316' : 'inherit') + ';">'
+            return '<button type="button" class="ir-global-genvariant-chip' + (on ? ' is-on' : '')
+                + '" data-genvariant="' + v + '" aria-pressed="' + on + '"'
+                + ' title="' + _escAttr(_GENESIS_VARIANTS[v].title
+                    + (gap ? ' (not yet published for the latest cycle)' : '')) + '">'
                 + _GENESIS_VARIANTS[v].chip + (gap ? _GENESIS_PENDING_SVG : '') + '</button>';
-        });
-        html += (_GENESIS_VARIANTS[_curVar].note
-                ? '<span style="font-size:0.66rem; opacity:0.7; margin-left:8px;">'
-                  + _GENESIS_VARIANTS[_curVar].note + '</span>'
-                : '')
-            + '</div>';
+        }), { accent: 'orange', dim: !_rtGenesisVisible, note: _GENESIS_VARIANTS[_curVar].note });
         // Clustering-method picker — two radio-style chips inline so
         // a forecaster can A/B DeepMind's own track_id grouping vs
         // our DBSCAN-style spatial clustering on member first-genesis
         // points. Active method is highlighted; inactive is clickable.
         var dmActive = _genesisClusterMethod === 'deepmind';
-        var dmChipBg    = dmActive   ? 'rgba(249,115,22,0.32)' : 'transparent';
-        var tcaChipBg   = !dmActive  ? 'rgba(249,115,22,0.32)' : 'transparent';
-        var dmChipColor = dmActive   ? '#f97316' : 'inherit';
-        var tcaChipColor = !dmActive ? '#f97316' : 'inherit';
-        html += '<div class="ir-global-menu-row ir-global-method-row" style="opacity:'
-            + (_rtGenesisVisible ? 1 : 0.45) + ';">'
-            + '<span style="font-size:0.72rem; opacity:0.75; margin-right:8px;">Method:</span>'
-            + '<button type="button" class="ir-global-method-chip" data-method="deepmind"'
-            + ' style="background:' + dmChipBg + '; color:' + dmChipColor + ';">'
-            + 'DeepMind</button>'
-            + '<button type="button" class="ir-global-method-chip" data-method="tcatlas"'
-            + ' style="background:' + tcaChipBg + '; color:' + tcaChipColor + ';">'
-            + 'TC-ATLAS</button>'
-            + '</div>';
+        html += _segRow('Method', [
+            '<button type="button" class="ir-global-method-chip' + (dmActive ? ' is-on' : '')
+                + '" data-method="deepmind" aria-pressed="' + dmActive + '"'
+                + ' title="DeepMind\'s own track_id grouping">DeepMind</button>',
+            '<button type="button" class="ir-global-method-chip' + (!dmActive ? ' is-on' : '')
+                + '" data-method="tcatlas" aria-pressed="' + !dmActive + '"'
+                + ' title="TC-ATLAS density-peak clustering of member genesis points">TC-ATLAS</button>'
+        ], { accent: 'orange', dim: !_rtGenesisVisible });
 
         // Live tuner — visible only when TC-ATLAS (density-peak) is
         // the active clustering method. Sliders mutate the tunables

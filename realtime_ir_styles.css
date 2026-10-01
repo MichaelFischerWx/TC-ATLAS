@@ -4132,9 +4132,9 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
    every input event. Stays out of the way visually with a faint
    orange border to signal "this only affects the TC-ATLAS path". */
 .ir-global-tuner {
-    margin: 4px 12px 8px 36px;
-    border: 1px dashed rgba(249, 115, 22, 0.45);
-    border-radius: 6px;
+    margin: 2px 12px 8px 32px;
+    border: 1px solid rgba(249, 115, 22, 0.22);
+    border-radius: 8px;
     background: rgba(249, 115, 22, 0.05);
 }
 .ir-global-tuner[open] {
@@ -4166,7 +4166,7 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     flex: 1;
     font-size: 0.72rem;
     font-weight: 600;
-    color: var(--text, #0f172a);
+    color: #e2e8f0;  /* panel is dark in both themes */
     text-transform: none;
     letter-spacing: 0;
 }
@@ -4192,7 +4192,7 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     justify-content: space-between;
     align-items: baseline;
     font-size: 0.7rem;
-    color: var(--text, #0f172a);
+    color: #e2e8f0;  /* panel is dark in both themes */
     font-weight: 600;
 }
 .ir-tuner-val {
@@ -4222,7 +4222,7 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     color: var(--text-dim, #64748b);
 }
 .ir-tuner-status strong {
-    color: var(--text, #0f172a);
+    color: #e2e8f0;  /* panel is dark in both themes */
     font-variant-numeric: tabular-nums;
 }
 .ir-tuner-reset {
@@ -4231,7 +4231,7 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     padding: 3px 9px;
     border: 1px solid rgba(249, 115, 22, 0.45);
     background: transparent;
-    color: var(--text, #0f172a);
+    color: #e2e8f0;  /* panel is dark in both themes */
     border-radius: 4px;
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s;
@@ -4247,30 +4247,101 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 [data-theme="dark"] .ir-tuner-status strong { color: #e2e8f0; }
 [data-theme="dark"] .ir-tuner-reset { color: #e2e8f0; }
 
-/* Inline cyclogenesis clustering-method picker.
-   Two radio-style chips that switch between DeepMind's track_id
-   grouping and our DBSCAN-style spatial clustering. Active chip
-   takes the orange brand fill; inactive is clickable to switch. */
+/* Segmented-control sub-rows under a layer toggle (Model / Wind risk /
+   Ensemble / Method). One track per row, one chip per option; the active
+   chip lifts out of the track with an accent tint. Accent = cyan for
+   DeepMind-model rows, orange for cyclogenesis rows (data-accent). Chips
+   keep their binding classes (.ir-global-*-chip); state is .is-on. */
 .ir-global-method-row {
     display: flex;
     align-items: center;
-    padding: 2px 12px 8px 36px;   /* indent matches sub-toggle row */
-    gap: 4px;
+    padding: 2px 12px 6px 32px;   /* caption lines up with the row title */
+    gap: 8px;
+    cursor: default;
+    transition: opacity 0.15s;
+}
+.ir-global-method-row:hover { background: transparent; }
+.ir-global-method-row.is-dim { opacity: 0.45; }
+.ir-global-method-row.is-dim:hover { opacity: 0.8; }
+.ir-seg-cap {
+    flex: 0 0 58px;
+    font-size: 0.64rem;
+    font-weight: 500;
+    color: #94a3b8;
+}
+.ir-seg-body {
+    display: flex;
+    flex-wrap: wrap;               /* a note that doesn't fit drops under the chips */
+    align-items: center;
+    gap: 4px 6px;
+    min-width: 0;
+}
+.ir-seg {
+    --seg-accent: #00e5ff;
+    --seg-tint: rgba(0, 229, 255, 0.16);
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.ir-seg[data-accent="orange"] {
+    --seg-accent: #fb923c;
+    --seg-tint: rgba(249, 115, 22, 0.18);
+}
+.ir-seg > button {
+    -webkit-appearance: none;
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    font-family: inherit;
+    font-size: 0.66rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    padding: 5px 9px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: #cbd5e1;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+.ir-seg > button:hover {
+    background: rgba(255, 255, 255, 0.07);
+    color: #f1f5f9;
+}
+.ir-seg > button.is-on {
+    background: var(--seg-tint);
+    color: var(--seg-accent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--seg-accent) 45%, transparent),
+                0 1px 2px rgba(0, 0, 0, 0.35);
     cursor: default;
 }
-.ir-global-method-chip {
-    font-family: inherit;
-    font-size: 0.72rem;
-    font-weight: 600;
-    padding: 3px 10px;
-    border: 1px solid rgba(249, 115, 22, 0.45);
-    border-radius: 11px;
-    cursor: pointer;
-    line-height: 1.2;
-    transition: background 0.15s, color 0.15s, border-color 0.15s;
+.ir-seg > button:focus-visible {
+    outline: 2px solid var(--seg-accent);
+    outline-offset: 1px;
 }
-.ir-global-method-chip:hover {
-    border-color: #f97316;
+.ir-seg > button svg { opacity: 0.75; }
+.ir-seg-note {
+    font-size: 0.56rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.12);
+    border-radius: 4px;
+    padding: 2px 5px;
+}
+.ir-seg-hint {
+    padding: 0 12px 4px 98px;     /* sits under the chips, past the caption */
+    font-size: 0.6rem;
+    color: #64748b;
+}
+@media (max-width: 768px) {
+    .ir-seg > button { padding: 7px 10px; font-size: 0.7rem; }  /* touch targets */
 }
 
 /* ════════════════════════════════════════════════════════════════
