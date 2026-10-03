@@ -5,7 +5,11 @@ starlette>=0.36
 
 # Scientific / data
 numpy>=1.24,<2.0
-xarray>=2024.1
+# xarray CAPPED (2026-10-03): 2026.9.0 (released 2026-09-29) passes zarr_format= to
+# zarr.open_group, which zarr<3 rejects -> every TC-RADAR /data and pre-warm open
+# failed from revision 00572 on ("open_group() got an unexpected keyword argument
+# 'zarr_format'"). Lift the cap only together with a zarr 3 migration.
+xarray>=2024.1,<2026.9
 scipy>=1.12
 matplotlib>=3.8
 Pillow>=10.0
