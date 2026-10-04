@@ -87,7 +87,7 @@
                the tree\u2019s Stage-1 size channel per frame \u2014 it had been
                silently dropped when the blend became the listed tab. */
             panels: { rmw: true, shap: false, dist: true, track: true,
-                      comp: true }
+                      comp: true, why: true }
         },
         ghost: {
             key: 'ghost',
@@ -204,6 +204,8 @@
     var _showComp = true;    // ON by default: a lone GHOST curve invites
                              // over-reading; peers give honest context
     var _showShap = false;   // model-driver (SHAP) panel
+    var _showWhy = false;    // 'Why this number' layer breakdown (2026-10-04)
+    var _whyIdx = null;      // selected frame index in that panel (null = latest)
     var _showVerif = false;  // manuscript verification statistics
     var COMP_STYLE = {
         'D-PRINT':       '#a855f7',
@@ -1141,6 +1143,11 @@
                   (_showShap ? ' active' : '') +
                   '" id="exp-shap-btn">Model drivers</button>'
                 : '') +
+            (M.panels.why
+                ? '<button class="exp-range exp-whybtn' +
+                  (_showWhy ? ' active' : '') +
+                  '" id="exp-why-btn">Why this number</button>'
+                : '') +
             /* Tilt page: the Verification disclosure lives at the BOTTOM of
                the page instead of the control bar (author's call) — the
                model summary is the page itself; the numbers are opt-in. */
@@ -1195,6 +1202,7 @@
             '<div id="exp-track" class="exp-track" style="display:none;"></div>' +
             '<div id="exp-dist" class="exp-shap" style="display:none;"></div>' +
             '<div id="exp-shap" class="exp-shap" style="display:none;"></div>' +
+            '<div id="exp-why" class="exp-shap" style="display:none;"></div>' +
             /* Page foot: the citation and usage-notes boxes (moved down from
                the header so the analyses lead), then the Verification
                disclosure. */
@@ -1302,6 +1310,15 @@
             var box = document.getElementById('exp-shap');
             if (box) box.style.display = _showShap ? 'block' : 'none';
             if (_showShap && _storm && _series[_storm]) drawShap(_series[_storm]);
+        });
+        var whyBtn = document.getElementById('exp-why-btn');
+        if (whyBtn) whyBtn.addEventListener('click', function () {
+            _showWhy = !_showWhy;
+            track(M.key + '_why_this_number', { on: _showWhy });
+            whyBtn.classList.toggle('active', _showWhy);
+            var box = document.getElementById('exp-why');
+            if (box) box.style.display = _showWhy ? 'block' : 'none';
+            if (_showWhy && _storm && _series[_storm]) drawWhy(_series[_storm]);
         });
         var compBtn = document.getElementById('exp-comp');
         if (compBtn) compBtn.addEventListener('click', function () {
@@ -1498,6 +1515,8 @@
             if (_showTrack) drawTrack(res[0]);
             if (_showDist) drawDist(res[0]);
             if (_showShap) drawShap(res[0]);
+            _whyIdx = null;
+            if (_showWhy) drawWhy(res[0]);
         }).catch(function () {
             var el = document.getElementById('exp-plot');
             if (el) el.innerHTML =
@@ -3379,6 +3398,178 @@
        add calibration, Stage-B inertia, a causal kernel and the pinhole
        blend. The panel says so, so nobody reads it as a decomposition of the
        number on the chart above. */
+    /* ---------------- 'Why this number' (2026-10-04) ----------------
+       Layer-by-layer breakdown of the PUBLISHED estimate for one frame. The
+       producer (TC-SWARM v51_layer / ghost_rt / blend_rt_all) exports each
+       stage of the composition as lay_* fields; consecutive differences are
+       exact and telescope to the published value (verified on the producer
+       side: 0 failures on Nolo / Choi-Wan). Frames the tree abstained on
+       (QC fill, carried wind) have no breakdown and are skipped. */
+    var WHY_V = [
+        ['Storm history (age, recent peak)', 'second pass of the intensity model: storm age, recent peak and decay state (includes the high-end ramp)'],
+        ['Time smoothing (4 h)', 'causal 4-hour smoothing of the estimate'],
+        ['Deep-eye specialist', 'once an eye has persisted 6+ h with winds 96+ kt, a regression built for intense eyes takes over'],
+        ['Intensity-corridor specialist', 'raises the estimate when a specialist trained on aircraft-observed majors reads higher'],
+        ['Major-hurricane wind floor', 'upward-only floor from a specialist trained on 120+ kt aircraft cases (not used in the West Pacific)'],
+        ['Pressure-to-wind adjustment', 'above about 130 kt, blends toward the wind implied by the estimated pressure (not used in the West Pacific)'],
+        ['Consistency cap', 'caps the wind if it runs far above both the first-pass estimate and the wind implied by the pressure']
+    ];
+    var WHY_P = [
+        ['Time smoothing (4 h)', 'causal 4-hour smoothing'],
+        ['Deep-eye specialist', 'regression built for intense eyes (pressure side)'],
+        ['Intensity-corridor specialist', 'deepen-only specialist trained on aircraft-observed majors'],
+        ['Averaging with physics-based member', 'the published pressure is the mean of this model and a separate physics-based pressure model']
+    ];
+    function whySteps(f) {
+        var pre = (f.vmax_tree_raw_kt != null) ? f.vmax_tree_raw_kt : f.vmax_kt;
+        var v = [f.vmax_inst_kt, f.lay_v_raw, f.lay_v_sm, f.lay_v_tier, f.lay_v_cor,
+                 f.lay_v_floor, pre, f.vmax_kt];
+        var p = [f.lay_p_raw, f.lay_p_sm, f.lay_p_tier, f.lay_p_cor,
+                 (f.pmin_hpa != null ? f.pmin_hpa : f.lay_p_cor)];
+        var dv = [], dp = [];
+        for (var i = 1; i < v.length; i++) dv.push(Math.round((v[i] - v[i - 1]) * 10) / 10);
+        for (var k = 1; k < p.length; k++) dp.push(Math.round((p[k] - p[k - 1]) * 10) / 10);
+        return { v: v, p: p, dv: dv, dp: dp };
+    }
+    function drawWhy(j) {
+        var box = document.getElementById('exp-why');
+        if (!box || typeof Plotly === 'undefined') return;
+        var fr = j.frames || [];
+        var idx = [];
+        fr.forEach(function (f, i) {
+            if (f.lay_v_raw != null && f.lay_v_floor != null && f.vmax_kt != null &&
+                f.vmax_inst_kt != null && !f.vmax_filled && !f.vmax_carried) idx.push(i);
+        });
+        if (!idx.length) {
+            box.innerHTML = '<div class="exp-shap-head">Why this number</div>' +
+                '<div class="exp-empty">This storm’s file doesn’t carry the step ' +
+                'breakdown yet; it appears after the next update.</div>';
+            return;
+        }
+        if (_whyIdx == null || _whyIdx < 0 || _whyIdx >= idx.length) _whyIdx = idx.length - 1;
+        var f = fr[idx[_whyIdx]];
+        var S = whySteps(f);
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var grid = dark ? '#1e293b' : '#e2e8f0';
+        var fc = dark ? '#cbd5e1' : '#334155';
+        var up = '#10b981', dn = '#f43f5e', tot = M.color || '#2e7dff';
+        var wp = (j.storm || '').slice(0, 2) === 'WP';
+        var tLab = (f.t || '').slice(5, 16).replace('-', '/').replace('T', ' ') + 'Z';
+        var chips = [];
+        if (f.tier_on) chips.push('deep-eye specialist active' +
+            (f.dv5_kt != null ? ' (its own wind ' + Math.round(f.dv5_kt) + ' kt)' : ''));
+        else chips.push('deep-eye specialist not active');
+        if (wp) chips.push('West Pacific: wind floor and pressure-to-wind steps are off');
+        if (f.fpm_pmin_hpa != null) chips.push('physics-based member ' + f.fpm_pmin_hpa.toFixed(1) + ' hPa');
+        if (f.members === 1) chips.push('pressure carried from one member');
+        box.innerHTML =
+            '<div class="exp-shap-head">Why this number' +
+            '<span class="exp-shap-sub">how each step of ' + M.name + ' moved the estimate at ' +
+            tLab + ' — the bars add up exactly to the published value. These are ' +
+            'the model’s internal steps, not physical causes; a single wind estimate ' +
+            'carries roughly ±10 kt of uncertainty, so read small steps loosely.</span></div>' +
+            '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 8px;">' +
+            '<input type="range" id="exp-why-slider" min="0" max="' + (idx.length - 1) +
+            '" value="' + _whyIdx + '" step="1" style="flex:1;min-width:160px;">' +
+            '<span style="font-size:12px;color:' + fc + ';min-width:96px;">' + tLab + '</span>' +
+            '<button class="exp-range" id="exp-why-latest">Latest</button></div>' +
+            '<div style="font-size:11.5px;color:' + fc + ';opacity:.85;margin-bottom:6px;">' +
+            chips.join(' · ') + '</div>' +
+            '<div class="exp-shap-grid"><div id="exp-why-v"></div><div id="exp-why-p"></div></div>' +
+            '<div id="exp-why-t"></div>';
+        function wf(el, title, unit, x, ys, hov, start, total, invert) {
+            var meas = ['absolute'].concat(ys.map(function () { return 'relative'; })).concat(['total']);
+            var vals = [start].concat(ys).concat([0]);
+            /* Zoom the axis to the path the estimate actually takes; from zero the
+               steps that matter (a few kt / hPa) are invisible next to a 130-kt
+               or 920-hPa first bar. Pressure runs reversed so deeper is up. */
+            var path = [start], cum = start;
+            ys.forEach(function (d) { cum += d; path.push(cum); });
+            var lo = Math.min.apply(null, path), hi = Math.max.apply(null, path);
+            var pad = Math.max(3, (hi - lo) * 0.35);
+            var rng = invert ? [hi + pad, lo - pad] : [lo - pad, hi + pad];
+            var txt = [start.toFixed(1)].concat(ys.map(function (d) {
+                return (d > 0 ? '+' : d < 0 ? '−' : '') + Math.abs(d).toFixed(1);
+            })).concat([total.toFixed(1)]);
+            Plotly.react(el, [{
+                type: 'waterfall', orientation: 'v', measure: meas, x: x, y: vals,
+                text: txt, textposition: 'outside', cliponaxis: false,
+                hovertext: hov, hovertemplate: '<b>%{x}</b><br>%{text}' + unit +
+                    '<br><i>%{hovertext}</i><extra></extra>',
+                connector: { line: { color: grid, width: 1 } },
+                increasing: { marker: { color: invert ? dn : up } },
+                decreasing: { marker: { color: invert ? up : dn } },
+                totals: { marker: { color: tot } }
+            }], {
+                title: { text: title, font: { size: 12 } },
+                height: 340, margin: { l: 46, r: 10, t: 30, b: 110 },
+                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+                font: { color: fc, size: 10 }, showlegend: false,
+                xaxis: { tickangle: -35, automargin: true },
+                yaxis: { gridcolor: grid, title: { text: unit.trim(), font: { size: 10 } },
+                         range: rng, autorange: false }
+            }, { displayModeBar: false, responsive: true })
+              .then(function () { Plotly.Plots.resize(el); });
+        }
+        wf('exp-why-v', 'Maximum wind (kt)', ' kt',
+           ['Single-image estimate'].concat(WHY_V.map(function (w) { return w[0]; })).concat(['Published']),
+           S.dv, ['the intensity model applied to this image and its recent infrared history']
+               .concat(WHY_V.map(function (w) { return w[1]; })).concat(['published estimate']),
+           S.v[0], f.vmax_kt, false);
+        wf('exp-why-p', 'Minimum pressure (hPa)', ' hPa',
+           ['Pressure head'].concat(WHY_P.map(function (w) { return w[0]; })).concat(['Published']),
+           S.dp, ['the pressure model applied to this image, storm history and environmental pressure']
+               .concat(WHY_P.map(function (w) { return w[1]; })).concat(['published estimate']),
+           S.p[0], S.p[4], true);
+        /* Through the storm's life: wind steps stacked relative to the
+           single-image estimate; the line is their sum (published minus
+           single-image). */
+        var T = idx.map(function (i) { return fr[i].t; });
+        var cols = ['#f59e0b', '#94a3b8', '#a855f7', '#2e7dff', '#14b8a6', '#f43f5e', '#64748b'];
+        var allS = idx.map(function (i) { return whySteps(fr[i]); });
+        var tr = WHY_V.map(function (w, k) {
+            return { type: 'bar', x: T, y: allS.map(function (q) { return q.dv[k]; }),
+                     name: w[0], marker: { color: cols[k] },
+                     hovertemplate: w[0] + ': %{y:+.1f} kt<extra></extra>' };
+        }).filter(function (t) { return t.y.some(function (y) { return Math.abs(y) > 0.05; }); });
+        tr.push({ type: 'scatter', mode: 'lines', x: T,
+                  y: allS.map(function (q) { return Math.round((q.v[7] - q.v[0]) * 10) / 10; }),
+                  name: 'Net (published − single-image)', line: { color: fc, width: 1.6 },
+                  hovertemplate: 'net %{y:+.1f} kt<extra></extra>' });
+        Plotly.react('exp-why-t', tr, {
+            title: { text: 'How each step moved the wind through the storm’s life', font: { size: 12 } },
+            barmode: 'relative', bargap: 0, height: 280,
+            margin: { l: 46, r: 10, t: 30, b: 40 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: dark ? 'rgba(15,23,42,0.55)' : 'rgba(248,250,252,0.7)',
+            font: { color: fc, size: 10 }, hovermode: 'x unified',
+            legend: { orientation: 'h', y: -0.25, font: { size: 10 } },
+            xaxis: { gridcolor: grid },
+            yaxis: { title: { text: 'kt vs single-image estimate', font: { size: 10 } },
+                     gridcolor: grid, zeroline: true, zerolinecolor: fc },
+            shapes: [{ type: 'line', xref: 'x', yref: 'paper', x0: f.t, x1: f.t, y0: 0, y1: 1,
+                       line: { color: tot, width: 1, dash: 'dot' } }]
+        }, { displayModeBar: false, responsive: true })
+          .then(function () { Plotly.Plots.resize('exp-why-t'); });
+        var tEl = document.getElementById('exp-why-t');
+        if (tEl && tEl.on) {
+            if (tEl.removeAllListeners) tEl.removeAllListeners('plotly_click');
+            tEl.on('plotly_click', function (ev) {
+                if (!ev.points || !ev.points.length) return;
+                var k = T.indexOf(ev.points[0].x);
+                if (k < 0) {
+                    var x = new Date(ev.points[0].x).getTime(), bd = Infinity;
+                    T.forEach(function (t, q) { var d = Math.abs(new Date(t).getTime() - x); if (d < bd) { bd = d; k = q; } });
+                }
+                _whyIdx = k; drawWhy(j);
+            });
+        }
+        var sl = document.getElementById('exp-why-slider');
+        if (sl) sl.addEventListener('change', function () { _whyIdx = +sl.value; drawWhy(j); });
+        var lt = document.getElementById('exp-why-latest');
+        if (lt) lt.addEventListener('click', function () { _whyIdx = idx.length - 1; drawWhy(j); });
+    }
+
     function drawShap(j) {
         var box = document.getElementById('exp-shap');
         if (!box || typeof Plotly === 'undefined') return;
@@ -4158,6 +4349,7 @@
             if (_showTrack) drawTrack(_series[_storm]);
             if (_showDist) drawDist(_series[_storm]);
             if (_showShap) drawShap(_series[_storm]);
+            if (_showWhy) drawWhy(_series[_storm]);
         }
     }).observe(document.documentElement,
                { attributes: true, attributeFilter: ['data-theme'] });
