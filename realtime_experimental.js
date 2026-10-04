@@ -752,7 +752,7 @@
         'independent estimators</strong> read from the same geostationary ' +
         'infrared frames &mdash; a small first-principles ridge on the ' +
         'environmental pressure deficit (FPM) and the boosted-tree stack with ' +
-        'its deep-eye tier (the GHOST tree member) &mdash; and maximum wind is ' +
+        'its mature-eye tier (the GHOST tree member) &mdash; and maximum wind is ' +
         'the tree&rsquo;s direct wind head with its high-end corrections. ' +
         'Held out by season over the Atlantic and East / Central Pacific ' +
         'archive, the mean is better than either member on aircraft-verified ' +
@@ -3408,7 +3408,7 @@
     var WHY_V = [
         ['Storm history (age, recent peak)', 'second pass of the intensity model: storm age, recent peak and decay state (includes the high-end ramp)'],
         ['Time smoothing (4 h)', 'causal 4-hour smoothing of the estimate'],
-        ['Deep-eye specialist', 'once an eye has persisted 6+ h with winds 96+ kt, a regression built for intense eyes takes over'],
+        ['Mature-eye specialist', 'once an eye has persisted 6+ h with winds 96+ kt, a regression built for intense storms with established eyes takes over'],
         ['Intensity-corridor specialist', 'raises the estimate when a specialist trained on aircraft-observed majors reads higher'],
         ['Major-hurricane wind floor', 'upward-only floor from a specialist trained on 120+ kt aircraft cases (not used in the West Pacific)'],
         ['Pressure-to-wind adjustment', 'above about 130 kt, blends toward the wind implied by the estimated pressure (not used in the West Pacific)'],
@@ -3416,7 +3416,7 @@
     ];
     var WHY_P = [
         ['Time smoothing (4 h)', 'causal 4-hour smoothing'],
-        ['Deep-eye specialist', 'regression built for intense eyes (pressure side)'],
+        ['Mature-eye specialist', 'regression built for intense storms with established eyes (pressure side)'],
         ['Intensity-corridor specialist', 'deepen-only specialist trained on aircraft-observed majors'],
         ['Averaging with physics-based member', 'the published pressure is the mean of this model and a separate physics-based pressure model']
     ];
@@ -3472,9 +3472,9 @@
         var wp = (j.storm || '').slice(0, 2) === 'WP';
         var tLab = (f.t || '').slice(5, 16).replace('-', '/').replace('T', ' ') + 'Z';
         var chips = [];
-        if (f.tier_on) chips.push('deep-eye specialist active' +
+        if (f.tier_on) chips.push('mature-eye specialist active' +
             (f.dv5_kt != null ? ' (its own wind ' + Math.round(f.dv5_kt) + ' kt)' : ''));
-        else chips.push('deep-eye specialist not active');
+        else chips.push('mature-eye specialist not active');
         if (wp) chips.push('West Pacific: wind floor and pressure-to-wind steps are off');
         if (f.fpm_pmin_hpa != null) chips.push('physics-based member ' + f.fpm_pmin_hpa.toFixed(1) + ' hPa');
         if (f.members === 1) chips.push('pressure carried from one member');
