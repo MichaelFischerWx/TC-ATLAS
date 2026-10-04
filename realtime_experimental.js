@@ -3452,7 +3452,23 @@
         var dark = document.documentElement.getAttribute('data-theme') === 'dark';
         var grid = dark ? '#1e293b' : '#e2e8f0';
         var fc = dark ? '#cbd5e1' : '#334155';
-        var up = '#10b981', dn = '#f43f5e', tot = M.color || '#2e7dff';
+        /* Site palette (realtime_ir_styles.css --lp-* tokens): green = toward a
+           stronger storm, orange = toward a weaker one, on BOTH charts (so a
+           deeper pressure is green); start / published bars in neutral ink. */
+        var up = dark ? '#6db993' : '#4a9b6e', dn = '#F47321';
+        var tot = dark ? '#94a3b8' : '#64748b';
+        var hov = { bgcolor: dark ? '#161b24' : '#ffffff',
+                    bordercolor: dark ? 'rgba(255,255,255,0.12)' : '#e2e8f0',
+                    font: { color: dark ? '#e6e8eb' : '#0f172a', size: 11 }, align: 'left' };
+        function wrap(s, n) {
+            var out = [], line = '';
+            String(s).split(' ').forEach(function (w) {
+                if ((line + ' ' + w).trim().length > n) { out.push(line.trim()); line = w; }
+                else line += ' ' + w;
+            });
+            if (line.trim()) out.push(line.trim());
+            return out.join('<br>');
+        }
         var wp = (j.storm || '').slice(0, 2) === 'WP';
         var tLab = (f.t || '').slice(5, 16).replace('-', '/').replace('T', ' ') + 'Z';
         var chips = [];
@@ -3477,7 +3493,7 @@
             chips.join(' · ') + '</div>' +
             '<div class="exp-shap-grid"><div id="exp-why-v"></div><div id="exp-why-p"></div></div>' +
             '<div id="exp-why-t"></div>';
-        function wf(el, title, unit, x, ys, hov, start, total, invert) {
+        function wf(el, title, unit, x, ys, hovs, start, total, invert) {
             var meas = ['absolute'].concat(ys.map(function () { return 'relative'; })).concat(['total']);
             var vals = [start].concat(ys).concat([0]);
             /* Zoom the axis to the path the estimate actually takes; from zero the
@@ -3494,13 +3510,15 @@
             Plotly.react(el, [{
                 type: 'waterfall', orientation: 'v', measure: meas, x: x, y: vals,
                 text: txt, textposition: 'outside', cliponaxis: false,
-                hovertext: hov, hovertemplate: '<b>%{x}</b><br>%{text}' + unit +
+                hovertext: hovs.map(function (h) { return wrap(h, 46); }),
+                hovertemplate: '<b>%{x}</b><br>%{text}' + unit +
                     '<br><i>%{hovertext}</i><extra></extra>',
                 connector: { line: { color: grid, width: 1 } },
                 increasing: { marker: { color: invert ? dn : up } },
                 decreasing: { marker: { color: invert ? up : dn } },
                 totals: { marker: { color: tot } }
             }], {
+                hoverlabel: hov,
                 title: { text: title, font: { size: 12 } },
                 height: 340, margin: { l: 46, r: 10, t: 30, b: 110 },
                 paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
@@ -3525,7 +3543,7 @@
            single-image estimate; the line is their sum (published minus
            single-image). */
         var T = idx.map(function (i) { return fr[i].t; });
-        var cols = ['#f59e0b', '#94a3b8', '#a855f7', '#2e7dff', '#14b8a6', '#f43f5e', '#64748b'];
+        var cols = ['#F47321', '#94a3b8', '#2e7dff', '#4a9b6e', '#6db993', '#f9a66c', '#64748b'];
         var allS = idx.map(function (i) { return whySteps(fr[i]); });
         var tr = WHY_V.map(function (w, k) {
             return { type: 'bar', x: T, y: allS.map(function (q) { return q.dv[k]; }),
@@ -3540,8 +3558,8 @@
             title: { text: 'How each step moved the wind through the storm’s life', font: { size: 12 } },
             barmode: 'relative', bargap: 0, height: 280,
             margin: { l: 46, r: 10, t: 30, b: 40 },
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: dark ? 'rgba(15,23,42,0.55)' : 'rgba(248,250,252,0.7)',
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            hoverlabel: hov,
             font: { color: fc, size: 10 }, hovermode: 'x unified',
             legend: { orientation: 'h', y: -0.25, font: { size: 10 } },
             xaxis: { gridcolor: grid },
