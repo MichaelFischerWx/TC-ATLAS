@@ -759,7 +759,7 @@
         'independent estimators</strong> read from the same geostationary ' +
         'infrared frames &mdash; a small first-principles ridge on the ' +
         'environmental pressure deficit (FPM) and the boosted-tree stack with ' +
-        'its mature-eye tier (the GHOST tree member) &mdash; and maximum wind is ' +
+        'its inner-core tier (the GHOST tree member) &mdash; and maximum wind is ' +
         'the tree&rsquo;s direct wind head with its high-end corrections. ' +
         'Held out by season over the Atlantic and East / Central Pacific ' +
         'archive, the mean is better than either member on aircraft-verified ' +
@@ -3445,7 +3445,7 @@
     var WHY_V = [
         ['Storm history', 'Storm history (age, recent peak)', 'second pass of the intensity model: storm age, recent peak and decay state (includes the high-end ramp)'],
         ['Smoothing', 'Time smoothing (4 h)', 'causal 4-hour smoothing of the estimate'],
-        ['Mature-eye specialist', 'Mature-eye specialist', 'once an eye has persisted 6+ h with winds 96+ kt, a regression built for intense storms with established eyes takes over'],
+        ['Inner-core specialist', 'Inner-core specialist', 'once an eye has persisted 6+ h with winds 96+ kt, a regression on the eyewall and cold canopy (coldness, size, symmetry and how long the eye has lasted) takes over'],
         ['Corridor specialist', 'Intensity-corridor specialist', 'raises the estimate when a specialist trained on aircraft-observed majors reads higher'],
         ['Wind floor', 'Major-hurricane wind floor', 'upward-only floor from a specialist trained on 120+ kt aircraft cases (not used in the West Pacific)'],
         ['Pressure → wind', 'Pressure-to-wind adjustment', 'above about 130 kt, blends toward the wind implied by the estimated pressure (not used in the West Pacific)'],
@@ -3453,7 +3453,7 @@
     ];
     var WHY_P = [
         ['Smoothing', 'Time smoothing (4 h)', 'causal 4-hour smoothing'],
-        ['Mature-eye specialist', 'Mature-eye specialist', 'regression built for intense storms with established eyes (pressure side)'],
+        ['Inner-core specialist', 'Inner-core specialist', 'the same eyewall and cold-canopy regression, pressure side'],
         ['Corridor specialist', 'Intensity-corridor specialist', 'deepen-only specialist trained on aircraft-observed majors'],
         ['Physics-based member', 'Averaging with the physics-based member', 'the published pressure is the mean of this model and a separate physics-based pressure model']
     ];
@@ -3537,7 +3537,7 @@
 
         var other = [];
         if (f.tier_on && f.dv5_kt != null)
-            other.push('Mature-eye specialist’s own wind: ' + Math.round(f.dv5_kt) + ' kt');
+            other.push('Inner-core specialist’s own wind: ' + Math.round(f.dv5_kt) + ' kt');
         if (f.fpm_pmin_hpa != null)
             other.push('physics-based member: ' + f.fpm_pmin_hpa.toFixed(1) + ' hPa');
         if (wp) other.push('West Pacific: wind floor and pressure → wind are off');
