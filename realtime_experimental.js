@@ -204,7 +204,14 @@
     var _showComp = true;    // ON by default: a lone GHOST curve invites
                              // over-reading; peers give honest context
     var _showShap = false;   // model-driver (SHAP) panel
-    var _showWhy = false;    // 'Why this number' layer breakdown (2026-10-04)
+    /* 'Why this number' layer breakdown (2026-10-04): ON by default, sits under
+       the main chart; a reader's hide/show choice is remembered per browser
+       (guarded: private mode / blocked storage just falls back to the default). */
+    function _pref(k, dflt) { try { var v = localStorage.getItem(k); return v == null ? dflt : v === 'on'; } catch (e) { return dflt; } }
+    function _setPref(k, on) { try { localStorage.setItem(k, on ? 'on' : 'off'); } catch (e) { /* storage unavailable */ } }
+    var _showWhy = _pref('tcatlas.exp.why', true);
+    var _whyLife = _pref('tcatlas.exp.whyLife', false);   // storm-life chart expanded?
+    var _whyT = null;        // times of frames carrying the breakdown (chart-click mapping)
     var _whyIdx = null;      // selected frame index in that panel (null = latest)
     var _showVerif = false;  // manuscript verification statistics
     var COMP_STYLE = {
@@ -1161,6 +1168,10 @@
             '&#x2913; Download</button>' +
             '</div>' +
             '<div id="exp-plot" class="exp-plot"></div>' +
+            (M.panels.why
+                ? '<div id="exp-why" class="exp-shap" style="display:' +
+                  (_showWhy ? 'block' : 'none') + ';"></div>'
+                : '') +
             '<div id="exp-skill" class="exp-verif" style="display:none;"></div>' +
             /* Frame viewer (archived storms): shown by setupFrameViewer()
                only when packed frames exist. Sits directly under the chart
@@ -1202,7 +1213,6 @@
             '<div id="exp-track" class="exp-track" style="display:none;"></div>' +
             '<div id="exp-dist" class="exp-shap" style="display:none;"></div>' +
             '<div id="exp-shap" class="exp-shap" style="display:none;"></div>' +
-            '<div id="exp-why" class="exp-shap" style="display:none;"></div>' +
             /* Page foot: the citation and usage-notes boxes (moved down from
                the header so the analyses lead), then the Verification
                disclosure. */
@@ -1314,6 +1324,7 @@
         var whyBtn = document.getElementById('exp-why-btn');
         if (whyBtn) whyBtn.addEventListener('click', function () {
             _showWhy = !_showWhy;
+            _setPref('tcatlas.exp.why', _showWhy);
             track(M.key + '_why_this_number', { on: _showWhy });
             whyBtn.classList.toggle('active', _showWhy);
             var box = document.getElementById('exp-why');
@@ -2855,14 +2866,39 @@
         });
     }
 
+    /* Plotly hands date-axis click values back as 'YYYY-MM-DD HH:MM[:SS]'
+       with NO timezone; new Date() reads that as the viewer's LOCAL time, which
+       put chart-click seeks hours off outside UTC. Every chart here is in UTC. */
+    function plotlyUtcMs(x) {
+        if (x instanceof Date) return x.getTime();
+        var s = String(x);
+        if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(s) && !/(Z|[+-]\d{2}:?\d{2})$/.test(s))
+            s = s.replace(' ', 'T') + 'Z';
+        return new Date(s).getTime();
+    }
+
     /* Chart click -> seek the viewer to the nearest frame. Bound after
        every Plotly.react; removeAllListeners keeps it single. */
     function bindChartSeek(el) {
         if (!el || typeof el.on !== 'function') return;
         if (el.removeAllListeners) el.removeAllListeners('plotly_click');
         el.on('plotly_click', function (ev) {
+            var whyOn = _showWhy && _whyT && _whyT.length && ev.points && ev.points.length &&
+                _storm && _series[_storm] && document.getElementById('exp-why');
+            if (whyOn) {
+                /* unified hover: points[0] can be any trace (a comparator fix at its
+                   own time) -- take GHOST's own point, which sits at the cursor's frame */
+                var pg = ev.points.filter(function (p) {
+                    return p.data && p.data.name === M.name; })[0] || ev.points[0];
+                var xw = plotlyUtcMs(pg.x), bw = Infinity, kw = 0;
+                _whyT.forEach(function (t, q) {
+                    var d = Math.abs(new Date(t).getTime() - xw); if (d < bw) { bw = d; kw = q; } });
+                _whyIdx = kw;
+                track(M.key + '_why_chart_seek', { storm: _storm });
+                drawWhy(_series[_storm]);
+            }
             if (!_strip || !ev.points || !ev.points.length) return;
-            var tms = new Date(ev.points[0].x).getTime();
+            var tms = plotlyUtcMs(ev.points[0].x);
             var best = _strip.i0, bd = Infinity;
             for (var i = _strip.i0; i <= _strip.i1; i++) {
                 var d = Math.abs(new Date(_strip.meta.times[i]).getTime() - tms);
@@ -2872,8 +2908,8 @@
             track(M.key + '_chart_seek', { storm: _storm });
             seekStrip(best);
             var box = document.getElementById('exp-frames');
-            if (box) box.scrollIntoView({ behavior: 'smooth',
-                                          block: 'nearest' });
+            if (box && !whyOn) box.scrollIntoView({ behavior: 'smooth',
+                                                    block: 'nearest' });
         });
     }
 
@@ -3452,6 +3488,7 @@
             return;
         }
         if (_whyIdx == null || _whyIdx < 0 || _whyIdx >= idx.length) _whyIdx = idx.length - 1;
+        _whyT = idx.map(function (i) { return fr[i].t; });
         var f = fr[idx[_whyIdx]];
         var S = whySteps(f);
         var dark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -3530,7 +3567,10 @@
             '<div style="' + card + '"><div id="exp-why-p"></div><div id="exp-why-p-off"></div></div></div>' +
             (other.length ? '<div style="font-size:11.5px;color:' + muted + ';margin:8px 2px 0;">' +
                 other.join(' · ') + '</div>' : '') +
-            '<div id="exp-why-t" style="margin-top:14px;"></div>';
+            '<button class="exp-range" id="exp-why-life" style="margin-top:12px;">' +
+            (_whyLife ? 'Hide' : 'Show') + ' each step through the storm\u2019s life ' +
+            (_whyLife ? '\u25b4' : '\u25be') + '</button>' +
+            '<div id="exp-why-t" style="margin-top:10px;"></div>';
 
         /* Horizontal waterfall: label rows on the left, only the steps that moved
            the value; the rest collapse into one muted "not active" line. */
@@ -3606,7 +3646,18 @@
         /* Through the storm's life: wind steps stacked relative to the
            single-image estimate; the line is their sum (published minus
            single-image). Only steps that ever moved the value get a series. */
-        var T = idx.map(function (i) { return fr[i].t; });
+        var T = _whyT;
+        var lifeBtn = document.getElementById('exp-why-life');
+        if (lifeBtn) lifeBtn.addEventListener('click', function () {
+            _whyLife = !_whyLife; _setPref('tcatlas.exp.whyLife', _whyLife);
+            track(M.key + '_why_life', { on: _whyLife });
+            drawWhy(j);
+        });
+        var sl0 = document.getElementById('exp-why-slider');
+        if (sl0) sl0.addEventListener('change', function () { _whyIdx = +sl0.value; drawWhy(j); });
+        var lt0 = document.getElementById('exp-why-latest');
+        if (lt0) lt0.addEventListener('click', function () { _whyIdx = idx.length - 1; drawWhy(j); });
+        if (!_whyLife) return;
         var cols = ['#F47321', '#94a3b8', '#2e7dff', '#4a9b6e', '#6db993', '#f9a66c', '#64748b'];
         var allS = idx.map(function (i) { return whySteps(fr[i]); });
         var tr = WHY_V.map(function (w, k) {
@@ -3649,16 +3700,12 @@
                 if (!ev.points || !ev.points.length) return;
                 var k = T.indexOf(ev.points[0].x);
                 if (k < 0) {
-                    var x = new Date(ev.points[0].x).getTime(), bd = Infinity;
+                    var x = plotlyUtcMs(ev.points[0].x), bd = Infinity;
                     T.forEach(function (t, q) { var d = Math.abs(new Date(t).getTime() - x); if (d < bd) { bd = d; k = q; } });
                 }
                 _whyIdx = k; drawWhy(j);
             });
         }
-        var sl = document.getElementById('exp-why-slider');
-        if (sl) sl.addEventListener('change', function () { _whyIdx = +sl.value; drawWhy(j); });
-        var lt = document.getElementById('exp-why-latest');
-        if (lt) lt.addEventListener('click', function () { _whyIdx = idx.length - 1; drawWhy(j); });
     }
 
     function drawShap(j) {
