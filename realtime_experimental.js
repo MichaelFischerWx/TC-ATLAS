@@ -3405,20 +3405,21 @@
        exact and telescope to the published value (verified on the producer
        side: 0 failures on Nolo / Choi-Wan). Frames the tree abstained on
        (QC fill, carried wind) have no breakdown and are skipped. */
+    /* [short label, hover title, hover explanation] per step, in pipeline order. */
     var WHY_V = [
-        ['Storm history (age, recent peak)', 'second pass of the intensity model: storm age, recent peak and decay state (includes the high-end ramp)'],
-        ['Time smoothing (4 h)', 'causal 4-hour smoothing of the estimate'],
-        ['Mature-eye specialist', 'once an eye has persisted 6+ h with winds 96+ kt, a regression built for intense storms with established eyes takes over'],
-        ['Intensity-corridor specialist', 'raises the estimate when a specialist trained on aircraft-observed majors reads higher'],
-        ['Major-hurricane wind floor', 'upward-only floor from a specialist trained on 120+ kt aircraft cases (not used in the West Pacific)'],
-        ['Pressure-to-wind adjustment', 'above about 130 kt, blends toward the wind implied by the estimated pressure (not used in the West Pacific)'],
-        ['Consistency cap', 'caps the wind if it runs far above both the first-pass estimate and the wind implied by the pressure']
+        ['Storm history', 'Storm history (age, recent peak)', 'second pass of the intensity model: storm age, recent peak and decay state (includes the high-end ramp)'],
+        ['Smoothing', 'Time smoothing (4 h)', 'causal 4-hour smoothing of the estimate'],
+        ['Mature-eye specialist', 'Mature-eye specialist', 'once an eye has persisted 6+ h with winds 96+ kt, a regression built for intense storms with established eyes takes over'],
+        ['Corridor specialist', 'Intensity-corridor specialist', 'raises the estimate when a specialist trained on aircraft-observed majors reads higher'],
+        ['Wind floor', 'Major-hurricane wind floor', 'upward-only floor from a specialist trained on 120+ kt aircraft cases (not used in the West Pacific)'],
+        ['Pressure → wind', 'Pressure-to-wind adjustment', 'above about 130 kt, blends toward the wind implied by the estimated pressure (not used in the West Pacific)'],
+        ['Cap', 'Consistency cap', 'caps the wind if it runs far above both the first-pass estimate and the wind implied by the pressure']
     ];
     var WHY_P = [
-        ['Time smoothing (4 h)', 'causal 4-hour smoothing'],
-        ['Mature-eye specialist', 'regression built for intense storms with established eyes (pressure side)'],
-        ['Intensity-corridor specialist', 'deepen-only specialist trained on aircraft-observed majors'],
-        ['Averaging with physics-based member', 'the published pressure is the mean of this model and a separate physics-based pressure model']
+        ['Smoothing', 'Time smoothing (4 h)', 'causal 4-hour smoothing'],
+        ['Mature-eye specialist', 'Mature-eye specialist', 'regression built for intense storms with established eyes (pressure side)'],
+        ['Corridor specialist', 'Intensity-corridor specialist', 'deepen-only specialist trained on aircraft-observed majors'],
+        ['Physics-based member', 'Averaging with the physics-based member', 'the published pressure is the mean of this model and a separate physics-based pressure model']
     ];
     function whySteps(f) {
         var pre = (f.vmax_tree_raw_kt != null) ? f.vmax_tree_raw_kt : f.vmax_kt;
@@ -3430,6 +3431,10 @@
         for (var i = 1; i < v.length; i++) dv.push(Math.round((v[i] - v[i - 1]) * 10) / 10);
         for (var k = 1; k < p.length; k++) dp.push(Math.round((p[k] - p[k - 1]) * 10) / 10);
         return { v: v, p: p, dv: dv, dp: dp };
+    }
+    function whySgn(d, dp) {
+        var r = d.toFixed(dp == null ? 1 : dp);
+        return (d > 0 ? '+' : d < 0 ? '−' : '') + r.replace('-', '');
     }
     function drawWhy(j) {
         var box = document.getElementById('exp-why');
@@ -3450,16 +3455,18 @@
         var f = fr[idx[_whyIdx]];
         var S = whySteps(f);
         var dark = document.documentElement.getAttribute('data-theme') === 'dark';
-        var grid = dark ? '#1e293b' : '#e2e8f0';
+        var grid = dark ? 'rgba(255,255,255,0.07)' : '#eef2f6';
         var fc = dark ? '#cbd5e1' : '#334155';
+        var muted = dark ? '#8a93a3' : '#64748b';
+        var ink = dark ? '#e6e8eb' : '#0f172a';
         /* Site palette (realtime_ir_styles.css --lp-* tokens): green = toward a
-           stronger storm, orange = toward a weaker one, on BOTH charts (so a
-           deeper pressure is green); start / published bars in neutral ink. */
+           stronger storm, orange = toward a weaker one, on BOTH charts; start /
+           published in neutral slate. Both axes run "stronger to the right". */
         var up = dark ? '#6db993' : '#4a9b6e', dn = '#F47321';
         var tot = dark ? '#94a3b8' : '#64748b';
         var hov = { bgcolor: dark ? '#161b24' : '#ffffff',
                     bordercolor: dark ? 'rgba(255,255,255,0.12)' : '#e2e8f0',
-                    font: { color: dark ? '#e6e8eb' : '#0f172a', size: 11 }, align: 'left' };
+                    font: { color: ink, size: 11 }, align: 'left' };
         function wrap(s, n) {
             var out = [], line = '';
             String(s).split(' ').forEach(function (w) {
@@ -3471,102 +3478,168 @@
         }
         var wp = (j.storm || '').slice(0, 2) === 'WP';
         var tLab = (f.t || '').slice(5, 16).replace('-', '/').replace('T', ' ') + 'Z';
-        var chips = [];
-        if (f.tier_on) chips.push('mature-eye specialist active' +
-            (f.dv5_kt != null ? ' (its own wind ' + Math.round(f.dv5_kt) + ' kt)' : ''));
-        else chips.push('mature-eye specialist not active');
-        if (wp) chips.push('West Pacific: wind floor and pressure-to-wind steps are off');
-        if (f.fpm_pmin_hpa != null) chips.push('physics-based member ' + f.fpm_pmin_hpa.toFixed(1) + ' hPa');
-        if (f.members === 1) chips.push('pressure carried from one member');
+        var narrow = window.innerWidth < 720;
+
+        /* Narrative: the biggest movers, in words, above the charts. */
+        var movers = WHY_V.map(function (w, k) { return { n: w[0], d: S.dv[k] }; })
+            .filter(function (m) { return Math.abs(m.d) >= 1; })
+            .sort(function (a, b) { return Math.abs(b.d) - Math.abs(a.d); }).slice(0, 3);
+        var upM = movers.filter(function (m) { return m.d > 0; }),
+            dnM = movers.filter(function (m) { return m.d < 0; });
+        function lst(a) { return a.map(function (m) {
+            var n = m.n.toLowerCase();
+            var art = /specialist|floor|cap|member/.test(n) ? 'the ' : '';
+            return art + '<b>' + n + '</b> (' + whySgn(m.d, 0) + ')'; }).join(' and '); }
+        var story = 'The image alone reads <b>' + Math.round(S.v[0]) + ' kt</b>';
+        if (upM.length) story += '; ' + lst(upM) + (upM.length > 1 ? ' raise' : ' raises') + ' it';
+        var net = f.vmax_kt - S.v[0];
+        if (dnM.length) story += (upM.length ? ', and ' : '; ') + lst(dnM) +
+            (dnM.length > 1 ? ' bring' : ' brings') + ' it ' + (upM.length && net >= 0 ? 'back' : 'down');
+        if (!movers.length) story += '; no later step moves it by more than 1 kt';
+        story += '.';
+
+        var other = [];
+        if (f.tier_on && f.dv5_kt != null)
+            other.push('Mature-eye specialist’s own wind: ' + Math.round(f.dv5_kt) + ' kt');
+        if (f.fpm_pmin_hpa != null)
+            other.push('physics-based member: ' + f.fpm_pmin_hpa.toFixed(1) + ' hPa');
+        if (wp) other.push('West Pacific: wind floor and pressure → wind are off');
+
+        var card = 'box-sizing:border-box;width:100%;border:1px solid ' +
+            (dark ? 'rgba(255,255,255,0.08)' : '#e2e8f0') +
+            ';border-radius:10px;padding:10px 12px 4px;min-width:0;';
         box.innerHTML =
             '<div class="exp-shap-head">Why this number' +
-            '<span class="exp-shap-sub">how each step of ' + M.name + ' moved the estimate at ' +
-            tLab + ' — the bars add up exactly to the published value. These are ' +
-            'the model’s internal steps, not physical causes; a single wind estimate ' +
-            'carries roughly ±10 kt of uncertainty, so read small steps loosely.</span></div>' +
-            '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 8px;">' +
+            '<span class="exp-shap-sub">how each step of ' + M.name + ' moved the estimate — ' +
+            'the rows add up exactly to the published value. These are the model’s internal ' +
+            'steps, not physical causes; a single wind estimate carries roughly ±10 kt of ' +
+            'uncertainty, so read small steps loosely.</span></div>' +
+            '<div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:6px 0 2px;">' +
+            '<div style="font-size:30px;font-weight:700;color:' + ink + ';letter-spacing:-0.5px;line-height:1;">' +
+            Math.round(f.vmax_kt) + '<span style="font-size:14px;font-weight:600;color:' + muted + '"> kt</span>' +
+            '<span style="font-size:18px;font-weight:600;color:' + muted + ';margin-left:10px;">' +
+            Math.round(S.p[4]) + ' hPa</span></div>' +
+            '<div style="flex:1;min-width:240px;font-size:13px;color:' + fc + ';line-height:1.45;">' + story + '</div></div>' +
+            '<div style="display:flex;gap:10px;align-items:center;margin:8px 0 10px;">' +
             '<input type="range" id="exp-why-slider" min="0" max="' + (idx.length - 1) +
-            '" value="' + _whyIdx + '" step="1" style="flex:1;min-width:160px;">' +
-            '<span style="font-size:12px;color:' + fc + ';min-width:96px;">' + tLab + '</span>' +
+            '" value="' + _whyIdx + '" step="1" style="flex:1;min-width:120px;accent-color:' + up + ';">' +
+            '<span style="font-size:12px;font-variant-numeric:tabular-nums;color:' + fc + ';min-width:84px;">' + tLab + '</span>' +
             '<button class="exp-range" id="exp-why-latest">Latest</button></div>' +
-            '<div style="font-size:11.5px;color:' + fc + ';opacity:.85;margin-bottom:6px;">' +
-            chips.join(' · ') + '</div>' +
-            '<div class="exp-shap-grid"><div id="exp-why-v"></div><div id="exp-why-p"></div></div>' +
-            '<div id="exp-why-t"></div>';
-        function wf(el, title, unit, x, ys, hovs, start, total, invert) {
-            var meas = ['absolute'].concat(ys.map(function () { return 'relative'; })).concat(['total']);
-            var vals = [start].concat(ys).concat([0]);
-            /* Zoom the axis to the path the estimate actually takes; from zero the
-               steps that matter (a few kt / hPa) are invisible next to a 130-kt
-               or 920-hPa first bar. Pressure runs reversed so deeper is up. */
-            var path = [start], cum = start;
-            ys.forEach(function (d) { cum += d; path.push(cum); });
-            var lo = Math.min.apply(null, path), hi = Math.max.apply(null, path);
-            var pad = Math.max(3, (hi - lo) * 0.35);
-            var rng = invert ? [hi + pad, lo - pad] : [lo - pad, hi + pad];
-            var txt = [start.toFixed(1)].concat(ys.map(function (d) {
-                return (d > 0 ? '+' : d < 0 ? '−' : '') + Math.abs(d).toFixed(1);
-            })).concat([total.toFixed(1)]);
-            Plotly.react(el, [{
-                type: 'waterfall', orientation: 'v', measure: meas, x: x, y: vals,
-                text: txt, textposition: 'outside', cliponaxis: false,
-                hovertext: hovs.map(function (h) { return wrap(h, 46); }),
-                hovertemplate: '<b>%{x}</b><br>%{text}' + unit +
-                    '<br><i>%{hovertext}</i><extra></extra>',
-                connector: { line: { color: grid, width: 1 } },
-                increasing: { marker: { color: invert ? dn : up } },
-                decreasing: { marker: { color: invert ? up : dn } },
-                totals: { marker: { color: tot } }
-            }], {
-                hoverlabel: hov,
-                title: { text: title, font: { size: 12 } },
-                height: 340, margin: { l: 46, r: 10, t: 30, b: 110 },
+            '<div class="exp-shap-grid">' +
+            '<div style="' + card + '"><div id="exp-why-v"></div><div id="exp-why-v-off"></div></div>' +
+            '<div style="' + card + '"><div id="exp-why-p"></div><div id="exp-why-p-off"></div></div></div>' +
+            (other.length ? '<div style="font-size:11.5px;color:' + muted + ';margin:8px 2px 0;">' +
+                other.join(' · ') + '</div>' : '') +
+            '<div id="exp-why-t" style="margin-top:14px;"></div>';
+
+        /* Horizontal waterfall: label rows on the left, only the steps that moved
+           the value; the rest collapse into one muted "not active" line. */
+        function wf(el, title, unit, startLab, startHov, steps, deltas, start, total, pressure) {
+            /* Bridge chart: start and published are markers sitting ON their
+               value; each active step is a floating bar from the running total;
+               dotted connectors carry the running total between rows. Inactive
+               steps collapse into one muted line under the card. */
+            var labs = [startLab], base = [], dx = [], txt = [], hv = [], col = [], off = [];
+            var cum = start, path = [start], steps_y = [], conn = [];
+            steps.forEach(function (st, k) {
+                var d = deltas[k];
+                if (Math.abs(d) < 0.05) { off.push(st[0]); return; }
+                var stronger = pressure ? d < 0 : d > 0;
+                labs.push(st[0]); steps_y.push(st[0]);
+                base.push(cum); dx.push(d); txt.push(whySgn(d));
+                col.push(stronger ? up : dn);
+                hv.push('<b>' + st[1] + '</b><br>' + wrap(st[2], 44) + '<br>' + whySgn(d) + unit);
+                cum += d; path.push(cum);
+            });
+            labs.push('Published');
+            for (var i = 0; i < path.length; i++) conn.push({ v: path[i], r0: i, r1: i + 1 });
+            var lo = Math.min.apply(null, path.concat([total])), hi = Math.max.apply(null, path.concat([total]));
+            var pad = Math.max(2.5, (hi - lo) * 0.3);
+            /* stronger to the right: wind ascending, pressure descending */
+            var rng = pressure ? [hi + pad, lo - pad * 1.25] : [lo - pad, hi + pad * 1.25];
+            var traces = [{
+                type: 'bar', orientation: 'h', y: steps_y, x: dx, base: base,
+                marker: { color: col, line: { width: 0 } }, width: 0.58,
+                text: txt, textposition: 'auto', insidetextanchor: 'middle', cliponaxis: false,
+                insidetextfont: { color: '#ffffff', size: 11 }, outsidetextfont: { color: ink, size: 11 },
+                hovertext: hv, hovertemplate: '%{hovertext}<extra></extra>'
+            }, {
+                type: 'scatter', mode: 'markers+text', y: [startLab, 'Published'], x: [start, total],
+                marker: { symbol: 'diamond', size: 13, color: tot, line: { width: 2, color: dark ? '#0d1117' : '#ffffff' } },
+                text: ['<b>' + start.toFixed(1) + '</b>', '<b>' + total.toFixed(1) + '</b>'],
+                textposition: pressure ? ['middle right', 'middle left'] : ['middle right', 'middle right'],
+                textfont: { color: ink, size: 12 }, cliponaxis: false,
+                hovertext: [startHov + '<br>' + start.toFixed(1) + unit, '<b>Published</b><br>' + total.toFixed(1) + unit],
+                hovertemplate: '%{hovertext}<extra></extra>'
+            }];
+            var shapes = conn.map(function (c) {
+                return { type: 'line', xref: 'x', yref: 'y', x0: c.v, x1: c.v,
+                         y0: c.r0 + 0.32, y1: c.r1 - 0.32,
+                         line: { color: dark ? 'rgba(255,255,255,0.22)' : '#cbd5e1', width: 1, dash: 'dot' } };
+            });
+            var H = 40 + labs.length * (narrow ? 32 : 34) + 30;
+            Plotly.react(el, traces, {
+                title: { text: title, x: 0, xanchor: 'left', font: { size: 13, color: ink } },
+                height: H, margin: { l: 8, r: 18, t: 34, b: 28 },
                 paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-                font: { color: fc, size: 10 }, showlegend: false,
-                xaxis: { tickangle: -35, automargin: true },
-                yaxis: { gridcolor: grid, title: { text: unit.trim(), font: { size: 10 } },
-                         range: rng, autorange: false }
+                font: { color: fc, size: 11 }, showlegend: false, hoverlabel: hov,
+                barmode: 'overlay', shapes: shapes,
+                yaxis: { type: 'category', categoryorder: 'array', categoryarray: labs,
+                         range: [labs.length - 0.5, -0.5], automargin: true, ticksuffix: '  ',
+                         showgrid: false, tickfont: { size: narrow ? 11 : 12, color: fc } },
+                xaxis: { range: rng, autorange: false, gridcolor: grid, zeroline: false,
+                         tickfont: { size: 10, color: muted }, nticks: 6 }
             }, { displayModeBar: false, responsive: true })
               .then(function () { Plotly.Plots.resize(el); });
+            var offEl = document.getElementById(el + '-off');
+            if (offEl) offEl.innerHTML = off.length
+                ? '<div style="font-size:11px;color:' + muted + ';padding:0 2px 6px;">Not active now: ' +
+                  off.join(' · ') + '</div>' : '';
         }
-        wf('exp-why-v', 'Maximum wind (kt)', ' kt',
-           ['Single-image estimate'].concat(WHY_V.map(function (w) { return w[0]; })).concat(['Published']),
-           S.dv, ['the intensity model applied to this image and its recent infrared history']
-               .concat(WHY_V.map(function (w) { return w[1]; })).concat(['published estimate']),
-           S.v[0], f.vmax_kt, false);
-        wf('exp-why-p', 'Minimum pressure (hPa)', ' hPa',
-           ['Pressure head'].concat(WHY_P.map(function (w) { return w[0]; })).concat(['Published']),
-           S.dp, ['the pressure model applied to this image, storm history and environmental pressure']
-               .concat(WHY_P.map(function (w) { return w[1]; })).concat(['published estimate']),
-           S.p[0], S.p[4], true);
+        wf('exp-why-v', 'Maximum wind (kt)', ' kt', 'Image estimate',
+           '<b>Single-image estimate</b><br>' + wrap('the intensity model applied to this image and its recent infrared history', 44),
+           WHY_V, S.dv, S.v[0], f.vmax_kt, false);
+        wf('exp-why-p', 'Minimum pressure (hPa)', ' hPa', 'Pressure head',
+           '<b>Pressure head</b><br>' + wrap('the pressure model applied to this image, storm history and environmental pressure', 44),
+           WHY_P, S.dp, S.p[0], S.p[4], true);
+
         /* Through the storm's life: wind steps stacked relative to the
            single-image estimate; the line is their sum (published minus
-           single-image). */
+           single-image). Only steps that ever moved the value get a series. */
         var T = idx.map(function (i) { return fr[i].t; });
         var cols = ['#F47321', '#94a3b8', '#2e7dff', '#4a9b6e', '#6db993', '#f9a66c', '#64748b'];
         var allS = idx.map(function (i) { return whySteps(fr[i]); });
         var tr = WHY_V.map(function (w, k) {
             return { type: 'bar', x: T, y: allS.map(function (q) { return q.dv[k]; }),
-                     name: w[0], marker: { color: cols[k] },
+                     name: w[0], marker: { color: cols[k], line: { width: 0 } }, opacity: 0.9,
                      hovertemplate: w[0] + ': %{y:+.1f} kt<extra></extra>' };
         }).filter(function (t) { return t.y.some(function (y) { return Math.abs(y) > 0.05; }); });
-        tr.push({ type: 'scatter', mode: 'lines', x: T,
-                  y: allS.map(function (q) { return Math.round((q.v[7] - q.v[0]) * 10) / 10; }),
-                  name: 'Net (published − single-image)', line: { color: fc, width: 1.6 },
+        /* break the net line across gaps (> 3 h, e.g. a remnant-low spell) */
+        var netX = [], netY = [];
+        allS.forEach(function (q, k) {
+            if (k && new Date(T[k]) - new Date(T[k - 1]) > 3 * 3.6e6) { netX.push(null); netY.push(null); }
+            netX.push(T[k]); netY.push(Math.round((q.v[7] - q.v[0]) * 10) / 10);
+        });
+        tr.push({ type: 'scatter', mode: 'lines', x: netX, connectgaps: false,
+                  y: netY,
+                  name: 'Net change', line: { color: ink, width: 1.8 },
                   hovertemplate: 'net %{y:+.1f} kt<extra></extra>' });
         Plotly.react('exp-why-t', tr, {
-            title: { text: 'How each step moved the wind through the storm’s life', font: { size: 12 } },
-            barmode: 'relative', bargap: 0, height: 280,
-            margin: { l: 46, r: 10, t: 30, b: 40 },
+            title: { text: narrow ? 'Each step through the storm’s life'
+                                  : 'How each step moved the wind through the storm’s life',
+                     x: 0, xanchor: 'left', font: { size: 13, color: ink } },
+            barmode: 'relative', bargap: 0.05, height: narrow ? 300 : 280,
+            margin: { l: 44, r: 10, t: 34, b: 36 },
             paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
             hoverlabel: hov,
-            font: { color: fc, size: 10 }, hovermode: 'x unified',
-            legend: { orientation: 'h', y: -0.25, font: { size: 10 } },
-            xaxis: { gridcolor: grid },
-            yaxis: { title: { text: 'kt vs single-image estimate', font: { size: 10 } },
-                     gridcolor: grid, zeroline: true, zerolinecolor: fc },
+            font: { color: fc, size: 11 }, hovermode: 'x unified',
+            legend: { orientation: 'h', y: narrow ? -0.32 : -0.22, font: { size: 11 } },
+            xaxis: { gridcolor: grid, tickfont: { color: muted } },
+            yaxis: { title: { text: 'kt vs image estimate', font: { size: 10, color: muted } },
+                     gridcolor: grid, zeroline: true, zerolinecolor: dark ? 'rgba(255,255,255,0.25)' : '#94a3b8',
+                     tickfont: { color: muted } },
             shapes: [{ type: 'line', xref: 'x', yref: 'paper', x0: f.t, x1: f.t, y0: 0, y1: 1,
-                       line: { color: tot, width: 1, dash: 'dot' } }]
+                       line: { color: up, width: 1.5, dash: 'dot' } }]
         }, { displayModeBar: false, responsive: true })
           .then(function () { Plotly.Plots.resize('exp-why-t'); });
         var tEl = document.getElementById('exp-why-t');
