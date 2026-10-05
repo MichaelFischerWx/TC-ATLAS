@@ -420,7 +420,7 @@
         var layout = B.chartLayout({ margin: { l: 34, r: 8, t: 6, b: 30 }, fontSize: 9,
             yaxis: { title: { text: '% members', font: { size: 9 } }, rangemode: 'tozero', ticksuffix: '%' },
             xaxis: { tickfont: { size: 8 }, tickangle: 0, nticks: 8 } });
-        Plotly.react(el, [{ type: 'bar', x: xs, y: ys, text: txt, hovertemplate: '%{text}<extra></extra>',
+        Plotly.react(el, [{ type: 'bar', x: xs, y: ys, text: txt, textposition: 'none', hovertemplate: '%{text}<extra></extra>',
                             marker: { color: '#34d399', opacity: 0.9 } }], layout,
                      { displayModeBar: false, responsive: true });
     }
@@ -490,7 +490,7 @@
             traces.push({ type: 'bar', name: catLabel(cats[ci]), x: xs.map(function (t) { return '+' + t + 'h'; }), y: ys,
                           marker: { color: catColor(cats[ci]) },
                           text: xs.map(function (t) { return fmtTauDate(init, t) + ' – ' + fmtTauDate(init, t + bin); }),
-                          hovertemplate: '%{text}<br>' + catLabel(cats[ci]) + ': %{y:.1f}% of members<extra></extra>' });
+                          textposition: 'none', hovertemplate: '%{text}<br>' + catLabel(cats[ci]) + ': %{y:.1f}% of members<extra></extra>' });
         }
         var layout = B.chartLayout({ margin: { l: 34, r: 8, t: 6, b: 30 }, fontSize: 9, legend: true,
             yaxis: { title: { text: '% members', font: { size: 9 } }, rangemode: 'tozero', ticksuffix: '%' },
@@ -698,30 +698,38 @@
     function exportChart(elId, label) {
         var el = $(elId); if (!el || !el.data || typeof Plotly === 'undefined') return;
         var isDark = B.isDark();
-        var wl = B.wl() || {};
+        // The DeepMind modal's charts (rt-genesis-*) describe the modal's
+        // system, not whatever storm card is open behind it.
+        var who, idTag, init, mtag, mshort;
+        if (elId.indexOf('rt-genesis-') === 0 && M.data) {
+            who = M.data.label || 'Genesis cluster'; idTag = M.data.atcf || who.replace(/[^a-z0-9]+/gi, '_');
+            init = M.data.init; mtag = modalModelTag(); mshort = modalModelShort();
+        } else {
+            var wl = B.wl() || {}, storm = B.stormName() || '', sid = B.stormId() || '';
+            who = storm + (sid && storm.indexOf(sid) < 0 ? ' (' + sid + ')' : ''); idTag = sid || 'storm';
+            init = wl.init_time; mtag = modelTag(); mshort = B.model() === 'wnv3' ? 'WN3' : 'FNV3';
+        }
         var data = JSON.parse(JSON.stringify(el.data)), layout = JSON.parse(JSON.stringify(el.layout));
-        var storm = B.stormName() || '', sid = B.stormId() || '';
-        var title = label + ' — ' + storm + ' (' + sid + ') — ' + modelTag() + ' init ' + fmtInit(wl.init_time);
-        layout.title = { text: title, font: { size: 15, color: isDark ? '#e2e8f0' : '#1e293b' }, x: 0.5, xanchor: 'center', y: 0.97 };
+        var ink = isDark ? '#e2e8f0' : '#1e293b', dim = isDark ? '#94a3b8' : '#64748b';
+        layout.title = { text: '<b>' + esc(label) + '</b><br><span style="font-size:12px;color:' + dim + ';">'
+                             + esc(who) + ' · ' + esc(mtag) + ' · init ' + fmtInit(init) + ' UTC</span>',
+                         font: { size: 16, color: ink }, x: 0.5, xanchor: 'center', y: 0.95, yanchor: 'top' };
         layout.paper_bgcolor = layout.plot_bgcolor = isDark ? '#0f172a' : '#ffffff';
-        layout.width = 900; layout.height = 520;
-        layout.margin = { l: 64, r: 30, t: 80, b: 90 };
+        layout.width = 900; layout.height = 500;
+        layout.margin = { l: 64, r: 30, t: 84, b: 56 };
         layout.font = Object.assign({}, layout.font, { size: 13 });
         ['xaxis', 'yaxis'].forEach(function (ax) { if (layout[ax]) { layout[ax].tickfont = { size: 12 }; if (layout[ax].title) layout[ax].title.font = { size: 13 }; } });
         if (layout.legend) layout.legend.font = { size: 11 };
-        layout.annotations = (layout.annotations || []).concat([{
-            text: 'Experimental research guidance (Google DeepMind ensemble via TC-ATLAS) — not an official forecast. See NHC / JTWC or your national weather service.',
-            xref: 'paper', yref: 'paper', x: 0, y: -0.17, xanchor: 'left', yanchor: 'top', showarrow: false,
-            font: { size: 10, color: isDark ? '#94a3b8' : '#64748b' } },
-            { text: 'tcatlas.org', xref: 'paper', yref: 'paper', x: 1, y: -0.17, xanchor: 'right', yanchor: 'top', showarrow: false,
-              font: { size: 10, color: isDark ? '#475569' : '#94a3b8' } }]);
         var tmp = document.createElement('div'); tmp.style.cssText = 'position:absolute;left:-9999px;top:-9999px;';
         document.body.appendChild(tmp);
+        var fn = 'TC-ATLAS_' + idTag + '_' + label.replace(/[^a-z0-9]+/gi, '_') + '_' + mshort + '_init' + (init || '') + '.png';
+        // Same footer as every other TC-ATLAS save: caption bottom-left, logo
+        // + tcatlas.org bottom-right, in a strip below the chart.
+        var caption = 'Experimental research guidance · NOT an official forecast — see NHC / CPHC / JTWC';
         Plotly.newPlot(tmp, data, layout, { displayModeBar: false })
-            .then(function () { return Plotly.toImage(tmp, { format: 'png', width: 900, height: 520, scale: 2 }); })
+            .then(function () { return Plotly.toImage(tmp, { format: 'png', width: 900, height: 500, scale: 2 }); })
             .then(function (url) {
-                var fn = 'TC-ATLAS_' + sid + '_' + label.replace(/[^a-z0-9]+/gi, '_') + '_' + (B.model() === 'wnv3' ? 'WN3' : 'FNV3') + '_init' + (wl.init_time || '') + '_' + (isDark ? 'dark' : 'light') + '.png';
-                B.saveImageBlob(B.dataURLToBlob(url), fn);
+                B.stampExport(url, 1800, 1000, function (blob) { B.saveImageBlob(blob || B.dataURLToBlob(url), fn); }, caption);
             })
             .catch(function (e) { console.warn('[RTDM] export failed', e); })
             .then(function () { try { Plotly.purge(tmp); } catch (e) {} if (tmp.parentNode) tmp.parentNode.removeChild(tmp); });
@@ -911,6 +919,7 @@
                 M.adeck = ad;
                 decorateTrackMap('rt-genesis-modal-map'); decorateIntensity('rt-genesis-modal-int');
                 if (S_modalPaneVisible('risk')) drawModalRiskMap();
+                if (S_modalPaneVisible('landfall')) drawModalLfMap();
             }).catch(function () {});
         }
     }
@@ -1194,33 +1203,21 @@
         var insetLat = fLat.length ? fLat[0] : 0, insetLon = fLon.length ? T().wrapLon(fLon[0]) : 0;
         var layout = B.geoLayout(bounds, { domainY: [0, 1], insetLon: insetLon, insetLat: insetLat, insetDomain: { x: [0.01, 0.17], y: [0.02, 0.36] } });
         layout.margin = { l: 4, r: 4, t: 8, b: 4 };
-        // Burn the liability note into the map itself (survives screenshots).
-        // Plotly annotations clip rather than wrap, so fit the box to the map:
-        // pick the largest font whose longest line fits, then shorten lines.
-        var mapW = Math.max(200, el.clientWidth || 600);
+        // Burn the liability note + key into the map itself (survives
+        // screenshots, and the saved PNG needs no HTML legend to read).
         var fcm2 = M.risk.nhc && modalOfficial();
         function annLines(short) {
             var L = ['<b>Not an official forecast</b>',
-                     esc(short ? (M.data.variant === 'wnv3' ? 'WN3' : 'FNV3') + ' ensemble' : modalModelTag() + ' ensemble · experimental'),
-                     '<span style="color:' + ofclCasing() + ';">━━</span> ensemble mean' + (short ? '' : ' (solid)')];
-            if (M.risk.swath) L.push('<span style="color:' + CYAN + ';">╌╌</span> ' + M.risk.swath + '% ensemble swath' + (short ? ' — not NHC cone' : ' — not the NHC cone'));
+                     esc(short ? modalModelShort() + ' ensemble' : modalModelTag() + ' ensemble · experimental'),
+                     swatch(ofclCasing(), '━━') + ' ensemble mean' + (short ? '' : ' (solid), dots every 24 h'),
+                     swatch('rgba(249,115,22,0.8)', '──') + ' member tracks'];
+            if (M.risk.swath) L.push(swatch(CYAN, '╌╌') + ' ' + M.risk.swath + '% ensemble swath' + (short ? ' — not NHC cone' : ' — not the NHC cone'));
             else L.push(short ? 'wind chances — not NHC' : 'wind chances — not NHC probabilities');
+            if (M.risk.thresh) L.push(probKey(short));
             if (fcm2) L.push(ofclSwatch() + ' ' + esc(fcm2.name || fcm2.tech) + (short ? ' (dashed)' : ' forecast (dashed) — authoritative'));
             return L;
         }
-        function plainLen(t) { return t.replace(/<[^>]*>/g, '').length; }
-        var annFont = 10, lines = annLines(false), maxPx = mapW - 28;
-        function widest(ls) { return Math.max.apply(null, ls.map(function (t) { return plainLen(t) * annFont * 0.56; })); }
-        while (widest(lines) > maxPx && annFont > 8) annFont--;
-        if (widest(lines) > maxPx) { lines = annLines(true); while (widest(lines) > maxPx && annFont > 7) annFont--; }
-        layout.annotations = (layout.annotations || []).concat([{
-            // Bottom-left: clear of the ⤓ PNG button (top-right) on every width.
-            xref: 'paper', yref: 'paper', x: 0.005, y: 0.01, xanchor: 'left', yanchor: 'bottom', showarrow: false, align: 'left',
-            text: lines.join('<br>'),
-            font: { size: annFont, color: isDark ? '#e2e8f0' : '#0f172a' },
-            bgcolor: isDark ? 'rgba(15,23,42,0.72)' : 'rgba(255,255,255,0.78)',
-            bordercolor: 'rgba(0,229,255,0.45)', borderwidth: 1, borderpad: 5,
-        }]);
+        layout.annotations = (layout.annotations || []).concat([legendBox(el, annLines, isDark)]);
         // The liability box is pinned to the frame by index: capture it BEFORE
         // the window note is appended.
         var annIdx = layout.annotations.length - 1;
@@ -1239,15 +1236,7 @@
         layout.dragmode = 'pan';
         layout.hovermode = 'closest';
         Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: true })
-            .then(function () { anchorAnnotationToFrame(el, annIdx); });
-        if (!el._rtdmRelayoutBound) {
-            el._rtdmRelayoutBound = true;
-            // Zoom / pan / resize move the frame: keep the box pinned to it.
-            el.on('plotly_relayout', function (ev) {
-                if (ev && (ev['annotations[' + annIdx + '].x'] != null)) return;   // our own relayout
-                anchorAnnotationToFrame(el, annIdx);
-            });
-        }
+            .then(function () { pinLegend(el, annIdx); });
         if (!el._rtdmClickBound) {
             el._rtdmClickBound = true;
             el.on('plotly_click', function (ev) {
@@ -1256,47 +1245,51 @@
             });
         }
     }
-    // PNG of the modal Wind Risk map: rasterize the geo panel (SVG path on
-    // Safari) then stamp the footer — caption (storm · model · layer · NOT an
-    // official forecast) bottom-left, TC-ATLAS logo + tcatlas.org bottom-right.
-    function exportModalRiskMap() {
-        var el = $('rt-genesis-modal-riskmap'); if (!el || !el.data || !M.data || typeof Plotly === 'undefined') return;
-        // Size the export to the MAP FRAME's aspect (not the container's): a geo
-        // frame is letterboxed inside the plot area, and Plotly anchors the
-        // legend box to the plot area — matching aspects makes the frame fill
-        // the image so the box lands inside the map, and no blank margins.
-        var W = 1600, H;
-        try {
-            var sp = el._fullLayout.geo._subplot;
-            H = Math.round((W - 8) * sp.yaxis._length / sp.xaxis._length) + 12;
-        } catch (e) { H = Math.round(W * el.clientHeight / Math.max(1, el.clientWidth)); }
-        H = Math.max(500, Math.min(2200, H));
-        var r = M.risk;
-        // Keep it to one line clear of the watermark: the map's own annotation
-        // already carries the swath / cone wording.
-        var caption = (M.data.label || '') + ' · ' + modalModelTag() + ' · init ' + fmtInit(M.data.init)
-            + (r.thresh ? ' · P(≥' + r.thresh + ' kt) within ' + r.horizon + ' h' : '')
-            + ' · NOT an official forecast';
-        var fn = 'TC-ATLAS_' + (M.data.atcf || (M.data.label || 'system').replace(/[^a-z0-9]+/gi, '_')) + '_wind_risk'
-            + (r.thresh ? '_p' + r.thresh + '_' + r.horizon + 'h' : '') + '_' + (M.data.variant === 'wnv3' ? 'WN3' : 'FNV3') + '_init' + (M.data.init || '') + '.png';
-        // Export goes through an SVG image, where the DM Sans web font is not
-        // available: text falls back to a wider system face than the one
-        // Plotly measured the legend box with, and the box clips it. Export a
-        // copy whose fonts name the system stack up front so measurement and
-        // rendering use the same face.
-        var SYS = '-apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif';
-        var lay = JSON.parse(JSON.stringify(el.layout));
-        lay.font = Object.assign({}, lay.font, { family: SYS });
-        (lay.annotations || []).forEach(function (a) { a.font = Object.assign({}, a.font, { family: SYS }); a.borderpad = Math.max(a.borderpad || 0, 6);
-            // The frame fills the export, so anchor just inside its corner.
-            if (a.xanchor === 'left' && a.yanchor === 'bottom') { a.x = 0.008; a.y = 0.012; } });
-        if (lay.geo && lay.geo.lonaxis && lay.geo.lonaxis.tickfont) lay.geo.lonaxis.tickfont.family = SYS;
-        if (lay.geo && lay.geo.lataxis && lay.geo.lataxis.tickfont) lay.geo.lataxis.tickfont.family = SYS;
-        var shim = { data: el.data, layout: lay };
-        B.panelExportURL(shim, 2.2, W, H, 1).then(function (url) {
-            B.stampExport(url, W, H, function (blob) { if (blob) B.saveImageBlob(blob, fn); }, caption);
-        }).catch(function (e) { console.warn('[RTDM] risk map export failed', e); });
-        B.ga('rt_dm_modal_risk_export', { thresh: r.thresh });
+    // ── Modal geo maps: in-map legend box, frame pinning, PNG export ──────
+    // System stack, not DM Sans: Plotly sizes an annotation's box with the
+    // font it measures on screen, but the export's SVG→image raster has no
+    // web font and draws a wider face, overflowing the box.
+    var SYS_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif';
+    function swatch(color, glyph) { return '<span style="color:' + color + ';">' + glyph + '</span>'; }
+    function modalModelShort() { return M.data && M.data.variant === 'wnv3' ? 'WN3' : 'FNV3'; }
+    // Probability key matching the filled contours (10/30/50/70/90 %).
+    function probKey(short) {
+        var sq = [0.1, 0.3, 0.5, 0.7, 0.9].map(function (lv) {
+            var c = probColor(lv + 0.05);
+            return swatch('rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')', '■') + Math.round(lv * 100);
+        }).join(' ');
+        return (short ? '≥' + M.risk.thresh + ' kt ' : 'P(≥' + M.risk.thresh + ' kt) within ' + M.risk.horizon + ' h  ') + sq + '%';
+    }
+    // Bottom-left legend box. Plotly annotations clip rather than wrap, so
+    // fit it to the map: the largest font whose longest line fits, else the
+    // short wording. linesFn(short) → array of HTML lines.
+    function legendBox(el, linesFn, isDark) {
+        var maxPx = Math.max(200, el.clientWidth || 600) - 28;
+        var annFont = 10, lines = linesFn(false);
+        function widest(ls) { return Math.max.apply(null, ls.map(function (t) { return t.replace(/<[^>]*>/g, '').length * annFont * 0.56; })); }
+        while (widest(lines) > maxPx && annFont > 8) annFont--;
+        if (widest(lines) > maxPx) { lines = linesFn(true); while (widest(lines) > maxPx && annFont > 7) annFont--; }
+        return {
+            // Bottom-left: clear of the ⤓ PNG button (top-right) on every width.
+            xref: 'paper', yref: 'paper', x: 0.005, y: 0.01, xanchor: 'left', yanchor: 'bottom', showarrow: false, align: 'left',
+            text: lines.join('<br>'),
+            font: { size: annFont, family: SYS_FONT, color: isDark ? '#e2e8f0' : '#0f172a' },
+            bgcolor: isDark ? 'rgba(15,23,42,0.78)' : 'rgba(255,255,255,0.82)',
+            bordercolor: 'rgba(0,229,255,0.45)', borderwidth: 1, borderpad: 5,
+            _rtdmLegend: 1,
+        };
+    }
+    // Keep the legend box pinned inside the frame through zoom / pan / resize.
+    function pinLegend(el, idx) {
+        el._rtdmAnnIdx = idx;
+        anchorAnnotationToFrame(el, idx);
+        if (el._rtdmRelayoutBound) return;
+        el._rtdmRelayoutBound = true;
+        el.on('plotly_relayout', function (ev) {
+            var i = el._rtdmAnnIdx;
+            if (i == null || (ev && ev['annotations[' + i + '].x'] != null)) return;   // our own relayout
+            anchorAnnotationToFrame(el, i);
+        });
     }
     // Plotly annotations use "paper" coordinates = the whole plot area, but a
     // geo map draws its frame centred and letterboxed inside that area, so a
@@ -1317,6 +1310,54 @@
             Plotly.relayout(el, upd);
         } catch (e) { /* leave the paper-anchored fallback */ }
     }
+    // PNG of a modal geo map (Wind Risk / Landfall): rasterize the geo panel
+    // via the SVG path (Safari-safe) then stamp the footer — caption bottom-
+    // left, TC-ATLAS logo + tcatlas.org bottom-right.
+    //
+    // The export is sized to the MAP FRAME's aspect with near-zero margins so
+    // the frame fills the image (no blank bands) and the legend box, placed
+    // from the predicted frame rectangle, always lands inside the map.
+    function exportModalGeo(elId, kind) {
+        var el = $(elId); if (!el || !el.data || !M.data || typeof Plotly === 'undefined') return;
+        var W = 1600, PAD = 4, aspect;
+        try { var sp = el._fullLayout.geo._subplot; aspect = sp.xaxis._length / sp.yaxis._length; } catch (e) { aspect = 0; }
+        if (!(aspect > 0)) aspect = Math.max(1, el.clientWidth) / Math.max(1, el.clientHeight);
+        var H = Math.max(500, Math.min(2200, Math.round((W - 2 * PAD) / aspect) + 2 * PAD));
+        // Predicted frame inside the plot area (Plotly centres a letterboxed
+        // frame) — only differs from the full area when H hit its clamp.
+        var pw = W - 2 * PAD, ph = H - 2 * PAD, fw = pw, fh = pw / aspect;
+        if (fh > ph) { fh = ph; fw = ph * aspect; }
+        var ax = (pw - fw) / 2 + 10, ay = (ph - fh) / 2 + 10;
+        var lay = JSON.parse(JSON.stringify(el.layout));
+        lay.font = Object.assign({}, lay.font, { family: SYS_FONT });
+        (lay.annotations || []).forEach(function (a) {
+            a.font = Object.assign({}, a.font, { family: SYS_FONT }); a.borderpad = Math.max(a.borderpad || 0, 6);
+            if (a._rtdmLegend) { a.x = ax / pw; a.y = ay / ph; }
+        });
+        var shim = { data: el.data, layout: lay };
+        var d = M.data, r = M.risk, model = modalModelShort();
+        var stem = 'TC-ATLAS_' + (d.atcf || (d.label || 'system').replace(/[^a-z0-9]+/gi, '_'));
+        // Keep the caption to one line clear of the watermark: the map's own
+        // legend box already carries the swath / cone wording.
+        var caption, fn;
+        if (kind === 'landfall') {
+            caption = (d.label || '') + ' · ' + modalModelTag() + ' · init ' + fmtInit(d.init) + ' · member landfall points · NOT an official forecast';
+            fn = stem + '_landfall_' + model + '_init' + (d.init || '') + '.png';
+        } else {
+            caption = (d.label || '') + ' · ' + modalModelTag() + ' · init ' + fmtInit(d.init)
+                + (r.thresh ? ' · P(≥' + r.thresh + ' kt) within ' + r.horizon + ' h' : '') + ' · NOT an official forecast';
+            fn = stem + '_wind_risk' + (r.thresh ? '_p' + r.thresh + '_' + r.horizon + 'h' : '') + '_' + model + '_init' + (d.init || '') + '.png';
+        }
+        // Lay out at W×H, then stamp at 2× — the SVG is vector, so drawing it
+        // onto the larger canvas sharpens coastlines and text for free.
+        var SS = 2;
+        B.panelExportURL(shim, 2.2, W, H, 1, { margin: { l: PAD, r: PAD, t: PAD, b: PAD } }).then(function (url) {
+            B.stampExport(url, W * SS, H * SS, function (blob) { if (blob) B.saveImageBlob(blob, fn); }, caption);
+        }).catch(function (e) { console.warn('[RTDM] ' + kind + ' map export failed', e); });
+        B.ga('rt_dm_modal_' + (kind === 'landfall' ? 'landfall' : 'risk') + '_export', { thresh: r.thresh });
+    }
+    function exportModalRiskMap() { exportModalGeo('rt-genesis-modal-riskmap', 'risk'); }
+    function exportModalLfMap() { exportModalGeo('rt-genesis-modal-lfmap', 'landfall'); }
     function renderModalLandfall() {
         var el = $('rt-genesis-pane-landfall'); if (!el || !M.data) return;
         if (!S.landMask) {
@@ -1351,19 +1392,20 @@
                 + mstat('Median timing', '+' + q[1] + ' h', fmtTauDate(init, q[1]) + ' · 80% in +' + q[0] + '–' + q[2] + ' h')
                 + mstat('Intensity at landfall', catLabel(medCat), 'median ' + Math.round(wq[0]) + ' kt among landfalling members', catColor(medCat))
                 + '</div>';
-            html += msection('When members make landfall', '12-h bins, stacked by intensity at landfall', 'rt-genesis-lf-chart', 200, 'Landfall timing');
-            // Hotspots: cluster events on a 1° grid, top 5.
-            var cells = {};
-            lf.events.forEach(function (e) { var k = Math.round(e.lat) + ',' + Math.round(e.lon); (cells[k] = cells[k] || []).push(e); });
-            var hot = Object.keys(cells).map(function (k) { return { k: k, ev: cells[k] }; }).sort(function (a, b) { return b.ev.length - a.ev.length; }).slice(0, 5);
-            html += '<div class="rt-genesis-trend-head" style="margin-top:14px;"><span class="rt-genesis-trend-title">Where</span><span class="rt-genesis-trend-note">member landfalls grouped to 1°</span></div><div class="rt-genesis-hotspots">';
-            hot.forEach(function (h) {
-                var la = h.ev.reduce(function (a, e) { return a + e.lat; }, 0) / h.ev.length, lo = h.ev.reduce(function (a, e) { return a + e.lon; }, 0) / h.ev.length;
-                var tq = T().percentiles(h.ev.map(function (e) { return e.tau; }), [0.5]), wq2 = T().percentiles(h.ev.filter(function (e) { return e.wind != null; }).map(function (e) { return e.wind; }), [0.5]);
-                html += '<div class="rt-genesis-hot"><span class="rt-genesis-hot-p">' + pct(h.ev.length / n) + '</span><span>near ' + B.fmtLatLon(la, lo) + '</span>'
-                    + '<span class="rt-dm-readout-sub">median ' + fmtTauDate(init, tq[0]) + (wq2[0] != null ? ' · ' + catLabel(T().catOf(wq2[0])) : '') + '</span></div>';
+            // Where: the map of every member's landfall point, then the top
+            // 1° hotspots as a ranked list (numbered to match the map).
+            var hot = lfHotspots(lf);
+            html += '<div class="rt-genesis-modal-chart-wrap" style="position:relative; max-width:860px; margin:14px auto 0; padding-top:32px;">'
+                + '<button type="button" class="rt-genesis-modal-save" title="Save the landfall map as PNG (with TC-ATLAS watermark and the not-an-official-forecast note)" onclick="window.RTDM.exportModalLfMap()">⤓ PNG</button>'
+                + '<div class="rt-genesis-trend-head"><span class="rt-genesis-trend-title">Where members make landfall</span><span class="rt-genesis-trend-note">each dot = one member\'s first landfall, colored by intensity · scroll or pinch to zoom</span></div>'
+                + '<div id="rt-genesis-modal-lfmap" style="width:100%; height:380px;"></div></div>';
+            html += '<div class="rt-genesis-trend-head" style="margin-top:10px;"><span class="rt-genesis-trend-title">Top landfall areas</span><span class="rt-genesis-trend-note">member landfalls grouped to 1° · numbers match the map</span></div><div class="rt-genesis-hotspots">';
+            hot.forEach(function (h, i) {
+                html += '<div class="rt-genesis-hot"><span class="rt-genesis-hot-p">' + pct(h.p) + '</span><span>' + (i + 1) + ' · near ' + B.fmtLatLon(h.lat, h.lon) + '</span>'
+                    + '<span class="rt-dm-readout-sub">median ' + fmtTauDate(init, h.tau) + (h.wind != null ? ' · ' + catLabel(T().catOf(h.wind)) : '') + '</span></div>';
             });
             html += '</div>';
+            html += msection('When members make landfall', '12-h bins, stacked by intensity at landfall', 'rt-genesis-lf-chart', 200, 'Landfall timing');
         }
         html += msection('Members still tracking the system', 'share of members that still carry the system at each lead', 'rt-genesis-surv-chart', 140, 'Ensemble survival');
         html += note('"Landfall" = the member\'s center first crossing from sea to land on a 0.1° coastline mask (small islands and narrow peninsulas can be missed; timing ±1 h).'
@@ -1372,9 +1414,110 @@
             + '<a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener">NHC</a> / CPHC / JTWC or your national weather service.');
         el.innerHTML = html;
         B.whenPlotly(function () {
-            if (lf.events.length) { var lfEl = $('rt-genesis-lf-chart'); if (lfEl) drawLfChartInto(lfEl, lf, init); }
+            if (lf.events.length) { drawModalLfMap(); var lfEl = $('rt-genesis-lf-chart'); if (lfEl) drawLfChartInto(lfEl, lf, init); }
             var sv = $('rt-genesis-surv-chart'); if (sv) drawSurvivalInto(sv, d.members, T().survival(d.members, allTaus(d.members)).taus);
         });
+    }
+    // Top-5 landfall areas: member landfalls grouped on a 1° grid.
+    function lfHotspots(lf) {
+        var cells = {};
+        lf.events.forEach(function (e) { var k = Math.round(e.lat) + ',' + Math.round(e.lon); (cells[k] = cells[k] || []).push(e); });
+        return Object.keys(cells).map(function (k) { return cells[k]; })
+            .sort(function (a, b) { return b.length - a.length; }).slice(0, 5)
+            .map(function (ev) {
+                var winds = ev.filter(function (e) { return e.wind != null; }).map(function (e) { return e.wind; });
+                return { p: ev.length / lf.n,
+                         lat: ev.reduce(function (a, e) { return a + e.lat; }, 0) / ev.length,
+                         lon: ev.reduce(function (a, e) { return a + e.lon; }, 0) / ev.length,
+                         tau: T().percentiles(ev.map(function (e) { return e.tau; }), [0.5])[0],
+                         wind: winds.length ? T().percentiles(winds, [0.5])[0] : null };
+            });
+    }
+    // Frame the landfall points themselves (the track-map framer pads ≥6–8°,
+    // far too loose for points strung along one coastline), then widen the
+    // short side to the container's aspect at the Mercator centre-line scale.
+    function lfBounds(lats, lons, aspect) {
+        var la0 = Math.min.apply(null, lats), la1 = Math.max.apply(null, lats);
+        var lo0 = Math.min.apply(null, lons), lo1 = Math.max.apply(null, lons);
+        var pLa = Math.max(2.5, 0.15 * (la1 - la0)), pLo = Math.max(3, 0.15 * (lo1 - lo0));
+        var bLat = [Math.max(-80, la0 - pLa), Math.min(80, la1 + pLa)], bLon = [lo0 - pLo, lo1 + pLo];
+        var cosLat = Math.max(0.2, Math.cos((bLat[0] + bLat[1]) / 2 * Math.PI / 180));
+        var latSpan = bLat[1] - bLat[0], lonSpan = bLon[1] - bLon[0];
+        var wantLon = latSpan * aspect / cosLat;
+        if (wantLon > lonSpan) { var ex = (wantLon - lonSpan) / 2; bLon = [bLon[0] - ex, bLon[1] + ex]; }
+        else { var exLa = (lonSpan * cosLat / aspect - latSpan) / 2; bLat = [Math.max(-80, bLat[0] - exLa), Math.min(80, bLat[1] + exLa)]; }
+        return { lat: bLat, lon: bLon };
+    }
+    // Landfall map: every member's first landfall (Saffir–Simpson colored),
+    // the numbered top areas, the ensemble mean and the official track.
+    function drawModalLfMap() {
+        var el = $('rt-genesis-modal-lfmap'), lf = M.lf; if (!el || !M.data || !lf || !lf.events.length) return;
+        var d = M.data, isDark = B.isDark(), init = d.init, ink = isDark ? '#e2e8f0' : '#0f172a';
+        // Weakest first so the strongest landfalls draw on top.
+        var evs = lf.events.slice().sort(function (a, b) { return (a.wind || 0) - (b.wind || 0); });
+        var refLon = B.circMeanLon(evs.map(function (e) { return e.lon; }));
+        function U(lon) { return T().unwrapLon(lon, refLon); }
+        // Mean track out to the P90 landfall time: past that only a handful of
+        // members remain and the mean wanders.
+        var lastTau = T().percentiles(lf.taus, [0.9])[0];
+        var mean = (d.mean && d.mean.points || []).filter(function (p) { return p.lat != null && p.lon != null && p.tau <= lastTau + 12; });
+        var mx = mean.map(function (p) { return U(p.lon); }), my = mean.map(function (p) { return p.lat; });
+        var traces = [];
+        if (mx.length > 1) {
+            traces.push({ type: 'scattergeo', mode: 'lines', lon: mx, lat: my, line: { color: ofclCasing(), width: 4.6 }, opacity: 0.9, hoverinfo: 'skip', showlegend: false });
+            traces.push({ type: 'scattergeo', mode: 'lines', lon: mx, lat: my, line: { color: ofclInner(), width: 2.2 }, hoverinfo: 'skip', showlegend: false });
+        }
+        var present = {};
+        traces.push({ type: 'scattergeo', mode: 'markers', lon: evs.map(function (e) { return U(e.lon); }), lat: evs.map(function (e) { return e.lat; }),
+            text: evs.map(function (e) {
+                var c = T().catOf(e.wind); present[c] = 1;
+                return '<b>Member ' + esc(e.member) + '</b> · landfall +' + e.tau + ' h (' + fmtTauDate(init, e.tau) + ')<br>'
+                    + B.fmtLatLon(e.lat, e.lon) + (e.wind != null ? ' · ' + e.wind + ' kt (' + catLabel(c) + ')' : '');
+            }),
+            hovertemplate: '%{text}<extra></extra>',
+            marker: { size: 6, opacity: 0.85, color: evs.map(function (e) { return catColor(T().catOf(e.wind)); }),
+                      line: { color: isDark ? 'rgba(15,23,42,0.9)' : 'rgba(255,255,255,0.9)', width: 0.6 } }, showlegend: false });
+        var fLat = evs.map(function (e) { return e.lat; }), fLon = evs.map(function (e) { return U(e.lon); });
+        var hot = lfHotspots(lf);
+        if (hot.length) {
+            // Numbered badges (the list below and the legend box carry the %):
+            // neighbouring 1° cells sit ~one badge apart, so labels stay short.
+            traces.push({ type: 'scattergeo', mode: 'markers+text', lon: hot.map(function (h) { return U(h.lon); }), lat: hot.map(function (h) { return h.lat; }),
+                text: hot.map(function (h, i) { return '<b>' + (i + 1) + '</b>'; }), textposition: 'middle center',
+                textfont: { size: 10, family: SYS_FONT, color: ink },
+                hovertext: hot.map(function (h, i) { return '<b>Area ' + (i + 1) + '</b> · ' + pct(h.p) + ' of members land near ' + B.fmtLatLon(h.lat, h.lon)
+                    + '<br>median ' + fmtTauDate(init, h.tau) + (h.wind != null ? ' · ' + catLabel(T().catOf(h.wind)) : ''); }),
+                hovertemplate: '%{hovertext}<extra></extra>',
+                marker: { size: 17, color: isDark ? 'rgba(15,23,42,0.88)' : 'rgba(255,255,255,0.9)', line: { color: ink, width: 1.4 } }, showlegend: false });
+        }
+        var fcm = M.risk.nhc && modalOfficial();
+        if (fcm) {
+            var fpts = ofclPoints(fcm);
+            var ftxt = fpts.map(function (p) { return '<b>' + esc(fcm.name || fcm.tech) + '</b> +' + p.tau + ' h · ' + fmtTauDate(fcm.init, p.tau) + (p.wind != null ? ' · ' + p.wind + ' kt' : '') + '<br>official forecast — authoritative'; });
+            ofclGeoTraces(fpts.map(function (p) { return U(p.lon); }), fpts.map(function (p) { return p.lat; }),
+                          fpts.map(function (p) { return p.tau % 24 === 0 ? 7 : 0; }), ftxt, fcm).forEach(function (t) { traces.push(t); });
+        }
+        var rect = el.getBoundingClientRect();
+        var aspect = rect.height > 0 ? Math.max(0.8, (rect.width - 20) / rect.height) : 2.0;
+        var layout = B.geoLayout(lfBounds(fLat, fLon, aspect), { domainY: [0, 1] });
+        layout.margin = { l: 4, r: 4, t: 8, b: 4 };
+        var catKey = ['TD', 'TS', 'C1', 'C2', 'C3', 'C4', 'C5'].filter(function (c) { return present[c]; })
+            .map(function (c) { return swatch(catColor(c), '●') + catLabel(c); }).join(' ');
+        function annLines(short) {
+            var L = ['<b>Not an official forecast</b>',
+                     esc(short ? modalModelShort() + ' ensemble' : modalModelTag() + ' ensemble · experimental'),
+                     (short ? '● member landfall: ' : '● member landfall, by intensity: ') + catKey,
+                     (short ? 'Top areas: ' : 'Top areas (% of members): ') + hot.map(function (h, i) { return '<b>' + (i + 1) + '</b> ' + pct(h.p); }).join(short ? ' ' : ' · ')];
+            if (mx.length > 1) L.push(swatch(ofclCasing(), '━━') + ' ensemble mean');
+            if (fcm) L.push(ofclSwatch() + ' ' + esc(fcm.name || fcm.tech) + (short ? ' (dashed)' : ' forecast (dashed) — authoritative'));
+            return L;
+        }
+        layout.annotations = (layout.annotations || []).concat([legendBox(el, annLines, isDark)]);
+        var annIdx = layout.annotations.length - 1;
+        layout.dragmode = 'pan';
+        layout.hovermode = 'closest';
+        Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true, scrollZoom: true })
+            .then(function () { pinLegend(el, annIdx); });
     }
     function allTaus(members) {
         var set = {}; Object.keys(members).forEach(function (k) { (members[k].points || []).forEach(function (p) { set[p.tau] = 1; }); });
@@ -1391,7 +1534,7 @@
             if (!ys.some(function (v) { return v > 0; })) continue;
             traces.push({ type: 'bar', name: catLabel(cats[ci]), x: xs.map(function (t) { return '+' + t + 'h'; }), y: ys, marker: { color: catColor(cats[ci]) },
                           text: xs.map(function (t) { return fmtTauDate(init, t) + ' – ' + fmtTauDate(init, t + bin); }),
-                          hovertemplate: '%{text}<br>' + catLabel(cats[ci]) + ': %{y:.1f}% of members<extra></extra>' });
+                          textposition: 'none', hovertemplate: '%{text}<br>' + catLabel(cats[ci]) + ': %{y:.1f}% of members<extra></extra>' });
         }
         var layout = B.chartLayout({ margin: { l: 36, r: 8, t: 6, b: 30 }, fontSize: 10, legend: true,
             yaxis: { title: { text: '% members', font: { size: 10 } }, rangemode: 'tozero', ticksuffix: '%' }, xaxis: { tickfont: { size: 9 }, nticks: 10 }, extra: { barmode: 'stack' } });
@@ -1417,7 +1560,7 @@
         onGenesisDetail: onGenesisDetail, onGenesisClose: onGenesisClose, renderGenesisPane: renderGenesisPane,
         modalRisk: modalRisk, modalHorizon: modalHorizon, modalSwath: modalSwath, modalProbe: modalProbe, modalNhc: modalNhc,
         decorateTrackMap: decorateTrackMap, decorateIntensity: decorateIntensity, toggleNhc: toggleNhc,
-        exportModalRiskMap: exportModalRiskMap,
+        exportModalRiskMap: exportModalRiskMap, exportModalLfMap: exportModalLfMap,
         _m: M,
         onWeatherlab: onWeatherlab, onEnsemble: onEnsemble, onPanels: onPanels, onStormClose: onStormClose,
         setTab: setTab, setRisk: setRisk, setHorizon: setHorizon, toggleEllipses: toggleEllipses, clearPoint: clearPoint,

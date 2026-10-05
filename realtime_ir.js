@@ -14954,7 +14954,7 @@
             circMeanLon: function (l) { return _genesisCircMeanLon(l); },
             ssScale: function () { return _GENESIS_SS_SCALE; },
             intensityMetric: function () { return _rtIntensityMetric; },
-            panelExportURL: function (el, scale, W, h, ss) { return _panelExportURL(el, scale, W, h, ss); },
+            panelExportURL: function (el, scale, W, h, ss, o) { return _panelExportURL(el, scale, W, h, ss, o); },
             stampExport: function (url, w, h, cb, caption) { return _tcStampExport(url, w, h, cb, caption); },
             // a-deck for any storm id (the modal may show a storm other than
             // the open card); shares the card's panel cache.
@@ -23398,8 +23398,12 @@
     // URL: drawing a base64 SVG to canvas is the reliable cross-browser path
     // where the uri-encoded / PNG path fails on Safari. Falls back to PNG if
     // the SVG round-trip throws, so we never do worse than before.
-    function _panelExportURL(el, scale, W, h, outScale) {
+    function _panelExportURL(el, scale, W, h, outScale, opts) {
         var fig = _figForExport(el, scale, h);
+        // A bare map has no axis labels to make room for: the scaled margin
+        // floor above would letterbox the geo frame inside a smaller plot
+        // area and strand frame-anchored annotations outside it.
+        if (opts && opts.margin && fig && fig.layout) fig.layout.margin = opts.margin;
         var isGeo = !!(el && el.layout && (el.layout.geo || el.layout.geo2));
         if (!isGeo) {
             // outScale supersamples the raster (2× → crisp on Retina / when
