@@ -3135,7 +3135,9 @@ def _interpolate_track_position(records: list, target_dt) -> tuple | None:
 
     t_arr = np.array([r[0].timestamp() for r in records])
     lat_arr = np.array([r[1] for r in records])
-    lon_arr = np.array([r[2] for r in records])
+    # Dateline-safe (2026-10-05, EP152026 Nolo): unwrap so a track crossing
+    # 180 interpolates/extrapolates the short way; re-wrapped on return.
+    lon_arr = np.degrees(np.unwrap(np.radians(np.array([r[2] for r in records], dtype=float))))
 
     t_q = target_dt.timestamp()
 
@@ -3166,7 +3168,7 @@ def _interpolate_track_position(records: list, target_dt) -> tuple | None:
         lat_q = float(np.interp(t_q, t_arr, lat_arr))
         lon_q = float(np.interp(t_q, t_arr, lon_arr))
 
-    return (lat_q, lon_q)
+    return (lat_q, float((lon_q + 180.0) % 360.0 - 180.0))
 
 
 def _invest_coexists(inv_records: list, genesis: dict, radius_deg: float) -> bool:
@@ -3295,6 +3297,44 @@ def _filter_genesis_invests(storms: list, radius_deg: float = 5.0,
 # Polling Logic
 # ---------------------------------------------------------------------------
 
+def _merge_jtwc_crossover(sid: str, records: list, now) -> list:
+    """Dateline crossover (2026-10-05, EP152026 Nolo). When an East/Central
+    Pacific storm crosses 180, CPHC's decks stop at the handoff (its A-deck may
+    even vanish) and JTWC continues the storm under the SAME designator
+    (bep152026.dat). The JTWC branch of _poll_active_storms skips ids already
+    seen in the NHC branch, so without this the card froze on CPHC's last
+    position (or was retained stale from cache once the A-deck went away).
+      - NHC records present, last fix at/near 180 and > 3 h old: append JTWC
+        records newer than it (NHC wins on overlap).
+      - NHC records gone: adopt JTWC's track, but ONLY if its latest fix is fresh
+        (< 24 h) and at/near 180, so a dissipated EP storm is never revived.
+    Best-effort: any failure returns the NHC records unchanged."""
+    try:
+        def _near(lon):
+            return lon is not None and (float(lon) <= -170.0 or float(lon) >= 0.0)
+        latest = _get_latest_position(records) if records else None
+        if latest is not None and (not _near(latest.get("lon"))
+                                   or (now - latest["datetime"]) <= timedelta(hours=3)):
+            return records
+        jt = _fetch_jtwc_bdeck(sid)
+        jl = _get_latest_position(jt) if jt else None
+        if not jl or (now - jl["datetime"]) > timedelta(hours=24) or not _near(jl.get("lon")):
+            return records
+        if latest is None:
+            print(f"[IR Monitor] {sid}: NHC decks gone -- dateline crossover, using JTWC's track "
+                  f"({jl['datetime']:%m-%d %H}Z {jl.get('lat')}, {jl.get('lon')})")
+            return jt
+        newer = [r for r in jt if r["datetime"] > latest["datetime"]]
+        if newer:
+            print(f"[IR Monitor] {sid}: dateline crossover -- merged {len(newer)} JTWC record(s) "
+                  f"after CPHC's last fix ({latest['datetime']:%m-%d %H}Z)")
+            return sorted(records + newer, key=lambda r: r["datetime"])
+        return records
+    except Exception as ex:                                      # noqa: BLE001
+        print(f"[IR Monitor] {sid}: JTWC crossover merge skipped ({ex})")
+        return records
+
+
 def _poll_active_storms(spawn_prefetch: bool = True):
     """
     Poll NHC + JTWC for all active storms worldwide and update the cache.
@@ -3322,6 +3362,8 @@ def _poll_active_storms(spawn_prefetch: bool = True):
         nhc_ids = []
     for sid in nhc_ids:
         records = _fetch_adeck(sid)
+        if sid.upper()[:2] in ("EP", "CP"):
+            records = _merge_jtwc_crossover(sid.upper(), records, now)
         if not records:
             degraded = True      # listed, but its A-deck couldn't be fetched
             continue
