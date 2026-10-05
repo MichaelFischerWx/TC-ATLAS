@@ -8881,7 +8881,10 @@ def _ace_basin_for(atcf_basin: str, lon: float) -> Optional[str]:
     if atcf_basin == "AL":
         return "NA"
     if atcf_basin in ("EP", "CP"):
-        return "EP"
+        # A storm that crosses the dateline westward (EP152026 Nolo, 2026-10)
+        # earns West Pacific ACE for its fixes west of 180, matching IBTrACS's
+        # per-point basin that the pace climatology is built from.
+        return "WP" if lon > 0.0 else "EP"
     if atcf_basin == "WP":
         return "WP"
     if atcf_basin == "IO":
@@ -8894,7 +8897,7 @@ def _ace_basin_for(atcf_basin: str, lon: float) -> Optional[str]:
     return None
 
 
-def _parse_bdeck_ace_points(text: str, atcf_basin: str = "") -> list:
+def _parse_bdeck_ace_points(text: str, atcf_basin: str = "", allow_untyped: bool = False) -> list:
     """Extract (datetime_str, lat, lon, vmax_kt, name) for the ACE-eligible
     synoptic BEST entries of one b-deck, deduped by time.
 
@@ -8909,7 +8912,7 @@ def _parse_bdeck_ace_points(text: str, atcf_basin: str = "") -> list:
     same synoptic time appears up to three times with the same vmax — count
     it once or the storm contributes triple ACE.
     """
-    is_jtwc = atcf_basin.upper() in _ACE_JTWC_BASINS
+    is_jtwc = atcf_basin.upper() in _ACE_JTWC_BASINS or allow_untyped
     seen: dict = {}
     for line in text.splitlines():
         parts = [p.strip() for p in line.split(",")]
@@ -8989,15 +8992,24 @@ def _ace_season_bdeck_urls(nh_season: int, sh_season: int) -> list:
     # NHC btk: currently-active AL/EP/CP storms, fresher than the mirror.
     text = _http_get(NHC_BDECK_BASE + "/", timeout=10)
     if text:
+        _nhc_seen = set()   # the listing names each file twice (href + text)
         for m in re.finditer(rf'b(al|ep|cp)(\d{{2}}){nh_season}\.dat',
                              text, re.IGNORECASE):
             code, cy = m.group(1).lower(), int(m.group(2))
             if cy > _ACE_MAX_CY:
                 continue
             sid = f"b{code}{cy:02d}{nh_season}"
+            if sid in _nhc_seen:
+                continue
+            _nhc_seen.add(sid)
             url = f"{NHC_BDECK_BASE}/{sid}.dat"
-            # Replace the UCAR mirror entry for the same storm, if any.
-            out = [(b, u) for (b, u) in out if not u.endswith(f"/{sid}.dat")]
+            # NHC's copy is authoritative; the UCAR mirror entry for the same
+            # storm is kept as a "+J" continuation (JTWC's rewrite) so a storm
+            # that crosses the dateline keeps the fixes JTWC adds after CPHC's
+            # last one. _compute_live_ace uses only its stamps past NHC's last.
+            _mirror = lambda u: u.startswith(ucar) and u.endswith(f"/{sid}.dat")   # noqa: E731
+            out = [((b + "+J") if _mirror(u) and code in ("ep", "cp") else b, u)
+                   for (b, u) in out if not (_mirror(u) and code == "al")]
             out.append((code.upper(), url))
     return out
 
@@ -9034,13 +9046,35 @@ def _compute_live_ace() -> dict:
     daily: dict = {}       # basin -> {season_day: ace increment}
     latest: dict = {}      # basin -> newest synoptic stamp used
     per_storm: dict = {}   # basin -> [storm record, ...]
+    # Gather points per storm first: NHC decks are authoritative; a "+J" entry
+    # (JTWC's copy of an EP/CP storm) contributes only fixes AFTER NHC's last,
+    # i.e. what JTWC adds once the storm crosses the dateline (Nolo 2026).
+    _entries = []
     for (atcf_basin, text), (_b, url) in zip(results, urls):
         if not text:
             continue
-        pts = _parse_bdeck_ace_points(text, atcf_basin)
-        if not pts:
-            continue
+        cont = atcf_basin.endswith("+J")
+        base_b = atcf_basin[:-2] if cont else atcf_basin
         sid = url.rsplit("/", 1)[-1].replace(".dat", "").lstrip("b").upper()
+        pts = _parse_bdeck_ace_points(text, base_b, allow_untyped=cont)
+        if not cont and not pts and base_b in ("EP", "CP"):
+            # NHC has dropped the storm and only JTWC's rewrite (no phase
+            # codes) remains on the mirror -- read it the JTWC way, or the
+            # storm's whole season would silently vanish.
+            pts = _parse_bdeck_ace_points(text, base_b, allow_untyped=True)
+        _entries.append((base_b, sid, cont, pts))
+    _nhc_last = {sid: max(p[0] for p in pts) for b, sid, cont, pts in _entries if not cont and pts}
+    _merged: dict = {}
+    for b, sid, cont, pts in _entries:
+        if cont:
+            last = _nhc_last.get(sid)
+            if last is None:
+                continue
+            pts = [p for p in pts if p[0] > last]
+        if pts:
+            _merged.setdefault((b, sid), {}).update({p[0]: p for p in pts})
+    for (atcf_basin, sid), _pmap in _merged.items():
+        pts = [_pmap[k] for k in sorted(_pmap)]
         # One storm can straddle the SI/SP boundary, so its ACE is tallied
         # per basin exactly the way the curve is.
         rec_by_basin: dict = {}
