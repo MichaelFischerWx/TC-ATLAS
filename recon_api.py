@@ -55,6 +55,16 @@ _LATEST_HDOB_FEEDS = {
     "EP": ["https://tgftp.nws.noaa.gov/data/raw/ur/urpn15.knhc..txt",
            "https://tgftp.nws.noaa.gov/data/raw/ur/urpn15.kwbc..txt"],
 }
+# Same idea for VDMs (URNT12 / URPN12). The REPNT2 archive directory can trail
+# the issued VDM by well over 20 min (Isaias 2026-10-07: the 14:04Z AF304 OB 09
+# VDM was still missing from the archive at 14:33Z), so the center fix that
+# SEAR and the Live Flight tab wait on arrived a cycle late.
+_LATEST_VDM_FEEDS = {
+    "AL": ["https://tgftp.nws.noaa.gov/data/raw/ur/urnt12.knhc..txt",
+           "https://tgftp.nws.noaa.gov/data/raw/ur/urnt12.kwbc..txt"],
+    "EP": ["https://tgftp.nws.noaa.gov/data/raw/ur/urpn12.knhc..txt",
+           "https://tgftp.nws.noaa.gov/data/raw/ur/urpn12.kwbc..txt"],
+}
 
 # Per-bulletin decoded cache (filename URL -> decoded payload). Bulletins never
 # change once posted, so this is unbounded-safe within a season but we cap it.
@@ -1365,6 +1375,74 @@ def _fetch_latest_hdob(atcf_id: str, now: datetime, since_iso: str = None) -> li
         return out
 
 
+_LIVE_VDM_KEEP: dict = {}        # GCS-style name -> {"text", "seen"}
+_VDM_KEY_ATCF = re.compile(r"VORTEX DATA MESSAGE\s+([A-Z]{2}\d{6})", re.I)
+_VDM_KEY_FIX = re.compile(r"^\s*A\.\s*(\d{1,2})/(\d{2}):?(\d{2}):?(\d{2})?", re.M)
+_VDM_KEY_U = re.compile(r"^\s*U\.\s*(\S+).*?\bOB\s*(\d+)", re.M | re.I)
+
+
+def _live_vdm_name(basin: str, text: str, now: datetime):
+    """Stable retention key for a live VDM: one per (storm, fix time, aircraft,
+    OB). None for a placeholder/unparseable slot (KWBC's AL99 00:00:00Z stub)."""
+    a, f, u = _VDM_KEY_ATCF.search(text), _VDM_KEY_FIX.search(text), _VDM_KEY_U.search(text)
+    if not (a and f and u) or a.group(1).upper()[2:4] == "99":
+        return None
+    fix = f"{int(f.group(1)):02d}{f.group(2)}{f.group(3)}{f.group(4) or '00'}"
+    return (f"{_LIVE_GCS_PREFIX}/vdm/{basin}/{now.strftime('%Y-%m-%d')}/"
+            f"{a.group(1).upper()}_{fix}_{u.group(1).upper()}_OB{int(u.group(2)):02d}.txt")
+
+
+def _fetch_latest_vdms(atcf_id: str, now: datetime) -> list:
+    """Raw texts of every live VDM retained for this storm's basin: the ones in
+    the tgftp slot NOW plus earlier ones (in-process + mirrored to GCS so all
+    instances agree — the slot holds only the last VDM issued, so a second
+    aircraft's fix evicts the first long before the archive posts it)."""
+    basin = "EP" if atcf_id[:2].upper() in ("EP", "CP") else "AL"
+    for url, txt in _fetch_texts(_LATEST_VDM_FEEDS.get(basin, [])).items():
+        if not txt:
+            continue
+        name = _live_vdm_name(basin, txt, now)
+        if not name:
+            continue
+        with _LIVE_KEEP_LOCK:
+            prev = _LIVE_VDM_KEEP.get(name)
+            # Same fix re-issued as a correction (CCA): keep the newest text.
+            if prev is None or prev["text"] != txt:
+                _LIVE_VDM_KEEP[name] = {"text": txt, "seen": time.time()}
+                _live_gcs_put_async(name, txt)
+    try:
+        b = _get_recon_gcs_bucket()
+        if b is not None:
+            c = _live_gcs_list_cache.get("vdm:" + basin)
+            if c and (time.time() - c[0]) < _LIVE_GCS_LIST_TTL:
+                names = c[1]
+            else:
+                names = set()
+                for d in (now, now - timedelta(days=1)):
+                    for bl in b.list_blobs(prefix=f"{_LIVE_GCS_PREFIX}/vdm/{basin}/{d.strftime('%Y-%m-%d')}/"):
+                        names.add(bl.name)
+                _live_gcs_list_cache["vdm:" + basin] = (time.time(), names)
+            with _LIVE_KEEP_LOCK:
+                missing = [n for n in names if n not in _LIVE_VDM_KEEP]
+            for n in missing:
+                txt = b.blob(n).download_as_text()
+                with _LIVE_KEEP_LOCK:
+                    _LIVE_VDM_KEEP.setdefault(n, {"text": txt, "seen": time.time()})
+    except Exception as e:
+        logger.warning("recon-live VDM sync failed: %s", e)
+    # Every basin VDM: the caller attributes by ATCF id (or, in mission mode,
+    # by proximity to the aircraft track) exactly as it does archive VDMs.
+    cutoff = time.time() - _LIVE_KEEP_H * 3600
+    out = []
+    with _LIVE_KEEP_LOCK:
+        for n in list(_LIVE_VDM_KEEP):
+            if _LIVE_VDM_KEEP[n]["seen"] < cutoff:
+                del _LIVE_VDM_KEEP[n]
+            elif f"/vdm/{basin}/" in n:
+                out.append(_LIVE_VDM_KEEP[n]["text"])
+    return out
+
+
 def _near_track(lat, lon, track_pts, tol_deg=4.0) -> bool:
     """True if (lat,lon) is within tol_deg of any aircraft track point — used to
     attribute a season-wide TEMP DROP bulletin to this storm when it carries no
@@ -1956,6 +2034,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
         ed = sim_now.strftime("%Y-%m-%d")
         _vdm_urls = _list_recent_files(vdm_dir, since, sim_now)
         _vdm_fetched = _fetch_texts([u for u in _vdm_urls if ("vdm::" + u) not in _bulletin_cache])
+        _vdm_parsed = []
         for url in _vdm_urls:
             txt = _bulletin_cache.get("vdm::" + url)
             if txt is None:
@@ -1967,9 +2046,20 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
                 if raw is not None and len(_bulletin_cache) < _BULLETIN_CACHE_MAX:
                     _bulletin_cache["vdm::" + url] = parsed if parsed else False
                 txt = parsed if parsed else False
-            if not txt:
-                continue
-            v = txt
+            if txt:
+                _vdm_parsed.append(("archive", txt))
+        # Live-slot VDMs the archive hasn't posted yet (see _LATEST_VDM_FEEDS).
+        if live_feed:
+            _arch_keys = {(v.get("time"), (v.get("aircraft") or "").upper()) for _, v in _vdm_parsed}
+            for raw in _fetch_latest_vdms(atcf_id, sim_now):
+                v = _parse_vdm_text(raw.replace("\r", ""), year)
+                if not v:
+                    continue
+                v["time"] = _resolve_vdm_time(v, year, sd, ed)
+                if (v.get("time"), (v.get("aircraft") or "").upper()) in _arch_keys:
+                    continue   # archive copy already posted — it wins
+                _vdm_parsed.append(("live", v))
+        for vsrc, v in _vdm_parsed:
             if v.get("lat") is None or v.get("lon") is None:
                 continue
             if abs(v["lat"]) < 0.05 or abs(v["lon"]) < 0.05:
@@ -1999,6 +2089,7 @@ def _build_blob(atcf_id: str, hours: int, sim_now: datetime, name: str = "",
                 "aircraft": v.get("aircraft"),
                 "ob_number": v.get("ob_number"),
                 "raw_text": v.get("raw_text"),
+                "src": vsrc,
             })
         vdms.sort(key=lambda x: x.get("t") or "")
     except Exception as e:

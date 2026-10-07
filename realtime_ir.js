@@ -32470,18 +32470,36 @@
         }
         if (_reconSondeColorVar !== 'none') setTimeout(_reconRecolorSondes, 0);   // size + stacking need the live DOM
 
-        // VDM center fixes — red crosshair + eye circle
-        var vdms = blob.vdms || [];
+        // VDM center fixes — white-filled badge with a red ring + crosshair (the bare
+        // red ⊕ vanished on the red/magenta IR core, 2026-10-07). The newest fix is
+        // large and labeled with its pressure + time; older fixes are small and
+        // faded, joined in time order by a cased fix track.
+        var vdms = (blob.vdms || []).filter(function (x) { return x.lat != null && x.lon != null; })
+            .slice().sort(function (a, b) { return String(a.t || '').localeCompare(String(b.t || '')); });
+        if (vdms.length > 1) {
+            var vll = vdms.map(function (x) { return [x.lat, x.lon]; });
+            [L.polyline(vll, { color: '#111827', weight: 4.5, opacity: 0.55, interactive: false, pane: 'reconPane' }),
+             L.polyline(vll, { color: '#f87171', weight: 2, opacity: 0.95, interactive: false, pane: 'reconPane' })]
+                .forEach(function (ln) { ln.addTo(map); out.push(ln); });
+        }
         for (var v = 0; v < vdms.length; v++) {
-            var x = vdms[v];
-            if (x.lat == null || x.lon == null) continue;
+            var x = vdms[v], newest = (v === vdms.length - 1), vs = newest ? 20 : 13;
+            var vlab = newest ? ((x.min_slp_hpa != null ? x.min_slp_hpa + ' mb ' : '') + (x.t ? String(x.t).slice(11, 16) + 'Z' : '')).trim() : '';
             var vicon = L.divIcon({
-                className: 'rt-recon-vdm-icon',
-                html: '<div style="font-size:15px;line-height:15px;color:#f87171;' +
-                    'text-shadow:0 0 2px #000,0 0 2px #000;">⊕</div>',
-                iconSize: [15, 15], iconAnchor: [8, 8]
+                className: 'rt-recon-vdm-icon' + (newest ? ' is-newest' : ''),
+                html: '<div data-vlab="' + vlab + '" style="position:relative;width:' + vs + 'px;height:' + vs + 'px;' +
+                    (newest ? '' : 'opacity:.8;') + '">' +
+                    '<svg width="' + vs + '" height="' + vs + '" viewBox="0 0 20 20" style="display:block;overflow:visible">' +
+                    '<circle cx="10" cy="10" r="8.5" fill="#fff" stroke="#111827" stroke-width="3.5"/>' +
+                    '<circle cx="10" cy="10" r="8.5" fill="#fff" stroke="#ef4444" stroke-width="2.2"/>' +
+                    '<path d="M10 3.5V16.5M3.5 10H16.5" stroke="#b91c1c" stroke-width="1.8"/></svg>' +
+                    (vlab ? '<span style="position:absolute;left:' + (vs + 3) + 'px;top:50%;transform:translateY(-50%);white-space:nowrap;' +
+                        'font:700 11px/1.2 system-ui,-apple-system,sans-serif;color:#fff;background:rgba(185,28,28,.92);' +
+                        'padding:1px 5px;border-radius:3px;box-shadow:0 0 0 1px rgba(17,24,39,.6);pointer-events:none;">' + vlab + '</span>' : '') +
+                    '</div>',
+                iconSize: [vs, vs], iconAnchor: [vs / 2, vs / 2]
             });
-            var vm = L.marker([x.lat, x.lon], { icon: vicon, interactive: true });
+            var vm = L.marker([x.lat, x.lon], { icon: vicon, interactive: true, zIndexOffset: newest ? 900 : 400 });
             var vh = '<div class="ir-popup" style="font-size:11px;min-width:175px;">' +
                 '<div style="font-weight:700;color:#f87171;margin-bottom:4px;">⊕ Center fix (VDM)' +
                 (x.aircraft ? ' · ' + x.aircraft : '') +
@@ -32504,7 +32522,7 @@
             vm.bindPopup(vh, { maxWidth: 270, className: 'rt-recon-popup' });
             vm.addTo(map); out.push(vm);
             // eye-size circle (diameter nm → radius m)
-            if (x.eye_diam_nm) {
+            if (newest && x.eye_diam_nm) {   // older eyes only clutter the track
                 var circ = L.circle([x.lat, x.lon], {
                     radius: x.eye_diam_nm * 1852 / 2,
                     color: '#f87171', weight: 1, opacity: 0.7, fill: false,

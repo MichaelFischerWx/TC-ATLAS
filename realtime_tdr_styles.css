@@ -1306,6 +1306,16 @@
 .recon-srcnote-list li.foot { font-size: 10px; opacity: .85; }
 :root[data-theme="dark"] .recon-srcnote-list li.warn,
 :root[data-theme="dark"] .recon-srcnote-list li.prelim { color: #fbbf24; }
+/* Center fix (VDM) tile (2026-10-07): same red as the map fix markers + chart diamonds */
+.recon-hdob-summary .recon-vdm-stat.is-fix { border-color: #ef4444; border-width: 1.5px; }
+.recon-hdob-summary .recon-vdm-stat.is-fix .recon-vdm-stat-label { color: #dc2626; }
+:root[data-theme="dark"] .recon-hdob-summary .recon-vdm-stat.is-fix .recon-vdm-stat-label { color: #f87171; }
+.recon-hdob-summary .recon-fix-line { margin-top: 1px; }
+.recon-hdob-summary .recon-fix-trend { font-weight: 700; color: var(--text); }
+.recon-hdob-summary .recon-fix-new {
+    display: inline-block; margin-left: 3px; padding: 0 4px; border-radius: 3px;
+    background: #ef4444; color: #fff; font-size: 9px; font-weight: 700; letter-spacing: .03em;
+}
 /* preliminary crossing: a range, never the headline number */
 .recon-hdob-summary .recon-prelim-sub {
     margin-top: 3px; padding: 2px 5px; border: 1px dashed #d97706; border-radius: 4px;

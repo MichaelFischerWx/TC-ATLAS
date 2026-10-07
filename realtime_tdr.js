@@ -2584,6 +2584,59 @@
         return best;
     }
 
+    /** Center-fix tile (2026-10-07): the newest VDM leads the pressure slot --
+     *  its central pressure is the operational value; extrapolated SLP from a
+     *  700/850-mb aircraft is only the estimate between fixes, so it rides
+     *  underneath ("since fix"). Scoped to the picked flight's tail when one is
+     *  picked, like the map markers. Returns '' when there is no VDM yet. */
+    function _hdobCenterFixTile(aircraft) {
+        var selTail = _hdobFlightSel ? _hdobFlightSel.split('#')[0] : null;
+        var vs = ((_hdobData && _hdobData.vdms) || []).filter(function (v) {
+            return v.t && (!selTail || _hdobTailEq(v.aircraft, selTail));
+        }).sort(function (a, b) { return Date.parse(_hdobX(a.t)) - Date.parse(_hdobX(b.t)); });
+        if (!vs.length) return '';
+        var v = vs[vs.length - 1], vms = Date.parse(_hdobX(v.t)), esc = _hdobTdrEsc;
+        var lines = [];
+        // pressure change vs the previous fix at least 45 min older (same storm, any aircraft)
+        if (v.min_slp_hpa != null) {
+            for (var i = vs.length - 2; i >= 0; i--) {
+                var p = vs[i], dh = (vms - Date.parse(_hdobX(p.t))) / 3600000;
+                if (p.min_slp_hpa == null || dh < 0.75) continue;
+                var dp = v.min_slp_hpa - p.min_slp_hpa;
+                lines.push('<span class="recon-fix-trend' + (dp < 0 ? ' is-fall' : dp > 0 ? ' is-rise' : '') + '">' +
+                    (dp < 0 ? '\u25bc ' : dp > 0 ? '\u25b2 ' : '\u00b1') + Math.abs(dp) + ' mb</span> in ' +
+                    (dh < 10 ? dh.toFixed(1) : Math.round(dh)) + ' h (' + String(_hdobX(p.t)).slice(11, 16) + 'Z ' + p.min_slp_hpa + ' mb)');
+                break;
+            }
+        }
+        var wind = v.max_fl_wind_kt != null ? 'Max FL ' + v.max_fl_wind_kt + ' kt' +
+            (v.max_fl_wind_bearing != null && v.max_fl_wind_range_nm != null ? ' ' + v.max_fl_wind_bearing + '\u00b0/' + v.max_fl_wind_range_nm + ' n mi' : '') : '';
+        var eye = ((v.eye_shape || '') + (v.eye_diam_nm != null ? ' ' + v.eye_diam_nm + ' n mi' : '')).trim();
+        if (wind || eye) lines.push(esc(wind + (wind && eye ? ' \u00b7 ' : '') + (eye ? 'eye ' + eye.toLowerCase() : '')));
+        // lowest extrapolated SLP flown since the fix: is it still deepening?
+        var ex = null;
+        (aircraft || []).forEach(function (ac) {
+            (ac.track || []).forEach(function (o) {
+                if (o.extrap_sfc_p_mb != null && Date.parse(_hdobX(o.t)) > vms && (!ex || o.extrap_sfc_p_mb < ex.v)) ex = { v: o.extrap_sfc_p_mb, t: o.t };
+            });
+        });
+        if (ex) lines.push('Extrap SLP since fix: ' + Math.round(ex.v) + ' mb ' + String(_hdobX(ex.t)).slice(11, 16) + 'Z');
+        var fresh = !_hdobArchive && (Date.now() - vms) < 45 * 60000;
+        var sub = String(_hdobX(v.t)).slice(11, 16) + 'Z \u00b7 ' + esc(_hdobTailDisplay(v.aircraft)) +
+            (v.ob_number != null ? ' OB ' + v.ob_number : '') +
+            (v.flight_level_mb != null ? ' \u00b7 ' + v.flight_level_mb + ' mb fix' : '') +
+            (fresh ? ' <span class="recon-fix-new">NEW</span>' : '') +
+            lines.map(function (l) { return '<div class="recon-fix-line">' + l + '</div>'; }).join('');
+        var tip = 'Center fix from the newest Vortex Data Message (VDM): the aircraft\'s measured center and central pressure. ' +
+            'Extrapolated SLP between fixes is the aircraft\'s estimate from flight level.' +
+            (v.raw_text ? '\n\n' + String(v.raw_text).trim() : '');
+        return '<div class="recon-vdm-stat is-fix" title="' + esc(tip) + '">' +
+            '<div class="recon-vdm-stat-val">' + (v.min_slp_hpa != null ? v.min_slp_hpa : '\u2014') +
+            '<span class="recon-vdm-stat-unit">mb</span></div>' +
+            '<div class="recon-vdm-stat-label">Center fix (VDM)</div>' +
+            '<div class="recon-vdm-stat-sub">' + sub + '</div></div>';
+    }
+
     /** Mission-extremes strip for the displayed sortie: max flight-level wind,
      *  min extrapolated SLP, max SEAR 10-m estimate — each with its time. */
     function _hdobBuildSummary() {
@@ -2709,7 +2762,7 @@
                 '. Click to show it on the map. Verification against dropsondes: table below the map. Not an official product.');
         }
         var html = tile('Max FL wind', best.fl, 'kt') +
-                   tile('Min extrap SLP', best.slp, 'mb', 'is-accent') +
+                   (_hdobCenterFixTile(aircraft) || tile('Min extrap SLP', best.slp, 'mb', 'is-accent', ' \u00b7 no VDM yet')) +
                    tile('Max SFMR', best.sfmr, 'kt') + tdrHtml +
                    tile(prelimTile ? 'PRELIMINARY FL SEAR 10-m (exp)' : (tdr ? 'Max FL SEAR 10-m (exp)' : 'Max SEAR 10-m (exp)'), searTile,
                         searTile && searTile.valText === 'pending' ? '' : 'kt',
@@ -2992,10 +3045,26 @@
                 ctx.fillStyle = '#fbbf24'; ctx.fillRect(-5.5, -5.5, 11, 11);
                 ctx.shadowBlur = 0; ctx.lineWidth = 1.5; ctx.strokeStyle = '#1f2937'; ctx.strokeRect(-5.5, -5.5, 11, 11);
             } else if (/rt-recon-vdm-icon/.test(cls)) {
-                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                ctx.font = '15px sans-serif';
-                ctx.shadowColor = '#000'; ctx.shadowBlur = 2;
-                ctx.fillStyle = '#f87171'; ctx.fillText('\u2295', cx, cy + 0.5);
+                // mirrors the badge in _reconBuildMarkers (realtime_ir.js): white fill, red ring, crosshair, label
+                var vr = r.w / 2 * 0.85, inner = el.firstElementChild;
+                if (inner && inner.style.opacity) ctx.globalAlpha = parseFloat(inner.style.opacity) || 1;
+                ctx.beginPath(); ctx.arc(cx, cy, vr, 0, Math.PI * 2);
+                ctx.fillStyle = '#fff'; ctx.fill();
+                ctx.lineWidth = r.w * 0.175; ctx.strokeStyle = '#111827'; ctx.stroke();
+                ctx.lineWidth = r.w * 0.11; ctx.strokeStyle = '#ef4444'; ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(cx, cy - r.w * 0.325); ctx.lineTo(cx, cy + r.w * 0.325);
+                ctx.moveTo(cx - r.w * 0.325, cy); ctx.lineTo(cx + r.w * 0.325, cy);
+                ctx.lineWidth = r.w * 0.09; ctx.strokeStyle = '#b91c1c'; ctx.stroke();
+                var vlab = inner && inner.getAttribute('data-vlab');
+                if (vlab) {
+                    ctx.globalAlpha = 1;
+                    ctx.font = '700 11px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif';
+                    var tw = ctx.measureText(vlab).width, lx = cx + r.w / 2 + 3;
+                    ctx.fillStyle = 'rgba(185,28,28,0.92)'; ctx.fillRect(lx, cy - 7.5, tw + 10, 15);
+                    ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(17,24,39,0.6)'; ctx.strokeRect(lx, cy - 7.5, tw + 10, 15);
+                    ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+                    ctx.fillText(vlab, lx + 5, cy + 0.5);
+                }
             }
             ctx.restore();
         }
@@ -3231,8 +3300,10 @@
             if (vx.length) {
                 traces.push({
                     x: vx, y: vy, type: 'scatter', mode: 'markers', name: 'VDM SLP', legendgroup: 'vdm',
-                    marker: { symbol: 'diamond', size: 9, color: '#ef4444', line: { color: '#fff', width: 1 } },
-                    yaxis: 'y2', text: vt, hovertemplate: '%{text}<extra></extra>'
+                    marker: { symbol: 'diamond', size: 11, color: '#ef4444', line: { color: '#fff', width: 1.5 } },
+                    // y5 = the Extrap SLP axis on the wind panel. It sat on y2 (flight-level
+                    // pressure, ~400-850 mb, reversed), so every ~1000-mb fix fell off the panel.
+                    yaxis: 'y5', text: vt, hovertemplate: '%{text}<extra></extra>'
                 });
             }
         }
