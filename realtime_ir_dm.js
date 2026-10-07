@@ -466,8 +466,9 @@
             html += '<div class="rt-dm-row"><button type="button" class="rt-dm-chip' + (S.lf.showPts ? ' active' : '') + '" onclick="window.RTDM.toggleLfPoints()">Landfall points on map</button>'
                 + '<span class="rt-dm-readout-sub">' + lf.events.length + ' of ' + lf.n + ' members · colored by intensity at landfall</span></div>';
         }
-        html += note('"Landfall" = the member\'s center first crossing from sea to land on a 0.1° coastline mask, so small islands and '
-            + 'narrow peninsulas can be missed and the timing is ±1 h. Experimental research guidance from ' + esc(modelTag())
+        html += note('"Landfall" = the member\'s center first crossing from sea to land on a 0.1° coastline mask (islands smaller than '
+            + 'the mask can be missed). Intensity at landfall carries the member\'s last over-water trend to the coast, so the '
+            + 'model\'s 6-hourly overland decay isn\'t blended in. Experimental research guidance from ' + esc(modelTag())
             + ' — <b>not a forecast</b>. For official track forecasts, watches and warnings see '
             + '<a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener">NHC</a> / CPHC / JTWC or your national weather service.');
         el.innerHTML = html;
@@ -1408,7 +1409,7 @@
             html += msection('When members make landfall', '12-h bins, stacked by intensity at landfall', 'rt-genesis-lf-chart', 200, 'Landfall timing');
         }
         html += msection('Members still tracking the system', 'share of members that still carry the system at each lead', 'rt-genesis-surv-chart', 140, 'Ensemble survival');
-        html += note('"Landfall" = the member\'s center first crossing from sea to land on a 0.1° coastline mask (small islands and narrow peninsulas can be missed; timing ±1 h).'
+        html += note('"Landfall" = the member\'s center first crossing from sea to land on a 0.1° coastline mask (islands smaller than the mask can be missed). Intensity at landfall carries the member\'s last over-water trend to the coast, so the model\'s 6-hourly overland decay isn\'t blended in.'
             + (preGenesis ? ' For a pre-genesis cluster the chance is over all members, so it already folds in the odds of forming.' : '')
             + ' Experimental research guidance from ' + esc(modalModelTag()) + ' — <b>not a forecast</b>. For official track forecasts, watches and warnings see '
             + '<a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener">NHC</a> / CPHC / JTWC or your national weather service.');

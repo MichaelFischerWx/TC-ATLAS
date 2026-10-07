@@ -379,11 +379,40 @@
     }
 
     // ── 6. landfall ───────────────────────────────────────────────────────
-    // isLand(lat, lon) → boolean. Per member: the first water→land crossing at
-    // 1-h resolution (a system already inland at +0 h must go back to sea
-    // before it can "make landfall"). Returns
+    // isLand(lat, lon) → boolean. Per member: the first water→land crossing
+    // (a system already inland at +0 h must go back to sea before it can
+    // "make landfall"). Returns
     //   { n, events: [{ member, tau, lat, lon, wind }], pAny, pBy: { "72": p, ... },
     //     taus: [], winds: [], byCat: { TD: k, TS: k, C1..C5 } }
+    //
+    // Position: the track is sampled every `stepH` hours AND at most every
+    // LF_STEP_DEG along the segment, so the event sits on the coast (±~3 km)
+    // and a barrier island / narrow peninsula is not stepped over. Hourly-only
+    // sampling put fast movers up to ~0.4° inland and, where an hour's step
+    // jumped a barrier into Mobile / Pensacola Bay, registered landfall at the
+    // head of the bay instead (Isaias 2026-10-07 00Z).
+    //
+    // Intensity: member output is 6-hourly, so the segment that straddles the
+    // coast ends at a point that already carries the model's overland decay;
+    // a plain time-lerp to the crossing therefore mixes post-landfall decay
+    // into "intensity at landfall" (median 64 kt vs ~72 kt for Isaias). Instead
+    // extrapolate the last over-water output along its own over-water trend
+    // (previous output → last over-water output) to the crossing time, bounded
+    // below by the lerp and above by the larger of the two over-water outputs.
+    var LF_STEP_DEG = 0.025;
+    function landfallWind(tr, i, f) {
+        var a = tr[i], b = tr[i + 1] || a;
+        var wa = a.wind, wb = b.wind;
+        if (wa == null) return wb;
+        var wLerp = (wb != null) ? lerp(wa, wb, f) : wa;
+        var ap = i > 0 ? tr[i - 1] : null;
+        var wExt = wa, hi = Math.max(wa, wLerp);
+        if (ap && ap.wind != null && a.tau > ap.tau) {
+            wExt = wa + (wa - ap.wind) / (a.tau - ap.tau) * f * (b.tau - a.tau);
+            hi = Math.max(hi, ap.wind);
+        }
+        return Math.min(hi, Math.max(wLerp, wExt));
+    }
     function landfall(members, isLand, opts) {
         opts = opts || {};
         var maxTau = opts.maxTau != null ? opts.maxTau : 360, stepH = opts.stepH || 1;
@@ -395,15 +424,30 @@
             if (!tr.length) continue;
             out.n++;
             var wasLand = null, ev = null;
-            walkTrack(tr, stepH, 34, function (s) {
-                var land = !!isLand(s.lat, wrapLon(s.lon));
-                if (wasLand === false && land) {
-                    ev = { member: keys[i], tau: Math.round(s.tau), lat: s.lat, lon: wrapLon(s.lon),
-                           wind: s.wind != null ? Math.round(s.wind) : null };
-                    return false;
+            for (var j = 0; j < tr.length && !ev; j++) {
+                var a = tr[j], b = tr[j + 1];
+                if (!b) {   // last point: one sample, no segment
+                    if (wasLand === false && isLand(a.lat, wrapLon(a.lon))) {
+                        ev = { member: keys[i], tau: Math.round(a.tau), lat: a.lat, lon: wrapLon(a.lon),
+                               wind: a.wind != null ? Math.round(a.wind) : null };
+                    }
+                    break;
                 }
-                wasLand = land;
-            });
+                var span = b.tau - a.tau; if (!(span > 0)) continue;
+                var deg = Math.max(Math.abs(b.lat - a.lat), Math.abs(b.lon - a.lon));
+                var n = Math.max(1, Math.round(span / stepH), Math.ceil(deg / LF_STEP_DEG));
+                for (var s = 0; s < n; s++) {
+                    var f = s / n, lat = lerp(a.lat, b.lat, f), lon = lerp(a.lon, b.lon, f);
+                    var land = !!isLand(lat, wrapLon(lon));
+                    if (wasLand === false && land) {
+                        var w = landfallWind(tr, j, f);
+                        ev = { member: keys[i], tau: Math.round(lerp(a.tau, b.tau, f)), lat: lat, lon: wrapLon(lon),
+                               wind: w != null ? Math.round(w) : null };
+                        break;
+                    }
+                    wasLand = land;
+                }
+            }
             if (ev) {
                 out.events.push(ev); out.taus.push(ev.tau);
                 if (ev.wind != null) out.winds.push(ev.wind);
