@@ -233,6 +233,9 @@
 
     function renderRisk() {
         var el = $('rt-dm-tab-risk'); if (!el) return;
+        if (!riskMaskReady(function () { if (S.visible && S.tab === 'risk') renderRisk(); })) {
+            el.innerHTML = '<div class="rt-dm-hint">Loading coastline mask…</div>'; return;
+        }
         var r = S.risk;
         function chip(label, on, onclick, title) {
             return '<button type="button" class="rt-dm-chip' + (on ? ' active' : '') + '" onclick="' + onclick + '"'
@@ -267,7 +270,7 @@
             + '</div>';
         html += '<div id="rt-dm-point-readout" class="rt-dm-readout"></div>';
         html += note('Probabilities count ensemble members whose modeled wind field reaches a location within the window, '
-            + 'using each member\'s own wind radii. Experimental research guidance from ' + esc(modelTag()) + ' — '
+            + 'using each member\'s own wind radii (held at their over-water trend until the center reaches the coast). Experimental research guidance from ' + esc(modelTag()) + ' — '
             + '<b>not a forecast</b>. Official watches, warnings and wind-speed probabilities come from '
             + '<a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener">NHC</a> / CPHC / JTWC or your national weather service.');
         el.innerHTML = html;
@@ -305,7 +308,7 @@
         var key = th + '@' + S.risk.horizon;
         if (!S.risk.grids[key]) {
             var wl = B.wl(); if (!wl) return null;
-            S.risk.grids[key] = T().windProbGrid(wl.members, { thresh: th, maxTau: S.risk.horizon, cellDeg: 0.2, stepH: 2 }) || false;
+            S.risk.grids[key] = T().windProbGrid(wl.members, { thresh: th, maxTau: S.risk.horizon, cellDeg: 0.2, stepH: 2, isLand: S.landMask || null }) || false;
         }
         return S.risk.grids[key] || null;
     }
@@ -374,7 +377,7 @@
             el.innerHTML = '<div class="rt-dm-hint">Click anywhere on the map for that location\'s wind chances and arrival timing.</div>';
             return;
         }
-        var pp = T().pointProbabilities(wl.members, p.lat, p.lon, { maxTau: S.risk.horizon, mean: wl.ensemble_mean });
+        var pp = T().pointProbabilities(wl.members, p.lat, p.lon, { maxTau: S.risk.horizon, mean: wl.ensemble_mean, isLand: S.landMask || null });
         var q = T().percentiles(pp.arrival34, [0.1, 0.5, 0.9]);
         var init = wl.init_time;
         var html = '<div class="rt-dm-readout-h">'
@@ -433,6 +436,15 @@
         if (S._lmProm) return S._lmProm;
         S._lmProm = T().loadLandMask('assets/landmask_0p1.png?v=1').then(function (fn) { S.landMask = fn; return fn; });
         return S._lmProm;
+    }
+    // Wind Risk grids/probes use the land mask to keep a member's over-water
+    // wind radii to the coast (tc_dm_analytics walkTrack). Returns true when
+    // the caller can compute now; otherwise loads the mask (47 KB, usually
+    // instant) and calls `then` — or proceeds without it if the load fails.
+    function riskMaskReady(then) {
+        if (S.landMask || S._lmFailed) return true;
+        ensureLandMask().then(then, function () { S._lmFailed = true; then(); });
+        return false;
     }
     function renderLandfall() {
         var el = $('rt-dm-tab-landfall'); if (!el) return;
@@ -759,7 +771,7 @@
             var d = gData(), grids = [];
             var tracks = d && d.tracks || [];
             for (var i = 0; i < tracks.length; i++) {
-                var g = T().windProbGrid(tracks[i].members || {}, { thresh: th, maxTau: G.horizon, cellDeg: 0.2, stepH: 2 });
+                var g = T().windProbGrid(tracks[i].members || {}, { thresh: th, maxTau: G.horizon, cellDeg: 0.2, stepH: 2, isLand: S.landMask || null });
                 if (g) grids.push(g);
             }
             G.grids[key] = T().compositeGrids(grids) || null;
@@ -781,6 +793,7 @@
         removeLayersOn(map, G.layers);
         if (!G.thresh) { clearGlobalRisk(); B.refreshLayersCount(); return; }
         if (!gData()) return;   // arrives via onGlobalData
+        if (!riskMaskReady(drawGlobalRisk)) return;
         var g = globalGrid(G.thresh);
         if (g) {
             var parts = T().rasterizeMercator(g, probColor, { pxPerCell: 4 });
@@ -799,7 +812,7 @@
         var d = gData(); if (!d) return;
         var tracks = d.tracks || [], best = null;
         for (var i = 0; i < tracks.length; i++) {
-            var pp = T().pointProbabilities(tracks[i].members || {}, lat, lon, { maxTau: G.horizon, mean: tracks[i].ensemble_mean });
+            var pp = T().pointProbabilities(tracks[i].members || {}, lat, lon, { maxTau: G.horizon, mean: tracks[i].ensemble_mean, isLand: S.landMask || null });
             if (!best || pp.p34 > best.pp.p34 || (pp.p34 === best.pp.p34 && pp.p64 > best.pp.p64)) best = { pp: pp, id: tracks[i].track_id };
         }
         var map = gMap();
@@ -1013,6 +1026,9 @@
     }
     function renderModalRisk() {
         var el = $('rt-genesis-pane-risk'); if (!el || !M.data) return;
+        if (!riskMaskReady(function () { if (M.data && S_modalPaneVisible('risk')) renderModalRisk(); })) {
+            el.innerHTML = '<div class="rt-dm-hint">Loading coastline mask…</div>'; return;
+        }
         var r = M.risk;
         var html = '<div class="rt-genesis-risk-controls">'
             + '<div class="rt-dm-row"><span class="rt-dm-row-l">Wind chance</span>'
@@ -1046,7 +1062,7 @@
             + (r.probe ? '<button type="button" class="rt-dm-chip" onclick="window.RTDM.modalProbe(null)">Clear</button>' : '')
             + '<span class="rt-dm-readout-sub">°N / °E (use negative for S / W)</span></div>'
             + '<div id="rt-genesis-probe-out" style="max-width:860px; margin:0 auto;"></div>'
-            + note('<b>Not an official forecast and not the NHC cone.</b> Wind chances count members whose modeled wind field reaches a location within the window, using each member\'s own wind radii; '
+            + note('<b>Not an official forecast and not the NHC cone.</b> Wind chances count members whose modeled wind field reaches a location within the window, using each member\'s own wind radii (held at their over-water trend until the center reaches the coast, so the 6-hourly output\'s overland decay doesn\'t start offshore); '
                 + 'the ensemble swath is the union of the members\' 50 % / 90 % position ellipses through the window (the ensemble analogue of a lifetime wind swath) and is unrelated to the NHC cone of uncertainty, which is built from official track-error statistics. '
                 + 'Experimental research guidance from ' + esc(modalModelTag()) + ' — <b>not a forecast</b>. Official forecasts, watches and warnings: '
                 + '<a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener">NHC</a> / CPHC / JTWC or your national weather service.');
@@ -1068,7 +1084,7 @@
     function renderModalProbe() {
         var o = $('rt-genesis-probe-out'); if (!o || !M.data) return;
         var p = M.risk.probe; if (!p) { o.innerHTML = ''; return; }
-        var pp = T().pointProbabilities(M.data.members, p.lat, p.lon, { maxTau: M.risk.horizon, mean: M.data.mean });
+        var pp = T().pointProbabilities(M.data.members, p.lat, p.lon, { maxTau: M.risk.horizon, mean: M.data.mean, isLand: S.landMask || null });
         var q = T().percentiles(pp.arrival34, [0.1, 0.5, 0.9]);
         var html = '<div class="rt-dm-tiles rt-dm-tiles-3" style="max-width:520px;">'
             + tile('≥34 kt', pct(pp.p34), 'within ' + M.risk.horizon + ' h', '#34d399') + tile('≥50 kt', pct(pp.p50), '', '#fbbf24') + tile('≥64 kt', pct(pp.p64), 'hurricane', '#ef4444') + '</div>';
@@ -1078,7 +1094,7 @@
     }
     function gridFor(th) {
         var r = M.risk, key = th + '@' + r.horizon;
-        if (r.grids[key] === undefined) r.grids[key] = T().windProbGrid(M.data.members, { thresh: th, maxTau: r.horizon, cellDeg: 0.2, stepH: 2 }) || null;
+        if (r.grids[key] === undefined) r.grids[key] = T().windProbGrid(M.data.members, { thresh: th, maxTau: r.horizon, cellDeg: 0.2, stepH: 2, isLand: S.landMask || null }) || null;
         return r.grids[key];
     }
     function modalGrid() { return gridFor(M.risk.thresh); }

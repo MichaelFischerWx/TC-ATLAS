@@ -127,16 +127,74 @@
             r: r,
         };
     }
-    // Walk a member track at `stepH` resolution, calling fn(sample) per step.
-    function walkTrack(track, stepH, thresh, fn) {
+    // Value at the coast (fraction f of a→b) for a segment that runs from sea
+    // onto land: the over-water trend (prev → a) carried to the crossing,
+    // bounded below by the plain lerp and above by the larger over-water
+    // value. Member output is 6-hourly, so the land end of the segment already
+    // carries the model's overland decay; lerping straight to it starts the
+    // decay offshore. Shared by landfall intensity and the wind-radii walk.
+    function coastValue(vPrev, tPrev, va, ta, vb, tb, f) {
+        if (va == null) return vb;
+        var vLerp = (vb != null) ? lerp(va, vb, f) : va;
+        var ext = va, hi = Math.max(va, vLerp);
+        if (vPrev != null && tPrev != null && ta > tPrev) {
+            ext = va + (va - vPrev) / (ta - tPrev) * f * (tb - ta);
+            hi = Math.max(hi, vPrev);
+        }
+        return Math.min(hi, Math.max(vLerp, ext));
+    }
+    // Fraction along a→b where the center first reaches land (1/64 steps).
+    function coastFraction(a, b, isLand) {
+        for (var q = 1; q <= 64; q++) {
+            var f = q / 64;
+            if (isLand(lerp(a.lat, b.lat, f), wrapLon(lerp(a.lon, b.lon, f)))) return f;
+        }
+        return null;
+    }
+    // Walk a member track, calling fn(sample) per step. Steps are every
+    // `stepH` hours AND at most half the largest `thresh`-kt radius along the
+    // track (≥ WALK_MIN_STEP_KM) — a 2-h step for a fast mover is ~70-100 km,
+    // wider than a 30-50 km r64 footprint, which left unswept gaps between
+    // successive footprints. With `isLand`, a sea→land segment keeps its
+    // over-water radii/wind trend to the coast (coastValue) and only then
+    // decays toward the inland output.
+    var WALK_MIN_STEP_KM = 10;
+    function walkTrack(track, stepH, thresh, fn, isLand) {
         if (!track.length) return;
         if (track.length === 1) { fn(interpPoint(track[0], track[0], 0, thresh)); return; }
         for (var i = 0; i < track.length - 1; i++) {
             var a = track[i], b = track[i + 1];
             var span = b.tau - a.tau; if (!(span > 0)) continue;
             var n = Math.max(1, Math.round(span / stepH));
-            for (var s = 0; s < n; s++) {
-                if (fn(interpPoint(a, b, s / n, thresh)) === false) return;
+            var ra = radiiAt(a, thresh), rb = radiiAt(b, thresh);
+            var rmax = Math.max(ra.ne, ra.se, ra.sw, ra.nw, rb.ne, rb.se, rb.sw, rb.nw);
+            if (rmax > 0) {
+                n = Math.max(n, Math.ceil(haversineKm(a.lat, a.lon, b.lat, b.lon)
+                                          / Math.max(WALK_MIN_STEP_KM, 0.5 * rmax)));
+            }
+            var fc = (isLand && !isLand(a.lat, wrapLon(a.lon)) && isLand(b.lat, wrapLon(b.lon)))
+                ? coastFraction(a, b, isLand) : null;
+            if (fc == null) {
+                for (var s = 0; s < n; s++) {
+                    if (fn(interpPoint(a, b, s / n, thresh)) === false) return;
+                }
+                continue;
+            }
+            // Piecewise: a → coast (over-water trend) → b (overland decay).
+            var ap = i > 0 ? track[i - 1] : null, rp = ap ? radiiAt(ap, thresh) : null;
+            var rc = { any: ra.any || rb.any };
+            for (var k = 0; k < 4; k++) {
+                var Q = QUADS[k];
+                rc[Q] = coastValue(rp ? rp[Q] : null, ap ? ap.tau : null, ra[Q], a.tau, rb[Q], b.tau, fc);
+            }
+            var wc = coastValue(ap ? ap.wind : null, ap ? ap.tau : null, a.wind, a.tau, b.wind, b.tau, fc);
+            for (var s2 = 0; s2 < n; s2++) {
+                var f = s2 / n, smp = interpPoint(a, b, f, thresh);
+                var lo, hi, g;
+                if (f < fc) { lo = ra; hi = rc; g = f / fc; smp.wind = (a.wind != null && wc != null) ? lerp(a.wind, wc, g) : smp.wind; }
+                else { lo = rc; hi = rb; g = (f - fc) / (1 - fc); smp.wind = (wc != null && b.wind != null) ? lerp(wc, b.wind, g) : smp.wind; }
+                for (var k2 = 0; k2 < 4; k2++) smp.r[QUADS[k2]] = lerp(lo[QUADS[k2]], hi[QUADS[k2]], g);
+                if (fn(smp) === false) return;
             }
         }
         if (fn(interpPoint(track[track.length - 1], track[track.length - 1], 0, thresh)) === false) return;
@@ -154,7 +212,8 @@
     }
 
     // ── 1. wind-speed probability grid ────────────────────────────────────
-    // opts: { thresh: 34|50|64, maxTau: 120, cellDeg: 0.2, stepH: 2, padDeg: 1 }
+    // opts: { thresh: 34|50|64, maxTau: 120, cellDeg: 0.2, stepH: 2, padDeg: 1,
+    //         isLand: fn(lat, lon) — optional; enables the coast-aware radii walk }
     // Returns { lat0 (north edge), lon0 (west edge, unwrapped), dLat, dLon, nx, ny,
     //           prob: Float32Array (row 0 = north), n, thresh, maxTau, lonRef }
     function windProbGrid(members, opts) {
@@ -216,7 +275,7 @@
                         if (inFootprint(s, clat, clon)) hit[idx] = 1;
                     }
                 }
-            });
+            }, opts.isLand);
             for (var q = 0; q < hit.length; q++) if (hit[q]) counts[q]++;
         }
         var prob = new Float32Array(nx * ny);
@@ -252,7 +311,7 @@
                 var th = threshes[ti], first = null;
                 walkTrack(tr, stepH, th, function (s) {
                     if (inFootprint(s, lat, plon)) { first = s.tau; return false; }
-                });
+                }, opts.isLand);
                 if (first != null) {
                     out['p' + th]++;
                     out['arrival' + th].push(Math.round(first));
@@ -396,22 +455,11 @@
     // coast ends at a point that already carries the model's overland decay;
     // a plain time-lerp to the crossing therefore mixes post-landfall decay
     // into "intensity at landfall" (median 64 kt vs ~72 kt for Isaias). Instead
-    // extrapolate the last over-water output along its own over-water trend
-    // (previous output → last over-water output) to the crossing time, bounded
-    // below by the lerp and above by the larger of the two over-water outputs.
+    // carry the last over-water output's own trend to the crossing (coastValue).
     var LF_STEP_DEG = 0.025;
     function landfallWind(tr, i, f) {
-        var a = tr[i], b = tr[i + 1] || a;
-        var wa = a.wind, wb = b.wind;
-        if (wa == null) return wb;
-        var wLerp = (wb != null) ? lerp(wa, wb, f) : wa;
-        var ap = i > 0 ? tr[i - 1] : null;
-        var wExt = wa, hi = Math.max(wa, wLerp);
-        if (ap && ap.wind != null && a.tau > ap.tau) {
-            wExt = wa + (wa - ap.wind) / (a.tau - ap.tau) * f * (b.tau - a.tau);
-            hi = Math.max(hi, ap.wind);
-        }
-        return Math.min(hi, Math.max(wLerp, wExt));
+        var a = tr[i], b = tr[i + 1] || a, ap = i > 0 ? tr[i - 1] : null;
+        return coastValue(ap ? ap.wind : null, ap ? ap.tau : null, a.wind, a.tau, b.wind, b.tau, f);
     }
     function landfall(members, isLand, opts) {
         opts = opts || {};
