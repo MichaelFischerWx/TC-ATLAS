@@ -2,14 +2,15 @@
 # --------------------------------------------------------------------------
 # TC-ATLAS SEAR real-time publisher -- Cloud Run Job (BACKSTOP) + Scheduler
 # --------------------------------------------------------------------------
-# The Mac is the primary SEAR runner (launchd com.fischerwx.sear-rt at
-# :05/:20/:35/:50, ~$0). This job is the greedy fallback for the slots the
-# Mac misses (asleep, commuting, offline):
-#   * Scheduler fires :12/:27/:42/:57 -- 7 min after each Mac slot.
+# The Mac is the primary SEAR runner (launchd com.fischerwx.sear-rt every
+# 5 min at :00/:05/.../:55 since 2026-10-07, ~$0). This job is the greedy
+# fallback for the slots the Mac misses (asleep, commuting, offline):
+#   * Scheduler fires :02/:07/.../:57 -- 2 min after each Mac slot (was every
+#     15 min; a laptop-closed VDM waited up to 15 min, Isaias 2026-10-07).
 #   * sear_rt.py (SEAR_SKIP_IF_FRESH_MIN=10) reads sear-rt/_run_marker.json;
 #     if the Mac completed within 10 min it exits in ~2 s (~$0.0001).
 #     Otherwise it does the full pass (~1-2 min, ~$0.003 with a storm).
-#   * Worst case (Mac never runs, recon every day): ~$0.30/day.
+#   * Worst case (Mac never runs, recon all day): ~$0.90/day; skips ~$0.03/day.
 #
 # Code lives in ~/github/MLBT (no git remote), so this script STAGES the
 # runtime files into sear_job_ctx/ (gitignored) before Cloud Build.
@@ -27,7 +28,7 @@ PROJECT="$(gcloud config get-value project 2>/dev/null)"
 JOB_NAME="tc-atlas-sear-job"
 REGION="us-east1"
 SCHEDULER_NAME="tc-atlas-sear-schedule"
-SCHEDULE="12,27,42,57 * * * *"
+SCHEDULE="2-59/5 * * * *"
 IMAGE="gcr.io/${PROJECT}/${JOB_NAME}:latest"
 MLBT="${MLBT_DIR:-$HOME/github/MLBT}"
 CTX="${SCRIPT_DIR}/sear_job_ctx"
