@@ -10490,6 +10490,8 @@ def get_weatherlab_genesis_trend(
     cluster_min_members: int = 25,
     same_system_km: float = 500.0,
     variant: str = _GENESIS_VARIANT_DEFAULT,
+    anchor_init: str = None,
+    anchor_tau: float = None,
 ):
     """Run-to-run trend for ONE disturbance: for each of the last `count`
     published cycles, find the TC-ATLAS cluster whose density-peak genesis
@@ -10509,11 +10511,104 @@ def get_weatherlab_genesis_trend(
     track + intensity overlays. Unmatched cycles still appear with null
     metrics so a gap reads as 'this run didn't forecast this system'.
 
+    `anchor_init` (YYYYMMDDHH of the run the user clicked in) + `anchor_tau`
+    (the cluster's peak_mean_tau) pin the anchor in TIME as well as space.
+    Distance alone mis-pairs systems: a +270 h NW-Caribbean cluster in one
+    run was "matched" to a +50 h Gulf invest (92L) 670 km away in the next
+    run that had no long-range Caribbean cluster at all (2026-10-06 report).
+    With the anchor time known, a candidate must also
+      - have its genesis VALID time (cycle init + peak_mean_tau) within
+        max(72 h, 0.5 × anchor_tau) of the anchor's, and
+      - not be a better match for a DIFFERENT cluster in the anchor's own
+        run (mutual-best: the next run's 92L belongs to the clicked run's
+        92L cluster, not to a long-range neighbour).
+    Without them (older frontend) the match falls back to distance only.
+
     Hyphenated path so it isn't swallowed by `/weatherlab-genesis/{track_id}`.
     """
     now = _dt.now(timezone.utc)
     variant_n = _genesis_variant_norm(variant)
     count = max(1, min(int(count or 5), 8))
+
+    # Anchor genesis valid time + timing tolerance (None → distance-only).
+    a_date, a_hour = _genesis_init_to_cycle(anchor_init) if anchor_init else (None, None)
+    anchor_valid = None
+    if a_date is not None and anchor_tau is not None:
+        try:
+            anchor_valid = (_genesis_cycle_dt(a_date, a_hour)
+                            + timedelta(hours=float(anchor_tau)))
+        except Exception:
+            anchor_valid = None
+
+    def _tol_h(tau):
+        # Long-range genesis timing drifts more run to run than short-range.
+        return max(72.0, 0.5 * max(0.0, float(tau or 0.0)))
+
+    def _valid_dt(cycle_dt, c):
+        t = c.get("peak_mean_tau")
+        if t is None:
+            t = c.get("peak_tau")
+        return None if t is None else cycle_dt + timedelta(hours=float(t))
+
+    def _match_cost(alat, alon, avalid, atol, cycle_dt, c):
+        """Normalised (distance, timing) cost of pairing an anchor with
+        cluster `c`, or None if it fails either gate."""
+        if c.get("peak_lat") is None or c.get("peak_lon") is None:
+            return None, None, None
+        d = _tca_haversine_km(alat, alon, c["peak_lat"], c["peak_lon"])
+        if d > match_radius_km:
+            return None, d, None
+        if avalid is None:
+            return d / match_radius_km, d, None
+        cv = _valid_dt(cycle_dt, c)
+        if cv is None:
+            return None, d, None
+        dt_h = abs((cv - avalid).total_seconds()) / 3600.0
+        if dt_h > atol:
+            return None, d, dt_h
+        return d / match_radius_km + dt_h / atol, d, dt_h
+
+    # The anchor run's own clusters, for the mutual-best check. Each gets its
+    # own valid time + tolerance so a candidate is scored against every
+    # system the user could have clicked in that run.
+    anchor_peers = None
+    if anchor_valid is not None:
+        try:
+            ac = _tca_clusters_for_cycle(
+                a_date, a_hour, grid_deg, peak_min_members,
+                assign_radius_km, time_window_h, cluster_min_members,
+                same_system_km, variant=variant_n)
+        except Exception:
+            ac = None
+        if ac:
+            a_cdt = _genesis_cycle_dt(a_date, a_hour)
+            anchor_peers = []
+            for c in ac:
+                if c.get("peak_lat") is None or c.get("peak_lon") is None:
+                    continue
+                cv = _valid_dt(a_cdt, c)
+                if cv is None:
+                    continue
+                tau_c = c.get("peak_mean_tau")
+                if tau_c is None:
+                    tau_c = c.get("peak_tau")
+                anchor_peers.append((c, c["peak_lat"], c["peak_lon"],
+                                     cv, _tol_h(tau_c)))
+    a_tol = _tol_h(anchor_tau)
+    # The clicked cluster itself = the anchor run's best match for the anchor
+    # (robust to the frontend's fallback anchor, which isn't a peak cell).
+    anchor_self = None
+    if anchor_peers:
+        a_cdt = _genesis_cycle_dt(a_date, a_hour)
+        _best = None
+        for peer in anchor_peers:
+            pcost, _, _ = _match_cost(lat, lon, anchor_valid, a_tol, a_cdt, peer[0])
+            if pcost is not None and (_best is None or pcost < _best):
+                _best = pcost
+                anchor_self = peer[0]
+        if anchor_self is None:
+            anchor_peers = None   # can't tell which peer is "us" → skip mutual check
+
     trend = []
     n_with_data = 0
     ic_cluster = None      # freshest matched cluster — source for the RI histogram
@@ -10529,14 +10624,39 @@ def get_weatherlab_genesis_trend(
         cycle_dt = _genesis_cycle_dt(date_str, hour_str)
         best = None
         best_d = float("inf")
+        best_cost = float("inf")
+        best_dt = None
+        nearest_d = None
         for c in clusters:
-            if c.get("peak_lat") is None or c.get("peak_lon") is None:
+            cost, d, dt_h = _match_cost(lat, lon, anchor_valid, a_tol,
+                                        cycle_dt, c)
+            if d is not None and (nearest_d is None or d < nearest_d):
+                nearest_d = d
+            if cost is None:
                 continue
-            d = _tca_haversine_km(lat, lon, c["peak_lat"], c["peak_lon"])
-            if d < best_d:
+            if anchor_peers:
+                # Mutual-best: reject `c` if some OTHER cluster of the
+                # anchor run claims it more cheaply — it is that system's
+                # continuation, not this one's.
+                stolen = False
+                for (pc, plat, plon, pvalid, ptol) in anchor_peers:
+                    if pc is anchor_self:
+                        continue
+                    pcost, _, _ = _match_cost(plat, plon, pvalid, ptol,
+                                              cycle_dt, c)
+                    if pcost is not None and pcost < cost:
+                        stolen = True
+                        break
+                if stolen:
+                    continue
+            if cost < best_cost:
+                best_cost = cost
                 best_d = d
+                best_dt = dt_h
                 best = c
-        matched = best is not None and best_d <= match_radius_km
+        matched = best is not None
+        if best is None:
+            best_d = nearest_d if nearest_d is not None else float("inf")
         if matched and ic_cluster is None:
             # Freshest cycle that resolves this system → source the RI
             # intensity-change distribution from its full member set.
@@ -10568,7 +10688,8 @@ def get_weatherlab_genesis_trend(
             "init_time": date_str.replace("-", "") + hour_str,
             "age_hours": round((now - cycle_dt).total_seconds() / 3600.0, 2),
             "matched": matched,
-            "dist_km": round(best_d, 1) if best is not None else None,
+            "dist_km": round(best_d, 1) if best_d != float("inf") else None,
+            "dt_hours": round(best_dt, 1) if best_dt is not None else None,
             "formation_prob": best["fraction"] if matched else None,
             "peak_wind": best["peak_wind"] if matched else None,
             "peak_tau": best["peak_tau"] if matched else None,
@@ -10591,6 +10712,8 @@ def get_weatherlab_genesis_trend(
             "variant": variant_n,
             "anchor": {"lat": lat, "lon": lon},
             "match_radius_km": match_radius_km,
+            "anchor_init": anchor_init if anchor_valid is not None else None,
+            "anchor_tau": anchor_tau if anchor_valid is not None else None,
             "trend": trend,
             "n": len(trend),
             "intensity_change": intensity_change,

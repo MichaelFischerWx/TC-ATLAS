@@ -19801,6 +19801,11 @@
         var meta = _genesisDisturbanceMeta[json && json.track_id] || {};
         var aLat = (meta.peakLat != null) ? meta.peakLat : null;
         var aLon = (meta.peakLon != null) ? meta.peakLon : null;
+        // Genesis lead (h) of the anchor in the LOADED run. Sent with the
+        // run's init so the server matches in time as well as space — a
+        // distance-only match paired a +270 h Caribbean cluster with a
+        // +50 h Gulf invest (92L) in the next run.
+        var aTau = (meta.peakMeanTau != null) ? meta.peakMeanTau : null;
         if (aLat == null || aLon == null) {
             // Fall back to the ensemble-mean's first 34-kt (or first) point.
             var mpts = (json && json.ensemble_mean && json.ensemble_mean.points) || [];
@@ -19812,7 +19817,7 @@
                 }
             }
             if (!anchorPt && mpts.length) anchorPt = mpts[0];
-            if (anchorPt) { aLat = anchorPt.lat; aLon = anchorPt.lon; }
+            if (anchorPt) { aLat = anchorPt.lat; aLon = anchorPt.lon; aTau = anchorPt.tau; }
         }
         if (aLat == null || aLon == null) {   // no anchor → skip, no fetch
             _genesisTrendLoading = false;
@@ -19835,6 +19840,10 @@
                 + '?lat=' + encodeURIComponent(aLat)
                 + '&lon=' + encodeURIComponent(aLon)
                 + (_trendVariant ? '&variant=' + encodeURIComponent(_trendVariant) : '')
+                + ((loadedInit && aTau != null)
+                    ? '&anchor_init=' + encodeURIComponent(loadedInit)
+                      + '&anchor_tau=' + encodeURIComponent(aTau)
+                    : '')
                 + '&count=5', { cache: 'no-store' })
             .then(function (r) { if (!r.ok) { var e = new Error('HTTP ' + r.status); e.status = r.status; throw e; } return r.json(); })
             .then(function (data) {
