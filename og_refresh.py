@@ -16,7 +16,7 @@ ogcard_job delegate here, so the card-building logic lives in exactly one place.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 
@@ -88,42 +88,39 @@ def build_and_upload_og_card(
         return False
 
     png = None
-    storm = og_card.pick_most_intense(storms) if storms else None
-    # Count-adaptive: ≥2 → roster card (strongest storm still provides the IR
-    # backdrop, so cost is identical); avoids arbitrarily anointing one storm
-    # when the tropics are busy.
-    multi = storm is not None and len(storms) >= 2
-    if storm is not None:
-        webp = dstr = None
-        if ir_webp_locator is not None:
-            try:
-                webp, dstr = ir_webp_locator(storm["atcf_id"])
-            except Exception:
-                webp, dstr = None, None
-        if webp:
-            # Fast path: reuse a frame already on GCS — one GET, no S3 reproject.
-            valid = None
-            if dstr and len(dstr) >= 12 and dstr[:12].isdigit():
-                valid = (f"{dstr[0:4]}-{dstr[4:6]}-{dstr[6:8]}"
-                         f"T{dstr[8:10]}:{dstr[10:12]}:00Z")
-            png = (og_card.render_multistorm_card_from_image(storms, webp, valid_utc=valid)
-                   if multi else
-                   og_card.render_storm_card_from_image(storm, webp, valid_utc=valid))
+    ordered = og_card._sorted_by_intensity(storms) if storms else []
+    storm = ordered[0] if ordered else None
+    # Count-adaptive: ≥2 → roster card over one storm's IR backdrop; avoids
+    # arbitrarily anointing one storm when the tropics are busy.
+    multi = len(ordered) >= 2
+    # Backdrop: strongest storm first, but fall through the rest when its IR
+    # isn't available — before this, a single missing Himawari scan (the :00
+    # slot isn't on S3 yet when the hourly job runs) dropped a 6-storm day to
+    # the branded card every hour. Storms poleward of 35° (usually going
+    # extratropical — a shapeless backdrop) drop to the back of the queue; the
+    # roster itself stays in strict intensity order.
+    def _poleward(s):
+        try:
+            return abs(float(s.get("lat"))) > 35.0
+        except (TypeError, ValueError):
+            return False
+    for cand in sorted(ordered, key=_poleward)[:4]:
+        webp, valid, tb = _backdrop_for(cand, ir_webp_locator, log)
+        if webp is None and tb is None:
+            continue
+        if multi:
+            png = (og_card.render_multistorm_card_from_image(
+                       storms, webp, valid_utc=valid, backdrop_storm=cand)
+                   if webp else
+                   og_card.render_multistorm_card_png(
+                       storms, tb, valid_utc=valid, backdrop_storm=cand))
         else:
-            # Fallback: fetch + render the IR directly (no prewarm frame needed).
-            try:
-                from satellite_ir import fetch_ir_tb_raw
-                raw = fetch_ir_tb_raw(
-                    float(storm["lat"]), float(storm["lon"]),
-                    datetime.now(timezone.utc), box_deg=10.0)
-            except Exception as ex:
-                log(f"[OG] IR fetch failed for {storm.get('atcf_id')}: {ex}")
-                raw = None
-            if raw is not None and raw.get("tb") is not None:
-                _valid = raw.get("scan_dt") or raw.get("datetime_utc")
-                png = (og_card.render_multistorm_card_png(storms, raw["tb"], valid_utc=_valid)
-                       if multi else
-                       og_card.render_storm_card_png(storm, raw["tb"], valid_utc=_valid))
+            png = (og_card.render_storm_card_from_image(cand, webp, valid_utc=valid)
+                   if webp else
+                   og_card.render_storm_card_png(cand, tb, valid_utc=valid))
+        if png:
+            storm = cand
+            break
 
     if png is None:
         # No active storms, or the IR fetch/render failed → branded fallback so
@@ -142,7 +139,7 @@ def build_and_upload_og_card(
         if not storm:
             tag = "branded fallback"
         elif multi:
-            tag = f"{len(storms)} systems (lead {storm['atcf_id']})"
+            tag = f"{len(storms)} systems (backdrop {storm['atcf_id']})"
         else:
             tag = "storm " + storm["atcf_id"]
         log(f"[OG] card updated ({tag})")
@@ -150,3 +147,41 @@ def build_and_upload_og_card(
     except Exception as ex:
         log(f"[OG] card upload failed: {ex}")
         return False
+
+
+def _backdrop_for(storm: dict, ir_webp_locator, log) -> tuple:
+    """IR backdrop for one storm → (webp_bytes, valid_iso, tb). Tries the
+    cached-WebP fast path, then a direct fetch at now, then 20 min earlier
+    (Himawari/Meteosat full disks land on S3 ~15-20 min after nominal).
+    Returns (None, None, None) when nothing is available."""
+    if ir_webp_locator is not None:
+        try:
+            webp, dstr = ir_webp_locator(storm["atcf_id"])
+        except Exception:
+            webp, dstr = None, None
+        if webp:
+            valid = None
+            if dstr and len(dstr) >= 12 and dstr[:12].isdigit():
+                valid = (f"{dstr[0:4]}-{dstr[4:6]}-{dstr[6:8]}"
+                         f"T{dstr[8:10]}:{dstr[10:12]}:00Z")
+            return webp, valid, None
+    try:
+        from satellite_ir import fetch_ir_tb_raw
+    except Exception as ex:
+        log(f"[OG] satellite_ir import failed: {ex}")
+        return None, None, None
+    now = datetime.now(timezone.utc)
+    for lag in (0, 20):
+        try:
+            raw = fetch_ir_tb_raw(
+                float(storm["lat"]), float(storm["lon"]),
+                now - timedelta(minutes=lag), box_deg=10.0)
+        except Exception as ex:
+            log(f"[OG] IR fetch failed for {storm.get('atcf_id')} (-{lag} min): {ex}")
+            raw = None
+        if raw is not None and raw.get("tb") is not None:
+            valid = raw.get("scan_dt") or raw.get("datetime_utc")
+            if isinstance(valid, datetime):
+                valid = valid.strftime("%Y-%m-%dT%H:%M:%SZ")
+            return None, valid, raw["tb"]
+    return None, None, None

@@ -10,6 +10,8 @@
 *.png
 *.jpg
 *.svg
+# Social OG card renderer needs its logo (og_card.py)
+!og_assets/*.png
 
 # ── Preprocessing / utility scripts (not needed at runtime) ──
 precompute_climatology.py
