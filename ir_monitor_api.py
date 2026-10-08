@@ -12764,8 +12764,8 @@ _SHEAR_OUTER_KM = 800.0        # SHIPS annulus outer radius
 # over an inner 0–100 km disc, while the ENVIRONMENTAL entropy s_m is
 # averaged over a 100–300 km annulus. Two distinct regions, NOT the
 # 200–800 km shear ring (which samples a much drier outer air mass).
-_CHI_DISC_KM = 100.0           # 0–100 km disc (s*_m saturation + boundary s_b)
-_CHI_INNER_KM = 100.0          # 100–300 km annulus (environmental s_m)
+_CHI_DISC_KM = 100.0           # 0–100 km disc (s*_m saturation)
+_CHI_INNER_KM = 100.0          # 100–300 km annulus (environmental s_m + boundary s_b)
 _CHI_OUTER_KM = 300.0
 _SHEAR_BOX_DEG = 9.0           # subset half-width in degrees (lat ~1000 km buffer)
 _SHEAR_CACHE_TTL = 6 * 3600    # 6 hours; one GFS cycle

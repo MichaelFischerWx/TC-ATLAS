@@ -26,7 +26,11 @@ cycle with no heavy dependencies — no numba/tcpyPI):
     TC-ATLAS already surfaces in the archive).
 
 BOTH the realtime endpoint (ir_monitor_api) and the offline climatology
-builder import compute_vi() from here, so they can never drift apart.
+builder import compute_vi() from here, so the physics cannot drift apart.
+The INPUTS can: the caller picks the regions and the SST product, and χ_m
+moves ~26% per K of SST through its small denominator (s*_SST − s_b). The
+climatology builder must therefore mirror the live path's regions (s_b from
+the 100–300 km annulus) and SST (OISST v2.1, nearest 0.25° cell).
 """
 
 from __future__ import annotations
@@ -158,7 +162,8 @@ def compute_vi(shear_kt: float, t_b_k: float, q_b: float,
     """Ventilation index VI = V_shear · χ_m / PI (Tang & Emanuel 2012, S13).
 
     shear_kt   : 850–200 hPa environmental (vortex-removed) shear mag (kt)
-    t_b_k/q_b  : 1000 hPa T (K) / specific humidity (kg/kg), inner 0–100 km disc
+    t_b_k/q_b  : 1000 hPa T (K) / specific humidity (kg/kg), 100–300 km
+                 environmental annulus (s_b of the air–sea disequilibrium)
     t_m_env_k/q_m_env : 600 hPa environmental T/q, 100–300 km annulus
     t_m_sat_k  : 600 hPa temperature, inner 0–100 km disc (for s*_m)
     sst_c      : sea-surface temperature (°C)
@@ -188,7 +193,7 @@ if __name__ == "__main__":
     # give a markedly LOWER ventilation index than hostile.
     favorable = compute_vi(
         shear_kt=8.0,
-        t_b_k=298.0, q_b=0.019,           # warm, moist boundary layer (disc)
+        t_b_k=298.0, q_b=0.019,           # warm, moist boundary layer (annulus)
         t_m_env_k=271.0, q_m_env=0.0045,  # moist 600 hPa env (small deficit)
         t_m_sat_k=272.0,                  # inner-disc 600 hPa T (for s*_m)
         sst_c=29.5,
