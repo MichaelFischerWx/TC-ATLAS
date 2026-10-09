@@ -152,9 +152,11 @@ MIN_BIN_N = 10                      # bins with fewer fixes are null
 MIN_QUANTILE_N = 200                # per-basin VI quantiles need this many
 
 # Population: a TC climatology takes only tropical and subtropical stages
-# (as the card, which shows systems with NHC/CPHC/JTWC advisories): fixes
-# whose usa_status is a TC stage or, with no US status, whose IBTrACS nature
-# is TS/SS. Disturbance, extratropical and other stages never enter a bin.
+# (as the card, which shows systems with NHC/CPHC/JTWC advisories), at BOTH
+# ends of the ΔV, as SHIFT and the SHIPS developmental data do: the fix and
+# the fix 24 h later must each have a TC usa_status or, with no US status, an
+# IBTrACS nature of TS/SS. A storm that is a remnant low, extratropical or a
+# disturbance 24 h later (8.6% of TC-stage fixes) has no ΔV here.
 TC_STATUS = {"TD", "TS", "TY", "ST", "TC", "HU", "HR", "SD", "SS"}
 TC_NATURE = {"TS", "SS"}
 
@@ -178,9 +180,9 @@ def load_fixes() -> list[dict]:
     where it has both, else wmo_wind. Differencing the merged series spliced a
     JTWC 1-min value against an RSMC 10-min one for 3% of fixes (8% in SI/SP).
     Spur tracks (alternative agency segments that duplicate part of a main
-    track) are skipped. Each fix keeps its IBTrACS nature, usa_status and
-    distance to land; `reduce` applies the stage rule, so changing it needs
-    no re-sample."""
+    track) are skipped. Each fix keeps its IBTrACS nature and usa_status at
+    both ends of the ΔV and its distance to land; `reduce` applies the stage
+    rule, so changing it needs no re-sample."""
     import xarray as xr
     if not IBTRACS_NC.exists():
         raise SystemExit(f"IBTrACS not found: {IBTRACS_NC}")
@@ -240,6 +242,8 @@ def load_fixes() -> list[dict]:
                     "basin": _s(basin[s, j]),
                     "nature": _s(nature[s, j]),
                     "status": _s(status[s, j]),
+                    "nature24": _s(nature[s, k]),       # stage at the ΔV end
+                    "status24": _s(status[s, k]),
                     "d2l": None if not np.isfinite(d2l[s, j]) else int(d2l[s, j]),
                     "d2l24": None if not np.isfinite(d2l[s, k]) else int(d2l[s, k]),
                 })
@@ -648,10 +652,14 @@ def oisst_lookup(rows: list[dict]) -> np.ndarray:
     return out
 
 
+def _tc_stage(status: str, nature: str) -> bool:
+    return status in TC_STATUS if status else (nature in TC_NATURE)
+
+
 def is_tc_stage(r: dict) -> bool:
-    """Tropical or subtropical stage (see TC_STATUS / TC_NATURE)."""
-    st = r.get("status") or ""
-    return st in TC_STATUS if st else (r.get("nature") in TC_NATURE)
+    """Tropical or subtropical at the fix AND 24 h later (see TC_STATUS)."""
+    return (_tc_stage(r.get("status") or "", r.get("nature"))
+            and _tc_stage(r.get("status24") or "", r.get("nature24")))
 
 
 def vi_for_rows(rows: list[dict], sst_source: str) -> tuple[np.ndarray, np.ndarray]:
@@ -676,13 +684,13 @@ def load_rows() -> list[dict]:
         raise SystemExit(f"no samples at {SAMPLES_JSONL}; run `sample` first")
     with open(SAMPLES_JSONL) as fh:
         rows = [json.loads(line) for line in fh]
-    if rows and ("t_b_k" not in rows[0] or "status" not in rows[0]):
+    if rows and ("t_b_k" not in rows[0] or "status24" not in rows[0]):
         raise SystemExit(f"{SAMPLES_JSONL} holds rows from an older builder "
-                         "(no VI inputs or no IBTrACS stage); re-run `sample` "
+                         "(no VI inputs or no IBTrACS stages); re-run `sample` "
                          "into a fresh work dir")
     kept = [r for r in rows if is_tc_stage(r)]
-    log.info("reduce: %d sampled fixes, %d at tropical/subtropical stages",
-             len(rows), len(kept))
+    log.info("reduce: %d sampled fixes, %d tropical/subtropical at both ends "
+             "of the ΔV", len(rows), len(kept))
     return kept
 
 
@@ -744,8 +752,9 @@ def phase_reduce(upload: bool, sst_source: str = "oisst") -> None:
                 "(live-card convention)" % OISST_LAG_DAYS
                 if sst_source == "oisst" else "ERA5 SST, 0-100 km disc mean"),
         "s_b_region_km": list(ENV_ANN_KM),
-        "population": ("tropical/subtropical stages (usa_status %s; nature "
-                       "TS/SS where no US status)" % "/".join(sorted(TC_STATUS))),
+        "population": ("tropical/subtropical stages at the fix and 24 h later "
+                       "(usa_status %s; nature TS/SS where no US status)"
+                       % "/".join(sorted(TC_STATUS))),
         "generated_utc": datetime.now(timezone.utc).isoformat(),
         "n_fixes": int(vi.size),
         "n_storms": int(np.unique(sids).size),
