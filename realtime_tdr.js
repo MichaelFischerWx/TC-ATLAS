@@ -1945,6 +1945,22 @@
                  note: String(o.band_note || (_hdobTdrMeta && _hdobTdrMeta.band_note) || '80% band for the peak 10-m wind') };
     }
     function _hdobTdrBandText(bd) { return '(80%: ' + bd.lo + '–' + bd.hi + ')'; }
+    /** How well the radar data support an analysis' 10-m peak (the publisher's support{}, 2026-10-08): the
+     *  number of 500-m TDR cells within 10 km of the peak at >= 90% of its 500-m wind. An annotation only --
+     *  a thinly sampled peak keeps its value (Isaias 10-08 17:17Z: 87 kt on a real inner maximum caught by
+     *  7 cells at the coverage edge; its magnitude was unconfirmed). null for JSONs without it. */
+    function _hdobTdrSupport(o) {
+        var s = o && o.support;
+        if (!s || s.cells == null || !isFinite(s.cells)) return null;
+        var rb = (s.robust_kt != null && isFinite(s.robust_kt)) ? Math.round(+s.robust_kt) : null;
+        var tip = (s.thin ? 'Thinly sampled: the peak rests on ' : 'Peak support: ') + s.cells +
+            ' TDR 500-m cells (2 km) within 10 km of it' + (s.edge_km != null && +s.edge_km <= 2 ? ', at the edge of the radar coverage' : '') + '. ' +
+            (s.thin ? 'The feature may be real, but its magnitude is not confirmed by the surrounding data. ' : '') +
+            (rb != null ? 'Robust peak (strongest wind held by at least 5 connected cells): ' + rb + ' kt. ' : '') +
+            (s.q_beyond_training && s.q500_2km != null ? 'The 500-m / 2-km wind ratio at the peak (' + (+s.q500_2km).toFixed(2) +
+                ') is above the training range (99th percentile ' + (+s.q500_2km_p99).toFixed(2) + '): the model is extrapolating there.' : '');
+        return { thin: !!s.thin, cells: +s.cells, robust: rb, tip: tip.trim() };
+    }
     function _hdobTdrEsc(s) {
         return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
     }
@@ -2013,8 +2029,12 @@
         h += '</div><div class="info">Max ' + (pk != null ? pk : '—') + ' kt' +
              (bd ? ' <span class="band" title="' + _hdobTdrEsc(bd.note) + '">' + _hdobTdrBandText(bd) + '</span>' : '') +
              ', ' + Math.round(a.max_r_nm) + ' n mi from center · ' +
-             'analysis ' + a.window[0].slice(11, 16) + '–' + a.window[1].slice(11, 16) + 'Z · no color = no TDR data below 1 km</div>' +
-             '<div class="hov">Hover the map for a value</div>';
+             'analysis ' + a.window[0].slice(11, 16) + '–' + a.window[1].slice(11, 16) + 'Z · no color = no TDR data below 1 km</div>';
+        var sup = _hdobTdrSupport(a);
+        if (sup) h += '<div class="info sup' + (sup.thin ? ' thin' : '') + '" title="' + _hdobTdrEsc(sup.tip) + '">' +
+             (sup.thin ? '⚠ Thinly sampled: peak rests on ' + sup.cells + ' radar cells' : 'Peak support: ' + sup.cells + ' radar cells') +
+             (sup.robust != null ? ' · robust peak ' + sup.robust + ' kt' : '') + '</div>';
+        h += '<div class="hov">Hover the map for a value</div>';
         return h;
     }
     /** Hover readout. Samples only _hdobTdrShown, which is set exclusively while the
@@ -2584,7 +2604,7 @@
         var shown = _hdobFilterAircraft(_hdobData.aircraft || [], 'chart').slice().sort(function (a, b) {
             return (b.src === 'iwg1') - (a.src === 'iwg1');
         });
-        var clock = _hdobArchive ? +_hdobArchive.cur : Infinity, PAD = 45 * 60000, best = null;
+        var clock = _hdobArchive ? +_hdobArchive.cur : Infinity, PAD = 45 * 60000, best = null, alt = null;
         // the analysis names its own P-3: mission 20261009I1 -> I = N43RF ("NOAA3"), H = N42RF ("NOAA2").
         // Matching by sortie window alone credited AF307 for NOAA3's 04:35Z analysis (Isaias 2026-10-09): a sortie
         // still flying has no end time, so the first aircraft listed always matched.
@@ -2600,7 +2620,11 @@
             }
             // the tile shows v, so rank by it; the unrounded max breaks ties, then the newer analysis
             if (tail && (!best || v > best.v || (v === best.v && +a.max_kt >= +best.a.max_kt))) best = { v: v, t: a.t, tail: tail, a: a };
+            var su = tail && _hdobTdrSupport(a);
+            if (su && !su.thin && (!alt || v > alt.v)) alt = { v: v, t: a.t };
         });
+        // a thinly sampled peak keeps the tile; the strongest well-sampled analysis rides along as context
+        if (best && alt && (_hdobTdrSupport(best.a) || {}).thin) best.alt = alt;
         return best;
     }
 
@@ -2774,15 +2798,20 @@
         _hdobTdrEnsureMeta();
         var tdr = _hdobTdrSummaryBest(), tdrHtml = '';
         if (tdr) {
-            var cov = tdr.a.coverage && tdr.a.coverage['r<60km'], tdrBand = _hdobTdrBand(tdr.a);
+            var cov = tdr.a.coverage && tdr.a.coverage['r<60km'], tdrBand = _hdobTdrBand(tdr.a), tdrSup = _hdobTdrSupport(tdr.a);
             if (tdrBand) tdr.bandText = _hdobTdrBandText(tdrBand);
             tdrHtml = tile('Max TDR SEAR 10-m (exp)', tdr, 'kt', 'is-sear is-tdrsear',
                 (tdr.a.max_r_nm != null ? ' · ' + Math.round(tdr.a.max_r_nm) + ' n mi from center' : '') +
-                (cov != null && cov < 0.3 ? ' · thin coverage' : ''),
+                // the peak's own support (2026-10-08) says more about this value than the area coverage within
+                // 60 km (~20-40% for most single analyses), which is only the fallback for older JSONs
+                (tdrSup ? (tdrSup.thin ? '<span class="recon-sonde-flag"> · \u26a0 thinly sampled: ' + tdrSup.cells + ' cells</span>' : '')
+                        : (cov != null && cov < 0.3 ? ' · thin coverage' : '')),
                 'TDR SEAR: experimental SEAR 10-m estimate from the P-3 tail-Doppler analysis (its 500-m and 2-km winds replace the flight-level wind). ' +
                 'It sees the low-level eyewall directly and all around the storm, not only along the flight track, so it leads the flight-level SEAR when both exist; they differ most when the eyewall is surface-heavy or the vortex is tilted. ' +
                 'Strongest analysis of the flight on display' + (cov != null ? ' (this one covers ' + Math.round(cov * 100) + '% of the area within 60 km)' : '') +
                 (tdrBand ? '. Range in parentheses: ' + _hdobTdrEsc(tdrBand.note) : '') +
+                (tdrSup ? '. ' + _hdobTdrEsc(tdrSup.tip).replace(/\.$/, '') : '') +
+                (tdr.alt ? '. Strongest well-sampled analysis of the flight: ' + tdr.alt.v + ' kt at ' + tdr.alt.t.slice(11, 16) + 'Z' : '') +
                 '. Click to show it on the map. Verification against dropsondes: table below the map. Not an official product.');
         }
         var html = tile('Max FL wind', best.fl, 'kt') +
