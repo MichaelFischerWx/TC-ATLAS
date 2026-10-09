@@ -10180,14 +10180,134 @@
         var color = v < 16 ? _FAV_HOSTILE : (v < 50 ? _FAV_MARGINAL : _FAV_GOOD);
         return { frac: frac, color: color };
     }
-    /** Ventilation index (Tang & Emanuel) — LOWER is better. Provisional
-     *  thresholds (favorable <0.02, marginal <0.08); the climatological ΔV
-     *  distribution will replace these with a percentile once it lands. */
-    function _favVI(vi) {
+    /** Ventilation index (Tang & Emanuel) — LOWER is better. With the
+     *  climatology loaded (ctx from _rtViClimoLookup) the bar is the storm's
+     *  basin percentile and the color its third: the lowest third of past
+     *  TC VIs favorable, the middle marginal, the top hostile. Until it
+     *  loads, or if it can't, fixed bands stand in (favorable <0.02,
+     *  marginal <0.08 — about the 36th and 75th global percentiles). */
+    function _favVI(vi, ctx) {
         if (vi == null || isNaN(vi)) return null;
-        var frac = _clamp01((0.12 - vi) / 0.12);   // 0 → 1.0, 0.12+ → 0
-        var color = vi < 0.02 ? _FAV_GOOD : (vi < 0.08 ? _FAV_MARGINAL : _FAV_HOSTILE);
-        return { frac: frac, color: color };
+        if (ctx) {
+            return { frac: _clamp01(1 - ctx.pct / 100),
+                     color: ctx.pct < 100 / 3 ? _FAV_GOOD
+                         : (ctx.pct < 200 / 3 ? _FAV_MARGINAL : _FAV_HOSTILE) };
+        }
+        return { frac: _clamp01((0.12 - vi) / 0.12),   // 0 → 1.0, 0.12+ → 0
+                 color: vi < 0.02 ? _FAV_GOOD : (vi < 0.08 ? _FAV_MARGINAL : _FAV_HOSTILE) };
+    }
+
+    // ── Ventilation-index climatology ───────────────────────────────────
+    // vi_dv_climo.json (build_era5_vi_climo.py): VI percentiles and the
+    // next-24 h intensity change (ΔV) by VI bin for 1991–2025 tropical and
+    // subtropical cyclones, global and per IBTrACS basin, computed like the
+    // live value (same regions; ERA5 atmosphere; OISST from the day before).
+    // ~15 KB and static between rebuilds, so it is fetched once per page and
+    // left to the HTTP cache instead of re-fetched no-store per storm.
+    var _VI_CLIMO_URL = 'https://cdn.tcatlas.org/seasonal/vi_dv_climo.json';
+    var _VI_BASIN_NAMES = { NA: 'Atlantic', EP: 'east Pacific', WP: 'west Pacific',
+                            NI: 'north Indian', SI: 'south Indian', SP: 'south Pacific' };
+    var _rtViClimo = { data: null, loading: false, failedAt: 0 };
+    function _rtViClimoLoad() {
+        var c = _rtViClimo;
+        if (c.data || c.loading || Date.now() - c.failedAt < 10 * 60 * 1000) return;
+        c.loading = true;
+        var get = function (url) {
+            return fetch(url).then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            });
+        };
+        // Local dev reads the builder's own output first.
+        var p = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+            ? get('data/seasonal/vi_dv_climo.json').catch(function () { return get(_VI_CLIMO_URL); })
+            : get(_VI_CLIMO_URL);
+        p.then(function (j) {
+            if (!j || !j.vi_bin_edges || !j.global || !j.vi_quantiles) throw new Error('bad climo');
+            c.data = j;
+            c.loading = false;
+            if (currentStormId) _rtUpdateFavMeters(currentStormId);
+        }).catch(function () { c.loading = false; c.failedAt = Date.now(); });
+    }
+    /** IBTrACS basin at a position, assigned as the climatology assigns it:
+     *  by position, so a storm that crossed 180° or 100°E uses its new
+     *  basin. North of the equator between 180° and 70°W the ATCF prefix
+     *  separates the Atlantic from the east Pacific (Central America). */
+    function _rtViBasin(atcfId, lat, lon) {
+        if (lat == null || lon == null || !isFinite(lat) || !isFinite(lon)) return null;
+        var x = ((lon % 360) + 360) % 360;
+        if (lat < 0) return (x >= 20 && x < 135) ? 'SI' : ((x >= 135 && x < 290) ? 'SP' : 'SA');
+        if (x >= 30 && x < 100) return 'NI';
+        if (x >= 100 && x < 180) return 'WP';
+        if (x >= 180 && x < 290) return String(atcfId || '').slice(0, 2).toUpperCase() === 'AL' ? 'NA' : 'EP';
+        return 'NA';
+    }
+    /** Climatological context for a live VI, or null until the file loads:
+     *  its percentile among the basin's past TC VIs (global quantiles where
+     *  the basin has too few) and the ΔV stats of its VI bin. The bins are
+     *  [edge_k, edge_k+1) with the top one open-ended, so a VI above the
+     *  last edge or below zero clamps into an end bin. */
+    function _rtViClimoLookup(vi, basin) {
+        var c = _rtViClimo.data;
+        if (!c || vi == null || !isFinite(vi)) return null;
+        var qb = c.vi_quantiles.by_basin || {};
+        var q = qb[basin] || c.vi_quantiles.global, p = c.vi_quantile_pcts, pct;
+        if (vi <= q[0]) pct = p[0];
+        else if (vi >= q[q.length - 1]) pct = p[p.length - 1];
+        else {                                   // linear in the quantile function
+            var i = 1;
+            while (vi > q[i]) i++;
+            pct = p[i - 1] + (vi - q[i - 1]) / (q[i] - q[i - 1]) * (p[i] - p[i - 1]);
+        }
+        var e = c.vi_bin_edges, k = 0;
+        while (k < e.length - 2 && vi >= e[k + 1]) k++;
+        var rows = (c.by_basin || {})[basin];
+        return { pct: pct, k: k, bin: rows && rows[k] ? rows[k] : c.global[k],
+                 pctBasin: qb[basin] ? basin : null,
+                 binBasin: rows && rows[k] ? basin : null,
+                 years: c.years };
+    }
+    function _rtOrdinal(pct) {
+        if (pct < 1) return '<1st';
+        if (pct > 99) return '>99th';
+        var n = Math.round(pct), t = n % 100;
+        return n + ((t >= 11 && t <= 13) ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th'));
+    }
+    function _rtSignedKt(v) {
+        var n = Math.round(v);
+        return n > 0 ? '+' + n : (n < 0 ? '−' + (-n) : '0');
+    }
+    /** Percentile chip on the VI label and the "next 24 h" line under the
+     *  ingredients line; both are empty without a climatological context. */
+    function _rtRenderViClimo(ctx) {
+        var chip = document.getElementById('ir-fav-vi-pct');
+        var line = document.getElementById('ir-fav-vi-climo');
+        var yrs = ctx && ctx.years ? ctx.years[0] + '–' + ctx.years[1] : '';
+        if (chip) {
+            chip.textContent = ctx ? _rtOrdinal(ctx.pct) + ' pct' : '';
+            chip.title = ctx
+                ? 'Percentile among the ventilation indices of ' + yrs + ' ' +
+                  (ctx.pctBasin ? _VI_BASIN_NAMES[ctx.pctBasin] + ' ' : '') +
+                  'tropical and subtropical cyclones. Lower = more favorable.'
+                : '';
+        }
+        if (!line) return;
+        var b = ctx && ctx.bin;
+        if (!b) { line.textContent = ''; line.title = ''; return; }
+        var where = ctx.binBasin ? _VI_BASIN_NAMES[ctx.binBasin] + ' TCs' : 'TCs';
+        line.textContent = 'next 24 h, ' + where + ' at this VI: median ' +
+            _rtSignedKt(b.pct['50']) + ' kt · 10–90% ' + _rtSignedKt(b.pct['10']) +
+            ' to ' + _rtSignedKt(b.pct['90']) + ' · RI ' + Math.round(100 * b.p_ri) + '%';
+        var e = _rtViClimo.data.vi_bin_edges, k = ctx.k;
+        var range = k < e.length - 2 ? 'VI ' + e[k] + '–' + e[k + 1] : 'VI ≥ ' + e[k];
+        line.title = 'What happened over the next 24 h to ' + yrs + ' ' +
+            (ctx.binBasin ? _VI_BASIN_NAMES[ctx.binBasin] + ' ' : '') +
+            'tropical and subtropical cyclones with ' + range + ' (' + b.n.toLocaleString() +
+            ' cases): median intensity change ' + _rtSignedKt(b.pct['50']) + ' kt, 10th–90th percentile ' +
+            _rtSignedKt(b.pct['10']) + ' to ' + _rtSignedKt(b.pct['90']) + ' kt, mean ' +
+            _rtSignedKt(b.mean) + ' kt; rapid intensification (≥30 kt in 24 h) in ' +
+            (100 * b.p_ri).toFixed(1) + '%. Their VI uses the same regions as the live value, with ERA5 ' +
+            'for the atmosphere and OISST from the day before; intensities from IBTrACS.';
     }
     function _favApply(meterId, valId, fav, valText) {
         var meter = document.getElementById(meterId);
@@ -10274,7 +10394,8 @@
         if (!el) {
             el = document.createElement('div');
             el.id = 'ir-fav-pi-sub'; el.className = 'ir-fav-vi-sub';
-            viSub.parentNode.insertBefore(el, viSub.nextSibling);
+            var after = document.getElementById('ir-fav-vi-climo') || viSub;
+            after.parentNode.insertBefore(el, after.nextSibling);
         }
         var storm = null;
         for (var i = 0; i < stormData.length; i++) if (stormData[i].atcf_id === atcfId) { storm = stormData[i]; break; }
@@ -10320,11 +10441,25 @@
             ohc != null ? Math.round(ohc) + ' kJ/cm²' : (oc ? 'n/a' : '…'));
         var sstStale = !!(oc && sst != null && _rtOceanDateAgeDays(oc.sst_date) > 7);
 
-        // Composite ventilation index (from the /shear payload).
+        // Composite ventilation index (from the /shear payload), placed in
+        // its basin's climatology once vi_dv_climo.json has loaded. The basin
+        // comes from the position the VI was computed at.
         var vent = env && env.ventilation ? env.ventilation : null;
         var vi = vent && vent.vi != null ? vent.vi : null;
-        _favApply('ir-fav-vi', 'ir-fav-vi-val', _favVI(vi),
+        var viCtx = null;
+        if (vi != null) {
+            _rtViClimoLoad();
+            var vlat = env.lat, vlon = env.lon;
+            if (vlat == null || vlon == null) {
+                for (var si = 0; si < stormData.length; si++) {
+                    if (stormData[si].atcf_id === atcfId) { vlat = stormData[si].lat; vlon = stormData[si].lon; break; }
+                }
+            }
+            viCtx = _rtViClimoLookup(vi, _rtViBasin(atcfId, vlat, vlon));
+        }
+        _favApply('ir-fav-vi', 'ir-fav-vi-val', _favVI(vi, viCtx),
             vi != null ? vi.toFixed(3) : (env ? 'n/a' : '…'));
+        _rtRenderViClimo(viCtx);
         var viSub = document.getElementById('ir-fav-vi-sub');
         if (viSub) {
             viSub.textContent = vent

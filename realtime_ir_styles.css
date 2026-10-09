@@ -1753,6 +1753,11 @@ html, body { margin: 0; padding: 0; }
     margin-top: 2px;
 }
 [data-theme="dark"] .ir-fav-vi-sub { color: #7c8aa0; }
+/* Climatological "next 24 h" line — one step stronger than the ingredients
+   line above it; collapses until vi_dv_climo.json has loaded. */
+.ir-fav-vi-climo { color: #475569; }
+[data-theme="dark"] .ir-fav-vi-climo { color: #a3aec0; }
+.ir-fav-vi-climo:empty { display: none; }
 
 /* Vmax|MSLP segmented toggle in the intensity-chart heading. */
 .ir-intensity-metric {
