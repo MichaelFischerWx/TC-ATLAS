@@ -181,6 +181,90 @@
         nino4:        [-5.0,  5.0,  160.0, 210.0],
     };
 
+    // ── Data credit for the region-mean charts ─────────────────────
+    // Names the product and the exact averaging box under the chart
+    // title, so the provider is credited and a saved PNG says what was
+    // averaged. Lives in the Plotly layout, so exports carry it too.
+    var OISST_CREDIT_DAILY = 'Data: NOAA/NCEI OISST v2.1 (0.25°, daily)';
+    var OISST_CREDIT_MONTHLY = 'Data: NOAA/NCEI OISST v2.1 (0.25°, monthly means)';
+    // ERA5 indices use the same REGIONS boxes (build_era5_*_indices.py
+    // import them from build_oisst_history.py).
+    var ERA5_CREDIT_DAILY = 'Data: ECMWF ERA5 reanalysis (Copernicus C3S), daily';
+    var ERA5_CREDIT_MONTHLY = 'Data: ECMWF ERA5 reanalysis (Copernicus C3S), monthly means';
+    // Tropical-mean band used by the relative-SST variants (mirrors
+    // TROPICAL_MEAN_LAT_MIN/MAX × LON_MIN/MAX in build_oisst_history.py).
+    var OISST_TROPICAL_BOX = [-30.0, 30.0, 100.0, 360.0];
+
+    function _fmtLatRange(s, n) {
+        function one(v) { return v === 0 ? '0°' : Math.abs(v) + (v > 0 ? '°N' : '°S'); }
+        if (s >= 0 && n > 0 && s !== 0) return s + '–' + n + '°N';
+        if (s < 0 && n < 0) return Math.abs(n) + '–' + Math.abs(s) + '°S';
+        return one(s) + '–' + one(n);
+    }
+    function _fmtLonRange(w, e) {
+        // Boxes are 0..360 east; label them on the usual W/E convention.
+        function hemi(v) {
+            v = ((v % 360) + 360) % 360;
+            if (v === 0 || v === 180) return { v: v, h: '' };
+            return v > 180 ? { v: 360 - v, h: 'W' } : { v: v, h: 'E' };
+        }
+        var a = hemi(w), b = hemi(e);
+        if (a.h && a.h === b.h) return a.v + '–' + b.v + '°' + a.h;
+        return a.v + '°' + a.h + '–' + b.v + '°' + b.h;
+    }
+    function _regionDomainText(region) {
+        var b = REGION_BOX[region];
+        var label = REGION_LABEL[region] || region;
+        if (!b) return label;
+        return label + ' ' + _fmtLatRange(b[0], b[1]) + ', ' + _fmtLonRange(b[2], b[3]);
+    }
+    function _relativeSstNote() {
+        var t = OISST_TROPICAL_BOX;
+        return 'minus the ' + _fmtLatRange(t[0], t[1]) + ', ' +
+               _fmtLonRange(t[2], t[3]) + ' tropical mean';
+    }
+
+    // Put the credit lines between the title and the plot. `parts` are
+    // joined on one line when they fit the plot width, else stacked.
+    // The title is pinned to the plot's top edge (paper ref) with a pad
+    // that clears the credit block; _exportLayout scales that pad with
+    // the export type. Untitled charts just get room above the plot.
+    function _applyDataCredit(layout, parts, el, centered) {
+        var size = 10;
+        var plotW = ((el && el.clientWidth) || 800) -
+                    (layout.margin.l || 0) - (layout.margin.r || 0);
+        var oneLine = parts.join(' · ');
+        // ~0.55 em per glyph; keep 20% headroom because the export
+        // scales type a little faster than it widens the figure.
+        var fits = oneLine.length * size * 0.55 <= plotW * 0.8;
+        var text = fits ? oneLine : parts.join('<br>');
+        var nLines = fits ? 1 : parts.length;
+        var creditH = Math.round(nLines * size * 1.3);
+        if (layout.title && layout.title.text) {
+            var titleSize = (layout.title.font && layout.title.font.size) || 15;
+            layout.title.xref = 'paper';
+            layout.title.yref = 'paper';
+            layout.title.x = centered ? 0.5 : 0;
+            layout.title.xanchor = centered ? 'center' : 'left';
+            layout.title.y = 1;
+            layout.title.yanchor = 'bottom';
+            layout.title.pad = { b: creditH + 10 };
+            layout.margin.t = creditH + 10 + Math.round(titleSize * 1.5) + 10;
+        } else {
+            layout.margin.t = Math.max(layout.margin.t || 0, creditH + 14);
+        }
+        layout.annotations.push({
+            name: 'data-credit',
+            xref: 'paper', yref: 'paper',
+            x: centered ? 0.5 : 0, y: 1,
+            xanchor: centered ? 'center' : 'left', yanchor: 'bottom',
+            yshift: 4, align: centered ? 'center' : 'left',
+            text: text, showarrow: false,
+            font: { size: size, color: BRAND.textDim,
+                    family: 'DM Sans, system-ui, sans-serif' },
+        });
+    }
+
     var REGION_SETS = {
         atlantic: ['atl_basin', 'atl_mdr', 'atl_mdr_east', 'atl_amo',
                    'caribbean', 'gulf', 'nta', 'tsa'],
@@ -1421,6 +1505,29 @@
                 }
             });
         }
+        // A title padded clear of the data-credit line (_applyDataCredit)
+        // needs that pad — and the top margin holding both — to grow
+        // with the full type scale, or the credit runs into the title.
+        var tp = out.title && out.title.pad;
+        if (tp && typeof tp.b === 'number') {
+            tp.b = Math.round(tp.b * fontK);
+            var tSize = (out.title.font && out.title.font.size) || 15;
+            if (m && typeof m.t === 'number') {
+                m.t = Math.max(m.t, tp.b + Math.round(tSize * 1.5) + 12);
+            }
+        }
+        out.annotations.forEach(function (a) {
+            if (a.name !== 'data-credit') return;
+            if (typeof a.yshift === 'number') {
+                a.yshift = Math.round(a.yshift * fontK);
+            }
+            // Untitled chart: the credit alone sits in the top margin.
+            if (!tp && m && typeof m.t === 'number') {
+                var lines = String(a.text).split('<br>').length;
+                m.t = Math.max(m.t, Math.round(lines * a.font.size * 1.3) +
+                                    (a.yshift || 0) + 10);
+            }
+        });
         return out;
     }
 
@@ -2008,6 +2115,12 @@
         var insetTraces = _scatterInsetBuildTraces();
         var allTraces = traces.concat(insetTraces);
         layout.geo2 = _insetGeoLayout();
+        var relNote = state.scatter.variable === 'sst_rel'
+            ? ' ' + _relativeSstNote() : '';
+        _applyDataCredit(layout, [OISST_CREDIT_MONTHLY,
+            'X: ' + _regionDomainText(state.scatter.x) + relNote,
+            'Y: ' + _regionDomainText(state.scatter.y) + relNote +
+            ' (area-weighted means)'], el, true);
         seasReact(el, allTraces, layout,
                      { responsive: true, displaylogo: false });
     }
@@ -2929,6 +3042,16 @@
         // climbs into, and matches the Daily-mode placement at line ~1747
         // for consistency across resolutions.
         layout.geo2 = _insetGeoLayout(_pickInsetDomain());
+        if (_isEra5Var(state.ts.variable)) {
+            _applyDataCredit(layout, [ERA5_CREDIT_MONTHLY,
+                'Domain: ' + _regionDomainText(state.ts.region) +
+                ' (area-weighted mean)'], el);
+        } else {
+            _applyDataCredit(layout, [OISST_CREDIT_MONTHLY,
+                'Domain: ' + _regionDomainText(state.ts.region) +
+                (state.ts.variable === 'sst_rel' ? ' ' + _relativeSstNote() : '') +
+                ' (area-weighted mean)'], el);
+        }
         // Variable changes mutate margin/legend/inset-domain enough that
         // Plotly.react leaves the chart in a partial state (data updated
         // but SVG not repainted). Empirically observed when going
@@ -3504,6 +3627,10 @@
         // and concentrated below the inset's y range).
         layout.geo2 = _insetGeoLayout(_pickInsetDomain());
         if (latestAnno) layout.annotations.push(latestAnno);
+        _applyDataCredit(layout, [OISST_CREDIT_DAILY,
+            'Domain: ' + _regionDomainText(region) +
+            (variable === 'sst_rel' ? ' ' + _relativeSstNote() : '') +
+            ' (area-weighted mean)'], el);
         seasReact(el, traces.concat(insetTraces), layout,
                      { responsive: true, displaylogo: false });
     }
@@ -4013,6 +4140,9 @@
         // winter shear maxes out the top band).
         var insetTraces = _timeSeriesInsetBuildTraces();
         layout.geo2 = _insetGeoLayout(_pickInsetDomain());
+        _applyDataCredit(layout, [ERA5_CREDIT_DAILY,
+            'Domain: ' + _regionDomainText(region) +
+            ' (area-weighted mean)'], el);
         // After the purge above, el is a clean div — newPlot is the
         // right primitive (react on a purged div technically works but
         // emits a "Plotly.react: missing layout" defensive warning on
@@ -9600,6 +9730,13 @@
         }
     }
 
+    // Data-credit line under the Panel B map legend; each map path
+    // (OISST SST, GFS shear anomaly, ERA5 shear climo) sets its own.
+    function _setAnomSource(text) {
+        var src = document.getElementById('seasonal-anom-source');
+        if (src) src.textContent = text || '';
+    }
+
     function _renderAnomMap() {
         var img = document.getElementById('seasonal-anom-img');
         var cap = document.getElementById('seasonal-anom-caption');
@@ -9610,10 +9747,13 @@
         // "shear_climo" = the long-term climo mean for the current
         // calendar month (kept as a secondary "what's normal?" view).
         if (state.anomVar === 'shear_anom') {
+            _setAnomSource('Data: NCEP GFS analysis minus ECMWF ERA5 1991-2020 ' +
+                           'monthly climatology');
             _renderShearAnomMap(img, cap);
             return;
         }
         if (state.anomVar === 'shear_climo') {
+            _setAnomSource('Data: ECMWF ERA5 (Copernicus C3S), 1991-2020');
             _renderShearClimoMap(img, cap);
             return;
         }
@@ -9622,6 +9762,9 @@
         // calendar month).
         _applyAnomLegend('sst');
         _setAnomMonthVisible(false);
+        _setAnomSource('Data: NOAA/NCEI OISST v2.1 (0.25°, daily) · anomaly vs ' +
+            'the 1991-2020 monthly climatology (interpolated to the day)' +
+            (state.anomVar === 'relative' ? ', ' + _relativeSstNote() : ''));
         if (!state.latest) return;
         var isRel = state.anomVar === 'relative';
         var pngName = isRel

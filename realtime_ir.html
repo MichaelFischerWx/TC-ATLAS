@@ -1644,6 +1644,7 @@
                     <span class="seasonal-anom-bar"></span>
                     <span>+3 °C</span>
                 </div>
+                <div class="seasonal-source" id="seasonal-anom-source"></div>
             </section>
 
             <!-- Panel C: Regional environment evolution time series -->
@@ -2039,6 +2040,7 @@
                     <span class="seasonal-corr-bar"></span>
                     <span>r = +0.7</span>
                 </div>
+                <div class="seasonal-source">Data: NOAA/NCEI OISST v2.1 (0.25°, monthly means) SST · ACE from IBTrACS v04r01 (NOAA/NCEI)</div>
             </section>
 
             <!-- Panel G: Analog seasons ranking -->
@@ -2865,7 +2867,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261009psup';
+        var _LAZY_ASSET_V = '?v=20261009sstcredit';
         var _lazyViewMods = {
             recon:       { js: ['tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

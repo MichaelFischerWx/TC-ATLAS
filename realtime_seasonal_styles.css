@@ -1175,6 +1175,13 @@ body.seasonal-maximized .seasonal-header {
     color: var(--text-dim, #a0a8b3);
 }
 
+/* Data-credit line under the SST map legends. */
+.seasonal-source {
+    margin-top: 4px;
+    font-size: 0.66rem;
+    color: var(--text-dim, #a0a8b3);
+}
+
 .seasonal-anom-bar {
     flex: 1;
     height: 8px;
