@@ -2570,16 +2570,21 @@
             return (b.src === 'iwg1') - (a.src === 'iwg1');
         });
         var clock = _hdobArchive ? +_hdobArchive.cur : Infinity, PAD = 45 * 60000, best = null;
+        // the analysis names its own P-3: mission 20261009I1 -> I = N43RF ("NOAA3"), H = N42RF ("NOAA2").
+        // Matching by sortie window alone credited AF307 for NOAA3's 04:35Z analysis (Isaias 2026-10-09): a sortie
+        // still flying has no end time, so the first aircraft listed always matched.
+        var MTAIL = { H: 'NOAA2', I: 'NOAA3' };
         (_hdobTdrMeta.analyses || []).forEach(function (a) {
             var t = Date.parse(a.t), v = _hdobTdrPeakKt(a);
             if (v == null || isNaN(t) || t > clock) return;
-            var tail = null;
+            var mt = MTAIL[(String(a.mission || '').match(/^\d{8}([A-Z])/) || [])[1]], tail = null;
             for (var i = 0; i < shown.length && !tail; i++) {
+                if (mt ? !_hdobTailEq(shown[i].tail, mt) : !/^NOAA[23]$/i.test(String(shown[i].tail || '').trim())) continue;
                 var s = Date.parse(_hdobX(shown[i].sortie_start || '')), e = Date.parse(_hdobX(shown[i].sortie_end || ''));
-                if (isNaN(s) || isNaN(e) || (t >= s - PAD && t <= e + PAD)) tail = shown[i].tail;
+                if ((isNaN(s) || t >= s - PAD) && (isNaN(e) || t <= e + PAD)) tail = shown[i].tail;
             }
-            // the tile shows v, so rank by it; the unrounded max only breaks ties
-            if (tail && (!best || v > best.v || (v === best.v && +a.max_kt > +best.a.max_kt))) best = { v: v, t: a.t, tail: tail, a: a };
+            // the tile shows v, so rank by it; the unrounded max breaks ties, then the newer analysis
+            if (tail && (!best || v > best.v || (v === best.v && +a.max_kt >= +best.a.max_kt))) best = { v: v, t: a.t, tail: tail, a: a };
         });
         return best;
     }
