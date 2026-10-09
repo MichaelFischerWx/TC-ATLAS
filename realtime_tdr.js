@@ -2030,10 +2030,10 @@
              (bd ? ' <span class="band" title="' + _hdobTdrEsc(bd.note) + '">' + _hdobTdrBandText(bd) + '</span>' : '') +
              ', ' + Math.round(a.max_r_nm) + ' n mi from center · ' +
              'analysis ' + a.window[0].slice(11, 16) + '–' + a.window[1].slice(11, 16) + 'Z · no color = no TDR data below 1 km</div>';
+        // only a thinly sampled peak gets a line (Michael 2026-10-09: the key is busy enough); details in the tooltip
         var sup = _hdobTdrSupport(a);
-        if (sup) h += '<div class="info sup' + (sup.thin ? ' thin' : '') + '" title="' + _hdobTdrEsc(sup.tip) + '">' +
-             (sup.thin ? '⚠ Thinly sampled: peak rests on ' + sup.cells + ' radar cells' : 'Peak support: ' + sup.cells + ' radar cells') +
-             (sup.robust != null ? ' · robust peak ' + sup.robust + ' kt' : '') + '</div>';
+        if (sup && sup.thin) h += '<div class="info sup thin" title="' + _hdobTdrEsc(sup.tip) + '">⚠ Thinly sampled: ' + sup.cells +
+             ' radar cells' + (sup.robust != null ? ' · robust ' + sup.robust + ' kt' : '') + '</div>';
         h += '<div class="hov">Hover the map for a value</div>';
         return h;
     }
@@ -2810,7 +2810,7 @@
                 'It sees the low-level eyewall directly and all around the storm, not only along the flight track, so it leads the flight-level SEAR when both exist; they differ most when the eyewall is surface-heavy or the vortex is tilted. ' +
                 'Strongest analysis of the flight on display' + (cov != null ? ' (this one covers ' + Math.round(cov * 100) + '% of the area within 60 km)' : '') +
                 (tdrBand ? '. Range in parentheses: ' + _hdobTdrEsc(tdrBand.note) : '') +
-                (tdrSup ? '. ' + _hdobTdrEsc(tdrSup.tip).replace(/\.$/, '') : '') +
+                (tdrSup && tdrSup.thin ? '. ' + _hdobTdrEsc(tdrSup.tip).replace(/\.$/, '') : '') +
                 (tdr.alt ? '. Strongest well-sampled analysis of the flight: ' + tdr.alt.v + ' kt at ' + tdr.alt.t.slice(11, 16) + 'Z' : '') +
                 '. Click to show it on the map. Verification against dropsondes: table below the map. Not an official product.');
         }

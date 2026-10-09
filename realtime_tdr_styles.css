@@ -917,9 +917,8 @@
 /* nothing drawn: the picked analysis' PNG is loading / failed */
 .recon-hdob-tdrkey .st { font-style: italic; }
 .recon-hdob-tdrkey .err { color: #b91c1c; font-style: normal; }
-/* peak sampling support (tooltip = cells, robust peak, ratio note); thin = few radar cells under the peak */
-.recon-hdob-tdrkey .sup { cursor: help; }
-.recon-hdob-tdrkey .sup.thin { color: #b45309; font-weight: 600; opacity: 1; }
+/* thinly sampled peak: few radar cells under it (tooltip = cells, robust peak, ratio note) */
+.recon-hdob-tdrkey .sup.thin { color: #b45309; font-weight: 600; opacity: 1; cursor: help; }
 :root[data-theme="dark"] .recon-hdob-tdrkey .sup.thin { color: #fbbf24; }
 :root[data-theme="dark"] .recon-hdob-tdrkey .err { color: #fca5a5; }
 .recon-hdob-legend-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
