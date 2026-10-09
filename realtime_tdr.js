@@ -1301,18 +1301,41 @@
                  others_max_kt: others.length ? Math.max.apply(null, others) : null };
     }
 
-    function _hdobSearPassesInScope(passes) {
-        passes = passes || [];
-        if (!passes.length) return [];
-        var all = (_hdobData && _hdobData.aircraft) || [];
-        var shown = _hdobFilterAircraft(all, 'map');
-        if (!shown.length) return passes.slice();
-        if (!_hdobFlightSel) {
+    /** The sorties "on display" -- ONE definition for everything scoped to the flight (SEAR passes and tile, TDR
+     *  tile and map analyses): the picked sortie, else the live ones (ending within 90 min of the newest). A
+     *  record matching only the tail let a previous mission's VDM and TDR analysis stand in for the flight in the
+     *  air (Isaias 2026-10-09, NOAA 43 09/00Z vs 09/12Z). */
+    function _hdobScopedSorties(kind) {
+        var shown = _hdobFilterAircraft((_hdobData && _hdobData.aircraft) || [], kind || 'map');
+        if (shown.length && !_hdobFlightSel) {
             var newest = 0;
             shown.forEach(function (a) { var e = Date.parse(_hdobX(a.sortie_end || '')); if (e > newest) newest = e; });
             var live = shown.filter(function (a) { return newest - Date.parse(_hdobX(a.sortie_end || '')) <= 90 * 60000; });
             if (live.length && live.length < shown.length) shown = live;
         }
+        return shown;
+    }
+
+    /** Tail of the displayed P-3 sortie that flew this TDR analysis, or null. The mission id names the aircraft
+     *  (20261009I1: I = N43RF "NOAA3", H = N42RF "NOAA2"); the analysis must also fall in that sortie (+-45 min). */
+    var _HDOB_TDR_MTAIL = { H: 'NOAA2', I: 'NOAA3' };
+    function _hdobTdrAnalysisTail(a, shown) {
+        var t = Date.parse(a.t), PAD = 45 * 60000;
+        if (isNaN(t)) return null;
+        var mt = _HDOB_TDR_MTAIL[(String(a.mission || '').match(/^\d{8}([A-Z])/) || [])[1]];
+        for (var i = 0; i < shown.length; i++) {
+            if (mt ? !_hdobTailEq(shown[i].tail, mt) : !/^NOAA[23]$/i.test(String(shown[i].tail || '').trim())) continue;
+            var s = Date.parse(_hdobX(shown[i].sortie_start || '')), e = Date.parse(_hdobX(shown[i].sortie_end || ''));
+            if ((isNaN(s) || t >= s - PAD) && (isNaN(e) || t <= e + PAD)) return shown[i].tail;
+        }
+        return null;
+    }
+
+    function _hdobSearPassesInScope(passes) {
+        passes = passes || [];
+        if (!passes.length) return [];
+        var shown = _hdobScopedSorties('map');
+        if (!shown.length) return passes.slice();
         var PAD = 45 * 60000;
         return passes.filter(function (p) {
             var t = Date.parse(p.fix_t || p.t);
@@ -1339,7 +1362,7 @@
             });
         } else {
             ((_hdobData && _hdobData.vdms) || []).forEach(function (v) {
-                if (!v.t || (selTail && !_hdobTailEq(v.aircraft, selTail))) return;
+                if (!v.t || !_hdobInPickedFlight(v.aircraft, v.t)) return;
                 out.push({ t: _hdobX(v.t), tail: v.aircraft, src: 'vdm', pass: null });
             });
         }
@@ -1964,10 +1987,14 @@
     function _hdobTdrEsc(s) {
         return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
     }
-    /** Analyses offered on the map: the stale ones drop out unless 'Older' is on. */
+    /** Analyses offered on the map: those flown by the sorties on display (_hdobScopedSorties), minus the stale
+     *  ones unless 'Older' is on. Without the flight scope a live sortie with no analysis yet drew the previous
+     *  mission's newest one as "latest" (Isaias 2026-10-09 NOAA 43 09/12Z showing 20261009I1 06:46Z). */
     function _hdobTdrAnalyses() {
-        var cut = _hdobStaleCut();
-        return ((_hdobTdrMeta && _hdobTdrMeta.analyses) || []).filter(function (a) { return !_hdobHideOld(a.t, cut); });
+        var cut = _hdobStaleCut(), shown = _hdobScopedSorties('map');
+        return ((_hdobTdrMeta && _hdobTdrMeta.analyses) || []).filter(function (a) {
+            return !_hdobHideOld(a.t, cut) && (!shown.length || _hdobTdrAnalysisTail(a, shown));
+        });
     }
     function _hdobTdrPick(passInfo) {
         var an = _hdobTdrAnalyses();
@@ -2373,19 +2400,30 @@
         return String(a || '').trim().toUpperCase() === String(b || '').trim().toUpperCase();
     }
 
+    /** Does a sonde / VDM record (tail + time) belong to the picked flight? Records carry a tail but no sortie, so
+     *  the picked sortie's time window decides (+-30 min): matching the tail alone showed the previous NOAA 43
+     *  mission's 05:35Z VDM as the 09/12Z flight's center fix (Isaias 2026-10-09). No pick -> true. */
+    function _hdobInPickedFlight(tail, t) {
+        if (!_hdobFlightSel) return true;
+        if (!_hdobTailEq(tail, _hdobFlightSel.split('#')[0])) return false;
+        var a = ((_hdobData && _hdobData.aircraft) || []).filter(function (x) { return _hdobAcId(x) === _hdobFlightSel; })[0];
+        var ms = Date.parse(_hdobX(t || '')), PAD = 30 * 60000;
+        if (!a || isNaN(ms)) return true;
+        var s = Date.parse(_hdobX(a.sortie_start || '')), e = Date.parse(_hdobX(a.sortie_end || ''));
+        return (isNaN(s) || ms >= s - PAD) && (isNaN(e) || ms <= e + PAD);
+    }
+
     /** Scope the dropsonde + VDM markers to the selected flight, the same way
      *  _hdobFilterAircraft scopes the barbs/track. Sondes carry `tail`, VDMs
-     *  carry `aircraft`; both are matched against the selected aircraft's raw
-     *  tail (the `#sortie` suffix is dropped — sonde/VDM records aren't tagged
-     *  by sortie). No selection → the blob is returned unchanged. */
+     *  carry `aircraft`; both are matched against the selected flight's tail
+     *  AND sortie window (_hdobInPickedFlight — the records aren't tagged by
+     *  sortie). No selection → the blob is returned unchanged. */
     function _hdobFilterMarkerBlob(blob) {
         if (!blob) return blob;
-        var selTail = _hdobFlightSel ? _hdobFlightSel.split('#')[0] : null;
         var cut = _hdobStaleCut();
-        function keep(t) { return !selTail || _hdobTailEq(t, selTail); }
         return Object.assign({}, blob, {
-            dropsondes: _hdobLayerVis.sondes ? (blob.dropsondes || []).filter(function (d) { return keep(d.tail) && !_hdobHideOld(d.t, cut); }) : [],
-            vdms:       _hdobLayerVis.vdm    ? (blob.vdms || []).filter(function (x) { return keep(x.aircraft) && !_hdobHideOld(x.t, cut); }) : []
+            dropsondes: _hdobLayerVis.sondes ? (blob.dropsondes || []).filter(function (d) { return _hdobInPickedFlight(d.tail, d.t) && !_hdobHideOld(d.t, cut); }) : [],
+            vdms:       _hdobLayerVis.vdm    ? (blob.vdms || []).filter(function (x) { return _hdobInPickedFlight(x.aircraft, x.t) && !_hdobHideOld(x.t, cut); }) : []
         });
     }
 
@@ -2601,23 +2639,14 @@
     function _hdobTdrSummaryBest() {
         var sp = _hdobData && _hdobData.sear;
         if (!_hdobTdrMeta || !sp || _hdobTdrMetaUrl !== sp.swath_url) return null;
-        var shown = _hdobFilterAircraft(_hdobData.aircraft || [], 'chart').slice().sort(function (a, b) {
-            return (b.src === 'iwg1') - (a.src === 'iwg1');
-        });
-        var clock = _hdobArchive ? +_hdobArchive.cur : Infinity, PAD = 45 * 60000, best = null, alt = null;
-        // the analysis names its own P-3: mission 20261009I1 -> I = N43RF ("NOAA3"), H = N42RF ("NOAA2").
-        // Matching by sortie window alone credited AF307 for NOAA3's 04:35Z analysis (Isaias 2026-10-09): a sortie
-        // still flying has no end time, so the first aircraft listed always matched.
-        var MTAIL = { H: 'NOAA2', I: 'NOAA3' };
+        // same sorties as the SEAR passes, the map analyses and the center-fix tile (_hdobScopedSorties); the
+        // analysis' own mission id names the P-3 (AF307 was once credited with NOAA3's 04:35Z analysis)
+        var shown = _hdobScopedSorties('chart');
+        var clock = _hdobArchive ? +_hdobArchive.cur : Infinity, best = null, alt = null;
         (_hdobTdrMeta.analyses || []).forEach(function (a) {
             var t = Date.parse(a.t), v = _hdobTdrPeakKt(a);
             if (v == null || isNaN(t) || t > clock) return;
-            var mt = MTAIL[(String(a.mission || '').match(/^\d{8}([A-Z])/) || [])[1]], tail = null;
-            for (var i = 0; i < shown.length && !tail; i++) {
-                if (mt ? !_hdobTailEq(shown[i].tail, mt) : !/^NOAA[23]$/i.test(String(shown[i].tail || '').trim())) continue;
-                var s = Date.parse(_hdobX(shown[i].sortie_start || '')), e = Date.parse(_hdobX(shown[i].sortie_end || ''));
-                if ((isNaN(s) || t >= s - PAD) && (isNaN(e) || t <= e + PAD)) tail = shown[i].tail;
-            }
+            var tail = _hdobTdrAnalysisTail(a, shown);
             // the tile shows v, so rank by it; the unrounded max breaks ties, then the newer analysis
             if (tail && (!best || v > best.v || (v === best.v && +a.max_kt >= +best.a.max_kt))) best = { v: v, t: a.t, tail: tail, a: a };
             var su = tail && _hdobTdrSupport(a);
@@ -2631,20 +2660,19 @@
     /** Center-fix tile (2026-10-07): the newest VDM leads the pressure slot --
      *  its central pressure is the operational value; extrapolated SLP from a
      *  700/850-mb aircraft is only the estimate between fixes, so it rides
-     *  underneath ("since fix"). Scoped to the picked flight's tail when one is
-     *  picked, like the map markers. Returns '' when there is no VDM yet. */
+     *  underneath ("since fix"). Scoped to the picked flight (tail + sortie
+     *  window), like the map markers. Returns '' when there is no VDM yet. */
     function _hdobCenterFixTile(aircraft) {
-        var selTail = _hdobFlightSel ? _hdobFlightSel.split('#')[0] : null;
-        var vs = ((_hdobData && _hdobData.vdms) || []).filter(function (v) {
-            return v.t && (!selTail || _hdobTailEq(v.aircraft, selTail));
-        }).sort(function (a, b) { return Date.parse(_hdobX(a.t)) - Date.parse(_hdobX(b.t)); });
+        var all = ((_hdobData && _hdobData.vdms) || []).filter(function (v) { return v.t; })
+            .sort(function (a, b) { return Date.parse(_hdobX(a.t)) - Date.parse(_hdobX(b.t)); });
+        var vs = all.filter(function (v) { return _hdobInPickedFlight(v.aircraft, v.t); });
         if (!vs.length) return '';
         var v = vs[vs.length - 1], vms = Date.parse(_hdobX(v.t)), esc = _hdobTdrEsc;
         var lines = [];
         // pressure change vs the previous fix at least 45 min older (same storm, any aircraft)
         if (v.min_slp_hpa != null) {
-            for (var i = vs.length - 2; i >= 0; i--) {
-                var p = vs[i], dh = (vms - Date.parse(_hdobX(p.t))) / 3600000;
+            for (var i = all.indexOf(v) - 1; i >= 0; i--) {
+                var p = all[i], dh = (vms - Date.parse(_hdobX(p.t))) / 3600000;
                 if (p.min_slp_hpa == null || dh < 0.75) continue;
                 var dp = v.min_slp_hpa - p.min_slp_hpa;
                 lines.push('<span class="recon-fix-trend' + (dp < 0 ? ' is-fall' : dp > 0 ? ' is-rise' : '') + '">' +
