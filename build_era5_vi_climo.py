@@ -30,8 +30,8 @@ cycle), looked up from the local PSL yearly files during `reduce`. χ_m moves
 SST (HadISST2 before Sep 2007, OSTIA after) would put the climatology on a
 different footing; it is kept in the rows as `sst_era5_c` (0–100 km disc)
 and `sst_era5_pt_c` (nearest point) for comparison (`reduce --sst era5`).
-The rows store the VI inputs rather than the VI, so a later change of SST,
-definition or population is a cheap re-reduce, not a new ERA5 pass.
+The rows store the VI inputs rather than the VI, so a later change of SST
+or definition is a cheap re-reduce, not a new ERA5 pass.
 
 ERA5 access. The default `raw` source byte-range-reads the ARCO raw per-day
 NetCDF-3 files (arco_era5_raw.py): one hour's latitude band of one field is
@@ -55,7 +55,6 @@ Two phases (idempotent, resumable — a multi-hour laptop run survives a crash):
     python build_era5_vi_climo.py reduce                    # local only
     python build_era5_vi_climo.py reduce --upload           # + GCS
     python build_era5_vi_climo.py reduce --sst era5         # ERA5-SST variant
-    python build_era5_vi_climo.py reduce --population all   # every IBTrACS stage
 
 Output: data/seasonal/vi_dv_climo.json (+ gs://${GCS_IR_CACHE_BUCKET}/
         seasonal/vi_dv_climo.json with --upload). The ERA5-SST variant goes
@@ -152,10 +151,10 @@ RI_KT = 30.0                        # ΔV24 ≥ 30 kt = rapid intensification
 MIN_BIN_N = 10                      # bins with fewer fixes are null
 MIN_QUANTILE_N = 200                # per-basin VI quantiles need this many
 
-# Population: the storm card shows VI for systems with NHC/CPHC/JTWC
-# advisories, i.e. tropical/subtropical cyclones. "tc" keeps fixes whose
-# usa_status is a TC stage (or, with no US status, whose IBTrACS nature is
-# TS/SS); "all" keeps every IBTrACS stage (disturbance, extratropical, ...).
+# Population: a TC climatology takes only tropical and subtropical stages
+# (as the card, which shows systems with NHC/CPHC/JTWC advisories): fixes
+# whose usa_status is a TC stage or, with no US status, whose IBTrACS nature
+# is TS/SS. Disturbance, extratropical and other stages never enter a bin.
 TC_STATUS = {"TD", "TS", "TY", "ST", "TC", "HU", "HR", "SD", "SS"}
 TC_NATURE = {"TS", "SS"}
 
@@ -180,8 +179,8 @@ def load_fixes() -> list[dict]:
     JTWC 1-min value against an RSMC 10-min one for 3% of fixes (8% in SI/SP).
     Spur tracks (alternative agency segments that duplicate part of a main
     track) are skipped. Each fix keeps its IBTrACS nature, usa_status and
-    distance to land, so `reduce` can choose the population without a
-    re-sample."""
+    distance to land; `reduce` applies the stage rule, so changing it needs
+    no re-sample."""
     import xarray as xr
     if not IBTRACS_NC.exists():
         raise SystemExit(f"IBTrACS not found: {IBTRACS_NC}")
@@ -649,9 +648,8 @@ def oisst_lookup(rows: list[dict]) -> np.ndarray:
     return out
 
 
-def in_population(r: dict, population: str) -> bool:
-    if population == "all":
-        return True
+def is_tc_stage(r: dict) -> bool:
+    """Tropical or subtropical stage (see TC_STATUS / TC_NATURE)."""
     st = r.get("status") or ""
     return st in TC_STATUS if st else (r.get("nature") in TC_NATURE)
 
@@ -673,7 +671,7 @@ def vi_for_rows(rows: list[dict], sst_source: str) -> tuple[np.ndarray, np.ndarr
     return vi, sst
 
 
-def load_rows(population: str) -> list[dict]:
+def load_rows() -> list[dict]:
     if not SAMPLES_JSONL.exists():
         raise SystemExit(f"no samples at {SAMPLES_JSONL}; run `sample` first")
     with open(SAMPLES_JSONL) as fh:
@@ -682,9 +680,9 @@ def load_rows(population: str) -> list[dict]:
         raise SystemExit(f"{SAMPLES_JSONL} holds rows from an older builder "
                          "(no VI inputs or no IBTrACS stage); re-run `sample` "
                          "into a fresh work dir")
-    kept = [r for r in rows if in_population(r, population)]
-    log.info("reduce: %d sampled fixes, %d in population '%s'",
-             len(rows), len(kept), population)
+    kept = [r for r in rows if is_tc_stage(r)]
+    log.info("reduce: %d sampled fixes, %d at tropical/subtropical stages",
+             len(rows), len(kept))
     return kept
 
 
@@ -694,12 +692,11 @@ def bin_index(vi: np.ndarray) -> np.ndarray:
     return np.clip(np.searchsorted(VI_BIN_EDGES, vi, side="right") - 1, 0, nb - 1)
 
 
-def phase_reduce(upload: bool, sst_source: str = "oisst",
-                 population: str = "tc") -> None:
-    if upload and (sst_source != "oisst" or population != "tc"):
-        raise SystemExit("only the OISST / tc build is the card's climatology; "
-                         "variants stay local")
-    rows = load_rows(population)
+def phase_reduce(upload: bool, sst_source: str = "oisst") -> None:
+    if upload and sst_source != "oisst":
+        raise SystemExit("only the OISST build is the card's climatology; "
+                         "the ERA5-SST variant stays local")
+    rows = load_rows()
     vi_all, _ = vi_for_rows(rows, sst_source)
     ok = np.isfinite(vi_all)
     vi = vi_all[ok]
@@ -748,8 +745,7 @@ def phase_reduce(upload: bool, sst_source: str = "oisst",
                 if sst_source == "oisst" else "ERA5 SST, 0-100 km disc mean"),
         "s_b_region_km": list(ENV_ANN_KM),
         "population": ("tropical/subtropical stages (usa_status %s; nature "
-                       "TS/SS where no US status)" % "/".join(sorted(TC_STATUS))
-                       if population == "tc" else "every IBTrACS stage"),
+                       "TS/SS where no US status)" % "/".join(sorted(TC_STATUS))),
         "generated_utc": datetime.now(timezone.utc).isoformat(),
         "n_fixes": int(vi.size),
         "n_storms": int(np.unique(sids).size),
@@ -772,8 +768,6 @@ def phase_reduce(upload: bool, sst_source: str = "oisst",
     _log_table("global", result["global"])
 
     out = OUT_LOCAL if sst_source == "oisst" else OUT_LOCAL_ERA5
-    if population != "tc":
-        out = out.with_name(out.stem + f"_pop-{population}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     body = json.dumps(result, separators=(",", ":")).encode()
     out.write_bytes(body)
@@ -831,14 +825,11 @@ def main() -> None:
     pr = sub.add_parser("reduce", help="bin VI vs ΔV → JSON (local; "
                                        "--upload for GCS)")
     pr.add_argument("--upload", action="store_true",
-                    help="also upload the OISST/tc JSON to GCS")
+                    help="also upload the OISST JSON to GCS")
     pr.add_argument("--local-only", action="store_true",
                     help="no-op, kept for old command lines (local is the default)")
     pr.add_argument("--sst", choices=("oisst", "era5"), default="oisst",
                     help="oisst (live-card SST, default) or era5 (comparison)")
-    pr.add_argument("--population", choices=("tc", "all"), default="tc",
-                    help="tc: tropical/subtropical stages (default); all: "
-                         "every IBTrACS stage")
     args = ap.parse_args()
 
     if args.phase == "sample":
@@ -847,8 +838,7 @@ def main() -> None:
     elif args.phase == "check":
         phase_check(args.timesteps)
     else:
-        phase_reduce(args.upload and not args.local_only, args.sst,
-                     args.population)
+        phase_reduce(args.upload and not args.local_only, args.sst)
 
 
 if __name__ == "__main__":
