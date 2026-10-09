@@ -1286,6 +1286,21 @@
         });
     }
 
+    /** Headline of the flights on display, mirroring sear_rt.build_payload: the strongest FINAL crossing within 3 h
+     *  of the newest final crossing, with the window's others and the RMW range. null when none is final. */
+    function _hdobSearScopedHeadline(scoped) {
+        var ps = (scoped || []).filter(function (p) { return p.final && p.y_corr_kt != null && !isNaN(Date.parse(p.t)); })
+            .sort(function (a, b) { return Date.parse(a.t) - Date.parse(b.t); });
+        if (!ps.length) return null;
+        var tLast = Date.parse(ps[ps.length - 1].t);
+        var win = ps.filter(function (p) { return tLast - Date.parse(p.t) <= 3 * 3600000; });
+        var top = win.reduce(function (m, p) { return +p.y_corr_kt > +m.y_corr_kt ? p : m; }, win[0]);
+        var others = win.filter(function (p) { return p !== top; }).map(function (p) { return +p.y_corr_kt; });
+        return { kt: top.y_corr_kt, t: top.t, tail: top.tail, fix_source: top.fix_source, range_kt: top.y_range_kt,
+                 others_kt: others, others_min_kt: others.length ? Math.min.apply(null, others) : null,
+                 others_max_kt: others.length ? Math.max.apply(null, others) : null };
+    }
+
     function _hdobSearPassesInScope(passes) {
         passes = passes || [];
         if (!passes.length) return [];
@@ -2688,10 +2703,14 @@
         // previous flight (Polo 2026-09-22: yesterday's 66 kt over an enroute
         // plane). Only use it when its pass is among the flights on display.
         if (hd && hd.kt != null) {
-            var hdIn = _hdobSearPassesInScope(_hdobData.sear.passes).some(function (p) {
+            var scoped = _hdobSearPassesInScope(_hdobData.sear.passes);
+            var hdIn = scoped.some(function (p) {
                 return _hdobTailEq(p.tail, hd.tail) && String(p.t).slice(0, 16) === String(hd.t).slice(0, 16);
             });
-            if (!hdIn) hd = null;
+            // The headline is another aircraft's (Isaias 2026-10-09: NOAA 43's flight picked, headline AF309's): build
+            // the displayed flight's own headline from its FINAL crossings, by the product's rule (strongest within 3 h
+            // of its newest final crossing), instead of dropping the tile while its crossings are listed above.
+            if (!hdIn) hd = _hdobSearScopedHeadline(scoped);
         }
         // FINAL values only (2026-09-30): payloads that mark crossings final/pending never fall back to the per-ob
         // maximum (a preliminary number); older payloads keep the old fallback.
