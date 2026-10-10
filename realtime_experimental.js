@@ -1194,12 +1194,12 @@
                   (_showWhy ? 'block' : 'none') + ';"></div>'
                 : '') +
             '<div id="exp-skill" class="exp-verif" style="display:none;"></div>' +
-            /* Frame viewer (archived storms): shown by setupFrameViewer()
-               only when packed frames exist. Sits directly under the chart
-               because clicking the chart is what seeks it. */
+            /* Frame viewer (archived and live storms): shown by
+               setupFrameViewer() only when packed frames exist. Sits directly
+               under the chart because clicking the chart is what seeks it. */
             '<div id="exp-frames" class="exp-frames" style="display:none;">' +
             '<div class="exp-shap-head">Frame viewer' +
-            '<span class="exp-verif-src"> every archived infrared frame — ' +
+            '<span class="exp-verif-src"> every infrared frame — ' +
             'drag to scrub, or click a time on the chart above</span></div>' +
             '<div class="exp-frv-wrap">' +
             '<canvas id="exp-frv" width="480" height="480"></canvas>' +
@@ -2315,21 +2315,25 @@
     }
 
     /* Fetch + wire the viewer for the selected storm; hides itself when no
-       strips exist (live storms, pre-strip archives). */
+       strips exist (pre-strip archives, a live storm before its first
+       strip publish). Live storms' strips are rebuilt every pass
+       (build_ir_strips.py --live). */
     function setupFrameViewer(j) {
         var box = document.getElementById('exp-frames');
         if (!box) return;
         stopStripPlay();
         _strip = null;
         box.style.display = 'none';
-        if (!_archSet[j.storm]) return;            // archived storms only
         var atcf = j.storm;
-        /* Same cache-bust contract as the plan PNG: strips are rebuilt when
-           a storm is re-archived, and the archive index's `generated` stamp
-           is what changes with it — without this, a browser-cached manifest
-           from before a rebuild can miss the payload window entirely. */
+        var arch = !!_archSet[atcf];
+        /* Same cache-bust contract as the plan PNG: the manifest changes
+           when the storm is re-archived (archive) or every pass (live), and
+           that index's `generated` stamp changes with it — without this, a
+           browser-cached manifest from before a rebuild can miss the
+           payload window entirely. */
         var bust = '?t=' + encodeURIComponent(
-            (_archIndex && _archIndex.generated) || '');
+            (arch ? (_archIndex && _archIndex.generated)
+                  : (_index && _index.generated)) || '');
         fetchJson(stripPath(atcf, 'meta.json') + bust).then(function (meta) {
             if (_storm !== atcf || !meta || !meta.times || !meta.times.length)
                 return;
@@ -2381,7 +2385,8 @@
             var comp = M.panels.tilt ? PROFILES.blend : PROFILES.tilt;
             if (M.panels.tilt) seedTilt(j.frames);
             else seedRmw(j.frames);
-            fetchJson(comp.arch + '/' + comp.file + atcf + '.json')
+            fetchJson((arch ? comp.arch : comp.prefix) + '/' + comp.file +
+                      atcf + '.json')
                 .then(function (cj) {
                     if (_strip !== null && _strip.atcf === atcf) {
                         if (M.panels.tilt) seedRmw(cj.frames);
@@ -2430,8 +2435,13 @@
                 im.onload = function () { resolve(im); };
                 im.onerror = next ? function () { tryBase(next, null); }
                                   : reject;
-                im.src = base + stripPath(s.atcf, k + '.png') +
-                    '?t=' + encodeURIComponent(s.meta.generated || '');
+                /* Per-sheet key when the manifest has one (live storms
+                   re-encode only their newest sheets each pass, so the
+                   rest stay browser-cached); else the build stamp. */
+                im.src = base + stripPath(s.atcf, k + '.png') + '?t=' +
+                    encodeURIComponent((s.meta.sheet_keys &&
+                                        s.meta.sheet_keys[k]) ||
+                                       s.meta.generated || '');
             }
             tryBase(CDN_BASE, GCS_BASE);
         });
