@@ -4231,6 +4231,7 @@
         var ctrkBtn = document.getElementById('rt-ctrk-btn'); if (ctrkBtn) { ctrkBtn.disabled = true; ctrkBtn.classList.toggle('active', _rtCtrkOverlay); }
         var tiltBtn = document.getElementById('rt-tilt-btn'); if (tiltBtn) { tiltBtn.disabled = true; tiltBtn.classList.remove('active'); }
         _rtTiltData = null; _rtTiltTraceStart = -1; _rtTiltEnabled = false;
+        _rtDrape.setTilt(null);
 
         // Generate initial plot
         rtGeneratePlot();
@@ -4450,6 +4451,9 @@
             _planLayout = layout;
         }
         Plotly.newPlot('rt-plotly-chart', _planTraces, _planLayout, config);
+        // newPlot drops added traces: put the tilt column back if it's on.
+        _rtTiltTraceStart = -1;
+        if (_rtTiltEnabled && _rtTiltData && !_ctrk) _rtAddTiltTraces(_rtTiltData);
         _rtLastPlotlyData = { heatmap: heatmap, overlayTraces: overlayTraces, maxTraces: maxTraces, baseLayout: baseLayout, title: title, config: config, json: json };
 
         // Capture the field for the map drape (storm-relative km → lat/lon) and
@@ -4508,8 +4512,8 @@
     //  real-time tab matches the explorer's focus mode: the map IS the plan
     //  view, and the redundant Plotly plan pane is hidden while draped. The
     //  "Radar on map" pill (or collapsing the map) brings the pane back, which
-    //  is also where the Plotly-only layers live (contour overlay, tilt,
-    //  max marker, centre-track mode, fullscreen / save).
+    //  is also where the Plotly-only layers live (contour overlay, max
+    //  marker, centre-track mode, fullscreen / save). Tilt draws on both.
     // ══════════════════════════════════════════════════════════════
     var _rtPlan = null;            // last plan-view field, captured by rtRenderPlot
     var _rtDrapeOn = false;        // field currently on the map
@@ -9028,18 +9032,8 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
     var _rtTiltEnabled = false;      // toggle state
     var _rtTilt3DTraceStart = -1;    // index where tilt traces start in 3D viewer
 
-    // Tilt-height colorscale. Deliberately a magenta/purple family: the fields
-    // it overlays — Jet wind and the reflectivity rainbow — both run
-    // blue→green→yellow→red, and the IR backdrop is grayscale, so a Viridis
-    // (blue/green/yellow) tilt column blended right in. Magenta sits outside all
-    // of those, and the ramp stays bright at every height so low-level points
-    // don't disappear over the dark inner core.
-    var _RT_TILT_COLORSCALE = [
-        [0.00, '#f9a8d4'],   // 0 km  — light pink
-        [0.40, '#e879f9'],   //         magenta
-        [0.70, '#c026d3'],   //         bright magenta
-        [1.00, '#86198f']    // 14 km — deep magenta
-    ];
+    // Tilt-height colorscale: shared with the map drape (TDRView.TILT_COLORSCALE).
+    var _RT_TILT_COLORSCALE = TDRView.TILT_COLORSCALE;
     var _RT_TILT_LINE   = 'rgba(192,38,211,0.85)';   // connecting line (magenta, was green)
     var _RT_TILT_OUTLINE = 'rgba(20,0,28,0.9)';      // marker edge — dark so dots read on light areas
 
@@ -9052,6 +9046,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             _rtTiltEnabled = false;
             btn.classList.remove('active');
             _rtRemoveTiltTraces();
+            _rtDrape.setTilt(null);
             return;
         }
 
@@ -9060,6 +9055,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             _rtTiltEnabled = true;
             btn.classList.add('active');
             _rtAddTiltTraces(_rtTiltData);
+            _rtDrape.setTilt(_rtTiltData);
             return;
         }
 
@@ -9099,6 +9095,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 _rtTiltEnabled = true;
                 btn.classList.add('active');
                 _rtAddTiltTraces(json);
+                _rtDrape.setTilt(json);
                 var nLevels = json.height_km ? json.height_km.length : '?';
                 var elapsed = json.compute_time_s !== undefined ? json.compute_time_s.toFixed(1) : ((Date.now() - tiltStartTime) / 1000).toFixed(1);
                 tiltStatusEl.textContent = '\u2713 Tilt profile: ' + nLevels + ' levels in ' + elapsed + 's';
