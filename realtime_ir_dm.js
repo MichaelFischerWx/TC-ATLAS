@@ -45,7 +45,7 @@
         };
     }
     function ofclSwatch() { return '<span style="color:' + (B.isDark() ? '#f8fafc' : '#0f172a') + ';">━ ━</span>'; }
-    function ofclLabel(fc) { return (fc.name || fc.tech) + ' forecast · issued ' + fmtInit(fc.init) + ' UTC'; }
+    function ofclLabel(fc) { return (fc.name || fc.tech) + ' forecast · issued ' + fmtInit(fc.init); }
     // Official points deduped by tau (a-deck repeats rows per radius line).
     function ofclPoints(fc) {
         var seen = {}, out = [];
@@ -68,15 +68,14 @@
     function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
         return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
     function pct(v, d) { return v == null ? '—' : (100 * v).toFixed(d || 0) + '%'; }
+    // Valid times and model cycles in the site's cycle form, "9 Oct 18Z".
     function fmtTauDate(init, tau) {
         var ms = T().initToMs(init); if (ms == null) return '+' + tau + ' h';
-        var d = new Date(ms + tau * 3600000);
-        var mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()];
-        return mon + ' ' + d.getUTCDate() + ' ' + ('0' + d.getUTCHours()).slice(-2) + 'Z';
+        return TCTime.cycle(ms + tau * 3600000);
     }
     function fmtInit(init) {
         if (!init || init.length < 10) return '';
-        return init.slice(4, 6) + '/' + init.slice(6, 8) + ' ' + init.slice(8, 10) + 'Z';
+        return TCTime.cycle(init);
     }
     function catLabel(c) {
         return { TD: 'TD', TS: 'TS', C1: 'Cat 1', C2: 'Cat 2', C3: 'Cat 3', C4: 'Cat 4', C5: 'Cat 5', NA: '—' }[c] || c;
@@ -738,7 +737,7 @@
         var data = JSON.parse(JSON.stringify(el.data)), layout = JSON.parse(JSON.stringify(el.layout));
         var ink = isDark ? '#e2e8f0' : '#1e293b', dim = isDark ? '#94a3b8' : '#64748b';
         layout.title = { text: '<b>' + esc(label) + '</b><br><span style="font-size:12px;color:' + dim + ';">'
-                             + esc(who) + ' · ' + esc(mtag) + ' · init ' + fmtInit(init) + ' UTC</span>',
+                             + esc(who) + ' · ' + esc(mtag) + ' · init ' + fmtInit(init) + '</span>',
                          font: { size: 16, color: ink }, x: 0.5, xanchor: 'center', y: 0.95, yanchor: 'top' };
         layout.paper_bgcolor = layout.plot_bgcolor = isDark ? '#0f172a' : '#ffffff';
         layout.width = 900; layout.height = 500;

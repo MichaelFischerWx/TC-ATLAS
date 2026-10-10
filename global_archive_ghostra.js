@@ -496,12 +496,12 @@
            which left the edge-flip below reading `.x` off a string. It read
            undefined, every comparison was false, and the card never flipped:
            near the right or bottom of the map it simply ran off. */
-        var ts = new Date(p.tm * 60000).toISOString().replace('T', ' ').slice(0, 16);
+        var ts = TCTime.utc(p.tm * 60000, { year: true });
         var d = (p.d === MISSING) ? null : p.d;
         var el = $('gra-tip');
         el.innerHTML =
             '<div class="gra-tip-hd">' + (st.name || st.atcf || p.s) +
-            '<span class="gra-tip-sub">' + p.b + ' · ' + ts + 'Z</span></div>' +
+            '<span class="gra-tip-sub">' + p.b + ' · ' + ts + '</span></div>' +
             '<div class="gra-tip-row"><span class="gra-tip-k gra-tip-g">GHOST</span>' +
             '<b>' + fmt(p.gp, 1) + '</b> hPa <b>' + fmt(p.gv, 0) + '</b> kt</div>' +
             /* Held out beside the product, never instead of it. Where the
@@ -889,7 +889,7 @@
         if (note) {
             var cur = list.filter(function (v) { return v.version === version; })[0];
             note.textContent = pinned ? 'pinned by URL'
-                : (cur && cur.cut_date ? 'cut ' + cur.cut_date : '');
+                : (cur && cur.cut_date ? 'cut ' + TCTime.utc(cur.cut_date, { time: false, year: true }) : '');
         }
     }
 
@@ -1283,7 +1283,7 @@
         if (!m || !m.available || idx < 0 || idx >= m.frames.length) return;
         ir.sid = sid; ir.idx = idx;
         var f = m.frames[idx];
-        $('gra-ir-stamp').textContent = f.datetime.replace('T', ' ') + 'Z · frame ' +
+        $('gra-ir-stamp').textContent = TCTime.utc(f.datetime, { year: true }) + ' · frame ' +
             (idx + 1) + '/' + m.frames.length;
         $('gra-ir-prev').disabled = idx <= 0;
         $('gra-ir-next').disabled = idx >= m.frames.length - 1;
@@ -1344,11 +1344,11 @@
         var sub = $('gra-ir-sub');
         if (sub) {
             if (j.source === 'hursat') {
-                var at = (j.actual_datetime || '').replace('T', ' ').slice(0, 16);
-                sub.textContent = 'backup scan' + (at ? ' · taken ' + at + 'Z' : '');
+                var at = j.actual_datetime ? TCTime.utc(j.actual_datetime, { year: true }) : '';
+                sub.textContent = 'backup scan' + (at ? ' · taken ' + at : '');
                 sub.title = 'The primary satellite mosaic has no image for this hour, ' +
                     'so this is the nearest scan from a coarser storm-centered archive' +
-                    (at ? ', taken ' + at + 'Z' : '') + '. GHOST does not read this ' +
+                    (at ? ', taken ' + at : '') + '. GHOST does not read this ' +
                     'picture — the estimate is unaffected.';
             } else { sub.textContent = ''; sub.title = ''; }
         }
@@ -2009,8 +2009,8 @@
         // a few date ticks so the axis is readable rather than decorative
         var ticks = '';
         for (var k = 0; k <= 3; k++) {
-            var ms = t0 + span * k / 3, x = X(ms), dt = new Date(ms);
-            var lab = (dt.getUTCMonth() + 1) + '/' + dt.getUTCDate();
+            var ms = t0 + span * k / 3, x = X(ms);
+            var lab = TCTime.utc(ms, { time: false });
             ticks += '<text x="' + x.toFixed(1) + '" y="' + (H - 4) + '" class="gc-ax" text-anchor="' +
                 (k === 0 ? 'start' : k === 3 ? 'end' : 'middle') + '">' + lab + '</text>';
         }
@@ -2187,11 +2187,11 @@
             var ms = msAt(ev), i = nearestIdx(S.t, ms);
             var hv = $('gc-hov'), x = Xi(i).toFixed(1);
             hv.style.display = ''; hv.setAttribute('x1', x); hv.setAttribute('x2', x);
-            var tms = Date.parse(S.t[i] + 'Z'), d = new Date(tms);
+            var tms = Date.parse(S.t[i] + 'Z');
             var nat = natureAt(tms);
             var rc = (st.lr && st.lr[i]) ? true : false, nfx = reconCount(tms);
             $('gra-chart-read').innerHTML =
-                '<b>' + d.toISOString().slice(0, 16).replace('T', ' ') + 'Z' +
+                '<b>' + TCTime.utc(tms, { year: true }) +
                 (nat && nat !== 'TS' ? ' <span class="gc-nat-key"><i class="' + nat + '"></i>' + NAT_NAME[nat] + '</span>' : '') +
                 (rc || nfx ? ' <span class="gc-rec-key"><i></i>recon' + (nfx ? ' (' + nfx + ' fix' + (nfx > 1 ? 'es' : '') + ' ±3 h)' : '') + '</span>' : '') +
                 '</b>' +

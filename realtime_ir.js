@@ -1483,28 +1483,19 @@
         return null;
     }
 
-    var _MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     /** Format a UTC timestamp for display in the site-wide form
-     *  "9 Oct 21:10 UTC" (day month, 24-h, no year: the monitor is live). */
-    function fmtUTC(isoStr) {
-        if (!isoStr) return '\u2014';
-        try {
-            var s = String(isoStr), d;
-            // The GL build drives the global loop off mosaic frames.json stamps
-            // ("YYYYMMDDHHMM"), which new Date() can't parse \u2192 NaN. Handle both.
-            if (/^\d{12}$/.test(s)) {
-                d = new Date(Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12)));
-            } else {
-                // An ISO time with no offset is a UTC stamp here; new Date()
-                // would read it as local time.
-                if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)) s = s.replace(' ', 'T') + 'Z';
-                d = new Date(s);
-            }
-            if (isNaN(d.getTime())) return String(isoStr);
-            var hh = String(d.getUTCHours()).padStart(2, '0');
-            var mm = String(d.getUTCMinutes()).padStart(2, '0');
-            return d.getUTCDate() + ' ' + _MON3[d.getUTCMonth()] + ' ' + hh + ':' + mm + ' UTC';
-        } catch (e) { return isoStr; }
+     *  "9 Oct 21:10 UTC" (day month, 24-h, no year: the monitor is live).
+     *  The format itself lives in tc_time.js, shared with the archive pages;
+     *  opts as TCTime.utc: year, sec, date: false (time of day), time: false.
+     *  Takes ISO stamps (no offset = UTC) and mosaic "YYYYMMDDHHMM" stamps. */
+    function fmtUTC(isoStr, opts) {
+        return TCTime.utc(isoStr, opts);
+    }
+
+    /** Model-cycle label, "9 Oct 12Z" (TCTime.cycle). Callers add the model or
+     *  role: "GFS 9 Oct 06Z analysis", "init 9 Oct 12Z", "valid 9 Oct 18Z". */
+    function fmtCycle(t, opts) {
+        return TCTime.cycle(t, opts);
     }
 
     /** Human "x ago" for a UTC ISO string, used to flag stale fixes. */
@@ -4670,7 +4661,7 @@
         if (ob.sst_c != null) lines.push('SST: ' + ob.sst_c.toFixed(1) + '°C');
         if (ob.pressure_hpa != null) lines.push('MSLP: ' + ob.pressure_hpa.toFixed(1) + ' hPa');
         if (ob.wave_height_m != null) lines.push('Waves: ' + ob.wave_height_m.toFixed(1) + ' m');
-        if (ob.time_utc) lines.push('<i>' + ob.time_utc + '</i>');
+        if (ob.time_utc) lines.push('<i>' + fmtUTC(ob.time_utc) + '</i>');
         var marker = L.marker([ob.lat, ob.lon], {
             icon: L.divIcon({
                 className: 'ir-stn-plot-icon',
@@ -4916,6 +4907,7 @@
                 layout['xaxis' + ax] = {
                     type: 'date', gridcolor: grid, zeroline: false,
                     showticklabels: (i === panels.length - 1), tickfont: { size: 9 },
+                    hoverformat: TCTime.plotly.utc,   // the unified hover's header
                 };
                 if (i > 0) layout['xaxis' + ax].matches = 'x';
                 p.traces.forEach(function (tr) {
@@ -4936,8 +4928,7 @@
                 { responsive: true, displayModeBar: false });
             if (st) {
                 var last = series[series.length - 1];
-                st.textContent = payload.n + ' obs · latest ' +
-                    (last.time_utc || '').replace('T', ' ').replace('Z', ' UTC') +
+                st.textContent = payload.n + ' obs · latest ' + fmtUTC(last.time_utc) +
                     // Panels only exist for variables the station reports, so
                     // a missing pressure trace is the STATION's gap, not a
                     // page bug — say so instead of leaving the reader to
@@ -5159,7 +5150,7 @@
             ctx.drawImage(img, 0, HEAD, W, chartH);
             ctx.fillStyle = dim;
             ctx.font = '400 18px ' + FONT;
-            var saved = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+            var saved = fmtUTC(new Date(), { year: true });
             ctx.fillText('TC-ATLAS · surface-ob history · saved ' + saved,
                          40, totalH - 30);
             // Logo + tcatlas.org, bottom-right. _drawTcWatermark resets the
@@ -10545,8 +10536,7 @@
             if (currentStormId !== atcfId) return;
             var v = _rtGridPiSample(storm.lat, storm.lon);
             if (v == null) { el.textContent = ''; return; }
-            var vt = (_rtGridPi.layer.valid_time || '').replace(/^\d{4}-(\d\d)-(\d\d)T(\d\d).*$/, '$1/$2 $3Z');
-            el.textContent = 'thermodynamic PI ' + Math.round(v) + ' kt (GFS ' + vt + ')';
+            el.textContent = 'thermodynamic PI ' + Math.round(v) + ' kt (GFS ' + fmtCycle(_rtGridPi.layer.valid_time) + ')';
             el.title = 'Thermodynamic potential intensity (Bister & Emanuel 2002) at the storm position, read from the Global Map’s Maximum Potential Intensity layer: GFS temperature and humidity profile over OISST, with tropical-cyclone circulations removed from the analysis first, expressed as a 10 m wind. It is shown for reference; the ventilation index above uses the empirical PI so that it stays comparable with its climatology.';
         });
     }
@@ -10624,12 +10614,12 @@
         var note = document.getElementById('ir-fav-note');
         if (note) {
             if (oc && oc.sst_date) {
-                var bits = ['OISST ' + oc.sst_date + (sstStale ? ' (stale)' : '')];
-                if (!ohcStale && oc.ohc_date) bits.push('TCHP ' + oc.ohc_date);
+                var bits = ['OISST ' + fmtUTC(oc.sst_date, { time: false }) + (sstStale ? ' (stale)' : '')];
+                if (!ohcStale && oc.ohc_date) bits.push('TCHP ' + fmtUTC(oc.ohc_date, { time: false }));
                 note.textContent = bits.join(' · ');
                 note.title = ohcStale
                     ? 'Ocean heat content (AOML TCHP) is hidden while its feed is stale'
-                      + (oc.ohc_date ? ' — latest grid ' + oc.ohc_date : '') + '.'
+                      + (oc.ohc_date ? ' — latest grid ' + fmtUTC(oc.ohc_date, { time: false, year: true }) : '') + '.'
                     : '';
             } else if (oc) { note.textContent = ''; note.title = ''; }
         }
@@ -10708,7 +10698,7 @@
                 _rtEnvCache[atcfId] = j;
                 _rtUpdateFavMeters(atcfId);
                 el.innerHTML = _shearValueHtml(j);
-                el.title = 'GFS 0.25° analysis ' + (j.gfs_cycle_utc || '') + '\n' +
+                el.title = 'GFS 0.25° analysis ' + fmtCycle(j.gfs_cycle_utc) + '\n' +
                     '850–200 hPa shear, 200–800 km annulus (environmental)\n' +
                     'heading ' + Math.round(j.heading_deg) + '° (toward)\n' +
                     'u200/v200: ' + j.u200_ms + '/' + j.v200_ms + ' m/s\n' +
@@ -10735,7 +10725,7 @@
                     if (!j || currentStormId !== atcfId) return;
                     _rtCoreShearCache[atcfId] = j;
                     elCore.innerHTML = _shearValueHtml(j);
-                    elCore.title = 'GFS 0.25° analysis ' + (j.gfs_cycle_utc || '') + '\n' +
+                    elCore.title = 'GFS 0.25° analysis ' + fmtCycle(j.gfs_cycle_utc) + '\n' +
                         '850–200 hPa shear, Helmholtz decomposition\n' +
                         'vortex removed within 500 km; shear averaged over 0–400 km core\n' +
                         'heading ' + Math.round(j.heading_deg) + '° (toward)\n' +
@@ -10905,15 +10895,8 @@
         var prof = _rtShearProfileCache[currentStormId] || {};
         var stormName = (document.getElementById('ir-detail-name') || {}).textContent || '';
         var stormId = currentStormId || '';
-        var cycle = prof.gfs_cycle_utc || '';
-        var cycleFmt = (cycle.length >= 13)
-            ? cycle.substring(0, 4) + '-' + cycle.substring(5, 7) + '-' +
-              cycle.substring(8, 10) + ' ' + cycle.substring(11, 13) + 'Z'
-            : '';
-        var fix = prof.last_fix_utc || '';
-        var fixFmt = (fix.length >= 13)
-            ? fix.substring(5, 7) + '/' + fix.substring(8, 10) + ' ' + fix.substring(11, 13) + 'Z'
-            : '';
+        var cycleFmt = fmtCycle(prof.gfs_cycle_utc);
+        var fixFmt = prof.last_fix_utc ? fmtUTC(prof.last_fix_utc) : '';
         var evalKm = prof.eval_km != null ? Math.round(prof.eval_km) : 400;
         var maskKm = prof.mask_km != null ? Math.round(prof.mask_km) : 500;
 
@@ -12189,7 +12172,7 @@
             xaxis: {
                 gridcolor: _rtPlotGrid(),
                 tickfont: { size: 9, color: '#5b6573', family: 'DM Sans, sans-serif' },
-                tickformat: '%m/%d %Hz'
+                tickformat: TCTime.plotly.cycle
             },
             yaxis: {
                 title: { text: _iMeta().title, font: { size: 10, color: '#5b6573', family: 'DM Sans, sans-serif' } },
@@ -14257,13 +14240,6 @@
     // extent (centered on each storm's current position), rather than
     // auto-fitting to each track and ending up at different scales.
     var _LOC_ZOOM = 3;
-    function _irFmtFixTime(iso) {
-        try {
-            var d = new Date(iso);
-            var h = d.getUTCHours(), m = d.getUTCMinutes();
-            return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + 'Z';
-        } catch (e) { return ''; }
-    }
     function _irFetchShearInto(statsEl, atcfId) {
         _rtFetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/shear',
               { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
@@ -14457,7 +14433,7 @@
         stats.className = 'qv-card-stats';
         var sp = [];
         if (s.satellite) sp.push(s.satellite);
-        if (s.last_fix_utc) sp.push('fix ' + _irFmtFixTime(s.last_fix_utc));
+        if (s.last_fix_utc) sp.push('fix ' + fmtUTC(s.last_fix_utc));
         stats.textContent = sp.join('  ·  ');
         body.appendChild(stats);
         _irFetchShearInto(stats, s.atcf_id);
@@ -14695,8 +14671,7 @@
                         var dt = inits[i];
                         var opt = document.createElement('option');
                         opt.value = dt;
-                        opt.textContent = dt.substring(0,4) + '-' + dt.substring(4,6) + '-' +
-                            dt.substring(6,8) + ' ' + dt.substring(8,10) + ' UTC';
+                        opt.textContent = fmtCycle(dt);
                         sel.appendChild(opt);
                     }
                 }
@@ -15345,7 +15320,7 @@
                 if (model !== _rtDmModel || currentStormId !== atcfId) return;   // stale
                 _rtWeatherlabData = json;
                 var btn = document.getElementById('rt-weatherlab-btn');
-                if (btn) btn.title = _dmModelName() + ': ' + json.n_members + ' members, init ' + json.init_time;
+                if (btn) btn.title = _dmModelName() + ': ' + json.n_members + ' members, init ' + fmtCycle(json.init_time);
                 console.log('[WeatherLab] Loaded ' + json.n_members + ' members for ' + atcfId + ' [' + model + ']');
                 // Render the percentile-bands forecast chart into the card's
                 // intensity chart container, replacing the simple history
@@ -16054,7 +16029,7 @@
                     statusEl.textContent = n === 0
                         ? '0 tracks · WeatherLab paired' + (_dmIsWn3() ? ' · WN3' : '')
                         : n + ' track' + (n === 1 ? '' : 's') + (_dmIsWn3() ? ' · WN3' : '') +
-                          (data.init_time ? ' · init ' + data.init_time.slice(0, 8) + ' ' + data.init_time.slice(8) + 'Z' : '');
+                          (data.init_time ? ' · init ' + fmtCycle(data.init_time) : '');
                 }
                 _ga('rt_global_wl_loaded', { n_tracks: data && data.n_tracks });
             })
@@ -17550,8 +17525,7 @@
             var gInit = effInit || '';
             var initLine = gInit
                 ? '<br><span style="opacity:0.75; font-size:0.85em;">Init: '
-                    + gInit.slice(0, 4) + '-' + gInit.slice(4, 6) + '-'
-                    + gInit.slice(6, 8) + ' ' + gInit.slice(8, 10) + 'Z</span>'
+                    + fmtCycle(gInit) + '</span>'
                 : '';
             // Wave-family line: one violet line, matching the corridor
             // ribbon on the map. The full union explanation lives in the
@@ -18985,10 +18959,7 @@
         var memberKeys = Object.keys(members);
         var mean = json.ensemble_mean || { points: [] };
         var init = json.init_time || '';
-        var initLabel = init
-            ? init.slice(0, 4) + '-' + init.slice(4, 6) + '-' + init.slice(6, 8)
-              + ' ' + init.slice(8, 10) + 'Z'
-            : '(unknown init)';
+        var initLabel = init ? fmtCycle(init) : '(unknown init)';
         _genesisExportInit = initLabel;
 
         // Pre-genesis-specific stats — computed once and threaded through
@@ -20273,9 +20244,7 @@
 
         if (noteEl) {
             var it = ic.init_time || loadedInit || '';
-            var initFmt = (it.length >= 10)
-                ? (it.substring(4, 6) + '/' + it.substring(6, 8) + ' ' + it.substring(8, 10) + 'Z')
-                : '';
+            var initFmt = (it.length >= 10) ? fmtCycle(it) : '';
             noteEl.textContent = (ic.n_members != null ? ic.n_members + ' members' : '')
                 + (initFmt ? ' · init ' + initFmt : '');
         }
@@ -20517,9 +20486,7 @@
         for (var i = 0; i < trend.length; i++) {
             var t = trend[i];
             var it = t.init_time || '';
-            var lbl = (it.length >= 10)
-                ? it.slice(4, 6) + '/' + it.slice(6, 8) + ' ' + it.slice(8, 10) + 'Z'
-                : it;
+            var lbl = (it.length >= 10) ? fmtCycle(it) : it;
             var isLoaded = (it === loadedInit);
             xLabels.push(lbl + (isLoaded ? ' ★' : ''));
             var w120 = t.spread && t.spread.win120;
@@ -20607,12 +20574,10 @@
         wrap.style.display = '';
     }
 
-    // Compact "MM/DD HHZ" label from a YYYYMMDDHH init string.
+    // Compact "9 Oct 12Z" label from a YYYYMMDDHH init string.
     function _genesisFmtInit(it) {
         it = it || '';
-        return (it.length >= 10)
-            ? it.slice(4, 6) + '/' + it.slice(6, 8) + ' ' + it.slice(8, 10) + 'Z'
-            : it;
+        return (it.length >= 10) ? fmtCycle(it) : it;
     }
 
     // True while the /weatherlab-genesis-trend fetch is in flight, so the
@@ -23949,7 +23914,7 @@
 
             ctx.fillStyle = dim;
             ctx.font = '24px Inter, "Helvetica Neue", sans-serif';
-            var saved = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+            var saved = fmtUTC(new Date(), { year: true });
             ctx.fillText('TC-ATLAS · DeepMind ' + _genesisVariantModelLabel()
                 + ' · saved ' + saved,
                          40, totalH - 44);
@@ -24247,8 +24212,7 @@
         var data = _rtGenesisData;
         var nTracks = (data && data.n_tracks) ? data.n_tracks : 0;
         var init = data && data.init_time;
-        var initBit = init
-            ? ' · init ' + init.slice(0, 8) + ' ' + init.slice(8) + 'Z' : '';
+        var initBit = init ? ' · init ' + fmtCycle(init) : '';
         // Recompute age live from the immutable init_time so a 302'd (frozen)
         // genesis payload from the R2/cdn mirror still shows the true run age.
         var ageH = _genesisAgeFromInit(init);
@@ -24352,8 +24316,7 @@
 
     function _fmtGenesisInit(it) {
         if (!it || it.length < 10) return '(unknown)';
-        return it.slice(0, 4) + '-' + it.slice(4, 6) + '-' + it.slice(6, 8)
-            + ' ' + it.slice(8, 10) + 'Z';
+        return fmtCycle(it);
     }
 
     // Is `variant` published for this cycle-list entry? Back-compat: an old
@@ -24559,11 +24522,8 @@
         }
         // Member tag so the user always knows which ensemble is in view.
         var memberTag = ' · ' + _GENESIS_VARIANTS[_genesisVariantNorm(_genesisEnsembleVariant)].tag;
-        // Compact init (drop the year — the dock is tight): "06-01 06Z".
-        var compactInit = (curInit && curInit.length >= 10)
-            ? curInit.slice(4, 6) + '-' + curInit.slice(6, 8)
-                + ' ' + curInit.slice(8, 10) + 'Z'
-            : _fmtGenesisInit(curInit);
+        // Init without the year (the dock is tight): "1 Jun 06Z".
+        var compactInit = _fmtGenesisInit(curInit);
         var textEl = document.getElementById('ir-dock-cycle-text');
         if (textEl) {
             textEl.textContent = 'DeepMind · ' + compactInit
@@ -25010,7 +24970,7 @@
                 line: { color: style.bold, width: 2 },
                 marker: { color: style.bold, size: 4 },
                 hovertemplate: (initDate
-                    ? '%{x|%b %d %HZ}'
+                    ? '%{x|' + TCTime.plotly.cycle + '}'
                     : '+%{x}h'
                     ) + ' · <b>%{y:.0f} kt</b><extra></extra>',
                 name: 'Member ' + memberKey,
@@ -26590,12 +26550,13 @@
 
     /** Format a GFS run/valid caption from an env layer's init_cycle
      *  ("YYYYMMDD-HH") + forecast_hour + valid_time. Analysis (f000) reads
-     *  "GFS 06Z analysis · valid 06Z"; a forecast reads "GFS 06Z f12 · valid 18Z". */
+     *  "GFS 9 Oct 06Z analysis · valid 9 Oct 06Z"; a forecast reads
+     *  "GFS 9 Oct 06Z f12 · valid 9 Oct 18Z". */
     function _fmtGfsRun(layer) {
         if (!layer) return '';
         var run = '';
         var ic = layer.init_cycle;
-        if (ic && /^\d{8}-\d{2}$/.test(ic)) run = ic.slice(9, 11) + 'Z';
+        if (ic && /^\d{8}-\d{2}$/.test(ic)) run = fmtCycle(ic);
         var fh = layer.forecast_hour;
         var head = 'GFS';
         if (run) {
@@ -26605,7 +26566,7 @@
         }
         var parts = [head];
         if (layer.valid_time) {
-            parts.push('valid ' + String(layer.valid_time).replace('T', ' ').replace(':00:00Z', 'Z'));
+            parts.push('valid ' + fmtCycle(layer.valid_time));
         }
         return parts.join(' · ');
     }
@@ -28053,7 +28014,7 @@
     // min/mid/max ticks instead — much more compact + still legible.
     var _ENV_CBAR_MAX_SWATCHES = 16;
 
-    /** "GFS 06Z f03 · valid 2026-08-11 09Z" for whichever active layer reports
+    /** "GFS 11 Aug 06Z f03 · valid 11 Aug 09Z" for whichever active layer reports
      *  a cycle — the frame-selected hour when the loop has snapped to one,
      *  else the layer's own (analysis) metadata. */
     function _globalEnvRunCaption() {
@@ -28858,9 +28819,7 @@
         var stormId = currentStormId || '';
         var initTime = _rtDmEnsData.init_time || '';
         var initFmt = '';
-        if (initTime.length >= 10) {
-            initFmt = initTime.substring(4, 6) + '/' + initTime.substring(6, 8) + ' ' + initTime.substring(8, 10) + 'Z';
-        }
+        if (initTime.length >= 10) initFmt = fmtCycle(initTime);
 
         var tauStr = '';
         if (chartType === 'intensity') {
@@ -29007,10 +28966,7 @@
         var heading   = (document.getElementById('ir-intensity-heading') || {}).textContent || 'Intensity Forecast';
         var initTime  = (_rtDmEnsData && _rtDmEnsData.init_time) || '';
         var initFmt   = '';
-        if (initTime.length >= 10) {
-            initFmt = initTime.substring(4, 6) + '/' + initTime.substring(6, 8) +
-                      ' ' + initTime.substring(8, 10) + 'Z';
-        }
+        if (initTime.length >= 10) initFmt = fmtCycle(initTime);
         var title = heading + ' — ' + (stormName && stormId
                         ? stormName + ' (' + stormId + ')'
                         : (stormName || stormId));
@@ -29260,7 +29216,7 @@
                         var cp = json.passes[ci];
                         var copt = document.createElement('option');
                         copt.value = ci;
-                        copt.textContent = cp.satellite + ' \u2014 ' + cp.datetime_utc;
+                        copt.textContent = cp.satellite + ' \u2014 ' + fmtUTC(cp.datetime_utc);
                         sel.appendChild(copt);
                     }
                 }
@@ -29306,7 +29262,7 @@
                             var p = json.passes[i];
                             var opt = document.createElement('option');
                             opt.value = i;
-                            opt.textContent = p.satellite + ' \u2014 ' + p.datetime_utc;
+                            opt.textContent = p.satellite + ' \u2014 ' + fmtUTC(p.datetime_utc);
                             sel.appendChild(opt);
                         }
                     }
@@ -31438,9 +31394,7 @@
                                    +ts.slice(10, 12));
                 var dMin = Math.round((tMs - mwMs) / 60000);
                 if (irTimeEl) {
-                    irTimeEl.textContent = ts.slice(0, 4) + '-' + ts.slice(4, 6)
-                        + '-' + ts.slice(6, 8) + ' ' + ts.slice(8, 10) + ':'
-                        + ts.slice(10, 12) + 'Z (' + (dMin >= 0 ? '+' : '')
+                    irTimeEl.textContent = fmtUTC(ts) + ' (' + (dMin >= 0 ? '+' : '')
                         + dMin + ' min vs MW)';
                 }
                 if (irStatus) irStatus.textContent = 'loading IR frame…';
@@ -32276,10 +32230,7 @@
     });
 
     function _rtFmtTime(iso) {
-        if (!iso) return '—';
-        var d = new Date(iso.endsWith('Z') || iso.indexOf('+') >= 0 ? iso : iso + 'Z');
-        if (isNaN(d)) return iso;
-        return d.toISOString().slice(11, 19) + 'Z ' + d.toISOString().slice(5, 10);
+        return fmtUTC(iso, { sec: true });
     }
     function _rtFmtLatLon(lat, lon) {
         if (lat == null || lon == null) return '—';
@@ -32433,7 +32384,7 @@
         var bits = [h.n_levels + ' levels (1-s)'];
         if (h.ob != null || h.t) {
             bits.unshift('OB ' + (h.ob != null ? String(h.ob).replace(/^(\d)$/, '0$1') : '?') +
-                (h.t ? ' released ' + String(h.t).slice(11, 19) + 'Z' : ''));
+                (h.t ? ' released ' + fmtUTC(h.t, { date: false, sec: true }) : ''));
         }
         if (h.wl150_kt != null) bits.push('WL150 ' + Math.round(h.wl150_kt) + ' kt');
         if (h.mbl_kt != null) bits.push('MBL ' + Math.round(h.mbl_kt) + ' kt');
@@ -32828,7 +32779,7 @@
         }
         for (var v = 0; v < vdms.length; v++) {
             var x = vdms[v], newest = (v === vdms.length - 1), vs = newest ? 20 : 13;
-            var vlab = newest ? ((x.min_slp_hpa != null ? x.min_slp_hpa + ' mb ' : '') + (x.t ? String(x.t).slice(11, 16) + 'Z' : '')).trim() : '';
+            var vlab = newest ? ((x.min_slp_hpa != null ? x.min_slp_hpa + ' mb ' : '') + (x.t ? fmtUTC(x.t, { date: false }) : '')).trim() : '';
             var vicon = L.divIcon({
                 className: 'rt-recon-vdm-icon' + (newest ? ' is-newest' : ''),
                 html: '<div data-vlab="' + vlab + '" style="position:relative;width:' + vs + 'px;height:' + vs + 'px;' +
@@ -33064,12 +33015,12 @@
             if (cf) {
                 var cfBits = cf.fl_max_kt != null ? ['FL max ' + Math.round(cf.fl_max_kt) + ' kt'] : [];
                 cfBits.push(cf.n_fix ? 'no scored crossing yet' : 'awaiting a center fix');
-                return ' · SEAR ' + Math.round(hd.kt) + ' kt (earlier flight, ' + String(hd.t).slice(5, 10).replace('-', '/') + ' ' +
-                    String(hd.t).slice(11, 16) + 'Z) · current flight: ' + cfBits.join(', ');
+                return ' · SEAR ' + Math.round(hd.kt) + ' kt (earlier flight, ' + fmtUTC(hd.t) +
+                    ') · current flight: ' + cfBits.join(', ');
             }
             return ' · SEAR ' + Math.round(hd.kt) + ' kt' +
                 (hd.others_kt && hd.others_kt.length ? ' (other crossings ' + Math.round(hd.others_min_kt) + (hd.others_kt.length > 1 ? '–' + Math.round(hd.others_max_kt) : '') + ')' : '') +
-                ' (' + String(hd.t).slice(11, 16) + 'Z' + (hd.fix_source === 'hdob' ? ', prelim' : '') + ')';
+                ' (' + fmtUTC(hd.t, { date: false }) + (hd.fix_source === 'hdob' ? ', prelim' : '') + ')';
         }
         var yh = (last.y_corr_kt != null) ? last.y_corr_kt : last.y_kt;   // RMW-corrected headline (2026-09-05)
         var rg = last.y_range_kt, rgs = '', head = Math.round(yh) + ' kt';
@@ -33078,7 +33029,7 @@
             // preliminary center: the range IS the estimate; VDM-fixed: point value, range after
             if (last.fix_source === 'hdob') head = rgs + ' kt (likely ' + Math.round(yh) + ')'; else head += ' [' + rgs + ']';
         }
-        return ' · SEAR ' + head + (q ? ' ' + q : '') + ' (' + String(last.t).slice(11, 16) + 'Z' +
+        return ' · SEAR ' + head + (q ? ' ' + q : '') + ' (' + fmtUTC(last.t, { date: false }) +
             (last.fix_source === 'hdob' ? ', prelim' : '') + ')';
     }
 
@@ -33666,7 +33617,7 @@
         var iso = snap.toISOString().slice(0, 16) + ':00Z';
         return { key: 'wmst-' + iso,
                  url: _IEM_WMST + '&time=' + encodeURIComponent(iso),
-                 label: 'valid ' + iso.slice(11, 16) + 'Z' };
+                 label: 'valid ' + fmtUTC(iso, { date: false }) };
     }
 
     /**

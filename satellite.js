@@ -754,7 +754,7 @@
                 // Update label with frame timestamp
                 if (rightLabelEl) {
                     var rName = rightBand === 2 ? 'Visible' : 'Water Vapor';
-                    var rTime = rightFrame.datetime_utc ? rightFrame.datetime_utc.replace('T', ' ').replace(/:\d{2}Z$/, ' UTC').replace('Z', ' UTC') : '';
+                    var rTime = rightFrame.datetime_utc ? TCTime.utc(rightFrame.datetime_utc) : '';
                     rightLabelEl.textContent = rName + (rTime ? '  ' + rTime : '');
                 }
                 renderFrame(canvasRight, ctxRight, rightFrame, rightCmap);
@@ -1019,7 +1019,7 @@
 
         var name = currentStorm ? (currentStorm.name || currentStormId) : currentStormId;
         var cat = currentStorm ? categoryShort(currentStorm.category) : '';
-        var time = irFrame.datetime_utc ? irFrame.datetime_utc.replace('T', ' ').replace('Z', ' UTC') : '';
+        var time = irFrame.datetime_utc ? TCTime.utc(irFrame.datetime_utc) : '';
         var sat = irFrame.satellite || '';
 
         // Build radar info string if radar overlay is active
@@ -1326,7 +1326,7 @@
                 renderBothPanels();
 
                 var frame = irFrames[fi];
-                var time = frame && frame.datetime_utc ? frame.datetime_utc.replace('T', ' ').replace('Z', ' UTC') : '';
+                var time = frame && frame.datetime_utc ? TCTime.utc(frame.datetime_utc) : '';
                 var sat = frame && frame.satellite ? frame.satellite : '';
                 var headerText = name + '  \u2014  ' + time + '  ' + sat;
 
@@ -2442,7 +2442,7 @@
                 + (p0.vmax_kt != null ? p0.vmax_kt : '—') + '</b> kt &nbsp; '
                 + '<b style="color:#60a5fa;">' + (p0.mslp_hpa != null ? p0.mslp_hpa : '—') + '</b> hPa'
                 + ' &nbsp; <span style="font-size:11px;color:#94a3b8;">@ '
-                + (p0.time ? p0.time.replace('T', ' ').replace('Z', ' UTC') : '—') + '</span></div>'
+                + TCTime.utc(p0.time) + '</span></div>'
                 + '</div>';
             return;
         }
@@ -2470,7 +2470,7 @@
             plot_bgcolor: 'rgba(0,0,0,0)',
             font: { color: '#cbd5e1', size: 10, family: '"DM Sans",sans-serif' },
             showlegend: false,
-            xaxis: { gridcolor: _satGrid(), tickformat: '%H:%M' },
+            xaxis: { gridcolor: _satGrid(), tickformat: TCTime.plotly.cycle, hoverformat: TCTime.plotly.utc },
             yaxis: { title: { text: 'kt', font: { size: 10 } },
                      gridcolor: _satGrid(),
                      side: 'left', color: '#fbbf24' },
@@ -2588,7 +2588,7 @@
                      { displayModeBar: false, responsive: true, staticPlot: _IS_TOUCH_INIT });
         if (metaEl) {
             metaEl.textContent = (data.n_members || memberArr.length) + ' members'
-                + (data.init_time ? ' · init ' + data.init_time : '');
+                + (data.init_time ? ' · init ' + TCTime.cycle(data.init_time) : '');
         }
     }
 
@@ -3899,7 +3899,7 @@
             if (!pr) continue;
             var ageMin = (nowMs - o.scan_start_ms) / 60000;
             var ageStr = _satMwFmtAgo(ageMin);
-            var utc = o.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
+            var utc = TCTime.utc(o.scan_start);
             var opt2 = document.createElement('option');
             opt2.value = o.orbit_id;
             opt2.textContent = o.sensor + ' · ' + (o.platform || '?')
@@ -3942,7 +3942,7 @@
         if (!orbit) return;
         _satMwSelectedOrbit = orbit;
         var storm = currentStorm;
-        _satMwSetPassTime(orbit.scan_start.replace('T', ' ').slice(0, 16) + 'Z');
+        _satMwSetPassTime(TCTime.utc(orbit.scan_start));
         // Reflect the selection back into the dropdown.
         var sel = document.getElementById('sat-mw-pass-select');
         if (sel) sel.value = orbit.orbit_id;
@@ -4192,9 +4192,8 @@
                 if (lblFast) {
                     var deltaMinFast = Math.round((bestMs - mwMs) / 60000);
                     var signFast = deltaMinFast >= 0 ? '+' : '';
-                    lblFast.textContent = 'IR · '
-                        + irFrames[bestIdx].datetime_utc.replace('T', ' ').slice(0, 16)
-                        + 'Z (' + signFast + deltaMinFast + ' min vs MW)';
+                    lblFast.textContent = 'IR · ' + TCTime.utc(irFrames[bestIdx].datetime_utc)
+                        + ' (' + signFast + deltaMinFast + ' min vs MW)';
                 }
                 return;
             }
@@ -4248,8 +4247,8 @@
             if (lbl) {
                 var deltaMin = Math.round((Date.parse(best.datetime_utc) - mwMs) / 60000);
                 var sign = deltaMin >= 0 ? '+' : '';
-                lbl.textContent = 'IR · ' + best.datetime_utc.replace('T', ' ').slice(0, 16)
-                                  + 'Z (' + sign + deltaMin + ' min vs MW)';
+                lbl.textContent = 'IR · ' + TCTime.utc(best.datetime_utc)
+                                  + ' (' + sign + deltaMin + ' min vs MW)';
             }
         };
         if (_satMwIrMetaCache.atcfId === storm.atcf_id && _satMwIrMetaCache.meta) {
@@ -6296,7 +6295,7 @@
         if (frameCounterEl) frameCounterEl.textContent = (pos >= 0 ? (pos + 1) : 0) + ' / ' + validFrameIndices.length;
         var timeStr = '';
         if (frame && frame.datetime_utc) {
-            timeStr = frame.datetime_utc.replace('T', ' ').replace(/:\d{2}Z$/, ' UTC').replace('Z', ' UTC');
+            timeStr = TCTime.utc(frame.datetime_utc);
         }
         if (timestampEl) timestampEl.textContent = timeStr;
         if (frame && satelliteEl) satelliteEl.textContent = frame.satellite || '';
@@ -6917,7 +6916,7 @@
                     var sc = _satRadarAllScans[i];
                     var opt = document.createElement('option');
                     opt.value = sc.s3_key;
-                    opt.textContent = sc.scan_time;
+                    opt.textContent = TCTime.utc(sc.scan_time);
                     scanSelect.appendChild(opt);
                 }
                 if (status) status.textContent = _satRadarAllScans.length + ' scans over 6h';
@@ -7017,7 +7016,7 @@
                     for (var i = 0; i < raw.length; i++) hoverData[i] = raw.charCodeAt(i);
                 }
 
-                var statusText = json.site + ' ' + json.scan_time + ' \u2014 ' + json.label;
+                var statusText = json.site + ' ' + TCTime.utc(json.scan_time) + ' \u2014 ' + json.label;
 
                 // Load image then cache
                 var img = new Image();

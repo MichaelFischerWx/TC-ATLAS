@@ -163,6 +163,13 @@ document.documentElement.addEventListener('theme:change', function () {
     });
 });
 
+// ── Time labels ──────────────────────────────────────────────
+// The site's one UTC format (tc_time.js). TC-RADAR is an archive, so dated
+// labels keep the year: "5 Sep 2017 18:04 UTC"; sec adds the seconds (sondes).
+function _tcrTime(t, sec) {
+    return TCTime.utc(t, { year: true, sec: !!sec });
+}
+
 // ── Inline-SVG icon helper (Lucide-style; stroke:currentColor). ─
 // Returns an SVG string for use in innerHTML / template strings.
 // Each icon picks up its button's accent color via stroke:currentColor.
@@ -676,7 +683,7 @@ function _bindTCCenterTooltip(marker, caseData) {
         ', ' + Math.abs(lon).toFixed(3) + '°' + ewLon;
     var subtitle = '';
     if (caseData.storm_name) subtitle += caseData.storm_name;
-    if (caseData.datetime) subtitle += (subtitle ? ' · ' : '') + caseData.datetime + ' UTC';
+    if (caseData.datetime) subtitle += (subtitle ? ' · ' : '') + _tcrTime(caseData.datetime);
     var html = '<b>TC Center</b><br>' +
         'Lat/Lon: ' + posStr +
         (subtitle ? '<br><span style="opacity:0.75;">' + subtitle + '</span>' : '');
@@ -814,7 +821,7 @@ document.getElementById('storm-select').addEventListener('change', function() {
         opt.value = c.case_index;
         var cat = getIntensityCategory(c.vmax_kt);
         var vStr = c.vmax_kt !== null ? ' [' + cat + ', ' + c.vmax_kt + ' kt]' : '';
-        opt.textContent = c.datetime + vStr;
+        opt.textContent = _tcrTime(c.datetime) + vStr;
         caseSelect.appendChild(opt);
     });
 
@@ -911,7 +918,7 @@ function openSidePanel(caseData, fromQuickSelect) {
             '<button class="cite-btn" onclick="showCiteModal()" title="How to cite TC-ATLAS &amp; TC-RADAR">' + _icon('clipboard') + 'Cite</button>' +
             '<button class="cite-btn" onclick="copyPermalink()" title="Copy shareable link" style="margin-left:4px;">' + _icon('link') + 'Share</button>' +
         '</div>' +
-        '<div class="panel-mission">' + caseData.mission_id + ' \u00b7 ' + caseData.datetime +
+        '<div class="panel-mission">' + caseData.mission_id + ' \u00b7 ' + _tcrTime(caseData.datetime) +
             (caseData.number_of_swaths ? ' \u00b7 ' + caseData.number_of_swaths + ' swaths' : '') +
         '</div>' +
 
@@ -1236,7 +1243,7 @@ function openSidePanel(caseData, fromQuickSelect) {
         };
         thumbWrap.onclick = function() {
             var src = thumbImg.src;
-            openImageModal(src, caseData.storm_name + ' \u2013 ' + caseData.datetime);
+            openImageModal(src, caseData.storm_name + ' \u2013 ' + _tcrTime(caseData.datetime));
         };
     }
     _quicklookSync();
@@ -1426,7 +1433,7 @@ function _quicklookSync() {
             if (im.getAttribute('src') !== img.src) im.src = img.src;
             var cd = currentCaseData || window._lastCaseData;
             card.querySelector('.ql-map-title').textContent = 'Quick-look' +
-                (cd ? ' \u00b7 ' + cd.storm_name + ' ' + cd.datetime : '');
+                (cd ? ' \u00b7 ' + cd.storm_name + ' ' + _tcrTime(cd.datetime) : '');
         }
         card.hidden = !showCard;
         card.classList.toggle('is-min', _qlMin);
@@ -2296,7 +2303,7 @@ function _envOverlayShowLoading() {
         var cd = currentCaseData;
         caseInfo.innerHTML =
             '<div class="env-case-name">' + (cd.storm_name || 'Unknown') + '</div>' +
-            '<div class="env-case-detail">' + (cd.datetime || '') + '</div>' +
+            '<div class="env-case-detail">' + (cd.datetime ? _tcrTime(cd.datetime) : '') + '</div>' +
             '<div class="env-case-detail">' +
                 (cd.latitude != null ? cd.latitude.toFixed(1) + '\u00b0N' : '') + ', ' +
                 (cd.longitude != null ? cd.longitude.toFixed(1) + '\u00b0E' : '') +
@@ -2368,7 +2375,7 @@ function renderEnvOverlay() {
         var cd = currentCaseData;
         caseInfo.innerHTML =
             '<div class="env-case-name">' + (cd.storm_name || 'Unknown') + '</div>' +
-            '<div class="env-case-detail">' + (cd.datetime || '') + '</div>' +
+            '<div class="env-case-detail">' + (cd.datetime ? _tcrTime(cd.datetime) : '') + '</div>' +
             '<div class="env-case-detail">' +
                 (cd.latitude != null ? cd.latitude.toFixed(1) + '\u00b0N' : '') + ', ' +
                 (cd.longitude != null ? cd.longitude.toFixed(1) + '\u00b0E' : '') +
@@ -2884,7 +2891,7 @@ function _envNavPopulate() {
         opt.value = c.case_index;
         var cat = typeof getIntensityCategory === 'function' ? getIntensityCategory(c.vmax_kt) : '';
         var vStr = c.vmax_kt !== null ? ' [' + cat + ', ' + c.vmax_kt + ' kt]' : '';
-        opt.textContent = c.datetime + vStr;
+        opt.textContent = _tcrTime(c.datetime) + vStr;
         if (currentCaseIndex === c.case_index) opt.selected = true;
         sel.appendChild(opt);
     });
@@ -3588,7 +3595,7 @@ function _updateIRLoadingLabel() {
         // Show current frame info
         var lagHr = _irData.lag_hours[_irAnimFrame];
         var dtStr = _irData.ir_datetimes[_irAnimFrame] || '';
-        label.textContent = 'IR ' + (lagHr > 0 ? 't\u2212' + lagHr.toFixed(1) + 'h' : 't=0') + (dtStr ? ' | ' + dtStr : '');
+        label.textContent = 'IR ' + (lagHr > 0 ? 't\u2212' + lagHr.toFixed(1) + 'h' : 't=0') + (dtStr ? ' | ' + _tcrTime(dtStr) : '');
     } else {
         // Show loading progress alongside current frame info
         var lagHr = _irData.lag_hours[_irAnimFrame];
@@ -4691,7 +4698,7 @@ function renderPlotFromJSON(json, resultDiv) {
         _radarMapDraw();
     }
 
-    var title = TDRView.planTitle(meta.storm_name + ' | ' + meta.datetime + (meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : ''),
+    var title = TDRView.planTitle(meta.storm_name + ' | ' + _tcrTime(meta.datetime) + (meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : ''),
                                   varInfo, json.actual_level_km, json);
     var fig = TDRView.planFigure({
         z: zData, x: x, y: y, varInfo: varInfo, colorscale: activeColorscale, zmin: activeVmin, zmax: activeVmax,
@@ -4896,7 +4903,7 @@ window.runMultiCS = function() {
         },
         endpoints: { x0: a.x, y0: a.y, x1: b.x, y1: b.y },
         locator: p ? { z: p.z, x: p.x, y: p.y, colorscale: p.colorscale, zmin: p.vmin, zmax: p.vmax } : null,
-        title: (meta.storm_name || '') + (meta.datetime ? ' | ' + meta.datetime : '') + ' \u2014 TDR cross-section (' +
+        title: (meta.storm_name || '') + (meta.datetime ? ' | ' + _tcrTime(meta.datetime) : '') + ' \u2014 TDR cross-section (' +
                Math.round(Math.hypot(b.x - a.x, b.y - a.y)) + ' km)',
         plot: tcrNewPlot
     });
@@ -5013,7 +5020,7 @@ function _searRenderRank() {
     el.innerHTML = rows.map(function (c, i) {
         return '<button type="button" class="sear-rank-row" data-ci="' + c.case_index + '" title="Open this analysis">' +
             '<span class="r">' + (i + 1) + '</span><span class="n">' + c.storm_name + ' ' + c.year + '</span>' +
-            '<span class="t">' + String(c.datetime).slice(5, 16).replace(' UTC', '') + 'Z</span>' +
+            '<span class="t">' + TCTime.utc(c.datetime) + '</span>' +
             '<span class="v">' + c.sear_max_kt + ' kt</span><span class="bt">BT ' + (c.vmax_kt != null ? c.vmax_kt : '—') + '</span></button>';
     }).join('');
     Array.prototype.forEach.call(el.querySelectorAll('.sear-rank-row'), function (b) {
@@ -5123,7 +5130,7 @@ function _renderDualAzimuthalMean(json) {
     var fig = TDRView.sectionFigure({
         z: json.azimuthal_mean, x: json.radius_km, y: json.height_km, varInfo: vi,
         colorscale: _explorerColorscale(vi), zmin: _getActiveVmin(), zmax: _getActiveVmax(),
-        title: meta.storm_name + ' | ' + meta.datetime + (meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '%)',
+        title: meta.storm_name + ' | ' + _tcrTime(meta.datetime) + (meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '%)',
         size: 'dual', margin: { l: 48, r: 14, t: json.overlay ? 78 : 68, b: 44 }, rmwX: meta.rmw_km,
         windMarker: isWindVariable((document.getElementById('ep-var') || {}).value || ''),
         overlayTraces: buildAzOverlayContours(json, json.radius_km, json.height_km)
@@ -5265,7 +5272,7 @@ function renderAzimuthalMeanInto(targetId, json, fullsize) {
     var fig = TDRView.sectionFigure({
         z: json.azimuthal_mean, x: json.radius_km, y: json.height_km, varInfo: vi,
         colorscale: _explorerColorscale(vi), zmin: _getActiveVmin(), zmax: _getActiveVmax(),
-        title: meta.storm_name + ' | ' + meta.datetime + (meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '% coverage)' + TDRView.sectionTitleOverlay(json),
+        title: meta.storm_name + ' | ' + _tcrTime(meta.datetime) + (meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '% coverage)' + TDRView.sectionTitleOverlay(json),
         size: fullsize ? 'full' : 'small', rmwX: meta.rmw_km,
         margin: fullsize ? { l:55,r:24,t:json.overlay?112:98,b:46 } : { l:45,r:12,t:json.overlay?78:64,b:38 },
         windMarker: isWindVariable((document.getElementById('ep-var') || {}).value || ''),
@@ -5317,7 +5324,7 @@ function renderHybridAzimuthalMeanInto(targetId, json, fullsize) {
 
     var vmaxStr = meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : '';
     var rmwStr = meta.rmw_km ? ' | RMW = ' + meta.rmw_km + ' km' : '';
-    var title = meta.storm_name + ' | ' + meta.datetime + vmaxStr + rmwStr +
+    var title = meta.storm_name + ' | ' + _tcrTime(meta.datetime) + vmaxStr + rmwStr +
                 '<br>Hybrid R\u2095 Azimuthal Mean: ' + varInfo.display_name;
 
     var shapes = [{
@@ -5377,7 +5384,7 @@ function renderAnomalyAzimuthalMeanInto(targetId, json, fullsize) {
     var vmaxStr = meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : '';
     var climInfo = json.clim_bin_kt ? ' (climo: \u00b110 kt of ' + json.clim_bin_kt + ' kt, n=' + json.clim_count + ')' : '';
     var fig = TDRView.anomalyFigure(Object.assign({}, json, { colorscale: varInfo.colorscale }), {
-        title: (meta.storm_name || '') + ' | ' + (meta.datetime || '') + vmaxStr + '<br>Anomalous ' + varInfo.display_name + climInfo,
+        title: (meta.storm_name || '') + ' | ' + (meta.datetime ? _tcrTime(meta.datetime) : '') + vmaxStr + '<br>Anomalous ' + varInfo.display_name + climInfo,
         fullsize: fullsize, citation: true
     });
     if (!fullsize) {
@@ -5401,7 +5408,7 @@ function renderVPScatterInto(targetId, json, fullsize) {
     (json.points || []).some(function(p) { if (p.case_index === currentCaseIndex) { cur = p; return true; } });
     var fig = TDRView.vpScatterFigure(json, { fullsize: fullsize, current: cur ? {
         vp: cur.vp, vf: cur.vortex_favorability, vh: cur.vortex_height, vw: cur.vortex_width,
-        label: cur.storm_name + ' ' + cur.datetime, vmax: cur.vmax_kt, dv: cur[colorBy] || 0 } : null });
+        label: cur.storm_name + ' ' + _tcrTime(cur.datetime), vmax: cur.vmax_kt, dv: cur[colorBy] || 0 } : null });
     if (fig.message) { el.innerHTML = '<div class="explorer-status">' + fig.message + '</div>'; return; }
     if (!fullsize) {
         _thumbHide();
@@ -5675,7 +5682,7 @@ function renderQuadrantMeansInto(targetId, json, fullsize) {
     var fig = TDRView.quadrantFigure(json, {
         varInfo: varInfo, colorscale: _explorerColorscale(varInfo), zmin: _getActiveVmin(), zmax: _getActiveVmax(),
         rmw: meta.rmw_km, sddc: sddc, fullsize: fullsize, contourInterval: intInput ? parseFloat(intInput.value) : NaN,
-        title: meta.storm_name + ' | ' + meta.datetime + (meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : '') +
+        title: meta.storm_name + ' | ' + _tcrTime(meta.datetime) + (meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : '') +
                (sddc !== null ? ' | Shear: ' + sddc.toFixed(0) + '\u00b0' : '') +
                '<br>Shear-Relative Quadrant Mean: ' + varInfo.display_name + ' (\u2265' + covPct + '% cov.)' + TDRView.sectionTitleOverlay(json)
     });
@@ -5827,7 +5834,7 @@ function createPopupContent(caseData) {
         '<div class="popup-row"><span class="popup-label">Swaths:</span><span class="popup-value">' + caseData.number_of_swaths + '</span></div>' : '';
     var dtBadge = _activeDataType === 'merge' ? '<span style="font-size:9px;background:#4f46e5;color:#fff;padding:1px 5px;border-radius:3px;margin-left:6px;">MERGE</span>' : '';
     return '<div class="popup-header"><div class="popup-storm-name">' + caseData.storm_name + dtBadge + '</div><div class="popup-mission">' + caseData.mission_id + '</div></div>' +
-        '<div class="popup-row"><span class="popup-label">Date/Time:</span><span class="popup-value">' + caseData.datetime + '</span></div>' +
+        '<div class="popup-row"><span class="popup-label">Date/Time:</span><span class="popup-value">' + _tcrTime(caseData.datetime) + '</span></div>' +
         '<div class="popup-row"><span class="popup-label">Intensity:</span><span class="popup-value"><span class="intensity-badge" style="background:' + catColor + '">' + category + '</span> ' + intensity + '</span></div>' +
         '<div class="popup-row"><span class="popup-label">24-h Change:</span><span class="popup-value">' + vmaxChange + '</span></div>' +
         '<div class="popup-row"><span class="popup-label">Min Pressure:</span><span class="popup-value">' + pressure + '</span></div>' +
@@ -5909,7 +5916,7 @@ function buildCaseMetaPanel(caseData) {
         ['Name', caseData.storm_name],
         ['Basin', basinStr],
         ['ATCF ID', atcfHtml],
-        ['Date / Time', caseData.datetime],
+        ['Date / Time', _tcrTime(caseData.datetime)],
         ['Mission', caseData.mission_id],
         ['Type', dtLabel],
         ['Coverage', covStr],
@@ -6514,7 +6521,7 @@ function _renderArchiveIntensityTimeline(track, storm) {
             // Show max earth-relative wind speed at 2.0 km (m/s → kt)
             var maxErWind = (c.max_er_wspd_20km != null) ? Math.round(c.max_er_wspd_20km * 1.944) : null;
             tdrWinds.push(maxErWind);
-            tdrHovers.push('<b>TDR Analysis</b><br>' + c.datetime + '<br>Mission: ' + c.mission_id +
+            tdrHovers.push('<b>TDR Analysis</b><br>' + _tcrTime(c.datetime) + '<br>Mission: ' + c.mission_id +
                 (maxErWind != null ? '<br>Max ER Wind (2 km): ' + maxErWind + ' kt' : '') +
                 '<br>BT Vmax: ' + c.vmax_kt + ' kt' +
                 (c.rmw_km ? '<br>RMW: ' + c.rmw_km + ' km' : ''));
@@ -6530,7 +6537,7 @@ function _renderArchiveIntensityTimeline(track, storm) {
         name: 'Wind (kt)',
         line: { color: '#00d4ff', width: 2.5 },
         marker: { color: colors, size: 5, line: { color: 'rgba(15, 22, 35,0.3)', width: 0.5 } },
-        hovertemplate: '<b>%{x}</b><br>Wind: %{y} kt<extra></extra>',
+        hovertemplate: '<b>%{x|' + TCTime.plotly.utcYear + '}</b><br>Wind: %{y} kt<extra></extra>',
         yaxis: 'y'
     };
 
@@ -6539,7 +6546,7 @@ function _renderArchiveIntensityTimeline(track, storm) {
         type: 'scatter', mode: 'lines',
         name: 'Pressure (hPa)',
         line: { color: '#a78bfa', width: 1.5, dash: 'dot' },
-        hovertemplate: '<b>%{x}</b><br>Pressure: %{y} hPa<extra></extra>',
+        hovertemplate: '<b>%{x|' + TCTime.plotly.utcYear + '}</b><br>Pressure: %{y} hPa<extra></extra>',
         yaxis: 'y2'
     };
 
@@ -6694,7 +6701,7 @@ function _addArchiveFDeckTraces() {
         fixes.forEach(function(f) {
             ftTimes.push(f.time);
             ftWinds.push(f.wind_kt);
-            var ht = '<b>' + style.name + '</b><br>' + f.time + '<br>Wind: ' + f.wind_kt + ' kt';
+            var ht = '<b>' + style.name + '</b><br>' + _tcrTime(f.time) + '<br>Wind: ' + f.wind_kt + ' kt';
             if (f.ci !== undefined) ht += '<br>CI#: ' + f.ci.toFixed(1);
             if (f.agency) ht += '<br>Agency: ' + f.agency;
             ftHovers.push(ht);
@@ -6815,7 +6822,7 @@ function _renderHovmoller(data) {
             scatterText.push(
                 '<b>' + varInfo.display_name + '</b>: ' + val.toFixed(2) + ' ' + varInfo.units +
                 '<br>Radius: ' + radiusKm[ri] + ' km' +
-                '<br>' + p.datetime +
+                '<br>' + _tcrTime(p.datetime) +
                 '<br>Mission: ' + p.mission_id +
                 '<br>Vmax: ' + (p.vmax_kt || '?') + ' kt' +
                 (p.rmw_km ? '<br>RMW: ' + p.rmw_km + ' km' : '')
@@ -6858,7 +6865,7 @@ function _renderHovmoller(data) {
             marker: { color: '#ffd700', size: 7, symbol: 'diamond',
                       line: { color: '#fff', width: 1 } },
             line: { color: 'rgba(255,215,0,0.3)', width: 1, dash: 'dot' },
-            hovertemplate: '<b>RMW</b>: %{y:.0f} km<br>%{x}<extra></extra>'
+            hovertemplate: '<b>RMW</b>: %{y:.0f} km<br>%{x|' + TCTime.plotly.utcYear + '}<extra></extra>'
         });
     }
 
@@ -7144,7 +7151,7 @@ function _renderArchiveTracks() {
             });
             cm.bindTooltip(
                 '<strong>' + c.storm_name + '</strong> (' + c.year + ')<br>' +
-                c.datetime + '<br>' +
+                _tcrTime(c.datetime) + '<br>' +
                 (c.vmax_kt != null ? c.vmax_kt + ' kt' : '') +
                 (c.tilt_magnitude_km != null ? ' · Tilt: ' + c.tilt_magnitude_km.toFixed(1) + ' km' : ''),
                 { className: 'track-tooltip', direction: 'top', offset: [0, -6] }
@@ -9417,7 +9424,7 @@ function _renderCompCaseList() {
     caseList.forEach(function(c) {
         var cat = getIntensityCategory(c.vmax_kt);
         var color = getIntensityColor(c.vmax_kt);
-        html += '<tr><td>' + c.case_index + '</td><td>' + c.storm_name + '</td><td>' + c.datetime + '</td>' +
+        html += '<tr><td>' + c.case_index + '</td><td>' + c.storm_name + '</td><td>' + _tcrTime(c.datetime) + '</td>' +
             '<td><span class="intensity-badge" style="background:' + color + ';font-size:9px;padding:1px 4px;">' + cat + '</span> ' + (c.vmax_kt !== null ? c.vmax_kt : 'N/A') + '</td></tr>';
     });
     html += '</tbody></table></div>';
@@ -11142,7 +11149,7 @@ function _appendCaseList(el, caseList, nCases) {
             caseList.map(function(c, i) {
                 var cat = getIntensityCategory(c.vmax_kt);
                 var color = getIntensityColor(c.vmax_kt);
-                return '<tr><td>' + (i+1) + '</td><td>' + (c.storm_name || '?') + '</td><td>' + (c.datetime || '?') + '</td><td><span class="intensity-badge" style="background:' + color + ';font-size:9px;padding:1px 4px;">' + cat + '</span> ' + (c.vmax_kt != null ? c.vmax_kt : 'N/A') + '</td></tr>';
+                return '<tr><td>' + (i+1) + '</td><td>' + (c.storm_name || '?') + '</td><td>' + (c.datetime ? _tcrTime(c.datetime) : '?') + '</td><td><span class="intensity-badge" style="background:' + color + ';font-size:9px;padding:1px 4px;">' + cat + '</span> ' + (c.vmax_kt != null ? c.vmax_kt : 'N/A') + '</td></tr>';
             }).join('') +
             '</tbody></table></div>';
     el.appendChild(wrap);
@@ -14241,7 +14248,7 @@ function _archiveSondeMapDraw(data) {
             fillColor: 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')', fillOpacity: 0.95, opacity: 1 });
         var sfc = sd.surface || {};
         var tOff = sd.time_offset_min != null ? ((sd.time_offset_min >= 0 ? '+' : '') + sd.time_offset_min.toFixed(0) + ' min') : '';
-        mk.bindTooltip('<strong>Sonde ' + (sd.sonde_id || idx) + '</strong> ' + (sd.launch_time || '') + (tOff ? ' (' + tOff + ')' : '') + '<br>' +
+        mk.bindTooltip('<strong>Sonde ' + (sd.sonde_id || idx) + '</strong> ' + (sd.launch_time ? _tcrTime(sd.launch_time, true) : '') + (tOff ? ' (' + tOff + ')' : '') + '<br>' +
             (maxW != null ? 'Max wind ' + maxW.toFixed(1) + ' m/s<br>' : '') +
             (sfc.wspd != null ? 'Sfc wind ' + Number(sfc.wspd).toFixed(1) + ' m/s' : '') +
             (sfc.pres != null ? ' \u00b7 ' + Number(sfc.pres).toFixed(1) + ' hPa' : '') +
@@ -14333,7 +14340,7 @@ function _archiveRenderSondeOverlay(data) {
 
         var hoverHtml =
             '<b>\uD83E\uDE82 ' + (sonde.sonde_id || 'Sonde ' + (idx+1)) + '</b><br>' +
-            sonde.launch_time + ' (' + tOffStr + ')<br>' +
+            _tcrTime(sonde.launch_time, true) + ' (' + tOffStr + ')<br>' +
             (sonde.aircraft || '') + '<br>' +
             'Max wind: <b>' + maxWspdStr + '</b><br>' +
             'Alt: ' + launchAltStr + ' \u2192 ' + sfcAltStr +
@@ -14414,7 +14421,7 @@ function _archiveRenderSondePanel(data) {
     html += '<tr style="color:#9ca3af;border-bottom:1px solid rgba(15, 22, 35,0.1);">' +
         '<th style="text-align:left;padding:2px 4px;">#</th>' +
         '<th style="text-align:left;padding:2px 4px;">ID</th>' +
-        '<th style="text-align:left;padding:2px 4px;">Time</th>' +
+        '<th style="text-align:left;padding:2px 4px;">Time (UTC)</th>' +
         '<th style="text-align:right;padding:2px 4px;">\u0394t</th>' +
         '<th style="text-align:right;padding:2px 4px;">WL150</th>' +
         '<th style="text-align:right;padding:2px 4px;">Vmax</th>' +
@@ -14466,7 +14473,7 @@ function _archiveRenderSondePanel(data) {
             if (sfcPres != null) splashSource = 'est';
         }
 
-        var timeStr = sonde.launch_time ? sonde.launch_time.substring(11, 19) : '?';
+        var timeStr = sonde.launch_time ? TCTime.utc(sonde.launch_time, { date: false, sec: true, zone: false }) : '?';
         var dtStr = sonde.time_offset_min != null ?
             (sonde.time_offset_min >= 0 ? '+' : '') + sonde.time_offset_min.toFixed(0) : '';
         var wl150Str = wl150 != null ? wl150.toFixed(1) : '-';
@@ -14621,7 +14628,7 @@ function archiveShowSondeSkewT(idx) {
             (missionLabel ? ' <span style="color:#9ca3af;">(' + missionLabel + ')</span>' : '') +
             '<br>' +
             '<span style="color:var(--slate);">' + (sonde.sonde_id || 'Sonde ' + (idx + 1)) +
-            ' \u2014 ' + sonde.launch_time + tOff + '</span>' + sfcTag;
+            ' \u2014 ' + _tcrTime(sonde.launch_time, true) + tOff + '</span>' + sfcTag;
     }
 
     // Render proper Skew-T using the global renderSkewT function
@@ -15012,7 +15019,7 @@ function archiveShowSondeWind(idx) {
             (missionLabel ? ' <span style="color:#9ca3af;">(' + missionLabel + ')</span>' : '') +
             '<br>' +
             '<span style="color:var(--slate);">' + (sonde.sonde_id || 'Sonde ' + (idx + 1)) +
-            ' \u2014 ' + sonde.launch_time + tOffStr + '</span>' + sfcTag;
+            ' \u2014 ' + _tcrTime(sonde.launch_time, true) + tOffStr + '</span>' + sfcTag;
     }
 
     // Build info strings for on-plot annotations (visible in saved PNG)
@@ -15029,7 +15036,7 @@ function archiveShowSondeWind(idx) {
     var plotTitleLine = (stormLabel || 'Unknown') +
         (missionLabel ? ' (' + missionLabel + ')' : '') +
         ' | ' + (sonde.sonde_id || '?') +
-        ' | ' + sonde.launch_time + tOffStr;
+        ' | ' + _tcrTime(sonde.launch_time, true) + tOffStr;
 
     var plotInfoParts = [];
     if (maxW != null) plotInfoParts.push('Vmax: ' + maxW.toFixed(1) + ' m/s (' + (maxW * 1.944).toFixed(0) + ' kt)');
@@ -15350,7 +15357,7 @@ function loadMicrowaveOverpass() {
             // Show MW colorbar on the Leaflet map
             _showMWMapColorbar(product, _mwVmin, _mwVmax);
 
-            if (status) status.textContent = json.sensor + ' ' + json.datetime;
+            if (status) status.textContent = json.sensor + ' ' + _tcrTime(json.datetime);
 
             // Add/update download button next to status text
             var dlBtn = document.getElementById('mw-download-btn');
@@ -15410,7 +15417,7 @@ function _createStandaloneMWPlanView() {
     var idx = sel ? parseInt(sel.value, 10) : 0;
     var op = (_mwOverpassData && _mwOverpassData[idx]) || {};
     var statusEl = document.getElementById('mw-status');
-    var sensorDt = statusEl ? statusEl.textContent : ((op.sensor || 'MW') + ' ' + (op.datetime || ''));
+    var sensorDt = statusEl ? statusEl.textContent : ((op.sensor || 'MW') + ' ' + (op.datetime ? _tcrTime(op.datetime) : ''));
     var titleText = sensorDt + ' | ' + product.toUpperCase();
 
     var plotBg = '#ffffff';
@@ -15799,10 +15806,7 @@ function renderMWTimeline(overpasses) {
         traces[key2].x.push(dt);
         traces[key2].y.push(baseY + jitter);
         // Build hover text: sensor / platform / formatted time
-        var dtObj = new Date(dt);
-        var dateStr = (dtObj.getUTCMonth() + 1) + '/' + dtObj.getUTCDate() + ' ' +
-            String(dtObj.getUTCHours()).padStart(2, '0') + ':' +
-            String(dtObj.getUTCMinutes()).padStart(2, '0') + 'z';
+        var dateStr = _tcrTime(op2.datetime);
         traces[key2].text.push(key2 + ' / ' + op2.platform + '<br>' + dateStr);
         traces[key2].customdata.push(k); // index into overpasses array
     }
@@ -15842,8 +15846,8 @@ function renderMWTimeline(overpasses) {
             color: '#5b6573',
             gridcolor: 'rgba(15, 22, 35,0.05)',
             tickfont: { size: 9, color: '#5b6573' },
-            tickformat: '%b %d\n%Hz',
-            hoverformat: '%Y-%m-%d %H:%Mz'
+            tickformat: '%-d %b\n%HZ',
+            hoverformat: TCTime.plotly.utcYear
         },
         yaxis: {
             title: '',
@@ -16110,7 +16114,7 @@ window.loadTdrNexradScans = function () {
                 var sc = json.scans[i];
                 var opt = document.createElement('option');
                 opt.value = sc.s3_key;
-                opt.textContent = sc.scan_time + ' (\u0394' + Math.round(sc.delta_sec) + 's)';
+                opt.textContent = _tcrTime(sc.scan_time, true) + ' (\u0394' + Math.round(sc.delta_sec) + ' s)';
                 scanSelect.appendChild(opt);
             }
 
@@ -16170,7 +16174,7 @@ window.loadTdrNexradFrame = function () {
             });
             if (_nexradVisible) _nexradMapOverlay.addTo(map);
 
-            if (status) status.textContent = json.site + ' ' + json.scan_time + ' — ' + json.label;
+            if (status) status.textContent = json.site + ' ' + _tcrTime(json.scan_time) + ' — ' + json.label;
 
             // Update colorbar
             _updateNexradColorbar(product);
