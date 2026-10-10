@@ -4658,7 +4658,7 @@
         if (ob.sst_c != null) lines.push('SST: ' + ob.sst_c.toFixed(1) + '°C');
         if (ob.pressure_hpa != null) lines.push('MSLP: ' + ob.pressure_hpa.toFixed(1) + ' hPa');
         if (ob.wave_height_m != null) lines.push('Waves: ' + ob.wave_height_m.toFixed(1) + ' m');
-        if (ob.time_utc) lines.push('<i>' + ob.time_utc + '</i>');
+        if (ob.time_utc) lines.push('<i>' + fmtUTC(ob.time_utc) + '</i>');
         var marker = L.marker([ob.lat, ob.lon], {
             icon: L.divIcon({
                 className: 'ir-stn-plot-icon',
@@ -10578,7 +10578,7 @@
                 note.textContent = bits.join(' · ');
                 note.title = ohcStale
                     ? 'Ocean heat content (AOML TCHP) is hidden while its feed is stale'
-                      + (oc.ohc_date ? ' — latest grid ' + oc.ohc_date : '') + '.'
+                      + (oc.ohc_date ? ' — latest grid ' + fmtUTC(oc.ohc_date, { time: false, year: true }) : '') + '.'
                     : '';
             } else if (oc) { note.textContent = ''; note.title = ''; }
         }
