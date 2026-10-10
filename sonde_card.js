@@ -115,7 +115,7 @@
     function r0(v) { return v == null || isNaN(v) ? '–' : Math.round(v); }
     function r1(v) { return v == null || isNaN(v) ? '–' : (Math.round(v * 10) / 10).toFixed(1); }
     function obLabel(ob) { return ob == null || ob === '' ? '' : 'OB ' + String(ob).replace(/^(\d)$/, '0$1'); }
-    function hhmm(iso) { return iso ? String(iso).slice(11, 16) + 'Z' : ''; }
+    function hhmm(iso) { return iso ? TCTime.utc(iso, { date: false }) : ''; }
     function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 
     // ── storm centre from the blob's VDM fixes ──────────────────────────

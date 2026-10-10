@@ -4903,6 +4903,7 @@
                 layout['xaxis' + ax] = {
                     type: 'date', gridcolor: grid, zeroline: false,
                     showticklabels: (i === panels.length - 1), tickfont: { size: 9 },
+                    hoverformat: TCTime.plotly.utc,   // the unified hover's header
                 };
                 if (i > 0) layout['xaxis' + ax].matches = 'x';
                 p.traces.forEach(function (tr) {
@@ -4923,8 +4924,7 @@
                 { responsive: true, displayModeBar: false });
             if (st) {
                 var last = series[series.length - 1];
-                st.textContent = payload.n + ' obs · latest ' +
-                    (last.time_utc || '').replace('T', ' ').replace('Z', ' UTC') +
+                st.textContent = payload.n + ' obs · latest ' + fmtUTC(last.time_utc) +
                     // Panels only exist for variables the station reports, so
                     // a missing pressure trace is the STATION's gap, not a
                     // page bug — say so instead of leaving the reader to
@@ -5146,7 +5146,7 @@
             ctx.drawImage(img, 0, HEAD, W, chartH);
             ctx.fillStyle = dim;
             ctx.font = '400 18px ' + FONT;
-            var saved = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+            var saved = fmtUTC(new Date(), { year: true });
             ctx.fillText('TC-ATLAS · surface-ob history · saved ' + saved,
                          40, totalH - 30);
             // Logo + tcatlas.org, bottom-right. _drawTcWatermark resets the
@@ -10855,15 +10855,8 @@
         var prof = _rtShearProfileCache[currentStormId] || {};
         var stormName = (document.getElementById('ir-detail-name') || {}).textContent || '';
         var stormId = currentStormId || '';
-        var cycle = prof.gfs_cycle_utc || '';
-        var cycleFmt = (cycle.length >= 13)
-            ? cycle.substring(0, 4) + '-' + cycle.substring(5, 7) + '-' +
-              cycle.substring(8, 10) + ' ' + cycle.substring(11, 13) + 'Z'
-            : '';
-        var fix = prof.last_fix_utc || '';
-        var fixFmt = (fix.length >= 13)
-            ? fix.substring(5, 7) + '/' + fix.substring(8, 10) + ' ' + fix.substring(11, 13) + 'Z'
-            : '';
+        var cycleFmt = fmtCycle(prof.gfs_cycle_utc);
+        var fixFmt = prof.last_fix_utc ? fmtUTC(prof.last_fix_utc) : '';
         var evalKm = prof.eval_km != null ? Math.round(prof.eval_km) : 400;
         var maskKm = prof.mask_km != null ? Math.round(prof.mask_km) : 500;
 
@@ -12138,7 +12131,7 @@
             xaxis: {
                 gridcolor: _rtPlotGrid(),
                 tickfont: { size: 9, color: '#5b6573', family: 'DM Sans, sans-serif' },
-                tickformat: '%m/%d %Hz'
+                tickformat: TCTime.plotly.cycle
             },
             yaxis: {
                 title: { text: _iMeta().title, font: { size: 10, color: '#5b6573', family: 'DM Sans, sans-serif' } },
@@ -14165,13 +14158,6 @@
     // extent (centered on each storm's current position), rather than
     // auto-fitting to each track and ending up at different scales.
     var _LOC_ZOOM = 3;
-    function _irFmtFixTime(iso) {
-        try {
-            var d = new Date(iso);
-            var h = d.getUTCHours(), m = d.getUTCMinutes();
-            return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + 'Z';
-        } catch (e) { return ''; }
-    }
     function _irFetchShearInto(statsEl, atcfId) {
         _rtFetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/shear',
               { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
@@ -14365,7 +14351,7 @@
         stats.className = 'qv-card-stats';
         var sp = [];
         if (s.satellite) sp.push(s.satellite);
-        if (s.last_fix_utc) sp.push('fix ' + _irFmtFixTime(s.last_fix_utc));
+        if (s.last_fix_utc) sp.push('fix ' + fmtUTC(s.last_fix_utc));
         stats.textContent = sp.join('  ·  ');
         body.appendChild(stats);
         _irFetchShearInto(stats, s.atcf_id);
@@ -23846,7 +23832,7 @@
 
             ctx.fillStyle = dim;
             ctx.font = '24px Inter, "Helvetica Neue", sans-serif';
-            var saved = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+            var saved = fmtUTC(new Date(), { year: true });
             ctx.fillText('TC-ATLAS · DeepMind ' + _genesisVariantModelLabel()
                 + ' · saved ' + saved,
                          40, totalH - 44);
@@ -31326,9 +31312,7 @@
                                    +ts.slice(10, 12));
                 var dMin = Math.round((tMs - mwMs) / 60000);
                 if (irTimeEl) {
-                    irTimeEl.textContent = ts.slice(0, 4) + '-' + ts.slice(4, 6)
-                        + '-' + ts.slice(6, 8) + ' ' + ts.slice(8, 10) + ':'
-                        + ts.slice(10, 12) + 'Z (' + (dMin >= 0 ? '+' : '')
+                    irTimeEl.textContent = fmtUTC(ts) + ' (' + (dMin >= 0 ? '+' : '')
                         + dMin + ' min vs MW)';
                 }
                 if (irStatus) irStatus.textContent = 'loading IR frame…';
@@ -32164,10 +32148,7 @@
     });
 
     function _rtFmtTime(iso) {
-        if (!iso) return '—';
-        var d = new Date(iso.endsWith('Z') || iso.indexOf('+') >= 0 ? iso : iso + 'Z');
-        if (isNaN(d)) return iso;
-        return d.toISOString().slice(11, 19) + 'Z ' + d.toISOString().slice(5, 10);
+        return fmtUTC(iso, { sec: true });
     }
     function _rtFmtLatLon(lat, lon) {
         if (lat == null || lon == null) return '—';
@@ -32321,7 +32302,7 @@
         var bits = [h.n_levels + ' levels (1-s)'];
         if (h.ob != null || h.t) {
             bits.unshift('OB ' + (h.ob != null ? String(h.ob).replace(/^(\d)$/, '0$1') : '?') +
-                (h.t ? ' released ' + String(h.t).slice(11, 19) + 'Z' : ''));
+                (h.t ? ' released ' + fmtUTC(h.t, { date: false, sec: true }) : ''));
         }
         if (h.wl150_kt != null) bits.push('WL150 ' + Math.round(h.wl150_kt) + ' kt');
         if (h.mbl_kt != null) bits.push('MBL ' + Math.round(h.mbl_kt) + ' kt');
@@ -32716,7 +32697,7 @@
         }
         for (var v = 0; v < vdms.length; v++) {
             var x = vdms[v], newest = (v === vdms.length - 1), vs = newest ? 20 : 13;
-            var vlab = newest ? ((x.min_slp_hpa != null ? x.min_slp_hpa + ' mb ' : '') + (x.t ? String(x.t).slice(11, 16) + 'Z' : '')).trim() : '';
+            var vlab = newest ? ((x.min_slp_hpa != null ? x.min_slp_hpa + ' mb ' : '') + (x.t ? fmtUTC(x.t, { date: false }) : '')).trim() : '';
             var vicon = L.divIcon({
                 className: 'rt-recon-vdm-icon' + (newest ? ' is-newest' : ''),
                 html: '<div data-vlab="' + vlab + '" style="position:relative;width:' + vs + 'px;height:' + vs + 'px;' +
@@ -32952,12 +32933,12 @@
             if (cf) {
                 var cfBits = cf.fl_max_kt != null ? ['FL max ' + Math.round(cf.fl_max_kt) + ' kt'] : [];
                 cfBits.push(cf.n_fix ? 'no scored crossing yet' : 'awaiting a center fix');
-                return ' · SEAR ' + Math.round(hd.kt) + ' kt (earlier flight, ' + String(hd.t).slice(5, 10).replace('-', '/') + ' ' +
-                    String(hd.t).slice(11, 16) + 'Z) · current flight: ' + cfBits.join(', ');
+                return ' · SEAR ' + Math.round(hd.kt) + ' kt (earlier flight, ' + fmtUTC(hd.t) +
+                    ') · current flight: ' + cfBits.join(', ');
             }
             return ' · SEAR ' + Math.round(hd.kt) + ' kt' +
                 (hd.others_kt && hd.others_kt.length ? ' (other crossings ' + Math.round(hd.others_min_kt) + (hd.others_kt.length > 1 ? '–' + Math.round(hd.others_max_kt) : '') + ')' : '') +
-                ' (' + String(hd.t).slice(11, 16) + 'Z' + (hd.fix_source === 'hdob' ? ', prelim' : '') + ')';
+                ' (' + fmtUTC(hd.t, { date: false }) + (hd.fix_source === 'hdob' ? ', prelim' : '') + ')';
         }
         var yh = (last.y_corr_kt != null) ? last.y_corr_kt : last.y_kt;   // RMW-corrected headline (2026-09-05)
         var rg = last.y_range_kt, rgs = '', head = Math.round(yh) + ' kt';
@@ -32966,7 +32947,7 @@
             // preliminary center: the range IS the estimate; VDM-fixed: point value, range after
             if (last.fix_source === 'hdob') head = rgs + ' kt (likely ' + Math.round(yh) + ')'; else head += ' [' + rgs + ']';
         }
-        return ' · SEAR ' + head + (q ? ' ' + q : '') + ' (' + String(last.t).slice(11, 16) + 'Z' +
+        return ' · SEAR ' + head + (q ? ' ' + q : '') + ' (' + fmtUTC(last.t, { date: false }) +
             (last.fix_source === 'hdob' ? ', prelim' : '') + ')';
     }
 
@@ -33554,7 +33535,7 @@
         var iso = snap.toISOString().slice(0, 16) + ':00Z';
         return { key: 'wmst-' + iso,
                  url: _IEM_WMST + '&time=' + encodeURIComponent(iso),
-                 label: 'valid ' + iso.slice(11, 16) + 'Z' };
+                 label: 'valid ' + fmtUTC(iso, { date: false }) };
     }
 
     /**
