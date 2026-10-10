@@ -1498,14 +1498,14 @@
              secondary tab bar above (no gap from a header in between).
              Sticky pinned so it stays accessible as the user scrolls. -->
         <nav class="seasonal-subnav" aria-label="Seasonal panels">
-            <a href="#seasonal-panel-ace-pace" data-target="seasonal-panel-ace-pace">A · Season ACE pace</a>
-            <a href="#seasonal-panel-anom-map" data-target="seasonal-panel-anom-map">B · Live anomaly</a>
-            <a href="#seasonal-panel-timeseries" data-target="seasonal-panel-timeseries">C · Regional environment</a>
-            <a href="#seasonal-panel-evolution" data-target="seasonal-panel-evolution">D · Seasonal evolution</a>
-            <a href="#seasonal-panel-scatter" data-target="seasonal-panel-scatter">E · SST × ACE</a>
-            <a href="#seasonal-panel-correlation" data-target="seasonal-panel-correlation">F · Correlation map</a>
-            <a href="#seasonal-panel-analogs" data-target="seasonal-panel-analogs">G · Analog seasons</a>
-            <a href="#seasonal-panel-indices" data-target="seasonal-panel-indices">H · Climate indices</a>
+            <a href="#seasonal-panel-ace-pace" data-target="seasonal-panel-ace-pace">Season ACE pace</a>
+            <a href="#seasonal-panel-anom-map" data-target="seasonal-panel-anom-map">Live anomaly</a>
+            <a href="#seasonal-panel-timeseries" data-target="seasonal-panel-timeseries">Regional environment</a>
+            <a href="#seasonal-panel-evolution" data-target="seasonal-panel-evolution">Seasonal evolution</a>
+            <a href="#seasonal-panel-scatter" data-target="seasonal-panel-scatter">SST × ACE</a>
+            <a href="#seasonal-panel-correlation" data-target="seasonal-panel-correlation">Correlation map</a>
+            <a href="#seasonal-panel-analogs" data-target="seasonal-panel-analogs">Analog seasons</a>
+            <a href="#seasonal-panel-indices" data-target="seasonal-panel-indices">Climate indices</a>
         </nav>
 
         <div class="seasonal-header">
@@ -1530,7 +1530,7 @@
                  synoptic hour rather than to IBTrACS's ingest lag. -->
             <section class="seasonal-panel" id="seasonal-panel-ace-pace">
                 <h3 class="seasonal-panel-title">
-                    A · Season ACE Pace
+                    Season ACE Pace
                     <span class="seasonal-panel-subtitle">live vs 1991-2020 climatology</span>
                 </h3>
                 <p class="seasonal-panel-desc">
@@ -1589,7 +1589,7 @@
 
             <!-- Panel B: Live SST anomaly map (global by default) -->
             <section class="seasonal-panel" id="seasonal-panel-anom-map">
-                <h3 class="seasonal-panel-title">B · Live SST &amp; Atmosphere</h3>
+                <h3 class="seasonal-panel-title">Live SST &amp; Atmosphere</h3>
                 <div class="seasonal-ts-controls">
                     <label>Variable
                         <select id="seasonal-anom-var" title="SST and atmospheric anomalies — both relative to the same 1991-2020 climatology. SST uses today's OISST; the atmosphere uses the latest GFS analysis cycle.">
@@ -1649,7 +1649,7 @@
 
             <!-- Panel C: Regional environment evolution time series -->
             <section class="seasonal-panel" id="seasonal-panel-timeseries">
-                <h3 class="seasonal-panel-title">C · Regional Environment Evolution</h3>
+                <h3 class="seasonal-panel-title">Regional Environment Evolution</h3>
                 <div class="seasonal-ts-controls">
                     <label>Region
                         <select id="seasonal-ts-region">
@@ -1731,7 +1731,7 @@
                  ibtracs_storms.json the TC Climatology page already loads. -->
             <section class="seasonal-panel" id="seasonal-panel-evolution">
                 <h3 class="seasonal-panel-title">
-                    D · Seasonal Evolution
+                    Seasonal Evolution
                     <span class="seasonal-panel-subtitle">ERA5 00Z analysis snapshot</span>
                 </h3>
                 <p class="seasonal-panel-desc">
@@ -1755,7 +1755,7 @@
                                 title="Calendar year to animate. Years populate from the era5_daily archive manifest."></select>
                     </label>
                     <label>Variable
-                        <select id="seasonal-evo-var" title="Daily-resolution options (shear / wind200 / wind850) come from the era5_daily archive with wind barbs overlaid; monthly-only options come from the GC-ATLAS monthly tile catalog (same source as Panel C) and snap the resolution to monthly.">
+                        <select id="seasonal-evo-var" title="Daily options (shear, 200-hPa wind, 850-hPa wind) come from daily ERA5 analyses, drawn with wind barbs. Monthly-only options come from monthly ERA5 means (the same source as Regional Environment Evolution) and switch the resolution to monthly.">
                             <optgroup label="Daily archive (shear + level winds, with barbs)">
                                 <option value="shear" selected>Deep-layer shear (200-850)</option>
                                 <option value="wind200">Wind at 200 hPa</option>
@@ -1884,7 +1884,7 @@
 
             <!-- Panel E: 2D phase-space scatter -->
             <section class="seasonal-panel" id="seasonal-panel-scatter">
-                <h3 class="seasonal-panel-title">E · Pre-season SST × Annual ACE</h3>
+                <h3 class="seasonal-panel-title">Pre-season SST × Annual ACE</h3>
                 <div class="seasonal-scatter-controls">
                     <label>X-axis
                         <select id="seasonal-scatter-x">
@@ -1974,7 +1974,7 @@
 
             <!-- Panel F: ACE × SST correlation map (interactive toggle) -->
             <section class="seasonal-panel" id="seasonal-panel-correlation">
-                <h3 class="seasonal-panel-title">F · ACE × SST Correlation</h3>
+                <h3 class="seasonal-panel-title">ACE × SST Correlation</h3>
                 <p class="seasonal-panel-desc">
                     Pixel-wise Pearson correlation between monthly SST and
                     annual basin ACE (1982-present). Red = warm SST coincides
@@ -2045,7 +2045,7 @@
 
             <!-- Panel G: Analog seasons ranking -->
             <section class="seasonal-panel" id="seasonal-panel-analogs">
-                <h3 class="seasonal-panel-title">G · Analog Seasons</h3>
+                <h3 class="seasonal-panel-title">Analog Seasons</h3>
                 <p class="seasonal-panel-desc" id="seasonal-an-method-desc">
                     Top-10 historical analogs to the target year/month.
                     <strong>Grid-weighted by |r|</strong> (default and
@@ -2157,7 +2157,7 @@
 
             <!-- Panel H: Climate-index multi-trace time series -->
             <section class="seasonal-panel" id="seasonal-panel-indices">
-                <h3 class="seasonal-panel-title">H · Climate Indices</h3>
+                <h3 class="seasonal-panel-title">Climate Indices</h3>
                 <p class="seasonal-panel-desc">
                     Derived from the same OISST record as Panels A-E. ENSO
                     horizontal markers at ±0.5 °C anomaly are the
