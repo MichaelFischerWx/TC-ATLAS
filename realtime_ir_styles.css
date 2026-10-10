@@ -1731,6 +1731,16 @@ html, body { margin: 0; padding: 0; }
     letter-spacing: 0.07em;
     color: #94a3b8;
 }
+/* Bar-end key: every meter fills from hostile (left) to favorable (right),
+   so a short red bar is a hostile reading, not missing data. */
+.ir-fav-scale {
+    display: flex;
+    justify-content: space-between;
+    margin: -4px 0 -2px;
+    font-size: 0.62rem;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+}
 .ir-fav-meter { display: flex; flex-direction: column; gap: 4px; }
 .ir-fav-top {
     display: flex;
@@ -1805,6 +1815,20 @@ html, body { margin: 0; padding: 0; }
 .ir-fav-vi-climo { color: #475569; }
 [data-theme="dark"] .ir-fav-vi-climo { color: #a3aec0; }
 .ir-fav-vi-climo:empty { display: none; }
+/* Technical lines (ingredients, empirical + thermodynamic PI, the 24 h
+   climatology) behind a native disclosure; hidden while all are empty. */
+.ir-fav-details { margin-top: 2px; }
+.ir-fav-details:not(:has(.ir-fav-vi-sub:not(:empty))) { display: none; }
+.ir-fav-details > summary {
+    width: max-content;
+    font-size: 0.66rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+}
+.ir-fav-details > summary:hover { color: var(--text); }
+.ir-fav-details[open] > summary { margin-bottom: 3px; }
 
 /* Vmax|MSLP segmented toggle in the intensity-chart heading. */
 .ir-intensity-metric {

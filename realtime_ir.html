@@ -82,7 +82,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261009p1e">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261009p1f">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -116,7 +116,7 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261009p1d">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261009p1c">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261009p1d">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261009p1a">
 </head>
@@ -503,6 +503,9 @@
                          muted "n/a" bar when a source is unavailable. -->
                     <div class="ir-fav-dash" id="ir-fav-dash">
                         <div class="ir-fav-heading">Environmental favorability</div>
+                        <!-- What the bar ends mean: every meter below (VI too) fills
+                             from hostile at the left to favorable at the right. -->
+                        <div class="ir-fav-scale" aria-hidden="true"><span>&larr; hostile</span><span>favorable &rarr;</span></div>
                         <div class="ir-fav-meter" id="ir-fav-shear">
                             <div class="ir-fav-top"><span class="ir-fav-label">Deep-layer shear<button type="button" class="ir-info-help" tabindex="0" aria-label="About deep-layer shear" title="850–200 hPa environmental shear (SHIPS 200–800 km ring). Lower is more favorable: <10 kt supportive, 10–20 kt marginal, >20 kt hostile. Source: latest GFS 0.25° analysis.">i</button></span><span class="ir-fav-val" id="ir-fav-shear-val">&mdash;</span></div>
                             <div class="ir-fav-bar"><div class="ir-fav-fill"></div></div>
@@ -521,8 +524,14 @@
                         <div class="ir-fav-meter ir-fav-composite" id="ir-fav-vi">
                             <div class="ir-fav-top"><span class="ir-fav-label">Ventilation index<button type="button" class="ir-info-help" tabindex="0" aria-label="About the ventilation index" title="Ventilation index (Tang & Emanuel 2012): VI = deep-layer shear × mid-level entropy deficit χ_m / potential intensity. A single composite of the three levers — low shear, moist mid-levels, and high ocean potential all lower it. Lower VI = more favorable; rapid intensification becomes unlikely as VI rises. Shear: 850–200 hPa; χ_m: 600 hPa entropy deficit (saturation entropy over the inner 0–100 km disc, environmental entropy over the 100–300 km annulus); potential intensity: empirical (SST-based, DeMaria–Kaplan). The chip is its percentile among tropical and subtropical cyclones in the same basin, 1991–2025, and the bar color is its third of that distribution (lowest third favorable, top third hostile). The last line says what those storms did over the next 24 h: median intensity change, 10–90% range and how often they intensified rapidly (≥30 kt). The climatology computes VI over the same regions as the live value, from ERA5 with the previous day’s OISST; intensities come from IBTrACS.">i</button><span class="ir-fav-sub" id="ir-fav-vi-pct"></span></span><span class="ir-fav-val" id="ir-fav-vi-val">&mdash;</span></div>
                             <div class="ir-fav-bar"><div class="ir-fav-fill"></div></div>
-                            <div class="ir-fav-vi-sub" id="ir-fav-vi-sub"></div>
-                            <div class="ir-fav-vi-sub ir-fav-vi-climo" id="ir-fav-vi-climo"></div>
+                            <!-- Technical lines (ingredients, both PIs, the 24 h
+                                 climatology) fold away; the bar + percentile
+                                 carry the at-a-glance read. -->
+                            <details class="ir-fav-details" id="ir-fav-details">
+                                <summary>Details</summary>
+                                <div class="ir-fav-vi-sub" id="ir-fav-vi-sub"></div>
+                                <div class="ir-fav-vi-sub ir-fav-vi-climo" id="ir-fav-vi-climo"></div>
+                            </details>
                         </div>
                         <div class="ir-fav-note" id="ir-fav-note"></div>
                     </div>
@@ -2770,7 +2779,7 @@
     <script defer src="tc_mw_layer.js?v=20260920a"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261007wr"></script>
-    <script defer src="realtime_ir.js?v=20261009p1e"></script>
+    <script defer src="realtime_ir.js?v=20261009p1f"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
