@@ -10,8 +10,8 @@
 set -u
 cd "$(dirname "$0")/.."
 
-PAGES="index.html realtime_ir.html global_archive.html explorer.html tc_climatology.html climatology_globe.html changelog.html"
-FILES="theme.js tc_export.js tc_errors.js changelog.css tc_radar_styles.css realtime_tdr_styles.css vol3d.js skewt.js lflet_gl.js global_archive_styles.css realtime_ir.js global_archive.js tc_radar_app.js tc_climatology.js satellite.js realtime_tdr.js satellite_styles.css realtime_ir_styles.css"
+PAGES="index.html realtime_ir.html global_archive.html explorer.html tc_climatology.html climatology_globe.html changelog.html about.html"
+FILES="theme.js tc_export.js tc_errors.js site_pages.css tc_radar_styles.css realtime_tdr_styles.css vol3d.js skewt.js lflet_gl.js global_archive_styles.css realtime_ir.js global_archive.js tc_radar_app.js tc_climatology.js satellite.js realtime_tdr.js satellite_styles.css realtime_ir_styles.css"
 
 fail=0
 for f in $FILES; do

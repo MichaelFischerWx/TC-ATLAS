@@ -48,6 +48,16 @@
     <meta name="apple-mobile-web-app-title" content="TC-ATLAS">
 
     <title>TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure</title>
+    <script>
+        // About, data sources, methods, citations and contact moved to
+        // about.html; keep shared links like index.html#cite working.
+        (function () {
+            var h = location.hash.slice(1);
+            if ({ about: 1, 'data-sources': 1, 'genesis-clustering': 1, cite: 1, 'data-credits': 1, contact: 1 }[h]) {
+                location.replace('about.html#' + h);
+            }
+        })();
+    </script>
     <script src="theme.js?v=20260924a"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -55,7 +65,7 @@
          script runs — warm the API connection from byte 0. -->
     <link rel="preconnect" href="https://api.tcatlas.org">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="changelog.css?v=20261009p2a">
+    <link rel="stylesheet" href="site_pages.css?v=20261009p2b">
 
     <style>
         :root {
@@ -357,43 +367,6 @@
         .section-title .accent { color: var(--blue); }
         .section-desc { text-align: center; max-width: 700px; margin: 0 auto 2.5rem auto; font-size: 1rem; color: var(--slate); line-height: 1.8; }
 
-        /* ── Data source grid ────────────────────────────── */
-        .source-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 1.25rem;
-            margin-top: 2rem;
-        }
-        .source-card {
-            background: var(--navy-mid);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 1.5rem;
-        }
-        .source-card h3 {
-            color: var(--text);
-            margin-bottom: 0.5rem;
-            font-size: 0.95rem;
-        }
-        .source-card p {
-            color: var(--slate);
-            font-size: 0.85rem;
-            line-height: 1.6;
-        }
-        .source-card a {
-            color: var(--blue);
-            text-decoration: none;
-        }
-        .source-card a:hover {
-            text-decoration: underline;
-        }
-
-        /* ── Contact section ─────────────────────────────── */
-        .contact-section { background: var(--surface); border-top: 1px solid var(--border); text-align: center; padding: 4rem 24px; color: var(--text); }
-        .contact-section .section-title { color: var(--text); }
-        .contact-info { max-width: 500px; margin: 2rem auto; background: var(--surface-raised); padding: 2rem; border-radius: var(--radius-lg); border: 1px solid var(--border); }
-        .contact-info a { color: var(--blue); }
-
         /* ── Footer ──────────────────────────────────────── */
         footer { text-align: center; padding: 2rem; font-size: 0.75rem; color: var(--text-dim); border-top: 1px solid var(--border); }
         footer a { color: var(--blue); text-decoration: none; }
@@ -570,21 +543,6 @@
             .platform-grid-bottom .platform-card { flex: 1 1 auto; }
         }
 
-        /* ── Citation section ────────────────────────────── */
-        .cite-list { display: flex; flex-direction: column; gap: 1rem; max-width: 840px; margin: 0 auto; }
-        .cite-pub { background: var(--navy-mid); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem 1.5rem; }
-        .cite-pub-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 0.5rem; }
-        .cite-pub-text { font-size: 0.875rem; line-height: 1.7; color: var(--slate); font-family: 'JetBrains Mono', monospace; word-break: break-word; }
-        .cite-pub-text a { color: var(--blue); text-decoration: none; }
-        .cite-pub-text a:hover { text-decoration: underline; }
-        .cite-pub-text em { font-style: italic; }
-        .cite-copy-landing { display: inline-flex; align-items: center; gap: 4px; margin-top: 0.75rem; padding: 4px 12px; font-size: 0.75rem; font-weight: 600; font-family: 'DM Sans', sans-serif; background: var(--surface); border: 1px solid var(--border-light); border-radius: 4px; color: var(--slate); cursor: pointer; transition: all 0.2s; }
-        .cite-copy-landing:hover { background: rgba(58,106,156,0.10); border-color: rgba(58,106,156,0.4); color: var(--blue); }
-        .cite-copy-landing.copied { background: rgba(34,150,100,0.12); border-color: rgba(34,150,100,0.4); color: #1e7a4e; }
-        .cite-bibtex-landing { display: inline-flex; align-items: center; gap: 6px; padding: 8px 20px; font-size: 0.875rem; font-weight: 700; font-family: 'DM Sans', sans-serif; background: var(--um-green); border: 1px solid var(--um-green); border-radius: 6px; color: #ffffff; cursor: pointer; transition: all 0.2s; }
-        .cite-bibtex-landing:hover { background: var(--um-green-deep); border-color: var(--um-green-deep); }
-        .cite-bibtex-landing.copied { background: rgba(34,150,100,0.12); border-color: rgba(34,150,100,0.4); color: #1e7a4e; }
-
         /* iOS Safari zooms the viewport when a focused form control is
            <16px. pointer:coarse scopes the rule to touch devices so
            desktop layouts stay dense. */
@@ -659,14 +617,13 @@
 
         <!-- ── Platform cards ────────────────────────────── -->
         <div class="platform-grid" id="tools">
-            <a href="explorer.html" class="platform-card card-radar">
-                <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg></div>
-                <div class="card-title">TC-RADAR</div>
-                <div class="card-desc">Explore 1,500+ post-processed airborne Doppler radar analyses with interactive 3D wind fields, cross-sections, azimuthal means, and multi-variable visualization spanning 1997&ndash;2024.</div>
+            <a href="realtime_ir.html" class="platform-card card-ir">
+                <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/></svg></div>
+                <div class="card-title">Real-Time Monitor</div>
+                <div class="card-desc">Track all active tropical cyclones worldwide with live geostationary infrared satellite imagery from GOES-East, GOES-West, and Himawari-9.</div>
                 <div class="card-stats">
-                    <div><div class="card-stat-val">1,510</div><div class="card-stat-label">Analyses</div></div>
-                    <div><div class="card-stat-val">91</div><div class="card-stat-label">Storms</div></div>
-                    <div><div class="card-stat-val">1997&ndash;2024</div><div class="card-stat-label">Coverage</div></div>
+                <div><div class="card-stat-val">Global</div><div class="card-stat-label">Coverage</div></div>
+                <div><div class="card-stat-val">GOES &amp; Himawari</div><div class="card-stat-label">Satellites</div></div>
                 </div>
                 <span class="card-arrow">&rarr;</span>
             </a>
@@ -676,43 +633,44 @@
                 <div class="card-title">Recon</div>
                 <div class="card-desc">Follow active hurricane-hunter missions live: flight-level winds, dropsondes, VDMs, SEAR surface-wind estimates and tail Doppler radar analyses, with an archive of every 2026 flight.</div>
                 <div class="card-stats">
-                    <div><div class="card-stat-val">Live</div><div class="card-stat-label">Missions</div></div>
-                    <div><div class="card-stat-val">P-3 &amp; G-IV</div><div class="card-stat-label">Aircraft</div></div>
+                <div><div class="card-stat-val">Live</div><div class="card-stat-label">Missions</div></div>
+                <div><div class="card-stat-val">P-3 &amp; G-IV</div><div class="card-stat-label">Aircraft</div></div>
                 </div>
                 <span class="card-arrow">&rarr;</span>
             </a>
 
-            <a href="realtime_ir.html" class="platform-card card-ir">
-                <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/></svg></div>
-                <div class="card-title">Real-Time Monitor</div>
-                <div class="card-desc">Track all active tropical cyclones worldwide with live geostationary infrared satellite imagery from GOES-East, GOES-West, and Himawari-9.</div>
+            <a href="global_archive.html" class="platform-card card-global">
+                <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+                <div class="card-title">Global Archive</div>
+                <div class="card-desc">Browse the complete IBTrACS tropical cyclone record from 1842 to present with satellite imagery, intensity timelines, reconnaissance, and multi-storm comparison tools.</div>
                 <div class="card-stats">
-                    <div><div class="card-stat-val">Global</div><div class="card-stat-label">Coverage</div></div>
-                    <div><div class="card-stat-val">GOES &amp; Himawari</div><div class="card-stat-label">Satellites</div></div>
+                <div><div class="card-stat-val">14,000+</div><div class="card-stat-label">Storms</div></div>
+                <div><div class="card-stat-val">7</div><div class="card-stat-label">Basins</div></div>
+                <div><div class="card-stat-val">1842&ndash;2025</div><div class="card-stat-label">Coverage</div></div>
                 </div>
                 <span class="card-arrow">&rarr;</span>
             </a>
 
             <div class="platform-grid-bottom">
-                <a href="global_archive.html" class="platform-card card-global">
-                    <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
-                    <div class="card-title">Global Archive</div>
-                    <div class="card-desc">Browse the complete IBTrACS tropical cyclone record from 1842 to present with satellite imagery, intensity timelines, reconnaissance, and multi-storm comparison tools.</div>
+                <a href="explorer.html" class="platform-card card-radar">
+                    <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg></div>
+                    <div class="card-title">TC-RADAR</div>
+                    <div class="card-desc">Explore 1,500+ post-processed airborne Doppler radar analyses with interactive 3D wind fields, cross-sections, azimuthal means, and multi-variable visualization spanning 1997&ndash;2024.</div>
                     <div class="card-stats">
-                        <div><div class="card-stat-val">14,000+</div><div class="card-stat-label">Storms</div></div>
-                        <div><div class="card-stat-val">7</div><div class="card-stat-label">Basins</div></div>
-                        <div><div class="card-stat-val">1842&ndash;2025</div><div class="card-stat-label">Coverage</div></div>
+                    <div><div class="card-stat-val">1,510</div><div class="card-stat-label">Analyses</div></div>
+                    <div><div class="card-stat-val">91</div><div class="card-stat-label">Storms</div></div>
+                    <div><div class="card-stat-val">1997&ndash;2024</div><div class="card-stat-label">Coverage</div></div>
                     </div>
                     <span class="card-arrow">&rarr;</span>
                 </a>
 
-                <a href="explorer.html#composites" class="platform-card card-composites" onclick="sessionStorage.setItem('openComposites','1')">
+                <a href="explorer.html?tab=composites" class="platform-card card-composites">
                     <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg></div>
                     <div class="card-title">TC-RADAR Composites</div>
                     <div class="card-desc">Build custom composite analyses from the TC-RADAR database. Filter by intensity, shear, tilt, motion, and more to reveal systematic structural patterns across tropical cyclones.</div>
                     <div class="card-stats">
-                        <div><div class="card-stat-val">12+</div><div class="card-stat-label">Variables</div></div>
-                        <div><div class="card-stat-val">Flexible</div><div class="card-stat-label">Filters</div></div>
+                    <div><div class="card-stat-val">12+</div><div class="card-stat-label">Variables</div></div>
+                    <div><div class="card-stat-val">Flexible</div><div class="card-stat-label">Filters</div></div>
                     </div>
                     <span class="card-arrow">&rarr;</span>
                 </a>
@@ -722,9 +680,9 @@
                     <div class="card-title">TC Climatology</div>
                     <div class="card-desc">Best-track statistics by basin (ACE, RI, intensity, LMI), an ERA5 reanalysis globe for compositing by climate index, and a new <strong>Subseasonal</strong> subview for binning genesis &amp; RI by MJO and BSISO phase.</div>
                     <div class="card-stats">
-                        <div><div class="card-stat-val">3</div><div class="card-stat-label">Sub-views</div></div>
-                        <div><div class="card-stat-val">14+</div><div class="card-stat-label">Indices</div></div>
-                        <div><div class="card-stat-val">MJO/BSISO</div><div class="card-stat-label">Phase composites</div></div>
+                    <div><div class="card-stat-val">3</div><div class="card-stat-label">Sub-views</div></div>
+                    <div><div class="card-stat-val">14+</div><div class="card-stat-label">Indices</div></div>
+                    <div><div class="card-stat-val">MJO/BSISO</div><div class="card-stat-label">Phase composites</div></div>
                     </div>
                     <span class="card-arrow">&rarr;</span>
                 </a>
@@ -763,63 +721,6 @@
         </div>
     </section>
 
-    <!-- ── Data Sources ──────────────────────────────────── -->
-    <section id="data-sources" class="section-bg">
-        <div class="content-section">
-            <h2 class="section-title">Integrated <span class="accent">Data Sources</span></h2>
-            <p class="section-desc">TC-ATLAS unifies observations from multiple platforms and agencies into a single interactive environment.</p>
-            <div class="source-grid">
-                <div class="source-card">
-                    <h3>Airborne Doppler Radar</h3>
-                    <p>Post-processed NOAA P-3 tail Doppler radar analyses providing full 3D wind fields, reflectivity, and derived vortex diagnostics via the <a href="explorer.html">TC-RADAR database</a>.</p>
-                </div>
-                <div class="source-card">
-                    <h3>Passive Microwave Satellite</h3>
-                    <p>Multi-sensor microwave imagery from the <a href="https://rammb-data.cira.colostate.edu/tcprimed/" target="_blank" rel="noopener">TC-PRIMED</a> dataset, revealing precipitation structure and convective organization.</p>
-                </div>
-                <div class="source-card">
-                    <h3>Infrared Satellite</h3>
-                    <p>Geostationary IR brightness temperatures from <a href="https://www.ncei.noaa.gov/products/climate-data-records/geostationary-ir-channel-brightness-temperature" target="_blank" rel="noopener">GridSat-B1</a> (NOAA NCEI Climate Data Record, 1980&ndash;2024), <a href="https://disc.gsfc.nasa.gov/datasets/GPM_MERGIR_1/summary" target="_blank" rel="noopener">MergIR</a> (NASA GES DISC, 1998&ndash;present), and real-time GOES ABI Band 13 imagery for cloud-top structure. <a href="#data-credits">Data acknowledgements</a>.</p>
-                </div>
-                <div class="source-card">
-                    <h3>ERA5 Reanalysis</h3>
-                    <p>Monthly-mean and per-year ERA5 fields (SST, MPI, wind, moisture, MSE, PV, deep-layer shear) on a 3D globe via the <a href="tc_climatology.html">TC Climatology</a> page. Composite TC seasons by climate index, custom year/month, or per-pixel correlation.</p>
-                </div>
-                <div class="source-card">
-                    <h3>SHIPS Diagnostics</h3>
-                    <p>Operational SHIPS model parameters — vertical wind shear, mid-level RH, ocean heat content, and forecast environment context — surfaced inline on each storm's detail card.</p>
-                </div>
-                <div class="source-card">
-                    <h3>In-situ Observations</h3>
-                    <p>Flight-level data and GPS dropsonde profiles from NOAA reconnaissance missions via the <a href="https://seb.omao.noaa.gov/" target="_blank" rel="noopener">SEB archives</a>.</p>
-                </div>
-                <div class="source-card">
-                    <h3>Best-Track Records</h3>
-                    <p>Storm tracks, intensity, and classification from <a href="https://www.ncei.noaa.gov/products/international-best-track-archive" target="_blank" rel="noopener">IBTrACS v04</a> for comprehensive historical context across all ocean basins.</p>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- ── About ─────────────────────────────────────────── -->
-    <section id="about">
-        <div class="content-section">
-            <h2 class="section-title">About <span class="accent">TC-ATLAS</span></h2>
-            <p class="section-desc">TC-ATLAS was developed by Dr. Michael Fischer at the University of Miami to enable researchers to conduct storm-to-storm comparisons and climatological analyses of tropical cyclone vortex and convective characteristics across all stages of the lifecycle. The platform is built around the <a href="explorer.html" style="color:var(--cyan);">TC-RADAR database</a>, developed in collaboration with NOAA's Hurricane Research Division, and continues to expand with new data sources and capabilities.</p>
-        </div>
-    </section>
-
-    <!-- ── Genesis-clustering methods: pointer stub only. The canonical
-         description lives on the Real-Time Monitor itself (in-page modal,
-         deep link #genesis-methods) — this anchor survives so previously
-         shared #genesis-clustering links still land somewhere useful. -->
-    <section id="genesis-clustering">
-        <div class="content-section">
-            <h2 class="section-title">Methods: <span class="accent">Cyclogenesis Clusters</span></h2>
-            <p class="section-desc">The description of how TC-ATLAS clusters Google DeepMind's cyclogenesis ensembles &mdash; genesis definition, density-peak clustering, and wave-family linking &mdash; lives on the Real-Time Monitor itself, where the markers are: <a href="realtime_ir.html#genesis-methods" style="color:var(--cyan);">open the methods description&nbsp;&rarr;</a></p>
-        </div>
-    </section>
-
     <!-- ── Recent Updates (changelog) ─────────────────────── -->
     <section id="updates" class="section-bg">
         <div class="content-section">
@@ -833,64 +734,11 @@
         </div>
     </section>
 
-    <!-- ── How to Cite ──────────────────────────────────────── -->
-    <section id="cite">
-        <div class="content-section">
-            <h2 class="section-title">How to <span class="accent">Cite</span></h2>
-            <p class="section-desc">If you use TC-ATLAS or the underlying TC-RADAR dataset in your research, please cite the relevant publications below.</p>
-            <div class="cite-list">
-                <div class="cite-pub">
-                    <div class="cite-pub-label">TC-RADAR Dataset</div>
-                    <p class="cite-pub-text">Fischer, M. S., P. D. Reasor, R. F. Rogers, and J. F. Gamache, 2022: An Analysis of Tropical Cyclone Vortex and Convective Characteristics in Relation to Storm Intensity Using a Novel Airborne Doppler Radar Database. <em>Mon. Wea. Rev.</em>, <strong>150</strong>, 2255&ndash;2278, <a href="https://doi.org/10.1175/MWR-D-21-0223.1" target="_blank" rel="noopener">https://doi.org/10.1175/MWR-D-21-0223.1</a>.</p>
-                    <button class="cite-copy-landing" onclick="landingCopy('Fischer, M. S., P. D. Reasor, R. F. Rogers, and J. F. Gamache, 2022: An Analysis of Tropical Cyclone Vortex and Convective Characteristics in Relation to Storm Intensity Using a Novel Airborne Doppler Radar Database. Mon. Wea. Rev., 150, 2255\u20132278, https://doi.org/10.1175/MWR-D-21-0223.1.',this)">Copy</button>
-                </div>
-                <div class="cite-pub">
-                    <div class="cite-pub-label">Vortex Tilt &amp; Precipitation Structure</div>
-                    <p class="cite-pub-text">Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2024: An observational analysis of the relationship between tropical cyclone vortex tilt, precipitation structure, and intensity change. <em>Mon. Wea. Rev.</em>, <strong>152</strong>, 203&ndash;225, <a href="https://doi.org/10.1175/MWR-D-23-0089.1" target="_blank" rel="noopener">https://doi.org/10.1175/MWR-D-23-0089.1</a>.</p>
-                    <button class="cite-copy-landing" onclick="landingCopy('Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2024: An observational analysis of the relationship between tropical cyclone vortex tilt, precipitation structure, and intensity change. Mon. Wea. Rev., 152, 203\u2013225, https://doi.org/10.1175/MWR-D-23-0089.1.',this)">Copy</button>
-                </div>
-                <div class="cite-pub">
-                    <div class="cite-pub-label">Anomaly-Based Vortex Diagnostics</div>
-                    <p class="cite-pub-text">Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2025: Are rapidly intensifying tropical cyclones associated with unique vortex and convective characteristics? <em>Mon. Wea. Rev.</em>, <strong>153</strong>, 183&ndash;203, <a href="https://doi.org/10.1175/MWR-D-24-0118.1" target="_blank" rel="noopener">https://doi.org/10.1175/MWR-D-24-0118.1</a>.</p>
-                    <button class="cite-copy-landing" onclick="landingCopy('Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2025: Are rapidly intensifying tropical cyclones associated with unique vortex and convective characteristics? Mon. Wea. Rev., 153, 183\u2013203, https://doi.org/10.1175/MWR-D-24-0118.1.',this)">Copy</button>
-                </div>
-                <div class="cite-pub">
-                    <div class="cite-pub-label">TC-ATLAS Web Tool</div>
-                    <p class="cite-pub-text">TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. Available at <a href="https://tcatlas.org/" target="_blank" rel="noopener">https://tcatlas.org/</a></p>
-                    <button class="cite-copy-landing" onclick="landingCopy('TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. Available at https://tcatlas.org/',this)">Copy</button>
-                </div>
-            </div>
-            <div class="cite-list" id="data-credits" style="margin-top:2rem;">
-                <div class="cite-pub">
-                    <div class="cite-pub-label">Data acknowledgements &mdash; infrared imagery</div>
-                    <p class="cite-pub-text" style="font-family:'DM Sans',sans-serif;">The Global IR Archive and the archived storm IR loops are built from two public datasets. Please cite them, and their data centers, in any work that uses imagery from TC-ATLAS.</p>
-                    <p class="cite-pub-text" style="margin-top:0.75rem;"><strong>MergIR (1998&ndash;present, 4 km, half-hourly):</strong> Janowiak, J., B. Joyce, and P. Xie, 2017: NCEP/CPC L3 Half Hourly 4km Global (60S&ndash;60N) Merged IR V1, edited by A. Savtchenko, Greenbelt, MD, Goddard Earth Sciences Data and Information Services Center (GES DISC), <a href="https://doi.org/10.5067/P4HZB9N27EKU" target="_blank" rel="noopener">doi:10.5067/P4HZB9N27EKU</a>. The MergIR data used here were acquired as part of the activities of NASA's Science Mission Directorate, and are archived and distributed by the Goddard Earth Sciences (GES) Data and Information Services Center (DISC).</p>
-                    <button class="cite-copy-landing" onclick="landingCopy('Janowiak, J., B. Joyce, and P. Xie, 2017: NCEP/CPC L3 Half Hourly 4km Global (60S-60N) Merged IR V1, edited by A. Savtchenko, Greenbelt, MD, Goddard Earth Sciences Data and Information Services Center (GES DISC), doi:10.5067/P4HZB9N27EKU',this)">Copy</button>
-                    <p class="cite-pub-text" style="margin-top:0.75rem;"><strong>GridSat-B1 (1980&ndash;2024, 0.07&deg;, 3-hourly):</strong> Knapp, K. R., and NOAA CDR Program, 2014: NOAA Climate Data Record (CDR) of Gridded Satellite Data from ISCCP B1 (GridSat-B1) Infrared Channel Brightness Temperature, Version 2. NOAA National Centers for Environmental Information, <a href="https://doi.org/10.7289/V59P2ZKR" target="_blank" rel="noopener">doi:10.7289/V59P2ZKR</a>. Knapp, K. R., and Coauthors, 2011: Globally gridded satellite (GridSat) observations for climate studies. <em>Bull. Amer. Meteor. Soc.</em>, <strong>92</strong>, 893&ndash;907, <a href="https://doi.org/10.1175/2011BAMS3039.1" target="_blank" rel="noopener">doi:10.1175/2011BAMS3039.1</a>. NOAA and NCEI cannot provide any warranty as to the accuracy, reliability, or completeness of furnished data; users assume responsibility to determine the usability of these data.</p>
-                    <button class="cite-copy-landing" onclick="landingCopy('Knapp, K. R., and NOAA CDR Program, 2014: NOAA Climate Data Record (CDR) of Gridded Satellite Data from ISCCP B1 (GridSat-B1) Infrared Channel Brightness Temperature, Version 2. NOAA National Centers for Environmental Information, doi:10.7289/V59P2ZKR. Knapp, K. R., and Coauthors, 2011: Globally gridded satellite (GridSat) observations for climate studies. Bull. Amer. Meteor. Soc., 92, 893-907, doi:10.1175/2011BAMS3039.1',this)">Copy</button>
-                    <p class="cite-pub-text" style="font-family:'DM Sans',sans-serif;margin-top:0.75rem;">Imagery on TC-ATLAS is re-encoded and recolored from these sources; it is not an official NASA or NOAA product, and neither agency endorses TC-ATLAS. Best-track positions and intensities are from <a href="https://www.ncei.noaa.gov/products/international-best-track-archive" target="_blank" rel="noopener">IBTrACS</a> (NOAA NCEI).</p>
-                </div>
-            </div>
-            <div style="display:flex;justify-content:center;margin-top:1.5rem;">
-                <button class="cite-bibtex-landing" onclick="landingCopyBibtex(this)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;" aria-hidden="true"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/></svg> Copy All BibTeX</button>
-            </div>
-        </div>
-    </section>
-
-    <!-- ── Contact ───────────────────────────────────────── -->
-    <section class="contact-section" id="contact">
-        <h2 class="section-title">Get in Touch</h2>
-        <p style="font-size:1.1rem;margin-bottom:2rem;opacity:0.9;">Questions about TC-ATLAS? Contact the developer.</p>
-        <div class="contact-info">
-            <p style="font-size:1.15rem;margin-bottom:0.75rem;"><strong>Dr. Michael Fischer</strong></p>
-            <p style="opacity:0.85;">TC-ATLAS Developer &middot; University of Miami</p>
-            <p style="margin-top:1rem;"><a href="mailto:mike.fischer@miami.edu" style="font-size:1rem;">mike.fischer@miami.edu</a></p>
-        </div>
-    </section>
     </main>
 
     <footer>
-        <div>Created by Michael S. Fischer &middot; University of Miami</div>
+        <div><a href="about.html">About</a> &middot; <a href="changelog.html">Updates</a> &middot; <a href="about.html#cite">How to cite</a></div>
+        <div style="margin-top:6px;">Created by Michael S. Fischer &middot; University of Miami</div>
         <div style="margin-top:6px;">Built with assistance from <a href="https://claude.ai" target="_blank" rel="noopener">Claude</a> (Anthropic)</div>
         <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);font-size:0.72rem;color:var(--text-dim);max-width:700px;margin-left:auto;margin-right:auto;line-height:1.5;">
             <strong>Disclaimer:</strong> TC-ATLAS is a research visualization platform developed at the University of Miami in collaboration with NOAA&rsquo;s Hurricane Research Division. It is provided for research and educational purposes only and is not intended for operational forecasting or decision-making. Data products are provided as-is without warranty. Real-time products may experience delays or interruptions. The developers assume no liability for the use or interpretation of information presented on this site.
@@ -898,31 +746,6 @@
     </footer>
 
     <script>
-    var _LANDING_BIBTEX = [
-        '@article{Fischer2022TCRadar,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Rogers, Robert F. and Gamache, John F.},\n  title   = {An Analysis of Tropical Cyclone Vortex and Convective Characteristics in Relation to Storm Intensity Using a Novel Airborne Doppler Radar Database},\n  journal = {Monthly Weather Review},\n  year    = {2022},\n  volume  = {150},\n  pages   = {2255--2278},\n  doi     = {10.1175/MWR-D-21-0223.1}\n}',
-        '@article{Fischer2024VortexTilt,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Dunion, Jason P. and Rogers, Robert F.},\n  title   = {An observational analysis of the relationship between tropical cyclone vortex tilt, precipitation structure, and intensity change},\n  journal = {Monthly Weather Review},\n  year    = {2024},\n  volume  = {152},\n  pages   = {203--225},\n  doi     = {10.1175/MWR-D-23-0089.1}\n}',
-        '@article{Fischer2025RapidIntensification,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Dunion, Jason P. and Rogers, Robert F.},\n  title   = {Are Rapidly Intensifying Tropical Cyclones Associated with Unique Vortex and Convective Characteristics?},\n  journal = {Monthly Weather Review},\n  year    = {2025},\n  volume  = {153},\n  pages   = {183--203},\n  doi     = {10.1175/MWR-D-24-0118.1}\n}',
-        '@misc{TCATLAS,\n  title  = {{TC-ATLAS}: Tropical Cyclone Analysis Tool for Live and Archived Structure},\n  author = {Fischer, Michael S.},\n  year   = {2024},\n  url    = {https://tcatlas.org/}\n}'
-    ].join('\n\n');
-
-    function landingCopy(text, btn) {
-        navigator.clipboard.writeText(text).then(function() {
-            var orig = btn.textContent;
-            btn.textContent = '\u2713 Copied';
-            btn.classList.add('copied');
-            setTimeout(function() { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
-        });
-    }
-
-    function landingCopyBibtex(btn) {
-        navigator.clipboard.writeText(_LANDING_BIBTEX).then(function() {
-            var orig = btn.textContent;
-            btn.textContent = '\u2713 Copied!';
-            btn.classList.add('copied');
-            setTimeout(function() { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
-        });
-    }
-
     // ── Live activity strip ───────────────────────────────
     // Populates the "N active TCs · Monitor refreshed X min ago" pill
     // from the same API endpoint the Real-Time Monitor uses. Fails
@@ -994,7 +817,8 @@
                     var label = nTC === 0 ? 'No active TCs'
                         : '<span class="activity-stat-val">' + nTC + '</span>&nbsp;active TC' + (nTC === 1 ? '' : 's');
                     if (nInvest) label += ' &middot; <span class="activity-stat-val">' + nInvest + '</span>&nbsp;invest' + (nInvest === 1 ? '' : 's');
-                    activeEl.innerHTML = '<span class="dot"></span>' + label;
+                    // One text span, so the stat's flex gap only separates the dot.
+                    activeEl.innerHTML = '<span class="dot"></span><span>' + label + '</span>';
                     activeEl.classList.remove('is-stale');
                 }
                 if (stripEl) stripEl.classList.toggle('has-active', active > 0);
