@@ -55,6 +55,7 @@
          script runs — warm the API connection from byte 0. -->
     <link rel="preconnect" href="https://api.tcatlas.org">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="changelog.css?v=20261009p2a">
 
     <style>
         :root {
@@ -528,83 +529,6 @@
         .start-card-arrow { color: var(--blue-light); font-size: 1.1rem; flex-shrink: 0; align-self: center; opacity: 0.6; transition: opacity 0.2s, transform 0.2s; }
         .start-card:hover .start-card-arrow { opacity: 1; transform: translateX(2px); }
 
-        /* ── Changelog timeline ──────────────────────────── */
-        .changelog-list {
-            max-width: 780px;
-            margin: 0 auto;
-            position: relative;
-            padding-left: 1rem;
-        }
-        .changelog-list::before {
-            content: '';
-            position: absolute;
-            left: 6px;
-            top: 6px;
-            bottom: 6px;
-            width: 1px;
-            background: var(--border-light);
-        }
-        .changelog-entry {
-            position: relative;
-            display: grid;
-            grid-template-columns: 110px 1fr;
-            gap: 1.25rem;
-            padding: 0.75rem 0 0.75rem 1.25rem;
-            align-items: baseline;
-        }
-        .changelog-entry::before {
-            content: '';
-            position: absolute;
-            left: -0.25rem;
-            top: 1.1rem;
-            width: 9px;
-            height: 9px;
-            border-radius: 50%;
-            background: var(--um-orange);
-            box-shadow: 0 0 0 3px var(--navy);
-        }
-        .changelog-entry:not(:first-child)::before {
-            background: var(--slate);
-            box-shadow: 0 0 0 3px var(--navy);
-        }
-        .changelog-date {
-            font-size: 0.72rem;
-            font-weight: 600;
-            color: var(--slate);
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-            white-space: nowrap;
-            font-variant-numeric: tabular-nums;
-        }
-        .changelog-text {
-            font-size: 0.92rem;
-            color: var(--text);
-            line-height: 1.6;
-        }
-        .changelog-text strong { color: var(--blue-light); font-weight: 600; }
-        .changelog-footer {
-            text-align: center;
-            margin-top: 1.5rem;
-            font-size: 0.82rem;
-            color: var(--slate);
-        }
-        .changelog-footer a {
-            color: var(--blue-light);
-            text-decoration: none;
-            border-bottom: 1px dotted rgba(91,156,255,0.4);
-            transition: color 0.2s, border-color 0.2s;
-        }
-        .changelog-footer a:hover { color: var(--cyan); border-color: var(--cyan); }
-        @media (max-width: 600px) {
-            .changelog-entry {
-                grid-template-columns: 1fr;
-                gap: 0.25rem;
-                padding-left: 1rem;
-            }
-            .changelog-date { font-size: 0.68rem; }
-            .changelog-text { font-size: 0.85rem; }
-        }
-
         /* ── Responsive ──────────────────────────────────── */
         @media (max-width: 1100px) {
             .platform-grid { grid-template-columns: repeat(2, 1fr); }
@@ -716,7 +640,7 @@
             <h1 class="hero-title">TC-ATLAS</h1>
         </div>
         <p class="hero-subtitle">Tropical Cyclone Analysis Tool for Live and Archived Structure</p>
-        <p class="hero-desc">A multi-source platform for exploring tropical cyclone vortex structure. TC-ATLAS brings together airborne Doppler radar, passive microwave and infrared satellite imagery, ERA5 environmental diagnostics, dropsonde profiles, and flight-level observations into one unified interactive tool.</p>
+        <p class="hero-desc">Live monitoring of every active tropical cyclone, with airborne radar, reconnaissance and best-track archives for studying storm structure.</p>
 
         <!-- ── Live activity strip ────────────────────────── -->
         <div class="activity-strip" id="activity-strip" role="status" aria-label="Live activity">
@@ -901,54 +825,10 @@
         <div class="content-section">
             <h2 class="section-title">Recent <span class="accent">Updates</span></h2>
             <p class="section-desc">TC-ATLAS is actively maintained — new data sources, analysis tools, and UI improvements are added continuously.</p>
-            <div class="changelog-list">
-                <div class="changelog-entry">
-                    <div class="changelog-date">Aug 24, 2026</div>
-                    <div class="changelog-text"><strong>Genesis clusters &amp; wave families.</strong> The DeepMind ensemble markers are now labeled <strong>genesis clusters</strong> &mdash; automated clusters of member genesis events, not observed disturbances &mdash; and clusters that are scenarios of the <strong>same physical wave</strong> are linked into families on the <a href="realtime_ir.html">Real-Time Monitor</a> map (translucent violet ribbon + marker rings) with a combined, deduplicated probability that counts each ensemble member once. The clustering and linking method is documented in a new <a href="realtime_ir.html#genesis-methods">Methods description</a> on the monitor itself.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Jul 15, 2026</div>
-                    <div class="changelog-text"><a href="realtime_ir.html">Real-Time Monitor</a> forecast focus: a new <strong>&ldquo;Off&rdquo;</strong> option on the IR/Vis/WV switch hides the satellite layer so the DeepMind ensemble and environmental overlays read unobscured. DeepMind <strong>FNV3 cyclogenesis</strong> probabilities are now labeled explicitly as the model odds of a disturbance reaching <strong>tropical-storm strength (&ge;34 kt)</strong>, and the 1000-member raw-ensemble spaghetti renders instantly.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Jul 3, 2026</div>
-                    <div class="changelog-text"><strong>Objective eye-fix &amp; storm favorability.</strong> The monitor snaps the storm pin to an objective IR <strong>eye center</strong> with an eye / cold-top brightness-temperature readout and a follow-storm mode. Each storm card gained a <strong>favorability dashboard</strong> &mdash; a realtime <strong>ventilation index</strong> (Tang &amp; Emanuel) alongside ocean <strong>SST, SST anomaly, and ocean heat content (TCHP)</strong> &mdash; and the storm-detail imagery now carries frame-aligned <strong>GFS environmental overlays</strong> with init-cycle captions and hover readouts.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Jun 29, 2026</div>
-                    <div class="changelog-text"><strong>Ground radar on the map.</strong> Storm-page and global-map <strong>NEXRAD</strong> reflectivity now stream as GL tiles (IEM N0Q) at no added compute, and the <a href="explorer.html">TC-RADAR Explorer</a> gained a two-panel view with the airborne Doppler field draped directly on the IR map.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Jun 28, 2026</div>
-                    <div class="changelog-text"><strong>DeepMind FNV3 ensemble tools.</strong> The 1000-member cyclogenesis ensemble gained a <strong>Structure</strong> modal (RMW, size, wind-rose, and wind-area vs. IBTrACS climatology), an <strong>Intensity-Change / RI trends</strong> panel with median LMI and intensity IQR, an <strong>ACE distribution</strong>, and <strong>Vmax &harr; MSLP</strong> toggles on every intensity chart. Members are clustered into labeled disturbances on the global map.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Jun 27, 2026</div>
-                    <div class="changelog-text"><strong>TC-ATLAS global satellite mosaic.</strong> The monitor now renders its own worldwide geostationary mosaic in <strong>IR, Visible, and Water Vapor</strong>, served from our CDN as GPU-recolored single-channel tiles &mdash; full-brightness, multiple colormaps, seamless across the dateline, with animated-GIF export.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Jun 25, 2026</div>
-                    <div class="changelog-text"><strong>New map engine &amp; 3D convection.</strong> The Real-Time Monitor and <a href="global_archive.html">Global Archive</a> moved to a <strong>MapLibre GL</strong> rendering engine (smoother zoom, GPU overlays). A one-click <strong>3D</strong> pill extrudes cold IR cloud tops into relief with Tilt/Height sliders, drag-to-orbit, and branded <strong>3D-orbit GIF</strong> export, and the Environmental Analysis menu added <strong>SST anomaly and relative-SST</strong> layers.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Jun 13, 2026</div>
-                    <div class="changelog-text">TC-ATLAS moved to its own domain, <a href="https://tcatlas.org/"><strong>tcatlas.org</strong></a>, and gained <strong>dynamic social-preview cards</strong> that render the current active-storm state when the site is shared.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">May 25, 2026</div>
-                    <div class="changelog-text"><strong>Near-real-time microwave &amp; aircraft recon.</strong> Added NRT <strong>microwave</strong> overpasses (AMSR2, GMI, SSMIS &mdash; 89 GHz PCT + 37 GHz color) with satellite pass prediction, an aircraft <strong>recon overlay</strong> (HDOB wind barbs, dropsondes, VDM), and a real-time <strong>Tail Doppler Radar</strong> tab with a live wind-center solver.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">May 19, 2026</div>
-                    <div class="changelog-text">New <strong>Seasonal</strong> tab on the Real-Time Monitor &mdash; seven panels spanning a <strong>live SST-anomaly map</strong>, regional environment evolution (shear, MPI, RH, TCWV&hellip;), pre-season SST &times; annual ACE, OISST correlation and analog-season maps, and a climate-index dashboard (ENSO, AMO, MJO, BSISO&hellip;).</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">May 17, 2026</div>
-                    <div class="changelog-text">New <strong>Subseasonal</strong> tab &mdash; MJO and BSISO <strong>phase clocks</strong> plus 60-day <strong>Wheeler&ndash;Kiladis-filtered OLR Hovm&ouml;llers</strong> (MJO, Kelvin, ER, MRG, TD-type) with active TCs projected on as longitude traces and a GEFS 10-day forecast extension.</div>
-                </div>
-            </div>
+            <!-- Filled from changelog.html (the one source): its newest three entries. -->
+            <div class="changelog-list" id="changelog-latest" aria-live="polite"></div>
             <div class="changelog-footer">
-                <a href="https://github.com/MichaelFischerWx/TC-ATLAS/commits/main" target="_blank" rel="noopener">View full commit history on GitHub →</a>
+                <a href="changelog.html">All updates &rarr;</a>
             </div>
         </div>
     </section>
@@ -1064,6 +944,12 @@
                 return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
             });
         }
+        // Invests (ATCF 90-99, or a name like "Invest 97L") are not yet
+        // tropical cyclones, so they are counted and labeled separately.
+        function isInvest(s) {
+            return /^[A-Za-z]{2}9\d{4}$/.test(String(s.atcf_id || ''))
+                || /^invest\b/i.test(s.name || '');
+        }
         // Render named, clickable chips that deep-link into the Real-Time
         // Monitor (realtime_ir.html#storm=<ATCF>), strongest storm first.
         function renderStormChips(storms) {
@@ -1082,9 +968,7 @@
                 // undesignated by definition and never get an intensity-class
                 // chip (same rule the Real-Time Monitor's markers follow).
                 // The name already reads "Invest 97L", so show no chip at all.
-                var isInvest = /^[A-Za-z]{2}9\d{4}$/.test(atcf)
-                    || /^invest\b/i.test(name);
-                var cat = isInvest ? '' : (s.category || '');
+                var cat = isInvest(s) ? '' : (s.category || '');
                 var href = /^[A-Za-z]{2}\d{6}$/.test(atcf)
                     ? 'realtime_ir.html#storm=' + encodeURIComponent(atcf)
                     : 'realtime_ir.html';
@@ -1101,16 +985,17 @@
             .then(function (data) {
                 var storms = (data && data.storms) || [];
                 var active = storms.length;
+                var nInvest = storms.filter(isInvest).length;
+                var nTC = active - nInvest;
                 var activeEl = document.getElementById('activity-active');
                 var stripEl = document.getElementById('activity-strip');
                 if (activeEl) {
-                    var val = activeEl.querySelector('.activity-stat-val');
-                    if (val) val.textContent = active;
+                    // "5 active TCs · 1 invest" — an invest is not a TC.
+                    var label = nTC === 0 ? 'No active TCs'
+                        : '<span class="activity-stat-val">' + nTC + '</span>&nbsp;active TC' + (nTC === 1 ? '' : 's');
+                    if (nInvest) label += ' &middot; <span class="activity-stat-val">' + nInvest + '</span>&nbsp;invest' + (nInvest === 1 ? '' : 's');
+                    activeEl.innerHTML = '<span class="dot"></span>' + label;
                     activeEl.classList.remove('is-stale');
-                    if (active === 0) {
-                        // Reframe the label when no storms are active
-                        activeEl.innerHTML = '<span class="dot"></span>No active TCs';
-                    }
                 }
                 if (stripEl) stripEl.classList.toggle('has-active', active > 0);
                 renderStormChips(storms);
@@ -1138,6 +1023,28 @@
                     var rval = refreshEl.querySelector('.activity-stat-val');
                     if (rval) rval.textContent = 'offline';
                 }
+            });
+    })();
+
+    // ── Recent updates: the newest three entries of changelog.html ──
+    // changelog.html is the only place entries are written; if it can't be
+    // read, the section keeps just its "All updates" link.
+    (function () {
+        var host = document.getElementById('changelog-latest');
+        if (!host || !window.fetch || !window.DOMParser) return;
+        fetch('changelog.html', { cache: 'no-cache' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+            .then(function (html) {
+                var doc = new DOMParser().parseFromString(html, 'text/html');
+                var entries = doc.querySelectorAll('#changelog > .changelog-entry');
+                if (!entries.length) throw new Error('no entries');
+                for (var i = 0; i < entries.length && i < 3; i++) {
+                    host.appendChild(document.importNode(entries[i], true));
+                }
+            })
+            .catch(function (e) {
+                host.hidden = true;
+                try { console.warn('[TC-ATLAS] recent updates unavailable:', e); } catch (x) {}
             });
     })();
     </script>
