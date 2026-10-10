@@ -50,6 +50,7 @@
     <title>Real-Time Monitor — TC-ATLAS</title>
     <script src="theme.js?v=20261009p1a"></script>
     <script defer src="tc_export.js?v=20260803c"></script>
+    <script defer src="tc_errors.js?v=20261010m1"></script>
 
     <!-- Leaflet CSS kept (chrome reuses some .leaflet-* classes); map engine is
          MapLibre via the lflet_gl.js facade (gl-engine-swap branch). -->
@@ -82,7 +83,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261009p1f">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261010m1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -115,7 +116,7 @@
     </script>
 
     <!-- Styles -->
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20261009p1d">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20261010m1">
     <link rel="stylesheet" href="realtime_ir_styles.css?v=20261009p1d">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261009p1a">
@@ -127,21 +128,20 @@
     <header class="topbar" role="banner">
         <div class="topbar-inner">
             <div class="topbar-brand">
-                <img src="tc-atlas-favicon-64.png?v=20261009p1a" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
-                <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                <a class="topbar-home" href="index.html" aria-label="TC-ATLAS home">
+                    <img src="tc-atlas-favicon-64.png?v=20261009p1a" alt="" class="topbar-icon" width="28" height="28">
+                    <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                </a>
                 <div class="topbar-divider"></div>
                 <div class="topbar-subtitle">Real-Time Monitor</div>
             </div>
             <nav aria-label="Main navigation">
                 <ul class="topbar-nav">
-                    <li><a href="index.html" role="button">Home</a></li>
-                    <li><a href="explorer.html" role="button"><span class="nav-full">TC-RADAR</span><span class="nav-short">Radar</span></a></li>
-                    <li><a href="realtime_ir.html" role="button" class="nav-active"><span class="nav-full">Real-Time Monitor</span><span class="nav-short">RT Monitor</span></a></li>
-                    <li><a href="global_archive.html" role="button"><span class="nav-full">Global Archive</span><span class="nav-short">Global</span></a></li>
-                    <li><a href="tc_climatology.html" role="button"><span class="nav-full">TC Climatology</span><span class="nav-short">Climo</span></a></li>
-                    <li><a href="explorer.html?tab=composites" role="button"><span class="nav-full">Composites</span><span class="nav-short">Comp.</span></a></li>
-                    <li><a href="index.html#about" role="button">About</a></li>
-                    <li><a href="index.html#cite" role="button">Cite</a></li>
+                    <li><a href="realtime_ir.html" class="nav-active" aria-current="page"><span class="nav-full">Real-Time Monitor</span><span class="nav-short">Monitor</span></a></li>
+                    <li><a href="global_archive.html"><span class="nav-full">Global Archive</span><span class="nav-short">Archive</span></a></li>
+                    <li><a href="explorer.html">TC-RADAR</a></li>
+                    <li><a href="tc_climatology.html"><span class="nav-full">TC Climatology</span><span class="nav-short">Climatology</span></a></li>
+                    <li><a href="about.html">About</a></li>
                 </ul>
             </nav>
                         <button class="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
@@ -375,13 +375,15 @@
                         <span id="ir-frame-time" class="ir-frame-time-label"></span>
                         <span id="ir-satellite-label" class="ir-sat-label"></span>
                     </div>
-                    <!-- Product toggle (IR / Visible / Water Vapor / Combo) -->
+                    <!-- Product toggle: same labels and order as the Global Map's switch
+                         (IR · Vis · WV · Combo), then Vigor, which only exists here
+                         because it is storm-relative. -->
                     <div id="ir-product-toggle" class="ir-product-toggle">
                         <button id="ir-product-eir" class="ir-product-btn ir-product-active" title="Clean infrared (Band 13, ~10.3 µm)">IR</button>
-                        <button id="ir-product-vis" class="ir-product-btn" title="Red visible (Band 2 / Band 3 — daytime only)">Visible</button>
+                        <button id="ir-product-vis" class="ir-product-btn" title="Visible (Band 2 / Band 3) — daytime only">Vis</button>
                         <button id="ir-product-wv" class="ir-product-btn" title="Mid-level water vapor (Band 8, ~6.2 µm)">WV</button>
-                        <button id="ir-product-vigor" class="ir-product-btn" title="IR vigor — brightness temperature minus the coldest 4-hour-mean temperature within 200 km, following the storm. Near or below zero marks cloud tops as cold as the coldest the storm has recently sustained.">Vigor</button>
                         <button id="ir-product-combo" class="ir-product-btn" title="Sandwich composite — visible cloud texture with IR-colored cold tops (night side falls back to IR)">Combo</button>
+                        <button id="ir-product-vigor" class="ir-product-btn" title="IR vigor — brightness temperature minus the coldest 4-hour-mean temperature within 200 km, following the storm. Near or below zero marks cloud tops as cold as the coldest the storm has recently sustained.">Vigor</button>
                     </div>
                     <!-- Env layers control — drape GFS analyses (shear, RH, SST,
                          heights, vorticity, winds) over the zoomed storm view.
@@ -1515,14 +1517,14 @@
              secondary tab bar above (no gap from a header in between).
              Sticky pinned so it stays accessible as the user scrolls. -->
         <nav class="seasonal-subnav" aria-label="Seasonal panels">
-            <a href="#seasonal-panel-ace-pace" data-target="seasonal-panel-ace-pace">A · Season ACE pace</a>
-            <a href="#seasonal-panel-anom-map" data-target="seasonal-panel-anom-map">B · Live anomaly</a>
-            <a href="#seasonal-panel-timeseries" data-target="seasonal-panel-timeseries">C · Regional environment</a>
-            <a href="#seasonal-panel-evolution" data-target="seasonal-panel-evolution">D · Seasonal evolution</a>
-            <a href="#seasonal-panel-scatter" data-target="seasonal-panel-scatter">E · SST × ACE</a>
-            <a href="#seasonal-panel-correlation" data-target="seasonal-panel-correlation">F · Correlation map</a>
-            <a href="#seasonal-panel-analogs" data-target="seasonal-panel-analogs">G · Analog seasons</a>
-            <a href="#seasonal-panel-indices" data-target="seasonal-panel-indices">H · Climate indices</a>
+            <a href="#seasonal-panel-ace-pace" data-target="seasonal-panel-ace-pace">Season ACE pace</a>
+            <a href="#seasonal-panel-anom-map" data-target="seasonal-panel-anom-map">Live anomaly</a>
+            <a href="#seasonal-panel-timeseries" data-target="seasonal-panel-timeseries">Regional environment</a>
+            <a href="#seasonal-panel-evolution" data-target="seasonal-panel-evolution">Seasonal evolution</a>
+            <a href="#seasonal-panel-scatter" data-target="seasonal-panel-scatter">SST × ACE</a>
+            <a href="#seasonal-panel-correlation" data-target="seasonal-panel-correlation">Correlation map</a>
+            <a href="#seasonal-panel-analogs" data-target="seasonal-panel-analogs">Analog seasons</a>
+            <a href="#seasonal-panel-indices" data-target="seasonal-panel-indices">Climate indices</a>
         </nav>
 
         <div class="seasonal-header">
@@ -1547,7 +1549,7 @@
                  synoptic hour rather than to IBTrACS's ingest lag. -->
             <section class="seasonal-panel" id="seasonal-panel-ace-pace">
                 <h3 class="seasonal-panel-title">
-                    A · Season ACE Pace
+                    Season ACE Pace
                     <span class="seasonal-panel-subtitle">live vs 1991-2020 climatology</span>
                 </h3>
                 <p class="seasonal-panel-desc">
@@ -1606,7 +1608,7 @@
 
             <!-- Panel B: Live SST anomaly map (global by default) -->
             <section class="seasonal-panel" id="seasonal-panel-anom-map">
-                <h3 class="seasonal-panel-title">B · Live SST &amp; Atmosphere</h3>
+                <h3 class="seasonal-panel-title">Live SST &amp; Atmosphere</h3>
                 <div class="seasonal-ts-controls">
                     <label>Variable
                         <select id="seasonal-anom-var" title="SST and atmospheric anomalies — both relative to the same 1991-2020 climatology. SST uses today's OISST; the atmosphere uses the latest GFS analysis cycle.">
@@ -1666,7 +1668,7 @@
 
             <!-- Panel C: Regional environment evolution time series -->
             <section class="seasonal-panel" id="seasonal-panel-timeseries">
-                <h3 class="seasonal-panel-title">C · Regional Environment Evolution</h3>
+                <h3 class="seasonal-panel-title">Regional Environment Evolution</h3>
                 <div class="seasonal-ts-controls">
                     <label>Region
                         <select id="seasonal-ts-region">
@@ -1748,7 +1750,7 @@
                  ibtracs_storms.json the TC Climatology page already loads. -->
             <section class="seasonal-panel" id="seasonal-panel-evolution">
                 <h3 class="seasonal-panel-title">
-                    D · Seasonal Evolution
+                    Seasonal Evolution
                     <span class="seasonal-panel-subtitle">ERA5 00Z analysis snapshot</span>
                 </h3>
                 <p class="seasonal-panel-desc">
@@ -1772,7 +1774,7 @@
                                 title="Calendar year to animate. Years populate from the era5_daily archive manifest."></select>
                     </label>
                     <label>Variable
-                        <select id="seasonal-evo-var" title="Daily-resolution options (shear / wind200 / wind850) come from the era5_daily archive with wind barbs overlaid; monthly-only options come from the GC-ATLAS monthly tile catalog (same source as Panel C) and snap the resolution to monthly.">
+                        <select id="seasonal-evo-var" title="Daily options (shear, 200-hPa wind, 850-hPa wind) come from daily ERA5 analyses, drawn with wind barbs. Monthly-only options come from monthly ERA5 means (the same source as Regional Environment Evolution) and switch the resolution to monthly.">
                             <optgroup label="Daily archive (shear + level winds, with barbs)">
                                 <option value="shear" selected>Deep-layer shear (200-850)</option>
                                 <option value="wind200">Wind at 200 hPa</option>
@@ -1901,7 +1903,7 @@
 
             <!-- Panel E: 2D phase-space scatter -->
             <section class="seasonal-panel" id="seasonal-panel-scatter">
-                <h3 class="seasonal-panel-title">E · Pre-season SST × Annual ACE</h3>
+                <h3 class="seasonal-panel-title">Pre-season SST × Annual ACE</h3>
                 <div class="seasonal-scatter-controls">
                     <label>X-axis
                         <select id="seasonal-scatter-x">
@@ -1991,7 +1993,7 @@
 
             <!-- Panel F: ACE × SST correlation map (interactive toggle) -->
             <section class="seasonal-panel" id="seasonal-panel-correlation">
-                <h3 class="seasonal-panel-title">F · ACE × SST Correlation</h3>
+                <h3 class="seasonal-panel-title">ACE × SST Correlation</h3>
                 <p class="seasonal-panel-desc">
                     Pixel-wise Pearson correlation between monthly SST and
                     annual basin ACE (1982-present). Red = warm SST coincides
@@ -2062,7 +2064,7 @@
 
             <!-- Panel G: Analog seasons ranking -->
             <section class="seasonal-panel" id="seasonal-panel-analogs">
-                <h3 class="seasonal-panel-title">G · Analog Seasons</h3>
+                <h3 class="seasonal-panel-title">Analog Seasons</h3>
                 <p class="seasonal-panel-desc" id="seasonal-an-method-desc">
                     Top-10 historical analogs to the target year/month.
                     <strong>Grid-weighted by |r|</strong> (default and
@@ -2174,7 +2176,7 @@
 
             <!-- Panel H: Climate-index multi-trace time series -->
             <section class="seasonal-panel" id="seasonal-panel-indices">
-                <h3 class="seasonal-panel-title">H · Climate Indices</h3>
+                <h3 class="seasonal-panel-title">Climate Indices</h3>
                 <p class="seasonal-panel-desc">
                     Derived from the same OISST record as Panels A-E. ENSO
                     horizontal markers at ±0.5 °C anomaly are the
@@ -2214,7 +2216,7 @@
 
 
     <!-- ── Recon View (Missions · TDR · Flight-Level · VDM) ───── -->
-    <section id="recon-main" class="recon-main" style="display:none;" role="main" aria-label="Real-Time Reconnaissance">
+    <section id="recon-main" class="recon-main" style="display:none;" role="main" aria-label="Recon">
         <!-- Inner sub-tab strip -->
         <div class="recon-subbar">
             <button class="recon-sub-tab" data-sub="missions" onclick="window.switchReconSub('missions')">Missions</button>
@@ -2284,8 +2286,8 @@
                             </span>
                             <span class="recon-hdob-satgroup" title="TC-ATLAS global satellite mosaic — the same fresh imagery as the Global Map (IR / Water Vapor / Visible)">
                                 <button class="ir-product-btn ir-product-active" data-rprod="ir" onclick="window._reconHdobSetSat('ir')" title="Clean infrared (Band 13, ~10.3 µm) — day &amp; night">IR</button>
+                                <button class="ir-product-btn" data-rprod="vis" onclick="window._reconHdobSetSat('vis')" title="Visible reflectance — daytime only">Vis</button>
                                 <button class="ir-product-btn" data-rprod="wv" onclick="window._reconHdobSetSat('wv')" title="Mid-level water vapor (~6.9 µm) — day &amp; night">WV</button>
-                                <button class="ir-product-btn" data-rprod="vis" onclick="window._reconHdobSetSat('vis')" title="Visible reflectance — daytime only">Visible</button>
                                 <button class="ir-product-btn" data-rprod="off" onclick="window._reconHdobSetSat('off')" title="Hide satellite (plain basemap)">Off</button>
                             </span>
                             <span id="recon-hdob-layers" class="recon-hdob-layers" title="Show or hide each map symbol"></span>
@@ -2339,8 +2341,8 @@
         <div class="recon-sub-panel" data-sub="tdr" style="display:none;">
             <!-- BEGIN moved Real-Time TDR content -->
         <div class="rt-header">
-            <h2 class="rt-header-title">Real-Time TDR Analysis</h2>
-            <p class="rt-header-desc">Browse and visualize real-time Tail Doppler Radar analyses from NOAA P-3 reconnaissance missions.</p>
+            <h2 class="rt-header-title">Tail Doppler Radar</h2>
+            <p class="rt-header-desc">Real-time tail Doppler radar analyses from NOAA P-3 reconnaissance missions.</p>
         </div>
 
         <!-- Mission / File selection toolbar -->
@@ -2779,14 +2781,14 @@
     <script defer src="tc_mw_layer.js?v=20260920a"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261007wr"></script>
-    <script defer src="realtime_ir.js?v=20261009p1f"></script>
+    <script defer src="realtime_ir.js?v=20261010m1"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
          eager for the map-tab recon-overlay sonde skew-Ts. The recon /
          subseasonal / seasonal tab modules (~1 MB combined) lazy-load on first
          tab activation — see _lazyViewMods in the tab controller below. -->
-    <script defer src="satellite.js?v=20260930cm1"></script>
+    <script defer src="satellite.js?v=20261010m1"></script>
 
     <script>
     /* Tab switching between Map, Satellite, Subseasonal, and Seasonal views */
@@ -2884,7 +2886,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261009tilt';
+        var _LAZY_ASSET_V = '?v=20261010m1';
         var _lazyViewMods = {
             recon:       { js: ['tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
@@ -3295,7 +3297,7 @@
                 <p><strong>Genesis definition.</strong> Each ensemble member's forecast tracks are scanned for the first point at which the member reaches tropical-storm strength (&ge;34 kt). We deliberately use TS strength rather than tropical-depression genesis: it filters out weak vortices whose closed-circulation status is ambiguous in an automated tracker, so these probabilities read slightly differently than NHC outlook percentages.</p>
                 <p><strong>Clustering.</strong> First-genesis points are binned on a 3&deg; grid, local density peaks seed the clusters, and each member genesis event is assigned to the nearest peak within 1,000 km whose mean genesis time agrees to within &plusmn;60 hours. A marker's formation probability is the count of <em>distinct</em> ensemble members in its cluster divided by the ensemble size &mdash; no member is counted twice within a marker. A member landing in two clusters closer than ~500 km is kept only in the nearer one, and a conservative merge step reconnects a single system that genesis-timing spread has split into adjacent fragments (the fragments' mean tracks must travel together at shared valid times, and their members must overlap in space like one population rather than two systems in tandem).</p>
                 <p><strong>Wave families (linking).</strong> One physical wave whose members disagree about <em>where</em> genesis first occurs still appears as several clusters strung along its corridor. A linking pass groups those sibling scenarios into a family &mdash; without changing any per-cluster number &mdash; using two independent tests. The <em>corridor test</em> compares cluster-mean positions at the same valid times (so a second wave trailing on the same track never matches: at any instant it is far behind), backstopped by a member-spread ratio that separates one population from two systems traveling in tandem. The <em>exclusivity test</em> uses membership statistics: sibling scenarios compete for members, because a member that first develops in one place cannot also first develop in another &mdash; so shared membership between true siblings collapses far below the chance rate expected of independent systems. A third, <em>kinematic test</em> covers the cohort structure the first two cannot see &mdash; members that stay weak and develop far downstream, whose tracks never coexist with the early developers': anchored on an invest's position at the forecast's start, each cluster's genesis implies a propagation speed, and clusters whose implied speeds agree (within the physical easterly-wave band, along the same bearing, with anti-correlated membership) are genesis events on one phase line &mdash; one wave &mdash; while a cluster implying a clearly different speed is a distinct system even when it sits on the same corridor. Linked clusters are drawn with violet marker rings and a translucent violet ribbon that follows the family's deduplicated <em>net mean track</em> &mdash; the wave's overall corridor, which no single cluster's mean can show in a start/stop/re-develop scenario (the ribbon deliberately carries no intensity information, because a per-hour family average blends members at very different lifecycle stages) &mdash; and their combined probability counts each ensemble member once &mdash; which is why the per-cluster percentages must <strong>never simply be added</strong>: some members produce a genesis event in more than one cluster (develop, decay, and re-develop downstream), and the family union removes that double counting.</p>
-                <p>The clustering and linking are fully automated and their thresholds were calibrated against known same-wave and known-distinct cluster pairs; like any automated method they can occasionally split one system or group two. Questions and suggestions are welcome via the <a href="index.html#contact" target="_blank" rel="noopener">contact section</a> on the home page.</p>
+                <p>The clustering and linking are fully automated and their thresholds were calibrated against known same-wave and known-distinct cluster pairs; like any automated method they can occasionally split one system or group two. Questions and suggestions are welcome via the <a href="about.html#contact" target="_blank" rel="noopener">contact section</a> of the About page.</p>
             </div>
         </div>
     </div>

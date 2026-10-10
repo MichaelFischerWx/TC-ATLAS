@@ -45,21 +45,45 @@
     // so stalls surface as a normal rejection the caller can show as a
     // retry-able error. Default 20 s — generous for a Cloud Run cold
     // start, short enough that a truly dead request doesn't hang the UI.
+    // Every monitor request goes through _rtFetch so none can hang forever
+    // and leave its spinner up. The deadline covers the whole exchange,
+    // headers AND body: the timer is left running on success, so a body
+    // still streaming at the deadline aborts too, and a timer firing after
+    // the body was read is a no-op. A caller's own signal (supersede /
+    // cancel) still aborts it as before. Timeouts reject with a
+    // TimeoutError, so code that ignores AbortError (a superseded request)
+    // doesn't swallow them. Returns the Response: call sites keep their own
+    // status handling.
+    var _RT_FETCH_MS = 20000;        // API JSON, CDN manifests, small files
+    var _RT_FETCH_SLOW_MS = 60000;   // binary bundles, multi-MB files, cold-compute endpoints
+    function _rtFetch(url, opts, timeoutMs) {
+        opts = opts ? Object.assign({}, opts) : {};
+        if (typeof AbortController === 'undefined') return fetch(url, opts);
+        var ctrl = new AbortController(), outer = opts.signal;
+        var onOuterAbort = function () { ctrl.abort(); };
+        if (outer) {
+            if (outer.aborted) ctrl.abort();
+            else outer.addEventListener('abort', onOuterAbort);
+        }
+        opts.signal = ctrl.signal;
+        var timer = setTimeout(function () {
+            if (outer) outer.removeEventListener('abort', onOuterAbort);
+            try { ctrl.abort(new DOMException('The request timed out.', 'TimeoutError')); }
+            catch (e) { ctrl.abort(); }
+        }, timeoutMs || _RT_FETCH_MS);
+        return fetch(url, opts).catch(function (e) {
+            clearTimeout(timer);
+            if (outer) outer.removeEventListener('abort', onOuterAbort);
+            throw e;
+        });
+    }
     function _rtFetchJSON(url, opts, timeoutMs) {
-        opts = opts || {};
+        opts = opts ? Object.assign({}, opts) : {};
         if (!('cache' in opts)) opts.cache = 'no-store';
-        var ms = timeoutMs || 20000;
-        var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-        if (ctrl && !opts.signal) opts.signal = ctrl.signal;
-        var timer = ctrl ? setTimeout(function () {
-            try { ctrl.abort(); } catch (e) {}
-        }, ms) : null;
-        return fetch(url, opts)
-            .then(function (r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
-            .finally(function () { if (timer) clearTimeout(timer); });
+        return _rtFetch(url, opts, timeoutMs).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        });
     }
 
     // Theme-aware Plotly gridline color (the old hardcoded faint-white
@@ -479,7 +503,7 @@
         _coastlineQueue.push(targetMap);
         if (_coastlineLoading) return;
         _coastlineLoading = true;
-        fetch('assets/coastlines/ne_10m_coastline_simplified.geojson')
+        _rtFetch('assets/coastlines/ne_10m_coastline_simplified.geojson', null, _RT_FETCH_SLOW_MS)
             .then(function (r) { return r.json(); })
             .then(function (geojson) {
                 _coastlineGeoJSON = geojson;
@@ -497,7 +521,7 @@
         _coastlineHiQueue.push(cb);
         if (_coastlineHiLoading) return;
         _coastlineHiLoading = true;
-        fetch('assets/coastlines/ne_10m_coastline.geojson')
+        _rtFetch('assets/coastlines/ne_10m_coastline.geojson', null, _RT_FETCH_SLOW_MS)
             .then(function (r) { return r.json(); })
             .then(function (g) {
                 _coastlineHiGeoJSON = g;
@@ -1456,7 +1480,9 @@
         return null;
     }
 
-    /** Format UTC timestamp for display */
+    var _MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    /** Format a UTC timestamp for display in the site-wide form
+     *  "9 Oct 21:10 UTC" (day month, 24-h, no year: the monitor is live). */
     function fmtUTC(isoStr) {
         if (!isoStr) return '\u2014';
         try {
@@ -1465,12 +1491,16 @@
             // ("YYYYMMDDHHMM"), which new Date() can't parse \u2192 NaN. Handle both.
             if (/^\d{12}$/.test(s)) {
                 d = new Date(Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12)));
-            } else { d = new Date(isoStr); }
-            var mo = String(d.getUTCMonth() + 1).padStart(2, '0');
-            var day = String(d.getUTCDate()).padStart(2, '0');
+            } else {
+                // An ISO time with no offset is a UTC stamp here; new Date()
+                // would read it as local time.
+                if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)) s = s.replace(' ', 'T') + 'Z';
+                d = new Date(s);
+            }
+            if (isNaN(d.getTime())) return String(isoStr);
             var hh = String(d.getUTCHours()).padStart(2, '0');
             var mm = String(d.getUTCMinutes()).padStart(2, '0');
-            return mo + '/' + day + ' ' + hh + ':' + mm + ' UTC';
+            return d.getUTCDate() + ' ' + _MON3[d.getUTCMonth()] + ' ' + hh + ':' + mm + ' UTC';
         } catch (e) { return isoStr; }
     }
 
@@ -1969,7 +1999,7 @@
         // Default (idx) reads v3's frames.json; v2 is dropped after cutover. Timestamps
         // are builder-identical, so every _mosaicFrames/_mosaicTs consumer keeps working.
         var _fbase = _IR2A ? _ir2aRoot('ir') : _MOSAIC_BASE;
-        _mosaicLoad = fetch(_fbase + '/frames.json', { cache: 'no-store' })
+        _mosaicLoad = _rtFetch(_fbase + '/frames.json', { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (j) { _mosaicFrames = (j && j.frames) || [];
                 _mosaicTs = _mosaicFrames[_mosaicFrames.length - 1] || null;
@@ -2026,7 +2056,7 @@
     // manifests must register their pack/zmax maps for tile fetches.
     function _ir2aLoadFrames(p, cb, onErr) {
         if (p !== 'combo') {
-            fetch(_ir2aRoot(p) + '/frames.json', { cache: 'no-store' })
+            _rtFetch(_ir2aRoot(p) + '/frames.json', { cache: 'no-store' })
                 .then(function (r) { return r.json(); })
                 .then(function (j) {
                     _ir2aFrames = (j && j.frames) || []; _ir2aFramesProduct = p;
@@ -2036,8 +2066,8 @@
             return;
         }
         Promise.all([
-            fetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' }).then(function (r) { return r.json(); }),
-            fetch(_ir2aRoot('vis') + '/frames.json', { cache: 'no-store' }).then(function (r) { return r.json(); }),
+            _rtFetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' }).then(function (r) { return r.json(); }),
+            _rtFetch(_ir2aRoot('vis') + '/frames.json', { cache: 'no-store' }).then(function (r) { return r.json(); }),
         ]).then(function (js) {
             _ir2aFrames = (js[0] && js[0].frames) || [];
             _comboVisFrames = (js[1] && js[1].frames) || [];
@@ -2176,7 +2206,7 @@
     }
     function _v3TileBlobUncached(url) {
         function plain() {
-            return fetch(url).then(function (r) { return r.ok ? r.blob() : null; })
+            return _rtFetch(url).then(function (r) { return r.ok ? r.blob() : null; })
                 .catch(function () { return null; });
         }
         var m = url.match(/^(.*\/(ir|vis|wv))\/(\d{12})\/(\d+)\/(\d+)\/(\d+)\.png$/);
@@ -2206,7 +2236,7 @@
                 }
                 return plain();
             }
-            return fetch(packUrl,
+            return _rtFetch(packUrl,
                          { headers: { Range: 'bytes=' + e[0] + '-' + (e[0] + e[1] - 1) } })
                 .then(function (r) {
                     if (r.status === 206) {
@@ -2709,7 +2739,7 @@
             var rest = params.url.slice('irlut://'.length), slash = rest.indexOf('/');
             var cmap = rest.slice(0, slash), realUrl = rest.slice(slash + 1);
             var rev = _irBuildReverse(), tmap = _irTargetMap(cmap);
-            return fetch(realUrl).then(function (r) { return r.blob(); })
+            return _rtFetch(realUrl).then(function (r) { return r.blob(); })
                 .then(function (b) { return createImageBitmap(b); })
                 .then(function (bmp) {
                     var c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
@@ -2796,7 +2826,7 @@
         maplibregl.addProtocol('terrainir', function (params) {
             var realUrl = params.url.slice('terrainir://'.length);
             var rev = _irBuildReverse();
-            return fetch(realUrl).then(function (r) { return r.blob(); })
+            return _rtFetch(realUrl).then(function (r) { return r.blob(); })
                 .then(function (b) { return createImageBitmap(b); })
                 .then(function (bmp) {
                     var c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
@@ -4488,8 +4518,8 @@
         _surfaceObsLoading = true;
         _surfaceObsAbortController = new AbortController();
         var sig = _surfaceObsAbortController.signal;
-        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) +
-              '/surface-obs?radius_deg=10', { signal: sig })
+        _rtFetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) +
+              '/surface-obs?radius_deg=10', { signal: sig }, _RT_FETCH_SLOW_MS)
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (data) {
                 if (currentStormId !== atcfId) return;
@@ -4807,7 +4837,7 @@
         var url = API_BASE + '/ir-monitor/surface-obs/history?id=' +
             encodeURIComponent(ob.id) + '&source=' + encodeURIComponent(ob.source) +
             '&hours=24';
-        fetch(url, { cache: 'no-store', signal: _rtObsHistAbort.signal })
+        _rtFetch(url, { cache: 'no-store', signal: _rtObsHistAbort.signal }, _RT_FETCH_SLOW_MS)
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (payload) { _rtRenderObHistory(payload, ob); })
             .catch(function (err) {
@@ -4929,16 +4959,16 @@
         var jobs = [];
         if (!_coastlineGeoJSON) {
             // Simplified tier is plenty for the tiny locator-inset canvas.
-            jobs.push(fetch('assets/coastlines/ne_10m_coastline_simplified.geojson')
+            jobs.push(_rtFetch('assets/coastlines/ne_10m_coastline_simplified.geojson', null, _RT_FETCH_SLOW_MS)
                 .then(function (r) { return r.json(); })
                 .then(function (g) { _coastlineGeoJSON = g; })
                 .catch(function (e) { console.warn('[Obs] coastline load failed', e); }));
         }
-        jobs.push(fetch('assets/coastlines/ne_50m_admin_1_states_provinces_lines.geojson')
+        jobs.push(_rtFetch('assets/coastlines/ne_50m_admin_1_states_provinces_lines.geojson', null, _RT_FETCH_SLOW_MS)
             .then(function (r) { return r.json(); })
             .then(function (g) { _locatorStatesGeoJSON = g; })
             .catch(function (e) { console.warn('[Obs] state-line load failed', e); }));
-        jobs.push(fetch('assets/coastlines/ne_50m_admin_0_boundary_lines_land.geojson')
+        jobs.push(_rtFetch('assets/coastlines/ne_50m_admin_0_boundary_lines_land.geojson', null, _RT_FETCH_SLOW_MS)
             .then(function (r) { return r.json(); })
             .then(function (g) { _locatorCountriesGeoJSON = g; })
             .catch(function (e) { console.warn('[Obs] country-border load failed', e); }));
@@ -5170,7 +5200,7 @@
                   n.toFixed(3) + '&south=' + s.toFixed(3) +
                   '&east=' + e.toFixed(3) + '&west=' + w.toFixed(3) +
                   '&max_stations=500';
-        fetch(url, { signal: sig })
+        _rtFetch(url, { signal: sig }, _RT_FETCH_SLOW_MS)
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (data) {
                 if (!_rtObsOn) return;
@@ -6501,9 +6531,12 @@
                 var seg = L.DomUtil.create('div', 'ir-mode-segment', wrap);
                 seg.id = 'ir-mode-segment';
                 seg.innerHTML =
-                      '<button type="button" class="ir-mode-btn ir-mode-active" data-mode="ir">IR</button>'
-                    + '<button type="button" class="ir-mode-btn"               data-mode="vis">Vis</button>'
-                    + '<button type="button" class="ir-mode-btn"               data-mode="wv">WV</button>'
+                      '<button type="button" class="ir-mode-btn ir-mode-active" data-mode="ir"'
+                    + ' title="Clean infrared (Band 13, ~10.3 µm)">IR</button>'
+                    + '<button type="button" class="ir-mode-btn"               data-mode="vis"'
+                    + ' title="Visible — daytime only">Vis</button>'
+                    + '<button type="button" class="ir-mode-btn"               data-mode="wv"'
+                    + ' title="Mid-level water vapor (~6.2 µm)">WV</button>'
                     + '<button type="button" class="ir-mode-btn"               data-mode="combo"'
                     + ' title="Sandwich composite — visible cloud texture with IR-colored cold tops (night side falls back to IR)">Combo</button>'
                     + '<button type="button" class="ir-mode-btn"               data-mode="off"'
@@ -7444,7 +7477,7 @@
         // populating cache even if user mouses away.
         _cdnBundleFetch(gcsUrl).then(function (r) {
             if (r.ok) return r;
-            return fetch(apiUrl);
+            return _rtFetch(apiUrl, null, _RT_FETCH_SLOW_MS);
         }).catch(function () {
             // Prefetch is best-effort; failure just means the real click
             // will pay the full latency. Reset the flag so a retry can
@@ -7487,7 +7520,7 @@
     function fetchAndDrawTrack(storm) {
         var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id) + '/metadata';
 
-        fetch(url, { cache: 'no-store' })
+        _rtFetch(url, { cache: 'no-store' })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (meta) {
                 if (!meta || !meta.intensity_history || meta.intensity_history.length < 2) return;
@@ -7792,7 +7825,7 @@
             if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) _pollOpts.signal = AbortSignal.timeout(30000);
         } catch (e) { /* older browsers keep the legacy behavior */ }
 
-        fetch(API_BASE + '/ir-monitor/active-storms', _pollOpts)
+        _rtFetch(API_BASE + '/ir-monitor/active-storms', _pollOpts)
             .then(function (r) {
                 if (r.status === 304) {
                     // Server confirms our cached payload is still current — no work to do.
@@ -8260,7 +8293,7 @@
         // only the rebuild differs (it has to re-pair the Vis band).
         var product = (productMode === 'vis' || productMode === 'wv') ? productMode : 'ir';
         var currentLatest = animFrameTimes[animFrameTimes.length - 1];
-        fetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
+        _rtFetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (j) {
                 if (!detailMap || currentStormId !== atcfId || !_liteActive) return;
@@ -8316,7 +8349,7 @@
                 return r.arrayBuffer();
             })
             .catch(function () {
-                return fetch(apiUrl).then(function (r) {
+                return _rtFetch(apiUrl, null, _RT_FETCH_SLOW_MS).then(function (r) {
                     if (!r.ok) throw new Error('api ' + r.status);
                     return r.arrayBuffer();
                 });
@@ -8384,7 +8417,7 @@
                 return r.arrayBuffer();
             })
             .catch(function () {
-                return fetch(fallbackUrl).then(function (r) {
+                return _rtFetch(fallbackUrl, null, _RT_FETCH_SLOW_MS).then(function (r) {
                     if (!r.ok) throw new Error('API ' + r.status);
                     return r.arrayBuffer();
                 });
@@ -8490,7 +8523,7 @@
         if (!atcfId) return;
         if (_eyeDiag && _eyeDiag.atcf === atcfId) return;   // already loaded
         var url = _ir2aRoot('ir').replace(/\/ir$/, '') + '/eye_fixes.json';
-        fetch(url, { cache: 'no-store' })
+        _rtFetch(url, { cache: 'no-store' })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
                 if (!j || currentStormId !== atcfId) return;
@@ -8636,8 +8669,8 @@
             // _ir2aLoadFrames('combo') on the Global Map, including sharing
             // _comboVisFrames — it's the same global mosaic manifest.
             framesP = Promise.all([
-                fetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' }).then(function (r) { return r.json(); }),
-                fetch(_ir2aRoot('vis') + '/frames.json', { cache: 'no-store' }).then(function (r) { return r.json(); })
+                _rtFetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' }).then(function (r) { return r.json(); }),
+                _rtFetch(_ir2aRoot('vis') + '/frames.json', { cache: 'no-store' }).then(function (r) { return r.json(); })
             ]).then(function (js) {
                 _irApplyTrange(js[0], 'ir');
                 _irApplyTrange(js[1], 'vis');
@@ -8650,7 +8683,7 @@
             // Vigor rides the IR timeline. Its storm-relative shift needs the
             // eye-fix sidecar and the best track, both fetched async — give
             // them a moment to land so the first tiles aren't earth-relative.
-            framesP = fetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' })
+            framesP = _rtFetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' })
                 .then(function (r) { return r.json(); })
                 .then(function (j) {
                     _irApplyTrange(j, 'ir');
@@ -8672,7 +8705,7 @@
         } else if (product === 'ir' && !(_IR2A && window.createMosaicGLLayer)) {
             framesP = _loadMosaicFrames();   // legacy v2 IR path
         } else {
-            framesP = fetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
+            framesP = _rtFetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
                 .then(function (r) { return r.json(); })
                 .then(function (j) { _irApplyTrange(j, product); return _liteStormFrames(j); });
         }
@@ -8873,7 +8906,7 @@
             .catch(function () {
                 // GCS miss — typical for brand-new storms before first prewarm.
                 // Fall through to the API endpoint.
-                return fetch(bundleUrl)
+                return _rtFetch(bundleUrl, null, _RT_FETCH_SLOW_MS)
                     .then(function (r) {
                         if (!r.ok) throw new Error('api bundle HTTP ' + r.status);
                         return r.arrayBuffer();
@@ -8927,7 +8960,7 @@
         if (!_RT_BUNDLES_PREWARMED) {
             return Promise.resolve(new Response(null, { status: 404 }));
         }
-        return fetch(url, opts);
+        return _rtFetch(url, opts, _RT_FETCH_SLOW_MS);
     }
     function _gcsFramesBundleUrl(atcfId) {
         return _GCS_BUNDLE_BASE + '/frames/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin';
@@ -8954,7 +8987,7 @@
      *  without a guard. */
     function _loadBundleVersion() {
         var url = _GCS_BUCKET_ROOT + '/rt-version.json';
-        return fetch(url, { cache: 'no-store' })
+        return _rtFetch(url, { cache: 'no-store' })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
                 if (!j) return;
@@ -9411,7 +9444,7 @@
             + '&radius_deg=' + JPG_PRIMARY_RADIUS_DEG
             + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
 
-        fetch(metaUrl, { cache: 'no-store' })
+        _rtFetch(metaUrl, { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error('frames-meta HTTP ' + r.status);
                 return r.json();
@@ -9741,7 +9774,7 @@
             if (_IR2A) {
                 // idx (v3): recolor the single-channel context fill via idxcolor://.
                 _idxColorEnsureProtocol();
-                fetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' })
+                _rtFetch(_ir2aRoot('ir') + '/frames.json', { cache: 'no-store' })
                     .then(function (r) { return r.json(); })
                     .then(function (j) {
                         if (!detailMap || currentStormId !== _mosStormId || _detailMosaicBase) return;
@@ -10006,7 +10039,7 @@
     function fetchStormMetadata(atcfId, callback) {
         var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/metadata';
 
-        fetch(url, { cache: 'no-store' })
+        _rtFetch(url, { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
@@ -10278,7 +10311,7 @@
         if (c.data || c.loading || Date.now() - c.failedAt < 10 * 60 * 1000) return;
         c.loading = true;
         var get = function (url) {
-            return fetch(url).then(function (r) {
+            return _rtFetch(url).then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
             });
@@ -10408,7 +10441,7 @@
         // when _rtEnvMetadata is already set, so don't populate that here.
         var metaP = (_rtEnvMetadata && _rtEnvMetadata.layers && _rtEnvMetadata.layers.length)
             ? Promise.resolve(_rtEnvMetadata)
-            : fetch(API_BASE + '/ir-monitor/env/layers', { cache: 'no-store' })
+            : _rtFetch(API_BASE + '/ir-monitor/env/layers', { cache: 'no-store' })
                 .then(function (r) { return r.ok ? r.json() : null; });
         _rtGridPi.loading = metaP.then(function (meta) {
             var layers = (meta && meta.layers) || [], lay = null;
@@ -10573,8 +10606,8 @@
     function _rtFetchOcean(atcfId) {
         if (!atcfId) return;
         if (_rtOceanCache[atcfId]) { _rtUpdateFavMeters(atcfId); return; }
-        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/ocean',
-              { cache: 'no-store' })
+        _rtFetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/ocean',
+              { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
                 if (!j || currentStormId !== atcfId) return;
@@ -10627,7 +10660,7 @@
         _rtUpdateFavMeters(atcfId);
 
         // Env (SHIPS annulus) — also drives the Skew-T / profile reveal.
-        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/shear')
+        _rtFetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/shear', null, _RT_FETCH_SLOW_MS)
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
                 if (!j || currentStormId !== atcfId) return;
@@ -10654,8 +10687,8 @@
         // Core (Helmholtz, vortex-removed, 0–400 km, same 850–200 layer).
         if (elCore) {
             elCore.textContent = '…';
-            fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) +
-                  '/shear?method=helmholtz&lower_hpa=850&upper_hpa=200&eval_km=400&mask_km=500')
+            _rtFetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) +
+                  '/shear?method=helmholtz&lower_hpa=850&upper_hpa=200&eval_km=400&mask_km=500', null, _RT_FETCH_SLOW_MS)
                 .then(function (r) { return r.ok ? r.json() : null; })
                 .then(function (j) {
                     if (!j || currentStormId !== atcfId) return;
@@ -10689,8 +10722,8 @@
         }
         // eval_km=400 / mask_km=500 match the Core shear headline, so the
         // profile's 850→200 cell equals the displayed 0–400 km core value.
-        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) +
-              '/shear-profile?eval_km=400&mask_km=500')
+        _rtFetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) +
+              '/shear-profile?eval_km=400&mask_km=500', null, _RT_FETCH_SLOW_MS)
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
@@ -11504,7 +11537,7 @@
             if (statusEl) statusEl.textContent = 'Computing ' + reqHours + 'h Hovmöller…';
             var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(reqStorm) +
                 '/hovmoller?lookback_hours=' + reqHours + '&radius_deg=10&interval_min=10';
-            fetch(url, { cache: 'no-store' })
+            _rtFetch(url, { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     chartEl.style.opacity = '1';
@@ -12479,7 +12512,7 @@
     function _fetchRawTbManifest(stormId, signal) {
         // no-cache → revalidate (ETag) so newly-appended frames are picked up;
         // the per-frame objects it points at are immutable (long max-age).
-        return fetch(_rawTbManifestUrl(stormId), { signal: signal, cache: 'no-cache' })
+        return _rtFetch(_rawTbManifestUrl(stormId), { signal: signal, cache: 'no-cache' })
             .then(function (r) {
                 if (!r.ok) throw new Error('manifest HTTP ' + r.status);
                 return r.json();
@@ -12527,7 +12560,7 @@
                     return function () {
                         if (!fh.key || fh.error) { failed++; return null; }
                         if (have[fh.key]) return have[fh.key];
-                        return fetch(_RT_BUNDLE_ROOT + '/' + fh.key, { signal: signal })
+                        return _rtFetch(_RT_BUNDLE_ROOT + '/' + fh.key, { signal: signal }, _RT_FETCH_SLOW_MS)
                             .then(function (fr) {
                                 if (!fr.ok) throw new Error('frame HTTP ' + fr.status);
                                 return fr.arrayBuffer();  // gzip auto-decoded by browser
@@ -12574,7 +12607,7 @@
             + '&radius_deg=' + DEFAULT_RADIUS_DEG
             + '&interval_min=' + RAW_TB_INTERVAL_MIN;
         function _viaApi() {
-            return fetch(apiUrl, { signal: signal }).then(function (r) {
+            return _rtFetch(apiUrl, { signal: signal }, _RT_FETCH_SLOW_MS).then(function (r) {
                 if (!r.ok) throw new Error('api raw bundle HTTP ' + r.status);
                 return r.arrayBuffer();
             });
@@ -12722,7 +12755,7 @@
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG
                 + '&interval_min=' + RAW_TB_INTERVAL_MIN;
 
-            fetch(url, { signal: controller.signal })
+            _rtFetch(url, { signal: controller.signal }, _RT_FETCH_SLOW_MS)
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     return r.json();
@@ -12811,7 +12844,7 @@
             + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
             + '&radius_deg=' + DEFAULT_RADIUS_DEG
             + '&interval_min=' + RAW_TB_INTERVAL_MIN;
-        return fetch(apiUrl)
+        return _rtFetch(apiUrl, null, _RT_FETCH_SLOW_MS)
             .then(function (r) {
                 if (!r.ok) throw new Error('band-raw bundle HTTP ' + r.status);
                 return r.arrayBuffer();
@@ -12897,7 +12930,7 @@
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG
                 + '&interval_min=' + RAW_TB_INTERVAL_MIN;
 
-            fetch(url)
+            _rtFetch(url, null, _RT_FETCH_SLOW_MS)
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     return r.json();
@@ -13014,7 +13047,7 @@
         var stateValid  = isVis ? visValidFrames : wvValidFrames;
         var blobBucket  = isVis ? _activeVisBlobUrls : _activeWvBlobUrls;
         var btnId       = isVis ? 'ir-product-vis' : 'ir-product-wv';
-        var label       = isVis ? 'Visible' : 'WV';
+        var label       = isVis ? 'Vis' : 'WV';
         var fullLabel;
         if (band === 8)      fullLabel = 'Water Vapor';
         else if (band === 7) fullLabel = 'Visible (SWIR night)';
@@ -13070,7 +13103,7 @@
             })
             .catch(function () {
                 // GCS miss — assemble fresh via the API.
-                return fetch(apiUrl)
+                return _rtFetch(apiUrl, null, _RT_FETCH_SLOW_MS)
                     .then(function (r) {
                         if (!r.ok) throw new Error('API bundle HTTP ' + r.status);
                         return r.arrayBuffer();
@@ -13092,7 +13125,7 @@
     function _ingestBandBundle(buf, band, productKey) {
         var isVis = (productKey === 'vis');  // covers band 2 and band 7
         var blobBucket = isVis ? _activeVisBlobUrls : _activeWvBlobUrls;
-        var label      = isVis ? 'Visible' : 'WV';
+        var label      = isVis ? 'Vis' : 'WV';
         var btnId      = isVis ? 'ir-product-vis' : 'ir-product-wv';
         var fullLabel;
         if (band === 8)      fullLabel = 'Water Vapor';
@@ -13302,7 +13335,7 @@
         return _cdnBundleFetch(gcsUrl)
             .then(function (r) { if (!r.ok) throw new Error('gcs ' + r.status); return r.arrayBuffer(); })
             .catch(function () {
-                return fetch(apiUrl).then(function (r) {
+                return _rtFetch(apiUrl, null, _RT_FETCH_SLOW_MS).then(function (r) {
                     if (!r.ok) throw new Error('api ' + r.status); return r.arrayBuffer();
                 });
             });
@@ -13346,7 +13379,7 @@
             if (stormIdAtFetch !== currentStormId || productMode !== 'vis') return;
             if (!bufs[0] && !bufs[1]) {
                 console.warn('[RT Monitor] Vis + SWIR bundles both unavailable; back to IR');
-                if (btn) { btn.classList.remove('ir-loading'); btn.textContent = 'Visible'; }
+                if (btn) { btn.classList.remove('ir-loading'); btn.textContent = 'Vis'; }
                 showLoadingProgress(false);
                 _rtToast('Visible imagery unavailable right now — showing IR instead');
                 setProductMode('eir');
@@ -13470,7 +13503,7 @@
             visValidFrames = validIdx; visFramesReady = true; visFramesLoaded = merged.length;
             showLoadingProgress(false);
             var fbtn = document.getElementById('ir-product-vis');
-            if (fbtn) { fbtn.classList.remove('ir-loading'); fbtn.textContent = 'Visible'; }
+            if (fbtn) { fbtn.classList.remove('ir-loading'); fbtn.textContent = 'Vis'; }
             var playBtn = document.getElementById('ir-anim-play');
             if (playBtn) playBtn.disabled = (validIdx.length === 0);
             var slider = document.getElementById('ir-anim-slider');
@@ -13847,10 +13880,21 @@
         var l = _loopEl('ir-loop-modal-loader');
         if (l) l.style.display = 'none';
     }
-    function _loopShowError(msg) {
+    function _loopShowError(msg, retryFn) {
         _loopHideLoader();
         var e = _loopEl('ir-loop-modal-error');
-        if (e) { e.textContent = msg || 'Loop unavailable.'; e.style.display = ''; }
+        if (!e) return;
+        e.textContent = msg || 'Loop unavailable.';
+        if (typeof retryFn === 'function') {
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'tc-retry';
+            b.textContent = 'Retry';
+            b.addEventListener('click', function () { e.style.display = 'none'; retryFn(); });
+            e.appendChild(document.createTextNode(' '));
+            e.appendChild(b);
+        }
+        e.style.display = '';
     }
 
     function _loopEnsureMap() {
@@ -14003,7 +14047,7 @@
             if (!r.ok) throw new Error('gcs ' + r.status);
             return r.arrayBuffer();
         }).catch(function () {
-            return fetch(api).then(function (r) {
+            return _rtFetch(api, null, _RT_FETCH_SLOW_MS).then(function (r) {
                 if (!r.ok) throw new Error('api ' + r.status);
                 return r.arrayBuffer();
             });
@@ -14012,7 +14056,8 @@
         }).catch(function (err) {
             if (reqId !== _loopReqId) return;
             console.warn('[LoopModal] bundle fetch failed:', err && err.message);
-            _loopShowError('Animation not yet available for this storm. The prewarm cycle builds new artifacts every ~5 minutes.');
+            _loopShowError('This storm’s animation isn’t ready yet. New frames are built every few minutes.',
+                function () { _loopLoad(stormId, ++_loopReqId); });
         });
     }
 
@@ -14137,8 +14182,8 @@
         } catch (e) { return ''; }
     }
     function _irFetchShearInto(statsEl, atcfId) {
-        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/shear',
-              { cache: 'no-store' })
+        _rtFetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/shear',
+              { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (d) {
                 if (!d || d.magnitude_kt == null || !statsEl.isConnected) return;
@@ -14182,7 +14227,7 @@
         setTimeout(function () { if (!map._qvDead) { try { map.invalidateSize(false); } catch (e) {} } }, 60);
 
         // Recent track → polyline + fit to extent.
-        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(s.atcf_id) + '/metadata',
+        _rtFetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(s.atcf_id) + '/metadata',
               { cache: 'no-store' })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (d) {
@@ -15128,7 +15173,7 @@
         if (cached && cached[cacheKey] && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
             return Promise.resolve(cached[cacheKey]);
         }
-        return fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/weatherlab?model=' + model, { cache: 'no-store' })
+        return _rtFetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/weatherlab?model=' + model, { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (json) {
                 if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
@@ -15203,7 +15248,7 @@
         if (cached && cached[cacheKey] && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
             dataPromise = Promise.resolve(cached[cacheKey]);
         } else {
-            dataPromise = fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/weatherlab' + _dmModelQs(), { cache: 'no-store' })
+            dataPromise = _rtFetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/weatherlab' + _dmModelQs(), { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
                 .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
                 .then(function (json) {
                     if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
@@ -15914,7 +15959,7 @@
         if (statusEl) statusEl.textContent = 'Loading…';
 
         var model = _rtDmModel;
-        fetch(API_BASE + '/ir-monitor/weatherlab-global' + _dmModelQs(), { cache: 'no-store' })
+        _rtFetch(API_BASE + '/ir-monitor/weatherlab-global' + _dmModelQs(), { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (data) {
                 if (model !== _rtDmModel) return;   // switched mid-flight
@@ -17161,8 +17206,8 @@
         var qs = '?' + Object.keys(curParams).map(function (k) {
             return k + '=' + encodeURIComponent(curParams[k]);
         }).join('&') + _genesisQueryString(false);
-        fetch(API_BASE + '/ir-monitor/weatherlab-genesis-family/'
-                + encodeURIComponent(familyId) + qs, { cache: 'no-store' })
+        _rtFetch(API_BASE + '/ir-monitor/weatherlab-genesis-family/'
+                + encodeURIComponent(familyId) + qs, { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
@@ -17723,8 +17768,8 @@
         if (_genesisDmTrackCache[key]) return _genesisDmTrackCache[key];
         var qs = '?variant=' + encodeURIComponent(v)
             + (initTime ? '&init_time=' + encodeURIComponent(initTime) : '');
-        var p = fetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
-                + encodeURIComponent(id) + qs, { cache: 'no-store' })
+        var p = _rtFetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
+                + encodeURIComponent(id) + qs, { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
@@ -18575,10 +18620,10 @@
             var qsParts = Object.keys(clusterParams).map(function (k) {
                 return k + '=' + encodeURIComponent(clusterParams[k]);
             });
-            prom = fetch(API_BASE + '/ir-monitor/weatherlab-genesis-cluster/'
+            prom = _rtFetch(API_BASE + '/ir-monitor/weatherlab-genesis-cluster/'
                     + encodeURIComponent(trackId) + '?' + qsParts.join('&')
                     + _detailQTail,
-                    { cache: 'no-store' })
+                    { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     return r.json();
@@ -18606,9 +18651,9 @@
             // on unrelated storms).
             // _detailQTail starts with '&'; swap to '?' for a standalone qs.
             var _dmQs = '?' + _detailQTail.replace(/^&/, '');
-            prom = fetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
+            prom = _rtFetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
                     + encodeURIComponent(trackId) + _dmQs,
-                    { cache: 'no-store' })
+                    { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     return r.json();
@@ -18671,8 +18716,7 @@
         }).catch(function (err) {
             if (reqSeq !== _genesisDetailReqSeq) return;
             _genesisShowLoader(false);
-            subEl.innerHTML = '<span style="color:#ef4444;">'
-                + 'Could not load detail: ' + (err.message || err) + '</span>';
+            TCErrors.show(subEl, err, 'this cluster’s details', function () { openGenesisDetail(trackId); });
         });
     }
     window.openGenesisDetail = openGenesisDetail;
@@ -18713,9 +18757,9 @@
         function tryPaired(variants, i) {
             if (i >= variants.length) { return nearSearch(); }
             var v = variants[i];
-            return fetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
+            return _rtFetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
                     + encodeURIComponent(atcfId) + '?variant=' + v,
-                    { cache: 'no-store' })
+                    { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
                 .then(function (r) { if (!r.ok) throw 0; return r.json(); })
                 .then(function (json) {
                     if (!json || !json.members
@@ -18742,10 +18786,10 @@
                 return;
             }
             var R = _IR_DM_NEAR_RADIUS_KM;
-            fetch(API_BASE + '/ir-monitor/weatherlab-genesis-near?lat=' + lat
+            _rtFetch(API_BASE + '/ir-monitor/weatherlab-genesis-near?lat=' + lat
                     + '&lon=' + lon + '&radius_km=' + R + '&variant='
                     + (_dmIsWn3() ? 'wnv3' : 'large'),
-                    { cache: 'no-store' })
+                    { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     return r.json();
@@ -18778,8 +18822,8 @@
                     openGenesisDetail(tid);
                 })
                 .catch(function (err) {
-                    _rtToast('DeepMind ensemble search failed: '
-                        + (err.message || err));
+                    TCErrors.log(err, 'the DeepMind ensemble near this point');
+                    _rtToast(TCErrors.message(err, 'the DeepMind ensemble near this point'));
                 });
         }
 
@@ -18817,8 +18861,8 @@
         } else {
             el.innerHTML = '<span style="color:#00e5ff;">'
                 + 'Next cycle due — checking…</span>';
-            el.title = 'Past expected publish time. The backend probes '
-                + 'every request; reopen this cluster to pick it up.';
+            el.title = 'Past the expected publish time. Reopen this '
+                + 'cluster in a few minutes to pick up the new run.';
         }
     }
 
@@ -20051,7 +20095,7 @@
         // freshest cycle the user is actually viewing.
         var _trendVariant = (json && json.variant) || _genesisEnsembleVariant || '';
 
-        fetch(API_BASE + '/ir-monitor/weatherlab-genesis-trend'
+        _rtFetch(API_BASE + '/ir-monitor/weatherlab-genesis-trend'
                 + '?lat=' + encodeURIComponent(aLat)
                 + '&lon=' + encodeURIComponent(aLon)
                 + (_trendVariant ? '&variant=' + encodeURIComponent(_trendVariant) : '')
@@ -20059,7 +20103,7 @@
                     ? '&anchor_init=' + encodeURIComponent(loadedInit)
                       + '&anchor_tau=' + encodeURIComponent(aTau)
                     : '')
-                + '&count=5', { cache: 'no-store' })
+                + '&count=5', { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
             .then(function (r) { if (!r.ok) { var e = new Error('HTTP ' + r.status); e.status = r.status; throw e; } return r.json(); })
             .then(function (data) {
                 if (wrap.dataset.trackId !== (reqTrackId || '')) return;  // stale
@@ -22015,7 +22059,7 @@
     function _loadStructClimo() {
         if (_structClimo) return Promise.resolve(_structClimo);
         if (_structClimoLoad) return _structClimoLoad;
-        _structClimoLoad = fetch('structure_climo.json', { cache: 'force-cache' })
+        _structClimoLoad = _rtFetch('structure_climo.json', { cache: 'force-cache' }, _RT_FETCH_SLOW_MS)
             .then(function (r) { if (!r.ok) throw new Error('climo HTTP ' + r.status); return r.json(); })
             .then(function (j) { _structClimo = j; return j; })
             .catch(function (e) { console.warn('[struct] climo load failed', e); return null; });
@@ -24175,8 +24219,8 @@
         var qs = '?' + Object.keys(curParams).map(function (k) {
             return k + '=' + encodeURIComponent(curParams[k]);
         }).join('&') + _genesisQueryString(false);
-        fetch(API_BASE + '/ir-monitor/weatherlab-genesis-clusters' + qs,
-              { cache: 'no-store' })
+        _rtFetch(API_BASE + '/ir-monitor/weatherlab-genesis-clusters' + qs,
+              { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
@@ -24324,8 +24368,8 @@
     function _loadGenesisCycleList() {
         if (_genesisCycleListLoading) return;
         _genesisCycleListLoading = true;
-        fetch(API_BASE + '/ir-monitor/weatherlab-genesis-cycles?count=5',
-              { cache: 'no-store' })
+        _rtFetch(API_BASE + '/ir-monitor/weatherlab-genesis-cycles?count=5',
+              { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (json) {
                 _genesisCycleList = (json && json.cycles) || [];
@@ -24551,7 +24595,7 @@
         _loadGenesisCycleList();
 
         var _genQs = _genesisQueryString(true);
-        fetch(API_BASE + '/ir-monitor/weatherlab-genesis' + _genQs, { cache: 'no-store' })
+        _rtFetch(API_BASE + '/ir-monitor/weatherlab-genesis' + _genQs, { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (data) {
                 var newInit = data && data.init_time;
@@ -25345,7 +25389,7 @@
     function _loadEnvMetadata() {
         if (_rtEnvLoading || _rtEnvMetadata) return Promise.resolve();
         _rtEnvLoading = true;
-        return fetch(API_BASE + '/ir-monitor/env/layers', { cache: 'no-store' })
+        return _rtFetch(API_BASE + '/ir-monitor/env/layers', { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (data) {
                 _rtEnvMetadata = data;
@@ -25750,7 +25794,7 @@
         // the hour nearest the current frame once the index lands.
         var _idxUrl = _detailEnvIndexUrl(layer);
         if (_idxUrl) {
-            fetch(_idxUrl, { cache: 'no-store' })
+            _rtFetch(_idxUrl, { cache: 'no-store' })
                 .then(function (r) { return r.ok ? r.json() : null; })
                 .then(function (j) {
                     if (!j || _rtEnvActive[layer.name] !== entry) return;
@@ -25839,7 +25883,7 @@
         entry._geoUrl = geoUrl;
         var p = _rtEnvGeojsonCache[geoUrl]
             ? Promise.resolve(_rtEnvGeojsonCache[geoUrl])
-            : fetch(geoUrl, { cache: 'no-store' })
+            : _rtFetch(geoUrl, { cache: 'no-store' })
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (geojson) { _rtEnvGeojsonCache[geoUrl] = geojson; return geojson; });
         p.then(function (geojson) {
@@ -26168,7 +26212,7 @@
             var url = layer.geojson_url;
             var p = _rtEnvGeojsonCache[url]
                 ? Promise.resolve(_rtEnvGeojsonCache[url])
-                : fetch(url, { cache: 'no-store' })
+                : _rtFetch(url, { cache: 'no-store' })
                     .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                     .then(function (g) { _rtEnvGeojsonCache[url] = g; return g; });
             p.then(function (g) {
@@ -26215,7 +26259,7 @@
         // nearest forecast hour once the index loads.
         var idxUrl = _detailEnvIndexUrl(layer);
         if (idxUrl) {
-            fetch(idxUrl, { cache: 'no-store' })
+            _rtFetch(idxUrl, { cache: 'no-store' })
                 .then(function (r) { return r.ok ? r.json() : null; })
                 .then(function (j) {
                     if (!j || !_detailEnvActive[layer.name]) return;
@@ -26317,7 +26361,7 @@
             if (gl && gl.clearLayers) {
                 var url = h.geojson_url;
                 var p = _rtEnvGeojsonCache[url] ? Promise.resolve(_rtEnvGeojsonCache[url])
-                    : fetch(url, { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+                    : _rtFetch(url, { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
                         .then(function (g) { _rtEnvGeojsonCache[url] = g; return g; });
                 p.then(function (g) {
                     if (!entry.overlays || entry.selectedFh !== h.forecast_hour) return;  // superseded
@@ -27574,7 +27618,7 @@
         }).catch(function (err) {
             console.error('[Export] PNG export failed', err);
             _ga('rt_export_png', { ok: false, msg: String(err && err.message) });
-            _rtToast('Couldn’t save PNG: ' + (err && err.message ? err.message : err));
+            _rtToast(TCErrors.message(err, 'the PNG', 'save'));
         }).then(function () {
             if (btn) { btn.textContent = orig; btn.disabled = false; }
         });
@@ -28096,7 +28140,7 @@
         if (cached && cached[cacheKey] && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
             dataPromise = Promise.resolve(cached[cacheKey]);
         } else {
-            dataPromise = fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/weatherlab-ensemble' + _dmModelQs(), { cache: 'no-store' })
+            dataPromise = _rtFetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/weatherlab-ensemble' + _dmModelQs(), { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
                 .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
                 .then(function (json) {
                     if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
@@ -29146,7 +29190,7 @@
 
         var retries = 0;
         function _doFetch() {
-            fetch(API_BASE + '/ascat/passes?atcf_id=' + encodeURIComponent(atcfId) + '&hours=12', { cache: 'no-store' })
+            _rtFetch(API_BASE + '/ascat/passes?atcf_id=' + encodeURIComponent(atcfId) + '&hours=12', { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
                 .then(function (r) {
                     // Retry on 404 — backend storm cache may not be warm yet
                     if (r.status === 404 && retries < 2) {
@@ -29418,7 +29462,7 @@
         if (_rtMwManifest && age < _RT_MW_MANIFEST_TTL_MS) {
             return Promise.resolve(_rtMwManifest);
         }
-        return fetch(_RT_MW_MANIFEST_URL, { cache: 'no-store' })
+        return _rtFetch(_RT_MW_MANIFEST_URL, { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error('manifest HTTP ' + r.status);
                 return r.json();
@@ -29444,7 +29488,7 @@
             + '?lat=' + encodeURIComponent(storm.lat)
             + '&lon=' + encodeURIComponent(storm.lon)
             + '&hours=24';
-        return fetch(url, { cache: 'no-store' })
+        return _rtFetch(url, { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error('per-storm passes HTTP ' + r.status);
                 return r.json();
@@ -29464,7 +29508,7 @@
         if (_rtMwPredictions && age < _RT_MW_PREDICTIONS_TTL_MS) {
             return Promise.resolve(_rtMwPredictions);
         }
-        return fetch(_RT_MW_PREDICTIONS_URL, { cache: 'no-store' })
+        return _rtFetch(_RT_MW_PREDICTIONS_URL, { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error('predictions HTTP ' + r.status);
                 return r.json();
@@ -29924,7 +29968,7 @@
             var swatch = _RT_MW_SENSOR_COLOR[o.sensor] || '#cbd5e1';
             var ageMin = (nowMs - o.scan_start_ms) / 60000;
             var ageStr = _rtMwFmtAgo(ageMin);
-            var utcStr = o.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
+            var utcStr = fmtUTC(o.scan_start);
             var thumbWrap = document.createElement('div');
             thumbWrap.className = 'rt-mw-storm-thumb-wrap';
             if (pr && pr.png_url) {
@@ -30721,7 +30765,7 @@
         var url = API_BASE
             + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
             + '/metadata';
-        return fetch(url, { cache: 'no-store' })
+        return _rtFetch(url, { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error('metadata HTTP ' + r.status);
                 return r.json();
@@ -30759,7 +30803,7 @@
             ttl.textContent = nm + ' · IR ↔ Microwave';
         }
         if (sub) {
-            var utcStr = orbit.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
+            var utcStr = fmtUTC(orbit.scan_start);
             sub.textContent = orbit.sensor + ' (' + (orbit.platform || '?') + ') · '
                             + utcStr;
         }
@@ -30770,7 +30814,7 @@
         // Seed legend with latest fix (we already know it from `storm`).
         var fixLegend = document.getElementById('rt-mw-compare-legend-fix');
         if (fixLegend && storm.last_fix_utc) {
-            var fixTime = storm.last_fix_utc.replace('T', ' ').slice(0, 16) + 'Z';
+            var fixTime = fmtUTC(storm.last_fix_utc);
             fixLegend.textContent = fixTime + ' · '
                 + storm.lat.toFixed(1) + '°' + (storm.lat >= 0 ? 'N' : 'S')
                 + ' / ' + storm.lon.toFixed(1) + '°' + (storm.lon >= 0 ? 'E' : 'W');
@@ -30804,7 +30848,7 @@
                             'snap':        'Position (single track point)',
                         }[interp.mode] || 'Interpolated position';
                         interpLabel.textContent = modeLabel;
-                        var passUtc = orbit.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
+                        var passUtc = fmtUTC(orbit.scan_start);
                         interpLegend.textContent = passUtc + ' · '
                             + interp.lat.toFixed(1) + '°' + (interp.lat >= 0 ? 'N' : 'S')
                             + ' / ' + interp.lon.toFixed(1) + '°' + (interp.lon >= 0 ? 'E' : 'W');
@@ -30838,7 +30882,7 @@
         var name = storm.name || storm.atcf_id || 'Storm';
         var sensorLabel = orbit.sensor
             + (orbit.platform ? ' (' + orbit.platform + ')' : '');
-        var mwUtc = (orbit.scan_start || '').replace('T', ' ').slice(0, 16) + 'Z';
+        var mwUtc = fmtUTC(orbit.scan_start);
         var irTimeEl = document.getElementById('rt-mw-compare-mw-time');  // not used
         var irTime = (document.getElementById('rt-mw-compare-ir-time') || {}).textContent || '';
         var mwTime = (document.getElementById('rt-mw-compare-mw-time') || {}).textContent || mwUtc;
@@ -31194,8 +31238,7 @@
         var mwStatus = document.getElementById('rt-mw-compare-mw-status');
         var mwTimeEl = document.getElementById('rt-mw-compare-mw-time');
         if (mwTimeEl) {
-            mwTimeEl.textContent =
-                orbit.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
+            mwTimeEl.textContent = fmtUTC(orbit.scan_start);
         }
 
         // ── Common center for BOTH panels ─────────────────────────
@@ -31392,7 +31435,7 @@
                     var dMin = (Date.parse(cand.datetime_utc) - mwMs) / 60000;
                     if (irTimeEl) {
                         irTimeEl.textContent =
-                            cand.datetime_utc.replace('T', ' ').slice(0, 16) + 'Z'
+                            fmtUTC(cand.datetime_utc)
                             + ' (' + (dMin >= 0 ? '+' : '') + Math.round(dMin)
                             + ' min vs MW)';
                     }
@@ -31438,7 +31481,7 @@
             + '/ir-frames-meta?lookback_hours=' + _RT_MW_COMPARE_LOOKBACK_H
             + '&radius_deg=' + _RT_MW_COMPARE_RADIUS
             + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
-        return fetch(url, { cache: 'no-store' })
+        return _rtFetch(url, { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error('frames-meta HTTP ' + r.status);
                 return r.json();
@@ -31663,8 +31706,8 @@
         var lat = _rtAscatPasses.storm_lat;
         var lon = _rtAscatPasses.storm_lon;
 
-        fetch(API_BASE + '/ascat/winds?data_url=' + encodeURIComponent(dataUrl) +
-              '&center_lat=' + lat + '&center_lon=' + lon + '&radius_deg=8', { cache: 'no-store' })
+        _rtFetch(API_BASE + '/ascat/winds?data_url=' + encodeURIComponent(dataUrl) +
+              '&center_lat=' + lat + '&center_lon=' + lon + '&radius_deg=8', { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (json) {
                 _rtAscatActiveUrl = dataUrl;
@@ -32576,7 +32619,7 @@
         // Full-resolution twin: fetch it and replace the TEMP DROP profile once it lands.
         var hr = sonde.hires;
         if (hr && hr.id) {
-            fetch(API_BASE + '/recon/sonde-hires?id=' + encodeURIComponent(hr.id))
+            _rtFetch(API_BASE + '/recon/sonde-hires?id=' + encodeURIComponent(hr.id))
                 .then(function (r) { return r.ok ? r.json() : null; })
                 .then(function (h) {
                     if (!h || _reconSkewTKey !== key) return;
@@ -32847,12 +32890,12 @@
         var c = _searCache[ck];
         if (c && (Date.now() - c.ts) < _SEAR_TTL_MS) return Promise.resolve(c.data);
         if (url) {   // explicit object (season archive): one source, no GCS fallback
-            return fetch(url, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; })
+            return _rtFetch(url, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; })
                 .catch(function () { return null; })
                 .then(function (d) { _searCache[ck] = { ts: Date.now(), data: d }; return d; });
         }
         function get(base) {
-            return fetch(base + atcf + '.json', { cache: 'no-store' }).then(function (r) {
+            return _rtFetch(base + atcf + '.json', { cache: 'no-store' }).then(function (r) {
                 if (!r.ok) { var e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }
                 return r.json();
             });
@@ -32972,7 +33015,7 @@
                    '&lon=' + Math.round(_rtReconLon * 2) / 2;
         }
         if (statusEl && !_rtReconData) statusEl.textContent = 'loading…';
-        fetch(url, { cache: 'no-store' })
+        _rtFetch(url, { cache: 'no-store' }, _RT_FETCH_SLOW_MS)
             .then(function (r) { return r.json(); })
             .then(function (j) {
                 if (!j || j.error) { if (statusEl) statusEl.textContent = 'no data'; return; }
@@ -33146,7 +33189,7 @@
             var ts = _reconGibsSlot(steps[i]);
             var url = GIBS_BASE + '/' + layer + '/default/' + ts +
                       '/GoogleMapsCompatible_Level6/3/3/2.png';  // small disk tile
-            fetch(url, { method: 'HEAD', cache: 'no-store' }).then(function (r) {
+            _rtFetch(url, { method: 'HEAD', cache: 'no-store' }).then(function (r) {
                 if (r.ok) {
                     _reconGibsTimeStr = ts; _reconGibsProbedAt = Date.now(); _reconGibsProbing = false;
                     try { window.dispatchEvent(new CustomEvent('recon-gibs-ready')); } catch (e) {}
@@ -33178,7 +33221,7 @@
             // z3 tile over the lit GOES-East disk (W Atlantic / tropics), Level7
             var url = GIBS_BASE + '/' + layerName + '/default/' + ts +
                       '/GoogleMapsCompatible_Level7/3/3/2.png';
-            fetch(url, { method: 'HEAD', cache: 'no-store' }).then(function (r) {
+            _rtFetch(url, { method: 'HEAD', cache: 'no-store' }).then(function (r) {
                 var len = parseInt(r.headers.get('content-length') || '0', 10);
                 if (r.ok && len > 1500) {   // skip 404 (~196 b) + empty (~693 b) tiles
                     _reconVisTime[layerName] = { ts: ts, at: Date.now() };
@@ -33284,7 +33327,7 @@
             // The mosaic keeps only ~3 h, so a miss (nothing within 40 min) resolves
             // null and the caller falls back to the GIBS archive at that time.
             function fetchFrame(product, atIso) {
-                return fetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
+                return _rtFetch(_ir2aRoot(product) + '/frames.json', { cache: 'no-store' })
                     .then(function (r) { return r.json(); })
                     .then(function (j) {
                         _irApplyTrange(j, product); var f = (j && j.frames) || [];
@@ -34346,7 +34389,7 @@
                 } catch (e) {
                     _irRestoreTrackAfterExport(hiddenTrack); hiddenTrack = null;
                     console.warn('[RT Monitor] iOS GL export failed:', e);
-                    _rtToast('Couldn’t save the image — ' + (e && e.message ? e.message : 'export failed') + '.');
+                    _rtToast(TCErrors.message(e, 'the image', 'save'));
                 }
             };
             _glSnapshotHiRes(glMap).then(_iosCapture);
@@ -34448,8 +34491,7 @@
         }).catch(function (err) {
             _irRestoreTrackAfterExport(hiddenTrack);
             console.warn('[RT Monitor] PNG export failed:', err);
-            _rtToast('Couldn’t save the image — ' +
-                     (err && err.message ? err.message : 'export failed') + '.');
+            _rtToast(TCErrors.message(err, 'the image', 'save'));
         });
     };
 
@@ -34462,7 +34504,7 @@
     function _ensureGifWorker() {
         if (_gifWorkerUrl) return Promise.resolve(_gifWorkerUrl);
         var src = 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js';
-        return fetch(src)
+        return _rtFetch(src)
             .then(function (r) { if (!r.ok) throw new Error('gif.worker HTTP ' + r.status); return r.text(); })
             .then(function (txt) {
                 _gifWorkerUrl = URL.createObjectURL(
@@ -34928,8 +34970,7 @@
                 }).catch(function (err) {
                     _restoreLive();
                     console.warn('[RT Monitor] GIF background capture failed:', err);
-                    _rtToast('GIF export failed — ' +
-                             ((err && err.message) || 'capture error'));
+                    _rtToast(TCErrors.message(err, 'the GIF', 'save'));
                     _gifCleanup();
                 });
             }, 0);
@@ -34956,7 +34997,7 @@
 
         // Fetch metadata to get the full track history
         var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) + '/metadata';
-        fetch(url, { cache: 'no-store' })
+        _rtFetch(url, { cache: 'no-store' })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (meta) {
                 if (!meta || !meta.intensity_history || meta.intensity_history.length === 0) {

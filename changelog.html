@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- Google Analytics (GA4) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-EFM8GFFKLK"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-EFM8GFFKLK');
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="What's new on TC-ATLAS: new data sources, analysis tools and fixes, newest first.">
+    <meta name="author" content="Dr. Michael Fischer, University of Miami">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Updates — TC-ATLAS">
+    <meta property="og:description" content="What's new on TC-ATLAS, newest first.">
+    <meta property="og:url" content="https://tcatlas.org/changelog.html">
+    <meta property="og:site_name" content="TC-ATLAS">
+    <meta property="og:image" content="https://tcatlas.org/tc-atlas-preview.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="tc-atlas-favicon-16.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="manifest" href="manifest.json">
+    <link rel="canonical" href="https://tcatlas.org/changelog.html">
+    <meta name="theme-color" content="#005030" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0a0e14" media="(prefers-color-scheme: dark)">
+    <meta name="apple-mobile-web-app-title" content="TC-ATLAS">
+    <title>Updates — TC-ATLAS</title>
+    <script src="theme.js?v=20261009p1a"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20261010m1">
+    <link rel="stylesheet" href="site_pages.css?v=20261010m1">
+    <style>
+        .cl-main { max-width: 900px; margin: 0 auto; padding: 2.5rem 24px 3.5rem; }
+        .cl-title { font-size: 1.9rem; font-weight: 700; letter-spacing: -0.02em; color: var(--text); margin: 0 0 0.4rem; text-align: center; }
+        .cl-desc { color: var(--slate); text-align: center; max-width: 560px; margin: 0 auto 2rem; font-size: 0.95rem; }
+    </style>
+</head>
+<body>
+    <header class="topbar" role="banner">
+        <div class="topbar-inner">
+            <div class="topbar-brand">
+                <a class="topbar-home" href="index.html" aria-label="TC-ATLAS home">
+                    <img src="tc-atlas-favicon-64.png?v=20261009p1a" alt="" class="topbar-icon" width="28" height="28">
+                    <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                </a>
+                <div class="topbar-divider"></div>
+                <div class="topbar-subtitle">Updates</div>
+            </div>
+            <nav aria-label="Main navigation">
+                <ul class="topbar-nav">
+                    <li><a href="realtime_ir.html"><span class="nav-full">Real-Time Monitor</span><span class="nav-short">Monitor</span></a></li>
+                    <li><a href="global_archive.html"><span class="nav-full">Global Archive</span><span class="nav-short">Archive</span></a></li>
+                    <li><a href="explorer.html">TC-RADAR</a></li>
+                    <li><a href="tc_climatology.html"><span class="nav-full">TC Climatology</span><span class="nav-short">Climatology</span></a></li>
+                    <li><a href="about.html">About</a></li>
+                </ul>
+            </nav>
+            <button class="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
+                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
+            <button class="nav-hamburger" onclick="this.classList.toggle('open');document.querySelector('.topbar-nav').classList.toggle('mobile-open')" aria-label="Menu">&#9776;</button>
+        </div>
+    </header>
+
+    <main class="cl-main" id="main">
+        <h1 class="cl-title">Updates</h1>
+        <p class="cl-desc">New data sources, analysis tools and fixes, newest first.</p>
+
+        <!-- ONE SOURCE: the home page shows the first three .changelog-entry
+             blocks of #changelog, so add new entries at the top and keep
+             the markup the same. -->
+        <div class="changelog-list" id="changelog">
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-10-09">9 Oct 2026</time></div>
+                <div class="changelog-text"><strong>Recon follows the flight you pick.</strong> On the <a href="realtime_ir.html#recon">Recon</a> tab&rsquo;s Live Flight map, VDMs, dropsondes and tail Doppler radar analyses now follow the selected sortie, not just its aircraft. Live VDMs arrive from the NWS bulletin feed within minutes, with center-fix markers on the map; draped radar analyses show the <strong>vortex tilt</strong>; and SEAR peak estimates are flagged when the radar data sample the peak only thinly.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-10-08">8 Oct 2026</time></div>
+                <div class="changelog-text"><strong>Ventilation index in context.</strong> The storm card now ranks each storm&rsquo;s <strong>ventilation index</strong> against 1991&ndash;2025 tropical and subtropical cyclones in the same basin, and shows what storms with similar ventilation did over the next 24 hours: the median intensity change, its 10&ndash;90% range, and how often they rapidly intensified. Links shared on social media also get a refreshed preview card.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-10-07">7 Oct 2026</time></div>
+                <div class="changelog-text"><strong>DeepMind landfall and wind risk.</strong> DeepMind landfall statistics now place each landfall on the coast and no longer blend overland decay into the landfall intensity, and wind-risk footprints keep over-water wind radii up to the coastline. Run-to-run <strong>genesis trends</strong> match clusters in time as well as space, and storms that cross the dateline stay on JTWC&rsquo;s track.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-10-04">4 Oct 2026</time></div>
+                <div class="changelog-text"><strong>GHOST: why this number.</strong> The GHOST intensity estimates on the Real-Time Monitor&rsquo;s <a href="realtime_ir.html#experimental">Experimental</a> tab gained a <strong>&ldquo;Why this number&rdquo;</strong> breakdown of each published estimate, and a verification table that scores the current system head-to-head against D-PRINT, ADT and SATCON on matched frames.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-10-01">1 Oct 2026</time></div>
+                <div class="changelog-text"><strong>A cleaner Layers panel.</strong> The Global Map&rsquo;s Layers panel uses one-tap segmented controls for Model, Wind risk, Ensemble and Method, with a single FNV3&thinsp;/&thinsp;WN3 switch for every DeepMind layer. Raw ensemble members gained a density view, and on phones the map tools move into a &ldquo;&hellip;&rdquo; menu.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-09-30">30 Sep 2026</time></div>
+                <div class="changelog-text"><strong>Colder cloud tops and full-resolution sondes.</strong> The Claude IR colormap gained an ice-blue tail so cloud tops colder than &minus;83&nbsp;&deg;C no longer saturate. Dropsondes now arrive at full <strong>1-second resolution</strong> from the NWS BUFR feed, shown on a redesigned dropsonde card, and the Recon tab&rsquo;s radar view gained 3D view presets and a max-wind readout.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-09-28">28 Sep 2026</time></div>
+                <div class="changelog-text"><strong>Tail Doppler radar on the map.</strong> Real-time radar analyses on the <a href="realtime_ir.html#recon">Recon</a> tab are draped on the satellite map, as in <a href="explorer.html">TC-RADAR</a>&rsquo;s case view, and both pages now share one set of radar views, including <strong>multi-variable cross-sections</strong> and the VP-favorability scatter.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-09-24">24 Sep 2026</time></div>
+                <div class="changelog-text"><strong>Recon archive.</strong> A new <strong>Archive</strong> view on the <a href="realtime_ir.html#recon">Recon</a> tab replays every 2026 reconnaissance flight in time, with SEAR 10-m wind estimates re-scored by the current model; &ldquo;Peak SEAR&rdquo; jumps to each storm&rsquo;s strongest estimate. SEAR estimates (experimental) also appear in the <a href="global_archive.html">Global Archive</a>&rsquo;s recon view and as a 10-m wind layer in <a href="explorer.html">TC-RADAR</a>.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-09-23">23 Sep 2026</time></div>
+                <div class="changelog-text"><strong>IR Vigor, Combo and new microwave sensors.</strong> The storm card gained <strong>IR Vigor</strong> (cloud tops relative to the coldest the storm has recently sustained) and the <strong>Combo</strong> view, which lays IR-colored cold tops over visible cloud texture. Microwave passes now include <strong>AMSR3</strong> (GOSAT-GW) and <strong>WSF-M MWI</strong>; AMSR2 was retired after JAXA ended its near-real-time delivery.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-09-17">17 Sep 2026</time></div>
+                <div class="changelog-text"><strong>Global IR Archive.</strong> The new <a href="archive_season.html">Global IR Archive</a> replays whole seasons of geostationary infrared imagery from MergIR (1998&ndash;present) and GridSat-B1, with sharper 4&nbsp;km storm sectors as you zoom in. It opens on Irma, Jose and Katia in September 2017. Both datasets are credited in full in the <a href="about.html#data-credits">data acknowledgements</a>.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-09-08">8 Sep 2026</time></div>
+                <div class="changelog-text"><strong>TC-RADAR on the map.</strong> <a href="explorer.html">TC-RADAR</a>&rsquo;s case view drapes the radar field on IR imagery over a Blue Marble basemap, renders a <strong>3D volume</strong> on the map with a cutaway plane, and draws flight-level data and dropsondes alongside; click a sonde to open its skew-T.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-09-05">5 Sep 2026</time></div>
+                <div class="changelog-text"><strong>SEAR surface-wind estimates.</strong> Experimental <strong>SEAR</strong> estimates of the 10-m wind from flight-level reconnaissance appear on the Recon tab&rsquo;s Live Flight view and on the storm card, with a range based on the radius of maximum wind while the storm center is still preliminary.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-09-04">4 Sep 2026</time></div>
+                <div class="changelog-text"><strong>DeepMind ensemble tools and WeatherNext&nbsp;3.</strong> A tabbed DeepMind Ensemble panel adds wind-speed probabilities, arrival times, track ellipses, landfall statistics, survival and RI odds, with NHC&rsquo;s official forecast as the reference line and a persistent &ldquo;not an official forecast&rdquo; label. <strong>WeatherNext&nbsp;3</strong> joins FNV3 as a model option, and DeepMind wind risk can be drawn on the Global Map.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-09-01">1 Sep 2026</time></div>
+                <div class="changelog-text"><strong>Measure tool.</strong> Drag on the <a href="realtime_ir.html">Real-Time Monitor</a>&rsquo;s Global Map to measure distances, and surface observations now refresh with the map&rsquo;s 10-minute update.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-08-24">24 Aug 2026</time></div>
+                <div class="changelog-text"><strong>Genesis clusters &amp; wave families.</strong> The DeepMind ensemble markers are now labeled <strong>genesis clusters</strong> &mdash; automated clusters of member genesis events, not observed disturbances &mdash; and clusters that are scenarios of the <strong>same physical wave</strong> are linked into families on the <a href="realtime_ir.html">Real-Time Monitor</a> map (translucent violet ribbon + marker rings) with a combined, deduplicated probability that counts each ensemble member once. The clustering and linking method is documented in a new <a href="realtime_ir.html#genesis-methods">Methods description</a> on the monitor itself.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-07-15">15 Jul 2026</time></div>
+                <div class="changelog-text"><a href="realtime_ir.html">Real-Time Monitor</a> forecast focus: a new <strong>&ldquo;Off&rdquo;</strong> option on the IR/Vis/WV switch hides the satellite layer so the DeepMind ensemble and environmental overlays read unobscured. DeepMind <strong>FNV3 cyclogenesis</strong> probabilities are now labeled explicitly as the model odds of a disturbance reaching <strong>tropical-storm strength (&ge;34 kt)</strong>, and the 1000-member raw-ensemble spaghetti renders instantly.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-07-03">3 Jul 2026</time></div>
+                <div class="changelog-text"><strong>Objective eye-fix &amp; storm favorability.</strong> The monitor snaps the storm pin to an objective IR <strong>eye center</strong> with an eye / cold-top brightness-temperature readout and a follow-storm mode. Each storm card gained a <strong>favorability dashboard</strong> &mdash; a realtime <strong>ventilation index</strong> (Tang &amp; Emanuel) alongside ocean <strong>SST, SST anomaly, and ocean heat content (TCHP)</strong> &mdash; and the storm-detail imagery now carries frame-aligned <strong>GFS environmental overlays</strong> with init-cycle captions and hover readouts.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-06-29">29 Jun 2026</time></div>
+                <div class="changelog-text"><strong>Ground radar on the map.</strong> Storm-page and global-map <strong>NEXRAD</strong> reflectivity now stream as GL tiles (IEM N0Q) at no added compute, and <a href="explorer.html">TC-RADAR</a> gained a two-panel view with the airborne Doppler field draped directly on the IR map.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-06-28">28 Jun 2026</time></div>
+                <div class="changelog-text"><strong>DeepMind FNV3 ensemble tools.</strong> The 1000-member cyclogenesis ensemble gained a <strong>Structure</strong> modal (RMW, size, wind-rose, and wind-area vs. IBTrACS climatology), an <strong>Intensity-Change / RI trends</strong> panel with median LMI and intensity IQR, an <strong>ACE distribution</strong>, and <strong>Vmax &harr; MSLP</strong> toggles on every intensity chart. Members are clustered into labeled disturbances on the global map.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-06-27">27 Jun 2026</time></div>
+                <div class="changelog-text"><strong>TC-ATLAS global satellite mosaic.</strong> The monitor now renders its own worldwide geostationary mosaic in <strong>IR, Visible, and Water Vapor</strong>, served from our CDN as GPU-recolored single-channel tiles &mdash; full-brightness, multiple colormaps, seamless across the dateline, with animated-GIF export.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-06-25">25 Jun 2026</time></div>
+                <div class="changelog-text"><strong>New map engine &amp; 3D convection.</strong> The Real-Time Monitor and <a href="global_archive.html">Global Archive</a> moved to a <strong>MapLibre GL</strong> rendering engine (smoother zoom, GPU overlays). A one-click <strong>3D</strong> pill extrudes cold IR cloud tops into relief with Tilt/Height sliders, drag-to-orbit, and branded <strong>3D-orbit GIF</strong> export, and the Environmental Analysis menu added <strong>SST anomaly and relative-SST</strong> layers.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-06-13">13 Jun 2026</time></div>
+                <div class="changelog-text">TC-ATLAS moved to its own domain, <a href="https://tcatlas.org/"><strong>tcatlas.org</strong></a>, and gained <strong>dynamic social-preview cards</strong> that render the current active-storm state when the site is shared.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-05-25">25 May 2026</time></div>
+                <div class="changelog-text"><strong>Near-real-time microwave &amp; aircraft recon.</strong> Added NRT <strong>microwave</strong> overpasses (AMSR2, GMI, SSMIS &mdash; 89 GHz PCT + 37 GHz color) with satellite pass prediction, an aircraft <strong>recon overlay</strong> (HDOB wind barbs, dropsondes, VDM), and a <strong>Recon</strong> tab with real-time tail Doppler radar analyses and a live wind-center solver.</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-05-19">19 May 2026</time></div>
+                <div class="changelog-text">New <strong>Seasonal</strong> tab on the Real-Time Monitor &mdash; panels spanning a <strong>live SST-anomaly map</strong>, regional environment evolution (shear, MPI, RH, TCWV&hellip;), pre-season SST &times; annual ACE, OISST correlation and analog-season maps, and a climate-index dashboard (ENSO, AMO, MJO, BSISO&hellip;).</div>
+            </div>
+            <div class="changelog-entry">
+                <div class="changelog-date"><time datetime="2026-05-17">17 May 2026</time></div>
+                <div class="changelog-text">New <strong>Subseasonal</strong> tab &mdash; MJO and BSISO <strong>phase clocks</strong> plus 60-day <strong>Wheeler&ndash;Kiladis-filtered OLR Hovm&ouml;llers</strong> (MJO, Kelvin, ER, MRG, TD-type) with active TCs projected on as longitude traces and a GEFS 10-day forecast extension.</div>
+            </div>
+        </div>
+        <div class="changelog-footer">
+            <a href="https://github.com/MichaelFischerWx/TC-ATLAS/commits/main" target="_blank" rel="noopener">Full commit history on GitHub &rarr;</a>
+        </div>
+    </main>
+
+    <footer>
+        <div>Created by Michael S. Fischer &middot; University of Miami</div>
+        <div style="margin-top:10px;font-size:0.7rem;color:var(--text-dim);max-width:650px;margin-left:auto;margin-right:auto;line-height:1.4;">
+            TC-ATLAS is a research visualization platform provided for research and educational purposes only. Not intended for operational forecasting. Data provided as-is without warranty.
+        </div>
+    </footer>
+</body>
+</html>

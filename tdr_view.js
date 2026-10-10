@@ -478,7 +478,7 @@
             o.plot(id, fig.traces, fig.layout, { responsive: true, displayModeBar: true, displaylogo: false,
                 modeBarButtonsToRemove: ['lasso2d', 'select2d', 'toggleSpikelines'] });
         }).catch(function (err) {
-            box.innerHTML = '<div class="explorer-status error">⚠️ ' + (err && err.message || err) + '</div>';
+            TCErrors.show(box, err, 'the cross-sections', function () { runMultiSection(o); }, 'explorer-status error');
         });
     }
 

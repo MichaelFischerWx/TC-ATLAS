@@ -630,7 +630,7 @@
         '(<a href="https://doi.org/10.5067/P4HZB9N27EKU" target="_blank" rel="noopener">doi:10.5067/P4HZB9N27EKU</a>) ' +
         'and NOAA NCEI GridSat-B1 (<a href="https://doi.org/10.7289/V59P2ZKR" target="_blank" rel="noopener">doi:10.7289/V59P2ZKR</a>) ' +
         'infrared imagery with IBTrACS best tracks; runs on live GOES and Himawari imagery. ' +
-        '<a href="index.html#data-credits">Data credits</a>.</span>';
+        '<a href="about.html#data-credits">Data credits</a>.</span>';
     var GHOST_CITE =
         '<div class="exp-cite"><strong>Unlisted member page &mdash; ' +
         'manuscript in preparation.</strong> ' +

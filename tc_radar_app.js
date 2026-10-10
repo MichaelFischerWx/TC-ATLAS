@@ -425,22 +425,15 @@ function _archExportBtnHTML(csvFn, jsonFn, dropId, rightPx) {
 // ── API cold-start pre-warming ───────────────────────────────
 var _apiReady = false;
 (function warmAPI() {
-    var start = Date.now();
     fetch(API_BASE + '/health', { method: 'GET' })
-        .then(function(r) {
-            _apiReady = true;
-            var elapsed = Date.now() - start;
-            if (elapsed > 3000) {
-                showToast('API server is ready (' + (elapsed / 1000).toFixed(1) + 's warm-up)', 'info', 3000);
-            }
-        })
+        .then(function() { _apiReady = true; })
         .catch(function() {
             // API might be cold-starting — retry once after 5s
             setTimeout(function() {
                 fetch(API_BASE + '/health', { method: 'GET' })
                     .then(function() { _apiReady = true; })
                     .catch(function() {
-                        showToast('API server may be waking up — first requests could take 30–60s', 'warn', 8000);
+                        showToast('Analyses may be slow to load for the next minute.', 'warn', 8000);
                     });
             }, 5000);
         });
@@ -4304,7 +4297,7 @@ function generateCustomPlot(callback) {
     var csStatus = document.getElementById('cs-status'); if (csStatus) csStatus.textContent = '';
     if (!_animPlaying) {
         _thumbHide();
-        resultDiv.innerHTML = _hurricaneLoadingHTML('Fetching data from API\u2026 (may take ~30s if service is waking up)', true);
+        resultDiv.innerHTML = _hurricaneLoadingHTML('Loading the analysis\u2026', true);
         var panelInner = document.getElementById('side-panel-inner');
         if (panelInner) panelInner.scrollTop = 0;
     }
@@ -4326,11 +4319,11 @@ function generateCustomPlot(callback) {
     if (wantBarbs) url += '&wind_barbs=true';
     if (wantTilt) url += '&tilt_profile=true';
     fetch(url, { signal: controller.signal })
-        .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+        .then(function(r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
         .then(function(json) { _dataCache[cacheKey] = json; renderPlotFromJSON(json, resultDiv); if (callback) callback(); })
         .catch(function(err) {
-            var msg = err.name === 'AbortError' ? '\u26A0\uFE0F Request timed out (90s). The API may be cold-starting \u2014 try again in a minute.' : '\u26A0\uFE0F ' + err.message;
-            resultDiv.innerHTML = '<div class="explorer-status error">' + msg + '</div>'; animStop();
+            TCErrors.show(resultDiv, err, 'this plan view', function () { generateCustomPlot(callback); }, 'explorer-status error');
+            animStop();
         })
         .finally(function() { clearTimeout(timeout); btn.disabled = false; btn.textContent = 'Update Plan View'; });
 }
@@ -4893,7 +4886,7 @@ window.runMultiCS = function() {
         fetch: function(key) {
             var url = API_BASE + '/cross_section?case_index=' + currentCaseIndex + '&variable=' + key + '&data_type=' + _activeDataType +
                       '&x0=' + a.x + '&y0=' + a.y + '&x1=' + b.x + '&y1=' + b.y + '&n_points=150';
-            return fetch(url).then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); });
+            return fetch(url).then(function(r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); });
         },
         endpoints: { x0: a.x, y0: a.y, x1: b.x, y1: b.y },
         locator: p ? { z: p.z, x: p.x, y: p.y, colorscale: p.colorscale, zmin: p.vmin, zmax: p.vmax } : null,
@@ -4912,7 +4905,7 @@ function fetchCrossSection(a, b) {
     var url = API_BASE + '/cross_section?case_index=' + currentCaseIndex + '&variable=' + variable + '&data_type=' + _activeDataType + '&x0=' + a.x + '&y0=' + a.y + '&x1=' + b.x + '&y1=' + b.y + '&n_points=150';
     if (overlay) url += '&overlay=' + overlay;
     fetch(url)
-        .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+        .then(function(r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
         .then(function(json) {
             if (_focusMode) {
                 // Its own result tab: an inline chart, expandable to the full view.
@@ -4924,7 +4917,9 @@ function fetchCrossSection(a, b) {
             }
             csResult.innerHTML = '<div class="explorer-status" style="color:#10b981;">\u2713 Cross-section ready \u2014 opening expanded view</div>' + _mcsControls(); openPlotModal(json);
         })
-        .catch(function(err) { csResult.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + err.message + '</div>'; });
+        .catch(function(err) {
+            TCErrors.show(csResult, err, 'the cross-section', function () { fetchCrossSection(a, b); }, 'explorer-status error');
+        });
 }
 
 var _lastCsJson = null;
@@ -5058,7 +5053,9 @@ function _searRender(callback) {
     if (resultDiv && !_animPlaying) resultDiv.innerHTML = _hurricaneLoadingHTML('Loading SEAR 10-m field…', false);
     fetch(_SEAR_CDN + dt + '/' + ci + '.json').then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(function (j) { _searCache[key] = j; go(j); })
-        .catch(function (e) { if (resultDiv) resultDiv.innerHTML = '<div class="explorer-status error">⚠️ SEAR field unavailable (' + e.message + ')</div>'; });
+        .catch(function (e) {
+            TCErrors.show(resultDiv, e, 'the SEAR 10-m wind field', function () { _searRender(callback); }, 'explorer-status error');
+        });
 }
 // Picking a different 3-D variable or level means "show me that" — leave SEAR mode.
 document.addEventListener('change', function (e) {
@@ -5096,7 +5093,7 @@ function _autoFetchDualAzimuthalMean() {
     var controller = new AbortController();
     var timeout = setTimeout(function() { controller.abort(); }, 90000);
     fetch(url, { signal: controller.signal })
-        .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+        .then(function(r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
         .then(function(json) {
             _dataCache[azCacheKey] = json;
             _lastAzJson = json; _lastHybridAzJson = null; _lastAnomalyAzJson = null; _lastVPScatterJson = null;
@@ -5106,7 +5103,7 @@ function _autoFetchDualAzimuthalMean() {
         })
         .catch(function(err) {
             var container = document.getElementById('dual-az-container');
-            if (container) container.innerHTML = '<div class="az-pane-placeholder" style="color:#f87171;font-style:normal;font-size:0.7rem;">' + (err.name === 'AbortError' ? 'Timed out' : err.message) + '</div>';
+            TCErrors.show(container, err, 'the azimuthal mean', _autoFetchDualAzimuthalMean, 'az-pane-placeholder tc-error');
         })
         .finally(function() { clearTimeout(timeout); });
 }
@@ -5167,9 +5164,9 @@ function fetchAzimuthalMean() {
     var controller = new AbortController();
     var timeout = setTimeout(function() { controller.abort(); }, 90000);
     fetch(url, { signal: controller.signal })
-        .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+        .then(function(r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
         .then(function(json) { _lastAzJson = json; _lastHybridAzJson = null; _lastAnomalyAzJson = null; _lastVPScatterJson = null; renderAzimuthalMeanInto('az-result', json, false); _autoExpand(); })
-        .catch(function(err) { resultDiv.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + (err.name === 'AbortError' ? 'Request timed out (90s).' : err.message) + '</div>'; })
+        .catch(function(err) { TCErrors.show(resultDiv, err, 'the azimuthal mean', fetchAzimuthalMean, 'explorer-status error'); })
         .finally(function() { clearTimeout(timeout); btn.disabled = false; btn.textContent = '\u27F3 Azim. Mean'; });
 }
 
@@ -5194,9 +5191,9 @@ function fetchHybridAzimuthalMean() {
     var controller = new AbortController();
     var timeout = setTimeout(function() { controller.abort(); }, 90000);
     fetch(url, { signal: controller.signal })
-        .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+        .then(function(r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
         .then(function(json) { _lastHybridAzJson = json; _lastAzJson = null; _lastAnomalyAzJson = null; _lastVPScatterJson = null; renderHybridAzimuthalMeanInto('az-result', json, false); _autoExpand(); })
-        .catch(function(err) { resultDiv.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + (err.name === 'AbortError' ? 'Request timed out (90s).' : err.message) + '</div>'; })
+        .catch(function(err) { TCErrors.show(resultDiv, err, 'the hybrid azimuthal mean', fetchHybridAzimuthalMean, 'explorer-status error'); })
         .finally(function() { clearTimeout(timeout); if (btn) { btn.disabled = false; btn.textContent = '\u27F3 Azim. Mean'; } });
 }
 
@@ -5216,9 +5213,9 @@ function fetchAnomalyAzimuthalMean() {
     var controller = new AbortController();
     var timeout = setTimeout(function() { controller.abort(); }, 90000);
     fetch(url, { signal: controller.signal })
-        .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+        .then(function(r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
         .then(function(json) { _lastAnomalyAzJson = json; _lastAzJson = null; _lastHybridAzJson = null; _lastVPScatterJson = null; renderAnomalyAzimuthalMeanInto('az-result', json, false); _autoExpand(); })
-        .catch(function(err) { resultDiv.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + (err.name === 'AbortError' ? 'Request timed out (90s).' : err.message) + '</div>'; })
+        .catch(function(err) { TCErrors.show(resultDiv, err, 'the anomaly azimuthal mean', fetchAnomalyAzimuthalMean, 'explorer-status error'); })
         .finally(function() { clearTimeout(timeout); if (btn) { btn.disabled = false; btn.textContent = '\u27F3 Azim. Mean'; } });
 }
 
@@ -5237,7 +5234,7 @@ function _loadVPScatter(colorBy) {
     if (_vpScatterCache[colorBy]) return Promise.resolve(_vpScatterCache[colorBy]);
     var url = API_BASE + '/scatter/vp_favorability?data_type=merge&color_by=' + colorBy;
     return fetch(url, { cache: 'no-store' })
-        .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+        .then(function(r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
         .then(function(json) { _vpScatterCache[colorBy] = json; return json; });
 }
 
@@ -5249,7 +5246,7 @@ function fetchVPScatter(colorBy) {
     if (btn) { btn.disabled = true; btn.textContent = '\u27F3 Loading\u2026'; }
     _loadVPScatter(colorBy)
         .then(function(json) { _lastVPScatterJson = json; _lastAzJson = null; _lastHybridAzJson = null; _lastAnomalyAzJson = null; renderVPScatterInto('az-result', json, false); _autoExpand(); })
-        .catch(function(err) { resultDiv.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + err.message + '</div>'; })
+        .catch(function(err) { TCErrors.show(resultDiv, err, 'the VP scatter', function () { fetchVPScatter(colorBy); }, 'explorer-status error'); })
         .finally(function() { if (btn) { btn.disabled = false; btn.textContent = '\u2234 VP Scatter'; } });
 }
 
@@ -5468,7 +5465,7 @@ function fetchSingleCFAD() {
             renderSingleCFADInto('az-result', json, false);
             _autoExpand();
         })
-        .catch(function(e) { showToast('CFAD error: ' + e.message, 'error'); })
+        .catch(function(e) { TCErrors.log(e, 'the CFAD'); showToast(TCErrors.message(e, 'the CFAD'), 'error'); })
         .finally(function() { if (btn) { btn.disabled = false; btn.textContent = '\u2593 CFAD'; } });
 }
 
@@ -5650,7 +5647,7 @@ function fetchShearQuadrants() {
     var controller = new AbortController();
     var timeout = setTimeout(function() { controller.abort(); }, 90000);
     fetch(url, { signal: controller.signal })
-        .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+        .then(function(r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
         .then(function(json) {
             _lastSqJson = json;
             json.case_meta = _enrichCaseMeta(json.case_meta);
@@ -5659,7 +5656,7 @@ function fetchShearQuadrants() {
             else resultDiv.innerHTML = '<div class="explorer-status" style="color:#10b981;">\u2713 Shear quadrants ready \u2014 opening expanded view</div>';
             _autoExpand();
         })
-        .catch(function(err) { resultDiv.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + (err.name === 'AbortError' ? 'Request timed out (90s).' : err.message) + '</div>'; })
+        .catch(function(err) { TCErrors.show(resultDiv, err, 'the shear-relative quadrant means', fetchShearQuadrants, 'explorer-status error'); })
         .finally(function() { clearTimeout(timeout); btn.disabled = false; btn.textContent = '\u25D1 Shear Quads'; });
 }
 
@@ -5690,13 +5687,17 @@ function renderQuadrantMeansInto(targetId, json, fullsize) {
 // ── Featured Cases (onboarding strip shown on first load) ────
 // Curated peak-intensity cases looked up by name+year (case_index
 // derived dynamically so this survives metadata regeneration).
+// peak_kt is the storm's best-track (NHC TCR) peak and drives the
+// badge, so it agrees with the blurb; the footer names the intensity of
+// the radar analysis the card opens, which can be lower (Michael's
+// strongest analysis is ~8 h before its Cat 5 landfall).
 var FEATURED_CASES = [
-    { storm: 'MILTON',  year: 2024, blurb: 'Rapid intensification to Cat 5 in the Gulf' },
-    { storm: 'HELENE',  year: 2024, blurb: 'Big Bend landfall, destructive inland flood' },
-    { storm: 'IAN',     year: 2022, blurb: 'SW Florida Cat 5 landfall' },
-    { storm: 'DORIAN',  year: 2019, blurb: 'Stationary Cat 5 over Abaco' },
-    { storm: 'MICHAEL', year: 2018, blurb: 'Panhandle Cat 5 landfall' },
-    { storm: 'IRMA',    year: 2017, blurb: 'Peak-intensity Cat 5 (185 mph) approach to Leewards' }
+    { storm: 'MILTON',  year: 2024, peak_kt: 155, blurb: 'Rapid intensification to Cat 5 in the Gulf' },
+    { storm: 'HELENE',  year: 2024, peak_kt: 120, blurb: 'Big Bend landfall, destructive inland flooding' },
+    { storm: 'IAN',     year: 2022, peak_kt: 140, blurb: 'Cat 5 peak, then a Cat 4 (130 kt) landfall in SW Florida' },
+    { storm: 'DORIAN',  year: 2019, peak_kt: 160, blurb: 'Cat 5 landfall in the Abacos, then a near-stall over Grand Bahama' },
+    { storm: 'MICHAEL', year: 2018, peak_kt: 140, blurb: 'Cat 5 landfall on the Florida Panhandle' },
+    { storm: 'IRMA',    year: 2017, peak_kt: 155, blurb: 'Cat 5 at 155 kt (180 mph) approaching the Leeward Islands' }
 ];
 // Read persisted dismissal — once a user has clicked any featured case
 // (or otherwise engaged with the case browser), the onboarding strip
@@ -5741,23 +5742,27 @@ function renderFeaturedCases() {
         if (idx == null) continue;
         var c = _getActiveData().cases.find(function(x){ return x.case_index === idx; });
         if (!c) continue;
-        var cat = getIntensityCategory(c.vmax_kt);
-        var color = getIntensityColor(c.vmax_kt);
+        var peakKt = f.peak_kt != null ? f.peak_kt : c.vmax_kt;
+        var cat = getIntensityCategory(peakKt);
+        var color = getIntensityColor(peakKt);
         var vmaxStr = c.vmax_kt != null ? Math.round(c.vmax_kt) + ' kt' : '—';
         var stormTitle = f.storm.charAt(0) + f.storm.slice(1).toLowerCase();
         var card = document.createElement('button');
         card.type = 'button';
         card.className = 'featured-case-card';
         card.setAttribute('data-case-index', idx);
-        card.setAttribute('aria-label', 'Open ' + stormTitle + ' ' + f.year + ' radar case, peak ' + vmaxStr);
+        card.setAttribute('aria-label', 'Open ' + stormTitle + ' ' + f.year + ': storm peak ' + cat +
+            ' (' + Math.round(peakKt) + ' kt); radar analysis at ' + vmaxStr);
         card.innerHTML =
             '<div class="featured-case-top">' +
                 '<span class="featured-case-name">' + stormTitle + '</span>' +
-                '<span class="featured-case-cat" style="background:' + color + ';">' + cat + '</span>' +
+                '<span class="featured-case-cat" style="background:' + color + ';" title="Storm peak: ' +
+                    Math.round(peakKt) + ' kt (best track)">' + cat + '</span>' +
             '</div>' +
             '<div class="featured-case-desc">' + f.blurb + '</div>' +
             '<div class="featured-case-footer">' +
-                '<span>' + f.year + ' · ' + vmaxStr + '</span>' +
+                '<span title="Intensity at the time of the strongest radar analysis, which this card opens">' +
+                    f.year + ' · analysis at ' + vmaxStr + '</span>' +
                 '<span class="featured-case-go">Explore →</span>' +
             '</div>';
         card.addEventListener('click', (function(caseIdx){
@@ -6185,7 +6190,9 @@ fetch('tc_radar_metadata.json')
         // Handle deep links for tabs and cases
         _handleDeepLink();
     })
-    .catch(function(err) { document.getElementById('loading').innerHTML = '<div style="color:#f87171;"><strong>Error loading data</strong><br><small>' + err.message + '</small></div>'; });
+    .catch(function(err) {
+        TCErrors.show(document.getElementById('loading'), err, 'the radar analyses', function () { location.reload(); });
+    });
 
 // ── Data-type toggle (Swath / Merge) ──────────────────────────
 function _injectDataTypeToggle() {
@@ -6770,9 +6777,8 @@ function _fetchAndRenderHovmoller() {
             _renderHovmoller(data);
         })
         .catch(function(err) {
-            statusEl.textContent = 'Error: ' + err.message;
-            statusEl.style.color = '#f87171';
-            console.warn('Hovmöller fetch failed:', err);
+            statusEl.style.color = '';
+            TCErrors.show(statusEl, err, 'the Hovmöller diagram', _fetchAndRenderHovmoller);
         });
 }
 
@@ -7531,15 +7537,15 @@ function fetch3DVolume() {
     var timeout = setTimeout(function() { controller.abort(); }, 120000);
     var url = API_BASE + '/volume?case_index=' + currentCaseIndex + '&variable=' + variable + '&data_type=' + _activeDataType + '&stride=2&max_height_km=15&compact=true&tilt_profile=true';
     fetch(url, { signal: controller.signal })
-        .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+        .then(function(r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
         .then(function(json) {
             _dataCache[cacheKey] = json;
             _last3DJson = json;
             _show3D(json);
         })
         .catch(function(err) {
-            var msg = err.name === 'AbortError' ? 'Request timed out (120s).' : err.message;
-            showToast('3D Volume: ' + msg, 'warn', 7000);
+            TCErrors.log(err, 'the 3D volume');
+            showToast(TCErrors.message(err, 'the 3D volume'), 'warn', 7000);
         })
         .finally(function() { clearTimeout(timeout); btn.disabled = false; btn.innerHTML = _icon('monitor') + '3D Volume'; });
 }
@@ -8875,7 +8881,9 @@ function _fetchCompositeStream(url, label, ms) {
     }).catch(function(err) {
         clearTimeout(timer);
         if (err.name === 'AbortError') {
-            throw new Error('Server timed out — the composite may be too large. Try narrowing your filters to reduce the case count.');
+            var te = new Error('composite stream timed out');
+            te.userMessage = 'The composite took too long to build. Try narrowing the filters to include fewer cases.';
+            throw te;
         }
         throw err;
     });
@@ -8891,6 +8899,15 @@ function _showCompStatus(cls, msg) {
         _stopHurricaneAnim();
         el.textContent = msg;
     }
+}
+// A failed composite: plain message + Retry in the status line (detail in the console).
+function _showCompError(err, what, retryFn) {
+    var el = document.getElementById('comp-status');
+    if (!el) { TCErrors.log(err, what); return; }
+    el.className = 'comp-status error';
+    el.style.display = 'block';
+    _stopHurricaneAnim();
+    TCErrors.show(el, err, what, retryFn, 'comp-status-msg');
 }
 
 // ── Composite overlay contour helpers ─────────────────────────
@@ -9021,7 +9038,8 @@ function _downloadCompNetCDF(btn) {
         var filename = m ? m[1] : ('tc_radar_' + label + '.nc');
         return r.blob().then(function(blob) { _triggerDownload(blob, filename, 'application/x-netcdf'); });
     }).catch(function(err) {
-        if (window._showCompStatus) _showCompStatus('error', 'NetCDF export failed: ' + (err.message || err));
+        TCErrors.log(err, 'the NetCDF file');
+        if (window._showCompStatus) _showCompStatus('error', TCErrors.message(err, 'the NetCDF file', 'download'));
     }).finally(function() {
         if (btn && origText !== null) { btn.innerHTML = origText; btn.disabled = false; }
     });
@@ -9658,7 +9676,7 @@ function generateCompositeAzMean() {
             _showCompShadingToolbar();
             history.replaceState(null, '', '#' + _buildCompPermalinkHash());
         })
-        .catch(function(err) { _showCompStatus('error', '\u2717 ' + (err.message || String(err))); })
+        .catch(function(err) { _showCompError(err, 'the composite azimuthal mean', generateCompositeAzMean); })
         .finally(function() {
             if (btnAz) btnAz.disabled = false; if (btnSq) btnSq.disabled = false; if (btnPv) if (btnPv) btnPv.disabled = false;
             if (btnAz) btnAz.textContent = '\u27F3 Azimuthal Mean';
@@ -9693,7 +9711,7 @@ function generateCompositeAnomaly() {
             renderCompositeAnomalyInto('comp-result-anom', json, filters);
         })
         .catch(function(err) {
-            resultEl.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + (err.message || String(err)) + '</div>';
+            TCErrors.show(resultEl, err, 'the composite anomaly', generateCompositeAnomaly, 'explorer-status error');
         });
 }
 
@@ -9753,7 +9771,7 @@ function generateCompDiffAnomaly() {
         _updateBadgeFromResult(jsonA.n_cases);
         _renderDiffAnomaly('comp-result-anom', diffJson, jsonA, jsonB, filtersA, filtersB);
     }).catch(function(err) {
-        resultEl.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + (err.message || String(err)) + '</div>';
+        TCErrors.show(resultEl, err, 'the anomaly difference', generateCompDiffAnomaly, 'explorer-status error');
     });
 }
 
@@ -9954,7 +9972,7 @@ function _renderCompVPScatter(colorBy, loadingMsg) {
             renderVPScatterInto('comp-vpsc-chart', json, true);
         })
         .catch(function(err) {
-            resultEl.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + (err.message || String(err)) + '</div>';
+            TCErrors.show(resultEl, err, 'the VP scatter', function () { _renderCompVPScatter(colorBy, loadingMsg); }, 'explorer-status error');
         });
 }
 
@@ -10061,7 +10079,7 @@ function generateCompositeCFAD() {
                 renderCompositeCFADInto('comp-result-cfad', json, filters);
             }
         })
-        .catch(function(err) { _showCompStatus('error', '\u2717 ' + (err.message || String(err))); });
+        .catch(function(err) { _showCompError(err, 'the composite CFAD', generateCompositeCFAD); });
 }
 
 function renderCompositeCFADInto(targetId, json, filters) {
@@ -10408,7 +10426,7 @@ function generateCompositeQuadMean() {
             _showCompShadingToolbar();
             history.replaceState(null, '', '#' + _buildCompPermalinkHash());
         })
-        .catch(function(err) { _showCompStatus('error', '\u2717 ' + (err.message || String(err))); })
+        .catch(function(err) { _showCompError(err, 'the composite quadrant means', generateCompositeQuadMean); })
         .finally(function() {
             if (btnAz) btnAz.disabled = false; if (btnSq) btnSq.disabled = false; if (btnPv) if (btnPv) btnPv.disabled = false;
             if (btnSq) btnSq.textContent = '\u25D1 Shear Quadrants';
@@ -10463,7 +10481,7 @@ function generateCompositePlanView() {
             _showCompShadingToolbar();
             history.replaceState(null, '', '#' + _buildCompPermalinkHash());
         })
-        .catch(function(err) { _showCompStatus('error', '\u2717 ' + (err.message || String(err))); })
+        .catch(function(err) { _showCompError(err, 'the composite plan view', generateCompositePlanView); })
         .finally(function() {
             if (btnPv) btnPv.disabled = false; if (btnAz) btnAz.disabled = false; if (btnSq) btnSq.disabled = false;
             if (btnPv) btnPv.innerHTML = _icon('map') + 'Plan View';
@@ -10834,7 +10852,8 @@ function _saveDiffComposite(panelIds, fileStem, mode, btn) {
     }).catch(function(err) {
         console.error('Composite save failed:', err);
         if (btn) { btn.innerHTML = orig; btn.disabled = false; }
-        showToast('Could not render composite PNG: ' + (err && err.message ? err.message : err), 'error');
+        TCErrors.log(err, 'the composite image');
+        showToast(TCErrors.message(err, 'the composite image', 'save'), 'error');
     });
 }
 
@@ -10905,7 +10924,7 @@ function generateCompositeIRPlanView() {
             _showCompStatus('success', '\u2713 IR plan-view composite computed: ' + json.n_cases + ' / ' + json.n_matched + ' cases');
             _renderIRPlanView('comp-result-ir-pv', json, filters, irParams);
         })
-        .catch(function(err) { _showCompStatus('error', '\u2717 IR Plan View: ' + (err.message || String(err))); });
+        .catch(function(err) { _showCompError(err, 'the composite IR plan view', generateCompositeIRPlanView); });
 }
 
 function _renderIRPlanView(targetId, json, filters, pvParams) {
@@ -11049,7 +11068,7 @@ function generateCompositeIRAzMean() {
             _showCompStatus('success', '\u2713 IR azimuthal-mean composite: ' + json.n_cases + ' / ' + json.n_matched + ' cases');
             _renderIRAzMean('comp-result-ir-az', json, filters);
         })
-        .catch(function(err) { _showCompStatus('error', '\u2717 IR Az Mean: ' + (err.message || String(err))); });
+        .catch(function(err) { _showCompError(err, 'the composite IR azimuthal mean', generateCompositeIRAzMean); });
 }
 
 function _renderIRAzMean(targetId, json, filters) {
@@ -11185,7 +11204,7 @@ function generateCompDiffIRPlanView() {
         _showCompStatus('success', '\u2713 IR PV difference computed: Group A (' + jsonA.n_cases + ') \u2212 Group B (' + jsonB.n_cases + ')');
         _renderDiffIRPlanView('comp-result-ir-pv', diffJson, jsonA, jsonB, filtersA, filtersB, irParams);
     }).catch(function(err) {
-        _showCompStatus('error', '\u2717 IR Plan View Diff: ' + (err.message || String(err)));
+        _showCompError(err, 'the IR plan-view difference', generateCompDiffIRPlanView);
     });
 }
 
@@ -11336,7 +11355,7 @@ function generateCompDiffIRAzMean() {
         _showCompStatus('success', '\u2713 IR Az Mean difference computed: Group A (' + jsonA.n_cases + ') \u2212 Group B (' + jsonB.n_cases + ')');
         _renderDiffIRAzMean('comp-result-ir-az', jsonA, jsonB, diffProfile, maxAbs, filtersA, filtersB);
     }).catch(function(err) {
-        _showCompStatus('error', '\u2717 IR Az Mean Diff: ' + (err.message || String(err)));
+        _showCompError(err, 'the IR azimuthal-mean difference', generateCompDiffIRAzMean);
     });
 }
 
@@ -11517,7 +11536,7 @@ function generateCompDiffAzMean() {
         _renderDiffAzMean('comp-result-az', diffJson, jsonA, jsonB, filtersA, filtersB);
         _showCompShadingToolbar();
     }).catch(function(err) {
-        _showCompStatus('error', '\u2717 Az Mean: ' + (err.message || String(err)));
+        _showCompError(err, 'the azimuthal-mean difference', generateCompDiffAzMean);
     });
 }
 
@@ -11612,7 +11631,7 @@ function generateCompDiffQuadMean() {
         _renderDiffQuadMean('comp-result-sq', diffJson, jsonA, jsonB, filtersA, filtersB);
         _showCompShadingToolbar();
     }).catch(function(err) {
-        _showCompStatus('error', '\u2717 Quad Mean: ' + (err.message || String(err)));
+        _showCompError(err, 'the quadrant-mean difference', generateCompDiffQuadMean);
     });
 }
 
@@ -11957,7 +11976,7 @@ function generateCompDiffPlanView() {
         _renderDiffPlanView('comp-result-pv', diffJson, jsonA, jsonB, filtersA, filtersB, pvParams);
         _showCompShadingToolbar();
     }).catch(function(err) {
-        _showCompStatus('error', '\u2717 Plan View: ' + (err.message || String(err)));
+        _showCompError(err, 'the plan-view difference', generateCompDiffPlanView);
     });
 }
 
@@ -12138,7 +12157,7 @@ function generateCompDiffCFAD() {
             _renderDiffCFAD('comp-result-cfad', jsonA, jsonB, filtersA, filtersB);
         }
     }).catch(function(err) {
-        _showCompStatus('error', '\u2717 ' + (err.message || String(err)));
+        _showCompError(err, 'the CFAD difference', generateCompDiffCFAD);
     });
 }
 
@@ -12607,6 +12626,13 @@ function _showEnvCompStatus(cls, msg) {
     el.className = 'explorer-status ' + cls;
     el.innerHTML = msg;
 }
+function _showEnvCompError(err, what, retryFn) {
+    var el = document.getElementById('comp-env-status');
+    if (!el) { TCErrors.log(err, what); return; }
+    el.style.display = 'block';
+    el.className = 'explorer-status error';
+    TCErrors.show(el, err, what, retryFn, 'comp-status-msg');
+}
 
 // ── Main generation function ──
 function generateEnvComposite() {
@@ -12665,7 +12691,7 @@ function generateEnvComposite() {
         if (pvData) renderEnvCompositePlanView(pvData, filters);
         if (profData) renderEnvCompositeThermo(profData, filters);
     }).catch(function(err) {
-        _showEnvCompStatus('error', '\u2717 Error: ' + err.message);
+        _showEnvCompError(err, 'the environmental composite', generateEnvComposite);
     });
 }
 
@@ -13164,7 +13190,7 @@ function generateEnvCompDiff() {
         if (profA && profB) renderEnvDiffThermo(profA, profB);
     }).catch(function(err) {
         if (err === 'no_data_a') return; // Already handled above
-        _showEnvCompStatus('error', '\u2717 \u0394 Error: ' + err.message);
+        _showEnvCompError(err, 'the environmental difference', generateEnvCompDiff);
     });
 }
 
@@ -15217,8 +15243,8 @@ function fetchMicrowaveOverpasses(caseIdx) {
             loadMicrowaveOverpass();
         })
         .catch(function(e) {
-            sel.innerHTML = '<option value="">Error loading overpasses</option>';
-            if (status) status.textContent = 'Error: ' + e.message;
+            sel.innerHTML = '<option value="">Overpasses unavailable</option>';
+            TCErrors.show(status, e, 'the microwave overpasses', function () { fetchMicrowaveOverpasses(caseIdx); });
         });
 }
 
@@ -15337,7 +15363,7 @@ function loadMicrowaveOverpass() {
             };
         })
         .catch(function(e) {
-            if (status) status.textContent = 'Error: ' + e.message;
+            TCErrors.show(status, e, 'this microwave image', loadMicrowaveOverpass);
             var dlBtn = document.getElementById('mw-download-btn');
             if (dlBtn) dlBtn.remove();
         });
@@ -15703,7 +15729,7 @@ function fetchMWTimeline() {
             renderMWTimeline(ops);
         })
         .catch(function(e) {
-            if (status) status.textContent = 'Error: ' + e.message;
+            TCErrors.show(status, e, 'the microwave timeline', fetchMWTimeline);
         });
 }
 
@@ -16147,7 +16173,7 @@ window.loadTdrNexradFrame = function () {
             _loadNexradStormRelative(site, s3Key, product);
         })
         .catch(function (e) {
-            if (status) status.textContent = 'Error: ' + e.message;
+            TCErrors.show(status, e, 'this NEXRAD scan', window.loadTdrNexradFrame);
         });
 };
 

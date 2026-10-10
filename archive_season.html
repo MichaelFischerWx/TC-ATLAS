@@ -19,7 +19,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="tc_radar_styles.css?v=20261009p1d">
+<link rel="stylesheet" href="tc_radar_styles.css?v=20261010m1">
 <style>
   /* Site palette (mirrors tc_radar_styles.css); theme.js sets data-theme="dark" from the user's site-wide choice */
   :root { --bg:#ffffff; --surface:#f7f8fa; --surface-raised:#ffffff; --border:rgba(15,22,35,.08); --text:#0f1623; --muted:#5b6573; --um-green:#005030; --um-orange:#F47321; --panel:rgba(255,255,255,.88); --ctl:#eef1f5; --ctl-border:rgba(15,22,35,.12); }
@@ -69,9 +69,9 @@
   #legend .row { display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
   #legend i { display:inline-block; width:9px; height:9px; border-radius:50%; border:1px solid #fff; box-shadow:0 0 0 1px rgba(0,0,0,.25); }
   #legend .sep { color:var(--border); margin:0 2px; }
-  #cbar { position:absolute; right:10px; top:50%; transform:translateY(-50%); width:30px; height:170px; padding:6px 0; display:flex; flex-direction:column; align-items:center; z-index:5; }
+  #cbar { position:absolute; right:10px; top:50%; transform:translateY(-50%); width:40px; height:170px; padding:6px 0; display:flex; flex-direction:column; align-items:center; z-index:5; cursor:help; }
   #cbar canvas { display:block; width:12px; height:126px; min-height:0; border-radius:2px; }
-  #cbar span { font-size:9px; color:var(--muted); }
+  #cbar span { font-size:9px; color:var(--muted); white-space:nowrap; font-variant-numeric:tabular-nums; }
   #status { color:var(--muted); font-size:11px; }
   #tb { position:absolute; z-index:6; pointer-events:none; display:none; background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:3px 7px; font-size:11px; color:var(--text); font-variant-numeric:tabular-nums; white-space:nowrap; }
   #tb b { font-size:12px; }
@@ -113,21 +113,20 @@
     <header class="topbar" role="banner">
         <div class="topbar-inner">
             <div class="topbar-brand">
-                <img src="tc-atlas-favicon-64.png?v=20261009p1a" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
-                <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                <a class="topbar-home" href="index.html" aria-label="TC-ATLAS home">
+                    <img src="tc-atlas-favicon-64.png?v=20261009p1a" alt="" class="topbar-icon" width="28" height="28">
+                    <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                </a>
                 <div class="topbar-divider"></div>
                 <div class="topbar-subtitle">Global IR Archive</div>
             </div>
             <nav aria-label="Main navigation">
                 <ul class="topbar-nav">
-                    <li><a href="index.html" role="button">Home</a></li>
-                    <li><a href="explorer.html" role="button"><span class="nav-full">TC-RADAR</span><span class="nav-short">Radar</span></a></li>
-                    <li><a href="realtime_ir.html" role="button"><span class="nav-full">Real-Time Monitor</span><span class="nav-short">RT Monitor</span></a></li>
-                    <li><a href="global_archive.html" role="button" class="ga-nav-active nav-active"><span class="nav-full">Global Archive</span><span class="nav-short">Global</span></a></li>
-                    <li><a href="tc_climatology.html" role="button"><span class="nav-full">TC Climatology</span><span class="nav-short">Climo</span></a></li>
-                    <li><a href="explorer.html?tab=composites" role="button"><span class="nav-full">Composites</span><span class="nav-short">Comp.</span></a></li>
-                    <li><a href="index.html#about" role="button">About</a></li>
-                    <li><a href="index.html#cite" role="button">Cite</a></li>
+                    <li><a href="realtime_ir.html"><span class="nav-full">Real-Time Monitor</span><span class="nav-short">Monitor</span></a></li>
+                    <li><a href="global_archive.html" class="nav-active" aria-current="page"><span class="nav-full">Global Archive</span><span class="nav-short">Archive</span></a></li>
+                    <li><a href="explorer.html">TC-RADAR</a></li>
+                    <li><a href="tc_climatology.html"><span class="nav-full">TC Climatology</span><span class="nav-short">Climatology</span></a></li>
+                    <li><a href="about.html">About</a></li>
                 </ul>
             </nav>
                         <button class="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
@@ -158,7 +157,7 @@
 <div id="legend" class="hud">
   <div class="row"><i style="background:#60a5fa"></i>TD/TS <i style="background:#fbbf24;margin-left:6px"></i>Cat 1&ndash;2 <i style="background:#f87171;margin-left:6px"></i>Cat 3 <i style="background:#ef4444;margin-left:6px"></i>Cat 4 <i style="background:#c084fc;margin-left:6px"></i>Cat 5 <span class="sep">|</span> <span style="color:#fde68a">kt</span> best track <span class="sep">|</span> <span style="color:#7dd3fc">G</span> GHOST</div>
   <div class="row">Dashed circle: 300 km locator, not a wind radius. Click a storm to lock on.</div>
-  <div class="row">IR: NASA GES DISC MergIR (1998+) &middot; NOAA NCEI GridSat-B1 (1980&ndash;97, gap fill) &middot; <a href="index.html#data-credits" style="color:var(--um-green)">credits &amp; citations</a></div>
+  <div class="row">IR: NASA GES DISC MergIR (1998+) &middot; NOAA NCEI GridSat-B1 (1980&ndash;97, gap fill) &middot; <a href="about.html#data-credits" style="color:var(--um-green)">credits &amp; citations</a></div>
 </div>
 <div id="ginfo" class="hud" role="dialog" aria-label="About GHOST">
   <h4>GHOST intensity estimates <span class="x" title="Close">&#10005;</span></h4>
@@ -167,7 +166,7 @@
   <p>The same model runs in real time on active storms: <a href="realtime_ir.html#experimental">open the Real-Time Monitor's Experimental tab &rarr;</a></p>
 </div>
 <div id="tb"></div>
-<div id="cbar" class="hud"><span>310 K</span><canvas width="1" height="126"></canvas><span>170 K</span></div>
+<div id="cbar" class="hud" title="IR brightness temperature: 37 °C (310 K) at the top to −103 °C (170 K) at the bottom"><span>37 °C</span><canvas width="1" height="126"></canvas><span>&minus;103 °C</span></div>
 <div id="bar" class="hud">
   <button id="prev" title="Previous frame (left arrow)">&#9664;</button>
   <button id="play" title="Play / pause (space)">&#9654; Play</button>
@@ -216,7 +215,7 @@
   var map = new maplibregl.Map({ container: 'ira-map', center: VIEWS[basin].slice(0,2), zoom: VIEWS[basin][2], minZoom: 1, maxZoom: 7,
     attributionControl: COMPACT_ATTR ? { compact: true } : undefined,
     style: { version: 8, sources: {
-      carto: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/' + TV + '_nolabels/{z}/{x}/{y}.png' + CK, 'https://b.basemaps.cartocdn.com/' + TV + '_nolabels/{z}/{x}/{y}.png' + CK], tileSize: 256, attribution: '&copy; <a href="https://carto.com/">CARTO</a> &middot; <a href="https://www.ncei.noaa.gov/products/international-best-track-archive">IBTrACS</a> &middot; IR: <a href="https://doi.org/10.5067/P4HZB9N27EKU">MergIR</a> (NASA GES DISC) &middot; <a href="https://doi.org/10.7289/V59P2ZKR">GridSat-B1</a> (NOAA NCEI CDR) &middot; GHOST (TC-ATLAS) &middot; <a href="index.html#data-credits">Data credits</a>' },
+      carto: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/' + TV + '_nolabels/{z}/{x}/{y}.png' + CK, 'https://b.basemaps.cartocdn.com/' + TV + '_nolabels/{z}/{x}/{y}.png' + CK], tileSize: 256, attribution: '&copy; <a href="https://carto.com/">CARTO</a> &middot; <a href="https://www.ncei.noaa.gov/products/international-best-track-archive">IBTrACS</a> &middot; IR: <a href="https://doi.org/10.5067/P4HZB9N27EKU">MergIR</a> (NASA GES DISC) &middot; <a href="https://doi.org/10.7289/V59P2ZKR">GridSat-B1</a> (NOAA NCEI CDR) &middot; GHOST (TC-ATLAS) &middot; <a href="about.html#data-credits">Data credits</a>' },
       labels: { type: 'raster', tiles: ['https://a.basemaps.cartocdn.com/' + TV + '_only_labels/{z}/{x}/{y}.png' + CK], tileSize: 256 } },
       layers: [{ id: 'carto', type: 'raster', source: 'carto' }] } });
   map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
@@ -394,13 +393,14 @@
     return rec.idx[r * rec.cols + c] || 0;
   }
   function tbK(v) { return 170 + (v - 1) / 254 * 140; }
+  function fmtC(k) { return (k - 273.15).toFixed(1).replace('-', '\u2212') + ' \u00b0C'; }
   map.on('mousemove', function (ev) {
     if (!curTs || isTouch) return;
     var lat = ev.lngLat.lat, lon = ((ev.lngLat.lng + 180) % 360 + 360) % 360 - 180, v = 0, src = '';
     if (secCur && secCur.fr && secCur.fr.rec) { v = sampleIdx(secCur.fr.rec, secCur.fr.b, lat, lon); if (v) src = '4 km · ' + secCur.s.name; }
     if (!v && decoded[curTs]) { v = sampleIdx(decoded[curTs], boundsFor(decoded[curTs]), lat, lon); if (v) src = '8 km'; }
     if (!v) { tbEl.style.display = 'none'; return; }
-    tbEl.innerHTML = '<b>' + tbK(v).toFixed(1) + ' K</b><small>' + src + ' · ' + Math.abs(lat).toFixed(2) + (lat >= 0 ? 'N ' : 'S ') + Math.abs(lon).toFixed(2) + (lon >= 0 ? 'E' : 'W') + '</small>';
+    tbEl.innerHTML = '<b>' + fmtC(tbK(v)) + '</b><small>' + tbK(v).toFixed(1) + ' K · ' + src + ' · ' + Math.abs(lat).toFixed(2) + (lat >= 0 ? 'N ' : 'S ') + Math.abs(lon).toFixed(2) + (lon >= 0 ? 'E' : 'W') + '</small>';
     tbEl.style.display = 'block'; tbEl.style.left = (ev.point.x + 14) + 'px'; tbEl.style.top = (ev.point.y + 14) + 'px';
   });
   map.on('mouseout', function () { tbEl.style.display = 'none'; });

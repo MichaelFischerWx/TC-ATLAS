@@ -1905,8 +1905,7 @@
                                      { dpi: EXPORT_DPI });
             }).catch(function (err) {
                 console.error('[seasonal] save failed', err);
-                alert("Couldn't save PNG: " +
-                      (err && err.message ? err.message : err));
+                alert(TCErrors.message(err, 'the PNG', 'save'));
             }).then(function () {
                 btn.textContent = origLabel;
                 btn.disabled = false;
@@ -3278,9 +3277,8 @@
                 state.ts.variable !== variable) {
                 return;
             }
-            el.innerHTML =
-                '<div class="seasonal-panel-stub seasonal-status-error">' +
-                'Failed to load daily data: ' + e.message + '</div>';
+            TCErrors.show(el, e, 'the daily data', _renderTimeSeriesDaily,
+                'seasonal-panel-stub seasonal-status-error');
         });
     }
 
@@ -3784,12 +3782,11 @@
                     || state.ts.variable !== variable) {
                 return;
             }
-            el.innerHTML =
-                '<div class="seasonal-panel-stub seasonal-status-error">'
-                + 'Failed to load ' + loadLabel + ': ' + e.message + '. '
-                + 'If you just deployed, the parquet may still be uploading — '
-                + 'run <code>python ' + builderHint + '</code>.'
-                + '</div>';
+            // A fresh deploy may not have uploaded the parquet yet; the
+            // builder to run goes to the console, not the page.
+            console.warn('[seasonal] ' + loadLabel + ' missing? Builder: python ' + builderHint);
+            TCErrors.show(el, e, loadLabel, _renderTimeSeriesDailyShear,
+                'seasonal-panel-stub seasonal-status-error');
         });
     }
 
@@ -8404,10 +8401,9 @@
                 _evoDrawPlotly(el, frames);
             });
         }).catch(function (e) {
-            console.warn('[seasonal-evo] year fetch failed:', e);
-            el.innerHTML = '<div class="seasonal-panel-stub" style="padding:80px;'
-                + 'text-align:center;color:#ef4444;">Failed to load '
-                + year + ': ' + e.message + '</div>';
+            var box = TCErrors.show(el, e, 'the ' + year + ' season', _evoRender,
+                'seasonal-panel-stub tc-error');
+            if (box) box.style.cssText = 'padding:80px;text-align:center;';
         });
     }
 
@@ -10364,7 +10360,9 @@
             _addPanelImageSaveBtn('seasonal-panel-analogs',
                                   'seasonal_analog_seasons');
         }).catch(function (e) {
-            _setStatus('Failed to load seasonal data: ' + e.message, true);
+            _setStatus('', true);
+            TCErrors.show(document.getElementById('seasonal-status'), e, 'the seasonal data',
+                function () { location.reload(); });
         });
     }
 

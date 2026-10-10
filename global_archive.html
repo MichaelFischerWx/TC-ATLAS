@@ -62,9 +62,10 @@
     <meta name="theme-color" content="#0a0e14" media="(prefers-color-scheme: dark)">
     <meta name="apple-mobile-web-app-title" content="TC-ATLAS">
 
-    <title>Global TC Archive — TC-ATLAS</title>
+    <title>Global Archive — TC-ATLAS</title>
     <script src="theme.js?v=20261009p1a"></script>
     <script defer src="tc_export.js?v=20260803c"></script>
+    <script defer src="tc_errors.js?v=20261010m1"></script>
 
     <!-- Map engine: MapLibre GL + Leaflet-compat facade (lflet_gl.js). leaflet.css is
          kept for the .leaflet-* control/tooltip styling the facade reuses. -->
@@ -87,11 +88,11 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundles, discoverable from byte 0. Tokens MUST match
          the script tags below. -->
-    <link rel="preload" as="script" href="global_archive.js?v=20260930cm1">
+    <link rel="preload" as="script" href="global_archive.js?v=20261010m1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20261009p1d">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20261009p1a">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20261010m1">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20261010m1">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -100,21 +101,20 @@
     <header class="topbar" role="banner">
         <div class="topbar-inner">
             <div class="topbar-brand">
-                <img src="tc-atlas-favicon-64.png?v=20261009p1a" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
-                <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                <a class="topbar-home" href="index.html" aria-label="TC-ATLAS home">
+                    <img src="tc-atlas-favicon-64.png?v=20261009p1a" alt="" class="topbar-icon" width="28" height="28">
+                    <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                </a>
                 <div class="topbar-divider"></div>
-                <div class="topbar-subtitle">Global TC Archive</div>
+                <div class="topbar-subtitle">Global Archive</div>
             </div>
             <nav aria-label="Main navigation">
                 <ul class="topbar-nav">
-                    <li><a href="index.html" role="button">Home</a></li>
-                    <li><a href="explorer.html" role="button"><span class="nav-full">TC-RADAR</span><span class="nav-short">Radar</span></a></li>
-                    <li><a href="realtime_ir.html" role="button"><span class="nav-full">Real-Time Monitor</span><span class="nav-short">RT Monitor</span></a></li>
-                    <li><a href="global_archive.html" role="button" class="ga-nav-active nav-active"><span class="nav-full">Global Archive</span><span class="nav-short">Global</span></a></li>
-                    <li><a href="tc_climatology.html" role="button"><span class="nav-full">TC Climatology</span><span class="nav-short">Climo</span></a></li>
-                    <li><a href="explorer.html?tab=composites" role="button"><span class="nav-full">Composites</span><span class="nav-short">Comp.</span></a></li>
-                    <li><a href="index.html#about" role="button">About</a></li>
-                    <li><a href="index.html#cite" role="button">Cite</a></li>
+                    <li><a href="realtime_ir.html"><span class="nav-full">Real-Time Monitor</span><span class="nav-short">Monitor</span></a></li>
+                    <li><a href="global_archive.html" class="nav-active" aria-current="page"><span class="nav-full">Global Archive</span><span class="nav-short">Archive</span></a></li>
+                    <li><a href="explorer.html">TC-RADAR</a></li>
+                    <li><a href="tc_climatology.html"><span class="nav-full">TC Climatology</span><span class="nav-short">Climatology</span></a></li>
+                    <li><a href="about.html">About</a></li>
                 </ul>
             </nav>
                         <button class="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
@@ -541,16 +541,16 @@
                                 </div>
                             </div>
                         </div>
-                        <div id="ir-colorbar-strip" class="ir-cbar-strip" style="display:none;">
-                            <span class="ir-cbar-label-top">310 K</span>
+                        <div id="ir-colorbar-strip" class="ir-cbar-strip" style="display:none;" title="IR brightness temperature: 37 °C (310 K) at the top to −103 °C (170 K) at the bottom">
+                            <span class="ir-cbar-label-top">37°C</span>
                             <canvas id="ir-colorbar-canvas" width="14"></canvas>
-                            <span class="ir-cbar-label-bot">170 K</span>
+                            <span class="ir-cbar-label-bot">&minus;103°C</span>
                         </div>
                         </div><!-- /detail-map-ir-row -->
                         <div id="ir-map-controls" class="ir-map-controls ir-bar ir-hidden" style="display:none;position:relative;bottom:auto;left:auto;z-index:auto;">
                             <div class="ir-bar-row1">
                                 <span id="ir-frame-info" class="ir-frame-info"></span>
-                                <a class="panel-badge" id="ir-source-badge" href="index.html#data-credits" target="_blank" rel="noopener" title="Imagery source — click for data credits and citations" style="text-decoration:none;">HURSAT-B1</a>
+                                <a class="panel-badge" id="ir-source-badge" href="about.html#data-credits" target="_blank" rel="noopener" title="Imagery source — click for data credits and citations" style="text-decoration:none;">HURSAT-B1</a>
                                 <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepIRFrame(-1)" title="Previous frame">&#9664;</button>
                                 <button id="ir-play-btn" class="ga-btn ga-btn-sm" aria-label="Play IR animation" onclick="toggleIRPlay()">&#9654;</button>
                                 <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepIRFrame(1)" title="Next frame">&#9654;</button>
@@ -991,7 +991,7 @@
                         </div>
                         <div class="ir-colorbar-row" style="margin-top:8px;padding:0 12px;">
                             <canvas id="compare-ir-colorbar" height="8"></canvas>
-                            <div class="ir-colorbar-labels"><span>310 K</span><span>240</span><span>170 K</span></div>
+                            <div class="ir-colorbar-labels" title="IR brightness temperature: 37 °C (310 K) to −103 °C (170 K)"><span>37 °C</span><span>&minus;33</span><span>&minus;103 °C</span></div>
                         </div>
 
                         <!-- Overlaid radial IR profile -->
@@ -1214,7 +1214,7 @@
                                 (NASA GES DISC MergIR, ~4&nbsp;km, half-hourly,
                                 <a href="https://doi.org/10.5067/P4HZB9N27EKU" target="_blank" rel="noopener">doi:10.5067/P4HZB9N27EKU</a>;
                                 NOAA NCEI GridSat-B1 before 1998) &mdash; the same imagery
-                                the frame viewer on this page displays. <a href="index.html#data-credits">Data credits</a>.</li>
+                                the frame viewer on this page displays. <a href="about.html#data-credits">Data credits</a>.</li>
                             <li><strong>Large-scale environmental fields</strong> from
                                 reanalysis (thermodynamic and kinematic).</li>
                             <li><strong>Storm position</strong> from IBTrACS &mdash; position
@@ -1398,10 +1398,10 @@
     <script defer src="lflet_gl.js?v=20261001ui1"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20261009p1a"></script>
-    <script defer src="global_archive.js?v=20260930cm1"></script>
+    <script defer src="global_archive.js?v=20261010m1"></script>
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
-    <script defer src="global_archive_ghostra.js?v=20260825c"></script>
+    <script defer src="global_archive_ghostra.js?v=20261010m1"></script>
 </body>
 </html>

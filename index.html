@@ -48,6 +48,16 @@
     <meta name="apple-mobile-web-app-title" content="TC-ATLAS">
 
     <title>TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure</title>
+    <script>
+        // About, data sources, methods, citations and contact moved to
+        // about.html; keep shared links like index.html#cite working.
+        (function () {
+            var h = location.hash.slice(1);
+            if ({ about: 1, 'data-sources': 1, 'genesis-clustering': 1, cite: 1, 'data-credits': 1, contact: 1 }[h]) {
+                location.replace('about.html#' + h);
+            }
+        })();
+    </script>
     <script src="theme.js?v=20261009p1a"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -55,6 +65,7 @@
          script runs — warm the API connection from byte 0. -->
     <link rel="preconnect" href="https://api.tcatlas.org">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="site_pages.css?v=20261010m1">
 
     <style>
         :root {
@@ -159,13 +170,16 @@
         .topbar { background: var(--navy); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1000; backdrop-filter: blur(12px); }
         .topbar-inner { max-width: 1200px; margin: 0 auto; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; height: 52px; }
         .topbar-brand { display: flex; align-items: center; gap: 14px; }
+        .topbar-home { display: flex; align-items: center; gap: 14px; min-width: 0; color: inherit; text-decoration: none; border-radius: 6px; }
+        .topbar-home:hover .topbar-logo { color: var(--um-green); }
+        .topbar-home:focus-visible { outline: 2px solid var(--um-orange); outline-offset: 3px; }
         .topbar-icon { width: 28px; height: 28px; border-radius: 4px; }
         .topbar-logo { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; white-space: nowrap; color: var(--text); }
         .topbar-nav { display: flex; gap: 6px; list-style: none; align-items: center; flex-wrap: nowrap; }
         .topbar-nav li { flex: 0 0 auto; }
         .topbar-nav a { color: var(--slate); text-decoration: none; font-weight: 500; font-size: 0.8rem; padding: 6px 12px; border-radius: 6px; transition: all 0.2s; white-space: nowrap; }
         .topbar-nav a:hover { color: var(--text); background: rgba(15,22,35,0.05); }
-        .topbar-nav a.nav-active { color: var(--blue); background: rgba(58,106,156,0.10); }
+        .topbar-nav a.nav-active { color: #ffffff; background: var(--um-green); font-weight: 600; }
         .nav-short { display: none; }
         .nav-full { display: inline; }
         /* Intermediate desktop widths: switch to short labels so the nav fits in one row. */
@@ -356,43 +370,6 @@
         .section-title .accent { color: var(--blue); }
         .section-desc { text-align: center; max-width: 700px; margin: 0 auto 2.5rem auto; font-size: 1rem; color: var(--slate); line-height: 1.8; }
 
-        /* ── Data source grid ────────────────────────────── */
-        .source-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 1.25rem;
-            margin-top: 2rem;
-        }
-        .source-card {
-            background: var(--navy-mid);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 1.5rem;
-        }
-        .source-card h3 {
-            color: var(--text);
-            margin-bottom: 0.5rem;
-            font-size: 0.95rem;
-        }
-        .source-card p {
-            color: var(--slate);
-            font-size: 0.85rem;
-            line-height: 1.6;
-        }
-        .source-card a {
-            color: var(--blue);
-            text-decoration: none;
-        }
-        .source-card a:hover {
-            text-decoration: underline;
-        }
-
-        /* ── Contact section ─────────────────────────────── */
-        .contact-section { background: var(--surface); border-top: 1px solid var(--border); text-align: center; padding: 4rem 24px; color: var(--text); }
-        .contact-section .section-title { color: var(--text); }
-        .contact-info { max-width: 500px; margin: 2rem auto; background: var(--surface-raised); padding: 2rem; border-radius: var(--radius-lg); border: 1px solid var(--border); }
-        .contact-info a { color: var(--blue); }
-
         /* ── Footer ──────────────────────────────────────── */
         footer { text-align: center; padding: 2rem; font-size: 0.75rem; color: var(--text-dim); border-top: 1px solid var(--border); }
         footer a { color: var(--blue); text-decoration: none; }
@@ -528,83 +505,6 @@
         .start-card-arrow { color: var(--blue-light); font-size: 1.1rem; flex-shrink: 0; align-self: center; opacity: 0.6; transition: opacity 0.2s, transform 0.2s; }
         .start-card:hover .start-card-arrow { opacity: 1; transform: translateX(2px); }
 
-        /* ── Changelog timeline ──────────────────────────── */
-        .changelog-list {
-            max-width: 780px;
-            margin: 0 auto;
-            position: relative;
-            padding-left: 1rem;
-        }
-        .changelog-list::before {
-            content: '';
-            position: absolute;
-            left: 6px;
-            top: 6px;
-            bottom: 6px;
-            width: 1px;
-            background: var(--border-light);
-        }
-        .changelog-entry {
-            position: relative;
-            display: grid;
-            grid-template-columns: 110px 1fr;
-            gap: 1.25rem;
-            padding: 0.75rem 0 0.75rem 1.25rem;
-            align-items: baseline;
-        }
-        .changelog-entry::before {
-            content: '';
-            position: absolute;
-            left: -0.25rem;
-            top: 1.1rem;
-            width: 9px;
-            height: 9px;
-            border-radius: 50%;
-            background: var(--um-orange);
-            box-shadow: 0 0 0 3px var(--navy);
-        }
-        .changelog-entry:not(:first-child)::before {
-            background: var(--slate);
-            box-shadow: 0 0 0 3px var(--navy);
-        }
-        .changelog-date {
-            font-size: 0.72rem;
-            font-weight: 600;
-            color: var(--slate);
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-            white-space: nowrap;
-            font-variant-numeric: tabular-nums;
-        }
-        .changelog-text {
-            font-size: 0.92rem;
-            color: var(--text);
-            line-height: 1.6;
-        }
-        .changelog-text strong { color: var(--blue-light); font-weight: 600; }
-        .changelog-footer {
-            text-align: center;
-            margin-top: 1.5rem;
-            font-size: 0.82rem;
-            color: var(--slate);
-        }
-        .changelog-footer a {
-            color: var(--blue-light);
-            text-decoration: none;
-            border-bottom: 1px dotted rgba(91,156,255,0.4);
-            transition: color 0.2s, border-color 0.2s;
-        }
-        .changelog-footer a:hover { color: var(--cyan); border-color: var(--cyan); }
-        @media (max-width: 600px) {
-            .changelog-entry {
-                grid-template-columns: 1fr;
-                gap: 0.25rem;
-                padding-left: 1rem;
-            }
-            .changelog-date { font-size: 0.68rem; }
-            .changelog-text { font-size: 0.85rem; }
-        }
-
         /* ── Responsive ──────────────────────────────────── */
         @media (max-width: 1100px) {
             .platform-grid { grid-template-columns: repeat(2, 1fr); }
@@ -646,21 +546,6 @@
             .platform-grid-bottom .platform-card { flex: 1 1 auto; }
         }
 
-        /* ── Citation section ────────────────────────────── */
-        .cite-list { display: flex; flex-direction: column; gap: 1rem; max-width: 840px; margin: 0 auto; }
-        .cite-pub { background: var(--navy-mid); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem 1.5rem; }
-        .cite-pub-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 0.5rem; }
-        .cite-pub-text { font-size: 0.875rem; line-height: 1.7; color: var(--slate); font-family: 'JetBrains Mono', monospace; word-break: break-word; }
-        .cite-pub-text a { color: var(--blue); text-decoration: none; }
-        .cite-pub-text a:hover { text-decoration: underline; }
-        .cite-pub-text em { font-style: italic; }
-        .cite-copy-landing { display: inline-flex; align-items: center; gap: 4px; margin-top: 0.75rem; padding: 4px 12px; font-size: 0.75rem; font-weight: 600; font-family: 'DM Sans', sans-serif; background: var(--surface); border: 1px solid var(--border-light); border-radius: 4px; color: var(--slate); cursor: pointer; transition: all 0.2s; }
-        .cite-copy-landing:hover { background: rgba(58,106,156,0.10); border-color: rgba(58,106,156,0.4); color: var(--blue); }
-        .cite-copy-landing.copied { background: rgba(34,150,100,0.12); border-color: rgba(34,150,100,0.4); color: #1e7a4e; }
-        .cite-bibtex-landing { display: inline-flex; align-items: center; gap: 6px; padding: 8px 20px; font-size: 0.875rem; font-weight: 700; font-family: 'DM Sans', sans-serif; background: var(--um-green); border: 1px solid var(--um-green); border-radius: 6px; color: #ffffff; cursor: pointer; transition: all 0.2s; }
-        .cite-bibtex-landing:hover { background: var(--um-green-deep); border-color: var(--um-green-deep); }
-        .cite-bibtex-landing.copied { background: rgba(34,150,100,0.12); border-color: rgba(34,150,100,0.4); color: #1e7a4e; }
-
         /* iOS Safari zooms the viewport when a focused form control is
            <16px. pointer:coarse scopes the rule to touch devices so
            desktop layouts stay dense. */
@@ -685,19 +570,18 @@
     <header class="topbar" role="banner">
         <div class="topbar-inner">
             <div class="topbar-brand">
-                <img src="tc-atlas-favicon-64.png?v=20261009p1a" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
-                <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                <a class="topbar-home" href="index.html" aria-label="TC-ATLAS home">
+                    <img src="tc-atlas-favicon-64.png?v=20261009p1a" alt="" class="topbar-icon" width="28" height="28">
+                    <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                </a>
             </div>
             <nav aria-label="Main navigation">
                 <ul class="topbar-nav">
-                    <li><a href="index.html" class="nav-active">Home</a></li>
-                    <li><a href="explorer.html"><span class="nav-full">TC-RADAR</span><span class="nav-short">Radar</span></a></li>
-                    <li><a href="realtime_ir.html"><span class="nav-full">Real-Time Monitor</span><span class="nav-short">RT Monitor</span></a></li>
-                    <li><a href="global_archive.html"><span class="nav-full">Global Archive</span><span class="nav-short">Global</span></a></li>
-                    <li><a href="tc_climatology.html"><span class="nav-full">TC Climatology</span><span class="nav-short">Climo</span></a></li>
-                    <li><a href="explorer.html?tab=composites"><span class="nav-full">Composites</span><span class="nav-short">Comp.</span></a></li>
-                    <li><a href="#about">About</a></li>
-                    <li><a href="#cite">Cite</a></li>
+                    <li><a href="realtime_ir.html"><span class="nav-full">Real-Time Monitor</span><span class="nav-short">Monitor</span></a></li>
+                    <li><a href="global_archive.html"><span class="nav-full">Global Archive</span><span class="nav-short">Archive</span></a></li>
+                    <li><a href="explorer.html">TC-RADAR</a></li>
+                    <li><a href="tc_climatology.html"><span class="nav-full">TC Climatology</span><span class="nav-short">Climatology</span></a></li>
+                    <li><a href="about.html">About</a></li>
                 </ul>
             </nav>
                         <button class="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
@@ -716,7 +600,7 @@
             <h1 class="hero-title">TC-ATLAS</h1>
         </div>
         <p class="hero-subtitle">Tropical Cyclone Analysis Tool for Live and Archived Structure</p>
-        <p class="hero-desc">A multi-source platform for exploring tropical cyclone vortex structure. TC-ATLAS brings together airborne Doppler radar, passive microwave and infrared satellite imagery, ERA5 environmental diagnostics, dropsonde profiles, and flight-level observations into one unified interactive tool.</p>
+        <p class="hero-desc">Live monitoring of every active tropical cyclone, with airborne radar, reconnaissance and best-track archives for studying storm structure.</p>
 
         <!-- ── Live activity strip ────────────────────────── -->
         <div class="activity-strip" id="activity-strip" role="status" aria-label="Live activity">
@@ -735,60 +619,60 @@
 
         <!-- ── Platform cards ────────────────────────────── -->
         <div class="platform-grid" id="tools">
-            <a href="explorer.html" class="platform-card card-radar">
-                <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg></div>
-                <div class="card-title">TC-RADAR Archive</div>
-                <div class="card-desc">Explore 1,500+ post-processed airborne Doppler radar analyses with interactive 3D wind fields, cross-sections, azimuthal means, and multi-variable visualization spanning 1997&ndash;2024.</div>
+            <a href="realtime_ir.html" class="platform-card card-ir">
+                <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/></svg></div>
+                <div class="card-title">Real-Time Monitor</div>
+                <div class="card-desc">Track all active tropical cyclones worldwide with live geostationary infrared satellite imagery from GOES-East, GOES-West, and Himawari-9.</div>
                 <div class="card-stats">
-                    <div><div class="card-stat-val">1,510</div><div class="card-stat-label">Analyses</div></div>
-                    <div><div class="card-stat-val">91</div><div class="card-stat-label">Storms</div></div>
-                    <div><div class="card-stat-val">1997&ndash;2024</div><div class="card-stat-label">Coverage</div></div>
+                <div><div class="card-stat-val">Global</div><div class="card-stat-label">Coverage</div></div>
+                <div><div class="card-stat-val">GOES &amp; Himawari</div><div class="card-stat-label">Satellites</div></div>
                 </div>
                 <span class="card-arrow">&rarr;</span>
             </a>
 
             <a href="realtime_ir.html#recon" class="platform-card card-realtime">
                 <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z"/></svg></div>
-                <div class="card-title">Real-Time TDR</div>
-                <div class="card-desc">Monitor active hurricane reconnaissance missions with live tail Doppler radar visualizations, flight-level data, dropsonde profiles, and SHIPS environmental diagnostics.</div>
+                <div class="card-title">Recon</div>
+                <div class="card-desc">Follow active hurricane-hunter missions live: flight-level winds, dropsondes, VDMs, SEAR surface-wind estimates and tail Doppler radar analyses, with an archive of every 2026 flight.</div>
                 <div class="card-stats">
-                    <div><div class="card-stat-val">Live</div><div class="card-stat-label">Missions</div></div>
-                    <div><div class="card-stat-val">P-3 &amp; G-IV</div><div class="card-stat-label">Aircraft</div></div>
+                <div><div class="card-stat-val">Live</div><div class="card-stat-label">Missions</div></div>
+                <div><div class="card-stat-val">P-3 &amp; G-IV</div><div class="card-stat-label">Aircraft</div></div>
                 </div>
                 <span class="card-arrow">&rarr;</span>
             </a>
 
-            <a href="realtime_ir.html" class="platform-card card-ir">
-                <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/></svg></div>
-                <div class="card-title">Real-Time Monitor</div>
-                <div class="card-desc">Track all active tropical cyclones worldwide with live geostationary infrared satellite imagery from GOES-East, GOES-West, and Himawari-9.</div>
+            <a href="global_archive.html" class="platform-card card-global">
+                <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+                <div class="card-title">Global Archive</div>
+                <div class="card-desc">Browse the complete IBTrACS tropical cyclone record from 1842 to present with satellite imagery, intensity timelines, reconnaissance, and multi-storm comparison tools.</div>
                 <div class="card-stats">
-                    <div><div class="card-stat-val">Global</div><div class="card-stat-label">Coverage</div></div>
-                    <div><div class="card-stat-val">GOES &amp; Himawari</div><div class="card-stat-label">Satellites</div></div>
+                <div><div class="card-stat-val">14,000+</div><div class="card-stat-label">Storms</div></div>
+                <div><div class="card-stat-val">7</div><div class="card-stat-label">Basins</div></div>
+                <div><div class="card-stat-val">1842&ndash;2025</div><div class="card-stat-label">Coverage</div></div>
                 </div>
                 <span class="card-arrow">&rarr;</span>
             </a>
 
             <div class="platform-grid-bottom">
-                <a href="global_archive.html" class="platform-card card-global">
-                    <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
-                    <div class="card-title">Global Archive</div>
-                    <div class="card-desc">Browse the complete IBTrACS tropical cyclone record from 1842 to present with satellite imagery, intensity timelines, reconnaissance, and multi-storm comparison tools.</div>
+                <a href="explorer.html" class="platform-card card-radar">
+                    <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg></div>
+                    <div class="card-title">TC-RADAR</div>
+                    <div class="card-desc">Explore 1,500+ post-processed airborne Doppler radar analyses with interactive 3D wind fields, cross-sections, azimuthal means, and multi-variable visualization spanning 1997&ndash;2024.</div>
                     <div class="card-stats">
-                        <div><div class="card-stat-val">14,000+</div><div class="card-stat-label">Storms</div></div>
-                        <div><div class="card-stat-val">7</div><div class="card-stat-label">Basins</div></div>
-                        <div><div class="card-stat-val">1842&ndash;2025</div><div class="card-stat-label">Coverage</div></div>
+                    <div><div class="card-stat-val">1,510</div><div class="card-stat-label">Analyses</div></div>
+                    <div><div class="card-stat-val">91</div><div class="card-stat-label">Storms</div></div>
+                    <div><div class="card-stat-val">1997&ndash;2024</div><div class="card-stat-label">Coverage</div></div>
                     </div>
                     <span class="card-arrow">&rarr;</span>
                 </a>
 
-                <a href="explorer.html#composites" class="platform-card card-composites" onclick="sessionStorage.setItem('openComposites','1')">
+                <a href="explorer.html?tab=composites" class="platform-card card-composites">
                     <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg></div>
-                    <div class="card-title">Composites</div>
+                    <div class="card-title">TC-RADAR Composites</div>
                     <div class="card-desc">Build custom composite analyses from the TC-RADAR database. Filter by intensity, shear, tilt, motion, and more to reveal systematic structural patterns across tropical cyclones.</div>
                     <div class="card-stats">
-                        <div><div class="card-stat-val">12+</div><div class="card-stat-label">Variables</div></div>
-                        <div><div class="card-stat-val">Flexible</div><div class="card-stat-label">Filters</div></div>
+                    <div><div class="card-stat-val">12+</div><div class="card-stat-label">Variables</div></div>
+                    <div><div class="card-stat-val">Flexible</div><div class="card-stat-label">Filters</div></div>
                     </div>
                     <span class="card-arrow">&rarr;</span>
                 </a>
@@ -798,9 +682,9 @@
                     <div class="card-title">TC Climatology</div>
                     <div class="card-desc">Best-track statistics by basin (ACE, RI, intensity, LMI), an ERA5 reanalysis globe for compositing by climate index, and a new <strong>Subseasonal</strong> subview for binning genesis &amp; RI by MJO and BSISO phase.</div>
                     <div class="card-stats">
-                        <div><div class="card-stat-val">3</div><div class="card-stat-label">Sub-views</div></div>
-                        <div><div class="card-stat-val">14+</div><div class="card-stat-label">Indices</div></div>
-                        <div><div class="card-stat-val">MJO/BSISO</div><div class="card-stat-label">Phase composites</div></div>
+                    <div><div class="card-stat-val">3</div><div class="card-stat-label">Sub-views</div></div>
+                    <div><div class="card-stat-val">14+</div><div class="card-stat-label">Indices</div></div>
+                    <div><div class="card-stat-val">MJO/BSISO</div><div class="card-stat-label">Phase composites</div></div>
                     </div>
                     <span class="card-arrow">&rarr;</span>
                 </a>
@@ -824,7 +708,7 @@
                 <div class="start-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg></div>
                 <div class="start-card-body">
                     <div class="start-card-title">Step inside Irma's Cat-5 eyewall</div>
-                    <div class="start-card-desc">Airborne Doppler radar · 155 kt · 2017-09-05 · full 3D wind field.</div>
+                    <div class="start-card-desc">Airborne Doppler radar · 155 kt · 5 Sep 2017 · full 3D wind field.</div>
                 </div>
                 <span class="start-card-arrow" aria-hidden="true">→</span>
             </a>
@@ -839,178 +723,24 @@
         </div>
     </section>
 
-    <!-- ── Data Sources ──────────────────────────────────── -->
-    <section id="data-sources" class="section-bg">
-        <div class="content-section">
-            <h2 class="section-title">Integrated <span class="accent">Data Sources</span></h2>
-            <p class="section-desc">TC-ATLAS unifies observations from multiple platforms and agencies into a single interactive environment.</p>
-            <div class="source-grid">
-                <div class="source-card">
-                    <h3>Airborne Doppler Radar</h3>
-                    <p>Post-processed NOAA P-3 tail Doppler radar analyses providing full 3D wind fields, reflectivity, and derived vortex diagnostics via the <a href="explorer.html">TC-RADAR database</a>.</p>
-                </div>
-                <div class="source-card">
-                    <h3>Passive Microwave Satellite</h3>
-                    <p>Multi-sensor microwave imagery from the <a href="https://rammb-data.cira.colostate.edu/tcprimed/" target="_blank" rel="noopener">TC-PRIMED</a> dataset, revealing precipitation structure and convective organization.</p>
-                </div>
-                <div class="source-card">
-                    <h3>Infrared Satellite</h3>
-                    <p>Geostationary IR brightness temperatures from <a href="https://www.ncei.noaa.gov/products/climate-data-records/geostationary-ir-channel-brightness-temperature" target="_blank" rel="noopener">GridSat-B1</a> (NOAA NCEI Climate Data Record, 1980&ndash;2024), <a href="https://disc.gsfc.nasa.gov/datasets/GPM_MERGIR_1/summary" target="_blank" rel="noopener">MergIR</a> (NASA GES DISC, 1998&ndash;present), and real-time GOES ABI Band 13 imagery for cloud-top structure. <a href="#data-credits">Data acknowledgements</a>.</p>
-                </div>
-                <div class="source-card">
-                    <h3>ERA5 Reanalysis</h3>
-                    <p>Monthly-mean and per-year ERA5 fields (SST, MPI, wind, moisture, MSE, PV, deep-layer shear) on a 3D globe via the <a href="tc_climatology.html">TC Climatology</a> page. Composite TC seasons by climate index, custom year/month, or per-pixel correlation.</p>
-                </div>
-                <div class="source-card">
-                    <h3>SHIPS Diagnostics</h3>
-                    <p>Operational SHIPS model parameters — vertical wind shear, mid-level RH, ocean heat content, and forecast environment context — surfaced inline on each storm's detail card.</p>
-                </div>
-                <div class="source-card">
-                    <h3>In-situ Observations</h3>
-                    <p>Flight-level data and GPS dropsonde profiles from NOAA reconnaissance missions via the <a href="https://seb.omao.noaa.gov/" target="_blank" rel="noopener">SEB archives</a>.</p>
-                </div>
-                <div class="source-card">
-                    <h3>Best-Track Records</h3>
-                    <p>Storm tracks, intensity, and classification from <a href="https://www.ncei.noaa.gov/products/international-best-track-archive" target="_blank" rel="noopener">IBTrACS v04</a> for comprehensive historical context across all ocean basins.</p>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- ── About ─────────────────────────────────────────── -->
-    <section id="about">
-        <div class="content-section">
-            <h2 class="section-title">About <span class="accent">TC-ATLAS</span></h2>
-            <p class="section-desc">TC-ATLAS was developed by Dr. Michael Fischer at the University of Miami to enable researchers to conduct storm-to-storm comparisons and climatological analyses of tropical cyclone vortex and convective characteristics across all stages of the lifecycle. The platform is built around the <a href="explorer.html" style="color:var(--cyan);">TC-RADAR database</a>, developed in collaboration with NOAA's Hurricane Research Division, and continues to expand with new data sources and capabilities.</p>
-        </div>
-    </section>
-
-    <!-- ── Genesis-clustering methods: pointer stub only. The canonical
-         description lives on the Real-Time Monitor itself (in-page modal,
-         deep link #genesis-methods) — this anchor survives so previously
-         shared #genesis-clustering links still land somewhere useful. -->
-    <section id="genesis-clustering">
-        <div class="content-section">
-            <h2 class="section-title">Methods: <span class="accent">Cyclogenesis Clusters</span></h2>
-            <p class="section-desc">The description of how TC-ATLAS clusters Google DeepMind's cyclogenesis ensembles &mdash; genesis definition, density-peak clustering, and wave-family linking &mdash; lives on the Real-Time Monitor itself, where the markers are: <a href="realtime_ir.html#genesis-methods" style="color:var(--cyan);">open the methods description&nbsp;&rarr;</a></p>
-        </div>
-    </section>
-
     <!-- ── Recent Updates (changelog) ─────────────────────── -->
     <section id="updates" class="section-bg">
         <div class="content-section">
             <h2 class="section-title">Recent <span class="accent">Updates</span></h2>
             <p class="section-desc">TC-ATLAS is actively maintained — new data sources, analysis tools, and UI improvements are added continuously.</p>
-            <div class="changelog-list">
-                <div class="changelog-entry">
-                    <div class="changelog-date">Aug 24, 2026</div>
-                    <div class="changelog-text"><strong>Genesis clusters &amp; wave families.</strong> The DeepMind ensemble markers are now labeled <strong>genesis clusters</strong> &mdash; automated clusters of member genesis events, not observed disturbances &mdash; and clusters that are scenarios of the <strong>same physical wave</strong> are linked into families on the <a href="realtime_ir.html">Real-Time Monitor</a> map (translucent violet ribbon + marker rings) with a combined, deduplicated probability that counts each ensemble member once. The clustering and linking method is documented in a new <a href="realtime_ir.html#genesis-methods">Methods description</a> on the monitor itself.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Jul 15, 2026</div>
-                    <div class="changelog-text"><a href="realtime_ir.html">Real-Time Monitor</a> forecast focus: a new <strong>&ldquo;Off&rdquo;</strong> option on the IR/Vis/WV switch hides the satellite layer so the DeepMind ensemble and environmental overlays read unobscured. DeepMind <strong>FNV3 cyclogenesis</strong> probabilities are now labeled explicitly as the model odds of a disturbance reaching <strong>tropical-storm strength (&ge;34 kt)</strong>, and the 1000-member raw-ensemble spaghetti renders instantly.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Jul 3, 2026</div>
-                    <div class="changelog-text"><strong>Objective eye-fix &amp; storm favorability.</strong> The monitor snaps the storm pin to an objective IR <strong>eye center</strong> with an eye / cold-top brightness-temperature readout and a follow-storm mode. Each storm card gained a <strong>favorability dashboard</strong> &mdash; a realtime <strong>ventilation index</strong> (Tang &amp; Emanuel) alongside ocean <strong>SST, SST anomaly, and ocean heat content (TCHP)</strong> &mdash; and the storm-detail imagery now carries frame-aligned <strong>GFS environmental overlays</strong> with init-cycle captions and hover readouts.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Jun 29, 2026</div>
-                    <div class="changelog-text"><strong>Ground radar on the map.</strong> Storm-page and global-map <strong>NEXRAD</strong> reflectivity now stream as GL tiles (IEM N0Q) at no added compute, and the <a href="explorer.html">TC-RADAR Explorer</a> gained a two-panel view with the airborne Doppler field draped directly on the IR map.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Jun 28, 2026</div>
-                    <div class="changelog-text"><strong>DeepMind FNV3 ensemble tools.</strong> The 1000-member cyclogenesis ensemble gained a <strong>Structure</strong> modal (RMW, size, wind-rose, and wind-area vs. IBTrACS climatology), an <strong>Intensity-Change / RI trends</strong> panel with median LMI and intensity IQR, an <strong>ACE distribution</strong>, and <strong>Vmax &harr; MSLP</strong> toggles on every intensity chart. Members are clustered into labeled disturbances on the global map.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Jun 27, 2026</div>
-                    <div class="changelog-text"><strong>TC-ATLAS global satellite mosaic.</strong> The monitor now renders its own worldwide geostationary mosaic in <strong>IR, Visible, and Water Vapor</strong>, served from our CDN as GPU-recolored single-channel tiles &mdash; full-brightness, multiple colormaps, seamless across the dateline, with animated-GIF export.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Jun 25, 2026</div>
-                    <div class="changelog-text"><strong>New map engine &amp; 3D convection.</strong> The Real-Time Monitor and <a href="global_archive.html">Global Archive</a> moved to a <strong>MapLibre GL</strong> rendering engine (smoother zoom, GPU overlays). A one-click <strong>3D</strong> pill extrudes cold IR cloud tops into relief with Tilt/Height sliders, drag-to-orbit, and branded <strong>3D-orbit GIF</strong> export, and the Environmental Analysis menu added <strong>SST anomaly and relative-SST</strong> layers.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">Jun 13, 2026</div>
-                    <div class="changelog-text">TC-ATLAS moved to its own domain, <a href="https://tcatlas.org/"><strong>tcatlas.org</strong></a>, and gained <strong>dynamic social-preview cards</strong> that render the current active-storm state when the site is shared.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">May 25, 2026</div>
-                    <div class="changelog-text"><strong>Near-real-time microwave &amp; aircraft recon.</strong> Added NRT <strong>microwave</strong> overpasses (AMSR2, GMI, SSMIS &mdash; 89 GHz PCT + 37 GHz color) with satellite pass prediction, an aircraft <strong>recon overlay</strong> (HDOB wind barbs, dropsondes, VDM), and a real-time <strong>Tail Doppler Radar</strong> tab with a live wind-center solver.</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">May 19, 2026</div>
-                    <div class="changelog-text">New <strong>Seasonal</strong> tab on the Real-Time Monitor &mdash; seven panels spanning a <strong>live SST-anomaly map</strong>, regional environment evolution (shear, MPI, RH, TCWV&hellip;), pre-season SST &times; annual ACE, OISST correlation and analog-season maps, and a climate-index dashboard (ENSO, AMO, MJO, BSISO&hellip;).</div>
-                </div>
-                <div class="changelog-entry">
-                    <div class="changelog-date">May 17, 2026</div>
-                    <div class="changelog-text">New <strong>Subseasonal</strong> tab &mdash; MJO and BSISO <strong>phase clocks</strong> plus 60-day <strong>Wheeler&ndash;Kiladis-filtered OLR Hovm&ouml;llers</strong> (MJO, Kelvin, ER, MRG, TD-type) with active TCs projected on as longitude traces and a GEFS 10-day forecast extension.</div>
-                </div>
-            </div>
+            <!-- Filled from changelog.html (the one source): its newest three entries. -->
+            <div class="changelog-list" id="changelog-latest" aria-live="polite"></div>
             <div class="changelog-footer">
-                <a href="https://github.com/MichaelFischerWx/TC-ATLAS/commits/main" target="_blank" rel="noopener">View full commit history on GitHub →</a>
+                <a href="changelog.html">All updates &rarr;</a>
             </div>
         </div>
     </section>
 
-    <!-- ── How to Cite ──────────────────────────────────────── -->
-    <section id="cite">
-        <div class="content-section">
-            <h2 class="section-title">How to <span class="accent">Cite</span></h2>
-            <p class="section-desc">If you use TC-ATLAS or the underlying TC-RADAR dataset in your research, please cite the relevant publications below.</p>
-            <div class="cite-list">
-                <div class="cite-pub">
-                    <div class="cite-pub-label">TC-RADAR Dataset</div>
-                    <p class="cite-pub-text">Fischer, M. S., P. D. Reasor, R. F. Rogers, and J. F. Gamache, 2022: An Analysis of Tropical Cyclone Vortex and Convective Characteristics in Relation to Storm Intensity Using a Novel Airborne Doppler Radar Database. <em>Mon. Wea. Rev.</em>, <strong>150</strong>, 2255&ndash;2278, <a href="https://doi.org/10.1175/MWR-D-21-0223.1" target="_blank" rel="noopener">https://doi.org/10.1175/MWR-D-21-0223.1</a>.</p>
-                    <button class="cite-copy-landing" onclick="landingCopy('Fischer, M. S., P. D. Reasor, R. F. Rogers, and J. F. Gamache, 2022: An Analysis of Tropical Cyclone Vortex and Convective Characteristics in Relation to Storm Intensity Using a Novel Airborne Doppler Radar Database. Mon. Wea. Rev., 150, 2255\u20132278, https://doi.org/10.1175/MWR-D-21-0223.1.',this)">Copy</button>
-                </div>
-                <div class="cite-pub">
-                    <div class="cite-pub-label">Vortex Tilt &amp; Precipitation Structure</div>
-                    <p class="cite-pub-text">Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2024: An observational analysis of the relationship between tropical cyclone vortex tilt, precipitation structure, and intensity change. <em>Mon. Wea. Rev.</em>, <strong>152</strong>, 203&ndash;225, <a href="https://doi.org/10.1175/MWR-D-23-0089.1" target="_blank" rel="noopener">https://doi.org/10.1175/MWR-D-23-0089.1</a>.</p>
-                    <button class="cite-copy-landing" onclick="landingCopy('Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2024: An observational analysis of the relationship between tropical cyclone vortex tilt, precipitation structure, and intensity change. Mon. Wea. Rev., 152, 203\u2013225, https://doi.org/10.1175/MWR-D-23-0089.1.',this)">Copy</button>
-                </div>
-                <div class="cite-pub">
-                    <div class="cite-pub-label">Anomaly-Based Vortex Diagnostics</div>
-                    <p class="cite-pub-text">Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2025: Are rapidly intensifying tropical cyclones associated with unique vortex and convective characteristics? <em>Mon. Wea. Rev.</em>, <strong>153</strong>, 183&ndash;203, <a href="https://doi.org/10.1175/MWR-D-24-0118.1" target="_blank" rel="noopener">https://doi.org/10.1175/MWR-D-24-0118.1</a>.</p>
-                    <button class="cite-copy-landing" onclick="landingCopy('Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2025: Are rapidly intensifying tropical cyclones associated with unique vortex and convective characteristics? Mon. Wea. Rev., 153, 183\u2013203, https://doi.org/10.1175/MWR-D-24-0118.1.',this)">Copy</button>
-                </div>
-                <div class="cite-pub">
-                    <div class="cite-pub-label">TC-ATLAS Web Tool</div>
-                    <p class="cite-pub-text">TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. Available at <a href="https://tcatlas.org/" target="_blank" rel="noopener">https://tcatlas.org/</a></p>
-                    <button class="cite-copy-landing" onclick="landingCopy('TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. Available at https://tcatlas.org/',this)">Copy</button>
-                </div>
-            </div>
-            <div class="cite-list" id="data-credits" style="margin-top:2rem;">
-                <div class="cite-pub">
-                    <div class="cite-pub-label">Data acknowledgements &mdash; infrared imagery</div>
-                    <p class="cite-pub-text" style="font-family:'DM Sans',sans-serif;">The Global IR Archive and the archived storm IR loops are built from two public datasets. Please cite them, and their data centers, in any work that uses imagery from TC-ATLAS.</p>
-                    <p class="cite-pub-text" style="margin-top:0.75rem;"><strong>MergIR (1998&ndash;present, 4 km, half-hourly):</strong> Janowiak, J., B. Joyce, and P. Xie, 2017: NCEP/CPC L3 Half Hourly 4km Global (60S&ndash;60N) Merged IR V1, edited by A. Savtchenko, Greenbelt, MD, Goddard Earth Sciences Data and Information Services Center (GES DISC), <a href="https://doi.org/10.5067/P4HZB9N27EKU" target="_blank" rel="noopener">doi:10.5067/P4HZB9N27EKU</a>. The MergIR data used here were acquired as part of the activities of NASA's Science Mission Directorate, and are archived and distributed by the Goddard Earth Sciences (GES) Data and Information Services Center (DISC).</p>
-                    <button class="cite-copy-landing" onclick="landingCopy('Janowiak, J., B. Joyce, and P. Xie, 2017: NCEP/CPC L3 Half Hourly 4km Global (60S-60N) Merged IR V1, edited by A. Savtchenko, Greenbelt, MD, Goddard Earth Sciences Data and Information Services Center (GES DISC), doi:10.5067/P4HZB9N27EKU',this)">Copy</button>
-                    <p class="cite-pub-text" style="margin-top:0.75rem;"><strong>GridSat-B1 (1980&ndash;2024, 0.07&deg;, 3-hourly):</strong> Knapp, K. R., and NOAA CDR Program, 2014: NOAA Climate Data Record (CDR) of Gridded Satellite Data from ISCCP B1 (GridSat-B1) Infrared Channel Brightness Temperature, Version 2. NOAA National Centers for Environmental Information, <a href="https://doi.org/10.7289/V59P2ZKR" target="_blank" rel="noopener">doi:10.7289/V59P2ZKR</a>. Knapp, K. R., and Coauthors, 2011: Globally gridded satellite (GridSat) observations for climate studies. <em>Bull. Amer. Meteor. Soc.</em>, <strong>92</strong>, 893&ndash;907, <a href="https://doi.org/10.1175/2011BAMS3039.1" target="_blank" rel="noopener">doi:10.1175/2011BAMS3039.1</a>. NOAA and NCEI cannot provide any warranty as to the accuracy, reliability, or completeness of furnished data; users assume responsibility to determine the usability of these data.</p>
-                    <button class="cite-copy-landing" onclick="landingCopy('Knapp, K. R., and NOAA CDR Program, 2014: NOAA Climate Data Record (CDR) of Gridded Satellite Data from ISCCP B1 (GridSat-B1) Infrared Channel Brightness Temperature, Version 2. NOAA National Centers for Environmental Information, doi:10.7289/V59P2ZKR. Knapp, K. R., and Coauthors, 2011: Globally gridded satellite (GridSat) observations for climate studies. Bull. Amer. Meteor. Soc., 92, 893-907, doi:10.1175/2011BAMS3039.1',this)">Copy</button>
-                    <p class="cite-pub-text" style="font-family:'DM Sans',sans-serif;margin-top:0.75rem;">Imagery on TC-ATLAS is re-encoded and recolored from these sources; it is not an official NASA or NOAA product, and neither agency endorses TC-ATLAS. Best-track positions and intensities are from <a href="https://www.ncei.noaa.gov/products/international-best-track-archive" target="_blank" rel="noopener">IBTrACS</a> (NOAA NCEI).</p>
-                </div>
-            </div>
-            <div style="display:flex;justify-content:center;margin-top:1.5rem;">
-                <button class="cite-bibtex-landing" onclick="landingCopyBibtex(this)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;" aria-hidden="true"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/></svg> Copy All BibTeX</button>
-            </div>
-        </div>
-    </section>
-
-    <!-- ── Contact ───────────────────────────────────────── -->
-    <section class="contact-section" id="contact">
-        <h2 class="section-title">Get in Touch</h2>
-        <p style="font-size:1.1rem;margin-bottom:2rem;opacity:0.9;">Questions about TC-ATLAS? Contact the developer.</p>
-        <div class="contact-info">
-            <p style="font-size:1.15rem;margin-bottom:0.75rem;"><strong>Dr. Michael Fischer</strong></p>
-            <p style="opacity:0.85;">TC-ATLAS Developer &middot; University of Miami</p>
-            <p style="margin-top:1rem;"><a href="mailto:mike.fischer@miami.edu" style="font-size:1rem;">mike.fischer@miami.edu</a></p>
-        </div>
-    </section>
     </main>
 
     <footer>
-        <div>Created by Michael S. Fischer &middot; University of Miami</div>
+        <div><a href="about.html">About</a> &middot; <a href="changelog.html">Updates</a> &middot; <a href="about.html#cite">How to cite</a></div>
+        <div style="margin-top:6px;">Created by Michael S. Fischer &middot; University of Miami</div>
         <div style="margin-top:6px;">Built with assistance from <a href="https://claude.ai" target="_blank" rel="noopener">Claude</a> (Anthropic)</div>
         <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);font-size:0.72rem;color:var(--text-dim);max-width:700px;margin-left:auto;margin-right:auto;line-height:1.5;">
             <strong>Disclaimer:</strong> TC-ATLAS is a research visualization platform developed at the University of Miami in collaboration with NOAA&rsquo;s Hurricane Research Division. It is provided for research and educational purposes only and is not intended for operational forecasting or decision-making. Data products are provided as-is without warranty. Real-time products may experience delays or interruptions. The developers assume no liability for the use or interpretation of information presented on this site.
@@ -1018,31 +748,6 @@
     </footer>
 
     <script>
-    var _LANDING_BIBTEX = [
-        '@article{Fischer2022TCRadar,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Rogers, Robert F. and Gamache, John F.},\n  title   = {An Analysis of Tropical Cyclone Vortex and Convective Characteristics in Relation to Storm Intensity Using a Novel Airborne Doppler Radar Database},\n  journal = {Monthly Weather Review},\n  year    = {2022},\n  volume  = {150},\n  pages   = {2255--2278},\n  doi     = {10.1175/MWR-D-21-0223.1}\n}',
-        '@article{Fischer2024VortexTilt,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Dunion, Jason P. and Rogers, Robert F.},\n  title   = {An observational analysis of the relationship between tropical cyclone vortex tilt, precipitation structure, and intensity change},\n  journal = {Monthly Weather Review},\n  year    = {2024},\n  volume  = {152},\n  pages   = {203--225},\n  doi     = {10.1175/MWR-D-23-0089.1}\n}',
-        '@article{Fischer2025RapidIntensification,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Dunion, Jason P. and Rogers, Robert F.},\n  title   = {Are Rapidly Intensifying Tropical Cyclones Associated with Unique Vortex and Convective Characteristics?},\n  journal = {Monthly Weather Review},\n  year    = {2025},\n  volume  = {153},\n  pages   = {183--203},\n  doi     = {10.1175/MWR-D-24-0118.1}\n}',
-        '@misc{TCATLAS,\n  title  = {{TC-ATLAS}: Tropical Cyclone Analysis Tool for Live and Archived Structure},\n  author = {Fischer, Michael S.},\n  year   = {2024},\n  url    = {https://tcatlas.org/}\n}'
-    ].join('\n\n');
-
-    function landingCopy(text, btn) {
-        navigator.clipboard.writeText(text).then(function() {
-            var orig = btn.textContent;
-            btn.textContent = '\u2713 Copied';
-            btn.classList.add('copied');
-            setTimeout(function() { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
-        });
-    }
-
-    function landingCopyBibtex(btn) {
-        navigator.clipboard.writeText(_LANDING_BIBTEX).then(function() {
-            var orig = btn.textContent;
-            btn.textContent = '\u2713 Copied!';
-            btn.classList.add('copied');
-            setTimeout(function() { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
-        });
-    }
-
     // ── Live activity strip ───────────────────────────────
     // Populates the "N active TCs · Monitor refreshed X min ago" pill
     // from the same API endpoint the Real-Time Monitor uses. Fails
@@ -1064,6 +769,12 @@
                 return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
             });
         }
+        // Invests (ATCF 90-99, or a name like "Invest 97L") are not yet
+        // tropical cyclones, so they are counted and labeled separately.
+        function isInvest(s) {
+            return /^[A-Za-z]{2}9\d{4}$/.test(String(s.atcf_id || ''))
+                || /^invest\b/i.test(s.name || '');
+        }
         // Render named, clickable chips that deep-link into the Real-Time
         // Monitor (realtime_ir.html#storm=<ATCF>), strongest storm first.
         function renderStormChips(storms) {
@@ -1082,9 +793,7 @@
                 // undesignated by definition and never get an intensity-class
                 // chip (same rule the Real-Time Monitor's markers follow).
                 // The name already reads "Invest 97L", so show no chip at all.
-                var isInvest = /^[A-Za-z]{2}9\d{4}$/.test(atcf)
-                    || /^invest\b/i.test(name);
-                var cat = isInvest ? '' : (s.category || '');
+                var cat = isInvest(s) ? '' : (s.category || '');
                 var href = /^[A-Za-z]{2}\d{6}$/.test(atcf)
                     ? 'realtime_ir.html#storm=' + encodeURIComponent(atcf)
                     : 'realtime_ir.html';
@@ -1101,16 +810,18 @@
             .then(function (data) {
                 var storms = (data && data.storms) || [];
                 var active = storms.length;
+                var nInvest = storms.filter(isInvest).length;
+                var nTC = active - nInvest;
                 var activeEl = document.getElementById('activity-active');
                 var stripEl = document.getElementById('activity-strip');
                 if (activeEl) {
-                    var val = activeEl.querySelector('.activity-stat-val');
-                    if (val) val.textContent = active;
+                    // "5 active TCs · 1 invest" — an invest is not a TC.
+                    var label = nTC === 0 ? 'No active TCs'
+                        : '<span class="activity-stat-val">' + nTC + '</span>&nbsp;active TC' + (nTC === 1 ? '' : 's');
+                    if (nInvest) label += ' &middot; <span class="activity-stat-val">' + nInvest + '</span>&nbsp;invest' + (nInvest === 1 ? '' : 's');
+                    // One text span, so the stat's flex gap only separates the dot.
+                    activeEl.innerHTML = '<span class="dot"></span><span>' + label + '</span>';
                     activeEl.classList.remove('is-stale');
-                    if (active === 0) {
-                        // Reframe the label when no storms are active
-                        activeEl.innerHTML = '<span class="dot"></span>No active TCs';
-                    }
                 }
                 if (stripEl) stripEl.classList.toggle('has-active', active > 0);
                 renderStormChips(storms);
@@ -1138,6 +849,28 @@
                     var rval = refreshEl.querySelector('.activity-stat-val');
                     if (rval) rval.textContent = 'offline';
                 }
+            });
+    })();
+
+    // ── Recent updates: the newest three entries of changelog.html ──
+    // changelog.html is the only place entries are written; if it can't be
+    // read, the section keeps just its "All updates" link.
+    (function () {
+        var host = document.getElementById('changelog-latest');
+        if (!host || !window.fetch || !window.DOMParser) return;
+        fetch('changelog.html', { cache: 'no-cache' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+            .then(function (html) {
+                var doc = new DOMParser().parseFromString(html, 'text/html');
+                var entries = doc.querySelectorAll('#changelog > .changelog-entry');
+                if (!entries.length) throw new Error('no entries');
+                for (var i = 0; i < entries.length && i < 3; i++) {
+                    host.appendChild(document.importNode(entries[i], true));
+                }
+            })
+            .catch(function (e) {
+                host.hidden = true;
+                try { console.warn('[TC-ATLAS] recent updates unavailable:', e); } catch (x) {}
             });
     })();
     </script>

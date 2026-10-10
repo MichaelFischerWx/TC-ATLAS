@@ -958,7 +958,7 @@
             });
         }).catch(function (e) {
             if (statusEl) statusEl.textContent = 'archive unavailable';
-            rtToast('Could not load the archived flights (' + (e && e.message || 'error') + ').', 'warn');
+            _rtErrToast(e, 'the archived flights', 'load', 'warn');
         });
     };
 
@@ -3070,7 +3070,7 @@
         }).catch(function (err) {
             console.error('[Recon] composite export failed', err);
             _ga('recon_hdob_export', { ok: false, msg: String(err && err.message) });
-            alert('Could not save image: ' + (err && err.message ? err.message : err));
+            alert(TCErrors.message(err, 'the image', 'save'));
             if (btn) { btn.textContent = orig; btn.disabled = false; }
         });
     };
@@ -3567,8 +3567,7 @@
                 _reconRenderMissionCards();
             })
             .catch(function (err) {
-                grid.innerHTML = '<div class="recon-missions-empty">Could not load missions: ' +
-                    (err && err.message ? err.message : err) + '</div>';
+                TCErrors.show(grid, err, 'the mission list', function () { _reconRenderMissionsDashboard(true); }, 'recon-missions-empty');
             });
     }
 
@@ -3766,7 +3765,8 @@
             .catch(function (err) {
                 if (_reconFLCurrentMission !== mission) return;
                 if (statusEl) statusEl.textContent = '';
-                if (emptyEl) { emptyEl.style.display = ''; emptyEl.textContent = 'Could not load flight-level data: ' + (err && err.message ? err.message : err); }
+                if (emptyEl) emptyEl.style.display = '';
+                TCErrors.show(emptyEl, err, 'flight-level data', function () { window.reconLoadFlightLevel(mission); });
             });
     };
 
@@ -3977,11 +3977,18 @@
             .catch(function (err) {
                 if (_reconVdmCurrentId !== atcfId) return;
                 if (statusEl) statusEl.textContent = '';
-                if (emptyEl) { emptyEl.style.display = ''; emptyEl.textContent = 'Could not load VDMs: ' + (err && err.message ? err.message : err); }
+                if (emptyEl) emptyEl.style.display = '';
+                TCErrors.show(emptyEl, err, 'the VDMs', function () { window.reconLoadVdm(atcfId); });
             });
     };
 
     // ── Toast (reuse if available, otherwise standalone) ─────────
+    // Failed load/save → plain toast; the raw error goes to the console.
+    function _rtErrToast(err, what, verb, type) {
+        TCErrors.log(err, what);
+        rtToast(TCErrors.message(err, what, verb), type || 'error');
+    }
+
     function rtToast(message, type, duration) {
         if (typeof showToast === 'function') { showToast(message, type, duration); return; }
         type = type || 'info'; duration = duration || 5000;
@@ -4054,8 +4061,8 @@
                 }
             })
             .catch(function (err) {
-                sel.innerHTML = '<option value="">Error loading missions</option>';
-                rtToast('Could not load missions: ' + err.message, 'error');
+                sel.innerHTML = '<option value="">Missions unavailable</option>';
+                _rtErrToast(err, 'the mission list');
             });
     }
     window._rtLoadMissions = loadMissions;
@@ -4094,8 +4101,8 @@
                 if (cb) cb(json.files);
             })
             .catch(function (err) {
-                sel.innerHTML = '<option value="">Error loading files</option>';
-                rtToast('Could not list files: ' + err.message, 'error');
+                sel.innerHTML = '<option value="">Files unavailable</option>';
+                _rtErrToast(err, 'the analysis files');
                 if (cb) cb(null);
             });
     }
@@ -4335,7 +4342,7 @@
         var azResult = document.getElementById('rt-az-result'); if (azResult) azResult.innerHTML = '';
 
         if (!_rtAnimPlaying) {
-            resultDiv.innerHTML = _rtLoadingHTML('Fetching data from API…');
+            resultDiv.innerHTML = _rtLoadingHTML('Loading the analysis…');
         }
 
         var cacheKey = _currentFileUrl + '_' + variable + '_' + level_km + '_' + overlay + (_rtBarbsEnabled ? '_barbs' : '') + (_rtStormRelative ? '_sr' : '');
@@ -4353,13 +4360,12 @@
         if (_rtStormRelative) url += '&storm_relative=true';
 
         var planPromise = fetch(url, { signal: controller.signal })
-            .then(function (r) { if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); });
+            .then(function (r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); });
         _rtPlanInflight = { fileUrl: _currentFileUrl, promise: planPromise };
         planPromise
             .then(function (json) { _rtDataCache[cacheKey] = json; if (json.case_meta) _rtCaseMeta = json.case_meta; rtRenderPlot(json, resultDiv); if (callback) callback(); })
             .catch(function (err) {
-                var msg = err.name === 'AbortError' ? '⚠️ Request timed out (120s).' : '⚠️ ' + err.message;
-                resultDiv.innerHTML = '<div class="explorer-status error">' + msg + '</div>';
+                TCErrors.show(resultDiv, err, 'this plan view', function () { window.rtGeneratePlot(callback); }, 'explorer-status error');
                 rtAnimStop();
             })
             .finally(function () { clearTimeout(timeout); btn.disabled = false; btn.textContent = 'Update Plan View'; });
@@ -4406,7 +4412,7 @@
         var activeColorscale = _rtColorscale(varInfo);
         var activeVmin = _rtGetVmin(), activeVmax = _rtGetVmax();
         var frameTag = json.storm_relative ? ' <span style="color:#2563eb;">\u00b7 storm-relative</span>' : '';
-        var title = TDRView.planTitle((meta.storm_name || 'Real-Time TDR') + ' | ' + (meta.datetime || ''),
+        var title = TDRView.planTitle((meta.storm_name || 'TDR analysis') + ' | ' + (meta.datetime || ''),
                                       varInfo, json.actual_level_km, json, frameTag);
         var fig = TDRView.planFigure({
             z: zData, x: x, y: y, varInfo: varInfo, colorscale: activeColorscale, zmin: activeVmin, zmax: activeVmax,
@@ -4926,11 +4932,11 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             fetch: function (key) {
                 var url = API_BASE + RT_PREFIX + '/cross_section?file_url=' + encodeURIComponent(_currentFileUrl) +
                     '&variable=' + key + '&x0=' + a.x + '&y0=' + a.y + '&x1=' + b.x + '&y1=' + b.y + '&n_points=150';
-                return fetch(url).then(function (r) { if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); });
+                return fetch(url).then(function (r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); });
             },
             endpoints: { x0: a.x, y0: a.y, x1: b.x, y1: b.y },
             locator: p ? { z: p.z, x: p.x, y: p.y, colorscale: p.colorscale, zmin: p.vmin, zmax: p.vmax } : null,
-            title: (meta.storm_name || 'Real-Time TDR') + (meta.datetime ? ' | ' + meta.datetime : '') + ' \u2014 TDR cross-section (' +
+            title: (meta.storm_name || 'TDR analysis') + (meta.datetime ? ' | ' + meta.datetime : '') + ' \u2014 TDR cross-section (' +
                    Math.round(Math.hypot(b.x - a.x, b.y - a.y)) + ' km)',
             plot: function (id, t, l, c) { Plotly.newPlot(id, t, l, c); }
         });
@@ -4948,14 +4954,16 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         if (overlay) url += '&overlay=' + overlay;
 
         fetch(url)
-            .then(function (r) { if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+            .then(function (r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
             .then(function (json) {
                 csResult.innerHTML = '<div class="explorer-status" style="color:#10b981;">✓ Cross-section ready</div>';
                 rtRenderCrossSection(json);
                 _rtCsLastAB = { a: a, b: b };
                 csResult.insertAdjacentHTML('beforeend', TDRView.multiSectionControlsHTML('rt-', _rtMcsKeyFor, 'rtRunMultiCS'));
             })
-            .catch(function (err) { csResult.innerHTML = '<div class="explorer-status error">⚠️ ' + err.message + '</div>'; });
+            .catch(function (err) {
+                TCErrors.show(csResult, err, 'the cross-section', function () { rtFetchCrossSection(a, b); }, 'explorer-status error');
+            });
     }
 
     function rtRenderCrossSection(json) {
@@ -4997,15 +5005,14 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var url = API_BASE + RT_PREFIX + '/volume?file_url=' + encodeURIComponent(_currentFileUrl) + '&variable=' + variable + '&stride=2&max_height_km=15&tilt_profile=true';
 
         fetch(url, { signal: controller.signal })
-            .then(function (r) { if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+            .then(function (r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
             .then(function (json) {
                 _rtDataCache[cacheKey] = json;
                 _rtLast3DJson = json;
                 rtOpen3DModal();
             })
             .catch(function (err) {
-                var msg = err.name === 'AbortError' ? 'Request timed out (120s).' : err.message;
-                rtToast('3D Volume: ' + msg, 'error');
+                _rtErrToast(err, 'the 3D volume');
             })
             .finally(function () { clearTimeout(timeout); btn.disabled = false; btn.innerHTML = _icon('monitor') + '3D Volume'; });
     };
@@ -5071,7 +5078,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         }).catch(function (e) {
             if (btn) btn.disabled = false;
             console.error('[rtSaveTDRMap]', e);
-            if (typeof rtToast === 'function') rtToast('Could not save the map: ' + (e && e.message ? e.message : e), 'warn');
+            _rtErrToast(e, 'the map', 'save', 'warn');
         });
     };
 
@@ -5083,7 +5090,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             '&radius_km=' + box.radius_km + '&tilt_profile=true';
         if (!_rt3DViewFetches[url]) {
             _rt3DViewFetches[url] = fetch(url)
-                .then(function (r) { if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+                .then(function (r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
                 .catch(function (e) { delete _rt3DViewFetches[url]; throw e; });
         }
         return _rt3DViewFetches[url];
@@ -5463,7 +5470,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var controller = new AbortController();
         var timeout = setTimeout(function() { controller.abort(); }, 120000);
         fetch(url, { signal: controller.signal })
-            .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+            .then(function(r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
             .then(function(json) {
                 _rtDataCache[azCacheKey] = json;
                 _rtLastAzJson = json;
@@ -5472,7 +5479,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             })
             .catch(function(err) {
                 var container = document.getElementById('rt-dual-az-container');
-                if (container) container.innerHTML = '<div class="az-pane-placeholder" style="color:#f87171;font-style:normal;font-size:0.7rem;">' + (err.name === 'AbortError' ? 'Timed out' : err.message) + '</div>';
+                TCErrors.show(container, err, 'the azimuthal mean', _rtAutoFetchDualAzimuthalMean, 'az-pane-placeholder tc-error');
             })
             .finally(function() { clearTimeout(timeout); });
     }
@@ -5487,7 +5494,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var fig = TDRView.sectionFigure({
             z: json.azimuthal_mean, x: json.radius_km, y: json.height_km, varInfo: vi,
             colorscale: _rtColorscale(vi), zmin: _rtGetVmin(), zmax: _rtGetVmax(),
-            title: (meta.storm_name || 'Real-Time TDR') + ' | ' + (meta.datetime || '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '%)',
+            title: (meta.storm_name || 'TDR analysis') + ' | ' + (meta.datetime || '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '%)',
             size: 'dual', margin: { l: 48, r: 14, t: json.overlay ? 78 : 68, b: 44 }, rmwX: _rtRmwKm(json),
             windMarker: _rtWindMarker(),
             overlayTraces: TDRView.contourTraces(json.overlay, json.overlay && json.overlay.azimuthal_mean, json.radius_km, json.height_km, intInput ? parseFloat(intInput.value) : NaN)
@@ -5532,10 +5539,10 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var controller = new AbortController();
         var timeout = setTimeout(function () { controller.abort(); }, 120000);
         fetch(url, { signal: controller.signal })
-            .then(function (r) { if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || 'HTTP ' + r.status); }); return r.json(); })
+            .then(function (r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
             .then(function (json) { _rtDataCache[azCacheKey] = json; _rtLastAzJson = json; rtRenderAzimuthalMean(json); })
             .catch(function (err) {
-                resultDiv.innerHTML = '<div class="explorer-status error">⚠️ ' + (err.name === 'AbortError' ? 'Request timed out (120s).' : err.message) + '</div>';
+                TCErrors.show(resultDiv, err, 'the azimuthal mean', window.rtFetchAzimuthalMean, 'explorer-status error');
             })
             .finally(function () { clearTimeout(timeout); btn.disabled = false; btn.textContent = '↻ Azimuthal Mean'; });
     };
@@ -5552,7 +5559,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var fig = TDRView.sectionFigure({
             z: json.azimuthal_mean, x: json.radius_km, y: json.height_km, varInfo: vi,
             colorscale: _rtColorscale(vi), zmin: _rtGetVmin(), zmax: _rtGetVmax(),
-            title: (meta.storm_name || 'Real-Time TDR') + ' | ' + (meta.datetime || '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '% coverage)' + TDRView.sectionTitleOverlay(json),
+            title: (meta.storm_name || 'TDR analysis') + ' | ' + (meta.datetime || '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '% coverage)' + TDRView.sectionTitleOverlay(json),
             size: 'small', rmwX: _rtRmwKm(json),
             margin: { l: 45, r: 12, t: json.overlay ? 78 : 64, b: 38 },
             windMarker: _rtWindMarker(),
@@ -6267,7 +6274,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 .catch(function (err) {
                     _rtSondeFetching = false;
                     if (btn) btn.innerHTML = _icon('parachute') + 'Sondes Off';
-                    rtToast('Dropsonde fetch failed: ' + err.message, 'error');
+                    _rtErrToast(err, 'the dropsondes');
                 });
             return;
         }
@@ -7949,7 +7956,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 .catch(function (err) {
                     _rtFLFetching = false;
                     if (btn) btn.innerHTML = _icon('plane') + 'FL';
-                    rtToast('Flight-level fetch failed: ' + err.message, 'error');
+                    _rtErrToast(err, 'flight-level data');
                 });
             return;
         }
@@ -8427,7 +8434,9 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             })
             .then(function (data) {
                 if (data.status === 'not_found') {
-                    throw new Error(data.message || 'SHIPS file not found');
+                    var nf = new Error(data.message || 'SHIPS file not found');
+                    nf.userMessage = 'No SHIPS diagnostics for this storm and time.';
+                    throw nf;
                 }
                 _rtShipsData = data;
                 _rtShipsLoading = false;
@@ -8455,7 +8464,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 _rtShipsLoading = false;
                 btn.innerHTML = _icon('dish') + 'Fetch SHIPS Data';
                 btn.disabled = false;
-                rtToast('SHIPS: ' + err.message, 'error');
+                _rtErrToast(err, 'SHIPS diagnostics');
             });
     };
 
@@ -8647,7 +8656,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 _rtRenderQuadrants(data, variable);
             })
             .catch(function (err) {
-                rtToast('Quadrant error: ' + err.message, 'error');
+                _rtErrToast(err, 'the quadrant means');
             })
             .finally(function () {
                 btn.disabled = false;
@@ -8723,7 +8732,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 _rtRenderAnomaly(data, variable);
             })
             .catch(function (err) {
-                rtToast('Anomaly error: ' + err.message, 'error');
+                _rtErrToast(err, 'the anomaly');
             })
             .finally(function () {
                 btn.disabled = false;
@@ -8808,7 +8817,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 _rtRenderVPScatter(json, colorBy, currentVP, currentVmax, stormName, currentVF, currentVH, currentVW);
             })
             .catch(function (err) {
-                rtToast('VP Scatter: ' + err.message, 'error');
+                _rtErrToast(err, 'the VP scatter');
             })
             .finally(function () {
                 btn.disabled = false;
@@ -8912,7 +8921,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             .catch(function (e) {
                 _rtCtrkOverlay = false;
                 if (btn) btn.classList.remove('active');
-                if (tableEl) tableEl.innerHTML = '<div style="color:#f87171;padding:10px;font-size:12px;">Could not build center track: ' + (e && e.message ? e.message : e) + '</div>';
+                TCErrors.show(tableEl, e, 'the center track', window.rtToggleCenterTrack);
             })
             .finally(function () { _rtCtrkLoading = false; if (btn) btn.disabled = false; });
     };
@@ -9087,7 +9096,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var timeout = setTimeout(function () { controller.abort(); }, 120000);
         fetch(url, { signal: controller.signal })
             .then(function (r) {
-                if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || 'HTTP ' + r.status); });
+                if (!r.ok) return TCErrors.fromResponse(r);
                 return r.json();
             })
             .then(function (json) {
@@ -9102,8 +9111,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 setTimeout(function () { tiltStatusEl.style.display = 'none'; }, 6000);
             })
             .catch(function (err) {
-                var msg = err.name === 'AbortError' ? 'Tilt request timed out (120s).' : err.message;
-                rtToast('Tilt: ' + msg, 'error');
+                _rtErrToast(err, 'the tilt profile');
                 btn.classList.remove('active');
                 tiltStatusEl.textContent = '\u2717 ' + msg;
                 setTimeout(function () { tiltStatusEl.style.display = 'none'; }, 8000);
@@ -9270,7 +9278,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         fetch(url)
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (json) { json._logScale = logScale; _rtRenderCFAD(json); })
-            .catch(function (e) { alert('CFAD error: ' + e.message); })
+            .catch(function (e) { _rtErrToast(e, 'the CFAD'); })
             .finally(function () { if (btn) { btn.disabled = false; btn.textContent = '\u2593 CFAD'; } });
     };
 
@@ -9421,7 +9429,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 _rtLoadNexradStormRelative(site, s3Key, product);
             })
             .catch(function (e) {
-                if (status) status.textContent = 'Error: ' + e.message;
+                TCErrors.show(status, e, 'this NEXRAD scan', window.rtLoadNexradFrame);
             });
     };
 
@@ -9707,8 +9715,8 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 window.rtLoadMicrowaveOverpass();
             })
             .catch(function (e) {
-                sel.innerHTML = '<option value="">Error</option>';
-                if (status) status.textContent = 'Error: ' + e.message;
+                sel.innerHTML = '<option value="">Overpasses unavailable</option>';
+                TCErrors.show(status, e, 'the microwave overpasses', function () { _rtFetchMicrowaveOverpasses(0); });
             });
     }
 
@@ -9782,7 +9790,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 };
             })
             .catch(function (e) {
-                if (status) status.textContent = 'Error: ' + e.message;
+                TCErrors.show(status, e, 'this microwave image', window.rtLoadMicrowaveOverpass);
                 var dlBtn = document.getElementById('rt-mw-download-btn');
                 if (dlBtn) dlBtn.remove();
             });

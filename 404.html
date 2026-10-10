@@ -15,7 +15,7 @@
          root-absolute (a stale /some/deep/link would otherwise break the
          relative links). Assets reuse the shared cached stylesheet. -->
     <script src="/theme.js?v=20261009p1a"></script>
-    <link rel="stylesheet" href="/tc_radar_styles.css?v=20261009p1d">
+    <link rel="stylesheet" href="/tc_radar_styles.css?v=20261010m1">
     <style>
         .nf-wrap {
             min-height: calc(100vh - 120px);
@@ -63,8 +63,10 @@
     <header class="topbar" role="banner">
         <div class="topbar-inner">
             <div class="topbar-brand">
-                <img src="/tc-atlas-favicon-64.png?v=20261009p1a" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
-                <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                <a class="topbar-home" href="/" aria-label="TC-ATLAS home">
+                    <img src="/tc-atlas-favicon-64.png?v=20261009p1a" alt="" class="topbar-icon" width="28" height="28">
+                    <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                </a>
             </div>
         </div>
     </header>
@@ -76,7 +78,7 @@
         moved, or the link is stale. The storms, however, are all still here.</p>
         <nav class="nf-links" aria-label="Main destinations">
             <a class="nf-primary" href="/realtime_ir.html">Real-Time Monitor</a>
-            <a href="/explorer.html">TC-RADAR Explorer</a>
+            <a href="/explorer.html">TC-RADAR</a>
             <a href="/global_archive.html">Global Archive</a>
             <a href="/">Home</a>
         </nav>
