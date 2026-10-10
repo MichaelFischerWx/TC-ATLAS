@@ -203,7 +203,15 @@
     // pointing at basemaps.cartocdn.com gets registered for theme
     // swapping. On theme:change we call .setUrl() with the matching
     // light_* or dark_* variant — Leaflet repaints the tiles in place.
+    // A layer created with `tcaVariant: 'dark'` (or 'light') keeps that
+    // variant in both themes and is never swapped — e.g. the basemap under
+    // the global satellite mosaic, where a light basemap shows through the
+    // coverage gaps as a white wedge.
     var _cartoLayers = [];
+    function pinnedVariant(opts) {
+        var v = opts && opts.tcaVariant;
+        return (v === 'dark' || v === 'light') ? v : null;
+    }
     // CARTO now watermarks unauthenticated raster basemap tiles with
     // "API KEY REQUIRED". Keys are free (5M tiles/month, non-commercial)
     // and issued instantly at https://carto.com/basemaps/apikey — paste
@@ -262,6 +270,8 @@
             if (typeof url === 'string') opts = withCredit(url, opts);
             if (typeof url === 'string'
                 && url.indexOf('basemaps.cartocdn.com') >= 0) {
+                var pinned = pinnedVariant(opts);
+                if (pinned) return origFactory(cartoKeyed(cartoSwapUrl(url, pinned)), opts);
                 var current = (document.documentElement.getAttribute('data-theme') === 'dark')
                     ? 'dark' : 'light';
                 var swapped = cartoKeyed(cartoSwapUrl(url, current));
@@ -280,9 +290,10 @@
         window.L.TileLayer.prototype.onAdd = function (map) {
             if (this._url && typeof this._url === 'string'
                 && this._url.indexOf('basemaps.cartocdn.com') >= 0) {
-                if (_cartoLayers.indexOf(this) < 0) _cartoLayers.push(this);
-                var current = (document.documentElement.getAttribute('data-theme') === 'dark')
-                    ? 'dark' : 'light';
+                var pinned = pinnedVariant(this.options);
+                if (!pinned && _cartoLayers.indexOf(this) < 0) _cartoLayers.push(this);
+                var current = pinned || ((document.documentElement.getAttribute('data-theme') === 'dark')
+                    ? 'dark' : 'light');
                 var swapped = cartoKeyed(cartoSwapUrl(this._url, current));
                 if (swapped !== this._url) this._url = swapped;
             }
@@ -337,8 +348,9 @@
                         if (layer && layer._url
                             && typeof layer._url === 'string'
                             && layer._url.indexOf('basemaps.cartocdn.com') >= 0) {
-                            if (_cartoLayers.indexOf(layer) < 0) _cartoLayers.push(layer);
-                            var swapped = cartoKeyed(cartoSwapUrl(layer._url, current));
+                            var pinned = pinnedVariant(layer.options);
+                            if (!pinned && _cartoLayers.indexOf(layer) < 0) _cartoLayers.push(layer);
+                            var swapped = cartoKeyed(cartoSwapUrl(layer._url, pinned || current));
                             if (swapped !== layer._url && layer.setUrl) {
                                 layer.setUrl(swapped);
                             }

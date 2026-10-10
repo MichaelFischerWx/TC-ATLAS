@@ -2778,7 +2778,7 @@
         var img = new Image();
         img.onload = function () { _rtLogoImg = img; cb(img); };
         img.onerror = function () { cb(null); };
-        img.src = 'tc-atlas-favicon-192.png';
+        img.src = 'tc-atlas-favicon-192.png?v=20261009p1a';
     }
     var _terrainProtoReady = false;
     function _tbToTerrainRGB(tb, out) {
@@ -4328,6 +4328,8 @@
     var _surfaceObsAutoRetried = false;  // one silent retry per card open
     var _surfaceObsPrevLayer = null;     // old layer kept on-map during a periodic refresh
     var _rtObsLastPeriodicMs = 0;        // throttle for the poll-tick obs refresh
+    var _surfaceObsAll = null;           // last card obs pull, before thinning
+    var _surfaceObsThinMap = null;       // detail map whose zoomend re-thins
 
     // Global-map (viewport) surface-obs overlay — independent of the
     // storm-card overlay above. Live METAR (land) + NDBC (marine) plots
@@ -4492,62 +4494,19 @@
             .then(function (data) {
                 if (currentStormId !== atcfId) return;
                 var obs = (data && data.observations) || [];
-                var lg = L.layerGroup();
-                for (var i = 0; i < obs.length; i++) {
-                    var ob = obs[i];
-                    var html = _renderStationPlot(ob);
-                    // Tooltip text — full obs detail on hover.
-                    var lines = [];
-                    lines.push('<b>' + ob.id + '</b> · ' + ob.source);
-                    if (ob.wind_speed_kt != null && ob.wind_dir_deg != null) {
-                        lines.push('Wind: ' + Math.round(ob.wind_dir_deg) + '° @ ' +
-                                   Math.round(ob.wind_speed_kt) + ' kt' +
-                                   (ob.wind_gust_kt != null ?
-                                    ' (gusts ' + Math.round(ob.wind_gust_kt) + ')' : ''));
-                    }
-                    if (ob.air_temp_c != null) {
-                        lines.push('T: ' + ob.air_temp_c.toFixed(1) + '°C / ' +
-                                   _cToF(ob.air_temp_c) + '°F');
-                    }
-                    if (ob.dewpoint_c != null) {
-                        lines.push('Td: ' + ob.dewpoint_c.toFixed(1) + '°C');
-                    }
-                    if (ob.sst_c != null) {
-                        lines.push('SST: ' + ob.sst_c.toFixed(1) + '°C');
-                    }
-                    if (ob.pressure_hpa != null) {
-                        lines.push('MSLP: ' + ob.pressure_hpa.toFixed(1) + ' hPa');
-                    }
-                    if (ob.wave_height_m != null) {
-                        lines.push('Waves: ' + ob.wave_height_m.toFixed(1) + ' m');
-                    }
-                    if (ob.time_utc) lines.push('<i>' + ob.time_utc + '</i>');
-                    var marker = L.marker([ob.lat, ob.lon], {
-                        icon: L.divIcon({
-                            className: 'ir-stn-plot-icon',
-                            html: html,
-                            iconSize: [72, 56],
-                            iconAnchor: [36, 28],
-                        }),
-                        interactive: true, keyboard: false,
-                    });
-                    marker.bindTooltip(lines.join('<br>') +
-                        '<br><span style="opacity:0.6;">click for 24 h history</span>', {
-                        sticky: true, direction: 'top', offset: [0, -10],
-                        className: 'ir-stn-plot-tooltip',
-                    });
-                    _rtObsBindClick(marker, ob);
-                    lg.addLayer(marker);
-                }
+                _surfaceObsAll = obs;
+                var lg = _rtCardObsLayer(obs);
                 _surfaceObsLoading = false;
                 if (_surfaceObsPrevLayer) {
                     try { detailMap.removeLayer(_surfaceObsPrevLayer); } catch (e) {}
                     _surfaceObsPrevLayer = null;
                 }
                 _surfaceObsLayer = lg.addTo(detailMap);
+                _rtCardObsBindThin();
                 console.log('[RT Monitor] Surface obs: ' + obs.length +
                             ' stations within ' +
-                            (data.bbox ? '10°' : 'bbox'));
+                            (data.bbox ? '10°' : 'bbox') + ', ' +
+                            lg.getLayers().length + ' plotted after thinning');
             })
             .catch(function (err) {
                 _surfaceObsLoading = false;
@@ -4598,6 +4557,7 @@
         }
         _surfaceObsLoading = false;
         _surfaceObsAutoRetried = false;
+        _surfaceObsAll = null;
         if (_surfaceObsRetryTimer) { clearTimeout(_surfaceObsRetryTimer); _surfaceObsRetryTimer = null; }
         var btn = document.getElementById('ir-detail-obs-toggle');
         if (btn) btn.classList.remove('active');
@@ -4659,10 +4619,68 @@
         el.style.display = text ? '' : 'none';
     }
 
+    /** One station-plot marker (SVG plot, hover readout, click for the
+     *  24 h history), shared by the storm-card and Global Map obs layers. */
+    function _rtObsMarker(ob) {
+        var lines = ['<b>' + ob.id + '</b> · ' + ob.source];
+        if (ob.wind_speed_kt != null && ob.wind_dir_deg != null) {
+            lines.push('Wind: ' + Math.round(ob.wind_dir_deg) + '° @ ' +
+                       Math.round(ob.wind_speed_kt) + ' kt' +
+                       (ob.wind_gust_kt != null ?
+                        ' (gusts ' + Math.round(ob.wind_gust_kt) + ')' : ''));
+        }
+        if (ob.air_temp_c != null) {
+            lines.push('T: ' + ob.air_temp_c.toFixed(1) + '°C / ' +
+                       _cToF(ob.air_temp_c) + '°F');
+        }
+        if (ob.dewpoint_c != null) lines.push('Td: ' + ob.dewpoint_c.toFixed(1) + '°C');
+        if (ob.sst_c != null) lines.push('SST: ' + ob.sst_c.toFixed(1) + '°C');
+        if (ob.pressure_hpa != null) lines.push('MSLP: ' + ob.pressure_hpa.toFixed(1) + ' hPa');
+        if (ob.wave_height_m != null) lines.push('Waves: ' + ob.wave_height_m.toFixed(1) + ' m');
+        if (ob.time_utc) lines.push('<i>' + ob.time_utc + '</i>');
+        var marker = L.marker([ob.lat, ob.lon], {
+            icon: L.divIcon({
+                className: 'ir-stn-plot-icon',
+                html: _renderStationPlot(ob),
+                iconSize: [72, 56],
+                iconAnchor: [36, 28],
+            }),
+            interactive: true, keyboard: false,
+        });
+        marker.bindTooltip(lines.join('<br>') +
+            '<br><span style="opacity:0.6;">click for 24 h history</span>', {
+            sticky: true, direction: 'top', offset: [0, -10],
+            className: 'ir-stn-plot-tooltip',
+        });
+        _rtObsBindClick(marker, ob);
+        return marker;
+    }
+
+    // Storm-card obs are pixel-thinned like the Global Map's and re-thinned
+    // on zoom: the card's 10° pull used to stack every coastal station
+    // (Mobile-Pensacola) into one unreadable cluster over the CDO.
+    function _rtCardObsLayer(obs) {
+        var lg = L.layerGroup(), kept = _rtObsDeclutter(obs, detailMap);
+        for (var i = 0; i < kept.length; i++) lg.addLayer(_rtObsMarker(kept[i]));
+        return lg;
+    }
+    function _rtCardObsRethin() {
+        if (!detailMap || !_surfaceObsLayer || !_surfaceObsAll || _surfaceObsLoading) return;
+        var lg = _rtCardObsLayer(_surfaceObsAll);
+        try { detailMap.removeLayer(_surfaceObsLayer); } catch (e) {}
+        _surfaceObsLayer = lg.addTo(detailMap);
+    }
+    function _rtCardObsBindThin() {
+        if (!detailMap || _surfaceObsThinMap === detailMap) return;
+        _surfaceObsThinMap = detailMap;   // the card map is rebuilt per storm
+        detailMap.on('zoomend', _rtCardObsRethin);
+    }
+
     // Keep only the richest ob within each ~52px pixel cell at the
-    // current zoom so plots never overlap into illegibility.
-    function _rtObsDeclutter(obs) {
-        if (!map || obs.length < 2) return obs;
+    // current zoom so plots never overlap into illegibility. Used by both
+    // the Global Map and the storm-card layers (pass the map to thin for).
+    function _rtObsDeclutter(obs, onMap) {
+        if (!onMap || obs.length < 2) return obs;
         var CELL = 52, kept = {}, out = [];
         function richness(o) {
             var s = 0;
@@ -4675,7 +4693,7 @@
         for (var i = 0; i < obs.length; i++) {
             var ob = obs[i];
             var pt;
-            try { pt = map.latLngToContainerPoint([ob.lat, ob.lon]); }
+            try { pt = onMap.latLngToContainerPoint([ob.lat, ob.lon]); }
             catch (e) { out.push(ob); continue; }
             var key = Math.floor(pt.x / CELL) + ':' + Math.floor(pt.y / CELL);
             var prev = kept[key];
@@ -5158,45 +5176,9 @@
                 if (!_rtObsOn) return;
                 var obs = (data && data.observations) || [];
                 var total = obs.length;
-                obs = _rtObsDeclutter(obs);
+                obs = _rtObsDeclutter(obs, map);
                 var lg = L.layerGroup();
-                for (var i = 0; i < obs.length; i++) {
-                    var ob = obs[i];
-                    var html = _renderStationPlot(ob);
-                    var lines = [];
-                    lines.push('<b>' + ob.id + '</b> · ' + ob.source);
-                    if (ob.wind_speed_kt != null && ob.wind_dir_deg != null) {
-                        lines.push('Wind: ' + Math.round(ob.wind_dir_deg) + '° @ ' +
-                                   Math.round(ob.wind_speed_kt) + ' kt' +
-                                   (ob.wind_gust_kt != null ?
-                                    ' (gusts ' + Math.round(ob.wind_gust_kt) + ')' : ''));
-                    }
-                    if (ob.air_temp_c != null) {
-                        lines.push('T: ' + ob.air_temp_c.toFixed(1) + '°C / ' +
-                                   _cToF(ob.air_temp_c) + '°F');
-                    }
-                    if (ob.dewpoint_c != null) lines.push('Td: ' + ob.dewpoint_c.toFixed(1) + '°C');
-                    if (ob.sst_c != null) lines.push('SST: ' + ob.sst_c.toFixed(1) + '°C');
-                    if (ob.pressure_hpa != null) lines.push('MSLP: ' + ob.pressure_hpa.toFixed(1) + ' hPa');
-                    if (ob.wave_height_m != null) lines.push('Waves: ' + ob.wave_height_m.toFixed(1) + ' m');
-                    if (ob.time_utc) lines.push('<i>' + ob.time_utc + '</i>');
-                    var marker = L.marker([ob.lat, ob.lon], {
-                        icon: L.divIcon({
-                            className: 'ir-stn-plot-icon',
-                            html: html,
-                            iconSize: [72, 56],
-                            iconAnchor: [36, 28],
-                        }),
-                        interactive: true, keyboard: false,
-                    });
-                    marker.bindTooltip(lines.join('<br>') +
-                        '<br><span style="opacity:0.6;">click for 24 h history</span>', {
-                        sticky: true, direction: 'top', offset: [0, -10],
-                        className: 'ir-stn-plot-tooltip',
-                    });
-                    _rtObsBindClick(marker, ob);
-                    lg.addLayer(marker);
-                }
+                for (var i = 0; i < obs.length; i++) lg.addLayer(_rtObsMarker(obs[i]));
                 if (_rtObsLayer) { map.removeLayer(_rtObsLayer); }
                 _rtObsLayer = lg.addTo(map);
                 var hint = obs.length + ' obs';
@@ -6279,7 +6261,12 @@
         // labels layer's copy as a substring instead of listing CARTO twice.
         // The IR/WV/Vis mosaic is a custom WebGL layer with no source of its
         // own, so its satellite credit lives here too.
-        var basemap = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
+        // Pinned to CARTO's dark variant in BOTH themes (tcaVariant, theme.js):
+        // the basemap only shows where the mosaic has no coverage (the
+        // Meteosat gap over Africa/Europe, the poles), and a light basemap
+        // there read as a white wedge of imagery that failed to load.
+        var basemap = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+            tcaVariant: 'dark',
             subdomains: 'abcd',
             maxZoom: 19,
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>'
@@ -6324,7 +6311,9 @@
 
         // Labels on top of IR — stashed on `_labelsLayer` so the "Labels"
         // toggle in the right rail can add/remove it without rebuilding.
-        _labelsLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
+        // Dark variant in both themes to match the pinned basemap above.
+        _labelsLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+            tcaVariant: 'dark',
             subdomains: 'abcd',
             maxZoom: 19,
             pane: 'overlayPane'
@@ -7340,19 +7329,87 @@
         for (var i = 0; i < (storms || []).length; i++) {
             var s = storms[i];
             if (s && s.lat != null && s.lon != null && isFinite(s.lat) && isFinite(s.lon)) {
-                pts.push([s.lat, s.lon]);
+                // Invests count for less when choosing what to keep in view.
+                pts.push({ lat: s.lat, lon: s.lon,
+                           w: Math.max(s.vmax_kt || 0, 20) * (_irIsInvest(s.atcf_id) ? 0.25 : 1) });
             }
         }
         if (!pts.length) return;
         _narrowFitDone = true;
         try {
             if (pts.length === 1) {
-                map.setView(pts[0], 4, { animate: false });
+                map.setView([pts[0].lat, pts[0].lon], 4, { animate: false });
+                return;
+            }
+            // Longitudes are fitted as the shortest arc around the globe, so
+            // storms on both sides of the Pacific frame the Pacific instead of
+            // a box running the long way round (124.5°W..153°E used to center
+            // on 14°E, over Africa). When even that arc is wider than the map
+            // shows at its minimum zoom, keep the strongest system and as much
+            // of the rest as fits.
+            // Degrees of longitude the map shows at its minimum zoom, inside
+            // the fit padding. MapLibre's zoom z is a 512·2^z px world
+            // (Leaflet's is 256·2^z), so a phone at zoom 2 spans ~60°.
+            var c = map.getContainer();
+            var tilePx = map._gl ? 512 : 256;
+            var minZ = map._gl ? map._gl.getMinZoom() : (map.getMinZoom ? map.getMinZoom() : 2);
+            var fitSpan = 360 * Math.max((c ? c.clientWidth : 390) - 48, 100) / (tilePx * Math.pow(2, minZ));
+            var arc = _lonArc(pts);
+            if (arc.span > fitSpan) {
+                pts = _heaviestLonWindow(pts, fitSpan);
+                arc = _lonArc(pts);
+            }
+            var south = 90, north = -90;
+            for (var k = 0; k < pts.length; k++) {
+                south = Math.min(south, pts[k].lat);
+                north = Math.max(north, pts[k].lat);
+            }
+            if (pts.length === 1) {
+                map.setView([pts[0].lat, pts[0].lon], 4, { animate: false });
             } else {
-                map.fitBounds(L.latLngBounds(pts).pad(0.25),
+                map.fitBounds(L.latLngBounds([south, arc.west], [north, arc.east]).pad(0.25),
                               { animate: false, maxZoom: 5, padding: [24, 24] });
             }
         } catch (e) { /* facade without fitBounds — keep default view */ }
+    }
+
+    function _lon360(x) { return ((x % 360) + 360) % 360; }
+
+    /** Shortest longitude arc covering every point: the circle minus its
+     *  widest empty gap. Returns {west, east, span} with west in [-180, 180)
+     *  and east > 180 when the arc crosses the dateline (fitBounds and
+     *  MapLibre take unwrapped longitudes). */
+    function _lonArc(pts) {
+        var xs = pts.map(function (p) { return _lon360(p.lon); })
+                    .sort(function (a, b) { return a - b; });
+        var n = xs.length, gapAt = n - 1, gap = xs[0] + 360 - xs[n - 1];   // wrap-around gap
+        for (var i = 0; i < n - 1; i++) {
+            if (xs[i + 1] - xs[i] > gap) { gap = xs[i + 1] - xs[i]; gapAt = i; }
+        }
+        var west = xs[(gapAt + 1) % n], east = xs[gapAt];
+        if (east < west) east += 360;
+        if (west >= 180) { west -= 360; east -= 360; }
+        return { west: west, east: east, span: east - west };
+    }
+
+    /** The points inside the heaviest run of longitudes no wider than
+     *  maxSpan that still contains the single heaviest point. */
+    function _heaviestLonWindow(pts, maxSpan) {
+        var order = pts.slice().sort(function (a, b) { return _lon360(a.lon) - _lon360(b.lon); });
+        var top = order.reduce(function (a, b) { return b.w > a.w ? b : a; });
+        var best = null, bestW = -1;
+        for (var i = 0; i < order.length; i++) {
+            var start = _lon360(order[i].lon), sum = 0, members = [];
+            for (var k = 0; k < order.length; k++) {
+                var q = order[(i + k) % order.length], x = _lon360(q.lon);
+                if (x < start) x += 360;
+                if (x - start > maxSpan) break;
+                sum += q.w;
+                members.push(q);
+            }
+            if (members.indexOf(top) >= 0 && sum > bestW) { best = members; bestW = sum; }
+        }
+        return best || [top];
     }
 
     // ── Predictive prefetch on hover (Tier-1 UX win) ─────────────
@@ -10095,15 +10152,23 @@
         if (shearEl) shearEl.innerHTML = '<span class="skeleton-pulse skeleton-text" style="width:80px;display:inline-block;">&nbsp;</span>';
         loadStormShear(atcfId);
 
-        // Official forecast link
-        var officialSection = document.getElementById('ir-official-section');
+        // Official forecast link — in the header, right after the category
+        // and recon badges (it used to be the last item in a panel about three
+        // screens long).
         var officialLink = document.getElementById('ir-official-link');
         var officialUrl = getOfficialForecastUrl(storm);
-        if (officialUrl) {
-            officialLink.href = officialUrl;
-            officialSection.style.display = 'block';
-        } else {
-            officialSection.style.display = 'none';
+        if (officialLink) {
+            if (officialUrl) {
+                officialLink.href = officialUrl;
+                var officialLabel = document.getElementById('ir-official-label');
+                if (officialLabel) {
+                    officialLabel.textContent = officialUrl.indexOf('nhc.noaa.gov') >= 0
+                        ? 'NHC forecast' : 'JTWC warning';
+                }
+                officialLink.style.display = '';
+            } else {
+                officialLink.style.display = 'none';
+            }
         }
 
         // Show skeleton placeholders while data loads
@@ -10322,7 +10387,9 @@
         }
         meter.classList.remove('is-empty');
         if (fill) {
-            fill.style.width = Math.round(fav.frac * 100) + '%';
+            // A sliver at minimum, so a hostile reading shows as a short red
+            // bar instead of an empty track that reads like missing data.
+            fill.style.width = Math.max(3, Math.round(fav.frac * 100)) + '%';
             fill.style.background = fav.color;
         }
     }
@@ -10439,6 +10506,11 @@
         var ohc = oc && oc.ohc_kj_cm2 != null && !ohcStale ? oc.ohc_kj_cm2 : null;
         _favApply('ir-fav-ohc', 'ir-fav-ohc-val', _favOhc(ohc),
             ohc != null ? Math.round(ohc) + ' kJ/cm²' : (oc ? 'n/a' : '…'));
+        // While the AOML feed is stale the row could only ever say "n/a", so
+        // it is hidden rather than shown as a gap (the footnote's tooltip
+        // keeps the grid date for anyone who wonders where it went).
+        var ohcMeter = document.getElementById('ir-fav-ohc');
+        if (ohcMeter) ohcMeter.style.display = ohcStale ? 'none' : '';
         var sstStale = !!(oc && sst != null && _rtOceanDateAgeDays(oc.sst_date) > 7);
 
         // Composite ventilation index (from the /shear payload), placed in
@@ -10479,10 +10551,13 @@
         if (note) {
             if (oc && oc.sst_date) {
                 var bits = ['OISST ' + oc.sst_date + (sstStale ? ' (stale)' : '')];
-                if (ohcStale) bits.push('TCHP feed stale — last grid ' + oc.ohc_date);
-                else if (oc.ohc_date) bits.push('TCHP ' + oc.ohc_date);
+                if (!ohcStale && oc.ohc_date) bits.push('TCHP ' + oc.ohc_date);
                 note.textContent = bits.join(' · ');
-            } else if (oc) { note.textContent = ''; }
+                note.title = ohcStale
+                    ? 'Ocean heat content (AOML TCHP) is hidden while its feed is stale'
+                      + (oc.ohc_date ? ' — latest grid ' + oc.ohc_date : '') + '.'
+                    : '';
+            } else if (oc) { note.textContent = ''; note.title = ''; }
         }
     }
     /** Whole days between a YYYY-MM-DD source date and now; Infinity when
@@ -13711,8 +13786,12 @@
     function _populateDetailStormPicker(currentId) {
         var sel = document.getElementById('ir-detail-storm-select');
         if (!sel) return;
+        // The select lies invisibly over the storm name, so the title itself
+        // is the switcher; the wrap shows a chevron while there is a choice.
+        var wrap = document.getElementById('ir-detail-name-wrap');
         if (!stormData || stormData.length < 2) {
             sel.style.display = 'none';
+            if (wrap) wrap.classList.remove('has-switcher');
             return;
         }
         var sorted = stormData.slice().sort(function (a, b) {
@@ -13731,6 +13810,7 @@
         }
         sel.innerHTML = opts.join('');
         sel.style.display = '';
+        if (wrap) wrap.classList.add('has-switcher');
     }
 
     // ── "Loop Only" popup ───────────────────────────────────────────
@@ -23773,7 +23853,7 @@
     // Brand logo preloaded once for figure exports (192px PNG, same-origin —
     // same artwork as the 1024px tc-atlas-icon.png at 1/6 the bytes; watermark
     // draws at most ~112px even on 4x exports).
-    var _tcLogoImg = (function () { var i = new Image(); i.src = 'tc-atlas-favicon-192.png'; return i; })();
+    var _tcLogoImg = (function () { var i = new Image(); i.src = 'tc-atlas-favicon-192.png?v=20261009p1a'; return i; })();
 
     // Stamp the TC-ATLAS watermark — logo + name + URL — into the bottom-right
     // of an export canvas. Sizing scales off the canvas width so it reads the
@@ -24427,14 +24507,17 @@
         }
         toast.addEventListener('click', dismiss);
         container.appendChild(toast);
-        // Drop below the GIBS feed-staleness banner when it's showing so
-        // the two top-center notices don't stack on top of each other.
-        var banner = document.getElementById('ir-feed-banner');
-        if (banner && getComputedStyle(banner).display !== 'none') {
-            var bRect = banner.getBoundingClientRect();
+        // CSS parks it bottom-center above the animation dock; when the dock
+        // is taller than usual (extra rows, short window) lift it clear.
+        var dock = document.getElementById('ir-global-anim-panel');
+        if (dock && dock.offsetParent !== null) {
+            var dRect = dock.getBoundingClientRect();
             var cRect = container.getBoundingClientRect();
-            var topPx = Math.max(14, Math.round(bRect.bottom - cRect.top) + 16);
-            toast.style.top = topPx + 'px';
+            var lift = Math.round(cRect.bottom - dRect.top) + 12;
+            var cssBottom = parseFloat(getComputedStyle(toast).bottom) || 0;
+            if (dRect.height && lift > cssBottom && lift < cRect.height * 0.6) {
+                toast.style.bottom = lift + 'px';
+            }
         }
         // Auto-dismiss after long enough to read, short enough to stay
         // unobtrusive. Tab-hidden re-polls don't reach here (the repoll
@@ -33922,7 +34005,7 @@
                 'line-height:1.2;padding:4px 9px 4px 7px;border-radius:5px;' +
                 'background:rgba(15,22,35,0.55);text-shadow:0 1px 2px rgba(0,0,0,0.7);';
             wm.innerHTML =
-                '<img src="tc-atlas-favicon-64.png" alt="" ' +
+                '<img src="tc-atlas-favicon-64.png?v=20261009p1a" alt="" ' +
                 'style="width:22px;height:22px;flex:0 0 auto;display:block;' +
                 'border-radius:5px;">' +
                 '<div style="text-align:left;">' +
@@ -33988,7 +34071,7 @@
     function _irExportLogo() {
         if (!_irExportLogoImg) {
             _irExportLogoImg = new Image();
-            _irExportLogoImg.src = 'tc-atlas-favicon-64.png';
+            _irExportLogoImg.src = 'tc-atlas-favicon-64.png?v=20261009p1a';
         }
         return (_irExportLogoImg.complete && _irExportLogoImg.naturalWidth)
             ? _irExportLogoImg : null;

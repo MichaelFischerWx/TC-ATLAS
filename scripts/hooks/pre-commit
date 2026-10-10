@@ -1,0 +1,26 @@
+#!/bin/sh
+# Refuse a commit that leaves a shared asset under two ?v= cache tokens
+# (scripts/check_version_tokens.sh). Two tokens for one file means some pages
+# keep getting an older copy from the CDN.
+#
+# Checks the STAGED copies of the pages and loaders, not the working tree,
+# which often holds unrelated WIP. Install once per clone with
+# scripts/install_hooks.sh; skip a single commit with `git commit --no-verify`.
+top=$(git rev-parse --show-toplevel) || exit 0
+check="$top/scripts/check_version_tokens.sh"
+[ -f "$check" ] || exit 0
+
+# Only a commit that touches a top-level page, script or stylesheet can drift.
+git diff --cached --name-only --diff-filter=ACMRD | grep -qE '^[^/]+\.(html|js|css)$' || exit 0
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/tc-token-check.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' EXIT INT TERM
+git ls-files -z -- ':(glob)*.html' ':(glob)*.js' | git checkout-index -z --stdin --prefix="$tmp/"
+mkdir -p "$tmp/scripts"
+cp "$check" "$tmp/scripts/"
+if ! out=$(bash "$tmp/scripts/check_version_tokens.sh" 2>&1); then
+    printf '%s\n' "$out" >&2
+    echo "pre-commit: give each file above ONE fresh ?v= token on every page, or commit with --no-verify." >&2
+    exit 1
+fi
+exit 0
