@@ -13767,10 +13767,21 @@
         var l = _loopEl('ir-loop-modal-loader');
         if (l) l.style.display = 'none';
     }
-    function _loopShowError(msg) {
+    function _loopShowError(msg, retryFn) {
         _loopHideLoader();
         var e = _loopEl('ir-loop-modal-error');
-        if (e) { e.textContent = msg || 'Loop unavailable.'; e.style.display = ''; }
+        if (!e) return;
+        e.textContent = msg || 'Loop unavailable.';
+        if (typeof retryFn === 'function') {
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'tc-retry';
+            b.textContent = 'Retry';
+            b.addEventListener('click', function () { e.style.display = 'none'; retryFn(); });
+            e.appendChild(document.createTextNode(' '));
+            e.appendChild(b);
+        }
+        e.style.display = '';
     }
 
     function _loopEnsureMap() {
@@ -13932,7 +13943,8 @@
         }).catch(function (err) {
             if (reqId !== _loopReqId) return;
             console.warn('[LoopModal] bundle fetch failed:', err && err.message);
-            _loopShowError('Animation not yet available for this storm. The prewarm cycle builds new artifacts every ~5 minutes.');
+            _loopShowError('This storm’s animation isn’t ready yet. New frames are built every few minutes.',
+                function () { _loopLoad(stormId, ++_loopReqId); });
         });
     }
 
@@ -18591,8 +18603,7 @@
         }).catch(function (err) {
             if (reqSeq !== _genesisDetailReqSeq) return;
             _genesisShowLoader(false);
-            subEl.innerHTML = '<span style="color:#ef4444;">'
-                + 'Could not load detail: ' + (err.message || err) + '</span>';
+            TCErrors.show(subEl, err, 'this cluster’s details', function () { openGenesisDetail(trackId); });
         });
     }
     window.openGenesisDetail = openGenesisDetail;
@@ -18698,8 +18709,8 @@
                     openGenesisDetail(tid);
                 })
                 .catch(function (err) {
-                    _rtToast('DeepMind ensemble search failed: '
-                        + (err.message || err));
+                    TCErrors.log(err, 'the DeepMind ensemble near this point');
+                    _rtToast(TCErrors.message(err, 'the DeepMind ensemble near this point'));
                 });
         }
 
@@ -18737,8 +18748,8 @@
         } else {
             el.innerHTML = '<span style="color:#00e5ff;">'
                 + 'Next cycle due — checking…</span>';
-            el.title = 'Past expected publish time. The backend probes '
-                + 'every request; reopen this cluster to pick it up.';
+            el.title = 'Past the expected publish time. Reopen this '
+                + 'cluster in a few minutes to pick up the new run.';
         }
     }
 
@@ -27491,7 +27502,7 @@
         }).catch(function (err) {
             console.error('[Export] PNG export failed', err);
             _ga('rt_export_png', { ok: false, msg: String(err && err.message) });
-            _rtToast('Couldn’t save PNG: ' + (err && err.message ? err.message : err));
+            _rtToast(TCErrors.message(err, 'the PNG', 'save'));
         }).then(function () {
             if (btn) { btn.textContent = orig; btn.disabled = false; }
         });
@@ -34263,7 +34274,7 @@
                 } catch (e) {
                     _irRestoreTrackAfterExport(hiddenTrack); hiddenTrack = null;
                     console.warn('[RT Monitor] iOS GL export failed:', e);
-                    _rtToast('Couldn’t save the image — ' + (e && e.message ? e.message : 'export failed') + '.');
+                    _rtToast(TCErrors.message(e, 'the image', 'save'));
                 }
             };
             _glSnapshotHiRes(glMap).then(_iosCapture);
@@ -34365,8 +34376,7 @@
         }).catch(function (err) {
             _irRestoreTrackAfterExport(hiddenTrack);
             console.warn('[RT Monitor] PNG export failed:', err);
-            _rtToast('Couldn’t save the image — ' +
-                     (err && err.message ? err.message : 'export failed') + '.');
+            _rtToast(TCErrors.message(err, 'the image', 'save'));
         });
     };
 
@@ -34845,8 +34855,7 @@
                 }).catch(function (err) {
                     _restoreLive();
                     console.warn('[RT Monitor] GIF background capture failed:', err);
-                    _rtToast('GIF export failed — ' +
-                             ((err && err.message) || 'capture error'));
+                    _rtToast(TCErrors.message(err, 'the GIF', 'save'));
                     _gifCleanup();
                 });
             }, 0);

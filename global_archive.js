@@ -5060,8 +5060,8 @@ function loadHURSAT(storm) {
             // Prefetching is triggered by loadIRFrame's callback (or above)
         })
         .catch(function (err) {
-            console.warn('IR load failed:', err);
-            document.getElementById('ir-status').textContent = 'API not connected';
+            TCErrors.show(document.getElementById('ir-status'), err, 'satellite imagery for this storm',
+                function () { loadHURSAT(storm); });
             document.getElementById('ir-toggle-wrap').style.display = 'none';
         });
 }
@@ -6540,8 +6540,8 @@ function loadGlobalMWOverpasses(storm) {
             }
         })
         .catch(function (e) {
-            sel.innerHTML = '<option value="">Error</option>';
-            if (status) status.textContent = 'Error: ' + e.message;
+            sel.innerHTML = '<option value="">Overpasses unavailable</option>';
+            TCErrors.show(status, e, 'the microwave overpasses', function () { loadGlobalMWOverpasses(storm); });
         });
 }
 
@@ -6713,7 +6713,7 @@ window.loadGlobalMWOverpass = function () {
             _applyIntensityMarker(_lastMarkerDt);
         })
         .catch(function (e) {
-            if (status) status.textContent = 'Error: ' + e.message;
+            TCErrors.show(status, e, 'this microwave image', window.loadGlobalMWOverpass);
         });
 };
 
@@ -6881,7 +6881,7 @@ function loadNexradSites(storm, frameLat, frameLon) {
             if (!hadOptions) {
                 siteSelect.innerHTML = '<option value="">Retry on next frame</option>';
             }
-            if (status) status.textContent = 'Error: ' + e.message;
+            TCErrors.show(status, e, 'the NEXRAD sites', function () { loadNexradSites(storm, frameLat, frameLon); });
         });
 }
 
@@ -6959,7 +6959,7 @@ window.loadNexradScans = function () {
             if (!hadScanOptions) {
                 scanSelect.innerHTML = '<option value="">Retry on next frame</option>';
             }
-            if (status) status.textContent = 'Error: ' + e.message;
+            TCErrors.show(status, e, 'the NEXRAD scans', window.loadNexradScans);
         });
 };
 
@@ -7065,7 +7065,7 @@ window.loadNexradFrame = function () {
             _prefetchNexradSibling(s3Key, site, siblingProduct);
         })
         .catch(function (e) {
-            if (status) status.textContent = 'Error: ' + e.message;
+            TCErrors.show(status, e, 'this NEXRAD scan', window.loadNexradFrame);
         });
 };
 
@@ -10863,8 +10863,8 @@ window.loadCompareMWOverpass = function (side) {
         })
         .catch(function (e) {
             s.loading = false;
-            if (dtEl) dtEl.textContent = 'Error: ' + e.message;
-            console.warn('MW compare frame load failed', e);
+            TCErrors.log(e, 'the comparison microwave image');
+            if (dtEl) dtEl.textContent = TCErrors.message(e, 'this microwave image');
         });
 };
 
@@ -12667,7 +12667,7 @@ function _gaFLDiscoverMissions(storm) {
             _gaFLFetchMissionStats(storm);
         })
         .catch(function (e) {
-            if (status) status.textContent = 'Error: ' + e.message;
+            TCErrors.show(status, e, 'the recon missions', function () { _gaFLDiscoverMissions(storm); });
         });
 }
 
@@ -13128,7 +13128,7 @@ function _gaFLLoadMissionData(fileUrl) {
             // Aborted fetches are expected when switching missions
             if (e && e.name === 'AbortError') return;
             if (_gaFLMainAbort === mainCtrl) _gaFLMainAbort = null;
-            if (status) status.textContent = 'Error: ' + e.message;
+            TCErrors.show(status, e, 'this mission’s flight-level data', function () { _gaFLLoadMissionData(fileUrl); });
         });
 }
 

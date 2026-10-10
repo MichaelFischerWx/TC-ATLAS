@@ -7036,7 +7036,7 @@
                 img.src = json.image;
             })
             .catch(function (e) {
-                if (display && status) status.textContent = 'Error: ' + e.message;
+                if (display) TCErrors.show(status, e, 'this radar frame', function () { _satFetchRadarFrame(s3Key, display); });
             });
     }
 

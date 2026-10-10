@@ -276,15 +276,11 @@
                 $('gra-loading').style.display = 'none';
             })
             .catch(function (e) {
-                var pub = DATA().indexOf('http') === 0;
+                // Source URL + detail go to the console (a local build can be
+                // pointed at with ?ghostra=/ghost-ra/v1); people get a retry.
+                TCErrors.log(e, 'the GHOST reanalysis from ' + DATA());
                 $('gra-loading').style.display = '';
-                $('gra-loading').innerHTML =
-                    '<span style="max-width:340px;text-align:center;line-height:1.5;">' +
-                    'Could not load the reanalysis from<br><code>' + DATA() + '</code>' +
-                    '<br><small>' + e.message + '</small>' +
-                    (pub ? '<br><small>If the tree has not been published yet, point the ' +
-                        'tab at a local build with <code>?ghostra=/ghost-ra/v1</code>.</small>' : '') +
-                    '</span>';
+                TCErrors.show($('gra-loading'), e, 'the GHOST reanalysis', loadVersion);
             });
     }
 

@@ -574,6 +574,26 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 .explorer-status.loading { color: var(--blue-light); }
 .explorer-status.error { color: #f87171; }
 
+/* Failed-load message + Retry (tc_errors.js). The container keeps the
+   panel's own error class; these cover the bare default and the button. */
+.tc-error { color: #b42318; font-size: 12px; padding: 6px 0; }
+:root[data-theme="dark"] .tc-error { color: #f87171; }
+.tc-retry {
+    display: inline-block;
+    margin-left: 4px;
+    padding: 1px 9px;
+    font: 600 11px/1.6 'DM Sans', sans-serif;
+    color: var(--um-green);
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    cursor: pointer;
+    vertical-align: baseline;
+}
+.tc-retry:hover { background: var(--um-green-tint); }
+.tc-retry:focus-visible { outline: 2px solid var(--um-orange); outline-offset: 2px; }
+:root[data-theme="dark"] .tc-retry { color: #6db993; }
+
 .anim-controls { display: flex; align-items: center; gap: 3px; margin-top: 4px; }
 .anim-btn { width: 28px; height: 26px; border: 1px solid var(--border-light); border-radius: 5px; background: var(--navy); font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--slate); transition: all 0.15s; padding: 0; }
 .anim-btn:hover { background: var(--navy-mid); border-color: var(--blue); color: var(--blue-light); }
