@@ -15,6 +15,15 @@
 (function () {
     'use strict';
 
+    // Plotly loads after the map on the plain Global Map view (see
+    // realtime_ir.html). Chart entry points that can run before it arrives
+    // re-run themselves once it has, and ask for it if nothing else has yet.
+    function _dmWhenPlotly(fn) {
+        if (typeof Plotly !== 'undefined') { fn(); return; }
+        window.addEventListener('plotly-ready', function () { fn(); }, { once: true });
+        if (window.tcaLoadPlotly) window.tcaLoadPlotly();
+    }
+
     var B = null;               // bridge from realtime_ir.js
     var T = function () { return window.TCDM; };
 
@@ -409,6 +418,7 @@
         renderPointReadout();
     }
     function drawArrivalChart(pp, init) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _dmWhenPlotly(function () { drawArrivalChart.apply(_pt, _pa); }); return; }
         var el = $('rt-dm-arrival-chart'); if (!el) return;
         var bin = 12, counts = {}, maxT = 0;
         for (var i = 0; i < pp.arrival34.length; i++) {
@@ -487,6 +497,7 @@
         if (S.lf.showPts && lf.events.length) drawLfPoints();
     }
     function drawLfChart(lf, init) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _dmWhenPlotly(function () { drawLfChart.apply(_pt, _pa); }); return; }
         var el = $('rt-dm-lf-chart'); if (!el) return;
         var bin = 12, maxT = 0, cats = ['TD', 'TS', 'C1', 'C2', 'C3', 'C4', 'C5'];
         var byBin = {};
@@ -511,6 +522,7 @@
         Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true });
     }
     function drawSurvivalChart(wl) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _dmWhenPlotly(function () { drawSurvivalChart.apply(_pt, _pa); }); return; }
         var el = $('rt-dm-surv-chart'); if (!el) return;
         var sv = T().survival(wl.members, wl.lead_times_h || []);
         var xs = sv.taus.map(function (t) { return '+' + t + 'h'; });
@@ -623,6 +635,7 @@
         return null;
     }
     function drawOfclChart(wl, fc) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _dmWhenPlotly(function () { drawOfclChart.apply(_pt, _pa); }); return; }
         var el = $('rt-dm-ofcl-chart'); if (!el) return;
         var off = T().initOffsetH(wl.init_time, fc.init);   // + when official is later
         // Ensemble percentiles by official lead (valid-time aligned).
@@ -1108,6 +1121,7 @@
         return r.swaths[key];
     }
     function drawModalRiskMap() {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _dmWhenPlotly(function () { drawModalRiskMap.apply(_pt, _pa); }); return; }
         var el = $('rt-genesis-modal-riskmap'); if (!el || !M.data) return;
         var d = M.data, mean = d.mean && d.mean.points || [];
         var isDark = B.isDark();
@@ -1467,6 +1481,7 @@
     // Landfall map: every member's first landfall (Saffir–Simpson colored),
     // the numbered top areas, the ensemble mean and the official track.
     function drawModalLfMap() {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _dmWhenPlotly(function () { drawModalLfMap.apply(_pt, _pa); }); return; }
         var el = $('rt-genesis-modal-lfmap'), lf = M.lf; if (!el || !M.data || !lf || !lf.events.length) return;
         var d = M.data, isDark = B.isDark(), init = d.init, ink = isDark ? '#e2e8f0' : '#0f172a';
         // Weakest first so the strongest landfalls draw on top.
@@ -1541,6 +1556,7 @@
     }
     // Chart helpers shared by card + modal (element-targeted variants).
     function drawLfChartInto(el, lf, init) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _dmWhenPlotly(function () { drawLfChartInto.apply(_pt, _pa); }); return; }
         var bin = 12, maxT = 0, cats = ['TD', 'TS', 'C1', 'C2', 'C3', 'C4', 'C5'], byBin = {};
         for (var i = 0; i < lf.events.length; i++) { var e = lf.events[i], b = Math.floor(e.tau / bin) * bin; if (b > maxT) maxT = b; var c = T().catOf(e.wind); byBin[b] = byBin[b] || {}; byBin[b][c] = (byBin[b][c] || 0) + 1; }
         var xs = []; for (var t = 0; t <= maxT; t += bin) xs.push(t);
@@ -1558,6 +1574,7 @@
         Plotly.react(el, traces, layout, { displayModeBar: false, responsive: true });
     }
     function drawSurvivalInto(el, members, taus) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _dmWhenPlotly(function () { drawSurvivalInto.apply(_pt, _pa); }); return; }
         var sv = T().survival(members, taus);
         var layout = B.chartLayout({ margin: { l: 36, r: 8, t: 6, b: 26 }, fontSize: 10,
             yaxis: { range: [0, 105], ticksuffix: '%', title: { text: '% members', font: { size: 10 } } }, xaxis: { tickfont: { size: 9 }, nticks: 10 } });

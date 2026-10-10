@@ -868,6 +868,7 @@ function openSidePanel(caseData, fromQuickSelect) {
     if (_fc) _fc.hidden = true;
     _archiveFLReset();
     _archiveSondeReset();
+    if (currentCaseIndex !== caseData.case_index) _tdrDrape.setTilt(null);   // the old case's column
     currentCaseIndex = caseData.case_index;
     currentCaseData = caseData;
     _currentSddc = (caseData.sddc !== null && caseData.sddc !== undefined && caseData.sddc !== 9999) ? caseData.sddc : null;
@@ -2044,6 +2045,7 @@ function toggleTiltProfile() {
             btn.style.color = '';
         }
     }
+    if (!_tiltProfileEnabled) _tdrDrape.setTilt(null);
     // Re-generate current plot with or without tilt profile
     if (currentCaseIndex !== null) {
         generateCustomPlot();
@@ -4683,6 +4685,10 @@ function renderPlotFromJSON(json, resultDiv) {
         barbs: json.wind_barbs || null,
         center_lat: (currentCaseData && currentCaseData.latitude), center_lon: (currentCaseData && currentCaseData.longitude)
     };
+    // Tilt column on the map too. The archive's stored tilt is the displacement
+    // from the 2-km center, which is the grid origin, so ref_center is 0,0.
+    var tp = _tiltProfileEnabled && json.tilt_profile;
+    _tdrDrape.setTilt(tp ? Object.assign({ ref_center_x_km: 0, ref_center_y_km: 0 }, tp) : null);
     if (_focusMode && !_twoPanelDisabled) {
         // Two-panel default (focus mode): defer so the Plotly plan chart renders at full size
         // first (clean toggle-back), then drape on the map + hide the plan pane. Idempotent,

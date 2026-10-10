@@ -13,6 +13,18 @@
 (function () {
     'use strict';
 
+    // Charts in this tab (and the shared tdr_view.js figures) were written
+    // for the light theme. plotly_dark.js maps their colors in dark mode and
+    // back on a theme toggle; plain Plotly if it failed to load.
+    function _rtNewPlot(el, traces, layout, config) {
+        return window.TCAPlotDark ? TCAPlotDark.newPlot(el, traces, layout, config)
+                                  : Plotly.newPlot(el, traces, layout, config);
+    }
+    function _rtReact(el, traces, layout, config) {
+        return window.TCAPlotDark ? TCAPlotDark.react(el, traces, layout, config)
+                                  : Plotly.react(el, traces, layout, config);
+    }
+
     // Theme-aware Plotly gridline color. The old hardcoded faint-white
     // values sat on white plot backgrounds — invisible in every theme.
     function _tdrGrid() {
@@ -3419,7 +3431,7 @@
             yaxis4: { title: { text: 'Alt (km)', font: { size: 11, color: '#94a3b8' } }, overlaying: 'y2', side: 'right', showgrid: false, tickfont: { size: 10, color: '#94a3b8' }, zeroline: false },
             yaxis3: { title: { text: 'Temp (°C)', font: { size: 11, color: fg } }, domain: [0, 0.24], gridcolor: grid, tickfont: { size: 10, color: fg }, zeroline: false }
         };
-        window.Plotly.react(el, traces, layout, { responsive: true, displayModeBar: false }).then(function () {
+        _rtReact(el, traces, layout, { responsive: true, displayModeBar: false }).then(function () {
             if (!_hdobChartBound) { try { el.on('plotly_click', _hdobOnChartClick); _hdobChartBound = true; } catch (e) {} }
         });
     }
@@ -3717,7 +3729,7 @@
             yaxis4: yax([0.0, 0.22], 'Alt (km)')
         };
         el.style.display = '';
-        window.Plotly.newPlot(el, traces, layout, { responsive: true, displayModeBar: false });
+        _rtNewPlot(el, traces, layout, { responsive: true, displayModeBar: false });
     }
 
     window.reconLoadFlightLevel = function (mission) {
@@ -4453,7 +4465,7 @@
             _planTraces = [heatmap].concat(coastTraces).concat(overlayTraces).concat(maxTraces);
             _planLayout = layout;
         }
-        Plotly.newPlot('rt-plotly-chart', _planTraces, _planLayout, config);
+        _rtNewPlot('rt-plotly-chart', _planTraces, _planLayout, config);
         // newPlot drops added traces: put the tilt column back if it's on.
         _rtTiltTraceStart = -1;
         if (_rtTiltEnabled && _rtTiltData && !_ctrk) _rtAddTiltTraces(_rtTiltData);
@@ -4832,9 +4844,9 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                     len: 0.42, y: 0.98, yanchor: 'top', x: 1.01, xpad: 2
                 })
             });
-            Plotly.newPlot('plotly-fullscreen', [fullHeatmap].concat(liveTraces).concat(d.maxTraces || []), fullLayout, d.config);
+            _rtNewPlot('plotly-fullscreen', [fullHeatmap].concat(liveTraces).concat(d.maxTraces || []), fullLayout, d.config);
         } else {
-            Plotly.newPlot('plotly-fullscreen', [d.heatmap].concat(liveTraces).concat(d.maxTraces || []), fullLayout, d.config);
+            _rtNewPlot('plotly-fullscreen', [d.heatmap].concat(liveTraces).concat(d.maxTraces || []), fullLayout, d.config);
         }
         document.getElementById('plotly-fullscreen').on('plotly_click', rtHandlePlotClick);
     };
@@ -4935,7 +4947,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             locator: p ? { z: p.z, x: p.x, y: p.y, colorscale: p.colorscale, zmin: p.vmin, zmax: p.vmax } : null,
             title: (meta.storm_name || 'TDR analysis') + (meta.datetime ? ' | ' + _rtAnalysisTime(meta) : '') + ' \u2014 TDR cross-section (' +
                    Math.round(Math.hypot(b.x - a.x, b.y - a.y)) + ' km)',
-            plot: function (id, t, l, c) { Plotly.newPlot(id, t, l, c); }
+            plot: function (id, t, l, c) { _rtNewPlot(id, t, l, c); }
         });
     };
 
@@ -4979,7 +4991,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             overlayTraces: rtBuildOverlayContours(json, null, null, true),
             inset: _rtPanelShearInset(false)
         });
-        Plotly.newPlot('rt-cs-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d', 'toggleSpikelines'] });
+        _rtNewPlot('rt-cs-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d', 'toggleSpikelines'] });
     }
 
     // ── 3D Volume ────────────────────────────────────────────────
@@ -5497,7 +5509,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             overlayTraces: TDRView.contourTraces(json.overlay, json.overlay && json.overlay.azimuthal_mean, json.radius_km, json.height_km, intInput ? parseFloat(intInput.value) : NaN)
         });
         container.innerHTML = '<div id="rt-dual-az-chart" style="width:100%;height:100%;min-height:320px;"></div>';
-        Plotly.newPlot('rt-dual-az-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d','select2d','toggleSpikelines'], displaylogo: false });
+        _rtNewPlot('rt-dual-az-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d','select2d','toggleSpikelines'], displaylogo: false });
     }
 
     // Coverage slider display update
@@ -5563,7 +5575,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             overlayTraces: TDRView.contourTraces(json.overlay, json.overlay && json.overlay.azimuthal_mean, json.radius_km, json.height_km, intInput ? parseFloat(intInput.value) : NaN),
             inset: _rtPanelShearInset(false)
         });
-        Plotly.newPlot('rt-az-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: false, displaylogo: false });
+        _rtNewPlot('rt-az-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: false, displaylogo: false });
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -7341,7 +7353,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             showarrow: false, font: { color: '#5b6573', size: 9.5 }, xanchor: 'center', yanchor: 'top',
         });
 
-        Plotly.newPlot(chartDiv, traces, layout, { responsive: true, displayModeBar: false });
+        _rtNewPlot(chartDiv, traces, layout, { responsive: true, displayModeBar: false });
 
         // Clear the info div (info is now shown as on-plot annotation)
         var infoEl = document.getElementById('rt-sonde-wind-info');
@@ -8280,7 +8292,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var plotDiv = document.getElementById('rt-fl-ts-plot');
         if (!plotDiv) return;
 
-        Plotly.newPlot(plotDiv, traces, layout, config);
+        _rtNewPlot(plotDiv, traces, layout, config);
 
         // Click-to-highlight: find nearest point in 10-s data for map marker
         plotDiv.on('plotly_click', function (eventData) {
@@ -8683,7 +8695,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             rmw: pj.wcm_rmw_km, sddc: data.sddc, contourInterval: intInput ? parseFloat(intInput.value) : NaN,
             title: 'Shear-Relative Quadrant Mean: ' + varInfo.display_name + ' (\u2265' + covPct + '% cov.)' + TDRView.sectionTitleOverlay(data)
         });
-        Plotly.newPlot('rt-quad-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: false, displaylogo: false });
+        _rtNewPlot('rt-quad-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: false, displaylogo: false });
     }
 
     window.rtFetchAnomaly = function () {
@@ -8758,7 +8770,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 '<div id="rt-anomaly-chart" style="width:100%;height:320px;"></div>' +
             '</div>';
         var fig = TDRView.anomalyFigure(data, { citation: false });
-        Plotly.newPlot('rt-anomaly-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: false, displaylogo: false });
+        _rtNewPlot('rt-anomaly-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: false, displaylogo: false });
     }
 
     // ── VP Favorability Scatter ──────────────────────────────────────
@@ -8847,7 +8859,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             container.querySelector('#rt-vp-chart').innerHTML = '<div style="color:var(--slate);text-align:center;padding:40px;">' + fig.message + '</div>';
             return;
         }
-        Plotly.newPlot('rt-vp-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: false, displaylogo: false });
+        _rtNewPlot('rt-vp-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: false, displaylogo: false });
     }
 
     // ── Center Track: 2-km (L) + 6-km (M) TDR centres over IR ────
@@ -9290,7 +9302,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         if (!el) el = document.getElementById('rt-cs-result');
         if (el) {
             el.innerHTML = '<div id="rt-cfad-chart" style="width:100%;height:400px;border-radius:6px;overflow:hidden;"></div>';
-            Plotly.newPlot('rt-cfad-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: true, displaylogo: false });
+            _rtNewPlot('rt-cfad-chart', fig.traces, fig.layout, { responsive: true, displayModeBar: true, displaylogo: false });
         }
     }
 
@@ -9856,7 +9868,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } },
                 showlegend: false
             };
-            Plotly.newPlot('rt-mw-plotly-chart', [centerTrace], layout, config);
+            _rtNewPlot('rt-mw-plotly-chart', [centerTrace], layout, config);
         } else {
             var sg = json.storm_grid;
             var ext2 = sg.extent_km || 250;
@@ -9890,7 +9902,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } },
                 showlegend: false
             };
-            Plotly.newPlot('rt-mw-plotly-chart', [mwTrace, centerTrace], layout2, config);
+            _rtNewPlot('rt-mw-plotly-chart', [mwTrace, centerTrace], layout2, config);
         }
     }
 

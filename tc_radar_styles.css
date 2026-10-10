@@ -2840,6 +2840,8 @@ body.basemap-satellite .tdr-cb-row input[type=number] { background: rgba(255,255
 body.basemap-satellite .tdr-cb-foot { color: #94a3b8; }
 body.basemap-satellite .tdr-cb-grad { border-color: rgba(255,255,255,0.2); }
 body.basemap-satellite .tdr-cb-reset { color: #93c5fd; }
+/* Drape tilt key row (TDRView inline-styles it for a light colorbar) */
+body.basemap-satellite .tdr-map-colorbar [data-k="tilt"] { color: #cbd5e1 !important; }
 
 /* Quick-look thumbnail floating on the focus-mode map (tc_radar_app.js
    _quicklookSync). Top-right, under the Satellite/Map switch, so the side

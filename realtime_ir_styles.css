@@ -26,7 +26,16 @@ html, body { margin: 0; padding: 0; }
     right: 0;
     bottom: 0;
     z-index: 1;
+    /* The basemap is CARTO dark in both themes. Paint the same tone before
+       the map engine has loaded, so a slow first load shows a dark map area
+       instead of a blank white page. */
+    background: #151617;
 }
+
+/* The static Basins button exists only until realtime_ir.js moves it into
+   the Display menu (it gains .ir-display-item there). Before the scripts run
+   it would float alone over the empty map. */
+#basin-sidebar-toggle:not(.ir-display-item) { visibility: hidden; }
 
 /* ── Status bar ──────────────────────────────────────────────── */
 .ir-status-bar {

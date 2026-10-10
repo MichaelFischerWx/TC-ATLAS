@@ -124,6 +124,9 @@
     function _whenPlotly(fn) {
         if (typeof Plotly !== 'undefined') { fn(); return; }
         window.addEventListener('plotly-ready', function () { fn(); }, { once: true });
+        // Plotly loads after the map on the plain Global Map view; a chart
+        // that is wanted sooner fetches it now (realtime_ir.html).
+        if (window.tcaLoadPlotly) window.tcaLoadPlotly();
     }
 
     // Transient toast for actions whose failure/fallback would otherwise be
@@ -4839,6 +4842,7 @@
     }
 
     function _rtRenderObHistory(payload, ob) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _rtRenderObHistory.apply(_pt, _pa); }); return; }
         var st = document.getElementById('rt-obs-hist-status');
         var series = (payload && payload.series) || [];
         if (!series.length) {
@@ -6198,7 +6202,14 @@
      *  ('idle', 'loading', 'ready', 'playing') are passed in so the
      *  loading-pct case can show a percentage, but most of the visual
      *  state is driven by the globalAnim* booleans via _refreshAnimSlider. */
+    var _imageryReadyAnnounced = false;
     function updateGlobalAnimControls(state, pct) {
+        // First imagery on the map: deferred downloads (Plotly) wait for this
+        // so they don't compete with the first satellite frame on a phone.
+        if (!_imageryReadyAnnounced && (state === 'ready' || state === 'playing')) {
+            _imageryReadyAnnounced = true;
+            try { window.dispatchEvent(new Event('tca-imagery-ready')); } catch (e) {}
+        }
         var panel = document.getElementById('ir-global-anim-panel');
         if (!panel) return;
         var playBtn = document.getElementById('ir-global-anim-play');
@@ -7336,19 +7347,21 @@
             marker.addTo(map);
             stormMarkers.push(marker);
         }
-        _fitNarrowViewToStorms(storms);
+        _fitViewToStorms(storms);
     }
 
-    // On a phone the desktop default view (Atlantic-centered, zoom 3) crops
-    // to an empty strip of ocean with every active system off-screen. Once,
-    // on the first storm render, fit the viewport to the systems instead —
-    // desktop keeps its wide default because the storms are already in view.
-    var _narrowFitDone = false;
-    function _fitNarrowViewToStorms(storms) {
-        if (_narrowFitDone || !map) return;
-        if (!(window.matchMedia && window.matchMedia('(max-width: 768px)').matches)) return;
+    // Once, on the first storm render, frame the active systems.
+    // On a phone the default view (Atlantic-centered, zoom 3) crops to an
+    // empty strip of ocean, so it always fits. A wider screen keeps that
+    // familiar default when it already shows every tropical cyclone and fits
+    // otherwise: on 10 Oct 2026 it clipped Simon (130 kt) at its left edge and
+    // left Koguma (120 kt, West Pacific) out of view.
+    var _firstFitDone = false;
+    function _fitViewToStorms(storms) {
+        if (_firstFitDone || !map) return;
         // A deep link is about to open a storm card / basin — don't fight it.
-        if (window.location.hash && window.location.hash.length > 1) { _narrowFitDone = true; return; }
+        if (window.location.hash && window.location.hash.length > 1) { _firstFitDone = true; return; }
+        var narrow = !!(window.matchMedia && window.matchMedia('(max-width: 768px)').matches);
         var pts = [];
         for (var i = 0; i < (storms || []).length; i++) {
             var s = storms[i];
@@ -7359,10 +7372,13 @@
             }
         }
         if (!pts.length) return;
-        _narrowFitDone = true;
+        _firstFitDone = true;
+        if (!narrow && _defaultViewShowsStorms(storms)) return;
+        // Phones zoom in further; a desktop stays an overview.
+        var singleZoom = narrow ? 4 : 3.5, maxFitZoom = narrow ? 5 : 4;
         try {
             if (pts.length === 1) {
-                map.setView([pts[0].lat, pts[0].lon], 4, { animate: false });
+                map.setView([pts[0].lat, pts[0].lon], singleZoom, { animate: false });
                 return;
             }
             // Longitudes are fitted as the shortest arc around the globe, so
@@ -7377,6 +7393,11 @@
             var c = map.getContainer();
             var tilePx = map._gl ? 512 : 256;
             var minZ = map._gl ? map._gl.getMinZoom() : (map.getMinZoom ? map.getMinZoom() : 2);
+            // A desktop at zoom 2 shows ~240°, too far out to read a storm.
+            // When the systems span more than fits at zoom 2.5 (~150-170° at
+            // laptop widths), frame the strongest system's region instead.
+            // (The fit padding can still settle a little below 2.5.)
+            if (!narrow) minZ = Math.max(minZ, 2.5);
             var fitSpan = 360 * Math.max((c ? c.clientWidth : 390) - 48, 100) / (tilePx * Math.pow(2, minZ));
             var arc = _lonArc(pts);
             if (arc.span > fitSpan) {
@@ -7389,12 +7410,30 @@
                 north = Math.max(north, pts[k].lat);
             }
             if (pts.length === 1) {
-                map.setView([pts[0].lat, pts[0].lon], 4, { animate: false });
+                map.setView([pts[0].lat, pts[0].lon], singleZoom, { animate: false });
             } else {
                 map.fitBounds(L.latLngBounds([south, arc.west], [north, arc.east]).pad(0.25),
-                              { animate: false, maxZoom: 5, padding: [24, 24] });
+                              { animate: false, maxZoom: maxFitZoom, padding: [24, 24] });
             }
         } catch (e) { /* facade without fitBounds — keep default view */ }
+    }
+
+    /** True when every tropical cyclone (invests aside) sits inside the
+     *  current view with a little margin, so the default view can stay. */
+    function _defaultViewShowsStorms(storms) {
+        try {
+            var b = map.getBounds(), c = map.getCenter();
+            var halfLon = (b.getEast() - b.getWest()) / 2, mLon = halfLon * 0.06;
+            var mLat = (b.getNorth() - b.getSouth()) * 0.06;
+            for (var i = 0; i < (storms || []).length; i++) {
+                var s = storms[i];
+                if (!s || s.lat == null || s.lon == null || _irIsInvest(s.atcf_id)) continue;
+                var dLon = ((s.lon - c.lng) % 360 + 540) % 360 - 180;
+                if (Math.abs(dLon) > halfLon - mLon) return false;
+                if (s.lat < b.getSouth() + mLat || s.lat > b.getNorth() - mLat) return false;
+            }
+            return true;   // also when only invests are active
+        } catch (e) { return true; }
     }
 
     function _lon360(x) { return ((x % 360) + 360) % 360; }
@@ -10051,6 +10090,8 @@
     /** Open the storm detail view */
     function openStormDetail(atcfId) {
         currentStormId = atcfId;
+        // The card is mostly charts; start Plotly now if the idle load hasn't.
+        if (window.tcaLoadPlotly) window.tcaLoadPlotly();
 
         // Hide the active-storm gallery landing — opening a card replaces it.
         var _satGallery = document.getElementById('sat-gallery');
@@ -10939,6 +10980,7 @@
      * cached /shear response of the active storm.
      */
     function _rtRenderEnvProfile(payload) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _rtRenderEnvProfile.apply(_pt, _pa); }); return; }
         if (!payload || !payload.profile) return;
         var prof = payload.profile;
         if (!prof.plev_hpa || !prof.plev_hpa.length) return;
@@ -12375,13 +12417,39 @@
     // already loads on demand when the user selects it.
     var MAX_PREFETCH_STORMS = 1;
 
+    // The warm-up is a desktop convenience. A raw-frame set is ~16-24 MB and
+    // a 0.1° move of the storm center invalidates it, so skip it where those
+    // bytes cost more than a faster first click is worth: phones and tablets
+    // (touch or narrow screens), Data Saver and slow connections. Elsewhere it
+    // waits until the map's own scripts, storm list and imagery have loaded,
+    // and runs at most once per storm per page view.
+    var _RAW_PREFETCH_MIN_DELAY_MS = 10000;
+    var _rawTbPrefetched = {};          // atcfId -> true once attempted this page view
+    var _rawTbPrefetchScheduled = false;
+    function _bgPrefetchAllowed() {
+        try {
+            if (window.matchMedia && (window.matchMedia('(pointer: coarse)').matches ||
+                                      window.matchMedia('(max-width: 768px)').matches)) return false;
+            var c = navigator.connection;
+            if (c && (c.saveData || /(^|-)(2g|3g)$/.test(c.effectiveType || ''))) return false;
+        } catch (e) {}
+        return true;
+    }
+
     function _prefetchAllStormsRawTb(storms) {
         if (!storms || storms.length === 0) return;
         // Skip background prefetch while user is viewing a detail (prioritize foreground).
-        // Also defer briefly so deep-link handling can set currentStormId first.
         if (currentStormId) return;
-        // Double-check after a microtask to catch deep-link race
-        setTimeout(function () { _prefetchAllStormsRawTbInner(storms); }, 0);
+        if (_rawTbPrefetchScheduled || !_bgPrefetchAllowed()) return;
+        _rawTbPrefetchScheduled = true;
+        var now = (window.performance && performance.now) ? performance.now() : _RAW_PREFETCH_MIN_DELAY_MS;
+        setTimeout(function () {
+            var idle = window.requestIdleCallback || function (f) { setTimeout(f, 200); };
+            idle(function () {
+                _rawTbPrefetchScheduled = false;
+                _prefetchAllStormsRawTbInner(storms);
+            }, { timeout: 5000 });
+        }, Math.max(0, _RAW_PREFETCH_MIN_DELAY_MS - now));
     }
 
     function _prefetchAllStormsRawTbInner(storms) {
@@ -12397,12 +12465,13 @@
             if (currentStormId) return;
             var storm = queue.shift();
             var atcfId = storm.atcf_id;
-            if (!atcfId || _rawTbCacheValid(atcfId)) { fetchNext(); return; }
+            if (!atcfId || _rawTbPrefetched[atcfId] || _rawTbCacheValid(atcfId)) { fetchNext(); return; }
+            _rawTbPrefetched[atcfId] = true;
             _fetchRawTbIncremental(atcfId, true, function () {
                 console.log('[IR Pre-fetch] ' + atcfId + ': done (' +
                     ((_rawTbCache[atcfId] || {}).rawTbFrames || []).length + ' frames)');
                 fetchNext();
-            });
+            }, { prefetch: true });
         }
         fetchNext();
     }
@@ -12652,8 +12721,9 @@
             });
     }
 
-    function _fetchRawTbIncremental(stormId, silent, onComplete) {
+    function _fetchRawTbIncremental(stormId, silent, onComplete, opts) {
         if (!stormId) return;
+        var prefetch = !!(opts && opts.prefetch);
 
         // Use cache if available, not expired, and storm hasn't moved
         if (_rawTbCacheValid(stormId)) {
@@ -12681,6 +12751,15 @@
         _fetchRawTbManifest(stormId, controller.signal)
             .catch(function (err) {
                 if (err && err.name === 'AbortError') throw err;
+                // A background warm-up stops at the CDN manifest. The bundle and
+                // per-frame fallbacks go to the API (a stale manifest even forces
+                // a rebuild there), which only someone who opened the storm
+                // should pay for.
+                if (prefetch) {
+                    var skip = new Error('prefetch skipped: ' + (err && err.message));
+                    skip._prefetchSkip = true;
+                    throw skip;
+                }
                 console.warn('[RT Monitor] Raw Tb manifest unavailable (' +
                     (err && err.message) + ') — trying bundle');
                 // _forceApi: the manifest existed but was stale/mismatched, so
@@ -12714,6 +12793,10 @@
             })
             .catch(function (err) {
                 if (err && err.name === 'AbortError') return;
+                if (err && err._prefetchSkip) {
+                    console.log('[IR Pre-fetch] ' + stormId + ': ' + err.message);
+                    return;
+                }
                 console.warn('[RT Monitor] Raw Tb bundle failed (' +
                     (err && err.message) + ') — falling back to incremental');
                 _fetchRawTbIncrementalLegacy(stormId, silent, controller, onComplete);
