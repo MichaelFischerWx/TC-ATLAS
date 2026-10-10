@@ -91,5 +91,27 @@
         dayYear:  '%-d %b %Y'
     };
 
+    // Plotly's own date axes (default ticks and hovers) take their day/month
+    // order from its locale: "Sep 5" over "2017", "18:00" over "Sep 5, 2017".
+    // Switch that to "5 Sep" / "5 Sep 2017" as soon as Plotly arrives, however
+    // the page loads it: already there, a <script> tag (monitor, TC-RADAR), or
+    // the Global Archive's on-demand ensurePlotly().
+    function plotlyDayMonth() {
+        var P = window.Plotly;
+        if (!P || P._tcDayMonth || typeof P.setPlotConfig !== 'function') return;
+        P._tcDayMonth = true;
+        P.setPlotConfig({ locales: { 'en-US': { format: { dayMonth: '%-d %b', dayMonthYear: '%-d %b %Y' } } } });
+    }
+    plotlyDayMonth();
+    [].forEach.call(document.querySelectorAll('script[src*="plotly"]'), function (s) {
+        s.addEventListener('load', plotlyDayMonth);
+    });
+    if (typeof window.ensurePlotly === 'function') {
+        var ensure = window.ensurePlotly;
+        window.ensurePlotly = function (cb) {
+            return ensure().then(function (v) { plotlyDayMonth(); return cb ? cb(v) : v; });
+        };
+    }
+
     window.TCTime = { utc: utc, cycle: cycle, span: span, parse: parse, plotly: plotly };
 })();
