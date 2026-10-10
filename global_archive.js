@@ -1371,7 +1371,7 @@ window._arch3DOrbitGif = function () {
         ' · Peak ' + (selectedStorm.peak_wind_kt || '?') + ' kt · ' +
         (selectedStorm.min_pres_hpa || '?') + ' hPa · ACE ' + (selectedStorm.ace || 0).toFixed(1);
     var frameMeta = irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null;
-    var dtLabel = frameMeta && frameMeta.datetime ? _formatIRDatetime(frameMeta.datetime) : '';
+    var dtLabel = frameMeta && frameMeta.datetime ? _gaTime(frameMeta.datetime) : '';
 
     function _roundRect(ctx, x, y, w, h, r) {
         ctx.beginPath();
@@ -2475,7 +2475,7 @@ function selectStorm(storm) {
     document.getElementById('card-basin').textContent = BASIN_NAMES[storm.basin] || storm.basin;
     document.getElementById('card-wind').textContent = storm.peak_wind_kt ? storm.peak_wind_kt + ' kt' : 'N/A';
     document.getElementById('card-pres').textContent = storm.min_pres_hpa ? storm.min_pres_hpa + ' hPa' : 'N/A';
-    var dateStr = (storm.start_date || '?') + ' → ' + (storm.end_date || '?');
+    var dateStr = storm.start_date ? TCTime.span(storm.start_date, storm.end_date, { year: true }) : '?';
     var tcDur = _tcDuration(allTracks[storm.sid] || []);
     if (tcDur) dateStr += ' (' + tcDur + ' as TC)';
     document.getElementById('card-dates').textContent = dateStr;
@@ -3098,7 +3098,7 @@ function renderIntensityTimeline(track, storm) {
         name: 'Wind (kt)',
         line: { color: '#00d4ff', width: 2.5 },
         marker: { color: colors, size: 6, line: { color: 'rgba(15, 22, 35,0.3)', width: 1 } },
-        hovertemplate: '<b>%{x}</b><br>Wind: %{y} kt<extra></extra>',
+        hovertemplate: '<b>%{x|' + TCTime.plotly.utcYear + '}</b><br>Wind: %{y} kt<extra></extra>',
         yaxis: 'y'
     };
 
@@ -3109,7 +3109,7 @@ function renderIntensityTimeline(track, storm) {
         mode: 'lines',
         name: 'Pressure (hPa)',
         line: { color: '#a78bfa', width: 1.5, dash: 'dot' },
-        hovertemplate: '<b>%{x}</b><br>Pressure: %{y} hPa<extra></extra>',
+        hovertemplate: '<b>%{x|' + TCTime.plotly.utcYear + '}</b><br>Pressure: %{y} hPa<extra></extra>',
         yaxis: 'y2'
     };
 
@@ -3420,7 +3420,7 @@ function renderHovmoller(data) {
         zmin: cMin,
         zmax: cMax,
         connectgaps: false,
-        hovertemplate: '%{y}<br>r = %{x} km<br>Tb = %{z:.1f} °C<extra></extra>',
+        hovertemplate: '%{y|' + TCTime.plotly.utcYear + '}<br>r = %{x} km<br>Tb = %{z:.1f} °C<extra></extra>',
         colorbar: {
             title: { text: '°C', font: { size: 9, color: '#5b6573' } },
             len: 0.7,
@@ -3442,7 +3442,7 @@ function renderHovmoller(data) {
             mode: 'lines',
             line: { color: 'rgba(15, 22, 35,0.7)', width: 1.5, dash: 'dot' },
             xaxis: 'x2',
-            hovertemplate: '%{y}<br>Vmax = %{x} kt<extra></extra>',
+            hovertemplate: '%{y|' + TCTime.plotly.utcYear + '}<br>Vmax = %{x} kt<extra></extra>',
             showlegend: false
         };
         traces.push(windTrace);
@@ -3620,7 +3620,7 @@ function addFDeckTraces() {
             times.push(f.time);
             winds.push(f.wind_kt);
             var hoverText = '<b>' + style.name + '</b><br>' +
-                f.time + '<br>' +
+                _gaTime(f.time) + '<br>' +
                 'Wind: ' + f.wind_kt + ' kt';
             if (f.ci !== undefined) {
                 hoverText += '<br>CI#: ' + f.ci.toFixed(1);
@@ -3823,7 +3823,7 @@ function _vdmRenderOnMap() {
         else if (acCode.startsWith('NOAA')) acName = 'NOAA ' + acCode.replace('NOAA', 'P-3 N');
 
         // Flight date from mission_id (e.g., "1111A" → mission 11 of storm 11 in year)
-        var flightDate = v.time ? v.time.substring(0, 10) : '';
+        var flightDate = v.time ? TCTime.utc(v.time, { time: false, year: true }) : '';
 
         var tip = '<b>VDM — ' + (v.storm_name || '') + ' OB ' + (v.ob_number || '?') + '</b><br>' +
             '<span style="color:var(--slate);">' + acName + ' · ' + flightDate + '</span><br>' +
@@ -4251,7 +4251,8 @@ function renderCompareTimeline() {
             name: storm.name + ' ' + storm.year + ' (wind)',
             line: { color: color, width: 2.5 },
             marker: { color: color, size: 5 },
-            hovertemplate: '<b>' + storm.name + ' ' + storm.year + '</b><br>%{x}<br>Wind: %{y} kt<extra></extra>',
+            hovertemplate: '<b>' + storm.name + ' ' + storm.year + '</b><br>' +
+                (compareAlign === 'absolute' ? '%{x|' + TCTime.plotly.utcYear + '}' : '%{x}') + '<br>Wind: %{y} kt<extra></extra>',
             yaxis: 'y'
         });
 
@@ -4863,7 +4864,7 @@ function renderDetailMap(track, storm) {
         var gen = genPt || validPts[0]; // fallback to first point if no genesis found
         var genM = L.circleMarker([gen.la, gen.lo], {
             radius: 6, color: '#fff', fillColor: '#60a5fa', fillOpacity: 1, weight: 2
-        }).bindTooltip('Genesis: ' + (gen.t || '').substring(0, 10), { className: 'track-tooltip' }).addTo(detailMap);
+        }).bindTooltip('Genesis: ' + TCTime.utc(gen.t, { time: false, year: true }), { className: 'track-tooltip' }).addTo(detailMap);
         trackAnnotationMarkers.push(genM);
         detailTrackElements.push(genM);
 
@@ -4872,7 +4873,7 @@ function renderDetailMap(track, storm) {
         if (lmiPt) {
             var lmiM = L.circleMarker([lmiPt.la, lmiPt.lo], {
                 radius: 8, color: '#fff', fillColor: getIntensityColor(lmiPt.w), fillOpacity: 1, weight: 2
-            }).bindTooltip('Peak: ' + (lmiPt.w || '?') + ' kt @ ' + (lmiPt.t || '').substring(0, 10), { className: 'track-tooltip' }).addTo(detailMap);
+            }).bindTooltip('Peak: ' + (lmiPt.w || '?') + ' kt @ ' + TCTime.utc(lmiPt.t, { time: false, year: true }), { className: 'track-tooltip' }).addTo(detailMap);
             trackAnnotationMarkers.push(lmiM);
             detailTrackElements.push(lmiM);
         }
@@ -4881,7 +4882,7 @@ function renderDetailMap(track, storm) {
         var end = validPts[validPts.length - 1];
         var endM = L.circleMarker([end.la, end.lo], {
             radius: 5, color: '#fff', fillColor: '#6b7280', fillOpacity: 1, weight: 2
-        }).bindTooltip('Dissipation: ' + (end.t || '').substring(0, 10), { className: 'track-tooltip' }).addTo(detailMap);
+        }).bindTooltip('Dissipation: ' + TCTime.utc(end.t, { time: false, year: true }), { className: 'track-tooltip' }).addTo(detailMap);
         trackAnnotationMarkers.push(endM);
         detailTrackElements.push(endM);
 
@@ -5509,7 +5510,7 @@ function updateIRPositionMarker(data) {
             if (irTrackVisible) irPositionMarker.addTo(detailMap);
             irPositionMarker.bindTooltip('', { className: 'track-tooltip', permanent: false });
         }
-        var tipText = (frameMeta.datetime || '');
+        var tipText = _gaTime(frameMeta.datetime);
         if (data && data.satellite) tipText += ' [' + data.satellite + ']';
         irPositionMarker.setTooltipContent(tipText);
     }
@@ -6045,26 +6046,11 @@ function prefetchIRFrames(currentIdx) {
 
 /* fetchIRBatch removed — all sources now use individual parallel fetches via prefetchIRFrames */
 
-var _MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun',
-                    'Jul','Aug','Sep','Oct','Nov','Dec'];
-
-function _formatIRDatetime(isoStr) {
-    // "2025-10-21T06:00:00" → "21 Oct 2025 06:00 UTC": the site-wide
-    // "9 Oct 21:10 UTC" form, with the year because this is the archive.
-    if (!isoStr) return '';
-    try {
-        var parts = isoStr.split('T');
-        var dateParts = parts[0].split('-');
-        var timeParts = (parts[1] || '00:00:00').split(':');
-        var year = dateParts[0];
-        var month = parseInt(dateParts[1], 10) - 1;
-        var day = parseInt(dateParts[2], 10);
-        var hhmm = timeParts[0] + ':' + (timeParts[1] || '00');
-        if (!_MONTH_NAMES[month] || isNaN(day)) return isoStr;
-        return day + ' ' + _MONTH_NAMES[month] + ' ' + year + ' ' + hhmm + ' UTC';
-    } catch (e) {
-        return isoStr;  // Fallback to raw string
-    }
+// "2025-10-21T06:00:00" → "21 Oct 2025 06:00 UTC": the site-wide time
+// format (tc_time.js) with the year, because this is the archive. sec adds
+// the seconds (sondes, scans).
+function _gaTime(t, sec) {
+    return t ? TCTime.utc(t, { year: true, sec: !!sec }) : '';
 }
 
 function updateIRMeta(idx) {
@@ -6075,8 +6061,7 @@ function updateIRMeta(idx) {
     if (irMeta && irMeta.frames && irMeta.frames[idx]) {
         rawDt = irMeta.frames[idx].datetime || '';
         var sat = irMeta.frames[idx].satellite || '';
-        // Format: "06 UTC 21 Oct 2025"
-        dtText = _formatIRDatetime(rawDt);
+        dtText = _gaTime(rawDt);
         if (_irElDatetime) _irElDatetime.textContent = dtText + (sat ? '  [' + sat + ']' : '');
         // Log NC file for HURSAT debugging
         var frameData = irFrames[idx];
@@ -6501,7 +6486,7 @@ function loadGlobalMWOverpasses(storm) {
 
             for (var i = 0; i < _gaMwOverpassData.length; i++) {
                 var op = _gaMwOverpassData[i];
-                var label = op.sensor + ' / ' + op.platform + ' — ' + op.datetime;
+                var label = op.sensor + ' / ' + op.platform + ' — ' + _gaTime(op.datetime);
                 var opt = document.createElement('option');
                 opt.value = i;
                 opt.textContent = label;
@@ -6698,7 +6683,7 @@ window.loadGlobalMWOverpass = function () {
                 // Store the base label in dataset.base; _updateMwStatusDt
                 // appends Δt against the current IR frame each time it
                 // runs (initial load + every displayIROnMap call).
-                status.dataset.base = json.sensor + ' ' + json.datetime;
+                status.dataset.base = json.sensor + ' ' + _gaTime(json.datetime);
                 status.textContent = status.dataset.base;
             }
             // Parse MW scan time once so Δt is cheap to recompute later.
@@ -6943,7 +6928,7 @@ window.loadNexradScans = function () {
                 var sc = json.scans[i];
                 var opt = document.createElement('option');
                 opt.value = sc.s3_key;
-                opt.textContent = sc.scan_time + ' (\u0394' + Math.round(sc.delta_sec) + 's)';
+                opt.textContent = _gaTime(sc.scan_time, true) + ' (\u0394' + Math.round(sc.delta_sec) + ' s)';
                 scanSelect.appendChild(opt);
             }
 
@@ -7037,7 +7022,7 @@ window.loadNexradFrame = function () {
             });
             if (_gaNexradVisible && detailMap) _gaNexradMapOverlay.addTo(detailMap);
 
-            if (status) status.textContent = json.site + ' ' + json.scan_time + ' — ' + json.label + ' (tilt ' + json.tilt + '\u00B0)';
+            if (status) status.textContent = json.site + ' ' + _gaTime(json.scan_time) + ' — ' + json.label + ' (tilt ' + json.tilt + '\u00B0)';
 
             // Update NEXRAD vertical line on the intensity chart.
             // Backend scan_time is "YYYY-MM-DD HH:MM:SS UTC" — coerce to
@@ -7933,7 +7918,7 @@ function _wfNzMean(q) {
 function _wfUpdateReadout(dtStr, vals) {
     var el = document.getElementById('ga-wf-readout');
     var timeEl = document.getElementById('ga-wf-time');
-    if (timeEl) timeEl.textContent = _formatIRDatetime(dtStr);
+    if (timeEl) timeEl.textContent = _gaTime(dtStr);
     if (!el) return;
     if (!vals) {
         el.innerHTML = '<span style="color:var(--slate);">No wind-radii analysis at this time' +
@@ -8049,9 +8034,8 @@ function loadModelForecasts(storm) {
                     var dt = inits[i];
                     var opt = document.createElement('option');
                     opt.value = dt;
-                    // Format YYYYMMDDHH → "YYYY-MM-DD HH UTC"
-                    opt.textContent = dt.substring(0,4) + '-' + dt.substring(4,6) + '-' +
-                        dt.substring(6,8) + ' ' + dt.substring(8,10) + ' UTC';
+                    // YYYYMMDDHH → "5 Sep 2017 12Z"
+                    opt.textContent = TCTime.cycle(dt, { year: true });
                     sel.appendChild(opt);
                 }
             }
@@ -9189,8 +9173,9 @@ window.startGifExport = function () {
                 if (irMeta.frames && irMeta.frames[fIdx]) dtStr = irMeta.frames[fIdx].datetime || '';
                 compCtx.font = '11px monospace';
                 compCtx.fillStyle = '#8899aa';
-                var dtW = compCtx.measureText(dtStr).width;
-                compCtx.fillText(dtStr, outW - dtW - 8, 12);
+                var dtLbl = _gaTime(dtStr);
+                var dtW = compCtx.measureText(dtLbl).width;
+                compCtx.fillText(dtLbl, outW - dtW - 8, 12);
 
                 // IR image
                 compCtx.imageSmoothingEnabled = false;
@@ -9456,8 +9441,9 @@ window.saveCurrentFramePng = function () {
     var dtStr = frameMeta ? (frameMeta.datetime || '') : '';
     compCtx.font = Math.round(11 * EXPORT_SCALE) + 'px monospace';
     compCtx.fillStyle = '#8899aa';
-    var dtW = compCtx.measureText(dtStr).width;
-    compCtx.fillText(dtStr, outW - dtW - 8 * EXPORT_SCALE, H_HEADER / 2);
+    var dtLbl = _gaTime(dtStr);
+    var dtW = compCtx.measureText(dtLbl).width;
+    compCtx.fillText(dtLbl, outW - dtW - 8 * EXPORT_SCALE, H_HEADER / 2);
 
     // geoToPx is shared by IR, radar, coastlines, tracks, and the storm
     // marker — all draw into the rectangle [0, H_HEADER, outW, irImageH]
@@ -10055,7 +10041,7 @@ function _updateCompareIRMeta(side, idx) {
     if (s.meta && s.meta.frames && s.meta.frames[idx]) {
         dtStr = s.meta.frames[idx].datetime || '';
     }
-    if (dtEl) dtEl.textContent = dtStr || ('Frame ' + (idx + 1) + ' / ' + (s.meta ? s.meta.n_frames : '?'));
+    if (dtEl) dtEl.textContent = dtStr ? _gaTime(dtStr) : ('Frame ' + (idx + 1) + ' / ' + (s.meta ? s.meta.n_frames : '?'));
 
     // Look up intensity at this frame time from track data
     if (intensityEl && s.storm && dtStr) {
@@ -10335,7 +10321,7 @@ function _renderCompareHov(side, data) {
         colorscale: colorscale,
         zmin: cMin, zmax: cMax,
         connectgaps: false,
-        hovertemplate: '%{y}<br>r = %{x} km<br>Tb = %{z:.1f} °C<extra></extra>',
+        hovertemplate: '%{y|' + TCTime.plotly.utcYear + '}<br>r = %{x} km<br>Tb = %{z:.1f} °C<extra></extra>',
         showscale: false
     };
 
@@ -10349,7 +10335,7 @@ function _renderCompareHov(side, data) {
             type: 'scatter', mode: 'lines',
             line: { color: 'rgba(15, 22, 35,0.6)', width: 1.2, dash: 'dot' },
             xaxis: 'x2',
-            hovertemplate: '%{y}<br>Vmax = %{x} kt<extra></extra>',
+            hovertemplate: '%{y|' + TCTime.plotly.utcYear + '}<br>Vmax = %{x} kt<extra></extra>',
             showlegend: false
         });
     }
@@ -10750,7 +10736,7 @@ function _loadCompareMWStorm(side, storm) {
                 var op = filtered[i];
                 var opt = document.createElement('option');
                 opt.value = op._origIdx;
-                opt.textContent = op.sensor + ' / ' + op.platform + ' — ' + op.datetime;
+                opt.textContent = op.sensor + ' / ' + op.platform + ' — ' + _gaTime(op.datetime);
                 sel.appendChild(opt);
             }
 
@@ -10839,8 +10825,7 @@ window.loadCompareMWOverpass = function (side) {
             }
 
             // Update datetime display
-            var dtStr = json.sensor + ' — ' + json.datetime;
-            if (dtEl) dtEl.textContent = dtStr;
+            if (dtEl) dtEl.textContent = json.sensor + ' — ' + _gaTime(json.datetime);
 
             // Update intensity from track data
             if (intensityEl && s.storm && json.datetime) {
@@ -10959,7 +10944,7 @@ window.setCompareMWProduct = function (product) {
             var op = filtered[i];
             var opt = document.createElement('option');
             opt.value = op._origIdx;
-            opt.textContent = op.sensor + ' / ' + op.platform + ' — ' + op.datetime;
+            opt.textContent = op.sensor + ' / ' + op.platform + ' — ' + _gaTime(op.datetime);
             sel.appendChild(opt);
         }
 
@@ -11866,7 +11851,7 @@ function renderSHIPSChart() {
             line: { color: meta.color, width: 2 },
             marker: { size: 4, color: meta.color },
             yaxis: yAxisName,
-            hovertemplate: '<b>' + meta.name + '</b><br>%{x}<br>%{y} ' + meta.unit + '<extra></extra>'
+            hovertemplate: '<b>' + meta.name + '</b><br>%{x|' + TCTime.plotly.utcYear + '}<br>%{y} ' + meta.unit + '<extra></extra>'
         });
     });
 
@@ -12140,7 +12125,7 @@ function renderTCPrimedEnvChart() {
             line: { color: meta.color, width: 2 },
             marker: { size: 3, color: meta.color },
             yaxis: yAxisName,
-            hovertemplate: '<b>' + meta.name + '</b><br>%{x}<br>%{y:.2f} ' + displayUnit + '<extra></extra>'
+            hovertemplate: '<b>' + meta.name + '</b><br>%{x|' + TCTime.plotly.utcYear + '}<br>%{y:.2f} ' + displayUnit + '<extra></extra>'
         });
     });
 
@@ -12175,7 +12160,7 @@ function renderTCPrimedEnvChart() {
                 name: 'Intensity (kt)',
                 line: { color: '#0f1623', width: 2, dash: 'dot' },
                 yaxis: intAxisName,
-                hovertemplate: '<b>Intensity</b><br>%{x}<br>%{y} kt<extra></extra>'
+                hovertemplate: '<b>Intensity</b><br>%{x|' + TCTime.plotly.utcYear + '}<br>%{y} kt<extra></extra>'
             });
         }
     }
@@ -12467,7 +12452,7 @@ function _gaFLUpdateStatus() {
                 var fix = String(bestPass.p.src || '').indexOf('fix') === 0;
                 sp.title = 'Experimental SEAR 10-m wind estimate (MLBT record) for the strongest ' +
                     (fix ? 'center-fix pass (from the VDM\u2019s max 10-s flight-level wind, ' + (bestPass.p.fl_peak_kt || '?') + ' kt)' : 'eyewall pass') +
-                    ' at ' + bestPass.p.t.slice(11, 16) + ' UTC' + (fix ? ' \u2014 a pass these flight-level files do not sample' : '');
+                    ' at ' + _gaTime(bestPass.p.t) + (fix ? ' \u2014 a pass these flight-level files do not sample' : '');
                 sp.textContent = ' \u00b7 SEAR max: ' + Math.round(bestPass.v) + ' kt' + (fix ? ' (VDM fix)' : '');
             }
             if (_gaSear.era === 'extrapolated') {   // SEAR is trained on 1997+ data (MLBT ruling 54)
@@ -12884,11 +12869,11 @@ function _gaFLPopulateMissionDropdown() {
         if (m.source === 'hdob') {
             // HDOB missions have no sortie letter and carry their own peak wind,
             // so label them by mission number + tail and mark the source.
-            label = m.datetime + ' \u00b7 ' + m.mission_id + ' (' + m.aircraft + ')'
+            label = TCTime.utc(m.datetime, { time: false, year: true }) + ' \u00b7 ' + m.mission_id + ' (' + m.aircraft + ')'
                 + (m.max_wind != null ? ' \u2014 ' + m.max_wind + ' kt' : '')
                 + ' \u00b7 HDOB';
         } else {
-            label = m.datetime + ' ' + m.aircraft_code + m.sortie +
+            label = TCTime.utc(m.datetime, { time: false, year: true }) + ' ' + m.aircraft_code + m.sortie +
                 ' (' + m.aircraft + ')';
             var stats = _gaFLMissionStats[m.file_url];
             if (stats) {
@@ -12915,7 +12900,7 @@ function _gaFLUpdateMissionStats(json) {
             for (var i = 0; i < select.options.length; i++) {
                 if (select.options[i].value === json.source_url) {
                     var m = _gaFLMissions[i];
-                    select.options[i].textContent = m.datetime + ' ' + m.aircraft_code + m.sortie +
+                    select.options[i].textContent = TCTime.utc(m.datetime, { time: false, year: true }) + ' ' + m.aircraft_code + m.sortie +
                         ' (' + m.aircraft + ') \u2014 ' + maxW + ' kt';
                     break;
                 }
@@ -13778,7 +13763,7 @@ function _gaFLSyncFromFDeckClick(clickedTime) {
         var MAX_SYNC_DELTA_MS = 24 * 3600 * 1000;
         if (bestDelta > MAX_SYNC_DELTA_MS) {
             if (typeof showToast === 'function') {
-                showToast('No recon mission within 24h of ' + fixDate);
+                showToast('No recon mission within 24h of ' + TCTime.utc(fixDate, { time: false, year: true }));
             }
             return;
         }
@@ -13791,7 +13776,7 @@ function _gaFLSyncFromFDeckClick(clickedTime) {
 
         // Show a brief toast
         if (typeof showToast === 'function') {
-            showToast('Recon synced to ' + fixDate + ' ' +
+            showToast('Recon synced to ' + TCTime.utc(fixDate, { time: false, year: true }) + ' ' +
                 (_gaFLMissions[bestIdx] ? _gaFLMissions[bestIdx].aircraft_code + _gaFLMissions[bestIdx].sortie : ''));
         }
     }
@@ -14021,7 +14006,7 @@ function _gaSondeRenderOnMap() {
         if (surfaceOk) {
             var sfcTip = '<b>Sonde ' + (si + 1) + '</b>' +
                 (sonde.sonde_id ? ' (' + sonde.sonde_id + ')' : '') + '<br>' +
-                (sonde.launch_time || '') + '<br>' +
+                _gaTime(sonde.launch_time, true) + '<br>' +
                 'Sfc: ' + (sonde.hit_surface ? 'Yes' : 'No') +
                 (sonde.splash_pr ? ' · P: ' + sonde.splash_pr.toFixed(1) + ' hPa' : '');
             var sfcMarker = L.circleMarker([sonde.surface.lat, sonde.surface.lon], {
@@ -14046,7 +14031,7 @@ function _gaSondeRenderTable() {
     var html = '<table style="width:100%;border-collapse:collapse;font-size:10px;font-variant-numeric:tabular-nums;color:var(--text);">' +
         '<tr style="color:var(--um-green);border-bottom:1px solid var(--border);">' +
         '<th style="padding:3px 4px;text-align:left;">#</th>' +
-        '<th style="padding:3px 4px;text-align:left;">Time</th>' +
+        '<th style="padding:3px 4px;text-align:left;">Time (UTC)</th>' +
         '<th style="padding:3px 4px;text-align:right;" title="Maximum wind speed in profile">Vmax</th>' +
         '<th style="padding:3px 4px;text-align:right;" title="Mean wind in lowest 150m (Franklin et al. 2003)">WL150</th>' +
         '<th style="padding:3px 4px;text-align:right;" title="Surface pressure (splash or hydrostatic)">Psfc</th>' +
@@ -14103,7 +14088,7 @@ function _gaSondeRenderTable() {
                 if (prof.pres[pi] != null && prof.pres[pi] > 850) { psfc = prof.pres[pi]; break; }
             }
         }
-        var timeShort = (s.launch_time || '').replace(/.*T/, '').replace('Z', '').substring(0, 8);
+        var timeShort = s.launch_time ? TCTime.utc(s.launch_time, { date: false, sec: true, zone: false }) : '';
 
         html += '<tr style="border-bottom:1px solid rgba(15, 22, 35,0.05);cursor:pointer;" onclick="gaSondeShowSkewT(' + i + ')">' +
             '<td style="padding:2px 4px;color:' + _SONDE_COLORS[i % _SONDE_COLORS.length] + ';">' + (i + 1) + '</td>' +
@@ -14238,7 +14223,7 @@ function _gaSondePlanViewRender() {
         var tip = '<b>Sonde #' + (si + 1) + '</b><br>' +
             _sondePlanViewFormat(varName, val) + '<br>' +
             'at ' + Math.round(actualP) + ' hPa<br>' +
-            (s.launch_time || '');
+            _gaTime(s.launch_time, true);
 
         var marker = L.circleMarker([lat, lon], {
             radius: 8, fillColor: color, fillOpacity: 0.95,
@@ -14333,7 +14318,7 @@ window.gaSondeShowSkewT = function (idx) {
     } else if (title) {
         title.textContent = 'Sonde ' + (idx + 1) +
             (sonde.sonde_id ? ' (' + sonde.sonde_id + ')' : '') +
-            ' \u2014 ' + (sonde.launch_time || '');
+            ' \u2014 ' + _gaTime(sonde.launch_time, true);
     }
 
     // Populate sonde selector dropdown
@@ -14343,8 +14328,8 @@ window.gaSondeShowSkewT = function (idx) {
         for (var j = 0; j < _gaSondeData.length; j++) {
             var opt = document.createElement('option');
             opt.value = j;
-            var t = (_gaSondeData[j].launch_time || '').replace(/.*T/, '').replace('Z', '').substring(0, 8);
-            opt.textContent = (j + 1) + ': ' + t;
+            var t = _gaSondeData[j].launch_time;
+            opt.textContent = (j + 1) + ': ' + (t ? TCTime.utc(t, { date: false, sec: true }) : '');
             sel.appendChild(opt);
         }
     }
@@ -14620,7 +14605,7 @@ function _renderCrossSection(divId) {
         rVals.push(r);
         altVals.push(alt);
         colorVals.push(val);
-        hoverTexts.push(o.time + ' · r=' + r.toFixed(0) + ' km · ' + val.toFixed(1) + ' ' +
+        hoverTexts.push(o.time + ' UTC · r=' + r.toFixed(0) + ' km · ' + val.toFixed(1) + ' ' +
             (_xsecVar === 'wspd' ? 'kt' : _xsecVar === 'temp' ? '°C' : 'K'));
     }
 
@@ -15550,7 +15535,7 @@ function _gaFLRenderTimeSeries() {
                 staticP = Math.round(1013.25 * Math.pow(1 - ob.geo_alt_m / 44330, 5.255) * 10) / 10;
             }
 
-            var hov = '<b>' + chartProdLabel + ' ' + tLabel + 'Z</b>';
+            var hov = '<b>' + chartProdLabel + ' ' + tLabel + ' UTC</b>';
             if (p10 != null) hov += '<br>Peak 10s: ' + p10 + ' kt';
             if (w30 != null) hov += '<br>30s avg: ' + w30 + ' kt';
             if (ob.geo_alt_m != null) hov += '<br>Alt: ' + ob.geo_alt_m + ' m';
