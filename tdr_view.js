@@ -699,7 +699,7 @@
         var traces = [], annotations = [];
         var dvs = withVF.map(function (p) { return p[colorBy] || 0; });
         var vmaxs = withVF.map(function (p) { return p.vmax_kt != null ? p.vmax_kt : ''; });
-        var labels = withVF.map(function (p) { return p.storm_name + ' ' + p.datetime; });
+        var labels = withVF.map(function (p) { return p.storm_name + ' ' + TCTime.utc(p.datetime, { year: true }); });
         traces.push({ x: withVF.map(function (p) { return p.vp; }), y: withVF.map(function (p) { return p.vortex_favorability; }),
             mode: 'markers', type: 'scatter', xaxis: 'x', yaxis: 'y', marker: marker(dvs, false), text: labels, customdata: vmaxs,
             hovertemplate: '<b>%{text}</b><br>Vmax: %{customdata} kt<br>VP: %{x:.1f}<br>Vortex Fav: %{y:.2f}<br>ΔVmax: %{marker.color:.0f} kt<extra></extra>',
