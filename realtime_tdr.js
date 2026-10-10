@@ -514,10 +514,9 @@
         return (tail && _HDOB_TAIL_NAMES[String(tail).toUpperCase()]) || tail || '';
     }
 
-    /** ISO → "DD/HHZ" (e.g. 20/06Z), used to disambiguate a tail's sorties. */
+    /** Sortie start ("20 Sep 06:12 UTC"), used to disambiguate a tail's sorties. */
     function _hdobSortieTag(iso) {
-        var m = iso && /\d{4}-(\d{2})-(\d{2})T(\d{2})/.exec(iso);
-        return m ? (m[2] + '/' + m[3] + 'Z') : '';
+        return iso ? TCTime.utc(iso) : '';
     }
 
     /** Flight-selector label: bare tail normally; tail + sortie time only when
@@ -840,12 +839,7 @@
     }
 
     function _reconArchiveFmtSpan(a, b) {
-        if (!a) return '';
-        var d1 = new Date(a), d2 = b ? new Date(b) : d1;
-        var mo = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        var s1 = mo[d1.getUTCMonth()] + ' ' + d1.getUTCDate();
-        var s2 = mo[d2.getUTCMonth()] + ' ' + d2.getUTCDate();
-        return s1 === s2 ? s1 : s1 + ' – ' + s2;
+        return a ? TCTime.span(a, b, { year: true }) : '';
     }
 
     function _reconEnsureArchive() {
@@ -1055,8 +1049,7 @@
         var A = _hdobArchive; if (!A) return;
         var lbl = document.getElementById('recon-hdob-replay-time');
         if (lbl) {
-            var d = new Date(A.cur);
-            lbl.textContent = d.toISOString().slice(5, 10).replace('-', '/') + ' ' + d.toISOString().slice(11, 16) + 'Z' +
+            lbl.textContent = TCTime.utc(A.cur, { year: true }) +
                 (A.cur >= A.t1 ? ' (end of data)' : '');
         }
         var sl = document.getElementById('recon-hdob-replay-slider');
@@ -1067,7 +1060,7 @@
         if (pk) {
             pk.style.display = top ? '' : 'none';
             if (top) pk.title = 'Jump to the strongest SEAR estimate: ' + Math.round(top.y_corr_kt != null ? top.y_corr_kt : top.y_kt) +
-                ' kt, ' + String(top.t).slice(5, 16).replace('T', ' ') + 'Z ' + _hdobTailDisplay(top.tail);
+                ' kt, ' + TCTime.utc(top.t, { year: true }) + ' ' + _hdobTailDisplay(top.tail);
         }
     }
     /** The pass maximum with the highest RMW-corrected estimate, or null. */
@@ -1396,7 +1389,7 @@
             cur.textContent = _hdobFrozenAt ? 'mission center pass' : 'live';
         } else {
             var p = pl[i];
-            cur.textContent = 'pass ' + (i + 1) + '/' + pl.length + ' · ' + String(p.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(p.tail);
+            cur.textContent = 'pass ' + (i + 1) + '/' + pl.length + ' · ' + TCTime.utc(p.t, { date: false }) + ' ' + _hdobTailDisplay(p.tail);
         }
         prev.disabled = (i != null && i <= 0);
         next.disabled = (i != null && i >= pl.length - 1);
@@ -1540,13 +1533,13 @@
             return;
         }
         var ctx = passInfo
-            ? 'center pass ' + String(passInfo.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(passInfo.tail) +
+            ? 'center pass ' + TCTime.utc(passInfo.t, { date: false }) + ' ' + _hdobTailDisplay(passInfo.tail) +
               (passInfo.src === 'hdob' ? ' (preliminary fix)' : '')
             : (_hdobArchive ? 'the replay clock (archive)' : 'this mission\u2019s center pass (flight ended \u2014 imagery is not updating)');
         var arch = frozenIso ? _hdobArchivedFrame(product, frozenIso) : null;
         if (arch) {
             var lblA = _HDOB_SAT_LABEL[product] || product;
-            var tsA = arch.ts.slice(8, 10) + ':' + arch.ts.slice(10, 12) + 'Z';
+            var tsA = TCTime.utc(arch.ts, { date: false });
             Promise.resolve(_hdobMosaic.setArchived(product, 0.92, arch)).then(function (ok) {
                 if (frozenIso !== _hdobSatTarget || product !== _hdobSatProduct) return;
                 if (!ok) { _hdobPinFallback(kit, lonHint, frozenIso, product, ctx); return; }
@@ -1572,7 +1565,7 @@
 
     /** Pinned time without an archived frame: live mosaic if still retained, else GIBS. */
     function _hdobPinFallback(kit, lonHint, frozenIso, product, ctx) {
-        var hhmm = String(frozenIso).slice(11, 16) + 'Z';
+        var hhmm = TCTime.utc(frozenIso, { date: false });
         var lbl = _HDOB_SAT_LABEL[product] || product;
         Promise.resolve(_hdobMosaic.setProduct(product, 0.92, frozenIso)).then(function (ok) {
             if (frozenIso !== _hdobSatTarget || product !== _hdobSatProduct) return;   // superseded
@@ -2032,14 +2025,14 @@
         var kit = window._ReconKit, stops = (kit && kit.windStops) || [];
         var a = pick.a, h = '<div class="tt">SEAR 10-m from TDR <span class="exp">experimental</span></div>';
         if (an.length) {
-            var lbl = a ? (a.t.slice(11, 16) + 'Z · ' + a.mission + ' (' + (pick.i + 1) + '/' + an.length + ')') : '—';
+            var lbl = a ? (TCTime.utc(a.t, { date: false }) + ' · ' + a.mission + ' (' + (pick.i + 1) + '/' + an.length + ')') : '—';
             h += '<div class="nav"><button data-d="-1" title="Earlier analysis">◀</button><span>' + lbl + '</span>' +
                  '<button data-d="1" title="Later analysis">▶</button>' +
                  '<button data-d="0" class="' + (_hdobTdrSel ? '' : 'on') + '" title="Follow the selected pass / sortie time">Auto</button></div>';
         }
         if (!a) return h + '<div class="info">' + (pick.why || '') + '</div>';
         if (!img || !img.vals) {
-            var tl = a.t.slice(11, 16) + 'Z';
+            var tl = TCTime.utc(a.t, { date: false });
             if (img && img.st === 'error') {
                 return h + '<div class="info st err">' + tl + ' field failed to load — ' +
                     (img.n <= _HDOB_TDR_RETRIES ? 'retrying… ' : '') +
@@ -2056,7 +2049,8 @@
         h += '</div><div class="info">Max ' + (pk != null ? pk : '—') + ' kt' +
              (bd ? ' <span class="band" title="' + _hdobTdrEsc(bd.note) + '">' + _hdobTdrBandText(bd) + '</span>' : '') +
              ', ' + Math.round(a.max_r_nm) + ' n mi from center · ' +
-             'analysis ' + a.window[0].slice(11, 16) + '–' + a.window[1].slice(11, 16) + 'Z · no color = no TDR data below 1 km</div>';
+             'analysis ' + TCTime.utc(a.window[0], { date: false, zone: false }) + '–' + TCTime.utc(a.window[1], { date: false }) +
+             ' · no color = no TDR data below 1 km</div>';
         // only a thinly sampled peak gets a line (Michael 2026-10-09: the key is busy enough); details in the tooltip
         var sup = _hdobTdrSupport(a);
         if (sup && sup.thin) h += '<div class="info sup thin" title="' + _hdobTdrEsc(sup.tip) + '">⚠ Thinly sampled: ' + sup.cells +
@@ -2190,7 +2184,7 @@
         var c = p.chain;
         if (_hdobSearIsPrelim(p)) {
             L.push('PRELIMINARY' + (p.pending_reason ? ' (' + p.pending_reason + ')' : '') + ': the range covers the unsettled center and RMW' +
-                   (p.final_by ? '; final by ~' + String(p.final_by).slice(11, 16) + 'Z' : ''));
+                   (p.final_by ? '; final by ~' + TCTime.utc(p.final_by, { date: false }) : ''));
             c = null;
         }
         if (c && c.s1 != null && c.s2 != null && c.f10 != null && p.fl_peak_kt != null) {
@@ -2243,7 +2237,7 @@
         }
         shown.forEach(function (p) {
             var where = (kit && kit.searWhere) ? kit.searWhere(p.az_deg, p.r_km) : (p.quad || '');
-            var when = String(p.t).slice(11, 16) + 'Z · ' + _hdobTailDisplay(p.tail);
+            var when = TCTime.utc(p.t, { date: false }) + ' · ' + _hdobTailDisplay(p.tail);
             var prelim = p.fix_source === 'hdob';
             var isSel = selT != null && (p.fix_t || p.t) === selT;   // the stepped pass
             var hasC = p.clat != null && p.clon != null;
@@ -2261,7 +2255,7 @@
                     iconSize: [14, 14], iconAnchor: [7, 7] });
                 var cm = L.marker([p.clat, p.clon], { icon: cIcon, interactive: true, zIndexOffset: 900 });
                 try {
-                    cm.bindTooltip('<b>Pass center</b> ' + String(p.fix_t || p.t).slice(11, 16) + 'Z · ' + _hdobTailDisplay(p.tail) +
+                    cm.bindTooltip('<b>Pass center</b> ' + TCTime.utc(p.fix_t || p.t, { date: false }) + ' · ' + _hdobTailDisplay(p.tail) +
                         (prelim ? '<br>preliminary: flight-level pressure minimum (no VDM yet)' : '<br>Vortex Data Message fix') +
                         (p.rmw_km != null ? '<br>RMW ' + Math.round(p.rmw_km) + ' km' : ''),
                         { direction: 'top', offset: [0, -8] });
@@ -2335,7 +2329,7 @@
                                    iconSize: [26, 26], iconAnchor: [13, 13] });
             var mk = L.marker([last.lat, last.lon], { icon: icon, interactive: true, zIndexOffset: 1000 });
             mk.bindTooltip(_hdobTailDisplay(aircraft[a].tail) + ' · ' + (last.wspd_kt != null ? last.wspd_kt + ' kt FL' : '') +
-                ' · ' + (window._ReconKit ? window._ReconKit.fmtTime(last.t) : last.t),
+                ' · ' + TCTime.utc(last.t, { sec: true }),
                 { direction: 'top', offset: [0, -10] });
             mk.addTo(map);
             _hdobAircraftMarkers.push(mk);
@@ -2511,7 +2505,7 @@
 
     function _hdobSondeFlagText(f) {
         var q = f.top;
-        return 'Eyewall sonde check: ' + String(q.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(q.tail) + ' WL150 ' + Math.round(q.wl150_kt) +
+        return 'Eyewall sonde check: ' + TCTime.utc(q.t, { date: false }) + ' ' + _hdobTailDisplay(q.tail) + ' WL150 ' + Math.round(q.wl150_kt) +
             ' kt, reduced to ~' + Math.round(q.sonde_10m_kt) + ' kt at 10 m with the SEAR WL150\u219210 m factor (\u00d7' + q.f10.toFixed(2) + '; not the sonde\u2019s own 10-m wind), ' + Math.round(q.diff_kt) +
             ' kt above flight-level SEAR at release' + (f.n > 1 ? ' (' + f.n + ' eyewall sondes \u2265' + Math.round(f.thr) + ' kt above)' : '') +
             ' \u2014 the surface wind is stronger than the flight-level wind implies, so flight-level SEAR is likely low here. ';
@@ -2576,7 +2570,7 @@
             '<span class="exp-verif-src">10-m wind, kt (bias / mean absolute error); the sonde&rsquo;s WL150 reduced to 10 m with the ' +
             'same wind-dependent factor the products use; eye excluded. 2026 = this season in real time; 2025 test = storms held out ' +
             'of training. Scores the FINAL estimates (every center and leg in hand) &mdash; preliminary values carry more error. ' +
-            'Updated ' + String(v.generated || '').slice(0, 16).replace('T', ' ') + 'Z.</span></div>' +
+            'Updated ' + TCTime.utc(v.generated) + '.</span></div>' +
             table('TDR SEAR &mdash; tail-Doppler analysis at the sonde&rsquo;s splash point', 'tdr') +
             table('Flight-level SEAR &mdash; at the sonde&rsquo;s release point', 'fl') +
             '<div class="exp-verif-note">' + (cm && cm.n ? 'On the ' + cm.n + ' sondes both products score: TDR SEAR ' + _hdobVerCell(cm.tdr) +
@@ -2592,7 +2586,7 @@
         var sp = _hdobData && _hdobData.sear;
         if (!sp) return [];
         var out = [{ text: 'SEAR (experimental): machine-learning estimate of the 10-m wind from the flight-level wind, its position ' +
-                           'in the storm and the environment. Not an official product.' + (sp.generated ? ' Updated ' + String(sp.generated).slice(11, 16) + 'Z.' : '') }];
+                           'in the storm and the environment. Not an official product.' + (sp.generated ? ' Updated ' + TCTime.utc(sp.generated) + '.' : '') }];
         if (sp.status !== 'ok' || !(sp.passes || []).length) {
             out.push({ text: sp.status === 'awaiting_fix' ? 'Awaiting the first center fix.' : sp.status === 'no_env' ? 'No GFS environment yet.' : 'No scored crossings yet.' });
             return out;
@@ -2602,8 +2596,8 @@
         var scoped = _hdobSearPassesInScope(sp.passes);
         if (!scoped.length) {
             var older = sp.passes[sp.passes.length - 1];
-            out.push({ text: 'No scored crossings yet for this flight' + (older ? ' (previous flight: ' + String(older.t).slice(5, 16).replace('T', ' ') +
-                             'Z ' + _hdobTailDisplay(older.tail) + ' ' + _hdobSearHeadline(older) + ')' : '') + '.' });
+            out.push({ text: 'No scored crossings yet for this flight' + (older ? ' (previous flight: ' + TCTime.utc(older.t) +
+                             ' ' + _hdobTailDisplay(older.tail) + ' ' + _hdobSearHeadline(older) + ')' : '') + '.' });
             return out;
         }
         var anyStale = false, anyPrelimCtr = false, anyPrelim = false;
@@ -2614,10 +2608,10 @@
             if (pre) anyPrelim = true;
             if (!pre && p.fix_source === 'hdob') anyPrelimCtr = true;
             if (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30) anyStale = true;
-            return { text: String(p.t).slice(11, 16) + 'Z ' + _hdobTailDisplay(p.tail) + ': ' + (pre ? 'PRELIMINARY ' + (_hdobSearPrelimRange(p) || '') :
+            return { text: TCTime.utc(p.t, { date: false }) + ' ' + _hdobTailDisplay(p.tail) + ': ' + (pre ? 'PRELIMINARY ' + (_hdobSearPrelimRange(p) || '') :
                         Math.round(_hdobSearVal(p)) + ' kt' + (rg ? ' (RMW range ' + rg.replace(' kt', '') + ')' : '')) +
                         (q ? ' \u00b7 ' + q + (p.r_km != null ? ' ' + Math.round(p.r_km) + ' km / ' + Math.round(p.r_km * 0.5399568) + ' n mi' : '') : '') +
-                        (pre ? ' \u00b7 ' + (p.pending_reason || 'center not yet confirmed') + (p.final_by ? ', final by ~' + String(p.final_by).slice(11, 16) + 'Z' : '') :
+                        (pre ? ' \u00b7 ' + (p.pending_reason || 'center not yet confirmed') + (p.final_by ? ', final by ~' + TCTime.utc(p.final_by, { date: false }) : '') :
                          (p.fix_source === 'hdob' ? ' \u00b7 preliminary center*' : '')) +
                         (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30 ? '\u2020' : ''),
                      cls: pre ? 'prelim' : '' };
@@ -2677,7 +2671,7 @@
                 var dp = v.min_slp_hpa - p.min_slp_hpa;
                 lines.push('<span class="recon-fix-trend' + (dp < 0 ? ' is-fall' : dp > 0 ? ' is-rise' : '') + '">' +
                     (dp < 0 ? '\u25bc ' : dp > 0 ? '\u25b2 ' : '\u00b1') + Math.abs(dp) + ' mb</span> in ' +
-                    (dh < 10 ? dh.toFixed(1) : Math.round(dh)) + ' h (' + String(_hdobX(p.t)).slice(11, 16) + 'Z ' + p.min_slp_hpa + ' mb)');
+                    (dh < 10 ? dh.toFixed(1) : Math.round(dh)) + ' h (' + TCTime.utc(p.t, { date: false }) + ' ' + p.min_slp_hpa + ' mb)');
                 break;
             }
         }
@@ -2692,9 +2686,9 @@
                 if (o.extrap_sfc_p_mb != null && Date.parse(_hdobX(o.t)) > vms && (!ex || o.extrap_sfc_p_mb < ex.v)) ex = { v: o.extrap_sfc_p_mb, t: o.t };
             });
         });
-        if (ex) lines.push('Extrap SLP since fix: ' + Math.round(ex.v) + ' mb ' + String(_hdobX(ex.t)).slice(11, 16) + 'Z');
+        if (ex) lines.push('Extrap SLP since fix: ' + Math.round(ex.v) + ' mb ' + TCTime.utc(ex.t, { date: false }));
         var fresh = !_hdobArchive && (Date.now() - vms) < 45 * 60000;
-        var sub = String(_hdobX(v.t)).slice(11, 16) + 'Z \u00b7 ' + esc(_hdobTailDisplay(v.aircraft)) +
+        var sub = TCTime.utc(v.t, { date: false }) + ' \u00b7 ' + esc(_hdobTailDisplay(v.aircraft)) +
             (v.ob_number != null ? ' OB ' + v.ob_number : '') +
             (v.flight_level_mb != null ? ' \u00b7 ' + v.flight_level_mb + ' mb fix' : '') +
             (fresh ? ' <span class="recon-fix-new">NEW</span>' : '') +
@@ -2738,7 +2732,7 @@
         }
         function tile(label, b, unit, cls, extra, tip) {
             if (!b) return '';
-            var sub = String(b.t || '').slice(11, 16) + 'Z · ' + _hdobTailDisplay(b.tail) + (extra || '');
+            var sub = (b.t ? TCTime.utc(b.t, { date: false }) + ' · ' : '') + _hdobTailDisplay(b.tail) + (extra || '');
             return '<div class="recon-vdm-stat' + (cls ? ' ' + cls : '') + '"' +
                 (tip ? ' title="' + tip + '"' : '') + '>' +
                 '<div class="recon-vdm-stat-val"' + (b.valText ? ' style="font-size:.78em;letter-spacing:-.01em"' : '') + '>' + (b.valText || Math.round(b.v)) +
@@ -2790,7 +2784,7 @@
             searTip = 'SEAR scores an eyewall crossing once the flight has a center fix (a VDM, a TDR radar center, or a pressure minimum with calm winds). ' +
                 (hdCf.fl_max_kt != null ? 'This flight\'s 10-s flight-level maximum so far: ' + Math.round(hdCf.fl_max_kt) + ' kt. ' : '') +
                 'The last SEAR estimate, ' + Math.round(_hdobData.sear.headline.kt) + ' kt, is from an earlier flight (' +
-                String(_hdobData.sear.headline.t).slice(5, 16).replace('T', ' ') + 'Z). Not an official product.';
+                TCTime.utc(_hdobData.sear.headline.t) + '). Not an official product.';
         }
         // PRELIMINARY crossings newer than the final headline: a range, clearly labeled, never the headline number
         var pend = (((_hdobData.sear || {}).headline || {}).pending || []).filter(function (q) {
@@ -2800,11 +2794,11 @@
         if (pq) {
             var prg = _hdobSearPrelimRange(pq) || 'range pending';
             if (searTile && searTile.valText !== 'pending') {
-                searSub += '<div class="recon-prelim-sub">PRELIMINARY ' + String(pq.t).slice(11, 16) + 'Z crossing: ' + prg +
-                    ' \u00b7 ' + _hdobTdrEsc(pq.reason || '') + (pq.final_by ? ', final by ~' + String(pq.final_by).slice(11, 16) + 'Z' : '') + '</div>';
+                searSub += '<div class="recon-prelim-sub">PRELIMINARY ' + TCTime.utc(pq.t, { date: false }) + ' crossing: ' + prg +
+                    ' \u00b7 ' + _hdobTdrEsc(pq.reason || '') + (pq.final_by ? ', final by ~' + TCTime.utc(pq.final_by, { date: false }) : '') + '</div>';
             } else {
                 searTile = { valText: prg.replace(' kt', ''), t: pq.t, tail: pq.tail };
-                searSub = ' · ' + _hdobTdrEsc(pq.reason || '') + (pq.final_by ? ', final by ~' + String(pq.final_by).slice(11, 16) + 'Z' : '');
+                searSub = ' · ' + _hdobTdrEsc(pq.reason || '') + (pq.final_by ? ', final by ~' + TCTime.utc(pq.final_by, { date: false }) : '');
                 prelimTile = true;
             }
             searTip += ' PRELIMINARY crossings are shown as a range covering the unsettled center and RMW; a single value is published once ' +
@@ -2815,7 +2809,7 @@
         var sflag = _hdobSondeFlag();
         if (sflag && searTile && searTile.valText !== 'pending') {
             // WL150 first, then the REDUCED 10-m value: the sonde's own 10-m wind is not what is shown (Michael, 09-30)
-            searSub += '<span class="recon-sonde-flag"> \u00b7 \u26a0 ' + _hdobSondeLink(sflag.top, 'eyewall sonde ' + String(sflag.top.t).slice(11, 16) + 'Z') +
+            searSub += '<span class="recon-sonde-flag"> \u00b7 \u26a0 ' + _hdobSondeLink(sflag.top, 'eyewall sonde ' + TCTime.utc(sflag.top.t, { date: false })) +
                 ': WL150 ' + Math.round(sflag.top.wl150_kt) + ' kt \u2192 ~' + Math.round(sflag.top.sonde_10m_kt) + ' kt 10-m (reduced)</span>';
             searTip += ' ' + _hdobSondeFlagText(sflag).replace(/"/g, '&quot;');
         }
@@ -2839,7 +2833,7 @@
                 'Strongest analysis of the flight on display' + (cov != null ? ' (this one covers ' + Math.round(cov * 100) + '% of the area within 60 km)' : '') +
                 (tdrBand ? '. Range in parentheses: ' + _hdobTdrEsc(tdrBand.note) : '') +
                 (tdrSup && tdrSup.thin ? '. ' + _hdobTdrEsc(tdrSup.tip).replace(/\.$/, '') : '') +
-                (tdr.alt ? '. Strongest well-sampled analysis of the flight: ' + tdr.alt.v + ' kt at ' + tdr.alt.t.slice(11, 16) + 'Z' : '') +
+                (tdr.alt ? '. Strongest well-sampled analysis of the flight: ' + tdr.alt.v + ' kt at ' + TCTime.utc(tdr.alt.t, { date: false }) : '') +
                 '. Click to show it on the map. Verification against dropsondes: table below the map. Not an official product.');
         }
         var html = tile('Max FL wind', best.fl, 'kt') +
@@ -2872,7 +2866,7 @@
             if (it.sonde) {   // the sonde the flag names opens its profile
                 var a = document.createElement('a'); a.href = '#'; a.className = 'recon-sonde-link';
                 a.setAttribute('data-t', it.sonde.t); a.setAttribute('data-tail', it.sonde.tail);
-                a.textContent = 'Open the ' + String(it.sonde.t).slice(11, 16) + 'Z sonde \u2197';
+                a.textContent = 'Open the ' + TCTime.utc(it.sonde.t, { date: false }) + ' sonde \u2197';
                 e.appendChild(document.createTextNode(' ')); e.appendChild(a);
             }
             if (it.sub && it.sub.length) {
@@ -3186,7 +3180,7 @@
         var name = _hdobMissionTail ? (_hdobName || _hdobMissionTail) : (_hdobName || _hdobAtcf || '');
         name = _hdobTailDisplay(name);   // NOAA3 -> NOAA 43 when the title is a bare tail
         var c = (_hdobData && _hdobData.counts) || {};
-        var when = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
+        var when = TCTime.utc(new Date(), { year: true });
         ctx.textBaseline = 'middle';
         ctx.fillStyle = fg; ctx.font = 'bold ' + (17 * scale) + 'px sans-serif';
         ctx.fillText('Live Flight Recon — ' + name, pad, headH * 0.26);
@@ -3320,7 +3314,7 @@
                     legendgroup: cfg.key, showlegend: firstForVar,
                     line: { color: cfg.color, width: 1.4, dash: cfg.dash || 'solid' },
                     connectgaps: false, yaxis: cfg.axis,
-                    hovertemplate: '%{x|%H:%M:%SZ} · %{y' + (cfg.scale ? ':.2f' : '') + '} ' + cfg.unit + ' · ' + _hdobTailDisplay(ac.tail) + '<extra></extra>'
+                    hovertemplate: '%{x|%H:%M:%S} UTC · %{y' + (cfg.scale ? ':.2f' : '') + '} ' + cfg.unit + ' · ' + _hdobTailDisplay(ac.tail) + '<extra></extra>'
                 };
                 // SEAR: say where in the storm each estimate was made (quadrant,
                 // radius from the pass center) — the number alone is ambiguous.
@@ -3332,11 +3326,11 @@
                         // A 10-s ob carries the max 1-s SEAR in its bin (_rtSearAttach);
                         // name the second it came from when that isn't the ob's own stamp.
                         var st = tr[g].sear_t;
-                        cd[g] = (st && st !== tr[g].t ? ' (at ' + String(st).slice(11, 19) + 'Z)' : '') + (w ? ' · ' + w : '');
+                        cd[g] = (st && st !== tr[g].t ? ' (at ' + TCTime.utc(st, { date: false, sec: true }) + ')' : '') + (w ? ' · ' + w : '');
                     }
                     // Whole knots, like the Max SEAR tile, so the two read identically.
                     trace.customdata = cd;
-                    trace.hovertemplate = '%{x|%H:%M:%SZ} · %{y:.0f} kt%{customdata} · ' + _hdobTailDisplay(ac.tail) + '<extra></extra>';
+                    trace.hovertemplate = '%{x|%H:%M:%S} UTC · %{y:.0f} kt%{customdata} · ' + _hdobTailDisplay(ac.tail) + '<extra></extra>';
                 }
                 traces.push(trace);
                 firstForVar = false;
@@ -3436,8 +3430,6 @@
     var _reconMissionsDashLoaded = false;
     var _reconMissionsList = null;
     var _reconPendingMission = null;
-    var _RECON_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                         'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
     function _reconParseMission(id) {
         var m = id.match(/^(\d{8})(.+)$/) || id.match(/^(\d{6})(.+)$/);
@@ -3522,7 +3514,7 @@
         var html = '';
         shown.forEach(function (p) {
             var dateLabel = p.dateISO
-                ? (_RECON_MONTHS[p.month - 1] + ' ' + p.day + ', ' + p.year)
+                ? TCTime.utc(p.dateISO, { time: false, year: true })
                 : p.id;
             var rel = _reconRelDays(p.dateISO);
             var recentCls = (rel === 'Today' || rel === 'Yesterday') ? ' is-recent' : '';
@@ -3595,8 +3587,8 @@
             var opt = document.createElement('option');
             opt.value = missionId;
             var label = missionId;
-            var mm = missionId.match(/^(\d{4})(\d{2})(\d{2})(.+)$/);
-            if (mm) label = mm[1] + '-' + mm[2] + '-' + mm[3] + ' ' + mm[4];
+            var mm = missionId.match(/^(\d{8})(.+)$/);
+            if (mm) label = TCTime.utc(mm[1], { time: false, year: true }) + ' ' + mm[2];
             opt.textContent = label;
             sel.appendChild(opt);
         }
@@ -3623,7 +3615,7 @@
 
     function _reconFLMissionLabel(id) {
         var p = _reconParseMission(id);
-        return p.dateISO ? (p.dateISO + ' ' + p.suffix) : id;
+        return p.dateISO ? (TCTime.utc(p.dateISO, { time: false, year: true }) + ' ' + p.suffix) : id;
     }
 
     function _reconEnsureFLMissions() {
@@ -3858,13 +3850,8 @@
     }
 
     function _reconVdmFmtTime(iso) {
-        if (!iso) return '—';
-        // iso like "2025-10-28T14:49:00" (UTC, no Z) → "Oct 28, 14:49Z"
-        var p = iso.split('T');
-        if (p.length < 2) return iso;
-        var d = p[0].split('-');
-        var t = p[1].slice(0, 5);
-        return _RECON_MONTHS[(+d[1]) - 1] + ' ' + (+d[2]) + ', ' + t + 'Z';
+        // iso like "2025-10-28T14:49:00" (UTC, no Z) → "28 Oct 14:49 UTC"
+        return TCTime.utc(iso);
     }
 
     function _reconVdmStat(label, value, unit, accent) {
@@ -4028,6 +4015,16 @@
         });
     }
 
+    // The TDR viewer browses every season's missions (2016 on), so its dated
+    // labels keep the year: "9 Oct 2026 21:10 UTC". meta.datetime itself stays
+    // raw; the SHIPS and NEXRAD lookups parse it.
+    function _rtAnalysisTime(meta) {
+        return meta && meta.datetime ? TCTime.utc(meta.datetime, { year: true }) : '';
+    }
+    function _rtSondeTime(sonde) {
+        return sonde && sonde.launch_time ? TCTime.utc(sonde.launch_time, { year: true, sec: true }) : '';
+    }
+
     // ── Load mission list ────────────────────────────────────────
     function loadMissions() {
         var sel = document.getElementById('rt-mission-select');
@@ -4041,10 +4038,10 @@
                 json.missions.forEach(function (m) {
                     var opt = document.createElement('option');
                     opt.value = m;
-                    // Parse a readable label: e.g. "20251028H1" → "2025-10-28 H1"
+                    // Parse a readable label: e.g. "20251028H1" → "28 Oct 2025 H1"
                     var label = m;
-                    var match = m.match(/^(\d{4})(\d{2})(\d{2})(.+)$/);
-                    if (match) label = match[1] + '-' + match[2] + '-' + match[3] + ' ' + match[4];
+                    var match = m.match(/^(\d{8})(.+)$/);
+                    if (match) label = TCTime.utc(match[1], { time: false, year: true }) + ' ' + match[2];
                     opt.textContent = label;
                     sel.appendChild(opt);
                 });
@@ -4289,7 +4286,7 @@
                 // Compact header like the explorer's (name + analysis stepper, one
                 // info line); the details sit behind a disclosure.
                 var html = '<div class="panel-storm-name">' + (m.storm_name || 'Unknown') + _rtStepperHTML() + '</div>' +
-                    '<div class="panel-mission">' + (m.mission_id || '') + ' \u00b7 ' + (m.datetime || '') + '</div>' +
+                    '<div class="panel-mission">' + (m.mission_id || '') + ' \u00b7 ' + _rtAnalysisTime(m) + '</div>' +
                     '<div class="panel-mission" id="rt-maxwind-line"></div>' +
                     '<details class="rt-meta-more"><summary>Analysis details</summary>' +
                     '<div class="rt-meta-grid">' +
@@ -4412,7 +4409,7 @@
         var activeColorscale = _rtColorscale(varInfo);
         var activeVmin = _rtGetVmin(), activeVmax = _rtGetVmax();
         var frameTag = json.storm_relative ? ' <span style="color:#2563eb;">\u00b7 storm-relative</span>' : '';
-        var title = TDRView.planTitle((meta.storm_name || 'TDR analysis') + ' | ' + (meta.datetime || ''),
+        var title = TDRView.planTitle((meta.storm_name || 'TDR analysis') + ' | ' + _rtAnalysisTime(meta),
                                       varInfo, json.actual_level_km, json, frameTag);
         var fig = TDRView.planFigure({
             z: zData, x: x, y: y, varInfo: varInfo, colorscale: activeColorscale, zmin: activeVmin, zmax: activeVmax,
@@ -4936,7 +4933,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             },
             endpoints: { x0: a.x, y0: a.y, x1: b.x, y1: b.y },
             locator: p ? { z: p.z, x: p.x, y: p.y, colorscale: p.colorscale, zmin: p.vmin, zmax: p.vmax } : null,
-            title: (meta.storm_name || 'TDR analysis') + (meta.datetime ? ' | ' + meta.datetime : '') + ' \u2014 TDR cross-section (' +
+            title: (meta.storm_name || 'TDR analysis') + (meta.datetime ? ' | ' + _rtAnalysisTime(meta) : '') + ' \u2014 TDR cross-section (' +
                    Math.round(Math.hypot(b.x - a.x, b.y - a.y)) + ' km)',
             plot: function (id, t, l, c) { Plotly.newPlot(id, t, l, c); }
         });
@@ -5053,7 +5050,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 x.fillStyle = color; x.fillText(str, 12 * k, y);
             };
             x.textBaseline = 'top';
-            fit((meta.storm_name || '') + '  \u00b7  ' + (meta.mission_id || '') + '  \u00b7  ' + (meta.datetime || ''), 17, '600', 9 * k, '#0f1623');
+            fit((meta.storm_name || '') + '  \u00b7  ' + (meta.mission_id || '') + '  \u00b7  ' + _rtAnalysisTime(meta), 17, '600', 9 * k, '#0f1623');
             var ext = TDRView.planExtremesText ? TDRView.planExtremesText(p) : '';
             fit((p.display_name || '') + (p.units ? ' (' + p.units + ')' : '') + '  \u00b7  ' + lvl + (ext ? '  \u00b7  ' + ext : ''), 13, '', 33 * k, '#374151');
             x.drawImage(snap, 0, headH);
@@ -5193,7 +5190,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var popupHtml =
             '<div style="font-family:DM Sans,sans-serif;font-size:12px;line-height:1.5;min-width:180px;">' +
             '<strong style="font-size:14px;color:' + color + ';">' + (meta.storm_name || 'Unknown') + '</strong><br>' +
-            '<span style="color:#aaa;">' + (meta.mission_id || '') + ' · ' + (meta.datetime || '') + '</span><br>' +
+            '<span style="color:#aaa;">' + (meta.mission_id || '') + ' · ' + _rtAnalysisTime(meta) + '</span><br>' +
             '<span style="margin-top:4px;display:inline-block;">Max 2-km earth-rel. wind: <strong style="color:' + color + ';">' + windStr + catStr + '</strong></span><br>' +
             '<span style="color:#aaa;font-size:10px;">' +
             (meta.latitude ? meta.latitude.toFixed(2) + '°N, ' + Math.abs(meta.longitude).toFixed(2) + '°' + (meta.longitude < 0 ? 'W' : 'E') : '') +
@@ -5319,7 +5316,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         if (label && _rtIRData.frame_datetimes && _rtIRData.frame_datetimes[_rtIRAnimFrame]) {
             var lag = _rtIRData.lag_minutes ? _rtIRData.lag_minutes[_rtIRAnimFrame] : 0;
             var lagStr = lag === 0 ? 't=0' : 't−' + Math.floor(lag / 60) + ':' + ('0' + (lag % 60)).slice(-2);
-            label.textContent = 'IR ' + lagStr + ' | ' + _rtIRData.frame_datetimes[_rtIRAnimFrame];
+            label.textContent = 'IR ' + lagStr + ' | ' + TCTime.utc(_rtIRData.frame_datetimes[_rtIRAnimFrame], { year: true });
         }
     }
 
@@ -5494,7 +5491,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var fig = TDRView.sectionFigure({
             z: json.azimuthal_mean, x: json.radius_km, y: json.height_km, varInfo: vi,
             colorscale: _rtColorscale(vi), zmin: _rtGetVmin(), zmax: _rtGetVmax(),
-            title: (meta.storm_name || 'TDR analysis') + ' | ' + (meta.datetime || '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '%)',
+            title: (meta.storm_name || 'TDR analysis') + ' | ' + _rtAnalysisTime(meta) + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '%)',
             size: 'dual', margin: { l: 48, r: 14, t: json.overlay ? 78 : 68, b: 44 }, rmwX: _rtRmwKm(json),
             windMarker: _rtWindMarker(),
             overlayTraces: TDRView.contourTraces(json.overlay, json.overlay && json.overlay.azimuthal_mean, json.radius_km, json.height_km, intInput ? parseFloat(intInput.value) : NaN)
@@ -5559,7 +5556,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var fig = TDRView.sectionFigure({
             z: json.azimuthal_mean, x: json.radius_km, y: json.height_km, varInfo: vi,
             colorscale: _rtColorscale(vi), zmin: _rtGetVmin(), zmax: _rtGetVmax(),
-            title: (meta.storm_name || 'TDR analysis') + ' | ' + (meta.datetime || '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '% coverage)' + TDRView.sectionTitleOverlay(json),
+            title: (meta.storm_name || 'TDR analysis') + ' | ' + _rtAnalysisTime(meta) + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '% coverage)' + TDRView.sectionTitleOverlay(json),
             size: 'small', rmwX: _rtRmwKm(json),
             margin: { l: 45, r: 12, t: json.overlay ? 78 : 64, b: 38 },
             windMarker: _rtWindMarker(),
@@ -5820,7 +5817,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var dtStr = _rtIRData.frame_datetimes ? _rtIRData.frame_datetimes[_rtIRAnimFrame] : '';
         var lagStr = lagMin === 0 ? 't=0' : 't\u2212' + (lagMin >= 60 ? (lagMin / 60).toFixed(1) + 'h' : lagMin + 'min');
         if (_rtIRAllLoaded) {
-            label.textContent = 'IR ' + lagStr + (dtStr ? ' | ' + dtStr : '');
+            label.textContent = 'IR ' + lagStr + (dtStr ? ' | ' + TCTime.utc(dtStr, { year: true }) : '');
         } else {
             label.textContent = 'IR ' + lagStr + ' | Loading ' + _rtIRLoadedCount + '/' + _rtIRFrameURLs.length + '…';
         }
@@ -6389,7 +6386,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             var popupHtml =
                 '<div class="sonde-popup">' +
                 '<div class="sonde-title">' + _icon('parachute') + 'Dropsonde ' + (sonde.sonde_id || '#' + (idx + 1)) + '</div>' +
-                '<div class="sonde-meta">' + sonde.launch_time + ' (' + tOffStr + ' from TDR)</div>' +
+                '<div class="sonde-meta">' + _rtSondeTime(sonde) + ' (' + tOffStr + ' from TDR)</div>' +
                 '<div class="sonde-meta">' + (sonde.platform || '') + ' / ' + (sonde.flight || '') + '</div>' +
                 '<div class="sonde-stats">' +
                 'Max wind: <strong style="color:' + windColor + ';">' + maxWspdStr + '</strong><br>' +
@@ -6489,7 +6486,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 hoverinfo: 'text',
                 hovertext: ['<b>\uD83E\uDE82 ' + sondeLabel + ' \u2014 LAUNCH</b>' +
                     '<br>Alt: ' + launchAlt +
-                    '<br>Time: ' + sonde.launch_time + (tOffStr ? ' (' + tOffStr + ')' : '') +
+                    '<br>Time: ' + _rtSondeTime(sonde) + (tOffStr ? ' (' + tOffStr + ')' : '') +
                     '<br>Max Wind: ' + maxWspdStr + ' m/s  |  Drift: ' + driftKm + ' km' +
                     (sonde.platform ? '<br>' + sonde.platform + ' / ' + sonde.flight : '') +
                     (sonde.comments ? '<br>' + sonde.comments : '') +
@@ -6718,7 +6715,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 (flightLabel ? ' <span style="color:#9ca3af;">(' + flightLabel + ')</span>' : '') +
                 '<br>' +
                 '<span style="color:#94a3b8;">' + (sonde.sonde_id || 'Sonde ' + (sondeIdx + 1)) +
-                ' \u2014 ' + sonde.launch_time + tOff + '</span>' +
+                ' \u2014 ' + _rtSondeTime(sonde) + tOff + '</span>' +
                 (sonde.comments ? ' <span style="color:#fbbf24;font-size:10px;">' + sonde.comments + '</span>' : '');
         }
 
@@ -6765,7 +6762,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             '\uD83E\uDE82 ' + (sonde.sonde_id || 'Unknown') + '</div>';
         html += '<div style="margin-bottom:8px;font-size:10px;color:#8899aa;">' +
             (sonde.platform || '') + ' / ' + (sonde.flight || '') + '<br>' +
-            sonde.launch_time + '<br>' +
+            _rtSondeTime(sonde) + '<br>' +
             (sonde.comments ? '<span style="color:#fbbf24;">' + sonde.comments + '</span>' : '') +
             '</div>';
 
@@ -6956,7 +6953,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         html += '<tr style="color:#9ca3af;border-bottom:1px solid rgba(255,255,255,0.1);">' +
             '<th style="text-align:left;padding:2px 4px;">#</th>' +
             '<th style="text-align:left;padding:2px 4px;">ID</th>' +
-            '<th style="text-align:left;padding:2px 4px;">Time</th>' +
+            '<th style="text-align:left;padding:2px 4px;">Time (UTC)</th>' +
             '<th style="text-align:right;padding:2px 4px;">\u0394t</th>' +
             '<th style="text-align:right;padding:2px 4px;">WL150</th>' +
             '<th style="text-align:right;padding:2px 4px;">Vmax</th>' +
@@ -7015,7 +7012,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 if (validAlts.length > 0 && Math.min.apply(null, validAlts) === 0) hitSurface = true;
             }
 
-            var timeStr = sonde.launch_time ? sonde.launch_time.substring(11, 19) : '?';
+            var timeStr = sonde.launch_time ? TCTime.utc(sonde.launch_time, { date: false, sec: true, zone: false }) : '?';
             var dtStr = sonde.time_offset_min != null ?
                 (sonde.time_offset_min >= 0 ? '+' : '') + sonde.time_offset_min.toFixed(0) : '';
             var wl150Str = wl150 != null ? wl150.toFixed(1) : '-';
@@ -7255,7 +7252,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 (flightLabel ? ' <span style="color:#9ca3af;">(' + flightLabel + ')</span>' : '') +
                 '<br>' +
                 '<span style="color:#94a3b8;">' + (sonde.sonde_id || 'Sonde ' + (sondeIdx + 1)) +
-                ' \u2014 ' + sonde.launch_time + tOffStr + '</span>';
+                ' \u2014 ' + _rtSondeTime(sonde) + tOffStr + '</span>';
         }
 
         // On-plot annotations
@@ -7267,7 +7264,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var plotTitleLine = (sonde.platform || 'Unknown') +
             (sonde.flight ? ' (' + sonde.flight + ')' : '') +
             ' | ' + (sonde.sonde_id || '?') +
-            ' | ' + sonde.launch_time + tOffStr;
+            ' | ' + _rtSondeTime(sonde) + tOffStr;
 
         var plotInfoParts = [];
         if (maxW != null) plotInfoParts.push('Vmax: ' + maxW.toFixed(1) + ' m/s (' + (maxW * 1.944).toFixed(0) + ' kt)');
@@ -7804,7 +7801,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             }
 
             var tOffsetMin = (o.time_offset_s != null && isFinite(o.time_offset_s)) ? (o.time_offset_s / 60) : null;
-            var timeStr = (o.time || '') + ' UTC';
+            var timeStr = TCTime.utc(o.time, { year: true, sec: true });
             if (tOffsetMin != null) timeStr += ' (T' + (tOffsetMin >= 0 ? '+' : '') + tOffsetMin.toFixed(1) + ' min)';
 
             var altStr = '';
@@ -8929,6 +8926,10 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
     // Project the mission's 2/6 km centres (lat/lon) into THIS sweep's storm-
     // relative km frame (the same projection the coastline overlay uses) and
     // return plan-view traces + time-label annotations + a title.
+    // Sweep time labels are "HHMM" ("2110"); show them as "21:10".
+    function _rtHHMM(tl) {
+        return /^\d{4}$/.test(tl || '') ? tl.slice(0, 2) + ':' + tl.slice(2) : (tl || '');
+    }
     function _rtBuildCenterTrackTraces(meta) {
         var pts = (_rtCtrkData && _rtCtrkData.points) || [];
         var lat0 = meta && meta.latitude, lon0 = meta && meta.longitude;
@@ -8938,13 +8939,13 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         pts.forEach(function (p) {
             if (p.lat2 != null) {
                 var xa = (p.lon2 - lon0) * kLon, ya = (p.lat2 - lat0) * kLat;
-                x2.push(xa); y2.push(ya); cd2.push(p.time_label);
-                ann.push({ x: xa, y: ya, text: p.time_label + 'Z', showarrow: false,
+                x2.push(xa); y2.push(ya); cd2.push(_rtHHMM(p.time_label));
+                ann.push({ x: xa, y: ya, text: _rtHHMM(p.time_label), showarrow: false,
                            xanchor: 'left', yanchor: 'bottom', xshift: 7, yshift: 3,
                            font: { color: '#1e3a8a', size: 9, family: 'Arial, sans-serif' } });
             }
             if (p.lat6 != null) {
-                x6.push((p.lon6 - lon0) * kLon); y6.push((p.lat6 - lat0) * kLat); cd6.push(p.time_label);
+                x6.push((p.lon6 - lon0) * kLon); y6.push((p.lat6 - lat0) * kLat); cd6.push(_rtHHMM(p.time_label));
             }
         });
         var traces = [
@@ -8953,16 +8954,16 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
               textfont: { color: '#ffffff', size: 10, family: 'Arial Black, Arial, sans-serif' },
               line: { color: 'rgba(96,165,250,0.75)', width: 1.5 },
               marker: { size: 15, color: '#60a5fa', line: { color: '#1e3a8a', width: 1 } },
-              customdata: cd2, hovertemplate: '<b>%{customdata}Z</b> · 2 km centre<extra></extra>' },
+              customdata: cd2, hovertemplate: '<b>%{customdata} UTC</b> · 2 km centre<extra></extra>' },
             { x: x6, y: y6, mode: 'markers+lines+text', type: 'scatter', name: '6 km (M)',
               text: x6.map(function () { return 'M'; }), textposition: 'middle center',
               textfont: { color: '#ffffff', size: 10, family: 'Arial Black, Arial, sans-serif' },
               line: { color: 'rgba(37,99,235,0.6)', width: 1.5, dash: 'dot' },
               marker: { size: 15, color: '#2563eb', symbol: 'diamond', line: { color: '#1e3a8a', width: 1 } },
-              customdata: cd6, hovertemplate: '<b>%{customdata}Z</b> · 6 km centre<extra></extra>' }
+              customdata: cd6, hovertemplate: '<b>%{customdata} UTC</b> · 6 km centre<extra></extra>' }
         ];
         var storm = ((_rtCtrkData && _rtCtrkData.storm_name) || (meta && meta.storm_name) || '').trim();
-        var title = (storm ? storm + ' | ' + (meta.datetime || '') + '<br>' : '') +
+        var title = (storm ? storm + ' | ' + _rtAnalysisTime(meta) + '<br>' : '') +
             '2-km (L) &amp; 6-km (M) Center Track · ' + pts.length + ' sweeps';
         return { traces: traces, annotations: ann, title: title };
     }
@@ -8976,7 +8977,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             var c2 = p.lat2 != null ? '(' + p.lon2.toFixed(2) + ', ' + p.lat2.toFixed(2) + ')' : '—';
             var c6 = p.lat6 != null ? '(' + p.lon6.toFixed(2) + ', ' + p.lat6.toFixed(2) + ')' : '—';
             var tilt = p.tilt_2_6_km != null ? p.tilt_2_6_km.toFixed(1) : '—';
-            return '<tr><td style="padding:1px 10px 1px 0;color:#2563eb;">' + p.time_label + 'Z</td>' +
+            return '<tr><td style="padding:1px 10px 1px 0;color:#2563eb;">' + _rtHHMM(p.time_label) + '</td>' +
                    '<td style="padding:1px 10px 1px 0;color:var(--text);">' + c2 + '</td>' +
                    '<td style="padding:1px 10px 1px 0;color:var(--text);">' + c6 + '</td>' +
                    '<td style="padding:1px 0;color:var(--slate);">' + tilt + '</td></tr>';
@@ -8990,7 +8991,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             '</div>' +
             '<table style="font-size:10.5px;border-collapse:collapse;font-variant-numeric:tabular-nums;">' +
             '<thead><tr style="color:var(--slate);text-align:left;border-bottom:1px solid rgba(148,163,184,0.25);">' +
-            '<th style="padding:1px 10px 3px 0;font-weight:600;">Time (Z)</th>' +
+            '<th style="padding:1px 10px 3px 0;font-weight:600;">Time (UTC)</th>' +
             '<th style="padding:1px 10px 3px 0;font-weight:600;">2-km (lon, lat)</th>' +
             '<th style="padding:1px 10px 3px 0;font-weight:600;">6-km (lon, lat)</th>' +
             '<th style="padding:1px 0 3px;font-weight:600;">Tilt (km)</th></tr></thead>' +
@@ -9284,7 +9285,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
 
     function _rtRenderCFAD(json) {
         var meta = json.case_meta || {};
-        var fig = TDRView.cfadFigure(json, { subtitle: meta.datetime ? ' | ' + meta.datetime : '' });
+        var fig = TDRView.cfadFigure(json, { subtitle: meta.datetime ? ' | ' + _rtAnalysisTime(meta) : '' });
         var el = document.getElementById('rt-az-result');
         if (!el) el = document.getElementById('rt-cs-result');
         if (el) {
@@ -9372,7 +9373,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                     var sc = json.scans[i];
                     var opt = document.createElement('option');
                     opt.value = sc.s3_key;
-                    opt.textContent = sc.scan_time + ' (\u0394' + Math.round(sc.delta_sec) + 's)';
+                    opt.textContent = TCTime.utc(sc.scan_time, { year: true, sec: true }) + ' (\u0394' + Math.round(sc.delta_sec) + ' s)';
                     scanSelect.appendChild(opt);
                 }
                 if (status) status.textContent = json.scans.length + ' scan(s)';
@@ -9424,7 +9425,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 });
                 if (_rtNexradVisible && _rtMap) _rtNexradMapOverlay.addTo(_rtMap);
 
-                if (status) status.textContent = json.site + ' ' + json.scan_time + ' \u2014 ' + json.label;
+                if (status) status.textContent = json.site + ' ' + TCTime.utc(json.scan_time, { year: true }) + ' \u2014 ' + json.label;
                 _rtUpdateNexradColorbar(product);
                 _rtLoadNexradStormRelative(site, s3Key, product);
             })
@@ -9771,7 +9772,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 _rtMwCurrentJson = json;
                 _rtCreateStandaloneMWPlanView(json);
 
-                if (status) status.textContent = json.sensor + ' ' + json.datetime;
+                if (status) status.textContent = json.sensor + ' ' + TCTime.utc(json.datetime, { year: true });
 
                 // Add/update download button next to status text
                 var dlBtn = document.getElementById('rt-mw-download-btn');
@@ -9825,7 +9826,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
 
         var product = json.product || '89pct';
         var titleText = (json.sensor || 'MW') + ' ' + (json.platform || '') +
-            ' | ' + product.toUpperCase() + '<br>' + (json.datetime || '');
+            ' | ' + product.toUpperCase() + '<br>' + (json.datetime ? TCTime.utc(json.datetime, { year: true }) : '');
         var plotBg = '#ffffff';
         var config = { responsive: true, displayModeBar: true,
             modeBarButtonsToRemove: ['lasso2d', 'select2d', 'toggleSpikelines'], displaylogo: false };
