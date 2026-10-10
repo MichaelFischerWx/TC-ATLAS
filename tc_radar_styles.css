@@ -1070,7 +1070,6 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 .citation-box h3 { color: var(--blue-light); margin-bottom: 0.75rem; font-family: 'DM Sans', sans-serif; }
 
 .contact-section { background: var(--surface); border-top: 1px solid var(--border); text-align: center; padding: 4rem 24px; color: var(--text); }
-.contact-section .section-title { color: white; }
 .contact-info { max-width: 500px; margin: 2rem auto; background: var(--border); padding: 2rem; border-radius: var(--radius-lg); backdrop-filter: blur(10px); border: 1px solid var(--border-light); }
 .contact-info a { color: var(--um-green); }
 
@@ -1975,7 +1974,9 @@ footer a:hover { text-decoration: underline; }
         top: 46px;
         left: 0;
         right: 0;
-        background: rgba(255, 255, 255,0.98);
+        /* Theme surface (was a hard-coded white sheet, so dark mode showed
+           grey links on white). Same token index.html's menu uses. */
+        background: var(--surface-raised);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
         border-bottom: 1px solid var(--border);
