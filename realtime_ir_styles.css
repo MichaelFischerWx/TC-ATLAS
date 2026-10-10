@@ -928,7 +928,10 @@ html, body { margin: 0; padding: 0; }
     color: rgba(241, 245, 249, 0.78);
 }
 
-/* ── Product toggle (IR / GeoColor) ────────────────────────── */
+/* ── Product toggle (IR / Visible / WV / Vigor / Combo) ─────────
+   Dark glass in both themes, the same segment as the Global Map's
+   IR/Vis/WV switcher (.ir-mode-segment). It used to be translucent white,
+   so map labels showed through it and it stayed light in dark mode. */
 .ir-product-toggle {
     position: absolute;
     top: 10px;
@@ -938,29 +941,33 @@ html, body { margin: 0; padding: 0; }
     gap: 0;
     border-radius: 5px;
     overflow: hidden;
-    border: 1px solid var(--border-light);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(22, 27, 36, 0.92);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
 }
 .ir-product-btn {
     padding: 5px 12px;
     font-family: 'DM Sans', sans-serif;
     font-size: 0.7rem;
     font-weight: 500;
-    color: #8993a4;
-    background: rgba(255, 255, 255, 0.85);
+    color: #cbd5e1;
+    background: transparent;
     border: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.10);
     cursor: pointer;
     transition: background 0.2s, color 0.2s;
     white-space: nowrap;
 }
+.ir-product-btn:last-child { border-right: none; }
 .ir-product-btn:hover {
-    background: rgba(30, 60, 110, 0.9);
-    color: #c0d0ea;
+    background: rgba(74, 155, 110, 0.18);
+    color: #ffffff;
 }
 .ir-product-btn.ir-product-active {
-    /* Solid, not 25%-transparent — a see-through "selected" button vanished over
-       bright imagery (WV/Vis especially). Opaque green + white text reads on any
-       background and clearly marks the active channel. */
-    background: #4a9b6e;
+    /* Opaque: the segment's own 0.92 glass sits under this tint, so the
+       selected channel stays legible over bright WV/Vis imagery. */
+    background: rgba(74, 155, 110, 0.32);
     color: #ffffff;
 }
 .ir-product-btn.ir-loading {
@@ -971,8 +978,8 @@ html, body { margin: 0; padding: 0; }
 .ir-product-btn:disabled,
 .ir-product-btn:disabled:hover {
     cursor: default;
-    color: #8993a4;
-    background: rgba(255, 255, 255, 0.85);
+    color: rgba(203, 213, 225, 0.38);
+    background: transparent;
 }
 
 /* ── Storm-detail env Layers control ─────────────────────────────
@@ -992,20 +999,22 @@ html, body { margin: 0; padding: 0; }
     font-family: 'DM Sans', sans-serif;
     font-size: 0.7rem;
     font-weight: 500;
-    color: #8993a4;
-    background: rgba(255, 255, 255, 0.85);
-    border: 1px solid var(--border-light);
+    color: #cbd5e1;
+    background: rgba(22, 27, 36, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 5px;
     cursor: pointer;
-    transition: background 0.2s, color 0.2s;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
 }
 .ir-detail-layers-btn svg {
     width: 13px; height: 13px; fill: none; stroke: currentColor;
     stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
 }
 .ir-detail-layers-btn svg polygon { fill: currentColor; stroke: none; }
-.ir-detail-layers-btn:hover { background: rgba(30, 60, 110, 0.9); color: #c0d0ea; }
-.ir-detail-layers-btn.active { background: rgba(74, 155, 110, 0.25); color: #60a5fa; }
+.ir-detail-layers-btn:hover { background: rgba(22, 27, 36, 0.96); color: #ffffff; border-color: rgba(74, 155, 110, 0.45); }
+.ir-detail-layers-btn.active { background: rgba(31, 66, 49, 0.94); color: #ffffff; border-color: rgba(74, 155, 110, 0.65); }
 .ir-detail-layers-count {
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 15px; height: 15px; padding: 0 4px;
@@ -2246,9 +2255,9 @@ html, body { margin: 0; padding: 0; }
     box-sizing: border-box;
     text-align: left;
     z-index: 600;
-    background: rgba(255, 255, 255, 0.88);
-    color: #8993a4;
-    border: 1px solid rgba(15, 22, 35, 0.1);
+    background: rgba(22, 27, 36, 0.92);
+    color: #cbd5e1;
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 6px;
     padding: 6px 12px;
     font-size: 0.72rem;
@@ -2262,14 +2271,14 @@ html, body { margin: 0; padding: 0; }
     touch-action: manipulation;
 }
 .ir-legend-toggle:hover {
-    background: rgba(255, 255, 255, 0.95);
-    color: var(--text);
-    border-color: rgba(74, 155, 110, 0.3);
+    background: rgba(22, 27, 36, 0.96);
+    color: #ffffff;
+    border-color: rgba(74, 155, 110, 0.45);
 }
 .ir-legend-toggle.active {
-    background: rgba(74, 155, 110, 0.18);
-    color: #60a5fa;
-    border-color: rgba(74, 155, 110, 0.4);
+    background: rgba(31, 66, 49, 0.94);
+    color: #ffffff;
+    border-color: rgba(74, 155, 110, 0.65);
 }
 
 /* ── Global IR animation bar (bottom-left of RT map) ─────────── */
@@ -2477,9 +2486,10 @@ html, body { margin: 0; padding: 0; }
     box-sizing: border-box;
     text-align: left;
     z-index: 600;
-    background: rgba(255, 255, 255, 0.88);
-    color: #8993a4;
-    border: 1px solid rgba(15, 22, 35, 0.1);
+    /* Dark glass in both themes, like every other floating map control. */
+    background: rgba(22, 27, 36, 0.92);
+    color: #cbd5e1;
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 6px;
     padding: 6px 12px;
     font-size: 0.72rem;
@@ -2493,14 +2503,14 @@ html, body { margin: 0; padding: 0; }
     touch-action: manipulation;
 }
 .basin-sidebar-toggle:hover {
-    background: rgba(255, 255, 255, 0.95);
-    color: var(--text);
-    border-color: rgba(74, 155, 110, 0.3);
+    background: rgba(22, 27, 36, 0.96);
+    color: #ffffff;
+    border-color: rgba(74, 155, 110, 0.45);
 }
 .basin-sidebar-toggle.active {
-    background: rgba(74, 155, 110, 0.15);
-    color: #60a5fa;
-    border-color: rgba(74, 155, 110, 0.4);
+    background: rgba(31, 66, 49, 0.94);
+    color: #ffffff;
+    border-color: rgba(74, 155, 110, 0.65);
 }
 
 /* When sidebar is open, shift the toggle button */
@@ -2561,7 +2571,7 @@ body:has(.basin-sidebar.open) #ir-display-wrap { left: 280px; }
 /* "Imagery Only" sits at the head of the menu and hides what every item
    below it toggles, so give it a rule underneath to read as its own tier. */
 #ir-display-menu .ir-clean-item {
-    border-bottom: 1px solid rgba(15, 22, 35, 0.12);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.14);
     padding-bottom: 8px;
     border-radius: 6px 6px 0 0;
     line-height: 1.2;   /* the label wraps to two lines in the 104px column */
@@ -2569,9 +2579,9 @@ body:has(.basin-sidebar.open) #ir-display-wrap { left: 280px; }
 /* Clean view is easy to forget once the menu is shut (the map just looks
    empty) — accent the collapsed pill so the state is visible from the corner. */
 .ir-display-toggle.ir-clean-on {
-    background: rgba(74, 155, 110, 0.22);
-    color: #60a5fa;
-    border-color: rgba(74, 155, 110, 0.45);
+    background: rgba(31, 66, 49, 0.94);
+    color: #ffffff;
+    border-color: rgba(74, 155, 110, 0.65);
 }
 
 /* IR colormap picker inside the Display menu */
@@ -2579,13 +2589,14 @@ body:has(.basin-sidebar.open) #ir-display-wrap { left: 280px; }
 #ir-display-menu .ir-cmap-select {
     width: 100%;
     font: 500 0.72rem 'DM Sans', sans-serif;
-    color: #8993a4;
-    background: rgba(255, 255, 255, 0.88);
-    border: 1px solid rgba(15, 22, 35, 0.1);
+    color: #cbd5e1;
+    background: rgba(22, 27, 36, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 6px;
     padding: 6px 8px;
     cursor: pointer;
 }
+#ir-display-menu .ir-cmap-select option { background: #161b24; color: #e6e8eb; }
 
 /* Drop the +/- zoom buttons on the global map (all viewports) — continuous
    scroll / pinch zoom is natural on GL, and removing them frees the top-left
