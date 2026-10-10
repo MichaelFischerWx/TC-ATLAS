@@ -69,9 +69,9 @@
   #legend .row { display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
   #legend i { display:inline-block; width:9px; height:9px; border-radius:50%; border:1px solid #fff; box-shadow:0 0 0 1px rgba(0,0,0,.25); }
   #legend .sep { color:var(--border); margin:0 2px; }
-  #cbar { position:absolute; right:10px; top:50%; transform:translateY(-50%); width:30px; height:170px; padding:6px 0; display:flex; flex-direction:column; align-items:center; z-index:5; }
+  #cbar { position:absolute; right:10px; top:50%; transform:translateY(-50%); width:40px; height:170px; padding:6px 0; display:flex; flex-direction:column; align-items:center; z-index:5; cursor:help; }
   #cbar canvas { display:block; width:12px; height:126px; min-height:0; border-radius:2px; }
-  #cbar span { font-size:9px; color:var(--muted); }
+  #cbar span { font-size:9px; color:var(--muted); white-space:nowrap; font-variant-numeric:tabular-nums; }
   #status { color:var(--muted); font-size:11px; }
   #tb { position:absolute; z-index:6; pointer-events:none; display:none; background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:3px 7px; font-size:11px; color:var(--text); font-variant-numeric:tabular-nums; white-space:nowrap; }
   #tb b { font-size:12px; }
@@ -167,7 +167,7 @@
   <p>The same model runs in real time on active storms: <a href="realtime_ir.html#experimental">open the Real-Time Monitor's Experimental tab &rarr;</a></p>
 </div>
 <div id="tb"></div>
-<div id="cbar" class="hud"><span>310 K</span><canvas width="1" height="126"></canvas><span>170 K</span></div>
+<div id="cbar" class="hud" title="IR brightness temperature: 37 °C (310 K) at the top to −103 °C (170 K) at the bottom"><span>37 °C</span><canvas width="1" height="126"></canvas><span>&minus;103 °C</span></div>
 <div id="bar" class="hud">
   <button id="prev" title="Previous frame (left arrow)">&#9664;</button>
   <button id="play" title="Play / pause (space)">&#9654; Play</button>
@@ -394,13 +394,14 @@
     return rec.idx[r * rec.cols + c] || 0;
   }
   function tbK(v) { return 170 + (v - 1) / 254 * 140; }
+  function fmtC(k) { return (k - 273.15).toFixed(1).replace('-', '\u2212') + ' \u00b0C'; }
   map.on('mousemove', function (ev) {
     if (!curTs || isTouch) return;
     var lat = ev.lngLat.lat, lon = ((ev.lngLat.lng + 180) % 360 + 360) % 360 - 180, v = 0, src = '';
     if (secCur && secCur.fr && secCur.fr.rec) { v = sampleIdx(secCur.fr.rec, secCur.fr.b, lat, lon); if (v) src = '4 km · ' + secCur.s.name; }
     if (!v && decoded[curTs]) { v = sampleIdx(decoded[curTs], boundsFor(decoded[curTs]), lat, lon); if (v) src = '8 km'; }
     if (!v) { tbEl.style.display = 'none'; return; }
-    tbEl.innerHTML = '<b>' + tbK(v).toFixed(1) + ' K</b><small>' + src + ' · ' + Math.abs(lat).toFixed(2) + (lat >= 0 ? 'N ' : 'S ') + Math.abs(lon).toFixed(2) + (lon >= 0 ? 'E' : 'W') + '</small>';
+    tbEl.innerHTML = '<b>' + fmtC(tbK(v)) + '</b><small>' + tbK(v).toFixed(1) + ' K · ' + src + ' · ' + Math.abs(lat).toFixed(2) + (lat >= 0 ? 'N ' : 'S ') + Math.abs(lon).toFixed(2) + (lon >= 0 ? 'E' : 'W') + '</small>';
     tbEl.style.display = 'block'; tbEl.style.left = (ev.point.x + 14) + 'px'; tbEl.style.top = (ev.point.y + 14) + 'px';
   });
   map.on('mouseout', function () { tbEl.style.display = 'none'; });
