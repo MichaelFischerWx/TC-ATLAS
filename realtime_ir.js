@@ -1480,28 +1480,19 @@
         return null;
     }
 
-    var _MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     /** Format a UTC timestamp for display in the site-wide form
-     *  "9 Oct 21:10 UTC" (day month, 24-h, no year: the monitor is live). */
-    function fmtUTC(isoStr) {
-        if (!isoStr) return '\u2014';
-        try {
-            var s = String(isoStr), d;
-            // The GL build drives the global loop off mosaic frames.json stamps
-            // ("YYYYMMDDHHMM"), which new Date() can't parse \u2192 NaN. Handle both.
-            if (/^\d{12}$/.test(s)) {
-                d = new Date(Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12)));
-            } else {
-                // An ISO time with no offset is a UTC stamp here; new Date()
-                // would read it as local time.
-                if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)) s = s.replace(' ', 'T') + 'Z';
-                d = new Date(s);
-            }
-            if (isNaN(d.getTime())) return String(isoStr);
-            var hh = String(d.getUTCHours()).padStart(2, '0');
-            var mm = String(d.getUTCMinutes()).padStart(2, '0');
-            return d.getUTCDate() + ' ' + _MON3[d.getUTCMonth()] + ' ' + hh + ':' + mm + ' UTC';
-        } catch (e) { return isoStr; }
+     *  "9 Oct 21:10 UTC" (day month, 24-h, no year: the monitor is live).
+     *  The format itself lives in tc_time.js, shared with the archive pages;
+     *  opts as TCTime.utc: year, sec, date: false (time of day), time: false.
+     *  Takes ISO stamps (no offset = UTC) and mosaic "YYYYMMDDHHMM" stamps. */
+    function fmtUTC(isoStr, opts) {
+        return TCTime.utc(isoStr, opts);
+    }
+
+    /** Model-cycle label, "9 Oct 12Z" (TCTime.cycle). Callers add the model or
+     *  role: "GFS 9 Oct 06Z analysis", "init 9 Oct 12Z", "valid 9 Oct 18Z". */
+    function fmtCycle(t, opts) {
+        return TCTime.cycle(t, opts);
     }
 
     /** Human "x ago" for a UTC ISO string, used to flag stale fixes. */
