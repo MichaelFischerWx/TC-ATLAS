@@ -7340,19 +7340,87 @@
         for (var i = 0; i < (storms || []).length; i++) {
             var s = storms[i];
             if (s && s.lat != null && s.lon != null && isFinite(s.lat) && isFinite(s.lon)) {
-                pts.push([s.lat, s.lon]);
+                // Invests count for less when choosing what to keep in view.
+                pts.push({ lat: s.lat, lon: s.lon,
+                           w: Math.max(s.vmax_kt || 0, 20) * (_irIsInvest(s.atcf_id) ? 0.25 : 1) });
             }
         }
         if (!pts.length) return;
         _narrowFitDone = true;
         try {
             if (pts.length === 1) {
-                map.setView(pts[0], 4, { animate: false });
+                map.setView([pts[0].lat, pts[0].lon], 4, { animate: false });
+                return;
+            }
+            // Longitudes are fitted as the shortest arc around the globe, so
+            // storms on both sides of the Pacific frame the Pacific instead of
+            // a box running the long way round (124.5°W..153°E used to center
+            // on 14°E, over Africa). When even that arc is wider than the map
+            // shows at its minimum zoom, keep the strongest system and as much
+            // of the rest as fits.
+            // Degrees of longitude the map shows at its minimum zoom, inside
+            // the fit padding. MapLibre's zoom z is a 512·2^z px world
+            // (Leaflet's is 256·2^z), so a phone at zoom 2 spans ~60°.
+            var c = map.getContainer();
+            var tilePx = map._gl ? 512 : 256;
+            var minZ = map._gl ? map._gl.getMinZoom() : (map.getMinZoom ? map.getMinZoom() : 2);
+            var fitSpan = 360 * Math.max((c ? c.clientWidth : 390) - 48, 100) / (tilePx * Math.pow(2, minZ));
+            var arc = _lonArc(pts);
+            if (arc.span > fitSpan) {
+                pts = _heaviestLonWindow(pts, fitSpan);
+                arc = _lonArc(pts);
+            }
+            var south = 90, north = -90;
+            for (var k = 0; k < pts.length; k++) {
+                south = Math.min(south, pts[k].lat);
+                north = Math.max(north, pts[k].lat);
+            }
+            if (pts.length === 1) {
+                map.setView([pts[0].lat, pts[0].lon], 4, { animate: false });
             } else {
-                map.fitBounds(L.latLngBounds(pts).pad(0.25),
+                map.fitBounds(L.latLngBounds([south, arc.west], [north, arc.east]).pad(0.25),
                               { animate: false, maxZoom: 5, padding: [24, 24] });
             }
         } catch (e) { /* facade without fitBounds — keep default view */ }
+    }
+
+    function _lon360(x) { return ((x % 360) + 360) % 360; }
+
+    /** Shortest longitude arc covering every point: the circle minus its
+     *  widest empty gap. Returns {west, east, span} with west in [-180, 180)
+     *  and east > 180 when the arc crosses the dateline (fitBounds and
+     *  MapLibre take unwrapped longitudes). */
+    function _lonArc(pts) {
+        var xs = pts.map(function (p) { return _lon360(p.lon); })
+                    .sort(function (a, b) { return a - b; });
+        var n = xs.length, gapAt = n - 1, gap = xs[0] + 360 - xs[n - 1];   // wrap-around gap
+        for (var i = 0; i < n - 1; i++) {
+            if (xs[i + 1] - xs[i] > gap) { gap = xs[i + 1] - xs[i]; gapAt = i; }
+        }
+        var west = xs[(gapAt + 1) % n], east = xs[gapAt];
+        if (east < west) east += 360;
+        if (west >= 180) { west -= 360; east -= 360; }
+        return { west: west, east: east, span: east - west };
+    }
+
+    /** The points inside the heaviest run of longitudes no wider than
+     *  maxSpan that still contains the single heaviest point. */
+    function _heaviestLonWindow(pts, maxSpan) {
+        var order = pts.slice().sort(function (a, b) { return _lon360(a.lon) - _lon360(b.lon); });
+        var top = order.reduce(function (a, b) { return b.w > a.w ? b : a; });
+        var best = null, bestW = -1;
+        for (var i = 0; i < order.length; i++) {
+            var start = _lon360(order[i].lon), sum = 0, members = [];
+            for (var k = 0; k < order.length; k++) {
+                var q = order[(i + k) % order.length], x = _lon360(q.lon);
+                if (x < start) x += 360;
+                if (x - start > maxSpan) break;
+                sum += q.w;
+                members.push(q);
+            }
+            if (members.indexOf(top) >= 0 && sum > bestW) { best = members; bestW = sum; }
+        }
+        return best || [top];
     }
 
     // ── Predictive prefetch on hover (Tier-1 UX win) ─────────────
