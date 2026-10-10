@@ -2778,7 +2778,7 @@
         var img = new Image();
         img.onload = function () { _rtLogoImg = img; cb(img); };
         img.onerror = function () { cb(null); };
-        img.src = 'tc-atlas-favicon-192.png';
+        img.src = 'tc-atlas-favicon-192.png?v=20261009p1a';
     }
     var _terrainProtoReady = false;
     function _tbToTerrainRGB(tb, out) {
@@ -23773,7 +23773,7 @@
     // Brand logo preloaded once for figure exports (192px PNG, same-origin —
     // same artwork as the 1024px tc-atlas-icon.png at 1/6 the bytes; watermark
     // draws at most ~112px even on 4x exports).
-    var _tcLogoImg = (function () { var i = new Image(); i.src = 'tc-atlas-favicon-192.png'; return i; })();
+    var _tcLogoImg = (function () { var i = new Image(); i.src = 'tc-atlas-favicon-192.png?v=20261009p1a'; return i; })();
 
     // Stamp the TC-ATLAS watermark — logo + name + URL — into the bottom-right
     // of an export canvas. Sizing scales off the canvas width so it reads the
@@ -33922,7 +33922,7 @@
                 'line-height:1.2;padding:4px 9px 4px 7px;border-radius:5px;' +
                 'background:rgba(15,22,35,0.55);text-shadow:0 1px 2px rgba(0,0,0,0.7);';
             wm.innerHTML =
-                '<img src="tc-atlas-favicon-64.png" alt="" ' +
+                '<img src="tc-atlas-favicon-64.png?v=20261009p1a" alt="" ' +
                 'style="width:22px;height:22px;flex:0 0 auto;display:block;' +
                 'border-radius:5px;">' +
                 '<div style="text-align:left;">' +
@@ -33988,7 +33988,7 @@
     function _irExportLogo() {
         if (!_irExportLogoImg) {
             _irExportLogoImg = new Image();
-            _irExportLogoImg.src = 'tc-atlas-favicon-64.png';
+            _irExportLogoImg.src = 'tc-atlas-favicon-64.png?v=20261009p1a';
         }
         return (_irExportLogoImg.complete && _irExportLogoImg.naturalWidth)
             ? _irExportLogoImg : null;
