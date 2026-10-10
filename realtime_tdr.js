@@ -4411,7 +4411,7 @@
         var activeColorscale = _rtColorscale(varInfo);
         var activeVmin = _rtGetVmin(), activeVmax = _rtGetVmax();
         var frameTag = json.storm_relative ? ' <span style="color:#2563eb;">\u00b7 storm-relative</span>' : '';
-        var title = TDRView.planTitle((meta.storm_name || 'Real-Time TDR') + ' | ' + (meta.datetime || ''),
+        var title = TDRView.planTitle((meta.storm_name || 'TDR analysis') + ' | ' + (meta.datetime || ''),
                                       varInfo, json.actual_level_km, json, frameTag);
         var fig = TDRView.planFigure({
             z: zData, x: x, y: y, varInfo: varInfo, colorscale: activeColorscale, zmin: activeVmin, zmax: activeVmax,
@@ -4932,7 +4932,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             },
             endpoints: { x0: a.x, y0: a.y, x1: b.x, y1: b.y },
             locator: p ? { z: p.z, x: p.x, y: p.y, colorscale: p.colorscale, zmin: p.vmin, zmax: p.vmax } : null,
-            title: (meta.storm_name || 'Real-Time TDR') + (meta.datetime ? ' | ' + meta.datetime : '') + ' \u2014 TDR cross-section (' +
+            title: (meta.storm_name || 'TDR analysis') + (meta.datetime ? ' | ' + meta.datetime : '') + ' \u2014 TDR cross-section (' +
                    Math.round(Math.hypot(b.x - a.x, b.y - a.y)) + ' km)',
             plot: function (id, t, l, c) { Plotly.newPlot(id, t, l, c); }
         });
@@ -5490,7 +5490,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var fig = TDRView.sectionFigure({
             z: json.azimuthal_mean, x: json.radius_km, y: json.height_km, varInfo: vi,
             colorscale: _rtColorscale(vi), zmin: _rtGetVmin(), zmax: _rtGetVmax(),
-            title: (meta.storm_name || 'Real-Time TDR') + ' | ' + (meta.datetime || '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '%)',
+            title: (meta.storm_name || 'TDR analysis') + ' | ' + (meta.datetime || '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '%)',
             size: 'dual', margin: { l: 48, r: 14, t: json.overlay ? 78 : 68, b: 44 }, rmwX: _rtRmwKm(json),
             windMarker: _rtWindMarker(),
             overlayTraces: TDRView.contourTraces(json.overlay, json.overlay && json.overlay.azimuthal_mean, json.radius_km, json.height_km, intInput ? parseFloat(intInput.value) : NaN)
@@ -5555,7 +5555,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var fig = TDRView.sectionFigure({
             z: json.azimuthal_mean, x: json.radius_km, y: json.height_km, varInfo: vi,
             colorscale: _rtColorscale(vi), zmin: _rtGetVmin(), zmax: _rtGetVmax(),
-            title: (meta.storm_name || 'Real-Time TDR') + ' | ' + (meta.datetime || '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '% coverage)' + TDRView.sectionTitleOverlay(json),
+            title: (meta.storm_name || 'TDR analysis') + ' | ' + (meta.datetime || '') + '<br>Azimuthal Mean: ' + vi.display_name + ' (\u2265' + covPct + '% coverage)' + TDRView.sectionTitleOverlay(json),
             size: 'small', rmwX: _rtRmwKm(json),
             margin: { l: 45, r: 12, t: json.overlay ? 78 : 64, b: 38 },
             windMarker: _rtWindMarker(),

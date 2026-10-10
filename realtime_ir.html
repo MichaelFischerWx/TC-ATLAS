@@ -83,7 +83,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261009p2b">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261009p2c">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -363,13 +363,15 @@
                         <span id="ir-frame-time" class="ir-frame-time-label"></span>
                         <span id="ir-satellite-label" class="ir-sat-label"></span>
                     </div>
-                    <!-- Product toggle (IR / Visible / Water Vapor / Combo) -->
+                    <!-- Product toggle: same labels and order as the Global Map's switch
+                         (IR · Vis · WV · Combo), then Vigor, which only exists here
+                         because it is storm-relative. -->
                     <div id="ir-product-toggle" class="ir-product-toggle">
                         <button id="ir-product-eir" class="ir-product-btn ir-product-active" title="Clean infrared (Band 13, ~10.3 µm)">IR</button>
-                        <button id="ir-product-vis" class="ir-product-btn" title="Red visible (Band 2 / Band 3 — daytime only)">Visible</button>
+                        <button id="ir-product-vis" class="ir-product-btn" title="Visible (Band 2 / Band 3) — daytime only">Vis</button>
                         <button id="ir-product-wv" class="ir-product-btn" title="Mid-level water vapor (Band 8, ~6.2 µm)">WV</button>
-                        <button id="ir-product-vigor" class="ir-product-btn" title="IR vigor — brightness temperature minus the coldest 4-hour-mean temperature within 200 km, following the storm. Near or below zero marks cloud tops as cold as the coldest the storm has recently sustained.">Vigor</button>
                         <button id="ir-product-combo" class="ir-product-btn" title="Sandwich composite — visible cloud texture with IR-colored cold tops (night side falls back to IR)">Combo</button>
+                        <button id="ir-product-vigor" class="ir-product-btn" title="IR vigor — brightness temperature minus the coldest 4-hour-mean temperature within 200 km, following the storm. Near or below zero marks cloud tops as cold as the coldest the storm has recently sustained.">Vigor</button>
                     </div>
                     <!-- Env layers control — drape GFS analyses (shear, RH, SST,
                          heights, vorticity, winds) over the zoomed storm view.
@@ -2198,7 +2200,7 @@
 
 
     <!-- ── Recon View (Missions · TDR · Flight-Level · VDM) ───── -->
-    <section id="recon-main" class="recon-main" style="display:none;" role="main" aria-label="Real-Time Reconnaissance">
+    <section id="recon-main" class="recon-main" style="display:none;" role="main" aria-label="Recon">
         <!-- Inner sub-tab strip -->
         <div class="recon-subbar">
             <button class="recon-sub-tab" data-sub="missions" onclick="window.switchReconSub('missions')">Missions</button>
@@ -2268,8 +2270,8 @@
                             </span>
                             <span class="recon-hdob-satgroup" title="TC-ATLAS global satellite mosaic — the same fresh imagery as the Global Map (IR / Water Vapor / Visible)">
                                 <button class="ir-product-btn ir-product-active" data-rprod="ir" onclick="window._reconHdobSetSat('ir')" title="Clean infrared (Band 13, ~10.3 µm) — day &amp; night">IR</button>
+                                <button class="ir-product-btn" data-rprod="vis" onclick="window._reconHdobSetSat('vis')" title="Visible reflectance — daytime only">Vis</button>
                                 <button class="ir-product-btn" data-rprod="wv" onclick="window._reconHdobSetSat('wv')" title="Mid-level water vapor (~6.9 µm) — day &amp; night">WV</button>
-                                <button class="ir-product-btn" data-rprod="vis" onclick="window._reconHdobSetSat('vis')" title="Visible reflectance — daytime only">Visible</button>
                                 <button class="ir-product-btn" data-rprod="off" onclick="window._reconHdobSetSat('off')" title="Hide satellite (plain basemap)">Off</button>
                             </span>
                             <span id="recon-hdob-layers" class="recon-hdob-layers" title="Show or hide each map symbol"></span>
@@ -2323,8 +2325,8 @@
         <div class="recon-sub-panel" data-sub="tdr" style="display:none;">
             <!-- BEGIN moved Real-Time TDR content -->
         <div class="rt-header">
-            <h2 class="rt-header-title">Real-Time TDR Analysis</h2>
-            <p class="rt-header-desc">Browse and visualize real-time Tail Doppler Radar analyses from NOAA P-3 reconnaissance missions.</p>
+            <h2 class="rt-header-title">Tail Doppler Radar</h2>
+            <p class="rt-header-desc">Real-time tail Doppler radar analyses from NOAA P-3 reconnaissance missions.</p>
         </div>
 
         <!-- Mission / File selection toolbar -->
@@ -2763,7 +2765,7 @@
     <script defer src="tc_mw_layer.js?v=20260920a"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261007wr"></script>
-    <script defer src="realtime_ir.js?v=20261009p2b"></script>
+    <script defer src="realtime_ir.js?v=20261009p2c"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
@@ -2868,7 +2870,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261009p2a';
+        var _LAZY_ASSET_V = '?v=20261009p2b';
         var _lazyViewMods = {
             recon:       { js: ['tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

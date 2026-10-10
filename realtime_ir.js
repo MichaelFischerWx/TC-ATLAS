@@ -6536,9 +6536,12 @@
                 var seg = L.DomUtil.create('div', 'ir-mode-segment', wrap);
                 seg.id = 'ir-mode-segment';
                 seg.innerHTML =
-                      '<button type="button" class="ir-mode-btn ir-mode-active" data-mode="ir">IR</button>'
-                    + '<button type="button" class="ir-mode-btn"               data-mode="vis">Vis</button>'
-                    + '<button type="button" class="ir-mode-btn"               data-mode="wv">WV</button>'
+                      '<button type="button" class="ir-mode-btn ir-mode-active" data-mode="ir"'
+                    + ' title="Clean infrared (Band 13, ~10.3 µm)">IR</button>'
+                    + '<button type="button" class="ir-mode-btn"               data-mode="vis"'
+                    + ' title="Visible — daytime only">Vis</button>'
+                    + '<button type="button" class="ir-mode-btn"               data-mode="wv"'
+                    + ' title="Mid-level water vapor (~6.2 µm)">WV</button>'
                     + '<button type="button" class="ir-mode-btn"               data-mode="combo"'
                     + ' title="Sandwich composite — visible cloud texture with IR-colored cold tops (night side falls back to IR)">Combo</button>'
                     + '<button type="button" class="ir-mode-btn"               data-mode="off"'
@@ -12963,7 +12966,7 @@
         var stateValid  = isVis ? visValidFrames : wvValidFrames;
         var blobBucket  = isVis ? _activeVisBlobUrls : _activeWvBlobUrls;
         var btnId       = isVis ? 'ir-product-vis' : 'ir-product-wv';
-        var label       = isVis ? 'Visible' : 'WV';
+        var label       = isVis ? 'Vis' : 'WV';
         var fullLabel;
         if (band === 8)      fullLabel = 'Water Vapor';
         else if (band === 7) fullLabel = 'Visible (SWIR night)';
@@ -13041,7 +13044,7 @@
     function _ingestBandBundle(buf, band, productKey) {
         var isVis = (productKey === 'vis');  // covers band 2 and band 7
         var blobBucket = isVis ? _activeVisBlobUrls : _activeWvBlobUrls;
-        var label      = isVis ? 'Visible' : 'WV';
+        var label      = isVis ? 'Vis' : 'WV';
         var btnId      = isVis ? 'ir-product-vis' : 'ir-product-wv';
         var fullLabel;
         if (band === 8)      fullLabel = 'Water Vapor';
@@ -13295,7 +13298,7 @@
             if (stormIdAtFetch !== currentStormId || productMode !== 'vis') return;
             if (!bufs[0] && !bufs[1]) {
                 console.warn('[RT Monitor] Vis + SWIR bundles both unavailable; back to IR');
-                if (btn) { btn.classList.remove('ir-loading'); btn.textContent = 'Visible'; }
+                if (btn) { btn.classList.remove('ir-loading'); btn.textContent = 'Vis'; }
                 showLoadingProgress(false);
                 _rtToast('Visible imagery unavailable right now — showing IR instead');
                 setProductMode('eir');
@@ -13419,7 +13422,7 @@
             visValidFrames = validIdx; visFramesReady = true; visFramesLoaded = merged.length;
             showLoadingProgress(false);
             var fbtn = document.getElementById('ir-product-vis');
-            if (fbtn) { fbtn.classList.remove('ir-loading'); fbtn.textContent = 'Visible'; }
+            if (fbtn) { fbtn.classList.remove('ir-loading'); fbtn.textContent = 'Vis'; }
             var playBtn = document.getElementById('ir-anim-play');
             if (playBtn) playBtn.disabled = (validIdx.length === 0);
             var slider = document.getElementById('ir-anim-slider');
