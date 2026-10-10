@@ -5567,13 +5567,17 @@ function renderQuadrantMeansInto(targetId, json, fullsize) {
 // ── Featured Cases (onboarding strip shown on first load) ────
 // Curated peak-intensity cases looked up by name+year (case_index
 // derived dynamically so this survives metadata regeneration).
+// peak_kt is the storm's best-track (NHC TCR) peak and drives the
+// badge, so it agrees with the blurb; the footer names the intensity of
+// the radar analysis the card opens, which can be lower (Michael's
+// strongest analysis is ~8 h before its Cat 5 landfall).
 var FEATURED_CASES = [
-    { storm: 'MILTON',  year: 2024, blurb: 'Rapid intensification to Cat 5 in the Gulf' },
-    { storm: 'HELENE',  year: 2024, blurb: 'Big Bend landfall, destructive inland flood' },
-    { storm: 'IAN',     year: 2022, blurb: 'SW Florida Cat 5 landfall' },
-    { storm: 'DORIAN',  year: 2019, blurb: 'Stationary Cat 5 over Abaco' },
-    { storm: 'MICHAEL', year: 2018, blurb: 'Panhandle Cat 5 landfall' },
-    { storm: 'IRMA',    year: 2017, blurb: 'Peak-intensity Cat 5 (185 mph) approach to Leewards' }
+    { storm: 'MILTON',  year: 2024, peak_kt: 155, blurb: 'Rapid intensification to Cat 5 in the Gulf' },
+    { storm: 'HELENE',  year: 2024, peak_kt: 120, blurb: 'Big Bend landfall, destructive inland flooding' },
+    { storm: 'IAN',     year: 2022, peak_kt: 140, blurb: 'Cat 5 peak, then a Cat 4 (130 kt) landfall in SW Florida' },
+    { storm: 'DORIAN',  year: 2019, peak_kt: 160, blurb: 'Cat 5 landfall in the Abacos, then a near-stall over Grand Bahama' },
+    { storm: 'MICHAEL', year: 2018, peak_kt: 140, blurb: 'Cat 5 landfall on the Florida Panhandle' },
+    { storm: 'IRMA',    year: 2017, peak_kt: 155, blurb: 'Cat 5 at 155 kt (180 mph) approaching the Leeward Islands' }
 ];
 // Read persisted dismissal — once a user has clicked any featured case
 // (or otherwise engaged with the case browser), the onboarding strip
@@ -5618,23 +5622,27 @@ function renderFeaturedCases() {
         if (idx == null) continue;
         var c = _getActiveData().cases.find(function(x){ return x.case_index === idx; });
         if (!c) continue;
-        var cat = getIntensityCategory(c.vmax_kt);
-        var color = getIntensityColor(c.vmax_kt);
+        var peakKt = f.peak_kt != null ? f.peak_kt : c.vmax_kt;
+        var cat = getIntensityCategory(peakKt);
+        var color = getIntensityColor(peakKt);
         var vmaxStr = c.vmax_kt != null ? Math.round(c.vmax_kt) + ' kt' : '—';
         var stormTitle = f.storm.charAt(0) + f.storm.slice(1).toLowerCase();
         var card = document.createElement('button');
         card.type = 'button';
         card.className = 'featured-case-card';
         card.setAttribute('data-case-index', idx);
-        card.setAttribute('aria-label', 'Open ' + stormTitle + ' ' + f.year + ' radar case, peak ' + vmaxStr);
+        card.setAttribute('aria-label', 'Open ' + stormTitle + ' ' + f.year + ': storm peak ' + cat +
+            ' (' + Math.round(peakKt) + ' kt); radar analysis at ' + vmaxStr);
         card.innerHTML =
             '<div class="featured-case-top">' +
                 '<span class="featured-case-name">' + stormTitle + '</span>' +
-                '<span class="featured-case-cat" style="background:' + color + ';">' + cat + '</span>' +
+                '<span class="featured-case-cat" style="background:' + color + ';" title="Storm peak: ' +
+                    Math.round(peakKt) + ' kt (best track)">' + cat + '</span>' +
             '</div>' +
             '<div class="featured-case-desc">' + f.blurb + '</div>' +
             '<div class="featured-case-footer">' +
-                '<span>' + f.year + ' · ' + vmaxStr + '</span>' +
+                '<span title="Intensity at the time of the strongest radar analysis, which this card opens">' +
+                    f.year + ' · analysis at ' + vmaxStr + '</span>' +
                 '<span class="featured-case-go">Explore →</span>' +
             '</div>';
         card.addEventListener('click', (function(caseIdx){
