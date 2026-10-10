@@ -3,12 +3,6 @@
    Uses CSS variables from tc_radar_styles.css
    ══════════════════════════════════════════════════════════════ */
 
-/* ── Active nav highlight ─────────────────────────────────── */
-.ga-nav-active {
-    color: var(--um-green) !important;
-    background: rgba(244, 115, 33, 0.08) !important;
-}
-
 /* ── Tab bar ──────────────────────────────────────────────── */
 .ga-tabs {
     display: flex;
