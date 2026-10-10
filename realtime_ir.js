@@ -24495,14 +24495,17 @@
         }
         toast.addEventListener('click', dismiss);
         container.appendChild(toast);
-        // Drop below the GIBS feed-staleness banner when it's showing so
-        // the two top-center notices don't stack on top of each other.
-        var banner = document.getElementById('ir-feed-banner');
-        if (banner && getComputedStyle(banner).display !== 'none') {
-            var bRect = banner.getBoundingClientRect();
+        // CSS parks it bottom-center above the animation dock; when the dock
+        // is taller than usual (extra rows, short window) lift it clear.
+        var dock = document.getElementById('ir-global-anim-panel');
+        if (dock && dock.offsetParent !== null) {
+            var dRect = dock.getBoundingClientRect();
             var cRect = container.getBoundingClientRect();
-            var topPx = Math.max(14, Math.round(bRect.bottom - cRect.top) + 16);
-            toast.style.top = topPx + 'px';
+            var lift = Math.round(cRect.bottom - dRect.top) + 12;
+            var cssBottom = parseFloat(getComputedStyle(toast).bottom) || 0;
+            if (dRect.height && lift > cssBottom && lift < cRect.height * 0.6) {
+                toast.style.bottom = lift + 'px';
+            }
         }
         // Auto-dismiss after long enough to read, short enough to stay
         // unobtrusive. Tab-hidden re-polls don't reach here (the repoll

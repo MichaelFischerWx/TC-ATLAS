@@ -4541,10 +4541,13 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 }
 
 /* Transient toast that announces newly-populated cyclogenesis
-   disturbances on the global map (see _genesisAnnounceArrival). */
+   disturbances on the global map (see _genesisAnnounceArrival). It sits
+   bottom-center just above the animation dock: at the top of the map it
+   covered the IR/Vis/WV/Combo/Off switcher for its whole 8 s. JS lifts it
+   further when the dock is taller than usual. */
 .rt-gen-toast {
     position: absolute;
-    top: 14px;
+    bottom: 132px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 1200;
@@ -4562,13 +4565,9 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     font-size: 12.5px;
     line-height: 1.32;
     cursor: pointer;
-    animation: rt-gen-toast-in 0.32s ease both;
+    animation: rt-gen-toast-up 0.32s ease both;
 }
-@keyframes rt-gen-toast-in {
-    0%   { opacity: 0; transform: translate(-50%, -10px); }
-    100% { opacity: 1; transform: translate(-50%, 0); }
-}
-.rt-gen-toast--out { opacity: 0; transform: translate(-50%, -10px); transition: opacity 0.3s ease, transform 0.3s ease; }
+.rt-gen-toast--out { opacity: 0; transform: translate(-50%, 10px); transition: opacity 0.3s ease, transform 0.3s ease; }
 .rt-gen-toast-dot {
     flex: 0 0 auto;
     width: 9px; height: 9px;
@@ -4590,17 +4589,11 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     opacity: 0.8;
 }
 .rt-gen-toast-close:hover { color: var(--text); opacity: 1; }
-/* Phones: the top of the map is the control bar, so the toast rises from
-   just above the bottom dock instead of covering IR/Vis/WV + Layers. */
 @media (max-width: 768px) {
     .rt-gen-toast {
-        top: auto !important;
-        bottom: 132px;
         font-size: 12px;
         padding: 9px 11px;
-        animation-name: rt-gen-toast-up;
     }
-    .rt-gen-toast--out { transform: translate(-50%, 10px); }
 }
 @keyframes rt-gen-toast-up {
     0%   { opacity: 0; transform: translate(-50%, 10px); }
