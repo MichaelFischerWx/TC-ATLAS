@@ -253,9 +253,12 @@ body, .topbar, .leaflet-container, .map-storm-card,
 /* Global reset. From 2026-05-07 to 2026-10-09 the block above had lost its
    `:root {` opener; the stray `}` made browsers drop it AND the old
    `* { margin: 0; padding: 0; box-sizing: border-box; }` reset that followed,
-   so five months of layout work happened without that rule. It comes back in
-   two steps: the page margin and border-box sizing first; the blanket
-   margin/padding zeroing only after a page-by-page visual check. */
+   so five months of layout work happened without that rule. Only the page
+   margin and border-box sizing came back. A page-by-page check (2026-10-09)
+   found the blanket margin/padding zeroing would only re-space layouts that
+   now rely on browser defaults (the top-bar nav list, Explorer's About and
+   Database headings and lists, the Global Archive filter labels) without
+   fixing anything, so zero margins per component where one needs it. */
 html, body { margin: 0; }
 *, *::before, *::after { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
