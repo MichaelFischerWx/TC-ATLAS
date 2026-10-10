@@ -61,11 +61,10 @@
     <script src="theme.js?v=20261009p1a"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <!-- The hero activity strip fetches active-storms as soon as its inline
-         script runs — warm the API connection from byte 0. -->
+    <!-- The storm tiles fetch active-storms (and their IR snapshots) as soon
+         as the inline script runs — warm the API connection from byte 0. -->
     <link rel="preconnect" href="https://api.tcatlas.org">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="site_pages.css?v=20261010m1">
 
     <style>
         :root {
@@ -81,6 +80,8 @@
             --um-orange: #F47321;           /* UM Pantone 1665 — live / active accent */
             --um-orange-deep: #d65f12;      /* hover / pressed */
             --um-orange-tint: rgba(244, 115, 33, 0.10);
+            --cta-bg: var(--um-green);
+            --cta-bg-hover: var(--um-green-deep);
 
             --blue: var(--um-green);        /* primary accent → UM green */
             --blue-light: #2e7a5b;          /* lighter green for hover */
@@ -120,9 +121,11 @@
             --um-green: #4a9b6e;
             --um-green-deep: #2e7a5b;
             --um-green-tint: rgba(74, 155, 110, 0.16);
+            --cta-bg: #2e7a5b;              /* white text stays >4.5:1 */
+            --cta-bg-hover: #3a8a66;
         }
         /* Smooth toggle */
-        body, .topbar, .platform-card, .activity-strip, .source-card {
+        body, .topbar {
             transition: background-color 0.18s ease, color 0.18s ease,
                         border-color 0.18s ease;
         }
@@ -199,7 +202,7 @@
             align-items: center;
             justify-content: flex-start;
             text-align: center;
-            padding: 3.25rem 24px 3rem;
+            padding: 3.25rem 24px 2.25rem;
             position: relative;
             overflow: hidden;
         }
@@ -236,139 +239,9 @@
             font-size: 1.05rem;
             color: var(--text-dim);
             max-width: 700px;
-            margin: 0 auto 3rem auto;
+            margin: 0 auto;
             line-height: 1.8;
         }
-
-        /* ── Platform cards ──────────────────────────────── */
-        .platform-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 1.5rem;
-            max-width: 1200px;
-            width: 100%;
-            margin: 0 auto;
-            position: relative;
-            z-index: 1;
-        }
-        /* Bottom row: 3 cards (Global Archive, Composites, TC Climatology),
-           each sized 1/3 of the row to match the top-row card width. Wraps
-           to two rows at 1100px and stacks vertically at 520px. */
-        .platform-grid-bottom {
-            grid-column: 1 / -1;          /* span full width */
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 1.5rem;
-        }
-        .platform-grid-bottom .platform-card {
-            flex: 0 1 calc((100% - 3rem) / 3);   /* 3 cards × 1/3, accounting for 2 gaps */
-        }
-        .platform-card {
-            background: var(--surface-raised);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-lg);
-            padding: 2rem 1.5rem 1.75rem 1.5rem;
-            text-decoration: none;
-            color: var(--text);
-            transition: transform 0.3s, border-color 0.3s, box-shadow 0.3s;
-            display: flex;
-            flex-direction: column;
-            position: relative;
-            overflow: hidden;
-        }
-        .platform-card:hover {
-            transform: translateY(-2px);
-            border-color: var(--border-light);
-            box-shadow: 0 4px 14px rgba(15,22,35,0.06);
-        }
-        .platform-card::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 2px;
-            background: var(--um-orange);
-            opacity: 0.85;
-        }
-        .card-radar::after,
-        .card-realtime::after,
-        .card-ir::after,
-        .card-global::after,
-        .card-composites::after,
-        .card-climo::after { background: var(--um-orange); opacity: 0.85; }
-
-        .card-icon {
-            font-size: 2.25rem;
-            margin-bottom: 1rem;
-            line-height: 1;
-        }
-        .card-icon svg {
-            width: 2.25rem;
-            height: 2.25rem;
-            stroke-width: 1.5;
-            color: var(--blue);
-        }
-        .card-radar .card-icon svg,
-        .card-realtime .card-icon svg,
-        .card-ir .card-icon svg,
-        .card-global .card-icon svg,
-        .card-composites .card-icon svg,
-        .card-climo .card-icon svg      { color: var(--blue); }
-        .card-title {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: var(--text);
-            margin-bottom: 0.5rem;
-        }
-        .card-desc {
-            font-size: 0.82rem;
-            color: var(--slate);
-            line-height: 1.65;
-            flex: 1;
-        }
-        .card-stats {
-            display: flex;
-            gap: 1.5rem;
-            margin-top: 1.5rem;
-            padding-top: 1rem;
-            border-top: 1px solid var(--border);
-        }
-        .card-stat-val {
-            font-size: 0.95rem;
-            font-weight: 700;
-            color: var(--text);
-            font-variant-numeric: tabular-nums;
-            letter-spacing: -0.01em;
-        }
-        .card-stat-label {
-            font-size: 0.65rem;
-            color: var(--text-dim);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-        .card-arrow {
-            position: absolute;
-            bottom: 2rem;
-            right: 2rem;
-            font-size: 1.25rem;
-            color: var(--blue);
-            opacity: 0;
-            transform: translateX(-8px);
-            transition: opacity 0.3s, transform 0.3s;
-        }
-        .platform-card:hover .card-arrow {
-            opacity: 1;
-            transform: translateX(0);
-        }
-
-        /* ── Content sections ────────────────────────────── */
-        .content-section { max-width: 1100px; margin: 0 auto; padding: 5rem 24px; }
-        .section-bg { background: var(--surface); }
-        .section-title { font-size: 1.8rem; font-weight: 700; color: var(--text); margin-bottom: 1.5rem; text-align: center; letter-spacing: -0.02em; }
-        .section-title .accent { color: var(--blue); }
-        .section-desc { text-align: center; max-width: 700px; margin: 0 auto 2.5rem auto; font-size: 1rem; color: var(--slate); line-height: 1.8; }
 
         /* ── Footer ──────────────────────────────────────── */
         footer { text-align: center; padding: 2rem; font-size: 0.75rem; color: var(--text-dim); border-top: 1px solid var(--border); }
@@ -378,138 +251,82 @@
             footer { padding: 1.5rem 16px; font-size: 0.82rem; }
         }
 
-        /* ── Live activity strip ─────────────────────────── */
-        .activity-strip {
-            display: inline-flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 10px 18px;
-            margin: 0 auto 2rem auto;
-            padding: 10px 18px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 999px;
-            font-size: 0.78rem;
-            color: var(--text-dim);
-            position: relative;
-            z-index: 1;
-        }
-        .activity-stat { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-        .activity-stat .dot {
-            width: 6px; height: 6px; border-radius: 50%;
-            background: var(--um-orange);
-            box-shadow: 0 0 0 3px var(--um-orange-tint);
-        }
-        .activity-stat.is-stale .dot { background: var(--text-dim); box-shadow: none; }
-        .activity-stat-val { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-        .activity-stat-sep { color: var(--border-light); }
-
-        /* Active state — the strip visibly "lights up" when storms are live */
-        .activity-strip.has-active { border-color: rgba(244, 115, 33, 0.35); background: var(--um-orange-tint); }
-        .activity-strip.has-active #activity-active .activity-stat-val { color: var(--um-orange-deep); }
-        .activity-strip.has-active #activity-active .dot { animation: activityPulse 1.8s ease-out infinite; }
-        @keyframes activityPulse {
+        /* ── Active storms ─────────────────────────────── */
+        /* Each tile is the same IR snapshot the monitor's Storm Satellite
+           gallery shows (one CDN-cached image per storm), loaded lazily
+           after the text so nothing else on the page waits for it. */
+        .live { max-width: 1200px; margin: 0 auto; padding: 0 24px 3rem; }
+        .live-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; margin-bottom: 1rem; }
+        .live-title { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
+        .live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--um-orange); box-shadow: 0 0 0 4px var(--um-orange-tint); animation: livePulse 1.8s ease-out infinite; }
+        .live-meta { margin: 4px 0 0; font-size: 0.86rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+        .live-cta { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 16px; border-radius: 8px; background: var(--cta-bg); color: #fff; font-size: 0.9rem; font-weight: 600; text-decoration: none; white-space: nowrap; transition: background 0.15s; }
+        .live-cta:hover { background: var(--cta-bg-hover); }
+        .live.is-quiet .live-dot { background: var(--text-dim); box-shadow: none; animation: none; }
+        .live-cta-bottom { display: none; }
+        @keyframes livePulse {
             0%   { box-shadow: 0 0 0 0 rgba(244, 115, 33, 0.5); }
-            70%  { box-shadow: 0 0 0 6px rgba(244, 115, 33, 0); }
+            70%  { box-shadow: 0 0 0 7px rgba(244, 115, 33, 0); }
             100% { box-shadow: 0 0 0 0 rgba(244, 115, 33, 0); }
         }
+        .storm-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 14px; }
+        .storm-tile { position: relative; display: flex; flex-direction: column; min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); color: var(--text); text-decoration: none; transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s; }
+        .storm-tile:hover { transform: translateY(-2px); border-color: var(--border-light); box-shadow: 0 8px 22px rgba(0, 0, 0, 0.12); }
+        .storm-tile-img { position: relative; aspect-ratio: 1 / 1; overflow: hidden; background: #0a0e14; }
+        /* The snapshot spans ±10° around the center; show the inner ±7.4°. */
+        .storm-tile-img img { display: block; width: 100%; height: 100%; object-fit: cover; transform: scale(1.35); opacity: 0; transition: opacity 0.3s; }
+        .storm-tile-img img.is-loaded { opacity: 1; }
+        .storm-tile-cat { position: absolute; top: 8px; left: 8px; display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 7px; border-radius: 999px; background: rgba(10, 14, 20, 0.76); color: #f1f5f9; font-size: 0.74rem; font-weight: 700; letter-spacing: 0.02em; }
+        .storm-tile-cat i { width: 8px; height: 8px; border-radius: 50%; background: var(--cat, #64748b); }
+        .storm-tile-recon { position: absolute; top: 8px; right: 8px; padding: 3px 7px; border-radius: 999px; background: rgba(10, 14, 20, 0.76); color: #fdba74; font-size: 0.66rem; font-weight: 700; letter-spacing: 0.06em; }
+        .storm-tile-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 10px 12px 12px; }
+        .storm-tile-name { overflow: hidden; font-size: 1rem; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
+        .storm-tile-int { font-size: 0.86rem; font-variant-numeric: tabular-nums; }
+        .storm-tile-meta { overflow: hidden; font-size: 0.76rem; color: var(--text-dim); white-space: nowrap; text-overflow: ellipsis; }
+        /* Same boxes as a real tile (square image + three text lines), so the
+           grid keeps its height when the storms arrive. */
+        .storm-tile.is-skeleton .storm-tile-img { background: var(--surface); }
+        .storm-tile.is-skeleton .sk { display: inline-block; height: 0.7em; border-radius: 4px; background: var(--border-light); vertical-align: middle; animation: skPulse 1.4s ease-in-out infinite alternate; }
+        @keyframes skPulse { from { opacity: 1; } to { opacity: 0.45; } }
+        .storm-tile.is-more { align-items: center; justify-content: center; padding: 16px; color: var(--um-green); font-weight: 600; text-align: center; }
+        .live-empty { grid-column: 1 / -1; padding: 28px 20px; border: 1px dashed var(--border-light); border-radius: 12px; color: var(--text-dim); text-align: center; }
+        .live-empty a { color: var(--um-green); font-weight: 600; text-decoration: none; }
+        .live-empty a:hover { text-decoration: underline; }
+        .storm-tile-img.no-img::after { content: 'No satellite image yet'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 12px; color: #8a93a3; font-size: 0.78rem; text-align: center; }
 
-        /* ── Active-storm quick-link chips ───────────────── */
-        .active-storms {
-            display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
-            gap: 8px; margin: -0.75rem auto 2rem; max-width: 700px;
-        }
-        .active-storms[hidden] { display: none; }
-        .active-storms-label {
-            font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em;
-            font-weight: 700; color: var(--um-orange-deep);
-        }
-        .storm-chip {
-            display: inline-flex; align-items: center; gap: 7px;
-            padding: 5px 11px 5px 9px; border-radius: 999px;
-            background: var(--um-orange-tint); border: 1px solid rgba(244, 115, 33, 0.32);
-            color: var(--text); font-size: 0.8rem; font-weight: 600;
-            text-decoration: none; transition: all 0.18s ease;
-        }
-        .storm-chip:hover { background: rgba(244, 115, 33, 0.18); border-color: var(--um-orange); transform: translateY(-1px); }
-        .storm-chip .chip-dot {
-            width: 7px; height: 7px; border-radius: 50%;
-            background: var(--um-orange); box-shadow: 0 0 0 3px var(--um-orange-tint); flex: none;
-        }
-        .storm-chip .chip-cat {
-            font-size: 0.64rem; font-weight: 700; letter-spacing: 0.03em;
-            text-transform: uppercase; color: var(--um-orange-deep);
-        }
-        .storm-chip .chip-arrow { color: var(--um-orange); font-weight: 700; margin-left: 1px; }
+        /* ── Explore + examples ───────────────────────── */
+        .tools, .examples { max-width: 1200px; margin: 0 auto; padding: 0 24px 3.5rem; }
+        .section-h { margin: 0 0 1rem; font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
+        .tool-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+        .tool { display: flex; align-items: flex-start; gap: 14px; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); color: var(--text); text-decoration: none; transition: border-color 0.15s, transform 0.15s; }
+        .tool:hover { transform: translateY(-1px); border-color: var(--um-green); }
+        .tool-icon { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 9px; background: var(--um-green-tint); color: var(--um-green); }
+        .tool-icon svg { width: 20px; height: 20px; stroke-width: 1.8; }
+        .tool-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+        .tool-title { font-size: 0.98rem; font-weight: 600; }
+        .tool-desc { font-size: 0.86rem; line-height: 1.5; color: var(--text-dim); }
+        .example-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+        .example { display: flex; flex-direction: column; min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); color: var(--text); text-decoration: none; transition: transform 0.15s, border-color 0.15s; }
+        .example:hover { transform: translateY(-2px); border-color: var(--border-light); }
+        .example img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover; background: #0a0e14; }
+        .example-body { display: flex; flex-direction: column; gap: 3px; padding: 12px 14px 14px; }
+        .example-title { font-size: 0.98rem; font-weight: 600; }
+        .example-desc { font-size: 0.84rem; color: var(--text-dim); }
 
-        /* ── Start Here: worked-example cards ────────────── */
-        .start-here-section {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 2.5rem 24px 4rem;
-            position: relative;
-            z-index: 1;
-        }
-        .start-here-title {
-            text-align: center;
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: var(--text);
-            margin-bottom: 2rem;
-            letter-spacing: -0.01em;
-        }
-        .start-here-title .accent { color: var(--cyan); }
-        .start-here-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 1rem;
-        }
-        .start-card {
-            display: flex;
-            gap: 14px;
-            align-items: flex-start;
-            padding: 1.1rem 1.25rem;
-            background: var(--navy-mid);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            color: var(--text);
-            text-decoration: none;
-            transition: border-color 0.2s, background 0.2s, transform 0.2s;
-        }
-        .start-card:hover {
-            border-color: rgba(46,125,255,0.55);
-            background: rgba(46,125,255,0.08);
-            transform: translateY(-2px);
-        }
-        .start-card-icon {
-            flex-shrink: 0;
-            width: 36px; height: 36px;
-            display: flex; align-items: center; justify-content: center;
-            background: rgba(46,125,255,0.14);
-            border-radius: 8px;
-            color: var(--cyan);
-        }
-        .start-card-icon svg { width: 20px; height: 20px; stroke-width: 1.8; }
-        .start-card-body { min-width: 0; flex: 1; }
-        .start-card-title {
-            font-size: 0.95rem;
-            font-weight: 700;
-            color: var(--text);
-            margin-bottom: 2px;
-        }
-        .start-card-desc {
-            font-size: 0.78rem;
-            color: var(--slate);
-            line-height: 1.5;
-        }
-        .start-card-arrow { color: var(--blue-light); font-size: 1.1rem; flex-shrink: 0; align-self: center; opacity: 0.6; transition: opacity 0.2s, transform 0.2s; }
-        .start-card:hover .start-card-arrow { opacity: 1; transform: translateX(2px); }
+        /* ── Recent updates as headlines ──────────────── */
+        .updates { max-width: 1200px; margin: 0 auto; padding: 0 24px 4rem; }
+        .updates-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+        .updates-head a { color: var(--um-green); font-size: 0.9rem; font-weight: 600; text-decoration: none; white-space: nowrap; }
+        .updates-head a:hover { text-decoration: underline; }
+        .update-lines { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--border); }
+        .update-lines a { display: flex; align-items: baseline; gap: 20px; padding: 12px 2px; border-bottom: 1px solid var(--border); color: var(--text); text-decoration: none; }
+        .update-lines a:hover .update-title { color: var(--um-green); }
+        .update-lines time { flex: none; width: 88px; font-size: 0.82rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+        .update-title { min-width: 0; font-weight: 500; }
 
         /* ── Responsive ──────────────────────────────────── */
         @media (max-width: 1100px) {
-            .platform-grid { grid-template-columns: repeat(2, 1fr); }
-            .platform-grid-bottom .platform-card { flex: 0 1 calc((100% - 1.5rem) / 2); }
-            .start-here-grid { grid-template-columns: 1fr; }
+            .tool-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
         @media (max-width: 768px) {
             .hero-lockup { gap: 0.7rem; }
@@ -517,8 +334,6 @@
             .hero { padding: 2.25rem 16px 2rem; }
             .hero-desc { font-size: 0.95rem; }
             .topbar-inner { padding: 0 16px; gap: 8px; }
-            .content-section { padding: 3rem 16px; }
-            .section-title { font-size: 1.4rem; }
             .nav-full { display: none !important; }
             .nav-short { display: inline !important; }
             .nav-hamburger { display: block; }
@@ -537,13 +352,12 @@
                 justify-content: center;
                 z-index: 999;
             }
-            .activity-strip { font-size: 0.72rem; padding: 8px 14px; border-radius: 12px; }
-            .start-here-section { padding: 0 16px 3rem; }
-        }
-        @media (max-width: 520px) {
-            .platform-grid { grid-template-columns: 1fr; }
-            .platform-grid-bottom { flex-direction: column; }
-            .platform-grid-bottom .platform-card { flex: 1 1 auto; }
+            .live, .tools, .examples, .updates { padding-left: 16px; padding-right: 16px; }
+            .update-lines a { flex-direction: column; gap: 2px; }
+            .live-head .live-cta { display: none; }
+            .live-cta-bottom { display: flex; margin-top: 12px; }
+            .storm-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+            .tool-list, .example-grid { grid-template-columns: 1fr; }
         }
 
         /* iOS Safari zooms the viewport when a focused form control is
@@ -602,138 +416,83 @@
         <p class="hero-subtitle">Tropical Cyclone Analysis Tool for Live and Archived Structure</p>
         <p class="hero-desc">Live monitoring of every active tropical cyclone, with airborne radar, reconnaissance and best-track archives for studying storm structure.</p>
 
-        <!-- ── Live activity strip ────────────────────────── -->
-        <div class="activity-strip" id="activity-strip" role="status" aria-label="Live activity">
-            <span class="activity-stat is-stale" id="activity-active"><span class="dot"></span><span class="activity-stat-val">—</span>&nbsp;active TCs</span>
-            <span class="activity-stat-sep">·</span>
-            <span class="activity-stat is-stale" id="activity-refresh"><span class="dot"></span>Monitor refreshed <span class="activity-stat-val">—</span></span>
-            <span class="activity-stat-sep">·</span>
-            <span class="activity-stat is-stale"><span class="dot"></span><span class="activity-stat-val">1,510</span>&nbsp;TC-RADAR analyses · 1997–2024</span>
-        </div>
-
-        <!-- ── Active-storm quick-links (populated live; hidden until storms exist) ── -->
-        <div class="active-storms" id="active-storms" hidden>
-            <span class="active-storms-label">Active now</span>
-            <span class="active-storms-chips" id="active-storms-chips"></span>
-        </div>
-
-        <!-- ── Platform cards ────────────────────────────── -->
-        <div class="platform-grid" id="tools">
-            <a href="realtime_ir.html" class="platform-card card-ir">
-                <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/></svg></div>
-                <div class="card-title">Real-Time Monitor</div>
-                <div class="card-desc">Track all active tropical cyclones worldwide with live geostationary infrared satellite imagery from GOES-East, GOES-West, and Himawari-9.</div>
-                <div class="card-stats">
-                <div><div class="card-stat-val">Global</div><div class="card-stat-label">Coverage</div></div>
-                <div><div class="card-stat-val">GOES &amp; Himawari</div><div class="card-stat-label">Satellites</div></div>
-                </div>
-                <span class="card-arrow">&rarr;</span>
-            </a>
-
-            <a href="realtime_ir.html#recon" class="platform-card card-realtime">
-                <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z"/></svg></div>
-                <div class="card-title">Recon</div>
-                <div class="card-desc">Follow active hurricane-hunter missions live: flight-level winds, dropsondes, VDMs, SEAR surface-wind estimates and tail Doppler radar analyses, with an archive of every 2026 flight.</div>
-                <div class="card-stats">
-                <div><div class="card-stat-val">Live</div><div class="card-stat-label">Missions</div></div>
-                <div><div class="card-stat-val">P-3 &amp; G-IV</div><div class="card-stat-label">Aircraft</div></div>
-                </div>
-                <span class="card-arrow">&rarr;</span>
-            </a>
-
-            <a href="global_archive.html" class="platform-card card-global">
-                <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
-                <div class="card-title">Global Archive</div>
-                <div class="card-desc">Browse the complete IBTrACS tropical cyclone record from 1842 to present with satellite imagery, intensity timelines, reconnaissance, and multi-storm comparison tools.</div>
-                <div class="card-stats">
-                <div><div class="card-stat-val">14,000+</div><div class="card-stat-label">Storms</div></div>
-                <div><div class="card-stat-val">7</div><div class="card-stat-label">Basins</div></div>
-                <div><div class="card-stat-val">1842&ndash;2025</div><div class="card-stat-label">Coverage</div></div>
-                </div>
-                <span class="card-arrow">&rarr;</span>
-            </a>
-
-            <div class="platform-grid-bottom">
-                <a href="explorer.html" class="platform-card card-radar">
-                    <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg></div>
-                    <div class="card-title">TC-RADAR</div>
-                    <div class="card-desc">Explore 1,500+ post-processed airborne Doppler radar analyses with interactive 3D wind fields, cross-sections, azimuthal means, and multi-variable visualization spanning 1997&ndash;2024.</div>
-                    <div class="card-stats">
-                    <div><div class="card-stat-val">1,510</div><div class="card-stat-label">Analyses</div></div>
-                    <div><div class="card-stat-val">91</div><div class="card-stat-label">Storms</div></div>
-                    <div><div class="card-stat-val">1997&ndash;2024</div><div class="card-stat-label">Coverage</div></div>
-                    </div>
-                    <span class="card-arrow">&rarr;</span>
-                </a>
-
-                <a href="explorer.html?tab=composites" class="platform-card card-composites">
-                    <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg></div>
-                    <div class="card-title">TC-RADAR Composites</div>
-                    <div class="card-desc">Build custom composite analyses from the TC-RADAR database. Filter by intensity, shear, tilt, motion, and more to reveal systematic structural patterns across tropical cyclones.</div>
-                    <div class="card-stats">
-                    <div><div class="card-stat-val">12+</div><div class="card-stat-label">Variables</div></div>
-                    <div><div class="card-stat-val">Flexible</div><div class="card-stat-label">Filters</div></div>
-                    </div>
-                    <span class="card-arrow">&rarr;</span>
-                </a>
-
-                <a href="tc_climatology.html" class="platform-card card-climo">
-                    <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 4 9 14 14 0 0 1-4 9 14 14 0 0 1-4-9 14 14 0 0 1 4-9z"/><path d="M5 6c2 1.5 5 2.4 7 2.4S17 7.5 19 6"/><path d="M5 18c2-1.5 5-2.4 7-2.4s5 .9 7 2.4"/></svg></div>
-                    <div class="card-title">TC Climatology</div>
-                    <div class="card-desc">Best-track statistics by basin (ACE, RI, intensity, LMI), an ERA5 reanalysis globe for compositing by climate index, and a new <strong>Subseasonal</strong> subview for binning genesis &amp; RI by MJO and BSISO phase.</div>
-                    <div class="card-stats">
-                    <div><div class="card-stat-val">3</div><div class="card-stat-label">Sub-views</div></div>
-                    <div><div class="card-stat-val">14+</div><div class="card-stat-label">Indices</div></div>
-                    <div><div class="card-stat-val">MJO/BSISO</div><div class="card-stat-label">Phase composites</div></div>
-                    </div>
-                    <span class="card-arrow">&rarr;</span>
-                </a>
-            </div>
-        </div>
     </section>
 
-    <!-- ── Start Here: worked examples for first-time visitors ── -->
-    <section class="start-here-section" aria-labelledby="start-here-title">
-        <h2 class="start-here-title" id="start-here-title">Popular <span class="accent">starting points</span></h2>
-        <div class="start-here-grid">
-            <a class="start-card" href="realtime_ir.html">
-                <div class="start-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/></svg></div>
-                <div class="start-card-body">
-                    <div class="start-card-title">See what's happening now</div>
-                    <div class="start-card-desc">Live global IR satellite composite tracking every active tropical cyclone.</div>
-                </div>
-                <span class="start-card-arrow" aria-hidden="true">→</span>
+    <!-- ── Active storms: live tiles that open the Real-Time Monitor ── -->
+    <section class="live" aria-labelledby="live-title">
+        <div class="live-head">
+            <div>
+                <h2 class="live-title" id="live-title"><span class="live-dot" aria-hidden="true"></span>Active now</h2>
+                <p class="live-meta" id="live-meta" role="status">Loading live storms&hellip;</p>
+            </div>
+            <a class="live-cta" href="realtime_ir.html">Open the Real-Time Monitor <span aria-hidden="true">&rarr;</span></a>
+        </div>
+        <div class="storm-tiles" id="storm-tiles">
+            <div class="storm-tile is-skeleton" aria-hidden="true"><span class="storm-tile-img"></span><span class="storm-tile-body"><span class="storm-tile-name"><i class="sk" style="width:58%"></i></span><span class="storm-tile-int"><i class="sk" style="width:72%"></i></span><span class="storm-tile-meta"><i class="sk" style="width:46%"></i></span></span></div>
+            <div class="storm-tile is-skeleton" aria-hidden="true"><span class="storm-tile-img"></span><span class="storm-tile-body"><span class="storm-tile-name"><i class="sk" style="width:58%"></i></span><span class="storm-tile-int"><i class="sk" style="width:72%"></i></span><span class="storm-tile-meta"><i class="sk" style="width:46%"></i></span></span></div>
+            <div class="storm-tile is-skeleton" aria-hidden="true"><span class="storm-tile-img"></span><span class="storm-tile-body"><span class="storm-tile-name"><i class="sk" style="width:58%"></i></span><span class="storm-tile-int"><i class="sk" style="width:72%"></i></span><span class="storm-tile-meta"><i class="sk" style="width:46%"></i></span></span></div>
+            <div class="storm-tile is-skeleton" aria-hidden="true"><span class="storm-tile-img"></span><span class="storm-tile-body"><span class="storm-tile-name"><i class="sk" style="width:58%"></i></span><span class="storm-tile-int"><i class="sk" style="width:72%"></i></span><span class="storm-tile-meta"><i class="sk" style="width:46%"></i></span></span></div>
+        </div>
+        <a class="live-cta live-cta-bottom" href="realtime_ir.html">Open the Real-Time Monitor <span aria-hidden="true">&rarr;</span></a>
+    </section>
+
+    <!-- ── The other tools ──────────────────────────────── -->
+    <section class="tools" id="tools" aria-labelledby="tools-title">
+        <h2 class="section-h" id="tools-title">Explore</h2>
+        <div class="tool-list">
+            <a class="tool" href="realtime_ir.html#recon">
+                <span class="tool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z"/></svg></span>
+                <span class="tool-text"><span class="tool-title">Recon</span><span class="tool-desc">Hurricane-hunter missions live, and every 2026 flight archived: flight-level winds, dropsondes, Doppler radar.</span></span>
             </a>
-            <a class="start-card" href="explorer.html#case=478">
-                <div class="start-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg></div>
-                <div class="start-card-body">
-                    <div class="start-card-title">Step inside Irma's Cat-5 eyewall</div>
-                    <div class="start-card-desc">Airborne Doppler radar · 155 kt · 5 Sep 2017 · full 3D wind field.</div>
-                </div>
-                <span class="start-card-arrow" aria-hidden="true">→</span>
+            <a class="tool" href="global_archive.html">
+                <span class="tool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
+                <span class="tool-text"><span class="tool-title">Global Archive</span><span class="tool-desc">Every tropical cyclone since 1842: tracks, intensity, infrared imagery and side-by-side comparison.</span></span>
             </a>
-            <a class="start-card" href="global_archive.html">
-                <div class="start-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
-                <div class="start-card-body">
-                    <div class="start-card-title">Browse 14,000+ historical storms</div>
-                    <div class="start-card-desc">Every named TC since 1842 · tracks, intensity, climatology, comparison.</div>
-                </div>
-                <span class="start-card-arrow" aria-hidden="true">→</span>
+            <a class="tool" href="archive_season.html">
+                <span class="tool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>
+                <span class="tool-text"><span class="tool-title">Global IR Archive</span><span class="tool-desc">Replay any season since 1980 over near-global infrared imagery, with every storm&rsquo;s track.</span></span>
+            </a>
+            <a class="tool" href="explorer.html">
+                <span class="tool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg></span>
+                <span class="tool-text"><span class="tool-title">TC-RADAR</span><span class="tool-desc">1,510 airborne Doppler radar analyses from 1997&ndash;2024, with 3D winds and cross-sections.</span></span>
+            </a>
+            <a class="tool" href="explorer.html?tab=composites">
+                <span class="tool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg></span>
+                <span class="tool-text"><span class="tool-title">TC-RADAR Composites</span><span class="tool-desc">Composite radar structure across storms, filtered by intensity, shear, tilt and motion.</span></span>
+            </a>
+            <a class="tool" href="tc_climatology.html">
+                <span class="tool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg></span>
+                <span class="tool-text"><span class="tool-title">TC Climatology</span><span class="tool-desc">Basin statistics, an ERA5 reanalysis globe, and MJO and BSISO phase composites.</span></span>
             </a>
         </div>
     </section>
 
-    <!-- ── Recent Updates (changelog) ─────────────────────── -->
-    <section id="updates" class="section-bg">
-        <div class="content-section">
-            <h2 class="section-title">Recent <span class="accent">Updates</span></h2>
-            <p class="section-desc">TC-ATLAS is actively maintained — new data sources, analysis tools, and UI improvements are added continuously.</p>
-            <!-- Filled from changelog.html (the one source): its newest three entries. -->
-            <div class="changelog-list" id="changelog-latest" aria-live="polite"></div>
-            <div class="changelog-footer">
-                <a href="changelog.html">All updates &rarr;</a>
-            </div>
+    <!-- ── Worked examples (static thumbnails, loaded on scroll) ── -->
+    <section class="examples" aria-labelledby="examples-title">
+        <h2 class="section-h" id="examples-title">Examples</h2>
+        <div class="example-grid">
+            <a class="example" href="explorer.html#case=478">
+                <img src="assets/home/example_irma.jpg" alt="Doppler radar winds around Hurricane Irma&rsquo;s eye" width="720" height="450" loading="lazy" decoding="async">
+                <span class="example-body"><span class="example-title">Inside Irma&rsquo;s Category 5 eyewall</span><span class="example-desc">Airborne Doppler radar winds &middot; 5 Sep 2017 &middot; 155 kt</span></span>
+            </a>
+            <a class="example" href="archive_season.html?year=2017&amp;basin=AL&amp;t=2017090700">
+                <img src="assets/home/example_season2017.jpg" alt="Infrared satellite view of Hurricanes Katia, Irma and Jose" width="720" height="450" loading="lazy" decoding="async">
+                <span class="example-body"><span class="example-title">Replay the 2017 Atlantic season</span><span class="example-desc">Katia, Irma and Jose on 7 Sep 2017 over infrared imagery</span></span>
+            </a>
+            <a class="example" href="global_archive.html#tab=detail&amp;storm=2005236N23285">
+                <img src="assets/home/example_katrina.jpg" alt="Infrared satellite image of Hurricane Katrina near peak intensity" width="720" height="450" loading="lazy" decoding="async">
+                <span class="example-body"><span class="example-title">Katrina, start to finish</span><span class="example-desc">Track, intensity and infrared imagery from the 2005 storm</span></span>
+            </a>
         </div>
+    </section>
+
+    <section class="updates" id="updates" aria-labelledby="updates-title">
+        <div class="updates-head">
+            <h2 class="section-h" id="updates-title">Recent updates</h2>
+            <a href="changelog.html">All updates <span aria-hidden="true">&rarr;</span></a>
+        </div>
+        <!-- Filled from changelog.html (the one source): its newest three entries, as headlines. -->
+        <ul class="update-lines" id="changelog-latest" aria-live="polite"></ul>
     </section>
 
     </main>
@@ -748,111 +507,155 @@
     </footer>
 
     <script>
-    // ── Live activity strip ───────────────────────────────
-    // Populates the "N active TCs · Monitor refreshed X min ago" pill
-    // from the same API endpoint the Real-Time Monitor uses. Fails
-    // silently (keeps the "—" placeholders) if offline or blocked.
+    // ── Active storms ─────────────────────────────────────
+    // One tile per active storm, strongest first, each opening that storm in
+    // the Real-Time Monitor. The text comes from the monitor's own feed; the
+    // picture is the latest IR snapshot its Storm Satellite gallery shows
+    // (same URL, so the same CDN copy), loaded lazily so the text never waits.
     (function () {
         var API_BASE = 'https://api.tcatlas.org';
-        function relTime(iso) {
-            if (!iso) return null;
-            var then = new Date(iso);
-            if (isNaN(then.getTime())) return null;
-            var delta = (Date.now() - then.getTime()) / 1000;
-            if (delta < 60)     return 'just now';
-            if (delta < 3600)   return Math.round(delta / 60) + ' min ago';
-            if (delta < 86400)  return Math.round(delta / 3600) + ' h ago';
-            return Math.round(delta / 86400) + ' d ago';
-        }
+        var grid = document.getElementById('storm-tiles');
+        var meta = document.getElementById('live-meta');
+        if (!grid || !meta) return;
+        var section = grid.parentNode;
+        var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        // The site's Saffir-Simpson colors (global_archive.js SS_COLORS).
+        var CAT_COLOR = { TD: '#60a5fa', TS: '#34d399', C1: '#fbbf24', C2: '#fb923c',
+                          C3: '#f87171', C4: '#ef4444', C5: '#dc2626' };
+        var INVEST_COLOR = '#64748b';
+        var BASIN = { ATL: 'Atlantic', EPAC: 'East Pacific', CPAC: 'Central Pacific',
+                      WPAC: 'West Pacific', IO: 'North Indian' };
+
         function escHtml(s) {
             return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
                 return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
             });
         }
         // Invests (ATCF 90-99, or a name like "Invest 97L") are not yet
-        // tropical cyclones, so they are counted and labeled separately.
+        // tropical cyclones: the monitor labels them "Invest" rather than
+        // the wind-based class the feed assigns, and counts them separately.
         function isInvest(s) {
             return /^[A-Za-z]{2}9\d{4}$/.test(String(s.atcf_id || ''))
                 || /^invest\b/i.test(s.name || '');
         }
-        // Render named, clickable chips that deep-link into the Real-Time
-        // Monitor (realtime_ir.html#storm=<ATCF>), strongest storm first.
-        function renderStormChips(storms) {
-            var row = document.getElementById('active-storms');
-            var chips = document.getElementById('active-storms-chips');
-            if (!row || !chips) return;
-            if (!storms.length) { row.hidden = true; return; }
-            var sorted = storms.slice().sort(function (a, b) {
-                return (b.vmax_kt || 0) - (a.vmax_kt || 0);
-            });
-            chips.innerHTML = sorted.map(function (s) {
-                var atcf = String(s.atcf_id || '');
-                var name = s.name || 'Unnamed';
-                // The feed's `category` is classified from vmax alone, so an
-                // invest at TD/TS winds arrives labeled "TD" — but invests are
-                // undesignated by definition and never get an intensity-class
-                // chip (same rule the Real-Time Monitor's markers follow).
-                // The name already reads "Invest 97L", so show no chip at all.
-                var cat = isInvest(s) ? '' : (s.category || '');
-                var href = /^[A-Za-z]{2}\d{6}$/.test(atcf)
-                    ? 'realtime_ir.html#storm=' + encodeURIComponent(atcf)
-                    : 'realtime_ir.html';
-                return '<a class="storm-chip" href="' + href + '" title="Open ' + escHtml(name) +
-                    ' in the Real-Time Monitor"><span class="chip-dot"></span>' + escHtml(name) +
-                    (cat ? '<span class="chip-cat">' + escHtml(cat) + '</span>' : '') +
-                    '<span class="chip-arrow">→</span></a>';
-            }).join('');
-            row.hidden = false;
+        // The site-wide time form ("10 Oct 18:00 UTC", tc_time.js).
+        function fmtUTC(iso) {
+            var d = new Date(iso);
+            if (isNaN(d.getTime())) return '';
+            function pad(n) { return (n < 10 ? '0' : '') + n; }
+            return d.getUTCDate() + ' ' + MONTHS[d.getUTCMonth()] + ' ' +
+                pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ' UTC';
+        }
+        // The feed's basin is the one the storm formed in; one that has since
+        // crossed the date line (an EP storm now at 145°E) is named for where it is.
+        function basinName(s) {
+            var b = String(s.basin || '').toUpperCase(), lat = Number(s.lat), lon = Number(s.lon);
+            if (lat < 0) return lon >= 135 || lon < -70 ? 'South Pacific' : lon < 20 ? 'South Atlantic' : 'South Indian';
+            if ((b === 'EPAC' || b === 'CPAC') && lon > 0) return 'West Pacific';
+            if (b === 'EPAC' && lon < -140) return 'Central Pacific';
+            return BASIN[b] || '';
         }
 
-        fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store' })
-            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-            .then(function (data) {
-                var storms = (data && data.storms) || [];
-                var active = storms.length;
-                var nInvest = storms.filter(isInvest).length;
-                var nTC = active - nInvest;
-                var activeEl = document.getElementById('activity-active');
-                var stripEl = document.getElementById('activity-strip');
-                if (activeEl) {
-                    // "5 active TCs · 1 invest" — an invest is not a TC.
-                    var label = nTC === 0 ? 'No active TCs'
-                        : '<span class="activity-stat-val">' + nTC + '</span>&nbsp;active TC' + (nTC === 1 ? '' : 's');
-                    if (nInvest) label += ' &middot; <span class="activity-stat-val">' + nInvest + '</span>&nbsp;invest' + (nInvest === 1 ? '' : 's');
-                    // One text span, so the stat's flex gap only separates the dot.
-                    activeEl.innerHTML = '<span class="dot"></span><span>' + label + '</span>';
-                    activeEl.classList.remove('is-stale');
-                }
-                if (stripEl) stripEl.classList.toggle('has-active', active > 0);
-                renderStormChips(storms);
-                var refreshEl = document.getElementById('activity-refresh');
-                if (refreshEl) {
-                    var rel = relTime(data && data.updated_utc);
-                    if (rel) {
-                        var rval = refreshEl.querySelector('.activity-stat-val');
-                        if (rval) rval.textContent = rel;
-                        refreshEl.classList.remove('is-stale');
-                    }
-                }
-            })
-            .catch(function () {
-                // API unreachable. The strip otherwise sits on a perpetual
-                // "—" with a gray dot, which reads as "still loading" forever.
-                // Swap in a clear, low-key "unavailable" state instead.
-                var activeEl = document.getElementById('activity-active');
-                if (activeEl) {
-                    activeEl.innerHTML = '<span class="dot"></span>Live activity unavailable';
-                    activeEl.title = 'Could not reach the real-time monitor right now. Open the Real-Time Monitor to retry.';
-                }
-                var refreshEl = document.getElementById('activity-refresh');
-                if (refreshEl) {
-                    var rval = refreshEl.querySelector('.activity-stat-val');
-                    if (rval) rval.textContent = 'offline';
-                }
+        function tileHtml(s, newestMs) {
+            var atcf = String(s.atcf_id || '');
+            var name = s.name || 'Unnamed';
+            var invest = isInvest(s);
+            var cat = String(s.category || '');
+            var label = invest ? 'Invest' : (/^C[1-5]$/.test(cat) ? 'Cat ' + cat.charAt(1) : cat);
+            var color = invest ? INVEST_COLOR : (CAT_COLOR[cat] || INVEST_COLOR);
+            var known = /^[A-Za-z]{2}\d{6}$/.test(atcf);
+            var href = known ? 'realtime_ir.html#storm=' + encodeURIComponent(atcf) : 'realtime_ir.html';
+            var img = known
+                ? '<img src="' + API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcf) +
+                  '/ir-frame.jpg?frame_index=-1&amp;interval_min=30&amp;lookback_hours=6"' +
+                  ' alt="" loading="lazy" decoding="async">'
+                : '';
+            var intensity = [
+                s.vmax_kt != null ? Math.round(s.vmax_kt) + ' kt' : '',
+                s.mslp_hpa != null ? Math.round(s.mslp_hpa) + ' hPa' : ''
+            ].filter(Boolean).join(' &middot; ');
+            // The header gives the newest fix time; a tile names its own only
+            // when that is older (feeds update on different cycles).
+            var fixMs = Date.parse(s.last_fix_utc || '');
+            var olderFix = fixMs && newestMs - fixMs >= 3 * 3600e3
+                ? '<span class="storm-tile-meta">as of ' + escHtml(fmtUTC(s.last_fix_utc)) + '</span>' : '';
+            return '<a class="storm-tile" href="' + href + '" title="Open ' + escHtml(name) + ' in the Real-Time Monitor">' +
+                '<span class="storm-tile-img">' + img +
+                    (label ? '<span class="storm-tile-cat" style="--cat:' + color + '"><i></i>' + escHtml(label) + '</span>' : '') +
+                    (s.has_recon ? '<span class="storm-tile-recon" title="Aircraft reconnaissance active">RECON</span>' : '') +
+                '</span>' +
+                '<span class="storm-tile-body">' +
+                    '<span class="storm-tile-name">' + escHtml(name) + '</span>' +
+                    '<span class="storm-tile-int">' + (intensity || '&nbsp;') + '</span>' +
+                    '<span class="storm-tile-meta">' + (escHtml(basinName(s)) || '&nbsp;') + '</span>' + olderFix +
+                '</span></a>';
+        }
+
+        function showEmpty(html, metaText) {
+            section.classList.add('is-quiet');
+            meta.textContent = metaText;
+            grid.innerHTML = '<p class="live-empty">' + html + '</p>';
+        }
+
+        function render(data) {
+            var storms = ((data && data.storms) || []).slice();
+            if (!storms.length) {
+                showEmpty('No tropical cyclones are active right now. ' +
+                    '<a href="archive_season.html">Replay a past season &rarr;</a>',
+                    'No active tropical cyclones');
+                return;
+            }
+            // Tropical cyclones strongest first, then invests.
+            storms.sort(function (a, b) {
+                return (isInvest(a) - isInvest(b)) || ((b.vmax_kt || 0) - (a.vmax_kt || 0));
             });
+            var nInvest = storms.filter(isInvest).length;
+            var nTC = storms.length - nInvest;
+            var parts = [];
+            if (nTC) parts.push(nTC + ' tropical cyclone' + (nTC === 1 ? '' : 's'));
+            else parts.push('No tropical cyclones');
+            if (nInvest) parts.push(nInvest + ' invest' + (nInvest === 1 ? '' : 's'));
+            var newestMs = 0;
+            storms.forEach(function (s) { newestMs = Math.max(newestMs, Date.parse(s.last_fix_utc || '') || 0); });
+            meta.textContent = parts.join(nTC ? ' and ' : ', ') +
+                (newestMs ? ' · as of ' + fmtUTC(new Date(newestMs).toISOString()) : '');
+            if (!nTC) section.classList.add('is-quiet');
+
+            // Two full rows at most: 6 tiles on a phone, 12 on wider screens.
+            var max = window.matchMedia && window.matchMedia('(max-width: 768px)').matches ? 6 : 12;
+            var shown = storms.length > max ? storms.slice(0, max - 1) : storms;
+            var html = shown.map(function (s) { return tileHtml(s, newestMs); }).join('');
+            if (shown.length < storms.length) {
+                html += '<a class="storm-tile is-more" href="realtime_ir.html">+' +
+                    (storms.length - shown.length) + ' more in the Real-Time Monitor</a>';
+            }
+            grid.innerHTML = html;
+            Array.prototype.forEach.call(grid.querySelectorAll('.storm-tile-img img'), function (img) {
+                function shown() { img.classList.add('is-loaded'); }
+                if (img.complete && img.naturalWidth) shown();
+                img.addEventListener('load', shown);
+                img.addEventListener('error', function () {
+                    img.parentNode.classList.add('no-img');
+                    img.remove();
+                });
+            });
+        }
+
+        var ctrl = window.AbortController ? new AbortController() : null;
+        var timer = ctrl && setTimeout(function () { ctrl.abort(); }, 15000);
+        fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store', signal: ctrl ? ctrl.signal : undefined })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(render)
+            .catch(function (e) {
+                showEmpty('Live storms couldn&rsquo;t be loaded just now. ' +
+                    '<a href="realtime_ir.html">Open the Real-Time Monitor &rarr;</a>',
+                    'Live storms unavailable');
+                try { console.warn('[TC-ATLAS] active storms unavailable:', e); } catch (x) {}
+            })
+            .then(function () { if (timer) clearTimeout(timer); });
     })();
 
-    // ── Recent updates: the newest three entries of changelog.html ──
+    // ── Recent updates: headlines of the newest three changelog entries ──
     // changelog.html is the only place entries are written; if it can't be
     // read, the section keeps just its "All updates" link.
     (function () {
@@ -863,10 +666,27 @@
             .then(function (html) {
                 var doc = new DOMParser().parseFromString(html, 'text/html');
                 var entries = doc.querySelectorAll('#changelog > .changelog-entry');
-                if (!entries.length) throw new Error('no entries');
-                for (var i = 0; i < entries.length && i < 3; i++) {
-                    host.appendChild(document.importNode(entries[i], true));
+                var n = 0;
+                for (var i = 0; i < entries.length && n < 3; i++) {
+                    var time = entries[i].querySelector('.changelog-date time');
+                    var lead = entries[i].querySelector('.changelog-text strong');
+                    if (!time || !lead) continue;
+                    var li = document.createElement('li');
+                    var a = document.createElement('a');
+                    a.href = 'changelog.html';
+                    var t = document.createElement('time');
+                    t.dateTime = time.getAttribute('datetime') || '';
+                    t.textContent = time.textContent.trim();
+                    var title = document.createElement('span');
+                    title.className = 'update-title';
+                    title.textContent = lead.textContent.trim().replace(/\.$/, '');
+                    a.appendChild(t);
+                    a.appendChild(title);
+                    li.appendChild(a);
+                    host.appendChild(li);
+                    n++;
                 }
+                if (!n) throw new Error('no entries');
             })
             .catch(function (e) {
                 host.hidden = true;

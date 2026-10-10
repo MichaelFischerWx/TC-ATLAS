@@ -1,7 +1,7 @@
 /* ══════════════════════════════════════════════════════════════
-   Content pages — the home page, changelog.html and about.html.
-   - Changelog timeline: entries live only in changelog.html; the home
-     page reads its newest three from there.
+   Content pages — changelog.html and about.html.
+   - Changelog timeline: entries live only in changelog.html (the home
+     page lists the newest three as headlines, styled in index.html).
    - About page: data-source grid, citation list, contact card.
    Uses the theme tokens every page defines (--navy, --navy-mid, --text,
    --slate, --blue, --blue-light, --border, --border-light, --um-orange,
