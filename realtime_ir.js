@@ -1480,7 +1480,9 @@
         return null;
     }
 
-    /** Format UTC timestamp for display */
+    var _MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    /** Format a UTC timestamp for display in the site-wide form
+     *  "9 Oct 21:10 UTC" (day month, 24-h, no year: the monitor is live). */
     function fmtUTC(isoStr) {
         if (!isoStr) return '\u2014';
         try {
@@ -1489,12 +1491,16 @@
             // ("YYYYMMDDHHMM"), which new Date() can't parse \u2192 NaN. Handle both.
             if (/^\d{12}$/.test(s)) {
                 d = new Date(Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12)));
-            } else { d = new Date(isoStr); }
-            var mo = String(d.getUTCMonth() + 1).padStart(2, '0');
-            var day = String(d.getUTCDate()).padStart(2, '0');
+            } else {
+                // An ISO time with no offset is a UTC stamp here; new Date()
+                // would read it as local time.
+                if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)) s = s.replace(' ', 'T') + 'Z';
+                d = new Date(s);
+            }
+            if (isNaN(d.getTime())) return String(isoStr);
             var hh = String(d.getUTCHours()).padStart(2, '0');
             var mm = String(d.getUTCMinutes()).padStart(2, '0');
-            return mo + '/' + day + ' ' + hh + ':' + mm + ' UTC';
+            return d.getUTCDate() + ' ' + _MON3[d.getUTCMonth()] + ' ' + hh + ':' + mm + ' UTC';
         } catch (e) { return isoStr; }
     }
 
@@ -29879,7 +29885,7 @@
             var swatch = _RT_MW_SENSOR_COLOR[o.sensor] || '#cbd5e1';
             var ageMin = (nowMs - o.scan_start_ms) / 60000;
             var ageStr = _rtMwFmtAgo(ageMin);
-            var utcStr = o.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
+            var utcStr = fmtUTC(o.scan_start);
             var thumbWrap = document.createElement('div');
             thumbWrap.className = 'rt-mw-storm-thumb-wrap';
             if (pr && pr.png_url) {
@@ -30714,7 +30720,7 @@
             ttl.textContent = nm + ' · IR ↔ Microwave';
         }
         if (sub) {
-            var utcStr = orbit.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
+            var utcStr = fmtUTC(orbit.scan_start);
             sub.textContent = orbit.sensor + ' (' + (orbit.platform || '?') + ') · '
                             + utcStr;
         }
@@ -30725,7 +30731,7 @@
         // Seed legend with latest fix (we already know it from `storm`).
         var fixLegend = document.getElementById('rt-mw-compare-legend-fix');
         if (fixLegend && storm.last_fix_utc) {
-            var fixTime = storm.last_fix_utc.replace('T', ' ').slice(0, 16) + 'Z';
+            var fixTime = fmtUTC(storm.last_fix_utc);
             fixLegend.textContent = fixTime + ' · '
                 + storm.lat.toFixed(1) + '°' + (storm.lat >= 0 ? 'N' : 'S')
                 + ' / ' + storm.lon.toFixed(1) + '°' + (storm.lon >= 0 ? 'E' : 'W');
@@ -30759,7 +30765,7 @@
                             'snap':        'Position (single track point)',
                         }[interp.mode] || 'Interpolated position';
                         interpLabel.textContent = modeLabel;
-                        var passUtc = orbit.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
+                        var passUtc = fmtUTC(orbit.scan_start);
                         interpLegend.textContent = passUtc + ' · '
                             + interp.lat.toFixed(1) + '°' + (interp.lat >= 0 ? 'N' : 'S')
                             + ' / ' + interp.lon.toFixed(1) + '°' + (interp.lon >= 0 ? 'E' : 'W');
@@ -30793,7 +30799,7 @@
         var name = storm.name || storm.atcf_id || 'Storm';
         var sensorLabel = orbit.sensor
             + (orbit.platform ? ' (' + orbit.platform + ')' : '');
-        var mwUtc = (orbit.scan_start || '').replace('T', ' ').slice(0, 16) + 'Z';
+        var mwUtc = fmtUTC(orbit.scan_start);
         var irTimeEl = document.getElementById('rt-mw-compare-mw-time');  // not used
         var irTime = (document.getElementById('rt-mw-compare-ir-time') || {}).textContent || '';
         var mwTime = (document.getElementById('rt-mw-compare-mw-time') || {}).textContent || mwUtc;
@@ -31149,8 +31155,7 @@
         var mwStatus = document.getElementById('rt-mw-compare-mw-status');
         var mwTimeEl = document.getElementById('rt-mw-compare-mw-time');
         if (mwTimeEl) {
-            mwTimeEl.textContent =
-                orbit.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
+            mwTimeEl.textContent = fmtUTC(orbit.scan_start);
         }
 
         // ── Common center for BOTH panels ─────────────────────────
@@ -31347,7 +31352,7 @@
                     var dMin = (Date.parse(cand.datetime_utc) - mwMs) / 60000;
                     if (irTimeEl) {
                         irTimeEl.textContent =
-                            cand.datetime_utc.replace('T', ' ').slice(0, 16) + 'Z'
+                            fmtUTC(cand.datetime_utc)
                             + ' (' + (dMin >= 0 ? '+' : '') + Math.round(dMin)
                             + ' min vs MW)';
                     }

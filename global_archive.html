@@ -88,11 +88,11 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundles, discoverable from byte 0. Tokens MUST match
          the script tags below. -->
-    <link rel="preload" as="script" href="global_archive.js?v=20261009p2a">
+    <link rel="preload" as="script" href="global_archive.js?v=20261009p2b">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261009p2b">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20261009p2a">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20261009p2b">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -541,10 +541,10 @@
                                 </div>
                             </div>
                         </div>
-                        <div id="ir-colorbar-strip" class="ir-cbar-strip" style="display:none;">
-                            <span class="ir-cbar-label-top">310 K</span>
+                        <div id="ir-colorbar-strip" class="ir-cbar-strip" style="display:none;" title="IR brightness temperature: 37 °C (310 K) at the top to −103 °C (170 K) at the bottom">
+                            <span class="ir-cbar-label-top">37°C</span>
                             <canvas id="ir-colorbar-canvas" width="14"></canvas>
-                            <span class="ir-cbar-label-bot">170 K</span>
+                            <span class="ir-cbar-label-bot">&minus;103°C</span>
                         </div>
                         </div><!-- /detail-map-ir-row -->
                         <div id="ir-map-controls" class="ir-map-controls ir-bar ir-hidden" style="display:none;position:relative;bottom:auto;left:auto;z-index:auto;">
@@ -991,7 +991,7 @@
                         </div>
                         <div class="ir-colorbar-row" style="margin-top:8px;padding:0 12px;">
                             <canvas id="compare-ir-colorbar" height="8"></canvas>
-                            <div class="ir-colorbar-labels"><span>310 K</span><span>240</span><span>170 K</span></div>
+                            <div class="ir-colorbar-labels" title="IR brightness temperature: 37 °C (310 K) to −103 °C (170 K)"><span>37 °C</span><span>&minus;33</span><span>&minus;103 °C</span></div>
                         </div>
 
                         <!-- Overlaid radial IR profile -->
@@ -1398,7 +1398,7 @@
     <script defer src="lflet_gl.js?v=20261001ui1"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20260930sv1"></script>
-    <script defer src="global_archive.js?v=20261009p2a"></script>
+    <script defer src="global_archive.js?v=20261009p2b"></script>
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->

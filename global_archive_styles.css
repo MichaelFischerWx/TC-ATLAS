@@ -921,8 +921,8 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .ir-cbar-label-top,
 .ir-cbar-label-bot {
-    font-size: 0.48rem;
-    color: rgba(180, 195, 220, 0.6);
+    font-size: 0.5rem;
+    color: var(--slate);   /* the strip is var(--surface); the old pale blue was ~1.5:1 */
     line-height: 1;
     white-space: nowrap;
 }

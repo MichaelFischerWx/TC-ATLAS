@@ -5452,9 +5452,9 @@ function _handleIRMouseMove(e) {
     var tbC = (tbK - 273.15).toFixed(1);
     var latStr = Math.abs(lat).toFixed(2) + (lat >= 0 ? '°N' : '°S');
     var lngStr = Math.abs(lng).toFixed(2) + (lng >= 0 ? '°E' : '°W');
-    var html = '<span class="ir-tb-val">' + tbKStr + ' K</span>' +
+    var html = '<span class="ir-tb-val">' + tbC + ' °C</span>' +
                '<span class="ir-tb-sep"> / </span>' +
-               '<span class="ir-tb-val">' + tbC + ' °C</span>' +
+               '<span class="ir-tb-val">' + tbKStr + ' K</span>' +
                '<span class="ir-tb-sep"> &nbsp; </span>' +
                '<span class="ir-tb-coord">' + latStr + ', ' + lngStr + '</span>';
 
@@ -6049,7 +6049,8 @@ var _MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun',
                     'Jul','Aug','Sep','Oct','Nov','Dec'];
 
 function _formatIRDatetime(isoStr) {
-    // Convert "2025-10-21T06:00:00" → "06 UTC 21 October 2025"
+    // "2025-10-21T06:00:00" → "21 Oct 2025 06:00 UTC": the site-wide
+    // "9 Oct 21:10 UTC" form, with the year because this is the archive.
     if (!isoStr) return '';
     try {
         var parts = isoStr.split('T');
@@ -6058,8 +6059,9 @@ function _formatIRDatetime(isoStr) {
         var year = dateParts[0];
         var month = parseInt(dateParts[1], 10) - 1;
         var day = parseInt(dateParts[2], 10);
-        var hour = timeParts[0];
-        return hour + ' UTC ' + day + ' ' + _MONTH_NAMES[month] + ' ' + year;
+        var hhmm = timeParts[0] + ':' + (timeParts[1] || '00');
+        if (!_MONTH_NAMES[month] || isNaN(day)) return isoStr;
+        return day + ' ' + _MONTH_NAMES[month] + ' ' + year + ' ' + hhmm + ' UTC';
     } catch (e) {
         return isoStr;  // Fallback to raw string
     }
@@ -10029,9 +10031,9 @@ function _attachCompareIRHover(side) {
 
         var tbK = 170.0 + (rawVal - 1) * (310.0 - 170.0) / 254.0;
         var tbC = (tbK - 273.15).toFixed(1);
-        var html = '<span class="ir-tb-val">' + tbK.toFixed(1) + ' K</span>' +
+        var html = '<span class="ir-tb-val">' + tbC + ' °C</span>' +
                    '<span class="ir-tb-sep"> / </span>' +
-                   '<span class="ir-tb-val">' + tbC + ' °C</span>';
+                   '<span class="ir-tb-val">' + tbK.toFixed(1) + ' K</span>';
 
         s.tooltip.setLatLng(e.latlng).setContent(html);
         if (!s.map.hasLayer(s.tooltip)) s.tooltip.openOn(s.map);
