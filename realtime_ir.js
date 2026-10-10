@@ -10495,8 +10495,7 @@
             if (currentStormId !== atcfId) return;
             var v = _rtGridPiSample(storm.lat, storm.lon);
             if (v == null) { el.textContent = ''; return; }
-            var vt = (_rtGridPi.layer.valid_time || '').replace(/^\d{4}-(\d\d)-(\d\d)T(\d\d).*$/, '$1/$2 $3Z');
-            el.textContent = 'thermodynamic PI ' + Math.round(v) + ' kt (GFS ' + vt + ')';
+            el.textContent = 'thermodynamic PI ' + Math.round(v) + ' kt (GFS ' + fmtCycle(_rtGridPi.layer.valid_time) + ')';
             el.title = 'Thermodynamic potential intensity (Bister & Emanuel 2002) at the storm position, read from the Global Map’s Maximum Potential Intensity layer: GFS temperature and humidity profile over OISST, with tropical-cyclone circulations removed from the analysis first, expressed as a 10 m wind. It is shown for reference; the ventilation index above uses the empirical PI so that it stays comparable with its climatology.';
         });
     }
@@ -10574,8 +10573,8 @@
         var note = document.getElementById('ir-fav-note');
         if (note) {
             if (oc && oc.sst_date) {
-                var bits = ['OISST ' + oc.sst_date + (sstStale ? ' (stale)' : '')];
-                if (!ohcStale && oc.ohc_date) bits.push('TCHP ' + oc.ohc_date);
+                var bits = ['OISST ' + fmtUTC(oc.sst_date, { time: false }) + (sstStale ? ' (stale)' : '')];
+                if (!ohcStale && oc.ohc_date) bits.push('TCHP ' + fmtUTC(oc.ohc_date, { time: false }));
                 note.textContent = bits.join(' · ');
                 note.title = ohcStale
                     ? 'Ocean heat content (AOML TCHP) is hidden while its feed is stale'
@@ -10658,7 +10657,7 @@
                 _rtEnvCache[atcfId] = j;
                 _rtUpdateFavMeters(atcfId);
                 el.innerHTML = _shearValueHtml(j);
-                el.title = 'GFS 0.25° analysis ' + (j.gfs_cycle_utc || '') + '\n' +
+                el.title = 'GFS 0.25° analysis ' + fmtCycle(j.gfs_cycle_utc) + '\n' +
                     '850–200 hPa shear, 200–800 km annulus (environmental)\n' +
                     'heading ' + Math.round(j.heading_deg) + '° (toward)\n' +
                     'u200/v200: ' + j.u200_ms + '/' + j.v200_ms + ' m/s\n' +
@@ -10685,7 +10684,7 @@
                     if (!j || currentStormId !== atcfId) return;
                     _rtCoreShearCache[atcfId] = j;
                     elCore.innerHTML = _shearValueHtml(j);
-                    elCore.title = 'GFS 0.25° analysis ' + (j.gfs_cycle_utc || '') + '\n' +
+                    elCore.title = 'GFS 0.25° analysis ' + fmtCycle(j.gfs_cycle_utc) + '\n' +
                         '850–200 hPa shear, Helmholtz decomposition\n' +
                         'vortex removed within 500 km; shear averaged over 0–400 km core\n' +
                         'heading ' + Math.round(j.heading_deg) + '° (toward)\n' +
@@ -15238,7 +15237,7 @@
                 if (model !== _rtDmModel || currentStormId !== atcfId) return;   // stale
                 _rtWeatherlabData = json;
                 var btn = document.getElementById('rt-weatherlab-btn');
-                if (btn) btn.title = _dmModelName() + ': ' + json.n_members + ' members, init ' + json.init_time;
+                if (btn) btn.title = _dmModelName() + ': ' + json.n_members + ' members, init ' + fmtCycle(json.init_time);
                 console.log('[WeatherLab] Loaded ' + json.n_members + ' members for ' + atcfId + ' [' + model + ']');
                 // Render the percentile-bands forecast chart into the card's
                 // intensity chart container, replacing the simple history
@@ -29134,7 +29133,7 @@
                         var cp = json.passes[ci];
                         var copt = document.createElement('option');
                         copt.value = ci;
-                        copt.textContent = cp.satellite + ' \u2014 ' + cp.datetime_utc;
+                        copt.textContent = cp.satellite + ' \u2014 ' + fmtUTC(cp.datetime_utc);
                         sel.appendChild(copt);
                     }
                 }
@@ -29180,7 +29179,7 @@
                             var p = json.passes[i];
                             var opt = document.createElement('option');
                             opt.value = i;
-                            opt.textContent = p.satellite + ' \u2014 ' + p.datetime_utc;
+                            opt.textContent = p.satellite + ' \u2014 ' + fmtUTC(p.datetime_utc);
                             sel.appendChild(opt);
                         }
                     }
