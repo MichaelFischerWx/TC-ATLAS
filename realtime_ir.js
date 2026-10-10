@@ -10170,15 +10170,23 @@
         if (shearEl) shearEl.innerHTML = '<span class="skeleton-pulse skeleton-text" style="width:80px;display:inline-block;">&nbsp;</span>';
         loadStormShear(atcfId);
 
-        // Official forecast link
-        var officialSection = document.getElementById('ir-official-section');
+        // Official forecast link — in the header, right after the category
+        // and recon badges (it used to be the last item in a panel about three
+        // screens long).
         var officialLink = document.getElementById('ir-official-link');
         var officialUrl = getOfficialForecastUrl(storm);
-        if (officialUrl) {
-            officialLink.href = officialUrl;
-            officialSection.style.display = 'block';
-        } else {
-            officialSection.style.display = 'none';
+        if (officialLink) {
+            if (officialUrl) {
+                officialLink.href = officialUrl;
+                var officialLabel = document.getElementById('ir-official-label');
+                if (officialLabel) {
+                    officialLabel.textContent = officialUrl.indexOf('nhc.noaa.gov') >= 0
+                        ? 'NHC forecast' : 'JTWC warning';
+                }
+                officialLink.style.display = '';
+            } else {
+                officialLink.style.display = 'none';
+            }
         }
 
         // Show skeleton placeholders while data loads
@@ -13786,8 +13794,12 @@
     function _populateDetailStormPicker(currentId) {
         var sel = document.getElementById('ir-detail-storm-select');
         if (!sel) return;
+        // The select lies invisibly over the storm name, so the title itself
+        // is the switcher; the wrap shows a chevron while there is a choice.
+        var wrap = document.getElementById('ir-detail-name-wrap');
         if (!stormData || stormData.length < 2) {
             sel.style.display = 'none';
+            if (wrap) wrap.classList.remove('has-switcher');
             return;
         }
         var sorted = stormData.slice().sort(function (a, b) {
@@ -13806,6 +13818,7 @@
         }
         sel.innerHTML = opts.join('');
         sel.style.display = '';
+        if (wrap) wrap.classList.add('has-switcher');
     }
 
     // ── "Loop Only" popup ───────────────────────────────────────────

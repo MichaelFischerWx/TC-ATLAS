@@ -82,7 +82,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261009p1d">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261009p1e">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -116,7 +116,7 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261009p1d">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261009p1b">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261009p1c">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261009p1a">
 </head>
@@ -224,23 +224,35 @@
     <section id="ir-detail" class="ir-detail" style="display:none;" aria-label="Storm detail">
         <div class="ir-detail-header">
             <button id="ir-back-btn" class="ir-back-btn" aria-label="Back to all storms">&larr; All Storms</button>
-            <!-- In-tab storm switcher — shown when ≥2 active storms so users
-                 can switch between them without going back to the global map. -->
-            <select id="ir-detail-storm-select"
-                    class="ir-detail-storm-select"
-                    aria-label="Switch active storm"
-                    style="display:none;"
-                    onchange="if(this.value)window._irOpenStorm(this.value)"></select>
             <div class="ir-detail-title">
-                <span id="ir-detail-name" class="ir-detail-name"></span>
-                <span id="ir-detail-id" class="ir-detail-id"></span>
+                <!-- The storm's name IS the switcher: with ≥2 active storms a
+                     native select (invisible, laid over the name) lists them
+                     and a chevron appears; with one storm it's a plain title. -->
+                <span id="ir-detail-name-wrap" class="ir-detail-name-wrap">
+                    <span id="ir-detail-name" class="ir-detail-name"></span>
+                    <span id="ir-detail-id" class="ir-detail-id"></span>
+                    <svg class="ir-detail-switch-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                    <select id="ir-detail-storm-select"
+                            class="ir-detail-storm-select"
+                            aria-label="Switch active storm"
+                            style="display:none;"
+                            onchange="if(this.value)window._irOpenStorm(this.value)"></select>
+                </span>
                 <span id="ir-detail-cat" class="ir-detail-cat"></span>
                 <span id="ir-detail-recon" class="ir-recon-badge" style="display:none;" role="button" tabindex="0"
                       onclick="window._reconOpenForStorm && window._reconOpenForStorm(this.dataset.atcf)"
                       onkeydown="if((event.key==='Enter'||event.key===' ')&&window._reconOpenForStorm){event.preventDefault();window._reconOpenForStorm(this.dataset.atcf);}"
                       title="Aircraft reconnaissance active — click to open Live Flight">✈ RECON</span>
+                <!-- Official advisory link: status badges first (category, recon),
+                     then this, then the export/view actions. -->
+                <a id="ir-official-link" class="ir-hdr-btn ir-official-link" href="#" target="_blank" rel="noopener"
+                   style="display:none;"
+                   title="Opens the official advisory from the responsible agency (NHC or JTWC)">
+                    <span id="ir-official-label">Official forecast</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>
+                </a>
                 <div class="ir-download-wrap" id="ir-download-wrap">
-                    <button class="ir-kml-btn ir-download-btn" type="button"
+                    <button class="ir-hdr-btn ir-download-btn" type="button"
                             onclick="window._irToggleDownloadMenu()"
                             aria-haspopup="true" aria-expanded="false"
                             title="Download current view or animation">
@@ -271,8 +283,9 @@
                     </div>
                 </div>
                 <div class="ir-options-wrap" id="ir-options-wrap">
-                    <button class="ir-kml-btn ir-options-btn" type="button"
+                    <button class="ir-hdr-btn ir-options-btn" type="button"
                             onclick="window._irToggleOptionsMenu()"
+                            aria-label="Options"
                             aria-haspopup="true" aria-expanded="false"
                             title="View toggles, display modes, and actions">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -921,11 +934,6 @@
                 </div>
 
                 <!-- Official forecast link -->
-                <div class="ir-info-section" id="ir-official-section" style="display:none;">
-                    <a id="ir-official-link" href="#" target="_blank" rel="noopener"
-                       class="ir-official-link">View Official Forecast &rarr;</a>
-                    <div class="ir-official-note">Opens the official advisory from the responsible agency (NHC or JTWC).</div>
-                </div>
 
                 <!-- Recon cross-reference -->
                 <div class="ir-info-section" id="ir-recon-section" style="display:none;">
@@ -2762,7 +2770,7 @@
     <script defer src="tc_mw_layer.js?v=20260920a"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261007wr"></script>
-    <script defer src="realtime_ir.js?v=20261009p1d"></script>
+    <script defer src="realtime_ir.js?v=20261009p1e"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays

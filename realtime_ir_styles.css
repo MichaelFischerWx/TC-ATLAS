@@ -399,10 +399,13 @@ html, body { margin: 0; padding: 0; }
     background: var(--surface-raised);
     flex-shrink: 0;   /* keep natural height; never compress into the body */
 }
+/* ← All Storms is the only way back to the map: body-text color and a
+   visible border, the same secondary style as the header's other buttons
+   (.ir-hdr-btn). It used to be #8993a4 on a 6% tint, about 2.7:1. */
 .ir-back-btn {
-    background: var(--border);
-    border: 1px solid rgba(15, 22, 35, 0.1);
-    color: #8993a4;
+    background: var(--surface-raised);
+    border: 1px solid rgba(15, 22, 35, 0.24);
+    color: var(--text);
     font-size: 0.8rem;
     font-weight: 500;
     padding: 6px 14px;
@@ -414,26 +417,61 @@ html, body { margin: 0; padding: 0; }
 }
 .ir-back-btn:hover {
     color: var(--text);
-    background: rgba(15, 22, 35, 0.1);
+    background: var(--navy-mid);
+    border-color: rgba(15, 22, 35, 0.38);
 }
 .ir-detail-title {
     display: flex;
     align-items: center;
     gap: 10px;
 }
-.ir-detail-storm-select {
-    background: var(--surface-raised);
-    color: var(--text);
-    border: 1px solid var(--border);
+/* Storm name + id. With ≥2 active storms it doubles as the storm switcher:
+   the native select is stretched invisibly over it (still focusable and
+   announced as "Switch active storm") and a chevron appears. */
+.ir-detail-name-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    padding: 2px 6px;
+    margin: -2px -6px;
     border-radius: 6px;
-    padding: 5px 10px;
-    font-size: 0.78rem;
-    font-family: 'DM Sans', sans-serif;
-    font-variant-numeric: tabular-nums;
-    max-width: 280px;
-    cursor: pointer;
+    transition: background 0.15s;
 }
-.ir-detail-storm-select:hover { border-color: rgba(255, 255, 255, 0.2); }
+.ir-detail-switch-caret {
+    display: none;
+    align-self: center;
+    width: 15px;
+    height: 15px;
+    margin-left: -2px;
+    fill: none;
+    stroke: var(--text-dim);
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.ir-detail-name-wrap.has-switcher .ir-detail-switch-caret { display: block; }
+.ir-detail-name-wrap.has-switcher:hover { background: var(--navy-mid); }
+.ir-detail-name-wrap.has-switcher:hover .ir-detail-switch-caret { stroke: var(--text); }
+.ir-detail-name-wrap:has(.ir-detail-storm-select:focus-visible) {
+    outline: 2px solid var(--cyan, #F47321);
+    outline-offset: 2px;
+}
+.ir-detail-storm-select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+    border: 0;
+    /* 16px keeps iOS Safari from zooming the page when the picker opens. */
+    font-size: 16px;
+    -webkit-appearance: none;
+    appearance: none;
+}
+.ir-detail-storm-select:focus-visible { outline: none !important; }
 .ir-detail-name {
     font-size: 1.1rem;
     font-weight: 700;
@@ -489,25 +527,29 @@ html, body { margin: 0; padding: 0; }
     outline: none;
 }
 
-/* Storm-detail header pills — KML / Satellite / Microwave.
-   Tinted with the site's UM brand palette: green for primary
-   data export + in-page nav (KML, Microwave), orange for the
-   loud "open external viewer" accent (Satellite). */
-.ir-kml-btn {
+/* Storm-detail header actions (official forecast, Download, Options): ONE
+   neutral secondary style, the same as ← All Storms. Color in the header is
+   for status only — the category badge and the live-recon badge. */
+.ir-hdr-btn {
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    font-family: 'DM Sans', sans-serif;
     font-size: 0.75rem;
-    padding: 3px 9px;
-    border-radius: 4px;
-    border: 1px solid rgba(0, 80, 48, 0.4);
-    background: rgba(0, 80, 48, 0.10);
-    color: var(--um-green);
+    font-weight: 500;
+    line-height: 1.3;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(15, 22, 35, 0.24);
+    background: var(--surface-raised);
+    color: var(--text);
     cursor: pointer;
+    text-decoration: none;
+    white-space: nowrap;
     margin-left: 8px;
     transition: background 0.2s, border-color 0.2s, color 0.2s;
 }
-.ir-kml-btn svg {
+.ir-hdr-btn svg {
     flex-shrink: 0;
     width: 13px;
     height: 13px;
@@ -517,18 +559,10 @@ html, body { margin: 0; padding: 0; }
     stroke-linecap: round;
     stroke-linejoin: round;
 }
-.ir-kml-btn:hover {
-    background: rgba(0, 80, 48, 0.20);
-    border-color: rgba(0, 80, 48, 0.55);
-}
-[data-theme="dark"] .ir-kml-btn {
-    color: var(--um-green);
-    border-color: rgba(74, 155, 110, 0.5);
-    background: rgba(74, 155, 110, 0.14);
-}
-[data-theme="dark"] .ir-kml-btn:hover {
-    background: rgba(74, 155, 110, 0.26);
-    border-color: rgba(74, 155, 110, 0.65);
+.ir-hdr-btn:hover {
+    background: var(--navy-mid);
+    border-color: rgba(15, 22, 35, 0.38);
+    color: var(--text);
 }
 /* Grid + Obs toggles dim when inactive so users can see at a glance
    whether the overlay is on. Active state inherits the green tint. */
@@ -567,7 +601,7 @@ html, body { margin: 0; padding: 0; }
 }
 .ir-stn-plot-tooltip::before { display: none; }
 
-/* Download dropdown — wraps the .ir-kml-btn-styled button and a
+/* Download dropdown — wraps the .ir-hdr-btn-styled button and a
    floating menu of three options (PNG/GIF/KML). */
 .ir-download-wrap {
     position: relative;
@@ -1418,14 +1452,18 @@ html, body { margin: 0; padding: 0; }
    which become invisible on the dark surface. Flip the alpha base from
    navy → white in dark mode for the back/kml/animation buttons + slider
    track + frame counter. */
-[data-theme="dark"] .ir-back-btn,
-[data-theme="dark"] .ir-kml-btn,
 [data-theme="dark"] .ir-anim-btn {
     border-color: rgba(255, 255, 255, 0.18);
     background: rgba(255, 255, 255, 0.04);
 }
+[data-theme="dark"] .ir-back-btn,
+[data-theme="dark"] .ir-hdr-btn {
+    border-color: rgba(255, 255, 255, 0.26);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text);
+}
 [data-theme="dark"] .ir-back-btn:hover,
-[data-theme="dark"] .ir-kml-btn:hover,
+[data-theme="dark"] .ir-hdr-btn:hover,
 [data-theme="dark"] .ir-anim-btn:hover {
     background: rgba(255, 255, 255, 0.10);
     color: var(--text);
@@ -1820,31 +1858,6 @@ html, body { margin: 0; padding: 0; }
     text-decoration: underline;
 }
 
-/* ── Official forecast link ─────────────────────────────────── */
-.ir-official-link {
-    display: inline-block;
-    padding: 8px 16px;
-    background: rgba(74, 155, 110, 0.12);
-    border: 1px solid rgba(74, 155, 110, 0.3);
-    border-radius: 6px;
-    color: #60a5fa;
-    text-decoration: none;
-    font-size: 0.82rem;
-    font-weight: 500;
-    transition: all 0.2s;
-}
-.ir-official-link:hover {
-    background: rgba(74, 155, 110, 0.2);
-    border-color: rgba(74, 155, 110, 0.5);
-    color: #93bbfc;
-}
-.ir-official-note {
-    margin-top: 6px;
-    font-size: 0.72rem;
-    color: #64748b;
-    line-height: 1.4;
-}
-
 /* ═══════════════════════════════════════════════════════════════
    Responsive
    ═══════════════════════════════════════════════════════════════ */
@@ -1986,7 +1999,7 @@ html, body { margin: 0; padding: 0; }
                                        its own row(s) below the back
                                        button so the pills wrap cleanly */
     }
-    .ir-kml-btn {
+    .ir-hdr-btn {
         margin-left: 0;
         padding: 6px 9px;
         font-size: 0.72rem;
@@ -1994,9 +2007,6 @@ html, body { margin: 0; padding: 0; }
     }
     .ir-back-btn {
         padding: 6px 11px;
-    }
-    .ir-detail-storm-select {
-        max-width: 150px;
     }
     /* Download dropdown anchors to its button; keep it from being
        clipped by the wrapped header. */
@@ -7859,10 +7869,13 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
        clear of the ☰ Display pill pinned top-left so the IR/Vis/WV segment
        never slides underneath it. */
     .ir-layers-wrap { max-width: calc(100vw - 64px); }
-    /* Storm-card header: let the name share the row with ← All Storms so the
-       sticky block above the map is two rows, not three. */
+    /* Storm-card header in two rows, not three: the title wrapper stops
+       being a box so its children wrap alongside ← All Storms (back + storm +
+       category, then recon + NHC + Download + Options), and Options shows
+       just its ⋯ glyph (the button keeps aria-label="Options"). */
     .ir-detail-header { gap: 6px 8px; padding: 6px 10px; }
-    .ir-detail-title { flex: 1 1 auto; }
+    .ir-detail-title { display: contents; }
+    .ir-options-btn > span { display: none; }
 }
 
 /* Layers panel — sticky section titles + collapsible analysis groups.
