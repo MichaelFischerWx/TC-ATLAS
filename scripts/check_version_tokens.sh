@@ -6,11 +6,13 @@
 # references to the same file.
 #
 # Run from the repo root:  ./scripts/check_version_tokens.sh
+# Runs on every commit that touches a page/JS/CSS via scripts/hooks/pre-commit
+# (install once per clone: scripts/install_hooks.sh).
 # Add new shared files to FILES as they grow page-spanning references.
 set -u
 cd "$(dirname "$0")/.."
 
-PAGES="index.html realtime_ir.html global_archive.html explorer.html tc_climatology.html climatology_globe.html changelog.html about.html"
+PAGES="index.html realtime_ir.html global_archive.html explorer.html tc_climatology.html climatology_globe.html changelog.html about.html archive_season.html 404.html"
 FILES="theme.js tc_export.js tc_errors.js site_pages.css tc_radar_styles.css realtime_tdr_styles.css vol3d.js skewt.js lflet_gl.js global_archive_styles.css realtime_ir.js global_archive.js tc_radar_app.js tc_climatology.js satellite.js realtime_tdr.js satellite_styles.css realtime_ir_styles.css"
 
 fail=0

@@ -399,10 +399,13 @@ html, body { margin: 0; padding: 0; }
     background: var(--surface-raised);
     flex-shrink: 0;   /* keep natural height; never compress into the body */
 }
+/* ← All Storms is the only way back to the map: body-text color and a
+   visible border, the same secondary style as the header's other buttons
+   (.ir-hdr-btn). It used to be #8993a4 on a 6% tint, about 2.7:1. */
 .ir-back-btn {
-    background: var(--border);
-    border: 1px solid rgba(15, 22, 35, 0.1);
-    color: #8993a4;
+    background: var(--surface-raised);
+    border: 1px solid rgba(15, 22, 35, 0.24);
+    color: var(--text);
     font-size: 0.8rem;
     font-weight: 500;
     padding: 6px 14px;
@@ -414,26 +417,61 @@ html, body { margin: 0; padding: 0; }
 }
 .ir-back-btn:hover {
     color: var(--text);
-    background: rgba(15, 22, 35, 0.1);
+    background: var(--navy-mid);
+    border-color: rgba(15, 22, 35, 0.38);
 }
 .ir-detail-title {
     display: flex;
     align-items: center;
     gap: 10px;
 }
-.ir-detail-storm-select {
-    background: var(--surface-raised);
-    color: var(--text);
-    border: 1px solid var(--border);
+/* Storm name + id. With ≥2 active storms it doubles as the storm switcher:
+   the native select is stretched invisibly over it (still focusable and
+   announced as "Switch active storm") and a chevron appears. */
+.ir-detail-name-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    padding: 2px 6px;
+    margin: -2px -6px;
     border-radius: 6px;
-    padding: 5px 10px;
-    font-size: 0.78rem;
-    font-family: 'DM Sans', sans-serif;
-    font-variant-numeric: tabular-nums;
-    max-width: 280px;
-    cursor: pointer;
+    transition: background 0.15s;
 }
-.ir-detail-storm-select:hover { border-color: rgba(255, 255, 255, 0.2); }
+.ir-detail-switch-caret {
+    display: none;
+    align-self: center;
+    width: 15px;
+    height: 15px;
+    margin-left: -2px;
+    fill: none;
+    stroke: var(--text-dim);
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.ir-detail-name-wrap.has-switcher .ir-detail-switch-caret { display: block; }
+.ir-detail-name-wrap.has-switcher:hover { background: var(--navy-mid); }
+.ir-detail-name-wrap.has-switcher:hover .ir-detail-switch-caret { stroke: var(--text); }
+.ir-detail-name-wrap:has(.ir-detail-storm-select:focus-visible) {
+    outline: 2px solid var(--cyan, #F47321);
+    outline-offset: 2px;
+}
+.ir-detail-storm-select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+    border: 0;
+    /* 16px keeps iOS Safari from zooming the page when the picker opens. */
+    font-size: 16px;
+    -webkit-appearance: none;
+    appearance: none;
+}
+.ir-detail-storm-select:focus-visible { outline: none !important; }
 .ir-detail-name {
     font-size: 1.1rem;
     font-weight: 700;
@@ -489,25 +527,29 @@ html, body { margin: 0; padding: 0; }
     outline: none;
 }
 
-/* Storm-detail header pills — KML / Satellite / Microwave.
-   Tinted with the site's UM brand palette: green for primary
-   data export + in-page nav (KML, Microwave), orange for the
-   loud "open external viewer" accent (Satellite). */
-.ir-kml-btn {
+/* Storm-detail header actions (official forecast, Download, Options): ONE
+   neutral secondary style, the same as ← All Storms. Color in the header is
+   for status only — the category badge and the live-recon badge. */
+.ir-hdr-btn {
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    font-family: 'DM Sans', sans-serif;
     font-size: 0.75rem;
-    padding: 3px 9px;
-    border-radius: 4px;
-    border: 1px solid rgba(0, 80, 48, 0.4);
-    background: rgba(0, 80, 48, 0.10);
-    color: var(--um-green);
+    font-weight: 500;
+    line-height: 1.3;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(15, 22, 35, 0.24);
+    background: var(--surface-raised);
+    color: var(--text);
     cursor: pointer;
+    text-decoration: none;
+    white-space: nowrap;
     margin-left: 8px;
     transition: background 0.2s, border-color 0.2s, color 0.2s;
 }
-.ir-kml-btn svg {
+.ir-hdr-btn svg {
     flex-shrink: 0;
     width: 13px;
     height: 13px;
@@ -517,18 +559,10 @@ html, body { margin: 0; padding: 0; }
     stroke-linecap: round;
     stroke-linejoin: round;
 }
-.ir-kml-btn:hover {
-    background: rgba(0, 80, 48, 0.20);
-    border-color: rgba(0, 80, 48, 0.55);
-}
-[data-theme="dark"] .ir-kml-btn {
-    color: var(--um-green);
-    border-color: rgba(74, 155, 110, 0.5);
-    background: rgba(74, 155, 110, 0.14);
-}
-[data-theme="dark"] .ir-kml-btn:hover {
-    background: rgba(74, 155, 110, 0.26);
-    border-color: rgba(74, 155, 110, 0.65);
+.ir-hdr-btn:hover {
+    background: var(--navy-mid);
+    border-color: rgba(15, 22, 35, 0.38);
+    color: var(--text);
 }
 /* Grid + Obs toggles dim when inactive so users can see at a glance
    whether the overlay is on. Active state inherits the green tint. */
@@ -567,7 +601,7 @@ html, body { margin: 0; padding: 0; }
 }
 .ir-stn-plot-tooltip::before { display: none; }
 
-/* Download dropdown — wraps the .ir-kml-btn-styled button and a
+/* Download dropdown — wraps the .ir-hdr-btn-styled button and a
    floating menu of three options (PNG/GIF/KML). */
 .ir-download-wrap {
     position: relative;
@@ -928,7 +962,10 @@ html, body { margin: 0; padding: 0; }
     color: rgba(241, 245, 249, 0.78);
 }
 
-/* ── Product toggle (IR / GeoColor) ────────────────────────── */
+/* ── Product toggle (IR / Visible / WV / Vigor / Combo) ─────────
+   Dark glass in both themes, the same segment as the Global Map's
+   IR/Vis/WV switcher (.ir-mode-segment). It used to be translucent white,
+   so map labels showed through it and it stayed light in dark mode. */
 .ir-product-toggle {
     position: absolute;
     top: 10px;
@@ -938,29 +975,33 @@ html, body { margin: 0; padding: 0; }
     gap: 0;
     border-radius: 5px;
     overflow: hidden;
-    border: 1px solid var(--border-light);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(22, 27, 36, 0.92);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
 }
 .ir-product-btn {
     padding: 5px 12px;
     font-family: 'DM Sans', sans-serif;
     font-size: 0.7rem;
     font-weight: 500;
-    color: #8993a4;
-    background: rgba(255, 255, 255, 0.85);
+    color: #cbd5e1;
+    background: transparent;
     border: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.10);
     cursor: pointer;
     transition: background 0.2s, color 0.2s;
     white-space: nowrap;
 }
+.ir-product-btn:last-child { border-right: none; }
 .ir-product-btn:hover {
-    background: rgba(30, 60, 110, 0.9);
-    color: #c0d0ea;
+    background: rgba(74, 155, 110, 0.18);
+    color: #ffffff;
 }
 .ir-product-btn.ir-product-active {
-    /* Solid, not 25%-transparent — a see-through "selected" button vanished over
-       bright imagery (WV/Vis especially). Opaque green + white text reads on any
-       background and clearly marks the active channel. */
-    background: #4a9b6e;
+    /* Opaque: the segment's own 0.92 glass sits under this tint, so the
+       selected channel stays legible over bright WV/Vis imagery. */
+    background: rgba(74, 155, 110, 0.32);
     color: #ffffff;
 }
 .ir-product-btn.ir-loading {
@@ -971,8 +1012,8 @@ html, body { margin: 0; padding: 0; }
 .ir-product-btn:disabled,
 .ir-product-btn:disabled:hover {
     cursor: default;
-    color: #8993a4;
-    background: rgba(255, 255, 255, 0.85);
+    color: rgba(203, 213, 225, 0.38);
+    background: transparent;
 }
 
 /* ── Storm-detail env Layers control ─────────────────────────────
@@ -992,20 +1033,22 @@ html, body { margin: 0; padding: 0; }
     font-family: 'DM Sans', sans-serif;
     font-size: 0.7rem;
     font-weight: 500;
-    color: #8993a4;
-    background: rgba(255, 255, 255, 0.85);
-    border: 1px solid var(--border-light);
+    color: #cbd5e1;
+    background: rgba(22, 27, 36, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 5px;
     cursor: pointer;
-    transition: background 0.2s, color 0.2s;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
 }
 .ir-detail-layers-btn svg {
     width: 13px; height: 13px; fill: none; stroke: currentColor;
     stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
 }
 .ir-detail-layers-btn svg polygon { fill: currentColor; stroke: none; }
-.ir-detail-layers-btn:hover { background: rgba(30, 60, 110, 0.9); color: #c0d0ea; }
-.ir-detail-layers-btn.active { background: rgba(74, 155, 110, 0.25); color: #60a5fa; }
+.ir-detail-layers-btn:hover { background: rgba(22, 27, 36, 0.96); color: #ffffff; border-color: rgba(74, 155, 110, 0.45); }
+.ir-detail-layers-btn.active { background: rgba(31, 66, 49, 0.94); color: #ffffff; border-color: rgba(74, 155, 110, 0.65); }
 .ir-detail-layers-count {
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 15px; height: 15px; padding: 0 4px;
@@ -1409,14 +1452,18 @@ html, body { margin: 0; padding: 0; }
    which become invisible on the dark surface. Flip the alpha base from
    navy → white in dark mode for the back/kml/animation buttons + slider
    track + frame counter. */
-[data-theme="dark"] .ir-back-btn,
-[data-theme="dark"] .ir-kml-btn,
 [data-theme="dark"] .ir-anim-btn {
     border-color: rgba(255, 255, 255, 0.18);
     background: rgba(255, 255, 255, 0.04);
 }
+[data-theme="dark"] .ir-back-btn,
+[data-theme="dark"] .ir-hdr-btn {
+    border-color: rgba(255, 255, 255, 0.26);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text);
+}
 [data-theme="dark"] .ir-back-btn:hover,
-[data-theme="dark"] .ir-kml-btn:hover,
+[data-theme="dark"] .ir-hdr-btn:hover,
 [data-theme="dark"] .ir-anim-btn:hover {
     background: rgba(255, 255, 255, 0.10);
     color: var(--text);
@@ -1684,6 +1731,16 @@ html, body { margin: 0; padding: 0; }
     letter-spacing: 0.07em;
     color: #94a3b8;
 }
+/* Bar-end key: every meter fills from hostile (left) to favorable (right),
+   so a short red bar is a hostile reading, not missing data. */
+.ir-fav-scale {
+    display: flex;
+    justify-content: space-between;
+    margin: -4px 0 -2px;
+    font-size: 0.62rem;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+}
 .ir-fav-meter { display: flex; flex-direction: column; gap: 4px; }
 .ir-fav-top {
     display: flex;
@@ -1758,6 +1815,20 @@ html, body { margin: 0; padding: 0; }
 .ir-fav-vi-climo { color: #475569; }
 [data-theme="dark"] .ir-fav-vi-climo { color: #a3aec0; }
 .ir-fav-vi-climo:empty { display: none; }
+/* Technical lines (ingredients, empirical + thermodynamic PI, the 24 h
+   climatology) behind a native disclosure; hidden while all are empty. */
+.ir-fav-details { margin-top: 2px; }
+.ir-fav-details:not(:has(.ir-fav-vi-sub:not(:empty))) { display: none; }
+.ir-fav-details > summary {
+    width: max-content;
+    font-size: 0.66rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+}
+.ir-fav-details > summary:hover { color: var(--text); }
+.ir-fav-details[open] > summary { margin-bottom: 3px; }
 
 /* Vmax|MSLP segmented toggle in the intensity-chart heading. */
 .ir-intensity-metric {
@@ -1809,31 +1880,6 @@ html, body { margin: 0; padding: 0; }
 }
 .ir-recon-info a:hover {
     text-decoration: underline;
-}
-
-/* ── Official forecast link ─────────────────────────────────── */
-.ir-official-link {
-    display: inline-block;
-    padding: 8px 16px;
-    background: rgba(74, 155, 110, 0.12);
-    border: 1px solid rgba(74, 155, 110, 0.3);
-    border-radius: 6px;
-    color: #60a5fa;
-    text-decoration: none;
-    font-size: 0.82rem;
-    font-weight: 500;
-    transition: all 0.2s;
-}
-.ir-official-link:hover {
-    background: rgba(74, 155, 110, 0.2);
-    border-color: rgba(74, 155, 110, 0.5);
-    color: #93bbfc;
-}
-.ir-official-note {
-    margin-top: 6px;
-    font-size: 0.72rem;
-    color: #64748b;
-    line-height: 1.4;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1977,7 +2023,7 @@ html, body { margin: 0; padding: 0; }
                                        its own row(s) below the back
                                        button so the pills wrap cleanly */
     }
-    .ir-kml-btn {
+    .ir-hdr-btn {
         margin-left: 0;
         padding: 6px 9px;
         font-size: 0.72rem;
@@ -1985,9 +2031,6 @@ html, body { margin: 0; padding: 0; }
     }
     .ir-back-btn {
         padding: 6px 11px;
-    }
-    .ir-detail-storm-select {
-        max-width: 150px;
     }
     /* Download dropdown anchors to its button; keep it from being
        clipped by the wrapped header. */
@@ -2246,9 +2289,9 @@ html, body { margin: 0; padding: 0; }
     box-sizing: border-box;
     text-align: left;
     z-index: 600;
-    background: rgba(255, 255, 255, 0.88);
-    color: #8993a4;
-    border: 1px solid rgba(15, 22, 35, 0.1);
+    background: rgba(22, 27, 36, 0.92);
+    color: #cbd5e1;
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 6px;
     padding: 6px 12px;
     font-size: 0.72rem;
@@ -2262,14 +2305,14 @@ html, body { margin: 0; padding: 0; }
     touch-action: manipulation;
 }
 .ir-legend-toggle:hover {
-    background: rgba(255, 255, 255, 0.95);
-    color: var(--text);
-    border-color: rgba(74, 155, 110, 0.3);
+    background: rgba(22, 27, 36, 0.96);
+    color: #ffffff;
+    border-color: rgba(74, 155, 110, 0.45);
 }
 .ir-legend-toggle.active {
-    background: rgba(74, 155, 110, 0.18);
-    color: #60a5fa;
-    border-color: rgba(74, 155, 110, 0.4);
+    background: rgba(31, 66, 49, 0.94);
+    color: #ffffff;
+    border-color: rgba(74, 155, 110, 0.65);
 }
 
 /* ── Global IR animation bar (bottom-left of RT map) ─────────── */
@@ -2477,9 +2520,10 @@ html, body { margin: 0; padding: 0; }
     box-sizing: border-box;
     text-align: left;
     z-index: 600;
-    background: rgba(255, 255, 255, 0.88);
-    color: #8993a4;
-    border: 1px solid rgba(15, 22, 35, 0.1);
+    /* Dark glass in both themes, like every other floating map control. */
+    background: rgba(22, 27, 36, 0.92);
+    color: #cbd5e1;
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 6px;
     padding: 6px 12px;
     font-size: 0.72rem;
@@ -2493,14 +2537,14 @@ html, body { margin: 0; padding: 0; }
     touch-action: manipulation;
 }
 .basin-sidebar-toggle:hover {
-    background: rgba(255, 255, 255, 0.95);
-    color: var(--text);
-    border-color: rgba(74, 155, 110, 0.3);
+    background: rgba(22, 27, 36, 0.96);
+    color: #ffffff;
+    border-color: rgba(74, 155, 110, 0.45);
 }
 .basin-sidebar-toggle.active {
-    background: rgba(74, 155, 110, 0.15);
-    color: #60a5fa;
-    border-color: rgba(74, 155, 110, 0.4);
+    background: rgba(31, 66, 49, 0.94);
+    color: #ffffff;
+    border-color: rgba(74, 155, 110, 0.65);
 }
 
 /* When sidebar is open, shift the toggle button */
@@ -2561,7 +2605,7 @@ body:has(.basin-sidebar.open) #ir-display-wrap { left: 280px; }
 /* "Imagery Only" sits at the head of the menu and hides what every item
    below it toggles, so give it a rule underneath to read as its own tier. */
 #ir-display-menu .ir-clean-item {
-    border-bottom: 1px solid rgba(15, 22, 35, 0.12);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.14);
     padding-bottom: 8px;
     border-radius: 6px 6px 0 0;
     line-height: 1.2;   /* the label wraps to two lines in the 104px column */
@@ -2569,9 +2613,9 @@ body:has(.basin-sidebar.open) #ir-display-wrap { left: 280px; }
 /* Clean view is easy to forget once the menu is shut (the map just looks
    empty) — accent the collapsed pill so the state is visible from the corner. */
 .ir-display-toggle.ir-clean-on {
-    background: rgba(74, 155, 110, 0.22);
-    color: #60a5fa;
-    border-color: rgba(74, 155, 110, 0.45);
+    background: rgba(31, 66, 49, 0.94);
+    color: #ffffff;
+    border-color: rgba(74, 155, 110, 0.65);
 }
 
 /* IR colormap picker inside the Display menu */
@@ -2579,13 +2623,14 @@ body:has(.basin-sidebar.open) #ir-display-wrap { left: 280px; }
 #ir-display-menu .ir-cmap-select {
     width: 100%;
     font: 500 0.72rem 'DM Sans', sans-serif;
-    color: #8993a4;
-    background: rgba(255, 255, 255, 0.88);
-    border: 1px solid rgba(15, 22, 35, 0.1);
+    color: #cbd5e1;
+    background: rgba(22, 27, 36, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 6px;
     padding: 6px 8px;
     cursor: pointer;
 }
+#ir-display-menu .ir-cmap-select option { background: #161b24; color: #e6e8eb; }
 
 /* Drop the +/- zoom buttons on the global map (all viewports) — continuous
    scroll / pinch zoom is natural on GL, and removing them frees the top-left
@@ -4541,10 +4586,13 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 }
 
 /* Transient toast that announces newly-populated cyclogenesis
-   disturbances on the global map (see _genesisAnnounceArrival). */
+   disturbances on the global map (see _genesisAnnounceArrival). It sits
+   bottom-center just above the animation dock: at the top of the map it
+   covered the IR/Vis/WV/Combo/Off switcher for its whole 8 s. JS lifts it
+   further when the dock is taller than usual. */
 .rt-gen-toast {
     position: absolute;
-    top: 14px;
+    bottom: 132px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 1200;
@@ -4562,13 +4610,9 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     font-size: 12.5px;
     line-height: 1.32;
     cursor: pointer;
-    animation: rt-gen-toast-in 0.32s ease both;
+    animation: rt-gen-toast-up 0.32s ease both;
 }
-@keyframes rt-gen-toast-in {
-    0%   { opacity: 0; transform: translate(-50%, -10px); }
-    100% { opacity: 1; transform: translate(-50%, 0); }
-}
-.rt-gen-toast--out { opacity: 0; transform: translate(-50%, -10px); transition: opacity 0.3s ease, transform 0.3s ease; }
+.rt-gen-toast--out { opacity: 0; transform: translate(-50%, 10px); transition: opacity 0.3s ease, transform 0.3s ease; }
 .rt-gen-toast-dot {
     flex: 0 0 auto;
     width: 9px; height: 9px;
@@ -4590,17 +4634,11 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     opacity: 0.8;
 }
 .rt-gen-toast-close:hover { color: var(--text); opacity: 1; }
-/* Phones: the top of the map is the control bar, so the toast rises from
-   just above the bottom dock instead of covering IR/Vis/WV + Layers. */
 @media (max-width: 768px) {
     .rt-gen-toast {
-        top: auto !important;
-        bottom: 132px;
         font-size: 12px;
         padding: 9px 11px;
-        animation-name: rt-gen-toast-up;
     }
-    .rt-gen-toast--out { transform: translate(-50%, 10px); }
 }
 @keyframes rt-gen-toast-up {
     0%   { opacity: 0; transform: translate(-50%, 10px); }
@@ -7855,10 +7893,13 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
        clear of the ☰ Display pill pinned top-left so the IR/Vis/WV segment
        never slides underneath it. */
     .ir-layers-wrap { max-width: calc(100vw - 64px); }
-    /* Storm-card header: let the name share the row with ← All Storms so the
-       sticky block above the map is two rows, not three. */
+    /* Storm-card header in two rows, not three: the title wrapper stops
+       being a box so its children wrap alongside ← All Storms (back + storm +
+       category, then recon + NHC + Download + Options), and Options shows
+       just its ⋯ glyph (the button keeps aria-label="Options"). */
     .ir-detail-header { gap: 6px 8px; padding: 6px 10px; }
-    .ir-detail-title { flex: 1 1 auto; }
+    .ir-detail-title { display: contents; }
+    .ir-options-btn > span { display: none; }
 }
 
 /* Layers panel — sticky section titles + collapsible analysis groups.

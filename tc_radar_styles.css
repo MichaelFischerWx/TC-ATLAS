@@ -221,6 +221,7 @@ body, .topbar, .leaflet-container, .map-storm-card,
                 border-color 0.18s ease;
 }
 
+:root {
     /* Accent palette — grouped by DATA ROLE, not per-tool. Keep new
        widgets aligned to one of these buckets so the visual language
        stays legible:
@@ -233,7 +234,11 @@ body, .topbar, .leaflet-container, .map-storm-card,
          - Slate (rgba 148,163,184) → neutral kinematic overlays (Barbs, Tilt)
          - Purple/Mint/Amber → reserved tints for *derived* analytics
                                 (CFAD, Z* anomaly, VP scatter), each
-                                visually distinct to aid quick ID. */
+                                visually distinct to aid quick ID.
+       The pastel *-text variants are for the always-dark surfaces that use
+       them (.rt-sub-panel, the 3D volume bar): 6.8-10:1 there in either
+       theme, but only 1.3-1.9:1 on white, so never put them on a light
+       surface. */
     --accent-mw: #fb923c;
     --accent-mw-text: #fdba74;
     --accent-nexrad: #22c55e;
@@ -245,7 +250,17 @@ body, .topbar, .leaflet-container, .map-storm-card,
     --accent-vp: #fbbf24;
     --accent-vp-text: #fde68a;
 }
-* { margin: 0; padding: 0; box-sizing: border-box; }
+/* Global reset. From 2026-05-07 to 2026-10-09 the block above had lost its
+   `:root {` opener; the stray `}` made browsers drop it AND the old
+   `* { margin: 0; padding: 0; box-sizing: border-box; }` reset that followed,
+   so five months of layout work happened without that rule. Only the page
+   margin and border-box sizing came back. A page-by-page check (2026-10-09)
+   found the blanket margin/padding zeroing would only re-space layouts that
+   now rely on browser defaults (the top-bar nav list, Explorer's About and
+   Database headings and lists, the Global Archive filter labels) without
+   fixing anything, so zero margins per component where one needs it. */
+html, body { margin: 0; }
+*, *::before, *::after { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
 body { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: var(--text); background: var(--navy); }
 
@@ -1082,7 +1097,6 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 .citation-box h3 { color: var(--blue-light); margin-bottom: 0.75rem; font-family: 'DM Sans', sans-serif; }
 
 .contact-section { background: var(--surface); border-top: 1px solid var(--border); text-align: center; padding: 4rem 24px; color: var(--text); }
-.contact-section .section-title { color: white; }
 .contact-info { max-width: 500px; margin: 2rem auto; background: var(--border); padding: 2rem; border-radius: var(--radius-lg); backdrop-filter: blur(10px); border: 1px solid var(--border-light); }
 .contact-info a { color: var(--um-green); }
 
@@ -2001,7 +2015,9 @@ footer a:hover { text-decoration: underline; }
         top: 46px;
         left: 0;
         right: 0;
-        background: rgba(255, 255, 255,0.98);
+        /* Theme surface (was a hard-coded white sheet, so dark mode showed
+           grey links on white). Same token index.html's menu uses. */
+        background: var(--surface-raised);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
         border-bottom: 1px solid var(--border);

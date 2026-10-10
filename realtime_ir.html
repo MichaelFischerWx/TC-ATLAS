@@ -37,10 +37,10 @@
     <meta name="twitter:creator" content="@mikefischerwx">
 
     <!-- Favicon -->
-    <link rel="icon" type="image/png" sizes="16x16" href="tc-atlas-favicon-16.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
-    <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
-    <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="tc-atlas-favicon-16.png?v=20261009p1a">
+    <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png?v=20261009p1a">
+    <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png?v=20261009p1a">
+    <link rel="apple-touch-icon" sizes="180x180" href="tc-atlas-apple-touch-180.png?v=20261009p1a">
     <link rel="manifest" href="manifest.json">
     <link rel="canonical" href="https://tcatlas.org/realtime_ir.html">
     <meta name="theme-color" content="#005030" media="(prefers-color-scheme: light)">
@@ -48,9 +48,9 @@
     <meta name="apple-mobile-web-app-title" content="TC-ATLAS">
 
     <title>Real-Time Monitor — TC-ATLAS</title>
-    <script src="theme.js?v=20260924a"></script>
+    <script src="theme.js?v=20261009p1a"></script>
     <script defer src="tc_export.js?v=20260803c"></script>
-    <script defer src="tc_errors.js?v=20261009p2a"></script>
+    <script defer src="tc_errors.js?v=20261010m1"></script>
 
     <!-- Leaflet CSS kept (chrome reuses some .leaflet-* classes); map engine is
          MapLibre via the lflet_gl.js facade (gl-engine-swap branch). -->
@@ -83,7 +83,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261009p2d">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261010m1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -116,10 +116,10 @@
     </script>
 
     <!-- Styles -->
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20261009p2b">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261009vic">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20261010m1">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261009p1d">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261009p2a">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261009p1a">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -129,7 +129,7 @@
         <div class="topbar-inner">
             <div class="topbar-brand">
                 <a class="topbar-home" href="index.html" aria-label="TC-ATLAS home">
-                    <img src="tc-atlas-favicon-64.png" alt="" class="topbar-icon" width="28" height="28">
+                    <img src="tc-atlas-favicon-64.png?v=20261009p1a" alt="" class="topbar-icon" width="28" height="28">
                     <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
                 </a>
                 <div class="topbar-divider"></div>
@@ -224,23 +224,35 @@
     <section id="ir-detail" class="ir-detail" style="display:none;" aria-label="Storm detail">
         <div class="ir-detail-header">
             <button id="ir-back-btn" class="ir-back-btn" aria-label="Back to all storms">&larr; All Storms</button>
-            <!-- In-tab storm switcher — shown when ≥2 active storms so users
-                 can switch between them without going back to the global map. -->
-            <select id="ir-detail-storm-select"
-                    class="ir-detail-storm-select"
-                    aria-label="Switch active storm"
-                    style="display:none;"
-                    onchange="if(this.value)window._irOpenStorm(this.value)"></select>
             <div class="ir-detail-title">
-                <span id="ir-detail-name" class="ir-detail-name"></span>
-                <span id="ir-detail-id" class="ir-detail-id"></span>
+                <!-- The storm's name IS the switcher: with ≥2 active storms a
+                     native select (invisible, laid over the name) lists them
+                     and a chevron appears; with one storm it's a plain title. -->
+                <span id="ir-detail-name-wrap" class="ir-detail-name-wrap">
+                    <span id="ir-detail-name" class="ir-detail-name"></span>
+                    <span id="ir-detail-id" class="ir-detail-id"></span>
+                    <svg class="ir-detail-switch-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                    <select id="ir-detail-storm-select"
+                            class="ir-detail-storm-select"
+                            aria-label="Switch active storm"
+                            style="display:none;"
+                            onchange="if(this.value)window._irOpenStorm(this.value)"></select>
+                </span>
                 <span id="ir-detail-cat" class="ir-detail-cat"></span>
                 <span id="ir-detail-recon" class="ir-recon-badge" style="display:none;" role="button" tabindex="0"
                       onclick="window._reconOpenForStorm && window._reconOpenForStorm(this.dataset.atcf)"
                       onkeydown="if((event.key==='Enter'||event.key===' ')&&window._reconOpenForStorm){event.preventDefault();window._reconOpenForStorm(this.dataset.atcf);}"
                       title="Aircraft reconnaissance active — click to open Live Flight">✈ RECON</span>
+                <!-- Official advisory link: status badges first (category, recon),
+                     then this, then the export/view actions. -->
+                <a id="ir-official-link" class="ir-hdr-btn ir-official-link" href="#" target="_blank" rel="noopener"
+                   style="display:none;"
+                   title="Opens the official advisory from the responsible agency (NHC or JTWC)">
+                    <span id="ir-official-label">Official forecast</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>
+                </a>
                 <div class="ir-download-wrap" id="ir-download-wrap">
-                    <button class="ir-kml-btn ir-download-btn" type="button"
+                    <button class="ir-hdr-btn ir-download-btn" type="button"
                             onclick="window._irToggleDownloadMenu()"
                             aria-haspopup="true" aria-expanded="false"
                             title="Download current view or animation">
@@ -271,8 +283,9 @@
                     </div>
                 </div>
                 <div class="ir-options-wrap" id="ir-options-wrap">
-                    <button class="ir-kml-btn ir-options-btn" type="button"
+                    <button class="ir-hdr-btn ir-options-btn" type="button"
                             onclick="window._irToggleOptionsMenu()"
+                            aria-label="Options"
                             aria-haspopup="true" aria-expanded="false"
                             title="View toggles, display modes, and actions">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -492,6 +505,9 @@
                          muted "n/a" bar when a source is unavailable. -->
                     <div class="ir-fav-dash" id="ir-fav-dash">
                         <div class="ir-fav-heading">Environmental favorability</div>
+                        <!-- What the bar ends mean: every meter below (VI too) fills
+                             from hostile at the left to favorable at the right. -->
+                        <div class="ir-fav-scale" aria-hidden="true"><span>&larr; hostile</span><span>favorable &rarr;</span></div>
                         <div class="ir-fav-meter" id="ir-fav-shear">
                             <div class="ir-fav-top"><span class="ir-fav-label">Deep-layer shear<button type="button" class="ir-info-help" tabindex="0" aria-label="About deep-layer shear" title="850–200 hPa environmental shear (SHIPS 200–800 km ring). Lower is more favorable: <10 kt supportive, 10–20 kt marginal, >20 kt hostile. Source: latest GFS 0.25° analysis.">i</button></span><span class="ir-fav-val" id="ir-fav-shear-val">&mdash;</span></div>
                             <div class="ir-fav-bar"><div class="ir-fav-fill"></div></div>
@@ -510,8 +526,14 @@
                         <div class="ir-fav-meter ir-fav-composite" id="ir-fav-vi">
                             <div class="ir-fav-top"><span class="ir-fav-label">Ventilation index<button type="button" class="ir-info-help" tabindex="0" aria-label="About the ventilation index" title="Ventilation index (Tang & Emanuel 2012): VI = deep-layer shear × mid-level entropy deficit χ_m / potential intensity. A single composite of the three levers — low shear, moist mid-levels, and high ocean potential all lower it. Lower VI = more favorable; rapid intensification becomes unlikely as VI rises. Shear: 850–200 hPa; χ_m: 600 hPa entropy deficit (saturation entropy over the inner 0–100 km disc, environmental entropy over the 100–300 km annulus); potential intensity: empirical (SST-based, DeMaria–Kaplan). The chip is its percentile among tropical and subtropical cyclones in the same basin, 1991–2025, and the bar color is its third of that distribution (lowest third favorable, top third hostile). The last line says what those storms did over the next 24 h: median intensity change, 10–90% range and how often they intensified rapidly (≥30 kt). The climatology computes VI over the same regions as the live value, from ERA5 with the previous day’s OISST; intensities come from IBTrACS.">i</button><span class="ir-fav-sub" id="ir-fav-vi-pct"></span></span><span class="ir-fav-val" id="ir-fav-vi-val">&mdash;</span></div>
                             <div class="ir-fav-bar"><div class="ir-fav-fill"></div></div>
-                            <div class="ir-fav-vi-sub" id="ir-fav-vi-sub"></div>
-                            <div class="ir-fav-vi-sub ir-fav-vi-climo" id="ir-fav-vi-climo"></div>
+                            <!-- Technical lines (ingredients, both PIs, the 24 h
+                                 climatology) fold away; the bar + percentile
+                                 carry the at-a-glance read. -->
+                            <details class="ir-fav-details" id="ir-fav-details">
+                                <summary>Details</summary>
+                                <div class="ir-fav-vi-sub" id="ir-fav-vi-sub"></div>
+                                <div class="ir-fav-vi-sub ir-fav-vi-climo" id="ir-fav-vi-climo"></div>
+                            </details>
                         </div>
                         <div class="ir-fav-note" id="ir-fav-note"></div>
                     </div>
@@ -923,11 +945,6 @@
                 </div>
 
                 <!-- Official forecast link -->
-                <div class="ir-info-section" id="ir-official-section" style="display:none;">
-                    <a id="ir-official-link" href="#" target="_blank" rel="noopener"
-                       class="ir-official-link">View Official Forecast &rarr;</a>
-                    <div class="ir-official-note">Opens the official advisory from the responsible agency (NHC or JTWC).</div>
-                </div>
 
                 <!-- Recon cross-reference -->
                 <div class="ir-info-section" id="ir-recon-section" style="display:none;">
@@ -2759,19 +2776,19 @@
     })();
     </script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
-    <script defer src="skewt.js?v=20260930sv1"></script>
+    <script defer src="skewt.js?v=20261009p1a"></script>
     <script defer src="sonde_card.js?v=20260930d"></script>
     <script defer src="tc_mw_layer.js?v=20260920a"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261007wr"></script>
-    <script defer src="realtime_ir.js?v=20261009p2d"></script>
+    <script defer src="realtime_ir.js?v=20261010m1"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
          eager for the map-tab recon-overlay sonde skew-Ts. The recon /
          subseasonal / seasonal tab modules (~1 MB combined) lazy-load on first
          tab activation — see _lazyViewMods in the tab controller below. -->
-    <script defer src="satellite.js?v=20261009p2a"></script>
+    <script defer src="satellite.js?v=20261010m1"></script>
 
     <script>
     /* Tab switching between Map, Satellite, Subseasonal, and Seasonal views */
@@ -2869,7 +2886,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261010p2m';
+        var _LAZY_ASSET_V = '?v=20261010m1';
         var _lazyViewMods = {
             recon:       { js: ['tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

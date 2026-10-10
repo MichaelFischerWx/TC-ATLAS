@@ -30,10 +30,10 @@
     <meta name="twitter:image" content="https://tcatlas.org/images/og-preview.png">
 
     <!-- Favicon -->
-    <link rel="icon" type="image/png" sizes="16x16" href="tc-atlas-favicon-16.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
-    <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
-    <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="tc-atlas-favicon-16.png?v=20261009p1a">
+    <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png?v=20261009p1a">
+    <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png?v=20261009p1a">
+    <link rel="apple-touch-icon" sizes="180x180" href="tc-atlas-apple-touch-180.png?v=20261009p1a">
     <link rel="manifest" href="manifest.json">
     <link rel="canonical" href="https://tcatlas.org/explorer.html">
     <meta name="theme-color" content="#005030" media="(prefers-color-scheme: light)">
@@ -41,9 +41,9 @@
     <meta name="apple-mobile-web-app-title" content="TC-ATLAS">
 
     <title>TC-RADAR — TC-ATLAS</title>
-    <script src="theme.js?v=20260924a"></script>
+    <script src="theme.js?v=20261009p1a"></script>
     <script defer src="tc_export.js?v=20260803c"></script>
-    <script defer src="tc_errors.js?v=20261009p2a"></script>
+    <script defer src="tc_errors.js?v=20261010m1"></script>
     <link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css?v=1.9.4" />
     <link rel="stylesheet" href="assets/vendor/markercluster/MarkerCluster.css?v=1.5.3" />
     <link rel="stylesheet" href="assets/vendor/markercluster/MarkerCluster.Default.css?v=1.5.3" />
@@ -60,10 +60,10 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundle + parser-injected map engine, discoverable
          from byte 0. Tokens MUST match the script tags below. -->
-    <link rel="preload" as="script" href="tc_radar_app.js?v=20261009p2b">
+    <link rel="preload" as="script" href="tc_radar_app.js?v=20261010m1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20261009p2b">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261009p2a">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20261010m1">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261009p1a">
 </head>
 <body>
     <a href="#map-section" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -71,7 +71,7 @@
         <div class="topbar-inner">
             <div class="topbar-brand">
                 <a class="topbar-home" href="index.html" aria-label="TC-ATLAS home">
-                    <img src="tc-atlas-favicon-64.png" alt="" class="topbar-icon" width="28" height="28">
+                    <img src="tc-atlas-favicon-64.png?v=20261009p1a" alt="" class="topbar-icon" width="28" height="28">
                     <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
                 </a>
                 <div class="topbar-divider"></div>
@@ -300,7 +300,7 @@
     </section>
 
     <section class="contact-section" id="contact">
-        <h2 class="section-title" style="color:white;">Get in Touch</h2>
+        <h2 class="section-title">Get in Touch</h2>
         <p style="font-size:1.1rem;margin-bottom:2rem;opacity:0.9;">Questions about TC-ATLAS? Contact the developer.</p>
         <div class="contact-info">
             <p style="font-size:1.15rem;margin-bottom:0.75rem;"><strong>Dr. Michael Fischer</strong></p>
@@ -426,11 +426,11 @@
         return cb ? p.then(cb) : p;
     };
     </script>
-    <script defer src="skewt.js?v=20260930sv1"></script>
+    <script defer src="skewt.js?v=20261009p1a"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <script defer src="tc_vol_gl.js?v=20260908l"></script>
-    <script defer src="tdr_view.js?v=ex20261009p2b"></script>
-    <script defer src="tc_radar_app.js?v=20261009p2b"></script>
+    <script defer src="tdr_view.js?v=ex20261010m1"></script>
+    <script defer src="tc_radar_app.js?v=20261010m1"></script>
     <!-- realtime_tdr.js (Recon tab, ~114 KB gz) is NOT loaded here any more:
          the Recon UI lives on realtime_ir.html and none of its 71 window.*
          exports or rt-* DOM ids exist on this page. realtime_tdr_styles.css
