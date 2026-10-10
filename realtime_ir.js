@@ -6279,7 +6279,12 @@
         // labels layer's copy as a substring instead of listing CARTO twice.
         // The IR/WV/Vis mosaic is a custom WebGL layer with no source of its
         // own, so its satellite credit lives here too.
-        var basemap = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
+        // Pinned to CARTO's dark variant in BOTH themes (tcaVariant, theme.js):
+        // the basemap only shows where the mosaic has no coverage (the
+        // Meteosat gap over Africa/Europe, the poles), and a light basemap
+        // there read as a white wedge of imagery that failed to load.
+        var basemap = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+            tcaVariant: 'dark',
             subdomains: 'abcd',
             maxZoom: 19,
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>'
@@ -6324,7 +6329,9 @@
 
         // Labels on top of IR — stashed on `_labelsLayer` so the "Labels"
         // toggle in the right rail can add/remove it without rebuilding.
-        _labelsLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
+        // Dark variant in both themes to match the pinned basemap above.
+        _labelsLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+            tcaVariant: 'dark',
             subdomains: 'abcd',
             maxZoom: 19,
             pane: 'overlayPane'
