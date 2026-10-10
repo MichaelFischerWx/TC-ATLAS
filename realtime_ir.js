@@ -124,6 +124,9 @@
     function _whenPlotly(fn) {
         if (typeof Plotly !== 'undefined') { fn(); return; }
         window.addEventListener('plotly-ready', function () { fn(); }, { once: true });
+        // Plotly loads after the map on the plain Global Map view; a chart
+        // that is wanted sooner fetches it now (realtime_ir.html).
+        if (window.tcaLoadPlotly) window.tcaLoadPlotly();
     }
 
     // Transient toast for actions whose failure/fallback would otherwise be
@@ -4848,6 +4851,7 @@
     }
 
     function _rtRenderObHistory(payload, ob) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _rtRenderObHistory.apply(_pt, _pa); }); return; }
         var st = document.getElementById('rt-obs-hist-status');
         var series = (payload && payload.series) || [];
         if (!series.length) {
@@ -6207,7 +6211,14 @@
      *  ('idle', 'loading', 'ready', 'playing') are passed in so the
      *  loading-pct case can show a percentage, but most of the visual
      *  state is driven by the globalAnim* booleans via _refreshAnimSlider. */
+    var _imageryReadyAnnounced = false;
     function updateGlobalAnimControls(state, pct) {
+        // First imagery on the map: deferred downloads (Plotly) wait for this
+        // so they don't compete with the first satellite frame on a phone.
+        if (!_imageryReadyAnnounced && (state === 'ready' || state === 'playing')) {
+            _imageryReadyAnnounced = true;
+            try { window.dispatchEvent(new Event('tca-imagery-ready')); } catch (e) {}
+        }
         var panel = document.getElementById('ir-global-anim-panel');
         if (!panel) return;
         var playBtn = document.getElementById('ir-global-anim-play');
@@ -10060,6 +10071,8 @@
     /** Open the storm detail view */
     function openStormDetail(atcfId) {
         currentStormId = atcfId;
+        // The card is mostly charts; start Plotly now if the idle load hasn't.
+        if (window.tcaLoadPlotly) window.tcaLoadPlotly();
 
         // Hide the active-storm gallery landing — opening a card replaces it.
         var _satGallery = document.getElementById('sat-gallery');
@@ -10956,6 +10969,7 @@
      * cached /shear response of the active storm.
      */
     function _rtRenderEnvProfile(payload) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _rtRenderEnvProfile.apply(_pt, _pa); }); return; }
         if (!payload || !payload.profile) return;
         var prof = payload.profile;
         if (!prof.plev_hpa || !prof.plev_hpa.length) return;
