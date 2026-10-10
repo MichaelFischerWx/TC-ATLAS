@@ -7356,19 +7356,21 @@
             marker.addTo(map);
             stormMarkers.push(marker);
         }
-        _fitNarrowViewToStorms(storms);
+        _fitViewToStorms(storms);
     }
 
-    // On a phone the desktop default view (Atlantic-centered, zoom 3) crops
-    // to an empty strip of ocean with every active system off-screen. Once,
-    // on the first storm render, fit the viewport to the systems instead —
-    // desktop keeps its wide default because the storms are already in view.
-    var _narrowFitDone = false;
-    function _fitNarrowViewToStorms(storms) {
-        if (_narrowFitDone || !map) return;
-        if (!(window.matchMedia && window.matchMedia('(max-width: 768px)').matches)) return;
+    // Once, on the first storm render, frame the active systems.
+    // On a phone the default view (Atlantic-centered, zoom 3) crops to an
+    // empty strip of ocean, so it always fits. A wider screen keeps that
+    // familiar default when it already shows every tropical cyclone and fits
+    // otherwise: on 10 Oct 2026 it clipped Simon (130 kt) at its left edge and
+    // left Koguma (120 kt, West Pacific) out of view.
+    var _firstFitDone = false;
+    function _fitViewToStorms(storms) {
+        if (_firstFitDone || !map) return;
         // A deep link is about to open a storm card / basin — don't fight it.
-        if (window.location.hash && window.location.hash.length > 1) { _narrowFitDone = true; return; }
+        if (window.location.hash && window.location.hash.length > 1) { _firstFitDone = true; return; }
+        var narrow = !!(window.matchMedia && window.matchMedia('(max-width: 768px)').matches);
         var pts = [];
         for (var i = 0; i < (storms || []).length; i++) {
             var s = storms[i];
@@ -7379,10 +7381,13 @@
             }
         }
         if (!pts.length) return;
-        _narrowFitDone = true;
+        _firstFitDone = true;
+        if (!narrow && _defaultViewShowsStorms(storms)) return;
+        // Phones zoom in further; a desktop stays an overview.
+        var singleZoom = narrow ? 4 : 3.5, maxFitZoom = narrow ? 5 : 4;
         try {
             if (pts.length === 1) {
-                map.setView([pts[0].lat, pts[0].lon], 4, { animate: false });
+                map.setView([pts[0].lat, pts[0].lon], singleZoom, { animate: false });
                 return;
             }
             // Longitudes are fitted as the shortest arc around the globe, so
@@ -7397,6 +7402,11 @@
             var c = map.getContainer();
             var tilePx = map._gl ? 512 : 256;
             var minZ = map._gl ? map._gl.getMinZoom() : (map.getMinZoom ? map.getMinZoom() : 2);
+            // A desktop at zoom 2 shows ~240°, too far out to read a storm.
+            // When the systems span more than fits at zoom 2.5 (~150-170° at
+            // laptop widths), frame the strongest system's region instead.
+            // (The fit padding can still settle a little below 2.5.)
+            if (!narrow) minZ = Math.max(minZ, 2.5);
             var fitSpan = 360 * Math.max((c ? c.clientWidth : 390) - 48, 100) / (tilePx * Math.pow(2, minZ));
             var arc = _lonArc(pts);
             if (arc.span > fitSpan) {
@@ -7409,12 +7419,30 @@
                 north = Math.max(north, pts[k].lat);
             }
             if (pts.length === 1) {
-                map.setView([pts[0].lat, pts[0].lon], 4, { animate: false });
+                map.setView([pts[0].lat, pts[0].lon], singleZoom, { animate: false });
             } else {
                 map.fitBounds(L.latLngBounds([south, arc.west], [north, arc.east]).pad(0.25),
-                              { animate: false, maxZoom: 5, padding: [24, 24] });
+                              { animate: false, maxZoom: maxFitZoom, padding: [24, 24] });
             }
         } catch (e) { /* facade without fitBounds — keep default view */ }
+    }
+
+    /** True when every tropical cyclone (invests aside) sits inside the
+     *  current view with a little margin, so the default view can stay. */
+    function _defaultViewShowsStorms(storms) {
+        try {
+            var b = map.getBounds(), c = map.getCenter();
+            var halfLon = (b.getEast() - b.getWest()) / 2, mLon = halfLon * 0.06;
+            var mLat = (b.getNorth() - b.getSouth()) * 0.06;
+            for (var i = 0; i < (storms || []).length; i++) {
+                var s = storms[i];
+                if (!s || s.lat == null || s.lon == null || _irIsInvest(s.atcf_id)) continue;
+                var dLon = ((s.lon - c.lng) % 360 + 540) % 360 - 180;
+                if (Math.abs(dLon) > halfLon - mLon) return false;
+                if (s.lat < b.getSouth() + mLat || s.lat > b.getNorth() - mLat) return false;
+            }
+            return true;   // also when only invests are active
+        } catch (e) { return true; }
     }
 
     function _lon360(x) { return ((x % 360) + 360) % 360; }
