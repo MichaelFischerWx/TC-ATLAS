@@ -7,6 +7,15 @@
 (function () {
     'use strict';
 
+    // Plotly loads after the map on the plain Global Map view (see
+    // realtime_ir.html). Chart entry points that can run before it arrives
+    // re-run themselves once it has, and ask for it if nothing else has yet.
+    function _satWhenPlotly(fn) {
+        if (typeof Plotly !== 'undefined') { fn(); return; }
+        window.addEventListener('plotly-ready', function () { fn(); }, { once: true });
+        if (window.tcaLoadPlotly) window.tcaLoadPlotly();
+    }
+
     // Theme-aware Plotly gridline color. The old hardcoded faint-white
     // values were invisible on the (default) light theme's white panels.
     function _satGrid() {
@@ -1603,6 +1612,7 @@
     var DIAG_CONFIG = { displayModeBar: false, responsive: true, staticPlot: _isMobile, scrollZoom: false };
 
     function renderRadialProfileChart(frame, targetId, zoomDegArg) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _satWhenPlotly(function () { renderRadialProfileChart.apply(_pt, _pa); }); return; }
         var div = document.getElementById(targetId || 'sat-diag-radial');
         if (!div) return;
         var profile = computeRadialProfile(frame, zoomDegArg);
@@ -1654,6 +1664,7 @@
     }
 
     function renderCenterFixTimeSeries(framesArg, curTimeArg, targetId) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _satWhenPlotly(function () { renderCenterFixTimeSeries.apply(_pt, _pa); }); return; }
         var div = document.getElementById(targetId || 'sat-diag-timeseries');
         if (!div) return;
         var ts = buildCenterFixTimeSeries(framesArg);
@@ -1755,6 +1766,7 @@
     }
 
     function renderTbHistogramChart(frame, targetId) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _satWhenPlotly(function () { renderTbHistogramChart.apply(_pt, _pa); }); return; }
         var div = document.getElementById(targetId || 'sat-diag-histogram');
         if (!div) return;
         var hist = computeTbHistogram(frame);

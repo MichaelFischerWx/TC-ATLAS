@@ -83,7 +83,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261010m1">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261010pf1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -117,7 +117,7 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261010m1">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261009p1d">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261010pf1">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261009p1a">
 </head>
@@ -2765,14 +2765,51 @@
     // parallel while the map initializes. Chart entry points that can fire
     // before it arrives (deep-linked storm cards) defer through
     // _whenPlotly() in realtime_ir.js, keyed off this 'plotly-ready' event.
+    //
+    // It still downloads on every visit, but no longer at parse time: on a
+    // phone that put ~1 MB in front of the map's own scripts and data. A deep
+    // link (#storm, #satellite&…, #seasonal, …) can draw charts during boot,
+    // so those fetch it right away. The plain map view draws no charts, so it
+    // waits until the page has loaded and gone idle. Anything that needs it
+    // sooner calls window.tcaLoadPlotly(): _whenPlotly(), opening a storm
+    // card, and every tab other than the map (the tab loader waits for it).
     (function () {
-        var s = document.createElement('script');
-        s.src = 'https://cdn.plot.ly/plotly-2.27.0.min.js';
-        s.async = true;
-        s.onload = function () {
-            try { window.dispatchEvent(new Event('plotly-ready')); } catch (e) {}
-        };
-        document.head.appendChild(s);
+        var pending = null;
+        function load() {
+            if (window.Plotly) return Promise.resolve(true);
+            if (pending) return pending;
+            pending = new Promise(function (resolve) {
+                var s = document.createElement('script');
+                s.src = 'https://cdn.plot.ly/plotly-2.27.0.min.js';
+                s.async = true;
+                s.onload = function () {
+                    try { window.dispatchEvent(new Event('plotly-ready')); } catch (e) {}
+                    resolve(true);
+                };
+                s.onerror = function () { pending = null; resolve(false); };
+                document.head.appendChild(s);
+            });
+            return pending;
+        }
+        window.tcaLoadPlotly = load;
+        /* skewt.js (dropsonde Skew-Ts from the map's recon overlay) waits on
+           window.ensurePlotly() when a page provides one. */
+        if (typeof window.ensurePlotly !== 'function') window.ensurePlotly = load;
+        if (location.hash && location.hash.length > 1) { load(); return; }
+        /* Plain map view: wait for the first satellite imagery (realtime_ir.js
+           fires tca-imagery-ready), or 12 s after the page loads if the
+           imagery is slow, then fetch Plotly when the browser is idle. */
+        var queued = false;
+        function whenIdle() {
+            if (queued) return;
+            queued = true;
+            (window.requestIdleCallback || function (f) { setTimeout(f, 1500); })(
+                function () { load(); }, { timeout: 4000 });
+        }
+        window.addEventListener('tca-imagery-ready', whenIdle, { once: true });
+        function fallback() { setTimeout(whenIdle, 12000); }
+        if (document.readyState === 'complete') fallback();
+        else window.addEventListener('load', fallback, { once: true });
     })();
     </script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
@@ -2780,15 +2817,15 @@
     <script defer src="sonde_card.js?v=20260930d"></script>
     <script defer src="tc_mw_layer.js?v=20260920a"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
-    <script defer src="realtime_ir_dm.js?v=20261007wr"></script>
-    <script defer src="realtime_ir.js?v=20261010m1"></script>
+    <script defer src="realtime_ir_dm.js?v=20261010pf1"></script>
+    <script defer src="realtime_ir.js?v=20261010pf1"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
          eager for the map-tab recon-overlay sonde skew-Ts. The recon /
          subseasonal / seasonal tab modules (~1 MB combined) lazy-load on first
          tab activation — see _lazyViewMods in the tab controller below. -->
-    <script defer src="satellite.js?v=20261010m1"></script>
+    <script defer src="satellite.js?v=20261010pf1"></script>
 
     <script>
     /* Tab switching between Map, Satellite, Subseasonal, and Seasonal views */
@@ -2920,8 +2957,16 @@
             });
             return _lazyLoads[src];
         }
-        function _ensureViewModules(view, cb) {
+        function _ensureViewModules(view, cb, plotlyTried) {
             var spec = _lazyViewMods[view];
+            /* Every view but the map draws charts, and their modules call
+               Plotly directly. Plotly no longer loads at parse time, so make
+               sure it is in before the view's modules run (one attempt; if
+               the CDN fails the view still opens, as it did before). */
+            if (!plotlyTried && view !== 'map' && !window.Plotly && window.tcaLoadPlotly) {
+                window.tcaLoadPlotly().then(function () { _ensureViewModules(view, cb, true); });
+                return;
+            }
             if (!spec) { cb(true); return; }   /* map/satellite: synchronous */
             var ps = [];
             (spec.css || []).forEach(function (h) { ps.push(_loadOnce(h, true)); });
@@ -2974,7 +3019,8 @@
                 var isTarget = tabs[i].getAttribute('data-view') ===
                     (_tabForView[view] || view);
                 tabs[i].classList.toggle('active', isTarget);
-                tabs[i].classList.toggle('is-loading', isTarget && !!_lazyViewMods[view]);
+                tabs[i].classList.toggle('is-loading', isTarget &&
+                    (!!_lazyViewMods[view] || (view !== 'map' && !window.Plotly)));
             }
             _ensureViewModules(view, function (ok) {
                 for (var j = 0; j < tabs.length; j++) tabs[j].classList.remove('is-loading');

@@ -124,6 +124,9 @@
     function _whenPlotly(fn) {
         if (typeof Plotly !== 'undefined') { fn(); return; }
         window.addEventListener('plotly-ready', function () { fn(); }, { once: true });
+        // Plotly loads after the map on the plain Global Map view; a chart
+        // that is wanted sooner fetches it now (realtime_ir.html).
+        if (window.tcaLoadPlotly) window.tcaLoadPlotly();
     }
 
     // Transient toast for actions whose failure/fallback would otherwise be
@@ -4848,6 +4851,7 @@
     }
 
     function _rtRenderObHistory(payload, ob) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _rtRenderObHistory.apply(_pt, _pa); }); return; }
         var st = document.getElementById('rt-obs-hist-status');
         var series = (payload && payload.series) || [];
         if (!series.length) {
@@ -6207,7 +6211,14 @@
      *  ('idle', 'loading', 'ready', 'playing') are passed in so the
      *  loading-pct case can show a percentage, but most of the visual
      *  state is driven by the globalAnim* booleans via _refreshAnimSlider. */
+    var _imageryReadyAnnounced = false;
     function updateGlobalAnimControls(state, pct) {
+        // First imagery on the map: deferred downloads (Plotly) wait for this
+        // so they don't compete with the first satellite frame on a phone.
+        if (!_imageryReadyAnnounced && (state === 'ready' || state === 'playing')) {
+            _imageryReadyAnnounced = true;
+            try { window.dispatchEvent(new Event('tca-imagery-ready')); } catch (e) {}
+        }
         var panel = document.getElementById('ir-global-anim-panel');
         if (!panel) return;
         var playBtn = document.getElementById('ir-global-anim-play');
@@ -10060,6 +10071,8 @@
     /** Open the storm detail view */
     function openStormDetail(atcfId) {
         currentStormId = atcfId;
+        // The card is mostly charts; start Plotly now if the idle load hasn't.
+        if (window.tcaLoadPlotly) window.tcaLoadPlotly();
 
         // Hide the active-storm gallery landing — opening a card replaces it.
         var _satGallery = document.getElementById('sat-gallery');
@@ -10956,6 +10969,7 @@
      * cached /shear response of the active storm.
      */
     function _rtRenderEnvProfile(payload) {
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _rtRenderEnvProfile.apply(_pt, _pa); }); return; }
         if (!payload || !payload.profile) return;
         var prof = payload.profile;
         if (!prof.plev_hpa || !prof.plev_hpa.length) return;
@@ -12392,13 +12406,39 @@
     // already loads on demand when the user selects it.
     var MAX_PREFETCH_STORMS = 1;
 
+    // The warm-up is a desktop convenience. A raw-frame set is ~16-24 MB and
+    // a 0.1° move of the storm center invalidates it, so skip it where those
+    // bytes cost more than a faster first click is worth: phones and tablets
+    // (touch or narrow screens), Data Saver and slow connections. Elsewhere it
+    // waits until the map's own scripts, storm list and imagery have loaded,
+    // and runs at most once per storm per page view.
+    var _RAW_PREFETCH_MIN_DELAY_MS = 10000;
+    var _rawTbPrefetched = {};          // atcfId -> true once attempted this page view
+    var _rawTbPrefetchScheduled = false;
+    function _bgPrefetchAllowed() {
+        try {
+            if (window.matchMedia && (window.matchMedia('(pointer: coarse)').matches ||
+                                      window.matchMedia('(max-width: 768px)').matches)) return false;
+            var c = navigator.connection;
+            if (c && (c.saveData || /(^|-)(2g|3g)$/.test(c.effectiveType || ''))) return false;
+        } catch (e) {}
+        return true;
+    }
+
     function _prefetchAllStormsRawTb(storms) {
         if (!storms || storms.length === 0) return;
         // Skip background prefetch while user is viewing a detail (prioritize foreground).
-        // Also defer briefly so deep-link handling can set currentStormId first.
         if (currentStormId) return;
-        // Double-check after a microtask to catch deep-link race
-        setTimeout(function () { _prefetchAllStormsRawTbInner(storms); }, 0);
+        if (_rawTbPrefetchScheduled || !_bgPrefetchAllowed()) return;
+        _rawTbPrefetchScheduled = true;
+        var now = (window.performance && performance.now) ? performance.now() : _RAW_PREFETCH_MIN_DELAY_MS;
+        setTimeout(function () {
+            var idle = window.requestIdleCallback || function (f) { setTimeout(f, 200); };
+            idle(function () {
+                _rawTbPrefetchScheduled = false;
+                _prefetchAllStormsRawTbInner(storms);
+            }, { timeout: 5000 });
+        }, Math.max(0, _RAW_PREFETCH_MIN_DELAY_MS - now));
     }
 
     function _prefetchAllStormsRawTbInner(storms) {
@@ -12414,12 +12454,13 @@
             if (currentStormId) return;
             var storm = queue.shift();
             var atcfId = storm.atcf_id;
-            if (!atcfId || _rawTbCacheValid(atcfId)) { fetchNext(); return; }
+            if (!atcfId || _rawTbPrefetched[atcfId] || _rawTbCacheValid(atcfId)) { fetchNext(); return; }
+            _rawTbPrefetched[atcfId] = true;
             _fetchRawTbIncremental(atcfId, true, function () {
                 console.log('[IR Pre-fetch] ' + atcfId + ': done (' +
                     ((_rawTbCache[atcfId] || {}).rawTbFrames || []).length + ' frames)');
                 fetchNext();
-            });
+            }, { prefetch: true });
         }
         fetchNext();
     }
@@ -12669,8 +12710,9 @@
             });
     }
 
-    function _fetchRawTbIncremental(stormId, silent, onComplete) {
+    function _fetchRawTbIncremental(stormId, silent, onComplete, opts) {
         if (!stormId) return;
+        var prefetch = !!(opts && opts.prefetch);
 
         // Use cache if available, not expired, and storm hasn't moved
         if (_rawTbCacheValid(stormId)) {
@@ -12698,6 +12740,15 @@
         _fetchRawTbManifest(stormId, controller.signal)
             .catch(function (err) {
                 if (err && err.name === 'AbortError') throw err;
+                // A background warm-up stops at the CDN manifest. The bundle and
+                // per-frame fallbacks go to the API (a stale manifest even forces
+                // a rebuild there), which only someone who opened the storm
+                // should pay for.
+                if (prefetch) {
+                    var skip = new Error('prefetch skipped: ' + (err && err.message));
+                    skip._prefetchSkip = true;
+                    throw skip;
+                }
                 console.warn('[RT Monitor] Raw Tb manifest unavailable (' +
                     (err && err.message) + ') — trying bundle');
                 // _forceApi: the manifest existed but was stale/mismatched, so
@@ -12731,6 +12782,10 @@
             })
             .catch(function (err) {
                 if (err && err.name === 'AbortError') return;
+                if (err && err._prefetchSkip) {
+                    console.log('[IR Pre-fetch] ' + stormId + ': ' + err.message);
+                    return;
+                }
                 console.warn('[RT Monitor] Raw Tb bundle failed (' +
                     (err && err.message) + ') — falling back to incremental');
                 _fetchRawTbIncrementalLegacy(stormId, silent, controller, onComplete);
