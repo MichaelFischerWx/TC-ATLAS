@@ -923,11 +923,36 @@
         return 'max ' + n(e.max) + (u ? ' ' + u : '');
     }
 
+    // Vortex-tilt height colorscale, shared by the Plotly plan view and the map.
+    // Magenta family on purpose: the fields under it (Jet wind, reflectivity
+    // rainbow) run blue→green→yellow→red and the IR backdrop is gray, so a
+    // Viridis column blended in. Bright at every height so low levels don't
+    // vanish over the dark inner core.
+    var TILT_COLORSCALE = [
+        [0.00, '#f9a8d4'],   // 0 km  — light pink
+        [0.40, '#e879f9'],   //         magenta
+        [0.70, '#c026d3'],   //         bright magenta
+        [1.00, '#86198f']    // 14 km — deep magenta
+    ];
+    var TILT_CMAX_KM = 14;
+    function tiltColor(h) {
+        var t = Math.max(0, Math.min(1, h / TILT_CMAX_KM)), cs = TILT_COLORSCALE;
+        for (var i = 1; i < cs.length; i++) {
+            if (t > cs[i][0]) continue;
+            var a = cs[i-1], b = cs[i], f = (t - a[0]) / ((b[0] - a[0]) || 1);
+            var ca = parseInt(a[1].slice(1), 16), cb = parseInt(b[1].slice(1), 16);
+            var ch = function (s) { var x = (ca >> s) & 255, y = (cb >> s) & 255; return Math.round(x + (y - x) * f); };
+            return 'rgb(' + ch(16) + ',' + ch(8) + ',' + ch(0) + ')';
+        }
+        return cs[cs.length - 1][1];
+    }
+
     function createDrape(opts) {
         var prefix = opts.prefix || 'tdr';
         var storeKey = prefix + '_radar_opacity';
         var st = { p: null, on: false, overlay: null, ring: null, halo: null, ink: null, tip: null,
-                   hoverMap: null, opacity: 1.0, rangeTimer: null };
+                   hoverMap: null, opacity: 1.0, rangeTimer: null,
+                   tilt: null, tiltLine: null, tiltDots: [] };
         try { var o = parseFloat(localStorage.getItem(storeKey)); if (o >= 0 && o <= 1) st.opacity = o; } catch (e) {}
         function M() { return opts.map(); }
         function fieldVisible() { return opts.fieldVisible ? !!opts.fieldVisible() : true; }
@@ -1012,7 +1037,68 @@
             }
             drawBarbs();
             colorbar();
+            drawTilt();
             if (opts.onDraw) opts.onDraw(p);
+        }
+
+        // Vortex tilt column: WCM centers at each height (the /tilt_profile
+        // record — x_km/y_km relative to the reference-height center at
+        // ref_center_{x,y}_km), dotted line + height-colored dots on the map.
+        function removeTilt() {
+            rm(st.tiltLine); st.tiltLine = null;
+            st.tiltDots.forEach(rm); st.tiltDots = [];
+            tiltLegend();
+        }
+        function drawTilt() {
+            removeTilt();
+            var t = st.tilt, p = st.p;
+            if (!st.on || !t || !p || p.center_lat == null || !t.height_km) return;
+            var offX = t.ref_center_x_km || 0, offY = t.ref_center_y_km || 0, refH = t.ref_height_km || 2.0;
+            var mag = t.tilt_magnitude_km || [], rmw = t.rmw_km || [], pts = [];
+            for (var k = 0; k < t.height_km.length; k++) {
+                var x = t.x_km[k], y = t.y_km[k], h = t.height_km[k];
+                if (x == null || y == null || h == null) continue;
+                pts.push({ ll: latLngFromKm(x + offX, y + offY, p), h: h, dx: x, dy: y, mag: mag[k], rmw: rmw[k] });
+            }
+            if (pts.length < 2) return;
+            var m = M(), z = zBase() + 14;
+            st.tiltLine = L.polyline(pts.map(function (q) { return q.ll; }), {
+                pane: pane(prefix + 'TiltPane', z), color: 'rgba(192,38,211,0.9)', weight: 2,
+                dashArray: '2 5', interactive: false }).addTo(m);
+            // Draw low → high so the upper-level dots sit on top.
+            pts.forEach(function (q) {
+                var ref = Math.abs(q.h - refH) < 0.3;
+                var tip = '<b>' + q.h.toFixed(1) + ' km</b>' + (ref ? ' (reference)' : '') +
+                    '<br>ΔX ' + q.dx.toFixed(1) + ' km · ΔY ' + q.dy.toFixed(1) + ' km' +
+                    (q.mag != null ? '<br>Tilt ' + q.mag.toFixed(1) + ' km' : '') +
+                    (q.rmw != null ? '<br>RMW ' + q.rmw.toFixed(1) + ' km' : '');
+                st.tiltDots.push(L.circleMarker(q.ll, {
+                    pane: prefix + 'TiltPane', radius: ref ? 6 : 4, color: 'rgba(20,0,28,0.9)', weight: 1,
+                    fillColor: tiltColor(q.h), fillOpacity: 1, interactive: true
+                }).bindTooltip(tip, { direction: 'top', offset: [0, -6] }).addTo(m));
+            });
+            tiltLegend();
+        }
+        function setTilt(t) { st.tilt = t || null; drawTilt(); }
+        // One-line height key under the field colorbar while the column shows.
+        function tiltLegend() {
+            var cb = opts.colorbar, el = cb && document.getElementById(cb.id);
+            if (!el) return;
+            var row = el.querySelector('[data-k="tilt"]');
+            if (!st.tiltDots.length) { if (row) row.style.display = 'none'; return; }
+            if (!row) {
+                row = document.createElement('div'); row.setAttribute('data-k', 'tilt');
+                row.style.cssText = 'display:flex;align-items:center;gap:5px;margin-top:4px;font-size:10px;color:#475569;';
+                el.appendChild(row);
+            }
+            var hs = st.tilt.height_km.filter(function (h) { return h != null; });
+            var lo = Math.min.apply(null, hs), hi = Math.max.apply(null, hs);
+            var stops = [0, 0.25, 0.5, 0.75, 1].map(function (f) { return tiltColor(lo + (hi - lo) * f); });
+            row.innerHTML = '<span style="font-weight:600;">Tilt</span><span>' + lo.toFixed(1) + '</span>' +
+                '<span style="flex:1;height:6px;border-radius:3px;background:linear-gradient(to right,' + stops.join(',') + ');"></span>' +
+                '<span>' + hi.toFixed(1) + ' km</span>';
+            row.title = 'Vortex tilt: WCM centers by height (hover a dot)';
+            row.style.display = 'flex';
         }
 
         // Barbs as VECTOR lines (constant screen width, antialiased at every
@@ -1048,7 +1134,15 @@
             var p = st.p;
             if (!st.on || !p || !fieldVisible() || (opts.hoverSuppressed && opts.hoverSuppressed())) { hideTip(); return; }
             var km = kmFromLatLng(e.latlng, p); if (!km) return;
-            var ci = Math.round((km.x - p.x[0]) / (p.x[p.x.length-1] - p.x[0]) * (p.x.length - 1));
+            // Over a tilt dot its own tooltip speaks; don't stack the field value on it.
+            if (st.tiltDots.length) {
+                var m = M(), cp = m.latLngToContainerPoint(e.latlng);
+                for (var j = 0; j < st.tiltDots.length; j++) {
+                    var dp = m.latLngToContainerPoint(st.tiltDots[j].getLatLng());
+                    if (Math.abs(dp.x - cp.x) < 8 && Math.abs(dp.y - cp.y) < 8) { hideTip(); return; }
+                }
+            }
+            var ci =Math.round((km.x - p.x[0]) / (p.x[p.x.length-1] - p.x[0]) * (p.x.length - 1));
             var ri = Math.round((km.y - p.y[0]) / (p.y[p.y.length-1] - p.y[0]) * (p.y.length - 1));
             if (ci < 0 || ci >= p.x.length || ri < 0 || ri >= p.y.length) { hideTip(); return; }
             var v = p.z[ri] ? p.z[ri][ci] : null;
@@ -1152,7 +1246,7 @@
         function off() {
             st.on = false;
             rm(st.overlay); rm(st.ring); st.overlay = st.ring = null;
-            removeBarbs(); hideTip(); hideColorbar();
+            removeBarbs(); removeTilt(); hideTip(); hideColorbar();
             if (opts.onOff) opts.onOff();
         }
         /** Frame the field; the map is often mid-reflow, so fit twice. */
@@ -1163,7 +1257,7 @@
         }
 
         return {
-            draw: draw, off: off, frame: frame, restyle: restyle, redrawBarbs: drawBarbs,
+            draw: draw, off: off, frame: frame, restyle: restyle, redrawBarbs: drawBarbs, setTilt: setTilt,
             setOpacity: setOpacity, applyVisibility: applyVisibility,
             bounds: bounds, kmFromLatLng: kmFromLatLng, latLngFromKm: latLngFromKm, hideTip: hideTip,
             isOn: function () { return st.on; }, plan: function () { return st.p; },
@@ -1341,7 +1435,7 @@
         anomalyFigure: anomalyFigure, FISCHER_2025: FISCHER_2025, quadrantFigure: quadrantFigure, vpScatterFigure: vpScatterFigure,
         startRubberBand: startRubberBand, stopRubberBand: stopRubberBand,
         shearCompassHTML: shearCompassHTML, intensityColor: intensityColor, intensityCategory: intensityCategory,
-        createDrape: createDrape, createResultTabs: createResultTabs, syncMapLayerBar: syncMapLayerBar,
+        createDrape: createDrape, TILT_COLORSCALE: TILT_COLORSCALE, createResultTabs: createResultTabs, syncMapLayerBar: syncMapLayerBar,
         ensurePlotModal: ensurePlotModal, openPlotModal: openPlotModal, closePlotModal: closePlotModal
     };
 })();
