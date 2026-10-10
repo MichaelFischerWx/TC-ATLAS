@@ -14603,8 +14603,7 @@
                         var dt = inits[i];
                         var opt = document.createElement('option');
                         opt.value = dt;
-                        opt.textContent = dt.substring(0,4) + '-' + dt.substring(4,6) + '-' +
-                            dt.substring(6,8) + ' ' + dt.substring(8,10) + ' UTC';
+                        opt.textContent = fmtCycle(dt);
                         sel.appendChild(opt);
                     }
                 }
@@ -15962,7 +15961,7 @@
                     statusEl.textContent = n === 0
                         ? '0 tracks · WeatherLab paired' + (_dmIsWn3() ? ' · WN3' : '')
                         : n + ' track' + (n === 1 ? '' : 's') + (_dmIsWn3() ? ' · WN3' : '') +
-                          (data.init_time ? ' · init ' + data.init_time.slice(0, 8) + ' ' + data.init_time.slice(8) + 'Z' : '');
+                          (data.init_time ? ' · init ' + fmtCycle(data.init_time) : '');
                 }
                 _ga('rt_global_wl_loaded', { n_tracks: data && data.n_tracks });
             })
@@ -17458,8 +17457,7 @@
             var gInit = effInit || '';
             var initLine = gInit
                 ? '<br><span style="opacity:0.75; font-size:0.85em;">Init: '
-                    + gInit.slice(0, 4) + '-' + gInit.slice(4, 6) + '-'
-                    + gInit.slice(6, 8) + ' ' + gInit.slice(8, 10) + 'Z</span>'
+                    + fmtCycle(gInit) + '</span>'
                 : '';
             // Wave-family line: one violet line, matching the corridor
             // ribbon on the map. The full union explanation lives in the
@@ -18893,10 +18891,7 @@
         var memberKeys = Object.keys(members);
         var mean = json.ensemble_mean || { points: [] };
         var init = json.init_time || '';
-        var initLabel = init
-            ? init.slice(0, 4) + '-' + init.slice(4, 6) + '-' + init.slice(6, 8)
-              + ' ' + init.slice(8, 10) + 'Z'
-            : '(unknown init)';
+        var initLabel = init ? fmtCycle(init) : '(unknown init)';
         _genesisExportInit = initLabel;
 
         // Pre-genesis-specific stats — computed once and threaded through
@@ -20181,9 +20176,7 @@
 
         if (noteEl) {
             var it = ic.init_time || loadedInit || '';
-            var initFmt = (it.length >= 10)
-                ? (it.substring(4, 6) + '/' + it.substring(6, 8) + ' ' + it.substring(8, 10) + 'Z')
-                : '';
+            var initFmt = (it.length >= 10) ? fmtCycle(it) : '';
             noteEl.textContent = (ic.n_members != null ? ic.n_members + ' members' : '')
                 + (initFmt ? ' · init ' + initFmt : '');
         }
@@ -20425,9 +20418,7 @@
         for (var i = 0; i < trend.length; i++) {
             var t = trend[i];
             var it = t.init_time || '';
-            var lbl = (it.length >= 10)
-                ? it.slice(4, 6) + '/' + it.slice(6, 8) + ' ' + it.slice(8, 10) + 'Z'
-                : it;
+            var lbl = (it.length >= 10) ? fmtCycle(it) : it;
             var isLoaded = (it === loadedInit);
             xLabels.push(lbl + (isLoaded ? ' ★' : ''));
             var w120 = t.spread && t.spread.win120;
@@ -20515,12 +20506,10 @@
         wrap.style.display = '';
     }
 
-    // Compact "MM/DD HHZ" label from a YYYYMMDDHH init string.
+    // Compact "9 Oct 12Z" label from a YYYYMMDDHH init string.
     function _genesisFmtInit(it) {
         it = it || '';
-        return (it.length >= 10)
-            ? it.slice(4, 6) + '/' + it.slice(6, 8) + ' ' + it.slice(8, 10) + 'Z'
-            : it;
+        return (it.length >= 10) ? fmtCycle(it) : it;
     }
 
     // True while the /weatherlab-genesis-trend fetch is in flight, so the
@@ -24155,8 +24144,7 @@
         var data = _rtGenesisData;
         var nTracks = (data && data.n_tracks) ? data.n_tracks : 0;
         var init = data && data.init_time;
-        var initBit = init
-            ? ' · init ' + init.slice(0, 8) + ' ' + init.slice(8) + 'Z' : '';
+        var initBit = init ? ' · init ' + fmtCycle(init) : '';
         // Recompute age live from the immutable init_time so a 302'd (frozen)
         // genesis payload from the R2/cdn mirror still shows the true run age.
         var ageH = _genesisAgeFromInit(init);
@@ -24260,8 +24248,7 @@
 
     function _fmtGenesisInit(it) {
         if (!it || it.length < 10) return '(unknown)';
-        return it.slice(0, 4) + '-' + it.slice(4, 6) + '-' + it.slice(6, 8)
-            + ' ' + it.slice(8, 10) + 'Z';
+        return fmtCycle(it);
     }
 
     // Is `variant` published for this cycle-list entry? Back-compat: an old
@@ -24467,11 +24454,8 @@
         }
         // Member tag so the user always knows which ensemble is in view.
         var memberTag = ' · ' + _GENESIS_VARIANTS[_genesisVariantNorm(_genesisEnsembleVariant)].tag;
-        // Compact init (drop the year — the dock is tight): "06-01 06Z".
-        var compactInit = (curInit && curInit.length >= 10)
-            ? curInit.slice(4, 6) + '-' + curInit.slice(6, 8)
-                + ' ' + curInit.slice(8, 10) + 'Z'
-            : _fmtGenesisInit(curInit);
+        // Init without the year (the dock is tight): "1 Jun 06Z".
+        var compactInit = _fmtGenesisInit(curInit);
         var textEl = document.getElementById('ir-dock-cycle-text');
         if (textEl) {
             textEl.textContent = 'DeepMind · ' + compactInit
@@ -24918,7 +24902,7 @@
                 line: { color: style.bold, width: 2 },
                 marker: { color: style.bold, size: 4 },
                 hovertemplate: (initDate
-                    ? '%{x|%b %d %HZ}'
+                    ? '%{x|' + TCTime.plotly.cycle + '}'
                     : '+%{x}h'
                     ) + ' · <b>%{y:.0f} kt</b><extra></extra>',
                 name: 'Member ' + memberKey,
@@ -26498,12 +26482,13 @@
 
     /** Format a GFS run/valid caption from an env layer's init_cycle
      *  ("YYYYMMDD-HH") + forecast_hour + valid_time. Analysis (f000) reads
-     *  "GFS 06Z analysis · valid 06Z"; a forecast reads "GFS 06Z f12 · valid 18Z". */
+     *  "GFS 9 Oct 06Z analysis · valid 9 Oct 06Z"; a forecast reads
+     *  "GFS 9 Oct 06Z f12 · valid 9 Oct 18Z". */
     function _fmtGfsRun(layer) {
         if (!layer) return '';
         var run = '';
         var ic = layer.init_cycle;
-        if (ic && /^\d{8}-\d{2}$/.test(ic)) run = ic.slice(9, 11) + 'Z';
+        if (ic && /^\d{8}-\d{2}$/.test(ic)) run = fmtCycle(ic);
         var fh = layer.forecast_hour;
         var head = 'GFS';
         if (run) {
@@ -26513,7 +26498,7 @@
         }
         var parts = [head];
         if (layer.valid_time) {
-            parts.push('valid ' + String(layer.valid_time).replace('T', ' ').replace(':00:00Z', 'Z'));
+            parts.push('valid ' + fmtCycle(layer.valid_time));
         }
         return parts.join(' · ');
     }
@@ -27961,7 +27946,7 @@
     // min/mid/max ticks instead — much more compact + still legible.
     var _ENV_CBAR_MAX_SWATCHES = 16;
 
-    /** "GFS 06Z f03 · valid 2026-08-11 09Z" for whichever active layer reports
+    /** "GFS 11 Aug 06Z f03 · valid 11 Aug 09Z" for whichever active layer reports
      *  a cycle — the frame-selected hour when the loop has snapped to one,
      *  else the layer's own (analysis) metadata. */
     function _globalEnvRunCaption() {
@@ -28766,9 +28751,7 @@
         var stormId = currentStormId || '';
         var initTime = _rtDmEnsData.init_time || '';
         var initFmt = '';
-        if (initTime.length >= 10) {
-            initFmt = initTime.substring(4, 6) + '/' + initTime.substring(6, 8) + ' ' + initTime.substring(8, 10) + 'Z';
-        }
+        if (initTime.length >= 10) initFmt = fmtCycle(initTime);
 
         var tauStr = '';
         if (chartType === 'intensity') {
@@ -28915,10 +28898,7 @@
         var heading   = (document.getElementById('ir-intensity-heading') || {}).textContent || 'Intensity Forecast';
         var initTime  = (_rtDmEnsData && _rtDmEnsData.init_time) || '';
         var initFmt   = '';
-        if (initTime.length >= 10) {
-            initFmt = initTime.substring(4, 6) + '/' + initTime.substring(6, 8) +
-                      ' ' + initTime.substring(8, 10) + 'Z';
-        }
+        if (initTime.length >= 10) initFmt = fmtCycle(initTime);
         var title = heading + ' — ' + (stormName && stormId
                         ? stormName + ' (' + stormId + ')'
                         : (stormName || stormId));
