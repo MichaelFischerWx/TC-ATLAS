@@ -5450,8 +5450,35 @@
         _rt3DSetAvailable(!hidden);
         if (typeof _setGlobalSatTimeLabel === 'function') _setGlobalSatTimeLabel();
         _syncSatSegment();
+        _syncGlobalBasemapVariant();
         _ga('rt_global_sat_toggle', { hidden: hidden });
     }
+
+    /* The Global Map basemap is pinned to CARTO's dark variant (tcaVariant,
+       theme.js) because, under the satellite mosaic, a light basemap shows
+       through the coverage gaps as a white wedge that reads as failed
+       imagery. With the satellite layer Off there are no gaps — the basemap
+       IS the map — so it follows the page theme again (light mode = the
+       usual gray map; reported by a user 2026-10-11). Pinned layers are not
+       in theme.js's swap list, so the swap is done here, in place via
+       setUrl (keeps stacking; the URL already carries the CARTO key). */
+    function _syncGlobalBasemapVariant() {
+        var want = (_satHidden &&
+            document.documentElement.getAttribute('data-theme') !== 'dark')
+            ? 'light' : 'dark';
+        [_globalBasemap, _labelsLayer].forEach(function (lyr) {
+            if (!lyr || typeof lyr._url !== 'string') return;
+            var url = lyr._url.replace(
+                /(basemaps\.cartocdn\.com\/)(light|dark)(_)/, '$1' + want + '$3');
+            if (url !== lyr._url) {
+                lyr.options.tcaVariant = want;
+                try { lyr.setUrl(url); } catch (e) {}
+            }
+        });
+    }
+    document.documentElement.addEventListener('theme:change', function () {
+        _syncGlobalBasemapVariant();
+    });
 
     // ═══════════════════════════════════════════════════════════
     //  GLOBAL MAP ANIMATION
