@@ -1437,8 +1437,12 @@
      *    - Atlantic, E+C Pacific (AL/EP/CP): HU / MH (major, Cat 3+ ≥96 kt)
      *    - West Pacific (WP):                TY / STY (super typhoon ≥130 kt)
      *    - N. Indian, S. Hemisphere (IO/SH): TC / STC (severe tropical cyclone)
+     *  An official post-tropical / potential-TC / subtropical classification
+     *  (OFFICIAL_CLASSES) reads PT / PTC / SD / SS instead.
      *  Returns '' when wind is unknown so the caller can leave the dot blank. */
-    function _irIntensityClass(vmaxKt, atcfId) {
+    function _irIntensityClass(vmaxKt, atcfId, classification) {
+        var oc = OFFICIAL_CLASSES[String(classification || '').toUpperCase()];
+        if (oc) return oc.code;
         if (vmaxKt == null) return '';
         if (vmaxKt < 34) return 'TD';
         if (vmaxKt < 64) return 'TS';
@@ -1456,6 +1460,40 @@
         return n >= 90 && n <= 99;
     }
     var INVEST_CHIP_COLOR = '#64748b';
+
+    /** Official classes the wind can't express, keyed by the active-storms
+     *  feed's `classification` (NHC's CurrentStorms.json code). Post-tropical
+     *  cyclones and potential TCs are not tropical cyclones, so they take the
+     *  invest gray, never a Saffir-Simpson color. Any other code (TD/TS/HU,
+     *  JTWC's TY) or none keeps the wind-based label. `code` is the dot form. */
+    var OFFICIAL_CLASSES = {
+        PTC: { code: 'PT',  short: 'Post-tropical', long: 'Post-Tropical Cyclone', color: INVEST_CHIP_COLOR },
+        PC:  { code: 'PTC', short: 'Potential TC',  long: 'Potential Tropical Cyclone', color: INVEST_CHIP_COLOR },
+        STD: { code: 'SD',  short: 'Subtropical',   long: 'Subtropical Depression' },
+        STS: { code: 'SS',  short: 'Subtropical',   long: 'Subtropical Storm' }
+    };
+    function _irOfficialClass(s) {
+        return (s && OFFICIAL_CLASSES[String(s.classification || '').toUpperCase()]) || null;
+    }
+    /** A feed storm's class label: INVEST, its official class, else TD / TS / Cat N. */
+    function _irClassShort(s) {
+        if (_irIsInvest(s.atcf_id)) return 'INVEST';
+        var oc = _irOfficialClass(s);
+        return oc ? oc.short : categoryShort(s.category || windToCategory(s.vmax_kt));
+    }
+    /** Spelled-out form of _irClassShort ("Post-Tropical Cyclone", "Category 4"). */
+    function _irClassLabel(s) {
+        if (_irIsInvest(s.atcf_id)) return 'INVEST';
+        var oc = _irOfficialClass(s);
+        return oc ? oc.long : categoryLabel(s.category || windToCategory(s.vmax_kt));
+    }
+    /** A feed storm's marker / chip color. */
+    function _irClassColor(s) {
+        if (_irIsInvest(s.atcf_id)) return INVEST_CHIP_COLOR;
+        var oc = _irOfficialClass(s);
+        if (oc && oc.color) return oc.color;
+        return SS_COLORS[s.category || windToCategory(s.vmax_kt)] || SS_COLORS.TD;
+    }
 
     /** Format lat/lon for display */
     function fmtLatLon(lat, lon) {
@@ -7252,9 +7290,7 @@
                     && _genesisMatchedAtcfIds[String(s.atcf_id).toUpperCase()]) {
                 continue;
             }
-            var invest = _irIsInvest(s.atcf_id);
-            var cat = s.category || windToCategory(s.vmax_kt);
-            var color = invest ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
+            var color = _irClassColor(s);
 
             var icon = L.divIcon({
                 className: '',
@@ -7292,7 +7328,7 @@
                 '<div class="ir-popup">' +
                   '<div class="ir-popup-name">' + (s.name || 'UNNAMED') + reconBadge + '</div>' +
                   '<div class="ir-popup-meta">' +
-                    '<strong>' + (invest ? 'INVEST' : categoryShort(cat)) + '</strong> &middot; ' + vmaxStr + '<br>' +
+                    '<strong>' + _irClassShort(s) + '</strong> &middot; ' + vmaxStr + '<br>' +
                     'MSLP: ' + mslpStr + '<br>' +
                     posLine + '<br>' +
                     '<span style="color:#64748b;">' + (s.atcf_id || '') + '</span>' +
@@ -7609,8 +7645,6 @@
 
         // Name label near the current position
         var last = history[history.length - 1];
-        var invest = _irIsInvest(storm.atcf_id);
-        var cat = storm.category || windToCategory(storm.vmax_kt);
 
         // Extend the track to the dead-reckoned "now" pin so the line +
         // name label sit on the convection shown in the IR loop (the
@@ -7622,7 +7656,7 @@
             var eDlon = extrapPin.lon - last.lon;
             if (Math.abs(eDlon) <= 180 &&
                     (Math.abs(extrapPin.lat - last.lat) > 0.02 || Math.abs(eDlon) > 0.02)) {
-                var extColor = invest ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
+                var extColor = _irClassColor(storm);
                 var extSeg = L.polyline(
                     [[last.lat, last.lon], [extrapPin.lat, extrapPin.lon]],
                     { color: extColor, weight: 2.5, opacity: 0.7, dashArray: '4,5' }
@@ -9912,8 +9946,7 @@
         }).addTo(detailMap);
 
         // Storm center marker
-        var cat = storm.category || windToCategory(storm.vmax_kt);
-        var color = _irIsInvest(storm.atcf_id) ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
+        var color = _irClassColor(storm);
         // Reset the track-layer array up-front so the current-position pin
         // (pushed just below) survives — the past-track fetch appends to it.
         detailTrackLayers = [];
@@ -9927,8 +9960,7 @@
         // The current-position pin previously had no tooltip/popup/handler, so
         // clicking the most-recent point did nothing. Give it a hover tooltip
         // (quick name + intensity) and a click popup (fuller current state).
-        var _catLbl = _irIsInvest(storm.atcf_id) ? 'INVEST'
-                    : categoryLabel(cat);
+        var _catLbl = _irClassLabel(storm);
         var _vmaxTxt = (storm.vmax_kt != null) ? (storm.vmax_kt + ' kt') : '—';
         pin.bindTooltip(
             '<b>' + (storm.name || storm.atcf_id) + '</b> · ' + _vmaxTxt,
@@ -10171,18 +10203,12 @@
         _populateDetailStormPicker(atcfId);
 
         // Populate header
-        var invest = _irIsInvest(storm.atcf_id);
         var cat = storm.category || windToCategory(storm.vmax_kt);
-        var color = invest ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
         document.getElementById('ir-detail-name').textContent = storm.name || 'UNNAMED';
         document.getElementById('ir-detail-id').textContent = storm.atcf_id;
         var reconEl = document.getElementById('ir-detail-recon');
         if (reconEl) { reconEl.style.display = storm.has_recon ? '' : 'none'; reconEl.dataset.atcf = storm.atcf_id || ''; }
-        var catEl = document.getElementById('ir-detail-cat');
-        catEl.textContent = (invest ? 'INVEST' : categoryShort(cat)) + (storm.vmax_kt != null ? ' \u00B7 ' + storm.vmax_kt + ' kt' : '');
-        catEl.style.background = color;
-        catEl.title = 'Saffir-Simpson category from 1-min sustained wind (kt). '
-            + 'TD <34 \u00B7 TS 34\u201363 \u00B7 Cat1 64\u201382 \u00B7 Cat2 83\u201395 \u00B7 Cat3 96\u2013112 \u00B7 Cat4 113\u2013136 \u00B7 Cat5 137+';
+        _irFillDetailClass(storm);
 
         // Populate info grid
         document.getElementById('ir-info-basin').textContent = storm.basin || '\u2014';
@@ -10191,10 +10217,6 @@
             storm.motion_deg != null ? storm.motion_deg + '\u00B0 at ' + (storm.motion_kt || '\u2014') + ' kt' : '\u2014';
         document.getElementById('ir-info-mslp').textContent =
             storm.mslp_hpa != null ? storm.mslp_hpa + ' hPa' : '\u2014';
-        document.getElementById('ir-info-vmax').textContent =
-            storm.vmax_kt != null
-                ? storm.vmax_kt + ' kt' + (invest ? '' : ' (' + categoryShort(cat) + ')')
-                : '\u2014';
         var lastfixEl = document.getElementById('ir-info-lastfix');
         if (lastfixEl) {
             var ago = _fmtAgo(storm.last_fix_utc);
@@ -11077,6 +11099,25 @@
         _rtLoadShearProfile(currentStormId);
     };
 
+    /** Storm-card class chip + the info grid's wind line ("25 kt (Post-tropical)"). */
+    function _irFillDetailClass(storm) {
+        var invest = _irIsInvest(storm.atcf_id);
+        var catEl = document.getElementById('ir-detail-cat');
+        if (catEl) {
+            catEl.textContent = _irClassShort(storm) + (storm.vmax_kt != null ? ' \u00B7 ' + storm.vmax_kt + ' kt' : '');
+            catEl.style.background = _irClassColor(storm);
+            var oc = invest ? null : _irOfficialClass(storm);
+            catEl.title = oc
+                ? (storm.source ? storm.source + ' classification: ' : 'Official classification: ') + oc.long
+                : 'Saffir-Simpson category from 1-min sustained wind (kt). '
+                  + 'TD <34 \u00B7 TS 34\u201363 \u00B7 Cat1 64\u201382 \u00B7 Cat2 83\u201395 \u00B7 Cat3 96\u2013112 \u00B7 Cat4 113\u2013136 \u00B7 Cat5 137+';
+        }
+        var vmaxEl = document.getElementById('ir-info-vmax');
+        if (vmaxEl) vmaxEl.textContent = storm.vmax_kt != null
+            ? storm.vmax_kt + ' kt' + (invest ? '' : ' (' + _irClassShort(storm) + ')')
+            : '\u2014';
+    }
+
     /**
      * Refresh the detail view header with latest storm data from a poll.
      * Handles name changes (e.g. "Four" → "Sinlaku"), position updates,
@@ -11093,31 +11134,19 @@
         }
         if (!storm) return;
 
-        var invest = _irIsInvest(storm.atcf_id);
-        var cat = storm.category || windToCategory(storm.vmax_kt);
-        var color = invest ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
-
         var nameEl = document.getElementById('ir-detail-name');
         if (nameEl) nameEl.textContent = storm.name || 'UNNAMED';
 
         var reconEl = document.getElementById('ir-detail-recon');
         if (reconEl) { reconEl.style.display = storm.has_recon ? '' : 'none'; reconEl.dataset.atcf = storm.atcf_id || ''; }
 
-        var catEl = document.getElementById('ir-detail-cat');
-        if (catEl) {
-            catEl.textContent = (invest ? 'INVEST' : categoryShort(cat)) + (storm.vmax_kt != null ? ' \u00B7 ' + storm.vmax_kt + ' kt' : '');
-            catEl.style.background = color;
-        }
+        _irFillDetailClass(storm);
 
         var posEl = document.getElementById('ir-info-position');
         if (posEl) posEl.textContent = fmtLatLon(storm.lat, storm.lon);
 
         var mslpEl = document.getElementById('ir-info-mslp');
         if (mslpEl) mslpEl.textContent = storm.mslp_hpa != null ? storm.mslp_hpa + ' hPa' : '\u2014';
-
-        var vmaxEl = document.getElementById('ir-info-vmax');
-        if (vmaxEl) vmaxEl.textContent = storm.vmax_kt != null
-            ? storm.vmax_kt + ' kt' + (invest ? '' : ' (' + categoryShort(cat) + ')') : '\u2014';
 
         var fixEl = document.getElementById('ir-info-lastfix');
         if (fixEl) fixEl.textContent = fmtUTC(storm.last_fix_utc);
@@ -13899,9 +13928,8 @@
         var opts = [];
         for (var i = 0; i < sorted.length; i++) {
             var s = sorted[i];
-            var c = s.category || windToCategory(s.vmax_kt);
             var label = (s.atcf_id || '') + ' · ' + (s.name || 'UNNAMED') +
-                        ' (' + (_irIsInvest(s.atcf_id) ? 'INVEST' : categoryShort(c)) +
+                        ' (' + _irClassShort(s) +
                         (s.vmax_kt != null ? ' ' + s.vmax_kt + ' kt' : '') + ')';
             var sel_attr = (s.atcf_id === currentId) ? ' selected' : '';
             opts.push('<option value="' + s.atcf_id + '"' + sel_attr + '>' +
@@ -14037,8 +14065,7 @@
 
     function _loopPlaceMarker(storm) {
         if (!_loopMap || !storm) return;
-        var cat = storm.category || windToCategory(storm.vmax_kt);
-        var color = _irIsInvest(storm.atcf_id) ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
+        var color = _irClassColor(storm);
         var icon = L.divIcon({
             className: '',
             html: '<div style="width:14px;height:14px;border-radius:50%;background:' + color
@@ -14142,9 +14169,10 @@
         if (titleEl) titleEl.textContent = (storm && (storm.name || storm.atcf_id)) || stormId || 'Satellite Loop';
         if (catEl) {
             var cat = (storm && (storm.category || windToCategory(storm.vmax_kt))) || '—';
-            catEl.textContent = cat;
-            catEl.style.background = (storm && _irIsInvest(storm.atcf_id))
-                ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
+            var oc = storm ? _irOfficialClass(storm) : null;
+            catEl.textContent = !storm ? cat
+                : _irIsInvest(storm.atcf_id) ? 'INVEST' : (oc ? oc.short : cat);
+            catEl.style.background = storm ? _irClassColor(storm) : SS_COLORS.TD;
         }
         if (subEl) {
             if (storm) {
@@ -14278,9 +14306,7 @@
         map.setView([s.lat, s.lon], _LOC_ZOOM);
         _galleryLocatorMaps.push(map);
 
-        var invest = _irIsInvest(s.atcf_id);
-        var cat = s.category || windToCategory(s.vmax_kt);
-        var color = invest ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
+        var color = _irClassColor(s);
         var cur = L.circleMarker([s.lat, s.lon],
             { radius: 5, color: '#fff', weight: 1.5, fillColor: color, fillOpacity: 1 }).addTo(map);
         setTimeout(function () { if (!map._qvDead) { try { map.invalidateSize(false); } catch (e) {} } }, 60);
@@ -14330,7 +14356,8 @@
         card.setAttribute('role', 'listitem');
         card.setAttribute('data-atcf', s.atcf_id);
         var invest = _irIsInvest(s.atcf_id);
-        var cat = invest ? 'INVEST' : (s.category || windToCategory(s.vmax_kt));
+        var oc = _irOfficialClass(s);
+        var cat = invest ? 'INVEST' : (oc ? oc.short : (s.category || windToCategory(s.vmax_kt)));
         var nm = s.name || s.atcf_id;
         card.setAttribute('aria-label', nm + ' — ' + cat
             + (s.vmax_kt != null ? ', ' + s.vmax_kt + ' kt' : ''));
@@ -14389,7 +14416,7 @@
         row.className = 'qv-card-row';
         var chip = document.createElement('span');
         chip.className = 'qv-card-chip'; chip.textContent = cat;
-        chip.style.background = invest ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
+        chip.style.background = _irClassColor(s);
         var name = document.createElement('span');
         name.className = 'qv-card-name'; name.textContent = nm;
         row.appendChild(chip); row.appendChild(name);
@@ -16271,7 +16298,13 @@
         var isNumberWord = /^(ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN|ELEVEN|TWELVE|THIRTEEN|FOURTEEN|FIFTEEN|SIXTEEN|SEVENTEEN|EIGHTEEN|NINETEEN|TWENTY|TWENTY-?ONE|TWENTY-?TWO|TWENTY-?THREE|TWENTY-?FOUR|TWENTY-?FIVE|TWENTY-?SIX|TWENTY-?SEVEN|TWENTY-?EIGHT|TWENTY-?NINE|THIRTY)$/.test(name);
         var looksLikeAtcfId = /^[A-Z]{2}\d{2}\d{4}$/.test(name);
         var hasRealName = name && !isNumberWord && !looksLikeAtcfId;
-        if (cat === 'TD' || cat === '' || cat === 'XX' || !hasRealName) {
+        // An official non-wind class (post-tropical, potential TC,
+        // subtropical) names the system instead of the wind-based "TD".
+        var oc = _irOfficialClass(storm);
+        if (oc && !hasRealName) {
+            return { full: oc.short + ' ' + nnb, short: nnb, atcfId: id.toUpperCase() };
+        }
+        if (!oc && (cat === 'TD' || cat === '' || cat === 'XX' || !hasRealName)) {
             return { full: 'TD ' + nnb, short: nnb, atcfId: id.toUpperCase() };
         }
         var titled = name.toLowerCase().split(/\s+/).map(function (w) {
@@ -16410,6 +16443,7 @@
                 atcfId: label.atcfId,
                 name: pr.storm.name,
                 category: pr.storm.category,
+                classification: pr.storm.classification,
                 vmaxKt: pr.storm.vmax_kt,
                 distKm: pr.distKm,
             };
@@ -17488,7 +17522,8 @@
             // (TD/TS/HU/MH) and put the name in the pill, so the circle isn't
             // blank. Unnamed systems keep their compact code (D7/01W) inside.
             var intenClass = (isNamed && d.atcfMatch)
-                ? _irIntensityClass(d.atcfMatch.vmaxKt, d.atcfMatch.atcfId) : '';
+                ? _irIntensityClass(d.atcfMatch.vmaxKt, d.atcfMatch.atcfId,
+                                    d.atcfMatch.classification) : '';
             var innerLabel = isNamed ? intenClass : d.displayShort;
             var namePill = isNamed
                 ? '<span class="rt-gen-marker-name">' + d.displayShort + '</span>'
@@ -19049,10 +19084,11 @@
         }
         if (_metaForSub && _metaForSub.atcfMatch) {
             var _am = _metaForSub.atcfMatch;
+            var _amClass = _irOfficialClass(_am);
             var _matchTip = 'Genesis cluster center within '
                 + Math.round(_am.distKm) + ' km of ' + _am.atcfId
                 + ' (' + (_am.name || '?')
-                + (_am.category ? ', ' + _am.category : '')
+                + (_amClass ? ', ' + _amClass.short : (_am.category ? ', ' + _am.category : ''))
                 + (_am.vmaxKt != null ? ', ' + _am.vmaxKt.toFixed(0) + ' kt' : '')
                 + ') — labeled with the official ATCF name; the FNV3 '
                 + _genesisVariantMemberTag(_detVariant)
@@ -19983,8 +20019,7 @@
             }
         }
         var vmax = s && s.vmax_kt != null ? s.vmax_kt : m.vmaxKt;
-        var cat = s ? (s.category || windToCategory(s.vmax_kt)) : null;
-        var catStr = cat ? categoryShort(cat) : (m.category || '');
+        var catStr = s ? _irClassShort(s) : (m.category || '');
         var mslp = s && s.mslp_hpa != null ? ' · ' + s.mslp_hpa + ' hPa' : '';
         var nowVal = vmax != null ? Math.round(vmax) + ' kt' : '—';
         var p10 = stats.peakP10 != null ? stats.peakP10.toFixed(0) + ' kt' : '—';

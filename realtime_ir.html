@@ -84,7 +84,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261010tm1">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261010cls1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -966,6 +966,7 @@
         <div class="ir-legend-row"><span class="ir-legend-dot" style="background:#f87171;"></span> Cat 3 (96&ndash;112 kt)</div>
         <div class="ir-legend-row"><span class="ir-legend-dot" style="background:#ef4444;"></span> Cat 4 (113&ndash;136 kt)</div>
         <div class="ir-legend-row"><span class="ir-legend-dot" style="background:#dc2626;"></span> Cat 5 (137+ kt)</div>
+        <div class="ir-legend-row"><span class="ir-legend-dot" style="background:#64748b;"></span> Invest, post-tropical, potential TC</div>
     </div>
 
     <!-- ── Storm Satellite: Quick View (default) ─────────────────
@@ -2819,14 +2820,14 @@
     <script defer src="tc_mw_layer.js?v=20260920a"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261010tm1"></script>
-    <script defer src="realtime_ir.js?v=20261010tm1"></script>
+    <script defer src="realtime_ir.js?v=20261010cls1"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
          eager for the map-tab recon-overlay sonde skew-Ts. The recon /
          subseasonal / seasonal tab modules (~1 MB combined) lazy-load on first
          tab activation — see _lazyViewMods in the tab controller below. -->
-    <script defer src="satellite.js?v=20261010tm1"></script>
+    <script defer src="satellite.js?v=20261010cls1"></script>
 
     <script>
     /* Tab switching between Map, Satellite, Subseasonal, and Seasonal views */
