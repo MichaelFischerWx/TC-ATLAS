@@ -10876,7 +10876,8 @@
      *  Arrows in each cell show the shear heading ("toward"). */
     function _rtRenderShearProfile(prof) {
         var el = document.getElementById('rt-env-shear-grid');
-        if (!el || !prof || !prof.magnitude_kt || typeof Plotly === 'undefined') return;
+        if (!el || !prof || !prof.magnitude_kt) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _rtRenderShearProfile.apply(_pt, _pa); }); return; }
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var axisCol = isDark ? '#8b9ec2' : '#374151';
         var gridCol = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.08)';
@@ -18631,6 +18632,11 @@
     function openGenesisDetail(trackId) {
         var m = _ensureGenesisDetailModal();
         var reqSeq = ++_genesisDetailReqSeq;
+        // Every pane in this modal is a Plotly chart. On a phone the plain
+        // map view defers Plotly until imagery + idle, so start the ~1 MB
+        // download now, in parallel with the cluster fetch (the renderers
+        // wait for it via _whenPlotly).
+        if (window.tcaLoadPlotly) window.tcaLoadPlotly();
         _genesisShowLoader(true);
         var titleEl = m.querySelector('#rt-genesis-modal-title');
         var subEl   = m.querySelector('#rt-genesis-modal-sub');
@@ -20369,7 +20375,8 @@
      */
     function _drawGenesisIcLmiVsTau() {
         var chartEl = document.getElementById('rt-genesis-ic-lmi-chart');
-        if (!chartEl || typeof Plotly === 'undefined') return;
+        if (!chartEl) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _drawGenesisIcLmiVsTau.apply(_pt, _pa); }); return; }
         var peak = _genesisIcPeak || {};
         var pt = peak.taus || [], pw = peak.winds || [];
         var xs = [], ys = [];
@@ -20438,7 +20445,8 @@
      */
     function _drawGenesisRiProb() {
         var chartEl = document.getElementById('rt-genesis-ic-pri-chart');
-        if (!chartEl || !_genesisIcData || typeof Plotly === 'undefined') return;
+        if (!chartEl || !_genesisIcData) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _drawGenesisRiProb.apply(_pt, _pa); }); return; }
 
         var taus = _genesisIcData.lead_times_h || [];
         var changeData = _genesisIcInt === 12
@@ -20531,7 +20539,8 @@
         var wrap = document.getElementById('rt-genesis-modal-trend');
         var el = document.getElementById('rt-genesis-modal-trend-chart');
         var noteEl = document.getElementById('rt-genesis-trend-note');
-        if (!wrap || !el || typeof Plotly === 'undefined') return;
+        if (!wrap || !el) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _drawGenesisTrend.apply(_pt, _pa); }); return; }
         var raw = (data && data.trend) || [];
         // Oldest → newest, left to right (API returns freshest-first).
         var trend = raw.slice().reverse();
@@ -20861,7 +20870,8 @@
         var wrap = document.getElementById('rt-genesis-trendmap-wrap');
         var el = document.getElementById('rt-genesis-modal-trendmap');
         var noteEl = document.getElementById('rt-genesis-trendmap-note');
-        if (!wrap || !el || typeof Plotly === 'undefined') return;
+        if (!wrap || !el) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _drawTrackTrend.apply(_pt, _pa); }); return; }
         wrap.style.display = 'none';
 
         var trend = ((data && data.trend) || []).slice().reverse();  // old→new
@@ -21040,7 +21050,8 @@
         var wrap = document.getElementById('rt-genesis-trendint-wrap');
         var el = document.getElementById('rt-genesis-modal-trendint');
         var noteEl = document.getElementById('rt-genesis-trendint-note');
-        if (!wrap || !el || typeof Plotly === 'undefined') return;
+        if (!wrap || !el) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _drawIntensityTrend.apply(_pt, _pa); }); return; }
         wrap.style.display = 'none';
 
         var trend = ((data && data.trend) || []).slice().reverse();  // old→new
@@ -21157,7 +21168,8 @@
         var wrap = document.getElementById('rt-genesis-trendstruct-wrap');
         var el = document.getElementById('rt-genesis-modal-trendstruct');
         var noteEl = document.getElementById('rt-genesis-trendstruct-note');
-        if (!wrap || !el || typeof Plotly === 'undefined') return;
+        if (!wrap || !el) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _drawStructureTrend.apply(_pt, _pa); }); return; }
         wrap.style.display = 'none';
         var KM_TO_NM = 0.5399568;
         var trend = ((data && data.trend) || []).slice().reverse();   // old→new
@@ -21218,7 +21230,8 @@
            which mostly shows where the storm sits, not where it forms). */
     function _renderGenesisMap(memberKeys, members, mean, stats) {
         var el = document.getElementById('rt-genesis-modal-map');
-        if (!el || typeof Plotly === 'undefined') return;
+        if (!el) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _renderGenesisMap.apply(_pt, _pa); }); return; }
         var theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
@@ -21696,7 +21709,8 @@
      *  intensity fan. */
     function _renderGenesisACE(memberKeys, members, stats) {
         var el = document.getElementById('rt-genesis-modal-ace');
-        if (!el || typeof Plotly === 'undefined') return;
+        if (!el) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _renderGenesisACE.apply(_pt, _pa); }); return; }
         var theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
@@ -21809,7 +21823,8 @@
 
     function _renderGenesisIntensity(memberKeys, members, mean, stats, elId) {
         var el = document.getElementById(elId || 'rt-genesis-modal-int');
-        if (!el || typeof Plotly === 'undefined') return;
+        if (!el) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _renderGenesisIntensity.apply(_pt, _pa); }); return; }
         var theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
@@ -22076,7 +22091,8 @@
        form before +24 h, then a cluster at +72-96 h"). */
     function _renderGenesisTimeHistogram(stats) {
         var el = document.getElementById('rt-genesis-modal-gtime');
-        if (!el || typeof Plotly === 'undefined') return;
+        if (!el) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _renderGenesisTimeHistogram.apply(_pt, _pa); }); return; }
         var theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var times = stats.genesisTimes || [];
@@ -22283,7 +22299,8 @@
        every member as a percentile / σ anomaly vs that climo. */
     function _renderStructFan(elId, cfg) {
         var el = document.getElementById(elId);
-        if (!el || typeof Plotly === 'undefined' || !_genStructCtx) return;
+        if (!el || !_genStructCtx) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _renderStructFan.apply(_pt, _pa); }); return; }
         var ctx = _genStructCtx;
         var theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -22421,7 +22438,8 @@
        mode (each ring expressed vs its own intensity-matched climo). */
     function _renderGenesisNesting() {
         var el = document.getElementById('rt-genesis-modal-nesting');
-        if (!el || typeof Plotly === 'undefined' || !_genStructCtx) return;
+        if (!el || !_genStructCtx) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _renderGenesisNesting.apply(_pt, _pa); }); return; }
         var ctx = _genStructCtx, theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         if (_genStructMode !== 'raw' && !_structClimo) {
@@ -22511,7 +22529,8 @@
        IBTrACS R34 climo drawn as a dashed reference ring. Always in nm. */
     function _renderGenesisRose() {
         var el = document.getElementById('rt-genesis-modal-rose');
-        if (!el || typeof Plotly === 'undefined' || !_genStructCtx) return;
+        if (!el || !_genStructCtx) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _renderGenesisRose.apply(_pt, _pa); }); return; }
         var ctx = _genStructCtx, theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var quads = ['ne', 'se', 'sw', 'nw'];
@@ -22599,7 +22618,8 @@
        IBTrACS R34 area at the ensemble's median peak intensity. Always 10³ km². */
     function _renderGenesisIKE() {
         var el = document.getElementById('rt-genesis-modal-ike');
-        if (!el || typeof Plotly === 'undefined' || !_genStructCtx) return;
+        if (!el || !_genStructCtx) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _renderGenesisIKE.apply(_pt, _pa); }); return; }
         var ctx = _genStructCtx, theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var QPI = Math.PI / 4;   // quarter-disk per quadrant
@@ -22864,7 +22884,8 @@
        genesis modal's theme and stats object. */
     function _renderGenesisLmiHist(stats) {
         var el = document.getElementById('rt-genesis-modal-lmi');
-        if (!el || typeof Plotly === 'undefined') return;
+        if (!el) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _renderGenesisLmiHist.apply(_pt, _pa); }); return; }
         var theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
@@ -22977,7 +22998,8 @@
        driven by stats.peakTaus / stats.peakWinds. */
     function _renderGenesisLmiVsTau(stats) {
         var el = document.getElementById('rt-genesis-modal-lmitau');
-        if (!el || typeof Plotly === 'undefined') return;
+        if (!el) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _renderGenesisLmiVsTau.apply(_pt, _pa); }); return; }
         var theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
@@ -24975,9 +24997,11 @@
 
         // Plotly needs the div in the DOM before plotting. openOn already
         // injected the popup, but defer to next tick so layout is final.
-        setTimeout(function () {
+        // On a phone Plotly may still be loading: wait for it, not bail.
+        setTimeout(function drawMemberChart() {
             var el = document.getElementById(plotDivId);
-            if (!el || typeof Plotly === 'undefined') return;
+            if (!el) return;
+            if (typeof Plotly === 'undefined') { _whenPlotly(drawMemberChart); return; }
 
             // Build x (forecast hour or absolute time) + y (wind) arrays.
             var xs = [], ys = [];
@@ -28330,7 +28354,8 @@
      * Render intensity histogram at the current slider tau.
      */
     function _rtRenderIntensityHist() {
-        if (!_rtDmEnsData || typeof Plotly === 'undefined') return;
+        if (!_rtDmEnsData) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _rtRenderIntensityHist.apply(_pt, _pa); }); return; }
 
         var taus = _rtDmEnsData.lead_times_h || [];
         var tau = taus[_rtDmHistTauIdx];
@@ -28453,7 +28478,7 @@
      *   chartElId / labelElId : target DOM ids
      */
     function _rtDrawChangeHistCore(changeData, taus, tauIdx, interval, chartElId, labelElId) {
-        if (typeof Plotly === 'undefined') return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _rtDrawChangeHistCore.apply(_pt, _pa); }); return; }
 
         taus = taus || [];
         var tau = taus[tauIdx];
@@ -28557,7 +28582,8 @@
      * Render LMI distribution — histogram of each member's lifetime max wind.
      */
     function _rtRenderLmiHist() {
-        if (!_rtDmEnsData || typeof Plotly === 'undefined') return;
+        if (!_rtDmEnsData) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _rtRenderLmiHist.apply(_pt, _pa); }); return; }
 
         var chartEl = document.getElementById('rt-dm-lmi-chart');
         if (!chartEl) return;
@@ -28674,7 +28700,8 @@
      *  WHEN the bulk of members peak and HOW STRONG those peaks are at
      *  a single glance. Complements the 1D LMI histogram above. */
     function _rtRenderLmiVsTau() {
-        if (!_rtDmEnsData || typeof Plotly === 'undefined') return;
+        if (!_rtDmEnsData) return;
+        if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _rtRenderLmiVsTau.apply(_pt, _pa); }); return; }
         var chartEl = document.getElementById('rt-dm-lmi-tau-chart');
         if (!chartEl) return;
 
