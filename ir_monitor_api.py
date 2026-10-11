@@ -2020,9 +2020,10 @@ def _fetch_jtwc_motion(atcf_id: str) -> tuple[float | None, float | None]:
             text = resp.read().decode("utf-8", errors="ignore")
     except Exception:
         with _motion_cache_lock:
-            _motion_cache[aid] = {"t": time.time(), "deg": None, "kt": None}
+            _motion_cache[aid] = {"t": time.time(), "deg": None, "kt": None, "cls": None}
         return None, None
 
+    cls = _jtwc_heading_class(text)
     # Format: "MOVEMENT PAST SIX HOURS - 335 DEGREES AT 07 KTS"
     m = re.search(
         r"MOVEMENT\s+PAST\s+SIX\s+HOURS\s*-\s*(\d{1,3})\s*DEGREES?\s+AT\s+(\d{1,3})\s*KTS?",
@@ -2030,7 +2031,7 @@ def _fetch_jtwc_motion(atcf_id: str) -> tuple[float | None, float | None]:
     )
     if not m:
         with _motion_cache_lock:
-            _motion_cache[aid] = {"t": time.time(), "deg": None, "kt": None}
+            _motion_cache[aid] = {"t": time.time(), "deg": None, "kt": None, "cls": cls}
         return None, None
     try:
         deg = float(m.group(1))
@@ -2038,8 +2039,38 @@ def _fetch_jtwc_motion(atcf_id: str) -> tuple[float | None, float | None]:
     except ValueError:
         return None, None
     with _motion_cache_lock:
-        _motion_cache[aid] = {"t": time.time(), "deg": deg, "kt": kt}
+        _motion_cache[aid] = {"t": time.time(), "deg": deg, "kt": kt, "cls": cls}
     return deg, kt
+
+
+# JTWC warning headings ("1. TYPHOON 27W (KOGUMA) WARNING NR 025") mapped onto
+# NHC's CurrentStorms.json codes, plus STY and TC, which NHC has no code for
+# (JTWC heads North Indian / Southern Hemisphere warnings "TROPICAL CYCLONE").
+_JTWC_HEADING_CLASSES = {
+    "SUPER TYPHOON": "STY", "TYPHOON": "TY", "HURRICANE": "HU",
+    "TROPICAL STORM": "TS", "TROPICAL DEPRESSION": "TD",
+    "TROPICAL CYCLONE": "TC",
+    "SUBTROPICAL STORM": "STS", "SUBTROPICAL DEPRESSION": "STD",
+}
+_JTWC_HEADING_RE = re.compile(
+    r"(?:SUBJ/|^\s*1\.\s+)(" + "|".join(sorted(_JTWC_HEADING_CLASSES, key=len, reverse=True))
+    + r")\s+\d{2}[A-Z]\b", re.MULTILINE)
+
+
+def _jtwc_heading_class(text: str) -> Optional[str]:
+    """The classification code in a JTWC warning's heading, or None."""
+    m = _JTWC_HEADING_RE.search((text or "").upper())
+    return _JTWC_HEADING_CLASSES[m.group(1)] if m else None
+
+
+def _fetch_jtwc_warning_class(atcf_id: str) -> Optional[str]:
+    """JTWC's classification of a WP/IO/SH storm, read from the same warning
+    text _fetch_jtwc_motion fetches and caches (so it costs no extra request).
+    None for invests (no warning) or when the warning is unreachable."""
+    _fetch_jtwc_motion(atcf_id)
+    with _motion_cache_lock:
+        hit = _motion_cache.get((atcf_id or "").upper())
+    return hit.get("cls") if hit else None
 
 
 def _compute_motion_from_records(records: list) -> tuple[float | None, float | None]:
@@ -2522,7 +2553,8 @@ def _parse_adeck_line(line: str) -> Optional[dict]:
     Returns dict with fields or None if unparseable.
 
     A-deck format (comma-separated):
-    basin, cy, YYYYMMDDHH, technum, tech, tau, lat, lon, vmax, mslp, ...
+    basin, cy, YYYYMMDDHH, technum, tech, tau, lat, lon, vmax, mslp, ty, ...
+    (ty = ATCF development level: TD, TS, HU, SD, SS, EX, LO, DB, ...)
     """
     parts = [p.strip() for p in line.split(",")]
     if len(parts) < 12:
@@ -2563,6 +2595,7 @@ def _parse_adeck_line(line: str) -> Optional[dict]:
             "lon": lon_val,
             "vmax_kt": vmax,
             "mslp_hpa": mslp,
+            "ty": parts[10].strip().upper(),
         }
     except (ValueError, IndexError):
         return None
@@ -2592,41 +2625,81 @@ def _fetch_adeck(atcf_id: str) -> list:
     return records
 
 
-_CURRENT_STORMS_CACHE: dict = {"t": 0.0, "names": {}}
+_CURRENT_STORMS_CACHE: dict = {"t": 0.0, "names": {}, "classes": {}}
 _CURRENT_STORMS_TTL = 300   # 5 min — matches the active-storms poll cadence
 
 
-def _fetch_nhc_current_storm_names() -> dict:
-    """{ATCF_ID_UPPER: official_name} from NHC's CurrentStorms.json.
+def _refresh_nhc_current_storms() -> dict:
+    """NHC's CurrentStorms.json, parsed into the shared cache dict:
+    "names" {ATCF_ID_UPPER: official_name} and "classes" {ATCF_ID_UPPER: code}.
 
     This is the real-time, authoritative naming source: a system shows its
     official name here the moment NHC names it, whereas the B-deck/TCVITALS
-    name field can lag a full advisory cycle. Cached for `_CURRENT_STORMS_TTL`
-    so we hit the endpoint at most once per poll cycle. Best-effort: any
-    failure leaves the last-known map in place and the caller falls back to the
-    B-deck name.
+    name field can lag a full advisory cycle. The classification code is NHC's
+    own (NHC_Tropical_Cyclone_Status_JSON_File_Reference.pdf): TD, STD, TS, STS,
+    HU, PTC (post-tropical cyclone / remnants), PC (potential tropical
+    cyclone) and TY (unused). Cached for `_CURRENT_STORMS_TTL` so we hit the
+    endpoint at most once per poll cycle. Best-effort: any failure leaves the
+    last-known maps in place and callers fall back (B-deck name, no class).
     """
     now = time.time()
-    if now - _CURRENT_STORMS_CACHE["t"] < _CURRENT_STORMS_TTL and _CURRENT_STORMS_CACHE["names"]:
-        return _CURRENT_STORMS_CACHE["names"]
+    if (now - _CURRENT_STORMS_CACHE["t"] < _CURRENT_STORMS_TTL
+            and (_CURRENT_STORMS_CACHE["names"] or _CURRENT_STORMS_CACHE["classes"])):
+        return _CURRENT_STORMS_CACHE
     text = _http_get(NHC_CURRENT_STORMS_URL, timeout=10)
     if not text:
-        return _CURRENT_STORMS_CACHE["names"]   # keep stale-but-good on a miss
+        return _CURRENT_STORMS_CACHE   # keep stale-but-good on a miss
     try:
         data = json.loads(text)
-        names = {}
+        names, classes = {}, {}
         for s in data.get("activeStorms", []):
             sid = str(s.get("id", "")).upper()
+            if not sid:
+                continue
             nm = (s.get("name") or "").strip()
             # Ignore the pre-name placeholder ("One"/an ATCF echo); only adopt a
             # real proper name so a depression isn't pinned to its number here.
-            if sid and nm and not re.fullmatch(r"[A-Z]{2}\d{2}\d{4}", nm.upper()):
+            if nm and not re.fullmatch(r"[A-Z]{2}\d{2}\d{4}", nm.upper()):
                 names[sid] = nm
+            cls = str(s.get("classification") or "").strip().upper()
+            if cls:
+                classes[sid] = cls
         _CURRENT_STORMS_CACHE["t"] = now
         _CURRENT_STORMS_CACHE["names"] = names
-        return names
-    except (ValueError, TypeError):
-        return _CURRENT_STORMS_CACHE["names"]
+        _CURRENT_STORMS_CACHE["classes"] = classes
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return _CURRENT_STORMS_CACHE
+
+
+def _fetch_nhc_current_storm_names() -> dict:
+    """{ATCF_ID_UPPER: official_name} from NHC's CurrentStorms.json."""
+    return _refresh_nhc_current_storms()["names"]
+
+
+# ATCF development levels (the deck "ty" column). NHC drops a storm from
+# CurrentStorms.json with its last advisory, but it stays in this feed until its
+# last fix is 24 h old; its deck then marks it EX/LO/DB/... after earlier
+# tropical fixes, i.e. the post-tropical cyclone or remnants NHC last advised on.
+_DECK_TC_LEVELS = frozenset({"TD", "TS", "HU", "TY", "ST", "TC", "SD", "SS"})
+_DECK_POST_TC_LEVELS = frozenset({"EX", "PT", "LO", "DB", "WV"})
+
+
+def _nhc_classification(atcf_id: str, records: list, latest: dict) -> Optional[str]:
+    """NHC's classification for an AL/EP/CP storm: the CurrentStorms.json code
+    while NHC advises on it; afterwards "PTC" if its deck shows it went
+    post-tropical (so it doesn't revert to a wind-based "TD"); else None. A
+    numbered system that was never tropical (a potential TC that didn't
+    develop) is not inferred post-tropical."""
+    aid = (atcf_id or "").upper()
+    cls = _refresh_nhc_current_storms()["classes"].get(aid)
+    if cls:
+        return cls
+    if _is_invest(aid) or (latest.get("ty") or "") not in _DECK_POST_TC_LEVELS:
+        return None
+    if any(r.get("tau") == 0 and r.get("ty") in _DECK_TC_LEVELS for r in records):
+        return "PTC"
+    return None
 
 
 def _fetch_nhc_storm_name(atcf_id: str) -> Optional[str]:
@@ -2931,6 +3004,15 @@ def _build_storm_entry(atcf_id: str, records: list,
 
     vmax = latest["vmax_kt"]
     cat = _classify_wind(vmax)
+    # The agency's own classification, which wind alone can't give (a
+    # post-tropical 25-kt storm is not a TD). `category` stays wind-based.
+    id_basin = atcf_id.upper()[:2]
+    if id_basin in _NHC_BASINS:
+        classification = _nhc_classification(atcf_id, records, latest)
+    elif id_basin in _JTWC_BASINS:
+        classification = _fetch_jtwc_warning_class(atcf_id)
+    else:
+        classification = None
 
     # Friendly nomenclature: invests → "Invest 90E", named → title-cased,
     # else the ATCF ID. Mirrors the frontend label logic.
@@ -2961,6 +3043,7 @@ def _build_storm_entry(atcf_id: str, records: list,
         "vmax_kt": vmax,
         "mslp_hpa": latest["mslp_hpa"],
         "category": cat,
+        "classification": classification,
         "motion_deg": motion_deg,
         "motion_kt": motion_kt,
         "last_fix_utc": latest["datetime"].strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -4746,6 +4829,11 @@ def get_active_storms(if_none_match: Optional[str] = Header(default=None)):
     Return all currently active tropical cyclones worldwide.
     Data sourced from NHC ATCF A-deck (ATL + EPAC) and JTWC B-deck (WPAC, IO, SHEM).
     Results are cached for 10 minutes; ETag/304 short-circuits unchanged polls.
+
+    Each storm's `category` is wind-based (TD/TS/C1-C5). `classification` is
+    the agency's own class when known, else null: NHC's CurrentStorms.json
+    code (TD, STD, TS, STS, HU, PTC = post-tropical, PC = potential TC), or the
+    JTWC warning heading mapped to the same codes (plus TY, STY, TC).
     """
     _ensure_fresh_cache()
 

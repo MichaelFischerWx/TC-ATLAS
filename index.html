@@ -538,6 +538,17 @@
             return /^[A-Za-z]{2}9\d{4}$/.test(String(s.atcf_id || ''))
                 || /^invest\b/i.test(s.name || '');
         }
+        // NHC's own classification (the feed's `classification`) where the
+        // wind-based class would mislabel the system. Post-tropical cyclones
+        // and potential TCs are not tropical cyclones: invest gray, counted apart.
+        var OFFICIAL = { PTC: 'Post-tropical', PC: 'Potential TC', STD: 'Subtropical', STS: 'Subtropical' };
+        function officialCode(s) {
+            return isInvest(s) ? '' : String(s.classification || '').toUpperCase();
+        }
+        function isNonTC(s) {
+            var c = officialCode(s);
+            return c === 'PTC' || c === 'PC';
+        }
         // The site-wide time form ("10 Oct 18:00 UTC", tc_time.js).
         function fmtUTC(iso) {
             var d = new Date(iso);
@@ -561,8 +572,9 @@
             var name = s.name || 'Unnamed';
             var invest = isInvest(s);
             var cat = String(s.category || '');
-            var label = invest ? 'Invest' : (/^C[1-5]$/.test(cat) ? 'Cat ' + cat.charAt(1) : cat);
-            var color = invest ? INVEST_COLOR : (CAT_COLOR[cat] || INVEST_COLOR);
+            var label = invest ? 'Invest'
+                : OFFICIAL[officialCode(s)] || (/^C[1-5]$/.test(cat) ? 'Cat ' + cat.charAt(1) : cat);
+            var color = invest || isNonTC(s) ? INVEST_COLOR : (CAT_COLOR[cat] || INVEST_COLOR);
             var known = /^[A-Za-z]{2}\d{6}$/.test(atcf);
             var href = known ? 'realtime_ir.html#storm=' + encodeURIComponent(atcf) : 'realtime_ir.html';
             var img = known
@@ -605,19 +617,30 @@
                     'No active tropical cyclones');
                 return;
             }
-            // Tropical cyclones strongest first, then invests.
+            // Tropical cyclones strongest first, then post-tropical cyclones
+            // and potential TCs, then invests.
+            function rank(s) { return isInvest(s) ? 2 : isNonTC(s) ? 1 : 0; }
             storms.sort(function (a, b) {
-                return (isInvest(a) - isInvest(b)) || ((b.vmax_kt || 0) - (a.vmax_kt || 0));
+                return (rank(a) - rank(b)) || ((b.vmax_kt || 0) - (a.vmax_kt || 0));
             });
-            var nInvest = storms.filter(isInvest).length;
-            var nTC = storms.length - nInvest;
-            var parts = [];
-            if (nTC) parts.push(nTC + ' tropical cyclone' + (nTC === 1 ? '' : 's'));
-            else parts.push('No tropical cyclones');
-            if (nInvest) parts.push(nInvest + ' invest' + (nInvest === 1 ? '' : 's'));
+            function count(test, noun) {
+                var n = storms.filter(test).length;
+                return n ? n + ' ' + noun + (n === 1 ? '' : 's') : '';
+            }
+            var others = [
+                count(function (s) { return officialCode(s) === 'PTC'; }, 'post-tropical cyclone'),
+                count(function (s) { return officialCode(s) === 'PC'; }, 'potential tropical cyclone'),
+                count(isInvest, 'invest')
+            ].filter(Boolean);
+            var nTC = storms.filter(function (s) { return !rank(s); }).length;
+            function andList(a) {
+                return a.length > 1 ? a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1] : (a[0] || '');
+            }
             var newestMs = 0;
             storms.forEach(function (s) { newestMs = Math.max(newestMs, Date.parse(s.last_fix_utc || '') || 0); });
-            meta.textContent = parts.join(nTC ? ' and ' : ', ') +
+            meta.textContent = (nTC
+                    ? andList([nTC + ' tropical cyclone' + (nTC === 1 ? '' : 's')].concat(others))
+                    : 'No tropical cyclones' + (others.length ? ', ' + andList(others) : '')) +
                 (newestMs ? ' · as of ' + fmtUTC(new Date(newestMs).toISOString()) : '');
             if (!nTC) section.classList.add('is-quiet');
 
