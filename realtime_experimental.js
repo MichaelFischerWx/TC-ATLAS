@@ -2295,14 +2295,17 @@
        with the payload's own per-frame annotations, so alignment attempts
        can be scrubbed frame by frame; clicking the time-series chart seeks
        the viewer to that time. */
-    var _strip = null;       // {atcf, meta, lut, sheets:{}, i0, i1, idx,
-                             //  frameByTime, tiltBy, rmwBy}
+    var _strip = null;       // {atcf, meta, lut, sheets:{}, ready:{}, bad:{},
+                             //  i0, i1, idx, frameByTime, tiltBy, rmwBy}
     var _stripTimer = null;
     /* Overlay layers, all on by default; unavailable ones (no companion
        payload for this storm) get their checkbox disabled instead of
        silently drawing nothing. Session-sticky across storms. */
     var _frvOpt = { coast: true, rings: true, tilt: true, rmw: true,
                     shear: true };
+    var FRV_TICK_MS = 140;   // ~7 frames/s
+    var FRV_LAST_HOLD = 6;   // extra ticks on the newest frame before the loop restarts
+    var FRV_AHEAD = 32;      // frames of look-ahead for fetching the next sheet
 
     function stripPath(atcf, name) {
         return 'irstrips/' + atcf.slice(4) + '/' + atcf + '_' + name;
@@ -2357,6 +2360,7 @@
                 lut[4 * i + 3] = (i === meta.missing) ? 0 : 255;
             }
             _strip = { atcf: atcf, meta: meta, lut: lut, sheets: {},
+                       ready: {}, bad: {},
                        i0: i0, i1: i1, idx: i1, frameByTime: fbt,
                        tiltBy: {}, rmwBy: {},
                        tdrObs: (j.tdr_tilt || []).map(function (o) {
@@ -2432,9 +2436,9 @@
             function tryBase(base, next) {
                 var im = new Image();
                 im.crossOrigin = 'anonymous';
-                im.onload = function () { resolve(im); };
+                im.onload = function () { s.ready[k] = true; resolve(im); };
                 im.onerror = next ? function () { tryBase(next, null); }
-                                  : reject;
+                                  : function (e) { s.bad[k] = true; reject(e); };
                 /* Per-sheet key when the manifest has one (live storms
                    re-encode only their newest sheets each pass, so the
                    rest stay browser-cached); else the build stamp. */
@@ -2525,52 +2529,116 @@
         }).catch(function () {});
     }
 
-    /* Coastline segments come from the geojson the map already ships, so
-       showing land in the storm-centered frame costs one (browser-cached)
-       fetch and a per-frame reprojection — no new storage at all. */
-    var _coastLines = null;      // [{c: [[lon,lat]...], bb:[w,s,e,n]}]
-    var _coastReq = null;
+    /* Coastlines: full-resolution Natural Earth 10 m lines (at a ±200 km
+       window the map's simplified copy is visibly chunky), pre-split into
+       10°×10° static tiles (assets/coastlines/tiles10/, the set TC-RADAR's
+       focus view uses, bin/build_coastline_tiles.py). A frame touches 1-4
+       tiles, so a storm costs tens of KB instead of the 3 MB whole-world
+       file, which on a phone competed with the frame sheets for bandwidth.
+       Tiles stay cached for the session; a tile or index that fails to load
+       counts as empty rather than being retried on every redraw. */
+    var COAST_TILES = 'assets/coastlines/tiles10/';
+    var _coastIndex = null;      // Set of existing tile names; false if unavailable
+    var _coastIndexReq = null;
+    var _coastTile = {};         // name -> [{c: [[lon,lat]...], bb}] or in-flight Promise
 
-    function ensureCoast() {
-        if (_coastReq) return _coastReq;
-        /* FULL-resolution Natural Earth 10m (already shipped for the
-           explorer), not the map's simplified copy: at a ±200 km window the
-           simplified vertices are visibly chunky. 9.3 MB, but lazy — it
-           only ever loads when a frame viewer actually draws coastlines,
-           and the browser caches it across storms. */
-        _coastReq = fetch('assets/coastlines/ne_10m_coastline.geojson')
-            .then(function (r) { return r.json(); })
-            .then(function (g) {
-                var lines = [];
-                (g.features || []).forEach(function (ft) {
-                    var gm = ft.geometry || {};
-                    var arr = gm.type === 'LineString' ? [gm.coordinates]
-                        : gm.type === 'MultiLineString' ? gm.coordinates : [];
-                    arr.forEach(function (c) {
-                        var w = 999, s_ = 999, e = -999, n = -999;
-                        c.forEach(function (p) {
-                            if (p[0] < w) w = p[0];
-                            if (p[0] > e) e = p[0];
-                            if (p[1] < s_) s_ = p[1];
-                            if (p[1] > n) n = p[1];
-                        });
-                        lines.push({ c: c, bb: [w, s_, e, n] });
-                    });
-                });
-                _coastLines = lines;
-                return lines;
-            })
-            .catch(function () { _coastReq = null; return null; });
-        return _coastReq;
+    function coastIndex() {
+        if (!_coastIndexReq) {
+            _coastIndexReq = fetch(COAST_TILES + 'index.json')
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function (j) { _coastIndex = new Set((j && j.tiles) || []); })
+                .catch(function () { _coastIndex = false; });
+        }
+        return _coastIndexReq;
     }
 
-    function drawCoast(ctx, S, ext, clat, clon, X, Y) {
-        var margin = ext / 111.32 + 2.5;      // deg box around the center
+    function coastTile(name) {
+        var have = _coastTile[name];
+        if (Array.isArray(have)) return Promise.resolve(have);
+        if (have) return have;
+        _coastTile[name] = fetch(COAST_TILES + name)
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (g) {
+                return ((g.geometry || {}).coordinates || []).map(function (c) {
+                    var w = 999, s_ = 999, e = -999, n = -999;
+                    c.forEach(function (p) {
+                        if (p[0] < w) w = p[0];
+                        if (p[0] > e) e = p[0];
+                        if (p[1] < s_) s_ = p[1];
+                        if (p[1] > n) n = p[1];
+                    });
+                    return { c: c, bb: [w, s_, e, n] };
+                });
+            })
+            .catch(function () { return []; })
+            .then(function (lines) { _coastTile[name] = lines; return lines; });
+        return _coastTile[name];
+    }
+
+    function coastMargin(ext) { return ext / 111.32 + 2.5; }   // deg box around a center
+
+    /* Existing tiles within `margin` degrees of a center (named by their
+       south-west corner, longitude wrapped to [-180, 180)). */
+    function coastTileNames(clat, clon, margin) {
+        var out = [];
+        var s0 = Math.floor((clat - margin) / 10) * 10;
+        var n0 = Math.floor((clat + margin) / 10) * 10;
+        var w0 = Math.floor((clon - margin) / 10) * 10;
+        var e0 = Math.floor((clon + margin) / 10) * 10;
+        for (var la = Math.max(-90, s0); la <= Math.min(80, n0); la += 10) {
+            for (var lo = w0; lo <= e0; lo += 10) {
+                var nm = la + '_' + ((((lo + 180) % 360) + 360) % 360 - 180) + '.json';
+                if (_coastIndex.has(nm)) out.push(nm);
+            }
+        }
+        return out;
+    }
+
+    /* Lines around one frame center: the loaded tiles' lines now, plus a
+       Promise for any still in flight (null when complete). */
+    function coastAround(clat, clon, ext) {
+        if (_coastIndex === false) return { lines: [], pending: null };
+        if (!_coastIndex) return { lines: [], pending: coastIndex() };
+        var lines = [], wait = [];
+        coastTileNames(clat, clon, coastMargin(ext)).forEach(function (nm) {
+            var t = _coastTile[nm];
+            if (Array.isArray(t)) Array.prototype.push.apply(lines, t);
+            else wait.push(coastTile(nm));
+        });
+        return { lines: lines, pending: wait.length ? Promise.all(wait) : null };
+    }
+
+    /* The GIF draws every frame synchronously: load all the tiles under any
+       of its frames first. */
+    function ensureCoastFor(idxs) {
+        var s = _strip;
+        return coastIndex().then(function () {
+            if (!_coastIndex || !s) return null;
+            var ext = s.meta.extent_km || 200, want = {};
+            idxs.forEach(function (ix) {
+                var f = s.frameByTime[s.meta.times[ix]];
+                if (f && f.center_lat != null) {
+                    coastTileNames(f.center_lat, f.center_lon, coastMargin(ext))
+                        .forEach(function (nm) { want[nm] = true; });
+                }
+            });
+            return Promise.all(Object.keys(want).map(coastTile));
+        });
+    }
+
+    function drawCoast(ctx, lines, ext, clat, clon, X, Y) {
+        var margin = coastMargin(ext);
         var coslat = Math.cos(clat * Math.PI / 180);
         ctx.save();
         ctx.strokeStyle = 'rgba(250,240,160,0.85)';
         ctx.lineWidth = 1.2;
-        _coastLines.forEach(function (L) {
+        lines.forEach(function (L) {
             /* Cheap bbox reject in lon/lat space, dateline-normalized. */
             var dW = ((L.bb[0] - clon + 540) % 360) - 180;
             var dE = ((L.bb[2] - clon + 540) % 360) - 180;
@@ -2608,13 +2676,14 @@
         var tf = s.tiltBy[t];
         var rw = s.rmwBy[t];
         if (_frvOpt.coast && f && f.center_lat != null) {
-            if (_coastLines) {
-                drawCoast(ctx, S, ext, f.center_lat, f.center_lon, X, Y);
-            } else {
+            var co = coastAround(f.center_lat, f.center_lon, ext);
+            if (co.lines.length) {
+                drawCoast(ctx, co.lines, ext, f.center_lat, f.center_lon, X, Y);
+            }
+            if (co.pending) {
                 var want = s.idx;
-                ensureCoast().then(function (ok) {
-                    if (ok && _strip === s && s.idx === want)
-                        drawStripFrame(want);
+                co.pending.then(function () {
+                    if (_strip === s && s.idx === want) drawStripFrame(want);
                 });
             }
         }
@@ -2768,16 +2837,44 @@
         });
         var pl = document.getElementById('exp-frv-play');
         if (pl) pl.addEventListener('click', function () {
-            if (_stripTimer) { stopStripPlay(); return; }
+            if (_stripTimer) {
+                stopStripPlay();
+                // Redraw so a "Loading frames…" label gives way to the frame's time.
+                if (_strip) drawStripFrame(_strip.idx);
+                return;
+            }
             if (!_strip) return;
             track(M.key + '_frame_play', { storm: _storm });
             pl.textContent = '❚❚';
+            /* The viewer opens on the newest frame; Play there starts the
+               loop from the first frame instead of stopping at once. */
+            if (_strip.idx >= _strip.i1) seekStrip(_strip.i0);
+            var hold = 0;
             _stripTimer = setInterval(function () {
-                if (!_strip) { stopStripPlay(); return; }
-                var nxt = _strip.idx + 1;
-                if (nxt > _strip.i1) { stopStripPlay(); return; }
+                var s = _strip;
+                if (!s) { stopStripPlay(); return; }
+                if (hold > 0) { hold--; return; }
+                var per = s.meta.per_sheet;
+                var nxt = s.idx >= s.i1 ? s.i0 : s.idx + 1;
+                var k = Math.floor(nxt / per);
+                /* Each sheet is ~1 MB: wait for it rather than stepping
+                   through frames that can't be drawn yet (the canvas would
+                   freeze, then jump), and fetch the next one ahead — the
+                   first sheet again near the end, for the restart. A sheet
+                   that failed to load is stepped over. */
+                if (!s.ready[k] && !s.bad[k]) {
+                    var lbl = document.getElementById('exp-frv-time');
+                    if (lbl) lbl.textContent = 'Loading frames…';
+                    stripSheet(k).catch(function () {});
+                    return;
+                }
+                var ahead = nxt + FRV_AHEAD;
+                stripSheet(Math.floor((ahead > s.i1 ? s.i0 : ahead) / per))
+                    .catch(function () {});
                 seekStrip(nxt);
-            }, 140);
+                // Hold the newest frame before looping, as the monitor's loops do.
+                if (nxt === s.i1) hold = FRV_LAST_HOLD;
+            }, FRV_TICK_MS);
         });
     }
 
@@ -2831,7 +2928,7 @@
             need[Math.floor(ix / m.per_sheet)] = true;
         });
         Promise.all([
-            _frvOpt.coast ? ensureCoast() : Promise.resolve(null),
+            _frvOpt.coast ? ensureCoastFor(idxs) : Promise.resolve(null),
             /* './' is load-bearing: import() rejects bare specifiers (they
                read as module names), unlike fetch(). Resolves against the
                document (site root), same as every other asset path here. */
