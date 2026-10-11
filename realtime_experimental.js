@@ -285,6 +285,38 @@
         return null;
     }
 
+    /* lastFiniteFrame, judged against the NEWEST published frame. A model
+       that stops estimating a quantity (the wind model over land, every
+       quantity once the system is no longer a tropical cyclone) leaves its
+       last value behind; shown as "latest" it read as current — Isaias
+       2026-10-11 showed "101 kt · Cat 3" from 25 h earlier beside an NHC
+       analysis of 20 kt. Flags the value stale when it trails the newest
+       frame by more than STALE_H, with the reason when the payload says
+       one. Archived storms keep their final values (no staleness). */
+    var STALE_H = 1.5;
+    var NON_TC_NAMES = { EX: 'extratropical', LO: 'a low', DB: 'a disturbance',
+                         WV: 'a tropical wave', PT: 'post-tropical' };
+    function currentValue(fr, key, atcf) {
+        var last = lastFiniteFrame(fr, key);
+        var newest = fr.length ? fr[fr.length - 1] : null;
+        if (!last || !newest || _archSet[atcf]) return last;
+        last.stale = (new Date(newest.t) - new Date(last.t)) / 3.6e6 > STALE_H;
+        if (last.stale) {
+            last.notTc = !!newest.not_tc;
+            last.reason = newest.not_tc
+                ? 'not a tropical cyclone' + (NON_TC_NAMES[newest.btk_status]
+                    ? ' (' + NON_TC_NAMES[newest.btk_status] + ')' : '')
+                : (key === 'pmin_hpa' ? 'no usable IR frame'
+                    : (key === 'vmax_kt' ? 'wind' : 'size') + ' model has no ' +
+                      'current estimate (it abstains over land and on ' +
+                      'unusable IR frames)');
+        }
+        return last;
+    }
+    function fmtTime(t) {
+        return window.TCTime ? TCTime.utc(t) : t.slice(11, 16) + 'Z';
+    }
+
     /* Change over ~24 h: latest finite value minus the finite value nearest
        (now − 24 h). Needs ≥18 h of history so a young storm shows "—" rather
        than a misleading short-baseline delta; returns the true baseline hours
@@ -1466,13 +1498,23 @@
                               : 'outside validity');
                     return;
                 }
-                var lf = lastFiniteFrame(j.frames || [], 'vmax_kt');
+                var lf = currentValue(j.frames || [], 'vmax_kt', s.atcf);
                 if (!lf) return;
+                var lp = M.headline === 'pmin_hpa'
+                    ? currentValue(j.frames || [], 'pmin_hpa', s.atcf) : null;
+                /* No current estimate: say so rather than stamping the last
+                   one (and its category) on the chip as if it were live. */
+                if (lf.stale) {
+                    em.innerHTML = lf.notTc ? 'not a tropical cyclone'
+                        : (lp && !lp.stale
+                            ? Math.round(lp.v) + ' hPa · wind abstains'
+                            : 'no current estimate');
+                    return;
+                }
+                if (lp && lp.stale) lp = null;
                 var cat = windToCategory(lf.v);
                 /* Pressure-first models lead with pressure; the wind is
                    still shown (it carries the category) but second. */
-                var lp = M.headline === 'pmin_hpa'
-                    ? lastFiniteFrame(j.frames || [], 'pmin_hpa') : null;
                 em.innerHTML = '<i style="background:' + SS_COLORS[cat] +
                     '"></i>' + (lp
                         ? Math.round(lp.v) + ' hPa · ' + Math.round(lf.v) + ' kt'
@@ -1702,9 +1744,19 @@
         var box = document.getElementById('exp-tiles');
         if (!box) return;
         var fr = j.frames || [];
-        var v = lastFiniteFrame(fr, 'vmax_kt');
-        var p = lastFiniteFrame(fr, 'pmin_hpa');
-        var r = lastFiniteFrame(fr, 'rmw_km');
+        var v = currentValue(fr, 'vmax_kt', j.storm);
+        var p = currentValue(fr, 'pmin_hpa', j.storm);
+        var r = currentValue(fr, 'rmw_km', j.storm);
+        /* A quantity the model has stopped estimating: no number, category,
+           trend or interval — the reason and the dated last estimate. */
+        function staleTile(label, c, unit) {
+            return '<div class="exp-tile exp-tile-stale">' +
+                '<div class="exp-tile-k">' + label + '</div>' +
+                '<div class="exp-tile-v">—</div>' +
+                '<div class="exp-tile-d">' + c.reason + '</div>' +
+                '<div class="exp-tile-sub">last estimate ' + Math.round(c.v) +
+                ' ' + unit + ' at ' + fmtTime(c.t) + '</div></div>';
+        }
         /* A pressure-only payload is legitimate, not a failed run: FPM's
            derived wind is withheld in basins where the weak gate hands the
            storm to a major-hurricane arm. Bail only if the profile's OWN
@@ -1739,7 +1791,7 @@
 
         /* No wind in the payload -> no wind tile. See the headline guard
            above: this is a withheld quantity, not a broken feed. */
-        var windTile = !v ? '' :
+        var windTile = !v ? '' : v.stale ? staleTile(M.name + ' max wind', v, 'kt') :
             '<div class="exp-tile">' +
             '<div class="exp-tile-k">' + M.name + ' max wind' +
             (M.windIsDerived
@@ -1779,7 +1831,7 @@
                 : '') +
             asOf + '</div>';
 
-        var presTile = !p ? '' :
+        var presTile = !p ? '' : p.stale ? staleTile(M.name + ' min pressure', p, 'hPa') :
             '<div class="exp-tile">' +
             '<div class="exp-tile-k">' + M.name + ' min pressure</div>' +
             '<div class="exp-tile-v">' + Math.round(p.v) +
@@ -1801,7 +1853,9 @@
             ? presTile + windTile
             : windTile + presTile;
 
-        if (r && M.panels.rmw) {
+        if (r && r.stale && M.panels.rmw) {
+            html += staleTile(M.name + ' eyewall radius (RMW)', r, 'km');
+        } else if (r && M.panels.rmw) {
             var ph = lastFiniteFrame(fr, 'pinhole_prob');
             html +=
                 '<div class="exp-tile">' +
@@ -1833,7 +1887,7 @@
                whichever quantity that is — `v` is null on a pressure-only
                payload and dereferencing it here threw, which selectStorm's
                catch swallowed silently and took the whole chart with it. */
-            var latest = v || p || r;
+            var latest = fr[fr.length - 1];
             var ageH = latest
                 ? (new Date(latest.t) - new Date(fix.t)) / 3.6e6 : 0;
             var gAt = (fix.vmax_kt !== null && isFinite(fix.vmax_kt))
