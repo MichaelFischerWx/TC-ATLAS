@@ -234,6 +234,17 @@
         TD: '#60a5fa', TS: '#34d399', C1: '#fbbf24',
         C2: '#fb923c', C3: '#f87171', C4: '#ef4444', C5: '#dc2626'
     };
+    // Invests and the official classes the wind can't express (the
+    // active-storms feed's `classification`, as in realtime_ir.js
+    // OFFICIAL_CLASSES). Post-tropical cyclones and potential TCs are not
+    // tropical cyclones, so they share the invest gray.
+    var NON_TC_COLOR = '#64748b';
+    var OFFICIAL_CLASSES = {
+        PTC: { short: 'Post-tropical', color: NON_TC_COLOR },
+        PC:  { short: 'Potential TC', color: NON_TC_COLOR },
+        STD: { short: 'Subtropical' },
+        STS: { short: 'Subtropical' }
+    };
 
     // ── IR Colormap LUTs ────────────────────────────────────────
     var IR_COLORMAPS = {};
@@ -555,6 +566,24 @@
         if (!cat) return 'TD';
         if (cat === 'TD' || cat === 'TS') return cat;
         return 'Cat ' + cat.replace('C', '');
+    }
+
+    function _isInvest(s) {
+        var n = parseInt(String(s.atcf_id || '').slice(2, 4), 10);
+        return n >= 90 && n <= 99;
+    }
+
+    /** A feed storm's class label: INVEST, its official class, else TD / TS / Cat N. */
+    function stormClassShort(s) {
+        if (_isInvest(s)) return 'INVEST';
+        var oc = OFFICIAL_CLASSES[String(s.classification || '').toUpperCase()];
+        return oc ? oc.short : categoryShort(s.category);
+    }
+
+    function stormClassColor(s) {
+        if (_isInvest(s)) return NON_TC_COLOR;
+        var oc = OFFICIAL_CLASSES[String(s.classification || '').toUpperCase()];
+        return (oc && oc.color) || SS_COLORS[s.category] || SS_COLORS.TD;
     }
 
     function _ga(action, params) {
@@ -2393,11 +2422,9 @@
         var mslpEl = document.getElementById('sat-env-mslp');
         var posEl = document.getElementById('sat-env-pos');
         var motEl = document.getElementById('sat-env-motion');
-        var cat = currentStorm.category || categoryShort(currentStorm.category);
-        var catShort = categoryShort(cat);
         if (catEl) {
-            catEl.textContent = catShort;
-            catEl.style.background = (SS_COLORS[cat] || SS_COLORS.TD);
+            catEl.textContent = stormClassShort(currentStorm);
+            catEl.style.background = stormClassColor(currentStorm);
         }
         if (nameEl) nameEl.textContent = currentStorm.name || currentStormId || '—';
         if (vmaxEl) vmaxEl.textContent = (currentStorm.vmax_kt != null) ? currentStorm.vmax_kt : '—';
@@ -4934,12 +4961,12 @@
         if (storms.length === 0) { stormListEl.innerHTML = '<div class="sat-loading-msg">No active storms</div>'; return; }
         var html = '';
         for (var i = 0; i < storms.length; i++) {
-            var s = storms[i], color = SS_COLORS[s.category] || SS_COLORS.TD;
+            var s = storms[i], color = stormClassColor(s);
             var active = (s.atcf_id === currentStormId) ? ' active' : '';
             html += '<div class="sat-storm-item' + active + '" data-id="' + s.atcf_id + '" style="--storm-color:' + color + '">' +
                 '<div class="sat-storm-dot" style="background:' + color + '"></div>' +
                 '<div class="sat-storm-info"><div class="sat-storm-name">' + (s.name || s.atcf_id) + '</div>' +
-                '<div class="sat-storm-meta">' + categoryShort(s.category) +
+                '<div class="sat-storm-meta">' + stormClassShort(s) +
                 (s.vmax_kt != null ? ' \u00B7 ' + s.vmax_kt + ' kt' : '') +
                 ' \u00B7 ' + (s.basin || '') + '</div></div></div>';
         }
@@ -5005,8 +5032,8 @@
         }
 
         if (currentStorm) {
-            var color = SS_COLORS[currentStorm.category] || SS_COLORS.TD;
-            stormLabelEl.textContent = (currentStorm.name || atcfId) + ' (' + categoryShort(currentStorm.category) + ')';
+            var color = stormClassColor(currentStorm);
+            stormLabelEl.textContent = (currentStorm.name || atcfId) + ' (' + stormClassShort(currentStorm) + ')';
             stormLabelEl.style.color = color;
         }
         if (window.innerWidth <= 768 && sidebar) sidebar.classList.remove('open');
