@@ -256,6 +256,33 @@ def _cat_label_color(category: str, vmax_kt, basin: str) -> tuple:
     return ("Disturbance", _MUTED)
 
 
+# Classes the wind can't express: the feed's `classification` (NHC's
+# CurrentStorms.json code). Post-tropical cyclones, potential TCs and invests
+# are not tropical cyclones, so they take the site's neutral invest gray.
+_NON_TC = (100, 116, 139)   # #64748b — INVEST_CHIP_COLOR in realtime_ir.js
+_OFFICIAL_CLASSES = {       # code -> (roster badge, label, accent; None = by wind)
+    "PTC": ("PT", "Post-Tropical Cyclone", _NON_TC),
+    "PC": ("PTC", "Potential Tropical Cyclone", _NON_TC),
+    "STD": ("SD", "Subtropical Depression", None),
+    "STS": ("SS", "Subtropical Storm", None),
+}
+
+
+def _storm_class(storm: dict) -> tuple:
+    """(roster badge, label, accent) for a feed storm: invest or NHC's own
+    class where the wind-based one would mislabel it, else _cat_label_color."""
+    num = str(storm.get("atcf_id") or "")[2:4]
+    if num.isdigit() and 90 <= int(num) <= 99:
+        return ("INV", "Invest", _NON_TC)
+    code = _cat_code(storm.get("category"), storm.get("vmax_kt"))
+    oc = _OFFICIAL_CLASSES.get(str(storm.get("classification") or "").strip().upper())
+    if oc:
+        return (oc[0], oc[1], oc[2] or _CAT_COLORS.get(code, _MUTED))
+    label, accent = _cat_label_color(
+        storm.get("category"), storm.get("vmax_kt"), storm.get("basin"))
+    return (code or "—", label, accent)
+
+
 # Friendly basin labels (endpoint emits codes like "WPAC"/"EPAC"). Unknown
 # codes fall through to the raw string.
 _BASIN_LABELS = {
@@ -397,8 +424,7 @@ def _compose_storm_card(ir_square, storm: dict,
     _draw_header(cv)
     _live_chip(cv)
 
-    label, accent = _cat_label_color(
-        storm.get("category"), storm.get("vmax_kt"), storm.get("basin"))
+    _, label, accent = _storm_class(storm)
 
     # Eyebrow: basin · AL09
     eyebrow = "  ·  ".join(b for b in (_basin_label(storm.get("basin")).upper(),
@@ -573,9 +599,7 @@ def _compose_multistorm_card(ir_square, storms: list, valid_utc: Optional[str],
     row_y, row_h = 236, 50
     for s in shown:
         cv.line([(_PAD, row_y), (col_r, row_y)], fill=_LINE, width=1)
-        code = _cat_code(s.get("category"), s.get("vmax_kt"))
-        _, accent = _cat_label_color(s.get("category"), s.get("vmax_kt"), s.get("basin"))
-        badge = code or "—"
+        badge, _, accent = _storm_class(s)
         bf = _font(13, 500, mono=True)
         mid = row_y + row_h / 2
         cv.rrect((_PAD, mid - 13, _PAD + 40, mid + 13), 5, fill=accent + (46,),
