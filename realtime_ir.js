@@ -1151,6 +1151,7 @@
     // Genesis-popup Intensity Change pane (RI histogram from cluster members)
     var _genesisIcData = null;         // {lead_times_h, intensity_change_12h/24h, ...}
     var _genesisIcTauIdx = 4;          // current slider index
+    var _genesisIcInit = null;         // init of the loaded cycle (valid-time label)
     var _genesisIcInt = 24;            // 12 or 24 hour change interval (ΔV + P(RI) figures)
     var _genesisIcPeak = null;         // {taus, winds} per-member peak for the LMI figure
 
@@ -20300,6 +20301,7 @@
         }
 
         _genesisIcData = ic;
+        _genesisIcInit = loadedInit || (data && data.init_time) || null;
         empty.style.display = 'none';
         wrap.style.display = '';
 
@@ -20356,7 +20358,7 @@
             : _genesisIcData.intensity_change_24h;
         _rtDrawChangeHistCore(changeData, _genesisIcData.lead_times_h || [],
             _genesisIcTauIdx, _genesisIcInt,
-            'rt-genesis-ic-chart', 'rt-genesis-ic-label');
+            'rt-genesis-ic-chart', 'rt-genesis-ic-label', _genesisIcInit);
     }
 
     // Render all three stacked figures.
@@ -28463,7 +28465,7 @@
             : _rtDmEnsData.intensity_change_24h;
         _rtDrawChangeHistCore(changeData, _rtDmEnsData.lead_times_h || [],
             _rtDmChangeTauIdx, _rtDmChangeInt,
-            'rt-dm-change-chart', 'rt-dm-change-label');
+            'rt-dm-change-chart', 'rt-dm-change-label', _rtDmEnsData.init_time);
     }
 
     /**
@@ -28476,8 +28478,9 @@
      *   tauIdx     : current slider index into taus
      *   interval   : 12 or 24 (hours)
      *   chartElId / labelElId : target DOM ids
+     *   initIso    : optional model init; adds the valid time to the label
      */
-    function _rtDrawChangeHistCore(changeData, taus, tauIdx, interval, chartElId, labelElId) {
+    function _rtDrawChangeHistCore(changeData, taus, tauIdx, interval, chartElId, labelElId, initIso) {
         if (typeof Plotly === 'undefined') { var _pa = arguments, _pt = this; _whenPlotly(function () { _rtDrawChangeHistCore.apply(_pt, _pa); }); return; }
 
         taus = taus || [];
@@ -28557,10 +28560,19 @@
               line: { color: _DM_MEAN_COLOR, width: 1.5 } }
         ];
 
+        // The forecast hour lives on the chart, not only in the slider label
+        // under it, so a saved PNG says which hour the distribution is for
+        // (user request 2026-10-12).
+        var initD = initIso && window.TCTime ? TCTime.parse(initIso) : null;
+        var hourText = 'Forecast hour +' + Math.round(tau) + ' h' + (initD
+            ? ' · valid ' + TCTime.cycle(new Date(initD.getTime() + tau * 3600e3)) : '');
         var annotations = [
             { x: riThreshold, y: 1, yref: 'paper', text: 'RI: ' + riPct + '%',
               showarrow: false, font: { size: 9, color: '#dc2626' },
-              yanchor: 'bottom', xanchor: 'left', xshift: 4 }
+              yanchor: 'bottom', xanchor: 'left', xshift: 4 },
+            { x: 1, xref: 'paper', y: 1, yref: 'paper', text: hourText,
+              showarrow: false, font: { size: 9, color: _dmRefLineColor() },
+              yanchor: 'bottom', xanchor: 'right' }
         ];
 
         var layout = _dmChartLayout({
