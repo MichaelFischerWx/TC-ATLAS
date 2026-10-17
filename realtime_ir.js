@@ -2592,8 +2592,8 @@
         btn.title = !avail
             ? 'Detailed view — this storm is outside the mosaic coverage, so the Lite view isn’t available here.'
             : (detailed
-                ? 'Detailed view: exact-Tb hover, operational colormaps, inner-core diagnostics. Click for the fast, crisp Lite mosaic loop.'
-                : 'Lite mosaic loop (fast + crisp, native resolution). Click for the Detailed view: exact-Tb hover, colormaps, diagnostics.');
+                ? 'Detailed view: exact-Tb hover and inner-core diagnostics. Click for the fast, crisp Lite mosaic loop (IR colormaps live in its legend).'
+                : 'Lite mosaic loop (fast + crisp, native resolution). Click for the Detailed view: exact-Tb hover and diagnostics.');
     }
     /** Toggle the open storm card between the Lite mosaic loop and the raw-Tb
      *  Detailed path, then rebuild the detail map in the new mode. */
@@ -2835,7 +2835,7 @@
             if (el && el.value !== _irColormap) el.value = _irColormap;
         });
         var bar = document.getElementById('ir-tb-legend-bar-gradient');
-        if (bar) bar.style.background = _rtTbLegendGradient(_irColormap) || '';
+        if (bar) bar.style.background = (_liteActive && _rtTbLegendGradient(_irColormap)) || '';
         if (_liteActive && (productMode === 'eir' || productMode === 'combo')) {
             for (var i = 0; i < animFrameLayers.length; i++) {
                 var ly = animFrameLayers[i];
@@ -2857,6 +2857,15 @@
                        + (k / N * 100).toFixed(1) + '%');
         }
         return 'linear-gradient(to right,' + stops.join(',') + ')';
+    }
+    /** The card's picker recolors the Lite mosaic only — the Detailed view
+     *  draws pre-rendered Claude-IR frames — so it is hidden there rather
+     *  than letting the legend disagree with the imagery. */
+    function _rtSyncCmapPickerVis() {
+        var sel = document.getElementById('ir-detail-cmap-select');
+        if (sel) sel.style.display = _liteActive ? '' : 'none';
+        var bar = document.getElementById('ir-tb-legend-bar-gradient');
+        if (bar) bar.style.background = (_liteActive && _rtTbLegendGradient(_irColormap)) || '';
     }
     (function _rtInitStormCmapPicker() {
         var sel = document.getElementById('ir-detail-cmap-select');
@@ -8795,7 +8804,7 @@
                 _irSyncProductButtons('eir');
                 _initDetailMapMosaic(storm, 'ir');
             }
-            else if (product === 'ir') { _liteActive = false; _initDetailMapJPG(storm, GIBS_IR_LAYERS[detailSatName]); }
+            else if (product === 'ir') { _liteActive = false; _rtSyncCmapPickerVis(); _initDetailMapJPG(storm, GIBS_IR_LAYERS[detailSatName]); }
             else if (product === 'vis') { _loadVisSwirComposite(); }
             else { _loadBandFramesBundle(8, 'wv'); }
         }
@@ -8871,6 +8880,7 @@
     function _buildMosaicAnimLayers(storm, frames, product) {
         cleanupFrameLayers();   // drop any prior layers + reset the frame-state arrays
         _liteActive = true;
+        _rtSyncCmapPickerVis();
         _irSyncComboAvail();    // Combo is Lite-only — it's live again now
         var n = frames.length;
         // idx path (?ir2a): recolor the single-channel v3 tiles → RGBA via the
@@ -9354,6 +9364,7 @@
         // mosaic poll-refresh doesn't fight this rebuild (product switch back to
         // IR, on-demand Detailed, or a fallback all funnel through here).
         _liteActive = false;
+        _rtSyncCmapPickerVis();
         _irSyncComboAvail();    // Combo needs Lite — grey it out here
         var dv;
         var header;
@@ -9977,6 +9988,7 @@
             _initDetailMapMosaic(storm);
         } else {
             _liteActive = false;
+            _rtSyncCmapPickerVis();
             _irSyncComboAvail();
             _initDetailMapJPG(storm, satLayerName);
         }

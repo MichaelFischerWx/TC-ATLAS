@@ -84,7 +84,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261017gf1">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261017gf2">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -325,10 +325,10 @@
                         </button>
                         <div class="ir-opt-sep"></div>
                         <div class="ir-opt-group-label">Display</div>
-                        <button id="ir-detail-mode-toggle" class="ir-opt-item ir-detail-mode-toggle-btn" role="menuitemcheckbox" onclick="window._rtToggleDetailMode()" title="Switch between the fast crisp Lite mosaic loop (default) and the Detailed raw-Tb view (exact-Tb hover, colormaps, diagnostics)">
+                        <button id="ir-detail-mode-toggle" class="ir-opt-item ir-detail-mode-toggle-btn" role="menuitemcheckbox" onclick="window._rtToggleDetailMode()" title="Switch between the fast crisp Lite mosaic loop (default) and the Detailed raw-Tb view (exact-Tb hover, diagnostics)">
                             <span class="ir-opt-dot" aria-hidden="true"></span>
                             <span class="ir-opt-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3.2M12 17.8V21M3 12h3.2M17.8 12H21"/></svg></span>
-                            <span class="ir-opt-text"><span class="ir-opt-title">Detailed view</span><span class="ir-opt-desc">Raw-Tb hover, colormaps</span></span>
+                            <span class="ir-opt-text"><span class="ir-opt-title">Detailed view</span><span class="ir-opt-desc">Raw-Tb hover, diagnostics</span></span>
                         </button>
                         <button id="ir-detail-diag-toggle" class="ir-opt-item ir-detail-diag-toggle-btn" role="menuitemcheckbox" onclick="window._irToggleDiagnosticsSection()" title="IR diagnostics — objective eye on the map + inner-core charts (radial Tb, center-fix series, histogram, Hovmöller)">
                             <span class="ir-opt-dot" aria-hidden="true"></span>
@@ -2824,7 +2824,7 @@
     <script defer src="tc_mw_layer.js?v=20260920a"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261010tm1"></script>
-    <script defer src="realtime_ir.js?v=20261017gf1"></script>
+    <script defer src="realtime_ir.js?v=20261017gf2"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
