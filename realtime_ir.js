@@ -33659,11 +33659,29 @@
     function _iemRadarUrl(layer) {
         return _IEM_RADAR_BASE + '/' + layer + '/{z}/{x}/{y}.png';
     }
-    // Rough CONUS (+ Puerto Rico) box the IEM composite covers. Outside it the
-    // tiles are transparent, so we hide the panel rather than show an empty
-    // layer (e.g. for WPac / IO / SHEM storms).
+    // Where the IEM composite has data: a rough CONUS (+ Puerto Rico) box,
+    // plus the OCONUS WSR-88Ds that are also stitched into nexrad-n0q (and
+    // the WMS-T) — Guam and Hawaii, verified 2026-10-17 with Champi's eye in
+    // the PGUA tiles. Outside these the tiles are transparent, so we hide the
+    // panel rather than show an empty layer (e.g. for IO / SHEM storms).
+    var _RT_OCONUS_RADARS = [
+        [13.455, 144.811],   // PGUA Andersen AFB, Guam
+        [21.894, -159.552],  // PHKI South Kauai
+        [21.133, -157.180],  // PHMO Molokai
+        [20.126, -155.778],  // PHKM Kohala
+        [19.095, -155.569],  // PHWA South Shore (Big Island)
+    ];
+    // Storm center within ~500 km of a site: the N0Q sweep reaches ~460 km,
+    // plus margin for an inner core straddling the edge.
+    var _RT_OCONUS_RADAR_KM = 500;
     function _rtInRadarCoverage(lat, lon) {
-        return lat >= 16 && lat <= 52 && lon >= -128 && lon <= -63;
+        if (lon > 180) lon -= 360;
+        if (lat >= 16 && lat <= 52 && lon >= -128 && lon <= -63) return true;
+        for (var i = 0; i < _RT_OCONUS_RADARS.length; i++) {
+            if (_genesisHaversineKm(lat, lon, _RT_OCONUS_RADARS[i][0],
+                                     _RT_OCONUS_RADARS[i][1]) <= _RT_OCONUS_RADAR_KM) return true;
+        }
+        return false;
     }
     // Parse a frame timestamp to epoch ms. Handles the compact mosaic format
     // "YYYYMMDDHHMM" (UTC, e.g. 202606292230) — which Date.parse does NOT —
