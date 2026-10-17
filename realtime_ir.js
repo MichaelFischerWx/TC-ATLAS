@@ -2737,7 +2737,12 @@
     // Registered as an 'irlut://<cmap>/<realurl>' MapLibre protocol so the IR
     // tileLayer routes through it when a non-default colormap is active. Quality
     // is approximate (8-bit inversion) but reads operational; Vis/WV are untouched.
-    var _irColormap = 'claude-ir';   // active IR colormap on the global map
+    var _irColormap = 'claude-ir';   // active IR colormap (global map + storm card)
+    // [value, label] for every IR colormap picker on the page.
+    var _IR_CMAP_OPTIONS = [['claude-ir', 'Claude IR'], ['irb', 'IRB'], ['avn', 'AVN'], ['nhc', 'NHC'],
+        ['rammb', 'RAMMB'], ['dvorak', 'Dvorak Color'], ['funktop', 'Funktop'],
+        ['enhanced', 'Enhanced'], ['grayscale', 'Dvorak BD'],
+        ['graylinear', 'Grayscale'], ['lowcloud', 'Low-Cloud']];
     var _irRevMap = null;            // quantized Claude-IR RGB(5-bit)/idx → idx
     var _irTargetMaps = {};          // cmap → [256] mosaic-idx → [r,g,b]
     function _irBuildReverse() {
@@ -2805,6 +2810,7 @@
     function _rtSetIRColormap(cmap) {
         if (cmap === _irColormap) return;
         _irColormap = cmap;
+        _rtSyncStormIRColormap();
         if ((globalProduct !== 'ir' && globalProduct !== 'combo') || !latestGIBSTime) return;
         // idx WebGL layer: instant GPU LUT swap, no rebuild.
         if (_ir2aOn && _ir2aLayer) {
@@ -2819,6 +2825,48 @@
         lyr.addTo(map); gibsIRLayers = [lyr];
         if (hadAnim) loadGlobalAnimation();
     }
+
+    /** Storm card side of an IR colormap change: both pickers show it, the
+     *  Tb legend bar is repainted from the LUT, and the card's Lite IR tiles
+     *  are refetched (the idxcolor:// protocol reads _irColormap per tile). */
+    function _rtSyncStormIRColormap() {
+        ['ir-cmap-select', 'ir-detail-cmap-select'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el && el.value !== _irColormap) el.value = _irColormap;
+        });
+        var bar = document.getElementById('ir-tb-legend-bar-gradient');
+        if (bar) bar.style.background = _rtTbLegendGradient(_irColormap) || '';
+        if (_liteActive && (productMode === 'eir' || productMode === 'combo')) {
+            for (var i = 0; i < animFrameLayers.length; i++) {
+                var ly = animFrameLayers[i];
+                if (ly && ly._mosaicTs && ly._map && ly.setUrl) ly.setUrl(ly._url);
+            }
+        }
+    }
+    /** CSS gradient for the storm-card Tb legend (+35 °C left → -100 °C right)
+     *  sampled from a colormap's LUT. null for Claude IR, whose hand-tuned
+     *  stylesheet gradient (with the ice-blue cold tail) is the default. */
+    function _rtTbLegendGradient(cmap) {
+        var lut = cmap && cmap !== 'claude-ir' && IR_COLORMAPS[cmap];
+        if (!lut) return null;
+        var stops = [], N = 24;
+        for (var k = 0; k <= N; k++) {
+            var tb = 308.15 - (k / N) * 135;    // +35 → -100 °C in K
+            var ti = Math.max(1, Math.min(255, Math.round((tb - 160) / 170 * 254) + 1));
+            stops.push('rgb(' + lut[ti * 4] + ',' + lut[ti * 4 + 1] + ',' + lut[ti * 4 + 2] + ') '
+                       + (k / N * 100).toFixed(1) + '%');
+        }
+        return 'linear-gradient(to right,' + stops.join(',') + ')';
+    }
+    (function _rtInitStormCmapPicker() {
+        var sel = document.getElementById('ir-detail-cmap-select');
+        if (!sel) return;
+        _IR_CMAP_OPTIONS.forEach(function (o) {
+            var opt = document.createElement('option'); opt.value = o[0]; opt.textContent = o[1]; sel.appendChild(opt);
+        });
+        sel.value = _irColormap;
+        sel.addEventListener('change', function () { _rtSetIRColormap(sel.value); });
+    })();
 
     // ── 3D convection (prototype) — extrude cold IR cloud tops into relief ─────
     // Re-encode the baked Claude-IR mosaic tiles into a Mapbox terrain-RGB DEM
@@ -6988,10 +7036,7 @@
             var cmSel = document.createElement('select');
             cmSel.id = 'ir-cmap-select';
             cmSel.className = 'ir-cmap-select';
-            [['claude-ir', 'Claude IR'], ['irb', 'IRB'], ['avn', 'AVN'], ['nhc', 'NHC'],
-             ['rammb', 'RAMMB'], ['dvorak', 'Dvorak Color'], ['funktop', 'Funktop'],
-             ['enhanced', 'Enhanced'], ['grayscale', 'Dvorak BD'],
-             ['graylinear', 'Grayscale'], ['lowcloud', 'Low-Cloud']].forEach(function (o) {
+            _IR_CMAP_OPTIONS.forEach(function (o) {
                 var opt = document.createElement('option'); opt.value = o[0]; opt.textContent = o[1]; cmSel.appendChild(opt);
             });
             cmSel.addEventListener('change', function () { _rtSetIRColormap(cmSel.value); });
@@ -34182,10 +34227,11 @@
         // '#ir-detail-layers' is the env-layers control (button + menu).
         ['.leaflet-control-zoom', '.maplibregl-ctrl-group',
          '#ir-product-toggle', '#ir-detail-layers', '#ir-image-loader',
-         '#ir-gif-prog'].forEach(function (sel) {
+         '#ir-gif-prog', '.ir-export-hide'].forEach(function (sel) {
             var els = clonedDoc.querySelectorAll(sel);
             for (var i = 0; i < els.length; i++) els[i].style.display = 'none';
         });
+        _irExportHideCoveredLabels(clonedDoc);
         var host = clonedDoc.getElementById('ir-image-container');
         if (host) {
             // Top-right (freed by hiding the product toggle). The graticule
@@ -34219,10 +34265,38 @@
     function _irExportOnCloneControls(clonedDoc) {
         ['.leaflet-control-zoom', '.maplibregl-ctrl-group',
          '#ir-product-toggle', '#ir-detail-layers', '#ir-image-loader',
-         '#ir-gif-prog'].forEach(function (sel) {
+         '#ir-gif-prog', '.ir-export-hide'].forEach(function (sel) {
             var els = clonedDoc.querySelectorAll(sel);
             for (var i = 0; i < els.length; i++) els[i].style.display = 'none';
         });
+        _irExportHideCoveredLabels(clonedDoc);
+    }
+
+    /** In a capture CLONE, drop graticule labels that sit under a product
+     *  legend — on screen the translucent legend half-hides them, and in a
+     *  saved figure that reads as overlapping text (e.g. 142°E behind the Tb
+     *  colorbar). */
+    function _irExportHideCoveredLabels(clonedDoc) {
+        var boxes = [];
+        ['ir-tb-legend', 'ir-wv-legend', 'ir-vigor-legend'].forEach(function (id) {
+            var el = clonedDoc.getElementById(id);
+            if (el && el.style.display !== 'none') {
+                var r = el.getBoundingClientRect();
+                if (r.width > 0) boxes.push(r);
+            }
+        });
+        if (!boxes.length) return;
+        var labels = clonedDoc.querySelectorAll('.rt-graticule-label');
+        for (var i = 0; i < labels.length; i++) {
+            var lr = labels[i].getBoundingClientRect();
+            for (var b = 0; b < boxes.length; b++) {
+                var r = boxes[b];
+                if (lr.right > r.left && lr.left < r.right && lr.bottom > r.top && lr.top < r.bottom) {
+                    labels[i].style.visibility = 'hidden';
+                    break;
+                }
+            }
+        }
     }
 
     /** Zero out the container/map backgrounds in the CLONE so the captured
@@ -34278,7 +34352,24 @@
      *  iOS export path, which can't use html2canvas (see
      *  _irDownloadCurrentFrame), and per-frame by the lite GIF path. System
      *  font stack — a web font may not be available to a canvas draw. */
-    function _irStampExportChrome(cx, W, H) {
+    /** The time / satellite / eye lines of the export chip, read from the
+     *  live DOM — gathered per frame by the GIF path, which stamps later. */
+    function _irExportChromeLines() {
+        var lines = [];
+        var tstr = _activeFrameTimeStr() || animFrameTimes[animIndex];
+        try { if (tstr) lines.push(fmtUTC(tstr)); } catch (e) {}
+        var sat = document.getElementById('ir-satellite-label');
+        if (sat && sat.textContent) lines.push(sat.textContent.trim());
+        // Eye / cold-top readout (hurricanes only — the chip is shown ≥65 kt),
+        // band-aware since we read the live chip text.
+        var eyeEl = document.getElementById('ir-eye-diag');
+        if (eyeEl && eyeEl.style.display !== 'none' && eyeEl.textContent) {
+            lines.push(eyeEl.textContent.trim());
+        }
+        return lines;
+    }
+
+    function _irStampExportChrome(cx, W, H, chipLines) {
         var fs = Math.max(13, Math.round(W / 46));
         var pad = Math.round(fs * 0.6);
         var m = Math.round(W / 70);
@@ -34311,17 +34402,7 @@
             var tx = align === 'right' ? (bx + bw - pad) : (bx + pad + iw + gap);
             for (i = 0; i < lines.length; i++) cx.fillText(lines[i], tx, y + pad * 0.5 + i * lh);
         }
-        var lines = [];
-        var tstr = _activeFrameTimeStr() || animFrameTimes[animIndex];
-        try { if (tstr) lines.push(fmtUTC(tstr)); } catch (e) {}
-        var sat = document.getElementById('ir-satellite-label');
-        if (sat && sat.textContent) lines.push(sat.textContent.trim());
-        // Eye / cold-top readout (hurricanes only — the chip is shown ≥65 kt),
-        // band-aware since we read the live chip text.
-        var eyeEl = document.getElementById('ir-eye-diag');
-        if (eyeEl && eyeEl.style.display !== 'none' && eyeEl.textContent) {
-            lines.push(eyeEl.textContent.trim());
-        }
+        var lines = chipLines || _irExportChromeLines();
         if (lines.length) chip(m, m, lines, 'left', 600);
         chip(W - m, m, ['TC-ATLAS', 'tcatlas.org'], 'right', 700, _irExportLogo());
     }
@@ -34680,6 +34761,44 @@
      *  lite PNG export uses. Static DOM chrome (Tb colorbar, env colorbars) is
      *  captured once; the timestamp chip + watermark are hand-stamped per
      *  frame with the 2D text API. Mirrors the global map's _exportMapGif. */
+    // Storm-card GIF size knobs. Frames are captured at the card's device
+    // pixels up to _IR_GIF_SRC_MAX_W, then the encoder shrinks the loop only as
+    // far as needed to land under _IR_GIF_BUDGET_BYTES — X's mobile apps cap
+    // GIF uploads at 5 MB (15 MB on the web). Phones capture smaller to bound
+    // memory (every frame is held until the encode).
+    var _IR_GIF_SRC_MAX_W = _IS_MOBILE_VIEWPORT ? 800 : 1200;
+    var _IR_GIF_BUDGET_BYTES = 4.6e6;   // decimal MB, margin under X's 5 MB
+
+    /** MapLibre's attribution control (the GL facade's) or Leaflet's. */
+    function _irIsAttribEl(el) {
+        var c = el && el.classList;
+        return !!(c && (c.contains('maplibregl-ctrl-attrib') || c.contains('leaflet-control-attribution')));
+    }
+    /** Small one-line attribution for per-frame GIF composites, tucked under
+     *  the TC-ATLAS chip at top-right. The live control is long ("Radar: IEM /
+     *  NWS | © OpenStreetMap contributors © CARTO") and, bottom-right, sat on
+     *  the bottom graticule labels; the top-right has no labels. Geometry
+     *  mirrors the watermark chip in _irStampExportChrome. */
+    function _irStampExportAttrib(cx, W, H) {
+        var host = document.querySelector('#ir-image-container .maplibregl-ctrl-attrib-inner, '
+                                          + '#ir-image-container .leaflet-control-attribution');
+        var txt = host ? host.textContent.replace(/\s+/g, ' ').replace(/\s*\|\s*/g, ' · ').trim() : '';
+        if (!txt) return;
+        var cfs = Math.max(13, Math.round(W / 46)), m = Math.round(W / 70);
+        var chipH = 2 * Math.round(cfs * 1.28) + Math.round(cfs * 0.6);
+        var fs = Math.max(9, Math.round(W / 92)), pad = Math.round(fs * 0.45);
+        var y = m + chipH + Math.round(m * 0.5);
+        cx.save();
+        cx.font = '500 ' + fs + "px -apple-system, system-ui, 'Segoe UI', sans-serif";
+        var tw = cx.measureText(txt).width, bh = fs + pad * 2;
+        cx.fillStyle = 'rgba(15,22,35,0.55)';
+        _roundRectPath(cx, W - m - tw - pad * 2, y, tw + pad * 2, bh, Math.round(fs * 0.35)); cx.fill();
+        cx.fillStyle = 'rgba(255,255,255,0.85)';
+        cx.textBaseline = 'middle'; cx.textAlign = 'right';
+        cx.fillText(txt, W - m - pad, y + bh / 2);
+        cx.restore();
+    }
+
     function _irGifFromGL(state, exportFrames, node, toast, cleanup) {
         var glMap = detailMap && detailMap._gl;
         var glCanvas = glMap && glMap.getCanvas && glMap.getCanvas();
@@ -34691,32 +34810,35 @@
         }
 
         var rect = node.getBoundingClientRect();
-        // Cap the long edge ~600 px — NeuQuant + LZW cost and output bytes
-        // scale with pixel count. Matches the other two GIF paths.
-        var capScale = Math.min(1, 600 / Math.max(1, rect.width));
-        var outW = Math.max(2, Math.round(rect.width * capScale)) & ~1;
-        var outH = Math.max(2, Math.round(rect.height * capScale)) & ~1;
-        var comp = document.createElement('canvas');
-        comp.width = outW; comp.height = outH;
-        var cctx = comp.getContext('2d');
+        // Capture at the card's device pixels (capped), then let the encoder
+        // step the size down only as far as the byte budget needs.
+        var srcScale = Math.min(window.devicePixelRatio || 1,
+                                _IR_GIF_SRC_MAX_W / Math.max(1, rect.width));
+        var srcW = Math.max(2, Math.round(rect.width * srcScale)) & ~1;
+        var srcH = Math.max(2, Math.round(rect.height * srcScale)) & ~1;
 
-        Promise.all([_ensureHtml2canvas(), _ensureGifWorker()]).then(function (setup) {
-            var workerUrl = setup[1];
+        Promise.all([_ensureHtml2canvas(),
+                     import('./assets/vendor/gifenc/gifenc.esm.js')]).then(function (setup) {
+            var gifenc = setup[1];
             // The DOM chrome doesn't change across frames → capture once.
             // Skip every <canvas> (the GL one is composited separately, and
-            // reading a tainted canvas throws on iOS) and the timestamp pill,
-            // which _irStampExportChrome redraws per frame. NEVER block on
+            // reading a tainted canvas throws on iOS). The time / satellite /
+            // eye chip and the attribution are stamped per frame by
+            // _irStampExportChrome / _irStampExportAttrib; capturing the live
+            // ones too doubled them up (overlapping text). NEVER block on
             // this: html2canvas can take many seconds on this DOM, and a GIF
             // without the Tb colorbar beats a GIF that never arrives.
             var overlayP = window.html2canvas(node, {
                 backgroundColor: null, useCORS: true, allowTaint: false,
-                logging: false, scale: capScale,
+                logging: false, scale: srcScale,
                 // ControlsVec: also zero the container backgrounds — this
                 // overlay is drawn OVER the per-frame GL snapshot, and the
                 // container's opaque background would paint the imagery out.
                 onclone: _irExportOnCloneControlsVec,
                 ignoreElements: function (el) {
-                    return el.tagName === 'CANVAS' || el.id === 'ir-overlay-info';
+                    return el.tagName === 'CANVAS' || el.id === 'ir-overlay-info'
+                        || el.id === 'ir-eye-diag' || _irIsAttribEl(el)
+                        || (el.classList && el.classList.contains('ir-export-hide'));
                 }
             }).catch(function () { return null; });
             var overlayTimeout = new Promise(function (r) {
@@ -34724,36 +34846,16 @@
             });
 
             return Promise.race([overlayP, overlayTimeout]).then(function (overlay) {
-                var gif = new window.GIF({
-                    workers: Math.max(2, Math.min(8, navigator.hardwareConcurrency || 4)),
-                    quality: 20, width: outW, height: outH,
-                    workerScript: workerUrl, background: '#0a0c12'
-                });
-                gif.on('progress', function (pct) {
-                    toast.textContent = 'GIF · encoding ' + Math.round(pct * 100) + '%';
-                });
-                gif.on('finished', function (blob) {
-                    _showGifResult(blob, currentStormId + '_animation.gif');
-                    _ga('ir_export_gif', { ok: true, mode: 'lite' });
-                    cleanup();
-                });
-
+                // Per frame: imagery + DOM overlay at source size, plus the
+                // chip text of that moment (the DOM moves on before encoding).
+                var shots = [];
                 var i = 0;
                 function frameStep() {
-                    if (i >= exportFrames.length) {
-                        toast.textContent = 'GIF · encoding…';
-                        try { gif.render(); }
-                        catch (e) {
-                            console.warn('[RT Monitor] lite GIF render failed', e);
-                            _rtToast('GIF encode failed');
-                            cleanup();
-                        }
-                        return;
-                    }
+                    if (i >= exportFrames.length) { encodeAll(); return; }
                     var idx = exportFrames[i];
                     // showFrame swaps layer opacity, recenters on the frame's
                     // true position, and updates the timestamp DOM that
-                    // _irStampExportChrome reads back below.
+                    // _irExportChromeLines reads back below.
                     state.showFn(idx);
                     _whenGlIdle(glMap, 1500)
                         .then(function () { return _glSnapshot(glMap); })
@@ -34769,28 +34871,81 @@
                             return snap;
                         })
                         .then(function (snap) {
-                            cctx.fillStyle = '#0a0c12';
-                            cctx.fillRect(0, 0, outW, outH);
-                            if (snap) {
-                                cctx.drawImage(snap, 0, 0, snap.width, snap.height,
-                                               0, 0, outW, outH);
-                            }
-                            if (overlay) {
-                                cctx.drawImage(overlay, 0, 0, overlay.width, overlay.height,
-                                               0, 0, outW, outH);
-                            }
-                            _irStampExportChrome(cctx, outW, outH);
+                            var c = document.createElement('canvas');
+                            c.width = srcW; c.height = srcH;
+                            var cx = c.getContext('2d');
+                            cx.imageSmoothingEnabled = true; cx.imageSmoothingQuality = 'high';
+                            cx.fillStyle = '#0a0c12';
+                            cx.fillRect(0, 0, srcW, srcH);
+                            if (snap) cx.drawImage(snap, 0, 0, snap.width, snap.height, 0, 0, srcW, srcH);
+                            if (overlay) cx.drawImage(overlay, 0, 0, overlay.width, overlay.height, 0, 0, srcW, srcH);
                             // The colorbar normally rides in on `overlay`. When
                             // that capture is unavailable (html2canvas throws on
                             // iOS, or it lost the 8 s race) stamp it by hand so
                             // the loop never ships without its scale.
-                            if (!overlay) _irStampExportLegend(cctx, outW, outH);
-                            gif.addFrame(cctx, { delay: animIntervalMs, copy: true });
+                            if (!overlay) _irStampExportLegend(cx, srcW, srcH);
+                            shots.push({ canvas: c, lines: _irExportChromeLines() });
                             i++;
                             toast.textContent = 'GIF · capturing ' + i + '/' + exportFrames.length;
                             frameStep();
                         });
                 }
+
+                // One global palette (the loop's colors barely change frame to
+                // frame) — ~20% smaller than per-frame palettes and ~100x
+                // faster than gif.js, which is what makes a budget search
+                // affordable: encode, and if over budget shrink and retry.
+                function encodeAt(scale) {
+                    var w = Math.max(2, Math.round(srcW * scale)) & ~1;
+                    var h = Math.max(2, Math.round(srcH * scale)) & ~1;
+                    var dst = document.createElement('canvas');
+                    dst.width = w; dst.height = h;
+                    var dx = dst.getContext('2d', { willReadFrequently: true });
+                    dx.imageSmoothingEnabled = true; dx.imageSmoothingQuality = 'high';
+                    var rgba = [];
+                    for (var k = 0; k < shots.length; k++) {
+                        dx.drawImage(shots[k].canvas, 0, 0, w, h);
+                        // Text stamped at the OUTPUT size so it stays crisp.
+                        _irStampExportChrome(dx, w, h, shots[k].lines);
+                        _irStampExportAttrib(dx, w, h);
+                        rgba.push(dx.getImageData(0, 0, w, h).data);
+                    }
+                    var picks = [0, Math.floor(rgba.length / 2), rgba.length - 1];
+                    var sample = new Uint8ClampedArray(w * h * 4 * picks.length);
+                    picks.forEach(function (f, j) { sample.set(rgba[f], j * w * h * 4); });
+                    var palette = gifenc.quantize(sample, 256, { format: 'rgb565' });
+                    var enc = gifenc.GIFEncoder();
+                    for (var f = 0; f < rgba.length; f++) {
+                        enc.writeFrame(gifenc.applyPalette(rgba[f], palette, 'rgb565'), w, h,
+                                       { palette: palette, delay: animIntervalMs, repeat: 0 });
+                    }
+                    enc.finish();
+                    return { bytes: enc.bytes(), w: w, h: h };
+                }
+
+                function encodeAll() {
+                    toast.textContent = 'GIF · encoding…';
+                    // Yield a frame so the toast paints before the sync encode.
+                    setTimeout(function () {
+                        try {
+                            var scale = 1, out = encodeAt(scale);
+                            for (var tries = 0; out.bytes.length > _IR_GIF_BUDGET_BYTES && tries < 4; tries++) {
+                                // Bytes ~ pixel count: shrink by the area ratio, with margin.
+                                scale *= Math.sqrt(_IR_GIF_BUDGET_BYTES / out.bytes.length) * 0.96;
+                                out = encodeAt(scale);
+                            }
+                            var blob = new Blob([out.bytes], { type: 'image/gif' });
+                            _showGifResult(blob, currentStormId + '_animation.gif');
+                            _ga('ir_export_gif', { ok: true, mode: 'lite', w: out.w,
+                                                   kb: Math.round(out.bytes.length / 1024) });
+                        } catch (e) {
+                            console.warn('[RT Monitor] lite GIF encode failed', e);
+                            _rtToast('GIF encode failed');
+                        }
+                        cleanup();
+                    }, 30);
+                }
+
                 frameStep();
             });
         }).catch(function (err) {

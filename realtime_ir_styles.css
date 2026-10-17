@@ -1307,6 +1307,23 @@ html, body { margin: 0; padding: 0; }
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
 }
+.ir-tb-legend-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.ir-tb-cmap-select {
+    font: inherit;
+    font-size: 0.62rem;
+    color: #e2e8f0;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+    padding: 0 2px;
+    cursor: pointer;
+}
+.ir-tb-cmap-select option { color: #0f172a; background: #fff; }
 .ir-tb-legend-bar {
     width: 160px;
     height: 10px;
