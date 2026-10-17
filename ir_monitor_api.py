@@ -2625,7 +2625,7 @@ def _fetch_adeck(atcf_id: str) -> list:
     return records
 
 
-_CURRENT_STORMS_CACHE: dict = {"t": 0.0, "names": {}, "classes": {}}
+_CURRENT_STORMS_CACHE: dict = {"t": 0.0, "names": {}, "classes": {}, "ids": set()}
 _CURRENT_STORMS_TTL = 300   # 5 min — matches the active-storms poll cadence
 
 
@@ -2643,19 +2643,19 @@ def _refresh_nhc_current_storms() -> dict:
     last-known maps in place and callers fall back (B-deck name, no class).
     """
     now = time.time()
-    if (now - _CURRENT_STORMS_CACHE["t"] < _CURRENT_STORMS_TTL
-            and (_CURRENT_STORMS_CACHE["names"] or _CURRENT_STORMS_CACHE["classes"])):
+    if now - _CURRENT_STORMS_CACHE["t"] < _CURRENT_STORMS_TTL:
         return _CURRENT_STORMS_CACHE
     text = _http_get(NHC_CURRENT_STORMS_URL, timeout=10)
     if not text:
         return _CURRENT_STORMS_CACHE   # keep stale-but-good on a miss
     try:
         data = json.loads(text)
-        names, classes = {}, {}
+        names, classes, ids = {}, {}, set()
         for s in data.get("activeStorms", []):
             sid = str(s.get("id", "")).upper()
             if not sid:
                 continue
+            ids.add(sid)
             nm = (s.get("name") or "").strip()
             # Ignore the pre-name placeholder ("One"/an ATCF echo); only adopt a
             # real proper name so a depression isn't pinned to its number here.
@@ -2667,6 +2667,7 @@ def _refresh_nhc_current_storms() -> dict:
         _CURRENT_STORMS_CACHE["t"] = now
         _CURRENT_STORMS_CACHE["names"] = names
         _CURRENT_STORMS_CACHE["classes"] = classes
+        _CURRENT_STORMS_CACHE["ids"] = ids
     except (ValueError, TypeError, AttributeError):
         pass
     return _CURRENT_STORMS_CACHE
@@ -2683,6 +2684,27 @@ def _fetch_nhc_current_storm_names() -> dict:
 # tropical fixes, i.e. the post-tropical cyclone or remnants NHC last advised on.
 _DECK_TC_LEVELS = frozenset({"TD", "TS", "HU", "TY", "ST", "TC", "SD", "SS"})
 _DECK_POST_TC_LEVELS = frozenset({"EX", "PT", "LO", "DB", "WV"})
+
+
+# A numbered NHC system can reach the A-deck an hour or two before its first
+# advisory puts it in CurrentStorms.json, so an unlisted storm is only dropped
+# once its deck says post-tropical/remnant or its last fix is this old.
+_NHC_DELISTED_GRACE = timedelta(hours=6)
+
+
+def _nhc_delisted(atcf_id: str, latest: dict, age: timedelta) -> bool:
+    """True when NHC has stopped advising on this storm: a fresh read of
+    CurrentStorms.json no longer lists it (final advisory issued) and it isn't
+    a pre-advisory newcomer. Invests are never listed there, so they're exempt;
+    if the JSON can't be read we fall back to the 24 h last-fix rule."""
+    aid = (atcf_id or "").upper()
+    if _is_invest(aid):
+        return False
+    cur = _refresh_nhc_current_storms()
+    if time.time() - cur["t"] > 2 * _CURRENT_STORMS_TTL or aid in cur["ids"]:
+        return False
+    return ((latest.get("ty") or "") in _DECK_POST_TC_LEVELS
+            or age > _NHC_DELISTED_GRACE)
 
 
 def _nhc_classification(atcf_id: str, records: list, latest: dict) -> Optional[str]:
@@ -3457,6 +3479,9 @@ def _poll_active_storms(spawn_prefetch: bool = True):
         age = now - latest["datetime"]
         if age > timedelta(hours=24):
             continue             # genuinely aged out — NOT a fetch failure
+        if _nhc_delisted(sid, latest, age):
+            print(f"[IR Monitor] NHC {sid.upper()}: final advisory issued — dropped")
+            continue
         # A-decks leave the name blank; pull it from the btk B-deck so named
         # NHC storms read as "Amanda" rather than "EP012026" (the JTWC branch
         # already does the equivalent via TCW/B-deck text).
