@@ -221,11 +221,22 @@
        OFF by default and remembered per browser; it only ever adds a dashed
        trace — tiles, headline numbers and every other panel stay the
        published GHOST. */
-    var CNN_PREFIX = 'ghostb-cnn-rt';
     var CNN_COL = '#0ea5e9';
     var _showCnn = _pref('tcatlas.exp.cnn', false);
-    var _cnnIdx = null;      // promise of {atcf: true} for storms the test has run on
-    var _cnnSeries = {};     // atcf -> payload, or null when the test has none
+    /* Hybrid RMW test (2026-10-18): the Stage-1 image CNN where GHOST's wind
+       is >= 64 kt, the published size model below (TC-SWARM
+       realtime/cnnghost/rmw_hybrid_publish.py). Same contract: off by
+       default, one dashed trace on the RMW panel only. */
+    var RMWCNN_COL = '#f97316';
+    var _showRmwCnn = _pref('tcatlas.exp.rmwcnn', false);
+    /* Test overlays' payloads, per source: idx = promise of {atcf: true}
+       for the storms the test has run on; s = atcf -> payload, or null. */
+    var OVERLAYS = {
+        cnn: { prefix: 'ghostb-cnn-rt', file: 'blend_', idx: null, s: {},
+               on: function () { return _showCnn; } },
+        rmw: { prefix: 'ghost-rmwcnn-rt', file: 'rmw_', idx: null, s: {},
+               on: function () { return _showRmwCnn; } }
+    };
     var COMP_STYLE = {
         'D-PRINT':       '#a855f7',
         /* ADT comes from the CIMSS feed (~30 min) and carries MSLP, so it
@@ -1223,6 +1234,14 @@
                   'It runs alongside GHOST for evaluation and is not the ' +
                   'published estimate.">GHOST + CNN (test)</button>'
                 : '') +
+            (M.panels.cnn && M.panels.rmw
+                ? '<button class="exp-range exp-rmwcnnbtn' +
+                  (_showRmwCnn ? ' active' : '') + '" id="exp-rmwcnn-btn" title="' +
+                  'Overlay a test size estimate on the RMW panel: a convolutional ' +
+                  'neural network (CNN) that reads the infrared image is used ' +
+                  'for hurricanes, and the published size model below 64 kt. ' +
+                  'Not the published estimate.">CNN RMW (test)</button>'
+                : '') +
             (M.panels.why
                 ? '<button class="exp-range exp-whybtn' +
                   (_showWhy ? ' active' : '') +
@@ -1410,6 +1429,14 @@
             _setPref('tcatlas.exp.cnn', _showCnn);
             track(M.key + '_cnn_test', { on: _showCnn });
             cnnBtn.classList.toggle('active', _showCnn);
+            if (_storm && _series[_storm]) drawSeries(_series[_storm]);
+        });
+        var rmwCnnBtn = document.getElementById('exp-rmwcnn-btn');
+        if (rmwCnnBtn) rmwCnnBtn.addEventListener('click', function () {
+            _showRmwCnn = !_showRmwCnn;
+            _setPref('tcatlas.exp.rmwcnn', _showRmwCnn);
+            track(M.key + '_rmw_cnn_test', { on: _showRmwCnn });
+            rmwCnnBtn.classList.toggle('active', _showRmwCnn);
             if (_storm && _series[_storm]) drawSeries(_series[_storm]);
         });
         var compBtn = document.getElementById('exp-comp');
@@ -4205,29 +4232,30 @@
         box.style.display = '';
     }
 
-    /* GHOST + CNN payload for one storm: undefined = not fetched yet (fetch,
-       then redraw if the same storm is still showing), null = the test has
-       not run on it. The index is checked first so storms it never ran on
-       cost no 404 round trips. */
-    function cnnSeriesFor(atcf) {
-        if (atcf in _cnnSeries) return _cnnSeries[atcf];
-        _cnnSeries[atcf] = undefined;
-        if (!_cnnIdx) {
-            _cnnIdx = fetchJson(CNN_PREFIX + '/index.json', true)
+    /* A test overlay's payload for one storm: undefined = not fetched yet
+       (fetch, then redraw if the same storm is still showing and the overlay
+       is still on), null = the test has not run on it. The index is checked
+       first so storms it never ran on cost no 404 round trips. */
+    function overlayFor(key, atcf) {
+        var o = OVERLAYS[key];
+        if (atcf in o.s) return o.s[atcf];
+        o.s[atcf] = undefined;
+        if (!o.idx) {
+            o.idx = fetchJson(o.prefix + '/index.json', true)
                 .then(function (ix) {
-                    var o = {};
-                    ((ix && ix.storms) || []).forEach(function (s) { o[s.atcf] = true; });
-                    return o;
+                    var h = {};
+                    ((ix && ix.storms) || []).forEach(function (s) { h[s.atcf] = true; });
+                    return h;
                 }).catch(function () { return {}; });
         }
-        _cnnIdx.then(function (have) {
+        o.idx.then(function (have) {
             return have[atcf]
-                ? fetchJson(CNN_PREFIX + '/blend_' + atcf + '.json')
+                ? fetchJson(o.prefix + '/' + o.file + atcf + '.json')
                     .catch(function () { return null; })
                 : null;
-        }).then(function (cj) {
-            _cnnSeries[atcf] = (cj && cj.frames && cj.frames.length) ? cj : null;
-            if (_showCnn && _storm === atcf && _series[atcf]) drawSeries(_series[atcf]);
+        }).then(function (pj) {
+            o.s[atcf] = (pj && pj.frames && pj.frames.length) ? pj : null;
+            if (o.on() && _storm === atcf && _series[atcf]) drawSeries(_series[atcf]);
         });
         return undefined;
     }
@@ -4705,7 +4733,7 @@
            Its size channel is not drawn — the test changes the intensity
            model only, and the size model is the published one. */
         if (M.panels.cnn && _showCnn && _storm) {
-            var cj = cnnSeriesFor(_storm);
+            var cj = overlayFor('cnn', _storm);
             if (cj) {
                 var cf = cj.frames;
                 var ct = cf.map(function (f) { return f.t; });
@@ -4733,6 +4761,30 @@
                     xaxis: 'x', mode: 'lines', hoverinfo: 'skip',
                     name: 'GHOST + CNN (test): not run on this storm',
                     line: { color: CNN_COL, width: 2, dash: 'dash' }
+                });
+            }
+        }
+        /* Hybrid RMW test overlay: RMW panel only (absent panel = nothing). */
+        if (M.panels.cnn && _showRmwCnn && _storm && axOf.y3) {
+            var rj = overlayFor('rmw', _storm);
+            var ax3 = axOf.y3, xx3 = 'x' + (ax3 === 'y' ? '' : ax3.slice(1));
+            if (rj) {
+                traces.push({
+                    x: rj.frames.map(function (f) { return f.t; }),
+                    y: rj.frames.map(function (f) { return f.rmw_km; }),
+                    text: rj.frames.map(function (f) {
+                        return f.routed === 'cnn' ? 'image CNN' : 'published model (below 64 kt)';
+                    }),
+                    name: 'CNN RMW (test)', yaxis: ax3, xaxis: xx3,
+                    mode: 'lines', connectgaps: false,
+                    line: { color: RMWCNN_COL, width: 2, dash: 'dash' },
+                    hovertemplate: '%{y:.0f} km — CNN RMW (test): %{text}<extra></extra>'
+                });
+            } else if (rj === null) {
+                traces.push({
+                    x: [null], y: [null], yaxis: ax3, xaxis: xx3, mode: 'lines',
+                    hoverinfo: 'skip', name: 'CNN RMW (test): not run on this storm',
+                    line: { color: RMWCNN_COL, width: 2, dash: 'dash' }
                 });
             }
         }
@@ -4837,7 +4889,9 @@
             return;
         if (!force && Date.now() - _lastLoad < REFRESH_MS) return;
         _series = {};
-        _cnnSeries = {}; _cnnIdx = null;
+        Object.keys(OVERLAYS).forEach(function (k) {
+            OVERLAYS[k].s = {}; OVERLAYS[k].idx = null;
+        });
         loadIndex();
     }
     setInterval(function () { refreshIfStale(false); }, 60 * 1000);
