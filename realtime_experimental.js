@@ -87,7 +87,7 @@
                the tree\u2019s Stage-1 size channel per frame \u2014 it had been
                silently dropped when the blend became the listed tab. */
             panels: { rmw: true, shap: false, dist: true, track: true,
-                      comp: true, why: true }
+                      comp: true, why: true, cnn: true }
         },
         ghost: {
             key: 'ghost',
@@ -214,6 +214,18 @@
     var _whyT = null;        // times of frames carrying the breakdown (chart-click mapping)
     var _whyIdx = null;      // selected frame index in that panel (null = latest)
     var _showVerif = false;  // manuscript verification statistics
+    /* GHOST + CNN test overlay (2026-10-18). A version of GHOST whose tree
+       member also reads the IR image with a CNN runs in shadow beside the
+       live chain (TC-SWARM realtime/cnnghost/shadow_blend.py: live FPM member
+       + CNN tree, blended by the live code) and publishes to its own prefix.
+       OFF by default and remembered per browser; it only ever adds a dashed
+       trace — tiles, headline numbers and every other panel stay the
+       published GHOST. */
+    var CNN_PREFIX = 'ghostb-cnn-rt';
+    var CNN_COL = '#0ea5e9';
+    var _showCnn = _pref('tcatlas.exp.cnn', false);
+    var _cnnIdx = null;      // promise of {atcf: true} for storms the test has run on
+    var _cnnSeries = {};     // atcf -> payload, or null when the test has none
     var COMP_STYLE = {
         'D-PRINT':       '#a855f7',
         /* ADT comes from the CIMSS feed (~30 min) and carries MSLP, so it
@@ -1203,6 +1215,14 @@
                   (_showShap ? ' active' : '') +
                   '" id="exp-shap-btn">Model drivers</button>'
                 : '') +
+            (M.panels.cnn
+                ? '<button class="exp-range exp-cnnbtn' +
+                  (_showCnn ? ' active' : '') + '" id="exp-cnn-btn" title="' +
+                  'Overlay a test version of GHOST that also reads the ' +
+                  'infrared image with a convolutional neural network (CNN). ' +
+                  'It runs alongside GHOST for evaluation and is not the ' +
+                  'published estimate.">GHOST + CNN (test)</button>'
+                : '') +
             (M.panels.why
                 ? '<button class="exp-range exp-whybtn' +
                   (_showWhy ? ' active' : '') +
@@ -1383,6 +1403,14 @@
             var box = document.getElementById('exp-why');
             if (box) box.style.display = _showWhy ? 'block' : 'none';
             if (_showWhy && _storm && _series[_storm]) drawWhy(_series[_storm]);
+        });
+        var cnnBtn = document.getElementById('exp-cnn-btn');
+        if (cnnBtn) cnnBtn.addEventListener('click', function () {
+            _showCnn = !_showCnn;
+            _setPref('tcatlas.exp.cnn', _showCnn);
+            track(M.key + '_cnn_test', { on: _showCnn });
+            cnnBtn.classList.toggle('active', _showCnn);
+            if (_storm && _series[_storm]) drawSeries(_series[_storm]);
         });
         var compBtn = document.getElementById('exp-comp');
         if (compBtn) compBtn.addEventListener('click', function () {
@@ -4119,6 +4147,33 @@
         box.style.display = '';
     }
 
+    /* GHOST + CNN payload for one storm: undefined = not fetched yet (fetch,
+       then redraw if the same storm is still showing), null = the test has
+       not run on it. The index is checked first so storms it never ran on
+       cost no 404 round trips. */
+    function cnnSeriesFor(atcf) {
+        if (atcf in _cnnSeries) return _cnnSeries[atcf];
+        _cnnSeries[atcf] = undefined;
+        if (!_cnnIdx) {
+            _cnnIdx = fetchJson(CNN_PREFIX + '/index.json', true)
+                .then(function (ix) {
+                    var o = {};
+                    ((ix && ix.storms) || []).forEach(function (s) { o[s.atcf] = true; });
+                    return o;
+                }).catch(function () { return {}; });
+        }
+        _cnnIdx.then(function (have) {
+            return have[atcf]
+                ? fetchJson(CNN_PREFIX + '/blend_' + atcf + '.json')
+                    .catch(function () { return null; })
+                : null;
+        }).then(function (cj) {
+            _cnnSeries[atcf] = (cj && cj.frames && cj.frames.length) ? cj : null;
+            if (_showCnn && _storm === atcf && _series[atcf]) drawSeries(_series[atcf]);
+        });
+        return undefined;
+    }
+
     function drawSeries(j) {
         if (M.panels.tilt) {
             var sk = document.getElementById('exp-skill');
@@ -4588,6 +4643,41 @@
                         ? ' ' + j.sar_next.slice(j.sar_next.indexOf('(')) : '')
             }]);
         }
+        /* GHOST + CNN test overlay: dashed, one legend entry for both panels.
+           Its size channel is not drawn — the test changes the intensity
+           model only, and the size model is the published one. */
+        if (M.panels.cnn && _showCnn && _storm) {
+            var cj = cnnSeriesFor(_storm);
+            if (cj) {
+                var cf = cj.frames;
+                var ct = cf.map(function (f) { return f.t; });
+                [{ f: 'vmax_kt', src: 'y', u: ' kt', dp: 0 },
+                 { f: 'pmin_hpa', src: 'y2', u: ' hPa', dp: 0 }
+                ].forEach(function (s, i) {
+                    var ax = axOf[s.src];
+                    if (!ax) return;
+                    traces.push({
+                        x: ct, y: cf.map(function (f) { return f[s.f] == null ? null : f[s.f]; }),
+                        name: 'GHOST + CNN (test)', yaxis: ax,
+                        xaxis: 'x' + (ax === 'y' ? '' : ax.slice(1)),
+                        mode: 'lines', legendgroup: 'cnn', showlegend: i === 0 || !axOf.y,
+                        line: { color: CNN_COL, width: 2, dash: 'dash' },
+                        connectgaps: false,
+                        hovertemplate: '%{y:.' + s.dp + 'f}' + s.u +
+                            ' — GHOST + CNN (test)<extra></extra>'
+                    });
+                });
+            } else if (cj === null) {
+                /* A legend entry, not an annotation: paintBands() replaces
+                   the layout's annotations once the axes settle. */
+                traces.push({
+                    x: [null], y: [null], yaxis: axOf.y ? 'y' : axOf.y2,
+                    xaxis: 'x', mode: 'lines', hoverinfo: 'skip',
+                    name: 'GHOST + CNN (test): not run on this storm',
+                    line: { color: CNN_COL, width: 2, dash: 'dash' }
+                });
+            }
+        }
         /* Backstop for the whole class of bug fixed above: a trace pointing
            at an axis this layout never declared makes Plotly invent it with
            a default full-figure domain, which silently draws a phantom axis
@@ -4689,6 +4779,7 @@
             return;
         if (!force && Date.now() - _lastLoad < REFRESH_MS) return;
         _series = {};
+        _cnnSeries = {}; _cnnIdx = null;
         loadIndex();
     }
     setInterval(function () { refreshIfStale(false); }, 60 * 1000);
