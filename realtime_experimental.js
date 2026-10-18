@@ -3733,10 +3733,38 @@
             .sort(function (a, b) { return Math.abs(b.d) - Math.abs(a.d); }).slice(0, 3);
         var upM = movers.filter(function (m) { return m.d > 0; }),
             dnM = movers.filter(function (m) { return m.d < 0; });
+        /* The corridor specialist REPLACES a gated frame's value with its own read,
+           then the 4-h smoothing dilutes that into the published step: show the
+           read itself next to the step (producer fields corr_v_kt / corr_p_hpa,
+           2026-10-16; absent in older files, in which case nothing is added). */
+        var corrV = (f.corr_v_kt != null && Math.abs(S.dv[3]) >= 0.05) ? f.corr_v_kt : null;
+        var corrP = (f.corr_p_hpa != null && Math.abs(S.dp[2]) >= 0.05) ? f.corr_p_hpa : null;
+        /* corr_*_on: true = the read replaced THIS frame; false = the step is carried by
+           the smoothing from earlier replaced frames (find the latest one within 8 h);
+           undefined = a file from before the flag existed (neutral wording). */
+        function corrSrc(kRead, kOn) {
+            if (f[kOn] !== false) return null;
+            var t0 = new Date(f.t);
+            for (var q = idx[_whyIdx] - 1; q >= 0; q--) {
+                var g = fr[q];
+                if (t0 - new Date(g.t) > 8 * 3.6e6) break;
+                if (g[kOn] === true && g[kRead] != null) return g;
+            }
+            return null;
+        }
+        var srcV = corrV != null ? corrSrc('corr_v_kt', 'corr_v_on') : null;
+        var srcP = corrP != null ? corrSrc('corr_p_hpa', 'corr_p_on') : null;
+        function hhmm(t) { return (t || '').slice(11, 16) + 'Z'; }
         function lst(a) { return a.map(function (m) {
             var n = m.n.toLowerCase();
             var art = /specialist|floor|cap|member/.test(n) ? 'the ' : '';
-            return art + '<b>' + n + '</b> (' + whySgn(m.d, 0) + ')'; }).join(' and '); }
+            var rd = '';
+            if (m.n === 'Corridor specialist' && corrV != null)
+                rd = f.corr_v_on === false
+                    ? (srcV ? ', carried from ' + hhmm(srcV.t) + ' where it read ' +
+                              Math.round(srcV.corr_v_kt) + ' kt' : ', carried from earlier frames')
+                    : '; it reads ' + Math.round(corrV) + ' kt on this frame';
+            return art + '<b>' + n + '</b> (' + whySgn(m.d, 0) + rd + ')'; }).join(' and '); }
         var story = 'The image alone reads <b>' + Math.round(S.v[0]) + ' kt</b>';
         if (upM.length) story += '; ' + lst(upM) + (upM.length > 1 ? ' raise' : ' raises') + ' it';
         var net = f.vmax_kt - S.v[0];
@@ -3748,6 +3776,11 @@
         var other = [];
         if (f.tier_on && f.dv5_kt != null)
             other.push('Inner-core specialist’s own wind: ' + Math.round(f.dv5_kt) + ' kt');
+        if (corrV != null || corrP != null)
+            other.push('Corridor specialist’s own read of this frame: ' +
+                [corrV != null ? Math.round(corrV) + ' kt' : null,
+                 corrP != null ? Math.round(corrP) + ' hPa' : null].filter(Boolean).join(' / ') +
+                ((f.corr_v_on === false || f.corr_p_on === false) ? ' (not applied on this frame)' : ''));
         if (f.fpm_pmin_hpa != null)
             other.push('physics-based member: ' + f.fpm_pmin_hpa.toFixed(1) + ' hPa');
         if (wp) other.push('West Pacific: wind floor and pressure → wind are off');
@@ -3784,7 +3817,7 @@
 
         /* Horizontal waterfall: label rows on the left, only the steps that moved
            the value; the rest collapse into one muted "not active" line. */
-        function wf(el, title, unit, startLab, startHov, steps, deltas, start, total, pressure) {
+        function wf(el, title, unit, startLab, startHov, steps, deltas, start, total, pressure, ann) {
             /* Bridge chart: start and published are markers sitting ON their
                value; each active step is a floating bar from the running total;
                dotted connectors carry the running total between rows. Inactive
@@ -3796,9 +3829,11 @@
                 if (Math.abs(d) < 0.05) { off.push(st[0]); return; }
                 var stronger = pressure ? d < 0 : d > 0;
                 labs.push(st[0]); steps_y.push(st[0]);
-                base.push(cum); dx.push(d); txt.push(whySgn(d));
+                var an = ann && ann[st[0]];
+                base.push(cum); dx.push(d); txt.push(whySgn(d) + (an ? an.txt : ''));
                 col.push(stronger ? up : dn);
-                hv.push('<b>' + st[1] + '</b><br>' + wrap(st[2], 44) + '<br>' + whySgn(d) + unit);
+                hv.push('<b>' + st[1] + '</b><br>' + wrap(st[2], 44) + '<br>' + whySgn(d) + unit +
+                        (an ? '<br>' + wrap(an.hov, 44) : ''));
                 cum += d; path.push(cum);
             });
             labs.push('Published');
@@ -3846,12 +3881,35 @@
                 ? '<div style="font-size:11px;color:' + muted + ';padding:0 2px 6px;">Not active now: ' +
                   off.join(' · ') + '</div>' : '';
         }
+        /* Corridor row annotation: the specialist's own read, and whether it replaced
+           this frame or the step is carried by the smoothing from an earlier frame. */
+        function corrAnn(read, on, src, kRead, u) {
+            if (read == null) return null;
+            var r = Math.round(read) + u, txt, hov;
+            var how = 'Where an eye is present and the frame’s estimate is high enough, it ' +
+                'replaces the frame’s value whenever it reads stronger; the 4-hour smoothing ' +
+                'then spreads that over the recent frames, so the published value moves by less.';
+            if (on === false) {
+                txt = ' · carried';
+                hov = 'its own read of this frame is ' + r + ', but it did not replace this ' +
+                    'frame; the step is carried by the smoothing from ' +
+                    (src ? hhmm(src.t) + ', where it read ' + Math.round(src[kRead]) + u :
+                           'earlier frames where it did') + '. ' + how;
+            } else {
+                txt = ' · read ' + Math.round(read);
+                hov = (on === true ? 'its own read of this frame (' + r + ') replaced the frame’s ' +
+                    'estimate. ' : 'its own read of this frame is ' + r + '. ') + how;
+            }
+            return { 'Corridor specialist': { txt: txt, hov: hov } };
+        }
         wf('exp-why-v', 'Maximum wind (kt)', ' kt', 'Image estimate',
            '<b>Single-image estimate</b><br>' + wrap('the intensity model applied to this image and its recent infrared history', 44),
-           WHY_V, S.dv, S.v[0], f.vmax_kt, false);
+           WHY_V, S.dv, S.v[0], f.vmax_kt, false,
+           corrAnn(corrV, f.corr_v_on, srcV, 'corr_v_kt', ' kt'));
         wf('exp-why-p', 'Minimum pressure (hPa)', ' hPa', 'Pressure head',
            '<b>Pressure head</b><br>' + wrap('the pressure model applied to this image, storm history and environmental pressure', 44),
-           WHY_P, S.dp, S.p[0], S.p[4], true);
+           WHY_P, S.dp, S.p[0], S.p[4], true,
+           corrAnn(corrP, f.corr_p_on, srcP, 'corr_p_hpa', ' hPa'));
 
         /* Through the storm's life: wind steps stacked relative to the
            single-image estimate; the line is their sum (published minus
