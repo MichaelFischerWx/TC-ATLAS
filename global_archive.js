@@ -12520,10 +12520,6 @@ function _gaFLReset() {
     // HRD flight-level data, keeps routing mission loads through the HDOB path.
     _gaHdobMode = false;
     _gaHdobMissions = [];
-    if (_gaFLZoomHandler && detailMap) {
-        detailMap.off('zoomend', _gaFLZoomHandler);
-        _gaFLZoomHandler = null;
-    }
     _gaFLRemoveFromMap();
     var btn = document.getElementById('ga-fl-toggle-btn');
     if (btn) btn.classList.remove('active');
@@ -12535,14 +12531,8 @@ function _gaFLReset() {
 window._gaFLReset = _gaFLReset;
 
 function _gaFLWindColor(wspd) {
-    if (wspd == null) return '#475569';
-    if (wspd < 17.5) return '#60a5fa';
-    if (wspd < 33.0) return '#34d399';
-    if (wspd < 43.0) return '#fbbf24';
-    if (wspd < 49.0) return '#fb923c';
-    if (wspd < 58.0) return '#f87171';
-    if (wspd < 70.0) return '#dc2626';
-    return '#7f1d1d';
+    // m/s in; recon kt scale (shared with the RT monitor) out.
+    return wspd == null ? '#9ca3af' : _gaReconWindColorKt(wspd * 1.944);
 }
 
 function _gaFLTempColor(t) {
@@ -13172,6 +13162,7 @@ function _gaFLRemoveFromMap() {
         if (detailMap) detailMap.removeLayer(_gaFLMinobMapLayers[i]);
     }
     _gaFLMinobMapLayers = [];
+    _gaFLCanvas = null;
     if (_gaFLTSHighlight && detailMap) {
         detailMap.removeLayer(_gaFLTSHighlight);
         _gaFLTSHighlight = null;
@@ -13182,98 +13173,308 @@ function _gaFLRenderOnMap() {
     _gaFLRemoveFromMap();
     if (!detailMap || !_gaFLData10s || _gaFLData10s.length < 2) return;
 
-    var obs = _gaFLData10s;
-
-    // Zoom-adaptive marker density:
-    // zoom 3-5: every 12th obs (~2 min), zoom 6-7: every 6th (~1 min),
-    // zoom 8-9: every 2nd (~20s), zoom 10+: every obs (~10s)
-    var zoom = detailMap.getZoom();
-    var circleStep = zoom >= 10 ? 1 : zoom >= 8 ? 2 : zoom >= 6 ? 6 : 12;
-    var barbStep = zoom >= 10 ? 3 : circleStep * 2;  // reduce barb clutter at high zoom
-    if (_gaIsTouch()) { circleStep *= 2; barbStep *= 2; }   // phones: half the markers, no hover anyway
-    _gaFLLastSteps = circleStep + '|' + barbStep;
-    var batch = _gaFLBatchRenderer();
-
-    // Colored track segments (always full resolution)
-    for (var i = 1; i < obs.length; i++) {
-        var p0 = obs[i - 1], p1 = obs[i];
-        if (p0.lat == null || p1.lat == null) continue;
-        var val = p1[_gaFLColorVar];
-        var color = _gaFLColorByVar(val);
-        var seg = L.polyline([[p0.lat, p0.lon], [p1.lat, p1.lon]], {
-            color: color, weight: 3.5, opacity: 0.9, interactive: false, renderer: batch
-        });
-        seg.addTo(detailMap);
-        _gaFLMapLayers.push(seg);
-    }
-
-    // Hover circles (zoom-adaptive density)
-    for (var i = 0; i < obs.length; i += circleStep) {
-        var o = obs[i];
-        if (o.lat == null) continue;
-        var wspd = o.fl_wspd_ms;
-        var wkt = wspd != null ? Math.round(wspd * 1.944) : '?';
-        var posStr = '';
-        if (o.lat != null && o.lon != null && isFinite(o.lat) && isFinite(o.lon)) {
-            posStr = 'Lat/Lon: ' + Math.abs(o.lat).toFixed(3) + '\u00b0' + (o.lat >= 0 ? 'N' : 'S') +
-                ', ' + Math.abs(o.lon).toFixed(3) + '\u00b0' + (o.lon >= 0 ? 'E' : 'W') + '<br>';
-        }
-        var tip = '<b>' + o.time + ' UTC</b><br>' +
-            'Wind: ' + (wspd != null ? wkt + ' kt' : '\u2014') + '<br>' +
-            'Wind Dir: ' + (o.fl_wdir_deg != null ? o.fl_wdir_deg + '\u00b0' : '\u2014') + '<br>' +
-            'Alt: ' + (o.gps_alt_m != null ? Math.round(o.gps_alt_m) + ' m' : '\u2014') + '<br>' +
-            posStr +
-            'Pres: ' + (o.static_pres_hpa != null ? o.static_pres_hpa + ' hPa' : '\u2014') + '<br>' +
-            'Temp: ' + (o.temp_c != null ? o.temp_c + ' \u00b0C' : '\u2014') +
-            (o.sear_kt != null ? '<br><span style="color:#be185d;">SEAR 10-m est (exp): <b>' + o.sear_kt + ' kt</b>' +
-                (o.sear_r_km != null ? ' \u00b7 ' + _gaSearWhere(o.sear_az, o.sear_r_km) : '') + '</span>' : '');
-        var circle = L.circleMarker([o.lat, o.lon], {
-            radius: 4, fillColor: _gaFLColorByVar(o[_gaFLColorVar]), fillOpacity: 0.8,
-            color: '#fff', weight: 0.5, opacity: 0.6,
-            pane: 'markerPane', renderer: batch
-        }).bindTooltip(tip, { sticky: true, pane: 'tooltipPane', className: 'ga-fl-tooltip' });
-        circle.on('tooltipopen', function () { _gaFLTooltipOpen = true; });
-        circle.on('tooltipclose', function () { _gaFLTooltipOpen = false; });
-        circle.addTo(detailMap);
-        _gaFLMapLayers.push(circle);
-    }
-
-    // Wind barbs (zoom-adaptive density)
-    for (var i = 0; i < obs.length; i += barbStep) {
-        var o = obs[i];
-        if (o.lat == null || o.fl_wdir_deg == null || o.fl_wspd_ms == null ||
-            !isFinite(o.fl_wdir_deg) || !isFinite(o.fl_wspd_ms)) continue;
-        var barbHtml = _gaFLBarbSVG(o.fl_wspd_ms, o.fl_wdir_deg);
-        var icon = L.divIcon({
-            className: 'ga-fl-barb',
-            html: barbHtml,
-            iconSize: [24, 24],
-            iconAnchor: [12, 12]
-        });
-        var marker = L.marker([o.lat, o.lon], { icon: icon, interactive: false });
-        marker.addTo(detailMap);
-        _gaFLMapLayers.push(marker);
-    }
+    // One canvas layer draws the whole mission — cased track coloured by the
+    // selected variable + WMO barbs thinned by SCREEN spacing, so density reads
+    // the same at every zoom (the RT recon overlay's look). Replaced ~3000
+    // polylines + ~1000 hover circles + DOM barb icons (2026-10-19).
+    var layer = new _GaFLCanvasLayer();
+    layer.addTrack({ obs: _gaFLData10s, kind: 'hrd' });
+    layer.addTo(detailMap);
+    _gaFLCanvas = layer;
+    _gaFLMapLayers.push(layer);
 
     _gaFLInjectLegend();
 
-    // Gap-fill: render MINOB wind barbs after HRD truncation point
+    // Gap-fill: MINOB/HDOB track outside the HRD file (dashed, same layer)
     _gaFLRenderMinobGapFill();
-
-    // Re-render markers on zoom change for adaptive density — only when the
-    // density tier actually changes (a zoom within a tier is a no-op).
-    if (!_gaFLZoomHandler) {
-        _gaFLZoomHandler = function () {
-            if (!_gaFLVisible || !_gaFLData10s || !detailMap) return;
-            var z = detailMap.getZoom();
-            var cs = z >= 10 ? 1 : z >= 8 ? 2 : z >= 6 ? 6 : 12;
-            var bs = z >= 10 ? 3 : cs * 2;
-            if (_gaIsTouch()) { cs *= 2; bs *= 2; }
-            if ((cs + '|' + bs) !== _gaFLLastSteps) _gaFLRenderOnMap();
-        };
-        detailMap.on('zoomend', _gaFLZoomHandler);
-    }
 }
+
+var _gaFLCanvas = null;       // the mission's _GaFLCanvasLayer (null when hidden)
+
+// Recon wind scale (kt) — same bins/colours as the RT monitor's recon overlay
+// (realtime_ir.js _RECON_WIND_STOPS) so a 140-kt ob reads the same everywhere.
+var _GA_RECON_WIND_STOPS = [
+    [34, '#60a5fa'], [50, '#22c55e'], [64, '#eab308'], [83, '#f97316'],
+    [96, '#ef4444'], [113, '#9d174d'], [137, '#c026d3'], [9999, '#7c3aed']
+];
+function _gaReconWindColorKt(kt) {
+    if (kt == null || isNaN(kt)) return '#9ca3af';
+    for (var i = 0; i < _GA_RECON_WIND_STOPS.length; i++) {
+        if (kt < _GA_RECON_WIND_STOPS[i][0]) return _GA_RECON_WIND_STOPS[i][1];
+    }
+    return _GA_RECON_WIND_STOPS[_GA_RECON_WIND_STOPS.length - 1][1];
+}
+
+/** Per-kind accessors so HRD 10-s obs and MINOB/HDOB gap obs share one renderer. */
+function _gaFLObKt(o, kind) {
+    if (kind === 'gap') return o.wspd_30s_kt != null ? o.wspd_30s_kt : (o.wspd_ms != null ? o.wspd_ms * 1.944 : null);
+    return o.fl_wspd_ms != null ? o.fl_wspd_ms * 1.944 : null;
+}
+function _gaFLObDir(o, kind) { return kind === 'gap' ? o.wdir : o.fl_wdir_deg; }
+/** θe (K) for an HRD ob: the file's own value, else Bolton (1980) from T, Td and
+ *  static pressure (some USAF files carry T/Td but no θe column). Cached. */
+function _gaFLObThetaE(o) {
+    if (o.theta_e != null) return o.theta_e;
+    if (o._te === undefined) {
+        var tc = o.temp_c, td = o.dewpoint_c, p = o.static_pres_hpa, th = null;
+        if (tc != null && td != null && p != null && p > 100) {
+            var e = 6.112 * Math.exp(17.67 * td / (td + 243.5)), T = tc + 273.15, Td = td + 273.15, q = 0.622 * e / (p - e);
+            var Tl = 1 / (1 / (Td - 56) + Math.log(T / Td) / 800) + 56;
+            th = T * Math.pow(1000 / p, 0.2854 * (1 - 0.28 * q)) * Math.exp((3.376 / Tl - 0.00254) * q * 1000 * (1 + 0.81 * q));
+        }
+        o._te = th;
+    }
+    return o._te;
+}
+function _gaFLObColor(o, kind) {
+    if (_gaFLColorVar === 'fl_wspd_ms') return _gaReconWindColorKt(_gaFLObKt(o, kind));
+    if (kind === 'gap') {
+        var v = _gaFLColorVar === 'temp_c' ? o.temp_c : _gaFLColorVar === 'dewpoint_c' ? o.dewpt_c : null;
+        return v == null ? '#9ca3af' : _gaFLTempColor(v);
+    }
+    var val = _gaFLColorVar === 'theta_e' ? _gaFLObThetaE(o) : o[_gaFLColorVar];
+    return val == null ? '#9ca3af' : _gaFLColorByVar(val);
+}
+function _gaFLObTip(o, kind) {
+    if (kind === 'gap') {
+        var prodLabel = (selectedStorm && selectedStorm.year >= 1997) ? 'HDOB' : 'MINOB';
+        return '<b>' + prodLabel + ' ' + String(o.time || '').substring(11, 16) + ' UTC</b><br>' +
+            '30s avg: ' + (o.wspd_30s_kt != null ? o.wspd_30s_kt + ' kt' : '—') + '<br>' +
+            'Pk 10s: ' + (o.peak_10s_kt != null ? o.peak_10s_kt + ' kt' : '—') + '<br>' +
+            'Dir: ' + o.wdir + '°' +
+            (o.geo_alt_m != null ? '<br>Alt: ' + o.geo_alt_m + ' m' : '') +
+            (o.sfc_pres_hpa != null ? '<br>Sfc P: ' + o.sfc_pres_hpa + ' hPa' : '') +
+            (o.temp_c != null ? '<br>T: ' + o.temp_c + ' °C' : '') +
+            (o.dewpt_c != null ? '<br>Td: ' + o.dewpt_c + ' °C' : '') +
+            '<br>' + (o.aircraft || '') + ' ' + (o.mission_id || '');
+    }
+    var kt = _gaFLObKt(o, kind);
+    return '<b>' + o.time + ' UTC</b><br>' +
+        'Wind: ' + (o.fl_wdir_deg != null ? Math.round(o.fl_wdir_deg) + '° / ' : '') +
+            (kt != null ? '<b>' + Math.round(kt) + ' kt</b>' : '—') + '<br>' +
+        'Alt: ' + (o.gps_alt_m != null ? Math.round(o.gps_alt_m) + ' m' : '—') +
+        ' · Pres: ' + (o.static_pres_hpa != null ? o.static_pres_hpa + ' hPa' : '—') + '<br>' +
+        'Temp: ' + (o.temp_c != null ? o.temp_c + ' °C' : '—') +
+        (o.dewpoint_c != null ? ' · Td: ' + o.dewpoint_c + ' °C' : '') +
+        (_gaFLObThetaE(o) != null ? ' · θe: ' + Math.round(_gaFLObThetaE(o)) + ' K' : '') + '<br>' +
+        Math.abs(o.lat).toFixed(3) + '°' + (o.lat >= 0 ? 'N' : 'S') + ', ' +
+        Math.abs(o.lon).toFixed(3) + '°' + (o.lon >= 0 ? 'E' : 'W') +
+        (o.sear_kt != null ? '<br><span style="color:#be185d;">SEAR 10-m est (exp): <b>' + o.sear_kt + ' kt</b>' +
+            (o.sear_r_km != null ? ' · ' + _gaSearWhere(o.sear_az, o.sear_r_km) : '') + '</span>' : '');
+}
+
+/**
+ * One WMO barb on a canvas — port of realtime_ir.js _rtDrawReconBarb so the
+ * archive matches the RT recon overlay: staff points upwind, feathers on the
+ * left in the NH (right in the SH), glyph + base dot in the variable's colour
+ * over a dark halo so it reads on any IR colour.
+ */
+function _gaFLDrawBarb(ctx, x, y, dirDeg, spdKt, isSH, color, alpha) {
+    ctx.save();
+    ctx.globalAlpha = 0.95 * alpha;
+    ctx.beginPath();
+    ctx.arc(x, y, 3.8, 0, 2 * Math.PI);
+    ctx.fillStyle = color; ctx.fill();
+    ctx.lineWidth = 1.1; ctx.strokeStyle = 'rgba(0,0,0,0.65)'; ctx.stroke();
+    ctx.restore();
+    if (spdKt == null || spdKt < 2 || dirDeg == null || !isFinite(dirDeg)) return;
+    var toRad = (dirDeg + 180) * Math.PI / 180;
+    var fromRot = Math.atan2(Math.sin(toRad), Math.cos(toRad));
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(fromRot);
+    var STAFF = 18, FEATHER = 8, FEATHER_H = 4, SPACING = 2.4, PEN_BASE = 3.5;
+    var side = isSH ? +1 : -1;
+    var lines = new Path2D();
+    lines.moveTo(0, 0); lines.lineTo(0, STAFF);
+    var kt = Math.round(spdKt / 5) * 5;
+    var nPen = Math.floor(kt / 50); kt -= nPen * 50;
+    var nFull = Math.floor(kt / 10); kt -= nFull * 10;
+    var nHalf = (kt >= 4.5) ? 1 : 0;
+    var pos = STAFF;
+    var pennants = new Path2D();
+    for (var i = 0; i < nPen; i++) {
+        pennants.moveTo(0, pos); pennants.lineTo(0, pos - PEN_BASE);
+        pennants.lineTo(side * FEATHER, pos); pennants.closePath();
+        pos -= PEN_BASE + SPACING * 0.5;
+    }
+    for (var f = 0; f < nFull; f++) { lines.moveTo(0, pos); lines.lineTo(side * FEATHER, pos); pos -= SPACING; }
+    if (nHalf) {
+        if (nPen === 0 && nFull === 0) pos -= SPACING;
+        lines.moveTo(0, pos); lines.lineTo(side * FEATHER_H, pos);
+    }
+    ctx.globalAlpha = 0.75 * alpha;
+    ctx.lineWidth = 4.0;
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.stroke(lines);
+    if (nPen) { ctx.fill(pennants); ctx.stroke(pennants); }
+    ctx.globalAlpha = alpha;
+    ctx.lineWidth = 2.0;
+    ctx.strokeStyle = color; ctx.fillStyle = color;
+    ctx.stroke(lines);
+    if (nPen) { ctx.fill(pennants); ctx.stroke(pennants); }
+    ctx.restore();
+}
+
+/**
+ * Canvas layer for a recon mission (HRD 10-s track + MINOB/HDOB gap tracks).
+ * Hover/click hit-test the FULL-resolution track (not just drawn barbs) and
+ * show one readout, so every 10-s ob stays inspectable without a marker each.
+ */
+var _GA_FL_BARB_SPACING_PX = 42;
+var _GaFLCanvasLayer = L.Layer.extend({
+    initialize: function () { this._tracks = []; this._canvas = null; this._tip = null; this._hot = null; },
+    addTrack: function (t) { this._tracks.push(t); if (this._map) this._redraw(); return this; },
+    dropTracks: function (kind) {
+        this._tracks = this._tracks.filter(function (t) { return t.kind !== kind; });
+        if (this._hot && this._hot.track.kind === kind) this._hideTip();
+        if (this._map) this._redraw();
+        return this;
+    },
+    redraw: function () { if (this._map) this._redraw(); return this; },
+    onAdd: function (map) {
+        this._map = map;
+        var pane = map.getPane('gaReconPane') || map.createPane('gaReconPane');
+        // A DOM pane sits above every GL layer (IR/MW/radar) whatever its z, so
+        // keep it under the facade's markers (600: sonde diamonds, VDM fixes)
+        // and the floating sidebar / header chrome (602-620).
+        pane.style.zIndex = 590; pane.style.pointerEvents = 'none';
+        var c = L.DomUtil.create('canvas', 'ga-fl-canvas');
+        c.style.position = 'absolute'; c.style.pointerEvents = 'none';
+        pane.appendChild(c);
+        this._canvas = c;
+        map.on('moveend zoomend resize', this._redraw, this);
+        map.on('mousemove', this._onMove, this);
+        map.on('mouseout', this._hideTip, this);
+        map.on('click', this._onClick, this);
+        this._redraw();
+        return this;
+    },
+    onRemove: function (map) {
+        map.off('moveend zoomend resize', this._redraw, this);
+        map.off('mousemove', this._onMove, this);
+        map.off('mouseout', this._hideTip, this);
+        map.off('click', this._onClick, this);
+        this._hideTip();
+        if (this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
+        this._canvas = null;
+    },
+    _redraw: function () {
+        var map = this._map;
+        if (!map || !this._canvas) return;
+        var size = map.getSize(), dpr = window.devicePixelRatio || 1;
+        var c = this._canvas;
+        c.width = Math.round(size.x * dpr); c.height = Math.round(size.y * dpr);
+        c.style.width = size.x + 'px'; c.style.height = size.y + 'px';
+        L.DomUtil.setPosition(c, map.containerPointToLayerPoint([0, 0]));
+        var ctx = c.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, size.x, size.y);
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        var pad = 40;
+        for (var ti = 0; ti < this._tracks.length; ti++) {
+            var t = this._tracks[ti], obs = t.obs, kind = t.kind, gap = kind === 'gap';
+            var pts = new Array(obs.length);
+            for (var i = 0; i < obs.length; i++) {
+                var o = obs[i];
+                pts[i] = (o.lat == null || o.lon == null) ? null : map.latLngToContainerPoint([o.lat, o.lon]);
+            }
+            t._pts = pts;
+            // Track: dark casing, then runs of one colour (batched strokes).
+            ctx.save();
+            if (gap) ctx.setLineDash([6, 4]);
+            ctx.beginPath();
+            var started = false;
+            for (var j = 0; j < pts.length; j++) {
+                if (!pts[j]) { started = false; continue; }
+                if (!started) { ctx.moveTo(pts[j].x, pts[j].y); started = true; } else ctx.lineTo(pts[j].x, pts[j].y);
+            }
+            ctx.lineWidth = 4.5; ctx.strokeStyle = 'rgba(15,23,42,0.55)'; ctx.stroke();
+            var runColor = null;
+            ctx.lineWidth = 2.2; ctx.globalAlpha = gap ? 0.8 : 0.95;
+            for (var k = 1; k < pts.length; k++) {
+                if (!pts[k] || !pts[k - 1]) continue;
+                var col = _gaFLObColor(obs[k], kind);
+                if (col !== runColor) {
+                    if (runColor) ctx.stroke();
+                    runColor = col; ctx.strokeStyle = col; ctx.beginPath(); ctx.moveTo(pts[k - 1].x, pts[k - 1].y);
+                }
+                ctx.lineTo(pts[k].x, pts[k].y);
+            }
+            if (runColor) ctx.stroke();
+            ctx.restore();
+            // Barbs: one every ~30 px of screen track, culled to the viewport.
+            var last = null, sp2 = _GA_FL_BARB_SPACING_PX * _GA_FL_BARB_SPACING_PX;
+            for (var b = 0; b < pts.length; b++) {
+                var p = pts[b];
+                if (!p) continue;
+                if (last) { var dx = p.x - last.x, dy = p.y - last.y; if (dx * dx + dy * dy < sp2) continue; }
+                last = p;
+                if (p.x < -pad || p.y < -pad || p.x > size.x + pad || p.y > size.y + pad) continue;
+                var ob = obs[b];
+                _gaFLDrawBarb(ctx, p.x, p.y, _gaFLObDir(ob, kind), _gaFLObKt(ob, kind), ob.lat < 0,
+                    _gaFLObColor(ob, kind), gap ? 0.8 : 1);
+            }
+        }
+        if (this._hot) this._drawHot(ctx);
+    },
+    _drawHot: function (ctx) {
+        var h = this._hot, p = h.track._pts && h.track._pts[h.idx];
+        if (!p) return;
+        ctx.save();
+        ctx.beginPath(); ctx.arc(p.x, p.y, 7, 0, 2 * Math.PI);
+        ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(15,23,42,0.7)'; ctx.stroke();
+        ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
+        ctx.restore();
+    },
+    /** Nearest full-resolution ob within `tol` px of a container point. */
+    _pick: function (cp, tol) {
+        var best = null, bd = tol * tol;
+        for (var ti = 0; ti < this._tracks.length; ti++) {
+            var t = this._tracks[ti], pts = t._pts || [];
+            for (var i = 0; i < pts.length; i++) {
+                var p = pts[i];
+                if (!p) continue;
+                var dx = p.x - cp.x, dy = p.y - cp.y, d = dx * dx + dy * dy;
+                if (d < bd) { bd = d; best = { track: t, idx: i }; }
+            }
+        }
+        return best;
+    },
+    _onMove: function (e) {
+        if (!e || !e.containerPoint) return;
+        var hit = this._pick(e.containerPoint, 9);
+        if (!hit) { this._hideTip(); return; }
+        this._showTip(hit, e.originalEvent);
+    },
+    _onClick: function (e) {
+        // Touch has no hover: a tap shows the same readout.
+        if (!e || !e.containerPoint) return;
+        var hit = this._pick(e.containerPoint, _gaIsTouch() ? 18 : 9);
+        if (hit) this._showTip(hit, e.originalEvent);
+    },
+    _showTip: function (hit, ev) {
+        var changed = !this._hot || this._hot.track !== hit.track || this._hot.idx !== hit.idx;
+        this._hot = hit;
+        if (!this._tip) { this._tip = document.createElement('div'); this._tip.className = 'ga-flc-tip'; }
+        if (changed) this._tip.innerHTML = _gaFLObTip(hit.track.obs[hit.idx], hit.track.kind);
+        if (!this._tip.parentNode) document.body.appendChild(this._tip);
+        if (ev && ev.clientX != null) {
+            var x = ev.clientX + 14, y = ev.clientY - 10, w = this._tip.offsetWidth, hgt = this._tip.offsetHeight;
+            if (x + w > window.innerWidth - 8) x = ev.clientX - w - 14;
+            if (y + hgt > window.innerHeight - 8) y = window.innerHeight - hgt - 8;
+            this._tip.style.left = x + 'px'; this._tip.style.top = Math.max(8, y) + 'px';
+        }
+        _gaFLTooltipOpen = true;
+        // Recon readout wins over the IR Tb hover (same rule as the old tooltips).
+        if (irTbTooltip && this._map.hasLayer(irTbTooltip)) this._map.closePopup(irTbTooltip);
+        if (changed) this._redraw();
+    },
+    _hideTip: function () {
+        if (this._tip && this._tip.parentNode) this._tip.parentNode.removeChild(this._tip);
+        if (this._hot) { this._hot = null; _gaFLTooltipOpen = false; this._redraw(); }
+    }
+});
 var _gaFLTSTimer = null;
 
 /** Coalesce time-series redraws: /data, /vdm and /minobs can all land within
@@ -13286,9 +13487,7 @@ function _gaFLScheduleTS() {
     }, 60);
 }
 
-var _gaFLZoomHandler = null;
 var _gaFLBatch = null;        // shared L.canvas batch renderer (one GL source per geometry type)
-var _gaFLLastSteps = '';      // circleStep|barbStep of the last render (skip no-op zoom rebuilds)
 
 /**
  * Batch renderer for the recon track/circles. On the MapLibre facade a plain
@@ -13346,6 +13545,7 @@ function _gaFLRenderMinobGapFill() {
         if (detailMap) detailMap.removeLayer(_gaFLMinobMapLayers[i]);
     }
     _gaFLMinobMapLayers = [];
+    if (_gaFLCanvas) _gaFLCanvas.dropTracks('gap');
 
     if (!detailMap || !minobData || !_gaFLMinobVisible || !_gaFLData10s || _gaFLData10s.length < 2) return;
 
@@ -13464,9 +13664,6 @@ function _gaFLRenderMinobGapFill() {
 
     if (preGap.length === 0 && postGap.length === 0) return;
 
-    var zoom = detailMap.getZoom();
-    var barbStep = zoom >= 10 ? 1 : zoom >= 8 ? 2 : 3;
-    if (_gaIsTouch()) barbStep *= 2;
     var prodLabel = (selectedStorm && selectedStorm.year >= 1997) ? 'HDOB' : 'MINOB';
 
     // Helper: render a gap segment (array of obs + HRD anchor point + whether pre or post)
@@ -13503,50 +13700,9 @@ function _gaFLRenderMinobGapFill() {
         dashSeg.addTo(detailMap);
         _gaFLMinobMapLayers.push(dashSeg);
 
-        // Colored track segments
-        for (var i = 1; i < gapObs.length; i++) {
-            var p0 = gapObs[i - 1], p1 = gapObs[i];
-            var color = _gaFLWindColor(p1.wspd_ms);
-            var seg = L.polyline([[p0.lat, p0.lon], [p1.lat, p1.lon]], {
-                color: color, weight: 3, opacity: 0.7, dashArray: '6,4', interactive: false, renderer: batch
-            });
-            seg.addTo(detailMap);
-            _gaFLMinobMapLayers.push(seg);
-        }
-
-        // Hover circles + wind barbs
-        for (var i = 0; i < gapObs.length; i += barbStep) {
-            var o = gapObs[i];
-            var timeLabel = o.time.substring(11, 16);
-            var tip = '<b>' + prodLabel + ' ' + timeLabel + ' UTC</b><br>' +
-                '30s avg: ' + (o.wspd_30s_kt != null ? o.wspd_30s_kt + ' kt' : '\u2014') + '<br>' +
-                'Pk 10s: ' + (o.peak_10s_kt != null ? o.peak_10s_kt + ' kt' : '\u2014') + '<br>' +
-                'Dir: ' + o.wdir + '\u00b0' +
-                (o.geo_alt_m != null ? '<br>Alt: ' + o.geo_alt_m + ' m' : '') +
-                (o.sfc_pres_hpa != null ? '<br>Sfc P: ' + o.sfc_pres_hpa + ' hPa' : '') +
-                (o.temp_c != null ? '<br>T: ' + o.temp_c + ' \u00b0C' : '') +
-                (o.dewpt_c != null ? '<br>Td: ' + o.dewpt_c + ' \u00b0C' : '') +
-                '<br>' + o.aircraft + ' ' + o.mission_id;
-            var circle = L.circleMarker([o.lat, o.lon], {
-                radius: 4, fillColor: _gaFLWindColor(o.wspd_ms), fillOpacity: 0.7,
-                color: '#f97316', weight: 1, opacity: 0.8, pane: 'markerPane', renderer: batch
-            }).bindTooltip(tip, { sticky: true, pane: 'tooltipPane', className: 'ga-fl-tooltip' });
-            circle.on('tooltipopen', function () { _gaFLTooltipOpen = true; });
-            circle.on('tooltipclose', function () { _gaFLTooltipOpen = false; });
-            circle.addTo(detailMap);
-            _gaFLMinobMapLayers.push(circle);
-
-            if (isFinite(o.wdir) && isFinite(o.wspd_ms)) {
-                var barbHtml = _gaFLBarbSVG(o.wspd_ms, o.wdir);
-                var icon = L.divIcon({
-                    className: 'ga-fl-barb', html: barbHtml,
-                    iconSize: [24, 24], iconAnchor: [12, 12]
-                });
-                var bm = L.marker([o.lat, o.lon], { icon: icon, interactive: false });
-                bm.addTo(detailMap);
-                _gaFLMinobMapLayers.push(bm);
-            }
-        }
+        // Track + barbs + hover readout: drawn by the mission canvas layer
+        // (dashed, slightly faded so the HRD/HDOB hand-off stays visible).
+        if (_gaFLCanvas) _gaFLCanvas.addTrack({ obs: gapObs, kind: 'gap' });
     }
 
     // Render pre-HRD gap (obs before HRD starts)
@@ -13557,46 +13713,20 @@ function _gaFLRenderMinobGapFill() {
 }
 
 
-function _gaFLBarbSVG(wspd_ms, wdir_deg) {
-    var kt = wspd_ms * 1.944;
-    var rot = wdir_deg;
-    var remaining = Math.round(kt / 5) * 5;
-    var flags = Math.floor(remaining / 50);
-    remaining -= flags * 50;
-    var full = Math.floor(remaining / 10);
-    remaining -= full * 10;
-    var half = remaining >= 5 ? 1 : 0;
-
-    var svg = '<svg width="24" height="24" viewBox="0 0 24 24" style="transform:rotate(' + rot + 'deg);">';
-    svg += '<line x1="12" y1="12" x2="12" y2="2" stroke="white" stroke-width="1.5" stroke-linecap="round"/>';
-    var y = 2;
-    for (var f = 0; f < flags; f++) {
-        svg += '<polygon points="12,' + y + ' 18,' + (y + 1.5) + ' 12,' + (y + 3) + '" fill="white"/>';
-        y += 3;
-    }
-    for (var b = 0; b < full; b++) {
-        svg += '<line x1="12" y1="' + y + '" x2="18" y2="' + (y - 1.5) + '" stroke="white" stroke-width="1.2"/>';
-        y += 2;
-    }
-    if (half) {
-        svg += '<line x1="12" y1="' + y + '" x2="15" y2="' + (y - 1) + '" stroke="white" stroke-width="1.2"/>';
-    }
-    svg += '</svg>';
-    return svg;
-}
-
 var _GA_FL_COLORBARS = {
     'fl_wspd_ms': {
-        label: 'Wind (m/s)',
+        label: 'Flight-level wind (kt)',
         stops: [
-            { val: '<17.5', color: '#60a5fa', lbl: 'TD' },
-            { val: '17.5', color: '#34d399', lbl: 'TS' },
-            { val: '33',   color: '#fbbf24', lbl: 'C1' },
-            { val: '43',   color: '#fb923c', lbl: 'C2' },
-            { val: '49',   color: '#f87171', lbl: 'C3' },
-            { val: '58',   color: '#dc2626', lbl: 'C4' },
-            { val: '70+',  color: '#7f1d1d', lbl: 'C5' },
-        ]
+            { val: '<34',  color: '#60a5fa' },
+            { val: '34',   color: '#22c55e' },
+            { val: '50',   color: '#eab308' },
+            { val: '64',   color: '#f97316' },
+            { val: '83',   color: '#ef4444' },
+            { val: '96',   color: '#9d174d' },
+            { val: '113',  color: '#c026d3' },
+            { val: '137+', color: '#7c3aed' },
+        ],
+        discrete: true
     },
     'temp_c': {
         label: 'Temperature (\u00b0C)',
@@ -13632,6 +13762,19 @@ function _gaFLInjectLegend() {
     if (!el) return;
     var cb = _GA_FL_COLORBARS[_gaFLColorVar];
     if (!cb) return;
+
+    // Binned scales (recon wind) read as labeled chips, like the RT monitor's
+    // barb legend; continuous ones keep the gradient bar.
+    if (cb.discrete) {
+        var chips = cb.stops.map(function (st) {
+            var ink = /^#(60a5fa|22c55e|eab308|f97316)$/i.test(st.color) ? '#0b1220' : '#fff';
+            return '<span style="flex:1;text-align:center;font-size:9px;font-weight:700;padding:1px 0;background:' +
+                st.color + ';color:' + ink + ';">' + st.val + '</span>';
+        }).join('');
+        el.innerHTML = '<div style="margin-top:2px;"><div style="display:flex;border-radius:3px;overflow:hidden;border:1px solid var(--border-light);">' +
+            chips + '</div><div style="font-size:9px;font-weight:500;color:var(--text);text-align:center;margin-top:1px;">' + cb.label + '</div></div>';
+        return;
+    }
 
     // Build a horizontal gradient colorbar with tick labels
     var stops = cb.stops;
@@ -13825,16 +13968,14 @@ function _gaFLHighlightOnTimeline(json) {
 var _gaSondeData = null;
 var _gaSondeMapLayers = [];
 var _gaSondeClientCache = {};  // "stormName_year_missionId" → dropsonde array
-var _SONDE_COLORS = [
-    '#34d399','#60a5fa','#f472b6','#fbbf24','#a78bfa',
-    '#fb923c','#38bdf8','#f87171','#4ade80','#e879f9',
-    '#facc15','#2dd4bf','#f97316','#818cf8','#fb7185'
-];
 
 var _gaSondeInflight = {};   // cacheKey → true while a request is out
 
+var _gaSondeWantKey = null;  // the mission the UI currently wants (late replies for others are dropped)
+
 function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
     var cacheKey = stormName + '_' + year + '_' + (missionId || '');
+    _gaSondeWantKey = cacheKey;
     if (_gaSondeInflight[cacheKey]) return;   // already fetching this mission
 
     // Check client-side cache first
@@ -13842,6 +13983,8 @@ function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
         var cached = _gaSondeClientCache[cacheKey];
         if (cached === null) {
             // Cached empty result
+            _gaSondeData = null;
+            _gaSondeRemoveFromMap();
             var el = document.getElementById('ga-sonde-info');
             if (el) {
                 el.style.display = '';
@@ -13853,6 +13996,7 @@ function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
             return;
         }
         _gaSondeData = cached;
+        _gaSondeSelIdx = null;
         _gaSondeShowUI();
         _gaSondeRenderOnMap();
         _gaSondeRenderTable();
@@ -13875,14 +14019,22 @@ function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
         '<span style="display:inline-block;width:10px;height:10px;border:1.5px solid var(--border);border-top-color:var(--um-green);border-radius:50%;animation:ga-spin 0.8s linear infinite;"></span>' +
         'Loading dropsondes…</span>';
     if (_sondeWrapEl) _sondeWrapEl.innerHTML = '';
+    _gaSondeData = null;            // the previous mission's diamonds go with it
+    _gaSondeRemoveFromMap();
 
     _gaSondeInflight[cacheKey] = true;
     fetch(url)
         .then(function (r) { return r.json(); })
         .then(function (json) {
             delete _gaSondeInflight[cacheKey];
-            if (!json.success || !json.dropsondes || json.dropsondes.length === 0) {
-                _gaSondeClientCache[cacheKey] = null;  // cache empty result
+            var empty = !json.success || !json.dropsondes || json.dropsondes.length === 0;
+            _gaSondeClientCache[cacheKey] = empty ? null : _gaSondeDedupe(json.dropsondes);
+            // A slower reply for a mission the user has since left (auto-sync
+            // or a quick re-pick) must not overwrite the current mission's sondes.
+            if (cacheKey !== _gaSondeWantKey) return;
+            if (empty) {
+                _gaSondeData = null;
+                _gaSondeRemoveFromMap();
                 var el = document.getElementById('ga-sonde-info');
                 if (el) {
                     el.style.display = '';
@@ -13893,13 +14045,13 @@ function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
                 }
                 return;
             }
-            _gaSondeClientCache[cacheKey] = json.dropsondes;
-            _gaSondeData = json.dropsondes;
+            _gaSondeData = _gaSondeClientCache[cacheKey];
+            _gaSondeSelIdx = null;
             _gaSondeShowUI();
             _gaSondeRenderOnMap();
             _gaSondeRenderTable();
         })
-        .catch(function () { delete _gaSondeInflight[cacheKey]; _gaSondeHideUI(); });
+        .catch(function () { delete _gaSondeInflight[cacheKey]; if (cacheKey === _gaSondeWantKey) _gaSondeHideUI(); });
 }
 
 function _gaSondeShowUI() {
@@ -13927,101 +14079,215 @@ function _gaSondeRemoveFromMap() {
         if (detailMap) detailMap.removeLayer(_gaSondeMapLayers[i]);
     }
     _gaSondeMapLayers = [];
+    _gaSondeMarkers = [];
+    _gaSondeClearSelection();
 }
+
+/** The same FRD file can sit in more than one HRD tarball (HURR + AFRES, or a
+ *  reprocessed copy), so the API can return each sonde twice — Irma 2017-09-07
+ *  came back as 67 rows for 33 drops. Keep one per (sonde id, launch time),
+ *  preferring the copy with more levels. */
+function _gaSondeDedupe(list) {
+    var byKey = {}, out = [];
+    (list || []).forEach(function (s) {
+        var k = (s.sonde_id || '') + '|' + (s.launch_time || '');
+        var n = (s.profile && s.profile.pres) ? s.profile.pres.length : 0;
+        if (byKey[k] == null) { byKey[k] = out.length; out.push(s); return; }
+        var prev = out[byKey[k]], pn = (prev.profile && prev.profile.pres) ? prev.profile.pres.length : 0;
+        if (n > pn) out[byKey[k]] = s;
+    });
+    return out;
+}
+
+/** Drift trajectory with bogus GPS samples dropped. Real dropsonde drift is at
+ *  most ~50 km even from G-IV altitude — anything more than ~1° from launch is
+ *  corrupt .frd data (Erika 2015, Sandy 2012 have stray Pacific coordinates). */
+function _gaSondeTrajectory(sonde) {
+    var prof = sonde.profile || {};
+    if (!prof.lat || !prof.lon) return [];
+    var refLat = (sonde.launch && sonde.launch.lat != null) ? sonde.launch.lat : null;
+    var refLon = (sonde.launch && sonde.launch.lon != null) ? sonde.launch.lon : null;
+    if (refLat == null || refLon == null) {
+        for (var rp = 0; rp < prof.lat.length; rp++) {
+            if (prof.lat[rp] != null && prof.lon[rp] != null && isFinite(prof.lat[rp]) && isFinite(prof.lon[rp])) {
+                refLat = prof.lat[rp]; refLon = prof.lon[rp]; break;
+            }
+        }
+    }
+    var coords = [];
+    for (var pi = 0; pi < prof.lat.length; pi++) {
+        var pLat = prof.lat[pi], pLon = prof.lon[pi];
+        if (pLat == null || pLon == null || !isFinite(pLat) || !isFinite(pLon)) continue;
+        if (pLat < -90 || pLat > 90 || pLon < -180 || pLon > 180) continue;
+        if (refLat != null && (Math.abs(pLat - refLat) > 1.0 || Math.abs(pLon - refLon) > 1.0)) continue;
+        coords.push([pLat, pLon]);
+    }
+    return coords;
+}
+
+/** Map anchor for a sonde's diamond: the release point (as on the RT map),
+ *  else the first valid trajectory point. */
+function _gaSondeAnchor(sonde) {
+    var L0 = sonde.launch;
+    if (L0 && L0.lat != null && L0.lon != null && isFinite(L0.lat) && isFinite(L0.lon) &&
+            Math.abs(L0.lat) <= 90 && Math.abs(L0.lon) <= 180) return [L0.lat, L0.lon];
+    var tr = _gaSondeTrajectory(sonde);
+    return tr.length ? tr[0] : null;
+}
+
+var _gaSondeMarkers = [];     // index-aligned with _gaSondeData (null when unplaced)
 
 function _gaSondeRenderOnMap() {
     _gaSondeRemoveFromMap();
     if (!detailMap || !_gaSondeData) return;
 
+    // Amber diamonds at the release point — the RT recon overlay's sonde
+    // symbol. Drift trails are drawn only for the selected sonde (the old
+    // per-sonde rainbow trails + launch/splash circles buried the flight track).
     for (var si = 0; si < _gaSondeData.length; si++) {
         var sonde = _gaSondeData[si];
-        var prof = sonde.profile;
-        if (!prof || !prof.lat || prof.lat.length < 2) continue;
+        var at = _gaSondeAnchor(sonde);
+        _gaSondeMarkers.push(null);
+        if (!at) continue;
+        var st = _gaSondeStats(sonde);
+        var tip = '<b>Sonde ' + (si + 1) + '</b> · ' + _gaTime(sonde.launch_time, true) + '<br>' +
+            (st.wl150 != null ? 'WL150: <b>' + Math.round(st.wl150) + ' kt</b> · ' : '') +
+            (st.vmax != null ? 'Max: ' + Math.round(st.vmax) + ' kt' + (st.vmaxP != null ? ' @ ' + Math.round(st.vmaxP) + ' hPa' : '') : '') +
+            (st.psfc != null ? '<br>Sfc P: ' + st.psfc.toFixed(0) + ' hPa' : '') +
+            (sonde.hit_surface ? '' : '<br><i>Did not reach the surface</i>') +
+            '<br><span style="color:var(--slate);">Click for the profile</span>';
+        var icon = L.divIcon({
+            className: 'ga-sonde-dia' + (sonde.hit_surface ? '' : ' is-nosfc'),
+            html: '<div data-si="' + si + '"></div>',
+            iconSize: [14, 14], iconAnchor: [7, 7]
+        });
+        var m = L.marker(at, { icon: icon, interactive: true, pane: 'sondes', zIndexOffset: 601 })
+            .bindTooltip(tip, { sticky: true, className: 'ga-fl-tooltip' });
+        (function (idx) {
+            m.on('click', function () { gaSondeShowSkewT(idx); });
+        })(si);
+        m.on('tooltipopen', function () { _gaFLTooltipOpen = true; });
+        m.on('tooltipclose', function () { _gaFLTooltipOpen = false; });
+        m.addTo(detailMap);
+        _gaSondeMapLayers.push(m);
+        _gaSondeMarkers[si] = m;
+    }
+    if (_gaSondeSelIdx != null) _gaSondeSelect(_gaSondeSelIdx, false);
+}
 
-        var color = _SONDE_COLORS[si % _SONDE_COLORS.length];
+// ── Selected-sonde highlight: pulsing ring + label at release, the drift
+//    trail to the splash point, other diamonds dimmed, table row marked. ──
+var _gaSondeSelIdx = null;
+var _gaSondeSelLayers = [];
 
-        // Establish a launch reference for filtering bogus GPS samples.
-        // Real dropsonde horizontal drift is at most ~50 km even from
-        // G-IV altitudes — anything more than ~1° from launch is corrupt
-        // .frd data (Erika 2015, Sandy 2012, etc. have stray Pacific
-        // coordinates scattered through otherwise-valid profiles).
-        var refLat = (sonde.launch && sonde.launch.lat != null) ? sonde.launch.lat : null;
-        var refLon = (sonde.launch && sonde.launch.lon != null) ? sonde.launch.lon : null;
-        if (refLat == null || refLon == null) {
-            for (var rp = 0; rp < prof.lat.length; rp++) {
-                if (prof.lat[rp] != null && prof.lon[rp] != null &&
-                    isFinite(prof.lat[rp]) && isFinite(prof.lon[rp])) {
-                    refLat = prof.lat[rp]; refLon = prof.lon[rp]; break;
-                }
-            }
-        }
+function _gaSondeClearSelection() {
+    for (var i = 0; i < _gaSondeSelLayers.length; i++) {
+        if (detailMap) { try { detailMap.removeLayer(_gaSondeSelLayers[i]); } catch (e) {} }
+    }
+    _gaSondeSelLayers = [];
+    document.querySelectorAll('.ga-sonde-dia.is-dim').forEach(function (el) { el.classList.remove('is-dim'); });
+}
 
-        // Trajectory polyline
-        var coords = [];
-        for (var pi = 0; pi < prof.lat.length; pi++) {
-            var pLat = prof.lat[pi], pLon = prof.lon[pi];
-            if (pLat == null || pLon == null) continue;
-            if (!isFinite(pLat) || !isFinite(pLon)) continue;
-            if (pLat < -90 || pLat > 90 || pLon < -180 || pLon > 180) continue;
-            if (refLat != null && (Math.abs(pLat - refLat) > 1.0 ||
-                                   Math.abs(pLon - refLon) > 1.0)) continue;
-            coords.push([pLat, pLon]);
-        }
-        if (coords.length > 1) {
-            var traj = L.polyline(coords, {
-                color: color, weight: 2.5, opacity: 0.8,
-                dashArray: '6,4', interactive: false,
-                pane: 'sondes'
-            });
-            traj.addTo(detailMap);
-            _gaSondeMapLayers.push(traj);
-        }
+function _gaSondeSelect(idx, pan) {
+    _gaSondeClearSelection();
+    _gaSondeSelIdx = idx;
+    document.querySelectorAll('.ga-sonde-row').forEach(function (r) {
+        var on = +r.getAttribute('data-si') === idx;
+        r.classList.toggle('sel', on);
+        if (on && pan) { try { r.scrollIntoView({ block: 'nearest' }); } catch (e) {} }
+    });
+    if (!detailMap || !_gaSondeData || !_gaSondeData[idx]) return;
+    var sonde = _gaSondeData[idx], at = _gaSondeAnchor(sonde);
+    if (!at) return;
+    document.querySelectorAll('.ga-sonde-dia > div[data-si]').forEach(function (d) {
+        d.parentNode.classList.toggle('is-dim', +d.getAttribute('data-si') !== idx);
+    });
+    var tr = _gaSondeTrajectory(sonde);
+    if (tr.length > 1) {
+        [L.polyline(tr, { color: '#111827', weight: 6, opacity: 0.6, interactive: false, pane: 'sondes' }),
+         L.polyline(tr, { color: '#fbbf24', weight: 3, opacity: 1, interactive: false, pane: 'sondes' })]
+            .forEach(function (ln) { ln.addTo(detailMap); _gaSondeSelLayers.push(ln); });
+        var end = tr[tr.length - 1];
+        var splash = L.circleMarker(end, { radius: 4.5, color: '#111827', weight: 1.5, fillColor: '#fbbf24',
+            fillOpacity: 1, interactive: false, pane: 'sondes' });
+        splash.addTo(detailMap); _gaSondeSelLayers.push(splash);
+    }
+    var st = _gaSondeStats(sonde);
+    var lab = (idx + 1) + ' · ' + (sonde.launch_time ? TCTime.utc(sonde.launch_time, { date: false, zone: false }) + 'Z' : '') +
+        (st.wl150 != null ? ' · ' + Math.round(st.wl150) + ' kt' : '');
+    var ring = L.marker(at, {
+        icon: L.divIcon({ className: 'ga-sonde-sel', iconSize: [0, 0], iconAnchor: [0, 0],
+            html: '<span class="ring"></span><span class="core"></span><span class="lab">' + lab + '</span>' }),
+        interactive: false, pane: 'sondes', zIndexOffset: 604   // under the sidebar (606)
+    });
+    ring.addTo(detailMap); _gaSondeSelLayers.push(ring);
+    if (pan) _gaSondePanIntoView(at);
+}
 
-        // Launch marker (hollow circle at top)
-        var launchOk = !!(sonde.launch && sonde.launch.lat != null &&
-                          sonde.launch.lon != null &&
-                          isFinite(sonde.launch.lat) && isFinite(sonde.launch.lon) &&
-                          Math.abs(sonde.launch.lat) <= 90 &&
-                          Math.abs(sonde.launch.lon) <= 180);
-        if (launchOk) {
-            var launchMarker = L.circleMarker([sonde.launch.lat, sonde.launch.lon], {
-                radius: 5, fillColor: color, fillOpacity: 0.3,
-                color: color, weight: 1.5, opacity: 0.8,
-                pane: 'sondes'
-            });
-            launchMarker.addTo(detailMap);
-            _gaSondeMapLayers.push(launchMarker);
-        }
+/** Pan (never zoom) so `at` sits inside the part of the map the floating
+ *  sidebar and the header/timeline chrome don't cover. */
+function _gaSondePanIntoView(at) {
+    var size = detailMap.getSize(), cont = detailMap.getContainer();
+    var left = 100, right = size.x - 40, top = 70, bottom = size.y - 70;
+    var side = document.querySelector('.detail-layout:not(.side-collapsed) .detail-side');
+    if (side && cont && side.offsetParent) {
+        var sr = side.getBoundingClientRect(), cr = cont.getBoundingClientRect();
+        if (sr.width > 0 && sr.left > cr.left) right = Math.min(right, sr.left - cr.left - 40);
+    }
+    if (right - left < 120) { left = 40; right = size.x - 40; }
+    var pt = detailMap.latLngToContainerPoint(at);
+    if (pt.x >= left && pt.x <= right && pt.y >= top && pt.y <= bottom) return;
+    var cx = (left + right) / 2, cy = (top + bottom) / 2;
+    var c = detailMap.latLngToContainerPoint(detailMap.getCenter());
+    detailMap.panTo(detailMap.containerPointToLatLng([c.x + (pt.x - cx), c.y + (pt.y - cy)]));
+}
 
-        // Surface marker (filled circle at bottom) — skip if too far from
-        // launch (same .frd-corruption guard as the polyline).
-        var surfaceOk = !!(sonde.surface && sonde.surface.lat != null &&
-                           sonde.surface.lon != null &&
-                           isFinite(sonde.surface.lat) && isFinite(sonde.surface.lon));
-        if (surfaceOk && launchOk &&
-            (Math.abs(sonde.surface.lat - sonde.launch.lat) > 1.0 ||
-             Math.abs(sonde.surface.lon - sonde.launch.lon) > 1.0)) {
-            surfaceOk = false;
-        }
-        if (surfaceOk) {
-            var sfcTip = '<b>Sonde ' + (si + 1) + '</b>' +
-                (sonde.sonde_id ? ' (' + sonde.sonde_id + ')' : '') + '<br>' +
-                _gaTime(sonde.launch_time, true) + '<br>' +
-                'Sfc: ' + (sonde.hit_surface ? 'Yes' : 'No') +
-                (sonde.splash_pr ? ' · P: ' + sonde.splash_pr.toFixed(1) + ' hPa' : '');
-            var sfcMarker = L.circleMarker([sonde.surface.lat, sonde.surface.lon], {
-                radius: 6, fillColor: color, fillOpacity: 0.9,
-                color: '#fff', weight: 1, opacity: 0.8,
-                pane: 'sondes'
-            }).bindTooltip(sfcTip, { sticky: true });
-            // Click to show Skew-T
-            (function (idx) {
-                sfcMarker.on('click', function () { gaSondeShowSkewT(idx); });
-            })(si);
-            sfcMarker.addTo(detailMap);
-            _gaSondeMapLayers.push(sfcMarker);
+/** Per-sonde summary numbers (kt / hPa) shared by the table, tooltips, the
+ *  map label and the profile panel. Cached on the sonde. */
+function _gaSondeStats(s) {
+    if (s._gaStats) return s._gaStats;
+    var prof = s.profile || {};
+    var vmax = null, vmaxP = null;
+    if (prof.wspd) {
+        for (var wi = 0; wi < prof.wspd.length; wi++) {
+            var w = prof.wspd[wi];
+            if (w != null && w < 130 && (vmax == null || w > vmax)) { vmax = w; vmaxP = prof.pres ? prof.pres[wi] : null; }
         }
     }
+    // WL150: vector-mean wind in the lowest 150 m (Franklin et al. 2003) —
+    // sonde within 500 m of the surface, >= 3 winds spanning >= 75 % (112.5 m).
+    var wl150 = null;
+    if (prof.alt_km && s.hit_surface && prof.uwnd && prof.vwnd) {
+        var minAlt = null;
+        for (var ai = 0; ai < prof.alt_km.length; ai++) {
+            if (prof.alt_km[ai] != null && (minAlt == null || prof.alt_km[ai] < minAlt)) minAlt = prof.alt_km[ai];
+        }
+        if (minAlt != null && minAlt <= 0.5) {
+            var uSum = 0, vSum = 0, wCnt = 0, layerTop = minAlt + 0.15, altMin = Infinity, altMax = -Infinity;
+            for (var hi = 0; hi < prof.alt_km.length; hi++) {
+                if (prof.alt_km[hi] != null && prof.uwnd[hi] != null && prof.vwnd[hi] != null && prof.alt_km[hi] <= layerTop) {
+                    uSum += prof.uwnd[hi]; vSum += prof.vwnd[hi]; wCnt++;
+                    if (prof.alt_km[hi] < altMin) altMin = prof.alt_km[hi];
+                    if (prof.alt_km[hi] > altMax) altMax = prof.alt_km[hi];
+                }
+            }
+            if (wCnt >= 3 && (altMax - altMin) * 1000 >= 112.5) {
+                wl150 = Math.sqrt(Math.pow(uSum / wCnt, 2) + Math.pow(vSum / wCnt, 2));
+            }
+        }
+    }
+    // Surface pressure: splash, then hydrostatic, then the deepest profile level.
+    var psfc = s.splash_pr || s.hyd_sfcp || null;
+    if (psfc == null && prof.pres) {
+        for (var pi = prof.pres.length - 1; pi >= 0; pi--) {
+            if (prof.pres[pi] != null && prof.pres[pi] > 850) { psfc = prof.pres[pi]; break; }
+        }
+    }
+    s._gaStats = {
+        vmax: vmax != null ? vmax * 1.944 : null, vmaxP: vmaxP,
+        wl150: wl150 != null ? wl150 * 1.944 : null, psfc: psfc
+    };
+    return s._gaStats;
 }
 
 function _gaSondeRenderTable() {
@@ -14029,81 +14295,29 @@ function _gaSondeRenderTable() {
     if (!wrap || !_gaSondeData) return;
 
     var html = '<table style="width:100%;border-collapse:collapse;font-size:10px;font-variant-numeric:tabular-nums;color:var(--text);">' +
-        '<tr style="color:var(--um-green);border-bottom:1px solid var(--border);">' +
+        '<tr style="color:var(--slate);border-bottom:1px solid var(--border);">' +
         '<th style="padding:3px 4px;text-align:left;">#</th>' +
         '<th style="padding:3px 4px;text-align:left;">Time (UTC)</th>' +
-        '<th style="padding:3px 4px;text-align:right;" title="Maximum wind speed in profile">Vmax</th>' +
-        '<th style="padding:3px 4px;text-align:right;" title="Mean wind in lowest 150m (Franklin et al. 2003)">WL150</th>' +
+        '<th style="padding:3px 4px;text-align:right;" title="Mean wind in lowest 150 m (Franklin et al. 2003)">WL150</th>' +
+        '<th style="padding:3px 4px;text-align:right;" title="Maximum wind speed in profile">Max</th>' +
         '<th style="padding:3px 4px;text-align:right;" title="Surface pressure (splash or hydrostatic)">Psfc</th>' +
-        '<th style="padding:3px 4px;text-align:center;" title="Reached surface?">Sfc</th>' +
-        '<th style="padding:3px 4px;"></th></tr>';
+        '<th style="padding:3px 4px;text-align:center;" title="Reached the surface?">Sfc</th></tr>';
 
     for (var i = 0; i < _gaSondeData.length; i++) {
-        var s = _gaSondeData[i];
-        var prof = s.profile || {};
-        var maxWspd = null;
-        if (prof.wspd) {
-            for (var wi = 0; wi < prof.wspd.length; wi++) {
-                if (prof.wspd[wi] != null && (maxWspd == null || prof.wspd[wi] > maxWspd)) maxWspd = prof.wspd[wi];
-            }
-        }
-        // WL150: vector-mean wind in the lowest 150m layer (Franklin et al. 2003)
-        // Requirements: sonde reached within 10m of surface, ≥3 valid winds,
-        // winds must span ≥75% of the 150m layer (112.5m coverage)
-        var wl150 = null;
-        if (prof.alt_km && prof.wspd && s.hit_surface && prof.uwnd && prof.vwnd) {
-            var minAlt = null, maxAltInLayer = null;
-            for (var ai = 0; ai < prof.alt_km.length; ai++) {
-                if (prof.alt_km[ai] != null) {
-                    if (minAlt == null || prof.alt_km[ai] < minAlt) minAlt = prof.alt_km[ai];
-                }
-            }
-            if (minAlt != null && minAlt <= 0.5) {  // sonde must reach within 500m of surface
-                var uSum = 0, vSum = 0, wCnt = 0;
-                var layerTop = minAlt + 0.15; // 150m above lowest point
-                var altMin = Infinity, altMax = -Infinity;
-                for (var hi = 0; hi < prof.alt_km.length; hi++) {
-                    if (prof.alt_km[hi] != null && prof.uwnd[hi] != null && prof.vwnd[hi] != null &&
-                        prof.alt_km[hi] <= layerTop) {
-                        uSum += prof.uwnd[hi];
-                        vSum += prof.vwnd[hi];
-                        wCnt++;
-                        if (prof.alt_km[hi] < altMin) altMin = prof.alt_km[hi];
-                        if (prof.alt_km[hi] > altMax) altMax = prof.alt_km[hi];
-                    }
-                }
-                var layerSpan = (altMax - altMin) * 1000; // in meters
-                // Franklin et al.: ≥3 winds spanning ≥75% of 150m (112.5m)
-                if (wCnt >= 3 && layerSpan >= 112.5) {
-                    var uMean = uSum / wCnt;
-                    var vMean = vSum / wCnt;
-                    wl150 = Math.sqrt(uMean * uMean + vMean * vMean);
-                }
-            }
-        }
-        // Surface pressure: prefer splash_pr, then hyd_sfcp, then last valid profile pressure
-        var psfc = s.splash_pr || s.hyd_sfcp || null;
-        if (psfc == null && prof.pres) {
-            for (var pi = prof.pres.length - 1; pi >= 0; pi--) {
-                if (prof.pres[pi] != null && prof.pres[pi] > 850) { psfc = prof.pres[pi]; break; }
-            }
-        }
+        var s = _gaSondeData[i], st = _gaSondeStats(s);
         var timeShort = s.launch_time ? TCTime.utc(s.launch_time, { date: false, sec: true, zone: false }) : '';
-
-        html += '<tr style="border-bottom:1px solid rgba(15, 22, 35,0.05);cursor:pointer;" onclick="gaSondeShowSkewT(' + i + ')">' +
-            '<td style="padding:2px 4px;color:' + _SONDE_COLORS[i % _SONDE_COLORS.length] + ';">' + (i + 1) + '</td>' +
+        var wlCell = st.wl150 != null
+            ? '<span style="display:inline-block;min-width:34px;padding:0 3px;border-radius:3px;text-align:right;font-weight:700;color:#fff;background:' +
+              _gaReconWindColorKt(st.wl150) + ';">' + Math.round(st.wl150) + '</span>'
+            : '—';
+        html += '<tr class="ga-sonde-row' + (i === _gaSondeSelIdx ? ' sel' : '') + '" data-si="' + i + '" onclick="gaSondeShowSkewT(' + i + ')">' +
+            '<td style="padding:2px 4px;white-space:nowrap;"><span class="ga-sd-i"></span>' + (i + 1) + '</td>' +
             '<td style="padding:2px 4px;">' + timeShort + '</td>' +
-            '<td style="padding:2px 4px;text-align:right;">' + (maxWspd != null ? (maxWspd * 1.944).toFixed(0) + ' kt' : '\u2014') + '</td>' +
-            '<td style="padding:2px 4px;text-align:right;">' + (wl150 != null ? (wl150 * 1.944).toFixed(0) + ' kt' : '\u2014') + '</td>' +
-            '<td style="padding:2px 4px;text-align:right;">' + (psfc != null ? psfc.toFixed(0) : '\u2014') + '</td>' +
-            '<td style="padding:2px 4px;text-align:center;">' + (s.hit_surface ? '\u2705' : '\u274c') + '</td>' +
-            '<td style="padding:2px 4px;white-space:nowrap;">' +
-                '<button class="ga-btn ga-btn-xs" style="font-size:8px;color:var(--um-green);margin-right:3px;" ' +
-                  'onclick="event.stopPropagation();gaSondeShowView(' + i + ',\'skewt\')">Skew-T</button>' +
-                '<button class="ga-btn ga-btn-xs" style="font-size:8px;color:#1d4ed8;" ' +
-                  'onclick="event.stopPropagation();gaSondeShowView(' + i + ',\'wind\')" ' +
-                  'title="Wind speed + direction vs altitude">Wind</button>' +
-            '</td></tr>';
+            '<td style="padding:2px 4px;text-align:right;">' + wlCell + '</td>' +
+            '<td style="padding:2px 4px;text-align:right;">' + (st.vmax != null ? Math.round(st.vmax) + ' kt' : '—') + '</td>' +
+            '<td style="padding:2px 4px;text-align:right;">' + (st.psfc != null ? st.psfc.toFixed(0) : '—') + '</td>' +
+            '<td style="padding:2px 4px;text-align:center;color:' + (s.hit_surface ? '#16a34a' : 'var(--slate)') + ';">' +
+                (s.hit_surface ? '✓' : '–') + '</td></tr>';
     }
     html += '</table>';
     wrap.innerHTML = html;
@@ -14246,11 +14460,9 @@ window.gaSondeShowView = function (idx, mode) {
     _gaSondeCurrentIdx = idx;
     // Reflect button state on the panel header pills so it's clear
     // which view is active when the panel opens.
-    ['skewt', 'wind', 'xsec', 'radial'].forEach(function (k) {
-        var b = document.getElementById('ga-sonde-view-' + k);
-        if (b) b.classList.toggle('active', k === m);
-    });
-    gaSondeShowSkewT(idx);
+    var panel = document.getElementById('ga-sonde-skewt-panel');
+    if (panel) panel.style.display = '';
+    gaSondeSetView(m);   // syncs the pills / stepper / tiles, then renders _gaSondeCurrentIdx
 };
 
 window.gaSondeShowSkewT = function (idx) {
@@ -14295,8 +14507,46 @@ window.gaSondeShowSkewT = function (idx) {
         v: prof.vwnd || null,
         showParcel: _gaSondeParcelEnabled,
     };
+    // Fit the pressure axis to this drop (splash -> just above release), as the
+    // RT sonde card does: a 700-mb drop otherwise fills only the bottom third
+    // of a fixed 1050-500 hPa frame.
+    var _ps = plev.filter(function (p) { return p != null && isFinite(p) && p > 50; });
+    if (_ps.length > 1) {
+        var _pLo = Math.min.apply(null, _ps), _pHi = Math.max.apply(null, _ps);
+        profiles.pBottom = Math.min(1060, Math.ceil((_pHi + 15) / 10) * 10);
+        profiles.pTop = Math.max(100, Math.floor((_pLo - 25) / 50) * 50);
+    }
+    // ...and the temperature axis: span the skewed T/Td of this drop (+ room
+    // for the barb column) instead of the fixed -40..80 frame.
+    var _sx = [];
+    for (var _i = 0; _i < plev.length; _i++) {
+        var _p = plev[_i];
+        if (_p == null || !(_p > 50)) continue;
+        var _sk = 70 * Math.log10(1000 / _p);
+        if (prof.temp && prof.temp[_i] != null) _sx.push(prof.temp[_i] + _sk);
+        if (prof.dewpoint && prof.dewpoint[_i] != null) _sx.push(prof.dewpoint[_i] + _sk);
+    }
+    if (_sx.length > 1) {
+        var _x0 = Math.min.apply(null, _sx), _x1 = Math.max.apply(null, _sx);
+        var _lo = Math.floor((_x0 - 12) / 5) * 5, _hi = Math.ceil((_x1 + 8) / 5) * 5;
+        if (_hi - _lo < 45) { var _mid = (_lo + _hi) / 2; _lo = Math.floor((_mid - 22.5) / 5) * 5; _hi = _lo + 45; }
+        profiles.xRange = [_lo, _hi + 0.16 * (_hi - _lo)];   // right strip = barbs
+    }
+    var _cs = getComputedStyle(document.documentElement);
+    profiles.style = {
+        noTitle: true,
+        tdHalo: true,
+        axisColor: (_cs.getPropertyValue('--slate') || '').trim() || undefined,
+        textColor: (_cs.getPropertyValue('--text') || '').trim() || undefined,
+        plotBg: 'rgba(0,0,0,0)',
+        margin: { l: 40, r: 6, t: 6, b: 32 },
+        pTicks: [1000, 950, 900, 850, 800, 750, 700, 650, 600, 500, 400, 300, 200]
+            .filter(function (v) { return !profiles.pBottom || v <= profiles.pBottom - 12; })
+    };
 
     _gaSondeCurrentIdx = idx;
+    _gaSondeSelect(idx, true);
+    _gaSondeRenderStats(sonde);
 
     // Render based on selected view mode
     if (_gaSondeViewMode === 'xsec') {
@@ -14316,9 +14566,13 @@ window.gaSondeShowSkewT = function (idx) {
     if (title && _gaSondeViewMode === 'xsec') {
         title.textContent = 'Radius\u2013Height Cross-Section';
     } else if (title) {
-        title.textContent = 'Sonde ' + (idx + 1) +
-            (sonde.sonde_id ? ' (' + sonde.sonde_id + ')' : '') +
-            ' \u2014 ' + _gaTime(sonde.launch_time, true);
+        var _lp = sonde.launch && sonde.launch.alt_m != null ? Math.round(sonde.launch.alt_m) + ' m release' : '';
+        var _ll = sonde.launch && sonde.launch.lat != null
+            ? Math.abs(sonde.launch.lat).toFixed(2) + '\u00b0' + (sonde.launch.lat >= 0 ? 'N' : 'S') + ' ' +
+              Math.abs(sonde.launch.lon).toFixed(2) + '\u00b0' + (sonde.launch.lon >= 0 ? 'E' : 'W') : '';
+        title.innerHTML = 'Sonde ' + (idx + 1) + ' of ' + _gaSondeData.length + ' \u00b7 ' + _gaTime(sonde.launch_time, true) +
+            '<span class="ga-sp-sub">' + [sonde.sonde_id ? 'ID ' + sonde.sonde_id : '', _ll, _lp]
+                .filter(Boolean).join(' \u00b7 ') + '</span>';
     }
 
     // Populate sonde selector dropdown
@@ -14329,20 +14583,48 @@ window.gaSondeShowSkewT = function (idx) {
             var opt = document.createElement('option');
             opt.value = j;
             var t = _gaSondeData[j].launch_time;
-            opt.textContent = (j + 1) + ': ' + (t ? TCTime.utc(t, { date: false, sec: true }) : '');
+            var _w = _gaSondeStats(_gaSondeData[j]).wl150;
+            opt.textContent = (j + 1) + ' \u00b7 ' + (t ? TCTime.utc(t, { date: false, zone: false }) + 'Z' : '') +
+                (_w != null ? ' \u00b7 ' + Math.round(_w) + ' kt' : '');
             sel.appendChild(opt);
         }
     }
     if (sel) sel.value = idx;
 
-    // Info panel with derived parameters
-    _gaSondeRenderSkewTInfo(profiles, sonde, idx);
+    // Derived column diagnostics come out of the skew-T pass (renderSkewT
+    // fills profiles._derived), so they only show with that view.
+    var _info = document.getElementById('ga-sonde-skewt-info');
+    if (_info) _info.style.display = _gaSondeViewMode === 'skewt' ? '' : 'none';
+    if (_gaSondeViewMode === 'skewt') _gaSondeRenderSkewTInfo(profiles, sonde, idx);
 };
 
 window.gaSondeCloseSkewT = function () {
     var panel = document.getElementById('ga-sonde-skewt-panel');
     if (panel) panel.style.display = 'none';
+    _gaSondeSelIdx = null;
+    _gaSondeClearSelection();
+    document.querySelectorAll('.ga-sonde-row.sel').forEach(function (r) { r.classList.remove('sel'); });
 };
+
+window.gaSondeStep = function (d) {
+    if (!_gaSondeData || !_gaSondeData.length) return;
+    var n = _gaSondeData.length;
+    gaSondeShowSkewT(((_gaSondeCurrentIdx || 0) + d + n) % n);
+};
+
+/** Three headline tiles over the plot: WL150, profile max, surface pressure. */
+function _gaSondeRenderStats(sonde) {
+    var el = document.getElementById('ga-sonde-skewt-stats');
+    if (!el) return;
+    var st = _gaSondeStats(sonde);
+    function tile(v, lab, col) {
+        return '<div class="ga-sp-stat"' + (col ? ' style="box-shadow:inset 3px 0 0 ' + col + ';"' : '') + '><b>' + v + '</b><span>' + lab + '</span></div>';
+    }
+    el.innerHTML =
+        tile(st.wl150 != null ? Math.round(st.wl150) + ' kt' : '\u2014', 'WL150 (lowest 150 m)', st.wl150 != null ? _gaReconWindColorKt(st.wl150) : null) +
+        tile(st.vmax != null ? Math.round(st.vmax) + ' kt' : '\u2014', 'Max' + (st.vmaxP != null ? ' @ ' + Math.round(st.vmaxP) + ' hPa' : ''), st.vmax != null ? _gaReconWindColorKt(st.vmax) : null) +
+        tile(st.psfc != null ? st.psfc.toFixed(0) + ' hPa' : '\u2014', sonde.hit_surface ? (sonde.splash_pr ? 'Splash pressure' : 'Surface pressure') : 'Did not reach sfc', null);
+}
 
 var _gaSondeViewMode = 'skewt';
 var _gaSondeCurrentIdx = 0;
@@ -14393,8 +14675,12 @@ window.gaSondeSetView = function (mode) {
     document.getElementById('ga-sonde-view-radial').classList.toggle('active', mode === 'radial');
     var isStructure = (mode === 'xsec' || mode === 'radial');
     // Show/hide sonde selector (not relevant for cross-section/radial) and variable row
-    var sel = document.getElementById('ga-sonde-skewt-select');
-    if (sel) sel.style.display = isStructure ? 'none' : '';
+    var stepper = document.getElementById('ga-sonde-stepper');
+    if (stepper) stepper.style.display = isStructure ? 'none' : '';
+    var stats = document.getElementById('ga-sonde-skewt-stats');
+    if (stats) stats.style.display = isStructure ? 'none' : '';
+    var parcelBtn = document.getElementById('ga-sonde-toggle-parcel');
+    if (parcelBtn) parcelBtn.style.display = mode === 'skewt' ? '' : 'none';
     var varRow = document.getElementById('ga-xsec-var-row');
     if (varRow) varRow.style.display = isStructure ? '' : 'none';
     // Hide the derived params panel for structure views
@@ -14598,7 +14884,7 @@ function _renderCrossSection(divId) {
         var val = null;
         if (_xsecVar === 'wspd' && o.fl_wspd_ms != null) val = o.fl_wspd_ms * 1.944;
         else if (_xsecVar === 'temp' && o.temp_c != null) val = o.temp_c;
-        else if (_xsecVar === 'theta_e' && o.theta_e != null) val = o.theta_e;
+        else if (_xsecVar === 'theta_e') val = _gaFLObThetaE(o);
         else if (_xsecVar === 'rh') continue;  // FL data doesn't have RH
         if (val == null) continue;
 
@@ -14917,7 +15203,7 @@ function _renderRadialProfile(divId) {
         var val = null;
         if (_xsecVar === 'wspd' && o.fl_wspd_ms != null) val = o.fl_wspd_ms * 1.944;
         else if (_xsecVar === 'temp' && o.temp_c != null) val = o.temp_c;
-        else if (_xsecVar === 'theta_e' && o.theta_e != null) val = o.theta_e;
+        else if (_xsecVar === 'theta_e') val = _gaFLObThetaE(o);
         else if (_xsecVar === 'rh') continue;
         if (val == null) continue;
         flR.push(r);
@@ -15000,59 +15286,37 @@ function _renderRadialProfile(divId) {
 function _gaSondeRenderSkewTInfo(profiles, sonde, idx) {
     var el = document.getElementById('ga-sonde-skewt-info');
     if (!el) return;
-
     var d = profiles._derived || {};
-    var parcelOn = profiles.showParcel === true;
-
-    // \u2500\u2500 Always-on TC-relevant column diagnostics \u2500\u2500
-    var html = '<div style="font-weight:600;color:var(--um-green);margin-bottom:6px;">Column Diagnostics</div>';
-    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;font-size:9px;">';
-    html += '<span style="color:var(--slate);">PWAT:</span><span>' + (d.pwat != null ? d.pwat.toFixed(1) + ' mm' : '\u2014') + '</span>';
-    html += '<span style="color:var(--slate);">0\u00b0C:</span><span>' + (d.freezing_p != null ? d.freezing_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-    html += '<span style="color:var(--slate);" title="Mean equivalent potential temperature in lowest 50 hPa \u2014 boundary-layer entropy">Sfc \u03b8e:</span><span>' + (d.thetaE_sfc != null ? d.thetaE_sfc.toFixed(1) + ' K' : '\u2014') + '</span>';
-    html += '<span style="color:var(--slate);" title="Mid-level (850\u2013400 hPa) \u03b8e minimum \u2014 low values signal dry-air entrainment / downdraft potential">Mid \u03b8e min:</span><span>' + (d.thetaE_min != null ? d.thetaE_min.toFixed(1) + ' K @ ' + d.thetaE_min_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-    html += '<span style="color:var(--slate);" title="Boundary-layer \u03b8e minus mid-level minimum \u2014 measure of conditional instability / downdraft CAPE potential">\u0394\u03b8e:</span><span>' + ((d.thetaE_sfc != null && d.thetaE_min != null) ? (d.thetaE_sfc - d.thetaE_min).toFixed(1) + ' K' : '\u2014') + '</span>';
-    html += '<span style="color:var(--slate);" title="Lowest pressure where RH first drops below 90% \u2014 depth of moist column">Sat depth:</span><span>' + (d.sat_depth_p != null ? d.sat_depth_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-    html += '</div>';
-
-    // \u2500\u2500 Parcel theory block (only when toggled on) \u2500\u2500
-    if (parcelOn) {
-        html += '<div style="margin-top:8px;font-weight:600;color:var(--um-green);margin-bottom:4px;">Parcel (surface-based)</div>';
-        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;font-size:9px;">';
-        html += '<span style="color:var(--slate);">CAPE:</span><span>' + (d.cape != null ? d.cape + ' J/kg' : '\u2014') + '</span>';
-        html += '<span style="color:var(--slate);">CIN:</span><span>' + (d.cin != null ? d.cin + ' J/kg' : '\u2014') + '</span>';
-        html += '<span style="color:var(--slate);">LCL:</span><span>' + (d.lcl_p != null ? d.lcl_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-        html += '<span style="color:var(--slate);">LFC:</span><span>' + (d.lfc_p != null ? d.lfc_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-        html += '<span style="color:var(--slate);">EL:</span><span>' + (d.el_p != null ? d.el_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-        html += '</div>';
-        html += '<div style="margin-top:4px;font-size:8px;color:var(--text-dim);font-style:italic;">Parcel theory has limited utility in TC eyewall / inner-core sondes (slantwise ascent, near-saturated column).</div>';
+    function row(label, val, tip) {
+        return '<span' + (tip ? ' title="' + tip + '"' : '') + '>' + label + '</span><span>' + val + '</span>';
     }
-
-    // \u2500\u2500 Surface info \u2500\u2500
-    html += '<div style="margin-top:8px;font-weight:600;color:var(--um-green);margin-bottom:4px;">Surface</div>';
-    html += '<div style="font-size:9px;">';
-    html += 'Hit surface: ' + (sonde.hit_surface ? 'Yes' : 'No') + '<br>';
-    if (sonde.splash_pr) html += 'Splash P: ' + sonde.splash_pr.toFixed(1) + ' hPa<br>';
-    if (sonde.hyd_sfcp) html += 'Hyd SfcP: ' + sonde.hyd_sfcp.toFixed(1) + ' hPa<br>';
-    html += '</div>';
-
-    // \u2500\u2500 Max wind in profile \u2500\u2500
-    var prof = sonde.profile || {};
-    if (prof.wspd) {
-        var maxW = 0, maxWp = null;
-        for (var i = 0; i < prof.wspd.length; i++) {
-            if (prof.wspd[i] != null && prof.wspd[i] > maxW) {
-                maxW = prof.wspd[i]; maxWp = prof.pres ? prof.pres[i] : null;
-            }
-        }
-        if (maxW > 0) {
-            html += '<div style="margin-top:6px;font-size:9px;">';
-            html += 'Max wind: ' + maxW.toFixed(1) + ' m/s (' + (maxW * 1.944).toFixed(0) + ' kt)';
-            if (maxWp) html += ' at ' + maxWp.toFixed(0) + ' hPa';
-            html += '</div>';
-        }
+    var dash = '—';
+    // Always-on TC-relevant column diagnostics (WL150 / max / surface P are
+    // the tiles above the plot).
+    var html = '<h4>Column diagnostics</h4><div class="ga-sp-grid">' +
+        row('PWAT', d.pwat != null ? d.pwat.toFixed(1) + ' mm' : dash) +
+        row('0°C', d.freezing_p != null ? d.freezing_p.toFixed(0) + ' hPa' : dash) +
+        row('Sfc θe', d.thetaE_sfc != null ? d.thetaE_sfc.toFixed(1) + ' K' : dash,
+            'Mean equivalent potential temperature in the lowest 50 hPa (boundary-layer entropy)') +
+        row('Mid θe min', d.thetaE_min != null ? d.thetaE_min.toFixed(1) + ' K @ ' + d.thetaE_min_p.toFixed(0) : dash,
+            'Mid-level (850-400 hPa) theta-e minimum: low values signal dry-air entrainment / downdraft potential') +
+        row('Δθe', (d.thetaE_sfc != null && d.thetaE_min != null) ? (d.thetaE_sfc - d.thetaE_min).toFixed(1) + ' K' : dash,
+            'Boundary-layer theta-e minus the mid-level minimum') +
+        row('Sat depth', d.sat_depth_p != null ? d.sat_depth_p.toFixed(0) + ' hPa' : dash,
+            'Lowest pressure where RH first drops below 90% (depth of the moist column)') +
+        '</div>';
+    if (profiles.showParcel === true) {
+        html += '<h4>Parcel (surface-based)</h4><div class="ga-sp-grid">' +
+            row('CAPE', d.cape != null ? d.cape + ' J/kg' : dash) +
+            row('CIN', d.cin != null ? d.cin + ' J/kg' : dash) +
+            row('LCL', d.lcl_p != null ? d.lcl_p.toFixed(0) + ' hPa' : dash) +
+            row('LFC', d.lfc_p != null ? d.lfc_p.toFixed(0) + ' hPa' : dash) +
+            row('EL', d.el_p != null ? d.el_p.toFixed(0) + ' hPa' : dash) +
+            '</div><div class="ga-sp-note">Parcel theory has limited utility in TC eyewall / inner-core sondes (slantwise ascent, near-saturated column).</div>';
     }
-
+    if (sonde.hyd_sfcp && sonde.splash_pr) {
+        html += '<div class="ga-sp-note" style="font-style:normal;">Splash ' + sonde.splash_pr.toFixed(1) + ' hPa · hydrostatic ' + sonde.hyd_sfcp.toFixed(1) + ' hPa</div>';
+    }
     el.innerHTML = html;
 }
 

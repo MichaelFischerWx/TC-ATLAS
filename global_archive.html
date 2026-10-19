@@ -89,11 +89,11 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundles, discoverable from byte 0. Tokens MUST match
          the script tags below. -->
-    <link rel="preload" as="script" href="global_archive.js?v=20261010tm1">
+    <link rel="preload" as="script" href="global_archive.js?v=20261019rc1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261010w1">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20261010m1">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20261019rc1">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -745,18 +745,25 @@
                             </div>
                         </div>
                         <!-- Dropsonde Skew-T display -->
-                        <div id="ga-sonde-skewt-panel" style="display:none;background:var(--surface-raised);border:1px solid rgba(52,211,153,0.3);border-radius:8px;padding:10px 12px;margin-top:6px;">
-                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-                                <div id="ga-sonde-skewt-title" style="font-size:11px;font-weight:600;color:#15803d;"></div>
-                                <div style="display:flex;align-items:center;gap:6px;">
-                                    <button id="ga-sonde-view-skewt" class="ga-btn ga-btn-xs active" onclick="gaSondeSetView('skewt')" style="font-size:9px;" title="Skew-T / Log-P thermodynamic diagram">Skew-T</button>
-                                    <button id="ga-sonde-view-wind" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('wind')" style="font-size:9px;" title="Wind speed and direction vs altitude">Wind</button>
-                                    <button id="ga-sonde-view-xsec" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('xsec')" style="font-size:9px;" title="Radius-height cross-section (all legs)">X-Sec</button>
-                                    <button id="ga-sonde-view-radial" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('radial')" style="font-size:9px;" title="Radial profile of selected variable">Radial</button>
-                                    <button id="ga-sonde-toggle-parcel" class="ga-btn ga-btn-xs" onclick="gaSondeToggleParcel()" style="font-size:9px;" title="Toggle parcel theory (CAPE/CIN/LCL/LFC/EL). Off by default — parcel theory has limited utility for TC inner-core sondes (slantwise eyewall ascent, near-saturated column).">Parcel</button>
-                                    <select id="ga-sonde-skewt-select" onchange="gaSondeShowSkewT(this.value)" style="font-size:9px;padding:2px 4px;background:var(--surface-raised);color:var(--text);border:1px solid var(--border);border-radius:3px;" data-hide-in-xsec="1"></select>
-                                    <button class="ga-btn ga-btn-xs" aria-label="Close Skew-T panel" onclick="gaSondeCloseSkewT()" style="font-size:9px;color:#f87171;">&#10005;</button>
+                        <div id="ga-sonde-skewt-panel" style="display:none;">
+                            <div class="ga-sp-head">
+                                <span class="ga-sp-diamond" aria-hidden="true"></span>
+                                <div id="ga-sonde-skewt-title" class="ga-sp-title"></div>
+                                <button class="ga-btn ga-btn-xs" aria-label="Close sonde panel" onclick="gaSondeCloseSkewT()" style="font-size:9px;color:#f87171;">&#10005;</button>
+                            </div>
+                            <div class="ga-sp-bar">
+                                <div class="ga-sp-seg" role="group" aria-label="Profile view">
+                                    <button id="ga-sonde-view-skewt" class="ga-btn ga-btn-xs active" onclick="gaSondeSetView('skewt')" title="Skew-T / Log-P thermodynamic diagram">Skew-T</button>
+                                    <button id="ga-sonde-view-wind" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('wind')" title="Wind speed and direction vs altitude">Wind</button>
+                                    <button id="ga-sonde-view-xsec" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('xsec')" title="Radius-height cross-section (all legs)">X-Sec</button>
+                                    <button id="ga-sonde-view-radial" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('radial')" title="Radial profile of selected variable">Radial</button>
                                 </div>
+                                <button id="ga-sonde-toggle-parcel" class="ga-btn ga-btn-xs" onclick="gaSondeToggleParcel()" title="Toggle parcel theory (CAPE/CIN/LCL/LFC/EL). Off by default — parcel theory has limited utility for TC inner-core sondes (slantwise eyewall ascent, near-saturated column).">Parcel</button>
+                                <span id="ga-sonde-stepper" class="ga-sp-step">
+                                    <button class="ga-btn ga-btn-xs" onclick="gaSondeStep(-1)" aria-label="Previous sonde" title="Previous sonde">&#9664;</button>
+                                    <select id="ga-sonde-skewt-select" onchange="gaSondeShowSkewT(+this.value)" aria-label="Choose sonde"></select>
+                                    <button class="ga-btn ga-btn-xs" onclick="gaSondeStep(1)" aria-label="Next sonde" title="Next sonde">&#9654;</button>
+                                </span>
                             </div>
                             <div id="ga-xsec-var-row" style="display:none;margin-bottom:6px;">
                                 <span style="font-size:9px;color:var(--slate);">Variable:</span>
@@ -765,10 +772,9 @@
                                 <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('theta_e')" data-var="theta_e" style="font-size:9px;" title="Equivalent potential temperature">&theta;e</button>
                                 <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('rh')" data-var="rh" style="font-size:9px;" title="Relative humidity">RH</button>
                             </div>
-                            <div style="display:flex;gap:8px;">
-                                <div id="ga-sonde-skewt" style="flex:1;height:520px;"></div>
-                                <div id="ga-sonde-skewt-info" style="width:180px;font-size:10px;color:var(--text);overflow-y:auto;max-height:520px;"></div>
-                            </div>
+                            <div id="ga-sonde-skewt-stats" class="ga-sp-stats"></div>
+                            <div id="ga-sonde-skewt" class="ga-sp-plot"></div>
+                            <div id="ga-sonde-skewt-info" class="ga-sp-info"></div>
                         </div>
                         <!-- Flight-level time series side panel -->
                         <div id="ga-fl-ts-panel" style="display:none;background:var(--surface-raised);border:1px solid rgba(96,165,250,0.3);border-radius:8px;padding:10px 12px;margin-top:6px;">
@@ -1398,8 +1404,8 @@
     <script defer src="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1"></script>
     <script defer src="lflet_gl.js?v=20261001ui1"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
-    <script defer src="skewt.js?v=20261009p1a"></script>
-    <script defer src="global_archive.js?v=20261010tm1"></script>
+    <script defer src="skewt.js?v=20261019rc1"></script>
+    <script defer src="global_archive.js?v=20261019rc1"></script>
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->

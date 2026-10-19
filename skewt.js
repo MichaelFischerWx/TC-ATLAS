@@ -602,7 +602,9 @@ function renderSkewT(profiles, divId) {
     // Dewpoint trace (green)
     traces.push({
         x: tdSkew, y: plev, type: 'scatter', mode: 'lines',
-        name: 'Td', line: { color: '#22c55e', width: 2.5 },
+        // tdHalo (opt-in): a wider Td under a thinner T, so a saturated layer
+        // (Td == T, e.g. an eyewall sonde) still shows its green edge.
+        name: 'Td', line: { color: '#22c55e', width: (profiles.style && profiles.style.tdHalo) ? 5 : 2.5 },
         hovertemplate: '%{text}<extra>Dewpoint</extra>',
         text: plev.map(function(p, idx) {
             return p + ' hPa: Td = ' + (tdC[idx] != null ? tdC[idx].toFixed(1) : '\u2014') + '\u00b0C';
@@ -612,7 +614,7 @@ function renderSkewT(profiles, divId) {
     // Temperature trace (red)
     traces.push({
         x: tSkew, y: plev, type: 'scatter', mode: 'lines',
-        name: 'T', line: { color: '#ef4444', width: 2.5 },
+        name: 'T', line: { color: '#ef4444', width: (profiles.style && profiles.style.tdHalo) ? 2 : 2.5 },
         hovertemplate: '%{text}<extra>Temperature</extra>',
         text: plev.map(function(p, idx) {
             return p + ' hPa: T = ' + (tC[idx] != null ? tC[idx].toFixed(1) : '\u2014') + '\u00b0C';
@@ -650,9 +652,19 @@ function renderSkewT(profiles, divId) {
     // ── Wind barbs (right side of diagram) ──
     var hasWind = profiles.u && profiles.v && profiles.u.length > 0;
     var barbXPos = 68;    // x-position for barb base (right edge of plot area)
+    // Optional caller x-range [min, max] in skewed-°C (archive sonde panel,
+    // 2026-10-19): a shallow 700-mb drop fills ~10 % of the default -40..80
+    // frame. Barbs move to the right 12 % of whatever range is given.
+    var xRangeMin = -40;
+    var _xr = profiles.xRange;
+    var _hasXR = _xr && _xr.length === 2 && isFinite(_xr[0]) && isFinite(_xr[1]) && _xr[1] > _xr[0];
     var barbShapes = [];
     var windAnnotations = [];
     var xRangeMax = hasWind ? 80 : 70;
+    if (_hasXR) {
+        xRangeMin = _xr[0]; xRangeMax = _xr[1];
+        barbXPos = xRangeMax - 0.1 * (xRangeMax - xRangeMin);
+    }
     // Dynamic pressure range from sonde data
     var pMin = 1050, pMax = 100;
     for (var pi = 0; pi < plev.length; pi++) {
@@ -675,7 +687,7 @@ function renderSkewT(profiles, divId) {
     if (profiles.pBottom > pMax) pBot = profiles.pBottom;
 
     var skewTAxRanges = {
-        xMin: -40, xMax: xRangeMax,
+        xMin: xRangeMin, xMax: xRangeMax,
         logPMin: Math.log10(pBot), logPMax: Math.log10(pMax),
     };
     if (hasWind) {
@@ -700,7 +712,7 @@ function renderSkewT(profiles, divId) {
     var layout = {
         xaxis: {
             title: { text: 'Temperature (\u00b0C)', font: { size: 9, color: _axisCol } },
-            range: [-40, xRangeMax],
+            range: [xRangeMin, xRangeMax],
             tickvals: xTickVals, ticktext: xTickText,
             color: _axisCol, tickfont: { size: 8 },
             zeroline: false, gridcolor: 'rgba(15,22,35,0.06)',
