@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- Shareable URL for the Real-Time Monitor's Experimental (GHOST) tab.
+         The tab itself lives at realtime_ir.html#experimental, and link
+         scrapers ignore the #fragment — so a shared tab link unfurled with the
+         RT Monitor's LIVE storm card, which X / Slack / iMessage then cache per
+         page URL for days and keep showing long-gone storms. This page has its
+         own static card (images/og-experimental.png) and forwards visitors to
+         the tab, keeping any #experimental_* sub-page. No analytics tag here:
+         the destination page counts the visit. -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GHOST — Real-Time Intensity Estimates · TC-ATLAS</title>
+    <meta name="description" content="GHOST: experimental real-time tropical cyclone intensity estimates for every active storm, on the TC-ATLAS Real-Time Monitor.">
+    <meta name="author" content="Dr. Michael Fischer, University of Miami / NOAA HRD">
+
+    <!-- Open Graph / Social Sharing -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="GHOST — Real-Time Intensity Estimates · TC-ATLAS">
+    <meta property="og:description" content="Experimental real-time tropical cyclone intensity estimates for every active storm.">
+    <meta property="og:url" content="https://tcatlas.org/experimental.html">
+    <meta property="og:image" content="https://tcatlas.org/images/og-experimental.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="TC-ATLAS Experimental: GHOST real-time intensity estimates">
+    <meta property="og:site_name" content="TC-ATLAS">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="GHOST — Real-Time Intensity Estimates · TC-ATLAS">
+    <meta name="twitter:description" content="Experimental real-time tropical cyclone intensity estimates for every active storm.">
+    <meta name="twitter:image" content="https://tcatlas.org/images/og-experimental.png">
+    <meta name="twitter:image:alt" content="TC-ATLAS Experimental: GHOST real-time intensity estimates">
+    <meta name="twitter:creator" content="@mikefischerwx">
+
+    <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png?v=20261009p1a">
+    <link rel="canonical" href="https://tcatlas.org/experimental.html">
+
+    <script>
+        (function () {
+            // Keep a sub-page hash (#experimental_fpm, #experimental_tilt, ...);
+            // anything else lands on the default Experimental tab.
+            var h = location.hash;
+            var target = 'realtime_ir.html' + location.search +
+                (/^#experimental\w*$/.test(h) ? h : '#experimental');
+            location.replace(target);
+        })();
+    </script>
+    <noscript><meta http-equiv="refresh" content="0; url=realtime_ir.html#experimental"></noscript>
+    <style>
+        body { margin: 0; background: #0a0e14; color: #e6e9ef;
+               font: 16px/1.5 system-ui, -apple-system, sans-serif;
+               display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+        a { color: #4a9b6e; }
+    </style>
+</head>
+<body>
+    <p>Opening the <a href="realtime_ir.html#experimental">Experimental tab</a> of the TC-ATLAS Real-Time Monitor…</p>
+</body>
+</html>
