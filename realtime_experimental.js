@@ -1888,6 +1888,12 @@
                 '</div>';
         }
 
+        /* Tile uncertainty = "typical error ±X": half the interquartile
+           range of held-out (best track − model) errors at this estimate.
+           Spread only, centred on the model output — the old "IQR lo–hi"
+           added the errors' offset too, so at the extremes it sat entirely
+           beside the estimate (Champi 893 hPa, IQR 896–908), and the model
+           output is what the tile publishes (author, 2026-10-20). */
         var tv = trend24(fr, 'vmax_kt');
         var tp = trend24(fr, 'pmin_hpa');
         var trm = trend24(fr, 'rmw_km');
@@ -1913,11 +1919,12 @@
             (function () {
                 var a = distErrAt(j, v.v, 25), b = distErrAt(j, v.v, 75);
                 return (a !== null && b !== null)
-                    ? '<div class="exp-tile-sub">IQR ' +
-                      Math.round(v.v + a) + '\u2013' + Math.round(v.v + b) +
-                      ' kt <span title="25th\u201375th percentile of ' +
-                      'storm-held-out CV outcomes at this predicted ' +
-                      'intensity">\u24d8</span></div>'
+                    ? '<div class="exp-tile-sub">typical error \u00b1' +
+                      Math.round((b - a) / 2) + ' kt' +
+                      ' <span title="Half the spread of the middle 50% of held-out errors ' +
+                      'when the model gave a similar estimate (half the ' +
+                      'interquartile range). A size of error, not a ' +
+                      'correction: the number above is the model output.">\u24d8</span></div>'
                     : '';
             })() +
             /* NHC RI definition: ≥30 kt in 24 h (scaled to the true baseline). */
@@ -1947,9 +1954,12 @@
                 var a = distErrAt(j, p.v, 25, 'pmin_dist'),
                     b = distErrAt(j, p.v, 75, 'pmin_dist');
                 return (a !== null && b !== null)
-                    ? '<div class="exp-tile-sub">IQR ' +
-                      Math.round(p.v + a) + '\u2013' + Math.round(p.v + b) +
-                      ' hPa</div>'
+                    ? '<div class="exp-tile-sub">typical error \u00b1' +
+                      Math.round((b - a) / 2) + ' hPa' +
+                      ' <span title="Half the spread of the middle 50% of held-out errors ' +
+                      'when the model gave a similar estimate (half the ' +
+                      'interquartile range). A size of error, not a ' +
+                      'correction: the number above is the model output.">\u24d8</span></div>'
                     : '';
             })() +
             '<div class="exp-tile-sub">at ' + p.t.slice(11, 16) + 'Z</div></div>';
