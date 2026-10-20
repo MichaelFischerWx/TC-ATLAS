@@ -404,17 +404,29 @@
         var q = j[key || 'vmax_dist'].err_q['p' + (pct < 10 ? '0' + pct : pct)];
         return (q && q[i] !== null && q[i] !== undefined) ? q[i] : null;
     }
+    /* Physical pressure bound (TC-SWARM doc §58, 2026-10-20): a storm's
+       central pressure must sit below its environment, so the producer
+       publishes every pressure at or below the frame's Penv - 1 hPa (1015
+       where Penv is missing). Pressure bands drawn here stop at the same
+       bound. */
+    function pBound(f) {
+        var pe = f && f.penv_hpa;
+        return (pe != null && isFinite(pe)) ? pe - 1 : 1015;
+    }
+
     function distBounds(j, plo, phi, key, field) {
         var fr = j.frames || [];
         key = key || 'vmax_dist'; field = field || 'vmax_kt';
         if (!j[key] || !j[key].err_q) return null;
+        var pres = key === 'pmin_dist';
         var lo = [], hi = [], any = false;
         fr.forEach(function (f) {
             var v = f[field];
             var a = (v == null) ? null : distErrAt(j, v, plo, key);
             var b = (v == null) ? null : distErrAt(j, v, phi, key);
             if (a === null || b === null) { lo.push(null); hi.push(null); return; }
-            lo.push(v + a); hi.push(v + b); any = true;
+            var cap = pres ? pBound(f) : Infinity;
+            lo.push(Math.min(v + a, cap)); hi.push(Math.min(v + b, cap)); any = true;
         });
         return any ? { lo: lo, hi: hi } : null;
     }
@@ -3227,16 +3239,17 @@
         var el = document.getElementById(elId);
         if (!el) return;
         if (!d || !d.err_q || !d.pcts || !v) { el.innerHTML = ''; return; }
+        var cap = key === 'pmin_dist' ? pBound(v.f) : Infinity;   // §58 bound
         var xs = [], ys = [];
         d.pcts.forEach(function (pc) {
             var e = distErrAt(j, v.v, pc, key);
-            if (e !== null) { xs.push(v.v + e); ys.push(pc); }
+            if (e !== null) { xs.push(Math.min(v.v + e, cap)); ys.push(pc); }
         });
         if (xs.length < 4) { el.innerHTML = ''; return; }
         var bi = distBin(j, v.v, key);
         var n = (d.n && bi >= 0) ? d.n[bi] : null;
-        var q25 = v.v + (distErrAt(j, v.v, 25, key) || 0);
-        var q75 = v.v + (distErrAt(j, v.v, 75, key) || 0);
+        var q25 = Math.min(v.v + (distErrAt(j, v.v, 25, key) || 0), cap);
+        var q75 = Math.min(v.v + (distErrAt(j, v.v, 75, key) || 0), cap);
         var dark = document.documentElement.getAttribute('data-theme') === 'dark';
         var grid = dark ? '#1e293b' : '#e2e8f0';
         var fc = dark ? '#cbd5e1' : '#334155';
@@ -3733,16 +3746,22 @@
         ['Corridor specialist', 'Intensity-corridor specialist', 'deepen-only specialist trained on aircraft-observed majors'],
         ['Physics-based member', 'Averaging with the physics-based member', 'the published pressure is the mean of this model and a separate physics-based pressure model']
     ];
+    /* Shown only on frames where the producer's §58 bound moved the published
+       pressure (it keeps the pre-bound value in s58_raw.pmin_hpa), so the rows
+       still add up exactly to the published value. */
+    var WHY_PB = ['Physical bound', 'Physical pressure bound', 'a storm’s central pressure must sit below its environment, so the published value is capped 1 hPa below the environmental pressure'];
     function whySteps(f) {
         var pre = (f.vmax_tree_raw_kt != null) ? f.vmax_tree_raw_kt : f.vmax_kt;
         var v = [f.vmax_inst_kt, f.lay_v_raw, f.lay_v_sm, f.lay_v_tier, f.lay_v_cor,
                  f.lay_v_floor, pre, f.vmax_kt];
-        var p = [f.lay_p_raw, f.lay_p_sm, f.lay_p_tier, f.lay_p_cor,
-                 (f.pmin_hpa != null ? f.pmin_hpa : f.lay_p_cor)];
+        var pPub = (f.pmin_hpa != null ? f.pmin_hpa : f.lay_p_cor);
+        var pPre = (f.s58_raw && f.s58_raw.pmin_hpa != null) ? f.s58_raw.pmin_hpa : pPub;
+        var p = [f.lay_p_raw, f.lay_p_sm, f.lay_p_tier, f.lay_p_cor, pPre];
         var dv = [], dp = [];
         for (var i = 1; i < v.length; i++) dv.push(Math.round((v[i] - v[i - 1]) * 10) / 10);
         for (var k = 1; k < p.length; k++) dp.push(Math.round((p[k] - p[k - 1]) * 10) / 10);
-        return { v: v, p: p, dv: dv, dp: dp };
+        return { v: v, p: p, dv: dv, dp: dp, pPub: pPub,
+                 dBound: Math.round((pPub - pPre) * 10) / 10 };
     }
     function whySgn(d, dp) {
         var r = d.toFixed(dp == null ? 1 : dp);
@@ -3864,7 +3883,7 @@
             '<div style="font-size:30px;font-weight:700;color:' + ink + ';letter-spacing:-0.5px;line-height:1;">' +
             Math.round(f.vmax_kt) + '<span style="font-size:14px;font-weight:600;color:' + muted + '"> kt</span>' +
             '<span style="font-size:18px;font-weight:600;color:' + muted + ';margin-left:10px;">' +
-            Math.round(S.p[4]) + ' hPa</span></div>' +
+            Math.round(S.pPub) + ' hPa</span></div>' +
             '<div style="flex:1;min-width:240px;font-size:13px;color:' + fc + ';line-height:1.45;">' + story + '</div></div>' +
             '<div style="display:flex;gap:10px;align-items:center;margin:8px 0 10px;">' +
             '<input type="range" id="exp-why-slider" min="0" max="' + (idx.length - 1) +
@@ -3972,9 +3991,11 @@
            '<b>Single-image estimate</b><br>' + wrap('the intensity model applied to this image and its recent infrared history', 44),
            WHY_V, S.dv, S.v[0], f.vmax_kt, false,
            corrAnn(corrV, f.corr_v_on, srcV, 'corr_v_kt', ' kt'));
+        var bnd = Math.abs(S.dBound) >= 0.05;
         wf('exp-why-p', 'Minimum pressure (hPa)', ' hPa', 'Pressure head',
            '<b>Pressure head</b><br>' + wrap('the pressure model applied to this image, storm history and environmental pressure', 44),
-           WHY_P, S.dp, S.p[0], S.p[4], true,
+           bnd ? WHY_P.concat([WHY_PB]) : WHY_P, bnd ? S.dp.concat([S.dBound]) : S.dp,
+           S.p[0], S.pPub, true,
            corrAnn(corrP, f.corr_p_on, srcP, 'corr_p_hpa', ' hPa'));
 
         /* Through the storm's life: wind steps stacked relative to the
