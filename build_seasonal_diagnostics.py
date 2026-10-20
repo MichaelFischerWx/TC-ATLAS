@@ -108,6 +108,25 @@ def _upload_blob(src: Path, name: str, content_type: str) -> None:
 # Core daily step
 # --------------------------------------------------------------------------
 
+def _trop_mean_full_lon(ds: xr.Dataset, time_index: int) -> float | None:
+    """All-longitude 30°S–30°N tropical-mean SST for one timestep of an open
+    PSL OISST dataset — the definition the env sst_rel layer and
+    build_oisst_history use. The regional grid stays cropped; only this
+    band is read at full longitude. None on failure (caller falls back)."""
+    from build_oisst_history import (tropical_mean_sst, TROPICAL_MEAN_LAT_MIN,
+                                     TROPICAL_MEAN_LAT_MAX)
+    try:
+        band = ds["sst"].isel(time=time_index).sel(
+            lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX)).load()
+        v = np.ascontiguousarray(band.values, dtype=np.float64)
+        v[np.abs(v) > 50.0] = np.nan
+        tm = tropical_mean_sst(v, band["lat"].values, band["lon"].values)
+        return float(tm) if np.isfinite(tm) else None
+    except Exception as e:
+        log.warning("  tropical-mean (all-lon) read failed: %s", e)
+        return None
+
+
 def _fetch_oisst_single_day(year: int) -> xr.DataArray | None:
     """Open year's daily OISST OPeNDAP file and return the last non-empty
     timestep, subset to the Atlantic+tropics box. Single-time-slice fetches
@@ -136,7 +155,8 @@ def _fetch_oisst_single_day(year: int) -> xr.DataArray | None:
                         "lat": slab["lat"].values.copy(),
                         "lon": slab["lon"].values.copy(),
                     },
-                    attrs={"time": str(np.datetime64(t, "D"))},
+                    attrs={"time": str(np.datetime64(t, "D")),
+                           "trop_mean_sst": _trop_mean_full_lon(ds, -k)},
                 )
     finally:
         ds.close()
@@ -267,16 +287,30 @@ def compute_today_indices(sst: xr.DataArray, clim_mean: xr.DataArray) -> tuple:
     clim_today = _interp_month_climatology(clim_mean, valid_date)
     anom = sst - clim_today
 
-    # Tropical-mean anomaly (matches the build_oisst_history band).
+    # Tropical-mean anomaly: 30°S–30°N, ALL longitudes, cos-lat weighted —
+    # the same definition as build_oisst_history and the env sst_rel layer.
+    # The caller attaches the all-longitude tropical-mean SST (the regional
+    # slab here is cropped to 100–360°E); its climatology comes from the
+    # climatology file's TROP_CLIM_ATTR.
     from build_oisst_history import (TROPICAL_MEAN_LAT_MIN,
-                                     TROPICAL_MEAN_LAT_MAX)
-    trop = anom.sel(lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX))
-    w = np.cos(np.deg2rad(trop.lat.values))[:, None]
-    finite = np.isfinite(trop.values)
-    w2 = np.where(finite, w * np.ones_like(trop.values), 0)
-    s2 = np.where(finite, trop.values, 0)
-    den = w2.sum()
-    trop_anom_mean = float((s2 * w2).sum() / den) if den > 0 else 0.0
+                                     TROPICAL_MEAN_LAT_MAX, trop_clim_for_day)
+    trop_anom_mean = None
+    tm = sst.attrs.get("trop_mean_sst")
+    if tm is not None:
+        d = pd.Timestamp(valid_date)
+        tc = trop_clim_for_day(clim_mean, d.year, d.month, d.day)
+        if tc is not None and np.isfinite(tc):
+            trop_anom_mean = float(tm) - float(tc)
+    if trop_anom_mean is None:
+        log.warning("  tropical mean: all-longitude value or its climatology "
+                    "unavailable — falling back to the cropped (100–360°E) grid")
+        trop = anom.sel(lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX))
+        w = np.cos(np.deg2rad(trop.lat.values))[:, None]
+        finite = np.isfinite(trop.values)
+        w2 = np.where(finite, w * np.ones_like(trop.values), 0)
+        s2 = np.where(finite, trop.values, 0)
+        den = w2.sum()
+        trop_anom_mean = float((s2 * w2).sum() / den) if den > 0 else 0.0
     anom_rel = anom - trop_anom_mean
     anom_rel.attrs = dict(anom.attrs)
 
@@ -340,7 +374,7 @@ def fetch_month_mean_anomaly(clim_mean: xr.DataArray,
                 v, dims=("lat", "lon"),
                 coords={"lat": slab["lat"].values.copy(),
                         "lon": slab["lon"].values.copy()},
-                attrs={"time": ts})
+                attrs={"time": ts, "trop_mean_sst": _trop_mean_full_lon(ds, i)})
             _row, a, ar = compute_today_indices(day_da, clim_mean)
             anoms.append(a)
             rels.append(ar)

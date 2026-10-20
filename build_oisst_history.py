@@ -495,25 +495,155 @@ def _open_monthly_oisst(local_path: str | None = None) -> xr.DataArray:
 # Vecchi & Soden (2007) tropical band. 30°S–30°N is the published choice;
 # Camargo and some genesis-index work use 20°S–20°N. Documented in the
 # Panel A/B/D/E tooltips so the audience knows which we picked.
+#
+# Definition (ONE definition site-wide): cos(lat)-weighted mean over ocean
+# (finite) cells, 30°S–30°N, ALL longitudes 0–360°E. This is what the env
+# `sst_rel` layer uses (build_env_overlays.build_sst_anomalies: |lat| ≤ 30,
+# every longitude, cos-lat weights over finite cells) and what
+# precompute_relative_sst.py uses. The REGIONAL grid here stays cropped to
+# LON_MIN..LON_MAX (Panel D maps, region boxes); the tropical mean is taken
+# from a separate full-longitude read of the band, never from that crop.
+# (Until 2026-10 this file averaged 30°S–30°N × 100–360°E only, which left
+# out the western Indian Ocean and the Atlantic east of 0°.)
 TROPICAL_MEAN_LAT_MIN = -30.0
 TROPICAL_MEAN_LAT_MAX = 30.0
+TROPICAL_MEAN_DEFINITION = ("cos-lat weighted ocean mean, 30S-30N, all "
+                            "longitudes (same as env sst_rel)")
+
+# Attribute on `sst_clim_mean` in oisst_monclim_1991_2020.nc holding the
+# 12 monthly 1991-2020 tropical-mean climatology values (°C) under the
+# definition above. The stored grid itself is cropped, so callers that need
+# the tropical-mean climatology (daily relative anomalies, the projected
+# preliminary point) read it from here instead of averaging the crop.
+TROP_CLIM_ATTR = "trop_mean_clim_30s30n_all_lon"
+
+
+def _assert_full_lon(lon_vals: np.ndarray) -> None:
+    """Guard: the tropical mean must never be computed on a lon crop."""
+    lon_vals = np.asarray(lon_vals, dtype=np.float64)
+    # Covered span = first-to-last centre + one cell (0.125..359.875 at
+    # 0.25° → 360°; the 100-360E crop → 260°).
+    covered = (lon_vals.max() - lon_vals.min()
+               + float(np.median(np.diff(np.sort(lon_vals))))) if lon_vals.size > 1 else 0.0
+    if covered < 359.0:
+        raise ValueError(
+            "tropical-mean SST needs ALL longitudes (got %.2f..%.2f); "
+            "read the 30S-30N band without the LON_MIN/LON_MAX crop"
+            % (float(lon_vals.min()), float(lon_vals.max())))
+
+
+def tropical_mean_sst(vals: np.ndarray, lat_vals: np.ndarray,
+                      lon_vals: np.ndarray) -> np.ndarray | float:
+    """cos(lat)-weighted NaN-safe mean over 30°S–30°N, all longitudes.
+
+    `vals` is (..., lat, lon) on a FULL-longitude grid. Returns an array of
+    the leading shape (a float for a 2-D slab). Rows outside the band are
+    ignored, so a ±60° or global slab can be passed as is. Public so other
+    jobs (build_seasonal_diagnostics.compute_today_indices) can share it."""
+    _assert_full_lon(lon_vals)
+    lat_vals = np.asarray(lat_vals, dtype=np.float64)
+    band = (lat_vals >= TROPICAL_MEAN_LAT_MIN) & (lat_vals <= TROPICAL_MEAN_LAT_MAX)
+    sub = np.asarray(vals)[..., band, :]
+    w = np.cos(np.deg2rad(lat_vals[band]))[:, None]
+    finite = np.isfinite(sub)
+    w2 = np.where(finite, w, 0.0)
+    num = (np.where(finite, sub, 0.0) * w2).sum(axis=(-2, -1))
+    den = w2.sum(axis=(-2, -1))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out = np.where(den > 0, num / den, np.nan)
+    return float(out) if np.ndim(out) == 0 else out
 
 
 def _tropical_mean_sst(sst_da: xr.DataArray) -> np.ndarray:
-    """Area-weighted mean SST over TROPICAL_MEAN_LAT_MIN..MAX × LON_MIN..MAX
-    at each time step in `sst_da` (dims time × lat × lon). Returns a 1D
-    array shaped (n_time,)."""
-    sub = sst_da.sel(lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX))
-    w = np.cos(np.deg2rad(sub.lat.values))
-    # NaN-safe area-weighted mean across (lat, lon) at each time.
-    vals = sub.values   # (time, lat, lon)
-    finite = np.isfinite(vals)
-    w2 = w[None, :, None] * np.ones_like(vals)
-    w2 = np.where(finite, w2, 0)
-    vals0 = np.where(finite, vals, 0)
-    num = (vals0 * w2).sum(axis=(1, 2))
-    den = w2.sum(axis=(1, 2))
-    return np.where(den > 0, num / den, np.nan)
+    """Tropical-mean SST (definition above) at each time step of `sst_da`
+    (dims time × lat × lon, FULL longitude). Returns shape (n_time,)."""
+    return np.atleast_1d(tropical_mean_sst(sst_da.values, sst_da.lat.values,
+                                           sst_da.lon.values))
+
+
+def _open_monthly_trop_mean(local_path: str | None = None,
+                            chunk: int = 48) -> xr.DataArray:
+    """Tropical-mean SST per month from the FULL-longitude monthly OISST
+    file (the regional reads crop to LON_MIN..LON_MAX; this one does not).
+    Reads only the 30S-30N band in time chunks (~65 MB each). Returns a
+    1-D DataArray on the file's time axis."""
+    path = Path(local_path or OISST_MONTHLY_LOCAL_DEFAULT)
+    if not path.exists():
+        raise FileNotFoundError(f"Monthly OISST file not found at {path}")
+    with xr.open_dataset(path) as ds:
+        band = ds["sst"].sel(lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX))
+        lat_vals = band["lat"].values.copy()
+        lon_vals = band["lon"].values.copy()
+        time_vals = band["time"].values.copy()
+        out = np.full(len(time_vals), np.nan, dtype=np.float64)
+        for i0 in range(0, len(time_vals), chunk):
+            v = np.asarray(band.isel(time=slice(i0, i0 + chunk)).values,
+                           dtype=np.float32)
+            v[np.abs(v) > 50.0] = np.nan
+            out[i0:i0 + chunk] = tropical_mean_sst(v, lat_vals, lon_vals)
+    return xr.DataArray(out, dims=("time",), coords={"time": time_vals},
+                        name="trop_mean_sst")
+
+
+def _trop_clim_from_series(trop_series: xr.DataArray) -> np.ndarray:
+    """(12,) 1991-2020 calendar-month mean of a tropical-mean series."""
+    clim = trop_series.sel(time=slice(f"{CLIMO_START_YEAR}-01-01",
+                                      f"{CLIMO_END_YEAR}-12-31"))
+    by_month = clim.groupby("time.month").mean("time")
+    out = np.full(12, np.nan, dtype=np.float64)
+    for m, v in zip(by_month["month"].values, by_month.values):
+        out[int(m) - 1] = float(v)
+    return out
+
+
+def _trop_mean_clim_monthly(clim_mean: xr.DataArray,
+                            monthly_path: str | None = None,
+                            allow_monthly_file: bool = True) -> np.ndarray | None:
+    """(12,) tropical-mean SST climatology (definition above).
+
+    Read from the TROP_CLIM_ATTR attribute that build_climatology writes;
+    for a climatology file built before that attribute existed, recomputed
+    from the full-longitude monthly OISST file when it is available
+    locally. Returns None when neither source exists — callers must not
+    fall back to averaging the lon-cropped climatology grid."""
+    attr = clim_mean.attrs.get(TROP_CLIM_ATTR)
+    if attr is not None:
+        arr = np.asarray(attr, dtype=np.float64).ravel()
+        if arr.size == 12 and np.isfinite(arr).all():
+            return arr
+    if not allow_monthly_file:
+        return None
+    path = Path(monthly_path or OISST_MONTHLY_LOCAL_DEFAULT)
+    if path.exists():
+        log.info("  climatology lacks %s; computing it from %s",
+                 TROP_CLIM_ATTR, path.name)
+        return _trop_clim_from_series(_open_monthly_trop_mean(str(path)))
+    return None
+
+
+def add_trop_clim_attr(climo_path: Path, monthly_path: str | None = None) -> bool:
+    """Upgrade an existing oisst_monclim_1991_2020.nc in place with the
+    TROP_CLIM_ATTR attribute (no change to the gridded values). Returns
+    True if the attribute is present afterwards."""
+    with xr.open_dataset(climo_path) as ds:
+        if TROP_CLIM_ATTR in ds["sst_clim_mean"].attrs:
+            return True
+        ds = ds.load()
+    tclim = _trop_mean_clim_monthly(ds["sst_clim_mean"], monthly_path)
+    if tclim is None:
+        log.warning("  cannot add %s to %s: monthly OISST file unavailable",
+                    TROP_CLIM_ATTR, climo_path.name)
+        return False
+    ds["sst_clim_mean"].attrs[TROP_CLIM_ATTR] = [round(float(v), 4) for v in tclim]
+    ds["sst_clim_mean"].attrs["trop_mean_definition"] = TROPICAL_MEAN_DEFINITION
+    enc = {v: {"zlib": True, "complevel": 4} for v in ("sst_clim_mean", "sst_clim_std")
+           if v in ds.data_vars}
+    tmp = climo_path.with_suffix(climo_path.suffix + ".tmp")
+    ds.to_netcdf(tmp, encoding=enc)
+    tmp.replace(climo_path)
+    log.info("  added %s to %s: %s", TROP_CLIM_ATTR, climo_path.name,
+             np.round(tclim, 3).tolist())
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -539,6 +669,13 @@ def build_climatology(out_path: Path, monthly_path: str | None = None) -> Path:
     grouped = full.groupby("time.month")
     mon_mean = grouped.mean(dim="time").rename("sst_clim_mean")
     mon_std = grouped.std(dim="time").rename("sst_clim_std")
+    # Tropical-mean climatology from a separate FULL-longitude band read —
+    # the grid above is lon-cropped, so it can't be averaged for this.
+    tclim = _trop_clim_from_series(_open_monthly_trop_mean(monthly_path))
+    mon_mean.attrs[TROP_CLIM_ATTR] = [round(float(v), 4) for v in tclim]
+    mon_mean.attrs["trop_mean_definition"] = TROPICAL_MEAN_DEFINITION
+    log.info("  tropical-mean climatology (all lon): %s",
+             np.round(tclim, 3).tolist())
     out = xr.merge([mon_mean, mon_std])
     out.attrs["title"] = "OISST v2.1 month-of-year climatology (mean + std)"
     out.attrs["reference_period"] = f"{CLIMO_START_YEAR}-{CLIMO_END_YEAR}"
@@ -564,6 +701,25 @@ def _interp_daily_clim(climo_mean: xr.DataArray, year: int, month: int,
     """Linearly interpolate the 12-month climatology to a specific calendar
     day. Treats each month's value as anchored at the 15th and advances
     fractionally toward the adjacent month's 15th."""
+    m_lo, m_hi, frac = _clim_interp_weights(year, month, day)
+    a = climo_mean.sel(month=m_lo).values
+    b = climo_mean.sel(month=m_hi).values
+    return a + (b - a) * frac
+
+
+def _interp_daily_scalar(clim12: np.ndarray, year: int, month: int,
+                         day: int) -> float:
+    """`_interp_daily_clim` for a (12,) scalar climatology (e.g. the
+    tropical-mean SST climatology)."""
+    m_lo, m_hi, frac = _clim_interp_weights(year, month, day)
+    a = float(clim12[m_lo - 1])
+    b = float(clim12[m_hi - 1])
+    return a + (b - a) * frac
+
+
+def _clim_interp_weights(year: int, month: int, day: int) -> tuple:
+    """(month_lo, month_hi, frac) for the mid-month-anchored linear
+    interpolation shared by the gridded and scalar climatologies."""
     import pandas as pd
     d = pd.Timestamp(year, month, day)
     this_15 = pd.Timestamp(year, month, 15)
@@ -578,9 +734,19 @@ def _interp_daily_clim(climo_mean: xr.DataArray, year: int, month: int,
         prev_15 = (pd.Timestamp(year - 1, 12, 15) if month == 1
                    else pd.Timestamp(year, month - 1, 15))
         frac = (d - prev_15).days / (this_15 - prev_15).days
-    a = climo_mean.sel(month=m_lo).values
-    b = climo_mean.sel(month=m_hi).values
-    return a + (b - a) * frac
+    return m_lo, m_hi, frac
+
+
+def trop_clim_for_day(climo_mean: xr.DataArray, year: int, month: int,
+                      day: int) -> float | None:
+    """Tropical-mean SST climatology (all longitudes) for a calendar day,
+    from the TROP_CLIM_ATTR attribute. None if the climatology file
+    predates it. Public for build_seasonal_diagnostics: today's tropical-
+    mean anomaly = tropical_mean_sst(full-lon slab) − this."""
+    tclim = _trop_mean_clim_monthly(climo_mean, allow_monthly_file=False)
+    if tclim is None:
+        return None
+    return _interp_daily_scalar(tclim, year, month, day)
 
 
 def _fetch_current_month_preliminary(climo_mean: xr.DataArray) -> dict | None:
@@ -613,8 +779,11 @@ def _fetch_current_month_preliminary(climo_mean: xr.DataArray) -> dict | None:
         log.warning("  preliminary current-month fetch failed (open): %s", e)
         return None
     try:
-        sub = ds.sel(lat=slice(LAT_MIN, LAT_MAX), lon=slice(LON_MIN, LON_MAX))
-        all_times = sub["time"].values
+        # ±60° × ALL longitudes in one read per day: the region crop below is
+        # sliced from it in memory, and the tropical mean needs every
+        # longitude (TROPICAL_MEAN_DEFINITION).
+        full = ds["sst"].sel(lat=slice(LAT_MIN, LAT_MAX))
+        all_times = full["time"].values
         day_idx, day_nums = [], []
         for i, t in enumerate(all_times):
             ts = str(t)[:10]
@@ -624,32 +793,38 @@ def _fetch_current_month_preliminary(climo_mean: xr.DataArray) -> dict | None:
         if not day_idx:
             log.warning("  preliminary current-month: no days available yet")
             return None
-        lat_vals = sub["lat"].values.copy()
-        lon_vals = sub["lon"].values.copy()
+        lat_vals = full["lat"].values.copy()
+        lon_full = full["lon"].values.copy()
+        crop = (lon_full >= LON_MIN) & (lon_full <= LON_MAX)
+        lon_vals = lon_full[crop]
         log.info("  fetching %d daily slabs one-at-a-time for %d-%02d ...",
                  len(day_idx), year, month)
+        shape_full = (len(lat_vals), len(lon_full))
         shape = (len(lat_vals), len(lon_vals))
-        accum_sst = np.zeros(shape, dtype=np.float64)
+        accum_sst_full = np.zeros(shape_full, dtype=np.float64)
+        accum_n_full = np.zeros(shape_full, dtype=np.int32)
         accum_anom = np.zeros(shape, dtype=np.float64)
-        accum_n = np.zeros(shape, dtype=np.int32)
         for k, d in zip(day_idx, day_nums):
-            slab = sub["sst"].isel(time=k).load()
-            v = np.ascontiguousarray(slab.values)
-            v[np.abs(v) > 50.0] = np.nan
+            vf = np.array(full.isel(time=k).load().values, dtype=np.float32)
+            vf[np.abs(vf) > 50.0] = np.nan
+            mf = np.isfinite(vf)
+            accum_sst_full[mf] += vf[mf]
+            accum_n_full[mf] += 1
+            v = vf[:, crop]
             climo_day = _interp_daily_clim(climo_mean, year, month, d)
             anom = v - climo_day
             mask = np.isfinite(v)
-            accum_sst[mask] += v[mask]
             accum_anom[mask] += anom[mask]
-            accum_n[mask] += 1
     finally:
         ds.close()
 
-    if accum_n.max() == 0:
+    if accum_n_full.max() == 0:
         log.warning("  preliminary current-month: all days returned no data")
         return None
     with np.errstate(invalid="ignore", divide="ignore"):
-        mtd_sst = np.where(accum_n > 0, accum_sst / accum_n, np.nan)
+        mtd_sst_full = np.where(accum_n_full > 0, accum_sst_full / accum_n_full, np.nan)
+        accum_n = accum_n_full[:, crop]
+        mtd_sst = mtd_sst_full[:, crop]
         mtd_anom = np.where(accum_n > 0, accum_anom / accum_n, np.nan)
 
     climo_full = climo_mean.sel(month=month).values
@@ -665,29 +840,40 @@ def _fetch_current_month_preliminary(climo_mean: xr.DataArray) -> dict | None:
     mtd_anom_da = _da(mtd_anom)
     projected_sst_da = _da(projected_sst)
     # Tropical-mean SST for the preliminary period (Vecchi-Soden
-    # relative-SST framework). Use the same MTD slab — area-weighted
-    # mean over 30°S-30°N within the OISST subset.
-    sub = mtd_sst_da.sel(lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX))
-    w = np.cos(np.deg2rad(sub.lat.values))[:, None]
-    finite = np.isfinite(sub.values)
-    w2 = np.where(finite, w * np.ones_like(sub.values), 0)
-    s2 = np.where(finite, sub.values, 0)
-    trop_mean_mtd = float((s2 * w2).sum() / w2.sum()) if w2.sum() > 0 else float("nan")
+    # relative-SST framework): 30°S-30°N, ALL longitudes, of the MTD field.
+    trop_mean_mtd = tropical_mean_sst(mtd_sst_full, lat_vals, lon_full)
     # Projected tropical-mean (persistence-anom): the SAME extrapolation
     # applied to the region — climo_full + mtd_anom — area-averaged over the
-    # tropics. Computed from projected_sst_da, NOT held at trop_mean_mtd:
-    # the tropics also warm over the remaining days, and in the Vecchi-Soden
-    # relative frame (region − tropics) that within-month seasonal warming
-    # must cancel. Holding the reference at MTD would over-credit the
-    # region's seasonal warming, so the projected relative SST would sit too
-    # far from the MTD value. With both extrapolated, the projected relative
-    # point differs from MTD only by the (small) change in the spatial
-    # region-minus-tropics gradient — which is the physically correct result.
-    psub = projected_sst_da.sel(lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX))
-    pfinite = np.isfinite(psub.values)
-    pw2 = np.where(pfinite, w * np.ones_like(psub.values), 0)
-    ps2 = np.where(pfinite, psub.values, 0)
-    trop_mean_proj = float((ps2 * pw2).sum() / pw2.sum()) if pw2.sum() > 0 else float("nan")
+    # tropics, NOT held at trop_mean_mtd: the tropics also warm over the
+    # remaining days, and in the Vecchi-Soden relative frame (region −
+    # tropics) that within-month seasonal warming must cancel. Holding the
+    # reference at MTD would over-credit the region's seasonal warming, so
+    # the projected relative SST would sit too far from the MTD value.
+    # Band-mean of (climo_full + mtd_anom) = trop_mean_mtd + [Tclim(month) −
+    # mean over observed days of Tclim(day)], with Tclim the all-longitude
+    # tropical-mean climatology (the stored grid is lon-cropped).
+    tclim = _trop_mean_clim_monthly(climo_mean, allow_monthly_file=False)
+    if tclim is not None:
+        seas_incr = float(tclim[month - 1]) - float(np.mean(
+            [_interp_daily_scalar(tclim, year, month, d) for d in day_nums]))
+    else:
+        # Climatology file predates TROP_CLIM_ATTR: estimate only the small
+        # seasonal INCREMENT from the cropped band (the level above is
+        # already all-longitude). Re-upload the climatology to remove this.
+        log.warning("  climatology lacks %s; projected tropical-mean "
+                    "increment estimated on the 100-360E band", TROP_CLIM_ATTR)
+        band = (lat_vals >= TROPICAL_MEAN_LAT_MIN) & (lat_vals <= TROPICAL_MEAN_LAT_MAX)
+        w = np.cos(np.deg2rad(lat_vals[band]))[:, None]
+
+        def _bmean(a):
+            a = a[band]
+            f = np.isfinite(a)
+            w2 = np.where(f, w, 0.0)
+            return float((np.where(f, a, 0.0) * w2).sum() / w2.sum())
+        seas_incr = _bmean(climo_full) - float(np.mean(
+            [_bmean(_interp_daily_clim(climo_mean, year, month, d))
+             for d in day_nums]))
+    trop_mean_proj = trop_mean_mtd + seas_incr
 
     row = {"date": f"{year}-{month:02d}", "preliminary": True,
            "n_days": int(len(day_idx)), "as_of": today.isoformat()}
@@ -732,6 +918,55 @@ def _open_daily_year(year: int):
         return None
 
 
+def _accumulate_daily_month(year: int, month: int, what: str) -> dict | None:
+    """Monthly-mean SST of a COMPLETE calendar month from the daily archive.
+
+    Reads ±60° × ALL longitudes once per day; returns the lon-cropped grid
+    (LON_MIN..LON_MAX, the regional/analog grid) plus the all-longitude
+    tropical mean (TROPICAL_MEAN_DEFINITION). None if the month is not yet
+    complete or has no data. `what` labels the skip log line."""
+    import calendar
+    ndays_expected = calendar.monthrange(year, month)[1]
+    ds = _open_daily_year(year)
+    if ds is None:
+        return None
+    try:
+        full = ds["sst"].sel(lat=slice(LAT_MIN, LAT_MAX))
+        all_times = full["time"].values
+        day_idx = [i for i, t in enumerate(all_times)
+                   if str(t)[:7] == f"{year}-{month:02d}"]
+        if len(day_idx) < ndays_expected:
+            log.info("  %d-%02d not yet complete in daily archive (%d/%d days);"
+                     " skipping %s", year, month, len(day_idx), ndays_expected, what)
+            return None
+        lat_vals = full["lat"].values.copy()
+        lon_full = full["lon"].values.copy()
+        shape = (len(lat_vals), len(lon_full))
+        accum = np.zeros(shape, dtype=np.float64)
+        accum_n = np.zeros(shape, dtype=np.int32)
+        for k in day_idx:
+            v = np.array(full.isel(time=k).load().values, dtype=np.float32)
+            v[np.abs(v) > 50.0] = np.nan
+            mask = np.isfinite(v)
+            accum[mask] += v[mask]
+            accum_n[mask] += 1
+    finally:
+        ds.close()
+
+    if accum_n.max() == 0:
+        return None
+    with np.errstate(invalid="ignore", divide="ignore"):
+        month_full = np.where(accum_n > 0, accum / accum_n, np.nan)
+    crop = (lon_full >= LON_MIN) & (lon_full <= LON_MAX)
+    return {
+        "grid": month_full[:, crop].astype(np.float32),
+        "lat": lat_vals,
+        "lon": lon_full[crop],
+        "trop_mean": tropical_mean_sst(month_full, lat_vals, lon_full),
+        "n_days": len(day_idx),
+    }
+
+
 def _fetch_completed_month_from_daily(clim_mean: xr.DataArray,
                                       year: int, month: int) -> dict | None:
     """Build a finalized-quality monthly index row for a COMPLETE calendar
@@ -751,39 +986,12 @@ def _fetch_completed_month_from_daily(clim_mean: xr.DataArray,
     `preliminary=False, daily_derived=True`; projected/detrended columns are
     left for the caller (NaN / trend loop). Returns None if the month is not
     yet fully present in the daily archive."""
-    import calendar
-    ndays_expected = calendar.monthrange(year, month)[1]
-    ds = _open_daily_year(year)
-    if ds is None:
+    acc = _accumulate_daily_month(year, month, "daily-derived fill")
+    if acc is None:
         return None
-    try:
-        sub = ds.sel(lat=slice(LAT_MIN, LAT_MAX), lon=slice(LON_MIN, LON_MAX))
-        all_times = sub["time"].values
-        day_idx = [i for i, t in enumerate(all_times)
-                   if str(t)[:7] == f"{year}-{month:02d}"]
-        if len(day_idx) < ndays_expected:
-            log.info("  %d-%02d not yet complete in daily archive (%d/%d days);"
-                     " skipping daily-derived fill",
-                     year, month, len(day_idx), ndays_expected)
-            return None
-        lat_vals = sub["lat"].values.copy()
-        lon_vals = sub["lon"].values.copy()
-        shape = (len(lat_vals), len(lon_vals))
-        accum = np.zeros(shape, dtype=np.float64)
-        accum_n = np.zeros(shape, dtype=np.int32)
-        for k in day_idx:
-            v = np.ascontiguousarray(sub["sst"].isel(time=k).load().values)
-            v[np.abs(v) > 50.0] = np.nan
-            mask = np.isfinite(v)
-            accum[mask] += v[mask]
-            accum_n[mask] += 1
-    finally:
-        ds.close()
-
-    if accum_n.max() == 0:
-        return None
-    with np.errstate(invalid="ignore", divide="ignore"):
-        month_sst = np.where(accum_n > 0, accum / accum_n, np.nan)
+    month_sst = acc["grid"]
+    lat_vals, lon_vals = acc["lat"], acc["lon"]
+    day_idx = range(acc["n_days"])
 
     month_sst_da = xr.DataArray(
         month_sst.astype(np.float32), dims=("lat", "lon"),
@@ -794,15 +1002,9 @@ def _fetch_completed_month_from_daily(clim_mean: xr.DataArray,
     anom_da = xr.DataArray(
         anom_grid.astype(np.float32), dims=("lat", "lon"),
         coords={"lat": lat_vals, "lon": lon_vals}, name="sst")
-    # Tropical-mean SST for the Vecchi-Soden relative framework (area-weighted
-    # 30°S-30°N mean of this month's grid) — mirrors _tropical_mean_sst.
-    tsub = month_sst_da.sel(lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX))
-    tw = np.cos(np.deg2rad(tsub.lat.values))[:, None]
-    tfinite = np.isfinite(tsub.values)
-    tw2 = np.where(tfinite, tw * np.ones_like(tsub.values), 0.0)
-    tden = tw2.sum()
-    trop_mean = (float((np.where(tfinite, tsub.values, 0.0) * tw2).sum() / tden)
-                 if tden > 0 else float("nan"))
+    # Tropical-mean SST for the Vecchi-Soden relative framework: 30°S-30°N,
+    # ALL longitudes, of this month's field — same as the finalized rows.
+    trop_mean = acc["trop_mean"]
 
     today = datetime.now(timezone.utc).date()
     row = {"date": f"{year}-{month:02d}", "preliminary": False,
@@ -826,62 +1028,33 @@ def _fetch_completed_month_from_daily(clim_mean: xr.DataArray,
 
 def _fetch_completed_month_grid_from_daily(
         year: int, month: int,
-        lat_ref: np.ndarray, lon_ref: np.ndarray) -> np.ndarray | None:
+        lat_ref: np.ndarray, lon_ref: np.ndarray) -> tuple | None:
     """Full gridded monthly-mean SST for a COMPLETE calendar month, built
     from the daily OISST archive, on the SAME (lat, lon) subset grid the
-    monthly file uses.
+    monthly file uses, plus that month's all-longitude tropical mean.
 
     Grid-space analogue of `_fetch_completed_month_from_daily` (which returns
     region means): `build_correlations` needs the whole field — not region
     reductions — to fill a slot in the SST stack so the grid-weighted analog
     matrix can include a just-finished month before NOAA publishes its monthly
-    mean (~2-week lag). Returns a float32 (lat, lon) array, or None if the
-    month is not yet fully present in the daily archive or the daily grid does
-    not match the reference grid."""
-    import calendar
-    ndays_expected = calendar.monthrange(year, month)[1]
-    ds = _open_daily_year(year)
-    if ds is None:
+    mean (~2-week lag). Returns (float32 (lat, lon) array, trop_mean), or
+    None if the month is not yet fully present in the daily archive or the
+    daily grid does not match the reference grid."""
+    acc = _accumulate_daily_month(year, month, "grid-weighted matrix fill")
+    if acc is None:
         return None
-    try:
-        sub = ds.sel(lat=slice(LAT_MIN, LAT_MAX), lon=slice(LON_MIN, LON_MAX))
-        all_times = sub["time"].values
-        day_idx = [i for i, t in enumerate(all_times)
-                   if str(t)[:7] == f"{year}-{month:02d}"]
-        if len(day_idx) < ndays_expected:
-            log.info("  %d-%02d not yet complete in daily archive (%d/%d days);"
-                     " skipping grid-weighted matrix fill",
-                     year, month, len(day_idx), ndays_expected)
-            return None
-        lat_vals = sub["lat"].values
-        lon_vals = sub["lon"].values
-        # The daily-derived field must drop into the monthly grid cell-for-cell
-        # (same 0.25° OISST v2.1 grid). Bail rather than silently misalign.
-        if (lat_vals.shape != lat_ref.shape or lon_vals.shape != lon_ref.shape
-                or not np.allclose(lat_vals, lat_ref)
-                or not np.allclose(lon_vals, lon_ref)):
-            log.warning("  %d-%02d daily grid does not match monthly grid; "
-                        "skipping grid-weighted matrix fill", year, month)
-            return None
-        shape = (len(lat_vals), len(lon_vals))
-        accum = np.zeros(shape, dtype=np.float64)
-        accum_n = np.zeros(shape, dtype=np.int32)
-        for k in day_idx:
-            v = np.ascontiguousarray(sub["sst"].isel(time=k).load().values)
-            v[np.abs(v) > 50.0] = np.nan
-            mask = np.isfinite(v)
-            accum[mask] += v[mask]
-            accum_n[mask] += 1
-    finally:
-        ds.close()
-
-    if accum_n.max() == 0:
+    lat_vals, lon_vals = acc["lat"], acc["lon"]
+    # The daily-derived field must drop into the monthly grid cell-for-cell
+    # (same 0.25° OISST v2.1 grid). Bail rather than silently misalign.
+    if (lat_vals.shape != lat_ref.shape or lon_vals.shape != lon_ref.shape
+            or not np.allclose(lat_vals, lat_ref)
+            or not np.allclose(lon_vals, lon_ref)):
+        log.warning("  %d-%02d daily grid does not match monthly grid; "
+                    "skipping grid-weighted matrix fill", year, month)
         return None
-    with np.errstate(invalid="ignore", divide="ignore"):
-        month_sst = np.where(accum_n > 0, accum / accum_n, np.nan)
     log.info("  daily-derived grid fill %d-%02d (%d days) for analog matrix",
-             year, month, len(day_idx))
-    return month_sst.astype(np.float32)
+             year, month, acc["n_days"])
+    return acc["grid"], acc["trop_mean"]
 
 
 def build_indices(climo_path: Path, out_path: Path,
@@ -922,14 +1095,13 @@ def build_indices(climo_path: Path, out_path: Path,
     # removes the global tropical warming signal, leaving only
     # differential warming (the dynamically meaningful part for TC
     # potential intensity work).
-    trop_mean_per_time = _tropical_mean_sst(sst)            # (n_time,)
-    # Climatological tropical-mean per calendar month.
-    trop_mean_clim = _tropical_mean_sst(clim_mean.rename({"month": "time"}))
-    log.info("  tropical-mean SST: monthly range %.2f..%.2f °C; clim min/max=%.2f/%.2f",
+    # Tropical mean = 30°S-30°N over ALL longitudes (separate full-lon band
+    # read; `sst` itself is cropped to LON_MIN..LON_MAX).
+    trop_series = _open_monthly_trop_mean(monthly_path)
+    trop_mean_per_time = trop_series.sel(time=sst.time.values).values   # (n_time,)
+    log.info("  tropical-mean SST (all lon): monthly range %.2f..%.2f °C",
              float(np.nanmin(trop_mean_per_time)),
-             float(np.nanmax(trop_mean_per_time)),
-             float(np.nanmin(trop_mean_clim)),
-             float(np.nanmax(trop_mean_clim)))
+             float(np.nanmax(trop_mean_per_time)))
 
     rows = {"date": sst.time.values.astype("datetime64[M]").astype(str)}
     for name, box in REGIONS.items():
@@ -1070,6 +1242,8 @@ def build_indices(climo_path: Path, out_path: Path,
         "daily_derived": df["daily_derived"].astype(bool).tolist(),
         "preliminary_n_days": df["n_days"].astype(int).tolist(),
         "climatology_period": f"{CLIMO_START_YEAR}-{CLIMO_END_YEAR}",
+        # Reference for every `*_sst_rel*` column.
+        "tropical_mean": TROPICAL_MEAN_DEFINITION,
         "generated_utc": datetime.now(timezone.utc).isoformat(),
     }
     json_path.write_text(json.dumps(payload, separators=(",", ":")))
@@ -1343,6 +1517,7 @@ def build_correlations(out_dir: Path,
         "vmin": -0.7, "vmax": 0.7,
         "extent": [LON_MIN, LON_MAX, LAT_MIN, LAT_MAX],
         "tropical_mean_band": [TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX],
+        "tropical_mean": TROPICAL_MEAN_DEFINITION,
         "generated_utc": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -1360,6 +1535,18 @@ def build_correlations(out_dir: Path,
 
     lat = sst.lat.values
     lon = sst.lon.values
+
+    # Tropical-mean SST per (year, month) for the Vecchi & Soden (2007)
+    # relative-SST field SST_rel = SST - trop_mean: 30°S-30°N over ALL
+    # longitudes, from a separate full-lon band read (the stack above is
+    # cropped to LON_MIN..LON_MAX).
+    trop_mean_grid = np.full((len(years_all), 12), np.nan, dtype=np.float64)
+    trop_series = _open_monthly_trop_mean(monthly_path)
+    for ts, tv in zip(trop_series.time.values, trop_series.values):
+        y = int(str(ts)[:4])
+        m = int(str(ts)[5:7])
+        if y in year_idx:
+            trop_mean_grid[year_idx[y], m - 1] = tv
 
     # Daily-derived completed-month fill — mirror build_indices() so the
     # grid-weighted analog matrix can include a just-finished month before
@@ -1379,9 +1566,11 @@ def build_correlations(out_dir: Path,
     while gap < (today.year, today.month):
         gy, gm = gap
         if gy in year_idx and gap not in monthly_periods:
-            grid = _fetch_completed_month_grid_from_daily(gy, gm, lat, lon)
-            if grid is not None:
+            filled = _fetch_completed_month_grid_from_daily(gy, gm, lat, lon)
+            if filled is not None:
+                grid, trop_gap = filled
                 sst_stack[year_idx[gy], gm - 1] = grid
+                trop_mean_grid[year_idx[gy], gm - 1] = trop_gap
                 log.info("  filled analog-matrix slot %d-%02d from daily archive",
                          gy, gm)
         gap = _next_period(*gap)
@@ -1496,20 +1685,8 @@ def build_correlations(out_dir: Path,
             return float("nan")
         return float((np.where(finite, sub, 0) * w).sum() / wsum)
 
-    # Tropical-mean SST per (year, month) — used to compute the
-    # Vecchi & Soden (2007) relative-SST field SST_rel = SST - trop_mean.
-    # Vectorized area-weighted mean over 30°S-30°N × LON_MIN..LON_MAX.
-    lat_trop_mask = (lat >= TROPICAL_MEAN_LAT_MIN) & (lat <= TROPICAL_MEAN_LAT_MAX)
-    cos_w = np.cos(np.deg2rad(lat[lat_trop_mask]))[None, :, None]
-    trop_mean_grid = np.full((len(years_all), 12), np.nan, dtype=np.float64)
-    for mm in range(12):
-        sub = sst_stack[:, mm][:, lat_trop_mask, :]
-        finite = np.isfinite(sub)
-        w2 = np.where(finite, cos_w, 0)
-        s2 = np.where(finite, sub, 0)
-        num = (s2 * w2).sum(axis=(1, 2))
-        den = w2.sum(axis=(1, 2))
-        trop_mean_grid[:, mm] = np.where(den > 0, num / den, np.nan)
+    # (trop_mean_grid — the all-longitude tropical mean per (year, month) —
+    # is built above, next to the SST stack.)
 
     region_corr = {}
     # Distance matrices for the grid-based ("correlation-weighted pixel")
@@ -1851,21 +2028,16 @@ def _build_daily_climo_grid(clim_mean: xr.DataArray) -> np.ndarray:
     return out
 
 
-def _build_daily_trop_climo(daily_climo_grid: np.ndarray,
-                            lat_vals: np.ndarray) -> np.ndarray:
-    """(366,) area-weighted tropical-mean climatology in the leap-year frame.
-    Used to convert today's tropical-mean SST into today's tropical-mean
-    anomaly when computing the Vecchi-Soden relative SST."""
-    trop_mask = (lat_vals >= TROPICAL_MEAN_LAT_MIN) & (lat_vals <= TROPICAL_MEAN_LAT_MAX)
-    w = np.cos(np.deg2rad(lat_vals[trop_mask]))[:, None]
+def _build_daily_trop_climo(trop_clim12: np.ndarray) -> np.ndarray:
+    """(366,) tropical-mean SST climatology in the leap-year frame, from the
+    (12,) all-longitude monthly values (_trop_mean_clim_monthly) with the
+    same mid-month interpolation as `_build_daily_climo_grid`. Used to turn
+    today's tropical-mean SST into today's tropical-mean anomaly for the
+    Vecchi-Soden relative SST."""
     out = np.empty(366, dtype=np.float64)
-    for ld in range(366):
-        slab = daily_climo_grid[ld][trop_mask, :]
-        finite = np.isfinite(slab)
-        w2 = np.where(finite, w * np.ones_like(slab), 0)
-        s2 = np.where(finite, slab, 0)
-        denom = w2.sum()
-        out[ld] = (s2 * w2).sum() / denom if denom > 0 else np.nan
+    for ld in range(1, 367):
+        month, day = _ld_to_md(ld)
+        out[ld - 1] = _interp_daily_scalar(trop_clim12, 2000, month, day)
     return out
 
 
@@ -1898,27 +2070,34 @@ def _region_mean_2d(slab: np.ndarray, region_entry: tuple) -> float:
     return float((s2 * w2).sum() / denom) if denom > 0 else float("nan")
 
 
-def _trop_mean_2d(slab: np.ndarray, lat_vals: np.ndarray) -> float:
-    """NaN-safe area-weighted 30°S–30°N mean of a 2D (lat, lon) slab."""
-    trop_mask = (lat_vals >= TROPICAL_MEAN_LAT_MIN) & (lat_vals <= TROPICAL_MEAN_LAT_MAX)
-    sub = slab[trop_mask, :]
-    w = np.cos(np.deg2rad(lat_vals[trop_mask]))[:, None]
-    finite = np.isfinite(sub)
-    if not finite.any():
-        return float("nan")
-    w2 = np.where(finite, w * np.ones_like(sub), 0)
-    s2 = np.where(finite, sub, 0)
-    denom = w2.sum()
-    return float((s2 * w2).sum() / denom) if denom > 0 else float("nan")
+def _open_oisst_year_trop_mean(year: int, chunk: int = 61) -> tuple:
+    """(times, trop_mean) — per-day tropical-mean SST (30°S-30°N, ALL
+    longitudes) from the cached per-year file. `_open_oisst_year` crops to
+    LON_MIN..LON_MAX, so the band is read separately, in time chunks."""
+    local = _download_oisst_year(year)
+    with xr.open_dataset(local) as ds:
+        band = ds["sst"].sel(lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX))
+        lat_vals = band["lat"].values.copy()
+        lon_vals = band["lon"].values.copy()
+        times = band["time"].values.copy()
+        out = np.full(len(times), np.nan, dtype=np.float64)
+        for i0 in range(0, len(times), chunk):
+            v = np.asarray(band.isel(time=slice(i0, i0 + chunk)).values,
+                           dtype=np.float32)
+            v[np.abs(v) > 50.0] = np.nan
+            out[i0:i0 + chunk] = tropical_mean_sst(v, lat_vals, lon_vals)
+    return times, out
 
 
 def _compute_year_daily_rows(sst_da: xr.DataArray,
                              daily_climo_grid: np.ndarray,
                              daily_trop_climo: np.ndarray,
                              region_index: dict,
-                             lat_vals: np.ndarray) -> list[dict]:
+                             trop_today_vals: np.ndarray) -> list[dict]:
     """Return one row per day for `sst_da` (time × lat × lon). Each row has
-    `date`, `{region}_sst`, `{region}_anom`, `{region}_anom_rel`."""
+    `date`, `{region}_sst`, `{region}_anom`, `{region}_anom_rel`.
+    `trop_today_vals` (n_days,) is each day's all-longitude tropical-mean
+    SST (`_open_oisst_year_trop_mean`), aligned with `sst_da.time`."""
     times = sst_da["time"].values   # datetime64[ns]
     # Sanity-check: time coord must be datetime-like, not integers. If a
     # caller passed an array of 0..N-1 (the symptom of an over-eager
@@ -1931,6 +2110,9 @@ def _compute_year_daily_rows(sst_da: xr.DataArray,
         )
     vals  = sst_da.values           # (n_days, n_lat, n_lon)
     n_days = vals.shape[0]
+    if len(trop_today_vals) != n_days:
+        raise ValueError(f"trop_today_vals has {len(trop_today_vals)} days, "
+                         f"sst_da has {n_days}")
     rows = []
     for i in range(n_days):
         ts = times[i]
@@ -1943,7 +2125,7 @@ def _compute_year_daily_rows(sst_da: xr.DataArray,
         slab = vals[i]
         clim_slab = daily_climo_grid[ld - 1]
         anom_slab = slab - clim_slab
-        trop_today = _trop_mean_2d(slab, lat_vals)
+        trop_today = float(trop_today_vals[i])
         trop_clim_today = float(daily_trop_climo[ld - 1])
         trop_anom_today = (trop_today - trop_clim_today
                            if np.isfinite(trop_today) and np.isfinite(trop_clim_today)
@@ -1962,10 +2144,35 @@ def _compute_year_daily_rows(sst_da: xr.DataArray,
     return rows
 
 
+# Parquet schema-metadata tag recording which tropical-mean definition the
+# `*_anom_rel` columns use (resume guard for build_daily_indices_full).
+_TROP_DEF_KEY = b"tc_atlas_trop_mean"
+_TROP_DEF_TAG = b"30S-30N_all_lon_coslat_v2"
+
+
+def _parquet_trop_def(path: Path) -> bytes | None:
+    try:
+        import pyarrow.parquet as pq
+        md = pq.read_schema(path).metadata or {}
+        return md.get(_TROP_DEF_KEY)
+    except Exception:
+        return None
+
+
+def _write_parquet_trop_def(df, path: Path) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    md = dict(table.schema.metadata or {})
+    md[_TROP_DEF_KEY] = _TROP_DEF_TAG
+    pq.write_table(table.replace_schema_metadata(md), path, compression="snappy")
+
+
 def build_daily_indices_full(climo_path: Path,
                              out_path: Path,
                              year_start: int = INDICES_START_YEAR,
-                             year_end: int | None = None) -> Path:
+                             year_end: int | None = None,
+                             monthly_path: str | None = None) -> Path:
     """Build the 1982-present per-day region-mean SST + anomaly + relative
     anomaly parquet. Idempotent and resumable: existing year-rows are
     preserved; only years missing or partial are recomputed. The current
@@ -1987,12 +2194,17 @@ def build_daily_indices_full(climo_path: Path,
     log.info("Building daily indices %d-%d ...", year_start, year_end)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Load existing parquet (if any) to support resume.
-    if out_path.exists():
+    # Load existing parquet (if any) to support resume — but only if it was
+    # written with the current tropical-mean definition; resuming an older
+    # file would splice two `anom_rel` definitions into one series.
+    if out_path.exists() and _parquet_trop_def(out_path) == _TROP_DEF_TAG:
         existing_df = pd.read_parquet(out_path)
         log.info("  found existing %s (%d rows); will resume",
                  out_path.name, len(existing_df))
     else:
+        if out_path.exists():
+            log.warning("  %s predates the all-longitude tropical mean; "
+                        "rebuilding every year", out_path.name)
         existing_df = pd.DataFrame()
 
     complete_years = set()
@@ -2015,7 +2227,14 @@ def build_daily_indices_full(climo_path: Path,
     lat_vals = clim_mean["lat"].values
     lon_vals = clim_mean["lon"].values
     daily_climo_grid = _build_daily_climo_grid(clim_mean)
-    daily_trop_climo = _build_daily_trop_climo(daily_climo_grid, lat_vals)
+    trop_clim12 = _trop_mean_clim_monthly(clim_mean, monthly_path)
+    if trop_clim12 is None:
+        clim_ds.close()
+        raise RuntimeError(
+            f"{climo_path.name} lacks {TROP_CLIM_ATTR} and the monthly OISST "
+            "file is unavailable; can't build an all-longitude tropical-mean "
+            "climatology (refusing to fall back to the lon-cropped grid)")
+    daily_trop_climo = _build_daily_trop_climo(trop_clim12)
     region_index = _build_region_index(lat_vals, lon_vals)
     clim_ds.close()
 
@@ -2030,9 +2249,13 @@ def build_daily_indices_full(climo_path: Path,
             log.warning("  year %d: failed to open (%s); skipping", year, e)
             continue
         t0 = time.time()
+        trop_times, trop_today_vals = _open_oisst_year_trop_mean(year)
+        if not np.array_equal(trop_times, sst_da["time"].values):
+            log.warning("  year %d: tropical-band time axis mismatch; skipping", year)
+            continue
         rows = _compute_year_daily_rows(sst_da, daily_climo_grid,
                                         daily_trop_climo, region_index,
-                                        lat_vals)
+                                        trop_today_vals)
         log.info("  year %d: %d daily rows in %.1f s",
                  year, len(rows), time.time() - t0)
 
@@ -2050,7 +2273,7 @@ def build_daily_indices_full(climo_path: Path,
                      .drop_duplicates(subset=["date"], keep="last")
                      .sort_values("date")
                      .reset_index(drop=True))
-        df_so_far.to_parquet(out_path, compression="snappy", index=False)
+        _write_parquet_trop_def(df_so_far, out_path)
         existing_df = df_so_far
         new_chunks = [existing_df]
         log.info("  year %d: parquet now %d rows (%.1f MB)",
@@ -2430,6 +2653,9 @@ def main():
         if climo_path.exists():
             log.info("Climatology already at %s; skipping (delete to rebuild)",
                      climo_path)
+            # Older files lack the all-longitude tropical-mean climatology
+            # attribute; add it in place (gridded values untouched).
+            add_trop_clim_attr(climo_path, monthly_path=args.monthly_file)
         else:
             build_climatology(climo_path, monthly_path=args.monthly_file)
 
@@ -2453,7 +2679,8 @@ def main():
     # /Users/mfischer/Data/OISST_daily/ populated and takes ~5-8 minutes.
     if args.step in ("daily_indices", "daily_all", "daily_local"):
         build_daily_indices_full(climo_path, daily_full_path,
-                                 year_end=args.year_end)
+                                 year_end=args.year_end,
+                                 monthly_path=args.monthly_file)
     if args.step in ("daily_climatology", "daily_all", "daily_local"):
         build_daily_climatology(daily_full_path, daily_climo_path)
     if args.step in ("daily_trend", "daily_all", "daily_local"):

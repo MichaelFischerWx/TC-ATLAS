@@ -70,6 +70,96 @@ def cat_for_wind(w_kt: Optional[float]) -> str:
     return "C5"
 
 
+# ── Shared filters for ACE and the 24-h intensity-change statistics ──
+#
+# IBTrACS v04r01 `nature` is a merged, agency-reconciled code with only
+# six values (verified against the full v04r01 file):
+#   TS  tropical system (any intensity: TD / TS / HU / TY ...)
+#   SS  subtropical system
+#   ET  extratropical system         DS  disturbance (pre-genesis / remnant)
+#   NR  not reported                 MX  mixed: agencies reported
+#                                        inconsistent types
+# Agency-specific codes such as HU, TY, TD, SD, PT, LO, IN, DB, WV never
+# appear in this variable, so filtering on them has no effect.
+#
+# MX is EXCLUDED on purpose. Of the 26.8k MX fixes in v04r01, 61% have no
+# USA status at all and, where one exists, non-TC codes (DB, EX, LO, WV,
+# MD, ...) outnumber TC codes (TD/TS/HU/TY/SD/SS) roughly 1.7:1; Tokyo
+# grades on MX fixes are mostly TD (2) or extratropical (6). MX is
+# therefore dominated by disturbance / transition phases, and keeping it
+# out matches the NHC / Bell et al. (2000) "tropical or subtropical only"
+# ACE convention.
+TC_NATURES = frozenset({"TS", "SS"})
+SYNOPTIC_HOURS = (0, 6, 12, 18)
+
+# Provisional (not yet finalized) tracks mostly carry nature = NR with no
+# agency status at all (v04r01 file of 2026-07: 1,888 of 2,329 PROVISIONAL
+# fixes, every one with blank usa_status / tokyo / bom / reunion / newdelhi
+# fields). They come from operational warnings, i.e. the TC phase, so NR
+# counts as a TC phase on provisional tracks ONLY. Without this the
+# current season is effectively missing from ACE and the 24-h statistics
+# (2026 ACE 46 vs ~398 with it). Finalized tracks keep NR excluded.
+PROVISIONAL_TRACK_TYPES = frozenset({"provisional", "us-provisional"})
+
+
+def is_tc_phase(nature_code: str, provisional: bool) -> bool:
+    """Fix counts toward ACE / intensity-change statistics."""
+    if nature_code in TC_NATURES:
+        return True
+    return provisional and nature_code == "NR"
+
+# IBTrACS `track_type`: "main" for regular tracks, "PROVISIONAL" /
+# "US-PROVISIONAL" for the recent seasons that have not been finalized
+# (they ARE the main track for those storms — dropping them would drop
+# the current season), and "spur-split" / "spur-merge" / "spur-other" for
+# alternate track segments that split from / merge into a main track
+# (IBTrACS: "Spur tracks should be treated with caution"). Spurs duplicate
+# part of their main track and would double-count storms, ACE and
+# intensity-change episodes, so they are skipped entirely.
+MAIN_TRACK_TYPES = frozenset({"main", "provisional", "us-provisional"})
+
+
+def is_main_track(track_type: str) -> bool:
+    """True for main + provisional tracks. Spurs are excluded; an unknown
+    future value is kept (and logged by the caller) rather than silently
+    dropping a whole category such as a renamed provisional flag."""
+    tt = (track_type or "").strip().lower()
+    if tt.startswith("spur"):
+        return False
+    return True
+
+
+# 24-h intensity-change windows: pairs of qualifying fixes 20-28 h apart.
+IC_MIN_DH, IC_MAX_DH = 20.0, 28.0
+IC_MIN_FIXES = 5   # storm needs >= 5 synoptic TC-phase fixes with a wind
+
+
+def episodes_24h(series) -> list:
+    """All 24-h intensity changes (kt, float) for one storm.
+
+    `series` is the storm's time-ordered list of (datetime, wind_kt,
+    overwater) for fixes that are synoptic (00/06/12/18 UTC), in a TC
+    phase (is_tc_phase) and have a finite wind. A window counts only when
+    BOTH ends are over water (IBTrACS dist2land > 0; 0 km = over land).
+
+    This one function feeds both intensity_changes.json (the Climatology
+    histograms) and the per-storm ri_24h / rw_24h, so the two can never
+    disagree on what an episode is."""
+    out = []
+    if len(series) < IC_MIN_FIXES:
+        return out
+    for a in range(len(series)):
+        ta, wa, owa = series[a]
+        for b in range(a + 1, len(series)):
+            tb, wb, owb = series[b]
+            dh = (tb - ta).total_seconds() / 3600
+            if dh > IC_MAX_DH:
+                break
+            if dh >= IC_MIN_DH and owa and owb:
+                out.append(wb - wa)
+    return out
+
+
 def _decode_str(v):
     """IBTrACS NetCDF strings are masked byte arrays. Strip + decode."""
     if v is None:
@@ -134,13 +224,16 @@ def download_ibtracs(force: bool) -> Path:
     return NC_CACHE
 
 
-def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list, dict]:
-    """Returns (tracks_by_sid, storms_metadata_list, radii_by_sid).
+def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list, dict, dict]:
+    """Returns (tracks_by_sid, storms_metadata_list, radii_by_sid,
+    episodes_by_sid). Spur tracks are skipped (see MAIN_TRACK_TYPES).
     tracks_by_sid: { sid: [{t, la, lo, w?, p?, n}, ...] } — finite la/lo only
     storms_metadata_list: [{sid, name, year, basin, ...}, ...]
     radii_by_sid: { sid: [[t, r34[4], r50[4], r64[4], rmw, poci, roci], ...] }
                   — only fixes where at least one structure field is finite;
                   quadrant order NE/SE/SW/NW (IBTrACS quadrant dim), nm
+    episodes_by_sid: { sid: [Δw_kt, ...] } — overwater 24-h intensity
+                  changes (episodes_24h); feeds intensity_changes.json
     """
     import xarray as xr
     LOG.info(f"opening {nc_path.name}")
@@ -155,7 +248,10 @@ def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list, dict]:
     times  = ds["iso_time"].values         # 2-D
     lats   = ds["lat"].values              # 2-D float
     lons   = ds["lon"].values              # 2-D float
-    track_type = ds["track_type"].values
+    track_type = ds["track_type"].values   # 1-D: main / PROVISIONAL / spur-*
+    # Distance to land (km) at the fix; 0 = over land. Used for the
+    # overwater 24-h intensity-change windows.
+    dist2land = ds["dist2land"].values     # 2-D
 
     # Wind: prefer USA (operational best estimate), fall back to WMO.
     usa_w = ds["usa_wind"].values if "usa_wind" in ds else None
@@ -181,6 +277,9 @@ def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list, dict]:
     tracks: dict[str, list] = {}
     storms: list[dict] = []
     radii: dict[str, list] = {}
+    episodes: dict[str, list] = {}
+    n_spur = 0
+    unknown_tt: dict[str, int] = {}
 
     def _quad(arr, i, j):
         """usa_rXX[i, j, :] → [ne, se, sw, nw] ints, or None if all missing.
@@ -192,29 +291,23 @@ def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list, dict]:
             return None
         return [int(round(float(v))) if np.isfinite(v) else None for v in q]
 
-    # ACE constant: 1e-4 × Σ v²(kt²) at synoptic 6-hourly fixes ≥ 34 kt
-    # WHILE the storm has a tropical or subtropical designation. IBTrACS
-    # `nature` codes used here:
-    #   TS  tropical storm        TY  typhoon          TC  generic TC
-    #   HU  hurricane             ST  subtropical      SS  subtropical storm
-    #   SD  subtropical depression       TD  tropical depression
-    # Explicitly EXCLUDED (per NHC / Bell+2000 ACE convention):
-    #   ET  extratropical (post-transition)
-    #   PT  post-tropical (a synonym for ET in some agencies)
-    #   DB  disturbance (pre-genesis)         WV  tropical wave
-    #   LO  low / non-tropical        IN  inland post-landfall remnant
-    #   DS  disturbance / monsoon depression (pre-genesis)
-    #   MX  mixed / uncertain         NR  not reported (mostly pre-1950)
-    # TD is included because some agencies record sub-34kt synoptic fixes
-    # before / after a storm's TS phase under a TD designation; ACE's
-    # ≥34 kt filter already excludes those by intensity anyway.
-    SYNOPTIC_HOURS = (0, 6, 12, 18)
-    TC_NATURES = {"TS", "TY", "TC", "HU", "ST", "SS", "SD", "TD"}
+    # ACE: 1e-4 × Σ v²(kt²) at synoptic 6-hourly fixes ≥ 34 kt WHILE the
+    # storm is tropical or subtropical (is_tc_phase: nature TS/SS, plus NR
+    # on provisional tracks; ET, DS, MX and finalized-track NR are
+    # excluded — see the TC_NATURES note at the top).
+    from datetime import datetime
 
     for i in range(nstorms):
         sid = _decode_str(sids[i])
         if not sid:
             continue
+        tt = _decode_str(track_type[i])
+        if not is_main_track(tt):
+            n_spur += 1
+            continue
+        if tt.lower() not in MAIN_TRACK_TYPES:
+            unknown_tt[tt] = unknown_tt.get(tt, 0) + 1
+        provisional = tt.lower() in PROVISIONAL_TRACK_TYPES
         year = int(seasons[i]) if np.isfinite(seasons[i]) else None
         if since is not None and (year is None or year < since):
             continue
@@ -239,8 +332,10 @@ def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list, dict]:
         min_p = None
         ace = 0.0
         is_hursat = False
-        # For RI / RW windows.
-        wind_series = []
+        # For the 24-h RI / RW windows: (datetime, w, overwater) at
+        # synoptic TC-phase fixes (same series for ri_24h/rw_24h and the
+        # intensity_changes.json histogram — see episodes_24h).
+        ic_series = []
         for j in range(lats.shape[1]):
             la = lats[i, j]
             lo = lons[i, j]
@@ -289,9 +384,17 @@ def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list, dict]:
                 # ocean during a transition but aren't part of "tropical
                 # cyclone activity" by the NHC definition).
                 hh = int(t[11:13])
-                if hh in SYNOPTIC_HOURS and w >= 34 and n in TC_NATURES:
-                    ace += w * w
-                wind_series.append((t, w))
+                if hh in SYNOPTIC_HOURS and is_tc_phase(n, provisional):
+                    if w >= 34:
+                        ace += w * w
+                    try:
+                        dtm = datetime.fromisoformat(t)
+                    except ValueError:
+                        dtm = None
+                    if dtm is not None:
+                        d2l = dist2land[i, j]
+                        ic_series.append((dtm, round(w, 1),
+                                          bool(np.isfinite(d2l) and d2l > 0)))
             if p is not None and (min_p is None or p < min_p):
                 min_p = p
             if atcf is None:
@@ -307,20 +410,11 @@ def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list, dict]:
         if len(pts) == 0:
             continue
 
-        # 24-h max ±Δw over all (t_a, t_b) pairs separated by ~24 hours.
-        ri = None
-        rw = None
-        if len(wind_series) > 1:
-            from datetime import datetime
-            parsed = [(datetime.fromisoformat(t), w) for t, w in wind_series]
-            for a in range(len(parsed)):
-                for b in range(a + 1, len(parsed)):
-                    dt_h = (parsed[b][0] - parsed[a][0]).total_seconds() / 3600
-                    if dt_h > 28: break  # pairs sorted by time; stop scanning
-                    if 20 <= dt_h <= 28:
-                        d = parsed[b][1] - parsed[a][1]
-                        if ri is None or d > ri: ri = d
-                        if rw is None or d < rw: rw = d
+        # Per-storm max / min 24-h Δw over the SAME overwater, synoptic,
+        # TC-phase windows that intensity_changes.json counts.
+        eps = episodes_24h(ic_series)
+        ri = max(eps) if eps else None
+        rw = min(eps) if eps else None
 
         # Find LMI (lifetime max intensity) lat/lon.
         lmi_lat, lmi_lon = pts[0]["la"], pts[0]["lo"]
@@ -371,10 +465,13 @@ def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list, dict]:
 
         tracks[sid] = pts
         storms.append(meta)
+        episodes[sid] = eps
 
     LOG.info(f"parsed {len(tracks)} storms with valid tracks, "
-             f"{len(radii)} with wind radii")
-    return tracks, storms, radii
+             f"{len(radii)} with wind radii; skipped {n_spur} spur tracks")
+    if unknown_tt:
+        LOG.warning(f"unrecognized track_type values kept as main: {unknown_tt}")
+    return tracks, storms, radii, episodes
 
 
 def chunk_tracks(tracks: dict) -> tuple[dict, dict]:
@@ -398,53 +495,32 @@ def chunk_tracks(tracks: dict) -> tuple[dict, dict]:
     return chunk0, chunk1
 
 
-def compute_intensity_changes(tracks: dict, storms_by_sid: dict) -> dict:
+def compute_intensity_changes(episodes: dict, storms_by_sid: dict) -> dict:
     """All overwater 24-h intensity changes, grouped by basin. Each event
     is [Δw_kt, year]. Frontend uses the empirical distribution for the
-    Climatology tab's RI / RW histograms."""
-    from datetime import datetime
+    Climatology tab's RI / RW histograms.
+
+    `episodes` comes from parse() (episodes_24h per storm): synoptic
+    00/06/12/18 UTC fixes in a TC phase (is_tc_phase), main/provisional
+    tracks only, window ends 20-28 h apart and BOTH over water (dist2land > 0)."""
     basins: dict[str, list] = {}
-    SYNOPTIC = (0, 6, 12, 18)
-    # Same TC/subtropical filter as ACE (in parse() above) — only count
-    # 24-h Δw episodes during the storm's tropical / subtropical phase.
-    # Excludes extratropical transition (ET/PT), pre-genesis disturbance
-    # (DB/DS/WV), and post-landfall remnant (IN/LO).
-    NATURE_TC = {"TS", "TY", "TC", "HU", "ST", "SS", "SD", "TD"}
     year_min = year_max = None
-    for sid, pts in tracks.items():
+    for sid, eps in episodes.items():
         meta = storms_by_sid.get(sid)
         if not meta or meta["year"] is None: continue
         basin = meta["basin"]
         if basin not in basins: basins[basin] = []
-        # Only use synoptic + TC-nature fixes with finite wind.
-        synoptic = []
-        for pt in pts:
-            t = pt.get("t")
-            if not t or "w" not in pt: continue
-            hh = int(t[11:13])
-            if hh not in SYNOPTIC: continue
-            n = pt.get("n", "")
-            if n not in NATURE_TC: continue
-            try:
-                d = datetime.fromisoformat(t)
-            except ValueError:
-                continue
-            synoptic.append((d, pt["w"]))
-        if len(synoptic) < 5: continue
-        # 24-h pairs.
-        for a in range(len(synoptic)):
-            for b in range(a + 1, len(synoptic)):
-                dh = (synoptic[b][0] - synoptic[a][0]).total_seconds() / 3600
-                if dh > 28: break
-                if 20 <= dh <= 28:
-                    delta = int(round(synoptic[b][1] - synoptic[a][1]))
-                    yr = meta["year"]
-                    basins[basin].append([delta, yr])
-                    if year_min is None or yr < year_min: year_min = yr
-                    if year_max is None or yr > year_max: year_max = yr
+        yr = meta["year"]
+        for d in eps:
+            basins[basin].append([int(round(d)), yr])
+            if year_min is None or yr < year_min: year_min = yr
+            if year_max is None or yr > year_max: year_max = yr
     total = sum(len(v) for v in basins.values())
     return {
-        "description": "All overwater 24-h intensity change episodes [change_kt, year] (synoptic, TC phases only)",
+        "description": ("All overwater 24-h intensity change episodes [change_kt, year] "
+                        "(synoptic, TC phase = nature TS/SS or NR on provisional tracks, "
+                        "main/provisional tracks, "
+                        "dist2land > 0 km at both ends)"),
         "total_episodes": total,
         "year_min": year_min,
         "year_max": year_max,
@@ -695,16 +771,6 @@ def write_outputs(tracks: dict, storms: list, chunk0: dict, chunk1: dict,
     atomic_write(root / "ibtracs_tracks_1.json", chunk1)
     atomic_write(root / "ibtracs_tracks.json", tracks)
 
-    # Explorer-only subset (bin/build_tdr_ibtracs_subset.py): the TC-RADAR
-    # explorer draws ~90 storms and fetches this ~85 KB gz file instead of
-    # the full archive. Rebuilt here so it never drifts from the chunks.
-    try:
-        import subprocess
-        subprocess.run([sys.executable, str(root / "bin" / "build_tdr_ibtracs_subset.py"),
-                        "--root", str(root)], check=True)
-    except Exception as e:  # noqa: BLE001
-        LOG.warning(f"ibtracs_tdr_subset.json not rebuilt: {e}")
-
     # Storms metadata + global summary.
     basin_counts: dict[str, int] = {}
     hursat_count = 0
@@ -725,12 +791,27 @@ def write_outputs(tracks: dict, storms: list, chunk0: dict, chunk1: dict,
             "year_range": [year_lo, year_hi],
             "basin_counts": basin_counts,
             "intensity_change_computed": True,
+            # Spur tracks (track_type spur-*) are skipped; main +
+            # PROVISIONAL / US-PROVISIONAL tracks are kept.
+            "track_types": "main+provisional",
         },
         "storms": storms,
     })
 
     # Intensity-change episodes.
     atomic_write(root / "intensity_changes.json", intensity_changes)
+
+    # Explorer-only subset (bin/build_tdr_ibtracs_subset.py): the TC-RADAR
+    # explorer draws ~90 storms and fetches this ~85 KB gz file instead of
+    # the full archive. Rebuilt here so it never drifts from the chunks.
+    # Runs AFTER ibtracs_storms.json is written — it copies storm rows
+    # from that file, so building it earlier shipped stale metadata.
+    try:
+        import subprocess
+        subprocess.run([sys.executable, str(root / "bin" / "build_tdr_ibtracs_subset.py"),
+                        "--root", str(root)], check=True)
+    except Exception as e:  # noqa: BLE001
+        LOG.warning(f"ibtracs_tdr_subset.json not rebuilt: {e}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -745,14 +826,14 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
     args = parse_args()
     nc = download_ibtracs(force=args.no_cache and not args.keep_cache)
-    tracks, storms, radii = parse(nc, args.since)
+    tracks, storms, radii, episodes = parse(nc, args.since)
     if not tracks:
         LOG.error("no storms parsed — aborting")
         return 1
     chunk0, chunk1 = chunk_tracks(tracks)
     LOG.info(f"chunked: {len(chunk0)} / {len(chunk1)} storms")
     storms_by_sid = {s["sid"]: s for s in storms}
-    ic = compute_intensity_changes(tracks, storms_by_sid)
+    ic = compute_intensity_changes(episodes, storms_by_sid)
     LOG.info(f"intensity_changes: {ic['total_episodes']} episodes, "
              f"years {ic['year_min']}-{ic['year_max']}")
     # Smoke-test mode (--since): write to a sandbox dir so the production
