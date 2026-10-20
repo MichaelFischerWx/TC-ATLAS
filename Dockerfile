@@ -50,15 +50,9 @@ COPY climatology_hybrid.npz .
 # Precomputed pass-1 vortex metrics (scripts/build_tc_radar_vortex_raw.py)
 COPY tc_radar_vortex_raw.json .
 COPY ibtracs_storms.json .
-# IBTrACS tracks ship as split chunks + manifest. The legacy combined
-# ibtracs_tracks.json is gitignored (the JSON is too large for git);
-# precache_mergir.py uses the manifest path. Frontend likewise prefers
-# the manifest, falling back to the combined file only when manifest
-# fetch fails.
-COPY ibtracs_tracks_0.json .
-COPY ibtracs_tracks_1.json .
-COPY ibtracs_tracks_manifest.json .
-COPY intensity_changes.json .
+# The IBTrACS track chunks (ibtracs_tracks_*.json) and intensity_changes.json
+# are frontend / precache_mergir.py inputs only — no module in this image
+# reads them, so they stay out of it (~48 MB).
 
 # ── Cloud Run requires the container to listen on $PORT (default 8080) ──
 ENV PORT=8080
