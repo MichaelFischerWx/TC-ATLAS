@@ -2,7 +2,7 @@
 mw_ingest.py — NRT passive-microwave swath ingestion for TC-ATLAS
 =================================================================
 Pulls new microwave granules from NASA PPS (and later JAXA G-Portal,
-NOAA CLASS) and produces Web Mercator PNG overlays + GeoJSON footprints
+NOAA CLASS) and produces Web Mercator PNG overlays
 in GCS for display on the RT Monitor / Global Archive map.
 
 Phase 1 scope: GMI (PPS NRT) → global "microwave passes (last N hrs)"
@@ -19,9 +19,9 @@ Pipeline per granule
    L.imageOverlay places it correctly on a Mercator basemap — see
    feedback_env_overlay_projection memory)
 5. Encode as RGBA PNG with NaN → fully transparent
-6. Compute footprint polygon from valid-pixel mask → GeoJSON
-7. Upload to gs://{MW_BUCKET}/{sensor}/{YYYY}/{MM}/{DD}/{orbit_id}.{png,geojson}
-8. Append entry to gs://{MW_BUCKET}/manifest_latest_48h.json (self-pruning)
+6. Upload to gs://{MW_BUCKET}/{sensor}/{YYYY}/{MM}/{DD}/{orbit_id}_*.png
+   (+ a small per-granule entries sidecar, see _granule_sidecar_key)
+7. Append entry to gs://{MW_BUCKET}/manifest_latest_48h.json (self-pruning)
 
 Usage
 -----
@@ -45,12 +45,13 @@ Environment
 
 Dependencies (all already in TC-ATLAS deployment)
     xarray, h5netcdf, numpy, scipy, matplotlib, pillow, google-cloud-storage,
-    requests, shapely
+    requests
 """
 
 from __future__ import annotations
 
 import argparse
+import gzip
 import io
 import json
 import logging
@@ -59,7 +60,6 @@ import signal
 import sys
 import tempfile
 import time
-import warnings
 from dataclasses import dataclass, field
 from datetime import datetime as _dt, timedelta, timezone
 from pathlib import Path
@@ -130,6 +130,14 @@ _MAX_RUNTIME_SECONDS = 25 * 60
 # processing time, while still letting a single tick cycle through
 # multiple sensors when one hangs.
 _GRANULE_TIMEOUT_SECONDS = 10 * 60
+
+# Wall-clock point (seconds since start) by which an in-flight granule is
+# abandoned. The budget above is only checked BEFORE each granule, so a
+# granule starting at ~1499 s with the full 600 s watchdog could run past
+# the 1800 s Cloud Run task timeout (deploy_mw_job.sh) and be SIGKILLed
+# before the manifest write. The per-granule alarm is capped at this point,
+# leaving ~60 s for the final manifest write + lock release.
+_HARD_STOP_SECONDS = _MAX_RUNTIME_SECONDS + 4 * 60
 
 # Sentinel product slug emitted to the manifest when a granule times
 # out. Lets the per-sensor cursor advance past the offender so the
@@ -426,16 +434,18 @@ def _get_r2_client():
     return _r2_client
 
 
-def _r2_put(key: str, data: bytes, content_type: str, cache_seconds: int) -> bool:
+def _r2_put(key: str, data: bytes, content_type: str, cache_seconds: int,
+            content_encoding: Optional[str] = None) -> bool:
     """Best-effort mirror of one object to R2. True only on a confirmed write."""
     client = _get_r2_client()
     if client is None:
         return False
     try:
+        extra = {"ContentEncoding": content_encoding} if content_encoding else {}
         client.put_object(
             Bucket=_R2_BUCKET, Key=key, Body=data,
             ContentType=content_type,
-            CacheControl=f"public, max-age={cache_seconds}")
+            CacheControl=f"public, max-age={cache_seconds}", **extra)
         return True
     except Exception as e:
         logger.warning("R2 mirror failed for %s: %s", key, e)
@@ -451,22 +461,44 @@ def _mw_public_url(key: str, r2_ok: bool) -> str:
 
 
 def _upload_bytes(key: str, data: bytes, content_type: str,
-                  cache_seconds: int = 600) -> bool:
+                  cache_seconds: int = 600, gzip_encode: bool = False,
+                  r2_mirror: bool = True) -> bool:
     """Upload to GCS (primary, must succeed) + best-effort mirror to R2.
     Returns True iff the R2 mirror also succeeded — callers building manifest
-    URLs use this to choose cdn vs. GCS per object (see _mw_public_url)."""
+    URLs use this to choose cdn vs. GCS per object (see _mw_public_url).
+
+    gzip_encode stores the object gzip-compressed with Content-Encoding:
+    gzip. GCS serves it compressed to clients that send Accept-Encoding:
+    gzip (browsers) and transparently decompresses it for clients that
+    don't, so readers need no changes. r2_mirror=False keeps job-internal
+    objects (never fetched by browsers) off R2."""
     blob = _get_bucket().blob(key)
     blob.cache_control = f"public, max-age={cache_seconds}"
+    encoding = None
+    if gzip_encode:
+        data = gzip.compress(data, compresslevel=6)
+        encoding = "gzip"
+        blob.content_encoding = encoding
     blob.upload_from_string(data, content_type=content_type)
-    logger.info("uploaded gs://%s/%s (%d bytes)", MW_BUCKET, key, len(data))
-    return _r2_put(key, data, content_type, cache_seconds)
+    logger.info("uploaded gs://%s/%s (%d bytes%s)", MW_BUCKET, key, len(data),
+                ", gzip" if encoding else "")
+    if not r2_mirror:
+        return False
+    return _r2_put(key, data, content_type, cache_seconds,
+                   content_encoding=encoding)
 
 
 def _download_text(key: str) -> Optional[str]:
     blob = _get_bucket().blob(key)
     if not blob.exists():
         return None
-    return blob.download_as_text()
+    raw = blob.download_as_bytes()
+    # The client normally expands Content-Encoding: gzip objects itself;
+    # decode by magic bytes too so a raw (still-compressed) body can never
+    # reach json.loads.
+    if raw[:2] == b"\x1f\x8b":
+        raw = gzip.decompress(raw)
+    return raw.decode("utf-8")
 
 
 def _prefix_has_objects(prefix: str) -> bool:
@@ -623,7 +655,9 @@ def _encode_rgb_png(rgb: np.ndarray, valid_mask: np.ndarray) -> bytes:
     rgba[..., :3] = rgb
     rgba[..., 3] = np.where(valid_mask, 255, 0).astype(np.uint8)
     buf = io.BytesIO()
-    Image.fromarray(rgba, "RGBA").save(buf, format="PNG", optimize=True)
+    # compress_level=6 without optimize: optimize=True re-runs the deflate
+    # search for ~0.5% smaller files at ~3x the encode time.
+    Image.fromarray(rgba, "RGBA").save(buf, format="PNG", compress_level=6)
     return buf.getvalue()
 
 
@@ -636,93 +670,10 @@ def _encode_scalar_png(arr: np.ndarray, cmap, vmin: float, vmax: float) -> bytes
     rgba = (rgba_f * 255).astype(np.uint8)
     rgba[..., 3] = np.where(valid, rgba[..., 3], 0).astype(np.uint8)
     buf = io.BytesIO()
-    Image.fromarray(rgba, "RGBA").save(buf, format="PNG", optimize=True)
+    # compress_level=6 without optimize: optimize=True re-runs the deflate
+    # search for ~0.5% smaller files at ~3x the encode time.
+    Image.fromarray(rgba, "RGBA").save(buf, format="PNG", compress_level=6)
     return buf.getvalue()
-
-
-# ---------------------------------------------------------------------------
-# Footprint polygon (concave hull of valid pixels)
-# ---------------------------------------------------------------------------
-# Douglas-Peucker tolerance (degrees) applied to the traced footprint before
-# serialization. The raw contour follows the valid-mask at full pixel resolution
-# — for 89 GHz that's ~90k vertices / ~3.5 MB of GeoJSON per pass, and it's the
-# single largest write in the pipeline (geojson ≈ 56% of all bytes; SSMIS 78%).
-# The footprint is only a coverage outline + click hit-test, so ~5.6 km (at or
-# below the 89 GHz footprint resolution) is visually identical while shrinking
-# the payload ~40× (3.5 MB → ~94 KB, measured on a real SSMIS pass).
-_FOOTPRINT_SIMPLIFY_TOL_DEG = 0.05
-
-
-def _footprint_geojson(valid_mask: np.ndarray,
-                       bounds: list) -> dict:
-    """Approximate the swath footprint as a polygon by tracing the outer
-    contour of the valid_mask in lat/lon space. Coarse but adequate for
-    a click-popup hit test and visualization. bounds = [[s, w], [n, e]].
-    The traced contour is Douglas-Peucker simplified (see
-    _FOOTPRINT_SIMPLIFY_TOL_DEG) to keep the GeoJSON small."""
-    from shapely.geometry import MultiPolygon, Polygon, mapping
-    from shapely.ops import unary_union
-    try:
-        from skimage import measure
-    except ImportError:
-        # Fall back to a simple bounding-box rectangle if skimage missing.
-        s, w = bounds[0]
-        n, e = bounds[1]
-        poly = Polygon([(w, s), (e, s), (e, n), (w, n), (w, s)])
-        return mapping(poly)
-
-    h, w_px = valid_mask.shape
-    s, west = bounds[0]
-    n, east = bounds[1]
-    dlat = (n - s) / max(h, 1)
-    dlon = (east - west) / max(w_px, 1)
-
-    contours = measure.find_contours(valid_mask.astype(np.uint8), 0.5)
-    if not contours:
-        poly = Polygon([(west, s), (east, s), (east, n), (west, n), (west, s)])
-        return mapping(poly)
-
-    polys = []
-    for c in contours:
-        # c is (row, col) float pixel coords; row 0 = top = lat n.
-        coords = [(west + col * dlon, n - row * dlat) for row, col in c]
-        if len(coords) >= 4:
-            try:
-                p = Polygon(coords).buffer(0)  # repair self-intersections
-                if p.is_valid and p.area > 0:
-                    polys.append(p)
-            except Exception:
-                continue
-
-    if not polys:
-        poly = Polygon([(west, s), (east, s), (east, n), (west, n), (west, s)])
-        return mapping(poly)
-
-    union = unary_union(polys)
-    if isinstance(union, MultiPolygon):
-        # Pick the largest few components to keep the GeoJSON small.
-        comps = sorted(union.geoms, key=lambda g: -g.area)[:5]
-        union = MultiPolygon(comps)
-
-    # Douglas-Peucker down to a map-display tolerance — this is the ~40× win.
-    # Guarded: if simplify yields an invalid/empty geom (degenerate rings can),
-    # try a buffer(0) repair, else keep the full-resolution union rather than
-    # ever emitting a broken/empty footprint.
-    try:
-        with warnings.catch_warnings():
-            # GEOS emits a benign "invalid value" RuntimeWarning on some
-            # degenerate rings but still returns a valid simplified geom; the
-            # is_valid/buffer(0) guard below is the real safety net.
-            warnings.simplefilter("ignore", RuntimeWarning)
-            simp = union.simplify(_FOOTPRINT_SIMPLIFY_TOL_DEG,
-                                  preserve_topology=True)
-        if not simp.is_valid or simp.is_empty:
-            simp = simp.buffer(0)
-        if simp.is_valid and not simp.is_empty and simp.area > 0:
-            union = simp
-    except Exception:
-        pass
-    return mapping(union)
 
 
 def _center_track(ds_geo, max_points: int = 12) -> list:
@@ -1276,7 +1227,10 @@ class RenderedProduct:
     product: str        # "37color" | "89pct" | "37v" | "37h" | "89v" | "89h"
     png_bytes: bytes
     bounds: list        # [[s, w], [n, e]]
-    footprint: dict     # GeoJSON geometry
+    # Legacy GeoJSON footprint slot. No longer computed or uploaded (no
+    # client or API ever fetched the .geojson); kept optional so existing
+    # callers that pass it keep working.
+    footprint: Optional[dict] = None
     pass_suffix: str = ""  # per-pass+segment tag like "-p0" or "-p0s1"
     # Orbital-arc identity, WITHOUT the along-track segment suffix (e.g.
     # "<orbit>-p0"). A wide arc is split into multiple whole-arc PNGs
@@ -1605,16 +1559,10 @@ def _render_single_product(ds_bt, ds_geo, sensor: str, product: str
     fields so they can do their own physics (e.g. compute their own
     polarization indices, sample emissivity contrasts, etc.).
     """
-    # vmin/vmax ranges per single-pol product. V-pol ocean values are
-    # higher than H-pol because ocean emissivity is V-dominated at these
-    # frequencies; bumping V-pol's vmin pulls dynamic range over the
-    # convective signal band rather than wasting it on warm ocean.
-    SINGLE_POL_RANGE = {
-        "37v": (180, 290),  # V-pol ocean ~200K, land/rain ~270-290K
-        "37h": (130, 290),  # H-pol ocean ~140K, land ~270K (huge dynamic range)
-        "89v": (180, 290),  # V-pol 89 GHz: ocean ~250K, ice scattering down to 180K
-        "89h": (130, 290),  # H-pol 89 GHz: ocean ~210K, ice down to 130K
-    }
+    # vmin/vmax per single-pol product come from the module-level
+    # _SINGLE_POL_RANGE — the same table the operational cached-regrid path
+    # uses, so both render paths (and the frontend legends) agree.
+    SINGLE_POL_RANGE = _SINGLE_POL_RANGE
 
     if product == "37color":
         gridded = _compute_37color_swath(ds_bt, ds_geo, sensor)
@@ -1672,7 +1620,6 @@ def _render_single_product(ds_bt, ds_geo, sensor: str, product: str
         # keeps the colormap's dynamic range over the band that actually
         # carries signal. Keep the frontend legend's 180-290 K ticks in sync.
         png = _encode_scalar_png(warped, _nrl_89ghz_cmap(), vmin=180, vmax=290)
-        warped_valid = np.isfinite(warped)
     else:
         # Single-pol products (37v / 37h / 89v / 89h). Use the matching
         # NRL colormap per frequency (37 GHz colormap is calibrated to
@@ -1682,11 +1629,8 @@ def _render_single_product(ds_bt, ds_geo, sensor: str, product: str
         vmin, vmax = SINGLE_POL_RANGE[product]
         cmap = _nrl_37ghz_cmap() if product.startswith("37") else _nrl_89ghz_cmap()
         png = _encode_scalar_png(warped, cmap, vmin=vmin, vmax=vmax)
-        warped_valid = np.isfinite(warped)
 
-    footprint = _footprint_geojson(warped_valid, bounds)
-    return RenderedProduct(product=product, png_bytes=png,
-                           bounds=bounds, footprint=footprint)
+    return RenderedProduct(product=product, png_bytes=png, bounds=bounds)
 
 
 # ---------------------------------------------------------------------------
@@ -1782,7 +1726,7 @@ def _finalize_from_grid(data, valid, bounds, product: str,
                         is_rgb: bool) -> RenderedProduct:
     """Common tail of the render pipeline shared by the per-product path
     and the cached-regrid path: bbox safety check, vertical flip,
-    Mercator warp, PNG encode, footprint."""
+    Mercator warp, PNG encode."""
     lat_min, lat_max = bounds[0][0], bounds[1][0]
     lon_min, lon_max = bounds[0][1], bounds[1][1]
     if (lon_max - lon_min) > 150.0:
@@ -1807,16 +1751,14 @@ def _finalize_from_grid(data, valid, bounds, product: str,
             vmin, vmax = _SINGLE_POL_RANGE[product]
             cmap = _nrl_37ghz_cmap() if product.startswith("37") else _nrl_89ghz_cmap()
         png = _encode_scalar_png(warped, cmap, vmin=vmin, vmax=vmax)
-        warped_valid = np.isfinite(warped)
-    footprint = _footprint_geojson(warped_valid, bounds)
-    return RenderedProduct(
-        product=product, png_bytes=png, bounds=bounds, footprint=footprint,
-    )
+    return RenderedProduct(product=product, png_bytes=png, bounds=bounds)
 
 
-# Per-product (vmin, vmax) for the single-pol scalar products.
-# Same numbers used by _render_single_product, hoisted here so both
-# render paths share the source of truth.
+# Per-product (vmin, vmax) for the single-pol scalar products, shared by
+# both render paths. V-pol ocean values are higher than H-pol because ocean
+# emissivity is V-dominated at these frequencies, so V-pol gets a higher
+# floor. Keep tc_mw_layer.js SINGLE_POL_LEGEND (and the IR/MW compare
+# colorbars in realtime_ir.js) in sync with these numbers.
 _SINGLE_POL_RANGE = {
     "37v": (180, 290),
     "37h": (150, 290),
@@ -1947,6 +1889,116 @@ def _frontfill_skip_granule(sensor: str, fname: str) -> bool:
                     "skipping download+render", sensor, fname,
                     MW_BUCKET, prefix)
     return already
+
+
+def _granule_sidecar_key(meta: GranuleMeta) -> str:
+    """Per-granule entries sidecar written by upload_granule after every
+    image. It sits under _granule_output_prefix, so the bucket lifecycle
+    rule and the existence guard treat it like the granule's PNGs."""
+    return f"{_granule_output_prefix(meta)}_entries.json"
+
+
+# Length of a PPS granule orbit_id (scan start as %Y%m%dT%H%M%S). Manifest
+# entries append a pass/segment suffix ("-p0", "s1", "-p0s1"), so slicing
+# to this length recovers the granule identity.
+_GRANULE_ORBIT_ID_LEN = len("20260101T000000")
+
+
+def _manifest_granule_keys(entries: Iterable[dict]) -> set:
+    """Granule identities a list of manifest entries accounts for:
+    (sensor, granule orbit_id) for every real product entry, plus
+    (sensor, "TIMEOUT-SKIP-<fname>") for watchdog sentinels. RENDERED-SKIP
+    sentinels are deliberately NOT counted — they only advance the backfill
+    cursor and say nothing about whether the real entries made it in."""
+    keys = set()
+    for e in entries:
+        sensor = e.get("sensor")
+        oid = str(e.get("orbit_id") or "")
+        if not sensor or not oid:
+            continue
+        product = e.get("product")
+        if product == _TIMEOUT_SENTINEL_PRODUCT:
+            keys.add((sensor, oid))
+        elif product != _RENDERED_SENTINEL_PRODUCT:
+            keys.add((sensor, oid[:_GRANULE_ORBIT_ID_LEN]))
+    return keys
+
+
+def _manifest_known_granules() -> Optional[set]:
+    """_manifest_granule_keys over the current GCS manifest. None when the
+    manifest can't be read or parsed — callers then fall back to the
+    GCS-only existence guard rather than treating everything as missing."""
+    try:
+        txt = _download_text(MANIFEST_KEY)
+        entries = json.loads(txt).get("entries", []) if txt else []
+    except Exception as exc:
+        logger.warning("[guard] manifest read failed (%s) — GCS-only "
+                       "existence guard this run", exc)
+        return None
+    return _manifest_granule_keys(entries)
+
+
+def _granule_skip_check(sensor: str, fname: str,
+                        known: Optional[set]) -> tuple[bool, list]:
+    """Manifest-aware existence guard. Returns (skip, repaired_entries).
+
+    GCS objects alone don't prove a granule reached the manifest: a run
+    killed (SIGTERM / OOM) or failing its manifest write leaves rendered
+    PNGs that no manifest entry points at, and a GCS-only guard would then
+    skip that pass forever. So:
+      * granule already in the manifest (or this run), or a watchdog
+        sentinel for it                      → skip
+      * no outputs in GCS (or LIST error)    → process
+      * outputs in GCS but not in manifest   → re-add the entries from the
+        granule's sidecar (no re-render) and skip; without a sidecar
+        (pre-sidecar or partial upload)      → process (re-render)
+    `known` is updated in place when entries are re-added. With known=None
+    (manifest unreadable) this is exactly _frontfill_skip_granule."""
+    if known is None:
+        return _frontfill_skip_granule(sensor, fname), []
+    if os.environ.get("MW_FRONTFILL_FORCE", "").strip().lower() in (
+            "1", "true", "yes", "on"):
+        return False, []
+    try:
+        meta = _pps_granule_meta(sensor, fname)
+    except Exception as exc:
+        logger.debug("[guard][%s] %s: meta parse failed (%s) — processing",
+                     sensor, fname, exc)
+        return False, []
+    if ((sensor, meta.orbit_id) in known
+            or (sensor, f"TIMEOUT-SKIP-{fname}") in known):
+        logger.info("[guard][%s] %s already in manifest — skipping "
+                    "download+render", sensor, fname)
+        return True, []
+    prefix = _granule_output_prefix(meta)
+    try:
+        if not _prefix_has_objects(prefix):
+            return False, []
+    except Exception as exc:
+        logger.warning("[guard][%s] existence check for %s failed (%s) — "
+                       "processing to be safe", sensor, prefix, exc)
+        return False, []
+    try:
+        txt = _download_text(_granule_sidecar_key(meta))
+        repaired = json.loads(txt) if txt else []
+    except Exception as exc:
+        logger.warning("[guard][%s] sidecar read for %s failed (%s)",
+                       sensor, prefix, exc)
+        repaired = []
+    if not isinstance(repaired, list):
+        repaired = []
+    repaired = [e for e in repaired
+                if isinstance(e, dict) and e.get("orbit_id")
+                and e.get("product") and e.get("scan_start")]
+    if repaired:
+        known.add((sensor, meta.orbit_id))
+        logger.warning("[guard][%s] %s rendered (gs://%s/%s*) but missing "
+                       "from manifest — re-adding %d entries from sidecar",
+                       sensor, fname, MW_BUCKET, prefix, len(repaired))
+        return True, repaired
+    logger.warning("[guard][%s] %s has outputs in GCS but no manifest entry "
+                   "and no sidecar — re-rendering", sensor, fname)
+    return False, []
 
 
 # ---------------------------------------------------------------------------
@@ -2087,7 +2139,8 @@ def _full_run_mark_done(now_ts=None) -> None:
 def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
                    dry_run: bool = False, dry_run_dir: Optional[str] = None,
                    ) -> list[dict]:
-    """Upload PNG + GeoJSON for each product. Returns manifest entries.
+    """Upload the PNG (+ storm crops) for each product, then the granule's
+    entries sidecar. Returns manifest entries.
     Each product carries its own `pass_suffix` (e.g., "-p0") for
     multi-pass sensors that were split. The suffix is appended to
     meta.orbit_id so each pass becomes a distinct manifest entry."""
@@ -2103,23 +2156,15 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
         # existence guard and this writer can never disagree on layout.
         png_key = _granule_png_key(meta, p.product, p.pass_suffix or "")
         base = png_key[:-len(f"_{p.product}.png")]
-        geo_key = f"{base}_{p.product}.geojson"
-        geo_payload = json.dumps(
-            {"type": "Feature", "geometry": p.footprint,
-             "properties": {"sensor": meta.sensor,
-                            "scan_start": t.isoformat()}},
-            separators=(",", ":")).encode("utf-8")
-        png_r2 = geo_r2 = False
+        png_r2 = False
         if dry_run:
             out_root = Path(dry_run_dir or "./mw_out")
             (out_root / Path(png_key).parent).mkdir(parents=True, exist_ok=True)
             (out_root / png_key).write_bytes(p.png_bytes)
-            (out_root / geo_key).write_bytes(geo_payload)
             logger.info("[dry-run] wrote %s (%d bytes)", out_root / png_key,
                         len(p.png_bytes))
         else:
             png_r2 = _upload_bytes(png_key, p.png_bytes, "image/png")
-            geo_r2 = _upload_bytes(geo_key, geo_payload, "application/geo+json")
         # Storm-centered hi-res crops (native resolution over a small
         # window) — uploaded alongside the whole-arc PNG. The frontend
         # per-storm card + IR/MW compare prefer the crop whose bounds cover
@@ -2155,7 +2200,6 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
             "scan_start": t.isoformat(),
             "product": p.product,
             "png_url": _mw_public_url(png_key, png_r2),
-            "geojson_url": _mw_public_url(geo_key, geo_r2),
             "bounds": p.bounds,  # [[s, w], [n, e]] for L.imageOverlay
             # Decimated arc center track [[lat,lon],...]. The frontend
             # tests min great-circle distance to this polyline against the
@@ -2170,6 +2214,18 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
             # storm was on this arc.
             entry["crops"] = crops_meta
         entries.append(entry)
+    if entries and not dry_run:
+        # Written LAST, after every image: its presence means the granule
+        # uploaded completely, and it lets a later tick put these entries
+        # back into the manifest without re-rendering if this run dies
+        # before its manifest write (see _granule_skip_check).
+        try:
+            _upload_bytes(_granule_sidecar_key(meta),
+                          json.dumps(entries, separators=(",", ":")).encode("utf-8"),
+                          "application/json", r2_mirror=False)
+        except Exception as exc:
+            logger.warning("entries sidecar upload failed for %s: %s",
+                           _granule_output_prefix(meta), exc)
     return entries
 
 
@@ -2253,6 +2309,7 @@ def update_manifest(new_entries: list[dict]) -> None:
         json.dumps(payload, separators=(",", ":")).encode("utf-8"),
         "application/json",
         cache_seconds=60,
+        gzip_encode=True,
     )
     logger.info("manifest: %d entries after merge (%d new)",
                 len(pruned), len(new_entries))
@@ -3207,6 +3264,7 @@ def run_predict_passes(upload: bool = True) -> dict:
             json.dumps(payload, separators=(",", ":")).encode("utf-8"),
             "application/json",
             cache_seconds=300,
+            gzip_encode=True,
         )
     _check_for_wsf_m_on_pps()
     return payload
@@ -3323,14 +3381,17 @@ def _cli(argv=None):
     )
 
     # Convert SIGTERM into a normal SystemExit so try/finally blocks run
-    # when the job is cancelled via `gcloud run jobs executions cancel`.
-    # Lock release + manifest checkpoint can then complete instead of
-    # leaving a stale lock behind. TTL is the safety net if the signal
-    # arrives mid-syscall and the finally never runs.
+    # when the job is cancelled via `gcloud run jobs executions cancel`
+    # (or hits its task timeout). The operational finally writes the
+    # manifest and then releases the lock, so entries rendered so far are
+    # kept instead of leaving orphaned PNGs behind. TTL is the safety net
+    # if the signal arrives mid-syscall and the finally never runs; the
+    # per-granule entries sidecar lets a later tick recover after SIGKILL.
     signal.signal(signal.SIGTERM, lambda *_a: sys.exit(0))
 
     products = [p.strip() for p in args.products.split(",") if p.strip()]
     all_entries: list[dict] = []
+    manifest_written = False
 
     # --predict-passes is its own short-circuit path: it never touches
     # PPS auth or granule listing, so it must run BEFORE the operational
@@ -3521,6 +3582,12 @@ def _cli(argv=None):
                             [(s, round(_staleness_h(s), 1)) for s in sensors])
 
             sess = _pps_session()
+            # Granules the manifest (plus this run) already accounts for —
+            # the existence guard's notion of "done". None (manifest
+            # unreadable, or a run that never writes the manifest) keeps
+            # the GCS-only guard.
+            known_granules = (None if (args.no_manifest or args.dry_run)
+                              else _manifest_known_granules())
             # Manifest-checkpoint timer. Long backfills used to keep the
             # frontend dark until end-of-run; now we write the manifest every
             # CHECKPOINT_INTERVAL_SEC of wall-clock time during the loop, so
@@ -3571,12 +3638,19 @@ def _cli(argv=None):
                                      source_tag=None):
                 fname = url.rsplit("/", 1)[-1]
                 granule_timed_out = False
+                # Cap the watchdog at the run's hard stop so a late-starting
+                # granule can't outlive the task timeout. A granule cut off
+                # by that cap (not by its own 600 s watchdog) gets no
+                # sentinel: it isn't poison, so the next tick retries it.
+                alarm_s = int(min(_GRANULE_TIMEOUT_SECONDS,
+                                  max(30.0, _HARD_STOP_SECONDS
+                                      - (time.time() - start_time))))
+                budget_capped = alarm_s < _GRANULE_TIMEOUT_SECONDS
                 def _granule_alarm_handler(_signum, _frame):
-                    raise TimeoutError(
-                        f"granule watchdog ({_GRANULE_TIMEOUT_SECONDS}s)")
+                    raise TimeoutError(f"granule watchdog ({alarm_s}s)")
                 prev_handler = signal.signal(
                     signal.SIGALRM, _granule_alarm_handler)
-                signal.alarm(_GRANULE_TIMEOUT_SECONDS)
+                signal.alarm(alarm_s)
                 # Download into a temp DIR using the original PPS
                 # filename so read_pps_for_product's regex (anchored
                 # on the granule name pattern) sees the unmodified
@@ -3595,12 +3669,18 @@ def _cli(argv=None):
                             produced = process_one(
                                 str(fpath), sensor, products)
                         except TimeoutError as exc:
-                            granule_timed_out = True
-                            logger.error(
-                                "[%s] granule %s WATCHDOG TIMEOUT "
-                                "(%s) — skipping; cursor will advance "
-                                "via sentinel entry to prevent retry "
-                                "loop", sensor, fname, exc)
+                            if budget_capped:
+                                logger.warning(
+                                    "[%s] granule %s stopped at the run's "
+                                    "hard stop (%s) — not marked; next "
+                                    "tick retries it", sensor, fname, exc)
+                            else:
+                                granule_timed_out = True
+                                logger.error(
+                                    "[%s] granule %s WATCHDOG TIMEOUT "
+                                    "(%s) — skipping; cursor will advance "
+                                    "via sentinel entry to prevent retry "
+                                    "loop", sensor, fname, exc)
                         except Exception as exc:
                             logger.error("[%s] granule %s failed: %s",
                                          sensor, fname, exc)
@@ -3612,8 +3692,13 @@ def _cli(argv=None):
                     for e in produced:
                         e["_source"] = source_tag
                 all_entries.extend(produced)
+                if known_granules is not None:
+                    known_granules.update(_manifest_granule_keys(produced))
 
                 if granule_timed_out:
+                    if known_granules is not None:
+                        known_granules.add(
+                            (sensor, f"TIMEOUT-SKIP-{fname}"))
                     all_entries.append({
                         "sensor": sensor,
                         "platform": "_skip",
@@ -3622,7 +3707,6 @@ def _cli(argv=None):
                         "orbit_id": f"TIMEOUT-SKIP-{fname}",
                         "product": _TIMEOUT_SENTINEL_PRODUCT,
                         "png_url": "",
-                        "geojson_url": "",
                         "bounds": [[0.0, 0.0], [0.0, 0.0]],
                         "_skip_reason": "granule-watchdog-timeout",
                         **({"_source": source_tag} if source_tag else {}),
@@ -3691,7 +3775,13 @@ def _cli(argv=None):
                             break
                         probed += 1
                         fname = url.rsplit("/", 1)[-1]
-                        if _frontfill_skip_granule(sensor, fname):
+                        skip, repaired = _granule_skip_check(
+                            sensor, fname, known_granules)
+                        if repaired:
+                            for e in repaired:
+                                e["_source"] = _FRONTFILL_SOURCE_TAG
+                            all_entries.extend(repaired)
+                        if skip:
                             continue
                         picked += 1
                         _process_one_granule(
@@ -3781,7 +3871,11 @@ def _cli(argv=None):
                             continue
                         logger.info("[%s] late arrival behind cursor: %s",
                                     sensor, fname)
-                    if _frontfill_skip_granule(sensor, fname):
+                    skip, repaired = _granule_skip_check(
+                        sensor, fname, known_granules)
+                    if repaired:
+                        all_entries.extend(repaired)
+                    if skip:
                         all_entries.append({
                             "sensor": sensor,
                             "platform": "_skip",
@@ -3790,7 +3884,6 @@ def _cli(argv=None):
                             "orbit_id": f"RENDERED-SKIP-{fname}",
                             "product": _RENDERED_SENTINEL_PRODUCT,
                             "png_url": "",
-                            "geojson_url": "",
                             "bounds": [[0.0, 0.0], [0.0, 0.0]],
                             "_skip_reason": "already-rendered-by-frontfill",
                         })
@@ -3810,20 +3903,33 @@ def _cli(argv=None):
                             "orbit_id": f"RENDERED-SKIP-{fname}",
                             "product": _RENDERED_SENTINEL_PRODUCT,
                             "png_url": "",
-                            "geojson_url": "",
                             "bounds": [[0.0, 0.0], [0.0, 0.0]],
                             "_skip_reason": "no-renderable-data",
                         })
                 if budget_exceeded:
                     break
         finally:
+            # Write the manifest BEFORE releasing the lock, and on every
+            # exit path (SIGTERM → SystemExit, exceptions): entries that
+            # miss the manifest leave rendered PNGs no entry points at.
+            # Inside the lock, so the next tick can't interleave its own
+            # read-merge-write.
+            if all_entries and not args.no_manifest and not args.dry_run:
+                manifest_written = True
+                try:
+                    update_manifest(all_entries)
+                except Exception as exc:
+                    logger.error("[manifest] final update failed (%s) — "
+                                 "entries recoverable from granule "
+                                 "sidecars on a later tick", exc)
             if lock_held:
                 _release_ingest_lock(execution_name)
     else:
         ap.error("Specify one of --tcprimed-file / --pps-file / "
                  "--since-hours / --operational")
 
-    if all_entries and not args.no_manifest and not args.dry_run:
+    if (all_entries and not manifest_written
+            and not args.no_manifest and not args.dry_run):
         update_manifest(all_entries)
     print(json.dumps({"processed": len(all_entries), "entries": all_entries[:3]},
                      indent=2, default=str))

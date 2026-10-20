@@ -145,8 +145,18 @@ fi
 # source → same hash → COPY layer still cached (fast); any edit → new hash →
 # COPY and everything after rebuild. Keeps the pip layer cached either way.
 SRC_HASH="$(cat mw_ingest.py microwave_api.py | shasum -a 256 | cut -c1-16)"
+# One EXIT trap over every temp file this script creates (appended as each is
+# made), so an early exit never references a not-yet-assigned variable under
+# `set -u` and no temp file is left out of the cleanup.
+TMP_FILES=()
+cleanup_tmp_files() {
+    if [ ${#TMP_FILES[@]} -gt 0 ]; then
+        rm -f "${TMP_FILES[@]}"
+    fi
+}
+trap cleanup_tmp_files EXIT
 BUILD_CFG="$(mktemp -t tc-atlas-mw-cloudbuild.XXXXXX.yaml)"
-trap 'rm -f "${BUILD_CFG}"' EXIT
+TMP_FILES+=("${BUILD_CFG}")
 cat > "${BUILD_CFG}" <<EOF
 steps:
 - name: 'gcr.io/cloud-builders/docker'
@@ -267,7 +277,7 @@ gcloud run jobs add-iam-policy-binding "${JOB_NAME}" \
 # which requires ACAO headers to avoid a tainted canvas. Same JSON shape
 # as the env-overlay bucket. Setting on the bucket is idempotent.
 CORS_JSON="$(mktemp -t tc-atlas-mw-cors.XXXXXX.json)"
-trap 'rm -f "${BUILD_CFG}" "${CORS_JSON}"' EXIT
+TMP_FILES+=("${CORS_JSON}")
 cat > "${CORS_JSON}" <<EOF
 [{"origin":["*"],"method":["GET","HEAD"],"responseHeader":["Content-Type","Access-Control-Allow-Origin"],"maxAgeSeconds":3600}]
 EOF
@@ -281,9 +291,9 @@ gsutil cors set "${CORS_JSON}" "gs://${BUCKET}" || echo "  (warning: CORS set fa
 # Manifest and predictions files have no sensor prefix so they're
 # left alone (they update in place and are tiny).
 LIFECYCLE_JSON="$(mktemp -t tc-atlas-mw-lifecycle.XXXXXX.json)"
-trap 'rm -f "${BUILD_CFG}" "${CORS_JSON}" "${PREDICT_BODY}" "${LIFECYCLE_JSON}"' EXIT
+TMP_FILES+=("${LIFECYCLE_JSON}")
 cat > "${LIFECYCLE_JSON}" <<EOF
-{"lifecycle":{"rule":[{"action":{"type":"Delete"},"condition":{"age":7,"matchesPrefix":["GMI/","SSMIS/","AMSR2/","ATMS/"]}}]}}
+{"lifecycle":{"rule":[{"action":{"type":"Delete"},"condition":{"age":7,"matchesPrefix":["GMI/","SSMIS/","AMSR2/","AMSR3/","ATMS/","MWI/"]}}]}}
 EOF
 echo "Setting 7-day lifecycle rule on gs://${BUCKET}..."
 gsutil lifecycle set "${LIFECYCLE_JSON}" "gs://${BUCKET}" || echo "  (warning: lifecycle set failed)"
@@ -315,7 +325,7 @@ fi
 # inherited automatically. Same pattern works for manual testing:
 #   gcloud run jobs execute ... --args=--predict-passes
 PREDICT_BODY="$(mktemp -t tc-atlas-mw-predict-body.XXXXXX.json)"
-trap 'rm -f "${BUILD_CFG}" "${CORS_JSON}" "${PREDICT_BODY}"' EXIT
+TMP_FILES+=("${PREDICT_BODY}")
 cat > "${PREDICT_BODY}" <<'EOF'
 {"overrides":{"containerOverrides":[{"args":["--predict-passes"]}]}}
 EOF

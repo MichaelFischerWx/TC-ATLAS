@@ -935,13 +935,18 @@ def storm_tile_set(points, zooms, box_deg):
         lat, lon = (p["lat"], p["lon"]) if isinstance(p, dict) else p
         for z in zooms:
             n = 2 ** z
-            x0 = max(0, lon_to_tilex(lon - box_deg, z))
-            x1 = min(n - 1, lon_to_tilex(lon + box_deg, z))
+            # x wraps around the antimeridian (a storm at 178°E needs tiles
+            # on both sides of 180°); floor so a box edge just west of
+            # -180° lands in the last column instead of truncating to 0.
+            x0 = math.floor((lon - box_deg + 180.0) / 360.0 * n)
+            x1 = math.floor((lon + box_deg + 180.0) / 360.0 * n)
+            if x1 - x0 >= n:
+                x0, x1 = 0, n - 1
             y0 = max(0, lat_to_tiley(lat + box_deg, z))
             y1 = min(n - 1, lat_to_tiley(lat - box_deg, z))
             for ty in range(y0, y1 + 1):
                 for tx in range(x0, x1 + 1):
-                    tiles.add((z, tx, ty))
+                    tiles.add((z, tx % n, ty))
     return tiles
 
 
@@ -1740,8 +1745,8 @@ def main():
                         log(f"  {product} pack: {len(pack)} tiles, {len(pk)/1e6:.1f} MB → {pk_name}")
                     except Exception as ex:
                         # dual: clients fall back to the per-tile objects. only:
-                        # the frame is unusable — do NOT stamp pack_frames (and
-                        # there are no tiles), so it reads as a missing frame.
+                        # there are no per-tile objects either, so the frame is
+                        # unusable and must stay out of frames.json (below).
                         log(f"  {product} pack upload failed: {ex}")
                 # A gap only counts when there WERE storms to cover (tiles
                 # non-empty) but none rendered — not a no-storm quiet cycle.
@@ -1750,12 +1755,20 @@ def main():
                 # list entry the storm-card loop shows it overzoomed from the
                 # z4 global pyramid (the 2026-08-31 blurry-frame bug). This is
                 # the one path where IR/WV gap too — same missing sectors.
-                frames = update_r2_manifest(ts, args.zmax, product,
-                                            is_gap=((bool(tiles) or storms_unknown)
-                                                    and n_storm == 0),
-                                            pack=pack_ok, storm_zmax=frame_szm)
-                timings["upload"] = time.time() - t1
-                log(f"  {product} R2: {ok} up ({errs} failed); manifest {len(frames)} frames")
+                if PACK_MODE == "only" and not pack_ok:
+                    # A frame missing from pack_frames is read per-tile by the
+                    # client, and "only" mode wrote no per-tile objects — so
+                    # publishing it would loop a blank frame. Leave it out.
+                    timings["upload"] = time.time() - t1
+                    log(f"  {product} R2: no pack in MOSAIC_PACK=only mode — "
+                        f"frame {ts} NOT added to frames.json")
+                else:
+                    frames = update_r2_manifest(ts, args.zmax, product,
+                                                is_gap=((bool(tiles) or storms_unknown)
+                                                        and n_storm == 0),
+                                                pack=pack_ok, storm_zmax=frame_szm)
+                    timings["upload"] = time.time() - t1
+                    log(f"  {product} R2: {ok} up ({errs} failed); manifest {len(frames)} frames")
                 if pack_ok:
                     written_pack.setdefault(product, []).append(ts)
             elif pack is not None:
