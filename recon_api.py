@@ -738,9 +738,25 @@ _HIRES_GCS_LIST_TTL = 300
 _HIRES_MAX_AGE_H = 72         # ignore ring-buffer slots older than this
 _hires_list_cache = {"ts": 0.0, "rows": []}
 _hires_slot_seen: dict = {}   # (name, size, mtime_iso) -> [ids] | None (None = undecodable)
-_hires_by_id: dict = {}       # id -> full sonde dict (levels included)
+_hires_by_id: dict = {}       # id -> full sonde dict (levels included); insertion-ordered
+_HIRES_BY_ID_MAX = 1500       # cap (oldest-inserted dropped); a build window needs a few hundred
 _hires_gcs_days: dict = {}    # day 'YYYY-MM-DD' -> ts of last archive listing
 _hires_lock = threading.Lock()   # eccodes is not thread-safe; decode serially
+
+
+def _hires_remember(sid: str, s: dict) -> None:
+    """Store a decoded sonde under ``sid`` (no-op if present), keeping
+    _hires_by_id at most _HIRES_BY_ID_MAX entries."""
+    if sid in _hires_by_id:
+        return
+    _hires_by_id[sid] = s
+    while len(_hires_by_id) > _HIRES_BY_ID_MAX:
+        try:
+            _hires_by_id.pop(next(iter(_hires_by_id)), None)
+        except (StopIteration, RuntimeError):
+            break
+
+
 _MONTHS = {m: i for i, m in enumerate(
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
 
@@ -949,7 +965,7 @@ def _hires_archive_sync(since: datetime, until: datetime):
         with ThreadPoolExecutor(max_workers=8) as ex:
             for s in ex.map(_get, todo):
                 if s and s.get("id"):
-                    _hires_by_id.setdefault(s["id"], s)
+                    _hires_remember(s["id"], s)
     except Exception as e:
         logger.warning("hires archive sync failed: %s", e)
 
@@ -994,7 +1010,7 @@ def _hires_sondes(since: datetime, until: datetime) -> list:
                 _hires_slot_seen[(nm, sz, mt.isoformat())] = [s["id"] for s in ss] or None
                 for s in ss:
                     if s["id"] not in _hires_by_id:
-                        _hires_by_id[s["id"]] = s
+                        _hires_remember(s["id"], s)
                         _hires_archive_put(s)
             if len(_hires_slot_seen) > 4000:
                 for k in list(_hires_slot_seen)[:1000]:
@@ -1006,7 +1022,7 @@ def _hires_sondes(since: datetime, until: datetime) -> list:
     except Exception as e:
         logger.warning("hires archive pass failed: %s", e)
     lo, hi = since.strftime("%Y-%m-%dT%H:%M:%SZ"), until.strftime("%Y-%m-%dT%H:%M:%SZ")
-    out = [s for s in _hires_by_id.values() if lo <= s["t"] <= hi]
+    out = [s for s in list(_hires_by_id.values()) if lo <= s["t"] <= hi]
     out.sort(key=lambda s: s["t"])
     return out
 
@@ -1299,7 +1315,14 @@ def _live_gcs_sync(basin: str, now: datetime):
         _live_gcs_list_cache[basin] = (time.time(), names)
     with _LIVE_KEEP_LOCK:
         known = {_live_blob_name(k[0], k[1], k[2]) for k in _LIVE_KEEP}
+    # Objects whose last ob is already past the retention window would just be
+    # pruned again by _live_retain, so don't re-download them every build. The
+    # name ends in the last-ob stamp written by _live_blob_name (YYYYMMDDTHHMMSSZ).
+    cutoff_stamp = (now - timedelta(hours=_LIVE_KEEP_H)).strftime("%Y%m%dT%H%M%S")
     for name in sorted(names - known):
+        stamp = name.rsplit("_", 1)[-1][:-len(".txt")].rstrip("Z")
+        if len(stamp) == 15 and stamp[8:9] == "T" and stamp < cutoff_stamp:
+            continue
         try:
             txt = b.blob(name).download_as_text()
             parsed = _parse_hdob_bulletin(txt, now)
@@ -2240,7 +2263,7 @@ def recon_sonde_hires(id: str = Query(..., description="hires sonde id from the 
                 bl = b.blob(f"{_HIRES_GCS_PREFIX}/{sid}.json")
                 if bl.exists():
                     s = json.loads(bl.download_as_bytes())
-                    _hires_by_id[sid] = s
+                    _hires_remember(sid, s)
             except Exception as e:
                 logger.warning("hires get %s failed: %s", sid, e)
     if s is None:

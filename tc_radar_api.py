@@ -56,8 +56,9 @@ import fsspec
 from scipy import ndimage as _ndimage
 from scipy.interpolate import RegularGridInterpolator
 from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.responses import PlainTextResponse
 from fastapi.responses import Response, JSONResponse, RedirectResponse, StreamingResponse
 from starlette.requests import Request as StarletteRequest
 
@@ -275,19 +276,8 @@ app = FastAPI(title="TC-RADAR API", version="2.0.0")
 from starlette.middleware.gzip import GZipMiddleware
 app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
 
-_cors_origins = os.environ.get(
-    "CORS_ORIGINS",
-    "https://michaelfischerwx.github.io,http://localhost:8000",
-).split(",")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[o.strip() for o in _cors_origins],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["ETag", "X-Cache"],
-)
+# CORS is handled by PublicCORSMiddleware, registered as the LAST middleware
+# (i.e. outermost) further below — see the comment there.
 
 
 # ---------------------------------------------------------------------------
@@ -333,8 +323,10 @@ _BOT_EXEMPT_UA_PREFIXES = ("Google-Cloud-Scheduler", "tc-atlas-", "GoogleHC")
 
 
 def _is_automated_client(request: StarletteRequest) -> bool:
-    ua = request.headers.get("user-agent", "")
-    if not ua or ua.startswith(_BOT_EXEMPT_UA_PREFIXES):
+    ua = request.headers.get("user-agent", "").strip()
+    if not ua:
+        return True   # every browser sends a UA; an empty one is scripted
+    if ua.startswith(_BOT_EXEMPT_UA_PREFIXES):
         return False
     return "Mozilla/" not in ua
 
@@ -428,7 +420,7 @@ app.add_middleware(RateLimitMiddleware)
 # backstop, not a hard global guarantee. The cap sits above the frontend's
 # largest single-tab prefetch batch (gridsat=14) so a normal viewer is never
 # throttled; only runaway/duplicate bursts trip it.
-_HEAVY_PREFIXES = ('/global/hursat/frame', '/global/ir/frame')
+_HEAVY_PREFIXES = ('/global/hursat/frame', '/global/ir/frame', '/nexrad/')
 _max_inflight_per_ip = 16
 _inflight_counts: dict[str, int] = _collections.defaultdict(int)
 _inflight_lock = threading.Lock()
@@ -506,7 +498,10 @@ class CacheHeaderMiddleware(BaseHTTPMiddleware):
         # for minutes, serving "not found" long after the origin recovered.
         if response.status_code >= 400:
             response.headers['Cache-Control'] = 'no-store'
-        elif response.status_code == 200:
+        elif response.status_code == 200 and 'cache-control' not in response.headers:
+            # A handler that set its own Cache-Control knows better than the
+            # path table (e.g. a provisional payload sent as no-store, or a
+            # streamed composite whose final line may be an error) — keep it.
             if path in self.IMMUTABLE_EXACT or any(path.startswith(p) for p in self.IMMUTABLE_PREFIXES):
                 # Immutable scientific data: browser holds 1d, CDN holds 7d.
                 # s-maxage + immutable let Cloud CDN absorb repeat hits without
@@ -522,7 +517,7 @@ class CacheHeaderMiddleware(BaseHTTPMiddleware):
                 )
             elif path in self.SHORT_CACHE_PATHS:
                 response.headers['Cache-Control'] = 'public, max-age=300'
-            elif path.startswith('/global/') and 'cache-control' not in response.headers:
+            elif path.startswith('/global/'):
                 # The Cloudflare cache rule now covers all of /global/ with
                 # respect_origin. A 200 with NO Cache-Control would fall back
                 # to Cloudflare's default 2 h edge TTL, so every archive
@@ -576,6 +571,92 @@ class InflightCounterMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(InflightCounterMiddleware)
+
+
+# ---------------------------------------------------------------------------
+# CORS — constant, cache-safe headers for a public, credential-free API
+# ---------------------------------------------------------------------------
+# Every response carries the same `Access-Control-Allow-Origin: *`, whatever
+# Origin (or none) the request sent, so a Cloudflare edge entry is valid for
+# every viewer and there is no per-Origin variant to split the cache. No
+# first-party fetch sends credentials, so no Allow-Credentials / reflected
+# Origin / `Vary: Origin` is needed. Pure ASGI (not BaseHTTPMiddleware) and
+# registered LAST, so it is the OUTERMOST middleware: 429s from the rate
+# limiters above, 4xx/5xx and streamed bodies all get the header, and
+# preflights are answered here before they count against the rate limit.
+# Keep this the last add_middleware call in the module.
+_CORS_ALLOW_METHODS = "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT"
+_CORS_EXPOSE_HEADERS = ("ETag", "X-Cache")
+
+
+class PublicCORSMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    @staticmethod
+    def _stamp(message):
+        h = MutableHeaders(scope=message)
+        h["Access-Control-Allow-Origin"] = "*"
+        if "access-control-allow-credentials" in h:
+            del h["access-control-allow-credentials"]
+        # Merge (don't clobber) any handler-specific exposed headers.
+        exposed = [e.strip() for e in h.get("access-control-expose-headers", "").split(",") if e.strip()]
+        for e in _CORS_EXPOSE_HEADERS:
+            if e.lower() not in {x.lower() for x in exposed}:
+                exposed.append(e)
+        h["Access-Control-Expose-Headers"] = ", ".join(exposed)
+        # Drop any Origin token from Vary (keep Accept-Encoding etc.).
+        vary = [tok.strip() for line in h.getlist("vary") for tok in line.split(",") if tok.strip()]
+        if any(v.lower() == "origin" for v in vary):
+            del h["vary"]
+            kept = [v for v in vary if v.lower() != "origin"]
+            if kept:
+                h["Vary"] = ", ".join(kept)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        req = Headers(scope=scope)
+        if (scope["method"] == "OPTIONS" and "origin" in req
+                and "access-control-request-method" in req):
+            headers = {
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": _CORS_ALLOW_METHODS,
+                "Access-Control-Max-Age": "600",
+            }
+            requested = req.get("access-control-request-headers")
+            if requested:
+                headers["Access-Control-Allow-Headers"] = requested
+            await PlainTextResponse("OK", status_code=200, headers=headers)(scope, receive, send)
+            return
+
+        started = False
+
+        async def _send(message):
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+                self._stamp(message)
+            await send(message)
+
+        try:
+            await self.app(scope, receive, _send)
+        except Exception:
+            # Unhandled error before any response: answer the 500 here so the
+            # browser sees the status instead of an opaque CORS failure. The
+            # outer ServerErrorMiddleware sees the response as started and
+            # only re-raises (so the traceback is still logged).
+            if not started:
+                await PlainTextResponse(
+                    "Internal Server Error", status_code=500,
+                    headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"},
+                )(scope, receive, send)
+            raise
+
+
+app.add_middleware(PublicCORSMiddleware)
 
 
 def _rss_mib() -> Optional[float]:
@@ -808,42 +889,45 @@ def render_planview(
         y = np.arange(data.shape[-2])
 
     fig, ax = plt.subplots(figsize=(7, 6.5), facecolor="#0e1117")
-    ax.set_facecolor("#0e1117")
+    try:
+        ax.set_facecolor("#0e1117")
 
-    im = ax.pcolormesh(x, y, data, cmap=cmap, vmin=vmin, vmax=vmax, shading="auto")
+        im = ax.pcolormesh(x, y, data, cmap=cmap, vmin=vmin, vmax=vmax, shading="auto")
 
-    rmw = case_meta.get("rmw_km")
-    if rmw is not None and not np.isnan(float(rmw)):
-        rmw = float(rmw)
-        theta = np.linspace(0, 2 * np.pi, 360)
-        ax.plot(rmw * np.cos(theta), rmw * np.sin(theta),
-                "w--", lw=1.5, alpha=0.85, label=f"RMW = {rmw:.0f} km")
-        ax.legend(loc="upper right", fontsize=8, framealpha=0.3, labelcolor="white")
+        rmw = case_meta.get("rmw_km")
+        if rmw is not None and not np.isnan(float(rmw)):
+            rmw = float(rmw)
+            theta = np.linspace(0, 2 * np.pi, 360)
+            ax.plot(rmw * np.cos(theta), rmw * np.sin(theta),
+                    "w--", lw=1.5, alpha=0.85, label=f"RMW = {rmw:.0f} km")
+            ax.legend(loc="upper right", fontsize=8, framealpha=0.3, labelcolor="white")
 
-    cbar = fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
-    cbar.set_label(units, color="white", fontsize=9)
-    cbar.ax.yaxis.set_tick_params(color="white")
-    plt.setp(cbar.ax.yaxis.get_ticklabels(), color="white")
+        cbar = fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
+        cbar.set_label(units, color="white", fontsize=9)
+        cbar.ax.yaxis.set_tick_params(color="white")
+        plt.setp(cbar.ax.yaxis.get_ticklabels(), color="white")
 
-    storm   = case_meta.get("storm_name", "")
-    dt      = case_meta.get("datetime", "")
-    vmax_kt = case_meta.get("vmax_kt", "")
-    vmax_str = f"  |  Vmax = {float(vmax_kt):.0f} kt" if vmax_kt != "" else ""
-    ax.set_title(
-        f"{storm}  |  {dt}{vmax_str}\n{display_name} @ {actual_level:.1f} km",
-        color="white", fontsize=10, pad=8,
-    )
-    ax.set_xlabel("Eastward distance (km)", color="white", fontsize=9)
-    ax.set_ylabel("Northward distance (km)", color="white", fontsize=9)
-    ax.tick_params(colors="white")
-    for spine in ax.spines.values():
-        spine.set_edgecolor("#444")
-    ax.set_aspect("equal")
+        storm   = case_meta.get("storm_name", "")
+        dt      = case_meta.get("datetime", "")
+        vmax_kt = case_meta.get("vmax_kt", "")
+        vmax_str = f"  |  Vmax = {float(vmax_kt):.0f} kt" if vmax_kt not in ("", None) else ""
+        ax.set_title(
+            f"{storm}  |  {dt}{vmax_str}\n{display_name} @ {actual_level:.1f} km",
+            color="white", fontsize=10, pad=8,
+        )
+        ax.set_xlabel("Eastward distance (km)", color="white", fontsize=9)
+        ax.set_ylabel("Northward distance (km)", color="white", fontsize=9)
+        ax.tick_params(colors="white")
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#444")
+        ax.set_aspect("equal")
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
-    plt.close(fig)
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=130, bbox_inches="tight",
+                    facecolor=fig.get_facecolor())
+    finally:
+        # Always release the figure — pyplot keeps every open figure alive.
+        plt.close(fig)
     buf.seek(0)
     return buf.read()
 
@@ -1401,9 +1485,20 @@ def list_variables():
     return [{"key": k, "display_name": v[0], "units": v[3]} for k, v in VARIABLES.items()]
 
 
+_LEVELS_KM = np.array([round(i * 0.5, 1) for i in range(37)])
+
+
 @app.get("/levels")
 def list_levels():
-    return {"levels_km": [round(i * 0.5, 1) for i in range(37)]}
+    return {"levels_km": _LEVELS_KM.tolist()}
+
+
+def _snap_level_km(level_km: float) -> float:
+    """The analysis level a request is served at: nearest /levels height, with
+    the same argmin tie rule the handlers use. Cache keys must name this level
+    (not round(level_km, 1)) or an off-grid request stores one level's data
+    under another level's key."""
+    return float(_LEVELS_KM[int(np.argmin(np.abs(_LEVELS_KM - level_km)))])
 
 
 @app.get("/metadata")
@@ -1572,7 +1667,8 @@ def get_data(
     from global_archive_api import (
         _r2_frame_exists, _r2_mirror_frame_async, _public_frame_url,
     )
-    r2_key = (f"tcradar-data/v1/{data_type}/{case_index}_{variable}_{round(level_km, 1):.1f}"
+    level_key = _snap_level_km(level_km)
+    r2_key = (f"tcradar-data/v1/{data_type}/{case_index}_{variable}_{level_key:.1f}"
               f"_{overlay or 'none'}_{int(wind_barbs)}_{int(tilt_profile)}.json")
     if _r2_frame_exists(r2_key):
         return RedirectResponse(
@@ -1581,7 +1677,7 @@ def get_data(
         )
 
     # Serve from cache if available (instant — no S3 read or computation)
-    cache_key = (case_index, variable, round(level_km, 1), data_type, overlay, wind_barbs, tilt_profile)
+    cache_key = (case_index, variable, level_key, data_type, overlay, wind_barbs, tilt_profile)
     with _data_cache_lock:
         _cached = _data_cache.get(cache_key)
         if _cached is not None:
@@ -1695,6 +1791,11 @@ def get_data(
                 result["tilt_profile"] = tilt_data
         except Exception as e:
             print(f"Tilt profile extraction failed: {e}")
+
+    # The keys name the snapped /levels height; if this dataset's height grid
+    # served a different level, don't store it under that key.
+    if abs(actual_level - level_key) > 1e-3:
+        return JSONResponse(result, headers={"X-Cache": "MISS"})
 
     # Store in cache. (No gc.collect() here any more — the evicted dicts are
     # plain refcounted containers and are freed on popitem; the forced full
@@ -3557,6 +3658,18 @@ def quadrant_mean(
 # ---------------------------------------------------------------------------
 _COMPOSITE_MAX_CASES = 1000  # safety cap — batched processing keeps peak RAM bounded regardless of N
 
+
+def _cap_composite_cases(matching: list) -> list:
+    """Apply the _COMPOSITE_MAX_CASES cap with a deterministic, evenly strided
+    subsample across the whole match list (rather than keeping only the first
+    N, which would drop every recent-era case), so all eras stay represented
+    and the same filters always give the same case set."""
+    n = len(matching)
+    cap = _COMPOSITE_MAX_CASES
+    if n <= cap:
+        return matching
+    return [matching[(i * n) // cap] for i in range(cap)]
+
 _SENTINEL_DONE = "__DONE__"
 _SENTINEL_ERROR = "__ERROR__"
 
@@ -3595,7 +3708,10 @@ def _streaming_composite_response(compute_fn):
                 break
             yield item
 
-    return StreamingResponse(_generate(), media_type="application/x-ndjson")
+    # no-store: the 200 status is sent before the result is known, and the
+    # final line may be {"error": ...} — never let a cache pin that.
+    return StreamingResponse(_generate(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-store"})
 
 # Common query parameters for composite filters
 def _composite_filter_params(
@@ -4106,8 +4222,7 @@ def composite_azimuthal_mean(
     )
     if not matching:
         raise HTTPException(status_code=400, detail="No cases match the specified criteria.")
-    if len(matching) > _COMPOSITE_MAX_CASES:
-        matching = matching[:_COMPOSITE_MAX_CASES]
+    matching = _cap_composite_cases(matching)
 
     # Filter to cases with valid RMW (only required when normalising)
     if normalize_rmw:
@@ -4337,8 +4452,7 @@ def composite_quadrant_mean(
     )
     if not matching:
         raise HTTPException(status_code=400, detail="No cases match the specified criteria.")
-    if len(matching) > _COMPOSITE_MAX_CASES:
-        matching = matching[:_COMPOSITE_MAX_CASES]
+    matching = _cap_composite_cases(matching)
 
     display_name, varname, cmap, units, vmin, vmax = VARIABLES[variable]
     ref_varname = DERIVED_VARIABLES[variable][0] if variable in DERIVED_VARIABLES else varname
@@ -4469,6 +4583,12 @@ def composite_quadrant_mean(
 # Composite plan-view endpoint
 # ---------------------------------------------------------------------------
 
+# Plan-view bootstrap budget: grid cells x max(n_cases, n_iter). 6.4e7 float32
+# = 256 MB per stack/product array. The default 5/0.1 R/RMW grid (101x101)
+# fits even at n_iter=5000 with 1000 cases.
+_PV_BOOT_MAX_CELL_ROWS = 64_000_000
+
+
 @app.get("/composite/plan_view")
 def composite_plan_view(
     variable:       str   = Query(DEFAULT_VARIABLE,        description="Variable key"),
@@ -4525,8 +4645,7 @@ def composite_plan_view(
     )
     if not matching:
         raise HTTPException(status_code=400, detail="No cases match the specified criteria.")
-    if len(matching) > _COMPOSITE_MAX_CASES:
-        matching = matching[:_COMPOSITE_MAX_CASES]
+    matching = _cap_composite_cases(matching)
 
     # ------------------------------------------------------------------
     # Collect per-case metadata (RMW, optionally SDDC)
@@ -4557,6 +4676,18 @@ def composite_plan_view(
             parts.append("shear direction")
         detail += " and ".join(parts) + " data."
         raise HTTPException(status_code=400, detail=detail)
+
+    # Bootstrap keeps an (n_cases x cells) stack and builds (n_iter x cells)
+    # products, so a fine R/RMW grid times many cases can exhaust memory.
+    if bootstrap and normalize_rmw:
+        n_side = 2 * int(round(max_r_rmw / dr_rmw)) + 1
+        if n_side * n_side * max(len(cases_ready), n_iter) > _PV_BOOT_MAX_CELL_ROWS:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Bootstrap on a {n_side}x{n_side} R/RMW grid with "
+                        f"{len(cases_ready)} cases is too large; use a coarser grid "
+                        f"spacing, a smaller extent, or narrower filters."),
+            )
 
     # ------------------------------------------------------------------
     # Pre-fetch grid info & locate height index
@@ -4965,8 +5096,7 @@ def composite_ir_plan_view(
     )
     if not matching:
         raise HTTPException(status_code=400, detail="No cases match the specified criteria.")
-    if len(matching) > _COMPOSITE_MAX_CASES:
-        matching = matching[:_COMPOSITE_MAX_CASES]
+    matching = _cap_composite_cases(matching)
 
     # Collect per-case metadata
     cases_ready = []
@@ -5197,8 +5327,7 @@ def composite_ir_azimuthal_mean(
     )
     if not matching:
         raise HTTPException(status_code=400, detail="No cases match the specified criteria.")
-    if len(matching) > _COMPOSITE_MAX_CASES:
-        matching = matching[:_COMPOSITE_MAX_CASES]
+    matching = _cap_composite_cases(matching)
 
     cases_ready = []
     for ci in matching:
@@ -5434,6 +5563,38 @@ def _process_one_case_cfad_multi(case_idx, variable, data_type, height_km, h_axi
         return None
 
 
+# Upper bound on CFAD histogram bins. Histograms (and the per-case stacks kept
+# for bootstrap) scale with the bin count; the explorer's finest bin width
+# (0.1) over the widest variable range (90 m/s) is 900 bins.
+_CFAD_MAX_BINS = 1000
+# bins x bootstrap iterations: the bootstrap holds (n_iter x heights x bins)
+# arrays. 200 x 5000 is the worst case the n_bins/n_iter bounds already allow.
+_CFAD_MAX_BOOT_BIN_ITERS = 200 * 5000
+
+
+def _cfad_bin_edges(b_min, b_max, bin_width, n_bins):
+    """CFAD bin edges from either an explicit bin_width or n_bins, rejecting
+    ranges/widths that are non-finite or would give an unbounded bin count."""
+    b_min, b_max = float(b_min), float(b_max)
+    if not (np.isfinite(b_min) and np.isfinite(b_max)) or b_max <= b_min:
+        raise HTTPException(status_code=400, detail="bin_max must be greater than bin_min.")
+    if bin_width is not None and bin_width > 0:
+        if not np.isfinite(bin_width):
+            raise HTTPException(status_code=400, detail="bin_width must be finite.")
+        n_est = (b_max - b_min) / bin_width
+        if n_est > _CFAD_MAX_BINS:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"bin_width {bin_width:g} gives ~{int(n_est)} bins over "
+                        f"[{b_min:g}, {b_max:g}]; the maximum is {_CFAD_MAX_BINS}."),
+            )
+        edges = np.arange(b_min, b_max + bin_width * 0.5, bin_width)
+        if len(edges) < 2:
+            raise HTTPException(status_code=400, detail="bin_width is wider than the bin range.")
+        return edges
+    return np.linspace(b_min, b_max, n_bins + 1)
+
+
 @app.get("/composite/cfad")
 def composite_cfad(
     variable:      str   = Query(DEFAULT_VARIABLE,       description="Variable key"),
@@ -5501,8 +5662,7 @@ def composite_cfad(
     )
     if not matching:
         raise HTTPException(status_code=400, detail="No cases match the specified criteria.")
-    if len(matching) > _COMPOSITE_MAX_CASES:
-        matching = matching[:_COMPOSITE_MAX_CASES]
+    matching = _cap_composite_cases(matching)
 
     display_name, varname, cmap, units, vmin, vmax = VARIABLES[variable]
     ref_varname = DERIVED_VARIABLES[variable][0] if variable in DERIVED_VARIABLES else varname
@@ -5510,12 +5670,15 @@ def composite_cfad(
     # Determine bin edges
     b_min = bin_min if bin_min is not None else vmin
     b_max = bin_max if bin_max is not None else vmax
-    if bin_width is not None and bin_width > 0:
-        bin_edges = np.arange(b_min, b_max + bin_width * 0.5, bin_width)
-    else:
-        bin_edges = np.linspace(b_min, b_max, n_bins + 1)
+    bin_edges = _cfad_bin_edges(b_min, b_max, bin_width, n_bins)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
     actual_n_bins = len(bin_centers)
+    if bootstrap and actual_n_bins * n_iter > _CFAD_MAX_BOOT_BIN_ITERS:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Bootstrap with {actual_n_bins} bins x {n_iter} iterations is too large; "
+                    f"use a wider bin width or fewer iterations."),
+        )
 
     # Pre-fetch grid info
     first_ds, _ = resolve_case(matching[0], data_type)
@@ -5753,7 +5916,7 @@ def composite_cfad(
 
 @app.get("/cfad/single")
 def single_case_cfad(
-    case_index:    int   = Query(...,                      description="Case index"),
+    case_index:    int   = Query(...,  ge=0,               description="Case index"),
     variable:      str   = Query(DEFAULT_VARIABLE,         description="Variable key"),
     data_type:     str   = Query("swath",                  description="'swath', 'merge', or 'tilt'"),
     era:           str   = Query("",                       description="Era tag (empty = auto-detect)"),
@@ -5777,10 +5940,7 @@ def single_case_cfad(
     # Bin edges
     b_min = bin_min if bin_min is not None else vmin
     b_max = bin_max if bin_max is not None else vmax
-    if bin_width is not None and bin_width > 0:
-        bin_edges = np.arange(b_min, b_max + bin_width * 0.5, bin_width)
-    else:
-        bin_edges = np.linspace(b_min, b_max, n_bins + 1)
+    bin_edges = _cfad_bin_edges(b_min, b_max, bin_width, n_bins)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
 
     # Load volume
@@ -5868,24 +6028,47 @@ def single_case_cfad(
 _ENV_COMP_GRID_KM = np.linspace(-1100, 1100, 81)  # ±1100 km at ~27 km spacing
 
 
+def _era5_rows_for_composite(matching, data_type, era5_status):
+    """Pair each matching case with its row in the ERA5 store, keeping only
+    rows that have ERA5 data (status == 1).
+
+    The ERA5 zarr is indexed by SWATH case, so merge-catalog indices are
+    translated through _merge_to_swath_index (same as the single-case /era5
+    endpoints); merge cases with no swath counterpart are dropped. Returns
+    [(case_index, era5_row), ...] in input order — case_index stays in the
+    caller's catalog (for metadata lookups and case_list).
+    """
+    n_rows = len(era5_status)
+    pairs = []
+    for ci in matching:
+        row = _merge_to_swath_index.get(ci) if data_type == "merge" else ci
+        if row is None or not (0 <= row < n_rows) or int(era5_status[row]) != 1:
+            continue
+        pairs.append((ci, row))
+    return pairs
+
+
 def _process_one_case_era5_plan_view(case_idx, field, include_vectors, target_x_km, target_y_km,
-                                     sddc=None):
+                                     sddc=None, era5_idx=None):
     """
     Process a single case for ERA5 environmental plan-view composite.
     Regrids from degree-offset to a common km grid.
     If sddc is not None, rotate to shear-relative frame (shear → +x).
+    era5_idx is the case's row in the (swath-indexed) ERA5 store; defaults
+    to case_idx (swath mode).
     Returns (case_idx, data_km, vec_u_km, vec_v_km) or None.
     """
+    row = case_idx if era5_idx is None else era5_idx
     try:
         era5 = get_era5_dataset()
         if era5 is None:
             return None
-        status = int(era5['status'][case_idx])
+        status = int(era5['status'][row])
         if status != 1:
             return None
 
-        data_deg = era5[field][case_idx]  # (81, 81) in degree offsets
-        center_lat = float(era5['center_lat'][case_idx])
+        data_deg = era5[field][row]  # (81, 81) in degree offsets
+        center_lat = float(era5['center_lat'][row])
         lat_offsets = era5['lat_offsets'][:]
         lon_offsets = era5['lon_offsets'][:]
 
@@ -5912,8 +6095,8 @@ def _process_one_case_era5_plan_view(case_idx, field, include_vectors, target_x_
         if include_vectors:
             cfg = ERA5_FIELD_CONFIG.get(field, {})
             if cfg.get('has_vectors'):
-                u_data = era5[cfg['vector_u']][case_idx]
-                v_data = era5[cfg['vector_v']][case_idx]
+                u_data = era5[cfg['vector_u']][row]
+                v_data = era5[cfg['vector_v']][row]
                 interp_u = RegularGridInterpolator(
                     (y_km_src, x_km_src), np.array(u_data, dtype=np.float64),
                     method='linear', bounds_error=False, fill_value=np.nan
@@ -5965,24 +6148,24 @@ def composite_era5_plan_view(
     if not matching:
         raise HTTPException(status_code=404, detail="No matching cases")
 
-    # Filter to cases with ERA5 data
+    # Filter to cases with ERA5 data (merge indices → swath-indexed ERA5 rows)
     era5_status = era5['status'][:]
-    matching = [ci for ci in matching if ci < len(era5_status) and int(era5_status[ci]) == 1]
-    if not matching:
+    pairs = _cap_composite_cases(_era5_rows_for_composite(matching, data_type, era5_status))
+    if not pairs:
         raise HTTPException(status_code=404, detail="No matching cases with ERA5 data")
 
     # If shear_relative, look up SDDC per case from metadata and skip cases without it
     meta_cache = _merge_metadata_cache if data_type == "merge" else _metadata_cache
-    cases_with_sddc: list[tuple] = []  # (case_idx, sddc_or_None)
-    for ci in matching[:_COMPOSITE_MAX_CASES]:
+    cases_with_sddc: list[tuple] = []  # (case_idx, sddc_or_None, era5_row)
+    for ci, row in pairs:
         if shear_relative:
             meta = meta_cache.get(ci, {})
             sddc = meta.get("sddc")
             if sddc is None or sddc == 9999:
                 continue  # need valid SDDC for rotation
-            cases_with_sddc.append((ci, float(sddc)))
+            cases_with_sddc.append((ci, float(sddc), row))
         else:
-            cases_with_sddc.append((ci, None))
+            cases_with_sddc.append((ci, None, row))
 
     if not cases_with_sddc:
         detail = "No matching cases with ERA5 data"
@@ -5996,8 +6179,8 @@ def composite_era5_plan_view(
 
     # Process cases in batches — keeps peak memory bounded on the 2 GB Render plan.
     work_items = [
-        (ci, field, include_vectors, target_x_km, target_y_km, sddc)
-        for ci, sddc in cases_with_sddc
+        (ci, field, include_vectors, target_x_km, target_y_km, sddc, row)
+        for ci, sddc, row in cases_with_sddc
     ]
 
     def _compute(progress_cb=None):
@@ -6097,11 +6280,12 @@ def composite_era5_profiles(
         raise HTTPException(status_code=404, detail="No matching cases")
 
     era5_status = era5['status'][:]
-    matching = [ci for ci in matching if ci < len(era5_status) and int(era5_status[ci]) == 1]
-    if not matching:
+    pairs = _cap_composite_cases(_era5_rows_for_composite(matching, data_type, era5_status))
+    if not pairs:
         raise HTTPException(status_code=404, detail="No matching cases with ERA5 data")
 
-    matching = matching[:_COMPOSITE_MAX_CASES]
+    matching = [ci for ci, _ in pairs]      # catalog indices (case_list)
+    era5_rows = [row for _, row in pairs]   # ERA5 store rows (reads)
 
     plev = era5['plev'][:].astype(float)
     n_lev = len(plev)
@@ -6114,13 +6298,13 @@ def composite_era5_profiles(
     v_all = np.full((n_cases, n_lev), np.nan, dtype=np.float64)
 
     valid_count = 0
-    for i, ci in enumerate(matching):
+    for i, row in enumerate(era5_rows):
         try:
-            t_all[i] = era5['t_profile'][ci].astype(float)
-            q_all[i] = era5['q_profile'][ci].astype(float)
-            rh_all[i] = era5['rh_profile'][ci].astype(float)
-            u_all[i] = era5['u_profile'][ci].astype(float)
-            v_all[i] = era5['v_profile'][ci].astype(float)
+            t_all[i] = era5['t_profile'][row].astype(float)
+            q_all[i] = era5['q_profile'][row].astype(float)
+            rh_all[i] = era5['rh_profile'][row].astype(float)
+            u_all[i] = era5['u_profile'][row].astype(float)
+            v_all[i] = era5['v_profile'][row].astype(float)
             valid_count += 1
         except Exception:
             pass
@@ -6204,12 +6388,12 @@ def composite_era5_scalars(
         raise HTTPException(status_code=404, detail="No matching cases")
 
     era5_status = era5['status'][:]
-    matching = [ci for ci in matching if ci < len(era5_status) and int(era5_status[ci]) == 1]
-    if not matching:
+    pairs = _cap_composite_cases(_era5_rows_for_composite(matching, data_type, era5_status))
+    if not pairs:
         raise HTTPException(status_code=404, detail="No matching cases with ERA5 data")
 
-    matching = matching[:_COMPOSITE_MAX_CASES]
-    indices = np.array(matching)
+    matching = [ci for ci, _ in pairs]               # catalog indices (case_list)
+    indices = np.array([row for _, row in pairs])    # ERA5 store rows (reads)
 
     scalar_names = [
         'shear_mag_env', 'shear_dir_env', 'rh_mid_env', 'div200_env',
@@ -6275,7 +6459,7 @@ def plot(
         raise HTTPException(status_code=400, detail="data_type must be 'swath' or 'merge'")
 
     # Serve from cache if available (instant)
-    cache_key = (case_index, variable, round(level_km, 1), data_type)
+    cache_key = (case_index, variable, _snap_level_km(level_km), data_type)
     with _plot_cache_lock:
         _cached_png = _plot_cache.get(cache_key)
         if _cached_png is not None:
@@ -8847,8 +9031,7 @@ def composite_anomaly_azimuthal_mean(
     )
     if not matching:
         raise HTTPException(status_code=400, detail="No cases match the specified criteria.")
-    if len(matching) > _COMPOSITE_MAX_CASES:
-        matching = matching[:_COMPOSITE_MAX_CASES]
+    matching = _cap_composite_cases(matching)
 
     # Filter to cases with valid RMW and Vmax (needed for anomaly computation)
     meta_cache = _merge_metadata_cache if data_type == "merge" else _metadata_cache

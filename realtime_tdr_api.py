@@ -108,24 +108,68 @@ def _get_pyproj_module():
 SEB_BASE = "https://seb.omao.noaa.gov/pub/flight/radar"
 # Hosts a client-supplied file_url may point at (SSRF guard in _open_rt_dataset)
 _RT_URL_ALLOWED_HOSTS = frozenset({"seb.omao.noaa.gov"})
+# Legit file_url values come from /files: SEB_BASE/<mission>/<file>. Every path
+# segment is a plain name (no dot-segments, no percent-escapes).
+_RT_URL_PATH_RE = re.compile(
+    r"^/pub/flight/radar/(?:[A-Za-z0-9_\-][A-Za-z0-9._\-]*/)*"
+    r"[A-Za-z0-9_\-][A-Za-z0-9._\-]*$")
+_RT_URL_MAX_LEN = 512
+
+
+def _parsed_https_host(url: str) -> Optional[str]:
+    """Lower-cased host of a plain ``https://host/path`` URL, or None.
+
+    The URL is parsed both with ``urllib.parse`` and with ``urllib3`` (the
+    parser ``requests`` uses to pick the host it connects to); the two must
+    agree. Userinfo, explicit non-default ports, backslashes, whitespace and
+    control characters are refused outright so the parsers can't diverge.
+    """
+    from urllib.parse import urlsplit
+    if not isinstance(url, str) or not url or len(url) > _RT_URL_MAX_LEN:
+        return None
+    if "\\" in url or "@" in url or any(ord(c) <= 0x20 or ord(c) >= 0x7f for c in url):
+        return None
+    try:
+        from urllib3.util import parse_url
+        a = urlsplit(url)
+        b = parse_url(url)
+        a_port = a.port
+    except Exception:
+        return None
+    host_a = (a.hostname or "").lower()
+    host_b = (b.host or "").lower()
+    if (a.scheme.lower() != "https" or (b.scheme or "").lower() != "https"
+            or not host_a or host_a != host_b
+            or a.username is not None or a.password is not None or b.auth
+            or a_port not in (None, 443) or b.port not in (None, 443)):
+        return None
+    return host_a
 
 
 def _check_rt_url(url: str) -> None:
-    """Reject file_url values that aren't https on an allowlisted host."""
-    from urllib.parse import urlparse
-    try:
-        u = urlparse(url)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid file_url")
-    if u.scheme != "https" or (u.hostname or "").lower() not in _RT_URL_ALLOWED_HOSTS:
+    """Reject file_url values that aren't a plain https URL for a TDR file on an
+    allowlisted host (SSRF guard for every endpoint that takes ``file_url``)."""
+    host = _parsed_https_host(url)
+    if host is None or host not in _RT_URL_ALLOWED_HOSTS:
         raise HTTPException(status_code=400, detail="file_url host not permitted")
+    from urllib.parse import urlsplit
+    from urllib3.util import parse_url
+    a = urlsplit(url)
+    b = parse_url(url)
+    # urllib3 normalises dot-segments, so check the path both ways.
+    if (a.query or a.fragment or b.query or b.fragment
+            or not _RT_URL_PATH_RE.match(a.path or "")
+            or not _RT_URL_PATH_RE.match(b.path or "")):
+        raise HTTPException(status_code=400, detail="file_url path not permitted")
 
 
 def _require_ops_key(request: Request) -> None:
     """Gate ops/debug routes behind env OPS_SECRET (header X-Ops-Key).
-    Unset env = open (current behavior); mismatch = 404 so the route isn't advertised."""
+    Deny by default: unset env or a mismatched key = 404 so the route isn't advertised."""
+    import hmac
     secret = os.environ.get("OPS_SECRET", "")
-    if secret and request.headers.get("x-ops-key", "") != secret:
+    if not secret or not hmac.compare_digest(
+            request.headers.get("x-ops-key", "").encode(), secret.encode()):
         raise HTTPException(status_code=404, detail="Not Found")
 
 # Variable mapping: real-time TDR → display metadata
@@ -284,6 +328,32 @@ def _rt_flight_lock(key) -> threading.Lock:
 # Kept small because browsers cache via Cache-Control headers.
 _rt_ir_cache = OrderedDict()
 _RT_IR_CACHE_MAX = 3               # minimal — browser handles long-term caching
+_rt_ir_cache_lock = threading.Lock()
+
+
+# Small result memos below are touched from FastAPI's threadpool; an unlocked
+# move_to_end racing a popitem can raise KeyError, so every read/write of an
+# OrderedDict memo goes through these (one lock per memo, as _rt_ds_cache does).
+def _lru_get(cache: OrderedDict, lock: threading.Lock, key):
+    """Return the cached entry for ``key`` (refreshing its LRU slot) or None."""
+    with lock:
+        hit = cache.get(key)
+        if hit is not None:
+            cache.move_to_end(key)
+        return hit
+
+
+def _lru_put(cache: OrderedDict, lock: threading.Lock, key, value, max_n: int) -> int:
+    """Insert ``value`` under ``key``, evict oldest entries beyond ``max_n``;
+    returns how many were evicted."""
+    n = 0
+    with lock:
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > max_n:
+            cache.popitem(last=False)
+            n += 1
+    return n
 
 # Shared S3 filesystem (lazy-initialised)
 _goes_fs = None
@@ -310,7 +380,7 @@ def _requests_get_cert_tolerant(url: str, **kwargs):
     try:
         return _requests.get(url, **kwargs)
     except _requests.exceptions.SSLError:
-        if "seb.omao.noaa.gov" not in url:
+        if _parsed_https_host(url) != "seb.omao.noaa.gov":
             raise
         try:
             import urllib3
@@ -1036,6 +1106,7 @@ def _open_goes_subset(s3_key: str, center_lat: float, center_lon: float,
     x_lo, x_hi = min(x_min, x_max), max(x_min, x_max)
     y_lo, y_hi = min(y_min, y_max), max(y_min, y_max)
 
+    ds = ds_sub = None
     fobj = fs.open(f"s3://{s3_key}", "rb")
     try:
         ds = xr.open_dataset(fobj, engine="h5netcdf")
@@ -1054,9 +1125,16 @@ def _open_goes_subset(s3_key: str, center_lat: float, center_lon: float,
             else:
                 raise ValueError(f"Neither {IR_VARIABLE} nor {alt_var} found in dataset")
     finally:
-        ds.close()
-        fobj.close()
-        del ds, ds_sub  # noqa: F821
+        if ds is not None:
+            try:
+                ds.close()
+            except Exception:
+                pass
+        try:
+            fobj.close()
+        except Exception:
+            pass
+        ds = ds_sub = None
         gc.collect()
     return tb
 
@@ -1718,13 +1796,11 @@ def get_realtime_ir(
             del tb  # free raw array immediately
             frame0_dt_iso = frame_times[0].isoformat()
             # Cache it
-            _rt_ir_cache[(file_url, 0)] = {
+            _lru_put(_rt_ir_cache, _rt_ir_cache_lock, (file_url, 0), {
                 "frame_index": 0,
                 "datetime_iso": frame0_dt_iso,
                 "frame": frame0_png,
-            }
-            if len(_rt_ir_cache) > _RT_IR_CACHE_MAX:
-                _rt_ir_cache.popitem(last=False)
+            }, _RT_IR_CACHE_MAX)
     except Exception as e:
         # Non-fatal: t=0 frame unavailable, client will show placeholder
         frame0_png = None
@@ -1776,9 +1852,9 @@ def get_realtime_ir_frame(
 
     # Check server-side cache first (small — browser is primary cache)
     cache_key = (file_url, frame_index)
-    if cache_key in _rt_ir_cache:
-        _rt_ir_cache.move_to_end(cache_key)
-        return _cached_json_response(_rt_ir_cache[cache_key])
+    _hit = _lru_get(_rt_ir_cache, _rt_ir_cache_lock, cache_key)
+    if _hit is not None:
+        return _cached_json_response(_hit)
 
     # Open TDR file for metadata
     try:
@@ -1822,9 +1898,7 @@ def get_realtime_ir_frame(
     }
 
     # Light server-side cache (browser is primary via Cache-Control)
-    _rt_ir_cache[cache_key] = result
-    if len(_rt_ir_cache) > _RT_IR_CACHE_MAX:
-        _rt_ir_cache.popitem(last=False)
+    _lru_put(_rt_ir_cache, _rt_ir_cache_lock, cache_key, result, _RT_IR_CACHE_MAX)
 
     return _cached_json_response(result)
 
@@ -1954,6 +2028,7 @@ SONDE_TIME_WINDOW_MIN = 45  # ±45 minutes from TDR analysis center time
 
 # Cache: file_url → (response_dict, timestamp)
 _rt_sonde_cache = OrderedDict()
+_rt_sonde_cache_lock = threading.Lock()
 _RT_SONDE_CACHE_MAX = 2
 _RT_SONDE_CACHE_TTL = 300  # 5 minutes
 
@@ -2373,20 +2448,16 @@ def get_dropsondes(
     returns full-resolution profiles for visualization.
     """
     now = time.time()
-    if file_url in _rt_sonde_cache:
-        cached, ts = _rt_sonde_cache[file_url]
-        if now - ts < _RT_SONDE_CACHE_TTL:
-            _rt_sonde_cache.move_to_end(file_url)
-            return JSONResponse(cached, headers=_SONDE_CACHE_HEADERS)
+    _hit = _lru_get(_rt_sonde_cache, _rt_sonde_cache_lock, file_url)
+    if _hit is not None and now - _hit[1] < _RT_SONDE_CACHE_TTL:
+        return JSONResponse(_hit[0], headers=_SONDE_CACHE_HEADERS)
 
     # Single-flight: concurrent cold requests for the same file share one build.
     with _rt_flight_lock(("sondes", file_url)):
         now = time.time()
-        if file_url in _rt_sonde_cache:
-            cached, ts = _rt_sonde_cache[file_url]
-            if now - ts < _RT_SONDE_CACHE_TTL:
-                _rt_sonde_cache.move_to_end(file_url)
-                return JSONResponse(cached, headers=_SONDE_CACHE_HEADERS)
+        _hit = _lru_get(_rt_sonde_cache, _rt_sonde_cache_lock, file_url)
+        if _hit is not None and now - _hit[1] < _RT_SONDE_CACHE_TTL:
+            return JSONResponse(_hit[0], headers=_SONDE_CACHE_HEADERS)
         result = _build_dropsondes_result(file_url, now)
     return JSONResponse(result, headers=_SONDE_CACHE_HEADERS)
 
@@ -2435,7 +2506,8 @@ def _build_dropsondes_result(file_url: str, now: float) -> dict:
             "n_sondes": 0,
             "message": f"No dropsonde directory found for mission {mission_id}",
         }
-        _rt_sonde_cache[file_url] = (result, now)
+        _lru_put(_rt_sonde_cache, _rt_sonde_cache_lock, file_url, (result, now),
+                 _RT_SONDE_CACHE_MAX)
         return result
 
     # Discover dropsonde products across naming conventions. The 2026 AVAPS
@@ -2539,9 +2611,8 @@ def _build_dropsondes_result(file_url: str, now: float) -> dict:
         "storm_motion_north_ms": round(_sv, 2) if _has_sm else None,
     }
 
-    _rt_sonde_cache[file_url] = (result, now)
-    if len(_rt_sonde_cache) > _RT_SONDE_CACHE_MAX:
-        _rt_sonde_cache.popitem(last=False)
+    if _lru_put(_rt_sonde_cache, _rt_sonde_cache_lock, file_url, (result, now),
+                _RT_SONDE_CACHE_MAX):
         gc.collect()
 
     return result
@@ -2604,11 +2675,13 @@ _MELISSA_SLP = 72                     # sea-level pressure (hPa)
 
 # Cache
 _rt_fl_cache = OrderedDict()
+_rt_fl_cache_lock = threading.Lock()
 _RT_FL_CACHE_MAX = 2
 _RT_FL_CACHE_TTL = 300  # 5 minutes
 
 # Full-mission flight-level cache (Recon Flight-Level sub-tab)
 _rt_flm_cache = OrderedDict()
+_rt_flm_cache_lock = threading.Lock()
 _RT_FLM_CACHE_MAX = 4
 _RT_FLM_CACHE_TTL = 300  # 5 minutes
 
@@ -2910,11 +2983,9 @@ def get_flight_level(
     """
     now = time.time()
     cache_key = f"{file_url}__avg{avg_interval_s}"
-    if cache_key in _rt_fl_cache:
-        cached, ts = _rt_fl_cache[cache_key]
-        if now - ts < _RT_FL_CACHE_TTL:
-            _rt_fl_cache.move_to_end(cache_key)
-            return JSONResponse(cached)
+    _hit = _lru_get(_rt_fl_cache, _rt_fl_cache_lock, cache_key)
+    if _hit is not None and now - _hit[1] < _RT_FL_CACHE_TTL:
+        return JSONResponse(_hit[0])
 
     # Open the TDR file to extract mission metadata
     try:
@@ -2957,7 +3028,8 @@ def get_flight_level(
             "n_obs": 0,
             "message": f"No flight-level data found for mission {mission_id}",
         }
-        _rt_fl_cache[cache_key] = (result, now)
+        _lru_put(_rt_fl_cache, _rt_fl_cache_lock, cache_key, (result, now),
+                 _RT_FL_CACHE_MAX)
         return JSONResponse(result)
 
     raw_obs = _parse_acdata_serial(serial_text, analysis_dt, FL_TIME_WINDOW_MIN)
@@ -3068,9 +3140,7 @@ def get_flight_level(
         "summary": summary,
     }
 
-    _rt_fl_cache[cache_key] = (result, now)
-    if len(_rt_fl_cache) > _RT_FL_CACHE_MAX:
-        _rt_fl_cache.popitem(last=False)
+    if _lru_put(_rt_fl_cache, _rt_fl_cache_lock, cache_key, (result, now), _RT_FL_CACHE_MAX):
         gc.collect()
 
     return JSONResponse(result)
@@ -3116,11 +3186,9 @@ def get_flight_level_mission(
     """
     now = time.time()
     cache_key = f"{mission}__{year}__avg{avg_interval_s}"
-    if cache_key in _rt_flm_cache:
-        cached, ts = _rt_flm_cache[cache_key]
-        if now - ts < _RT_FLM_CACHE_TTL:
-            _rt_flm_cache.move_to_end(cache_key)
-            return JSONResponse(cached)
+    _hit = _lru_get(_rt_flm_cache, _rt_flm_cache_lock, cache_key)
+    if _hit is not None and now - _hit[1] < _RT_FLM_CACHE_TTL:
+        return JSONResponse(_hit[0])
 
     # Derive the year from the mission id when not supplied
     if year is None:
@@ -3144,7 +3212,8 @@ def get_flight_level_mission(
             "n_obs_total": 0,
             "message": f"No flight-level data found for mission {mission}",
         }
-        _rt_flm_cache[cache_key] = (result, now)
+        _lru_put(_rt_flm_cache, _rt_flm_cache_lock, cache_key, (result, now),
+                 _RT_FLM_CACHE_MAX)
         return JSONResponse(result)
 
     # Parse the entire mission (no analysis_dt, no time-window filter)
@@ -3164,9 +3233,7 @@ def get_flight_level_mission(
         "summary": _fl_summary(raw_obs, avg_interval_s),
     }
 
-    _rt_flm_cache[cache_key] = (result, now)
-    if len(_rt_flm_cache) > _RT_FLM_CACHE_MAX:
-        _rt_flm_cache.popitem(last=False)
+    if _lru_put(_rt_flm_cache, _rt_flm_cache_lock, cache_key, (result, now), _RT_FLM_CACHE_MAX):
         gc.collect()
 
     return JSONResponse(result)
@@ -3178,6 +3245,8 @@ def get_flight_level_mission(
 
 # Cache for SHIPS data: (atcf_id, analysis_dt) → (result_dict, timestamp)
 _rt_ships_cache = OrderedDict()
+_rt_ships_cache_lock = threading.Lock()
+_RT_SHIPS_CACHE_MAX = 50
 _RT_SHIPS_CACHE_TTL = 600  # 10 minutes
 
 # Variable mapping: RT variable names → climatology variable names
@@ -3811,11 +3880,9 @@ def get_rt_ships(
         atcf_id = f"{basin}{storm_number:02d}{year % 100:02d}"
 
         cache_key = (atcf_id, analysis_datetime.isoformat())
-        if cache_key in _rt_ships_cache:
-            cached_result, ts = _rt_ships_cache[cache_key]
-            if now - ts < _RT_SHIPS_CACHE_TTL:
-                _rt_ships_cache.move_to_end(cache_key)
-                return JSONResponse(cached_result)
+        _hit = _lru_get(_rt_ships_cache, _rt_ships_cache_lock, cache_key)
+        if _hit is not None and now - _hit[1] < _RT_SHIPS_CACHE_TTL:
+            return JSONResponse(_hit[0])
 
         try:
             ships_data = _fetch_ships_from_nhc(atcf_id, analysis_datetime)
@@ -3833,9 +3900,8 @@ def get_rt_ships(
                     storm_name, year, basin, storm_number
                 )
 
-            _rt_ships_cache[cache_key] = (result, now)
-            if len(_rt_ships_cache) > 50:
-                _rt_ships_cache.popitem(last=False)
+            _lru_put(_rt_ships_cache, _rt_ships_cache_lock, cache_key, (result, now),
+                     _RT_SHIPS_CACHE_MAX)
             return JSONResponse(result)
 
         except Exception as e:
@@ -3843,11 +3909,9 @@ def get_rt_ships(
 
     # ── Mode 2: Auto-detect by storm name ──
     cache_key = (storm_name.upper(), analysis_datetime.isoformat())
-    if cache_key in _rt_ships_cache:
-        cached_result, ts = _rt_ships_cache[cache_key]
-        if now - ts < _RT_SHIPS_CACHE_TTL:
-            _rt_ships_cache.move_to_end(cache_key)
-            return JSONResponse(cached_result)
+    _hit = _lru_get(_rt_ships_cache, _rt_ships_cache_lock, cache_key)
+    if _hit is not None and now - _hit[1] < _RT_SHIPS_CACHE_TTL:
+        return JSONResponse(_hit[0])
 
     try:
         found = _fetch_ships_by_name(storm_name, analysis_datetime, lat, lon)
@@ -3883,9 +3947,8 @@ def get_rt_ships(
             result["auto_detected"] = True
             result["matched_by"] = matched_by   # "name" | "location"
 
-        _rt_ships_cache[cache_key] = (result, now)
-        if len(_rt_ships_cache) > 50:
-            _rt_ships_cache.popitem(last=False)
+        _lru_put(_rt_ships_cache, _rt_ships_cache_lock, cache_key, (result, now),
+                 _RT_SHIPS_CACHE_MAX)
         return JSONResponse(result)
 
     except Exception as e:
@@ -4155,16 +4218,22 @@ def memory_status(request: Request):
 def clear_all_rt_caches(request: Request):
     """Emergency cache flush — frees all cached datasets and results."""
     _require_ops_key(request)
-    for url, (ds, _) in list(_rt_ds_cache.items()):
+    with _rt_ds_cache_lock:
+        _old = list(_rt_ds_cache.values())
+        _rt_ds_cache.clear()
+    for ds, _ in _old:
         try:
             ds.close()
         except Exception:
             pass
-    _rt_ds_cache.clear()
-    _rt_ir_cache.clear()
-    _rt_sonde_cache.clear()
-    _rt_fl_cache.clear()
-    _rt_ships_cache.clear()
+    del _old
+    for _c, _lk in ((_rt_ir_cache, _rt_ir_cache_lock),
+                    (_rt_sonde_cache, _rt_sonde_cache_lock),
+                    (_rt_fl_cache, _rt_fl_cache_lock),
+                    (_rt_flm_cache, _rt_flm_cache_lock),
+                    (_rt_ships_cache, _rt_ships_cache_lock)):
+        with _lk:
+            _c.clear()
     gc.collect()
     return JSONResponse({"status": "ok", **_cache_summary()})
 

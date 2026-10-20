@@ -555,7 +555,14 @@ def _load_nrt_manifest_cached() -> dict | None:
                 headers={"User-Agent": "tc-atlas-api/per-storm-passes"},
             )
             with _urllib_request.urlopen(req, timeout=10) as resp:
-                m = _json.load(resp)
+                raw = resp.read()
+            # mw_ingest uploads the manifest gzip-encoded; GCS normally
+            # decompresses it for clients that don't send Accept-Encoding,
+            # but decode it here too in case it arrives compressed.
+            if raw[:2] == b"\x1f\x8b":
+                import gzip as _gzip
+                raw = _gzip.decompress(raw)
+            m = _json.loads(raw)
             _NRT_MANIFEST_CACHE["data"] = m
             _NRT_MANIFEST_CACHE["fetched_at"] = _time.time()
             return m
@@ -575,7 +582,10 @@ def _bounds_contains(bounds, lat: float, lon: float) -> bool:
     if lat < south or lat > north:
         return False
     if west <= east:
-        return west <= lon <= east
+        # Dateline arcs are regridded on a continuous axis, so their bounds
+        # can run past ±180 (e.g. west=170, east=190). Test the storm
+        # longitude in all three 360° frames so a storm at -175 matches.
+        return any(west <= x <= east for x in (lon, lon + 360.0, lon - 360.0))
     # Dateline-wrapping bounds: pass covers (west..180) ∪ (-180..east)
     return lon >= west or lon <= east
 

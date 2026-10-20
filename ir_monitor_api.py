@@ -114,12 +114,12 @@ _NHC_BASINS = {"EP", "CP", "AL"}
 
 # Cache settings
 _STORM_CACHE_TTL = 300          # 5 minutes (matches Cloud Scheduler ping interval)
-# Backstop: how long a non-empty last-known-good storm cache is retained when a
-# poll comes back empty *and* this cycle hit an upstream fetch failure (a clean
-# empty poll clears to 0 immediately — see the retain logic in
-# _poll_active_storms). Real dissipation ages out per-storm over 24-48 h, so a
-# few hours of riding out an outage is safe; past this we give up rather than
-# serve indefinitely-frozen data.
+# Backstop: how long a storm's last-known-good entry is carried forward while
+# its deck (or its source's whole listing) fails to fetch, counted from the
+# last successful read of that storm (a storm read fine and aged out/delisted
+# drops immediately — see _carry_forward_failed_storms). Real dissipation ages
+# out per-storm over 24-48 h, so a few hours of riding out an outage is safe;
+# past this we give up rather than serve indefinitely-frozen data.
 _EMPTY_POLL_RETAIN_HOURS = 6.0
 _IR_FRAME_CACHE_MAX = 100       # max cached IR frames (~10 MB, covers ~7 storms)
 _IR_FRAME_CACHE_TTL = 300       # 5 minutes per frame
@@ -3440,6 +3440,67 @@ def _merge_jtwc_crossover(sid: str, records: list, now) -> list:
         return records
 
 
+# Epoch of the last successful read of each storm (atcf_id upper -> time),
+# from a local poll or an adopted shared copy. Bounds the carry-forward.
+_storm_last_ok: dict = {}
+# True while the in-memory list came from a degraded poll (storms carried
+# forward or a whole listing down); /active-storms then serves no-store.
+_storm_poll_degraded = False
+
+
+def _carry_forward_failed_storms(storms: list, failed_ids: set,
+                                 failed_sources: set):
+    """Append previous entries for storms whose fetch failed this poll.
+
+    A previous storm is carried only if its own deck failed (failed_ids) or
+    its source's whole listing failed (failed_sources: "NHC"/"JTWC"), and it
+    was last read successfully less than _EMPTY_POLL_RETAIN_HOURS ago.
+    A cold instance (nothing in memory) seeds the previous list from the
+    shared GCS copy when that copy is within the same window.
+    Returns (storms, carried_ids)."""
+    with _active_storms_lock:
+        prev = list(_active_storms_cache.get("storms", []))
+    now_ts = time.time()
+    window = _EMPTY_POLL_RETAIN_HOURS * 3600
+    if not prev:
+        try:
+            shared = _gcs_storm_cache_get()
+            pa = shared.get("polled_at")
+            if (isinstance(pa, (int, float)) and 0 <= now_ts - pa < window
+                    and isinstance(shared.get("storms"), list)):
+                prev = shared["storms"]
+                for p in prev:
+                    sid = str(p.get("atcf_id", "")).upper()
+                    if sid:
+                        _storm_last_ok[sid] = max(_storm_last_ok.get(sid, 0), pa)
+        except Exception as ex:                                  # noqa: BLE001
+            print(f"[IR Monitor] carry-forward: shared seed skipped ({ex})")
+    have = {str(x.get("atcf_id", "")).upper() for x in storms}
+    out = list(storms)
+    carried = []
+    for p in prev:
+        sid = str(p.get("atcf_id", "")).upper()
+        if not sid or sid in have:
+            continue
+        if sid not in failed_ids and p.get("source") not in failed_sources:
+            continue
+        ok_at = _storm_last_ok.get(sid)
+        if ok_at is None or now_ts - ok_at >= window:
+            print(f"[IR Monitor] {sid}: fetch failed and last good read is older "
+                  f"than {_EMPTY_POLL_RETAIN_HOURS} h — dropping")
+            continue
+        out.append(p)
+        carried.append(sid)
+        have.add(sid)
+    if carried:
+        print(f"[IR Monitor] Upstream fetch failed for {carried} — carrying "
+              f"forward last-known-good entries")
+    # Keep the bookkeeping bounded.
+    for sid in [k for k, v in _storm_last_ok.items() if now_ts - v > 2 * window]:
+        _storm_last_ok.pop(sid, None)
+    return out, carried
+
+
 def _poll_active_storms(spawn_prefetch: bool = True):
     """
     Poll NHC + JTWC for all active storms worldwide and update the cache.
@@ -3449,7 +3510,7 @@ def _poll_active_storms(spawn_prefetch: bool = True):
     caller (e.g. the prewarm Cloud Run Job) can drive the render pipeline
     synchronously instead.
     """
-    global _last_poll_time, _last_prefetch_time
+    global _last_poll_time, _last_prefetch_time, _storm_poll_degraded
     now = _dt.now(timezone.utc)
     storms = []
     seen_ids = set()
@@ -3459,11 +3520,16 @@ def _poll_active_storms(spawn_prefetch: bool = True):
     # keep the last-known-good cache when the empty result is explained by a
     # failure, never on a clean "all sources read OK, no storms" poll.
     degraded = False
+    # Which storms/sources failed this cycle, so the previous entries for
+    # exactly those can be carried forward (see _carry_forward_failed_storms).
+    failed_ids = set()
+    failed_sources = set()
 
     # ── NHC storms (ATL + EPAC) ──
     nhc_ids = _list_nhc_active_storms()
     if nhc_ids is None:
         degraded = True          # NHC directory listing fetch failed
+        failed_sources.add("NHC")
         nhc_ids = []
     for sid in nhc_ids:
         records = _fetch_adeck(sid)
@@ -3471,10 +3537,12 @@ def _poll_active_storms(spawn_prefetch: bool = True):
             records = _merge_jtwc_crossover(sid.upper(), records, now)
         if not records:
             degraded = True      # listed, but its A-deck couldn't be fetched
+            failed_ids.add(sid.upper())
             continue
         latest = _get_latest_position(records)
         if not latest:
             degraded = True      # records present but no current fix — transient
+            failed_ids.add(sid.upper())
             continue
         age = now - latest["datetime"]
         if age > timedelta(hours=24):
@@ -3490,6 +3558,7 @@ def _poll_active_storms(spawn_prefetch: bool = True):
         if entry:
             storms.append(entry)
             seen_ids.add(sid.upper())
+            _storm_last_ok[sid.upper()] = time.time()
 
     print(f"[IR Monitor] NHC: {len(nhc_ids)} A-deck files → {len(storms)} active storms")
 
@@ -3497,6 +3566,7 @@ def _poll_active_storms(spawn_prefetch: bool = True):
     jtwc_storms = _list_jtwc_active_storms()
     if jtwc_storms is None:
         degraded = True          # all JTWC enumeration sources failed
+        failed_sources.add("JTWC")
         jtwc_storms = []
     jtwc_count = 0
 
@@ -3567,12 +3637,14 @@ def _poll_active_storms(spawn_prefetch: bool = True):
 
         if not records:
             degraded = True   # listed, but no B-deck/CARQ/TCW could be fetched
+            failed_ids.add(storm_id.upper())
             print(f"[IR Monitor] JTWC {storm_id}: no B-deck/CARQ/TCW records")
             continue
 
         latest = _get_latest_position(records)
         if not latest:
             degraded = True   # records present but no current fix — transient
+            failed_ids.add(storm_id.upper())
             print(f"[IR Monitor] JTWC {storm_id}: no tau=0 position in {len(records)} records")
             continue
         age = now - latest["datetime"]
@@ -3597,8 +3669,24 @@ def _poll_active_storms(spawn_prefetch: bool = True):
             storms.append(entry)
             seen_ids.add(storm_id)
             jtwc_count += 1
+            _storm_last_ok[storm_id.upper()] = time.time()
 
     print(f"[IR Monitor] JTWC: {len(jtwc_storms)} B-deck files → {jtwc_count} active storms")
+
+    # ── Resilience: a FAILED fetch must not drop a storm ──
+    # A storm whose deck (or whose whole source listing) failed this cycle
+    # keeps its previous entry, bounded per storm by _EMPTY_POLL_RETAIN_HOURS
+    # since it was last read successfully. Storms that were read fine and aged
+    # out, were delisted, or simply stopped being listed are NOT carried — a
+    # dissipating storm still drops on the first clean read.
+    carried = []
+    if degraded:
+        storms, carried = _carry_forward_failed_storms(
+            storms, failed_ids, failed_sources)
+    # A degraded result (storms carried forward, or a whole listing down so
+    # the list may be incomplete) stays local: it is not published to the
+    # shared GCS copy and /active-storms serves it no-store.
+    degraded_result = bool(carried) or bool(failed_sources)
 
     # ── Filter out invests that have undergone genesis ──
     # When a JTWC invest (number 90-99) develops into a named storm
@@ -3623,42 +3711,9 @@ def _poll_active_storms(spawn_prefetch: bool = True):
                           f"{s.get('lat',0):.1f},{s.get('lon',0):.1f} "
                           f"(Δ{dlat:.1f}°lat, Δ{dlon:.1f}°lon) — will refetch frames")
 
-    # ── Resilience: don't let a FAILED empty poll wipe the map ──
-    # An empty result only retains the last-known-good cache when this cycle
-    # actually hit an upstream failure (degraded=True: a listing was unreadable
-    # or a listed storm's deck couldn't be fetched — e.g. NHC gzipped an A-deck
-    # so .dat 404s, or JTWC's SSD mirror 403s). A CLEAN empty poll — every
-    # source read fine and simply reported nothing — is genuine dissipation /
-    # end-of-season and is taken at face value, clearing to 0 immediately.
-    # The retain is still bounded by _EMPTY_POLL_RETAIN_HOURS so a prolonged
-    # outage eventually gives up rather than serving indefinitely-frozen data.
-    if not storms:
-        with _active_storms_lock:
-            prev_storms = list(_active_storms_cache.get("storms", []))
-            prev_updated = _active_storms_cache.get("updated_utc")
-        if prev_storms and degraded:
-            within_backstop = True
-            if prev_updated:
-                try:
-                    prev_dt = _dt.strptime(
-                        prev_updated, "%Y-%m-%dT%H:%M:%SZ"
-                    ).replace(tzinfo=timezone.utc)
-                    within_backstop = (now - prev_dt) < timedelta(
-                        hours=_EMPTY_POLL_RETAIN_HOURS)
-                except ValueError:
-                    within_backstop = True
-            if within_backstop:
-                print(f"[IR Monitor] Empty poll with upstream fetch failure — "
-                      f"retaining {len(prev_storms)} last-known-good storm(s) "
-                      f"(updated {prev_updated}) rather than clobbering to 0.")
-                _last_poll_time = time.time()
-                return prev_storms
-            print(f"[IR Monitor] Empty poll, upstream degraded, but last-known-"
-                  f"good is stale (>{_EMPTY_POLL_RETAIN_HOURS} h, updated "
-                  f"{prev_updated}) — accepting 0 active storms.")
-        elif prev_storms:
-            print("[IR Monitor] Clean empty poll (all sources read OK) — "
-                  "accepting 0 active storms (genuine dissipation/off-season).")
+    if not storms and not degraded_result:
+        print("[IR Monitor] Clean empty poll (all sources read OK) — "
+              "accepting 0 active storms (genuine dissipation/off-season).")
 
     # ── Update cache ──
     count_by_basin: dict = {}
@@ -3670,15 +3725,21 @@ def _poll_active_storms(spawn_prefetch: bool = True):
         _active_storms_cache["storms"] = storms
         _active_storms_cache["updated_utc"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
         _active_storms_cache["count_by_basin"] = count_by_basin
+        _storm_poll_degraded = degraded_result
 
     _last_poll_time = time.time()
 
-    # Publish for the other instances. Only on this path — the degraded
-    # "retain last-known-good" early-return above must NOT republish, or a
-    # failed upstream fetch would keep refreshing the shared timestamp and
-    # stale data would coast indefinitely.
-    _gcs_storm_cache_put(
-        storms, now.strftime("%Y-%m-%dT%H:%M:%SZ"), count_by_basin)
+    # Publish for the other instances — clean results only. A degraded result
+    # must NOT republish: carried-forward storms would get a fresh shared
+    # timestamp (and adopters a fresh retain clock), so stale data could coast
+    # indefinitely; and an incomplete list would replace every instance's view.
+    if degraded_result:
+        print(f"[IR Monitor] Degraded poll (carried forward {carried or 'none'}; "
+              f"failed listings {sorted(failed_sources) or 'none'}) — "
+              f"not publishing to the shared storm cache.")
+    else:
+        _gcs_storm_cache_put(
+            storms, now.strftime("%Y-%m-%dT%H:%M:%SZ"), count_by_basin)
 
     total = len(storms)
     if moved_storms:
@@ -4394,7 +4455,7 @@ def _prefetch_nexrad_for_storms(storms: list, frame_times_map: dict):
             s3_key = scan["s3_key"]
             cache_key = f"{site_id}:{s3_key}:reflectivity:0:{MAX_RANGE_KM}:1000"
             try:
-                radar = _read_nexrad_level2(s3_key)
+                radar = _read_nexrad_level2(s3_key, field=prod_cfg["field"])
                 data_2d, count_2d, metadata = _grid_radar(
                     radar, product="reflectivity", sweep=0,
                     grid_spacing_m=1000, max_range_m=MAX_RANGE_KM * 1000,
@@ -4611,7 +4672,7 @@ def _adopt_shared_storm_cache(max_age: float = _STORM_CACHE_TTL) -> bool:
     True  → adopted; caller must NOT poll.
     False → nothing usable; caller polls as before.
     """
-    global _last_poll_time
+    global _last_poll_time, _storm_poll_degraded
     shared = _gcs_storm_cache_get()
     if not shared:
         return False           # already logged by the getter
@@ -4634,6 +4695,12 @@ def _adopt_shared_storm_cache(max_age: float = _STORM_CACHE_TTL) -> bool:
         _active_storms_cache["storms"] = storms
         _active_storms_cache["updated_utc"] = shared.get("updated_utc") or ""
         _active_storms_cache["count_by_basin"] = shared.get("count_by_basin") or {}
+        # Shared copies are only ever published from clean polls.
+        _storm_poll_degraded = False
+    for st in storms:
+        sid = str(st.get("atcf_id", "")).upper() if isinstance(st, dict) else ""
+        if sid:
+            _storm_last_ok[sid] = max(_storm_last_ok.get(sid, 0), polled_at)
     # Inherit the ORIGINAL poll time, not now — otherwise adopting would
     # silently extend freshness past the TTL and the data could coast.
     _last_poll_time = polled_at
@@ -4868,6 +4935,7 @@ def get_active_storms(if_none_match: Optional[str] = Header(default=None)):
             "updated_utc": _active_storms_cache["updated_utc"],
             "count_by_basin": dict(_active_storms_cache["count_by_basin"]),
         }
+        degraded = _storm_poll_degraded
 
     # ETag derived from updated_utc + storm count (cache rebuild → new ETag).
     # Cheap to compute and stable so long as the cache hasn't changed.
@@ -4881,6 +4949,10 @@ def get_active_storms(if_none_match: Optional[str] = Header(default=None)):
     # the pill populated even if the origin is mid-cold-start or briefly down.
     _ACTIVE_STORMS_CC = (
         "public, max-age=300, stale-while-revalidate=600, stale-if-error=86400")
+    if degraded:
+        # Partial upstream failure this poll (storms carried forward or a
+        # listing down): don't let the edge pin this copy for 5+ minutes.
+        _ACTIVE_STORMS_CC = "no-store"
 
     if if_none_match and if_none_match.strip() == etag:
         return Response(
@@ -6138,6 +6210,20 @@ def get_storm_hovmoller(
 # Multi-Band Raw Frame Endpoint (Visible, WV, IR)
 # ---------------------------------------------------------------------------
 
+def _require_cached_radius(radius_deg: float) -> None:
+    """400 unless radius_deg is the one cutout the shared caches hold.
+
+    The WebP keys (_gcs_jpg_put) and band raw keys (_band_raw_key) encode
+    storm + time + position but NOT radius, and every frontend caller sends
+    radius_deg=10. Any other radius would miss the cache (a full render) and
+    then write its cutout under the radius-10 key, so later viewers would get
+    a mis-sized image. Same guard as /ir-frame.jpg."""
+    if abs(float(radius_deg) - _PREFETCH_RADIUS_DEG) > 1e-6:
+        raise HTTPException(
+            status_code=400,
+            detail=f"radius_deg must be {_PREFETCH_RADIUS_DEG:g} (the only cutout this endpoint serves)")
+
+
 @router.get("/storm/{atcf_id}/band-raw-frame")
 def get_storm_band_raw_frame(
     request: Request,
@@ -6164,6 +6250,7 @@ def get_storm_band_raw_frame(
             detail="Too many per-frame requests — use /band-raw-bundle",
             headers={"Retry-After": str(int(_BAND_FRAME_RATE_WINDOW_SEC))},
         )
+    _require_cached_radius(radius_deg)
     _ensure_fresh_cache()
     storm = None
     with _active_storms_lock:
@@ -6340,6 +6427,7 @@ def get_storm_band_raw_bundle(
     import struct
     from concurrent.futures import ThreadPoolExecutor
 
+    _require_cached_radius(radius_deg)
     _ensure_fresh_cache()
     storm = None
     with _active_storms_lock:
@@ -6852,6 +6940,7 @@ def get_band_frame_jpg(
     at: str = Query(None, description="Time-keyed frame lookup (YYYYMMDDHHMM); overrides frame_index"),
 ):
     """Return a pre-rendered WV/Vis band frame as a JPEG image."""
+    _require_cached_radius(radius_deg)
     _ensure_fresh_cache()
     storm = None
     with _active_storms_lock:
@@ -7060,6 +7149,7 @@ def get_storm_band_frames_bundle(
     import struct
     from concurrent.futures import ThreadPoolExecutor
 
+    _require_cached_radius(radius_deg)
     _ensure_fresh_cache()
     storm = None
     with _active_storms_lock:
@@ -7614,6 +7704,7 @@ def get_storm_ir_frames_bundle(
     import struct
     from concurrent.futures import ThreadPoolExecutor
 
+    _require_cached_radius(radius_deg)
     _ensure_fresh_cache()
     storm = None
     with _active_storms_lock:
@@ -8129,7 +8220,9 @@ def _weatherlab_cache_lookup(cache, key, good_ttl, miss_ttl):
         return _WL_CACHE_MISS
     age = time.time() - c["ts"]
     if isinstance(c["data"], dict):
-        return c["data"] if age < good_ttl else _WL_CACHE_MISS
+        # A positive entry may carry a shorter "ttl" (e.g. a parse whose
+        # ensemble-mean fetch failed), so it is re-fetched sooner.
+        return c["data"] if age < c.get("ttl", good_ttl) else _WL_CACHE_MISS
     eff = c.get("ttl", miss_ttl)            # transient misses carry a short ttl
     return None if age < eff else _WL_CACHE_MISS
 
@@ -8140,6 +8233,67 @@ def _weatherlab_cache_transient(cache, key):
     """
     cache[key] = {"data": "__MISSING__", "ts": time.time(),
                   "ttl": _WEATHERLAB_TRANSIENT_MISS_TTL}
+
+
+def _weatherlab_cache_status_miss(cache, key, status_code):
+    """Negative-cache a non-200 response. Only a 404 means "cycle not
+    published" (full MISS TTL); anything else (an exhausted 429/5xx comes
+    back as a response because the session uses raise_on_status=False) is
+    treated as transient so it is re-probed within seconds."""
+    if status_code == 404:
+        cache[key] = {"data": "__MISSING__", "ts": time.time()}
+    else:
+        print(f"[WeatherLab] HTTP {status_code} for {key} — short negative cache")
+        _weatherlab_cache_transient(cache, key)
+
+
+def _weatherlab_cache_cap(cache, cap):
+    """Evict the oldest PARSED entry once more than `cap` are held. Keys
+    are (date_str, hour_str, *group); the newest cycle of each group (a
+    variant / model / target) is never the victim, so a probe that walks
+    older cycles can't push the warm latest parse out of the cache.
+    Miss sentinels are excluded from the cap (they are tiny)."""
+    parsed = [k for k, v in cache.items() if isinstance(v.get("data"), dict)]
+    if len(parsed) <= cap:
+        return
+    newest: dict = {}
+    for k in parsed:
+        g = k[2:]
+        if g not in newest or k[:2] > newest[g][:2]:
+            newest[g] = k
+    protected = set(newest.values())
+    victims = [k for k in parsed if k not in protected] or parsed
+    oldest = min(victims, key=lambda k: cache[k]["ts"])
+    del cache[oldest]
+
+
+# Negative cache for ID lookups that walk every candidate cycle and find
+# nothing: (kind, id, variant/model, newest candidate cycle) -> ts. Without
+# it each probe for an absent ID re-downloads every candidate CSV. The newest
+# candidate in the key means a new cycle entering the window re-probes.
+_WL_ID_ABSENT: dict = {}
+_WL_ID_ABSENT_TTL = 600
+_WL_ID_ABSENT_MAX = 2000
+
+
+def _wl_id_absent_key(kind: str, ident: str, variant: str, candidates) -> tuple:
+    return (kind, ident, variant, candidates[0] if candidates else None)
+
+
+def _wl_id_absent_hit(key: tuple) -> bool:
+    ts = _WL_ID_ABSENT.get(key)
+    return ts is not None and time.time() - ts < _WL_ID_ABSENT_TTL
+
+
+def _wl_id_absent_mark(key: tuple) -> None:
+    now_ts = time.time()
+    if len(_WL_ID_ABSENT) >= _WL_ID_ABSENT_MAX:
+        for k in [k for k, t in _WL_ID_ABSENT.items()
+                  if now_ts - t >= _WL_ID_ABSENT_TTL]:
+            _WL_ID_ABSENT.pop(k, None)
+        if len(_WL_ID_ABSENT) >= _WL_ID_ABSENT_MAX:
+            _WL_ID_ABSENT.clear()
+    _WL_ID_ABSENT[key] = now_ts
 
 
 def _parse_lead_time(lead_str: str) -> float:
@@ -8280,8 +8434,9 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str,
         _weatherlab_cache_transient(_weatherlab_cache, cache_key)
         return None
     if ens_resp.status_code != 200:
-        # Definitive 404 — cycle not published. Full MISS TTL.
-        _weatherlab_cache[cache_key] = {"data": _WEATHERLAB_MISS, "ts": time.time()}
+        # 404 = cycle not published (full MISS TTL); other statuses short.
+        _weatherlab_cache_status_miss(_weatherlab_cache, cache_key,
+                                      ens_resp.status_code)
         return None
     ens_text = ens_resp.text
 
@@ -8339,9 +8494,14 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str,
         storm["members"][member_key]["points"].append(point)
 
     # Fetch ensemble mean
+    mean_ok = False
     try:
         mean_resp = _weatherlab_http().get(mean_url, timeout=20)
+        if mean_resp.status_code != 200:
+            print(f"[WeatherLab] ensemble-mean HTTP {mean_resp.status_code} "
+                  f"{date_str} {hour_str}z [{model_n}]")
         if mean_resp.status_code == 200:
+            mean_ok = True
             mean_cmap: dict = {}
             mean_header = None
             for line in mean_resp.text.splitlines():
@@ -8379,18 +8539,20 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str,
                     if _size:
                         pt.update(_size)
                     result[track_id]["ensemble_mean"]["points"].append(pt)
-    except Exception:
-        pass
+    except Exception as e:
+        mean_ok = False
+        print(f"[WeatherLab] ensemble-mean fetch failed "
+              f"{date_str} {hour_str}z [{model_n}]: {e}")
 
     # Cache. Exclude miss-sentinel entries from the eviction cap so a
     # flurry of 404s on not-yet-published cycles can't push a real
-    # parsed cycle out of the cache.
-    _weatherlab_cache[cache_key] = {"data": result, "ts": time.time()}
-    parsed_keys = [k for k, v in _weatherlab_cache.items()
-                   if v["data"] != _WEATHERLAB_MISS]
-    if len(parsed_keys) > _WEATHERLAB_CACHE_MAX:
-        oldest = min(parsed_keys, key=lambda k: _weatherlab_cache[k]["ts"])
-        del _weatherlab_cache[oldest]
+    # parsed cycle out of the cache. A parse without its ensemble mean is
+    # kept only for the MISS TTL so the mean is retried soon.
+    entry = {"data": result, "ts": time.time()}
+    if not mean_ok:
+        entry["ttl"] = _WEATHERLAB_MISS_TTL
+    _weatherlab_cache[cache_key] = entry
+    _weatherlab_cache_cap(_weatherlab_cache, _WEATHERLAB_CACHE_MAX)
 
     print(f"[WeatherLab] Parsed {len(result)} storms from {date_str} "
           f"{hour_str}z [{model_n}]")
@@ -8480,8 +8642,15 @@ def get_storm_weatherlab(atcf_id: str, model: str = _WL_MODEL_DEFAULT):
     used_date = None
     used_hour = None
     track_id = None
-    for date_str, hour_str in _genesis_candidates(now=now):
+    candidates = _genesis_candidates(now=now)
+    absent_key = _wl_id_absent_key("paired", atcf_id, model_n, candidates)
+    any_data = False
+    for date_str, hour_str in ([] if _wl_id_absent_hit(absent_key)
+                               else candidates):
         data = _fetch_weatherlab_csv(date_str, hour_str, model_n)
+        # Only a newest-cycle read can prove absence: if it failed
+        # transiently, an older cycle lacking the ID proves nothing.
+        any_data = any_data or (bool(data) and (date_str, hour_str) == candidates[0])
         # Exact ID first; fall back to the nearest invest track, which is how
         # a freshly-upgraded storm appears while DeepMind's pairing catches up.
         track_id = _weatherlab_match_id(data, atcf_id) if data else None
@@ -8491,6 +8660,8 @@ def get_storm_weatherlab(atcf_id: str, model: str = _WL_MODEL_DEFAULT):
             break
 
     if not track_id:
+        if any_data:
+            _wl_id_absent_mark(absent_key)
         raise HTTPException(
             status_code=404,
             detail=f"WeatherLab data not found for {atcf_id}",
@@ -9632,12 +9803,28 @@ def _genesis_cycle_dt(date_str: str, hour_str: str):
     )
 
 
+# Oldest pinned init_time accepted. The cycle picker offers ~2 days of runs;
+# the wider window leaves room for long-open tabs without letting arbitrary
+# dates each trigger an outbound fetch, a storage lookup and a cache entry.
+_GENESIS_INIT_MAX_AGE_DAYS = 30
+
+
 def _genesis_init_to_cycle(init_time: str):
     """Parse a `YYYYMMDDHH` init string into `(date_str, hour_str)`.
-    Returns `(None, None)` if malformed. Used by the cycle-trend toggle
-    so the global endpoint can serve a specific past DeepMind cycle."""
+    Returns `(None, None)` if malformed, if HH is not a DeepMind cycle hour
+    (00/06/12/18), or if the cycle is in the future or older than
+    _GENESIS_INIT_MAX_AGE_DAYS. Used by the cycle-trend toggle so the
+    global endpoint can serve a specific past DeepMind cycle."""
     s = (init_time or "").strip()
-    if len(s) != 10 or not s.isdigit():
+    if len(s) != 10 or not s.isdigit() or s[8:10] not in ("00", "06", "12", "18"):
+        return None, None
+    try:
+        cyc = _dt(int(s[:4]), int(s[4:6]), int(s[6:8]), int(s[8:10]),
+                  tzinfo=timezone.utc)
+    except ValueError:
+        return None, None
+    now = _dt.now(timezone.utc)
+    if cyc > now or now - cyc > timedelta(days=_GENESIS_INIT_MAX_AGE_DAYS):
         return None, None
     return f"{s[:4]}-{s[4:6]}-{s[6:8]}", s[8:10]
 
@@ -9803,10 +9990,10 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str,
         _weatherlab_cache_transient(_weatherlab_genesis_cache, cache_key)
         return None
     if r.status_code != 200:
-        # Definitive: cycle not published yet. Full MISS TTL is correct so
-        # the next request doesn't pay another fetch for the same 404.
-        _weatherlab_genesis_cache[cache_key] = {
-            "data": _WEATHERLAB_GENESIS_MISS, "ts": time.time()}
+        # 404 = cycle not published yet: full MISS TTL so the next request
+        # doesn't pay another fetch for it. Other statuses: short.
+        _weatherlab_cache_status_miss(_weatherlab_genesis_cache, cache_key,
+                                      r.status_code)
         return None
     text = r.text
 
@@ -9979,12 +10166,9 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str,
     # Cap the cache at 4 PARSED cycles. Miss-sentinel entries are tiny
     # strings, so we exclude them from the cap — otherwise a flurry of
     # not-yet-published probes could evict a fresh ~10 MB parse and
-    # force a re-fetch on the next request.
-    parsed_keys = [k for k, v in _weatherlab_genesis_cache.items()
-                   if v["data"] != _WEATHERLAB_GENESIS_MISS]
-    if len(parsed_keys) > 4:
-        oldest = min(parsed_keys, key=lambda k: _weatherlab_genesis_cache[k]["ts"])
-        del _weatherlab_genesis_cache[oldest]
+    # force a re-fetch on the next request. Each variant's newest cycle
+    # is protected from eviction.
+    _weatherlab_cache_cap(_weatherlab_genesis_cache, 4)
     print(f"[WeatherLab Genesis] Parsed {len(result)} tracks from "
           f"{date_str} {hour_str}z [{variant_n}]")
     return result
@@ -10086,8 +10270,14 @@ def _genesis_r2_key(date_str: str, hour_str: str, variant_n: str, cap: int) -> s
     return f"genesis/{variant_n}/{it}_m{int(cap)}.json"
 
 
+# Allowed per-track thinning levels for /weatherlab-genesis. Each distinct
+# value is its own R2 object and full render, so arbitrary values snap here.
+_GENESIS_MAX_MEMBERS_STEPS = (25, 50, 100, 250, 500, 1000)
+
+
 @router.get("/weatherlab-genesis")
-def get_weatherlab_genesis(max_members: int = 100, init_time: str = None,
+def get_weatherlab_genesis(max_members: int = Query(100, ge=1, le=1000),
+                           init_time: str = None,
                            variant: str = _GENESIS_VARIANT_DEFAULT):
     """FNV3 cyclogenesis: all TC predictions (including pre-genesis
     disturbances) for the latest available init.
@@ -10108,7 +10298,8 @@ def get_weatherlab_genesis(max_members: int = 100, init_time: str = None,
     """
     now = _dt.now(timezone.utc)
     variant_n = _genesis_variant_norm(variant)
-    cap = max(1, int(max_members)) if max_members else 0
+    cap = min(_GENESIS_MAX_MEMBERS_STEPS,
+              key=lambda v: abs(v - int(max_members)))
 
     # R2 fast path. A published (cycle, variant, cap) payload is immutable in
     # its tracks; the only wall-clock fields are `cycle_age_hours` (the frontend
@@ -10140,7 +10331,8 @@ def get_weatherlab_genesis(max_members: int = 100, init_time: str = None,
         if req_date is None:
             raise HTTPException(
                 status_code=400,
-                detail="init_time must be 10 digits (YYYYMMDDHH)")
+                detail="init_time must be a recent YYYYMMDDHH cycle "
+                       "(HH = 00/06/12/18)")
         # Pinned past cycle: 302 before touching the multi-MB CSV at all.
         hit = _genesis_302(req_date, req_hour)
         if hit is not None:
@@ -10595,13 +10787,13 @@ def get_weatherlab_genesis_trend(
     lat: float,
     lon: float,
     count: int = 5,
-    match_radius_km: float = 800.0,
-    grid_deg: float = 3.0,
-    peak_min_members: int = 8,
-    assign_radius_km: float = 1000.0,
-    time_window_h: float = 60.0,
-    cluster_min_members: int = 25,
-    same_system_km: float = 500.0,
+    match_radius_km: float = Query(800.0, ge=50.0, le=3000.0),
+    grid_deg: float = Query(3.0, ge=1.0, le=6.0),
+    peak_min_members: int = Query(8, ge=2, le=100),
+    assign_radius_km: float = Query(1000.0, ge=100.0, le=1500.0),
+    time_window_h: float = Query(60.0, ge=6.0, le=168.0),
+    cluster_min_members: int = Query(25, ge=10, le=200),
+    same_system_km: float = Query(500.0, ge=0.0, le=1500.0),
     variant: str = _GENESIS_VARIANT_DEFAULT,
     anchor_init: str = None,
     anchor_tau: float = None,
@@ -10868,7 +11060,8 @@ def get_weatherlab_genesis_near(lat: float, lon: float,
         if req_date is None:
             raise HTTPException(
                 status_code=400,
-                detail="init_time must be 10 digits (YYYYMMDDHH)")
+                detail="init_time must be a recent YYYYMMDDHH cycle "
+                       "(HH = 00/06/12/18)")
         data = _fetch_weatherlab_genesis_csv(req_date, req_hour, variant_n)
         used_date, used_hour = req_date, req_hour
     else:
@@ -11021,7 +11214,8 @@ def get_weatherlab_genesis_track(track_id: str, init_time: str = None,
         if req_date is None:
             raise HTTPException(
                 status_code=400,
-                detail="init_time must be 10 digits (YYYYMMDDHH)")
+                detail="init_time must be a recent YYYYMMDDHH cycle "
+                       "(HH = 00/06/12/18)")
         d = _fetch_weatherlab_genesis_csv(req_date, req_hour, variant_n)
         if d and track_id in d:
             data = d
@@ -11031,13 +11225,22 @@ def get_weatherlab_genesis_track(track_id: str, init_time: str = None,
         # Walk the maturity-gated candidate list and stop at the first cycle
         # that contains the requested track_id. Cycles too young to be
         # published are skipped automatically.
-        for date_str, hour_str in _genesis_candidates(now=now):
+        candidates = _genesis_candidates(now=now)
+        absent_key = _wl_id_absent_key("genesis", track_id, variant_n,
+                                       candidates)
+        any_data = False
+        for date_str, hour_str in ([] if _wl_id_absent_hit(absent_key)
+                                   else candidates):
             d = _fetch_weatherlab_genesis_csv(date_str, hour_str, variant_n)
+            any_data = any_data or (d is not None
+                                    and (date_str, hour_str) == candidates[0])
             if d and track_id in d:
                 data = d
                 used_date = date_str
                 used_hour = hour_str
                 break
+        if data is None and any_data:
+            _wl_id_absent_mark(absent_key)
 
     if data is None or track_id not in data:
         raise HTTPException(
@@ -12322,16 +12525,16 @@ def _tca_cluster_index_view(c):
 
 @router.get("/weatherlab-genesis-clusters")
 def get_weatherlab_genesis_clusters(
-    grid_deg: float = 3.0,
-    peak_min_members: int = 8,
-    assign_radius_km: float = 1000.0,
-    time_window_h: float = 60.0,
-    cluster_min_members: int = 25,
-    same_system_km: float = 500.0,
+    grid_deg: float = Query(3.0, ge=1.0, le=6.0),
+    peak_min_members: int = Query(8, ge=2, le=100),
+    assign_radius_km: float = Query(1000.0, ge=100.0, le=1500.0),
+    time_window_h: float = Query(60.0, ge=6.0, le=168.0),
+    cluster_min_members: int = Query(25, ge=10, le=200),
+    same_system_km: float = Query(500.0, ge=0.0, le=1500.0),
     variant: str = _GENESIS_VARIANT_DEFAULT,
     init_time: str = None,
-    merge_km: float = _TCA_MERGE_DEFAULT_KM,
-    merge_overlap_h: float = 48.0,
+    merge_km: float = Query(_TCA_MERGE_DEFAULT_KM, ge=0.0, le=800.0),
+    merge_overlap_h: float = Query(48.0, ge=0.0, le=168.0),
 ):
     """Precomputed TC-ATLAS density-peak cluster INDEX — lightweight
     cluster metadata + ensemble_mean polylines, no per-member trajectories.
@@ -12411,16 +12614,16 @@ def get_weatherlab_genesis_clusters(
 @router.get("/weatherlab-genesis-cluster/{tca_id}")
 def get_weatherlab_genesis_cluster(
     tca_id: str,
-    grid_deg: float = 3.0,
-    peak_min_members: int = 8,
-    assign_radius_km: float = 1000.0,
-    time_window_h: float = 60.0,
-    cluster_min_members: int = 25,
-    same_system_km: float = 500.0,
+    grid_deg: float = Query(3.0, ge=1.0, le=6.0),
+    peak_min_members: int = Query(8, ge=2, le=100),
+    assign_radius_km: float = Query(1000.0, ge=100.0, le=1500.0),
+    time_window_h: float = Query(60.0, ge=6.0, le=168.0),
+    cluster_min_members: int = Query(25, ge=10, le=200),
+    same_system_km: float = Query(500.0, ge=0.0, le=1500.0),
     variant: str = _GENESIS_VARIANT_DEFAULT,
     init_time: str = None,
-    merge_km: float = _TCA_MERGE_DEFAULT_KM,
-    merge_overlap_h: float = 48.0,
+    merge_km: float = Query(_TCA_MERGE_DEFAULT_KM, ge=0.0, le=800.0),
+    merge_overlap_h: float = Query(48.0, ge=0.0, le=168.0),
 ):
     """Full per-member trajectories for one TC-ATLAS cluster (tca-N).
     Lazy-loaded by the detail modal when the user clicks a disturbance.
@@ -12493,16 +12696,16 @@ def get_weatherlab_genesis_cluster(
 @router.get("/weatherlab-genesis-family/{family_id}")
 def get_weatherlab_genesis_family(
     family_id: str,
-    grid_deg: float = 3.0,
-    peak_min_members: int = 8,
-    assign_radius_km: float = 1000.0,
-    time_window_h: float = 60.0,
-    cluster_min_members: int = 25,
-    same_system_km: float = 500.0,
+    grid_deg: float = Query(3.0, ge=1.0, le=6.0),
+    peak_min_members: int = Query(8, ge=2, le=100),
+    assign_radius_km: float = Query(1000.0, ge=100.0, le=1500.0),
+    time_window_h: float = Query(60.0, ge=6.0, le=168.0),
+    cluster_min_members: int = Query(25, ge=10, le=200),
+    same_system_km: float = Query(500.0, ge=0.0, le=1500.0),
     variant: str = _GENESIS_VARIANT_DEFAULT,
     init_time: str = None,
-    merge_km: float = _TCA_MERGE_DEFAULT_KM,
-    merge_overlap_h: float = 48.0,
+    merge_km: float = Query(_TCA_MERGE_DEFAULT_KM, ge=0.0, le=800.0),
+    merge_overlap_h: float = Query(48.0, ge=0.0, le=168.0),
 ):
     """Whole-wave-train detail: the deduplicated union member set of one
     wave family (fam-N), shaped like /weatherlab-genesis-cluster/{id} so
@@ -12623,9 +12826,9 @@ def _fetch_weatherlab_large_csv(date_str: str, hour_str: str,
         _weatherlab_cache_transient(_weatherlab_large_cache, cache_key)
         return None
     if resp.status_code != 200:
-        # Definitive 404 — cycle not published. Full MISS TTL.
-        _weatherlab_large_cache[cache_key] = {
-            "data": _WEATHERLAB_LARGE_MISS, "ts": time.time()}
+        # 404 = cycle not published (full MISS TTL); other statuses short.
+        _weatherlab_cache_status_miss(_weatherlab_large_cache, cache_key,
+                                      resp.status_code)
         return None
 
     # Parse: collect per-(track, member) → list of {tau, wind, pres}
@@ -12678,11 +12881,7 @@ def _fetch_weatherlab_large_csv(date_str: str, hour_str: str,
     # Cache. Exclude miss-sentinel entries from the cap so 404 probes
     # can't evict a freshly-parsed multi-MB cycle.
     _weatherlab_large_cache[cache_key] = {"data": result, "ts": time.time()}
-    parsed_keys = [k for k, v in _weatherlab_large_cache.items()
-                   if v["data"] != _WEATHERLAB_LARGE_MISS]
-    if len(parsed_keys) > 4:
-        oldest = min(parsed_keys, key=lambda k: _weatherlab_large_cache[k]["ts"])
-        del _weatherlab_large_cache[oldest]
+    _weatherlab_cache_cap(_weatherlab_large_cache, 4)
 
     print(f"[WeatherLab 1K] Parsed {len(result)} storms, "
           f"{sum(r['n_members'] for r in result.values())} total members")
@@ -12798,7 +12997,11 @@ def get_storm_weatherlab_ensemble(atcf_id: str,
     used_date = None
     used_hour = None
     track_id = None
-    for date_str, hour_str in _genesis_candidates(now=now):
+    candidates = _genesis_candidates(now=now)
+    absent_key = _wl_id_absent_key("ensemble", atcf_id, model_n, candidates)
+    any_data = False
+    for date_str, hour_str in ([] if _wl_id_absent_hit(absent_key)
+                               else candidates):
         if model_n == "wnv3":
             paired = _fetch_weatherlab_csv(date_str, hour_str, model_n)
             data = _wl_paired_to_dist(paired) if paired else None
@@ -12810,6 +13013,7 @@ def get_storm_weatherlab_ensemble(atcf_id: str,
                                                target_track=None)
         if not data:
             continue
+        any_data = any_data or (date_str, hour_str) == candidates[0]
         if atcf_id in data:
             track_id = atcf_id
         else:
@@ -12827,6 +13031,8 @@ def get_storm_weatherlab_ensemble(atcf_id: str,
             break
 
     if not track_id:
+        if any_data:
+            _wl_id_absent_mark(absent_key)
         raise HTTPException(
             status_code=404,
             detail=f"WeatherLab 1000-member data not found for {atcf_id}",
@@ -14536,21 +14742,23 @@ def _parse_ndbc_latest(text: str) -> list[dict]:
     """Parse the latest_obs.txt fixed-width feed. Columns are documented
     in NDBC's data file header (commented out with #) and have stayed
     stable for years. Returns a list of dicts with normalized SI units."""
-    # Header line is the second line; first row is column names.
-    # Example header:  STN LAT LON YYYY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES PTDY ATMP WTMP DEWP VIS TIDE
+    # Both header rows (column names and units) start with '#', e.g.
+    #   #STN LAT LON YYYY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES PTDY ATMP WTMP DEWP VIS TIDE
+    #   #text deg deg yr mo day hr mn degT m/s ...
+    # so every remaining line is a station row. Missing values are "MM";
+    # numeric values (e.g. 999 hPa, 99 degT) are real readings.
     lines = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
-    if len(lines) < 2:
+    if not lines:
         return []
     rows = []
 
     def _f(v: str) -> float | None:
         try:
-            x = float(v)
-            return None if x in (99.0, 999.0, 9999.0, 99.0, 99.00) else x
+            return float(v)
         except (ValueError, TypeError):
-            return None
+            return None   # "MM" (missing) or malformed
 
-    for line in lines[1:]:  # skip the unit row
+    for line in lines:  # a non-'#' header row, if any, fails the float parse below
         parts = line.split()
         if len(parts) < 7:
             continue
@@ -14917,13 +15125,13 @@ _OBS_HISTORY_MAX = 128
 
 
 def _ndbc_f(v: str) -> float | None:
-    """Coerce an NDBC realtime2 token to float; 'MM' and the numeric
-    sentinels mean missing."""
+    """Coerce an NDBC realtime2 token to float. The realtime2 feed marks
+    missing values as 'MM'; numeric values such as 999 hPa or 99 degT are
+    real readings."""
     if v == "MM":
         return None
     try:
-        x = float(v)
-        return None if x in (99.0, 999.0, 9999.0) else x
+        return float(v)
     except (ValueError, TypeError):
         return None
 
@@ -14966,7 +15174,8 @@ def _parse_ndbc_realtime2(text: str, since_ts: float) -> list[dict]:
     return rows
 
 
-def _fetch_ndbc_history(station: str, since_ts: float) -> list[dict]:
+def _fetch_ndbc_history(station: str, since_ts: float) -> list[dict] | None:
+    """None on upstream failure (distinct from a station with no recent obs)."""
     try:
         import urllib.request
         req = urllib.request.Request(
@@ -14976,11 +15185,13 @@ def _fetch_ndbc_history(station: str, since_ts: float) -> list[dict]:
             text = resp.read().decode("utf-8", errors="ignore")
     except Exception as ex:
         print(f"[Obs History] NDBC {station} fetch failed: {ex}")
-        return []
+        return None
     return _parse_ndbc_realtime2(text, since_ts)
 
 
-def _fetch_metar_history(icao: str, hours: int, since_ts: float) -> list[dict]:
+def _fetch_metar_history(icao: str, hours: int,
+                         since_ts: float) -> list[dict] | None:
+    """None on upstream failure (distinct from a station with no recent obs)."""
     url = (f"{_METAR_BBOX_URL}?ids={icao.upper()}"
            f"&format=json&hours={hours}")
     try:
@@ -14991,7 +15202,7 @@ def _fetch_metar_history(icao: str, hours: int, since_ts: float) -> list[dict]:
         raw = json.loads(body) if body else []
     except Exception as ex:
         print(f"[Obs History] METAR {icao} fetch failed: {ex}")
-        return []
+        return None
     rows: list[dict] = []
     for m in (raw or []):
         time_utc = (m.get("reportTime") or "").replace(" ", "T")
@@ -15042,6 +15253,14 @@ def get_surface_obs_history(
         series = _fetch_ndbc_history(station, since_ts)
     else:
         series = _fetch_metar_history(station, hours, since_ts)
+
+    if series is None:
+        # Upstream failure: answer empty but don't memoize it or let the
+        # edge cache it, so the next click retries.
+        return JSONResponse(
+            content={"id": station, "source": src, "hours": hours,
+                     "n": 0, "series": [], "degraded": True},
+            headers={"Cache-Control": "no-store"})
 
     payload = {
         "id": station,

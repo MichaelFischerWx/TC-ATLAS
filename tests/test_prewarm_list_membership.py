@@ -163,13 +163,14 @@ def _run_prewarm(bucket, *, record):
 
         # Heavy fetchers — record calls; return a minimal valid payload so
         # the cache-write branch runs (cold-cache test wants real writes).
-        def _fake_ir(ilat, ilon, tdt, box, max_substitution_min=None):
+        def _fake_ir(ilat, ilon, tdt, box, max_substitution_min=None,
+                     **kwargs):
             record["ir"].append(tdt)
             return None  # short-circuit before JPG/encode — we only need to
             # know whether the fetch was attempted.
 
         def _fake_band(ilat, ilon, tdt, box, band=None,
-                       max_substitution_min=None):
+                       max_substitution_min=None, **kwargs):
             record["band"].append((band, tdt))
             return None
 

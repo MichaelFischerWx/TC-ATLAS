@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -87,19 +88,38 @@ def _get_nexrad_fs():
             "connect_timeout": 5,
             "read_timeout": 20,
             "retries": {"max_attempts": 2, "mode": "standard"},
-        })
+        },
+            # fsspec's dircache default (listings_expiry_time=None) never
+            # expires, so a warm instance would keep serving the first
+            # listing it saw for a site/day and real-time loops would stop
+            # advancing. Same fix as satellite_ir.get_goes_fs().
+            listings_expiry_time=60,
+        )
     return _nexrad_fs
 
 
 # ── In-memory LRU cache ──────────────────────────────────────
-# Each entry is ~100-150 KB (PNG + uint8 grid + metadata), so
-# 256 entries ≈ 25-40 MB in memory. A multi-storm archive session
-# (4-5 storms × 3-4 sites × 2 products × several tilts) evicts
-# frequently at the old size of 64.
+# A default /frame entry carries the image plus base64 `data` and
+# `count_data` grids (600×600 cells each), ~1.1 MB in total, so the
+# cache is bounded by approximate bytes as well as entry count.
 
 _CACHE_MAX = 256
+_CACHE_MAX_BYTES = 64 * 1024 * 1024
 _frame_cache: OrderedDict = OrderedDict()
+_frame_cache_sizes: Dict[str, int] = {}
+_frame_cache_bytes = 0
 _cache_lock = threading.Lock()
+
+
+def _entry_nbytes(val: dict) -> int:
+    """Approximate size of a cached frame (dominated by its base64 strings)."""
+    n = 0
+    for v in val.values():
+        if isinstance(v, str):
+            n += len(v)
+        elif isinstance(v, list):
+            n += 8 * len(v)
+    return n
 
 
 def _cache_get(key: str) -> dict | None:
@@ -111,11 +131,19 @@ def _cache_get(key: str) -> dict | None:
 
 
 def _cache_put(key: str, val: dict):
+    global _frame_cache_bytes
+    nbytes = _entry_nbytes(val)
     with _cache_lock:
+        _frame_cache_bytes -= _frame_cache_sizes.get(key, 0)
         _frame_cache[key] = val
+        _frame_cache_sizes[key] = nbytes
+        _frame_cache_bytes += nbytes
         _frame_cache.move_to_end(key)
-        while len(_frame_cache) > _CACHE_MAX:
-            _frame_cache.popitem(last=False)
+        while len(_frame_cache) > 1 and (
+                len(_frame_cache) > _CACHE_MAX
+                or _frame_cache_bytes > _CACHE_MAX_BYTES):
+            old_key, _ = _frame_cache.popitem(last=False)
+            _frame_cache_bytes -= _frame_cache_sizes.pop(old_key, 0)
 
 
 # ── GCS persistent cache ─────────────────────────────────────
@@ -148,18 +176,27 @@ def _get_gcs_bucket():
         return None
 
 
+_DEFAULT_GRID_SPACING_M = 1000
+
+
 def _gcs_cache_key(site: str, scan_key: str, product: str, tilt: int,
-                    max_range_km: int = 300) -> str:
+                    max_range_km: int = 300,
+                    grid_spacing_m: int = _DEFAULT_GRID_SPACING_M) -> str:
     safe_key = scan_key.replace("/", "_")
-    return f"nexrad/{_GCS_CACHE_VERSION}/{site}/{safe_key}/{product}_{tilt}_{max_range_km}km.json"
+    # Default-grid keys stay unchanged so existing cache objects remain valid;
+    # a non-default grid gets its own suffix.
+    grid_sfx = "" if grid_spacing_m == _DEFAULT_GRID_SPACING_M else f"_{grid_spacing_m}m"
+    return (f"nexrad/{_GCS_CACHE_VERSION}/{site}/{safe_key}/"
+            f"{product}_{tilt}_{max_range_km}km{grid_sfx}.json")
 
 
 def _gcs_get_frame(site: str, scan_key: str, product: str, tilt: int,
-                    max_range_km: int = 460) -> dict | None:
+                    max_range_km: int = 460,
+                    grid_spacing_m: int = _DEFAULT_GRID_SPACING_M) -> dict | None:
     bucket = _get_gcs_bucket()
     if bucket is None:
         return None
-    key = _gcs_cache_key(site, scan_key, product, tilt, max_range_km)
+    key = _gcs_cache_key(site, scan_key, product, tilt, max_range_km, grid_spacing_m)
     try:
         blob = bucket.blob(key)
         data = blob.download_as_bytes(timeout=5)
@@ -169,13 +206,14 @@ def _gcs_get_frame(site: str, scan_key: str, product: str, tilt: int,
 
 
 def _gcs_put_frame(site: str, scan_key: str, product: str, tilt: int, result: dict,
-                    max_range_km: int = 460):
+                    max_range_km: int = 460,
+                    grid_spacing_m: int = _DEFAULT_GRID_SPACING_M):
     bucket = _get_gcs_bucket()
     if bucket is None:
         return
 
     def _upload():
-        key = _gcs_cache_key(site, scan_key, product, tilt, max_range_km)
+        key = _gcs_cache_key(site, scan_key, product, tilt, max_range_km, grid_spacing_m)
         try:
             blob = bucket.blob(key)
             blob.upload_from_string(
@@ -483,12 +521,15 @@ def _list_scans_s3(site: str, dt: _dt, window_min: int = 60) -> List[dict]:
         raise HTTPException(500, "s3fs not available")
 
     results = []
-    # Search the day of and adjacent day if near midnight
-    dates_to_check = [dt.date()]
-    if dt.hour < 1:
-        dates_to_check.append((dt - timedelta(days=1)).date())
-    elif dt.hour >= 23:
-        dates_to_check.append((dt + timedelta(days=1)).date())
+    # Search every UTC date the [dt - window, dt + window] range touches
+    # (callers ask for windows of up to several hours, which can cross
+    # midnight even when dt itself is mid-evening).
+    dates_to_check = []
+    d = (dt - timedelta(minutes=window_min)).date()
+    d_end = (dt + timedelta(minutes=window_min)).date()
+    while d <= d_end:
+        dates_to_check.append(d)
+        d += timedelta(days=1)
 
     for d in dates_to_check:
         prefix = f"{_NEXRAD_BUCKET}/{d.strftime('%Y/%m/%d')}/{site}/"
@@ -529,9 +570,31 @@ def _list_scans_s3(site: str, dt: _dt, window_min: int = 60) -> List[dict]:
     return results
 
 
-def _read_nexrad_level2(s3_key: str):
+# Level-2 volume keys as returned by _list_scans_s3, e.g.
+#   unidata-nexrad-level2/2024/09/26/KTLH/KTLH20240926_000218_V06
+#   unidata-nexrad-level2/2005/08/29/KLIX/KLIX20050829_000249.gz
+_S3_KEY_RE = re.compile(
+    r"^" + re.escape(_NEXRAD_BUCKET) +
+    r"/\d{4}/\d{2}/\d{2}/([A-Z]{4})/\1\d{8}_\d{6}(?:_V\d{2})?(?:\.gz)?$"
+)
+# Level-2 volumes are tens of MB; refuse anything far larger.
+_MAX_LEVEL2_BYTES = 200 * 1024 * 1024
+
+
+def _validate_s3_key(s3_key: str) -> str:
+    """Reject anything that is not a Level-2 volume key for a known site."""
+    m = _S3_KEY_RE.match(s3_key or "")
+    if m is None or m.group(1) not in NEXRAD_SITES:
+        raise HTTPException(400, "Invalid NEXRAD s3_key")
+    return s3_key
+
+
+def _read_nexrad_level2(s3_key: str, field: Optional[str] = None):
     """
     Read a NEXRAD Level II file from S3 and return a pyart Radar object.
+
+    If `field` is given, only that moment is decoded (much lower memory
+    than loading every moment of the volume).
     """
     pyart = _get_pyart()
     if pyart is None:
@@ -543,7 +606,12 @@ def _read_nexrad_level2(s3_key: str):
 
     try:
         with fs.open(s3_key, "rb") as f:
+            size = getattr(f, "size", None)
+            if size is not None and size > _MAX_LEVEL2_BYTES:
+                raise HTTPException(413, "NEXRAD file too large")
             data = f.read()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(404, f"NEXRAD file not found: {s3_key}: {e}")
 
@@ -567,7 +635,8 @@ def _read_nexrad_level2(s3_key: str):
 
     try:
         radar = pyart.io.read_nexrad_archive(
-            io.BytesIO(data), delay_field_loading=False
+            io.BytesIO(data), delay_field_loading=False,
+            include_fields=[field] if field else None,
         )
     except Exception as e:
         raise HTTPException(500, f"Failed to read NEXRAD file: {e}")
@@ -950,6 +1019,22 @@ def _grid_radar(radar, product: str = "reflectivity",
     return data_2d, count_u8, metadata
 
 
+# ── Cold-render concurrency cap ──────────────────────────────
+# A cold render reads and decodes a whole Level-2 volume plus gridding
+# temporaries; letting many run at once on one instance risks OOM for every
+# router. Excess requests wait briefly, then get a 503 with Retry-After.
+_RENDER_SEM = threading.BoundedSemaphore(2)
+_RENDER_WAIT_S = 20
+# Largest output grid edge for /frame (300 km at 250 m).
+_MAX_FRAME_BINS = 2400
+
+
+def _acquire_render_slot():
+    if not _RENDER_SEM.acquire(timeout=_RENDER_WAIT_S):
+        raise HTTPException(503, "Radar renderer busy, retry shortly",
+                            headers={"Retry-After": "5"})
+
+
 # ── API Endpoints ─────────────────────────────────────────────
 
 @router.get("/sites")
@@ -979,7 +1064,7 @@ def get_nearby_sites(
 def get_available_scans(
     site: str = Query(..., description="NEXRAD site ID (e.g., KBYX)"),
     datetime: str = Query(..., description="ISO datetime (e.g., 2022-09-28T18:00:00)"),
-    window_min: int = Query(60, description="Search window in minutes"),
+    window_min: int = Query(60, ge=1, le=720, description="Search window in minutes"),
 ):
     """List available NEXRAD scans near a given time."""
     site = site.upper()
@@ -1026,9 +1111,10 @@ def get_radar_frame(
     site: str = Query(..., description="NEXRAD site ID"),
     s3_key: str = Query(..., description="S3 key from /scans endpoint"),
     product: str = Query("reflectivity", description="reflectivity or velocity"),
-    tilt: int = Query(0, description="Sweep/tilt index (0 = lowest)"),
-    max_range_km: int = Query(300, description="Max radar range in km"),
-    grid_spacing_m: int = Query(1000, description="Grid spacing in meters"),
+    tilt: int = Query(0, ge=0, le=20, description="Sweep/tilt index (0 = lowest)"),
+    max_range_km: int = Query(300, ge=10, le=460, description="Max radar range in km"),
+    grid_spacing_m: int = Query(_DEFAULT_GRID_SPACING_M, ge=250, le=4000,
+                                description="Grid spacing in meters"),
 ):
     """
     Render a NEXRAD radar frame as a geographic overlay image + raw data for hover.
@@ -1036,6 +1122,9 @@ def get_radar_frame(
     site = site.upper()
     if product not in PRODUCTS:
         raise HTTPException(400, f"Unknown product: {product}. Use: {list(PRODUCTS.keys())}")
+    _validate_s3_key(s3_key)
+    if 2 * max_range_km * 1000 / grid_spacing_m > _MAX_FRAME_BINS:
+        raise HTTPException(400, "max_range_km / grid_spacing_m grid too large")
 
     prod_cfg = PRODUCTS[product]
 
@@ -1046,48 +1135,55 @@ def get_radar_frame(
         return JSONResponse(cached, headers=_FRAME_CACHE_HEADERS)
 
     # Check GCS cache
-    gcs_result = _gcs_get_frame(site, s3_key, product, tilt, max_range_km)
+    gcs_result = _gcs_get_frame(site, s3_key, product, tilt, max_range_km, grid_spacing_m)
     if gcs_result:
         _cache_put(cache_key, gcs_result)
         return JSONResponse(gcs_result, headers=_FRAME_CACHE_HEADERS)
 
-    # Read and process the radar data
-    radar = _read_nexrad_level2(s3_key)
-    data_2d, count_2d, metadata = _grid_radar(
-        radar, product=product, sweep=tilt,
-        grid_spacing_m=grid_spacing_m,
-        max_range_m=max_range_km * 1000,
-        site_hint=site,
-    )
-    radar = None  # free memory
+    # Read and process the radar data (bounded concurrency)
+    _acquire_render_slot()
+    try:
+        cached = _cache_get(cache_key)  # rendered by another request while waiting
+        if cached:
+            return JSONResponse(cached, headers=_FRAME_CACHE_HEADERS)
+        radar = _read_nexrad_level2(s3_key, field=prod_cfg["field"])
+        data_2d, count_2d, metadata = _grid_radar(
+            radar, product=product, sweep=tilt,
+            grid_spacing_m=grid_spacing_m,
+            max_range_m=max_range_km * 1000,
+            site_hint=site,
+        )
+        radar = None  # free memory
 
-    # Render image (flip so row 0 = north for image display)
-    image = _render_radar_image(
-        np.flipud(data_2d), prod_cfg["lut"], prod_cfg["vmin"], prod_cfg["vmax"], scale=1
-    )
+        # Render image (flip so row 0 = north for image display)
+        image = _render_radar_image(
+            np.flipud(data_2d), prod_cfg["lut"], prod_cfg["vmin"], prod_cfg["vmax"], scale=1
+        )
 
-    # Encode raw data + gate count for hover readout (flipped to match image)
-    hover_data = _encode_data_uint8(np.flipud(data_2d), prod_cfg["vmin"], prod_cfg["vmax"])
-    hover_count = _encode_count_uint8(np.flipud(count_2d))
+        # Encode raw data + gate count for hover readout (flipped to match image)
+        hover_data = _encode_data_uint8(np.flipud(data_2d), prod_cfg["vmin"], prod_cfg["vmax"])
+        hover_count = _encode_count_uint8(np.flipud(count_2d))
 
-    result = {
-        "image": image,
-        **hover_data,
-        **hover_count,
-        "bounds": metadata["bounds"],
-        "site": site,
-        "site_lat": metadata["lat_center"],
-        "site_lon": metadata["lon_center"],
-        "scan_time": metadata["scan_time"],
-        "product": product,
-        "tilt": metadata["tilt"],
-        "units": prod_cfg["units"],
-        "label": prod_cfg["label"],
-    }
+        result = {
+            "image": image,
+            **hover_data,
+            **hover_count,
+            "bounds": metadata["bounds"],
+            "site": site,
+            "site_lat": metadata["lat_center"],
+            "site_lon": metadata["lon_center"],
+            "scan_time": metadata["scan_time"],
+            "product": product,
+            "tilt": metadata["tilt"],
+            "units": prod_cfg["units"],
+            "label": prod_cfg["label"],
+        }
 
-    # Cache
-    _cache_put(cache_key, result)
-    _gcs_put_frame(site, s3_key, product, tilt, result, max_range_km)
+        # Cache
+        _cache_put(cache_key, result)
+        _gcs_put_frame(site, s3_key, product, tilt, result, max_range_km, grid_spacing_m)
+    finally:
+        _RENDER_SEM.release()
 
     return JSONResponse(result, headers=_FRAME_CACHE_HEADERS)
 
@@ -1096,12 +1192,12 @@ def get_radar_frame(
 def get_storm_relative_frame(
     site: str = Query(..., description="NEXRAD site ID"),
     s3_key: str = Query(..., description="S3 key from /scans endpoint"),
-    center_lat: float = Query(..., description="Storm center latitude"),
-    center_lon: float = Query(..., description="Storm center longitude"),
+    center_lat: float = Query(..., ge=-90, le=90, description="Storm center latitude"),
+    center_lon: float = Query(..., ge=-360, le=360, description="Storm center longitude"),
     product: str = Query("reflectivity", description="reflectivity or velocity"),
-    tilt: int = Query(0, description="Sweep/tilt index"),
-    grid_spacing_km: float = Query(2.0, description="Output grid spacing in km"),
-    domain_km: float = Query(200.0, description="Half-domain size in km"),
+    tilt: int = Query(0, ge=0, le=20, description="Sweep/tilt index"),
+    grid_spacing_km: float = Query(2.0, ge=0.5, le=20.0, description="Output grid spacing in km"),
+    domain_km: float = Query(200.0, ge=10.0, le=400.0, description="Half-domain size in km"),
 ):
     """
     Render NEXRAD data in storm-relative Cartesian coordinates,
@@ -1110,6 +1206,7 @@ def get_storm_relative_frame(
     site = site.upper()
     if product not in PRODUCTS:
         raise HTTPException(400, f"Unknown product: {product}")
+    _validate_s3_key(s3_key)
 
     prod_cfg = PRODUCTS[product]
 
@@ -1120,86 +1217,93 @@ def get_storm_relative_frame(
     if cached:
         return JSONResponse(cached, headers=_FRAME_CACHE_HEADERS)
 
-    # Read and grid to geographic coordinates
-    radar = _read_nexrad_level2(s3_key)
-    data_geo, _count_unused, metadata = _grid_radar(
-        radar, product=product, sweep=tilt,
-        grid_spacing_m=1000,  # intermediate grid (1km matches /frame default)
-        max_range_m=int((domain_km + 50) * 1000),  # +50 km margin
-        site_hint=site,
-    )
-    radar = None
+    # Read and grid to geographic coordinates (bounded concurrency)
+    _acquire_render_slot()
+    try:
+        cached = _cache_get(cache_key)  # rendered by another request while waiting
+        if cached:
+            return JSONResponse(cached, headers=_FRAME_CACHE_HEADERS)
+        radar = _read_nexrad_level2(s3_key, field=prod_cfg["field"])
+        data_geo, _count_unused, metadata = _grid_radar(
+            radar, product=product, sweep=tilt,
+            grid_spacing_m=1000,  # intermediate grid (1km matches /frame default)
+            max_range_m=int((domain_km + 50) * 1000),  # +50 km margin
+            site_hint=site,
+        )
+        radar = None
 
-    # Build storm-relative output grid
-    n_pts = int(2 * domain_km / grid_spacing_km) + 1
-    x_km = np.linspace(-domain_km, domain_km, n_pts)
-    y_km = np.linspace(-domain_km, domain_km, n_pts)
+        # Build storm-relative output grid
+        n_pts = int(2 * domain_km / grid_spacing_km) + 1
+        x_km = np.linspace(-domain_km, domain_km, n_pts)
+        y_km = np.linspace(-domain_km, domain_km, n_pts)
 
-    # Convert geographic grid to storm-relative km
-    bounds = metadata["bounds"]
-    lat_center_radar = metadata["lat_center"]
-    lon_center_radar = metadata["lon_center"]
+        # Convert geographic grid to storm-relative km
+        bounds = metadata["bounds"]
+        lat_center_radar = metadata["lat_center"]
+        lon_center_radar = metadata["lon_center"]
 
-    ny_geo, nx_geo = data_geo.shape
-    lats_geo = np.linspace(bounds[0][0], bounds[1][0], ny_geo)
-    lons_geo = np.linspace(bounds[0][1], bounds[1][1], nx_geo)
+        ny_geo, nx_geo = data_geo.shape
+        lats_geo = np.linspace(bounds[0][0], bounds[1][0], ny_geo)
+        lons_geo = np.linspace(bounds[0][1], bounds[1][1], nx_geo)
 
-    # Convert geo coords to storm-relative km
-    km_per_deg_lat = 111.0
-    km_per_deg_lon = 111.0 * math.cos(math.radians(center_lat))
-    x_geo_km = (lons_geo - center_lon) * km_per_deg_lon
-    y_geo_km = (lats_geo - center_lat) * km_per_deg_lat
+        # Convert geo coords to storm-relative km
+        km_per_deg_lat = 111.0
+        km_per_deg_lon = 111.0 * math.cos(math.radians(center_lat))
+        x_geo_km = (lons_geo - center_lon) * km_per_deg_lon
+        y_geo_km = (lats_geo - center_lat) * km_per_deg_lat
 
-    # Interpolate from geographic grid to storm-relative grid
-    RegularGridInterpolator = _get_scipy_interp()
-    if RegularGridInterpolator is None:
-        raise HTTPException(500, "scipy not available")
+        # Interpolate from geographic grid to storm-relative grid
+        RegularGridInterpolator = _get_scipy_interp()
+        if RegularGridInterpolator is None:
+            raise HTTPException(500, "scipy not available")
 
-    # Replace NaN with a fill value for interpolation
-    fill_val = prod_cfg["vmin"] - 999
-    data_clean = np.where(np.isfinite(data_geo), data_geo, fill_val)
+        # Replace NaN with a fill value for interpolation
+        fill_val = prod_cfg["vmin"] - 999
+        data_clean = np.where(np.isfinite(data_geo), data_geo, fill_val)
 
-    interp = RegularGridInterpolator(
-        (y_geo_km, x_geo_km), data_clean,
-        method="nearest", bounds_error=False, fill_value=fill_val,
-    )
+        interp = RegularGridInterpolator(
+            (y_geo_km, x_geo_km), data_clean,
+            method="nearest", bounds_error=False, fill_value=fill_val,
+        )
 
-    # Create output grid
-    yy, xx = np.meshgrid(y_km, x_km, indexing="ij")
-    pts = np.column_stack([yy.ravel(), xx.ravel()])
-    data_sr = interp(pts).reshape(n_pts, n_pts).astype(np.float32)
+        # Create output grid
+        yy, xx = np.meshgrid(y_km, x_km, indexing="ij")
+        pts = np.column_stack([yy.ravel(), xx.ravel()])
+        data_sr = interp(pts).reshape(n_pts, n_pts).astype(np.float32)
 
-    # Restore NaN for fill values
-    data_sr[data_sr <= fill_val + 1] = np.nan
+        # Restore NaN for fill values
+        data_sr[data_sr <= fill_val + 1] = np.nan
 
-    # Flip so north is at top
-    data_sr = np.flipud(data_sr)
+        # Flip so north is at top
+        data_sr = np.flipud(data_sr)
 
-    # Render image
-    image = _render_radar_image(
-        data_sr, prod_cfg["lut"], prod_cfg["vmin"], prod_cfg["vmax"], scale=1
-    )
+        # Render image
+        image = _render_radar_image(
+            data_sr, prod_cfg["lut"], prod_cfg["vmin"], prod_cfg["vmax"], scale=1
+        )
 
-    # Encode hover data
-    hover_data = _encode_data_uint8(data_sr, prod_cfg["vmin"], prod_cfg["vmax"])
+        # Encode hover data
+        hover_data = _encode_data_uint8(data_sr, prod_cfg["vmin"], prod_cfg["vmax"])
 
-    result = {
-        "image": image,
-        **hover_data,
-        "x_km": x_km.tolist(),
-        "y_km": y_km.tolist(),
-        "site": site,
-        "scan_time": metadata["scan_time"],
-        "product": product,
-        "tilt": metadata["tilt"],
-        "units": prod_cfg["units"],
-        "label": prod_cfg["label"],
-        "center_lat": center_lat,
-        "center_lon": center_lon,
-        "domain_km": domain_km,
-        "grid_spacing_km": grid_spacing_km,
-    }
+        result = {
+            "image": image,
+            **hover_data,
+            "x_km": x_km.tolist(),
+            "y_km": y_km.tolist(),
+            "site": site,
+            "scan_time": metadata["scan_time"],
+            "product": product,
+            "tilt": metadata["tilt"],
+            "units": prod_cfg["units"],
+            "label": prod_cfg["label"],
+            "center_lat": center_lat,
+            "center_lon": center_lon,
+            "domain_km": domain_km,
+            "grid_spacing_km": grid_spacing_km,
+        }
 
-    _cache_put(cache_key, result)
+        _cache_put(cache_key, result)
+    finally:
+        _RENDER_SEM.release()
 
     return JSONResponse(result, headers=_FRAME_CACHE_HEADERS)

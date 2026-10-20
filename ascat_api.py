@@ -47,6 +47,9 @@ _EARTHDATA_USER = os.environ.get("EARTHDATA_USERNAME", "") or os.environ.get("EA
 _EARTHDATA_PASS = os.environ.get("EARTHDATA_PASSWORD", "") or os.environ.get("EARTHDATA_PASS", "")
 _EARTHDATA_TOKEN = os.environ.get("EARTHDATA_TOKEN", "")
 
+# Largest granule download accepted (ASCAT L2 25 km granules are a few MB)
+_MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+
 # Cache settings
 _PASS_CACHE_TTL = 900       # 15 minutes
 _WIND_CACHE_MAX = 50        # max cached wind results
@@ -232,6 +235,27 @@ def _fetch_ascat_winds(
     Fetch ASCAT wind data from an OPeNDAP URL or direct NetCDF download.
     Subsets to the storm region and returns wind vectors as JSON-ready dict.
     """
+    tmp_paths: list = []
+    try:
+        return _fetch_ascat_winds_file(data_url, center_lat, center_lon,
+                                       radius_deg, tmp_paths)
+    finally:
+        # Every return path (including "no points in box" and "missing
+        # variables") removes the temp file; /tmp is RAM-backed on Cloud Run.
+        for tmp_path in tmp_paths:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+
+def _fetch_ascat_winds_file(
+    data_url: str,
+    center_lat: float, center_lon: float,
+    radius_deg: float,
+    tmp_paths: list,
+) -> Optional[dict]:
+    """Body of _fetch_ascat_winds; records any temp file in `tmp_paths`."""
     import xarray as xr
     import tempfile
 
@@ -254,10 +278,18 @@ def _fetch_ascat_winds(
             session = _get_earthdata_session()
             resp = session.get(download_url, timeout=60, stream=True)
         resp.raise_for_status()
+        clen = resp.headers.get("Content-Length")
+        if clen and clen.isdigit() and int(clen) > _MAX_DOWNLOAD_BYTES:
+            raise ValueError(f"granule too large ({int(clen)} bytes)")
 
         with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
             tmp_path = tmp.name
+            tmp_paths.append(tmp_path)
+            written = 0
             for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                written += len(chunk)
+                if written > _MAX_DOWNLOAD_BYTES:
+                    raise ValueError("granule exceeds download size cap")
                 tmp.write(chunk)
         file_size = os.path.getsize(tmp_path)
         logger.info("ASCAT: downloaded %.1f MB to %s", file_size / 1e6, tmp_path)
@@ -265,10 +297,6 @@ def _fetch_ascat_winds(
         ds = xr.open_dataset(tmp_path, engine="netcdf4")
     except Exception as e:
         logger.warning("ASCAT: Failed to download/open %s: %s", download_url[:120], e)
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
         return None
 
     try:
@@ -372,12 +400,6 @@ def _fetch_ascat_winds(
         del lat, lon, wspd, wdir, lat_flat, lon_flat, wspd_flat, wdir_flat
         gc.collect()
 
-        # Clean up temp file
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-
         return {
             "winds": winds,
             "count": len(winds),
@@ -388,10 +410,6 @@ def _fetch_ascat_winds(
         logger.error("Error processing ASCAT data: %s", e, exc_info=True)
         try:
             ds.close()
-        except Exception:
-            pass
-        try:
-            os.unlink(tmp_path)
         except Exception:
             pass
         return None
@@ -414,7 +432,7 @@ def get_ascat_passes(
 
     # Check cache
     hour_key = int(time.time() // _PASS_CACHE_TTL)
-    cache_key = (atcf_id.upper(), hour_key)
+    cache_key = (atcf_id.upper(), hour_key, round(hours, 1))
     with _pass_cache_lock:
         cached = _pass_cache.get(cache_key)
         if cached and cached["expires"] > time.time():
@@ -461,7 +479,8 @@ def get_ascat_winds(
     """
     _check_ascat_url(data_url)
     # Check cache
-    cache_key = (data_url, round(center_lat, 1), round(center_lon, 1))
+    cache_key = (data_url, round(center_lat, 1), round(center_lon, 1),
+                 round(radius_deg, 1))
     with _wind_cache_lock:
         cached = _wind_cache.get(cache_key)
         if cached and cached["expires"] > time.time():

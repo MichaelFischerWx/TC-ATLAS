@@ -161,9 +161,11 @@ _R2_PUBLIC_BASE = os.environ.get("R2_PUBLIC_BASE", "https://cdn.tcatlas.org").rs
 
 def _require_ops_key(request: Request) -> None:
     """Gate ops/debug routes behind env OPS_SECRET (header X-Ops-Key).
-    Unset env = open (current behavior); mismatch = 404 so the route isn't advertised."""
+    Deny by default: unset env or a mismatched key = 404 so the route isn't advertised."""
+    import hmac
     secret = os.environ.get("OPS_SECRET", "")
-    if secret and request.headers.get("x-ops-key", "") != secret:
+    if not secret or not hmac.compare_digest(
+            request.headers.get("x-ops-key", "").encode(), secret.encode()):
         raise HTTPException(status_code=404, detail="Not Found")
 _r2_client = None
 _r2_client_init = False
@@ -646,6 +648,47 @@ def _parse_sid_year(sid: str) -> int:
     return 0
 
 
+# IBTrACS SID: YYYYDDD + hemisphere + 2-digit lat + 3-digit lon of the first
+# fix. Checked before a sid is used in a cache key or object path.
+_SID_RE = re.compile(r"^\d{7}[NS]\d{5}$")
+
+
+def _require_sid(sid: str) -> str:
+    sid = (sid or "").strip()
+    if not _SID_RE.match(sid):
+        raise HTTPException(status_code=400, detail="Invalid IBTrACS sid")
+    return sid
+
+
+def _sid_start_date(sid: str) -> datetime | None:
+    """Date encoded in the SID (year + day-of-year of the first fix)."""
+    try:
+        from datetime import timedelta
+        return datetime(int(sid[:4]), 1, 1) + timedelta(days=int(sid[4:7]) - 1)
+    except (ValueError, TypeError):
+        return None
+
+
+def _client_frame_ok(sid: str, frame_dt: datetime, lat: float, lon: float) -> bool:
+    """Plausibility check for client-supplied frame time/position, used only
+    when this instance has no meta for the storm. Frame times sit on the 3-h
+    synoptic grid within the storm's lifetime (every IBTrACS track starts
+    within 1 day of its SID date and ends within 38 days of it)."""
+    from datetime import timedelta
+    if frame_dt is None or lat is None or lon is None:
+        return False
+    if not (np.isfinite(lat) and np.isfinite(lon)):
+        return False
+    if not (-90.0 <= lat <= 90.0 and -360.0 <= lon <= 360.0):
+        return False
+    if frame_dt.minute or frame_dt.second or frame_dt.microsecond or frame_dt.hour % 3:
+        return False
+    start = _sid_start_date(sid)
+    if start is None:
+        return False
+    return start - timedelta(days=1) <= frame_dt <= start + timedelta(days=45)
+
+
 def _find_tarball_url(sid: str, year: int) -> str | None:
     """
     Find the tar.gz URL for a storm on NCEI.
@@ -921,11 +964,8 @@ def _viewing_angle_score(sat_name: str, storm_lon: float) -> float:
     sublon = _get_sat_sublon(sat_name)
     if sublon is None:
         return 999.0
-    # Longitude difference (handle wrap-around)
-    diff = abs(storm_lon - sublon)
-    if diff > 180:
-        diff = 360 - diff
-    return diff
+    # Longitude difference (handle wrap-around; track lons can exceed 180)
+    return abs((storm_lon - sublon + 180.0) % 360.0 - 180.0)
 
 
 def _deduplicate_frames(frames: list, storm_lon: float = 0.0) -> list:
@@ -1105,6 +1145,7 @@ def hursat_meta(
     storm_lon: float = Query(0.0, description="Storm longitude for satellite selection"),
 ):
     """Return HURSAT frame metadata for a storm."""
+    sid = _require_sid(sid)
     # Check cache
     if sid in _meta_cache:
         _meta_cache.move_to_end(sid)
@@ -1158,6 +1199,7 @@ def hursat_frame(
     frame_idx: int = Query(..., ge=0, description="Frame index (0-based)"),
 ):
     """Return a rendered IR frame as base64 PNG."""
+    sid = _require_sid(sid)
     cache_key = (sid, frame_idx)
 
     # Check in-memory frame cache
@@ -1380,6 +1422,9 @@ def _mergir_subset_url(dt: datetime, center_lat: float, center_lon: float) -> st
         f"{MERGIR_OPENDAP}/{dt.year}/{jday:03d}/"
         f"merg_{time_str}_4km-pixel.nc4"
     )
+    # Track longitudes are continuous (can exceed 180); index in the grid's
+    # -180..180 frame. _sel_latlon_wrap maps the result back.
+    center_lon = ((center_lon + 180.0) % 360.0) - 180.0
 
     # Convert lat/lon bounds to grid indices
     # MergIR: lat from -60 to 60 in ~3301 steps, lon from -180 to 180 in ~9896 steps
@@ -1424,28 +1469,32 @@ def _mergir_subset_url(dt: datetime, center_lat: float, center_lon: float) -> st
 
 
 def _sel_latlon_wrap(da, lat_min, lat_max, lon_min, lon_max, xr):
-    """Box-select from a lon −180..180 grid, surviving the antimeridian.
+    """Box-select from a global lon grid, surviving the antimeridian.
 
-    A box straddling ±180 cannot be one slice(): select the two pieces and
-    concatenate west-to-east, shifting coords ±360 so the returned lons are
-    monotonic and numerically match the requested (unwrapped) range. Raises
-    if either piece comes back empty — that means the source file itself is
-    truncated at the dateline (e.g. a lon-clamped OPeNDAP subset) and the
-    caller must try the next source rather than serve a mislabeled chip.
+    The requested box may be in any longitude frame (track longitudes are
+    continuous, so a storm east of 180 arrives as e.g. 190..210). The box is
+    shifted by a multiple of 360 into the grid's own frame (-180..180 or
+    0..360, detected from the coords); a box that then straddles the grid
+    seam is selected as two pieces concatenated west-to-east. Returned lons
+    are shifted back, so they are monotonic and numerically match the
+    requested range. Raises if either seam piece comes back empty — that
+    means the source file itself is truncated at the seam (e.g. a lon-clamped
+    OPeNDAP subset) and the caller must try the next source rather than serve
+    a mislabeled chip.
 
     Returns (values, lats, lons) with lats in file order (not flipped).
     """
-    if lon_min < -180.0 or lon_max > 180.0:
-        if lon_max > 180.0:          # e.g. 169..189 -> 169..180 + -180..-171
-            west_part = da.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min, 180.0))
-            east_part = da.sel(lat=slice(lat_min, lat_max), lon=slice(-180.0, lon_max - 360.0))
-            west_lons = west_part.coords["lon"].values
-            east_lons = east_part.coords["lon"].values + 360.0
-        else:                         # e.g. -189..-169 -> 171..180 + -180..-169
-            west_part = da.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min + 360.0, 180.0))
-            east_part = da.sel(lat=slice(lat_min, lat_max), lon=slice(-180.0, lon_max))
-            west_lons = west_part.coords["lon"].values - 360.0
-            east_lons = east_part.coords["lon"].values
+    grid_lons = da.coords["lon"].values
+    g0 = 0.0 if float(np.nanmax(grid_lons)) > 180.0 else -180.0
+    g1 = g0 + 360.0
+    shift = 360.0 * np.floor((lon_min - g0) / 360.0)
+    lo, hi = lon_min - shift, lon_max - shift      # lo in [g0, g1)
+    lat_sl = slice(lat_min, lat_max)
+    if hi > g1:                       # e.g. 169..189 -> 169..180 + -180..-171
+        west_part = da.sel(lat=lat_sl, lon=slice(lo, g1))
+        east_part = da.sel(lat=lat_sl, lon=slice(g0, hi - 360.0))
+        west_lons = west_part.coords["lon"].values + shift
+        east_lons = east_part.coords["lon"].values + 360.0 + shift
         if len(west_lons) == 0 or len(east_lons) == 0:
             raise ValueError(
                 "antimeridian piece empty — source file does not span the dateline"
@@ -1453,8 +1502,8 @@ def _sel_latlon_wrap(da, lat_min, lat_max, lon_min, lon_max, xr):
         da_sub = xr.concat([west_part, east_part], dim="lon")
         return (da_sub.values, da_sub.coords["lat"].values,
                 np.concatenate([west_lons, east_lons]))
-    da_sub = da.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min, lon_max))
-    return da_sub.values, da_sub.coords["lat"].values, da_sub.coords["lon"].values
+    da_sub = da.sel(lat=lat_sl, lon=slice(lo, hi))
+    return da_sub.values, da_sub.coords["lat"].values, da_sub.coords["lon"].values + shift
 
 
 def _load_mergir_subset(target_dt: datetime, center_lat: float, center_lon: float):
@@ -1742,6 +1791,11 @@ def _load_gridsat_subset(target_dt: datetime, center_lat: float, center_lon: flo
     import requests
     import xarray as xr
 
+    # Outside the record there is nothing to fetch (and a 404 cascade would
+    # only burn time and trip the OPeNDAP breaker for everyone).
+    if target_dt is None or not (GRIDSAT_START_YEAR <= target_dt.year <= GRIDSAT_END_YEAR):
+        return None, None
+
     # Acquire semaphore to limit concurrent loads (OOM protection)
     if not _data_load_semaphore.acquire(timeout=60):
         logger.warning("GridSat: semaphore timeout — too many concurrent loads")
@@ -1779,6 +1833,7 @@ def _load_gridsat_subset_inner(target_dt, center_lat, center_lon, requests_mod, 
     # 2026-09-23 THREDDS outage), then NCEI's own HTTPS copy. Each file is one
     # HDF5 chunk per variable, so a ranged read would pull the same ~28 MB.
     ncei = _get_ncei_session()
+    _n_404 = 0
     for direct_url in (_gridsat_aws_url(file_dt), direct_url):
         tmp = None
         try:
@@ -1786,6 +1841,7 @@ def _load_gridsat_subset_inner(target_dt, center_lat, center_lon, requests_mod, 
             resp = ncei.get(direct_url, timeout=120, stream=True)
             if resp.status_code != 200:
                 logger.info(f"GridSat: HTTP {resp.status_code} for direct download")
+                _n_404 += resp.status_code == 404
                 resp.close()
                 continue
 
@@ -1872,6 +1928,10 @@ def _load_gridsat_subset_inner(target_dt, center_lat, center_lon, requests_mod, 
     global _gridsat_dap_down_until
     if _time.time() < _gridsat_dap_down_until:
         return None, None
+    # Both mirrors answered 404: the file does not exist, so the DAP copy
+    # won't either — skip it rather than trip the breaker on a missing file.
+    if _n_404 == 2:
+        return None, None
     # Requires the netCDF4 C library for DAP protocol support
     try:
         import netCDF4 as _nc4  # noqa: F401 — needed by xarray's netcdf4 engine
@@ -1949,6 +2009,10 @@ def _load_gridsat_subset_inner(target_dt, center_lat, center_lon, requests_mod, 
                         }
                         return tb, requested_bounds
 
+    except (ValueError, KeyError, IndexError) as e:
+        # Data/selection problem with this one frame, not a server outage:
+        # don't trip the breaker for every other frame and user.
+        logger.warning(f"GridSat: OPeNDAP subset unusable: {e}")
     except Exception as e:
         logger.warning(f"GridSat: OPeNDAP failed: {e}")
         _gridsat_dap_down_until = _time.time() + 600
@@ -1980,6 +2044,7 @@ def ir_meta(
     """
     import json as json_mod
 
+    sid = _require_sid(sid)
     cache_key = f"ir_{sid}"
     year = _parse_sid_year(sid)
     # Past seasons: frame list is fixed → long edge TTL. Current season: the
@@ -1995,6 +2060,7 @@ def ir_meta(
             _mergir_meta_cache.move_to_end(cache_key)
             return JSONResponse(_hit, headers={"Cache-Control": _meta_cc})
         _mergir_meta_cache.pop(cache_key, None)
+        _mergir_meta_ts.pop(cache_key, None)
 
     # Determine source — priority: MergIR (2000+) > GridSat (1980-2024) > HURSAT (fallback)
     source = None
@@ -2195,8 +2261,9 @@ def ir_meta(
     # Cache and return
     _mergir_meta_cache[cache_key] = result
     _mergir_meta_ts[cache_key] = _time.time()
-    if len(_mergir_meta_cache) > _MERGIR_META_CACHE_MAX:
-        _mergir_meta_cache.popitem(last=False)
+    while len(_mergir_meta_cache) > _MERGIR_META_CACHE_MAX:
+        _evicted_key, _ = _mergir_meta_cache.popitem(last=False)
+        _mergir_meta_ts.pop(_evicted_key, None)
 
     # Fire-and-forget: precompute Hovmöller in background so it's cached
     # when the user clicks the button. Skip if already cached.
@@ -2443,6 +2510,7 @@ def ir_frame(
     Return a rendered IR frame as base64 PNG.
     Auto-selects source (MergIR/GridSat/HURSAT) based on cached metadata.
     """
+    sid = _require_sid(sid)
     cache_key = (f"ir_{sid}", frame_idx)
     r2_key = _gcs_cache_key(sid, frame_idx, source="ir")
 
@@ -2513,22 +2581,30 @@ def ir_frame(
         else:
             source = "hursat"
 
-    if source in ("mergir", "gridsat") and (lat is not None and lon is not None):
+    # Server meta for this frame, when this instance has it, is authoritative:
+    # the rendered frame is cached under (sid, frame_idx) for every viewer, so
+    # client-supplied lat/lon/dt must not override it.
+    meta_frame = None
+    if meta and meta.get("available") and source in ("mergir", "gridsat"):
+        _mf = meta.get("frames", [])
+        if frame_idx < len(_mf) and _mf[frame_idx].get("lat") is not None \
+                and _mf[frame_idx].get("lon") is not None:
+            meta_frame = _mf[frame_idx]
+
+    if source in ("mergir", "gridsat") and (
+            meta_frame is not None or (lat is not None and lon is not None)):
         # MergIR/GridSat path: need lat/lon for the specific frame.
         # When meta cache is available, use it for frame coordinates and datetime.
         # When meta is missing (container restart), fall back to client-provided
-        # lat/lon and derive datetime from HURSAT frame list.
+        # lat/lon/dt, after a plausibility check.
         frame_lat = lat
         frame_lon = lon
         frame_dt = None
 
-        if meta and meta.get("available"):
-            frames = meta.get("frames", [])
-            if frame_idx < len(frames):
-                frame_info = frames[frame_idx]
-                frame_lat = lat or frame_info.get("lat")
-                frame_lon = lon or frame_info.get("lon")
-                frame_dt = datetime.fromisoformat(frame_info["datetime"])
+        if meta_frame is not None:
+            frame_lat = meta_frame["lat"]
+            frame_lon = meta_frame["lon"]
+            frame_dt = datetime.fromisoformat(meta_frame["datetime"])
 
         # Client-supplied timestamp — the authoritative escape from instance-local
         # state.  _mergir_meta_cache lives in one container's memory, so on
@@ -2539,8 +2615,17 @@ def ir_frame(
         if frame_dt is None and dt:
             try:
                 frame_dt = datetime.fromisoformat(dt.replace("Z", "").strip())
+                if frame_dt.tzinfo is not None:
+                    from datetime import timezone
+                    frame_dt = frame_dt.astimezone(timezone.utc).replace(tzinfo=None)
             except ValueError:
                 logger.warning(f"ir_frame: unparseable dt={dt!r} for {sid} frame {frame_idx}")
+            # Without server meta the client values are cached for everyone,
+            # so reject anything off the synoptic grid or outside the storm's
+            # lifetime (see _client_frame_ok).
+            if frame_dt is not None and not _client_frame_ok(sid, frame_dt, frame_lat, frame_lon):
+                raise HTTPException(status_code=400,
+                                    detail="Frame time/position outside this storm's track")
 
         # No meta and no client dt: there is no trustworthy time for this
         # index, so fall through to the HURSAT-native path below, whose list
@@ -2675,150 +2760,8 @@ def ir_frame(
     )
 
 
-@router.get("/ir/batch")
-def ir_batch(
-    sid: str = Query(..., description="IBTrACS storm ID"),
-    indices: str = Query(..., description="Comma-separated frame indices, e.g. '0,1,2,3,4'"),
-):
-    """
-    Fetch multiple IR frames in one request using concurrent workers.
-    Returns a dict mapping frame index → frame data (or null on failure).
-    Server-side concurrency is capped at 5 workers to limit RAM usage.
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    MAX_BATCH = 15      # Max frames per batch request
-    MAX_WORKERS = 5     # Concurrent OPeNDAP/file reads
-
-    # Parse indices
-    try:
-        idx_list = [int(x.strip()) for x in indices.split(",") if x.strip()]
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid indices format")
-
-    if len(idx_list) > MAX_BATCH:
-        idx_list = idx_list[:MAX_BATCH]
-
-    # Look up cached meta to determine source
-    # The unified /ir/meta endpoint caches with "ir_{sid}" prefix
-    meta = _mergir_meta_cache.get(f"ir_{sid}")
-    if not meta:
-        meta = _mergir_meta_cache.get(sid)
-    if not meta:
-        meta = _meta_cache.get(sid)
-    source = meta.get("source", "hursat") if meta else "hursat"
-
-    def fetch_single_frame(frame_idx: int):
-        """Fetch one frame, return (idx, result_dict) or (idx, None)."""
-        cache_key = (sid, frame_idx)
-
-        # Check frame cache first
-        if cache_key in _frame_cache:
-            _frame_cache.move_to_end(cache_key)
-            return (frame_idx, _frame_cache[cache_key])
-
-        try:
-            if source in ("mergir", "gridsat") and meta and meta.get("available"):
-                frames_meta = meta.get("frames", [])
-                if frame_idx >= len(frames_meta):
-                    return (frame_idx, None)
-
-                frame_info = frames_meta[frame_idx]
-                frame_dt = datetime.strptime(
-                    frame_info["datetime"], "%Y-%m-%dT%H:%M:%S"
-                )
-                frame_lat = frame_info.get("lat")
-                frame_lon = frame_info.get("lon")
-
-                if frame_lat is None or frame_lon is None:
-                    return (frame_idx, None)
-
-                if source == "gridsat":
-                    frame_2d, ir_bounds = _load_gridsat_subset(
-                        frame_dt, frame_lat, frame_lon
-                    )
-                    half_domain = GRIDSAT_HALF_DOMAIN
-                    ir_scale = 4
-                else:
-                    frame_2d, ir_bounds = _load_mergir_subset(
-                        frame_dt, frame_lat, frame_lon
-                    )
-                    half_domain = MERGIR_HALF_DOMAIN
-                    ir_scale = 3
-
-                if frame_2d is None:
-                    return (frame_idx, None)
-
-                tb_encoded = _encode_tb_uint8(frame_2d)
-                # Use actual data bounds for precise geo-alignment
-                if ir_bounds:
-                    bounds = ir_bounds
-                else:
-                    bounds = {
-                        "south": frame_lat - half_domain,
-                        "north": frame_lat + half_domain,
-                        "west": frame_lon - half_domain,
-                        "east": frame_lon + half_domain,
-                    }
-                result = {
-                    "sid": sid, "frame_idx": frame_idx,
-                    "datetime": frame_info["datetime"], "source": source,
-                    "bounds": bounds,
-                    **tb_encoded,
-                }
-            else:
-                # HURSAT path
-                frames = _get_extracted_frames(sid, storm_lon=0.0)
-                if not frames or frame_idx >= len(frames):
-                    return (frame_idx, None)
-
-                frame_tuple = frames[frame_idx]
-                dt_str, nc_path = frame_tuple[0], frame_tuple[1]
-                satellite = frame_tuple[2] if len(frame_tuple) > 2 else ""
-
-                frame_2d, bounds = _load_frame_from_nc(nc_path)
-                if frame_2d is None:
-                    return (frame_idx, None)
-
-                tb_encoded = _encode_tb_uint8(frame_2d)
-                result = {
-                    "sid": sid, "frame_idx": frame_idx,
-                    "datetime": dt_str, "source": "hursat",
-                    **tb_encoded,
-                }
-                if satellite:
-                    result["satellite"] = satellite
-                if bounds:
-                    result["bounds"] = bounds
-
-            # Cache it
-            _frame_cache[cache_key] = result
-            if len(_frame_cache) > _FRAME_CACHE_MAX:
-                _frame_cache.popitem(last=False)
-
-            return (frame_idx, result)
-
-        except Exception as e:
-            logger.warning(f"Batch frame {frame_idx} failed: {e}")
-            return (frame_idx, None)
-
-    # Fetch frames concurrently
-    results = {}
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = {pool.submit(fetch_single_frame, idx): idx for idx in idx_list}
-        for future in as_completed(futures):
-            idx, data = future.result()
-            results[str(idx)] = data
-
-    # Opportunistically heal any fallback frames in the background
-    for idx_str, frame_data in results.items():
-        if frame_data is not None:
-            _maybe_heal_frame(sid, int(idx_str), frame_data)
-
-    return JSONResponse(
-        {"sid": sid, "source": source, "frames": results},
-        headers={"Cache-Control": "public, max-age=3600"},
-    )
+# /ir/batch was removed: it had no caller, bypassed the GCS/R2 frame cache,
+# and shared /hursat/frame's memory keys across index spaces.
 
 
 # ── Storm-Duration Hovmöller ─────────────────────────────────
@@ -2848,6 +2791,15 @@ def _radial_profile_C(arr: np.ndarray, bins: np.ndarray,
 
 
 _HOV_CACHE_VER = "v15"  # v15 = gate2=0.7 std ratio, gate3=ring within 7C of P1(100km)
+
+
+def _hov_key(sid: str, max_radius_km: float = 200.0, dr_km: float = 4.0) -> str:
+    """Cache key for a Hovmöller result. The default parameters keep the bare
+    sid (existing cache objects stay valid); any other radius/bin width gets
+    its own key so it can neither be served nor overwrite the default."""
+    if float(max_radius_km) == 200.0 and float(dr_km) == 4.0:
+        return sid
+    return f"{sid}_r{float(max_radius_km):g}_dr{float(dr_km):g}"
 
 
 def _gcs_get_hovmoller(sid: str):
@@ -3127,11 +3079,12 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
         "n_frames": len(out_times),
     }
 
+    _hkey = _hov_key(sid, max_radius_km, dr_km)
     with _hovmoller_cache_lock:
-        _hovmoller_cache[sid] = result
+        _hovmoller_cache[_hkey] = result
         while len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
             _hovmoller_cache.popitem(last=False)
-    threading.Thread(target=_gcs_put_hovmoller, args=(sid, result), daemon=True).start()
+    threading.Thread(target=_gcs_put_hovmoller, args=(_hkey, result), daemon=True).start()
     return result
 
 
@@ -3157,12 +3110,14 @@ async def ir_hovmoller(
 
     if not sid:
         raise HTTPException(status_code=400, detail="sid parameter required")
+    sid = _require_sid(sid)
+    _hkey = _hov_key(sid, max_radius_km, dr_km)
 
     # Check in-memory cache
     with _hovmoller_cache_lock:
-        _mem_hit = _hovmoller_cache.get(sid)
+        _mem_hit = _hovmoller_cache.get(_hkey)
         if _mem_hit is not None:
-            _hovmoller_cache.move_to_end(sid)
+            _hovmoller_cache.move_to_end(_hkey)
     if _mem_hit is not None:
         return JSONResponse(
             _mem_hit,
@@ -3173,10 +3128,10 @@ async def ir_hovmoller(
     # every blocking call below goes through the threadpool — a Hovmöller
     # miss can take minutes and previously pinned the single uvicorn worker,
     # stalling every other request on the instance.
-    gcs_result = await run_in_threadpool(_gcs_get_hovmoller, sid)
+    gcs_result = await run_in_threadpool(_gcs_get_hovmoller, _hkey)
     if gcs_result is not None:
         with _hovmoller_cache_lock:
-            _hovmoller_cache[sid] = gcs_result
+            _hovmoller_cache[_hkey] = gcs_result
             while len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
                 _hovmoller_cache.popitem(last=False)
         return JSONResponse(
@@ -3462,10 +3417,10 @@ async def ir_hovmoller(
             result = _build_result(partial_results)
             if result:
                 with _hovmoller_cache_lock:
-                    _hovmoller_cache[sid] = result
+                    _hovmoller_cache[_hkey] = result
                     while len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
                         _hovmoller_cache.popitem(last=False)
-                threading.Thread(target=_gcs_put_hovmoller, args=(sid, result), daemon=True).start()
+                threading.Thread(target=_gcs_put_hovmoller, args=(_hkey, result), daemon=True).start()
                 yield f"data: {json.dumps(result)}\n\n"
             else:
                 yield f"data: {json.dumps({'error': 'No frames could be processed'})}\n\n"
@@ -3834,7 +3789,6 @@ ADECK_MODELS = {
     "QLM":  {"name": "QLM",       "color": "#e056a0", "type": "dynamical", "interp": False},
     "QLMI": {"name": "QLM",       "color": "#e056a0", "type": "dynamical", "interp": True},
     "AVN":  {"name": "AVN",       "color": "#ff6b6b", "type": "dynamical", "interp": False},
-    "AVNI": {"name": "AVN",       "color": "#ff6b6b", "type": "dynamical", "interp": True},
     "MFM":  {"name": "MFM",       "color": "#cf6a87", "type": "dynamical", "interp": False},
     "MRFO": {"name": "MRF",       "color": "#ff7979", "type": "dynamical", "interp": False},
     # Legacy statistical/trajectory models (baselines + BAM family)
@@ -4300,6 +4254,11 @@ def _parse_ships_lsdiag(raw_text: str, atcf_id: str) -> dict:
     current_case = None
     variables_found = set()
 
+    # Only cases for the requested storm are kept: the developmental files
+    # hold every storm in the basin (and, for the bulk files, every year).
+    want_id = (atcf_id or "").upper().strip()
+    want_basin, want_num = want_id[:2], want_id[2:4]
+
     lines = raw_text.splitlines()
     i = 0
     while i < len(lines):
@@ -4309,10 +4268,46 @@ def _parse_ships_lsdiag(raw_text: str, atcf_id: str) -> dict:
         if not line:
             continue
 
-        # Check for HEAD line
+        # Check for HEAD line. The CIRA developmental files put the label at
+        # the END of the line:
+        #   ALBE 820602 12   20   21.7   87.1 1005 AL011982   ...   HEAD
+        #   (name YYMMDD HH vmax lat lon[+W] mslp ATCF-ID)
+        # Older per-storm layouts put it at the start; both are accepted.
+        if line.endswith("HEAD") and not line.startswith("HEAD"):
+            parts = line.split()
+            current_case = None
+            if len(parts) < 9:
+                continue
+            try:
+                case_id = parts[7].upper()
+                if want_id and case_id != want_id:
+                    continue
+                yymmdd, hh = parts[1], parts[2]
+                yy = int(yymmdd[:2])
+                century = "19" if yy >= 50 else "20"
+                init_time = f"{century}{yymmdd}{int(hh):02d}"
+                lat = _parse_ships_coord(parts[4], "NS")
+                lon_w = _parse_ships_coord(parts[5], "EW")
+                lon = -lon_w if lon_w is not None else None   # file is degrees west
+                vmax = int(float(parts[3])) if parts[3] != "9999" else None
+                mslp = int(float(parts[6])) if parts[6] != "9999" else None
+                current_case = {
+                    "init_time": init_time,
+                    "storm_name": parts[0],
+                    "lat": lat,
+                    "lon": lon,
+                    "vmax": vmax,
+                    "mslp": mslp,
+                    "predictors": {},
+                }
+            except (ValueError, IndexError):
+                current_case = None
+            continue
+
         if line.startswith("HEAD"):
             # Parse HEAD line — format varies but key fields are identifiable
             parts = line.split()
+            current_case = None
             if len(parts) < 8:
                 continue
 
@@ -4323,6 +4318,8 @@ def _parse_ships_lsdiag(raw_text: str, atcf_id: str) -> dict:
                 if "," in line:
                     cparts = [p.strip() for p in line.split(",")]
                     # HEAD, basin, num, datetime, name, lat, lon, vmax, mslp
+                    case_basin = cparts[0].split()[-1].upper() if cparts else ""
+                    case_num = cparts[1].strip() if len(cparts) > 1 else ""
                     init_time = cparts[2].strip() if len(cparts) > 2 else ""
                     storm_name = cparts[3].strip() if len(cparts) > 3 else ""
                     lat_str = cparts[4].strip() if len(cparts) > 4 else ""
@@ -4330,12 +4327,18 @@ def _parse_ships_lsdiag(raw_text: str, atcf_id: str) -> dict:
                     vmax_str = cparts[6].strip() if len(cparts) > 6 else ""
                     mslp_str = cparts[7].strip() if len(cparts) > 7 else ""
                 else:
+                    case_basin = parts[1].upper()
+                    case_num = parts[2]
                     init_time = parts[3] if len(parts) > 3 else ""
                     storm_name = parts[4] if len(parts) > 4 else ""
                     lat_str = parts[5] if len(parts) > 5 else ""
                     lon_str = parts[6] if len(parts) > 6 else ""
                     vmax_str = parts[7] if len(parts) > 7 else ""
                     mslp_str = parts[8] if len(parts) > 8 else ""
+
+                if want_id and (case_basin != want_basin
+                                or case_num.zfill(2) != want_num):
+                    continue
 
                 # Parse lat/lon with N/S/E/W suffix
                 lat = _parse_ships_coord(lat_str, "NS")
@@ -4374,7 +4377,8 @@ def _parse_ships_lsdiag(raw_text: str, atcf_id: str) -> dict:
             continue
 
         varname = parts[-1].strip()
-        if not varname.isalpha() or len(varname) > 6:
+        # alnum, not alpha: D200 / T200 are four-character names too
+        if not varname.isalnum() or not varname[0].isalpha() or len(varname) > 6:
             continue
 
         # Only extract variables we care about
@@ -4445,11 +4449,11 @@ def _fetch_ships(atcf_id: str) -> dict | None:
     For bulk files, we filter to only the requested storm.
     Returns parsed dict or None on failure.
     """
+    atcf_id = atcf_id.upper().strip()
     if atcf_id in _ships_cache:
         _ships_cache.move_to_end(atcf_id)
         return _ships_cache[atcf_id]
 
-    atcf_id = atcf_id.upper().strip()
     if len(atcf_id) < 8:
         return None
 
@@ -4498,15 +4502,12 @@ def _fetch_ships(atcf_id: str) -> dict | None:
     parsed["source"] = source
     parsed["basin"] = basin.upper()
 
-    # The bulk file has ALL storms for this basin/year.
-    # We filter to only the relevant storm number.
-    # Storm identification: check init_time year matches and filter by proximity
-    # to the storm's known positions (from best track).
-    # For simplicity, we rely on storm_name matching or case timing.
-    # The ATCF storm number (e.g., 09) corresponds to the 9th storm in the basin.
-    # SHIPS HEAD lines include this.
+    # The bulk file has ALL storms for this basin/year; the parser keeps only
+    # the cases whose HEAD line names this storm. An empty parse (storm not in
+    # the file, or a format change) is not cached, so a later request retries.
+    if not parsed.get("cases"):
+        return parsed
 
-    # Cache the full parsed result (includes all cases for the storm)
     _ships_cache[atcf_id] = parsed
     if len(_ships_cache) > _SHIPS_CACHE_MAX:
         _ships_cache.popitem(last=False)
@@ -4539,7 +4540,9 @@ def get_ships(atcf_id: str = Query(..., description="ATCF storm ID, e.g., AL0920
         )
 
     result = _fetch_ships(atcf_id)
-    if result is None:
+    if result is None or not result.get("cases"):
+        # Not found or no cases for this storm: may be transient (upstream
+        # outage) or fixed later, so never edge-cache it.
         return JSONResponse(
             content={
                 "atcf_id": atcf_id,
@@ -4548,7 +4551,7 @@ def get_ships(atcf_id: str = Query(..., description="ATCF storm ID, e.g., AL0920
                 "cases": [],
                 "variables": [],
             },
-            headers={"Cache-Control": "public, max-age=3600"},
+            headers={"Cache-Control": _CC_NO_STORE},
         )
 
     return JSONResponse(
@@ -5048,6 +5051,7 @@ def ir_heal_status():
 def hursat_inspect(request: Request, sid: str = Query("1992230N11325", description="IBTrACS storm ID")):
     """Inspect the first extracted NetCDF file to see variables and structure."""
     _require_ops_key(request)
+    sid = _require_sid(sid)
     import xarray as xr
 
     frames = _get_extracted_frames(sid, storm_lon=0.0)
@@ -5094,6 +5098,7 @@ def hursat_inspect(request: Request, sid: str = Query("1992230N11325", descripti
 def hursat_debug(request: Request, sid: str = Query("1992230N11325", description="IBTrACS storm ID to test")):
     """Debug endpoint: test NCEI connectivity for a storm."""
     _require_ops_key(request)
+    sid = _require_sid(sid)
     import requests
 
     year = _parse_sid_year(sid)
@@ -6480,7 +6485,13 @@ def get_vdm(
     """Fetch and parse VDMs from the NHC reconnaissance archive."""
     import time as _time
     now = _time.time()
-    cache_key = f"vdm_{storm_name.lower()}_{year}"
+    # atcf_id is part of the key: it selects the REPNT2/REPPN2 directory and
+    # the storm filter, so an EP request must never be answered with AL data.
+    _atcf_key = (atcf_id or "").upper().strip()
+    cache_key = f"vdm_{storm_name.lower()}_{year}_{_atcf_key}"
+    # Without the storm dates VDM times cannot be resolved (2006+ messages are
+    # dropped, legacy ones lack "time"), so such a result is never cached.
+    _vdm_dated = bool(start_date and end_date)
     # CDN edge cache so repeat visitors to the same storm collapse to one
     # origin fetch (the per-file recon pull is the expensive part). Past-year
     # recon is immutable → long s-maxage; current-year storms may still be
@@ -6498,8 +6509,9 @@ def get_vdm(
     # GCS persistent cache (memory cache is per-instance; the per-file pull
     # from the NHC archive is the expensive part and the data is immutable
     # for past seasons). The date window only narrows the listing scan, not
-    # the storm's VDM set, so the key is storm+year like the memory cache.
-    _vdm_gcs_key = f"vdm/{year}_{storm_name.lower()}.json"
+    # the storm's VDM set, so the key is storm+year+atcf like the memory cache.
+    # v2: keyed by atcf_id too; v1 objects may hold undated legacy results.
+    _vdm_gcs_key = f"vdm/v2/{year}_{storm_name.lower()}_{_atcf_key}.json"
     _vdm_gcs = _recon_gcs_get(_vdm_gcs_key,
                               max_age_days=None if not _vdm_live else _VDM_LIVE_TTL / 86400.0)
     if _vdm_gcs is not None and _vdm_gcs.get("n_vdms"):
@@ -6507,6 +6519,14 @@ def get_vdm(
         if len(_vdm_cache) > _VDM_CACHE_MAX:
             _vdm_cache.popitem(last=False)
         return JSONResponse(_vdm_gcs, headers={"Cache-Control": _vdm_cc})
+
+    if year >= 2006 and not _vdm_dated:
+        # Every 2006+ VDM needs the storm dates to resolve its time and would be
+        # dropped below, so skip downloading the whole season's messages.
+        return JSONResponse({"success": True, "storm_name": storm_name, "year": year,
+                             "atcf_id": atcf_id or None, "vdms": [], "n_vdms": 0,
+                             "message": "start_date and end_date are required"},
+                            headers={"Cache-Control": _CC_NO_STORE})
 
     from tc_radar_api import _hrd_fetch_text, _hrd_parse_directory
 
@@ -6641,15 +6661,16 @@ def get_vdm(
         "n_vdms": len(vdms),
     }
 
-    _vdm_cache[cache_key] = (result, now)
-    if len(_vdm_cache) > _VDM_CACHE_MAX:
-        _vdm_cache.popitem(last=False)
-
-    if vdms:
+    # Only complete (dated, non-empty) results are cached: an empty set may be
+    # a transient listing failure, and an undated one is missing its times.
+    _cacheable = bool(vdms) and _vdm_dated
+    if _cacheable:
+        _vdm_cache[cache_key] = (result, now)
+        if len(_vdm_cache) > _VDM_CACHE_MAX:
+            _vdm_cache.popitem(last=False)
         _recon_gcs_put(_vdm_gcs_key, result)
-    # An empty set is not edge-cached: it may be a transient listing failure.
     return JSONResponse(result, headers={
-        "Cache-Control": _vdm_cc if vdms else _CC_NO_STORE})
+        "Cache-Control": _vdm_cc if _cacheable else _CC_NO_STORE})
 
 
 # ── Minute Observations (MINOB / HDOB) ─────────────────────────────
