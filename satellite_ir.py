@@ -9,6 +9,8 @@ Satellite routing by storm longitude:
   - GOES-East (GOES-19):  100°W to 10°E   (Atlantic, Caribbean)
   - GOES-West (GOES-18):  175°W to 100°W  (Eastern/Central Pacific)
   - Himawari-9:            80°E to 175°W   (Western Pacific, IO, SH)
+  Targets past MAX_USABLE_SAT_ZENITH_DEG (the Meteosat gap, ~0-70°E) get
+  None up front from the fetch_* helpers (see beyond_usable_view).
 
 This module is imported by ir_monitor_api.py and can eventually
 replace the duplicate GOES code in realtime_tdr_api.py.
@@ -376,6 +378,50 @@ def select_goes_sat(longitude: float, analysis_dt: _dt) -> tuple:
     return bucket, sat_key
 
 
+# Satellite zenith angle beyond which a cutout is not worth fetching. Storms in
+# the Meteosat gap (~0–70°E: Africa / W Indian Ocean, incl. SWIO ~40–60°E) are
+# routed by select_goes_sat to Himawari or GOES-East, which see them at ≥80°
+# or past the limb entirely — the fetch paid S3 LISTs, a multi-segment
+# download/decode and > 1 s of CPU, then returned None (or an extreme-limb
+# sliver). 80° (pixels ~6× elongated, ~85 km parallax for a 15-km cloud top)
+# matches the global mosaic's own coverage edges (build_ir_mosaic.py treats
+# lon ≤ −5 / ≥ 75 as covered: GOES-East at −5°E ≈ 79–81°, Himawari at 72–75°E
+# ≈ 75–79° in the tropics), so a storm the mosaic shows is never refused here.
+MAX_USABLE_SAT_ZENITH_DEG = 80.0
+_EARTH_RADIUS_KM = 6378.137
+_GEO_ORBIT_RADIUS_KM = 42164.16
+
+
+def satellite_zenith_deg(lat: float, lon: float, sub_lon: float) -> float:
+    """Satellite zenith angle (deg) of (lat, lon) seen from a geostationary
+    satellite at sub_lon (spherical Earth; ≥ 90 = beyond the limb)."""
+    import math
+    dlon = math.radians(((lon - sub_lon + 180.0) % 360.0) - 180.0)
+    cos_g = math.cos(math.radians(lat)) * math.cos(dlon)
+    re, rs = _EARTH_RADIUS_KM, _GEO_ORBIT_RADIUS_KM
+    d = math.sqrt(re * re + rs * rs - 2.0 * re * rs * cos_g)
+    return math.degrees(math.acos(max(-1.0, min(1.0, (rs * cos_g - re) / d))))
+
+
+def _sat_sub_lon(sat_key: str) -> Optional[float]:
+    if sat_key == "himawari":
+        return HIMAWARI_LON_0
+    return GOES_LON_0.get(sat_key)
+
+
+def beyond_usable_view(lat: float, lon: float, sat_key: str) -> bool:
+    """True when (lat, lon) is past MAX_USABLE_SAT_ZENITH_DEG for sat_key —
+    the fetchers return None up front (no S3 traffic). Unknown keys → False."""
+    sub = _sat_sub_lon(sat_key)
+    if sub is None or lat is None or lon is None:
+        return False
+    try:
+        z = satellite_zenith_deg(float(lat), float(lon), sub)
+    except (TypeError, ValueError):
+        return False
+    return z > MAX_USABLE_SAT_ZENITH_DEG
+
+
 def satellite_name_from_bucket(bucket: str) -> str:
     """Human-readable satellite name from bucket."""
     names = {
@@ -402,16 +448,26 @@ def find_goes_file(bucket: str, target_dt: _dt,
     if fs is None:
         return (None, None) if return_dt else None
 
-    # Scan the target hour AND the previous hour. The large 0.5 km Visible
-    # (Band 2) full-disk file (~380 MB) finishes uploading well after the small
-    # IR/WV ones, so at the near-real-time edge the wanted scan often still lives
-    # in the PREVIOUS hour's prefix (the hour-scoped listing would otherwise miss
-    # it → "no file"). The best_delta/tolerance gate below still rejects anything
-    # too far, so this is safe for IR/WV too — a previous-hour file is only ever
-    # selected when it's genuinely within tolerance.
+    # List the target hour's prefix plus whichever neighbouring hour(s) the
+    # ±tolerance window reaches into. The previous hour matters at the near-
+    # real-time edge (the large 0.5 km Visible file posts late, so the nearest
+    # AVAILABLE scan is often :50 of the previous hour); the NEXT hour matters
+    # for late-in-the-hour targets (a 12:58 target must see the 13:00 scan,
+    # which lives under hour 13 — it used to get 12:50). A neighbour hour the
+    # window cannot reach can't hold an in-tolerance file, so skipping it
+    # changes no result; a next hour that hasn't started yet can't exist.
     band_tag = f"C{band:02d}"
+    tgt = target_dt.replace(tzinfo=timezone.utc) if target_dt.tzinfo is None else target_dt
+    tol = timedelta(minutes=tolerance_min)
+    hour0 = tgt.replace(minute=0, second=0, microsecond=0)
+    hours = [hour0]
+    if tgt - tol < hour0:
+        hours.append(hour0 - timedelta(hours=1))
+    if tgt + tol >= hour0 + timedelta(hours=1) and \
+            hour0 + timedelta(hours=1) <= _dt.now(timezone.utc):
+        hours.append(hour0 + timedelta(hours=1))
     candidates = []
-    for _h in (target_dt, target_dt - timedelta(hours=1)):
+    for _h in hours:
         jd = _h.timetuple().tm_yday
         pfx = f"{bucket}/{IR_PRODUCT}/{_h.year}/{jd:03d}/{_h.hour:02d}/"
         try:
@@ -439,8 +495,10 @@ def find_goes_file(bucket: str, target_dt: _dt,
             mm = int(m.group(4))
             ss = int(m.group(5))
             file_dt = _dt(yr, 1, 1, hh, mm, ss, tzinfo=timezone.utc) + timedelta(days=jd - 1)
-            delta = abs(file_dt - target_dt.replace(tzinfo=timezone.utc))
-            if delta < best_delta:
+            delta = abs(file_dt - tgt)
+            # Minimum |Δt|; on an exact tie prefer the earlier scan.
+            if delta < best_delta or (delta == best_delta and best_dt is not None
+                                      and file_dt < best_dt):
                 best_delta = delta
                 best_file = fpath
                 best_dt = file_dt
@@ -592,7 +650,8 @@ def open_goes_subset(s3_key: str, center_lat: float, center_lon: float,
 
 
 def find_himawari_file(target_dt: _dt, tolerance_min: int = 20,
-                       band: int = HIMAWARI_BAND, return_dt: bool = False):
+                       band: int = HIMAWARI_BAND, return_dt: bool = False,
+                       segments=None):
     """
     Find the S3 prefix for a Himawari-9 AHI full-disk scan
     closest to target_dt for a given band.
@@ -603,6 +662,18 @@ def find_himawari_file(target_dt: _dt, tolerance_min: int = 20,
 
     Returns the S3 *directory prefix* (not a single file) containing the
     segment files, or None if nothing is found within tolerance.
+
+    segments: the segment numbers (1-10) the caller will read. A scan only
+    qualifies when ALL of them are posted — segments land one by one while a
+    scan disseminates, and a partly posted scan used to be accepted on the
+    strength of any single segment (a storm window then lost rows, a full-disk
+    read failed the mosaic size check). None (default) = all
+    HIMAWARI_N_SEGMENTS, i.e. a complete scan (full-disk reads).
+
+    Candidates are the 10-min slots within ±tolerance_min, tried in order of
+    |Δt| (ties → the EARLIER slot, which is the one more likely complete), so
+    the true nearest complete scan wins — a 12:09 target gets 12:10, not
+    12:00. Slots in the future are skipped (they cannot exist yet).
 
     If return_dt=True, returns (prefix, matched_scan_dt) so callers can
     tell whether a *different* scan time was substituted for the request
@@ -616,19 +687,23 @@ def find_himawari_file(target_dt: _dt, tolerance_min: int = 20,
         return (None, None) if return_dt else None
 
     utc_dt = target_dt.replace(tzinfo=timezone.utc) if target_dt.tzinfo is None else target_dt
+    tol = timedelta(minutes=tolerance_min)
 
-    # Round to the nearest 10 minutes (Himawari scans every 10 min)
-    minute = utc_dt.minute
-    base_min = minute - (minute % 10)
+    # Himawari full-disk scans start every 10 min (HHM0 directories).
+    base = utc_dt.replace(minute=utc_dt.minute - (utc_dt.minute % 10),
+                          second=0, microsecond=0)
+    k = int(tolerance_min // 10) + 1
+    now = _dt.now(timezone.utc)
+    candidates_dt = []
+    for i in range(-k, k + 2):
+        cdt = base + timedelta(minutes=10 * i)
+        if abs(cdt - utc_dt) <= tol and cdt <= now:
+            candidates_dt.append(cdt)
+    candidates_dt.sort(key=lambda c: (abs(c - utc_dt), c))
 
-    # Try the target time and +/- 10 min offsets
-    candidates_dt = [
-        utc_dt.replace(minute=base_min, second=0, microsecond=0),
-    ]
-    for offset in [10, -10, 20, -20]:
-        candidates_dt.append(candidates_dt[0] + timedelta(minutes=offset))
-
+    need = set(segments) if segments else set(range(1, HIMAWARI_N_SEGMENTS + 1))
     band_tag = f"B{band:02d}"
+    seg_re = re.compile(r"_S(\d{2})10\.DAT")
 
     for cdt in candidates_dt:
         hhmm = f"{cdt.hour:02d}{cdt.minute:02d}"
@@ -643,15 +718,26 @@ def find_himawari_file(target_dt: _dt, tolerance_min: int = 20,
         if not files:
             continue
 
-        band_files = [f for f in files if band_tag in f.split("/")[-1]]
-        if not band_files:
+        have = set()
+        for f in files:
+            fname = f.split("/")[-1]
+            if band_tag not in fname:
+                continue
+            m = seg_re.search(fname)
+            if m:
+                have.add(int(m.group(1)))
+        if not have:
+            continue
+        missing = need - have
+        if missing:
+            print(f"[satellite_ir] Himawari {hhmm} {band_tag} incomplete "
+                  f"({len(have)}/{HIMAWARI_N_SEGMENTS} segments posted; "
+                  f"missing needed {sorted(missing)}) — trying next scan")
             continue
 
-        delta = abs(cdt - utc_dt)
-        if delta <= timedelta(minutes=tolerance_min):
-            print(f"[satellite_ir] Himawari L1b dir found: {prefix.split('/')[-2]} "
-                  f"({len(band_files)} {band_tag} segments)")
-            return (prefix, cdt) if return_dt else prefix
+        print(f"[satellite_ir] Himawari L1b dir found: {hhmm} "
+              f"({len(have)} {band_tag} segments)")
+        return (prefix, cdt) if return_dt else prefix
 
     print(f"[satellite_ir] No Himawari {band_tag} data found for {target_dt.isoformat()}")
     return (None, None) if return_dt else None
@@ -783,6 +869,16 @@ def _parse_hsd_header(data: bytes) -> dict:
         # Central wavelength (µm) — at offset 5 in block 5
         header["central_wavelength"] = struct.unpack_from(f"{LE}d", data, blk5_start + 5)[0]
 
+        # Count sentinels (offsets 13/15/17): valid bits per pixel, the count
+        # written for error pixels and for pixels outside the scan area (off
+        # the Earth disk). Verified on live HS_H09 B13/B03 files (2026-10-20):
+        # valid_bits 12 (B13) / 11 (B03), error 65535, outside 65534 — the
+        # off-disk corners are 65534, never 0.
+        vb, err_c, out_c = struct.unpack_from(f"{LE}HHH", data, blk5_start + 13)
+        header["valid_bits"] = int(vb)
+        header["count_error"] = int(err_c)
+        header["count_outside"] = int(out_c)
+
         # Planck temperature correction coefficients (offsets 59-75):
         # Tbb_corrected = C0 + C1 * Te + C2 * Te^2
         header["corr_c0"] = struct.unpack_from(f"{LE}d", data, blk5_start + 59)[0]
@@ -807,6 +903,9 @@ def _parse_hsd_header(data: bytes) -> dict:
         header.setdefault("speed_of_light", 299792458.0)
         header.setdefault("planck_h", 6.62607e-34)
         header.setdefault("boltzmann_k", 1.38065e-23)
+    header.setdefault("valid_bits", 16)
+    header.setdefault("count_error", 65535)
+    header.setdefault("count_outside", 65534)
 
     # Total header length is stored in Block 1 at byte 70 (uint32)
     try:
@@ -826,6 +925,24 @@ def _parse_hsd_header(data: bytes) -> dict:
     return header
 
 
+def _hsd_valid_counts(counts: np.ndarray, header: dict) -> np.ndarray:
+    """Boolean mask of physically valid HSD counts.
+
+    Excludes the header's error / outside-scan-area sentinels (65535 / 65534
+    on live files) and anything above the band's valid bit depth, mirroring
+    satpy's ahi_hsd masking. Without this, Visible off-disk pixels decoded as
+    1.5 reflectance (bright) and IR ones became NaN only by accident (log of a
+    negative Planck argument). Count 0 stays excluded (legacy behaviour; it
+    never occurs on real files)."""
+    valid = counts > 0
+    valid &= counts != header.get("count_error", 65535)
+    valid &= counts != header.get("count_outside", 65534)
+    vb = int(header.get("valid_bits", 16) or 16)
+    if 0 < vb < 16:
+        valid &= counts <= (1 << vb) - 1
+    return valid
+
+
 def _hsd_counts_to_tbb(counts: np.ndarray, header: dict) -> np.ndarray:
     """Convert raw HSD uint16 counts to brightness temperature (K).
 
@@ -838,7 +955,7 @@ def _hsd_counts_to_tbb(counts: np.ndarray, header: dict) -> np.ndarray:
     the HSD Block 5 header.  The correction coefficients C0/C1/C2
     account for sensor spectral response.
     """
-    valid = counts > 0
+    valid = _hsd_valid_counts(counts, header)
 
     # Step 1: count → spectral radiance
     rad = np.full(counts.shape, np.nan, dtype=np.float64)
@@ -880,7 +997,7 @@ def _hsd_counts_to_reflectance(counts: np.ndarray, header: dict,
     """
     import math as _math
 
-    valid = counts > 0
+    valid = _hsd_valid_counts(counts, header)
     rad = np.full(counts.shape, np.nan, dtype=np.float64)
     rad[valid] = header["gain"] * counts[valid].astype(np.float64) + header["offset"]
 
@@ -968,6 +1085,14 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
 
     if not seg_files:
         raise RuntimeError(f"No Band {band} segment files found in {s3_prefix}")
+    # Every segment the box touches must be present: a scan still posting (or
+    # a segment that fails below) would otherwise leave a hole. Return None so
+    # callers skip / fall back instead of rendering + caching a broken frame.
+    _missing = sorted(set(needed_segs) - set(seg_files))
+    if _missing:
+        print(f"[satellite_ir] Himawari B{band:02d}: needed segments {_missing} "
+              f"not posted in {s3_prefix} — skip")
+        return (None, None) if return_extent else None
 
     # Download, decompress, and parse each segment
     seg_arrays = {}
@@ -1027,13 +1152,37 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
             print(f"[satellite_ir] Himawari segment {seg_num} failed: {e}")
             continue
 
-    if not seg_arrays:
-        raise RuntimeError("All Himawari segment reads failed")
+    _failed = sorted(set(seg_files) - set(seg_arrays))
+    if _failed:
+        # Any failed segment leaves a band of rows we can't fill. Refuse the
+        # whole read (None) rather than return a frame with a ~1100-km hole —
+        # callers treat None as "no imagery" and nothing gets cached.
+        print(f"[satellite_ir] Himawari B{band:02d}: segment(s) {_failed} failed "
+              f"— skip {s3_prefix}")
+        del seg_arrays
+        gc.collect()
+        return (None, None) if return_extent else None
 
-    # Stack segments vertically (segment 1 = top/north, 10 = bottom/south)
-    ordered = [seg_arrays[s] for s in sorted(seg_arrays.keys())]
-    full_tb = np.vstack(ordered)
-    del seg_arrays, ordered
+    # Place each segment at its ABSOLUTE position (segment 1 = top/north,
+    # 10 = bottom/south) inside a NaN-initialised block spanning the first to
+    # the last needed segment, so row_offset below (derived from the first
+    # segment) always matches the data. Stacking only the segments that
+    # arrived used to shift every row after a gap by one segment (~550 rows,
+    # ~1,100 km at 2 km).
+    seg_keys = sorted(seg_arrays.keys())
+    seg_rows = seg_arrays[seg_keys[0]].shape[0]
+    seg_cols = seg_arrays[seg_keys[0]].shape[1]
+    first_seg = seg_keys[0]
+    n_span = seg_keys[-1] - first_seg + 1
+    full_tb = np.full((n_span * seg_rows, seg_cols), np.nan, dtype=np.float32)
+    for sn in seg_keys:
+        a = seg_arrays.pop(sn)
+        r0 = (sn - first_seg) * seg_rows
+        nr = min(a.shape[0], seg_rows)
+        nc = min(a.shape[1], seg_cols)
+        full_tb[r0:r0 + nr, :nc] = a[:nr, :nc]
+        del a
+    del seg_arrays
     gc.collect()
 
     # Now subset to the geographic bounding box
@@ -1236,12 +1385,33 @@ def _reproject_geos_to_latlon(
     col_frac[invalid] = -1
     row_frac[invalid] = -1
 
-    # Replace NaN in tb_geo with a sentinel for interpolation
-    tb_filled = np.where(np.isfinite(tb_geo), tb_geo, 0)
-
     # Bilinear interpolation
     coords = np.array([row_frac.ravel(), col_frac.ravel()])
-    tb_out = map_coordinates(tb_filled, coords, order=1, mode='constant', cval=np.nan)
+    finite = np.isfinite(tb_geo)
+    if finite.all():
+        # Common case (storm well inside the disk, all segments present):
+        # plain bilinear, unchanged from before.
+        tb_filled = tb_geo
+        tb_out = map_coordinates(tb_geo, coords, order=1, mode='constant', cval=np.nan)
+    else:
+        # Gaps (off-disk limb, sentinel/error pixels): normalised bilinear.
+        # Interpolating a 0-filled array smeared "0 K" into every pixel next
+        # to a gap (e.g. 0.5·280 K = 140 K) — spurious cold-top fringes that
+        # also drag the 1st-percentile center-fix gate. Instead interpolate
+        # the data (0 where invalid) and the validity mask with the same
+        # weights and divide, so each output is a weighted mean of VALID
+        # neighbours only (always within their range). The 0.5 cut keeps an
+        # output pixel iff most of its bilinear support is valid — the same
+        # footprint nearest-neighbour would give, so data edges neither grow
+        # nor erode by a pixel.
+        tb_filled = np.where(finite, tb_geo, 0).astype(np.float32)
+        num = map_coordinates(tb_filled, coords, order=1, mode='constant', cval=0.0)
+        wgt = map_coordinates(finite.astype(np.float32), coords, order=1,
+                              mode='constant', cval=0.0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            tb_out = num / wgt
+        tb_out[~(wgt >= 0.5)] = np.nan
+        del num, wgt
     tb_out = tb_out.reshape(n_lat, n_lon)
 
     # Mask invalid pixels
@@ -1309,10 +1479,16 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
     """
     bucket, sat_key = select_goes_sat(
         center_lon if select_lon is None else select_lon, target_dt)
+    if beyond_usable_view(center_lat, center_lon, sat_key):
+        # Meteosat-gap storm: no satellite we ingest can see it — answer
+        # "no imagery" before any S3 LIST/download.
+        return None
 
     try:
         if sat_key == "himawari":
-            s3_key, scan_dt = find_himawari_file(target_dt, return_dt=True)
+            s3_key, scan_dt = find_himawari_file(
+                target_dt, return_dt=True,
+                segments=_himawari_seg_for_lat(center_lat, box_deg))
             if not s3_key:
                 return None
             if _scan_substitution_too_stale(scan_dt, target_dt, max_substitution_min):
@@ -1320,6 +1496,8 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
             tb_geo, geos_extent = open_himawari_subset(
                 s3_key, center_lat, center_lon, box_deg, return_extent=True
             )
+            if tb_geo is None:
+                return None
             # Reproject from geostationary fixed-grid to regular lat/lon grid
             # at _IR_RAW_RES_DEG (0.018° = native Band-13 2km; ~1111×1111 for a
             # 20° box). See _IR_RAW_RES_DEG for why this is lossless vs 0.013°.
@@ -1401,6 +1579,8 @@ def fetch_band_raw(center_lat: float, center_lon: float,
     """
     bucket, sat_key = select_goes_sat(
         center_lon if select_lon is None else select_lon, target_dt)
+    if beyond_usable_view(center_lat, center_lon, sat_key):
+        return None  # Meteosat-gap storm — see fetch_ir_tb_raw
 
     # Map GOES band to Himawari equivalent
     him_band = band
@@ -1415,7 +1595,9 @@ def fetch_band_raw(center_lat: float, center_lon: float,
 
     try:
         if sat_key == "himawari":
-            s3_key, scan_dt = find_himawari_file(target_dt, band=him_band, return_dt=True)
+            s3_key, scan_dt = find_himawari_file(
+                target_dt, band=him_band, return_dt=True,
+                segments=_himawari_seg_for_lat(center_lat, box_deg, band=him_band))
             if not s3_key:
                 return None
             if _scan_substitution_too_stale(scan_dt, target_dt, max_substitution_min):
@@ -1424,6 +1606,8 @@ def fetch_band_raw(center_lat: float, center_lon: float,
                 s3_key, center_lat, center_lon, box_deg, band=him_band,
                 return_extent=True
             )
+            if data_geo is None:
+                return None
             data = _reproject_geos_to_latlon(
                 data_geo, center_lat, center_lon, box_deg,
                 HIMAWARI_SAT_HEIGHT, HIMAWARI_LON_0, HIMAWARI_SWEEP,
@@ -1528,14 +1712,19 @@ def fetch_ir_frame(center_lat: float, center_lon: float,
     or None on failure.
     """
     bucket, sat_key = select_goes_sat(center_lon, target_dt)
+    if beyond_usable_view(center_lat, center_lon, sat_key):
+        return None  # Meteosat-gap storm — see fetch_ir_tb_raw
 
     try:
         if sat_key == "himawari":
             # ── Himawari-9 path ──
-            s3_key = find_himawari_file(target_dt)
+            s3_key = find_himawari_file(
+                target_dt, segments=_himawari_seg_for_lat(center_lat, box_deg))
             if not s3_key:
                 return None
             tb = open_himawari_subset(s3_key, center_lat, center_lon, box_deg)
+            if tb is None:
+                return None
         else:
             # ── GOES path ──
             s3_key = find_goes_file(bucket, target_dt)
