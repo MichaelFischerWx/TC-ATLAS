@@ -86,8 +86,15 @@
                rmw is ON again (2026-08-20): the blend publisher now joins
                the tree\u2019s Stage-1 size channel per frame \u2014 it had been
                silently dropped when the blend became the listed tab. */
+            /* Test overlays (dashed, off by default, see OVERLAYS):
+               vit    = GHOST v6 with the ViT image member (2026-10-20);
+               cnn    = GHOST + CNN shadow (2026-10-18), off since the ViT
+                        replaced the CNN as the v6 image member; its code is
+                        kept and `cnn: true` brings the button back;
+               rmwcnn = the hybrid CNN RMW on the size panel. */
             panels: { rmw: true, shap: false, dist: true, track: true,
-                      comp: true, why: true, cnn: true }
+                      comp: true, why: true,
+                      vit: true, cnn: false, rmwcnn: true }
         },
         ghost: {
             key: 'ghost',
@@ -223,6 +230,16 @@
        published GHOST. */
     var CNN_COL = '#0ea5e9';
     var _showCnn = _pref('tcatlas.exp.cnn', false);
+    /* GHOST v6 ViT overlay (2026-10-20): GHOST with the vision-transformer
+       image member the author adopted for v6. Wind = half the tree member
+       (the shadow tree above) + half the ViT member's reads of the IR image;
+       pressure = the FPM / tree blend with a wind-pressure guard (TC-SWARM
+       realtime/vitghost/vit_blend.py, the offline v6 recipe run in real
+       time). Same contract as the CNN overlay it replaces: off by default,
+       remembered per browser, one dashed trace on Vmax and Pmin. */
+    var VIT_COL = '#3b82f6';
+    var VIT_LABEL = 'GHOST v6 (ViT, experimental)';
+    var _showVit = _pref('tcatlas.exp.vit', false);
     /* Hybrid RMW test (2026-10-18): the Stage-1 image CNN where GHOST's wind
        is >= 64 kt, the published size model below (TC-SWARM
        realtime/cnnghost/rmw_hybrid_publish.py). Same contract: off by
@@ -232,6 +249,8 @@
     /* Test overlays' payloads, per source: idx = promise of {atcf: true}
        for the storms the test has run on; s = atcf -> payload, or null. */
     var OVERLAYS = {
+        vit: { prefix: 'ghostb-vit-rt', file: 'blend_', idx: null, s: {},
+               on: function () { return _showVit; } },
         cnn: { prefix: 'ghostb-cnn-rt', file: 'blend_', idx: null, s: {},
                on: function () { return _showCnn; } },
         rmw: { prefix: 'ghost-rmwcnn-rt', file: 'rmw_', idx: null, s: {},
@@ -1226,6 +1245,17 @@
                   (_showShap ? ' active' : '') +
                   '" id="exp-shap-btn">Model drivers</button>'
                 : '') +
+            (M.panels.vit
+                ? '<button class="exp-range exp-vitbtn' +
+                  (_showVit ? ' active' : '') + '" id="exp-vit-btn" ' +
+                  'aria-pressed="' + _showVit + '" title="' +
+                  'Overlay an experimental version of GHOST whose wind ' +
+                  'estimate is half the GHOST tree model and half a vision ' +
+                  'transformer (ViT), a neural network that reads the ' +
+                  'infrared image. It runs alongside GHOST for evaluation ' +
+                  'and is not the published estimate.">' + VIT_LABEL +
+                  '</button>'
+                : '') +
             (M.panels.cnn
                 ? '<button class="exp-range exp-cnnbtn' +
                   (_showCnn ? ' active' : '') + '" id="exp-cnn-btn" title="' +
@@ -1234,7 +1264,7 @@
                   'It runs alongside GHOST for evaluation and is not the ' +
                   'published estimate.">GHOST + CNN (test)</button>'
                 : '') +
-            (M.panels.cnn && M.panels.rmw
+            (M.panels.rmwcnn && M.panels.rmw
                 ? '<button class="exp-range exp-rmwcnnbtn' +
                   (_showRmwCnn ? ' active' : '') + '" id="exp-rmwcnn-btn" title="' +
                   'Overlay a test size estimate on the RMW panel: a convolutional ' +
@@ -1422,6 +1452,15 @@
             var box = document.getElementById('exp-why');
             if (box) box.style.display = _showWhy ? 'block' : 'none';
             if (_showWhy && _storm && _series[_storm]) drawWhy(_series[_storm]);
+        });
+        var vitBtn = document.getElementById('exp-vit-btn');
+        if (vitBtn) vitBtn.addEventListener('click', function () {
+            _showVit = !_showVit;
+            _setPref('tcatlas.exp.vit', _showVit);
+            track(M.key + '_vit_v6', { on: _showVit });
+            vitBtn.classList.toggle('active', _showVit);
+            vitBtn.setAttribute('aria-pressed', String(_showVit));
+            if (_storm && _series[_storm]) drawSeries(_series[_storm]);
         });
         var cnnBtn = document.getElementById('exp-cnn-btn');
         if (cnnBtn) cnnBtn.addEventListener('click', function () {
@@ -4729,6 +4768,41 @@
                         ? ' ' + j.sar_next.slice(j.sar_next.indexOf('(')) : '')
             }]);
         }
+        /* GHOST v6 ViT overlay: dashed, one legend entry for both panels
+           (the CNN overlay's contract). No size channel: the ViT member
+           changes the intensity estimate only. */
+        if (M.panels.vit && _showVit && _storm) {
+            var vj = overlayFor('vit', _storm);
+            if (vj) {
+                var vf = vj.frames;
+                var vt = vf.map(function (f) { return f.t; });
+                [{ f: 'vmax_kt', src: 'y', u: ' kt' },
+                 { f: 'pmin_hpa', src: 'y2', u: ' hPa' }
+                ].forEach(function (s, i) {
+                    var ax = axOf[s.src];
+                    if (!ax) return;
+                    traces.push({
+                        x: vt, y: vf.map(function (f) { return f[s.f] == null ? null : f[s.f]; }),
+                        name: VIT_LABEL, yaxis: ax,
+                        xaxis: 'x' + (ax === 'y' ? '' : ax.slice(1)),
+                        mode: 'lines', legendgroup: 'vit', showlegend: i === 0 || !axOf.y,
+                        line: { color: VIT_COL, width: 2, dash: 'dash' },
+                        connectgaps: false,
+                        hovertemplate: '%{y:.0f}' + s.u + ' — ' + VIT_LABEL +
+                            '<extra></extra>'
+                    });
+                });
+            } else if (vj === null) {
+                /* A legend entry, not an annotation: paintBands() replaces
+                   the layout's annotations once the axes settle. */
+                traces.push({
+                    x: [null], y: [null], yaxis: axOf.y ? 'y' : axOf.y2,
+                    xaxis: 'x', mode: 'lines', hoverinfo: 'skip',
+                    name: VIT_LABEL + ': not run on this storm',
+                    line: { color: VIT_COL, width: 2, dash: 'dash' }
+                });
+            }
+        }
         /* GHOST + CNN test overlay: dashed, one legend entry for both panels.
            Its size channel is not drawn — the test changes the intensity
            model only, and the size model is the published one. */
@@ -4765,7 +4839,7 @@
             }
         }
         /* Hybrid RMW test overlay: RMW panel only (absent panel = nothing). */
-        if (M.panels.cnn && _showRmwCnn && _storm && axOf.y3) {
+        if (M.panels.rmwcnn && _showRmwCnn && _storm && axOf.y3) {
             var rj = overlayFor('rmw', _storm);
             var ax3 = axOf.y3, xx3 = 'x' + (ax3 === 'y' ? '' : ax3.slice(1));
             if (rj) {
