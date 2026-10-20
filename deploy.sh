@@ -231,6 +231,6 @@ echo "Done! Update your frontend API_BASE to the URL above."
 echo ""
 echo "Useful commands:"
 echo "  gcloud run services describe ${SERVICE_NAME} --region ${REGION}"
-echo "  gcloud run services update ${SERVICE_NAME} --region ${REGION} --min-instances 1   # hurricane season"
-echo "  gcloud run services update ${SERVICE_NAME} --region ${REGION} --min-instances 0   # off-season"
+# No min-instances hint: the 5-min /warmup scheduler already keeps an
+# instance warm, and a min-instance (1 vCPU / 4 GiB) costs ~$32/month idle.
 echo "  gcloud run services logs read ${SERVICE_NAME} --region ${REGION} --limit 50"

@@ -807,7 +807,7 @@
         // Clean prior render
         container.innerHTML = '';
 
-        var theme = (window.TCATheme && window.TCATheme.current) || 'light';
+        var theme = (window.TCATheme && window.TCATheme.get) ? window.TCATheme.get() : 'light';
         var isDark = theme === 'dark';
         var bg = isDark ? '#161b24' : '#ffffff';
         var fg = isDark ? '#cbd5e1' : '#0f172a';
@@ -1852,14 +1852,14 @@
         });
     };
 
-    /* React to theme flips while the tab is open */
-    if (window.TCATheme && typeof window.TCATheme.onChange === 'function') {
-        window.TCATheme.onChange(function () {
-            if (state.initialized
-                && document.getElementById('sub-main')
-                && document.getElementById('sub-main').style.display !== 'none') {
-                _renderHovmollers();
-            }
-        });
-    }
+    /* React to theme flips while the tab is open (theme.js dispatches
+     * `theme:change` on <html>). */
+    document.documentElement.addEventListener('theme:change', function () {
+        if (state.initialized
+            && document.getElementById('sub-main')
+            && document.getElementById('sub-main').style.display !== 'none') {
+            _renderClocks();
+            _renderHovmollers();
+        }
+    });
 })();

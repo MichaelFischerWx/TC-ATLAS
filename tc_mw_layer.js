@@ -1352,12 +1352,13 @@
         if (!this._ui || !this._ui.legend) return;
         var html;
         // (vmin, vmax, title, cmap-class) per single-pol product —
-        // matches the backend SINGLE_POL_RANGE table in mw_ingest.py.
+        // matches the backend _SINGLE_POL_RANGE table in mw_ingest.py (the
+        // ranges the operational PNGs are rendered with).
         var SINGLE_POL_LEGEND = {
             '37v': { vmin: 180, vmax: 290, title: '37 GHz V-pol TB (K)', bar: 'tc-mw-legend-bar-37' },
-            '37h': { vmin: 130, vmax: 290, title: '37 GHz H-pol TB (K)', bar: 'tc-mw-legend-bar-37' },
+            '37h': { vmin: 150, vmax: 290, title: '37 GHz H-pol TB (K)', bar: 'tc-mw-legend-bar-37' },
             '89v': { vmin: 180, vmax: 290, title: '89 GHz V-pol TB (K)', bar: 'tc-mw-legend-bar-89' },
-            '89h': { vmin: 130, vmax: 290, title: '89 GHz H-pol TB (K)', bar: 'tc-mw-legend-bar-89' }
+            '89h': { vmin: 150, vmax: 290, title: '89 GHz H-pol TB (K)', bar: 'tc-mw-legend-bar-89' }
         };
         if (this._product === '89pct') {
             html =

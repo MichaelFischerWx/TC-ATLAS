@@ -84,6 +84,20 @@ function getIntensityCategory(vmax) {
     return 'Cat 5';
 }
 
+// Track-point nature test (same semantics as global_archive.js): missing
+// nature counts as tropical (pre-nature track data); otherwise TS or SS.
+function _isTCNature(n) {
+    if (!n) return true;
+    return n === 'TS' || n === 'SS';
+}
+
+// Storm detail lives on the Global Archive page; open it via its
+// #tab=detail&storm=SID deep link (parsed by restoreFromHash there).
+function _openStormInArchive(sid) {
+    if (!sid) return;
+    window.location.href = 'global_archive.html#tab=detail&storm=' + encodeURIComponent(sid);
+}
+
 function getCatKey(vmax) {
     if (!vmax) return 'UN';
     if (vmax < 34) return 'TD';
@@ -711,9 +725,7 @@ function renderACEYearDetail(year) {
             var storm = yearStorms[idx];
             if (storm) {
                 closeACEModal();
-                selectedStorm = storm;
-                selectStorm(storm);
-                viewStormDetail();
+                _openStormInArchive(storm.sid);
             }
         }
     });
@@ -747,9 +759,7 @@ window.aceJumpToStorm = function (sid) {
     var storm = allStorms.find(function (s) { return s.sid === sid; });
     if (storm) {
         closeACEModal();
-        selectedStorm = storm;
-        selectStorm(storm);
-        viewStormDetail();
+        _openStormInArchive(storm.sid);
     }
 };
 

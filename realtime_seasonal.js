@@ -5616,9 +5616,17 @@
             var lineX = isNamed ? namedLineX : unnamedLineX;
             var lineY = isNamed ? namedLineY : unnamedLineY;
             if (lineX.length) { lineX.push(null); lineY.push(null); }
+            var prevLon = null;
             for (var k = 0; k < frameFixes.length; k++) {
                 var ff = frameFixes[k];
                 var lon = _evoNormLon(ff.lo);
+                // Break the line where the track crosses the antimeridian
+                // (e.g. 179.5 → -179.5); otherwise Plotly draws a segment
+                // straight across the whole map.
+                if (prevLon != null && Math.abs(lon - prevLon) > 180) {
+                    lineX.push(null); lineY.push(null);
+                }
+                prevLon = lon;
                 lineX.push(lon); lineY.push(ff.la);
                 mX.push(lon); mY.push(ff.la);
                 var w = ff.w;

@@ -55,7 +55,9 @@
        bookmarks), and it now also accepts a bare root. Split on whether the
        last segment looks like a version so both keep working: a pinned
        directory disables the picker, a root drives it. */
-    var _ov = (qs.get('ghostra') || '').replace(/\/+$/, '');
+    /* Honored only on a local dev host: the override picks the origin every
+       data file (and the strings rendered from them) is read from. */
+    var _ov = LOCALHOST ? (qs.get('ghostra') || '').replace(/\/+$/, '') : '';
     var pinned = null, ROOT;
     if (_ov) {
         var m = _ov.match(/^(.*)\/(v[0-9][0-9A-Za-z._-]*)$/);
@@ -67,6 +69,12 @@
     var versionList = null;      // from versions.json, or synthesised
     function DATA() { return ROOT + '/' + version; }
     var API = 'https://api.tcatlas.org';
+    /* Escape a data string before it is concatenated into innerHTML. */
+    function esc(v) {
+        return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
 
     /* Never hand an error page to JSON.parse. A missing object on the CDN comes
        back as HTML, and the resulting "Unexpected token '<'" tells the reader
@@ -500,8 +508,8 @@
         var d = (p.d === MISSING) ? null : p.d;
         var el = $('gra-tip');
         el.innerHTML =
-            '<div class="gra-tip-hd">' + (st.name || st.atcf || p.s) +
-            '<span class="gra-tip-sub">' + p.b + ' · ' + ts + '</span></div>' +
+            '<div class="gra-tip-hd">' + esc(st.name || st.atcf || p.s) +
+            '<span class="gra-tip-sub">' + esc(p.b) + ' · ' + ts + '</span></div>' +
             '<div class="gra-tip-row"><span class="gra-tip-k gra-tip-g">GHOST</span>' +
             '<b>' + fmt(p.gp, 1) + '</b> hPa <b>' + fmt(p.gv, 0) + '</b> kt</div>' +
             /* Held out beside the product, never instead of it. Where the
@@ -771,8 +779,8 @@
            number. Say so rather than concatenating the two labels into one
            plausible-looking string. */
         var mism = (index.version && version && index.version !== version)
-            ? '<br><b class="gra-mismatch">served as ' + version +
-              ' but the tree identifies itself as ' + index.version +
+            ? '<br><b class="gra-mismatch">served as ' + esc(version) +
+              ' but the tree identifies itself as ' + esc(index.version) +
               '</b>' : '';
         /* The identity line (version, per-basin protocol, any version
            mismatch) stays ALWAYS VISIBLE — it is what tells a reader which
@@ -780,9 +788,9 @@
            reference prose, and it used to starve the leaderboard down to ~2
            visible storms, so it collapses. */
         $('gra-foot').innerHTML =
-            'GHOST ' + (version || index.version || '') +
-            (index.title ? ' — ' + index.title : '') + mism +
-            (per ? '<br>' + per : '<br>' + (index.model || '')) +
+            'GHOST ' + esc(version || index.version || '') +
+            (index.title ? ' — ' + esc(index.title) : '') + mism +
+            (per ? '<br>' + per : '<br>' + esc(index.model || '')) +
             '<details class="gra-foot-more"><summary>What these numbers are</summary>' +
             '<br>Recon-independent research estimates from geostationary IR + ' +
             'reanalysis environment. Not an official analysis. ' +
@@ -843,14 +851,14 @@
             return '<tr><th>' + (BASIN_LABEL[b] || b) + '</th>' +
                 '<td><span class="gra-proto-p ' + (m.protocol || '') + '">' +
                 (PROTO_SHORT[m.protocol] || m.protocol) + '</span>' +
-                (m.column ? '<br><code>' + m.column + '</code>' : '') + '</td>' +
+                (m.column ? '<br><code>' + esc(m.column) + '</code>' : '') + '</td>' +
                 '<td>' + ho + '</td></tr>';
         }).join('');
         var detail = basins.map(function (b) {
             var m = basinModel(b);
             return m && m.protocol_detail
                 ? '<p class="gra-about-note"><strong>' + (BASIN_LABEL[b] || b) +
-                  ':</strong> ' + m.protocol_detail + '</p>'
+                  ':</strong> ' + esc(m.protocol_detail) + '</p>'
                 : '';
         }).join('');
         el.innerHTML =
@@ -873,15 +881,15 @@
                vanishes leaves the reader unable to tell WHICH version they are
                looking at, which is the state this whole change exists to end. */
             vsel.innerHTML = '<option>' +
-                ((list[0] && (list[0].title || list[0].version)) || version || '—') +
+                esc((list[0] && (list[0].title || list[0].version)) || version || '—') +
                 '</option>';
             vsel.disabled = true;
         } else {
             vsel.disabled = false;
             vsel.innerHTML = list.map(function (v) {
-                return '<option value="' + v.version + '"' +
+                return '<option value="' + esc(v.version) + '"' +
                     (v.version === version ? ' selected' : '') + '>' +
-                    (v.title || v.version) + '</option>';
+                    esc(v.title || v.version) + '</option>';
             }).join('');
             vsel.value = version;
         }
@@ -1009,23 +1017,23 @@
                 hdr = '<div class="gra-group">' + (BASIN_LABEL[s.basin] || s.basin) + '</div>';
             }
             return hdr + '<div class="gra-item' + (sel === s.sid ? ' active' : '') +
-                '" data-sid="' + s.sid + '">' +
-                '<div class="gra-nm">' + (s.name || s.atcf) +
-                (s.suspect ? '<span class="gra-flag" title="QC-suspect (' + (s.qc_src || '') + ')">QC</span>' : '') +
+                '" data-sid="' + esc(s.sid) + '">' +
+                '<div class="gra-nm">' + esc(s.name || s.atcf) +
+                (s.suspect ? '<span class="gra-flag" title="QC-suspect (' + esc(s.qc_src || '') + ')">QC</span>' : '') +
                 (s.out_of_basin ? '<span class="gra-flag oob" title="Out-of-basin apply — trained on AL/EP recon labels">OOB</span>' : '') +
                 (s.min_uncorroborated ? '<span class="gra-flag unc" title="This storm&rsquo;s deepest frame is also its largest disagreement with best track (' +
                     s.min_gap + ' hPa), with no reconnaissance nearby — the minimum has no independent support">?</span>' : '') +
                 '</div>' +
                 '<div class="gra-num gra-g">' + (gv !== null ? gv.toFixed(kt ? 0 : 1) : '—') +
                 heldoutCell(s) + '</div>' +
-                '<div class="gra-meta">' + s.year + ' · ' + s.basin + ' · ' + s.n + ' fr</div>' +
+                '<div class="gra-meta">' + esc(s.year) + ' · ' + esc(s.basin) + ' · ' + esc(s.n) + ' fr</div>' +
                 '<div class="gra-num" title="official best-track peak (includes non-synoptic special entries); Δ = GHOST at published frames minus this">BT ' + (bv !== null ? bv.toFixed(0) : '—') +
                 (d !== null ? ' <span style="color:' + (dBlue ? '#2a78d6' : '#e34948') + '">' +
                     (d > 0 ? '+' : '−') + Math.abs(d).toFixed(0) + '</span>' : '') +
                 '</div></div>';
         }).join('') ||
             '<div style="padding:16px;color:var(--slate);font-size:0.72rem;">' +
-            (q ? 'No storm matches &ldquo;' + q + '&rdquo;.' : 'No storms match the filters.') +
+            (q ? 'No storm matches &ldquo;' + esc(q) + '&rdquo;.' : 'No storms match the filters.') +
             '</div>';
         /* Row clicks are handled by ONE delegated listener on #gra-list (see
            wire()). A per-row onclick used to be bound here as well, so every

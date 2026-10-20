@@ -85,7 +85,7 @@ window.SubseasonalClock = (function () {
     /* Theme-aware palette. Mirrors what tc_climatology.js used inline so
      * both pages stay visually consistent across light/dark. */
     function _palette() {
-        var theme = (window.TCATheme && window.TCATheme.current) || 'light';
+        var theme = (window.TCATheme && window.TCATheme.get) ? window.TCATheme.get() : 'light';
         if (theme === 'dark') {
             return {
                 bgFill:     '#161b24',

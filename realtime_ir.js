@@ -2036,8 +2036,12 @@
             .then(function (r) { return r.json(); })
             .then(function (j) { _mosaicFrames = (j && j.frames) || [];
                 _mosaicTs = _mosaicFrames[_mosaicFrames.length - 1] || null;
-                _irApplyTrange(j, 'ir'); return _mosaicFrames; })
-            .catch(function (e) { console.warn('[mosaic] frames.json failed', e); return []; });
+                _irApplyTrange(j, 'ir');
+                if (!_mosaicFrames.length) _mosaicLoad = null;   // empty list → allow a retry
+                return _mosaicFrames; })
+            .catch(function (e) { console.warn('[mosaic] frames.json failed', e);
+                _mosaicLoad = null;   // don't memoize a failure — the next caller retries
+                return []; });
         return _mosaicLoad;
     }
     function _mosaicTileUrl(ts, product) { return _MOSAIC_ROOT + '/' + (product || 'ir') + '/' + ts + '/{z}/{x}/{y}.png'; }
@@ -2053,6 +2057,8 @@
     function _ir2aRoot(p) { return _IR2A_DEV ? (location.origin + '/_ir2a_anim/ir') : (_IR2A_BASE + '/' + (p || 'ir')); }
     var _IR2A_DEV_FRAMES = ['202607202240'];   // local mosaic_out fixture (packed frame)
     var _ir2aLayer = null, _ir2aOn = false, _ir2aFrames = null, _ir2aFramesProduct = null;
+    var _ir2aFramesAt = 0;             // when the current frame list was fetched (ms)
+    var _ir2aLoadFailed = false;       // still-layer frames.json load failed (retried by the poll)
     function _ir2aEligible() {
         return _IR2A && window.LFLET_GL && window.createMosaicGLLayer &&
                (globalProduct === 'ir' || globalProduct === 'vis' || globalProduct === 'wv'
@@ -2093,6 +2099,7 @@
                 .then(function (r) { return r.json(); })
                 .then(function (j) {
                     _ir2aFrames = (j && j.frames) || []; _ir2aFramesProduct = p;
+                    _ir2aFramesAt = Date.now();
                     _irApplyTrange(j, p); cb();
                 })
                 .catch(onErr);
@@ -2105,6 +2112,7 @@
             _ir2aFrames = (js[0] && js[0].frames) || [];
             _comboVisFrames = (js[1] && js[1].frames) || [];
             _ir2aFramesProduct = 'combo';
+            _ir2aFramesAt = Date.now();
             _irApplyTrange(js[0], 'ir');
             _irApplyTrange(js[1], 'vis');
             cb();
@@ -2504,7 +2512,7 @@
         if (_ir2aFrames && _ir2aFrames.length && _ir2aFramesProduct === p) { build(); return; }
         if (_IR2A_DEV) { _ir2aFrames = _IR2A_DEV_FRAMES.slice(); _ir2aFramesProduct = p; build(); return; }
         _ir2aLoadFrames(p, build,
-            function (e) { console.error('[ir2a] frames.json load failed', e); });
+            function (e) { console.error('[ir2a] frames.json load failed', e); _ir2aLoadFailed = true; });
     }
     // Show the latest v3 frame as the still (pre-play) global IR layer.
     function _ir2aStill() {
@@ -2516,6 +2524,34 @@
         // Follow the latest frame with the radar overlay (still view refreshes
         // as new satellite frames arrive).
         if (_gRadarOn) _gRadarSync();
+    }
+    // Periodic still refresh (called from the active-storms poll): re-read the
+    // product's frames.json and advance the still to the newest frame. Skipped
+    // while a loop is loaded or loading (its stubs index the current list), and
+    // when the list was fetched recently. Also retries a failed first load.
+    function _ir2aRefreshStill() {
+        if (!_ir2aEligible() || _satHidden || _IR2A_DEV) return;
+        if (globalAnimReady || globalAnimLoading || globalAnimFrameLayers.length) return;
+        if (!_ir2aLayer) {
+            if (_ir2aLoadFailed) { _ir2aLoadFailed = false; _ir2aStill(); }   // failed load → retry
+            return;
+        }
+        var p = globalProduct;
+        if (_ir2aProduct !== p || Date.now() - _ir2aFramesAt < 5 * 60 * 1000) return;
+        _ir2aLoadFrames(p, function () {
+            if (!_ir2aLayer || _ir2aProduct !== p || _ir2aFramesProduct !== p) return;
+            if (!_ir2aFrames || !_ir2aFrames.length) return;
+            if (globalAnimReady || globalAnimLoading || globalAnimFrameLayers.length) return;
+            _ir2aLayer.setFrames(_ir2aFrames);
+            _ir2aLayer.setFrame(_ir2aFrames.length - 1);
+            if (p === 'ir' || p === 'combo') {   // IR timeline drives the shared latest-time label
+                _mosaicFrames = _ir2aFrames.slice();
+                _mosaicTs = _mosaicFrames[_mosaicFrames.length - 1] || _mosaicTs;
+            }
+            _setGlobalSatTimeLabel();
+            _rt3DRefreshSource();
+            if (_gRadarOn) _gRadarSync();
+        }, function (e) { console.warn('[ir2a] frames.json refresh failed', e); });
     }
 
     // ── Lite storm view (Phase B/C) ────────────────────────────────────────
@@ -5560,7 +5596,12 @@
         // GL facade: ensure the real mosaic frame list is loaded before building
         // the loop (else all frames collapse to the latest mosaic tile).
         if (window.LFLET_GL && (!_mosaicFrames || !_mosaicFrames.length)) {
-            _loadMosaicFrames().then(loadGlobalAnimation);
+            // Re-enter only once frames exist; an empty/failed load would
+            // otherwise re-chain on the resolved promise without end.
+            _loadMosaicFrames().then(function (fr) {
+                if (fr && fr.length) loadGlobalAnimation();
+                else updateGlobalAnimControls('idle');
+            });
             return;
         }
         if (!map || !latestGIBSTime || globalAnimLoading) return;
@@ -7937,6 +7978,7 @@
     function pollActiveStorms() {
         var loaderEl = document.getElementById('ir-loader');
         try { _rtObsPeriodicRefresh(); } catch (e) { console.warn('[RT Monitor] obs periodic refresh:', e); }
+        try { _ir2aRefreshStill(); } catch (e) { console.warn('[RT Monitor] global frames refresh:', e); }
 
         // Show cached storms immediately while fresh fetch runs
         if (stormData.length === 0) {
@@ -10603,7 +10645,10 @@
                 img.onerror = function () { resolve(null); };
                 img.src = lay.data_url;
             });
-        }).catch(function () { return null; });
+        }).catch(function () { return null; }).then(function (ok) {
+            if (!ok) _rtGridPi.loading = null;   // don't cache a failure — next call retries
+            return ok;
+        });
         return _rtGridPi.loading;
     }
     /** Mean gridded PI (kt) over the valid cells within ±0.5° of a point —
@@ -25575,7 +25620,9 @@
     //    * sst_oisst     — NOAA OISST daily SST (degC)
 
     function _loadEnvMetadata() {
-        if (_rtEnvLoading || _rtEnvMetadata) return Promise.resolve();
+        // A failed fetch leaves { layers: [], error } for the menu to render;
+        // it is not treated as loaded, so the next open retries.
+        if (_rtEnvLoading || (_rtEnvMetadata && !_rtEnvMetadata.error)) return Promise.resolve();
         _rtEnvLoading = true;
         return _rtFetch(API_BASE + '/ir-monitor/env/layers', { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
@@ -26840,7 +26887,7 @@
             _renderDetailLayersMenu();
             // Metadata may not have loaded yet (user never opened the global
             // Layers panel this session) — fetch then re-render.
-            if (!_rtEnvMetadata) _loadEnvMetadata().then(_renderDetailLayersMenu);
+            if (!_rtEnvMetadata || _rtEnvMetadata.error) _loadEnvMetadata().then(_renderDetailLayersMenu);
             setTimeout(function () {
                 document.addEventListener('click', _irOutsideDetailLayersClick, { capture: true, once: true });
             }, 0);
@@ -26943,7 +26990,7 @@
         if (bd) bd.classList.toggle('is-active', isMobile && _rtLayersPanelOpen);
 
         if (_rtLayersPanelOpen) {
-            if (!_rtEnvMetadata) _loadEnvMetadata(); // _renderLayersPanel runs after the fetch
+            if (!_rtEnvMetadata || _rtEnvMetadata.error) _loadEnvMetadata(); // _renderLayersPanel runs after the fetch
             _renderLayersPanel();
         }
     }
@@ -29531,9 +29578,13 @@
     // passes. Refreshes silently (no "loading…" flash, list replaced
     // atomically). Self-cancels when the detail closes, the storm changes,
     // or focus moves to the Satellite tab (which runs its own refresh).
+    // Ticks are skipped while the tab is hidden; one catch-up refresh runs
+    // when it becomes visible again.
+    var _rtMwStormMissedTick = false;
     function _rtMwStartStormRefresh() {
         if (_rtMwStormRefreshTimer) clearInterval(_rtMwStormRefreshTimer);
         var boundAtcf = _rtMwStormState.atcfId;
+        _rtMwStormMissedTick = false;
         _rtMwStormRefreshTimer = setInterval(function () {
             var detail = document.getElementById('ir-detail');
             var storm = _rtMwStormState.storm;
@@ -29544,16 +29595,33 @@
                 _rtMwStormRefreshTimer = null;
                 return;
             }
+            if (document.hidden) { _rtMwStormMissedTick = true; return; }
             _rtLoadStormMwPasses(storm, undefined, true /* silent */);
         }, _RT_MW_STORM_REFRESH_MS);
     }
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden || !_rtMwStormRefreshTimer || !_rtMwStormMissedTick) return;
+        _rtMwStormMissedTick = false;
+        var detail = document.getElementById('ir-detail');
+        var storm = _rtMwStormState.storm;
+        if (storm && _rtMwStormState.prefix === 'rt-mw-storm'
+            && detail && detail.style.display !== 'none') {
+            _rtLoadStormMwPasses(storm, undefined, true /* silent */);
+        }
+    });
 
     function _rtMwBoundsContains(bounds, lat, lon) {
         if (!bounds || !bounds[0] || !bounds[1]) return false;
         var south = bounds[0][0], west = bounds[0][1];
         var north = bounds[1][0], east = bounds[1][1];
         if (lat < south || lat > north) return false;
-        if (west <= east) return lon >= west && lon <= east;
+        if (west <= east) {
+            // Dateline arcs are regridded onto a continuous axis (e.g. west
+            // 170, east 190), so also test the storm lon shifted by ±360.
+            return (lon >= west && lon <= east) ||
+                   (lon + 360 >= west && lon + 360 <= east) ||
+                   (lon - 360 >= west && lon - 360 <= east);
+        }
         return lon >= west || lon <= east;   // dateline wrap
     }
 
@@ -30608,11 +30676,13 @@
         [1.000, '#663300'],
     ];
     var _MW_CBAR_PRODUCT = {
-        '89pct': { scale: _MW_CBAR_89, vmin: 105, vmax: 305, title: '89 PCT (K)' },
-        '89v':   { scale: _MW_CBAR_89, vmin: 150, vmax: 300, title: '89V (K)' },
-        '89h':   { scale: _MW_CBAR_89, vmin: 100, vmax: 290, title: '89H (K)' },
-        '37v':   { scale: _MW_CBAR_37, vmin: 125, vmax: 300, title: '37V (K)' },
-        '37h':   { scale: _MW_CBAR_37, vmin: 125, vmax: 300, title: '37H (K)' },
+        // vmin/vmax = the range mw_ingest stretches each colormap over when
+        // rendering the PNG (89pct fixed; single-pol _SINGLE_POL_RANGE).
+        '89pct': { scale: _MW_CBAR_89, vmin: 180, vmax: 290, title: '89 PCT (K)' },
+        '89v':   { scale: _MW_CBAR_89, vmin: 180, vmax: 290, title: '89V (K)' },
+        '89h':   { scale: _MW_CBAR_89, vmin: 150, vmax: 290, title: '89H (K)' },
+        '37v':   { scale: _MW_CBAR_37, vmin: 180, vmax: 290, title: '37V (K)' },
+        '37h':   { scale: _MW_CBAR_37, vmin: 150, vmax: 290, title: '37H (K)' },
         // 37color is an RGB composite — no 1D scale; handled separately.
     };
     // Claude IR LUT (warm → cold, left → right) over exactly +35 → -100 °C, so

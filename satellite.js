@@ -5239,7 +5239,13 @@
             // parsed = { frames: [{previewImg, bounds, datetime_utc, satellite, ...}], total }
             if (stormId !== currentStormId || band !== rightBand) return;
             for (var i = 0; i < parsed.frames.length; i++) {
-                rightFrames[parsed.frames[i].index] = parsed.frames[i].entry;
+                var _e = parsed.frames[i].entry;
+                rightFrames[parsed.frames[i].index] = _e;
+                // Entries arrive loaded; the canvas draws the <img>, so the
+                // blob URL is no longer needed here.
+                if (_e && _e.previewImg && /^blob:/.test(_e.previewImg.src)) {
+                    URL.revokeObjectURL(_e.previewImg.src);
+                }
             }
             totalFrames = parsed.total;
             if (loadStatusEl) loadStatusEl.textContent = '';
@@ -5416,7 +5422,13 @@
                             _startRightRawBackfill();
                         }
                     };
-                    img.src = URL.createObjectURL(result.blob);
+                    // Revoke once decoded: the frame keeps the loaded <img> for
+                    // drawImage, so the blob URL itself is no longer needed.
+                    var _blobUrl = URL.createObjectURL(result.blob);
+                    var _revoke = function () { URL.revokeObjectURL(_blobUrl); };
+                    img.addEventListener('load', _revoke);
+                    img.addEventListener('error', _revoke);
+                    img.src = _blobUrl;
                 })
                 .catch(function () {
                     previewDone++;
@@ -5954,6 +5966,10 @@
                                     pending--;
                                     maybeFinish();
                                 };
+                                // Frames keep the decoded <img> (drawImage only), so
+                                // the blob URL can go once it has loaded or failed.
+                                img.addEventListener('load', function () { URL.revokeObjectURL(url); });
+                                img.addEventListener('error', function () { URL.revokeObjectURL(url); });
                                 img.src = url;
                             })(f);
                         }
@@ -6046,7 +6062,13 @@
                                 console.log('[Satellite] All previews loaded — raw Tb deferred until needed');
                             }
                         };
-                        img.src = URL.createObjectURL(result.blob);
+                        // Revoke once decoded: the frame keeps the loaded <img> for
+                        // drawImage, so the blob URL itself is no longer needed.
+                        var _blobUrl = URL.createObjectURL(result.blob);
+                        var _revoke = function () { URL.revokeObjectURL(_blobUrl); };
+                        img.addEventListener('load', _revoke);
+                        img.addEventListener('error', _revoke);
+                        img.src = _blobUrl;
                     })
                     .catch(function () {
                         _previewDone++;
@@ -6739,8 +6761,18 @@
     // ── Polling ─────────────────────────────────────────────────
 
     var _pollHiddenAt = 0;
+    var _pollSkipped = false;
+
+    // The Diagnostics view (#sat-main) is one tab of realtime_ir.html; its
+    // poll only does useful work while that view is on screen.
+    function _satViewShown() {
+        var el = document.getElementById('sat-main');
+        return !!el && el.style.display !== 'none';
+    }
 
     function _pollOnce() {
+        if (!_satViewShown()) { _pollSkipped = true; return; }
+        _pollSkipped = false;
         var headers = {};
         if (_satActiveStormsETag) headers['If-None-Match'] = _satActiveStormsETag;
         fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store', headers: headers })
@@ -6804,6 +6836,9 @@
                 stopPolling();
             }
         } else {
+            // Only resume a poll that activate() started; a page that never
+            // opened the Diagnostics view has nothing to refresh.
+            if (!_activated) return;
             var awayMs = _pollHiddenAt ? Date.now() - _pollHiddenAt : 0;
             _pollHiddenAt = 0;
             if (awayMs > POLL_INTERVAL_MS / 2) _pollOnce();
@@ -7016,10 +7051,17 @@
     /**
      * Fetch a single radar frame and cache it.
      * If display=true, also apply it to the current display.
+     * onDone (optional) runs once when the request settles, success or not.
      */
-    function _satFetchRadarFrame(s3Key, display) {
+    function _satFetchRadarFrame(s3Key, display, onDone) {
+        var _settled = false;
+        function settle() {
+            if (_settled) return;
+            _settled = true;
+            if (onDone) onDone();
+        }
         var siteSelect = document.getElementById('sat-radar-site-select');
-        if (!siteSelect || !siteSelect.value) return;
+        if (!siteSelect || !siteSelect.value) { settle(); return; }
         var site = siteSelect.value;
         var product = _satRadarProduct;
         var status = document.getElementById('sat-radar-frame-status');
@@ -7033,7 +7075,7 @@
         fetch(url, { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (json) {
-                if (!json.image || !json.bounds) return;
+                if (!json.image || !json.bounds) { settle(); return; }
 
                 // Decode hover data
                 var hoverData = null;
@@ -7070,10 +7112,13 @@
                         _satApplyRadarFrame(entry);
                         _satUpdateRadarColorbar();
                     }
+                    settle();
                 };
+                img.onerror = settle;
                 img.src = json.image;
             })
             .catch(function (e) {
+                settle();
                 if (display) TCErrors.show(status, e, 'this radar frame', function () { _satFetchRadarFrame(s3Key, display); });
             });
     }
@@ -7132,9 +7177,11 @@
                 fetchNext();
                 return;
             }
-            _satFetchRadarFrame(scan.s3_key, false);
-            // Chain next fetch after a short delay (let the API breathe)
-            setTimeout(fetchNext, 500);
+            // Chain the next fetch only after this one settles (plus a short
+            // pause), so at most CONCURRENCY requests are ever in flight.
+            _satFetchRadarFrame(scan.s3_key, false, function () {
+                setTimeout(fetchNext, 500);
+            });
         }
 
         // Launch concurrent slots
@@ -7286,7 +7333,11 @@
     }
 
     function activate() {
-        if (_activated) return;
+        if (_activated) {
+            // Returning to the view: catch up on a poll skipped while away.
+            if (_pollSkipped) _pollOnce();
+            return;
+        }
         _activated = true;
         loadCoastlines();   // deferred from init(): only tab users pay for it
 
