@@ -62,22 +62,22 @@ BUCKET="${GCS_IR_CACHE_BUCKET:-tc-atlas-ir-cache}"
 # create/update time so this job runs the subseasonal script.
 IMAGE="gcr.io/${PROJECT}/tc-atlas-env-job:latest"
 
-# Production climatology window — 30-yr WMO baseline. The first job run
-# takes ~3 min for the climatology fetch over OPeNDAP; subsequent runs
-# reuse the cached netCDF in /tmp/_olr_cache and complete in ~30s. Cloud
-# Run Job's /tmp is ephemeral per-task, so each cold start re-downloads
-# the climatology unless we pre-stage it in GCS — TODO for v2 if cold-
-# start cost matters; today's ~$0.05/run is well within margin.
+# Production climatology window — 30-yr WMO baseline. The climatology is
+# built over OPeNDAP only once per base period (~3 min) and persisted to
+# gs://${BUCKET}/subseasonal/olr_climo_<start>_<end>.nc
+# (build_subseasonal_overlays.daily_climatology); every later run, cold
+# start included, downloads that ~15 MB netCDF instead of rebuilding it.
+# Changing OLR_CLIMO_START/END triggers one rebuild under the new name.
 OLR_CLIMO_START="${OLR_CLIMO_START:-1991-01-01}"
 OLR_CLIMO_END="${OLR_CLIMO_END:-2020-12-31}"
 
 # ── Create or update the Cloud Run Job ───────────────────────────
 echo "Deploying Cloud Run Job ${JOB_NAME}..."
-# Memory: 30-yr climatology fetch accumulates ~1.25 GB of raw OLR
-# chunks before concat. 4 GiB gives plenty of headroom; daily warm
-# runs use far less but we provision for the cold-start case since
-# Cloud Run Job /tmp is per-task (no climo cache persistence).
-# TODO: bump back down to 1 GiB once we add GCS-side climo cache.
+# Memory: a climatology REBUILD (new base period, or the GCS copy
+# deleted) accumulates ~1.25 GB of raw OLR chunks before concat. Routine
+# runs read the cached climatology from GCS and hold far less (~150 MB
+# GEFS sidecar + the 200-day window), so 4 GiB / 2 vCPU is sized for the
+# rare rebuild, not the daily run.
 if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; then
     gcloud run jobs update "${JOB_NAME}" \
         --region "${REGION}" \

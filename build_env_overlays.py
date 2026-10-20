@@ -1080,13 +1080,12 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
     }
 
     def _put(blob, body: bytes | str, content_type: str) -> None:
-        blob.upload_from_string(body, content_type=content_type)
+        # Cache-Control and the public ACL ride on the upload itself: one
+        # Class A op per object instead of upload + patch() + make_public(),
+        # and no window where the new object is private or uncached.
         blob.cache_control = "public, max-age=300"
-        blob.patch()
-        try:
-            blob.make_public()
-        except Exception as e:
-            log.warning("Could not mark %s public: %s", blob.name, e)
+        blob.upload_from_string(body, content_type=content_type,
+                                predefined_acl="publicRead")
 
     try:
         _put(png_blob, png, "image/png")
@@ -1133,11 +1132,20 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
 
 
 def write_layer_indices(date_str: str, hour_str: str,
-                         forecast_hours: list, layer_names: list) -> None:
+                         forecast_hours: list, layer_names: list,
+                         results: Optional[dict] = None) -> None:
     """For each hourly-forecast layer, write env/{name}/index.json listing
     which (init_cycle, forecast_hour, valid_time) tuples are currently
     available. The API endpoint reads these to enumerate hours without
     scanning GCS prefixes — much faster than blob.list().
+
+    `results` is main()'s {"<name>.f<HHH>": bool} map. When given, only
+    the (layer, forecast hour) pairs whose builder actually uploaded are
+    listed, and a layer with NO successful hour keeps its previous
+    index.json untouched. Without this filter a run where NOMADS didn't
+    have the cycle yet (every builder failed) still repointed every
+    index at the missing cycle, and the frontend — which swaps URLs even
+    on image error — went blank until the next good run.
 
     Per-layer index shape:
       {
@@ -1166,6 +1174,8 @@ def write_layer_indices(date_str: str, hour_str: str,
     for name in layer_names:
         hours_meta = []
         for fh in forecast_hours:
+            if results is not None and not results.get(f"{name}.f{fh:03d}"):
+                continue
             valid = compute_valid_time(date_str, hour_str, fh)
             hh = f"{fh:03d}"
             per_hour_dir = f"{GCS_PREFIX}/{name}/init-{init_cycle}"
@@ -1183,6 +1193,10 @@ def write_layer_indices(date_str: str, hour_str: str,
                 entry["geojson_url"] = f"{base_url}/{per_hour_dir}/f{hh}.geojson"
             hours_meta.append(entry)
 
+        if not hours_meta:
+            log.warning("No forecast hour of %s built for %s — keeping the "
+                        "previous index.json", name, init_cycle)
+            continue
         index = {
             "name": name,
             "latest_init": init_cycle,
@@ -1191,11 +1205,8 @@ def write_layer_indices(date_str: str, hour_str: str,
         blob = bucket.blob(f"{GCS_PREFIX}/{name}/index.json")
         blob.cache_control = "public, max-age=300"
         blob.upload_from_string(json.dumps(index, indent=2),
-                                content_type="application/json")
-        try:
-            blob.make_public()
-        except Exception:
-            pass
+                                content_type="application/json",
+                                predefined_acl="publicRead")
         log.info("Wrote index for %s (%d hours)", name, len(hours_meta))
 
 
@@ -1316,13 +1327,6 @@ def build_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0,
             "shear represents the environment a storm would experience)."
         ),
     )
-    # Side-effect: capture per-region shear means and append to the
-    # tc-atlas-ir-cache/seasonal/shear_mtd_current_year.parquet that
-    # Panel B's Atmosphere mode reads. See append_gfs_shear_regions().
-    try:
-        append_gfs_shear_regions(date_str, hour_str, forecast_hour, shear_kt)
-    except Exception as e:
-        log.warning("  region-mean shear append failed (non-fatal): %s", e)
     return shear_kt if upload_layer(spec, shear_kt) else None
 
 
@@ -1617,82 +1621,6 @@ def _upload_shear_anom_panel_a(anom_kt: np.ndarray, spec: LayerSpec,
         log.warning("Panel-A equirect upload failed: %s", e)
 
 
-def append_gfs_shear_regions(date_str: str, hour_str: str,
-                             forecast_hour: int, shear_global_kt: np.ndarray) -> None:
-    """Feed Panel B (Seasonal · Atmosphere mode) and Panel A's
-    trailing-30-day current-anomaly view. Pulls per-region cos(lat)-
-    weighted shear means out of the freshly-computed global GFS field,
-    converts to m/s (to match ERA5 conventions) and upserts one row per
-    (date, cycle, fh) into the seasonal/shear daily store on GCS.
-
-    The cron writes a per-day mean across all of that day's f000 cycles
-    so the downstream MTD / trailing-30-day calculations stay simple
-    (one value per region per day) while the underlying cycle/fh rows
-    preserve provenance.
-    """
-    # Lazy imports — keep build_env_overlays.py importable without these
-    # if a user runs a single layer locally.
-    from build_oisst_history import REGIONS    # noqa: WPS433
-    import pandas as pd                         # noqa: WPS433
-
-    # shear_global_kt is on the regrid_to_global() grid: 1° global,
-    # lats descending 90..-90 (181 rows), lons -180..179 (360 cols).
-    lats = np.arange(90.0, -90.5, -1.0)
-    cos_lat = np.cos(np.deg2rad(lats))
-    shear_mps = shear_global_kt / 1.94384      # back to m/s
-
-    row = {
-        "date": date_str,
-        "cycle": hour_str,
-        "fh": int(forecast_hour),
-    }
-    for name, (lat_s, lat_n, lon_w, lon_e) in REGIONS.items():
-        # REGIONS use 0..360 longitudes; the global grid is -180..180.
-        lw = lon_w - 360.0 if lon_w > 180.0 else lon_w
-        le = lon_e - 360.0 if lon_e > 180.0 else lon_e
-        lat_mask = (lats >= lat_s) & (lats <= lat_n)
-        lons = np.arange(-180.0, 180.0, 1.0)
-        if lw <= le:
-            lon_mask = (lons >= lw) & (lons <= le)
-        else:
-            lon_mask = (lons >= lw) | (lons <= le)
-        sub = shear_mps[lat_mask][:, lon_mask]
-        w = cos_lat[lat_mask][:, None] * np.ones_like(sub)
-        finite = np.isfinite(sub)
-        w = np.where(finite, w, 0.0)
-        s = np.where(finite, sub, 0.0)
-        den = float(w.sum())
-        row[f"{name}_shear"] = round(float((s * w).sum() / den), 4) if den > 0 else None
-
-    # Idempotent append into a small parquet on GCS — same bucket the
-    # env-overlay layers already live in, under a /seasonal/ prefix.
-    if not GCS_BUCKET:
-        log.info("  GCS_IR_CACHE_BUCKET not set; skipping shear append")
-        return
-    blob_name = "seasonal/shear_mtd_current_year.parquet"
-    from google.cloud import storage   # match the lazy-import pattern
-    bucket = storage.Client().bucket(GCS_BUCKET)
-    blob = bucket.blob(blob_name)
-    if blob.exists():
-        buf = io.BytesIO(blob.download_as_bytes())
-        df = pd.read_parquet(buf)
-    else:
-        df = pd.DataFrame(columns=list(row.keys()))
-    # Upsert by (date, cycle, fh) — re-runs of the cron overwrite.
-    mask = ((df["date"] == row["date"])
-            & (df["cycle"] == row["cycle"])
-            & (df["fh"] == row["fh"]))
-    if mask.any():
-        df = df[~mask]
-    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-    df.sort_values(["date", "cycle", "fh"], inplace=True)
-    df.reset_index(drop=True, inplace=True)
-    out = io.BytesIO()
-    df.to_parquet(out, compression="snappy", index=False)
-    blob.cache_control = "no-cache, max-age=60"
-    blob.upload_from_string(out.getvalue(), content_type="application/octet-stream")
-
-
 def build_midlevel_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0,
                          bundle: Optional[dict] = None) -> Optional[bytes]:
     """500-850 hPa wind shear magnitude (knots) — vortex-suppressed.
@@ -1875,13 +1803,10 @@ def _upload_winds(name: str, title: str, valid_time: str, png: bytes,
         meta["level"] = level
 
     def _put(blob, body, ct):
-        blob.upload_from_string(body, content_type=ct)
+        # One Class A op: Cache-Control + public ACL set on the upload.
         blob.cache_control = "public, max-age=300"
-        blob.patch()
-        try:
-            blob.make_public()
-        except Exception as e:
-            log.warning("Could not mark %s public: %s", blob.name, e)
+        blob.upload_from_string(body, content_type=ct,
+                                predefined_acl="publicRead")
 
     try:
         _put(png_blob, png, "image/png")
@@ -2802,7 +2727,8 @@ def build_sst_anomalies(prefetched: "Optional[tuple]" = None) -> bool:
     """OISST SST anomaly + relative anomaly vs the 1991-2020 climatology.
 
     Brings the seasonal Panel A framing to the global map: where is the ocean
-    warmer/cooler than normal for the calendar month (anomaly), and — after
+    warmer/cooler than normal for the day of year (anomaly, vs the PSL daily
+    long-term mean — `_load_oisst_monclim_env` is not used), and — after
     removing the area-weighted tropical-mean warming — where is it warm
     RELATIVE to the tropics (Vecchi & Soden 2007), which tracks TC potential
     intensity better than absolute SST in a warming climate. Reuses the OISST
@@ -2845,7 +2771,8 @@ def build_sst_anomalies(prefetched: "Optional[tuple]" = None) -> bool:
         name="sst_anom", title="SST Anomaly", units="degC",
         vmin=-3, vmax=3, step=1, cmap="RdBu_r", render_style="filled",
         valid_time=valid, data_vmin=-6, data_vmax=6,
-        description=("OISST daily SST minus the 1991-2020 monthly climatology. "
+        description=("OISST daily SST minus the 1991-2020 daily climatology "
+                     "(NOAA PSL long-term mean for the same day of year). "
                      "Red = warmer than normal, blue = cooler."),
     ), anom)
     ok = upload_layer(LayerSpec(
@@ -3297,11 +3224,31 @@ def main() -> int:
     # Hour-major iteration with a shared bundle per hour: one NOMADS
     # fetch per (var, typeOfLevel) up front, then every builder for
     # that hour reads pre-decoded fields out of the bundle.
+    gfs_down = False
     for fh in forecast_hours:
         log.info("=" * 70)
         log.info("=== Forecast hour f%03d ===", fh)
         log.info("=" * 70)
         bundle = fetch_gfs_bundle(date_str, hour_str, forecast_hour=fh)
+        if not bundle:
+            if fh == 0:
+                # The cycle isn't on NOMADS (GFS late, rate-limited, or
+                # down). Every GFS builder would just burn its own retries
+                # and fail, so stop the GFS loop: no GFS layer gets indexed
+                # (the previous cycle stays live) and no run marker is
+                # written (the backstop / next poll retries this cycle).
+                # The OISST and genesis layers below still refresh.
+                log.error("GFS %s %sZ f000 bundle came back empty — "
+                          "skipping GFS layers, indices and the run "
+                          "marker", date_str, hour_str)
+                gfs_down = True
+                break
+            # A later hour that isn't posted yet: skip its builders rather
+            # than paying 16 × per-field retry sleeps. Unlisted in the index.
+            log.warning("GFS f%03d bundle empty — skipping that hour", fh)
+            for name, _ in gfs_builders:
+                results[f"{name}.f{fh:03d}"] = False
+            continue
         for name, fn in gfs_builders:
             key = f"{name}.f{fh:03d}"
             try:
@@ -3374,7 +3321,7 @@ def main() -> int:
     # scanning GCS on every request.
     try:
         write_layer_indices(date_str, hour_str, forecast_hours,
-                            [b[0] for b in gfs_builders])
+                            [b[0] for b in gfs_builders], results)
     except Exception:
         log.error("write_layer_indices failed:\n%s", traceback.format_exc())
 
@@ -3384,7 +3331,7 @@ def main() -> int:
     try:
         built_pi = [n for n, _ in pi_builders if results.get(f"{n}.f000")]
         if built_pi:
-            write_layer_indices(date_str, hour_str, [0], built_pi)
+            write_layer_indices(date_str, hour_str, [0], built_pi, results)
     except Exception:
         log.error("write_layer_indices (PI) failed:\n%s",
                   traceback.format_exc())
@@ -3404,6 +3351,9 @@ def main() -> int:
 
     log.info("Done. Results: %s", results)
     _elapsed = _time.time() - _t0
+    if gfs_down:
+        # No run marker: the cycle wasn't built, so the backstop must retry it.
+        return 1
     # Written last, and only on a real run — this is what tells the cloud
     # backstop it can stand down for this cycle.
     write_run_marker(date_str, hour_str, results, _elapsed)

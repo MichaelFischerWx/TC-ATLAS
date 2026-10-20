@@ -1010,21 +1010,75 @@ def _warp_eq_to_mercator(field: np.ndarray, ny_out: Optional[int] = None
     rows_out = np.arange(ny_out, dtype=np.float64)
     merc_y = max_my - (rows_out + 0.5) / ny_out * (2 * max_my)
     lats = np.degrees(np.arctan(np.sinh(merc_y)))
-    src_rows = np.clip(np.round((90.0 - lats) / 180.0 * ny_in).astype(int),
-                       0, ny_in - 1)
+    # Source rows are NODES at +90, ..., -90 (ny_in of them, so ny_in − 1
+    # intervals). Scaling by ny_in instead of ny_in − 1 picked the row one
+    # 2.5° step too far south across most of the Southern Hemisphere.
+    src_rows = np.clip(
+        np.round((90.0 - lats) / 180.0 * (ny_in - 1)).astype(int),
+        0, ny_in - 1)
     return field[src_rows, :].copy()
+
+
+def _orient_field(field2d: np.ndarray, lats: np.ndarray, lons: np.ndarray):
+    """Reorder to lat N→S and lon ascending from -180.
+
+    Returns (f, lat_desc, lon_sorted) where f[i, j] is the value AT the
+    grid node (lat_desc[i], lon_sorted[j]). The CPC grid is 0..357.5°E,
+    so lon_sorted runs -180, -177.5, ..., 177.5 — it does NOT include
+    +180; that column is the -180 one again.
+    """
+    lat_order = np.argsort(-lats)
+    lon_wrapped = ((np.asarray(lons, dtype=float) + 180.0) % 360.0) - 180.0
+    lon_order = np.argsort(lon_wrapped)
+    f = np.asarray(field2d)[lat_order, :][:, lon_order]
+    return f, np.asarray(lats, dtype=float)[lat_order], lon_wrapped[lon_order]
+
+
+def _upsample_smooth_periodic(f: np.ndarray, lat_desc: np.ndarray,
+                              lon_sorted: np.ndarray, factor: int = 5,
+                              sigma: float = 1.5):
+    """Bicubic `factor`× upsample + light Gaussian, periodic in longitude.
+
+    Returns (f_hi, lat_hi, lon_hi) with every output value tied to an
+    explicit coordinate: row i is lat_desc[0] − i·dlat/factor, column j is
+    lon_sorted[0] + j·dlon/factor, and the LAST column repeats the first
+    one 360° later so contours close across the antimeridian.
+
+    Replaces `ndimage.zoom(f, 5, mode="wrap")`, which aligns CORNERS
+    (source column nx−1 lands on output column 5·nx−1) while the callers
+    placed output columns at 360/(5·nx) spacing — every contour came out
+    shifted east by up to 2° (GeoJSON) / 2.5° (PNG).
+    """
+    from scipy.ndimage import map_coordinates, gaussian_filter
+
+    ny, nx = f.shape
+    pad = 8  # cubic-spline prefilter influence decays ~0.27^n — 8 is plenty
+    fp = np.pad(np.asarray(f, dtype=np.float64), ((0, 0), (pad, pad)),
+                mode="wrap")
+    rows = np.arange((ny - 1) * factor + 1, dtype=np.float64) / factor
+    cols = pad + np.arange(nx * factor, dtype=np.float64) / factor
+    rr, cc = np.meshgrid(rows, cols, indexing="ij")
+    f_hi = map_coordinates(fp, [rr, cc], order=3, mode="nearest")
+    # Latitude is not periodic (the old mode="wrap" blended the poles
+    # into each other); longitude is.
+    f_hi = gaussian_filter(f_hi, sigma=sigma, mode=("nearest", "wrap"))
+    f_hi = np.concatenate([f_hi, f_hi[:, :1]], axis=1)
+
+    dlat = float(lat_desc[0] - lat_desc[1])
+    dlon = 360.0 / nx
+    lat_hi = lat_desc[0] - np.arange(f_hi.shape[0]) * (dlat / factor)
+    lon_hi = lon_sorted[0] + np.arange(f_hi.shape[1]) * (dlon / factor)
+    return f_hi, lat_hi, lon_hi
 
 
 def _prepare_field_for_render(field2d: np.ndarray, lats: np.ndarray,
                                lons: np.ndarray):
-    """Reorder lat N→S and shift lon to [-180, 180], then Mercator-warp.
-    Returns the warped 2D array ready to feed matplotlib in the
-    [-180, 180, -WEB_MERC_LAT_MAX, WEB_MERC_LAT_MAX] extent.
+    """Reorder lat N→S and shift lon to [-180, 180), then Mercator-warp.
+    Returns the warped 2D array whose column j is the value AT lon
+    -180 + j·360/nx (a node, not a cell edge) — `_render_filled_png`
+    places the pixel centers accordingly.
     """
-    lat_order = np.argsort(-lats)
-    f = field2d[lat_order, :]
-    lon_order = np.argsort(((lons + 180) % 360) - 180)
-    f = f[:, lon_order]
+    f, _, _ = _orient_field(field2d, lats, lons)
     return _warp_eq_to_mercator(f)
 
 
@@ -1041,11 +1095,23 @@ def _render_filled_png(field2d: np.ndarray, spec: WaveSpec) -> bytes:
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_axis_off()
     norm = TwoSlopeNorm(vcenter=0.0, vmin=spec.vmin, vmax=spec.vmax)
+    # Column j holds the value AT lon -180 + j·dx (a grid node). imshow
+    # puts pixel CENTERS at extent_left + (j + ½)·dx, so an extent of
+    # [-180, 180] drew everything half a cell (1.25°) east. Close the seam
+    # with a copy of column 0 at +180, shift the extent half a cell
+    # outward, and clip back to [-180, 180] — the pixel centers then sit
+    # on the nodes and the bilinear blend runs across the antimeridian.
+    nx = field2d.shape[1]
+    dx = 360.0 / nx
+    closed = np.concatenate([field2d, field2d[:, :1]], axis=1)
     ax.imshow(
-        field2d, cmap=spec.cmap, norm=norm,
-        extent=[-180, 180, -WEB_MERC_LAT_MAX, WEB_MERC_LAT_MAX],
+        closed, cmap=spec.cmap, norm=norm,
+        extent=[-180 - dx / 2, 180 + dx / 2,
+                -WEB_MERC_LAT_MAX, WEB_MERC_LAT_MAX],
         origin="upper", interpolation="bilinear", aspect="auto",
     )
+    ax.set_xlim(-180, 180)
+    ax.set_ylim(-WEB_MERC_LAT_MAX, WEB_MERC_LAT_MAX)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", transparent=True, bbox_inches="tight",
                 pad_inches=0)
@@ -1053,7 +1119,8 @@ def _render_filled_png(field2d: np.ndarray, spec: WaveSpec) -> bytes:
     return buf.getvalue()
 
 
-def _render_contour_png(field2d: np.ndarray, spec: WaveSpec) -> bytes:
+def _render_contour_png(field2d: np.ndarray, lats: np.ndarray,
+                        lons: np.ndarray, spec: WaveSpec) -> bytes:
     """Render `field2d` as colored isolines on a transparent background.
 
     For WK-filtered bands whose natural amplitude is small (±2-15 W/m²),
@@ -1079,27 +1146,38 @@ def _render_contour_png(field2d: np.ndarray, spec: WaveSpec) -> bytes:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from scipy.ndimage import zoom, gaussian_filter
 
     levels = list(spec.contour_levels or [])
     if not levels:
-        return _render_filled_png(field2d, spec)
+        return _render_filled_png(
+            _prepare_field_for_render(field2d, lats, lons), spec)
 
     # 5× bicubic upsample so contour curvature is well-defined; then a
     # small Gaussian (σ=1.5 cells in the dense field) softens the
-    # grid-cell facets that survive bicubic interpolation.
-    field_hi = zoom(field2d, zoom=5, order=3, mode="wrap")
-    field_hi = gaussian_filter(field_hi, sigma=1.5, mode="wrap")
-
-    out_nx, out_ny = field_hi.shape[1], field_hi.shape[0]
+    # grid-cell facets that survive bicubic interpolation. Done on the
+    # EQUIRECTANGULAR field with explicit node coordinates; the Mercator
+    # projection is applied to the coordinates below rather than by
+    # warping (and re-gridding) the field first.
+    f, lat_desc, lon_sorted = _orient_field(field2d, lats, lons)
+    field_hi, lat_hi, lon_hi = _upsample_smooth_periodic(f, lat_desc,
+                                                         lon_sorted)
+    # Same PNG size as before (5·nx × 5·ny); Leaflet stretches it to the
+    # layer bounds either way.
+    out_nx, out_ny = 5 * f.shape[1], 5 * f.shape[0]
     dpi = 100
 
     fig = plt.figure(figsize=(out_nx / dpi, out_ny / dpi), dpi=dpi)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_axis_off()
-    # x = lon, y = lat (top → bottom in Mercator pixel space)
-    xs = np.linspace(-180, 180, out_nx)
-    ys = np.linspace(WEB_MERC_LAT_MAX, -WEB_MERC_LAT_MAX, out_ny)
+    # x = lon (°), y = Mercator y (radians) — the PNG's vertical pixel
+    # axis is linear in Mercator y, which is what L.imageOverlay assumes.
+    # Rows at the poles map to ±inf and are dropped; ylim clips the rest
+    # to ±WEB_MERC_LAT_MAX.
+    keep = np.abs(lat_hi) < 89.0
+    field_hi = field_hi[keep, :]
+    xs = lon_hi
+    ys = np.log(np.tan(np.pi / 4 + np.radians(lat_hi[keep]) / 2))
+    max_my = np.log(np.tan(np.pi / 4 + np.radians(WEB_MERC_LAT_MAX) / 2))
     # Per-level color + stroke width: deeper saturation + thicker stroke
     # for the outer (high-magnitude) contours.
     max_abs = max(abs(l) for l in levels)
@@ -1128,7 +1206,7 @@ def _render_contour_png(field2d: np.ndarray, spec: WaveSpec) -> bytes:
         antialiased=True,
     )
     ax.set_xlim(-180, 180)
-    ax.set_ylim(-WEB_MERC_LAT_MAX, WEB_MERC_LAT_MAX)
+    ax.set_ylim(-max_my, max_my)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", transparent=True, bbox_inches=None,
                 pad_inches=0, dpi=dpi)
@@ -1139,14 +1217,15 @@ def _render_contour_png(field2d: np.ndarray, spec: WaveSpec) -> bytes:
 def render_png(field2d: np.ndarray, lats: np.ndarray, lons: np.ndarray,
                spec: WaveSpec) -> bytes:
     """Dispatch to the contour or filled renderer based on spec.render_style.
-    Both paths warp the field to Mercator pixel-space first so the
-    output PNG aligns correctly when overlaid on Leaflet's Web Mercator
-    basemap.
+    Both paths produce a PNG whose vertical pixel axis is linear in
+    Mercator y (the filled path warps the field, the contour path
+    projects the contour coordinates) so it aligns when overlaid on
+    Leaflet's Web Mercator basemap.
     """
-    warped = _prepare_field_for_render(field2d, lats, lons)
     if spec.render_style == "contour":
-        return _render_contour_png(warped, spec)
-    return _render_filled_png(warped, spec)
+        return _render_contour_png(field2d, lats, lons, spec)
+    return _render_filled_png(_prepare_field_for_render(field2d, lats, lons),
+                              spec)
 
 
 def _contour_level_color(L: float, max_abs: float) -> str:
@@ -1186,30 +1265,22 @@ def render_contour_geojson(field2d: np.ndarray, lats: np.ndarray,
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from scipy.ndimage import zoom, gaussian_filter
-
-    # Equirectangular orientation: row 0 = +90 (north), col 0 = -180 (west)
-    lat_order = np.argsort(-lats)
-    f = field2d[lat_order, :]
-    lon_order = np.argsort(((lons + 180) % 360) - 180)
-    f = f[:, lon_order]
 
     # Same upsample + smoothing as the PNG renderer so the GeoJSON
-    # polylines match what the contour PNG (fallback) shows.
-    f_hi = zoom(f, zoom=5, order=3, mode="wrap")
-    f_hi = gaussian_filter(f_hi, sigma=1.5, mode="wrap")
-    ny_hi, nx_hi = f_hi.shape
+    # polylines match what the contour PNG (fallback) shows. Contouring
+    # directly on the (lon, lat) node coordinates makes the segment
+    # vertices geographic — no pixel → degree conversion to get wrong.
+    # The closed seam column (lon -180 repeated at +180) lets lines run
+    # through the antimeridian instead of stopping short of it.
+    f, lat_desc, lon_sorted = _orient_field(field2d, lats, lons)
+    f_hi, lat_hi, lon_hi = _upsample_smooth_periodic(f, lat_desc, lon_sorted)
 
     fig = plt.figure()
     ax = fig.add_subplot(111)
-    cs = ax.contour(np.arange(nx_hi), np.arange(ny_hi), f_hi,
+    cs = ax.contour(lon_hi, lat_hi[::-1], f_hi[::-1, :],
                     levels=list(spec.contour_levels))
     plt.close(fig)
 
-    # (col, row) → (lon, lat) on the upsampled grid. Lon is uniform
-    # over [-180, 180); lat is uniform over [+90, -90].
-    deg_per_col = 360.0 / nx_hi
-    deg_per_row = 180.0 / max(ny_hi - 1, 1)
     max_abs = max(abs(L) for L in spec.contour_levels)
 
     def _split_antimeridian(coords):
@@ -1232,10 +1303,8 @@ def render_contour_geojson(field2d: np.ndarray, lats: np.ndarray,
         for seg in segs:
             if len(seg) < 2: continue
             coords = []
-            for px, py in seg:
-                lon = -180.0 + float(px) * deg_per_col
-                lat =   90.0 - float(py) * deg_per_row
-                coords.append([round(lon, 3), round(lat, 3)])
+            for lon, lat in seg:
+                coords.append([round(float(lon), 3), round(float(lat), 3)])
             for sub in _split_antimeridian(coords):
                 features.append({
                     "type": "Feature",
@@ -1402,14 +1471,12 @@ def upload_hovmoller_gcs(spec: WaveSpec, slab: dict,
     client = storage.Client()
     bucket = client.bucket(GCS_BUCKET)
     blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/{filename}")
-    blob.upload_from_string(json.dumps(slab, separators=(",", ":")),
-                            content_type="application/json")
+    # Cache-Control + public ACL on the upload itself: one Class A op
+    # instead of upload + patch() + make_public().
     blob.cache_control = "public, max-age=600"
-    blob.patch()
-    try:
-        blob.make_public()
-    except Exception as e:
-        log.warning("Could not mark %s public: %s", blob.name, e)
+    blob.upload_from_string(json.dumps(slab, separators=(",", ":")),
+                            content_type="application/json",
+                            predefined_acl="publicRead")
     log.info("  uploaded gs://%s/%s/%s/%s",
              GCS_BUCKET, GCS_PREFIX, spec.name, filename)
     return True
@@ -1488,13 +1555,10 @@ def upload_gcs(spec: WaveSpec, png: bytes, valid_time: str, bounds: list,
                       image_url=image_url, geojson_url=geojson_url)
 
     def _put(blob, body, content_type: str) -> None:
-        blob.upload_from_string(body, content_type=content_type)
+        # One Class A op: Cache-Control + public ACL set on the upload.
         blob.cache_control = "public, max-age=600"
-        blob.patch()
-        try:
-            blob.make_public()
-        except Exception as e:
-            log.warning("Could not mark %s public: %s", blob.name, e)
+        blob.upload_from_string(body, content_type=content_type,
+                                predefined_acl="publicRead")
 
     _put(png_blob,  png, "image/png")
     if gj_blob is not None:
@@ -1586,24 +1650,54 @@ def _densify_daily(records: dict, fill=(0, 0.0, 0.0, 0.0)) -> dict:
     }
 
 
-def _load_baseline_indices() -> dict:
+def _load_baseline_indices() -> Optional[dict]:
     """Load the seed JSON. Prefer the most recent copy from GCS so we
     pick up yesterday's merged version; fall back to the container-
-    bundled file on the first run (or if GCS unreachable)."""
+    bundled file ONLY when the GCS object genuinely does not exist
+    (first run).
+
+    Any other read failure returns None and the caller skips the upload:
+    the bundled seed is months stale (RMM ends 2026-05-14), and if a
+    provider was also down that day the stale series would have
+    overwritten the good GCS copy.
+    """
     try:
         from google.cloud import storage
+        from google.api_core.exceptions import NotFound
+    except ImportError as e:
+        log.warning("google-cloud-storage unavailable (%s) — skipping the "
+                    "index refresh rather than publishing the bundled seed", e)
+        return None
+    try:
         client = storage.Client()
-        bucket = client.bucket(GCS_BUCKET)
-        blob = bucket.blob(INDICES_GCS_PATH)
-        if blob.exists():
-            log.info("Loading baseline indices from gs://%s/%s",
-                     GCS_BUCKET, INDICES_GCS_PATH)
-            return json.loads(blob.download_as_text())
+        blob = client.bucket(GCS_BUCKET).blob(INDICES_GCS_PATH)
+        text = blob.download_as_text()
+        log.info("Loading baseline indices from gs://%s/%s",
+                 GCS_BUCKET, INDICES_GCS_PATH)
+        return json.loads(text)
+    except NotFound:
+        log.info("No gs://%s/%s yet — seeding from %s",
+                 GCS_BUCKET, INDICES_GCS_PATH, BUNDLED_INDICES_PATH)
     except Exception as e:
-        log.warning("GCS baseline read failed (using bundled): %s", e)
-    log.info("Loading baseline indices from %s", BUNDLED_INDICES_PATH)
+        log.warning("GCS baseline read failed (%s) — skipping the index "
+                    "refresh this run", e)
+        return None
     with open(BUNDLED_INDICES_PATH) as f:
         return json.load(f)
+
+
+def _series_not_older(existing: Optional[dict], new: dict, key: str) -> bool:
+    """True if `new` may replace `existing` — its end_date must not be
+    earlier. A provider serving a truncated or stale file must never
+    roll a series backwards."""
+    old_end = (existing or {}).get("end_date")
+    new_end = (new or {}).get("end_date")
+    if old_end and (not new_end or str(new_end) < str(old_end)):
+        log.warning("Index %s: fetched series ends %s, earlier than the "
+                    "existing %s — keeping the existing series",
+                    key, new_end, old_end)
+        return False
+    return True
 
 
 def _fetch_bom_rmm():
@@ -1737,7 +1831,10 @@ def refresh_indices() -> bool:
     """Daily refresh of MJO RMM / BSISO1 / BSISO2 / ROMI. Each source
     is independent: any single failure leaves the existing series in
     place and the merged JSON still uploads (so a temporary BOM
-    blackhole doesn't lose the BSISO refresh).
+    blackhole doesn't lose the BSISO refresh). Two guards: nothing is
+    uploaded when the existing GCS copy can't be read (other than "not
+    found"), and a fetched series that ends earlier than the existing
+    one is ignored.
 
     Note: the bundled JSON key 'mjo_omi' is REPLACED in-place with
     fresh ROMI data + ROMI metadata (NOAA stopped updating OMI in
@@ -1745,21 +1842,26 @@ def refresh_indices() -> bool:
     """
     log.info("=== Refreshing subseasonal indices ===")
     base = _load_baseline_indices()
+    if base is None:
+        return False
     base.setdefault("indices", {})
+    idx = base["indices"]
 
     rmm = _fetch_bom_rmm()
-    if rmm:
-        base["indices"].setdefault("mjo", {})
-        base["indices"]["mjo"].update(rmm)
+    if rmm and _series_not_older(idx.get("mjo"), rmm, "mjo"):
+        idx.setdefault("mjo", {})
+        idx["mjo"].update(rmm)
 
     bsiso = _fetch_apcc_bsiso()
     if bsiso:
         for k, payload in bsiso.items():
-            base["indices"].setdefault(k, {})
-            base["indices"][k].update(payload)
+            if not _series_not_older(idx.get(k), payload, k):
+                continue
+            idx.setdefault(k, {})
+            idx[k].update(payload)
 
     romi = _fetch_noaa_romi()
-    if romi:
+    if romi and _series_not_older(idx.get("mjo_omi"), romi, "mjo_omi"):
         # Migrate the 'mjo_omi' slot to ROMI in place. Update the
         # provider metadata so the frontend tooltip stays accurate.
         slot = base["indices"].setdefault("mjo_omi", {})
@@ -1786,13 +1888,10 @@ def refresh_indices() -> bool:
         bucket = client.bucket(GCS_BUCKET)
         blob = bucket.blob(INDICES_GCS_PATH)
         body = json.dumps(base, separators=(",", ":"))
-        blob.upload_from_string(body, content_type="application/json")
+        # One Class A op: Cache-Control + public ACL set on the upload.
         blob.cache_control = "public, max-age=600"
-        blob.patch()
-        try:
-            blob.make_public()
-        except Exception as e:
-            log.warning("indices blob make_public failed: %s", e)
+        blob.upload_from_string(body, content_type="application/json",
+                                predefined_acl="publicRead")
         log.info("Uploaded indices to gs://%s/%s (%d bytes)",
                  GCS_BUCKET, INDICES_GCS_PATH, len(body))
         return True
