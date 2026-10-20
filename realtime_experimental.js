@@ -398,36 +398,11 @@
         }
         return -1;
     }
-    /* Percentile of (best track − model) at prediction v. Interpolated
-       linearly between bin centres rather than read off the bin, so values
-       built on it (the adjusted headline, the IQR band) don't jump when the
-       prediction crosses a bin edge (crossing 920 hPa used to step the
-       median error by ~5 hPa). Open-ended end bins are centred half a
-       neighbouring bin-width in from their finite edge; beyond the outermost
-       centres the end value is held. */
     function distErrAt(j, v, pct, key) {
-        var d = j[key || 'vmax_dist'];
-        if (!d || !d.bin_edges || !d.err_q || v == null || !isFinite(v)) return null;
-        var q = d.err_q['p' + (pct < 10 ? '0' + pct : pct)];
-        if (!q) return null;
-        var e = d.bin_edges, nb = e.length - 1, cs = [], qs = [];
-        for (var i = 0; i < nb; i++) {
-            if (q[i] === null || q[i] === undefined) continue;
-            var lo = e[i], hi = e[i + 1], c;
-            if (hi === null) c = i > 0 ? lo + (lo - e[i - 1]) / 2 : lo;
-            else if (i === 0 && nb > 1 && e[2] !== null) c = hi - (e[2] - hi) / 2;
-            else c = (lo + hi) / 2;
-            cs.push(c); qs.push(q[i]);
-        }
-        if (!cs.length) return null;
-        if (v <= cs[0]) return qs[0];
-        for (var k = 0; k < cs.length - 1; k++) {
-            if (v < cs[k + 1]) {
-                var w = (v - cs[k]) / (cs[k + 1] - cs[k]);
-                return qs[k] + w * (qs[k + 1] - qs[k]);
-            }
-        }
-        return qs[qs.length - 1];
+        var i = distBin(j, v, key);
+        if (i < 0) return null;
+        var q = j[key || 'vmax_dist'].err_q['p' + (pct < 10 ? '0' + pct : pct)];
+        return (q && q[i] !== null && q[i] !== undefined) ? q[i] : null;
     }
     /* Physical pressure bound (TC-SWARM doc §58, 2026-10-20): a storm's
        central pressure must sit below its environment, so the producer
@@ -437,30 +412,6 @@
     function pBound(f) {
         var pe = f && f.penv_hpa;
         return (pe != null && isFinite(pe)) ? pe - 1 : 1015;
-    }
-
-    /* Headline value (author's call, 2026-10-20): the model's estimate plus
-       the held-out median of (best track − model) at that estimate — i.e.
-       the best-track value that was typical when the model said this — so
-       the published IQR brackets the number shown instead of sitting beside
-       it at the extremes (Champi 893 hPa had an IQR of 896–908). Falls back
-       to the raw value when the payload ships no lookup. The chart line and
-       "Why this number" keep the raw model output. */
-    function adjusted(j, x, key, f) {
-        if (x == null || !isFinite(x)) return x;
-        var e = distErrAt(j, x, 50, key);
-        if (e === null) return x;
-        var a = x + e;
-        return key === 'pmin_dist' ? Math.min(a, pBound(f)) : a;
-    }
-    /* Frames re-expressed as adjusted values (for 24-h trends on the same
-       scale as the headline). */
-    function adjustedFrames(j, fr, field, key) {
-        return fr.map(function (f) {
-            var o = { t: f.t };
-            o[field] = (f[field] == null) ? f[field] : adjusted(j, f[field], key, f);
-            return o;
-        });
     }
 
     function distBounds(j, plo, phi, key, field) {
@@ -1667,8 +1618,6 @@
                     return;
                 }
                 if (lp && lp.stale) lp = null;
-                lf = { v: adjusted(j, lf.v, 'vmax_dist', lf.f) };
-                if (lp) lp = { v: adjusted(j, lp.v, 'pmin_dist', lp.f) };
                 var cat = windToCategory(lf.v);
                 /* Pressure-first models lead with pressure; the wind is
                    still shown (it carries the category) but second. */
@@ -1939,21 +1888,10 @@
                 '</div>';
         }
 
-        var tv = trend24(adjustedFrames(j, fr, 'vmax_kt', 'vmax_dist'), 'vmax_kt');
-        var tp = trend24(adjustedFrames(j, fr, 'pmin_hpa', 'pmin_dist'), 'pmin_hpa');
+        var tv = trend24(fr, 'vmax_kt');
+        var tp = trend24(fr, 'pmin_hpa');
         var trm = trend24(fr, 'rmw_km');
-        var va = v ? adjusted(j, v.v, 'vmax_dist', v.f) : null;
-        var pa = p ? adjusted(j, p.v, 'pmin_dist', p.f) : null;
-        var cat = windToCategory(va);
-        /* Raw model output, shown under an adjusted headline that differs. */
-        function rawLine(raw, adj, unit) {
-            return Math.round(raw) === Math.round(adj) ? '' :
-                '<div class="exp-tile-sub">model output ' + Math.round(raw) +
-                ' ' + unit + ' <span title="The number above is the typical ' +
-                'best-track value when ' + M.name + ' gave this estimate ' +
-                '(median over held-out storms); the chart and \u201cWhy this ' +
-                'number\u201d show the model output itself.">\u24d8</span></div>';
-        }
+        var cat = windToCategory(v && v.v);
         var asOf = v
             ? '<div class="exp-tile-sub">at ' + v.t.slice(11, 16) + 'Z</div>' : '';
 
@@ -1967,20 +1905,19 @@
                   'this is the modeled pressure passed through a fitted ' +
                   'pressure–wind relationship">(derived)</span>'
                 : '') + '</div>' +
-            '<div class="exp-tile-v">' + Math.round(va) +
+            '<div class="exp-tile-v">' + Math.round(v.v) +
             ' <span class="exp-tile-u">kt</span>' +
             '<span class="exp-cat" style="background:' + SS_COLORS[cat] +
             ';color:' + catInk(cat) + '">' + categoryShort(cat) + '</span></div>' +
             deltaLine(tv, 'kt', 0, true) +
-            rawLine(v.v, va, 'kt') +
             (function () {
                 var a = distErrAt(j, v.v, 25), b = distErrAt(j, v.v, 75);
                 return (a !== null && b !== null)
                     ? '<div class="exp-tile-sub">IQR ' +
                       Math.round(v.v + a) + '\u2013' + Math.round(v.v + b) +
-                      ' kt <span title="25th\u201375th percentile of the ' +
-                      'best-track value in held-out storms when the model ' +
-                      'gave this estimate">\u24d8</span></div>'
+                      ' kt <span title="25th\u201375th percentile of ' +
+                      'storm-held-out CV outcomes at this predicted ' +
+                      'intensity">\u24d8</span></div>'
                     : '';
             })() +
             /* NHC RI definition: ≥30 kt in 24 h (scaled to the true baseline). */
@@ -2003,21 +1940,16 @@
         var presTile = !p ? '' : p.stale ? staleTile(M.name + ' min pressure', p, 'hPa') :
             '<div class="exp-tile">' +
             '<div class="exp-tile-k">' + M.name + ' min pressure</div>' +
-            '<div class="exp-tile-v">' + Math.round(pa) +
+            '<div class="exp-tile-v">' + Math.round(p.v) +
             ' <span class="exp-tile-u">hPa</span></div>' +
             deltaLine(tp, 'hPa', 0, false) +
-            rawLine(p.v, pa, 'hPa') +
             (function () {
                 var a = distErrAt(j, p.v, 25, 'pmin_dist'),
                     b = distErrAt(j, p.v, 75, 'pmin_dist');
-                var cap = pBound(p.f);   // §58 bound, as on the chart band
                 return (a !== null && b !== null)
                     ? '<div class="exp-tile-sub">IQR ' +
-                      Math.round(Math.min(p.v + a, cap)) + '\u2013' +
-                      Math.round(Math.min(p.v + b, cap)) +
-                      ' hPa <span title="25th\u201375th percentile of the ' +
-                      'best-track value in held-out storms when the model ' +
-                      'gave this estimate">\u24d8</span></div>'
+                      Math.round(p.v + a) + '\u2013' + Math.round(p.v + b) +
+                      ' hPa</div>'
                     : '';
             })() +
             '<div class="exp-tile-sub">at ' + p.t.slice(11, 16) + 'Z</div></div>';
@@ -2065,7 +1997,7 @@
             var ageH = latest
                 ? (new Date(latest.t) - new Date(fix.t)) / 3.6e6 : 0;
             var gAt = (fix.vmax_kt !== null && isFinite(fix.vmax_kt))
-                ? adjusted(j, fix.vmax_kt, 'vmax_dist', fix) : null;
+                ? fix.vmax_kt : null;
             html +=
                 '<div class="exp-tile">' +
                 '<div class="exp-tile-k">Last ' + agT + ' analysis</div>' +
