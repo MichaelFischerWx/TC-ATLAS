@@ -1071,51 +1071,58 @@ def _upsample_smooth_periodic(f: np.ndarray, lat_desc: np.ndarray,
     return f_hi, lat_hi, lon_hi
 
 
-def _prepare_field_for_render(field2d: np.ndarray, lats: np.ndarray,
-                               lons: np.ndarray):
-    """Reorder lat N→S and shift lon to [-180, 180), then Mercator-warp.
-    Returns the warped 2D array whose column j is the value AT lon
-    -180 + j·360/nx (a node, not a cell edge) — `_render_filled_png`
-    places the pixel centers accordingly.
-    """
-    f, _, _ = _orient_field(field2d, lats, lons)
-    return _warp_eq_to_mercator(f)
-
-
-def _render_filled_png(field2d: np.ndarray, spec: WaveSpec) -> bytes:
+def _render_filled_png(field2d: np.ndarray, lats: np.ndarray,
+                       lons: np.ndarray, spec: WaveSpec,
+                       factor: int = 5) -> bytes:
     """Filled diverging-colormap render — used for the raw OLR anomaly
     (vmin/vmax ±60 W/m² is wide enough that the broad ITCZ + subtropical
-    pattern reads cleanly under filled shading)."""
+    pattern reads cleanly under filled shading).
+
+    Samples the field directly at every output PIXEL CENTER instead of
+    letting imshow resample the node grid. The PNG spans exactly
+    [-180, 180] × ±WEB_MERC_LAT_MAX (the published layer bounds, which
+    the MapLibre facade requires to stay inside [-180, 180]), so with a
+    2.5° node grid drawn 1:1 every node sits on a pixel EDGE and imshow
+    snapped a single-node feature half a cell (±1.25°) off. Here pixel
+    column j is sampled at lon −180 + (j + ½)·360/W by periodic bilinear
+    interpolation between the nodes, at W = factor·nx (0.5° pixels), so a
+    node feature renders symmetric about its own longitude; rows are
+    linear in Mercator y, matching L.imageOverlay's stretch.
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.colors import TwoSlopeNorm
+    from scipy.ndimage import map_coordinates
 
-    fig = plt.figure(figsize=(NX / 100, NY / 100), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1])
-    ax.set_axis_off()
+    f, lat_desc, lon_sorted = _orient_field(field2d, lats, lons)
+    ny, nx = f.shape
+    out_nx, out_ny = factor * nx, factor * ny
+
+    px_lon = -180.0 + (np.arange(out_nx, dtype=np.float64) + 0.5) * (
+        360.0 / out_nx)
+    max_my = np.log(np.tan(np.pi / 4 + np.radians(WEB_MERC_LAT_MAX) / 2))
+    merc_y = max_my - (np.arange(out_ny, dtype=np.float64) + 0.5) / out_ny \
+        * (2 * max_my)
+    px_lat = np.degrees(np.arctan(np.sinh(merc_y)))
+
+    # Fractional node indices. Longitude is periodic: one wrapped column
+    # on each side lets the bilinear blend cross the antimeridian.
+    dlon = 360.0 / nx
+    dlat = float(lat_desc[0] - lat_desc[1])
+    col = ((px_lon - lon_sorted[0]) % 360.0) / dlon + 1.0
+    row = (lat_desc[0] - px_lat) / dlat
+    fp = np.pad(np.asarray(f, dtype=np.float64), ((0, 0), (1, 1)),
+                mode="wrap")
+    rr, cc = np.meshgrid(row, col, indexing="ij")
+    vals = map_coordinates(fp, [rr, cc], order=1, mode="nearest")
+
     norm = TwoSlopeNorm(vcenter=0.0, vmin=spec.vmin, vmax=spec.vmax)
-    # Column j holds the value AT lon -180 + j·dx (a grid node). imshow
-    # puts pixel CENTERS at extent_left + (j + ½)·dx, so an extent of
-    # [-180, 180] drew everything half a cell (1.25°) east. Close the seam
-    # with a copy of column 0 at +180, shift the extent half a cell
-    # outward, and clip back to [-180, 180] — the pixel centers then sit
-    # on the nodes and the bilinear blend runs across the antimeridian.
-    nx = field2d.shape[1]
-    dx = 360.0 / nx
-    closed = np.concatenate([field2d, field2d[:, :1]], axis=1)
-    ax.imshow(
-        closed, cmap=spec.cmap, norm=norm,
-        extent=[-180 - dx / 2, 180 + dx / 2,
-                -WEB_MERC_LAT_MAX, WEB_MERC_LAT_MAX],
-        origin="upper", interpolation="bilinear", aspect="auto",
-    )
-    ax.set_xlim(-180, 180)
-    ax.set_ylim(-WEB_MERC_LAT_MAX, WEB_MERC_LAT_MAX)
+    rgba = matplotlib.colormaps[spec.cmap](
+        norm(np.ma.masked_invalid(vals)))
+    rgba[~np.isfinite(vals)] = 0.0    # missing → transparent
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", transparent=True, bbox_inches="tight",
-                pad_inches=0)
-    plt.close(fig)
+    plt.imsave(buf, rgba, format="png")
     return buf.getvalue()
 
 
@@ -1149,8 +1156,7 @@ def _render_contour_png(field2d: np.ndarray, lats: np.ndarray,
 
     levels = list(spec.contour_levels or [])
     if not levels:
-        return _render_filled_png(
-            _prepare_field_for_render(field2d, lats, lons), spec)
+        return _render_filled_png(field2d, lats, lons, spec)
 
     # 5× bicubic upsample so contour curvature is well-defined; then a
     # small Gaussian (σ=1.5 cells in the dense field) softens the
@@ -1218,14 +1224,13 @@ def render_png(field2d: np.ndarray, lats: np.ndarray, lons: np.ndarray,
                spec: WaveSpec) -> bytes:
     """Dispatch to the contour or filled renderer based on spec.render_style.
     Both paths produce a PNG whose vertical pixel axis is linear in
-    Mercator y (the filled path warps the field, the contour path
-    projects the contour coordinates) so it aligns when overlaid on
+    Mercator y (the filled path samples the field at Mercator pixel
+    centers, the contour path projects the contour coordinates) so it aligns when overlaid on
     Leaflet's Web Mercator basemap.
     """
     if spec.render_style == "contour":
         return _render_contour_png(field2d, lats, lons, spec)
-    return _render_filled_png(_prepare_field_for_render(field2d, lats, lons),
-                              spec)
+    return _render_filled_png(field2d, lats, lons, spec)
 
 
 def _contour_level_color(L: float, max_abs: float) -> str:

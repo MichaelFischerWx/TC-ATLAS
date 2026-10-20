@@ -2441,6 +2441,11 @@ def _fetch_jtwc_tcw(atcf_id: str) -> tuple:
         if tcw_name and tcw_name.upper() in ("", "UNNAMED", "NONAME"):
             tcw_name = None
 
+        # The same warning's T012…T120 lines are JTWC's official forecast
+        # (its a-deck isn't public). Cache them for /storm/{id}/metadata so
+        # the poll's TCW read serves it without another fetch.
+        _official_forecast_store(atcf_id, _parse_tcw_forecast(lines, dt))
+
         # Find T000 line (tau=0 current position)
         t000_line = None
         for line in lines:
@@ -2601,10 +2606,13 @@ def _parse_adeck_line(line: str) -> Optional[dict]:
         return None
 
 
-def _fetch_adeck(atcf_id: str) -> list:
+def _fetch_adeck(atcf_id: str, techs: Optional[tuple] = None) -> list:
     """
     Fetch and parse the A-deck file for a given ATCF ID.
     Returns list of parsed records sorted by datetime.
+
+    `techs` (e.g. ("OFCL",)) keeps only those techniques, skipping the
+    parse of every other line — an NHC a-deck is ~2-3 MB of model aids.
     """
     # Try aid_public first (operational forecasts). NHC serves some decks
     # gzip-compressed (e.g. invests like aep90….dat.gz), so fall back to the
@@ -2617,6 +2625,10 @@ def _fetch_adeck(atcf_id: str) -> list:
 
     records = []
     for line in text.strip().split("\n"):
+        if techs:
+            cols = line.split(",", 5)
+            if len(cols) < 6 or cols[4].strip() not in techs:
+                continue
         rec = _parse_adeck_line(line)
         if rec:
             records.append(rec)
@@ -2811,6 +2823,121 @@ def _get_latest_position(records: list) -> Optional[dict]:
 
     # Fallback: any record at the latest datetime
     return latest_records[-1]
+
+
+# ---------------------------------------------------------------------------
+# Official forecast track (NHC OFCL / JTWC) for /storm/{id}/metadata
+# ---------------------------------------------------------------------------
+# OFCL forecasts live only in the a-deck and JTWC's only in its warning (TCW),
+# so a metadata request answered from the b-deck has none of its own. The
+# active-storm poll already reads both every cycle and stores the latest
+# forecast here; a metadata request on an instance that didn't poll (it
+# adopted the shared GCS result) does one cached, single-flight fetch per
+# storm per TTL. Entries: ATCF_ID_UPPER -> {"t", "init", "track"}.
+_OFFICIAL_FCST_CACHE: dict = {}
+_OFFICIAL_FCST_TTL = _STORM_CACHE_TTL     # the poll refreshes it this often
+_OFFICIAL_FCST_MISS_TTL = 120             # failed / no-forecast lookups
+_official_fcst_lock = threading.Lock()
+_official_fcst_key_locks: dict = {}
+
+
+def _official_forecast_tech(atcf_id: str) -> str:
+    """'OFCL' for NHC/CPHC basins (AL/EP/CP), else 'JTWC'."""
+    return "OFCL" if (atcf_id or "")[:2].upper() in _NHC_BASINS else "JTWC"
+
+
+def _official_forecast_from_records(records: list, tech: str) -> dict:
+    """Latest-cycle `tech` forecast as {"init": datetime|None, "track": [
+    {tau_h, lat, lon, vmax_kt}, ...]} sorted by tau. One point per tau (the
+    deck repeats each tau once per 34/50/64-kt radii row)."""
+    fc = [r for r in (records or [])
+          if r.get("tech") == tech and (r.get("tau") or 0) > 0]
+    if not fc:
+        return {"init": None, "track": []}
+    init = max(r["datetime"] for r in fc)
+    by_tau: dict = {}
+    for r in fc:
+        if r["datetime"] == init:
+            by_tau.setdefault(r["tau"], r)
+    return {"init": init, "track": [
+        {"tau_h": tau, "lat": r["lat"], "lon": r["lon"],
+         "vmax_kt": r["vmax_kt"]}
+        for tau, r in sorted(by_tau.items())]}
+
+
+_TCW_FCST_RE = re.compile(
+    r"^T(\d{3})\s+(\d{2,3})([NS])\s+(\d{3,4})([EW])\s+(\d{1,3})\b")
+
+
+def _parse_tcw_forecast(lines: list, init_dt) -> dict:
+    """JTWC warning (TCW) T012…T120 lines → the same shape as
+    `_official_forecast_from_records`. Never raises."""
+    track = []
+    try:
+        for line in lines:
+            m = _TCW_FCST_RE.match(line.strip())
+            if not m or int(m.group(1)) == 0:
+                continue
+            lat = int(m.group(2)) / 10.0 * (-1 if m.group(3) == "S" else 1)
+            lon = int(m.group(4)) / 10.0 * (-1 if m.group(5) == "W" else 1)
+            track.append({"tau_h": int(m.group(1)), "lat": lat, "lon": lon,
+                          "vmax_kt": int(m.group(6))})
+    except (ValueError, TypeError, AttributeError):
+        track = []
+    track.sort(key=lambda p: p["tau_h"])
+    return {"init": init_dt if track else None, "track": track}
+
+
+def _official_forecast_store(atcf_id: str, fc: dict) -> None:
+    with _official_fcst_lock:
+        _OFFICIAL_FCST_CACHE[(atcf_id or "").upper()] = {
+            "t": time.time(), "init": fc.get("init"),
+            "track": fc.get("track") or []}
+
+
+def _official_forecast_cached(aid: str) -> Optional[dict]:
+    with _official_fcst_lock:
+        ent = _OFFICIAL_FCST_CACHE.get(aid)
+    if ent is None:
+        return None
+    ttl = _OFFICIAL_FCST_TTL if ent["track"] else _OFFICIAL_FCST_MISS_TTL
+    return ent if time.time() - ent["t"] < ttl else None
+
+
+def _get_official_forecast(atcf_id: str, records: Optional[list] = None) -> dict:
+    """Latest official forecast for a storm: from `records` when they carry
+    it (an a-deck), else the poll-fed cache, else one fetch through the
+    existing helpers (a-deck OFCL-only parse, or the JTWC TCW). Any failure
+    degrades to an empty track."""
+    aid = (atcf_id or "").upper()
+    tech = _official_forecast_tech(aid)
+    fc = _official_forecast_from_records(records, tech)
+    if fc["track"]:
+        return fc
+    ent = _official_forecast_cached(aid)
+    if ent is not None:
+        return ent
+    with _official_fcst_lock:
+        key_lock = _official_fcst_key_locks.setdefault(aid, threading.Lock())
+    with key_lock:
+        ent = _official_forecast_cached(aid)   # filled while we waited?
+        if ent is not None:
+            return ent
+        started = time.time()
+        try:
+            if tech == "OFCL":
+                _official_forecast_store(aid, _official_forecast_from_records(
+                    _fetch_adeck(aid.lower(), techs=("OFCL",)), "OFCL"))
+            else:
+                _fetch_jtwc_tcw(aid.lower())   # stores on a successful read
+        except Exception as e:
+            print(f"[IR Monitor] official forecast fetch failed for {aid}: {e}")
+        with _official_fcst_lock:
+            ent = _OFFICIAL_FCST_CACHE.get(aid)
+            if ent is None or ent["t"] < started:
+                ent = {"t": time.time(), "init": None, "track": []}
+                _OFFICIAL_FCST_CACHE[aid] = ent   # negative-cache the miss
+        return ent
 
 
 # ---------------------------------------------------------------------------
@@ -3539,6 +3666,10 @@ def _poll_active_storms(spawn_prefetch: bool = True):
             degraded = True      # listed, but its A-deck couldn't be fetched
             failed_ids.add(sid.upper())
             continue
+        # The a-deck is already parsed: keep its OFCL forecast for
+        # /storm/{id}/metadata (which otherwise answers from the b-deck).
+        _official_forecast_store(
+            sid, _official_forecast_from_records(records, "OFCL"))
         latest = _get_latest_position(records)
         if not latest:
             degraded = True      # records present but no current fix — transient
@@ -6722,9 +6853,11 @@ def _warp_eq_to_mercator_local(field: np.ndarray, lat_min: float,
     merc_y = my_top - (rows_out + 0.5) / ny_in * (my_top - my_bot)
     lats_out = np.degrees(np.arctan(np.sinh(merc_y)))
     # Equirectangular source row for each target lat. Nearest neighbor so
-    # masked/NaN pixels don't blur across cloud edges.
+    # masked/NaN pixels don't blur across cloud edges. Rows are grid points
+    # (satellite_ir builds them with linspace(lat_max, lat_min, ny)), so the
+    # span is ny_in − 1 rows, not ny_in.
     src_rows = np.clip(
-        np.round((lat_max - lats_out) / (lat_max - lat_min) * ny_in).astype(int),
+        np.round((lat_max - lats_out) / (lat_max - lat_min) * (ny_in - 1)).astype(int),
         0, ny_in - 1,
     )
     return field[src_rows, :].copy()
@@ -8070,21 +8203,29 @@ def get_storm_metadata(atcf_id: str):
                 current = dict(s)
                 break
 
-    # Build forecast track from OFCL records
+    # Official forecast (NHC OFCL / JTWC), latest cycle. Not in the b-deck,
+    # so it comes from the a-deck / TCW via a poll-fed cache; [] on failure.
     forecast_track = []
-    ofcl_records = [r for r in records if r["tech"] == "OFCL" and r["tau"] > 0]
-    if ofcl_records:
-        # Get the most recent OFCL forecast
-        latest_init = max(r["datetime"] for r in ofcl_records)
-        latest_fcst = [r for r in ofcl_records if r["datetime"] == latest_init]
-        latest_fcst.sort(key=lambda r: r["tau"])
-        for r in latest_fcst:
-            forecast_track.append({
-                "tau_h": r["tau"],
-                "lat": r["lat"],
-                "lon": r["lon"],
-                "vmax_kt": r["vmax_kt"],
-            })
+    try:
+        fc = _get_official_forecast(atcf_id, records)
+        init = fc.get("init")
+        last_fix = intensity_history[-1]["time"] if intensity_history else None
+        # A final advisory's forecast outliving the storm isn't "current".
+        if fc.get("track") and not (
+                init is not None and last_fix is not None
+                and init < _dt.fromisoformat(last_fix.replace("Z", "+00:00"))
+                - timedelta(hours=24)):
+            # Keep longitudes continuous with the last fix across 180°.
+            ref = intensity_history[-1]["lon"] if intensity_history else None
+            for p in fc["track"]:
+                lon = p["lon"]
+                if ref is not None:
+                    lon += 360.0 * round((ref - lon) / 360.0)
+                forecast_track.append(dict(p, lon=lon))
+                ref = lon
+    except Exception as e:
+        print(f"[IR Monitor] forecast_track for {atcf_id} failed: {e}")
+        forecast_track = []
 
     # Friendly display name — derive from the active-cache entry when present
     # (already normalized), otherwise synthesize from the ATCF id so the detail
@@ -9700,7 +9841,38 @@ _WEATHERLAB_GENESIS_TYPICAL_PUBLISH_LAG_H = 5.0
 # to anchor the "next cycle in Xh" chip on the actual previous publish
 # — "next publish ≈ first_seen + 6 h" — instead of an assumed-lag
 # model that consistently runs ~2 h optimistic in practice.
+#
+# Only an OBSERVED publication counts: DeepMind sends no Last-Modified, so
+# the anchor is set only when this process saw the file 404 and then 200
+# within _GENESIS_FIRST_SEEN_MAX_GAP_S (publish instant ≈ midpoint). The
+# first fetch after a restart is NOT a publish time (it was hours late,
+# pushed the ETA out by as much, and got frozen into the R2 mirror).
 _genesis_cycle_first_seen: dict = {}
+# (date_str, hour_str, variant) -> unix time of the latest 404 this process
+# got for that cycle file (GET or HEAD).
+_genesis_cycle_last_404: dict = {}
+_GENESIS_FIRST_SEEN_MAX_GAP_S = 3600
+
+
+def _genesis_note_unpublished(date_str: str, hour_str: str, variant: str):
+    """Record an observed 404 for a cycle file (see _genesis_cycle_first_seen)."""
+    now = time.time()
+    _genesis_cycle_last_404[(date_str, hour_str, variant)] = now
+    if len(_genesis_cycle_last_404) > 64:
+        for k, t in list(_genesis_cycle_last_404.items()):
+            if now - t > 2 * 86400:
+                _genesis_cycle_last_404.pop(k, None)
+
+
+def _genesis_note_published(date_str: str, hour_str: str, variant: str):
+    """Anchor the cycle's publish time on an observed 404 → 200 transition;
+    without one (e.g. first fetch after a restart) record nothing, so the
+    ETA uses the process-independent assumed-lag model."""
+    t404 = _genesis_cycle_last_404.pop((date_str, hour_str, variant), None)
+    now = time.time()
+    if t404 is not None and 0 <= now - t404 <= _GENESIS_FIRST_SEEN_MAX_GAP_S:
+        _genesis_cycle_first_seen.setdefault((date_str, hour_str),
+                                             (t404 + now) / 2.0)
 
 
 # Cyclogenesis ensemble variants.
@@ -9858,16 +10030,16 @@ def _genesis_next_cycle_eta_h(now=None, init_time: str = None) -> float | None:
     DeepMind. Used both for the user-visible "next cycle in Xh" chip and
     for setting a tight HTTP Cache-Control near a publish boundary.
 
-    Prefers an OBSERVED anchor: if we recorded a first-seen timestamp
-    for the current cycle (we almost always have one — the only way to
-    know `init_time` is to have just fetched it), the next publish is
+    Prefers an OBSERVED anchor: if this process saw the current cycle
+    go 404 → 200 (see `_genesis_cycle_first_seen`), the next publish is
     estimated as `first_seen + 6 h`. This tracks reality much better
     than the older assumed-lag model, which was anchored on the floor
     of the 3-5 h observed range and consistently ran ~2 h optimistic.
 
     Falls back to `next_init + typical_lag` (5 h) when no anchor is
-    available — e.g., immediately after a server restart, before any
-    successful fetch has populated `_genesis_cycle_first_seen`.
+    available — e.g. after a restart, when the cycle was already up at
+    the first fetch. That fallback depends only on `init_time`, so it is
+    safe to freeze into the R2 mirror.
     """
     if now is None:
         now = _dt.now(timezone.utc)
@@ -9994,6 +10166,8 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str,
         # doesn't pay another fetch for it. Other statuses: short.
         _weatherlab_cache_status_miss(_weatherlab_genesis_cache, cache_key,
                                       r.status_code)
+        if r.status_code == 404:
+            _genesis_note_unpublished(date_str, hour_str, variant_n)
         return None
     text = r.text
 
@@ -10153,16 +10327,13 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str,
         storm["ensemble_mean"] = {"points": mean_pts}
 
     _weatherlab_genesis_cache[cache_key] = {"data": result, "ts": time.time()}
-    # Record the FIRST time we observed this cycle as published — this
-    # anchors the next-cycle ETA on observed reality ("publish + 6 h")
-    # rather than an assumed lag. We use setdefault so re-fetches after
-    # cache eviction don't reset the anchor to a later wall-clock time
-    # (which would push the predicted next-publish further into the
-    # future every time). Keyed by (date, hour) only — variant-agnostic, so
-    # whichever variant lands first anchors the cycle's publish clock (the
-    # ETA is a soft display, and _genesis_next_cycle_eta_h looks it up by
-    # the 2-tuple).
-    _genesis_cycle_first_seen.setdefault((date_str, hour_str), time.time())
+    # Anchor the next-cycle ETA on the observed publish ("publish + 6 h") —
+    # but only when this process saw the 404 → 200 transition (see
+    # _genesis_cycle_first_seen); a re-fetch after eviction or a restart
+    # records nothing. Keyed by (date, hour) only — variant-agnostic, so
+    # whichever variant is first OBSERVED landing anchors the cycle's
+    # publish clock (the ETA is a soft display).
+    _genesis_note_published(date_str, hour_str, variant_n)
     # Cap the cache at 4 PARSED cycles. Miss-sentinel entries are tiny
     # strings, so we exclude them from the cap — otherwise a flurry of
     # not-yet-published probes could evict a fresh ~10 MB parse and
@@ -10305,8 +10476,10 @@ def get_weatherlab_genesis(max_members: int = Query(100, ge=1, le=1000),
     # its tracks; the only wall-clock fields are `cycle_age_hours` (the frontend
     # recomputes this live from the immutable `init_time`) and the
     # `fetched_at` + `next_cycle_eta_hours` pair (their SUM is an absolute
-    # publish instant, so freezing both keeps the next-cycle countdown correct).
-    # So the whole JSON can be mirrored to R2 + 302'd off Cloud Run egress
+    # publish instant, so freezing both keeps the next-cycle countdown correct;
+    # the ETA is either an observed 404 → 200 anchor or the init_time-only
+    # model, never a first-fetch-after-restart guess — see
+    # _genesis_cycle_first_seen). So the whole JSON can be mirrored to R2 + 302'd off Cloud Run egress
     # (~16% of it). The no-store 302 + content-addressed key means a NEW cycle
     # (new init_time → new key/URL) is always picked up despite the object's
     # immutable Cache-Control. Reuses global_archive_api's R2 helpers (lazy
@@ -10460,8 +10633,10 @@ def _genesis_cycle_brief(date_str: str, hour_str: str, variant: str) -> tuple:
         d = _fetch_weatherlab_genesis_csv(date_str, hour_str, variant_n)
         return (d is not None), (len(d) if d is not None else None)
     if r.status_code == 200:
+        _genesis_note_published(date_str, hour_str, variant_n)
         return True, None
     if r.status_code == 404:
+        _genesis_note_unpublished(date_str, hour_str, variant_n)
         return False, None
     # Unexpected status — be authoritative rather than guess.
     d = _fetch_weatherlab_genesis_csv(date_str, hour_str, variant_n)
