@@ -2408,8 +2408,23 @@
         };
     }
 
+    // VI denominator convention — Tang & Emanuel (2012, J. Climate,
+    // "A ventilation index for tropical cyclones"): VI = u_shear · χ_m /
+    // u_PI, where u_PI is the GRADIENT-wind Bister–Emanuel PI (not
+    // reduced to 10 m; T&E apply their 75% reduction only when
+    // normalizing intensity against best track). Our `{region}_mpi`
+    // series is the GC-ATLAS / tcpyPI 10-m wind (V_reduc = 0.8, see
+    // potential_intensity.py PI_V_REDUC), so VI must divide by
+    // PI_10m / PI_V_REDUC. Displayed MPI and vPI stay 10-m:
+    // vPI = PI_10m · f(VI). Must match potential_intensity.PI_V_REDUC.
+    var PI_V_REDUC = 0.8;
+    function _ventilationIndex(shear, chiM, pi10m) {
+        return shear * chiM / (pi10m / PI_V_REDUC);
+    }
+
     // Compute Ventilation Index per (year, month) from the three
-    // existing monthly time series:  VI = shear · χ_m / V_PI.
+    // existing monthly time series:  VI = shear · χ_m / V_PI,grad
+    // (V_PI,grad = 10-m MPI / PI_V_REDUC; see above).
     // Climo (1991-2020) mean + std are derived from the per-year VI
     // series, NOT from a ratio of climo ingredients (which would be a
     // different quantity).
@@ -2438,7 +2453,7 @@
             for (var m = 0; m < 12; m++) {
                 if (sh[m] != null && ch[m] != null
                         && mp[m] != null && mp[m] > 1.0) {
-                    row[m] = sh[m] * ch[m] / mp[m];
+                    row[m] = _ventilationIndex(sh[m], ch[m], mp[m]);
                     anyValid = true;
                 } else {
                     row[m] = null;
@@ -2555,7 +2570,9 @@
             for (var m = 0; m < 12; m++) {
                 if (sh[m] != null && ch[m] != null
                         && mp[m] != null && mp[m] > 1.0) {
-                    var vi = sh[m] * ch[m] / mp[m];
+                    // VI on the gradient-wind PI (T&E 2012); the
+                    // vPI scaling below stays on the 10-m PI.
+                    var vi = _ventilationIndex(sh[m], ch[m], mp[m]);
                     if (vi >= VI_MAX) {
                         row[m] = 0.0;
                     } else {
@@ -4928,9 +4945,10 @@
                     long_name: 'Ventilation Index (Tang & Emanuel 2012)',
                 };
             }
-            // Ventilated Potential Intensity — client-side V_PI ·
-            // √(max(0, 1 - VI/VI_crit)). Same metadata-injection
-            // pattern as the other derived variables.
+            // Ventilated Potential Intensity — server-side pointwise
+            // (indices_monthly_era5_vpi.json) or the client-side
+            // Chavas cubic fallback (_buildVentilatedPIData). Same
+            // metadata-injection pattern as the other derived variables.
             if (merged && !merged.fields.vpi) {
                 merged.fields.vpi = {
                     units: 'm s⁻¹',
@@ -5320,20 +5338,33 @@
         var latLo = Math.max(srcCfg.latMin, view.y[0] - padDeg);
         var lonLo = view.x[0] - padDeg;
         var lonHi = view.x[1] + padDeg;
-        // Clamp lon to the source's -180..180 frame — SP basin's
-        // 140..220 wraps the antimeridian; we don't yet support
-        // wraparound cropping, so cap at 180 and accept the visible
-        // edge clipping in HD mode (1° mode covers it via the full
-        // global grid).
-        if (lonLo < -180) lonLo = -180;
-        if (lonHi > 179.75) lonHi = 179.75;
+        // Longitude is NOT clamped to the source's -180..180 frame:
+        // views that span the antimeridian (SP 140..220, WP's padded
+        // 92..188) get colStart < 0 or colEnd > nx, and the decoders
+        // wrap column indices modulo nx. _evoApplyGridShape then emits
+        // EVO_LONS in the view's own frame (e.g. 132..228 for SP),
+        // which is the same frame _evoNormLon puts tracks/coastlines in.
         var rs = Math.max(0, Math.floor((srcCfg.latMax - latHi) / srcCfg.cellSize));
         var re = Math.min(srcCfg.ny,
                           Math.ceil((srcCfg.latMax - latLo) / srcCfg.cellSize) + 1);
-        var cs = Math.max(0, Math.floor((lonLo - srcCfg.lonMin) / srcCfg.cellSize));
-        var ce = Math.min(srcCfg.nx,
-                          Math.ceil((lonHi - srcCfg.lonMin) / srcCfg.cellSize) + 1);
+        var cs = Math.floor((lonLo - srcCfg.lonMin) / srcCfg.cellSize);
+        var ce = Math.ceil((lonHi - srcCfg.lonMin) / srcCfg.cellSize) + 1;
+        if (ce - cs >= srcCfg.nx) {
+            // Padded window covers the whole globe — no lon crop.
+            cs = 0; ce = srcCfg.nx;
+        }
         return { rowStart: rs, rowEnd: re, colStart: cs, colEnd: ce };
+    }
+    // Source-column index for each of `n` cropped columns starting at
+    // (possibly negative / past-the-end) `colStart`, wrapped modulo the
+    // source width `srcNx` so antimeridian-spanning crops read the
+    // right cells on both sides of the seam.
+    function _evoWrapColMap(colStart, n, srcNx) {
+        var map = new Int32Array(n);
+        for (var j = 0; j < n; j++) {
+            map[j] = (((colStart + j) % srcNx) + srcNx) % srcNx;
+        }
+        return map;
     }
     // Re-derive EVO_GRID_NY/NX/LATS/LONS from (srcCfg, crop). Called by
     // _evoRender before any tile decode so all downstream iterators
@@ -5509,11 +5540,56 @@
         wrap.style.aspectRatio = String(ratio);
     }
 
-    // Normalize a storm-track longitude to the [-180, 180) frame the
-    // Plotly heatmap uses. IBTrACS publishes lons in 0..360 historically.
+    // Longitude frame of the evolution map. Every x value — field
+    // columns (EVO_LONS, via the unclamped crop), coastlines, tracks,
+    // markers, labels — is expressed in [c − 180, c + 180) where c is
+    // the active basin view's center. ALL keeps the source frame
+    // [-180, 180); SP (view 140..220) becomes [0, 360) so the region
+    // east of the dateline lines up with the field instead of wrapping
+    // to −180 and leaving the view's eastern ~40° blank. The frame seam
+    // sits 180° from the view center, i.e. never inside the basin.
+    function _evoLonFrameCenter(basin) {
+        if (!basin || basin === 'ALL') return 0;
+        var v = _evoViewForBasin(basin);
+        return (v.x[0] + v.x[1]) / 2;
+    }
+    // Normalize a longitude (IBTrACS ships either 0..360 or -180..180)
+    // into the current basin's map frame (see _evoLonFrameCenter).
     function _evoNormLon(lon) {
         if (lon == null) return null;
-        return lon > 180 ? lon - 360 : lon;
+        var lo = _evoLonFrameCenter(_evoState.basin) - 180;
+        return lo + ((((lon - lo) % 360) + 360) % 360);
+    }
+    // Coastline polyline re-expressed in the current basin's frame,
+    // with a null break wherever a line crosses the frame seam. ALL
+    // (center 0) returns the source coastlines untouched. Cached per
+    // frame center.
+    var _evoCoastFrameCache = {};
+    function _evoCoastlinesInFrame() {
+        var src = _evoState.coastlines || { x: [], y: [] };
+        var c = _evoLonFrameCenter(_evoState.basin);
+        if (c === 0 || !src.x.length) return src;
+        var cached = _evoCoastFrameCache[c];
+        if (cached && cached.src === src) return cached.out;
+        var lo = c - 180;
+        var xs = [], ys = [];
+        var prev = null;
+        for (var i = 0; i < src.x.length; i++) {
+            var x = src.x[i];
+            if (x == null) {
+                xs.push(null); ys.push(null); prev = null;
+                continue;
+            }
+            var xn = lo + ((((x - lo) % 360) + 360) % 360);
+            if (prev != null && Math.abs(xn - prev) > 180) {
+                xs.push(null); ys.push(null);
+            }
+            xs.push(xn); ys.push(src.y[i]);
+            prev = xn;
+        }
+        var out = { x: xs, y: ys };
+        _evoCoastFrameCache[c] = { src: src, out: out };
+        return out;
     }
 
     function _evoLoadStorms() {
@@ -5522,7 +5598,7 @@
         // Same static-quarterly cache key as global_archive/tc_radar_app so the
         // pages share one HTTP cache entry (never window.__v — that key changes
         // every minute and forced a full re-download per visit).
-        _evoState.stormsPromise = fetch('ibtracs_storms.json?v20260408')
+        _evoState.stormsPromise = fetch('ibtracs_storms.json?v20261020')
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
                 if (!j || !j.storms) { _evoState.storms = {}; return {}; }
@@ -5539,7 +5615,7 @@
         // Chunk 1 (1977-present) is enough — era5_daily archive starts 1991.
         if (_evoState.tracks) return Promise.resolve(_evoState.tracks);
         if (_evoState.tracksPromise) return _evoState.tracksPromise;
-        _evoState.tracksPromise = fetch('ibtracs_tracks_1.json?v20260408')
+        _evoState.tracksPromise = fetch('ibtracs_tracks_1.json?v20261020')
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
                 _evoState.tracks = j || {};
@@ -5802,15 +5878,18 @@
         var cropNy = re - rs;
         var cropNx = ce - cs;
         var cropStride = cropNy * cropNx;
+        // Antimeridian-spanning crops (SP) run colStart < 0 or
+        // colEnd > nx — wrap each column into the source row.
+        var colMap = _evoWrapColMap(cs, cropNx, srcNx);
         var outC = new Float32Array(nDays * cropStride);
         for (var d = 0; d < nDays; d++) {
             var srcBase = d * srcStride;
             var dstBase = d * cropStride;
             for (var ri = 0; ri < cropNy; ri++) {
-                var srcRow = srcBase + (rs + ri) * srcNx + cs;
+                var srcRow = srcBase + (rs + ri) * srcNx;
                 var dstRow = dstBase + ri * cropNx;
                 for (var ci = 0; ci < cropNx; ci++) {
-                    var v = u16[srcRow + ci];
+                    var v = u16[srcRow + colMap[ci]];
                     outC[dstRow + ci] = v === 0xFFFF
                         ? NaN
                         : tileMeta.vmin + v * range;
@@ -6079,13 +6158,16 @@
         // _evoMag / _evoSub / frameZ etc. can operate on the same
         // shape without nested-Array fallbacks.
         var ny = EVO_GRID_NY, nx = EVO_GRID_NX;
+        // Wrap columns so antimeridian-spanning crops (SP) read the
+        // cells east of 180° instead of running off the row.
+        var colMap = _evoWrapColMap(colStart, nx, SRC_TILE_NX);
         var out = new Array(ny);
         for (var i = 0; i < ny; i++) {
             var srcRow = rowStart + i;
-            var rowBase = srcRow * SRC_TILE_NX + colStart;
+            var rowBase = srcRow * SRC_TILE_NX;
             var row = new Float32Array(nx);
             for (var j = 0; j < nx; j++) {
-                var v = u16[rowBase + j];
+                var v = u16[rowBase + colMap[j]];
                 if (v === 0xFFFF) {
                     row[j] = NaN;
                 } else {
@@ -7223,23 +7305,48 @@
         var mm = (month < 10 ? '0' : '') + month;
         var globalUrl = EVO_CLIMO_BASE + '/shear_' + mm + '.global.grid.json';
         var pacUrl    = EVO_CLIMO_BASE + '/shear_' + mm + '.grid.json';
+        // Both sidecars are 1° and only consumed in 1° mode (HD anomaly
+        // skips climo). Build the global 121×360 N→S × -180..179 grid,
+        // then apply the active basin crop (with antimeridian wrap) so
+        // the climo lines up cell-for-cell with the cropped frames.
+        // (Previously the global sidecar was only accepted when the
+        // decoded grid was the full globe, and the Pacific fallback
+        // wrote global indices into cropped arrays — wrong cells for
+        // every non-ALL basin.)
+        var GNY = 121, GNX = 360;
+        function cropGlobal(rows) {
+            var crop = _evoState.crop;
+            if (!crop || (crop.rowStart === 0 && crop.colStart === 0
+                          && crop.rowEnd === GNY && crop.colEnd === GNX)) {
+                return rows;
+            }
+            var nx = crop.colEnd - crop.colStart;
+            var colMap = _evoWrapColMap(crop.colStart, nx, GNX);
+            var out = [];
+            for (var i = crop.rowStart; i < crop.rowEnd; i++) {
+                var src = rows[i];
+                var t = new Float32Array(nx);
+                for (var j = 0; j < nx; j++) t[j] = src[colMap[j]];
+                out.push(t);
+            }
+            return out;
+        }
         // Try global first.
         return fetch(globalUrl)
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (g) {
-                if (g && g.values && g.n_lon === EVO_GRID_NX
-                    && g.n_lat === EVO_GRID_NY) {
+                if (g && g.values && g.n_lon === GNX && g.n_lat === GNY) {
                     // Already in N→S × lon -180..179 frame.
                     // Convert each row to Float32Array so it matches
                     // the typed-array convention of frame/decoder
                     // outputs (cheaper memory, NaN-safe arithmetic).
-                    return g.values.map(function (row) {
-                        var t = new Float32Array(EVO_GRID_NX);
-                        for (var k = 0; k < EVO_GRID_NX; k++) {
+                    return cropGlobal(g.values.map(function (row) {
+                        var t = new Float32Array(GNX);
+                        for (var k = 0; k < GNX; k++) {
                             t[k] = (row[k] == null) ? NaN : row[k];
                         }
                         return t;
-                    });
+                    }));
                 }
                 // Fall back to the Pacific-centered 261-col sidecar.
                 return fetch(pacUrl)
@@ -7250,21 +7357,21 @@
                         // n_lat=121, n_lon=261. Flip lats + roll lons into
                         // the daily-tile N→S × lon -180..179 frame.
                         var ny = p.n_lat, nx = p.n_lon;
-                        var out = new Array(EVO_GRID_NY);
-                        for (var i = 0; i < EVO_GRID_NY; i++) {
-                            out[i] = new Float32Array(EVO_GRID_NX);
+                        var out = new Array(GNY);
+                        for (var i = 0; i < GNY; i++) {
+                            out[i] = new Float32Array(GNX);
                             out[i].fill(NaN);
                         }
                         for (var iC = 0; iC < ny; iC++) {
                             var iD = 120 - iC;
-                            if (iD < 0 || iD >= EVO_GRID_NY) continue;
+                            if (iD < 0 || iD >= GNY) continue;
                             for (var jC = 0; jC < nx; jC++) {
                                 var jD = (280 + jC) % 360;
                                 var v = p.values[iC][jC];
                                 out[iD][jD] = (v == null) ? NaN : v;
                             }
                         }
-                        return out;
+                        return cropGlobal(out);
                     });
             })
             .catch(function () { return null; });
@@ -8051,7 +8158,9 @@
         // storm tracks so countries are visible without obscuring TC
         // markers. Lazy-loaded once per session; frames skip this
         // trace via the `traces: [0, 2, 3, 4]` indexing above.
-        var coastlines = _evoState.coastlines || { x: [], y: [] };
+        // In the basin's lon frame so SP's east-of-dateline coasts
+        // (Fiji, Tonga, Samoa, French Polynesia) line up with the field.
+        var coastlines = _evoCoastlinesInFrame();
         var coastlineTrace = {
             type: 'scatter', mode: 'lines',
             x: coastlines.x, y: coastlines.y,
@@ -9346,6 +9455,10 @@
                     // The frames cache keys on basin, so flipping back
                     // to a previously-viewed basin is a hit, not a
                     // refetch — basin toggling stays cheap in practice.
+                    // Climo grids are cropped to the basin too (same
+                    // crop as the frames), so drop them with the frames.
+                    _evoState.climo = null;
+                    _evoState.windClimo = null;
                     _evoState.frames = null;
                     _evoRender();
                 } else if (key === 'trackDepth') {

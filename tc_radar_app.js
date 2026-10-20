@@ -6953,9 +6953,9 @@ function _buildTDRtoSIDMapping() {
 // of storms + track chunks, so a mismatched token means the browser caches two
 // full copies and a user who visits both Explorer and Global Archive downloads
 // all of it twice. This file previously fetched them with no token at all.
-var IBTRACS_DATA_VER = 'v20260812';
+var IBTRACS_DATA_VER = 'v20261020';
 // Token for the explorer-only subset (bin/build_tdr_ibtracs_subset.py).
-var IBTRACS_TDR_VER = 'v20260907';
+var IBTRACS_TDR_VER = 'v20261020';
 
 // Load IBTrACS storms + tracks. Fast path: the explorer only ever draws the
 // ~90 storms that have TC-RADAR analyses, so fetch the prebuilt subset
