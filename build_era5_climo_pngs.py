@@ -21,6 +21,11 @@ hover-sidecar plumbing.
 
 Run after `build_era5_daily_archive.py` finishes its backfill.
 Re-runnable any time the daily archive grows.
+
+`--disc400-anom-climo` builds a SEPARATE, versioned climatology for the
+RT shear-anomaly env layer: same 1991-2020 window, but from 400 km
+disc-smoothed u/v components exactly as the GFS side is computed (see
+build_smoothed_anom_climo). Panel A/C keep the unsmoothed one above.
 """
 from __future__ import annotations
 
@@ -245,6 +250,206 @@ def render_global_grid_sidecar(monthly_clim: np.ndarray) -> bytes:
     return json.dumps(payload, separators=(",", ":")).encode()
 
 
+# ── Disc-smoothed climatology for the RT shear-ANOMALY layer ────────
+#
+# build_env_overlays.build_shear_anomaly subtracts this climatology from
+# GFS shear that was computed from u/v disc-smoothed over 400 km at each
+# level BEFORE differencing (_compute_smoothed_shear_kt). The Panel A
+# climatology above is the mean of UNSMOOTHED daily |ΔV|, and since
+# |mean of vectors| ≤ mean of |vectors| the smoothed GFS magnitude sits
+# systematically below it — the anomaly read ~1-3 kt "favorable"
+# everywhere (audit S13 / SCI-6). This path rebuilds the climatology the
+# same way the GFS side is computed: per day, Δu = u200 − u850 and
+# Δv = v200 − v850 on the native 0.25° 00Z archive, each disc-smoothed
+# with the env builder's own kernel (smoothing is linear, so smoothing
+# the differences ≡ differencing the smoothed levels), then |ΔV|,
+# monthly mean, 1991-2020 mean of monthly means.
+#
+# Output goes to a NEW versioned filename so the live (unsmoothed)
+# climatology — which Panel A/C still use, correctly, against their own
+# unsmoothed fields — is untouched; the env builder prefers this file
+# and falls back to the old one until it exists.
+
+SMOOTH_ARCHIVE_PREFIX = "era5_daily_00z"      # 0.25° native, 00Z snapshots
+SMOOTH_NATIVE_SHAPE = (481, 1440)             # lat 60..-60, lon -180..179.75
+SMOOTH_RADIUS_KM = 400.0                      # = _compute_smoothed_shear_kt
+SMOOTH_KM_PER_CELL = 27.8                     # = build_env_overlays.KM_PER_CELL
+SMOOTH_CLIMO_VERSION = "v2_disc400"
+SMOOTH_COMPONENTS = ("u200", "v200", "u850", "v850")
+
+
+def smoothed_climo_blob(month: int) -> str:
+    """GCS path of the disc-smoothed shear climatology for `month`.
+    build_env_overlays._load_shear_climo_kt reads the same name."""
+    return f"{OUTPUT_PREFIX}/shear_{SMOOTH_CLIMO_VERSION}_{month:02d}.global.grid.json"
+
+
+def _disc_kernel_cells(radius_km: float = SMOOTH_RADIUS_KM,
+                       km_per_cell: float = SMOOTH_KM_PER_CELL) -> np.ndarray:
+    """Normalized disc kernel — identical to build_env_overlays._disc_kernel
+    at the same radius (radius_cells = round(400 / 27.8) = 14)."""
+    r = max(1, int(round(radius_km / km_per_cell)))
+    yy, xx = np.ogrid[-r:r + 1, -r:r + 1]
+    k = ((xx * xx + yy * yy) <= r * r).astype(np.float64)
+    return k / k.sum()
+
+
+def disc_smooth_box(fields: np.ndarray, kernel: np.ndarray) -> np.ndarray:
+    """Disc-average a (T, ny, nx) stack on the 60S-60N box.
+
+    Longitude wraps (the box is global in longitude, as on the GFS grid);
+    latitude reflects at the ±60° box edges, since unlike the global GFS
+    grid there is no data beyond them. That edge treatment only differs
+    from the GFS smoothing within one kernel radius (~3.5°) of ±60°,
+    poleward of anything TC-relevant. NaN-aware (normalized convolution),
+    though the ERA5 wind archive has no gaps in practice.
+    """
+    from scipy.signal import fftconvolve
+    r = kernel.shape[0] // 2
+    x = np.asarray(fields, dtype=np.float64)
+    finite = np.isfinite(x)
+    has_nan = not finite.all()
+    pad = ((0, 0), (r, r), (0, 0))
+    work = np.where(finite, x, 0.0)
+    work = np.pad(work, pad, mode="reflect")
+    work = np.pad(work, ((0, 0), (0, 0), (r, r)), mode="wrap")
+    k3 = kernel[None, :, :]
+    out = fftconvolve(work, k3, mode="valid", axes=(1, 2))
+    if has_nan:
+        w = np.pad(finite.astype(np.float64), pad, mode="reflect")
+        w = np.pad(w, ((0, 0), (0, 0), (r, r)), mode="wrap")
+        wsum = fftconvolve(w, k3, mode="valid", axes=(1, 2))
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out = np.where(wsum > 1e-6, out / wsum, np.nan)
+    return out.astype(np.float32)
+
+
+def load_smooth_manifest(local_only: bool) -> dict:
+    if local_only:
+        p = Path(SMOOTH_ARCHIVE_PREFIX) / "manifest.json"
+        return json.loads(p.read_text()) if p.exists() else {}
+    blob = _bucket().blob(f"{SMOOTH_ARCHIVE_PREFIX}/manifest.json")
+    if not blob.exists():
+        return {}
+    return json.loads(blob.download_as_text())
+
+
+def fetch_daily_component(var: str, year: int, month: int, manifest: dict,
+                          local_only: bool) -> np.ndarray | None:
+    """(n_days, 481, 1440) daily 00Z field from the native archive."""
+    tk = f"{var}/{year}_{month:02d}"
+    meta = manifest.get("tiles", {}).get(tk)
+    if not meta:
+        return None
+    rel = f"{var}/{year}_{month:02d}.bin.gz"
+    if local_only:
+        p = Path(SMOOTH_ARCHIVE_PREFIX) / rel
+        if not p.exists():
+            return None
+        raw = gzip.decompress(p.read_bytes())
+    else:
+        blob = _bucket().blob(f"{SMOOTH_ARCHIVE_PREFIX}/{rel}")
+        if not blob.exists():
+            return None
+        raw = gzip.decompress(blob.download_as_bytes())
+    u16 = np.frombuffer(raw, dtype=np.uint16)
+    ny, nx = SMOOTH_NATIVE_SHAPE
+    n_days = int(meta["n_days"])
+    if u16.size != n_days * ny * nx:
+        log.warning("  %s: shape mismatch — skip", tk)
+        return None
+    rng = (meta["vmax"] - meta["vmin"]) / 65534.0
+    arr = meta["vmin"] + u16.astype(np.float32) * rng
+    arr[u16 == 0xFFFF] = np.nan
+    return arr.reshape(n_days, ny, nx)
+
+
+def smoothed_monthly_mean_shear(year: int, month: int, manifest: dict,
+                                local_only: bool,
+                                kernel: np.ndarray | None = None
+                                ) -> np.ndarray | None:
+    """Monthly mean of daily |smooth(ΔV)| (m/s) on the native 0.25° box —
+    the ERA5 analogue of build_env_overlays._compute_smoothed_shear_kt."""
+    comps = {}
+    for var in SMOOTH_COMPONENTS:
+        a = fetch_daily_component(var, year, month, manifest, local_only)
+        if a is None:
+            return None
+        comps[var] = a
+    if kernel is None:
+        kernel = _disc_kernel_cells()
+    du = disc_smooth_box(comps["u200"] - comps["u850"], kernel)
+    dv = disc_smooth_box(comps["v200"] - comps["v850"], kernel)
+    del comps
+    return np.nanmean(np.sqrt(du * du + dv * dv), axis=0)
+
+
+def native_to_1deg_nodes(field: np.ndarray) -> np.ndarray:
+    """Sample the (481, 1440) 0.25° field at the integer-degree NODES
+    (lat 60..-60, lon -180..179) → (121, 360), the schema
+    render_global_grid_sidecar emits and _climo_to_gfs_grid expects.
+    Point sampling (not block-averaging) keeps each value AT its stated
+    coordinate; the field is already 400 km-smoothed, so 1° sampling +
+    the env builder's bilinear upsample loses nothing material."""
+    return np.asarray(field)[::4, ::4][:121, :360]
+
+
+def build_smoothed_anom_climo(months: list[int], *, local_only: bool,
+                              min_years: int, workers: int = 4) -> None:
+    """Rebuild the disc-smoothed 1991-2020 shear climatology and write
+    shear_v2_disc400_{MM}.global.grid.json (+ a small manifest)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    manifest = load_smooth_manifest(local_only)
+    if not manifest:
+        log.error("%s manifest empty — nothing to build from.",
+                  SMOOTH_ARCHIVE_PREFIX)
+        sys.exit(1)
+    kernel = _disc_kernel_cells()
+    meta_out = {
+        "version": SMOOTH_CLIMO_VERSION,
+        "clim_window": [CLIM_START, CLIM_END],
+        "source": f"gs://{GCS_BUCKET}/{SMOOTH_ARCHIVE_PREFIX} (ERA5 00Z, "
+                  "0.25°): daily Δu, Δv (200−850 hPa) disc-smoothed over "
+                  f"{SMOOTH_RADIUS_KM:.0f} km (radius "
+                  f"{kernel.shape[0] // 2} cells) → |ΔV| → monthly mean → "
+                  "1991-2020 mean; sampled at 1° nodes",
+        "matches": "build_env_overlays._compute_smoothed_shear_kt",
+        "units": "m s-1",
+        "n_years_per_month": {},
+    }
+    for month in months:
+        log.info("== Smoothed shear climo month %02d ==", month)
+        years = list(range(CLIM_START, CLIM_END + 1))
+        sum_f = np.zeros(SMOOTH_NATIVE_SHAPE, dtype=np.float64)
+        cnt_f = np.zeros(SMOOTH_NATIVE_SHAPE, dtype=np.int32)
+        n_years = 0
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+            for year, mm in zip(years, ex.map(
+                    lambda y: smoothed_monthly_mean_shear(
+                        y, month, manifest, local_only, kernel), years)):
+                if mm is None:
+                    log.warning("  %d-%02d missing — skipped", year, month)
+                    continue
+                ok = np.isfinite(mm)
+                sum_f[ok] += mm[ok]
+                cnt_f[ok] += 1
+                n_years += 1
+        if n_years < min_years:
+            log.warning("  month %02d: only %d years — skipping", month,
+                        n_years)
+            continue
+        clim = np.where(cnt_f > 0, sum_f / np.maximum(cnt_f, 1), np.nan)
+        body = render_global_grid_sidecar(native_to_1deg_nodes(clim))
+        upload(smoothed_climo_blob(month), body, "application/json",
+               local_only)
+        meta_out["n_years_per_month"][str(month)] = n_years
+        log.info("  month %02d: done (n_years=%d)", month, n_years)
+    upload(f"{OUTPUT_PREFIX}/shear_{SMOOTH_CLIMO_VERSION}_manifest.json",
+           json.dumps(meta_out, separators=(",", ":")).encode(),
+           "application/json", local_only)
+
+
 # ── Top-level workflow ───────────────────────────────────────────────
 def upload(blob_path: str, body: bytes, content_type: str, local_only: bool) -> None:
     if local_only:
@@ -276,7 +481,26 @@ def main() -> None:
                          "(default 5; lower this during backfill for "
                          "early-preview maps with the right spatial "
                          "pattern but noisy magnitudes)")
+    ap.add_argument("--disc400-anom-climo", action="store_true",
+                    help="Build ONLY the 400 km disc-smoothed climatology "
+                         "the RT shear-anomaly layer subtracts "
+                         f"(era5_climo/shear_{SMOOTH_CLIMO_VERSION}_MM"
+                         ".global.grid.json, from the 0.25° "
+                         f"{SMOOTH_ARCHIVE_PREFIX} archive). Leaves the "
+                         "Panel A PNGs/sidecars and manifest untouched. "
+                         "Run for all 12 months: the small version "
+                         "manifest it writes lists only the months built.")
+    ap.add_argument("--workers", type=int, default=4,
+                    help="Parallel years for --disc400-anom-climo "
+                         "(~1 GB RAM each)")
     args = ap.parse_args()
+
+    if args.disc400_anom_climo:
+        months = [args.month] if args.month else list(range(1, 13))
+        build_smoothed_anom_climo(months, local_only=args.local_only,
+                                  min_years=args.min_years,
+                                  workers=args.workers)
+        return
 
     manifest = load_manifest(args.local_only)
     if not manifest:

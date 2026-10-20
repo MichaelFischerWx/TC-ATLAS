@@ -738,8 +738,15 @@ def _warp_eq_to_mercator(field: np.ndarray, ny_out: Optional[int] = None
     merc_y = max_my - (rows_out + 0.5) / ny_out * (2 * max_my)
     lats = np.degrees(np.arctan(np.sinh(merc_y)))
     # Equirectangular source row for each target lat. Nearest neighbor.
-    src_rows = np.clip(np.round((90.0 - lats) / 180.0 * ny_in).astype(int),
-                       0, ny_in - 1)
+    # Source rows are NODES at +90, ..., -90 (lat = 90 − row·0.25 for the
+    # 721-row grid, the convention render_contour_geojson and the hover
+    # sampler use), so there are ny_in − 1 intervals. Scaling by ny_in
+    # picked a row up to one 0.25° step too far south (error grows
+    # linearly from 0 at +90 to a full row at −90; ~½ row at the
+    # equator). Same fix as build_subseasonal_overlays (commit ae2a467c).
+    src_rows = np.clip(
+        np.round((90.0 - lats) / 180.0 * (ny_in - 1)).astype(int),
+        0, ny_in - 1)
     return field[src_rows, :].copy()
 
 
@@ -1332,14 +1339,31 @@ def build_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0,
 
 # Cached ERA5 climatology grids — fetched lazily per calendar month
 # and reused across cycles inside one job invocation. Keyed by month
-# (1-12). Values are (121, 360) float32 arrays in kt, N→S, lon -180..179.
+# (1-12). Values are (121, 360) float32 arrays in kt, N→S, lon -180..179
+# at 1° nodes.
 _SHEAR_CLIMO_KT_CACHE: dict = {}
+# Which climatology file served each month ("disc400" or "unsmoothed"),
+# so the layer description can say whether the anomaly is like-for-like.
+_SHEAR_CLIMO_SOURCE: dict = {}
+
+# Preferred: the 1991-2020 climatology rebuilt from 400 km disc-smoothed
+# u/v components exactly like _compute_smoothed_shear_kt
+# (build_era5_climo_pngs.py --disc400-anom-climo). Fallback: the original
+# Panel A climatology of UNSMOOTHED daily |ΔV|, which sits ~1-3 kt above
+# smoothed shear (|mean of vectors| ≤ mean of |vectors|) and so biases
+# the anomaly toward "favorable" (audit S13). The fallback keeps the
+# layer alive until the smoothed files are built.
+SHEAR_CLIMO_BLOBS = (
+    ("disc400", "era5_climo/shear_v2_disc400_{mm:02d}.global.grid.json"),
+    ("unsmoothed", "era5_climo/shear_{mm:02d}.global.grid.json"),
+)
 
 
 def _load_shear_climo_kt(month: int) -> Optional[np.ndarray]:
-    """Fetch the ERA5 1991-2020 climatology grid for `month` from
-    gs://${GCS_IR_CACHE_BUCKET}/era5_climo/shear_{MM}.global.grid.json
-    and return it in knots (matching build_shear's unit choice).
+    """Fetch the ERA5 1991-2020 shear climatology grid for `month` from
+    gs://${GCS_IR_CACHE_BUCKET}/era5_climo/ — the disc-smoothed v2 file
+    when it exists, else the original unsmoothed one (SHEAR_CLIMO_BLOBS)
+    — and return it in knots (matching build_shear's unit choice).
     Cached for the process lifetime — twelve months × a few KB each.
     """
     if month in _SHEAR_CLIMO_KT_CACHE:
@@ -1355,25 +1379,38 @@ def _load_shear_climo_kt(month: int) -> Optional[np.ndarray]:
     except ImportError:
         log.warning("Shear-anom: google-cloud-storage not installed")
         return None
-    blob_path = f"era5_climo/shear_{month:02d}.global.grid.json"
     try:
         bucket = storage.Client().bucket(GCS_BUCKET)
-        blob = bucket.blob(blob_path)
-        if not blob.exists():
-            log.warning("Shear-anom: climo grid missing at %s", blob_path)
-            return None
-        data = json.loads(blob.download_as_bytes())
     except Exception as e:
-        log.warning("Shear-anom: climo fetch failed: %s", e)
+        log.warning("Shear-anom: GCS client failed: %s", e)
         return None
-    vals = np.array(data["values"], dtype=np.float32)
-    if vals.shape != (121, 360):
-        log.warning("Shear-anom: unexpected climo shape %s for %s",
-                    vals.shape, blob_path)
-        return None
-    kt = vals * 1.94384  # m/s → kt
-    _SHEAR_CLIMO_KT_CACHE[month] = kt
-    return kt
+    for source, pattern in SHEAR_CLIMO_BLOBS:
+        blob_path = pattern.format(mm=month)
+        try:
+            blob = bucket.blob(blob_path)
+            if not blob.exists():
+                log.info("Shear-anom: no %s climo at %s", source, blob_path)
+                continue
+            data = json.loads(blob.download_as_bytes())
+        except Exception as e:
+            log.warning("Shear-anom: %s climo fetch failed: %s", source, e)
+            continue
+        vals = np.array(data["values"], dtype=np.float32)
+        if vals.shape != (121, 360):
+            log.warning("Shear-anom: unexpected climo shape %s for %s",
+                        vals.shape, blob_path)
+            continue
+        if source != "disc400":
+            log.warning("Shear-anom: using the UNSMOOTHED climatology for "
+                        "month %d — anomaly biased ~1-3 kt low until "
+                        "build_era5_climo_pngs.py --disc400-anom-climo "
+                        "is run", month)
+        kt = vals * 1.94384  # m/s → kt
+        _SHEAR_CLIMO_KT_CACHE[month] = kt
+        _SHEAR_CLIMO_SOURCE[month] = source
+        return kt
+    log.warning("Shear-anom: no climo grid for month %d", month)
+    return None
 
 
 def _climo_to_gfs_grid(climo_kt: np.ndarray) -> np.ndarray:
@@ -1455,7 +1492,12 @@ def build_shear_anomaly(date_str: str, hour_str: str, *,
         description=(
             "Current GFS-derived 200-850 hPa shear minus the ERA5 "
             "1991-2020 climatological mean for the same calendar "
-            "month, after a 400 km disc smooth of u/v at each level. "
+            "month, after a 400 km disc smooth of u/v at each level. " +
+            ("The climatology is built with the same 400 km smoothing, "
+             "so the anomaly is like-for-like. "
+             if _SHEAR_CLIMO_SOURCE.get(month) == "disc400" else
+             "The climatology is not yet smoothed the same way, so the "
+             "anomaly reads ~1-3 kt too low (too favorable). ") +
             "Blue = below-normal shear (favorable for TCs); red = "
             "above-normal (suppressive)."
         ),
@@ -2441,16 +2483,26 @@ def _compute_pi_family(date_str: str, hour_str: str, forecast_hour: int,
         return None
     shear_ms = shear_kt / potential_intensity.MS_TO_KT
 
+    # VI is normalized by the GRADIENT-wind PI (Tang & Emanuel 2012: the
+    # BE-2002 PI "considering ... gradient wind balance"; their 75%
+    # surface reduction is applied only when comparing against best
+    # track). tcpyPI's vmax_ms is the 10 m wind (× V_reduc 0.8), so
+    # dividing VI by it — as this did before 2026-10-20 — made VI 1.25×
+    # too large. χ_m's denominator (asdeq) already undoes V_reduc, so
+    # both now see the same PI state. MPI and vPI stay 10 m winds:
+    # vPI = PI_10m · f(VI/VI_max).
+    pi_grad = pi_out["vgrad_ms"]
     # Two VIs on purpose. vPI needs the UNFLOORED index so that a cell
     # where ventilation overwhelms a weak PI resolves to vPI = 0 ("no
     # storm can be sustained here") rather than NaN ("no data here") —
     # those are very different things to paint on a map. The VI layer
     # itself uses the floored version so its hover readout isn't scaled
-    # by runaway values over cold water.
+    # by runaway values over cold water (floor = 20 m/s of 10 m PI,
+    # applied as its gradient-wind equivalent).
     vi_raw = potential_intensity.ventilation_index(
-        shear_ms, chi_m, pi_out["vmax_ms"], pi_floor_ms=0.0)
+        shear_ms, chi_m, pi_grad, pi_floor_ms=0.0)
     vi_display = potential_intensity.ventilation_index(
-        shear_ms, chi_m, pi_out["vmax_ms"])
+        shear_ms, chi_m, pi_grad)
     vpi = potential_intensity.vpi_from(pi_out["vmax_ms"], vi_raw)
 
     KT = potential_intensity.MS_TO_KT
@@ -2550,7 +2602,9 @@ def build_ventilation_index(date_str: str, hour_str: str, *,
         description=(
             "VI = V_shear · χ_m / PI (Tang & Emanuel 2012) — "
             "deep-layer shear times the 600 hPa entropy deficit, scaled by "
-            "potential intensity. LOWER is more favorable. The 0.145 "
+            "the gradient-wind potential intensity (the Bister-Emanuel PI "
+            "before the 0.8 reduction to 10 m that the MPI layer shows), "
+            "as T&E define it. LOWER is more favorable. The 0.145 "
             "contour is the genesis threshold (Hoogewind et al. 2020): "
             "above it no steady TC can be sustained. " + _PI_VORTEX_NOTE
         ),
@@ -2588,7 +2642,8 @@ def build_vpi(date_str: str, hour_str: str, *, forecast_hour: int = 0,
             "The intensity a storm could actually reach once ventilation "
             "is accounted for — the equilibrium upper-branch solution "
             "of Tang & Emanuel (2012) theory, per Chavas, Camargo & "
-            "Tippett (2025). vPI = PI · f(VI/VI_max), falling to "
+            "Tippett (2025). vPI = PI · f(VI/VI_max), with PI the 10 m "
+            "MPI shown in the MPI layer, falling to "
             "0.577·PI at the genesis threshold and to zero above it. "
             "Compare against the MPI layer on the same color scale: the "
             "difference is what the environment is taking away. " +

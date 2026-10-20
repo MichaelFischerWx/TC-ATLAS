@@ -28,8 +28,16 @@ VI_max = 0.145 per Hoogewind et al. (2019) — the value Chavas uses
 directly in their Fig. 1 + Eq. 4 derivation.
 
 The ventilation index (Tang & Emanuel 2012) is
-    VI = (V_shear · χ_m) / PI
-where V_shear is the 200-850 hPa vector wind shear magnitude and χ_m
+    VI = (V_shear · χ_m) / PI_grad
+where PI_grad is the GRADIENT-wind Bister-Emanuel PI — T&E's u_PI
+"considering the local thermodynamic profile and gradient wind
+balance"; they apply their 75% surface reduction only when comparing
+against best track, never inside VI. The PI solve here returns the 10 m
+wind (V_reduc 0.8, matching the GC-ATLAS mpi tiles), so VI divides by
+VMAX / 0.8 (potential_intensity.gradient_pi), while vPI = PI_10m ·
+f(VI/VI_max) stays a 10 m wind. Before 2026-10-20 VI divided by the
+10 m PI (1.25× too large → vPI biased low; audit S1). V_shear is the
+200-850 hPa vector wind shear magnitude and χ_m
 is the mid-tropospheric entropy deficit at 600 hPa — the T&E /
 Hoogewind / Chavas level, confirmed by Chavas as intended (pers.
 comm., 2026-09), and the level every other TC-ATLAS VI surface uses.
@@ -102,8 +110,10 @@ def compute_vpi_field(T_m: np.ndarray, q_m: np.ndarray,
 
     All inputs are 2-D (lat, lon) float arrays at the same shape.
     NaNs propagate (land cells → NaN vPI, via the PI solve's SST mask).
-    `mpi` and `asdeq` come from the same era5_pi_monthly solve, so the
-    VI normalization and the χ_m denominator are mutually consistent —
+    `mpi` (10 m PI) and `asdeq` come from the same era5_pi_monthly
+    solve; VI divides by the gradient-wind PI (mpi / V_reduc), the same
+    state asdeq is built from, so the VI normalization and the χ_m
+    denominator are mutually consistent —
     the T&E (2012, suppl. ES128) definition, matching the RT map
     layers. The old gridded s*_SST − s_b denominator measured ~38% too
     large → χ_m too small → vPI biased high.
@@ -122,8 +132,14 @@ def compute_vpi_field(T_m: np.ndarray, q_m: np.ndarray,
     du, dv = u200 - u850, v200 - v850
     shear = np.sqrt(du * du + dv * dv)
 
-    # Ventilation index VI = shear · χ_m / PI.
-    vi = np.where(mpi > 1.0, shear * chi_m / np.maximum(mpi, 1.0), np.nan)
+    # Ventilation index VI = shear · χ_m / PI_grad. `mpi` is tcpyPI's 10 m
+    # VMAX (era5_pi_monthly → pi_grid with V_reduc 0.8); T&E normalize VI
+    # by the gradient-wind PI, the same state asdeq (χ_m's denominator)
+    # already undoes V_reduc to. vPI below still scales the 10 m PI.
+    from potential_intensity import gradient_pi
+    pi_grad = gradient_pi(mpi)
+    vi = np.where(mpi > 1.0, shear * chi_m / np.maximum(pi_grad, 1.0),
+                  np.nan)
 
     # vPI per Chavas Eq. 4 closed-form trig solution.
     # Clip to VI_max from above so arccos receives a value in [-1, 0].
@@ -264,9 +280,12 @@ def main() -> None:
                       "+ CDS ERA5 monthly means (T+q@600, era5_600_sidecar)",
             "method": "Pointwise vPI per Chavas et al. (2025) Eq. 4; "
                       "χ_m denominator = BE-2002 asdeq inverted from the "
-                      "PI solve (T&E 2012 suppl. ES128); "
+                      "PI solve (T&E 2012 suppl. ES128); VI normalized by "
+                      "the gradient-wind PI (VMAX/0.8), vPI scales the "
+                      "10 m PI; "
                       "cos(lat)-weighted regional mean of the vPI field",
             "vi_max": VI_MAX,
+            "vi_pi_basis": "gradient_wind",   # VI = shear·χ_m/(VMAX/0.8); since 2026-10-20
             "boundary_level_hpa": 1000,
             "mid_level_hpa": 600,
             "clim_period": CLIM_PERIOD,

@@ -9,6 +9,11 @@ Covers:
   SCI-11       subseasonal index refresh never publishes the bundled seed
                on a GCS read error, never rolls a series backwards
   SCI-12       dead append_gfs_shear_regions removed
+  S1 / SCI-2   VI normalized by the GRADIENT-wind PI (T&E 2012); MPI and
+               vPI stay 10 m winds — RT layers and the monthly vPI builder
+  S13 / SCI-6  shear-anomaly climatology: disc-smoothed v2 file preferred,
+               unsmoothed fallback; same smoothing kernel as the GFS side
+  env warp     _warp_eq_to_mercator row scaling uses ny_in − 1 (nodes)
 
 Runnable standalone:  python3 tests/test_audit_science.py
 """
@@ -213,19 +218,50 @@ def test_write_layer_indices_filters_failed_pairs():
 
 
 def test_empty_bundle_aborts_without_index_or_marker():
+    # Contract: an empty GFS f000 bundle sets gfs_down and breaks the
+    # forecast-hour loop. No GFS builder runs and no GFS layer index.json
+    # is written (write_layer_indices still runs but has no GFS results to
+    # list), no run marker is written, main returns 1 — and the non-GFS
+    # builders (OISST SST/anomalies, genesis_prob) still refresh.
+    store = {}
+    gfs_layers = []
+    real_wli = E.write_layer_indices
+
+    def _wli(date_str, hour_str, fhs, layers, results):
+        gfs_layers.extend(layers)
+        real_wli(date_str, hour_str, fhs, layers, results)
+
     with mock.patch.object(E, "latest_gfs_cycle",
                            return_value=("20261020", "12")), \
-         mock.patch.object(E, "fetch_cyclogenesis_csv", return_value=None), \
+         mock.patch.object(E, "fetch_cyclogenesis_csv",
+                           return_value="csv,text\n"), \
          mock.patch.object(E, "fetch_oisst_sst", return_value=None), \
          mock.patch.object(E, "fetch_gfs_bundle", return_value={}), \
-         mock.patch.object(E, "build_shear") as b, \
-         mock.patch.object(E, "write_layer_indices") as wli, \
+         mock.patch.object(E, "build_shear") as b_gfs, \
+         mock.patch.object(E, "build_mpi") as b_pi, \
+         mock.patch.object(E, "build_sst", return_value=b"x") as b_sst, \
+         mock.patch.object(E, "build_sst_anomalies",
+                           return_value=True) as b_anom, \
+         mock.patch.object(E, "build_genesis_prob",
+                           return_value=b"x") as b_gen, \
+         mock.patch.object(E, "write_layer_indices",
+                           side_effect=_wli) as wli, \
          mock.patch.object(E, "write_run_marker") as wrm, \
+         mock.patch.object(E, "emit_cost_telemetry"), \
+         mock.patch("google.cloud.storage.Client",
+                    return_value=_fake_client(store)), \
          mock.patch.dict(os.environ, {"SKIP_IF_FRESH": "0"}):
         assert E.main() == 1
-        b.assert_not_called()
-        wli.assert_not_called()
+        b_gfs.assert_not_called()
+        b_pi.assert_not_called()
         wrm.assert_not_called()
+        b_sst.assert_called_once()
+        b_anom.assert_called_once()
+        assert b_gen.call_count == 3          # 2, 7, 14 day
+        assert wli.called and "shear_200_850" in gfs_layers
+    # No GFS layer got an index.json (the previous cycle's stays live).
+    for name in gfs_layers:
+        assert f"env/{name}/index.json" not in store, name
 
 
 # ── SCI-8: one request per object ────────────────────────────────────
@@ -249,6 +285,135 @@ def test_upload_layer_single_request_public():
 
 def test_dead_shear_regions_removed():
     assert not hasattr(E, "append_gfs_shear_regions")
+
+
+# ── S1 / SCI-2: VI uses the gradient-wind PI ─────────────────────────
+
+def test_vi_gradient_pi_normalization():
+    import potential_intensity as P
+    pi10 = np.array([60.0, 40.0, 15.0])
+    shear = np.array([5.0, 20.0, 15.0])
+    chi = np.array([0.3, 0.4, 0.5])
+    vi = P.ventilation_index(shear, chi, P.gradient_pi(pi10))
+    expect = shear * chi / (pi10 / P.PI_V_REDUC)
+    assert np.allclose(vi[:2], expect[:2])
+    # Floor: 15 m/s of 10 m PI is below the 20 m/s (~39 kt) display floor.
+    assert np.isnan(vi[2])
+    assert np.isclose(P.PI_FLOOR_GRAD_MS, P.PI_FLOOR_MS / P.PI_V_REDUC)
+    # vPI scales the 10 m PI and uses the gradient-normalized VI. A cell
+    # that the old 10 m normalization pushed past VI_max now survives.
+    shear_t, chi_t = np.array([30.0]), np.array([0.3])
+    vi_old = shear_t * chi_t / pi10[:1]                 # 0.150 > VI_max
+    vi_new = P.ventilation_index(shear_t, chi_t, P.gradient_pi(pi10[:1]))
+    assert vi_old[0] > P.VI_MAX > vi_new[0]
+    assert P.vpi_from(pi10[:1], vi_old)[0] == 0.0
+    assert 0.577 * 60.0 < P.vpi_from(pi10[:1], vi_new)[0] < 60.0
+
+
+def test_rt_pi_family_feeds_gradient_pi_to_vi():
+    import inspect
+    src = inspect.getsource(E._compute_pi_family)
+    assert 'pi_grad = pi_out["vgrad_ms"]' in src
+    for call in src.split("ventilation_index(")[1:]:
+        args = call.split(")")[0]
+        assert "pi_grad" in args and "vmax_ms" not in args, args
+    assert 'vpi_from(pi_out["vmax_ms"]' in src      # vPI stays 10 m
+
+
+def test_monthly_vpi_builder_uses_gradient_pi():
+    import build_era5_vpi_indices as V
+    import potential_intensity as P
+    rng = np.random.default_rng(1)
+    shp = (6, 8)
+    T_m = 268.0 + rng.uniform(-2, 2, shp)
+    q_m = 1e-3 * rng.uniform(1, 4, shp)
+    mpi = rng.uniform(30, 80, shp)
+    asdeq = rng.uniform(40, 70, shp)
+    u200, v200 = rng.uniform(-15, 15, shp), rng.uniform(-15, 15, shp)
+    u850, v850 = rng.uniform(-8, 8, shp), rng.uniform(-8, 8, shp)
+    vpi, vi, chi = V.compute_vpi_field(T_m, q_m, mpi, asdeq,
+                                       u200, v200, u850, v850)
+    shear = np.hypot(u200 - u850, v200 - v850)
+    assert np.allclose(vi, shear * chi / (mpi / P.PI_V_REDUC))
+    assert np.allclose(vpi, P.vpi_from(mpi, vi), equal_nan=True)
+
+
+# ── env warp: node-centered row scaling ──────────────────────────────
+
+def test_env_mercator_warp_row_mapping():
+    lat = 90.0 - np.arange(E.NY) * 0.25          # node latitudes
+    f = np.repeat(lat[:, None], 4, axis=1)
+    out = E._warp_eq_to_mercator(f)
+    max_my = np.log(np.tan(np.pi / 4 + np.radians(E.WEB_MERC_LAT_MAX) / 2))
+    merc_y = max_my - (np.arange(E.NY) + 0.5) / E.NY * (2 * max_my)
+    row_lat = np.degrees(np.arctan(np.sinh(merc_y)))
+    # Nearest node → at most half a 0.25° row (was up to ~0.36°).
+    assert np.max(np.abs(out[:, 0] - row_lat)) <= 0.125 + 1e-6
+
+
+# ── S13 / SCI-6: shear-anomaly climatology ───────────────────────────
+
+def test_smoothed_climo_name_and_kernel_match_env_builder():
+    import build_era5_climo_pngs as C
+    v2_pattern = dict(E.SHEAR_CLIMO_BLOBS)["disc400"]
+    for m in (1, 9, 12):
+        assert C.smoothed_climo_blob(m) == v2_pattern.format(mm=m)
+    r = max(1, int(round(400.0 / E.KM_PER_CELL)))
+    assert np.allclose(C._disc_kernel_cells(), E._disc_kernel(r))
+    assert C.SMOOTH_KM_PER_CELL == E.KM_PER_CELL
+
+
+def test_disc_smooth_box_matches_env_disc_smooth_in_interior():
+    import build_era5_climo_pngs as C
+    rng = np.random.default_rng(2)
+    f = rng.normal(size=(81, 120))
+    k = C._disc_kernel_cells(radius_km=5 * 27.8)
+    ours = C.disc_smooth_box(f[None], k)[0]
+    from scipy.ndimage import convolve
+    ref = convolve(f, k, mode="wrap")
+    # Longitude wraps identically; latitude edges differ by design.
+    assert np.allclose(ours[6:-6], ref[6:-6], atol=1e-5)
+    # NaN-aware: a hole is filled from its neighbors, not propagated.
+    g = f.copy(); g[40, 60] = np.nan
+    assert np.isfinite(C.disc_smooth_box(g[None], k)[0][40, 60])
+
+
+class _ClimoBlob:
+    def __init__(self, store, name):
+        self.store, self.name = store, name
+
+    def exists(self):
+        return self.name in self.store
+
+    def download_as_bytes(self):
+        return self.store[self.name]
+
+
+def _climo_client(store):
+    bucket = mock.MagicMock()
+    bucket.blob.side_effect = lambda n: _ClimoBlob(store, n)
+    c = mock.MagicMock()
+    c.bucket.return_value = bucket
+    return c
+
+
+def test_shear_climo_prefers_disc400_then_falls_back():
+    vals = json.dumps({"values": [[1.0] * 360] * 121}).encode()
+    vals2 = json.dumps({"values": [[2.0] * 360] * 121}).encode()
+    old = "era5_climo/shear_09.global.grid.json"
+    new = "era5_climo/shear_v2_disc400_09.global.grid.json"
+    for store, want, src in [({old: vals}, 1.0, "unsmoothed"),
+                             ({old: vals, new: vals2}, 2.0, "disc400")]:
+        E._SHEAR_CLIMO_KT_CACHE.clear()
+        E._SHEAR_CLIMO_SOURCE.clear()
+        with mock.patch.object(E, "GCS_BUCKET", "b"), \
+             mock.patch("google.cloud.storage.Client",
+                        return_value=_climo_client(store)):
+            kt = E._load_shear_climo_kt(9)
+        assert kt is not None and np.allclose(kt, want * 1.94384)
+        assert E._SHEAR_CLIMO_SOURCE[9] == src
+    E._SHEAR_CLIMO_KT_CACHE.clear()
+    E._SHEAR_CLIMO_SOURCE.clear()
 
 
 if __name__ == "__main__":

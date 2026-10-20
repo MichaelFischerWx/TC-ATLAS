@@ -11,12 +11,14 @@ Three quantities, in dependency order:
         (Gilford's vectorized BE-2002 port). Wrapped in a numba `prange`
         driver so a global grid costs seconds, not minutes.
 
-  VI    Tang & Emanuel (2012) ventilation index, VI = V_shear · χ_m / PI.
+  VI    Tang & Emanuel (2012) ventilation index, VI = V_shear · χ_m / PI,
+        where PI is the GRADIENT-wind BE-2002 PI (NOT reduced to 10 m) —
+        see "VI normalization" under Parameter conventions below.
 
   vPI   Chavas, Camargo & Tippett (2025) ventilated potential intensity —
         the equilibrium upper-branch solution of the T&E theory, i.e. the
         intensity a storm can actually reach once ventilation is accounted
-        for. vPI = PI · f(VI/VI_max), f given in closed form below.
+        for. vPI = PI_10m · f(VI/VI_max), f given in closed form below.
 
 Validated against the authors' own MATLAB reference implementation and
 published fields (Chavas 2025, Purdue Research Repository
@@ -96,6 +98,30 @@ Vmax, which is what an operational user will do with it.
 The two differ by ~10% in absolute PI (PI ∝ √(C_k/C_D) · V_reduc). To
 reproduce Chavas's published values instead, set PI_PARAMS_CHAVAS below —
 but then rebuild the GC-ATLAS MPI tiles to match before trusting anomalies.
+
+── VI normalization (gradient-wind PI) ────────────────────────────────
+
+V_reduc applies to the DISPLAYED intensities only (the MPI and vPI map
+layers, in 10 m knots). The ventilation index itself is normalized by
+the GRADIENT-wind PI, PI_grad = PI_10m / V_reduc (`gradient_pi`):
+
+    VI  = V_shear · χ_m / PI_grad
+    vPI = PI_10m · f(VI / VI_max)
+
+This follows Tang & Emanuel (2012, BAMS): the u_PI in VI is the
+Bister & Emanuel (2002) PI "considering the local thermodynamic profile
+and gradient wind balance", and T&E apply their 75% surface reduction
+only "before calculating the normalized intensity" against best-track
+winds — never inside VI. It is also what Chavas's MATLAB bundle and
+tcpyVPI do implicitly (both run V_reduc = 1.0, so their PI IS the
+gradient wind), which is the basis on which VI_max = 0.145 is applied
+in the vPI relation. And it makes VI self-consistent with χ_m, whose
+denominator `air_sea_disequilibrium` already divides V_reduc back out.
+Before 2026-10-20 VI divided by the 10 m PI, which made every VI 1/0.8
+= 1.25× too large and vPI too small (audit item S1 / SCI-2); the
+regional "here" VI values in the validation table above predate that
+fix as well as the 700 → 600 hPa switch (×0.8 gives 0.206 / 0.130 /
+0.093). VI is now independent of V_reduc altogether.
 """
 
 from __future__ import annotations
@@ -122,7 +148,9 @@ L_V = 2.555e6      # J/kg — inflated (Bryan 2008), per setup_ventilation.m
 PI_CKCD = 0.9           # ratio C_k/C_D
 PI_ASCENT_FLAG = 0      # 0 = reversible, 1 = pseudoadiabatic
 PI_DISS_FLAG = 1        # dissipative heating on
-PI_V_REDUC = 0.8        # gradient wind → 10 m wind
+PI_V_REDUC = 0.8        # gradient wind → 10 m wind (displayed MPI/vPI
+                        # only — VI uses the gradient wind, see
+                        # `gradient_pi` and the module docstring)
 PI_PTOP = 50.0          # hPa, top of the PI integration
 PI_MISS_HANDLE = 1      # tcpyPI's NaN policy for missing mixing ratio
 
@@ -142,9 +170,9 @@ CHI_MID_HPA = 600.0     # entropy-deficit level. 600 hPa is what T&E
                         # Chavas confirmed 600 is the intended level
                         # (pers. comm. to M. Fischer, 2026-09). The
                         # docstring's regional validation numbers predate
-                        # the switch. build_era5_vpi_indices.py stays at
-                        # 700 until its planned rebuild (the GC-ATLAS
-                        # ERA5 manifest doesn't index 600 hPa).
+                        # the switch. build_era5_vpi_indices.py followed
+                        # on 2026-09-01 via the era5_600_sidecar CDS
+                        # t/q (the GC-ATLAS manifest has no 600 tiles).
 CHI_R_INNER_KM = 100.0  # hypothetical inner-core disc (saturation entropy)
 CHI_R_OUTER_KM = 300.0  # hypothetical environmental annulus outer radius
 
@@ -253,8 +281,11 @@ def pi_grid(sst_c: np.ndarray, msl_hpa: np.ndarray, p_hpa: np.ndarray,
     t_c      : (nz, ny, nx) temperature, °C.
     r_gkg    : (nz, ny, nx) mixing ratio, g/kg (NOT specific humidity).
 
-    Returns {vmax_ms, pmin_hpa, t_out_k, asdeq, ifl}, all (ny, nx), with
-    non-converged cells (IFL != 1) masked to NaN.
+    Returns {vmax_ms, vgrad_ms, pmin_hpa, t_out_k, asdeq, ifl}, all
+    (ny, nx), with non-converged cells (IFL != 1) masked to NaN.
+    `vmax_ms` is the 10 m PI (× v_reduc, what the MPI layer displays);
+    `vgrad_ms` is the gradient-wind PI (= vmax_ms / v_reduc), which is
+    what `ventilation_index` must be given.
 
     The level ordering is load-bearing: tcpyPI's docstring claims ascending
     but the algorithm integrates from the surface upward and silently
@@ -295,8 +326,22 @@ def pi_grid(sst_c: np.ndarray, msl_hpa: np.ndarray, p_hpa: np.ndarray,
 
     asdeq = air_sea_disequilibrium(vmax, t_out, sst_c, ckcd=ckcd,
                                    v_reduc=v_reduc)
-    return {"vmax_ms": vmax, "pmin_hpa": pmin, "t_out_k": t_out,
-            "asdeq": asdeq, "ifl": ifl}
+    return {"vmax_ms": vmax, "vgrad_ms": gradient_pi(vmax, v_reduc=v_reduc),
+            "pmin_hpa": pmin, "t_out_k": t_out, "asdeq": asdeq, "ifl": ifl}
+
+
+def gradient_pi(pi10_ms: np.ndarray, *,
+                v_reduc: float = PI_V_REDUC) -> np.ndarray:
+    """Gradient-wind PI from tcpyPI's 10 m PI: PI_grad = PI_10m / V_reduc.
+
+    This is the PI that normalizes the ventilation index (Tang & Emanuel
+    2012: the BE-2002 PI "considering the local thermodynamic profile and
+    gradient wind balance"; their 75% surface reduction is applied only
+    when comparing against best-track intensity, not in VI). It is the
+    same undo `air_sea_disequilibrium` performs for χ_m's denominator, so
+    VI and χ_m see one consistent PI state.
+    """
+    return np.asarray(pi10_ms, dtype=float) / max(v_reduc, 1e-6)
 
 
 def air_sea_disequilibrium(vmax_ms: np.ndarray, t_out_k: np.ndarray,
@@ -324,7 +369,7 @@ def air_sea_disequilibrium(vmax_ms: np.ndarray, t_out_k: np.ndarray,
     such term and the omission is easy to miss.)
     """
     sst_k = np.asarray(sst_c, dtype=float) + 273.15
-    v_grad = np.asarray(vmax_ms, dtype=float) / max(v_reduc, 1e-6)
+    v_grad = gradient_pi(vmax_ms, v_reduc=v_reduc)
     denom = sst_k * (sst_k - t_out_k)
     with np.errstate(invalid="ignore", divide="ignore"):
         asdeq = v_grad ** 2 * (1.0 / ckcd) * t_out_k / denom
@@ -404,34 +449,52 @@ def chi_m_grid(s_star_disc: np.ndarray, s_m_annulus: np.ndarray,
 
 # ── Ventilation index and ventilated PI ───────────────────────────────
 
-PI_FLOOR_MS = 20.0   # ~39 kt — below this VI is meaningless, see below
+# Display floor for the VI layer, stated on the 10 m PI the MPI map shows:
+# below ~39 kt of 10 m MPI, VI is meaningless (see `ventilation_index`).
+# `ventilation_index` takes the GRADIENT-wind PI, so its default floor is
+# the same threshold expressed as a gradient wind (20 / 0.8 = 25 m/s).
+# Expressing it this way kept the masked cells identical across the
+# 2026-10-20 switch of VI's denominator from the 10 m to the gradient PI.
+PI_FLOOR_MS = 20.0                           # 10 m PI, m/s (~39 kt)
+PI_FLOOR_GRAD_MS = PI_FLOOR_MS / PI_V_REDUC  # same floor, gradient wind
 
 
 def ventilation_index(shear_ms: np.ndarray, chi_m: np.ndarray,
-                      pi_ms: np.ndarray, *,
-                      pi_floor_ms: float = PI_FLOOR_MS) -> np.ndarray:
+                      pi_grad_ms: np.ndarray, *,
+                      pi_floor_ms: float = PI_FLOOR_GRAD_MS) -> np.ndarray:
     """VI = V_shear · χ_m / PI (T&E 2012 eq. S13), dimensionless.
+
+    `pi_grad_ms` must be the GRADIENT-wind PI — `pi_grid(...)["vgrad_ms"]`
+    or `gradient_pi(pi10)` — NOT tcpyPI's 10 m `vmax_ms`. Tang & Emanuel
+    (2012) define u_PI in VI as the Bister-Emanuel (2002) PI "considering
+    the local thermodynamic profile and gradient wind balance"; their 75%
+    surface reduction is applied only "before calculating the normalized
+    intensity" against best track. Passing the 10 m PI inflates VI by
+    1/V_reduc = 1.25× (the pre-2026-10-20 bug). With the gradient PI, VI
+    is independent of V_reduc and on the scale VI_max = 0.145 assumes
+    (Chavas's MATLAB and tcpyVPI both run V_reduc = 1.0).
 
     `shear_ms` must be the ENVIRONMENTAL shear with the TC circulation
     already removed — see `remove_tc_vortex` and the note in
     ventilation.m line 5.
 
-    Cells with PI below `pi_floor_ms` are masked. This is a DISPLAY
-    choice, not a correction: the reference merely floors the divisor at
-    1 m/s (`vi = shear.*chim./max(pi,1)`) and its own published field
-    runs to VI = 810, because where PI collapses toward zero the quotient
-    runs away. Every such cell already means "no TC possible", which VI
-    says at 0.145, so the runaway values carry no information and would
-    wreck the hover readout's scale. Pass `pi_floor_ms=0` to reproduce
-    the reference exactly.
+    Cells with gradient PI below `pi_floor_ms` (default 25 m/s ≡ 20 m/s,
+    ~39 kt, of 10 m PI) are masked. This is a DISPLAY choice, not a
+    correction: the reference merely floors the divisor at 1 m/s
+    (`vi = shear.*chim./max(pi,1)`) and its own published field runs to
+    VI = 810, because where PI collapses toward zero the quotient runs
+    away. Every such cell already means "no TC possible", which VI says
+    at 0.145, so the runaway values carry no information and would wreck
+    the hover readout's scale. Pass `pi_floor_ms=0` to reproduce the
+    reference exactly.
 
     NB: mask this only for the VI layer. Feeding a masked VI into
     `vpi_from` turns "vPI is zero here" into "no data here" — see the
     two-call pattern in build_env_overlays._compute_pi_family.
     """
     with np.errstate(invalid="ignore", divide="ignore"):
-        vi = shear_ms * chi_m / np.maximum(pi_ms, 1.0)
-    ok = np.isfinite(pi_ms) & (pi_ms >= pi_floor_ms)
+        vi = shear_ms * chi_m / np.maximum(pi_grad_ms, 1.0)
+    ok = np.isfinite(pi_grad_ms) & (pi_grad_ms >= pi_floor_ms)
     return np.where(ok, vi, np.nan)
 
 
@@ -441,7 +504,10 @@ def vpi_from(pi_ms: np.ndarray, vi: np.ndarray, *,
 
     vPI = PI · f(VI/VI_max), where f is the equilibrium upper-branch
     solution of the T&E (2012) theory — Komaček, Chavas & Abbott (2020)
-    eq. 7. The reference `Vp_VIreduced_calc.m` writes f in Cardano radical
+    eq. 7. f is dimensionless, so `pi_ms` sets the output's reference
+    level: TC-ATLAS passes the 10 m PI, making vPI a 10 m wind on the MPI
+    layer's scale, while `vi` must come from `ventilation_index` with the
+    GRADIENT-wind PI. The reference `Vp_VIreduced_calc.m` writes f in Cardano radical
     form, which needs complex arithmetic because both terms are complex
     below the threshold and only their sum is real. We use the equivalent
     trigonometric form of the same root, which is real throughout:
@@ -811,11 +877,38 @@ if __name__ == "__main__":
     # 5. ventilation_index floor semantics — the distinction that decides
     #    whether vPI reads 0 or NaN over marginal water.
     shear = np.array([[15.0]]); chi = np.array([[0.5]]); weak = np.array([[5.0]])
-    assert np.isnan(ventilation_index(shear, chi, weak)[0, 0])
-    raw = ventilation_index(shear, chi, weak, pi_floor_ms=0.0)
+    weak_g = gradient_pi(weak)
+    assert np.isnan(ventilation_index(shear, chi, weak_g)[0, 0])
+    raw = ventilation_index(shear, chi, weak_g, pi_floor_ms=0.0)
     assert np.isfinite(raw[0, 0]) and raw[0, 0] > VI_MAX
     assert float(vpi_from(weak, raw)[0, 0]) == 0.0, \
         "unfloored VI must drive vPI to 0, not NaN"
+    # The default floor is the 20 m/s 10 m-PI threshold restated as a
+    # gradient wind, so the masked set matches the MPI map's ~39 kt.
+    edge = np.array([[PI_FLOOR_MS - 0.01, PI_FLOOR_MS + 0.01]])
+    vi_edge = ventilation_index(np.full_like(edge, 5.0),
+                                np.full_like(edge, 0.3), gradient_pi(edge))
+    assert np.isnan(vi_edge[0, 0]) and np.isfinite(vi_edge[0, 1])
     print("VI floor          OK  (floored -> NaN for display; unfloored -> "
-          "vPI = 0)")
+          "vPI = 0; floor = 20 m/s of 10 m PI)")
+
+    # 6. VI normalization (T&E 2012): VI divides by the GRADIENT-wind PI,
+    #    so it is V_reduc-independent, and vPI stays a 10 m wind. Reference
+    #    case: 10 m PI 60 m/s, χ_m 0.3, shear 5 m/s → PI_grad 75 m/s,
+    #    VI = 5·0.3/75 = 0.020 (the pre-fix 10 m normalization gave 0.025).
+    pi10 = np.array([60.0])
+    vi = ventilation_index(np.array([5.0]), np.array([0.3]),
+                           gradient_pi(pi10))
+    assert abs(float(vi[0]) - 0.020) < 1e-12, vi
+    vi_chavas = ventilation_index(np.array([5.0]), np.array([0.3]),
+                                  gradient_pi(pi10 / 0.8, v_reduc=1.0))
+    assert abs(float(vi[0] - vi_chavas[0])) < 1e-12, \
+        "VI must not depend on V_reduc"
+    vpi = vpi_from(pi10, vi)
+    assert 0.0 < float(vpi[0]) < 60.0
+    assert abs(float(vpi[0]) - 60.0 * float(vpi_from(np.ones(1), vi)[0])) \
+        < 1e-9, "vPI must scale the 10 m PI"
+    print(f"VI normalization  OK  (gradient PI: VI={float(vi[0]):.3f}, "
+          f"vPI={float(vpi[0]) * MS_TO_KT:.1f} kt of 10 m PI "
+          f"{60 * MS_TO_KT:.1f} kt; V_reduc-invariant)")
     print("\nall checks passed")
