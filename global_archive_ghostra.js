@@ -274,6 +274,7 @@
                 renderBasins();
                 renderFoot();
                 renderProtocols();
+                renderBuilt();
                 renderVersions();   // index.json can caption the picker better
                 sizeTab();          // basin chips just changed the toolbar height
                 return Promise.all((j.basins || []).map(loadPoints));
@@ -727,6 +728,26 @@
             return ms[b] && ms[b].column === 'reco'; });
     }
 
+    /* v6 and later: the wind gains the vision-transformer member and the
+       pressure a three-member mix, so the prose describing the model (the
+       footer paragraph and the About panel's "How it is built") has a v6
+       form. Read from the tree's own version, so a pinned or older tree
+       keeps the text that describes it. */
+    function isV6Plus() {
+        var m = String((index && index.version) || version || '').match(/^v(\d+)/);
+        return !!m && +m[1] >= 6;
+    }
+
+    /* The About panel's "How it is built": one block per model generation in
+       global_archive.html ([data-gra-built]); show the one for this version. */
+    function renderBuilt() {
+        var v6 = isV6Plus();
+        var els = document.querySelectorAll('[data-gra-built]');
+        for (var i = 0; i < els.length; i++) {
+            els[i].hidden = (els[i].getAttribute('data-gra-built') === 'v6') !== v6;
+        }
+    }
+
     /* Why there is no held-out value here. The two reasons are not the same
        claim and must not share a phrasing: an out-of-basin transfer has
        nothing to hold out, whereas an older published version simply did not
@@ -803,7 +824,22 @@
                held-out fold, and a best-track size analysis). Shipping both
                numbers silently was the one option ruled out — see
                TC-SWARM realtime/FPM_WIND_CONSISTENCY.md. */
-            (isBlendVersion()
+            (isBlendVersion() && isV6Plus()
+            /* v6: wind = the tree member and the vision transformer, equal
+               halves; pressure = half the ridge plus the tree (and, outside
+               the West Pacific, the ViT). Only the wind is filled over land. */
+            ? '<br><b>On the model:</b> V<sub>max</sub> is the equal mean of ' +
+              'the tree member’s wind and a vision transformer, a neural ' +
+              'network that reads the infrared image itself; above 130 kt in ' +
+              'the Atlantic, East and Central Pacific it is blended with the ' +
+              'wind implied by the published pressure. P<sub>min</sub> is half ' +
+              'the first-principles ridge (FPM), the rest from the tree member ' +
+              'and, outside the West Pacific, the vision transformer; it is ' +
+              'never above the environmental pressure minus 1 hPa. Over land ' +
+              'the wind is filled and drawn dashed. The Real-Time Monitor’s ' +
+              'Experimental tab still publishes the earlier model; its “GHOST ' +
+              'v6 (ViT, experimental)” overlay previews this wind live.'
+            : isBlendVersion()
             /* v4+ (paper model): the wind is the tree member's DIRECT wind
                head, not a pressure-wind relationship; the pressure is the
                equal mean of the two members. */

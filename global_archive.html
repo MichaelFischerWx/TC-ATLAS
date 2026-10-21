@@ -1232,6 +1232,9 @@
                             independently. That is what the <em>GHOST&nbsp;&minus;&nbsp;BT</em>
                             view is for.</p>
 
+                        <!-- "How it is built": one block per model generation. global_archive_ghostra.js
+                             (renderBuilt) shows the one that matches the data version on screen. -->
+                        <div data-gra-built="v5">
                         <h4>How it is built (data version v5.3, the paper model)</h4>
                         <ul>
                             <li><strong>P<sub>min</sub></strong> is the <strong>equal mean of two
@@ -1265,6 +1268,53 @@
                                 v4&ndash;v5 (the two-member blend), v5.1 (wind fill), v5.2 (East
                                 and Central Pacific decay gate).</li>
                         </ul>
+                        </div>
+                        <div data-gra-built="v6" hidden>
+                        <h4>How it is built (data version v6)</h4>
+                        <ul>
+                            <li><strong>V<sub>max</sub></strong> is the <strong>equal mean of two
+                                members</strong> read from the same imagery, each smoothed over the
+                                preceding four hours: the boosted-tree model&rsquo;s wind (the tree
+                                member), and a <strong>vision transformer</strong> &mdash; a neural
+                                network fine-tuned on single infrared images, trained on
+                                aircraft-verified intensities where reconnaissance exists and on the
+                                best track elsewhere. Above 130&nbsp;kt in the Atlantic, East and
+                                Central Pacific it is blended with the wind implied by the
+                                <em>published</em> pressure, so wind and pressure stay
+                                consistent.</li>
+                            <li><strong>P<sub>min</sub></strong> in the Atlantic, East and Central
+                                Pacific is half the first-principles ridge on the environmental
+                                pressure deficit (FPM) and a quarter each from the tree member and
+                                the vision transformer; in the West Pacific it is the equal mean of
+                                the ridge and the tree member. For the strongest storms, a
+                                wind&ndash;pressure guard deepens the pressure where it would
+                                otherwise read far weaker than the wind, and no frame is published
+                                above the environmental pressure minus 1&nbsp;hPa.</li>
+                            <li>Only frames whose center is <strong>over water</strong> get the full
+                                wind estimate. Over land, or where the image is unusable, the wind
+                                is <strong>filled</strong> and drawn dashed, and the storm&rsquo;s
+                                peak wind never rests on a filled frame. The pressure there is
+                                still an estimate: the ridge, with the tree member&rsquo;s last
+                                value fading over about six hours. A few East and Central Pacific
+                                frames the new model does not cover (all of Erick 2019 among them)
+                                keep the previous version&rsquo;s values and are marked as
+                                filled.</li>
+                            <li><strong>Every published value is held out</strong>: each frame comes
+                                from models that never saw its year. Atlantic, East and Central
+                                Pacific members were fitted leave-one-year-out (the 1998&ndash;99
+                                Atlantic seasons were never in training at all); the West Pacific is
+                                an out-of-basin transfer. There is no separate frozen channel
+                                &mdash; the number shown is the held-out one.</li>
+                            <li>The Real-Time Monitor&rsquo;s Experimental tab still publishes the
+                                earlier model. Its <em>GHOST v6 (ViT, experimental)</em> overlay
+                                previews the new wind in real time; its pressure follows the
+                                earlier recipe until the real-time model is updated. Earlier data
+                                versions remain selectable below: v1&ndash;v2 (a single FPM channel
+                                per basin), v4&ndash;v5 (the two-member blend), v5.1 (wind fill),
+                                v5.2 (East and Central Pacific decay gate), v5.3 (Atlantic
+                                wind&ndash;pressure consistency above 130&nbsp;kt).</li>
+                        </ul>
+                        </div>
 
                         <h4>How to read it</h4>
                         <ul>
@@ -1409,6 +1459,6 @@
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
-    <script defer src="global_archive_ghostra.js?v=20261020au1"></script>
+    <script defer src="global_archive_ghostra.js?v=20261020v6a"></script>
 </body>
 </html>
