@@ -7148,7 +7148,10 @@ def _parse_hrd_1sec(text: str) -> list[dict]:
                 hh = int(time_str[0:2])
                 mm = int(time_str[2:4])
                 ss = int(time_str[4:6])
-            time_sec = hh * 3600 + mm * 60 + ss + _day_offset * 86400
+            # The day flag and an hour past 24 encode the same rollover: some
+            # files write both after midnight ("274640  1  15.403 ..." =
+            # 27:46:40 next day), so count it once.
+            time_sec = hh * 3600 + mm * 60 + ss + (_day_offset * 86400 if hh < 24 else 0)
         except (ValueError, IndexError):
             continue
 

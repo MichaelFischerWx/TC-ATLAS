@@ -5462,26 +5462,39 @@ def _parse_hrd_legacy_csv(text: str) -> list:
     return observations
 
 
-_FL_GCS_CACHE_PREFIX = "recon/v7"  # v7: split light/1s pre-gzipped blobs (dropdown latency)
+# v8 (2026-10-20): two parser fixes.
+#  - USAF: the ten-second deg-min files (.ten, .10sec.txt, .10.txt) carry
+#    static pressure (ISA from the pressure altitude) and geometric altitude,
+#    the .10.txt files parse at all, and the ADS exports (*U#STORM.TXT etc.)
+#    take static pressure from PA instead of the altimeter setting. Blobs of
+#    these formats from before the fix are never reused.
+#  - HRD 1-s files that write both an hour past 24 and a day flag after
+#    midnight counted the day twice (the rest of the flight a day late).
+#    Other formats' v7 / v6 blobs are migrated lazily into v8 unless they show
+#    that signature (_fl_day_double_counted), so unaffected files are not
+#    re-fetched from AOML.
+_FL_GCS_CACHE_PREFIX = "recon/v8"
+_FL_GCS_PREV_PREFIX = "recon/v7"   # split light/1s pre-gzipped blobs, before the v8 fixes
 _FL_GCS_V6_PREFIX = "recon/v6"     # legacy combined blobs — read-only fallback, avoids AOML refetch
-# USAF parser fix (2026-10-20): the ten-second deg-min files (.ten, .10sec.txt,
-# .10.txt) now carry static pressure (ISA from the pressure altitude) and
-# geometric altitude, the .10.txt files parse at all, and the ADS exports
-# (*U#STORM.TXT etc.) take static pressure from PA instead of the altimeter
-# setting. Their cached blobs predate the fix, so these formats use a new cache
-# generation and never read the v6 blobs.
-_FL_GCS_USAF_PREFIX = "recon/v8"
 _FL_USAF_FIXED_FORMATS = ("usaf_10sec", "usaf_01", "usaf_ten", "text_generic")
 
 
-def _fl_cache_prefix(filename: str) -> str:
-    return (_FL_GCS_USAF_PREFIX if _detect_fl_format(filename) in _FL_USAF_FIXED_FORMATS
-            else _FL_GCS_CACHE_PREFIX)
-
-
-def _fl_gcs_key(filename: str, center_lat: float, center_lon: float, kind: str) -> str:
+def _fl_gcs_key(filename: str, center_lat: float, center_lon: float, kind: str,
+                prefix: str = None) -> str:
     """GCS object key for a cached flight-level blob. kind: 'light' (no obs_1s) or '1s'."""
-    return f"{_fl_cache_prefix(filename)}/{filename}_{center_lat:.1f}_{center_lon:.1f}.{kind}.json.gz"
+    return f"{prefix or _FL_GCS_CACHE_PREFIX}/{filename}_{center_lat:.1f}_{center_lon:.1f}.{kind}.json.gz"
+
+
+def _fl_day_double_counted(result: dict) -> bool:
+    """A pre-v8 parse of an HRD 1-s file that writes both an hour past 24 and a
+    day flag placed the rest of the flight a day late: a forward jump of ~24 h
+    between consecutive observations (no flight lasts 20 h)."""
+    for key in ("obs_10s", "obs_30s", "observations"):
+        o = result.get(key)
+        if o:
+            t = [x.get("time_sec") for x in o if isinstance(x, dict) and x.get("time_sec") is not None]
+            return any(b - a > 72000 for a, b in zip(t, t[1:]))
+    return False
 
 
 def _fl_gcs_get_gz(key: str, max_age_days: float | None = None):
@@ -5675,32 +5688,45 @@ def get_fl_data(
 
 def _fl_full_result(file_url: str, filename: str, center_lat: float, center_lon: float,
                     h: dict, now: float):
-    """Full parsed result (incl. obs_1s): v7 blobs → legacy v6 blob → AOML.
+    """Full parsed result (incl. obs_1s): v8 blobs → v7 blobs → legacy v6 blob → AOML.
 
-    Returns (result, needs_v7_write) — the flag is True when the result did
-    not come from v7 blobs, so callers should persist the split blobs.
+    Returns (result, needs_write) — the flag is True when the result did not
+    come from v8 blobs, so callers should persist the split blobs.
     """
     file_year = _fl_file_year(filename)
     historical = _fl_is_historical(file_year)
     max_age = None if historical else 7.0
 
     import gzip as _gzip
-    light_gz = _fl_gcs_get_gz(_fl_gcs_key(filename, center_lat, center_lon, "light"), max_age)
-    if light_gz:
+
+    def _split_blobs(prefix):
+        light_gz = _fl_gcs_get_gz(_fl_gcs_key(filename, center_lat, center_lon, "light", prefix), max_age)
+        if not light_gz:
+            return None
         try:
             result = json.loads(_gzip.decompress(light_gz))
-            ones_gz = _fl_gcs_get_gz(_fl_gcs_key(filename, center_lat, center_lon, "1s"), max_age)
+            ones_gz = _fl_gcs_get_gz(_fl_gcs_key(filename, center_lat, center_lon, "1s", prefix), max_age)
             if ones_gz:
                 result["obs_1s"] = json.loads(_gzip.decompress(ones_gz)).get("obs_1s") or []
-            return result, False
+            return result
         except Exception:
-            pass
+            return None
 
-    # Legacy v6 combined blob (avoids an AOML refetch during migration); never
-    # for the USAF formats fixed after it was written
-    v6 = (None if _detect_fl_format(filename) in _FL_USAF_FIXED_FORMATS
-          else _fl_gcs_get_v6(filename, center_lat, center_lon))
-    if v6:
+    result = _split_blobs(_FL_GCS_CACHE_PREFIX)
+    if result is not None:
+        return result, False
+
+    # Earlier generations avoid an AOML refetch, except where a v8 fix changed
+    # the parse: the USAF formats, and 1-s files with the day double count
+    if _detect_fl_format(filename) in _FL_USAF_FIXED_FORMATS:
+        return _fl_fetch_and_parse(file_url, filename, center_lat, center_lon, h, now), True
+    result = _split_blobs(_FL_GCS_PREV_PREFIX)
+    if result is not None and not _fl_day_double_counted(result):
+        return result, True
+
+    # Legacy v6 combined blob (avoids an AOML refetch during migration)
+    v6 = _fl_gcs_get_v6(filename, center_lat, center_lon)
+    if v6 and not _fl_day_double_counted(v6):
         cached_at = v6.get("_cached_at", 0)
         age_days = (now - cached_at) / 86400 if cached_at else 9999
         if historical or age_days < 7:
@@ -5879,20 +5905,24 @@ def _extract_summary_from_caches(file_url: str) -> dict | None:
     for ck, ((gz, summ), _ts) in _fl_data_cache.items():
         if ck.startswith(file_url + "_"):
             return summ or _summary_from_light_gz(gz)
-    # List GCS blobs with this filename prefix: v7 light blobs, then legacy v6
+    # List GCS blobs with this filename prefix: v8 light blobs, then (formats
+    # whose parse the v8 fixes did not change; summaries do not depend on
+    # time, so the 1-s day fix does not matter here) v7, then legacy v6
     bucket = _get_gcs_bucket()
+    usaf = _detect_fl_format(filename) in _FL_USAF_FIXED_FORMATS
     if bucket:
-        try:
-            prefix = f"{_fl_cache_prefix(filename)}/{filename}_"
-            for blob in bucket.list_blobs(prefix=prefix, max_results=4):
-                if not blob.name.endswith(".light.json.gz"):
-                    continue
-                summ = _summary_from_light_gz(blob.download_as_bytes(timeout=5))
-                if summ:
-                    return summ
-        except Exception:
-            pass
-        if _detect_fl_format(filename) in _FL_USAF_FIXED_FORMATS:
+        for gen in ((_FL_GCS_CACHE_PREFIX,) if usaf else (_FL_GCS_CACHE_PREFIX, _FL_GCS_PREV_PREFIX)):
+            try:
+                prefix = f"{gen}/{filename}_"
+                for blob in bucket.list_blobs(prefix=prefix, max_results=4):
+                    if not blob.name.endswith(".light.json.gz"):
+                        continue
+                    summ = _summary_from_light_gz(blob.download_as_bytes(timeout=5))
+                    if summ:
+                        return summ
+            except Exception:
+                pass
+        if usaf:
             return None                      # pre-fix v6 summaries do not apply
         try:
             prefix = f"{_FL_GCS_V6_PREFIX}/{filename}_"
