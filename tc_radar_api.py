@@ -6694,12 +6694,16 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
     # Map known USAF names to our standard field names.
     # Note: some USAF files have both WSpd/WDir (meteorological wind) AND WS/WD
     # (potentially different quantity). Prefer WSpd/WDir when present.
+    # ADS exports (2005-06 *U#STORM.TXT / .10sec.txt / .ten): PA = pressure
+    # altitude (m) and CSP = static pressure (hPa) agree through the ISA to
+    # ~0.1 hPa; BSP is the altimeter setting (constant 1013.27), NOT a
+    # pressure, and DPR is the dynamic pressure, NOT a dewpoint.
     _USAF_MAP = {
         "GMTTIME": "TIME", "LAT": "LAT", "LON": "LON",
         "WSPD": "WNDSP", "WDIR": "WNDDR",  # Preferred wind columns
         "WS": "WNDSP2", "WD": "WNDDR2",    # Fallback wind (may be flags in newer files)
-        "TA": "TEMPR", "DPR": "DEWPT", "TDD": "DEWPT", "TD": "DEWPT",
-        "BSP": "PRESS", "CSP": "PRESS2",
+        "TA": "TEMPR", "TDD": "DEWPT", "TD": "DEWPT",
+        "PA": "PALT", "CSP": "PRESS2",
         "GPSA": "GEOAL", "SLP": "SFCPR",
         "THD": "HEAD", "TRK": "TRACK",
         "GS": "GNSPD", "TAS": "TAS",
@@ -6831,7 +6835,13 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
             wspd = wspd * 0.514444
         temp = _get("TEMPR")
         dewpt = _get("DEWPT")
-        press = _get("PRESS")
+        # Static pressure: from the pressure altitude (ISA), else the reported
+        # static pressure CSP, else PT. Never BSP (the altimeter setting).
+        press = _isa_pressure_hpa(_get("PALT"))
+        if press is None:
+            press = _get("PRESS2")
+        if press is None:
+            press = _get("PRESS")
         geo_alt = _get("GEOAL")
         sfcpr = _get("SFCPR")
         gn_spd = _get("GNSPD")
@@ -6872,17 +6882,31 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
     return observations
 
 
+def _isa_pressure_hpa(pa_m):
+    """Static pressure (hPa) from pressure altitude (m) in the ICAO standard
+    atmosphere, the altimetry relation the aircraft itself uses:
+    p = 1013.25 (1 - PA / 44330.8) ** (1 / 0.190263). None if PA is missing."""
+    if pa_m is None:
+        return None
+    x = 1.0 - pa_m / 44330.8
+    return 1013.25 * x ** (1.0 / 0.190263) if x > 0 else None
+
+
 def _parse_usaf_ten(text: str) -> list:
     """
-    Parse USAF .ten format flight-level files (10-second data, late 1990s).
+    Parse USAF ten-second flight-level files in the deg-min layout: .ten
+    (late 1990s-2003), and the 2000-05 .10sec.txt / .10.txt files that use the
+    same columns.
 
     Format:
       Line 1: column names (time lt lg ta td wd ws dv pa ra flag)
-      Line 2: @ metadata line (date, aircraft, storm)
+      Line 2: @ metadata line (date, aircraft, storm); the two may be swapped
       Line 3+: data in deg-min format (30 24.2N  88 55.6W)
 
     Time is HH:MM:SS with possible space-padded seconds (16:30: 0).
     Lat/lon use degrees + decimal minutes + N/S/E/W suffix.
+    dv / pa / ra are the D-value, pressure altitude and radar altitude (m):
+    static pressure follows from pa (ISA), geometric altitude = pa + dv.
     """
     lines = text.replace('\x00', '').strip().splitlines()
     if len(lines) < 3:
@@ -6956,12 +6980,17 @@ def _parse_usaf_ten(text: str) -> list:
         dewpt = _fget(1)     # dewpoint (°C)
         wdir = _fget(2)      # wind direction (deg)
         wspd = _fget(3)      # wind speed (kt in .ten format)
-        dval = _fget(4)      # D-value (m)
-        palt = _fget(5)      # pressure altitude
-        ralt = _fget(6)      # radar altitude
+        dval = _fget(4)      # D-value (m): geometric minus pressure altitude
+        palt = _fget(5)      # pressure altitude (m)
+        ralt = _fget(6)      # radar altitude (m): height above the surface
 
         # Convert wind speed from knots to m/s
         wspd_ms = wspd * 0.514444 if wspd is not None else None
+        # Static pressure from the pressure altitude (ISA). Geometric altitude
+        # = pressure altitude + D-value; the radar altitude (= geometric
+        # altitude over water) only where either is missing.
+        press = _isa_pressure_hpa(palt)
+        geo_alt = palt + dval if (palt is not None and dval is not None) else ralt
 
         obs = {
             "time": f"{hh:02d}:{mm:02d}:{ss:02d}",
@@ -6970,8 +6999,8 @@ def _parse_usaf_ten(text: str) -> list:
             "lon": round(lon, 5),
             "fl_wspd_ms": round(wspd_ms, 2) if wspd_ms is not None else None,
             "fl_wdir_deg": round(wdir, 1) if wdir is not None else None,
-            "gps_alt_m": None,
-            "static_pres_hpa": None,
+            "gps_alt_m": round(geo_alt, 1) if geo_alt is not None else None,
+            "static_pres_hpa": round(press, 1) if press is not None else None,
             "temp_c": round(temp, 2) if temp is not None else None,
             "dewpoint_c": round(dewpt, 2) if dewpt is not None else None,
             "sfcpr_hpa": None,

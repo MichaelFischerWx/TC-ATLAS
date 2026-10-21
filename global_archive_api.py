@@ -5464,11 +5464,24 @@ def _parse_hrd_legacy_csv(text: str) -> list:
 
 _FL_GCS_CACHE_PREFIX = "recon/v7"  # v7: split light/1s pre-gzipped blobs (dropdown latency)
 _FL_GCS_V6_PREFIX = "recon/v6"     # legacy combined blobs — read-only fallback, avoids AOML refetch
+# USAF parser fix (2026-10-20): the ten-second deg-min files (.ten, .10sec.txt,
+# .10.txt) now carry static pressure (ISA from the pressure altitude) and
+# geometric altitude, the .10.txt files parse at all, and the ADS exports
+# (*U#STORM.TXT etc.) take static pressure from PA instead of the altimeter
+# setting. Their cached blobs predate the fix, so these formats use a new cache
+# generation and never read the v6 blobs.
+_FL_GCS_USAF_PREFIX = "recon/v8"
+_FL_USAF_FIXED_FORMATS = ("usaf_10sec", "usaf_01", "usaf_ten", "text_generic")
+
+
+def _fl_cache_prefix(filename: str) -> str:
+    return (_FL_GCS_USAF_PREFIX if _detect_fl_format(filename) in _FL_USAF_FIXED_FORMATS
+            else _FL_GCS_CACHE_PREFIX)
 
 
 def _fl_gcs_key(filename: str, center_lat: float, center_lon: float, kind: str) -> str:
     """GCS object key for a cached flight-level blob. kind: 'light' (no obs_1s) or '1s'."""
-    return f"{_FL_GCS_CACHE_PREFIX}/{filename}_{center_lat:.1f}_{center_lon:.1f}.{kind}.json.gz"
+    return f"{_fl_cache_prefix(filename)}/{filename}_{center_lat:.1f}_{center_lon:.1f}.{kind}.json.gz"
 
 
 def _fl_gcs_get_gz(key: str, max_age_days: float | None = None):
@@ -5683,8 +5696,10 @@ def _fl_full_result(file_url: str, filename: str, center_lat: float, center_lon:
         except Exception:
             pass
 
-    # Legacy v6 combined blob (avoids an AOML refetch during migration)
-    v6 = _fl_gcs_get_v6(filename, center_lat, center_lon)
+    # Legacy v6 combined blob (avoids an AOML refetch during migration); never
+    # for the USAF formats fixed after it was written
+    v6 = (None if _detect_fl_format(filename) in _FL_USAF_FIXED_FORMATS
+          else _fl_gcs_get_v6(filename, center_lat, center_lon))
     if v6:
         cached_at = v6.get("_cached_at", 0)
         age_days = (now - cached_at) / 86400 if cached_at else 9999
@@ -5692,6 +5707,40 @@ def _fl_full_result(file_url: str, filename: str, center_lat: float, center_lon:
             return v6, True
 
     return _fl_fetch_and_parse(file_url, filename, center_lat, center_lon, h, now), True
+
+
+def _fl_parse_text(text: str, filename: str, h: dict) -> list:
+    """The flight-level parse chain, shared by the data and stats paths: the
+    standard HRD / USAF header parser, then (USAF formats) the ten-second
+    deg-min parser, then the legacy CSV parser."""
+    fmt = _detect_fl_format(filename)
+    observations = []
+
+    # Try standard parser first (handles both NOAA and most USAF formats)
+    try:
+        observations = h["parse_1sec"](text)
+    except Exception as e:
+        logger.warning(f"Standard parser failed for {filename}: {e}")
+
+    # If standard parser returned too few results, try .ten parser (USAF deg-min
+    # format; also the 2000-05 .10sec.txt / .10.txt files with the same columns)
+    if len(observations) < 10 and fmt in _FL_USAF_FIXED_FORMATS:
+        try:
+            from tc_radar_api import _parse_usaf_ten
+            observations = _parse_usaf_ten(text)
+            if observations:
+                logger.info(f"USAF .ten parser succeeded for {filename}: {len(observations)} obs")
+        except Exception as e:
+            logger.warning(f"USAF .ten parser failed for {filename}: {e}")
+
+    # If still too few results, try legacy CSV parser
+    if len(observations) < 10 and "," in text[:500]:
+        try:
+            observations = _parse_hrd_legacy_csv(text)
+            logger.info(f"Legacy CSV parser succeeded for {filename}: {len(observations)} obs")
+        except Exception as e:
+            logger.warning(f"Legacy CSV parser also failed for {filename}: {e}")
+    return observations
 
 
 def _fl_fetch_and_parse(file_url: str, filename: str, center_lat: float, center_lon: float,
@@ -5709,31 +5758,7 @@ def _fl_fetch_and_parse(file_url: str, filename: str, center_lat: float, center_
 
     # Detect format and parse
     fmt = _detect_fl_format(filename)
-    observations = []
-
-    # Try standard parser first (handles both NOAA and most USAF formats)
-    try:
-        observations = h["parse_1sec"](text)
-    except Exception as e:
-        logger.warning(f"Standard parser failed for {filename}: {e}")
-
-    # If standard parser returned too few results, try .ten parser (USAF deg-min format)
-    if len(observations) < 10 and fmt in ("usaf_ten", "usaf_10sec", "text_generic"):
-        try:
-            from tc_radar_api import _parse_usaf_ten
-            observations = _parse_usaf_ten(text)
-            if observations:
-                logger.info(f"USAF .ten parser succeeded for {filename}: {len(observations)} obs")
-        except Exception as e:
-            logger.warning(f"USAF .ten parser failed for {filename}: {e}")
-
-    # If still too few results, try legacy CSV parser
-    if len(observations) < 10 and "," in text[:500]:
-        try:
-            observations = _parse_hrd_legacy_csv(text)
-            logger.info(f"Legacy CSV parser succeeded for {filename}: {len(observations)} obs")
-        except Exception as e:
-            logger.warning(f"Legacy CSV parser also failed for {filename}: {e}")
+    observations = _fl_parse_text(text, filename, h)
 
     if len(observations) < 10:
         return {
@@ -5858,7 +5883,7 @@ def _extract_summary_from_caches(file_url: str) -> dict | None:
     bucket = _get_gcs_bucket()
     if bucket:
         try:
-            prefix = f"{_FL_GCS_CACHE_PREFIX}/{filename}_"
+            prefix = f"{_fl_cache_prefix(filename)}/{filename}_"
             for blob in bucket.list_blobs(prefix=prefix, max_results=4):
                 if not blob.name.endswith(".light.json.gz"):
                     continue
@@ -5867,6 +5892,8 @@ def _extract_summary_from_caches(file_url: str) -> dict | None:
                     return summ
         except Exception:
             pass
+        if _detect_fl_format(filename) in _FL_USAF_FIXED_FORMATS:
+            return None                      # pre-fix v6 summaries do not apply
         try:
             prefix = f"{_FL_GCS_V6_PREFIX}/{filename}_"
             blobs = list(bucket.list_blobs(prefix=prefix, max_results=1))
@@ -5897,16 +5924,10 @@ def _quick_max_wind_from_file(file_url: str) -> dict | None:
         return None
 
     filename = file_url.rsplit("/", 1)[-1]
-    fmt = _detect_fl_format(filename)
+    if _detect_fl_format(filename) == "unknown":
+        return None
     try:
-        if fmt in ("noaa_1sec", "noaa_1min"):
-            observations = h["parse_1sec"](text)
-        elif fmt in ("usaf_10sec", "usaf_01", "usaf_ten"):
-            observations = h["parse_1sec"](text)  # Unified parser handles both
-        elif fmt == "legacy_csv":
-            observations = _parse_hrd_legacy_csv(text)
-        else:
-            return None
+        observations = _fl_parse_text(text, filename, h)   # the data path's own chain
     except Exception:
         return None
 
