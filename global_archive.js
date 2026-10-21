@@ -13078,8 +13078,10 @@ function _gaFLLoadMissionData(fileUrl) {
        "immutable" for a year by browsers and Cloudflare, so a parser fix only
        reaches viewers under a new URL. pv=2 (2026-10-20): USAF ten-second
        files carry static pressure / altitude, .10.txt files parse, ADS
-       exports take static pressure from PA, not the altimeter setting. */
-    baseUrl += '&pv=2';
+       exports take static pressure from PA, not the altimeter setting.
+       pv=3 (2026-10-20): HRD 1-s files that write both an hour past 24 and a
+       day flag no longer put the rest of the flight a day late. */
+    baseUrl += '&pv=3';
 
     // Check browser-side cache first — instant load for previously viewed missions
     if (_gaFLClientCache[fileUrl]) {
