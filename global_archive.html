@@ -93,7 +93,7 @@
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261010w1">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20261019rc1">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20261020v6a">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -1293,12 +1293,12 @@
                             <li>Only frames whose center is <strong>over water</strong> get the full
                                 wind estimate. Over land, or where the image is unusable, the wind
                                 is <strong>filled</strong> and drawn dashed, and the storm&rsquo;s
-                                peak wind never rests on a filled frame. The pressure there is
+                                peak wind never rests on a filled frame (except on a storm with no
+                                unfilled frame, where the peak is marked as filled). The pressure there is
                                 still an estimate: the ridge, with the tree member&rsquo;s last
                                 value fading over about six hours. A few East and Central Pacific
                                 frames the new model does not cover (all of Erick 2019 among them)
-                                keep the previous version&rsquo;s values and are marked as
-                                filled.</li>
+                                keep the published v5.3 values and are marked as filled.</li>
                             <li><strong>Every published value is held out</strong>: each frame comes
                                 from models that never saw its year. Atlantic, East and Central
                                 Pacific members were fitted leave-one-year-out (the 1998&ndash;99
@@ -1388,6 +1388,16 @@
                         <input type="text" id="gra-search" class="ga-input ga-input-sm gra-search"
                                placeholder="Search name or ATCF (e.g. Ioke, WP012006)"
                                autocomplete="off" spellcheck="false">
+                        <!-- The list's own copy of the toolbar's "Filter by" switch (same state,
+                             setUnit): the toolbar collapses on a phone, and ranking by wind is a
+                             question asked of the list. -->
+                        <div class="gra-rank">
+                            <span class="gra-rank-lbl">Rank by</span>
+                            <div class="gra-seg" id="gra-unit-list" role="group" aria-label="Rank the list by">
+                                <button class="active" data-unit="hPa">P<sub>min</sub></button>
+                                <button data-unit="kt">V<sub>max</sub></button>
+                            </div>
+                        </div>
                         <div class="basin-chips" id="gra-sorts" style="margin-top:8px;">
                             <button class="basin-chip active" data-sort="ghost">GHOST P<sub>min</sub></button>
                             <button class="basin-chip" data-sort="bt">BT P<sub>min</sub></button>

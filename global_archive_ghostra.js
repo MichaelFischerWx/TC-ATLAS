@@ -1061,6 +1061,11 @@
                     s.min_gap + ' hPa), with no reconnaissance nearby — the minimum has no independent support">?</span>' : '') +
                 '</div>' +
                 '<div class="gra-num gra-g">' + (gv !== null ? gv.toFixed(kt ? 0 : 1) : '—') +
+                /* v6: a storm with no unfilled wind frame (peak_filled) has
+                   only a filled peak — show it, marked. */
+                (kt && s.peak_filled && gv !== null
+                    ? '<span class="gra-fillmark" title="Every wind frame of this storm ' +
+                      'is filled, so its peak wind is a filled value">filled</span>' : '') +
                 heldoutCell(s) + '</div>' +
                 '<div class="gra-meta">' + esc(s.year) + ' · ' + esc(s.basin) + ' · ' + esc(s.n) + ' fr</div>' +
                 '<div class="gra-num" title="official best-track peak (includes non-synoptic special entries); Δ = GHOST at published frames minus this">BT ' + (bv !== null ? bv.toFixed(0) : '—') +
@@ -2186,7 +2191,18 @@
             '</svg>' +
             '<div class="gra-chart-key"><b style="color:#f43f5e">—</b> GHOST &nbsp; ' +
             '<b style="color:var(--slate)">—</b> best track &nbsp; ' +
-            (anyFill ? '<b style="color:#f43f5e">- -</b> <span title="The direct ' +
+            (anyFill && isV6Plus()
+                /* v6 fills: center over land or image rejected (wind = the
+                   lower of the pressure-implied wind and the tree's raw wind),
+                   plus the few frames carried from v5.3. */
+                ? '<b style="color:#f43f5e">- -</b> <span title="On frames whose ' +
+                  'center is over land, or whose infrared image was rejected, ' +
+                  'the wind is filled: the lower of the wind implied by the ' +
+                  'pressure and the tree member’s own wind. A few East and ' +
+                  'Central Pacific frames carry the v5.3 value. A filled wind ' +
+                  'never sets the storm peak unless every frame is filled.">' +
+                  'filled wind (center over land or image rejected)</span> &nbsp; '
+                : anyFill ? '<b style="color:#f43f5e">- -</b> <span title="The direct ' +
                 'wind head is withheld on QC-masked frames (overland or ' +
                 'output-spike); the dashed wind is filled from the published ' +
                 'pressure (AL: min with the raw wind head) and is excluded ' +
@@ -2331,8 +2347,12 @@
         if (!UNITS[u]) return;
         funit = u;
         var U = UNITS[u];
-        Array.prototype.forEach.call($('gra-unit').children, function (x) {
-            x.classList.toggle('active', x.dataset.unit === u);
+        // the toolbar's "Filter by" and the list's "Rank by" are one switch
+        ['gra-unit', 'gra-unit-list'].forEach(function (id) {
+            if (!$(id)) return;
+            Array.prototype.forEach.call($(id).children, function (x) {
+                x.classList.toggle('active', x.dataset.unit === u);
+            });
         });
         [['obs', 'Observed'], ['gh', 'GHOST']].forEach(function (pair) {
             var lo = $('gra-' + pair[0] + 'lo'), hi = $('gra-' + pair[0] + 'hi');
@@ -2366,8 +2386,11 @@
                 };
             });
         });
-        Array.prototype.forEach.call($('gra-unit').children, function (el) {
-            el.onclick = function () { setUnit(el.dataset.unit); };
+        ['gra-unit', 'gra-unit-list'].forEach(function (id) {
+            if (!$(id)) return;
+            Array.prototype.forEach.call($(id).children, function (el) {
+                el.onclick = function () { setUnit(el.dataset.unit); };
+            });
         });
         if ($('gra-version')) {
             $('gra-version').onchange = function () { setVersion(this.value); };

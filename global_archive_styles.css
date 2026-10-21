@@ -3025,6 +3025,17 @@ input[type="range"].ga-range::-moz-range-thumb {
     border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1;
 }
 .gra-search { width: 100%; margin-top: 8px; font-size: 0.74rem; }
+/* "Rank by" Pmin / Vmax, the list's copy of the toolbar's currency switch */
+.gra-rank { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.gra-rank-lbl {
+    font-size: 0.6rem; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--slate); font-weight: 700;
+}
+/* a peak wind that can only come from filled frames (no unfilled frame) */
+.gra-fillmark {
+    font-size: 0.6rem; font-weight: 600; color: var(--slate); margin-left: 3px;
+    font-style: italic;
+}
 .gra-ir-zoom {
     position: absolute; right: 5px; top: 4px; font-size: 0.58rem; line-height: 1.45;
     background: rgba(15, 23, 42, .72); color: #e2e8f0; padding: 1px 5px;
