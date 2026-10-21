@@ -13074,6 +13074,12 @@ function _gaFLLoadMissionData(fileUrl) {
     var baseUrl = API_BASE + '/global/flightlevel/data?file_url=' +
         encodeURIComponent(fileUrl);
     if (centerLat) baseUrl += '&center_lat=' + centerLat + '&center_lon=' + centerLon;
+    /* Parser version (ignored by the API): historical responses are cached
+       "immutable" for a year by browsers and Cloudflare, so a parser fix only
+       reaches viewers under a new URL. pv=2 (2026-10-20): USAF ten-second
+       files carry static pressure / altitude, .10.txt files parse, ADS
+       exports take static pressure from PA, not the altimeter setting. */
+    baseUrl += '&pv=2';
 
     // Check browser-side cache first — instant load for previously viewed missions
     if (_gaFLClientCache[fileUrl]) {
