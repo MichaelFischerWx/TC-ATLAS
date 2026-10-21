@@ -947,13 +947,24 @@
          a value          the storm has a held-out estimate — show it, and the
                           divergence is the information (Patricia: 868.6
                           frozen, 885.9 held out)
-         "not held out"   the basin has NO held-out channel because there is
-                          nothing to hold out — an out-of-basin transfer is
-                          already out of sample everywhere
+         "out of basin"   the basin has NO held-out channel because there is
+                          nothing to hold out — an out-of-basin transfer was
+                          never in training, which is stricter than a held-out
+                          season (it used to read "not held out", which
+                          misstated exactly that)
          "—"              a held-out channel exists for this basin but not for
                           this storm
        Rendering any of them as a repeat of the product value, or as a flat
        fill, would turn an absence into apparent corroboration. */
+    /* The out-of-basin transfer label, shared by the leaderboard row and the
+       frame readout: say what the estimate IS, not what it lacks. */
+    function transferLabel(b) {
+        return '<span class="gra-ho gra-ho-na" title="Never in training: a ' +
+            'cross-basin transfer. Zero ' + esc(b || '') + ' frames were in ' +
+            'training, so every frame is out of sample, a stricter condition ' +
+            'than holding out a season">out of basin</span>';
+    }
+
     function heldoutCell(s) {
         var m = basinModel(s.basin);
         if (s.heldout_min_hpa !== null && s.heldout_min_hpa !== undefined) {
@@ -966,12 +977,7 @@
                 (d !== null ? ' <i>' + (d > 0 ? '+' : '−') +
                     Math.abs(d).toFixed(1) + '</i>' : '') + '</span>';
         }
-        if (m && m.protocol === 'transfer') {
-            return '<span class="gra-ho gra-ho-na" title="Out-of-basin ' +
-                'transfer: zero ' + s.basin + ' frames were in training, so ' +
-                'every frame is already out of sample and there is nothing to ' +
-                'hold out">not held out</span>';
-        }
+        if (m && m.protocol === 'transfer') return transferLabel(s.basin);
         if (m && !m.heldout_column &&
                 (m.protocol === 'loyo' || m.protocol === 'loso')) {
             return '<span class="gra-ho gra-ho-na" title="' +
@@ -1891,9 +1897,10 @@
         var b = st.basin || (byId[sid] && byId[sid].basin);
         var hoTxt = S.ho
             ? '<span class="gra-ho">HO <b>' + f(S.ho, 1) + '</b></span>'
+            : (basinModel(b) || {}).protocol === 'transfer'
+            ? transferLabel(b)
             : '<span class="gra-ho gra-ho-na" title="' + heldoutAbsence(b) +
-              '">' + ((basinModel(b) || {}).protocol === 'transfer'
-                  ? 'not held out' : 'no HO') + '</span>';
+              '">no HO</span>';
         $('gra-ir-vals').innerHTML =
             '<span class="gra-g">GHOST</span> <b>' + f(S.gp, 1) + '</b> hPa / <b>' +
             f(S.gv, 0) + '</b> kt &nbsp;·&nbsp; ' + hoTxt +
