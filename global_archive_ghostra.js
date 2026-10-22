@@ -738,13 +738,23 @@
         return !!m && +m[1] >= 6;
     }
 
+    /* v6.1 and later: the wind weight shifts toward the vision transformer
+       above 50 kt, the wind-pressure step and the three-member pressure apply
+       in every basin, and the tree reads the transformer's estimates plus
+       observed SST and a thermodynamic PI, so the prose has a v6.1 form. */
+    function isV61Plus() {
+        var m = String((index && index.version) || version || '').match(/^v(\d+)(?:\.(\d+))?/);
+        return !!m && (+m[1] > 6 || (+m[1] === 6 && +(m[2] || 0) >= 1));
+    }
+
     /* The About panel's "How it is built": one block per model generation in
-       global_archive.html ([data-gra-built]); show the one for this version. */
+       global_archive.html ([data-gra-built] = v5 / v6 / v6.1); show the one
+       for this version. */
     function renderBuilt() {
-        var v6 = isV6Plus();
+        var gen = isV61Plus() ? 'v6.1' : (isV6Plus() ? 'v6' : 'v5');
         var els = document.querySelectorAll('[data-gra-built]');
         for (var i = 0; i < els.length; i++) {
-            els[i].hidden = (els[i].getAttribute('data-gra-built') === 'v6') !== v6;
+            els[i].hidden = els[i].getAttribute('data-gra-built') !== gen;
         }
     }
 
@@ -824,7 +834,20 @@
                held-out fold, and a best-track size analysis). Shipping both
                numbers silently was the one option ruled out — see
                TC-SWARM realtime/FPM_WIND_CONSISTENCY.md. */
-            (isBlendVersion() && isV6Plus()
+            (isBlendVersion() && isV61Plus()
+            /* v6.1: tree weight 1/2 below 50 kt, 1/4 above 80 kt; the wind
+               step and the three-member pressure in every basin. */
+            ? '<br><b>On the model:</b> V<sub>max</sub> blends the tree ' +
+              'member’s wind with a vision transformer, a neural network that ' +
+              'reads the infrared image itself (equal shares below 50 kt, three ' +
+              'quarters vision transformer above 80 kt); above 130 kt it is ' +
+              'blended with the wind implied by the published pressure, in every ' +
+              'basin. P<sub>min</sub> is half the first-principles ridge (FPM) ' +
+              'and a quarter each from the tree member and the vision ' +
+              'transformer; it is never above the environmental pressure minus ' +
+              '1 hPa. Over land the wind is filled and drawn dashed. The ' +
+              'Real-Time Monitor still publishes the earlier model.'
+            : (isBlendVersion() && isV6Plus())
             /* v6: wind = the tree member and the vision transformer, equal
                halves; pressure = half the ridge plus the tree (and, outside
                the West Pacific, the ViT). Only the wind is filled over land. */
