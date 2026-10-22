@@ -1488,10 +1488,9 @@ def _sel_latlon_wrap(da, lat_min, lat_max, lon_min, lon_max, xr):
     0..360, detected from the coords); a box that then straddles the grid
     seam is selected as two pieces concatenated west-to-east. Returned lons
     are shifted back, so they are monotonic and numerically match the
-    requested range. Raises if either seam piece comes back empty — that
-    means the source file itself is truncated at the seam (e.g. a lon-clamped
-    OPeNDAP subset) and the caller must try the next source rather than serve
-    a mislabeled chip.
+    requested range. Raises if the grid stops short of the seam — the source
+    file itself is truncated there (e.g. a lon-clamped OPeNDAP subset) and the
+    caller must try the next source rather than serve a mislabeled chip.
 
     Returns (values, lats, lons) with lats in file order (not flipped).
     """
@@ -1506,13 +1505,22 @@ def _sel_latlon_wrap(da, lat_min, lat_max, lon_min, lon_max, xr):
         east_part = da.sel(lat=lat_sl, lon=slice(g0, hi - 360.0))
         west_lons = west_part.coords["lon"].values + shift
         east_lons = east_part.coords["lon"].values + 360.0 + shift
-        if len(west_lons) == 0 or len(east_lons) == 0:
+        # Judge truncation by whether the grid reaches the seam, not by an
+        # empty piece: cell-centered grids stop half a pixel short (MergIR
+        # runs -179.98..179.98), so a box edge in that strip legitimately
+        # selects nothing on one side, and raising there sent the frame to
+        # GridSat and counted toward the MergIR breaker.
+        step = float(np.nanmedian(np.abs(np.diff(grid_lons)))) if len(grid_lons) > 1 else 0.0
+        if (float(np.nanmin(grid_lons)) > g0 + 1.5 * step
+                or float(np.nanmax(grid_lons)) < g1 - 1.5 * step):
             raise ValueError(
                 "antimeridian piece empty — source file does not span the dateline"
             )
-        da_sub = xr.concat([west_part, east_part], dim="lon")
+        pieces = [(p, l) for p, l in ((west_part, west_lons), (east_part, east_lons))
+                  if len(l)]
+        da_sub = xr.concat([p for p, _ in pieces], dim="lon")
         return (da_sub.values, da_sub.coords["lat"].values,
-                np.concatenate([west_lons, east_lons]))
+                np.concatenate([l for _, l in pieces]))
     da_sub = da.sel(lat=lat_sl, lon=slice(lo, hi))
     return da_sub.values, da_sub.coords["lat"].values, da_sub.coords["lon"].values + shift
 
@@ -1541,7 +1549,7 @@ def _load_mergir_subset(target_dt: datetime, center_lat: float, center_lon: floa
     from datetime import timedelta
 
     _mergir_tls.gap = False
-    _mergir_tls.n_gap = _mergir_tls.n_other = 0
+    _mergir_tls.n_gap = _mergir_tls.n_other = _mergir_tls.n_parse = 0
     # Acquire semaphore to limit concurrent loads (OOM protection)
     if not _data_load_semaphore.acquire(timeout=60):
         logger.warning("MergIR: semaphore timeout — too many concurrent loads")
@@ -1751,6 +1759,7 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
             except Exception as e:
                 logger.warning(f"MergIR: {url_label} parse failed: {e}")
                 _mergir_tls.n_other += 1
+                _mergir_tls.n_parse += 1
                 if tmp:
                     try:
                         os.unlink(tmp.name)
@@ -1762,7 +1771,11 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
     # Every other failure (auth, 5xx, timeouts via `except`, parse errors)
     # bumps n_other; only an all-404/too-sparse result is a gap.
     _mergir_tls.gap = _mergir_tls.n_gap > 0 and _mergir_tls.n_other == 0
-    if not _mergir_tls.gap:
+    # The breaker guards against a sick GES DISC. A file that downloaded fine
+    # but would not parse says nothing about the service — counting it let
+    # one storm's dateline frames (2026-10-18) open the breaker and push every
+    # other storm's frames onto GridSat for 5 min.
+    if not _mergir_tls.gap and _mergir_tls.n_other > _mergir_tls.n_parse:
         _mergir_record_failure()
     return None, None
 

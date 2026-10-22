@@ -2,7 +2,9 @@
 
 * _sel_latlon_wrap selects the right pixels for boxes in any longitude frame
   (track lons run past 180) on both -180..180 and 0..360 grids, including
-  boxes that straddle the grid seam, and returns lons in the caller's frame.
+  boxes that straddle the grid seam, and returns lons in the caller's frame;
+  on a MergIR-shaped (cell-centered +/-179.98) grid no dateline box raises.
+* A MergIR parse failure does not count toward the GES DISC circuit breaker.
 * SID validation and the client frame plausibility check.
 * /ir/frame rejects bad sids and implausible client values without fetching.
 * SHIPS parser reads the CIRA layout (HEAD/LAST at line end) and keeps only
@@ -66,6 +68,64 @@ def test_sel_latlon_wrap_truncated_source_raises():
         raise AssertionError("truncated seam piece accepted")
     except ValueError:
         pass
+
+
+def _mergir_grid():
+    """MergIR-shaped grid: cell centers -179.98..179.98, so the outermost
+    columns stop ~0.018 deg short of the seam on both sides."""
+    import xarray as xr
+    lons = np.linspace(-179.9818, 179.9818, 9896).astype("float32")
+    lats = np.linspace(-59.9818, 59.9818, 3298).astype("float32")
+    vals = np.broadcast_to(_norm(lons.astype(float)), (len(lats), len(lons))).copy()
+    return xr.DataArray(vals, coords={"lat": lats, "lon": lons}, dims=("lat", "lon"))
+
+
+def test_sel_latlon_wrap_mergir_dateline():
+    """2026-10-17/18: dateline frames (Percy 2005 at 200E, Genevieve 2014 at
+    178E) raised 'antimeridian piece empty' on a full global MergIR file and
+    cascaded to GridSat. Every center around the dateline — in both track
+    longitude frames — must select a full 20-deg box, including edges that
+    land in the sub-pixel strip between the last grid column and +/-180."""
+    import xarray as xr
+    da = _mergir_grid()
+    centers = [177.5, -177.5, 182.5, -182.5, 200.4, -159.6, 184.6,
+               170.0, 170.01, 190.0, 189.99, -170.0, -170.01, -189.99, 169.995]
+    for c in centers:
+        vals, lats, lons = G._sel_latlon_wrap(da, -25.0, -5.0, c - 10.0, c + 10.0, xr)
+        assert vals.shape == (len(lats), len(lons)), c
+        assert np.all(np.diff(lons) > 0), c
+        assert lons[-1] - lons[0] >= 20.0 * 0.95, (c, lons[0], lons[-1])
+        assert np.allclose(vals[0], _norm(lons), atol=1e-3), c
+
+
+def test_mergir_parse_failure_does_not_trip_breaker():
+    """A downloaded file that fails to parse is not a GES DISC outage."""
+    class _Resp:
+        status_code = 200
+        headers = {"content-type": "application/x-netcdf"}
+        def iter_content(self, chunk_size):
+            yield b"not a netcdf file"
+        def close(self):
+            pass
+
+    class _Sess:
+        def get(self, *a, **k):
+            return _Resp()
+
+    saved = (G._get_earthdata_session, G._mergir_rate_limit,
+             G._mergir_consecutive_failures, G._mergir_circuit_open_until)
+    G._get_earthdata_session = lambda: _Sess()
+    G._mergir_rate_limit = lambda: None
+    try:
+        G._mergir_consecutive_failures = 0
+        for _ in range(G.MERGIR_CIRCUIT_THRESHOLD + 2):
+            assert G._load_mergir_subset(datetime(2005, 3, 4, 9), -24.3, 200.4) == (None, None)
+        assert G._mergir_consecutive_failures == 0, G._mergir_consecutive_failures
+        assert not G._mergir_circuit_is_open()
+        assert G._mergir_tls.gap is False   # still retried by heal
+    finally:
+        (G._get_earthdata_session, G._mergir_rate_limit,
+         G._mergir_consecutive_failures, G._mergir_circuit_open_until) = saved
 
 
 def test_mergir_subset_url_normalizes_lon():
