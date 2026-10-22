@@ -172,6 +172,10 @@ echo "Deploying ${SERVICE_NAME} to Cloud Run (${REGION})..."
 # every viewer fell through to the on-demand bundle rebuild and then to the
 # legacy per-frame endpoint (82% of API egress by 2026-07-30). /ir-raw-bundle
 # now refreshes the manifest itself, but ONLY when this flag is on.
+# EARTHDATA_USERNAME (below) defaults to the real login: an empty value wipes it
+# on the service, the password path (needs a user) silently drops to the 60-day
+# bearer token, and once that expires every MergIR fetch 401s and the archive
+# renders GridSat instead (2026-10-22).
 gcloud run deploy "${SERVICE_NAME}" \
     --source "${DEPLOY_SRC}" \
     --region "${REGION}" \
@@ -181,7 +185,7 @@ gcloud run deploy "${SERVICE_NAME}" \
     --timeout "${TIMEOUT}" \
     --port 8080 \
     --allow-unauthenticated \
-    --update-env-vars "^||^TC_RADAR_S3_BUCKET=${TC_RADAR_S3_BUCKET:-}||TC_RADAR_S3_PREFIX=${TC_RADAR_S3_PREFIX:-tc-radar}||TC_RADAR_GCS_BUCKET=${TC_RADAR_GCS_BUCKET:-}||TC_RADAR_GCS_PREFIX=${TC_RADAR_GCS_PREFIX:-tc-radar}||GCS_IR_CACHE_BUCKET=${GCS_IR_CACHE_BUCKET:-tc-atlas-ir-cache}||AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}||EARTHDATA_USERNAME=${EARTHDATA_USERNAME:-}||CORS_ORIGINS=https://michaelfischerwx.github.io,http://localhost:8000,https://tcatlas.org,https://www.tcatlas.org||R2_ENDPOINT_URL=${R2_ENDPOINT_URL:-https://4f3e5ab095ae4962e91af5b33c6deb54.r2.cloudflarestorage.com}||R2_BUCKET=${R2_BUCKET:-tc-atlas-rt}||PUBLIC_BUNDLE_BASE=${PUBLIC_BUNDLE_BASE:-https://cdn.tcatlas.org}||RAW_PERFRAME=${RAW_PERFRAME:-0}||PYTHONUNBUFFERED=1" \
+    --update-env-vars "^||^TC_RADAR_S3_BUCKET=${TC_RADAR_S3_BUCKET:-}||TC_RADAR_S3_PREFIX=${TC_RADAR_S3_PREFIX:-tc-radar}||TC_RADAR_GCS_BUCKET=${TC_RADAR_GCS_BUCKET:-}||TC_RADAR_GCS_PREFIX=${TC_RADAR_GCS_PREFIX:-tc-radar}||GCS_IR_CACHE_BUCKET=${GCS_IR_CACHE_BUCKET:-tc-atlas-ir-cache}||AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}||EARTHDATA_USERNAME=${EARTHDATA_USERNAME:-michael.fischer}||CORS_ORIGINS=https://michaelfischerwx.github.io,http://localhost:8000,https://tcatlas.org,https://www.tcatlas.org||R2_ENDPOINT_URL=${R2_ENDPOINT_URL:-https://4f3e5ab095ae4962e91af5b33c6deb54.r2.cloudflarestorage.com}||R2_BUCKET=${R2_BUCKET:-tc-atlas-rt}||PUBLIC_BUNDLE_BASE=${PUBLIC_BUNDLE_BASE:-https://cdn.tcatlas.org}||RAW_PERFRAME=${RAW_PERFRAME:-0}||PYTHONUNBUFFERED=1" \
     --update-secrets "AWS_ACCESS_KEY_ID=aws-access-key-id:latest,AWS_SECRET_ACCESS_KEY=aws-secret-access-key:latest,EARTHDATA_PASSWORD=earthdata-pass:latest,R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest" \
     ${PROMOTE_FLAGS[@]+"${PROMOTE_FLAGS[@]}"} \
     ${ARGS_FORWARD[@]+"${ARGS_FORWARD[@]}"}
