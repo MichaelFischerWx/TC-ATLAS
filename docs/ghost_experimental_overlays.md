@@ -8,7 +8,7 @@ published GHOST.
 
 | Button | Gate (`PROFILES.blend.panels`) | localStorage key | Object prefix (R2, GCS fallback) | Producer |
 |---|---|---|---|---|
-| GHOST v6 (ViT, experimental) | `vit: true` | `tcatlas.exp.vit` | `ghostb-vit-rt/` | `realtime/vitghost/` (new, 2026-10-20) |
+| GHOST v6.1 (experimental) | `vit: true` | `tcatlas.exp.vit` | `ghostb-v61-rt/` | `realtime/v61/` (2026-10-22; was GHOST v6 (ViT) on `ghostb-vit-rt/`, 2026-10-20) |
 | GHOST + CNN (test) | `cnn: false` (off; code kept) | `tcatlas.exp.cnn` | `ghostb-cnn-rt/` | `realtime/cnnghost/shadow_blend.py` |
 | CNN RMW (test) | `rmwcnn: true` (unchanged) | `tcatlas.exp.rmwcnn` | `ghost-rmwcnn-rt/` | `realtime/cnnghost/rmw_hybrid_publish.py` |
 
@@ -89,3 +89,21 @@ since 21:50Z, with the hook in `cnnghost/shadow_all.py` since 21:51Z; this
 page went out after it. The member carries the §58 physical pressure bound
 (Pmin ≤ Penv − 1 hPa on the member and on the blend). Operations and
 rollback are in TC-SWARM `realtime/vitghost/README.md`.
+
+## The v6.1 overlay (2026-10-22, replaces the v6 ViT overlay on the same button)
+
+The dashed button now reads `ghostb-v61-rt/`: GHOST v6.1 in real time, the model behind the GHOST Reanalysis v6.1.
+
+- **Composition:** the reanalysis composition code itself, `realtime/v61/v61_core.py`, gated bit-exact against the GHOST-RA v6.1 chains.
+- **Inputs:** the potential intensity comes from GFS (`realtime/rt_pi.py`).
+
+```
+com.fischerwx.ghost-v61-shadow  (:02 / :32)  v61/shadow_v61.py, holds /tmp/ghost-cnn-shadow.lock.d with its pid
+  1 cnnghost/ghost_rt_v61_shadow.py -> out_shadow_v61/ghost_<ATCF>_goes.json  (v6.1 tree + R1 ViT reads + OISST + GFS PI)
+  2 cnnghost/fpm_rt_v61_shadow.py   -> out_shadow_v61/fpm/fpm_<ATCF>.json    (FPM v2.1 member, GFS PI, v6.1 gate key)
+  3 v61/v61_blend.py                -> out_shadow_v61/blend_<ATCF>.json      (v61_core: the GHOST-RA v6.1 composition)
+  4 v61/publish_v61_rt.py           -> ghostb-v61-rt/ (changed payloads + merged index)
+finished 2026 storms: v61/replay_v61_2026.py -> out_shadow_v61_2026/ (same steps in archive mode), published by step 4
+```
+
+The v6 ViT producer (`ghostb-vit-rt/`) still runs. Nothing on the page reads it now.
