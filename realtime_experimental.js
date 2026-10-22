@@ -230,15 +230,20 @@
        published GHOST. */
     var CNN_COL = '#0ea5e9';
     var _showCnn = _pref('tcatlas.exp.cnn', false);
-    /* GHOST v6 ViT overlay (2026-10-20): GHOST with the vision-transformer
-       image member the author adopted for v6. Wind = half the tree member
-       (the shadow tree above) + half the ViT member's reads of the IR image;
-       pressure = the FPM / tree blend with a wind-pressure guard (TC-SWARM
-       realtime/vitghost/vit_blend.py, the offline v6 recipe run in real
-       time). Same contract as the CNN overlay it replaces: off by default,
-       remembered per browser, one dashed trace on Vmax and Pmin. */
+    /* GHOST v6.1 overlay (2026-10-22; was the v6 ViT overlay of 2026-10-20).
+       GHOST v6.1 run in real time beside the live chain: the model behind
+       the GHOST Reanalysis v6.1, with the same composition code (TC-SWARM
+       realtime/v61/v61_core.py, bit-exact against the reanalysis) and the
+       potential intensity computed from GFS. Wind = a gated mix of the tree
+       model and the ViT image model (+ the pressure-derived wind at >= 130
+       kt); pressure = 1/2 FPM + 1/4 tree + 1/4 ViT with a wind-pressure
+       guard. Live storms come from the half-hourly shadow, finished 2026
+       storms from the season replay (realtime/v61/shadow_v61.py,
+       replay_v61_2026.py -> publish_v61_rt.py -> ghostb-v61-rt/). Same
+       contract as before: off by default, remembered per browser (same
+       key), one dashed trace on Vmax and Pmin. */
     var VIT_COL = '#3b82f6';
-    var VIT_LABEL = 'GHOST v6 (ViT, experimental)';
+    var VIT_LABEL = 'GHOST v6.1 (experimental)';
     var _showVit = _pref('tcatlas.exp.vit', false);
     /* Hybrid RMW test (2026-10-18): the Stage-1 image CNN where GHOST's wind
        is >= 64 kt, the published size model below (TC-SWARM
@@ -249,7 +254,7 @@
     /* Test overlays' payloads, per source: idx = promise of {atcf: true}
        for the storms the test has run on; s = atcf -> payload, or null. */
     var OVERLAYS = {
-        vit: { prefix: 'ghostb-vit-rt', file: 'blend_', idx: null, s: {},
+        vit: { prefix: 'ghostb-v61-rt', file: 'blend_', idx: null, s: {},
                on: function () { return _showVit; } },
         cnn: { prefix: 'ghostb-cnn-rt', file: 'blend_', idx: null, s: {},
                on: function () { return _showCnn; } },
@@ -1261,11 +1266,11 @@
                 ? '<button class="exp-range exp-vitbtn' +
                   (_showVit ? ' active' : '') + '" id="exp-vit-btn" ' +
                   'aria-pressed="' + _showVit + '" title="' +
-                  'Overlay an experimental version of GHOST whose wind ' +
-                  'estimate is half the GHOST tree model and half a vision ' +
-                  'transformer (ViT), a neural network that reads the ' +
-                  'infrared image. It runs alongside GHOST for evaluation ' +
-                  'and is not the published estimate.">' + VIT_LABEL +
+                  'Overlay GHOST v6.1, the model behind the GHOST ' +
+                  'Reanalysis v6.1, run in real time. It combines the GHOST ' +
+                  'tree model and a vision transformer (ViT), a neural network ' +
+                  'that reads the infrared image. It runs alongside GHOST for ' +
+                  'evaluation and is not the published estimate.">' + VIT_LABEL +
                   '</button>'
                 : '') +
             (M.panels.cnn
@@ -1469,7 +1474,7 @@
         if (vitBtn) vitBtn.addEventListener('click', function () {
             _showVit = !_showVit;
             _setPref('tcatlas.exp.vit', _showVit);
-            track(M.key + '_vit_v6', { on: _showVit });
+            track(M.key + '_vit_v61', { on: _showVit });
             vitBtn.classList.toggle('active', _showVit);
             vitBtn.setAttribute('aria-pressed', String(_showVit));
             if (_storm && _series[_storm]) drawSeries(_series[_storm]);
