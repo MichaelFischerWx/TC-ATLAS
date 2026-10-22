@@ -1481,10 +1481,7 @@
             track('ghost_v61_news_dismiss', {});
         });
         var sumBtn = document.getElementById('exp-frv-sum');
-        if (sumBtn) sumBtn.addEventListener('click', function () {
-            var b = document.getElementById('exp-plan-dl');
-            if (b) b.click();
-        });
+        if (sumBtn) sumBtn.addEventListener('click', function () { saveDashPng(sumBtn); });
         /* Model switcher: go through switchIRView when the tab controller
            is present so the hash, the data-view attribute and the header
            highlight all follow (deep links keep working); fall back to a
@@ -2394,6 +2391,213 @@
                 hovertemplate: '%{y:.0f}' + s.u + ' — ' + MEMBER[s.k].name + '<extra></extra>'
             });
         });
+    }
+
+    /* ---------------- Summary card: the dashboard as one PNG ---------------- */
+    /* The Summary button exports what the dashboard shows (PI 10-22): the infrared frame on screen with its overlays, beside
+       the scorecard for that time -- wind and pressure, how the number is made (v6.1), comparisons and environment -- with
+       the site's branding and disclaimer, through TCExport (the one save path). Without packed frames the button is not
+       shown; the plan-view fallback keeps its own Download. */
+    var CARD_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+    function cardText(ctx, s, x, y, size, color, weight, align) {
+        ctx.font = (weight || 400) + ' ' + size + 'px ' + CARD_FONT;
+        ctx.fillStyle = color;
+        ctx.textAlign = align || 'left';
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillText(s, x, y);
+        return ctx.measureText(s).width;
+    }
+    function cardWrap(ctx, s, x, y, maxW, size, color, weight, lh) {
+        ctx.font = (weight || 400) + ' ' + size + 'px ' + CARD_FONT;
+        var words = String(s).split(' '), line = '', yy = y;
+        for (var i = 0; i < words.length; i++) {
+            var test = line ? line + ' ' + words[i] : words[i];
+            if (ctx.measureText(test).width > maxW && line) {
+                cardText(ctx, line, x, yy, size, color, weight); line = words[i]; yy += lh;
+            } else line = test;
+        }
+        if (line) cardText(ctx, line, x, yy, size, color, weight);
+        return yy + lh;
+    }
+    function cardRound(ctx, x, y, w, h, r, fill, stroke) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+        if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+        if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
+    }
+    function saveDashPng(btn) {
+        var j = _storm && _series[_storm];
+        var S = _strip;
+        if (!j || !S || S.atcf !== _storm || !window.TCExport) return;
+        track(M.key + '_summary_download', { storm: _storm });
+        if (btn) btn.disabled = true;
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var bg = dark ? '#0d1117' : '#ffffff', fg = dark ? '#e2e8f0' : '#0f172a', fg2 = dark ? '#94a3b8' : '#475569';
+        var line = dark ? '#1e293b' : '#e2e8f0', card = dark ? '#111827' : '#f8fafc';
+        var idx = S.idx, tImg = S.meta.times[idx], atLatest = (idx === S.i1);
+        var fr = j.frames || [], f = null, i;
+        for (i = 0; i < fr.length; i++) {
+            if (fr[i].t > tImg) break;
+            if (fr[i].vmax_kt != null || fr[i].pmin_hpa != null) f = fr[i];
+        }
+        if (!f) { for (i = fr.length - 1; i >= 0; i--) if (fr[i].vmax_kt != null || fr[i].pmin_hpa != null) { f = fr[i]; break; } }
+        var v61 = isV61(j), mName = v61 ? 'GHOST v6.1' : M.name;
+        var name = (j.name ? j.name + ' (' + j.storm + ')' : j.storm);
+        var CW = 1200, CH = 760, sc = 2, IS = 600, X0 = 24, Y0 = 92, RX = X0 + IS + 28, RW = CW - RX - 24;
+        var c = document.createElement('canvas');
+        c.width = CW * sc; c.height = CH * sc;
+        var ctx = c.getContext('2d');
+        ctx.scale(sc, sc);
+        ctx.fillStyle = bg; ctx.fillRect(0, 0, CW, CH);
+        cardText(ctx, name + ' — ' + mName, X0, 40, 24, fg, 700);
+        cardText(ctx, 'Real-time intensity estimate from geostationary infrared imagery · image ' +
+            tImg.slice(0, 16).replace('T', ' ') + ' UTC' + (atLatest ? ' (latest)' : ''), X0, 66, 14, fg2, 400);
+        var stamp = tImg.slice(0, 16).replace(/[:T-]/g, '');
+        var fname = 'TC-ATLAS_' + mName.replace(/\s+/g, '-') + '_summary_' + _storm + '_' + stamp + '.png';
+        Promise.all([stripSheet(Math.floor(idx / S.meta.per_sheet)), logoDataUrl()]).then(function (res) {
+            var ic = document.createElement('canvas');
+            ic.width = IS; ic.height = IS;
+            renderStripInto(ic.getContext('2d'), IS, idx, res[0]);
+            cardRound(ctx, X0 - 1, Y0 - 1, IS + 2, IS + 2, 10, null, line);
+            ctx.save(); cardRound(ctx, X0, Y0, IS, IS, 10); ctx.clip(); ctx.drawImage(ic, X0, Y0, IS, IS); ctx.restore();
+            var y = Y0;
+            /* wind and pressure, side by side */
+            var half = (RW - 12) / 2;
+            [['MAX WIND', 'vmax_kt', 'kt', 'vmax_dist', true], ['MIN PRESSURE', 'pmin_hpa', 'hPa', 'pmin_dist', false]]
+                .forEach(function (q, k) {
+                    var x = RX + k * (half + 12), val = f && f[q[1]];
+                    cardRound(ctx, x, y, half, 132, 10, card, line);
+                    cardText(ctx, q[0], x + 14, y + 26, 12, fg2, 700);
+                    if (val == null) { cardText(ctx, '—', x + 14, y + 72, 36, fg2, 700); return; }
+                    var w = cardText(ctx, String(Math.round(val)), x + 14, y + 74, 40, fg, 700);
+                    cardText(ctx, q[2], x + 20 + w, y + 74, 16, fg2, 600);
+                    if (q[4]) {
+                        var cat = windToCategory(val), lbl = categoryShort(cat);
+                        ctx.font = '700 13px ' + CARD_FONT;
+                        var pw = ctx.measureText(lbl).width + 16, px = x + 20 + w + ctx.measureText(q[2]).width + 18;
+                        ctx.font = '600 16px ' + CARD_FONT;
+                        px = x + 20 + w + ctx.measureText(q[2]).width + 10;
+                        cardRound(ctx, px, y + 56, pw, 22, 11, SS_COLORS[cat], null);
+                        cardText(ctx, lbl, px + pw / 2, y + 72, 13, catInk(cat), 700, 'center');
+                    }
+                    var yy = y + 100;
+                    if (atLatest) {
+                        var tr = trend24(fr, q[1]);
+                        if (tr) {
+                            cardText(ctx, (tr.d >= 0 ? '▲ ' : '▼ ') + fmtSigned(tr.d, 0) + ' ' + q[2] + ' over ' +
+                                (Math.abs(tr.h - 24) < 1.5 ? '24 h' : Math.round(tr.h) + ' h'), x + 14, yy, 13, fg2, 400);
+                            yy += 20;
+                        }
+                    }
+                    var a = distErrAt(j, val, 25, q[3]), b = distErrAt(j, val, 75, q[3]);
+                    if (a !== null && b !== null) {
+                        cardText(ctx, 'typical error ±' + Math.round((b - a) / 2) + ' ' + q[2], x + 14, yy, 13, fg2, 400);
+                    }
+                });
+            y += 132 + 14;
+            /* how this number is made (v6.1) */
+            if (v61 && f) {
+                var top = y;
+                cardRound(ctx, RX, y, RW, 196, 10, card, line);
+                cardText(ctx, 'How this number is made', RX + 14, y + 26, 15, fg, 700);
+                var rowY = y + 44;
+                function bar(segs, by) {
+                    var bx = RX + 14, bw = RW - 28, gap = 2, used = 0;
+                    segs.forEach(function (s, n) {
+                        var sw = (n === segs.length - 1) ? (bw - used) : Math.round(bw * s[1]) - gap;
+                        cardRound(ctx, bx + used, by, Math.max(2, sw), 12, 4, MEMBER[s[0]].col, null);
+                        used += sw + gap;
+                    });
+                }
+                if (f.vmax_kt != null && f.ghost_vmax_kt != null) {
+                    var wt = f.w_tree, pT = (wt != null && f.vit_vmax_kt != null) ? Math.round(wt * 100) : 100;
+                    cardText(ctx, 'Wind ' + Math.round(f.vmax_kt) + ' kt', RX + 14, rowY + 6, 13, fg, 700);
+                    bar(pT < 100 ? [['tree', pT / 100], ['img', 1 - pT / 100]] : [['tree', 1]], rowY + 14);
+                    cardText(ctx, 'tree model ' + Math.round(f.ghost_vmax_kt) + ' × ' + pT + '%' +
+                        (pT < 100 ? ' + image model ' + Math.round(f.vit_vmax_kt) + ' × ' + (100 - pT) + '%' : ''),
+                        RX + 14, rowY + 46, 12.5, fg2, 400);
+                    rowY += 64;
+                }
+                if (f.pmin_hpa != null && f.fpm_pmin_hpa != null && f.tree_pmin_hpa != null && f.vit_pmin_hpa != null &&
+                    f.pmin_image_hpa != null) {
+                    cardText(ctx, 'Pressure ' + Math.round(f.pmin_hpa) + ' hPa', RX + 14, rowY + 6, 13, fg, 700);
+                    bar([['phys', 0.5], ['tree', 0.25], ['img', 0.25]], rowY + 14);
+                    cardText(ctx, 'physics model ' + Math.round(f.fpm_pmin_hpa) + ' × 50% + tree ' +
+                        Math.round(f.tree_pmin_hpa) + ' × 25% + image ' + Math.round(f.vit_pmin_hpa) + ' × 25%',
+                        RX + 14, rowY + 46, 12.5, fg2, 400);
+                    rowY += 64;
+                }
+                var kx = RX + 14;
+                ['phys', 'tree', 'img'].forEach(function (k) {
+                    cardRound(ctx, kx, top + 178, 10, 10, 3, MEMBER[k].col, null);
+                    kx += 16 + cardText(ctx, MEMBER[k].name, kx + 16, top + 188, 12, fg2, 400) + 18;
+                });
+                y = top + 196 + 14;
+            }
+            /* comparisons and environment */
+            var rows = [], agT = j.agency || 'NHC', fix = null;
+            for (i = fr.length - 1; i >= 0; i--) {
+                if (fr[i].t <= tImg && fr[i].btk_is_fix && fr[i].btk_vmax_kt != null && isFinite(fr[i].btk_vmax_kt)) {
+                    fix = fr[i]; break;
+                }
+            }
+            if (fix) rows.push(['Last ' + agT + ' analysis', Math.round(fix.btk_vmax_kt) + ' kt · ' + fix.t.slice(11, 16) +
+                'Z' + (fix.vmax_kt != null ? ' · ' + mName + ' then ' + Math.round(fix.vmax_kt) : '')]);
+            var cs = [];
+            Object.keys(j.comparators || {}).forEach(function (nm) {
+                var rr = (j.comparators[nm] || []).filter(function (x) { return x.vmax_kt != null && x.t <= tImg; });
+                if (rr.length) cs.push(nm.replace(' (DVTS)', '') + ' ' + Math.round(rr[rr.length - 1].vmax_kt));
+            });
+            if (cs.length) rows.push(['Other satellite methods', cs.join(' · ') + ' kt']);
+            if (f && (f.pi_kt != null || f.sst_c != null)) {
+                rows.push(['Environment', (f.pi_kt != null ? 'potential intensity ' + Math.round(f.pi_kt) + ' kt' : '') +
+                    (f.pi_kt != null && f.sst_c != null ? ' · ' : '') + (f.sst_c != null ? 'SST ' + f.sst_c.toFixed(1) +
+                    ' °C' : '') + (_envShear && atLatest ? ' · shear ' + Math.round(_envShear.kt) + ' kt' : '')]);
+            }
+            if (f && f.rmw_km != null) rows.push(['Eyewall radius', Math.round(f.rmw_km) + ' km']);
+            if (rows.length) {
+                var rh = 30, boxH = rows.length * rh + 12;
+                cardRound(ctx, RX, y, RW, boxH, 10, card, line);
+                rows.forEach(function (r, n) {
+                    var ry = y + 26 + n * rh;
+                    cardText(ctx, r[0], RX + 14, ry, 13, fg2, 400);
+                    cardText(ctx, r[1], RX + RW - 14, ry, 13, fg, 600, 'right');
+                });
+                y += boxH + 22;
+            }
+            /* same caution as the page: no aircraft truth outside the NHC basins */
+            if (/^(WP|IO|SH)/.test(j.storm)) {
+                cardWrap(ctx, '⚠ Provisional: this basin has no aircraft reconnaissance, so these estimates are not ' +
+                    'verified against aircraft.', RX, y, RW, 12.5, dark ? '#fbbf24' : '#b45309', 600, 17);
+            }
+            /* footer: brand + disclaimer */
+            var fy = Y0 + IS + 30;
+            if (res[1]) {
+                var lg = new Image();
+                return new Promise(function (ok) {
+                    lg.onload = function () { ctx.drawImage(lg, X0, fy - 18, 24, 24); ok(fy); };
+                    lg.onerror = function () { ok(fy); };
+                    lg.src = res[1];
+                });
+            }
+            return fy;
+        }).then(function (fy) {
+            var tx = X0 + 32;
+            var w = cardText(ctx, 'TC-ATLAS', tx, fy, 14, fg, 700);
+            cardText(ctx, ' · tcatlas.org', tx + w, fy, 14, fg2, 400);
+            var ew = cardText(ctx, 'EXPERIMENTAL', X0, fy + 26, 12, '#F47321', 700);
+            cardWrap(ctx, ' · ' + mName + ' is a research method (manuscript in preparation) — not an official ' +
+                'forecast or analysis. Contact the author before citing or redistributing.', X0 + ew + 4, fy + 26,
+                CW - X0 - ew - 30, 12, fg2, 400, 16);
+            return new Promise(function (ok, bad) {
+                c.toBlob(function (blob) { blob ? ok(blob) : bad(new Error('toBlob')); }, 'image/png');
+            });
+        }).then(function (blob) {
+            return TCExport.save(blob, fname);
+        }).catch(function (e) {
+            if (window.console) console.warn('summary card save failed', e);
+        }).then(function () { if (btn) btn.disabled = false; });
     }
 
     /* ---------------- TILT-RF panels ---------------- */
