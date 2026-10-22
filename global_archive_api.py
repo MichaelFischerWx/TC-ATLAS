@@ -432,11 +432,15 @@ MERGIR_CIRCUIT_THRESHOLD = 3    # failures before opening circuit
 MERGIR_CIRCUIT_COOLDOWN = 300   # seconds to skip MergIR after circuit opens (5 min)
 
 
+_mergir_last_success = 0.0  # monotonic; proves the service + URL scheme work
+
+
 def _mergir_record_success():
     """Reset the circuit breaker on a successful MergIR fetch."""
-    global _mergir_consecutive_failures
+    global _mergir_consecutive_failures, _mergir_last_success
     with _mergir_circuit_lock:
         _mergir_consecutive_failures = 0
+        _mergir_last_success = _time.monotonic()
 
 
 def _mergir_record_failure():
@@ -1513,6 +1517,14 @@ def _sel_latlon_wrap(da, lat_min, lat_max, lon_min, lon_max, xr):
     return da_sub.values, da_sub.coords["lat"].values, da_sub.coords["lon"].values + shift
 
 
+# Why the calling thread's last _load_mergir_subset returned None: `gap` is
+# True only when every attempt was a 404 or a too-sparse file — the archive
+# genuinely has no usable image — and False for anything that might succeed
+# on retry (timeouts, auth, 5xx, semaphore, open breaker). Heal reads it to
+# tell a real hole from a transient failure.
+_mergir_tls = threading.local()
+
+
 def _load_mergir_subset(target_dt: datetime, center_lat: float, center_lon: float):
     """
     Fetch a single MergIR Tb snapshot, cropped to a
@@ -1528,6 +1540,8 @@ def _load_mergir_subset(target_dt: datetime, center_lat: float, center_lon: floa
     import xarray as xr
     from datetime import timedelta
 
+    _mergir_tls.gap = False
+    _mergir_tls.n_gap = _mergir_tls.n_other = 0
     # Acquire semaphore to limit concurrent loads (OOM protection)
     if not _data_load_semaphore.acquire(timeout=60):
         logger.warning("MergIR: semaphore timeout — too many concurrent loads")
@@ -1579,6 +1593,7 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
                     _earthdata_session = None
                     session = _get_earthdata_session()
                     _mergir_record_failure()
+                    _mergir_tls.n_other += 1
                     continue
 
                 # Detect Earthdata login page redirect — if the response is
@@ -1593,12 +1608,20 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
                     _earthdata_session = None
                     session = _get_earthdata_session()
                     _mergir_record_failure()
+                    _mergir_tls.n_other += 1
                     continue
 
                 if resp.status_code != 200:
                     logger.info(f"MergIR: HTTP {resp.status_code} for {url_label}")
                     resp.close()
-                    _mergir_record_failure()
+                    # A 404 is a missing hour, not a sick service: counting it
+                    # let ONE archive gap (4 requests) trip the breaker and push
+                    # every frame rendered in the next 5 min onto GridSat.
+                    if resp.status_code == 404:
+                        _mergir_tls.n_gap += 1
+                    else:
+                        _mergir_record_failure()
+                        _mergir_tls.n_other += 1
                     continue
 
                 # Stream to temp file (avoid buffering 130 MB in memory)
@@ -1615,6 +1638,7 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
             except Exception as e:
                 logger.warning(f"MergIR: {url_label} download failed: {e}")
                 _mergir_record_failure()
+                _mergir_tls.n_other += 1
                 if tmp and hasattr(tmp, 'name') and os.path.exists(tmp.name):
                     try:
                         os.unlink(tmp.name)
@@ -1703,6 +1727,7 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
                             f"MergIR: {url_label} data too sparse "
                             f"({valid_frac:.0%} valid pixels), trying next source"
                         )
+                        _mergir_tls.n_gap += 1
                         continue
 
                     # MergIR lat is ascending (south→north), flip so
@@ -1725,6 +1750,7 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
 
             except Exception as e:
                 logger.warning(f"MergIR: {url_label} parse failed: {e}")
+                _mergir_tls.n_other += 1
                 if tmp:
                     try:
                         os.unlink(tmp.name)
@@ -1733,7 +1759,11 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
                 continue
 
     logger.warning(f"MergIR: no data found for {target_dt}")
-    _mergir_record_failure()
+    # Every other failure (auth, 5xx, timeouts via `except`, parse errors)
+    # bumps n_other; only an all-404/too-sparse result is a gap.
+    _mergir_tls.gap = _mergir_tls.n_gap > 0 and _mergir_tls.n_other == 0
+    if not _mergir_tls.gap:
+        _mergir_record_failure()
     return None, None
 
 
@@ -2338,6 +2368,8 @@ def _is_fallback_frame(sid: str, result: dict) -> bool:
     In GCS only, every view comes back through here and retries the
     preferred source via _maybe_heal_frame."""
     actual = result.get("source", "")
+    if result.get("fallback_final"):
+        return False                 # heal confirmed an archive gap
     pref = _preferred_source_for(sid)
     if not actual or not pref:
         return False
@@ -2353,7 +2385,8 @@ def _frame_cache_headers(fallback: bool, x_cache: str) -> dict:
 
 
 def _heal_frame_background(sid: str, frame_idx: int, preferred_source: str,
-                           frame_dt: datetime, frame_lat: float, frame_lon: float):
+                           frame_dt: datetime, frame_lat: float, frame_lon: float,
+                           cached_result: dict | None = None):
     """
     Background worker: retry fetching a frame from the preferred source.
     If successful, update both in-memory and GCS caches.
@@ -2373,8 +2406,24 @@ def _heal_frame_background(sid: str, frame_idx: int, preferred_source: str,
 
         if frame_2d is None:
             _heal_stats["failed"] += 1
+            # A gap only counts while MergIR is demonstrably serving other
+            # hours (success in the last 30 min on this instance) — so a GES
+            # DISC URL/layout change that 404s everything can't finalize the
+            # archive onto GridSat.
+            gap = (preferred_source == "mergir" and getattr(_mergir_tls, "gap", False)
+                   and _time.monotonic() - _mergir_last_success < 1800)
             _record_heal_history(sid, frame_idx, preferred_source, success=False,
-                                 reason="preferred source returned no data")
+                                 reason="archive gap — fallback kept as final" if gap
+                                 else "preferred source returned no data")
+            if gap and cached_result:
+                # MergIR has no usable image for this hour (404 / too sparse),
+                # so the fallback IS the best frame there will be: mark it
+                # final (first key, so the purge script sees it in the head)
+                # and publish it to R2 like any other frame.
+                final = {"fallback_final": True, **cached_result}
+                _frame_cache[(f"ir_{sid}", frame_idx)] = final
+                _gcs_put_frame(sid, frame_idx, final, source="ir")
+                _r2_mirror_frame_async(_gcs_cache_key(sid, frame_idx, source="ir"), final)
             return  # Preferred source still unavailable — keep fallback
 
         tb_encoded = _encode_tb_uint8(frame_2d)
@@ -2465,7 +2514,7 @@ def _maybe_heal_frame(sid: str, frame_idx: int, cached_result: dict):
          after container restarts when only GCS cache is available).
     """
     actual_source = cached_result.get("source", "")
-    if not actual_source:
+    if not actual_source or cached_result.get("fallback_final"):
         return
 
     # Try metadata cache first, fall back to year-based inference
@@ -2547,7 +2596,8 @@ def _maybe_heal_frame(sid: str, frame_idx: int, cached_result: dict):
     _heal_stats["attempted"] += 1
     t = threading.Thread(
         target=_heal_frame_background,
-        args=(sid, frame_idx, preferred_source, frame_dt, frame_lat, frame_lon),
+        args=(sid, frame_idx, preferred_source, frame_dt, frame_lat, frame_lon,
+              cached_result),
         daemon=True, name=f"heal-{sid}-{frame_idx}",
     )
     t.start()

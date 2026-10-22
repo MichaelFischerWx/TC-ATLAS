@@ -79,6 +79,8 @@ def preferred(sid: str):
 def classify(key: str, head: bytes):
     """-> (is_fallback, source, datetime) or None when unparseable."""
     txt = head.decode("utf-8", "replace")
+    if re.search(r'"fallback_final"\s*:\s*true', txt):
+        return False, "final", ""     # heal confirmed an archive gap; keep
     m = _SRC_RE.search(txt)
     if not m:
         return None
