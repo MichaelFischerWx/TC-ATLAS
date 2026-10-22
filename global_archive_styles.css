@@ -3318,6 +3318,28 @@ input[type="range"].ga-range::-moz-range-thumb {
    than styled like either claim, because the record does not say which it is. */
 .gra-chart .gc-vdm.unk  { fill: var(--slate); stroke: #fff; stroke-width: .5; fill-opacity: .8; }
 .gra-chart-key .gc-vdm-key { color: var(--cyan); }
+/* GHOST v6.1 Pmin members (tree, ViT, FPM): thin, pressure panel only, off by
+   default. Colors and dashes are the GHOST explorer's, so the two pages read
+   the same; each line also differs by dash, not only by hue. */
+:root { --gc-tm: #b07800; --gc-vm: #00838f; --gc-fm: #6f7d00; }
+:root[data-theme="dark"] { --gc-tm: #e3ac2e; --gc-vm: #3cc3cf; --gc-fm: #b3c23a; }
+.gra-chart .gc-mem { fill: none; stroke-width: 1.1; stroke-linejoin: round; opacity: .95; }
+.gra-chart .gc-mem-tm { stroke: var(--gc-tm); }
+.gra-chart .gc-mem-vm { stroke: var(--gc-vm); stroke-dasharray: 4 3; }
+.gra-chart .gc-mem-fm { stroke: var(--gc-fm); stroke-dasharray: 7 3 2 3; }
+.gra-mem { display: block; color: var(--slate); }
+.gra-mem span { margin-right: 6px; white-space: nowrap; }
+.gra-mem b, .gc-mem-key b { color: var(--text); }
+.gra-mem i, .gc-mem-key i {
+    display: inline-block; width: 11px; height: 0; vertical-align: 2px;
+    margin-right: 3px; border-top: 2px solid; border-radius: 0; background: none;
+}
+.gra-mem-tm i { border-top-color: var(--gc-tm); }
+.gra-mem-vm i { border-top: 2px dashed var(--gc-vm); }
+.gra-mem-fm i { border-top: 2px dotted var(--gc-fm); }
+.gc-mem-key { cursor: pointer; white-space: nowrap; }
+.gc-mem-key input { margin: 0 2px 0 0; vertical-align: -1px; width: 10px; height: 10px; }
+.gc-mem-key span { margin-left: 4px; }
 .gra-chart-read .gc-vdm-read i {
     display: inline-block; width: 7px; height: 7px; border-radius: 50%;
     background: var(--cyan); margin-right: 4px; box-sizing: border-box;

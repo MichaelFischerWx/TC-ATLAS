@@ -199,6 +199,15 @@
          eyeCache[sid]    the pipeline's IR-recentred centre per lifecycle
                           frame (<root>/eye/<sid>.json, ghostra_eye_sidecar.py). */
     var fdeckCache = {}, eyeCache = {};
+    /* memCache[version/sid]  the Pmin MEMBERS (tree, ViT, FPM) on the storm's
+                          lifecycle grid (<data>/members/<sid>.json, written by
+                          ghostra_members_sidecar.py from the GHOST v6.1
+                          explorer). Version-scoped: a release without the
+                          sidecar 404s once and caches null. memOn = whether
+                          the chart draws them (off by default, as in the
+                          explorer); the readouts list them regardless. */
+    var memCache = {}, memOn = false, valsMs = null;
+    try { memOn = localStorage.getItem('gra-members') === '1'; } catch (e) { }
     /* basin -> the producer's held-out declaration, or null where the manifest
        says none exists. Kept separate from the data so "no held-out channel
        was published" and "this frame happens to have no held-out value" stay
@@ -1217,6 +1226,7 @@
         _off = null; zoom = 1; cx = 0; cy = 0;   // new storm, new view
         fillCmapPicker();
         loadEye(sid);
+        loadMembers(sid);
         loadStorm(sid, function () {
             drawSpark(sid);
             // the per-storm JSON can arrive after the frame list, in which case
@@ -1918,7 +1928,58 @@
             : { t: st.t, gp: st.duo || st.g2, bp: st.p, gv: st.wv, bv: st.vw, ho: ho, fl: null };
     }
 
+    function loadMembers(sid) {
+        var key = version + '/' + sid;
+        if (memCache[key] !== undefined) return;
+        memCache[key] = false;                          // in flight
+        getJSON(DATA() + '/members/' + sid + '.json')
+            .then(function (j) { memCache[key] = (j && j.t && j.t.length) ? j : null; })
+            .catch(function () { memCache[key] = null; })
+            .then(function () {
+                if (!ir || ir.sid !== sid || !memCache[key]) return;
+                drawSpark(sid);
+                if (valsMs !== null) valsAt(sid, valsMs);
+            });
+    }
+
+    /* Members aligned to the series' own time array. The sidecar is written on
+       the lifecycle grid, so this is normally index-for-index; anything else is
+       joined by time rather than trusted positionally. Null when absent. */
+    function membersFor(sid, T) {
+        var M = memCache[version + '/' + sid];
+        if (!M || !T || !T.length) return null;
+        if (M.t.length === T.length && M.t[0] === T[0] && M.t[M.t.length - 1] === T[T.length - 1])
+            return { tm: M.tm, vm: M.vm, fm: M.fm };
+        var at = {};
+        for (var i = 0; i < M.t.length; i++) at[M.t[i]] = i;
+        var out = { tm: [], vm: [], fm: [] };
+        for (var k = 0; k < T.length; k++) {
+            var j = at[T[k]];
+            ['tm', 'vm', 'fm'].forEach(function (c) { out[c].push(j === undefined ? null : M[c][j]); });
+        }
+        return out;
+    }
+    var MEM = [['tm', 'tree'], ['vm', 'ViT'], ['fm', 'FPM']];
+    var MEM_TIP = 'The three GHOST v6.1 pressure members at this time. Published ' +
+        'Pmin = ½ FPM + ½ × mean(tree, ViT), then a carry where a member ' +
+        'abstains, the wind–pressure guard and the environmental-pressure bound, ' +
+        'so the published value can differ slightly from the plain mix. On deep ' +
+        'eyed frames the tree and ViT both take the deep-eye tier value and can ' +
+        'coincide.';
+    function memRow(Mm, i) {
+        if (!Mm) return '';
+        var any = false, parts = MEM.map(function (m) {
+            var v = Mm[m[0]] ? Mm[m[0]][i] : null;
+            if (v != null) any = true;
+            return '<span class="gra-mem-' + m[0] + '"><i></i>' + m[1] + ' <b>' +
+                (v != null ? v.toFixed(1) : '—') + '</b></span>';
+        });
+        return any ? '<span class="gra-mem" title="' + MEM_TIP + '">members (hPa): ' +
+            parts.join(' ') + '</span>' : '';
+    }
+
     function valsAt(sid, ms) {
+        valsMs = ms;
         var st = stormCache[sid];
         if (!st) return;
         var S = series(st);
@@ -1942,7 +2003,8 @@
             '<span class="gra-g">GHOST</span> <b>' + f(S.gp, 1) + '</b> hPa / <b>' +
             f(S.gv, 0) + '</b> kt &nbsp;·&nbsp; ' + hoTxt +
             ' &nbsp;·&nbsp; BT <b>' + f(S.bp, 0) + '</b> hPa / <b>' +
-            f(S.bv, 0) + '</b> kt';
+            f(S.bv, 0) + '</b> kt' +
+            memRow(st.lt ? membersFor(sid, S.t) : null, bi);
     }
 
     /* Sparkline: GHOST vs best track over the lifetime, with the IR cursor.
@@ -2070,7 +2132,9 @@
             var pad = (hi - lo) * (padFrac || 0.08);
             return { lo: lo - pad, hi: hi + pad };
         }
-        var rp = rng([S.gp, S.bp, S.ho], 0.08);
+        loadMembers(sid);                                // no-op once cached; covers a version switch
+        var Mm = st.lt ? membersFor(sid, S.t) : null;
+        var rp = rng(Mm && memOn ? [S.gp, S.bp, S.ho, Mm.tm, Mm.vm, Mm.fm] : [S.gp, S.bp, S.ho], 0.08);
         var rv = rng([S.gv, S.bv], 0.10);
 
         // pressure: LOW at top, the convention every forecaster reads
@@ -2092,6 +2156,14 @@
             var d = path(a, Y);
             return d ? '<path d="' + d + '" fill="none" stroke="' + col + '" stroke-width="' + w +
                 '"' + (dash ? ' stroke-dasharray="3 2"' : '') + ' stroke-linejoin="round"/>' : '';
+        }
+        // member lines take their stroke (color + dash) from CSS so they theme
+        function memLines() {
+            if (!Mm || !memOn) return '';
+            return MEM.map(function (m) {
+                var d = path(Mm[m[0]], Yp);
+                return d ? '<path d="' + d + '" class="gc-mem gc-mem-' + m[0] + '"/>' : '';
+            }).join('');
         }
         function ylab(Y, r, unit) {
             if (!Y || !r) return '';
@@ -2224,6 +2296,7 @@
             '<text x="' + PL + '" y="' + (yv0 - 3) + '" class="gc-t">Maximum wind (kt)</text>' +
             ylab(Yp, rp) + ylab(Yv, rv) + ticks +
             line(S.bp, Yp, 'var(--slate)', 1.5) + line(S.ho, Yp, '#f43f5e', 1.2, 1) +
+            memLines() +
             line(S.gp, Yp, '#f43f5e', 1.9) +
             line(S.bv, Yv, 'var(--slate)', 1.5) +
             (gvFill ? line(gvFill, Yv, '#f43f5e', 1.4, 1) : '') +
@@ -2253,10 +2326,20 @@
                 'from every published metric and the storm peak.">wind filled ' +
                 'from P<sub>min</sub> (QC gap)</span> &nbsp; ' : '') +
             hoKey + vdmKey +
-            natKey + recKey + peakKey + '</div>' +
+            natKey + recKey + peakKey +
+            (Mm ? ' &nbsp; <label class="gc-mem-key" title="' + MEM_TIP + '"><input type="checkbox" id="gc-mem-on"' +
+                  (memOn ? ' checked' : '') + '> members: ' +
+                  MEM.map(function (m) { return '<span class="gra-mem-' + m[0] + '"><i></i>' + m[1] + '</span>'; }).join(' ') +
+                  '</label>' : '') + '</div>' +
             '<div id="gra-chart-read" class="gra-chart-read"></div>';
 
         var svg = $('gra-chart-svg');
+        var memBox = $('gc-mem-on');
+        if (memBox) memBox.onchange = function () {
+            memOn = memBox.checked;
+            try { localStorage.setItem('gra-members', memOn ? '1' : '0'); } catch (e) { }
+            drawSpark(sid);
+        };
         function markCurrent() {
             var cl = $('gc-cur');
             if (!cl || !ir || ir.idx === null || !irMeta[sid] || !irMeta[sid].frames) return;
@@ -2302,6 +2385,7 @@
                 '<span><i style="background:#f43f5e"></i>GHOST ' + fmt(S.gp, i, 1) + ' hPa / ' + fmt(S.gv, i, 0) + ' kt</span>' +
                 '<span><i style="background:var(--slate)"></i>BT ' + fmt(S.bp, i, 0) + ' hPa / ' + fmt(S.bv, i, 0) + ' kt</span>' +
                 (S.ho ? '<span class="gra-ho">HO ' + fmt(S.ho, i, 1) + ' hPa</span>' : '') +
+                memRow(Mm, i) +
                 vdmAt(st, tms);
         }
         svg.addEventListener('mousemove', hoverAt);
