@@ -244,6 +244,21 @@
        key), one dashed trace on Vmax and Pmin. */
     var VIT_COL = '#3b82f6';
     var VIT_LABEL = 'GHOST v6.1 (experimental)';
+    /* GHOST v6.1 cutover (2026-10-23; TC-SWARM docs/GHOST_PARSIMONY_CNN_AUG_2026-10-18.md section 82). The producer stamps
+       compose: "v61" on every v6.1 blend payload and index (blend_rt_all.py with GHOST_V61=1), so the page takes its version
+       from the data: this script can ship before the producer flips, and a producer rollback reverts the page with it. */
+    function isV61(j) { return !!(j && j.compose === 'v61'); }
+    function v61Page() { return M.key === 'blend' && (isV61(_index) || isV61(_archIndex)); }
+    /* One colour per member model wherever it appears (scorecard bars, chart lines, legend); checked with the dataviz
+       palette validator (CVD separation and contrast pass in light and dark). */
+    var MEMBER = {
+        phys: { name: 'physics model', col: '#6366f1' },
+        tree: { name: 'tree model', col: '#f43f5e' },
+        img: { name: 'image model', col: '#0ea5e9' }
+    };
+    var _hmT = null;       // the scorecard's "how this number is made" frame; null = the latest
+    var _envShear = null;  // latest deep-layer shear, from TILT-RF's payload (fetched by the frame viewer)
+    var V61_NEWS_KEY = 'ghost_v61_news_dismissed';
     var _showVit = _pref('tcatlas.exp.vit', false);
     /* Hybrid RMW test (2026-10-18): the Stage-1 image CNN where GHOST's wind
        is >= 64 kt, the published size model below (TC-SWARM
@@ -863,8 +878,7 @@
         'is the frozen real-time version of that model; the manuscript&rsquo;s ' +
         'latest refinements to it (an East/Central Pacific specialist and a ' +
         'land-decay floor) are not yet in the real-time chain. ' +
-        'Each member can be viewed on its own (tree: ' +
-        '<a href="#experimental_tree">#experimental_tree</a>, FPM: ' +
+        'The physics-based member can be viewed on its own (' +
         '<a href="#experimental_fpm">#experimental_fpm</a>). GHOST ' +
         '(Geostationary-based Hurricane Objective Strength Technique) is ' +
         'described in a manuscript in preparation; this page is provided for ' +
@@ -946,6 +960,67 @@
     PROFILES.blend.lede = BLEND_LEDE;
     PROFILES.blend.cite = BLEND_CITE;
     PROFILES.blend.note = BLEND_NOTE;
+    /* GHOST v6.1 text, used when the data say v6.1 (v61Page). Numbers: TC-SWARM doc sections 80.1 and 80.3, from the boards
+       of rtpi/loyo_live_v61.py and rtpi/score2026_live_v61.py (held out by season; 2026 never trained on). */
+    var V61_TEXT = {
+        title: 'GHOST v6.1 — Real-Time Intensity Estimates',
+        lede: '<div class="exp-lede"><strong>GHOST v6.1</strong> estimates a tropical cyclone’s maximum wind and ' +
+            'minimum central pressure from geostationary infrared imagery alone, every 30 minutes. Three models read ' +
+            'each image: a <strong>tree model</strong> (boosted trees on the storm’s infrared structure, recent ' +
+            'history and environment), an <strong>image model</strong> (a vision transformer that reads the infrared ' +
+            'picture directly) and, for pressure, a <strong>physics model</strong> (a first-principles regression on the ' +
+            'environmental pressure deficit). The same model produces the GHOST Reanalysis v6.1. Held out by season, its ' +
+            'error against aircraft-measured winds is 8.8 kt, against 11.8 kt for the previous real-time GHOST.</div>',
+        note: '<div class="exp-note">Guidance, not an official analysis. <em>How this number is made</em> shows each ' +
+            'model’s estimate and weight at the selected time: the wind mixes the tree and image models (the image ' +
+            'model’s share grows from ½ below 50 kt to ¾ above 80 kt, and above about 130 kt the wind is ' +
+            'also drawn toward the wind implied by the estimated pressure); the pressure is ½ physics + ¼ tree + ' +
+            '¼ image, kept at least 1 hPa below the environmental pressure. Times with no readable infrared frame ' +
+            'have no estimate. Known limits: compact late-season storms and freshly formed eyes can be over-read, and ' +
+            'rapid weakening under a persistent cold canopy is seen late. West Pacific estimates are not verified ' +
+            'against aircraft.</div>',
+        cite: '<div class="exp-cite"><strong>Provisional real-time version of a method whose manuscript is in ' +
+            'preparation.</strong> GHOST v6.1 runs here with the same composition code as the GHOST Reanalysis v6.1, on ' +
+            'real-time inputs: GOES and Himawari imagery, the GFS potential intensity and NOAA OISST sea-surface ' +
+            'temperature. The physics model can be viewed on its own (<a href="#experimental_fpm">#experimental_fpm</a>). ' +
+            'GHOST (Geostationary-based Hurricane Objective Strength Technique) is described in a manuscript in ' +
+            'preparation; this page is provided for scientific transparency and is <strong>not an official forecast or ' +
+            'analysis</strong>. Please contact the author &mdash; Dr. Michael Fischer ' +
+            '(<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu</a>) &mdash; before citing or ' +
+            'redistributing these estimates.' + DATA_CREDIT + '</div>',
+        verif: '<div class="exp-verif-h">GHOST v6.1 verification' +
+            '<span class="exp-verif-src">held out by season (each year scored by a model trained without it) over the ' +
+            'Atlantic and East / Central Pacific archive, 2000&ndash;2025, and the 2026 season so far (never trained on). ' +
+            '&ldquo;Aircraft wind&rdquo; = the reconnaissance surface-wind peak of each mission (flight-level winds ' +
+            'reduced to 10 m, adjusted for how much of the eyewall one pass samples); &ldquo;aircraft pressure&rdquo; = the ' +
+            'central pressure at each aircraft fix. RMSE (bias, estimate minus truth); the previous real-time GHOST is the ' +
+            'system v6.1 replaced, scored on the same frames.</span></div>' +
+            '<div class="exp-verif-t"><table><caption>Held out, 2000&ndash;2025 &mdash; RMSE (bias)</caption>' +
+            '<tr><th>truth</th><th>frames / storms</th><th>GHOST v6.1</th><th>previous real-time GHOST</th></tr>' +
+            '<tr class="me"><td>aircraft wind (kt)</td><td>1,290 / 236</td><td><strong>8.8 (&minus;0.5)</strong></td><td>11.8 (+1.6)</td></tr>' +
+            '<tr><td>&nbsp;&nbsp;&mdash; majors (&ge;96 kt)</td><td>351 / 76</td><td><strong>10.7 (&minus;2.5)</strong></td><td>13.2 (+2.2)</td></tr>' +
+            '<tr class="me"><td>aircraft pressure (hPa)</td><td>2,284 / 306</td><td><strong>6.6 (+0.6)</strong></td><td>7.5 (+0.2)</td></tr>' +
+            '<tr><td>&nbsp;&nbsp;&mdash; &le;945 hPa</td><td>281 / 61</td><td><strong>10.7 (+2.7)</strong></td><td>11.0 (+2.2)</td></tr>' +
+            '<tr><td>best-track wind near aircraft fixes (kt)</td><td>4,475 / 298</td><td><strong>8.0 (&minus;0.9)</strong></td><td>9.8 (+0.8)</td></tr>' +
+            '<tr><td>best-track pressure near aircraft fixes (hPa)</td><td>5,928 / 306</td><td><strong>6.1 (+0.6)</strong></td><td>7.1 (+0.3)</td></tr>' +
+            '<tr><td>best-track wind, every frame (kt)</td><td>24,460 / 502</td><td><strong>8.6 (+2.6)</strong></td><td>10.2 (+3.3)</td></tr>' +
+            '<tr><td>best-track pressure, every frame (hPa)</td><td>31,802 / 506</td><td><strong>6.5 (&minus;1.1)</strong></td><td>7.0 (&minus;1.1)</td></tr>' +
+            '</table></div>' +
+            '<div class="exp-verif-t"><table><caption>2026 so far, 12 Atlantic and East / Central Pacific storms &mdash; ' +
+            'RMSE (bias)</caption>' +
+            '<tr><th>truth</th><th>frames / storms</th><th>GHOST v6.1</th><th>previous real-time GHOST</th></tr>' +
+            '<tr class="me"><td>aircraft wind (kt)</td><td>45 / 7</td><td><strong>12.0 (+1.5)</strong></td><td>14.4 (+4.0)</td></tr>' +
+            '<tr class="me"><td>aircraft pressure (hPa)</td><td>71 / 12</td><td><strong>5.8 (&minus;0.1)</strong></td><td>6.2 (&minus;0.6)</td></tr>' +
+            '<tr><td>best-track wind, every frame (kt)</td><td>5,228 / 12</td><td><strong>8.1 (+3.0)</strong></td><td>8.5 (+2.6)</td></tr>' +
+            '<tr><td>best-track pressure, every frame (hPa)</td><td>5,228 / 12</td><td><strong>5.9 (&minus;1.3)</strong></td><td>6.1 (&minus;1.6)</td></tr>' +
+            '</table></div>' +
+            '<div class="exp-verif-n">The aircraft rows are the decisive ones: wind inferred from aircraft carries roughly ' +
+            '&plusmn;10 kt of error, and best-track values away from aircraft are themselves satellite-based. The ' +
+            'aircraft-wind improvements are statistically resolved (95% intervals from storm-clustered resampling: ' +
+            '&minus;3.0 [&minus;3.5, &minus;2.4] kt held out, &minus;2.3 [&minus;4.0, &minus;0.5] kt in 2026). West Pacific ' +
+            'estimates have no aircraft truth and are not scored here.</div>'
+    };
+    function prof(k) { return (v61Page() && V61_TEXT[k]) || M[k]; }
     PROFILES.fpm.verif = FPM_VERIF_HTML;
     PROFILES.fpm.lede = FPM_LEDE;
     PROFILES.fpm.cite = FPM_CITE;
@@ -1033,6 +1108,83 @@
     var STALE_H = 2.5;
 
     function renderShell() {
+        /* GHOST page = the v6.1 dashboard (2026-10-23): one infrared image (the frame viewer, moved up from under the
+           chart) beside a scorecard; the 4-panel plan view stays as the fallback image and a download. */
+        var DASH = (M.key === 'blend');
+        if (DASH) {
+            /* After the cutover the main line IS v6.1, so the dashed toggle shows the previous real-time GHOST (v5.1, a
+               reverse shadow) for comparison; before it, the toggle stays the v6.1 preview. */
+            var ovp = v61Page() ? 'ghostb-v51-rt' : 'ghostb-v61-rt';
+            if (OVERLAYS.vit.prefix !== ovp) { OVERLAYS.vit.prefix = ovp; OVERLAYS.vit.idx = null; OVERLAYS.vit.s = {}; }
+            VIT_LABEL = v61Page() ? 'GHOST v5.1 (previous)' : 'GHOST v6.1 (experimental)';
+        }
+        function planHtml() {
+            return (
+            /* Plan view leads: the latest imagery is the page's face, and the
+               toggled panels (verification especially) must never push it
+               out of view — they open BELOW the chart, verification last. */
+            '<div class="exp-plan-wrap" id="exp-plan-wrap">' +
+            '<div class="exp-plan-head">' +
+            '<span class="exp-plan-title">' +
+            (M.planTitle || 'IR plan-view evolution') + '</span>' +
+            '<button class="exp-range exp-dl" id="exp-plan-dl" ' +
+            'title="Download plan view as PNG" ' +
+            'aria-label="Download plan view as PNG">&#x2913; Download</button>' +
+            '</div>' +
+            /* crossorigin="anonymous" is LOAD-BEARING for the Download
+               button, not decoration. Without it the browser fetches this
+               image in no-CORS mode and stores a cache entry that CORS-mode
+               requests may not reuse -- so the download handler's fetch() of
+               the SAME url fails with an opaque "TypeError: Failed to fetch"
+               and the save never even reaches TCExport. Must be set before
+               src is assigned (it is: src is set later in selectStorm).
+               Both cdn.tcatlas.org and the GCS fallback send
+               access-control-allow-origin: *, so the image still loads. */
+            '<img id="exp-plan" class="exp-plan" crossorigin="anonymous" ' +
+            'alt="' + M.name + ' plan view">' +
+            '</div>');
+        }
+        function framesHtml(dash) {
+            return (
+            '<div id="exp-frames" class="exp-frames" style="display:none;">' +
+            (dash
+                ? '<div class="exp-shap-head">Infrared image' +
+                  '<span class="exp-verif-src"> every frame — drag to scrub, press play, ' +
+                  'or click a time on the chart below</span></div>'
+                : '<div class="exp-shap-head">Frame viewer' +
+                  '<span class="exp-verif-src"> every infrared frame — ' +
+                  'drag to scrub, or click a time on the chart above</span></div>') +
+            '<div class="exp-frv-wrap">' +
+            '<canvas id="exp-frv" width="480" height="480"></canvas>' +
+            '<div class="exp-frv-bar">' +
+            '<button id="exp-frv-play" class="exp-range" ' +
+            'aria-label="Play frames">▶</button>' +
+            '<input type="range" id="exp-frv-slider" min="0" max="0" ' +
+            'value="0" step="1">' +
+            '<span id="exp-frv-time" class="exp-frv-time"></span>' +
+            '<button id="exp-frv-gif" class="exp-range exp-dl" ' +
+            'title="Download the loop as an animated GIF (current layers ' +
+            'baked in)" aria-label="Download animated GIF">&#x2913; GIF' +
+            '</button>' +
+            (dash
+                ? '<button id="exp-frv-sum" class="exp-range exp-dl" title="Download the 4-panel ' +
+                  'summary image (PNG)" aria-label="Download the summary image">&#x2913; Summary</button>'
+                : '') +
+            '</div>' +
+            '<div class="exp-frv-opts" id="exp-frv-opts">' +
+            [['coast', 'coastlines'], ['rings', 'range rings'],
+             ['tilt', 'L/M tilt'], ['rmw', 'RMW'],
+             ['shear', 'shear']].map(function (o) {
+                return '<label><input type="checkbox" data-opt="' + o[0] +
+                    '"' + (_frvOpt[o[0]] ? ' checked' : '') + '> ' +
+                    o[1] + '</label>';
+            }).join('') +
+            '</div></div></div>');
+        }
+        function dashHtml() {
+            return '<div class="exp-dash"><div class="exp-dash-img">' + framesHtml(true) + planHtml() + '</div>' +
+                '<div class="exp-tiles exp-score" id="exp-tiles"></div></div>';
+        }
         var storms = (_index && _index.storms) || [];
         var gen = _index && _index.generated
             ? new Date(_index.generated) : null;
@@ -1072,7 +1224,7 @@
             '<div class="exp-head">' +
             '  <div>' +
             '    <span class="exp-badge">EXPERIMENTAL</span>' +
-            '    <span class="exp-title">' + M.title + '</span>' +
+            '    <span class="exp-title">' + prof('title') + '</span>' +
             '  </div>' +
             '  <div class="exp-meta">Updated ' + genStr +
             '    · refreshes every 30 minutes · ' +
@@ -1081,7 +1233,7 @@
             /* Only the one-paragraph lede stays up top (author's call,
                2026-08-21): the citation and usage-notes boxes were burying
                the analyses below the fold — they now close the page. */
-            switcher + staleHtml + M.lede;
+            switcher + staleHtml + newsHtml() + prof('lede');
         var arch = (_archIndex && _archIndex.storms) || [];
         if (!storms.length && !arch.length) {
             html += '<div class="exp-empty">No active storms right now — ' +
@@ -1201,30 +1353,7 @@
                 M.name + ' runs of completed storms</span></div>';
         }
         html +=
-            '<div class="exp-tiles" id="exp-tiles"></div>' +
-            /* Plan view leads: the latest imagery is the page's face, and the
-               toggled panels (verification especially) must never push it
-               out of view — they open BELOW the chart, verification last. */
-            '<div class="exp-plan-wrap">' +
-            '<div class="exp-plan-head">' +
-            '<span class="exp-plan-title">' +
-            (M.planTitle || 'IR plan-view evolution') + '</span>' +
-            '<button class="exp-range exp-dl" id="exp-plan-dl" ' +
-            'title="Download plan view as PNG" ' +
-            'aria-label="Download plan view as PNG">&#x2913; Download</button>' +
-            '</div>' +
-            /* crossorigin="anonymous" is LOAD-BEARING for the Download
-               button, not decoration. Without it the browser fetches this
-               image in no-CORS mode and stores a cache entry that CORS-mode
-               requests may not reuse -- so the download handler's fetch() of
-               the SAME url fails with an opaque "TypeError: Failed to fetch"
-               and the save never even reaches TCExport. Must be set before
-               src is assigned (it is: src is set later in selectStorm).
-               Both cdn.tcatlas.org and the GCS fallback send
-               access-control-allow-origin: *, so the image still loads. */
-            '<img id="exp-plan" class="exp-plan" crossorigin="anonymous" ' +
-            'alt="' + M.name + ' plan view">' +
-            '</div>' +
+            (DASH ? dashHtml() : '<div class="exp-tiles" id="exp-tiles"></div>' + planHtml()) +
             '<div class="exp-ranges" id="exp-ranges">' +
             '<span class="exp-ranges-label">Show</span>';
         RANGES.forEach(function (r) {
@@ -1265,12 +1394,14 @@
             (M.panels.vit
                 ? '<button class="exp-range exp-vitbtn' +
                   (_showVit ? ' active' : '') + '" id="exp-vit-btn" ' +
-                  'aria-pressed="' + _showVit + '" title="' +
-                  'Overlay GHOST v6.1, the model behind the GHOST ' +
-                  'Reanalysis v6.1, run in real time. It combines the GHOST ' +
-                  'tree model and a vision transformer (ViT), a neural network ' +
-                  'that reads the infrared image. It runs alongside GHOST for ' +
-                  'evaluation and is not the published estimate.">' + VIT_LABEL +
+                  'aria-pressed="' + _showVit + '" title="' + (v61Page()
+                      ? 'Overlay the previous real-time GHOST (v5.1), which GHOST v6.1 replaced. It runs ' +
+                        'alongside for comparison and is not the published estimate.'
+                      : 'Overlay GHOST v6.1, the model behind the GHOST ' +
+                        'Reanalysis v6.1, run in real time. It combines the GHOST ' +
+                        'tree model and a vision transformer (ViT), a neural network ' +
+                        'that reads the infrared image. It runs alongside GHOST for ' +
+                        'evaluation and is not the published estimate.') + '">' + VIT_LABEL +
                   '</button>'
                 : '') +
             (M.panels.cnn
@@ -1289,7 +1420,7 @@
                   'for hurricanes, and the published size model below 64 kt. ' +
                   'Not the published estimate.">CNN RMW (test)</button>'
                 : '') +
-            (M.panels.why
+            (M.panels.why && !v61Page()
                 ? '<button class="exp-range exp-whybtn' +
                   (_showWhy ? ' active' : '') +
                   '" id="exp-why-btn">Why this number</button>'
@@ -1307,7 +1438,7 @@
             '&#x2913; Download</button>' +
             '</div>' +
             '<div id="exp-plot" class="exp-plot"></div>' +
-            (M.panels.why
+            (M.panels.why && !v61Page()
                 ? '<div id="exp-why" class="exp-shap" style="display:' +
                   (_showWhy ? 'block' : 'none') + ';"></div>'
                 : '') +
@@ -1315,32 +1446,7 @@
             /* Frame viewer (archived and live storms): shown by
                setupFrameViewer() only when packed frames exist. Sits directly
                under the chart because clicking the chart is what seeks it. */
-            '<div id="exp-frames" class="exp-frames" style="display:none;">' +
-            '<div class="exp-shap-head">Frame viewer' +
-            '<span class="exp-verif-src"> every infrared frame — ' +
-            'drag to scrub, or click a time on the chart above</span></div>' +
-            '<div class="exp-frv-wrap">' +
-            '<canvas id="exp-frv" width="480" height="480"></canvas>' +
-            '<div class="exp-frv-bar">' +
-            '<button id="exp-frv-play" class="exp-range" ' +
-            'aria-label="Play frames">▶</button>' +
-            '<input type="range" id="exp-frv-slider" min="0" max="0" ' +
-            'value="0" step="1">' +
-            '<span id="exp-frv-time" class="exp-frv-time"></span>' +
-            '<button id="exp-frv-gif" class="exp-range exp-dl" ' +
-            'title="Download the loop as an animated GIF (current layers ' +
-            'baked in)" aria-label="Download animated GIF">&#x2913; GIF' +
-            '</button>' +
-            '</div>' +
-            '<div class="exp-frv-opts" id="exp-frv-opts">' +
-            [['coast', 'coastlines'], ['rings', 'range rings'],
-             ['tilt', 'L/M tilt'], ['rmw', 'RMW'],
-             ['shear', 'shear']].map(function (o) {
-                return '<label><input type="checkbox" data-opt="' + o[0] +
-                    '"' + (_frvOpt[o[0]] ? ' checked' : '') + '> ' +
-                    o[1] + '</label>';
-            }).join('') +
-            '</div></div></div>' +
+            (DASH ? '' : framesHtml(false)) +
             /* RI-guidance card (TILT-RF only): NOT behind a toggle — the
                stratification is the model's operational point, so it sits
                directly under the chart. */
@@ -1355,7 +1461,7 @@
             /* Page foot: the citation and usage-notes boxes (moved down from
                the header so the analyses lead), then the Verification
                disclosure. */
-            '<div class="exp-foot">' + (M.cite || '') + (M.note || '') +
+            '<div class="exp-foot">' + (prof('cite') || '') + (prof('note') || '') +
             '</div>' +
             (M.panels.tilt
                 ? '<div class="exp-verif-foot">' +
@@ -1367,6 +1473,18 @@
             '</div>';
         _root.innerHTML = html;
         bindRefresh();
+        var newsX = document.getElementById('exp-news-x');
+        if (newsX) newsX.addEventListener('click', function () {
+            try { localStorage.setItem(V61_NEWS_KEY, '1'); } catch (e) { /* storage unavailable: hidden for this view */ }
+            var n = document.getElementById('exp-news');
+            if (n) n.parentNode.removeChild(n);
+            track('ghost_v61_news_dismiss', {});
+        });
+        var sumBtn = document.getElementById('exp-frv-sum');
+        if (sumBtn) sumBtn.addEventListener('click', function () {
+            var b = document.getElementById('exp-plan-dl');
+            if (b) b.click();
+        });
         /* Model switcher: go through switchIRView when the tab controller
            is present so the hash, the data-view attribute and the header
            highlight all follow (deep links keep working); fall back to a
@@ -1431,7 +1549,7 @@
             var box = document.getElementById('exp-verif');
             if (!box) return;
             box.style.display = _showVerif ? 'block' : 'none';
-            if (_showVerif) box.innerHTML = M.verif;
+            if (_showVerif) box.innerHTML = prof('verif');
         });
         var trackBtn = document.getElementById('exp-track-btn');
         if (trackBtn) trackBtn.addEventListener('click', function () {
@@ -1644,6 +1762,7 @@
     }
 
     function selectStorm(atcf) {
+        _hmT = null; _envShear = null;
         if (_storm && _storm !== atcf) track(M.key + '_storm_select', { storm: atcf });
         _storm = atcf;
         _root.querySelectorAll('.exp-chip').forEach(function (c) {
@@ -1942,7 +2061,7 @@
                emitted 155.1 kt on held-out 2025). A flat, maxed-out value
                means "at or above the ceiling", not a measurement — and
                decays from saturation are invisible at first. */
-            (M.saturates && v.v >= 145
+            (M.saturates && v.v >= 145 && !isV61(j)
                 ? '<div class="exp-tile-sub exp-ceil">near the model’s ' +
                   'saturation ceiling (~150–160 kt) — read as ' +
                   '“at least”, not a precise value</div>'
@@ -1969,6 +2088,11 @@
             })() +
             '<div class="exp-tile-sub">at ' + p.t.slice(11, 16) + 'Z</div></div>';
 
+        if (M.key === 'blend') {
+            box.innerHTML = scorecardHtml(j, fr, v, p, r, trm, windTile, presTile);
+            bindHowMade(j);
+            return;
+        }
         /* Lead with what the model actually predicts. */
         var html = (M.headline === 'pmin_hpa')
             ? presTile + windTile
@@ -2044,6 +2168,232 @@
            readers). The stamps stay in the JSON for provenance -- read them
            there, not here. */
         box.innerHTML = html;
+    }
+
+    /* ---------------- GHOST v6.1 dashboard: scorecard + "how this number is made" ---------------- */
+
+    function newsHtml() {
+        if (!v61Page()) return '';
+        try { if (localStorage.getItem(V61_NEWS_KEY) === '1') return ''; } catch (e) { /* storage unavailable: show it */ }
+        return '<div class="exp-news" id="exp-news"><span class="exp-news-k">New</span><span><strong>GHOST v6.1</strong> ' +
+            'is now the published GHOST. Three models read each infrared image — a tree model, an image model and, for ' +
+            'pressure, a physics model — with observed sea-surface temperature and the GFS potential intensity. On ' +
+            'aircraft-verified cases its wind error fell from 11.8 to 8.8 kt.</span>' +
+            '<button class="exp-news-x" id="exp-news-x" aria-label="Dismiss">✕</button></div>';
+    }
+
+    /* The plan-view PNG is the dashboard's fallback image: shown only when a storm has no packed frames. */
+    function showPlanFallback(on) {
+        var w = document.getElementById('exp-plan-wrap');
+        if (w && M.key === 'blend') w.style.display = on ? '' : 'none';
+    }
+
+    function shearText() {
+        return _envShear ? ' · shear ' + Math.round(_envShear.kt) + ' kt' : '';
+    }
+    function noteShear(frames) {
+        _envShear = null;
+        for (var i = (frames || []).length - 1; i >= 0; i--) {
+            var f = frames[i];
+            if (f.shdc_kt != null && isFinite(f.shdc_kt)) { _envShear = { kt: f.shdc_kt, t: f.t }; break; }
+        }
+        var el = document.getElementById('exp-env-shear');
+        if (el) el.textContent = shearText();
+    }
+
+    function srow(k, v, title) {
+        return '<div class="exp-srow"' + (title ? ' title="' + title + '"' : '') + '><span class="exp-srow-k">' + k +
+            '</span><span class="exp-srow-v">' + v + '</span></div>';
+    }
+
+    function scorecardHtml(j, fr, v, p, r, trm, windTile, presTile) {
+        var html = '';
+        if (_archSet[j.storm]) {
+            html += '<div class="exp-arch-note">Archived storm — retrospective ' + M.name + ' run over the ' +
+                'completed lifetime; “latest” values are the storm’s final analysis.</div>';
+        }
+        var prov = provisionalNote(j.storm, j);
+        if (prov) html += '<div class="exp-prov-note">⚠️ ' + prov + '</div>';
+        html += '<div class="exp-score-top">' + windTile + presTile + '</div>';
+        if (isV61(j)) html += '<div class="exp-hm" id="exp-howmade">' + howMadeHtml(j) + '</div>';
+        var rows = [];
+        var agT = j.agency || 'NHC', fix = null;
+        for (var i = fr.length - 1; i >= 0; i--) {
+            if (fr[i].btk_is_fix && fr[i].btk_vmax_kt != null && isFinite(fr[i].btk_vmax_kt)) { fix = fr[i]; break; }
+        }
+        if (fix) {
+            rows.push(srow('Last ' + agT + ' analysis', Math.round(fix.btk_vmax_kt) + ' kt · ' +
+                fix.t.slice(11, 16) + 'Z' + (fix.vmax_kt != null && isFinite(fix.vmax_kt)
+                    ? ' · ' + M.name + ' then ' + Math.round(fix.vmax_kt) + ' (' +
+                      fmtSigned(fix.vmax_kt - fix.btk_vmax_kt, 0) + ')' : '')));
+        }
+        var comp = j.comparators || {}, cs = [], ct = [];
+        Object.keys(comp).forEach(function (name) {
+            var rr = (comp[name] || []).filter(function (x) { return x.vmax_kt != null; });
+            if (!rr.length) return;
+            var last = rr[rr.length - 1];
+            cs.push(name.replace(' (DVTS)', '') + ' ' + Math.round(last.vmax_kt));
+            ct.push(name + ' ' + Math.round(last.vmax_kt) + ' kt at ' + last.t.slice(5, 16).replace('T', ' ') + 'Z');
+        });
+        if (cs.length) rows.push(srow('Other satellite methods', cs.join(' · ') + ' kt', ct.join('; ')));
+        var sar = (j.sar || []).filter(function (x) { return x.sfc_kt != null; });
+        if (sar.length) {
+            var sl = sar[sar.length - 1];
+            rows.push(srow('SAR surface wind', Math.round(sl.sfc_kt) + ' kt · ' + sl.t.slice(5, 16).replace('T', ' ') +
+                'Z', sl.mission || ''));
+        }
+        var rec = (j.recon || []).filter(function (x) { return x.vmax_sfc_kt != null; });
+        if (rec.length) {
+            var rl = rec[rec.length - 1];
+            rows.push(srow('Aircraft', Math.round(rl.vmax_sfc_kt) + ' kt' + (rl.pmin_hpa != null
+                ? ' / ' + Math.round(rl.pmin_hpa) + ' hPa' : '') + ' · ' + rl.t.slice(5, 16).replace('T', ' ') + 'Z'));
+        }
+        if (r && M.panels.rmw) {
+            if (r.stale) {
+                rows.push(srow('Eyewall radius', '— (last ' + Math.round(r.v) + ' km at ' + fmtTime(r.t) + ')'));
+            } else {
+                var ph = lastFiniteFrame(fr, 'pinhole_prob');
+                rows.push(srow('Eyewall radius', Math.round(r.v) + ' km' +
+                    (trm ? ' · ' + fmtSigned(trm.d, 0) + ' km / ' + Math.round(trm.h) + ' h' : '') +
+                    (ph && ph.v >= 0.10 ? ' · pinhole eye ' + Math.round(ph.v * 100) + '%' : '')));
+            }
+        }
+        if (isV61(j)) {
+            var lv = null;
+            for (var k = fr.length - 1; k >= 0; k--) { if (fr[k].pi_kt != null || fr[k].sst_c != null) { lv = fr[k]; break; } }
+            if (lv) {
+                rows.push(srow('Environment', (lv.pi_kt != null ? 'potential intensity ' + Math.round(lv.pi_kt) + ' kt' : '') +
+                    (lv.pi_kt != null && lv.sst_c != null ? ' · ' : '') +
+                    (lv.sst_c != null ? 'SST ' + lv.sst_c.toFixed(1) + ' °C' : '') +
+                    '<span id="exp-env-shear">' + shearText() + '</span>',
+                    'The inputs GHOST v6.1 used at ' + lv.t.slice(11, 16) + 'Z: potential intensity from the GFS ' +
+                    '(thermodynamic, Bister–Emanuel), sea-surface temperature from NOAA OISST; shear from TILT-RF’s ' +
+                    'deep-layer analysis'));
+            }
+        }
+        if (rows.length) html += '<div class="exp-score-list">' + rows.join('') + '</div>';
+        return html;
+    }
+
+    function pctTxt(w) { return Math.round(w * 100) + '%'; }
+    function hmRow(lbl, res, segs, eq, adj) {
+        var bar = segs ? '<div class="exp-hm-bar" aria-hidden="true">' + segs.map(function (s) {
+            return '<span style="width:' + (s[1] * 100).toFixed(1) + '%;background:' + MEMBER[s[0]].col + '" title="' +
+                MEMBER[s[0]].name + ' ' + pctTxt(s[1]) + '"></span>';
+        }).join('') + '</div>' : '';
+        return '<div class="exp-hm-row"><div class="exp-hm-lbl">' + lbl + ' <b>' + res + '</b></div>' + bar +
+            (eq ? '<div class="exp-hm-eq">' + eq + '</div>' : '') + (adj || '') + '</div>';
+    }
+    function mtxt(k, x, w) {
+        return '<span class="exp-hm-m" style="--mc:' + MEMBER[k].col + '">' + MEMBER[k].name + ' ' + Math.round(x) +
+            (w != null ? ' × ' + w + '%' : '') + '</span>';
+    }
+    /* The arithmetic is exact: the payload carries the members, the tree's wind weight (w_tree), the mixes before the
+       pressure-wind step (vmax_mix_kt) and before the guard / bound (pmin_blend_hpa), all from the same v61_core call
+       that produced the published value. */
+    function howMadeHtml(j) {
+        var fr = j.frames || [], f = null, i;
+        if (_hmT) { for (i = 0; i < fr.length; i++) if (fr[i].t === _hmT) { f = fr[i]; break; } }
+        if (!f) { for (i = fr.length - 1; i >= 0; i--) if (fr[i].vmax_kt != null || fr[i].pmin_hpa != null) { f = fr[i]; break; } }
+        if (!f) return '';
+        var html = '<div class="exp-hm-h"><span>How this number is made</span><span class="exp-hm-t">at ' +
+            f.t.slice(5, 16).replace('T', ' ') + 'Z' + (_hmT ? ' · <a href="#" id="exp-hm-latest">back to latest</a>' : '') +
+            '</span></div>';
+        if (f.vmax_kt != null) {
+            var tv = f.ghost_vmax_kt, iv = f.vit_vmax_kt, wt = f.w_tree, segs = null, eq = '';
+            if (tv != null && iv != null && wt != null) {
+                segs = [['tree', wt], ['img', 1 - wt]];
+                var pT = Math.round(wt * 100);              // shares shown as whole percent that sum to 100
+                eq = mtxt('tree', tv, pT) + ' + ' + mtxt('img', iv, 100 - pT);
+            } else if (tv != null) {
+                segs = [['tree', 1]]; eq = mtxt('tree', tv, null) + ' (no image-model read at this time)';
+            } else if (f.vmax_filled) {
+                eq = 'no usable tree-model read at this time: estimated from the pressure';
+            }
+            var mix = f.vmax_mix_kt, adj = '';
+            if (mix != null && Math.abs(f.vmax_kt - mix) >= 0.5) {
+                adj = '<div class="exp-hm-adj">then drawn toward the wind implied by the pressure: ' +
+                    fmtSigned(f.vmax_kt - mix, 0) + ' kt</div>';
+            }
+            html += hmRow('Wind', Math.round(f.vmax_kt) + ' kt', segs, eq, adj);
+        }
+        if (f.pmin_hpa != null) {
+            var fp = f.fpm_pmin_hpa, tp = f.tree_pmin_hpa, vp = f.vit_pmin_hpa, gp = f.pmin_image_hpa, sp = null, eqp = '';
+            if (fp != null && gp != null && tp != null && vp != null) {
+                sp = [['phys', 0.5], ['tree', 0.25], ['img', 0.25]];
+                eqp = mtxt('phys', fp, 50) + ' + ' + mtxt('tree', tp, 25) + ' + ' + mtxt('img', vp, 25);
+            } else if (fp != null && gp != null) {
+                var k2 = (tp != null) ? 'tree' : 'img', x2 = (tp != null) ? tp : vp;
+                sp = [['phys', 0.5], [k2, 0.5]];
+                eqp = mtxt('phys', fp, 50) + ' + ' + mtxt(k2, x2, 50);
+            } else if (fp != null) {
+                eqp = mtxt('phys', fp, null) + ', with the image models’ last estimate carried (fading over 6 h)';
+            } else if (gp != null) {
+                eqp = 'image models only: ' + (tp != null ? mtxt('tree', tp, null) : '') +
+                    (tp != null && vp != null ? ' and ' : '') + (vp != null ? mtxt('img', vp, null) : '');
+            }
+            var bl = f.pmin_blend_hpa, adjp = '';
+            if (bl != null && Math.abs(f.pmin_hpa - bl) >= 0.5) {
+                adjp = '<div class="exp-hm-adj">then ' + (f.dp1 ? 'deepened to match the wind (wind–pressure check)'
+                    : f.pmin_bounded ? 'kept 1 hPa below the environmental pressure' : 'adjusted by the consistency checks') +
+                    ': ' + fmtSigned(f.pmin_hpa - bl, 0) + ' hPa</div>';
+            }
+            html += hmRow('Pressure', Math.round(f.pmin_hpa) + ' hPa', sp, eqp, adjp);
+        }
+        return html + '<div class="exp-hm-key">' + ['phys', 'tree', 'img'].map(function (k) {
+            return '<span><i style="background:' + MEMBER[k].col + '"></i>' + MEMBER[k].name + '</span>';
+        }).join('') + '</div>';
+    }
+    function renderHowMade(j) {
+        var el = document.getElementById('exp-howmade');
+        if (!el) return;
+        el.innerHTML = howMadeHtml(j);
+        bindHowMade(j);
+    }
+    function bindHowMade(j) {
+        var a = document.getElementById('exp-hm-latest');
+        if (a) a.addEventListener('click', function (e) {
+            e.preventDefault();
+            _hmT = null;
+            if (_strip && _strip.atcf === j.storm) seekStrip(_strip.i1);
+            renderHowMade(j);
+        });
+    }
+    /* The scorecard follows the image: scrubbing the frame viewer (or clicking the chart, which seeks it) selects the
+       latest published frame at or before that image. */
+    function onFrameChange(t, atLatest) {
+        if (M.key !== 'blend' || !_storm) return;
+        var j = _series[_storm];
+        if (!isV61(j)) return;
+        var fr = j.frames || [], best = null;
+        for (var i = 0; i < fr.length; i++) {
+            if (fr[i].t > t) break;
+            if (fr[i].vmax_kt != null || fr[i].pmin_hpa != null) best = fr[i];
+        }
+        var nt = (atLatest || !best) ? null : best.t;
+        if (nt === _hmT) return;
+        _hmT = nt;
+        renderHowMade(j);
+    }
+
+    /* GHOST v6.1's three member models on the chart: hidden until asked for (click the legend), one legend entry per
+       model toggling its wind and pressure lines together. */
+    function membersV61(fr, t, col, traces) {
+        [{ f: 'fpm_pmin_hpa', k: 'phys', ax: 'y2', u: ' hPa' },
+         { f: 'tree_pmin_hpa', k: 'tree', ax: 'y2', u: ' hPa' },
+         { f: 'vit_pmin_hpa', k: 'img', ax: 'y2', u: ' hPa' },
+         { f: 'ghost_vmax_kt', k: 'tree', ax: 'y', u: ' kt' },
+         { f: 'vit_vmax_kt', k: 'img', ax: 'y', u: ' kt' }
+        ].forEach(function (s) {
+            if (!fr.some(function (r) { return r[s.f] != null; })) return;
+            var first = !traces.some(function (tr) { return tr && tr.legendgroup === 'm-' + s.k; });
+            traces.push({
+                x: t, y: col(s.f), name: MEMBER[s.k].name, yaxis: s.ax, xaxis: s.ax === 'y' ? 'x' : 'x2',
+                mode: 'lines', legendgroup: 'm-' + s.k, showlegend: first, visible: 'legendonly',
+                line: { width: 1.3, color: MEMBER[s.k].col, dash: 'dot' }, connectgaps: false,
+                hovertemplate: '%{y:.0f}' + s.u + ' — ' + MEMBER[s.k].name + '<extra></extra>'
+            });
+        });
     }
 
     /* ---------------- TILT-RF panels ---------------- */
@@ -2502,6 +2852,7 @@
         stopStripPlay();
         _strip = null;
         box.style.display = 'none';
+        showPlanFallback(true);
         var atcf = j.storm;
         var arch = !!_archSet[atcf];
         /* Same cache-bust contract as the plan PNG: the manifest changes
@@ -2570,6 +2921,7 @@
                     if (_strip !== null && _strip.atcf === atcf) {
                         if (M.panels.tilt) seedRmw(cj.frames);
                         else seedTilt(cj.frames);
+                        if (!M.panels.tilt) noteShear(cj.frames);
                         frvToggleState();
                         drawStripFrame(_strip.idx);
                     }
@@ -2577,6 +2929,7 @@
             var sl = document.getElementById('exp-frv-slider');
             sl.min = i0; sl.max = i1; sl.value = i1;
             box.style.display = 'block';
+            showPlanFallback(false);
             frvToggleState();
             drawStripFrame(i1);
         }).catch(function () { /* no strips for this storm — stay hidden */ });
@@ -2701,6 +3054,7 @@
                 lbl.textContent = m.times[idx].slice(5, 16)
                     .replace('T', ' ') + 'Z' + stripInfo(m.times[idx]);
             }
+            onFrameChange(m.times[idx], idx === s.i1);
         }).catch(function () {});
     }
 
@@ -4557,9 +4911,10 @@
                     y: rows.map(function (r) { return r.vmax_kt; }),
                     name: lbl, yaxis: 'y', xaxis: 'x',
                     mode: many ? 'lines' : 'lines+markers',
-                    line: { color: col, width: 1.4 },
-                    marker: { size: 5, color: col },
-                    opacity: 0.9,
+                    /* lighter on the GHOST page: context, not the headline */
+                    line: { color: col, width: (M.key === 'blend') ? 1.1 : 1.4 },
+                    marker: { size: (M.key === 'blend') ? 4 : 5, color: col },
+                    opacity: (M.key === 'blend') ? 0.6 : 0.9,
                     hovertemplate: '%{y:.0f} kt'
                 });
                 var hasP = rows.some(function (r) {
@@ -4569,8 +4924,8 @@
                     y: rows.map(function (r) {
                         return (r.pmin_hpa === undefined) ? null : r.pmin_hpa; }),
                     name: lbl + ' Pmin', yaxis: 'y2', xaxis: 'x2',
-                    mode: 'lines', line: { color: col, width: 1.4 },
-                    opacity: 0.9, showlegend: false,
+                    mode: 'lines', line: { color: col, width: (M.key === 'blend') ? 1.1 : 1.4 },
+                    opacity: (M.key === 'blend') ? 0.6 : 0.9, showlegend: false,
                     hovertemplate: '%{y:.0f} hPa'
                 });
             });
@@ -4700,7 +5055,9 @@
            so a reader can see how far apart they were on every frame and which
            one the mean is leaning on. `ghost_vmax_kt` is the wind itself there
            (the blend's Vmax IS the tree's), so it is not repeated. */
-        if (M.key === 'blend') {
+        if (M.key === 'blend' && isV61(j)) {
+            membersV61(fr, t, col, traces);
+        } else if (M.key === 'blend') {
             [{ f: 'fpm_pmin_hpa', nm: 'FPM member', c: PROFILES.fpm.color },
              { f: 'tree_pmin_hpa', nm: 'tree member', c: PROFILES.ghost.color }
             ].forEach(function (s) {
@@ -4717,7 +5074,10 @@
         var otherCol = (M.key === 'fpm' ? PROFILES.ghost.color : MODEL_COL);
         [{ f: 'ghost_vmax_kt', ax: 'y', xax: 'x', u: ' kt', dp: 0 },
          { f: 'ghost_pmin_hpa', ax: 'y2', xax: 'x2', u: ' hPa', dp: 1 }
-        ].filter(function (s) { return M.key !== 'blend'; }).forEach(function (s) {
+        ].filter(function (s) {
+            /* a v6.1 FPM payload's ghost_* fields are the v6.1 TREE's own numbers, not the published GHOST */
+            return M.key !== 'blend' && !(M.key === 'fpm' && j.v61);
+        }).forEach(function (s) {
             if (!fr.some(function (r) { return r[s.f] != null; })) return;
             traces.push({
                 x: t, y: col(s.f), name: 'GHOST', yaxis: s.ax, xaxis: s.xax,
@@ -5029,6 +5389,12 @@
     window.activateExperimentalView = function (profileKey) {
         _root = document.getElementById('exp-main');
         if (!_root) return;
+        /* The tree member page is retired with the GHOST v6.1 cutover (2026-10-23): v6.1's tree is one of three members
+           with no published product of its own, so old #experimental_tree links land on the GHOST page. */
+        if (profileKey === 'ghost') {
+            profileKey = 'blend';
+            try { history.replaceState(null, '', '#experimental'); } catch (e) { /* keep the old hash */ }
+        }
         var switched = setProfile(profileKey || 'blend');
         track(M.key + '_view_open', { narrow: window.innerWidth < 640 });
         /* A profile switch reuses the same #exp-main node, so the previous

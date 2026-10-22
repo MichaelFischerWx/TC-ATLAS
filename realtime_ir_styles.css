@@ -8175,3 +8175,72 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
    above it so the basemap / satellite credit stays visible. */
 #ir-map .maplibregl-ctrl-bottom-right,
 #ir-map .maplibregl-ctrl-bottom-left { bottom: 28px; }
+
+/* ---- GHOST v6.1 dashboard (2026-10-23): one infrared image beside a scorecard ---- */
+.exp-dash {
+    display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    gap: 14px; margin: 6px 0 14px; align-items: start;
+}
+.exp-dash .exp-frames { margin-top: 0; }
+.exp-dash .exp-frv-wrap { max-width: none; }
+.exp-dash .exp-plan-wrap { margin: 0; }
+.exp-tiles.exp-score { display: flex; flex-direction: column; gap: 10px; margin: 0; }
+.exp-score .exp-score-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.exp-hm, .exp-score-list {
+    border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; background: #fff;
+}
+[data-theme="dark"] .exp-hm, [data-theme="dark"] .exp-score-list {
+    border-color: #1e293b; background: rgba(15,23,42,0.55);
+}
+.exp-hm-h {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+    font-size: 12.5px; font-weight: 700; color: #0f172a;
+}
+[data-theme="dark"] .exp-hm-h { color: #e2e8f0; }
+.exp-hm-t { font-size: 11px; font-weight: 500; color: #64748b; white-space: nowrap; }
+.exp-hm-row { margin-top: 9px; }
+.exp-hm-lbl { font-size: 12px; color: #475569; margin-bottom: 4px; }
+.exp-hm-lbl b { color: #0f172a; font-size: 13px; }
+[data-theme="dark"] .exp-hm-lbl { color: #94a3b8; }
+[data-theme="dark"] .exp-hm-lbl b { color: #e2e8f0; }
+.exp-hm-bar { display: flex; gap: 2px; height: 12px; border-radius: 6px; overflow: hidden; }
+.exp-hm-bar span { display: block; height: 100%; }
+.exp-hm-eq { font-size: 11.5px; color: #475569; margin-top: 4px; line-height: 1.5; }
+[data-theme="dark"] .exp-hm-eq { color: #94a3b8; }
+.exp-hm-m { white-space: nowrap; border-bottom: 2px solid var(--mc, #94a3b8); }
+.exp-hm-adj { font-size: 11px; color: #64748b; margin-top: 2px; }
+.exp-hm-key { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11px; color: #64748b; margin-top: 9px; }
+.exp-hm-key i {
+    display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px;
+}
+.exp-score-list { padding: 4px 12px; }
+.exp-srow {
+    display: flex; justify-content: space-between; gap: 12px; font-size: 12px;
+    padding: 6px 0; border-top: 1px solid #f1f5f9;
+}
+.exp-srow:first-child { border-top: 0; }
+[data-theme="dark"] .exp-srow { border-top-color: #1e293b; }
+.exp-srow-k { color: #64748b; white-space: nowrap; }
+.exp-srow-v { color: #0f172a; text-align: right; }
+[data-theme="dark"] .exp-srow-k { color: #94a3b8; }
+[data-theme="dark"] .exp-srow-v { color: #e2e8f0; }
+.exp-news {
+    display: flex; align-items: flex-start; gap: 10px; margin: 0 0 10px;
+    border: 1px solid #a7f3d0; background: #ecfdf5; color: #065f46;
+    border-radius: 10px; padding: 9px 12px; font-size: 13px; line-height: 1.5;
+}
+[data-theme="dark"] .exp-news { border-color: #065f46; background: rgba(6,78,59,0.35); color: #a7f3d0; }
+.exp-news-k {
+    flex: none; margin-top: 2px; padding: 1px 7px; border-radius: 6px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    background: #10b981; color: #ffffff;
+}
+.exp-news-x {
+    flex: none; margin-left: auto; padding: 0 4px; border: 0; background: transparent;
+    color: inherit; font-size: 15px; line-height: 1.3; cursor: pointer; opacity: 0.7;
+}
+.exp-news-x:hover { opacity: 1; }
+@media (max-width: 760px) {
+    .exp-dash { grid-template-columns: minmax(0, 1fr); }
+    .exp-dash .exp-score { order: -1; }
+}
