@@ -1420,8 +1420,22 @@
            OWN time — before it did, Nida 2009's 18:00 Nov 25 slot silently
            wore imagery from Nov 27. */
         var sub = $('gra-ir-sub');
+        /* Same for a coarser same-time stand-in. When the storm's own source
+           (MergIR, 4 km) could not be fetched, the API cascades to GridSat-B1
+           (8 km) for the same hour. Its eye can sit tens of km from the IR eye
+           fix, which is computed on MergIR — Hagibis 2019, 7 Oct 15 UTC, was
+           36 km off with nothing on the chip saying why. */
+        var planned = (irMeta[j.sid] || {}).source;
+        var standIn = j.source === 'gridsat' && planned && planned !== 'gridsat';
         if (sub) {
-            if (j.source === 'hursat') {
+            if (standIn) {
+                sub.textContent = 'backup image · GridSat 8 km';
+                sub.title = 'The primary 4 km satellite mosaic could not be fetched for ' +
+                    'this hour, so this is the coarser 8 km GridSat-B1 image for the ' +
+                    'same time. Its eye can sit tens of km from the IR eye fix, which ' +
+                    'is measured on the 4 km mosaic. GHOST does not read this ' +
+                    'picture — the estimate is unaffected.';
+            } else if (j.source === 'hursat') {
                 var at = j.actual_datetime ? TCTime.utc(j.actual_datetime, { year: true }) : '';
                 sub.textContent = 'backup scan' + (at ? ' · taken ' + at : '');
                 sub.title = 'The primary satellite mosaic has no image for this hour, ' +

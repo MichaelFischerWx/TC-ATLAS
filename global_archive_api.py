@@ -310,6 +310,13 @@ def _setup_earthdata_netrc():
         print("[global_archive] Earthdata: no credentials configured (MergIR disabled)")
         return
 
+    # Outside Cloud Run (K_SERVICE unset) this is someone's real home: never
+    # clobber an existing ~/.netrc — other tools (TC-SWARM MergIR/IMERG pulls)
+    # depend on it, and a local import with a test token once wiped it.
+    if not os.environ.get("K_SERVICE") and os.path.exists(netrc_path):
+        print(f"[global_archive] Earthdata: {netrc_path} exists and not on Cloud Run — leaving it alone")
+        return
+
     # Write ~/.netrc
     if EARTHDATA_USER and EARTHDATA_PASS:
         netrc_entry = (
@@ -2308,6 +2315,41 @@ def ir_meta(
 
 _heal_in_progress: set = set()       # set of (sid, frame_idx) currently healing
 _heal_lock = threading.Lock()
+# A genuine archive gap fails every retry, and each retry is a full MergIR
+# download, so a frame is re-tried at most once per cooldown per instance.
+_heal_last_try: dict = {}            # (sid, frame_idx) -> _time.time() of last spawn
+_HEAL_COOLDOWN_S = 3600
+_SOURCE_RANK = {"mergir": 0, "gridsat": 1, "hursat": 2}
+
+
+def _preferred_source_for(sid: str) -> str | None:
+    meta = _mergir_meta_cache.get(f"ir_{sid}")
+    if meta and meta.get("available"):
+        return meta.get("source") or None
+    return _determine_preferred_source(sid)
+
+
+def _is_fallback_frame(sid: str, result: dict) -> bool:
+    """True when a rendered frame came from a source BELOW the storm's
+    preferred one (the MergIR -> GridSat -> HURSAT cascade fired). Such a
+    frame stays out of R2: once mirrored, the CDN-direct fetch and the R2
+    302 fast path serve it forever and heal never runs (Hagibis 2019 frames
+    24-27 sat on GridSat, eye 14-36 km off the MergIR position, for months).
+    In GCS only, every view comes back through here and retries the
+    preferred source via _maybe_heal_frame."""
+    actual = result.get("source", "")
+    pref = _preferred_source_for(sid)
+    if not actual or not pref:
+        return False
+    return _SOURCE_RANK.get(actual, 99) > _SOURCE_RANK.get(pref, 99)
+
+
+def _frame_cache_headers(fallback: bool, x_cache: str) -> dict:
+    # A fallback frame is provisional: short browser TTL, not immutable, so a
+    # healed copy reaches viewers instead of the substitute living on in caches.
+    cc = ("public, max-age=3600" if fallback
+          else "public, max-age=86400, s-maxage=604800, immutable")
+    return {"Cache-Control": cc, "X-Cache": x_cache}
 
 
 def _heal_frame_background(sid: str, frame_idx: int, preferred_source: str,
@@ -2347,7 +2389,7 @@ def _heal_frame_background(sid: str, frame_idx: int, preferred_source: str,
             }
         result = {
             "sid": sid, "frame_idx": frame_idx,
-            "datetime": frame_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "datetime": frame_dt.isoformat(),
             "source": preferred_source,
             "bounds": bounds,
             **tb_encoded,
@@ -2356,8 +2398,11 @@ def _heal_frame_background(sid: str, frame_idx: int, preferred_source: str,
         # Update in-memory cache
         cache_key = (f"ir_{sid}", frame_idx)
         _frame_cache[cache_key] = result
-        # Update GCS persistent cache
+        # Update GCS persistent cache, and publish to R2 — the healed frame is
+        # final, and overwriting the key also replaces any substitute that an
+        # older revision mirrored there.
         _gcs_put_frame(sid, frame_idx, result, source="ir")
+        _r2_mirror_frame_async(_gcs_cache_key(sid, frame_idx, source="ir"), result)
 
         _heal_stats["succeeded"] += 1
         _record_heal_history(sid, frame_idx, preferred_source, success=True)
@@ -2439,16 +2484,28 @@ def _maybe_heal_frame(sid: str, frame_idx: int, cached_result: dict):
         return
 
     # Only heal upgrades (gridsat→mergir, hursat→gridsat, hursat→mergir)
-    _SOURCE_RANK = {"mergir": 0, "gridsat": 1, "hursat": 2}
     if _SOURCE_RANK.get(actual_source, 99) <= _SOURCE_RANK.get(preferred_source, 99):
         return
 
-    # Don't duplicate heal attempts
+    # An open MergIR breaker would fail the retry instantly and burn the
+    # cooldown; wait for it to close (the next view retries).
+    if preferred_source == "mergir" and _mergir_circuit_is_open():
+        return
+
+    # Don't duplicate heal attempts, and don't hammer a genuine gap
     heal_key = (sid, frame_idx)
+    now = _time.time()
     with _heal_lock:
         if heal_key in _heal_in_progress:
             return
+        if now - _heal_last_try.get(heal_key, 0.0) < _HEAL_COOLDOWN_S:
+            _heal_stats["skipped"] += 1
+            return
         _heal_in_progress.add(heal_key)
+        _heal_last_try[heal_key] = now
+        if len(_heal_last_try) > 5000:
+            for k in [k for k, t in _heal_last_try.items() if now - t >= _HEAL_COOLDOWN_S]:
+                del _heal_last_try[k]
 
     # Get frame coordinates — prefer metadata, fall back to cached bounds
     frame_lat = None
@@ -2516,10 +2573,10 @@ def ir_frame(
 
     # R2 fast path: this immutable frame is already mirrored to R2 → 302 the
     # browser straight to cdn.tcatlas.org. Zero compute, no Cloud Run egress —
-    # this is the common case (repeat hits of historical frames). NOTE: once a
-    # frame is on R2 it skips the in-memory/GCS paths below, so opportunistic
-    # _maybe_heal_frame healing runs only on the FIRST access (acceptable —
-    # healing is a one-shot quality upgrade; bump _GCS_CACHE_VERSION to redo).
+    # this is the common case (repeat hits of historical frames). Once a frame
+    # is on R2 it skips the in-memory/GCS paths below and can never heal, which
+    # is why fallback renders are kept off R2 (_is_fallback_frame) until a
+    # heal replaces them with the preferred source.
     if _r2_frame_exists(r2_key):
         # Target is a pure function of (sid, frame_idx, _GCS_CACHE_VERSION) and
         # the mirrored object never changes → the redirect is safely cacheable.
@@ -2534,12 +2591,12 @@ def ir_frame(
         cached = _frame_cache[cache_key]
         # Opportunistically heal fallback frames in the background
         _maybe_heal_frame(sid, frame_idx, cached)
-        # Mirror to R2 so subsequent requests 302 (no Cloud Run egress)
-        _r2_mirror_frame_async(r2_key, cached)
-        return JSONResponse(
-            cached,
-            headers={"Cache-Control": "public, max-age=86400, s-maxage=604800, immutable", "X-Cache": "HIT"},
-        )
+        fallback = _is_fallback_frame(sid, cached)
+        # Mirror to R2 so subsequent requests 302 (no Cloud Run egress) —
+        # never a fallback, or it is frozen there (see _is_fallback_frame)
+        if not fallback:
+            _r2_mirror_frame_async(r2_key, cached)
+        return JSONResponse(cached, headers=_frame_cache_headers(fallback, "HIT"))
 
     # Check GCS persistent cache
     gcs_result = _gcs_get_frame(sid, frame_idx, source="ir")
@@ -2550,12 +2607,10 @@ def ir_frame(
             _frame_cache.popitem(last=False)
         # Opportunistically heal fallback frames in the background
         _maybe_heal_frame(sid, frame_idx, gcs_result)
-        # Mirror to R2 so subsequent requests 302 (no Cloud Run egress)
-        _r2_mirror_frame_async(r2_key, gcs_result)
-        return JSONResponse(
-            gcs_result,
-            headers={"Cache-Control": "public, max-age=86400, s-maxage=604800, immutable", "X-Cache": "GCS-HIT"},
-        )
+        fallback = _is_fallback_frame(sid, gcs_result)
+        if not fallback:
+            _r2_mirror_frame_async(r2_key, gcs_result)
+        return JSONResponse(gcs_result, headers=_frame_cache_headers(fallback, "GCS-HIT"))
 
     # Check what source was determined for this storm.
     # If the server's meta cache is empty (e.g. fresh container restart, or
@@ -2751,13 +2806,14 @@ def ir_frame(
         _frame_cache.popitem(last=False)
         gc.collect()
     _gcs_put_frame(sid, frame_idx, result, source="ir")
-    # Mirror to R2 so subsequent requests 302 to cdn.tcatlas.org (off Cloud Run)
-    _r2_mirror_frame_async(r2_key, result)
+    # Mirror to R2 so subsequent requests 302 to cdn.tcatlas.org (off Cloud
+    # Run). A fallback render stays GCS-only, so the next view comes back here
+    # and _maybe_heal_frame retries the preferred source (see _is_fallback_frame).
+    fallback = _is_fallback_frame(sid, result)
+    if not fallback:
+        _r2_mirror_frame_async(r2_key, result)
 
-    return JSONResponse(
-        result,
-        headers={"Cache-Control": "public, max-age=86400, s-maxage=604800, immutable", "X-Cache": "MISS"},
-    )
+    return JSONResponse(result, headers=_frame_cache_headers(fallback, "MISS"))
 
 
 # /ir/batch was removed: it had no caller, bypassed the GCS/R2 frame cache,
