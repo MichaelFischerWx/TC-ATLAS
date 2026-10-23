@@ -759,12 +759,22 @@
     /* The About panel's "How it is built": one block per model generation in
        global_archive.html ([data-gra-built] = v5 / v6 / v6.1); show the one
        for this version. */
+    /* v6.1.1 and later: frames over land are scored and their wind decays from the last over-water estimate (paced by the
+       core's land fraction); error statistics use over-water times only. */
+    function isV611Plus() {
+        var m = String((index && index.version) || version || '').match(/^v(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+        if (!m) return false;
+        var a = +m[1], b = +(m[2] || 0), c = +(m[3] || 0);
+        return a > 6 || (a === 6 && (b > 1 || (b === 1 && c >= 1)));
+    }
     function renderBuilt() {
         var gen = isV61Plus() ? 'v6.1' : (isV6Plus() ? 'v6' : 'v5');
         var els = document.querySelectorAll('[data-gra-built]');
         for (var i = 0; i < els.length; i++) {
             els[i].hidden = els[i].getAttribute('data-gra-built') !== gen;
         }
+        var v611 = isV611Plus(), ls = document.querySelectorAll('[data-gra-v611]');
+        for (var k = 0; k < ls.length; k++) ls[k].hidden = !v611;
     }
 
     /* Why there is no held-out value here. The two reasons are not the same
@@ -2311,7 +2321,14 @@
             '</svg>' +
             '<div class="gra-chart-key"><b style="color:#f43f5e">—</b> GHOST &nbsp; ' +
             '<b style="color:var(--slate)">—</b> best track &nbsp; ' +
-            (anyFill && isV6Plus()
+            (anyFill && st.lin && st.lin.some(Boolean)
+                /* v6.1.1: frames whose centre is over land carry the inland decay (lin); other fills are rejected images */
+                ? '<b style="color:#f43f5e">- -</b> <span title="Over land (centre over land) the wind decays from the ' +
+                  'last over-water estimate, faster the more of the storm’s core is over land; where the infrared image ' +
+                  'was rejected over water the wind is filled from the pressure. Dashed winds never set the storm peak, and ' +
+                  'every error statistic uses over-water times only.">over land: decaying from the last over-water estimate' +
+                  '</span> &nbsp; '
+                : (anyFill && isV6Plus())
                 /* v6 fills: center over land or image rejected (wind = the
                    lower of the pressure-implied wind and the tree's raw wind),
                    plus the few frames carried from v5.3. */
@@ -2384,6 +2401,7 @@
                 '<b>' + TCTime.utc(tms, { year: true }) +
                 (nat && nat !== 'TS' ? ' <span class="gc-nat-key"><i class="' + nat + '"></i>' + NAT_NAME[nat] + '</span>' : '') +
                 (rc || nfx ? ' <span class="gc-rec-key"><i></i>recon' + (nfx ? ' (' + nfx + ' fix' + (nfx > 1 ? 'es' : '') + ' ±3 h)' : '') + '</span>' : '') +
+                (st.lin && st.lin[i] ? ' <span class="gc-rec-key">centre over land</span>' : '') +
                 '</b>' +
                 '<span><i style="background:#f43f5e"></i>GHOST ' + fmt(S.gp, i, 1) + ' hPa / ' + fmt(S.gv, i, 0) + ' kt</span>' +
                 '<span><i style="background:var(--slate)"></i>BT ' + fmt(S.bp, i, 0) + ' hPa / ' + fmt(S.bv, i, 0) + ' kt</span>' +
@@ -2858,7 +2876,8 @@
             var yy = y + 100;
             cardText(ctx, 'best track ' + (q[3] != null ? Math.round(q[3]) + ' ' + q[2] : '—'), x + 14, yy, 13, col.fg2, 400);
             yy += 20;
-            if (q[4] && filled) cardText(ctx, 'filled: over land or image rejected', x + 14, yy, 12.5, col.fg2, 400);
+            if (q[4] && filled) cardText(ctx, (st.lin && st.lin[bi]) ? 'over land, decaying' : 'filled: over land or image rejected',
+                x + 14, yy, 12.5, col.fg2, 400);
             if (!q[4] && ho != null) cardText(ctx, 'held out ' + ho.toFixed(1) + ' hPa', x + 14, yy, 12.5, col.fg2, 400);
         });
         y += 132 + 14;
@@ -2866,7 +2885,11 @@
         /* ── how this number is made (v6.1) ── */
         var Mm = st.lt ? membersFor(sid, S.t) : null;
         if (v61) {
-            var windTxt = filled
+            var inl = !!(st.lin && st.lin[bi]);
+            var windTxt = inl
+                ? 'Centre over land: the wind decays from the last over-water estimate, faster the more of the storm’s core ' +
+                  'is over land.'
+                : filled
                 ? 'Filled: the centre is over land or the image was rejected, so the wind is the lower of the wind ' +
                   'implied by the pressure and the tree model’s own wind.'
                 : 'Tree model and image model (vision transformer) blended by intensity: equal below 50 kt, image ' +
@@ -2921,7 +2944,8 @@
             (bvk != null ? Math.round(bvk) + ' kt' : '') + (bvk != null && bpk != null ? ' · ' : '') +
             (bpk != null ? Math.round(bpk) + ' hPa' : '')]);
         var lm = st.lm && st.lm.all;
-        if (lm && lm.n && lm.rmse != null && lm.bias != null) rows.push(['Whole storm vs best track', 'pressure RMSE ' +
+        if (lm && lm.n && lm.rmse != null && lm.bias != null) rows.push([st.lin ? 'Over water vs best track' :
+            'Whole storm vs best track', 'pressure RMSE ' +
             lm.rmse.toFixed(1) + ' hPa, bias ' + (lm.bias >= 0 ? '+' : '−') + Math.abs(lm.bias).toFixed(1) + ' (' + lm.n + ' times)']);
         var sv = st.lsatv && st.lsatv[bi], sp = st.lsat && st.lsat[bi];
         if (sv != null || sp != null) rows.push(['SATCON at this time', (sv != null ? Math.round(sv) + ' kt' : '') +

@@ -382,6 +382,23 @@
         }
         return null;
     }
+    /* Frames whose centre is over land (2026-10-23): v6.1 scores them, and the wind there decays from the last over-water
+       estimate, faster the more of the storm's core is over land. lastWaterWind finds that anchor for the explanations. */
+    function lastWaterWind(fr, t) {
+        for (var i = fr.length - 1; i >= 0; i--) {
+            if (fr[i].t >= t || fr[i].inland) continue;
+            if (fr[i].vmax_kt != null && isFinite(fr[i].vmax_kt)) return { v: fr[i].vmax_kt, t: fr[i].t };
+        }
+        return null;
+    }
+    /* A tile's time label: the clock time, with the date when the value is not from the newest frame's day (an archived
+       storm's last wind can be days older than its final analysis), and "over land" on an inland frame. */
+    function tileAt(c, fr) {
+        var newest = fr.length ? fr[fr.length - 1].t : c.t;
+        var old = (new Date(newest) - new Date(c.t)) / 3.6e6 > STALE_H || newest.slice(0, 10) !== c.t.slice(0, 10);
+        return 'at ' + (old ? c.t.slice(5, 10).replace('-', '/') + ' ' : '') + c.t.slice(11, 16) + 'Z' +
+            (c.f && c.f.inland ? ' \u00b7 centre over land' : '');
+    }
 
     /* lastFiniteFrame, judged against the NEWEST published frame. A model
        that stops estimating a quantity (the wind model over land, every
@@ -2064,7 +2081,7 @@
         var trm = trend24(fr, 'rmw_km');
         var cat = windToCategory(v && v.v);
         var asOf = v
-            ? '<div class="exp-tile-sub">at ' + v.t.slice(11, 16) + 'Z</div>' : '';
+            ? '<div class="exp-tile-sub">' + tileAt(v, fr) + '</div>' : '';
 
         /* No wind in the payload -> no wind tile. See the headline guard
            above: this is a withheld quantity, not a broken feed. */
@@ -2127,7 +2144,7 @@
                       'correction: the number above is the model output.">\u24d8</span></div>'
                     : '';
             })() +
-            '<div class="exp-tile-sub">at ' + p.t.slice(11, 16) + 'Z</div></div>';
+            '<div class="exp-tile-sub">' + tileAt(p, fr) + '</div></div>';
 
         if (M.key === 'blend') {
             box.innerHTML = scorecardHtml(j, fr, v, p, r, trm, windTile, presTile);
@@ -2348,7 +2365,12 @@
             '</span></div>';
         if (f.vmax_kt != null) {
             var tv = f.ghost_vmax_kt, iv = f.vit_vmax_kt, wt = f.w_tree, segs = null, eq = '';
-            if (tv != null && iv != null && wt != null) {
+            if (f.inland) {
+                var w0 = lastWaterWind(fr, f.t);
+                eq = 'centre over land: the wind decays from the last over-water estimate' +
+                    (w0 ? ' (' + Math.round(w0.v) + ' kt at ' + w0.t.slice(11, 16) + 'Z)' : '') +
+                    ', faster the more of the storm\u2019s core is over land';
+            } else if (tv != null && iv != null && wt != null) {
                 segs = [['tree', wt], ['img', 1 - wt]];
                 var pT = Math.round(wt * 100);              // shares shown as whole percent that sum to 100
                 eq = mtxt('tree', tv, pT) + ' + ' + mtxt('img', iv, 100 - pT);
@@ -2358,7 +2380,7 @@
                 eq = 'no usable tree-model read at this time: estimated from the pressure';
             }
             var mix = f.vmax_mix_kt, adj = '';
-            if (mix != null && Math.abs(f.vmax_kt - mix) >= 0.5) {
+            if (!f.inland && mix != null && Math.abs(f.vmax_kt - mix) >= 0.5) {
                 adj = '<div class="exp-hm-adj">then drawn toward the wind implied by the pressure: ' +
                     fmtSigned(f.vmax_kt - mix, 0) + ' kt</div>';
             }
@@ -2747,7 +2769,14 @@
                         used += sw + gap;
                     });
                 }
-                if (f.vmax_kt != null && f.ghost_vmax_kt != null) {
+                if (f.vmax_kt != null && f.inland) {
+                    var w0c = lastWaterWind(fr, f.t);
+                    cardText(ctx, 'Wind ' + Math.round(f.vmax_kt) + ' kt', RX + 14, rowY + 6, 13, fg, 700);
+                    cardWrap(ctx, 'Centre over land: the wind decays from the last over-water estimate' +
+                        (w0c ? ' (' + Math.round(w0c.v) + ' kt at ' + w0c.t.slice(11, 16) + 'Z)' : '') +
+                        ', faster the more of the storm\u2019s core is over land.', RX + 14, rowY + 26, RW - 28, 12.5, fg2, 400, 17);
+                    rowY += 64;
+                } else if (f.vmax_kt != null && f.ghost_vmax_kt != null) {
                     var wt = f.w_tree, pT = (wt != null && f.vit_vmax_kt != null) ? Math.round(wt * 100) : 100;
                     cardText(ctx, 'Wind ' + Math.round(f.vmax_kt) + ' kt', RX + 14, rowY + 6, 13, fg, 700);
                     bar(pT < 100 ? [['tree', pT / 100], ['img', 1 - pT / 100]] : [['tree', 1]], rowY + 14);
@@ -5066,6 +5095,25 @@
             return ok[lo];
         };
     }
+    /* Over-water times only (PI 2026-10-23): frames whose centre is over land carry the inland wind decay and the physics
+       model's land pressure, and no error statistic is computed on them, for GHOST or for the methods it is compared with.
+       A comparator time takes the flag of the frame at or before it. Null when the payload predates the flag. */
+    function waterAt(fr) {
+        var ts = [], ok = [];
+        fr.forEach(function (f) {
+            if (f.inland === undefined) return;
+            var ms = Date.parse(f.t);
+            if (!isNaN(ms)) { ts.push(ms); ok.push(!f.inland); }
+        });
+        if (!ts.length) return null;
+        return function (iso) {
+            var x = Date.parse(iso);
+            if (isNaN(x) || x < ts[0]) return true;
+            var lo = 0, hi = ts.length - 1;
+            while (lo < hi) { var m = (lo + hi + 1) >> 1; if (ts[m] <= x) lo = m; else hi = m - 1; }
+            return ok[lo];
+        };
+    }
     function errStats(rows, key, ref, keep) {
         var n = 0, se = 0, sb = 0;
         rows.forEach(function (r) {
@@ -5084,7 +5132,9 @@
         var fr = j.frames || [];
         var vRef = btkAt(fr, 'btk_vmax_kt'), pRef = btkAt(fr, 'btk_mslp_hpa');
         var isTc = tcAt(fr);
-        var keep = isTc ? function (r) { return isTc(r.t); } : null;
+        var isWater = waterAt(fr);
+        var keep = (isTc || isWater)
+            ? function (r) { return (!isTc || isTc(r.t)) && (!isWater || isWater(r.t)); } : null;
         /* The producer says filled winds must never be scored, and a carried
            wind is the previous frame's value, not an estimate of this one. */
         var keepV = function (r) {
@@ -5124,6 +5174,7 @@
             span + '), ' + (isTc ? 'counting only times ' + ag + ' classified it as a ' +
             'tropical or subtropical cyclone' : 'all times (storm type not yet in this ' +
             'storm\u2019s data, so remnant-low or disturbance stretches are included)') +
+            (isWater ? ', with the centre over water' : '') +
             ' \u00b7 bias = method minus best track</span></div>' +
             '<div class="exp-verif-t"><table><thead><tr><th>Method</th>' +
             '<th>Vmax RMSE (kt)</th><th>Bias</th><th>n</th>' +
@@ -5223,13 +5274,21 @@
                   name: 'IQR (conditional)',
                   hovertemplate: '%{y:.0f} kt (p75)' });
         }
+        var inl = fr.map(function (f) { return !!f.inland; });
+        var anyInl = inl.some(Boolean);
+        var vSolid = anyInl ? fr.map(function (f, k) { return inl[k] ? null : f.vmax_kt; }) : col('vmax_kt');
+        var vLand = anyInl ? fr.map(function (f, k) { return (inl[k] || inl[k - 1] || inl[k + 1]) ? f.vmax_kt : null; }) : null;
         traces.push(
             /* One GHOST color across all three panels so the single legend
                entry means the same thing everywhere (the y-axis titles already
                say which quantity each panel shows). */
-            { x: t, y: col('vmax_kt'), name: M.name, yaxis: 'y',
-              line: { color: MODEL_COL, width: 2.4 },
+            { x: t, y: vSolid, name: M.name, yaxis: 'y',
+              line: { color: MODEL_COL, width: 2.4 }, connectgaps: false,
               hovertemplate: '%{y:.1f} kt' });
+        /* frames whose centre is over land: the wind decays from the last over-water estimate (dashed) */
+        if (vLand) traces.push(
+            { x: t, y: vLand, name: 'over land (decaying)', yaxis: 'y', connectgaps: false,
+              line: { color: MODEL_COL, width: 2, dash: 'dash' }, hovertemplate: '%{y:.1f} kt (over land)' });
         /* The displayed wind is smoothed over the preceding hours, so it
            trails a fast ramp; the per-frame value is what the current
            image alone says. Shown as a thin trace so the two can be read

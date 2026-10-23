@@ -1344,6 +1344,14 @@
                                 pressure where it would otherwise read far weaker than the wind, and
                                 no frame is published above the environmental pressure minus
                                 1&nbsp;hPa.</li>
+                            <li data-gra-v611 hidden><strong>Since v6.1.1</strong>, frames whose center is
+                                over land are scored like any other, and their wind <strong>decays from the
+                                last over-water estimate</strong>, faster the more of the storm&rsquo;s core
+                                (100&nbsp;km) is over land, so a storm scraping a coast weakens slowly and one
+                                moving fully inland at the full rate. The decay was fitted on 672 landfalls
+                                (1998&ndash;2025). Every error statistic (each storm&rsquo;s agreement with
+                                best track, the list&rsquo;s QC flag and the headline numbers) and each
+                                storm&rsquo;s peaks use <strong>over-water times only</strong>.</li>
                             <li>Only frames whose center is <strong>over water</strong> get the full
                                 wind estimate. Over land, or where the image is unusable, the wind
                                 is <strong>filled</strong> and drawn dashed, and the storm&rsquo;s
@@ -1523,6 +1531,6 @@
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
-    <script defer src="global_archive_ghostra.js?v=20261023card1"></script>
+    <script defer src="global_archive_ghostra.js?v=20261023land1"></script>
 </body>
 </html>
