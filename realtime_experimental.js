@@ -1183,10 +1183,9 @@
         function framesHtml(dash) {
             return (
             '<div id="exp-frames" class="exp-frames" style="display:none;">' +
+            /* The dashboard's caption sits in its own grid row (dashHtml), so the scorecard lines up with the image */
             (dash
-                ? '<div class="exp-shap-head">Infrared image' +
-                  '<span class="exp-verif-src"> every frame — drag to scrub, press play, ' +
-                  'or click a time on the chart below</span></div>'
+                ? ''
                 : '<div class="exp-shap-head">Frame viewer' +
                   '<span class="exp-verif-src"> every infrared frame — ' +
                   'drag to scrub, or click a time on the chart above</span></div>') +
@@ -1218,7 +1217,11 @@
             '</div></div></div>');
         }
         function dashHtml() {
-            return '<div class="exp-dash"><div class="exp-dash-img">' + framesHtml(true) + planHtml() + '</div>' +
+            return '<div class="exp-dash">' +
+                '<div class="exp-shap-head exp-dash-head" id="exp-frames-head" style="display:none;">Infrared image' +
+                '<span class="exp-verif-src"> every frame — drag to scrub, press play, ' +
+                'or click a time on the chart below</span></div>' +
+                '<div class="exp-dash-img">' + framesHtml(true) + planHtml() + '</div>' +
                 '<div class="exp-tiles exp-score" id="exp-tiles"></div></div>';
         }
         var storms = (_index && _index.storms) || [];
@@ -3309,9 +3312,11 @@
     function setupFrameViewer(j) {
         var box = document.getElementById('exp-frames');
         if (!box) return;
+        var head = document.getElementById('exp-frames-head');
         stopStripPlay();
         _strip = null;
         box.style.display = 'none';
+        if (head) head.style.display = 'none';
         showPlanFallback(true);
         var atcf = j.storm;
         var arch = !!_archSet[atcf];
@@ -3391,6 +3396,7 @@
             var sl = document.getElementById('exp-frv-slider');
             sl.min = i0; sl.max = i1; sl.value = i1;
             box.style.display = 'block';
+            if (head) head.style.display = '';
             showPlanFallback(false);
             frvToggleState();
             drawStripFrame(i1);
