@@ -2483,6 +2483,140 @@
         if (fill) { ctx.fillStyle = fill; ctx.fill(); }
         if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
     }
+    /* word-wrap where the first line is narrower than the rest (the footer's text runs on after "EXPERIMENTAL") */
+    function cardFootLines(ctx, s, w1, w2, size, weight) {
+        ctx.font = (weight || 400) + ' ' + size + 'px ' + CARD_FONT;
+        var words = String(s).split(' '), out = [], ln = '';
+        for (var i = 0; i < words.length; i++) {
+            var test = ln ? ln + ' ' + words[i] : words[i];
+            if (ctx.measureText(test).width > (out.length ? w2 : w1) && ln) { out.push(ln); ln = words[i]; } else ln = test;
+        }
+        if (ln) out.push(ln);
+        return out;
+    }
+    /* The Summary card's recent evolution (PI 10-23: "a trace of the recent intensity evolution"). It shows the
+       published wind and pressure over the 48 h up to the image, with the agency's analyses as dots joined by a dashed
+       line. Two panels share one time axis, never a dual axis. The styling follows the page's chart: the model's
+       colour, the agency in dashed grey, pressure upright, and filled winds dashed. Returns false when fewer than
+       two frames exist. */
+    function cardTrend(ctx, x, y, w, h, j, tImg, c) {
+        var tE = Date.parse(tImg), all = j.frames || [], fr = [], i;
+        for (i = 0; i < all.length; i++) {
+            var ms = Date.parse(all[i].t);
+            if (ms <= tE && ms >= tE - 48 * 3.6e6) fr.push({ ms: ms, f: all[i] });
+        }
+        if (fr.filter(function (r) { return r.f.vmax_kt != null; }).length < 2) return false;
+        var t0 = fr[0].ms, span = Math.max(tE - t0, 3.6e6), hrs = Math.round(span / 3.6e6);
+        var fx = fr.filter(function (r) { return r.f.btk_is_fix && (r.f.btk_vmax_kt != null || r.f.btk_mslp_hpa != null); });
+        var anyFill = fr.some(function (r) { return r.f.vmax_filled && r.f.vmax_kt != null; });
+        cardRound(ctx, x, y, w, h, 10, c.card, c.line);
+        cardText(ctx, hrs >= 47 ? 'Last 48 hours' : 'Last ' + hrs + ' hours', x + 14, y + 24, 14, c.fg, 700);
+        var keys = [['line', c.model, c.mName]];
+        if (fx.length) keys.push(['dot', c.bt, c.agency + ' analysis']);
+        if (anyFill) keys.push(['dash', c.model, 'filled']);
+        ctx.font = '400 12px ' + CARD_FONT;
+        var kw = 0;
+        keys.forEach(function (k) { kw += 24 + ctx.measureText(k[2]).width + 12; });
+        var kx = x + w - 14 - kw + 12, ky = y + 20;
+        keys.forEach(function (k) {
+            ctx.save(); ctx.strokeStyle = k[1]; ctx.fillStyle = k[1]; ctx.lineWidth = 2.2;
+            if (k[0] === 'dot') {
+                ctx.setLineDash([3, 3]); ctx.lineWidth = 1.2;
+                ctx.beginPath(); ctx.moveTo(kx, ky); ctx.lineTo(kx + 18, ky); ctx.stroke();
+                ctx.beginPath(); ctx.arc(kx + 9, ky, 3, 0, 2 * Math.PI); ctx.fill();
+            } else {
+                if (k[0] === 'dash') ctx.setLineDash([4, 3]);
+                ctx.beginPath(); ctx.moveTo(kx, ky); ctx.lineTo(kx + 18, ky); ctx.stroke();
+            }
+            ctx.restore();
+            kx += 24 + cardText(ctx, k[2], kx + 24, ky + 4, 12, c.fg2, 400) + 12;
+        });
+        var PL = x + 60, PR = x + w - 32, top = y + 38, bot = y + h - 24, gap = 16;
+        var hv = Math.round((bot - top - gap) * 0.55), hp = bot - top - gap - hv, p0 = top + hv + gap;
+        var X = function (ms) { return PL + (ms - t0) / span * (PR - PL); };
+        function rng(vals, minSpan) {
+            vals = vals.filter(function (v) { return v != null && isFinite(v); });
+            if (!vals.length) return null;
+            var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+            if (hi - lo < minSpan) { var m = (hi + lo) / 2; lo = m - minSpan / 2; hi = m + minSpan / 2; }
+            var pd = (hi - lo) * 0.12;
+            return { lo: lo - pd, hi: hi + pd };
+        }
+        var rv = rng(fr.map(function (r) { return r.f.vmax_kt; }).concat(fx.map(function (r) { return r.f.btk_vmax_kt; })), 10);
+        var rp = rng(fr.map(function (r) { return r.f.pmin_hpa; }).concat(fx.map(function (r) { return r.f.btk_mslp_hpa; })), 6);
+        var Yv = function (v) { return top + (rv.hi - v) / (rv.hi - rv.lo) * hv; };
+        var Yp = rp ? function (p) { return p0 + (rp.hi - p) / (rp.hi - rp.lo) * hp; } : null;   // upright, as on the page
+        ctx.fillStyle = c.dark ? 'rgba(148,163,184,.06)' : 'rgba(15,23,42,.035)';
+        ctx.fillRect(PL, top, PR - PL, hv);
+        if (Yp) ctx.fillRect(PL, p0, PR - PL, hp);
+        function ticks(r, Y, unit) {
+            var st = [2, 5, 10, 20, 25, 50, 100], s = st[st.length - 1];
+            for (var k = 0; k < st.length; k++) if ((r.hi - r.lo) / st[k] <= 3) { s = st[k]; break; }
+            for (var v = Math.ceil(r.lo / s) * s; v <= r.hi; v += s) {
+                ctx.save(); ctx.strokeStyle = c.grid; ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(PL, Y(v)); ctx.lineTo(PR, Y(v)); ctx.stroke(); ctx.restore();
+                cardText(ctx, v + ' ' + unit, PL - 6, Y(v) + 4, 11, c.fg2, 400, 'right');
+            }
+        }
+        ticks(rv, Yv, 'kt');
+        if (Yp) ticks(rp, Yp, 'hPa');
+        [[64, 'C1'], [96, 'C3'], [137, 'C5']].forEach(function (q) {
+            if (q[0] <= rv.lo || q[0] >= rv.hi) return;
+            ctx.save(); ctx.setLineDash([3, 4]); ctx.strokeStyle = c.grid2; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(PL, Yv(q[0])); ctx.lineTo(PR, Yv(q[0])); ctx.stroke(); ctx.restore();
+            cardText(ctx, q[1], PR + 5, Yv(q[0]) + 4, 10.5, c.fg2, 600);
+        });
+        function path(pts, Y, color, wd, dash) {
+            ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = wd; ctx.lineJoin = 'round';
+            if (dash) ctx.setLineDash(dash);
+            ctx.beginPath();
+            var pen = false;
+            pts.forEach(function (p) {
+                if (p[1] == null) { pen = false; return; }
+                if (pen) ctx.lineTo(X(p[0]), Y(p[1])); else ctx.moveTo(X(p[0]), Y(p[1]));
+                pen = true;
+            });
+            ctx.stroke(); ctx.restore();
+        }
+        function dots(pts, Y, color, r) {
+            pts.forEach(function (p) {
+                if (p[1] == null) return;
+                ctx.beginPath(); ctx.arc(X(p[0]), Y(p[1]), r, 0, 2 * Math.PI);
+                ctx.fillStyle = color; ctx.fill(); ctx.lineWidth = 1.2; ctx.strokeStyle = c.card; ctx.stroke();
+            });
+        }
+        // agency analyses: dashed grey through the fixes, dots on them
+        var fv = fx.map(function (r) { return [r.ms, r.f.btk_vmax_kt]; });
+        var fp = fx.map(function (r) { return [r.ms, r.f.btk_mslp_hpa]; });
+        path(fv, Yv, c.bt, 1.3, [4, 3]);
+        if (Yp) path(fp, Yp, c.bt, 1.3, [4, 3]);
+        // the model: filled winds dashed, with the neighbouring points so the dashes meet the solid line
+        var V = fr.map(function (r, k) {
+            var fl = !!r.f.vmax_filled;
+            return { ms: r.ms, v: r.f.vmax_kt, fl: fl };
+        });
+        path(V.map(function (q) { return [q.ms, q.fl ? null : q.v]; }), Yv, c.model, 2.2);
+        if (anyFill) path(V.map(function (q, k) {
+            var near = q.fl || (V[k - 1] && V[k - 1].fl) || (V[k + 1] && V[k + 1].fl);
+            return [q.ms, near ? q.v : null];
+        }), Yv, c.model, 1.6, [5, 4]);
+        if (Yp) path(fr.map(function (r) { return [r.ms, r.f.pmin_hpa]; }), Yp, c.model, 2.2);
+        dots(fv, Yv, c.bt, 2.8);
+        if (Yp) dots(fp, Yp, c.bt, 2.8);
+        // where it stands at the image time
+        for (i = fr.length - 1; i >= 0; i--) if (fr[i].f.vmax_kt != null) { dots([[fr[i].ms, fr[i].f.vmax_kt]], Yv, c.model, 3.6); break; }
+        if (Yp) for (i = fr.length - 1; i >= 0; i--) if (fr[i].f.pmin_hpa != null) { dots([[fr[i].ms, fr[i].f.pmin_hpa]], Yp, c.model, 3.6); break; }
+        var fmt = function (ms) { return window.TCTime ? TCTime.cycle(ms) : new Date(ms).toISOString().slice(5, 13) + 'Z'; };
+        // time ticks on synoptic hours (12-hourly over a long window, 6-hourly over a short one)
+        var stp = (span > 30 * 3.6e6 ? 12 : 6) * 3.6e6;
+        for (var tk = Math.ceil(t0 / stp) * stp; tk <= tE; tk += stp) {
+            var tx = X(tk), al = tx - PL < 34 ? 'left' : PR - tx < 34 ? 'right' : 'center';
+            ctx.save(); ctx.strokeStyle = c.grid; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(tx, bot); ctx.lineTo(tx, bot + 4); ctx.stroke(); ctx.restore();
+            cardText(ctx, fmt(tk), tx, bot + 16, 11, c.fg2, 400, al);
+        }
+        return true;
+    }
     /* The Summary card's image at the export's full resolution (PI 10-23: "Does the summary photo use a high-resolution
        IR image?"). The strip frames are the native ~2-km band-13 grid (201 px over +/-200 km); the viewer colours that grid
        and lets the browser stretch the COLOURS, which smears the colour bands. Here the brightness temperatures are
@@ -2543,7 +2677,8 @@
         if (!f) { for (i = fr.length - 1; i >= 0; i--) if (fr[i].vmax_kt != null || fr[i].pmin_hpa != null) { f = fr[i]; break; } }
         var v61 = isV61(j), mName = v61 ? 'GHOST v6.1' : M.name;
         var name = (j.name ? j.name + ' (' + j.storm + ')' : j.storm);
-        var CW = 1200, CH = 760, sc = 2, IS = 600, X0 = 24, Y0 = 92, RX = X0 + IS + 28, RW = CW - RX - 24;
+        var CW = 1200, CH = 960, sc = 2, IS = 600, X0 = 24, Y0 = 92, RX = X0 + IS + 28, RW = CW - RX - 24;
+        var footLines = null, footEW = 0, cardBottom = 0;      // the export is cropped to cardBottom
         var c = document.createElement('canvas');
         c.width = CW * sc; c.height = CH * sc;
         var ctx = c.getContext('2d');
@@ -2668,15 +2803,29 @@
                     cardText(ctx, r[0], RX + 14, ry, 13, fg2, 400);
                     cardText(ctx, r[1], RX + RW - 14, ry, 13, fg, 600, 'right');
                 });
-                y += boxH + 22;
+                y += boxH + 14;
             }
             /* same caution as the page: no aircraft truth outside the NHC basins */
             if (/^(WP|IO|SH)/.test(j.storm)) {
-                cardWrap(ctx, '⚠ Provisional: this basin has no aircraft reconnaissance, so these estimates are not ' +
-                    'verified against aircraft.', RX, y, RW, 12.5, dark ? '#fbbf24' : '#b45309', 600, 17);
+                y = cardWrap(ctx, '⚠ Provisional: this basin has no aircraft reconnaissance, so these estimates are not ' +
+                    'verified against aircraft.', RX, y + 8, RW, 12.5, dark ? '#fbbf24' : '#b45309', 600, 17) - 3;
             }
-            /* footer: brand + disclaimer */
+            /* footer under the image (brand + disclaimer); the recent trace fills the right column down to it */
             var fy = Y0 + IS + 30;
+            ctx.font = '700 12px ' + CARD_FONT;
+            footEW = ctx.measureText('EXPERIMENTAL').width;
+            footLines = cardFootLines(ctx, '· ' + mName + ' is a research method (manuscript in preparation) — not an ' +
+                'official forecast or analysis. Contact the author before citing or redistributing.', IS - footEW - 6, IS, 12, 400);
+            var footEnd = fy + 26 + (footLines.length - 1) * 16 + 8;
+            var trBottom = Math.max(footEnd, y + 204);
+            var drew = cardTrend(ctx, RX, y, RW, trBottom - y, j, tImg, {
+                dark: dark, fg: fg, fg2: fg2, card: card, line: line, model: MODEL_COL, mName: mName,
+                bt: dark ? '#94a3b8' : '#64748b', agency: j.agency || 'NHC',
+                grid: dark ? 'rgba(148,163,184,.14)' : 'rgba(15,23,42,.08)',
+                grid2: dark ? 'rgba(148,163,184,.35)' : 'rgba(15,23,42,.25)'
+            });
+            cardBottom = Math.max(footEnd, drew ? trBottom : y);
+            fy = Math.max(fy, cardBottom - 8 - (footLines.length - 1) * 16 - 26);
             if (res[1]) {
                 var lg = new Image();
                 return new Promise(function (ok) {
@@ -2690,12 +2839,15 @@
             var tx = X0 + 32;
             var w = cardText(ctx, 'TC-ATLAS', tx, fy, 14, fg, 700);
             cardText(ctx, ' · tcatlas.org', tx + w, fy, 14, fg2, 400);
-            var ew = cardText(ctx, 'EXPERIMENTAL', X0, fy + 26, 12, '#F47321', 700);
-            cardWrap(ctx, ' · ' + mName + ' is a research method (manuscript in preparation) — not an official ' +
-                'forecast or analysis. Contact the author before citing or redistributing.', X0 + ew + 4, fy + 26,
-                CW - X0 - ew - 30, 12, fg2, 400, 16);
+            cardText(ctx, 'EXPERIMENTAL', X0, fy + 26, 12, '#F47321', 700);
+            footLines.forEach(function (ln, n) {
+                cardText(ctx, ln, n ? X0 : X0 + footEW + 6, fy + 26 + n * 16, 12, fg2, 400);
+            });
+            var out = document.createElement('canvas');
+            out.width = CW * sc; out.height = Math.ceil(cardBottom + 18) * sc;
+            out.getContext('2d').drawImage(c, 0, 0);
             return new Promise(function (ok, bad) {
-                c.toBlob(function (blob) { blob ? ok(blob) : bad(new Error('toBlob')); }, 'image/png');
+                out.toBlob(function (blob) { blob ? ok(blob) : bad(new Error('toBlob')); }, 'image/png');
             });
         }).then(function (blob) {
             return TCExport.save(blob, fname);
