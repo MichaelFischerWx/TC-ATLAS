@@ -1232,8 +1232,14 @@
             '<div class="exp-frv-wrap">' +
             '<canvas id="exp-frv" width="480" height="480"></canvas>' +
             '<div class="exp-frv-bar">' +
+            '<span class="exp-frv-step">' +
+            '<button id="exp-frv-prev" class="exp-range" title="Previous frame" ' +
+            'aria-label="Previous frame">‹</button>' +
             '<button id="exp-frv-play" class="exp-range" ' +
             'aria-label="Play frames">▶</button>' +
+            '<button id="exp-frv-next" class="exp-range" title="Next frame" ' +
+            'aria-label="Next frame">›</button>' +
+            '</span>' +
             '<input type="range" id="exp-frv-slider" min="0" max="0" ' +
             'value="0" step="1">' +
             '<span id="exp-frv-time" class="exp-frv-time"></span>' +
@@ -1778,7 +1784,15 @@
        Returns a bucket-relative path -- fetchJson() picks CDN vs GCS. */
     function seriesPath(atcf) {
         return (_archSet[atcf] ? ARCH_PREFIX : PREFIX) +
-            '/' + M.file + atcf + '.json';
+            '/' + M.file + atcf + '.json' + runTag(!!_archSet[atcf]);
+    }
+
+    /* The run a storm's files belong to, as a query tag: the chain uploads every per-storm file BEFORE the index that
+       names the run, so index.generated keys one immutable set. A new run = a new URL, so neither the browser nor the
+       Cloudflare edge (which caches only tagged ghostb-rt / irstrips .json) can hand out the previous run's numbers. */
+    function runTag(arch) {
+        var gen = arch ? (_archIndex && _archIndex.generated) : (_index && _index.generated);
+        return gen ? '?t=' + encodeURIComponent(gen) : '';
     }
 
     /* Fill each storm chip with its latest GHOST intensity + category. Also
@@ -1787,7 +1801,7 @@
         storms.forEach(function (s) {
             var p = _series[s.atcf]
                 ? Promise.resolve(_series[s.atcf])
-                : fetchJson(PREFIX + '/' + M.file + s.atcf + '.json')
+                : fetchJson(PREFIX + '/' + M.file + s.atcf + '.json' + runTag(false))
                     .then(function (j) { _series[s.atcf] = j; return j; });
             p.then(function (j) {
                 var em = document.getElementById('exp-int-' + s.atcf);
@@ -3377,10 +3391,7 @@
            that index's `generated` stamp changes with it — without this, a
            browser-cached manifest from before a rebuild can miss the
            payload window entirely. */
-        var bust = '?t=' + encodeURIComponent(
-            (arch ? (_archIndex && _archIndex.generated)
-                  : (_index && _index.generated)) || '');
-        fetchJson(stripPath(atcf, 'meta.json') + bust).then(function (meta) {
+        fetchJson(stripPath(atcf, 'meta.json') + runTag(arch)).then(function (meta) {
             if (_storm !== atcf || !meta || !meta.times || !meta.times.length)
                 return;
             var fbt = {};
@@ -3899,6 +3910,16 @@
                 track(M.key + '_frame_layer',
                       { layer: cb.getAttribute('data-opt'), on: cb.checked });
                 if (_strip) drawStripFrame(_strip.idx);
+            });
+        });
+        /* Step one frame: pauses the loop; stops at the first and last frames rather than wrapping. */
+        [['exp-frv-prev', -1], ['exp-frv-next', 1]].forEach(function (b) {
+            var btn = document.getElementById(b[0]);
+            if (btn) btn.addEventListener('click', function () {
+                if (!_strip) return;
+                stopStripPlay();
+                track(M.key + '_frame_step', { storm: _storm });
+                seekStrip(_strip.idx + b[1]);
             });
         });
         var gifBtn = document.getElementById('exp-frv-gif');

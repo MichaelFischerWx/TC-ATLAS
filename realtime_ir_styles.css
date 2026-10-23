@@ -7678,6 +7678,12 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     display: flex; align-items: center; gap: 10px; margin-top: 8px;
 }
 .exp-frv-bar input[type="range"] { flex: 1 1 auto; }
+/* ‹ ▶ › as one segmented control */
+.exp-frv-step { display: inline-flex; flex: none; }
+.exp-frv-step .exp-range { border-radius: 0; margin-left: -1px; min-width: 30px; }
+.exp-frv-step .exp-range:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.exp-frv-step .exp-range:last-child { border-radius: 0 6px 6px 0; }
+#exp-frv-prev, #exp-frv-next { font-size: 15px; line-height: 1; padding: 3px 9px 5px; }
 .exp-frv-time {
     font-size: 12px; font-variant-numeric: tabular-nums; color: #475569;
     white-space: nowrap;
@@ -8252,13 +8258,16 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 /* Frame-viewer bar on the dashboard: play + slider + time + GIF + Summary are wider than a phone, and a nowrap row
    overflowed the scroll panel sideways (10-22, iPhone). The row wraps: the slider fills the first line with play, and the
    time and the downloads take the second. */
-.exp-dash .exp-frv-bar { flex-wrap: wrap; row-gap: 6px; }
+.exp-dash .exp-frv-bar { flex-wrap: wrap; row-gap: 6px; gap: 8px; }
+/* A wrapping row places items at their BASIS before anything shrinks, and a range input's auto basis is ~130 px: with
+   ‹ ▶ › in the row that pushed Summary onto a second line at desktop widths. A small basis lets the slider give way. */
+.exp-dash .exp-frv-bar input[type="range"] { flex: 1 1 60px; }
 .exp-dash .exp-frv-bar .exp-range { white-space: nowrap; flex: none; }
 /* Safari keeps a range input's intrinsic width (~130 px) unless min-width is 0 -- that, not Chrome, is where the row
    overflowed */
 .exp-frv-bar input[type="range"] { min-width: 0; }
 @media (max-width: 760px) {
-    .exp-dash .exp-frv-bar input[type="range"] { flex: 1 1 calc(100% - 64px); }
+    .exp-dash .exp-frv-bar input[type="range"] { flex: 1 1 calc(100% - 104px); }
     .exp-dash .exp-frv-time { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 }
 
