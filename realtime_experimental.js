@@ -536,7 +536,16 @@
        window against a 30-minute publish cadence. Only the tiny index.json
        (102 B) is fetched no-store, so the storm list and the `generated`
        stamp (which cache-busts the plan PNGs) are always current. */
+    /* CDN first, GCS as the mirror. The .json objects are cf DYNAMIC (every read goes to R2), and R2 reads can stall
+       2-15 s or 500 after ~25 s (10-23: a storm's dashboard sat on the plan-view fallback for that long). So GCS is not
+       only the after-failure fallback: if the CDN has not answered in FETCH_HEDGE_MS the same file is asked of GCS and
+       whichever lands first wins. Both copies are written by the same upload with the same max-age=300. Concurrent
+       asks for one path share a request (the chip pass and the open storm both want its series at load). */
+    var FETCH_HEDGE_MS = 4000;
+    var _inflight = {};
     function fetchJson(path, noStore) {
+        var key = (noStore ? 'ns:' : '') + path;
+        if (_inflight[key]) return _inflight[key];
         var opts = noStore ? { cache: 'no-store' } : undefined;
         function get(base) {
             return fetch(base + path, opts).then(function (r) {
@@ -544,7 +553,21 @@
                 return r.json();
             });
         }
-        return get(CDN_BASE).catch(function () { return get(GCS_BASE); });
+        var p = new Promise(function (resolve, reject) {
+            var left = 2, gcs = false;
+            function fail(e) { if (--left === 0) reject(e); }
+            function viaGcs() {
+                if (gcs) return;
+                gcs = true;
+                get(GCS_BASE).then(resolve, fail);
+            }
+            var timer = setTimeout(viaGcs, FETCH_HEDGE_MS);
+            get(CDN_BASE).then(function (j) { clearTimeout(timer); resolve(j); },
+                               function (e) { clearTimeout(timer); fail(e); viaGcs(); });
+        });
+        function done() { delete _inflight[key]; }
+        p.then(done, done);
+        return (_inflight[key] = p);
     }
 
     /* Verification numbers are quoted from the manuscript (Fischer, in preparation).
