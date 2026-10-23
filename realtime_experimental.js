@@ -2483,6 +2483,48 @@
         if (fill) { ctx.fillStyle = fill; ctx.fill(); }
         if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
     }
+    /* The Summary card's image at the export's full resolution (PI 10-23: "Does the summary photo use a high-resolution
+       IR image?"). The strip frames are the native ~2-km band-13 grid (201 px over +/-200 km); the viewer colours that grid
+       and lets the browser stretch the COLOURS, which smears the colour bands. Here the brightness temperatures are
+       interpolated to the output size first and coloured after (as high-resolution tiles render); gaps (missing) fall back
+       to the nearest pixel. Overlays are drawn afterwards as vectors at the card's scale. */
+    function stripTbGrid(idx, img) {
+        var s = _strip, m = s.meta, k = Math.floor(idx / m.per_sheet), j = idx - k * m.per_sheet;
+        var col = j % m.nx, row = Math.floor(j / m.nx);
+        var off = document.createElement('canvas');
+        off.width = m.w; off.height = m.h;
+        var octx = off.getContext('2d', { willReadFrequently: true });
+        octx.drawImage(img, col * m.w, (m.ny - 1 - row) * m.h, m.w, m.h, 0, 0, m.w, m.h);
+        var d = octx.getImageData(0, 0, m.w, m.h).data, g = new Uint8Array(m.w * m.h);
+        for (var i = 0; i < g.length; i++) g[i] = d[i * 4];
+        return g;
+    }
+    function renderStripTbHiRes(ctx, N, idx, img) {
+        var s = _strip, m = s.meta, W = m.w, H = m.h, MISS = m.missing, lut = s.lut;
+        var g = stripTbGrid(idx, img);
+        var out = ctx.createImageData(N, N), o = out.data;
+        for (var y = 0; y < N; y++) {
+            var fy = Math.min(H - 1, Math.max(0, (y + 0.5) * H / N - 0.5));
+            var y0 = Math.floor(fy), y1 = Math.min(H - 1, y0 + 1), wy = fy - y0;
+            for (var x = 0; x < N; x++) {
+                var fx = Math.min(W - 1, Math.max(0, (x + 0.5) * W / N - 0.5));
+                var x0 = Math.floor(fx), x1 = Math.min(W - 1, x0 + 1), wx = fx - x0;
+                var a = g[y0 * W + x0], b = g[y0 * W + x1], c = g[y1 * W + x0], e = g[y1 * W + x1], u;
+                if (a === MISS || b === MISS || c === MISS || e === MISS) {
+                    u = wy < 0.5 ? (wx < 0.5 ? a : b) : (wx < 0.5 ? c : e);
+                } else {
+                    u = Math.round((a * (1 - wx) + b * wx) * (1 - wy) + (c * (1 - wx) + e * wx) * wy);
+                }
+                var q = u * 4, pz = (y * N + x) * 4;
+                o[pz] = lut[q]; o[pz + 1] = lut[q + 1]; o[pz + 2] = lut[q + 2]; o[pz + 3] = lut[q + 3];
+            }
+        }
+        var tmp = document.createElement('canvas');
+        tmp.width = N; tmp.height = N;
+        tmp.getContext('2d').putImageData(out, 0, 0);
+        ctx.fillStyle = '#0b1220'; ctx.fillRect(0, 0, N, N);
+        ctx.drawImage(tmp, 0, 0);
+    }
     function saveDashPng(btn) {
         var j = _storm && _series[_storm];
         var S = _strip;
@@ -2513,11 +2555,14 @@
         var stamp = tImg.slice(0, 16).replace(/[:T-]/g, '');
         var fname = 'TC-ATLAS_' + mName.replace(/\s+/g, '-') + '_summary_' + _storm + '_' + stamp + '.png';
         Promise.all([stripSheet(Math.floor(idx / S.meta.per_sheet)), logoDataUrl()]).then(function (res) {
-            var ic = document.createElement('canvas');
-            ic.width = IS; ic.height = IS;
-            renderStripInto(ic.getContext('2d'), IS, idx, res[0]);
+            var hi = document.createElement('canvas');
+            hi.width = IS * sc; hi.height = IS * sc;
+            renderStripTbHiRes(hi.getContext('2d'), IS * sc, idx, res[0]);
             cardRound(ctx, X0 - 1, Y0 - 1, IS + 2, IS + 2, 10, null, line);
-            ctx.save(); cardRound(ctx, X0, Y0, IS, IS, 10); ctx.clip(); ctx.drawImage(ic, X0, Y0, IS, IS); ctx.restore();
+            ctx.save(); cardRound(ctx, X0, Y0, IS, IS, 10); ctx.clip();
+            ctx.drawImage(hi, X0, Y0, IS, IS);                       // 1:1 with the device pixels of the 2x export
+            ctx.translate(X0, Y0); drawStripOverlay(ctx, IS, S.meta.times[idx]);
+            ctx.restore();
             var y = Y0;
             /* wind and pressure, side by side */
             var half = (RW - 12) / 2;
