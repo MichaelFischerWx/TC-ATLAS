@@ -252,9 +252,18 @@
     /* One colour per member model wherever it appears (scorecard bars, chart lines, legend); checked with the dataviz
        palette validator (CVD separation and contrast pass in light and dark). */
     var MEMBER = {
-        phys: { name: 'physics model', col: '#6366f1' },
-        tree: { name: 'tree model', col: '#f43f5e' },
-        img: { name: 'image model', col: '#0ea5e9' }
+        phys: { name: 'physics model', col: '#6366f1',
+                desc: 'A compact regression for the central pressure (FPM): it predicts the pressure drop from the ' +
+                      'environment to the center in the square-root form that gradient-wind balance gives, from a few ' +
+                      'infrared and environmental predictors. \u201cPhysics\u201d refers to that form \u2014 it is ' +
+                      'fitted to data, not a weather simulation.' },
+        tree: { name: 'tree model', col: '#f43f5e',
+                desc: 'Gradient-boosted decision trees that read the storm\u2019s infrared structure (cloud-top ' +
+                      'temperatures, the eye, symmetry), its recent history and its environment (sea-surface ' +
+                      'temperature, potential intensity).' },
+        img: { name: 'image model', col: '#0ea5e9',
+               desc: 'A vision transformer \u2014 a neural network that reads the infrared image itself and ' +
+                     'estimates wind and pressure directly.' }
     };
     var _hmT = null;       // the scorecard's "how this number is made" frame; null = the latest
     var _envShear = null;  // latest deep-layer shear, from TILT-RF's payload (fetched by the frame viewer)
@@ -2322,7 +2331,8 @@
             (eq ? '<div class="exp-hm-eq">' + eq + '</div>' : '') + (adj || '') + '</div>';
     }
     function mtxt(k, x, w) {
-        return '<span class="exp-hm-m" style="--mc:' + MEMBER[k].col + '">' + MEMBER[k].name + ' ' + Math.round(x) +
+        return '<span class="exp-hm-m" style="--mc:' + MEMBER[k].col + '" title="' + MEMBER[k].desc + '">' +
+            MEMBER[k].name + ' ' + Math.round(x) +
             (w != null ? ' × ' + w + '%' : '') + '</span>';
     }
     /* The arithmetic is exact: the payload carries the members, the tree's wind weight (w_tree), the mixes before the
@@ -2378,8 +2388,15 @@
             html += hmRow('Pressure', Math.round(f.pmin_hpa) + ' hPa', sp, eqp, adjp);
         }
         return html + '<div class="exp-hm-key">' + ['phys', 'tree', 'img'].map(function (k) {
-            return '<span><i style="background:' + MEMBER[k].col + '"></i>' + MEMBER[k].name + '</span>';
-        }).join('') + '</div>';
+            return '<span title="' + MEMBER[k].desc + '"><i style="background:' + MEMBER[k].col + '"></i>' +
+                MEMBER[k].name + '</span>';
+        }).join('') + '</div>' +
+            /* hover does not exist on phones: the same three sentences behind a tap */
+            '<details class="exp-hm-what"><summary>What are these models?</summary><ul>' +
+            ['phys', 'tree', 'img'].map(function (k) {
+                return '<li><b style="color:' + MEMBER[k].col + '">' + MEMBER[k].name + '</b> \u2014 ' + MEMBER[k].desc +
+                    '</li>';
+            }).join('') + '</ul></details>';
     }
     function renderHowMade(j) {
         var el = document.getElementById('exp-howmade');
@@ -3457,6 +3474,7 @@
     function seedRmwHybrid(s) {
         var p = s && _rmwH[s.atcf];
         if (!p || M.key !== 'blend') return false;
+        s.rmwBy = {};
         p.frames.forEach(function (f) {
             if (f.rmw_km != null && isFinite(f.rmw_km)) s.rmwBy[f.t] = f.rmw_km;
         });
@@ -3471,6 +3489,7 @@
         var f = s.frameByTime[t];
         var tf = s.tiltBy[t];
         var rw = rmwAt(s, t);
+        ctx.lineJoin = 'round'; ctx.miterLimit = 2;
         if (_frvOpt.coast && f && f.center_lat != null) {
             var co = coastAround(f.center_lat, f.center_lon, ext);
             if (co.lines.length) {
