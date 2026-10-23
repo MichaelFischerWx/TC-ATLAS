@@ -259,6 +259,33 @@
     var _hmT = null;       // the scorecard's "how this number is made" frame; null = the latest
     var _envShear = null;  // latest deep-layer shear, from TILT-RF's payload (fetched by the frame viewer)
     var V61_NEWS_KEY = 'ghost_v61_news_dismissed';
+    /* The GHOST page's eyewall radius (2026-10-23): the hybrid Stage-1 RMW -- the image CNN where GHOST is at least 64 kt,
+       the Stage-1 model below -- published every live pass to ghost-rmwcnn-rt/ (cnnghost/rmw_hybrid_publish.py). Used for
+       the frame-viewer / Summary-card ring, the scorecard row and the chart's RMW line; the tree's own Stage-1 RMW stays
+       on the chart as a legend-only reference. atcf -> payload, or null where the producer has none. */
+    var _rmwH = {};
+    function loadRmwHybrid(atcf) {
+        if (atcf in _rmwH) return Promise.resolve(_rmwH[atcf]);
+        return fetchJson(OVERLAYS.rmw.prefix + '/' + OVERLAYS.rmw.file + atcf + '.json', true)
+            .then(function (p) { _rmwH[atcf] = (p && p.frames && p.frames.length) ? p : null; return _rmwH[atcf]; })
+            .catch(function () { _rmwH[atcf] = null; return null; });
+    }
+    /* the hybrid frame at or before t (within 3 h), or null */
+    function rmwHybridAt(atcf, t) {
+        var p = _rmwH[atcf], best = null;
+        if (!p) return null;
+        for (var i = 0; i < p.frames.length; i++) {
+            if (p.frames[i].t > t) break;
+            if (p.frames[i].rmw_km != null) best = p.frames[i];
+        }
+        return (best && (new Date(t) - new Date(best.t)) <= 3 * 3.6e6) ? best : null;
+    }
+    function rmwHybridTxt(h) {
+        return Math.round(h.rmw_km) + ' km' + (h.routed === 'cnn'
+            ? ' · image CNN' + (h.cnn_p10_km != null && h.cnn_p90_km != null
+                ? ' (' + Math.round(h.cnn_p10_km) + '–' + Math.round(h.cnn_p90_km) + ')' : '')
+            : ' · Stage-1 model');
+    }
     var _showVit = _pref('tcatlas.exp.vit', false);
     /* Hybrid RMW test (2026-10-18): the Stage-1 image CNN where GHOST's wind
        is >= 64 kt, the published size model below (TC-SWARM
@@ -1412,7 +1439,7 @@
                   'It runs alongside GHOST for evaluation and is not the ' +
                   'published estimate.">GHOST + CNN (test)</button>'
                 : '') +
-            (M.panels.rmwcnn && M.panels.rmw
+            (M.panels.rmwcnn && M.panels.rmw && M.key !== 'blend'
                 ? '<button class="exp-range exp-rmwcnnbtn' +
                   (_showRmwCnn ? ' active' : '') + '" id="exp-rmwcnn-btn" title="' +
                   'Overlay a test size estimate on the RMW panel: a convolutional ' +
@@ -1808,6 +1835,14 @@
             ? Promise.resolve(_series[atcf])
             : fetchJson(seriesPath(atcf))
                 .then(function (j) { _series[atcf] = j; return j; });
+        if (M.key === 'blend') {
+            loadRmwHybrid(atcf).then(function (h) {
+                if (!h || _storm !== atcf || !_series[atcf]) return;
+                renderTiles(_series[atcf]);
+                if (_strip && _strip.atcf === atcf && seedRmwHybrid(_strip)) drawStripFrame(_strip.idx);
+                if (typeof Plotly !== 'undefined') drawSeries(_series[atcf]);
+            });
+        }
         Promise.all([p, ensurePlotly()]).then(function (res) {
             if (_storm !== atcf) return;
             renderTiles(res[0]);
@@ -2245,7 +2280,12 @@
             rows.push(srow('Aircraft', Math.round(rl.vmax_sfc_kt) + ' kt' + (rl.pmin_hpa != null
                 ? ' / ' + Math.round(rl.pmin_hpa) + ' hPa' : '') + ' · ' + rl.t.slice(5, 16).replace('T', ' ') + 'Z'));
         }
-        if (r && M.panels.rmw) {
+        var hNow = rmwHybridAt(j.storm, (fr.length ? fr[fr.length - 1].t : ''));
+        if (hNow && M.panels.rmw) {
+            rows.push(srow('Eyewall radius', rmwHybridTxt(hNow), 'GHOST\u2019s radius of maximum wind at ' +
+                hNow.t.slice(11, 16) + 'Z: the image CNN where GHOST is at least 64 kt (10th\u201390th percentile in ' +
+                'brackets), the Stage-1 model below'));
+        } else if (r && M.panels.rmw) {
             if (r.stale) {
                 rows.push(srow('Eyewall radius', '— (last ' + Math.round(r.v) + ' km at ' + fmtTime(r.t) + ')'));
             } else {
@@ -2555,7 +2595,9 @@
                     (f.pi_kt != null && f.sst_c != null ? ' · ' : '') + (f.sst_c != null ? 'SST ' + f.sst_c.toFixed(1) +
                     ' °C' : '') + (_envShear && atLatest ? ' · shear ' + Math.round(_envShear.kt) + ' kt' : '')]);
             }
-            if (f && f.rmw_km != null) rows.push(['Eyewall radius', Math.round(f.rmw_km) + ' km']);
+            var hC = rmwHybridAt(j.storm, tImg);
+            if (hC) rows.push(['Eyewall radius', rmwHybridTxt(hC)]);
+            else if (f && f.rmw_km != null) rows.push(['Eyewall radius', Math.round(f.rmw_km) + ' km']);
             if (rows.length) {
                 var rh = 30, boxH = rows.length * rh + 12;
                 cardRound(ctx, RX, y, RW, boxH, 10, card, line);
@@ -3115,6 +3157,8 @@
                     if (f.rmw_km != null && isFinite(f.rmw_km))
                         _strip.rmwBy[f.t] = f.rmw_km;
                 });
+                _strip.rmwT = null;
+                seedRmwHybrid(_strip);
             }
             var comp = M.panels.tilt ? PROFILES.blend : PROFILES.tilt;
             if (M.panels.tilt) seedTilt(j.frames);
@@ -3400,6 +3444,25 @@
     /* km -> canvas px for the ±extent domain, north up. Layer stack, all
        user-toggleable: coastlines, range rings, RMW ring (GHOST size),
        L/M centers + tilt vector (TILT-RF), shear vector inset. */
+    /* radius for an image time: exact frame, else the latest at or before it within 3 h (images run every 10 min,
+       published frames every 30, so an exact-time lookup left most images -- the newest included -- without a ring) */
+    function rmwAt(s, t) {
+        if (s.rmwBy[t] != null) return s.rmwBy[t];
+        if (!s.rmwT) s.rmwT = Object.keys(s.rmwBy).sort();
+        var best = null;
+        for (var i = s.rmwT.length - 1; i >= 0; i--) { if (s.rmwT[i] <= t) { best = s.rmwT[i]; break; } }
+        return (best && (new Date(t) - new Date(best)) <= 3 * 3.6e6) ? s.rmwBy[best] : null;
+    }
+    /* the GHOST page's ring follows the hybrid RMW once it has loaded */
+    function seedRmwHybrid(s) {
+        var p = s && _rmwH[s.atcf];
+        if (!p || M.key !== 'blend') return false;
+        p.frames.forEach(function (f) {
+            if (f.rmw_km != null && isFinite(f.rmw_km)) s.rmwBy[f.t] = f.rmw_km;
+        });
+        s.rmwT = null;
+        return true;
+    }
     function drawStripOverlay(ctx, S, t) {
         var s = _strip;
         var ext = s.meta.extent_km || 200;
@@ -3407,7 +3470,7 @@
         function Y(km) { return (ext - km) / (2 * ext) * S; }
         var f = s.frameByTime[t];
         var tf = s.tiltBy[t];
-        var rw = s.rmwBy[t];
+        var rw = rmwAt(s, t);
         if (_frvOpt.coast && f && f.center_lat != null) {
             var co = coastAround(f.center_lat, f.center_lon, ext);
             if (co.lines.length) {
@@ -3454,9 +3517,9 @@
             ctx.textBaseline = 'bottom';
             ctx.lineWidth = 2.5;
             ctx.strokeStyle = '#000000';
-            ctx.strokeText('RMW', X(0), Y(rw) - 3);
+            ctx.strokeText('RMW ' + Math.round(rw) + ' km', X(0), Y(rw) - 3);
             ctx.fillStyle = 'rgba(103,232,249,0.95)';
-            ctx.fillText('RMW', X(0), Y(rw) - 3);
+            ctx.fillText('RMW ' + Math.round(rw) + ' km', X(0), Y(rw) - 3);
         }
         if (_frvOpt.tilt) {
             /* Aircraft-observed mid-level center when a TDR fix sits within
@@ -4911,8 +4974,9 @@
            AND the payload has to actually carry one. Either alone would
            render an empty third panel — indistinguishable from a broken
            feed — on a run where the size stage failed. */
+        var rmwH = (M.key === 'blend') ? _rmwH[j.storm] : null;
         var hasRmw = M.panels.rmw &&
-            fr.some(function (f) { return f.rmw_km != null; });
+            (fr.some(function (f) { return f.rmw_km != null; }) || !!rmwH);
         /* Same contract for the wind: a pressure-only payload is a
            deliberate product decision (the derived wind is withheld where
            the weak gate hands a storm to the major-hurricane arm), not a
@@ -4993,7 +5057,24 @@
             /* Size panel only where the model actually predicts size. Nulls
                are dropped by the filter below, the same way the conditional
                IQR bands are. */
-            hasRmw ? { x: t, y: col('rmw_km'), name: M.name, yaxis: 'y3',
+            (hasRmw && rmwH) ? { x: rmwH.frames.map(function (f) { return f.t; }),
+              y: rmwH.frames.map(function (f) { return f.routed === 'cnn' ? f.cnn_p10_km : null; }),
+              yaxis: 'y3', mode: 'lines', line: { width: 0 }, hoverinfo: 'skip', showlegend: false,
+              connectgaps: false } : null,
+            (hasRmw && rmwH) ? { x: rmwH.frames.map(function (f) { return f.t; }),
+              y: rmwH.frames.map(function (f) { return f.routed === 'cnn' ? f.cnn_p90_km : null; }),
+              yaxis: 'y3', mode: 'lines', line: { width: 0 }, fill: 'tonexty', fillcolor: hexToRgba(MODEL_COL, 0.14),
+              hoverinfo: 'skip', showlegend: false, connectgaps: false } : null,
+            (hasRmw && rmwH) ? { x: rmwH.frames.map(function (f) { return f.t; }),
+              y: rmwH.frames.map(function (f) { return f.rmw_km; }),
+              text: rmwH.frames.map(function (f) { return f.routed === 'cnn' ? 'image CNN' : 'Stage-1 model'; }),
+              name: M.name, yaxis: 'y3', line: { color: MODEL_COL, width: 2.4 }, showlegend: false,
+              connectgaps: false, hovertemplate: '%{y:.0f} km \u2014 %{text}<extra>' + M.name + ' RMW</extra>' } : null,
+            (hasRmw && rmwH && fr.some(function (f) { return f.rmw_km != null; }))
+                ? { x: t, y: col('rmw_km'), name: 'Stage-1 RMW (tree)', yaxis: 'y3', visible: 'legendonly',
+                    line: { color: MEMBER.tree.col, width: 1.3, dash: 'dot' }, connectgaps: false,
+                    hovertemplate: '%{y:.0f} km \u2014 Stage-1 (tree)<extra></extra>' } : null,
+            (hasRmw && !rmwH) ? { x: t, y: col('rmw_km'), name: M.name, yaxis: 'y3',
               line: { color: MODEL_COL, width: 2.4 }, showlegend: false,
               hovertemplate: '%{y:.0f} km' } : null,
             hasRmw ? { x: t, y: col('btk_rmw_km'), name: ag + ' RMW', yaxis: 'y3',
@@ -5439,7 +5520,7 @@
             }
         }
         /* Hybrid RMW test overlay: RMW panel only (absent panel = nothing). */
-        if (M.panels.rmwcnn && _showRmwCnn && _storm && axOf.y3) {
+        if (M.panels.rmwcnn && M.key !== 'blend' && _showRmwCnn && _storm && axOf.y3) {
             var rj = overlayFor('rmw', _storm);
             var ax3 = axOf.y3, xx3 = 'x' + (ax3 === 'y' ? '' : ax3.slice(1));
             if (rj) {
