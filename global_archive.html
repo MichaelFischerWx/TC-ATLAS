@@ -93,7 +93,7 @@
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261010w1">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20261022mem1">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20261023card1">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -1164,8 +1164,11 @@
                         <div class="gra-ir-head">
                             <span id="gra-ir-name"></span>
                             <span id="gra-ir-basin" class="gra-ir-sub"></span>
+                            <span class="gra-ir-acts">
                             <button id="gra-ir-expand" class="ga-btn ga-btn-xs" title="Expand the satellite view">&#10530;</button>
+                            <button id="gra-ir-card" class="ga-btn ga-btn-xs" title="Save a summary card (PNG) of this storm at this time: the infrared image, the GHOST numbers beside best track, and the storm's lifetime">Summary</button>
                             <button id="gra-ir-detail" class="ga-btn ga-btn-xs" title="Open the full Storm Detail view at this time">Storm Detail &rarr;</button>
+                            </span>
                             <button id="gra-ir-close" class="gra-ir-x" title="Close">&times;</button>
                         </div>
                         <div class="gra-ir-time">
@@ -1520,6 +1523,6 @@
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
-    <script defer src="global_archive_ghostra.js?v=20261022mem1"></script>
+    <script defer src="global_archive_ghostra.js?v=20261023card1"></script>
 </body>
 </html>
