@@ -1457,7 +1457,10 @@
         var bin = atob(j.tb_data), raw = new Uint8Array(bin.length), i;
         for (i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i);
         tb = { raw: raw, rows: j.tb_rows, cols: j.tb_cols, vmin: j.tb_vmin,
-               scale: 254 / (j.tb_vmax - j.tb_vmin), b: j.bounds };
+               scale: 254 / (j.tb_vmax - j.tb_vmin), b: j.bounds,
+               /* for the Summary card: which frame this is, and whether it is a stand-in */
+               fkey: ir ? ir.sid + '/' + ir.idx : null, src: j.source || null,
+               srcAt: j.actual_datetime || null, standIn: standIn };
         applyEye();
         repaint();
     }
@@ -2443,6 +2446,549 @@
     }
 
     // ══════════════════════════════════════════════════════════════
+    //  Summary card — the open storm at the open frame, as one PNG
+    // ══════════════════════════════════════════════════════════════
+    /* The reanalysis twin of the real-time page's Summary card (PI 10-23: "the same kind of summary card for the
+       selected storm"). The infrared scene on the chip sits beside the GHOST numbers for that time: best track
+       alongside, how the v6.1 number is made, the storm's lifetime peaks, its agreement with best track, recon and
+       the validation protocol. The storm's whole life runs underneath on one chart, with the site's branding and
+       disclaimer, and the card is saved through TCExport (the one save path).
+
+       The image is the chip's own MergIR frame, at native 4 km. Its brightness temperatures are interpolated to the
+       export size and coloured afterwards, so colour bands stay sharp instead of smeared. The view is the reader's own
+       zoom; when the chip is not zoomed it is a storm-scale 8-degree box about the best-track centre. A 20-degree chip
+       leaves the storm a few pixels wide on a card. The coastline and centre marks follow the chip's toggles. */
+    var CARD_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+    var CARD_BOX_DEG = 8;
+    var _logoUrl = null;
+    function cardFont(size, weight) { return (weight || 400) + ' ' + size + 'px ' + CARD_FONT; }
+    function cardText(ctx, s, x, y, size, color, weight, align) {
+        ctx.font = cardFont(size, weight);
+        ctx.fillStyle = color;
+        ctx.textAlign = align || 'left';
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillText(s, x, y);
+        return ctx.measureText(s).width;
+    }
+    function cardLines(ctx, s, maxW, size, weight) {
+        ctx.font = cardFont(size, weight);
+        var words = String(s).split(' '), out = [], line = '';
+        for (var i = 0; i < words.length; i++) {
+            var test = line ? line + ' ' + words[i] : words[i];
+            if (ctx.measureText(test).width > maxW && line) { out.push(line); line = words[i]; } else line = test;
+        }
+        if (line) out.push(line);
+        return out;
+    }
+    function cardWrap(ctx, s, x, y, maxW, size, color, weight, lh) {
+        var ls = cardLines(ctx, s, maxW, size, weight);
+        for (var i = 0; i < ls.length; i++) cardText(ctx, ls[i], x, y + i * lh, size, color, weight);
+        return y + ls.length * lh;
+    }
+    function cardRound(ctx, x, y, w, h, r, fill, stroke) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+        if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+        if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
+    }
+    function cardVar(name, dflt) {
+        var v = getComputedStyle(document.documentElement).getPropertyValue(name);
+        return (v && v.trim()) || dflt;
+    }
+    function cardCat(v) {
+        var k = 0;
+        while (k < SS_BRK.length && v >= SS_BRK[k]) k++;
+        return { lbl: k <= 1 ? SS_LBL[k] : 'Cat ' + (k - 1), col: SS[k], ink: k >= 4 ? '#ffffff' : '#0f172a' };
+    }
+    function cardLogo() {
+        if (_logoUrl) return Promise.resolve(_logoUrl);
+        return fetch('tc-atlas-favicon-96.png').then(function (r) { return r.blob(); })
+            .then(function (b) {
+                return new Promise(function (ok) {
+                    var fr = new FileReader();
+                    fr.onload = function () { _logoUrl = fr.result; ok(_logoUrl); };
+                    fr.onerror = function () { ok(null); };
+                    fr.readAsDataURL(b);
+                });
+            })
+            .catch(function () { return null; });
+    }
+
+    /* The card's source rect: the reader's view when zoomed, else the storm-scale box; square either way */
+    function cardRect() {
+        var r;
+        if (zoom > 1.01) r = srcRect();
+        else {
+            var side = tb.cols;
+            if (tb.b && tb.b.north > tb.b.south) side = CARD_BOX_DEG / ((tb.b.north - tb.b.south) / tb.rows);
+            r = { sx: tb.cols / 2 - side / 2, sy: tb.rows / 2 - side / 2, sw: side, sh: side };
+        }
+        var s = Math.min(r.sw, r.sh, tb.cols, tb.rows);
+        var sx = Math.max(0, Math.min(tb.cols - s, r.sx + (r.sw - s) / 2));
+        var sy = Math.max(0, Math.min(tb.rows - s, r.sy + (r.sh - s) / 2));
+        return { sx: sx, sy: sy, sw: s, sh: s };
+    }
+
+    /* Tb bytes over the rect, bilinear to N x N device pixels, coloured after. A sample touching no-data takes its
+       nearest pixel, and no-data itself keeps the chip's grey checker, so a gap never reads as a temperature. */
+    function cardIR(N, r, lut) {
+        var W = tb.cols, H = tb.rows, g = tb.raw;
+        var c = document.createElement('canvas');
+        c.width = N; c.height = N;
+        var cx2 = c.getContext('2d'), out = cx2.createImageData(N, N), o = out.data;
+        var kx = r.sw / N, ky = r.sh / N, sq = Math.max(8, Math.round(N / 75));
+        for (var y = 0; y < N; y++) {
+            var fy = Math.min(H - 1, Math.max(0, r.sy + (y + 0.5) * ky - 0.5));
+            var y0 = Math.floor(fy), y1 = Math.min(H - 1, y0 + 1), wy = fy - y0;
+            for (var x = 0; x < N; x++) {
+                var fx = Math.min(W - 1, Math.max(0, r.sx + (x + 0.5) * kx - 0.5));
+                var x0 = Math.floor(fx), x1 = Math.min(W - 1, x0 + 1), wx = fx - x0;
+                var a = g[y0 * W + x0], b = g[y0 * W + x1], cc = g[y1 * W + x0], e = g[y1 * W + x1], u;
+                if (a === 0 || b === 0 || cc === 0 || e === 0) {
+                    u = wy < 0.5 ? (wx < 0.5 ? a : b) : (wx < 0.5 ? cc : e);
+                } else {
+                    u = Math.round((a * (1 - wx) + b * wx) * (1 - wy) + (cc * (1 - wx) + e * wx) * wy);
+                }
+                var p = (y * N + x) * 4;
+                if (u === 0) {
+                    var q = ((((x / sq) | 0) + ((y / sq) | 0)) & 1) ? 122 : 98;
+                    o[p] = o[p + 1] = o[p + 2] = q;
+                } else if (lut) {
+                    o[p] = lut[u * 4]; o[p + 1] = lut[u * 4 + 1]; o[p + 2] = lut[u * 4 + 2];
+                } else {
+                    o[p] = o[p + 1] = o[p + 2] = 255 - u;
+                }
+                o[p + 3] = 255;
+            }
+        }
+        cx2.putImageData(out, 0, 0);
+        return c;
+    }
+
+    /* Coastline, centre marks, scale bar and key over the image, as vectors at the card's scale */
+    function cardOverlay(ctx, X0, Y0, IS, r) {
+        var k = IS / r.sw;
+        var PX = function (sx) { return X0 + (sx - r.sx) * k; }, PY = function (sy) { return Y0 + (sy - r.sy) * k; };
+        if (irCoast && coastGeo && tb.b) {
+            buildCoast();
+            ctx.save();
+            ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+            [['rgba(0,0,0,.55)', 3.4], ['rgba(255,255,255,.92)', 1.4]].forEach(function (pz) {
+                ctx.strokeStyle = pz[0]; ctx.lineWidth = pz[1];
+                ctx.beginPath();
+                for (var i = 0; i < coastSegs.length; i++) {
+                    var s = coastSegs[i];
+                    for (var j = 0; j < s.length; j += 2) {
+                        if (j === 0) ctx.moveTo(PX(s[j]), PY(s[j + 1])); else ctx.lineTo(PX(s[j]), PY(s[j + 1]));
+                    }
+                }
+                ctx.stroke();
+            });
+            ctx.restore();
+        }
+        var hasEye = tb.eye_col != null && tb.eye_row != null;
+        if (irCentres) {
+            var bx = PX(tb.cols / 2), by = PY(tb.rows / 2);
+            if (hasEye) {
+                var ex = PX(tb.eye_col), ey = PY(tb.eye_row);
+                ctx.save();
+                ctx.setLineDash([5, 5]); ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(244,63,94,.85)';
+                ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(ex, ey); ctx.stroke();
+                ctx.restore();
+                crosshair(ctx, ex, ey, '#f43f5e', 7, 14, 2.6);
+            }
+            crosshair(ctx, bx, by, '#38bdf8', 7, 14, 2.6);
+        }
+        // scale bar: a round distance near a fifth of the image width
+        if (tb.b) {
+            var latc = (tb.b.north + tb.b.south) / 2;
+            var kmPx = (tb.b.east - tb.b.west) / tb.cols * 111.2 * Math.cos(latc * Math.PI / 180) / k;
+            var want = IS / 5 * kmPx, nice = [25, 50, 100, 200, 250, 500, 1000], km = nice[0];
+            for (var i = 0; i < nice.length; i++) if (nice[i] <= want) km = nice[i];
+            var L = km / kmPx, sx0 = X0 + 16, sy0 = Y0 + IS - 18;
+            ctx.save();
+            ctx.lineCap = 'butt';
+            [['rgba(0,0,0,.6)', 6], ['#ffffff', 2.5]].forEach(function (pz) {
+                ctx.strokeStyle = pz[0]; ctx.lineWidth = pz[1];
+                ctx.beginPath();
+                ctx.moveTo(sx0, sy0 - 5); ctx.lineTo(sx0, sy0); ctx.lineTo(sx0 + L, sy0); ctx.lineTo(sx0 + L, sy0 - 5);
+                ctx.stroke();
+            });
+            ctx.font = cardFont(12, 700); ctx.textAlign = 'left';
+            ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.65)'; ctx.strokeText(km + ' km', sx0, sy0 - 9);
+            ctx.fillStyle = '#ffffff'; ctx.fillText(km + ' km', sx0, sy0 - 9);
+            ctx.restore();
+        }
+        if (irCentres) {
+            var items = [['#38bdf8', 'best-track centre']];
+            if (hasEye) items.push(['#f43f5e', 'IR eye fix']);
+            ctx.font = cardFont(12, 600);
+            var w = 14;
+            items.forEach(function (it) { w += 22 + ctx.measureText(it[1]).width + 10; });
+            cardRound(ctx, X0 + 10, Y0 + 10, w - 6, 26, 7, 'rgba(15,23,42,.72)', null);
+            var kx2 = X0 + 22;
+            items.forEach(function (it) {
+                crosshair(ctx, kx2 + 6, Y0 + 23, it[0], 2, 5, 2);
+                ctx.fillStyle = '#e2e8f0'; ctx.textAlign = 'left';
+                ctx.fillText(it[1], kx2 + 18, Y0 + 27);
+                kx2 += 22 + ctx.measureText(it[1]).width + 10;
+            });
+        }
+    }
+
+    /* The storm's life on one chart: pressure (low at top) over wind, GHOST against best track, the recon strip
+       between, aircraft fixes, and the image time. Two panels on one time axis, never a dual axis. */
+    function cardChart(ctx, x, y, w, h, sid, st, S, tImg, col) {
+        cardRound(ctx, x, y, w, h, 10, col.card, col.line);
+        cardText(ctx, 'Storm lifetime', x + 14, y + 26, 15, col.fg, 700);
+        var PL = x + 52, PR = x + w - 40, T0 = y + 50, HP = (h - 112) / 2, GAP = 34, yv0 = T0 + HP + GAP;
+        var t0 = Date.parse(S.t[0] + 'Z'), t1 = Date.parse(S.t[S.t.length - 1] + 'Z'), span = (t1 - t0) || 1;
+        var X = function (ms) { return PL + (ms - t0) / span * (PR - PL); };
+        var Xi = function (i) { return X(Date.parse(S.t[i] + 'Z')); };
+        function rng(arrs, pad) {
+            var v = [];
+            arrs.forEach(function (A) { for (var i = 0; A && i < A.length; i++) if (A[i] != null) v.push(A[i]); });
+            if (!v.length) return null;
+            var lo = Math.min.apply(null, v), hi = Math.max.apply(null, v);
+            if (hi - lo < 4) { hi += 2; lo -= 2; }
+            var p = (hi - lo) * pad;
+            return { lo: lo - p, hi: hi + p };
+        }
+        var vdm = (st.vdm && st.vdm.t && st.vdm.t.length) ? st.vdm : null;
+        var rp = rng([S.gp, S.bp, S.ho, vdm && vdm.p], 0.08), rv = rng([S.gv, S.bv, vdm && vdm.v], 0.10);
+        var Yp = rp ? function (v) { return T0 + (v - rp.lo) / (rp.hi - rp.lo) * HP; } : null;
+        var Yv = rv ? function (v) { return yv0 + HP - (v - rv.lo) / (rv.hi - rv.lo) * HP; } : null;
+        ctx.fillStyle = col.dark ? 'rgba(148,163,184,.06)' : 'rgba(15,23,42,.035)';
+        ctx.fillRect(PL, T0, PR - PL, HP); ctx.fillRect(PL, yv0, PR - PL, HP);
+        cardText(ctx, 'Minimum pressure (hPa)', PL, T0 - 6, 12, col.fg2, 600);
+        cardText(ctx, 'Maximum wind (kt)', PL, yv0 - 6, 12, col.fg2, 600);
+        function ylab(Y, r) {
+            if (!Y || !r) return;
+            [r.lo + (r.hi - r.lo) * 0.1, r.hi - (r.hi - r.lo) * 0.1].forEach(function (v) {
+                v = Math.round(v);
+                cardText(ctx, String(v), PL - 6, Y(v) + 4, 11, col.fg2, 400, 'right');
+                ctx.save(); ctx.strokeStyle = col.grid; ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(PL, Y(v)); ctx.lineTo(PR, Y(v)); ctx.stroke(); ctx.restore();
+            });
+        }
+        ylab(Yp, rp); ylab(Yv, rv);
+        // Saffir-Simpson thresholds on the wind panel, labelled at the right edge
+        if (Yv) [[64, 'C1'], [96, 'C3'], [137, 'C5']].forEach(function (c) {
+            if (c[0] <= rv.lo || c[0] >= rv.hi) return;
+            ctx.save(); ctx.setLineDash([3, 4]); ctx.strokeStyle = col.grid2; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(PL, Yv(c[0])); ctx.lineTo(PR, Yv(c[0])); ctx.stroke(); ctx.restore();
+            cardText(ctx, c[1], PR + 6, Yv(c[0]) + 4, 11, col.fg2, 600);
+        });
+        // recon strip: the recon-proximate flag per frame (aircraft MSLP within 3 h), as on the tab's chart
+        var yS = T0 + HP + 10, any = false;
+        if (st.lr && st.lr.length === S.t.length) {
+            ctx.save(); ctx.fillStyle = col.cyan; ctx.globalAlpha = 0.35;
+            for (var i = 0; i < st.lr.length; i++) {
+                if (!st.lr[i]) continue;
+                var ms = Date.parse(S.t[i] + 'Z');
+                var xa = Math.max(PL, X(ms - 1.5 * 3600e3)), xb = Math.min(PR, X(ms + 1.5 * 3600e3));
+                ctx.fillRect(xa, yS, Math.max(1, xb - xa), 6); any = true;
+            }
+            ctx.restore();
+            if (any) cardText(ctx, 'recon', PL - 6, yS + 7, 10.5, col.fg2, 600, 'right');
+        }
+        function path(a, Y, color, wd, dash) {
+            if (!a || !Y) return;
+            ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = wd; ctx.lineJoin = 'round';
+            if (dash) ctx.setLineDash(dash);
+            ctx.beginPath();
+            var pen = false;
+            for (var i = 0; i < a.length; i++) {
+                if (a[i] == null) { pen = false; continue; }
+                if (pen) ctx.lineTo(Xi(i), Y(a[i])); else ctx.moveTo(Xi(i), Y(a[i]));
+                pen = true;
+            }
+            ctx.stroke(); ctx.restore();
+        }
+        // filled winds draw dashed, as on the tab (with the neighbouring solid point so the dashes meet the line)
+        var gvSolid = S.gv, gvFill = null;
+        if (S.gv && S.fl && S.fl.some(function (f, i) { return f && S.gv[i] != null; })) {
+            gvSolid = S.gv.map(function (v, i) { return S.fl[i] ? null : v; });
+            gvFill = S.gv.map(function (v, i) { return (S.fl[i] || S.fl[i - 1] || S.fl[i + 1]) ? v : null; });
+        }
+        path(S.bp, Yp, col.slate, 1.6);
+        path(S.bv, Yv, col.slate, 1.6);
+        if (S.ho) path(S.ho, Yp, col.ghost, 1.3, [4, 3]);
+        path(S.gp, Yp, col.ghost, 2.2);
+        if (gvFill) path(gvFill, Yv, col.ghost, 1.6, [5, 4]);
+        path(gvSolid, Yv, col.ghost, 2.2);
+        if (vdm) {
+            for (var q = 0; q < vdm.t.length; q++) {
+                var vx = X(Date.parse(vdm.t[q] + 'Z'));
+                if (!(vx >= PL - 1 && vx <= PR + 1)) continue;
+                [[vdm.p, Yp], [vdm.v, Yv]].forEach(function (pv) {
+                    if (!pv[0] || pv[0][q] == null || !pv[1]) return;
+                    ctx.beginPath(); ctx.arc(vx, pv[1](pv[0][q]), 2.8, 0, 2 * Math.PI);
+                    ctx.fillStyle = col.cyan; ctx.fill();
+                    ctx.lineWidth = 1; ctx.strokeStyle = col.card; ctx.stroke();
+                });
+            }
+        }
+        // the image time, through both panels
+        var xc = X(tImg);
+        if (xc >= PL - 1 && xc <= PR + 1) {
+            ctx.save(); ctx.strokeStyle = col.fg; ctx.globalAlpha = 0.55; ctx.lineWidth = 1.4;
+            ctx.beginPath(); ctx.moveTo(xc, T0); ctx.lineTo(xc, yv0 + HP); ctx.stroke(); ctx.restore();
+            var lab = 'image', lw = (ctx.font = cardFont(10.5, 700), ctx.measureText(lab).width) + 10;
+            var lx = Math.max(PL, Math.min(PR - lw, xc - lw / 2));
+            cardRound(ctx, lx, T0 - 1, lw, 15, 7, col.fg, null);
+            cardText(ctx, lab, lx + lw / 2, T0 + 10, 10.5, col.card, 700, 'center');
+        }
+        for (var kk = 0; kk <= 4; kk++) {
+            var tm = t0 + span * kk / 4;
+            cardText(ctx, TCTime.utc(tm, { time: false }), X(tm), yv0 + HP + 18, 11, col.fg2, 400,
+                kk === 0 ? 'left' : kk === 4 ? 'right' : 'center');
+        }
+        // key, right-aligned on the title row
+        var keys = [['line', col.ghost, 'GHOST'], ['line', col.slate, 'best track']];
+        if (gvFill) keys.push(['dash', col.ghost, 'filled wind']);
+        if (S.ho) keys.push(['dash', col.ghost, 'held out']);
+        if (vdm) keys.push(['dot', col.cyan, 'aircraft fix']);
+        if (any) keys.push(['band', col.cyan, 'recon within 3 h']);
+        ctx.font = cardFont(12, 400);
+        var kw = 0;
+        keys.forEach(function (k2) { kw += 26 + ctx.measureText(k2[2]).width + 14; });
+        var kx = x + w - 14 - kw + 14, ky = y + 22;
+        keys.forEach(function (k2) {
+            ctx.save(); ctx.strokeStyle = k2[1]; ctx.fillStyle = k2[1]; ctx.lineWidth = 2.2;
+            if (k2[0] === 'line' || k2[0] === 'dash') {
+                if (k2[0] === 'dash') ctx.setLineDash([4, 3]);
+                ctx.beginPath(); ctx.moveTo(kx, ky); ctx.lineTo(kx + 20, ky); ctx.stroke();
+            } else if (k2[0] === 'dot') {
+                ctx.beginPath(); ctx.arc(kx + 10, ky, 3, 0, 2 * Math.PI); ctx.fill();
+            } else { ctx.globalAlpha = 0.35; ctx.fillRect(kx, ky - 3, 20, 6); }
+            ctx.restore();
+            kx += 26 + cardText(ctx, k2[2], kx + 26, ky + 4, 12, col.fg2, 400) + 14;
+        });
+    }
+
+    function saveCardPng(btn) {
+        var sid = ir && ir.sid, st = sid && stormCache[sid], s = sid && byId[sid];
+        if (!st || !s || !window.TCExport) return;
+        var S = series(st);
+        if (!S.t || !S.t.length) return;
+        var m = irMeta[sid], fr0 = (m && m.available && ir.idx !== null) ? m.frames[ir.idx] : null;
+        var tImg = fr0 ? Date.parse(fr0.datetime + 'Z') : (valsMs !== null ? valsMs : Date.parse(S.t[0] + 'Z'));
+        var bi = 0, bd = Infinity, i;
+        for (i = 0; i < S.t.length; i++) {
+            var d0 = Math.abs(Date.parse(S.t[i] + 'Z') - tImg);
+            if (d0 < bd) { bd = d0; bi = i; }
+        }
+        var tEst = Date.parse(S.t[bi] + 'Z');
+        var hasImg = !!(fr0 && tb && tb.fkey === sid + '/' + ir.idx);
+        if (fr0 && !hasImg && irFrames[sid + '/' + ir.idx] === false) {
+            $('gra-ir-status').textContent = 'The frame is still loading — try Summary again in a moment.';
+            return;
+        }
+        if (btn) btn.disabled = true;
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var col = {
+            dark: dark, bg: dark ? '#0d1117' : '#ffffff', fg: dark ? '#e2e8f0' : '#0f172a', fg2: dark ? '#94a3b8' : '#475569',
+            line: dark ? '#1e293b' : '#e2e8f0', card: dark ? '#111827' : '#f8fafc',
+            grid: dark ? 'rgba(148,163,184,.14)' : 'rgba(15,23,42,.08)', grid2: dark ? 'rgba(148,163,184,.35)' : 'rgba(15,23,42,.25)',
+            ghost: '#f43f5e', slate: cardVar('--slate', dark ? '#8a93a4' : '#5b6573'), cyan: cardVar('--cyan', '#0891b2'),
+            fm: cardVar('--gc-fm', '#6f7d00'), tm: cardVar('--gc-tm', '#b07800'), vm: cardVar('--gc-vm', '#00838f')
+        };
+        var v61 = isV61Plus(), vName = 'GHOST Reanalysis ' + (version || '');
+        var b = st.basin || s.basin, bm = basinModel(b) || {};
+        var name = (s.name || st.name || s.atcf) + ' ' + (s.year || '') + ' (' + (s.atcf || sid) + ')';
+        var CW = 1200, CH = 1062, sc = 2, IS = 600, X0 = 24, Y0 = 92, RX = X0 + IS + 28, RW = CW - RX - 24;
+        var c = document.createElement('canvas');
+        c.width = CW * sc; c.height = CH * sc;
+        var ctx = c.getContext('2d');
+        ctx.scale(sc, sc);
+        ctx.fillStyle = col.bg; ctx.fillRect(0, 0, CW, CH);
+        cardText(ctx, name + ' — ' + vName, X0, 40, 24, col.fg, 700);
+        var pk = peakTime(sid);
+        var sub = 'Intensity reanalysis from geostationary infrared imagery · ' + (BASIN_LABEL[b] || b) +
+            ' · image ' + TCTime.utc(tImg, { year: true }) +
+            (Math.abs(tEst - tImg) > 45 * 60000 ? ' · estimate ' + TCTime.utc(tEst) : '') +
+            (pk !== null && Math.abs(tImg - pk) <= 90 * 60000 ? ' · GHOST peak' : '');
+        cardText(ctx, sub, X0, 66, 14, col.fg2, 400);
+
+        /* ── image ── */
+        cardRound(ctx, X0 - 1, Y0 - 1, IS + 2, IS + 2, 10, null, col.line);
+        ctx.save(); cardRound(ctx, X0, Y0, IS, IS, 10); ctx.clip();
+        if (hasImg) {
+            var maps = (GA() && GA().irColormaps) ? GA().irColormaps() : null;
+            var lut = maps ? (maps[cmap] || maps['claude-ir'] || maps['enhanced']) : null;
+            var r = cardRect();
+            ctx.drawImage(cardIR(IS * sc, r, lut), X0, Y0, IS, IS);    // 1:1 with the device pixels of the 2x export
+            cardOverlay(ctx, X0, Y0, IS, r);
+        } else {
+            ctx.fillStyle = col.card; ctx.fillRect(X0, Y0, IS, IS);
+            cardText(ctx, 'No infrared image for this time', X0 + IS / 2, Y0 + IS / 2, 15, col.fg2, 600, 'center');
+        }
+        ctx.restore();
+        if (hasImg) {
+            var note = tb.standIn ? 'backup image: GridSat-B1 8 km (the 4 km mosaic was unavailable)'
+                : tb.src === 'hursat' ? 'backup scan' + (tb.srcAt ? ' taken ' + TCTime.utc(tb.srcAt) : '') +
+                  ' (the mosaic has no image for this hour)'
+                : (tb.nodata > 0.02 ? Math.round(tb.nodata * 100) + '% of the scene has no satellite data (grey checker)' : '');
+            if (note) cardText(ctx, note, X0 + IS, Y0 + IS + 16, 11.5, dark ? '#fbbf24' : '#b45309', 600, 'right');
+        }
+
+        /* ── wind and pressure at this time, best track beneath ── */
+        var y = Y0, half = (RW - 12) / 2;
+        var val = function (a, dp) { return (a && a[bi] != null) ? +a[bi].toFixed(dp) : null; };
+        var gv = val(S.gv, 0), gp = val(S.gp, 1), bv = val(S.bv, 0), bp = val(S.bp, 0), ho = val(S.ho, 1);
+        var filled = !!(S.fl && S.fl[bi]);
+        [['MAX WIND', gv, 'kt', bv, true], ['MIN PRESSURE', gp, 'hPa', bp, false]].forEach(function (q, k) {
+            var x = RX + k * (half + 12);
+            cardRound(ctx, x, y, half, 132, 10, col.card, col.line);
+            cardText(ctx, q[0], x + 14, y + 26, 12, col.fg2, 700);
+            if (q[1] == null) { cardText(ctx, '—', x + 14, y + 72, 36, col.fg2, 700); }
+            else {
+                var w = cardText(ctx, String(Math.round(q[1])), x + 14, y + 74, 40, col.fg, 700);
+                var uw = cardText(ctx, q[2], x + 20 + w, y + 74, 16, col.fg2, 600);
+                if (q[4]) {
+                    var ct = cardCat(q[1]);
+                    ctx.font = cardFont(13, 700);
+                    var pw = ctx.measureText(ct.lbl).width + 16, px = x + 20 + w + uw + 10;
+                    cardRound(ctx, px, y + 56, pw, 22, 11, ct.col, null);
+                    cardText(ctx, ct.lbl, px + pw / 2, y + 72, 13, ct.ink, 700, 'center');
+                }
+            }
+            var yy = y + 100;
+            cardText(ctx, 'best track ' + (q[3] != null ? Math.round(q[3]) + ' ' + q[2] : '—'), x + 14, yy, 13, col.fg2, 400);
+            yy += 20;
+            if (q[4] && filled) cardText(ctx, 'filled: over land or image rejected', x + 14, yy, 12.5, col.fg2, 400);
+            if (!q[4] && ho != null) cardText(ctx, 'held out ' + ho.toFixed(1) + ' hPa', x + 14, yy, 12.5, col.fg2, 400);
+        });
+        y += 132 + 14;
+
+        /* ── how this number is made (v6.1) ── */
+        var Mm = st.lt ? membersFor(sid, S.t) : null;
+        if (v61) {
+            var windTxt = filled
+                ? 'Filled: the centre is over land or the image was rejected, so the wind is the lower of the wind ' +
+                  'implied by the pressure and the tree model’s own wind.'
+                : 'Tree model and image model (vision transformer) blended by intensity: equal below 50 kt, image ' +
+                  '¾ above 80 kt. Above 130 kt the wind is blended with the wind the pressure implies.';
+            var wl = cardLines(ctx, windTxt, RW - 28, 12.5, 400);
+            var fm = Mm ? Mm.fm[bi] : null, tm = Mm ? Mm.tm[bi] : null, vm = Mm ? Mm.vm[bi] : null;
+            var all3 = fm != null && tm != null && vm != null;
+            var pTxt = all3
+                ? 'physics model ' + Math.round(fm) + ' × 50% + tree ' + Math.round(tm) + ' × 25% + image ' +
+                  Math.round(vm) + ' × 25%'
+                : 'Half the physics model (FPM), a quarter each from the tree and image models' +
+                  (Mm ? '; a member abstains at this time and its recent value is carried' : '') + '.';
+            var adj = all3 && gp != null && Math.abs(0.5 * fm + 0.25 * tm + 0.25 * vm - gp) >= 1;
+            if (adj) pTxt += ' → ' + Math.round(gp) + ' after the wind–pressure guard and bounds';
+            var pl = cardLines(ctx, pTxt, RW - 28, 12.5, 400);
+            var boxH = 150 + (wl.length + pl.length) * 17;
+            var top = y;
+            cardRound(ctx, RX, y, RW, boxH, 10, col.card, col.line);
+            cardText(ctx, 'How this number is made', RX + 14, y + 26, 15, col.fg, 700);
+            var ry = y + 50;
+            cardText(ctx, 'Wind ' + (gv != null ? gv + ' kt' : '—'), RX + 14, ry, 13, col.fg, 700);
+            ry += 20;
+            wl.forEach(function (ln, n) { cardText(ctx, ln, RX + 14, ry + n * 17, 12.5, col.fg2, 400); });
+            ry += wl.length * 17 + 14;
+            cardText(ctx, 'Pressure ' + (gp != null ? Math.round(gp) + ' hPa' : '—'), RX + 14, ry, 13, col.fg, 700);
+            var bx = RX + 14, bw = RW - 28, used = 0;
+            [[col.fm, 0.5], [col.tm, 0.25], [col.vm, 0.25]].forEach(function (sg, n) {
+                var sw = n === 2 ? bw - used : Math.round(bw * sg[1]) - 2;
+                cardRound(ctx, bx + used, ry + 8, Math.max(2, sw), 12, 4, sg[0], null);
+                used += sw + 2;
+            });
+            ry += 38;
+            pl.forEach(function (ln, n) { cardText(ctx, ln, RX + 14, ry + n * 17, 12.5, col.fg2, 400); });
+            var kx = RX + 14, ky = top + boxH - 14;
+            [[col.fm, 'physics model (FPM)'], [col.tm, 'tree model'], [col.vm, 'image model (ViT)']].forEach(function (kk) {
+                cardRound(ctx, kx, ky - 10, 10, 10, 3, kk[0], null);
+                kx += 16 + cardText(ctx, kk[1], kx + 16, ky, 12, col.fg2, 400) + 18;
+            });
+            y = top + boxH + 14;
+        }
+
+        /* ── the storm and its validation ── */
+        var rows = [];
+        var iV = peakIdx(S.t, (S.gv && S.fl) ? S.gv.map(function (v, n) { return S.fl[n] ? null : v; }) : S.gv, +1);
+        if (iV < 0) iV = peakIdx(S.t, S.gv, +1);
+        var iP = peakIdx(S.t, S.gp, -1);
+        if (iV >= 0 || iP >= 0) rows.push(['Lifetime peak (GHOST)',
+            (iV >= 0 ? Math.round(S.gv[iV]) + ' kt ' + TCTime.cycle(S.t[iV]) : '') + (iV >= 0 && iP >= 0 ? ' · ' : '') +
+            (iP >= 0 ? Math.round(S.gp[iP]) + ' hPa ' + TCTime.cycle(S.t[iP]) : '')]);
+        var bvk = s.bt_v_peak != null ? s.bt_v_peak : s.bt_peak_kt, bpk = s.bt_p_peak != null ? s.bt_p_peak : s.bt_min_hpa;
+        if (bvk != null || bpk != null) rows.push(['Lifetime peak (best track)',
+            (bvk != null ? Math.round(bvk) + ' kt' : '') + (bvk != null && bpk != null ? ' · ' : '') +
+            (bpk != null ? Math.round(bpk) + ' hPa' : '')]);
+        var lm = st.lm && st.lm.all;
+        if (lm && lm.n && lm.rmse != null && lm.bias != null) rows.push(['Whole storm vs best track', 'pressure RMSE ' +
+            lm.rmse.toFixed(1) + ' hPa, bias ' + (lm.bias >= 0 ? '+' : '−') + Math.abs(lm.bias).toFixed(1) + ' (' + lm.n + ' times)']);
+        var sv = st.lsatv && st.lsatv[bi], sp = st.lsat && st.lsat[bi];
+        if (sv != null || sp != null) rows.push(['SATCON at this time', (sv != null ? Math.round(sv) + ' kt' : '') +
+            (sv != null && sp != null ? ' · ' : '') + (sp != null ? Math.round(sp) + ' hPa' : '')]);
+        var nhc = b === 'AL' || b === 'EP' || b === 'CP';
+        if (nhc) {
+            var fx = fdeckCache[sid], nfx = 0;
+            if (fx && fx.t) for (i = 0; i < fx.t.length; i++) if (Math.abs(fx.t[i] - tEst) <= 3 * 3600e3) nfx++;
+            var rc = !!(st.lr && st.lr[bi]);
+            rows.push(['Aircraft reconnaissance', (rc || nfx ? 'within 3 h' + (nfx ? ' (' + nfx + ' fix' + (nfx > 1 ? 'es' : '') + ')' : '')
+                : 'none within 3 h') + (s.recon_frac != null ? ' · ' + Math.round(s.recon_frac * 100) + '% of the storm' : '')]);
+        }
+        if (bm.protocol) rows.push(['Validation', (PROTO_SHORT[bm.protocol] || bm.protocol) +
+            (bm.protocol === 'transfer' ? ': no ' + b + ' storms in training' : ': fit never saw this season')]);
+        var la = st.lla && st.lla[bi], lo = st.llo && st.llo[bi];
+        if (la == null && fr0) { la = fr0.lat; lo = fr0.lon; }
+        if (la != null && lo != null) {
+            var lo180 = ((lo + 540) % 360) - 180;
+            rows.push(['Centre', Math.abs(la).toFixed(1) + '°' + (la >= 0 ? 'N' : 'S') + ' ' +
+                Math.abs(lo180).toFixed(1) + '°' + (lo180 >= 0 ? 'E' : 'W')]);
+        }
+        var rh = 28, rbH = rows.length * rh + 12;
+        cardRound(ctx, RX, y, RW, rbH, 10, col.card, col.line);
+        rows.forEach(function (rw, n) {
+            var yy2 = y + 25 + n * rh;
+            cardText(ctx, rw[0], RX + 14, yy2, 13, col.fg2, 400);
+            cardText(ctx, rw[1], RX + RW - 14, yy2, 13, col.fg, 600, 'right');
+        });
+        y += rbH + 18;
+        if (!nhc) {
+            cardWrap(ctx, '⚠ No aircraft reconnaissance in this basin: these estimates are not verified against aircraft.',
+                RX, y, RW, 12.5, dark ? '#fbbf24' : '#b45309', 600, 17);
+        }
+
+        /* ── lifetime ── */
+        cardChart(ctx, X0, Y0 + IS + 26, CW - 2 * X0, 268, sid, st, S, tImg, col);
+
+        var stamp = new Date(tImg).toISOString().slice(0, 16).replace(/[:T-]/g, '');
+        var fname = 'TC-ATLAS_GHOST-Reanalysis-' + (version || '') + '_summary_' + (s.atcf || sid) + '_' + stamp + '.png';
+        var fy = Y0 + IS + 26 + 268 + 34;
+        cardLogo().then(function (url) {
+            if (!url) return;
+            return new Promise(function (ok) {
+                var lg = new Image();
+                lg.onload = function () { ctx.drawImage(lg, X0, fy - 18, 24, 24); ok(); };
+                lg.onerror = function () { ok(); };
+                lg.src = url;
+            });
+        }).then(function () {
+            var tx = X0 + 32;
+            var w = cardText(ctx, 'TC-ATLAS', tx, fy, 14, col.fg, 700);
+            cardText(ctx, ' · tcatlas.org', tx + w, fy, 14, col.fg2, 400);
+            var ew = cardText(ctx, 'EXPERIMENTAL', X0, fy + 24, 12, '#F47321', 700);
+            cardWrap(ctx, ' · The GHOST Reanalysis is a research product (manuscript in preparation), not an official ' +
+                'best track or analysis. Contact the author before citing or redistributing.', X0 + ew + 4, fy + 24,
+                CW - X0 - ew - 30, 12, col.fg2, 400, 16);
+            return new Promise(function (ok, bad) {
+                c.toBlob(function (blob) { blob ? ok(blob) : bad(new Error('toBlob')); }, 'image/png');
+            });
+        }).then(function (blob) {
+            return TCExport.save(blob, fname);
+        }).catch(function (e) {
+            if (window.console) console.warn('summary card save failed', e);
+        }).then(function () { if (btn) btn.disabled = false; });
+    }
+
+    // ══════════════════════════════════════════════════════════════
     //  wiring
     // ══════════════════════════════════════════════════════════════
     function renderBasins() {
@@ -2597,6 +3143,8 @@
             switchTab('detail');
             if (dt && GA()) setTimeout(function () { GA().syncIRToTime(dt); }, 600);
         };
+
+        $('gra-ir-card').onclick = function () { saveCardPng(this); };
 
         var cv = $('gra-ir-canvas'), drag = null;
         cv.addEventListener('wheel', function (e) {

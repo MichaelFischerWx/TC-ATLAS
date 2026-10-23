@@ -2962,7 +2962,8 @@ input[type="range"].ga-range::-moz-range-thumb {
     display: flex; align-items: center; gap: 6px; font-size: 0.78rem; font-weight: 700;
 }
 .gra-ir-sub { font-size: 0.62rem; color: #94a3b8; font-weight: 500; }
-.gra-ir-head .ga-btn { margin-left: auto; }
+/* the header's buttons sit together at the right */
+.gra-ir-acts { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 .gra-ir-x {
     cursor: pointer; border: 0; background: none; color: #94a3b8;
     font-size: 1rem; line-height: 1; padding: 0 2px;
@@ -3199,6 +3200,9 @@ input[type="range"].ga-range::-moz-range-thumb {
     #gra-ir-canvas, .gra-ir.big #gra-ir-canvas { max-height: 34vh; }
     #gra-ir-expand { display: none; }          /* nothing to expand into */
     .gra-ir-head { flex-wrap: wrap; row-gap: 4px; }
+    /* phones: close stays top-right, the buttons take their own right-aligned row */
+    .gra-ir-x { margin-left: auto; }
+    .gra-ir-acts { order: 3; flex-basis: 100%; justify-content: flex-end; }
     .gra-ir-ctr { flex-wrap: wrap; row-gap: 3px; }
     .gra-chart-read { min-height: 0; }
 
