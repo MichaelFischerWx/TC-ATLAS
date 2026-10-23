@@ -432,6 +432,20 @@
         return window.TCTime ? TCTime.utc(t) : t.slice(11, 16) + 'Z';
     }
 
+    /* The storm's peak: the highest wind among frames where it was a tropical cyclone over water with an estimate of
+       its own (filled or carried values, inland frames and non-tropical best-track statuses don't count); the earliest
+       frame on a tie. */
+    function peakFrame(fr) {
+        var best = null;
+        fr.forEach(function (f) {
+            var w = f.vmax_kt;
+            if (w === null || w === undefined || !isFinite(w) || f.inland || f.vmax_filled || f.vmax_carried ||
+                f.not_tc || NON_TC_NAMES[f.btk_status]) return;
+            if (!best || w > best.vmax_kt) best = f;
+        });
+        return best;
+    }
+
     /* Change over ~24 h: latest finite value minus the finite value nearest
        (now − 24 h). Needs ≥18 h of history so a young storm shows "—" rather
        than a misleading short-baseline delta; returns the true baseline hours
@@ -2077,13 +2091,13 @@
         var r = currentValue(fr, 'rmw_km', j.storm);
         /* A quantity the model has stopped estimating: no number, category,
            trend or interval — the reason and the dated last estimate. */
-        function staleTile(label, c, unit) {
+        function staleTile(label, c, unit, extra) {
             return '<div class="exp-tile exp-tile-stale">' +
                 '<div class="exp-tile-k">' + label + '</div>' +
                 '<div class="exp-tile-v">—</div>' +
                 '<div class="exp-tile-d">' + c.reason + '</div>' +
                 '<div class="exp-tile-sub">last estimate ' + Math.round(c.v) +
-                ' ' + unit + ' at ' + fmtTime(c.t) + '</div></div>';
+                ' ' + unit + ' at ' + fmtTime(c.t) + '</div>' + (extra || '') + '</div>';
         }
         /* A pressure-only payload is legitimate, not a failed run: FPM's
            derived wind is withheld in basins where the weak gate hands the
@@ -2122,10 +2136,23 @@
         var cat = windToCategory(v && v.v);
         var asOf = v
             ? '<div class="exp-tile-sub">' + tileAt(v, fr) + '</div>' : '';
+        /* Archived storms open on their last frame, usually the decay: a link to the peak ("so far" while live). Not
+           shown when the latest estimate IS the peak. */
+        var pk = peakFrame(fr);
+        var peakLine = (pk && v && pk.t !== v.t)
+            ? '<div class="exp-tile-sub"><a href="#" id="exp-peak" title="Show the image and the numbers at the peak">' +
+              (_archSet[j.storm] ? 'Peak ' : 'Peak so far ') + Math.round(pk.vmax_kt) + ' kt \u00b7 ' +
+              pk.t.slice(5, 16).replace('T', ' ') + 'Z</a></div>'
+            : '';
+        box.onclick = function (e) {
+            if (!e.target.closest || !e.target.closest('#exp-peak')) return;
+            e.preventDefault();
+            seekToPeak(j, pk);
+        };
 
         /* No wind in the payload -> no wind tile. See the headline guard
            above: this is a withheld quantity, not a broken feed. */
-        var windTile = !v ? '' : v.stale ? staleTile(M.name + ' max wind', v, 'kt') :
+        var windTile = !v ? '' : v.stale ? staleTile(M.name + ' max wind', v, 'kt', peakLine) :
             '<div class="exp-tile">' +
             '<div class="exp-tile-k">' + M.name + ' max wind' +
             (M.windIsDerived
@@ -2164,7 +2191,7 @@
                   'saturation ceiling (~150–160 kt) — read as ' +
                   '“at least”, not a precise value</div>'
                 : '') +
-            asOf + '</div>';
+            asOf + peakLine + '</div>';
 
         var presTile = !p ? '' : p.stale ? staleTile(M.name + ' min pressure', p, 'hPa') :
             '<div class="exp-tile">' +
@@ -2475,6 +2502,30 @@
             renderHowMade(j);
         });
     }
+    /* Jump to the peak: seek the image to the first infrared frame at or after it, and onFrameChange then puts the
+       scorecard on the peak frame itself. With no image there (no strips, or none within 45 min) the scorecard alone
+       moves. */
+    function seekToPeak(j, pk) {
+        if (!pk) return;
+        track(M.key + '_peak_seek', { storm: j.storm });
+        var tms = new Date(pk.t).getTime();
+        if (_strip && _strip.atcf === j.storm) {
+            for (var i = _strip.i0; i <= _strip.i1; i++) {
+                var d = new Date(_strip.meta.times[i]).getTime() - tms;
+                if (d < 0) continue;
+                if (d <= 45 * 60e3) {
+                    stopStripPlay();
+                    seekStrip(i);
+                    var box = document.getElementById('exp-frames');
+                    if (box) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    return;
+                }
+                break;
+            }
+        }
+        if (M.key === 'blend' && isV61(j)) { _hmT = pk.t; renderHowMade(j); }
+    }
+
     /* The scorecard follows the image: scrubbing the frame viewer (or clicking the chart, which seeks it) selects the
        latest published frame at or before that image. */
     function onFrameChange(t, atLatest) {
