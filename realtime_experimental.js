@@ -4642,7 +4642,7 @@
         pres_init: 'Central-pressure input to the size model (GHOST’s own estimate)',
         mpi_init: 'Maximum potential intensity of the current ocean–atmosphere environment',
         shdc_init: 'Deep-layer vertical wind shear over the storm',
-        sddc_init: 'Direction the deep-layer shear comes from',
+        sddc_init: 'Heading of the deep-layer shear vector (the downshear direction)',
         rhlo_init: 'Lower-troposphere relative humidity near the storm',
         rhmd_init: 'Mid-troposphere relative humidity near the storm',
         rhhi_init: 'Upper-troposphere relative humidity near the storm',
