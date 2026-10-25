@@ -76,10 +76,16 @@
             headline: 'pmin_hpa',
             windIsDerived: false,
             saturates: true,
+            /* Fallback only: the producer stamps a per-storm `caveat` (for IO it
+               names the storm's own Himawari-9 viewing angle), which wins. */
             provisional: {
                 WP: 'West Pacific estimates are <strong>provisional</strong>: ' +
                     'both members run as out-of-basin transfer there and the ' +
-                    'labels are JTWC Dvorak, not aircraft.'
+                    'labels are JTWC Dvorak, not aircraft.',
+                IO: 'North Indian Ocean estimates are <strong>provisional</strong>: ' +
+                    'no storm from this basin is in the model’s training or ' +
+                    'verification record, and Himawari-9 sees the Bay of Bengal ' +
+                    'at a steep 56–70° slant.'
             },
             /* No SHAP: the ridge\u2019s coefficients are FPM\u2019s drivers, the
                tree\u2019s SHAP is GHOST\u2019s; neither describes the mean.
@@ -249,7 +255,7 @@
        from the data: this script can ship before the producer flips, and a producer rollback reverts the page with it. */
     function isV61(j) { return !!(j && j.compose === 'v61'); }
     function v61Page() { return M.key === 'blend' && (isV61(_index) || isV61(_archIndex)); }
-    /* One colour per member model wherever it appears (scorecard bars, chart lines, legend); checked with the dataviz
+    /* One color per member model wherever it appears (scorecard bars, chart lines, legend); checked with the dataviz
        palette validator (CVD separation and contrast pass in light and dark). */
     var MEMBER = {
         phys: { name: 'physics model', col: '#6366f1',
@@ -382,7 +388,7 @@
         }
         return null;
     }
-    /* Frames whose centre is over land (2026-10-23): v6.1 scores them, and the wind there decays from the last over-water
+    /* Frames whose center is over land (2026-10-23): v6.1 scores them, and the wind there decays from the last over-water
        estimate, faster the more of the storm's core is over land. lastWaterWind finds that anchor for the explanations. */
     function lastWaterWind(fr, t) {
         for (var i = fr.length - 1; i >= 0; i--) {
@@ -397,7 +403,7 @@
         var newest = fr.length ? fr[fr.length - 1].t : c.t;
         var old = (new Date(newest) - new Date(c.t)) / 3.6e6 > STALE_H || newest.slice(0, 10) !== c.t.slice(0, 10);
         return 'at ' + (old ? c.t.slice(5, 10).replace('-', '/') + ' ' : '') + c.t.slice(11, 16) + 'Z' +
-            (c.f && c.f.inland ? ' \u00b7 centre over land' : '');
+            (c.f && c.f.inland ? ' \u00b7 center over land' : '');
     }
 
     /* lastFiniteFrame, judged against the NEWEST published frame. A model
@@ -2196,7 +2202,7 @@
 
         /* Tile uncertainty = "typical error ±X": half the interquartile
            range of held-out (best track − model) errors at this estimate.
-           Spread only, centred on the model output — the old "IQR lo–hi"
+           Spread only, centered on the model output — the old "IQR lo–hi"
            added the errors' offset too, so at the extremes it sat entirely
            beside the estimate (Champi 893 hPa, IQR 896–908), and the model
            output is what the tile publishes (author, 2026-10-20). */
@@ -2504,7 +2510,7 @@
             var tv = f.ghost_vmax_kt, iv = f.vit_vmax_kt, wt = f.w_tree, segs = null, eq = '';
             if (f.inland) {
                 var w0 = lastWaterWind(fr, f.t);
-                eq = 'centre over land: the wind decays from the last over-water estimate' +
+                eq = 'center over land: the wind decays from the last over-water estimate' +
                     (w0 ? ' (' + Math.round(w0.v) + ' kt at ' + w0.t.slice(11, 16) + 'Z)' : '') +
                     ', faster the more of the storm\u2019s core is over land';
             } else if (tv != null && iv != null && wt != null) {
@@ -2680,7 +2686,7 @@
     /* The Summary card's recent evolution (PI 10-23: "a trace of the recent intensity evolution"). It shows the
        published wind and pressure over the 48 h up to the image, with the agency's analyses as dots joined by a dashed
        line. Two panels share one time axis, never a dual axis. The styling follows the page's chart: the model's
-       colour, the agency in dashed grey, pressure upright, and filled winds dashed. Returns false when fewer than
+       color, the agency in dashed gray, pressure upright, and filled winds dashed. Returns false when fewer than
        two frames exist. */
     function cardTrend(ctx, x, y, w, h, j, tImg, c) {
         var tE = Date.parse(tImg), all = j.frames || [], fr = [], i;
@@ -2768,7 +2774,7 @@
                 ctx.fillStyle = color; ctx.fill(); ctx.lineWidth = 1.2; ctx.strokeStyle = c.card; ctx.stroke();
             });
         }
-        // agency analyses: dashed grey through the fixes, dots on them
+        // agency analyses: dashed gray through the fixes, dots on them
         var fv = fx.map(function (r) { return [r.ms, r.f.btk_vmax_kt]; });
         var fp = fx.map(function (r) { return [r.ms, r.f.btk_mslp_hpa]; });
         path(fv, Yv, c.bt, 1.3, [4, 3]);
@@ -2801,9 +2807,9 @@
         return true;
     }
     /* The Summary card's image at the export's full resolution (PI 10-23: "Does the summary photo use a high-resolution
-       IR image?"). The strip frames are the native ~2-km band-13 grid (201 px over +/-200 km); the viewer colours that grid
-       and lets the browser stretch the COLOURS, which smears the colour bands. Here the brightness temperatures are
-       interpolated to the output size first and coloured after (as high-resolution tiles render); gaps (missing) fall back
+       IR image?"). The strip frames are the native ~2-km band-13 grid (201 px over +/-200 km); the viewer colors that grid
+       and lets the browser stretch the COLORS, which smears the color bands. Here the brightness temperatures are
+       interpolated to the output size first and colored after (as high-resolution tiles render); gaps (missing) fall back
        to the nearest pixel. Overlays are drawn afterwards as vectors at the card's scale. */
     function stripTbGrid(idx, img) {
         var s = _strip, m = s.meta, k = Math.floor(idx / m.per_sheet), j = idx - k * m.per_sheet;
@@ -2926,7 +2932,7 @@
                 if (f.vmax_kt != null && f.inland) {
                     var w0c = lastWaterWind(fr, f.t);
                     cardText(ctx, 'Wind ' + Math.round(f.vmax_kt) + ' kt', RX + 14, rowY + 6, 13, fg, 700);
-                    cardWrap(ctx, 'Centre over land: the wind decays from the last over-water estimate' +
+                    cardWrap(ctx, 'Center over land: the wind decays from the last over-water estimate' +
                         (w0c ? ' (' + Math.round(w0c.v) + ' kt at ' + w0c.t.slice(11, 16) + 'Z)' : '') +
                         ', faster the more of the storm\u2019s core is over land.', RX + 14, rowY + 26, RW - 28, 12.5, fg2, 400, 17);
                     rowY += 64;
@@ -4310,8 +4316,11 @@
         if (!box || typeof Plotly === 'undefined') return;
         var v = lastFiniteFrame(j.frames || [], 'vmax_kt');
         if (!v || !j.vmax_dist || !j.vmax_dist.err_q) {
-            box.innerHTML = '<div class="exp-empty">No distribution lookup ' +
-                'in this storm\u2019s file yet (republish to populate).</div>';
+            /* dist_note: the producer's reason when a basin has no held-out
+               errors at all (North Indian Ocean), which republishing won't fix */
+            box.innerHTML = '<div class="exp-empty">' + (j.dist_note ||
+                'No distribution lookup in this storm\u2019s file yet ' +
+                '(republish to populate).') + '</div>';
             return;
         }
         box.innerHTML =
@@ -4634,7 +4643,7 @@
        (build_symmetry_cdo.py, dvorak_feats.py, build_train_table.py,
        build_multiframe_feats.py) — do NOT guess new entries, a wrong gloss
        is worse than none. Suffixes: _km = kernel-smoothed over recent
-       frames (NOT kilometres), _tr = its recent trend. */
+       frames (NOT kilometers), _tr = its recent trend. */
     var FEATURE_GLOSS = {
         tc_lat: 'Storm latitude',
         age_h: 'Time since the system became a tropical cyclone',
@@ -5311,7 +5320,7 @@
             return ok[lo];
         };
     }
-    /* Over-water times only (PI 2026-10-23): frames whose centre is over land carry the inland wind decay and the physics
+    /* Over-water times only (PI 2026-10-23): frames whose center is over land carry the inland wind decay and the physics
        model's land pressure, and no error statistic is computed on them, for GHOST or for the methods it is compared with.
        A comparator time takes the flag of the frame at or before it. Null when the payload predates the flag. */
     function waterAt(fr) {
@@ -5390,7 +5399,7 @@
             span + '), ' + (isTc ? 'counting only times ' + ag + ' classified it as a ' +
             'tropical or subtropical cyclone' : 'all times (storm type not yet in this ' +
             'storm\u2019s data, so remnant-low or disturbance stretches are included)') +
-            (isWater ? ', with the centre over water' : '') +
+            (isWater ? ', with the center over water' : '') +
             ' \u00b7 bias = method minus best track</span></div>' +
             '<div class="exp-verif-t"><table><thead><tr><th>Method</th>' +
             '<th>Vmax RMSE (kt)</th><th>Bias</th><th>n</th>' +
@@ -5501,7 +5510,7 @@
             { x: t, y: vSolid, name: M.name, yaxis: 'y',
               line: { color: MODEL_COL, width: 2.4 }, connectgaps: false,
               hovertemplate: '%{y:.1f} kt' });
-        /* frames whose centre is over land: the wind decays from the last over-water estimate (dashed) */
+        /* frames whose center is over land: the wind decays from the last over-water estimate (dashed) */
         if (vLand) traces.push(
             { x: t, y: vLand, name: 'over land (decaying)', yaxis: 'y', connectgaps: false,
               line: { color: MODEL_COL, width: 2, dash: 'dash' }, hovertemplate: '%{y:.1f} kt (over land)' });
@@ -5794,7 +5803,7 @@
             /* hasRmw, not just "the fix carries an RMW": on a profile with
                no size panel there is no y3/x3 for this to land on, and
                Plotly would CREATE one with a default full-height domain —
-               drawing a phantom kilometre axis and a second x-axis straight
+               drawing a phantom kilometer axis and a second x-axis straight
                across both real panels. */
             var rr = hasRmw
                 ? rec.filter(function (r) { return r.rmw_km != null; }) : [];
