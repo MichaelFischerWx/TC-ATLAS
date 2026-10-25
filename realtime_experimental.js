@@ -3847,6 +3847,22 @@
                 ctx.stroke();
             });
             ctx.setLineDash([]);
+            /* Each ring labeled where it crosses the lower-right diagonal -- clear of the RMW label (top of its ring),
+               the shear badge (top-right corner) and the center glyphs -- on a small dark pill so the dashes don't
+               run through the text. */
+            ctx.font = '600 9.5px -apple-system, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            [50, 100, 150].forEach(function (r) {
+                var lx = X(r * Math.SQRT1_2), ly = Y(-r * Math.SQRT1_2), txt = r + ' km';
+                var w = ctx.measureText(txt).width + 8;
+                ctx.fillStyle = 'rgba(11,18,32,0.62)';
+                ctx.beginPath();
+                if (ctx.roundRect) ctx.roundRect(lx - w / 2, ly - 7, w, 14, 7); else ctx.rect(lx - w / 2, ly - 7, w, 14);
+                ctx.fill();
+                ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                ctx.fillText(txt, lx, ly + 0.5);
+            });
         }
         function glyph(txt, xkm, ykm, color, size) {
             ctx.font = 'bold ' + (size || 15) +
@@ -3922,40 +3938,52 @@
             glyph((M.panels.tilt || tf) ? 'L' : '+', 0, 0, '#ffffff');
         }
         if (_frvOpt.shear && tf && tf.sddc != null && isFinite(tf.sddc)) {
+            /* Shear badge, top-right: a dark rounded card so the arrow reads over cold white tops as well as warm
+               clear air; a filled, outlined arrowhead; the shaft's length grows with the magnitude (0 -> 30+ kt), so a
+               glance separates weak from strong shear before the number is read. Points along sddc (the heading of
+               the 200-850 hPa shear vector, i.e. downshear). */
+            var mag = (tf.shdc != null && isFinite(tf.shdc)) ? tf.shdc : null;
             var th = tf.sddc * Math.PI / 180;
-            var ux = Math.sin(th), uy = Math.cos(th);
-            var cx = S - 44, cy = 40, ln = 20;
-            ctx.lineWidth = 2;
-            ctx.strokeStyle = '#000000';
-            ctx.lineWidth = 4;
+            var ux = Math.sin(th), uy = -Math.cos(th);          // canvas y points down
+            var bw = 62, bh = 78, bx = S - bw - 8, by = 8;
+            var acx = bx + bw / 2, acy = by + 41;
+            var half = mag === null ? 13 : 6 + 12 * Math.min(mag, 30) / 30;
+            var hl = 8, hw = 5.5;                                // arrowhead length / half-width
+            var tx = acx - ux * half, ty = acy - uy * half;     // tail
+            var px = acx + ux * half, py = acy + uy * half;     // tip
+            var bxs = px - ux * hl, bys = py - uy * hl;         // arrowhead base
+            ctx.fillStyle = 'rgba(11,18,32,0.62)';
+            ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+            ctx.lineWidth = 1;
             ctx.beginPath();
-            ctx.moveTo(cx - ln * ux, cy + ln * uy);
-            ctx.lineTo(cx + ln * ux, cy - ln * uy);
-            ctx.stroke();
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(cx - ln * ux, cy + ln * uy);
-            ctx.lineTo(cx + ln * ux, cy - ln * uy);
-            ctx.stroke();
-            /* arrowhead */
-            var ax = cx + ln * ux, ay = cy - ln * uy;
-            ctx.beginPath();
-            ctx.moveTo(ax, ay);
-            ctx.lineTo(ax - 7 * ux - 4 * uy, ay + 7 * uy - 4 * ux);
-            ctx.moveTo(ax, ay);
-            ctx.lineTo(ax - 7 * ux + 4 * uy, ay + 7 * uy + 4 * ux);
-            ctx.stroke();
-            ctx.font = '10px -apple-system, sans-serif';
+            if (ctx.roundRect) ctx.roundRect(bx, by, bw, bh, 8); else ctx.rect(bx, by, bw, bh);
+            ctx.fill(); ctx.stroke();
             ctx.textAlign = 'center';
-            ctx.textBaseline = 'top';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = 'rgba(255,255,255,0.72)';
+            ctx.font = '600 8.5px -apple-system, sans-serif';
+            ctx.fillText('SHEAR', acx, by + 11);
+            function head() {
+                ctx.beginPath();
+                ctx.moveTo(px, py);
+                ctx.lineTo(bxs - uy * hw, bys + ux * hw);
+                ctx.lineTo(bxs + uy * hw, bys - ux * hw);
+                ctx.closePath();
+            }
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = 'rgba(0,0,0,0.85)';               // halo
+            ctx.lineWidth = 5.5;
+            ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(bxs, bys); ctx.stroke();
+            ctx.lineWidth = 3; head(); ctx.stroke();
+            ctx.strokeStyle = '#ffffff';
             ctx.lineWidth = 2.5;
-            ctx.strokeStyle = '#000000';
-            var shl = (tf.shdc != null && isFinite(tf.shdc))
-                ? Math.round(tf.shdc) + ' kt shear' : 'shear';
-            ctx.strokeText(shl, cx, cy + ln + 6);
+            ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(bxs + ux, bys + uy); ctx.stroke();
             ctx.fillStyle = '#ffffff';
-            ctx.fillText(shl, cx, cy + ln + 6);
+            head(); ctx.fill();
+            ctx.lineCap = 'butt';
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '700 12px -apple-system, sans-serif';
+            ctx.fillText(mag === null ? '—' : Math.round(mag) + ' kt', acx, by + bh - 11);
         }
         ctx.restore();
     }
