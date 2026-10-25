@@ -2747,21 +2747,14 @@
         return g;
     }
     function renderStripTbHiRes(ctx, N, idx, img) {
-        var s = _strip, m = s.meta, W = m.w, H = m.h, MISS = m.missing, lut = s.lut;
+        var s = _strip, m = s.meta, W = m.w, H = m.h, lut = s.lut;
         var g = stripTbGrid(idx, img);
         var out = ctx.createImageData(N, N), o = out.data;
+        /* Nearest cell, like the viewer: crisp 2-km blocks rather than interpolated Tb. */
         for (var y = 0; y < N; y++) {
-            var fy = Math.min(H - 1, Math.max(0, (y + 0.5) * H / N - 0.5));
-            var y0 = Math.floor(fy), y1 = Math.min(H - 1, y0 + 1), wy = fy - y0;
+            var yr = Math.min(H - 1, Math.floor(y * H / N)) * W;
             for (var x = 0; x < N; x++) {
-                var fx = Math.min(W - 1, Math.max(0, (x + 0.5) * W / N - 0.5));
-                var x0 = Math.floor(fx), x1 = Math.min(W - 1, x0 + 1), wx = fx - x0;
-                var a = g[y0 * W + x0], b = g[y0 * W + x1], c = g[y1 * W + x0], e = g[y1 * W + x1], u;
-                if (a === MISS || b === MISS || c === MISS || e === MISS) {
-                    u = wy < 0.5 ? (wx < 0.5 ? a : b) : (wx < 0.5 ? c : e);
-                } else {
-                    u = Math.round((a * (1 - wx) + b * wx) * (1 - wy) + (c * (1 - wx) + e * wx) * wy);
-                }
+                var u = g[yr + Math.min(W - 1, Math.floor(x * W / N))];
                 var q = u * 4, pz = (y * N + x) * 4;
                 o[pz] = lut[q]; o[pz + 1] = lut[q + 1]; o[pz + 2] = lut[q + 2]; o[pz + 3] = lut[q + 3];
             }
@@ -3616,10 +3609,30 @@
         ctx.clearRect(0, 0, S, S);
         ctx.fillStyle = '#0b1220';
         ctx.fillRect(0, 0, S, S);
-        ctx.imageSmoothingEnabled = true;
+        /* Crisp, not smoothed: each 2-km grid cell shows as its own block, so the image reads at the resolution the
+           data has (author, 2026-10-25). The viewer canvas is sized to device pixels (drawStripFrame), so the blocks
+           land on whole device pixels instead of being re-blurred by the browser's CSS scaling. */
+        ctx.imageSmoothingEnabled = false;
         ctx.drawImage(off, 0, 0, S, S);
+        ctx.imageSmoothingEnabled = true;
         drawStripOverlay(ctx, S, m.times[idx]);
     }
+
+    /* The viewer draws in FRV_S (480) logical units -- the overlay's fonts and line widths are tuned to that -- on a
+       backing store of the canvas's on-screen size in device pixels, so the crisp IR blocks are not resampled again by
+       the browser. Returns the logical-to-device scale. */
+    var FRV_S = 480;
+    function frvDeviceScale(cv) {
+        var css = cv.clientWidth;
+        var dev = css ? Math.round(css * (window.devicePixelRatio || 1)) : FRV_S;
+        if (cv.width !== dev) { cv.width = dev; cv.height = dev; }
+        return dev / FRV_S;
+    }
+    var _frvResizeT = null;
+    window.addEventListener('resize', function () {
+        clearTimeout(_frvResizeT);
+        _frvResizeT = setTimeout(function () { if (_strip) drawStripFrame(_strip.idx); }, 120);
+    });
 
     function drawStripFrame(idx) {
         var s = _strip;
@@ -3630,7 +3643,11 @@
             if (_strip !== s || s.idx !== idx) return;
             var cv = document.getElementById('exp-frv');
             if (!cv) return;
-            renderStripInto(cv.getContext('2d'), cv.width, idx, img);
+            var ctx = cv.getContext('2d');
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            var k = frvDeviceScale(cv);
+            ctx.setTransform(k, 0, 0, k, 0, 0);
+            renderStripInto(ctx, FRV_S, idx, img);
             var lbl = document.getElementById('exp-frv-time');
             if (lbl) {
                 lbl.textContent = m.times[idx].slice(5, 16)
