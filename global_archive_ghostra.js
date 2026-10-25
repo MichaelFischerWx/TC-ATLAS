@@ -1237,8 +1237,10 @@
         fillCmapPicker();
         loadEye(sid);
         loadMembers(sid);
+        $('gra-ir-peak').hidden = true;
         loadStorm(sid, function () {
             drawSpark(sid);
+            if (ir && ir.sid === sid && ir.idx != null) showFrame(sid, ir.idx);   // the peak was unknown until now
             // the per-storm JSON can arrive after the frame list, in which case
             // pickFrame had no peak to aim at yet — take the shot now
             if (ir && ir.sid === sid && tm == null && irMeta[sid]) pickFrame(sid, null);
@@ -1343,14 +1345,33 @@
        reader who sorted storms by wind lands on the wind peak they ranked
        by. Falls back to the other channel when one is absent (old trees). */
     function peakTime(sid) {
+        var p = peakPoint(sid);
+        return p ? p.ms : null;
+    }
+    /* The same peak with its value and channel, for the Peak button. */
+    function peakPoint(sid) {
         var st = stormCache[sid];
         if (!st) return null;
         var S = series(st);
         if (!S.t) return null;
         var kt = funit === 'kt';
         var bi = kt ? peakIdx(S.t, S.gv, +1) : peakIdx(S.t, S.gp, -1);
-        if (bi < 0) bi = kt ? peakIdx(S.t, S.gp, -1) : peakIdx(S.t, S.gv, +1);
-        return bi < 0 ? null : Date.parse(S.t[bi] + 'Z');
+        if (bi >= 0) return { ms: Date.parse(S.t[bi] + 'Z'), v: kt ? S.gv[bi] : S.gp[bi], kt: kt };
+        bi = kt ? peakIdx(S.t, S.gp, -1) : peakIdx(S.t, S.gv, +1);
+        return bi < 0 ? null : { ms: Date.parse(S.t[bi] + 'Z'), v: kt ? S.gp[bi] : S.gv[bi], kt: !kt };
+    }
+
+    /* "Peak 161 kt" beside the frame arrows: a storm opened from a map point lands on that time, and the peak was
+       otherwise a long arrow-walk away. Disabled on the peak frame (where the panel already says so). */
+    function syncPeakBtn(sid, atPeak) {
+        var b = $('gra-ir-peak'), p = peakPoint(sid);
+        if (!b) return;
+        b.hidden = !p;
+        if (!p) return;
+        b.textContent = 'Peak ' + Math.round(p.v) + (p.kt ? ' kt' : ' hPa');
+        b.title = 'Jump to the GHOST peak ' + (p.kt ? 'wind' : 'pressure') + ' (' +
+            TCTime.utc(p.ms, { year: true }) + ')';
+        b.disabled = !!atPeak;
     }
 
     function pickFrame(sid, tm) {
@@ -1399,6 +1420,7 @@
             : (dt === null ? '' : (dt === 0 ? 'exact match'
                 : 'Δ ' + (dt > 0 ? '+' : '−') + Math.abs(dt) + ' min vs GHOST'));
         el.className = 'gra-ir-delta' + (dt !== null && Math.abs(dt) > 45 ? ' far' : '');
+        syncPeakBtn(sid, atPeak);
 
         valsAt(sid, Date.parse(f.datetime + 'Z'));
         drawSpark(sid);
@@ -3066,6 +3088,8 @@
             if (x.dataset.sort === 'bt') x.innerHTML = 'BT ' + quant;
         });
         applyFilter(true);
+        // the open frame's peak label + Peak button follow the currency
+        if (ir && ir.sid && ir.idx != null) showFrame(ir.sid, ir.idx);
     }
 
     function wire() {
@@ -3153,6 +3177,7 @@
         $('gra-ir-close').onclick = clearSel;
         $('gra-ir-prev').onclick = function () { if (ir) showFrame(ir.sid, ir.idx - 1); };
         $('gra-ir-next').onclick = function () { if (ir) showFrame(ir.sid, ir.idx + 1); };
+        $('gra-ir-peak').onclick = function () { if (ir && ir.sid) pickFrame(ir.sid, null); };
 
         /* Handoff to Storm Detail: the same SID the archive is keyed on, so
            selectStorm() finds it and the full environment (IR animation, MW,
