@@ -716,8 +716,40 @@ def _wrap_lru(store, max_bytes: int):
     return zarr.storage.LRUStoreCache(store, max_size=max_bytes)
 
 
+# Dimension coordinates xarray reads ONCE, at open, into an in-memory index.
+_GRID_COORDS = ("height", "eastward_distance", "northward_distance")
+
+
+def _nonfinite_coords(ds: xr.Dataset) -> list[str]:
+    return [c for c in _GRID_COORDS
+            if c in ds.coords and not np.isfinite(ds[c].values).all()]
+
+
 @lru_cache(maxsize=4)  # all 4 (data_type, era) combos resident — no reopen thrash
 def get_dataset(data_type: str, era: str) -> xr.Dataset:
+    """
+    Open a TC-RADAR dataset, refusing one whose grid coordinates read as NaN.
+
+    A coordinate chunk read that fails as "missing" (FSMap maps the store error
+    to KeyError) makes zarr return the fill value, so height / x / y come back
+    all-NaN. lru_cache would then pin that dataset for the worker's lifetime and
+    every response from it would carry NaN axes: a 500 on the request, plus a
+    garbage copy mirrored to R2 that later requests 302 to (Francine merge
+    414/415, Oct 22). Reopen instead; lru_cache never caches the raise.
+    """
+    for attempt in range(3):
+        ds = _open_dataset(data_type, era)
+        bad = _nonfinite_coords(ds)
+        if not bad:
+            return ds
+        print(f"[get_dataset] {data_type}/{era}: non-finite {bad} after open "
+              f"(attempt {attempt + 1}/3); reopening", flush=True)
+        time.sleep(1 + attempt)
+    raise RuntimeError(f"TC-RADAR {data_type}/{era}: grid coordinates {bad} "
+                       f"still non-finite after 3 opens")
+
+
+def _open_dataset(data_type: str, era: str) -> xr.Dataset:
     """
     Open a TC-RADAR dataset.
 

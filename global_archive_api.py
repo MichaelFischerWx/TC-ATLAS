@@ -225,10 +225,19 @@ def _r2_mirror_frame_async(key: str, result: dict):
         return
 
     def _upload():
+        # allow_nan=False: a NaN/Infinity token is invalid JSON to browsers, and
+        # the object is immutable + 302'd to forever, so one bad render would
+        # poison that frame for every later visitor. Skip it; the caller's own
+        # JSONResponse raises on the same payload, so nothing valid is lost.
+        try:
+            body = json.dumps(result, separators=(",", ":"), allow_nan=False)
+        except ValueError:
+            logger.warning(f"R2 frame mirror skipped (non-finite floats): {key}")
+            return
         try:
             client.put_object(
                 Bucket=_R2_BUCKET, Key=key,
-                Body=json.dumps(result, separators=(",", ":")).encode("utf-8"),
+                Body=body.encode("utf-8"),
                 ContentType="application/json",
                 CacheControl="public, max-age=86400, immutable",
             )
