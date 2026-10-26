@@ -378,6 +378,13 @@
         return (M.provisional && M.provisional[basin]) || null;
     }
 
+    /* Plain producer text placed in markup (an attribute or an element):
+       escape the characters that would break it. */
+    function escAttr(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
     /* Last frame with a finite value for `key` (frames hold nulls where a
        quantity is missing, e.g. NHC columns past the last analysis). */
     function lastFiniteFrame(fr, key) {
@@ -1428,10 +1435,13 @@
                    basins are handled — those render normally and carry a
                    disclaimer (see provisionalNote). */
                 if (s.excluded) {
+                    /* excluded_label: the producer's short chip text when the
+                       storm is only too new (e.g. "first estimate 02:30Z") */
                     html += '<button class="exp-chip exp-chip-off" disabled ' +
-                        'title="' + s.excluded + '">' +
+                        'title="' + escAttr(s.excluded) + '">' +
                         (s.name || s.atcf) + ' <span>' + s.atcf + '</span>' +
-                        '<em class="exp-chip-int">not available</em>' +
+                        '<em class="exp-chip-int">' +
+                        escAttr(s.excluded_label || 'not available') + '</em>' +
                         '</button>';
                     return;
                 }
@@ -1443,6 +1453,17 @@
                     '</button>';
             });
             html += '</div>';
+            /* The reason as text under the chips: a disabled button's title
+               never shows on a phone and not reliably on desktop, so a chip
+               saying only "not available" read as a broken feed (IO022026,
+               2026-10-26: a storm two hours old). */
+            var why = storms.filter(function (s) { return s.excluded; })
+                .map(function (s) {
+                    return '<div>' + escAttr((s.name || s.atcf) + ' (' + s.atcf +
+                        '): ' + s.excluded) + '</div>';
+                }).join('');
+            if (why) html += '<div class="exp-meta" style="margin:-4px 0 12px;">' +
+                why + '</div>';
         } else {
             html += '<div class="exp-empty exp-empty-sm">No active ' +
                 'storms right now — browse the season archive below.</div>';
