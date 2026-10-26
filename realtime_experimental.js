@@ -884,11 +884,12 @@
         'Ocean storms) is linearly interpolated between 6-hourly analyses ' +
         '(dots mark the real ones) and STOPS at the latest analysis &mdash; ' +
         'the model continues past it, so the most recent stretch has no ' +
-        'reference to compare against yet. Below hurricane strength the ' +
-        'plotted storm center comes from that interpolated track (the IR ' +
-        'eye-lock engages only once an eye is trackable), so plan-view ' +
-        'centers can lag a reforming or fast-moving storm — each panel ' +
-        'is stamped with its center source.';
+        'reference to compare against yet. Until an eye is trackable the ' +
+        'storm center comes from that interpolated track, and past the latest ' +
+        'analysis from CIMSS\u2019s forecast interpolation or ARCHER fixes (or, ' +
+        'failing those, the storm\u2019s motion), so centers can lag a reforming ' +
+        'or fast-moving storm — the infrared viewer\u2019s time label names each ' +
+        'frame\u2019s center source.';
 
     var GHOST_NOTE =
         '<div class="exp-note">Guidance, not official analysis. ' +
@@ -3535,8 +3536,12 @@
         fetchJson(stripPath(atcf, 'meta.json') + runTag(arch)).then(function (meta) {
             if (_storm !== atcf || !meta || !meta.times || !meta.times.length)
                 return;
-            var fbt = {};
-            (j.frames || []).forEach(function (f) { fbt[f.t] = f; });
+            var fbt = {}, ctrBy = {};
+            (j.frames || []).forEach(function (f) {
+                fbt[f.t] = f;
+                var how = centerHow(f, j);
+                if (how) ctrBy[f.t] = centerLabel(how, j);
+            });
             var t0 = (j.frames || []).length ? j.frames[0].t : meta.times[0];
             var t1 = (j.frames || []).length
                 ? j.frames[j.frames.length - 1].t
@@ -3556,7 +3561,7 @@
             }
             _strip = { atcf: atcf, meta: meta, lut: lut, sheets: {},
                        ready: {}, bad: {},
-                       i0: i0, i1: i1, idx: i1, frameByTime: fbt,
+                       i0: i0, i1: i1, idx: i1, frameByTime: fbt, ctrBy: ctrBy,
                        tiltBy: {}, rmwBy: {},
                        tdrObs: (j.tdr_tilt || []).map(function (o) {
                            return { ms: new Date(o.t).getTime(),
@@ -3660,22 +3665,55 @@
         drawStripFrame(idx);
     }
 
-    /* One-line status suffix for a frame: the active model's estimate. */
-    function stripInfo(t) {
+    /* Where a frame's storm center came from (PI 2026-10-26: "when we are using center lock vs. forecast
+       interpolation"). The producer's center_how names it; older payloads carry only center_src (lock / cnn /
+       guess), where a guess is the agency track up to its latest analysis and an unnamed estimate after it. */
+    var CTR_LABEL = {
+        lock: 'eye lock',
+        cnn: 'image center (CNN)',
+        forecast: 'forecast interpolation (CIMSS)',
+        archer: 'ARCHER fix (CIMSS)',
+        chain: 'last eye lock, moved with the storm',
+        extrap: 'extrapolated from the motion',
+        past: 'estimated past the last analysis'
+    };
+    function centerHow(f, j) {
+        if (!f) return null;
+        if (f.center_how) return f.center_how;
+        if (f.center_src === 'lock' || f.center_src === 'cnn') return f.center_src;
+        if (f.center_src == null) return f.eye_recentered == null ? null : (f.eye_recentered ? 'lock' : 'track');
+        var last = j && j.last_nhc_analysis;
+        return (!last || f.t <= last) ? 'track' : 'past';
+    }
+    function centerLabel(how, j) {
+        if (!how) return null;
+        return how === 'track' ? ((j && j.agency) || 'NHC') + ' track' : (CTR_LABEL[how] || how);
+    }
+    /* filled = found in the image, open circle = the agency track, open diamond = past its latest analysis */
+    function centerSymbol(how) {
+        return (how === 'lock' || how === 'cnn') ? 'circle'
+            : (how === 'track' || !how) ? 'circle-open' : 'diamond-open';
+    }
+
+    /* One-line status suffix for a frame: the active model's estimate, and with
+       withCenter the frame's center source (the viewer's time label only; the GIF
+       footer line has no room for it). */
+    function stripInfo(t, withCenter) {
         var f = _strip && _strip.frameByTime[t];
         if (!f) return '';
+        var c = withCenter && _strip.ctrBy && _strip.ctrBy[t] ? ' · center: ' + _strip.ctrBy[t] : '';
         if (M.panels.tilt) {
-            return (f.in_scope && f.tilt_mag_km != null)
+            return ((f.in_scope && f.tilt_mag_km != null)
                 ? ' · tilt ' + Math.round(f.tilt_mag_km) + ' km'
-                : ' · no estimate (outside validity)';
+                : ' · no estimate (outside validity)') + c;
         }
         if (f.vmax_kt != null) {
             return ' · ' + Math.round(f.vmax_kt) + ' kt' +
                 (f.pmin_hpa != null
-                    ? ' / ' + Math.round(f.pmin_hpa) + ' hPa' : '');
+                    ? ' / ' + Math.round(f.pmin_hpa) + ' hPa' : '') + c;
         }
-        return f.pmin_hpa != null
-            ? ' · ' + Math.round(f.pmin_hpa) + ' hPa' : '';
+        return (f.pmin_hpa != null
+            ? ' · ' + Math.round(f.pmin_hpa) + ' hPa' : '') + c;
     }
 
     /* Pure renderer: composite frame idx (sheet image already loaded) plus
@@ -3748,7 +3786,7 @@
             var lbl = document.getElementById('exp-frv-time');
             if (lbl) {
                 lbl.textContent = m.times[idx].slice(5, 16)
-                    .replace('T', ' ') + 'Z' + stripInfo(m.times[idx]);
+                    .replace('T', ' ') + 'Z' + stripInfo(m.times[idx], true);
             }
             onFrameChange(m.times[idx], idx === s.i1);
         }).catch(function () {});
@@ -4427,10 +4465,10 @@
     /* ---------------- center-track mini-map ---------------- */
 
     /* The producer publishes the IR-recentered center for every frame
-       (center_lat/lon + eye_recentered) but until now nothing displayed
-       them. Full-lifetime track colored by model intensity; open circles
-       mark frames where no IR eye lock was found and the center fell back
-       to the interpolated/extrapolated NHC track. */
+       (center_lat/lon, and since 2026-10-26 center_how). Full-lifetime
+       track colored by model intensity; the symbol says where each center
+       came from (centerSymbol): found in the image, the agency track
+       between its analyses, or an estimate past the latest analysis. */
     function drawTrack(j) {
         var box = document.getElementById('exp-track');
         if (!box || typeof Plotly === 'undefined') return;
@@ -4451,15 +4489,15 @@
         }
         var cols = fr.map(function (f) {
             return SS_COLORS[windToCategory(f.vmax_kt)]; });
-        var syms = fr.map(function (f) {
-            return f.eye_recentered ? 'circle' : 'circle-open'; });
-        var hover = fr.map(function (f) {
+        var hows = fr.map(function (f) { return centerHow(f, j); });
+        var syms = hows.map(centerSymbol);
+        var hover = fr.map(function (f, k) {
             var cat = windToCategory(f.vmax_kt);
             return f.t.slice(5, 16).replace('T', ' ') + 'Z — ' +
                 (f.vmax_kt != null ? Math.round(f.vmax_kt) + ' kt (' +
                     categoryShort(cat) + ')' : '—') +
                 (f.rmw_km != null ? ' · RMW ' + Math.round(f.rmw_km) + ' km' : '') +
-                (f.eye_recentered ? ' · IR-fixed center' : ' · track first-guess');
+                (centerLabel(hows[k], j) ? ' · center: ' + centerLabel(hows[k], j) : '');
         });
         var dark = document.documentElement.getAttribute('data-theme') === 'dark';
         var grid = dark ? '#1e293b' : '#e2e8f0';
@@ -4476,9 +4514,10 @@
             '</div>' +
             '<div class="exp-shap-head" style="font-weight:400">' +
             '<span class="exp-shap-sub" style="margin-top:0">full lifetime, colored by ' + M.name + ' ' +
-            'intensity. Open circles = no IR eye lock; the center there comes ' +
-            'from the interpolated ' + (j.agency || 'NHC') +
-            ' track instead.</span></div>' +
+            'intensity. Filled circles = center found in the infrared image (eye lock); open circles = the ' +
+            'interpolated ' + (j.agency || 'NHC') + ' track between its analyses; open diamonds = past the ' +
+            'latest analysis (CIMSS forecast interpolation, an ARCHER fix, the last eye lock moved with the storm, ' +
+            'or extrapolation). Hover a point for its source.</span></div>' +
             '<div id="exp-track-map"></div>' +
             '<div class="exp-track-leg" id="exp-track-leg"></div>';
         var tDl = document.getElementById('exp-track-dl');
@@ -4490,7 +4529,8 @@
                 legHtml += '<span><i style="background:' + SS_COLORS[k] +
                     '"></i>' + categoryShort(k) + '</span>';
             });
-            legHtml += '<span><i class="open"></i>track-based center</span>';
+            legHtml += '<span><i class="open"></i>' + (j.agency || 'NHC') + ' track</span>' +
+                '<span>&#9671; past the latest analysis</span>';
             leg.innerHTML = legHtml;
         }
 
@@ -4590,7 +4630,8 @@
         if (lay.geo) lay.geo.bgcolor = bg;
         var catLeg = ['TD', 'TS', 'C1', 'C2', 'C3', 'C4', 'C5'].map(function (k) {
             return '<span style="color:' + SS_COLORS[k] + '">&#9679;</span> ' + categoryShort(k);
-        }).join('&nbsp;&nbsp;') + '&nbsp;&nbsp;&#9675; track-based center';
+        }).join('&nbsp;&nbsp;') + '&nbsp;&nbsp;&#9675; ' + (j.agency || 'NHC') + ' track' +
+            '&nbsp;&nbsp;&#9671; past the latest analysis';
         var lastTxt = last && last.vmax_kt != null
             ? ' &#183; latest ' + last.t.slice(0, 16).replace('T', ' ') + 'Z: ' +
               Math.round(last.vmax_kt) + ' kt' +
@@ -4603,8 +4644,8 @@
               font: { size: 18, color: fg } },
             { xref: 'paper', yref: 'paper', x: 0, y: 1, xanchor: 'left', yanchor: 'bottom',
               yshift: 18, showarrow: false, align: 'left',
-              text: 'full lifetime, colored by ' + M.name + ' intensity; filled = IR eye-lock, ' +
-                    'open = interpolated ' + (j.agency || 'NHC') + ' track' + lastTxt,
+              text: 'full lifetime, colored by ' + M.name + ' intensity; filled = eye lock, open circle = ' +
+                    (j.agency || 'NHC') + ' track, open diamond = past the latest analysis' + lastTxt,
               font: { size: 12, color: fg2 } },
             { xref: 'paper', yref: 'paper', x: 0, y: 0, xanchor: 'left', yanchor: 'top',
               yshift: -14, showarrow: false, align: 'left',
