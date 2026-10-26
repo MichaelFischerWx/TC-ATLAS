@@ -63,6 +63,15 @@ def main():
         pass
 
     hard_fail = None
+    # Meteosat-9 pre-step: its own process, so the .nat download + satpy decode
+    # transient never co-resides with a band child. Non-fatal: on failure the
+    # bands simply blend without Meteosat-9 (read_met9_full_disk finds no cache).
+    if os.environ.get("MOSAIC_MET9", "0") not in ("0", "false", "off", ""):
+        fetch = os.path.join(os.path.dirname(BUILDER), "met9_fetch.py")
+        log("── met9 fetch")
+        rc = subprocess.run([sys.executable, fetch]).returncode
+        if rc != 0:
+            log(f"met9 fetch failed (rc {rc}) — building without Meteosat-9")
     for band in bands:
         cmd = [sys.executable, BUILDER, "--bands", band] + rest
         if band == "ir" and "wv" in bands:
