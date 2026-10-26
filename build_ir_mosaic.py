@@ -115,6 +115,27 @@ SATS = [
     ("west", "goes",     GOES_BUCKETS["west"],    "GOES-18"),
     ("hima", "himawari", HIMAWARI_BUCKET,         "Himawari-9"),
 ]
+# Meteosat-9 IODC (45.5°E, EUMETSAT SEVIRI) fills the Africa / Indian Ocean gap.
+# No bucket: met9_fetch.py (run by mosaic_band_runner BEFORE the bands) downloads
+# from the EUMETSAT Data Store and leaves a float16 cache in MET9_CACHE_DIR that
+# read_met9_full_disk reads. MOSAIC_MET9=0 on the job is the off switch (no
+# redeploy); a missing cache or kernel just drops the sat for that frame.
+MET9 = os.environ.get("MOSAIC_MET9", "0") not in ("0", "false", "off", "")
+MET9_CACHE_DIR = os.environ.get("MET9_CACHE_DIR", "/tmp/met9_cache")
+MET9_LON_0 = 45.5
+if MET9:
+    SATS.append(("met9", "seviri", None, "Meteosat-9"))
+
+
+# Nominal sub-satellite longitudes (decisions made before any file is read).
+SAT_NOMINAL_LON = {"east": -75.2, "west": -137.2, "hima": 140.7, "met9": MET9_LON_0}
+
+
+def _nadir_sat_key(lat, lon):
+    """Enabled sat with the most nadir view of (lat, lon)."""
+    def cosw(k):
+        return math.cos(math.radians(lat)) * math.cos(math.radians(lon - SAT_NOMINAL_LON[k]))
+    return max((k for k, *_ in SATS), key=cosw)
 
 
 def log(msg):
@@ -602,6 +623,26 @@ def read_full_disk(bucket, dt, band=IR_BAND, coarsen=1, tol=20, hires_windows=No
     return data, x, y, lon_0, sat_h, sweep, scan_dt, hires
 
 
+def read_met9_full_disk(dt, product="ir", tol=20):
+    """Meteosat-9 IODC channel from the met9_fetch.py cache (native 3712² SEVIRI
+    grid, 3 km IR — coarser than the 2 km GOES/Himawari grids, which the kernel
+    handles like any other geometry). Same return shape as read_full_disk; no
+    native storm windows (Vis z7 sectors skip storms Meteosat-9 owns)."""
+    nav_p = os.path.join(MET9_CACHE_DIR, "nav.npz")
+    band_p = os.path.join(MET9_CACHE_DIR, f"{product}.npy")
+    if not (os.path.exists(nav_p) and os.path.exists(band_p)):
+        return None
+    nav = np.load(nav_p)
+    scan_dt = datetime.strptime(str(nav["scan_dt"]), "%Y%m%d%H%M")
+    if abs((scan_dt - dt.replace(tzinfo=None)).total_seconds()) > tol * 60:
+        log(f"  Meteosat-9 cache scan {scan_dt:%H:%M}Z is >{tol} min from "
+            f"{dt:%H:%M}Z — skip")
+        return None
+    data = np.load(band_p).astype(np.float32)
+    return (data, nav["x"], nav["y"], float(nav["lon_0"]), float(nav["sat_h"]),
+            str(nav["sweep"]), scan_dt, [])
+
+
 _hima_prefix_memo = {}   # (dt, band, tol) → (prefix, scan_dt); see read_himawari_full_disk
 
 
@@ -693,11 +734,14 @@ def read_all_sats(dt, timings, product="ir", hires_windows=None):
         hw = hires_windows if want_hi else None
         t0 = time.time()
         try:
-            fd = (read_himawari_full_disk(dt, band=band, coarsen=coarsen, tol=tol,
-                                          hires_windows=hw)
-                  if kind == "himawari"
-                  else read_full_disk(bucket, dt, band=band, coarsen=coarsen,
-                                      tol=tol, hires_windows=hw))
+            if kind == "seviri":
+                fd = read_met9_full_disk(dt, product, tol=tol)
+            elif kind == "himawari":
+                fd = read_himawari_full_disk(dt, band=band, coarsen=coarsen, tol=tol,
+                                             hires_windows=hw)
+            else:
+                fd = read_full_disk(bucket, dt, band=band, coarsen=coarsen,
+                                    tol=tol, hires_windows=hw)
         except Exception as e:
             log(f"  {label} {product}: read failed ({e}) — skip"); fd = None
         timings["read"] = timings.get("read", 0.0) + time.time() - t0
@@ -741,6 +785,8 @@ def read_all_sat_windows(dt, timings, product="vis", hires_windows=None):
         return {}
     out = {}
     for sat_key, kind, bucket, label in SATS:
+        if kind == "seviri":
+            continue           # 3 km SEVIRI has no native-res windows to offer
         band = cfg["hima"] if kind == "himawari" else cfg["goes"]
         coarsen = 1 if kind == "himawari" else cfg["coarsen"]
         tol = cfg.get("tol", 20)
@@ -782,6 +828,36 @@ def _r2_kernel_key(sat_key, zoom):
     return f"kernels/{sat_key}_z{zoom}.npz"
 
 
+# Kernel navigation grid per sat (only kernels that recorded one, i.e. the
+# cropped met9 kernel): global_render refuses a sat whose live grid differs, so
+# a satellite swap / re-navigation can't silently misplace pixels.
+_KERNEL_GRID = {}
+
+
+def save_cropped_kernel(path, idx, cosz, mask, grid):
+    """Save a kernel cropped to the bounding box of its on-disk pixels, with the
+    (r0, c0) offset and the navigation grid it was built from. A geostationary
+    disk (LIMB_DEG-cropped) covers ~28-45% of the global Mercator field, so the
+    crop cuts the resident kernel ~2-3.5× (Meteosat-9: 576 → 162 MiB) — the
+    memory that would otherwise push the 4 GiB job toward OOM."""
+    rows = np.where(mask.any(axis=1))[0]
+    cols = np.where(mask.any(axis=0))[0]
+    r0, r1, c0, c1 = int(rows[0]), int(rows[-1]) + 1, int(cols[0]), int(cols[-1]) + 1
+    np.savez_compressed(path, idx=idx[r0:r1, c0:c1], cosz=cosz[r0:r1, c0:c1],
+                        mask=mask[r0:r1, c0:c1], off=np.array([r0, c0]),
+                        grid=np.array(grid, dtype=np.float64))
+
+
+def _load_kernel(path, sat_key):
+    """→ (idx, cosz, mask, off). off = None for a full-field kernel, (r0, c0)
+    for a cropped one (save_cropped_kernel)."""
+    d = np.load(path)
+    off = tuple(int(v) for v in d["off"]) if "off" in d.files else None
+    if "grid" in d.files:
+        _KERNEL_GRID[sat_key] = tuple(float(v) for v in d["grid"])
+    return (d["idx"], d["cosz"], d["mask"], off)
+
+
 def ensure_global_kernels(zoom, sats, rebuild=False, use_r2=False):
     """Resolve each satellite's geos→Mercator kernel: local file → R2 cache →
     build (+ upload to R2). The geometry is fixed, so kernels are built once ever
@@ -801,11 +877,11 @@ def ensure_global_kernels(zoom, sats, rebuild=False, use_r2=False):
             _g["LAT"] = np.broadcast_to(lat, (S, S))
         return _g["LON"], _g["LAT"]
 
-    for sat_key, _kind, _b, label in SATS:
+    for sat_key, kind, _b, label in SATS:
         kp = kernel_path(sat_key, zoom)
         # 1. local file (warm container)
-        if os.path.exists(kp) and not rebuild:
-            d = np.load(kp); kernels[sat_key] = (d["idx"], d["cosz"], d["mask"])
+        if os.path.exists(kp) and not (rebuild and kind != "seviri"):
+            kernels[sat_key] = _load_kernel(kp, sat_key)
             log(f"  kernel {label} z{zoom}: loaded (local)"); continue
         # 2. R2 cache (cold container)
         if use_r2 and not rebuild:
@@ -815,12 +891,19 @@ def ensure_global_kernels(zoom, sats, rebuild=False, use_r2=False):
                                             Key=_r2_kernel_key(sat_key, zoom))["Body"].read()
                 with open(kp, "wb") as f:
                     f.write(data)
-                d = np.load(kp); kernels[sat_key] = (d["idx"], d["cosz"], d["mask"])
+                kernels[sat_key] = _load_kernel(kp, sat_key)
                 log(f"  kernel {label} z{zoom}: loaded from R2 "
                     f"({len(data)//1048576} MB in {time.time()-t0:.1f}s)"); continue
             except Exception:
                 pass                   # not cached yet → build below
         # 3. build (+ upload to R2)
+        if kind == "seviri":
+            # Never in the job: the full-res projection peaks ~6.5 GB (4 GiB tier).
+            # Built locally by `met9_fetch.py --build-kernel`, uploaded to R2
+            # kernels/, baked into the image. Missing → frame renders without it.
+            log(f"  kernel {label} z{zoom}: missing — build locally with "
+                f"met9_fetch.py --build-kernel; rendering without {label}")
+            continue
         if sat_key not in sats:
             continue
         t0 = time.time()
@@ -829,7 +912,7 @@ def ensure_global_kernels(zoom, sats, rebuild=False, use_r2=False):
         idx, cosz, mask = project_to_sat(LON, LAT, s["grid"], s["lon_0"],
                                          s["sat_h"], s["sweep"])
         np.savez_compressed(kp, idx=idx, cosz=cosz, mask=mask)
-        kernels[sat_key] = (idx, cosz, mask)
+        kernels[sat_key] = (idx, cosz, mask, None)
         log(f"  kernel {label} z{zoom}: {mask.sum()/1e6:.0f}M px built in "
             f"{time.time()-t0:.1f}s")
         if use_r2:
@@ -884,12 +967,18 @@ def global_render(zoom, sats, kernels, timings, product="ir", dt=None):
     for sat_key in sats:
         if sat_key not in kernels:
             continue
-        idx, cosz, mask = kernels[sat_key]
+        idx, cosz, mask, off = kernels[sat_key]
         flat = sats[sat_key]["flat"]
         if idx.size and int(idx.max()) >= flat.size:
             log(f"  {sats[sat_key]['label']} {product}: grid {flat.size} ≠ kernel "
                 f"(size mismatch — skip)"); continue
-        active.append((idx, cosz, mask, flat))
+        kg = _KERNEL_GRID.get(sat_key)
+        if kg is not None and not np.allclose(kg, sats[sat_key]["grid"],
+                                              rtol=0, atol=1e-9):
+            log(f"  {sats[sat_key]['label']} {product}: navigation ≠ kernel grid "
+                f"(re-run met9_fetch.py --build-kernel) — skip"); continue
+        active.append((idx, cosz, mask, off, flat))
+        timings.setdefault("sats", []).append(sat_key)
 
     out = (np.zeros((S, S), np.uint8) if TILE_MODE == "idx"
            else np.zeros((S, S, 4), np.uint8))
@@ -903,13 +992,31 @@ def global_render(zoom, sats, kernels, timings, product="ir", dt=None):
             continue
         t0 = time.time()
         samples = []
-        for (idx, cosz, mask, flat) in active:
-            g = flat[idx[r0:r1]]                       # gather this strip's rows only
+        for (idx, cosz, mask, off, flat) in active:
+            if off is None:
+                g = flat[idx[r0:r1]]                   # gather this strip's rows only
+                valid = mask[r0:r1] & np.isfinite(g)
+                cz = cosz[r0:r1]                       # view (no copy)
+            else:
+                # Cropped kernel: gather only the bbox ∩ strip, then pad to the
+                # full strip (zero weight outside) so blend_samples sees one shape.
+                kr0, kc0 = off
+                a, b = max(r0, kr0), min(r1, kr0 + idx.shape[0])
+                if b <= a:
+                    continue
+                sub = slice(a - kr0, b - kr0)
+                cols = slice(kc0, kc0 + idx.shape[1])
+                g = np.zeros((r1 - r0, S), np.float32)
+                valid = np.zeros((r1 - r0, S), bool)
+                cz = np.zeros((r1 - r0, S), np.float32)
+                gs = flat[idx[sub]]
+                g[a - r0:b - r0, cols] = gs
+                valid[a - r0:b - r0, cols] = mask[sub] & np.isfinite(gs)
+                cz[a - r0:b - r0, cols] = cosz[sub]
             # Visible reflectance has no "0 = no-data" sentinel; only gate IR/WV on g>0.
-            valid = mask[r0:r1] & np.isfinite(g)
             if not is_vis:
                 valid = valid & (g > 0)
-            samples.append((g, cosz[r0:r1], valid))    # cosz slice is a view (no copy)
+            samples.append((g, cz, valid))
         tg += time.time() - t0
         if not samples:
             continue
@@ -1317,7 +1424,7 @@ def build_pack_bytes(entries):
 
 
 def update_r2_manifest(new_ts, zmax, product="ir", is_gap=False,
-                       pack=False, storm_zmax=None):
+                       pack=False, storm_zmax=None, frame_sats=None):
     """Append new_ts to <prefix>/<product>/frames.json, trim to the rolling window,
     and prune the tiles of any frame that fell out of the window (keeps R2 bounded).
 
@@ -1334,7 +1441,7 @@ def update_r2_manifest(new_ts, zmax, product="ir", is_gap=False,
     deny-list only grows with newly-observed gaps; unknown/old frames default to
     shown. IR never gaps so its gap_frames stays empty. See project_vis_loop_bounce."""
     c = _get_r2(); key = f"{R2_PREFIX}/{product}/frames.json"
-    frames = []; ir_trange = {}; gap_frames = []; pack_frames = []; szm = {}
+    frames = []; ir_trange = {}; gap_frames = []; pack_frames = []; szm = {}; fsats = {}
     try:
         cur = json.loads(c.get_object(Bucket=_r2_bucket(), Key=key)["Body"].read())
         frames = cur.get("frames", [])
@@ -1342,6 +1449,7 @@ def update_r2_manifest(new_ts, zmax, product="ir", is_gap=False,
         gap_frames = cur.get("gap_frames", []) or []
         pack_frames = cur.get("pack_frames", []) or []
         szm = cur.get("storm_zmax", {}) or {}
+        fsats = cur.get("frame_sats", {}) or {}
     except Exception:
         pass
     if new_ts not in frames:
@@ -1360,9 +1468,15 @@ def update_r2_manifest(new_ts, zmax, product="ir", is_gap=False,
     pack_frames = [t for t in sorted(set(pack_frames)) if t in frames]
     if storm_zmax:
         szm[new_ts] = int(storm_zmax)
+    # `frame_sats` = sats blended into each frame (e.g. ["east","hima","met9","west"]).
+    # The frontend reads "met9" in it to treat the Africa / Indian Ocean sector as
+    # covered (lite storm card, credit line); frames without an entry predate it.
+    if frame_sats:
+        fsats[new_ts] = sorted(frame_sats)
     manifest = {"frames": frames, "zmax": zmax, "storm_zooms": list(STORM_ZOOMS),
                 "gap_frames": gap_frames, "pack_frames": pack_frames,
-                "storm_zmax": {t: v for t, v in szm.items() if t in frames}}
+                "storm_zmax": {t: v for t, v in szm.items() if t in frames},
+                "frame_sats": {t: v for t, v in fsats.items() if t in frames}}
     # Per-frame idx→Tb decode range (IR only). Stamp THIS frame with the current
     # encoding range; leave pre-existing frames' entries as-is (a mixed rollover
     # window stays correct) and drop entries for frames that fell out of the window.
@@ -1557,6 +1671,7 @@ def main():
     frame_dts = [latest - timedelta(minutes=10 * i) for i in range(args.frames)]
     written, written_gap, kernels = {}, {}, None
     written_pack, written_zmax = {}, {}   # per-product: packed frames / storm zmax
+    written_sats = {}                     # per-product: {ts: sats blended}
     t0 = time.time()
     for fi, dt in enumerate(frame_dts):
         log(f"── frame {fi+1}/{args.frames}: {dt:%Y-%m-%d %H:%M}Z "
@@ -1594,11 +1709,17 @@ def main():
                     la, lo = (p["lat"], p["lon"]) if isinstance(p, dict) else p
                     se = float(solar_elev_grid(np.asarray(la, dtype=np.float64),
                                                np.asarray(lo, dtype=np.float64), dt))
-                    if se >= _NIGHT_ELEV_DEG:
-                        day_pts.append((la, lo))
+                    if se < _NIGHT_ELEV_DEG:
+                        continue
+                    # Meteosat-9's sector has no native-res windows (3 km SEVIRI):
+                    # a z7 there would be drawn from a GOES/Himawari limb view.
+                    if _nadir_sat_key(la, lo) == "met9":
+                        continue
+                    day_pts.append((la, lo))
                 if len(day_pts) < len(points):
                     log(f"  vis z7: {len(points) - len(day_pts)}/{len(points)} "
-                        f"storm(s) in darkness — those sectors stay z6")
+                        f"storm(s) in darkness or the Meteosat-9 sector — "
+                        f"those sectors stay z6")
                 if day_pts:
                     tiles_hi = storm_tile_set(day_pts, hi_zooms, STORM_BOX_DEG)
                     # Native-res read windows: storm box + the deepest tiles' snap-out
@@ -1677,6 +1798,8 @@ def main():
                     log("kernels ready (one-time cost) — done"); return
 
             rgba = global_render(args.zmax, sats, kernels, timings, product, dt)
+            frame_sats = timings.pop("sats", [])
+            written_sats.setdefault(product, {})[ts] = sorted(frame_sats)
             n_global = write_pyramid(rgba, args.zmax, emit, timings)
             n_storm = n_storm_z7
             if tiles:
@@ -1766,7 +1889,8 @@ def main():
                     frames = update_r2_manifest(ts, args.zmax, product,
                                                 is_gap=((bool(tiles) or storms_unknown)
                                                         and n_storm == 0),
-                                                pack=pack_ok, storm_zmax=frame_szm)
+                                                pack=pack_ok, storm_zmax=frame_szm,
+                                                frame_sats=frame_sats)
                     timings["upload"] = time.time() - t1
                     log(f"  {product} R2: {ok} up ({errs} failed); manifest {len(frames)} frames")
                 if pack_ok:
@@ -1823,6 +1947,8 @@ def main():
                            "gap_frames": _gapframes,
                            "pack_frames": sorted(set(written_pack.get(product, [])) & set(ts_list)),
                            "storm_zmax": {t: v for t, v in written_zmax.get(product, {}).items()
+                                          if t in ts_list},
+                           "frame_sats": {t: v for t, v in written_sats.get(product, {}).items()
                                           if t in ts_list}}, f)
             log(f"manifest {product} ({len(ts_list)} frames, "
                 f"{len(_gapframes)} gap) → {man}")

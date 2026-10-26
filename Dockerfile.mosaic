@@ -1,7 +1,8 @@
 # --------------------------------------------------------------------------
 # TC-ATLAS global IR mosaic builder — Cloud Run Job container
 # --------------------------------------------------------------------------
-# Each invocation: reads the latest GOES-19/18 + Himawari-9 full-disk Band 13,
+# Each invocation: reads the latest GOES-19/18 + Himawari-9 full-disk Band 13
+# (+ Meteosat-9 IODC via met9_fetch.py when MOSAIC_MET9=1),
 # reprojects via cached geos→Mercator kernels, cutline-blends, colormaps, tiles
 # (z0–4 global + z5–6 storm sectors, 512px), and uploads to R2 (mosaic-v2/) + rolls
 # the manifest. Consumed by the MapLibre map as one raster source.
@@ -37,6 +38,14 @@ RUN mkdir -p /app/mosaic_out/kernels && \
         curl -fsSL "https://cdn.tcatlas.org/kernels/${sat}_z4.npz" \
              -o "/app/mosaic_out/kernels/${sat}_z4.npz"; \
     done
+# Meteosat-9 IODC kernel (bbox-cropped, ~67 MB): built LOCALLY from real SEVIRI
+# navigation by `met9_fetch.py --build-kernel` (the projection peaks ~6.5 GB, so
+# the job never builds it) and uploaded to kernels/met9_z4.npz. Optional: if it
+# isn't there yet the builder tries R2, then renders without Meteosat-9.
+RUN curl -fsSL "https://cdn.tcatlas.org/kernels/met9_z4.npz" \
+         -o /app/mosaic_out/kernels/met9_z4.npz \
+    || (echo "met9 kernel not published yet — image builds without it" && \
+        rm -f /app/mosaic_out/kernels/met9_z4.npz)
 
 RUN pip install --no-cache-dir \
         numpy \
@@ -47,13 +56,16 @@ RUN pip install --no-cache-dir \
         s3fs \
         pyproj \
         Pillow \
-        boto3
+        boto3 \
+        eumdac \
+        satpy
 
 # the builder + the production satellite data stack it reuses
 COPY build_ir_mosaic.py .
 COPY mosaic_band_runner.py .
 COPY satellite_ir.py .
 COPY tc_center_fix.py .
+COPY met9_fetch.py .
 
 # Cloud Run Jobs invoke the container once and exit. Default to production R2
 # mode with storm sectors over active storms; the deploy script can override

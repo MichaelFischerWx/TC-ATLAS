@@ -90,6 +90,22 @@ MOSAIC_PACK="${MOSAIC_PACK:-only}"
 # darkness are gated out, and the RSS guard remains as a backstop
 # (project_mosaic_idx_oom). Set 0 to fall back to z6-only sectors.
 MOSAIC_VIS_HIRES="${MOSAIC_VIS_HIRES:-1}"
+# Meteosat-9 IODC (Africa / Indian Ocean gap) via the EUMETSAT Data Store.
+# Default: ON iff the EUMETSAT secrets exist (eumetsat-consumer-key/-secret).
+# Off switch without a redeploy:
+#   gcloud run jobs update tc-atlas-mosaic-idx --region us-east1 --update-env-vars MOSAIC_MET9=0
+if [[ -z "${MOSAIC_MET9:-}" ]]; then
+    if gcloud secrets describe eumetsat-consumer-key >/dev/null 2>&1; then
+        MOSAIC_MET9=1
+    else
+        MOSAIC_MET9=0
+    fi
+fi
+SECRETS="R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
+if [[ "${MOSAIC_MET9}" == "1" ]]; then
+    SECRETS="${SECRETS},EUMDAC_KEY=eumetsat-consumer-key:latest,EUMDAC_SECRET=eumetsat-consumer-secret:latest"
+fi
+echo "Meteosat-9: MOSAIC_MET9=${MOSAIC_MET9}"
 # rolling 1 frame/run (R2_KEEP_FRAMES window in the builder). args use the ^@^
 # delimiter — leading -- trips gcloud.
 #
@@ -103,8 +119,8 @@ MOSAIC_VIS_HIRES="${MOSAIC_VIS_HIRES:-1}"
 COMMON_FLAGS=(
   --region "${REGION}" --image "${IMAGE}"
   --memory "${MOSAIC_JOB_MEMORY}" --cpu "${MOSAIC_JOB_CPU}" --max-retries 1 --task-timeout 900
-  --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET},MOSAIC_TILE_MODE=idx,MOSAIC_R2_PREFIX=mosaic-v3,MOSAIC_PACK=${MOSAIC_PACK},MOSAIC_VIS_HIRES=${MOSAIC_VIS_HIRES},MALLOC_ARENA_MAX=2,MALLOC_TRIM_THRESHOLD_=0"
-  --set-secrets  "R2_ACCESS_KEY_ID=r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
+  --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET},MOSAIC_TILE_MODE=idx,MOSAIC_R2_PREFIX=mosaic-v3,MOSAIC_PACK=${MOSAIC_PACK},MOSAIC_VIS_HIRES=${MOSAIC_VIS_HIRES},MOSAIC_MET9=${MOSAIC_MET9},MALLOC_ARENA_MAX=2,MALLOC_TRIM_THRESHOLD_=0"
+  --set-secrets  "${SECRETS}"
   --command "python"
   "--args=^@^mosaic_band_runner.py@--r2@--storm@--time@--bands@ir,wv,vis@--frames@1"
 )
