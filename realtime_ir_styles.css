@@ -59,6 +59,19 @@ html, body { margin: 0; padding: 0; }
 .ir-last-update {
     color: #64748b;
 }
+/* Meteosat-9 credit (shown once the mosaic carries EUMETSAT data) */
+.ir-sat-credit {
+    min-width: 0;
+    margin: 0 12px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.ir-sat-credit a {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
 
 /* ── Loading overlay ─────────────────────────────────────────── */
 .ir-loader {

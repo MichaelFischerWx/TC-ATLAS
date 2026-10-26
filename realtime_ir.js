@@ -801,6 +801,7 @@
     // from the track history). Persists across storms as a session preference.
     var _detailPinVisible = false;
     var detailSatName = '';     // which satellite is used for this storm
+    var _liteSatDisplay = '';   // lite (mosaic) card caption sat — can be Meteosat-9
     var detailStormLat = 0;    // storm latitude for solar position calc
     var detailStormLon = 0;    // storm longitude for solar position calc
 
@@ -2166,6 +2167,7 @@
         return (v && v > 6) ? v : 6;
     }
     function _irApplyTrange(j, product) {
+        if (j && product === 'ir') _mosaicNoteSats(j);
         if (j) {
             var pf = {}, i, pl = j.pack_frames || [];
             for (i = 0; i < pl.length; i++) pf[pl[i]] = 1;
@@ -2581,12 +2583,40 @@
             setZIndex: function () { return this; }
         };
     }
-    // The combined mosaic covers GOES-E/W + Himawari only; the Meteosat sector
-    // (~-5..75°E: Africa / Europe / W Indian Ocean) has no baked tiles, so a
-    // storm there always falls through to the raw-Tb path.
+    // The mosaic always carries GOES-E/W + Himawari. Meteosat-9 IODC (45.5°E,
+    // EUMETSAT SEVIRI) fills the Africa / Europe / W Indian Ocean sector
+    // (~-5..75°E) whenever the builder stamps "met9" into the latest frame's
+    // frame_sats; without it (older frames, the job's MOSAIC_MET9=0 off switch)
+    // that sector has no baked tiles and a storm there falls through to the
+    // raw-Tb path.
+    var _mosaicHasMet9 = false;
+    var _SAT_SUBLON = { 'GOES-East': -75.2, 'GOES-West': -137.2, 'Himawari': 140.7, 'Meteosat-9': 45.5 };
+    var _MET9_CREDIT_HTML = 'Meteosat-9 imagery: &copy; <a href="https://www.eumetsat.int/" target="_blank" rel="noopener">EUMETSAT</a>';
+    function _mosaicNoteSats(j) {
+        var fs = (j && j.frame_sats) || {}, frames = (j && j.frames) || [];
+        var latest = frames.length ? frames[frames.length - 1] : null;
+        var sats = (latest && fs[latest]) || [];
+        var has = sats.indexOf('met9') >= 0;
+        if (has === _mosaicHasMet9) return;
+        _mosaicHasMet9 = has;
+        var el = document.getElementById('ir-sat-credit');
+        if (el) { el.innerHTML = has ? _MET9_CREDIT_HTML : ''; el.hidden = !has; }
+    }
     function _mosaicCoversLon(lon) {
+        if (_mosaicHasMet9) return true;
         var L = ((lon + 180) % 360 + 360) % 360 - 180;   // normalize to [-180,180)
         return !(L > -5 && L < 75);
+    }
+    // Display name of the mosaic satellite with the most nadir view of `lon`
+    // (lite card caption + exports). Meteosat-9 carries its EUMETSAT credit.
+    function _mosaicSatDisplayForLon(lon) {
+        var best = null, bestC = -2;
+        Object.keys(_SAT_SUBLON).forEach(function (k) {
+            if (k === 'Meteosat-9' && !_mosaicHasMet9) return;
+            var c = Math.cos((lon - _SAT_SUBLON[k]) * Math.PI / 180);
+            if (c > bestC) { bestC = c; best = k; }
+        });
+        return best === 'Meteosat-9' ? 'Meteosat-9 (\u00a9 EUMETSAT)' : best;
     }
     // Whether THIS storm can use the lite path at all (GL + inside coverage).
     function _liteAvailable(lon) {
@@ -6467,6 +6497,7 @@
             maxZoom: 19,
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>'
                 + ' | Satellite: NOAA GOES-19/18, JMA Himawari-9 via <a href="https://registry.opendata.aws/noaa-goes/" target="_blank" rel="noopener">NOAA Open Data</a>'
+                + '; Meteosat-9 &copy; <a href="https://www.eumetsat.int/" target="_blank" rel="noopener">EUMETSAT</a>'
         }).addTo(map);
         _globalBasemap = basemap;   // exposed so 3D mode can mute it (see _rt3DToggle)
 
@@ -8993,11 +9024,14 @@
         // obs / intensity). Deliberately NOT _fetchRawTbIncremental — the whole
         // point of lite is to leave raw Tb untouched; diagnostics/obj-eye that
         // need raw Tb stay a Detailed-path feature.
+        // Caption the mosaic sat actually under the storm (may be Meteosat-9,
+        // which detailSatName — a GIBS layer key — can't name).
+        _liteSatDisplay = _mosaicSatDisplayForLon(storm.lon) || detailSatName;
         var _satLbl = document.getElementById('ir-satellite-label');
         if (_satLbl) _satLbl.textContent =
             ({ ir: 'Infrared', vis: 'Visible', wv: 'Water Vapor',
                combo: 'Vis+IR Combo', vigor: 'IR Vigor' }[product] || 'Infrared')
-            + ' — ' + detailSatName;
+            + ' — ' + _liteSatDisplay;
         _deferredStormRef = storm;
         _triggerDeferredLoads();
         // Arm the viewport prefetch for this deck (and re-warm on pan/zoom so
@@ -35175,9 +35209,10 @@
                 };
             }
             function _channelLabel() {
-                if (productMode === 'vis') return 'Visible — ' + detailSatName;
-                if (productMode === 'wv') return 'Water Vapor — ' + detailSatName;
-                return 'Infrared — ' + (detailSatName || 'GIBS IR');
+                var sat = (_liteActive && _liteSatDisplay) || detailSatName;
+                if (productMode === 'vis') return 'Visible — ' + sat;
+                if (productMode === 'wv') return 'Water Vapor — ' + sat;
+                return 'Infrared — ' + (sat || 'GIBS IR');
             }
             function _drawLabel(cx, idx) {
                 if (!lbl) return;
