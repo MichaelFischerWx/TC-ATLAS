@@ -1641,13 +1641,19 @@ def main():
                     help="upload tiles to R2 (mosaic-v1/) + roll the manifest "
                          "(production Cloud Run Job mode)")
     ap.add_argument("--time", action="store_true")
+    ap.add_argument("--frame-ts", default=None,
+                    help="build THIS frame (YYYYmmddHHMM UTC) instead of now-20 min; "
+                         "the band runner pins it so every band builds the same frame")
     ap.add_argument("--out", default=OUT_DIR)
     args = ap.parse_args()
     if args.blend_p:
         BLEND_P = args.blend_p
 
-    now = datetime.now(timezone.utc) - timedelta(minutes=20)
-    latest = now.replace(minute=now.minute - (now.minute % 10), second=0, microsecond=0)
+    if args.frame_ts:
+        latest = datetime.strptime(args.frame_ts, "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
+    else:
+        now = datetime.now(timezone.utc) - timedelta(minutes=20)
+        latest = now.replace(minute=now.minute - (now.minute % 10), second=0, microsecond=0)
 
     # storm points (resolved once, reused for every frame)
     points, storms_unknown = [], False

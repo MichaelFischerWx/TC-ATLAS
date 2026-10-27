@@ -27,10 +27,14 @@ them with WV Tb and uploads the sidecar. Across processes that flows through
 Usage: identical CLI to build_ir_mosaic.py; --bands is split and run serially:
   python mosaic_band_runner.py --r2 --storm --time --bands ir,wv,vis --frames 1
 """
+import json
 import os
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.request
+from datetime import datetime, timedelta, timezone
 
 BUILDER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "build_ir_mosaic.py")
@@ -38,6 +42,38 @@ BUILDER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 def log(msg):
     print(f"[band-runner] {msg}", flush=True)
+
+
+def frame_ts():
+    """The frame this run builds — build_ir_mosaic.main's formula (now - 20 min,
+    floored to 10 min), computed ONCE and pinned on every child via --frame-ts,
+    so a band that starts after the next 10-min boundary still builds the same
+    frame (the backstop runs at +7 min, so its vis child would otherwise drift)."""
+    now = datetime.now(timezone.utc) - timedelta(minutes=20)
+    return now.replace(minute=now.minute - (now.minute % 10), second=0,
+                       microsecond=0).strftime("%Y%m%d%H%M")
+
+
+# ── Backstop (MOSAIC_BACKSTOP=1, the Cloud Run job) ──────────────────────────
+# The primary builder runs on Michael's Mac at :00/:10/...; this job fires 7 min
+# later and builds only the bands whose frame is NOT already in that band's
+# frames.json — so a sleeping / offline / slow Mac costs nothing but Cloud Run
+# time, and a healthy Mac costs one container start + three tiny GETs. Any read
+# failure counts as "not published" (build): the safe direction.
+_CDN = os.environ.get("MOSAIC_CDN_BASE", "https://cdn.tcatlas.org")
+_UA = "tc-atlas-mosaic-backstop/1.0"   # Cloudflare 403s the default Python-urllib UA
+
+
+def published(band, ts):
+    prefix = os.environ.get("MOSAIC_R2_PREFIX", "mosaic-v3")
+    url = f"{_CDN}/{prefix}/{band}/frames.json?t={int(time.time())}"  # bust the edge cache
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _UA})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return ts in json.load(r).get("frames", [])
+    except Exception as e:
+        log(f"backstop: {band} frames.json unreadable ({e}) — building it")
+        return False
 
 
 def main():
@@ -62,6 +98,22 @@ def main():
     except OSError:
         pass
 
+    ts = frame_ts()
+    if "--frame-ts" not in rest:
+        rest += ["--frame-ts", ts]
+    else:
+        ts = rest[rest.index("--frame-ts") + 1]
+    if os.environ.get("MOSAIC_BACKSTOP", "0") not in ("0", "false", "off", ""):
+        missing = [b for b in bands if not published(b, ts)]
+        if not missing:
+            log(f"backstop: frame {ts} already published for {','.join(bands)} — nothing to do")
+            sys.exit(0)
+        log(f"backstop: frame {ts} missing {','.join(missing)} — building")
+        bands = missing
+    # Per-band wall clock (local runs set it; a hung S3 read must not hold the
+    # lock past the next cycle). Unset = no limit (Cloud Run has task-timeout).
+    band_timeout = float(os.environ.get("MOSAIC_BAND_TIMEOUT_S", "0")) or None
+
     hard_fail = None
     # Meteosat-9 pre-step: its own process, so the .nat download + satpy decode
     # transient never co-resides with a band child. Non-fatal: on failure the
@@ -69,7 +121,11 @@ def main():
     if os.environ.get("MOSAIC_MET9", "0") not in ("0", "false", "off", ""):
         fetch = os.path.join(os.path.dirname(BUILDER), "met9_fetch.py")
         log("── met9 fetch")
-        rc = subprocess.run([sys.executable, fetch]).returncode
+        try:
+            rc = subprocess.run([sys.executable, fetch, "--dt", ts],
+                                timeout=band_timeout).returncode
+        except subprocess.TimeoutExpired:
+            rc = "timeout"
         if rc != 0:
             log(f"met9 fetch failed (rc {rc}) — building without Meteosat-9")
     for band in bands:
@@ -79,7 +135,12 @@ def main():
         elif band == "wv" and os.path.exists(diags):
             cmd += ["--eye-diags-in", diags]      # augment + upload them
         log(f"── band {band}: {' '.join(cmd[1:])}")
-        rc = subprocess.run(cmd).returncode
+        try:
+            rc = subprocess.run(cmd, timeout=band_timeout).returncode
+        except subprocess.TimeoutExpired:
+            log(f"band {band} exceeded {band_timeout:.0f} s — killed (backstop rebuilds it)")
+            hard_fail = hard_fail or 124
+            continue
         if rc == 0:
             continue
         if band == "vis" and rc == -9:

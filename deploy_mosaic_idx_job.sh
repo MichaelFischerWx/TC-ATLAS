@@ -31,7 +31,16 @@ PROJECT="$(gcloud config get-value project 2>/dev/null)"
 JOB_NAME="tc-atlas-mosaic-idx"
 REGION="us-east1"
 SCHEDULER_NAME="tc-atlas-mosaic-idx-schedule"
-SCHEDULE="*/10 * * * *"            # match the v2 job (GOES/Himawari full-disk cadence)
+# BACKSTOP (default since 2026-10-27): the primary builder is Michael's Mac
+# (bin/run_mosaic_local.sh, launchd at :00/:10/...). This job fires 7 min later
+# and builds only bands whose frame isn't published yet (mosaic_band_runner
+# MOSAIC_BACKSTOP). Back to cloud-only: MOSAIC_BACKSTOP=0 ./deploy_mosaic_idx_job.sh
+MOSAIC_BACKSTOP="${MOSAIC_BACKSTOP:-1}"
+if [[ "${MOSAIC_BACKSTOP}" == "1" ]]; then
+    SCHEDULE="7-59/10 * * * *"
+else
+    SCHEDULE="*/10 * * * *"        # GOES/Himawari full-disk cadence
+fi
 TIMEZONE="UTC"
 IMAGE="gcr.io/${PROJECT}/tc-atlas-mosaic-job:latest"   # shared builder image (idx is env-gated)
 
@@ -119,7 +128,7 @@ echo "Meteosat-9: MOSAIC_MET9=${MOSAIC_MET9}"
 COMMON_FLAGS=(
   --region "${REGION}" --image "${IMAGE}"
   --memory "${MOSAIC_JOB_MEMORY}" --cpu "${MOSAIC_JOB_CPU}" --max-retries 1 --task-timeout 900
-  --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET},MOSAIC_TILE_MODE=idx,MOSAIC_R2_PREFIX=mosaic-v3,MOSAIC_PACK=${MOSAIC_PACK},MOSAIC_VIS_HIRES=${MOSAIC_VIS_HIRES},MOSAIC_MET9=${MOSAIC_MET9},MALLOC_ARENA_MAX=2,MALLOC_TRIM_THRESHOLD_=0"
+  --set-env-vars "R2_ENDPOINT_URL=${R2_ENDPOINT_URL},R2_BUCKET=${R2_BUCKET},MOSAIC_TILE_MODE=idx,MOSAIC_R2_PREFIX=mosaic-v3,MOSAIC_PACK=${MOSAIC_PACK},MOSAIC_VIS_HIRES=${MOSAIC_VIS_HIRES},MOSAIC_MET9=${MOSAIC_MET9},MOSAIC_BACKSTOP=${MOSAIC_BACKSTOP},MALLOC_ARENA_MAX=2,MALLOC_TRIM_THRESHOLD_=0"
   --set-secrets  "${SECRETS}"
   --command "python"
   "--args=^@^mosaic_band_runner.py@--r2@--storm@--time@--bands@ir,wv,vis@--frames@1"
