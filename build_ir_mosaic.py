@@ -834,18 +834,32 @@ def _r2_kernel_key(sat_key, zoom):
 _KERNEL_GRID = {}
 
 
-def save_cropped_kernel(path, idx, cosz, mask, grid):
+def save_cropped_kernel(path, idx, cosz, mask, grid=None):
     """Save a kernel cropped to the bounding box of its on-disk pixels, with the
-    (r0, c0) offset and the navigation grid it was built from. A geostationary
-    disk (LIMB_DEG-cropped) covers ~28-45% of the global Mercator field, so the
-    crop cuts the resident kernel ~2-3.5× (Meteosat-9: 576 → 162 MiB) — the
-    memory that would otherwise push the 4 GiB job toward OOM."""
+    (r0, c0) offset and (optionally) the navigation grid it was built from. A
+    geostationary disk (LIMB_DEG-cropped) covers ~28-45% of the global Mercator
+    field, so the crop cuts the resident kernel ~3.5× (576 → 162 MiB per sat) —
+    the memory that would otherwise push the 4 GiB job toward OOM.
+
+    Columns wrap: the box starts after the widest run of empty columns, so a disk
+    straddling the antimeridian (GOES-West, Himawari) crops as tightly as one that
+    doesn't — c0 + width may then exceed the field width (global_render wraps).
+
+    grid=None skips the navigation check — needed for GOES, whose 4×-coarsened
+    Visible grid differs from the IR grid by ~7e-9 (> global_render's 1e-9)."""
+    S = mask.shape[1]
     rows = np.where(mask.any(axis=1))[0]
-    cols = np.where(mask.any(axis=0))[0]
-    r0, r1, c0, c1 = int(rows[0]), int(rows[-1]) + 1, int(cols[0]), int(cols[-1]) + 1
-    np.savez_compressed(path, idx=idx[r0:r1, c0:c1], cosz=cosz[r0:r1, c0:c1],
-                        mask=mask[r0:r1, c0:c1], off=np.array([r0, c0]),
-                        grid=np.array(grid, dtype=np.float64))
+    r0, r1 = int(rows[0]), int(rows[-1]) + 1
+    on = np.where(mask.any(axis=0))[0]
+    gaps = np.diff(np.append(on, on[0] + S)) - 1      # empty run after each on-col
+    k = int(np.argmax(gaps))
+    if gaps[k] == gaps[-1]:
+        k = len(on) - 1                               # tie → the plain (non-wrapping) box
+    c0 = int(on[(k + 1) % len(on)])
+    cols = (c0 + np.arange(S - int(gaps[k]))) % S
+    extra = {} if grid is None else dict(grid=np.array(grid, dtype=np.float64))
+    np.savez_compressed(path, idx=idx[r0:r1][:, cols], cosz=cosz[r0:r1][:, cols],
+                        mask=mask[r0:r1][:, cols], off=np.array([r0, c0]), **extra)
 
 
 def _load_kernel(path, sat_key):
@@ -1000,19 +1014,27 @@ def global_render(zoom, sats, kernels, timings, product="ir", dt=None):
             else:
                 # Cropped kernel: gather only the bbox ∩ strip, then pad to the
                 # full strip (zero weight outside) so blend_samples sees one shape.
+                # The box may wrap the antimeridian (kc0 + width > S): the columns
+                # past S land at the left edge.
                 kr0, kc0 = off
                 a, b = max(r0, kr0), min(r1, kr0 + idx.shape[0])
                 if b <= a:
                     continue
                 sub = slice(a - kr0, b - kr0)
-                cols = slice(kc0, kc0 + idx.shape[1])
+                w = idx.shape[1]
+                n1 = min(w, S - kc0)               # columns before the wrap
                 g = np.zeros((r1 - r0, S), np.float32)
                 valid = np.zeros((r1 - r0, S), bool)
                 cz = np.zeros((r1 - r0, S), np.float32)
                 gs = flat[idx[sub]]
-                g[a - r0:b - r0, cols] = gs
-                valid[a - r0:b - r0, cols] = mask[sub] & np.isfinite(gs)
-                cz[a - r0:b - r0, cols] = cosz[sub]
+                vs = mask[sub] & np.isfinite(gs)
+                cs = cosz[sub]
+                rr = slice(a - r0, b - r0)
+                for dst, src in ((slice(kc0, kc0 + n1), slice(0, n1)),
+                                 (slice(0, w - n1), slice(n1, w))):
+                    g[rr, dst] = gs[:, src]
+                    valid[rr, dst] = vs[:, src]
+                    cz[rr, dst] = cs[:, src]
             # Visible reflectance has no "0 = no-data" sentinel; only gate IR/WV on g>0.
             if not is_vis:
                 valid = valid & (g > 0)

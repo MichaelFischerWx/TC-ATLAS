@@ -23,7 +23,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Bake the z4 geos→Mercator kernels into the image (one per satellite, ~74MB each).
+# Bake the z4 geos→Mercator kernels into the image (one per satellite, ~77 MB each).
+# Since 2026-10-27 they are bbox-CROPPED (save_cropped_kernel, wrapping the
+# antimeridian for GOES-West/Himawari): 162 MiB resident each instead of 576 MiB
+# full-field — ~1.2 GiB off every band child's peak. Output is byte-identical.
 # The geometry is fixed (S = TILE_SIZE·2^zmax = 8192), so kernels are built once and
 # reused forever. Shipping them in an image layer (pulled from the fast regional GCR
 # cache) lets the builder's local-file path load them instantly — skipping the ~78s
