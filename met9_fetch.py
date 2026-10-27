@@ -50,6 +50,7 @@ CHANNELS = {"ir": ("IR_108", "brightness_temperature"),
             "vis": ("VIS006", "reflectance")}
 CACHE_DIR = os.environ.get("MET9_CACHE_DIR", "/tmp/met9_cache")
 TOL_MIN = 20
+EDGE_TRIM_PX = 8       # part-space rim of the scanned disk (see decode)
 
 
 def log(msg):
@@ -135,6 +136,15 @@ def decode(nat):
         if prod == "vis":
             a = a / 100.0                    # satpy % → the builder's 0-1 factor
         out[prod] = a
+    # The outermost pixels of the scanned disk are part-space: on 2026-10-27 a
+    # ring there read 133-170 K (all within 8 px of the edge, 49-72°N on the
+    # northern rim, where Meteosat-9 is the most-nadir sat over Europe). Trim
+    # EDGE_TRIM_PX off every band (shared footprint) so they never reach the blend.
+    from scipy import ndimage
+    fin = np.isfinite(out["ir"])
+    edge = fin & (ndimage.distance_transform_cdt(fin, metric="chessboard") <= EDGE_TRIM_PX)
+    for a in out.values():
+        a[edge] = np.nan
     area = scn[CHANNELS["ir"][0]].attrs["area"]
     crs = area.crs.to_dict()
     h = float(crs["h"])
