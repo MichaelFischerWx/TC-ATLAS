@@ -77,6 +77,12 @@ export MOSAIC_MET9=0 MOSAIC_BACKSTOP=0
 export MOSAIC_OUT="${HOME_DIR}/out"            # KERNEL_DIR = $MOSAIC_OUT/kernels
 export MET9_CACHE_DIR="${HOME_DIR}/met9_cache"
 export MOSAIC_BAND_TIMEOUT_S=420              # a hung read can't hold the lock into the next cycle
+# The venv borrows anaconda's site-packages, but pyproj looks for its PROJ data
+# under the VENV's prefix; an interactive shell gets PROJ_DATA from conda
+# activation, launchd doesn't (first launchd run 2026-10-27 15:10Z: every band
+# died with DataDirError). Ask the base interpreter, which finds it.
+PROJ_DATA=$(/opt/anaconda3/bin/python3 -c "import pyproj; print(pyproj.datadir.get_data_dir())" 2>/dev/null)
+export PROJ_DATA PROJ_LIB="${PROJ_DATA}"
 [ -f "${HOME_DIR}/env" ] && . "${HOME_DIR}/env"
 
 cd "${CODE}" || exit 1
