@@ -77,15 +77,16 @@
             windIsDerived: false,
             saturates: true,
             /* Fallback only: the producer stamps a per-storm `caveat` (for IO it
-               names the storm's own Himawari-9 viewing angle), which wins. */
+               names the storm's own imager -- Meteosat-9 since 2026-10-27 --
+               and its viewing angle), which wins. */
             provisional: {
                 WP: 'West Pacific estimates are <strong>provisional</strong>: ' +
                     'both members run as out-of-basin transfer there and the ' +
                     'labels are JTWC Dvorak, not aircraft.',
                 IO: 'North Indian Ocean estimates are <strong>provisional</strong>: ' +
                     'no storm from this basin is in the model’s training or ' +
-                    'verification record, and Himawari-9 sees the Bay of Bengal ' +
-                    'at a steep 56–70° slant.'
+                    'verification record. Imagery: Meteosat-9 over 45.5°E ' +
+                    '(contains EUMETSAT data).'
             },
             /* No SHAP: the ridge\u2019s coefficients are FPM\u2019s drivers, the
                tree\u2019s SHAP is GHOST\u2019s; neither describes the mean.
@@ -838,7 +839,9 @@
         ' <span class="exp-data-credit">Trained on NASA GES DISC MergIR ' +
         '(<a href="https://doi.org/10.5067/P4HZB9N27EKU" target="_blank" rel="noopener">doi:10.5067/P4HZB9N27EKU</a>) ' +
         'and NOAA NCEI GridSat-B1 (<a href="https://doi.org/10.7289/V59P2ZKR" target="_blank" rel="noopener">doi:10.7289/V59P2ZKR</a>) ' +
-        'infrared imagery with IBTrACS best tracks; runs on live GOES and Himawari imagery. ' +
+        'infrared imagery with IBTrACS best tracks; runs on live GOES and Himawari imagery, and on Meteosat-9 imagery ' +
+        'for the North Indian Ocean (&copy; <a href="https://www.eumetsat.int/" target="_blank" rel="noopener">EUMETSAT</a>, ' +
+        'via the <a href="https://data.eumetsat.int/" target="_blank" rel="noopener">EUMETSAT Data Store</a>). ' +
         '<a href="about.html#data-credits">Data credits</a>.</span>';
     var GHOST_CITE =
         '<div class="exp-cite"><strong>Unlisted member page &mdash; ' +
@@ -1154,7 +1157,8 @@
             'against aircraft.</div>',
         cite: '<div class="exp-cite"><strong>Provisional real-time version of a method whose manuscript is in ' +
             'preparation.</strong> GHOST v6.1 runs here with the same composition code as the GHOST Reanalysis v6.1, on ' +
-            'real-time inputs: GOES and Himawari imagery, the GFS potential intensity and NOAA OISST sea-surface ' +
+            'real-time inputs: GOES and Himawari imagery (Meteosat-9 for the North Indian Ocean; contains EUMETSAT ' +
+            'data), the GFS potential intensity and NOAA OISST sea-surface ' +
             'temperature. The physics model can be viewed on its own (<a href="#experimental_fpm">#experimental_fpm</a>). ' +
             'GHOST (Geostationary-based Hurricane Objective Strength Technique) is described in a manuscript in ' +
             'preparation; this page is provided for scientific transparency and is <strong>not an official forecast or ' +
