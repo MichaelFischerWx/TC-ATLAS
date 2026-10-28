@@ -4860,7 +4860,9 @@ def _extract_tcprimed_env(data: bytes, atcf_id: str) -> dict:
         "variable_meta": {},
         "pressure_levels": [],
         "radial_regions": [],
-        "shear_layers": ["deep (200-850 hPa)", "shallow (500-850 hPa)"],
+        # index order of shear_magnitude / shear_direction's layer axis (v01r01); replaced below by the file's own
+        # 'layer' attribute ("850_to_500_hPa 850_to_200_hPa") when present
+        "shear_layers": ["shallow (850-500 hPa)", "deep (850-200 hPa)"],
     }
 
     with h5py.File(io.BytesIO(data), "r") as f:
@@ -4871,6 +4873,25 @@ def _extract_tcprimed_env(data: bytes, atcf_id: str) -> dict:
         # ── Radial regions ──
         if "diagnostics/regions" in f:
             result["radial_regions"] = f["diagnostics/regions"][:].tolist()
+
+        # ── Shear layer / region order, from the shear_magnitude attributes ──
+        if "diagnostics/shear_magnitude" in f:
+            sm_attrs = f["diagnostics/shear_magnitude"].attrs
+
+            def _attr_words(key):
+                v = sm_attrs.get(key)
+                if isinstance(v, bytes):
+                    v = v.decode()
+                return str(v).split() if v is not None else []
+
+            layers = _attr_words("layer")
+            if layers:
+                kind = {"850_to_200_hPa": "deep", "850_to_500_hPa": "shallow"}
+                result["shear_layers"] = [
+                    f"{kind[w]} ({w[:-4].replace('_to_', '-')} hPa)" if w in kind else w for w in layers]
+            if not result["radial_regions"]:
+                result["radial_regions"] = [w.replace("_to_", "-").replace("_km", " km")
+                                            for w in _attr_words("regions")]
 
         # ── Time axis ──
         if "diagnostics/time" in f:

@@ -11293,8 +11293,10 @@ var SHIPS_DEFAULT_SHOW = ['SHDC', 'SHGC', 'RSST', 'COHC', 'MTPW'];
 
 // TC-PRIMED ERA5 environmental variable display config
 // For multi-dimensional variables, we pick representative slices:
-//   shear_magnitude: [time, layer, region] → deep layer (idx 0), 0-500km (idx 0)
-//   relative_humidity: [time, level, region] → pick specific levels, 0-500km
+//   shear_magnitude / shear_direction: [time, layer, region]; the file attributes give
+//     layer = "850_to_500_hPa 850_to_200_hPa" (shallow idx 0, deep idx 1) and
+//     regions = "0_to_300_km 0_to_500_km 0_to_800_km 200_to_800_km" → 0-500 km (idx 1), the SHDC analogue
+//   relative_humidity: [time, level, region] → pick specific levels, 0-300 km (idx 0)
 //   precipitable_water: [time, bins] → 0-200km bin (idx 0)
 //   divergence/vorticity: [time, level, region] → 200 hPa for divergence, 850 for vorticity
 //   temperature_anomaly: [time, level, region] → max across levels (warm core)
@@ -11302,10 +11304,10 @@ var TCPRIMED_VAR_META = {
     sst:                              { name: 'SST',               unit: 'K',    color: '#00d4ff', group: 'ocean',    extract: function(d) { return _tcpExtract1D(d, 0); } },
     potential_intensity_theoretical:  { name: 'MPI (theoretical)', unit: 'kt',   color: '#a78bfa', group: 'ocean',    extract: function(d) { return _tcpExtract1D(d, 0); } },
     potential_intensity_empirical:    { name: 'MPI (empirical)',   unit: 'kt',   color: '#818cf8', group: 'ocean',    extract: function(d) { return _tcpExtract1D(d, 0); } },
-    shear_magnitude_deep:            { name: 'Deep Shear',        unit: 'm/s',  color: '#ff6b6b', group: 'shear',    srcVar: 'shear_magnitude', extract: function(d) { return _tcpExtract3D(d, 0, 0); } },
-    shear_magnitude_shallow:         { name: 'Shallow Shear',     unit: 'm/s',  color: '#fab1a0', group: 'shear',    srcVar: 'shear_magnitude', extract: function(d) { return _tcpExtract3D(d, 1, 0); } },
+    shear_magnitude_deep:            { name: 'Deep Shear (850–200 hPa)',    unit: 'm/s',  color: '#ff6b6b', group: 'shear',    srcVar: 'shear_magnitude', extract: function(d) { return _tcpExtract3D(d, 1, 1); } },
+    shear_magnitude_shallow:         { name: 'Shallow Shear (850–500 hPa)', unit: 'm/s',  color: '#fab1a0', group: 'shear',    srcVar: 'shear_magnitude', extract: function(d) { return _tcpExtract3D(d, 0, 1); } },
     shear_generalized_inner:         { name: 'Gen. Shear (inner)',unit: 'm/s',  color: '#e17055', group: 'shear',    srcVar: 'shear_generalized', extract: function(d) { return _tcpExtract2D(d, 0); } },
-    shear_direction_deep:            { name: 'Shear Dir (deep)',  unit: '°',    color: '#ff9f43', group: 'shear',    srcVar: 'shear_direction', extract: function(d) { return _tcpExtract3D(d, 0, 0); } },
+    shear_direction_deep:            { name: 'Shear Dir (850–200 hPa)',     unit: '°',    color: '#ff9f43', group: 'shear',    srcVar: 'shear_direction', extract: function(d) { return _tcpExtract3D(d, 1, 1); } },
     rh_mid:                          { name: 'Mid-level RH',     unit: '%',    color: '#34d399', group: 'moisture',  srcVar: 'relative_humidity', extract: function(d, meta) { return _tcpExtractLevel(d, meta, 700, 0); } },
     rh_low:                          { name: 'Low-level RH',     unit: '%',    color: '#6ee7b7', group: 'moisture',  srcVar: 'relative_humidity', extract: function(d, meta) { return _tcpExtractLevel(d, meta, 850, 0); } },
     precipitable_water_inner:        { name: 'Precip. Water (inner)', unit: 'kg/m²', color: '#60a5fa', group: 'moisture', srcVar: 'precipitable_water', extract: function(d) { return _tcpExtract2D(d, 0); } },
