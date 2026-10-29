@@ -333,6 +333,7 @@
     var RANGES = [{ h: 24, label: '24 h' }, { h: 48, label: '48 h' },
                   { h: 0,  label: 'Full lifetime' }];
     var _showTrack = false;  // center-track mini-map panel
+    var _showPlan = _pref('tcatlas.exp.plan', false);  // dashboard: the multi-panel IR plan-view evolution under the chart
     var _showDist = false;   // conditional-distribution panel
 
     /* Saffir-Simpson palette + classifier — same values as realtime_ir.js /
@@ -1296,16 +1297,20 @@
             if (OVERLAYS.vit.prefix !== ovp) { OVERLAYS.vit.prefix = ovp; OVERLAYS.vit.idx = null; OVERLAYS.vit.s = {}; }
             VIT_LABEL = v61Page() ? 'GHOST v5.1 (previous)' : 'GHOST v6.1 (experimental)';
         }
-        function planHtml() {
+        /* box = the dashboard's "Plan-view evolution" panel under the chart (its own ids, shown by the toggle); otherwise
+           the plan view that leads the page, or the dashboard's fallback image. */
+        function planHtml(box) {
+            var id = box ? 'exp-planbox' : 'exp-plan';
             return (
             /* Plan view leads: the latest imagery is the page's face, and the
                toggled panels (verification especially) must never push it
                out of view — they open BELOW the chart, verification last. */
-            '<div class="exp-plan-wrap" id="exp-plan-wrap">' +
+            '<div class="exp-plan-wrap' + (box ? ' exp-planbox' : '') + '" id="' + id + '-wrap"' +
+            (box ? ' style="display:' + (_showPlan ? 'block' : 'none') + ';"' : '') + '>' +
             '<div class="exp-plan-head">' +
             '<span class="exp-plan-title">' +
             (M.planTitle || 'IR plan-view evolution') + '</span>' +
-            '<button class="exp-range exp-dl" id="exp-plan-dl" ' +
+            '<button class="exp-range exp-dl exp-plan-dl" id="' + id + '-dl" ' +
             'title="Download plan view as PNG" ' +
             'aria-label="Download plan view as PNG">&#x2913; Download</button>' +
             '</div>' +
@@ -1318,7 +1323,7 @@
                src is assigned (it is: src is set later in selectStorm).
                Both cdn.tcatlas.org and the GCS fallback send
                access-control-allow-origin: *, so the image still loads. */
-            '<img id="exp-plan" class="exp-plan" crossorigin="anonymous" ' +
+            '<img id="' + (box ? 'exp-planbox-img' : 'exp-plan') + '" class="exp-plan" crossorigin="anonymous" ' +
             'alt="' + M.name + ' plan view">' +
             '</div>');
         }
@@ -1579,6 +1584,11 @@
                   (_showTrack ? ' active' : '') +
                   '" id="exp-track-btn">Track map</button>'
                 : '') +
+            (DASH
+                ? '<button class="exp-range exp-planbtn' + (_showPlan ? ' active' : '') + '" id="exp-plan-btn" ' +
+                  'aria-pressed="' + _showPlan + '" title="Four infrared snapshots 3 hours apart, each labeled with ' +
+                  'its GHOST estimate (the page\'s former main view)">Plan-view evolution</button>'
+                : '') +
             (M.panels.dist !== false
                 ? '<button class="exp-range exp-distbtn' +
                   (_showDist ? ' active' : '') +
@@ -1639,6 +1649,7 @@
             '&#x2913; Download</button>' +
             '</div>' +
             '<div id="exp-plot" class="exp-plot"></div>' +
+            (DASH ? planHtml(true) : '') +
             (M.panels.why && !v61Page()
                 ? '<div id="exp-why" class="exp-shap" style="display:' +
                   (_showWhy ? 'block' : 'none') + ';"></div>'
@@ -1825,9 +1836,8 @@
         /* Plan view is a producer-rendered PNG on GCS (CORS origin:*), so
            download = fetch the blob and hand it to TCExport (the ONE save
            path — iOS-safe, share-sheet aware). */
-        var pDl = document.getElementById('exp-plan-dl');
-        if (pDl) pDl.addEventListener('click', function () {
-            var img = document.getElementById('exp-plan');
+        _root.querySelectorAll('.exp-plan-dl').forEach(function (pDl) { pDl.addEventListener('click', function () {
+            var img = pDl.closest('.exp-plan-wrap').querySelector('img.exp-plan');
             if (!img || !img.src || !window.TCExport || !_storm) return;
             track(M.key + '_plan_download', { storm: _storm });
             pDl.disabled = true;
@@ -1868,6 +1878,16 @@
                     if (window.console) console.warn(M.name + ' plan save failed', e);
                 })
                 .then(function () { pDl.disabled = false; });
+        }); });
+        var planBtn = document.getElementById('exp-plan-btn');
+        if (planBtn) planBtn.addEventListener('click', function () {
+            _showPlan = !_showPlan;
+            _setPref('tcatlas.exp.plan', _showPlan);
+            track(M.key + '_plan_view', { on: _showPlan });
+            planBtn.classList.toggle('active', _showPlan);
+            planBtn.setAttribute('aria-pressed', _showPlan);
+            var box = document.getElementById('exp-planbox-wrap');
+            if (box) box.style.display = _showPlan ? 'block' : 'none';
         });
         _root.querySelectorAll('.exp-range[data-h]').forEach(function (b) {
             b.addEventListener('click', function () {
@@ -1996,8 +2016,9 @@
                     it.getAttribute('data-atcf') === atcf);
             });
         }
-        var img = document.getElementById('exp-plan');
-        if (img) {
+        ['exp-plan', 'exp-planbox-img'].forEach(function (imgId) {   // the fallback image and the toggled panel
+            var img = document.getElementById(imgId);
+            if (!img) return;
             var gen = _archSet[atcf]
                 ? (_archIndex && _archIndex.generated)
                 : (_index && _index.generated);
@@ -2012,7 +2033,7 @@
                 img.src = GCS_BASE + planPath;
             };
             img.src = CDN_BASE + planPath;
-        }
+        });
         var p = _series[atcf]
             ? Promise.resolve(_series[atcf])
             : fetchJson(seriesPath(atcf))
