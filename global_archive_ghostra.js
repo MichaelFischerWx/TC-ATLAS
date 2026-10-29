@@ -1484,6 +1484,18 @@
                     'so this is the nearest scan from a coarser storm-centered archive' +
                     (at ? ', taken ' + at : '') + '. GHOST does not read this ' +
                     'picture — the estimate is unaffected.';
+            } else if (j.qc_substituted && j.actual_datetime) {
+                /* The mosaic's image for this hour failed the scene check (stripes or
+                   missing data: Cimaron 2006, 29 Oct 00 UTC), so the API served the
+                   nearest clean half-hourly scan; say whose time it is. */
+                var at2 = TCTime.utc(j.actual_datetime, { year: true });
+                sub.textContent = 'nearest clean scan · taken ' + at2;
+                sub.title = 'The satellite mosaic’s image for this hour is corrupt (striped or partly ' +
+                    'empty), so this is the nearest clean half-hourly scan, taken ' + at2 + '.';
+            } else if (j.qc_degraded) {
+                sub.textContent = 'degraded scan · no clean image within 90 min';
+                sub.title = 'The satellite mosaic’s image for this hour is corrupt (striped or partly ' +
+                    'empty) and no clean scan exists within 90 minutes of it.';
             } else { sub.textContent = ''; sub.title = ''; }
         }
         var bin = atob(j.tb_data), raw = new Uint8Array(bin.length), i;
@@ -1492,7 +1504,8 @@
                scale: 254 / (j.tb_vmax - j.tb_vmin), b: j.bounds,
                /* for the Summary card: which frame this is, and whether it is a stand-in */
                fkey: ir ? ir.sid + '/' + ir.idx : null, src: j.source || null,
-               srcAt: j.actual_datetime || null, standIn: standIn };
+               srcAt: j.actual_datetime || null, standIn: standIn,
+               qcSub: !!(j.qc_substituted && j.actual_datetime), qcBad: !!j.qc_degraded };
         applyEye();
         repaint();
     }
@@ -2847,7 +2860,7 @@
         cardText(ctx, name + ' — ' + vName, X0, 40, 24, col.fg, 700);
         var pk = peakTime(sid);
         var sub = 'Intensity reanalysis from geostationary infrared imagery · ' + (BASIN_LABEL[b] || b) +
-            ' · image ' + TCTime.utc(tImg, { year: true }) +
+            ' · image ' + TCTime.utc(hasImg && (tb.qcSub || tb.src === 'hursat') && tb.srcAt ? tb.srcAt : tImg, { year: true }) +
             (Math.abs(tEst - tImg) > 45 * 60000 ? ' · estimate ' + TCTime.utc(tEst) : '') +
             (pk !== null && Math.abs(tImg - pk) <= 90 * 60000 ? ' · GHOST peak' : '');
         cardText(ctx, sub, X0, 66, 14, col.fg2, 400);
@@ -2870,6 +2883,8 @@
             var note = tb.standIn ? 'backup image: GridSat-B1 8 km (the 4 km mosaic was unavailable)'
                 : tb.src === 'hursat' ? 'backup scan' + (tb.srcAt ? ' taken ' + TCTime.utc(tb.srcAt) : '') +
                   ' (the mosaic has no image for this hour)'
+                : tb.qcSub ? 'nearest clean scan, taken ' + TCTime.utc(tb.srcAt) + ' (the mosaic’s image for this hour is corrupt)'
+                : tb.qcBad ? 'degraded scan: stripes or missing data, no clean image within 90 min'
                 : (tb.nodata > 0.02 ? Math.round(tb.nodata * 100) + '% of the scene has no satellite data (grey checker)' : '');
             if (note) cardText(ctx, note, X0 + IS, Y0 + IS + 16, 11.5, dark ? '#fbbf24' : '#b45309', 600, 'right');
         }

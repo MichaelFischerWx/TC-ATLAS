@@ -1789,6 +1789,87 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
     return None, None
 
 
+# MergIR scene QC (2026-10-29). Some half-hour slices of the merge are not
+# usable images: in the West Pacific before 2016 the synoptic-hour :00 slot is
+# often a striped, partly empty fill (Cimaron 2006-10-29 00Z: 9.6% missing,
+# stripe anisotropy 2.28), byte-identical in CPC's original 2006 granules, so
+# no MergIR version is clean there. GHOST's own fetch rejects such a slice and
+# reads the nearest clean half-hour instead; the archive viewers showed the
+# corrupt one. Same test, thresholds and storm-centred +/-6 deg box as TC-SWARM
+# inference/mergir_fetch.qc_ir_frame (vendored: the API image does not ship
+# TC-SWARM), and the same search: 30, 60, 90 min, earlier first, so a tie goes
+# to the earlier scan.
+MERGIR_QC_HALF_DEG = 6.0
+MERGIR_QC_FILL_MAX = 0.06       # missing fraction
+MERGIR_QC_ANISO_MAX = 1.8       # row/col mean-|dTb| ratio (striping)
+MERGIR_QC_UNPHYS_MAX = 0.002    # fraction outside [150, 340] K
+MERGIR_QC_STEPS_MIN = (30, 60, 90)
+
+
+def _mergir_scene_qc(tb, bounds, center_lat, center_lon) -> dict:
+    """qc_ir_frame on the +/-6 deg box about the storm centre of a north-up
+    frame spanning `bounds` (the loader's native 4-km grid, not resampled)."""
+    tb = np.asarray(tb, dtype=float)
+    ny, nx = tb.shape
+    lats = bounds["north"] - (np.arange(ny) + 0.5) * (bounds["north"] - bounds["south"]) / ny
+    lons = bounds["west"] + (np.arange(nx) + 0.5) * (bounds["east"] - bounds["west"]) / nx
+    sub = tb[np.ix_(np.abs(lats - center_lat) <= MERGIR_QC_HALF_DEG,
+                    np.abs(lons - center_lon) <= MERGIR_QC_HALF_DEG)]
+    fin = np.isfinite(sub)
+    if fin.sum() < 100:
+        return {"is_bad": True, "reason": "empty"}
+    fill = float(1.0 - fin.mean())
+    col_jump = float(np.nanmean(np.abs(np.diff(sub, axis=1))))
+    row_jump = float(np.nanmean(np.abs(np.diff(sub, axis=0))))
+    aniso = max(col_jump, row_jump) / max(min(col_jump, row_jump), 1e-6)
+    unphys = float((fin & ((sub < 150) | (sub > 340))).mean())
+    reasons = []
+    if fill > MERGIR_QC_FILL_MAX:
+        reasons.append(f"fill={fill:.3f}")
+    if aniso > MERGIR_QC_ANISO_MAX:
+        reasons.append(f"stripe_aniso={aniso:.2f}")
+    if unphys > MERGIR_QC_UNPHYS_MAX:
+        reasons.append(f"unphysical={unphys:.3f}")
+    return {"is_bad": bool(reasons), "reason": ",".join(reasons)}
+
+
+def _load_mergir_clean(target_dt: datetime, center_lat: float, center_lon: float):
+    """_load_mergir_subset plus the scene QC. Returns (tb, bounds, info):
+      info == {}                        the nearest slice is clean
+      actual_datetime + qc_substituted  a corrupt slice was replaced by the
+                                        nearest clean half-hour
+      qc_degraded (+ qc_final)          no clean slice within 90 min: the
+                                        corrupt one is returned, labelled.
+                                        qc_final is False when a neighbour
+                                        could not be fetched (transient), so
+                                        the caller keeps the frame provisional.
+    """
+    tb, bounds = _load_mergir_subset(target_dt, center_lat, center_lon)
+    if tb is None:
+        return None, None, {}
+    q = _mergir_scene_qc(tb, bounds, center_lat, center_lon)
+    if not q["is_bad"]:
+        return tb, bounds, {}
+    from datetime import timedelta
+    transient = False
+    for step in MERGIR_QC_STEPS_MIN:
+        for sign in (-1, 1):
+            cand = target_dt + timedelta(minutes=sign * step)
+            tb2, b2 = _load_mergir_subset(cand, center_lat, center_lon)
+            if tb2 is None:
+                transient = transient or not getattr(_mergir_tls, "gap", False)
+                continue
+            if not _mergir_scene_qc(tb2, b2, center_lat, center_lon)["is_bad"]:
+                logger.info(f"MergIR QC: {target_dt} slice corrupt ({q['reason']}); "
+                            f"serving clean {cand} ({sign * step:+d} min)")
+                return tb2, b2, {"actual_datetime": cand.isoformat(),
+                                 "qc_substituted": q["reason"]}
+    logger.warning(f"MergIR QC: {target_dt} slice corrupt ({q['reason']}); "
+                   f"no clean slice within {MERGIR_QC_STEPS_MIN[-1]} min"
+                   f"{' (a neighbour failed to fetch)' if transient else ''}")
+    return tb, bounds, {"qc_degraded": q["reason"], "qc_final": not transient}
+
+
 # ══════════════════════════════════════════════════════════════
 #  GridSat-B1 Data Access (1980–2024)
 # ══════════════════════════════════════════════════════════════
@@ -2416,9 +2497,12 @@ def _heal_frame_background(sid: str, frame_idx: int, preferred_source: str,
     heal_key = (sid, frame_idx)
     try:
         frame_2d = None
+        qc_info = {}
 
         if preferred_source == "mergir":
-            frame_2d, ir_bounds = _load_mergir_subset(frame_dt, frame_lat, frame_lon)
+            frame_2d, ir_bounds, qc_info = _load_mergir_clean(frame_dt, frame_lat, frame_lon)
+            if qc_info.get("qc_degraded") and not qc_info.get("qc_final"):
+                frame_2d = None          # provisional (a neighbour failed): keep the fallback, retry later
             half_domain = MERGIR_HALF_DOMAIN
             ir_scale = 3
         elif preferred_source == "gridsat":
@@ -2464,6 +2548,7 @@ def _heal_frame_background(sid: str, frame_idx: int, preferred_source: str,
             "source": preferred_source,
             "bounds": bounds,
             **tb_encoded,
+            **qc_info,
         }
 
         # Update in-memory cache
@@ -2770,9 +2855,10 @@ def ir_frame(
         #           GridSat → HURSAT             (for pre-2000 storms)
         frame_2d = None
         actual_source = source
+        qc_info = {}
 
         if source == "mergir":
-            frame_2d, ir_bounds = _load_mergir_subset(frame_dt, frame_lat, frame_lon)
+            frame_2d, ir_bounds, qc_info = _load_mergir_clean(frame_dt, frame_lat, frame_lon)
             half_domain = MERGIR_HALF_DOMAIN
             ir_scale = 3  # 4km → 3x upscale
 
@@ -2839,6 +2925,11 @@ def ir_frame(
             result["actual_datetime"] = hursat_dt_str
             if hursat_satellite:
                 result["satellite"] = hursat_satellite
+        # Same for a MergIR slice that failed the scene QC (_load_mergir_clean):
+        # either the nearest clean half-hour, with its own time, or the corrupt
+        # slice itself, flagged.
+        if actual_source == "mergir" and qc_info:
+            result.update(qc_info)
 
     else:
         # HURSAT path (default)
@@ -2871,6 +2962,12 @@ def ir_frame(
             result["satellite"] = satellite
         if bounds:
             result["bounds"] = bounds
+
+    # A corrupt MergIR slice whose clean neighbours could not all be fetched is
+    # provisional: cache it nowhere, so the next view searches again instead of
+    # an R2 copy (immutable) freezing a scan that a retry would replace.
+    if result.get("qc_degraded") and not result.get("qc_final"):
+        return JSONResponse(result, headers=_frame_cache_headers(True, "MISS"))
 
     # Cache rendered frame (in-memory + GCS persistent)
     _frame_cache[cache_key] = result

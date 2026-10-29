@@ -6076,7 +6076,13 @@ function updateIRMeta(idx) {
         rawDt = irMeta.frames[idx].datetime || '';
         var sat = irMeta.frames[idx].satellite || '';
         dtText = _gaTime(rawDt);
-        if (_irElDatetime) _irElDatetime.textContent = dtText + (sat ? '  [' + sat + ']' : '');
+        // A MergIR hour whose image failed the API's scene check (stripes or
+        // missing data) is served as the nearest clean scan, or flagged.
+        var _qf = irFrames[idx];
+        var qcNote = (_qf && _qf.qc_substituted && _qf.actual_datetime)
+            ? '  · scan ' + _gaTime(_qf.actual_datetime) + ' (corrupt image at this hour)'
+            : (_qf && _qf.qc_degraded ? '  · degraded scan' : '');
+        if (_irElDatetime) _irElDatetime.textContent = dtText + (sat ? '  [' + sat + ']' : '') + qcNote;
         // Log NC file for HURSAT debugging
         var frameData = irFrames[idx];
         if (frameData && frameData.nc_file) {
