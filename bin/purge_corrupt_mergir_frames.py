@@ -51,6 +51,9 @@ SCAN_WORKERS = 24
 HALF_DEG = 6.0
 FILL_MAX = 0.05
 ANISO_MAX = 1.7
+# Cloudflare answers Python-urllib's default User-Agent with 403 (the first dry
+# run read only the ~20k frames GCS also holds; 138k R2-only frames errored).
+CDN_HEADERS = {"User-Agent": "tc-atlas-maint/1.0 (+https://tcatlas.org)"}
 
 
 def decode(fr):
@@ -117,7 +120,8 @@ def main():
     def fetch(key):
         if key in r2_keys or r2 is None:
             try:
-                with urllib.request.urlopen(f"{R2_PUBLIC_BASE}/{key}", timeout=60) as r:
+                with urllib.request.urlopen(urllib.request.Request(f"{R2_PUBLIC_BASE}/{key}", headers=CDN_HEADERS),
+                                            timeout=60) as r:
                     return json.loads(r.read())
             except Exception:
                 if key not in gcs_keys:
@@ -166,6 +170,10 @@ def main():
                    "hovmoller": hov_keys, "errors": errs}, f, indent=1)
     print(f"Report -> {args.report}")
 
+    if len(errs) > 0.01 * len(keys):
+        print(f"\nINCOMPLETE SCAN: {len(errs)} of {len(keys)} objects unreadable — "
+              f"{'refusing to delete; fix the reads and re-run' if args.apply else 'the counts above are partial'}.")
+        return
     if not args.apply:
         print("\nDRY RUN — nothing deleted. Re-run with --apply to delete.")
         return
