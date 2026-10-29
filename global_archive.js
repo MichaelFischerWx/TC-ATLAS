@@ -2004,6 +2004,20 @@ window.switchTab = function (tabName) {
         btn.classList.toggle('active', isTarget);
         btn.setAttribute('aria-selected', isTarget ? 'true' : 'false');
     });
+    // Phones: the tab strip scrolls sideways and GHOST Reanalysis starts
+    // off-screen, so bring the active tab into view (horizontally only: the
+    // page itself never moves). Instant, after this task's layout changes;
+    // setTimeout rather than requestAnimationFrame / smooth scrolling, which
+    // never run in a background tab.
+    setTimeout(function () {
+        var onTab = document.querySelector('.ga-tab.active');
+        var strip = onTab && onTab.parentElement;
+        if (!strip || strip.scrollWidth <= strip.clientWidth) return;
+        var l = onTab.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft;
+        if (l < strip.scrollLeft || l + onTab.offsetWidth > strip.scrollLeft + strip.clientWidth) {
+            strip.scrollLeft = Math.max(0, l - 12);
+        }
+    }, 0);
     // Update panels
     document.querySelectorAll('.ga-tab-content').forEach(function (panel) {
         panel.classList.toggle('active', panel.id === 'tab-' + tabName);
@@ -11251,6 +11265,10 @@ function restoreFromHash() {
             if (params.align) compareAlign = params.align;
             switchTab('compare');
         }
+
+        // GHOST Reanalysis: switchTab writes #tab=reanalysis into the URL, so a
+        // shared or reloaded link must land on that tab, not the Storm Browser.
+        if (params.tab === 'reanalysis') switchTab('reanalysis');
 
         // tab=climatology and tab=environment are handled by an inline
         // <head> redirect to tc_climatology.html, so we never reach this

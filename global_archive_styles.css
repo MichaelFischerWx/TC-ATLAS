@@ -2874,7 +2874,9 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gra-layout { flex: 1; height: auto; min-height: 0; }
 #gra-map { width: 100%; height: 100%; background: var(--navy); }
 .gra-count {
-    position: absolute; left: 10px; top: 10px; z-index: 500;
+    /* left of 48 px clears the map's zoom buttons (10-39 px); at 10 px the
+       badge sat exactly on "+" */
+    position: absolute; left: 48px; top: 10px; z-index: 500;
     background: rgba(15, 23, 42, .86); color: #fff; font-size: 0.72rem;
     padding: 4px 9px; border-radius: 6px; font-variant-numeric: tabular-nums;
 }
@@ -3215,6 +3217,42 @@ input[type="range"].ga-range::-moz-range-thumb {
     .gra-count { font-size: 0.66rem; }
     .browser-sidebar { overflow-y: visible; }
     .gra-list { max-height: 60vh; }
+
+    /* Mobile cleanup (2026-10-29) */
+    /* the frame count moves right: top-left belongs to the map's zoom buttons,
+       and the badge was sitting on top of "+" */
+    .gra-count { left: auto; right: 10px; }
+    /* range filters: the two sliders share the row instead of a fixed 104 px each */
+    .gra-rng { width: 100%; }
+    .gra-rng input[type=range] { flex: 1 1 0; width: auto; min-width: 0; }
+    /* data-version menu takes the full row so its label isn't cut mid-word;
+       the cut-date note wraps underneath */
+    .gra-version { max-width: none; flex: 1 1 100%; }
+    /* scrolling inside the sheet, the explainer or the list must not drag the
+       page underneath */
+    .gra-ir-body, .gra-about, .gra-list { overscroll-behavior: contain; }
+
+    /* Touch targets in the frame sheet: the buttons were 20 px tall, the close
+       × 13×16 px and the checkboxes 13 px. */
+    .gra-ir-head .ga-btn, .gra-ir-foot .ga-btn { min-height: 32px; padding: 6px 12px; }
+    #gra-ir-prev, #gra-ir-next { min-width: 44px; }
+    .gra-ir-foot .gra-ir-cmap { min-height: 32px; margin-left: auto; }
+    .gra-ir-x {
+        width: 36px; height: 36px; margin: -8px -6px -8px auto;
+        font-size: 1.4rem;
+    }
+    .gra-ir-ctr { gap: 4px 14px; padding: 4px 9px 8px; font-size: 0.68rem; }
+    .gra-ir-ctr-tog { min-height: 30px; }
+    .gra-ir-ctr-tog input { width: 18px; height: 18px; }
+
+    /* the explainer's × stays reachable however far down the text is read */
+    .gra-about-x {
+        position: sticky; top: 0; display: block; z-index: 2;
+        width: 36px; height: 36px; margin: -6px -6px -30px auto;
+        border-radius: 50%; background: var(--surface-raised);
+        border: 1px solid var(--border); box-shadow: 0 1px 5px rgba(15, 22, 35, .22);
+    }
+    .gra-about h3 { padding-right: 34px; }
 }
 .gra-ir-cover { color: #fbbf24; font-weight: 700; }
 .gra-ir-cover:empty { display: none; }
