@@ -2518,11 +2518,47 @@ def _extract_storm_name(text: str) -> Optional[str]:
 # _ATCF_BASIN_LETTER map in realtime_ir.js.
 _ATCF_BASIN_LETTER = {
     "AL": "L", "EP": "E", "CP": "C",
-    "WP": "W", "IO": "A", "SH": "S",
+    "WP": "W", "SH": "S",
 }
 
+# North Indian Ocean (IO) has two letters, set by where the system formed:
+# "A" Arabian Sea, "B" Bay of Bengal (JTWC 91B, 02B, ...). A storm keeps its
+# letter if it later crosses India, so it comes from the GENESIS longitude,
+# split at India's southern tip. IO used to map to "A" for every storm, which
+# labelled Bay of Bengal invests "91A" (2026-10-31).
+_IO_AB_SPLIT_LON = 77.5
 
-def _friendly_storm_name(atcf_id: str, raw_name: Optional[str] = None) -> str:
+
+def _atcf_basin_letter(atcf_id: str, genesis_lon: Optional[float] = None) -> str:
+    """Single-letter ATCF suffix; for IO from the genesis longitude ("" when
+    unknown -- no letter rather than a wrong one)."""
+    basin_code = (atcf_id or "").upper()[:2]
+    if basin_code == "IO":
+        if genesis_lon is None:
+            return ""
+        return "A" if (float(genesis_lon) % 360.0) < _IO_AB_SPLIT_LON else "B"
+    return _ATCF_BASIN_LETTER.get(basin_code, "")
+
+
+def _genesis_lon(records: list) -> Optional[float]:
+    """Longitude of the first tau=0 fix of the storm's latest continuous
+    segment (same >72 h / >8 deg reused-invest guard as get_storm_metadata),
+    so a recycled invest number doesn't inherit an older system's sea."""
+    pts = sorted(((r["datetime"], r["lat"], r["lon"]) for r in records
+                  if r.get("tau") == 0 and r.get("lat") is not None
+                  and r.get("lon") is not None), key=lambda x: x[0])
+    if not pts:
+        return None
+    start = 0
+    for i in range(1, len(pts)):
+        if (pts[i][0] - pts[i - 1][0]) > timedelta(hours=72) or \
+                _haversine_deg(pts[i - 1][1], pts[i - 1][2], pts[i][1], pts[i][2]) > 8.0:
+            start = i
+    return float(pts[start][2])
+
+
+def _friendly_storm_name(atcf_id: str, raw_name: Optional[str] = None,
+                         genesis_lon: Optional[float] = None) -> str:
     """Human-facing storm name following NHC/JTWC nomenclature.
 
     Mirrors the frontend `_genesisFormatStormLabel` so the global map and the
@@ -2538,7 +2574,7 @@ def _friendly_storm_name(atcf_id: str, raw_name: Optional[str] = None) -> str:
     aid = (atcf_id or "").upper()
     basin_code = aid[:2]
     num = aid[2:4]
-    letter = _ATCF_BASIN_LETTER.get(basin_code, "")
+    letter = _atcf_basin_letter(aid, genesis_lon)
     try:
         n = int(num)
     except ValueError:
@@ -3165,7 +3201,8 @@ def _build_storm_entry(atcf_id: str, records: list,
 
     # Friendly nomenclature: invests → "Invest 90E", named → title-cased,
     # else the ATCF ID. Mirrors the frontend label logic.
-    display_name = _friendly_storm_name(atcf_id, name)
+    genesis_lon = _genesis_lon(records)
+    display_name = _friendly_storm_name(atcf_id, name, genesis_lon)
 
     # Motion: prefer the JTWC advisory's official "MOVEMENT PAST SIX
     # HOURS" line for WP/IO/SH storms (it's what shows on the warning
@@ -3186,6 +3223,7 @@ def _build_storm_entry(atcf_id: str, records: list,
     entry = {
         "atcf_id": atcf_id.upper(),
         "name": display_name,
+        "atcf_letter": _atcf_basin_letter(atcf_id, genesis_lon),   # IO: A/B by genesis sea
         "basin": basin,
         "lat": latest["lat"],
         "lon": latest["lon"],
@@ -8231,7 +8269,8 @@ def get_storm_metadata(atcf_id: str):
     # (already normalized), otherwise synthesize from the ATCF id so the detail
     # header reads correctly even for storms not in the active list.
     display_name = _friendly_storm_name(
-        atcf_id, current.get("name") if current else None
+        atcf_id, current.get("name") if current else None,
+        intensity_history[0]["lon"] if intensity_history else None,
     )
     if current is not None:
         current["name"] = display_name
