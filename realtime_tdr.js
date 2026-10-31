@@ -3981,7 +3981,7 @@
             });
     };
 
-    // ── Toast (reuse if available, otherwise standalone) ─────────
+    // ── Toast: the shared TCToast (theme.js) ─────────────────────
     // Failed load/save → plain toast; the raw error goes to the console.
     function _rtErrToast(err, what, verb, type) {
         TCErrors.log(err, what);
@@ -3989,28 +3989,13 @@
     }
 
     function rtToast(message, type, duration) {
-        if (typeof showToast === 'function') { showToast(message, type, duration); return; }
-        type = type || 'info'; duration = duration || 5000;
-        var container = document.getElementById('toast-container');
-        if (!container) {
-            container = document.createElement('div');
-            container.id = 'toast-container';
-            container.style.cssText = 'position:fixed;top:60px;right:16px;z-index:100000;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
-            document.body.appendChild(container);
-        }
-        var toast = document.createElement('div');
-        var bgColor = type === 'error' ? 'rgba(239,68,68,0.95)' : type === 'warn' ? 'rgba(245,158,11,0.95)' : 'rgba(14,45,90,0.95)';
-        toast.style.cssText = 'background:' + bgColor + ';color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;font-family:DM Sans,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,0.4);border:1px solid rgba(96,165,250,0.4);pointer-events:auto;max-width:380px;opacity:0;transform:translateX(30px);transition:all 0.3s ease;';
-        toast.textContent = message;
-        container.appendChild(toast);
-        requestAnimationFrame(function () { toast.style.opacity = '1'; toast.style.transform = 'translateX(0)'; });
-        setTimeout(function () { toast.style.opacity = '0'; toast.style.transform = 'translateX(30px)'; setTimeout(function () { toast.remove(); }, 300); }, duration);
+        return TCToast.show(message, { type: type, duration: duration });
     }
 
     // ── Hurricane loading animation (reuse pattern from main app) ──
     function _rtLoadingHTML(msg) {
         return '<div class="explorer-status loading" style="padding:24px 0;text-align:center;">' +
-            '<div class="spinner" style="margin:0 auto 12px;"></div>' +
+            '<div class="tc-spinner tc-spinner--lg tc-spinner--block"></div>' +
             '<div>' + msg + '</div></div>';
     }
 
@@ -5595,8 +5580,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             'border:1px solid rgba(96,165,250,0.25);border-radius:8px;' +
             'padding:8px 16px;display:flex;align-items:center;gap:8px;';
         div.innerHTML =
-            '<div style="width:14px;height:14px;border:2px solid rgba(255,255,255,0.15);' +
-            'border-top:2px solid #60a5fa;border-radius:50%;animation:spin 1s linear infinite;"></div>' +
+            '<div class="tc-spinner tc-spinner--sm"></div>' +
             '<span id="rt-ir-loading-text" style="font-size:11px;color:#93c5fd;font-family:\'JetBrains Mono\',monospace;">' +
             'Loading IR satellite\u2026</span>';
         wrapper.appendChild(div);

@@ -178,18 +178,6 @@ var intensityChangeData = null;
 var _intensityChangePromise = null;
 var climRendered = false;
 
-// ── Toast ───────────────────────────────────────────────────────
-function showToast(message) {
-    var el = document.getElementById('toast');
-    if (!el) return;
-    el.textContent = message;
-    el.style.display = '';
-    clearTimeout(el._timer);
-    el._timer = setTimeout(function () {
-        el.style.display = 'none';
-    }, 3000);
-}
-
 // ── Hide / show the page chrome around modal overlays ───────────
 // Same pattern as Global Archive's _hideBackgroundElements but
 // targeted at this page's main + sub-nav so opening a modal doesn't

@@ -392,4 +392,144 @@
         basemapVariant: basemapVariant,
         readVar: readVar
     };
+
+    // ── TCToast: the site's one transient message ──────────────
+    // Bottom center, newest last, at most three at once; repeating the newest
+    // message restarts its timer instead of stacking a copy. The stack is a
+    // polite live region and errors are role=alert, so screen readers read
+    // them. Plain text only. Lives here because every page loads theme.js;
+    // the page-level showToast/_rtToast/rtToast functions are thin wrappers.
+    //   TCToast.show('Saved', { type: 'info'|'success'|'warn'|'error', duration: 4000 })
+    // Options for richer notices: title (a bold first line; the message
+    // becomes a dimmer second line), action {label, onClick} (a link-style
+    // button after the message), closable (an × button) and id (a new toast
+    // with the same id replaces the one on screen).
+    // A page whose bottom edge is covered can raise the stack with the CSS
+    // variable --tc-toast-bottom (default 40px, clears the RT status bar).
+    var TOAST_CSS = [
+        '.tc-toasts{position:fixed;left:50%;bottom:calc(var(--tc-toast-bottom,40px) + env(safe-area-inset-bottom,0px));',
+        'transform:translateX(-50%);z-index:100000;display:flex;flex-direction:column;align-items:center;gap:8px;',
+        'pointer-events:none;width:max-content;max-width:calc(100vw - 32px)}',
+        '.tc-toast{pointer-events:auto;display:flex;align-items:flex-start;gap:10px;max-width:460px;padding:10px 14px;',
+        'border-radius:10px;font:500 13px/1.4 "DM Sans",system-ui,-apple-system,"Segoe UI",sans-serif;',
+        'background:var(--surface-raised,#fff);color:var(--text,#0f1623);border:1px solid var(--border-light,rgba(15,22,35,.12));',
+        'box-shadow:0 14px 34px rgba(0,0,0,.2);opacity:0;transform:translateY(8px);transition:opacity .18s ease,transform .18s ease}',
+        '.tc-toast::before{content:"";flex:none;width:8px;height:8px;margin-top:5px;border-radius:50%;background:#4a9b6e}',
+        '.tc-toast-body{min-width:0}',
+        '.tc-toast-title{display:block;font-weight:600}',
+        '.tc-toast-title+.tc-toast-msg{display:block;margin-top:2px;font-size:12px;color:var(--text-dim,#64748b)}',
+        '.tc-toast-action{font:inherit;padding:0;border:0;background:none;color:var(--um-green,#005030);text-decoration:underline;text-underline-offset:2px;cursor:pointer}',
+        '.tc-toast-close{flex:none;font:inherit;font-size:16px;line-height:18px;padding:0 0 0 2px;border:0;background:none;color:var(--text-dim,#64748b);cursor:pointer}',
+        '.tc-toast-close:hover{color:var(--text,#0f1623)}',
+        '[data-theme="dark"] .tc-toast-action{color:#7cc49c}',
+        '.tc-toast.tc-toast-in{opacity:1;transform:none}',
+        '.tc-toast--warn::before{background:#d97706}',
+        '.tc-toast--error{background:#fef2f2;color:#991b1b;border-color:rgba(220,38,38,.35)}',
+        '.tc-toast--error::before{background:#dc2626}',
+        '[data-theme="dark"] .tc-toast{box-shadow:0 14px 34px rgba(0,0,0,.55)}',
+        '[data-theme="dark"] .tc-toast--error{background:#2a1416;color:#fca5a5;border-color:rgba(248,113,113,.4)}'
+    ].join('');
+    var _toastBox = null;
+    function _toastStack() {
+        if (_toastBox && _toastBox.isConnected) return _toastBox;
+        if (!document.getElementById('tc-toast-css')) {
+            var st = document.createElement('style');
+            st.id = 'tc-toast-css';
+            st.textContent = TOAST_CSS;
+            document.head.appendChild(st);
+        }
+        _toastBox = document.createElement('div');
+        _toastBox.className = 'tc-toasts';
+        _toastBox.setAttribute('role', 'status');
+        _toastBox.setAttribute('aria-live', 'polite');
+        document.body.appendChild(_toastBox);
+        return _toastBox;
+    }
+    function _toastDismiss(t) {
+        if (t._leaving) return;
+        t._leaving = true;
+        clearTimeout(t._timer);
+        t.classList.remove('tc-toast-in');
+        setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 200);
+    }
+    function toastShow(msg, opts) {
+        opts = opts || {};
+        if (!document.body) {
+            document.addEventListener('DOMContentLoaded', function () { toastShow(msg, opts); });
+            return null;
+        }
+        var type = ['info', 'success', 'warn', 'error'].indexOf(opts.type) >= 0 ? opts.type : 'info';
+        var dur = opts.duration > 0 ? opts.duration : 4000;
+        var text = String(msg == null ? '' : msg);
+        var box = _toastStack();
+        // A page keeps the stack clear of its own bottom chrome (the RT
+        // animation dock) by defining window.tcToastBottom() → px from the
+        // bottom edge, or 0 for the default.
+        if (typeof window.tcToastBottom === 'function') {
+            var px = 0;
+            try { px = window.tcToastBottom() || 0; } catch (e) {}
+            if (px > 0) box.style.setProperty('--tc-toast-bottom', px + 'px');
+            else box.style.removeProperty('--tc-toast-bottom');
+        }
+        var key = (opts.title ? opts.title + '\n' : '') + text;
+        if (opts.id) {
+            for (var i = 0; i < box.children.length; i++) {
+                var old = box.children[i];
+                if (old._id === opts.id) { clearTimeout(old._timer); box.removeChild(old); break; }
+            }
+        }
+        var last = box.lastElementChild;
+        if (last && !last._leaving && last._text === key && last._type === type) {
+            clearTimeout(last._timer);
+            last._timer = setTimeout(function () { _toastDismiss(last); }, dur);
+            return last;
+        }
+        var t = document.createElement('div');
+        t.className = 'tc-toast tc-toast--' + type;
+        if (type === 'error') t.setAttribute('role', 'alert');
+        var body = document.createElement('span');
+        body.className = 'tc-toast-body';
+        if (opts.title) {
+            var title = document.createElement('b');
+            title.className = 'tc-toast-title';
+            title.textContent = String(opts.title);
+            body.appendChild(title);
+        }
+        var line = document.createElement('span');
+        line.className = 'tc-toast-msg';
+        line.textContent = text;
+        if (opts.action && opts.action.label) {
+            var act = document.createElement('button');
+            act.type = 'button';
+            act.className = 'tc-toast-action';
+            act.textContent = String(opts.action.label);
+            act.addEventListener('click', function (e) {
+                e.stopPropagation();
+                try { if (opts.action.onClick) opts.action.onClick(e); } catch (x) {}
+                _toastDismiss(t);
+            });
+            line.appendChild(document.createTextNode(text ? ' ' : ''));
+            line.appendChild(act);
+        }
+        body.appendChild(line);
+        t.appendChild(body);
+        if (opts.closable) {
+            var close = document.createElement('button');
+            close.type = 'button';
+            close.className = 'tc-toast-close';
+            close.setAttribute('aria-label', 'Dismiss');
+            close.textContent = '\u00d7';
+            t.appendChild(close);
+        }
+        t._text = key;
+        t._type = type;
+        t._id = opts.id || null;
+        t.addEventListener('click', function () { _toastDismiss(t); });
+        box.appendChild(t);
+        while (box.children.length > 3) box.removeChild(box.firstElementChild);
+        requestAnimationFrame(function () { t.classList.add('tc-toast-in'); });
+        t._timer = setTimeout(function () { _toastDismiss(t); }, dur);
+        return t;
+    }
+    window.TCToast = { show: toastShow };
 })();

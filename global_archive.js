@@ -2086,7 +2086,7 @@ function loadData() {
         var loader = document.createElement('div');
         loader.id = 'ga-map-loader';
         loader.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1000;text-align:center;color:#8b9ec2;font-size:14px;font-family:DM Sans,sans-serif;';
-        loader.innerHTML = '<div style="width:40px;height:40px;border:3px solid rgba(46,125,255,0.2);border-top-color:#2e7dff;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 12px;"></div>Loading storm database\u2026';
+        loader.innerHTML = '<div class="tc-spinner tc-spinner--lg tc-spinner--block"></div>Loading storm database\u2026';
         mapEl.style.position = 'relative';
         mapEl.appendChild(loader);
     }
@@ -6713,14 +6713,9 @@ window.jumpIRToPeak = function () {
 //  UTILITIES
 // ══════════════════════════════════════════════════════════════
 
+// The shared TCToast (theme.js).
 function showToast(message) {
-    var el = document.getElementById('toast');
-    el.textContent = message;
-    el.style.display = '';
-    clearTimeout(el._timer);
-    el._timer = setTimeout(function () {
-        el.style.display = 'none';
-    }, 3000);
+    TCToast.show(message);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -12548,7 +12543,7 @@ function _envRender() {
         purge();
         fig.style.height = '';
         fig.innerHTML = info.state === 'loading' || info.state === 'idle'
-            ? '<div class="env-empty"><div class="ga-spinner"></div></div>' : '';
+            ? '<div class="env-empty"><div class="tc-spinner"></div></div>' : '';
         return;
     }
     var panels = [];
@@ -14500,7 +14495,7 @@ function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
     if (_sondeInfoEl) _sondeInfoEl.style.display = '';
     if (_sondeCntEl) _sondeCntEl.innerHTML =
         '<span style="display:inline-flex;align-items:center;gap:5px;color:var(--slate);">' +
-        '<span style="display:inline-block;width:10px;height:10px;border:1.5px solid var(--border);border-top-color:var(--um-green);border-radius:50%;animation:ga-spin 0.8s linear infinite;"></span>' +
+        '<span class="tc-spinner tc-spinner--sm"></span>' +
         'Loading dropsondes…</span>';
     if (_sondeWrapEl) _sondeWrapEl.innerHTML = '';
     _gaSondeData = null;            // the previous mission's diamonds go with it

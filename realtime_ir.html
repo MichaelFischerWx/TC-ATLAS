@@ -48,7 +48,7 @@
     <meta name="apple-mobile-web-app-title" content="TC-ATLAS">
 
     <title>Real-Time Monitor — TC-ATLAS</title>
-    <script src="theme.js?v=20261009p1a"></script>
+    <script src="theme.js?v=20261031p1"></script>
     <script defer src="tc_export.js?v=20260803c"></script>
     <script defer src="tc_errors.js?v=20261010m1"></script>
     <script defer src="tc_time.js?v=20261010tm1"></script>
@@ -84,7 +84,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261031mp1">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261031p1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -117,9 +117,9 @@
     </script>
 
     <!-- Styles -->
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20261031p0">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261031p0">
-    <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20261031p1">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261031p1">
+    <link rel="stylesheet" href="satellite_styles.css?v=20261031p1">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261009p1a">
 </head>
 <body>
@@ -216,7 +216,7 @@
 
         <!-- Loading overlay -->
         <div id="ir-loader" class="ir-loader">
-            <div class="ir-loader-spinner"></div>
+            <div class="tc-spinner tc-spinner--sm ir-loader-spinner"></div>
             <div class="ir-loader-text">Loading active storms&hellip;</div>
         </div>
 
@@ -369,7 +369,7 @@
             <div class="ir-detail-left">
                 <div id="ir-image-container" class="ir-image-container">
                     <div id="ir-image-loader" class="ir-loader" style="display:none;">
-                        <div class="ir-loader-spinner"></div>
+                        <div class="tc-spinner tc-spinner--sm ir-loader-spinner"></div>
                         <div class="ir-loader-text">Fetching IR imagery&hellip;</div>
                     </div>
                     <canvas id="ir-canvas" class="ir-canvas"></canvas>
@@ -1336,7 +1336,7 @@
                 <div id="sat-tooltip" class="sat-tooltip"></div>
                 <!-- Loading overlay -->
                 <div id="sat-loader" class="sat-loader">
-                    <div class="sat-spinner"></div>
+                    <div class="tc-spinner tc-spinner--lg"></div>
                     <div id="sat-loader-msg" class="sat-loader-msg">Loading satellite data&hellip;</div>
                 </div>
                 <!-- No-storms message -->
@@ -2824,7 +2824,7 @@
     <script defer src="tc_mw_layer.js?v=20261020au1"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261010tm1"></script>
-    <script defer src="realtime_ir.js?v=20261031mp1"></script>
+    <script defer src="realtime_ir.js?v=20261031p1"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
@@ -2929,7 +2929,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261031mp1';
+        var _LAZY_ASSET_V = '?v=20261031p1';
         var _lazyViewMods = {
             recon:       { js: ['plotly_dark.js', 'tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },
@@ -3292,7 +3292,7 @@
                     <div class="rt-mw-compare-canvas-wrap">
                         <canvas id="rt-mw-compare-ir" width="1100" height="1100" class="rt-mw-compare-canvas"></canvas>
                         <div id="rt-mw-compare-ir-loading" class="rt-mw-compare-loading" hidden>
-                            <span class="rt-mw-compare-spinner" aria-hidden="true"></span>
+                            <span class="tc-spinner" aria-hidden="true"></span>
                             <span class="rt-mw-compare-loading-text">Loading IR…</span>
                         </div>
                     </div>
@@ -3306,7 +3306,7 @@
                     <div class="rt-mw-compare-canvas-wrap">
                         <canvas id="rt-mw-compare-mw" width="1100" height="1100" class="rt-mw-compare-canvas"></canvas>
                         <div id="rt-mw-compare-mw-loading" class="rt-mw-compare-loading" hidden>
-                            <span class="rt-mw-compare-spinner" aria-hidden="true"></span>
+                            <span class="tc-spinner" aria-hidden="true"></span>
                             <span class="rt-mw-compare-loading-text">Loading microwave…</span>
                         </div>
                     </div>
