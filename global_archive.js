@@ -3693,6 +3693,7 @@ function _applyIntensityMarker(dtStr) {
     }
 
     Plotly.relayout(chartEl, { shapes: baseShapes.concat(extraShapes) });
+    _envSetCursor(dtStr && irOverlayVisible ? dtStr : null);
 }
 
 
@@ -7051,6 +7052,18 @@ function addMWTrackMarkers() {
 /**
  * Load the selected MW overpass image onto the detail map.
  */
+// Microwave image requests: a sequence number so only the LATEST pick may
+// draw (picking pass A then pass B used to let A's slower reply land last and
+// replace B on the map), and a small cache so revisiting a pass, or flipping
+// 89 GHz ↔ 37 GHz and back, is instant instead of another 1-5 s render.
+var _gaMwReqSeq = 0;
+var _gaMwRespCache = {}, _gaMwRespOrder = [];
+function _gaMwCachePut(url, json) {
+    if (!_gaMwRespCache[url]) _gaMwRespOrder.push(url);
+    _gaMwRespCache[url] = json;
+    while (_gaMwRespOrder.length > 12) delete _gaMwRespCache[_gaMwRespOrder.shift()];
+}
+
 window.loadGlobalMWOverpass = function () {
     var sel = document.getElementById('ga-mw-overpass-select');
     var prodSel = document.getElementById('ga-mw-product-select');
@@ -7086,9 +7099,14 @@ window.loadGlobalMWOverpass = function () {
         url += '&center_lat=' + lat + '&center_lon=' + lon;
     }
 
-    fetch(url)
-        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    var reqId = ++_gaMwReqSeq;
+    var cached = _gaMwRespCache[url];
+    (cached ? Promise.resolve(cached)
+            : fetch(url)
+                .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+                .then(function (json) { if (json && json.image_b64) _gaMwCachePut(url, json); return json; }))
         .then(function (json) {
+            if (reqId !== _gaMwReqSeq) return;   // superseded by a newer pick
             if (!json.image_b64 || !json.bounds) {
                 if (status) status.textContent = 'No data returned';
                 return;
@@ -7111,6 +7129,7 @@ window.loadGlobalMWOverpass = function () {
                     return imgUrl;
                 })
                 .then(function (warpedUrl) {
+                    if (reqId !== _gaMwReqSeq) return;
                     if (_gaMwMapOverlay && detailMap) {
                         detailMap.removeLayer(_gaMwMapOverlay);
                     }
@@ -7125,12 +7144,19 @@ window.loadGlobalMWOverpass = function () {
                     // correctly co-located in geographic space.
                 });
 
-            // Re-center map on the MW image so the overpass is visible
+            // Bring the overpass into view only when it is entirely off-screen.
+            // Flying to the swath's CENTER on every load pulled the map off the
+            // storm (the middle of a swath can sit hundreds of km away), and
+            // with it the recon track, sondes and radar the user was reading.
             if (detailMap && bounds.isValid()) {
-                var mwCenter = bounds.getCenter();
-                detailMap.flyTo(mwCenter, detailMap.getZoom(), {
-                    animate: true, duration: 0.5
-                });
+                var vb = detailMap.getBounds();
+                var overlaps = vb && !(bounds.getEast() < vb.getWest() || bounds.getWest() > vb.getEast() ||
+                                       bounds.getNorth() < vb.getSouth() || bounds.getSouth() > vb.getNorth());
+                if (!overlaps) {
+                    detailMap.flyTo(bounds.getCenter(), detailMap.getZoom(), {
+                        animate: true, duration: 0.5
+                    });
+                }
             }
 
             if (status) {
@@ -7154,6 +7180,7 @@ window.loadGlobalMWOverpass = function () {
             _applyIntensityMarker(_lastMarkerDt);
         })
         .catch(function (e) {
+            if (reqId !== _gaMwReqSeq) return;
             TCErrors.show(status, e, 'this microwave image', window.loadGlobalMWOverpass);
         });
 };
@@ -7407,6 +7434,11 @@ window.loadNexradScans = function () {
 /**
  * Load and display a NEXRAD radar frame on the detail map.
  */
+// Only the latest scan pick may draw: a cold scan renders in 10-15 s, and
+// without this a slow reply for an earlier pick could replace the scan the
+// user had since moved to.
+var _gaNexradReqSeq = 0;
+
 window.loadNexradFrame = function () {
     var scanSelect = document.getElementById('ga-nexrad-scan-select');
     var siteSelect = document.getElementById('ga-nexrad-site-select');
@@ -7423,10 +7455,12 @@ window.loadNexradFrame = function () {
     var url = API_BASE + '/nexrad/frame?site=' + encodeURIComponent(site) +
         '&s3_key=' + encodeURIComponent(s3Key) +
         '&product=' + product;
+    var reqId = ++_gaNexradReqSeq;
 
     fetch(url)
         .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function (json) {
+            if (reqId !== _gaNexradReqSeq) return;   // superseded by a newer pick
             if (!json.image || !json.bounds) {
                 if (status) status.textContent = 'No data returned';
                 return;
@@ -7506,6 +7540,7 @@ window.loadNexradFrame = function () {
             _prefetchNexradSibling(s3Key, site, siblingProduct);
         })
         .catch(function (e) {
+            if (reqId !== _gaNexradReqSeq) return;
             TCErrors.show(status, e, 'this NEXRAD scan', window.loadNexradFrame);
         });
 };
@@ -7902,7 +7937,7 @@ function _updateGaNexradColorbar(product) {
             '<div style="display:flex;height:8px;border-radius:3px;border:1px solid rgba(15, 22, 35,0.15);overflow:hidden;">' +
                 velSwatchHtml +
             '</div>' +
-            '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
+            '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--slate);margin-top:2px;">' +
                 '<span>-100 m/s</span><span>-50</span><span>0</span><span>+50</span><span>+100 m/s</span>' +
             '</div>';
     } else {
@@ -7923,7 +7958,7 @@ function _updateGaNexradColorbar(product) {
                 '<div style="flex:1;background:#F800FD;"></div>' +
                 '<div style="flex:1;background:#9854C6;"></div>' +
             '</div>' +
-            '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
+            '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--slate);margin-top:2px;">' +
                 '<span>5 dBZ</span><span>20</span><span>35</span><span>50</span><span>65</span>' +
             '</div>';
     }
@@ -12174,189 +12209,25 @@ function loadSHIPSData(storm) {
 
     var basin = storm.atcf_id.substring(0, 2).toUpperCase();
     if (basin !== 'AL' && basin !== 'EP' && basin !== 'CP') {
-        var s = document.getElementById('ships-status');
-        if (s) s.textContent = 'SHIPS data only available for AL/EP/CP basins';
+        _envSetSrc('ships', 'none', 'SHIPS covers the Atlantic and East/Central Pacific only.');
         return;
     }
 
-    var s = document.getElementById('ships-status');
-    if (s) s.textContent = 'Loading...';
+    _envSetSrc('ships', 'loading');
 
     var url = API_BASE + '/global/ships?atcf_id=' + encodeURIComponent(storm.atcf_id);
     fetch(url).then(function (r) { return r.json(); }).then(function (data) {
         _shipsData = data;
-        var s2 = document.getElementById('ships-status');
         if (data.available && data.cases && data.cases.length > 0) {
-            if (s2) s2.textContent = data.n_cases + ' cases loaded';
-            if (_envPanelVisible) {
-                renderSHIPSControls();
-                renderSHIPSChart();
-            }
+            _envSetSrc('ships', 'ready', data.n_cases + ' six-hourly cases');
         } else {
-            if (s2) s2.textContent = data.reason || 'No data available';
+            data.available = false;
+            _envSetSrc('ships', 'none', (data.reason || 'No SHIPS data for this storm') + '.');
         }
     }).catch(function (err) {
-        var s2 = document.getElementById('ships-status');
-        if (s2) s2.textContent = 'Failed to load';
+        _envSetSrc('ships', 'error', 'SHIPS could not be loaded.');
         console.warn('SHIPS load error:', err);
     });
-}
-
-/**
- * Render toggle buttons for each SHIPS variable.
- */
-function renderSHIPSControls() {
-    var container = document.getElementById('ships-var-toggles');
-    if (!container || !_shipsData || !_shipsData.variables) return;
-
-    var html = '';
-    _shipsData.variables.forEach(function (varName) {
-        var meta = SHIPS_VAR_META[varName];
-        if (!meta) return;
-        var active = SHIPS_DEFAULT_SHOW.indexOf(varName) !== -1;
-        html += '<button class="ships-var-btn' + (active ? ' active' : '') + '" '
-              + 'data-var="' + varName + '" '
-              + 'style="border-color:' + meta.color + ';' + (active ? 'background:' + meta.color + '22;color:' + meta.color : '') + '" '
-              + 'onclick="toggleSHIPSVar(\'' + varName + '\', this)">'
-              + meta.name + '</button>';
-    });
-    container.innerHTML = html;
-}
-
-window.toggleSHIPSVar = function (varName, btn) {
-    btn.classList.toggle('active');
-    var meta = SHIPS_VAR_META[varName];
-    if (btn.classList.contains('active')) {
-        btn.style.background = meta.color + '22';
-        btn.style.color = meta.color;
-    } else {
-        btn.style.background = '';
-        btn.style.color = '';
-    }
-    renderSHIPSChart();
-};
-
-/**
- * Render SHIPS environmental variables chart using Plotly.
- */
-function renderSHIPSChart() {
-    var chartEl = document.getElementById('ships-chart');
-    if (!chartEl || !_shipsData || !_shipsData.cases || _shipsData.cases.length === 0) return;
-
-    // Get active variables
-    var activeVars = [];
-    document.querySelectorAll('.ships-var-btn.active').forEach(function (btn) {
-        activeVars.push(btn.getAttribute('data-var'));
-    });
-
-    if (activeVars.length === 0) {
-        if (window.Plotly) Plotly.purge(chartEl);
-        return;
-    }
-
-    // Build time series from SHIPS cases.
-    // Each case has an init_time and predictors at tau=0 (analysis time).
-    // We want the tau=0 values to form a time series across all cases.
-    var traces = [];
-    var yAxes = {};
-    var axisCount = 0;
-
-    activeVars.forEach(function (varName, idx) {
-        var meta = SHIPS_VAR_META[varName];
-        if (!meta) return;
-
-        var times = [];
-        var values = [];
-
-        _shipsData.cases.forEach(function (c) {
-            if (!c.predictors || !c.predictors[varName]) return;
-            // Find tau=0 value
-            var series = c.predictors[varName];
-            for (var j = 0; j < series.length; j++) {
-                if (series[j].tau === 0) {
-                    // Convert init_time to Date string
-                    var it = c.init_time;
-                    if (it && it.length >= 10) {
-                        var dateStr = it.substring(0, 4) + '-' + it.substring(4, 6) + '-' + it.substring(6, 8)
-                                    + 'T' + it.substring(8, 10) + ':00:00Z';
-                        times.push(dateStr);
-                        values.push(series[j].val);
-                    }
-                    break;
-                }
-            }
-        });
-
-        if (times.length === 0) return;
-
-        // Assign y-axis (group similar units on same axis)
-        var axisKey = meta.unit;
-        if (!yAxes[axisKey]) {
-            axisCount++;
-            yAxes[axisKey] = {
-                idx: axisCount,
-                unit: meta.unit,
-                side: axisCount % 2 === 1 ? 'left' : 'right'
-            };
-        }
-
-        var yAxisName = yAxes[axisKey].idx === 1 ? 'y' : 'y' + yAxes[axisKey].idx;
-
-        traces.push({
-            x: times,
-            y: values,
-            type: 'scatter',
-            mode: 'lines+markers',
-            name: meta.name + ' (' + meta.unit + ')',
-            line: { color: meta.color, width: 2 },
-            marker: { size: 4, color: meta.color },
-            yaxis: yAxisName,
-            hovertemplate: '<b>' + meta.name + '</b><br>%{x|' + TCTime.plotly.utcYear + '}<br>%{y} ' + meta.unit + '<extra></extra>'
-        });
-    });
-
-    if (traces.length === 0) {
-        if (window.Plotly) Plotly.purge(chartEl);
-        return;
-    }
-
-    // Build layout with dynamic y-axes
-    var layout = {
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'Inter, sans-serif', color: '#0f1623' },
-        margin: { l: 55, r: 55, t: 10, b: 40 },
-        showlegend: true,
-        legend: {
-            x: 0.01, y: 0.99,
-            bgcolor: 'rgba(255,255,255,0.85)',
-            bordercolor: 'rgba(15, 22, 35,0.08)',
-            borderwidth: 1,
-            font: { size: 10, color: '#0f1623' },
-            orientation: 'h'
-        },
-        xaxis: {
-            tickfont: { size: 10, color: '#5b6573' },
-            gridcolor: 'rgba(15, 22, 35,0.22)',
-            linecolor: 'rgba(15, 22, 35,0.08)'
-        }
-    };
-
-    // Add y-axes
-    var axisKeys = Object.keys(yAxes);
-    axisKeys.forEach(function (key, i) {
-        var ax = yAxes[key];
-        var yKey = ax.idx === 1 ? 'yaxis' : 'yaxis' + ax.idx;
-        layout[yKey] = {
-            title: { text: ax.unit, font: { size: 11, color: '#5b6573' } },
-            tickfont: { size: 10, color: '#5b6573' },
-            gridcolor: ax.idx === 1 ? 'rgba(15, 22, 35,0.22)' : 'transparent',
-            side: ax.side,
-            overlaying: ax.idx > 1 ? 'y' : undefined
-        };
-    });
-
-    gaNewPlot(chartEl, traces, layout, { responsive: true, displayModeBar: false });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -12380,6 +12251,12 @@ window.toggleEnvironment = function () {
 
         // Build the environment panel content
         renderEnvironmentPanel();
+        if (selectedStorm && !selectedStorm.atcf_id) {
+            // Both sources are keyed by ATCF ID, which IBTrACS lacks for
+            // most storms outside the NHC/JTWC era
+            _envSetSrc('tcprimed', 'none', 'Not available: this storm has no ATCF ID.');
+            _envSetSrc('ships', 'none', 'Not available: this storm has no ATCF ID.');
+        }
 
         // Load data if needed
         if (!_tcprimedEnvData && selectedStorm && selectedStorm.atcf_id) {
@@ -12400,45 +12277,379 @@ window.toggleEnvironment = function () {
 };
 
 /**
- * Render the Environment panel content with TC-PRIMED and SHIPS sections.
+ * Environment panel: the storm's environment along its track as STACKED
+ * panels on one shared time axis — one quantity and one unit per panel —
+ * from one source at a time: ERA5 via TC-PRIMED (global, 1998+) or SHIPS
+ * (Atlantic, East/Central Pacific). It replaced a single chart that stacked
+ * up to four y-axes and needed fifteen variable toggles to stay legible.
+ * The current IR frame time is a cursor across every panel, and the
+ * storm's peak is marked, so the environment reads against the imagery.
  */
+var _envSrc = null;                                    // 'tcprimed' | 'ships'
+var _envSrcInfo = { tcprimed: { state: 'idle', note: '' }, ships: { state: 'idle', note: '' } };
+var _envCursorDt = null;
+var _envPanelsOn = null;                               // { src: { panelId: bool } }
+var _envWired = false;
+
+// The panels each source offers. `on` = shown by default; the rest are one
+// tick away in the Panels list. Series colors are mid-tone so they hold on
+// both themes; dash patterns separate lines within a panel without color.
+var _ENV_PANELS = {
+    tcprimed: [
+        { id: 'pi', title: 'Potential intensity', unit: 'kt', on: true, intensity: true, series: [
+            { v: 'potential_intensity_theoretical', label: 'Theoretical MPI', color: '#8b5cf6' },
+            { v: 'potential_intensity_empirical', label: 'Empirical MPI', color: '#c084fc', dash: 'dash' } ] },
+        { id: 'shear', title: 'Vertical wind shear', unit: 'm/s', on: true, series: [
+            { v: 'shear_magnitude_deep', label: '850–200 hPa', color: '#ef4444' },
+            { v: 'shear_magnitude_shallow', label: '850–500 hPa', color: '#f97316', dash: 'dash' },
+            { v: 'shear_generalized_inner', label: 'Generalized', color: '#ca8a04', dash: 'dot' } ] },
+        { id: 'rh', title: 'Relative humidity', unit: '%', on: true, series: [
+            { v: 'rh_mid', label: '700 hPa', color: '#10b981' },
+            { v: 'rh_low', label: '850 hPa', color: '#0d9488', dash: 'dash' } ] },
+        { id: 'sst', title: 'Sea-surface temperature', unit: '°C', on: true, series: [
+            { v: 'sst', label: 'SST', color: '#0ea5e9', k2c: true } ] },
+        { id: 'pw', title: 'Precipitable water', unit: 'kg/m²', series: [
+            { v: 'precipitable_water_inner', label: 'Near the center', color: '#3b82f6' } ] },
+        { id: 'sdir', title: 'Shear heading', unit: '°', series: [
+            { v: 'shear_direction_deep', label: '850–200 hPa', color: '#ea580c', markers: true } ] },
+        { id: 'div', title: '200-hPa divergence', unit: '10⁻⁶ s⁻¹', series: [
+            { v: 'divergence_200', label: '200 hPa', color: '#d97706' } ] },
+        { id: 'vort', title: '850-hPa vorticity', unit: '10⁻⁵ s⁻¹', series: [
+            { v: 'vorticity_850', label: '850 hPa', color: '#db2777' } ] },
+        { id: 'wc', title: 'Warm-core anomaly', unit: 'K', series: [
+            { v: 'warm_core_max', label: 'Largest over levels', color: '#e11d48' } ] },
+        { id: 'cps', title: 'Phase-space B', unit: 'm', series: [
+            { v: 'cyclone_phase_space_b_parameter', label: 'Thermal asymmetry', color: '#9333ea' } ] }
+    ],
+    ships: [
+        { id: 'pi', title: 'Potential intensity', unit: 'kt', on: true, intensity: true, series: [
+            { v: 'VMPI', label: 'VMPI', color: '#8b5cf6' } ] },
+        { id: 'shear', title: 'Vertical wind shear', unit: 'kt', on: true, series: [
+            { v: 'SHDC', label: 'SHDC (0–500 km, vortex removed)', color: '#ef4444' },
+            { v: 'SHRD', label: 'SHRD (200–800 km)', color: '#f97316', dash: 'dash' },
+            { v: 'SHGC', label: 'SHGC (generalized)', color: '#ca8a04', dash: 'dot' } ] },
+        { id: 'rh', title: 'Relative humidity', unit: '%', on: true, series: [
+            { v: 'RHMD', label: 'RHMD (700–500 hPa)', color: '#10b981' },
+            { v: 'RHLO', label: 'RHLO (850–700 hPa)', color: '#0d9488', dash: 'dash' } ] },
+        { id: 'sst', title: 'Sea-surface temperature', unit: '°C', on: true, series: [
+            { v: 'RSST', label: 'RSST', color: '#0ea5e9' } ] },
+        { id: 'ohc', title: 'Ocean heat content', unit: 'kJ/cm²', series: [
+            { v: 'COHC', label: 'COHC', color: '#0891b2' } ] },
+        { id: 'pw', title: 'Precipitable water', unit: 'mm', series: [
+            { v: 'MTPW', label: 'MTPW', color: '#3b82f6' } ] },
+        { id: 'div', title: '200-hPa divergence', unit: '10⁻⁷ s⁻¹', series: [
+            { v: 'D200', label: 'D200', color: '#d97706' } ] },
+        { id: 't200', title: '200-hPa temperature', unit: '°C', series: [
+            { v: 'T200', label: 'T200', color: '#db2777' } ] }
+    ]
+};
+var _ENV_SRC_NAME = { tcprimed: 'ERA5 · TC-PRIMED', ships: 'SHIPS' };
+var _ENV_FOOT = {
+    tcprimed: 'ERA5 reanalysis via NOAA TC-PRIMED, every 6 h. Shear is averaged 0–500 km from the center; relative humidity 0–300 km.',
+    ships: 'SHIPS developmental data (LSDIAG): each 6-hourly case at its analysis time (τ = 0).'
+};
+
+function _envPrefs() {
+    if (_envPanelsOn) return _envPanelsOn;
+    _envPanelsOn = { tcprimed: {}, ships: {} };
+    try {
+        var j = JSON.parse(localStorage.getItem('ga-env-panels') || 'null');
+        if (j && typeof j === 'object') { _envPanelsOn.tcprimed = j.tcprimed || {}; _envPanelsOn.ships = j.ships || {}; }
+    } catch (e) {}
+    return _envPanelsOn;
+}
+function _envPanelOn(src, p) {
+    var m = _envPrefs()[src];
+    return (m && m[p.id] != null) ? !!m[p.id] : !!p.on;
+}
+
+// One series of one source as {x, y}, or null when the source lacks it.
+function _envSeries(src, s) {
+    var x = [], y = [];
+    if (src === 'tcprimed') {
+        var D = _tcprimedEnvData, meta = TCPRIMED_VAR_META[s.v];
+        if (!D || !D.available || !meta || !D.diagnostics) return null;
+        var sv = meta.srcVar || s.v, raw = D.diagnostics[sv];
+        if (!raw) return null;
+        var vals = meta.extract(raw, D.variable_meta ? D.variable_meta[sv] : null) || [];
+        for (var i = 0; i < Math.min(D.times.length, vals.length); i++) {
+            var v = vals[i];
+            if (v == null || D.times[i] == null || !isFinite(v)) continue;
+            x.push(D.times[i]); y.push(s.k2c ? v - 273.15 : v);
+        }
+    } else {
+        var S = _shipsData;
+        if (!S || !S.available || !S.cases) return null;
+        S.cases.forEach(function (c) {
+            var ser = c.predictors && c.predictors[s.v], it = c.init_time;
+            if (!ser || !it || it.length < 10) return;
+            for (var j = 0; j < ser.length; j++) {
+                if (ser[j].tau !== 0) continue;
+                if (ser[j].val != null && isFinite(ser[j].val)) {
+                    x.push(it.substring(0, 4) + '-' + it.substring(4, 6) + '-' + it.substring(6, 8) + 'T' + it.substring(8, 10) + ':00');
+                    y.push(ser[j].val);
+                }
+                break;
+            }
+        });
+    }
+    return x.length ? { x: x, y: y } : null;
+}
+
+// Best-track intensity (the same 6-hourly track the timeline draws)
+function _envIntensity() {
+    var t = selectedStorm && allTracks[selectedStorm.sid], x = [], y = [];
+    if (t) t.forEach(function (p) { if (p.t && p.w != null) { x.push(p.t); y.push(p.w); } });
+    if (!x.length && _tcprimedEnvData && _tcprimedEnvData.storm_metadata) {
+        var I = _tcprimedEnvData.storm_metadata.intensity || [], T = _tcprimedEnvData.times || [];
+        for (var i = 0; i < Math.min(I.length, T.length); i++) if (I[i] != null) { x.push(T[i]); y.push(I[i]); }
+    }
+    return x.length ? { x: x, y: y } : null;
+}
+
+// Loader → panel: a source's state is idle | loading | ready | none | error.
+function _envSetSrc(src, state, note) {
+    _envSrcInfo[src] = { state: state, note: note || '' };
+    if (!_envPanelVisible) return;
+    _envPickSource();
+    _envRender();
+}
+
+// Keep the reader's last choice when it has data; otherwise ERA5, else SHIPS.
+function _envPickSource() {
+    var pref = null;
+    try { pref = localStorage.getItem('ga-env-src'); } catch (e) {}
+    var ready = function (k) { return _envSrcInfo[k] && _envSrcInfo[k].state === 'ready'; };
+    if (_envSrc && ready(_envSrc)) return;
+    if (pref && ready(pref)) { _envSrc = pref; return; }
+    if (ready('tcprimed')) { _envSrc = 'tcprimed'; return; }
+    if (ready('ships')) { _envSrc = 'ships'; return; }
+    if (!_envSrc) _envSrc = (pref === 'ships') ? 'ships' : 'tcprimed';
+}
+
 function renderEnvironmentPanel() {
     var container = document.getElementById('environment-content');
     if (!container) return;
-
-    var html = '';
-
-    // --- TC-PRIMED ERA5 Environmental section (global, primary) ---
-    html += '<div id="tcprimed-env-section" class="ships-section">';
-    html += '<div class="ships-header">';
-    html += '<h4 style="margin:0;color:#e2e8f0;font-size:0.92rem;">ERA5 Reanalysis <span style="font-size:0.75rem;color:#8b9ec2;">(TC-PRIMED, all basins)</span></h4>';
-    html += '<span id="tcprimed-env-status" style="font-size:0.8rem;color:#8b9ec2;"></span>';
-    html += '</div>';
-    html += '<div id="tcprimed-env-toggles" class="ships-var-toggles"></div>';
-    html += '<div id="tcprimed-env-chart" class="chart-container" style="height:320px;"></div>';
-    html += '</div>';
-
-    // --- SHIPS Environmental section (AL/EP/CP) ---
-    html += '<div id="ships-section" class="ships-section">';
-    html += '<div class="ships-header">';
-    html += '<h4 style="margin:0;color:#e2e8f0;font-size:0.92rem;">SHIPS Diagnostics <span style="font-size:0.75rem;color:#8b9ec2;">(LSDIAG, AL/EP/CP only)</span></h4>';
-    html += '<span id="ships-status" style="font-size:0.8rem;color:#8b9ec2;"></span>';
-    html += '</div>';
-    html += '<div id="ships-var-toggles" class="ships-var-toggles"></div>';
-    html += '<div id="ships-chart" class="chart-container" style="height:280px;"></div>';
-    html += '</div>';
-
-    container.innerHTML = html;
-
-    // Render existing data if already loaded
-    if (_tcprimedEnvData && _tcprimedEnvData.available) {
-        renderTCPrimedEnvControls();
-        renderTCPrimedEnvChart();
+    container.innerHTML =
+        '<div class="env-top">' +
+            '<div class="env-src" role="group" aria-label="Data source">' +
+                '<button type="button" data-src="tcprimed" title="ERA5 reanalysis via NOAA TC-PRIMED: every basin, 1998 onward">ERA5 <span>TC-PRIMED</span></button>' +
+                '<button type="button" data-src="ships" title="SHIPS developmental data (LSDIAG): Atlantic and East/Central Pacific">SHIPS</button>' +
+            '</div>' +
+            '<div class="env-pick">' +
+                '<button type="button" class="env-pick-btn" aria-expanded="false" title="Choose which panels to show">' +
+                    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="16" width="18" height="4" rx="1"/></svg>' +
+                    'Panels <b id="env-pick-n"></b></button>' +
+                '<div class="env-pick-pop" id="env-pick-pop" hidden></div>' +
+            '</div>' +
+        '</div>' +
+        '<div id="env-status" class="env-status"></div>' +
+        '<div id="env-figure" class="env-figure js-theme-ignore"></div>' +
+        '<div id="env-foot" class="env-foot"></div>';
+    if (!_envWired) {
+        _envWired = true;
+        container.addEventListener('click', function (e) {
+            var b = e.target.closest ? e.target.closest('button') : null;
+            if (!b || !container.contains(b)) return;
+            if (b.dataset.src) {
+                if (b.disabled || b.dataset.src === _envSrc) return;
+                _envSrc = b.dataset.src;
+                try { localStorage.setItem('ga-env-src', _envSrc); } catch (er) {}
+                _envRender();
+            } else if (b.classList.contains('env-pick-btn')) {
+                var pop = document.getElementById('env-pick-pop');
+                pop.hidden = !pop.hidden;
+                b.setAttribute('aria-expanded', pop.hidden ? 'false' : 'true');
+            } else if (b.classList.contains('env-pick-reset')) {
+                _envPrefs()[_envSrc] = {};
+                _envSavePrefs(); _envRender();
+            }
+        });
+        container.addEventListener('change', function (e) {
+            var cb = e.target;
+            if (!cb || cb.type !== 'checkbox' || !cb.dataset.pid) return;
+            _envPrefs()[_envSrc][cb.dataset.pid] = cb.checked;
+            _envSavePrefs(); _envRender(true);
+        });
+        document.addEventListener('mousedown', function (e) {
+            var pop = document.getElementById('env-pick-pop');
+            if (!pop || pop.hidden) return;
+            var wrap = pop.parentNode;
+            if (wrap && !wrap.contains(e.target)) {
+                pop.hidden = true;
+                var b2 = wrap.querySelector('.env-pick-btn'); if (b2) b2.setAttribute('aria-expanded', 'false');
+            }
+        });
+        // the figure's annotation colors and key wrapping are set at render:
+        // redraw on a theme flip or a resize
+        document.documentElement.addEventListener('theme:change', function () {
+            if (_envPanelVisible) setTimeout(function () { _envRender(true); }, 0);
+        });
+        var _envRsz = null;
+        window.addEventListener('resize', function () {
+            clearTimeout(_envRsz);
+            _envRsz = setTimeout(function () { if (_envPanelVisible) _envRender(true); }, 250);
+        });
     }
-    if (_shipsData && _shipsData.available) {
-        renderSHIPSControls();
-        renderSHIPSChart();
+    _envPickSource();
+    _envRender();
+}
+function _envSavePrefs() {
+    try { localStorage.setItem('ga-env-panels', JSON.stringify(_envPrefs())); } catch (e) {}
+}
+
+// Source switch, status line, Panels list and footnote for the current source.
+function _envRenderChrome() {
+    var info = _envSrcInfo[_envSrc] || {};
+    document.querySelectorAll('#environment-content .env-src button').forEach(function (b) {
+        var k = b.dataset.src, st = (_envSrcInfo[k] || {}).state;
+        b.classList.toggle('active', k === _envSrc);
+        b.setAttribute('aria-pressed', k === _envSrc ? 'true' : 'false');
+        b.disabled = (st === 'none' || st === 'error') && k !== _envSrc;
+        b.classList.toggle('is-na', st === 'none' || st === 'error');
+        if (st === 'none' || st === 'error') b.title = _ENV_SRC_NAME[k] + ': ' + (_envSrcInfo[k].note || 'not available');
+    });
+    var stEl = document.getElementById('env-status');
+    if (stEl) {
+        stEl.textContent = info.state === 'loading' ? 'Loading ' + _ENV_SRC_NAME[_envSrc] + '…'
+            : (info.note || '');
+        stEl.classList.toggle('is-warn', info.state === 'none' || info.state === 'error');
     }
+    var foot = document.getElementById('env-foot');
+    if (foot) foot.textContent = info.state === 'ready' ? (_ENV_FOOT[_envSrc] || '') : '';
+    var list = document.getElementById('env-pick-pop'), nEl = document.getElementById('env-pick-n');
+    var pickBtn = document.querySelector('#environment-content .env-pick-btn');
+    if (pickBtn) pickBtn.disabled = info.state !== 'ready';
+    if (!list || info.state !== 'ready') { if (nEl) nEl.textContent = ''; return; }
+    var on = 0, avail = 0, rows = _ENV_PANELS[_envSrc].map(function (p) {
+        var has = p.series.some(function (s) { return !!_envSeries(_envSrc, s); });
+        var chk = has && _envPanelOn(_envSrc, p);
+        if (has) avail++;
+        if (chk) on++;
+        return '<label class="env-pick-row' + (has ? '' : ' is-na') + '"' + (has ? '' : ' title="No data for this storm"') + '>' +
+            '<input type="checkbox" data-pid="' + p.id + '"' + (chk ? ' checked' : '') + (has ? '' : ' disabled') + '>' +
+            '<span class="env-pick-name">' + p.title + '</span><span class="env-pick-unit">' + p.unit + '</span></label>';
+    }).join('');
+    list.innerHTML = '<div class="env-pick-head">Panels<button type="button" class="env-pick-reset">Reset</button></div>' + rows;
+    if (nEl) nEl.textContent = on + '/' + avail;
+}
+
+function _envDashGlyph(d) { return d === 'dash' ? '╍╍' : (d === 'dot' ? '┅┅' : '━━'); }
+
+// The stacked figure: one Plotly plot, one shared date axis, a y-domain per
+// panel, titles and line keys as annotations in the gap above each panel.
+function _envRender() {
+    var fig = document.getElementById('env-figure');
+    if (!fig) return;
+    _envRenderChrome();
+    var info = _envSrcInfo[_envSrc] || {};
+    var purge = function () { if (window.Plotly && fig._fullLayout) { try { Plotly.purge(fig); } catch (e) {} } };
+    if (info.state !== 'ready') {
+        purge();
+        fig.style.height = '';
+        fig.innerHTML = info.state === 'loading' || info.state === 'idle'
+            ? '<div class="env-empty"><div class="ga-spinner"></div></div>' : '';
+        return;
+    }
+    var panels = [];
+    _ENV_PANELS[_envSrc].forEach(function (p) {
+        if (!_envPanelOn(_envSrc, p)) return;
+        var data = p.series.map(function (s) { return { s: s, d: _envSeries(_envSrc, s) }; }).filter(function (o) { return o.d; });
+        if (data.length) panels.push({ p: p, data: data });
+    });
+    if (!panels.length) {
+        purge(); fig.style.height = '';
+        fig.innerHTML = '<div class="env-empty">No panels selected. Pick some under <b>Panels</b>.</div>';
+        return;
+    }
+    if (!fig._fullLayout) fig.innerHTML = '';
+
+    var T = _tcaPlotlyBase(), ink = T.font.color;
+    var axisC = (T.xaxis && T.xaxis.tickfont && T.xaxis.tickfont.color) || '#5b6573';
+    var grid = (T.xaxis && T.xaxis.gridcolor) || 'rgba(15,22,35,0.08)';
+    var n = panels.length, PH = 88, GAP = 46, A = n * (PH + GAP), MB = 24;
+    var plotW = Math.max(200, (fig.clientWidth || 340) - 44);
+    var inten = _envIntensity();
+    var traces = [], ann = [], xmin = null, xmax = null;
+    var span = function (xs) { xs.forEach(function (x) { if (xmin === null || x < xmin) xmin = x; if (xmax === null || x > xmax) xmax = x; }); };
+    var layout = {
+        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: T.font.family, color: ink, size: 10 },
+        hoverlabel: T.hoverlabel, hovermode: 'x unified', showlegend: false,
+        margin: { l: 36, r: 8, t: 0, b: MB }, height: A + MB, dragmode: false
+    };
+    panels.forEach(function (P, i) {
+        var yk = i === 0 ? 'y' : 'y' + (i + 1), yl = i === 0 ? 'yaxis' : 'yaxis' + (i + 1);
+        var topPx = i * (PH + GAP) + GAP, botPx = topPx + PH;
+        layout[yl] = {
+            domain: [1 - botPx / A, 1 - topPx / A], anchor: 'x',
+            gridcolor: grid, zeroline: false, showline: false, fixedrange: true,
+            tickfont: { size: 9.5, color: axisC }, nticks: 4, ticks: ''
+        };
+        if (P.p.unit === '°' ) { layout[yl].range = [0, 360]; layout[yl].tickvals = [0, 90, 180, 270, 360]; }
+        if (P.p.intensity && inten) {
+            traces.push({ x: inten.x, y: inten.y, xaxis: 'x', yaxis: yk, type: 'scatter', mode: 'lines',
+                name: 'Best-track intensity', line: { color: ink, width: 1.4 }, opacity: 0.45,
+                hovertemplate: '%{y:.0f} kt<extra>Best track</extra>' });
+            span(inten.x);
+        }
+        P.data.forEach(function (o) {
+            var s = o.s;
+            traces.push({ x: o.d.x, y: o.d.y, xaxis: 'x', yaxis: yk, type: 'scatter',
+                mode: s.markers ? 'markers' : 'lines', name: s.label,
+                line: { color: s.color, width: 1.9, dash: s.dash || 'solid' },
+                marker: { size: 4.5, color: s.color },
+                hovertemplate: '%{y:.' + (Math.abs(o.d.y[0]) >= 100 ? 0 : 1) + 'f} ' + P.p.unit + '<extra>' + s.label + '</extra>' });
+            span(o.d.x);
+        });
+        var keys = P.data.map(function (o) {
+            return { t: o.s.label, h: '<span style="color:' + o.s.color + '">' + _envDashGlyph(o.s.dash) + '</span> ' + o.s.label };
+        });
+        if (P.p.intensity && inten) keys.push({ t: 'Best-track intensity', h: '<span style="color:' + axisC + '">━━</span> Best-track intensity' });
+        // Pack the line keys into at most two lines that fit the plot width
+        // (a one-line key ran off the right edge of a 340-px drawer).
+        var lines = [[]], used = 0;
+        keys.forEach(function (k) {
+            var w = 22 + k.t.length * 5.4;
+            if (used && used + w > plotW && lines.length < 2) { lines.push([]); used = 0; }
+            lines[lines.length - 1].push(k.h); used += w + 14;
+        });
+        ann.push({ xref: 'paper', yref: 'paper', x: 0, xanchor: 'left', y: 1 - (i * (PH + GAP) + 2) / A, yanchor: 'top',
+            showarrow: false, align: 'left',
+            text: '<b>' + P.p.title + '</b>  <span style="color:' + axisC + '">' + P.p.unit + '</span><br>' +
+                  lines.map(function (ln) { return '<span style="font-size:9.5px">' + ln.join('    ') + '</span>'; }).join('<br>'),
+            font: { size: 11, color: ink } });
+    });
+    // the storm's life as the shared x range (data can stop before or after it)
+    var track = selectedStorm && allTracks[selectedStorm.sid];
+    if (track && track.length) { span([track[0].t, track[track.length - 1].t]); }
+    layout.xaxis = {
+        type: 'date', anchor: n === 1 ? 'y' : 'y' + n, domain: [0, 1],
+        range: [xmin, xmax], tickformat: TCTime.plotly.day, nticks: 6,
+        tickfont: { size: 10, color: axisC }, gridcolor: grid, linecolor: grid, fixedrange: true,
+        showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikethickness: 1, spikedash: 'solid', spikecolor: axisC
+    };
+    // shapes[0] = IR-time cursor (moved by _envSetCursor), shapes[1] = peak
+    var shapes = [{ type: 'line', xref: 'x', yref: 'paper', x0: _envCursorDt || xmin, x1: _envCursorDt || xmin, y0: 0, y1: 1,
+                    line: { color: 'rgba(245,158,11,0.9)', width: 1.5 }, visible: !!_envCursorDt }];
+    if (track) {
+        var pk = null;
+        track.forEach(function (p) { if (p.w != null && (!pk || p.w > pk.w)) pk = p; });
+        if (pk) shapes.push({ type: 'line', xref: 'x', yref: 'paper', x0: pk.t, x1: pk.t, y0: 0, y1: 1,
+                              line: { color: 'rgba(220,38,38,0.55)', width: 1, dash: 'dash' } });
+    }
+    layout.shapes = shapes;
+    layout.annotations = ann;
+    fig.style.height = (A + MB) + 'px';
+    gaNewPlot(fig, traces, layout, { responsive: true, displayModeBar: false });
+}
+
+// IR clock → Environment cursor (called with the timeline's own marker)
+function _envSetCursor(dt) {
+    _envCursorDt = dt || null;
+    var fig = document.getElementById('env-figure');
+    if (!_envPanelVisible || !fig || !fig._fullLayout || !window.Plotly) return;
+    try { Plotly.relayout(fig, { 'shapes[0].x0': dt, 'shapes[0].x1': dt, 'shapes[0].visible': !!dt }); } catch (e) {}
 }
 
 /**
@@ -12447,219 +12658,22 @@ function renderEnvironmentPanel() {
 function loadTCPrimedEnvData(storm) {
     if (!storm.atcf_id || _tcprimedEnvData) return;
 
-    var statusEl = document.getElementById('tcprimed-env-status');
-    if (statusEl) statusEl.textContent = 'Loading ERA5 diagnostics...';
+    _envSetSrc('tcprimed', 'loading');
 
     var url = API_BASE + '/global/tcprimed-env?atcf_id=' + encodeURIComponent(storm.atcf_id);
     fetch(url).then(function(r) { return r.json(); }).then(function(data) {
         _tcprimedEnvData = data;
         // Update UI if the environment panel is currently visible
-        var statusEl2 = document.getElementById('tcprimed-env-status');
         if (data.available && data.times && data.times.length > 0) {
-            if (statusEl2) statusEl2.textContent = data.times.length + ' synoptic times (' + data.source + ')';
-            if (_envPanelVisible) {
-                renderTCPrimedEnvControls();
-                renderTCPrimedEnvChart();
-            }
+            _envSetSrc('tcprimed', 'ready', data.times.length + ' analysis times · ' + (data.source || 'TC-PRIMED'));
         } else {
-            if (statusEl2) statusEl2.textContent = data.reason || 'No TC-PRIMED data available';
+            data.available = false;
+            _envSetSrc('tcprimed', 'none', (data.reason || 'No TC-PRIMED data for this storm') + '.');
         }
     }).catch(function(err) {
-        var statusEl2 = document.getElementById('tcprimed-env-status');
-        if (statusEl2) statusEl2.textContent = 'Failed to load';
+        _envSetSrc('tcprimed', 'error', 'The ERA5 diagnostics could not be loaded.');
         console.warn('TC-PRIMED env load error:', err);
     });
-}
-
-/**
- * Render toggle buttons for TC-PRIMED environmental variables.
- */
-function renderTCPrimedEnvControls() {
-    var container = document.getElementById('tcprimed-env-toggles');
-    if (!container || !_tcprimedEnvData || !_tcprimedEnvData.available) return;
-
-    var html = '';
-    var varKeys = Object.keys(TCPRIMED_VAR_META);
-    varKeys.forEach(function(varKey) {
-        var meta = TCPRIMED_VAR_META[varKey];
-        // Check that the source data exists
-        var srcVar = meta.srcVar || varKey;
-        if (!_tcprimedEnvData.diagnostics[srcVar]) return;
-
-        var active = TCPRIMED_DEFAULT_SHOW.indexOf(varKey) !== -1;
-        html += '<button class="ships-var-btn tcprimed-var-btn' + (active ? ' active' : '') + '" '
-              + 'data-var="' + varKey + '" '
-              + 'style="border-color:' + meta.color + ';' + (active ? 'background:' + meta.color + '22;color:' + meta.color : '') + '" '
-              + 'onclick="toggleTCPrimedVar(\'' + varKey + '\', this)">'
-              + meta.name + '</button>';
-    });
-    container.innerHTML = html;
-}
-
-window.toggleTCPrimedVar = function(varKey, btn) {
-    btn.classList.toggle('active');
-    var meta = TCPRIMED_VAR_META[varKey];
-    if (btn.classList.contains('active')) {
-        btn.style.background = meta.color + '22';
-        btn.style.color = meta.color;
-    } else {
-        btn.style.background = '';
-        btn.style.color = '';
-    }
-    renderTCPrimedEnvChart();
-};
-
-/**
- * Render TC-PRIMED environmental chart using Plotly.
- */
-function renderTCPrimedEnvChart() {
-    var chartEl = document.getElementById('tcprimed-env-chart');
-    if (!chartEl || !_tcprimedEnvData || !_tcprimedEnvData.available) return;
-
-    // Get active variables
-    var activeVars = [];
-    document.querySelectorAll('.tcprimed-var-btn.active').forEach(function(btn) {
-        activeVars.push(btn.getAttribute('data-var'));
-    });
-
-    if (activeVars.length === 0) {
-        if (window.Plotly) Plotly.purge(chartEl);
-        return;
-    }
-
-    var times = _tcprimedEnvData.times;
-    var traces = [];
-    var yAxes = {};
-    var axisCount = 0;
-
-    activeVars.forEach(function(varKey) {
-        var meta = TCPRIMED_VAR_META[varKey];
-        if (!meta) return;
-
-        var srcVar = meta.srcVar || varKey;
-        var rawData = _tcprimedEnvData.diagnostics[srcVar];
-        if (!rawData) return;
-
-        // Extract the time series using the variable-specific extractor
-        var varMeta = _tcprimedEnvData.variable_meta[srcVar];
-        var values = meta.extract(rawData, varMeta);
-
-        // Filter out nulls and align with times
-        var xVals = [];
-        var yVals = [];
-        for (var i = 0; i < Math.min(times.length, values.length); i++) {
-            if (values[i] != null && times[i] != null) {
-                xVals.push(times[i]);
-                yVals.push(values[i]);
-            }
-        }
-
-        if (xVals.length === 0) return;
-
-        // Convert SST from K to °C for display
-        var displayUnit = meta.unit;
-        if (varKey === 'sst') {
-            yVals = yVals.map(function(v) { return v != null ? Math.round((v - 273.15) * 100) / 100 : null; });
-            displayUnit = '°C';
-        }
-
-        // Assign y-axis (group by unit)
-        var axisKey = displayUnit;
-        if (!yAxes[axisKey]) {
-            axisCount++;
-            yAxes[axisKey] = {
-                idx: axisCount,
-                unit: displayUnit,
-                side: axisCount % 2 === 1 ? 'left' : 'right'
-            };
-        }
-
-        var yAxisName = yAxes[axisKey].idx === 1 ? 'y' : 'y' + yAxes[axisKey].idx;
-
-        traces.push({
-            x: xVals,
-            y: yVals,
-            type: 'scatter',
-            mode: 'lines+markers',
-            name: meta.name + ' (' + displayUnit + ')',
-            line: { color: meta.color, width: 2 },
-            marker: { size: 3, color: meta.color },
-            yaxis: yAxisName,
-            hovertemplate: '<b>' + meta.name + '</b><br>%{x|' + TCTime.plotly.utcYear + '}<br>%{y:.2f} ' + displayUnit + '<extra></extra>'
-        });
-    });
-
-    if (traces.length === 0) {
-        if (window.Plotly) Plotly.purge(chartEl);
-        return;
-    }
-
-    // Also overlay intensity from storm_metadata if available
-    var smIntensity = _tcprimedEnvData.storm_metadata ? _tcprimedEnvData.storm_metadata.intensity : null;
-    if (smIntensity && smIntensity.length > 0) {
-        var intX = [];
-        var intY = [];
-        for (var i = 0; i < Math.min(times.length, smIntensity.length); i++) {
-            if (smIntensity[i] != null && times[i] != null) {
-                intX.push(times[i]);
-                intY.push(smIntensity[i]);
-            }
-        }
-        if (intX.length > 0) {
-            // Ensure kt axis exists
-            if (!yAxes['kt']) {
-                axisCount++;
-                yAxes['kt'] = { idx: axisCount, unit: 'kt', side: axisCount % 2 === 1 ? 'left' : 'right' };
-            }
-            var intAxisName = yAxes['kt'].idx === 1 ? 'y' : 'y' + yAxes['kt'].idx;
-            traces.push({
-                x: intX,
-                y: intY,
-                type: 'scatter',
-                mode: 'lines',
-                name: 'Intensity (kt)',
-                line: { color: '#0f1623', width: 2, dash: 'dot' },
-                yaxis: intAxisName,
-                hovertemplate: '<b>Intensity</b><br>%{x|' + TCTime.plotly.utcYear + '}<br>%{y} kt<extra></extra>'
-            });
-        }
-    }
-
-    var layout = {
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'Inter, sans-serif', color: '#0f1623' },
-        margin: { l: 55, r: 55, t: 10, b: 40 },
-        showlegend: true,
-        legend: {
-            x: 0.01, y: 0.99,
-            bgcolor: 'rgba(255,255,255,0.85)',
-            bordercolor: 'rgba(15, 22, 35,0.08)',
-            borderwidth: 1,
-            font: { size: 10, color: '#0f1623' },
-            orientation: 'h'
-        },
-        xaxis: {
-            tickfont: { size: 10, color: '#5b6573' },
-            gridcolor: 'rgba(15, 22, 35,0.22)',
-            linecolor: 'rgba(15, 22, 35,0.08)'
-        }
-    };
-
-    // Add y-axes
-    Object.keys(yAxes).forEach(function(key) {
-        var ax = yAxes[key];
-        var yKey = ax.idx === 1 ? 'yaxis' : 'yaxis' + ax.idx;
-        layout[yKey] = {
-            title: { text: ax.unit, font: { size: 11, color: '#5b6573' } },
-            tickfont: { size: 10, color: '#5b6573' },
-            gridcolor: ax.idx === 1 ? 'rgba(15, 22, 35,0.22)' : 'transparent',
-            side: ax.side,
-            overlaying: ax.idx > 1 ? 'y' : undefined
-        };
-    });
-
-    gaNewPlot(chartEl, traces, layout, { responsive: true, displayModeBar: false });
 }
 
 /**
@@ -12680,6 +12694,8 @@ function removeScorecard() {
     _scorecardLastAtcf = null;
     _tcprimedEnvData = null;
     _envPanelVisible = false;
+    _envSrc = null;
+    _envSrcInfo = { tcprimed: { state: 'idle', note: '' }, ships: { state: 'idle', note: '' } };
     removeSHIPSTraces();
     var panel = document.getElementById('scorecard-panel');
     if (panel) panel.style.display = 'none';
@@ -14236,11 +14252,11 @@ function _gaFLInjectLegend() {
     if (cb.discrete) {
         var chips = cb.stops.map(function (st) {
             var ink = /^#(60a5fa|22c55e|eab308|f97316)$/i.test(st.color) ? '#0b1220' : '#fff';
-            return '<span style="flex:1;text-align:center;font-size:9px;font-weight:700;padding:1px 0;background:' +
+            return '<span style="flex:1;text-align:center;font-size:10.5px;font-weight:700;padding:2px 0;background:' +
                 st.color + ';color:' + ink + ';">' + st.val + '</span>';
         }).join('');
         el.innerHTML = '<div style="margin-top:2px;"><div style="display:flex;border-radius:3px;overflow:hidden;border:1px solid var(--border-light);">' +
-            chips + '</div><div style="font-size:9px;font-weight:500;color:var(--text);text-align:center;margin-top:1px;">' + cb.label + '</div></div>';
+            chips + '</div><div style="font-size:10.5px;font-weight:500;color:var(--text);text-align:center;margin-top:1px;">' + cb.label + '</div></div>';
         return;
     }
 
@@ -14259,12 +14275,12 @@ function _gaFLInjectLegend() {
     var borderCol = 'var(--border-light)';
     var html = '<div style="margin-top:2px;">' +
         '<div style="height:12px;border-radius:3px;background:linear-gradient(to right,' + gradStops + ');border:1px solid ' + borderCol + ';"></div>' +
-        '<div style="display:flex;justify-content:space-between;font-size:9px;font-weight:500;color:' + labelCol + ';margin-top:2px;">';
+        '<div style="display:flex;justify-content:space-between;font-size:10.5px;font-weight:500;color:' + labelCol + ';margin-top:2px;">';
     stops.forEach(function (s) {
         html += '<span>' + (s.lbl || s.val) + '</span>';
     });
     html += '</div>' +
-        '<div style="font-size:9px;font-weight:500;color:' + captionCol + ';text-align:center;margin-top:1px;">' + cb.label + '</div></div>';
+        '<div style="font-size:10.5px;font-weight:500;color:' + captionCol + ';text-align:center;margin-top:1px;">' + cb.label + '</div></div>';
     el.innerHTML = html;
 }
 
@@ -14762,14 +14778,14 @@ function _gaSondeRenderTable() {
     var wrap = document.getElementById('ga-sonde-table-wrap');
     if (!wrap || !_gaSondeData) return;
 
-    var html = '<table style="width:100%;border-collapse:collapse;font-size:10px;font-variant-numeric:tabular-nums;color:var(--text);">' +
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--text);">' +
         '<tr style="color:var(--slate);border-bottom:1px solid var(--border);">' +
-        '<th style="padding:3px 4px;text-align:left;">#</th>' +
-        '<th style="padding:3px 4px;text-align:left;">Time (UTC)</th>' +
-        '<th style="padding:3px 4px;text-align:right;" title="Mean wind in lowest 150 m (Franklin et al. 2003)">WL150</th>' +
-        '<th style="padding:3px 4px;text-align:right;" title="Maximum wind speed in profile">Max</th>' +
-        '<th style="padding:3px 4px;text-align:right;" title="Surface pressure (splash or hydrostatic)">Psfc</th>' +
-        '<th style="padding:3px 4px;text-align:center;" title="Reached the surface?">Sfc</th></tr>';
+        '<th style="padding:5px 6px;text-align:left;">#</th>' +
+        '<th style="padding:5px 6px;text-align:left;">Time (UTC)</th>' +
+        '<th style="padding:5px 6px;text-align:right;" title="Mean wind in lowest 150 m (Franklin et al. 2003)">WL150</th>' +
+        '<th style="padding:5px 6px;text-align:right;" title="Maximum wind speed in profile">Max</th>' +
+        '<th style="padding:5px 6px;text-align:right;" title="Surface pressure (splash or hydrostatic)">Psfc</th>' +
+        '<th style="padding:5px 6px;text-align:center;" title="Reached the surface?">Sfc</th></tr>';
 
     for (var i = 0; i < _gaSondeData.length; i++) {
         var s = _gaSondeData[i], st = _gaSondeStats(s);
@@ -14779,12 +14795,12 @@ function _gaSondeRenderTable() {
               _gaReconWindColorKt(st.wl150) + ';">' + Math.round(st.wl150) + '</span>'
             : '—';
         html += '<tr class="ga-sonde-row' + (i === _gaSondeSelIdx ? ' sel' : '') + '" data-si="' + i + '" onclick="gaSondeShowSkewT(' + i + ')">' +
-            '<td style="padding:2px 4px;white-space:nowrap;"><span class="ga-sd-i"></span>' + (i + 1) + '</td>' +
-            '<td style="padding:2px 4px;">' + timeShort + '</td>' +
-            '<td style="padding:2px 4px;text-align:right;">' + wlCell + '</td>' +
-            '<td style="padding:2px 4px;text-align:right;">' + (st.vmax != null ? Math.round(st.vmax) + ' kt' : '—') + '</td>' +
-            '<td style="padding:2px 4px;text-align:right;">' + (st.psfc != null ? st.psfc.toFixed(0) : '—') + '</td>' +
-            '<td style="padding:2px 4px;text-align:center;color:' + (s.hit_surface ? '#16a34a' : 'var(--slate)') + ';">' +
+            '<td style="padding:4px 6px;white-space:nowrap;"><span class="ga-sd-i"></span>' + (i + 1) + '</td>' +
+            '<td style="padding:4px 6px;">' + timeShort + '</td>' +
+            '<td style="padding:4px 6px;text-align:right;">' + wlCell + '</td>' +
+            '<td style="padding:4px 6px;text-align:right;">' + (st.vmax != null ? Math.round(st.vmax) + ' kt' : '—') + '</td>' +
+            '<td style="padding:4px 6px;text-align:right;">' + (st.psfc != null ? st.psfc.toFixed(0) : '—') + '</td>' +
+            '<td style="padding:4px 6px;text-align:center;color:' + (s.hit_surface ? '#16a34a' : 'var(--slate)') + ';">' +
                 (s.hit_surface ? '✓' : '–') + '</td></tr>';
     }
     html += '</table>';
@@ -16055,7 +16071,9 @@ function _gaFLRenderTimeSeries() {
             color: _axisCol,
             gridcolor: _gridCol,
             zeroline: false,
-            nticks: 8,
+            // about one label per 70 px: 8 fixed ticks ran together in the
+            // ~330-px drawer ("07:5408:5509:56…")
+            nticks: Math.max(3, Math.min(8, Math.floor(((document.getElementById('ga-fl-ts-chart') || {}).clientWidth || 560) / 70))),
             tickangle: 0,
         },
         yaxis: {
