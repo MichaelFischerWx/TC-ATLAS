@@ -72,6 +72,15 @@ html, body { margin: 0; padding: 0; }
     text-decoration: underline;
     text-underline-offset: 2px;
 }
+/* Phones: the three items (~430 px of text) wrapped out of the 28-px bar.
+   Drop the "imagery:" / "Updated:" words and keep each on one line; the
+   EUMETSAT credit stays and is the one that truncates if space runs out. */
+@media (max-width: 640px) {
+    .ir-status-bar { padding: 0 10px; }
+    .ir-status-bar .ir-sb-long { display: none; }
+    #ir-status-text, .ir-last-update { white-space: nowrap; flex: none; }
+    .ir-sat-credit { margin: 0 8px; }
+}
 
 /* ── Loading overlay ─────────────────────────────────────────── */
 .ir-loader {
@@ -4125,6 +4134,17 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 .sub-clock-val {
     font-weight: 600;
     white-space: nowrap;
+}
+/* Feed out of date (realtime_subseasonal.js _renderClocks / _renderStaleNote). */
+.sub-clock-card.sub-clock-stale [data-val="date"] { color: #d97706; }
+.sub-stale-note {
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(217, 119, 6, 0.45);
+    background: rgba(217, 119, 6, 0.10);
+    color: var(--text, #1f2937);
+    font-size: 0.75rem;
+    line-height: 1.4;
 }
 .sub-clock-status {
     margin-top: 3px;

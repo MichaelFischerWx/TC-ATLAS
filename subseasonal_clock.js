@@ -200,7 +200,11 @@ window.SubseasonalClock = (function () {
     var _MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     function _shortDate(iso) {
         var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || '');
-        return m ? (+m[3]) + ' ' + _MON[+m[2] - 1] : (iso || '');
+        if (!m) return iso || '';
+        var s = (+m[3]) + ' ' + _MON[+m[2] - 1];
+        // The year only when it isn't this one, so a stale value can't
+        // pass for a recent date.
+        return +m[1] === new Date().getUTCFullYear() ? s : s + ' ' + m[1];
     }
 
     function render(opts) {

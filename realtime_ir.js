@@ -2591,7 +2591,7 @@
     // raw-Tb path.
     var _mosaicHasMet9 = false;
     var _SAT_SUBLON = { 'GOES-East': -75.2, 'GOES-West': -137.2, 'Himawari': 140.7, 'Meteosat-9': 45.5 };
-    var _MET9_CREDIT_HTML = 'Meteosat-9 imagery: &copy; <a href="https://www.eumetsat.int/" target="_blank" rel="noopener">EUMETSAT</a>';
+    var _MET9_CREDIT_HTML = 'Meteosat-9 <span class="ir-sb-long">imagery: </span>&copy; <a href="https://www.eumetsat.int/" target="_blank" rel="noopener">EUMETSAT</a>';
     function _mosaicNoteSats(j) {
         var fs = (j && j.frame_sats) || {}, frames = (j && j.frames) || [];
         var latest = frames.length ? frames[frames.length - 1] : null;
@@ -7936,7 +7936,9 @@
             el('ir-status-text').textContent = totalActive + ' active system' + (totalActive === 1 ? '' : 's');
         }
         if (data.updated_utc) {
-            el('ir-last-update').textContent = 'Updated: ' + fmtUTC(data.updated_utc);
+            var lastUpd = el('ir-last-update');
+            lastUpd.innerHTML = '<span class="ir-sb-long">Updated: </span>';
+            lastUpd.appendChild(document.createTextNode(fmtUTC(data.updated_utc)));
         }
     }
 

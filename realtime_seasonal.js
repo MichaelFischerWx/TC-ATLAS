@@ -49,6 +49,10 @@
         return Plotly.react(el, traces, a[0], a[1]);
     }
 
+    // Phones (same breakpoint as the stylesheet's ≤640 px rules).
+    var SEAS_NARROW_MQ = window.matchMedia ? window.matchMedia('(max-width: 640px)') : null;
+    function _seasNarrow() { return !!(SEAS_NARROW_MQ && SEAS_NARROW_MQ.matches); }
+
     var GCS_BASE = 'https://cdn.tcatlas.org/seasonal';   // R2 (Phase 2a); kept fresh by tc-atlas-r2-mirror job
     var LOCAL_BASE = 'data/seasonal';
     // Same hostname realtime_ir.js uses for /ir-monitor/* endpoints; we
@@ -2073,12 +2077,15 @@
                      : 'SST';
         var titleX = REGION_LABEL[state.scatter.x] || state.scatter.x;
         var titleY = REGION_LABEL[state.scatter.y] || state.scatter.y;
+        // Plotly titles don't wrap: on a phone this one ran off both
+        // edges, so there its second half leads the credit lines instead.
+        var narrow = _seasNarrow();
+        var titleWhat = 'Mean ' + MONTH_LABEL[state.scatter.month] + ' ' + titleVar +
+                        ' (OISST; 1982-' + (new Date()).getUTCFullYear() + ')';
         var layout = {
             title: {
-                text: titleX + ' vs ' + titleY +
-                      ' — Mean ' + MONTH_LABEL[state.scatter.month] + ' ' + titleVar +
-                      ' (OISST; 1982-' + (new Date()).getUTCFullYear() + ')',
-                font: { size: 14 },
+                text: titleX + ' vs ' + titleY + (narrow ? '' : ' — ' + titleWhat),
+                font: { size: narrow ? 12 : 14 },
             },
             xaxis: { title: _axisTitle(bundle.xKey, state.scatter.x), zeroline: false },
             yaxis: { title: _axisTitle(bundle.yKey, state.scatter.y), zeroline: false },
@@ -2116,10 +2123,10 @@
         layout.geo2 = _insetGeoLayout();
         var relNote = state.scatter.variable === 'sst_rel'
             ? ' ' + _relativeSstNote() : '';
-        _applyDataCredit(layout, [OISST_CREDIT_MONTHLY,
+        _applyDataCredit(layout, (narrow ? [titleWhat] : []).concat([OISST_CREDIT_MONTHLY,
             'X: ' + _regionDomainText(state.scatter.x) + relNote,
             'Y: ' + _regionDomainText(state.scatter.y) + relNote +
-            ' (area-weighted means)'], el, true);
+            ' (area-weighted means)']), el, true);
         seasReact(el, allTraces, layout,
                      { responsive: true, displaylogo: false });
     }
@@ -5517,6 +5524,92 @@
         return _EVO_BASIN_VIEWS[basin] || _EVO_BASIN_VIEWS.NA;
     }
 
+    // Evolution-map chrome per screen size. The desktop set (50/70-px
+    // side margins, axis titles, colorbar at the right) left a ~170×85-px
+    // map on a 390-px phone: the 1°=1° aspect lock fits the map to what
+    // the margins leave. Phones get tight margins, ° on the ticks in
+    // place of axis titles, and the colorbar laid flat above the map.
+    // Keys are Plotly relayout / restyle paths. Saves always render with
+    // the desktop set (_evoToImageNoSlider), so a PNG or GIF doesn't
+    // depend on the device it was made on.
+    var EVO_CHROME = {
+        wide: {
+            layout: { 'margin.l': 50, 'margin.r': 70, 'margin.t': 10, 'margin.b': 48,
+                      'xaxis.title.text': 'Longitude', 'yaxis.title.text': 'Latitude',
+                      'xaxis.ticksuffix': '', 'yaxis.ticksuffix': '' },
+            colorbar: { 'colorbar.orientation': 'v', 'colorbar.x': 1.02,
+                        'colorbar.xanchor': 'left', 'colorbar.y': 0.5,
+                        'colorbar.yanchor': 'middle', 'colorbar.len': 1,
+                        'colorbar.thickness': 10, 'colorbar.ypad': 10 },
+        },
+        narrow: {
+            layout: { 'margin.l': 34, 'margin.r': 8, 'margin.t': 8, 'margin.b': 40,
+                      'xaxis.title.text': '', 'yaxis.title.text': '',
+                      'xaxis.ticksuffix': '°', 'yaxis.ticksuffix': '°' },
+            // Short of the right edge: the TC-ATLAS mark sits there.
+            colorbar: { 'colorbar.orientation': 'h', 'colorbar.x': 0.42,
+                        'colorbar.xanchor': 'center', 'colorbar.y': 1.02,
+                        'colorbar.yanchor': 'bottom', 'colorbar.len': 0.78,
+                        'colorbar.thickness': 8, 'colorbar.ypad': 2 },
+        },
+    };
+    function _evoChromeKey() { return _seasNarrow() ? 'narrow' : 'wide'; }
+    // Write dotted Plotly paths into a plain layout / trace object.
+    function _evoSetPaths(obj, paths) {
+        Object.keys(paths).forEach(function (p) {
+            var keys = p.split('.'), o = obj;
+            for (var i = 0; i < keys.length - 1; i++) {
+                if (o[keys[i]] == null || typeof o[keys[i]] !== 'object') o[keys[i]] = {};
+                o = o[keys[i]];
+            }
+            o[keys[keys.length - 1]] = paths[p];
+        });
+    }
+    function _evoHeatIdx(traces) {
+        for (var i = 0; i < (traces || []).length; i++) {
+            if (traces[i].type === 'heatmap') return i;
+        }
+        return -1;
+    }
+    // Phones: once drawn, Plotly knows how much the colorbar, ticks and
+    // slider take; refit the box so the map gets the rest at full width.
+    function _evoFitNarrowWrap(el) {
+        var wrap = document.getElementById('seasonal-evo-wrap');
+        var s = el && el._fullLayout && el._fullLayout._size;
+        if (!wrap || !s || el._evoChrome !== 'narrow') return;
+        _evoState._narrowChromePx = Math.round(s.t + s.b);
+        var before = wrap.clientHeight;
+        _evoApplyWrapAspect(_evoState.basin);
+        if (Math.abs(wrap.clientHeight - before) > 3) Plotly.Plots.resize(el);
+    }
+    // Switch a drawn map to the named chrome.
+    function _evoApplyChrome(el, key) {
+        var c = EVO_CHROME[key], hi = _evoHeatIdx(el.data);
+        el._evoChrome = key;
+        return Promise.all([
+            Plotly.relayout(el, c.layout),
+            hi >= 0 ? Plotly.restyle(el, c.colorbar, [hi]) : null,
+        ]);
+    }
+    // Rotating a phone crosses the breakpoint: swap the map's chrome in
+    // place (a redraw would reset the animation) and re-title the scatter.
+    function _seasOnNarrowChange() {
+        var evo = document.getElementById('seasonal-evo-map');
+        if (evo && evo._fullLayout && evo._evoChrome !== _evoChromeKey()) {
+            _evoApplyWrapAspect(_evoState.basin);
+            _evoApplyChrome(evo, _evoChromeKey()).then(function () {
+                Plotly.Plots.resize(evo);
+                _evoFitNarrowWrap(evo);
+            });
+        }
+        var sc = document.getElementById('seasonal-scatter-plot');
+        if (sc && sc._fullLayout) _renderScatter();
+    }
+    if (SEAS_NARROW_MQ) {
+        if (SEAS_NARROW_MQ.addEventListener) SEAS_NARROW_MQ.addEventListener('change', _seasOnNarrowChange);
+        else if (SEAS_NARROW_MQ.addListener) SEAS_NARROW_MQ.addListener(_seasOnNarrowChange);
+    }
+
     // Tune the .seasonal-evo-wrap aspect ratio to the current basin's
     // viewport so we don't leave huge whitespace bands above/below the
     // map. Plotly's xaxis.scaleanchor:'y' locks 1°-lon = 1°-lat in
@@ -5532,6 +5625,18 @@
         var lonW = Math.abs(v.x[1] - v.x[0]);
         var latH = Math.abs(v.y[1] - v.y[0]);
         if (!lonW || !latH) return;
+        if (_seasNarrow()) {
+            // Phone chrome (EVO_CHROME.narrow): the map spans the card, so
+            // size the box from the map's own aspect plus the colorbar
+            // above it and the ticks + slider below — measured after the
+            // first draw (_evoFitNarrowWrap), estimated until then.
+            var mapW = Math.max(200, wrap.clientWidth - 42);
+            wrap.style.aspectRatio = 'auto';
+            wrap.style.height = Math.round(mapW * latH / lonW
+                + (_evoState._narrowChromePx || 150)) + 'px';
+            return;
+        }
+        wrap.style.height = '';
         var ratio = (lonW / latH) * 1.05;
         // Clamp so we don't produce pathologically tall or wide boxes
         // on extreme basin choices (e.g., SP is ~80° wide × 35° tall).
@@ -8601,9 +8706,17 @@
         // Plotly takes over fully.
         var stub = el.querySelector('.seasonal-panel-stub');
         if (stub) stub.remove();
+        var chromeKey = _evoChromeKey();
+        if (chromeKey === 'narrow') {
+            _evoSetPaths(layout, EVO_CHROME.narrow.layout);
+            var heatIdx = _evoHeatIdx(built.traces);
+            if (heatIdx >= 0) _evoSetPaths(built.traces[heatIdx], EVO_CHROME.narrow.colorbar);
+        }
+        el._evoChrome = chromeKey;
         Plotly.newPlot(el, built.traces, layout, {
             displayModeBar: false, responsive: true,
         }).then(function () {
+            _evoFitNarrowWrap(el);
             Plotly.addFrames(el, built.frames);
             // Build a name → friendly label map for the date readout.
             // Daily-mode frames have names like 'd<epochDay>'; monthly
@@ -8869,17 +8982,31 @@
         var origSliders = el._fullLayout.sliders
             ? el._fullLayout.sliders.map(function (s) { return s; })
             : null;
-        return Plotly.relayout(el, { sliders: [] })
+        // A phone shows the narrow chrome; capture with the desktop one
+        // (EVO_CHROME) so saves are the same from every device.
+        var narrow = el._evoChrome === 'narrow';
+        var heatIdx = _evoHeatIdx(el.data);
+        function restore() {
+            // Fire-and-forget; the URL is already captured, no need to
+            // wait for the redraw before returning to the caller.
+            var lay = narrow ? Object.assign({}, EVO_CHROME.narrow.layout) : {};
+            if (origSliders) lay.sliders = origSliders;
+            if (Object.keys(lay).length) Plotly.relayout(el, lay);
+            if (narrow && heatIdx >= 0) Plotly.restyle(el, EVO_CHROME.narrow.colorbar, [heatIdx]);
+        }
+        return Promise.resolve(narrow && heatIdx >= 0
+                ? Plotly.restyle(el, EVO_CHROME.wide.colorbar, [heatIdx]) : null)
+            .then(function () {
+                return Plotly.relayout(el, Object.assign({ sliders: [] },
+                    narrow ? EVO_CHROME.wide.layout : {}));
+            })
             .then(function () { return Plotly.toImage(el, opts); })
             .then(function (url) {
-                // Restore the slider — fire-and-forget; the URL is
-                // already captured, no need to wait for redraw to
-                // resolve before returning to the caller.
-                if (origSliders) Plotly.relayout(el, { sliders: origSliders });
+                restore();
                 return url;
             })
             .catch(function (e) {
-                if (origSliders) Plotly.relayout(el, { sliders: origSliders });
+                restore();
                 throw e;
             });
     }
