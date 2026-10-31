@@ -118,7 +118,7 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261010w1">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261027m9a">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261031sm1">
     <link rel="stylesheet" href="satellite_styles.css?v=20260904a">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261009p1a">
 </head>
@@ -1399,31 +1399,30 @@
                     <button class="sub-latband-btn" data-band="eq5">5°S-5°N</button>
                     <button class="sub-latband-btn" data-band="boreal">5°N-15°N</button>
                 </div>
-                <label class="sub-control-label" style="margin-left:18px;">View:</label>
+                <label class="sub-control-label sub-ctl-gap">View:</label>
                 <div class="sub-view-toggle" id="sub-view-toggle" role="tablist"
                      title="Stacked shows one heatmap per WK-filtered band. Combined overlays each band as colored contours on top of the raw OLR anomaly — the Peyrille-style view.">
                     <button class="sub-view-btn active" data-view="stacked">Stacked</button>
                     <button class="sub-view-btn" data-view="combined">Combined</button>
                 </div>
-                <label class="sub-control-label sub-smooth-control" id="sub-smooth-label" style="margin-left:18px;">Base:</label>
+                <label class="sub-control-label sub-smooth-control sub-ctl-gap" id="sub-smooth-label">Base:</label>
                 <div class="sub-view-toggle sub-smooth-control" id="sub-smooth-toggle" role="tablist"
                      title="Temporal smoothing applied to the OLR-anomaly background in the combined view. Wave-band contours always use raw data. 5-day is the canonical pentad; 3-day preserves more short-period structure; Raw shows daily OLR.">
                     <button class="sub-view-btn" data-smooth="1">Raw</button>
                     <button class="sub-view-btn" data-smooth="3">3-day</button>
                     <button class="sub-view-btn active" data-smooth="5">5-day</button>
                 </div>
-                <label class="sub-control-label" style="margin-left:18px;">
+                <label class="sub-control-label sub-ctl-gap sub-ctl-check">
                     <input type="checkbox" id="sub-tc-overlay-toggle" checked>
                     Active-TC overlay
                 </label>
-                <label class="sub-control-label" id="sub-forecast-label" style="margin-left:18px;"
+                <label class="sub-control-label sub-ctl-gap sub-ctl-check" id="sub-forecast-label"
                        title="Extend each Hovmöller 10 days into the future with GEFS ensemble-mean OLR, re-running the same Wheeler-Kiladis wave filters so the band contours continue across the forecast window. The forecast region is shaded and labeled.">
                     <input type="checkbox" id="sub-forecast-toggle" checked>
                     GEFS 10-day forecast
                 </label>
-                <button type="button" id="sub-save-png-btn" class="sub-save-png-btn"
-                        title="Download the full Hovmöller stack + basemap as a single PNG"
-                        style="margin-left:18px;">
+                <button type="button" id="sub-save-png-btn" class="sub-save-png-btn sub-ctl-gap"
+                        title="Download the full Hovmöller stack + basemap as a single PNG">
                     &#10515; Save PNG
                 </button>
             </div>
@@ -2930,7 +2929,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261029pv1';
+        var _LAZY_ASSET_V = '?v=20261031sm1';
         var _lazyViewMods = {
             recon:       { js: ['plotly_dark.js', 'tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

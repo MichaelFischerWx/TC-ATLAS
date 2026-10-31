@@ -197,6 +197,12 @@ window.SubseasonalClock = (function () {
         return current;
     }
 
+    var _MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    function _shortDate(iso) {
+        var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || '');
+        return m ? (+m[3]) + ' ' + _MON[+m[2] - 1] : (iso || '');
+    }
+
     function render(opts) {
         opts = opts || {};
         var current = _renderSVG(opts.svg, opts.modeRec, opts.mode, opts);
@@ -206,7 +212,13 @@ window.SubseasonalClock = (function () {
             if (labels.dateEl) labels.dateEl.textContent = '(no data)';
             return null;
         }
-        if (labels.dateEl)  labels.dateEl.textContent  = current.dateISO;
+        if (labels.dateEl) {
+            // "28 Oct" (the site's day format): the ISO "2026-10-28" broke in
+            // two inside the dial cards' narrow date column, on phones and
+            // desktop alike. The full date stays in the tooltip.
+            labels.dateEl.textContent = _shortDate(current.dateISO);
+            labels.dateEl.title = current.dateISO;
+        }
         if (labels.phaseEl) labels.phaseEl.textContent = String(current.phase);
         if (labels.ampEl)   labels.ampEl.textContent   = current.amp.toFixed(2);
         if (labels.statusEl) {

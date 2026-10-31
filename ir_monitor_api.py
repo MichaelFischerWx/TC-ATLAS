@@ -5304,22 +5304,53 @@ def _attach_storm_names(entries: list) -> None:
             e["name"] = by_id[e["atcf_id"]]
 
 
-@router.get("/recent-storms")
-def get_recent_storms(days: int = Query(60, ge=1, le=120,
-                                         description="Lookback window in days")):
-    """All storms with at least one fix in the last N days (active +
-    recently-dissipated). Includes the full track in the window so the
-    RT Monitor's Subseasonal tab can plot (time, lon) trajectories on
-    the Hovmöllers — i.e. show whether each storm rode a Kelvin or MJO
-    envelope through its lifetime."""
-    now = time.time()
-    with _recent_storms_lock:
-        cached = _recent_storms_cache
-        if (cached["days"] == days and cached["data"] is not None
-                and (now - cached["ts"]) < _RECENT_STORMS_TTL):
-            return JSONResponse(content=cached["data"],
-                                headers={"Cache-Control": "public, max-age=600"})
+# Stale-while-revalidate for /recent-storms. A miss used to rebuild the
+# whole list INSIDE the request: ~60 storms' NHC/JTWC deck files, measured
+# 7.7 s live (2026-10-31), so whoever opened the Subseasonal tab after the
+# 15-min TTL lapsed waited that long for the Hovmöller's TC tracks — and so
+# did the first visitor on every new instance. Now the last result is served
+# at once (memory, else the shared GCS copy) and one background thread per
+# instance rebuilds it; a request builds synchronously only when no copy
+# exists anywhere. Same rebuild work and cadence as before, off the request.
+_RECENT_STORMS_STALE_MAX = 24 * 3600      # never serve a copy older than this
+_recent_storms_refreshing = False
 
+
+def _recent_storms_gcs_key(days: int) -> str:
+    return f"{_GCS_RT_VERSION}/storm-cache/recent-storms-{days}d.json"
+
+
+def _recent_storms_gcs_get(days: int):
+    """Shared copy from GCS as (payload, built_at) or (None, 0). Best effort."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return None, 0.0
+    try:
+        d = json.loads(bucket.blob(_recent_storms_gcs_key(days)).download_as_bytes(timeout=10))
+        if isinstance(d, dict) and isinstance(d.get("payload"), dict):
+            return d["payload"], float(d.get("built_at") or 0)
+    except Exception as ex:
+        print(f"[recent-storms] shared copy get failed ({type(ex).__name__}: {ex})")
+    return None, 0.0
+
+
+def _recent_storms_gcs_put(days: int, payload: dict, built_at: float):
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+    try:
+        blob = bucket.blob(_recent_storms_gcs_key(days))
+        # no-store: GCS otherwise applies a default public max-age=3600 to
+        # this public bucket and readers get hour-old copies (see
+        # _gcs_storm_cache_put).
+        blob.cache_control = "no-store"
+        blob.upload_from_string(json.dumps({"built_at": built_at, "payload": payload}, default=str),
+                                content_type="application/json", timeout=10)
+    except Exception as ex:
+        print(f"[recent-storms] shared copy put failed ({type(ex).__name__}: {ex})")
+
+
+def _build_recent_storms(days: int) -> dict:
     ids = _list_recent_atcf_ids(days)
     # Each storm's track is built from up to ~4 sequential HTTP fetches to
     # NHC/JTWC deck files. Done serially over N storms that stacks into 10+ s
@@ -5345,17 +5376,75 @@ def get_recent_storms(days: int = Query(60, ge=1, le=120,
                     entries.append(entry)
     _attach_storm_names(entries)
     entries.sort(key=lambda s: s["last_fix_utc"], reverse=True)
-
-    payload = {
+    return {
         "storms": entries,
         "lookback_days": days,
         "updated_utc": _dt.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "count": len(entries),
     }
+
+
+def _rebuild_recent_storms(days: int):
+    """Build, then publish to this instance's memory and the shared copy."""
+    built_at = time.time()
+    payload = _build_recent_storms(days)
     with _recent_storms_lock:
-        _recent_storms_cache.update({"days": days, "data": payload, "ts": now})
-    return JSONResponse(content=payload,
-                        headers={"Cache-Control": "public, max-age=600"})
+        _recent_storms_cache.update({"days": days, "data": payload, "ts": built_at})
+    _recent_storms_gcs_put(days, payload, built_at)
+    return payload
+
+
+def _refresh_recent_storms_bg(days: int):
+    """Single-flight background rebuild (one per instance at a time)."""
+    global _recent_storms_refreshing
+    with _recent_storms_lock:
+        if _recent_storms_refreshing:
+            return
+        _recent_storms_refreshing = True
+
+    def _run():
+        global _recent_storms_refreshing
+        try:
+            _rebuild_recent_storms(days)
+        except Exception as ex:
+            print(f"[recent-storms] background rebuild failed: {ex}")
+        finally:
+            with _recent_storms_lock:
+                _recent_storms_refreshing = False
+
+    threading.Thread(target=_run, name="recent-storms-refresh", daemon=True).start()
+
+
+@router.get("/recent-storms")
+def get_recent_storms(days: int = Query(60, ge=1, le=120,
+                                         description="Lookback window in days")):
+    """All storms with at least one fix in the last N days (active +
+    recently-dissipated). Includes the full track in the window so the
+    RT Monitor's Subseasonal tab can plot (time, lon) trajectories on
+    the Hovmöllers — i.e. show whether each storm rode a Kelvin or MJO
+    envelope through its lifetime."""
+    hdrs = {"Cache-Control": "public, max-age=600"}
+    now = time.time()
+    with _recent_storms_lock:
+        cached = _recent_storms_cache
+        have = cached["days"] == days and cached["data"] is not None
+        data, ts = (cached["data"], cached["ts"]) if have else (None, 0.0)
+    if data is not None and now - ts < _RECENT_STORMS_STALE_MAX:
+        if now - ts >= _RECENT_STORMS_TTL:
+            _refresh_recent_storms_bg(days)        # serve stale, rebuild behind
+        return JSONResponse(content=data, headers=hdrs)
+
+    # Nothing usable in this instance (cold start): adopt the shared copy.
+    shared, built_at = _recent_storms_gcs_get(days)
+    if shared is not None and now - built_at < _RECENT_STORMS_STALE_MAX:
+        with _recent_storms_lock:
+            _recent_storms_cache.update({"days": days, "data": shared, "ts": built_at})
+        if now - built_at >= _RECENT_STORMS_TTL:
+            _refresh_recent_storms_bg(days)
+        return JSONResponse(content=shared, headers=hdrs)
+
+    # No copy anywhere: build in the request (first ever / after a version bump).
+    return JSONResponse(content=_rebuild_recent_storms(days), headers=hdrs)
 
 
 @router.get("/storm/{atcf_id}/ir")
