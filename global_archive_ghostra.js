@@ -654,10 +654,38 @@
         $('gra-obsout').textContent = r.olo + '–' + r.ohi;
         $('gra-ghout').textContent = r.glo + '–' + r.ghi;
         $('gra-yrout').textContent = r.ylo + '–' + r.yhi;
+        ['obs', 'gh', 'yr'].forEach(dualFill);
+        filterBadge(r);
 
         clearTimeout(_heavyT);
         if (now) { recount(r); renderList(); }
         else _heavyT = setTimeout(function () { recount(r); renderList(); }, 130);
+    }
+
+    /* The filled stretch between a dual range's two thumbs. The track is inset
+       by half a thumb, so the fill's percentages are plain value fractions. */
+    function dualFill(p) {
+        var lo = $('gra-' + p + 'lo'), hi = $('gra-' + p + 'hi'), f = $('gra-' + p + '-fill');
+        if (!lo || !hi || !f) return;
+        var mn = +lo.min, span = (+lo.max - mn) || 1;
+        f.style.left = ((+lo.value - mn) / span * 100) + '%';
+        f.style.right = ((+hi.max - +hi.value) / span * 100) + '%';
+    }
+
+    /* How many of the popover's settings differ from the defaults, on the
+       Filters button, with a one-line summary beside it — the query is hidden
+       in a popover now, so the bar has to say that one is in force. */
+    function filterBadge(r) {
+        var n = 0, sum = [], u = funit === 'kt' ? ' kt' : ' hPa';
+        if (r.oOn) { n++; sum.push('BT ' + r.olo + '–' + r.ohi + u); }
+        if (r.gOn) { n++; sum.push('GHOST ' + r.glo + '–' + r.ghi + u); }
+        if (r.ylo > +$('gra-yrlo').min || r.yhi < +$('gra-yrhi').max) { n++; sum.push(r.ylo + '–' + r.yhi); }
+        if (r.rec) { n++; sum.push('recon only'); }
+        if (!r.sus) { n++; sum.push('QC-suspect shown'); }
+        if (presetOn) { n++; sum.push('preset'); }
+        var b = $('gra-fcount'), sm = $('gra-fsum');
+        if (b) { b.hidden = !n; b.textContent = n; }
+        if (sm) sm.textContent = sum.join(' · ');
     }
 
     /* Evaluating the predicates over the source once is cheaper than
@@ -1089,7 +1117,11 @@
         rows.sort(function (a, b) { return key(a) - key(b); });
         $('gra-title').textContent = q ? 'Search results' : (SORT_TITLE[funit][sortKey] || 'Storms');
 
-        var lastBasin = null;
+        var lastBasin = null, rk = 0;
+        /* Rank numbers only where the order IS a ranking: GHOST, best track and
+           |Δ| rank the whole list, Basin ranks within each group, Season is a
+           chronology and gets none. */
+        var ranked = sortKey !== 'year' && !q;
         $('gra-list').innerHTML = rows.slice(0, 400).map(function (s) {
             var gv = gval(s), bv = bval(s);
             var d = (gv !== null && bv !== null) ? gv - bv : null;
@@ -1098,30 +1130,40 @@
             var hdr = '';
             if (sortKey === 'basin' && s.basin !== lastBasin) {
                 lastBasin = s.basin;
+                rk = 0;
                 hdr = '<div class="gra-group">' + (BASIN_LABEL[s.basin] || s.basin) + '</div>';
             }
+            rk++;
+            var dTxt = d === null ? '' : (Math.round(Math.abs(d)) === 0 ? '0'
+                : (d > 0 ? '+' : '\u2212') + Math.abs(d).toFixed(0));
             return hdr + '<div class="gra-item' + (sel === s.sid ? ' active' : '') +
                 '" data-sid="' + esc(s.sid) + '">' +
+                '<span class="gra-rk">' + (ranked ? rk : '') + '</span>' +
+                '<div class="gra-it-main">' +
                 '<div class="gra-nm">' + esc(s.name || s.atcf) +
                 (s.suspect ? '<span class="gra-flag" title="QC-suspect (' + esc(s.qc_src || '') + ')">QC</span>' : '') +
                 (s.out_of_basin ? '<span class="gra-flag oob" title="Out-of-basin apply — trained on AL/EP recon labels">OOB</span>' : '') +
                 (s.min_uncorroborated ? '<span class="gra-flag unc" title="This storm&rsquo;s deepest frame is also its largest disagreement with best track (' +
                     s.min_gap + ' hPa), with no reconnaissance nearby — the minimum has no independent support">?</span>' : '') +
                 '</div>' +
-                '<div class="gra-num gra-g">' + (gv !== null ? gv.toFixed(kt ? 0 : 1) : '—') +
+                '<div class="gra-meta"><span>' + esc(s.year) + ' · ' + esc(s.basin) + ' · ' + esc(s.n) + ' fr</span>' +
+                heldoutCell(s) + '</div>' +
+                '</div>' +
+                '<div class="gra-it-vals">' +
+                '<div class="gra-num gra-g"><b>' + (gv !== null ? gv.toFixed(kt ? 0 : 1) : '—') + '</b>' +
                 /* v6: a storm with no unfilled wind frame (peak_filled) has
                    only a filled peak — show it, marked. */
                 (kt && s.peak_filled && gv !== null
                     ? '<span class="gra-fillmark" title="Every wind frame of this storm ' +
                       'is filled, so its peak wind is a filled value">filled</span>' : '') +
-                heldoutCell(s) + '</div>' +
-                '<div class="gra-meta">' + esc(s.year) + ' · ' + esc(s.basin) + ' · ' + esc(s.n) + ' fr</div>' +
-                '<div class="gra-num" title="official best-track peak (includes non-synoptic special entries); Δ = GHOST at published frames minus this">BT ' + (bv !== null ? bv.toFixed(0) : '—') +
-                (d !== null ? ' <span style="color:' + (dBlue ? '#2a78d6' : '#e34948') + '">' +
-                    (d > 0 ? '+' : '−') + Math.abs(d).toFixed(0) + '</span>' : '') +
+                '</div>' +
+                '<div class="gra-num gra-bt" title="official best-track peak (includes non-synoptic special entries); Δ = GHOST at published frames minus this">BT ' +
+                (bv !== null ? bv.toFixed(0) : '—') +
+                (d !== null ? ' <span class="gra-delta ' + (Math.round(Math.abs(d)) === 0 ? 'eq' : (dBlue ? 'more' : 'less')) + '">' + dTxt + '</span>' : '') +
+                '</div>' +
                 '</div></div>';
         }).join('') ||
-            '<div style="padding:16px;color:var(--slate);font-size:0.72rem;">' +
+            '<div class="gra-empty">' +
             (q ? 'No storm matches &ldquo;' + esc(q) + '&rdquo;.' : 'No storms match the filters.') +
             '</div>';
         /* Row clicks are handled by ONE delegated listener on #gra-list (see
@@ -1809,6 +1851,8 @@
        fixed but its DISPLAYED size changes, and the crosshair/coastline stroke
        widths are derived from the backing store — they stay correct, but the
        repaint keeps the marks crisp after the layout settles. */
+    var ICON_EXPAND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
+    var ICON_SHRINK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>';
     function wireExpand() {
         var b = $('gra-ir-expand');
         if (!b || b._wired) return;
@@ -1816,7 +1860,7 @@
         b.addEventListener('click', function () {
             var panel = document.querySelector('.gra-ir');
             var big = panel.classList.toggle('big');
-            b.innerHTML = big ? '&#10231;' : '&#10530;';
+            b.innerHTML = big ? ICON_SHRINK : ICON_EXPAND;
             b.title = big ? 'Shrink the satellite view' : 'Expand the satellite view';
             setTimeout(function () { blit(); if (ir && ir.sid) drawSpark(ir.sid); }, 60);
         });
@@ -3054,7 +3098,8 @@
     // ══════════════════════════════════════════════════════════════
     function renderBasins() {
         $('gra-basins').innerHTML = Object.keys(basinsOn).map(function (b) {
-            return '<button class="basin-chip active" data-basin="' + b + '">' + b + '</button>';
+            return '<button class="gra-chip active" data-basin="' + b + '" title="' +
+                esc(BASIN_LABEL[b] || b) + '">' + b + '</button>';
         }).join('');
         Array.prototype.forEach.call($('gra-basins').children, function (el) {
             el.onclick = function () {
@@ -3147,6 +3192,7 @@
         $('gra-preset').onclick = function () {
             presetOn = !presetOn;
             this.classList.toggle('ga-btn-accent', presetOn);
+            this.setAttribute('aria-pressed', presetOn ? 'true' : 'false');
             if (presetOn) { $('gra-recon').checked = false; setMode('diff'); }
             else applyFilter(true);
         };
@@ -3171,20 +3217,48 @@
         /* Open the explainer once per browser, then remember. A colleague
            following a shared link lands on a map of 45k dots with no idea what
            they are looking at; a returning user does not need telling twice. */
-        function showAbout(on) { $('gra-about').classList.toggle('open', on); }
-        $('gra-more').onclick = function () {
-            var tb = document.querySelector('#tab-reanalysis .gra-toolbar');
-            var open = tb.classList.toggle('open');
-            this.innerHTML = 'Filters &amp; options ' + (open ? '\u25B4' : '\u25BE');
-            sizeTab();
-        };
-        $('gra-about-btn').onclick = function () {
-            showAbout(!$('gra-about').classList.contains('open'));
-        };
-        $('gra-about-x').onclick = function () {
+        function showAbout(on) {
+            $('gra-about').classList.toggle('open', on);
+            var sc = $('gra-about-scrim');
+            if (sc) sc.classList.toggle('open', on);
+            if (on) showPop(false);
+        }
+        function closeAbout() {
             showAbout(false);
             try { localStorage.setItem('gra-about-seen', '1'); } catch (e) { }
+        }
+        $('gra-about-btn').onclick = function () {
+            if ($('gra-about').classList.contains('open')) closeAbout(); else showAbout(true);
         };
+        $('gra-about-x').onclick = closeAbout;
+        if ($('gra-about-scrim')) $('gra-about-scrim').onclick = closeAbout;
+
+        /* The Filters popover: the range, recon and QC query. Closes on Done,
+           a second click on the button, Escape, or a click anywhere outside. */
+        function showPop(on) {
+            var pop = $('gra-filters-pop'), btn = $('gra-filters-btn');
+            if (!pop || !btn) return;
+            pop.hidden = !on;
+            btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+            btn.classList.toggle('is-open', on);
+            if (on) ['obs', 'gh', 'yr'].forEach(dualFill);
+        }
+        $('gra-filters-btn').onclick = function (e) {
+            e.stopPropagation();
+            showPop($('gra-filters-pop').hidden);
+        };
+        $('gra-pop-done').onclick = function () { showPop(false); };
+        document.addEventListener('mousedown', function (e) {
+            var pop = $('gra-filters-pop');
+            if (!pop || pop.hidden) return;
+            if (pop.contains(e.target) || $('gra-filters-btn').contains(e.target)) return;
+            showPop(false);
+        });
+        document.addEventListener('keydown', function (e) {
+            if (e.key !== 'Escape') return;
+            if ($('gra-filters-pop') && !$('gra-filters-pop').hidden) showPop(false);
+            else if ($('gra-about').classList.contains('open')) closeAbout();
+        });
         try {
             if (!localStorage.getItem('gra-about-seen')) showAbout(true);
         } catch (e) { /* private mode — just don't auto-open */ }

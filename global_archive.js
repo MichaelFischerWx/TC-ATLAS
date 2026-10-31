@@ -1943,6 +1943,25 @@ document.addEventListener('DOMContentLoaded', _gaHudInit);
 window.addEventListener('resize', function () { setTimeout(_gaStripDraw, 150); });
 
 
+// ── Page chrome height ────────────────────────────────────────────────
+// Everything above <main> (topbar + tab sub-bar), measured into --ga-main-top
+// so the map-filling tabs size to the viewport exactly instead of trusting a
+// hard-coded sum that goes stale whenever the header changes. Re-measured on
+// resize and once web fonts settle (a late font swap can move the bar).
+function _gaMeasureChrome() {
+    var m = document.getElementById('global-main');
+    if (!m) return;
+    var top = Math.round(m.getBoundingClientRect().top + window.scrollY);
+    if (top > 0 && top < 400) document.documentElement.style.setProperty('--ga-main-top', top + 'px');
+}
+document.addEventListener('DOMContentLoaded', _gaMeasureChrome);
+var _gaChromeTimer = null;
+window.addEventListener('resize', function () {
+    clearTimeout(_gaChromeTimer);
+    _gaChromeTimer = setTimeout(_gaMeasureChrome, 100);
+});
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(_gaMeasureChrome);
+
 // ── Storm Detail map-dominant layout helpers ──────────────────────────
 // The detail layout is sized to the viewport below the tab bar
 // (height: calc(100vh - --ga-detail-top)); the offset is measured, not
@@ -2078,6 +2097,8 @@ function loadData() {
         .then(function (data) {
             allStorms = data.storms || [];
             filteredStorms = allStorms.slice();
+            // the list opens in its default order (Sort: Newest)
+            filteredStorms.sort(function (a, b) { return (b.year || 0) - (a.year || 0) || _sbDateCmp(b, a); });
 
             // Update header stats
             var meta = data.metadata || {};
@@ -2094,6 +2115,7 @@ function loadData() {
                 renderMarkers(filteredStorms);
             }
             if (loadingEl) loadingEl.style.display = 'none';
+            _sbAfterFilter('');
 
             var _loader = document.getElementById('ga-map-loader');
             if (_loader) _loader.remove();
@@ -2131,6 +2153,7 @@ function loadData() {
                     if (mapViewMode === 'tracks' && filteredStorms.length) {
                         renderTracks(filteredStorms);
                     }
+                    _sbRenderList(false);   // rows gain their intensity sparklines
                 }, 150);
             }
 
@@ -2145,6 +2168,7 @@ function loadData() {
                         _scheduleRender();
                         if (loaded === chunks.length) {
                             var n = Object.keys(allTracks).length;
+                            _cmpTracksArrived();
                             console.log('Loaded tracks for ' + n + ' storms from chunks');
                             showToast('Track data ready — ' + n.toLocaleString() + ' storm tracks');
                         }
@@ -2158,12 +2182,14 @@ function loadData() {
                 .then(function (r) { return r.json(); })
                 .then(function (data) {
                     allTracks = data;
+                    _cmpTracksArrived();
                     var n = Object.keys(data).length;
                     console.log('Loaded tracks for ' + n + ' storms (single file)');
                     showToast('Track data ready — ' + n.toLocaleString() + ' storm tracks');
                     if (mapViewMode === 'tracks' && filteredStorms.length) {
                         renderTracks(filteredStorms);
                     }
+                    _sbRenderList(false);
                 })
                 .catch(function (err) {
                     console.warn('Track data not loaded:', err);
@@ -2218,21 +2244,16 @@ function initBrowserMap() {
         stormMap.addLayer(markerCluster);
     }
 
-    // Add legend
-    var legend = L.control({ position: 'bottomright' });
-    legend.onAdd = function () {
-        var div = L.DomUtil.create('div', 'ga-legend');
-        div.innerHTML = '<h4>Intensity (Saffir-Simpson)</h4>' +
-            '<div class="ga-legend-item"><span class="ga-legend-dot" style="background:#60a5fa;"></span> TD (&lt;34 kt)</div>' +
-            '<div class="ga-legend-item"><span class="ga-legend-dot" style="background:#34d399;"></span> TS (34–63 kt)</div>' +
-            '<div class="ga-legend-item"><span class="ga-legend-dot" style="background:#fbbf24;"></span> Cat 1 (64–82 kt)</div>' +
-            '<div class="ga-legend-item"><span class="ga-legend-dot" style="background:#fb923c;"></span> Cat 2 (83–95 kt)</div>' +
-            '<div class="ga-legend-item"><span class="ga-legend-dot" style="background:#f87171;"></span> Cat 3 (96–112 kt)</div>' +
-            '<div class="ga-legend-item"><span class="ga-legend-dot" style="background:#ef4444;"></span> Cat 4 (113–136 kt)</div>' +
-            '<div class="ga-legend-item"><span class="ga-legend-dot" style="background:#dc2626;"></span> Cat 5 (137+ kt)</div>';
-        return div;
-    };
-    legend.addTo(stormMap);
+    // The Saffir-Simpson key is static HTML (#sb-legend, bottom-left of the
+    // map wrap) rather than a map control: a 7-row control in the bottom-right
+    // corner sat on top of the basemap attribution.
+
+    // Hover highlight for the results list (_sbHoverTrack): a casing line and
+    // one colored line, drawn when a row is hovered and cleared on leave.
+    _sbHoverLayer = L.layerGroup().addTo(stormMap);
+
+    // Open on every basin at once instead of a fixed Atlantic/Africa view.
+    _fitStormsOnMap(allStorms, { animate: false });
 
     // Cursor lat/lon readout (bottom-left) — a coordinate reference for
     // reading genesis or LMI positions off the map. Stays hidden until
@@ -2474,55 +2495,16 @@ window.setMapView = function (mode) {
 function selectStorm(storm) {
     _ga('ga_select_storm', { sid: storm.sid, storm_name: storm.name, year: storm.year, basin: storm.basin, peak_wind_kt: storm.peak_wind_kt });
     selectedStorm = storm;
-    var card = document.getElementById('storm-card');
-    card.style.display = '';
 
     var color = getIntensityColor(storm.peak_wind_kt);
     var cat = getIntensityCategory(storm.peak_wind_kt);
 
-    document.getElementById('card-name').textContent = storm.name || 'UNNAMED';
-    var catBadge = document.getElementById('card-cat-badge');
-    catBadge.textContent = cat;
-    catBadge.style.background = color;
-    catBadge.title = SAFFIR_SIMPSON_TIP;
-    document.getElementById('card-year').textContent = storm.year;
-    document.getElementById('card-basin').textContent = BASIN_NAMES[storm.basin] || storm.basin;
-    document.getElementById('card-wind').textContent = storm.peak_wind_kt ? storm.peak_wind_kt + ' kt' : 'N/A';
-    document.getElementById('card-pres').textContent = storm.min_pres_hpa ? storm.min_pres_hpa + ' hPa' : 'N/A';
-    var dateStr = storm.start_date ? TCTime.span(storm.start_date, storm.end_date, { year: true }) : '?';
-    var tcDur = _tcDuration(allTracks[storm.sid] || []);
-    if (tcDur) dateStr += ' (' + tcDur + ' as TC)';
-    document.getElementById('card-dates').textContent = dateStr;
-    document.getElementById('card-ace').textContent = (storm.ace || 0).toFixed(1);
-
-    var hursatEl = document.getElementById('card-hursat');
-    if (stormHasIR(storm)) {
-        hursatEl.innerHTML = '<span style="color:#34d399;">Available</span>';
-    } else {
-        hursatEl.innerHTML = '<span style="color:#6b7280;">Not available</span>';
-    }
-
-    // TC-RADAR badge in sidebar card
-    var radarRowEl = document.getElementById('card-tc-radar');
-    var radarValEl = document.getElementById('card-tc-radar-value');
-    if (radarRowEl && radarValEl) {
-        var rk = (storm.name || '').toUpperCase() + '_' + storm.year;
-        var re = tcRadarLookup && tcRadarLookup[rk];
-        if (re) {
-            radarValEl.innerHTML = '<span style="color:#ffad00;">' + _icon('radio') + re.n + ' ' + (re.n === 1 ? 'analysis' : 'analyses') + '</span>';
-            radarRowEl.style.display = '';
-        } else {
-            radarRowEl.style.display = 'none';
-        }
-    }
-
-    // Update the floating map card
+    // The one selected-storm card (floating on the map)
     _showMapStormCard(storm, color, cat);
 
-    // Scroll sidebar to show the storm card
-    setTimeout(function () {
-        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }, 50);
+    // Mark (and reveal) the storm's row in the results list
+    _sbSetSelected(storm.sid, true);
+    _sbHoverTrack(null);
 
     // Show track on map if available
     showTrackOnBrowserMap(storm.sid);
@@ -2575,31 +2557,62 @@ function selectStorm(storm) {
 function _showMapStormCard(storm, color, cat) {
     var mc = document.getElementById('map-storm-card');
     if (!mc) return;
-    document.getElementById('map-card-name').textContent = storm.name || 'UNNAMED';
+    document.getElementById('map-card-name').textContent = _titleName(storm.name);
     var badge = document.getElementById('map-card-badge');
-    badge.textContent = cat;
+    badge.textContent = cat === 'Unknown' ? '—' : cat;
     badge.style.background = color;
     badge.title = SAFFIR_SIMPSON_TIP;
-    document.getElementById('map-card-wind').textContent = storm.peak_wind_kt ? storm.peak_wind_kt + ' kt' : 'N/A';
-    document.getElementById('map-card-pres').textContent = storm.min_pres_hpa ? storm.min_pres_hpa + ' hPa' : 'N/A';
-    document.getElementById('map-card-year').textContent = storm.year;
-    document.getElementById('map-card-basin').textContent = BASIN_NAMES[storm.basin] || storm.basin;
+    var span = storm.start_date ? TCTime.span(storm.start_date, storm.end_date, { year: true }) : String(storm.year);
+    document.getElementById('map-card-sub').textContent =
+        (BASIN_NAMES[storm.basin] || storm.basin) + ' · ' + span;
+    document.getElementById('map-card-wind').textContent = storm.peak_wind_kt ? storm.peak_wind_kt + ' kt' : '—';
+    document.getElementById('map-card-pres').textContent = storm.min_pres_hpa ? storm.min_pres_hpa + ' hPa' : '—';
+    document.getElementById('map-card-ace').textContent = (storm.ace || 0).toFixed(1);
+    document.getElementById('map-card-dur').textContent = _tcDuration(allTracks[storm.sid] || []) || '—';
+
+    // What else exists for this storm, as small tags under the numbers
+    var tags = [];
+    tags.push(stormHasIR(storm)
+        ? '<span class="sb-tag sb-tag-ok" title="Animated IR imagery in Storm Detail: MergIR (1998+), GridSat-B1 (1980+) or HURSAT-B1 (1978–2015)">IR imagery</span>'
+        : '<span class="sb-tag sb-tag-off" title="No archived IR imagery before 1978">No IR imagery</span>');
+    var rk = (storm.name || '').toUpperCase() + '_' + storm.year;
+    var re = tcRadarLookup && tcRadarLookup[rk];
+    if (re) {
+        tags.push('<span class="sb-tag sb-tag-radar" title="Airborne Doppler radar analyses in TC-RADAR">' + _icon('radio') +
+            re.n + ' TC-RADAR ' + (re.n === 1 ? 'analysis' : 'analyses') + '</span>');
+    }
+    if (storm.ri_24h != null && storm.ri_24h >= 30) {
+        tags.push('<span class="sb-tag sb-tag-ri" title="Largest 24-h increase in best-track wind (rapid intensification is ≥30 kt in 24 h)">RI +' +
+            Math.round(storm.ri_24h) + ' kt/24 h</span>');
+    }
+    document.getElementById('map-card-tags').innerHTML = tags.join('');
     mc.style.display = '';
 }
 
-// Full deselect: clear the highlighted track, hide both storm cards, and
-// fly back to the view the user was browsing before selecting.
+// IBTrACS names are upper case ("KATRINA"); the list and card read better in
+// title case, with each part of a hyphenated or multi-word name capitalized
+// ("IN-FA" → "In-Fa"). The placeholder names all read "Unnamed".
+function _titleName(n) {
+    if (!n || n === 'UNNAMED' || n === 'NOT_NAMED' || n === 'NOT NAMED') return 'Unnamed';
+    return n.toLowerCase().replace(/(^|[\s\-'(])([a-z])/g, function (m, a, b) { return a + b.toUpperCase(); });
+}
+
+// Full deselect: clear the highlighted track, hide the storm card, and fly
+// back to the view the user was browsing before selecting.
 window.dismissMapStormCard = function () {
     var mc = document.getElementById('map-storm-card');
     if (mc) mc.style.display = 'none';
-    var card = document.getElementById('storm-card');
-    if (card) card.style.display = 'none';
     if (trackLayer) trackLayer.clearLayers();
     selectedStorm = null;
+    _sbSetSelected(null);
     if (_preSelectView && stormMap) {
         stormMap.flyTo(_preSelectView.center, _preSelectView.zoom);
     }
     _preSelectView = null;
+};
+
+window.addSelectedToCompare = function () {
+    if (selectedStorm) addToCompare(selectedStorm);
 };
 
 window.selectStormFromPopup = function (sid) {
@@ -2627,55 +2640,95 @@ function showTrackOnBrowserMap(sid) {
         _preSelectView = { center: stormMap.getCenter(), zoom: stormMap.getZoom() };
     }
 
-    // Draw track as colored segments
-    for (var i = 1; i < track.length; i++) {
-        var p0 = track[i - 1];
-        var p1 = track[i];
-        if (!p0.la || !p0.lo || !p1.la || !p1.lo) continue;
+    var pts = track.filter(function (p) { return p.la != null && p.lo != null; });
+    if (pts.length < 2) return;
 
-        var color = getIntensityColor(p1.w);
-        var line = L.polyline(
-            [[p0.la, p0.lo], [p1.la, p1.lo]],
-            { color: color, weight: 2.5, opacity: 0.85 }
-        );
-        trackLayer.addLayer(line);
+    // A casing under the whole track so the selected storm stands out from
+    // the 13k-track background, then one line per run of same-color points
+    // (it used to be one GL layer per 6-hourly segment, ~100 per storm).
+    var all = pts.map(function (p) { return [p.la, p.lo]; });
+    trackLayer.addLayer(L.polyline(all, { color: _sbCasingColor(), weight: 7, opacity: 0.9 }));
+    var runColor = getIntensityColor(pts[1].w), run = [all[0]];
+    for (var i = 1; i < pts.length; i++) {
+        var c = getIntensityColor(pts[i].w);
+        if (c !== runColor && run.length >= 2) {
+            trackLayer.addLayer(L.polyline(run, { color: runColor, weight: 3.5, opacity: 1 }));
+            run = [all[i - 1]];
+        }
+        runColor = c;
+        run.push(all[i]);
     }
+    if (run.length >= 2) trackLayer.addLayer(L.polyline(run, { color: runColor, weight: 3.5, opacity: 1 }));
+    // genesis and lifetime-max points
+    var lmi = null;
+    pts.forEach(function (p) { if (p.w != null && (!lmi || p.w > lmi.w)) lmi = p; });
+    trackLayer.addLayer(L.circleMarker([pts[0].la, pts[0].lo], {
+        radius: 4.5, color: '#fff', weight: 1.5, fillColor: '#60a5fa', fillOpacity: 1 }));
+    if (lmi) trackLayer.addLayer(L.circleMarker([lmi.la, lmi.lo], {
+        radius: 6, color: '#fff', weight: 2, fillColor: getIntensityColor(lmi.w), fillOpacity: 1 }));
 
-    // Fit bounds
-    var lats = track.filter(function (p) { return p.la; }).map(function (p) { return p.la; });
-    var lons = track.filter(function (p) { return p.lo; }).map(function (p) { return p.lo; });
-    if (lats.length > 0) {
-        stormMap.fitBounds([
-            [Math.min.apply(null, lats) - 2, Math.min.apply(null, lons) - 2],
-            [Math.max.apply(null, lats) + 2, Math.max.apply(null, lons) + 2]
-        ]);
-    }
+    // Fit the track into the part of the map the storm card does not cover
+    var lats = pts.map(function (p) { return p.la; });
+    var lons = pts.map(function (p) { return p.lo; });
+    stormMap.fitBounds([
+        [Math.min.apply(null, lats) - 1, Math.min.apply(null, lons) - 1],
+        [Math.max.apply(null, lats) + 1, Math.max.apply(null, lons) + 1]
+    ], { padding: _sbMapPadding(), maxZoom: 7 });
+}
+
+// Padding for fitBounds on the browser map: clear of the floating storm card
+// (top-left on desktop, bottom on phones) and the map controls.
+function _sbMapPadding() {
+    var phone = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+    var mc = document.getElementById('map-storm-card');
+    var cardW = (mc && mc.offsetWidth) || 300, cardH = (mc && mc.offsetHeight) || 230;
+    return phone ? { top: 56, bottom: Math.min(cardH + 24, 260), left: 24, right: 24 }
+                 : { top: 60, bottom: 50, left: cardW + 40, right: 40 };
+}
+
+// The casing/halo under highlighted tracks follows the basemap: white on the
+// light CARTO tiles, near-black on the dark ones.
+function _sbCasingColor() {
+    return document.documentElement.getAttribute('data-theme') === 'dark' ? '#05080d' : '#ffffff';
 }
 
 // ── Filtering ────────────────────────────────────────────────
 
+// The chip queries are scoped to the Storm Browser's own groups. They used
+// to run over every .basin-chip on the page, so after the GHOST Reanalysis
+// tab had drawn its AL/CP/EP/WP chips (also .basin-chip, also data-basin), a
+// click here swept their "active" state into activeBasins — EP and WP got
+// filtered in without being picked — and "All" cleared those other tabs'
+// chips (and the Compare search's) as a side effect.
+function _browserChips(groupId, cls) {
+    var g = document.getElementById(groupId);
+    return g ? Array.prototype.slice.call(g.querySelectorAll('.' + cls)) : [];
+}
+
 window.toggleBasin = function (btn) {
     var basin = btn.getAttribute('data-basin');
+    var chips = _browserChips('basin-chips', 'basin-chip');
+    var allChip = chips.filter(function (c) { return c.getAttribute('data-basin') === 'ALL'; })[0];
 
     if (basin === 'ALL') {
         // Reset all to inactive, set ALL to active
-        document.querySelectorAll('.basin-chip').forEach(function (c) { c.classList.remove('active'); });
+        chips.forEach(function (c) { c.classList.remove('active'); });
         btn.classList.add('active');
         activeBasins = ['ALL'];
     } else {
         // Deactivate ALL, toggle this basin
-        document.querySelector('.basin-chip[data-basin="ALL"]').classList.remove('active');
+        if (allChip) allChip.classList.remove('active');
         btn.classList.toggle('active');
 
         activeBasins = [];
-        document.querySelectorAll('.basin-chip.active').forEach(function (c) {
+        chips.forEach(function (c) {
             var b = c.getAttribute('data-basin');
-            if (b !== 'ALL') activeBasins.push(b);
+            if (b !== 'ALL' && c.classList.contains('active')) activeBasins.push(b);
         });
 
         // If none selected, revert to ALL
         if (activeBasins.length === 0) {
-            document.querySelector('.basin-chip[data-basin="ALL"]').classList.add('active');
+            if (allChip) allChip.classList.add('active');
             activeBasins = ['ALL'];
         }
     }
@@ -2685,23 +2738,25 @@ window.toggleBasin = function (btn) {
 
 window.toggleMonth = function (btn) {
     var month = btn.getAttribute('data-month');
+    var chips = _browserChips('month-chips', 'month-chip');
+    var allChip = chips.filter(function (c) { return c.getAttribute('data-month') === 'ALL'; })[0];
 
     if (month === 'ALL') {
-        document.querySelectorAll('.month-chip').forEach(function (c) { c.classList.remove('active'); });
+        chips.forEach(function (c) { c.classList.remove('active'); });
         btn.classList.add('active');
         activeMonths = ['ALL'];
     } else {
-        document.querySelector('.month-chip[data-month="ALL"]').classList.remove('active');
+        if (allChip) allChip.classList.remove('active');
         btn.classList.toggle('active');
 
         activeMonths = [];
-        document.querySelectorAll('.month-chip.active').forEach(function (c) {
+        chips.forEach(function (c) {
             var m = c.getAttribute('data-month');
-            if (m !== 'ALL') activeMonths.push(parseInt(m, 10));
+            if (m !== 'ALL' && c.classList.contains('active')) activeMonths.push(parseInt(m, 10));
         });
 
         if (activeMonths.length === 0) {
-            document.querySelector('.month-chip[data-month="ALL"]').classList.add('active');
+            if (allChip) allChip.classList.add('active');
             activeMonths = ['ALL'];
         }
     }
@@ -2744,29 +2799,25 @@ window.onFilterChange = function () {
 window.onWindFilterChange = function () {
     var val = parseInt(document.getElementById('filter-wind-min').value) || 0;
     var label = document.getElementById('wind-min-label');
-    if (val === 0) {
-        label.textContent = '0 kt (All)';
-    } else {
-        label.textContent = val + ' kt (' + getIntensityCategory(val) + '+)';
-    }
+    label.textContent = val === 0 ? 'Any' : '\u2265 ' + val + ' kt (' + getIntensityCategory(val) + '+)';
     onFilterChange();
 };
 
 window.onAceFilterChange = function () {
     var val = parseFloat(document.getElementById('filter-ace-min').value) || 0;
-    document.getElementById('ace-min-label').textContent = val === 0 ? '0 (All)' : '\u2265 ' + val.toFixed(0);
+    document.getElementById('ace-min-label').textContent = val === 0 ? 'Any' : '\u2265 ' + val.toFixed(0);
     onFilterChange();
 };
 
 window.onRIFilterChange = function () {
     var val = parseInt(document.getElementById('filter-ri-min').value) || 0;
-    document.getElementById('ri-min-label').textContent = val === 0 ? '0 kt (All)' : '\u2265 ' + val + ' kt/24h';
+    document.getElementById('ri-min-label').textContent = val === 0 ? 'Any' : '\u2265 ' + val + ' kt / 24 h';
     onFilterChange();
 };
 
 window.onRWFilterChange = function () {
     var val = parseInt(document.getElementById('filter-rw-max').value) || 0;
-    document.getElementById('rw-max-label').textContent = val === 0 ? '0 kt (All)' : '\u2264 ' + val + ' kt/24h';
+    document.getElementById('rw-max-label').textContent = val === 0 ? 'Any' : '\u2264 ' + val + ' kt / 24 h';
     onFilterChange();
 };
 
@@ -2810,24 +2861,39 @@ function applyFilters() {
     // Sort
     var sortBy = document.getElementById('sort-by').value;
     var comparators = {
-        'year-desc': function (a, b) { return (b.year || 0) - (a.year || 0); },
-        'year-asc':  function (a, b) { return (a.year || 0) - (b.year || 0); },
+        // Newest/Oldest order by when the storm formed, not just its season
+        // year, so the list reads chronologically within a year as well.
+        'year-desc': function (a, b) { return (b.year || 0) - (a.year || 0) || _sbDateCmp(b, a); },
+        'year-asc':  function (a, b) { return (a.year || 0) - (b.year || 0) || _sbDateCmp(a, b); },
         'wind-desc': function (a, b) { return (b.peak_wind_kt || 0) - (a.peak_wind_kt || 0); },
         'ri-desc':   function (a, b) { return (b.ri_24h || 0) - (a.ri_24h || 0); },
         'rw-desc':   function (a, b) { return (a.rw_24h || 0) - (b.rw_24h || 0); },
         'ace-desc':  function (a, b) { return (b.ace || 0) - (a.ace || 0); }
     };
-    if (comparators[sortBy]) filteredStorms.sort(comparators[sortBy]);
+    var cmp = comparators[sortBy];
+    if (nameQuery) {
+        // A name search ranks how well the name matches before the chosen
+        // order: "Ian" lists the IANs first, then names that start with it
+        // (Iana), then names that merely contain it (Vaianu, Dianne).
+        var q = nameQuery;
+        var qual = function (s) {
+            var n = (s.name || '').toUpperCase();
+            return n === q ? 0 : (n.indexOf(q) === 0 ? 1 : 2);
+        };
+        filteredStorms.sort(function (a, b) { return qual(a) - qual(b) || (cmp ? cmp(a, b) : 0); });
+    } else if (cmp) {
+        filteredStorms.sort(cmp);
+    }
 
-    // Clear the previously selected individual storm track and card.
-    // The saved pre-selection view is dropped WITHOUT restoring — the
-    // user changed filters, so wherever they are now is the new context.
+    // A selected storm that still matches stays selected (re-sorting the
+    // list, or narrowing around it, should not drop it). One the new filters
+    // exclude is cleared, track and card with it. The saved pre-selection view
+    // is dropped WITHOUT restoring — the user changed filters, so wherever
+    // they are now is the new context.
     _preSelectView = null;
-    if (trackLayer) trackLayer.clearLayers();
-    if (selectedStorm) {
+    if (selectedStorm && filteredStorms.indexOf(selectedStorm) < 0) {
         selectedStorm = null;
-        var card = document.getElementById('storm-card');
-        if (card) card.style.display = 'none';
+        if (trackLayer) trackLayer.clearLayers();
         var mc = document.getElementById('map-storm-card');
         if (mc) mc.style.display = 'none';
     }
@@ -2837,6 +2903,7 @@ function applyFilters() {
     } else {
         renderMarkers(filteredStorms);
     }
+    _sbAfterFilter(nameQuery);
 }
 
 window.resetFilters = function () {
@@ -2844,35 +2911,387 @@ window.resetFilters = function () {
     document.getElementById('filter-year-min').value = '';
     document.getElementById('filter-year-max').value = '';
     document.getElementById('filter-wind-min').value = 0;
-    document.getElementById('wind-min-label').textContent = '0 kt (All)';
+    document.getElementById('wind-min-label').textContent = 'Any';
     document.getElementById('filter-ace-min').value = 0;
-    document.getElementById('ace-min-label').textContent = '0 (All)';
+    document.getElementById('ace-min-label').textContent = 'Any';
     document.getElementById('filter-ri-min').value = 0;
-    document.getElementById('ri-min-label').textContent = '0 kt (All)';
+    document.getElementById('ri-min-label').textContent = 'Any';
     document.getElementById('filter-rw-max').value = 0;
-    document.getElementById('rw-max-label').textContent = '0 kt (All)';
+    document.getElementById('rw-max-label').textContent = 'Any';
     document.getElementById('sort-by').value = 'year-desc';
+    _sbSyncYearSlider();
 
-    document.querySelectorAll('.basin-chip').forEach(function (c) { c.classList.remove('active'); });
-    document.querySelector('.basin-chip[data-basin="ALL"]').classList.add('active');
+    _browserChips('basin-chips', 'basin-chip').forEach(function (c) {
+        c.classList.toggle('active', c.getAttribute('data-basin') === 'ALL');
+    });
     activeBasins = ['ALL'];
 
-    document.querySelectorAll('.month-chip').forEach(function (c) { c.classList.remove('active'); });
-    document.querySelector('.month-chip[data-month="ALL"]').classList.add('active');
+    _browserChips('month-chips', 'month-chip').forEach(function (c) {
+        c.classList.toggle('active', c.getAttribute('data-month') === 'ALL');
+    });
     activeMonths = ['ALL'];
 
     filteredStorms = allStorms.slice();
+    filteredStorms.sort(function (a, b) { return (b.year || 0) - (a.year || 0) || _sbDateCmp(b, a); });
     if (mapViewMode === 'tracks') {
         renderTracks(filteredStorms);
     } else {
         renderMarkers(filteredStorms);
     }
 
-    // Hide storm card
-    document.getElementById('storm-card').style.display = 'none';
+    // Clear the selection
+    var mc = document.getElementById('map-storm-card');
+    if (mc) mc.style.display = 'none';
     selectedStorm = null;
     _preSelectView = null;
     if (trackLayer) trackLayer.clearLayers();
+    _sbAfterFilter('');
+    updateHashSilently();
+};
+
+// ══════════════════════════════════════════════════════════════
+//  STORM BROWSER — results list, filter panel, map fitting
+//  The list is the browser's index: every storm the filters keep, in the
+//  chosen order. Before it existed the "Sort by" menu reordered nothing
+//  visible and the only way to pick a storm was to find its track on the map.
+// ══════════════════════════════════════════════════════════════
+
+var SB_ROW_H = 60;            // px per list row (fixed: the list is virtualized)
+var _sbSelSid = null;         // sid of the selected row
+var _sbHoverSid = null;       // sid whose track is highlighted from the list
+var _sbHoverLayer = null;     // L.layerGroup for that highlight
+var _sbHoverTimer = null;
+var _sbCursor = -1;           // keyboard cursor (index into filteredStorms)
+var _sbLastFitQuery = null;   // name query the map was last auto-fitted to
+var _sbWired = false;
+
+function _sbEl() { return document.getElementById('sb-results'); }
+
+// ISO 'YYYY-MM-DD' start dates compare as strings
+function _sbDateCmp(a, b) {
+    var x = a.start_date || '', y = b.start_date || '';
+    return x < y ? -1 : (x > y ? 1 : 0);
+}
+
+// Short category key + color for a row's badge.
+function _sbCat(s) {
+    var k = getCatKey(s.peak_wind_kt);
+    return { k: k === 'UN' ? '?' : k, c: SS_COLORS[k] || SS_COLORS.UN };
+}
+
+// Tiny wind-vs-time trace from the track (once the track chunks are in).
+function _sbSpark(sid) {
+    var t = allTracks && allTracks[sid];
+    if (!t || t.length < 3) return '';
+    var w = [], i, mx = 0;
+    for (i = 0; i < t.length; i++) { var v = t[i].w; w.push(v == null ? null : v); if (v > mx) mx = v; }
+    if (!mx) return '';
+    var W = 46, H = 18, n = w.length, top = Math.max(mx, 64), d = '', pen = false;
+    for (i = 0; i < n; i++) {
+        if (w[i] == null) { pen = false; continue; }
+        var x = (i / (n - 1)) * W, y = H - 1 - (w[i] / top) * (H - 2);
+        d += (pen ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1);
+        pen = true;
+    }
+    // the 64-kt (hurricane) line, so a glance tells which crossed it
+    var y64 = (H - 1 - (64 / top) * (H - 2)).toFixed(1);
+    return '<svg class="sb-spark" viewBox="0 0 ' + W + ' ' + H + '" aria-hidden="true">' +
+        '<line x1="0" x2="' + W + '" y1="' + y64 + '" y2="' + y64 + '" class="sb-spark-64"/>' +
+        '<path d="' + d + '" stroke="' + getIntensityColor(mx) + '"/></svg>';
+}
+
+// Right-hand number of a row follows the sort, so the column you ordered by
+// is the one you read.
+function _sbMetric(s, sortBy) {
+    var kt = s.peak_wind_kt ? Math.round(s.peak_wind_kt) + ' kt' : '—';
+    var hpa = s.min_pres_hpa ? Math.round(s.min_pres_hpa) + ' hPa' : '';
+    if (sortBy === 'ace-desc') return ['ACE ' + (s.ace || 0).toFixed(1), kt];
+    if (sortBy === 'ri-desc') return [s.ri_24h != null ? '+' + Math.round(s.ri_24h) + ' kt' : '—', 'in 24 h'];
+    if (sortBy === 'rw-desc') return [s.rw_24h != null ? '−' + Math.abs(Math.round(s.rw_24h)) + ' kt' : '—', 'in 24 h'];
+    return [kt, hpa];
+}
+
+function _sbRowHTML(s, i, sortBy) {
+    var c = _sbCat(s), m = _sbMetric(s, sortBy);
+    var dates = s.start_date ? TCTime.span(s.start_date, s.end_date) : '';
+    return '<div class="sb-row' + (s.sid === _sbSelSid ? ' is-sel' : '') + (i === _sbCursor ? ' is-cur' : '') +
+        '" role="option" aria-selected="' + (s.sid === _sbSelSid) + '" data-i="' + i + '" style="top:' + (i * SB_ROW_H) + 'px">' +
+        '<span class="sb-cat" style="--c:' + c.c + '" title="Peak: ' + getIntensityCategory(s.peak_wind_kt) + '">' + c.k + '</span>' +
+        '<span class="sb-row-main"><span class="sb-row-name">' + _escXml(_titleName(s.name)) + '</span>' +
+        '<span class="sb-row-meta">' + s.year + ' · ' + s.basin + (dates ? ' · ' + dates : '') + '</span></span>' +
+        _sbSpark(s.sid) +
+        '<span class="sb-row-val"><b>' + m[0] + '</b><span>' + m[1] + '</span></span>' +
+        '</div>';
+}
+
+// Virtualized render: only the rows in (and just around) the viewport exist.
+var _sbRange = [-1, -1];
+function _sbRenderList(resetScroll) {
+    var el = _sbEl();
+    if (!el) return;
+    _sbWire();
+    var n = filteredStorms.length;
+    if (resetScroll) { el.scrollTop = 0; _sbCursor = -1; }
+    if (!n) {
+        el.innerHTML = '<div class="sb-empty">' + (allStorms.length
+            ? 'No storms match these filters.<br><button type="button" class="sb-reset" onclick="resetFilters()">Reset all filters</button>'
+            : 'Loading storms&hellip;') + '</div>';
+        _sbRange = [-1, -1];
+        return;
+    }
+    var vh = el.clientHeight || 600, top = el.scrollTop;
+    var i0 = Math.max(0, Math.floor(top / SB_ROW_H) - 6);
+    var i1 = Math.min(n, Math.ceil((top + vh) / SB_ROW_H) + 6);
+    var sortBy = (document.getElementById('sort-by') || {}).value;
+    var h = '<div class="sb-spacer" style="height:' + (n * SB_ROW_H) + 'px">';
+    for (var i = i0; i < i1; i++) h += _sbRowHTML(filteredStorms[i], i, sortBy);
+    el.innerHTML = h + '</div>';
+    _sbRange = [i0, i1];
+}
+
+function _sbOnScroll() {
+    var el = _sbEl();
+    if (!el || !filteredStorms.length) return;
+    var vh = el.clientHeight || 600, top = el.scrollTop;
+    var need0 = Math.max(0, Math.floor(top / SB_ROW_H) - 2);
+    var need1 = Math.min(filteredStorms.length, Math.ceil((top + vh) / SB_ROW_H) + 2);
+    if (need0 < _sbRange[0] || need1 > _sbRange[1]) _sbRenderList(false);
+}
+
+function _sbWire() {
+    if (_sbWired) return;
+    var el = _sbEl();
+    if (!el) return;
+    _sbWired = true;
+    el.addEventListener('scroll', _sbOnScroll, { passive: true });
+    window.addEventListener('resize', function () { _sbRenderList(false); });
+    function rowOf(e) {
+        var r = e.target.closest ? e.target.closest('.sb-row') : null;
+        return r ? filteredStorms[+r.getAttribute('data-i')] : null;
+    }
+    el.addEventListener('click', function (e) {
+        var s = rowOf(e);
+        if (!s) return;
+        _sbCursor = filteredStorms.indexOf(s);
+        selectStorm(s);
+    });
+    el.addEventListener('dblclick', function (e) {
+        var s = rowOf(e);
+        if (!s) return;
+        if (selectedStorm !== s) selectStorm(s);
+        viewStormDetail();
+    });
+    // Hover a row → its track lights up on the map (after a beat, so
+    // sweeping the pointer down the list doesn't strobe the map).
+    el.addEventListener('mouseover', function (e) {
+        var s = rowOf(e);
+        clearTimeout(_sbHoverTimer);
+        if (!s || s.sid === _sbHoverSid) return;
+        _sbHoverTimer = setTimeout(function () { _sbHoverTrack(s.sid); }, 90);
+    });
+    el.addEventListener('mouseleave', function () {
+        clearTimeout(_sbHoverTimer);
+        _sbHoverTrack(null);
+    });
+    // Arrow keys move through the list, Enter opens the storm
+    el.addEventListener('keydown', function (e) {
+        var n = filteredStorms.length;
+        if (!n) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            var cur = _sbCursor >= 0 ? _sbCursor : (selectedStorm ? filteredStorms.indexOf(selectedStorm) : -1);
+            cur = Math.max(0, Math.min(n - 1, cur + (e.key === 'ArrowDown' ? 1 : -1)));
+            _sbCursor = cur;
+            selectStorm(filteredStorms[cur]);
+        } else if (e.key === 'Enter' && selectedStorm) {
+            e.preventDefault();
+            viewStormDetail();
+        }
+    });
+}
+
+// Mark the selected row and (optionally) scroll it into view.
+function _sbSetSelected(sid, reveal) {
+    _sbSelSid = sid;
+    var el = _sbEl();
+    if (!el) return;
+    var idx = -1;
+    if (sid) {
+        for (var i = 0; i < filteredStorms.length; i++) {
+            if (filteredStorms[i].sid === sid) { idx = i; break; }
+        }
+    }
+    if (reveal && idx >= 0) {
+        var top = idx * SB_ROW_H, vh = el.clientHeight;
+        if (top < el.scrollTop || top + SB_ROW_H > el.scrollTop + vh) {
+            el.scrollTop = Math.max(0, top - vh / 2 + SB_ROW_H / 2);
+        }
+    }
+    _sbRenderList(false);
+}
+
+// Highlight one storm's track from the list (null clears it).
+function _sbHoverTrack(sid) {
+    _sbHoverSid = sid;
+    if (!_sbHoverLayer) return;
+    _sbHoverLayer.clearLayers();
+    if (!sid || (selectedStorm && selectedStorm.sid === sid)) return;
+    var t = allTracks && allTracks[sid];
+    if (!t) return;
+    var ll = [];
+    for (var i = 0; i < t.length; i++) if (t[i].la != null && t[i].lo != null) ll.push([t[i].la, t[i].lo]);
+    if (ll.length < 2) return;
+    var s = null;
+    for (var j = 0; j < filteredStorms.length; j++) if (filteredStorms[j].sid === sid) { s = filteredStorms[j]; break; }
+    _sbHoverLayer.addLayer(L.polyline(ll, { color: _sbCasingColor(), weight: 7, opacity: 0.85 }));
+    _sbHoverLayer.addLayer(L.polyline(ll, { color: getIntensityColor(s ? s.peak_wind_kt : 0), weight: 3.5, opacity: 1 }));
+}
+
+// After every filter pass: list, counts, the Filters badge, and — when a
+// name search has narrowed things to a handful — the map follows the matches.
+function _sbAfterFilter(nameQuery) {
+    _sbRenderList(true);
+    _sbUpdateFilterBadge();
+    var hint = document.getElementById('sb-hint');
+    if (hint) hint.style.display = filteredStorms.length ? '' : 'none';
+    if (nameQuery && nameQuery !== _sbLastFitQuery && filteredStorms.length) {
+        // fit to the best matches: exact names, else names starting with the query
+        var nm = function (s) { return (s.name || '').toUpperCase(); };
+        var set = filteredStorms.filter(function (s) { return nm(s) === nameQuery; });
+        if (!set.length) set = filteredStorms.filter(function (s) { return nm(s).indexOf(nameQuery) === 0; });
+        if (!set.length) set = filteredStorms;
+        if (set.length <= 60) {
+            _sbLastFitQuery = nameQuery;
+            _fitStormsOnMap(set);
+        }
+    }
+    if (!nameQuery) _sbLastFitQuery = null;
+}
+
+// Count of active filters beyond name + basin (those two are always on
+// screen), shown on the Filters button, plus a one-line summary.
+function _sbUpdateFilterBadge() {
+    var n = 0, sum = [];
+    var y0 = document.getElementById('filter-year-min').value, y1 = document.getElementById('filter-year-max').value;
+    if (y0 || y1) { n++; sum.push((y0 || '1842') + '–' + (y1 || 'now')); }
+    if (activeMonths[0] !== 'ALL') {
+        n++;
+        var MN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        sum.push(activeMonths.length <= 2 ? activeMonths.map(function (m) { return MN[m - 1]; }).join('/') : activeMonths.length + ' months');
+    }
+    var w = +document.getElementById('filter-wind-min').value;
+    if (w > 0) { n++; sum.push(getIntensityCategory(w) + '+'); }
+    if (+document.getElementById('filter-ace-min').value > 0) { n++; sum.push('ACE'); }
+    if (+document.getElementById('filter-ri-min').value > 0) { n++; sum.push('RI'); }
+    if (+document.getElementById('filter-rw-max').value < 0) { n++; sum.push('RW'); }
+    var b = document.getElementById('sb-filter-count'), sm = document.getElementById('sb-filter-sum');
+    if (b) { b.hidden = !n; b.textContent = n; }
+    if (sm) sm.textContent = sum.join(' · ');
+}
+
+window.toggleBrowserFilters = function (force) {
+    var p = document.getElementById('sb-filters'), btn = document.getElementById('sb-filters-toggle');
+    if (!p || !btn) return;
+    var open = typeof force === 'boolean' ? force : p.hidden;
+    p.hidden = !open;
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    btn.classList.toggle('is-open', open);
+    if (open) _sbSyncYearSlider();
+    setTimeout(function () { _sbRenderList(false); }, 0);   // list height changed
+};
+
+// ── Year range: dual slider ↔ the two number boxes ──
+var SB_Y0 = 1842, SB_Y1 = 2026;
+function _sbYearBounds() {
+    var lo = document.getElementById('sb-year-lo');
+    if (lo) { SB_Y0 = +lo.min; SB_Y1 = +lo.max; }
+}
+function _sbSyncYearSlider() {
+    _sbYearBounds();
+    var lo = document.getElementById('sb-year-lo'), hi = document.getElementById('sb-year-hi');
+    if (!lo || !hi) return;
+    var a = parseInt(document.getElementById('filter-year-min').value, 10);
+    var b = parseInt(document.getElementById('filter-year-max').value, 10);
+    lo.value = isNaN(a) ? SB_Y0 : Math.max(SB_Y0, Math.min(SB_Y1, a));
+    hi.value = isNaN(b) ? SB_Y1 : Math.max(SB_Y0, Math.min(SB_Y1, b));
+    _sbYearFill();
+}
+function _sbYearFill() {
+    var lo = document.getElementById('sb-year-lo'), hi = document.getElementById('sb-year-hi');
+    var f = document.getElementById('sb-year-fill');
+    if (!lo || !hi || !f) return;
+    var span = (SB_Y1 - SB_Y0) || 1;
+    f.style.left = ((+lo.value - SB_Y0) / span * 100) + '%';
+    f.style.right = ((SB_Y1 - +hi.value) / span * 100) + '%';
+}
+function _sbWireYearSlider() {
+    var lo = document.getElementById('sb-year-lo'), hi = document.getElementById('sb-year-hi');
+    if (!lo || !hi || lo._wired) return;
+    lo._wired = true;
+    _sbYearBounds();
+    function onSlide(which) {
+        if (+lo.value > +hi.value) { if (which === 'lo') hi.value = lo.value; else lo.value = hi.value; }
+        // an end at its limit means "no bound" — leave the box empty
+        document.getElementById('filter-year-min').value = +lo.value > SB_Y0 ? lo.value : '';
+        document.getElementById('filter-year-max').value = +hi.value < SB_Y1 ? hi.value : '';
+        _sbYearFill();
+        onFilterChange();
+    }
+    lo.addEventListener('input', function () { onSlide('lo'); });
+    hi.addEventListener('input', function () { onSlide('hi'); });
+    _sbYearFill();
+}
+window.onYearInput = function () {
+    _sbSyncYearSlider();
+    onFilterChange();
+};
+window.setBrowserYears = function (a, b) {
+    document.getElementById('filter-year-min').value = a == null ? '' : a;
+    document.getElementById('filter-year-max').value = b == null ? '' : b;
+    _sbSyncYearSlider();
+    onFilterChange();
+};
+
+// ── Map fitting ──
+// Bounds of a set of storms that respect the date line: the longitudes are
+// laid around the globe and the view is cut at the widest empty gap, so a
+// Pacific set is not stretched across the Atlantic. With every storm that
+// gap is Africa, giving a Pacific-centred view of all seven basins.
+function _fitStormsOnMap(storms, opts) {
+    if (!stormMap || !storms || !storms.length) return;
+    var lats = [], lons = [];
+    var useTracks = storms.length <= 60 && allTracks;
+    storms.forEach(function (s) {
+        var t = useTracks && allTracks[s.sid];
+        if (t && t.length) {
+            for (var i = 0; i < t.length; i += 2) {
+                if (t[i].la != null && t[i].lo != null) { lats.push(t[i].la); lons.push(t[i].lo); }
+            }
+        } else {
+            if (s.genesis_lat != null && s.genesis_lon != null) { lats.push(s.genesis_lat); lons.push(s.genesis_lon); }
+            if (s.lmi_lat != null && s.lmi_lon != null) { lats.push(s.lmi_lat); lons.push(s.lmi_lon); }
+        }
+    });
+    if (!lats.length) return;
+    var norm = lons.map(function (x) { return ((x + 180) % 360 + 360) % 360 - 180; }).sort(function (a, b) { return a - b; });
+    var gap = -1, gi = 0;
+    for (var k = 0; k < norm.length; k++) {
+        var a = norm[k], b = k === norm.length - 1 ? norm[0] + 360 : norm[k + 1];
+        if (b - a > gap) { gap = b - a; gi = k; }
+    }
+    var w = norm[(gi + 1) % norm.length];
+    var e = norm[gi];
+    if (e < w) e += 360;
+    var s0 = Math.min.apply(null, lats), n0 = Math.max.apply(null, lats);
+    var padLon = Math.max(2, (e - w) * 0.04), padLat = Math.max(2, (n0 - s0) * 0.08);
+    var pad = (opts && opts.animate === false) ? { top: 50, bottom: 40, left: 20, right: 20 } : _sbMapPadding();
+    if (!selectedStorm) { pad.left = Math.min(pad.left, 60); }
+    stormMap.fitBounds([[Math.max(-80, s0 - padLat), w - padLon], [Math.min(84, n0 + padLat), e + padLon]],
+        { padding: pad, maxZoom: 6, animate: !(opts && opts.animate === false) });
+}
+
+window.fitMapToResults = function () {
+    _fitStormsOnMap(filteredStorms.length ? filteredStorms : allStorms);
 };
 
 // ══════════════════════════════════════════════════════════════
@@ -4154,6 +4573,15 @@ window.setCompareAlign = function (mode) {
     if (compareStorms.length > 0) renderCompareTimeline();
 };
 
+var _cmpNeedsTracks = false;
+function _cmpTracksArrived() {
+    var tab = document.getElementById('tab-compare');
+    if (_cmpNeedsTracks && compareStorms.length && tab && tab.classList.contains('active') &&
+            compareStorms.every(function (s) { return !!allTracks[s.sid]; })) {
+        renderCompareView();
+    }
+}
+
 function renderCompareView() {
     var chips = document.getElementById('compare-chips');
     var empty = document.getElementById('compare-empty');
@@ -4201,6 +4629,11 @@ function renderCompareView() {
     content.style.display = '';
     tableWrap.style.display = '';
     if (addBtn) addBtn.style.display = '';
+
+    // A shared Compare link restores as soon as the storm list is in, which is
+    // before the ~40 MB of tracks: the charts drew empty and nothing redrew
+    // them. Remember that, and loadData() renders again when the tracks land.
+    _cmpNeedsTracks = compareStorms.some(function (s) { return !allTracks[s.sid]; });
 
     renderCompareTimeline();
     renderCompareMap();
@@ -6295,6 +6728,7 @@ function showToast(message) {
 
 document.addEventListener('DOMContentLoaded', function () {
     loadData();
+    _sbWireYearSlider();
 
     // Render colorbar canvas from default colormap
     renderColorbarCanvas(irSelectedColormap);
@@ -11182,7 +11616,7 @@ function restoreFromHash() {
         // ── Restore basin filter for browser/detail tabs ──
         if (params.basin && (params.tab === 'browser' || params.tab === 'detail')) {
             activeBasins = params.basin.split(',');
-            document.querySelectorAll('.basin-chip').forEach(function (c) {
+            _browserChips('basin-chips', 'basin-chip').forEach(function (c) {
                 var b = c.getAttribute('data-basin');
                 if (b === 'ALL') {
                     c.classList.remove('active');
