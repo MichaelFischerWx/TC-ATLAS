@@ -206,7 +206,7 @@ outline-offset: 2px;
     }
     .spinner, .ga-spinner, .ir-loader-spinner, .sat-spinner,
     .env-loading-spinner, .rt-genesis-modal-loader-spinner,
-    .rt-mw-compare-spinner {
+    .rt-mw-compare-spinner, .rt-anim-spin, .qv-card-thumb.is-loading::after {
         animation-duration: 0.8s !important;
         animation-iteration-count: infinite !important;
     }

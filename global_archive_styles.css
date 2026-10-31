@@ -1243,7 +1243,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .gif-settings-row select {
     flex: 1;
-    background: var(--card);
+    background: var(--surface);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -2610,7 +2610,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     color: var(--slate);
 }
 .compare-mw-product-row select {
-    background: var(--card);
+    background: var(--surface);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -2626,7 +2626,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .compare-mw-overpass-row select {
     flex: 1;
-    background: var(--card);
+    background: var(--surface);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -2733,7 +2733,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .analog-results td {
     padding: 7px 8px;
-    color: var(--white);
+    color: var(--text);
     border-bottom: 1px solid rgba(15, 22, 35,0.03);
     font-variant-numeric: tabular-nums;
     font-size: 0.72rem;
