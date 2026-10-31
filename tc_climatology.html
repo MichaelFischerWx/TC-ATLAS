@@ -43,7 +43,11 @@
     <script defer src="tc_export.js?v=20260803c"></script>
 
     <!-- Leaflet — needed by the ACE modal's per-year season map -->
+    <!-- Map engine: MapLibre GL + Leaflet-compat facade (lflet_gl.js), as on the
+         other pages. leaflet.css is kept for the .leaflet-* control/tooltip
+         styling the facade reuses. -->
     <link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css?v=1.9.4" />
+    <link href="assets/vendor/maplibre/maplibre-gl.css?v=4.7.1" rel="stylesheet" />
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1045,7 +1049,7 @@
 
 
     <!-- Scripts.
-         All deferred: `defer` keeps this execution order (leaflet, then Plotly,
+         All deferred: `defer` keeps this execution order (MapLibre + facade, then Plotly,
          then the page JS) while leaving the parser unblocked. Unlike the other
          pages this one DOES need Plotly at load — tc_climatology.js builds six
          charts up front — so Plotly stays in the initial load here; deferring
@@ -1053,7 +1057,8 @@
          before DOMContentLoaded, so the handlers inside these files fire as
          they always did. Do NOT add an inline <script> after this block that
          depends on them — inline scripts run during parsing, before deferred. -->
-    <script defer src="assets/vendor/leaflet/leaflet.js?v=1.9.4"></script>
+    <script defer src="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1"></script>
+    <script defer src="lflet_gl.js?v=20261001ui1"></script>
     <script defer src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script defer src="subseasonal_clock.js?v=20261031mp1"></script>
     <script defer src="tc_climatology.js?v=20261031p1"></script>
