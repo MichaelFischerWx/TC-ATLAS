@@ -718,7 +718,7 @@ function enterFocusMode(caseData) {
         map.invalidateSize();
         // If IR data was already fetched before focus mode, show it now
         // and start the deferred lag-frame fetch for the animation.
-        if (_irData && _irFrameURLs.length) {
+        if (_irData && _irIdx.length) {
             _injectIRMapControls();
             showIRMapOverlay(0);
             _startIRLagFrames(_irData.case_index);
@@ -1255,7 +1255,7 @@ function openSidePanel(caseData, fromQuickSelect) {
     document.getElementById('side-panel').classList.add('open');
 
     // Fetch IR satellite data for this case
-    _irData = null; _irFrameURLs = []; _irOriginalURLs = []; _irPlotlyVisible = false; _irUserDisabled = false; _irAllFramesLoaded = false; _irLoadedCount = 0;
+    _irPlotlyVisible = false; _irUserDisabled = false;   // fetchIRData resets the rest
     _showIRLoadingIndicator();
     fetchIRData(caseData.case_index, function(data) {
         _removeIRLoadingIndicator();
@@ -3121,98 +3121,35 @@ function cleanupERA5() {
 
 // ── IR state ─────────────────────────────────────────────────
 var _irData = null;
-var _irMapOverlay = null;
-var _irFrameURLs = [];
+var _irMapOverlay = null;     // Leaflet engine: L.imageOverlay of a CPU-colored frame
+var _irGL = null;             // GL engine: custom layer that colors the frames on the GPU
 var _irAnimFrame = 0;
 var _irAnimTimer = null;
 var _irAnimPlaying = false;
 var _irMapVisible = true;
-var _irFrameURLsGray = [];   // luminance twins of _irFrameURLs (see _irMakeGray)
 var _irPlotlyVisible = false;
 var _irUserDisabled = false;  // sticky: true if user explicitly turned IR underlay off this case
 var _tdrVisible = true;
-var _irFetching = false;
-var _irBoundsSet = false;
-var _irDecodedImages = [];
-var _irOriginalURLs = [];    // original equirectangular PNGs (for Plotly underlay)
-var _irReprojCanvas = null;  // reusable canvas for Mercator reprojection
+var _irFetching = null;       // "dt:case" of the /ir request in flight
+var _irSeq = 0;               // bumped per case load / teardown; stale async work checks it
+var _irIdx = [];              // per loop frame: Uint8Array of colormap indices (row 0 = north), null until loaded
+var _irW = 0, _irH = 0;       // frame grid size (all frames of a case share it)
+var _irSlots = [];            // loop frame → IR store lag slot (repeated IR times collapsed)
+var _irPlotlyURL = null;      // equirectangular site-color frame 0 for the Plotly underlay (built lazily)
+var _irCpuURLs = {};          // Leaflet engine: { cmap: [Mercator data URL per frame] }
 
-/**
- * Reproject an equirectangular IR image to Web Mercator on a canvas.
- * src: Image or canvas with the equirectangular PNG
- * southLat, northLat: latitude bounds in degrees
- * Returns a data:image/png;base64 URL of the reprojected image.
- */
-function _mercatorReproject(src, southLat, northLat) {
-    var w = src.width || src.naturalWidth;
-    var h = src.height || src.naturalHeight;
-    if (!w || !h) return null;
-
-    // Set up source canvas to read pixels
-    var srcCvs = document.createElement('canvas');
-    srcCvs.width = w; srcCvs.height = h;
-    var srcCtx = srcCvs.getContext('2d');
-    srcCtx.drawImage(src, 0, 0);
-    var srcData = srcCtx.getImageData(0, 0, w, h);
-
-    // Reuse destination canvas
-    if (!_irReprojCanvas) _irReprojCanvas = document.createElement('canvas');
-    _irReprojCanvas.width = w; _irReprojCanvas.height = h;
-    var dstCtx = _irReprojCanvas.getContext('2d');
-    var dstImg = dstCtx.createImageData(w, h);
-
-    var toRad = Math.PI / 180;
-    // Mercator Y for south and north bounds
-    var yS = Math.log(Math.tan(Math.PI / 4 + southLat * toRad / 2));
-    var yN = Math.log(Math.tan(Math.PI / 4 + northLat * toRad / 2));
-
-    for (var row = 0; row < h; row++) {
-        // row 0 = north (top of image), row h-1 = south
-        var frac = row / (h - 1);  // 0 at top (north), 1 at bottom (south)
-        // Mercator Y for this output row (north to south)
-        var yMerc = yN + frac * (yS - yN);
-        // Convert Mercator Y back to latitude
-        var lat = (2 * Math.atan(Math.exp(yMerc)) - Math.PI / 2) / toRad;
-        // Map latitude to source row (linear in lat)
-        var srcFrac = (northLat - lat) / (northLat - southLat);
-        var srcRow = srcFrac * (h - 1);
-        // Bilinear interpolation between two source rows
-        var r0 = Math.floor(srcRow);
-        var r1 = Math.min(r0 + 1, h - 1);
-        var t = srcRow - r0;
-        for (var col = 0; col < w; col++) {
-            var di = (row * w + col) * 4;
-            var si0 = (r0 * w + col) * 4;
-            var si1 = (r1 * w + col) * 4;
-            dstImg.data[di]     = srcData.data[si0]     + t * (srcData.data[si1]     - srcData.data[si0]);
-            dstImg.data[di + 1] = srcData.data[si0 + 1] + t * (srcData.data[si1 + 1] - srcData.data[si0 + 1]);
-            dstImg.data[di + 2] = srcData.data[si0 + 2] + t * (srcData.data[si1 + 2] - srcData.data[si0 + 2]);
-            dstImg.data[di + 3] = srcData.data[si0 + 3] + t * (srcData.data[si1 + 3] - srcData.data[si0 + 3]);
-        }
-    }
-
-    dstCtx.putImageData(dstImg, 0, 0);
-    return _irReprojCanvas.toDataURL('image/png');
-}
-
-/**
- * Reproject an IR frame data URL to Mercator. Returns the reprojected URL
- * via callback (async because we need to load the image first).
- */
-// ── Grayscale IR ─────────────────────────────────────────────
-// The server ships IR frames already colored with the site IR colormap
-// (tc_radar_api._CLAUDE_IR_TB_STOPS). When the radar field is draped on the
-// map, two rainbows collide, so we invert the colormap client-side back to
-// its 0-255 index (high index = cold) and emit a luminance frame: cold tops
-// bright, warm surface dark. Both variants are built at reprojection time
-// so toggling is a src swap, not a re-fetch.
+// ── IR colormaps ─────────────────────────────────────────────
+// A frame is a grid of indices into the site IR colormap: Tb = 330 − 170·i/255,
+// 0 = no data (tc_radar_api._ir_idx_png). Each colormap below is a 256-entry
+// RGBA LUT over that index, applied at draw time, so switching colormaps never
+// touches the frames.
 var _IR_TB_STOPS = [
     [310,12,12,22],[293,70,70,82],[283,120,120,132],[273,180,180,192],[263,216,218,228],
     [253,140,210,220],[248,68,180,196],[243,32,148,166],[238,40,178,116],[233,96,208,68],
     [228,192,220,40],[223,238,196,48],[218,228,132,48],[213,214,78,56],[208,180,36,68],
     [203,196,48,156],[198,168,64,200],[193,120,48,180],
     // ice-blue cold tail (2026-09-30) — MUST equal tc_radar_api._CLAUDE_IR_TB_STOPS,
-    // since this table inverts the server-rendered PNG back to its index
+    // since this table inverts legacy server-colored PNGs back to their index
     [190,64,24,140],[187,40,60,196],[184,76,116,236],[181,136,164,250],[176,152,168,248],[170,255,255,255]
 ];
 var _irLUT = null, _irInvLUT = null;
@@ -3230,8 +3167,7 @@ function _irBuildLUTs() {
         _irLUT[i*3+2] = Math.round(lo[3] + t * (hi[3] - lo[3]));
     }
     // Inverse: 5 bits/channel (32768 cells) → nearest LUT index. ~8M distance
-    // ops once per session (~20 ms); PNG pixels are exact LUT colors so the
-    // quantized nearest match is exact for them.
+    // ops once per session (~20 ms); only legacy RGBA frames need it.
     _irInvLUT = new Uint8Array(32768);
     for (var q = 0; q < 32768; q++) {
         var r = ((q >> 10) & 31) * 8 + 4, g = ((q >> 5) & 31) * 8 + 4, b = (q & 31) * 8 + 4;
@@ -3244,27 +3180,9 @@ function _irBuildLUTs() {
         _irInvLUT[q] = best;
     }
 }
-function _irMakeGray(img) {
-    _irBuildLUTs();
-    var w = img.width || img.naturalWidth, h = img.height || img.naturalHeight;
-    if (!w || !h) return null;
-    var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
-    var ctx = cv.getContext('2d'); ctx.drawImage(img, 0, 0);
-    var im = ctx.getImageData(0, 0, w, h), d = im.data;
-    for (var i = 0; i < d.length; i += 4) {
-        if (d[i+3] === 0) continue;
-        var q = ((d[i] >> 3) << 10) | ((d[i+1] >> 3) << 5) | (d[i+2] >> 3);
-        var idx = _irInvLUT[q];
-        // Slight gamma lift so mid-level cloud is legible under a colored field
-        var v = Math.round(255 * Math.pow(idx / 255, 0.7));   // lift: cold tops read white over a dark basemap
-        d[i] = v; d[i+1] = v; d[i+2] = v;
-    }
-    ctx.putImageData(im, 0, 0);
-    return cv;
-}
 // IR colormap mode: 'auto' (gray while the radar field is draped, else the
 // site color map) | 'color' (site) | 'gray' | 'bd' (Dvorak BD enhancement) |
-// 'rainbow'. Non-color variants are built client-side from the inverse LUT.
+// 'rainbow'.
 var _irGrayMode = 'auto';
 try { _irGrayMode = localStorage.getItem('tcr_ir_gray') || 'auto'; } catch (e) {}
 var _IR_CMAP_NAMES = { auto: 'Auto', color: 'TC-ATLAS color', gray: 'Grayscale', bd: 'Dvorak BD', rainbow: 'Rainbow enhanced' };
@@ -3273,83 +3191,48 @@ function _irActiveCmap() {
     return _IR_CMAP_NAMES[_irGrayMode] ? _irGrayMode : 'color';
 }
 function _irUseGray() { return _irActiveCmap() !== 'color'; }   // "non-site colormap" (opacity + colorbar decisions)
-// LUTs indexed by the site colormap's 0-255 index (high = cold). Tb(idx) = 330 - 170*idx/255.
-var _irVariantLUT = {};
-function _irVariantLUTFor(name) {
-    if (_irVariantLUT[name]) return _irVariantLUT[name];
-    var lut = new Uint8Array(256 * 3);
-    function setRGB(i, r, g, b) { lut[i*3] = r; lut[i*3+1] = g; lut[i*3+2] = b; }
+// Gray IR carries no color to blend with, so it sits nearly opaque; color IR
+// keeps the 0.75 that lets the basemap read through.
+function _irOpacity() { return _irMapVisible ? (_irUseGray() ? 0.92 : 0.75) : 0; }
+// Gray level shared by the non-color maps: linear in Tb from 305 K (black) to
+// 185 K (white), the usual IR enhancement. The earlier ramp (gamma 0.7 over
+// 160–330 K) peaked at 223/255 and pressed everything colder than about
+// −40 °C into one band of light gray, so a CDO read as a flat smear.
+function _irGrayLevel(i) {
+    var tb = 330 - 170 * i / 255;
+    return Math.round(255 * Math.max(0, Math.min(1, (305 - tb) / 120)));
+}
+var _irLUTs = {};
+function _irLUTFor(name) {
+    if (_irLUTs[name]) return _irLUTs[name];
+    _irBuildLUTs();
+    var lut = new Uint8Array(256 * 4);
     for (var i = 0; i < 256; i++) {
-        var tb = 330 - 170 * i / 255, tc = tb - 273.15;
-        var g = Math.round(255 * Math.pow(i / 255, 0.7));   // luminance ramp: warm dark → cold bright
-        if (name === 'gray') { setRGB(i, g, g, g); continue; }
-        if (name === 'bd') {
+        var tc = 330 - 170 * i / 255 - 273.15, g = _irGrayLevel(i), c;
+        if (name === 'color') c = [_irLUT[i*3], _irLUT[i*3+1], _irLUT[i*3+2]];
+        else if (name === 'bd') {
             // Dvorak BD enhancement (°C bands) over the gray ramp
             var v = tc > -30 ? g : tc > -42 ? 150 : tc > -54 ? 205 : tc > -64 ? 80 : tc > -70 ? 0 : tc > -76 ? 255 : tc > -80 ? 140 : 60;
-            setRGB(i, v, v, v); continue;
-        }
-        if (name === 'rainbow') {
-            if (tc > -20) { setRGB(i, g, g, g); continue; }
-            var c = tc > -30 ? [0,200,255] : tc > -40 ? [0,90,255] : tc > -50 ? [0,190,0] : tc > -60 ? [255,230,0] : tc > -70 ? [255,60,0] : tc > -80 ? [200,0,180] : [255,255,255];
-            setRGB(i, c[0], c[1], c[2]); continue;
-        }
-        setRGB(i, g, g, g);
+            c = [v, v, v];
+        } else if (name === 'rainbow') {
+            c = tc > -20 ? [g, g, g] : tc > -30 ? [0,200,255] : tc > -40 ? [0,90,255] : tc > -50 ? [0,190,0] : tc > -60 ? [255,230,0] : tc > -70 ? [255,60,0] : tc > -80 ? [200,0,180] : [255,255,255];
+        } else c = [g, g, g];
+        lut[i*4] = c[0]; lut[i*4+1] = c[1]; lut[i*4+2] = c[2]; lut[i*4+3] = i ? 255 : 0;
     }
-    _irVariantLUT[name] = lut;
-    return lut;
-}
-function _irMakeVariant(img, name) {
-    _irBuildLUTs();
-    var lut = _irVariantLUTFor(name);
-    var w = img.width || img.naturalWidth, h = img.height || img.naturalHeight;
-    if (!w || !h) return null;
-    var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
-    var ctx = cv.getContext('2d'); ctx.drawImage(img, 0, 0);
-    var im = ctx.getImageData(0, 0, w, h), d = im.data;
-    for (var i = 0; i < d.length; i += 4) {
-        if (d[i+3] === 0) continue;
-        var q = ((d[i] >> 3) << 10) | ((d[i+1] >> 3) << 5) | (d[i+2] >> 3);
-        var idx = _irInvLUT[q];
-        d[i] = lut[idx*3]; d[i+1] = lut[idx*3+1]; d[i+2] = lut[idx*3+2];
-    }
-    ctx.putImageData(im, 0, 0);
-    return cv;
-}
-// Lazily built, reprojected variant frames: { bd: [url...], rainbow: [...] }
-var _irVariantURLs = {};
-var _irVariantBuilding = {};
-function _irEnsureVariant(name, idx, cb) {
-    var arr = _irVariantURLs[name] = _irVariantURLs[name] || [];
-    if (arr[idx]) { cb(arr[idx]); return; }
-    var key = name + ':' + idx;
-    if (_irVariantBuilding[key]) return;
-    var src = _irOriginalURLs[idx]; if (!src || !_irData) return;
-    _irVariantBuilding[key] = true;
-    var irData = _irData, caseIdx = irData.case_index;
-    var latOff = irData.lat_offsets;
-    var southLat = irData.center_lat + latOff[0], northLat = irData.center_lat + latOff[latOff.length - 1];
-    var img = new Image();
-    img.onload = function() {
-        delete _irVariantBuilding[key];
-        if (!_irData || _irData.case_index !== caseIdx) return;
-        try { var c = _irMakeVariant(img, name); var u = c && _mercatorReproject(c, southLat, northLat); if (u) { arr[idx] = u; cb(u); } } catch (e) {}
-    };
-    img.onerror = function() { delete _irVariantBuilding[key]; };
-    img.src = src;
+    return (_irLUTs[name] = lut);
 }
 function _irColorbarGradient() {
-    var cm = _irActiveCmap();
-    if (cm === 'color') return 'linear-gradient(to right, #FFFFFF, #C8C8C8, #969696, #646464, #323232, #003264, #0064C8, #0096FF, #00C8FF, #00FF96, #00C800, #96FF00, #FFFF00, #FFC800, #FF9600, #FF0000, #C80000, #960000, #640000, #320000)';
-    var lut = _irVariantLUTFor(cm), stops = [];
+    var lut = _irLUTFor(_irActiveCmap()), stops = [];
     // colorbar runs 170 K (left) → 310 K (right); idx = (330 - Tb) * 255/170
     for (var k = 0; k <= 28; k++) {
-        var tb = 170 + 140 * k / 28, i = Math.max(0, Math.min(255, Math.round((330 - tb) * 255 / 170)));
-        stops.push('rgb(' + lut[i*3] + ',' + lut[i*3+1] + ',' + lut[i*3+2] + ')');
+        var tb = 170 + 140 * k / 28, i = Math.max(1, Math.min(255, Math.round((330 - tb) * 255 / 170)));
+        stops.push('rgb(' + lut[i*4] + ',' + lut[i*4+1] + ',' + lut[i*4+2] + ')');
     }
     return 'linear-gradient(to right, ' + stops.join(', ') + ')';
 }
+function _irOnMap() { return !!(_irGL || _irMapOverlay); }
 function _irRefreshMapFrame() {
-    if (_irMapOverlay && _irData && _irFrameURLs.length) showIRMapOverlay(_irAnimFrame);
+    if (_irOnMap() && _irData && _irIdx.length) showIRMapOverlay(_irAnimFrame);
     var sel = document.getElementById('ir-cmap-sel');
     if (sel && sel.value !== _irGrayMode) sel.value = _irGrayMode;
     var tb = document.getElementById('tdr-map-btn');
@@ -3361,21 +3244,221 @@ window.irSetCmap = function(v) {
     _irRefreshMapFrame();
 };
 
-// Reproject one server frame to Mercator; callback(colorUrl, grayUrl).
-function _reprojectIRFrame(dataUrl, irData, callback) {
-    if (!dataUrl || !irData) { callback(dataUrl, null); return; }
-    var latOff = irData.lat_offsets;
-    var southLat = irData.center_lat + latOff[0];
-    var northLat = irData.center_lat + latOff[latOff.length - 1];
-    var img = new Image();
-    img.onload = function() {
-        var reprojUrl = _mercatorReproject(img, southLat, northLat);
-        var grayUrl = null;
-        try { var gc = _irMakeGray(img); if (gc) grayUrl = _mercatorReproject(gc, southLat, northLat); } catch (e) {}
-        callback(reprojUrl || dataUrl, grayUrl);
+// ── IR frame decoding ────────────────────────────────────────
+// An idx8 frame is a gray PNG whose value is the index. A legacy frame (an API
+// without fmt=idx8) is the server-colored RGBA image, inverted through the LUT.
+function _irLoadImage(url) {
+    return new Promise(function(resolve, reject) {
+        var im = new Image();
+        im.onload = function() { resolve(im); };
+        im.onerror = reject;
+        im.src = url;
+    });
+}
+function _irDecodeFrame(src, fmt) {
+    var blobP = typeof src === 'string' ? fetch(src).then(function(r) { return r.blob(); }) : Promise.resolve(src);
+    return blobP.then(function(blob) {
+        // No color management: the bytes are indices, not colors.
+        var bm = window.createImageBitmap
+            ? createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' })
+            : Promise.reject(new Error('no createImageBitmap'));
+        return bm.catch(function() {
+            var u = URL.createObjectURL(blob);
+            return _irLoadImage(u).then(function(im) { URL.revokeObjectURL(u); return im; });
+        });
+    }).then(function(img) {
+        var w = img.width, h = img.height;
+        var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+        var ctx = cv.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0);
+        if (img.close) img.close();
+        var d = ctx.getImageData(0, 0, w, h).data, out = new Uint8Array(w * h), i, p;
+        if (fmt === 'idx8') {
+            for (i = 0, p = 0; i < out.length; i++, p += 4) out[i] = d[p + 3] ? d[p] : 0;
+        } else {
+            _irBuildLUTs();
+            for (i = 0, p = 0; i < out.length; i++, p += 4)
+                out[i] = d[p + 3] ? Math.max(1, _irInvLUT[((d[p] >> 3) << 10) | ((d[p + 1] >> 3) << 5) | (d[p + 2] >> 3)]) : 0;
+        }
+        return { w: w, h: h, idx: out };
+    });
+}
+// Geographic edges of a frame (the offsets are pixel centers).
+function _irEdges(data) {
+    var la = data.lat_offsets, lo = data.lon_offsets;
+    var dla = (la[la.length - 1] - la[0]) / (la.length - 1), dlo = (lo[lo.length - 1] - lo[0]) / (lo.length - 1);
+    return { s: data.center_lat + la[0] - dla / 2, n: data.center_lat + la[la.length - 1] + dla / 2,
+             w: data.center_lon + lo[0] - dlo / 2, e: data.center_lon + lo[lo.length - 1] + dlo / 2 };
+}
+function _irGetBounds(data) {
+    var g = _irEdges(data);
+    return L.latLngBounds([g.s, g.w], [g.n, g.e]);
+}
+function _irMerc(latDeg) { return Math.log(Math.tan(Math.PI / 4 + latDeg * Math.PI / 360)); }
+
+// ── IR on the GL engine: one custom layer, colored on the GPU ─
+// Each fragment turns its Mercator y back into latitude to pick the frame row
+// (exact reprojection of the equirectangular grid, nearest pixel, so the 4-km
+// pixels stay visible), then colors the index through a 256-texel LUT. Frame
+// steps, colormap switches and opacity are texture/uniform swaps: no canvas
+// work and no image re-encoding.
+var _IR_GL_VS = 'attribute vec2 a_t;uniform mat4 u_matrix;uniform vec4 u_box;varying vec2 v_t;' +
+    'void main(){v_t=a_t;gl_Position=u_matrix*vec4(mix(u_box.xy,u_box.zw,a_t),0.0,1.0);}';
+var _IR_GL_FS =
+    '#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n' +
+    'uniform sampler2D u_idx;uniform sampler2D u_lut;uniform float u_opacity;uniform vec4 u_lat;varying vec2 v_t;' +
+    'void main(){' +
+    'float m=mix(u_lat.x,u_lat.y,v_t.y);' +                       // Mercator ordinate of this fragment
+    'float lat=2.0*atan(exp(m))-1.5707963267948966;' +           // → latitude (radians)
+    'float i=texture2D(u_idx,vec2(v_t.x,(u_lat.z-lat)/(u_lat.z-u_lat.w))).r;' +
+    'if(i<0.0019)discard;' +                                      // index 0 = no data
+    'vec4 c=texture2D(u_lut,vec2((i*255.0+0.5)/256.0,0.5));' +
+    'float a=c.a*u_opacity;gl_FragColor=vec4(c.rgb*a,a);}';      // premultiplied, as MapLibre blends
+function _irUseGL() { return !!(window.LFLET_GL && map && map._gl && typeof map._glAdd === 'function'); }
+function _irCreateGL() {
+    var gmap = map._gl, gl = null, prog = null, buf = null, loc = null, lutTex = null;
+    var texs = [], pend = {}, lutPend = null, drop = false;
+    var st = { k: 0, op: 0.75, box: null, lat: null, lut: null };
+    function compile(type, src) {
+        var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.warn('IR GL shader:', gl.getShaderInfoLog(s));
+        return s;
+    }
+    function texParams() {
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+    // Uploads run inside render(), where MapLibre expects foreign GL calls (it
+    // re-syncs its cached GL state after a custom layer draws).
+    function flush() {
+        if (drop) { texs.forEach(function(t) { if (t) gl.deleteTexture(t); }); texs = []; drop = false; }
+        var keys = Object.keys(pend);
+        if (!keys.length && !lutPend) return;
+        var align = gl.getParameter(gl.UNPACK_ALIGNMENT), flip = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL),
+            pre = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);      // 1-byte rows of any width
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        gl.activeTexture(gl.TEXTURE0);
+        keys.forEach(function(k) {
+            var f = pend[k]; delete pend[k];
+            var t = texs[k] || (texs[k] = gl.createTexture());
+            gl.bindTexture(gl.TEXTURE_2D, t);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, f.w, f.h, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, f.a);
+            texParams();
+        });
+        if (lutPend) {
+            if (!lutTex) lutTex = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, lutTex);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, lutPend);
+            texParams();
+            lutPend = null;
+        }
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, align);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, flip);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, pre);
+    }
+    var layer = {
+        id: 'tcr-ir-gl', type: 'custom',
+        onAdd: function(m, g) {
+            gl = g;
+            prog = gl.createProgram();
+            gl.attachShader(prog, compile(gl.VERTEX_SHADER, _IR_GL_VS));
+            gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, _IR_GL_FS));
+            gl.linkProgram(prog);
+            if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) console.warn('IR GL link:', gl.getProgramInfoLog(prog));
+            loc = { a_t: gl.getAttribLocation(prog, 'a_t') };
+            ['u_matrix', 'u_box', 'u_lat', 'u_idx', 'u_lut', 'u_opacity'].forEach(function(n) { loc[n] = gl.getUniformLocation(prog, n); });
+            buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+            try { m.triggerRepaint(); } catch (e) {}
+        },
+        render: function(g, matrix) {
+            if (!prog) return;
+            flush();
+            var t = texs[st.k];
+            if (!t || !lutTex || !st.box || st.op <= 0) return;
+            if (gl.bindVertexArray) gl.bindVertexArray(null);
+            gl.useProgram(prog);
+            gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+            gl.enableVertexAttribArray(loc.a_t);
+            gl.vertexAttribPointer(loc.a_t, 2, gl.FLOAT, false, 0, 0);
+            gl.uniformMatrix4fv(loc.u_matrix, false, matrix);
+            gl.uniform4f(loc.u_lat, st.lat[0], st.lat[1], st.lat[2], st.lat[3]);
+            gl.uniform1f(loc.u_opacity, st.op);
+            gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform1i(loc.u_idx, 0);
+            gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, lutTex); gl.uniform1i(loc.u_lut, 1);
+            gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+            gl.disable(gl.DEPTH_TEST); gl.disable(gl.STENCIL_TEST);
+            for (var w = -1; w <= 1; w++) {   // neighbor world copies, for views across the antimeridian
+                gl.uniform4f(loc.u_box, st.box[0] + w, st.box[1], st.box[2] + w, st.box[3]);
+                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            }
+        },
+        onRemove: function() {
+            if (!gl) return;
+            texs.forEach(function(t) { if (t) gl.deleteTexture(t); });
+            if (lutTex) gl.deleteTexture(lutTex);
+            if (buf) gl.deleteBuffer(buf);
+            if (prog) gl.deleteProgram(prog);
+            texs = []; lutTex = buf = prog = gl = null;
+        }
     };
-    img.onerror = function() { callback(dataUrl, null); };
-    img.src = dataUrl;
+    function repaint() { try { gmap.triggerRepaint(); } catch (e) {} }
+    return {
+        layer: layer,
+        setGeo: function(data) {
+            var e = _irEdges(data), R = Math.PI / 180, mn = _irMerc(e.n), ms = _irMerc(e.s);
+            st.box = [(e.w + 180) / 360, (1 - mn / Math.PI) / 2, (e.e + 180) / 360, (1 - ms / Math.PI) / 2];
+            st.lat = [mn, ms, e.n * R, e.s * R];
+        },
+        setFrame: function(k, w, h, a) { pend[k] = { w: w, h: h, a: a }; repaint(); },
+        show: function(k, lut, op) {
+            st.k = k; st.op = op;
+            if (lut !== st.lut) { st.lut = lut; lutPend = lut; }
+            repaint();
+        },
+        reset: function() { pend = {}; drop = true; st.box = null; repaint(); }
+    };
+}
+
+// ── IR on the Leaflet engine: frames colored on the CPU ──────
+// Rows are remapped to Mercator (nearest source row) so the image overlay
+// lands at the right latitudes. Built lazily per (colormap, frame).
+function _irCpuURL(cm, k) {
+    var arr = _irCpuURLs[cm] || (_irCpuURLs[cm] = []);
+    if (arr[k]) return arr[k];
+    var src = _irIdx[k];
+    if (!src) return null;
+    var w = _irW, h = _irH, lut = _irLUTFor(cm), e = _irEdges(_irData), mn = _irMerc(e.n), ms = _irMerc(e.s);
+    var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    var ctx = cv.getContext('2d'), im = ctx.createImageData(w, h), o = im.data;
+    for (var row = 0; row < h; row++) {
+        var lat = (2 * Math.atan(Math.exp(mn + (row + 0.5) / h * (ms - mn))) - Math.PI / 2) * 180 / Math.PI;
+        var sr = Math.min(h - 1, Math.max(0, Math.floor((e.n - lat) / (e.n - e.s) * h)));
+        for (var col = 0, si = sr * w, di = row * w * 4; col < w; col++, di += 4) {
+            var li = src[si + col] * 4;
+            o[di] = lut[li]; o[di + 1] = lut[li + 1]; o[di + 2] = lut[li + 2]; o[di + 3] = lut[li + 3];
+        }
+    }
+    ctx.putImageData(im, 0, 0);
+    return (arr[k] = cv.toDataURL('image/png'));
+}
+// Frame 0 in the site colors, equirectangular, for the Plotly plan view.
+function _irPlotlyFrameURL() {
+    if (_irPlotlyURL) return _irPlotlyURL;
+    var src = _irIdx[0];
+    if (!src) return null;
+    var lut = _irLUTFor('color'), cv = document.createElement('canvas'); cv.width = _irW; cv.height = _irH;
+    var ctx = cv.getContext('2d'), im = ctx.createImageData(_irW, _irH), o = im.data;
+    for (var i = 0, p = 0; i < src.length; i++, p += 4) {
+        var li = src[i] * 4;
+        o[p] = lut[li]; o[p + 1] = lut[li + 1]; o[p + 2] = lut[li + 2]; o[p + 3] = lut[li + 3];
+    }
+    ctx.putImageData(im, 0, 0);
+    return (_irPlotlyURL = cv.toDataURL('image/png'));
 }
 
 // ── IR data fetch ────────────────────────────────────────────
@@ -3393,7 +3476,7 @@ function _showIRLoadingIndicator() {
     div.innerHTML =
         '<div style="width:14px;height:14px;border:2px solid rgba(15, 22, 35,0.15);' +
         'border-top:2px solid #60a5fa;border-radius:50%;animation:spin 1s linear infinite;"></div>' +
-        '<span style="font-size:11px;color:#93c5fd;font-family:\'JetBrains Mono\',monospace;">IR loading\u2026</span>';
+        '<span style="font-size:11px;color:#93c5fd;font-family:\'JetBrains Mono\',monospace;">IR loading…</span>';
     mapEl.appendChild(div);
 }
 function _removeIRLoadingIndicator() {
@@ -3404,69 +3487,123 @@ function _removeIRLoadingIndicator() {
 var _irAllFramesLoaded = false;
 var _irLoadedCount = 0;
 
+// Loop frames: one per distinct IR time. Some cases repeat an image across
+// neighboring lag slots (hourly imagery in the half-hourly lag grid), which
+// used to download twice and hold the loop on one picture. For each image
+// keep the slot whose nominal lag best matches its age relative to frame 0.
+function _irPickSlots(data) {
+    var dts = data.ir_datetimes || [], lags = data.lag_hours || [], n = data.n_frames || lags.length;
+    function ms(s) { return s ? Date.parse(s.replace(' UTC', 'Z').replace(' ', 'T')) : NaN; }
+    var t0 = ms(dts[0]), best = {}, order = [];
+    for (var s = 0; s < n; s++) {
+        if (s > 0 && !dts[s]) continue;   // no image time → no image in that slot
+        var key = dts[s] || 'slot0';
+        var age = isFinite(t0) && dts[s] ? (t0 - ms(dts[s])) / 3.6e6 : (lags[s] || 0);
+        var err = Math.abs((lags[s] || 0) - age);
+        if (!(key in best)) { best[key] = { slot: s, err: err }; order.push(key); }
+        else if (err < best[key].err) best[key] = { slot: s, err: err };
+    }
+    return order.map(function(k) { return best[k].slot; }).sort(function(a, b) { return a - b; });
+}
+
+function _irSetFrame(k, f) {
+    if (!_irW) { _irW = f.w; _irH = f.h; }
+    if (f.w !== _irW || f.h !== _irH) return;   // every frame of a case shares one grid
+    _irIdx[k] = f.idx;
+    if (_irGL) _irGL.setFrame(k, f.w, f.h, f.idx);
+}
+
+// Drop the previous case's IR: state, in-flight work (via _irSeq) and what the
+// map shows. Called before a case's IR loads.
+function _irResetForCase() {
+    _irSeq++;
+    irAnimStop();
+    _irData = null; _irIdx = []; _irSlots = []; _irW = _irH = 0; _irCpuURLs = {}; _irPlotlyURL = null;
+    _irAnimFrame = 0; _irAllFramesLoaded = false; _irLoadedCount = 0; _irLagFramesStarted = false;
+    _irFetching = null;
+    if (_irGL) _irGL.reset();
+    if (_irMapOverlay) { try { map.removeLayer(_irMapOverlay); } catch (e) {} _irMapOverlay = null; }
+}
+
 // Per-session cache of /ir responses keyed by data_type:case. The
 // "Focus & IR Satellite" button re-runs openSidePanel for the same case,
-// which used to re-download the ~400 KB gz /ir payload every time.
+// which used to re-download the /ir payload every time.
 var _irRespCache = {};
 var _irLagFramesStarted = false;
 function fetchIRData(caseIndex, callback) {
-    if (_irFetching) return;
-    _irFetching = true;
-    _irAllFramesLoaded = false;
-    _irLagFramesStarted = false;
-    _irVariantURLs = {}; _irVariantBuilding = {};
-    _irLoadedCount = 0;
-    _irBoundsSet = false;  // force setBounds() on new case (center may differ)
-
-    // Phase 1: Fetch metadata + t=0 frame for instant display
-    var url = API_BASE + '/ir?case_index=' + caseIndex + '&data_type=' + _activeDataType + '&cm=2';   // cm = IR colormap version (cache key)
     var cacheKey = _activeDataType + ':' + caseIndex;
+    if (_irFetching === cacheKey) return;
+    _irResetForCase();
+    _irFetching = cacheKey;
+    var seq = _irSeq;
+
+    // Phase 1: metadata + t=0 frame for instant display. fmt=idx8 → frames are
+    // colormap-index PNGs and the rest of the loop is read from the CDN.
+    var url = API_BASE + '/ir?case_index=' + caseIndex + '&data_type=' + _activeDataType + '&fmt=idx8';
     var p = _irRespCache[cacheKey]
         ? Promise.resolve(_irRespCache[cacheKey])
         : fetch(url).then(function(r) {
-            if (!r.ok) { _irFetching = false; if (callback) callback(null); return null; }
+            if (!r.ok) return null;
             return r.json().then(function(j) { if (j) _irRespCache[cacheKey] = j; return j; });
         });
     p
         .then(function(data) {
-            _irFetching = false;
-            if (!data) return;
+            if (seq !== _irSeq) return;   // superseded: a newer load owns _irFetching
+            _irFetching = null;
+            if (!data) { if (callback) callback(null); return; }
             _irData = data;
-            // Initialize frame array with just frame0 in position 0
-            var n = data.n_frames || 9;
-            _irFrameURLs = new Array(n);
-            _irFrameURLsGray = new Array(n);
-            for (var i = 0; i < n; i++) { _irFrameURLs[i] = null; _irFrameURLsGray[i] = null; }
-            _irOriginalURLs = new Array(n);
-            for (var j = 0; j < n; j++) _irOriginalURLs[j] = null;
-            // Pre-allocate decode-cache slots so we can populate them
-            // incrementally as each frame arrives (instead of waiting for
-            // the whole batch to land before kicking off decode).
-            _irDecodedImages = new Array(n);
-            for (var k = 0; k < n; k++) _irDecodedImages[k] = null;
+            _irSlots = _irPickSlots(data);
+            _irIdx = _irSlots.map(function() { return null; });
+            _irSyncSlider();
+            var done = function() { if (seq === _irSeq && callback) callback(data); };
             if (data.frame0) {
-                _irLoadedCount = 1;
-                _irOriginalURLs[0] = data.frame0;
-                // Reproject frame0 to Mercator, then fire callback
-                _reprojectIRFrame(data.frame0, data, function(reprojUrl, grayUrl) {
-                    _irFrameURLs[0] = reprojUrl;
-                    _irFrameURLsGray[0] = grayUrl;
-                    if (callback) callback(data);
-                });
+                _irDecodeFrame(data.frame0, data.frame_fmt === 'idx8' ? 'idx8' : 'rgba').then(function(f) {
+                    if (seq !== _irSeq) return;
+                    _irSetFrame(0, f);
+                    _irLoadedCount = _countLoadedFrames();
+                    done();
+                }, function(err) { console.warn('IR frame 0 decode failed:', err); done(); });
             } else {
-                if (callback) callback(data);
+                done();
             }
 
-            // Phase 2: the 8 lag frames only matter for the map animation,
+            // Phase 2: the other loop frames only matter for the map animation,
             // which exists in focus mode. Outside focus mode the side panel
-            // uses frame0 alone (plan-view underlay), so defer the 8 extra
-            // requests until enterFocusMode() asks for them.
+            // uses frame 0 alone (plan-view underlay), so defer them until
+            // enterFocusMode() asks.
             if (_focusMode) _startIRLagFrames(caseIndex);
         })
         .catch(function(err) {
             console.warn('IR fetch failed:', err);
-            _irFetching = false; _irData = null;
+            if (seq !== _irSeq) return;
+            _irFetching = null;
+            _irData = null;
             if (callback) callback(null);
+        });
+}
+
+// One loop frame. idx8: the CDN copy first (edge-cached, no Cloud Run hop); a
+// miss means the frame is not mirrored yet (or the edge still holds that 404),
+// so the API renders it and mirrors it to R2 for the next viewer.
+function _irFetchLagFrame(caseIndex, k) {
+    var d = _irData, slot = _irSlots[k];
+    var q = '?case_index=' + caseIndex + '&lag_index=' + slot + '&data_type=' + _activeDataType;
+    if (d.frame_fmt === 'idx8' && d.frame_cdn_base) {
+        return fetch(d.frame_cdn_base + caseIndex + '_' + slot + '.png')
+            .then(function(r) { if (!r.ok) throw new Error('cdn ' + r.status); return r.blob(); })
+            .catch(function() {
+                return fetch(API_BASE + '/ir_frame' + q + '&fmt=idx8').then(function(r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.blob();
+                });
+            })
+            .then(function(b) { return _irDecodeFrame(b, 'idx8'); });
+    }
+    return fetch(API_BASE + '/ir_frame' + q + '&cm=2')
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(j) {
+            if (!j || !j.frame) throw new Error('no frame');
+            return _irDecodeFrame(j.frame, 'rgba');
         });
 }
 
@@ -3474,105 +3611,33 @@ function _startIRLagFrames(caseIndex) {
     if (_irLagFramesStarted) return;
     if (!_irData || _irData.case_index !== caseIndex) return;
     _irLagFramesStarted = true;
-    _fetchRemainingFramesParallel(caseIndex, 1);
-}
-
-function _fetchRemainingFramesParallel(caseIndex, startIdx) {
-    // Stop if case changed or out of range
-    if (!_irData || _irData.case_index !== caseIndex) return;
-    if (startIdx >= _irFrameURLs.length) {
+    var seq = _irSeq, jobs = [];
+    for (var k = 1; k < _irSlots.length; k++) {
+        (function(k) {
+            jobs.push(_irFetchLagFrame(caseIndex, k).then(function(f) {
+                if (seq !== _irSeq) return;
+                _irSetFrame(k, f);
+                _irLoadedCount = _countLoadedFrames();
+                _updateIRLoadingLabel();
+                if (_irLoadedCount >= 2) _enableIRAnimControls();
+            }).catch(function(err) {
+                console.warn('IR frame ' + k + ' fetch failed:', err);
+            }));
+        })(k);
+    }
+    Promise.all(jobs).then(function() {
+        if (seq !== _irSeq) return;
+        _irLoadedCount = _countLoadedFrames();
         _irAllFramesLoaded = true;
         _updateIRLoadingLabel();
-        _preDecodeIRFrames();
-        return;
-    }
-
-    var promises = [];
-    for (var i = startIdx; i < _irFrameURLs.length; i++) {
-        (function(lagIdx) {
-            var url = API_BASE + '/ir_frame?case_index=' + caseIndex + '&lag_index=' + lagIdx + '&data_type=' + _activeDataType + '&cm=2';
-            promises.push(
-                fetch(url)
-                    .then(function(r) { return r.ok ? r.json() : null; })
-                    .then(function(data) {
-                        // Guard: user may have navigated away
-                        if (!data || !_irData || _irData.case_index !== caseIndex) return;
-                        if (data.frame) {
-                            _irOriginalURLs[data.lag_index] = data.frame;
-                            return new Promise(function(resolve) {
-                                _reprojectIRFrame(data.frame, _irData, function(reprojUrl, grayUrl) {
-                                    _irFrameURLs[data.lag_index] = reprojUrl;
-                                    _irFrameURLsGray[data.lag_index] = grayUrl;
-                                    resolve();
-                                });
-                            });
-                        }
-                    })
-                    .then(function() {
-                        if (!_irData || _irData.case_index !== caseIndex) return;
-                        // Update progress as each frame lands
-                        _irLoadedCount = _countLoadedFrames();
-                        _updateIRLoadingLabel();
-                        if (_irLoadedCount >= 2) {
-                            _enableIRAnimControls();
-                        }
-                        // Incremental pre-decode: kick off decode for THIS
-                        // frame as soon as its URL is ready, rather than
-                        // waiting for the whole batch. Avoids the playback
-                        // hitch where the first cycle has to decode each
-                        // frame on its first <img>.src swap.
-                        if (_irFrameURLs[lagIdx] && _irDecodedImages && !_irDecodedImages[lagIdx]) {
-                            var pdImg = new Image();
-                            pdImg.src = _irFrameURLs[lagIdx];
-                            if (pdImg.decode) pdImg.decode().catch(function() {});
-                            _irDecodedImages[lagIdx] = pdImg;
-                        }
-                    })
-                    .catch(function(err) {
-                        console.warn('IR frame ' + lagIdx + ' fetch failed:', err);
-                    })
-            );
-        })(i);
-    }
-
-    Promise.all(promises).then(function() {
-        // Final update once every request has resolved (success or failure)
-        if (_irData && _irData.case_index === caseIndex) {
-            _irLoadedCount = _countLoadedFrames();
-            _irAllFramesLoaded = true;
-            _updateIRLoadingLabel();
-            if (_irLoadedCount >= 2) {
-                _enableIRAnimControls();
-            }
-            _preDecodeIRFrames();
-        }
+        if (_irLoadedCount >= 2) _enableIRAnimControls();
     });
-}
-
-// ── Pre-decoded IR frame images for smooth animation ─────────
-
-function _preDecodeIRFrames() {
-    if (!_irDecodedImages || _irDecodedImages.length !== _irFrameURLs.length) {
-        _irDecodedImages = new Array(_irFrameURLs.length);
-    }
-    // Fill in any frames whose URL has landed but whose decode wasn't
-    // kicked off yet by the incremental pre-decode in the fetch chain.
-    for (var i = 0; i < _irFrameURLs.length; i++) {
-        if (_irFrameURLs[i] && !_irDecodedImages[i]) {
-            var img = new Image();
-            img.src = _irFrameURLs[i];
-            if (img.decode) {
-                img.decode().catch(function() {});
-            }
-            _irDecodedImages[i] = img;
-        }
-    }
 }
 
 function _countLoadedFrames() {
     var count = 0;
-    for (var i = 0; i < _irFrameURLs.length; i++) {
-        if (_irFrameURLs[i]) count++;
+    for (var i = 0; i < _irIdx.length; i++) {
+        if (_irIdx[i]) count++;
     }
     return count;
 }
@@ -3591,79 +3656,58 @@ function _enableIRAnimControls() {
 function _updateIRLoadingLabel() {
     var label = document.getElementById('ir-map-label');
     if (!label || !_irData) return;
-    if (_irAllFramesLoaded) {
-        // Show current frame info
-        var lagHr = _irData.lag_hours[_irAnimFrame];
-        var dtStr = _irData.ir_datetimes[_irAnimFrame] || '';
-        label.textContent = 'IR ' + (lagHr > 0 ? 't\u2212' + lagHr.toFixed(1) + 'h' : 't=0') + (dtStr ? ' | ' + _tcrTime(dtStr) : '');
-    } else {
-        // Show loading progress alongside current frame info
-        var lagHr = _irData.lag_hours[_irAnimFrame];
-        var dtStr = _irData.ir_datetimes[_irAnimFrame] || '';
-        var frameInfo = 'IR ' + (lagHr > 0 ? 't\u2212' + lagHr.toFixed(1) + 'h' : 't=0');
-        label.textContent = frameInfo + ' | Loading ' + _irLoadedCount + '/' + _irFrameURLs.length + '...';
-    }
+    var slot = _irSlots[_irAnimFrame] || 0;
+    var lagHr = _irData.lag_hours[slot];
+    var dtStr = _irData.ir_datetimes[slot] || '';
+    var frameInfo = 'IR ' + (lagHr > 0 ? 't−' + lagHr.toFixed(1) + 'h' : 't=0');
+    label.textContent = _irAllFramesLoaded
+        ? frameInfo + (dtStr ? ' | ' + _tcrTime(dtStr) : '')
+        : frameInfo + ' | Loading ' + _irLoadedCount + '/' + _irIdx.length + '...';
 }
 
-// ── Leaflet map overlay ──────────────────────────────────────
-function _irGetBounds(data) {
-    var latOff = data.lat_offsets, lonOff = data.lon_offsets;
-    return L.latLngBounds(
-        [data.center_lat + latOff[0], data.center_lon + lonOff[0]],
-        [data.center_lat + latOff[latOff.length - 1], data.center_lon + lonOff[lonOff.length - 1]]
-    );
-}
-
+// ── Map overlay ──────────────────────────────────────────────
 function showIRMapOverlay(frameIdx) {
-    if (!_irData || !_irFrameURLs.length) return;
+    if (!_irData || !_irIdx.length) return;
     var idx = (frameIdx !== undefined) ? frameIdx : _irAnimFrame;
-    idx = Math.max(0, Math.min(idx, _irFrameURLs.length - 1));
+    idx = Math.max(0, Math.min(idx, _irIdx.length - 1));
+    if (!_irIdx[idx]) return;   // not loaded (yet)
     _irAnimFrame = idx;
     var cm = _irActiveCmap();
-    var url = cm === 'color' ? _irFrameURLs[idx]
-            : cm === 'gray' ? (_irFrameURLsGray[idx] || _irFrameURLs[idx])
-            : ((_irVariantURLs[cm] || [])[idx] || null);
-    if (!url && cm !== 'color' && cm !== 'gray') {
-        // Variant not built yet: show the site color frame now, swap when ready.
-        _irEnsureVariant(cm, idx, function() { if (_irAnimFrame === idx && _irActiveCmap() === cm) showIRMapOverlay(idx); });
-        url = _irFrameURLs[idx];
-    }
-    if (!url) return;  // skip null frames
-    var bounds = _irGetBounds(_irData);
-    if (_irMapOverlay) {
-        // Gray IR carries no color to blend with, so let it sit nearly opaque;
-        // color IR keeps the 0.75 that lets the basemap read through.
-        if (_irMapVisible) { try { _irMapOverlay.setOpacity(_irUseGray() ? 0.92 : 0.75); } catch (e) {} }
-        // Fast path: bypass Leaflet's setUrl() to avoid its async load cycle.
-        // Directly set the <img> src — if a pre-decoded Image exists for this
-        // frame, the browser can resolve the data URL from its cache near-instantly.
-        var imgEl = _irMapOverlay.getElement ? _irMapOverlay.getElement() : _irMapOverlay._image;
-        if (imgEl) {
-            imgEl.src = url;
-        } else {
-            _irMapOverlay.setUrl(url);
+    if (_irUseGL()) {
+        if (!_irGL) {
+            _irGL = _irCreateGL();
+            map._glAdd(_irGL.layer, 350);   // the facade's image-overlay z: under the radar drape (380)
+            for (var k = 0; k < _irIdx.length; k++) if (_irIdx[k]) _irGL.setFrame(k, _irW, _irH, _irIdx[k]);
         }
-        // Bounds are identical for all frames in a case, so only set once
-        if (!_irBoundsSet) {
-            _irMapOverlay.setBounds(bounds);
-            _irBoundsSet = true;
-        }
+        _irGL.setGeo(_irData);
+        _irGL.show(idx, _irLUTFor(cm), _irOpacity());
     } else {
-        _irMapOverlay = L.imageOverlay(url, bounds, { opacity: 0.75, interactive: false, zIndex: 200 });
-        _irMapOverlay.addTo(map);
-        _irBoundsSet = true;
+        var url = _irCpuURL(cm, idx);
+        if (!url) return;
+        var bounds = _irGetBounds(_irData);
+        if (_irMapOverlay) {
+            _irMapOverlay.setOpacity(_irOpacity());
+            // Swap the <img> src directly: setUrl() would run Leaflet's async load cycle.
+            var imgEl = _irMapOverlay.getElement ? _irMapOverlay.getElement() : _irMapOverlay._image;
+            if (imgEl) imgEl.src = url; else _irMapOverlay.setUrl(url);
+            _irMapOverlay.setBounds(bounds);
+        } else {
+            _irMapOverlay = L.imageOverlay(url, bounds, { opacity: _irOpacity(), interactive: false, zIndex: 200 });
+            _irMapOverlay.addTo(map);
+            var el = _irMapOverlay.getElement && _irMapOverlay.getElement();
+            if (el) el.style.imageRendering = 'pixelated';   // show the 4-km pixels, not a blur
+        }
     }
     _updateIRLoadingLabel();
-    // Show IR colorbar on the Leaflet map
-    _showIRMapColorbar();
+    if (_irMapVisible) _showIRMapColorbar();
 }
 
 function removeIRMapOverlay() {
-    irAnimStop();
+    _irResetForCase();
     _removeIRLoadingIndicator();
     _hideIRMapColorbar();
-    if (_irMapOverlay) { map.removeLayer(_irMapOverlay); _irMapOverlay = null; }
-    _irData = null; _irFrameURLs = []; _irFrameURLsGray = []; _irVariantURLs = {}; _irVariantBuilding = {}; _irOriginalURLs = []; _irAnimFrame = 0; _irMapVisible = true; _irAllFramesLoaded = false; _irLoadedCount = 0; _irBoundsSet = false; _irDecodedImages = [];
+    if (_irGL) { try { map._gl.removeLayer(_irGL.layer.id); } catch (e) {} _irGL = null; }
+    _irMapVisible = true;
     var ctrl = document.getElementById('ir-map-controls');
     if (ctrl) ctrl.remove();
     _positionIRColorbar();
@@ -3671,12 +3715,11 @@ function removeIRMapOverlay() {
 
 function irAnimStep(dir) {
     if (!_irData || _irLoadedCount < 2) return;
-    var n = _irFrameURLs.length;
-    // Step in direction, skipping null frames
-    var startFrame = _irAnimFrame;
+    var n = _irIdx.length;
+    // Step in direction, skipping frames that failed to load
     for (var i = 0; i < n; i++) {
         _irAnimFrame = (_irAnimFrame + dir + n) % n;
-        if (_irFrameURLs[_irAnimFrame]) break;
+        if (_irIdx[_irAnimFrame]) break;
     }
     showIRMapOverlay(_irAnimFrame);
     _updateIRSlider();
@@ -3688,8 +3731,8 @@ function irAnimToggle() {
     else {
         _irAnimPlaying = true;
         // Start from the earliest (highest-index) loaded frame
-        for (var i = _irFrameURLs.length - 1; i >= 0; i--) {
-            if (_irFrameURLs[i]) { _irAnimFrame = i; break; }
+        for (var i = _irIdx.length - 1; i >= 0; i--) {
+            if (_irIdx[i]) { _irAnimFrame = i; break; }
         }
         showIRMapOverlay(_irAnimFrame);
         _updateIRSlider();
@@ -3704,8 +3747,8 @@ function irAnimTick() {
     if (_irAnimFrame === 0) {
         _irAnimTimer = setTimeout(function() {
             // Reset to the earliest (highest-index) loaded frame
-            for (var i = _irFrameURLs.length - 1; i >= 0; i--) {
-                if (_irFrameURLs[i]) { _irAnimFrame = i; break; }
+            for (var i = _irIdx.length - 1; i >= 0; i--) {
+                if (_irIdx[i]) { _irAnimFrame = i; break; }
             }
             showIRMapOverlay(_irAnimFrame);
             _updateIRSlider();
@@ -3724,17 +3767,27 @@ function irAnimStop() {
 
 function _updateIRPlayBtn() {
     var btn = document.getElementById('ir-play-btn');
-    if (btn) btn.textContent = _irAnimPlaying ? '\u23F8' : '\u25B6';
+    if (btn) btn.textContent = _irAnimPlaying ? '⏸' : '▶';
 }
 
 function _updateIRSlider() {
     var slider = document.getElementById('ir-frame-slider');
-    if (slider) slider.value = (_irFrameURLs.length - 1) - _irAnimFrame;
+    if (slider) slider.value = (_irIdx.length - 1) - _irAnimFrame;
 }
+// The loop length varies by case (repeated IR times are collapsed) while the
+// map controls persist across cases in focus mode, so the slider is resized here.
+function _irSyncSlider() {
+    var slider = document.getElementById('ir-frame-slider');
+    if (!slider) return;
+    slider.max = Math.max(0, _irIdx.length - 1);
+    _updateIRSlider();
+}
+function irSliderInput(v) { showIRMapOverlay((_irIdx.length - 1) - parseInt(v, 10)); }
 
 function toggleIRMapVisibility() {
     _irMapVisible = !_irMapVisible;
-    if (_irMapOverlay) _irMapOverlay.setOpacity(_irMapVisible ? (_irUseGray() ? 0.92 : 0.75) : 0);
+    if (_irGL) _irGL.show(_irAnimFrame, _irLUTFor(_irActiveCmap()), _irOpacity());
+    if (_irMapOverlay) _irMapOverlay.setOpacity(_irOpacity());
     if (_irMapVisible) { _showIRMapColorbar(); } else { _hideIRMapColorbar(); }
     var btn = document.getElementById('ir-toggle-btn');
     if (btn) btn.innerHTML = _icon('satellite') + (_irMapVisible ? 'IR On' : 'IR Off');
@@ -3746,7 +3799,7 @@ function _injectIRMapControls() {
     // to the bottom of the visible map, not the bottom of the full layout
     var mapWrapper = document.getElementById('map-container');
     if (!mapWrapper) return;
-    var n = _irFrameURLs.length;
+    var n = _irIdx.length;
     var disabledCls = _irAllFramesLoaded ? '' : ' ir-ctrl-disabled';
     var disabledAttr = _irAllFramesLoaded ? '' : ' disabled';
     var ctrl = document.createElement('div');
@@ -3761,7 +3814,7 @@ function _injectIRMapControls() {
             '<button class="ir-ctrl-btn' + disabledCls + '" id="ir-step-fwd" onclick="irAnimStep(-1)" title="Next (later)">\u25B6</button>' +
             '<input type="range" id="ir-frame-slider" min="0" max="' + (n - 1) + '" value="' + (n - 1) + '" ' +
                 disabledAttr +
-                ' oninput="showIRMapOverlay(' + (n - 1) + ' - parseInt(this.value))" class="ir-slider">' +
+                ' oninput="irSliderInput(this.value)" class="ir-slider">' +
             '<span class="ir-label" id="ir-map-label">IR t=0</span>' +
         '</div>' +
         '<div class="ir-ctrl-row">' +
@@ -3842,9 +3895,9 @@ window.toggleStormGrid = function() {
 
 // ── Plotly IR underlay ───────────────────────────────────────
 function buildIRPlotlyImage(irData) {
-    if (!irData || !_irFrameURLs.length) return null;
-    // Use the original (equirectangular) t=0 frame for Plotly's Cartesian coords
-    var url = _irOriginalURLs[0] || _irFrameURLs[0];
+    if (!irData || !_irIdx.length) return null;
+    // Equirectangular t=0 frame for Plotly's Cartesian coords
+    var url = _irPlotlyFrameURL();
     if (!url) return null;
     var latOff = irData.lat_offsets, lonOff = irData.lon_offsets;
     var centerLat = irData.center_lat;
@@ -3887,6 +3940,10 @@ function toggleIRPlotlyUnderlay() {
                 fsImages.push(fsImg);
                 Plotly.relayout('plotly-fullscreen', { images: fsImages });
             }
+        } else {
+            // Frame 0 is still decoding: stay "off" so the fetchIRData
+            // callback applies the underlay once it lands.
+            _irPlotlyVisible = false;
         }
     } else {
         _irPlotlyVisible = false;
@@ -15692,6 +15749,7 @@ function _showIRMapColorbar() {
             '<span>170 K</span><span>310 K</span>' +
         '</div>';
     el.style.display = 'block';
+    _positionIRColorbar();   // restack the radar key above it
 }
 
 /**
@@ -15700,6 +15758,7 @@ function _showIRMapColorbar() {
 function _hideIRMapColorbar() {
     var el = document.getElementById('ir-map-colorbar');
     if (el) el.style.display = 'none';
+    _positionIRColorbar();
 }
 
 // ── MW Timeline (Storm Evolution section) ──
