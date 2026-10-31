@@ -14,13 +14,13 @@
     text-align: center;
 }
 .rt-header-title {
-    font-size: 1.6rem;
-    font-weight: 700;
+    font-size: 1.5rem;
+    font-weight: 600;
     color: var(--text);
     margin-bottom: 6px;
 }
 .rt-header-desc {
-    font-size: 0.95rem;
+    font-size: 1rem;
     color: var(--slate);
     max-width: 640px;
     margin: 0 auto;
@@ -143,13 +143,13 @@
     margin-bottom: 8px;
 }
 .rt-meta-title {
-    font-size: 1.15rem;
-    font-weight: 700;
+    font-size: 1.125rem;
+    font-weight: 600;
     color: var(--text);
     margin-bottom: 2px;
 }
 .rt-meta-row {
-    font-size: 0.82rem;
+    font-size: 0.8125rem;
     color: var(--slate);
     margin-bottom: 10px;
 }
@@ -166,13 +166,13 @@
     gap: 1px;
 }
 .rt-meta-label {
-    font-size: 0.7rem;
+    font-size: 0.6875rem;
     color: var(--slate);
     text-transform: uppercase;
     letter-spacing: 0.04em;
 }
 .rt-meta-val {
-    font-size: 0.85rem;
+    font-size: 0.875rem;
     color: var(--text);
     font-weight: 500;
     font-variant-numeric: tabular-nums;
@@ -282,7 +282,7 @@
 .rt-attribution {
     text-align: center;
     padding: 20px;
-    font-size: 0.8rem;
+    font-size: 0.8125rem;
     color: var(--slate);
 }
 .rt-attribution a {
@@ -622,7 +622,7 @@
     border-bottom: 2px solid transparent;
     border-radius: 0;
     padding: 7px 14px;
-    font-size: 12.5px;
+    font-size: 13px;
     font-weight: 600;
     font-family: inherit;
     cursor: pointer;
@@ -651,7 +651,7 @@
     gap: 14px; flex-wrap: wrap;
 }
 .recon-hdob-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.recon-hdob-status { font-size: 0.72rem; color: var(--slate); }
+.recon-hdob-status { font-size: 0.75rem; color: var(--slate); }
 .recon-hdob-empty { padding: 28px 8px; color: var(--slate); font-size: 13px; }
 .recon-hdob-split {
     display: grid;
@@ -682,7 +682,7 @@
     display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
     padding: 8px 10px; border-bottom: 1px solid var(--border);
 }
-.recon-hdob-flightlabel { font-size: 11px; font-weight: 700; color: var(--slate); margin-right: 2px; }
+.recon-hdob-flightlabel { font-size: 11px; font-weight: 600; color: var(--slate); margin-right: 2px; }
 .recon-hdob-flighttoggle button {
     background: transparent; border: 1px solid var(--border); color: var(--slate);
     border-radius: 5px; padding: 2px 9px; font-size: 11px; font-weight: 600;
@@ -694,7 +694,7 @@
 .recon-hdob-layers { display: inline-flex; gap: 3px; align-items: center; flex-wrap: wrap; }
 .recon-hdob-layers .lbl { font-size: 11px; font-weight: 600; color: var(--slate); margin-right: 2px; }
 .recon-hdob-layers button {
-    font-size: 10.5px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: inherit;
+    font-size: 11px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: inherit;
     border: 1px solid var(--border); background: var(--surface); color: var(--slate); line-height: 1.3;
 }
 .recon-hdob-layers button.on { color: #fff; border-color: transparent; }
@@ -710,7 +710,7 @@
 .recon-hdob-passstep button.on { color: #fff; border-color: transparent; background: #ec4899; }
 .recon-hdob-passstep .cur { font-size: 11px; color: var(--text); min-width: 120px; text-align: center; }
 .recon-hdob-searlbl.sel span { font-size: 12px !important; background: #ec4899; color: #fff !important; text-shadow: none !important; padding: 0 4px; border-radius: 3px; }
-.recon-hdob-searctr.sel span { font-size: 19px !important; }
+.recon-hdob-searctr.sel span { font-size: 20px !important; }
 /* Lat/lon grid toggle on the recon map toolbar */
 .recon-hdob-gridbtn {
     background: transparent; border: 1px solid var(--border); color: var(--slate);
@@ -735,7 +735,7 @@
     display: flex; align-items: center; justify-content: space-between;
     padding: 11px 16px; border-bottom: 1px solid var(--border);
 }
-.recon-skewt-title { font-size: 14px; font-weight: 700; margin: 0; }
+.recon-skewt-title { font-size: 14px; font-weight: 600; margin: 0; }
 .recon-skewt-close {
     background: transparent; border: none; color: var(--slate);
     font-size: 24px; line-height: 1; cursor: pointer; padding: 0 4px;
@@ -746,15 +746,15 @@
     gap: 14px; padding: 14px 16px;
 }
 .recon-skewt-plot { min-width: 0; }
-.recon-skewt-side { font-size: 11.5px; }
+.recon-skewt-side { font-size: 12px; }
 .recon-skewt-toggle { grid-column: 1 / -1; display: flex; gap: 6px; }
 .recon-skewt-toggle button {
     background: transparent; border: 1px solid var(--border); color: var(--slate);
-    border-radius: 5px; padding: 3px 12px; font-size: 11.5px; font-weight: 600;
+    border-radius: 5px; padding: 3px 12px; font-size: 12px; font-weight: 600;
     font-family: inherit; cursor: pointer; transition: all 0.12s;
 }
 .recon-skewt-toggle button.on { color: var(--sel-ink); border-color: var(--sel-fill); background: var(--sel-fill); }
-.recon-skewt-subhead { font-size: 11px; font-weight: 700; color: var(--slate); margin: 10px 0 4px; }
+.recon-skewt-subhead { font-size: 11px; font-weight: 600; color: var(--slate); margin: 10px 0 4px; }
 .recon-skewt-subhead:first-child { margin-top: 0; }
 .recon-skewt-tbl { width: 100%; border-collapse: collapse; }
 .recon-skewt-tbl th, .recon-skewt-tbl td {
@@ -786,14 +786,14 @@
 }
 .recon-skewt-content.sv2-on .recon-skewt-body { display: block; padding: 14px 18px 16px; }
 .sv2 { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.sv2-who { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--slate);
+.sv2-who { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 12px; color: var(--slate);
     display: flex; flex-wrap: wrap; gap: 3px 12px; }
 .sv2-who b { color: var(--text); font-weight: 600; }
 .sv2-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 20px; }
 .sv2-num { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums;
     font-size: 56px; font-weight: 600; letter-spacing: -0.03em; line-height: 0.95; }
 .sv2-num small { font-size: 16px; font-weight: 400; letter-spacing: 0; color: var(--slate); margin-left: 4px; }
-.sv2-numlab { font-size: 11.5px; color: var(--slate); margin-top: 5px; }
+.sv2-numlab { font-size: 12px; color: var(--slate); margin-top: 5px; }
 .sv2-second { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 12px; color: var(--slate);
     display: flex; flex-direction: column; gap: 2px; text-align: right; font-variant-numeric: tabular-nums; }
 .sv2-second b { color: var(--text); font-weight: 500; }
@@ -803,16 +803,16 @@
 .sv2-wait { padding: 60px 0; text-align: center; color: var(--slate); font-size: 12px; }
 .sv2-seg { display: inline-flex; align-self: flex-start; max-width: 100%; flex-wrap: wrap;
     border: 1px solid var(--sv2-rule2); border-radius: 8px; overflow: hidden; }
-.sv2-seg button { font: inherit; font-size: 12.5px; color: var(--slate); background: transparent; border: 0;
+.sv2-seg button { font: inherit; font-size: 13px; color: var(--slate); background: transparent; border: 0;
     padding: 6px 13px; cursor: pointer; }
 .sv2-seg button + button { border-left: 1px solid var(--sv2-rule2); }
 .sv2-seg button[aria-pressed="true"] { background: var(--sel-fill); color: var(--sel-ink); box-shadow: none; border-color: var(--sel-fill); }
 .sv2-seg button:disabled { color: var(--sv2-muted); cursor: not-allowed; opacity: 0.6; }
 .sv2-seg button:focus-visible, .sv2-tile:focus-visible, .sv2-open:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 2px; }
-.sv2-caption { font-size: 12.5px; color: var(--slate); min-height: 1.4em; }
+.sv2-caption { font-size: 13px; color: var(--slate); min-height: 1.4em; }
 .sv2-caption b { color: var(--text); font-weight: 600; }
 .sv2-caption .sv2-warn { color: var(--slate); font-style: italic; }
-.sv2-src { font-size: 10.5px; color: var(--sv2-muted); }
+.sv2-src { font-size: 11px; color: var(--sv2-muted); }
 .sv2-flight { border-top: 1px solid var(--sv2-rule); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .sv2-flight-h { font-size: 13px; font-weight: 600; color: var(--text); }
 .sv2-flight-h span { font-weight: 400; color: var(--slate); font-size: 12px; margin-left: 6px; }
@@ -829,7 +829,7 @@
 .sv2-tm { height: 40px; }
 .sv2-tip { position: fixed; z-index: 4100; pointer-events: none; display: none; background: var(--surface);
     color: var(--text); border: 1px solid var(--sv2-rule2, rgba(148,163,184,0.26)); border-radius: 7px; padding: 5px 9px;
-    font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11.5px; white-space: nowrap;
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 12px; white-space: nowrap;
     box-shadow: 0 6px 20px rgba(0,0,0,0.3); font-variant-numeric: tabular-nums; }
 .sv2-tip span { color: var(--slate); }
 /* popup glance */
@@ -837,23 +837,23 @@
 .sv2-glance { display: flex; flex-direction: column; gap: 2px; min-width: 168px; color: #0f172a; }
 .sv2-glance-who { font-size: 11px; font-weight: 600; color: #475569; display: flex; align-items: center; gap: 6px; }
 .sv2-diamond { width: 8px; height: 8px; background: #fbbf24; transform: rotate(45deg); border: 1px solid #1f2937; flex: 0 0 auto; }
-.sv2-glance-num { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 34px; font-weight: 600;
+.sv2-glance-num { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 32px; font-weight: 600;
     letter-spacing: -0.03em; line-height: 1; margin-top: 4px; font-variant-numeric: tabular-nums; }
 .sv2-glance-num small { font-size: 12px; font-weight: 400; color: #475569; letter-spacing: 0; margin-left: 3px; }
-.sv2-glance-lab { font-size: 10.5px; color: #475569; }
+.sv2-glance-lab { font-size: 11px; color: #475569; }
 .sv2-glance-sub { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11px; color: #475569; margin-top: 3px; }
 .sv2-glance-sub b { color: #0f172a; font-weight: 600; }
 .sv2-open { margin-top: 8px; padding: 6px 10px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
     border-radius: 6px; border: 0; background: #005030; color: #fff; outline: none; }
 .sv2-open:hover { background: #2e7a5b; }
 @media (max-width: 560px) {
-    .sv2-num { font-size: 46px; }
+    .sv2-num { font-size: 48px; }
     .sv2-second { text-align: left; }
     .recon-skewt-content.sv2-on .recon-skewt-body { padding: 12px 12px 14px; }
 }
-.recon-hdob-srcnote { padding: 2px 10px 6px; font-size: 10.5px; line-height: 1.35; color: var(--slate); }
+.recon-hdob-srcnote { padding: 2px 10px 6px; font-size: 11px; line-height: 1.35; color: var(--slate); }
 .recon-hdob-chart { flex: 1 1 auto; width: 100%; min-height: 540px; }
-.recon-hdob-hint { padding: 6px 10px; font-size: 10.5px; color: var(--slate); border-top: 1px solid var(--border); }
+.recon-hdob-hint { padding: 6px 10px; font-size: 11px; color: var(--slate); border-top: 1px solid var(--border); }
 .recon-hdob-maptools {
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     padding: 7px 10px; border-bottom: 1px solid var(--border);
@@ -865,7 +865,7 @@
 }
 .recon-hdob-legend { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
 .recon-hdob-legend .sw {
-    font-size: 8px; color: #0b1220; padding: 1px 5px; border-radius: 2px; font-weight: 700;
+    font-size: 9px; color: #0b1220; padding: 1px 5px; border-radius: 2px; font-weight: 600;
 }
 .recon-hdob-map { flex: 1 1 auto; width: 100%; min-height: 600px; position: relative; }
 
@@ -900,7 +900,7 @@
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
 }
 :root[data-theme="dark"] .recon-hdob-tdrkey { background: rgba(15, 23, 42, 0.86); border-color: rgba(148, 163, 184, 0.28); color: #e2e8f0; }
-.recon-hdob-tdrkey .tt { font-weight: 700; }
+.recon-hdob-tdrkey .tt { font-weight: 600; }
 .recon-hdob-tdrkey .exp { font-weight: 400; color: #db2777; font-size: 9px; }
 .recon-hdob-tdrkey .nav { display: flex; align-items: center; gap: 4px; margin: 3px 0; }
 .recon-hdob-tdrkey .nav span { flex: 1 1 auto; text-align: center; white-space: nowrap; }
@@ -910,7 +910,7 @@
 }
 .recon-hdob-tdrkey button.on { background: #0891b2; border-color: #0891b2; color: #fff; }
 .recon-hdob-tdrkey .bar { display: flex; margin: 3px 0 2px; }
-.recon-hdob-tdrkey .bar span { flex: 1 1 0; height: 12px; font-size: 8px; line-height: 12px; color: #fff; text-align: left; padding-left: 1px; text-shadow: 0 0 2px #000; }
+.recon-hdob-tdrkey .bar span { flex: 1 1 0; height: 12px; font-size: 9px; line-height: 12px; color: #fff; text-align: left; padding-left: 1px; text-shadow: 0 0 2px #000; }
 .recon-hdob-tdrkey .info, .recon-hdob-tdrkey .hov { opacity: 0.9; }
 .recon-hdob-tdrkey .hov { font-variant-numeric: tabular-nums; }
 /* 80% band for the analysis peak (tooltip = the publisher's band_note) */
@@ -953,7 +953,7 @@
     margin: 0 0 8px;
     color: var(--text);
     font-size: 16px;
-    font-weight: 700;
+    font-weight: 600;
 }
 .recon-stub-card p {
     margin: 0;
@@ -1021,8 +1021,8 @@
     gap: 8px;
 }
 .recon-mission-date {
-    font-size: 15px;
-    font-weight: 700;
+    font-size: 16px;
+    font-weight: 600;
     color: var(--text);
 }
 .recon-mission-rel {
@@ -1042,7 +1042,7 @@
 }
 .recon-mission-tag {
     font-size: 10px;
-    font-weight: 700;
+    font-weight: 600;
     letter-spacing: 0.04em;
     padding: 2px 7px;
     border-radius: 999px;
@@ -1103,8 +1103,8 @@
     padding: 11px 13px;
 }
 .recon-fl-stat-val {
-    font-size: 22px;
-    font-weight: 700;
+    font-size: 24px;
+    font-weight: 600;
     color: var(--text);
     line-height: 1.1;
 }
@@ -1174,8 +1174,8 @@
     padding-bottom: 9px;
 }
 .recon-vdm-time {
-    font-size: 15px;
-    font-weight: 700;
+    font-size: 16px;
+    font-weight: 600;
     color: var(--text);
 }
 .recon-vdm-pos {
@@ -1200,7 +1200,7 @@
 }
 .recon-vdm-stat-val {
     font-size: 18px;
-    font-weight: 700;
+    font-weight: 600;
     color: var(--text);
     line-height: 1.1;
 }
@@ -1226,7 +1226,7 @@
 }
 .recon-vdm-tag {
     font-size: 10px;
-    font-weight: 700;
+    font-weight: 600;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--slate);
@@ -1315,10 +1315,10 @@
 .recon-hdob-summary .recon-vdm-stat.is-fix .recon-vdm-stat-label { color: #dc2626; }
 :root[data-theme="dark"] .recon-hdob-summary .recon-vdm-stat.is-fix .recon-vdm-stat-label { color: #f87171; }
 .recon-hdob-summary .recon-fix-line { margin-top: 1px; }
-.recon-hdob-summary .recon-fix-trend { font-weight: 700; color: var(--text); }
+.recon-hdob-summary .recon-fix-trend { font-weight: 600; color: var(--text); }
 .recon-hdob-summary .recon-fix-new {
     display: inline-block; margin-left: 3px; padding: 0 4px; border-radius: 3px;
-    background: #ef4444; color: #fff; font-size: 9px; font-weight: 700; letter-spacing: .03em;
+    background: #ef4444; color: #fff; font-size: 10px; font-weight: 600; letter-spacing: .03em;
 }
 /* preliminary crossing: a range, never the headline number */
 .recon-hdob-summary .recon-prelim-sub {

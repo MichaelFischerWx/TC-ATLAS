@@ -787,7 +787,7 @@
 
             // Title bar
             ctx.fillStyle = textColor;
-            ctx.font = 'bold 15px "DM Sans", system-ui, sans-serif';
+            ctx.font = '600 15px "DM Sans", system-ui, sans-serif';
             ctx.textBaseline = 'middle';
             ctx.fillText(modeLabel + ' · Phase Clock', padX, titleH / 2 + 6);
 
@@ -1544,7 +1544,7 @@
         ctx.fillStyle = '#f1f5f9';
         ctx.fillRect(x, y, width, H);
         ctx.fillStyle = '#0f172a';
-        ctx.font = 'bold 26px "DM Sans", system-ui, sans-serif';
+        ctx.font = '600 26px "DM Sans", system-ui, sans-serif';
         ctx.textBaseline = 'middle';
         ctx.fillText(title, x + 24, y + H / 2);
         return H;
@@ -1688,7 +1688,7 @@
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 // Stack-level header
                 ctx.fillStyle = '#0f172a';
-                ctx.font = 'bold 36px "DM Sans", system-ui, sans-serif';
+                ctx.font = '600 36px "DM Sans", system-ui, sans-serif';
                 ctx.textBaseline = 'alphabetic';
                 ctx.fillText('Subseasonal State — Wheeler-Kiladis OLR Hovmöllers',
                              36, 48);

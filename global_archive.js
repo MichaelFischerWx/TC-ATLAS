@@ -1188,10 +1188,10 @@ function _arch3DEnsureTilt() {
     box.innerHTML = '<div style="display:grid;grid-template-columns:auto 120px 36px;align-items:center;gap:6px 8px;">' +
         '<span title="Camera tilt — 0° top-down, 80° near-horizon. Shortcut: hold Shift and drag the map up/down. Or right-/ctrl-drag to orbit.">⛰ Tilt</span>' +
         '<input id="arch-3d-tilt" type="range" min="0" max="80" step="1" style="accent-color:#4a9b6e;cursor:pointer;">' +
-        '<span id="arch-3d-tilt-val" style="text-align:right;color:#F47321;font-weight:700;font-variant-numeric:tabular-nums;"></span>' +
+        '<span id="arch-3d-tilt-val" style="text-align:right;color:#F47321;font-weight:600;font-variant-numeric:tabular-nums;"></span>' +
         '<span title="Vertical amplification of the IR cloud-top relief (GPU only).">↕ Height</span>' +
         '<input id="arch-3d-exag" type="range" min="1" max="8" step="0.5" style="accent-color:#4a9b6e;cursor:pointer;">' +
-        '<span id="arch-3d-exag-val" style="text-align:right;color:#F47321;font-weight:700;font-variant-numeric:tabular-nums;"></span></div>' +
+        '<span id="arch-3d-exag-val" style="text-align:right;color:#F47321;font-weight:600;font-variant-numeric:tabular-nums;"></span></div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;">' +
         '<button id="arch-3d-orbit" title="Auto-orbit: one slow 360° revolution with a tilt sweep — click again to stop" ' +
         'style="background:rgba(244,115,33,0.14);border:1px solid rgba(244,115,33,0.40);' +
@@ -1404,18 +1404,18 @@ window._arch3DOrbitGif = function () {
         }
 
         // Brand wordmark (small, above the storm name).
-        cctx.font = '700 ' + Math.round(10 * S) + 'px "DM Sans",system-ui,sans-serif';
+        cctx.font = '600 ' + Math.round(10 * S) + 'px "DM Sans",system-ui,sans-serif';
         cctx.fillStyle = 'rgba(148,197,255,0.95)';
         cctx.fillText('TC-ATLAS', textX, cy0 + Math.round(11 * S));
 
         // Storm name + category badge.
         var nameY = cy0 + Math.round(29 * S);
-        cctx.font = '800 ' + Math.round(21 * S) + 'px "DM Sans",system-ui,sans-serif';
+        cctx.font = '600 ' + Math.round(21 * S) + 'px "DM Sans",system-ui,sans-serif';
         cctx.fillStyle = '#f8fafc';
         cctx.fillText(nameLabel, textX, nameY);
         var nameW = cctx.measureText(nameLabel).width;
         if (catLabel && catLabel !== 'Unknown') {
-            cctx.font = '800 ' + Math.round(11 * S) + 'px "DM Sans",system-ui,sans-serif';
+            cctx.font = '600 ' + Math.round(11 * S) + 'px "DM Sans",system-ui,sans-serif';
             var bw = cctx.measureText(catLabel).width + Math.round(14 * S);
             var bh = Math.round(17 * S);
             var bx = textX + nameW + Math.round(9 * S);
@@ -1433,7 +1433,7 @@ window._arch3DOrbitGif = function () {
 
         // Frame datetime (top-right).
         if (dtLabel) {
-            cctx.font = '700 ' + Math.round(13 * S) + 'px "DM Sans",system-ui,sans-serif';
+            cctx.font = '600 ' + Math.round(13 * S) + 'px "DM Sans",system-ui,sans-serif';
             cctx.textAlign = 'right'; cctx.fillStyle = '#e2e8f0';
             cctx.fillText(dtLabel, outW - pad, cy0 + Math.round(15 * S));
             cctx.textAlign = 'left';
@@ -1460,7 +1460,7 @@ window._arch3DOrbitGif = function () {
 
         // Watermark: mini logo + wordmark, bottom-right.
         var wmText = 'TC-ATLAS · tcatlas.org';
-        cctx.font = '700 ' + Math.round(12 * S) + 'px "DM Sans",system-ui,sans-serif';
+        cctx.font = '600 ' + Math.round(12 * S) + 'px "DM Sans",system-ui,sans-serif';
         var wmW = cctx.measureText(wmText).width;
         var wmY = outH - Math.round(7 * S);
         var wmLogo = Math.round(16 * S);
@@ -2317,7 +2317,7 @@ function renderMarkers(storms) {
         var cat = getIntensityCategory(s.peak_wind_kt);
         var popupHtml =
             '<div style="min-width:180px;">' +
-            '<div style="font-weight:700;font-size:14px;margin-bottom:4px;">' + (s.name || 'UNNAMED') +
+            '<div style="font-weight:600;font-size:14px;margin-bottom:4px;">' + (s.name || 'UNNAMED') +
             ' <span class="intensity-badge" style="background:' + color + ';font-size:10px;padding:1px 6px;">' + cat + '</span></div>' +
             '<div style="font-size:12px;color:var(--slate);margin-bottom:6px;">' + s.year + ' &middot; ' + (BASIN_NAMES[s.basin] || s.basin) + '</div>' +
             '<div style="font-size:12px;"><b>Peak:</b> ' + (s.peak_wind_kt || '?') + ' kt &middot; ' + (s.min_pres_hpa || '?') + ' hPa</div>' +
@@ -5064,12 +5064,12 @@ function _renderAnalogTable() {
         '<tr style="background:rgba(46,125,255,0.1);border-bottom:2px solid var(--blue);">' +
         '<td style="text-align:center;font-size:0.7rem;color:#00d4ff;">REF</td>' +
         '<td></td>' +
-        '<td style="color:' + getIntensityColor(ref.peak_wind_kt) + ';font-family:DM Sans;font-weight:700">' + (ref.name || 'UNNAMED') + '</td>' +
+        '<td style="color:' + getIntensityColor(ref.peak_wind_kt) + ';font-family:DM Sans;font-weight:600">' + (ref.name || 'UNNAMED') + '</td>' +
         '<td>' + ref.year + '</td>' +
         '<td>' + (ref.basin || '-') + '</td>' +
-        '<td style="font-weight:700">' + (ref.peak_wind_kt || '-') + '</td>' +
-        '<td style="font-weight:700">' + (ref.ri_24h != null ? '+' + ref.ri_24h : '-') + '</td>' +
-        '<td style="font-weight:700">' + (ref.ace || 0).toFixed(1) + '</td>' +
+        '<td style="font-weight:600">' + (ref.peak_wind_kt || '-') + '</td>' +
+        '<td style="font-weight:600">' + (ref.ri_24h != null ? '+' + ref.ri_24h : '-') + '</td>' +
+        '<td style="font-weight:600">' + (ref.ace || 0).toFixed(1) + '</td>' +
         '<td style="color:#00d4ff;">—</td>' +
         '</tr>';
 
@@ -10332,7 +10332,7 @@ function _loadCompareIRStorm(side, storm) {
     if (label) {
         var cat = getIntensityCategory(storm.peak_wind_kt);
         var color = getIntensityColor(storm.peak_wind_kt);
-        label.innerHTML = '<span style="color:' + color + ';font-weight:700;">' +
+        label.innerHTML = '<span style="color:' + color + ';font-weight:600;">' +
             (storm.name || 'UNNAMED') + '</span> ' + storm.year + ' <span style="font-size:0.7rem;color:' + color + ';">' + cat + '</span>';
     }
 
@@ -11171,7 +11171,7 @@ function _loadCompareMWStorm(side, storm) {
     if (label) {
         var cat = getIntensityCategory(storm.peak_wind_kt);
         var color = getIntensityColor(storm.peak_wind_kt);
-        label.innerHTML = '<span style="color:' + color + ';font-weight:700;">' +
+        label.innerHTML = '<span style="color:' + color + ';font-weight:600;">' +
             (storm.name || 'UNNAMED') + '</span> ' + storm.year +
             ' <span style="font-size:0.7rem;color:' + color + ';">' + cat + '</span>';
     }
@@ -14159,7 +14159,7 @@ function _gaFLRenderMinobGapFill() {
             : 'HRD flight-level data ends here.<br>Remaining track from ' + prodLabel + ' minute observations.';
         var transIcon = L.divIcon({
             className: 'ga-fl-minob-trans',
-            html: '<div style="background:#f97316;color:#fff;font-size:9px;font-weight:bold;' +
+            html: '<div style="background:#f97316;color:#fff;font-size:9px;font-weight:600;' +
                   'padding:1px 4px;border-radius:3px;white-space:nowrap;border:1px solid #fff;">' +
                   transLabel + '</div>',
             iconSize: [60, 16], iconAnchor: isPre ? [60, 8] : [0, 8]
@@ -14247,7 +14247,7 @@ function _gaFLInjectLegend() {
     if (cb.discrete) {
         var chips = cb.stops.map(function (st) {
             var ink = /^#(60a5fa|22c55e|eab308|f97316)$/i.test(st.color) ? '#0b1220' : '#fff';
-            return '<span style="flex:1;text-align:center;font-size:10.5px;font-weight:700;padding:2px 0;background:' +
+            return '<span style="flex:1;text-align:center;font-size:10.5px;font-weight:600;padding:2px 0;background:' +
                 st.color + ';color:' + ink + ';">' + st.val + '</span>';
         }).join('');
         el.innerHTML = '<div style="margin-top:2px;"><div style="display:flex;border-radius:3px;overflow:hidden;border:1px solid var(--border-light);">' +
@@ -14786,7 +14786,7 @@ function _gaSondeRenderTable() {
         var s = _gaSondeData[i], st = _gaSondeStats(s);
         var timeShort = s.launch_time ? TCTime.utc(s.launch_time, { date: false, sec: true, zone: false }) : '';
         var wlCell = st.wl150 != null
-            ? '<span style="display:inline-block;min-width:34px;padding:0 3px;border-radius:3px;text-align:right;font-weight:700;color:#fff;background:' +
+            ? '<span style="display:inline-block;min-width:34px;padding:0 3px;border-radius:3px;text-align:right;font-weight:600;color:#fff;background:' +
               _gaReconWindColorKt(st.wl150) + ';">' + Math.round(st.wl150) + '</span>'
             : '—';
         html += '<tr class="ga-sonde-row' + (i === _gaSondeSelIdx ? ' sel' : '') + '" data-si="' + i + '" onclick="gaSondeShowSkewT(' + i + ')">' +

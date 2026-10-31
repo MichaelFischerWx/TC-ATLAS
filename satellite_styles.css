@@ -619,7 +619,7 @@
     font-variant-numeric: tabular-nums;
 }
 .sat-env-name {
-    font-size: 17px;
+    font-size: 18px;
     font-weight: 600;
     color: #f1f5f9;
 }
@@ -638,7 +638,7 @@
 .sat-env-shear {
     font-variant-numeric: tabular-nums;
     color: #f1f5f9;
-    font-size: 15px;
+    font-size: 16px;
 }
 .sat-env-shear-dir {
     color: #94a3b8;
@@ -1152,7 +1152,7 @@
     padding: 2px 7px;
     border-radius: 4px;
     font-size: 10px;
-    font-weight: 700;
+    font-weight: 600;
     letter-spacing: 0.05em;
     color: #0a0c12;
     background: #fbbf24;
@@ -1237,17 +1237,17 @@
     /* Mobile: stack bar items, shrink chip sizes. The animation
        still gets the central space.  */
     .qv-storm-bar { padding: 10px 12px; gap: 10px; }
-    .qv-name { font-size: 17px; }
+    .qv-name { font-size: 18px; }
     .qv-vitals { font-size: 12px; }
     .qv-detailed-btn { padding: 7px 11px; font-size: 12px; }
     .qv-meta-bar { gap: 12px; padding: 10px 12px; font-size: 12px; }
-    .qv-meta-label { font-size: 9px; }
+    .qv-meta-label { font-size: 10px; }
     /* Gallery: tighter padding + smaller card floor so two columns
        still fit on a phone. */
     #sat-gallery { padding: 14px 12px 20px; }
     .qv-gallery-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
-    .qv-gallery-title { font-size: 17px; }
-    .qv-card-name { font-size: 15px; }
+    .qv-gallery-title { font-size: 18px; }
+    .qv-card-name { font-size: 16px; }
 }
 
 /* ── Hover Tooltip ──────────────────────────────────────────── */
@@ -1582,7 +1582,7 @@ body.sat-leaflet-active .sat-zoom-group { display: none; }
 
     .sat-sidebar-close {
         display: block;
-        font-size: 22px;
+        font-size: 24px;
         padding: 4px 8px;
         min-width: 36px;
         min-height: 36px;

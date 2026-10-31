@@ -49,7 +49,7 @@
 
     <title>Real-Time Monitor — TC-ATLAS</title>
     <script src="theme.js?v=20261031p1"></script>
-    <script defer src="tc_export.js?v=20260803c"></script>
+    <script defer src="tc_export.js?v=20261031p3"></script>
     <script defer src="tc_errors.js?v=20261010m1"></script>
     <script defer src="tc_time.js?v=20261010tm1"></script>
 
@@ -84,7 +84,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261031p2">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261031p3">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -117,10 +117,10 @@
     </script>
 
     <!-- Styles -->
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20261031p2">
-    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261031p2">
-    <link rel="stylesheet" href="satellite_styles.css?v=20261031p2">
-    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261031p2">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20261031p3">
+    <link rel="stylesheet" href="realtime_ir_styles.css?v=20261031p3">
+    <link rel="stylesheet" href="satellite_styles.css?v=20261031p3">
+    <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261031p3">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -2824,7 +2824,7 @@
     <script defer src="tc_mw_layer.js?v=20261020au1"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261010tm1"></script>
-    <script defer src="realtime_ir.js?v=20261031p2"></script>
+    <script defer src="realtime_ir.js?v=20261031p3"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
@@ -2929,7 +2929,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261031p2';
+        var _LAZY_ASSET_V = '?v=20261031p3';
         var _lazyViewMods = {
             recon:       { js: ['plotly_dark.js', 'tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

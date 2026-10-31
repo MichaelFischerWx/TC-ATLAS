@@ -268,7 +268,7 @@
 
         var title = document.createElement('div');
         title.textContent = 'Your file is ready';
-        title.style.cssText = 'font-weight:700;font-size:14px;';
+        title.style.cssText = 'font-weight:600;font-size:14px;';
         card.appendChild(title);
 
         var isImage = /^image\//.test(blob.type || '');
@@ -303,7 +303,7 @@
         saveBtn.textContent = isTouch() ? 'Save / Share' : 'Save';
         saveBtn.style.cssText =
             'padding:9px 18px;border-radius:9px;border:none;background:#2e7dff;' +
-            'color:#fff;font:700 13px "DM Sans",sans-serif;cursor:pointer;';
+            'color:#fff;font:600 13px "DM Sans",sans-serif;cursor:pointer;';
         row.appendChild(closeBtn);
         row.appendChild(saveBtn);
         card.appendChild(row);

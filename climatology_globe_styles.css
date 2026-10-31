@@ -362,32 +362,32 @@
     -webkit-backdrop-filter: blur(10px);
     color: #e6e8eb;
     font-family: 'DM Sans', -apple-system, sans-serif;
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     line-height: 1.4;
     transition: opacity 0.08s ease-out;
 }
 .track-tooltip.hidden { opacity: 0; }
 .track-tooltip .tt-title {
-    font-weight: 700;
-    font-size: 0.92rem;
+    font-weight: 600;
+    font-size: 0.875rem;
     color: var(--um-orange);
     letter-spacing: 0.02em;
     margin-bottom: 2px;
 }
 .track-tooltip .tt-year { color: #8993a4; font-weight: 500; margin-left: 4px; }
 .track-tooltip .tt-basin {
-    font-size: 0.68rem;
+    font-size: 0.6875rem;
     color: #8993a4;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin-bottom: 4px;
 }
-.track-tooltip .tt-row { font-variant-numeric: tabular-nums; font-size: 0.74rem; }
-.track-tooltip .tt-cat { font-weight: 700; }
+.track-tooltip .tt-row { font-variant-numeric: tabular-nums; font-size: 0.75rem; }
+.track-tooltip .tt-cat { font-weight: 600; }
 .track-tooltip .tt-date {
     margin-top: 2px;
     font-variant-numeric: tabular-nums;
-    font-size: 0.68rem;
+    font-size: 0.6875rem;
     color: #8a93a3;
 }
 
@@ -424,7 +424,7 @@
     width: 18px;
     height: 18px;
     line-height: 1;
-    font-size: 0.85rem;
+    font-size: 0.875rem;
     font-family: inherit;
     color: var(--sage);
     background: transparent;
@@ -441,7 +441,7 @@
 .field-info-popover {
     margin-top: 6px;
     padding: 10px 12px;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     line-height: 1.5;
     color: var(--paper);
     background: rgba(255, 255, 255,0.03);
@@ -456,14 +456,14 @@
 }
 .field-info-popover .fi-units {
     font-variant-numeric: tabular-nums;
-    font-size: 0.66rem;
+    font-size: 0.6875rem;
     color: var(--sage);
     font-weight: normal;
     margin-left: 4px;
 }
 .field-info-popover .fi-body  { margin-bottom: 6px; }
-.field-info-popover .fi-meta  { margin-bottom: 6px; font-size: 0.66rem; }
-.field-info-popover .fi-learn a { font-size: 0.7rem; }
+.field-info-popover .fi-meta  { margin-bottom: 6px; font-size: 0.6875rem; }
+.field-info-popover .fi-learn a { font-size: 0.6875rem; }
 
 /* ── GIF export modal text overrides ─────────────────────────────────
    The vendor globe.css uses --paper / --sage for the text inside the

@@ -38,7 +38,7 @@
 .tc-clim-subtitle {
     margin: 0;
     color: var(--text-dim, #8a93a3);
-    font-size: 0.86rem;
+    font-size: 0.875rem;
     line-height: 1.5;
     max-width: 720px;
 }
@@ -58,7 +58,7 @@
     border: none;
     border-right: 1px solid var(--border);
     font-family: inherit;
-    font-size: 0.84rem;
+    font-size: 0.8125rem;
     font-weight: 500;
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
@@ -124,13 +124,13 @@
 }
 .tc-clim-globe-banner-title {
     margin: 0 0 4px 0;
-    font-size: 1.1rem;
+    font-size: 1.125rem;
     font-weight: 600;
     color: var(--text);
 }
 .tc-clim-globe-banner-lede {
     margin: 0;
-    font-size: 0.85rem;
+    font-size: 0.875rem;
     line-height: 1.45;
     color: var(--text-dim, #8a93a3);
 }
@@ -144,8 +144,8 @@
     color: #ffffff;
     text-decoration: none;
     font-family: 'DM Sans', sans-serif;
-    font-weight: 700;
-    font-size: 0.92rem;
+    font-weight: 600;
+    font-size: 0.875rem;
     letter-spacing: 0.01em;
     border-radius: 8px;
     transition: background 0.15s, transform 0.15s;
@@ -187,7 +187,7 @@
 /* ── Featured-views gallery (2×3 tile grid) ──────────────── */
 .tc-clim-gallery-heading {
     margin: 36px 0 4px 0;
-    font-size: 1.1rem;
+    font-size: 1.125rem;
     font-weight: 600;
     color: var(--text);
     text-align: center;
@@ -196,7 +196,7 @@
     margin: 0 0 18px 0;
     text-align: center;
     color: var(--text-dim, #8a93a3);
-    font-size: 0.84rem;
+    font-size: 0.8125rem;
 }
 .tc-clim-gallery {
     display: grid;
@@ -261,12 +261,12 @@
 .tc-clim-tile-title {
     font-weight: 600;
     color: var(--text);
-    font-size: 0.92rem;
+    font-size: 0.875rem;
     margin-bottom: 4px;
 }
 .tc-clim-tile-desc {
     color: var(--text-dim, #8a93a3);
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     line-height: 1.45;
 }
 .tc-clim-tile-desc strong { color: var(--text); }
@@ -284,7 +284,7 @@
     padding: 4px 12px;
     border-radius: 12px;
     font-family: 'DM Sans', sans-serif;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     font-weight: 600;
     background: var(--surface);
     color: var(--slate);
@@ -362,8 +362,8 @@ html.evo-only-mode #sub-evolution-modal .ace-modal-content {
     box-shadow: 0 1px 4px rgba(46, 125, 255, 0.12);
 }
 .sub-clock-mode {
-    font-size: 0.66rem;
-    font-weight: 700;
+    font-size: 0.6875rem;
+    font-weight: 600;
     color: var(--text-dim, #64748b);
     text-transform: uppercase;
     letter-spacing: 0.4px;
@@ -378,7 +378,7 @@ html.evo-only-mode #sub-evolution-modal .ace-modal-content {
     display: flex;
     gap: 8px;
     margin-top: 3px;
-    font-size: 0.65rem;
+    font-size: 0.625rem;
     font-variant-numeric: tabular-nums;
 }
 .sub-clock-key {
@@ -388,7 +388,7 @@ html.evo-only-mode #sub-evolution-modal .ace-modal-content {
 .sub-clock-val { font-weight: 600; }
 .sub-clock-status {
     margin-top: 3px;
-    font-size: 0.6rem;
+    font-size: 0.625rem;
     color: var(--text-dim, #64748b);
     text-align: center;
     min-height: 14px;
@@ -403,7 +403,7 @@ html.evo-only-mode #sub-evolution-modal .ace-modal-content {
     height: 24px;
     padding: 0;
     line-height: 1;
-    font-size: 0.8rem;
+    font-size: 0.8125rem;
     color: var(--text-dim, #64748b);
     background: rgba(255,255,255,0.78);
     border: 1px solid var(--border, rgba(0,0,0,0.08));
@@ -439,7 +439,7 @@ html.evo-only-mode #sub-evolution-modal .ace-modal-content {
     z-index: 4;
     padding: 4px 10px;
     font-family: inherit;
-    font-size: 0.7rem;
+    font-size: 0.6875rem;
     font-weight: 600;
     color: var(--text, #0f172a);
     background: rgba(46,125,255,0.12);
@@ -473,7 +473,7 @@ html.evo-only-mode #sub-evolution-modal .ace-modal-content {
     /* Tighter padding on mobile so the button doesn't overlap the
        section title. Bottom-right would be ideal but the chart fills
        the bottom — keep top-right and rely on the smaller footprint. */
-    .sub-evo-save-btn { padding: 4px 8px; font-size: 0.66rem; }
+    .sub-evo-save-btn { padding: 4px 8px; font-size: 0.6875rem; }
 }
 
 /* Per-basin genesis-odds readout in the Phase Evolution modal. Mirrors
@@ -481,7 +481,7 @@ html.evo-only-mode #sub-evolution-modal .ace-modal-content {
    shows the full six-basin set the card defers to "the full dial". */
 #sub-evolution-genesis {
     margin: 2px 0 6px;
-    font-size: 0.74rem;
+    font-size: 0.75rem;
     line-height: 1.5;
 }
 #sub-evolution-genesis .sub-evo-gen-label { opacity: 0.7; }

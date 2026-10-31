@@ -1752,7 +1752,7 @@ function showERA5FieldMenu() {
     var toggleRow = document.createElement('div');
     toggleRow.className = 'env-field-option env-toggle-row' + (_era5PlotlyVisible ? ' active' : '');
     toggleRow.textContent = _era5PlotlyVisible ? '\u2705 Overlay On' : '\u274C Overlay Off';
-    toggleRow.style.cssText = 'border-bottom:1px solid rgba(15, 22, 35,0.15);font-weight:bold;';
+    toggleRow.style.cssText = 'border-bottom:1px solid rgba(15, 22, 35,0.15);font-weight:600;';
     toggleRow.onclick = function() {
         menu.remove();
         toggleERA5PlotlyUnderlay();
@@ -2707,12 +2707,12 @@ function _renderSkewTInfo(profiles) {
     // ── Derived quantities summary (top) ──
     var html = '<div style="font-family:\'JetBrains Mono\',monospace;">';
 
-    html += '<div style="color:#00d4ff;font-weight:700;margin-bottom:8px;font-size:11px;letter-spacing:1px;">DERIVED PARAMETERS</div>';
+    html += '<div style="color:#00d4ff;font-weight:600;margin-bottom:8px;font-size:11px;letter-spacing:1px;">DERIVED PARAMETERS</div>';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:14px;">';
 
     function infoCard(label, value, unit, color) {
         return '<div style="background:rgba(15, 22, 35,0.03);border:1px solid rgba(15, 22, 35,0.06);border-radius:6px;padding:6px 8px;text-align:center;">' +
-            '<div style="font-size:14px;font-weight:700;color:' + (color || '#e5e7eb') + ';">' + value + '</div>' +
+            '<div style="font-size:14px;font-weight:600;color:' + (color || '#e5e7eb') + ';">' + value + '</div>' +
             '<div style="font-size:8px;color:#6b7280;margin-top:1px;">' + unit + '</div>' +
             '<div style="font-size:8px;color:#8b9ec2;font-weight:600;">' + label + '</div></div>';
     }
@@ -2759,7 +2759,7 @@ function _renderSkewTInfo(profiles) {
     html += '</div>';
 
     // ── Sounding table ──
-    html += '<div style="color:#00d4ff;font-weight:700;margin-bottom:4px;font-size:10px;letter-spacing:1px;">SOUNDING TABLE</div>';
+    html += '<div style="color:#00d4ff;font-weight:600;margin-bottom:4px;font-size:10px;letter-spacing:1px;">SOUNDING TABLE</div>';
     html += '<table style="width:100%;border-collapse:collapse;font-size:10px;">';
     html += '<tr style="border-bottom:1px solid rgba(15, 22, 35,0.1);color:#8b9ec2;">' +
         '<th style="text-align:left;padding:3px 4px;">P</th>' +
@@ -5906,7 +5906,7 @@ function buildCaseMetaPanel(caseData) {
     var dvStr = (dv !== null && dv !== undefined) ? (dv > 0 ? '+' : '') + dv + ' kt/24h' : '\u2014';
     var dvStyle = '';
     if (dv !== null && dv !== undefined) {
-        if (dv >= 30)       dvStyle = 'color:#ef4444;font-weight:700;';
+        if (dv >= 30)       dvStyle = 'color:#ef4444;font-weight:600;';
         else if (dv > 0)    dvStyle = 'color:#f87171;';
         else if (dv < 0)    dvStyle = 'color:#60a5fa;';
     }
@@ -6106,7 +6106,7 @@ function _buildClusterMarkers(cases) {
             iconCreateFunction: function(cluster) {
                 var n = cluster.getChildCount();
                 var bg = n<10?'rgba(46,125,255,0.25)':n<50?'rgba(46,125,255,0.4)':n<100?'rgba(46,125,255,0.6)':n<200?'rgba(46,125,255,0.75)':'rgba(46,125,255,0.9)';
-                return L.divIcon({ html:'<div style="background:'+bg+';color:white;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;border:2px solid rgba(15, 22, 35,0.3);box-shadow:0 2px 8px rgba(0,0,0,0.4);backdrop-filter:blur(4px);font-family:\'JetBrains Mono\',monospace;">'+n+'</div>', className:'custom-cluster-icon', iconSize:L.point(40,40) });
+                return L.divIcon({ html:'<div style="background:'+bg+';color:white;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px;border:2px solid rgba(15, 22, 35,0.3);box-shadow:0 2px 8px rgba(0,0,0,0.4);backdrop-filter:blur(4px);font-family:\'JetBrains Mono\',monospace;">'+n+'</div>', className:'custom-cluster-icon', iconSize:L.point(40,40) });
             }
         });
     } else {
@@ -14543,7 +14543,7 @@ function _archiveRenderSondePanel(data) {
             'onclick="archiveShowSondeSkewT(' + idx + ')" ' +
             'onmouseover="this.style.background=\'rgba(52,211,153,0.1)\'" ' +
             'onmouseout="this.style.background=\'none\'">' +
-            '<td style="padding:2px 4px;color:' + color + ';font-weight:bold;">' + (idx+1) + '</td>' +
+            '<td style="padding:2px 4px;color:' + color + ';font-weight:600;">' + (idx+1) + '</td>' +
             '<td style="padding:2px 4px;">' + (sonde.sonde_id || '-') + '</td>' +
             '<td style="padding:2px 4px;">' + timeStr + '</td>' +
             '<td style="padding:2px 4px;text-align:right;">' + dtStr + '</td>' +

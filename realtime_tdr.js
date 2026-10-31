@@ -1222,7 +1222,7 @@
             { sym: '<span class="recon-hdob-legend-diamond"></span>', label: 'Dropsonde' },
             { sym: '<span style="color:#f87171;font-size:14px;line-height:13px;">⊕</span>', label: 'Center fix (VDM)' },
             { sym: '<span style="color:#eab308;font-size:12px;line-height:13px;">✈</span>', label: 'Aircraft (latest)' },
-            { sym: '<span style="color:#ec4899;font-size:14px;line-height:13px;font-weight:700;">×</span>', label: 'SEAR pass center (prelim) · dotted = center track' },
+            { sym: '<span style="color:#ec4899;font-size:14px;line-height:13px;font-weight:600;">×</span>', label: 'SEAR pass center (prelim) · dotted = center track' },
             { sym: '<span style="color:#ec4899;font-size:13px;line-height:13px;">○</span>', label: 'SEAR peak 10-m est (exp) · kt + sector, radial to center' }
         ];
         var html = rows.map(function (r) {
@@ -2262,7 +2262,7 @@
                     line.addTo(map); _hdobSearMarkers.push(line);
                 }
                 var cIcon = L.divIcon({ className: 'recon-hdob-searctr' + (isSel ? ' sel' : ''),
-                    html: '<span style="color:' + PINK + ';font-size:15px;line-height:14px;font-weight:700;' +
+                    html: '<span style="color:' + PINK + ';font-size:15px;line-height:14px;font-weight:600;' +
                           'text-shadow:0 0 2px #fff,0 0 2px #fff;">×</span>',
                     iconSize: [14, 14], iconAnchor: [7, 7] });
                 var cm = L.marker([p.clat, p.clon], { icon: cIcon, interactive: true, zIndexOffset: 900 });
@@ -2289,7 +2289,7 @@
             mk.addTo(map); _hdobSearMarkers.push(mk);
             var q = (kit && kit.compass8) ? kit.compass8(p.az_deg) : (p.quad || '');
             var lIcon = L.divIcon({ className: 'recon-hdob-searlbl' + (isSel ? ' sel' : ''),
-                html: '<span style="color:' + PINK + ';font-size:10px;font-weight:700;white-space:nowrap;' +
+                html: '<span style="color:' + PINK + ';font-size:10px;font-weight:600;white-space:nowrap;' +
                       'text-shadow:0 0 2px #fff,0 0 2px #fff,0 0 3px #fff;">' +
                       _hdobSearHeadline(p) + (q ? ' ' + q : '') + '</span>',
                 iconSize: [1, 1], iconAnchor: [-6, 6] });
@@ -6754,7 +6754,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var html = '<div style="font-family:DM Sans,monospace;">';
 
         // Sonde metadata
-        html += '<div style="color:#c4b5fd;font-weight:700;margin-bottom:6px;">' +
+        html += '<div style="color:#c4b5fd;font-weight:600;margin-bottom:6px;">' +
             '\uD83E\uDE82 ' + (sonde.sonde_id || 'Unknown') + '</div>';
         html += '<div style="margin-bottom:8px;font-size:10px;color:#8899aa;">' +
             (sonde.platform || '') + ' / ' + (sonde.flight || '') + '<br>' +
@@ -6769,7 +6769,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             return v != null && isFinite(v) ? v.toFixed(dp || 0) + ' ' + (unit || '') : '\u2014';
         }
 
-        html += '<div>CAPE</div><div style="color:#ef4444;font-weight:700;">' + _val(derived.cape, 'J/kg') + '</div>';
+        html += '<div>CAPE</div><div style="color:#ef4444;font-weight:600;">' + _val(derived.cape, 'J/kg') + '</div>';
         html += '<div>CIN</div><div style="color:#60a5fa;">' + _val(derived.cin, 'J/kg') + '</div>';
         html += '<div>PWAT</div><div style="color:#06b6d4;">' + _val(derived.pwat, 'mm', 1) + '</div>';
         html += '<div>LCL</div><div>' + _val(derived.lcl_p, 'hPa') + '</div>';
@@ -6820,7 +6820,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                     if (wl.val != null) {
                         ktStr = ' (' + (wl.val * 1.94384).toFixed(0) + ' kt)';
                     }
-                    html += '<div>' + wl.name + '</div><div style="color:#34d399;font-weight:700;">' +
+                    html += '<div>' + wl.name + '</div><div style="color:#34d399;font-weight:600;">' +
                         (wl.val != null ? wl.val.toFixed(1) + ' m/s' + ktStr : '\u2014') + '</div>';
                 }
             }
@@ -6932,7 +6932,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
 
         var sondes = _rtSondeData.dropsondes;
         var html = '<div style="padding:6px 8px;background:rgba(168,85,247,0.06);border-top:1px solid rgba(168,85,247,0.15);">';
-        html += '<div style="color:#c4b5fd;font-size:12px;font-weight:700;margin-bottom:4px;">' +
+        html += '<div style="color:#c4b5fd;font-size:12px;font-weight:600;margin-bottom:4px;">' +
             '\uD83E\uDE82 Dropsondes (' + sondes.length + ')';
         // Add platform/flight if available from first sonde
         if (sondes.length > 0) {
@@ -7026,7 +7026,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 'onclick="rtSelectSonde(' + idx + ')" ' +
                 'onmouseover="this.style.background=\'rgba(52,211,153,0.1)\'" ' +
                 'onmouseout="this.style.background=\'none\'">' +
-                '<td style="padding:2px 4px;color:' + color + ';font-weight:bold;">' + (idx+1) + '</td>' +
+                '<td style="padding:2px 4px;color:' + color + ';font-weight:600;">' + (idx+1) + '</td>' +
                 '<td style="padding:2px 4px;">' + (sonde.sonde_id || '-') + '</td>' +
                 '<td style="padding:2px 4px;">' + timeStr + '</td>' +
                 '<td style="padding:2px 4px;text-align:right;">' + dtStr + '</td>' +
