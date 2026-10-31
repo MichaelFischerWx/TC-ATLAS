@@ -118,6 +118,17 @@ fi
 assert_cacheable "ghost-ra/eye"       "$CDN/ghost-ra/eye/2005289N18282.json"
 assert_cacheable "global/fdeck"       "$HOST/global/fdeck?atcf_id=AL252005"
 
+# TC-RADAR explorer (rule 6). It was added in the dashboard 2026-09-07, never
+# written into the spec, and silently dropped by a later apply; these probes
+# make a repeat visible. Irma case 481 is a fixed probe. The idx8 frame PNG
+# caches under Cloudflare's default .png handling (no rule): cache_status
+# sends an Origin header, which matters, since R2 adds the CORS header only
+# when asked and the edge keeps whichever copy it fetched first.
+assert_cacheable "tcradar /ir"        "$HOST/ir?case_index=481&data_type=swath&fmt=idx8"
+assert_cacheable "tcradar /era5"      "$HOST/era5?case_index=481&field=shear_mag&data_type=swath"
+assert_cacheable "tcradar /ir_frame"  "$HOST/ir_frame?case_index=481&lag_index=2&data_type=swath"
+assert_cacheable "tcradar-ir/v3 png"  "$CDN/tcradar-ir/v3/swath/481_0.png"
+
 echo "== should BYPASS =="
 assert_bypassed "genesis-near"   "$HOST/ir-monitor/weatherlab-genesis-near?lat=15&lon=-50"
 assert_bypassed "genesis-cycles" "$HOST/ir-monitor/weatherlab-genesis-cycles"

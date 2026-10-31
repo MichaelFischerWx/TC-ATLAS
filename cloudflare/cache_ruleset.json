@@ -66,6 +66,18 @@
       "description": "tc-atlas: SITE versioned static assets (tcatlas.org via GH Pages, once the apex is orange-clouded \u2014 INERT until then because grey-cloud traffic never reaches CF). GH Pages caps everything at max-age=600 and re-issues ETags on every deploy, so returning visitors re-download byte-identical JS/CSS after 10 min. Every mutable asset reference carries a cache token: `?v=YYYYMMDDx` (scripts/styles, matched by `v=`), `?vYYYYMMDD` (the IBTrACS data files, matched by starts_with v20), or `?v=<semver>` (vendored libs, matched by `v=`). A changed file always ships under a NEW token (enforced by scripts/check_version_tokens.sh), so long edge/browser TTLs are safe: edge 30d, browser 7d. Rule deliberately does NOT match tokenless requests \u2014 page HTML has no query string and keeps GH Pages' 600s freshness, and untokened images fall through to CF extension defaults (respect origin 600s), so an updated og-card/gallery image never goes 30-days-stale at the edge.",
       "enabled": true,
       "expression": "(http.host eq \"tcatlas.org\") and (http.request.uri.query contains \"v=\" or starts_with(http.request.uri.query, \"v20\"))"
+    },
+    {
+      "description": "tc-atlas: CACHE immutable TC-RADAR explorer endpoints (GET; respect origin). First added in the dashboard 2026-09-07 but never written into this spec, so a later whole-ruleset apply silently removed it and every case open went back to Cloud Run (found DYNAMIC 2026-10-30). Each path is a pure function of its query (case, variable, level...): tc_radar_api.CacheHeaderMiddleware stamps the 200s public,max-age=86400,s-maxage=604800,immutable and every error no-store, and the R2-mirrored ones (/data, /azimuthal_mean, /ir_frame, /flightlevel/archive, /dropsondes/archive) answer with an immutable 302 to cdn.tcatlas.org, which is cached too. eq /ir (not a prefix) keeps /ir-monitor/* out. GET-only so it stays disjoint from the BYPASS rule's non-GET clause.",
+      "expression": "(http.host eq \"api.tcatlas.org\") and (http.request.method eq \"GET\") and (starts_with(http.request.uri.path, \"/data\") or starts_with(http.request.uri.path, \"/era5\") or starts_with(http.request.uri.path, \"/azimuthal_mean\") or starts_with(http.request.uri.path, \"/quadrant_mean\") or starts_with(http.request.uri.path, \"/cross_section\") or starts_with(http.request.uri.path, \"/volume\") or starts_with(http.request.uri.path, \"/plot\") or starts_with(http.request.uri.path, \"/ir_frame\") or starts_with(http.request.uri.path, \"/cfad/\") or http.request.uri.path eq \"/ir\" or http.request.uri.path eq \"/flightlevel/archive\" or http.request.uri.path eq \"/dropsondes/archive\")",
+      "action": "set_cache_settings",
+      "action_parameters": {
+        "cache": true,
+        "edge_ttl": {
+          "mode": "respect_origin"
+        }
+      },
+      "enabled": true
     }
   ]
 }
