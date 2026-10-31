@@ -300,7 +300,7 @@
 #rt-sonde-btn.active {
     background: rgba(96, 165, 250, 0.22) !important;
     border-color: rgba(96, 165, 250, 0.6) !important;
-    color: #bfdbfe !important;
+    color: #1d4ed8 !important;
 }
 #rt-sonde-btn.sonde-only {
     background: rgba(96, 165, 250, 0.42) !important;
@@ -379,8 +379,9 @@
 #rt-fl-btn.active {
     background: rgba(96, 165, 250, 0.25) !important;
     border-color: rgba(96, 165, 250, 0.6) !important;
-    color: #bfdbfe !important;
+    color: #1d4ed8 !important;
 }
+[data-theme="dark"] #rt-sonde-btn.active, [data-theme="dark"] #rt-fl-btn.active { color: #bfdbfe !important; }
 
 /* ── FL aircraft icon on map ──────────────────── */
 .fl-aircraft-icon {
@@ -687,7 +688,7 @@
     border-radius: 5px; padding: 2px 9px; font-size: 11px; font-weight: 600;
     font-family: inherit; cursor: pointer; transition: all 0.12s;
 }
-.recon-hdob-flighttoggle button.on { color: #fff; border-color: transparent; background: #2563eb; }
+.recon-hdob-flighttoggle button.on { color: var(--sel-ink); border-color: transparent; background: var(--sel-fill); }
 .recon-hdob-satgroup { margin-left: auto; display: inline-flex; gap: 3px; align-items: center; }
 /* Per-symbol show/hide pills (barbs, sondes, VDM fixes, SEAR passes, aircraft). */
 .recon-hdob-layers { display: inline-flex; gap: 3px; align-items: center; flex-wrap: wrap; }
@@ -716,7 +717,7 @@
     border-radius: 5px; padding: 3px 10px; font-size: 11px; font-weight: 600;
     font-family: inherit; cursor: pointer; transition: all 0.12s;
 }
-.recon-hdob-gridbtn.active { color: #fff; border-color: transparent; background: #2563eb; }
+.recon-hdob-gridbtn.active { color: var(--sel-ink); border-color: transparent; background: var(--sel-fill); }
 
 /* Dropsonde skew-T modal */
 .recon-skewt-modal {

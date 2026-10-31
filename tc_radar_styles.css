@@ -706,11 +706,11 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 .vol3d-controls select { appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23e6e8eb' stroke-width='1.5'/></svg>"); background-repeat: no-repeat; background-position: right 5px center; padding-right: 18px; }
 .vol3d-controls option { background: #161b22; color: #e6e8eb; }
 .vol3d-toggle-btn { padding: 3px 10px; font-size: 10px; border: 1px solid var(--blue); border-radius: 4px; background: transparent; color: var(--blue-light); cursor: pointer; font-weight: 700; font-family: 'DM Sans', sans-serif; transition: all 0.15s; }
-.vol3d-toggle-btn.active { background: var(--sel-fill); color: var(--sel-ink); border-color: var(--sel-fill); }
-.vol3d-toggle-btn:hover { background: rgba(37,99,235,0.15); }
+.vol3d-toggle-btn:hover { background: rgba(46, 122, 91, 0.25); }
 .vol3d-toggle-btn[data-accent="cfad"]    { border-color: rgba(168,85,247,0.5); color: var(--accent-cfad-text); }
 .vol3d-toggle-btn[data-accent="anomaly"] { border-color: rgba(52,211,153,0.5); color: var(--accent-anomaly-text); }
 .vol3d-toggle-btn[data-accent="slate"]   { border-color: rgba(148,163,184,0.5); color: #475569; }
+.vol3d-toggle-btn.active, .vol3d-toggle-btn.active[data-accent] { background: var(--sel-fill-glass); color: var(--sel-ink); border-color: var(--sel-fill-glass); }
 #vol-3d-chart { flex: 1; width: 100%; min-height: 0; }
 
 /* ── IR satellite map controls ──────────────────────────────── */
