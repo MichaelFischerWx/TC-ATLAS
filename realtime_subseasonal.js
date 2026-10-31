@@ -97,6 +97,15 @@
     // combined view its map read wider than the Hovmöller above it.
     var COMBINED_HOV_MARGIN_LR = { l: 90, r: 90 };
     var STACKED_HOV_MARGIN_LR  = { l: 60, r: 55 };
+    /* Phones. On a 390-px screen the 90-px side margins plus a vertical
+       color bar left the combined Hovmöller ~150 px wide, its long legend
+       wrapped to five lines and desktop-sized TC markers buried the OLR.
+       Below 640 px: slim margins, the color bar under the plot, short
+       legend names, smaller markers (labels on active storms only). */
+    var NARROW_MQ = window.matchMedia ? window.matchMedia('(max-width: 640px)') : null;
+    function _narrow() { return !!(NARROW_MQ && NARROW_MQ.matches); }
+    function _combinedMargins() { return _narrow() ? { l: 46, r: 10 } : COMBINED_HOV_MARGIN_LR; }
+    function _stackedMargins() { return _narrow() ? { l: 46, r: 42 } : STACKED_HOV_MARGIN_LR; }
 
     // Per-band contour styling for the combined view. Colors are chosen
     // for legibility on top of the BrBG OLR base (dark green ↔ tan ↔ deep
@@ -815,7 +824,7 @@
 
         if (state.viewMode === 'combined') {
             _renderCombinedHovmoller(container, bg, fg, axisGrid, isDark);
-            _renderBasinStrip(container, bg, fg, COMBINED_HOV_MARGIN_LR);
+            _renderBasinStrip(container, bg, fg, _combinedMargins());
             _renderActiveTCList();
             return;
         }
@@ -939,7 +948,7 @@
                 // the last one to read off the axis. Right margin makes
                 // room for the per-panel vertical colorbar; basin strip
                 // below uses the same r value to preserve x-axis alignment.
-                margin: { l: STACKED_HOV_MARGIN_LR.l, r: STACKED_HOV_MARGIN_LR.r, t: 18, b: 22 },
+                margin: { l: _stackedMargins().l, r: _stackedMargins().r, t: 18, b: 22 },
                 paper_bgcolor: bg,
                 plot_bgcolor:  bg,
                 font: { color: fg, size: 10, family: 'DM Sans, system-ui, sans-serif' },
@@ -1001,7 +1010,7 @@
             Plotly.newPlot(panel, [trace].concat(overlayTraces), layout, config);
         });
 
-        _renderBasinStrip(container, bg, fg, STACKED_HOV_MARGIN_LR);
+        _renderBasinStrip(container, bg, fg, _stackedMargins());
         _renderActiveTCList();
     }
 
@@ -1071,7 +1080,15 @@
             // contrast on the dominant signal.
             zmin: -60, zmax: 60,
             showscale: true,
-            colorbar: {
+            colorbar: _narrow() ? {
+                orientation: 'h', x: 0.5, xanchor: 'center', y: -0.075, yanchor: 'top',
+                len: 0.9, thickness: 7, outlinewidth: 0,
+                tickvals: [-60, -30, 0, 30, 60],
+                ticktext: ['−60', '−30', '0', '+30', '+60'],
+                tickfont: { size: 9, color: fg, family: 'DM Sans, system-ui, sans-serif' },
+                title: { text: 'OLR anomaly (W/m²)', side: 'top',
+                         font: { size: 9, color: fg } },
+            } : {
                 x: 1.005, xanchor: 'left', y: 0.5, yanchor: 'middle',
                 len: 0.92, thickness: 8, outlinewidth: 0,
                 tickvals: [-60, -30, 0, 30, 60],
@@ -1107,7 +1124,8 @@
             // their units so the reader sees what amplitude each band's
             // lines correspond to without an extra colorbar. Off-equator
             // bands carry a `(5-15°N)` lat-band note.
-            var legendName = ov.label + ' ±' + ov.levels.join(', ±')
+            var legendName = _narrow() ? ov.label
+                : ov.label + ' ±' + ov.levels.join(', ±')
                 + ' W/m²' + (ov.latNote ? ' (' + ov.latNote + ')' : '');
             var initialVisibility = ov.defaultVisible === false ? 'legendonly' : true;
             ov.levels.forEach(function (lev, levIdx) {
@@ -1160,7 +1178,9 @@
             // wraps to two lines so the column needs to accommodate the
             // longer of those plus the "↓ Time" annotation that sits in
             // the same margin band.
-            margin: { l: COMBINED_HOV_MARGIN_LR.l, r: COMBINED_HOV_MARGIN_LR.r, t: 38, b: 36 },
+            margin: _narrow()
+                ? { l: _combinedMargins().l, r: _combinedMargins().r, t: 30, b: 74 }
+                : { l: COMBINED_HOV_MARGIN_LR.l, r: COMBINED_HOV_MARGIN_LR.r, t: 38, b: 36 },
             paper_bgcolor: bg, plot_bgcolor: bg,
             font: { color: fg, size: 10, family: 'DM Sans, system-ui, sans-serif' },
             xaxis: {
@@ -1168,7 +1188,7 @@
                 tickvals: [0, 60, 120, 180, 240, 300, 360],
                 ticktext: ['0°', '60°E', '120°E', '180°', '120°W', '60°W', '0°'],
                 showgrid: true, gridcolor: axisGrid, zeroline: false,
-                tickfont: { size: 10 },
+                tickfont: { size: _narrow() ? 9 : 10 },
             },
             yaxis: {
                 // Newest at BOTTOM — same convention as the stacked
@@ -1176,8 +1196,8 @@
                 // strip drawn underneath.
                 autorange: 'reversed',
                 showgrid: false, zeroline: false,
-                tickfont: { size: 10 },
-                nticks: 14,
+                tickfont: { size: _narrow() ? 9 : 10 },
+                nticks: _narrow() ? 9 : 14,
             },
             shapes: [],
             // "↓ Time" indicator anchored above the y-axis date column,
@@ -1195,7 +1215,7 @@
             legend: {
                 orientation: 'h',
                 x: 0, y: 1.04, xanchor: 'left', yanchor: 'bottom',
-                font: { size: 10, color: fg },
+                font: { size: _narrow() ? 9 : 10, color: fg },
                 bgcolor: 'rgba(0,0,0,0)',
             },
         };
@@ -1247,19 +1267,20 @@
         div.className = 'sub-hov-basin-strip';
         container.appendChild(div);
 
+        var nar = _narrow();
         var basins = [
-            { name: 'Africa',     x0:   0, x1:  50 },
-            { name: 'N Indian',   x0:  50, x1: 100 },
-            { name: 'W Pacific',  x0: 100, x1: 180 },
-            { name: 'E Pacific',  x0: 180, x1: 260 },
-            { name: 'N Atlantic', x0: 260, x1: 360 },
+            { name: nar ? 'Afr' : 'Africa',       x0:   0, x1:  50 },
+            { name: nar ? 'N Ind' : 'N Indian',   x0:  50, x1: 100 },
+            { name: nar ? 'W Pac' : 'W Pacific',  x0: 100, x1: 180 },
+            { name: nar ? 'E Pac' : 'E Pacific',  x0: 180, x1: 260 },
+            { name: nar ? 'N Atl' : 'N Atlantic', x0: 260, x1: 360 },
         ];
         var annotations = basins.map(function (b) {
             return {
                 xref: 'x', yref: 'paper',
                 x: (b.x0 + b.x1) / 2, y: 0.92,
                 text: '<b>' + b.name + '</b>', showarrow: false,
-                font: { size: 10, color: fg, family: 'DM Sans, system-ui, sans-serif' },
+                font: { size: nar ? 9 : 10, color: fg, family: 'DM Sans, system-ui, sans-serif' },
                 bgcolor: 'rgba(255,255,255,0.78)',
                 bordercolor: 'rgba(0,0,0,0.10)', borderwidth: 0.5,
                 borderpad: 2,
@@ -1343,28 +1364,31 @@
             return name + '<br>' + times[i] + '<br>lon ' + xs[i].toFixed(1) + '°'
                 + (vmaxs[i] != null ? '<br>' + vmaxs[i] + ' kt' : '');
         });
+        // phones: ~1/3 the plot width of desktop, so smaller marks, and only
+        // active storms keep a name label (60 labels covered the field)
+        var nar = _narrow(), labelIt = !nar || storm.active;
         return {
             line: {
                 type: 'scatter', mode: 'lines',
                 x: xs, y: ys,
-                line: { color: 'rgba(15,23,42,0.55)', width: 1.5 },
+                line: { color: 'rgba(15,23,42,0.55)', width: nar ? 1 : 1.5 },
                 showlegend: false, hoverinfo: 'skip',
             },
             markers: {
                 type: 'scatter', mode: 'markers',
                 x: xs, y: ys,
                 marker: {
-                    size: 6, color: colors,
-                    line: { color: 'rgba(15,23,42,0.85)', width: 0.8 },
+                    size: nar ? 3.5 : 6, color: colors,
+                    line: { color: 'rgba(15,23,42,0.85)', width: nar ? 0.5 : 0.8 },
                 },
                 text: hover, hoverinfo: 'text',
                 showlegend: false,
             },
             latest: {
-                type: 'scatter', mode: 'markers+text',
+                type: 'scatter', mode: labelIt ? 'markers+text' : 'markers',
                 x: [xs[xs.length - 1]], y: [ys[ys.length - 1]],
-                marker: { size: 12, color: colors[colors.length - 1],
-                          line: { color: '#0f172a', width: 1.5 } },
+                marker: { size: nar ? 7 : 12, color: colors[colors.length - 1],
+                          line: { color: '#0f172a', width: nar ? 1 : 1.5 } },
                 text: [name], textposition: 'top right',
                 textfont: { size: 9, color: '#0f172a',
                             family: 'DM Sans, system-ui, sans-serif' },
@@ -1862,4 +1886,19 @@
             _renderHovmollers();
         }
     });
+
+    /* Crossing the phone breakpoint (a rotation, a resized window) changes
+       the Hovmöllers' margins, color-bar placement and marker sizes, which
+       are baked into the figure at render — redraw rather than stretch. */
+    if (NARROW_MQ) {
+        var _onNarrow = function () {
+            if (state.initialized
+                && document.getElementById('sub-main')
+                && document.getElementById('sub-main').style.display !== 'none') {
+                _renderHovmollers();
+            }
+        };
+        if (NARROW_MQ.addEventListener) NARROW_MQ.addEventListener('change', _onNarrow);
+        else if (NARROW_MQ.addListener) NARROW_MQ.addListener(_onNarrow);
+    }
 })();
