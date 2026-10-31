@@ -89,11 +89,11 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundles, discoverable from byte 0. Tokens MUST match
          the script tags below. -->
-    <link rel="preload" as="script" href="global_archive.js?v=20261029qc1">
+    <link rel="preload" as="script" href="global_archive.js?v=20261030ui1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261010w1">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20261029mob3">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20261030ui1">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -126,41 +126,46 @@
         </div>
     </header>
 
-    <div class="dataset-stats-strip" role="region" aria-label="Global archive dataset overview">
-        <span class="dataset-stat"><strong id="stat-storms">&mdash;</strong> storms</span>
-        <span class="dataset-stat-sep" aria-hidden="true">·</span>
-        <span class="dataset-stat" id="stat-years">&mdash;</span>
-        <span class="dataset-stat-sep" aria-hidden="true">·</span>
-        <span class="dataset-stat"><strong id="stat-basins">&mdash;</strong> basins</span>
-        <span class="dataset-version" title="IBTrACS v04 — NOAA's International Best Track Archive for Climate Stewardship, the global best-track record merged from all regional forecast agencies.">IBTrACS v04</span>
-    </div>
-
-    <!-- ── Tab bar ────────────────────────────────────────────── -->
-    <div class="ga-tabs" role="tablist" aria-label="Global archive sections">
-        <button class="ga-tab active" role="tab" aria-selected="true" data-tab="browser" onclick="switchTab('browser')">
-            Storm Browser
-        </button>
-        <button class="ga-tab" role="tab" aria-selected="false" data-tab="detail" onclick="switchTab('detail')">
-            Storm Detail
-        </button>
-        <button class="ga-tab" role="tab" aria-selected="false" data-tab="compare" onclick="switchTab('compare')">
-            Compare Storms
-        </button>
-        <button class="ga-tab" role="tab" aria-selected="false" data-tab="reanalysis" onclick="switchTab('reanalysis')"
-                title="GHOST recon-independent intensity reanalysis (research, not an official analysis)">
-            GHOST Reanalysis <span class="ga-beta-chip">BETA</span>
-        </button>
-        <!-- Climatology + Environment moved to tc_climatology.html
-             (TC Climatology in the top nav). Old #tab=climatology and
-             #tab=environment URLs redirect via the inline <head> stub. -->
-                <a class="ga-tab ga-tab-link" role="tab" href="archive_season.html"
-                   title="Animate any season since 1980 over near-global infrared imagery, with every storm's best-track and GHOST intensity">
-                    Global IR Archive &rarr;
-                </a>
-                <a class="ga-tab ga-tab-link" role="tab" href="tc_climatology.html"
-           title="Best-track statistics + reanalysis globe">
-            TC Climatology &rarr;
-        </a>
+    <!-- ── Sub-bar: section tabs + dataset overview ──────────────
+         One row, the same dark bar as the Real-Time Monitor's view tabs
+         (tabs left, counts right). It replaces the separate stats strip and
+         tab row, which stacked ~80px of chrome above the map. -->
+    <div class="ga-subbar">
+        <div class="ga-tabs" role="tablist" aria-label="Global archive sections">
+            <button class="ga-tab active" role="tab" aria-selected="true" data-tab="browser" onclick="switchTab('browser')">
+                <span class="tab-full">Storm Browser</span><span class="tab-short">Browser</span>
+            </button>
+            <button class="ga-tab" role="tab" aria-selected="false" data-tab="detail" onclick="switchTab('detail')">
+                <span class="tab-full">Storm Detail</span><span class="tab-short">Detail</span>
+            </button>
+            <button class="ga-tab" role="tab" aria-selected="false" data-tab="compare" onclick="switchTab('compare')">
+                <span class="tab-full">Compare Storms</span><span class="tab-short">Compare</span>
+            </button>
+            <button class="ga-tab" role="tab" aria-selected="false" data-tab="reanalysis" onclick="switchTab('reanalysis')"
+                    title="GHOST recon-independent intensity reanalysis (research, not an official analysis)">
+                <span class="tab-full">GHOST Reanalysis</span><span class="tab-short">GHOST</span> <span class="ga-beta-chip">BETA</span>
+            </button>
+            <!-- Climatology + Environment moved to tc_climatology.html
+                 (TC Climatology in the top nav). Old #tab=climatology and
+                 #tab=environment URLs redirect via the inline <head> stub.
+                 These two are links to other pages, not tabs: set apart by a
+                 rule and an outbound arrow. -->
+            <span class="ga-tab-sep" aria-hidden="true"></span>
+            <a class="ga-tab ga-tab-link" href="archive_season.html"
+               title="Animate any season since 1980 over near-global infrared imagery, with every storm's best-track and GHOST intensity">
+                <span class="tab-full">Global IR Archive</span><span class="tab-short">IR Archive</span><svg class="ga-tab-out" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>
+            </a>
+            <a class="ga-tab ga-tab-link" href="tc_climatology.html"
+               title="Best-track statistics + reanalysis globe">
+                <span class="tab-full">TC Climatology</span><span class="tab-short">Climatology</span><svg class="ga-tab-out" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>
+            </a>
+        </div>
+        <div class="ga-subbar-stats" role="region" aria-label="Global archive dataset overview">
+            <span class="ga-count"><span class="ga-count-val" id="stat-storms">&mdash;</span> storms</span>
+            <span class="ga-count ga-count-val" id="stat-years">&mdash;</span>
+            <span class="ga-count"><span class="ga-count-val" id="stat-basins">&mdash;</span> basins</span>
+            <span class="ga-count-src" title="IBTrACS v04 — NOAA's International Best Track Archive for Climate Stewardship, the global best-track record merged from all regional forecast agencies.">IBTrACS v04</span>
+        </div>
     </div>
 
     <!-- ── Main content ───────────────────────────────────────── -->
@@ -173,160 +178,21 @@
                     <div id="storm-map"></div>
                     <div class="map-overlay-loading" id="map-loading">
                         <div class="ga-spinner"></div>
-                        <span>Loading storms...</span>
-                    </div>
-                    <!-- Floating storm info card on map -->
-                    <div id="map-storm-card" class="map-storm-card" style="display:none;">
-                        <button class="map-storm-card-close" onclick="dismissMapStormCard()" title="Dismiss">&times;</button>
-                        <div class="map-storm-card-header">
-                            <span id="map-card-name" class="map-storm-card-name"></span>
-                            <span id="map-card-badge" class="intensity-badge"></span>
-                        </div>
-                        <div class="map-storm-card-stats">
-                            <div class="map-card-stat">
-                                <span class="map-card-stat-label">Wind</span>
-                                <span id="map-card-wind" class="map-card-stat-value"></span>
-                            </div>
-                            <div class="map-card-stat">
-                                <span class="map-card-stat-label">Pres</span>
-                                <span id="map-card-pres" class="map-card-stat-value"></span>
-                            </div>
-                            <div class="map-card-stat">
-                                <span class="map-card-stat-label">Year</span>
-                                <span id="map-card-year" class="map-card-stat-value"></span>
-                            </div>
-                            <div class="map-card-stat">
-                                <span class="map-card-stat-label">Basin</span>
-                                <span id="map-card-basin" class="map-card-stat-value"></span>
-                            </div>
-                        </div>
-                        <button class="map-storm-card-btn" onclick="viewStormDetail()">
-                            View Storm Detail <span style="margin-left:4px;">&#8594;</span>
-                        </button>
-                    </div>
-                </div>
-                <aside class="browser-sidebar">
-                    <div class="sidebar-section">
-                        <h3 class="sidebar-title">Filter Storms</h3>
-
-                        <label class="filter-label" for="filter-name">Storm Name</label>
-                        <input type="text" id="filter-name" class="ga-input" placeholder="Search (e.g. Katrina)..." oninput="onFilterChange()">
-
-                        <label class="filter-label">Basin</label>
-                        <div class="basin-chips" id="basin-chips">
-                            <button class="basin-chip active" data-basin="ALL" onclick="toggleBasin(this)">All</button>
-                            <button class="basin-chip" data-basin="NA" onclick="toggleBasin(this)">NA</button>
-                            <button class="basin-chip" data-basin="EP" onclick="toggleBasin(this)">EP</button>
-                            <button class="basin-chip" data-basin="WP" onclick="toggleBasin(this)">WP</button>
-                            <button class="basin-chip" data-basin="NI" onclick="toggleBasin(this)">NI</button>
-                            <button class="basin-chip" data-basin="SI" onclick="toggleBasin(this)">SI</button>
-                            <button class="basin-chip" data-basin="SP" onclick="toggleBasin(this)">SP</button>
-                            <button class="basin-chip" data-basin="SA" onclick="toggleBasin(this)">SA</button>
-                        </div>
-
-                        <div class="filter-row">
-                            <div class="filter-col">
-                                <label class="filter-label" for="filter-year-min">Year From</label>
-                                <input type="number" id="filter-year-min" class="ga-input ga-input-sm" placeholder="1842" oninput="onFilterChange()">
-                            </div>
-                            <div class="filter-col">
-                                <label class="filter-label" for="filter-year-max">Year To</label>
-                                <input type="number" id="filter-year-max" class="ga-input ga-input-sm" placeholder="2026" oninput="onFilterChange()">
-                            </div>
-                        </div>
-
-                        <label class="filter-label">Month(s)</label>
-                        <div class="basin-chips" id="month-chips">
-                            <button class="month-chip active" data-month="ALL" onclick="toggleMonth(this)">All</button>
-                            <button class="month-chip" data-month="1" onclick="toggleMonth(this)">Jan</button>
-                            <button class="month-chip" data-month="2" onclick="toggleMonth(this)">Feb</button>
-                            <button class="month-chip" data-month="3" onclick="toggleMonth(this)">Mar</button>
-                            <button class="month-chip" data-month="4" onclick="toggleMonth(this)">Apr</button>
-                            <button class="month-chip" data-month="5" onclick="toggleMonth(this)">May</button>
-                            <button class="month-chip" data-month="6" onclick="toggleMonth(this)">Jun</button>
-                            <button class="month-chip" data-month="7" onclick="toggleMonth(this)">Jul</button>
-                            <button class="month-chip" data-month="8" onclick="toggleMonth(this)">Aug</button>
-                            <button class="month-chip" data-month="9" onclick="toggleMonth(this)">Sep</button>
-                            <button class="month-chip" data-month="10" onclick="toggleMonth(this)">Oct</button>
-                            <button class="month-chip" data-month="11" onclick="toggleMonth(this)">Nov</button>
-                            <button class="month-chip" data-month="12" onclick="toggleMonth(this)">Dec</button>
-                        </div>
-
-                        <label class="filter-label">Min Peak Intensity</label>
-                        <div class="intensity-filter">
-                            <div class="intensity-scale">
-                                <span class="scale-tick" style="left:0%;">0</span>
-                                <span class="scale-tick" style="left:18%;">TD</span>
-                                <span class="scale-tick" style="left:35%;">TS</span>
-                                <span class="scale-tick" style="left:45%;">C1</span>
-                                <span class="scale-tick" style="left:52%;">C2</span>
-                                <span class="scale-tick" style="left:61%;">C3</span>
-                                <span class="scale-tick" style="left:74%;">C4</span>
-                                <span class="scale-tick" style="left:100%;">C5</span>
-                            </div>
-                            <input type="range" id="filter-wind-min" min="0" max="185" value="0" class="ga-range" oninput="onWindFilterChange()">
-                            <div class="range-value-row">
-                                <span id="wind-min-label" class="range-label">0 kt (All)</span>
-                            </div>
-                        </div>
-
-                        <label class="filter-label" for="filter-ace-min">Min ACE</label>
-                        <div class="intensity-filter">
-                            <input type="range" id="filter-ace-min" min="0" max="200" value="0" step="1" class="ga-range" oninput="onAceFilterChange()">
-                            <div class="range-value-row">
-                                <span id="ace-min-label" class="range-label">0 (All)</span>
-                            </div>
-                        </div>
-
-                        <label class="filter-label" for="filter-ri-min">Min 24-h Intensification</label>
-                        <div class="intensity-filter">
-                            <input type="range" id="filter-ri-min" min="0" max="100" value="0" step="5" class="ga-range" oninput="onRIFilterChange()">
-                            <div class="range-value-row">
-                                <span id="ri-min-label" class="range-label">0 kt (All)</span>
-                            </div>
-                        </div>
-
-                        <label class="filter-label" for="filter-rw-max">Max 24-h Weakening</label>
-                        <div class="intensity-filter">
-                            <input type="range" id="filter-rw-max" min="-100" max="0" value="0" step="5" class="ga-range" oninput="onRWFilterChange()">
-                            <div class="range-value-row">
-                                <span id="rw-max-label" class="range-label">0 kt (All)</span>
-                            </div>
-                        </div>
-
-                        <label class="filter-label" for="sort-by">Sort By</label>
-                        <select id="sort-by" class="ga-select" onchange="onFilterChange()">
-                            <option value="year-desc">Year (newest first)</option>
-                            <option value="year-asc">Year (oldest first)</option>
-                            <option value="wind-desc">Peak Intensity (strongest)</option>
-                            <option value="ri-desc">Max 24-h Intensification</option>
-                            <option value="rw-desc">Max 24-h Weakening</option>
-                            <option value="ace-desc">ACE (highest)</option>
-                        </select>
-
-                        <div class="filter-actions">
-                            <button class="ga-btn ga-btn-secondary" onclick="resetFilters()">Reset</button>
-                        </div>
+                        <span>Loading storms&hellip;</span>
                     </div>
 
-                    <div class="sidebar-section filter-stats-section">
-                        <div class="filter-stats">
-                            <span class="stat-highlight" id="filtered-count">0</span>
-                            <span class="stat-of">of</span>
-                            <span id="total-count">0</span>
-                            <span class="stat-label-inline">storms</span>
-                        </div>
-                        <div class="view-toggle">
-                            <button class="view-toggle-btn" data-view="cluster" onclick="setMapView('cluster')" title="Group nearby storms into numbered clusters — best for scanning storm counts at low zoom">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><text x="12" y="16" text-anchor="middle" font-size="12" fill="currentColor" stroke="none">#</text></svg>
-                                Clusters
-                            </button>
+                    <!-- Map display (top-right): track/cluster view, the two
+                         Tracks-view markers, and fit-to-results. -->
+                    <div class="sb-mapctl" role="group" aria-label="Map display">
+                        <div class="sb-seg view-toggle" role="group" aria-label="Map view">
                             <button class="view-toggle-btn active" data-view="tracks" onclick="setMapView('tracks')" title="Draw each storm's full track line — best for examining paths and landfalls">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17 C8 9, 16 5, 21 12"/></svg>
-                                Tracks
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 17c5-8 13-12 18-5"/></svg>Tracks
+                            </button>
+                            <button class="view-toggle-btn" data-view="cluster" onclick="setMapView('cluster')" title="Group nearby storms into numbered clusters — best for scanning storm counts at low zoom">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="8" cy="9" r="4"/><circle cx="16" cy="15" r="5"/></svg>Clusters
                             </button>
                         </div>
-                        <div class="track-dot-toggles" id="track-dot-toggles">
+                        <div class="sb-dots track-dot-toggles" id="track-dot-toggles">
                             <label class="dot-toggle" title="Mark each storm's first track point (Tracks view; shown when 3,000 or fewer storms match)">
                                 <input type="checkbox" id="toggle-genesis-dots" checked onchange="onDotToggleChange()">
                                 <span class="dot-swatch dot-swatch-genesis"></span>Genesis
@@ -336,26 +202,184 @@
                                 <span class="dot-swatch dot-swatch-lmi"></span>LMI
                             </label>
                         </div>
+                        <button class="sb-iconbtn" type="button" onclick="fitMapToResults()" title="Zoom the map to the storms in the list" aria-label="Zoom to matching storms">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+                        </button>
                     </div>
 
-                    <!-- Selected storm card -->
-                    <div id="storm-card" class="sidebar-section storm-card" style="display:none;">
-                        <div class="storm-card-header">
-                            <h3 id="card-name" class="storm-card-name"></h3>
-                            <span id="card-cat-badge" class="intensity-badge"></span>
+                    <!-- Saffir-Simpson key (bottom-left), one compact row -->
+                    <div class="sb-legend" id="sb-legend" title="Peak / local intensity, Saffir-Simpson scale (1-min sustained wind, kt): TD <34 · TS 34-63 · Cat 1 64-82 · Cat 2 83-95 · Cat 3 96-112 · Cat 4 113-136 · Cat 5 137+">
+                        <span class="sb-legend-t">Intensity</span>
+                        <span class="sb-legend-k"><i style="background:#60a5fa"></i>TD</span>
+                        <span class="sb-legend-k"><i style="background:#34d399"></i>TS</span>
+                        <span class="sb-legend-k"><i style="background:#fbbf24"></i>1</span>
+                        <span class="sb-legend-k"><i style="background:#fb923c"></i>2</span>
+                        <span class="sb-legend-k"><i style="background:#f87171"></i>3</span>
+                        <span class="sb-legend-k"><i style="background:#ef4444"></i>4</span>
+                        <span class="sb-legend-k"><i style="background:#dc2626"></i>5</span>
+                        <span class="sb-legend-k sb-legend-et"><i></i>Non-tropical</span>
+                    </div>
+
+                    <!-- Selected storm. ONE card (it used to be two: this one and
+                         a second copy at the foot of the sidebar). -->
+                    <div id="map-storm-card" class="map-storm-card" style="display:none;" role="region" aria-label="Selected storm">
+                        <button class="map-storm-card-close" onclick="dismissMapStormCard()" title="Clear the selection" aria-label="Clear the selection">&times;</button>
+                        <div class="map-storm-card-header">
+                            <span id="map-card-badge" class="intensity-badge"></span>
+                            <div class="map-storm-card-titles">
+                                <div id="map-card-name" class="map-storm-card-name"></div>
+                                <div id="map-card-sub" class="map-storm-card-sub"></div>
+                            </div>
                         </div>
-                        <button class="ga-btn ga-btn-primary storm-detail-pulse" onclick="viewStormDetail()" style="margin-bottom:10px;font-size:0.88rem;padding:10px 14px;font-weight:700;letter-spacing:0.3px;">View Storm Detail <span style="margin-left:4px;">&#8594;</span></button>
-                        <div class="storm-card-meta">
-                            <div class="card-row"><span class="card-label">Year</span><span id="card-year" class="card-value"></span></div>
-                            <div class="card-row"><span class="card-label">Basin</span><span id="card-basin" class="card-value"></span></div>
-                            <div class="card-row"><span class="card-label">Peak Wind</span><span id="card-wind" class="card-value mono"></span></div>
-                            <div class="card-row"><span class="card-label">Min Pressure</span><span id="card-pres" class="card-value mono"></span></div>
-                            <div class="card-row"><span class="card-label">Duration</span><span id="card-dates" class="card-value"></span></div>
-                            <div class="card-row"><span class="card-label" title="Accumulated Cyclone Energy — a measure of a storm's total intensity over its lifetime, summing the square of max wind every 6 hours. Higher = stronger and/or longer-lived.">ACE</span><span id="card-ace" class="card-value mono"></span></div>
-                            <div id="card-hursat-row" class="card-row"><span class="card-label" title="Animated IR imagery in the storm detail view. Served from MergIR (1998+), GridSat-B1 (1980+), or HURSAT-B1 (1978–2015) — the viewer shows which.">IR Archive</span><span id="card-hursat" class="card-value"></span></div>
-                            <div id="card-tc-radar" class="card-row" style="display:none;"><span class="card-label">TC-RADAR</span><span id="card-tc-radar-value" class="card-value"></span></div>
+                        <div class="map-storm-card-stats">
+                            <div class="map-card-stat"><span id="map-card-wind" class="map-card-stat-value"></span><span class="map-card-stat-label">Peak wind</span></div>
+                            <div class="map-card-stat"><span id="map-card-pres" class="map-card-stat-value"></span><span class="map-card-stat-label">Min pressure</span></div>
+                            <div class="map-card-stat"><span id="map-card-ace" class="map-card-stat-value"></span><span class="map-card-stat-label" title="Accumulated Cyclone Energy — a measure of a storm's total intensity over its lifetime, summing the square of max wind every 6 hours. Higher = stronger and/or longer-lived.">ACE</span></div>
+                            <div class="map-card-stat"><span id="map-card-dur" class="map-card-stat-value"></span><span class="map-card-stat-label">As a TC</span></div>
+                        </div>
+                        <div id="map-card-tags" class="map-storm-card-tags"></div>
+                        <div class="map-storm-card-actions">
+                            <button class="map-storm-card-btn storm-detail-pulse" onclick="viewStormDetail()">Open Storm Detail <span aria-hidden="true">&rarr;</span></button>
+                            <button class="map-storm-card-btn2" onclick="addSelectedToCompare()" title="Add this storm to Compare Storms">+ Compare</button>
                         </div>
                     </div>
+                </div>
+
+                <aside class="browser-sidebar sb" aria-label="Find storms">
+                    <div class="sb-top">
+                        <div class="sb-search">
+                            <svg class="sb-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                            <input type="search" id="filter-name" class="sb-search-input" placeholder="Search by name (e.g. Katrina)" oninput="onFilterChange()" autocomplete="off" spellcheck="false" aria-label="Search storms by name">
+                        </div>
+
+                        <div class="basin-chips sb-basins" id="basin-chips" role="group" aria-label="Basin">
+                            <button class="basin-chip active" data-basin="ALL" onclick="toggleBasin(this)">All</button>
+                            <button class="basin-chip" data-basin="NA" onclick="toggleBasin(this)" title="North Atlantic">NA</button>
+                            <button class="basin-chip" data-basin="EP" onclick="toggleBasin(this)" title="East Pacific">EP</button>
+                            <button class="basin-chip" data-basin="WP" onclick="toggleBasin(this)" title="West Pacific">WP</button>
+                            <button class="basin-chip" data-basin="NI" onclick="toggleBasin(this)" title="North Indian">NI</button>
+                            <button class="basin-chip" data-basin="SI" onclick="toggleBasin(this)" title="South Indian">SI</button>
+                            <button class="basin-chip" data-basin="SP" onclick="toggleBasin(this)" title="South Pacific">SP</button>
+                            <button class="basin-chip" data-basin="SA" onclick="toggleBasin(this)" title="South Atlantic">SA</button>
+                        </div>
+
+                        <button type="button" class="sb-filters-toggle" id="sb-filters-toggle" aria-expanded="false" aria-controls="sb-filters" onclick="toggleBrowserFilters()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+                            <span>Filters</span>
+                            <span class="sb-badge" id="sb-filter-count" hidden></span>
+                            <span class="sb-filters-sum" id="sb-filter-sum"></span>
+                            <svg class="sb-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                        </button>
+
+                        <div class="sb-filters" id="sb-filters" hidden>
+                            <div class="sb-field">
+                                <div class="sb-field-head">
+                                    <label class="filter-label" for="filter-year-min">Years</label>
+                                    <button type="button" class="sb-mini-link" onclick="setBrowserYears(1980, null)" title="Storms since 1980 — the satellite era, with IR imagery for every storm">Since 1980</button>
+                                </div>
+                                <div class="sb-dual" id="sb-year-dual">
+                                    <div class="sb-dual-track"><div class="sb-dual-fill" id="sb-year-fill"></div></div>
+                                    <input type="range" id="sb-year-lo" min="1842" max="2026" value="1842" step="1" aria-label="First year">
+                                    <input type="range" id="sb-year-hi" min="1842" max="2026" value="2026" step="1" aria-label="Last year">
+                                </div>
+                                <div class="sb-yr-inputs">
+                                    <input type="number" id="filter-year-min" class="ga-input ga-input-sm" placeholder="1842" inputmode="numeric" oninput="onYearInput()" aria-label="Year from">
+                                    <span aria-hidden="true">&ndash;</span>
+                                    <input type="number" id="filter-year-max" class="ga-input ga-input-sm" placeholder="2026" inputmode="numeric" oninput="onYearInput()" aria-label="Year to">
+                                </div>
+                            </div>
+
+                            <div class="sb-field">
+                                <label class="filter-label">Months active</label>
+                                <div class="basin-chips sb-months" id="month-chips" role="group" aria-label="Months active">
+                                    <button class="month-chip active" data-month="ALL" onclick="toggleMonth(this)">All</button>
+                                    <button class="month-chip" data-month="1" onclick="toggleMonth(this)">Jan</button>
+                                    <button class="month-chip" data-month="2" onclick="toggleMonth(this)">Feb</button>
+                                    <button class="month-chip" data-month="3" onclick="toggleMonth(this)">Mar</button>
+                                    <button class="month-chip" data-month="4" onclick="toggleMonth(this)">Apr</button>
+                                    <button class="month-chip" data-month="5" onclick="toggleMonth(this)">May</button>
+                                    <button class="month-chip" data-month="6" onclick="toggleMonth(this)">Jun</button>
+                                    <button class="month-chip" data-month="7" onclick="toggleMonth(this)">Jul</button>
+                                    <button class="month-chip" data-month="8" onclick="toggleMonth(this)">Aug</button>
+                                    <button class="month-chip" data-month="9" onclick="toggleMonth(this)">Sep</button>
+                                    <button class="month-chip" data-month="10" onclick="toggleMonth(this)">Oct</button>
+                                    <button class="month-chip" data-month="11" onclick="toggleMonth(this)">Nov</button>
+                                    <button class="month-chip" data-month="12" onclick="toggleMonth(this)">Dec</button>
+                                </div>
+                            </div>
+
+                            <div class="sb-field">
+                                <div class="sb-field-head">
+                                    <label class="filter-label" for="filter-wind-min">Min peak intensity</label>
+                                    <span id="wind-min-label" class="range-label sb-val">Any</span>
+                                </div>
+                                <div class="intensity-filter">
+                                    <input type="range" id="filter-wind-min" min="0" max="185" value="0" class="ga-range sb-range-ss" oninput="onWindFilterChange()">
+                                    <!-- ticks at each category's lower bound on the 0-185 kt
+                                         slider: TS 34, Cat 1 64, 2 83, 3 96, 4 113, 5 137 -->
+                                    <div class="intensity-scale">
+                                        <span class="scale-tick" style="left:18.4%;">TS</span>
+                                        <span class="scale-tick" style="left:34.6%;">C1</span>
+                                        <span class="scale-tick" style="left:44.9%;">C2</span>
+                                        <span class="scale-tick" style="left:51.9%;">C3</span>
+                                        <span class="scale-tick" style="left:61.1%;">C4</span>
+                                        <span class="scale-tick" style="left:74.1%;">C5</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="sb-field">
+                                <div class="sb-field-head">
+                                    <label class="filter-label" for="filter-ace-min" title="Accumulated Cyclone Energy">Min ACE</label>
+                                    <span id="ace-min-label" class="range-label sb-val">Any</span>
+                                </div>
+                                <input type="range" id="filter-ace-min" min="0" max="200" value="0" step="1" class="ga-range" oninput="onAceFilterChange()">
+                            </div>
+
+                            <div class="sb-field">
+                                <div class="sb-field-head">
+                                    <label class="filter-label" for="filter-ri-min">Min 24-h intensification</label>
+                                    <span id="ri-min-label" class="range-label sb-val">Any</span>
+                                </div>
+                                <input type="range" id="filter-ri-min" min="0" max="100" value="0" step="5" class="ga-range" oninput="onRIFilterChange()">
+                            </div>
+
+                            <div class="sb-field">
+                                <div class="sb-field-head">
+                                    <label class="filter-label" for="filter-rw-max">Max 24-h weakening</label>
+                                    <span id="rw-max-label" class="range-label sb-val">Any</span>
+                                </div>
+                                <input type="range" id="filter-rw-max" min="-100" max="0" value="0" step="5" class="ga-range sb-range-rev" oninput="onRWFilterChange()">
+                            </div>
+
+                            <div class="sb-filters-foot">
+                                <button type="button" class="sb-reset" onclick="resetFilters()">Reset all filters</button>
+                                <button type="button" class="sb-done" onclick="toggleBrowserFilters(false)">Done</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="sb-results-head">
+                        <div class="filter-stats" aria-live="polite">
+                            <span class="stat-highlight" id="filtered-count">0</span>
+                            <span class="stat-of">of <span id="total-count">0</span> storms</span>
+                        </div>
+                        <label class="sb-sort">
+                            <span class="sb-sort-lbl">Sort</span>
+                            <select id="sort-by" class="sb-sort-sel" onchange="onFilterChange()" aria-label="Sort storms">
+                                <option value="year-desc">Newest</option>
+                                <option value="year-asc">Oldest</option>
+                                <option value="wind-desc">Strongest</option>
+                                <option value="ace-desc">Highest ACE</option>
+                                <option value="ri-desc">Fastest 24-h intensification</option>
+                                <option value="rw-desc">Fastest 24-h weakening</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div id="sb-results" class="sb-results" role="listbox" aria-label="Matching storms" tabindex="0">
+                        <div class="sb-empty">Loading storms&hellip;</div>
+                    </div>
+                    <div class="sb-hint" id="sb-hint">Click a storm to see its track &middot; double-click to open it</div>
                 </aside>
             </div>
         </section>
@@ -1077,11 +1101,14 @@
 
         <!-- TAB 4: GHOST REANALYSIS (recon-independent intensity estimates) -->
         <section id="tab-reanalysis" class="ga-tab-content" role="tabpanel">
+            <!-- One row: what the dots show, which basins, a Filters popover
+                 for the range/recon/QC query, and the data version + About on
+                 the right. The ranges used to sit in the bar as pairs of
+                 separate one-thumb sliders across two wrapped rows. -->
             <div class="gra-toolbar">
-                <button id="gra-more" class="ga-btn ga-btn-xs gra-more">Filters &amp; options &#9662;</button>
-                <div class="gra-tgroup">
-                    <label>Shade frames by</label>
-                    <div class="gra-seg" id="gra-modes">
+                <div class="gra-tgroup gra-tg-shade">
+                    <label>Shade by</label>
+                    <div class="gra-seg" id="gra-modes" role="group" aria-label="Shade frames by">
                         <button class="active" data-mode="gp">GHOST P<sub>min</sub></button>
                         <button data-mode="gv">GHOST V<sub>max</sub></button>
                         <button data-mode="bp">BT P<sub>min</sub></button>
@@ -1089,51 +1116,20 @@
                         <button data-mode="diff">GHOST &minus; BT</button>
                     </div>
                 </div>
-                <div class="gra-tgroup">
+                <div class="gra-tgroup gra-tg-basin">
                     <label>Basin</label>
-                    <div class="basin-chips" id="gra-basins"></div>
+                    <div class="gra-chips" id="gra-basins" role="group" aria-label="Basins"></div>
                 </div>
-                <div class="gra-tgroup">
-                    <label>Filter by</label>
-                    <div class="gra-seg" id="gra-unit">
-                        <button class="active" data-unit="hPa">P<sub>min</sub></button>
-                        <button data-unit="kt">V<sub>max</sub></button>
-                    </div>
+                <div class="gra-tgroup gra-tg-filters">
+                    <button type="button" id="gra-filters-btn" class="gra-pop-btn" aria-expanded="false" aria-controls="gra-filters-pop">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+                        <span>Filters</span>
+                        <span class="sb-badge" id="gra-fcount" hidden></span>
+                        <svg class="sb-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                    </button>
+                    <span class="gra-fsum" id="gra-fsum"></span>
                 </div>
-                <div class="gra-tgroup">
-                    <label id="gra-obslabel">Observed P<sub>min</sub> (hPa)</label>
-                    <div class="gra-rng">
-                        <input type="range" id="gra-obslo" min="880" max="1020" value="880" step="5">
-                        <input type="range" id="gra-obshi" min="880" max="1020" value="1020" step="5">
-                        <output id="gra-obsout">880&ndash;1020</output>
-                    </div>
-                </div>
-                <div class="gra-tgroup">
-                    <label id="gra-ghlabel">GHOST P<sub>min</sub> (hPa)</label>
-                    <div class="gra-rng">
-                        <input type="range" id="gra-ghlo" min="880" max="1020" value="880" step="5">
-                        <input type="range" id="gra-ghhi" min="880" max="1020" value="1020" step="5">
-                        <output id="gra-ghout">880&ndash;1020</output>
-                    </div>
-                </div>
-                <div class="gra-tgroup">
-                    <label>Season</label>
-                    <div class="gra-rng">
-                        <input type="range" id="gra-yrlo" min="1998" max="2025" value="1998" step="1">
-                        <input type="range" id="gra-yrhi" min="1998" max="2025" value="2025" step="1">
-                        <output id="gra-yrout">1998&ndash;2025</output>
-                    </div>
-                </div>
-                <div class="gra-tgroup">
-                    <label>Filters</label>
-                    <div class="gra-row">
-                        <label class="gra-chk"><input type="checkbox" id="gra-recon"> Recon-proximate only</label>
-                        <label class="gra-chk"><input type="checkbox" id="gra-hidesus" checked> Hide QC-suspect</label>
-                        <button class="ga-btn ga-btn-xs" id="gra-preset">GHOST &ge;15 hPa deeper, non-recon</button>
-                        <button class="ga-btn ga-btn-xs ga-btn-ghost" id="gra-reset">Reset</button>
-                        <button class="ga-btn ga-btn-xs" id="gra-about-btn" title="What is GHOST?">About GHOST</button>
-                    </div>
-                </div>
+                <span class="gra-tb-spacer" aria-hidden="true"></span>
                 <!-- Published data version. The list comes from
                      <root>/versions.json, written by the producer's release
                      manifest — nothing here names a version, so a rollback is
@@ -1142,12 +1138,66 @@
                      (but still shown) when only one version exists or the URL
                      pins one, because a reader always needs to be able to see
                      WHICH version produced the number in front of them. -->
-                <div class="gra-tgroup">
-                    <label>Data version</label>
-                    <div class="gra-row">
-                        <select id="gra-version" class="ga-select ga-select-sm gra-version"
-                                title="Published data version — earlier versions stay reachable so a cited number keeps resolving"></select>
-                        <span id="gra-version-note" class="gra-version-note"></span>
+                <div class="gra-tgroup gra-tg-ver">
+                    <label for="gra-version">Data</label>
+                    <select id="gra-version" class="gra-version"
+                            title="Published data version — earlier versions stay reachable so a cited number keeps resolving"></select>
+                    <span id="gra-version-note" class="gra-version-note"></span>
+                </div>
+                <button type="button" class="gra-about-btn" id="gra-about-btn" title="What is GHOST?">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg>
+                    <span>About GHOST</span>
+                </button>
+
+                <!-- Filters popover -->
+                <div id="gra-filters-pop" class="gra-pop" role="dialog" aria-label="Filter frames" hidden>
+                    <div class="gra-pop-head">
+                        <span class="gra-pop-title">Filter frames</span>
+                        <div class="gra-pop-unit">
+                            <span>in</span>
+                            <div class="gra-seg" id="gra-unit" role="group" aria-label="Filter by">
+                                <button class="active" data-unit="hPa">P<sub>min</sub></button>
+                                <button data-unit="kt">V<sub>max</sub></button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="gra-pop-field">
+                        <div class="gra-pop-fh"><label id="gra-obslabel">Observed P<sub>min</sub> (hPa)</label><output id="gra-obsout">880&ndash;1020</output></div>
+                        <div class="sb-dual gra-dual">
+                            <div class="sb-dual-track"><div class="sb-dual-fill" id="gra-obs-fill"></div></div>
+                            <input type="range" id="gra-obslo" min="880" max="1020" value="880" step="5" aria-label="Observed, low end">
+                            <input type="range" id="gra-obshi" min="880" max="1020" value="1020" step="5" aria-label="Observed, high end">
+                        </div>
+                    </div>
+                    <div class="gra-pop-field">
+                        <div class="gra-pop-fh"><label id="gra-ghlabel">GHOST P<sub>min</sub> (hPa)</label><output id="gra-ghout">880&ndash;1020</output></div>
+                        <div class="sb-dual gra-dual">
+                            <div class="sb-dual-track"><div class="sb-dual-fill" id="gra-gh-fill"></div></div>
+                            <input type="range" id="gra-ghlo" min="880" max="1020" value="880" step="5" aria-label="GHOST, low end">
+                            <input type="range" id="gra-ghhi" min="880" max="1020" value="1020" step="5" aria-label="GHOST, high end">
+                        </div>
+                    </div>
+                    <div class="gra-pop-field">
+                        <div class="gra-pop-fh"><label>Season</label><output id="gra-yrout">1998&ndash;2025</output></div>
+                        <div class="sb-dual gra-dual">
+                            <div class="sb-dual-track"><div class="sb-dual-fill" id="gra-yr-fill"></div></div>
+                            <input type="range" id="gra-yrlo" min="1998" max="2025" value="1998" step="1" aria-label="First season">
+                            <input type="range" id="gra-yrhi" min="1998" max="2025" value="2025" step="1" aria-label="Last season">
+                        </div>
+                    </div>
+                    <div class="gra-pop-checks">
+                        <label class="gra-chk"><input type="checkbox" id="gra-recon">
+                            <span>Recon-proximate only<small>frames with an aircraft pressure fix within &plusmn;3&nbsp;h &mdash; the decisive comparison</small></span></label>
+                        <label class="gra-chk"><input type="checkbox" id="gra-hidesus" checked>
+                            <span>Hide QC-suspect storms<small>large trace-vs-best-track disagreement</small></span></label>
+                    </div>
+                    <div class="gra-pop-preset">
+                        <button type="button" class="gra-preset" id="gra-preset">GHOST &ge;15&nbsp;hPa deeper, non-recon</button>
+                        <span>Preset: frames GHOST reads much deeper than best track, away from reconnaissance.</span>
+                    </div>
+                    <div class="gra-pop-foot">
+                        <button type="button" class="sb-reset" id="gra-reset">Reset all</button>
+                        <button type="button" class="sb-done" id="gra-pop-done">Done</button>
                     </div>
                 </div>
             </div>
@@ -1165,9 +1215,9 @@
                             <span id="gra-ir-name"></span>
                             <span id="gra-ir-basin" class="gra-ir-sub"></span>
                             <span class="gra-ir-acts">
-                            <button id="gra-ir-expand" class="ga-btn ga-btn-xs" title="Expand the satellite view">&#10530;</button>
-                            <button id="gra-ir-card" class="ga-btn ga-btn-xs" title="Save a summary card (PNG) of this storm at this time: the infrared image, the GHOST numbers beside best track, and the storm's lifetime">Summary</button>
-                            <button id="gra-ir-detail" class="ga-btn ga-btn-xs" title="Open the full Storm Detail view at this time">Storm Detail &rarr;</button>
+                            <button id="gra-ir-expand" class="ga-btn ga-btn-xs gra-ir-icon" title="Expand the satellite view" aria-label="Expand the satellite view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg></button>
+                            <button id="gra-ir-card" class="ga-btn ga-btn-xs" title="Save a summary card (PNG) of this storm at this time: the infrared image, the GHOST numbers beside best track, and the storm's lifetime"><svg class="gra-btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>Summary</button>
+                            <button id="gra-ir-detail" class="ga-btn ga-btn-xs gra-ir-primary" title="Open the full Storm Detail view at this time">Storm Detail &rarr;</button>
                             </span>
                             <button id="gra-ir-close" class="gra-ir-x" title="Close">&times;</button>
                         </div>
@@ -1209,10 +1259,13 @@
                     </div>
 
                     <!-- What-is-this panel. Opens once on a first visit (then
-                         remembered), or from the About GHOST button. -->
-                    <div id="gra-about" class="gra-about">
+                         remembered), or from the About GHOST button. The scrim
+                         dims the map behind it and closes it on a click. -->
+                    <div id="gra-about-scrim" class="gra-scrim"></div>
+                    <div id="gra-about" class="gra-about" role="dialog" aria-labelledby="gra-about-h">
                         <button id="gra-about-x" class="gra-about-x" title="Close">&times;</button>
-                        <h3>GHOST &mdash; recon-independent intensity reanalysis</h3>
+                        <div class="gra-about-kicker">About this tab</div>
+                        <h3 id="gra-about-h">GHOST &mdash; recon-independent intensity reanalysis</h3>
                         <p class="gra-about-lede">GHOST estimates tropical cyclone intensity
                             &mdash; <strong>minimum central pressure and maximum sustained
                             wind</strong> &mdash; from geostationary infrared imagery and the
@@ -1444,29 +1497,32 @@
                     </div>
                 </div>
 
-                <aside class="browser-sidebar">
-                    <div class="sidebar-section">
-                        <h3 class="sidebar-title" id="gra-title">Deepest TCs</h3>
+                <aside class="browser-sidebar gra-side" aria-label="GHOST leaderboard">
+                    <div class="gra-side-head">
+                        <h3 class="gra-side-title" id="gra-title">Deepest TCs — GHOST</h3>
                         <div id="gra-sub" class="gra-sub">&mdash;</div>
-                        <input type="text" id="gra-search" class="ga-input ga-input-sm gra-search"
-                               placeholder="Search name or ATCF (e.g. Ioke, WP012006)"
-                               autocomplete="off" spellcheck="false">
+                        <div class="sb-search">
+                            <svg class="sb-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                            <input type="search" id="gra-search" class="sb-search-input gra-search"
+                                   placeholder="Search name or ATCF (e.g. Ioke, WP012006)"
+                                   autocomplete="off" spellcheck="false" aria-label="Search GHOST storms">
+                        </div>
                         <!-- The list's own copy of the toolbar's "Filter by" switch (same state,
-                             setUnit): the toolbar collapses on a phone, and ranking by wind is a
-                             question asked of the list. -->
-                        <div class="gra-rank">
+                             setUnit): the toolbar's copy lives in the Filters popover, and ranking
+                             by wind is a question asked of the list. -->
+                        <div class="gra-rankrow">
                             <span class="gra-rank-lbl">Rank by</span>
-                            <div class="gra-seg" id="gra-unit-list" role="group" aria-label="Rank the list by">
+                            <div class="gra-seg gra-seg-sm" id="gra-unit-list" role="group" aria-label="Rank the list by">
                                 <button class="active" data-unit="hPa">P<sub>min</sub></button>
                                 <button data-unit="kt">V<sub>max</sub></button>
                             </div>
                         </div>
-                        <div class="basin-chips" id="gra-sorts" style="margin-top:8px;">
-                            <button class="basin-chip active" data-sort="ghost">GHOST P<sub>min</sub></button>
-                            <button class="basin-chip" data-sort="bt">BT P<sub>min</sub></button>
-                            <button class="basin-chip" data-sort="diff">|&Delta;|</button>
-                            <button class="basin-chip" data-sort="basin">Basin</button>
-                            <button class="basin-chip" data-sort="year">Season</button>
+                        <div class="gra-chips gra-sorts" id="gra-sorts" role="group" aria-label="Order the list">
+                            <button class="gra-chip active" data-sort="ghost">GHOST P<sub>min</sub></button>
+                            <button class="gra-chip" data-sort="bt">BT P<sub>min</sub></button>
+                            <button class="gra-chip" data-sort="diff" title="Largest disagreement with best track">|&Delta;|</button>
+                            <button class="gra-chip" data-sort="basin">Basin</button>
+                            <button class="gra-chip" data-sort="year">Season</button>
                         </div>
                     </div>
                     <div id="gra-list" class="gra-list"></div>
@@ -1528,10 +1584,10 @@
     <script defer src="lflet_gl.js?v=20261001ui1"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script defer src="skewt.js?v=20261019rc1"></script>
-    <script defer src="global_archive.js?v=20261029qc1"></script>
+    <script defer src="global_archive.js?v=20261030ui1"></script>
     <!-- GHOST Reanalysis tab. Deferred like the rest so execution order holds
          (it reads allTracks/allStorms off global_archive.js), but it does no
          work until switchTab('reanalysis') calls activateGhostRAView(). -->
-    <script defer src="global_archive_ghostra.js?v=20261029qc1"></script>
+    <script defer src="global_archive_ghostra.js?v=20261030ui1"></script>
 </body>
 </html>

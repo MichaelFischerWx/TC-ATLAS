@@ -3,60 +3,109 @@
    Uses CSS variables from tc_radar_styles.css
    ══════════════════════════════════════════════════════════════ */
 
-/* ── Tab bar ──────────────────────────────────────────────── */
+/* ── Archive tokens ─────────────────────────────────────────
+   Shared by the Storm Browser and the GHOST Reanalysis tab so their floating
+   map chrome, panels and controls read as one system. Theme colors still come
+   from tc_radar_styles.css; these only add elevation, radii and the
+   translucent "glass" used for anything floating over a map. */
+:root {
+    --ga-main-top: 88px;            /* measured by JS: page top → <main> */
+    --ga-ctl-h: 32px;
+    --ga-r: 8px;
+    --ga-r-lg: 12px;
+    --ga-shadow-sm: 0 1px 2px rgba(15, 22, 35, .06), 0 1px 3px rgba(15, 22, 35, .07);
+    --ga-shadow-md: 0 6px 18px rgba(15, 22, 35, .10), 0 1px 3px rgba(15, 22, 35, .08);
+    --ga-shadow-lg: 0 18px 48px rgba(15, 22, 35, .20), 0 2px 8px rgba(15, 22, 35, .08);
+    --ga-float-bg: rgba(255, 255, 255, .92);
+    --ga-float-border: rgba(15, 22, 35, .10);
+    --ga-hover: rgba(15, 22, 35, .045);
+    --ga-sel: rgba(0, 80, 48, .085);
+    --ga-sel-ring: rgba(0, 80, 48, .28);
+    --ga-scrim: rgba(10, 14, 20, .32);
+}
+:root[data-theme="dark"] {
+    --ga-shadow-sm: 0 1px 2px rgba(0, 0, 0, .45);
+    --ga-shadow-md: 0 8px 22px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .4);
+    --ga-shadow-lg: 0 20px 56px rgba(0, 0, 0, .6), 0 2px 8px rgba(0, 0, 0, .4);
+    --ga-float-bg: rgba(22, 27, 36, .92);
+    --ga-float-border: rgba(255, 255, 255, .10);
+    --ga-hover: rgba(255, 255, 255, .05);
+    --ga-sel: rgba(74, 155, 110, .17);
+    --ga-sel-ring: rgba(109, 185, 147, .40);
+    --ga-scrim: rgba(0, 0, 0, .5);
+}
+
+/* ── Sub-bar: section tabs + dataset counts ─────────────────
+   The Real-Time Monitor's secondary bar, reproduced: same dark strip in both
+   themes, same tab metrics, orange active underline, counts at the right. */
+.ga-subbar {
+    display: flex;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: 16px;
+    height: 35px;
+    padding: 0 16px;
+    background: #12141c;
+    border-bottom: 1px solid #2a2d38;
+    position: relative;
+    z-index: 2;
+}
 .ga-tabs {
     display: flex;
+    align-items: flex-end;
     gap: 2px;
-    padding: 6px 24px 0;
-    background: var(--navy);
-    border-bottom: 1px solid var(--border);
-    position: relative;
-    z-index: 1;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
 }
+.ga-tabs::-webkit-scrollbar { display: none; }
 .ga-tab {
-    padding: 10px 20px;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 0.82rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: 0 0 auto;
+    padding: 7px 14px 8px;
+    font-family: var(--font-sans);
+    font-size: 13px;
     font-weight: 600;
-    color: var(--slate);
+    line-height: 1.3;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    color: #8b8fa4;
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
     cursor: pointer;
-    transition: all 0.2s;
-    letter-spacing: 0.01em;
-}
-.ga-tab:hover {
-    color: var(--text);
-    background: rgba(15, 22, 35,0.03);
-}
-.ga-tab.active {
-    color: var(--um-green);
-    border-bottom-color: var(--um-green);
-}
-/* Cross-page tab — TC Climatology lives on its own page, but is shown
-   here in the tab strip so users discover the destination without
-   leaving the tab metaphor. Styled subtly different so the navigation
-   nature is visible (text-decoration: none keeps it from underlining
-   like a default link). */
-.ga-tab-link {
     text-decoration: none;
-    color: var(--slate);
-    background: transparent;
-    border-bottom: 2px solid transparent;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 10px 20px;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 0.82rem;
-    font-weight: 600;
-    transition: all 0.2s;
-    letter-spacing: 0.01em;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
-.ga-tab-link:hover {
-    color: var(--text);
-    background: rgba(15, 22, 35,0.03);
+.ga-tab:hover { color: #e6e8ee; background: rgba(255, 255, 255, 0.035); }
+.ga-tab.active { color: var(--um-orange); border-bottom-color: var(--um-orange); background: transparent; }
+.ga-tab:focus-visible { outline-offset: -2px; }
+/* Links to other pages: set apart from the tabs by a rule + outbound arrow */
+.ga-tab-sep { flex: none; align-self: center; width: 1px; height: 16px; margin: 0 6px; background: #2f3340; }
+.ga-tab-link { color: #7f8498; font-weight: 500; }
+.ga-tab-out { width: 11px; height: 11px; opacity: .65; margin-left: 1px; }
+.ga-tab-link:hover .ga-tab-out { opacity: 1; }
+.ga-tab .tab-short { display: none; }
+.ga-subbar-stats { display: flex; align-items: center; gap: 14px; flex: none; }
+.ga-count { font-size: 11px; color: #8b8fa4; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ga-count-val { color: #e2e4ea; font-weight: 600; margin-right: 2px; }
+.ga-count-src {
+    font-size: 10px; font-weight: 600; letter-spacing: .02em; white-space: nowrap;
+    color: #f9a46b; border: 1px solid rgba(244, 115, 33, .45);
+    padding: 1px 7px; border-radius: 999px; cursor: help;
+}
+@media (max-width: 1100px) { .ga-subbar-stats .ga-count-src { display: none; } }
+@media (max-width: 920px)  { .ga-subbar-stats { display: none; } }
+@media (max-width: 640px) {
+    .ga-subbar { padding: 0 6px; height: 37px; }
+    .ga-tab { padding: 8px 10px; }
+    .ga-tab .tab-full { display: none; }
+    .ga-tab .tab-short { display: inline; }
+    .ga-tab-sep { margin: 0 2px; }
 }
 
 /* ── Tab content ──────────────────────────────────────────── */
@@ -370,15 +419,19 @@ input[type="range"].ga-range::-moz-range-thumb {
 
 /* ══════════════════════════════════════════════════════════════
    TAB 1: STORM BROWSER
+   Map on the left with its own floating chrome (view controls top-right,
+   Saffir-Simpson key bottom-left, the selected-storm card top-left); the
+   sidebar is search → basin → collapsible filters → the results list.
    ══════════════════════════════════════════════════════════════ */
 
 .browser-layout {
     display: flex;
-    /* Viewport minus everything above the map: body margin (8) + topbar
-       (53) + dataset-stats-strip (27) + tab row (50) = 138. The old
-       94px value predated the stats strip, so the map ran ~44px past
-       the viewport and clipped the bottom of the Saffir-Simpson legend. */
-    height: calc(100vh - 138px);
+    /* Viewport minus the chrome above <main>, MEASURED (--ga-main-top, set by
+       _gaMeasureChrome in global_archive.js) so a header change can't push the
+       map past the fold again. dvh where supported, for mobile URL bars. */
+    height: calc(100vh - var(--ga-main-top));
+    height: calc(100dvh - var(--ga-main-top));
+    min-height: 420px;
 }
 .browser-map-wrap {
     flex: 1;
@@ -404,6 +457,140 @@ input[type="range"].ga-range::-moz-range-thumb {
     z-index: 500;
 }
 
+/* ── floating map chrome ── */
+.sb-mapctl, .sb-legend, .map-storm-card {
+    background: var(--ga-float-bg);
+    border: 1px solid var(--ga-float-border);
+    box-shadow: var(--ga-shadow-md);
+    -webkit-backdrop-filter: blur(12px) saturate(1.2);
+    backdrop-filter: blur(12px) saturate(1.2);
+    color: var(--text);
+}
+.sb-mapctl {
+    position: absolute; top: 10px; right: 10px; z-index: 900;
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px; border-radius: 11px;
+}
+.sb-seg { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--ga-hover); }
+.sb-seg .view-toggle-btn {
+    display: inline-flex; align-items: center; gap: 5px; height: 26px;
+    padding: 0 10px; border: 0; border-radius: 6px; background: transparent;
+    font: 600 0.74rem var(--font-sans); color: var(--slate); cursor: pointer;
+    transition: background .15s, color .15s;
+}
+.sb-seg .view-toggle-btn svg { width: 13px; height: 13px; }
+.sb-seg .view-toggle-btn:hover { color: var(--text); }
+.sb-seg .view-toggle-btn.active { background: var(--um-green); color: #fff; box-shadow: var(--ga-shadow-sm); }
+.sb-dots { display: flex; align-items: center; gap: 10px; padding: 0 6px; border-left: 1px solid var(--border-light); border-right: 1px solid var(--border-light); height: 22px; }
+.dot-toggle {
+    display: flex; align-items: center; gap: 5px;
+    font: 500 0.72rem var(--font-sans); color: var(--text);
+    cursor: pointer; user-select: none; white-space: nowrap;
+}
+.dot-toggle input[type="checkbox"] { accent-color: var(--um-green); margin: 0; cursor: pointer; }
+.dot-swatch {
+    width: 9px; height: 9px; border-radius: 50%; display: inline-block;
+    border: 1.5px solid #fff; box-shadow: 0 0 0 1px rgba(15, 22, 35, .25);
+}
+.dot-swatch-genesis { background: #60a5fa; }
+.dot-swatch-lmi { background: #f59e0b; }
+.sb-iconbtn {
+    width: 30px; height: 30px; display: grid; place-items: center;
+    border: 0; border-radius: 7px; background: transparent; color: var(--text); cursor: pointer;
+}
+.sb-iconbtn:hover { background: var(--ga-hover); color: var(--um-green); }
+.sb-iconbtn svg { width: 16px; height: 16px; }
+
+.sb-legend {
+    position: absolute; left: 10px; bottom: 10px; z-index: 900;
+    display: flex; align-items: center; gap: 9px;
+    padding: 6px 11px; border-radius: 999px;
+    font-size: 0.7rem; font-weight: 600; font-variant-numeric: tabular-nums;
+    pointer-events: auto; cursor: help; white-space: nowrap;
+}
+.sb-legend-t { color: var(--slate); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; font-size: 0.62rem; margin-right: 1px; }
+.sb-legend-k { display: inline-flex; align-items: center; gap: 4px; }
+.sb-legend-k i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .9), 0 0 0 2.5px rgba(15, 22, 35, .12); }
+.sb-legend-et i { border-radius: 2px; height: 3px; width: 14px; box-shadow: none;
+    background: repeating-linear-gradient(90deg, #6b7280 0 4px, transparent 4px 7px); }
+.sb-legend-et { color: var(--slate); font-weight: 500; }
+
+/* The cursor lat/lon readout sits above the key */
+#tab-browser .ga-latlon-readout { bottom: 52px; }
+
+/* ── selected-storm card ── */
+.map-storm-card {
+    position: absolute; top: 10px; left: 52px; z-index: 950;
+    width: 316px; padding: 14px 14px 12px; border-radius: var(--ga-r-lg);
+    animation: ga-card-in .22s ease;
+}
+@keyframes ga-card-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.map-storm-card-close {
+    position: absolute; top: 8px; right: 8px;
+    width: 26px; height: 26px; display: grid; place-items: center;
+    border: 0; border-radius: 7px; background: transparent;
+    color: var(--slate); font-size: 18px; line-height: 1; cursor: pointer;
+}
+.map-storm-card-close:hover { color: var(--text); background: var(--ga-hover); }
+.map-storm-card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding-right: 24px; }
+.map-storm-card-header .intensity-badge {
+    flex: none; min-width: 46px; text-align: center; padding: 5px 8px;
+    border-radius: 8px; font-size: 0.74rem; font-weight: 700; letter-spacing: .01em;
+}
+.map-storm-card-titles { min-width: 0; }
+.map-storm-card-name {
+    font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em; line-height: 1.2;
+    color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.map-storm-card-sub { font-size: 0.74rem; color: var(--slate); margin-top: 1px; font-variant-numeric: tabular-nums; }
+.map-storm-card-stats {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px;
+    padding: 9px 4px; margin-bottom: 10px;
+    border-top: 1px solid var(--border-light); border-bottom: 1px solid var(--border-light);
+}
+.map-card-stat { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 0; }
+.map-card-stat-value {
+    font-size: 0.86rem; font-weight: 700; color: var(--text);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.map-card-stat-label { font-size: 0.66rem; color: var(--slate); white-space: nowrap; }
+.map-storm-card-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; }
+.map-storm-card-tags:empty { display: none; }
+.sb-tag {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 0.68rem; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+    background: var(--ga-hover); color: var(--slate); white-space: nowrap;
+}
+.sb-tag .icon-inline { width: 11px; height: 11px; }
+.sb-tag-ok { background: var(--um-green-tint); color: var(--um-green); }
+.sb-tag-radar { background: rgba(244, 115, 33, .12); color: var(--um-orange-text); }
+.sb-tag-ri { background: rgba(239, 68, 68, .12); color: #dc2626; }
+:root[data-theme="dark"] .sb-tag-ri { color: #f87171; }
+.map-storm-card-actions { display: flex; gap: 8px; }
+.map-storm-card-btn {
+    flex: 1; height: 36px; border: none; border-radius: 9px;
+    background: var(--um-green); color: #fff;
+    font: 700 0.82rem var(--font-sans); letter-spacing: .01em; cursor: pointer;
+    transition: background .15s, transform .1s;
+}
+.map-storm-card-btn:hover { background: var(--um-green-deep); }
+.map-storm-card-btn:active { transform: translateY(1px); }
+.map-storm-card-btn2 {
+    flex: none; height: 36px; padding: 0 12px; border-radius: 9px;
+    border: 1px solid var(--border-light); background: transparent; color: var(--text);
+    font: 600 0.78rem var(--font-sans); cursor: pointer;
+}
+.map-storm-card-btn2:hover { border-color: var(--um-green); color: var(--um-green); }
+.storm-detail-pulse { animation: detail-btn-glow 2s ease-in-out 0.3s 2; }
+@keyframes detail-btn-glow {
+    0%, 100% { box-shadow: none; }
+    50% { box-shadow: 0 0 0 4px rgba(0, 80, 48, .16), 0 0 18px rgba(244, 115, 33, .35); }
+}
+
+/* ── sidebar ── */
 .browser-sidebar {
     width: 300px;
     min-width: 300px;
@@ -413,331 +600,233 @@ input[type="range"].ga-range::-moz-range-thumb {
     display: flex;
     flex-direction: column;
 }
-
-.sidebar-section {
-    padding: 16px;
-    border-bottom: 1px solid var(--border);
+.browser-sidebar.sb { width: 348px; min-width: 348px; overflow: hidden; }
+.sb-top {
+    flex: none; display: flex; flex-direction: column; gap: 10px;
+    padding: 14px 14px 12px; border-bottom: 1px solid var(--border);
+    max-height: 72%; overflow-y: auto; overscroll-behavior: contain;
 }
-.sidebar-title {
-    font-size: 0.78rem;
-    font-weight: 600;
-    color: var(--slate);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 12px;
+/* nothing in the top block may shrink: when the filter panel opens the block
+   scrolls instead (a flex column would otherwise squash the Filters button) */
+.sb-top > * { flex-shrink: 0; }
+.sb-search { position: relative; }
+.sb-search-ico {
+    position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+    width: 16px; height: 16px; color: var(--slate); pointer-events: none;
 }
+.sb-search-input {
+    width: 100%; height: 38px; padding: 0 12px 0 35px;
+    border: 1px solid var(--border-light); border-radius: 10px;
+    background: var(--surface); color: var(--text);
+    font: 500 0.86rem var(--font-sans); outline: none;
+    transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.sb-search-input::placeholder { color: var(--text-dim); font-weight: 400; }
+.sb-search-input:focus { border-color: var(--um-green); background: var(--surface-raised); box-shadow: 0 0 0 3px var(--um-green-tint); }
+.sb-search-input::-webkit-search-cancel-button { cursor: pointer; }
 
 .filter-label {
-    display: block;
-    font-size: 0.72rem;
-    color: var(--text-dim);
-    font-weight: 500;
-    margin: 10px 0 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    display: block; font-size: 0.68rem; color: var(--slate); font-weight: 600;
+    margin: 10px 0 4px; text-transform: uppercase; letter-spacing: 0.05em;
 }
+.sb .filter-label { margin: 0; }
 
-.basin-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-}
+.basin-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .basin-chip,
 .month-chip {
-    padding: 3px 10px;
-    border-radius: 12px;
-    font-family: 'DM Sans', sans-serif;
+    padding: 3px 10px; border-radius: 12px;
+    font-family: var(--font-sans); font-size: 0.72rem; font-weight: 600;
+    background: var(--surface); color: var(--slate);
+    border: 1px solid var(--border); cursor: pointer; transition: all 0.15s;
+}
+.basin-chip:hover, .month-chip:hover { border-color: var(--blue); color: var(--text); }
+.basin-chip.active, .month-chip.active { background: var(--blue); color: white; border-color: var(--blue); }
+
+/* basin + month pickers in the sidebar: even grids instead of ragged wraps */
+.sb-basins { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; }
+.sb-months { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.sb-basins .basin-chip, .sb-months .month-chip {
+    height: 30px; padding: 0; border-radius: 7px; text-align: center;
+    border-color: var(--border-light); background: transparent; color: var(--text);
     font-size: 0.72rem;
-    font-weight: 600;
+}
+.sb-months .month-chip { height: 28px; font-weight: 500; }
+.sb-basins .basin-chip:hover, .sb-months .month-chip:hover { border-color: var(--um-green); color: var(--um-green); }
+.sb-basins .basin-chip.active, .sb-months .month-chip.active {
+    background: var(--um-green); border-color: var(--um-green); color: #fff;
+}
+
+.sb-filters-toggle {
+    display: flex; align-items: center; gap: 8px; width: 100%; height: 34px;
+    padding: 0 10px; border: 1px solid var(--border-light); border-radius: 9px;
+    background: transparent; color: var(--text);
+    font: 600 0.8rem var(--font-sans); cursor: pointer; text-align: left;
+    transition: border-color .15s, background .15s;
+}
+.sb-filters-toggle:hover { border-color: var(--um-green); }
+.sb-filters-toggle.is-open { background: var(--surface); }
+.sb-filters-toggle svg { width: 15px; height: 15px; flex: none; color: var(--slate); }
+.sb-filters-sum {
+    flex: 1; min-width: 0; text-align: right; color: var(--slate);
+    font-weight: 500; font-size: 0.72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sb-badge {
+    min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+    background: var(--um-orange); color: #fff; font-size: 0.66rem; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.sb-badge[hidden] { display: none; }
+.sb-chev { transition: transform .2s; }
+.sb-filters-toggle.is-open .sb-chev { transform: rotate(180deg); }
+
+.sb-filters {
+    display: flex; flex-direction: column; gap: 16px;
+    padding: 14px 12px 12px; border: 1px solid var(--border); border-radius: 10px;
     background: var(--surface);
-    color: var(--slate);
-    border: 1px solid var(--border);
-    cursor: pointer;
-    transition: all 0.15s;
 }
-.basin-chip:hover,
-.month-chip:hover {
-    border-color: var(--blue);
-    color: var(--text);
+.sb-filters[hidden] { display: none; }
+.sb-field-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.sb-val { font-size: 0.74rem; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.sb-mini-link {
+    border: 0; background: none; padding: 0; cursor: pointer;
+    color: var(--um-green); font: 600 0.72rem var(--font-sans);
 }
-.basin-chip.active,
-.month-chip.active {
-    background: var(--blue);
-    color: white;
-    border-color: var(--blue);
-}
+.sb-mini-link:hover { text-decoration: underline; }
 
-.filter-row {
-    display: flex;
-    gap: 8px;
+/* dual-thumb range: two stacked native inputs, thumbs only take the pointer */
+.sb-dual { position: relative; height: 22px; }
+.sb-dual-track {
+    position: absolute; left: 8px; right: 8px; top: 50%; height: 4px; margin-top: -2px;
+    border-radius: 2px; background: var(--border-light);
 }
-.filter-col {
-    flex: 1;
+.sb-dual-fill { position: absolute; top: 0; bottom: 0; left: 0; right: 0; border-radius: 2px; background: var(--um-green); }
+.sb-dual input[type=range] {
+    position: absolute; inset: 0; width: 100%; height: 22px; margin: 0;
+    background: transparent; pointer-events: none;
+    -webkit-appearance: none; appearance: none;
 }
+.sb-dual input[type=range]:focus { outline: none; }
+.sb-dual input[type=range]::-webkit-slider-runnable-track { height: 22px; background: transparent; }
+.sb-dual input[type=range]::-moz-range-track { background: transparent; }
+.sb-dual input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; pointer-events: auto; cursor: grab;
+    width: 16px; height: 16px; margin-top: 3px; border-radius: 50%;
+    background: var(--surface-raised); border: 2px solid var(--um-green); box-shadow: var(--ga-shadow-sm);
+}
+.sb-dual input[type=range]::-moz-range-thumb {
+    pointer-events: auto; cursor: grab; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--surface-raised); border: 2px solid var(--um-green);
+}
+.sb-dual input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--um-green-tint); }
+.sb-yr-inputs { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: var(--slate); }
+.sb-yr-inputs .ga-input { flex: 1; height: 30px; text-align: center; background: var(--surface-raised); border-color: var(--border-light); font-variant-numeric: tabular-nums; }
 
-.intensity-filter {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+/* single-thumb ranges inside the sidebar */
+.sb input[type="range"].ga-range { height: 4px; margin: 8px 0 4px; background: var(--border-light); border-radius: 2px; }
+.sb input[type="range"].ga-range::-webkit-slider-thumb {
+    width: 16px; height: 16px; margin-top: -6px;
+    background: var(--surface-raised); border: 2px solid var(--um-green); box-shadow: var(--ga-shadow-sm);
 }
-.intensity-scale {
-    position: relative;
-    height: 16px;
-    margin: 0 7px;
+.sb input[type="range"].ga-range::-moz-range-thumb { width: 12px; height: 12px; background: var(--surface-raised); border: 2px solid var(--um-green); }
+/* the intensity slider's track IS the Saffir-Simpson scale */
+.sb input[type="range"].sb-range-ss {
+    height: 6px;
+    background: linear-gradient(90deg, #94a3b8 0 18.4%, #34d399 18.4% 34.6%, #fbbf24 34.6% 44.9%,
+        #fb923c 44.9% 51.9%, #f87171 51.9% 61.1%, #ef4444 61.1% 74.1%, #dc2626 74.1%);
 }
+.sb input[type="range"].sb-range-ss::-webkit-slider-thumb { margin-top: -5px; }
+
+.intensity-filter { display: flex; flex-direction: column; gap: 2px; }
+.intensity-scale { position: relative; height: 14px; margin: 0 8px; }
 .scale-tick {
-    position: absolute;
-    transform: translateX(-50%);
-    font-size: 0.62rem;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-dim);
-    letter-spacing: 0;
+    position: absolute; transform: translateX(-50%);
+    font-size: 0.6rem; font-weight: 600; font-variant-numeric: tabular-nums;
+    color: var(--text-dim); letter-spacing: 0;
 }
-/* Intensity scale ticks (TD/TS/C1–C5) overlap below ~480 px because
-   they're absolutely positioned at fixed percentages on a narrow
-   container. Drop the "TD" label (rest stay legible at 0.78rem) and
-   bump the others so they read on phone screens. */
-@media (max-width: 480px) {
-    .scale-tick { font-size: 0.78rem; }
-    /* Hide TD (the second tick at 18%); it sits too close to TS (35%)
-       to remain legible at the larger font on phone widths. */
-    .intensity-scale .scale-tick:nth-child(2) { display: none; }
-}
-.range-value-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-.range-label {
-    font-size: 0.72rem;
-    color: var(--text-dim);
-    font-variant-numeric: tabular-nums;
-}
+.range-label { font-size: 0.72rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.sb .range-label.sb-val { color: var(--text); }
 
-.filter-actions {
-    margin-top: 12px;
+.sb-filters-foot { display: flex; justify-content: space-between; align-items: center; padding-top: 2px; }
+.sb-reset {
+    border: 0; background: none; padding: 4px 0; cursor: pointer;
+    color: var(--slate); font: 600 0.76rem var(--font-sans);
 }
+.sb-reset:hover { color: #dc2626; }
+.sb-done {
+    height: 28px; padding: 0 14px; border-radius: 7px; border: 0; cursor: pointer;
+    background: var(--um-green); color: #fff; font: 600 0.76rem var(--font-sans);
+}
+.sb-done:hover { background: var(--um-green-deep); }
 
-.filter-stats-section {
-    padding: 12px 16px;
+/* ── results ── */
+.sb-results-head {
+    flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 10px 14px 8px;
 }
-.filter-stats {
-    display: flex;
-    align-items: baseline;
-    gap: 4px;
-    font-size: 0.82rem;
+.filter-stats { display: flex; align-items: baseline; gap: 5px; font-size: 0.78rem; white-space: nowrap; }
+.stat-highlight { font-size: 1.05rem; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.stat-of { color: var(--slate); }
+.stat-of span { font-variant-numeric: tabular-nums; }
+.sb-sort { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sb-sort-lbl { font-size: 0.66rem; color: var(--slate); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.sb-sort-sel {
+    -webkit-appearance: none; appearance: none; min-width: 0; max-width: 150px;
+    height: 28px; padding: 0 26px 0 9px; border-radius: 7px;
+    border: 1px solid var(--border-light); color: var(--text); cursor: pointer;
+    background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%238a93a4' stroke-width='1.8' stroke-linecap='round' d='M2.5 4.5 6 8l3.5-3.5'/%3E%3C/svg%3E") no-repeat right 9px center;
+    font: 600 0.76rem var(--font-sans); text-overflow: ellipsis;
 }
-.stat-highlight {
-    font-size: 1.2rem;
-    font-weight: 700;
-    color: var(--um-green);
-    font-variant-numeric: tabular-nums;
-}
-.stat-of {
-    color: var(--text-dim);
-}
-.stat-label-inline {
-    color: var(--slate);
-}
+.sb-sort-sel:focus { outline: none; border-color: var(--um-green); }
+.sb-sort-sel option { background: var(--navy); color: var(--text); }
 
-/* View toggle (cluster / tracks) */
-.view-toggle {
-    display: flex;
-    gap: 4px;
-    margin-top: 10px;
+.sb-results {
+    position: relative; flex: 1 1 auto; min-height: 120px;
+    overflow-y: auto; overscroll-behavior: contain; outline: none;
+    padding-bottom: 6px;
 }
-.view-toggle-btn {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    padding: 5px 10px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--text-dim);
-    font-family: 'DM Sans', sans-serif;
-    font-size: 0.75rem;
-    cursor: pointer;
-    transition: all 0.15s ease;
+.sb-results:focus-visible { box-shadow: inset 0 0 0 2px var(--um-green-tint); }
+.sb-spacer { position: relative; }
+.sb-row {
+    position: absolute; left: 6px; right: 6px; height: 56px;
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 10px; border-radius: 10px; cursor: pointer;
+    transition: background .12s;
 }
-.view-toggle-btn:hover {
-    border-color: var(--blue);
-    color: var(--text);
+.sb-row:hover { background: var(--ga-hover); }
+.sb-row.is-sel { background: var(--ga-sel); box-shadow: inset 0 0 0 1px var(--ga-sel-ring); }
+.sb-row.is-cur:not(.is-sel) { box-shadow: inset 0 0 0 1px var(--border-light); }
+.sb-cat {
+    flex: none; width: 32px; height: 32px; border-radius: 9px;
+    display: grid; place-items: center;
+    font-size: 0.68rem; font-weight: 800; letter-spacing: -.01em;
+    color: var(--c); background: var(--surface);
+    background: color-mix(in srgb, var(--c) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--c) 42%, transparent);
 }
-.view-toggle-btn.active {
-    background: var(--blue);
-    border-color: var(--blue);
-    color: #ffffff;
+:root:not([data-theme="dark"]) .sb-cat { color: color-mix(in srgb, var(--c) 72%, #0f1623); }
+.sb-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sb-row-name {
+    font-size: 0.86rem; font-weight: 650; color: var(--text); line-height: 1.2;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-
-/* Genesis / LMI dot toggles (Tracks view) */
-.track-dot-toggles {
-    display: flex;
-    gap: 14px;
-    margin-top: 8px;
+.sb-row-meta {
+    font-size: 0.71rem; color: var(--slate); line-height: 1.2;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums;
 }
-.dot-toggle {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 0.72rem;
-    color: var(--text-dim);
-    cursor: pointer;
-    user-select: none;
+.sb-spark { flex: none; width: 46px; height: 18px; overflow: visible; }
+.sb-spark path { fill: none; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.sb-spark-64 { stroke: var(--border-light); stroke-width: 1; stroke-dasharray: 2 2; }
+.sb-row-val {
+    flex: none; width: 64px; display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.dot-toggle input[type="checkbox"] {
-    accent-color: var(--blue);
-    margin: 0;
-    cursor: pointer;
-}
-.dot-swatch {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    border: 1px solid #fff;
-    box-shadow: 0 0 0 1px var(--border);
-    display: inline-block;
-}
-.dot-swatch-genesis { background: #60a5fa; }
-.dot-swatch-lmi { background: #f59e0b; }
-
-/* Floating map storm card */
-.map-storm-card {
-    position: absolute;
-    bottom: 16px;
-    left: 16px;
-    z-index: 1000;
-    background: rgba(255, 255, 255, 0.96);
-    border: 1px solid var(--border-light);
-    border-left: 3px solid var(--um-orange);
-    border-radius: 10px;
-    padding: 12px 14px 10px;
-    min-width: 220px;
-    max-width: 280px;
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    box-shadow: 0 6px 22px var(--border-light);
-    animation: ga-toast-in 0.25s ease;
-}
-.map-storm-card-close {
-    position: absolute;
-    top: 6px;
-    right: 8px;
-    background: none;
-    border: none;
-    color: var(--slate);
-    font-size: 18px;
-    cursor: pointer;
-    line-height: 1;
-    padding: 0 4px;
-}
-.map-storm-card-close:hover {
-    color: var(--text);
-}
-.map-storm-card-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
-    padding-right: 18px;
-}
-.map-storm-card-name {
-    font-size: 1.05rem;
-    font-weight: 700;
-    color: var(--text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.map-storm-card-stats {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px 12px;
-    margin-bottom: 10px;
-}
-.map-card-stat {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.75rem;
-}
-.map-card-stat-label {
-    color: var(--text-dim);
-    font-weight: 500;
-}
-.map-card-stat-value {
-    color: var(--text);
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-    font-size: 0.72rem;
-}
-.map-storm-card-btn {
-    display: block;
-    width: 100%;
-    background: var(--um-green);
-    color: #ffffff;
-    border: none;
-    border-radius: 6px;
-    padding: 8px 12px;
-    font-size: 0.82rem;
-    font-weight: 700;
-    font-family: 'DM Sans', sans-serif;
-    cursor: pointer;
-    text-align: center;
-    transition: background 0.15s, transform 0.1s;
-    letter-spacing: 0.3px;
-}
-.map-storm-card-btn:hover {
-    background: var(--um-green-deep);
-    transform: translateY(-1px);
-}
-.map-storm-card-btn:active {
-    transform: translateY(0);
-}
-
-/* Storm card (sidebar) */
-.storm-card {
-    animation: ga-toast-in 0.2s ease;
-}
-.storm-detail-pulse {
-    animation: detail-btn-glow 2s ease-in-out 0.3s 3;
-}
-@keyframes detail-btn-glow {
-    0%, 100% { box-shadow: none; }
-    50% { box-shadow: 0 0 12px rgba(244, 115, 33, 0.5), 0 0 24px rgba(74, 155, 110, 0.25); }
-}
-.storm-card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 10px;
-}
-.storm-card-name {
-    font-size: 1rem;
-    font-weight: 700;
-    color: var(--text);
-    margin: 0;
-}
-.storm-card-meta {
-    margin-bottom: 12px;
-}
-.card-row {
-    display: flex;
-    justify-content: space-between;
-    padding: 4px 0;
-    font-size: 0.78rem;
-    border-bottom: 1px solid var(--border);
-}
-.card-row:last-child { border-bottom: none; }
-.card-label {
-    color: var(--slate);
-    font-weight: 500;
-}
-.card-value {
-    color: var(--text);
-    font-weight: 600;
+.sb-row-val b { font-size: 0.82rem; font-weight: 700; color: var(--text); }
+.sb-row-val span { font-size: 0.7rem; color: var(--slate); }
+.sb-empty { padding: 32px 18px; text-align: center; color: var(--slate); font-size: 0.82rem; line-height: 1.6; }
+.sb-empty .sb-reset { color: var(--um-green); margin-top: 6px; }
+.sb-hint {
+    flex: none; padding: 7px 14px; border-top: 1px solid var(--border);
+    font-size: 0.68rem; color: var(--text-dim); text-align: center;
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -1706,6 +1795,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     .browser-layout {
         flex-direction: column;
         height: auto;
+        min-height: 0;
     }
     .browser-map-wrap {
         height: 50vh;
@@ -1716,19 +1806,27 @@ input[type="range"].ga-range::-moz-range-thumb {
         border-left: none;
         border-top: 1px solid var(--border);
     }
-    .ga-tabs {
-        padding: 0 12px;
-        overflow-x: auto;
-        /* Touch surface — hide the scrollbar like the RT tab bar does. */
-        scrollbar-width: none;
-        -webkit-overflow-scrolling: touch;
+
+    /* Storm Browser on a phone: map first, then search + filters, then the
+       list in its own scroller (it is virtualized, so it needs one). */
+    #tab-browser .browser-map-wrap { flex: none; height: 52vh; min-height: 300px; }
+    .browser-sidebar.sb { width: 100%; min-width: 0; overflow: visible; }
+    .sb-top { max-height: none; overflow: visible; padding: 12px 12px 10px; }
+    .sb-search-input { height: 42px; font-size: 16px; }   /* 16px: no iOS zoom-on-focus */
+    .sb-basins .basin-chip { height: 34px; }
+    .sb-months .month-chip { height: 32px; }
+    .sb-results { flex: none; height: 64vh; min-height: 280px; }
+    .sb-hint { display: none !important; }
+    .sb-row { height: 58px; }
+    .map-storm-card {
+        top: auto; left: 8px; right: 8px; bottom: 8px; width: auto;
+        padding: 12px 12px 10px;
     }
-    .ga-tabs::-webkit-scrollbar { display: none; }
-    .ga-tab {
-        padding: 8px 14px;
-        white-space: nowrap;
-        font-size: 0.78rem;
-    }
+    .sb-mapctl { top: 8px; right: 8px; padding: 3px; gap: 4px; }
+    .sb-seg .view-toggle-btn { height: 30px; padding: 0 9px; }
+    .sb-legend { left: 8px; bottom: 8px; gap: 7px; padding: 5px 9px; font-size: 0.66rem; }
+    .sb-legend-t, .sb-legend-et { display: none; }
+    #tab-browser .ga-latlon-readout { display: none !important; }
     .detail-layout,
     .clim-layout {
         padding: 12px;
@@ -1955,7 +2053,8 @@ input[type="range"].ga-range::-moz-range-thumb {
     box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
 }
 
-/* Intensity legend on map */
+/* Map legend card (the GHOST tab's colour bar uses it; the Storm Browser's
+   key is .sb-legend) */
 .ga-legend {
     background: var(--surface-raised);
     padding: 10px 14px;
@@ -1965,26 +2064,6 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-size: 0.72rem;
     line-height: 1.8;
     color: var(--text);
-}
-.ga-legend h4 {
-    margin: 0 0 6px;
-    font-size: 0.68rem;
-    font-weight: 600;
-    color: var(--slate);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-}
-.ga-legend-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-.ga-legend-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    border: 1.5px solid rgba(15, 22, 35,0.2);
-    flex-shrink: 0;
 }
 
 /* Cursor lat/lon readout (bottom-left of the browser map) */
@@ -2209,17 +2288,18 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ga-fl-barb { pointer-events: none; }
 
 /* ── Compare tab ───────────────────────────────────────────── */
-.compare-layout { padding: 16px; }
+.compare-layout { padding: 20px 24px 28px; max-width: 1640px; margin: 0 auto; }
 .compare-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 12px;
+    margin-bottom: 14px;
 }
 .compare-header h2 {
-    font-size: 1.1rem;
+    font-size: 1.3rem;
     font-weight: 700;
-    color: var(--white);
+    letter-spacing: -0.015em;
+    color: var(--text);
     margin: 0;
 }
 .compare-controls {
@@ -2259,14 +2339,16 @@ input[type="range"].ga-range::-moz-range-thumb {
 .compare-chip {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 3px 10px;
-    border-radius: 20px;
-    font-size: 0.72rem;
+    gap: 7px;
+    height: 30px;
+    padding: 0 8px 0 12px;
+    border-radius: 999px;
+    font-size: 0.76rem;
     font-weight: 600;
     color: var(--text);
-    background: var(--border);
+    background: var(--surface-raised);
     border: 1px solid var(--border-light);
+    box-shadow: var(--ga-shadow-sm);
     cursor: default;
 }
 .compare-chip-dot {
@@ -2277,11 +2359,13 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .compare-chip-remove {
     cursor: pointer;
-    opacity: 0.5;
-    font-size: 0.8rem;
-    margin-left: 2px;
+    opacity: 0.55;
+    font-size: 0.9rem;
+    width: 20px; height: 20px; border-radius: 50%;
+    display: inline-grid; place-items: center;
+    margin-left: 1px;
 }
-.compare-chip-remove:hover { opacity: 1; }
+.compare-chip-remove:hover { opacity: 1; background: var(--ga-hover); color: #dc2626; }
 
 /* Empty state (now hosts the search panel) */
 .compare-empty {
@@ -2289,10 +2373,29 @@ input[type="range"].ga-range::-moz-range-thumb {
     color: var(--slate);
 }
 
-/* Compare search panel */
-.compare-search-panel { max-width: 600px; margin: 0 auto; text-align: left; }
-.compare-search-title { font-size: 1rem; color: var(--white); margin: 0 0 4px; font-weight: 700; }
-.compare-search-hint { font-size: 0.78rem; color: var(--slate); margin: 0 0 14px; opacity: 0.8; }
+/* Compare search panel: a centered card */
+.compare-search-panel {
+    max-width: 700px; margin: 8px auto 0; text-align: left;
+    padding: 24px 26px 22px; border-radius: 16px;
+    background: var(--surface-raised); border: 1px solid var(--border-light);
+    box-shadow: var(--ga-shadow-md);
+}
+.compare-search-title { font-size: 1.15rem; letter-spacing: -0.01em; color: var(--text); margin: 0 0 4px; font-weight: 700; }
+.compare-search-hint { font-size: 0.8rem; color: var(--slate); margin: 0 0 16px; }
+.compare-search-panel .ga-input, .compare-search-inline .ga-input {
+    height: 34px; border-radius: 8px; border-color: var(--border-light); font-size: 0.82rem;
+}
+.compare-search-row .ga-input { height: 40px; border-radius: 10px; padding: 0 14px; font-size: 0.88rem; }
+.compare-search-panel .ga-input:focus, .compare-search-inline .ga-input:focus {
+    border-color: var(--um-green); box-shadow: 0 0 0 3px var(--um-green-tint);
+}
+.compare-basin-chips .basin-chip {
+    height: 28px; padding: 0 12px; border-radius: 7px;
+    border-color: var(--border-light); background: transparent; color: var(--text);
+}
+.compare-basin-chips .basin-chip:hover { border-color: var(--um-green); color: var(--um-green); }
+.compare-basin-chips .basin-chip.active { background: var(--um-green); border-color: var(--um-green); color: #fff; }
+.compare-search-panel .ga-select { border-radius: 8px; border-color: var(--border-light); }
 .compare-search-row { margin-bottom: 10px; }
 .compare-filter-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
 .compare-filter-label { font-size: 0.75rem; color: var(--slate); min-width: 36px; }
@@ -2305,20 +2408,21 @@ input[type="range"].ga-range::-moz-range-thumb {
 
 /* Search results list */
 .compare-search-results {
-    max-height: 320px; overflow-y: auto; margin-top: 10px;
-    border: 1px solid var(--border); border-radius: 8px;
+    max-height: 340px; overflow-y: auto; margin-top: 10px;
+    border: 1px solid var(--border-light); border-radius: 10px;
+    overscroll-behavior: contain;
 }
 .compare-result-row {
     display: flex; align-items: center; gap: 10px;
-    padding: 7px 12px; cursor: pointer; transition: background 0.15s;
-    border-bottom: 1px solid rgba(15, 22, 35,0.03);
-    font-size: 0.78rem;
+    padding: 9px 14px; cursor: pointer; transition: background 0.15s;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.8rem;
 }
 .compare-result-row:last-child { border-bottom: none; }
-.compare-result-row:hover { background: rgba(15, 22, 35,0.04); }
+.compare-result-row:hover { background: var(--ga-hover); }
 .compare-result-row.added { opacity: 0.45; cursor: default; }
 .compare-result-row.added:hover { background: transparent; }
-.compare-result-name { font-weight: 600; color: var(--white); min-width: 90px; }
+.compare-result-name { font-weight: 650; color: var(--text); min-width: 96px; }
 .compare-result-meta { font-size: 0.72rem; color: var(--slate); font-variant-numeric: tabular-nums; }
 .basin-badge-sm {
     background: var(--border); padding: 1px 5px; border-radius: 3px;
@@ -2326,19 +2430,21 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .cat-label-sm { font-size: 0.62rem; opacity: 0.7; }
 .compare-result-add {
-    margin-left: auto; font-size: 0.7rem; padding: 3px 10px;
-    border-radius: 6px; border: 1px solid var(--blue); color: var(--blue);
-    background: transparent; cursor: pointer; white-space: nowrap; transition: background 0.15s;
+    margin-left: auto; font-size: 0.72rem; font-weight: 600; height: 26px; padding: 0 11px;
+    border-radius: 7px; border: 1px solid var(--um-green); color: var(--um-green);
+    background: transparent; cursor: pointer; white-space: nowrap; transition: background 0.15s, color .15s;
 }
-.compare-result-add:hover { background: rgba(244, 115, 33,0.1); }
+.compare-result-add:hover { background: var(--um-green); color: #fff; }
+:root[data-theme="dark"] .compare-result-add { color: var(--blue-light); }
+:root[data-theme="dark"] .compare-result-add:hover { color: #fff; }
 .compare-result-add.added { border-color: var(--slate); color: var(--slate); cursor: default; }
 .compare-result-add.added:hover { background: transparent; }
 .compare-result-empty { text-align: center; padding: 24px; color: var(--slate); font-size: 0.8rem; }
 
 /* Inline search (when storms already selected) */
 .compare-search-inline {
-    background: rgba(15, 22, 35,0.02); border: 1px solid var(--border);
-    border-radius: 10px; padding: 14px; margin-bottom: 14px;
+    background: var(--surface-raised); border: 1px solid var(--border-light);
+    border-radius: 14px; padding: 16px 18px; margin-bottom: 16px; box-shadow: var(--ga-shadow-sm);
 }
 .compare-search-inline .compare-search-title { font-size: 0.9rem; margin-bottom: 8px; }
 .compare-search-inline .compare-search-results { max-height: 220px; }
@@ -2368,7 +2474,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .compare-stats-table th:hover { color: var(--blue); }
 .compare-stats-table td {
     padding: 6px 10px;
-    color: var(--white);
+    color: var(--text);
     border-bottom: 1px solid rgba(15, 22, 35,0.03);
     font-variant-numeric: tabular-nums;
     font-size: 0.74rem;
@@ -2377,6 +2483,14 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-family: 'DM Sans', sans-serif;
     font-weight: 600;
 }
+
+/* Compare's panels as cards (the Storm Detail drawer keeps its flat panels) */
+#tab-compare .detail-panel {
+    background: var(--surface-raised); border-color: var(--border-light);
+    border-radius: 14px; box-shadow: var(--ga-shadow-sm);
+}
+#tab-compare .panel-header { padding: 12px 16px; }
+#tab-compare .panel-header h3 { font-size: 0.74rem; letter-spacing: .06em; }
 
 /* ── Side-by-side IR Comparison ───────────────────────────── */
 .compare-ir-grid {
@@ -2830,99 +2944,250 @@ input[type="range"].ga-range::-moz-range-thumb {
     padding: 1px 5px; border-radius: 999px; margin-left: 5px;
     background: #f43f5e; color: #fff; vertical-align: 1.5px;
 }
+/* ── toolbar: one row ── */
 .gra-toolbar {
-    display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap;
+    display: flex; gap: 18px; align-items: center; flex-wrap: wrap;
     padding: 8px 14px; background: var(--surface-raised);
     border-bottom: 1px solid var(--border);
+    /* above everything floating on the map (count 500, IR panel 600, About
+       640): the Filters popover drops down over it */
+    position: relative; z-index: 700;
 }
-.gra-tgroup { display: flex; flex-direction: column; gap: 5px; }
+@media (min-width: 1180px) {
+    /* one row: only the filter summary and the version menu give way */
+    .gra-toolbar { flex-wrap: nowrap; }
+    .gra-tg-shade, .gra-tg-basin, .gra-about-btn, .gra-pop-btn { flex: none; }
+    .gra-tg-basin .gra-chips { flex-wrap: nowrap; }
+}
+@media (max-width: 1360px) {
+    .gra-version-note, .gra-fsum { display: none; }
+}
+.gra-tgroup { display: flex; align-items: center; gap: 8px; }
 .gra-tgroup > label {
-    font-size: 0.6rem; text-transform: uppercase; letter-spacing: .07em;
-    color: var(--slate); font-weight: 700;
+    font-size: 0.62rem; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--slate); font-weight: 700; white-space: nowrap;
 }
+.gra-tb-spacer { flex: 1 1 auto; }
 .gra-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.gra-seg { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+/* segmented control */
+.gra-seg {
+    display: flex; gap: 2px; padding: 2px; border-radius: 8px;
+    background: var(--ga-hover); border: 1px solid var(--border);
+}
 .gra-seg button {
-    font-family: 'DM Sans', sans-serif; font-size: 0.72rem; padding: 4px 9px;
-    border: 0; border-right: 1px solid var(--border); cursor: pointer;
-    background: var(--surface); color: var(--slate);
+    font-family: var(--font-sans); font-size: 0.74rem; font-weight: 600;
+    height: 26px; padding: 0 10px; border: 0; border-radius: 6px; cursor: pointer;
+    background: transparent; color: var(--slate); white-space: nowrap;
+    transition: background .15s, color .15s;
 }
-.gra-seg button:last-child { border-right: 0; }
 .gra-seg button:hover { color: var(--text); }
-.gra-seg button.active { background: var(--blue); color: #fff; font-weight: 700; }
-.gra-rng { display: flex; align-items: center; gap: 6px; }
-.gra-rng input[type=range] { width: 88px; accent-color: var(--blue); }
-.gra-rng output {
-    font-size: 0.72rem; color: var(--text); min-width: 56px;
-    font-variant-numeric: tabular-nums;
+.gra-seg button.active { background: var(--um-green); color: #fff; box-shadow: var(--ga-shadow-sm); }
+.gra-seg-sm button { height: 24px; padding: 0 9px; font-size: 0.72rem; }
+.gra-seg sub, .gra-chip sub { font-size: 0.72em; }
+/* chips (basins, list order) */
+.gra-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.gra-chip {
+    height: 28px; padding: 0 11px; border-radius: 7px; cursor: pointer;
+    font: 600 0.74rem var(--font-sans); white-space: nowrap;
+    background: transparent; color: var(--text); border: 1px solid var(--border-light);
+    transition: background .15s, color .15s, border-color .15s;
 }
+.gra-chip:hover { border-color: var(--um-green); color: var(--um-green); }
+.gra-chip.active { background: var(--um-green); border-color: var(--um-green); color: #fff; }
+.gra-tg-basin .gra-chip { min-width: 40px; }
+/* Filters button + popover */
+.gra-tg-filters { position: relative; min-width: 0; flex: 0 1 auto; }
+.gra-pop-btn {
+    display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px;
+    border: 1px solid var(--border-light); border-radius: 8px; background: transparent;
+    font: 600 0.78rem var(--font-sans); color: var(--text); cursor: pointer; white-space: nowrap;
+    transition: border-color .15s, background .15s;
+}
+.gra-pop-btn:hover { border-color: var(--um-green); }
+.gra-pop-btn.is-open { background: var(--surface); border-color: var(--um-green); }
+.gra-pop-btn svg { width: 15px; height: 15px; color: var(--slate); }
+.gra-pop-btn.is-open .sb-chev { transform: rotate(180deg); }
+.gra-fsum {
+    font-size: 0.72rem; color: var(--slate); white-space: nowrap; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; max-width: 260px;
+}
+.gra-pop {
+    position: absolute; top: calc(100% + 6px); left: 14px; z-index: 30;
+    width: 360px; max-height: min(70vh, 560px); overflow-y: auto;
+    padding: 14px 16px 12px; border-radius: var(--ga-r-lg);
+    background: var(--surface-raised); border: 1px solid var(--border-light);
+    box-shadow: var(--ga-shadow-lg);
+    display: flex; flex-direction: column; gap: 14px;
+    animation: ga-card-in .16s ease;
+}
+.gra-pop[hidden] { display: none; }
+.gra-pop-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.gra-pop-title { font-size: 0.86rem; font-weight: 700; color: var(--text); }
+.gra-pop-unit { display: flex; align-items: center; gap: 6px; font-size: 0.72rem; color: var(--slate); }
+.gra-pop-unit .gra-seg button { height: 24px; padding: 0 9px; font-size: 0.72rem; }
+.gra-pop-fh { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.gra-pop-fh label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: .05em; color: var(--slate); font-weight: 700; }
+.gra-pop-fh output { font-size: 0.78rem; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.gra-pop-checks { display: flex; flex-direction: column; gap: 9px; padding-top: 2px; border-top: 1px solid var(--border); padding-top: 12px; }
 .gra-chk {
-    font-size: 0.72rem; color: var(--slate); display: flex;
-    align-items: center; gap: 4px; cursor: pointer;
+    font-size: 0.78rem; color: var(--text); display: flex; align-items: flex-start;
+    gap: 8px; cursor: pointer; line-height: 1.35;
 }
+.gra-chk input { margin: 2px 0 0; accent-color: var(--um-green); width: 15px; height: 15px; flex: none; }
+.gra-chk small { display: block; font-size: 0.68rem; color: var(--slate); margin-top: 1px; }
+.gra-pop-preset { display: flex; flex-direction: column; gap: 5px; }
+.gra-pop-preset > span { font-size: 0.68rem; color: var(--slate); line-height: 1.4; }
+.gra-preset {
+    align-self: flex-start; height: 28px; padding: 0 11px; border-radius: 7px; cursor: pointer;
+    font: 600 0.74rem var(--font-sans); color: var(--text);
+    background: transparent; border: 1px dashed var(--border-light);
+}
+.gra-preset:hover { border-color: var(--um-orange); color: var(--um-orange-text); }
+.gra-preset.ga-btn-accent { background: var(--um-orange); border: 1px solid var(--um-orange); color: #fff; }
+.gra-pop-foot { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border); padding-top: 10px; }
+/* version + about (right end) */
+.gra-tg-ver > label { cursor: default; }
+.gra-tg-ver { min-width: 0; flex: 0 1 auto; }
+.gra-version {
+    -webkit-appearance: none; appearance: none; max-width: 240px; min-width: 120px; height: 30px;
+    padding: 0 26px 0 10px; border-radius: 8px; border: 1px solid var(--border-light);
+    background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%238a93a4' stroke-width='1.8' stroke-linecap='round' d='M2.5 4.5 6 8l3.5-3.5'/%3E%3C/svg%3E") no-repeat right 9px center;
+    color: var(--text); font: 600 0.74rem var(--font-sans); cursor: pointer;
+    text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
+}
+.gra-version:disabled { opacity: 1; cursor: default; background-image: none; padding-right: 10px; }
+.gra-version:focus { outline: none; border-color: var(--um-green); }
+.gra-version option { background: var(--navy); color: var(--text); }
+.gra-version-note { font-size: 0.66rem; color: var(--slate); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.gra-about-btn {
+    display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px;
+    border-radius: 8px; border: 1px solid var(--um-green); cursor: pointer;
+    background: var(--um-green-tint); color: var(--um-green);
+    font: 600 0.76rem var(--font-sans); white-space: nowrap;
+}
+.gra-about-btn:hover { background: var(--um-green); color: #fff; }
+.gra-about-btn svg { width: 15px; height: 15px; }
+:root[data-theme="dark"] .gra-about-btn { color: var(--blue-light); }
+:root[data-theme="dark"] .gra-about-btn:hover { color: #fff; }
+
+/* the GHOST tab's dual ranges reuse the Storm Browser's .sb-dual */
+.gra-dual { height: 22px; }
+
 /* Height is set from the panel's MEASURED offset by sizeTab(), not from a
-   hard-coded calc: the chrome above it is ~138px (page offset + topbar +
-   stats strip + tab bar), not the 52+42 the older layout classes assume, and
-   the toolbar itself wraps to two rows at narrow widths. Guessing it left the
-   panel ~44px past the fold, which quietly clipped the bottom-anchored legend.
-   The calc here is only a pre-JS fallback. */
+   hard-coded calc: the chrome above it (topbar + tab bar + this toolbar)
+   changes with the viewport and the toolbar wraps at narrow widths. Guessing
+   it once left the panel ~44px past the fold, which quietly clipped the
+   bottom-anchored legend. The calc here is only a pre-JS fallback. */
 #tab-reanalysis.active {
     display: flex; flex-direction: column;
-    height: calc(100vh - 138px);
+    height: calc(100vh - var(--ga-main-top));
 }
 .gra-toolbar { flex: none; }
 .gra-layout { flex: 1; height: auto; min-height: 0; }
 #gra-map { width: 100%; height: 100%; background: var(--navy); }
+
+/* ── floating map chrome (same glass as the Storm Browser) ── */
+.gra-count, .gra-legend {
+    background: var(--ga-float-bg); border: 1px solid var(--ga-float-border);
+    box-shadow: var(--ga-shadow-md); color: var(--text);
+    -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2);
+}
 .gra-count {
     /* left of 48 px clears the map's zoom buttons (10-39 px); at 10 px the
        badge sat exactly on "+" */
     position: absolute; left: 48px; top: 10px; z-index: 500;
-    background: rgba(15, 23, 42, .86); color: #fff; font-size: 0.72rem;
-    padding: 4px 9px; border-radius: 6px; font-variant-numeric: tabular-nums;
+    font-size: 0.72rem; font-weight: 600; padding: 5px 11px; border-radius: 999px;
+    font-variant-numeric: tabular-nums;
 }
-.gra-legend { position: absolute; left: 10px; bottom: 10px; z-index: 500; max-width: 330px; }
-.gra-legend .gra-lt { font-size: 0.65rem; font-weight: 700; margin-bottom: 4px; color: var(--text); }
-.gra-legend .gra-bar { height: 9px; border-radius: 2px; }
+.gra-legend {
+    position: absolute; left: 10px; bottom: 10px; z-index: 500; max-width: 330px;
+    padding: 9px 12px 8px; border-radius: 10px; font-size: 0.7rem;
+}
+.gra-legend .gra-lt { font-size: 0.68rem; font-weight: 700; margin-bottom: 6px; color: var(--text); }
+.gra-legend .gra-bar { height: 8px; border-radius: 4px; }
 .gra-legend .gra-ticks {
-    display: flex; justify-content: space-between; font-size: 0.6rem;
-    color: var(--slate); font-variant-numeric: tabular-nums; margin-top: 2px;
+    display: flex; justify-content: space-between; font-size: 0.62rem;
+    color: var(--slate); font-variant-numeric: tabular-nums; margin-top: 3px;
 }
-.gra-legend .gra-note { font-size: 0.6rem; color: var(--cyan); margin-top: 5px; line-height: 1.35; }
+.gra-legend .gra-note { font-size: 0.62rem; color: var(--um-orange-text); margin-top: 6px; line-height: 1.4; }
 .gra-legend .gra-sw {
-    display: inline-block; width: 9px; height: 9px; border-radius: 2px;
-    margin-right: 3px; vertical-align: -1px;
+    display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    margin-right: 4px; vertical-align: -1px;
 }
 .gra-legend .gra-swatches {
-    display: flex; flex-wrap: wrap; gap: 3px 9px;
-    font-size: 0.62rem; color: var(--slate);
+    display: flex; flex-wrap: wrap; gap: 4px 10px;
+    font-size: 0.66rem; font-weight: 600; color: var(--text);
 }
+
 /* ── leaderboard ── */
-.gra-sub { font-size: 0.66rem; color: var(--slate); }
+.browser-sidebar.gra-side { width: 340px; min-width: 340px; overflow: hidden; }
+.gra-side-head {
+    flex: none; display: flex; flex-direction: column; gap: 9px;
+    padding: 14px 14px 12px; border-bottom: 1px solid var(--border);
+}
+.gra-side-title { margin: 0; font-size: 1rem; font-weight: 700; color: var(--text); letter-spacing: -0.01em; line-height: 1.25; }
+.gra-sub { font-size: 0.72rem; color: var(--slate); margin-top: -5px; font-variant-numeric: tabular-nums; }
+.gra-search { width: 100%; }
+.gra-rankrow { display: flex; align-items: center; gap: 8px; }
+.gra-rank-lbl {
+    font-size: 0.62rem; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--slate); font-weight: 700;
+}
+.gra-sorts { gap: 3px; flex-wrap: nowrap; }
+.gra-sorts .gra-chip { height: 26px; padding: 0 8px; font-size: 0.7rem; flex: 1 1 auto; }
 /* min-height:0 is load-bearing: without it a flex child refuses to shrink
    below its content height, so a long .gra-foot starved the list down to
    ~2 visible storms. */
-.gra-list { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+.gra-list { overflow-y: auto; flex: 1 1 auto; min-height: 0; padding: 4px 6px 6px; overscroll-behavior: contain; }
 .gra-item {
-    padding: 6px 14px; border-bottom: 1px solid var(--border); cursor: pointer;
-    display: grid; grid-template-columns: 1fr auto; gap: 1px 8px;
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; border-radius: 10px; cursor: pointer;
+    transition: background .12s;
 }
-.gra-item:hover { background: var(--surface); }
-.gra-item.active { background: var(--surface); box-shadow: inset 3px 0 0 var(--blue); }
-.gra-item .gra-nm { font-size: 0.78rem; font-weight: 700; color: var(--text); }
-.gra-item .gra-meta, .gra-item .gra-num {
-    font-size: 0.66rem; color: var(--slate); font-variant-numeric: tabular-nums;
+.gra-item + .gra-item { margin-top: 1px; }
+.gra-item:hover { background: var(--ga-hover); }
+.gra-item.active { background: var(--ga-sel); box-shadow: inset 0 0 0 1px var(--ga-sel-ring); }
+.gra-rk {
+    flex: none; width: 22px; text-align: right;
+    font-size: 0.72rem; font-weight: 700; color: var(--text-dim); font-variant-numeric: tabular-nums;
 }
-.gra-item .gra-num { text-align: right; }
+.gra-rk:empty { width: 0; margin-right: -10px; }
+.gra-it-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.gra-item .gra-nm {
+    font-size: 0.86rem; font-weight: 650; color: var(--text); line-height: 1.2;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.gra-item .gra-meta {
+    display: flex; align-items: baseline; gap: 6px; min-width: 0;
+    font-size: 0.7rem; color: var(--slate); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.gra-item .gra-meta > span:first-child { flex: none; }
+.gra-item .gra-meta .gra-ho { margin-left: 0; overflow: hidden; text-overflow: ellipsis; }
+.gra-it-vals { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.gra-item .gra-num { font-size: 0.72rem; color: var(--slate); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.gra-item .gra-g b { font-size: 0.9rem; font-weight: 750; color: #e11d48; }
+:root[data-theme="dark"] .gra-item .gra-g b { color: #fb7185; }
 .gra-item .gra-g { color: #f43f5e; font-weight: 700; }
-.gra-flag {
-    font-size: 0.52rem; padding: 0 4px; border-radius: 3px; margin-left: 4px;
-    font-weight: 800; vertical-align: 1px;
-    background: rgba(244, 115, 33, .16); color: var(--cyan);
+.gra-delta {
+    display: inline-block; min-width: 26px; text-align: center; margin-left: 3px;
+    padding: 0 5px; border-radius: 999px; font-size: 0.66rem; font-weight: 700; line-height: 1.5;
 }
-.gra-flag.oob { background: rgba(46, 125, 255, .16); color: #4f7fd1; }
+.gra-delta.more { background: rgba(42, 120, 214, .13); color: #2a78d6; }
+.gra-delta.less { background: rgba(227, 73, 72, .13); color: #d33d3c; }
+.gra-delta.eq   { background: var(--ga-hover); color: var(--slate); }
+:root[data-theme="dark"] .gra-delta.more { color: #7fb1f0; background: rgba(42, 120, 214, .22); }
+:root[data-theme="dark"] .gra-delta.less { color: #f19a99; background: rgba(227, 73, 72, .22); }
+.gra-empty { padding: 28px 16px; text-align: center; color: var(--slate); font-size: 0.8rem; }
+.gra-flag {
+    font-size: 0.56rem; padding: 1px 5px; border-radius: 4px; margin-left: 5px;
+    font-weight: 800; vertical-align: 1.5px; letter-spacing: .03em;
+    background: rgba(244, 115, 33, .14); color: var(--um-orange-text);
+}
+.gra-flag.oob { background: rgba(46, 125, 255, .14); color: #3f72c9; }
+:root[data-theme="dark"] .gra-flag.oob { color: #8fb3f0; }
 .gra-foot {
-    padding: 8px 14px; border-top: 1px solid var(--border);
-    font-size: 0.6rem; color: var(--slate); line-height: 1.4;
+    padding: 9px 14px 10px; border-top: 1px solid var(--border); background: var(--surface);
+    font-size: 0.64rem; color: var(--slate); line-height: 1.5;
     /* Reference prose, not the point of the panel: the identity line stays
        visible, the rest collapses, and the whole block is bounded so it can
        never squeeze the leaderboard again. */
@@ -2938,11 +3203,11 @@ input[type="range"].ga-range::-moz-range-thumb {
        its lifecycle trace are. Two columns instead of a 320 px stack. */
     position: absolute; right: 10px; bottom: 10px; z-index: 600; width: 700px;
     max-height: calc(100% - 20px);
-    background: var(--surface-raised); border: 1px solid var(--border);
-    border-radius: 9px; overflow: hidden; display: none;
-    box-shadow: 0 4px 18px rgba(15, 22, 35, .22);
+    background: var(--surface-raised); border: 1px solid var(--border-light);
+    border-radius: var(--ga-r-lg); overflow: hidden; display: none;
+    box-shadow: var(--ga-shadow-lg);
 }
-.gra-ir.open { display: flex; flex-direction: column; }
+.gra-ir.open { display: flex; flex-direction: column; animation: ga-card-in .2s ease; }
 .gra-ir-body { display: flex; flex: 1 1 auto; min-height: 0; }
 .gra-ir-left {
     flex: 0 0 336px; display: flex; flex-direction: column; min-width: 0;
@@ -2959,20 +3224,37 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .gra-ir-head, .gra-ir-time, .gra-ir-foot, .gra-ir-spark, .gra-ir-status { flex: none; }
 .gra-ir-canvaswrap { flex: 1 1 auto; min-height: 90px; overflow: hidden; }
+/* The panel's header is a dark media-viewer bar in both themes (it frames an
+   infrared image), in the same ink as the page's tab bar. */
 .gra-ir-head {
-    padding: 6px 9px; background: #0f172a; color: #fff;
-    display: flex; align-items: center; gap: 6px; font-size: 0.78rem; font-weight: 700;
+    padding: 8px 10px 8px 12px; background: #12141c; color: #fff;
+    display: flex; align-items: center; gap: 8px; font-size: 0.92rem; font-weight: 700;
+    letter-spacing: -0.005em;
 }
-.gra-ir-sub { font-size: 0.62rem; color: #94a3b8; font-weight: 500; }
+.gra-ir-sub { font-size: 0.68rem; color: #9aa3b5; font-weight: 500; letter-spacing: 0; }
+.gra-ir-head .ga-btn-xs {
+    display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px;
+    border-radius: 6px; background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .14);
+    color: #e6e8ee; font-size: 0.72rem; font-weight: 600; white-space: nowrap;
+}
+.gra-ir-head .ga-btn-xs:hover { background: rgba(255, 255, 255, .12); border-color: rgba(255, 255, 255, .26); }
+.gra-ir-head .gra-ir-primary { background: var(--um-green); border-color: transparent; color: #fff; }
+:root[data-theme="dark"] .gra-ir-head .gra-ir-primary { background: #2e7a5b; }
+.gra-ir-head .gra-ir-primary:hover { background: var(--um-green-deep); border-color: transparent; }
+.gra-ir-head .gra-ir-icon { width: 26px; padding: 0; justify-content: center; }
+.gra-ir-icon svg, .gra-btn-ico { width: 13px; height: 13px; flex: none; }
 /* the header's buttons sit together at the right */
 .gra-ir-acts { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 .gra-ir-x {
-    cursor: pointer; border: 0; background: none; color: #94a3b8;
-    font-size: 1rem; line-height: 1; padding: 0 2px;
+    cursor: pointer; border: 0; background: none; color: #9aa3b5;
+    width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center;
+    font-size: 1.15rem; line-height: 1; padding: 0;
 }
+.gra-ir-x:hover { background: rgba(255, 255, 255, .1); color: #fff; }
 .gra-ir-time {
-    font-size: 0.62rem; padding: 3px 9px; background: #1e293b; color: #cbd5e1;
-    display: flex; gap: 6px; font-variant-numeric: tabular-nums;
+    font-size: 0.68rem; padding: 4px 12px 5px; background: #1a1d27; color: #c8cdd8;
+    display: flex; gap: 8px; font-variant-numeric: tabular-nums;
+    border-bottom: 1px solid #000;
 }
 .gra-ir-delta { margin-left: auto; }
 .gra-ir-delta.far { color: #fca5a5; }
@@ -3011,7 +3293,13 @@ input[type="range"].ga-range::-moz-range-thumb {
 
 .gra-ir-status { padding: 8px 9px; font-size: 0.68rem; color: var(--slate); }
 .gra-ir-status:empty { display: none; }
-.gra-ir-foot { padding: 6px 9px; display: flex; align-items: center; gap: 6px; }
+.gra-ir-foot { padding: 8px 10px 4px; display: flex; align-items: center; gap: 6px; }
+.gra-ir-foot .ga-btn-xs {
+    height: 28px; min-width: 34px; padding: 0 10px; border-radius: 7px;
+    border-color: var(--border-light); background: transparent;
+    font-size: 0.74rem; font-weight: 600;
+}
+.gra-ir-foot .ga-btn-xs:hover { border-color: var(--um-green); color: var(--um-green); }
 .gra-ir-vals { font-size: 0.66rem; color: var(--slate); font-variant-numeric: tabular-nums; }
 .gra-ir-vals b { color: var(--text); }
 .gra-ir-vals .gra-g { color: #f43f5e; }
@@ -3020,20 +3308,18 @@ input[type="range"].ga-range::-moz-range-thumb {
    height squashes both panels and their labels. */
 .gra-ir-spark { padding: 0; }
 .gra-ir-spark svg { width: 100%; height: auto; display: block; }
-.gra-ir-cmap { margin-left: auto; font-size: 0.62rem; padding: 1px 4px; max-width: 108px; }
+.gra-ir-cmap {
+    margin-left: auto; height: 28px; max-width: 118px; font-size: 0.72rem;
+    padding: 0 24px 0 9px; border-radius: 7px; border-color: var(--border-light);
+    background-position: right 7px center;
+}
 .gra-group {
-    padding: 5px 14px 3px; font-size: 0.6rem; font-weight: 800;
+    margin: 6px 0 2px; padding: 5px 10px; border-radius: 7px; font-size: 0.62rem; font-weight: 800;
     text-transform: uppercase; letter-spacing: .07em;
     color: var(--slate); background: var(--surface);
-    border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1;
+    position: sticky; top: 0; z-index: 1;
 }
-.gra-search { width: 100%; margin-top: 8px; font-size: 0.74rem; }
-/* "Rank by" Pmin / Vmax, the list's copy of the toolbar's currency switch */
-.gra-rank { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.gra-rank-lbl {
-    font-size: 0.6rem; text-transform: uppercase; letter-spacing: .07em;
-    color: var(--slate); font-weight: 700;
-}
+
 /* a peak wind that can only come from filled frames (no unfilled frame) */
 .gra-fillmark {
     font-size: 0.6rem; font-weight: 600; color: var(--slate); margin-left: 3px;
@@ -3047,10 +3333,11 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gra-ir-zoom:empty { display: none; }
 .gra-tip {
     position: absolute; z-index: 620; display: none; pointer-events: none;
-    min-width: 186px; padding: 6px 9px; border-radius: 7px;
-    background: rgba(15, 23, 42, .94); color: #e2e8f0;
-    font-size: 0.66rem; line-height: 1.5; font-variant-numeric: tabular-nums;
-    box-shadow: 0 3px 14px rgba(15, 22, 35, .3);
+    min-width: 196px; padding: 8px 11px; border-radius: 10px;
+    background: rgba(18, 20, 28, .95); color: #e2e8f0;
+    border: 1px solid rgba(255, 255, 255, .08);
+    font-size: 0.68rem; line-height: 1.5; font-variant-numeric: tabular-nums;
+    box-shadow: 0 8px 26px rgba(0, 0, 0, .35);
 }
 .gra-tip.on { display: block; }
 .gra-tip-hd { font-weight: 700; font-size: 0.74rem; color: #fff; margin-bottom: 3px; }
@@ -3121,35 +3408,55 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gra-mismatch { color: #e34948; }
 
 /* About panel — the "what is this" a colleague arriving cold needs. */
+.gra-scrim {
+    position: absolute; inset: 0; z-index: 635; display: none;
+    background: var(--ga-scrim);
+    -webkit-backdrop-filter: blur(1.5px); backdrop-filter: blur(1.5px);
+}
+.gra-scrim.open { display: block; animation: ace-fade-in .2s ease; }
 .gra-about {
     position: absolute; z-index: 640; display: none;
     left: 50%; top: 50%; transform: translate(-50%, -50%);
-    width: min(560px, calc(100% - 40px)); max-height: calc(100% - 40px);
-    overflow-y: auto; padding: 18px 22px 20px;
-    background: var(--surface-raised); border: 1px solid var(--border);
-    border-radius: 10px; box-shadow: 0 10px 40px rgba(15, 22, 35, .3);
+    width: min(660px, calc(100% - 48px)); max-height: calc(100% - 48px);
+    overflow-y: auto; overscroll-behavior: contain; padding: 26px 30px 24px;
+    background: var(--surface-raised); border: 1px solid var(--border-light);
+    border-radius: 16px; box-shadow: var(--ga-shadow-lg);
     color: var(--text);
 }
 .gra-about.open { display: block; }
-.gra-about h3 { margin: 0 26px 10px 0; font-size: 1rem; }
-.gra-about h4 {
-    margin: 14px 0 5px; font-size: 0.66rem; text-transform: uppercase;
-    letter-spacing: .07em; color: var(--slate);
+.gra-about-kicker {
+    font-size: 0.66rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--um-orange-text); margin-bottom: 4px;
 }
-.gra-about p, .gra-about li { font-size: 0.78rem; line-height: 1.55; margin: 0 0 7px; }
-.gra-about ul { margin: 0 0 4px; padding-left: 18px; }
-.gra-about li { margin-bottom: 5px; }
-.gra-about-lede { font-size: 0.85rem !important; }
+.gra-about h3 { margin: 0 36px 14px 0; font-size: 1.28rem; line-height: 1.3; letter-spacing: -0.015em; }
+.gra-about h4 {
+    margin: 22px 0 8px; font-size: 0.68rem; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--um-green);
+}
+:root[data-theme="dark"] .gra-about h4 { color: var(--blue-light); }
+.gra-about p, .gra-about li { font-size: 0.82rem; line-height: 1.6; margin: 0 0 8px; }
+.gra-about ul { margin: 0 0 4px; padding-left: 20px; }
+.gra-about li { margin-bottom: 6px; }
+.gra-about li::marker { color: var(--um-green); }
+.gra-about-lede {
+    font-size: 0.95rem !important; line-height: 1.6 !important;
+    padding: 12px 14px; border-radius: 10px; background: var(--surface);
+    border-left: 3px solid var(--um-green);
+}
 .gra-about-note { color: var(--slate); }
 .gra-about-cite {
-    margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border);
-    font-size: 0.7rem !important; color: var(--slate);
+    margin-top: 20px; padding: 12px 14px; border-radius: 10px;
+    background: rgba(244, 115, 33, .07); border: 1px solid rgba(244, 115, 33, .22);
+    font-size: 0.74rem !important; color: var(--text);
 }
-.gra-about-cite a { color: var(--blue); }
+.gra-about-cite a { color: var(--um-green); font-weight: 600; }
+:root[data-theme="dark"] .gra-about-cite a { color: var(--blue-light); }
 .gra-about-x {
-    position: absolute; right: 12px; top: 10px; border: 0; background: none;
-    color: var(--slate); font-size: 1.3rem; line-height: 1; cursor: pointer;
+    position: absolute; right: 16px; top: 16px; width: 32px; height: 32px;
+    display: grid; place-items: center; border: 0; border-radius: 8px; background: none;
+    color: var(--slate); font-size: 1.35rem; line-height: 1; cursor: pointer;
 }
+.gra-about-x:hover { background: var(--ga-hover); color: var(--text); }
 
 /* ── GHOST Reanalysis on small screens ─────────────────────────────────
    The archive already stacks .browser-layout below 768px (map 50vh, sidebar
@@ -3157,8 +3464,6 @@ input[type="range"].ga-range::-moz-range-thumb {
    measured height fights that stacking, seven toolbar groups stacked vertically
    consume the whole screen before the map starts, and the 320px IR chip is
    wider than the map it floats over. */
-.gra-more { display: none; }
-
 @media (max-width: 768px) {
     /* let the stacking rules own the height — sizeTab() also no-ops here */
     #tab-reanalysis.active { display: block; height: auto; }
@@ -3175,14 +3480,31 @@ input[type="range"].ga-range::-moz-range-thumb {
     #tab-reanalysis .browser-sidebar { flex: none; height: auto; }
     #gra-map { height: 100%; }
 
-    .gra-toolbar { gap: 10px 14px; padding: 8px 12px; }
-    .gra-more { display: block; order: -1; width: 100%; text-align: left; }
-    /* collapsed by default: keep only shading + basin, which are the two
-       controls worth having permanently on a small screen */
-    .gra-toolbar:not(.open) > .gra-tgroup:nth-of-type(n+3) { display: none; }
-    .gra-seg button { padding: 6px 10px; }        /* touch targets */
+    /* toolbar: shading scrolls on its own row; basins, Filters and About
+       share the next; the data version takes the last */
+    .gra-toolbar { gap: 8px 8px; padding: 8px 10px; }
+    .gra-tg-shade { flex: 1 1 100%; min-width: 0; }
+    .gra-tg-shade > label, .gra-tg-basin > label, .gra-tb-spacer, .gra-fsum { display: none; }
+    .gra-tg-shade .gra-seg { overflow-x: auto; scrollbar-width: none; }
+    .gra-tg-shade .gra-seg::-webkit-scrollbar { display: none; }
+    .gra-seg button { height: 32px; padding: 0 11px; }   /* touch targets */
+    .gra-chip { height: 32px; }
+    .gra-tg-basin .gra-chip { min-width: 0; padding: 0 9px; }
+    .gra-pop-btn, .gra-about-btn { height: 32px; }
+    .gra-about-btn span { display: none; }
+    .gra-about-btn { width: 34px; padding: 0; justify-content: center; margin-left: auto; }
+    /* About sits at the end of the basins + Filters row; the version gets its own */
+    .gra-tg-shade { order: 1; } .gra-tg-basin { order: 2; } .gra-tg-filters { order: 3; }
+    .gra-about-btn { order: 4; } .gra-tg-ver { order: 5; }
+    .gra-tg-ver { flex: 1 1 100%; }
+    .gra-tg-ver .gra-version { flex: 1; max-width: none; }
     .basin-chip, .month-chip { padding: 5px 12px; }
-    .gra-rng input[type=range] { width: 104px; }
+    /* the Filters popover becomes a bottom sheet */
+    .gra-pop {
+        position: fixed; top: auto; left: 8px; right: 8px; bottom: 8px; width: auto;
+        max-height: 82vh; z-index: 1300; box-shadow: 0 -10px 40px rgba(15, 22, 35, .35);
+    }
+    .browser-sidebar.gra-side { width: 100%; min-width: 0; overflow: visible; }
 
     /* The chip becomes a bottom SHEET over the page, not a card inside the
        52vh map pane. Inside the pane its max-height was ~45vh, the canvas
@@ -3211,8 +3533,9 @@ input[type="range"].ga-range::-moz-range-thumb {
     /* the explainer gets the whole viewport, not a 50vh map pane */
     .gra-about {
         position: fixed; width: calc(100% - 20px); max-height: 82vh;
-        padding: 16px 16px 18px;
+        padding: 18px 16px 18px; z-index: 1250;
     }
+    .gra-scrim { position: fixed; z-index: 1240; }
     .gra-legend { max-width: calc(100% - 20px); }
     .gra-count { font-size: 0.66rem; }
     .browser-sidebar { overflow-y: visible; }
@@ -3222,12 +3545,6 @@ input[type="range"].ga-range::-moz-range-thumb {
     /* the frame count moves right: top-left belongs to the map's zoom buttons,
        and the badge was sitting on top of "+" */
     .gra-count { left: auto; right: 10px; }
-    /* range filters: the two sliders share the row instead of a fixed 104 px each */
-    .gra-rng { width: 100%; }
-    .gra-rng input[type=range] { flex: 1 1 0; width: auto; min-width: 0; }
-    /* data-version menu takes the full row so its label isn't cut mid-word;
-       the cut-date note wraps underneath */
-    .gra-version { max-width: none; flex: 1 1 100%; }
     /* scrolling inside the sheet, the explainer or the list must not drag the
        page underneath */
     .gra-ir-body, .gra-about, .gra-list { overscroll-behavior: contain; }
@@ -3744,4 +4061,9 @@ input[type="range"].ga-range::-moz-range-thumb {
     background: var(--surface-raised); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; padding: 5px 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.25);
     font-size: 11px; line-height: 1.4; font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 480px) {
+    .sb-dots { display: none; }
+    .sb-seg .view-toggle-btn { padding: 0 8px; }
 }
