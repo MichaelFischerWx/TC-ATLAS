@@ -247,6 +247,23 @@ def _r2_mirror_frame_async(key: str, result: dict):
     threading.Thread(target=_upload, daemon=True).start()
 
 
+def _r2_put_bytes(key: str, body: bytes, content_type: str,
+                  cache_control: str = "public, max-age=86400, immutable") -> bool:
+    """Blocking upload of a binary object (e.g. a PNG frame) to R2. Returns
+    False when R2 is unconfigured or the PUT fails; callers treat the mirror
+    as best-effort."""
+    client = _get_r2_client()
+    if client is None:
+        return False
+    try:
+        client.put_object(Bucket=_R2_BUCKET, Key=key, Body=body,
+                          ContentType=content_type, CacheControl=cache_control)
+        return True
+    except Exception as e:
+        logger.debug(f"R2 put failed: {key}: {e}")
+        return False
+
+
 router = APIRouter(tags=["global_archive"])
 
 # ── Configuration ────────────────────────────────────────────

@@ -2534,14 +2534,88 @@ def _render_ir_png(frame_2d, vmin=_IR_CMAP_VMIN, vmax=_IR_CMAP_VMAX):
     return f"data:image/png;base64,{b64}"
 
 
+# Compact "idx8" frames (?fmt=idx8): one 8-bit grayscale PNG per frame whose
+# pixel value IS the colormap index above (same floor mapping, so the site
+# colors are byte-identical), 0 = no data. The client applies the LUT itself
+# (on the GPU in the explorer), so one file serves every IR colormap, and it is
+# about a third of the bytes of the baked RGBA PNG (Irma case 481: 121 KB vs 341 KB).
+# Frames are mirrored to R2 at {_IR_IDX_PREFIX}/{dt}/{case}_{lag}.png and read
+# by the browser straight from cdn.tcatlas.org (.png is edge-cached by default).
+_IR_IDX_PREFIX = "tcradar-ir/v3"
+
+
+def _ir_idx_png(frame_2d, vmin=_IR_CMAP_VMIN, vmax=_IR_CMAP_VMAX):
+    """2D Tb array → idx8 PNG bytes, or None when the frame holds no data."""
+    from PIL import Image
+
+    arr = np.asarray(frame_2d, dtype=np.float32)
+    valid = np.isfinite(arr) & (arr > 0)
+    if not valid.any():
+        return None
+    frac = 1.0 - (np.where(valid, arr, vmax) - vmin) / (vmax - vmin)
+    idx = np.clip((np.clip(frac, 0.0, 1.0) * 255).astype(np.uint8), 1, 255)
+    idx[~valid] = 0
+    buf = io.BytesIO()
+    Image.fromarray(np.ascontiguousarray(idx[::-1]), 'L').save(buf, format='PNG', compress_level=6)
+    return buf.getvalue()
+
+
+def _ir_idx_key(dt, case_index, lag_index):
+    return f"{_IR_IDX_PREFIX}/{dt}/{case_index}_{lag_index}.png"
+
+
+_ir_idx_mirroring = set()
+_ir_idx_mirrored = set()      # cases this instance has seen fully mirrored (skips the marker HEAD)
+_ir_idx_mirroring_lock = threading.Lock()
+
+
+def _ir_idx_mirror_case_async(ir_store, dt, case_index, ir_idx):
+    """Mirror every idx8 frame of one case to R2 in the background, so the
+    browser's direct CDN reads hit. One zarr chunk holds all lags of a case,
+    so this is one read plus ~30 ms of PNG encoding per frame, done once per
+    case: a '{case}.ok' marker written last short-circuits later calls."""
+    from global_archive_api import _r2_frame_exists, _r2_put_bytes, _get_r2_client
+    if _get_r2_client() is None:
+        return
+    job = (dt, case_index)
+    with _ir_idx_mirroring_lock:
+        if job in _ir_idx_mirroring or job in _ir_idx_mirrored:
+            return
+        _ir_idx_mirroring.add(job)
+
+    def _run():
+        try:
+            marker = f"{_IR_IDX_PREFIX}/{dt}/{case_index}.ok"
+            if not _r2_frame_exists(marker):
+                tb = np.asarray(ir_store['Tb'][ir_idx])
+                for lag in range(tb.shape[0]):
+                    png = _ir_idx_png(tb[lag])
+                    if png is not None and not _r2_put_bytes(_ir_idx_key(dt, case_index, lag), png, "image/png"):
+                        return   # R2 trouble: no marker, so a later /ir retries
+                if not _r2_put_bytes(marker, b"", "text/plain"):
+                    return
+            with _ir_idx_mirroring_lock:
+                _ir_idx_mirrored.add(job)
+        except Exception as e:
+            print(f"IR idx8 mirror failed for {dt}/{case_index}: {e}")
+        finally:
+            with _ir_idx_mirroring_lock:
+                _ir_idx_mirroring.discard(job)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 @app.get("/ir")
 def get_ir(
     case_index: int = Query(..., ge=0),
     data_type:  str = Query("swath", description="'swath' or 'merge'"),
+    fmt:        str = Query("", description="'idx8' = colormap-index frames (frame0 + CDN base)"),
 ):
     """
     Return IR metadata and the t=0 frame (most recent) for instant display.
     The client then calls /ir_frame for each additional lag index to progressively
+    build the loop. With fmt=idx8, frame0 is an idx8 PNG and the response names
+    the CDN prefix the remaining frames are read from (frame_cdn_base).
     """
     ir_store = get_ir_dataset()
     if ir_store is None:
@@ -2575,7 +2649,11 @@ def get_ir(
 
     # Render ONLY the t=0 frame (index 0) for instant display
     tb_frame0 = ir_store['Tb'][ir_idx, 0]  # shape: (n_lat, n_lon)
-    if np.all(np.isnan(tb_frame0)):
+    idx8 = fmt == "idx8"
+    if idx8:
+        png0 = _ir_idx_png(tb_frame0)
+        frame0_png = ("data:image/png;base64," + base64.b64encode(png0).decode('ascii')) if png0 else None
+    elif np.all(np.isnan(tb_frame0)):
         frame0_png = None
     else:
         frame0_png = _render_ir_png(tb_frame0, vmin=_IR_CMAP_VMIN, vmax=_IR_CMAP_VMAX)
@@ -2591,7 +2669,7 @@ def get_ir(
         else:
             ir_datetimes.append(None)
 
-    return {
+    result = {
         "case_index": case_index,
         "center_lat": center_lat,
         "center_lon": center_lon,
@@ -2603,6 +2681,15 @@ def get_ir(
         "frame0": frame0_png,
         "units": "K",
     }
+    if idx8:
+        # The prefix is advertised, never hardcoded client-side, so a future
+        # v4 is a server-only change.
+        from global_archive_api import _R2_PUBLIC_BASE
+        dt_key = "merge" if data_type == "merge" else "swath"
+        result["frame_fmt"] = "idx8"
+        result["frame_cdn_base"] = f"{_R2_PUBLIC_BASE}/{_IR_IDX_PREFIX}/{dt_key}/"
+        _ir_idx_mirror_case_async(ir_store, dt_key, case_index, ir_idx)
+    return result
 
 
 @app.get("/ir_frame")
@@ -2610,11 +2697,17 @@ def get_ir_frame(
     case_index: int = Query(..., ge=0),
     lag_index:  int = Query(..., ge=0),
     data_type:  str = Query("swath", description="'swath' or 'merge'"),
+    fmt:        str = Query("", description="'idx8' = the frame as an idx8 PNG (image/png)"),
 ):
     """
     Return a single server-rendered IR PNG frame.
     Called progressively by the client to build up the animation.
+    fmt=idx8 is the explorer's fallback when the CDN copy is not there yet:
+    it always renders and answers with the PNG bytes (never a redirect, since
+    Cloudflare may still hold the CDN 404 that sent the client here).
     """
+    if fmt == "idx8":
+        return _get_ir_frame_idx8(case_index, lag_index, data_type)
     # R2 fast path: TC-RADAR frames are immutable per (data_type, case, lag).
     # Mirror each to R2 + 302 to cdn.tcatlas.org so the ~330 KB PNG-JSON serves
     # from object storage, not streamed through Cloud Run (this endpoint was
@@ -2673,6 +2766,31 @@ def get_ir_frame(
     # Mirror to R2 so subsequent requests 302 to cdn.tcatlas.org (off Cloud Run)
     _r2_mirror_frame_async(r2_key, result)
     return result
+
+
+def _get_ir_frame_idx8(case_index, lag_index, data_type):
+    ir_store = get_ir_dataset()
+    if ir_store is None:
+        raise HTTPException(status_code=503, detail="IR data not available (S3 not configured)")
+    ir_idx = case_index
+    if data_type == "merge":
+        ir_idx = _merge_to_swath_index.get(case_index)
+        if ir_idx is None:
+            raise HTTPException(status_code=404, detail=f"No swath mapping for merge case {case_index}")
+    try:
+        status = int(ir_store['status'][ir_idx])
+    except (IndexError, KeyError):
+        raise HTTPException(status_code=404, detail=f"Case {ir_idx} not found in IR store")
+    if status != 1:
+        raise HTTPException(status_code=404, detail=f"No IR data for case {ir_idx}")
+    if lag_index >= ir_store['Tb'].shape[1]:
+        raise HTTPException(status_code=404, detail=f"lag_index {lag_index} out of range")
+    png = _ir_idx_png(ir_store['Tb'][ir_idx, lag_index])
+    if png is None:
+        raise HTTPException(status_code=404, detail="No IR data for this frame")
+    _ir_idx_mirror_case_async(ir_store, "merge" if data_type == "merge" else "swath", case_index, ir_idx)
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=86400, immutable"})
 
 
 
