@@ -18344,7 +18344,7 @@
                           '<span class="rt-genesis-trend-title">Intensity change (ΔV)</span>' +
                           '<div style="display:flex;gap:4px;align-items:center;">' +
                             '<button id="rt-genesis-ic-12h-btn" type="button" onclick="window._genesisIcInterval(12)" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">12h</button>' +
-                            '<button id="rt-genesis-ic-24h-btn" type="button" onclick="window._genesisIcInterval(24)" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">24h</button>' +
+                            '<button id="rt-genesis-ic-24h-btn" type="button" onclick="window._genesisIcInterval(24)" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;">24h</button>' +
                           '</div>' +
                           '<button id="rt-genesis-ic-save" type="button" class="rt-genesis-modal-save" style="position:static;margin-left:auto;padding:2px 7px;font-size:0.6rem;" title="Save ΔV distribution as PNG">⤓ PNG</button>' +
                         '</div>' +
@@ -18363,7 +18363,7 @@
                           '<span class="rt-genesis-trend-title">RI probability by lead time</span>' +
                           '<div style="display:flex;gap:4px;align-items:center;">' +
                             '<button id="rt-genesis-ic-pri-12h-btn" type="button" onclick="window._genesisIcInterval(12)" class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">12h</button>' +
-                            '<button id="rt-genesis-ic-pri-24h-btn" type="button" onclick="window._genesisIcInterval(24)" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">24h</button>' +
+                            '<button id="rt-genesis-ic-pri-24h-btn" type="button" onclick="window._genesisIcInterval(24)" class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;">24h</button>' +
                           '</div>' +
                           '<button id="rt-genesis-ic-pri-save" type="button" class="rt-genesis-modal-save" style="position:static;margin-left:auto;padding:2px 7px;font-size:0.6rem;" title="Save RI probability chart as PNG">⤓ PNG</button>' +
                         '</div>' +
@@ -20664,11 +20664,11 @@
         _genesisIcInt = hours;
         ['rt-genesis-ic-12h-btn', 'rt-genesis-ic-pri-12h-btn'].forEach(function (id) {
             var b = document.getElementById(id);
-            if (b) { b.style.background = hours === 12 ? 'rgba(0,229,255,0.2)' : ''; b.classList.toggle('active', hours === 12); }
+            if (b) b.classList.toggle('active', hours === 12);
         });
         ['rt-genesis-ic-24h-btn', 'rt-genesis-ic-pri-24h-btn'].forEach(function (id) {
             var b = document.getElementById(id);
-            if (b) { b.style.background = hours === 24 ? 'rgba(0,229,255,0.2)' : ''; b.classList.toggle('active', hours === 24); }
+            if (b) b.classList.toggle('active', hours === 24);
         });
         _genesisIcClampSlider();   // valid range differs between 12h and 24h
         _genesisIcDrawDist();
@@ -28449,8 +28449,6 @@
         _rtDmChangeInt = hours;
         var btn12 = document.getElementById('rt-dm-change-12h-btn');
         var btn24 = document.getElementById('rt-dm-change-24h-btn');
-        if (btn12) btn12.style.background = hours === 12 ? 'rgba(0,229,255,0.2)' : '';
-        if (btn24) btn24.style.background = hours === 24 ? 'rgba(0,229,255,0.2)' : '';
         if (btn12) btn12.classList.toggle('active', hours === 12);
         if (btn24) btn24.classList.toggle('active', hours === 24);
         _rtRenderChangeHist();

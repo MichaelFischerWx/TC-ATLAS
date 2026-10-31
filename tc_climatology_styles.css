@@ -65,9 +65,9 @@
 }
 .tc-clim-subnav-btn:last-child { border-right: none; }
 .tc-clim-subnav-btn:hover { color: var(--text); background: rgba(15, 22, 35,0.04); }
-.tc-clim-subnav-btn.active {
-    background: var(--um-green-tint);
-    color: var(--um-green);
+.tc-clim-subnav-btn.active, .tc-clim-subnav-btn.active:hover {
+    background: var(--sel-fill);
+    color: var(--sel-ink);
     font-weight: 600;
 }
 
@@ -297,9 +297,9 @@
     color: var(--text);
 }
 #tc-clim-subseasonal .segmented button.active {
-    background: var(--blue);
-    color: white;
-    border-color: var(--blue);
+    background: var(--sel-fill);
+    color: var(--sel-ink);
+    border-color: var(--sel-fill);
 }
 
 /* ════════════════════════════════════════════════════════════════
