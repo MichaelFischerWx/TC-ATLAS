@@ -948,7 +948,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                     '<button class="overlay-pill" id="btn-archive-fl" onclick="archiveToggleFlightLevel()" data-color="blue" title="Flight-Level Data">' + _icon('plane') + 'FL</button>' +
                     '<button class="overlay-pill" id="btn-archive-sonde" onclick="archiveToggleDropsondes()" data-color="blue" title="Dropsonde Data">' + _icon('parachute') + 'Sondes</button>' +
                     '<button class="overlay-pill" id="barb-btn" onclick="toggleWindBarbs()" data-color="slate" title="Wind Barbs">' + _icon('wind') + 'Barbs</button>' +
-                    '<button class="overlay-pill" id="sear-btn" onclick="toggleSear()" data-color="pink" disabled title="SEAR 10-m wind (experimental): the surface wind estimated from this analysis\u2019 500-m and 2-km TDR winds. In-sample: SEAR\u2019s surface model was trained on dropsondes collocated with these analyses.">' + _icon('wind') + 'SEAR 10-m</button>' +
+                    '<button class="overlay-pill" id="sear-btn" onclick="toggleSear()" data-color="pink" disabled title="SEAR 10-m wind (experimental): the surface wind estimated from this analysis\u2019 500-m and 2-km TDR winds with the same model as the Recon tab\u2019s live TDR swath; no estimate inside half the RMW. In-sample: SEAR\u2019s surface model was trained on dropsondes collocated with these analyses.">' + _icon('wind') + 'SEAR 10-m</button>' +
                     '<button class="overlay-pill" id="tilt-btn" onclick="toggleTiltProfile()" data-color="slate" title="Vortex Tilt Profile">' + _icon('target') + 'Tilt</button>' +
                     '<button class="overlay-pill" id="env-case-btn" onclick="toggleEnvOverlay()" data-color="emerald" title="ERA5 Environment Diagnostics">' + _icon('globe') + 'Env</button>' +
                     '<button class="overlay-pill" id="mw-overlay-btn" onclick="toggleMicrowaveOverlay()" data-color="orange" title="Microwave Satellite Overlay">' + _icon('dish') + 'MW</button>' +
@@ -5029,14 +5029,16 @@ function _toggleDualPane() {
 // ── Auto-fetch azimuthal mean into the right dual pane ────────
 
 // ── SEAR 10-m wind (experimental), precomputed per case ─────────────────────
-// bin/build_tcradar_sear.py runs SEAR Stage 2 on every case's own recentered 500-m +
-// 2-km winds (ERA5 shear from the matching TC-RADAR v4.0 case) and uploads one gzip
-// JSON per case to cdn.tcatlas.org/tcradar-sear/v1/{swath|merge}/{case}.json, in
+// bin/build_tcradar_sear.py runs the live Recon-tab TDR swath recipe (MLBT
+// sear_swath.compute_field: TDR-path Stage 2 V2c, eye mask inside 0.5 local RMW,
+// 80% band) on every case's own recentered 500-m + 2-km winds (ERA5 shear from the
+// matching TC-RADAR v4.0 case) and uploads one gzip JSON per case to
+// cdn.tcatlas.org/tcradar-sear/v2/{swath|merge}/{case}.json (v1 = old Stage 2 v8), in
 // the /data shape — so the plan view, map drape, hover, RMW ring and colorbar all
 // reuse the normal render path. Discrete recon wind scale (same as the RT recon
 // map). IN-SAMPLE: Stage 2 was trained on sondes collocated with these analyses.
 var _searMode = false, _searIndex = {}, _searIndexReq = {}, _searCache = {};
-var _SEAR_CDN = 'https://cdn.tcatlas.org/tcradar-sear/v1/';
+var _SEAR_CDN = 'https://cdn.tcatlas.org/tcradar-sear/v2/';
 // Copy of realtime_ir.js _RECON_WIND_STOPS — keep in sync (96-112 kt deep wine since 2026-09-28).
 var _SEAR_STOPS = [[34, '#60a5fa'], [50, '#22c55e'], [64, '#eab308'], [83, '#f97316'], [96, '#ef4444'], [113, '#9d174d'], [137, '#c026d3'], [999, '#7c3aed']];
 var _SEAR_VMIN = 0, _SEAR_VMAX = 170;
@@ -5097,7 +5099,7 @@ function _searSyncBtn() {
     if (!has && _searMode) _searMode = false;
     b.classList.toggle('active', _searMode);
     var ix = _searIndex[_activeDataType];
-    b.title = has ? 'SEAR 10-m wind (experimental), max ' + ix[String(currentCaseIndex)] + ' kt. Estimated from this analysis’ 500-m and 2-km TDR winds. In-sample: SEAR’s surface model was trained on dropsondes collocated with these analyses.'
+    b.title = has ? 'SEAR 10-m wind (experimental), max ' + ix[String(currentCaseIndex)] + ' kt. Estimated from this analysis’ 500-m and 2-km TDR winds with the same model as the Recon tab’s live TDR swath; no estimate inside half the RMW. In-sample: SEAR’s surface model was trained on dropsondes collocated with these analyses.'
                   : 'SEAR 10-m wind: not available for this analysis (no 500-m TDR data or no ERA5 environment match).';
 }
 window.toggleSear = function () {
@@ -5113,7 +5115,8 @@ function _searRender(callback) {
     var go = function (j) {
         if (ci !== currentCaseIndex || dt !== _activeDataType || !_searMode) return;
         var json = { data: j.data, x: j.x, y: j.y, actual_level_km: 0.01,
-            variable: { key: 'sear_10m', display_name: 'SEAR 10-m wind (exp, in-sample) \u00b7 max ' + j.max_kt + ' kt', units: 'kt',
+            variable: { key: 'sear_10m', display_name: 'SEAR 10-m wind (exp, in-sample) \u00b7 max ' + j.max_kt + ' kt' +
+                            (j.max_band_kt ? ' (80%: ' + j.max_band_kt[0] + '\u2013' + j.max_band_kt[1] + ')' : ''), units: 'kt',
                         vmin: _SEAR_VMIN, vmax: _SEAR_VMAX, colorscale: _searColorscale() },
             case_meta: { rmw_km: j.rmw_km } };
         renderPlotFromJSON(json, resultDiv);

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Precompute the experimental SEAR 10-m wind for every TC-RADAR explorer case (v3m swath + merge).
 
-Recipe = MLBT realtime/sear_swath.compute_field (validated in MLBT external/SEAR/Repro/tdr_swath):
-the case's own WCM-recentered earth-relative 500-m and 2-km winds -> SEAR Stage 2 (the shipped
-live model) -> WL150 -> 10 m (SEAR's binned sonde factor). Environment = ERA5 850-200 hPa shear
+Recipe = MLBT realtime/sear_swath.compute_field, i.e. the live Recon-tab TDR swath: the case's own
+WCM-recentered earth-relative 500-m and 2-km winds -> realtime/sear_tdr_features -> the swath's SEAR
+Stage 2 (sear_swath.swath_model_path(), V2c since 2026-09-29) -> WL150 -> 10 m (interpolated sonde
+factor), no estimate inside 0.5 local RMW, 80% band at the peak cell. Environment = ERA5 850-200 hPa shear
 (0-500 km) from the TC-RADAR v4.0 case on the same mission nearest in time (the environment
 Stage 2 was trained on). Cases with no v4.0 match are skipped and listed in the index.
 
@@ -11,8 +12,8 @@ NOTE: Stage 2 was trained on dropsondes collocated with these same analyses (all
 so these fields are IN-SAMPLE -- the explorer labels them that way.
 
 Output (one gzip JSON per case, in the /data response shape the explorer already renders):
-  tcradar-sear/v1/{swath|merge}/{case_index}.json   {data: [[kt|null]], x, y, units, rmw_km, max_kt, ...}
-  tcradar-sear/v1/{swath|merge}/index.json          {cases: {idx: max_kt}, skipped: {...}, model, generated}
+  tcradar-sear/v2/{swath|merge}/{case_index}.json   {data: [[kt|null]], x, y, units, rmw_km, max_kt, max_band_kt, ...}
+  tcradar-sear/v2/{swath|merge}/index.json          {cases: {idx: max_kt}, skipped: {...}, model, generated}
 Uploaded to R2 (cdn.tcatlas.org) with the R2 creds from Secret Manager, like sear-rt-cron.sh.
 
 Usage:  python3 bin/build_tcradar_sear.py [--dtype swath|merge|both] [--limit N] [--no-upload] [--cases 1,2]
@@ -37,10 +38,10 @@ MLBT = Path.home() / "github" / "MLBT"
 sys.path.insert(0, str(MLBT / "realtime"))
 sys.path.insert(0, str(MLBT / "external" / "SEAR" / "Scripts"))
 import joblib  # noqa: E402
-import sear_rt  # noqa: E402  (model paths / tag -- same model as the live product)
-import sear_swath  # noqa: E402
+import sear_swath  # noqa: E402  (model path / tag -- the live TDR swath's model)
 from config import STAGE2_BASE_RMW_FLOOR_KM, TC_RADAR_SWATH_FILE  # noqa: E402
 from reduction import wl150_to_10m_factor  # noqa: E402
+from sear_tdr_features import tdr_stage2_features  # noqa: E402
 from stage1_features import build_case_environment  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
@@ -50,8 +51,8 @@ FILES = {("swath", "early"): "tc_radar_v3m_1997_2019_xy_rel_swath_ships.nc",
          ("merge", "early"): "tc_radar_v3m_1997_2019_xy_rel_merge_ships.nc",
          ("merge", "recent"): "tc_radar_v3m_2020_2024_xy_rel_merge_ships.nc"}
 META = {"swath": REPO / "tc_radar_metadata.json", "merge": REPO / "tc_radar_metadata_merge.json"}
-PREFIX = "tcradar-sear/v1"
-OUT = Path(os.environ.get("TCRADAR_SEAR_OUT", Path.home() / "Data" / "tcradar_sear"))
+PREFIX = "tcradar-sear/v2"     # v2 = TDR-path Stage 2 V2c (live swath model); v1 = Stage 2 v8, kept for rollback
+OUT = Path(os.environ.get("TCRADAR_SEAR_OUT", Path.home() / "Data" / "tcradar_sear" / PREFIX.split("/")[-1]))
 KT = 1.943844
 MAX_MATCH_H = 4.0          # v4.0 case on the same mission within this many hours supplies the ERA5 env
 
@@ -65,27 +66,33 @@ def v4_env_table() -> pd.DataFrame:
 
 
 def field(u5, v5, u2, v2, x, y, rmw, lat, env, art):
-    """sear_swath.compute_field's recipe on an already-recentered grid (center at x=y=0)."""
-    s5, s2 = np.hypot(u5, v5), np.hypot(u2, v2)
-    X, Y = np.meshgrid(x, y); r = np.hypot(X, Y); az = (np.degrees(np.arctan2(X, Y)) + 360) % 360
-    rb, pb = sear_swath._wedge_rmw(s2, x, y, 0.0, 0.0, rmw)
-    b = np.minimum(az // 10, 35).astype(int); rl, pk = rb[b], pb[b]
-    ring = np.abs(r - rmw) < 4
-    pk_mean = np.nanmax(np.where(ring, s2, np.nan)) if np.isfinite(np.where(ring, s2, np.nan)).any() else np.nan
-    fb = ~np.isfinite(rl); rmw_use = np.where(fb, rmw, rl); pk_use = np.where(fb, pk_mean, pk)
-    sraz = np.radians((az - env["dir"] + 360) % 360); ln_rmw = np.log(max(rmw, 2.0))
-    cols = {"stacked_tdr500_wind_ms": s5, "stacked_tdr500_u_ms": u5, "stacked_tdr500_v_ms": v5, "wind_ms": s2,
-            "r_over_rmw": r / rmw_use, "sraz_sin": np.sin(sraz), "sraz_cos": np.cos(sraz), "latitude": lat,
-            "era5_shear_mag_850_200_0_500": env["shear"], "era5_rh_low_0_500": env["rh"], "ln_rmw": ln_rmw,
-            "w_rel": np.clip(s2 / pk_use, 0, 1.5), "radius_km": r}
-    F = pd.DataFrame({f: np.broadcast_to(np.asarray(cols[f], float), r.shape).ravel() for f in art["features"]})
+    """sear_swath.compute_field on an already-recentered grid (center at x=y=0): the same feature builder
+    (sear_tdr_features), the same artifact (the live swath model), eye mask, 80% band and WL150 -> 10 m."""
+    FT = tdr_stage2_features(u5, v5, u2, v2, x, y, 0.0, 0.0, rmw, lat, env["shear"], env["dir"])
+    cols, r, s5 = FT["cols"], FT["r"], FT["s5"]
+    missing = [f for f in art["features"] if f not in cols]
+    if missing:
+        raise RuntimeError(f"Stage 2 artifact needs features sear_tdr_features does not build: {missing}")
+    F = pd.DataFrame({f: np.asarray(cols[f], dtype=float).ravel() for f in art["features"]})
     ok = np.isfinite(F.to_numpy(float)).all(1) & (s5.ravel() > 0) & (r.ravel() <= 200)
-    wl = np.full(r.size, np.nan)
+    eye = art.get("eye_mask_r_over_rmw")
+    if eye:                                           # no estimate inside half the local RMW (artifact-declared)
+        ok &= np.asarray(cols[art.get("eye_mask_feature", "r_over_rmw_g")], float).ravel() >= float(eye)
+    ln_rmw = float(np.log(max(rmw, 2.0)))
+    wl, wl_lo, wl_hi = (np.full(r.size, np.nan) for _ in range(3))
     if ok.any():
         base = art.get("base")
-        b0 = (base["c0"] + base["c1"] * max(ln_rmw, np.log(STAGE2_BASE_RMW_FLOOR_KM))) if base else 0.0
-        wl[ok] = (b0 + art["model"].predict(F[ok])) * s5.ravel()[ok]
-    return (wl150_to_10m_factor(wl) * wl).reshape(r.shape) * KT, r
+        floor = float(base.get("floor_km", STAGE2_BASE_RMW_FLOOR_KM)) if base else STAGE2_BASE_RMW_FLOOR_KM
+        b0 = (base["c0"] + base["c1"] * max(ln_rmw, np.log(floor))) if base else 0.0
+        s5k = s5.ravel()[ok]
+        wl[ok] = (b0 + art["model"].predict(F[ok])) * s5k
+        q = art.get("quantiles")
+        if q:                                         # 80% band: conformalized 10th/90th-percentile ratio models
+            adj = float(art.get("band_adjust_ratio", 0.0))
+            wl_lo[ok] = (q["0.1"].predict(F[ok]) - adj) * s5k
+            wl_hi[ok] = (q["0.9"].predict(F[ok]) + adj) * s5k
+    to10 = lambda w: (wl150_to_10m_factor(w) * w).reshape(r.shape) * KT  # noqa: E731
+    return to10(wl), to10(wl_lo), to10(wl_hi), r
 
 
 def r2_client():
@@ -105,7 +112,7 @@ def main() -> int:
     ap.add_argument("--cases", default="", help="comma-separated case indices (test runs)")
     ap.add_argument("--no-upload", action="store_true")
     a = ap.parse_args()
-    art = joblib.load(sear_rt.STAGE2_MODEL)
+    art = joblib.load(sear_swath.swath_model_path())
     v4 = v4_env_table()
     cli = None if a.no_upload else r2_client()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -143,7 +150,7 @@ def main() -> int:
             rmw = float(ds["tc_rmw"].isel(num_cases=li, height=i2).values)
             if not np.isfinite(rmw) or rmw <= 0:
                 index["skipped"][str(ci)] = "no 2-km RMW"; continue
-            w, r = field(u5, v5, u2, v2, x, y, rmw, float(m["latitude"]), env, art)
+            w, w_lo, w_hi, r = field(u5, v5, u2, v2, x, y, rmw, float(m["latitude"]), env, art)
             if not np.isfinite(w).any():
                 index["skipped"][str(ci)] = "no 500-m TDR data"; continue
             rows = np.where(np.isfinite(w).any(1))[0]; cols = np.where(np.isfinite(w).any(0))[0]
@@ -154,10 +161,12 @@ def main() -> int:
                    "data": [[None if not np.isfinite(v) else int(round(v)) for v in row] for row in sub],
                    "units": "kt", "variable": {"key": "sear_10m", "display_name": "SEAR 10-m wind (exp)", "units": "kt"},
                    "rmw_km": rmw, "max_kt": int(round(w[k])), "max_r_km": round(float(r[k]), 1),
+                   "max_band_kt": ([int(round(w_lo[k])), int(round(w_hi[k]))]
+                                   if np.isfinite(w_lo[k]) and np.isfinite(w_hi[k]) else None),
                    "coverage_r60": round(float(np.isfinite(w[r < 60]).mean()), 2),
                    "env": {"shear_ms": round(env["shear"], 1), "shear_dir": round(env["dir"]), "src": "ERA5 via TC-RADAR v4.0",
                            "match_dt_min": round(float(abs(e.t - tm) / 60))},
-                   "model": sear_rt.MODEL_TAG, "in_sample": True, "generated": now}
+                   "model": sear_swath.SWATH_MODEL_TAG, "in_sample": True, "generated": now}
             fp = odir / f"{ci}.json"
             raw = gzip.compress(json.dumps(out, separators=(",", ":"), allow_nan=False).encode(), 9)
             fp.write_bytes(raw)
@@ -167,7 +176,7 @@ def main() -> int:
                                ContentEncoding="gzip", CacheControl="public, max-age=86400")
             if n % 100 == 0:
                 print(f"{dt}: {n} cases ({len(index['cases'])} ok, {len(index['skipped'])} skipped) {time.time() - t0:.0f}s", flush=True)
-        index.update({"model": sear_rt.MODEL_TAG, "generated": now, "units": "kt", "in_sample": True,
+        index.update({"model": sear_swath.SWATH_MODEL_TAG, "generated": now, "units": "kt", "in_sample": True,
                       "note": "SEAR 10-m wind (experimental) from the TDR 500-m wind; Stage 2 trained on sondes collocated with these analyses"})
         idx_p.write_text(json.dumps(index, separators=(",", ":")))
         if cli is not None:
