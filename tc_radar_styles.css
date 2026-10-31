@@ -204,9 +204,7 @@ outline-offset: 2px;
         transition-duration: 0.01ms !important;
         scroll-behavior: auto !important;
     }
-    .spinner, .ga-spinner, .ir-loader-spinner, .sat-spinner,
-    .env-loading-spinner, .rt-genesis-modal-loader-spinner,
-    .rt-mw-compare-spinner, .rt-anim-spin, .qv-card-thumb.is-loading::after {
+    .tc-spinner, .rt-anim-spin, .qv-card-thumb.is-loading::after {
         animation-duration: 0.8s !important;
         animation-iteration-count: infinite !important;
     }
@@ -979,16 +977,6 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 .env-no-case-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.4; }
 .env-no-case-msg { font-size: 13px; max-width: 360px; line-height: 1.6; }
 
-/* Loading spinner for env overlay */
-.env-loading-spinner {
-    width: 48px; height: 48px;
-    /* Neutral slate track at 40% alpha reads on both themes; the
-       previous cyan-on-cyan-alpha disappeared on dark navy. */
-    border: 3px solid rgba(148, 163, 184, 0.4);
-    border-top-color: var(--cyan); border-radius: 50%;
-    animation: envSpin 0.8s linear infinite; margin-bottom: 16px;
-}
-@keyframes envSpin { to { transform: rotate(360deg); } }
 @keyframes envPulse { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
 
 @media (max-width: 1100px) {
@@ -1043,8 +1031,19 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 
 /* ── Loading ─────────────────────────────────────── */
 #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); background: var(--surface-raised); padding: 30px 40px; border-radius: var(--radius-lg); box-shadow: 0 4px 20px rgba(0,0,0,0.12); z-index: 1000; text-align: center; color: var(--text); border: 1px solid var(--border); }
-.spinner { border: 3px solid rgba(148, 163, 184, 0.4); border-top: 3px solid var(--cyan); border-radius: 50%; width: 36px; height: 36px; animation: spin 0.8s linear infinite; margin: 0 auto 12px; }
 @keyframes spin { 0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
+
+/* ── Spinner: the site's one loading indicator ───── */
+/* A green arc on a neutral track. The arc is the mid green in BOTH themes on
+   purpose: spinners sit on light cards, dark cards and dark map overlays, and
+   the light theme's #005030 vanishes on the dark ones. Sizes: --sm 16 px
+   (inline, buttons), default 24 px (panels), --lg 36 px (page or map).
+   --block centres it above a caption. */
+.tc-spinner { display: inline-block; flex: none; box-sizing: border-box; width: 24px; height: 24px; border-radius: 50%; border: 3px solid rgba(148, 163, 184, 0.4); border-top-color: #4a9b6e; animation: tc-spin 0.8s linear infinite; }
+.tc-spinner--sm { width: 16px; height: 16px; border-width: 2px; }
+.tc-spinner--lg { width: 36px; height: 36px; }
+.tc-spinner--block { display: block; margin: 0 auto 12px; }
+@keyframes tc-spin { to { transform: rotate(360deg); } }
 
 /* ── Below-fold sections ─────────────────────────── */
 .content-section { max-width: 1100px; margin: 0 auto; padding: 5rem 24px; }

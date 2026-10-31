@@ -273,7 +273,7 @@
         sel = null; basinsOn = {};
         $('gra-loading').style.display = '';
         $('gra-loading').innerHTML =
-            '<div class="ga-spinner"></div><span>Loading reanalysis&hellip;</span>';
+            '<div class="tc-spinner"></div><span>Loading reanalysis&hellip;</span>';
         renderVersions();
         return getJSON(DATA() + '/index.json')
             .then(function (j) {

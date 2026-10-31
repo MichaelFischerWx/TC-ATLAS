@@ -131,22 +131,19 @@
 
     // Transient toast for actions whose failure/fallback would otherwise be
     // invisible (product switch falling back, an overlay that didn't load).
-    // One reusable element; a repeat call replaces the message + timer.
-    var _rtToastTimer = null;
+    // The shared TCToast (theme.js); repeating a message refreshes it.
     function _rtToast(msg) {
-        var el = document.getElementById('rt-toast');
-        if (!el) {
-            el = document.createElement('div');
-            el.id = 'rt-toast';
-            document.body.appendChild(el);
-        }
-        el.textContent = msg;
-        el.classList.add('rt-toast-show');
-        if (_rtToastTimer) clearTimeout(_rtToastTimer);
-        _rtToastTimer = setTimeout(function () {
-            el.classList.remove('rt-toast-show');
-        }, 4000);
+        TCToast.show(msg);
     }
+    // Every toast on this page (Recon's too) clears the animation dock while
+    // it's open; same measurement as the genesis card's lift.
+    window.tcToastBottom = function () {
+        var dock = document.getElementById('ir-global-anim-panel');
+        if (!dock || dock.offsetParent === null) return 0;
+        var r = dock.getBoundingClientRect();
+        var lift = Math.round(window.innerHeight - r.top) + 12;
+        return (r.height && lift > 40 && lift < window.innerHeight * 0.6) ? lift : 0;
+    };
 
     // ── IR Colormap LUTs (for client-side raw Tb rendering) ────
     var IR_COLORMAPS = {};
@@ -6560,7 +6557,7 @@
             pill.id = 'ir-global-loading';
             pill.className = 'ir-global-loading';
             pill.setAttribute('aria-live', 'polite');
-            pill.innerHTML = '<div class="ir-loader-spinner"></div><span>Loading satellite imagery\u2026</span>';
+            pill.innerHTML = '<div class="tc-spinner tc-spinner--sm ir-loader-spinner"></div><span>Loading satellite imagery\u2026</span>';
             host.appendChild(pill);
             setTimeout(_hideGlobalLoadingPill, 30000);
         })();
@@ -8224,7 +8221,7 @@
             pill.id = 'ir-detail-loading';
             pill.className = 'ir-global-loading';
             pill.setAttribute('aria-live', 'polite');
-            pill.innerHTML = '<div class="ir-loader-spinner"></div><span>Loading satellite imagery\u2026</span>';
+            pill.innerHTML = '<div class="tc-spinner tc-spinner--sm ir-loader-spinner"></div><span>Loading satellite imagery\u2026</span>';
             host.appendChild(pill);
         }
         pill.style.display = '';
@@ -18274,7 +18271,7 @@
                 // _genesisShowLoader). Hidden by default; the header stays
                 // visible/clickable behind/above it.
                 '<div id="rt-genesis-modal-loader" class="rt-genesis-modal-loader" style="display:none;">' +
-                  '<div class="rt-genesis-modal-loader-spinner"></div>' +
+                  '<div class="tc-spinner tc-spinner--lg"></div>' +
                   '<div class="rt-genesis-modal-loader-text">Loading ensemble members…</div>' +
                 '</div>' +
                 // ── Trends pane (hidden by default) ──────────────────
@@ -24788,56 +24785,20 @@
     // (cold backend cache) or up to 30 min (a new cycle on a long-open
     // tab) after the user first looked at the map — without this, they
     // silently appear and a user who already glanced away misses them.
-    var _genesisToastTimer = null;
+    // The shared TCToast: id replaces a previous announcement still on
+    // screen, and the page's tcToastBottom() keeps it above the dock (at the
+    // top of the map it covered the band switcher for its whole 8 s).
     function _genesisAnnounceArrival(nDisturbances, isAutoRefresh) {
-        if (!map || typeof map.getContainer !== 'function') return;
-        var container = map.getContainer();
-        if (!container) return;
-        // Replace any toast still on screen so we never stack them.
-        var prev = container.querySelector('.rt-gen-toast');
-        if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
-        if (_genesisToastTimer) { clearTimeout(_genesisToastTimer); _genesisToastTimer = null; }
-
+        if (!map) return;
         var plural = nDisturbances === 1 ? '' : 's';
         var lead = isAutoRefresh ? 'Updated forecast · ' : '';
-        var toast = document.createElement('div');
-        toast.className = 'rt-gen-toast';
-        toast.setAttribute('role', 'status');
-        toast.setAttribute('aria-live', 'polite');
-        toast.innerHTML =
-            '<span class="rt-gen-toast-dot"></span>'
-            + '<span class="rt-gen-toast-body">'
-            + '<b>' + lead + nDisturbances + ' genesis cluster' + plural + '</b>'
-            + '<span class="rt-gen-toast-sub">DeepMind ' + _genesisVariantMemberTag() + ' ensemble guidance, not observed disturbances · tap a marker for details · <a href="#genesis-methods" class="ir-lp-link" onclick="event.stopPropagation(); window._irOpenGenesisMethods(); return false;">methods</a></span>'
-            + '</span>'
-            + '<span class="rt-gen-toast-close" aria-label="Dismiss">×</span>';
-
-        function dismiss() {
-            if (_genesisToastTimer) { clearTimeout(_genesisToastTimer); _genesisToastTimer = null; }
-            toast.classList.add('rt-gen-toast--out');
-            setTimeout(function () {
-                if (toast.parentNode) toast.parentNode.removeChild(toast);
-            }, 320);
-        }
-        toast.addEventListener('click', dismiss);
-        container.appendChild(toast);
-        // CSS parks it bottom-center above the animation dock; when the dock
-        // is taller than usual (extra rows, short window) lift it clear.
-        var dock = document.getElementById('ir-global-anim-panel');
-        if (dock && dock.offsetParent !== null) {
-            var dRect = dock.getBoundingClientRect();
-            var cRect = container.getBoundingClientRect();
-            var lift = Math.round(cRect.bottom - dRect.top) + 12;
-            var cssBottom = parseFloat(getComputedStyle(toast).bottom) || 0;
-            if (dRect.height && lift > cssBottom && lift < cRect.height * 0.6) {
-                toast.style.bottom = lift + 'px';
-            }
-        }
-        // Auto-dismiss after long enough to read, short enough to stay
-        // unobtrusive. Tab-hidden re-polls don't reach here (the repoll
-        // is gated on visibilityState), so the timer always counts down
-        // while the user is actually looking.
-        _genesisToastTimer = setTimeout(dismiss, 8000);
+        TCToast.show('DeepMind ' + _genesisVariantMemberTag() + ' ensemble guidance, not observed disturbances · tap a marker for details ·', {
+            id: 'rt-genesis',
+            title: lead + nDisturbances + ' genesis cluster' + plural,
+            duration: 8000,
+            closable: true,
+            action: { label: 'methods', onClick: function () { window._irOpenGenesisMethods(); } }
+        });
         _ga('rt_genesis_toast', { n_disturbances: nDisturbances, auto: !!isAutoRefresh });
     }
 

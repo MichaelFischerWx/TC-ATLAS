@@ -331,29 +331,9 @@ window.addEventListener('DOMContentLoaded', function() {
     window.scrollTo(0, 0);
 });
 
-// ── Toast notification system ────────────────────────────────
+// ── Toast: the shared TCToast (theme.js) ─────────────────────
 function showToast(message, type, duration) {
-    type = type || 'info';
-    duration = duration || 5000;
-    var container = document.getElementById('toast-container');
-    if (!container) {
-        container = document.createElement('div');
-        container.id = 'toast-container';
-        container.style.cssText = 'position:fixed;top:60px;right:16px;z-index:100000;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
-        document.body.appendChild(container);
-    }
-    var toast = document.createElement('div');
-    var bgColor = type === 'error' ? 'rgba(239,68,68,0.95)' : type === 'warn' ? 'rgba(245,158,11,0.95)' : 'rgba(14,45,90,0.95)';
-    var borderColor = type === 'error' ? '#f87171' : type === 'warn' ? '#fbbf24' : '#60a5fa';
-    toast.style.cssText = 'background:' + bgColor + ';color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;font-family:DM Sans,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,0.4);border:1px solid ' + borderColor + ';backdrop-filter:blur(8px);pointer-events:auto;max-width:380px;opacity:0;transform:translateX(30px);transition:all 0.3s ease;';
-    toast.textContent = message;
-    container.appendChild(toast);
-    requestAnimationFrame(function() { toast.style.opacity = '1'; toast.style.transform = 'translateX(0)'; });
-    setTimeout(function() {
-        toast.style.opacity = '0'; toast.style.transform = 'translateX(30px)';
-        setTimeout(function() { toast.remove(); }, 300);
-    }, duration);
-    return toast;
+    return TCToast.show(message, { type: type, duration: duration });
 }
 
 // ── Save plot as PNG ─────────────────────────────────────────
@@ -2293,7 +2273,7 @@ function _envOverlayShowLoading() {
     if (!display) return;
     display.innerHTML =
         '<div class="env-no-case" style="display:flex;">' +
-            '<div class="env-loading-spinner"></div>' +
+            '<div class="tc-spinner tc-spinner--lg" style="margin-bottom:16px;"></div>' +
             '<div class="env-no-case-msg" style="animation:envPulse 2s ease-in-out infinite;">Loading ERA5 environmental data\u2026</div>' +
         '</div>';
     // Update case info in the controls
@@ -3474,8 +3454,7 @@ function _showIRLoadingIndicator() {
         'border:1px solid rgba(15, 22, 35,0.12);border-radius:8px;' +
         'padding:8px 16px;display:flex;align-items:center;gap:8px;';
     div.innerHTML =
-        '<div style="width:14px;height:14px;border:2px solid rgba(15, 22, 35,0.15);' +
-        'border-top:2px solid #60a5fa;border-radius:50%;animation:spin 1s linear infinite;"></div>' +
+        '<div class="tc-spinner tc-spinner--sm"></div>' +
         '<span style="font-size:11px;color:#93c5fd;font-family:\'JetBrains Mono\',monospace;">IR loading…</span>';
     mapEl.appendChild(div);
 }

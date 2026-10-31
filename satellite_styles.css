@@ -1102,7 +1102,7 @@
 }
 /* Spinner is absolutely positioned (not a flex item) so it stays
    centered over the thumbnail regardless of the sibling <img>. Centred
-   with negative margins rather than translate(-50%) so the qv-spin
+   with negative margins rather than translate(-50%) so the tc-spin
    keyframe's `transform: rotate()` doesn't clobber the centering. */
 .qv-card-thumb.is-loading::after {
     content: "";
@@ -1112,10 +1112,11 @@
     width: 22px;
     height: 22px;
     margin: -11px 0 0 -11px;
-    border: 2px solid var(--border-light);
-    border-top-color: var(--text-dim);
+    /* Same look as .tc-spinner (a pseudo-element can't take the class). */
+    border: 2px solid rgba(148, 163, 184, 0.4);
+    border-top-color: #4a9b6e;
     border-radius: 50%;
-    animation: qv-spin 0.8s linear infinite;
+    animation: tc-spin 0.8s linear infinite;
 }
 .qv-card-thumb.is-error::after {
     content: "No recent imagery";
@@ -1127,7 +1128,6 @@
     color: var(--text-faint);
     font-size: 12px;
 }
-@keyframes qv-spin { to { transform: rotate(360deg); } }
 /* Chips sit OVER the (always-dark) IR image, so they keep a dark scrim
    + light text in both themes. */
 .qv-card-basin-chip {
@@ -1306,20 +1306,6 @@
     pointer-events: none;
 }
 
-.sat-spinner {
-    width: 36px;
-    height: 36px;
-    /* Hard-coded dark-slate track was fine on dark navy but invisible
-       on the new light-theme surfaces. Neutral alpha works on both. */
-    border: 3px solid rgba(148, 163, 184, 0.4);
-    border-top-color: #4a8cff;
-    border-radius: 50%;
-    animation: sat-spin 0.8s linear infinite;
-}
-
-@keyframes sat-spin {
-    to { transform: rotate(360deg); }
-}
 
 .sat-loader-msg {
     margin-top: 12px;
