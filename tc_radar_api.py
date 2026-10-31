@@ -2539,8 +2539,9 @@ def _render_ir_png(frame_2d, vmin=_IR_CMAP_VMIN, vmax=_IR_CMAP_VMAX):
 # colors are byte-identical), 0 = no data. The client applies the LUT itself
 # (on the GPU in the explorer), so one file serves every IR colormap, and it is
 # about a third of the bytes of the baked RGBA PNG (Irma case 481: 121 KB vs 341 KB).
-# Frames are mirrored to R2 at {_IR_IDX_PREFIX}/{dt}/{case}_{lag}.png and read
-# by the browser straight from cdn.tcatlas.org (.png is edge-cached by default).
+# Each frame is mirrored to R2 at {_IR_IDX_PREFIX}/{dt}/{case}_{lag}.png the first
+# time it is rendered, and the browser reads mirrored frames straight from
+# cdn.tcatlas.org (.png is edge-cached by default).
 _IR_IDX_PREFIX = "tcradar-ir/v3"
 
 
@@ -2564,43 +2565,27 @@ def _ir_idx_key(dt, case_index, lag_index):
     return f"{_IR_IDX_PREFIX}/{dt}/{case_index}_{lag_index}.png"
 
 
-_ir_idx_mirroring = set()
-_ir_idx_mirrored = set()      # cases this instance has seen fully mirrored (skips the marker HEAD)
-_ir_idx_mirroring_lock = threading.Lock()
+_ir_idx_mirrored = set()      # R2 keys this instance has written or found present
+_ir_idx_mirror_lock = threading.Lock()
 
 
-def _ir_idx_mirror_case_async(ir_store, dt, case_index, ir_idx):
-    """Mirror every idx8 frame of one case to R2 in the background, so the
-    browser's direct CDN reads hit. One zarr chunk holds all lags of a case,
-    so this is one read plus ~30 ms of PNG encoding per frame, done once per
-    case: a '{case}.ok' marker written last short-circuits later calls."""
+def _ir_idx_mirror_async(key, png):
+    """Upload one rendered idx8 frame to R2 in the background (HEAD first, so
+    each frame is written once). Only I/O runs off-request: Cloud Run throttles
+    CPU once the response is out, and a thread that also rendered the rest of
+    the case stalled after its first frame (2026-10-30)."""
     from global_archive_api import _r2_frame_exists, _r2_put_bytes, _get_r2_client
-    if _get_r2_client() is None:
+    if png is None or _get_r2_client() is None:
         return
-    job = (dt, case_index)
-    with _ir_idx_mirroring_lock:
-        if job in _ir_idx_mirroring or job in _ir_idx_mirrored:
+    with _ir_idx_mirror_lock:
+        if key in _ir_idx_mirrored:
             return
-        _ir_idx_mirroring.add(job)
+        _ir_idx_mirrored.add(key)
 
     def _run():
-        try:
-            marker = f"{_IR_IDX_PREFIX}/{dt}/{case_index}.ok"
-            if not _r2_frame_exists(marker):
-                tb = np.asarray(ir_store['Tb'][ir_idx])
-                for lag in range(tb.shape[0]):
-                    png = _ir_idx_png(tb[lag])
-                    if png is not None and not _r2_put_bytes(_ir_idx_key(dt, case_index, lag), png, "image/png"):
-                        return   # R2 trouble: no marker, so a later /ir retries
-                if not _r2_put_bytes(marker, b"", "text/plain"):
-                    return
-            with _ir_idx_mirroring_lock:
-                _ir_idx_mirrored.add(job)
-        except Exception as e:
-            print(f"IR idx8 mirror failed for {dt}/{case_index}: {e}")
-        finally:
-            with _ir_idx_mirroring_lock:
-                _ir_idx_mirroring.discard(job)
+        if not (_r2_frame_exists(key) or _r2_put_bytes(key, png, "image/png")):
+            with _ir_idx_mirror_lock:
+                _ir_idx_mirrored.discard(key)   # let a later request retry
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -2688,7 +2673,7 @@ def get_ir(
         dt_key = "merge" if data_type == "merge" else "swath"
         result["frame_fmt"] = "idx8"
         result["frame_cdn_base"] = f"{_R2_PUBLIC_BASE}/{_IR_IDX_PREFIX}/{dt_key}/"
-        _ir_idx_mirror_case_async(ir_store, dt_key, case_index, ir_idx)
+        _ir_idx_mirror_async(_ir_idx_key(dt_key, case_index, 0), png0)
     return result
 
 
@@ -2704,7 +2689,8 @@ def get_ir_frame(
     Called progressively by the client to build up the animation.
     fmt=idx8 is the explorer's fallback when the CDN copy is not there yet:
     it always renders and answers with the PNG bytes (never a redirect, since
-    Cloudflare may still hold the CDN 404 that sent the client here).
+    Cloudflare may still hold the CDN 404 that sent the client here), and
+    mirrors the frame so the next viewer reads it from the CDN.
     """
     if fmt == "idx8":
         return _get_ir_frame_idx8(case_index, lag_index, data_type)
@@ -2788,7 +2774,7 @@ def _get_ir_frame_idx8(case_index, lag_index, data_type):
     png = _ir_idx_png(ir_store['Tb'][ir_idx, lag_index])
     if png is None:
         raise HTTPException(status_code=404, detail="No IR data for this frame")
-    _ir_idx_mirror_case_async(ir_store, "merge" if data_type == "merge" else "swath", case_index, ir_idx)
+    _ir_idx_mirror_async(_ir_idx_key("merge" if data_type == "merge" else "swath", case_index, lag_index), png)
     return Response(content=png, media_type="image/png",
                     headers={"Cache-Control": "public, max-age=86400, immutable"})
 
