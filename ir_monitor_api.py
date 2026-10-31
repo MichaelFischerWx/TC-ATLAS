@@ -5269,9 +5269,12 @@ def _build_recent_storm_track(atcf_id: str, days_back: int) -> Optional[dict]:
     track = sorted(by_dt.values(), key=lambda r: r["datetime"])
     latest = track[-1]
     now = _dt.now(timezone.utc)
-    # > 6 hours since last fix → consider dissipated. Active storms get
-    # fix updates every 6h, so this draws a clear line.
-    dissipated = (now - latest["datetime"]).total_seconds() > 6 * 3600
+    # Fallback only — _build_recent_storms overrides `active` from the live
+    # active-storms list when one is available. Fixes are 6-hourly but the
+    # deck files post them 3-6+ h after synoptic time (JTWC can lag more), so
+    # the old 6-h cutoff flagged live storms "dissipated" for part of every
+    # cycle (In-Fa at 115 kt, 2026-10-31).
+    dissipated = (now - latest["datetime"]).total_seconds() > 12 * 3600
     return {
         "atcf_id": atcf_id.upper(),
         "name": name,                    # may be None for early/unnamed systems
@@ -5350,6 +5353,21 @@ def _recent_storms_gcs_put(days: int, payload: dict, built_at: float):
         print(f"[recent-storms] shared copy put failed ({type(ex).__name__}: {ex})")
 
 
+def _live_active_ids():
+    """ATCF ids on the live active-storms list — the one the RT header counts —
+    from this instance's poll or the shared copy, or None when neither is under
+    an hour old. Keeps "active" on the Hovmöller in step with the header."""
+    with _active_storms_lock:
+        if _active_storms_cache.get("updated_utc") and time.time() - _last_poll_time < 3600:
+            return {str(s.get("atcf_id", "")).upper() for s in _active_storms_cache["storms"]}
+    shared = _gcs_storm_cache_get()
+    polled_at = shared.get("polled_at") if shared else None
+    if (isinstance(polled_at, (int, float)) and 0 <= time.time() - polled_at < 3600
+            and isinstance(shared.get("storms"), list)):
+        return {str(s.get("atcf_id", "")).upper() for s in shared["storms"] if isinstance(s, dict)}
+    return None
+
+
 def _build_recent_storms(days: int) -> dict:
     ids = _list_recent_atcf_ids(days)
     # Each storm's track is built from up to ~4 sequential HTTP fetches to
@@ -5375,6 +5393,10 @@ def _build_recent_storms(days: int) -> dict:
                 if entry:
                     entries.append(entry)
     _attach_storm_names(entries)
+    live = _live_active_ids()
+    if live is not None:
+        for e in entries:
+            e["active"] = e["atcf_id"] in live
     entries.sort(key=lambda s: s["last_fix_utc"], reverse=True)
     return {
         "storms": entries,
