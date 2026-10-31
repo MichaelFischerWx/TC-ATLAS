@@ -413,8 +413,9 @@
 }
 
 .sat-mode-btn.active {
-    background: #2a2d38;
-    color: #e2e4ea;
+    background: var(--sel-fill-glass);
+    color: var(--sel-ink);
+    border-color: var(--sel-fill-glass);
 }
 
 /* ── Diagnostics Panel ─────────────────────────────────────── */
@@ -464,8 +465,8 @@
 }
 
 .sat-diag-tab.active {
-    background: #2a2d38;
-    color: #e2e4ea;
+    background: var(--sel-fill-glass);
+    color: var(--sel-ink);
 }
 
 .sat-diag-view {
@@ -495,7 +496,7 @@
     transition: background 0.15s, color 0.15s;
 }
 .sat-hov-lookback-btn:hover { color: #c8cad2; }
-.sat-hov-lookback-btn.active { background: #2a2d38; color: #e2e4ea; }
+.sat-hov-lookback-btn.active { background: var(--sel-fill-glass); color: var(--sel-ink); border-color: var(--sel-fill-glass); }
 
 .sat-diag-chart {
     min-height: 170px;
@@ -1532,8 +1533,9 @@ body.sat-leaflet-active .sat-zoom-group { display: none; }
 }
 
 .sat-zoom-btn.active {
-    background: #2a2d38;
-    color: #7dd3fc;
+    background: var(--sel-fill-glass);
+    color: var(--sel-ink);
+    border-color: var(--sel-fill-glass);
 }
 
 /* ── Responsive ─────────────────────────────────────────────── */

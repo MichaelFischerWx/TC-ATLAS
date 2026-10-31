@@ -445,7 +445,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .sb-seg .view-toggle-btn svg { width: 13px; height: 13px; }
 .sb-seg .view-toggle-btn:hover { color: var(--text); }
-.sb-seg .view-toggle-btn.active { background: var(--um-green); color: #fff; box-shadow: var(--ga-shadow-sm); }
+.sb-seg .view-toggle-btn.active { background: var(--sel-fill); color: var(--sel-ink); box-shadow: var(--ga-shadow-sm); border-color: var(--sel-fill); }
 .sb-dots { display: flex; align-items: center; gap: 10px; padding: 0 6px; border-left: 1px solid var(--border-light); border-right: 1px solid var(--border-light); height: 22px; }
 .dot-toggle {
     display: flex; align-items: center; gap: 5px;
@@ -605,7 +605,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     border: 1px solid var(--border); cursor: pointer; transition: all 0.15s;
 }
 .basin-chip:hover, .month-chip:hover { border-color: var(--blue); color: var(--text); }
-.basin-chip.active, .month-chip.active { background: var(--blue); color: white; border-color: var(--blue); }
+.basin-chip.active, .month-chip.active { background: var(--sel-fill); color: var(--sel-ink); border-color: var(--sel-fill); }
 
 /* basin + month pickers in the sidebar: even grids instead of ragged wraps */
 .sb-basins { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; }
@@ -618,7 +618,9 @@ input[type="range"].ga-range::-moz-range-thumb {
 .sb-months .month-chip { height: 28px; font-weight: 500; }
 .sb-basins .basin-chip:hover, .sb-months .month-chip:hover { border-color: var(--um-green); color: var(--um-green); }
 .sb-basins .basin-chip.active, .sb-months .month-chip.active {
-    background: var(--um-green); border-color: var(--um-green); color: #fff;
+    background: var(--sel-fill);
+    border-color: var(--sel-fill);
+    color: var(--sel-ink);
 }
 
 .sb-filters-toggle {
@@ -905,8 +907,9 @@ input[type="range"].ga-range::-moz-range-thumb {
     padding: 3px 10px;
 }
 .ir-toggle-btn.active {
-    background: var(--blue);
-    color: #ffffff;
+    background: var(--sel-fill);
+    color: var(--sel-ink);
+    border-color: var(--sel-fill);
 }
 
 /* ── Layer bar: uniform overlay-toggle cards ─────────────────
@@ -1113,16 +1116,17 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .ir-follow-btn.active {
     opacity: 1;
-    background: rgba(0, 180, 255, 0.25);
-    border-color: rgba(0, 180, 255, 0.6);
+    background: var(--sel-fill);
+    border-color: var(--sel-fill);
+    color: var(--sel-ink);
 }
 /* 3D button: UM-orange when engaged (matches the Tilt/Height control + the
    RT-monitor 3D pill) instead of the cyan used by the other toggles. */
 .ir-3d-btn.active {
     opacity: 1;
-    background: rgba(244, 115, 33, 0.24);
-    border-color: rgba(244, 115, 33, 0.6);
-    color: #fdba74;
+    background: var(--sel-fill);
+    border-color: var(--sel-fill);
+    color: var(--sel-ink);
 }
 
 /* Colormap selector row — own line below options */
@@ -1148,8 +1152,9 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .ir-cmap-btn.active {
     opacity: 1;
-    background: rgba(0, 180, 255, 0.25);
-    border-color: rgba(0, 180, 255, 0.6);
+    background: var(--sel-fill);
+    border-color: var(--sel-fill);
+    color: var(--sel-ink);
 }
 
 /* ── NEXRAD 88D Overlay ─────────────────────────────────────── */
@@ -1273,11 +1278,11 @@ input[type="range"].ga-range::-moz-range-thumb {
     transition: transform 0.2s, background 0.2s;
 }
 .gif-toggle input:checked + .gif-toggle-slider {
-    background: rgba(0, 180, 255, 0.3);
+    background: var(--sel-fill);
 }
 .gif-toggle input:checked + .gif-toggle-slider::before {
     transform: translateX(14px);
-    background: var(--um-green);
+    background: #ffffff;
 }
 .gif-toggle-label {
     font-size: 0.68rem;
@@ -1314,9 +1319,9 @@ input[type="range"].ga-range::-moz-range-thumb {
     transition: all 0.2s;
 }
 .model-filter-btn.active {
-    background: rgba(116, 185, 255, 0.15);
-    color: #1d4ed8;
-    border-color: rgba(116, 185, 255, 0.4);
+    background: var(--sel-fill);
+    color: var(--sel-ink);
+    border-color: var(--sel-fill);
 }
 .model-legend {
     display: flex;
@@ -2131,9 +2136,9 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ga-sonde-pv-btn.active,
 .ga-sonde-color-btn.active,
 .ga-sonde-view-btn.active {
-    background: var(--um-green-tint);
-    color: var(--um-green);
-    border-color: var(--um-green);
+    background: var(--sel-fill);
+    color: var(--sel-ink);
+    border-color: var(--sel-fill);
 }
 
 /* ── Wind-field on-map legend ── */
@@ -2288,9 +2293,9 @@ input[type="range"].ga-range::-moz-range-thumb {
     color: var(--slate);
 }
 .compare-align.active {
-    background: var(--blue);
-    color: #ffffff;
-    border-color: var(--blue);
+    background: var(--sel-fill);
+    color: var(--sel-ink);
+    border-color: var(--sel-fill);
 }
 
 /* Storm chips bar */
@@ -2359,7 +2364,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     border-color: var(--border-light); background: transparent; color: var(--text);
 }
 .compare-basin-chips .basin-chip:hover { border-color: var(--um-green); color: var(--um-green); }
-.compare-basin-chips .basin-chip.active { background: var(--um-green); border-color: var(--um-green); color: #fff; }
+.compare-basin-chips .basin-chip.active { background: var(--sel-fill); border-color: var(--sel-fill); color: var(--sel-ink); }
 .compare-search-panel .ga-select { border-radius: 8px; border-color: var(--border-light); }
 .compare-search-row { margin-bottom: 10px; }
 .compare-filter-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
@@ -2560,9 +2565,9 @@ input[type="range"].ga-range::-moz-range-thumb {
     transition: all 0.2s;
 }
 .compare-mode-btn.active {
-    background: rgba(0, 180, 255, 0.2);
-    color: var(--um-green);
-    border-color: var(--um-green);
+    background: var(--sel-fill);
+    color: var(--sel-ink);
+    border-color: var(--sel-fill);
 }
 
 /* ── MW Compare Panel ────────────────────────────────────── */
@@ -2775,10 +2780,8 @@ input[type="range"].ga-range::-moz-range-thumb {
 .scorecard-tab:hover {
     background: var(--border);
 }
-.scorecard-tab.active {
-    background: rgba(251,191,36,0.15);
-    border-color: rgba(251,191,36,0.4);
-    color: #fbbf24;
+.scorecard-tab.active, .scorecard-tab.active:hover {
+    background: var(--sel-fill); border-color: var(--sel-fill); color: var(--sel-ink);
 }
 .scorecard-table-wrap {
     overflow-x: auto;
@@ -2946,7 +2949,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     transition: background .15s, color .15s;
 }
 .gra-seg button:hover { color: var(--text); }
-.gra-seg button.active { background: var(--um-green); color: #fff; box-shadow: var(--ga-shadow-sm); }
+.gra-seg button.active { background: var(--sel-fill); color: var(--sel-ink); box-shadow: var(--ga-shadow-sm); border-color: var(--sel-fill); }
 .gra-seg-sm button { height: 24px; padding: 0 9px; font-size: 0.72rem; }
 .gra-seg sub, .gra-chip sub { font-size: 0.72em; }
 /* chips (basins, list order) */
@@ -2958,7 +2961,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     transition: background .15s, color .15s, border-color .15s;
 }
 .gra-chip:hover { border-color: var(--um-green); color: var(--um-green); }
-.gra-chip.active { background: var(--um-green); border-color: var(--um-green); color: #fff; }
+.gra-chip.active { background: var(--sel-fill); border-color: var(--sel-fill); color: var(--sel-ink); }
 .gra-tg-basin .gra-chip { min-width: 40px; }
 /* Filters button + popover */
 .gra-tg-filters { position: relative; min-width: 0; flex: 0 1 auto; }
@@ -4224,7 +4227,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .env-src button span { font-weight: 500; opacity: .8; margin-left: 2px; }
 .env-src button:hover:not(:disabled) { color: var(--text); }
-.env-src button.active { background: var(--um-green); color: #fff; box-shadow: var(--ga-shadow-sm); }
+.env-src button.active { background: var(--sel-fill); color: var(--sel-ink); box-shadow: var(--ga-shadow-sm); border-color: var(--sel-fill); }
 .env-src button.is-na:not(.active) { opacity: .4; cursor: not-allowed; }
 .env-pick { position: relative; margin-left: auto; }
 .env-pick-btn {

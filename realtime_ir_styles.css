@@ -191,10 +191,10 @@ html, body { margin: 0; padding: 0; }
     background: var(--surface-raised);
     border-color: var(--um-green);
 }
-.rt-env-toggle-btn.active {
-    background: rgba(74, 155, 110, 0.15);
-    border-color: var(--um-green);
-    color: var(--um-green);
+.rt-env-toggle-btn.active, .rt-env-toggle-btn.active:hover {
+    background: var(--sel-fill);
+    border-color: var(--sel-fill);
+    color: var(--sel-ink);
 }
 
 /* ── GIBS feed staleness banner ─────────────────────────────── */
@@ -762,7 +762,7 @@ html, body { margin: 0; padding: 0; }
 }
 .ir-opt-item:disabled:hover { background: transparent; }
 .ir-opt-item.active {
-    background: rgba(74, 155, 110, 0.10);
+    background: var(--um-green-tint);
 }
 /* State dot: hollow when off, filled green when on. */
 .ir-opt-dot {
@@ -775,9 +775,8 @@ html, body { margin: 0; padding: 0; }
     transition: background 0.12s, border-color 0.12s;
 }
 .ir-opt-item.active .ir-opt-dot {
-    background: var(--um-green);
-    border-color: var(--um-green);
-    box-shadow: 0 0 5px rgba(74, 155, 110, 0.6);
+    background: var(--sel-fill);
+    border-color: var(--sel-fill);
 }
 .ir-opt-dot-blank {          /* action items — keep alignment, no state */
     border-color: transparent;
@@ -1016,10 +1015,10 @@ html, body { margin: 0; padding: 0; }
     color: #ffffff;
 }
 .ir-product-btn.ir-product-active {
-    /* Opaque: the segment's own 0.92 glass sits under this tint, so the
-       selected channel stays legible over bright WV/Vis imagery. */
-    background: rgba(74, 155, 110, 0.32);
-    color: #ffffff;
+    /* Solid glass green: legible over bright WV/Vis imagery. */
+    background: var(--sel-fill-glass);
+    border-color: var(--sel-fill-glass);
+    color: var(--sel-ink);
 }
 .ir-product-btn.ir-loading {
     color: #fbbf24;
@@ -1065,7 +1064,11 @@ html, body { margin: 0; padding: 0; }
 }
 .ir-detail-layers-btn svg polygon { fill: currentColor; stroke: none; }
 .ir-detail-layers-btn:hover { background: rgba(22, 27, 36, 0.96); color: #ffffff; border-color: rgba(74, 155, 110, 0.45); }
-.ir-detail-layers-btn.active { background: rgba(31, 66, 49, 0.94); color: #ffffff; border-color: rgba(74, 155, 110, 0.65); }
+.ir-detail-layers-btn.active {
+    background: var(--sel-fill-glass);
+    border-color: var(--sel-fill-glass);
+    color: var(--sel-ink);
+}
 .ir-detail-layers-count {
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 15px; height: 15px; padding: 0 4px;
@@ -1221,9 +1224,9 @@ html, body { margin: 0; padding: 0; }
     color: #ffffff;
 }
 .ir-radar-mode-btn.active {
-    background: rgba(34, 197, 94, 0.22);
-    border-color: rgba(34, 197, 94, 0.55);
-    color: #86efac;
+    background: var(--sel-fill-glass);
+    border-color: var(--sel-fill-glass);
+    color: var(--sel-ink);
 }
 /* Measure tool toggle — sibling pill of ⛰3D / ◈Radar in the global-map
    control bar. Cyan active state (a readout utility, not an overlay product).
@@ -1253,9 +1256,9 @@ html, body { margin: 0; padding: 0; }
     color: #ffffff;
 }
 .ir-measure-mode-btn.active {
-    background: rgba(34, 211, 238, 0.20);
-    border-color: rgba(34, 211, 238, 0.55);
-    color: #67e8f9;
+    background: var(--sel-fill-glass);
+    border-color: var(--sel-fill-glass);
+    color: var(--sel-ink);
 }
 #ir-map.ir-measuring,
 #ir-map.ir-measuring canvas {
@@ -1509,8 +1512,9 @@ html, body { margin: 0; padding: 0; }
 /* Frame-trim dropdown ("Frames ▾") — mirrors the download dropdown. */
 .ir-frames-wrap { position: relative; display: inline-block; }
 .ir-frames-btn.active {
-    background: rgba(74, 155, 110, 0.30);
-    border-color: rgba(74, 155, 110, 0.6);
+    background: var(--sel-fill-glass);
+    border-color: var(--sel-fill-glass);
+    color: var(--sel-ink);
 }
 .ir-frames-menu {
     position: absolute;
@@ -1694,25 +1698,18 @@ html, body { margin: 0; padding: 0; }
 }
 .rt-diag-tab:hover,
 .rt-diag-lookback-btn:hover {
-    background: rgba(46, 125, 255, 0.08);
-    border-color: rgba(46, 125, 255, 0.45);
+    background: var(--um-green-tint);
+    border-color: var(--sel-fill);
 }
-.rt-diag-tab.active,
-.rt-diag-lookback-btn.active {
-    background: rgba(46, 125, 255, 0.18);
-    border-color: rgba(46, 125, 255, 0.65);
-    color: #2e7dff;
+.rt-diag-tab.active, .rt-diag-tab.active:hover,
+.rt-diag-lookback-btn.active, .rt-diag-lookback-btn.active:hover,
+[data-theme="dark"] .rt-diag-tab.active, [data-theme="dark"] .rt-diag-lookback-btn.active {
+    background: var(--sel-fill); border-color: var(--sel-fill); color: var(--sel-ink);
 }
 [data-theme="dark"] .rt-diag-tab,
 [data-theme="dark"] .rt-diag-lookback-btn {
     color: var(--text, #e2e8f0);
     border-color: rgba(148, 163, 184, 0.3);
-}
-[data-theme="dark"] .rt-diag-tab.active,
-[data-theme="dark"] .rt-diag-lookback-btn.active {
-    background: rgba(46, 125, 255, 0.28);
-    border-color: rgba(46, 125, 255, 0.7);
-    color: #93c5fd;
 }
 
 .rt-diag-view { display: flex; flex-direction: column; gap: 8px; }
@@ -1884,8 +1881,9 @@ html, body { margin: 0; padding: 0; }
 }
 .ir-intensity-metric-btn:hover { color: var(--text); }
 .ir-intensity-metric-btn.active {
-    background: rgba(0, 229, 255, 0.18);
-    color: #00e5ff;
+    background: var(--sel-fill);
+    color: var(--sel-ink);
+    border-color: var(--sel-fill);
 }
 
 /* ── Intensity chart ─────────────────────────────────────────── */
@@ -2344,9 +2342,9 @@ html, body { margin: 0; padding: 0; }
     border-color: rgba(74, 155, 110, 0.45);
 }
 .ir-legend-toggle.active {
-    background: rgba(31, 66, 49, 0.94);
-    color: #ffffff;
-    border-color: rgba(74, 155, 110, 0.65);
+    background: var(--sel-fill-glass);
+    border-color: var(--sel-fill-glass);
+    color: var(--sel-ink);
 }
 
 /* ── Global IR animation bar (bottom-left of RT map) ─────────── */
@@ -2411,9 +2409,9 @@ html, body { margin: 0; padding: 0; }
     color: #6cb78a;
 }
 .rt-anim-play.active {
-    background: rgba(74, 155, 110, 0.22);
-    border-color: rgba(74, 155, 110, 0.55);
-    color: #6cb78a;
+    background: var(--sel-fill-glass);
+    border-color: var(--sel-fill-glass);
+    color: var(--sel-ink);
 }
 .rt-anim-btn:disabled {
     opacity: 0.4;
@@ -2575,9 +2573,9 @@ html, body { margin: 0; padding: 0; }
     border-color: rgba(74, 155, 110, 0.45);
 }
 .basin-sidebar-toggle.active {
-    background: rgba(31, 66, 49, 0.94);
-    color: #ffffff;
-    border-color: rgba(74, 155, 110, 0.65);
+    background: var(--sel-fill-glass);
+    border-color: var(--sel-fill-glass);
+    color: var(--sel-ink);
 }
 
 /* When sidebar is open, shift the toggle button */
@@ -2646,9 +2644,9 @@ body:has(.basin-sidebar.open) #ir-display-wrap { left: 280px; }
 /* Clean view is easy to forget once the menu is shut (the map just looks
    empty) — accent the collapsed pill so the state is visible from the corner. */
 .ir-display-toggle.ir-clean-on {
-    background: rgba(31, 66, 49, 0.94);
-    color: #ffffff;
-    border-color: rgba(74, 155, 110, 0.65);
+    background: var(--sel-fill-glass);
+    color: var(--sel-ink);
+    border-color: var(--sel-fill-glass);
 }
 
 /* IR colormap picker inside the Display menu */
@@ -2772,8 +2770,9 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     border-color: rgba(116, 185, 255, 0.3);
 }
 .rt-model-filter-btn.active {
-    background: rgba(116, 185, 255, 0.15);
-    border-color: rgba(116, 185, 255, 0.4);
+    background: var(--sel-fill);
+    border-color: var(--sel-fill);
+    color: var(--sel-ink);
 }
 
 .rt-model-legend {
@@ -2947,23 +2946,13 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     border-color: rgba(74, 155, 110, 0.45);
 }
 .ir-global-toggle-btn.active {
-    background: rgba(74, 155, 110, 0.28);
-    color: #ffffff;
-    border-color: rgba(74, 155, 110, 0.65);
+    background: var(--sel-fill-glass);
+    border-color: var(--sel-fill-glass);
+    color: var(--sel-ink);
 }
 .ir-global-toggle-btn.active:hover {
-    background: rgba(74, 155, 110, 0.34);
-    border-color: rgba(74, 155, 110, 0.75);
-}
-.ir-global-toggle-btn.active-orange {
-    background: rgba(244, 115, 33, 0.22);
-    color: #ffd2a8;
-    border-color: rgba(244, 115, 33, 0.55);
-}
-.ir-global-toggle-btn.active-orange:hover {
-    background: rgba(244, 115, 33, 0.30);
-    color: #ffe2c2;
-    border-color: rgba(244, 115, 33, 0.70);
+    background: var(--sel-fill-glass);
+    border-color: var(--sel-fill-glass);
 }
 
 /* Status pill that sits under the DeepMind 10-day toggle */
@@ -3269,8 +3258,7 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     font-size: 0.6rem;
     font-weight: 600;
     color: #ffffff;
-    background: rgba(74, 155, 110, 0.28);
-    box-shadow: inset 0 0 0 1px rgba(74, 155, 110, 0.65);
+    background: var(--sel-fill-glass);
     border-radius: 999px;
     padding: 1px 7px;
 }
@@ -3379,8 +3367,9 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     color: #ffffff;
 }
 .ir-mode-btn.ir-mode-active {
-    background: rgba(74, 155, 110, 0.32);
-    color: #ffffff;
+    background: var(--sel-fill-glass);
+    color: var(--sel-ink);
+    border-color: var(--sel-fill-glass);
 }
 
 /* Microwave one-click pill — sits below the IR/GeoColor segment.
@@ -3402,7 +3391,7 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     transition: border-color 0.15s;
 }
 .ir-mw-toggle-group:has(.ir-mw-toggle-btn.active) {
-    border-color: rgba(74, 155, 110, 0.55);
+    border-color: var(--sel-fill-glass);
 }
 .ir-mw-toggle-btn {
     display: inline-flex;
@@ -3423,8 +3412,8 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     color: #ffffff;
 }
 .ir-mw-toggle-btn.active {
-    background: rgba(74, 155, 110, 0.32);
-    color: #ffffff;
+    background: var(--sel-fill-glass);
+    color: var(--sel-ink);
 }
 .ir-mw-toggle-dot {
     width: 7px; height: 7px;
@@ -3465,9 +3454,9 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     color: #ffffff;
 }
 .ir-3d-mode-btn.active {
-    background: rgba(244, 115, 33, 0.22);
-    border-color: rgba(244, 115, 33, 0.55);
-    color: #fdba74;
+    background: var(--sel-fill-glass);
+    border-color: var(--sel-fill-glass);
+    color: var(--sel-ink);
 }
 .ir-mw-expand-btn {
     background: transparent;
@@ -3945,9 +3934,9 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 .sub-latband-btn:first-child { border-top-left-radius: 4px; border-bottom-left-radius: 4px; }
 .sub-latband-btn:last-child  { border-top-right-radius: 4px; border-bottom-right-radius: 4px; border-right: 1px solid var(--border); }
 .sub-latband-btn.active {
-    background: var(--um-green);
-    border-color: var(--um-green);
-    color: #fff;
+    background: var(--sel-fill);
+    border-color: var(--sel-fill);
+    color: var(--sel-ink);
     font-weight: 600;
 }
 
@@ -3966,9 +3955,9 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 .sub-view-btn:first-child { border-top-left-radius: 4px; border-bottom-left-radius: 4px; }
 .sub-view-btn:last-child  { border-top-right-radius: 4px; border-bottom-right-radius: 4px; border-right: 1px solid var(--border); }
 .sub-view-btn.active {
-    background: var(--um-green);
-    border-color: var(--um-green);
-    color: #fff;
+    background: var(--sel-fill);
+    border-color: var(--sel-fill);
+    color: var(--sel-ink);
     font-weight: 600;
 }
 /* spacing between control groups (was inline margin-left:18px) */
@@ -4550,10 +4539,11 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     color: var(--lp-text);
 }
 .ir-seg > button.is-on {
-    background: var(--seg-tint);
-    color: var(--seg-ink);
-    box-shadow: inset 0 0 0 1px var(--seg-accent), 0 1px 2px rgba(0, 0, 0, 0.35);
+    background: var(--sel-fill-glass);
+    color: var(--sel-ink);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
     cursor: default;
+    border-color: var(--sel-fill-glass);
 }
 .ir-seg > button:focus-visible {
     outline: 2px solid var(--lp-green);
@@ -4741,8 +4731,9 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 }
 .rt-dock-var-btn:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
 .rt-dock-var-btn.is-active {
-    background: rgba(249, 115, 22, 0.32);
-    color: #f97316;
+    background: var(--sel-fill-glass);
+    color: var(--sel-ink);
+    border-color: var(--sel-fill-glass);
 }
 
 /* ── Compact Tb colorbar chip — right end of the scrubber row ── */
@@ -5006,7 +4997,7 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     pointer-events: none;
 }
 .rt-genesis-subnav-chip:hover {
-    color: #2e7dff;
+    color: var(--tab-ink);
 }
 .rt-genesis-subnav-chip.active {
     font-weight: 600;
@@ -5016,10 +5007,6 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 }
 [data-theme="dark"] .rt-genesis-subnav-chip {
     color: var(--text-dim, #94a3b8);
-}
-[data-theme="dark"] .rt-genesis-subnav-chip:hover,
-[data-theme="dark"] .rt-genesis-subnav-chip.active {
-    color: #7eb8ff;
 }
 /* ATCF-match pill in the disturbance modal subtitle — signals that
    the FNV3 ensemble is locked to an officially-tracked TC/invest, so
@@ -5188,10 +5175,11 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     border-left: 1px solid rgba(15,22,35,0.18);
 }
 .rt-genesis-mode-btn:hover { background: rgba(15,22,35,0.10); }
-.rt-genesis-mode-btn.active {
-    background: rgba(249,115,22,0.22);
-    color: #f97316;
+.rt-genesis-mode-btn.active, [data-theme="dark"] .rt-genesis-mode-btn.active {
+    background: var(--sel-fill);
+    color: var(--sel-ink);
     font-weight: 600;
+    border-color: var(--sel-fill);
 }
 [data-theme="dark"] .rt-genesis-mode-btn {
     background: rgba(255,255,255,0.04);
@@ -5201,10 +5189,6 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     border-left-color: rgba(255,255,255,0.18);
 }
 [data-theme="dark"] .rt-genesis-mode-btn:hover { background: rgba(255,255,255,0.10); }
-[data-theme="dark"] .rt-genesis-mode-btn.active {
-    background: rgba(249,115,22,0.28);
-    color: #fdba74;
-}
 
 /* Structure anomaly-mode toggle (Raw / Percentile / Z-score) — reuses the
    genesis mode-toggle look so it reads as a sibling control. */
@@ -5228,10 +5212,11 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     border-left: 1px solid rgba(15,22,35,0.18);
 }
 .rt-genesis-struct-mode-btn:hover { background: rgba(15,22,35,0.10); }
-.rt-genesis-struct-mode-btn.active {
-    background: rgba(249,115,22,0.22);
-    color: #f97316;
+.rt-genesis-struct-mode-btn.active, [data-theme="dark"] .rt-genesis-struct-mode-btn.active {
+    background: var(--sel-fill);
+    color: var(--sel-ink);
     font-weight: 600;
+    border-color: var(--sel-fill);
 }
 [data-theme="dark"] .rt-genesis-struct-mode-btn {
     background: rgba(255,255,255,0.04);
@@ -5241,10 +5226,6 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     border-left-color: rgba(255,255,255,0.18);
 }
 [data-theme="dark"] .rt-genesis-struct-mode-btn:hover { background: rgba(255,255,255,0.10); }
-[data-theme="dark"] .rt-genesis-struct-mode-btn.active {
-    background: rgba(249,115,22,0.28);
-    color: #fdba74;
-}
 
 /* Density-mode key strip — sits between the scrubber row and the
    map, visible only when Density mode is active. Color swatches +
@@ -5391,19 +5372,14 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     background: rgba(46, 125, 255, 0.08);
     border-color: rgba(46, 125, 255, 0.45);
 }
-.rt-mw-storm-chip.active {
-    background: rgba(46, 125, 255, 0.18);
-    border-color: rgba(46, 125, 255, 0.65);
-    color: #2e7dff;
+.rt-mw-storm-chip.active, [data-theme="dark"] .rt-mw-storm-chip.active {
+    background: var(--sel-fill);
+    border-color: var(--sel-fill);
+    color: var(--sel-ink);
 }
 [data-theme="dark"] .rt-mw-storm-chip {
     color: var(--text, #e2e8f0);
     border-color: rgba(148, 163, 184, 0.3);
-}
-[data-theme="dark"] .rt-mw-storm-chip.active {
-    background: rgba(46, 125, 255, 0.28);
-    border-color: rgba(46, 125, 255, 0.7);
-    color: #93c5fd;
 }
 
 /* Upcoming-overpass strip — per-sensor "next pass" ETA above the
@@ -5788,10 +5764,10 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     color: #ffffff;
 }
 .sat-mw-controls-row .rt-mw-storm-chip.active {
-    background: rgba(46, 125, 255, 0.45);
-    border-color: rgba(46, 125, 255, 0.9);
-    color: #ffffff;
-    box-shadow: 0 0 0 1px rgba(46, 125, 255, 0.35);
+    background: var(--sel-fill-glass);
+    border-color: var(--sel-fill-glass);
+    color: var(--sel-ink);
+    box-shadow: none;
 }
 .sat-mw-pass-select-label {
     font-size: 0.72rem;
@@ -6168,8 +6144,9 @@ body.sat-leaflet-active #sat-cb-right .sat-cb-label-right,
 .sat-map-ctrl-btn:last-child { border-bottom: none; }
 .sat-map-ctrl-btn:hover { background: #f4f4f4; }
 .sat-map-ctrl-btn.active {
-    background: #d4e7ff;
-    color: #1d4ed8;
+    background: var(--sel-fill);
+    color: var(--sel-ink);
+    border-color: var(--sel-fill);
 }
 
 /* Phase 2: Leaflet IR animation center-fix marker. Shown when the
@@ -6645,9 +6622,9 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     transition: background 0.12s, box-shadow 0.12s;
 }
 .tc-mw-toggle.active {
-    background: rgba(74, 155, 110, 0.18);
-    border-color: #4a9b6e;
-    color: #ffffff;
+    background: var(--sel-fill-glass);
+    border-color: var(--sel-fill-glass);
+    color: var(--sel-ink);
 }
 .tc-mw-toggle.active .tc-mw-toggle-dot {
     background: #4a9b6e;
@@ -6738,9 +6715,9 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     color: #fefefe;
 }
 .tc-mw-live-btn.active {
-    background: rgba(74,155,110,0.28);
-    color: #e2e8f0;
-    border-color: rgba(74,155,110,0.5);
+    background: var(--sel-fill-glass);
+    border-color: var(--sel-fill-glass);
+    color: var(--sel-ink);
 }
 .tc-mw-play-icon {
     display: inline-block;
@@ -7296,13 +7273,13 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 .exp-chip span { color: #94a3b8; font-size: 11px; margin-left: 4px; }
 [data-theme="dark"] .exp-chip span { color: #64748b; }
 .exp-chip:hover:not(.active) {
-    border-color: var(--um-orange, #F47321);
-    color: var(--um-orange-deep, #d65f12);
+    border-color: var(--sel-fill);
+    color: var(--um-green);
 }
 .exp-chip.active {
-    background: var(--um-green, #005030);
-    border-color: var(--um-green, #005030);
-    color: #fff;
+    background: var(--sel-fill);
+    border-color: var(--sel-fill);
+    color: var(--sel-ink);
 }
 .exp-chip.active span { color: #b7d9c9; }
 
@@ -7321,12 +7298,11 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 }
 [data-theme="dark"] .exp-range { border-color: #334155; color: #94a3b8; }
 .exp-range.active {
-    background: var(--um-orange-tint, rgba(244, 115, 33, 0.10));
-    border-color: var(--um-orange, #F47321);
-    color: var(--um-orange-deep, #d65f12);
+    background: var(--sel-fill);
+    border-color: var(--sel-fill);
+    color: var(--sel-ink);
     font-weight: 600;
 }
-[data-theme="dark"] .exp-range.active { color: var(--um-orange, #F47321); }
 .exp-comp.active {
     background: rgba(168, 85, 247, 0.10); border-color: #a855f7; color: #a855f7;
 }
@@ -8051,21 +8027,13 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
    strip stays cyan on purpose (DeepMind's color, and it must stand out). */
 .rt-genesis-jump-btn:hover,
 [data-theme="dark"] .rt-genesis-jump-btn:hover {
-    background: rgba(249, 115, 22, 0.10);
-    border-color: rgba(249, 115, 22, 0.45);
+    background: var(--um-green-tint);
+    border-color: var(--sel-fill);
 }
-.rt-genesis-jump-btn.active {
-    background: rgba(249, 115, 22, 0.16);
-    border-color: rgba(249, 115, 22, 0.6);
-    color: #ea580c;
+.rt-genesis-jump-btn.active, .rt-genesis-jump-btn.active:hover {
+    background: var(--sel-fill); border-color: var(--sel-fill); color: var(--sel-ink);
 }
-[data-theme="dark"] .rt-genesis-jump-btn.active {
-    background: rgba(249, 115, 22, 0.24);
-    border-color: rgba(249, 115, 22, 0.65);
-    color: #fdba74;
-}
-.rt-genesis-subnav-chip.active { color: #ea580c; border-bottom-color: #f97316; }
-[data-theme="dark"] .rt-genesis-subnav-chip.active { color: #fdba74; border-bottom-color: #fb923c; }
+.rt-genesis-subnav-chip.active { color: var(--tab-ink); border-bottom-color: var(--tab-line); }
 .rt-genesis-modal-save { background: rgba(249, 115, 22, 0.14); }
 .rt-genesis-modal-save:hover { background: rgba(249, 115, 22, 0.26); border-color: rgba(249, 115, 22, 0.55); }
 /* Phones: the absolutely-positioned ⤓ PNG button sat on top of the plot's
@@ -8099,11 +8067,9 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 }
 .rt-genesis-modal-open-storm:hover { background: #ea580c !important; }
 /* Pane chips (card + modal) — orange active state, cyan reserved for notes */
-.rt-dm-chip:hover { border-color: rgba(249, 115, 22, 0.55); }
-.rt-dm-chip.active { background: rgba(249, 115, 22, 0.16); border-color: rgba(249, 115, 22, 0.6); color: #ea580c; }
-[data-theme="dark"] .rt-dm-chip.active { background: rgba(249, 115, 22, 0.24); color: #fdba74; }
-.rt-dm-tabs button.active { background: rgba(249, 115, 22, 0.16); color: #ea580c; box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.4); }
-[data-theme="dark"] .rt-dm-tabs button.active { color: #fdba74; background: rgba(249, 115, 22, 0.22); }
+.rt-dm-chip:hover { border-color: var(--sel-fill); }
+.rt-dm-chip.active, .rt-dm-chip.active:hover { background: var(--sel-fill); border-color: var(--sel-fill); color: var(--sel-ink); }
+.rt-dm-tabs button.active, .rt-dm-tabs button.active:hover { background: var(--sel-fill); color: var(--sel-ink); box-shadow: none; }
 .rt-genesis-modal-open-storm.is-primary { box-shadow: 0 2px 8px rgba(249, 115, 22, 0.35) !important; }
 
 /* Map attribution: the fixed 28-px status bar (z 800) covers the bottom of
