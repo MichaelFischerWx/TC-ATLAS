@@ -333,11 +333,13 @@
     }
 
     function _loadIndices() {
-        if (state.indices) return Promise.resolve(state.indices);
+        // A fallback copy isn't kept: the next visit to the tab retries live.
+        if (state.indices && !state.indices._fallback) return Promise.resolve(state.indices);
         return _fetchJSON(INDICES_URL)
             .catch(function (err) {
                 console.warn('[subseasonal-rt] GCS indices failed, falling back:', err.message);
-                return _fetchJSON(INDICES_FALLBACK + '?v=' + (window.__v || ''));
+                return _fetchJSON(INDICES_FALLBACK + '?v=' + (window.__v || ''))
+                    .then(function (d) { d._fallback = true; return d; });
             })
             .then(function (d) { state.indices = d; return d; });
     }
@@ -611,15 +613,57 @@
         });
     }
 
+    /* ── Stale phase data ──────────────────────────────────────── */
+    // The clocks draw whatever indices file loaded. When the live copy
+    // fails, that's the repo fallback (refreshed by hand — months old),
+    // and a stalled upstream feed looks the same; without a word here,
+    // old phases read as today's.
+    var STALE_FEED_DAYS = 14;    // RMM lags ~2 d, ROMI ~4 d, BSISO ~6 d
+    function _endAgeDays(modeRec) {
+        var t = Date.parse(((modeRec && modeRec.end_date) || '') + 'T00:00:00Z');
+        return isNaN(t) ? null : (Date.now() - t) / 864e5;
+    }
+    function _fmtDay(iso) {
+        var t = new Date(iso + 'T00:00:00Z');
+        return isNaN(t) ? iso : t.toLocaleDateString('en-GB',
+            { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+    }
+    function _renderStaleNote() {
+        var aside = document.querySelector('.sub-clocks');
+        if (!aside || !state.indices) return;
+        var ind = state.indices.indices || {}, newest = '';
+        Object.keys(ind).forEach(function (m) {
+            var e = ind[m] && ind[m].end_date;
+            if (e && e > newest) newest = e;
+        });
+        var age = _endAgeDays({ end_date: newest });
+        var fallback = !!state.indices._fallback;
+        var note = aside.querySelector('.sub-stale-note');
+        if (!fallback && !(age > STALE_FEED_DAYS)) { if (note) note.remove(); return; }
+        if (!note) {
+            note = document.createElement('div');
+            note.className = 'sub-stale-note';
+            note.setAttribute('role', 'status');
+            var heading = aside.querySelector('.sub-section-heading');
+            aside.insertBefore(note, heading ? heading.nextSibling : aside.firstChild);
+        }
+        var through = newest ? _fmtDay(newest) : 'an earlier date';
+        note.textContent = fallback
+            ? 'Live phase data could not be loaded. These clocks show a saved copy with data only through ' + through + '.'
+            : 'The phase-index feeds have not updated since ' + through + ', so these clocks are out of date.';
+    }
+
     /* ── Phase clocks ──────────────────────────────────────────── */
     function _renderClocks() {
         if (!state.indices || !window.SubseasonalClock) return;
+        _renderStaleNote();
         ['mjo', 'mjo_omi', 'bsiso1', 'bsiso2'].forEach(function (mode) {
             var card = document.querySelector('.sub-clock-card[data-mode="' + mode + '"]');
             if (!card) return;
             var svg = card.querySelector('.sub-clock-svg');
             var modeRec = state.indices.indices && state.indices.indices[mode];
             if (!svg || !modeRec) return;
+            card.classList.toggle('sub-clock-stale', _endAgeDays(modeRec) > STALE_FEED_DAYS);
             window.SubseasonalClock.render({
                 svg: svg,
                 modeRec: modeRec,
@@ -1827,6 +1871,13 @@
             _renderClocks();
             _renderGenesisIndicators();
             _renderHovmollers();
+            if (state.indices && state.indices._fallback) {
+                // Last load fell back to the saved copy: try live again.
+                _loadIndices().then(function () {
+                    _renderClocks();
+                    _renderGenesisIndicators();
+                }).catch(function () {});
+            }
             return;
         }
         state.initialized = true;

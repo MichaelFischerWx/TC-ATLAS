@@ -654,6 +654,25 @@ body.seasonal-maximized .seasonal-header {
     }
 }
 
+@media (max-width: 640px) {
+    /* Phones size the map box from the map itself (_evoApplyWrapAspect,
+       narrow chrome), so the 360-px floor above only left empty space.
+       Until the first draw, hold about the North Atlantic box. */
+    .seasonal-evo-wrap { min-height: 0; aspect-ratio: 1.35; }
+    /* The play / date / date-jump / chips / speed / PNG / GIF row needs
+       ~590 px on one line; let it wrap instead of running off the card. */
+    .seasonal-evo-slider-row { flex-wrap: wrap; row-gap: 8px; }
+    /* A <select> is as wide as its longest option and a flex label won't
+       shrink below it, so "Relative SST anomaly (Vecchi-Soden 2007)" and
+       the Detrending menu ran past the card edge, arrows cut off. */
+    .seasonal-ts-controls label,
+    .seasonal-scatter-controls label,
+    .seasonal-corr-controls label { min-width: 0; max-width: 100%; }
+    .seasonal-ts-controls select,
+    .seasonal-scatter-controls select,
+    .seasonal-corr-controls select { min-width: 0; max-width: 100%; text-overflow: ellipsis; }
+}
+
 .seasonal-panel-desc {
     margin: 0 0 10px;
     font-size: 0.74rem;
