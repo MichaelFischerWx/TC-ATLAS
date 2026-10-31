@@ -5042,11 +5042,6 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     background: rgba(46, 125, 255, 0.08);
     border-color: rgba(46, 125, 255, 0.45);
 }
-.rt-genesis-jump-btn.active {
-    background: rgba(46, 125, 255, 0.18);
-    border-color: rgba(46, 125, 255, 0.65);
-    color: #2e7dff;
-}
 [data-theme="dark"] .rt-genesis-jump-nav {
     background: var(--surface-raised, #161b24);
     border-bottom-color: rgba(255, 255, 255, 0.08);
@@ -5058,11 +5053,6 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 [data-theme="dark"] .rt-genesis-jump-btn:hover {
     background: rgba(46, 125, 255, 0.16);
     border-color: rgba(46, 125, 255, 0.55);
-}
-[data-theme="dark"] .rt-genesis-jump-btn.active {
-    background: rgba(46, 125, 255, 0.28);
-    border-color: rgba(46, 125, 255, 0.7);
-    color: #7eb8ff;
 }
 /* Sub-nav inside the "This run" pane: lighter than the tab pills above.
    Lists the stacked panels (tracks, intensity, …) so the user knows
@@ -5106,8 +5096,6 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     color: #2e7dff;
 }
 .rt-genesis-subnav-chip.active {
-    color: #2e7dff;
-    border-bottom-color: #2e7dff;
     font-weight: 600;
 }
 [data-theme="dark"] .rt-genesis-subnav {
@@ -5119,9 +5107,6 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 [data-theme="dark"] .rt-genesis-subnav-chip:hover,
 [data-theme="dark"] .rt-genesis-subnav-chip.active {
     color: #7eb8ff;
-}
-[data-theme="dark"] .rt-genesis-subnav-chip.active {
-    border-bottom-color: #7eb8ff;
 }
 /* ATCF-match pill in the disturbance modal subtitle — signals that
    the FNV3 ensemble is locked to an officially-tracked TC/invest, so
@@ -7665,11 +7650,7 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 .exp-trackbtn.active {
     border-color: #2e7dff; color: #1d4ed8; background: rgba(46,125,255,0.08);
 }
-[data-theme="dark"] .exp-distbtn.active {
-    border-color: #f43f5e; color: #be123c; background: rgba(244,63,94,0.08);
-}
-[data-theme="dark"] .exp-distbtn.active { color: #fb7185; }
-.exp-trackbtn.active { color: #60a5fa; }
+[data-theme="dark"] .exp-trackbtn.active { color: #60a5fa; }
 
 @media (max-width: 720px) { .exp-shap-grid { grid-template-columns: 1fr; } }
 @media (max-width: 640px) {
@@ -8095,7 +8076,6 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     cursor: pointer; font-family: 'DM Sans', sans-serif; transition: background 0.15s, color 0.15s;
 }
 .rt-dm-tabs button:hover { color: var(--text, #e2e8f0); }
-.rt-dm-tabs button.active { background: rgba(0,229,255,0.16); color: #00e5ff; box-shadow: inset 0 0 0 1px rgba(0,229,255,0.35); }
 .rt-dm-disclaimer {
     font-size: 0.6rem; line-height: 1.35; color: var(--text-dim, #94a3b8);
     padding: 5px 8px; margin-bottom: 8px; border-left: 2px solid rgba(0,229,255,0.5);
@@ -8114,7 +8094,6 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     color: var(--text, #e2e8f0); font-family: 'DM Sans', sans-serif; transition: all 0.15s;
 }
 .rt-dm-chip:hover { border-color: rgba(0,229,255,0.5); }
-.rt-dm-chip.active { background: rgba(0,229,255,0.18); border-color: rgba(0,229,255,0.6); color: #00e5ff; }
 .rt-dm-chip:disabled { opacity: 0.45; cursor: default; }
 .rt-dm-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px; margin: 6px 0; }
 .rt-dm-tiles-3 { grid-template-columns: repeat(3, 1fr); }
