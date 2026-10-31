@@ -3096,7 +3096,7 @@ function _saveClimoClockAsPNG(card, mode) {
         ctx.fillRect(8, 8, W - 16, H - 16);
 
         ctx.fillStyle = textColor;
-        ctx.font = 'bold 15px "DM Sans", system-ui, sans-serif';
+        ctx.font = '600 15px "DM Sans", system-ui, sans-serif';
         ctx.textBaseline = 'middle';
         ctx.fillText(modeLabel + ' · Phase Clock', padX, titleH / 2 + 6);
 
@@ -3697,7 +3697,7 @@ function _saveSubEvoChart(chartId, chartLabel, btnId) {
 
         // Title bar — 2× sizes for parity with the 2× Plotly raster.
         ctx.fillStyle = textColor;
-        ctx.font = 'bold 26px "DM Sans", system-ui, sans-serif';
+        ctx.font = '600 26px "DM Sans", system-ui, sans-serif';
         ctx.textBaseline = 'middle';
         ctx.fillText(modeLabel + ' · ' + chartLabel, 32, titleH / 2);
 

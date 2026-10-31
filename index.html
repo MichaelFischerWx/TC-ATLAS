@@ -67,6 +67,8 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 
     <style>
+        /* DM Sans is loaded at 400-600 only; default-bold elements use the real semibold. */
+        b, strong, th, h1, h2, h3, h4, h5, h6 { font-weight: 600; }
         :root {
             /* University of Miami — Hurricanes palette on light bg */
             --navy: #ffffff;                /* page background */
@@ -177,10 +179,10 @@
         .topbar-home:hover .topbar-logo { color: var(--um-green); }
         .topbar-home:focus-visible { outline: 2px solid var(--um-orange); outline-offset: 3px; }
         .topbar-icon { width: 28px; height: 28px; border-radius: 4px; }
-        .topbar-logo { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; white-space: nowrap; color: var(--text); }
+        .topbar-logo { font-size: 1.25rem; font-weight: 600; letter-spacing: -0.02em; white-space: nowrap; color: var(--text); }
         .topbar-nav { display: flex; gap: 6px; list-style: none; align-items: center; flex-wrap: nowrap; }
         .topbar-nav li { flex: 0 0 auto; }
-        .topbar-nav a { color: var(--slate); text-decoration: none; font-weight: 500; font-size: 0.8rem; padding: 6px 12px; border-radius: 6px; transition: all 0.2s; white-space: nowrap; }
+        .topbar-nav a { color: var(--slate); text-decoration: none; font-weight: 500; font-size: 0.8125rem; padding: 6px 12px; border-radius: 6px; transition: all 0.2s; white-space: nowrap; }
         .topbar-nav a:hover { color: var(--text); background: rgba(15,22,35,0.05); }
         .topbar-nav a.nav-active { color: #ffffff; background: var(--um-green); font-weight: 600; }
         .nav-short { display: none; }
@@ -188,11 +190,11 @@
         /* Intermediate desktop widths: switch to short labels so the nav fits in one row. */
         @media (max-width: 1100px) and (min-width: 769px) {
             .topbar-nav { gap: 3px; }
-            .topbar-nav a { padding: 6px 9px; font-size: 0.76rem; }
+            .topbar-nav a { padding: 6px 9px; font-size: 0.75rem; }
             .nav-full { display: none; }
             .nav-short { display: inline; }
         }
-        .nav-hamburger { display: none; background: none; border: 1px solid var(--border-light); color: var(--slate); font-size: 1.2rem; padding: 4px 10px; border-radius: 6px; cursor: pointer; line-height: 1; min-height: 36px; }
+        .nav-hamburger { display: none; background: none; border: 1px solid var(--border-light); color: var(--slate); font-size: 1.25rem; padding: 4px 10px; border-radius: 6px; cursor: pointer; line-height: 1; min-height: 36px; }
         .nav-hamburger.open { color: var(--text); background: rgba(15,22,35,0.06); }
 
         /* ── Hero section ────────────────────────────────── */
@@ -222,21 +224,21 @@
         }
         .hero-title {
             font-size: clamp(2rem, 9vw, 4rem);
-            font-weight: 700;
+            font-weight: 600;
             letter-spacing: -0.035em;
             margin: 0;
             color: var(--text);
             line-height: 1;
         }
         .hero-subtitle {
-            font-size: 1.05rem;
+            font-size: 1rem;
             color: var(--text-dim);
             max-width: 650px;
             margin: 0 auto 1rem auto;
             font-weight: 400;
         }
         .hero-desc {
-            font-size: 1.05rem;
+            font-size: 1rem;
             color: var(--text-dim);
             max-width: 700px;
             margin: 0 auto;
@@ -248,7 +250,7 @@
         footer a { color: var(--blue); text-decoration: none; }
         footer a:hover { text-decoration: underline; }
         @media (max-width: 480px) {
-            footer { padding: 1.5rem 16px; font-size: 0.82rem; }
+            footer { padding: 1.5rem 16px; font-size: 0.8125rem; }
         }
 
         /* ── Active storms ─────────────────────────────── */
@@ -257,10 +259,10 @@
            after the text so nothing else on the page waits for it. */
         .live { max-width: 1200px; margin: 0 auto; padding: 0 24px 3rem; }
         .live-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; margin-bottom: 1rem; }
-        .live-title { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
+        .live-title { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
         .live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--um-orange); box-shadow: 0 0 0 4px var(--um-orange-tint); animation: livePulse 1.8s ease-out infinite; }
-        .live-meta { margin: 4px 0 0; font-size: 0.86rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
-        .live-cta { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 16px; border-radius: 8px; background: var(--cta-bg); color: #fff; font-size: 0.9rem; font-weight: 600; text-decoration: none; white-space: nowrap; transition: background 0.15s; }
+        .live-meta { margin: 4px 0 0; font-size: 0.875rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+        .live-cta { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 16px; border-radius: 8px; background: var(--cta-bg); color: #fff; font-size: 0.875rem; font-weight: 600; text-decoration: none; white-space: nowrap; transition: background 0.15s; }
         .live-cta:hover { background: var(--cta-bg-hover); }
         .live.is-quiet .live-dot { background: var(--text-dim); box-shadow: none; animation: none; }
         .live-cta-bottom { display: none; }
@@ -276,13 +278,13 @@
         /* The snapshot spans ±10° around the center; show the inner ±7.4°. */
         .storm-tile-img img { display: block; width: 100%; height: 100%; object-fit: cover; transform: scale(1.35); opacity: 0; transition: opacity 0.3s; }
         .storm-tile-img img.is-loaded { opacity: 1; }
-        .storm-tile-cat { position: absolute; top: 8px; left: 8px; display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 7px; border-radius: 999px; background: rgba(10, 14, 20, 0.76); color: #f1f5f9; font-size: 0.74rem; font-weight: 700; letter-spacing: 0.02em; }
+        .storm-tile-cat { position: absolute; top: 8px; left: 8px; display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 7px; border-radius: 999px; background: rgba(10, 14, 20, 0.76); color: #f1f5f9; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em; }
         .storm-tile-cat i { width: 8px; height: 8px; border-radius: 50%; background: var(--cat, #64748b); }
-        .storm-tile-recon { position: absolute; top: 8px; right: 8px; padding: 3px 7px; border-radius: 999px; background: rgba(10, 14, 20, 0.76); color: #fdba74; font-size: 0.66rem; font-weight: 700; letter-spacing: 0.06em; }
+        .storm-tile-recon { position: absolute; top: 8px; right: 8px; padding: 3px 7px; border-radius: 999px; background: rgba(10, 14, 20, 0.76); color: #fdba74; font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.06em; }
         .storm-tile-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 10px 12px 12px; }
-        .storm-tile-name { overflow: hidden; font-size: 1rem; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
-        .storm-tile-int { font-size: 0.86rem; font-variant-numeric: tabular-nums; }
-        .storm-tile-meta { overflow: hidden; font-size: 0.76rem; color: var(--text-dim); white-space: nowrap; text-overflow: ellipsis; }
+        .storm-tile-name { overflow: hidden; font-size: 1rem; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+        .storm-tile-int { font-size: 0.875rem; font-variant-numeric: tabular-nums; }
+        .storm-tile-meta { overflow: hidden; font-size: 0.75rem; color: var(--text-dim); white-space: nowrap; text-overflow: ellipsis; }
         /* Same boxes as a real tile (square image + three text lines), so the
            grid keeps its height when the storms arrive. */
         .storm-tile.is-skeleton .storm-tile-img { background: var(--surface); }
@@ -292,36 +294,36 @@
         .live-empty { grid-column: 1 / -1; padding: 28px 20px; border: 1px dashed var(--border-light); border-radius: 12px; color: var(--text-dim); text-align: center; }
         .live-empty a { color: var(--um-green); font-weight: 600; text-decoration: none; }
         .live-empty a:hover { text-decoration: underline; }
-        .storm-tile-img.no-img::after { content: 'No satellite image yet'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 12px; color: #8a93a3; font-size: 0.78rem; text-align: center; }
+        .storm-tile-img.no-img::after { content: 'No satellite image yet'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 12px; color: #8a93a3; font-size: 0.75rem; text-align: center; }
 
         /* ── Explore + examples ───────────────────────── */
         .tools, .examples { max-width: 1200px; margin: 0 auto; padding: 0 24px 3.5rem; }
-        .section-h { margin: 0 0 1rem; font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
+        .section-h { margin: 0 0 1rem; font-size: 1.25rem; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
         .tool-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
         .tool { display: flex; align-items: flex-start; gap: 14px; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); color: var(--text); text-decoration: none; transition: border-color 0.15s, transform 0.15s; }
         .tool:hover { transform: translateY(-1px); border-color: var(--um-green); }
         .tool-icon { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 9px; background: var(--um-green-tint); color: var(--um-green); }
         .tool-icon svg { width: 20px; height: 20px; stroke-width: 1.8; }
         .tool-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-        .tool-title { font-size: 0.98rem; font-weight: 600; }
-        .tool-desc { font-size: 0.86rem; line-height: 1.5; color: var(--text-dim); }
+        .tool-title { font-size: 1rem; font-weight: 600; }
+        .tool-desc { font-size: 0.875rem; line-height: 1.5; color: var(--text-dim); }
         .example-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
         .example { display: flex; flex-direction: column; min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); color: var(--text); text-decoration: none; transition: transform 0.15s, border-color 0.15s; }
         .example:hover { transform: translateY(-2px); border-color: var(--border-light); }
         .example img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover; background: #0a0e14; }
         .example-body { display: flex; flex-direction: column; gap: 3px; padding: 12px 14px 14px; }
-        .example-title { font-size: 0.98rem; font-weight: 600; }
-        .example-desc { font-size: 0.84rem; color: var(--text-dim); }
+        .example-title { font-size: 1rem; font-weight: 600; }
+        .example-desc { font-size: 0.8125rem; color: var(--text-dim); }
 
         /* ── Recent updates as headlines ──────────────── */
         .updates { max-width: 1200px; margin: 0 auto; padding: 0 24px 4rem; }
         .updates-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
-        .updates-head a { color: var(--um-green); font-size: 0.9rem; font-weight: 600; text-decoration: none; white-space: nowrap; }
+        .updates-head a { color: var(--um-green); font-size: 0.875rem; font-weight: 600; text-decoration: none; white-space: nowrap; }
         .updates-head a:hover { text-decoration: underline; }
         .update-lines { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--border); }
         .update-lines a { display: flex; align-items: baseline; gap: 20px; padding: 12px 2px; border-bottom: 1px solid var(--border); color: var(--text); text-decoration: none; }
         .update-lines a:hover .update-title { color: var(--um-green); }
-        .update-lines time { flex: none; width: 88px; font-size: 0.82rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+        .update-lines time { flex: none; width: 88px; font-size: 0.8125rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
         .update-title { min-width: 0; font-weight: 500; }
 
         /* ── Responsive ──────────────────────────────────── */
@@ -332,7 +334,7 @@
             .hero-lockup { gap: 0.7rem; }
             .hero-icon { width: 52px; height: 52px; border-radius: 10px; }
             .hero { padding: 2.25rem 16px 2rem; }
-            .hero-desc { font-size: 0.95rem; }
+            .hero-desc { font-size: 1rem; }
             .topbar-inner { padding: 0 16px; gap: 8px; }
             .nav-full { display: none !important; }
             .nav-short { display: inline !important; }

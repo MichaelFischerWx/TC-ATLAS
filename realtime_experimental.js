@@ -5073,7 +5073,7 @@
             'steps, not physical causes; a single wind estimate carries roughly ±10 kt of ' +
             'uncertainty, so read small steps loosely.</span></div>' +
             '<div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:6px 0 2px;">' +
-            '<div style="font-size:30px;font-weight:700;color:' + ink + ';letter-spacing:-0.5px;line-height:1;">' +
+            '<div style="font-size:30px;font-weight:600;color:' + ink + ';letter-spacing:-0.5px;line-height:1;">' +
             Math.round(f.vmax_kt) + '<span style="font-size:14px;font-weight:600;color:' + muted + '"> kt</span>' +
             '<span style="font-size:18px;font-weight:600;color:' + muted + ';margin-left:10px;">' +
             Math.round(S.pPub) + ' hPa</span></div>' +

@@ -3500,10 +3500,10 @@
             '<div style="display:grid;grid-template-columns:auto 120px 36px;align-items:center;gap:6px 8px;">' +
             '<span title="Camera tilt — 0° top-down, 80° near-horizon. Shortcut: hold Shift and drag the map up/down. Or right-/ctrl-drag to orbit.">⛰ Tilt</span>' +
             '<input id="ir-3d-tilt" type="range" min="0" max="80" step="1" style="accent-color:#4a9b6e;cursor:pointer;">' +
-            '<span id="ir-3d-tilt-val" style="text-align:right;color:var(--um-orange,#F47321);font-weight:700;font-variant-numeric:tabular-nums;"></span>' +
+            '<span id="ir-3d-tilt-val" style="text-align:right;color:var(--um-orange,#F47321);font-weight:600;font-variant-numeric:tabular-nums;"></span>' +
             '<span title="Vertical amplification of the IR cloud-top relief (GPU only — no extra data or compute).">↕ Height</span>' +
             '<input id="ir-3d-exag" type="range" min="1" max="8" step="0.5" style="accent-color:#4a9b6e;cursor:pointer;">' +
-            '<span id="ir-3d-exag-val" style="text-align:right;color:var(--um-orange,#F47321);font-weight:700;font-variant-numeric:tabular-nums;"></span>' +
+            '<span id="ir-3d-exag-val" style="text-align:right;color:var(--um-orange,#F47321);font-weight:600;font-variant-numeric:tabular-nums;"></span>' +
             '</div>' +
             '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;">' +
             '<button id="ir-3d-orbit" title="Auto-orbit: one slow 360° revolution with a tilt sweep — click again to stop" ' +
@@ -3666,15 +3666,15 @@
                 try { cctx.drawImage(_rtLogoImg, cx0, cy0, logoSz, logoSz); } catch (e) {}
                 cctx.restore(); textX = cx0 + logoSz + Math.round(10 * S);
             }
-            cctx.font = '700 ' + Math.round(10 * S) + 'px "DM Sans",system-ui,sans-serif';
+            cctx.font = '600 ' + Math.round(10 * S) + 'px "DM Sans",system-ui,sans-serif';
             cctx.fillStyle = 'rgba(148,197,255,0.95)';
             cctx.fillText('TC-ATLAS', textX, cy0 + Math.round(11 * S));
-            cctx.font = '800 ' + Math.round(18 * S) + 'px "DM Sans",system-ui,sans-serif';
+            cctx.font = '600 ' + Math.round(18 * S) + 'px "DM Sans",system-ui,sans-serif';
             cctx.fillStyle = '#f8fafc';
             var title = 'Real-Time Monitor';
             cctx.fillText(title, textX, cy0 + Math.round(29 * S));
             var titleW = cctx.measureText(title).width;
-            cctx.font = '800 ' + Math.round(11 * S) + 'px "DM Sans",system-ui,sans-serif';
+            cctx.font = '600 ' + Math.round(11 * S) + 'px "DM Sans",system-ui,sans-serif';
             var bw = cctx.measureText(prodLabel).width + Math.round(14 * S), bh = Math.round(17 * S);
             var bx = textX + titleW + Math.round(9 * S), by = cy0 + Math.round(29 * S) - Math.round(13 * S);
             cctx.fillStyle = 'rgba(74,155,110,0.85)';
@@ -3682,7 +3682,7 @@
             cctx.fillStyle = '#ffffff';
             cctx.fillText(prodLabel, bx + Math.round(7 * S), by + bh - Math.round(5 * S));
             if (dtLabel) {
-                cctx.font = '700 ' + Math.round(14 * S) + 'px "DM Sans",system-ui,sans-serif';
+                cctx.font = '600 ' + Math.round(14 * S) + 'px "DM Sans",system-ui,sans-serif';
                 cctx.textAlign = 'right'; cctx.fillStyle = '#e2e8f0';
                 cctx.fillText(dtLabel, outW - pad, cy0 + Math.round(17 * S));
                 cctx.textAlign = 'left';
@@ -3697,7 +3697,7 @@
                 try { _rtDrawCompareColorbar(cctx, outW, outH, _IR_CBAR, _IR_CBAR_LABELS, 'Brightness Temp (°C)'); } catch (e) {}
             }
             var wmText = 'TC-ATLAS · tcatlas.org';
-            cctx.font = '700 ' + Math.round(12 * S) + 'px "DM Sans",system-ui,sans-serif';
+            cctx.font = '600 ' + Math.round(12 * S) + 'px "DM Sans",system-ui,sans-serif';
             var wmW = cctx.measureText(wmText).width, wmY = outH - Math.round(7 * S);
             var wmLogo = Math.round(16 * S), wmX = outW - pad - wmW;
             if (_rtLogoImg) {
@@ -4948,7 +4948,7 @@
         _rtObsHistCard.innerHTML =
             '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">' +
               '<div>' +
-                '<div style="font-weight:700;font-size:15px;">' + ob.id +
+                '<div style="font-weight:600;font-size:15px;">' + ob.id +
                   ' <span style="color:' + sub + ';font-weight:600;font-size:12px;">· ' + ob.source +
                   (ob.name ? ' · ' + ob.name : '') + '</span></div>' +
                 '<div style="color:' + sub + ';font-size:11.5px;">Last 24 h' +
@@ -4966,7 +4966,7 @@
                     ';font:600 12px ' + _DM_FONT_STACK + ';cursor:pointer;">⤓ PNG</button>' +
                   '<button type="button" id="rt-obs-hist-close" ' +
                     'style="padding:6px 12px;border-radius:8px;border:none;background:#2e7dff;' +
-                    'color:#fff;font:700 13px ' + _DM_FONT_STACK + ';cursor:pointer;">Close</button>' +
+                    'color:#fff;font:600 13px ' + _DM_FONT_STACK + ';cursor:pointer;">Close</button>' +
                 '</div>' +
                 ((ob.lat != null && ob.lon != null)
                   ? '<canvas id="rt-obs-hist-locator" title="Station location" ' +
@@ -5290,7 +5290,7 @@
             ctx.fillRect(0, 0, W, totalH);
             ctx.textBaseline = 'top';
             ctx.fillStyle = ink;
-            ctx.font = '700 30px ' + FONT;
+            ctx.font = '600 30px ' + FONT;
             ctx.fillText(ob.id + '  ·  ' + ob.source +
                 (ob.name ? '  ·  ' + ob.name : ''), 40, 30);
             ctx.fillStyle = dim;
@@ -10127,7 +10127,7 @@
             { direction: 'top', offset: [0, -8] }
         );
         var _popLines = [
-            '<div style="font-weight:700;margin-bottom:2px;">' +
+            '<div style="font-weight:600;margin-bottom:2px;">' +
                 (storm.name || storm.atcf_id) +
                 (_catLbl ? ' · ' + _catLbl : '') + '</div>',
             'Wind: ' + _vmaxTxt +
@@ -11592,7 +11592,7 @@
         if (cf.mean_std != null) bits.push('σ ' + cf.mean_std);
         _irObjEyeMarker.bindPopup(
             '<div class="ir-popup" style="font-size:11px;min-width:150px;">' +
-            '<div style="font-weight:700;color:#00b8cc;margin-bottom:4px;">⊕ Objective IR eye</div>' +
+            '<div style="font-weight:600;color:#00b8cc;margin-bottom:4px;">⊕ Objective IR eye</div>' +
             _rtReconRow('Center', _rtFmtLatLon(cf.lat, cf.lon)) +
             (bits.length ? _rtReconRow('Quality', bits.join(' · ')) : '') +
             '</div>', { maxWidth: 240, className: 'rt-recon-popup' });
@@ -28036,7 +28036,7 @@
         function _pill(label, bg) {
             var b = document.createElement('button');
             b.textContent = label; b.type = 'button';
-            b.style.cssText = 'font:700 13px/1 \'DM Sans\',system-ui,sans-serif;color:#fff;' +
+            b.style.cssText = 'font:600 13px/1 \'DM Sans\',system-ui,sans-serif;color:#fff;' +
                 'background:' + bg + ';border:none;border-radius:8px;padding:11px 18px;cursor:pointer;';
             return b;
         }
@@ -32480,7 +32480,7 @@
 
     function _rtReconBarbPopup(ob, tail, latlng, map) {
         var html = '<div class="ir-popup" style="font-size:11px;min-width:170px;">' +
-            '<div style="font-weight:700;color:#22d3ee;margin-bottom:4px;">' +
+            '<div style="font-weight:600;color:#22d3ee;margin-bottom:4px;">' +
             (_rtReconTailName(tail) || 'Aircraft') + ' · flight-level ob</div>' +
             _rtReconRow('Time', _rtFmtTime(ob.t)) +
             _rtReconRow('Position', _rtFmtLatLon(ob.lat, ob.lon)) +
@@ -32968,7 +32968,7 @@
             var hr = d.hires || null;   // full-resolution BUFR twin (2026-09-22)
             if (hr && hr.id) hasProfile = true;
             var sh = '<div class="ir-popup" style="font-size:11px;min-width:170px;">' +
-                '<div style="font-weight:700;color:#fbbf24;margin-bottom:4px;">◇ Dropsonde' +
+                '<div style="font-weight:600;color:#fbbf24;margin-bottom:4px;">◇ Dropsonde' +
                 (d.tail ? ' · ' + _rtReconTailName(d.tail) : '') + '</div>' +
                 _rtReconRow('Release', _rtFmtTime(d.t)) +
                 _rtReconRow('Position', _rtFmtLatLon(d.lat, d.lon)) +
@@ -33022,7 +33022,7 @@
             });
             var vm = L.marker([x.lat, x.lon], { icon: vicon, interactive: true, zIndexOffset: newest ? 900 : 400 });
             var vh = '<div class="ir-popup" style="font-size:11px;min-width:175px;">' +
-                '<div style="font-weight:700;color:#f87171;margin-bottom:4px;">⊕ Center fix (VDM)' +
+                '<div style="font-weight:600;color:#f87171;margin-bottom:4px;">⊕ Center fix (VDM)' +
                 (x.aircraft ? ' · ' + x.aircraft : '') +
                 (x.ob_number != null ? ' OB ' + x.ob_number : '') + '</div>' +
                 _rtReconRow('Time', _rtFmtTime(x.t)) +
@@ -33332,7 +33332,7 @@
             box.innerHTML = '';
             _reconSondeLegend(_reconSondeColorVar).forEach(function (s) {
                 var c = document.createElement('span'); c.textContent = s[0];
-                c.style.cssText = 'font-size:8px;color:' + (s[2] || '#0b1220') + ';font-weight:700;padding:1px 4px;border-radius:2px;background:' + s[1] + ';';
+                c.style.cssText = 'font-size:8px;color:' + (s[2] || '#0b1220') + ';font-weight:600;padding:1px 4px;border-radius:2px;background:' + s[1] + ';';
                 box.appendChild(c);
             });
         }
@@ -33362,7 +33362,7 @@
         for (var i = 0; i < stops.length; i++) {
             var s = document.createElement('span');
             s.textContent = stops[i][0];
-            s.style.cssText = 'font-size:8px;color:' + (stops[i][2] || '#0b1220') + ';font-weight:700;padding:1px 4px;border-radius:2px;background:' + stops[i][1] + ';';
+            s.style.cssText = 'font-size:8px;color:' + (stops[i][2] || '#0b1220') + ';font-weight:600;padding:1px 4px;border-radius:2px;background:' + stops[i][1] + ';';
             box.appendChild(s);
         }
     }
@@ -34331,7 +34331,7 @@
                 'style="width:22px;height:22px;flex:0 0 auto;display:block;' +
                 'border-radius:5px;">' +
                 '<div style="text-align:left;">' +
-                '<div style="font-weight:700;font-size:12px;letter-spacing:0.3px;' +
+                '<div style="font-weight:600;font-size:12px;letter-spacing:0.3px;' +
                 'color:rgba(255,255,255,0.95);">TC-ATLAS</div>' +
                 '<div style="font-weight:500;font-size:9px;color:rgba(255,255,255,0.78);">' +
                 'tcatlas.org</div></div>';
@@ -35188,7 +35188,7 @@
                 else cx.fillRect(lbl.x, lbl.y, lbl.w, lbl.h);
                 cx.textBaseline = 'middle';
                 var ty = lbl.y + lbl.h / 2;
-                cx.font = '700 ' + lbl.font;
+                cx.font = '600 ' + lbl.font;
                 cx.fillStyle = lbl.timeColor;
                 cx.fillText(timeTxt, lbl.x + lbl.padX, ty);
                 var tw = cx.measureText(timeTxt).width;

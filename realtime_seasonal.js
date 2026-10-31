@@ -9130,7 +9130,7 @@
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = '#0f172a';
-                ctx.font = 'bold ' + titleFont + 'px "DM Sans", system-ui, sans-serif';
+                ctx.font = '600 ' + titleFont + 'px "DM Sans", system-ui, sans-serif';
                 ctx.textBaseline = 'middle';
                 ctx.fillText('Seasonal Evolution — ' + dateLabel
                              + '  ·  ' + modeLabel,

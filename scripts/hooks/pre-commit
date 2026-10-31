@@ -1,6 +1,7 @@
 #!/bin/sh
 # Refuse a commit that leaves a shared asset under two ?v= cache tokens
-# (scripts/check_version_tokens.sh). Two tokens for one file means some pages
+# (scripts/check_version_tokens.sh), or a stylesheet font size off the type
+# scale (scripts/check_type_scale.sh). Two tokens for one file means some pages
 # keep getting an older copy from the CDN.
 #
 # Checks the STAGED copies of the pages and loaders, not the working tree,
@@ -15,12 +16,23 @@ git diff --cached --name-only --diff-filter=ACMRD | grep -qE '^[^/]+\.(html|js|c
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/tc-token-check.XXXXXX") || exit 1
 trap 'rm -rf "$tmp"' EXIT INT TERM
-git ls-files -z -- ':(glob)*.html' ':(glob)*.js' | git checkout-index -z --stdin --prefix="$tmp/"
+git ls-files -z -- ':(glob)*.html' ':(glob)*.js' ':(glob)*.css' | git checkout-index -z --stdin --prefix="$tmp/"
 mkdir -p "$tmp/scripts"
 cp "$check" "$tmp/scripts/"
 if ! out=$(bash "$tmp/scripts/check_version_tokens.sh" 2>&1); then
     printf '%s\n' "$out" >&2
     echo "pre-commit: give each file above ONE fresh ?v= token on every page, or commit with --no-verify." >&2
     exit 1
+fi
+
+# Stylesheet font sizes stay on the type scale (scripts/check_type_scale.sh).
+scale="$top/scripts/check_type_scale.sh"
+if [ -f "$scale" ]; then
+    cp "$scale" "$tmp/scripts/"
+    if ! out=$(bash "$tmp/scripts/check_type_scale.sh" 2>&1); then
+        printf '%s\n' "$out" >&2
+        echo "pre-commit: move each size above onto the type scale, or commit with --no-verify." >&2
+        exit 1
+    fi
 fi
 exit 0

@@ -33,20 +33,20 @@
 
 .seasonal-title {
     margin: 0 0 4px;
-    font-size: 1.15rem;
+    font-size: 1.125rem;
     color: var(--text, #e0e0e0);
 }
 
 .seasonal-sub {
     margin: 0;
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     line-height: 1.45;
     color: var(--text-dim, #a0a8b3);
     max-width: 860px;
 }
 
 .seasonal-status {
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     color: var(--text-dim, #a0a8b3);
     font-variant-numeric: tabular-nums;
     text-align: right;
@@ -82,7 +82,7 @@
 .seasonal-subnav a {
     flex: 0 0 auto;
     padding: 4px 10px;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     font-weight: 500;
     color: var(--text-dim, #94a3b8);
     background: rgba(255,255,255,0.04);
@@ -140,7 +140,7 @@
     height: 24px;
     padding: 0;
     line-height: 1;
-    font-size: 0.95rem;
+    font-size: 1rem;
     color: var(--text-dim, #94a3b8);
     background: rgba(255,255,255,0.04);
     border: 1px solid rgba(255,255,255,0.10);
@@ -175,7 +175,7 @@
     min-width: 44px;        /* iOS HIG touch target */
     height: 44px;
     padding: 0 14px;
-    font-size: 0.85rem;
+    font-size: 0.875rem;
     font-weight: 600;
     letter-spacing: 0.02em;
     /* High-contrast pill — bright orange on dark, dark on light, so
@@ -217,7 +217,7 @@
     color: var(--text, #e6edf5);
     box-shadow: 0 2px 8px rgba(0,0,0,0.25);
     border-radius: 22px;
-    font-size: 1.05rem;
+    font-size: 1rem;
 }
 
 /* The maximized panel covers the viewport with a generous safe-area
@@ -283,7 +283,7 @@
     padding: 4px 12px;
     border-radius: 12px;
     font-family: 'DM Sans', system-ui, sans-serif;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     font-weight: 500;
     letter-spacing: 0.01em;
     white-space: nowrap;
@@ -346,7 +346,7 @@ body.seasonal-maximized .seasonal-header {
         border-color: rgba(255,255,255,0.10);
         box-shadow: 0 2px 6px rgba(0,0,0,0.22);
     }
-    .seasonal-panel-title { font-size: 0.95rem; }
+    .seasonal-panel-title { font-size: 1rem; }
 }
 
 /* Mobile-only: enlarge the maximize button so it's a comfortable
@@ -464,7 +464,7 @@ body.seasonal-maximized .seasonal-header {
     border: 1px solid var(--border, rgba(255,255,255,0.18));
     border-radius: 4px;
     padding: 3px 10px;
-    font-size: 0.85rem;
+    font-size: 0.875rem;
     cursor: pointer;
     line-height: 1;
 }
@@ -492,7 +492,7 @@ body.seasonal-maximized .seasonal-header {
     border: 1px solid var(--border, rgba(255,255,255,0.18));
     border-radius: 3px;
     padding: 1px 4px;
-    font-size: 0.7rem;
+    font-size: 0.6875rem;
     font-family: inherit;
     color-scheme: dark light;
     min-width: 110px;
@@ -509,7 +509,7 @@ body.seasonal-maximized .seasonal-header {
     background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.12);
     color: var(--text-dim, #94a3b8);
-    font-size: 0.65rem;
+    font-size: 0.625rem;
     font-variant-numeric: tabular-nums;
     line-height: 1.4;
     white-space: nowrap;
@@ -527,7 +527,7 @@ body.seasonal-maximized .seasonal-header {
     background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.12);
     color: var(--text-dim, #94a3b8);
-    font-size: 0.65rem;
+    font-size: 0.625rem;
     font-variant-numeric: tabular-nums;
     line-height: 1.4;
     white-space: nowrap;
@@ -544,11 +544,11 @@ body.seasonal-maximized .seasonal-header {
     border: 1px solid var(--border);
     border-radius: 3px;
     padding: 2px 4px;
-    font-size: 0.7rem;
+    font-size: 0.6875rem;
 }
 .seasonal-evo-legend {
     margin-top: 4px;
-    font-size: 0.7rem;
+    font-size: 0.6875rem;
     color: var(--text-dim, #94a3b8);
 }
 
@@ -566,7 +566,7 @@ body.seasonal-maximized .seasonal-header {
     border: 1px solid var(--border, rgba(255,255,255,0.18));
     border-radius: 3px;
     padding: 3px 8px;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     font-family: inherit;
     cursor: pointer;
     line-height: 1;
@@ -605,7 +605,7 @@ body.seasonal-maximized .seasonal-header {
     border-radius: 999px;
     background: rgba(46,125,255,0.16);
     color: var(--text-dim, #94a3b8);
-    font-size: 0.7rem;
+    font-size: 0.6875rem;
     font-weight: 500;
     letter-spacing: 0.02em;
     vertical-align: middle;
@@ -627,7 +627,7 @@ body.seasonal-maximized .seasonal-header {
     border: 1px solid var(--border, rgba(255,255,255,0.18));
     border-radius: 4px;
     padding: 6px 12px;
-    font-size: 0.85rem;
+    font-size: 0.875rem;
     font-family: inherit;
     cursor: pointer;
     line-height: 1;
@@ -647,7 +647,7 @@ body.seasonal-maximized .seasonal-header {
     }
     .seasonal-evo-step-btn {
         padding: 8px 14px;
-        font-size: 0.95rem;
+        font-size: 1rem;
         min-width: 72px;
     }
 }
@@ -673,7 +673,7 @@ body.seasonal-maximized .seasonal-header {
 
 .seasonal-panel-desc {
     margin: 0 0 10px;
-    font-size: 0.74rem;
+    font-size: 0.75rem;
     line-height: 1.45;
     color: var(--text-dim, #a0a8b3);
     max-width: 900px;
@@ -738,7 +738,7 @@ body.seasonal-maximized .seasonal-header {
     background: rgba(10,12,14,0.78);
     border-radius: 3px;
     color: #fff;
-    font: 10.5px/1.4 'DM Sans', system-ui, sans-serif;
+    font: 11px/1.4 'DM Sans', system-ui, sans-serif;
     pointer-events: none;
     display: none;
     z-index: 4;
@@ -755,7 +755,7 @@ body.seasonal-maximized .seasonal-header {
     align-items: center;
     gap: 6px;
     margin-top: 6px;
-    font-size: 0.7rem;
+    font-size: 0.6875rem;
     color: var(--text-dim, #a0a8b3);
 }
 
@@ -771,7 +771,7 @@ body.seasonal-maximized .seasonal-header {
 
 .seasonal-panel-title {
     margin: 0 0 8px;
-    font-size: 0.85rem;
+    font-size: 0.875rem;
     color: var(--text, #e0e0e0);
     letter-spacing: 0.02em;
     /* Keep clear of the expand + save buttons pinned to the panel's
@@ -790,7 +790,7 @@ body.seasonal-maximized .seasonal-header {
     height: 24px;
     padding: 0;
     line-height: 1;
-    font-size: 0.95rem;
+    font-size: 1rem;
     color: var(--text-dim, #94a3b8);
     background: rgba(255,255,255,0.04);
     border: 1px solid rgba(255,255,255,0.10);
@@ -811,7 +811,7 @@ body.seasonal-maximized .seasonal-header {
     align-items: center;
     justify-content: center;
     color: var(--text-dim, #8892a0);
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     font-style: italic;
     padding: 24px 18px;
     text-align: center;
@@ -879,7 +879,7 @@ body.seasonal-maximized .seasonal-header {
     border-radius: 6px;
     background: var(--surface-raised, #161b22);
     cursor: pointer;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     color: var(--text-dim, #94a3b8);
     transition: border-color .12s ease, background .12s ease;
 }
@@ -895,7 +895,7 @@ body.seasonal-maximized .seasonal-header {
     color: var(--text, #e0e0e0);
 }
 .seasonal-ace-chip .ace-chip-val {
-    font-size: 0.95rem;
+    font-size: 1rem;
     font-variant-numeric: tabular-nums;
     color: var(--text, #e0e0e0);
 }
@@ -926,7 +926,7 @@ body.seasonal-maximized .seasonal-header {
 /* Panel A — per-storm ACE contribution breakdown */
 .seasonal-ace-storms { margin-top: 6px; min-width: 0; }
 .seasonal-ace-storms-head {
-    font-size: 0.74rem;
+    font-size: 0.75rem;
     color: var(--text-dim, #94a3b8);
     margin-bottom: 6px;
 }
@@ -942,7 +942,7 @@ body.seasonal-maximized .seasonal-header {
     align-items: center;
     column-gap: 10px;
     row-gap: 6px;
-    font-size: 0.74rem;
+    font-size: 0.75rem;
     color: var(--text-dim, #94a3b8);
 }
 .seasonal-ace-storm { display: contents; }
@@ -992,7 +992,7 @@ body.seasonal-maximized .seasonal-header {
 .seasonal-ace-more {
     margin-top: 4px;
     padding: 2px 8px;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     font-family: inherit;
     color: var(--text-dim, #94a3b8);
     background: transparent;
@@ -1005,7 +1005,7 @@ body.seasonal-maximized .seasonal-header {
     border-color: rgba(120,170,210,0.55);
 }
 .seasonal-ace-storms-empty {
-    font-size: 0.74rem;
+    font-size: 0.75rem;
     color: var(--text-dim, #94a3b8);
     opacity: .8;
 }
@@ -1038,7 +1038,7 @@ body.seasonal-maximized .seasonal-header {
 .seasonal-an-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     color: var(--text, #e0e0e0);
     margin-top: 6px;
 }
@@ -1066,7 +1066,7 @@ body.seasonal-maximized .seasonal-header {
 .seasonal-an-table tr.an-avg-row td {
     border-top: 2px solid rgba(140,148,160,0.55);
     padding-top: 8px;
-    font-weight: 700;
+    font-weight: 600;
     color: var(--text, #e0e0e0);
 }
 
@@ -1075,7 +1075,7 @@ body.seasonal-maximized .seasonal-header {
    ACE historically (vs predicting climatology every year). */
 .seasonal-an-skill {
     margin-top: 10px;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     color: var(--text-dim, #a0a8b3);
     line-height: 1.5;
 }
@@ -1101,7 +1101,7 @@ body.seasonal-maximized .seasonal-header {
 
 .seasonal-an-details {
     margin-top: 10px;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     color: var(--text-dim, #a0a8b3);
 }
 .seasonal-an-details summary {
@@ -1179,7 +1179,7 @@ body.seasonal-maximized .seasonal-header {
     right: 0;
     padding: 4px 8px;
     background: linear-gradient(to top, rgba(0,0,0,0.72), rgba(0,0,0,0));
-    font-size: 0.7rem;
+    font-size: 0.6875rem;
     color: #fff;
     font-variant-numeric: tabular-nums;
 }
@@ -1189,14 +1189,14 @@ body.seasonal-maximized .seasonal-header {
     align-items: center;
     gap: 6px;
     margin-top: 6px;
-    font-size: 0.7rem;
+    font-size: 0.6875rem;
     color: var(--text-dim, #a0a8b3);
 }
 
 /* Data-credit line under the SST map legends. */
 .seasonal-source {
     margin-top: 4px;
-    font-size: 0.66rem;
+    font-size: 0.6875rem;
     color: var(--text-dim, #a0a8b3);
 }
 
