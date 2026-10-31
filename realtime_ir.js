@@ -16430,10 +16430,12 @@
     var _genesisMatchedAtcfIds = {};
 
     // Map an active-storm ATCF basin code to its single-letter suffix
-    // used in JTWC/NHC nomenclature (e.g., "WP012026" → "01W").
+    // used in JTWC/NHC nomenclature (e.g., "WP012026" → "01W"). IO is not
+    // here: its letter depends on where the storm formed ("A" Arabian Sea,
+    // "B" Bay of Bengal), so the API sends it per storm as `atcf_letter`.
     var _ATCF_BASIN_LETTER = {
         AL: 'L', EP: 'E', CP: 'C',
-        WP: 'W', IO: 'A', SH: 'S',
+        WP: 'W', SH: 'S',
     };
 
     // Format an active-storm record using JTWC/NHC nomenclature so a
@@ -16449,7 +16451,8 @@
         var basinCode = id.slice(0, 2).toUpperCase();
         var num = id.slice(2, 4);
         var n = parseInt(num, 10);
-        var letter = _ATCF_BASIN_LETTER[basinCode] || '';
+        var letter = (typeof storm.atcf_letter === 'string')
+            ? storm.atcf_letter : (_ATCF_BASIN_LETTER[basinCode] || '');
         var nnb = num + letter;  // e.g., "01W"
         if (isNaN(n)) return null;
         if (n >= 90 && n <= 99) {
