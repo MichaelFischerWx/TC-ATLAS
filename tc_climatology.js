@@ -783,10 +783,14 @@ function renderACESeasonMap(yearStorms) {
     }
     mapEl.style.display = '';
 
-    // Initialize map
+    // Initialize map. Zooms are MapLibre's (512-px tiles: zoom z spans
+    // 512·2^z px). Never wider than one world: zoomed out further, a global
+    // season's tracks repeat on every world copy.
+    var worldZoom = Math.log(Math.max(256, mapEl.clientWidth) / 512) / Math.LN2;
     aceSeasonMap = L.map('ace-season-map', {
         center: [20, -60],
-        zoom: 3,
+        zoom: Math.max(2, worldZoom),
+        minZoom: worldZoom,
         zoomControl: true,
         worldCopyJump: true
     });
@@ -799,6 +803,33 @@ function renderACESeasonMap(yearStorms) {
 
     var allLats = [];
     var allLons = [];
+
+    // One shared batch renderer: under MapLibre (lflet_gl.js) every segment and
+    // genesis dot naming it is drawn from ONE source rather than a layer each —
+    // a busy season is a few thousand segments.
+    var map = aceSeasonMap;
+    var trackRenderer = L.canvas({ padding: 0.5 });
+    // Hover highlights the whole storm. Batched lines get no mouseover/out, but
+    // tooltipopen/close fire on both engines; moving between two segments of a
+    // storm closes and reopens the tooltip in one tick, so clearing waits a tick.
+    var hiLayer = null, hiSid = null, hiOffTimer = null;
+    function hiOn(sid, fc) {
+        clearTimeout(hiOffTimer);
+        if (hiSid === sid) return;
+        if (hiLayer) map.removeLayer(hiLayer);
+        hiSid = sid;
+        hiLayer = L.geoJSON(fc, {
+            interactive: false,
+            style: function (f) { return f.properties; }
+        }).addTo(map);
+    }
+    function hiOff() {
+        clearTimeout(hiOffTimer);
+        hiOffTimer = setTimeout(function () {
+            if (hiLayer && map === aceSeasonMap) map.removeLayer(hiLayer);
+            hiLayer = null; hiSid = null;
+        }, 0);
+    }
 
     // Compute median ACE for label filtering (reduce clutter in busy seasons)
     var aceValues = stormsWithTracks.map(function (s) { return s.ace || 0; }).sort(function (a, b) { return a - b; });
@@ -813,15 +844,22 @@ function renderACESeasonMap(yearStorms) {
         if (validPts.length < 2) return;
 
         // Draw intensity-colored polyline segments
-        var segmentCoords = [];
+        var hiFeatures = [];
+        var hiFC = { type: 'FeatureCollection', features: hiFeatures };
         for (var i = 1; i < validPts.length; i++) {
             var p0 = validPts[i - 1];
             var p1 = validPts[i];
             var isTCPhase = _isTCNature(p1.n);
             var color = isTCPhase ? getIntensityColor(p1.w) : '#6b7280';
+            hiFeatures.push({
+                type: 'Feature',
+                properties: { color: color, weight: isTCPhase ? 5 : 2, opacity: 1 },
+                geometry: { type: 'LineString', coordinates: [[p0.lo, p0.la], [p1.lo, p1.la]] }
+            });
             var seg = L.polyline(
                 [[p0.la, p0.lo], [p1.la, p1.lo]],
-                { color: color, weight: isTCPhase ? 2.5 : 1, opacity: isTCPhase ? 0.85 : 0.35, dashArray: isTCPhase ? null : '4,3' }
+                { color: color, weight: isTCPhase ? 2.5 : 1, opacity: isTCPhase ? 0.85 : 0.35, dashArray: isTCPhase ? null : '4,3',
+                  renderer: trackRenderer }
             );
             seg._stormSid = storm.sid;
             seg.addTo(aceSeasonMap);
@@ -840,9 +878,11 @@ function renderACESeasonMap(yearStorms) {
                 return function () { aceJumpToStorm(sid); };
             })(storm.sid));
 
-            // Highlight on hover
-            seg.on('mouseover', function () { this.setStyle({ weight: 5, opacity: 1 }); });
-            seg.on('mouseout', function () { this.setStyle({ weight: 2.5, opacity: 0.85 }); });
+            // Highlight the storm on hover
+            seg.on('tooltipopen', (function (sid, fc) {
+                return function () { hiOn(sid, fc); };
+            })(storm.sid, hiFC));
+            seg.on('tooltipclose', hiOff);
         }
 
         // Collect bounds
@@ -870,7 +910,8 @@ function renderACESeasonMap(yearStorms) {
         // Genesis dot
         var gen = validPts[0];
         L.circleMarker([gen.la, gen.lo], {
-            radius: 3, color: '#fff', fillColor: getIntensityColor(gen.w), fillOpacity: 0.9, weight: 1
+            radius: 3, color: '#fff', fillColor: getIntensityColor(gen.w), fillOpacity: 0.9, weight: 1,
+            renderer: trackRenderer
         }).addTo(aceSeasonMap);
     });
 
