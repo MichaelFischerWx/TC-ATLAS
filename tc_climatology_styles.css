@@ -139,21 +139,13 @@
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    padding: 11px 20px;
-    background: var(--um-green);
-    color: #ffffff;
+    padding: 8px 16px;
     text-decoration: none;
     font-family: 'DM Sans', sans-serif;
-    font-weight: 600;
-    font-size: 0.875rem;
+    font-size: 0.8125rem;
     letter-spacing: 0.01em;
-    border-radius: 8px;
     transition: background 0.15s, transform 0.15s;
     white-space: nowrap;
-}
-.tc-clim-globe-banner-btn:hover {
-    background: var(--um-green-deep);
-    transform: translateY(-1px);
 }
 .tc-clim-globe-banner-btn:focus {
     outline: 2px solid var(--um-green);
@@ -437,14 +429,9 @@ html.evo-only-mode #sub-evolution-modal .ace-modal-content {
     top: 6px;
     right: 6px;
     z-index: 4;
-    padding: 4px 10px;
+    padding: 2px 8px;
     font-family: inherit;
     font-size: 0.6875rem;
-    font-weight: 600;
-    color: var(--text, #0f172a);
-    background: rgba(46,125,255,0.12);
-    border: 1px solid var(--border, rgba(0,0,0,0.12));
-    border-radius: 4px;
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s;
 }
@@ -454,20 +441,9 @@ html.evo-only-mode #sub-evolution-modal .ace-modal-content {
 #sub-evolution-modal .ace-chart-wrap > .ace-section-title {
     padding-right: 110px;
 }
-.sub-evo-save-btn:hover,
-.sub-evo-save-btn:focus-visible {
-    background: rgba(46,125,255,0.28);
-    border-color: rgba(46,125,255,0.55);
-    outline: none;
-}
 .sub-evo-save-btn:disabled {
     opacity: 0.55;
     cursor: wait;
-}
-[data-theme="dark"] .sub-evo-save-btn {
-    color: #e2e8f0;
-    background: rgba(46,125,255,0.18);
-    border-color: rgba(148,163,184,0.25);
 }
 @media (max-width: 600px) {
     /* Tighter padding on mobile so the button doesn't overlap the
