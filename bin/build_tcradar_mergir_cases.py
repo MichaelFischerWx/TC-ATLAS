@@ -8,7 +8,7 @@ Store layout (written by the original, uncommitted builder; reproduced here and 
   lag_hours 0, 0.5 ... 4: the frame is the MergIR half-hour slot nearest (analysis time - lag)
   ir_datetime[case, 9] = that slot in EPOCH MINUTES (-1 = missing); status[case] = 1 when the case has IR
 
-MergIR comes from NASA GES DISC OPeNDAP (GPM_MERGIR.1), one server-side subset per file (each file = one hour,
+MergIR comes from NASA Earthdata Cloud OPeNDAP (GPM_MERGIR.1), one server-side subset per file (each file = one hour,
 two half-hourly grids), authenticated with the urs.earthdata.nasa.gov entry in ~/.netrc. Nothing here writes
 ~/.netrc (global_archive_api must not be imported on the Mac: its import-time setup overwrites it).
 
@@ -29,7 +29,8 @@ import numpy as np
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
-OPENDAP = "https://disc2.gesdisc.eosdis.nasa.gov/opendap/MERGED_IR/GPM_MERGIR.1"
+# Earthdata Cloud OPeNDAP (GES DISC retired disc2 on 2026-11-01; same login, granules keyed by name)
+OPENDAP = "https://opendap.earthdata.nasa.gov/collections/C1432254058-GES_DISC/granules"
 N = 550
 HALF = N // 2
 LAGS = [0.5 * k for k in range(9)]
@@ -52,7 +53,7 @@ def slot(t: datetime) -> datetime:
 def fetch_hour(s: requests.Session, hour: datetime, i_lat: tuple, i_lon: tuple):
     """Both half-hour grids of one MergIR file over [i_lat, i_lon] index ranges -> (Tb[2, ny, nx], lat, lon)."""
     import xarray as xr
-    url = (f"{OPENDAP}/{hour.year}/{hour.timetuple().tm_yday:03d}/merg_{hour:%Y%m%d%H}_4km-pixel.nc4.nc4?"
+    url = (f"{OPENDAP}/GPM_MERGIR.1%3Amerg_{hour:%Y%m%d%H}_4km-pixel.nc4.nc4?"
            f"Tb[0:1][{i_lat[0]}:{i_lat[1]}][{i_lon[0]}:{i_lon[1]}],lat[{i_lat[0]}:{i_lat[1]}],lon[{i_lon[0]}:{i_lon[1]}],time")
     for attempt in range(4):
         r = s.get(url, timeout=120)
