@@ -4411,7 +4411,7 @@ function generateCustomPlot(callback) {
     var timeout = setTimeout(function() { controller.abort(); }, 90000);
     var url = API_BASE + '/data?case_index=' + currentCaseIndex + '&variable=' + variable + '&level_km=' + level_km + '&data_type=' + _activeDataType + '';
     if (overlay) url += '&overlay=' + overlay;
-    if (wantBarbs) url += '&wind_barbs=true';
+    if (wantBarbs) url += '&wind_barbs=true&barb_stride=2';   // 4-km barb grid; tdr_view thins it by zoom
     if (wantTilt) url += '&tilt_profile=true';
     fetch(url, { signal: controller.signal })
         .then(function(r) { if (!r.ok) return TCErrors.fromResponse(r); return r.json(); })
@@ -4821,7 +4821,10 @@ function renderPlotFromJSON(json, resultDiv) {
     var centerMarkerTrace = buildTCCenterMarkerTrace(_ccLat, _ccLon);
     var centerTraces = centerMarkerTrace ? [centerMarkerTrace] : [];
 
-    tcrNewPlot('plotly-chart', [heatmap].concat(overlayTraces).concat(maxTraces).concat(tiltTraces).concat(centerTraces), smallLayout, config);
+    var _planPlot = tcrNewPlot('plotly-chart', [heatmap].concat(overlayTraces).concat(maxTraces).concat(tiltTraces).concat(centerTraces), smallLayout, config);
+    if (json.wind_barbs && _planPlot && _planPlot.then) {
+        _planPlot.then(function (gd) { TDRView.bindPlotBarbs(gd, json.wind_barbs); });   // re-thin barbs on plot zoom
+    }
     window._lastPlotlyData = { heatmap: heatmap, overlayTraces: overlayTraces, maxTraces: maxTraces, tiltTraces: tiltTraces, centerTraces: centerTraces, baseLayout: baseLayout, title: title, config: config, barbShapes: barbShapes };
 
     // Auto-apply IR underlay if data is loaded and user hasn't opted out

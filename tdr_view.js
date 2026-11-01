@@ -71,22 +71,36 @@
     // shapes (the map drape reprojects the same shapes). Staff points INTO the
     // wind, feathers on the left; half = 5 kt, full = 10 kt, pennant = 50 kt.
     // barbData = { u:[[]], v:[[]], x:[], y:[], units:'m/s', type }
-    // axRanges = { xMin, xMax, yMin, yMax }
-    function windBarbShapes(barbData, axRanges) {
+    // axRanges = { xMin, xMax, yMin, yMax } -- the VISIBLE range: barbs outside it are skipped
+    // opt = { spacing (km between barbs), staffLen (km) } -- default ~20 barbs and a 4%-of-span staff
+    //   across the visible range, so a zoomed plan view or map gets denser, constant-size barbs.
+    //   Thinning keeps every step-th point of the barb grid, anchored on the storm center, so the
+    //   pattern does not shift as you pan.
+    function windBarbShapes(barbData, axRanges, opt) {
         var shapes = [];
         if (!barbData || !barbData.u || !barbData.v) return shapes;
+        opt = opt || {};
         var uGrid = barbData.u, vGrid = barbData.v, xCoords = barbData.x, yCoords = barbData.y;
         var span = Math.max(axRanges.xMax - axRanges.xMin, axRanges.yMax - axRanges.yMin);
         if (span <= 0) return shapes;
-        var staffLen = span * 0.04;              // ~4% of the axis span, in km
+        var staffLen = opt.staffLen || span * 0.04;  // ~4% of the visible span, in km
+        var dxg = xCoords.length > 1 ? Math.abs(xCoords[1] - xCoords[0]) : span;
+        var step = Math.max(1, Math.round((opt.spacing || span / 20) / dxg));
+        function nearest0(a) { var b = 0; for (var q = 1; q < a.length; q++) if (Math.abs(a[q]) < Math.abs(a[b])) b = q; return b; }
+        var i0 = nearest0(xCoords), j0 = nearest0(yCoords);
         var barbFrac = 0.38, gapFrac = 0.12;     // feather length / spacing (x staff)
         var flagWFrac = 0.38, flagHFrac = 0.18;  // 50-kt pennant width / height
         var lineColor = 'rgba(0,0,0,0.8)', lineWidth = 1.4;
         function mkLine(x0, y0, x1, y1) {
-            return { type: 'line', xref: 'x', yref: 'y', x0: x0, y0: y0, x1: x1, y1: y1, line: { color: lineColor, width: lineWidth } };
+            return { type: 'line', name: 'barb', xref: 'x', yref: 'y', x0: x0, y0: y0, x1: x1, y1: y1, line: { color: lineColor, width: lineWidth } };
         }
         for (var yi = 0; yi < uGrid.length; yi++) {
+            if (((yi - j0) % step + step) % step) continue;
+            var yRow = yCoords[yi];
+            if (yRow < axRanges.yMin || yRow > axRanges.yMax) continue;
             for (var xi = 0; xi < uGrid[yi].length; xi++) {
+                if (((xi - i0) % step + step) % step) continue;
+                if (xCoords[xi] < axRanges.xMin || xCoords[xi] > axRanges.xMax) continue;
                 var uMs = uGrid[yi][xi], vMs = vGrid[yi][xi];
                 if (uMs === null || vMs === null) continue;
                 var spdKt = Math.sqrt(uMs * uMs + vMs * vMs) * 1.944;
@@ -131,6 +145,25 @@
             }
         }
         return shapes;
+    }
+
+    // Plan view: when the user zooms the Plotly chart, re-thin the barbs for the visible range
+    // (~20 per axis, staff 4% of the visible span). Re-bind after every Plotly.newPlot (it drops
+    // listeners); only shapes named 'barb' are swapped, so rings / markers / overlays stay.
+    function bindPlotBarbs(gd, barbData) {
+        if (!gd || typeof gd.on !== 'function' || typeof Plotly === 'undefined') return;
+        gd._tdrBarbs = barbData || null;
+        if (gd._tdrBarbHandler && gd.removeListener) gd.removeListener('plotly_relayout', gd._tdrBarbHandler);
+        gd._tdrBarbHandler = function (ev) {
+            if (!gd._tdrBarbs || !ev || !gd._fullLayout) return;
+            if (!Object.keys(ev).some(function (k) { return /^[xy]axis\.(range|autorange)/.test(k); })) return;
+            var xr = gd._fullLayout.xaxis && gd._fullLayout.xaxis.range, yr = gd._fullLayout.yaxis && gd._fullLayout.yaxis.range;
+            if (!xr || !yr) return;
+            var ax = { xMin: Math.min(xr[0], xr[1]), xMax: Math.max(xr[0], xr[1]), yMin: Math.min(yr[0], yr[1]), yMax: Math.max(yr[0], yr[1]) };
+            var keep = (gd.layout.shapes || []).filter(function (sh) { return sh.name !== 'barb'; });
+            Plotly.relayout(gd, { shapes: keep.concat(windBarbShapes(gd._tdrBarbs, ax)) });
+        };
+        gd.on('plotly_relayout', gd._tdrBarbHandler);
     }
 
     // ── Max / min / center markers ───────────────────────────────────────
@@ -1104,10 +1137,29 @@
         // Barbs as VECTOR lines (constant screen width, antialiased at every
         // zoom); same glyphs as the plan view, projected to lon/lat.
         function removeBarbs() { rm(st.halo); rm(st.ink); st.halo = st.ink = null; }
+        // Like the Global Archive recon barbs: ~BARB_SPACING_PX apart on screen and a constant
+        // ~BARB_STAFF_PX staff at every zoom, redrawn on zoomend / moveend, culled to the view.
+        var BARB_SPACING_PX = 42, BARB_STAFF_PX = 24;
         function drawBarbs() {
-            var p = st.p;
-            if (!st.on || !p || !p.barbs || !barbsVisible() || !fieldVisible() || p.center_lat == null) { removeBarbs(); return; }
-            var shapes = windBarbShapes(p.barbs, { xMin: p.x[0], xMax: p.x[p.x.length - 1], yMin: p.y[0], yMax: p.y[p.y.length - 1] });
+            var p = st.p, m = M();
+            if (!st.on || !p || !p.barbs || !barbsVisible() || !fieldVisible() || p.center_lat == null || !m) { removeBarbs(); return; }
+            var ax = { xMin: p.x[0], xMax: p.x[p.x.length - 1], yMin: p.y[0], yMax: p.y[p.y.length - 1] }, bopt = {};
+            try {
+                var c0 = m.latLngToContainerPoint(latLngFromKm(0, 0, p)), c1 = m.latLngToContainerPoint(latLngFromKm(50, 0, p));
+                var pxPerKm = Math.sqrt(Math.pow(c1.x - c0.x, 2) + Math.pow(c1.y - c0.y, 2)) / 50;
+                if (pxPerKm > 0 && isFinite(pxPerKm)) {
+                    bopt = { spacing: BARB_SPACING_PX / pxPerKm, staffLen: BARB_STAFF_PX / pxPerKm };
+                    var vb = m.getBounds(), sw = kmFromLatLng(vb.getSouthWest(), p), ne = kmFromLatLng(vb.getNorthEast(), p);
+                    var pad = bopt.staffLen;
+                    if (sw && ne) ax = { xMin: Math.max(ax.xMin, sw.x - pad), xMax: Math.min(ax.xMax, ne.x + pad),
+                                         yMin: Math.max(ax.yMin, sw.y - pad), yMax: Math.min(ax.yMax, ne.y + pad) };
+                }
+            } catch (e) { bopt = {}; }
+            if (st.barbMap !== m) {                      // once per map: re-thin on every zoom / pan
+                m.on('zoomend', drawBarbs); m.on('moveend', drawBarbs);
+                st.barbMap = m;
+            }
+            var shapes = (ax.xMax > ax.xMin && ax.yMax > ax.yMin) ? windBarbShapes(p.barbs, ax, bopt) : [];
             var lines = [];
             for (var i = 0; i < shapes.length; i++) {
                 var sh = shapes[i]; if (sh.type !== 'line') continue;
@@ -1423,6 +1475,7 @@
         NAMED_CS: NAMED_CS, csParse: csParse, csResolve: csResolve, csColor: csColor, csLUT: csLUT,
         planExtremes: planExtremes, planExtremesText: planExtremesText,
         windBarbShapes: windBarbShapes,
+        bindPlotBarbs: bindPlotBarbs,
         findDataMax: findDataMax, findDataMin: findDataMin, isWindVariable: isWindVariable,
         maxMarkerTrace: maxMarkerTrace, maxAnnotation: maxAnnotation, tcCenterMarkerTrace: tcCenterMarkerTrace,
         overlayContours: overlayContours, contourTraces: contourTraces, hybridXAxis: hybridXAxis,

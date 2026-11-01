@@ -1732,6 +1732,8 @@ def get_data(
     overlay:    str   = Query("",                              description="Optional overlay variable key"),
     wind_barbs: bool  = Query(False,                           description="Include subsampled U/V for wind barbs"),
     tilt_profile: bool = Query(False,                          description="Include vortex tilt profile (center at each height)"),
+    barb_stride: Optional[int] = Query(None, ge=1, le=20,      description="Barb grid stride in analysis cells (default: ~20 barbs per axis). "
+                                                                           "The explorer asks for 2 and thins on screen by zoom."),
 ):
     """Return the raw 2D data slice as JSON for client-side Plotly rendering."""
     if variable not in VARIABLES:
@@ -1752,8 +1754,9 @@ def get_data(
         _r2_frame_exists, _r2_mirror_frame_async, _public_frame_url,
     )
     level_key = _snap_level_km(level_km)
+    _bs = f"_bs{barb_stride}" if (wind_barbs and barb_stride) else ""   # default payload keeps its old key
     r2_key = (f"{_R2_DS}-data/v1/{data_type}/{case_index}_{variable}_{level_key:.1f}"
-              f"_{overlay or 'none'}_{int(wind_barbs)}_{int(tilt_profile)}.json")
+              f"_{overlay or 'none'}_{int(wind_barbs)}_{int(tilt_profile)}{_bs}.json")
     if _r2_frame_exists(r2_key):
         return RedirectResponse(
             _public_frame_url(r2_key), status_code=302,
@@ -1761,7 +1764,8 @@ def get_data(
         )
 
     # Serve from cache if available (instant — no S3 read or computation)
-    cache_key = (case_index, variable, level_key, data_type, overlay, wind_barbs, tilt_profile)
+    cache_key = (case_index, variable, level_key, data_type, overlay, wind_barbs, tilt_profile,
+                 barb_stride if wind_barbs else None)
     with _data_cache_lock:
         _cached = _data_cache.get(cache_key)
         if _cached is not None:
@@ -1844,9 +1848,9 @@ def get_data(
             if u_name in ds and v_name in ds:
                 u_full = ds[u_name].isel(num_cases=local_idx, height=z_idx).values
                 v_full = ds[v_name].isel(num_cases=local_idx, height=z_idx).values
-                # Subsample to ~20 barbs per axis
+                # Subsample: ~20 barbs per axis by default, or the client's stride
                 ny, nx = u_full.shape
-                stride = max(1, min(nx, ny) // 20)
+                stride = barb_stride or max(1, min(nx, ny) // 20)
                 u_sub = u_full[::stride, ::stride]
                 v_sub = v_full[::stride, ::stride]
                 x_arr = np.array(x)
@@ -1862,6 +1866,7 @@ def get_data(
                     "y": y_sub,
                     "units": "m/s",
                     "type": barb_type,
+                    "stride": int(stride),
                 }
         except Exception as e:
             print(f"Wind barb extraction failed for {variable}: {e}")
