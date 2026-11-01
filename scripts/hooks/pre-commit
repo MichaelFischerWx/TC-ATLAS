@@ -1,7 +1,8 @@
 #!/bin/sh
 # Refuse a commit that leaves a shared asset under two ?v= cache tokens
-# (scripts/check_version_tokens.sh), or a stylesheet font size off the type
-# scale (scripts/check_type_scale.sh). Two tokens for one file means some pages
+# (scripts/check_version_tokens.sh), a stylesheet font size off the type scale
+# (scripts/check_type_scale.sh), or a hard-coded corner radius or elevation
+# shadow (scripts/check_corner_shadow_tokens.sh). Two tokens for one file means some pages
 # keep getting an older copy from the CDN.
 #
 # Checks the STAGED copies of the pages and loaders, not the working tree,
@@ -32,6 +33,17 @@ if [ -f "$scale" ]; then
     if ! out=$(bash "$tmp/scripts/check_type_scale.sh" 2>&1); then
         printf '%s\n' "$out" >&2
         echo "pre-commit: move each size above onto the type scale, or commit with --no-verify." >&2
+        exit 1
+    fi
+fi
+
+# Corners and elevation shadows use the tokens (scripts/check_corner_shadow_tokens.sh).
+corners="$top/scripts/check_corner_shadow_tokens.sh"
+if [ -f "$corners" ]; then
+    cp "$corners" "$tmp/scripts/"
+    if ! out=$(bash "$tmp/scripts/check_corner_shadow_tokens.sh" 2>&1); then
+        printf '%s\n' "$out" >&2
+        echo "pre-commit: use the --radius-* / --shadow-* tokens for each line above, or commit with --no-verify." >&2
         exit 1
     fi
 fi

@@ -109,7 +109,7 @@
     text-decoration: none;
     padding: 5px 12px;
     border: 1px solid var(--border-light);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     transition: color 0.15s, border-color 0.15s;
 }
 .about-toc a:hover { color: var(--text); border-color: var(--um-green); }
@@ -143,10 +143,10 @@
 .cite-pub-text a { color: var(--blue); text-decoration: none; }
 .cite-pub-text a:hover { text-decoration: underline; }
 .cite-pub-text em { font-style: italic; }
-.cite-copy-landing { display: inline-flex; align-items: center; gap: 4px; margin-top: 0.75rem; padding: 4px 12px; font-size: 0.75rem; font-weight: 600; font-family: 'DM Sans', sans-serif; background: var(--surface); border: 1px solid var(--border-light); border-radius: 4px; color: var(--slate); cursor: pointer; transition: all 0.2s; }
+.cite-copy-landing { display: inline-flex; align-items: center; gap: 4px; margin-top: 0.75rem; padding: 4px 12px; font-size: 0.75rem; font-weight: 600; font-family: 'DM Sans', sans-serif; background: var(--surface); border: 1px solid var(--border-light); border-radius: var(--radius-sm); color: var(--slate); cursor: pointer; transition: all 0.2s; }
 .cite-copy-landing:hover { background: var(--um-green-tint); border-color: var(--um-green); color: var(--blue); }
 .cite-copy-landing.copied { background: rgba(34,150,100,0.12); border-color: rgba(34,150,100,0.4); color: #1e7a4e; }
-.cite-bibtex-landing { display: inline-flex; align-items: center; gap: 6px; padding: 8px 20px; font-size: 0.875rem; font-weight: 600; font-family: 'DM Sans', sans-serif; background: var(--um-green); border: 1px solid var(--um-green); border-radius: 6px; color: #ffffff; cursor: pointer; transition: all 0.2s; }
+.cite-bibtex-landing { display: inline-flex; align-items: center; gap: 6px; padding: 8px 20px; font-size: 0.875rem; font-weight: 600; font-family: 'DM Sans', sans-serif; background: var(--um-green); border: 1px solid var(--um-green); border-radius: var(--radius); color: #ffffff; cursor: pointer; transition: all 0.2s; }
 .cite-bibtex-landing:hover { background: var(--um-green-deep); border-color: var(--um-green-deep); }
 .cite-bibtex-landing.copied { background: rgba(34,150,100,0.12); border-color: rgba(34,150,100,0.4); color: #1e7a4e; }
 

@@ -87,7 +87,7 @@
     color: var(--text-dim, #94a3b8);
     background: rgba(255,255,255,0.04);
     border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 14px;
+    border-radius: var(--radius-lg);
     text-decoration: none;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
     white-space: nowrap;
@@ -175,8 +175,8 @@
     background: rgba(251,146,60,0.95);
     border-color: rgba(251,146,60,0.95);
     color: #1a1f25;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-    border-radius: 22px;
+    box-shadow: var(--shadow-2);
+    border-radius: var(--radius-pill);
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -206,8 +206,8 @@
     background: rgba(20,28,42,0.85);
     border-color: rgba(140,148,160,0.40);
     color: var(--text, #e6edf5);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-    border-radius: 22px;
+    box-shadow: var(--shadow-2);
+    border-radius: var(--radius-pill);
     font-size: 1rem;
 }
 
@@ -246,7 +246,7 @@
     z-index: 9009;
     width: 44px;
     height: 4px;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
     background: rgba(140,148,160,0.50);
     pointer-events: none;
 }
@@ -272,7 +272,7 @@
     left: 12px;
     z-index: 9009;
     padding: 4px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     font-family: 'DM Sans', system-ui, sans-serif;
     font-size: 0.75rem;
     font-weight: 500;
@@ -281,7 +281,7 @@
     color: var(--text, #e6edf5);
     background: rgba(20,28,42,0.82);
     border: 1px solid rgba(140,148,160,0.30);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    box-shadow: var(--shadow-2);
     pointer-events: none;
     opacity: 0;
     animation: seasonalCloseHint 5s ease forwards;
@@ -335,7 +335,7 @@ body.seasonal-maximized .seasonal-header {
     .seasonal-body { gap: 18px; }
     .seasonal-panel {
         border-color: rgba(255,255,255,0.10);
-        box-shadow: 0 2px 6px rgba(0,0,0,0.22);
+        box-shadow: var(--shadow-1);
     }
     .seasonal-panel-title { font-size: 1rem; }
 }
@@ -387,7 +387,7 @@ body.seasonal-maximized .seasonal-header {
     flex-direction: column;
     background: var(--surface-raised, #161b22);
     border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 6px;
+    border-radius: var(--radius);
     padding: 10px 12px 12px;
     min-height: 0;
     /* Pair with the grid's minmax(0, 1fr) — without min-width: 0 the
@@ -410,7 +410,7 @@ body.seasonal-maximized .seasonal-header {
     position: relative;
     /* Match the rest of the page's panel surface — no dark band. */
     background: transparent;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     overflow: hidden;
     /* Aspect is computed per-basin at render time from the viewport's
        (lon width)/(lat height) ratio, plus a small allowance for the
@@ -476,7 +476,7 @@ body.seasonal-maximized .seasonal-header {
     background: var(--surface-raised, #1a1f25);
     color: var(--text, #d5dbe5);
     border: 1px solid var(--border, rgba(255,255,255,0.18));
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     padding: 1px 4px;
     font-size: 0.6875rem;
     font-family: inherit;
@@ -491,7 +491,7 @@ body.seasonal-maximized .seasonal-header {
     display: inline-block;
     min-width: 44px;
     padding: 1px 6px;
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.12);
     color: var(--text-dim, #94a3b8);
@@ -509,7 +509,7 @@ body.seasonal-maximized .seasonal-header {
     display: inline-block;
     min-width: 70px;
     padding: 1px 6px;
-    border-radius: 8px;
+    border-radius: var(--radius-pill);
     background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.12);
     color: var(--text-dim, #94a3b8);
@@ -528,7 +528,7 @@ body.seasonal-maximized .seasonal-header {
     background: var(--surface-raised, #1a1f25);
     color: var(--text);
     border: 1px solid var(--border);
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     padding: 2px 4px;
     font-size: 0.6875rem;
 }
@@ -580,7 +580,7 @@ body.seasonal-maximized .seasonal-header {
 .seasonal-panel-subtitle {
     margin-left: 10px;
     padding: 2px 8px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: rgba(46,125,255,0.16);
     color: var(--text-dim, #94a3b8);
     font-size: 0.6875rem;
@@ -670,13 +670,13 @@ body.seasonal-maximized .seasonal-header {
     background: var(--surface, #0d1117);
     color: var(--text, #e0e0e0);
     border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
 }
 
 .seasonal-corr-wrap {
     position: relative;
     background: rgba(0,0,0,0.25);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     overflow: hidden;
     /* Aspect matches our SST subset: (LON_MAX-LON_MIN)/(LAT_MAX-LAT_MIN)
        = 260/120 ≈ 2.17 at the ±60° extent. */
@@ -708,7 +708,7 @@ body.seasonal-maximized .seasonal-header {
     bottom: 8px;
     padding: 4px 8px;
     background: rgba(10,12,14,0.78);
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     color: #fff;
     font: 11px/1.4 'DM Sans', system-ui, sans-serif;
     pointer-events: none;
@@ -734,7 +734,7 @@ body.seasonal-maximized .seasonal-header {
 .seasonal-corr-bar {
     flex: 1;
     height: 8px;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
     background: linear-gradient(to right,
         #053061 0%, #2166ac 14%, #4393c3 28%, #92c5de 42%,
         #f7f7f7 50%,
@@ -783,7 +783,7 @@ body.seasonal-maximized .seasonal-header {
 .seasonal-panel-stub-pending {
     background: rgba(0,229,255,0.04);
     border: 1px dashed rgba(0,229,255,0.18);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     color: rgba(0,229,255,0.85);
     font-style: normal;
 }
@@ -810,7 +810,7 @@ body.seasonal-maximized .seasonal-header {
     background: var(--surface, #0d1117);
     color: var(--text, #e0e0e0);
     border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
 }
 
 .seasonal-scatter-plot {
@@ -926,14 +926,14 @@ body.seasonal-maximized .seasonal-header {
 .seasonal-ace-storm .ace-storm-bar {
     position: relative;
     height: 9px;
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
     background: rgba(140,148,160,0.16);
     overflow: hidden;
 }
 .seasonal-ace-storm .ace-storm-bar span {
     position: absolute;
     left: 0; top: 0; bottom: 0;
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
     background: #6da8e6;
 }
 .seasonal-ace-storm.is-active .ace-storm-bar span { background: var(--sel-fill); }
@@ -959,7 +959,7 @@ body.seasonal-maximized .seasonal-header {
     color: var(--text-dim, #94a3b8);
     background: transparent;
     border: 1px solid rgba(255,255,255,0.14);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
 }
 .seasonal-ace-more:hover {
@@ -988,7 +988,7 @@ body.seasonal-maximized .seasonal-header {
     background: var(--surface, #0d1117);
     color: var(--text, #e0e0e0);
     border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
 }
 .seasonal-ts-plot {
     width: 100%;
@@ -1045,19 +1045,19 @@ body.seasonal-maximized .seasonal-header {
     padding: 6px 10px;
     background: rgba(34,197,94,0.10);
     border-left: 3px solid rgba(34,197,94,0.60);
-    border-radius: 0 3px 3px 0;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 .seasonal-an-skill .an-skill-ok {
     padding: 6px 10px;
     background: rgba(251,146,60,0.10);
     border-left: 3px solid rgba(251,146,60,0.55);
-    border-radius: 0 3px 3px 0;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 .seasonal-an-skill .an-skill-poor {
     padding: 6px 10px;
     background: rgba(233,85,79,0.10);
     border-left: 3px solid rgba(233,85,79,0.55);
-    border-radius: 0 3px 3px 0;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 .seasonal-an-skill strong { color: var(--text, #e0e0e0); }
 
@@ -1076,14 +1076,14 @@ body.seasonal-maximized .seasonal-header {
     padding: 6px 12px 8px;
     background: rgba(255,255,255,0.025);
     border-left: 2px solid rgba(140,148,160,0.30);
-    border-radius: 0 3px 3px 0;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     line-height: 1.5;
 }
 .seasonal-an-details-body p { margin: 4px 0; }
 .seasonal-an-details-body code {
     background: rgba(255,255,255,0.06);
     padding: 1px 4px;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
     font-size: 0.85em;
 }
 
@@ -1091,7 +1091,7 @@ body.seasonal-maximized .seasonal-header {
 .seasonal-anom-wrap {
     position: relative;
     background: rgba(0,0,0,0.25);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     overflow: hidden;
     /* Global view: lon 100-360 × lat -60..60 → 260/120 = 2.17. */
     aspect-ratio: 2.17;
@@ -1114,7 +1114,7 @@ body.seasonal-maximized .seasonal-header {
     background: rgba(10,12,14,0.88);
     color: #fff;
     font: 11px/1.35 'DM Sans', system-ui, sans-serif;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     /* JS positions `left`/`top` to the cursor; this offset keeps the tip
        a few px clear so the cursor doesn't sit on the box. */
     transform: translate(12px, 12px);
@@ -1165,7 +1165,7 @@ body.seasonal-maximized .seasonal-header {
 .seasonal-anom-bar {
     flex: 1;
     height: 8px;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
     background: linear-gradient(to right,
         #0571b0 0%, #92c5de 25%, #f7f7f7 50%,
         #f4a582 75%, #ca0020 100%);
