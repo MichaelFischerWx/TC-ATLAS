@@ -322,7 +322,7 @@
     background: #12141c;
     color: #e2e4ea;
     border: 1px solid #2a2d38;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 5px 8px;
     font-size: 12px;
     font-family: inherit;
@@ -338,7 +338,7 @@
     display: flex;
     gap: 2px;
     background: #0a0c12;
-    border-radius: 5px;
+    border-radius: var(--radius);
     padding: 2px;
     border: 1px solid #2a2d38;
 }
@@ -348,7 +348,7 @@
     background: transparent;
     color: #8b8fa4;
     border: none;
-    border-radius: 3px;
+    border-radius: var(--radius);
     padding: 5px 8px;
     font-size: 11px;
     font-family: inherit;
@@ -390,7 +390,7 @@
     grid-template-columns: repeat(3, 1fr);
     gap: 2px;
     background: #0a0c12;
-    border-radius: 5px;
+    border-radius: var(--radius);
     padding: 2px;
     border: 1px solid #2a2d38;
 }
@@ -399,7 +399,7 @@
     background: transparent;
     color: #8b8fa4;
     border: none;
-    border-radius: 3px;
+    border-radius: var(--radius);
     padding: 6px 4px;
     font-size: 10px;
     font-family: inherit;
@@ -443,7 +443,7 @@
     display: flex;
     gap: 2px;
     background: #0a0c12;
-    border-radius: 5px;
+    border-radius: var(--radius);
     padding: 2px;
     border: 1px solid #2a2d38;
 }
@@ -452,7 +452,7 @@
     background: transparent;
     color: #8b8fa4;
     border: none;
-    border-radius: 3px;
+    border-radius: var(--radius);
     padding: 4px 14px;
     font-size: 11px;
     font-family: inherit;
@@ -488,7 +488,7 @@
     background: transparent;
     color: #8b8fa4;
     border: 1px solid #2a2d38;
-    border-radius: 3px;
+    border-radius: var(--radius-pill);
     padding: 2px 10px;
     font-size: 10px;
     font-family: inherit;
@@ -611,7 +611,7 @@
 }
 .sat-env-cat-chip {
     padding: 2px 8px;
-    border-radius: 4px;
+    border-radius: var(--radius-pill);
     background: #2e7dff;
     color: #fff;
     font-size: 12px;
@@ -695,13 +695,13 @@
     background: #181b24ee;
     color: #e2e4ea;
     border: 1px solid #3a3d48;
-    border-radius: 6px;
+    border-radius: var(--radius);
     padding: 8px 14px;
     font-size: 13px;
     font-weight: 500;
     font-family: inherit;
     cursor: pointer;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    box-shadow: var(--shadow-2);
 }
 
 /* ── Canvas Area ────────────────────────────────────────────── */
@@ -757,7 +757,7 @@
     font-size: 11px;
     font-weight: 500;
     padding: 2px 10px;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     pointer-events: none;
     white-space: nowrap;
 }
@@ -803,7 +803,7 @@
 .sat-colorbar-horiz canvas {
     flex: 1;
     height: 8px;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
     border: 1px solid #2a2d38;
     image-rendering: auto;
 }
@@ -890,7 +890,7 @@
     background: #1a1e2a;
     color: #e2e8f0;
     border: 1px solid #2a2d38;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 6px 10px;
     font-size: 13px;
     font-family: inherit;
@@ -905,7 +905,7 @@
 }
 .qv-cat-chip {
     padding: 3px 10px;
-    border-radius: 4px;
+    border-radius: var(--radius-pill);
     background: #2e7dff;
     color: #fff;
     font-size: 13px;
@@ -926,7 +926,7 @@
     background: #2e7dff;
     color: #fff;
     border: none;
-    border-radius: 4px;
+    border-radius: var(--radius);
     padding: 8px 14px;
     font-size: 13px;
     font-weight: 500;
@@ -970,7 +970,7 @@
     font-size: 14px;
     padding: 12px 18px;
     background: rgba(15, 22, 36, 0.85);
-    border-radius: 6px;
+    border-radius: var(--radius);
     backdrop-filter: blur(6px);
     border: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -980,7 +980,7 @@
     max-width: 420px;
     padding: 32px 24px;
     background: rgba(15, 22, 36, 0.92);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
 }
 .qv-error {
     color: #f87171;
@@ -989,7 +989,7 @@
     max-width: 480px;
     line-height: 1.5;
     background: rgba(15, 22, 36, 0.92);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     border: 1px solid rgba(248, 113, 113, 0.25);
 }
 
@@ -1070,7 +1070,7 @@
     padding: 0;
     background: var(--surface-raised);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     overflow: hidden;
     cursor: pointer;
     font-family: inherit;
@@ -1080,7 +1080,7 @@
 .qv-card:hover {
     border-color: var(--blue);
     transform: translateY(-2px);
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+    box-shadow: var(--shadow-2);
 }
 .qv-card:focus-visible {
     outline: 2px solid var(--blue);
@@ -1136,7 +1136,7 @@
     top: 8px;
     left: 8px;
     padding: 2px 7px;
-    border-radius: 4px;
+    border-radius: var(--radius-pill);
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.04em;
@@ -1150,7 +1150,7 @@
     top: 8px;
     right: 8px;
     padding: 2px 7px;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.05em;
@@ -1184,7 +1184,7 @@
 }
 .qv-card-chip {
     padding: 2px 8px;
-    border-radius: 4px;
+    border-radius: var(--radius-pill);
     background: var(--blue);
     color: #fff;
     font-size: 12px;
@@ -1266,13 +1266,13 @@
     background: #181b24ee;
     color: #e2e4ea;
     border: 1px solid #2a2d38;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 4px 8px;
     font-size: 12px;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     display: none;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    box-shadow: var(--shadow-2);
 }
 
 .sat-tb-val {
@@ -1417,7 +1417,7 @@ input[type="range"].sat-slider {
     -webkit-appearance: none;
     appearance: none;
     background: #2a2d38;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
     outline: none;
     cursor: pointer;
     /* Override tc_radar_styles.css global input[type="range"] */
@@ -1499,7 +1499,7 @@ input[type="range"].sat-slider {
     display: flex;
     gap: 1px;
     background: #2a2d38;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     overflow: hidden;
     border: 1px solid #2a2d38;
 }

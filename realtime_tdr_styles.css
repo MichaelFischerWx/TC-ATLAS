@@ -184,7 +184,7 @@
     width: 100%;
     flex: 1;
     min-height: 400px;
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     overflow: hidden;
     border: 1px solid var(--border);
     background: var(--surface-raised);
@@ -201,16 +201,16 @@
 /* ── Radar field draped on the map: colorbar with editable range ── */
 .rt-drape-colorbar {
     position: absolute; left: 8px; bottom: 64px; z-index: 900; width: 236px; display: none;
-    background: rgba(255, 255, 255, 0.9); padding: 6px 10px; border-radius: 6px;
-    border: 1px solid rgba(15, 22, 35, 0.1); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    background: rgba(255, 255, 255, 0.9); padding: 6px 10px; border-radius: var(--radius);
+    border: 1px solid rgba(15, 22, 35, 0.1); box-shadow: var(--shadow-2);
     backdrop-filter: blur(6px);
 }
 .rt-cb-title { font-size: 10px; font-weight: 600; color: #F47321; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rt-cb-row { display: flex; align-items: center; gap: 4px; }
-.rt-cb-grad { flex: 1; height: 10px; border-radius: 3px; border: 1px solid rgba(15, 22, 35, 0.15); }
+.rt-cb-grad { flex: 1; height: 10px; border-radius: var(--radius-sm); border: 1px solid rgba(15, 22, 35, 0.15); }
 .rt-cb-row input[type=number] {
     width: 48px; padding: 1px 3px; font: 600 10px 'JetBrains Mono', monospace;
-    border: 1px solid rgba(15, 22, 35, 0.2); border-radius: 3px; background: rgba(255, 255, 255, 0.7);
+    border: 1px solid rgba(15, 22, 35, 0.2); border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.7);
     color: var(--text); text-align: center; -moz-appearance: textfield;
 }
 .rt-cb-row input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
@@ -237,7 +237,7 @@
     z-index: 1000;
     background: rgba(255, 255, 255, 0.88);
     backdrop-filter: blur(6px);
-    border-radius: 6px;
+    border-radius: var(--radius);
     border: 1px solid rgba(96, 165, 250, 0.25);
     padding: 6px 10px;
 }
@@ -333,7 +333,7 @@
 /* ── Dropsonde Skew-T Panel ─────────────────── */
 #rt-sonde-skewt-panel {
     border: 1px solid rgba(168, 85, 247, 0.2);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     margin-top: 8px;
     background: rgba(10, 15, 25, 0.6);
     overflow: hidden;
@@ -394,7 +394,7 @@
     z-index: 1000;
     background: rgba(255, 255, 255, 0.88);
     backdrop-filter: blur(6px);
-    border-radius: 6px;
+    border-radius: var(--radius);
     border: 1px solid rgba(96, 165, 250, 0.25);
     padding: 6px 10px;
     min-width: 140px;
@@ -418,7 +418,7 @@
     color: #ccc;
     font-size: 10px;
     padding: 2px 4px;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     font-family: 'DM Sans', sans-serif;
     outline: none;
@@ -430,7 +430,7 @@
 }
 .fl-legend-bar {
     height: 6px;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     background: linear-gradient(
         to right,
         rgb(96, 165, 250),
@@ -452,7 +452,7 @@
 /* ── Flight-Level Along-Track Time Series Panel ─────── */
 #rt-fl-timeseries-panel {
     border: 1px solid rgba(96, 165, 250, 0.2);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     margin-top: 8px;
     background: rgba(10, 15, 25, 0.6);
     overflow: hidden;
@@ -497,7 +497,7 @@
 .fl-ts-var-btn {
     background: rgba(30, 40, 60, 0.8);
     border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 4px;
+    border-radius: var(--radius);
     color: #64748b;
     font-size: 10px;
     font-family: 'DM Sans', sans-serif;
@@ -544,7 +544,7 @@
 .fl-ts-res-btn {
     background: rgba(30, 40, 60, 0.8);
     border: 1px solid rgba(96, 165, 250, 0.25);
-    border-radius: 4px;
+    border-radius: var(--radius);
     color: #64748b;
     font-size: 10px;
     font-variant-numeric: tabular-nums;
@@ -646,7 +646,7 @@
 .recon-hdob-chart-panel, .recon-hdob-map-panel {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     overflow: hidden;
     min-height: 600px;
     display: flex; flex-direction: column;
@@ -657,7 +657,7 @@
 }
 .recon-hdob-vartoggles button {
     background: transparent; border: 1px solid var(--border); color: var(--slate);
-    border-radius: 5px; padding: 2px 8px; font-size: 11px; font-weight: 600;
+    border-radius: var(--radius); padding: 2px 8px; font-size: 11px; font-weight: 600;
     font-family: inherit; cursor: pointer; transition: all 0.12s;
 }
 .recon-hdob-vartoggles button.on { color: #fff; border-color: transparent; }
@@ -669,7 +669,7 @@
 .recon-hdob-flightlabel { font-size: 11px; font-weight: 600; color: var(--slate); margin-right: 2px; }
 .recon-hdob-flighttoggle button {
     background: transparent; border: 1px solid var(--border); color: var(--slate);
-    border-radius: 5px; padding: 2px 9px; font-size: 11px; font-weight: 600;
+    border-radius: var(--radius); padding: 2px 9px; font-size: 11px; font-weight: 600;
     font-family: inherit; cursor: pointer; transition: all 0.12s;
 }
 .recon-hdob-flighttoggle button.on { color: var(--sel-ink); border-color: transparent; background: var(--sel-fill); }
@@ -678,7 +678,7 @@
 .recon-hdob-layers { display: inline-flex; gap: 3px; align-items: center; flex-wrap: wrap; }
 .recon-hdob-layers .lbl { font-size: 11px; font-weight: 600; color: var(--slate); margin-right: 2px; }
 .recon-hdob-layers button {
-    font-size: 11px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: inherit;
+    font-size: 11px; padding: 2px 7px; border-radius: var(--radius-pill); cursor: pointer; font-family: inherit;
     border: 1px solid var(--border); background: var(--surface); color: var(--slate); line-height: 1.3;
 }
 .recon-hdob-layers button.on { color: #fff; border-color: transparent; }
@@ -687,18 +687,18 @@
 .recon-hdob-passstep { display: inline-flex; gap: 3px; align-items: center; }
 .recon-hdob-passstep .lbl { font-size: 11px; font-weight: 600; color: var(--slate); margin-right: 2px; }
 .recon-hdob-passstep button {
-    font-size: 11px; padding: 2px 7px; border-radius: 5px; cursor: pointer; font-family: inherit;
+    font-size: 11px; padding: 2px 7px; border-radius: var(--radius); cursor: pointer; font-family: inherit;
     border: 1px solid var(--border); background: var(--surface); color: var(--text); line-height: 1.3;
 }
 .recon-hdob-passstep button:disabled { opacity: 0.4; cursor: default; }
 .recon-hdob-passstep button.on { color: #fff; border-color: transparent; background: #ec4899; }
 .recon-hdob-passstep .cur { font-size: 11px; color: var(--text); min-width: 120px; text-align: center; }
-.recon-hdob-searlbl.sel span { font-size: 12px !important; background: #ec4899; color: #fff !important; text-shadow: none !important; padding: 0 4px; border-radius: 3px; }
+.recon-hdob-searlbl.sel span { font-size: 12px !important; background: #ec4899; color: #fff !important; text-shadow: none !important; padding: 0 4px; border-radius: var(--radius-sm); }
 .recon-hdob-searctr.sel span { font-size: 20px !important; }
 /* Lat/lon grid toggle on the recon map toolbar */
 .recon-hdob-gridbtn {
     background: transparent; border: 1px solid var(--border); color: var(--slate);
-    border-radius: 5px; padding: 3px 10px; font-size: 11px; font-weight: 600;
+    border-radius: var(--radius); padding: 3px 10px; font-size: 11px; font-weight: 600;
     font-family: inherit; cursor: pointer; transition: all 0.12s;
 }
 .recon-hdob-gridbtn.active { color: var(--sel-ink); border-color: transparent; background: var(--sel-fill); }
@@ -711,7 +711,7 @@
 }
 .recon-skewt-content {
     background: var(--surface); color: var(--text);
-    border: 1px solid var(--border); border-radius: 12px;
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
     max-width: 960px; width: 100%; max-height: 92vh; overflow: auto;
     box-shadow: 0 20px 60px rgba(0,0,0,0.55);
 }
@@ -734,7 +734,7 @@
 .recon-skewt-toggle { grid-column: 1 / -1; display: flex; gap: 6px; }
 .recon-skewt-toggle button {
     background: transparent; border: 1px solid var(--border); color: var(--slate);
-    border-radius: 5px; padding: 3px 12px; font-size: 12px; font-weight: 600;
+    border-radius: var(--radius); padding: 3px 12px; font-size: 12px; font-weight: 600;
     font-family: inherit; cursor: pointer; transition: all 0.12s;
 }
 .recon-skewt-toggle button.on { color: var(--sel-ink); border-color: var(--sel-fill); background: var(--sel-fill); }
@@ -748,7 +748,7 @@
 .recon-skewt-foot { margin-top: 10px; font-size: 11px; color: var(--slate); line-height: 1.5; }
 .rt-recon-skewt-btn {
     margin-top: 7px; width: 100%; padding: 4px 8px; font-size: 11px; font-weight: 600;
-    font-family: inherit; cursor: pointer; border: 1px solid #fbbf24; border-radius: 5px;
+    font-family: inherit; cursor: pointer; border: 1px solid #fbbf24; border-radius: var(--radius);
     background: rgba(251,191,36,0.14); color: #fbbf24;
 }
 .rt-recon-skewt-btn:hover { background: rgba(251,191,36,0.28); }
@@ -786,7 +786,7 @@
 .sv2-chart svg text.sv2-ann { paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
 .sv2-wait { padding: 60px 0; text-align: center; color: var(--slate); font-size: 12px; }
 .sv2-seg { display: inline-flex; align-self: flex-start; max-width: 100%; flex-wrap: wrap;
-    border: 1px solid var(--sv2-rule2); border-radius: 8px; overflow: hidden; }
+    border: 1px solid var(--sv2-rule2); border-radius: var(--radius); overflow: hidden; }
 .sv2-seg button { font: inherit; font-size: 13px; color: var(--slate); background: transparent; border: 0;
     padding: 6px 13px; cursor: pointer; }
 .sv2-seg button + button { border-left: 1px solid var(--sv2-rule2); }
@@ -802,7 +802,7 @@
 .sv2-flight-h span { font-weight: 400; color: var(--slate); font-size: 12px; margin-left: 6px; }
 .sv2-tiles { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 4px; scroll-snap-type: x proximity; }
 .sv2-tile { flex: 0 0 auto; width: 108px; scroll-snap-align: start; font: inherit; color: inherit; text-align: left;
-    background: var(--navy-mid); border: 1px solid var(--sv2-rule); border-radius: 9px; padding: 7px 8px 5px;
+    background: var(--navy-mid); border: 1px solid var(--sv2-rule); border-radius: var(--radius-lg); padding: 7px 8px 5px;
     cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
 .sv2-tile:hover { border-color: var(--sv2-rule2); }
 .sv2-tile[aria-current="true"] { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset; }
@@ -812,7 +812,7 @@
     letter-spacing: -0.02em; line-height: 1; font-variant-numeric: tabular-nums; }
 .sv2-tm { height: 40px; }
 .sv2-tip { position: fixed; z-index: 4100; pointer-events: none; display: none; background: var(--surface);
-    color: var(--text); border: 1px solid var(--sv2-rule2, rgba(148,163,184,0.26)); border-radius: 7px; padding: 5px 9px;
+    color: var(--text); border: 1px solid var(--sv2-rule2, rgba(148,163,184,0.26)); border-radius: var(--radius); padding: 5px 9px;
     font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 12px; white-space: nowrap;
     box-shadow: 0 6px 20px rgba(0,0,0,0.3); font-variant-numeric: tabular-nums; }
 .sv2-tip span { color: var(--slate); }
@@ -828,7 +828,7 @@
 .sv2-glance-sub { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11px; color: #475569; margin-top: 3px; }
 .sv2-glance-sub b { color: #0f172a; font-weight: 600; }
 .sv2-open { margin-top: 8px; padding: 6px 10px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
-    border-radius: 6px; border: 0; background: #005030; color: #fff; outline: none; }
+    border-radius: var(--radius); border: 0; background: #005030; color: #fff; outline: none; }
 .sv2-open:hover { background: #2e7a5b; }
 @media (max-width: 560px) {
     .sv2-num { font-size: 48px; }
@@ -845,11 +845,11 @@
 .recon-hdob-maplabel { font-size: 11px; font-weight: 600; color: var(--slate); }
 .recon-hdob-barbvar {
     background: var(--surface); color: var(--text); border: 1px solid var(--border);
-    border-radius: 5px; padding: 2px 6px; font-size: 11px; font-family: inherit;
+    border-radius: var(--radius-sm); padding: 2px 6px; font-size: 11px; font-family: inherit;
 }
 .recon-hdob-legend { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
 .recon-hdob-legend .sw {
-    font-size: 9px; color: #0b1220; padding: 1px 5px; border-radius: 2px; font-weight: 600;
+    font-size: 9px; color: #0b1220; padding: 1px 5px; border-radius: var(--radius-xs); font-weight: 600;
 }
 .recon-hdob-map { flex: 1 1 auto; width: 100%; min-height: 600px; position: relative; }
 
@@ -865,9 +865,9 @@
     pointer-events: none; user-select: none;
     background: rgba(255, 255, 255, 0.86);
     border: 1px solid rgba(15, 23, 42, 0.18);
-    border-radius: 5px; padding: 5px 8px;
+    border-radius: var(--radius-sm); padding: 5px 8px;
     font-size: 10px; line-height: 1.5; color: #1f2937;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+    box-shadow: var(--shadow-1);
     backdrop-filter: blur(2px);
 }
 :root[data-theme="dark"] .recon-hdob-mapkey {
@@ -880,8 +880,8 @@
 .recon-hdob-tdrkey {
     position: absolute; right: 8px; top: 8px; z-index: 1050; max-width: 290px;
     background: rgba(255, 255, 255, 0.9); border: 1px solid rgba(15, 23, 42, 0.18);
-    border-radius: 5px; padding: 5px 8px; font-size: 10px; line-height: 1.45; color: #1f2937;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+    border-radius: var(--radius-sm); padding: 5px 8px; font-size: 10px; line-height: 1.45; color: #1f2937;
+    box-shadow: var(--shadow-1);
 }
 :root[data-theme="dark"] .recon-hdob-tdrkey { background: rgba(15, 23, 42, 0.86); border-color: rgba(148, 163, 184, 0.28); color: #e2e8f0; }
 .recon-hdob-tdrkey .tt { font-weight: 600; }
@@ -889,7 +889,7 @@
 .recon-hdob-tdrkey .nav { display: flex; align-items: center; gap: 4px; margin: 3px 0; }
 .recon-hdob-tdrkey .nav span { flex: 1 1 auto; text-align: center; white-space: nowrap; }
 .recon-hdob-tdrkey button {
-    font: inherit; padding: 0 6px; border-radius: 3px; cursor: pointer;
+    font: inherit; padding: 0 6px; border-radius: var(--radius); cursor: pointer;
     border: 1px solid rgba(100, 116, 139, 0.5); background: transparent; color: inherit;
 }
 .recon-hdob-tdrkey button.on { background: #0891b2; border-color: #0891b2; color: #fff; }
@@ -984,7 +984,7 @@
     cursor: pointer;
     background: var(--surface-raised);
     border: 1px solid var(--border-light);
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     padding: 13px 14px 11px;
     color: var(--text);
     font-family: inherit;
@@ -1029,7 +1029,7 @@
     font-weight: 600;
     letter-spacing: 0.04em;
     padding: 2px 7px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--border);
     color: var(--slate);
     text-transform: uppercase;
@@ -1083,7 +1083,7 @@
 .recon-fl-stat {
     background: var(--surface-raised);
     border: 1px solid var(--border-light);
-    border-radius: 9px;
+    border-radius: var(--radius-lg);
     padding: 11px 13px;
 }
 .recon-fl-stat-val {
@@ -1109,7 +1109,7 @@
 .recon-fl-charts {
     background: var(--surface);
     border: 1px solid var(--border-light);
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     padding: 8px 6px 4px;
 }
 .recon-fl-empty {
@@ -1145,7 +1145,7 @@
 .recon-vdm-card {
     background: var(--surface-raised);
     border: 1px solid var(--border-light);
-    border-radius: 11px;
+    border-radius: var(--radius-lg);
     padding: 13px 15px 14px;
 }
 .recon-vdm-card-top {
@@ -1176,7 +1176,7 @@
 .recon-vdm-stat {
     background: var(--surface);
     border: 1px solid var(--border-light);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     padding: 8px 10px;
 }
 .recon-vdm-stat.is-accent {
@@ -1216,7 +1216,7 @@
     color: var(--slate);
     background: var(--border);
     border: 1px solid var(--border-light);
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
     padding: 2px 7px;
 }
 .recon-vdm-raw {
@@ -1237,7 +1237,7 @@
     padding: 9px 11px;
     background: var(--surface);
     border: 1px solid var(--border-light);
-    border-radius: 7px;
+    border-radius: var(--radius);
     font-size: 11px;
     line-height: 1.4;
     color: var(--text-dim);
@@ -1301,12 +1301,12 @@
 .recon-hdob-summary .recon-fix-line { margin-top: 1px; }
 .recon-hdob-summary .recon-fix-trend { font-weight: 600; color: var(--text); }
 .recon-hdob-summary .recon-fix-new {
-    display: inline-block; margin-left: 3px; padding: 0 4px; border-radius: 3px;
+    display: inline-block; margin-left: 3px; padding: 0 4px; border-radius: var(--radius-sm);
     background: #ef4444; color: #fff; font-size: 10px; font-weight: 600; letter-spacing: .03em;
 }
 /* preliminary crossing: a range, never the headline number */
 .recon-hdob-summary .recon-prelim-sub {
-    margin-top: 3px; padding: 2px 5px; border: 1px dashed #d97706; border-radius: 4px;
+    margin-top: 3px; padding: 2px 5px; border: 1px dashed #d97706; border-radius: var(--radius-sm);
     color: #b45309; font-weight: 600; font-size: 10px;
 }
 :root[data-theme="dark"] .recon-hdob-summary .recon-prelim-sub { color: #fbbf24; border-color: #fbbf24; }
@@ -1334,7 +1334,7 @@
     padding: 8px 10px;
     border: 1px solid var(--border-light);
     border-left: 3px solid #ec4899;
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     background: var(--surface-raised);
 }
 .recon-hdob-replay-title { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }

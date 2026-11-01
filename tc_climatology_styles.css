@@ -47,7 +47,7 @@
     display: inline-flex;
     gap: 0;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     overflow: hidden;
     background: rgba(15, 22, 35,0.02);
 }
@@ -100,7 +100,7 @@
     background: var(--surface-raised);
     border: 1px solid var(--border);
     border-left: 3px solid var(--um-green);
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
 }
 .tc-clim-globe-banner-icon {
     flex: 0 0 56px;
@@ -208,7 +208,7 @@
     flex-direction: column;
     background: var(--surface-raised, rgba(15, 22, 35,0.03));
     border: 1px solid var(--border, var(--border));
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     overflow: hidden;
     text-decoration: none;
     color: inherit;
@@ -217,7 +217,7 @@
 .tc-clim-tile:hover {
     border-color: rgba(244, 115, 33,0.45);
     transform: translateY(-2px);
-    box-shadow: 0 8px 22px rgba(0,0,0,0.1);
+    box-shadow: var(--shadow-2);
 }
 
 .tc-clim-tile-thumb {
@@ -274,7 +274,7 @@
 }
 #tc-clim-subseasonal .segmented button {
     padding: 4px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-pill);
     font-family: 'DM Sans', sans-serif;
     font-size: 0.75rem;
     font-weight: 600;
@@ -341,7 +341,7 @@ html.evo-only-mode #sub-evolution-modal .ace-modal-content {
     position: relative;
     background: var(--surface-raised, #ffffff);
     border: 1px solid var(--border, rgba(0,0,0,0.08));
-    border-radius: 6px;
+    border-radius: var(--radius);
     padding: 6px 8px 8px;
     display: flex;
     flex-direction: column;
