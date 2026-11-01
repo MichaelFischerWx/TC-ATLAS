@@ -275,8 +275,14 @@ HURSAT_V06_BASE = (
 HURSAT_START_YEAR = 1978
 HURSAT_END_YEAR = 2015
 
-# MergIR (NASA GES DISC GPM_MERGIR) — via OPeNDAP for server-side subsetting
-MERGIR_OPENDAP = "https://disc2.gesdisc.eosdis.nasa.gov/opendap/MERGED_IR/GPM_MERGIR.1"
+# MergIR (NASA GES DISC GPM_MERGIR) — via OPeNDAP for server-side subsetting.
+# GES DISC moved MergIR to Earthdata Cloud and is retiring its on-prem disc2
+# server (OPeNDAP and /data/ HTTPS; GES DISC migration notice, 2026). The cloud
+# serves the same granules (CMR collection C1432254058-GES_DISC) under the same
+# Earthdata login; cloud OPeNDAP keys a granule by name, not by YYYY/DOY path.
+MERGIR_OPENDAP = ("https://opendap.earthdata.nasa.gov/collections/"
+                  "C1432254058-GES_DISC/granules")
+MERGIR_DATA = "https://data.gesdisc.earthdata.nasa.gov/data/MERGED_IR/GPM_MERGIR.1"
 MERGIR_START_YEAR = 1998  # Extended back from Feb 2000 in June 2025
 
 # GridSat-B1 CDR (NOAA/NCEI THREDDS) — 3-hourly global IR, 0.07° (~8km), 1980–present
@@ -1338,14 +1344,10 @@ def _mergir_opendap_file_url(dt: datetime) -> str:
     Build OPeNDAP URL for the MergIR file covering a given datetime.
     Each file has two half-hourly grids and is keyed by the truncated hour.
 
-    Pattern: {BASE}/{YYYY}/{DOY:03d}/merg_{YYYYMMDDHH}_4km-pixel.nc4
+    Pattern: {BASE}/GPM_MERGIR.1%3Amerg_{YYYYMMDDHH}_4km-pixel.nc4
     """
-    jday = dt.timetuple().tm_yday
     time_str = dt.strftime("%Y%m%d%H")
-    return (
-        f"{MERGIR_OPENDAP}/{dt.year}/{jday:03d}/"
-        f"merg_{time_str}_4km-pixel.nc4"
-    )
+    return f"{MERGIR_OPENDAP}/GPM_MERGIR.1%3Amerg_{time_str}_4km-pixel.nc4"
 
 
 def _build_mergir_frame_list(track_points: list) -> list:
@@ -1434,14 +1436,11 @@ def _get_earthdata_session():
 def _mergir_direct_file_url(dt: datetime) -> str:
     """
     Build direct download URL for the MergIR file covering a given datetime.
-    Pattern: {BASE_DATA}/{YYYY}/{DOY:03d}/merg_{YYYYMMDDHH}_4km-pixel.nc4
+    Pattern: {MERGIR_DATA}/{YYYY}/{DOY:03d}/merg_{YYYYMMDDHH}_4km-pixel.nc4
     """
     jday = dt.timetuple().tm_yday
     time_str = dt.strftime("%Y%m%d%H")
-    return (
-        f"https://disc2.gesdisc.eosdis.nasa.gov/data/MERGED_IR/GPM_MERGIR.1"
-        f"/{dt.year}/{jday:03d}/merg_{time_str}_4km-pixel.nc4"
-    )
+    return f"{MERGIR_DATA}/{dt.year}/{jday:03d}/merg_{time_str}_4km-pixel.nc4"
 
 
 def _mergir_subset_url(dt: datetime, center_lat: float, center_lon: float) -> str:
@@ -1450,15 +1449,10 @@ def _mergir_subset_url(dt: datetime, center_lat: float, center_lon: float) -> st
     Appends .nc4 suffix + constraint expression to request server-side subsetting.
     This downloads ~1-2 MB instead of ~130 MB for the full file.
 
-    GES DISC OPeNDAP supports: {opendap_url}.nc4?Tb[time][lat_start:lat_end][lon_start:lon_end]
+    Earthdata Cloud OPeNDAP supports: {opendap_url}.nc4?Tb[time][lat_start:lat_end][lon_start:lon_end]
     MergIR grid: lat -60 to 60 (0.03636° spacing, ~3300 pts), lon -180 to 180 (~9896 pts)
     """
-    jday = dt.timetuple().tm_yday
-    time_str = dt.strftime("%Y%m%d%H")
-    base = (
-        f"{MERGIR_OPENDAP}/{dt.year}/{jday:03d}/"
-        f"merg_{time_str}_4km-pixel.nc4"
-    )
+    base = _mergir_opendap_file_url(dt)
     # Track longitudes are continuous (can exceed 180); index in the grid's
     # -180..180 frame. _sel_latlon_wrap maps the result back.
     center_lon = ((center_lon + 180.0) % 360.0) - 180.0
