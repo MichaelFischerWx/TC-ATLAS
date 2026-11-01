@@ -33,7 +33,7 @@ function _ga(action, params) {
 
 // ── Configuration ────────────────────────────────────────────
 var API_BASE = 'https://api.tcatlas.org';
-var DATA_VER = 'v20261101v4';  // Cache-busting version for static JSON files
+var DATA_VER = 'v20261101i1';  // Cache-busting version for static JSON files
 var STORMS_JSON = 'ibtracs_storms.json?' + DATA_VER;
 var TRACKS_MANIFEST = 'ibtracs_tracks_manifest.json?' + DATA_VER;
 var TRACKS_JSON_FALLBACK = 'ibtracs_tracks.json?' + DATA_VER;  // Fallback for single-file mode

@@ -7043,7 +7043,7 @@ function _buildTDRtoSIDMapping() {
 // of storms + track chunks, so a mismatched token means the browser caches two
 // full copies and a user who visits both Explorer and Global Archive downloads
 // all of it twice. This file previously fetched them with no token at all.
-var IBTRACS_DATA_VER = 'v20261020';
+var IBTRACS_DATA_VER = 'v20261101i1';
 // Token for the explorer-only subset (bin/build_tdr_ibtracs_subset.py).
 var IBTRACS_TDR_VER = 'v20261101v4';
 

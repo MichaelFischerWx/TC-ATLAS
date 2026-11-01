@@ -5703,7 +5703,7 @@
         // Same static-quarterly cache key as global_archive/tc_radar_app so the
         // pages share one HTTP cache entry (never window.__v — that key changes
         // every minute and forced a full re-download per visit).
-        _evoState.stormsPromise = fetch('ibtracs_storms.json?v20261020')
+        _evoState.stormsPromise = fetch('ibtracs_storms.json?v20261101i1')
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
                 if (!j || !j.storms) { _evoState.storms = {}; return {}; }
@@ -5720,7 +5720,7 @@
         // Chunk 1 (1977-present) is enough — era5_daily archive starts 1991.
         if (_evoState.tracks) return Promise.resolve(_evoState.tracks);
         if (_evoState.tracksPromise) return _evoState.tracksPromise;
-        _evoState.tracksPromise = fetch('ibtracs_tracks_1.json?v20261020')
+        _evoState.tracksPromise = fetch('ibtracs_tracks_1.json?v20261101i1')
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
                 _evoState.tracks = j || {};

@@ -753,6 +753,9 @@ def _nonfinite_coords(ds: xr.Dataset) -> list[str]:
             if c in ds.coords and not np.isfinite(ds[c].values).all()]
 
 
+_SIDE_STORE_TTL_S = 3600   # MergIR / ERA5 side stores re-open hourly (see get_ir_dataset)
+
+
 @lru_cache(maxsize=4)  # all 4 (data_type, era) combos resident — no reopen thrash
 def get_dataset(data_type: str, era: str) -> xr.Dataset:
     """
@@ -845,8 +848,15 @@ def _open_zarr_group_consolidated(store, label: str):
         return zarr.open(store, mode='r')
 
 
-@lru_cache(maxsize=1)
 def get_ir_dataset():
+    """The MergIR side store, re-opened once an hour: it gains cases in place (the cases new in TC-RADAR v4.0 get
+    their data after the switch, 2026-11-01), and a store opened once per instance would keep its first status
+    array -- and answer 404 for those cases -- for the instance's whole life."""
+    return _get_ir_dataset(int(time.time() // _SIDE_STORE_TTL_S))
+
+
+@lru_cache(maxsize=1)
+def _get_ir_dataset(_hour_bucket: int):
     """Open the MergIR Zarr store. Prefers GCS (free egress) over S3."""
     import zarr
     if USE_GCS_ZARR and IR_GCS_PATH:
@@ -867,8 +877,15 @@ def get_ir_dataset():
     return None
 
 
-@lru_cache(maxsize=1)
 def get_era5_dataset():
+    """The ERA5 side store, re-opened once an hour: it gains cases in place (the cases new in TC-RADAR v4.0 get
+    their data after the switch, 2026-11-01), and a store opened once per instance would keep its first status
+    array -- and answer 404 for those cases -- for the instance's whole life."""
+    return _get_era5_dataset(int(time.time() // _SIDE_STORE_TTL_S))
+
+
+@lru_cache(maxsize=1)
+def _get_era5_dataset(_hour_bucket: int):
     """Open the ERA5 Zarr store. Prefers GCS (free egress) over S3."""
     import zarr
     if USE_GCS_ZARR and ERA5_GCS_PATH:
