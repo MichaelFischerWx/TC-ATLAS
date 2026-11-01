@@ -176,6 +176,8 @@ function _tcrTime(t, sec) {
 var _ICON_PATHS = {
     satellite: '<path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/>',
     radio:     '<path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>',
+    alert:     '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    scissors:  '<circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/>',
     plane:     '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z"/>',
     parachute: '<path d="M2 12a10 10 0 0 1 20 0"/><path d="M7 12l5 9"/><path d="M17 12l-5 9"/><path d="M12 12v9"/>',
     wind:      '<path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/>',
@@ -882,9 +884,9 @@ function openSidePanel(caseData, fromQuickSelect) {
             var nextDis = posIdx < 0 || posIdx >= stormCases.length - 1 ? ' disabled' : '';
             caseNavHtml =
                 '<span class="case-nav-bar">' +
-                    '<button class="case-nav-btn" id="case-nav-prev" onclick="caseNavPrev()" title="Previous analysis (← key)"' + prevDis + '>&#9664;</button>' +
+                    '<button class="case-nav-btn" id="case-nav-prev" onclick="caseNavPrev()" title="Previous analysis (← key)"' + prevDis + '>&#9664;&#xFE0E;</button>' +
                     '<span class="case-nav-pos">' + (posIdx + 1) + ' of ' + stormCases.length + '</span>' +
-                    '<button class="case-nav-btn" id="case-nav-next" onclick="caseNavNext()" title="Next analysis (→ key)"' + nextDis + '>&#9654;</button>' +
+                    '<button class="case-nav-btn" id="case-nav-next" onclick="caseNavNext()" title="Next analysis (→ key)"' + nextDis + '>&#9654;&#xFE0E;</button>' +
                 '</span>';
         }
     }
@@ -991,7 +993,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                                 '<option value="anomaly">Z* anomaly (Fischer et al. 2025)</option>' +
                             '</select></label></div>' +
                     '<div class="display-actions">' +
-                        '<button class="cs-btn" id="cs-btn" onclick="toggleCrossSection()" disabled>\u2702 Cross Section</button>' +
+                        '<button class="cs-btn" id="cs-btn" onclick="toggleCrossSection()" disabled>' + _icon('scissors') + ' Cross Section</button>' +
                         '<button class="cs-btn" id="az-btn" onclick="dispatchAzimuthalMean()" disabled>\u27F3 Azim. Mean</button>' +
                         '<button class="cs-btn" id="sq-btn" onclick="fetchShearQuadrants()" disabled>\u25D1 Shear Quads</button>' +
                         '<button class="cs-btn" id="vol-btn" onclick="fetch3DVolume()" disabled>' + _icon('monitor') + '3D Volume</button>' +
@@ -1184,9 +1186,9 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<span class="explorer-level-value" id="ep-level-val">2.0 km</span>' +
                     '</div>' +
                     '<div class="anim-controls">' +
-                        '<button class="anim-btn" onclick="animStep(-1)" title="Previous level">\u25C0</button>' +
-                        '<button class="anim-btn" id="anim-play-btn" onclick="animToggle()" title="Play/Pause">\u25B6</button>' +
-                        '<button class="anim-btn" onclick="animStep(1)" title="Next level">\u25B6\u25B6</button>' +
+                        '<button class="anim-btn" onclick="animStep(-1)" title="Previous level">\u25C0\uFE0E</button>' +
+                        '<button class="anim-btn" id="anim-play-btn" onclick="animToggle()" title="Play/Pause">\u25B6\uFE0E</button>' +
+                        '<button class="anim-btn" onclick="animStep(1)" title="Next level">\u25B6\uFE0E\u25B6\uFE0E</button>' +
                         '<span class="anim-speed" id="anim-speed-label" title="Animation speed">0.8s / level</span>' +
                     '</div>' +
                 '</div>' +
@@ -1751,7 +1753,7 @@ function showERA5FieldMenu() {
     // ── Toggle row at top ──
     var toggleRow = document.createElement('div');
     toggleRow.className = 'env-field-option env-toggle-row' + (_era5PlotlyVisible ? ' active' : '');
-    toggleRow.textContent = _era5PlotlyVisible ? '\u2705 Overlay On' : '\u274C Overlay Off';
+    toggleRow.textContent = _era5PlotlyVisible ? 'Overlay on' : 'Overlay off';
     toggleRow.style.cssText = 'border-bottom:1px solid rgba(15, 22, 35,0.15);font-weight:600;';
     toggleRow.onclick = function() {
         menu.remove();
@@ -1763,7 +1765,7 @@ function showERA5FieldMenu() {
     var fields = [
         { key: 'shear_mag',   label: 'Shear (200\u2013850 hPa)' },
         { key: 'rh_mid',      label: 'Mid-Level RH (500\u2013700)' },
-        { key: 'div200',      label: '\u2B06 200 hPa Divergence' },
+        { key: 'div200',      label: '200 hPa Divergence' },
         { key: 'sst',         label: 'Sea Surface Temperature' },
         { key: 'entropy_def', label: 'Entropy Deficit (\u03c7\u2098)' },
     ];
@@ -2132,9 +2134,9 @@ function initEnvOverlay() {
                     '<span class="env-ov-subtitle">ERA5 Reanalysis Diagnostics</span>' +
                 '</div>' +
                 '<div class="env-nav-bar" id="env-nav-bar">' +
-                    '<button class="env-nav-btn" id="env-nav-prev" onclick="envNavPrev()" title="Previous case">\u25C0</button>' +
+                    '<button class="env-nav-btn" id="env-nav-prev" onclick="envNavPrev()" title="Previous case">\u25C0\uFE0E</button>' +
                     '<select class="env-nav-select" id="env-nav-select" onchange="envNavJump(this.value)"></select>' +
-                    '<button class="env-nav-btn" id="env-nav-next" onclick="envNavNext()" title="Next case">\u25B6</button>' +
+                    '<button class="env-nav-btn" id="env-nav-next" onclick="envNavNext()" title="Next case">\u25B6\uFE0E</button>' +
                 '</div>' +
                 '<button class="env-ov-close" onclick="toggleEnvOverlay()">\u2715</button>' +
             '</div>' +
@@ -2333,7 +2335,7 @@ function renderEnvOverlay() {
                 icon = _icon('radio');
                 msg = 'Good \u2014 you\'ve selected a storm. Now choose a <strong>case</strong> from the toolbar dropdown, then reopen this panel.';
             } else {
-                icon = '\u26A0';
+                icon = _icon('alert');
                 msg = 'ERA5 data could not be loaded for this case. It may not be available in the ERA5 store.';
             }
             display.innerHTML =
@@ -2433,7 +2435,7 @@ function renderEnvOverlay() {
         radiusNote.style.display = 'none';
     } else {
         radiusNote.style.display = 'block';
-        radiusNote.innerHTML = '\u26A0 3D T/q fields not in store \u2014 sounding fixed at precomputed 200\u2013600 km annulus.';
+        radiusNote.innerHTML = _icon('alert') + ' 3D T/q fields not in store \u2014 sounding fixed at precomputed 200\u2013600 km annulus.';
     }
 
     // Render each component
@@ -2829,7 +2831,7 @@ function envOverlayRecomputeSkewT() {
                     sourceNote.textContent = '\u2713 Recomputed at ' + radiusKm + ' km radius';
                 } else {
                     sourceNote.style.color = '#fbbf24';
-                    sourceNote.textContent = '\u26A0 Precomputed ' +
+                    sourceNote.textContent = 'Precomputed ' +
                         (data.precomputed_domain || '200\u2013600 km annulus') + ' mean';
                 }
             }
@@ -3746,7 +3748,7 @@ function irAnimStop() {
 
 function _updateIRPlayBtn() {
     var btn = document.getElementById('ir-play-btn');
-    if (btn) btn.textContent = _irAnimPlaying ? '⏸' : '▶';
+    if (btn) btn.textContent = _irAnimPlaying ? '⏸\uFE0E' : '▶\uFE0E';
 }
 
 function _updateIRSlider() {
@@ -3788,9 +3790,9 @@ function _injectIRMapControls() {
     ctrl.innerHTML =
         '<div class="ir-ctrl-row">' +
             '<button class="ir-ctrl-btn" id="ir-toggle-btn" onclick="toggleIRMapVisibility()">' + _icon('satellite') + 'IR On</button>' +
-            '<button class="ir-ctrl-btn' + disabledCls + '" id="ir-step-back" onclick="irAnimStep(1)" title="Previous (earlier)">\u25C0</button>' +
-            '<button class="ir-ctrl-btn' + disabledCls + '" id="ir-play-btn" onclick="irAnimToggle()" title="Play/Pause">\u25B6</button>' +
-            '<button class="ir-ctrl-btn' + disabledCls + '" id="ir-step-fwd" onclick="irAnimStep(-1)" title="Next (later)">\u25B6</button>' +
+            '<button class="ir-ctrl-btn' + disabledCls + '" id="ir-step-back" onclick="irAnimStep(1)" title="Previous (earlier)">\u25C0\uFE0E</button>' +
+            '<button class="ir-ctrl-btn' + disabledCls + '" id="ir-play-btn" onclick="irAnimToggle()" title="Play/Pause">\u25B6\uFE0E</button>' +
+            '<button class="ir-ctrl-btn' + disabledCls + '" id="ir-step-fwd" onclick="irAnimStep(-1)" title="Next (later)">\u25B6\uFE0E</button>' +
             '<input type="range" id="ir-frame-slider" min="0" max="' + (n - 1) + '" value="' + (n - 1) + '" ' +
                 disabledAttr +
                 ' oninput="irSliderInput(this.value)" class="ir-slider">' +
@@ -4808,8 +4810,8 @@ function renderPlotFromJSON(json, resultDiv) {
 
 // ── Height animation ─────────────────────────────────────────
 function animToggle() { if (_animPlaying) animStop(); else animStart(); }
-function animStart() { _animPlaying = true; var btn = document.getElementById('anim-play-btn'); if (btn) { btn.textContent = '\u23F8'; btn.classList.add('active'); } animTick(); }
-function animStop() { _animPlaying = false; if (_animTimer) { clearTimeout(_animTimer); _animTimer = null; } var btn = document.getElementById('anim-play-btn'); if (btn) { btn.textContent = '\u25B6'; btn.classList.remove('active'); } }
+function animStart() { _animPlaying = true; var btn = document.getElementById('anim-play-btn'); if (btn) { btn.textContent = '\u23F8\uFE0E'; btn.classList.add('active'); } animTick(); }
+function animStop() { _animPlaying = false; if (_animTimer) { clearTimeout(_animTimer); _animTimer = null; } var btn = document.getElementById('anim-play-btn'); if (btn) { btn.textContent = '\u25B6\uFE0E'; btn.classList.remove('active'); } }
 function animTick() { if (!_animPlaying) return; generateCustomPlot(function() { if (!_animPlaying) return; _animTimer = setTimeout(function() { animStep(1); animTick(); }, 800); }); }
 function animStep(dir) { var slider = document.getElementById('ep-level'); if (!slider) return; var val = parseFloat(slider.value) + dir * 0.5; if (val > 18) val = 0; if (val < 0) val = 18; slider.value = val; document.getElementById('ep-level-val').textContent = val.toFixed(1) + ' km'; if (!_animPlaying) generateCustomPlot(); }
 
@@ -4823,11 +4825,11 @@ function toggleCrossSection() {
     if (_csMode) {
         _csMapClearGraphics();
         btn.classList.add('active');
-        btn.textContent = '\u2702 Click point A' + (onMap ? ' on the map\u2026' : ' on plot\u2026');
+        btn.innerHTML = _icon('scissors') + ' Click point A' + (onMap ? ' on the map\u2026' : ' on plot\u2026');
         if (status) status.textContent = 'Click the starting point on the ' + (onMap ? 'map' : 'plan view above');
         if (onMap) _csMapEnable(true);
     } else {
-        btn.classList.remove('active'); btn.textContent = '\u2702 Draw Cross Section'; if (status) status.textContent = '';
+        btn.classList.remove('active'); btn.innerHTML = _icon('scissors') + ' Draw Cross Section'; if (status) status.textContent = '';
         _csMapEnable(false); _csMapClearGraphics();
     }
 }
@@ -4860,7 +4862,7 @@ function _csMapClick(e) {
     if (!_csMapA) {
         _csMapA = e.latlng; _csPointA = km;
         _csMapMarkers.push(_csMapDot(e.latlng));
-        var btn = document.getElementById('cs-btn'); if (btn) btn.textContent = '✂ Click point B on the map…';
+        var btn = document.getElementById('cs-btn'); if (btn) btn.innerHTML = _icon('scissors') + ' Click point B on the map…';
         if (status) status.textContent = 'A: (' + km.x.toFixed(0) + ', ' + km.y.toFixed(0) + ') km — now click the end point';
     } else {
         var a = _csPointA, b = km;
@@ -4870,7 +4872,7 @@ function _csMapClick(e) {
         if (status) status.textContent = 'A→B: (' + a.x.toFixed(0) + ',' + a.y.toFixed(0) + ') → (' + b.x.toFixed(0) + ',' + b.y.toFixed(0) + ') km';
         _csMode = false; _csMapA = null; _csPointA = null;
         _csMapEnable(false);   // leave the drawn line; stop listening
-        var btn2 = document.getElementById('cs-btn'); if (btn2) { btn2.classList.remove('active'); btn2.textContent = '✂ Draw Cross Section'; }
+        var btn2 = document.getElementById('cs-btn'); if (btn2) { btn2.classList.remove('active'); btn2.innerHTML = _icon('scissors') + ' Draw Cross Section'; }
         fetchCrossSection(a, b);
     }
 }
@@ -4886,7 +4888,7 @@ function handlePlotClick(eventData) {
     var status = document.getElementById('cs-status'), plotDiv = document.getElementById('plotly-chart');
     if (!_csPointA) {
         _csPointA = { x: x, y: y };
-        var btn = document.getElementById('cs-btn'); if (btn) btn.textContent = '\u2702 Click point B on plot\u2026';
+        var btn = document.getElementById('cs-btn'); if (btn) btn.innerHTML = _icon('scissors') + ' Click point B on plot\u2026';
         if (status) status.textContent = 'A: (' + x.toFixed(0) + ', ' + y.toFixed(0) + ') km \u2014 now click the end point';
         var currentShapes = (plotDiv.layout.shapes || []).slice();
         currentShapes.push({ type: 'circle', xref: 'x', yref: 'y', x0: x-4, y0: y-4, x1: x+4, y1: y+4, fillcolor: '#ef4444', line: { color: 'white', width: 1.5 } });
@@ -4896,7 +4898,7 @@ function handlePlotClick(eventData) {
     } else {
         var a = _csPointA, b = { x: x, y: y };
         _csMode = false; _csPointA = null; _removeRubberBand();
-        var btn2 = document.getElementById('cs-btn'); if (btn2) { btn2.classList.remove('active'); btn2.textContent = '\u2702 Draw Cross Section'; }
+        var btn2 = document.getElementById('cs-btn'); if (btn2) { btn2.classList.remove('active'); btn2.innerHTML = _icon('scissors') + ' Draw Cross Section'; }
         if (status) status.textContent = 'A\u2192B: (' + a.x.toFixed(0) + ',' + a.y.toFixed(0) + ') \u2192 (' + b.x.toFixed(0) + ',' + b.y.toFixed(0) + ') km';
         var currentShapes2 = (plotDiv.layout.shapes || []).slice();
         var csShapes = [
@@ -5406,7 +5408,7 @@ function renderHybridAzimuthalMeanInto(targetId, json, fullsize) {
 function renderAnomalyAzimuthalMeanInto(targetId, json, fullsize) {
     var el = document.getElementById(targetId); if (!el) return;
     if (json.error || !json.anomaly) {
-        el.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F ' + (json.error || 'Anomaly data unavailable.') + '</div>';
+        el.innerHTML = '<div class="explorer-status error">' + _icon('alert') + ' ' + (json.error || 'Anomaly data unavailable.') + '</div>';
         if (json.raw) {
             var vi = json.variable || {};
             var rawVar = Object.assign({}, vi, {
@@ -5938,7 +5940,7 @@ function buildCaseMetaPanel(caseData) {
         ? (caseData.coverage * 100).toFixed(0) + '%' : '\u2014';
 
     var atcfHtml = atcfId
-        ? '<a href="https://www.ncei.noaa.gov/products/international-best-track-archive?name=' + atcfId + '" target="_blank" rel="noopener" class="case-meta-link">' + atcfId + '\u00a0\u2197</a>'
+        ? '<a href="https://www.ncei.noaa.gov/products/international-best-track-archive?name=' + atcfId + '" target="_blank" rel="noopener" class="case-meta-link">' + atcfId + '\u00a0\u2197\uFE0E</a>'
         : '\u2014';
 
     function section(title, rows) {
@@ -8160,7 +8162,7 @@ function initCompositePanel() {
                 // ═══ STEP 4: Results ═══
                 '<div class="wizard-step-content" id="wizard-step-4">' +
                     '<div class="wizard-generate-bar">' +
-                        '<button class="wizard-generate-btn" id="wiz-generate-btn" onclick="_wizardGenerateSelected()">\u25B6 Generate Selected</button>' +
+                        '<button class="wizard-generate-btn" id="wiz-generate-btn" onclick="_wizardGenerateSelected()">\u25B6\uFE0E Generate Selected</button>' +
                         '<span class="wizard-generate-summary" id="wiz-generate-summary"></span>' +
                     '</div>' +
                     // ── Inline shading toolbar (mirrors Step 3 controls for live adjustment) ──
@@ -9016,9 +9018,9 @@ var _lastCompType = null;  // 'az' or 'sq'
 
 function _buildCompToolbar() {
     return '<div class="comp-toolbar">' +
-        '<button class="comp-tool-btn" onclick="_downloadCompCSV()" title="Download data as CSV">\u2B07 CSV</button>' +
-        '<button class="comp-tool-btn" onclick="_downloadCompJSON()" title="Download full API response as JSON">\u2B07 JSON</button>' +
-        '<button class="comp-tool-btn" onclick="_downloadCompNetCDF(this)" title="Download as CF-flavored NetCDF (xarray-ready)">\u2B07 NetCDF</button>' +
+        '<button class="comp-tool-btn" onclick="_downloadCompCSV()" title="Download data as CSV">\u2B07\uFE0E CSV</button>' +
+        '<button class="comp-tool-btn" onclick="_downloadCompJSON()" title="Download full API response as JSON">\u2B07\uFE0E JSON</button>' +
+        '<button class="comp-tool-btn" onclick="_downloadCompNetCDF(this)" title="Download as CF-flavored NetCDF (xarray-ready)">\u2B07\uFE0E NetCDF</button>' +
         '<button class="comp-tool-btn comp-save-png-btn" onclick="_saveCompChartsPng(this)" title="Save chart(s) as a high-quality (2\u00D7 retina) PNG">' + _icon('download') + 'PNG</button>' +
         '<button class="comp-tool-btn" onclick="_toggleCompCaseList()" title="Show/hide cases used in this composite">' + _icon('clipboard') + 'Cases</button>' +
         '<button class="comp-tool-btn comp-link-btn" onclick="_copyCompPermalink()" title="Copy shareable link with current settings">' + _icon('link') + 'Copy Link</button>' +
@@ -9081,7 +9083,7 @@ function _downloadCompNetCDF(btn) {
         }
     }
     var origText = btn ? btn.innerHTML : null;
-    if (btn) { btn.innerHTML = '⏳ Building…'; btn.disabled = true; }
+    if (btn) { btn.innerHTML = '<span class="tc-spinner tc-spinner--sm" aria-hidden="true"></span> Building…'; btn.disabled = true; }
     var url = API_BASE + '/composite/' + endpoint + '?' + qs;
     fetch(url).then(function(r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -9709,7 +9711,7 @@ function generateCompositeAzMean() {
     var coverage = parseInt(document.getElementById('comp-coverage').value) / 100;
     var btnAz = document.getElementById('comp-btn-az'), btnSq = document.getElementById('comp-btn-sq'), btnPv = document.getElementById('comp-btn-pv');
     if (btnAz) if (btnAz) btnAz.disabled = true; if (btnSq) if (btnSq) btnSq.disabled = true; if (btnPv) if (btnPv) btnPv.disabled = true;
-    if (btnAz) btnAz.textContent = '\u23F3 Computing\u2026';
+    if (btnAz) btnAz.textContent = 'Computing\u2026';
     var _crp = document.getElementById('comp-result-placeholder') || document.getElementById('wiz-result-placeholder'); if (_crp) _crp.style.display = 'none';
     _showCompStatus('loading', 'Computing composite azimuthal mean \u2014 this may take 30\u201390 seconds for many cases\u2026');
 
@@ -9743,7 +9745,7 @@ function generateCompositeAnomaly() {
     var dataType = document.getElementById('comp-dtype').value;
     if (dataType !== 'merge') {
         resultEl.style.display = 'block';
-        resultEl.innerHTML = '<div class="explorer-status" style="color:#fbbf24;padding:12px;font-size:12px;">\u26A0\uFE0F Anomaly composites are only available for merged analyses. Switch data type to "Merge".</div>';
+        resultEl.innerHTML = '<div class="explorer-status" style="color:#fbbf24;padding:12px;font-size:12px;">' + _icon('alert') + ' Anomaly composites are only available for merged analyses. Switch data type to "Merge".</div>';
         return;
     }
 
@@ -9772,7 +9774,7 @@ function generateCompDiffAnomaly() {
     var dataType = document.getElementById('comp-dtype').value;
     if (dataType !== 'merge') {
         resultEl.style.display = 'block';
-        resultEl.innerHTML = '<div class="explorer-status" style="color:#fbbf24;padding:12px;font-size:12px;">\u26A0\uFE0F Anomaly composites are only available for merged analyses. Switch data type to "Merge".</div>';
+        resultEl.innerHTML = '<div class="explorer-status" style="color:#fbbf24;padding:12px;font-size:12px;">' + _icon('alert') + ' Anomaly composites are only available for merged analyses. Switch data type to "Merge".</div>';
         return Promise.resolve();
     }
 
@@ -9831,7 +9833,7 @@ function renderCompositeAnomalyInto(targetId, json, filters) {
     var el = document.getElementById(targetId); if (!el) return;
 
     if (!json.anomaly) {
-        el.innerHTML = '<div class="explorer-status error">\u26A0\uFE0F Anomaly data unavailable.</div>';
+        el.innerHTML = '<div class="explorer-status error">' + _icon('alert') + ' Anomaly data unavailable.</div>';
         return;
     }
 
@@ -10459,7 +10461,7 @@ function generateCompositeQuadMean() {
     var coverage = parseInt(document.getElementById('comp-coverage').value) / 100;
     var btnAz = document.getElementById('comp-btn-az'), btnSq = document.getElementById('comp-btn-sq'), btnPv = document.getElementById('comp-btn-pv');
     if (btnAz) if (btnAz) btnAz.disabled = true; if (btnSq) if (btnSq) btnSq.disabled = true; if (btnPv) if (btnPv) btnPv.disabled = true;
-    if (btnSq) btnSq.textContent = '\u23F3 Computing\u2026';
+    if (btnSq) btnSq.textContent = 'Computing\u2026';
     var _crp = document.getElementById('comp-result-placeholder') || document.getElementById('wiz-result-placeholder'); if (_crp) _crp.style.display = 'none';
     _showCompStatus('loading', 'Computing composite shear quadrants \u2014 this may take 30\u201390 seconds for many cases\u2026');
 
@@ -10509,7 +10511,7 @@ function generateCompositePlanView() {
     var btnAz = document.getElementById('comp-btn-az');
     var btnSq = document.getElementById('comp-btn-sq');
     if (btnPv) btnPv.disabled = true; if (btnAz) btnAz.disabled = true; if (btnSq) btnSq.disabled = true;
-    if (btnPv) btnPv.textContent = '\u23F3 Computing\u2026';
+    if (btnPv) btnPv.textContent = 'Computing\u2026';
     var _crp = document.getElementById('comp-result-placeholder') || document.getElementById('wiz-result-placeholder'); if (_crp) _crp.style.display = 'none';
     _showCompStatus('loading', 'Computing plan-view composite at ' + pvParams.level_km + ' km \u2014 this may take 30\u201390 seconds for many cases\u2026');
 
@@ -12699,7 +12701,7 @@ function generateEnvComposite() {
     // Switch to env tab and show loading
     _switchCompTab('env');
     var _cep = document.getElementById('comp-env-placeholder') || document.getElementById('wiz-result-placeholder'); if (_cep) _cep.style.display = 'none';
-    _showEnvCompStatus('loading', '\u23F3 Computing environmental composites\u2026');
+    _showEnvCompStatus('loading', 'Computing environmental composites\u2026');
 
     // Hide previous results
     ['comp-env-scalars', 'comp-env-plan-view', 'comp-env-thermo-row'].forEach(function(id) {
@@ -12719,7 +12721,7 @@ function generateEnvComposite() {
 
     _fetchCompositeStream(planViewUrl, 'Computing ERA5 plan view').then(function(pv) {
         pvData = pv;
-        _showEnvCompStatus('loading', '\u23F3 Plan view done. Computing profiles & scalars\u2026');
+        _showEnvCompStatus('loading', 'Plan view done. Computing profiles & scalars\u2026');
         // Profiles and scalars are lightweight — safe to run in parallel
         return Promise.all([
             _fetchWithTimeout(profilesUrl).then(function(r) { return r.ok ? r.json() : null; }),
@@ -13186,7 +13188,7 @@ function generateEnvCompDiff() {
     var radiusKm = parseInt(document.getElementById('comp-env-radius').value) || 500;
 
     _switchCompTab('env');
-    _showEnvCompStatus('loading', '\u23F3 Computing \u0394 environmental composites (A\u2212B)\u2026');
+    _showEnvCompStatus('loading', 'Computing \u0394 environmental composites (A\u2212B)\u2026');
     ['comp-env-scalars', 'comp-env-plan-view', 'comp-env-thermo-row'].forEach(function(id) {
         var el = document.getElementById(id);
         if (el) el.style.display = 'none';
@@ -13200,7 +13202,7 @@ function generateEnvCompDiff() {
     // the single-worker backend with 6 concurrent heavy requests.
     var pvA, pvB, profA, profB, scA, scB;
 
-    _showEnvCompStatus('loading', '\u23F3 Computing Group A environmental composites\u2026');
+    _showEnvCompStatus('loading', 'Computing Group A environmental composites\u2026');
 
     Promise.all([
         _fetchWithTimeout(API_BASE + '/composite/era5_plan_view?' + qsA + pvSuffix).then(function(r) { return r.ok ? r.json() : null; }),
@@ -13214,7 +13216,7 @@ function generateEnvCompDiff() {
             return Promise.reject('no_data_a');
         }
 
-        _showEnvCompStatus('loading', '\u23F3 Group A done. Computing Group B environmental composites\u2026');
+        _showEnvCompStatus('loading', 'Group A done. Computing Group B environmental composites\u2026');
 
         return Promise.all([
             _fetchWithTimeout(API_BASE + '/composite/era5_plan_view?' + qsB + pvSuffix).then(function(r) { return r.ok ? r.json() : null; }),
@@ -13673,7 +13675,7 @@ function _archiveRenderFLOverlay(flData) {
         }
 
         texts.push(
-            '<b>\u2708 Flight Level</b><br>' +
+            '<b>Flight Level</b><br>' +
             'Wind: ' + (ws != null ? ws.toFixed(1) + ' m/s (' + (ws * 1.94384).toFixed(0) + ' kt)' : 'N/A') + '<br>' +
             'Wind Dir: ' + (o.fl_wdir_deg != null ? o.fl_wdir_deg.toFixed(0) + '\u00b0' : 'N/A') + '<br>' +
             altStr +
@@ -13712,7 +13714,7 @@ function _archiveRenderFLOverlay(flData) {
         },
         text: texts,
         hovertemplate: '%{text}<extra></extra>',
-        name: '\u2708 Flight Level',
+        name: 'Flight Level',
         showlegend: true,
     };
 
@@ -14378,7 +14380,7 @@ function _archiveRenderSondeOverlay(data) {
         var sfcAltStr = sonde.surface.alt_m != null ? sonde.surface.alt_m.toFixed(0) + ' m' : '?';
 
         var hoverHtml =
-            '<b>\uD83E\uDE82 ' + (sonde.sonde_id || 'Sonde ' + (idx+1)) + '</b><br>' +
+            '<b>' + (sonde.sonde_id || 'Sonde ' + (idx+1)) + '</b><br>' +
             _tcrTime(sonde.launch_time, true) + ' (' + tOffStr + ')<br>' +
             (sonde.aircraft || '') + '<br>' +
             'Max wind: <b>' + maxWspdStr + '</b><br>' +
@@ -14404,7 +14406,7 @@ function _archiveRenderSondeOverlay(data) {
             textfont: { color: color, size: 10, family: 'monospace' },
             hovertemplate: hoverHtml,
             showlegend: idx === 0,
-            name: '\uD83E\uDE82 Dropsondes',
+            name: 'Dropsondes',
         };
         traces.push(markerTrace);
     });

@@ -168,9 +168,9 @@
 <div id="tb"></div>
 <div id="cbar" class="hud" title="IR brightness temperature: 37 °C (310 K) at the top to −103 °C (170 K) at the bottom"><span>37 °C</span><canvas width="1" height="126"></canvas><span>&minus;103 °C</span></div>
 <div id="bar" class="hud">
-  <button id="prev" title="Previous frame (left arrow)">&#9664;</button>
-  <button id="play" title="Play / pause (space)">&#9654; Play</button>
-  <button id="next" title="Next frame (right arrow)">&#9654;</button>
+  <button id="prev" title="Previous frame (left arrow)">&#9664;&#xFE0E;</button>
+  <button id="play" title="Play / pause (space)">&#9654;&#xFE0E; Play</button>
+  <button id="next" title="Next frame (right arrow)">&#9654;&#xFE0E;</button>
   <div id="strip"><canvas id="stripc"></canvas><input id="slider" type="range" min="0" max="0" value="0"></div>
   <span id="dt" title="Click to jump to a date">&mdash;</span>
   <div id="jump" class="hud">
@@ -523,7 +523,7 @@
       var html = '<b>' + (s.name === 'UNNAMED' ? (s.atcf || s.sid) : s.name) + '</b>' +
         (st.bv != null ? '<span class="b">' + Math.round(st.bv) + ' kt</span>' : '') +
         (st.gv != null ? '<span class="g">G ' + Math.round(st.gv) + '</span>' : '') +
-        '<span class="open" title="Open in Storm Detail">&#8599;</span>';
+        '<span class="open" title="Open in Storm Detail">&#8599;&#xFE0E;</span>';
       var m = markers[s.sid];
       if (!m) {
         var el = document.createElement('div'); el.style.cssText = 'position:relative;width:0;height:0;';
@@ -593,7 +593,7 @@
       .catch(function (e) { if (seq !== reqSeq) return; status.textContent = 'imagery failed: ' + (e && e.message ? e.message : e); console.warn('[season]', ts, e); });
   }
   function step(d) { pause(); show(idx + d); }
-  function pause() { playing = false; $('play').classList.remove('active'); $('play').innerHTML = '&#9654; Play'; if (timer) { clearTimeout(timer); timer = null; } }
+  function pause() { playing = false; $('play').classList.remove('active'); $('play').innerHTML = '&#9654;&#xFE0E; Play'; if (timer) { clearTimeout(timer); timer = null; } }
   function tick() {
     if (!playing || !frames.length) return;
     var j = (idx + 1) % frames.length, ts = frames[j], seq = ++reqSeq, t0 = performance.now();

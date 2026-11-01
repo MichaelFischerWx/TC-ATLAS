@@ -389,7 +389,7 @@
             <label class="field-label" for="month-select">Month</label>
             <select id="month-select"></select>
             <div class="slider-row">
-                <button id="month-play" class="icon-btn" type="button" aria-label="play through months" title="Play through the seasonal cycle">▶</button>
+                <button id="month-play" class="icon-btn" type="button" aria-label="play through months" title="Play through the seasonal cycle">▶&#xFE0E;</button>
                 <input id="month-slider" class="slider" type="range" min="1" max="12" step="1" value="1" aria-label="scrub month">
             </div>
             <label class="toggle-row" style="margin-top:8px; display:flex; align-items:center; gap:8px; font-size:0.78rem; cursor:pointer;"
@@ -622,7 +622,7 @@
         <div id="compare-label-right" class="compare-label compare-label--right" hidden></div>
         <!-- Swipe-compare divider handle: arrows + drag hint, centred on the divider -->
         <div id="compare-handle" class="compare-handle" hidden>
-            <span class="compare-handle-arrows">◀&nbsp;&nbsp;▶</span>
+            <span class="compare-handle-arrows">◀&#xFE0E;&nbsp;&nbsp;▶&#xFE0E;</span>
             <span class="compare-handle-hint">Drag to compare</span>
         </div>
 
@@ -923,7 +923,7 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
                             style="padding:4px 10px; margin:0; width:auto; font-size:0.68rem;"
                             title="Click, then drag a rectangle on the Map view to define the area.">Pick region</button>
                     <button class="xs-expand" id="ts-download-btn" type="button"
-                            aria-label="Download CSV" title="Download the time series as CSV">⬇</button>
+                            aria-label="Download CSV" title="Download the time series as CSV">⬇&#xFE0E;</button>
                     <button class="xs-close"  id="ts-close" aria-label="Close panel">&times;</button>
                 </span>
             </div>
@@ -1022,7 +1022,7 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
 </div>
 
 <script type="module" src="vendor/gc-atlas/globe.js"></script>
-<script type="module" src="climatology_globe.js?v=20261020au2"></script>
+<script type="module" src="climatology_globe.js?v=20261101n1"></script>
 
 </body>
 </html>

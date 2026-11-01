@@ -3498,10 +3498,10 @@
         // GPU vertical scale on the existing DEM, no re-fetch/re-encode, $0).
         box.innerHTML =
             '<div style="display:grid;grid-template-columns:auto 120px 36px;align-items:center;gap:6px 8px;">' +
-            '<span title="Camera tilt — 0° top-down, 80° near-horizon. Shortcut: hold Shift and drag the map up/down. Or right-/ctrl-drag to orbit.">⛰ Tilt</span>' +
+            '<span title="Camera tilt — 0° top-down, 80° near-horizon. Shortcut: hold Shift and drag the map up/down. Or right-/ctrl-drag to orbit."><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 3 4 8 5-5 5 15H2L8 3z"/></svg> Tilt</span>' +
             '<input id="ir-3d-tilt" type="range" min="0" max="80" step="1" style="accent-color:#4a9b6e;cursor:pointer;">' +
             '<span id="ir-3d-tilt-val" style="text-align:right;color:var(--um-orange,#F47321);font-weight:600;font-variant-numeric:tabular-nums;"></span>' +
-            '<span title="Vertical amplification of the IR cloud-top relief (GPU only — no extra data or compute).">↕ Height</span>' +
+            '<span title="Vertical amplification of the IR cloud-top relief (GPU only — no extra data or compute).">↕\uFE0E Height</span>' +
             '<input id="ir-3d-exag" type="range" min="1" max="8" step="0.5" style="accent-color:#4a9b6e;cursor:pointer;">' +
             '<span id="ir-3d-exag-val" style="text-align:right;color:var(--um-orange,#F47321);font-weight:600;font-variant-numeric:tabular-nums;"></span>' +
             '</div>' +
@@ -4140,7 +4140,7 @@
         var icon = document.createElement('span');
         icon.className = 'ir-feed-banner-icon';
         icon.setAttribute('aria-hidden', 'true');
-        icon.innerHTML = '&#128241;'; // 📱
+        icon.innerHTML = '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></svg>';
         bar.appendChild(icon);
 
         var txt = document.createElement('span');
@@ -4954,7 +4954,7 @@
                 '<div style="color:' + sub + ';font-size:11.5px;">Last 24 h' +
                   (latlon ? ' · ' + latlon : '') +
                   ' · <a href="' + link + '" target="_blank" rel="noopener" ' +
-                    'style="color:#2e7dff;text-decoration:none;">station page ↗</a></div>' +
+                    'style="color:#2e7dff;text-decoration:none;">station page ↗\uFE0E</a></div>' +
               '</div>' +
               '<div style="display:flex;flex-direction:column;align-items:flex-end;' +
                 'gap:8px;flex-shrink:0;">' +
@@ -6611,7 +6611,7 @@
                 exportMenu.style.display = 'none';
                 exportMenu.innerHTML =
                       '<button type="button" class="ir-export-menu-item" data-act="png">'
-                    + '<span class="ir-export-menu-glyph" aria-hidden="true">⬇</span> Save image (PNG)</button>'
+                    + '<span class="ir-export-menu-glyph" aria-hidden="true">⬇\uFE0E</span> Save image (PNG)</button>'
                     + '<button type="button" class="ir-export-menu-item" data-act="gif">'
                     + '<span class="ir-export-menu-glyph" aria-hidden="true">◉</span> Save animation (GIF)</button>';
                 function _closeExportMenu() {
@@ -6665,13 +6665,13 @@
                             + '<span class="ir-export-menu-glyph" aria-hidden="true">' + glyph + '</span>' + label
                             + (isOn ? '<span class="ir-more-on">On</span>' : '') + '</button>';
                     }
-                    return item('3d', '⛰', '3D cloud tops', on(d3Btn))
+                    return item('3d', '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 3 4 8 5-5 5 15H2L8 3z"/></svg>', '3D cloud tops', on(d3Btn))
                         + item('radar', '◈', 'US radar', on(radarBtn))
-                        + item('measure', '↔', 'Measure distance', on(measBtn))
+                        + item('measure', '↔\uFE0E', 'Measure distance', on(measBtn))
                         + item('mw', '◉', 'Microwave', on(mwTopBtn))
                         + item('mwopts', '▾', 'Microwave options…', null)
                         + '<div class="ir-more-sep"></div>'
-                        + item('png', '⬇', 'Save image (PNG)', null)
+                        + item('png', '⬇\uFE0E', 'Save image (PNG)', null)
                         + item('gif', '◉', 'Save animation (GIF)', null);
                 }
                 function _closeMoreMenu() {
@@ -6762,7 +6762,7 @@
                 d3Btn.id = 'ir-3d-mode-btn';
                 d3Btn.type = 'button';
                 d3Btn.title = 'Extrude cold IR cloud tops into 3D relief — drag to orbit, use the Tilt / Height sliders. Toggle off to flatten.';
-                d3Btn.innerHTML = '<span class="ir-3d-mode-glyph" aria-hidden="true">⛰</span><span class="ir-3d-mode-text">3D</span>';
+                d3Btn.innerHTML = '<span class="ir-3d-mode-glyph" aria-hidden="true"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 3 4 8 5-5 5 15H2L8 3z"/></svg></span><span class="ir-3d-mode-text">3D</span>';
                 d3Btn.addEventListener('click', function () { _rt3DToggle(); });
 
                 // ── US Radar one-click overlay toggle (sibling of 3D / MW) ──
@@ -7097,7 +7097,7 @@
             convBtn.type = 'button';
             convBtn.className = 'ir-legend-toggle ir-display-item active';
             convBtn.title = 'Overlay deep convection (Tb < -20 °C) in grayscale on top of shaded env layers (SST anomaly, RH, …) so the white cloud tops read over the field';
-            convBtn.innerHTML = '⛈ Convection';
+            convBtn.innerHTML = '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2"/><path d="m13 12-3 5h4l-3 5"/></svg> Convection';
             convBtn.addEventListener('click', function () {
                 convBtn.classList.toggle('active', window._rtToggleConvectionOverlay());
             });
@@ -7180,20 +7180,20 @@
                 cyc.style.display = 'none';
                 var cycPrev = L.DomUtil.create('button', 'ir-gen-cyc-btn', cyc);
                 cycPrev.setAttribute('data-dir', 'older');
-                cycPrev.innerHTML = '&#9664;';
+                cycPrev.innerHTML = '&#9664;&#xFE0E;';
                 cycPrev.title = 'Older DeepMind run';
                 cycPrev.addEventListener('click', function () { _genesisStepCycle(-1); });
                 var cycText = L.DomUtil.create('span', 'rt-dock-cycle-text', cyc);
                 cycText.id = 'ir-dock-cycle-text';
                 var cycNext = L.DomUtil.create('button', 'ir-gen-cyc-btn', cyc);
                 cycNext.setAttribute('data-dir', 'newer');
-                cycNext.innerHTML = '&#9654;';
+                cycNext.innerHTML = '&#9654;&#xFE0E;';
                 cycNext.title = 'Newer DeepMind run';
                 cycNext.addEventListener('click', function () { _genesisStepCycle(1); });
 
                 // Ensemble-size toggle (1000 / 50) right beside the run
                 // stepper — mirrors the Layers-menu chips. _updateGenesisCycleBar
-                // sets the active state + a ⏳ when a variant isn't published
+                // sets the active state + a clock when a variant isn't published
                 // for the freshest cycle.
                 var cycVar = L.DomUtil.create('span', 'rt-dock-variant', cyc);
                 cycVar.id = 'ir-dock-variant';
@@ -7473,7 +7473,7 @@
                    fmtLatLon(s.lat, s.lon) + ')</span>')
                 : fmtLatLon(s.lat, s.lon);
             var reconBadge = s.has_recon
-                ? '<span class="ir-recon-badge" title="Aircraft reconnaissance active (recent vortex data message)">✈ RECON</span>'
+                ? '<span class="ir-recon-badge" title="Aircraft reconnaissance active (recent vortex data message)"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z"/></svg> RECON</span>'
                 : '';
             var popupHtml =
                 '<div class="ir-popup">' +
@@ -7993,7 +7993,7 @@
         el.id = 'ir-no-storms';
         el.className = 'ir-no-storms';
         el.innerHTML =
-            '<span class="ir-no-storms-icon" aria-hidden="true">🌀</span>' +
+            '<span class="ir-no-storms-icon" aria-hidden="true"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2.5"/><path d="M12 9.5C12 5 15 3 19 3"/><path d="M12 14.5C12 19 9 21 5 21"/></svg></span>' +
             '<span class="ir-no-storms-title">No active tropical cyclones right now</span>' +
             '<a class="ir-no-storms-link" href="global_archive.html">Explore past storms →</a>' +
             '<button class="ir-no-storms-close" type="button" aria-label="Dismiss">×</button>';
@@ -16350,7 +16350,7 @@
 
     // Small "pending / not-yet-published" clock glyph in the site's inline-SVG
     // convention (currentColor stroke) so it inherits the chip's color and
-    // matches the line-icon look — replaces the ⏳ emoji, whose flat-color
+    // matches the line-icon look — replaces the hourglass emoji, whose flat-color
     // rendering clashed with the rest of the UI. Marks a variant that hasn't
     // published yet for the freshest cycle.
     var _GENESIS_PENDING_SVG =
@@ -24762,7 +24762,7 @@
     }
 
     // Reflect the active ensemble variant + per-variant availability on the
-    // dock's 1000/50 chips. A ⏳ marks a variant not published for the
+    // dock's 1000/50 chips. A clock marks a variant not published for the
     // freshest cycle (clicking it jumps to the freshest run that has it).
     function _updateDockVariantChips() {
         var wrap = document.getElementById('ir-dock-variant');
@@ -25938,7 +25938,7 @@
     //  When a filled/shaded env raster (SST anomaly, SST, RH, …) is active, drape
     //  a grayscale convection-only IR layer (Tb < -20 C white, warmer
     //  transparent) ABOVE it so deep convection reads over the env field.
-    //  Default on; the Display menu "⛈ Convection" item toggles it.
+    //  Default on; the Display menu "Convection" item toggles it.
     var _coldCloudLayer = null, _coldCloudUrl = null, _coldCloudEnabled = true;
 
     function _anyShadedEnvActive() {
@@ -27870,7 +27870,7 @@
         if (typeof window.GIF === 'undefined') { _rtToast('GIF encoder still loading — try again in a moment'); return; }
         var nFrames = globalAnimFrameLayers.length;
         if (!globalAnimReady || nFrames < 2) {
-            _rtToast('Press ▶ to load the animation first, then export a GIF');
+            _rtToast('Press ▶\uFE0E to load the animation first, then export a GIF');
             return;
         }
         var node = document.getElementById('ir-map');
@@ -28040,7 +28040,7 @@
                 'background:' + bg + ';border:none;border-radius:8px;padding:11px 18px;cursor:pointer;';
             return b;
         }
-        var saveBtn = _pill(opts.saveLabel || '⬇ Save', '#4a9b6e');
+        var saveBtn = _pill(opts.saveLabel || '⬇\uFE0E Save', '#4a9b6e');
         var closeBtn = _pill('Close', 'rgba(148,163,184,0.35)');
         function close() {
             if (ov.parentElement) ov.parentElement.removeChild(ov);
@@ -28060,7 +28060,7 @@
     /** Back-compat wrapper — GIF exports show the loop preview + "Save GIF". */
     function _showGifResult(blob, filename) {
         _showSaveResult(blob, filename, {
-            saveLabel: '⬇ Save GIF', alt: 'TC-ATLAS loop',
+            saveLabel: '⬇\uFE0E Save GIF', alt: 'TC-ATLAS loop',
             hint: 'Tap Save GIF — or long-press the image to save.'
         });
     }
@@ -31065,7 +31065,7 @@
         var sub = document.getElementById('rt-mw-compare-sub');
         if (ttl) {
             var nm = (storm.name || storm.atcf_id || 'Storm');
-            ttl.textContent = nm + ' · IR ↔ Microwave';
+            ttl.textContent = nm + ' · IR ↔\uFE0E Microwave';
         }
         if (sub) {
             var utcStr = fmtUTC(orbit.scan_start);
@@ -31185,7 +31185,7 @@
         ctx.font = '700 ' + Math.round(18 * s) + 'px sans-serif';
         ctx.textBaseline = 'alphabetic';
         ctx.textAlign = 'left';
-        ctx.fillText(name + ' — IR ↔ Microwave', pad, Math.round(24 * s));
+        ctx.fillText(name + ' — IR ↔\uFE0E Microwave', pad, Math.round(24 * s));
 
         ctx.fillStyle = '#94a3b8';
         ctx.font = Math.round(13 * s) + 'px sans-serif';
@@ -34696,7 +34696,7 @@
                         if (!blob) { try { blob = _dataURLToBlob(comp.toDataURL('image/png')); } catch (e2) { blob = null; } }
                         if (!blob) { _rtToast('Couldn’t build the image on this device — the map layer can’t be read.'); return; }
                         _showSaveResult(blob, nm, {
-                            saveLabel: '⬇ Save image', alt: 'TC-ATLAS frame',
+                            saveLabel: '⬇\uFE0E Save image', alt: 'TC-ATLAS frame',
                             hint: 'Tap Save image — or long-press the image to save.'
                         });
                     }, 'image/png');
@@ -34794,7 +34794,7 @@
                 // Desktop keeps the instant one-tap download via _saveImageBlob.
                 if (_isIOS()) {
                     _showSaveResult(blob, pngName, {
-                        saveLabel: '⬇ Save image', alt: 'TC-ATLAS IR frame',
+                        saveLabel: '⬇\uFE0E Save image', alt: 'TC-ATLAS IR frame',
                         hint: 'Tap Save image — or long-press the image to save.'
                     });
                 } else {

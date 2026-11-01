@@ -835,7 +835,7 @@ function _bindFieldInfoPopover() {
             (noteOrShort ? `<div class="fi-body">${escText(noteOrShort)}</div>` : '') +
             `<div class="fi-meta">${provider}</div>` +
             (learnUrl
-                ? `<div class="fi-learn"><a href="${escAttr(learnUrl)}" target="_blank" rel="noopener noreferrer" class="ts-source-link">${escText(learnLabel)} ↗</a></div>`
+                ? `<div class="fi-learn"><a href="${escAttr(learnUrl)}" target="_blank" rel="noopener noreferrer" class="ts-source-link">${escText(learnLabel)} ↗\uFE0E</a></div>`
                 : '');
         pop.hidden = false;
         _ga('clim_globe_field_info_open', { field: fname });
