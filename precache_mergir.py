@@ -238,12 +238,10 @@ def encode_tb_uint8(frame_2d):
 
 def _mergir_opendap_url(dt: datetime) -> str:
     """Build OPeNDAP base URL for a MergIR file (no subsetting constraint)."""
-    jday = dt.timetuple().tm_yday
     time_str = dt.strftime("%Y%m%d%H")
     return (
-        f"https://disc2.gesdisc.eosdis.nasa.gov/opendap/"
-        f"MERGED_IR/GPM_MERGIR.1/{dt.year}/{jday:03d}/"
-        f"merg_{time_str}_4km-pixel.nc4"
+        "https://opendap.earthdata.nasa.gov/collections/C1432254058-GES_DISC/"
+        f"granules/GPM_MERGIR.1%3Amerg_{time_str}_4km-pixel.nc4"
     )
 
 
