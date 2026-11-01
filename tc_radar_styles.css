@@ -105,6 +105,16 @@ outline-offset: 2px;
     /* Buttons (UI standard): 6-px corners; primary hover one step deeper. */
     --btn-r: 6px;
     --btn-primary-hover: var(--um-green-deep);
+    /* Map buttons: dark glass over imagery, the same in both themes. The inset
+       background is for buttons inside a dark panel (animation dock, microwave
+       panel, Storm Satellite tab). */
+    --map-btn-bg: rgba(22, 27, 36, 0.92);
+    --map-btn-hover-bg: rgba(30, 37, 48, 0.96);
+    --map-btn-inset-bg: rgba(255, 255, 255, 0.06);
+    --map-btn-inset-hover-bg: rgba(255, 255, 255, 0.14);
+    --map-btn-ink: #e6edf3;
+    --map-btn-line: rgba(255, 255, 255, 0.14);
+    --map-btn-hover-line: rgba(74, 155, 110, 0.55);
 
     /* Plotly bridge — JS reads these via getComputedStyle so charts
        repaint correctly when theme flips. Don't reference these from
@@ -624,8 +634,7 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 :root[data-theme="dark"] .tc-retry { color: #6db993; }
 
 .anim-controls { display: flex; align-items: center; gap: 3px; margin-top: 4px; }
-.anim-btn { width: 28px; height: 26px; border: 1px solid var(--border-light); border-radius: 5px; background: var(--navy); font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--slate); transition: all 0.15s; padding: 0; }
-.anim-btn:hover { background: var(--navy-mid); border-color: var(--blue); color: var(--blue-light); }
+.anim-btn { width: 28px; height: 26px; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s; padding: 0; }
 .anim-btn.active { background: var(--sel-fill); color: var(--sel-ink); border-color: var(--sel-fill); }
 .anim-speed { font-size: 10px; color: var(--slate); margin-left: auto; }
 
@@ -720,17 +729,12 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
     gap: 6px;
 }
 .ir-ctrl-btn {
-    background: var(--border);
-    border: 1px solid rgba(15, 22, 35,0.15);
-    color: var(--text);
     font-size: 12px;
     padding: 3px 8px;
-    border-radius: 5px;
     cursor: pointer;
     transition: background 0.2s;
     white-space: nowrap;
 }
-.ir-ctrl-btn:hover { background: rgba(15, 22, 35,0.18); }
 .ir-slider {
     width: 100px;
     height: 4px;
@@ -2733,7 +2737,9 @@ body.basemap-satellite .basemap-btn + .basemap-btn { border-left-color: rgba(255
 body.basemap-satellite .leaflet-bar a, body.basemap-satellite .maplibregl-ctrl-group button { background: transparent; color: #e2e8f0; border-bottom-color: rgba(255,255,255,0.16); }
 body.basemap-satellite .leaflet-bar a:hover, body.basemap-satellite .maplibregl-ctrl-group button:hover { background: rgba(255,255,255,0.1); }
 body.basemap-satellite .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(1) brightness(1.4); }
-body.basemap-satellite #ir-map-controls .ir-ctrl-btn { background: rgba(255,255,255,0.08); color: #e2e8f0; border-color: rgba(255,255,255,0.18); }
+body.basemap-satellite #ir-map-controls .ir-ctrl-btn { background: var(--map-btn-inset-bg); color: var(--map-btn-ink); border-color: var(--map-btn-line); }
+body.basemap-satellite #ir-map-controls .ir-ctrl-btn:hover:not(.active) { background: var(--map-btn-inset-hover-bg); border-color: var(--map-btn-hover-line); color: #fff; }
+body.basemap-satellite #ir-map-controls .ir-ctrl-btn.active { background: var(--sel-fill-glass); border-color: var(--sel-fill-glass); color: var(--sel-ink); }
 body.basemap-satellite #ir-map-controls .ir-label, body.basemap-satellite #ir-map-controls .radar-op-wrap { color: #e2e8f0; }
 
 /* ── IR control strip: two aligned rows, no overlap ──────────────────── */
@@ -2941,21 +2947,29 @@ body.basemap-satellite #map-layer-bar .overlay-pill.active { background: var(--s
      secondary  every other action, and options while they are off
                 (an option that is on takes the green fill, phase 2)
      ghost      low-stakes actions: back, reset, clear
+     map        dark glass over imagery, the same in both themes; "inset"
+                is the same button inside a dark panel
    A Global Archive .ga-btn with no role class is secondary.
    Sizes: 13 px / 8px 16px, small 12 px / 5px 12px, and 11 px / 2px 8px in
    the dense drawers. Kept on purpose: the orange TC-RADAR cross-link, the
-   purple BibTeX and amber Peak buttons, segmented groups, data-colored
-   toggles, and the Real-Time Monitor's map controls (next pass). */
+   purple BibTeX and amber Peak buttons, segmented groups, chips, data-colored
+   toggles and sub-panels, and close (x) buttons. */
 .ga-btn, .ga-btn-secondary, .ga-btn-xs, .cs-btn,
 .filter-toggle-btn, .focus-back-btn, .case-nav-btn, .env-nav-btn,
 .cite-btn, .cite-copy-btn, .env-pick-btn, .gra-pop-btn,
-.gra-about-btn, .map-storm-card-btn2, .sub-evo-save-btn, .wizard-nav-btn {
+.gra-about-btn, .map-storm-card-btn2, .sub-evo-save-btn, .wizard-nav-btn,
+.ir-back-btn, .ir-hdr-btn, .ir-anim-btn, .anim-btn,
+.ir-ctrl-btn, .rt-env-toggle-btn, .rt-model-toggle-btn, .ir-chart-save-btn,
+.rt-save-png-btn, .rt-dm-export-btn, .ir-popup-btn.ir-popup-btn-dm, .rt-genesis-tau-btn,
+.sub-save-png-btn, .sub-clock-save-btn, .sub-hov-expand-btn, .sub-hov-save-btn,
+.exp-archdd-btn, .seasonal-ace-chip, .seasonal-evo-btn, .seasonal-evo-step-btn,
+.seasonal-evo-toggle, .seasonal-maximize-btn, .seasonal-save-btn {
     background: var(--surface-raised); color: var(--text); border: 1px solid var(--border-light);
     border-radius: var(--btn-r); font-weight: 600;
 }
 .ga-btn-primary, .ga-btn-accent, .download-btn, .popup-explore-btn,
 .generate-btn, .toolbar-explore-btn, .env-recompute-btn, .wizard-generate-btn,
-.wizard-nav-btn.primary, .map-storm-card-btn, .tc-clim-globe-banner-btn {
+.wizard-nav-btn.primary, .map-storm-card-btn, .tc-clim-globe-banner-btn, .ir-popup-btn {
     background: var(--sel-fill); color: var(--sel-ink); border: 1px solid var(--sel-fill);
     border-radius: var(--btn-r); font-weight: 600;
 }
@@ -2963,20 +2977,48 @@ body.basemap-satellite #map-layer-bar .overlay-pill.active { background: var(--s
     background: transparent; color: var(--um-green); border: 1px solid transparent;
     border-radius: var(--btn-r); font-weight: 600;
 }
-.ga-btn:hover:not(.active, :disabled, .ga-btn-radar, .ir-peak-btn), .ga-btn-secondary:hover:not(.active, :disabled), .ga-btn-xs:hover:not(.active, :disabled),
-.cs-btn:hover:not(.active, :disabled), .filter-toggle-btn:hover:not(.active, :disabled), .focus-back-btn:hover:not(.active, :disabled),
-.case-nav-btn:hover:not(.active, :disabled), .env-nav-btn:hover:not(.active, :disabled), .cite-btn:hover:not(.active, :disabled),
-.cite-copy-btn:hover:not(.active, :disabled), .env-pick-btn:hover:not(.active, :disabled), .gra-pop-btn:hover:not(.active, :disabled),
-.gra-about-btn:hover:not(.active, :disabled), .map-storm-card-btn2:hover:not(.active, :disabled), .sub-evo-save-btn:hover:not(.active, :disabled),
-.wizard-nav-btn:hover:not(.active, :disabled) {
+.ir-detail-layers-btn, .ir-radar-mode-btn, .ir-measure-mode-btn, .ir-3d-mode-btn,
+.ir-global-toggle-btn {
+    background: var(--map-btn-bg); color: var(--map-btn-ink); border: 1px solid var(--map-btn-line);
+    border-radius: var(--btn-r); font-weight: 600;
+}
+.rt-anim-btn, .rt-dock-var-btn, .ir-gen-cyc-btn, .tc-mw-play-btn,
+.tc-mw-live-btn, .sat-anim-btn {
+    background: var(--map-btn-inset-bg); color: var(--map-btn-ink); border: 1px solid var(--map-btn-line);
+    border-radius: var(--btn-r); font-weight: 600;
+}
+.ga-btn:hover:not(.active, .is-active, :disabled, .ga-btn-radar, .ir-peak-btn), .ga-btn-secondary:hover:not(.active, .is-active, :disabled), .ga-btn-xs:hover:not(.active, .is-active, :disabled),
+.cs-btn:hover:not(.active, .is-active, :disabled), .filter-toggle-btn:hover:not(.active, .is-active, :disabled), .focus-back-btn:hover:not(.active, .is-active, :disabled),
+.case-nav-btn:hover:not(.active, .is-active, :disabled), .env-nav-btn:hover:not(.active, .is-active, :disabled), .cite-btn:hover:not(.active, .is-active, :disabled),
+.cite-copy-btn:hover:not(.active, .is-active, :disabled), .env-pick-btn:hover:not(.active, .is-active, :disabled), .gra-pop-btn:hover:not(.active, .is-active, :disabled),
+.gra-about-btn:hover:not(.active, .is-active, :disabled), .map-storm-card-btn2:hover:not(.active, .is-active, :disabled), .sub-evo-save-btn:hover:not(.active, .is-active, :disabled),
+.wizard-nav-btn:hover:not(.active, .is-active, :disabled), .ir-back-btn:hover:not(.active, .is-active, :disabled), .ir-hdr-btn:hover:not(.active, .is-active, :disabled),
+.ir-anim-btn:hover:not(.active, .is-active, :disabled), .anim-btn:hover:not(.active, .is-active, :disabled), .ir-ctrl-btn:hover:not(.active, .is-active, :disabled),
+.rt-env-toggle-btn:hover:not(.active, .is-active, :disabled), .rt-model-toggle-btn:hover:not(.active, .is-active, :disabled), .ir-chart-save-btn:hover:not(.active, .is-active, :disabled),
+.rt-save-png-btn:hover:not(.active, .is-active, :disabled), .rt-dm-export-btn:hover:not(.active, .is-active, :disabled), .ir-popup-btn.ir-popup-btn-dm:hover:not(.active, .is-active, :disabled),
+.rt-genesis-tau-btn:hover:not(.active, .is-active, :disabled), .sub-save-png-btn:hover:not(.active, .is-active, :disabled), .sub-clock-save-btn:hover:not(.active, .is-active, :disabled),
+.sub-hov-expand-btn:hover:not(.active, .is-active, :disabled), .sub-hov-save-btn:hover:not(.active, .is-active, :disabled), .exp-archdd-btn:hover:not(.active, .is-active, :disabled),
+.seasonal-ace-chip:hover:not(.active, .is-active, :disabled), .seasonal-evo-btn:hover:not(.active, .is-active, :disabled), .seasonal-evo-step-btn:hover:not(.active, .is-active, :disabled),
+.seasonal-evo-toggle:hover:not(.active, .is-active, :disabled), .seasonal-maximize-btn:hover:not(.active, .is-active, :disabled), .seasonal-save-btn:hover:not(.active, .is-active, :disabled) {
     background: var(--um-green-tint); border-color: var(--sel-fill);
 }
 .ga-btn-primary:hover:not(:disabled), .ga-btn-accent:hover:not(:disabled), .download-btn:hover:not(:disabled),
 .popup-explore-btn:hover:not(:disabled), .generate-btn:hover:not(:disabled), .toolbar-explore-btn:hover:not(:disabled),
 .env-recompute-btn:hover:not(:disabled), .wizard-generate-btn:hover:not(:disabled), .wizard-nav-btn.primary:hover:not(:disabled),
-.map-storm-card-btn:hover:not(:disabled), .tc-clim-globe-banner-btn:hover:not(:disabled) {
+.map-storm-card-btn:hover:not(:disabled), .tc-clim-globe-banner-btn:hover:not(:disabled), .ir-popup-btn:hover:not(:disabled) {
     background: var(--btn-primary-hover); border-color: var(--btn-primary-hover);
+}
+.ir-popup-btn.ir-popup-btn-dm:hover:not(:disabled) {
+    background: var(--um-green-tint); border-color: var(--sel-fill); color: var(--text);
 }
 .ga-btn-ghost:hover:not(:disabled), .toolbar-reset:hover:not(:disabled), .cst-reset:hover:not(:disabled) {
     background: var(--um-green-tint); border-color: transparent;
+}
+.ir-detail-layers-btn:hover:not(.active, .is-active, :disabled), .ir-radar-mode-btn:hover:not(.active, .is-active, :disabled), .ir-measure-mode-btn:hover:not(.active, .is-active, :disabled),
+.ir-3d-mode-btn:hover:not(.active, .is-active, :disabled), .ir-global-toggle-btn:hover:not(.active, .is-active, :disabled) {
+    background: var(--map-btn-hover-bg); border-color: var(--map-btn-hover-line); color: #fff;
+}
+.rt-anim-btn:hover:not(.active, .is-active, :disabled), .rt-dock-var-btn:hover:not(.active, .is-active, :disabled), .ir-gen-cyc-btn:hover:not(.active, .is-active, :disabled),
+.tc-mw-play-btn:hover:not(.active, .is-active, :disabled), .tc-mw-live-btn:hover:not(.active, .is-active, :disabled), .sat-anim-btn:hover:not(.active, .is-active, :disabled) {
+    background: var(--map-btn-inset-hover-bg); border-color: var(--map-btn-hover-line); color: #fff;
 }
