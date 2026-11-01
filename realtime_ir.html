@@ -84,7 +84,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261031p3">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261101n1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -201,7 +201,7 @@
         <!-- Satellite feed staleness banner (shown when a GIBS layer
              has no recent tiles, e.g., GOES-West ingest stalled) -->
         <div id="ir-feed-banner" class="ir-feed-banner" style="display:none;" role="alert">
-            <span class="ir-feed-banner-icon" aria-hidden="true">&#9888;</span>
+            <span class="ir-feed-banner-icon" aria-hidden="true"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>
             <span id="ir-feed-banner-text"></span>
             <a class="ir-feed-banner-link" href="https://www.earthdata.nasa.gov/data/alerts-outages" target="_blank" rel="noopener">NASA status</a>
             <button class="ir-feed-banner-close" onclick="this.parentElement.style.display='none'" aria-label="Dismiss">&times;</button>
@@ -244,7 +244,7 @@
                 <span id="ir-detail-recon" class="ir-recon-badge" style="display:none;" role="button" tabindex="0"
                       onclick="window._reconOpenForStorm && window._reconOpenForStorm(this.dataset.atcf)"
                       onkeydown="if((event.key==='Enter'||event.key===' ')&&window._reconOpenForStorm){event.preventDefault();window._reconOpenForStorm(this.dataset.atcf);}"
-                      title="Aircraft reconnaissance active — click to open Live Flight">✈ RECON</span>
+                      title="Aircraft reconnaissance active — click to open Live Flight"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z"/></svg> RECON</span>
                 <!-- Official advisory link: status badges first (category, recon),
                      then this, then the export/view actions. -->
                 <a id="ir-official-link" class="ir-hdr-btn ir-official-link" href="#" target="_blank" rel="noopener"
@@ -892,7 +892,7 @@
                 <!-- Aircraft Recon Overlay (HDOB track + dropsondes + VDM) -->
                 <div class="ir-info-section" id="rt-recon-overlay-section" style="display:none;">
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">Recon ✈</h3>
+                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">Recon</h3>
                         <div style="display:flex;align-items:center;gap:6px;">
                             <button id="rt-recon-toggle-btn" onclick="window._rtToggleReconOverlay()"
                                 class="rt-model-toggle-btn">Recon</button>
@@ -1367,7 +1367,7 @@
                         <button class="sat-zoom-btn" data-deg="2" title="Inner core (2°)">2°</button>
                     </div>
                     <button id="sat-save" class="sat-anim-btn" title="Save image (PNG)">&#10515;</button>
-                    <button id="sat-save-gif" class="sat-anim-btn" title="Save GIF (Shift+click for dual panel)">&#127916;</button>
+                    <button id="sat-save-gif" class="sat-anim-btn" title="Save GIF (Shift+click for dual panel)" aria-label="Save GIF"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/></svg></button>
                     <span id="sat-load-status" class="sat-load-status"></span>
                 </div>
                 <div class="sat-anim-info">
@@ -1864,7 +1864,7 @@
                 </div>
                 <div class="seasonal-evo-slider-row" id="seasonal-evo-slider-row">
                     <button type="button" id="seasonal-evo-play" class="seasonal-evo-btn"
-                            title="Play / pause the animation">▶</button>
+                            title="Play / pause the animation">▶&#xFE0E;</button>
                     <div class="seasonal-evo-slider" id="seasonal-evo-slider"></div>
                     <span class="seasonal-evo-date" id="seasonal-evo-date">—</span>
                     <input type="date" id="seasonal-evo-date-jump"
@@ -2042,7 +2042,7 @@
                         </select>
                     </label>
                     <label>Statistic
-                        <select id="seasonal-corr-stat" title="Pearson is the literature convention (linear correlation). Spearman = correlation of ranks — robust to outlier years like 2005 NA, 1990 WP, 2018 EP, and captures monotonic-but-nonlinear SST↔ACE coupling.">
+                        <select id="seasonal-corr-stat" title="Pearson is the literature convention (linear correlation). Spearman = correlation of ranks — robust to outlier years like 2005 NA, 1990 WP, 2018 EP, and captures monotonic-but-nonlinear SST↔&#xFE0E;ACE coupling.">
                             <option value="pearson" selected>Pearson r (linear)</option>
                             <option value="spearman">Spearman ρ (rank, robust)</option>
                         </select>
@@ -2127,7 +2127,7 @@
                         </select>
                     </label>
                     <label>Statistic
-                        <select id="seasonal-an-stat" title="Pearson r weights linear SST↔ACE coupling. Spearman ρ uses rank-correlation: robust to outlier seasons and captures monotonic-but-nonlinear coupling. Toggle to compare LOO skill at the bottom of the table.">
+                        <select id="seasonal-an-stat" title="Pearson r weights linear SST↔&#xFE0E;ACE coupling. Spearman ρ uses rank-correlation: robust to outlier seasons and captures monotonic-but-nonlinear coupling. Toggle to compare LOO skill at the bottom of the table.">
                             <option value="pearson" selected>Pearson r</option>
                             <option value="spearman">Spearman ρ</option>
                         </select>
@@ -2226,7 +2226,7 @@
         <!-- Inner sub-tab strip -->
         <div class="recon-subbar">
             <button class="recon-sub-tab" data-sub="missions" onclick="window.switchReconSub('missions')">Missions</button>
-            <button class="recon-sub-tab active" data-sub="hdob" onclick="window.switchReconSub('hdob')"><span class="tab-full">Live Flight ✈</span><span class="tab-short">Live ✈</span></button>
+            <button class="recon-sub-tab active" data-sub="hdob" onclick="window.switchReconSub('hdob')"><span class="tab-full">Live Flight</span><span class="tab-short">Live</span></button>
             <button class="recon-sub-tab" data-sub="tdr" onclick="window.switchReconSub('tdr')"><span class="tab-full">Tail Doppler Radar</span><span class="tab-short">TDR</span></button>
             <button class="recon-sub-tab" data-sub="fl" onclick="window.switchReconSub('fl')">Flight-Level</button>
             <button class="recon-sub-tab" data-sub="vdm" onclick="window.switchReconSub('vdm')">VDM</button>
@@ -2238,7 +2238,7 @@
             <div class="recon-hdob-wrap">
                 <div class="rt-header recon-hdob-header">
                     <div>
-                        <h2 class="rt-header-title">Live Flight-Level Recon ✈</h2>
+                        <h2 class="rt-header-title">Live Flight-Level Recon</h2>
                         <p class="rt-header-desc">Aircraft reconnaissance flight-level data — USAF (30-s HDOB) &amp; NOAA (1-s) tracks, dropsondes, and VDM center fixes — time series synced to an interactive map, updating in real time.</p>
                     </div>
                     <div class="recon-hdob-controls">
@@ -2252,11 +2252,11 @@
                 <div id="recon-hdob-replay" class="recon-hdob-replay" style="display:none;" role="group" aria-label="Archive replay controls">
                     <div id="recon-hdob-replay-title" class="recon-hdob-replay-title"></div>
                     <div class="recon-hdob-replay-row">
-                        <button class="recon-hdob-gridbtn" onclick="window._reconArchiveStep('start')" title="Start of the first flight">⏮</button>
+                        <button class="recon-hdob-gridbtn" onclick="window._reconArchiveStep('start')" title="Start of the first flight">⏮&#xFE0E;</button>
                         <button class="recon-hdob-gridbtn" onclick="window._reconArchiveStep(-1)" title="Back 10 minutes">−10m</button>
-                        <button id="recon-hdob-replay-play" class="recon-hdob-gridbtn recon-hdob-replay-playbtn" onclick="window._reconArchivePlay()" title="Play / pause">▶</button>
+                        <button id="recon-hdob-replay-play" class="recon-hdob-gridbtn recon-hdob-replay-playbtn" onclick="window._reconArchivePlay()" title="Play / pause">▶&#xFE0E;</button>
                         <button class="recon-hdob-gridbtn" onclick="window._reconArchiveStep(1)" title="Forward 10 minutes">+10m</button>
-                        <button class="recon-hdob-gridbtn" onclick="window._reconArchiveStep('end')" title="End of the last flight (everything shown)">⏭</button>
+                        <button class="recon-hdob-gridbtn" onclick="window._reconArchiveStep('end')" title="End of the last flight (everything shown)">⏭&#xFE0E;</button>
                         <button id="recon-hdob-replay-peak" class="recon-hdob-gridbtn" style="display:none;color:#ec4899;" onclick="window._reconArchivePeak()" title="Jump the replay clock to the strongest SEAR 10-m estimate of the storm">Peak SEAR</button>
                         <input id="recon-hdob-replay-slider" class="recon-hdob-replay-slider" type="range" min="0" max="100" step="1" value="100"
                                oninput="window._reconArchiveSeek(this.value, false)" onchange="window._reconArchiveSeek(this.value, true)" aria-label="Replay time">
@@ -2441,9 +2441,9 @@
                                     <span class="explorer-level-value" id="rt-level-val">2.0 km</span>
                                 </div>
                                 <div class="anim-controls">
-                                    <button class="anim-btn" onclick="rtAnimStep(-1)" title="Previous level">◀</button>
-                                    <button class="anim-btn" id="rt-anim-play" onclick="rtAnimToggle()" title="Play/Pause">▶</button>
-                                    <button class="anim-btn" onclick="rtAnimStep(1)" title="Next level">▶▶</button>
+                                    <button class="anim-btn" onclick="rtAnimStep(-1)" title="Previous level">◀&#xFE0E;</button>
+                                    <button class="anim-btn" id="rt-anim-play" onclick="rtAnimToggle()" title="Play/Pause">▶&#xFE0E;</button>
+                                    <button class="anim-btn" onclick="rtAnimStep(1)" title="Next level">▶&#xFE0E;▶&#xFE0E;</button>
                                 </div>
                             </div>
 
@@ -2529,7 +2529,7 @@
                             <div class="action-section">
                                 <div class="action-section-head"><span class="action-section-label">Analysis</span><label class="az-coord-inline" title="Radial coordinate for the azimuthal mean">Azim. mean in<select id="rt-az-coord-mode" onchange="rtAzCoordChanged()"><option value="standard">Standard (km)</option><option value="anomaly">Z* anomaly (Fischer et al. 2025)</option></select></label></div>
                                 <div class="display-actions">
-                                <button class="cs-btn" id="rt-cs-btn" onclick="rtToggleCrossSection()" disabled>✂ <span class="cs-btn-full">Cross Section</span><span class="cs-btn-short">X-Sect</span></button>
+                                <button class="cs-btn" id="rt-cs-btn" onclick="rtToggleCrossSection()" disabled><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/></svg> <span class="cs-btn-full">Cross Section</span><span class="cs-btn-short">X-Sect</span></button>
                                 <button class="cs-btn" id="rt-az-btn" onclick="rtDispatchAzimuthalMean()" disabled>↻ <span class="cs-btn-full">Azim. Mean</span><span class="cs-btn-short">Azim</span></button>
                                 <button class="cs-btn is-tinted" data-accent="mw" id="rt-quad-btn" onclick="rtFetchQuadrants()" disabled>⊙ <span class="cs-btn-full">Shear Quads</span><span class="cs-btn-short">Quads</span></button>
                                 <button class="cs-btn" id="rt-vol-btn" onclick="rtFetch3DVolume()" disabled><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg><span class="cs-btn-full">3D Volume</span><span class="cs-btn-short">3D Vol</span></button>
@@ -2567,7 +2567,7 @@
                                 <div id="rt-ctrk-result"></div>
                             </div>
                             <select id="rt-sonde-select" onchange="rtSelectSonde(this.value)" disabled style="display:none; background:#1a1a2e; color:#6d28d9; border:1px solid rgba(168,85,247,0.35); border-radius:6px; padding:4px 8px; font-size:11px; cursor:pointer; max-width:220px; margin-top:4px;">
-                                <option value="">🪂 Select Sonde…</option>
+                                <option value="">Select sonde…</option>
                             </select>
                             <!-- Dropsonde Table + Wind Profile (shown when sondes loaded) -->
                             <div id="rt-sonde-table-panel" style="display:none;"></div>
@@ -2824,14 +2824,14 @@
     <script defer src="tc_mw_layer.js?v=20261020au1"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261010tm1"></script>
-    <script defer src="realtime_ir.js?v=20261031p3"></script>
+    <script defer src="realtime_ir.js?v=20261101n1"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays
          eager for the map-tab recon-overlay sonde skew-Ts. The recon /
          subseasonal / seasonal tab modules (~1 MB combined) lazy-load on first
          tab activation — see _lazyViewMods in the tab controller below. -->
-    <script defer src="satellite.js?v=20261020au1"></script>
+    <script defer src="satellite.js?v=20261101n1"></script>
 
     <script>
     /* Tab switching between Map, Satellite, Subseasonal, and Seasonal views */
@@ -2929,7 +2929,7 @@
            on every page visit. Scripts inject with async=false so multi-file
            lists execute in order; a failed load is dropped from the memo so
            the next tab click retries. */
-        var _LAZY_ASSET_V = '?v=20261031p6';
+        var _LAZY_ASSET_V = '?v=20261101n1';
         var _lazyViewMods = {
             recon:       { js: ['plotly_dark.js', 'tdr_view.js', 'realtime_tdr.js'] },
             subseasonal: { js: ['subseasonal_clock.js', 'realtime_subseasonal.js'] },

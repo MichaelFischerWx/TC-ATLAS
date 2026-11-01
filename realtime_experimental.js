@@ -1343,7 +1343,7 @@
             '<button id="exp-frv-prev" class="exp-range" title="Previous frame" ' +
             'aria-label="Previous frame">‹</button>' +
             '<button id="exp-frv-play" class="exp-range" ' +
-            'aria-label="Play frames">▶</button>' +
+            'aria-label="Play frames">▶\uFE0E</button>' +
             '<button id="exp-frv-next" class="exp-range" title="Next frame" ' +
             'aria-label="Next frame">›</button>' +
             '</span>' +
@@ -1386,7 +1386,7 @@
         var staleHtml = '';
         if (_index && (ageH === null || ageH > STALE_H)) {
             staleHtml =
-                '<div class="exp-stale">&#9888;&#65039; ' + M.name +
+                '<div class="exp-stale"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> ' + M.name +
                 ' updates are paused — the last successful run was ' +
                 (ageH === null ? 'an unknown time' :
                  ageH > 48 ? Math.round(ageH / 24) + ' days' :
@@ -2407,7 +2407,7 @@
            goes above the numbers, not in a footnote under them. */
         var prov = provisionalNote(j.storm, j);
         if (prov) {
-            html = '<div class="exp-prov-note">⚠️ ' + prov + '</div>' + html;
+            html = '<div class="exp-prov-note"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> ' + prov + '</div>' + html;
         }
         /* The producers stamp `model_version` / `model_version_note` into
            every payload (internal version strings: layer versions, member
@@ -2461,7 +2461,7 @@
                 'completed lifetime; “latest” values are the storm’s final analysis.</div>';
         }
         var prov = provisionalNote(j.storm, j);
-        if (prov) html += '<div class="exp-prov-note">⚠️ ' + prov + '</div>';
+        if (prov) html += '<div class="exp-prov-note"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> ' + prov + '</div>';
         html += '<div class="exp-score-top">' + windTile + presTile + '</div>';
         if (isV61(j)) html += '<div class="exp-hm" id="exp-howmade">' + howMadeHtml(j) + '</div>';
         var rows = [];
@@ -3043,7 +3043,7 @@
             }
             /* same caution as the page: no aircraft truth outside the NHC basins */
             if (/^(WP|IO|SH)/.test(j.storm)) {
-                y = cardWrap(ctx, '⚠ Provisional: this basin has no aircraft reconnaissance, so these estimates are not ' +
+                y = cardWrap(ctx, 'Provisional: this basin has no aircraft reconnaissance, so these estimates are not ' +
                     'verified against aircraft.', RX, y + 8, RW, 12.5, dark ? '#fbbf24' : '#b45309', 600, 17) - 3;
             }
             /* footer under the image (brand + disclaimer); the recent trace fills the right column down to it */
@@ -3230,7 +3230,7 @@
         }
         var prov = provisionalNote(j.storm, j);
         if (prov) {
-            html = '<div class="exp-prov-note">⚠️ ' + prov + '</div>' + html;
+            html = '<div class="exp-prov-note"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> ' + prov + '</div>' + html;
         }
         box.innerHTML = html;
         drawRiGuidance(j);
@@ -3535,7 +3535,7 @@
     function stopStripPlay() {
         if (_stripTimer) { clearInterval(_stripTimer); _stripTimer = null; }
         var b = document.getElementById('exp-frv-play');
-        if (b) b.textContent = '▶';
+        if (b) b.textContent = '▶\uFE0E';
     }
 
     /* Fetch + wire the viewer for the selected storm; hides itself when no

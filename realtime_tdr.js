@@ -41,6 +41,9 @@
     // when textContent used to be reassigned to emoji+label.
     var _ICON_PATHS = {
         satellite: '<path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/>',
+        alert:     '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+        scissors:  '<circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/>',
+        wind:      '<path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/>',
         plane:     '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z"/>',
         parachute: '<path d="M2 12a10 10 0 0 1 20 0"/><path d="M7 12l5 9"/><path d="M17 12l-5 9"/><path d="M12 12v9"/>',
         monitor:   '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
@@ -355,7 +358,7 @@
         window.switchReconSub(name || 'hdob');
     };
 
-    // Deep-link from a storm's detail view (the header "✈ RECON" badge) straight
+    // Deep-link from a storm's detail view (the header RECON badge) straight
     // to its Live-Flight recon. switchIRView('recon') activates the tab and
     // populates the storm picker ASYNCHRONOUSLY (active-storm list may still be in
     // flight), so poll briefly for this storm's option, then select it.
@@ -406,7 +409,7 @@
         { key: 'vdm',      name: 'VDM fixes',  color: '#ef4444', tip: 'Vortex Data Message center fixes (⊕)' },
         { key: 'sear',     name: 'SEAR',       color: '#ec4899', tip: 'SEAR pass centers, peaks and radials (experimental)' },
         { key: 'tdr',      name: 'TDR 10-m',   color: '#0891b2', tip: 'SEAR 10-m wind estimated from each P-3 tail-Doppler analysis (experimental)' },
-        { key: 'aircraft', name: 'Aircraft',   color: '#ca8a04', tip: 'Latest aircraft position (✈)' },
+        { key: 'aircraft', name: 'Aircraft',   color: '#ca8a04', tip: 'Latest aircraft position' },
         { key: 'old',      name: 'Older than 12 h', color: '#64748b', tip: 'Sondes, VDMs, SEAR passes and TDR analyses more than 12 h before the latest ob (hidden by default)' }
     ];
     // The live blob spans 24 h, so yesterday's sondes, fixes and TDR swath sat
@@ -417,7 +420,7 @@
     var _HDOB_STALE_MS = 12 * 3600000;
     var _hdobMissions = [], _hdobMissionInfo = {}, _hdobMissionTail = null;  // mission-centric fallback
     var _hdobLoggedLoad = false;  // fire recon_hdob_loaded once per selection, not per poll
-    var _hdobAircraftMarkers = [];  // ✈ glyph at each aircraft's latest ob, rotated to heading
+    var _hdobAircraftMarkers = [];  // plane icon at each aircraft's latest ob, rotated to heading
     // _hdobFlatObs is built lazily on first chart click (null = not yet built);
     // _hdobFlatSrc holds the aircraft set the last render was drawn from.
     var _hdobFitDone = false, _hdobHighlight = null, _hdobFlatObs = null,
@@ -638,7 +641,7 @@
         }
         // List ALL active storms (not just recon-flagged ones), so tonight's
         // target is selectable even before the first VDM fix flips has_recon.
-        // Recon-active storms sort first and are marked with ✈; the picker
+        // Recon-active storms sort first and are marked "· recon"; the picker
         // defaults to one of them when present.
         var storms = (typeof window._irGetActiveStorms === 'function') ? (window._irGetActiveStorms() || []) : [];
         var reconOpts = [], otherOpts = [];
@@ -660,7 +663,7 @@
         // Mission-centric fallback: standalone active flights NOT attributable to
         // any tracked storm (a flight into an undesignated disturbance that storm
         // attribution would miss). Ones flying a tracked storm are already covered
-        // by it — and they also FLAG it ✈ here, because a mission is airborne long
+        // by it — and they also FLAG it here, because a mission is airborne long
         // before has_recon (a 15-min server cache) catches up.
         _hdobMissionInfo = {};
         var missionOpts = [];
@@ -715,13 +718,13 @@
         for (var u = 0; u < uniq.length; u++) {
             var op = document.createElement('option');
             op.value = uniq[u].atcf;
-            op.textContent = (uniq[u].recon ? '✈ ' : '') + uniq[u].name + ' (' + uniq[u].atcf + ')';
+            op.textContent = uniq[u].name + ' (' + uniq[u].atcf + ')' + (uniq[u].recon ? ' · recon' : '');
             sel.appendChild(op);
         }
         for (var mo = 0; mo < missionOpts.length; mo++) {
             var mop = document.createElement('option');
             mop.value = 'mission:' + missionOpts[mo].tail;
-            mop.textContent = '✈ ' + _hdobTailDisplay(missionOpts[mo].tail) +
+            mop.textContent = _hdobTailDisplay(missionOpts[mo].tail) +
                 (missionOpts[mo].label ? ' · ' + missionOpts[mo].label : '') + ' (flight)';
             sel.appendChild(mop);
         }
@@ -886,7 +889,7 @@
                     (e.txt ? '<a href="' + e.txt + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">.txt</a>' : '') +
                     (e.nc ? ' <a href="' + e.nc + '" onclick="event.stopPropagation()">.nc</a>' : '') +
                     '</span></div>' +
-                    '<div class="recon-archive-cta">▶ Replay flights</div>' +
+                    '<div class="recon-archive-cta">▶\uFE0E Replay flights</div>' +
                     '</button>';
             }).join('');
         });
@@ -1067,7 +1070,7 @@
         var sl = document.getElementById('recon-hdob-replay-slider');
         if (sl && Math.abs(Number(sl.value) - A.cur / 60000) > 0.6) sl.value = Math.round(A.cur / 60000);
         var pb = document.getElementById('recon-hdob-replay-play');
-        if (pb) pb.textContent = A.playing ? '⏸' : '▶';
+        if (pb) pb.textContent = A.playing ? '⏸\uFE0E' : '▶\uFE0E';
         var pk = document.getElementById('recon-hdob-replay-peak'), top = _hdobArchivePeakPass();
         if (pk) {
             pk.style.display = top ? '' : 'none';
@@ -1221,7 +1224,7 @@
         var rows = [
             { sym: '<span class="recon-hdob-legend-diamond"></span>', label: 'Dropsonde' },
             { sym: '<span style="color:#f87171;font-size:14px;line-height:13px;">⊕</span>', label: 'Center fix (VDM)' },
-            { sym: '<span style="color:#eab308;font-size:12px;line-height:13px;">✈</span>', label: 'Aircraft (latest)' },
+            { sym: '<span style="display:inline-block;width:13px;height:13px;"><svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" style=\"display:block;filter:drop-shadow(0 0 1.5px rgba(0,0,0,0.8));\"><path d=\"M12 2 L14.2 10 L22 13.5 L22 15.5 L14.2 13.5 L13.4 19 L16 21 L16 22.3 L12 21.2 L8 22.3 L8 21 L10.6 19 L9.8 13.5 L2 15.5 L2 13.5 L9.8 10 Z\" fill=\"#fde047\" stroke=\"#1f2937\" stroke-width=\"0.7\" stroke-linejoin=\"round\"/></svg></span>', label: 'Aircraft (latest)' },
             { sym: '<span style="color:#ec4899;font-size:14px;line-height:13px;font-weight:600;">×</span>', label: 'SEAR pass center (prelim) · dotted = center track' },
             { sym: '<span style="color:#ec4899;font-size:13px;line-height:13px;">○</span>', label: 'SEAR peak 10-m est (exp) · kt + sector, radial to center' }
         ];
@@ -1390,9 +1393,9 @@
         box.style.display = '';
         box.innerHTML = '';
         var lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = 'Satellite'; box.appendChild(lbl);
-        var prev = document.createElement('button'); prev.textContent = '◀'; prev.title = 'Previous center pass';
+        var prev = document.createElement('button'); prev.textContent = '◀\uFE0E'; prev.title = 'Previous center pass';
         var cur = document.createElement('span'); cur.className = 'cur';
-        var next = document.createElement('button'); next.textContent = '▶'; next.title = 'Next center pass';
+        var next = document.createElement('button'); next.textContent = '▶\uFE0E'; next.title = 'Next center pass';
         var auto = document.createElement('button'); auto.textContent = _hdobFrozenAt ? 'Center pass' : 'Latest';
         auto.title = _hdobFrozenAt ? 'Frame nearest the median center-pass time' : 'Live imagery (latest frame)';
         auto.className = (_hdobPassSel == null) ? 'on' : '';
@@ -2038,8 +2041,8 @@
         var a = pick.a, h = '<div class="tt">SEAR 10-m from TDR <span class="exp">experimental</span></div>';
         if (an.length) {
             var lbl = a ? (TCTime.utc(a.t, { date: false }) + ' · ' + a.mission + ' (' + (pick.i + 1) + '/' + an.length + ')') : '—';
-            h += '<div class="nav"><button data-d="-1" title="Earlier analysis">◀</button><span>' + lbl + '</span>' +
-                 '<button data-d="1" title="Later analysis">▶</button>' +
+            h += '<div class="nav"><button data-d="-1" title="Earlier analysis">◀\uFE0E</button><span>' + lbl + '</span>' +
+                 '<button data-d="1" title="Later analysis">▶\uFE0E</button>' +
                  '<button data-d="0" class="' + (_hdobTdrSel ? '' : 'on') + '" title="Follow the selected pass / sortie time">Auto</button></div>';
         }
         if (!a) return h + '<div class="info">' + (pick.why || '') + '</div>';
@@ -2065,7 +2068,7 @@
              ' · no color = no TDR data below 1 km</div>';
         // only a thinly sampled peak gets a line (Michael 2026-10-09: the key is busy enough); details in the tooltip
         var sup = _hdobTdrSupport(a);
-        if (sup && sup.thin) h += '<div class="info sup thin" title="' + _hdobTdrEsc(sup.tip) + '">⚠ Thinly sampled: ' + sup.cells +
+        if (sup && sup.thin) h += '<div class="info sup thin" title="' + _hdobTdrEsc(sup.tip) + '">' + _icon('alert') + ' Thinly sampled: ' + sup.cells +
              ' radar cells' + (sup.robust != null ? ' · robust ' + sup.robust + ' kt' : '') + '</div>';
         h += '<div class="hov">Hover the map for a value</div>';
         return h;
@@ -2219,7 +2222,7 @@
                    (p.ctr_spread_km != null ? (p.center_method === 'HDOB_WC82' ? ', ' + Math.round(p.ctr_spread_km) + ' km from the centroid' : ', ' + Math.round(p.ctr_spread_km) + ' km apart') : '') + ' (no VDM yet)');
         }
         if (p.fix_dt_min != null && Math.abs(p.fix_dt_min) > 30) {
-            L.push('\u26a0 nearest center fix is ' + Math.round(Math.abs(p.fix_dt_min)) + ' min away \u2014 center extrapolated');
+            L.push(_icon('alert') + ' nearest center fix is ' + Math.round(Math.abs(p.fix_dt_min)) + ' min away \u2014 center extrapolated');
         }
         return L.join('<br>');
     }
@@ -2307,7 +2310,7 @@
         return (Math.atan2(y, x) / d2r + 360) % 360;
     }
 
-    /** ✈ marker at each aircraft's latest ob, rotated to its heading. */
+    /** Plane marker at each aircraft's latest ob, rotated to its heading. */
     function _hdobRenderAircraft(map, aircraft) {
         for (var i = 0; i < _hdobAircraftMarkers.length; i++) {
             try { map.removeLayer(_hdobAircraftMarkers[i]); } catch (e) {}
@@ -2821,7 +2824,7 @@
         var sflag = _hdobSondeFlag();
         if (sflag && searTile && searTile.valText !== 'pending') {
             // WL150 first, then the REDUCED 10-m value: the sonde's own 10-m wind is not what is shown (Michael, 09-30)
-            searSub += '<span class="recon-sonde-flag"> \u00b7 \u26a0 ' + _hdobSondeLink(sflag.top, 'eyewall sonde ' + TCTime.utc(sflag.top.t, { date: false })) +
+            searSub += '<span class="recon-sonde-flag"> \u00b7 ' + _icon('alert') + ' ' + _hdobSondeLink(sflag.top, 'eyewall sonde ' + TCTime.utc(sflag.top.t, { date: false })) +
                 ': WL150 ' + Math.round(sflag.top.wl150_kt) + ' kt \u2192 ~' + Math.round(sflag.top.sonde_10m_kt) + ' kt 10-m (reduced)</span>';
             searTip += ' ' + _hdobSondeFlagText(sflag).replace(/"/g, '&quot;');
         }
@@ -2838,7 +2841,7 @@
                 (tdr.a.max_r_nm != null ? ' · ' + Math.round(tdr.a.max_r_nm) + ' n mi from center' : '') +
                 // the peak's own support (2026-10-08) says more about this value than the area coverage within
                 // 60 km (~20-40% for most single analyses), which is only the fallback for older JSONs
-                (tdrSup ? (tdrSup.thin ? '<span class="recon-sonde-flag"> · \u26a0 thinly sampled: ' + tdrSup.cells + ' cells</span>' : '')
+                (tdrSup ? (tdrSup.thin ? '<span class="recon-sonde-flag"> · ' + _icon('alert') + ' thinly sampled: ' + tdrSup.cells + ' cells</span>' : '')
                         : (cov != null && cov < 0.3 ? ' · thin coverage' : '')),
                 'TDR SEAR: experimental SEAR 10-m estimate from the P-3 tail-Doppler analysis (its 500-m and 2-km winds replace the flight-level wind). ' +
                 'It sees the low-level eyewall directly and all around the storm, not only along the flight track, so it leads the flight-level SEAR when both exist; they differ most when the eyewall is surface-heavy or the vortex is tilted. ' +
@@ -2878,7 +2881,7 @@
             if (it.sonde) {   // the sonde the flag names opens its profile
                 var a = document.createElement('a'); a.href = '#'; a.className = 'recon-sonde-link';
                 a.setAttribute('data-t', it.sonde.t); a.setAttribute('data-tail', it.sonde.tail);
-                a.textContent = 'Open the ' + TCTime.utc(it.sonde.t, { date: false }) + ' sonde \u2197';
+                a.textContent = 'Open the ' + TCTime.utc(it.sonde.t, { date: false }) + ' sonde \u2197\uFE0E';
                 e.appendChild(document.createTextNode(' ')); e.appendChild(a);
             }
             if (it.sub && it.sub.length) {
@@ -4256,9 +4259,9 @@
         if (opts.length < 2 || !sel) return '';
         var i = opts.findIndex(function (o) { return o.value === sel.value; });
         return '<span class="case-nav-bar">' +
-            '<button class="case-nav-btn" onclick="rtStepAnalysis(-1)" title="Previous analysis"' + (i <= 0 ? ' disabled' : '') + '>\u25C0</button>' +
+            '<button class="case-nav-btn" onclick="rtStepAnalysis(-1)" title="Previous analysis"' + (i <= 0 ? ' disabled' : '') + '>\u25C0\uFE0E</button>' +
             '<span class="case-nav-pos">' + (i + 1) + ' of ' + opts.length + '</span>' +
-            '<button class="case-nav-btn" onclick="rtStepAnalysis(1)" title="Next analysis"' + (i >= opts.length - 1 ? ' disabled' : '') + '>\u25B6</button></span>';
+            '<button class="case-nav-btn" onclick="rtStepAnalysis(1)" title="Next analysis"' + (i >= opts.length - 1 ? ' disabled' : '') + '>\u25B6\uFE0E</button></span>';
     }
     window.rtStepAnalysis = function (d) {
         var opts = _rtFileOptions(), sel = document.getElementById('rt-file-select');
@@ -4658,7 +4661,7 @@
         if (!_rtCsMapA) {
             _rtCsMapA = e.latlng; _rtCsPointA = km;
             _rtCsMapLayers.push(_rtCsMapDot(e.latlng));
-            if (btn) btn.textContent = '✂ Click point B on the map…';
+            if (btn) btn.innerHTML = _icon('scissors') + ' Click point B on the map…';
             if (status) status.textContent = 'A: (' + km.x.toFixed(0) + ', ' + km.y.toFixed(0) + ') km — now click the end point';
         } else {
             var a = _rtCsPointA, b = km, llA = _rtCsMapA;
@@ -4668,7 +4671,7 @@
             _rtCsMapLayers.push(L.polyline([[llA.lat, llA.lng], [e.latlng.lat, e.latlng.lng]], { color: '#ef4444', weight: 2.5, interactive: false }).addTo(_rtMap));
             _rtCsMapLayers.push(_rtCsMapDot(e.latlng));
             var w = document.getElementById('rt-map-wrapper'); if (w) w.classList.remove('rt-cs-picking');
-            if (btn) { btn.classList.remove('active'); btn.textContent = '✂ Cross Section'; }
+            if (btn) { btn.classList.remove('active'); btn.innerHTML = _icon('scissors') + ' Cross Section'; }
             if (status) status.textContent = 'A→B: (' + a.x.toFixed(0) + ',' + a.y.toFixed(0) + ') → (' + b.x.toFixed(0) + ',' + b.y.toFixed(0) + ') km';
             rtFetchCrossSection(a, b);
         }
@@ -4840,13 +4843,13 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
     window.rtAnimToggle = function () { if (_rtAnimPlaying) rtAnimStop(); else rtAnimStart(); };
     function rtAnimStart() {
         _rtAnimPlaying = true;
-        var btn = document.getElementById('rt-anim-play'); if (btn) { btn.textContent = '⏸'; btn.classList.add('active'); }
+        var btn = document.getElementById('rt-anim-play'); if (btn) { btn.textContent = '⏸\uFE0E'; btn.classList.add('active'); }
         rtAnimTick();
     }
     function rtAnimStop() {
         _rtAnimPlaying = false;
         if (_rtAnimTimer) { clearTimeout(_rtAnimTimer); _rtAnimTimer = null; }
-        var btn = document.getElementById('rt-anim-play'); if (btn) { btn.textContent = '▶'; btn.classList.remove('active'); }
+        var btn = document.getElementById('rt-anim-play'); if (btn) { btn.textContent = '▶\uFE0E'; btn.classList.remove('active'); }
     }
     function rtAnimTick() {
         if (!_rtAnimPlaying) return;
@@ -4872,11 +4875,11 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var onMap = _rtDrapeOn;
         _rtCsMapClear();
         if (_rtCsMode) {
-            btn.classList.add('active'); btn.textContent = '✂ Click point A on ' + (onMap ? 'the map…' : 'plot…');
+            btn.classList.add('active'); btn.innerHTML = _icon('scissors') + ' Click point A on ' + (onMap ? 'the map…' : 'plot…');
             if (status) status.textContent = 'Click the starting point on the ' + (onMap ? 'map' : 'plan view above');
             if (onMap) { var w = document.getElementById('rt-map-wrapper'); if (w) w.classList.add('rt-cs-picking'); }
         } else {
-            btn.classList.remove('active'); btn.textContent = '✂ Cross Section';
+            btn.classList.remove('active'); btn.innerHTML = _icon('scissors') + ' Cross Section';
             if (status) status.textContent = '';
         }
     };
@@ -4889,7 +4892,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
 
         if (!_rtCsPointA) {
             _rtCsPointA = { x: x, y: y };
-            var btn = document.getElementById('rt-cs-btn'); if (btn) btn.textContent = '✂ Click point B…';
+            var btn = document.getElementById('rt-cs-btn'); if (btn) btn.innerHTML = _icon('scissors') + ' Click point B…';
             if (status) status.textContent = 'A: (' + x.toFixed(0) + ', ' + y.toFixed(0) + ') km — now click end point';
             var shapes = (plotDiv.layout.shapes || []).slice();
             shapes.push({ type: 'circle', xref: 'x', yref: 'y', x0: x - 4, y0: y - 4, x1: x + 4, y1: y + 4, fillcolor: '#ef4444', line: { color: 'white', width: 1.5 } });
@@ -4900,7 +4903,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         } else {
             var a = _rtCsPointA, b = { x: x, y: y };
             _rtCsMode = false; _rtCsPointA = null; _rtRemoveRubberBand();
-            var btn2 = document.getElementById('rt-cs-btn'); if (btn2) { btn2.classList.remove('active'); btn2.textContent = '✂ Cross Section'; }
+            var btn2 = document.getElementById('rt-cs-btn'); if (btn2) { btn2.classList.remove('active'); btn2.innerHTML = _icon('scissors') + ' Cross Section'; }
             if (status) status.textContent = 'A→B: (' + a.x.toFixed(0) + ',' + a.y.toFixed(0) + ') → (' + b.x.toFixed(0) + ',' + b.y.toFixed(0) + ') km';
             var shapes2 = (plotDiv.layout.shapes || []).slice();
             shapes2.push(
@@ -5330,9 +5333,9 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         ctrl.innerHTML =
             '<div class="ir-ctrl-row">' +
                 '<button class="ir-ctrl-btn" id="rt-map-ir-toggle" onclick="rtToggleMapIRVisibility()">' + _icon('satellite') + 'IR On</button>' +
-                '<button class="ir-ctrl-btn' + disabledCls + '" id="rt-map-ir-step-back" onclick="rtMapIRAnimStep(1)" title="Earlier">◀</button>' +
-                '<button class="ir-ctrl-btn' + disabledCls + '" id="rt-map-ir-play" onclick="rtMapIRAnimToggle()" title="Play / Pause">▶</button>' +
-                '<button class="ir-ctrl-btn' + disabledCls + '" id="rt-map-ir-step-fwd" onclick="rtMapIRAnimStep(-1)" title="Later">▶</button>' +
+                '<button class="ir-ctrl-btn' + disabledCls + '" id="rt-map-ir-step-back" onclick="rtMapIRAnimStep(1)" title="Earlier">◀\uFE0E</button>' +
+                '<button class="ir-ctrl-btn' + disabledCls + '" id="rt-map-ir-play" onclick="rtMapIRAnimToggle()" title="Play / Pause">▶\uFE0E</button>' +
+                '<button class="ir-ctrl-btn' + disabledCls + '" id="rt-map-ir-step-fwd" onclick="rtMapIRAnimStep(-1)" title="Later">▶\uFE0E</button>' +
                 '<input type="range" id="rt-map-ir-slider" min="0" max="' + (n - 1) + '" value="' + (n - 1) + '"' +
                     disabledAttr +
                     ' oninput="rtMapIRSliderInput(parseInt(this.max) - parseInt(this.value))" class="ir-slider">' +
@@ -5358,7 +5361,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             _rtMapIRAnimPlaying = false;
             if (_rtMapIRAnimTimer) { clearTimeout(_rtMapIRAnimTimer); _rtMapIRAnimTimer = null; }
             var btn = document.getElementById('rt-map-ir-play');
-            if (btn) btn.textContent = '▶';
+            if (btn) btn.textContent = '▶\uFE0E';
         } else {
             _rtMapIRAnimPlaying = true;
             // Start from oldest loaded frame
@@ -5369,7 +5372,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             rtIRShowFrame(_rtIRAnimFrame);
             _rtUpdateMapIRSlider();
             var playBtn = document.getElementById('rt-map-ir-play');
-            if (playBtn) playBtn.textContent = '⏸';
+            if (playBtn) playBtn.textContent = '⏸\uFE0E';
             _rtMapIRAnimTick();
         }
         // Mirror play state on the content-panel Loop pill (the map play button
@@ -5827,7 +5830,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             _rtIRAnimPlaying = true;
             // Update map play button
             var mapBtn = document.getElementById('rt-map-ir-play');
-            if (mapBtn) mapBtn.textContent = '⏸';
+            if (mapBtn) mapBtn.textContent = '⏸\uFE0E';
             // Start from earliest frame (highest index)
             for (var i = _rtIRFrameURLs.length - 1; i >= 0; i--) {
                 if (_rtIRFrameURLs[i]) { _rtIRAnimFrame = i; break; }
@@ -5866,7 +5869,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         _rtIRAnimPlaying = false;
         if (_rtIRAnimTimer) { clearTimeout(_rtIRAnimTimer); _rtIRAnimTimer = null; }
         var mapBtn = document.getElementById('rt-map-ir-play');
-        if (mapBtn) mapBtn.textContent = '▶';
+        if (mapBtn) mapBtn.textContent = '▶\uFE0E';
     }
 
     window.rtIRAnimStep = function (dir) {
@@ -6184,7 +6187,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         try { Plotly.purge('rt-sonde-wind'); } catch (e) { /* ok */ }
         // Hide and reset sonde dropdown
         var sel = document.getElementById('rt-sonde-select');
-        if (sel) { sel.style.display = 'none'; sel.disabled = true; sel.innerHTML = '<option value="">\uD83E\uDE82 Select Sonde\u2026</option>'; }
+        if (sel) { sel.style.display = 'none'; sel.disabled = true; sel.innerHTML = '<option value="">Select Sonde\u2026</option>'; }
         var btn = document.getElementById('rt-sonde-btn');
         if (btn) {
             btn.disabled = true;
@@ -6480,13 +6483,13 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 type: 'scatter', mode: 'markers',
                 marker: { symbol: 'circle-open', size: isBold ? 10 : 7, color: color, line: { width: isBold ? 2.5 : 1.5, color: color } },
                 hoverinfo: 'text',
-                hovertext: ['<b>\uD83E\uDE82 ' + sondeLabel + ' \u2014 LAUNCH</b>' +
+                hovertext: ['<b>' + sondeLabel + ' \u2014 LAUNCH</b>' +
                     '<br>Alt: ' + launchAlt +
                     '<br>Time: ' + _rtSondeTime(sonde) + (tOffStr ? ' (' + tOffStr + ')' : '') +
                     '<br>Max Wind: ' + maxWspdStr + ' m/s  |  Drift: ' + driftKm + ' km' +
                     (sonde.platform ? '<br>' + sonde.platform + ' / ' + sonde.flight : '') +
                     (sonde.comments ? '<br>' + sonde.comments : '') +
-                    '<br><i>\u25B6 Click for Skew-T</i>'],
+                    '<br><i>\u25B6\uFE0E Click for Skew-T</i>'],
                 showlegend: false,
                 _rtSonde: true,
                 _rtSondeIdx: idx,
@@ -6510,14 +6513,14 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 textposition: 'top right',
                 textfont: { color: color, size: isBold ? 12 : 10, family: 'monospace' },
                 hoverinfo: 'text',
-                hovertext: ['<b>\uD83E\uDE82 ' + sondeLabel + ' \u2014 SURFACE</b>' +
+                hovertext: ['<b>' + sondeLabel + ' \u2014 SURFACE</b>' +
                     '<br>Alt: ' + sfcAlt +
                     (sfcWspd != null ? '<br>Sfc Wind: ' + sfcWspd.toFixed(1) + ' m/s' : '') +
                     (sfcTemp != null ? '<br>Sfc Temp: ' + sfcTemp.toFixed(1) + ' \u00b0C' : '') +
                     '<br>Max Wind: ' + maxWspdStr + ' m/s  |  Drift: ' + driftKm + ' km' +
                     (sonde.hit_surface ? '<br>Hit Surface' : '') +
                     (sonde.comments ? '<br>' + sonde.comments : '') +
-                    '<br><i>\u25B6 Click for Skew-T</i>'],
+                    '<br><i>\u25B6\uFE0E Click for Skew-T</i>'],
                 showlegend: false,
                 _rtSonde: true,
                 _rtSondeIdx: idx,
@@ -6530,13 +6533,13 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 // Get wind speed for color
                 var wspdColor = interpPt.wspd != null ? _sondeWindColor(interpPt.wspd) : color;
                 var wspdText = interpPt.wspd != null ? interpPt.wspd.toFixed(1) + ' m/s' : '';
-                var hoverContent = '<b>\uD83E\uDE82 ' + sondeLabel + ' @ ' + currentLevel.toFixed(1) + ' km</b>' +
+                var hoverContent = '<b>' + sondeLabel + ' @ ' + currentLevel.toFixed(1) + ' km</b>' +
                     (wspdText ? '<br>Wind: ' + wspdText : '') +
                     (interpPt.temp != null ? '<br>Temp: ' + interpPt.temp.toFixed(1) + ' \u00b0C' : '') +
                     '<br>Max Wind: ' + maxWspdStr + ' m/s' +
                     (tOffStr ? '<br>Offset: ' + tOffStr : '') +
                     (sonde.comments ? '<br>' + sonde.comments : '') +
-                    '<br><i>\u25B6 Click for Skew-T</i>';
+                    '<br><i>\u25B6\uFE0E Click for Skew-T</i>';
                 // Invisible larger hit-target underneath for easier clicking
                 traces.push({
                     x: [interpPt.x], y: [interpPt.y],
@@ -6707,7 +6710,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             var platLabel = sonde.platform || '';
             var flightLabel = sonde.flight || '';
             titleEl.innerHTML =
-                '\uD83E\uDE82 ' + (platLabel || '') +
+                _icon('parachute') + ' ' + (platLabel || '') +
                 (flightLabel ? ' <span style="color:#9ca3af;">(' + flightLabel + ')</span>' : '') +
                 '<br>' +
                 '<span style="color:#94a3b8;">' + (sonde.sonde_id || 'Sonde ' + (sondeIdx + 1)) +
@@ -6755,7 +6758,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
 
         // Sonde metadata
         html += '<div style="color:#c4b5fd;font-weight:600;margin-bottom:6px;">' +
-            '\uD83E\uDE82 ' + (sonde.sonde_id || 'Unknown') + '</div>';
+            _icon('parachute') + ' ' + (sonde.sonde_id || 'Unknown') + '</div>';
         html += '<div style="margin-bottom:8px;font-size:10px;color:#8899aa;">' +
             (sonde.platform || '') + ' / ' + (sonde.flight || '') + '<br>' +
             _rtSondeTime(sonde) + '<br>' +
@@ -6933,7 +6936,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         var sondes = _rtSondeData.dropsondes;
         var html = '<div style="padding:6px 8px;background:rgba(168,85,247,0.06);border-top:1px solid rgba(168,85,247,0.15);">';
         html += '<div style="color:#c4b5fd;font-size:12px;font-weight:600;margin-bottom:4px;">' +
-            '\uD83E\uDE82 Dropsondes (' + sondes.length + ')';
+            _icon('parachute') + ' Dropsondes (' + sondes.length + ')';
         // Add platform/flight if available from first sonde
         if (sondes.length > 0) {
             var s0 = sondes[0];
@@ -7244,7 +7247,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             var platLabel = sonde.platform || '';
             var flightLabel = sonde.flight || '';
             titleEl.innerHTML =
-                '\uD83C\uDF2C\uFE0F ' + (platLabel || '') +
+                _icon('wind') + ' ' + (platLabel || '') +
                 (flightLabel ? ' <span style="color:#9ca3af;">(' + flightLabel + ')</span>' : '') +
                 '<br>' +
                 '<span style="color:#94a3b8;">' + (sonde.sonde_id || 'Sonde ' + (sondeIdx + 1)) +
@@ -7351,7 +7354,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         if (!_rtSondeData || !_rtSondeData.dropsondes) return;
         var sondes = _rtSondeData.dropsondes;
 
-        var optionsHtml = '<option value="">\uD83E\uDE82 Select Sonde\u2026</option>';
+        var optionsHtml = '<option value="">Select Sonde\u2026</option>';
         for (var i = 0; i < sondes.length; i++) {
             var s = sondes[i];
             var tOff = s.time_offset_min != null ?
@@ -7460,7 +7463,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                     var wspd = p.wspd[i];
                     colors.push(wspd != null ? wspd : 0);
                     texts.push(
-                        '<b>\uD83E\uDE82 ' + sonde.sonde_id + '</b>' +
+                        '<b>' + sonde.sonde_id + '</b>' +
                         '<br>Alt: ' + p.alt_km[i].toFixed(2) + ' km' +
                         (wspd != null ? '<br>Wind: ' + wspd.toFixed(1) + ' m/s' : '') +
                         (p.temp[i] != null ? '<br>Temp: ' + p.temp[i].toFixed(1) + ' \u00b0C' : '')
@@ -7479,7 +7482,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 text: texts,
                 hoverinfo: 'text',
                 showlegend: false,
-                name: '\uD83E\uDE82 ' + (sonde.sonde_id || '#' + (idx + 1))
+                name: '' + (sonde.sonde_id || '#' + (idx + 1))
             });
 
             // Launch marker (larger, at top)
@@ -7490,7 +7493,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 marker: { size: 6, color: color, symbol: 'circle',
                           line: { color: '#fff', width: 1 } },
                 hoverinfo: 'text',
-                text: ['\uD83E\uDE82 Launch: ' + sonde.sonde_id],
+                text: ['Launch: ' + sonde.sonde_id],
                 showlegend: false
             });
 
@@ -7502,7 +7505,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
                 marker: { size: 6, color: color, symbol: 'diamond',
                           line: { color: '#fff', width: 1 } },
                 hoverinfo: 'text',
-                text: ['\uD83E\uDE82 Surface: ' + sonde.sonde_id],
+                text: ['Surface: ' + sonde.sonde_id],
                 showlegend: false
             });
         });
@@ -7722,7 +7725,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
         if (closest) {
             var acIcon = L.divIcon({
                 className: 'fl-aircraft-icon',
-                html: '<div style="font-size:16px;text-shadow:0 0 6px rgba(0,0,0,0.8);">\u2708</div>',
+                html: '<svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" style="display:block;filter:drop-shadow(0 0 1.5px rgba(0,0,0,0.8));"><path d="M12 2 L14.2 10 L22 13.5 L22 15.5 L14.2 13.5 L13.4 19 L16 21 L16 22.3 L12 21.2 L8 22.3 L8 21 L10.6 19 L9.8 13.5 L2 15.5 L2 13.5 L9.8 10 Z" fill="#fde047" stroke="#1f2937" stroke-width="0.7" stroke-linejoin="round"/></svg>',
                 iconSize: [20, 20],
                 iconAnchor: [10, 10]
             });
@@ -7733,7 +7736,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             var sm = _rtFLData.summary || {};
             var popupHtml =
                 '<div style="font-family:DM Sans,sans-serif;font-size:12px;line-height:1.6;min-width:200px;">' +
-                '<strong style="font-size:13px;color:#60a5fa;">\u2708 Flight-Level Data</strong><br>' +
+                '<strong style="font-size:13px;color:#60a5fa;">' + _icon('plane') + ' Flight-Level Data</strong><br>' +
                 '<span style="color:#aaa;">' + (_rtFLData.mission_id || '') + '</span><br>' +
                 (sm.mean_alt_m != null ? 'Mean Alt: <strong>' + (sm.mean_alt_m / 1000).toFixed(1) + ' km</strong><br>' : '') +
                 (sm.max_fl_wspd_ms != null ? 'Max FL Wind: <strong style="color:' + _flWindColor(sm.max_fl_wspd_ms) + ';">' + sm.max_fl_wspd_ms.toFixed(1) + ' m/s (' + (sm.max_fl_wspd_ms * 1.94384).toFixed(0) + ' kt)</strong><br>' : '') +
@@ -7813,7 +7816,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             }
 
             texts.push(
-                '<b>\u2708 Flight Level</b><br>' +
+                '<b>Flight Level</b><br>' +
                 'Wind: ' + (ws != null ? ws.toFixed(1) + ' m/s (' + (ws * 1.94384).toFixed(0) + ' kt)' : 'N/A') + '<br>' +
                 'Wind Dir: ' + (o.fl_wdir_deg != null ? o.fl_wdir_deg.toFixed(0) + '\u00b0' : 'N/A') + '<br>' +
                 altStr +
@@ -7853,7 +7856,7 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             },
             text: texts,
             hovertemplate: '%{text}<extra></extra>',
-            name: '\u2708 Flight Level',
+            name: 'Flight Level',
             showlegend: true,
         };
 
@@ -9082,10 +9085,10 @@ function _rtWindMarker() { return _rtMaxMarkerEnabled && rtIsWindVariable((docum
             if (layerStrip && layerStrip.parentElement) layerStrip.parentElement.insertBefore(tiltStatusEl, layerStrip.nextSibling);
         }
         tiltStatusEl.style.display = 'block';
-        tiltStatusEl.textContent = '\u23F3 Computing WCM centres at 16 heights (0.5\u20138 km)\u2026 0s';
+        tiltStatusEl.textContent = 'Computing WCM centres at 16 heights (0.5\u20138 km)\u2026 0s';
         var tiltTimer = setInterval(function () {
             var elapsed = ((Date.now() - tiltStartTime) / 1000).toFixed(0);
-            tiltStatusEl.textContent = '\u23F3 Computing WCM centres at 16 heights (0.5\u20138 km)\u2026 ' + elapsed + 's';
+            tiltStatusEl.textContent = 'Computing WCM centres at 16 heights (0.5\u20138 km)\u2026 ' + elapsed + 's';
         }, 1000);
 
         var url = API_BASE + RT_PREFIX + '/tilt_profile?file_url=' + encodeURIComponent(_currentFileUrl);

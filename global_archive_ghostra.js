@@ -3057,7 +3057,7 @@
         });
         y += rbH + 18;
         if (!nhc) {
-            cardWrap(ctx, '⚠ No aircraft reconnaissance in this basin: these estimates are not verified against aircraft.',
+            cardWrap(ctx, 'No aircraft reconnaissance in this basin: these estimates are not verified against aircraft.',
                 RX, y, RW, 12.5, dark ? '#fbbf24' : '#b45309', 600, 17);
         }
 

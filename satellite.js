@@ -3568,7 +3568,7 @@
                 var link = L.DomUtil.create('a', 'sat-map-ctrl-btn', bar);
                 link.href = '#';
                 link.title = 'Toggle pane sync — when off, each map pans independently';
-                link.innerHTML = '🔗';
+                link.innerHTML = '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>'; link.setAttribute('aria-label', 'Sync panes');
                 if (_satMapSyncEnabled) link.classList.add('active');
                 L.DomEvent.on(link, 'click', function (e) {
                     L.DomEvent.preventDefault(e); L.DomEvent.stop(e);

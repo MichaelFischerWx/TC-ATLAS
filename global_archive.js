@@ -10,6 +10,9 @@
 // use in innerHTML; each icon inherits the button's accent color
 // via stroke:currentColor. ───────────────────────────────────
 var _ICON_PATHS = {
+    mountain:  '<path d="m8 3 4 8 5-5 5 15H2L8 3z"/>',
+    sliders:   '<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
+    alert:     '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
     plane:     '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z"/>',
     dish:      '<path d="M4 10a7.31 7.31 0 0 0 10 10Z"/><path d="m9 15 3-3"/><path d="M17 13a6 6 0 0 0-6-6"/><path d="M21 13A10 10 0 0 0 11 3"/>',
     chartBar:  '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
@@ -1186,10 +1189,10 @@ function _arch3DEnsureTilt() {
         'border-radius:10px;padding:8px 11px;box-shadow:0 4px 18px rgba(0,0,0,0.45);' +
         'font:600 11px/1.2 "DM Sans",system-ui,sans-serif;color:#cbd5e1;';
     box.innerHTML = '<div style="display:grid;grid-template-columns:auto 120px 36px;align-items:center;gap:6px 8px;">' +
-        '<span title="Camera tilt — 0° top-down, 80° near-horizon. Shortcut: hold Shift and drag the map up/down. Or right-/ctrl-drag to orbit.">⛰ Tilt</span>' +
+        '<span title="Camera tilt — 0° top-down, 80° near-horizon. Shortcut: hold Shift and drag the map up/down. Or right-/ctrl-drag to orbit.">' + _icon('mountain') + ' Tilt</span>' +
         '<input id="arch-3d-tilt" type="range" min="0" max="80" step="1" style="accent-color:#4a9b6e;cursor:pointer;">' +
         '<span id="arch-3d-tilt-val" style="text-align:right;color:#F47321;font-weight:600;font-variant-numeric:tabular-nums;"></span>' +
-        '<span title="Vertical amplification of the IR cloud-top relief (GPU only).">↕ Height</span>' +
+        '<span title="Vertical amplification of the IR cloud-top relief (GPU only).">↕\uFE0E Height</span>' +
         '<input id="arch-3d-exag" type="range" min="1" max="8" step="0.5" style="accent-color:#4a9b6e;cursor:pointer;">' +
         '<span id="arch-3d-exag-val" style="text-align:right;color:#F47321;font-weight:600;font-variant-numeric:tabular-nums;"></span></div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;">' +
@@ -1839,7 +1842,7 @@ function gaOnPlot(plotPromise, el, evt, fn) {
 //   • header → one-line pill; the five actions fold into a "⋯" menu
 //   • overlay toggles → a vertical icon rail on the left
 //   • IR bar → play/step + a timeline STRIP (intensity curve drawn under the
-//     scrubber) + time; everything else behind one ⚙ popover
+//     scrubber) + time; everything else behind one settings popover
 //   • drawer starts closed; a tool that shows a control panel opens it
 function _gaHudInit() {
     var main = document.querySelector('#tab-detail .detail-main');
@@ -1889,7 +1892,7 @@ function _gaHudInit() {
         });
         var opBtn = row1.querySelector('.ir-opacity-btn'); if (opBtn) moreRow.insertBefore(opBtn, moreRow.children[3] || null);
         var row2 = irbar.querySelector('.ir-bar-row2'); if (row2) more.appendChild(row2);
-        var gear = document.createElement('button'); gear.type = 'button'; gear.className = 'ga-btn ga-btn-sm ir-bar-gear'; gear.title = 'Loop settings: speed, opacity, colormap, context, 3D, export'; gear.innerHTML = '&#9881;';
+        var gear = document.createElement('button'); gear.type = 'button'; gear.className = 'ga-btn ga-btn-sm ir-bar-gear'; gear.title = 'Loop settings: speed, opacity, colormap, context, 3D, export'; gear.innerHTML = _icon('sliders'); gear.setAttribute('aria-label', 'Loop settings');
         gear.onclick = function (e) { e.stopPropagation(); more.hidden = !more.hidden; gear.classList.toggle('active', !more.hidden); };
         document.addEventListener('click', function (e) { if (!more.hidden && !more.contains(e.target) && e.target !== gear) { more.hidden = true; gear.classList.remove('active'); } });
         row1.appendChild(gear); irbar.appendChild(more);
@@ -2126,7 +2129,7 @@ function loadData() {
             console.error('Failed to load storms:', err);
             if (loadingEl) loadingEl.innerHTML = '<span style="color:#f87171;">Failed to load storm data. Check console.</span>';
             var _loader = document.getElementById('ga-map-loader');
-            if (_loader) _loader.innerHTML = '<div style="color:#ef4444;font-size:14px;">\u26A0 Could not load storm data. Try refreshing.</div>';
+            if (_loader) _loader.innerHTML = '<div style="color:#ef4444;font-size:14px;">' + _icon('alert') + ' Could not load storm data. Try refreshing.</div>';
         });
 
     // Load track data — try chunked manifest first, fall back to single file.
@@ -6621,7 +6624,7 @@ function stopIRPlayback() {
     if (irTimer) cancelAnimationFrame(irTimer);
     irTimer = null;
     _cacheIREls();
-    if (_irElPlayBtn) _irElPlayBtn.innerHTML = '&#9654; Play';
+    if (_irElPlayBtn) _irElPlayBtn.innerHTML = '&#9654;&#xFE0E; Play';
 }
 
 window.seekIRFrame = function (val) {
@@ -10642,13 +10645,13 @@ window.toggleCompareIRPlay = function (side) {
     if (s.playing) {
         cancelAnimationFrame(s.timer); s.timer = null; s.playing = false;
         var btn = document.getElementById('compare-ir-play-' + side);
-        if (btn) btn.innerHTML = '&#9654; Play';
+        if (btn) btn.innerHTML = '&#9654;&#xFE0E; Play';
         if (_cmpIR.sync) {
             var other = side === 'left' ? 'right' : 'left';
             var os = _cmpIR[other];
             if (os.playing) { cancelAnimationFrame(os.timer); os.timer = null; os.playing = false; }
             var obtn = document.getElementById('compare-ir-play-' + other);
-            if (obtn) obtn.innerHTML = '&#9654; Play';
+            if (obtn) obtn.innerHTML = '&#9654;&#xFE0E; Play';
         }
     } else {
         s.playing = true;
@@ -13410,7 +13413,7 @@ var _gaFL1sFireNow = null;  // fires the pending prefetch immediately (1s button
 function _gaFLPrefetch1s(fileUrl, baseUrl, json) {
     if (!json || !json.has_1s || (json.obs_1s && json.obs_1s.length > 0)) return;
     var btn1s = document.getElementById('ga-fl-res-1s');
-    if (btn1s) { btn1s.style.display = ''; btn1s.style.opacity = '0.5'; btn1s.textContent = '1s ⏳'; }
+    if (btn1s) { btn1s.style.display = ''; btn1s.style.opacity = '0.5'; btn1s.textContent = '1s …'; }
     if (_gaFL1sTimer) { clearTimeout(_gaFL1sTimer); _gaFL1sTimer = null; }
     if (_gaFL1sAbort) _gaFL1sAbort.abort();
     var ctrl = new AbortController();
@@ -13435,7 +13438,7 @@ function _gaFLPrefetch1s(fileUrl, baseUrl, json) {
             })
             .catch(function (err) {
                 if (err && err.name === 'AbortError') return;
-                if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s ❌'; }
+                if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s ✕'; }
             });
     };
     _gaFL1sFireNow = fire;

@@ -3755,7 +3755,7 @@ function _renderSubseasonalSource() {
     if (!rec) { if (el) el.textContent = ''; return; }
     function link(href, txt) {
         if (!href) return txt;
-        return '<a href="' + _escapeHtml(href) + '" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">' + _escapeHtml(txt) + ' ↗</a>';
+        return '<a href="' + _escapeHtml(href) + '" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">' + _escapeHtml(txt) + ' ↗\uFE0E</a>';
     }
     // Inline (top of section): short attribution that updates on mode change.
     if (inlineEl) {

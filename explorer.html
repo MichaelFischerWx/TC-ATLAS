@@ -61,7 +61,7 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundle + parser-injected map engine, discoverable
          from byte 0. Tokens MUST match the script tags below. -->
-    <link rel="preload" as="script" href="tc_radar_app.js?v=20261031p3">
+    <link rel="preload" as="script" href="tc_radar_app.js?v=20261101n1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261031p6">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261031p6">
@@ -122,7 +122,7 @@
             </div>
             <button class="toolbar-explore-btn" id="explore-btn" onclick="exploreCaseGo()" disabled aria-label="Explore selected case">Explore →</button>
             <div class="toolbar-sep" aria-hidden="true"></div>
-            <button class="filter-toggle-btn" id="filter-toggle" onclick="toggleFilterDrawer()" aria-expanded="false" aria-controls="filter-drawer"><span style="font-size:13px;" aria-hidden="true">&#9881;</span> Filters</button>
+            <button class="filter-toggle-btn" id="filter-toggle" onclick="toggleFilterDrawer()" aria-expanded="false" aria-controls="filter-drawer"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg> Filters</button>
             <button class="toolbar-reset" onclick="resetFilters()" aria-label="Reset all filters">Reset</button>
             <span class="toolbar-count" aria-live="polite"><span id="filtered-count">0</span> / <span id="total-count">0</span> cases</span>
         </div>
@@ -259,11 +259,11 @@
                 <div class="file-card"><h3>Merged Data</h3><p class="file-period">2020&ndash;2024</p><div class="file-size">~10 GB</div><a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/tc_radar_v3m_2020_2024_xy_rel_merge_ships.nc" class="download-btn" target="_blank">Download</a></div>
             </div>
             <div class="usage-policy">
-                <h3>&#128203; Usage Policy</h3>
+                <h3>Usage Policy</h3>
                 <p>Users are free to download TC-RADAR. However, we request that you notify <strong>Dr. Michael Fischer</strong> (<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu</a>) and NOAA's Hurricane Research Division radar team lead, <strong>Dr. Paul Reasor</strong> (<a href="mailto:paul.reasor@noaa.gov">paul.reasor@noaa.gov</a>), of the nature of your research project to ensure proper usage. Users should carefully examine data and apply additional QC consistent with their objectives.</p>
             </div>
             <div class="citation-box">
-                <h3>&#128218; Citation</h3>
+                <h3>Citation</h3>
                 <p>Fischer, M. S., P. D. Reasor, R. F. Rogers, and J. F. Gamache, 2022: An Analysis of Tropical Cyclone Vortex and Convective Characteristics in Relation to Storm Intensity Using a Novel Airborne Doppler Radar Database. Mon. Wea. Rev., 150, 2255-2278, https://doi.org/10.1175/MWR-D-21-0223.1.</p>
                 <p style="margin-top:1rem;padding-top:0.75rem;border-top:1px solid var(--border);">
                 <strong style="color:var(--blue-light);">For vortex tilt analyses, also cite:</strong><br>Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2024: An Observational Analysis of the Relationship between Tropical Cyclone Vortex Tilt, Precipitation Structure, and Intensity Change. Mon. Wea. Rev., 152, 203-225, https://doi.org/10.1175/MWR-D-23-0089.1.</p>
@@ -431,7 +431,7 @@
     <script defer src="vol3d.js?v=20260930v5"></script>
     <script defer src="tc_vol_gl.js?v=20260908l"></script>
     <script defer src="tdr_view.js?v=ex20261010tm1"></script>
-    <script defer src="tc_radar_app.js?v=20261031p3"></script>
+    <script defer src="tc_radar_app.js?v=20261101n1"></script>
     <!-- realtime_tdr.js (Recon tab, ~114 KB gz) is NOT loaded here any more:
          the Recon UI lives on realtime_ir.html and none of its 71 window.*
          exports or rt-* DOM ids exist on this page. realtime_tdr_styles.css

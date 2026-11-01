@@ -1,8 +1,8 @@
 #!/bin/sh
 # Refuse a commit that leaves a shared asset under two ?v= cache tokens
 # (scripts/check_version_tokens.sh), a stylesheet font size off the type scale
-# (scripts/check_type_scale.sh), or a hard-coded corner radius or elevation
-# shadow (scripts/check_corner_shadow_tokens.sh). Two tokens for one file means some pages
+# (scripts/check_type_scale.sh), an emoji (scripts/check_no_emoji.sh), or a
+# hard-coded corner radius or elevation shadow (scripts/check_corner_shadow_tokens.sh). Two tokens for one file means some pages
 # keep getting an older copy from the CDN.
 #
 # Checks the STAGED copies of the pages and loaders, not the working tree,
@@ -33,6 +33,17 @@ if [ -f "$scale" ]; then
     if ! out=$(bash "$tmp/scripts/check_type_scale.sh" 2>&1); then
         printf '%s\n' "$out" >&2
         echo "pre-commit: move each size above onto the type scale, or commit with --no-verify." >&2
+        exit 1
+    fi
+fi
+
+# No emoji in the UI (scripts/check_no_emoji.sh).
+noemoji="$top/scripts/check_no_emoji.sh"
+if [ -f "$noemoji" ]; then
+    cp "$noemoji" "$tmp/scripts/"
+    if ! out=$(bash "$tmp/scripts/check_no_emoji.sh" 2>&1); then
+        printf '%s\n' "$out" >&2
+        echo "pre-commit: replace each emoji above with an SVG icon or text (or run scripts/check_no_emoji.sh --fix for the selector), or commit with --no-verify." >&2
         exit 1
     fi
 fi

@@ -9656,7 +9656,7 @@
             var el = document.getElementById('seasonal-evo-map');
             if (!el || !_evoState.frames || !_evoState.frames.length) return;
             _evoState.playing = !_evoState.playing;
-            if (play) play.textContent = _evoState.playing ? '⏸' : '▶';
+            if (play) play.textContent = _evoState.playing ? '⏸\uFE0E' : '▶\uFE0E';
             if (_evoState.playing) {
                 var speed = parseInt(
                     document.getElementById('seasonal-evo-speed').value, 10);
@@ -9696,7 +9696,7 @@
             // If we're playing, pause first.
             if (_evoState.playing) {
                 _evoState.playing = false;
-                if (play) play.textContent = '▶';
+                if (play) play.textContent = '▶\uFE0E';
                 Plotly.animate(el, [null], { mode: 'next' });
             }
             // Plotly.animate auto-syncs the slider's active step when
