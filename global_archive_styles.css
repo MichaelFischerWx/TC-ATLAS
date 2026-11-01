@@ -205,34 +205,17 @@ input[type="range"].ga-range::-moz-range-thumb {
 
 .ga-btn {
     padding: 8px 16px;
-    border: none;
-    border-radius: 6px;
     font-family: 'DM Sans', sans-serif;
     font-size: 0.8125rem;
-    font-weight: 600;
     cursor: pointer;
     transition: all 0.2s;
     text-align: center;
     width: 100%;
 }
-.ga-btn-primary {
-    background: var(--um-green);
-    color: #ffffff;
-}
-.ga-btn-primary:hover { background: var(--um-green-deep); }
-.ga-btn-secondary {
-    background: var(--surface);
-    color: var(--slate);
-    border: 1px solid var(--border);
-}
-.ga-btn-secondary:hover { color: var(--text); border-color: var(--border-light); }
 .ga-btn-ghost {
-    background: transparent;
-    color: var(--slate);
     padding: 6px 12px;
     width: auto;
 }
-.ga-btn-ghost:hover { color: var(--text); }
 .ga-btn-sm {
     padding: 5px 12px;
     font-size: 0.75rem;
@@ -536,19 +519,15 @@ input[type="range"].ga-range::-moz-range-thumb {
 :root[data-theme="dark"] .sb-tag-ri { color: #f87171; }
 .map-storm-card-actions { display: flex; gap: 8px; }
 .map-storm-card-btn {
-    flex: 1; height: 36px; border: none; border-radius: 9px;
-    background: var(--um-green); color: #fff;
+    flex: 1; height: 36px;
     font: 600 0.8125rem var(--font-sans); letter-spacing: .01em; cursor: pointer;
     transition: background .15s, transform .1s;
 }
-.map-storm-card-btn:hover { background: var(--um-green-deep); }
 .map-storm-card-btn:active { transform: translateY(1px); }
 .map-storm-card-btn2 {
-    flex: none; height: 36px; padding: 0 12px; border-radius: 9px;
-    border: 1px solid var(--border-light); background: transparent; color: var(--text);
+    flex: none; height: 36px; padding: 0 12px;
     font: 600 0.75rem var(--font-sans); cursor: pointer;
 }
-.map-storm-card-btn2:hover { border-color: var(--um-green); color: var(--um-green); }
 .storm-detail-pulse { animation: detail-btn-glow 2s ease-in-out 0.3s 2; }
 @keyframes detail-btn-glow {
     0%, 100% { box-shadow: none; }
@@ -1055,6 +1034,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     background: rgba(251,191,36,0.28);
     border-color: rgba(251,191,36,0.65);
 }
+:root[data-theme="dark"] .ir-peak-btn { color: #fbbf24; }   /* #a16207 is 3.4:1 on the dark bar */
 
 /* Legacy horizontal fallback classes (kept for tc_radar compat) */
 .ir-map-controls:not(.ir-sidebar) {
@@ -1313,9 +1293,6 @@ input[type="range"].ga-range::-moz-range-thumb {
 
 /* ── Model Forecast Overlay ──────────────────────────────── */
 .model-filter-btn {
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--slate);
     transition: all 0.2s;
 }
 .model-filter-btn.active {
@@ -2103,34 +2080,20 @@ input[type="range"].ga-range::-moz-range-thumb {
     flex-wrap: wrap;
     justify-content: flex-end;
 }
-.ga-btn-accent {
-    background: var(--um-green);
-    color: #ffffff;
-    border: none;
-}
-.ga-btn-accent:hover { background: var(--um-green-deep); }
 .ga-btn-radar {
     background: var(--um-orange);
     color: #ffffff;
-    border: none;
+    border: 1px solid var(--um-orange);
     text-decoration: none;
     display: inline-flex;
     align-items: center;
     gap: 4px;
 }
-.ga-btn-radar:hover { background: var(--um-orange-deep); }
+.ga-btn-radar:hover { background: var(--um-orange-deep); border-color: var(--um-orange-deep); }
 .ga-btn-xs {
     font-size: 0.6875rem;
     padding: 2px 8px;
-    border-radius: 4px;
     width: auto;
-    background: var(--surface);
-    color: var(--text);
-    border: 1px solid var(--border);
-}
-.ga-btn-xs:hover {
-    background: var(--surface-raised);
-    border-color: var(--border-light);
 }
 .ga-btn-xs.active,
 .ga-sonde-pv-btn.active,
@@ -2286,11 +2249,6 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-size: 0.75rem;
     color: var(--slate);
     margin-right: 4px;
-}
-.compare-align {
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--slate);
 }
 .compare-align.active {
     background: var(--sel-fill);
@@ -2558,9 +2516,6 @@ input[type="range"].ga-range::-moz-range-thumb {
 .compare-mode-btn {
     font-size: 0.6875rem;
     padding: 2px 8px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--slate);
     cursor: pointer;
     transition: all 0.2s;
 }
@@ -2967,12 +2922,10 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gra-tg-filters { position: relative; min-width: 0; flex: 0 1 auto; }
 .gra-pop-btn {
     display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px;
-    border: 1px solid var(--border-light); border-radius: 8px; background: transparent;
-    font: 600 0.75rem var(--font-sans); color: var(--text); cursor: pointer; white-space: nowrap;
+    font: 600 0.75rem var(--font-sans); cursor: pointer; white-space: nowrap;
     transition: border-color .15s, background .15s;
 }
-.gra-pop-btn:hover { border-color: var(--um-green); }
-.gra-pop-btn.is-open { background: var(--surface); border-color: var(--um-green); }
+.gra-pop-btn.is-open { background: var(--um-green-tint); border-color: var(--sel-fill); }
 .gra-pop-btn svg { width: 15px; height: 15px; color: var(--slate); }
 .gra-pop-btn.is-open .sb-chev { transform: rotate(180deg); }
 .gra-fsum {
@@ -3006,12 +2959,12 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gra-pop-preset { display: flex; flex-direction: column; gap: 5px; }
 .gra-pop-preset > span { font-size: 0.6875rem; color: var(--slate); line-height: 1.4; }
 .gra-preset {
-    align-self: flex-start; height: 28px; padding: 0 11px; border-radius: 7px; cursor: pointer;
+    align-self: flex-start; height: 28px; padding: 0 11px; border-radius: var(--btn-r); cursor: pointer;
     font: 600 0.75rem var(--font-sans); color: var(--text);
     background: transparent; border: 1px dashed var(--border-light);
 }
-.gra-preset:hover { border-color: var(--um-orange); color: var(--um-orange-text); }
-.gra-preset.ga-btn-accent { background: var(--um-orange); border: 1px solid var(--um-orange); color: #fff; }
+.gra-preset:hover { border-color: var(--sel-fill); }
+.gra-preset.ga-btn-accent { background: var(--sel-fill); border: 1px solid var(--sel-fill); color: var(--sel-ink); }
 .gra-pop-foot { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border); padding-top: 10px; }
 /* version + about (right end) */
 .gra-tg-ver > label { cursor: default; }
@@ -3029,14 +2982,10 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gra-version-note { font-size: 0.6875rem; color: var(--slate); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .gra-about-btn {
     display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px;
-    border-radius: 8px; border: 1px solid var(--um-green); cursor: pointer;
-    background: var(--um-green-tint); color: var(--um-green);
+    cursor: pointer;
     font: 600 0.75rem var(--font-sans); white-space: nowrap;
 }
-.gra-about-btn:hover { background: var(--um-green); color: #fff; }
 .gra-about-btn svg { width: 15px; height: 15px; }
-:root[data-theme="dark"] .gra-about-btn { color: var(--blue-light); }
-:root[data-theme="dark"] .gra-about-btn:hover { color: #fff; }
 
 /* the GHOST tab's dual ranges reuse the Storm Browser's .sb-dual */
 .gra-dual { height: 22px; }
@@ -3263,11 +3212,9 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gra-ir-status:empty { display: none; }
 .gra-ir-foot { padding: 8px 10px 4px; display: flex; align-items: center; gap: 6px; }
 .gra-ir-foot .ga-btn-xs {
-    height: 28px; min-width: 34px; padding: 0 10px; border-radius: 7px;
-    border-color: var(--border-light); background: transparent;
+    height: 28px; min-width: 34px; padding: 0 10px;
     font-size: 0.75rem; font-weight: 600;
 }
-.gra-ir-foot .ga-btn-xs:hover { border-color: var(--um-green); color: var(--um-green); }
 .gra-ir-vals { font-size: 0.6875rem; color: var(--slate); font-variant-numeric: tabular-nums; }
 .gra-ir-vals b { color: var(--text); }
 .gra-ir-vals .gra-g { color: #f43f5e; }
@@ -3856,7 +3803,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .detail-rail .ga-layer-item .ga-btn {
     display: flex !important; flex-direction: column; align-items: center; justify-content: center;
     gap: 4px; padding: 8px 4px; font-size: 0.6875rem; line-height: 1.1; letter-spacing: 0;
-    border-radius: 8px; width: 100%; height: auto; white-space: nowrap;
+    width: 100%; height: auto; white-space: nowrap;
 }
 .detail-rail .ga-layer-item .ga-btn .icon-inline { width: 17px; height: 17px; margin: 0; display: block; }
 .detail-rail .ga-layer-item .ga-btn .rail-ico { font-size: 16px; line-height: 17px; height: 17px; display: block; }
@@ -4111,7 +4058,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ga-obs-select-full { flex: 1 1 100%; }
 .ga-obs .ga-btn-xs, .ga-model-ctrl .ga-btn-xs {
     display: inline-flex; align-items: center; gap: 4px;
-    height: 27px; padding: 0 10px; border-radius: 7px;
+    height: 27px; padding: 0 10px;
     font-size: 0.75rem; font-weight: 600; white-space: nowrap;
     border: 1px solid var(--border-light); background: transparent; color: var(--text);
 }
@@ -4232,10 +4179,8 @@ input[type="range"].ga-range::-moz-range-thumb {
 .env-pick { position: relative; margin-left: auto; }
 .env-pick-btn {
     display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px;
-    border: 1px solid var(--border-light); border-radius: 8px; background: transparent;
-    color: var(--text); font: 600 0.75rem var(--font-sans); cursor: pointer; white-space: nowrap;
+    font: 600 0.75rem var(--font-sans); cursor: pointer; white-space: nowrap;
 }
-.env-pick-btn:hover:not(:disabled) { border-color: var(--um-green); }
 .env-pick-btn svg { width: 14px; height: 14px; color: var(--slate); }
 .env-pick-btn b { font-weight: 600; color: var(--slate); font-variant-numeric: tabular-nums; }
 .env-pick-btn:disabled { opacity: .5; cursor: default; }

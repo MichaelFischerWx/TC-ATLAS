@@ -1851,7 +1851,7 @@ function _gaHudInit() {
     var actions = main.querySelector('.detail-header-actions');
     if (row && actions) {
         var trig = document.createElement('button');
-        trig.type = 'button'; trig.className = 'ga-btn ga-btn-sm detail-actions-trigger';
+        trig.type = 'button'; trig.className = 'ga-btn ga-btn-sm ga-btn-ghost detail-actions-trigger';
         trig.title = 'Storm actions'; trig.setAttribute('aria-haspopup', 'true'); trig.innerHTML = '&#8943;';
         var pop = document.createElement('div'); pop.className = 'detail-actions-pop'; pop.hidden = true;
         pop.appendChild(actions);

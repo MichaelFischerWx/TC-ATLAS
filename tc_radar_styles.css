@@ -102,6 +102,9 @@ outline-offset: 2px;
     --sel-ink: #ffffff;
     --tab-ink: var(--um-orange-text);
     --tab-line: var(--um-orange);
+    /* Buttons (UI standard): 6-px corners; primary hover one step deeper. */
+    --btn-r: 6px;
+    --btn-primary-hover: var(--um-green-deep);
 
     /* Plotly bridge — JS reads these via getComputedStyle so charts
        repaint correctly when theme flips. Don't reference these from
@@ -165,6 +168,7 @@ outline-offset: 2px;
     --um-green: #4a9b6e;
     --um-green-deep: #2e7a5b;
     --sel-fill: var(--um-green-deep);
+    --btn-primary-hover: #256b4f;   /* white text 6.4:1 */
     --um-green-tint: rgba(74, 155, 110, 0.16);
 
     --plot-paper: #0a0e14;
@@ -345,15 +349,12 @@ b, strong, th, h1, h2, h3, h4, h5, h6 { font-weight: 600; }
 .toolbar-select option { background: var(--navy); color: var(--text); }
 .toolbar-sep { width: 1px; height: 24px; background: var(--border-light); margin: 0 4px; }
 
-.toolbar-explore-btn { background: var(--blue); color: white; border: none; border-radius: 6px; padding: 6px 14px; font-size: 0.8125rem; font-weight: 600; font-family: 'DM Sans', sans-serif; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
-.toolbar-explore-btn:hover { background: #3a7a55; }
+.toolbar-explore-btn { padding: 6px 14px; font-size: 0.8125rem; font-family: 'DM Sans', sans-serif; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
 .toolbar-explore-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .toolbar-count { font-variant-numeric: tabular-nums; font-size: 0.75rem; color: var(--blue-light); white-space: nowrap; }
-.toolbar-reset { background: transparent; border: 1px solid var(--border-light); color: var(--slate); border-radius: 6px; padding: 5px 12px; font-size: 0.75rem; cursor: pointer; font-family: 'DM Sans', sans-serif; font-weight: 500; transition: all 0.2s; }
-.toolbar-reset:hover { border-color: var(--blue); color: var(--text); }
-.filter-toggle-btn { background: transparent; border: 1px solid var(--border-light); color: var(--slate); border-radius: 6px; padding: 5px 12px; font-size: 0.75rem; cursor: pointer; font-family: 'DM Sans', sans-serif; font-weight: 500; transition: all 0.2s; display: flex; align-items: center; gap: 5px; }
-.filter-toggle-btn:hover { border-color: var(--blue); color: var(--text); }
+.toolbar-reset { padding: 5px 12px; font-size: 0.75rem; cursor: pointer; font-family: 'DM Sans', sans-serif; transition: all 0.2s; }
+.filter-toggle-btn { padding: 5px 12px; font-size: 0.75rem; cursor: pointer; font-family: 'DM Sans', sans-serif; transition: all 0.2s; display: flex; align-items: center; gap: 5px; }
 .filter-toggle-btn.active { background: var(--sel-fill); color: var(--sel-ink); border-color: var(--sel-fill); }
 
 /* ── Active-filter badge ─────────────────────────── */
@@ -418,22 +419,18 @@ b, strong, th, h1, h2, h3, h4, h5, h6 { font-weight: 600; }
 }
 :is(#side-panel.focus-panel, .tdr-focus-panel) .explorer-controls .explorer-title { grid-column: 1 / -1; }
 .focus-back-btn {
-    display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; margin-bottom: 8px;
-    background: var(--navy-mid); color: var(--slate); border: 1px solid var(--border-light); border-radius: 5px;
-    font-size: 0.75rem; font-weight: 600; font-family: 'DM Sans', sans-serif; cursor: pointer; transition: all 0.2s;
+    display: inline-flex; align-items: center; gap: 4px; padding: 5px 12px; margin-bottom: 8px;
+    font-size: 0.75rem; font-family: 'DM Sans', sans-serif; cursor: pointer; transition: all 0.2s;
 }
-.focus-back-btn:hover { background: var(--blue); color: white; border-color: var(--blue); }
 .focus-back-btn svg { width: 12px; height: 12px; }
 .case-nav-bar {
     display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; vertical-align: middle;
 }
 .case-nav-btn {
-    background: rgba(15, 22, 35,0.04); border: 1px solid rgba(15, 22, 35,0.1);
-    color: #9ca3af; font-size: 10px; width: 22px; height: 22px; border-radius: 5px;
+    font-size: 10px; width: 22px; height: 22px;
     cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
     transition: all 0.15s; flex-shrink: 0; line-height: 1; vertical-align: middle;
 }
-.case-nav-btn:hover:not(:disabled) { background: rgba(59,130,246,0.15); color: var(--blue); border-color: rgba(59,130,246,0.35); }
 .case-nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .case-nav-pos {
     font-size: 10px; font-variant-numeric: tabular-nums; color: var(--slate); white-space: nowrap;
@@ -600,9 +597,7 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 .az-cov-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; background: var(--blue); border: 2px solid white; border-radius: 50%; cursor: pointer; pointer-events: auto; box-shadow: 0 1px 4px rgba(0,0,0,0.12); margin-top: -5px; }
 .explorer-level-value { font-size: 12px; font-weight: 600; color: var(--text); min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
 
-.generate-btn { width: 100%; padding: 8px 0; background: var(--blue); color: #ffffff; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background 0.2s; margin-top: 4px; font-family: 'DM Sans', sans-serif; }
-.generate-btn:hover { background: var(--blue-light); }
-.generate-btn:hover { opacity: 0.9; }
+.generate-btn { width: 100%; padding: 8px 0; font-size: 12px; cursor: pointer; transition: background 0.2s; margin-top: 4px; font-family: 'DM Sans', sans-serif; }
 .generate-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .explorer-status { font-size: 11px; color: var(--slate); padding: 6px 0; }
 .explorer-status.loading { color: var(--blue-light); }
@@ -637,20 +632,11 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 .cs-btn {
     width: 100%;
     padding: 7px 0;
-    background: var(--surface-raised);
-    color: var(--text);
-    border: 1px solid var(--border-light);
-    border-radius: 6px;
     font-size: 11px;
-    font-weight: 600;
     cursor: pointer;
     transition: background 0.2s, border-color 0.2s, color 0.2s;
     margin-top: 6px;
     font-family: 'DM Sans', sans-serif;
-}
-.cs-btn:hover:not(:disabled) {
-    background: rgba(15,22,35,0.04);
-    border-color: rgba(15,22,35,0.20);
 }
 .cs-btn.active {
     background: var(--sel-fill);
@@ -664,8 +650,7 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 .explorer-result { margin-top: 6px; text-align: center; }
 
 /* ── Cite button & modal ─────────────────────────── */
-.cite-btn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; font-size: 10px; font-weight: 600; font-family: 'DM Sans', sans-serif; background: rgba(74, 155, 110,0.12); border: 1px solid rgba(74, 155, 110,0.35); border-radius: 4px; color: #1d4ed8; cursor: pointer; transition: all 0.2s; vertical-align: middle; margin-left: 8px; }
-.cite-btn:hover { background: rgba(74, 155, 110,0.25); border-color: rgba(74, 155, 110,0.6); color: #bfdbfe; }
+.cite-btn { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; font-size: 11px; font-family: 'DM Sans', sans-serif; cursor: pointer; transition: all 0.2s; vertical-align: middle; margin-left: 8px; }
 .cite-modal-overlay { display: none; position: fixed; inset: 0; z-index: 20000; background: rgba(0,0,0,0.18); backdrop-filter: blur(4px); align-items: center; justify-content: center; }
 .cite-modal-overlay.active { display: flex; }
 .cite-modal-box { width: min(600px, 94vw); background: var(--navy); border-radius: var(--radius-lg); border: 1px solid var(--border-light); box-shadow: 0 16px 48px rgba(0,0,0,0.18); padding: 24px; position: relative; max-height: 90vh; overflow-y: auto; }
@@ -675,8 +660,7 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 .cite-entry { background: rgba(15, 22, 35,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
 .cite-entry-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--um-green); margin-bottom: 6px; }
 .cite-entry-text { font-size: 12px; line-height: 1.6; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; word-break: break-word; }
-.cite-copy-btn { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; padding: 3px 10px; font-size: 10px; font-weight: 600; font-family: 'DM Sans', sans-serif; background: rgba(15, 22, 35,0.05); border: 1px solid var(--border-light); border-radius: 4px; color: var(--slate); cursor: pointer; transition: all 0.2s; }
-.cite-copy-btn:hover { background: rgba(74, 155, 110,0.18); border-color: rgba(74, 155, 110,0.4); color: #1d4ed8; }
+.cite-copy-btn { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; padding: 2px 8px; font-size: 11px; font-family: 'DM Sans', sans-serif; cursor: pointer; transition: all 0.2s; }
 .cite-copy-btn.copied { background: rgba(52,211,153,0.18); border-color: rgba(52,211,153,0.4); color: #15803d; }
 .cite-bibtex-row { display: flex; justify-content: flex-end; margin-top: 4px; }
 .cite-bibtex-btn { display: inline-flex; align-items: center; gap: 5px; padding: 6px 14px; font-size: 11px; font-weight: 600; font-family: 'DM Sans', sans-serif; background: rgba(168,85,247,0.14); border: 1px solid rgba(168,85,247,0.4); border-radius: 5px; color: #6d28d9; cursor: pointer; transition: all 0.2s; }
@@ -835,12 +819,10 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
     margin-left: auto; margin-right: 12px;
 }
 .env-nav-btn {
-    background: rgba(15, 22, 35,0.04); border: 1px solid rgba(15, 22, 35,0.1);
-    color: #9ca3af; font-size: 11px; width: 30px; height: 30px; border-radius: 6px;
+    font-size: 11px; width: 30px; height: 30px;
     cursor: pointer; display: flex; align-items: center; justify-content: center;
     transition: all 0.15s; flex-shrink: 0;
 }
-.env-nav-btn:hover:not(:disabled) { background: rgba(34,211,238,0.12); color: var(--cyan); border-color: rgba(34,211,238,0.3); }
 .env-nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .env-nav-select {
     background: rgba(15, 22, 35,0.04); border: 1px solid rgba(15, 22, 35,0.1);
@@ -919,12 +901,11 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
     line-height: 1.5;
 }
 .env-recompute-btn {
-    width: 100%; padding: 8px; border: none; border-radius: 6px;
-    font-size: 12px; font-weight: 600; cursor: pointer;
+    width: 100%; padding: 8px;
+    font-size: 12px; cursor: pointer;
     font-variant-numeric: tabular-nums; transition: all 0.15s;
-    background: var(--cyan); color: var(--navy); margin-top: 8px;
+    margin-top: 8px;
 }
-.env-recompute-btn:hover { background: #67e8f9; }
 .env-recompute-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── Dashboard grid inside display area ─────────── */
@@ -1012,9 +993,7 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 .popup-label { color: var(--slate); font-weight: 500; }
 .popup-value { color: var(--text); font-weight: 600; }
 .intensity-badge { display: inline-block; padding: 3px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; color: white; }
-.popup-explore-btn { display: block; width: 100%; margin-top: 12px; padding: 8px 0; background: var(--blue); color: #ffffff; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; text-align: center; transition: background 0.2s; font-family: 'DM Sans', sans-serif; }
-.popup-explore-btn:hover { background: var(--blue-light); }
-.popup-explore-btn:hover { opacity: 0.9; }
+.popup-explore-btn { display: block; width: 100%; margin-top: 12px; padding: 8px 0; font-size: 13px; cursor: pointer; text-align: center; transition: background 0.2s; font-family: 'DM Sans', sans-serif; }
 
 /* ── Legend ──────────────────────────────────────── */
 .intensity-legend { background: var(--surface-raised); padding: 14px; border-radius: var(--radius); box-shadow: 0 2px 12px rgba(0,0,0,0.1); font-size: 12px; line-height: 1.6; border: 1px solid var(--border); color: var(--text); }
@@ -1090,9 +1069,7 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 .file-card h3 { color: var(--text); font-size: 1rem; }
 .file-card .file-period { color: var(--slate); font-size: 0.875rem; margin-top: 4px; }
 .file-size { font-size: 1.75rem; font-weight: 600; color: var(--text); margin: 1rem 0; font-variant-numeric: tabular-nums; }
-.download-btn { background: var(--blue); color: #ffffff; padding: 10px 24px; border: none; border-radius: 6px; font-size: 0.875rem; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; transition: background 0.2s, transform 0.2s; font-family: 'DM Sans', sans-serif; }
-.download-btn:hover { background: var(--blue-light); }
-.download-btn:hover { opacity: 0.9; transform: scale(1.03); }
+.download-btn { padding: 8px 16px; font-size: 13px; cursor: pointer; text-decoration: none; display: inline-block; transition: background 0.2s, transform 0.2s; font-family: 'DM Sans', sans-serif; }
 
 .usage-policy { max-width: 750px; margin: 3rem auto; padding: 1.5rem 2rem; background: rgba(251, 191, 36, 0.08); border-radius: var(--radius); border-left: 3px solid #fbbf24; }
 .usage-policy h3 { color: #fbbf24; margin-bottom: 0.75rem; font-size: 1rem; }
@@ -1220,19 +1197,10 @@ footer a:hover { text-decoration: underline; }
     background: rgba(15, 22, 35,0.015); flex-shrink: 0;
 }
 .wizard-nav-btn {
-    padding: 8px 20px; border-radius: 8px; font-size: 13px; font-weight: 600;
+    padding: 8px 16px; font-size: 13px;
     font-family: 'DM Sans', sans-serif; cursor: pointer; transition: all 0.2s;
     display: flex; align-items: center; gap: 6px;
 }
-.wizard-nav-btn.secondary {
-    background: transparent; border: 1px solid var(--border-light);
-    color: var(--slate);
-}
-.wizard-nav-btn.secondary:hover { border-color: var(--blue); color: var(--text); }
-.wizard-nav-btn.primary {
-    background: var(--cyan); border: none; color: var(--navy); font-weight: 600;
-}
-.wizard-nav-btn.primary:hover { background: #67e8f9; }
 .wizard-nav-btn:disabled { opacity: 0.35; pointer-events: none; }
 
 /* ── Step 1: Mode & Output Selection ────────────── */
@@ -1482,12 +1450,10 @@ footer a:hover { text-decoration: underline; }
     border: 1px solid var(--border); border-radius: 10px;
 }
 .wizard-generate-btn {
-    padding: 10px 24px; border: none; border-radius: 8px;
-    font-size: 14px; font-weight: 600; cursor: pointer;
+    padding: 8px 16px;
+    font-size: 13px; cursor: pointer;
     font-variant-numeric: tabular-nums; transition: all 0.2s;
-    background: var(--cyan); color: var(--navy);
 }
-.wizard-generate-btn:hover { background: #67e8f9; }
 .wizard-generate-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .wizard-generate-summary { font-size: 11px; color: var(--slate); }
 
@@ -1518,11 +1484,9 @@ footer a:hover { text-decoration: underline; }
 .cst-to { font-size: 10px; color: var(--slate); }
 .cst-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
 .cst-reset {
-    padding: 2px 7px; font-size: 11px; border: 1px solid var(--border-light);
-    border-radius: 5px; background: var(--navy); color: var(--slate);
+    padding: 2px 7px; font-size: 11px;
     cursor: pointer; font-variant-numeric: tabular-nums;
 }
-.cst-reset:hover { color: var(--text); border-color: rgba(15, 22, 35,0.2); }
 
 .wizard-results-area { }
 .wizard-result-section {
@@ -2611,19 +2575,9 @@ footer a:hover { text-decoration: underline; }
 }
 
 /* Analysis-strip buttons (Shear Quads, Z* Anomaly, VP Scatter, CFAD).
-   On the new light theme we keep the DEFAULT state neutral (no candy
-   tints competing on white), and only paint the data-role accent on
-   :hover and .active. The accent palette is preserved as a quick-
-   identification cue for which analysis is running. */
-.cs-btn.is-tinted {
-    background: var(--surface-raised);
-    border-color: var(--border-light);
-    color: var(--text);
-}
-.cs-btn.is-tinted:hover:not(:disabled) {
-    background: rgba(15,22,35,0.04);
-    border-color: rgba(15,22,35,0.20);
-}
+   Off and hover use the shared secondary button look (end of file); only
+   .active paints the data-role accent, a quick cue for which analysis is
+   running. */
 
 /* Active state — paint with the data-role accent so it's immediately
    identifiable while the analysis is running. */
@@ -2979,3 +2933,50 @@ body.basemap-satellite #map-layer-bar .overlay-pill.active { background: var(--s
 .sear-rank-row .t { color: var(--slate); font-variant-numeric: tabular-nums; }
 .sear-rank-row .v { font-weight: 600; color: #be185d; text-align: right; font-variant-numeric: tabular-nums; }
 .sear-rank-row .bt { color: var(--slate); text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ── Buttons (UI standard, phase 4) ──────────────────────────────────────
+   One look per role on every page. Class names stay (scripts look them up):
+   each joins a role group here, and its own rule keeps only layout and size.
+     primary    the one main action of a panel
+     secondary  every other action, and options while they are off
+                (an option that is on takes the green fill, phase 2)
+     ghost      low-stakes actions: back, reset, clear
+   A Global Archive .ga-btn with no role class is secondary.
+   Sizes: 13 px / 8px 16px, small 12 px / 5px 12px, and 11 px / 2px 8px in
+   the dense drawers. Kept on purpose: the orange TC-RADAR cross-link, the
+   purple BibTeX and amber Peak buttons, segmented groups, data-colored
+   toggles, and the Real-Time Monitor's map controls (next pass). */
+.ga-btn, .ga-btn-secondary, .ga-btn-xs, .cs-btn,
+.filter-toggle-btn, .focus-back-btn, .case-nav-btn, .env-nav-btn,
+.cite-btn, .cite-copy-btn, .env-pick-btn, .gra-pop-btn,
+.gra-about-btn, .map-storm-card-btn2, .sub-evo-save-btn, .wizard-nav-btn {
+    background: var(--surface-raised); color: var(--text); border: 1px solid var(--border-light);
+    border-radius: var(--btn-r); font-weight: 600;
+}
+.ga-btn-primary, .ga-btn-accent, .download-btn, .popup-explore-btn,
+.generate-btn, .toolbar-explore-btn, .env-recompute-btn, .wizard-generate-btn,
+.wizard-nav-btn.primary, .map-storm-card-btn, .tc-clim-globe-banner-btn {
+    background: var(--sel-fill); color: var(--sel-ink); border: 1px solid var(--sel-fill);
+    border-radius: var(--btn-r); font-weight: 600;
+}
+.ga-btn-ghost, .toolbar-reset, .cst-reset {
+    background: transparent; color: var(--um-green); border: 1px solid transparent;
+    border-radius: var(--btn-r); font-weight: 600;
+}
+.ga-btn:hover:not(.active, :disabled, .ga-btn-radar, .ir-peak-btn), .ga-btn-secondary:hover:not(.active, :disabled), .ga-btn-xs:hover:not(.active, :disabled),
+.cs-btn:hover:not(.active, :disabled), .filter-toggle-btn:hover:not(.active, :disabled), .focus-back-btn:hover:not(.active, :disabled),
+.case-nav-btn:hover:not(.active, :disabled), .env-nav-btn:hover:not(.active, :disabled), .cite-btn:hover:not(.active, :disabled),
+.cite-copy-btn:hover:not(.active, :disabled), .env-pick-btn:hover:not(.active, :disabled), .gra-pop-btn:hover:not(.active, :disabled),
+.gra-about-btn:hover:not(.active, :disabled), .map-storm-card-btn2:hover:not(.active, :disabled), .sub-evo-save-btn:hover:not(.active, :disabled),
+.wizard-nav-btn:hover:not(.active, :disabled) {
+    background: var(--um-green-tint); border-color: var(--sel-fill);
+}
+.ga-btn-primary:hover:not(:disabled), .ga-btn-accent:hover:not(:disabled), .download-btn:hover:not(:disabled),
+.popup-explore-btn:hover:not(:disabled), .generate-btn:hover:not(:disabled), .toolbar-explore-btn:hover:not(:disabled),
+.env-recompute-btn:hover:not(:disabled), .wizard-generate-btn:hover:not(:disabled), .wizard-nav-btn.primary:hover:not(:disabled),
+.map-storm-card-btn:hover:not(:disabled), .tc-clim-globe-banner-btn:hover:not(:disabled) {
+    background: var(--btn-primary-hover); border-color: var(--btn-primary-hover);
+}
+.ga-btn-ghost:hover:not(:disabled), .toolbar-reset:hover:not(:disabled), .cst-reset:hover:not(:disabled) {
+    background: var(--um-green-tint); border-color: transparent;
+}
