@@ -247,19 +247,11 @@
     gap: 6px;
 }
 .ir-ctrl-btn {
-    background: var(--border);
-    border: 1px solid rgba(15, 22, 35, 0.15);
-    color: #ccc;
     font-size: 11px;
     padding: 3px 8px;
-    border-radius: 4px;
     cursor: pointer;
     white-space: nowrap;
     transition: background 0.15s;
-}
-.ir-ctrl-btn:hover {
-    background: rgba(15, 22, 35, 0.18);
-    color: var(--text);
 }
 .ir-slider {
     flex: 1;
@@ -572,21 +564,13 @@
 
 /* ── PNG save button ────────────────────────── */
 .rt-save-png-btn {
-    background: var(--border);
-    border: none;
-    color: #aab;
     width: 30px;
     height: 30px;
-    border-radius: 5px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     transition: background 0.2s, color 0.2s;
-}
-.rt-save-png-btn:hover {
-    background: rgba(15, 22, 35,0.2);
-    color: var(--text);
 }
 
 /* ── Recon tab: inner sub-tab strip (Missions/TDR/Flight-Level/VDM) ── */

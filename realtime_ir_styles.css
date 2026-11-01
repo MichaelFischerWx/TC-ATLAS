@@ -179,17 +179,9 @@ html, body { margin: 0; padding: 0; }
 .rt-env-toggle-btn {
     font-size: 0.6875rem;
     padding: 4px 10px;
-    border-radius: 4px;
-    border: 1px solid var(--border-light);
-    background: var(--surface);
-    color: var(--text);
     cursor: pointer;
     font-family: inherit;
     transition: background 0.15s, border-color 0.15s;
-}
-.rt-env-toggle-btn:hover {
-    background: var(--surface-raised);
-    border-color: var(--um-green);
 }
 .rt-env-toggle-btn.active, .rt-env-toggle-btn.active:hover {
     background: var(--sel-fill);
@@ -331,28 +323,16 @@ html, body { margin: 0; padding: 0; }
 .ir-popup-btn {
     display: inline-block;
     margin-top: 8px;
-    background: var(--um-green);
-    color: #ffffff;
-    border: none;
-    border-radius: 4px;
     padding: 5px 16px;
     font-size: 0.75rem;
-    font-weight: 600;
     cursor: pointer;
     font-family: 'DM Sans', sans-serif;
     transition: background 0.2s;
 }
-.ir-popup-btn:hover {
-    background: var(--um-green-deep);
-}
 /* DeepMind-ensemble action — distinct cyan so it reads as the model
    (genesis) action vs the green IR-detail action. */
 .ir-popup-btn-dm {
-    background: #0891b2;
     margin-left: 6px;
-}
-.ir-popup-btn-dm:hover {
-    background: #0e7490;
 }
 
 /* ── Custom storm markers ────────────────────────────────────── */
@@ -420,22 +400,12 @@ html, body { margin: 0; padding: 0; }
    visible border, the same secondary style as the header's other buttons
    (.ir-hdr-btn). It used to be #8993a4 on a 6% tint, about 2.7:1. */
 .ir-back-btn {
-    background: var(--surface-raised);
-    border: 1px solid rgba(15, 22, 35, 0.24);
-    color: var(--text);
     font-size: 0.8125rem;
-    font-weight: 500;
     padding: 6px 14px;
-    border-radius: 6px;
     cursor: pointer;
     font-family: 'DM Sans', sans-serif;
     transition: all 0.2s;
     white-space: nowrap;
-}
-.ir-back-btn:hover {
-    color: var(--text);
-    background: var(--navy-mid);
-    border-color: rgba(15, 22, 35, 0.38);
 }
 .ir-detail-title {
     display: flex;
@@ -553,13 +523,8 @@ html, body { margin: 0; padding: 0; }
     gap: 5px;
     font-family: 'DM Sans', sans-serif;
     font-size: 0.75rem;
-    font-weight: 500;
     line-height: 1.3;
     padding: 4px 10px;
-    border-radius: 6px;
-    border: 1px solid rgba(15, 22, 35, 0.24);
-    background: var(--surface-raised);
-    color: var(--text);
     cursor: pointer;
     text-decoration: none;
     white-space: nowrap;
@@ -575,11 +540,6 @@ html, body { margin: 0; padding: 0; }
     stroke-width: 1.75;
     stroke-linecap: round;
     stroke-linejoin: round;
-}
-.ir-hdr-btn:hover {
-    background: var(--navy-mid);
-    border-color: rgba(15, 22, 35, 0.38);
-    color: var(--text);
 }
 /* Grid + Obs toggles dim when inactive so users can see at a glance
    whether the overlay is on. Active state inherits the green tint. */
@@ -818,17 +778,8 @@ html, body { margin: 0; padding: 0; }
     align-items: center;
     justify-content: center;
     padding: 3px;
-    background: transparent;
-    border: 1px solid rgba(100, 116, 139, 0.35);
-    border-radius: 4px;
-    color: #64748b;
     cursor: pointer;
     transition: color 0.12s, border-color 0.12s, background 0.12s;
-}
-.ir-chart-save-btn:hover {
-    color: var(--um-green);
-    border-color: var(--um-green);
-    background: rgba(74, 155, 110, 0.10);
 }
 .ir-chart-save-btn svg {
     fill: none;
@@ -1048,11 +999,6 @@ html, body { margin: 0; padding: 0; }
     padding: 5px 10px;
     font-family: 'DM Sans', sans-serif;
     font-size: 0.6875rem;
-    font-weight: 500;
-    color: #cbd5e1;
-    background: rgba(22, 27, 36, 0.92);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 5px;
     cursor: pointer;
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
@@ -1063,7 +1009,6 @@ html, body { margin: 0; padding: 0; }
     stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
 }
 .ir-detail-layers-btn svg polygon { fill: currentColor; stroke: none; }
-.ir-detail-layers-btn:hover { background: rgba(22, 27, 36, 0.96); color: #ffffff; border-color: rgba(74, 155, 110, 0.45); }
 .ir-detail-layers-btn.active {
     background: var(--sel-fill-glass);
     border-color: var(--sel-fill-glass);
@@ -1204,25 +1149,15 @@ html, body { margin: 0; padding: 0; }
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    border-radius: 5px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    background: rgba(22, 27, 36, 0.92);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
     padding: 4px 10px;
     font-family: 'DM Sans', sans-serif;
     font-size: 0.6875rem;
-    font-weight: 600;
-    color: #cbd5e1;
     cursor: pointer;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .ir-radar-mode-btn .ir-radar-mode-glyph { font-size: 0.875rem; line-height: 1; opacity: 0.9; }
-.ir-radar-mode-btn:hover {
-    background: rgba(34, 197, 94, 0.16);
-    border-color: rgba(34, 197, 94, 0.40);
-    color: #ffffff;
-}
 .ir-radar-mode-btn.active {
     background: var(--sel-fill-glass);
     border-color: var(--sel-fill-glass);
@@ -1236,25 +1171,15 @@ html, body { margin: 0; padding: 0; }
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    border-radius: 5px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    background: rgba(22, 27, 36, 0.92);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
     padding: 4px 10px;
     font-family: 'DM Sans', sans-serif;
     font-size: 0.6875rem;
-    font-weight: 600;
-    color: #cbd5e1;
     cursor: pointer;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .ir-measure-mode-btn svg { opacity: 0.9; }
-.ir-measure-mode-btn:hover {
-    background: rgba(34, 211, 238, 0.14);
-    border-color: rgba(34, 211, 238, 0.40);
-    color: #ffffff;
-}
 .ir-measure-mode-btn.active {
     background: var(--sel-fill-glass);
     border-color: var(--sel-fill-glass);
@@ -1420,25 +1345,12 @@ html, body { margin: 0; padding: 0; }
 .ir-anim-btn {
     width: 32px;
     height: 32px;
-    border: 1px solid rgba(15, 22, 35, 0.1);
-    background: rgba(15, 22, 35, 0.04);
-    color: #8993a4;
-    border-radius: 4px;
     cursor: pointer;
     font-size: 0.75rem;
     display: flex;
     align-items: center;
     justify-content: center;
     transition: all 0.2s;
-}
-.ir-anim-btn:hover {
-    color: var(--text);
-    background: var(--border);
-}
-.ir-anim-play {
-    background: rgba(74, 155, 110, 0.15);
-    border-color: rgba(74, 155, 110, 0.3);
-    color: #4a9b6e;
 }
 .ir-anim-slider {
     flex: 1;
@@ -1489,22 +1401,6 @@ html, body { margin: 0; padding: 0; }
    which become invisible on the dark surface. Flip the alpha base from
    navy → white in dark mode for the back/kml/animation buttons + slider
    track + frame counter. */
-[data-theme="dark"] .ir-anim-btn {
-    border-color: rgba(255, 255, 255, 0.18);
-    background: rgba(255, 255, 255, 0.04);
-}
-[data-theme="dark"] .ir-back-btn,
-[data-theme="dark"] .ir-hdr-btn {
-    border-color: rgba(255, 255, 255, 0.26);
-    background: rgba(255, 255, 255, 0.04);
-    color: var(--text);
-}
-[data-theme="dark"] .ir-back-btn:hover,
-[data-theme="dark"] .ir-hdr-btn:hover,
-[data-theme="dark"] .ir-anim-btn:hover {
-    background: rgba(255, 255, 255, 0.10);
-    color: var(--text);
-}
 [data-theme="dark"] .ir-anim-slider {
     background: rgba(255, 255, 255, 0.14);
 }
@@ -2376,15 +2272,11 @@ html, body { margin: 0; padding: 0; }
     gap: 6px;
 }
 .rt-anim-btn {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    color: #c0d0ea;
     cursor: pointer;
     font-family: inherit;
     font-size: 0.75rem;
     line-height: 1;
     padding: 3px 8px;
-    border-radius: 4px;
     min-width: 24px;
     height: 22px;
     transition: background 0.15s, border-color 0.15s, color 0.15s;
@@ -2403,11 +2295,6 @@ html, body { margin: 0; padding: 0; }
     display: block;
 }
 .rt-anim-spin { animation: tc-spin 0.8s linear infinite; transform-origin: 50% 50%; }
-.rt-anim-btn:hover {
-    background: rgba(74, 155, 110, 0.18);
-    border-color: rgba(74, 155, 110, 0.45);
-    color: #6cb78a;
-}
 .rt-anim-play.active {
     background: var(--sel-fill-glass);
     border-color: var(--sel-fill-glass);
@@ -2724,16 +2611,9 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
 .rt-model-toggle-btn {
     font-size: 0.6875rem;
     padding: 3px 10px;
-    border: 1px solid rgba(116, 185, 255, 0.4);
-    background: rgba(116, 185, 255, 0.15);
-    color: #1d4ed8;
-    border-radius: 4px;
     cursor: pointer;
     font-family: 'DM Sans', sans-serif;
     transition: all 0.2s;
-}
-.rt-model-toggle-btn:hover {
-    background: rgba(116, 185, 255, 0.25);
 }
 
 .rt-model-controls-inner {
@@ -2854,27 +2734,18 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
 
 /* GDMI chart export button */
 .rt-dm-export-btn {
-    background: none;
-    border: 1px solid rgba(0, 229, 255, 0.25);
-    color: #00e5ff;
     font-size: 13px;
     width: 28px;
     height: 28px;
     min-width: 28px;
     min-height: 28px;
-    border-radius: 4px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 0;
-    opacity: 0.6;
     transition: opacity 0.15s, background 0.15s;
     position: relative;
-}
-.rt-dm-export-btn:hover {
-    opacity: 1;
-    background: rgba(0, 229, 255, 0.12);
 }
 
 /* Export theme popup */
@@ -2929,21 +2800,11 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     padding: 6px 14px;
     font-family: 'DM Sans', sans-serif;
     font-size: 0.75rem;
-    font-weight: 500;
-    color: #cbd5e1;
-    background: rgba(22, 27, 36, 0.92);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 5px;
     cursor: pointer;
     white-space: nowrap;
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
     transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-.ir-global-toggle-btn:hover {
-    background: rgba(74, 155, 110, 0.22);
-    color: #ffffff;
-    border-color: rgba(74, 155, 110, 0.45);
 }
 .ir-global-toggle-btn.active {
     background: var(--sel-fill-glass);
@@ -3434,25 +3295,15 @@ body:has(.basin-sidebar.open) #ir-obs-hint {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    border-radius: 5px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    background: rgba(22, 27, 36, 0.92);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
     padding: 4px 10px;
     font-family: 'DM Sans', sans-serif;
     font-size: 0.6875rem;
-    font-weight: 600;
-    color: #cbd5e1;
     cursor: pointer;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .ir-3d-mode-btn .ir-3d-mode-glyph { font-size: 0.875rem; line-height: 1; opacity: 0.9; }
-.ir-3d-mode-btn:hover {
-    background: rgba(244, 115, 33, 0.16);
-    border-color: rgba(244, 115, 33, 0.40);
-    color: #ffffff;
-}
 .ir-3d-mode-btn.active {
     background: var(--sel-fill-glass);
     border-color: var(--sel-fill-glass);
@@ -3995,19 +3846,10 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
 
 .sub-save-png-btn {
     padding: 4px 12px;
-    border: 1px solid var(--border);
-    background: rgba(46, 125, 255, 0.12);
-    color: var(--text);
     font-family: inherit;
     font-size: 0.75rem;
-    font-weight: 600;
-    border-radius: 4px;
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s;
-}
-.sub-save-png-btn:hover {
-    background: rgba(46, 125, 255, 0.28);
-    border-color: rgba(46, 125, 255, 0.55);
 }
 .sub-save-png-btn:disabled {
     opacity: 0.55;
@@ -4062,21 +3904,9 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     padding: 0;
     line-height: 1;
     font-size: 0.875rem;
-    color: var(--text-dim, #64748b);
-    background: rgba(255,255,255,0.78);
-    border: 1px solid var(--border);
-    border-radius: 4px;
     cursor: pointer;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.sub-clock-save-btn:hover,
-.sub-clock-save-btn:focus-visible {
-    background: rgba(46,125,255,0.18);
-    color: var(--text);
-    border-color: rgba(46,125,255,0.55);
-    outline: none;
-}
-[data-theme="dark"] .sub-clock-save-btn { background: rgba(22,27,36,0.78); }
 .sub-clock-card:hover {
     border-color: rgba(46, 125, 255, 0.55);
     box-shadow: 0 1px 4px rgba(46, 125, 255, 0.12);
@@ -4201,23 +4031,11 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     padding: 0;
     line-height: 1;
     font-size: 0.75rem;
-    color: var(--text-dim, #64748b);
-    background: rgba(255,255,255,0.7);
-    border: 1px solid var(--border);
-    border-radius: 3px;
     cursor: pointer;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .sub-hov-expand-btn { right: 8px; }
 .sub-hov-save-btn   { right: 34px; }
-.sub-hov-expand-btn:hover,
-.sub-hov-save-btn:hover {
-    background: rgba(46,125,255,0.18);
-    color: var(--text);
-    border-color: rgba(46,125,255,0.45);
-}
-[data-theme="dark"] .sub-hov-expand-btn,
-[data-theme="dark"] .sub-hov-save-btn { background: rgba(22,27,36,0.72); }
 .sub-hov-basin-strip {
     position: relative;
     height: 60px;
@@ -4692,15 +4510,11 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     width: 26px;
     height: 20px;
     border: none;
-    border-radius: 5px;
-    background: rgba(255, 255, 255, 0.06);
-    color: #c0d0ea;
     font-size: 12px;
     line-height: 1;
     cursor: pointer;
     transition: background 0.15s ease, color 0.15s ease;
 }
-.ir-gen-cyc-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.16); color: #fff; }
 .ir-gen-cyc-btn:disabled { opacity: 0.3; cursor: default; }
 
 /* Ensemble-size (1000 / 50) toggle beside the run stepper. */
@@ -4718,18 +4532,13 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
     height: 20px;
     padding: 0 7px;
     border: none;
-    border-radius: 5px;
-    background: rgba(255, 255, 255, 0.06);
-    color: #c0d0ea;
     font-family: 'DM Sans', system-ui, sans-serif;
     font-size: 11px;
-    font-weight: 600;
     line-height: 1;
     white-space: nowrap;
     cursor: pointer;
     transition: background 0.15s ease, color 0.15s ease;
 }
-.rt-dock-var-btn:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
 .rt-dock-var-btn.is-active {
     background: var(--sel-fill-glass);
     color: var(--sel-ink);
@@ -5121,28 +4930,15 @@ body:has(#ir-detail[style*="block"], #ir-detail[style*="flex"]) #ir-display-wrap
    the .rt-anim-btn look from the Global Map IR scrubber so the
    control reads as the same pattern. */
 .rt-genesis-tau-btn {
-    background: rgba(15,22,35,0.04);
-    color: var(--text);
-    border: 1px solid rgba(15,22,35,0.18);
-    border-radius: 4px;
     font-size: 13px;
     padding: 4px 9px;
     cursor: pointer;
     transition: background 0.12s ease, border-color 0.12s ease;
     min-width: 30px;
 }
-.rt-genesis-tau-btn:hover { background: rgba(15,22,35,0.10); }
-[data-theme="dark"] .rt-genesis-tau-btn {
-    background: rgba(255,255,255,0.04);
-    color: #e2e8f0;
-    border-color: rgba(255,255,255,0.18);
-}
-[data-theme="dark"] .rt-genesis-tau-btn:hover {
-    background: rgba(255,255,255,0.10);
-}
 .rt-genesis-tau-btn.playing {
-    background: rgba(249,115,22,0.20);
-    border-color: rgba(249,115,22,0.50);
+    background: var(--um-green-tint);
+    border-color: var(--sel-fill);
 }
 
 /* The scrubber row holds 4 tau buttons + a min-160px slider + tau label +
@@ -6694,22 +6490,13 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
     min-width: 60px;
 }
 .tc-mw-play-btn, .tc-mw-live-btn {
-    background: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.12);
-    color: #cbd5e1;
     font-size: 0.625rem;
-    font-weight: 600;
     padding: 2px 6px;
-    border-radius: 3px;
     cursor: pointer;
     letter-spacing: 0.04em;
     transition: background 0.12s, color 0.12s;
 }
 .tc-mw-play-btn { padding: 2px 5px; }
-.tc-mw-play-btn:hover, .tc-mw-live-btn:hover {
-    background: rgba(74,155,110,0.18);
-    color: #e2e8f0;
-}
 .tc-mw-play-btn.playing {
     background: rgba(74,155,110,0.32);
     color: #fefefe;
@@ -7614,16 +7401,9 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 .exp-archdd { position: relative; display: inline-block; }
 .exp-archdd-btn {
     font: inherit; font-size: 13px; padding: 7px 12px; cursor: pointer;
-    border: 1px solid #e2e8f0; border-radius: 8px;
-    background: #ffffff; color: #0f172a;
     display: inline-flex; align-items: center; gap: 7px;
 }
 .exp-archdd-btn b { font-weight: 400; color: #64748b; }
-.exp-archdd-btn:hover { border-color: #cbd5e1; }
-[data-theme="dark"] .exp-archdd-btn {
-    background: #0f172a; color: #e2e8f0; border-color: #1e293b;
-}
-[data-theme="dark"] .exp-archdd-btn:hover { border-color: #334155; }
 .exp-archdd-menu {
     position: absolute; z-index: 60; top: calc(100% + 6px); left: 0;
     min-width: 320px; max-height: 380px; overflow-y: auto;

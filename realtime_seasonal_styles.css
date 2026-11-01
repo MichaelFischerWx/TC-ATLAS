@@ -141,21 +141,12 @@
     padding: 0;
     line-height: 1;
     font-size: 1rem;
-    color: var(--text-dim, #94a3b8);
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.10);
-    border-radius: 4px;
     cursor: pointer;
     transition: background 0.15s, color 0.15s, border-color 0.15s,
                 transform 0.12s;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-}
-.seasonal-maximize-btn:hover {
-    color: var(--text, #e0e0e0);
-    background: rgba(255,255,255,0.10);
-    border-color: rgba(255,255,255,0.30);
 }
 .seasonal-maximize-btn:active { transform: scale(0.95); }
 .seasonal-maximize-btn svg { width: 13px; height: 13px; }
@@ -459,16 +450,11 @@ body.seasonal-maximized .seasonal-header {
     font-size: 0.75rem;
 }
 .seasonal-evo-btn {
-    background: rgba(46,125,255,0.18);
-    color: var(--text, #d5dbe5);
-    border: 1px solid var(--border, rgba(255,255,255,0.18));
-    border-radius: 4px;
     padding: 3px 10px;
     font-size: 0.875rem;
     cursor: pointer;
     line-height: 1;
 }
-.seasonal-evo-btn:hover { background: rgba(46,125,255,0.32); }
 .seasonal-evo-slider {
     flex: 1;
     height: 18px;
@@ -561,20 +547,12 @@ body.seasonal-maximized .seasonal-header {
     margin-top: 2px;
 }
 .seasonal-evo-toggle {
-    background: transparent;
-    color: var(--text-dim, #94a3b8);
-    border: 1px solid var(--border, rgba(255,255,255,0.18));
-    border-radius: 3px;
     padding: 3px 8px;
     font-size: 0.75rem;
     font-family: inherit;
     cursor: pointer;
     line-height: 1;
     touch-action: manipulation;
-}
-.seasonal-evo-toggle:hover {
-    background: rgba(251,146,60,0.10);
-    border-color: rgba(251,146,60,0.40);
 }
 .seasonal-evo-toggle.active {
     background: var(--sel-fill);
@@ -622,10 +600,6 @@ body.seasonal-maximized .seasonal-header {
     flex-wrap: wrap;
 }
 .seasonal-evo-step-btn {
-    background: rgba(46,125,255,0.18);
-    color: var(--text, #d5dbe5);
-    border: 1px solid var(--border, rgba(255,255,255,0.18));
-    border-radius: 4px;
     padding: 6px 12px;
     font-size: 0.875rem;
     font-family: inherit;
@@ -634,8 +608,6 @@ body.seasonal-maximized .seasonal-header {
     min-width: 64px;
     touch-action: manipulation;
 }
-.seasonal-evo-step-btn:hover { background: rgba(46,125,255,0.32); }
-.seasonal-evo-step-btn:active { background: rgba(46,125,255,0.45); }
 
 /* Mobile: the wrap div's aspect-ratio drives a small height when the
    viewport is narrow. Override to a minimum height so Panel C stays
@@ -791,17 +763,8 @@ body.seasonal-maximized .seasonal-header {
     padding: 0;
     line-height: 1;
     font-size: 1rem;
-    color: var(--text-dim, #94a3b8);
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.10);
-    border-radius: 4px;
     cursor: pointer;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-.seasonal-save-btn:hover {
-    color: var(--text, #e0e0e0);
-    background: rgba(255,255,255,0.10);
-    border-color: rgba(255,255,255,0.30);
 }
 .seasonal-panel { position: relative; }
 
@@ -875,15 +838,11 @@ body.seasonal-maximized .seasonal-header {
     gap: 1px;
     padding: 6px 10px;
     min-width: 118px;
-    border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 6px;
-    background: var(--surface-raised, #161b22);
     cursor: pointer;
     font-size: 0.75rem;
     color: var(--text-dim, #94a3b8);
     transition: border-color .12s ease, background .12s ease;
 }
-.seasonal-ace-chip:hover { border-color: rgba(120,170,210,0.55); }
 .seasonal-ace-chip.is-active {
     border-color: var(--sel-fill);
     background: var(--sel-fill);
@@ -902,6 +861,9 @@ body.seasonal-maximized .seasonal-header {
 .seasonal-ace-chip .ace-chip-pct { font-variant-numeric: tabular-nums; }
 .seasonal-ace-chip .ace-hi { color: #ff7a59; }
 .seasonal-ace-chip .ace-lo { color: #6da8e6; }
+/* On the green fill every line reads white (the data colors above are for the off state). */
+.seasonal-ace-chip.is-active .ace-chip-basin, .seasonal-ace-chip.is-active .ace-chip-val,
+.seasonal-ace-chip.is-active .ace-chip-pct { color: var(--sel-ink); }
 
 /* Panel A inner layout: chart left, storm contributions right. The
    breakdown is a natural sidebar — short rows, no wide axis — and putting

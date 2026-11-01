@@ -1358,10 +1358,6 @@
 }
 
 .sat-anim-btn {
-    background: #12141c;
-    color: #e2e4ea;
-    border: 1px solid #2a2d38;
-    border-radius: 4px;
     padding: 4px 10px;
     font-size: 12px;
     cursor: pointer;
@@ -1370,9 +1366,6 @@
     font-family: inherit;
 }
 
-.sat-anim-btn:hover {
-    background: #1e2130;
-}
 
 .sat-play-btn {
     min-width: 36px;
