@@ -27,6 +27,7 @@ _NAMES = {
     "_rate_rejections", "_rate_lock", "_client_ip", "_bot_rate_max_requests",
     "_BOT_EXEMPT_UA_PREFIXES", "_is_automated_client", "RateLimitMiddleware",
     "CacheHeaderMiddleware", "_CORS_ALLOW_METHODS", "_CORS_EXPOSE_HEADERS",
+    "TC_RADAR_DATASET", "IS_V4", "TC_RADAR_DS_PARAM",
     "PublicCORSMiddleware",
     # composites
     "_COMPOSITE_MAX_CASES", "_cap_composite_cases", "_era5_rows_for_composite",
@@ -191,7 +192,11 @@ class CORSTests(unittest.TestCase):
 class CacheHeaderTests(unittest.TestCase):
     def setUp(self):
         from fastapi.testclient import TestClient
+        self._ds = T["TC_RADAR_DS_PARAM"]; T["TC_RADAR_DS_PARAM"] = None      # v3m revision: no dataset guard
         self.c = TestClient(_app(), raise_server_exceptions=False)
+
+    def tearDown(self):
+        T["TC_RADAR_DS_PARAM"] = self._ds
 
     def test_handler_cache_control_kept(self):
         self.assertEqual(self.c.get("/scatter/vp_favorability").headers["cache-control"], "no-store")
@@ -202,6 +207,29 @@ class CacheHeaderTests(unittest.TestCase):
 
     def test_errors_no_store(self):
         self.assertEqual(self.c.get("/missing").headers["cache-control"], "no-store")
+
+
+class DatasetGuardTests(unittest.TestCase):
+    """A v4 revision never lets a shared cache keep a case-keyed payload under a URL without ds=4."""
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        self._saved = (T["TC_RADAR_DS_PARAM"], T["TC_RADAR_DATASET"])
+        T["TC_RADAR_DS_PARAM"], T["TC_RADAR_DATASET"] = "4", "v4"
+        self.c = TestClient(_app(), raise_server_exceptions=False)
+
+    def tearDown(self):
+        T["TC_RADAR_DS_PARAM"], T["TC_RADAR_DATASET"] = self._saved
+
+    def test_without_ds_no_store(self):
+        r = self.c.get("/data?case_index=5")
+        self.assertEqual(r.headers["cache-control"], "no-store")
+        self.assertEqual(r.headers["x-tc-radar-dataset"], "v4")
+
+    def test_wrong_ds_no_store(self):
+        self.assertEqual(self.c.get("/data?case_index=5&ds=3").headers["cache-control"], "no-store")
+
+    def test_with_ds_keeps_immutable(self):
+        self.assertIn("immutable", self.c.get("/data?case_index=5&ds=4").headers["cache-control"])
 
 
 class AutomatedTierTests(unittest.TestCase):

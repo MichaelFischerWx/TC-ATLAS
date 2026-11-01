@@ -46,9 +46,14 @@ COPY ascat_api.py .
 COPY recon_api.py .
 COPY tc_radar_metadata.json .
 COPY tc_radar_metadata_merge.json .
+# TC-RADAR v4.0 (TC_RADAR_DATASET=v4; bin/build_tc_radar_metadata.py --suffix _v4). Both versions ship so the
+# env var alone picks the dataset (rollback = a v3m revision).
+COPY tc_radar_metadata_v4.json .
+COPY tc_radar_metadata_merge_v4.json .
 COPY climatology_hybrid.npz .
-# Precomputed pass-1 vortex metrics (scripts/build_tc_radar_vortex_raw.py)
+# Precomputed pass-1 vortex metrics (scripts/build_tc_radar_vortex_raw.py; v4: recomputed from the v4.0 merges)
 COPY tc_radar_vortex_raw.json .
+COPY tc_radar_vortex_raw_v4.json .
 COPY ibtracs_storms.json .
 # The IBTrACS track chunks (ibtracs_tracks_*.json) and intensity_changes.json
 # are frontend / precache_mergir.py inputs only — no module in this image

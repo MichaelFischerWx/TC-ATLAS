@@ -70,9 +70,24 @@ S3_PREFIX  = os.environ.get("TC_RADAR_S3_PREFIX", "tc-radar")
 AWS_REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
 USE_S3     = bool(S3_BUCKET)
 
+# TC-RADAR dataset this revision serves (2026-11-01, v4.0 migration). ONE dataset per revision -- the stores,
+# case counts, metadata, vortex metrics and R2 mirror keys below all follow it. v4.0 renumbers the swath cases from
+# 710 on and the merges from 215 on, so the explorer sends ds=4 on every v4 request (new cache keys at Cloudflare and
+# in browsers); a v4 revision answers requests WITHOUT ds=4 as no-store (CacheHeaderMiddleware) so a page loaded
+# before the switch can never plant v4 payloads under its old URLs. Rollback = shift traffic to a v3m revision.
+TC_RADAR_DATASET = os.environ.get("TC_RADAR_DATASET", "v3m").strip().lower()
+if TC_RADAR_DATASET not in ("v3m", "v4"):
+    raise RuntimeError(f"TC_RADAR_DATASET must be v3m or v4, not {TC_RADAR_DATASET!r}")
+IS_V4 = TC_RADAR_DATASET == "v4"
+TC_RADAR_DS_PARAM = "4" if IS_V4 else None          # the ds= value requests to this revision should carry
+TC_RADAR_MAX_YEAR = 2025 if IS_V4 else 2024
+_R2_DS = "tcradar4" if IS_V4 else "tcradar"      # R2 mirror key root for every case-keyed payload
+
 # GCS Zarr — preferred over S3 (free egress from Cloud Run)
 GCS_ZARR_BUCKET = os.environ.get("TC_RADAR_GCS_BUCKET", "")
 GCS_ZARR_PREFIX = os.environ.get("TC_RADAR_GCS_PREFIX", "tc-radar")
+if IS_V4 and GCS_ZARR_PREFIX == "tc-radar":
+    GCS_ZARR_PREFIX = "tc-radar-v4"                  # deploy.sh used to pin the v3m prefix explicitly
 USE_GCS_ZARR    = bool(GCS_ZARR_BUCKET)
 
 AOML_BASE = "https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3"
@@ -190,10 +205,10 @@ ERA5_FIELD_CONFIG = {
 }
 
 CASE_COUNTS = {
-    ("swath", "early"):  710,
-    ("swath", "recent"): 800,
-    ("merge", "early"):  215,
-    ("merge", "recent"): 221,
+    ("swath", "early"):  713 if IS_V4 else 710,     # v4: gs://tc-atlas-zarr/tc-radar-v4/manifest.json
+    ("swath", "recent"): 927 if IS_V4 else 800,     # (early = cases through 2019 in both versions)
+    ("merge", "early"):  216 if IS_V4 else 215,
+    ("merge", "recent"): 258 if IS_V4 else 221,
 }
 
 # ---------------------------------------------------------------------------
@@ -525,6 +540,19 @@ class CacheHeaderMiddleware(BaseHTTPMiddleware):
                 # probes, partial/negative dicts) is pinned to no-store.
                 response.headers['Cache-Control'] = 'no-store'
 
+        # TC-RADAR dataset guard (v4.0 migration): a case number means a different analysis in v3m and v4.0, so
+        # a v4 revision never lets a shared cache keep a case-keyed payload under a URL without ds=4 (a page
+        # loaded before the switch). The explorer adds ds=4 to every request once it serves v4.0.
+        if TC_RADAR_DS_PARAM and (
+                "case_index" in request.query_params
+                or path in self.IMMUTABLE_EXACT
+                or any(path.startswith(p) for p in self.IMMUTABLE_PREFIXES + self.SEMI_STABLE_PREFIXES)
+                or path in ('/metadata', '/metadata_all', '/hovmoller')
+                or path.startswith(('/flightlevel/archive', '/dropsondes/archive'))):
+            response.headers['X-TC-RADAR-Dataset'] = TC_RADAR_DATASET
+            if request.query_params.get('ds') != TC_RADAR_DS_PARAM:
+                response.headers['Cache-Control'] = 'no-store'
+
         return response
 
 
@@ -765,6 +793,9 @@ def _open_dataset(data_type: str, era: str) -> xr.Dataset:
         store = _wrap_lru(gcsfs.GCSMap(root=path, gcs=fs, check=False),
                           _TC_RADAR_CHUNK_CACHE_BYTES)
         ds = xr.open_zarr(store, consolidated=True)
+        if ds.sizes.get("num_cases") != CASE_COUNTS[key]:
+            raise RuntimeError(f"{path}: {ds.sizes.get('num_cases')} cases, CASE_COUNTS says {CASE_COUNTS[key]} "
+                               f"(TC_RADAR_DATASET={TC_RADAR_DATASET})")
         print(f"Opened Zarr from GCS (LRU {_TC_RADAR_CHUNK_CACHE_BYTES//1024//1024} MB): {path}")
         return ds
     if USE_S3:
@@ -777,6 +808,8 @@ def _open_dataset(data_type: str, era: str) -> xr.Dataset:
         ds = xr.open_zarr(store, consolidated=True)
         print(f"Opened Zarr from S3 (LRU {_TC_RADAR_CHUNK_CACHE_BYTES//1024//1024} MB): {path}")
         return ds
+    if IS_V4:
+        raise RuntimeError("TC-RADAR v4.0 is served from the GCS Zarr only (no AOML fallback)")
     url = AOML_FILES[key]
     of  = fsspec.open(url, "rb")
     ds  = xr.open_dataset(of.open(), engine="h5netcdf")
@@ -967,8 +1000,9 @@ def render_planview(
 # ---------------------------------------------------------------------------
 # Metadata + plot cache
 # ---------------------------------------------------------------------------
-METADATA_PATH = Path(os.environ.get("METADATA_PATH", "./tc_radar_metadata.json"))
-MERGE_METADATA_PATH = Path(os.environ.get("MERGE_METADATA_PATH", "./tc_radar_metadata_merge.json"))
+_DS_SUFFIX = "_v4" if IS_V4 else ""          # bin/build_tc_radar_metadata.py --suffix _v4
+METADATA_PATH = Path(os.environ.get("METADATA_PATH", f"./tc_radar_metadata{_DS_SUFFIX}.json"))
+MERGE_METADATA_PATH = Path(os.environ.get("MERGE_METADATA_PATH", f"./tc_radar_metadata_merge{_DS_SUFFIX}.json"))
 _metadata_cache: dict[int, dict] = {}
 _merge_metadata_cache: dict[int, dict] = {}
 # Staging area for two-pass vortex metrics (raw values before DB mean subtraction)
@@ -1083,7 +1117,7 @@ def _apply_enrichment_sidecar() -> bool:
     return True
 
 
-VORTEX_RAW_PATH = Path(os.environ.get("TC_RADAR_VORTEX_RAW", "./tc_radar_vortex_raw.json"))
+VORTEX_RAW_PATH = Path(os.environ.get("TC_RADAR_VORTEX_RAW", f"./tc_radar_vortex_raw{_DS_SUFFIX}.json"))
 
 
 def _apply_vortex_raw() -> bool:
@@ -1426,6 +1460,7 @@ def health():
     return {
         "status": "ok",
         "version": "2.0",
+        "tc_radar_dataset": TC_RADAR_DATASET,
         "backend": "s3_zarr" if USE_S3 else "aoml_http",
         "bucket": S3_BUCKET if USE_S3 else None,
     }
@@ -1700,7 +1735,7 @@ def get_data(
         _r2_frame_exists, _r2_mirror_frame_async, _public_frame_url,
     )
     level_key = _snap_level_km(level_km)
-    r2_key = (f"tcradar-data/v1/{data_type}/{case_index}_{variable}_{level_key:.1f}"
+    r2_key = (f"{_R2_DS}-data/v1/{data_type}/{case_index}_{variable}_{level_key:.1f}"
               f"_{overlay or 'none'}_{int(wind_barbs)}_{int(tilt_profile)}.json")
     if _r2_frame_exists(r2_key):
         return RedirectResponse(
@@ -2542,7 +2577,7 @@ def _render_ir_png(frame_2d, vmin=_IR_CMAP_VMIN, vmax=_IR_CMAP_VMAX):
 # Each frame is mirrored to R2 at {_IR_IDX_PREFIX}/{dt}/{case}_{lag}.png the first
 # time it is rendered, and the browser reads mirrored frames straight from
 # cdn.tcatlas.org (.png is edge-cached by default).
-_IR_IDX_PREFIX = "tcradar-ir/v3"
+_IR_IDX_PREFIX = "tcradar4-ir/v3" if IS_V4 else "tcradar-ir/v3"
 
 
 def _ir_idx_png(frame_2d, vmin=_IR_CMAP_VMIN, vmax=_IR_CMAP_VMAX):
@@ -2705,7 +2740,7 @@ def get_ir_frame(
     )
     dt = "merge" if data_type == "merge" else "swath"
     # v2 = ice-blue cold tail (2026-09-30); v1 objects hold the old baked colours.
-    r2_key = f"tcradar-ir/v2/{dt}/{case_index}_{lag_index}.json"
+    r2_key = f"{_R2_DS}-ir/v2/{dt}/{case_index}_{lag_index}.json"
     if _r2_frame_exists(r2_key):
         # Target is a pure function of (dt, case, lag) and the object never
         # changes once mirrored → the redirect itself is safely cacheable.
@@ -3469,7 +3504,7 @@ def azimuthal_mean(
     from global_archive_api import (
         _r2_frame_exists, _r2_mirror_frame_async, _public_frame_url,
     )
-    r2_key = (f"tcradar-azmean/v1/{data_type}/{case_index}_{variable}_{max_radius_km:g}"
+    r2_key = (f"{_R2_DS}-azmean/v1/{data_type}/{case_index}_{variable}_{max_radius_km:g}"
               f"_{dr_km:g}_{coverage_min:g}_{overlay or 'none'}.json")
     if _r2_frame_exists(r2_key):
         return RedirectResponse(
@@ -3857,8 +3892,8 @@ def _composite_filter_params(
     max_vmax_change:float = Query(85,   ge=-100,le=85,   description="Max 24-h Vmax change (kt)"),
     min_tilt:       float = Query(0,    ge=0,   le=200,  description="Min tilt magnitude (km)"),
     max_tilt:       float = Query(200,  ge=0,   le=200,  description="Max tilt magnitude (km)"),
-    min_year:       int   = Query(1997, ge=1997,le=2024,  description="Min year"),
-    max_year:       int   = Query(2024, ge=1997,le=2024,  description="Max year"),
+    min_year:       int   = Query(1997, ge=1997,le=TC_RADAR_MAX_YEAR,  description="Min year"),
+    max_year:       int   = Query(TC_RADAR_MAX_YEAR, ge=1997,le=TC_RADAR_MAX_YEAR,  description="Max year"),
     min_shear_mag:  float = Query(0,    ge=0,   le=100,  description="Min shear magnitude (kt)"),
     max_shear_mag:  float = Query(100,  ge=0,   le=100,  description="Max shear magnitude (kt)"),
     min_shear_dir:  float = Query(0,    ge=0,   le=360,  description="Min shear direction (deg)"),
@@ -4268,8 +4303,8 @@ def composite_count(
     max_vmax_change:float = Query(85,   ge=-100,le=85),
     min_tilt:       float = Query(0,    ge=0,   le=200),
     max_tilt:       float = Query(200,  ge=0,   le=200),
-    min_year:       int   = Query(1997, ge=1997,le=2024),
-    max_year:       int   = Query(2024, ge=1997,le=2024),
+    min_year:       int   = Query(1997, ge=1997,le=TC_RADAR_MAX_YEAR),
+    max_year:       int   = Query(TC_RADAR_MAX_YEAR, ge=1997,le=TC_RADAR_MAX_YEAR),
     min_shear_mag:  float = Query(0,    ge=0,   le=100),
     max_shear_mag:  float = Query(100,  ge=0,   le=100),
     min_shear_dir:  float = Query(0,    ge=0,   le=360),
@@ -4322,7 +4357,7 @@ def composite_azimuthal_mean(
     min_intensity:  float = Query(0),    max_intensity:  float = Query(200),
     min_vmax_change:float = Query(-100), max_vmax_change:float = Query(85),
     min_tilt:       float = Query(0),    max_tilt:       float = Query(200),
-    min_year:       int   = Query(1997), max_year:       int   = Query(2024),
+    min_year:       int   = Query(1997), max_year:       int   = Query(TC_RADAR_MAX_YEAR),
     min_shear_mag:  float = Query(0),    max_shear_mag:  float = Query(100),
     min_shear_dir:  float = Query(0),    max_shear_dir:  float = Query(360),
     min_dtl:        float = Query(0),    dtl_window:     str   = Query("24h"),
@@ -4552,7 +4587,7 @@ def composite_quadrant_mean(
     min_intensity:  float = Query(0),    max_intensity:  float = Query(200),
     min_vmax_change:float = Query(-100), max_vmax_change:float = Query(85),
     min_tilt:       float = Query(0),    max_tilt:       float = Query(200),
-    min_year:       int   = Query(1997), max_year:       int   = Query(2024),
+    min_year:       int   = Query(1997), max_year:       int   = Query(TC_RADAR_MAX_YEAR),
     min_shear_mag:  float = Query(0),    max_shear_mag:  float = Query(100),
     min_shear_dir:  float = Query(0),    max_shear_dir:  float = Query(360),
     min_dtl:        float = Query(0),    dtl_window:     str   = Query("24h"),
@@ -4743,7 +4778,7 @@ def composite_plan_view(
     min_intensity:  float = Query(0),    max_intensity:  float = Query(200),
     min_vmax_change:float = Query(-100), max_vmax_change:float = Query(85),
     min_tilt:       float = Query(0),    max_tilt:       float = Query(200),
-    min_year:       int   = Query(1997), max_year:       int   = Query(2024),
+    min_year:       int   = Query(1997), max_year:       int   = Query(TC_RADAR_MAX_YEAR),
     min_shear_mag:  float = Query(0),    max_shear_mag:  float = Query(100),
     min_shear_dir:  float = Query(0),    max_shear_dir:  float = Query(360),
     min_dtl:        float = Query(0),    dtl_window:     str   = Query("24h"),
@@ -5192,7 +5227,7 @@ def composite_ir_plan_view(
     min_intensity:  float = Query(0),    max_intensity:  float = Query(200),
     min_vmax_change:float = Query(-100), max_vmax_change:float = Query(85),
     min_tilt:       float = Query(0),    max_tilt:       float = Query(200),
-    min_year:       int   = Query(1997), max_year:       int   = Query(2024),
+    min_year:       int   = Query(1997), max_year:       int   = Query(TC_RADAR_MAX_YEAR),
     min_shear_mag:  float = Query(0),    max_shear_mag:  float = Query(100),
     min_shear_dir:  float = Query(0),    max_shear_dir:  float = Query(360),
     min_dtl:        float = Query(0),    dtl_window:     str   = Query("24h"),
@@ -5423,7 +5458,7 @@ def composite_ir_azimuthal_mean(
     min_intensity:  float = Query(0),    max_intensity:  float = Query(200),
     min_vmax_change:float = Query(-100), max_vmax_change:float = Query(85),
     min_tilt:       float = Query(0),    max_tilt:       float = Query(200),
-    min_year:       int   = Query(1997), max_year:       int   = Query(2024),
+    min_year:       int   = Query(1997), max_year:       int   = Query(TC_RADAR_MAX_YEAR),
     min_shear_mag:  float = Query(0),    max_shear_mag:  float = Query(100),
     min_shear_dir:  float = Query(0),    max_shear_dir:  float = Query(360),
     min_dtl:        float = Query(0),    dtl_window:     str   = Query("24h"),
@@ -5751,7 +5786,7 @@ def composite_cfad(
     min_intensity:  float = Query(0),    max_intensity:  float = Query(200),
     min_vmax_change:float = Query(-100), max_vmax_change:float = Query(85),
     min_tilt:       float = Query(0),    max_tilt:       float = Query(200),
-    min_year:       int   = Query(1997), max_year:       int   = Query(2024),
+    min_year:       int   = Query(1997), max_year:       int   = Query(TC_RADAR_MAX_YEAR),
     min_shear_mag:  float = Query(0),    max_shear_mag:  float = Query(100),
     min_shear_dir:  float = Query(0),    max_shear_dir:  float = Query(360),
     min_dtl:        float = Query(0),    dtl_window:     str   = Query("24h"),
@@ -7768,7 +7803,7 @@ def get_archive_flight_level(
     """
     now = time.time()
     cache_key = f"{data_type}_{case_index}_avg{avg_interval_s}"
-    r2_key_early = f"tcradar-fl/v1/{data_type}/{case_index}_avg{avg_interval_s:g}.json"
+    r2_key_early = f"{_R2_DS}-fl/v1/{data_type}/{case_index}_avg{avg_interval_s:g}.json"
     if cache_key in _hrd_fl_cache:
         cached, ts = _hrd_fl_cache[cache_key]
         if now - ts < _HRD_FL_CACHE_TTL:
@@ -7781,7 +7816,7 @@ def get_archive_flight_level(
     if not case_meta:
         raise HTTPException(status_code=404, detail=f"case_index {case_index} not found")
 
-    r2_key = f"tcradar-fl/v1/{data_type}/{case_index}_avg{avg_interval_s:g}.json"
+    r2_key = f"{_R2_DS}-fl/v1/{data_type}/{case_index}_avg{avg_interval_s:g}.json"
     _rd = _archive_r2_redirect(r2_key)
     if _rd is not None:
         return _rd
@@ -8742,7 +8777,7 @@ def get_archive_dropsondes(
     """
     now = time.time()
     cache_key = f"sonde_{data_type}_{case_index}"
-    r2_key_early = f"tcradar-sondes/v1/{data_type}/{case_index}.json"
+    r2_key_early = f"{_R2_DS}-sondes/v1/{data_type}/{case_index}.json"
     if cache_key in _hrd_sonde_cache:
         cached, ts = _hrd_sonde_cache[cache_key]
         if now - ts < _HRD_SONDE_CACHE_TTL:
@@ -8755,7 +8790,7 @@ def get_archive_dropsondes(
     if not case_meta:
         raise HTTPException(status_code=404, detail=f"case_index {case_index} not found")
 
-    r2_key = f"tcradar-sondes/v1/{data_type}/{case_index}.json"
+    r2_key = f"{_R2_DS}-sondes/v1/{data_type}/{case_index}.json"
     _rd = _archive_r2_redirect(r2_key)
     if _rd is not None:
         return _rd
@@ -9163,7 +9198,7 @@ def composite_anomaly_azimuthal_mean(
     min_intensity:  float = Query(0),    max_intensity:  float = Query(200),
     min_vmax_change:float = Query(-100), max_vmax_change:float = Query(85),
     min_tilt:       float = Query(0),    max_tilt:       float = Query(200),
-    min_year:       int   = Query(1997), max_year:       int   = Query(2024),
+    min_year:       int   = Query(1997), max_year:       int   = Query(TC_RADAR_MAX_YEAR),
     min_shear_mag:  float = Query(0),    max_shear_mag:  float = Query(100),
     min_shear_dir:  float = Query(0),    max_shear_dir:  float = Query(360),
     min_dtl:        float = Query(0),    dtl_window:     str   = Query("24h"),
@@ -9843,7 +9878,7 @@ try:
     app.include_router(microwave_router, prefix="/microwave")
     # Kick off the TC-PRIMED overpass index build in a background thread.
     # The index maps TC-RADAR cases to temporally nearby microwave overpasses.
-    _mw_start()
+    _mw_start(metadata_path=str(METADATA_PATH))
     print("[microwave] Router mounted and index build started")
 except Exception as _mw_err:
     import traceback

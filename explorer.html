@@ -11,14 +11,14 @@
     </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Explore 1,500+ airborne Doppler radar analyses of tropical cyclones (1997–2024) with 3D vortex structure, satellite imagery, and environmental diagnostics.">
+    <meta name="description" content="Explore 1,600+ airborne Doppler radar analyses of tropical cyclones (1997–2025) with 3D vortex structure, satellite imagery, and environmental diagnostics.">
     <meta name="keywords" content="tropical cyclone, hurricane, radar, TC-ATLAS, airborne Doppler, vortex structure, NOAA, HRD, wind analysis, microwave, satellite">
     <meta name="author" content="Dr. Michael Fischer, University of Miami / NOAA HRD">
 
     <!-- Open Graph / Social Sharing -->
     <meta property="og:type" content="website">
     <meta property="og:title" content="TC-RADAR — TC-ATLAS">
-    <meta property="og:description" content="Explore 1,500+ airborne Doppler radar analyses of tropical cyclones. Interactive 3D wind fields, IR satellite overlays, microwave imagery, ERA5 environmental diagnostics, and compositing tools.">
+    <meta property="og:description" content="Explore 1,600+ airborne Doppler radar analyses of tropical cyclones. Interactive 3D wind fields, IR satellite overlays, microwave imagery, ERA5 environmental diagnostics, and compositing tools.">
     <meta property="og:url" content="https://tcatlas.org/explorer.html">
     <meta property="og:image" content="https://tcatlas.org/images/og-preview.png">
     <meta property="og:site_name" content="TC-ATLAS">
@@ -26,7 +26,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="TC-RADAR — TC-ATLAS">
-    <meta name="twitter:description" content="Explore 1,500+ airborne Doppler radar analyses of tropical cyclones with interactive 3D visualization, microwave imagery, and environmental diagnostics.">
+    <meta name="twitter:description" content="Explore 1,600+ airborne Doppler radar analyses of tropical cyclones with interactive 3D visualization, microwave imagery, and environmental diagnostics.">
     <meta name="twitter:image" content="https://tcatlas.org/images/og-preview.png">
 
     <!-- Favicon -->
@@ -61,7 +61,7 @@
     <link rel="dns-prefetch" href="https://d.basemaps.cartocdn.com">
     <!-- Bottom-of-body bundle + parser-injected map engine, discoverable
          from byte 0. Tokens MUST match the script tags below. -->
-    <link rel="preload" as="script" href="tc_radar_app.js?v=20261101p2">
+    <link rel="preload" as="script" href="tc_radar_app.js?v=20261101v4">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
     <link rel="stylesheet" href="tc_radar_styles.css?v=20261101m1">
     <link rel="stylesheet" href="realtime_tdr_styles.css?v=20261031p6">
@@ -102,7 +102,7 @@
             <span class="dataset-stat"><strong id="unique-storms">&mdash;</strong> storms</span>
             <span class="dataset-stat-sep" aria-hidden="true">·</span>
             <span class="dataset-stat" id="year-range">&mdash;</span>
-            <span class="dataset-version" title="TC-RADAR dataset version v3m: post-processed merged and swath analyses">Dataset v3m</span>
+            <span class="dataset-version" title="TC-RADAR dataset version 4.0: post-processed merged and swath analyses, 1997&ndash;2025">Dataset v4.0</span>
             <!-- Composites left the top nav (it is a TC-RADAR mode); this is its entry point on the page. -->
             <button type="button" class="dataset-composites-btn" id="composites-btn" onclick="toggleCompositePanel()" title="Composite analyses across cases: filter by intensity, shear, tilt, motion and more"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>Composites</button>
         </div>
@@ -165,9 +165,9 @@
                 <div class="filter-group">
                     <label>Year Range</label>
                     <div style="display:flex;gap:8px;align-items:center;margin-top:4px;">
-                        <input type="number" id="min-year" min="1997" max="2024" value="1997">
+                        <input type="number" id="min-year" min="1997" max="2025" value="1997">
                         <span style="color:var(--slate);font-size:0.8rem;">to</span>
-                        <input type="number" id="max-year" min="1997" max="2024" value="2024">
+                        <input type="number" id="max-year" min="1997" max="2025" value="2025">
                     </div>
                 </div>
             </div>
@@ -229,7 +229,7 @@
     <section id="tc-radar-db" class="section-bg">
         <div class="content-section">
             <h2 class="section-title">The <span class="accent">TC-RADAR</span> Database</h2>
-            <p class="section-desc">The TC-RADAR dataset forms the backbone of TC-ATLAS, providing over 1,500 post-processed airborne Doppler radar analyses of tropical cyclones from 1997 to 2024. All analyses are mapped onto storm-centered grids at 2.0 km horizontal and 0.5 km vertical resolution, spanning 0&ndash;18 km in height.</p>
+            <p class="section-desc">The TC-RADAR dataset forms the backbone of TC-ATLAS, providing over 1,600 post-processed airborne Doppler radar analyses of tropical cyclones from 1997 to 2025. All analyses are mapped onto storm-centered grids at 2.0 km horizontal and 0.5 km vertical resolution, spanning 0&ndash;18 km in height.</p>
             <div style="max-width:800px;margin:0 auto;">
                 <h3 style="color:var(--blue-light);margin-bottom:0.5rem;font-size:1.1rem;">Available Variables</h3>
                 <ul class="variables-list">
@@ -251,7 +251,7 @@
     <section id="download">
         <div class="content-section">
             <h2 class="section-title">Download <span class="accent">TC-RADAR</span></h2>
-            <p class="section-desc">TC-RADAR consists of four netCDF files, grouped by data type and time period. Each file is approximately 10 GB.</p>
+            <p class="section-desc">The explorer shows <strong>TC-RADAR v4.0</strong> (1997&ndash;2025). Until the v4.0 files are posted at AOML, the previous release, v3m (1997&ndash;2024), is available as four netCDF files grouped by data type and time period, each about 10 GB.</p>
             <div class="data-files">
                 <div class="file-card"><h3>Swath Data</h3><p class="file-period">1997&ndash;2019</p><div class="file-size">~10 GB</div><a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/tc_radar_v3m_1997_2019_xy_rel_swath_ships.nc" class="download-btn" target="_blank">Download</a></div>
                 <div class="file-card"><h3>Swath Data</h3><p class="file-period">2020&ndash;2024</p><div class="file-size">~10 GB</div><a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/tc_radar_v3m_2020_2024_xy_rel_swath_ships.nc" class="download-btn" target="_blank">Download</a></div>
@@ -431,7 +431,7 @@
     <script defer src="vol3d.js?v=20260930v5"></script>
     <script defer src="tc_vol_gl.js?v=20260908l"></script>
     <script defer src="tdr_view.js?v=ex20261010tm1"></script>
-    <script defer src="tc_radar_app.js?v=20261101p2"></script>
+    <script defer src="tc_radar_app.js?v=20261101v4"></script>
     <!-- realtime_tdr.js (Recon tab, ~114 KB gz) is NOT loaded here any more:
          the Recon UI lives on realtime_ir.html and none of its 71 window.*
          exports or rt-* DOM ids exist on this page. realtime_tdr_styles.css

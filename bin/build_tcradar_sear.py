@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Precompute the experimental SEAR 10-m wind for every TC-RADAR explorer case (v3m swath + merge).
+"""Precompute the experimental SEAR 10-m wind for every TC-RADAR explorer case (v4.0 swath + merge).
 
 Recipe = MLBT realtime/sear_swath.compute_field, i.e. the live Recon-tab TDR swath: the case's own
 WCM-recentered earth-relative 500-m and 2-km winds -> realtime/sear_tdr_features -> the swath's SEAR
@@ -13,8 +13,8 @@ NOTE: Stage 2 was trained on dropsondes collocated with these same analyses (all
 so these fields are IN-SAMPLE -- the explorer labels them that way.
 
 Output (one gzip JSON per case, in the /data response shape the explorer already renders):
-  tcradar-sear/v3/{swath|merge}/{case_index}.json   {data: [[kt|null]], x, y, units, rmw_km, max_kt, max_band_kt, ...}
-  tcradar-sear/v3/{swath|merge}/index.json          {cases: {idx: max_kt}, skipped: {...}, model, generated}
+  tcradar4-sear/v3/{swath|merge}/{case_index}.json   {data: [[kt|null]], x, y, units, rmw_km, max_kt, max_band_kt, ...}
+  tcradar4-sear/v3/{swath|merge}/index.json          {cases: {idx: max_kt}, skipped: {...}, model, generated}
 Uploaded to R2 (cdn.tcatlas.org) with the R2 creds from Secret Manager, like sear-rt-cron.sh.
 
 Usage:  python3 bin/build_tcradar_sear.py [--dtype swath|merge|both] [--limit N] [--no-upload] [--cases 1,2]
@@ -46,14 +46,12 @@ from sear_tdr_features import tdr_stage2_features  # noqa: E402
 from stage1_features import build_case_environment  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
-TCR = Path.home() / "Data" / "TDR" / "TCRADAR"
-FILES = {("swath", "early"): "tc_radar_v3m_1997_2019_xy_rel_swath_ships.nc",
-         ("swath", "recent"): "tc_radar_v3m_2020_2024_xy_rel_swath_ships.nc",
-         ("merge", "early"): "tc_radar_v3m_1997_2019_xy_rel_merge_ships.nc",
-         ("merge", "recent"): "tc_radar_v3m_2020_2024_xy_rel_merge_ships.nc"}
-META = {"swath": REPO / "tc_radar_metadata.json", "merge": REPO / "tc_radar_metadata_merge.json"}
-PREFIX = "tcradar-sear/v3"     # v3 = V2c + ruling 56 peak term (2026-11-01); v2 = V2c; v1 = Stage 2 v8 (rollbacks)
-OUT = Path(os.environ.get("TCRADAR_SEAR_OUT", Path.home() / "Data" / "tcradar_sear" / PREFIX.split("/")[-1]))
+# TC-RADAR v4.0 (2026-11-01): one file per data type, case_index = index in the file (the explorer's numbering)
+L3 = Path.home() / "Data" / "TDR" / "Level3"
+FILES = {"swath": L3 / "tc_radar_v4.0_xy_rel_swath.nc", "merge": L3 / "tc_radar_v4.0_xy_rel_merge.nc"}
+META = {"swath": REPO / "tc_radar_metadata_v4.json", "merge": REPO / "tc_radar_metadata_merge_v4.json"}
+PREFIX = "tcradar4-sear/v3"    # TC-RADAR v4.0 case numbers; V2c + ruling 56 peak term. tcradar-sear/{v1,v2,v3} = v3m numbering
+OUT = Path(os.environ.get("TCRADAR_SEAR_OUT", Path.home() / "Data" / "tcradar_sear" / PREFIX.replace("/", "_")))   # one folder per R2 prefix (the local index.json is merged into)
 KT = 1.943844
 MAX_MATCH_H = 4.0          # v4.0 case on the same mission within this many hours supplies the ERA5 env
 
@@ -121,8 +119,7 @@ def main() -> int:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     for dt in (["swath", "merge"] if a.dtype == "both" else [a.dtype]):
         meta = json.load(open(META[dt]))["cases"]
-        early_n = xr.open_dataset(TCR / FILES[(dt, "early")], decode_times=False).sizes["num_cases"]
-        dss = {k: xr.open_dataset(TCR / FILES[(dt, k)], decode_times=False) for k in ("early", "recent")}
+        ds = xr.open_dataset(FILES[dt], decode_times=False)
         want = {int(c) for c in a.cases.split(",") if c} if a.cases else None
         odir = OUT / dt; odir.mkdir(parents=True, exist_ok=True)
         idx_p = odir / "index.json"
@@ -135,8 +132,7 @@ def main() -> int:
             if a.limit and n >= a.limit:
                 break
             n += 1
-            part, li = ("early", ci) if ci < early_n else ("recent", ci - early_n)
-            ds = dss[part]
+            li = ci
             tm = pd.Timestamp(m["datetime"].replace(" UTC", ""), tz="UTC").timestamp()
             cand = v4[v4.mission == str(m["mission_id"]).strip()]
             if cand.empty or (np.abs(cand.t - tm).min() > MAX_MATCH_H * 3600):

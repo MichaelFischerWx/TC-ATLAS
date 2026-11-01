@@ -1,5 +1,42 @@
 const API_BASE = 'https://api.tcatlas.org';
 
+// ── TC-RADAR dataset: v4.0 (1997–2025) since 2026-11-01 ──────────────────────
+// v4.0 renumbered the cases from swath 710 / merge 215 on (Nestor 2019 inserted,
+// extra 2024 analyses, 127 new 2025 swaths). Every API request from this page
+// carries ds=4, so nothing cached for a v3m case number is ever reused (the API
+// answers case requests without ds=4 as no-store), and #case= links written
+// before the switch (no ds=) are translated via tc_radar_v3m_to_v4.json.
+const TCR_DS = '4', TCR_MAX_YEAR = 2025, TCR_DATA_TOKEN = '20261101v4';
+(function () {
+    var _fetch = window.fetch;
+    window.fetch = function (input, init) {
+        if (typeof input === 'string' && input.indexOf(API_BASE + '/') === 0 && !/[?&]ds=/.test(input)) {
+            input += (input.indexOf('?') >= 0 ? '&' : '?') + 'ds=' + TCR_DS;
+        }
+        return _fetch.call(this, input, init);
+    };
+})();
+// v3m → v4 case map ({swath:{map:{v3m:v4}}, merge:{…}}) + its inverse, for old
+// links and for the quick-look images (still named by v3m case number).
+var _tcrMap = null, _tcrMapReq = null;
+function _tcrLoadMap() {
+    if (!_tcrMapReq) {
+        _tcrMapReq = fetch('tc_radar_v3m_to_v4.json?v=' + TCR_DATA_TOKEN)
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (j) {
+                ['swath', 'merge'].forEach(function (dt) {
+                    var inv = {}, m = j[dt].map;
+                    Object.keys(m).forEach(function (k) { inv[m[k]] = +k; });
+                    j[dt].inv = inv;
+                });
+                _tcrMap = j; return j;
+            })
+            .catch(function (e) { console.warn('v3m→v4 case map unavailable: ' + e.message); _tcrMap = {}; return _tcrMap; });
+    }
+    return _tcrMapReq;
+}
+_tcrLoadMap();
+
 // ── GA4 analytics helper ─────────────────────────────────────
 function _ga(action, params) {
     if (typeof gtag === 'function') {
@@ -206,7 +243,7 @@ function _icon(name) {
 // ── Deep linking: ?tab=realtime / ?tab=composites / #case=N&var=X&level=Y&dtype=Z ──
 function _updatePermalink() {
     if (currentCaseIndex === null) return;
-    var parts = ['case=' + currentCaseIndex];
+    var parts = ['case=' + currentCaseIndex, 'ds=' + TCR_DS];
     var varSel = document.getElementById('ep-var');
     var lvlSel = document.getElementById('ep-level');
     if (varSel && varSel.value) parts.push('var=' + encodeURIComponent(varSel.value));
@@ -274,6 +311,14 @@ function _handleDeepLink() {
         var _checkInterval = setInterval(function() {
             var d = _getActiveData();
             if (!d) return;
+            // a link without ds= was written for v3m: translate its case number (wait for the map)
+            if (!/[#&]ds=/.test(hash)) {
+                if (!_tcrMap) return;
+                var _m = _tcrMap[_activeDataType === 'merge' ? 'merge' : 'swath'];
+                var _t = _m && _m.map ? _m.map[String(targetIdx)] : undefined;
+                if (_t !== undefined) targetIdx = _t;
+                hash = hash + '&ds=' + TCR_DS;
+            }
             clearInterval(_checkInterval);
             var caseData = d.cases.find(function(c) { return c.case_index === targetIdx; });
             if (caseData) {
@@ -443,7 +488,7 @@ const filters = {
     minWspd05:0, maxWspd05:100,
     minWspd20:0, maxWspd20:100,
     minSear:0, maxSear:200,
-    minYear:1997, maxYear:2024,
+    minYear:1997, maxYear:TCR_MAX_YEAR,
     stormName:'all'
 };
 
@@ -856,7 +901,10 @@ function openSidePanel(caseData, fromQuickSelect) {
     _currentSddc = (caseData.sddc !== null && caseData.sddc !== undefined && caseData.sddc !== 9999) ? caseData.sddc : null;
     _updatePermalink();
     const idx = caseData.case_index;
-    const padded = String(idx).padStart(4, '0');
+    // quick-look PNGs are named by the v3m case number; analyses new in v4.0 have none
+    const _qlDt = _activeDataType === 'merge' ? 'merge' : 'swath';
+    const _qlIdx = (_tcrMap && _tcrMap[_qlDt] && _tcrMap[_qlDt].inv) ? _tcrMap[_qlDt].inv[idx] : undefined;
+    const padded = _qlIdx === undefined ? 'none' : String(_qlIdx).padStart(4, '0');
     const imgPrefix = _activeDataType === 'merge' ? 'v3m_merge_cf_' : 'v3m_swath_cf_';
     const imageUrl = 'images/v3m/' + imgPrefix + padded + '.png';
 
@@ -5014,13 +5062,13 @@ function _toggleDualPane() {
 // sear_swath.compute_field: TDR-path Stage 2 V2c, eye mask inside 0.5 local RMW,
 // 80% band, ruling-56 peak term for strong small-eye fields) on every case's own
 // recentered 500-m + 2-km winds (ERA5 shear from the matching TC-RADAR v4.0 case) and
-// uploads one gzip JSON per case to cdn.tcatlas.org/tcradar-sear/v3/{swath|merge}/{case}.json
+// uploads one gzip JSON per case to cdn.tcatlas.org/tcradar4-sear/v3/{swath|merge}/{case}.json
 // (v2 = without the peak term, v1 = old Stage 2 v8), in
 // the /data shape — so the plan view, map drape, hover, RMW ring and colorbar all
 // reuse the normal render path. Discrete recon wind scale (same as the RT recon
 // map). IN-SAMPLE: Stage 2 was trained on sondes collocated with these analyses.
 var _searMode = false, _searIndex = {}, _searIndexReq = {}, _searCache = {};
-var _SEAR_CDN = 'https://cdn.tcatlas.org/tcradar-sear/v3/';
+var _SEAR_CDN = 'https://cdn.tcatlas.org/tcradar4-sear/v3/';   // v4.0 case numbers (tcradar-sear/* = v3m)
 // Copy of realtime_ir.js _RECON_WIND_STOPS — keep in sync (96-112 kt deep wine since 2026-09-28).
 var _SEAR_STOPS = [[34, '#60a5fa'], [50, '#22c55e'], [64, '#eab308'], [83, '#f97316'], [96, '#ef4444'], [113, '#9d174d'], [137, '#c026d3'], [999, '#7c3aed']];
 var _SEAR_VMIN = 0, _SEAR_VMAX = 170;
@@ -6063,7 +6111,7 @@ function resetFilters() {
         var _yrs = _resetData.cases.map(function(c) { return c.year; });
         filters.minYear = Math.min.apply(null, _yrs); filters.maxYear = Math.max.apply(null, _yrs);
     } else {
-        filters.minYear = 1997; filters.maxYear = 2024;
+        filters.minYear = 1997; filters.maxYear = TCR_MAX_YEAR;
     }
     document.getElementById('min-year').value = filters.minYear; document.getElementById('max-year').value = filters.maxYear;
     // Reset year dropdown and rebuild storm list with years
@@ -6153,12 +6201,12 @@ function _fetchEnrichedWindData(dataType) {
 
 // ── Load data ────────────────────────────────────────────────
 var mergeData = null;
-fetch('tc_radar_metadata_merge.json')
+fetch('tc_radar_metadata_merge_v4.json?v=' + TCR_DATA_TOKEN)
     .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(function(data) { mergeData = data; console.log('Merge metadata loaded: ' + data.total_cases + ' cases'); if (!data.enrichment_baked) _fetchEnrichedWindData('merge'); })
     .catch(function(err) { console.warn('Merge metadata not available: ' + err.message); });
 
-fetch('tc_radar_metadata.json')
+fetch('tc_radar_metadata_v4.json?v=' + TCR_DATA_TOKEN)
     .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(function(data) {
         allData = data;
@@ -7742,7 +7790,7 @@ function initCompositePanel() {
         return wfRow('Intensity', prefix + '-int', 0, 200, 5, 0, 200, 'kt') +
             wfRow('\u0394V\u2098\u2090\u2093 (24h)', prefix + '-dv', -100, 85, 5, -100, 85, 'kt') +
             wfRow('Tilt', prefix + '-tilt', 0, 200, 5, 0, 200, 'km') +
-            wfRow('Year', prefix + '-year', 1997, 2024, 1, 1997, 2024, '') +
+            wfRow('Year', prefix + '-year', 1997, TCR_MAX_YEAR, 1, 1997, TCR_MAX_YEAR, '') +
             wfRow('Shear Mag', prefix + '-shrmag', 0, 100, 2, 0, 100, 'kt') +
             wfRow('Shear Dir', prefix + '-shrdir', 0, 360, 5, 0, 360, '\u00b0') +
             '<div class="wizard-filter-row">' +
@@ -8698,7 +8746,7 @@ function _readCompositeFilters(prefix) {
         min_tilt:        num('-tilt-min', 0),
         max_tilt:        num('-tilt-max', 200),
         min_year:        intval('-year-min', 1997),
-        max_year:        intval('-year-max', 2024),
+        max_year:        intval('-year-max', TCR_MAX_YEAR),
         min_shear_mag:   num('-shrmag-min', 0),
         max_shear_mag:   num('-shrmag-max', 100),
         min_shear_dir:   num('-shrdir-min', 0),
@@ -8766,7 +8814,7 @@ function _compositeFilterSummary(filters, nCases) {
         parts.push('\u0394V ' + filters.min_vmax_change + ' to ' + filters.max_vmax_change + ' kt');
     if (filters.min_tilt > 0 || filters.max_tilt < 200)
         parts.push('Tilt ' + filters.min_tilt + '\u2013' + filters.max_tilt + ' km');
-    if (filters.min_year > 1997 || filters.max_year < 2024)
+    if (filters.min_year > 1997 || filters.max_year < TCR_MAX_YEAR)
         parts.push(filters.min_year + '\u2013' + filters.max_year);
     if (filters.min_shear_mag > 0 || filters.max_shear_mag < 100)
         parts.push('Shr ' + filters.min_shear_mag + '\u2013' + filters.max_shear_mag + ' kt');
@@ -9129,7 +9177,7 @@ function _buildCompPermalinkHash() {
     if (filters.min_tilt > 0)          params.min_tilt = filters.min_tilt;
     if (filters.max_tilt < 200)        params.max_tilt = filters.max_tilt;
     if (filters.min_year > 1997)       params.min_year = filters.min_year;
-    if (filters.max_year < 2024)       params.max_year = filters.max_year;
+    if (filters.max_year < TCR_MAX_YEAR)       params.max_year = filters.max_year;
     if (filters.min_shear_mag > 0)     params.min_shear_mag = filters.min_shear_mag;
     if (filters.max_shear_mag < 100)   params.max_shear_mag = filters.max_shear_mag;
     if (filters.min_shear_dir > 0)     params.min_shear_dir = filters.min_shear_dir;

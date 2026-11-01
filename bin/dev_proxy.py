@@ -19,7 +19,7 @@ import sys
 import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-API = "https://api.tcatlas.org"
+API = os.environ.get("DEV_PROXY_API", "https://api.tcatlas.org")   # e.g. http://localhost:8099 for a local API
 
 
 class Handler(SimpleHTTPRequestHandler):
