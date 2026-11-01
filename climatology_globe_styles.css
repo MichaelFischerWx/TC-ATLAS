@@ -353,14 +353,14 @@
     min-width: 180px;
     max-width: 280px;
     padding: 8px 12px 10px;
-    background: rgba(13, 19, 24, 0.92);
-    border: 1px solid rgba(255,255,255,0.10);
+    background: var(--map-glass);
+    border: 1px solid var(--map-line);
     border-left: 3px solid var(--um-orange);
     border-radius: var(--radius-lg);
-    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+    box-shadow: var(--map-shadow-menu);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
-    color: #e6e8eb;
+    color: var(--map-ink);
     font-family: 'DM Sans', -apple-system, sans-serif;
     font-size: 0.75rem;
     line-height: 1.4;

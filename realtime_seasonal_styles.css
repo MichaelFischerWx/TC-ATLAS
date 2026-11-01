@@ -707,7 +707,7 @@ body.seasonal-maximized .seasonal-header {
     right: 8px;
     bottom: 8px;
     padding: 4px 8px;
-    background: rgba(10,12,14,0.78);
+    background: var(--map-glass-soft);
     border-radius: var(--radius-sm);
     color: #fff;
     font: 11px/1.4 'DM Sans', system-ui, sans-serif;
@@ -1111,7 +1111,7 @@ body.seasonal-maximized .seasonal-header {
     position: absolute;
     pointer-events: none;
     padding: 3px 8px;
-    background: rgba(10,12,14,0.88);
+    background: var(--map-glass);
     color: #fff;
     font: 11px/1.35 'DM Sans', system-ui, sans-serif;
     border-radius: var(--radius-sm);
@@ -1122,7 +1122,7 @@ body.seasonal-maximized .seasonal-header {
     transition: opacity 80ms ease-out;
     white-space: nowrap;
     z-index: 5;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+    box-shadow: var(--map-shadow);
 }
 
 .seasonal-anom-tooltip.visible { opacity: 1; }

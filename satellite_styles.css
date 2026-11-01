@@ -966,20 +966,20 @@
     pointer-events: none;
 }
 .qv-loader {
-    color: #e2e8f0;
+    color: var(--map-ink);
     font-size: 14px;
     padding: 12px 18px;
-    background: rgba(15, 22, 36, 0.85);
+    background: var(--map-glass-soft);
     border-radius: var(--radius);
     backdrop-filter: blur(6px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--map-line);
 }
 .qv-empty {
     text-align: center;
-    color: #e2e8f0;
+    color: var(--map-ink);
     max-width: 420px;
     padding: 32px 24px;
-    background: rgba(15, 22, 36, 0.92);
+    background: var(--map-glass);
     border-radius: var(--radius-lg);
 }
 .qv-error {
@@ -988,7 +988,7 @@
     padding: 18px;
     max-width: 480px;
     line-height: 1.5;
-    background: rgba(15, 22, 36, 0.92);
+    background: var(--map-glass);
     border-radius: var(--radius-lg);
     border: 1px solid rgba(248, 113, 113, 0.25);
 }
@@ -1140,8 +1140,8 @@
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.04em;
-    color: #e2e8f0;
-    background: rgba(10, 12, 18, 0.78);
+    color: var(--map-ink);
+    background: var(--map-glass-soft);
     backdrop-filter: blur(4px);
     z-index: 2;
 }
