@@ -4,7 +4,8 @@
 Recipe = MLBT realtime/sear_swath.compute_field, i.e. the live Recon-tab TDR swath: the case's own
 WCM-recentered earth-relative 500-m and 2-km winds -> realtime/sear_tdr_features -> the swath's SEAR
 Stage 2 (sear_swath.swath_model_path(), V2c since 2026-09-29) -> WL150 -> 10 m (interpolated sonde
-factor), no estimate inside 0.5 local RMW, 80% band at the peak cell. Environment = ERA5 850-200 hPa shear
+factor), no estimate inside 0.5 local RMW, 80% band at the peak cell, and the ruling-56 peak term
+(sear_swath.peak_multiplier: up to +4.7% near the maximum of fields >= 113 kt with a 2-km RMW < 30 km). Environment = ERA5 850-200 hPa shear
 (0-500 km) from the TC-RADAR v4.0 case on the same mission nearest in time (the environment
 Stage 2 was trained on). Cases with no v4.0 match are skipped and listed in the index.
 
@@ -12,8 +13,8 @@ NOTE: Stage 2 was trained on dropsondes collocated with these same analyses (all
 so these fields are IN-SAMPLE -- the explorer labels them that way.
 
 Output (one gzip JSON per case, in the /data response shape the explorer already renders):
-  tcradar-sear/v2/{swath|merge}/{case_index}.json   {data: [[kt|null]], x, y, units, rmw_km, max_kt, max_band_kt, ...}
-  tcradar-sear/v2/{swath|merge}/index.json          {cases: {idx: max_kt}, skipped: {...}, model, generated}
+  tcradar-sear/v3/{swath|merge}/{case_index}.json   {data: [[kt|null]], x, y, units, rmw_km, max_kt, max_band_kt, ...}
+  tcradar-sear/v3/{swath|merge}/index.json          {cases: {idx: max_kt}, skipped: {...}, model, generated}
 Uploaded to R2 (cdn.tcatlas.org) with the R2 creds from Secret Manager, like sear-rt-cron.sh.
 
 Usage:  python3 bin/build_tcradar_sear.py [--dtype swath|merge|both] [--limit N] [--no-upload] [--cases 1,2]
@@ -51,7 +52,7 @@ FILES = {("swath", "early"): "tc_radar_v3m_1997_2019_xy_rel_swath_ships.nc",
          ("merge", "early"): "tc_radar_v3m_1997_2019_xy_rel_merge_ships.nc",
          ("merge", "recent"): "tc_radar_v3m_2020_2024_xy_rel_merge_ships.nc"}
 META = {"swath": REPO / "tc_radar_metadata.json", "merge": REPO / "tc_radar_metadata_merge.json"}
-PREFIX = "tcradar-sear/v2"     # v2 = TDR-path Stage 2 V2c (live swath model); v1 = Stage 2 v8, kept for rollback
+PREFIX = "tcradar-sear/v3"     # v3 = V2c + ruling 56 peak term (2026-11-01); v2 = V2c; v1 = Stage 2 v8 (rollbacks)
 OUT = Path(os.environ.get("TCRADAR_SEAR_OUT", Path.home() / "Data" / "tcradar_sear" / PREFIX.split("/")[-1]))
 KT = 1.943844
 MAX_MATCH_H = 4.0          # v4.0 case on the same mission within this many hours supplies the ERA5 env
@@ -91,8 +92,10 @@ def field(u5, v5, u2, v2, x, y, rmw, lat, env, art):
             adj = float(art.get("band_adjust_ratio", 0.0))
             wl_lo[ok] = (q["0.1"].predict(F[ok]) - adj) * s5k
             wl_hi[ok] = (q["0.9"].predict(F[ok]) + adj) * s5k
-    to10 = lambda w: (wl150_to_10m_factor(w) * w).reshape(r.shape) * KT  # noqa: E731
-    return to10(wl), to10(wl_lo), to10(wl_hi), r
+    to10 = lambda w: (wl150_to_10m_factor(w) * w).reshape(r.shape)  # noqa: E731
+    w10, lo10, hi10 = to10(wl), to10(wl_lo), to10(wl_hi)
+    mult, _ = sear_swath.peak_multiplier(w10, rmw)                 # ruling 56 peak term, as the live swath
+    return w10 * mult * KT, lo10 * mult * KT, hi10 * mult * KT, r
 
 
 def r2_client():
