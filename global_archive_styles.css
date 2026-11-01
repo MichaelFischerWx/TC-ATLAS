@@ -1693,15 +1693,15 @@ input[type="range"].ga-range::-moz-range-thumb {
 
 /* NEXRAD min/max value labels on the map */
 .nexrad-extrema-label {
-    background: rgba(15, 22, 35, 0.85);
-    color: #f8fafc;
-    border: 1px solid rgba(148, 163, 184, 0.4);
+    background: var(--map-glass-soft);
+    color: var(--map-ink);
+    border: 1px solid var(--map-line);
     border-radius: var(--radius-sm);
     padding: 2px 6px;
     font-size: 11px;
     font-weight: 600;
     font-family: 'DM Sans', sans-serif;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    box-shadow: var(--map-shadow);
     white-space: nowrap;
 }
 .nexrad-extrema-label:before {
@@ -3179,7 +3179,7 @@ input[type="range"].ga-range::-moz-range-thumb {
    box whose glyphs spill past bottom:0 and get clipped by overflow:hidden. */
 .gra-ir-hover {
     position: absolute; left: 0; right: 0; bottom: 0; font-size: 0.625rem;
-    line-height: 1.45; background: rgba(15, 23, 42, .8); color: #e2e8f0;
+    line-height: 1.45; background: var(--map-glass-soft); color: var(--map-ink);
     padding: 2px 6px; font-variant-numeric: tabular-nums; pointer-events: none;
 }
 .gra-ir-hover:empty { display: none; }
@@ -3239,17 +3239,17 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .gra-ir-zoom {
     position: absolute; right: 5px; top: 4px; font-size: 0.625rem; line-height: 1.45;
-    background: rgba(15, 23, 42, .72); color: #e2e8f0; padding: 1px 5px;
+    background: var(--map-glass-soft); color: var(--map-ink); padding: 1px 5px;
     border-radius: var(--radius-sm); pointer-events: none;
 }
 .gra-ir-zoom:empty { display: none; }
 .gra-tip {
     position: absolute; z-index: 620; display: none; pointer-events: none;
     min-width: 196px; padding: 8px 11px; border-radius: var(--radius-lg);
-    background: rgba(18, 20, 28, .95); color: #e2e8f0;
-    border: 1px solid rgba(255, 255, 255, .08);
+    background: var(--map-glass-menu); color: var(--map-ink);
+    border: 1px solid var(--map-line);
     font-size: 0.6875rem; line-height: 1.5; font-variant-numeric: tabular-nums;
-    box-shadow: 0 8px 26px rgba(0, 0, 0, .35);
+    box-shadow: var(--map-shadow-menu);
 }
 .gra-tip.on { display: block; }
 .gra-tip-hd { font-weight: 600; font-size: 0.75rem; color: #fff; margin-bottom: 3px; }
