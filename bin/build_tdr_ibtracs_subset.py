@@ -13,7 +13,7 @@ is shared across basins) and writes one small file:
                                 "storms": [ <ibtracs_storms.json rows> ],
                                 "tracks": { sid: [ {t, la, lo, w, p, n}, ... ] } }
 
-Inputs (repo root): tc_radar_metadata.json, tc_radar_metadata_merge.json,
+Inputs (repo root): tc_radar_metadata_v4.json, tc_radar_metadata_merge_v4.json,
 ibtracs_storms.json, ibtracs_tracks_manifest.json + chunks.
 Re-run after pipeline/refresh_ibtracs.py (which also calls this) or whenever
 the TC-RADAR metadata gains new storms.
@@ -31,7 +31,7 @@ from pathlib import Path
 
 def build(root: Path) -> dict:
     keys: set[str] = set()
-    for name in ("tc_radar_metadata.json", "tc_radar_metadata_merge.json"):
+    for name in ("tc_radar_metadata_v4.json", "tc_radar_metadata_merge_v4.json"):   # TC-RADAR v4.0 (2026-11-01)
         p = root / name
         if not p.exists():
             continue

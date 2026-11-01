@@ -7045,7 +7045,7 @@ function _buildTDRtoSIDMapping() {
 // all of it twice. This file previously fetched them with no token at all.
 var IBTRACS_DATA_VER = 'v20261020';
 // Token for the explorer-only subset (bin/build_tdr_ibtracs_subset.py).
-var IBTRACS_TDR_VER = 'v20261020';
+var IBTRACS_TDR_VER = 'v20261101v4';
 
 // Load IBTrACS storms + tracks. Fast path: the explorer only ever draws the
 // ~90 storms that have TC-RADAR analyses, so fetch the prebuilt subset
