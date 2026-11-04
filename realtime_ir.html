@@ -84,7 +84,7 @@
     <!-- The main bundle + map engine live at the bottom of a ~240 KB
          document; preload makes them discoverable from byte 0. Tokens MUST
          match the script tags below or the browser downloads both. -->
-    <link rel="preload" as="script" href="realtime_ir.js?v=20261104gh1">
+    <link rel="preload" as="script" href="realtime_ir.js?v=20261104mg1">
     <link rel="preload" as="script" href="assets/vendor/maplibre/maplibre-gl.js?v=4.7.1">
 
     <!-- Cache version token. Script/CSS tags below carry a STATIC ?v= so
@@ -988,6 +988,12 @@
             <div class="qv-gallery-sub">Select a storm to open its satellite detail</div>
         </div>
         <div id="sat-gallery-grid" class="qv-gallery-grid" role="list"></div>
+        <!-- Shown instead of the empty state until the first storm list
+             arrives; same box as the empty state so nothing jumps. -->
+        <div id="sat-gallery-loading" class="qv-gallery-empty" role="status" style="display:none;">
+            <div class="tc-spinner tc-spinner--lg tc-spinner--block" aria-hidden="true"></div>
+            <div style="color:var(--text-dim);">Loading active storms&hellip;</div>
+        </div>
         <div id="sat-gallery-empty" class="qv-gallery-empty" style="display:none;">
             <div style="font-size:18px;margin-bottom:8px;">No active storms.</div>
             <div style="color:#94a3b8;">Storms appear here when systems are active in any basin.</div>
@@ -2824,7 +2830,7 @@
     <script defer src="tc_mw_layer.js?v=20261020au1"></script>
     <script defer src="tc_dm_analytics.js?v=20261007wr"></script>
     <script defer src="realtime_ir_dm.js?v=20261010tm1"></script>
-    <script defer src="realtime_ir.js?v=20261104gh1"></script>
+    <script defer src="realtime_ir.js?v=20261104mg1"></script>
     <script defer src="vol3d.js?v=20260930v5"></script>
     <!-- satellite.js stays EAGER: the map view's storm-card diagnostics render
          through its window._satDiag / _satIRColormaps exports. skewt.js stays

@@ -680,6 +680,9 @@
     var map = null;
     var stormMarkers = [];     // L.marker references
     var stormData = [];        // latest active-storms response
+    // False until a storm list arrives (localStorage cache or the API). Until
+    // then an empty stormData means "still loading", not "no active storms".
+    var stormListLoaded = false;
     var pollTimer = null;
     var currentStormId = null; // ATCF ID of detail view
 
@@ -8094,6 +8097,7 @@
                     var parsed = JSON.parse(cached);
                     if (parsed.storms && parsed.storms.length > 0) {
                         stormData = parsed.storms;
+                        stormListLoaded = true;
                         if (loaderEl) loaderEl.style.display = 'none';
                         updateStats(parsed);
                         renderStormMarkers(stormData);
@@ -8140,6 +8144,7 @@
             .then(function (data) {
                 if (data === null) return;  // 304 — nothing changed
                 stormData = data.storms || [];
+                stormListLoaded = true;
 
                 // Cache to localStorage for instant display on next visit
                 try { localStorage.setItem(_LS_STORMS_KEY, JSON.stringify(data)); } catch (e) { }
@@ -14730,15 +14735,22 @@
         _irCleanupGalleryMaps();   // tear down prior locator maps before rebuild
         var countEl = document.getElementById('sat-gallery-count');
         var emptyEl = document.getElementById('sat-gallery-empty');
+        var loadingEl = document.getElementById('sat-gallery-loading');
         var storms = (stormData || []).slice().sort(function (a, b) {
             return (b.vmax_kt || 0) - (a.vmax_kt || 0);
         });
         if (countEl) countEl.textContent = storms.length ? '· ' + storms.length + ' active' : '';
         if (!storms.length) {
             grid.innerHTML = '';
-            if (emptyEl) emptyEl.style.display = '';
+            // A cold load reaches here before the first list arrives (the API
+            // can take seconds, longer on a cold start): say it's loading
+            // rather than claim there are no storms. The ir-storms-loaded
+            // listener below re-renders once the list is in.
+            if (loadingEl) loadingEl.style.display = stormListLoaded ? 'none' : '';
+            if (emptyEl) emptyEl.style.display = stormListLoaded ? '' : 'none';
             return;
         }
+        if (loadingEl) loadingEl.style.display = 'none';
         if (emptyEl) emptyEl.style.display = 'none';
         var frag = document.createDocumentFragment();
         for (var i = 0; i < storms.length; i++) frag.appendChild(_irMakeGalleryCard(storms[i], i));
