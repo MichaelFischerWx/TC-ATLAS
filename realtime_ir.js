@@ -50,10 +50,11 @@
     // headers AND body: the timer is left running on success, so a body
     // still streaming at the deadline aborts too, and a timer firing after
     // the body was read is a no-op. A caller's own signal (supersede /
-    // cancel) still aborts it as before. Timeouts reject with a
-    // TimeoutError, so code that ignores AbortError (a superseded request)
-    // doesn't swallow them. Returns the Response: call sites keep their own
-    // status handling.
+    // cancel) still aborts it as before, but it can only end the request
+    // sooner: a deadline longer than the default goes in timeoutMs.
+    // Timeouts reject with a TimeoutError, so code that ignores AbortError
+    // (a superseded request) doesn't swallow them. Returns the Response:
+    // call sites keep their own status handling.
     var _RT_FETCH_MS = 20000;        // API JSON, CDN manifests, small files
     var _RT_FETCH_SLOW_MS = 60000;   // binary bundles, multi-MB files, cold-compute endpoints
     function _rtFetch(url, opts, timeoutMs) {
@@ -8117,13 +8118,12 @@
         // .then nor .catch would fire and the retry/backoff path below never
         // engaged — the loader spun until the 10-min poll interval. 30 s
         // clears a worst-case Cloud Run cold start (~22 s measured) while
-        // converting a true stall into the normal retry path.
+        // converting a true stall into the normal retry path. It goes in as
+        // _rtFetch's timeout, not as a signal: a caller's signal can only end
+        // the request sooner, never outlast _rtFetch's 20 s default.
         var _pollOpts = { cache: 'no-store', headers: headers };
-        try {
-            if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) _pollOpts.signal = AbortSignal.timeout(30000);
-        } catch (e) { /* older browsers keep the legacy behavior */ }
 
-        _rtFetch(API_BASE + '/ir-monitor/active-storms', _pollOpts)
+        _rtFetch(API_BASE + '/ir-monitor/active-storms', _pollOpts, 30000)
             .then(function (r) {
                 if (r.status === 304) {
                     // Server confirms our cached payload is still current — no work to do.
