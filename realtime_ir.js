@@ -8141,12 +8141,6 @@
                 if (data === null) return;  // 304 — nothing changed
                 stormData = data.storms || [];
 
-                // Notify listeners (e.g. Storm Satellite tab) that a fresh
-                // active-storms list is available so they can pick a default.
-                if (stormData.length > 0) {
-                    try { window.dispatchEvent(new CustomEvent('ir-storms-loaded')); } catch (e) {}
-                }
-
                 // Cache to localStorage for instant display on next visit
                 try { localStorage.setItem(_LS_STORMS_KEY, JSON.stringify(data)); } catch (e) { }
 
@@ -8159,6 +8153,9 @@
                 _updateNoStormsNotice(stormData);
                 fetchAllTracks(stormData);
                 _rtPushStormsToMwLayer();
+                // Notify listeners (Storm Satellite tab, gallery, Recon pickers)
+                // that a fresh list is in: once per fetch, after the page state
+                // above is current, and for an empty list too.
                 try { window.dispatchEvent(new CustomEvent('ir-storms-loaded')); } catch (e) {}
 
                 // If genesis data is already loaded, re-render so any
@@ -10357,13 +10354,35 @@
 
     /** Open the storm detail view */
     function openStormDetail(atcfId) {
+        // Find the storm BEFORE touching any state. A deep link can name a
+        // storm the list doesn't have (expired, or a stale cached list that
+        // predates it); setting currentStormId first left it naming a card
+        // that never mounted, which handleDeepLink() and the tab controller
+        // then read as "already open".
+        var storm = null;
+        for (var i = 0; i < stormData.length; i++) {
+            if (stormData[i].atcf_id === atcfId) {
+                storm = stormData[i];
+                break;
+            }
+        }
+
+        if (!storm) {
+            console.warn('[RT Monitor] Storm not found:', atcfId);
+            return;
+        }
+
         currentStormId = atcfId;
         // The card is mostly charts; start Plotly now if the idle load hasn't.
         if (window.tcaLoadPlotly) window.tcaLoadPlotly();
 
         // Hide the active-storm gallery landing — opening a card replaces it.
+        // Its locator maps go too: _irShowGallery() rebuilds the grid on the
+        // way back, so left alive they only hold a WebGL context each behind
+        // the card.
         var _satGallery = document.getElementById('sat-gallery');
         if (_satGallery) _satGallery.style.display = 'none';
+        _irCleanupGalleryMaps();
 
         // Clean up model overlay from previous storm
         _rtRemoveModelOverlay();
@@ -10383,20 +10402,6 @@
         if (_intResetSec) _intResetSec.style.display = 'none';
         _irSyncProductButtons('eir');
         _irSyncComboAvail();
-
-        // Find storm in current data
-        var storm = null;
-        for (var i = 0; i < stormData.length; i++) {
-            if (stormData[i].atcf_id === atcfId) {
-                storm = stormData[i];
-                break;
-            }
-        }
-
-        if (!storm) {
-            console.warn('[RT Monitor] Storm not found:', atcfId);
-            return;
-        }
 
         // Update URL hash for deep linking. Preserve the satellite-tab
         // marker when the card is the Sat tab's landing view, so reload
@@ -14016,6 +14021,16 @@
         var stormId = _stormIdFromHash();
         if (!stormId) return;
 
+        // That card is already open (popstate makes the same check). On a
+        // cold load the Storm Satellite tab controller opens it from its own
+        // ir-storms-loaded handler just before this runs, and a card opened by
+        // hand puts its id in the hash too; reopening would tear down the
+        // fresh detail map and restart its IR loop.
+        if ((currentStormId || '').toUpperCase() === stormId) {
+            deepLinkHandled = true;
+            return;
+        }
+
         // Check if storm exists in current data
         for (var i = 0; i < stormData.length; i++) {
             if ((stormData[i].atcf_id || '').toUpperCase() === stormId) {
@@ -14739,7 +14754,8 @@
         }
     };
     /** Show the gallery landing (hides the detail card + other sat views).
-     *  Renders now; re-renders once if the storm list hasn't loaded yet. */
+     *  Renders now; the ir-storms-loaded listener below re-renders it when
+     *  the storm list arrives. */
     window._irShowGallery = function () {
         var gallery = document.getElementById('sat-gallery');
         var detail = document.getElementById('ir-detail');
@@ -14754,17 +14770,20 @@
                 window.location.pathname + window.location.search + '#satellite');
         } catch (e) {}
         window._irRenderGallery();
-        if (!(stormData && stormData.length) && window._irOnceStormsLoaded) {
-            window._irOnceStormsLoaded(function () {
-                if (gallery && gallery.style.display !== 'none') window._irRenderGallery();
-            });
-        }
     };
     // Keep the gallery fresh as poll cycles update the storm list, but only
-    // while it's the visible view.
+    // while it's the visible view. Checked in a microtask, after the
+    // dispatching code and the other listeners have run: on a cold storm=
+    // deep link the gallery is only a placeholder, and the tab controller's
+    // handler (registered after this one) opens the card in the same
+    // dispatch. Rendering first built a locator map per storm, plus its
+    // thumbnail, shear and metadata requests, for a grid hidden before it
+    // painted.
     window.addEventListener('ir-storms-loaded', function () {
-        var gallery = document.getElementById('sat-gallery');
-        if (gallery && gallery.style.display !== 'none') window._irRenderGallery();
+        Promise.resolve().then(function () {
+            var gallery = document.getElementById('sat-gallery');
+            if (gallery && gallery.style.display !== 'none') window._irRenderGallery();
+        });
     });
 
     // ═══════════════════════════════════════════════════════════
