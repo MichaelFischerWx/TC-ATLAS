@@ -743,6 +743,8 @@
     var _gRadarLayers = {};           // IEM bucket name → preloaded L.tileLayer (opacity-toggled)
     var _gRadarVisibleBucket = null;  // bucket currently shown
     var _gRadarOpacity = 0.75;
+    var _gRadarWanted = {};           // bucket names the current loop uses (pool is pruned to this)
+    var _gRadarPollTimer = null;      // polls IEM for a new composite while radar is on
     var _gRadarPrevProduct = null;    // satellite product to restore when radar off
     var _gRadarPrevCmap = null;       // IR colormap to restore when radar off
     var globalAnimLastTick = 0;       // timestamp of last frame advance (global view)
@@ -5644,17 +5646,18 @@
         globalAnimReady = false;
 
         // ── Radar mode: decoupled full IEM loop ──────────────────────────
-        // When radar is on, the loop is the radar's OWN timeline — latest →
-        // −55 min at IEM's native 5-min steps (12 frames) — independent of the
-        // sparse, lagged satellite mosaic. The satellite stays on its latest
-        // still as a static backdrop; per frame, _gRadarSync (called from
+        // When radar is on, the loop is the radar's OWN timeline — the latest
+        // published composite → −55 min at IEM's native 5-min steps (12
+        // frames, absolute valid times) — independent of the sparse, lagged
+        // satellite mosaic. The satellite stays on its latest still as a
+        // static backdrop; per frame, _gRadarSync (called from
         // showGlobalAnimFrame) flips to the matching preloaded radar bucket.
         if (_gRadarOn) {
-            var _rnow = Date.now();
+            var _rLatest = _iemLatestValidMs();
             globalAnimFrameTimes = [];
             globalAnimFrameLayers = [];
             for (var _age = 55; _age >= 0; _age -= 5) {   // oldest→newest
-                globalAnimFrameTimes.push(new Date(_rnow - _age * 60000).toISOString());
+                globalAnimFrameTimes.push(new Date(_rLatest - _age * 60000).toISOString());
                 globalAnimFrameLayers.push(_gRadarFrameStub());
             }
             _gRadarPreload();   // build + start loading every bucket layer
@@ -5834,13 +5837,14 @@
 
     // ── Global-map US radar overlay (IEM N0Q tiles) ──────────────────────
     /** Current global-map frame time: the displayed animation frame if loaded,
-     *  else the latest satellite/mosaic time (still view). */
+     *  else null = the latest radar scan (still view — the satellite still can
+     *  lag the radar by an hour or more, so don't key radar off it). */
     function _gRadarFrameTime() {
         if (globalAnimFrameTimes.length && globalAnimIndex >= 0
                 && globalAnimIndex < globalAnimFrameTimes.length) {
             return globalAnimFrameTimes[globalAnimIndex];
         }
-        return latestGIBSTime || null;
+        return null;
     }
 
     // IEM radar only covers the last ~1 h, so when radar is on we restrict the
@@ -5890,17 +5894,35 @@
                 _gRadarLayers[k].setOpacity(k === name ? _gRadarOpacity : 0);
             }
         }
+        var prev = _gRadarVisibleBucket;
         _gRadarVisibleBucket = name;
+        // A bucket that rolled out of the loop was kept only while on screen.
+        if (prev && prev !== name && !_gRadarWanted[prev] && _gRadarLayers[prev]) {
+            if (map) map.removeLayer(_gRadarLayers[prev]);
+            delete _gRadarLayers[prev];
+        }
+    }
+    /** True once every tile of a bucket's source is loaded (or when that can't
+     *  be told) — playback waits on it so it never flips to a half-drawn frame. */
+    function _gRadarBucketReady(name) {
+        var lyr = _gRadarLayers[name], gl = map && map._gl;
+        if (!lyr || !gl) return true;
+        if (!lyr._added) return false;
+        try { return gl.isSourceLoaded(lyr._id); } catch (e) { return true; }
     }
     function _gRadarClearLayers() {
         for (var k in _gRadarLayers) {
             if (_gRadarLayers.hasOwnProperty(k) && map) map.removeLayer(_gRadarLayers[k]);
         }
         _gRadarLayers = {};
+        _gRadarWanted = {};
         _gRadarVisibleBucket = null;
     }
     // Pre-build a layer for every distinct bucket in the current loop so their
-    // tiles fetch ahead of playback (smooth from the first pass).
+    // tiles fetch ahead of playback (smooth from the first pass), and drop
+    // buckets the loop no longer uses (kept until hidden if on screen). Layers
+    // shared with the previous loop survive, so a roll-forward to a new scan
+    // fetches just the one new frame.
     function _gRadarPreload() {
         var times = (globalAnimFrameTimes && globalAnimFrameTimes.length)
             ? globalAnimFrameTimes : [_gRadarFrameTime()];
@@ -5908,6 +5930,41 @@
         for (var i = 0; i < times.length; i++) {
             var n = _iemLayerForFrameTime(times[i]);
             if (!seen[n]) { seen[n] = 1; _gRadarBucketLayer(n); }
+        }
+        _gRadarWanted = seen;
+        for (var k in _gRadarLayers) {
+            if (_gRadarLayers.hasOwnProperty(k) && !seen[k] && k !== _gRadarVisibleBucket) {
+                if (map) map.removeLayer(_gRadarLayers[k]);
+                delete _gRadarLayers[k];
+            }
+        }
+    }
+
+    // While radar is on, pick up each new IEM composite (~every 5 min): the
+    // loop rolls forward one frame, keeping play state and the loaded layers.
+    function _gRadarPoll(on) {
+        if (_gRadarPollTimer) { clearInterval(_gRadarPollTimer); _gRadarPollTimer = null; }
+        if (!on) return;
+        _gRadarPollTimer = setInterval(function () {
+            if (!_gRadarOn || document.hidden) return;
+            _iemRefreshLatest(function (changed) { if (changed) _gRadarRoll(); });
+        }, 120000);
+    }
+    function _gRadarRoll() {
+        if (!_gRadarOn) return;
+        if (globalAnimReady || globalAnimFrameLayers.length) {
+            var atLatest = globalAnimIndex >= globalAnimFrameTimes.length - 1;
+            var wasPlaying = globalAnimPlaying;
+            var keepIdx = globalAnimIndex;
+            cleanupGlobalAnimation();
+            _globalAnimAutoplay = wasPlaying;
+            // Paused on the latest frame → stay on the (new) latest; paused
+            // mid-loop → keep the slider position.
+            if (!wasPlaying && !atLatest) _globalAnimPendingScrub = keepIdx;
+            loadGlobalAnimation();
+        } else {
+            _gRadarPreload();
+            _gRadarSync();
         }
     }
 
@@ -5984,6 +6041,7 @@
         if (_gRadarOn) {
             _gRadarOn = false;
             if (btn) btn.classList.remove('active');
+            _gRadarPoll(false);
             _gRadarLegend(false);
             _gRadarClearLayers();
             _gRadarRestoreBase();
@@ -6009,6 +6067,10 @@
         _reloadGlobalAnimIfActive();
         _gRadarPreload();
         _gRadarShowBucket(_iemLayerForFrameTime(_gRadarFrameTime()));
+        // Anchor the loop on IEM's actual latest scan (until it answers, the
+        // loop sits on a conservative estimate), then keep it current.
+        _iemRefreshLatest(function (changed) { if (changed) _gRadarRoll(); });
+        _gRadarPoll(true);
     };
 
     // ── Global-map measure tool ──────────────────────────────────────────
@@ -6314,12 +6376,26 @@
     }
 
     /** rAF tick for global animation */
+    // Radar loop: hold the newest scan before wrapping, and wait (up to a cap)
+    // for the next frame's tiles so playback never flips to a half-drawn or
+    // blank frame — on the first pass the loop plays as fast as tiles land.
+    var _GRADAR_MAX_WAIT_MS = 2500;
     function _globalAnimTick(ts) {
         if (!globalAnimPlaying) return;
         var ms = GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].ms;
-        if (ts - globalAnimLastTick >= ms) {
-            globalAnimLastTick = ts;
-            nextGlobalFrame();
+        var n = globalAnimFrameTimes.length;
+        if (_gRadarOn && n > 1 && globalAnimIndex === n - 1) ms = Math.max(ms * 4, 900);
+        var elapsed = ts - globalAnimLastTick;
+        if (elapsed >= ms) {
+            var waitTiles = false;
+            if (_gRadarOn && n > 1 && elapsed < ms + _GRADAR_MAX_WAIT_MS) {
+                var nextT = globalAnimFrameTimes[(globalAnimIndex + 1) % n];
+                waitTiles = !_gRadarBucketReady(_iemLayerForFrameTime(nextT));
+            }
+            if (!waitTiles) {
+                globalAnimLastTick = ts;
+                nextGlobalFrame();
+            }
         }
         globalAnimTimer = requestAnimationFrame(_globalAnimTick);
     }
@@ -33776,10 +33852,14 @@
     // ── 88D NEXRAD RADAR OVERLAY ─────────────────────────────────
     // ═══════════════════════════════════════════════════════════════
 
-    // IEM national NEXRAD base-reflectivity (N0Q) XYZ tile cache. The bare
-    // layer is the latest composite; the -mNNm variants step back in 5-min
-    // increments to ~55 min (a built-in ~1 h loop). XYZ web-mercator, so it
-    // drops straight onto the GL map via L.tileLayer.
+    // IEM national NEXRAD base-reflectivity (N0Q) XYZ tile cache, addressed
+    // by ABSOLUTE valid time ('ridge::USCOMP-N0Q-YYYYMMDDHHMM', 5-min grid).
+    // NOT the relative 'nexrad-n0q-mNNm' layers: those mean "NN min before
+    // whatever is latest when this tile is rendered", and IEM caches each tile
+    // independently for 5 min, so one frame stitched tiles from different
+    // scans (visible seams) and every frame's valid time slid as the composite
+    // advanced. Absolute-time tiles are one scan per frame, immutable, and
+    // reach back >1 yr. XYZ web-mercator → drops onto the GL map as-is.
     var _IEM_RADAR_BASE = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0';
     function _iemRadarUrl(layer) {
         return _IEM_RADAR_BASE + '/' + layer + '/{z}/{x}/{y}.png';
@@ -33819,17 +33899,41 @@
         var t = Date.parse(s);
         return isFinite(t) ? t : NaN;
     }
-    // Map a frame timestamp to the closest IEM layer within its ~1 h window.
-    // Frames older than 55 min clamp to the oldest available (m55m); recent
-    // frames resolve to the latest composite.
+    // Latest composite IEM has published (epoch ms). Requesting a time that
+    // isn't processed yet returns a blank tile that IEM then caches for 5 min,
+    // so every frame is clamped to this. Until the JSON answers, assume a
+    // conservative ~10 min processing lag (a composite posts ~2 min after its
+    // valid time).
+    var _IEM_LATEST_URL = 'https://mesonet.agron.iastate.edu/data/gis/images/4326/USCOMP/n0q_0.json';
+    var _iemLatestMs = NaN;
+    function _iemLatestValidMs() {
+        if (isFinite(_iemLatestMs)) return _iemLatestMs;
+        return Math.floor((Date.now() - 10 * 60000) / 300000) * 300000;
+    }
+    /** Refresh _iemLatestMs; cb(changed) after (also on failure, changed=false). */
+    function _iemRefreshLatest(cb) {
+        fetch(_IEM_LATEST_URL, { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+                var t = j && j.meta ? Date.parse(j.meta.valid) : NaN;
+                var changed = isFinite(t) && t !== _iemLatestMs;
+                if (isFinite(t)) _iemLatestMs = t;
+                if (cb) cb(changed);
+            })
+            .catch(function () { if (cb) cb(false); });
+    }
+    /** IEM absolute-time layer for an epoch-ms time: snapped to the 5-min
+     *  composite grid and clamped to the latest published scan. */
+    function _iemLayerForMs(ms) {
+        var latest = _iemLatestValidMs();
+        var t = isFinite(ms) ? Math.min(Math.round(ms / 300000) * 300000, latest) : latest;
+        var d = new Date(t), p = function (n) { return (n < 10 ? '0' : '') + n; };
+        return 'ridge::USCOMP-N0Q-' + d.getUTCFullYear() + p(d.getUTCMonth() + 1)
+            + p(d.getUTCDate()) + p(d.getUTCHours()) + p(d.getUTCMinutes());
+    }
+    // Map a frame timestamp to the IEM composite valid nearest that time.
     function _iemLayerForFrameTime(frameTimeStr) {
-        var t = _parseFrameTimeMs(frameTimeStr);
-        if (!isFinite(t)) return 'nexrad-n0q';
-        var ageMin = (Date.now() - t) / 60000;
-        var bucket = Math.round(ageMin / 5) * 5;
-        if (bucket <= 0) return 'nexrad-n0q';
-        if (bucket > 55) bucket = 55;
-        return 'nexrad-n0q-m' + (bucket < 10 ? '0' : '') + bucket + 'm';
+        return _iemLayerForMs(_parseFrameTimeMs(frameTimeStr));
     }
     // IEM's time-enabled WMS: the SAME national N0Q composite, but reaching
     // back years at 5-min steps instead of the tile cache's ~1 h. MapLibre
@@ -33849,12 +33953,16 @@
     function _rtRadarSrcForFrameTime(frameTimeStr) {
         var t = _parseFrameTimeMs(frameTimeStr);
         var ageMin = isFinite(t) ? (Date.now() - t) / 60000 : 0;
-        if (!isFinite(t) || ageMin <= 57.5) {
-            var name = _iemLayerForFrameTime(frameTimeStr);
-            var m = /m(\d{2})m/.exec(name);
+        // Tile cache (absolute time) for anything a live loop can reach; the
+        // WMS-T stays as the deep-archive path.
+        if (!isFinite(t) || ageMin <= 48 * 60) {
+            var name = _iemLayerForMs(t);
+            var m = /(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(name);
+            var vIso = m ? m[1] + '-' + m[2] + '-' + m[3] + 'T' + m[4] + ':' + m[5] + ':00Z' : null;
             return { key: name, url: _iemRadarUrl(name),
-                     label: m ? 'valid ~' + parseInt(m[1], 10) + ' min ago'
-                              : 'latest scan' };
+                     label: !vIso ? 'latest scan'
+                          : (Date.parse(vIso) >= _iemLatestValidMs() ? 'latest scan, ' : 'valid ')
+                            + fmtUTC(vIso, { date: false }) };
         }
         // Round to IEM's 5-min composite grid.
         var snap = new Date(Math.round(t / 300000) * 300000);
@@ -33961,6 +34069,7 @@
         _ga('ir_radar_toggle', { visible: true });
         _rtUpdateRadarColorbar();
         _rtEnsureRadarLayer();
+        _iemRefreshLatest(function (changed) { if (changed && _rtRadarVisible) _rtUpdateRadarForFrame(); });
     };
 
     /** Opacity slider handler (0-100 \u2192 0-1). */
