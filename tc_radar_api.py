@@ -6714,11 +6714,35 @@ class _HRDLinkParser(HTMLParser):
                     self.links.append(value)
 
 
+# AOML's web server (all of ftp/pub/hrd) can hang rather than answer: in the
+# 2026-11-04 outage listings ran into the 30-s read timeout or bounced to a
+# 403 placeholder host. After a timeout, connection failure or off-site
+# redirect, AOML is skipped for a few minutes so callers fall back (NOAA AOC
+# for archive sondes and flight level) without each paying the wait again.
+# Other hosts are unaffected.
+_AOML_HOST = "www.aoml.noaa.gov"
+_AOML_COOLDOWN_S = 300
+_aoml_down_until = 0.0
+
+
 def _hrd_fetch_text(url: str, timeout: int = 30) -> str:
     """Fetch text content from a URL (for HRD archive access)."""
+    global _aoml_down_until
+    from urllib.parse import urlparse
+    aoml = urlparse(url).hostname == _AOML_HOST
+    if aoml and time.time() < _aoml_down_until:
+        raise ConnectionError(f"{_AOML_HOST} failed recently; skipping {url}")
     try:
         import requests as _req
-        resp = _req.get(url, timeout=timeout)
+        try:
+            resp = _req.get(url, timeout=timeout)
+        except (_req.exceptions.Timeout, _req.exceptions.ConnectionError):
+            if aoml:
+                _aoml_down_until = time.time() + _AOML_COOLDOWN_S
+            raise
+        if aoml and urlparse(resp.url).hostname != _AOML_HOST:
+            _aoml_down_until = time.time() + _AOML_COOLDOWN_S
+            raise ConnectionError(f"{url} redirected off {_AOML_HOST} to {resp.url}")
         resp.raise_for_status()
         return resp.text
     except ImportError:
@@ -7441,7 +7465,7 @@ def _hrd_average_window(
     _AVG_KEYS = [
         "gps_alt_m", "static_pres_hpa", "temp_c", "dewpoint_c",
         "fl_wspd_ms", "fl_wdir_deg", "sfcpr_hpa", "ground_spd_ms",
-        "true_airspd_ms", "vert_vel_ms", "theta_e",
+        "true_airspd_ms", "vert_vel_ms", "theta_e", "sfmr_wspd_ms",
     ]
 
     result = []
@@ -7480,7 +7504,6 @@ def _hrd_average_window(
         averaged["time_offset_s"] = mid.get("time_offset_s")
         averaged["heading"] = mid.get("heading")
         averaged["track"] = mid.get("track")
-        averaged["sfmr_wspd_ms"] = None
         averaged["slp_hpa"] = None
         averaged["extrapolated_sfc_wspd_ms"] = None
 
@@ -7810,6 +7833,257 @@ def _archive_r2_redirect(r2_key: str):
                                 headers={"Cache-Control": "public, max-age=86400, immutable"})
     return None
 
+# NOAA AOC's SEB server keeps each P-3 sortie's own 1-Hz flight-level record
+# (2017 on: {mission}_A_IWG.dat, ~20 MB: IWG1 lines plus repeated IWG1_NAMES
+# lines naming all ~137 columns). /flightlevel/archive falls back to it when
+# the AOML HRD archive has nothing for the case (2026-11-04: www.aoml.noaa.gov
+# down). Like the sonde fallback it is served, not mirrored to R2.
+_AOC_IWG_FIELDS = {   # archive key (HRD .sec.txt shape) -> IWG1 column(s), first present wins
+    "fl_wspd_ms": ("WS.d",), "fl_wdir_deg": ("WD.d",),
+    "gps_alt_m": ("HT.d", "ALTref"),            # HRD GEOAL is geopotential altitude
+    "static_pres_hpa": ("PS.c",), "temp_c": ("TA.d",), "dewpoint_c": ("TD.c",),
+    "sfcpr_hpa": ("PSURF.d",), "ground_spd_ms": ("GS.d",), "true_airspd_ms": ("TAS.d",),
+    "heading": ("THDGref",), "track": ("TRK.d",),
+    "vert_vel_ms": ("UWZ.d",),                   # vertical WIND, like HRD VTWND (not the aircraft's GSZref)
+    "theta_e": ("THETAE.d",), "sfmr_wspd_ms": ("SfmrWS.1", "ASfmrWS.1"),
+}
+# Standard P-3 IWG1 positions, for a file with no IWG1_NAMES line.
+_AOC_IWG_POS = {"TIME": 1, "LATref": 2, "LONref": 3, "ALTref": 4, "GS.d": 8, "TAS.d": 9, "THDGref": 13,
+                "TRK.d": 14, "TA.d": 20, "TD.c": 21, "PS.c": 23, "WS.d": 26, "WD.d": 27, "UWZ.d": 28}
+
+
+def _aoc_obs_record(t: datetime, num, scan_dt: datetime, scan_sec: int) -> Optional[dict]:
+    """One 1-Hz observation in the HRD .sec.txt shape; num(*columns) -> float | None."""
+    lat, lon = num("LATref"), num("LONref")
+    if lat is None or lon is None:
+        return None
+    off = (t - scan_dt).total_seconds()
+    o = {"time": t.strftime("%H:%M:%S"), "time_sec": scan_sec + off,   # monotonic across midnight
+         "time_offset_s": round(off, 1), "lat": round(lat, 5), "lon": round(lon, 5)}
+    for key, names in _AOC_IWG_FIELDS.items():
+        v = num(*names)
+        if key in ("fl_wspd_ms", "true_airspd_ms") and v is not None and v > 200:
+            v = None   # same unreachable-speed screen as the HRD parser
+        o[key] = round(v, 2) if v is not None else None
+    o["slp_hpa"] = None
+    o["extrapolated_sfc_wspd_ms"] = None
+    return o
+
+
+def _aoc_iwg_obs(url: str, scan_dt: datetime, window_min: float) -> tuple[list[dict], Optional[str]]:
+    """Obs within window_min of scan_dt from an AOC _A_IWG.dat, and the
+    record's time span ("HH:MM-HH:MMZ") or None when the file is missing."""
+    from realtime_tdr_api import _fetch_text
+    try:
+        text = _fetch_text(url, timeout=90)
+    except Exception:
+        return [], None
+    col = dict(_AOC_IWG_POS)
+    at = text.find("IWG1_NAMES,")
+    if at >= 0:
+        end = text.find("\n", at)
+        col = {n: i for i, n in enumerate(text[at:end if end > 0 else None].strip().split(",")) if n}
+    lo = (scan_dt - timedelta(minutes=window_min)).strftime("%Y%m%dT%H%M%S")
+    hi = (scan_dt + timedelta(minutes=window_min)).strftime("%Y%m%dT%H%M%S")
+    scan_sec = scan_dt.hour * 3600 + scan_dt.minute * 60 + scan_dt.second
+    obs, first, last = [], None, None
+    for line in text.splitlines():
+        if not line.startswith("IWG1,"):
+            continue
+        ts = line[5:20]
+        first = first or ts
+        last = ts
+        if not (lo <= ts <= hi):
+            continue
+        parts = line.split(",")
+
+        def num(*names):
+            for n in names:
+                i = col.get(n)
+                if i is not None and i < len(parts) and parts[i].strip():
+                    try:
+                        return float(parts[i])
+                    except ValueError:
+                        pass
+            return None
+
+        try:
+            t = datetime.strptime(ts, "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        o = _aoc_obs_record(t, num, scan_dt, scan_sec)
+        if o:
+            obs.append(o)
+    span = f"{first[9:11]}:{first[11:13]}-{last[9:11]}:{last[11:13]}Z" if first and last else ""
+    return obs, span
+
+
+def _nc3_header(buf: bytes) -> dict:
+    """Parse a NetCDF-3 (classic or 64-bit-offset) header. Raises struct.error
+    when buf stops short of the header's end (fetch more and retry)."""
+    import struct
+    if buf[:3] != b"CDF" or buf[3] not in (1, 2):
+        raise ValueError("not a NetCDF-3 file")
+    big_offsets = buf[3] == 2
+    pos = 4
+    types = {1: "i1", 2: "S1", 3: ">i2", 4: ">i4", 5: ">f4", 6: ">f8"}
+    sizes = {1: 1, 2: 1, 3: 2, 4: 4, 5: 4, 6: 8}
+
+    def u32():
+        nonlocal pos
+        v = struct.unpack_from(">I", buf, pos)[0]
+        pos += 4
+        return v
+
+    def name():
+        nonlocal pos
+        n = u32()
+        if pos + n > len(buf):
+            raise struct.error("header truncated")
+        s = buf[pos:pos + n].decode("latin-1")
+        pos += (n + 3) & ~3
+        return s
+
+    def attrs():
+        nonlocal pos
+        tag, n = u32(), u32()
+        out = {}
+        for _ in range(n if tag else 0):
+            k, t, cnt = name(), u32(), u32()
+            size = sizes[t] * cnt
+            if pos + size > len(buf):
+                raise struct.error("header truncated")
+            raw = buf[pos:pos + size]
+            pos += (size + 3) & ~3
+            out[k] = raw.decode("latin-1").rstrip("\x00") if t == 2 else np.frombuffer(raw, dtype=types[t])
+        return out
+
+    numrecs = u32()
+    tag, n = u32(), u32()
+    dims = [(name(), u32()) for _ in range(n if tag else 0)]
+    gatts = attrs()
+    tag, n = u32(), u32()
+    variables = {}
+    for _ in range(n if tag else 0):
+        vname = name()
+        dimids = [u32() for _ in range(u32())]
+        vattrs = attrs()
+        vtype, vsize = u32(), u32()
+        begin = struct.unpack_from(">Q" if big_offsets else ">I", buf, pos)[0]
+        pos += 8 if big_offsets else 4
+        variables[vname] = {"dimids": dimids, "attrs": vattrs, "dtype": types.get(vtype),
+                            "vsize": vsize, "begin": begin}
+    return {"numrecs": numrecs, "dims": dims, "gatts": gatts, "vars": variables}
+
+
+def _aoc_nc_obs(url: str, scan_dt: datetime, window_min: float) -> tuple[list[dict], Optional[str]]:
+    """Obs within window_min of scan_dt from an AOC flight netCDF (_A.nc,
+    NetCDF-3 with Time as the record dimension, 1 Hz from the StartTime
+    global attribute), reading only the header and the window's records by
+    HTTP range (~14 MB for +/-45 min, not the 60-80 MB file). Returns
+    (obs, record span) or ([], None) when the file is missing or unreadable."""
+    import struct
+    from realtime_tdr_api import _requests_get_cert_tolerant
+
+    def get_range(a: int, b: int) -> bytes:
+        r = _requests_get_cert_tolerant(url, headers={"Range": f"bytes={a}-{b}"}, timeout=90)
+        if r.status_code not in (200, 206):
+            raise ValueError(f"HTTP {r.status_code}")
+        return r.content if r.status_code == 206 else r.content[a:b + 1]
+
+    try:
+        hdr = None
+        for nbytes in (1 << 20, 8 << 20):
+            try:
+                hdr = _nc3_header(get_range(0, nbytes - 1))
+                break
+            except struct.error:
+                continue
+        if hdr is None:
+            return [], None
+        unlim = next((i for i, (_, size) in enumerate(hdr["dims"]) if size == 0), None)
+        rec_vars = {k: v for k, v in hdr["vars"].items() if v["dimids"] and v["dimids"][0] == unlim}
+        start = hdr["gatts"].get("StartTime")
+        if unlim is None or "Time" not in rec_vars or start is None or not len(np.atleast_1d(start)):
+            return [], None
+        start_dt = datetime.fromtimestamp(int(np.atleast_1d(start)[0]), tz=timezone.utc)
+        recsize = sum(v["vsize"] for v in rec_vars.values())
+        rec0 = min(v["begin"] for v in rec_vars.values())
+        numrecs = hdr["numrecs"]
+        span = (f"{start_dt:%H:%M}-{start_dt + timedelta(seconds=numrecs):%H:%M}Z")
+        # Record i is ~i seconds after StartTime; read 2 min extra each side, then filter on Time.
+        lo = (scan_dt - start_dt).total_seconds() - window_min * 60 - 120
+        hi = (scan_dt - start_dt).total_seconds() + window_min * 60 + 120
+        i0, i1 = max(0, int(lo)), min(numrecs, int(hi) + 1)
+        if i0 >= i1:
+            return [], span
+        block = get_range(rec0 + i0 * recsize, rec0 + i1 * recsize - 1)
+        n = len(block) // recsize
+
+        def column(vname):
+            v = rec_vars.get(vname)
+            if v is None or v["dtype"] not in (">f4", ">f8"):
+                return None
+            arr = np.ndarray((n,), dtype=v["dtype"], buffer=block, offset=v["begin"] - rec0,
+                             strides=(recsize,)).astype(float)
+            fill = v["attrs"].get("_FillValue")
+            if fill is not None and len(np.atleast_1d(fill)) and np.isfinite(np.atleast_1d(fill)[0]):
+                arr[arr == float(np.atleast_1d(fill)[0])] = np.nan
+            return arr
+
+        names = {"Time", "LATref", "LONref"} | {c for cols in _AOC_IWG_FIELDS.values() for c in cols}
+        cols = {c: column(c) for c in names}
+        if cols["Time"] is None:
+            return [], span
+    except Exception:
+        return [], None
+    scan_sec = scan_dt.hour * 3600 + scan_dt.minute * 60 + scan_dt.second
+    obs = []
+    for k in range(n):
+        ts = cols["Time"][k]
+        if not np.isfinite(ts):
+            continue
+        t = start_dt + timedelta(seconds=float(ts))
+        if abs((t - scan_dt).total_seconds()) > window_min * 60:
+            continue
+
+        def num(*names):
+            for c in names:
+                a = cols.get(c)
+                if a is not None and np.isfinite(a[k]):
+                    return float(a[k])
+            return None
+
+        o = _aoc_obs_record(t, num, scan_dt, scan_sec)
+        if o:
+            obs.append(o)
+    return obs, span
+
+
+def _aoc_fl_obs(mission_id: str, scan_dt: datetime, window_min: float) -> tuple[list[dict], Optional[str], str]:
+    """1-Hz flight-level obs within window_min of scan_dt from NOAA AOC: the
+    _A_IWG.dat text record first, then the flight netCDF when the text is
+    missing or stops short of the analysis (15% of 2025 cases; 2010-2011
+    only have the netCDF). Returns (obs, URL used, note for the message)."""
+    from realtime_tdr_api import SEB_ACDATA_BASE
+    m = re.match(r"(\d{6})([A-Za-z])(\d+)", mission_id or "")
+    if not m or scan_dt is None:
+        return [], None, "no mission id"
+    year = scan_dt.year // 100 * 100 + int(m.group(1)[:2])
+    mid = f"{year}{m.group(1)[2:]}{m.group(2).upper()}{m.group(3)}"
+    base = f"{SEB_ACDATA_BASE}/{year}/MET/{mid}/{mid}"
+    iwg_obs, iwg_span = _aoc_iwg_obs(base + "_A_IWG.dat", scan_dt, window_min)
+    if iwg_obs:
+        return iwg_obs, base + "_A_IWG.dat", ""
+    nc_obs, nc_span = _aoc_nc_obs(base + "_A.nc", scan_dt, window_min)
+    if nc_obs:
+        return nc_obs, base + "_A.nc", ""
+    span = nc_span or iwg_span
+    note = (f"NOAA AOC's record of the flight ({span}) has nothing within {window_min:g} min of the analysis"
+            if span else "NOAA AOC's server has no record of it either")
+    return [], base + ("_A.nc" if nc_span else "_A_IWG.dat"), note
+
+
 @app.get("/flightlevel/archive")
 def get_archive_flight_level(
     case_index: int = Query(..., ge=0, description="0-based case index"),
@@ -7832,7 +8106,7 @@ def get_archive_flight_level(
         cached, ts = _hrd_fl_cache[cache_key]
         if now - ts < _HRD_FL_CACHE_TTL:
             _hrd_fl_cache.move_to_end(cache_key)
-            return _archive_reply(cached, r2_key_early)
+            return _archive_reply(cached, r2_key_early, mirror=cached.get("source") != "aoc_acdata")
 
     # Look up case metadata
     cache = _merge_metadata_cache if data_type == "merge" else _metadata_cache
@@ -7900,45 +8174,95 @@ def get_archive_flight_level(
     year = scan_dt.year
     scan_time_sec = scan_dt.hour * 3600 + scan_dt.minute * 60 + scan_dt.second
 
-    # Resolve HRD storm directory
+    # HRD's 1-s .sec.txt for the mission first. A miss before the time-window
+    # step lands in hrd_fail and NOAA AOC's own IWG1 record is tried instead.
+    hrd_fail = None
+    filtered = []
+    fl_source, fl_url, source_file = "hrd", None, None
     hrd_storm = _resolve_hrd_storm_name(storm_name, year)
     if not hrd_storm:
-        result = {
-            "success": False,
-            "reason": "no_hrd_storm",
-            "message": f"No HRD flight-level directory found for {storm_name} ({year})",
-        }
-        _hrd_fl_cache[cache_key] = (result, now)
-        if len(_hrd_fl_cache) > _HRD_FL_CACHE_MAX:
-            _hrd_fl_cache.popitem(last=False)
-        return _archive_reply(result, r2_key)
+        hrd_fail = ("no_hrd_storm", f"the HRD archive has no flight-level directory for {storm_name} ({year})")
+    else:
+        storm_url = f"{HRD_FL_BASE}/{year}/{hrd_storm}/"
+        try:
+            hrd_files = _hrd_parse_directory(storm_url)
+        except Exception as e:
+            hrd_files = None
+            hrd_fail = ("dir_fetch_error", f"the HRD directory could not be listed ({e})")
+        if hrd_files is not None:
+            # --- Priority 2: HRD .trak file (2-min center fixes) ---
+            if center_lat is None:
+                trak_files = [f for f in hrd_files if f.lower().endswith('.trak')]
+                if trak_files:
+                    try:
+                        trak_text = _hrd_fetch_text(f"{storm_url}{trak_files[0]}", timeout=30)
+                        trak_entries = _parse_hrd_trak(trak_text)
+                        _trak_lat, _trak_lon = _get_trak_center(trak_entries, scan_dt, max_offset_min=30.0)
+                        if _trak_lat is not None:
+                            center_lat = _trak_lat
+                            center_lon = _trak_lon
+                            _center_source = "hrd_trak"
+                    except Exception:
+                        pass
 
-    # List files in the storm directory
-    storm_url = f"{HRD_FL_BASE}/{year}/{hrd_storm}/"
-    try:
-        hrd_files = _hrd_parse_directory(storm_url)
-    except Exception as e:
-        result = {
-            "success": False,
-            "reason": "dir_fetch_error",
-            "message": f"Could not list HRD directory: {e}",
-        }
-        return _archive_reply(result, r2_key)
+            # Match mission_id to HRD files
+            matched_files = _match_hrd_files(mission_id, hrd_files, year=year)
+            if not matched_files:
+                hrd_fail = ("no_fl_data", f"the HRD archive has no file for it in {hrd_storm}/")
+            else:
+                # Fetch and parse the best-match file
+                source_file = matched_files[0]
+                fl_url = f"{storm_url}{source_file}"
+                raw_obs = []
+                try:
+                    raw_obs = _parse_hrd_1sec(_hrd_fetch_text(fl_url, timeout=60))
+                    if not raw_obs:
+                        hrd_fail = ("parse_error", f"no valid observations parsed from {source_file}")
+                except Exception as e:
+                    hrd_fail = ("fetch_error", f"{source_file} could not be fetched ({e})")
 
-    # --- Priority 2: HRD .trak file (2-min center fixes) ---
-    if center_lat is None:
-        trak_files = [f for f in hrd_files if f.lower().endswith('.trak')]
-        if trak_files:
-            try:
-                trak_text = _hrd_fetch_text(f"{storm_url}{trak_files[0]}", timeout=30)
-                trak_entries = _parse_hrd_trak(trak_text)
-                _trak_lat, _trak_lon = _get_trak_center(trak_entries, scan_dt, max_offset_min=30.0)
-                if _trak_lat is not None:
-                    center_lat = _trak_lat
-                    center_lon = _trak_lon
-                    _center_source = "hrd_trak"
-            except Exception:
-                pass
+                # Time-window filter: keep records within ±FL_TIME_WINDOW_MIN of scan
+                window_sec = _FL_TIME_WINDOW_MIN * 60
+                for obs in raw_obs:
+                    delta = obs["time_sec"] - scan_time_sec
+                    # Handle midnight crossing
+                    if delta > 43200:
+                        delta -= 86400
+                    elif delta < -43200:
+                        delta += 86400
+                    if abs(delta) <= window_sec:
+                        obs["time_offset_s"] = round(delta, 1)
+                        filtered.append(obs)
+
+                if raw_obs and not filtered:
+                    result = {
+                        "success": False,
+                        "reason": "no_obs_in_window",
+                        "message": f"No observations within ±{_FL_TIME_WINDOW_MIN} min of TDR scan time ({scan_dt.strftime('%H:%M:%SZ')})",
+                        "total_obs": len(raw_obs),
+                        "file": source_file,
+                    }
+                    _hrd_fl_cache[cache_key] = (result, now)
+                    if len(_hrd_fl_cache) > _HRD_FL_CACHE_MAX:
+                        _hrd_fl_cache.popitem(last=False)
+                    return _archive_reply(result, r2_key)
+
+    if hrd_fail:
+        filtered, aoc_url, aoc_note = _aoc_fl_obs(mission_id, scan_dt, _FL_TIME_WINDOW_MIN)
+        if not filtered:
+            result = {
+                "success": False,
+                "reason": hrd_fail[0],
+                "message": f"No flight-level data found for mission {mission_id}: {hrd_fail[1]}, and {aoc_note}",
+                "aoc_url": aoc_url,
+            }
+            if hrd_fail[0] in ("no_hrd_storm", "no_fl_data"):   # not a transient fetch error
+                _hrd_fl_cache[cache_key] = (result, now)
+                if len(_hrd_fl_cache) > _HRD_FL_CACHE_MAX:
+                    _hrd_fl_cache.popitem(last=False)
+            return _archive_reply(result, r2_key)
+        fl_source, fl_url, source_file = "aoc_acdata", aoc_url, aoc_url.rsplit("/", 1)[-1]
+
     # --- Priority 3: ERA5 best-track center ---
     # ERA5 and IR zarr stores are indexed by swath case; translate if in merge mode.
     _swath_idx = _merge_to_swath_index.get(case_index, case_index) if data_type == "merge" else case_index
@@ -7961,67 +8285,6 @@ def get_archive_flight_level(
                 _center_source = "ir_zarr"
         except Exception:
             pass
-
-    # Match mission_id to HRD files
-    matched_files = _match_hrd_files(mission_id, hrd_files, year=year)
-    if not matched_files:
-        result = {
-            "success": False,
-            "reason": "no_fl_data",
-            "message": f"No flight-level data found for mission {mission_id} in {hrd_storm}/",
-        }
-        _hrd_fl_cache[cache_key] = (result, now)
-        if len(_hrd_fl_cache) > _HRD_FL_CACHE_MAX:
-            _hrd_fl_cache.popitem(last=False)
-        return _archive_reply(result, r2_key)
-
-    # Fetch and parse the best-match file
-    fl_url = f"{storm_url}{matched_files[0]}"
-    try:
-        fl_text = _hrd_fetch_text(fl_url, timeout=60)
-    except Exception as e:
-        result = {
-            "success": False,
-            "reason": "fetch_error",
-            "message": f"Could not fetch {matched_files[0]}: {e}",
-        }
-        return _archive_reply(result, r2_key)
-
-    raw_obs = _parse_hrd_1sec(fl_text)
-    if not raw_obs:
-        result = {
-            "success": False,
-            "reason": "parse_error",
-            "message": f"No valid observations parsed from {matched_files[0]}",
-        }
-        return _archive_reply(result, r2_key)
-
-    # Time-window filter: keep records within ±FL_TIME_WINDOW_MIN of scan
-    window_sec = _FL_TIME_WINDOW_MIN * 60
-    filtered = []
-    for obs in raw_obs:
-        delta = obs["time_sec"] - scan_time_sec
-        # Handle midnight crossing
-        if delta > 43200:
-            delta -= 86400
-        elif delta < -43200:
-            delta += 86400
-        if abs(delta) <= window_sec:
-            obs["time_offset_s"] = round(delta, 1)
-            filtered.append(obs)
-
-    if not filtered:
-        result = {
-            "success": False,
-            "reason": "no_obs_in_window",
-            "message": f"No observations within ±{_FL_TIME_WINDOW_MIN} min of TDR scan time ({scan_dt.strftime('%H:%M:%SZ')})",
-            "total_obs": len(raw_obs),
-            "file": matched_files[0],
-        }
-        _hrd_fl_cache[cache_key] = (result, now)
-        if len(_hrd_fl_cache) > _HRD_FL_CACHE_MAX:
-            _hrd_fl_cache.popitem(last=False)
-        return _archive_reply(result, r2_key)
 
     # ── Multi-resolution averaging ──────────────────────────────
     # Produce 1s (raw), 10s, and 30s averaged windows in a single pass
@@ -8222,7 +8485,8 @@ def get_archive_flight_level(
         "time_window_min": _FL_TIME_WINDOW_MIN,
         "n_obs": len(averaged_10s),
         "n_obs_raw": len(filtered),
-        "source_file": matched_files[0],
+        "source": fl_source,
+        "source_file": source_file,
         "source_url": fl_url,
         "summary": summary,
     }
@@ -8231,7 +8495,7 @@ def get_archive_flight_level(
     if len(_hrd_fl_cache) > _HRD_FL_CACHE_MAX:
         _hrd_fl_cache.popitem(last=False)
 
-    return _archive_reply(result, r2_key)
+    return _archive_reply(result, r2_key, mirror=(fl_source == "hrd"))
 
 
 # ---------------------------------------------------------------------------
